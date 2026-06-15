@@ -2,7 +2,7 @@
 
 [Chinese version](README.cn.md)
 
-`nexus-plus` is a Nexus-compatible, self-hosted artifact repository for Maven, npm, PyPI, Go, Helm, NuGet, RubyGems, and Yum artifacts.
+`nexus-plus` is a Nexus-compatible, self-hosted artifact repository for Maven, npm, PyPI, Go, Helm, NuGet, RubyGems, Yum, and Raw artifacts.
 
 The project keeps Nexus-compatible client protocols, the Nexus permission/authentication model, and the `/repository/<repo>/...` URL layout while addressing stability, external database support, multi-replica deployment, and usage-limit issues found in Nexus Repository OSS / Community Edition. It also supports smooth migration from an existing Nexus instance to nexus-plus.
 
@@ -51,6 +51,7 @@ Local hot-reload development and testing are documented in the [Development Guid
 | NuGet | hosted / proxy / group | package push and admin UI upload | v3 service index / search supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
 | RubyGems | hosted / proxy / group | gem push/yank and admin UI upload | Supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
 | Yum | hosted / proxy / group | RPM upload and admin UI upload | repodata supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
+| Raw | hosted / proxy / group | PUT upload and admin UI upload | Supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
 
 Nexus Repository Data migration scans hosted repositories by default. If you need to migrate proxy repositories from the source Nexus as historical backup data or upstream cache data, explicitly specify repository names in `Optional proxy repositories` on the migration page.
 
@@ -71,7 +72,7 @@ Migration supports interruption and resume. Completed data is skipped on later r
 | Dimension | Nexus Repository OSS / Community Edition | nexus-plus |
 | --- | --- | --- |
 | Product positioning | A general-purpose artifact repository management platform with broad format and management coverage | Keeps Nexus client behavior, permission model, and `/repository/<repo>/...` URL layout compatible while addressing OSS embedded database stability issues, Community Edition usage limits, limited horizontal scaling in open source editions, and providing zero-downtime migration to nexus-plus |
-| Supported formats | Officially supports more formats; exact capabilities vary by version and distribution | Focuses on common artifact formats. Currently supports Maven, npm, PyPI, Go, Helm, NuGet, RubyGems, and Yum. Each format is implemented as an independent protocol module for prioritized extension and validation |
+| Supported formats | Officially supports more formats; exact capabilities vary by version and distribution | Focuses on common artifact formats. Currently supports Maven, npm, PyPI, Go, Helm, NuGet, RubyGems, Yum, and Raw. Each format is implemented as an independent protocol module for prioritized extension and validation |
 | Usage limits | Community Edition targets individuals and small teams. Official limits are up to 40,000 components and 100,000 requests/day. When exceeded, new component creation is paused until usage returns below the limits | Does not include Community Edition-style license usage limits. Capacity is bounded by MySQL, OSS/S3, replica count, and deployment sizing, so it can scale with actual business needs |
 | High availability deployment | Open source editions are suitable for a single instance or basic Kubernetes deployment; official HA deployment is a Pro capability | Designed for multi-replica deployment by default: session, authentication tickets, catalog watermarks, locks, migration progress, and short-lived coordination state are stored in MySQL. In-process cache is only a rebuildable hot cache |
 | Stability and upgrade | Version boundaries are complex: 3.70.x is the last version supporting OrientDB; 3.71.0 defaults new installs to H2, but H2 is still embedded; Community Edition did not support free external PostgreSQL until 3.77.0+; search was fully moved to SQL and away from Elasticsearch only in 3.88.0. Older OrientDB/Elasticsearch/local-data-directory deployments carry heavy upgrade windows and recovery depends heavily on backups, repair tasks, and manual intervention | MySQL-first runtime with no dependency on OrientDB or embedded Elasticsearch. Core state is in MySQL, blobs are in OSS/S3/File blob store, and cache/index data is rebuildable, making rolling upgrade, failover, and recovery easier |
@@ -96,7 +97,7 @@ The repository list shows hosted, proxy, and group repositories with format, sta
 
 ![User repository list](docs/img/img_7.png)
 
-Search components by format across Maven, npm, PyPI, Go, Helm, NuGet, RubyGems, Yum, and other repository types.
+Search components by format across Maven, npm, PyPI, Go, Helm, NuGet, RubyGems, Yum, Raw, and other repository types.
 
 ![User artifact search](docs/img/img.png)
 
@@ -132,7 +133,15 @@ AI agent and contributor development instructions are in [AGENTS.md](AGENTS.md).
 
 ## Roadmap
 
-- Add support for more artifact repository formats based on community feedback.
+Planned repository format iterations:
+
+1. Docker / OCI Registry
+2. APT / Debian
+3. Cargo / Rust
+4. Terraform Provider / Module Registry
+5. Conan
+6. Conda
+7. Composer / PHP
 
 ## Contributing
 
