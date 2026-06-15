@@ -30,6 +30,8 @@ nexus-plus 的诞生不是因为我们想重新做一个制品仓库，而是因
 
 根据 Sonatype 官方文档，Nexus Repository Community Edition 面向个人和小团队，支持最多 `40,000` 个 components 和每天 `100,000` 次 requests。Sonatype 官方价格页显示 Nexus Repository 的 Pro Edition 起步价格为 `$1,620 / year + consumption`；对于更大规模或特殊部署形态，还需要和商务单独沟通。
 
+Sonatype `nexus-public` 仓库里的公开讨论也反映了类似担忧：[Issue #883](https://github.com/sonatype/nexus-public/issues/883) 中有用户在升级到 `3.87.0` 后发现 Community Edition 的 component 和 request 限制被下调，并进一步追问这些限制未来是否还会继续变化。对我们来说，这类公开反馈说明 Nexus 社区版的用量边界不只是当前额度问题，还会带来后续升级和容量规划的不确定性。
+
 我们是愿意为基础设施软件付费的，但在我们的制品规模和访问规模下，新的社区版本限制不适用，商业版本的价格和采购不确定性也超过了预期。
 
 这意味着，继续沿着 Nexus 升级路线走，并不能低成本解决我们真正关心的问题：
@@ -110,3 +112,4 @@ nexus-plus 的核心思路是：
 
 - Sonatype Community Edition Onboarding: https://help.sonatype.com/en/ce-onboarding.html
 - Sonatype Platform Pricing: https://www.sonatype.com/products/pricing
+- Sonatype nexus-public Issue #883: https://github.com/sonatype/nexus-public/issues/883

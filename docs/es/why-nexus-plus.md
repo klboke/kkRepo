@@ -30,6 +30,8 @@ After deploying a newer version, we found that the new Nexus Community Edition w
 
 According to Sonatype official documentation, Nexus Repository Community Edition is intended for individuals and small teams, supports up to `40,000` components and `100,000` requests per day. Sonatype's official pricing page lists Nexus Repository Pro Edition starting at `$1,620 / year + consumption`; larger scale or special deployment models require separate commercial discussion.
 
+Public discussion in Sonatype's `nexus-public` repository reflects a similar concern. In [Issue #883](https://github.com/sonatype/nexus-public/issues/883), a user reported that after upgrading to `3.87.0`, Community Edition component and request limits had been reduced, then asked whether those limits might continue changing in later releases. For us, this kind of public feedback means the Community Edition boundary is not only about the current quota, but also about uncertainty for future upgrades and capacity planning.
+
 We are willing to pay for infrastructure software, but at our artifact scale and traffic scale, the new Community Edition limits do not apply to us, and the commercial edition price and purchasing uncertainty exceeded expectations.
 
 This means continuing along the Nexus upgrade path does not solve the problems we actually care about at low cost:
@@ -110,3 +112,4 @@ The larger hope is that this project can continue growing in the open source com
 
 - Sonatype Community Edition Onboarding: https://help.sonatype.com/en/ce-onboarding.html
 - Sonatype Platform Pricing: https://www.sonatype.com/products/pricing
+- Sonatype nexus-public Issue #883: https://github.com/sonatype/nexus-public/issues/883
