@@ -1,0 +1,86 @@
+name: Live Compatibility
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Compatibility suite to run
+        required: true
+        default: smoke
+        type: choice
+        options:
+          - smoke
+          - write-smoke
+          - extended
+          - full
+  schedule:
+    - cron: "0 19 * * *"
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - labeled
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-compat-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live-compat:
+    name: Live compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-live-compat')
+    env:
+      COMPOSE_PROJECT_NAME: nexus-plus-compat
+      LIVE_COMPAT_SUITE: ${{ github.event_name == 'workflow_dispatch' && inputs.suite || 'smoke' }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Validate live compatibility compose file
+        run: docker compose -f docker-compose.compat.yml config
+
+      - name: Build candidate image
+        run: scripts/build-docker-image.sh nexus-plus:compat
+
+      - name: Start reference and candidate services
+        run: docker compose -f docker-compose.compat.yml up -d mysql nexus nexus-plus
+
+      - name: Prepare live compatibility fixtures
+        run: scripts/ci/live-compat-setup.sh
+
+      - name: Run live compatibility suite
+        run: scripts/ci/run-live-compat.sh "$LIVE_COMPAT_SUITE"
+
+      - name: Collect compose logs
+        if: always()
+        run: |
+          mkdir -p artifacts
+          docker compose -f docker-compose.compat.yml ps > artifacts/live-compat-ps.txt || true
+          docker compose -f docker-compose.compat.yml logs --no-color --timestamps > artifacts/live-compat-compose.log || true
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-compat-logs
+          path: artifacts/
+          if-no-files-found: ignore
+
+      - name: Stop services
+        if: always()
+        run: docker compose -f docker-compose.compat.yml down -v

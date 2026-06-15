@@ -1,0 +1,50 @@
+name: Feature request
+description: Propose a nexus-plus feature or compatibility improvement.
+title: "[Feature]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What workflow or compatibility gap should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the expected user-visible behavior.
+    validations:
+      required: true
+  - type: dropdown
+    id: format
+    attributes:
+      label: Affected area
+      options:
+        - Maven
+        - npm
+        - PyPI
+        - Go
+        - Helm
+        - NuGet
+        - RubyGems
+        - Yum
+        - Admin UI
+        - Browse UI
+        - Migration
+        - Security
+        - Storage
+        - Operations
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: nexus
+    attributes:
+      label: Nexus or official protocol reference
+      description: Link to official protocol docs or describe the Nexus behavior when compatibility matters.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Optional. Mention workarounds or other designs you considered.
