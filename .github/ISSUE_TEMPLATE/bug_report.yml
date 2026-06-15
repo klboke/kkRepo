@@ -1,0 +1,85 @@
+name: Bug report
+description: Report a reproducible nexus-plus bug.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please do not include secrets, tokens, passwords, or private repository contents.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What went wrong?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Include commands, HTTP requests, or UI steps when possible.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include status codes, response snippets, or screenshots when useful.
+    validations:
+      required: true
+  - type: dropdown
+    id: format
+    attributes:
+      label: Repository format
+      options:
+        - Maven
+        - npm
+        - PyPI
+        - Go
+        - Helm
+        - NuGet
+        - RubyGems
+        - Yum
+        - Admin UI
+        - Browse UI
+        - Migration
+        - Security
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: nexus-plus version or commit
+      placeholder: main, tag, or commit SHA
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Deployment mode, Java version, MySQL version, storage backend, replica count, and relevant configuration.
+      placeholder: |
+        - Java:
+        - MySQL:
+        - Storage:
+        - Replica count:
+        - Deployment:
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or request details
+      description: Redact secrets before posting.
+      render: text

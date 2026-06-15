@@ -1,0 +1,75 @@
+name: Nexus compatibility issue
+description: Report a client-visible difference between Nexus and nexus-plus.
+title: "[Compatibility]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template when Nexus and nexus-plus respond differently for the same client-visible behavior.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Compatibility difference
+      description: Summarize the observed difference.
+    validations:
+      required: true
+  - type: dropdown
+    id: format
+    attributes:
+      label: Repository format
+      options:
+        - Maven
+        - npm
+        - PyPI
+        - Go
+        - Helm
+        - NuGet
+        - RubyGems
+        - Yum
+        - Security/Admin API
+        - Browse/Admin UI
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: request
+    attributes:
+      label: Request or client command
+      description: Include the URL path, method, important headers, and client command.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: nexus
+    attributes:
+      label: Nexus behavior
+      description: Include status, headers, body semantics, generated metadata, or checksum details.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: nexus_plus
+    attributes:
+      label: nexus-plus behavior
+      description: Include status, headers, body semantics, generated metadata, or checksum details.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: client
+    attributes:
+      label: Client impact
+      description: Explain how Maven/npm/pip/go/helm/dotnet/gem/yum or another client behaves.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction notes
+      description: Reference instance version, nexus-plus commit, repository settings, and whether write tests are enabled.
+      placeholder: |
+        - Nexus version:
+        - nexus-plus commit:
+        - Repository type:
+        - Hosted/proxy/group:
+        - Related compat-test:

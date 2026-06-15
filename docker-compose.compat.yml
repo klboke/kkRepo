@@ -1,0 +1,53 @@
+services:
+  mysql:
+    image: mysql:8.0
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: nexus_plus
+      MYSQL_USER: nexus_plus
+      MYSQL_PASSWORD: nexus_plus
+      TZ: Asia/Shanghai
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+  nexus:
+    image: ${NEXUS_COMPAT_IMAGE:-sonatype/nexus3:3.29.2}
+    environment:
+      INSTALL4J_ADD_VM_PARAMS: "-Xms512m -Xmx1536m -XX:MaxDirectMemorySize=1536m"
+    ports:
+      - "${NEXUS_COMPAT_PORT:-28090}:8081"
+    volumes:
+      - nexus-data:/nexus-data
+
+  nexus-plus:
+    image: ${NEXUS_PLUS_COMPAT_IMAGE:-nexus-plus:compat}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/nexus_plus?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
+      SPRING_DATASOURCE_USERNAME: nexus_plus
+      SPRING_DATASOURCE_PASSWORD: nexus_plus
+      NEXUS_PLUS_MANAGEMENT_PORT: "8081"
+      NEXUS_PLUS_CREDENTIAL_SECRET: ci-compat-credential-secret-not-for-production
+      NEXUS_PLUS_API_KEY_PAYLOAD_SECRET: ci-compat-api-key-payload-secret-not-for-production
+      NEXUS_PLUS_FILE_ENABLED: "true"
+      NEXUS_PLUS_FILE_BASE_DIR: /tmp/nexus-plus-blobs
+      NEXUS_PLUS_OUTBOUND_ALLOW_PRIVATE_ADDRESSES: "true"
+      JAVA_OPTS: "-Xms512m -Xmx1536m"
+    ports:
+      - "${NEXUS_PLUS_COMPAT_PORT:-18090}:8080"
+      - "${NEXUS_PLUS_MANAGEMENT_PORT:-18091}:8081"
+
+volumes:
+  mysql-data:
+  nexus-data:

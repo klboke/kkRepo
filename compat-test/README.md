@@ -29,6 +29,32 @@ mvn -pl compat-test -am test
 The live black-box tests are skipped by default so the module stays deterministic in CI and local
 builds without Nexus.
 
+## Disposable Live Compatibility Environment
+
+The GitHub `Live Compatibility` workflow uses the same commands below. It builds a candidate
+nexus-plus image, starts MySQL, a disposable Nexus reference, and the candidate service, then
+bootstraps the admin user, default file blob store, and Maven/npm fixture repositories.
+The disposable defaults are `admin` / `123456` for Nexus and `admin` / `12345678` for nexus-plus.
+
+```bash
+scripts/build-docker-image.sh nexus-plus:compat
+docker compose -f docker-compose.compat.yml up -d mysql nexus nexus-plus
+scripts/ci/live-compat-setup.sh
+scripts/ci/run-live-compat.sh smoke
+docker compose -f docker-compose.compat.yml down -v
+```
+
+Available suites:
+
+- `smoke`: console API checks plus Maven proxy GET/HEAD/checksum read compatibility.
+- `write-smoke`: Maven hosted release/snapshot write compatibility with `COMPAT_WRITE_ENABLED=true`.
+- `extended`: smoke coverage plus currently separated PyPI, Helm, NuGet, RubyGems, and Yum checks.
+- `full`: all compat-test tests with live endpoint variables set; use this as a diagnostic suite
+  when working through known protocol gaps.
+
+In GitHub Actions, add the `run-live-compat` label to a PR to run the smoke suite, or start the
+workflow manually and select a suite.
+
 ## Live Console And Maven Read Checks
 
 Start nexus-plus locally first:

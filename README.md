@@ -118,13 +118,13 @@ AI agent and contributor development instructions are in [AGENTS.md](AGENTS.md).
 
 ## Contributing
 
-Issues and pull requests are welcome. For protocol behavior changes, compare with official protocol behavior and a Nexus reference instance first, and add black-box compatibility tests under `compat-test` whenever possible.
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor workflow, PR expectations, compatibility testing expectations, and multi-replica design constraints.
 
 Local development and testing are documented in the [Development Guide](docs/es/development-guide.md). Build and deployment are documented in the [Build And Deployment Guide](docs/es/build-deployment-guide.md). AI agent and contributor constraints are in [AGENTS.md](AGENTS.md).
 
 ## Security
 
-If you find a security issue, report it through GitHub Security Advisory or a private channel first. Avoid disclosing exploitable details in public issues. Regular bugs, compatibility issues, and feature requests can be submitted as public issues.
+If you find a security issue, follow [SECURITY.md](SECURITY.md) and report it through GitHub Security Advisory first. Avoid disclosing exploitable details in public issues. Regular bugs, compatibility issues, and feature requests can be submitted as public issues.
 
 ## License
 
