@@ -140,6 +140,10 @@ Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for
 
 Local development and testing are documented in the [Development Guide](docs/es/development-guide.md). Build and deployment are documented in the [Build And Deployment Guide](docs/es/build-deployment-guide.md). AI agent and contributor constraints are in [AGENTS.md](AGENTS.md).
 
+## Support
+
+Join the [nexus-plus Telegram group](https://t.me/+M6prtFUGnF9kYTU1) for community support and usage discussion.
+
 ## Security
 
 If you find a security issue, follow [SECURITY.md](SECURITY.md) and report it through GitHub Security Advisory first. Avoid disclosing exploitable details in public issues. Regular bugs, compatibility issues, and feature requests can be submitted as public issues.

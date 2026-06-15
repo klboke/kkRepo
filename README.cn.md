@@ -138,6 +138,10 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 
 本地开发和测试说明见 [中文开发指南](docs/zh/development-guide.md)；构建部署说明见 [构建部署指南](docs/zh/build-deployment-guide.md)；AI agent 和贡献者约束见 [AGENTS.md](AGENTS.md)。
 
+## 支持
+
+加入 [nexus-plus Telegram 群](https://t.me/+M6prtFUGnF9kYTU1) 获取社区支持和使用交流。
+
 ## Security
 
 如果发现安全问题，请按 [SECURITY.md](SECURITY.md) 说明优先通过 GitHub Security Advisory 报告，避免在公开 issue 中直接披露可利用细节。普通 bug、兼容性问题和功能建议可以直接提交 issue。
