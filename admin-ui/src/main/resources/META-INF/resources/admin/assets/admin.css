@@ -37,7 +37,9 @@ select {
 }
 
 .nx-topbar {
+  position: relative;
   grid-column: 1 / -1;
+  z-index: 80;
   display: flex;
   align-items: center;
   min-width: 0;
