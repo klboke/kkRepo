@@ -38,7 +38,7 @@
     <spring.boot.version>3.3.7</spring.boot.version>
     <apollo.client.version>2.5.0</apollo.client.version>
     <guava.version>32.0.0-jre</guava.version>
-    <guice.version>5.0.1</guice.version>
+    <guice.version>7.0.0</guice.version>
     <maven.artifact.version>3.9.16</maven.artifact.version>
     <aws.sdk.version>2.33.5</aws.sdk.version>
     <maven.compiler.release>${java.version}</maven.compiler.release>
