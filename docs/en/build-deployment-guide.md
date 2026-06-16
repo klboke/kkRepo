@@ -4,7 +4,7 @@ This document covers local startup, release builds, archive package deployment, 
 
 ## Prerequisites
 
-- JDK 21
+- JDK 25
 - Maven 3.9 or a compatible version
 - MySQL 8.0
 - Optional: Docker, for building images or running containerized dependencies

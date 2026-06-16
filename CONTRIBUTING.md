@@ -13,7 +13,7 @@ Thanks for helping improve nexus-plus. The project aims to stay compatible with 
 
 Prerequisites:
 
-- JDK 21
+- JDK 25
 - Maven 3.9 or newer
 - Docker, optional but useful for local MySQL and S3-compatible storage
 
