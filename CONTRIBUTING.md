@@ -97,6 +97,6 @@ checks. It runs nightly, can be started manually, and runs for PRs only after th
 ## Documentation
 
 - Keep the root README concise.
-- Put English docs under `docs/es`.
+- Put English docs under `docs/en`.
 - Put Chinese docs under `docs/zh`.
 - Keep public docs free of private deployment domains, internal CI details, and organization-specific operational assumptions.
