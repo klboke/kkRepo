@@ -40,7 +40,7 @@
     <guava.version>32.0.0-jre</guava.version>
     <guice.version>5.0.1</guice.version>
     <maven.artifact.version>3.9.10</maven.artifact.version>
-    <aws.sdk.version>2.33.5</aws.sdk.version>
+    <aws.sdk.version>2.46.11</aws.sdk.version>
     <maven.compiler.release>${java.version}</maven.compiler.release>
     <nexus.plus.dist.version>${project.version}</nexus.plus.dist.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
