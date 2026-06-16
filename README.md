@@ -35,9 +35,9 @@ If you prefer to inspect the script before running it, download `scripts/quickst
 
 ## Build And Deployment
 
-Local quick start, Spring Boot executable jar, Docker image, archive package, production deployment architecture, resource sizing, and upgrade flow are documented in the [Build And Deployment Guide](docs/es/build-deployment-guide.md).
+Local quick start, Spring Boot executable jar, Docker image, archive package, production deployment architecture, resource sizing, and upgrade flow are documented in the [Build And Deployment Guide](docs/en/build-deployment-guide.md).
 
-Local hot-reload development and testing are documented in the [Development Guide](docs/es/development-guide.md).
+Local hot-reload development and testing are documented in the [Development Guide](docs/en/development-guide.md).
 
 ## Supported Capabilities
 
@@ -65,7 +65,7 @@ Migration is available in the `/admin/` console:
 4. For the first repository data migration, leave `Metadata since` empty to scan all data. Later runs can set `Metadata since` for incremental migration.
 5. After migration is complete, point the original Nexus domain to nexus-plus. Client configuration does not need to change.
 
-Migration supports interruption and resume. Completed data is skipped on later runs. See the [Nexus Migration Guide](docs/es/nexus-migration-guide.md) for the full process.
+Migration supports interruption and resume. Completed data is skipped on later runs. See the [Nexus Migration Guide](docs/en/nexus-migration-guide.md) for the full process.
 
 ## Comparison With Open Source Nexus
 
@@ -135,7 +135,7 @@ AI agent and contributor development instructions are in [AGENTS.md](AGENTS.md).
 
 Planned repository format iterations:
 
-1. Docker / OCI Registry
+1. Docker / OCI Registry - In progress ([development plan](docs/en/dev/docker-repository-implementation-plan.md))
 2. APT / Debian
 3. Cargo / Rust
 4. Terraform Provider / Module Registry
@@ -147,7 +147,7 @@ Planned repository format iterations:
 
 Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor workflow, PR expectations, compatibility testing expectations, and multi-replica design constraints.
 
-Local development and testing are documented in the [Development Guide](docs/es/development-guide.md). Build and deployment are documented in the [Build And Deployment Guide](docs/es/build-deployment-guide.md). AI agent and contributor constraints are in [AGENTS.md](AGENTS.md).
+Local development and testing are documented in the [Development Guide](docs/en/development-guide.md). Build and deployment are documented in the [Build And Deployment Guide](docs/en/build-deployment-guide.md). AI agent and contributor constraints are in [AGENTS.md](AGENTS.md).
 
 ## Support
 
@@ -163,10 +163,10 @@ nexus-plus is open sourced under the [Apache License 2.0](LICENSE).
 
 ## Documentation
 
-- [Development Guide](docs/es/development-guide.md)
-- [Build And Deployment Guide](docs/es/build-deployment-guide.md)
-- [MySQL ER Design](docs/es/mysql-er.md)
-- [Nexus Migration Guide](docs/es/nexus-migration-guide.md)
-- [Monitoring And Observability Guide](docs/es/monitoring-observability-guide.md)
-- [Nexus Compatibility Testing](docs/es/nexus-compatibility-testing.md)
-- [Why We Built nexus-plus To Replace Nexus](docs/es/why-nexus-plus.md)
+- [Development Guide](docs/en/development-guide.md)
+- [Build And Deployment Guide](docs/en/build-deployment-guide.md)
+- [MySQL ER Design](docs/en/mysql-er.md)
+- [Nexus Migration Guide](docs/en/nexus-migration-guide.md)
+- [Monitoring And Observability Guide](docs/en/monitoring-observability-guide.md)
+- [Nexus Compatibility Testing](docs/en/nexus-compatibility-testing.md)
+- [Why We Built nexus-plus To Replace Nexus](docs/en/why-nexus-plus.md)

@@ -133,7 +133,7 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 
 后续仓库格式迭代路线：
 
-1. Docker / OCI Registry
+1. Docker / OCI Registry - 进行中（[开发计划](docs/zh/dev/docker-repository-implementation-plan.md)）
 2. APT / Debian
 3. Cargo / Rust
 4. Terraform Provider / Module Registry
