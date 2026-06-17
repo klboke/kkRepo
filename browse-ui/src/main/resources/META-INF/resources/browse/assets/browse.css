@@ -1021,6 +1021,20 @@ h1 {
 .repo-row { cursor: pointer; }
 .repo-row:hover { background: var(--row-alt); }
 
+.component-result-row {
+  cursor: pointer;
+}
+
+.component-result-row:hover,
+.component-result-row:focus {
+  background: var(--row-alt);
+  outline: none;
+}
+
+.component-result-row:focus-visible {
+  box-shadow: inset 3px 0 0 var(--active);
+}
+
 .muted-row {
   color: var(--muted);
   font-style: italic;
