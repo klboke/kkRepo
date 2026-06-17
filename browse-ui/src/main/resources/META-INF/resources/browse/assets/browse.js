@@ -110,6 +110,27 @@ function repositoryBrowseHash(repoName, path = "") {
   return `${hash}?${params.toString()}`;
 }
 
+function componentBrowsePath(component) {
+  const format = (component.format || "").toLowerCase();
+  const group = (component.group || "").trim();
+  const name = (component.name || "").trim();
+  const version = (component.version || "").trim();
+  if (!name) return "";
+  if (format === "maven2") {
+    return [group ? group.replaceAll(".", "/") : "", name, version].filter(Boolean).join("/");
+  }
+  if (format === "pypi") {
+    return [name, version].filter(Boolean).join("/");
+  }
+  if (format === "npm") {
+    return group ? `@${group}/${name}` : name;
+  }
+  if (format === "go") {
+    return name;
+  }
+  return "";
+}
+
 function parseBrowseHash() {
   const hash = window.location.hash.replace(/^#/, "");
   if (!hash) return null;
@@ -952,6 +973,11 @@ function activateSearch(format = DEFAULT_SEARCH_FORMAT, syncHash = true) {
 
 function showSearch(format = DEFAULT_SEARCH_FORMAT, syncHash = true) {
   renderSearch(activateSearch(format, syncHash));
+}
+
+function openSearchResult(component) {
+  if (!component || !component.repository) return;
+  showRepositoryTree(component.repository, true, componentBrowsePath(component));
 }
 
 function renderRepoList() {
@@ -2099,8 +2125,13 @@ async function renderSearch(format = DEFAULT_SEARCH_FORMAT) {
       '<tr><td colspan="7" class="muted-row">No components found.</td></tr>';
     return;
   }
-  document.getElementById("component-table").innerHTML = rows.map((component) => `
-    <tr>
+  document.getElementById("component-table").innerHTML = rows.map((component, index) => {
+    const browsePath = componentBrowsePath(component);
+    const title = browsePath
+      ? `Open ${component.repository}/${browsePath} in Browse`
+      : `Open ${component.repository} in Browse`;
+    return `
+    <tr class="component-result-row" data-component-result-index="${index}" tabindex="0" title="${escapeHtml(title)}">
       <td class="icon-column"><span class="component-icon">▰</span></td>
       <td>${escapeHtml(component.name)}</td>
       <td>${component.group ? escapeHtml(component.group) : '<span class="health-muted">⊘</span>'}</td>
@@ -2109,7 +2140,17 @@ async function renderSearch(format = DEFAULT_SEARCH_FORMAT) {
       <td>${escapeHtml(component.repository)}</td>
       <td class="expand-column">›</td>
     </tr>
-  `).join("");
+  `;
+  }).join("");
+  document.querySelectorAll("#component-table .component-result-row").forEach((tr) => {
+    const result = rows[Number(tr.dataset.componentResultIndex)];
+    tr.addEventListener("click", () => openSearchResult(result));
+    tr.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      openSearchResult(result);
+    });
+  });
 }
 
 function switchView(view) {
