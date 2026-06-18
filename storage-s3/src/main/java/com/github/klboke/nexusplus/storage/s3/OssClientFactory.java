@@ -3,6 +3,7 @@ package com.github.klboke.nexusplus.storage.s3;
 import com.aliyun.sdk.service.oss2.OSSClient;
 import com.aliyun.sdk.service.oss2.credentials.StaticCredentialsProvider;
 import com.aliyun.sdk.service.oss2.transport.HttpClientOptions;
+import com.aliyun.sdk.service.oss2.transport.apache5client.Apache5HttpClient;
 import com.aliyun.sdk.service.oss2.transport.apache5client.Apache5HttpClientBuilder;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -53,20 +54,29 @@ public class OssClientFactory {
   }
 
   private static OSSClient build(S3BlobStoreConfig config) {
-    // Connection-pool / timeout tuning lives on the HTTP client options (Apache5 transport).
-    HttpClientOptions httpOptions = HttpClientOptions.custom()
-        .maxConnections(config.maxConnections())
-        .connectTimeout(Duration.ofMillis(config.connectionTimeoutMs()))
-        .readWriteTimeout(Duration.ofMillis(config.socketTimeoutMs()))
-        .keepAliveTimeout(Duration.ofSeconds(30))
-        .build();
     return OSSClient.newBuilder()
         .region(config.region())
         .endpoint(config.endpoint())
         .credentialsProvider(new StaticCredentialsProvider(config.accessKey(), config.secretKey()))
         .usePathStyle(config.pathStyleAccess())
         .retryMaxAttempts(3)
-        .httpClient(Apache5HttpClientBuilder.create().options(httpOptions).build())
+        .httpClient(buildHttpClient(config))
+        .build();
+  }
+
+  static Apache5HttpClient buildHttpClient(S3BlobStoreConfig config) {
+    // Socket/connect timeout tuning lives in HTTP options; pool lease/max settings are builder-only
+    // in Aliyun OSS SDK v2 0.4.0's Apache5 transport.
+    HttpClientOptions httpOptions = HttpClientOptions.custom()
+        .maxConnections(config.maxConnections())
+        .connectTimeout(Duration.ofMillis(config.connectionTimeoutMs()))
+        .readWriteTimeout(Duration.ofMillis(config.socketTimeoutMs()))
+        .keepAliveTimeout(Duration.ofSeconds(30))
+        .build();
+    return Apache5HttpClientBuilder.create()
+        .options(httpOptions)
+        .maxConnections(config.maxConnections())
+        .connectionRequestTimeout(config.connectionAcquisitionTimeoutMs())
         .build();
   }
 
