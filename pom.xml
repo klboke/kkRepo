@@ -42,7 +42,7 @@
     <maven.artifact.version>3.9.16</maven.artifact.version>
     <aws.sdk.version>2.46.15</aws.sdk.version>
     <commons.compress.version>1.28.0</commons.compress.version>
-    <commons.lang3.version>3.18.0</commons.lang3.version>
+    <commons.lang3.version>3.20.0</commons.lang3.version>
     <maven.compiler.release>${java.version}</maven.compiler.release>
     <kkrepo.dist.version>${project.version}</kkrepo.dist.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
