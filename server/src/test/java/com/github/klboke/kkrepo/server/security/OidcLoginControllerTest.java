@@ -9,11 +9,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityDao;
 import com.github.klboke.kkrepo.persistence.mysql.model.SecurityRealmRecord;
+import com.sun.net.httpserver.HttpServer;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import java.lang.reflect.Proxy;
+import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
@@ -80,7 +82,7 @@ class OidcLoginControllerTest {
   }
 
   @Test
-  void loginRejectsAuthorizationEndpointOnDifferentHostThanIssuer() {
+  void loginAllowsConfiguredAuthorizationEndpointOnDifferentHostWhenOutboundPolicyAllowsIt() throws Exception {
     SessionState session = new SessionState();
     ResponseState response = new ResponseState();
     StubAuthenticationService authentication = new StubAuthenticationService();
@@ -97,13 +99,51 @@ class OidcLoginControllerTest {
         null,
         "");
 
-    SecurityValidationException error = assertThrows(
-        SecurityValidationException.class,
-        () -> controller.login(request(session), response.proxy(), "/browse/"));
+    controller.login(request(session), response.proxy(), "/browse/");
 
-    assertEquals(
-        "OIDC authorization endpoint host must match configured issuer/discovery host",
-        error.getMessage());
+    URI redirect = URI.create(response.redirect);
+    assertEquals("login.example.net", redirect.getHost());
+    assertEquals("/oauth2/authorize", redirect.getPath());
+  }
+
+  @Test
+  void loginAllowsDiscoveredAuthorizationEndpointOnDifferentHostThanIssuer() throws Exception {
+    try (TestOidcDiscovery discovery = oidcDiscoveryServer("127.0.0.1", "localhost", false)) {
+      SessionState session = new SessionState();
+      ResponseState response = new ResponseState();
+      StubAuthenticationService authentication = new StubAuthenticationService();
+      authentication.oidcRealm = Optional.of(oidcRealm(Map.of(
+          "clientId", "kkrepo",
+          "issuerUri", discovery.issuer(),
+          "redirectUri", "http://nexus.example.com/internal/security/oidc/callback")));
+      OidcLoginController controller = new OidcLoginController(authentication, new ObjectMapper());
+
+      controller.login(request(session), response.proxy(), "/browse/");
+
+      URI redirect = URI.create(response.redirect);
+      assertEquals("localhost", redirect.getHost());
+      assertEquals("/oauth2/authorize", redirect.getPath());
+    }
+  }
+
+  @Test
+  void discoveryRejectsIssuerMismatch() throws Exception {
+    try (TestOidcDiscovery discovery = oidcDiscoveryServer("127.0.0.1", "localhost", true)) {
+      SessionState session = new SessionState();
+      ResponseState response = new ResponseState();
+      StubAuthenticationService authentication = new StubAuthenticationService();
+      authentication.oidcRealm = Optional.of(oidcRealm(Map.of(
+          "clientId", "kkrepo",
+          "issuerUri", discovery.issuer(),
+          "redirectUri", "http://nexus.example.com/internal/security/oidc/callback")));
+      OidcLoginController controller = new OidcLoginController(authentication, new ObjectMapper());
+
+      SecurityValidationException error = assertThrows(
+          SecurityValidationException.class,
+          () -> controller.login(request(session), response.proxy(), "/browse/"));
+
+      assertEquals("OIDC discovery issuer must match configured issuer", error.getMessage());
+    }
   }
 
   @Test
@@ -307,6 +347,31 @@ class OidcLoginControllerTest {
     return URLDecoder.decode(value, StandardCharsets.UTF_8);
   }
 
+  private static TestOidcDiscovery oidcDiscoveryServer(
+      String issuerHost,
+      String authorizationHost,
+      boolean issuerMismatch) throws Exception {
+    HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    int port = server.getAddress().getPort();
+    String issuer = "http://" + issuerHost + ":" + port;
+    String authorizationEndpoint = "http://" + authorizationHost + ":" + port + "/oauth2/authorize";
+    String tokenEndpoint = "http://" + authorizationHost + ":" + port + "/oauth2/token";
+    String documentIssuer = issuerMismatch ? "http://mismatch.example.com" : issuer;
+    String body = new ObjectMapper().writeValueAsString(Map.of(
+        "issuer", documentIssuer,
+        "authorization_endpoint", authorizationEndpoint,
+        "token_endpoint", tokenEndpoint));
+    server.createContext("/.well-known/openid-configuration", exchange -> {
+      byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+      exchange.getResponseHeaders().add("Content-Type", "application/json");
+      exchange.sendResponseHeaders(200, bytes.length);
+      exchange.getResponseBody().write(bytes);
+      exchange.close();
+    });
+    server.start();
+    return new TestOidcDiscovery(server, issuer);
+  }
+
   private static Object primitiveDefault(Class<?> type) {
     if (boolean.class.equals(type)) {
       return false;
@@ -365,6 +430,13 @@ class OidcLoginControllerTest {
     @Override
     public List<String> listUserRoleIds(String source, String userId) {
       return List.of("nx-admin");
+    }
+  }
+
+  private record TestOidcDiscovery(HttpServer server, String issuer) implements AutoCloseable {
+    @Override
+    public void close() {
+      server.stop(0);
     }
   }
 

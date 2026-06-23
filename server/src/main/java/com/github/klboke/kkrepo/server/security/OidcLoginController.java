@@ -134,11 +134,13 @@ public class OidcLoginController {
     params.put("redirect_uri", redirectUri);
     params.put("scope", defaultString(stringConfig(config, "scopes", "scope"), DEFAULT_SCOPES));
     params.put("state", state);
-    URI authorizationEndpoint = outboundPolicy.validateHttpUri(
-        endpoint(config, "authorizationEndpoint", "authorizationEndpointUri", "authorization_endpoint"),
-        "OIDC authorization endpoint");
-    validateOidcEndpointHost(config, authorizationEndpoint, "OIDC authorization endpoint");
-    response.sendRedirect(appendQuery(authorizationEndpoint, form(params)));
+    OidcEndpoint authorizationEndpoint = endpoint(
+        config,
+        "OIDC authorization endpoint",
+        "authorizationEndpoint",
+        "authorizationEndpointUri",
+        "authorization_endpoint");
+    sendRedirectToOidcEndpoint(response, authorizationEndpoint, form(params));
   }
 
   @GetMapping("/oidc/callback")
@@ -201,7 +203,12 @@ public class OidcLoginController {
       String code,
       String redirectUri) {
     String clientId = required(config, "clientId", "audience");
-    String tokenEndpoint = endpoint(config, "tokenEndpoint", "tokenEndpointUri", "token_endpoint");
+    OidcEndpoint tokenEndpoint = endpoint(
+        config,
+        "OIDC token endpoint",
+        "tokenEndpoint",
+        "tokenEndpointUri",
+        "token_endpoint");
     Map<String, String> body = new LinkedHashMap<>();
     body.put("grant_type", "authorization_code");
     body.put("code", code);
@@ -211,9 +218,7 @@ public class OidcLoginController {
     if (clientSecret != null) {
       body.put("client_secret", clientSecret);
     }
-    URI tokenEndpointUri = outboundPolicy.validateHttpUri(tokenEndpoint, "OIDC token endpoint");
-    validateOidcEndpointHost(config, tokenEndpointUri, "OIDC token endpoint");
-    HttpRequest tokenRequest = HttpRequest.newBuilder(tokenEndpointUri)
+    HttpRequest tokenRequest = HttpRequest.newBuilder(tokenEndpoint.uri())
         .header("Content-Type", MediaType.APPLICATION_FORM_URLENCODED_VALUE)
         .POST(HttpRequest.BodyPublishers.ofString(form(body)))
         .build();
@@ -231,19 +236,27 @@ public class OidcLoginController {
     }
   }
 
-  private String endpoint(Map<String, Object> config, String... keys) {
+  private OidcEndpoint endpoint(Map<String, Object> config, String purpose, String... keys) {
     String direct = stringConfig(config, keys);
     if (direct != null) {
-      return direct;
+      return validatedEndpoint(direct, purpose);
     }
     Map<String, Object> discovery = discovery(config);
     for (String key : keys) {
       String discovered = asString(discovery.get(key));
       if (discovered != null) {
-        return discovered;
+        return validatedEndpoint(discovered, purpose);
       }
     }
     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "OIDC endpoint is not configured: " + String.join("/", keys));
+  }
+
+  private OidcEndpoint validatedEndpoint(String rawUrl, String purpose) {
+    URI uri = outboundPolicy.validateHttpUri(rawUrl, purpose);
+    if (uri.getRawFragment() != null) {
+      throw new SecurityValidationException(purpose + " URL must not include a fragment");
+    }
+    return new OidcEndpoint(uri, uri.getHost());
   }
 
   private Map<String, Object> discovery(Map<String, Object> config) {
@@ -255,7 +268,9 @@ public class OidcLoginController {
     if (sharedCache != null) {
       Optional<Map<String, Object>> cached = sharedCache.getJson(DISCOVERY_CACHE_NAMESPACE, uri, JSON_MAP);
       if (cached.isPresent()) {
-        return cached.get();
+        Map<String, Object> document = cached.get();
+        validateDiscoveryDocument(config, document);
+        return document;
       }
     }
     try {
@@ -266,6 +281,7 @@ public class OidcLoginController {
         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "OIDC discovery endpoint returned " + response.statusCode());
       }
       Map<String, Object> document = objectMapper.readValue(response.body(), JSON_MAP);
+      validateDiscoveryDocument(config, document);
       if (sharedCache != null) {
         sharedCache.putJson(DISCOVERY_CACHE_NAMESPACE, uri, document, java.time.Duration.ofSeconds(300));
       }
@@ -278,18 +294,28 @@ public class OidcLoginController {
     }
   }
 
-  private void validateOidcEndpointHost(Map<String, Object> config, URI endpoint, String purpose) {
-    String issuer = stringConfig(config, "issuerUri", "issuer");
-    String discoveryUri = stringConfig(config, "discoveryUri", "metadataUrl", "wellKnownUrl");
-    if (issuer == null && discoveryUri == null) {
+  private void validateDiscoveryDocument(Map<String, Object> config, Map<String, Object> document) {
+    String configuredIssuer = stringConfig(config, "issuerUri", "issuer");
+    if (configuredIssuer == null) {
       return;
     }
-    URI expected = outboundPolicy.validateHttpUri(
-        discoveryUri == null ? stripTrailingSlash(issuer) + "/.well-known/openid-configuration" : discoveryUri,
-        purpose + " issuer");
-    if (!endpoint.getHost().equals(expected.getHost())) {
-      throw new SecurityValidationException(purpose + " host must match configured issuer/discovery host");
+    String discoveredIssuer = asString(document.get("issuer"));
+    String expectedIssuer = stripTrailingSlash(configuredIssuer);
+    if (!expectedIssuer.equals(discoveredIssuer)) {
+      throw new SecurityValidationException("OIDC discovery issuer must match configured issuer");
     }
+  }
+
+  private void sendRedirectToOidcEndpoint(
+      HttpServletResponse response,
+      OidcEndpoint endpoint,
+      String query) throws IOException {
+    URI uri = endpoint.uri();
+    String authorizedHost = endpoint.authorizedRedirectHost();
+    if (!authorizedHost.equals(uri.getHost())) {
+      throw new SecurityValidationException("OIDC authorization endpoint host changed after validation");
+    }
+    response.sendRedirect(appendQuery(uri, query));
   }
 
   private String redirectUri(HttpServletRequest request, Map<String, Object> config) {
@@ -428,5 +454,8 @@ public class OidcLoginController {
   }
 
   public record LoginResult(String returnTo) {
+  }
+
+  private record OidcEndpoint(URI uri, String authorizedRedirectHost) {
   }
 }
