@@ -46,7 +46,6 @@ public class OidcLoginController {
   private final ObjectMapper objectMapper;
   private final HttpClient httpClient;
   private final OutboundRequestPolicy outboundPolicy;
-  private final ForwardedHeaderPolicy forwardedHeaderPolicy;
   private final String externalBaseUrl;
   private final SharedCache sharedCache;
   private final SecureRandom secureRandom = new SecureRandom();
@@ -56,13 +55,11 @@ public class OidcLoginController {
       SecurityAuthenticationService authenticationService,
       ObjectMapper objectMapper,
       OutboundRequestPolicy outboundPolicy,
-      ForwardedHeaderPolicy forwardedHeaderPolicy,
       SharedCache sharedCache,
       @Value("${kkrepo.security.external-base-url:}") String externalBaseUrl) {
     this.authenticationService = authenticationService;
     this.objectMapper = objectMapper;
     this.outboundPolicy = outboundPolicy;
-    this.forwardedHeaderPolicy = forwardedHeaderPolicy;
     this.sharedCache = sharedCache;
     this.externalBaseUrl = asString(externalBaseUrl);
     this.httpClient = HttpClient.newHttpClient();
@@ -75,7 +72,6 @@ public class OidcLoginController {
         authenticationService,
         objectMapper,
         OutboundRequestPolicy.allowPrivateForTests(),
-        new ForwardedHeaderPolicy(""),
         null,
         "");
   }
@@ -122,7 +118,7 @@ public class OidcLoginController {
     SecurityRealmRecord realm = activeOidcRealm();
     Map<String, Object> config = attributes(realm);
     String clientId = required(config, "clientId", "audience");
-    String redirectUri = redirectUri(request, config);
+    String redirectUri = redirectUri(config);
     String state = randomToken();
     HttpSession session = request.getSession(true);
     session.setAttribute(OIDC_STATE_ATTRIBUTE, state);
@@ -167,7 +163,7 @@ public class OidcLoginController {
     Map<String, Object> config = attributes(realm);
     String token = firstNonBlank(idToken, accessToken);
     if (token == null && code != null && !code.isBlank()) {
-      Map<String, Object> tokenResponse = exchangeCode(config, code, redirectUri(request, config));
+      Map<String, Object> tokenResponse = exchangeCode(config, code, redirectUri(config));
       token = firstNonBlank(asString(tokenResponse.get("id_token")), asString(tokenResponse.get("access_token")));
     }
     if (token == null) {
@@ -318,31 +314,17 @@ public class OidcLoginController {
     response.sendRedirect(appendQuery(uri, query));
   }
 
-  private String redirectUri(HttpServletRequest request, Map<String, Object> config) {
+  private String redirectUri(Map<String, Object> config) {
     String configured = stringConfig(config, "redirectUri", "redirect_uri");
     if (configured != null) {
       return configured;
     }
     if (externalBaseUrl != null) {
-      return stripTrailingSlash(externalBaseUrl) + request.getContextPath() + "/internal/security/oidc/callback";
+      return stripTrailingSlash(externalBaseUrl) + "/internal/security/oidc/callback";
     }
-    return externalBaseUri(request) + request.getContextPath() + "/internal/security/oidc/callback";
-  }
-
-  private String externalBaseUri(HttpServletRequest request) {
-    boolean trustedForwarded = forwardedHeaderPolicy.trusted(request);
-    String proto = trustedForwarded
-        ? defaultString(firstForwarded(request.getHeader("X-Forwarded-Proto")), request.getScheme())
-        : request.getScheme();
-    String host = trustedForwarded ? firstForwarded(request.getHeader("X-Forwarded-Host")) : null;
-    if (host == null) {
-      host = request.getServerName();
-      int port = request.getServerPort();
-      if (port > 0 && !host.contains(":") && !defaultPort(proto, port)) {
-        host += ":" + port;
-      }
-    }
-    return proto + "://" + host;
+    throw new ResponseStatusException(
+        HttpStatus.BAD_REQUEST,
+        "OIDC redirectUri or kkrepo.security.external-base-url must be configured");
   }
 
   private String randomToken() {
@@ -402,19 +384,6 @@ public class OidcLoginController {
 
   private static String urlEncode(String value) {
     return URLEncoder.encode(value, StandardCharsets.UTF_8);
-  }
-
-  private static String firstForwarded(String header) {
-    if (header == null || header.isBlank()) {
-      return null;
-    }
-    String first = header.split(",", 2)[0].trim();
-    return first.isBlank() ? null : first;
-  }
-
-  private static boolean defaultPort(String proto, int port) {
-    return ("http".equalsIgnoreCase(proto) && port == 80)
-        || ("https".equalsIgnoreCase(proto) && port == 443);
   }
 
   private static String stripTrailingSlash(String value) {

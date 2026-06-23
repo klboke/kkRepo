@@ -70,7 +70,6 @@ class OidcLoginControllerTest {
         authentication,
         new ObjectMapper(),
         new OutboundRequestPolicy(false, ""),
-        new ForwardedHeaderPolicy(""),
         null,
         "");
 
@@ -95,7 +94,6 @@ class OidcLoginControllerTest {
         authentication,
         new ObjectMapper(),
         new OutboundRequestPolicy(false, "issuer.example.com,login.example.net"),
-        new ForwardedHeaderPolicy(""),
         null,
         "");
 
@@ -104,6 +102,51 @@ class OidcLoginControllerTest {
     URI redirect = URI.create(response.redirect);
     assertEquals("login.example.net", redirect.getHost());
     assertEquals("/oauth2/authorize", redirect.getPath());
+  }
+
+  @Test
+  void loginBuildsRedirectUriFromConfiguredExternalBaseUrl() throws Exception {
+    SessionState session = new SessionState();
+    ResponseState response = new ResponseState();
+    StubAuthenticationService authentication = new StubAuthenticationService();
+    authentication.oidcRealm = Optional.of(oidcRealm(Map.of(
+        "clientId", "kkrepo",
+        "issuerUri", "https://localhost",
+        "authorizationEndpoint", "https://localhost/oauth2/authorize")));
+    OidcLoginController controller = new OidcLoginController(
+        authentication,
+        new ObjectMapper(),
+        OutboundRequestPolicy.allowPrivateForTests(),
+        null,
+        "https://nexus.example.com/");
+
+    controller.login(request(session), response.proxy(), "/browse/");
+
+    URI redirect = URI.create(response.redirect);
+    assertEquals(
+        "https://nexus.example.com/internal/security/oidc/callback",
+        query(redirect).get("redirect_uri"));
+  }
+
+  @Test
+  void loginRequiresConfiguredRedirectUriOrExternalBaseUrl() {
+    SessionState session = new SessionState();
+    ResponseState response = new ResponseState();
+    StubAuthenticationService authentication = new StubAuthenticationService();
+    authentication.oidcRealm = Optional.of(oidcRealm(Map.of(
+        "clientId", "kkrepo",
+        "issuerUri", "https://localhost",
+        "authorizationEndpoint", "https://localhost/oauth2/authorize")));
+    OidcLoginController controller = new OidcLoginController(authentication, new ObjectMapper());
+
+    ResponseStatusException error = assertThrows(
+        ResponseStatusException.class,
+        () -> controller.login(request(session), response.proxy(), "/browse/"));
+
+    assertTrue(error.getStatusCode().isSameCodeAs(org.springframework.http.HttpStatus.BAD_REQUEST));
+    assertEquals(
+        "OIDC redirectUri or kkrepo.security.external-base-url must be configured",
+        error.getReason());
   }
 
   @Test
