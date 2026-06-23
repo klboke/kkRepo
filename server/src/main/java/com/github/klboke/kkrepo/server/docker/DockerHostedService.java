@@ -6,6 +6,7 @@ import com.github.klboke.kkrepo.protocol.docker.DockerDigest;
 import com.github.klboke.kkrepo.protocol.docker.DockerErrorCode;
 import com.github.klboke.kkrepo.protocol.docker.DockerPathParser;
 import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
+import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerManifestRecord;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.IOException;
 import java.io.InputStream;
@@ -181,6 +182,10 @@ public class DockerHostedService {
           if (row.artifactType() != null && !row.artifactType().isBlank()) {
             descriptor.put("artifactType", row.artifactType());
           }
+          Map<String, Object> annotations = annotations(row);
+          if (!annotations.isEmpty()) {
+            descriptor.put("annotations", annotations);
+          }
           return descriptor;
         })
         .toList();
@@ -189,6 +194,12 @@ public class DockerHostedService {
         "schemaVersion", 2,
         "mediaType", DockerConstants.MEDIA_TYPE_OCI_INDEX,
         "manifests", manifests);
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> annotations(DockerManifestRecord row) {
+    Object value = row.attributes() == null ? null : row.attributes().get("annotations");
+    return value instanceof Map<?, ?> map ? (Map<String, Object>) map : Map.of();
   }
 
   private void recordReferrers(RepositoryRuntime runtime, String outcome, long count) {

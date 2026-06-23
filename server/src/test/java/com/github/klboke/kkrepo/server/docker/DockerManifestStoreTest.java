@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.docker;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -34,7 +35,8 @@ class DockerManifestStoreTest {
     DockerManifestStore store = new DockerManifestStore(assetDao, dockerDao, blobStore, parser, null, null);
     byte[] body = "{}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
     when(parser.parse(body, "application/vnd.oci.image.manifest.v1+json"))
-        .thenReturn(new DockerManifestMetadata("application/vnd.oci.image.manifest.v1+json", null, null, List.of()));
+        .thenReturn(new DockerManifestMetadata(
+            "application/vnd.oci.image.manifest.v1+json", null, null, Map.of(), List.of()));
     when(dockerDao.tagExists(runtime("ALLOW_ONCE").id(), "team/app", "latest")).thenReturn(true);
 
     DockerProtocolException thrown = assertThrows(DockerProtocolException.class,
@@ -63,7 +65,8 @@ class DockerManifestStoreTest {
     byte[] body = "{}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
     DockerDigest digest = DockerDigest.sha256(body);
     when(parser.parse(body, "application/vnd.oci.image.manifest.v1+json"))
-        .thenReturn(new DockerManifestMetadata("application/vnd.oci.image.manifest.v1+json", null, null, List.of()));
+        .thenReturn(new DockerManifestMetadata(
+            "application/vnd.oci.image.manifest.v1+json", null, null, Map.of(), List.of()));
     when(dockerDao.findManifestByDigest(runtime("ALLOW_ONCE").id(), "team/app", digest.value()))
         .thenReturn(Optional.of(manifest(digest.value())));
 
@@ -125,6 +128,56 @@ class DockerManifestStoreTest {
         .getAnnotation(Transactional.class);
 
     assertNotNull(transactional);
+  }
+
+  @Test
+  void hostedReferrersIncludeStoredManifestAnnotations() {
+    DockerManifestStore manifestStore = mock(DockerManifestStore.class);
+    DockerHostedService hosted = new DockerHostedService(
+        mock(DockerBlobStore.class),
+        manifestStore,
+        mock(DockerUploadService.class));
+    String subject = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    DockerDigest digest = DockerDigest.parse(subject);
+    String referrer = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    when(manifestStore.referrers(
+        runtime("ALLOW"),
+        subject,
+        "application/vnd.nhl.peanut.butter.bagel"))
+        .thenReturn(List.of(new DockerManifestRecord(
+            100L,
+            runtime("ALLOW").id(),
+            "team/app",
+            new byte[32],
+            "sha256",
+            referrer,
+            new byte[32],
+            "application/vnd.oci.image.manifest.v1+json",
+            "application/vnd.nhl.peanut.butter.bagel",
+            subject,
+            DockerRegistryDao.hash(subject),
+            200L,
+            123,
+            "alice",
+            "127.0.0.1",
+            null,
+            Map.of("annotations", Map.of("org.opencontainers.conformance.test", "test config a")),
+            null,
+            null)));
+
+    Map<String, Object> response = hosted.referrers(
+        runtime("ALLOW"),
+        digest,
+        "application/vnd.nhl.peanut.butter.bagel");
+
+    Object rawManifests = response.get("manifests");
+    assertTrue(rawManifests instanceof List<?>);
+    Map<?, ?> descriptor = (Map<?, ?>) ((List<?>) rawManifests).get(0);
+    assertEquals(referrer, descriptor.get("digest"));
+    assertEquals("application/vnd.nhl.peanut.butter.bagel", descriptor.get("artifactType"));
+    assertEquals(
+        "test config a",
+        ((Map<?, ?>) descriptor.get("annotations")).get("org.opencontainers.conformance.test"));
   }
 
   private static RepositoryRuntime runtime(String writePolicy) {

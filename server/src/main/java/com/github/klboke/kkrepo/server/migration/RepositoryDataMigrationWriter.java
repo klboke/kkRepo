@@ -362,7 +362,7 @@ class RepositoryDataMigrationWriter {
           + ": expected " + target.reference() + ", actual " + digest.value());
     }
     DockerManifestMetadata metadata = dockerManifestParser.parse(body, contentType);
-    Map<String, Object> attributes = dockerManifestAttributes(source, digest);
+    Map<String, Object> attributes = dockerManifestAttributes(source, digest, metadata);
     DockerManifestRecord manifest = dockerRegistryDao.upsertManifest(new DockerManifestRecord(
         null,
         repository.id(),
@@ -425,10 +425,14 @@ class RepositoryDataMigrationWriter {
 
   private static Map<String, Object> dockerManifestAttributes(
       RepositoryDataMigrationAssetRecord source,
-      DockerDigest digest) {
+      DockerDigest digest,
+      DockerManifestMetadata metadata) {
     LinkedHashMap<String, Object> attributes = new LinkedHashMap<>();
     attributes.put("source", "nexus-repository-data-migration");
     attributes.put("rawBytesDigest", digest.value());
+    if (metadata.annotations() != null && !metadata.annotations().isEmpty()) {
+      attributes.put("annotations", metadata.annotations());
+    }
     putIfPresent(attributes, "sourceAssetId", source.sourceAssetId());
     putIfPresent(attributes, "sourceBlobRef", source.sourceBlobRef());
     return Map.copyOf(attributes);

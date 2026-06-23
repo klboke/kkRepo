@@ -18,6 +18,10 @@ public final class DockerConstants {
       "application/vnd.oci.image.index.v1+json";
   public static final String MEDIA_TYPE_OCI_ARTIFACT =
       "application/vnd.oci.artifact.manifest.v1+json";
+  public static final String MEDIA_TYPE_OCI_IMAGE_CONFIG =
+      "application/vnd.oci.image.config.v1+json";
+  public static final String MEDIA_TYPE_OCI_EMPTY =
+      "application/vnd.oci.empty.v1+json";
   public static final String MEDIA_TYPE_JSON = "application/json";
 
   private DockerConstants() {

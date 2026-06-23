@@ -310,7 +310,7 @@ public class DockerManifestStore {
         createdBy,
         createdByIp,
         null,
-        Map.of("rawBytesDigest", digest.value()),
+        manifestAttributes(digest, metadata),
         null,
         null));
     dockerDao.replaceManifestReferences(manifest.id(), metadata.references().stream()
@@ -406,6 +406,18 @@ public class DockerManifestStore {
           record.attributes());
     }
     return assetDao.findAssetByPath(runtime.id(), path).orElseThrow();
+  }
+
+  private static Map<String, Object> manifestAttributes(
+      DockerDigest digest,
+      DockerManifestMetadata metadata) {
+    Map<String, Object> annotations = metadata.annotations() == null ? Map.of() : metadata.annotations();
+    if (annotations.isEmpty()) {
+      return Map.of("rawBytesDigest", digest.value());
+    }
+    return Map.of(
+        "rawBytesDigest", digest.value(),
+        "annotations", annotations);
   }
 
   private void validateReferences(

@@ -36,6 +36,7 @@ public class DockerManifestParser {
     String mediaType = firstText(root.get("mediaType"), contentTypeHint, DockerConstants.MEDIA_TYPE_SCHEMA2_MANIFEST);
     validateMediaType(mediaType);
     String artifactType = text(root.get("artifactType"));
+    Map<String, Object> annotations = objectMap(root.get("annotations"));
     String subjectDigest = null;
     Object subject = root.get("subject");
     if (subject instanceof Map<?, ?> subjectMap) {
@@ -46,6 +47,7 @@ public class DockerManifestParser {
     }
     List<DockerManifestDescriptor> references = new ArrayList<>();
     if (root.get("config") instanceof Map<?, ?> config) {
+      artifactType = firstText(artifactType, legacyArtifactType(config));
       references.add(descriptor("CONFIG", config));
     }
     Object layers = root.get("layers");
@@ -72,7 +74,26 @@ public class DockerManifestParser {
         }
       }
     }
-    return new DockerManifestMetadata(mediaType, artifactType, subjectDigest, List.copyOf(references));
+    return new DockerManifestMetadata(
+        mediaType,
+        artifactType,
+        subjectDigest,
+        annotations,
+        List.copyOf(references));
+  }
+
+  private static String legacyArtifactType(Map<?, ?> config) {
+    String mediaType = text(config.get("mediaType"));
+    if (mediaType == null) {
+      return null;
+    }
+    String normalized = mediaType.toLowerCase(Locale.ROOT);
+    if (normalized.equals(DockerConstants.MEDIA_TYPE_OCI_IMAGE_CONFIG)
+        || normalized.equals(DockerConstants.MEDIA_TYPE_OCI_EMPTY)
+        || normalized.equals("application/vnd.docker.container.image.v1+json")) {
+      return null;
+    }
+    return mediaType;
   }
 
   private DockerManifestDescriptor descriptor(String kind, Map<?, ?> map) {
