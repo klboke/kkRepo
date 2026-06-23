@@ -18,6 +18,7 @@ import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
+import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
 import java.io.ByteArrayInputStream;
@@ -97,9 +98,11 @@ public class NpmProxyService {
       throw new IllegalStateException("NpmProxyService.search called on non-proxy " + runtime.name());
     }
     String text = keyword == null ? "" : keyword;
-    String url = buildRemoteUrl(runtime.proxyRemoteUrl(), "-/v1/search")
-        + "?text=" + URLEncoder.encode(text, StandardCharsets.UTF_8)
-        + "&size=" + Math.max(1, limit);
+    String url = RemoteUrlBuilder.repositoryPathWithQueryString(
+        runtime.proxyRemoteUrl(),
+        "-/v1/search",
+        "text=" + URLEncoder.encode(text, StandardCharsets.UTF_8)
+            + "&size=" + Math.max(1, limit));
     Instant now = Instant.now();
     HttpRemoteFetcher.Request req = new HttpRemoteFetcher.Request(
         url, null, null, null, false)
@@ -469,11 +472,7 @@ public class NpmProxyService {
   }
 
   private static String buildRemoteUrl(String base, String path) {
-    if (base == null || base.isBlank()) {
-      throw new IllegalStateException("Proxy repository has no remote URL configured");
-    }
-    String prefix = base.endsWith("/") ? base : base + "/";
-    return prefix + path;
+    return RemoteUrlBuilder.repositoryPathString(base, path);
   }
 
   private static String stringAttr(Map<String, Object> attrs, String key) {

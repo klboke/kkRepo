@@ -67,6 +67,15 @@ class ComponentDaoTest {
     Assertions.assertFalse(jdbcTemplate.sql.contains("ORDER BY c.last_updated_at DESC, r.name"));
   }
 
+  @Test
+  void fulltextBooleanQueryTokenizesWithoutRegexBacktracking() {
+    String keyword = "\"".repeat(4096) + "Com.Example artifact-1.0";
+
+    Assertions.assertEquals(
+        "+com* +example* +artifact* +1* +0*",
+        ComponentDao.fulltextBooleanQuery(keyword));
+  }
+
   private static final class CountingJdbcTemplate extends JdbcTemplate {
     private final long[] ids;
     private final AtomicInteger executeCalls = new AtomicInteger();

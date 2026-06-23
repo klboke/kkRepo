@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.server.cache.NexusLikeCacheInfo;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
+import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
 import java.io.ByteArrayInputStream;
@@ -307,8 +308,7 @@ public class PypiProxyService {
     String href = match.href();
     int hashIdx = href.indexOf('#');
     if (hashIdx >= 0) href = href.substring(0, hashIdx);
-    URI base = ensureTrailingSlash(URI.create(runtime.proxyRemoteUrl()))
-        .resolve(PypiPaths.indexPath(projectName));
+    URI base = RemoteUrlBuilder.repositoryPath(runtime.proxyRemoteUrl(), PypiPaths.indexPath(projectName));
     return base.resolve(href).toString();
   }
 
@@ -432,16 +432,7 @@ public class PypiProxyService {
   }
 
   private static String buildRemoteUrl(String base, String path) {
-    if (base == null || base.isBlank()) {
-      throw new IllegalStateException("Proxy repository has no remote URL configured");
-    }
-    String prefix = base.endsWith("/") ? base : base + "/";
-    return prefix + path;
-  }
-
-  private static URI ensureTrailingSlash(URI uri) {
-    String raw = uri.toString();
-    return raw.endsWith("/") ? uri : URI.create(raw + "/");
+    return RemoteUrlBuilder.repositoryPathString(base, path);
   }
 
   private static String stringAttr(Map<String, Object> attrs, String key) {

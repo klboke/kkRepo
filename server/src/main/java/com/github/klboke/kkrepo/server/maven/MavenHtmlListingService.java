@@ -17,6 +17,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import org.springframework.web.util.HtmlUtils;
 import org.springframework.stereotype.Service;
 
 /**
@@ -287,10 +288,7 @@ public class MavenHtmlListingService {
 
   private static String escape(String s) {
     if (s == null) return "";
-    return s.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\"", "&quot;");
+    return HtmlUtils.htmlEscape(s, "UTF-8");
   }
 
   private record ListingPath(String storagePath, String displayPath, boolean stripPypiPackages) {}

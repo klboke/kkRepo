@@ -134,8 +134,11 @@ public class OidcLoginController {
     params.put("redirect_uri", redirectUri);
     params.put("scope", defaultString(stringConfig(config, "scopes", "scope"), DEFAULT_SCOPES));
     params.put("state", state);
-    String authorizationEndpoint = endpoint(config, "authorizationEndpoint", "authorizationEndpointUri", "authorization_endpoint");
-    response.sendRedirect(authorizationEndpoint + querySeparator(authorizationEndpoint) + form(params));
+    URI authorizationEndpoint = outboundPolicy.validateHttpUri(
+        endpoint(config, "authorizationEndpoint", "authorizationEndpointUri", "authorization_endpoint"),
+        "OIDC authorization endpoint");
+    validateOidcEndpointHost(config, authorizationEndpoint, "OIDC authorization endpoint");
+    response.sendRedirect(appendQuery(authorizationEndpoint, form(params)));
   }
 
   @GetMapping("/oidc/callback")
@@ -208,8 +211,9 @@ public class OidcLoginController {
     if (clientSecret != null) {
       body.put("client_secret", clientSecret);
     }
-    HttpRequest tokenRequest = HttpRequest.newBuilder(
-            outboundPolicy.validateHttpUri(tokenEndpoint, "OIDC token endpoint"))
+    URI tokenEndpointUri = outboundPolicy.validateHttpUri(tokenEndpoint, "OIDC token endpoint");
+    validateOidcEndpointHost(config, tokenEndpointUri, "OIDC token endpoint");
+    HttpRequest tokenRequest = HttpRequest.newBuilder(tokenEndpointUri)
         .header("Content-Type", MediaType.APPLICATION_FORM_URLENCODED_VALUE)
         .POST(HttpRequest.BodyPublishers.ofString(form(body)))
         .build();
@@ -271,6 +275,20 @@ public class OidcLoginController {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "OIDC discovery was interrupted", e);
     } catch (IOException e) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "OIDC discovery failed", e);
+    }
+  }
+
+  private void validateOidcEndpointHost(Map<String, Object> config, URI endpoint, String purpose) {
+    String issuer = stringConfig(config, "issuerUri", "issuer");
+    String discoveryUri = stringConfig(config, "discoveryUri", "metadataUrl", "wellKnownUrl");
+    if (issuer == null && discoveryUri == null) {
+      return;
+    }
+    URI expected = outboundPolicy.validateHttpUri(
+        discoveryUri == null ? stripTrailingSlash(issuer) + "/.well-known/openid-configuration" : discoveryUri,
+        purpose + " issuer");
+    if (!endpoint.getHost().equals(expected.getHost())) {
+      throw new SecurityValidationException(purpose + " host must match configured issuer/discovery host");
     }
   }
 
@@ -351,8 +369,9 @@ public class OidcLoginController {
     return builder.toString();
   }
 
-  private static String querySeparator(String uri) {
-    return uri.contains("?") ? "&" : "?";
+  private static String appendQuery(URI uri, String query) {
+    String raw = uri.toString();
+    return raw + (uri.getRawQuery() == null ? "?" : "&") + query;
   }
 
   private static String urlEncode(String value) {

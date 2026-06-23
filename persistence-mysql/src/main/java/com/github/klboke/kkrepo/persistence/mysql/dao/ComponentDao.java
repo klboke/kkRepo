@@ -311,19 +311,28 @@ public class ComponentDao {
     tokens.add(value);
   }
 
-  private static String fulltextBooleanQuery(String keyword) {
+  static String fulltextBooleanQuery(String keyword) {
     if (keyword == null || keyword.isBlank()) return "";
-    String normalized = keyword.toLowerCase(Locale.ROOT)
-        .replaceAll("[^\\p{Alnum}]+", " ")
-        .trim();
-    if (normalized.isBlank()) return "";
     List<String> terms = new ArrayList<>();
-    for (String token : normalized.split("\\s+")) {
-      String cleaned = token.replaceAll("^[+\\-~<>()*@\"]+|[+\\-~<>()*@\"]+$", "");
-      if (cleaned.isBlank()) continue;
-      terms.add("+" + cleaned + "*");
+    StringBuilder token = new StringBuilder();
+    for (int i = 0; i < keyword.length(); i++) {
+      char c = keyword.charAt(i);
+      if (Character.isLetterOrDigit(c)) {
+        token.append(Character.toLowerCase(c));
+      } else {
+        addFulltextTerm(terms, token);
+      }
     }
+    addFulltextTerm(terms, token);
     return String.join(" ", terms);
+  }
+
+  private static void addFulltextTerm(List<String> terms, StringBuilder token) {
+    if (token.isEmpty()) {
+      return;
+    }
+    terms.add("+" + token + "*");
+    token.setLength(0);
   }
 
   public long countByRepositoryId(long repositoryId) {

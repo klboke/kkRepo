@@ -12,6 +12,7 @@ import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
+import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
 import java.io.IOException;
@@ -354,11 +355,7 @@ public class HelmProxyService {
   }
 
   private static String buildRemoteUrl(String base, String path) {
-    if (base == null || base.isBlank()) {
-      throw new IllegalStateException("Proxy repository has no remote URL configured");
-    }
-    String prefix = base.endsWith("/") ? base : base + "/";
-    return prefix + path;
+    return RemoteUrlBuilder.repositoryPathString(base, path);
   }
 
   private static String fileName(String path) {

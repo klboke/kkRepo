@@ -10,10 +10,9 @@ import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
+import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.IOException;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Locale;
@@ -279,21 +278,7 @@ public class RawProxyService {
   }
 
   private static String buildRemoteUrl(String base, String path) {
-    if (base == null || base.isBlank()) {
-      throw new IllegalStateException("Proxy repository has no remote URL configured");
-    }
-    String prefix = base.endsWith("/") ? base : base + "/";
-    return prefix + encodePath(path);
-  }
-
-  private static String encodePath(String path) {
-    String[] segments = path.split("/", -1);
-    StringBuilder out = new StringBuilder(path.length() + 16);
-    for (int i = 0; i < segments.length; i++) {
-      if (i > 0) out.append('/');
-      out.append(URLEncoder.encode(segments[i], StandardCharsets.UTF_8).replace("+", "%20"));
-    }
-    return out.toString();
+    return RemoteUrlBuilder.repositoryPathString(base, path);
   }
 
   private static String stringAttr(Map<String, Object> attrs, String key) {

@@ -4,6 +4,7 @@ import com.github.klboke.kkrepo.cache.SharedCache;
 import com.github.klboke.kkrepo.protocol.docker.DockerErrorCode;
 import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
+import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.metrics.KkRepoMetrics;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
@@ -234,12 +235,12 @@ public class DockerRemoteRegistryClient {
     String path = remotePath == null ? "" : remotePath;
     while (path.startsWith("/")) path = path.substring(1);
     if (base.endsWith("/v2")) {
-      return base + "/" + path;
+      return RemoteUrlBuilder.repositoryPathString(base, path);
     }
     if (base.contains("/v2/")) {
-      return base + "/" + path;
+      return RemoteUrlBuilder.repositoryPathString(base, path);
     }
-    return base + "/v2/" + path;
+    return RemoteUrlBuilder.repositoryPathString(base + "/v2", path);
   }
 
   private static String encode(String value) {

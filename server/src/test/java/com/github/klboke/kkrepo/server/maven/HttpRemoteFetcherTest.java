@@ -13,8 +13,13 @@ import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayDeque;
+import java.util.List;
 import java.util.Map;
 import java.util.Queue;
+import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
+import com.github.klboke.kkrepo.server.security.SecurityValidationException;
 import org.junit.jupiter.api.Test;
 
 class HttpRemoteFetcherTest {
@@ -65,6 +70,55 @@ class HttpRemoteFetcherTest {
         Duration.ofSeconds(9),
         fetcher.requestTimeout(new HttpRemoteFetcher.Request(
             "https://repo.example/artifact.jar", null, null, Duration.ofSeconds(9), false)));
+  }
+
+  @Test
+  void requestUriMustPassOutboundPolicyValidation() {
+    HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request.get("http://127.0.0.1/artifact.jar");
+
+    assertThrows(
+        SecurityValidationException.class,
+        () -> request.validatedUri(new OutboundRequestPolicy(false, ""), "remote fetch"));
+  }
+
+  @Test
+  void requestUriMustRemainOnRepositoryRemoteHost() {
+    RepositoryRuntime runtime = new RepositoryRuntime(
+        1,
+        "maven-proxy",
+        RepositoryFormat.MAVEN2,
+        RepositoryType.PROXY,
+        "maven2-proxy",
+        true,
+        1L,
+        null,
+        "RELEASE",
+        "STRICT",
+        true,
+        "https://repo.example.com/maven2",
+        1440,
+        1440,
+        List.of());
+    HttpRemoteFetcher.Request trusted = HttpRemoteFetcher.Request
+        .get("https://repo.example.com/maven2/com/example/app.jar")
+        .withRepository(runtime);
+    HttpRemoteFetcher.Request tampered = new HttpRemoteFetcher.Request(
+        "https://evil.example.com/maven2/com/example/app.jar",
+        trusted.etag(),
+        trusted.lastModified(),
+        trusted.timeout(),
+        trusted.timeoutProfile(),
+        trusted.headOnly(),
+        trusted.repository(),
+        trusted.format(),
+        trusted.trustedHost());
+
+    OutboundRequestPolicy policy = new OutboundRequestPolicy(false, "repo.example.com,evil.example.com");
+    assertEquals("repo.example.com", trusted.validatedUri(policy, "remote fetch").getHost());
+    SecurityValidationException error = assertThrows(
+        SecurityValidationException.class,
+        () -> tampered.validatedUri(policy, "remote fetch"));
+    assertEquals("remote fetch URL host must remain repo.example.com", error.getMessage());
   }
 
   @Test

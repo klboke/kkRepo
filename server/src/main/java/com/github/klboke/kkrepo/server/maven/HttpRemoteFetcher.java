@@ -15,6 +15,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
+import com.github.klboke.kkrepo.server.security.SecurityValidationException;
 import com.github.klboke.kkrepo.server.metrics.KkRepoMetrics;
 import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
@@ -145,7 +146,7 @@ public class HttpRemoteFetcher {
   }
 
   private Result fetchInternal(Request req, int redirects) throws IOException {
-    URI uri = outboundPolicy.validateHttpUri(req.url(), "remote fetch");
+    var uri = req.validatedUri(outboundPolicy, "remote fetch");
     HttpRequest.Builder b = HttpRequest.newBuilder()
         .uri(uri)
         .timeout(requestTimeout(req))
@@ -169,7 +170,7 @@ public class HttpRemoteFetcher {
         if (redirects >= MAX_REDIRECTS) {
           throw new IOException("Too many redirects fetching " + req.url());
         }
-        URI redirected = outboundPolicy.validateHttpUri(uri.resolve(redirect.get()), "remote redirect");
+        var redirected = outboundPolicy.validateHttpUri(uri.resolve(redirect.get()), "remote redirect");
         return fetchInternal(new Request(
             redirected.toString(),
             req.etag(),
@@ -270,9 +271,10 @@ public class HttpRemoteFetcher {
       TimeoutProfile timeoutProfile,
       boolean headOnly,
       String repository,
-      String format) {
+      String format,
+      String trustedHost) {
     public Request(String url, String etag, Instant lastModified, Duration timeout, boolean headOnly) {
-      this(url, etag, lastModified, timeout, TimeoutProfile.DEFAULT, headOnly, null, null);
+      this(url, etag, lastModified, timeout, TimeoutProfile.DEFAULT, headOnly, null, null, null);
     }
 
     public Request(
@@ -284,6 +286,19 @@ public class HttpRemoteFetcher {
         boolean headOnly,
         String repository,
         String format) {
+      this(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format, null);
+    }
+
+    public Request(
+        String url,
+        String etag,
+        Instant lastModified,
+        Duration timeout,
+        TimeoutProfile timeoutProfile,
+        boolean headOnly,
+        String repository,
+        String format,
+        String trustedHost) {
       this.url = url;
       this.etag = etag;
       this.lastModified = lastModified;
@@ -292,6 +307,7 @@ public class HttpRemoteFetcher {
       this.headOnly = headOnly;
       this.repository = repository;
       this.format = format;
+      this.trustedHost = trustedHost;
     }
 
     public static Request get(String url) {
@@ -299,11 +315,11 @@ public class HttpRemoteFetcher {
     }
 
     public Request withConditional(String etag, Instant lastModified) {
-      return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format);
+      return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format, trustedHost);
     }
 
     public Request withTimeoutProfile(TimeoutProfile timeoutProfile) {
-      return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format);
+      return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format, trustedHost);
     }
 
     public Request withRepository(RepositoryRuntime runtime) {
@@ -315,11 +331,36 @@ public class HttpRemoteFetcher {
           timeoutProfile,
           headOnly,
           runtime == null ? null : runtime.name(),
-          runtime == null || runtime.format() == null ? null : runtime.format().name());
+          runtime == null || runtime.format() == null ? null : runtime.format().name(),
+          trustedRemoteHost(url, runtime));
     }
 
     public String method() {
       return headOnly ? "HEAD" : "GET";
+    }
+
+    java.net.URI validatedUri(OutboundRequestPolicy policy, String purpose) {
+      URI uri = policy.validateHttpUri(url, purpose);
+      if (trustedHost != null && !uri.getHost().equals(trustedHost)) {
+        throw new SecurityValidationException(purpose + " URL host must remain " + trustedHost);
+      }
+      return uri;
+    }
+
+    private static String trustedRemoteHost(String url, RepositoryRuntime runtime) {
+      if (runtime == null || runtime.proxyRemoteUrl() == null || runtime.proxyRemoteUrl().isBlank()) {
+        return null;
+      }
+      try {
+        String baseHost = URI.create(runtime.proxyRemoteUrl()).getHost();
+        String requestHost = URI.create(url).getHost();
+        if (baseHost != null && requestHost != null && requestHost.equals(baseHost)) {
+          return baseHost;
+        }
+      } catch (RuntimeException ignored) {
+        return null;
+      }
+      return null;
     }
   }
 

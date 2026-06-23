@@ -311,11 +311,7 @@ public class MavenProxyService {
   }
 
   private static String buildRemoteUrl(String base, String path) {
-    if (base == null || base.isBlank()) {
-      throw new IllegalStateException("Proxy repository has no remote URL configured");
-    }
-    String prefix = base.endsWith("/") ? base : base + "/";
-    return prefix + path;
+    return RemoteUrlBuilder.repositoryPathString(base, path);
   }
 
   private static String stringAttr(Map<String, Object> attrs, String key) {

@@ -34,7 +34,8 @@ class OidcLoginControllerTest {
     StubAuthenticationService authentication = new StubAuthenticationService();
     authentication.oidcRealm = Optional.of(oidcRealm(Map.of(
         "clientId", "kkrepo",
-        "authorizationEndpoint", "https://issuer.example.com/oauth2/authorize",
+        "issuerUri", "https://localhost",
+        "authorizationEndpoint", "https://localhost/oauth2/authorize",
         "redirectUri", "http://nexus.example.com/internal/security/oidc/callback",
         "scopes", "openid profile email groups")));
     OidcLoginController controller = new OidcLoginController(authentication, new ObjectMapper());
@@ -44,13 +45,65 @@ class OidcLoginControllerTest {
     URI redirect = URI.create(response.redirect);
     Map<String, String> query = query(redirect);
     assertEquals("https", redirect.getScheme());
-    assertEquals("issuer.example.com", redirect.getHost());
+    assertEquals("localhost", redirect.getHost());
     assertEquals("/oauth2/authorize", redirect.getPath());
     assertEquals("code", query.get("response_type"));
     assertEquals("kkrepo", query.get("client_id"));
     assertEquals("http://nexus.example.com/internal/security/oidc/callback", query.get("redirect_uri"));
     assertEquals("openid profile email groups", query.get("scope"));
     assertNotNull(query.get("state"));
+  }
+
+  @Test
+  void loginRejectsUnsafeAuthorizationEndpoint() {
+    SessionState session = new SessionState();
+    ResponseState response = new ResponseState();
+    StubAuthenticationService authentication = new StubAuthenticationService();
+    authentication.oidcRealm = Optional.of(oidcRealm(Map.of(
+        "clientId", "kkrepo",
+        "issuerUri", "https://localhost",
+        "authorizationEndpoint", "http://127.0.0.1/oauth2/authorize",
+        "redirectUri", "http://nexus.example.com/internal/security/oidc/callback")));
+    OidcLoginController controller = new OidcLoginController(
+        authentication,
+        new ObjectMapper(),
+        new OutboundRequestPolicy(false, ""),
+        new ForwardedHeaderPolicy(""),
+        null,
+        "");
+
+    SecurityValidationException error = assertThrows(
+        SecurityValidationException.class,
+        () -> controller.login(request(session), response.proxy(), "/browse/"));
+
+    assertTrue(error.getMessage().contains("OIDC authorization endpoint URL resolves to a private or local address"));
+  }
+
+  @Test
+  void loginRejectsAuthorizationEndpointOnDifferentHostThanIssuer() {
+    SessionState session = new SessionState();
+    ResponseState response = new ResponseState();
+    StubAuthenticationService authentication = new StubAuthenticationService();
+    authentication.oidcRealm = Optional.of(oidcRealm(Map.of(
+        "clientId", "kkrepo",
+        "issuerUri", "https://issuer.example.com",
+        "authorizationEndpoint", "https://login.example.net/oauth2/authorize",
+        "redirectUri", "http://nexus.example.com/internal/security/oidc/callback")));
+    OidcLoginController controller = new OidcLoginController(
+        authentication,
+        new ObjectMapper(),
+        new OutboundRequestPolicy(false, "issuer.example.com,login.example.net"),
+        new ForwardedHeaderPolicy(""),
+        null,
+        "");
+
+    SecurityValidationException error = assertThrows(
+        SecurityValidationException.class,
+        () -> controller.login(request(session), response.proxy(), "/browse/"));
+
+    assertEquals(
+        "OIDC authorization endpoint host must match configured issuer/discovery host",
+        error.getMessage());
   }
 
   @Test
@@ -156,7 +209,8 @@ class OidcLoginControllerTest {
         new PermissionSubject("OIDC", "alice", Set.of("nx-admin"), null));
     authentication.oidcRealm = Optional.of(oidcRealm(Map.of(
         "clientId", "kkrepo",
-        "authorizationEndpoint", "https://issuer.example.com/oauth2/authorize",
+        "issuerUri", "https://localhost",
+        "authorizationEndpoint", "https://localhost/oauth2/authorize",
         "redirectUri", "http://nexus.example.com/callback")));
     authentication.subject = Optional.of(subject);
     OidcLoginController controller = new OidcLoginController(authentication, new ObjectMapper());
