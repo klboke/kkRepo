@@ -1,0 +1,38 @@
+name: AI agent task
+description: Small, scoped task suitable for Copilot Coding Agent or another AI agent.
+title: "[Agent]: "
+labels:
+  - agent-ready
+body:
+  - type: textarea
+    id: task
+    attributes:
+      label: Task
+      description: Describe the concrete change or investigation.
+      placeholder: "Example: Add a focused test for Maven proxy 404 negative-cache TTL behavior."
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope boundaries
+      description: List files, modules, or behavior that should not be changed.
+      placeholder: "Keep this to compat-test and server tests; do not change production code unless the test exposes a bug."
+    validations:
+      required: false
+  - type: textarea
+    id: validation
+    attributes:
+      label: Expected validation
+      description: Commands or checks the agent should run.
+      value: |
+        - mvn -pl server -am -Dsurefire.failIfNoSpecifiedTests=false test
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Extra context
+      description: Links, logs, screenshots, or compatibility notes.
+    validations:
+      required: false
