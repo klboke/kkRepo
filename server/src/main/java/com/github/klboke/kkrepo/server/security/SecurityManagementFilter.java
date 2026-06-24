@@ -98,6 +98,11 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
     if (uri.startsWith("/internal/blob-stores")) {
       return internalBlobStorePermission(method, uri);
     }
+    if (uri.equals("/internal/ui-settings")) {
+      return "GET".equals(method)
+          ? Optional.empty()
+          : Optional.of("nexus:settings:update");
+    }
     if (uri.startsWith("/internal/security/")) {
       return internalSecurityPermission(method, uri);
     }

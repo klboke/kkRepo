@@ -111,6 +111,7 @@
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && !modal.root.hidden) close();
     });
+    window.kkrepoI18n?.apply?.(root);
     return modal;
   }
 
@@ -176,6 +177,7 @@
       }
       const options = await response.json();
       dialog.passwordTab.textContent = options.ldapEnabled ? "Local / LDAP" : "Local";
+      window.kkrepoI18n?.apply?.(dialog.root);
       setOidcEnabled(Boolean(options.oidcEnabled), { focus: !dialog.root.hidden });
     } catch {
       setOidcEnabled(false, { focus: !dialog.root.hidden });

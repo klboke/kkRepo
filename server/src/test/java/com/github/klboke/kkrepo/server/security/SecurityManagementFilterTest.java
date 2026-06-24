@@ -336,6 +336,45 @@ class SecurityManagementFilterTest {
   }
 
   @Test
+  void uiSettingsReadBypassesManagementFilterForEarlyLocalization() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
+    RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("should not be checked"));
+    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/internal/ui-settings"),
+        response.proxy(),
+        chain);
+
+    assertEquals(0, authentication.calls);
+    assertEquals(0, security.decisions);
+    assertEquals(1, chain.calls);
+    assertEquals(0, response.status);
+  }
+
+  @Test
+  void uiSettingsUpdateRequiresSettingsUpdatePermission() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("admin")));
+    RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("missing permission"));
+    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("PUT", "/internal/ui-settings"),
+        response.proxy(),
+        chain);
+
+    assertEquals(1, authentication.calls);
+    assertEquals(1, security.decisions);
+    assertEquals("nexus:settings:update", security.requestedPermission);
+    assertEquals(0, chain.calls);
+    assertEquals(HttpServletResponse.SC_FORBIDDEN, response.status);
+  }
+
+  @Test
   void adminApiKeysStillRequireApiKeyManagementPermission() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("admin")));
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("missing permission"));

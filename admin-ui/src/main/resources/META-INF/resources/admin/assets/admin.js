@@ -77,6 +77,7 @@ const viewHashRoutes = {
   "security-anonymous": "#admin/security/anonymous",
   "security-api-keys": "#admin/security/api-keys",
   "security-audit-log": "#admin/security/audit-log",
+  "ui-settings": "#admin/system/ui-settings",
   "nexus-migration": "#admin/migration/nexus",
   "repository-data-migration": "#admin/migration/repository-data",
 };
@@ -101,6 +102,9 @@ const hashViewRoutes = {
   "#admin/security/apikeys": "security-api-keys",
   "#admin/security/audit-log": "security-audit-log",
   "#admin/security/audit": "security-audit-log",
+  "#admin/system": "ui-settings",
+  "#admin/system/ui-settings": "ui-settings",
+  "#admin/system/ui": "ui-settings",
   "#admin/migration": "nexus-migration",
   "#admin/migration/nexus": "nexus-migration",
   "#admin/migration/repository-data": "repository-data-migration",
@@ -1863,6 +1867,51 @@ async function fetchJson(path, fallback, errorLabel) {
   }
 }
 
+function uiLanguageLabel(language) {
+  if (language === "zh-CN") return "Chinese";
+  if (language === "en") return "English";
+  return "Follow browser";
+}
+
+function syncUiSettingsForm() {
+  const settings = window.kkrepoI18n?.settings?.();
+  const select = document.getElementById("ui-default-language");
+  if (select && settings) {
+    select.value = settings.defaultLanguage || "en";
+  }
+  updateUiSettingsStatus();
+}
+
+function updateUiSettingsStatus() {
+  const status = document.getElementById("ui-settings-status");
+  if (!status || !window.kkrepoI18n) return;
+  const defaultLanguage = window.kkrepoI18n.defaultLanguage();
+  const currentLanguage = window.kkrepoI18n.currentLanguage();
+  status.textContent = `Default language: ${uiLanguageLabel(defaultLanguage)}. Active language: ${uiLanguageLabel(currentLanguage)}.`;
+}
+
+async function loadUiSettings() {
+  if (!window.kkrepoI18n) return;
+  await window.kkrepoI18n.ready();
+  syncUiSettingsForm();
+}
+
+async function saveUiSettings() {
+  const button = document.getElementById("save-ui-settings-button");
+  const select = document.getElementById("ui-default-language");
+  if (!button || !select || !window.kkrepoI18n) return;
+  button.disabled = true;
+  try {
+    await window.kkrepoI18n.saveDefaultLanguage(select.value);
+    syncUiSettingsForm();
+    showToast("UI language settings saved.", "ok");
+  } catch (error) {
+    showToast(`Save failed: ${error.message}`, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function loadSecurityUsers() {
   [securityUsers, securityRoles] = await Promise.all([
     fetchJson("/internal/security/users", [], "Failed to load users"),
@@ -3269,6 +3318,7 @@ function switchView(view, options = {}) {
   if (view === "security-anonymous") loadSecurityAnonymous();
   if (view === "security-api-keys") loadSecurityApiKeys();
   if (view === "security-audit-log") loadAuditLogs(0);
+  if (view === "ui-settings") loadUiSettings();
   if (view === "repository-data-migration") loadRepositoryDataMigrationJobs();
   return true;
 }
@@ -3415,6 +3465,8 @@ oidcRequiredFields.forEach((field) => {
   });
 });
 document.getElementById("save-security-anonymous-button").addEventListener("click", saveSecurityAnonymous);
+document.getElementById("save-ui-settings-button").addEventListener("click", saveUiSettings);
+window.addEventListener("kkrepo:i18n-change", syncUiSettingsForm);
 
 document.getElementById("create-security-api-key-button").addEventListener("click", showSecurityApiKeyForm);
 document.getElementById("cancel-security-api-key-button").addEventListener("click", hideSecurityApiKeyForm);

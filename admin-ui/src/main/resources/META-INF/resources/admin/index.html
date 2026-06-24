@@ -13,7 +13,7 @@
         <div class="product">
           <div class="logo-mark" aria-hidden="true">KL</div>
           <div class="product-copy">
-            <div class="product-name">kkrepo<br>Repository Manager</div>
+            <div class="product-name" data-i18n-skip>kkrepo<br>Repository Manager</div>
           </div>
         </div>
         <nav class="workspace-tabs" aria-label="Workspace">
@@ -49,6 +49,8 @@
           <button class="side-item" data-view="security-anonymous" type="button">◌ Anonymous</button>
           <button class="side-item" data-view="security-api-keys" type="button">⌘ API Keys</button>
           <button class="side-item" data-view="security-audit-log" type="button">▦ Audit Log</button>
+          <button class="side-group is-open" type="button">▾ System</button>
+          <button class="side-item" data-view="ui-settings" type="button">▨ UI Settings</button>
           <button class="side-group is-open" type="button">▾ Migration</button>
           <button class="side-item" data-view="nexus-migration" type="button">⇆ Nexus Metadata</button>
           <button class="side-item" data-view="repository-data-migration" type="button">⇄ Nexus Repository Data</button>
@@ -770,6 +772,31 @@
           </form>
         </section>
 
+        <section class="view" id="ui-settings-view">
+          <div class="page-heading">
+            <span class="heading-icon">▨</span>
+            <h1>UI Settings</h1>
+            <span class="heading-copy">Configure the default UI language shared by all replicas</span>
+          </div>
+          <form class="blobstore-form" id="ui-settings-form" novalidate>
+            <div class="form-grid">
+              <label>
+                <span>Default language</span>
+                <select id="ui-default-language">
+                  <option value="browser">Follow browser</option>
+                  <option value="zh-CN">Chinese</option>
+                  <option value="en" selected>English</option>
+                </select>
+              </label>
+              <p class="form-note full-width">This preference is stored in MySQL and applies to the administration, browse, and sign-in UI on every replica.</p>
+            </div>
+            <div class="form-actions">
+              <button class="create-button" id="save-ui-settings-button" type="button">Save UI settings</button>
+            </div>
+            <div class="ops-status" id="ui-settings-status" role="status"></div>
+          </form>
+        </section>
+
         <section class="view" id="nexus-migration-view">
           <div class="page-heading">
             <span class="heading-icon">⇆</span>
@@ -826,6 +853,7 @@
       </main>
     </div>
 
-    <script src="./assets/admin.js?v=20260623-migration-preflight-1"></script>
+    <script src="/login/assets/ui-i18n.js?v=20260624-ui-i18n-5"></script>
+    <script src="./assets/admin.js?v=20260624-ui-i18n-2"></script>
   </body>
 </html>
