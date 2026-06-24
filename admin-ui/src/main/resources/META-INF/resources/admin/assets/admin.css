@@ -798,6 +798,10 @@ body {
   font-weight: 700;
 }
 
+.required-mark {
+  color: #b42318;
+}
+
 .form-note {
   margin: 0;
   color: #65746f;

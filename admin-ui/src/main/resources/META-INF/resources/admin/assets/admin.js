@@ -152,6 +152,13 @@ const blobStoreFormFields = [
   ...blobStoreS3RequiredFields,
   { id: "blobstore-path", label: "Path" }
 ];
+const oidcRequiredFields = [
+  { id: "security-oidc-issuer", label: "Issuer" },
+  { id: "security-oidc-jwks-uri", label: "JWKS URI" },
+  { id: "security-oidc-client-id", label: "Client ID" },
+  { id: "security-oidc-client-secret", label: "Client secret" },
+  { id: "security-oidc-redirect-uri", label: "Redirect URI" }
+];
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -391,6 +398,11 @@ function parseJsonObject(id) {
     showToast(`Invalid JSON: ${error.message}`, "error");
     throw error;
   }
+}
+
+function markInputValidity(input, invalid) {
+  input.classList.toggle("is-invalid", invalid);
+  input.setAttribute("aria-invalid", String(invalid));
 }
 
 function filterValue(id) {
@@ -2376,8 +2388,9 @@ async function loadSecurityOidc() {
 
 function renderSecurityOidc() {
   const settings = securityOidc || {};
-  document.getElementById("security-oidc-jwks-uri").classList.remove("is-invalid");
-  document.getElementById("security-oidc-jwks-uri").setAttribute("aria-invalid", "false");
+  oidcRequiredFields.forEach((field) => {
+    markInputValidity(document.getElementById(field.id), false);
+  });
   document.getElementById("security-oidc-enabled").checked = Boolean(settings.enabled);
   document.getElementById("security-oidc-priority").value = Number(settings.priority ?? 20);
   document.getElementById("security-oidc-source").value = settings.source || "OIDC";
@@ -2401,6 +2414,28 @@ function renderSecurityOidc() {
   document.getElementById("security-oidc-attributes").value = JSON.stringify(settings.attributes || {}, null, 2);
 }
 
+function validateSecurityOidcRequiredFields() {
+  const enabled = document.getElementById("security-oidc-enabled").checked;
+  const missing = [];
+  oidcRequiredFields.forEach((field) => {
+    const input = document.getElementById(field.id);
+    const invalid = enabled && !input.value.trim();
+    markInputValidity(input, invalid);
+    if (invalid) {
+      missing.push(field.label);
+    }
+  });
+  if (missing.length) {
+    showToast(`OIDC is enabled but required fields are missing: ${missing.join(", ")}`, "error");
+    document.getElementById(oidcRequiredFields.find((field) => {
+      const input = document.getElementById(field.id);
+      return input.classList.contains("is-invalid");
+    }).id).focus();
+    return false;
+  }
+  return true;
+}
+
 async function saveSecurityOidc() {
   let attributes;
   try {
@@ -2408,12 +2443,10 @@ async function saveSecurityOidc() {
   } catch (_) {
     return;
   }
-  const jwksUri = document.getElementById("security-oidc-jwks-uri").value.trim();
-  if (document.getElementById("security-oidc-enabled").checked && !jwksUri) {
-    showToast("JWKS URI is required when OIDC is enabled.", "error");
-    document.getElementById("security-oidc-jwks-uri").classList.add("is-invalid");
+  if (!validateSecurityOidcRequiredFields()) {
     return;
   }
+  const jwksUri = document.getElementById("security-oidc-jwks-uri").value.trim();
   const payload = {
     enabled: document.getElementById("security-oidc-enabled").checked,
     priority: Number(document.getElementById("security-oidc-priority").value || 20),
@@ -3376,9 +3409,10 @@ document.getElementById("security-privilege-table").addEventListener("click", (e
 document.getElementById("save-security-realms-button").addEventListener("click", saveSecurityRealms);
 document.getElementById("save-security-ldap-button").addEventListener("click", saveSecurityLdap);
 document.getElementById("save-security-oidc-button").addEventListener("click", saveSecurityOidc);
-document.getElementById("security-oidc-jwks-uri").addEventListener("input", (event) => {
-  event.target.classList.remove("is-invalid");
-  event.target.setAttribute("aria-invalid", "false");
+oidcRequiredFields.forEach((field) => {
+  document.getElementById(field.id).addEventListener("input", (event) => {
+    markInputValidity(event.target, false);
+  });
 });
 document.getElementById("save-security-anonymous-button").addEventListener("click", saveSecurityAnonymous);
 

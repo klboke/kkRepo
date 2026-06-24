@@ -622,15 +622,15 @@
               </label>
               <label><span>Priority</span><input id="security-oidc-priority" type="number" value="20"></label>
               <label><span>Source</span><input id="security-oidc-source" type="text" value="OIDC"></label>
-              <label><span>Issuer</span><input id="security-oidc-issuer" type="url" placeholder="https://issuer.example.com"></label>
-              <label class="full-width"><span>JWKS URI</span><input id="security-oidc-jwks-uri" type="url" placeholder="https://issuer.example.com/.well-known/jwks.json"></label>
+              <label><span>Issuer <span class="required-mark">*</span></span><input id="security-oidc-issuer" type="url" placeholder="https://issuer.example.com"></label>
+              <label class="full-width"><span>JWKS URI <span class="required-mark">*</span></span><input id="security-oidc-jwks-uri" type="url" placeholder="https://issuer.example.com/.well-known/jwks.json"></label>
               <label><span>Audience</span><input id="security-oidc-audience" type="text"></label>
-              <label><span>Client ID</span><input id="security-oidc-client-id" type="text"></label>
-              <label><span>Client secret</span><input id="security-oidc-client-secret" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing"></label>
+              <label><span>Client ID <span class="required-mark">*</span></span><input id="security-oidc-client-id" type="text"></label>
+              <label><span>Client secret <span class="required-mark">*</span></span><input id="security-oidc-client-secret" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing"></label>
               <label><span>Scopes</span><input id="security-oidc-scopes" type="text" value="openid profile email"></label>
               <label class="full-width"><span>Authorization endpoint</span><input id="security-oidc-authorization-endpoint" type="url" placeholder="https://issuer.example.com/oauth2/authorize"></label>
               <label class="full-width"><span>Token endpoint</span><input id="security-oidc-token-endpoint" type="url" placeholder="https://issuer.example.com/oauth2/token"></label>
-              <label class="full-width"><span>Redirect URI</span><input id="security-oidc-redirect-uri" type="url" placeholder="/internal/security/oidc/callback"></label>
+              <label class="full-width"><span>Redirect URI <span class="required-mark">*</span></span><input id="security-oidc-redirect-uri" type="url" placeholder="/internal/security/oidc/callback"></label>
               <label><span>User ID claim</span><input id="security-oidc-user-id-claim" type="text" value="preferred_username"></label>
               <label><span>First name claim</span><input id="security-oidc-first-name-claim" type="text" value="given_name"></label>
               <label><span>Last name claim</span><input id="security-oidc-last-name-claim" type="text" value="family_name"></label>
