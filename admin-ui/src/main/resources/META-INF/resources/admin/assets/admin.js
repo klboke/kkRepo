@@ -156,12 +156,74 @@ const blobStoreFormFields = [
   ...blobStoreS3RequiredFields,
   { id: "blobstore-path", label: "Path" }
 ];
+const repositoryRequiredFields = [
+  {
+    id: "repository-recipe",
+    label: "Recipe",
+    required: () => repositoryFormMode === "create"
+  },
+  { id: "repository-name", label: "Name" },
+  { id: "repository-blobstore", label: "Blob store", required: () => repositoryFormMode === "create" },
+  {
+    id: "repository-remote-url",
+    label: "Remote URL",
+    required: () => currentRecipe()?.type === "PROXY"
+  },
+  {
+    id: "repository-docker-connector-port",
+    label: "Connector port",
+    required: () => currentRecipe()?.format === "docker"
+        && document.getElementById("repository-docker-connector-enabled").checked
+  }
+];
+const securityUserRequiredFields = [
+  { id: "security-user-id", label: "User ID" }
+];
+const securityRoleRequiredFields = [
+  { id: "security-role-id", label: "Role ID" }
+];
+const securityPrivilegeRequiredFields = [
+  { id: "security-privilege-id", label: "Privilege ID" }
+];
+const ldapRequiredFields = [
+  {
+    id: "security-ldap-url",
+    label: "URL",
+    required: () => document.getElementById("security-ldap-enabled").checked
+  },
+  {
+    id: "security-ldap-host",
+    label: "Host",
+    required: () => document.getElementById("security-ldap-enabled").checked
+  }
+];
 const oidcRequiredFields = [
   { id: "security-oidc-issuer", label: "Issuer" },
   { id: "security-oidc-jwks-uri", label: "JWKS URI" },
   { id: "security-oidc-client-id", label: "Client ID" },
   { id: "security-oidc-client-secret", label: "Client secret" },
   { id: "security-oidc-redirect-uri", label: "Redirect URI" }
+];
+const securityApiKeyRequiredFields = [
+  { id: "security-api-key-owner-user-id", label: "Owner user ID" }
+];
+const securityAnonymousRequiredFields = [
+  { id: "security-anonymous-source", label: "User source" },
+  { id: "security-anonymous-user-id", label: "User ID" },
+  { id: "security-anonymous-realm-name", label: "Realm name" }
+];
+const uiSettingsRequiredFields = [
+  { id: "ui-default-language", label: "Default language" }
+];
+const nexusMigrationRequiredFields = [
+  { id: "migration-source-url", label: "Source URL" },
+  { id: "migration-source-username", label: "Source username" },
+  { id: "migration-source-password", label: "Source password" }
+];
+const repositoryDataMigrationRequiredFields = [
+  { id: "repository-data-migration-source-url", label: "Source URL" },
+  { id: "repository-data-migration-source-username", label: "Source username" },
+  { id: "repository-data-migration-source-password", label: "Source password" }
 ];
 
 function escapeHtml(value) {
@@ -407,6 +469,84 @@ function parseJsonObject(id) {
 function markInputValidity(input, invalid) {
   input.classList.toggle("is-invalid", invalid);
   input.setAttribute("aria-invalid", String(invalid));
+}
+
+function fieldIsRequired(field) {
+  return field.required ? Boolean(field.required(field)) : true;
+}
+
+function fieldValue(input) {
+  if (!input) return "";
+  if (input.tagName === "SELECT") return input.value;
+  return String(input.value || "").trim();
+}
+
+function updateRequiredMarker(field) {
+  const input = document.getElementById(field.id);
+  if (!input) return;
+  const marker = input.closest("label")?.querySelector(".required-mark");
+  if (!marker) return;
+  marker.hidden = !fieldIsRequired(field);
+}
+
+function updateRequiredMarkers(fields) {
+  fields.forEach(updateRequiredMarker);
+}
+
+function setFieldRequired(input, required) {
+  if (!input) return;
+  if (required) {
+    input.setAttribute("required", "");
+    input.setAttribute("aria-required", "true");
+  } else {
+    input.removeAttribute("required");
+    input.removeAttribute("aria-required");
+  }
+}
+
+function validateRequiredFields(fields, options = {}) {
+  const missing = [];
+  let firstMissingInput = null;
+  fields.forEach((field) => {
+    const input = document.getElementById(field.id);
+    if (!input) return;
+    const required = fieldIsRequired(field);
+    setFieldRequired(input, required);
+    updateRequiredMarker(field);
+    const invalid = required && !input.disabled && !fieldValue(input);
+    markInputValidity(input, invalid);
+    if (invalid) {
+      missing.push(field.label);
+      firstMissingInput = firstMissingInput || input;
+    }
+  });
+  if (missing.length > 0) {
+    showToast(`${options.prefix || "Required fields missing"}: ${missing.join(", ")}`, "error");
+    firstMissingInput?.focus();
+    return false;
+  }
+  return true;
+}
+
+function clearRequiredFieldError(event) {
+  if (fieldValue(event.target)) {
+    markInputValidity(event.target, false);
+  }
+}
+
+function bindRequiredFieldErrors(fields) {
+  fields.forEach((field) => {
+    const input = document.getElementById(field.id);
+    input?.addEventListener("input", clearRequiredFieldError);
+    input?.addEventListener("change", clearRequiredFieldError);
+  });
+}
+
+function clearRequiredFieldErrors(fields) {
+  fields.forEach((field) => {
+    const input = document.getElementById(field.id);
+    if (input) markInputValidity(input, false);
+  });
 }
 
 function filterValue(id) {
@@ -749,24 +889,38 @@ function blobStoreFormPayload() {
   };
 }
 
+function activeBlobStoreRequiredFields() {
+  const fileMode = document.getElementById("blobstore-engine").value === "file";
+  return (fileMode ? blobStoreFileRequiredFields : blobStoreS3RequiredFields)
+    .filter((field) => !(
+      (field.id === "blobstore-access-key" || field.id === "blobstore-secret-key")
+      && blobStoreFormMode === "edit"
+    ));
+}
+
+function refreshBlobStoreRequiredMarkers() {
+  const active = new Set(activeBlobStoreRequiredFields().map((field) => field.id));
+  blobStoreFormFields.forEach((field) => {
+    updateRequiredMarker({
+      ...field,
+      required: () => active.has(field.id)
+    });
+  });
+}
+
 function validateBlobStoreForm() {
   const missing = [];
   let firstMissingInput = null;
-  const fileMode = document.getElementById("blobstore-engine").value === "file";
-  const requiredFields = fileMode ? blobStoreFileRequiredFields : blobStoreS3RequiredFields;
+  const requiredFields = activeBlobStoreRequiredFields();
   blobStoreFormFields.forEach((field) => {
     const input = document.getElementById(field.id);
     if (!requiredFields.some((requiredField) => requiredField.id === field.id)) {
       input.classList.remove("is-invalid");
       input.setAttribute("aria-invalid", "false");
+      setFieldRequired(input, false);
       return;
     }
-    if ((field.id === "blobstore-access-key" || field.id === "blobstore-secret-key")
-        && blobStoreFormMode === "edit") {
-      input.classList.remove("is-invalid");
-      input.setAttribute("aria-invalid", "false");
-      return;
-    }
+    setFieldRequired(input, true);
     const empty = !input.value.trim();
     input.classList.toggle("is-invalid", empty);
     input.setAttribute("aria-invalid", String(empty));
@@ -775,6 +929,7 @@ function validateBlobStoreForm() {
       firstMissingInput = firstMissingInput || input;
     }
   });
+  refreshBlobStoreRequiredMarkers();
   if (missing.length > 0) {
     showToast(`Required fields missing: ${missing.join(", ")}`, "error");
     firstMissingInput.focus();
@@ -806,13 +961,17 @@ function setBlobStoreFormTitle(title, saveLabel) {
 function setSecretFieldMode(required, placeholder = "") {
   const secretInput = document.getElementById("blobstore-secret-key");
   secretInput.required = required;
+  secretInput.setAttribute("aria-required", String(required));
   secretInput.placeholder = placeholder;
+  refreshBlobStoreRequiredMarkers();
 }
 
 function setAccessFieldMode(required, placeholder = "") {
   const accessInput = document.getElementById("blobstore-access-key");
   accessInput.required = required;
+  accessInput.setAttribute("aria-required", String(required));
   accessInput.placeholder = placeholder;
+  refreshBlobStoreRequiredMarkers();
 }
 
 function refreshBlobStoreEngineControls() {
@@ -839,12 +998,14 @@ function refreshBlobStoreEngineControls() {
   });
   pathInput.disabled = !fileMode;
   pathInput.required = fileMode;
+  pathInput.setAttribute("aria-required", String(fileMode));
   pathStyle.disabled = fileMode;
   if (fileMode) {
     pathStyle.title = "";
   } else {
     pathStyle.title = "";
   }
+  refreshBlobStoreRequiredMarkers();
 }
 
 function showCreateBlobStoreForm() {
@@ -1114,6 +1275,7 @@ function refreshRepositoryBlobStoreLock() {
   const locked = repositoryFormMode === "edit";
   select.disabled = locked;
   select.title = locked ? "Blob store is fixed after repository creation." : "";
+  updateRequiredMarkers(repositoryRequiredFields);
 }
 
 function memberCandidates() {
@@ -1330,6 +1492,7 @@ function refreshRepositoryRecipeControls() {
   });
   refreshRepositoryRemoteDefaults(recipe);
   if (type === "GROUP") refreshRepositoryMemberOptions();
+  updateRequiredMarkers(repositoryRequiredFields);
 }
 
 function refreshRepositoryRemoteDefaults(recipe) {
@@ -1427,8 +1590,11 @@ function setRepositoryFormDefaults() {
 
 function refreshDockerConnectorControls() {
   const enabled = document.getElementById("repository-docker-connector-enabled").checked;
-  document.getElementById("repository-docker-connector-port").disabled = !enabled;
+  const portInput = document.getElementById("repository-docker-connector-port");
+  portInput.disabled = !enabled;
+  setFieldRequired(portInput, currentRecipe()?.format === "docker" && enabled);
   document.getElementById("repository-docker-connector-public-url").disabled = !enabled;
+  updateRequiredMarkers(repositoryRequiredFields);
 }
 
 function showCreateRepositoryForm() {
@@ -1447,6 +1613,7 @@ function showCreateRepositoryForm() {
   }
   refreshRepositoryBlobStoreOptions();
   refreshRepositoryRecipeControls();
+  clearRequiredFieldErrors(repositoryRequiredFields);
   document.getElementById("repository-form").hidden = false;
   document.getElementById("repository-name").focus();
 }
@@ -1498,6 +1665,7 @@ function showEditRepositoryForm(name) {
     document.getElementById("repository-docker-connector-public-url").value = repo.docker.connectorPublicUrl || "";
   }
   refreshRepositoryRecipeControls();
+  clearRequiredFieldErrors(repositoryRequiredFields);
   document.getElementById("repository-form").hidden = false;
 }
 
@@ -1507,6 +1675,7 @@ function hideRepositoryForm() {
   editingRepositoryBlobStoreName = null;
   document.getElementById("repository-blobstore").disabled = false;
   document.getElementById("repository-blobstore").title = "";
+  clearRequiredFieldErrors(repositoryRequiredFields);
   document.getElementById("repository-form").hidden = true;
 }
 
@@ -1516,16 +1685,11 @@ async function saveRepository() {
     showToast("Pick a recipe before saving.", "error");
     return;
   }
+  if (!validateRequiredFields(repositoryRequiredFields)) {
+    return;
+  }
   const payload = repositoryFormPayload();
-  if (!payload.name) {
-    showToast("Repository name is required.", "error");
-    return;
-  }
   const creating = repositoryFormMode === "create";
-  if (creating && !payload.blobStoreName) {
-    showToast("Select a blob store.", "error");
-    return;
-  }
   const path = creating
     ? "/internal/repositories"
     : `/internal/repositories/${encodeURIComponent(editingRepositoryName)}`;
@@ -1879,6 +2043,7 @@ function syncUiSettingsForm() {
   if (select && settings) {
     select.value = settings.defaultLanguage || "en";
   }
+  clearRequiredFieldErrors(uiSettingsRequiredFields);
   updateUiSettingsStatus();
 }
 
@@ -1900,6 +2065,7 @@ async function saveUiSettings() {
   const button = document.getElementById("save-ui-settings-button");
   const select = document.getElementById("ui-default-language");
   if (!button || !select || !window.kkrepoI18n) return;
+  if (!validateRequiredFields(uiSettingsRequiredFields)) return;
   button.disabled = true;
   try {
     await window.kkrepoI18n.saveDefaultLanguage(select.value);
@@ -1959,6 +2125,7 @@ function showSecurityUserForm(user = null) {
   document.getElementById("security-user-status").value = user?.status || "ACTIVE";
   document.getElementById("security-user-password").value = "";
   setSecurityTransferSelection("userRoles", user?.roles || []);
+  clearRequiredFieldErrors(securityUserRequiredFields);
   document.getElementById("security-user-form").hidden = false;
 }
 
@@ -1966,9 +2133,11 @@ function hideSecurityUserForm() {
   document.getElementById("security-user-form").hidden = true;
   document.getElementById("security-user-source").disabled = false;
   document.getElementById("security-user-id").disabled = false;
+  clearRequiredFieldErrors(securityUserRequiredFields);
 }
 
 async function saveSecurityUser() {
+  if (!validateRequiredFields(securityUserRequiredFields)) return;
   const payload = {
     source: document.getElementById("security-user-source").value.trim() || "Local",
     userId: document.getElementById("security-user-id").value.trim(),
@@ -1979,10 +2148,6 @@ async function saveSecurityUser() {
     password: document.getElementById("security-user-password").value || null,
     roles: commaList(document.getElementById("security-user-roles").value)
   };
-  if (!payload.userId) {
-    showToast("User ID is required.", "error");
-    return;
-  }
   const path = securityUserMode === "edit"
     ? `/internal/security/users/${encodeURIComponent(payload.source)}/${encodeURIComponent(payload.userId)}`
     : "/internal/security/users";
@@ -2065,6 +2230,7 @@ function showSecurityRoleForm(role = null, options = {}) {
   setSecurityTransferSelection("rolePrivileges", role?.privileges || []);
   setSecurityTransferSelection("roleRoles", role?.roles || []);
   setSecurityRoleFormReadOnly(viewOnly);
+  clearRequiredFieldErrors(securityRoleRequiredFields);
   document.getElementById("security-role-form").hidden = false;
 }
 
@@ -2073,6 +2239,7 @@ function hideSecurityRoleForm() {
   securityRoleMode = "create";
   setSecurityRoleFormReadOnly(false);
   document.getElementById("security-role-id").disabled = false;
+  clearRequiredFieldErrors(securityRoleRequiredFields);
 }
 
 function setSecurityRoleFormReadOnly(readOnly) {
@@ -2095,6 +2262,7 @@ function setSecurityRoleFormReadOnly(readOnly) {
 
 async function saveSecurityRole() {
   if (securityRoleMode === "view") return;
+  if (!validateRequiredFields(securityRoleRequiredFields)) return;
   const payload = {
     roleId: document.getElementById("security-role-id").value.trim(),
     name: document.getElementById("security-role-name").value.trim() || null,
@@ -2103,10 +2271,6 @@ async function saveSecurityRole() {
     privileges: commaList(document.getElementById("security-role-privileges").value),
     roles: commaList(document.getElementById("security-role-roles").value)
   };
-  if (!payload.roleId) {
-    showToast("Role ID is required.", "error");
-    return;
-  }
   const path = securityRoleMode === "edit"
     ? `/internal/security/roles/${encodeURIComponent(payload.roleId)}`
     : "/internal/security/roles";
@@ -2174,15 +2338,18 @@ function showSecurityPrivilegeForm(privilege = null) {
   document.getElementById("security-privilege-description").value = privilege?.description || "";
   document.getElementById("security-privilege-readonly").checked = Boolean(privilege?.readOnly);
   document.getElementById("security-privilege-properties").value = JSON.stringify(privilege?.properties || { pattern: "nexus:*" }, null, 2);
+  clearRequiredFieldErrors(securityPrivilegeRequiredFields);
   document.getElementById("security-privilege-form").hidden = false;
 }
 
 function hideSecurityPrivilegeForm() {
   document.getElementById("security-privilege-form").hidden = true;
   document.getElementById("security-privilege-id").disabled = false;
+  clearRequiredFieldErrors(securityPrivilegeRequiredFields);
 }
 
 async function saveSecurityPrivilege() {
+  if (!validateRequiredFields(securityPrivilegeRequiredFields)) return;
   let properties;
   try {
     properties = parseJsonObject("security-privilege-properties");
@@ -2197,10 +2364,6 @@ async function saveSecurityPrivilege() {
     readOnly: document.getElementById("security-privilege-readonly").checked,
     properties
   };
-  if (!payload.privilegeId) {
-    showToast("Privilege ID is required.", "error");
-    return;
-  }
   const path = securityPrivilegeMode === "edit"
     ? `/internal/security/privileges/${encodeURIComponent(payload.privilegeId)}`
     : "/internal/security/privileges";
@@ -2308,8 +2471,7 @@ async function loadSecurityLdap() {
 
 function renderSecurityLdap() {
   const settings = securityLdap || {};
-  document.getElementById("security-ldap-url").classList.remove("is-invalid");
-  document.getElementById("security-ldap-url").setAttribute("aria-invalid", "false");
+  clearRequiredFieldErrors(ldapRequiredFields);
   setCheckboxValue("security-ldap-enabled", settings.enabled);
   setInputValue("security-ldap-priority", Number(settings.priority ?? 10));
   setInputValue("security-ldap-source", settings.source, "LDAP");
@@ -2345,9 +2507,47 @@ function renderSecurityLdap() {
   setInputValue("security-ldap-group-member-format", settings.groupMemberFormat, "${dn}");
   setInputValue("security-ldap-group-object-class", settings.groupObjectClass, "groupOfNames");
   document.getElementById("security-ldap-attributes").value = JSON.stringify(settings.attributes || {}, null, 2);
+  refreshSecurityLdapRequiredMarkers();
+}
+
+function refreshSecurityLdapRequiredMarkers() {
+  updateRequiredMarkers(ldapRequiredFields);
+  const required = document.getElementById("security-ldap-enabled").checked;
+  setFieldRequired(document.getElementById("security-ldap-url"), false);
+  setFieldRequired(document.getElementById("security-ldap-host"), false);
+  document.getElementById("security-ldap-url").setAttribute("aria-required", String(required));
+  document.getElementById("security-ldap-host").setAttribute("aria-required", String(required));
+  if (!required) {
+    clearRequiredFieldErrors(ldapRequiredFields);
+  }
+}
+
+function clearSecurityLdapRequiredErrors() {
+  if (textInputValue("security-ldap-url") || textInputValue("security-ldap-host")) {
+    clearRequiredFieldErrors(ldapRequiredFields);
+  }
+}
+
+function validateSecurityLdapRequiredFields() {
+  refreshSecurityLdapRequiredMarkers();
+  const enabled = document.getElementById("security-ldap-enabled").checked;
+  const url = textInputValue("security-ldap-url");
+  const host = textInputValue("security-ldap-host");
+  const invalid = enabled && !url && !host;
+  markInputValidity(document.getElementById("security-ldap-url"), invalid);
+  markInputValidity(document.getElementById("security-ldap-host"), invalid);
+  if (invalid) {
+    showToast("LDAP is enabled but URL or Host is required.", "error");
+    document.getElementById("security-ldap-url").focus();
+    return false;
+  }
+  return true;
 }
 
 async function saveSecurityLdap() {
+  if (!validateSecurityLdapRequiredFields()) {
+    return;
+  }
   let attributes;
   try {
     attributes = parseJsonObject("security-ldap-attributes");
@@ -2356,11 +2556,6 @@ async function saveSecurityLdap() {
   }
   const url = textInputValue("security-ldap-url");
   const host = textInputValue("security-ldap-host");
-  if (document.getElementById("security-ldap-enabled").checked && !url && !host) {
-    showToast("LDAP URL or host is required when LDAP is enabled.", "error");
-    document.getElementById("security-ldap-url").classList.add("is-invalid");
-    return;
-  }
   const payload = {
     enabled: document.getElementById("security-ldap-enabled").checked,
     priority: numberInputValue("security-ldap-priority") ?? 10,
@@ -2461,6 +2656,22 @@ function renderSecurityOidc() {
   document.getElementById("security-oidc-clock-skew").value = Number(settings.clockSkewSeconds ?? 60);
   document.getElementById("security-oidc-jwks-cache").value = Number(settings.jwksCacheSeconds ?? 300);
   document.getElementById("security-oidc-attributes").value = JSON.stringify(settings.attributes || {}, null, 2);
+  refreshSecurityOidcRequiredMarkers();
+}
+
+function refreshSecurityOidcRequiredMarkers() {
+  const enabled = document.getElementById("security-oidc-enabled").checked;
+  oidcRequiredFields.forEach((field) => {
+    const input = document.getElementById(field.id);
+    setFieldRequired(input, enabled);
+    updateRequiredMarker({
+      ...field,
+      required: () => enabled
+    });
+  });
+  if (!enabled) {
+    clearRequiredFieldErrors(oidcRequiredFields);
+  }
 }
 
 function validateSecurityOidcRequiredFields() {
@@ -2474,6 +2685,7 @@ function validateSecurityOidcRequiredFields() {
       missing.push(field.label);
     }
   });
+  refreshSecurityOidcRequiredMarkers();
   if (missing.length) {
     showToast(`OIDC is enabled but required fields are missing: ${missing.join(", ")}`, "error");
     document.getElementById(oidcRequiredFields.find((field) => {
@@ -2486,13 +2698,13 @@ function validateSecurityOidcRequiredFields() {
 }
 
 async function saveSecurityOidc() {
+  if (!validateSecurityOidcRequiredFields()) {
+    return;
+  }
   let attributes;
   try {
     attributes = parseJsonObject("security-oidc-attributes");
   } catch (_) {
-    return;
-  }
-  if (!validateSecurityOidcRequiredFields()) {
     return;
   }
   const jwksUri = document.getElementById("security-oidc-jwks-uri").value.trim();
@@ -2553,6 +2765,7 @@ function renderSecurityAnonymous() {
 }
 
 async function saveSecurityAnonymous() {
+  if (!validateRequiredFields(securityAnonymousRequiredFields)) return;
   const payload = {
     enabled: document.getElementById("security-anonymous-enabled").checked,
     userSource: document.getElementById("security-anonymous-source").value.trim() || "Local",
@@ -2600,14 +2813,17 @@ function showSecurityApiKeyForm() {
   document.getElementById("security-api-key-owner-user-id").value = "";
   document.getElementById("security-api-key-display-name").value = "";
   document.getElementById("security-api-key-scopes").value = "";
+  clearRequiredFieldErrors(securityApiKeyRequiredFields);
   document.getElementById("security-api-key-form").hidden = false;
 }
 
 function hideSecurityApiKeyForm() {
   document.getElementById("security-api-key-form").hidden = true;
+  clearRequiredFieldErrors(securityApiKeyRequiredFields);
 }
 
 async function saveSecurityApiKey() {
+  if (!validateRequiredFields(securityApiKeyRequiredFields)) return;
   const payload = {
     domain: document.getElementById("security-api-key-domain").value.trim() || "nexus",
     ownerSource: document.getElementById("security-api-key-owner-source").value.trim() || "Local",
@@ -2615,10 +2831,6 @@ async function saveSecurityApiKey() {
     displayName: document.getElementById("security-api-key-display-name").value.trim() || null,
     scopes: commaList(document.getElementById("security-api-key-scopes").value)
   };
-  if (!payload.ownerUserId) {
-    showToast("Owner user ID is required.", "error");
-    return;
-  }
   try {
     const response = await fetch("/internal/security/api-keys", {
       method: "POST",
@@ -2770,8 +2982,7 @@ function migrationPayload() {
   return {
     sourceBaseUrl: document.getElementById("migration-source-url").value.trim(),
     sourceUsername: document.getElementById("migration-source-username").value.trim(),
-    sourcePassword: document.getElementById("migration-source-password").value,
-    sourceNexusVersion: document.getElementById("migration-source-version").value.trim() || "3.29.2-02"
+    sourcePassword: document.getElementById("migration-source-password").value
   };
 }
 
@@ -2939,6 +3150,7 @@ function renderMigrationError(title, message) {
 }
 
 async function runNexusMigrationPreflight() {
+  if (!validateRequiredFields(nexusMigrationRequiredFields)) return;
   try {
     showToast("Running preflight...");
     const response = await fetch("/internal/migration/nexus/preflight", {
@@ -2956,6 +3168,7 @@ async function runNexusMigrationPreflight() {
 }
 
 async function runNexusMigration() {
+  if (!validateRequiredFields(nexusMigrationRequiredFields)) return;
   try {
     showToast("Running migration...");
     const response = await fetch("/internal/migration/nexus/run", {
@@ -2978,7 +3191,6 @@ function repositoryDataMigrationPayload() {
     sourceBaseUrl: document.getElementById("repository-data-migration-source-url").value.trim(),
     sourceUsername: document.getElementById("repository-data-migration-source-username").value.trim(),
     sourcePassword: document.getElementById("repository-data-migration-source-password").value,
-    sourceNexusVersion: document.getElementById("repository-data-migration-source-version").value.trim() || "3.29.2-02",
     pageSize: numberValue("repository-data-migration-page-size"),
     concurrency: numberValue("repository-data-migration-concurrency"),
     checksumValidation: document.getElementById("repository-data-migration-checksum-validation").checked,
@@ -3188,6 +3400,7 @@ function renderRepositoryDataMigrationError(title, message) {
 }
 
 async function startRepositoryDataMetadataMigration() {
+  if (!validateRequiredFields(repositoryDataMigrationRequiredFields)) return;
   try {
     showToast("Syncing repository metadata...");
     const response = await fetch("/internal/migration/nexus/repository-data/start", {
@@ -3364,7 +3577,7 @@ document.addEventListener("keydown", (event) => {
 });
 document.getElementById("create-blobstore-button").addEventListener("click", showCreateBlobStoreForm);
 document.getElementById("cancel-blobstore-button").addEventListener("click", hideBlobStoreForm);
-document.getElementById("blobstore-form").addEventListener("submit", (event) => event.preventDefault());
+document.getElementById("blobstore-form").addEventListener("submit", saveBlobStore);
 document.getElementById("save-blobstore-button").addEventListener("click", saveBlobStore);
 document.getElementById("blobstore-engine").addEventListener("change", refreshBlobStoreEngineControls);
 blobStoreFormFields.forEach((field) => {
@@ -3384,9 +3597,13 @@ document.getElementById("blobstore-table").addEventListener("click", (event) => 
 document.getElementById("create-repository-button").addEventListener("click", showCreateRepositoryForm);
 document.getElementById("cancel-repository-button").addEventListener("click", hideRepositoryForm);
 document.getElementById("save-repository-button").addEventListener("click", saveRepository);
-document.getElementById("repository-form").addEventListener("submit", (event) => event.preventDefault());
+document.getElementById("repository-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveRepository();
+});
 document.getElementById("repository-recipe").addEventListener("change", refreshRepositoryRecipeControls);
 document.getElementById("repository-docker-connector-enabled").addEventListener("change", refreshDockerConnectorControls);
+bindRequiredFieldErrors(repositoryRequiredFields);
 bindMemberTransferEvents();
 bindSecurityTransfers();
 document.getElementById("repository-table").addEventListener("click", (event) => {
@@ -3408,6 +3625,11 @@ document.getElementById("security-user-source-filter").addEventListener("change"
 document.getElementById("create-security-user-button").addEventListener("click", () => showSecurityUserForm());
 document.getElementById("cancel-security-user-button").addEventListener("click", hideSecurityUserForm);
 document.getElementById("save-security-user-button").addEventListener("click", saveSecurityUser);
+document.getElementById("security-user-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveSecurityUser();
+});
+bindRequiredFieldErrors(securityUserRequiredFields);
 document.getElementById("security-user-table").addEventListener("click", (event) => {
   const editButton = event.target.closest(".edit-security-user-button");
   if (editButton) {
@@ -3424,6 +3646,11 @@ document.getElementById("create-security-role-button").addEventListener("click",
 document.getElementById("cancel-security-role-button").addEventListener("click", hideSecurityRoleForm);
 document.getElementById("save-security-role-button").addEventListener("click", saveSecurityRole);
 document.getElementById("security-role-id").addEventListener("input", () => refreshSecurityTransfer("roleRoles"));
+document.getElementById("security-role-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveSecurityRole();
+});
+bindRequiredFieldErrors(securityRoleRequiredFields);
 document.getElementById("security-role-table").addEventListener("click", (event) => {
   const viewButton = event.target.closest(".view-security-role-button");
   if (viewButton) {
@@ -3445,6 +3672,11 @@ document.getElementById("security-privilege-filter").addEventListener("input", r
 document.getElementById("create-security-privilege-button").addEventListener("click", () => showSecurityPrivilegeForm());
 document.getElementById("cancel-security-privilege-button").addEventListener("click", hideSecurityPrivilegeForm);
 document.getElementById("save-security-privilege-button").addEventListener("click", saveSecurityPrivilege);
+document.getElementById("security-privilege-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveSecurityPrivilege();
+});
+bindRequiredFieldErrors(securityPrivilegeRequiredFields);
 document.getElementById("security-privilege-table").addEventListener("click", (event) => {
   const editButton = event.target.closest(".edit-security-privilege-button");
   if (editButton) {
@@ -3458,19 +3690,49 @@ document.getElementById("security-privilege-table").addEventListener("click", (e
 
 document.getElementById("save-security-realms-button").addEventListener("click", saveSecurityRealms);
 document.getElementById("save-security-ldap-button").addEventListener("click", saveSecurityLdap);
+document.getElementById("security-ldap-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveSecurityLdap();
+});
+document.getElementById("security-ldap-enabled").addEventListener("change", refreshSecurityLdapRequiredMarkers);
+ldapRequiredFields.forEach((field) => {
+  const input = document.getElementById(field.id);
+  input.addEventListener("input", clearSecurityLdapRequiredErrors);
+  input.addEventListener("change", clearSecurityLdapRequiredErrors);
+});
 document.getElementById("save-security-oidc-button").addEventListener("click", saveSecurityOidc);
+document.getElementById("security-oidc-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveSecurityOidc();
+});
+document.getElementById("security-oidc-enabled").addEventListener("change", refreshSecurityOidcRequiredMarkers);
 oidcRequiredFields.forEach((field) => {
   document.getElementById(field.id).addEventListener("input", (event) => {
     markInputValidity(event.target, false);
   });
 });
 document.getElementById("save-security-anonymous-button").addEventListener("click", saveSecurityAnonymous);
+document.getElementById("security-anonymous-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveSecurityAnonymous();
+});
+bindRequiredFieldErrors(securityAnonymousRequiredFields);
 document.getElementById("save-ui-settings-button").addEventListener("click", saveUiSettings);
+document.getElementById("ui-settings-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveUiSettings();
+});
+bindRequiredFieldErrors(uiSettingsRequiredFields);
 window.addEventListener("kkrepo:i18n-change", syncUiSettingsForm);
 
 document.getElementById("create-security-api-key-button").addEventListener("click", showSecurityApiKeyForm);
 document.getElementById("cancel-security-api-key-button").addEventListener("click", hideSecurityApiKeyForm);
 document.getElementById("save-security-api-key-button").addEventListener("click", saveSecurityApiKey);
+document.getElementById("security-api-key-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveSecurityApiKey();
+});
+bindRequiredFieldErrors(securityApiKeyRequiredFields);
 document.getElementById("security-api-key-table").addEventListener("click", (event) => {
   const deleteButton = event.target.closest(".delete-security-api-key-button");
   if (deleteButton) deleteSecurityApiKey(deleteButton.dataset.id);
@@ -3487,10 +3749,18 @@ document.getElementById("audit-log-next-page").addEventListener("click", () => {
   if (auditLogPage.page < auditLogTotalPages() - 1) loadAuditLogs(auditLogPage.page + 1);
 });
 document.getElementById("audit-log-size").addEventListener("change", () => loadAuditLogs(0));
-document.getElementById("nexus-migration-form").addEventListener("submit", (event) => event.preventDefault());
+document.getElementById("nexus-migration-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  runNexusMigrationPreflight();
+});
+bindRequiredFieldErrors(nexusMigrationRequiredFields);
 document.getElementById("migration-preflight-button").addEventListener("click", runNexusMigrationPreflight);
 document.getElementById("migration-run-button").addEventListener("click", runNexusMigration);
-document.getElementById("repository-data-migration-form").addEventListener("submit", (event) => event.preventDefault());
+document.getElementById("repository-data-migration-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  startRepositoryDataMetadataMigration();
+});
+bindRequiredFieldErrors(repositoryDataMigrationRequiredFields);
 document.getElementById("repository-data-migration-start-button").addEventListener("click", startRepositoryDataMetadataMigration);
 document.getElementById("repository-data-migration-metadata-button").addEventListener("click", continueRepositoryDataMetadataMigration);
 document.getElementById("repository-data-migration-packages-button").addEventListener("click", startRepositoryDataPackageMigration);

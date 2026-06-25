@@ -78,7 +78,7 @@ Script REST API is important because some Nexus data is not available through re
 In kkrepo `/admin/`:
 
 1. Open `Nexus Metadata`.
-2. Fill in source URL, username, password, and source version.
+2. Fill in source URL, username, and password.
 3. Run `Run preflight`.
 4. Review blocking issues and warnings.
 

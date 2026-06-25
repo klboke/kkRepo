@@ -27,9 +27,9 @@ kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议行
 
 ## 元数据迁移
 
-先进入 kkrepo 后台 `/admin/` 的 `Nexus Metadata` 页面，填写源 Nexus 地址、用户名、密码和版本。
+先进入 kkrepo 后台 `/admin/` 的 `Nexus Metadata` 页面，填写源 Nexus 地址、用户名和密码。
 
-1. 点击 `Run preflight`，检查源端版本、脚本能力、账号权限、repository/blob store/security 配置和不支持项。
+1. 点击 `Run preflight`，检查脚本能力、账号权限、repository/blob store/security 配置和不支持项。
 2. 根据 preflight 结果处理阻塞问题，例如脚本能力未开启、账号权限不足、部分用户密码 hash 无法补偿等。
 3. 点击 `Run migration`，迁移用户、角色、权限、realm、anonymous、blob store、repository 定义等系统元数据。
 
@@ -48,7 +48,7 @@ kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议行
 
 执行步骤：
 
-1. 填写 `Source URL`、`Source username`、`Source password` 和 `Source version`。
+1. 填写 `Source URL`、`Source username` 和 `Source password`。
 2. 根据源 Nexus 规模调整 `Page size` 和 `Concurrency`；如果仓库数据量较大，建议把 `Concurrency` 从默认 `8` 调整到 `32`。
 3. 保持 `Metadata since` 为空。
 4. 点击 `Sync metadata`，扫描全部仓库元数据。

@@ -78,7 +78,7 @@ Script REST API 很重要，因为部分 Nexus 数据无法通过普通 REST API
 在 kkrepo `/admin/`：
 
 1. 打开 `Nexus Metadata`。
-2. 填写 source URL、username、password 和 source version。
+2. 填写 source URL、username 和 password。
 3. 执行 `Run preflight`。
 4. 查看 blocking issue 和 warning。
 

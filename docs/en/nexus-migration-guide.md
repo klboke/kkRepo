@@ -27,9 +27,9 @@ Migration runs in this order:
 
 ## Metadata Migration
 
-Open the `Nexus Metadata` page in the kkrepo `/admin/` console and fill in source Nexus URL, username, password, and version.
+Open the `Nexus Metadata` page in the kkrepo `/admin/` console and fill in source Nexus URL, username, and password.
 
-1. Click `Run preflight` to check source version, script capability, account permissions, repository/blob store/security configuration, and unsupported items.
+1. Click `Run preflight` to check script capability, account permissions, repository/blob store/security configuration, and unsupported items.
 2. Resolve blocking issues based on preflight results, such as disabled script capability, insufficient account permissions, or local user password hashes that cannot be compensated.
 3. Click `Run migration` to migrate users, roles, privileges, realms, anonymous configuration, blob stores, repository definitions, and other system metadata.
 
@@ -48,7 +48,7 @@ For the first repository data migration, leave `Metadata since` empty. This scan
 
 Steps:
 
-1. Fill in `Source URL`, `Source username`, `Source password`, and `Source version`.
+1. Fill in `Source URL`, `Source username`, and `Source password`.
 2. Tune `Page size` and `Concurrency` based on source Nexus scale. If repository data is large, increase `Concurrency` from the default `8` to `32`.
 3. Leave `Metadata since` empty.
 4. Click `Sync metadata` to scan all repository metadata.

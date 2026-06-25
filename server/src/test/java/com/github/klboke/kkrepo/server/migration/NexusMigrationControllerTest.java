@@ -23,6 +23,7 @@ import com.github.klboke.kkrepo.server.security.SecurityAuthorizationCache;
 import com.github.klboke.kkrepo.server.security.SecurityCatalogCache;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.util.Arrays;
@@ -144,6 +145,70 @@ class NexusMigrationControllerTest {
   }
 
   @Test
+  void migrationRequestRequiresSourcePassword() throws Exception {
+    NexusMigrationController controller = controllerWith(defaultBlobStore());
+    NexusMigrationController.NexusMigrationCommand command = new NexusMigrationController.NexusMigrationCommand(
+        "http://localhost:28090/",
+        "admin",
+        "",
+        null,
+        null,
+        "3.29.2-02",
+        false);
+
+    IllegalArgumentException thrown = assertThrows(
+        IllegalArgumentException.class,
+        () -> toRequest(controller, command, true));
+
+    assertEquals("sourcePassword is required", thrown.getMessage());
+  }
+
+  @Test
+  void repositoryDataRequestRequiresSourcePassword() throws Exception {
+    NexusMigrationController controller = new NexusMigrationController(
+        null,
+        new StubBlobStoreDao(defaultBlobStore()),
+        null,
+        null,
+        null,
+        null,
+        new AllowingSecurityService(),
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null);
+    MockHttpServletRequest request = new MockHttpServletRequest(
+        "POST",
+        "/internal/migration/nexus/repository-data/start");
+    request.setAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE, adminSubject());
+    NexusMigrationController.RepositoryDataMigrationCommand command =
+        new NexusMigrationController.RepositoryDataMigrationCommand(
+            "http://localhost:28090/",
+            "admin",
+            " ",
+            null,
+            null,
+            "3.29.2-02",
+            List.of("docker-hosted"),
+            null,
+            List.of(),
+            null,
+            100,
+            1,
+            true,
+            null);
+
+    IllegalArgumentException thrown = assertThrows(
+        IllegalArgumentException.class,
+        () -> controller.startRepositoryDataMigration(command, request));
+
+    assertEquals("sourcePassword is required", thrown.getMessage());
+  }
+
+  @Test
   void repositoryDataCommandMergesExplicitRepositoryNames() throws Exception {
     NexusMigrationController.RepositoryDataMigrationCommand command =
         new NexusMigrationController.RepositoryDataMigrationCommand(
@@ -259,7 +324,14 @@ class NexusMigrationControllerTest {
         NexusMigrationController.NexusMigrationCommand.class,
         boolean.class);
     method.setAccessible(true);
-    return (NexusMigrationRequest) method.invoke(controller, command, dryRun);
+    try {
+      return (NexusMigrationRequest) method.invoke(controller, command, dryRun);
+    } catch (InvocationTargetException e) {
+      if (e.getCause() instanceof Exception exception) {
+        throw exception;
+      }
+      throw e;
+    }
   }
 
   private static BlobStoreRecord defaultBlobStore() {

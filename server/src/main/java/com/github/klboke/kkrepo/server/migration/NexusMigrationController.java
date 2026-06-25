@@ -148,7 +148,7 @@ public class NexusMigrationController {
         repositoryDataMigrationService.start(new RepositoryDataMigrationService.RepositoryDataMigrationRequest(
         required(command.sourceBaseUrl(), "sourceBaseUrl"),
         required(command.sourceUsernameOrAlias(), "sourceUsername"),
-        command.sourcePasswordOrAlias(),
+        requiredSourcePassword(command.sourcePasswordOrAlias()),
         command.sourceNexusVersion(),
         command.pageSize(),
         command.concurrency(),
@@ -245,7 +245,7 @@ public class NexusMigrationController {
     return new NexusMigrationRequest(
         required(command.sourceBaseUrl(), "sourceBaseUrl"),
         required(command.sourceUsernameOrAlias(), "sourceUsername"),
-        command.sourcePasswordOrAlias(),
+        requiredSourcePassword(command.sourcePasswordOrAlias()),
         command.sourceNexusVersion(),
         dryRun,
         targetBlobStore());
@@ -295,6 +295,13 @@ public class NexusMigrationController {
       throw new IllegalArgumentException(name + " is required");
     }
     return value.trim();
+  }
+
+  private static String requiredSourcePassword(String value) {
+    if (value == null || value.isBlank()) {
+      throw new IllegalArgumentException("sourcePassword is required");
+    }
+    return value;
   }
 
   private static Instant parseInstant(String value, String name) {
