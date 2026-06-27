@@ -155,6 +155,14 @@ mvn -pl compat-test -am test
 
 Live black-box 测试默认跳过，需要显式提供 Nexus 参考实例和 kkrepo 地址。具体命令见 [compat-test/README.md](../../compat-test/README.md)。
 
+## 开发设计文档
+
+仓库格式和迁移工作的详细设计、实现计划集中放在 `docs/zh/dev/`：
+
+- [Docker 仓库实现说明](dev/docker-repository-implementation-plan.md)
+- [Cargo / Rust 仓库开发设计说明](dev/cargo-rust-repository-design.md)
+- [Nexus 兼容迁移重构开发计划](dev/nexus-migration-compatibility-refactor-plan.md)
+
 ## 配置中心
 
 服务接入 Apollo ConfigData，但未配置 Apollo meta 时默认不启用 Apollo，避免本地启动时访问不存在的配置中心。配置了 Apollo meta 但 Apollo 暂不可用时，服务仍使用本地配置启动。

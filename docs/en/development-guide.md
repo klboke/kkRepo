@@ -155,6 +155,14 @@ mvn -pl compat-test -am test
 
 Live black-box tests are skipped by default and require explicit Nexus reference and kkrepo URLs. Commands are documented in [compat-test/README.md](../../compat-test/README.md).
 
+## Development Design Documents
+
+Detailed design and implementation plans for repository formats and migration work are kept under `docs/en/dev/`:
+
+- [Docker Repository Implementation Notes](dev/docker-repository-implementation-plan.md)
+- [Cargo / Rust Repository Design Notes](dev/cargo-rust-repository-design.md)
+- [Nexus Compatibility Migration Refactor Plan](dev/nexus-migration-compatibility-refactor-plan.md)
+
 ## Configuration Center
 
 The service integrates Apollo ConfigData, but Apollo is not enabled by default when Apollo meta is not configured, so local startup does not try to access a missing configuration center. When Apollo meta is configured but Apollo is temporarily unavailable, the service still starts with local configuration.
