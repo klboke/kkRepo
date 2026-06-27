@@ -27,10 +27,12 @@ public record RepositoryRuntime(
     Boolean autoBlock,
     String proxyRemoteUsername,
     String proxyRemotePassword,
+    String proxyRemoteBearerToken,
     String rawContentDisposition,
     Boolean dockerConnectorEnabled,
     Integer dockerConnectorPort,
     String dockerConnectorPublicUrl,
+    Boolean cargoRequireAuthentication,
     List<RepositoryRuntime> members) {
 
   public RepositoryRuntime(
@@ -69,7 +71,9 @@ public record RepositoryRuntime(
         autoBlock,
         null,
         null,
+        null,
         rawContentDisposition,
+        null,
         null,
         null,
         null,
@@ -115,10 +119,62 @@ public record RepositoryRuntime(
         autoBlock,
         null,
         null,
+        null,
         rawContentDisposition,
         dockerConnectorEnabled,
         dockerConnectorPort,
         dockerConnectorPublicUrl,
+        null,
+        members);
+  }
+
+  public RepositoryRuntime(
+      long id,
+      String name,
+      RepositoryFormat format,
+      RepositoryType type,
+      String recipeName,
+      boolean online,
+      Long blobStoreId,
+      String writePolicy,
+      String versionPolicy,
+      String layoutPolicy,
+      boolean strictContentTypeValidation,
+      String proxyRemoteUrl,
+      Integer contentMaxAgeMinutes,
+      Integer metadataMaxAgeMinutes,
+      Boolean autoBlock,
+      String proxyRemoteUsername,
+      String proxyRemotePassword,
+      String rawContentDisposition,
+      Boolean dockerConnectorEnabled,
+      Integer dockerConnectorPort,
+      String dockerConnectorPublicUrl,
+      List<RepositoryRuntime> members) {
+    this(
+        id,
+        name,
+        format,
+        type,
+        recipeName,
+        online,
+        blobStoreId,
+        writePolicy,
+        versionPolicy,
+        layoutPolicy,
+        strictContentTypeValidation,
+        proxyRemoteUrl,
+        contentMaxAgeMinutes,
+        metadataMaxAgeMinutes,
+        autoBlock,
+        proxyRemoteUsername,
+        proxyRemotePassword,
+        null,
+        rawContentDisposition,
+        dockerConnectorEnabled,
+        dockerConnectorPort,
+        dockerConnectorPublicUrl,
+        null,
         members);
   }
 
@@ -153,6 +209,8 @@ public record RepositoryRuntime(
         proxyRemoteUrl,
         contentMaxAgeMinutes,
         metadataMaxAgeMinutes,
+        null,
+        null,
         null,
         null,
         null,
@@ -195,5 +253,9 @@ public record RepositoryRuntime(
 
   public boolean dockerConnectorEnabledOrDefault() {
     return dockerConnectorEnabled == null ? dockerConnectorPort != null : dockerConnectorEnabled;
+  }
+
+  public boolean cargoRequireAuthenticationOrDefault() {
+    return Boolean.TRUE.equals(cargoRequireAuthentication);
   }
 }

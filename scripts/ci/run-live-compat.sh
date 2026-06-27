@@ -7,10 +7,10 @@ cd "$PROJECT_ROOT"
 
 SUITE="${1:-${LIVE_COMPAT_SUITE:-smoke}}"
 
-export NEXUS_COMPAT_BASE_URL="${NEXUS_COMPAT_BASE_URL:-http://127.0.0.1:28090}"
+export NEXUS_COMPAT_BASE_URL="${NEXUS_COMPAT_BASE_URL:-http://127.0.0.1:${NEXUS_COMPAT_PORT:-28090}}"
 export NEXUS_COMPAT_USERNAME="${NEXUS_COMPAT_USERNAME:-admin}"
 export NEXUS_COMPAT_PASSWORD="${NEXUS_COMPAT_PASSWORD:-123456}"
-export KKREPO_COMPAT_BASE_URL="${KKREPO_COMPAT_BASE_URL:-http://127.0.0.1:18090}"
+export KKREPO_COMPAT_BASE_URL="${KKREPO_COMPAT_BASE_URL:-http://127.0.0.1:${KKREPO_COMPAT_PORT:-18090}}"
 export KKREPO_COMPAT_USERNAME="${KKREPO_COMPAT_USERNAME:-admin}"
 export KKREPO_COMPAT_PASSWORD="${KKREPO_COMPAT_PASSWORD:-12345678}"
 export NEXUS_COMPAT_READ_REPOSITORY="${NEXUS_COMPAT_READ_REPOSITORY:-maven-public}"
@@ -42,12 +42,16 @@ case "$SUITE" in
   extended)
     run_tests "KkRepoConsoleBlackBoxCompatibilityTest,MavenRepositoryBlackBoxCompatibilityTest,PypiRepositoryBlackBoxCompatibilityTest,HelmRepositoryBlackBoxCompatibilityTest,NugetRubygemsYumRepositoryBlackBoxCompatibilityTest"
     ;;
+  cargo)
+    export CARGO_COMPAT_ENABLED=true
+    run_tests "CargoRepositoryBlackBoxCompatibilityTest"
+    ;;
   full)
     mvn "${COMMON_ARGS[@]}" test
     ;;
   *)
     echo "Unknown live compatibility suite: $SUITE" >&2
-    echo "Available suites: smoke, write-smoke, extended, full" >&2
+    echo "Available suites: smoke, write-smoke, extended, cargo, full" >&2
     exit 2
     ;;
 esac

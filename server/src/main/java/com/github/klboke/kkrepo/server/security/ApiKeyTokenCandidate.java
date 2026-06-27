@@ -6,6 +6,7 @@ import java.util.List;
 
 record ApiKeyTokenCandidate(String domain, String tokenMaterial) {
   private static final String NPM_TOKEN_DOMAIN = "NpmToken";
+  private static final String CARGO_TOKEN_DOMAIN = "CargoToken";
 
   static List<ApiKeyTokenCandidate> fromPresentedToken(String token) {
     String value = normalize(token);
@@ -23,6 +24,7 @@ record ApiKeyTokenCandidate(String domain, String tokenMaterial) {
     } else {
       // Nexus npm token auth also accepts a bare bearer token and checks it in the NpmToken domain.
       add(candidates, NPM_TOKEN_DOMAIN, value);
+      add(candidates, CARGO_TOKEN_DOMAIN, value);
     }
     add(candidates, null, value);
     return new ArrayList<>(candidates.values());

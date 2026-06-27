@@ -146,7 +146,7 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 
 1. Docker / OCI Registry - 已完成（[实现说明](docs/zh/dev/docker-repository-implementation-plan.md)）
 2. APT / Debian
-3. Cargo / Rust
+3. Cargo / Rust - 第一阶段仓库能力已实现；迁移能力待定（[设计说明](docs/zh/dev/cargo-rust-repository-design.md)）
 4. Terraform Provider / Module Registry
 5. Conan
 6. Conda

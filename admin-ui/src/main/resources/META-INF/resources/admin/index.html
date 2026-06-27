@@ -136,6 +136,10 @@
                 <input id="repository-remote-password" type="password" autocomplete="new-password">
               </label>
               <label>
+                <span>Remote bearer token</span>
+                <input id="repository-remote-bearer-token" type="password" autocomplete="new-password">
+              </label>
+              <label>
                 <span>Content max age (min)</span>
                 <input id="repository-content-max-age" type="number" min="-1" value="1440">
               </label>
@@ -150,6 +154,10 @@
               <label class="checkbox-field">
                 <input id="repository-remote-password-clear" type="checkbox">
                 <span>Clear saved password</span>
+              </label>
+              <label class="checkbox-field">
+                <input id="repository-remote-bearer-token-clear" type="checkbox">
+                <span>Clear saved bearer token</span>
               </label>
             </fieldset>
             <fieldset class="form-grid" id="repository-docker-fields" hidden>
@@ -170,6 +178,17 @@
               <label class="full-width">
                 <span>Public URL</span>
                 <input id="repository-docker-connector-public-url" type="url" placeholder="https://registry.example.com">
+              </label>
+            </fieldset>
+            <fieldset class="form-grid" id="repository-cargo-fields" hidden>
+              <legend>Cargo settings</legend>
+              <p class="form-note full-width">
+                Controls the Cargo registry `auth-required` client hint. Repository access is still decided by
+                anonymous settings and security privileges.
+              </p>
+              <label class="checkbox-field">
+                <input id="repository-cargo-require-authentication" type="checkbox">
+                <span>Authentication requirements</span>
               </label>
             </fieldset>
             <fieldset class="form-grid" id="repository-group-fields" hidden>
@@ -661,7 +680,14 @@
           <form class="blobstore-form" id="security-api-key-form" hidden novalidate>
             <div class="form-title">Create API key</div>
             <div class="form-grid">
-              <label><span>Domain</span><input id="security-api-key-domain" type="text" value="nexus"></label>
+              <label>
+                <span>Domain</span>
+                <select id="security-api-key-domain">
+                  <option value="NpmToken">NpmToken</option>
+                  <option value="NuGetApiKey">NuGetApiKey</option>
+                  <option value="CargoToken">CargoToken</option>
+                </select>
+              </label>
               <label><span>Owner source</span><input id="security-api-key-owner-source" type="text" value="Local"></label>
               <label><span>Owner user ID <span class="required-mark">*</span></span><input id="security-api-key-owner-user-id" type="text" required></label>
               <label><span>Display name</span><input id="security-api-key-display-name" type="text"></label>

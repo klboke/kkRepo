@@ -35,6 +35,7 @@ const AUTH_SNAPSHOT_KEY = "nexusPlus.authSnapshot";
 const AUTH_SNAPSHOT_MAX_AGE_MS = 10 * 60 * 1000;
 let pendingLoginReturnTo = readPendingLoginReturnTo();
 const SEARCH_ROUTE_FORMAT = {
+  cargo: "cargo",
   go: "go",
   helm: "helm",
   maven2: "maven2",
@@ -45,6 +46,7 @@ const SEARCH_ROUTE_FORMAT = {
   npm: "npm",
 };
 const FORMAT_ROUTE_SEGMENT = {
+  cargo: "cargo",
   go: "go",
   helm: "helm",
   maven2: "maven2",
@@ -124,6 +126,9 @@ function componentBrowsePath(component) {
   }
   if (format === "npm") {
     return group ? `@${group}/${name}` : name;
+  }
+  if (format === "cargo") {
+    return ["crates", name, version].filter(Boolean).join("/");
   }
   if (format === "go") {
     return name;
@@ -779,6 +784,13 @@ function setMyTokenStatus(message, type = "") {
   status.classList.toggle("error", type === "error");
 }
 
+function markMyTokenDisplayNameValidity(invalid) {
+  const input = document.getElementById("my-token-display-name");
+  if (!input) return;
+  input.classList.toggle("is-invalid", invalid);
+  input.setAttribute("aria-invalid", String(invalid));
+}
+
 function setMyTokenBusy(busy) {
   document.getElementById("my-token-create").disabled = busy;
   document.querySelectorAll("[data-token-reset], [data-token-delete]").forEach((button) => {
@@ -890,7 +902,15 @@ async function createCurrentApiKey(event) {
     return;
   }
   const domain = document.getElementById("my-token-domain").value || "NpmToken";
-  const displayName = document.getElementById("my-token-display-name").value.trim() || "npm token";
+  const displayNameInput = document.getElementById("my-token-display-name");
+  const displayName = displayNameInput.value.trim();
+  if (!displayName) {
+    markMyTokenDisplayNameValidity(true);
+    setMyTokenStatus("Display name is required.", "error");
+    displayNameInput.focus();
+    return;
+  }
+  markMyTokenDisplayNameValidity(false);
   setMyTokenBusy(true);
   setMyTokenStatus("Generating...");
   try {
@@ -1576,6 +1596,9 @@ function hasDirectoryUsage(entry) {
   if (repo.format === "npm") {
     return Boolean(npmPackageName(entry.path));
   }
+  if (repo.format === "cargo") {
+    return Boolean(cargoCoordinates(entry).name);
+  }
   if (repo.format === "go") {
     return goModulePath(entry.path) === entry.path;
   }
@@ -1691,6 +1714,99 @@ async function npmUsageDetail(entry) {
       usageSnippet("Yarn", `yarn add ${installTarget}`, "Install runtime dependency"),
       usageSnippet("package.json", `"${name}": "${version || "latest"}"`,
         "Install runtime dependency to the package.json dependencies section"),
+    ],
+  };
+}
+
+function cargoCoordinates(entry) {
+  const parts = pathSegments(entry.path);
+  if (!parts.length || parts[0] === "config.json") {
+    return { name: "", version: "" };
+  }
+  if (parts[0] === "crates" && parts.length >= 2) {
+    const name = parts[1] || "";
+    let version = parts[2] || "";
+    const file = parts.at(-1) || "";
+    if (!version && file.endsWith(".crate")) {
+      version = cargoVersionFromCrateFile(file, name);
+    }
+    return { name, version };
+  }
+  if (parts[0] === "api" && parts[1] === "v1" && parts[2] === "crates") {
+    return { name: parts[3] || "", version: parts[4] || "" };
+  }
+  return { name: parts.at(-1) || "", version: "" };
+}
+
+function cargoVersionFromCrateFile(filename, crateName) {
+  if (!filename || !filename.endsWith(".crate")) return "";
+  const base = filename.slice(0, -".crate".length);
+  const prefix = `${crateName}-`;
+  return base.startsWith(prefix) ? base.slice(prefix.length) : "";
+}
+
+function cargoSourceName(repoName) {
+  return (repoName || "kkrepo")
+    .replace(/[^A-Za-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "kkrepo";
+}
+
+function tomlString(value) {
+  return `"${String(value || "").replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
+function cargoSourceTable(sourceName) {
+  return /^[A-Za-z0-9_-]+$/.test(sourceName) ? sourceName : tomlString(sourceName);
+}
+
+async function latestCargoVersion(cratePath) {
+  try {
+    const children = await fetchChildren(state.repo, cratePath);
+    return latestVersion(children
+      .filter((child) => !child.leaf)
+      .map((child) => child.name));
+  } catch {
+    return "";
+  }
+}
+
+async function cargoUsageDetail(entry) {
+  const coordinates = cargoCoordinates(entry);
+  if (!coordinates.name) return null;
+  const name = coordinates.name;
+  const cratePath = `crates/${name}`;
+  const version = coordinates.version || (!entry.leaf && entry.path === cratePath
+    ? await latestCargoVersion(cratePath)
+    : "");
+  const sourceName = cargoSourceName(state.repo);
+  const sourceTable = cargoSourceTable(sourceName);
+  const repoUrl = repositoryBaseUrl();
+  const registryUrl = `sparse+${repoUrl}`;
+  const addTarget = version ? `${name}@${version}` : name;
+  const dependency = version ? `${name} = "${version}"` : `${name} = "*"`;
+  const alternateDependency = version
+    ? `${name} = { version = "${version}", registry = "${sourceName}" }`
+    : `${name} = { version = "*", registry = "${sourceName}" }`;
+  return {
+    crumbText: entry.path,
+    summaryRows: [
+      ["Repository", state.repo],
+      ["Format", "cargo"],
+      ["Name", name],
+      ["Version", version || "latest"],
+      ["Registry URL", repoUrl],
+    ],
+    snippets: [
+      usageSnippet(".cargo/config.toml", `[source.crates-io]
+replace-with = "${sourceName}"
+
+[source.${sourceTable}]
+registry = "${registryUrl}"`, "Route crates.io dependencies through this repository"),
+      usageSnippet("cargo add", `cargo add ${addTarget}`),
+      usageSnippet("Cargo.toml", dependency),
+      usageSnippet("Named registry config", `[registries.${sourceTable}]
+index = "${registryUrl}"`, "Add to .cargo/config.toml when using this repository as an explicit registry"),
+      usageSnippet("Cargo.toml registry", alternateDependency),
     ],
   };
 }
@@ -2001,6 +2117,7 @@ async function usageDetailForEntry(entry) {
   if (repo.format === "maven2") return mavenUsageDetail(entry);
   if (repo.format === "pypi") return pypiUsageDetail(entry);
   if (repo.format === "npm") return npmUsageDetail(entry);
+  if (repo.format === "cargo") return cargoUsageDetail(entry);
   if (repo.format === "helm") return helmUsageDetail(entry);
   if (repo.format === "go") return goUsageDetail(entry);
   if (repo.format === "docker") return dockerUsageDetail(entry);
@@ -2567,6 +2684,12 @@ document.getElementById("upload-fields").addEventListener("change", updateUpload
 document.getElementById("component-search-button").addEventListener("click", () => renderSearch(activeSearchFormat));
 document.getElementById("upload-form").addEventListener("submit", uploadSelectedAsset);
 document.getElementById("my-token-form").addEventListener("submit", createCurrentApiKey);
+document.getElementById("my-token-display-name").addEventListener("input", (event) => {
+  if (event.target.value.trim()) {
+    markMyTokenDisplayNameValidity(false);
+    setMyTokenStatus("");
+  }
+});
 document.getElementById("my-token-copy").addEventListener("click", copyGeneratedToken);
 document.getElementById("admin-bootstrap-panel").addEventListener("submit", submitAdminBootstrap);
 document.getElementById("login-button").addEventListener("click", login);

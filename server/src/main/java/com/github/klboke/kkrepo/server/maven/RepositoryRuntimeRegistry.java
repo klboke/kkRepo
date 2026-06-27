@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.maven;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.cache.SharedCache;
+import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
@@ -173,12 +174,14 @@ public class RepositoryRuntimeRegistry {
     Object proxyRaw = attrs.get("proxy");
     Object rawRaw = attrs.get("raw");
     Object dockerRaw = attrs.get("docker");
+    Object cargoRaw = attrs.get("cargo");
 
     Integer contentMaxAge = null;
     Integer metadataMaxAge = null;
     Boolean autoBlock = null;
     String proxyRemoteUsername = null;
     String proxyRemotePassword = null;
+    String proxyRemoteBearerToken = null;
     if (proxyRaw instanceof Map<?, ?> proxyMap) {
       contentMaxAge = asInt(proxyMap.get("contentMaxAgeMinutes"));
       metadataMaxAge = asInt(proxyMap.get("metadataMaxAgeMinutes"));
@@ -190,6 +193,10 @@ public class RepositoryRuntimeRegistry {
       Object password = proxyMap.get("remotePassword");
       if (password != null && !password.toString().isBlank()) {
         proxyRemotePassword = password.toString();
+      }
+      Object bearerToken = proxyMap.get("remoteBearerToken");
+      if (bearerToken != null && !bearerToken.toString().isBlank()) {
+        proxyRemoteBearerToken = bearerToken.toString();
       }
     }
     String rawContentDisposition = null;
@@ -209,6 +216,10 @@ public class RepositoryRuntimeRegistry {
       if (publicUrl != null && !publicUrl.toString().isBlank()) {
         dockerConnectorPublicUrl = publicUrl.toString();
       }
+    }
+    Boolean cargoRequireAuthentication = null;
+    if (usesCargoAuthenticationHint(record) && cargoRaw instanceof Map<?, ?> cargoMap) {
+      cargoRequireAuthentication = asBool(cargoMap.get("requireAuthentication"));
     }
 
     List<RepositoryRuntime> members = List.of();
@@ -247,10 +258,12 @@ public class RepositoryRuntimeRegistry {
         autoBlock,
         proxyRemoteUsername,
         proxyRemotePassword,
+        proxyRemoteBearerToken,
         rawContentDisposition,
         dockerConnectorEnabled,
         dockerConnectorPort,
         dockerConnectorPublicUrl,
+        cargoRequireAuthentication,
         members);
   }
 
@@ -274,11 +287,19 @@ public class RepositoryRuntimeRegistry {
     if (runtime.proxyRemotePassword() != null && !runtime.proxyRemotePassword().isBlank()) {
       return true;
     }
+    if (runtime.proxyRemoteBearerToken() != null && !runtime.proxyRemoteBearerToken().isBlank()) {
+      return true;
+    }
     for (RepositoryRuntime member : runtime.members()) {
       if (containsProxySecret(member)) {
         return true;
       }
     }
     return false;
+  }
+
+  private static boolean usesCargoAuthenticationHint(RepositoryRecord record) {
+    return record.format() == RepositoryFormat.CARGO
+        && (record.type() == RepositoryType.PROXY || record.type() == RepositoryType.GROUP);
   }
 }

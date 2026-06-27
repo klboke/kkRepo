@@ -85,6 +85,108 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
+  void cargoConfigUsesAnonymousReadPermissionsWhenAvailable() throws Exception {
+    assertCargoReadUsesAnonymousPermissions("/repository/cargo-hosted/config.json");
+  }
+
+  @Test
+  void cargoSparseIndexUsesAnonymousReadPermissionsWhenAvailable() throws Exception {
+    assertCargoReadUsesAnonymousPermissions("/repository/cargo-hosted/kk/re/kkrepo_e2e");
+  }
+
+  @Test
+  void cargoConfigRequiresAuthenticationWhenAnonymousReadIsDisabled() throws Exception {
+    assertCargoReadRequiresAuthenticationWithoutAnonymousFallback("/repository/cargo-hosted/config.json");
+  }
+
+  @Test
+  void cargoSparseIndexRequiresAuthenticationWhenAnonymousReadIsDisabled() throws Exception {
+    assertCargoReadRequiresAuthenticationWithoutAnonymousFallback("/repository/cargo-hosted/kk/re/kkrepo_e2e");
+  }
+
+  private static void assertCargoReadUsesAnonymousPermissions(String uri) throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(subject("anonymous"));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(cargoRepository("cargo-hosted", true)),
+        true);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(request("GET", uri), response.proxy(), chain);
+
+    assertEquals(1, authentication.anonymousCalls);
+    assertEquals(1, decisions.decisions);
+    assertEquals("anonymous", decisions.subject.userId());
+    assertEquals(PermissionAction.READ, decisions.permission.action());
+    assertEquals(1, chain.calls);
+    assertEquals(0, response.status);
+  }
+
+  private static void assertCargoReadRequiresAuthenticationWithoutAnonymousFallback(String uri) throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(subject("anonymous"));
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        new RecordingDecisionService(AccessDecision.allow()),
+        new FakeRepositoryDao(cargoRepository("cargo-hosted", false)),
+        false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(request("GET", uri), response.proxy(), chain);
+
+    assertEquals(1, authentication.anonymousCalls);
+    assertEquals(0, chain.calls);
+    assertEquals(HttpServletResponse.SC_UNAUTHORIZED, response.status);
+    assertEquals("Authentication required", response.message);
+    assertEquals("Cargo login_url=\"/repository/cargo-hosted/me\"", response.headers.get("WWW-Authenticate"));
+  }
+
+  @Test
+  void cargoDownloadsUseAnonymousReadFallbackLikeOtherRepositories() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(subject("anonymous"));
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        new RecordingDecisionService(AccessDecision.allow()),
+        new FakeRepositoryDao(cargoRepository("cargo-hosted", true)),
+        true);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/repository/cargo-hosted/api/v1/crates/kkrepo_e2e/0.1.0/download"),
+        response.proxy(),
+        chain);
+
+    assertEquals(1, authentication.anonymousCalls);
+    assertEquals(1, chain.calls);
+    assertEquals(0, response.status);
+  }
+
+  @Test
+  void nexusCompatibleCargoDownloadsUseAnonymousReadFallbackLikeOtherRepositories() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(subject("anonymous"));
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        new RecordingDecisionService(AccessDecision.allow()),
+        new FakeRepositoryDao(cargoRepository("cargo-hosted", true)),
+        true);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/repository/cargo-hosted/crates/kkrepo_e2e/0.1.0/download"),
+        response.proxy(),
+        chain);
+
+    assertEquals(1, authentication.anonymousCalls);
+    assertEquals(1, chain.calls);
+    assertEquals(0, response.status);
+  }
+
+  @Test
   void writeRequestsDoNotUseAnonymousFallback() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(subject("anonymous"));
     RepositorySecurityFilter filter = new RepositorySecurityFilter(
@@ -103,6 +205,7 @@ class RepositorySecurityFilterTest {
     assertEquals(0, authentication.anonymousCalls);
     assertEquals(0, chain.calls);
     assertEquals(HttpServletResponse.SC_UNAUTHORIZED, response.status);
+    assertEquals("Basic realm=\"kkrepo\"", response.headers.get("WWW-Authenticate"));
   }
 
   @Test
@@ -157,6 +260,24 @@ class RepositorySecurityFilterTest {
     assertRepositoryContentAction("PATCH", PermissionAction.ADD);
     assertRepositoryContentAction("PUT", PermissionAction.EDIT);
     assertRepositoryContentAction("DELETE", PermissionAction.DELETE);
+  }
+
+  @Test
+  void cargoPublishRouteAllowsAddOrEditPermission() throws Exception {
+    assertCargoRouteAction("PUT", "/repository/cargo-hosted/api/v1/crates/new", PermissionAction.ADD);
+    assertCargoPublishRouteFallsBackToEditWhenAddDenied();
+  }
+
+  @Test
+  void cargoYankRoutesUseEditPermission() throws Exception {
+    assertCargoRouteAction(
+        "DELETE",
+        "/repository/cargo-hosted/api/v1/crates/my-crate/1.0.0/yank",
+        PermissionAction.EDIT);
+    assertCargoRouteAction(
+        "PUT",
+        "/repository/cargo-hosted/api/v1/crates/my-crate/1.0.0/unyank",
+        PermissionAction.EDIT);
   }
 
   @Test
@@ -283,6 +404,49 @@ class RepositorySecurityFilterTest {
     assertEquals(action, decisions.permission.action());
   }
 
+  private static void assertCargoRouteAction(String method, String uri, PermissionAction action) throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(cargoRepository("cargo-hosted", false)),
+        false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(request(method, uri), response.proxy(), chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(action, decisions.permission.action());
+  }
+
+  private static void assertCargoPublishRouteFallsBackToEditWhenAddDenied() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow()) {
+      @Override
+      public AccessDecision decide(PermissionSubject subject, RepositoryPermission permission) {
+        super.decide(subject, permission);
+        return permission.action() == PermissionAction.ADD
+            ? AccessDecision.deny("missing add")
+            : AccessDecision.allow();
+      }
+    };
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(cargoRepository("cargo-hosted", false)),
+        false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(request("PUT", "/repository/cargo-hosted/api/v1/crates/new"), response.proxy(), chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(2, decisions.decisions);
+    assertEquals(PermissionAction.EDIT, decisions.permission.action());
+  }
+
   private static RepositoryRecord repository(String name) {
     return repository(name, RepositoryFormat.MAVEN2);
   }
@@ -303,6 +467,24 @@ class RepositorySecurityFilterTest {
         null,
         true,
         Map.of());
+  }
+
+  private static RepositoryRecord cargoRepository(String name, boolean requireAuthentication) {
+    return new RepositoryRecord(
+        1L,
+        name,
+        RepositoryFormat.CARGO,
+        RepositoryType.HOSTED,
+        "cargo-hosted",
+        true,
+        1L,
+        null,
+        null,
+        null,
+        null,
+        null,
+        true,
+        Map.of("cargo", Map.of("requireAuthentication", requireAuthentication)));
   }
 
   private static HttpServletRequest request(String method, String uri) {

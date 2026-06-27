@@ -4,10 +4,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
+import com.github.klboke.kkrepo.protocol.cargo.CargoPath;
+import com.github.klboke.kkrepo.protocol.cargo.CargoPathParser;
 import com.github.klboke.kkrepo.protocol.npm.NpmPath;
 import com.github.klboke.kkrepo.protocol.npm.NpmPathParser;
 import com.github.klboke.kkrepo.protocol.nuget.NugetPaths;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
+import com.github.klboke.kkrepo.server.cargo.CargoExceptions;
+import com.github.klboke.kkrepo.server.cargo.CargoGroupService;
+import com.github.klboke.kkrepo.server.cargo.CargoHostedService;
+import com.github.klboke.kkrepo.server.cargo.CargoProxyService;
 import com.github.klboke.kkrepo.server.goartifact.GoGroupService;
 import com.github.klboke.kkrepo.server.goartifact.GoProxyService;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
@@ -87,6 +93,9 @@ public class RepositoryContentController {
   private final NpmGroupService npmGroup;
   private final NpmSearchService npmSearch;
   private final NpmTokenService npmToken;
+  private final CargoHostedService cargoHosted;
+  private final CargoProxyService cargoProxy;
+  private final CargoGroupService cargoGroup;
   private final NugetService nuget;
   private final RubygemsService rubygems;
   private final YumService yum;
@@ -97,6 +106,7 @@ public class RepositoryContentController {
   private final ForwardedHeaderPolicy forwardedHeaderPolicy;
   private final MavenPathParser parser = new MavenPathParser();
   private final NpmPathParser npmParser = new NpmPathParser();
+  private final CargoPathParser cargoParser = new CargoPathParser();
   private final MavenPartialFetchSupport partialFetch = new MavenPartialFetchSupport();
 
   public RepositoryContentController(RepositoryRuntimeRegistry registry,
@@ -106,6 +116,7 @@ public class RepositoryContentController {
       MavenHtmlListingService htmlListing,
       NpmHostedService npmHosted, NpmProxyService npmProxy, NpmGroupService npmGroup,
       NpmSearchService npmSearch, NpmTokenService npmToken,
+      CargoHostedService cargoHosted, CargoProxyService cargoProxy, CargoGroupService cargoGroup,
       NugetService nuget,
       RubygemsService rubygems,
       YumService yum,
@@ -126,6 +137,9 @@ public class RepositoryContentController {
     this.npmGroup = npmGroup;
     this.npmSearch = npmSearch;
     this.npmToken = npmToken;
+    this.cargoHosted = cargoHosted;
+    this.cargoProxy = cargoProxy;
+    this.cargoGroup = cargoGroup;
     this.nuget = nuget;
     this.rubygems = rubygems;
     this.yum = yum;
@@ -161,6 +175,11 @@ public class RepositoryContentController {
       MavenResponse resp = raw.isBlank()
           ? helmRepositoryInfo(runtime, request, true)
           : dispatchHelmGet(runtime, raw, true);
+      return toHeadResponse(resp, request);
+    }
+    if (runtime.format() == RepositoryFormat.CARGO) {
+      CargoPath path = cargoParser.parse(extractRepositoryPath(name, request, true));
+      MavenResponse resp = dispatchCargoGet(runtime, path, repositoryBaseUrl(request, runtime.name()), true);
       return toHeadResponse(resp, request);
     }
     if (runtime.format() == RepositoryFormat.NUGET) {
@@ -233,6 +252,20 @@ public class RepositoryContentController {
       }
       return ResponseEntity.status(resp.status()).build();
     }
+    if (runtime.format() == RepositoryFormat.CARGO) {
+      CargoPath path = cargoParser.parse(extractRepositoryPath(name, request, true));
+      MavenResponse resp;
+      if (path.kind() == CargoPath.Kind.PUBLISH) {
+        try (InputStream body = request.getInputStream()) {
+          resp = cargoHosted.publish(runtime, body, userId, request.getRemoteAddr());
+        }
+      } else if (path.kind() == CargoPath.Kind.UNYANK) {
+        resp = cargoHosted.yank(runtime, path.crateName(), path.version(), false);
+      } else {
+        throw new CargoExceptions.MethodNotAllowed("Unsupported Cargo PUT path: " + path.rawPath());
+      }
+      return toByteArrayResponse(resp);
+    }
     if (runtime.format() == RepositoryFormat.NUGET) {
       String raw = extractRepositoryPath(name, request, true);
       MavenResponse resp;
@@ -287,7 +320,7 @@ public class RepositoryContentController {
   }
 
   @DeleteMapping("/**")
-  public ResponseEntity<?> delete(@PathVariable("name") String name, HttpServletRequest request) {
+  public ResponseEntity<?> delete(@PathVariable("name") String name, HttpServletRequest request) throws IOException {
     RepositoryRuntime runtime = resolveRuntime(name);
     if (runtime.format() == RepositoryFormat.NPM) {
       String rawPath = extractRepositoryPath(name, request);
@@ -308,6 +341,14 @@ public class RepositoryContentController {
       String raw = extractRepositoryPath(name, request);
       MavenResponse resp = helmHosted.delete(runtime, raw);
       return ResponseEntity.status(resp.status()).build();
+    }
+    if (runtime.format() == RepositoryFormat.CARGO) {
+      CargoPath path = cargoParser.parse(extractRepositoryPath(name, request, true));
+      if (path.kind() != CargoPath.Kind.YANK) {
+        throw new CargoExceptions.MethodNotAllowed("Unsupported Cargo DELETE path: " + path.rawPath());
+      }
+      MavenResponse resp = cargoHosted.yank(runtime, path.crateName(), path.version(), true);
+      return toByteArrayResponse(resp);
     }
     if (runtime.format() == RepositoryFormat.NUGET) {
       String raw = extractRepositoryPath(name, request, true);
@@ -429,6 +470,11 @@ public class RepositoryContentController {
           : dispatchHelmGet(runtime, raw, headOnly);
       return toStreamingResponse(resp, request, false);
     }
+    if (runtime.format() == RepositoryFormat.CARGO) {
+      CargoPath path = cargoParser.parse(extractRepositoryPath(name, request, true));
+      MavenResponse resp = dispatchCargoGet(runtime, path, repositoryBaseUrl(request, runtime.name()), headOnly);
+      return toStreamingResponse(resp, request, false);
+    }
     if (runtime.format() == RepositoryFormat.NUGET) {
       String raw = extractRepositoryPath(name, request, true);
       MavenResponse resp = nuget.get(runtime, raw, repositoryBaseUrl(request, runtime.name()), request, headOnly);
@@ -474,6 +520,21 @@ public class RepositoryContentController {
 
   private ResponseEntity<StreamingResponseBody> toStreamingResponse(MavenResponse resp) {
     return toStreamingResponse(resp, null, false);
+  }
+
+  private ResponseEntity<byte[]> toByteArrayResponse(MavenResponse resp) throws IOException {
+    HttpHeaders headers = responseHeaders(resp, true);
+    InputStream responseBody = resp.body();
+    if (responseBody == null) {
+      headers.setContentLength(0);
+      return ResponseEntity.status(resp.status()).headers(headers).body(null);
+    }
+    byte[] bytes;
+    try (responseBody) {
+      bytes = responseBody.readAllBytes();
+    }
+    headers.setContentLength(bytes.length);
+    return ResponseEntity.status(resp.status()).headers(headers).body(bytes);
   }
 
   private ResponseEntity<StreamingResponseBody> toStreamingResponse(MavenResponse resp, HttpServletRequest request) {
@@ -552,6 +613,18 @@ public class RepositoryContentController {
       case HOSTED -> rawHosted.get(runtime, rawPath, headOnly);
       case PROXY -> rawProxy.get(runtime, rawPath, headOnly);
       case GROUP -> rawGroup.get(runtime, rawPath, headOnly);
+    };
+  }
+
+  private MavenResponse dispatchCargoGet(
+      RepositoryRuntime runtime,
+      CargoPath path,
+      String baseUrl,
+      boolean headOnly) {
+    return switch (runtime.type()) {
+      case HOSTED -> cargoHosted.get(runtime, path, baseUrl, headOnly);
+      case PROXY -> cargoProxy.get(runtime, path, baseUrl, headOnly);
+      case GROUP -> cargoGroup.get(runtime, path, baseUrl, headOnly);
     };
   }
 

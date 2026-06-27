@@ -148,7 +148,7 @@ Repository format roadmap:
 
 1. Docker / OCI Registry - Completed ([implementation notes](docs/en/dev/docker-repository-implementation-plan.md))
 2. APT / Debian
-3. Cargo / Rust
+3. Cargo / Rust - First-phase repository support implemented; migration TBD ([design notes](docs/en/dev/cargo-rust-repository-design.md))
 4. Terraform Provider / Module Registry
 5. Conan
 6. Conda

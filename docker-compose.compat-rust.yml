@@ -1,0 +1,60 @@
+# Cargo/Rust compatibility reference. Cargo was introduced in Nexus Repository
+# 3.73.0 as a Pro-only format; use 3.77.x+ for a Community Edition reference
+# that exposes Cargo repository creation without a Pro license. New installs use
+# embedded H2 by default unless an external PostgreSQL datasource is configured.
+name: kkrepo-rust-compat
+
+services:
+  mysql:
+    image: mysql:8.0
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: kkrepo
+      MYSQL_USER: kkrepo
+      MYSQL_PASSWORD: kkrepo
+      TZ: Asia/Shanghai
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+  nexus:
+    image: ${NEXUS_COMPAT_IMAGE:-sonatype/nexus3:3.77.2}
+    environment:
+      INSTALL4J_ADD_VM_PARAMS: "-Xms512m -Xmx1536m -XX:MaxDirectMemorySize=1536m"
+    ports:
+      - "${NEXUS_COMPAT_PORT:-38090}:8081"
+    volumes:
+      - nexus-data:/nexus-data
+
+  kkrepo:
+    image: ${KKREPO_COMPAT_IMAGE:-kkrepo:compat}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/kkrepo?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
+      SPRING_DATASOURCE_USERNAME: kkrepo
+      SPRING_DATASOURCE_PASSWORD: kkrepo
+      KKREPO_MANAGEMENT_PORT: "8081"
+      KKREPO_CREDENTIAL_SECRET: ci-compat-credential-secret-not-for-production
+      KKREPO_API_KEY_PAYLOAD_SECRET: ci-compat-api-key-payload-secret-not-for-production
+      KKREPO_FILE_ENABLED: "true"
+      KKREPO_FILE_BASE_DIR: /tmp/kkrepo-blobs
+      KKREPO_OUTBOUND_ALLOW_PRIVATE_ADDRESSES: "true"
+      JAVA_OPTS: "-Xms512m -Xmx1536m"
+    ports:
+      - "${KKREPO_COMPAT_PORT:-18092}:8080"
+      - "${KKREPO_MANAGEMENT_PORT:-18093}:8081"
+      - "${KKREPO_DOCKER_HOSTED_PORT:-38180}:18180"
+
+volumes:
+  mysql-data:
+  nexus-data:

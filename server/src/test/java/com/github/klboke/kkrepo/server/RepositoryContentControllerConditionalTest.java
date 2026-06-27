@@ -2,17 +2,21 @@ package com.github.klboke.kkrepo.server;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
+import com.github.klboke.kkrepo.protocol.cargo.CargoPath;
 import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
+import com.github.klboke.kkrepo.server.cargo.CargoHostedService;
 import com.github.klboke.kkrepo.server.maven.MavenHostedService;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
+import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -61,9 +65,69 @@ class RepositoryContentControllerConditionalTest {
     assertEquals(1, hosted.openBodyCalls);
   }
 
+  @Test
+  void cargoConfigWithMatchingIfNoneMatchReturnsNotModified() {
+    CountingCargoHostedService cargoHosted = new CountingCargoHostedService();
+    RepositoryContentController controller = cargoController(cargoHosted);
+    MockHttpServletRequest request = new MockHttpServletRequest(
+        "GET", "/repository/cargo/config.json");
+    request.addHeader(HttpHeaders.IF_NONE_MATCH, "\"cargo-config\"");
+
+    ResponseEntity<StreamingResponseBody> response = controller.get("cargo", request);
+
+    assertEquals(304, response.getStatusCode().value());
+    assertNull(response.getBody());
+    assertEquals(0, cargoHosted.openBodyCalls);
+  }
+
+  @Test
+  void cargoHeadWithMatchingIfModifiedSinceReturnsNotModified() {
+    CountingCargoHostedService cargoHosted = new CountingCargoHostedService();
+    RepositoryContentController controller = cargoController(cargoHosted);
+    MockHttpServletRequest request = new MockHttpServletRequest(
+        "HEAD", "/repository/cargo/config.json");
+    request.addHeader(HttpHeaders.IF_MODIFIED_SINCE, "Mon, 08 Jun 2026 00:00:00 GMT");
+
+    ResponseEntity<Void> response = controller.head("cargo", request);
+
+    assertEquals(304, response.getStatusCode().value());
+    assertEquals("\"cargo-config\"", response.getHeaders().getETag());
+  }
+
+  @Test
+  void cargoPublishReturnsJsonBytesInsteadOfSerializingStreamingResponseBody() throws Exception {
+    CountingCargoHostedService cargoHosted = new CountingCargoHostedService();
+    RepositoryContentController controller = cargoController(cargoHosted);
+    MockHttpServletRequest request = new MockHttpServletRequest(
+        "PUT", "/repository/cargo/api/v1/crates/new");
+    request.setContent("publish-body".getBytes(StandardCharsets.UTF_8));
+
+    ResponseEntity<?> response = controller.put("cargo", request, "application/octet-stream");
+
+    assertEquals(200, response.getStatusCode().value());
+    assertTrue(response.getBody() instanceof byte[]);
+    byte[] body = (byte[]) response.getBody();
+    assertEquals("{\"warnings\":{\"invalid_categories\":[],\"invalid_badges\":[],\"other\":[]}}",
+        new String(body, StandardCharsets.UTF_8));
+    assertEquals(body.length, response.getHeaders().getContentLength());
+  }
+
   private static RepositoryContentController controller(MavenHostedService hosted) {
     FakeRepositoryDao repositories = new FakeRepositoryDao();
     repositories.repository(repository("maven", RepositoryFormat.MAVEN2, RepositoryType.HOSTED));
+    return controller(repositories, hosted, null);
+  }
+
+  private static RepositoryContentController cargoController(CargoHostedService cargoHosted) {
+    FakeRepositoryDao repositories = new FakeRepositoryDao();
+    repositories.repository(repository("cargo", RepositoryFormat.CARGO, RepositoryType.HOSTED));
+    return controller(repositories, null, cargoHosted);
+  }
+
+  private static RepositoryContentController controller(
+      FakeRepositoryDao repositories,
+      MavenHostedService hosted,
+      CargoHostedService cargoHosted) {
     return new RepositoryContentController(
         new RepositoryRuntimeRegistry(repositories, 0),
         hosted, null, null,
@@ -72,10 +136,11 @@ class RepositoryContentControllerConditionalTest {
         null,
         null, null, null,
         null, null,
+        cargoHosted, null, null,
         null, null, null,
         null, null, null,
         new ObjectMapper(),
-        null);
+        new ForwardedHeaderPolicy(""));
   }
 
   private static RepositoryRecord repository(String name, RepositoryFormat format, RepositoryType type) {
@@ -119,6 +184,40 @@ class RepositoryContentControllerConditionalTest {
           "application/octet-stream",
           "sha1",
           Instant.parse("2026-06-08T00:00:00Z"));
+    }
+  }
+
+  private static final class CountingCargoHostedService extends CargoHostedService {
+    private int openBodyCalls;
+
+    CountingCargoHostedService() {
+      super(null, null, null, null, null, null, new ObjectMapper());
+    }
+
+    @Override
+    public MavenResponse get(RepositoryRuntime runtime, CargoPath path, String baseUrl, boolean headOnly) {
+      byte[] bytes = "{\"dl\":\"http://localhost/repository/cargo/api/v1/crates\"}"
+          .getBytes(StandardCharsets.UTF_8);
+      if (headOnly) {
+        return MavenResponse.noBody(200, bytes.length, "application/json",
+            "cargo-config", Instant.parse("2026-06-08T00:00:00Z"));
+      }
+      return MavenResponse.ok(
+          () -> {
+            openBodyCalls++;
+            return new ByteArrayInputStream(bytes);
+          },
+          bytes.length,
+          "application/json",
+          "cargo-config",
+          Instant.parse("2026-06-08T00:00:00Z"));
+    }
+
+    @Override
+    public MavenResponse publish(RepositoryRuntime runtime, java.io.InputStream body, String createdBy, String createdByIp) {
+      byte[] bytes = "{\"warnings\":{\"invalid_categories\":[],\"invalid_badges\":[],\"other\":[]}}"
+          .getBytes(StandardCharsets.UTF_8);
+      return MavenResponse.ok(new ByteArrayInputStream(bytes), bytes.length, "application/json", null, null);
     }
   }
 

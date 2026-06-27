@@ -688,6 +688,7 @@ class RepositoryDataMigrationWriter {
       case RUBYGEMS -> source.sourcePath().endsWith(".gem") ? "PACKAGE" : "ASSET";
       case YUM -> source.sourcePath().endsWith(".rpm") ? "PACKAGE" : "METADATA";
       case DOCKER -> dockerAssetKind(source.sourcePath());
+      case CARGO -> throw new IllegalArgumentException("Cargo migration is not implemented");
       case RAW -> "asset";
     };
   }

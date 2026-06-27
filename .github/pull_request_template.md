@@ -6,7 +6,7 @@
 
 - [ ] `mvn -pl server -am test`
 - [ ] `mvn -pl compat-test -am -Dtest=MavenMetadataMergeCompatibilityTest,MavenWritePolicyCompatibilityTest,NpmProtocolCompatibilityTest -Dsurefire.failIfNoSpecifiedTests=false test`
-- [ ] Live compatibility workflow or `scripts/ci/run-live-compat.sh smoke` for protocol/admin API changes, or not applicable.
+- [ ] Live compatibility workflow with the `run-live-compat` label, or `scripts/ci/run-live-compat.sh smoke` for protocol/admin API changes, or not applicable.
 - [ ] Other:
 
 ## Compatibility and design checklist

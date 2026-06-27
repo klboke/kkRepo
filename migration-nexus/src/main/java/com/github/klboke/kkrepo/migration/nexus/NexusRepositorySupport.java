@@ -21,6 +21,9 @@ final class NexusRepositorySupport {
     if (repositoryFormat == null || repositoryType == null) {
       return Optional.empty();
     }
+    if (repositoryFormat == RepositoryFormat.CARGO) {
+      return Optional.empty();
+    }
     return RepositoryRecipes.byName(repositoryFormat.id() + "-" + repositoryType.name().toLowerCase(Locale.ROOT));
   }
 
@@ -64,6 +67,9 @@ final class NexusRepositorySupport {
     }
     if (repositoryFormat == RepositoryFormat.HELM && repositoryType == RepositoryType.GROUP) {
       return "helm group has no target recipe";
+    }
+    if (repositoryFormat == RepositoryFormat.CARGO) {
+      return "cargo migration is TBD for Nexus 3.77+ H2/PostgreSQL repositories";
     }
     return "recipe is not supported by kkrepo";
   }

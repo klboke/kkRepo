@@ -20,9 +20,19 @@ class ApiKeyTokenCandidateTest {
   void preservesExistingFullTokenHashFallback() {
     List<ApiKeyTokenCandidate> candidates = ApiKeyTokenCandidate.fromPresentedToken("kkrepo-generated-token");
 
-    assertEquals(2, candidates.size());
+    assertEquals(3, candidates.size());
     assertEquals(new ApiKeyTokenCandidate("NpmToken", "kkrepo-generated-token"), candidates.get(0));
-    assertEquals(new ApiKeyTokenCandidate(null, "kkrepo-generated-token"), candidates.get(1));
+    assertEquals(new ApiKeyTokenCandidate("CargoToken", "kkrepo-generated-token"), candidates.get(1));
+    assertEquals(new ApiKeyTokenCandidate(null, "kkrepo-generated-token"), candidates.get(2));
+  }
+
+  @Test
+  void extractsCargoDomainPrefixAndRawToken() {
+    List<ApiKeyTokenCandidate> candidates = ApiKeyTokenCandidate.fromPresentedToken("CargoToken.raw-value");
+
+    assertEquals(2, candidates.size());
+    assertEquals(new ApiKeyTokenCandidate("CargoToken", "raw-value"), candidates.get(0));
+    assertEquals(new ApiKeyTokenCandidate(null, "CargoToken.raw-value"), candidates.get(1));
   }
 
   @Test

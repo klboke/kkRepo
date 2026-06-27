@@ -8,6 +8,7 @@ public enum RepositoryFormat {
   MAVEN2,
   NPM,
   PYPI,
+  CARGO,
   GO,
   HELM,
   DOCKER,

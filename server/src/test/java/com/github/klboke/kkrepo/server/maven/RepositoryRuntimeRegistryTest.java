@@ -62,6 +62,45 @@ class RepositoryRuntimeRegistryTest {
     assertEquals(2, dao.findByNameCalls); // broadcast flushed the cache → reloaded from MySQL
   }
 
+  @Test
+  void resolveReadsCargoRequireAuthenticationHintForProxyRepositories() {
+    FakeRepositoryDao dao = new FakeRepositoryDao();
+    dao.add(cargoRepo(4, "cargo-private", true), List.of());
+
+    RepositoryRuntime runtime = new RepositoryRuntimeRegistry(dao, 0)
+        .resolve("cargo-private")
+        .orElseThrow();
+
+    assertTrue(runtime.cargoRequireAuthenticationOrDefault());
+  }
+
+  @Test
+  void resolveReadsProxyRemoteBearerTokenAttribute() {
+    FakeRepositoryDao dao = new FakeRepositoryDao();
+    dao.add(cargoProxyRepo(5, "cargo-proxy", "upstream-token"), List.of());
+
+    RepositoryRuntime runtime = new RepositoryRuntimeRegistry(dao, 0)
+        .resolve("cargo-proxy")
+        .orElseThrow();
+
+    assertEquals("upstream-token", runtime.proxyRemoteBearerToken());
+  }
+
+  @Test
+  void runtimeWithProxyBearerTokenIsNotWrittenToSharedCache() {
+    FakeRepositoryDao dao = new FakeRepositoryDao();
+    dao.add(cargoProxyRepo(6, "cargo-private-proxy", "upstream-token"), List.of());
+    ObjectMapper mapper = new ObjectMapper()
+        .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+    RepositoryRuntimeRegistry registry = new RepositoryRuntimeRegistry(
+        dao, new InMemorySharedCache(mapper, 1000, null), mapper, (CatalogCacheBroadcaster) null, 300);
+
+    registry.resolve("cargo-private-proxy").orElseThrow();
+    registry.resolve("cargo-private-proxy").orElseThrow();
+
+    assertEquals(2, dao.findByNameCalls);
+  }
+
   private static RepositoryRecord repo(long id, String name, RepositoryType type) {
     return new RepositoryRecord(
         id,
@@ -78,6 +117,44 @@ class RepositoryRuntimeRegistryTest {
         "ALLOW",
         true,
         Map.of());
+  }
+
+  private static RepositoryRecord cargoRepo(long id, String name, boolean requireAuthentication) {
+    return new RepositoryRecord(
+        id,
+        name,
+        RepositoryFormat.CARGO,
+        RepositoryType.PROXY,
+        "cargo-proxy",
+        true,
+        1L,
+        null,
+        "https://index.crates.io/",
+        null,
+        null,
+        "ALLOW",
+        true,
+        Map.of("cargo", Map.of("requireAuthentication", requireAuthentication)));
+  }
+
+  private static RepositoryRecord cargoProxyRepo(long id, String name, String bearerToken) {
+    return new RepositoryRecord(
+        id,
+        name,
+        RepositoryFormat.CARGO,
+        RepositoryType.PROXY,
+        "cargo-proxy",
+        true,
+        1L,
+        null,
+        "https://index.crates.io/",
+        null,
+        null,
+        "ALLOW",
+        true,
+        Map.of("proxy", Map.of(
+            "remoteUrl", "https://index.crates.io/",
+            "remoteBearerToken", bearerToken)));
   }
 
   private static class FakeRepositoryDao extends RepositoryDao {

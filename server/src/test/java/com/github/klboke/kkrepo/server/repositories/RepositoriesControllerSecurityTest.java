@@ -180,7 +180,7 @@ class RepositoriesControllerSecurityTest {
     RepositoriesController controller = controller(repositories, subject("admin"), security);
 
     controller.create(new CreateCommand("npm-hosted", "npm-hosted", true, "default",
-        true, null, null, null, null, null), request("POST", "/internal/repositories"));
+        true, null, null, null, null, null, null), request("POST", "/internal/repositories"));
 
     assertEquals("nexus:repository-admin:npm:npm-hosted:add", security.permissions.get(0));
     assertEquals("npm-hosted", repositories.created.name());
@@ -193,7 +193,7 @@ class RepositoriesControllerSecurityTest {
     RecordingSecurityService security = new RecordingSecurityService(permission -> AccessDecision.allow());
     RepositoriesController controller = controller(repositories, subject("admin"), security);
 
-    controller.update("maven-public", new UpdateCommand(true, null, null, null, null, null, null, null),
+    controller.update("maven-public", new UpdateCommand(true, null, null, null, null, null, null, null, null),
         request("PUT", "/internal/repositories/maven-public"));
 
     assertEquals("nexus:repository-admin:maven2:maven-public:edit", security.permissions.get(0));
@@ -259,6 +259,7 @@ class RepositoriesControllerSecurityTest {
         "default",
         true,
         "/repository/" + name + "/",
+        null,
         null,
         null,
         null,

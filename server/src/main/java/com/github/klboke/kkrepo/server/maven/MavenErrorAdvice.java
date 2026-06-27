@@ -1,6 +1,8 @@
 package com.github.klboke.kkrepo.server.maven;
 
 import com.github.klboke.kkrepo.server.RepositoryContentController;
+import com.github.klboke.kkrepo.server.cargo.CargoExceptions;
+import com.github.klboke.kkrepo.server.cargo.CargoResponses;
 import com.github.klboke.kkrepo.server.npm.NpmExceptions;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
@@ -66,6 +68,31 @@ public class MavenErrorAdvice {
     return npmBody(HttpStatus.BAD_GATEWAY, e.getMessage());
   }
 
+  @ExceptionHandler(CargoExceptions.CargoNotFoundException.class)
+  public ResponseEntity<Map<String, Object>> cargoNotFound(CargoExceptions.CargoNotFoundException e) {
+    return cargoBody(HttpStatus.NOT_FOUND, e.getMessage());
+  }
+
+  @ExceptionHandler(CargoExceptions.BadRequestException.class)
+  public ResponseEntity<Map<String, Object>> cargoBadRequest(CargoExceptions.BadRequestException e) {
+    return cargoBody(HttpStatus.BAD_REQUEST, e.getMessage());
+  }
+
+  @ExceptionHandler(CargoExceptions.WritePolicyDenied.class)
+  public ResponseEntity<Map<String, Object>> cargoWriteDenied(CargoExceptions.WritePolicyDenied e) {
+    return cargoBody(HttpStatus.BAD_REQUEST, e.getMessage());
+  }
+
+  @ExceptionHandler(CargoExceptions.MethodNotAllowed.class)
+  public ResponseEntity<Map<String, Object>> cargoMethod(CargoExceptions.MethodNotAllowed e) {
+    return cargoBody(HttpStatus.METHOD_NOT_ALLOWED, e.getMessage());
+  }
+
+  @ExceptionHandler(CargoExceptions.BadUpstreamException.class)
+  public ResponseEntity<Map<String, Object>> cargoUpstream(CargoExceptions.BadUpstreamException e) {
+    return cargoBody(HttpStatus.BAD_GATEWAY, e.getMessage());
+  }
+
   private ResponseEntity<Map<String, Object>> body(HttpStatus status, String message) {
     return ResponseEntity.status(status).body(Map.of(
         "status", status.value(),
@@ -77,5 +104,11 @@ public class MavenErrorAdvice {
     return ResponseEntity.status(status).body(Map.of(
         "success", false,
         "error", message == null ? status.getReasonPhrase() : message));
+  }
+
+  @SuppressWarnings("unchecked")
+  private ResponseEntity<Map<String, Object>> cargoBody(HttpStatus status, String message) {
+    return ResponseEntity.status(status).body(CargoResponses.errorBody(
+        message == null ? status.getReasonPhrase() : message));
   }
 }

@@ -97,6 +97,10 @@
     </dependency>
     <dependency>
       <groupId>com.github.klboke</groupId>
+      <artifactId>kkrepo-protocol-cargo</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.github.klboke</groupId>
       <artifactId>kkrepo-protocol-go</artifactId>
     </dependency>
     <dependency>

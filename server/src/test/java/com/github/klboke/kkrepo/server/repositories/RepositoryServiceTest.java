@@ -14,6 +14,7 @@ import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
 import com.github.klboke.kkrepo.persistence.mysql.model.SecurityPrivilegeRecord;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CargoSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CreateCommand;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.DockerSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.HostedSettings;
@@ -36,7 +37,7 @@ class RepositoryServiceTest {
 
     RepositoryValidationException thrown = assertThrows(RepositoryValidationException.class,
         () -> service.update("maven-releases",
-            new UpdateCommand(true, "v2", null, null, null, null, null, null)));
+            new UpdateCommand(true, "v2", null, null, null, null, null, null, null)));
 
     assertEquals("blobStoreName cannot be changed after repository creation", thrown.getMessage());
     assertNull(repositories.updated);
@@ -48,7 +49,7 @@ class RepositoryServiceTest {
     RepositoryService service = service(repositories);
 
     RepositoryView updated = service.update("maven-releases",
-        new UpdateCommand(false, "default", null, null, null, null, null, null));
+        new UpdateCommand(false, "default", null, null, null, null, null, null, null));
 
     assertEquals("default", updated.blobStoreName());
     assertEquals(1L, repositories.updated.blobStoreId());
@@ -61,7 +62,7 @@ class RepositoryServiceTest {
     RepositoryService service = service(repositories);
 
     RepositoryView updated = service.update("maven-releases",
-        new UpdateCommand(false, null, null, null, null, null, null, null));
+        new UpdateCommand(false, null, null, null, null, null, null, null, null));
 
     assertEquals("default", updated.blobStoreName());
     assertEquals(1L, repositories.updated.blobStoreId());
@@ -80,7 +81,7 @@ class RepositoryServiceTest {
         "/repository");
 
     service.update("maven-releases",
-        new UpdateCommand(false, null, null, null, null, null, null, null));
+        new UpdateCommand(false, null, null, null, null, null, null, null, null));
 
     assertEquals(1, watermark.current("repo:10:CONTENT"));
     assertEquals(1, watermark.current("repo:10:METADATA"));
@@ -102,6 +103,7 @@ class RepositoryServiceTest {
             null,
             null,
             new DockerSettings(true, 5000, null),
+            null,
             null)));
 
     assertEquals(
@@ -125,6 +127,7 @@ class RepositoryServiceTest {
             null,
             null,
             new DockerSettings(true, null, null),
+            null,
             null)));
 
     assertEquals("docker.connector.port is required when connector is enabled", thrown.getMessage());
@@ -142,10 +145,11 @@ class RepositoryServiceTest {
         "default",
         true,
         new HostedSettings("ALLOW", null, null),
-        null,
-        null,
-        new DockerSettings(false, null, null),
-        null));
+            null,
+            null,
+            new DockerSettings(false, null, null),
+            null,
+            null));
 
     assertEquals("docker-hosted", created.name());
     assertEquals(false, created.docker().connectorEnabled());
@@ -171,6 +175,7 @@ class RepositoryServiceTest {
             null,
             null,
             new DockerSettings(true, 18090, null),
+            null,
             null)));
 
     assertEquals("docker.connector.port 18090 conflicts with server.port", thrown.getMessage());
@@ -192,6 +197,7 @@ class RepositoryServiceTest {
             null,
             null,
             new DockerSettings(true, 18091, null),
+            null,
             null)));
 
     assertEquals("docker.connector.port 18091 conflicts with management.server.port", thrown.getMessage());
@@ -204,13 +210,60 @@ class RepositoryServiceTest {
 
     RepositoryView updated = service.update("docker-hosted",
         new UpdateCommand(true, null, null, null, null, null,
-            new DockerSettings(false, null, null), null));
+            new DockerSettings(false, null, null), null, null));
 
     assertEquals(false, updated.docker().connectorEnabled());
     assertNull(updated.docker().connectorPort());
     Map<?, ?> docker = (Map<?, ?>) repositories.updated.attributes().get("docker");
     assertEquals(false, docker.get("connectorEnabled"));
     assertNull(docker.get("connectorPort"));
+  }
+
+  @Test
+  void createCargoHostedRepositoryDoesNotExposeRequireAuthenticationHint() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "cargo-hosted",
+        "cargo-hosted",
+        true,
+        "default",
+        true,
+        new HostedSettings("ALLOW", null, null),
+        null,
+        null,
+        null,
+        new CargoSettings(true),
+        null));
+
+    assertEquals("cargo-hosted", created.name());
+    assertNull(created.cargo());
+    assertNull(repositories.repository.attributes().get("cargo"));
+  }
+
+  @Test
+  void createCargoProxyRepositoryStoresRequireAuthenticationHint() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "cargo-proxy",
+        "cargo-proxy",
+        true,
+        "default",
+        true,
+        null,
+        new ProxySettings("https://index.crates.io/", 1440, 1440, true),
+        null,
+        null,
+        new CargoSettings(true),
+        null));
+
+    assertEquals("cargo-proxy", created.name());
+    assertEquals(true, created.cargo().requireAuthentication());
+    Map<?, ?> cargo = (Map<?, ?>) repositories.repository.attributes().get("cargo");
+    assertEquals(true, cargo.get("requireAuthentication"));
   }
 
   @Test
@@ -221,7 +274,7 @@ class RepositoryServiceTest {
     RepositoryView updated = service.update("docker-proxy",
         new UpdateCommand(true, null, null, null,
             new ProxySettings("http://127.0.0.1:5000", 60, 30, true, "robot", "secret", null),
-            null, null, null));
+            null, null, null, null));
 
     assertEquals("robot", updated.proxy().remoteUsername());
     assertNull(updated.proxy().remotePassword());
@@ -259,11 +312,64 @@ class RepositoryServiceTest {
     RepositoryView updated = service.update("docker-proxy",
         new UpdateCommand(true, null, null, null,
             new ProxySettings(null, null, null, null, null, null, false),
-            null, null, null));
+            null, null, null, null));
 
     assertEquals(false, updated.proxy().remotePasswordConfigured());
     Map<?, ?> storedProxy = (Map<?, ?>) repositories.updated.attributes().get("proxy");
     assertNull(storedProxy.get("remotePassword"));
+  }
+
+  @Test
+  void proxyRemoteBearerTokenIsStoredButMaskedInRepositoryView() {
+    StubRepositoryDao repositories = new StubRepositoryDao(dockerProxyRepository());
+    RepositoryService service = service(repositories);
+
+    RepositoryView updated = service.update("docker-proxy",
+        new UpdateCommand(true, null, null, null,
+            new ProxySettings("http://127.0.0.1:5000", 60, 30, true,
+                null, null, null, "bearer-secret", null),
+            null, null, null, null));
+
+    assertNull(updated.proxy().remoteBearerToken());
+    assertEquals(true, updated.proxy().remoteBearerTokenConfigured());
+    Map<?, ?> proxy = (Map<?, ?>) repositories.updated.attributes().get("proxy");
+    assertEquals("bearer-secret", proxy.get("remoteBearerToken"));
+  }
+
+  @Test
+  void proxyRemoteBearerTokenCanBeClearedWithoutSendingPlaintext() {
+    Map<String, Object> proxy = new LinkedHashMap<>();
+    proxy.put("remoteUrl", "http://127.0.0.1:5000");
+    proxy.put("remoteBearerToken", "bearer-secret");
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", "docker-proxy");
+    attributes.put("proxy", proxy);
+    StubRepositoryDao repositories = new StubRepositoryDao(new RepositoryRecord(
+        30L,
+        "docker-proxy",
+        RepositoryFormat.DOCKER,
+        RepositoryType.PROXY,
+        "docker-proxy",
+        true,
+        1L,
+        null,
+        "http://127.0.0.1:5000",
+        null,
+        null,
+        null,
+        true,
+        attributes));
+    RepositoryService service = service(repositories);
+
+    RepositoryView updated = service.update("docker-proxy",
+        new UpdateCommand(true, null, null, null,
+            new ProxySettings(null, null, null, null,
+                null, null, null, null, false),
+            null, null, null, null));
+
+    assertEquals(false, updated.proxy().remoteBearerTokenConfigured());
+    Map<?, ?> storedProxy = (Map<?, ?>) repositories.updated.attributes().get("proxy");
+    assertNull(storedProxy.get("remoteBearerToken"));
   }
 
   private static RepositoryService service(StubRepositoryDao repositories) {

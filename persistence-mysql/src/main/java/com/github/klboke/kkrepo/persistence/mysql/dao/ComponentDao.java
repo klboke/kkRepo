@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.ConnectionCallback;
@@ -78,6 +79,13 @@ public class ComponentDao {
         SELECT * FROM component
         WHERE repository_id = ? AND coordinate_hash = ?
         """, rowMapper, repositoryId, coordinateHash).stream().findFirst();
+  }
+
+  public Optional<ComponentRecord> findById(long componentId) {
+    return jdbcTemplate.query("""
+        SELECT * FROM component
+        WHERE id = ?
+        """, rowMapper, componentId).stream().findFirst();
   }
 
   public long upsertReturningId(ComponentRecord record) {
@@ -229,6 +237,16 @@ public class ComponentDao {
     jdbcTemplate.update("""
         UPDATE component_search SET refreshed_at = NOW(3) WHERE component_id = ?
         """, componentId);
+    return updated;
+  }
+
+  public int updateAttributes(long componentId, Map<String, Object> attributes, java.time.Instant when) {
+    int updated = jdbcTemplate.update("""
+        UPDATE component
+        SET attributes_json = ?, last_updated_at = ?
+        WHERE id = ?
+        """, jsonColumns.write(attributes), nullableTimestamp(when), componentId);
+    findById(componentId).ifPresent(record -> upsertSearchIndex(componentId, record));
     return updated;
   }
 

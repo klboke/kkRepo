@@ -44,16 +44,37 @@ scripts/ci/run-live-compat.sh smoke
 docker compose -f docker-compose.compat.yml down -v
 ```
 
+For Cargo/Rust compatibility work, use the Nexus 3.77.x Community Edition
+reference compose file instead of the default Nexus 3.29.2 reference. Nexus
+3.73.0 contains the Cargo plugin, but exposes it only in Pro:
+
+```bash
+scripts/build-docker-image.sh kkrepo:compat
+export COMPOSE_FILE="$PWD/docker-compose.compat-rust.yml"
+export COMPOSE_PROJECT_NAME=kkrepo-rust-compat
+export NEXUS_COMPAT_PORT=38090
+export KKREPO_COMPAT_PORT=18092
+export KKREPO_MANAGEMENT_PORT=18093
+docker compose -f "$COMPOSE_FILE" up -d mysql nexus kkrepo
+scripts/ci/live-compat-setup.sh
+scripts/ci/run-live-compat.sh cargo
+docker compose -f "$COMPOSE_FILE" down -v
+```
+
 Available suites:
 
 - `smoke`: console API checks plus Maven proxy GET/HEAD/checksum read compatibility.
 - `write-smoke`: Maven hosted release/snapshot write compatibility with `COMPAT_WRITE_ENABLED=true`.
+- `cargo`: Cargo hosted/proxy/group compatibility against Nexus 3.77.x+. Proxy and group checks
+  force both sides to use the same upstream sparse index (`CARGO_COMPAT_REMOTE_URL`, default
+  `https://index.crates.io/`) and the same crate/version (`CARGO_COMPAT_CRATE`, default `itoa`;
+  `CARGO_COMPAT_VERSION`, default `1.0.15`).
 - `extended`: smoke coverage plus currently separated PyPI, Helm, NuGet, RubyGems, and Yum checks.
 - `full`: all compat-test tests with live endpoint variables set; use this as a diagnostic suite
   when working through known protocol gaps.
 
-In GitHub Actions, add the `run-live-compat` label to a PR to run the smoke suite, or start the
-workflow manually and select a suite.
+In GitHub Actions, add the `run-live-compat` label to a PR to run the smoke suite plus Cargo
+compatibility against the Nexus 3.77.x reference, or start the workflow manually and select a suite.
 
 ## Live Console And Maven Read Checks
 

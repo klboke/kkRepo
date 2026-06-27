@@ -20,6 +20,7 @@ public final class RepositoryCommands {
       ProxySettings proxy,
       RawSettings raw,
       DockerSettings docker,
+      CargoSettings cargo,
       GroupSettings group) {
   }
 
@@ -31,6 +32,7 @@ public final class RepositoryCommands {
       ProxySettings proxy,
       RawSettings raw,
       DockerSettings docker,
+      CargoSettings cargo,
       GroupSettings group) {
   }
 
@@ -47,13 +49,27 @@ public final class RepositoryCommands {
       Boolean autoBlock,
       String remoteUsername,
       String remotePassword,
-      Boolean remotePasswordConfigured) {
+      Boolean remotePasswordConfigured,
+      String remoteBearerToken,
+      Boolean remoteBearerTokenConfigured) {
+    public ProxySettings(
+        String remoteUrl,
+        Integer contentMaxAgeMinutes,
+        Integer metadataMaxAgeMinutes,
+        Boolean autoBlock,
+        String remoteUsername,
+        String remotePassword,
+        Boolean remotePasswordConfigured) {
+      this(remoteUrl, contentMaxAgeMinutes, metadataMaxAgeMinutes, autoBlock,
+          remoteUsername, remotePassword, remotePasswordConfigured, null, null);
+    }
+
     public ProxySettings(
         String remoteUrl,
         Integer contentMaxAgeMinutes,
         Integer metadataMaxAgeMinutes,
         Boolean autoBlock) {
-      this(remoteUrl, contentMaxAgeMinutes, metadataMaxAgeMinutes, autoBlock, null, null, null);
+      this(remoteUrl, contentMaxAgeMinutes, metadataMaxAgeMinutes, autoBlock, null, null, null, null, null);
     }
   }
 
@@ -65,6 +81,10 @@ public final class RepositoryCommands {
       Boolean connectorEnabled,
       Integer connectorPort,
       String connectorPublicUrl) {
+  }
+
+  public record CargoSettings(
+      Boolean requireAuthentication) {
   }
 
   public record GroupSettings(

@@ -61,6 +61,7 @@ class RepositoryContentControllerNpmAuditTest {
         null, null,
         null, null, null,
         null, null, null,
+        null, null, null,
         new ObjectMapper(),
         null);
   }

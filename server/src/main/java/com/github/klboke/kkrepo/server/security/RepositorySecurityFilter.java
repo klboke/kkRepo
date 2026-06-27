@@ -68,14 +68,15 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       filterChain.doFilter(request, response);
       return;
     }
-
-    Optional<AuthenticatedSubject> authenticated = authenticationService.authenticate(request);
+    Optional<AuthenticatedSubject> authenticated = repository.get().format() == RepositoryFormat.CARGO
+        ? authenticationService.authenticateCargo(request)
+        : authenticationService.authenticate(request);
     if (authenticated.isEmpty()) {
       authenticated = target.readOnly()
           ? authenticationService.authenticateAnonymous(anonymousReadEnabled)
           : Optional.empty();
       if (authenticated.isEmpty()) {
-        challenge(response);
+        challenge(request, response, repository.get(), target);
         return;
       }
     }
@@ -181,6 +182,12 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     if (isNpmAuditRoute(method, path)) {
       return List.of(PermissionAction.READ, PermissionAction.BROWSE);
     }
+    if (isCargoPublishRoute(method, path)) {
+      return List.of(PermissionAction.ADD, PermissionAction.EDIT);
+    }
+    if (isCargoYankRoute(method, path)) {
+      return List.of(PermissionAction.EDIT);
+    }
     return switch (method.toUpperCase()) {
       case "GET", "HEAD", "OPTIONS", "TRACE" -> List.of(PermissionAction.READ);
       case "POST", "PATCH", "MKCOL" -> List.of(PermissionAction.ADD);
@@ -188,6 +195,19 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       case "DELETE" -> List.of(PermissionAction.DELETE);
       default -> List.of(PermissionAction.ADMIN);
     };
+  }
+
+  private boolean isCargoPublishRoute(String method, String path) {
+    return "PUT".equalsIgnoreCase(method)
+        && "api/v1/crates/new".equals(path);
+  }
+
+  private boolean isCargoYankRoute(String method, String path) {
+    if (!path.startsWith("api/v1/crates/")) {
+      return false;
+    }
+    return ("DELETE".equalsIgnoreCase(method) && path.endsWith("/yank"))
+        || ("PUT".equalsIgnoreCase(method) && path.endsWith("/unyank"));
   }
 
   private boolean isNpmAuditRoute(String method, String path) {
@@ -210,9 +230,37 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     return uri;
   }
 
-  private void challenge(HttpServletResponse response) throws IOException {
-    response.setHeader(HttpHeaders.WWW_AUTHENTICATE, "Basic realm=\"kkrepo\"");
+  private void challenge(
+      HttpServletRequest request,
+      HttpServletResponse response,
+      RepositoryRecord repository,
+      RepositoryRequest target) throws IOException {
+    if (repository.format() == RepositoryFormat.CARGO) {
+      response.setHeader(
+          HttpHeaders.WWW_AUTHENTICATE,
+          "Cargo login_url=\"" + quoteHeaderValue(cargoLoginUrl(request, target.repository())) + "\"");
+    } else {
+      response.setHeader(HttpHeaders.WWW_AUTHENTICATE, "Basic realm=\"kkrepo\"");
+    }
     response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Authentication required");
+  }
+
+  private String cargoLoginUrl(HttpServletRequest request, String repository) {
+    String contextPath = request.getContextPath();
+    String path = (contextPath == null ? "" : contextPath) + "/repository/" + repository + "/me";
+    String scheme = request.getScheme();
+    String server = request.getServerName();
+    if (scheme == null || scheme.isBlank() || server == null || server.isBlank()) {
+      return path;
+    }
+    int port = request.getServerPort();
+    boolean defaultPort = ("http".equalsIgnoreCase(scheme) && port == 80)
+        || ("https".equalsIgnoreCase(scheme) && port == 443);
+    return scheme + "://" + server + (port <= 0 || defaultPort ? "" : ":" + port) + path;
+  }
+
+  private String quoteHeaderValue(String value) {
+    return value.replace("\\", "\\\\").replace("\"", "\\\"");
   }
 
   private static String decode(String value) {
@@ -227,5 +275,6 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     private boolean readOnly() {
       return actions.stream().allMatch(action -> action == PermissionAction.BROWSE || action == PermissionAction.READ);
     }
+
   }
 }

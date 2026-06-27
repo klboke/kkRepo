@@ -781,6 +781,16 @@ h1 {
   padding: 0 8px;
 }
 
+.required-mark {
+  color: #b42318;
+}
+
+.token-form input.is-invalid,
+.token-form select.is-invalid {
+  border-color: #d92d20;
+  box-shadow: 0 0 0 2px rgba(217, 45, 32, 0.14);
+}
+
 .token-status {
   min-height: 20px;
   color: var(--muted);

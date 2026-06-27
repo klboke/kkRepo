@@ -78,6 +78,7 @@ public class ComponentSearchController {
     return switch (value.trim().toLowerCase(Locale.ROOT)) {
       case "maven2" -> RepositoryFormat.MAVEN2;
       case "npm" -> RepositoryFormat.NPM;
+      case "cargo" -> RepositoryFormat.CARGO;
       case "nuget" -> RepositoryFormat.NUGET;
       case "pypi" -> RepositoryFormat.PYPI;
       case "rubygems" -> RepositoryFormat.RUBYGEMS;

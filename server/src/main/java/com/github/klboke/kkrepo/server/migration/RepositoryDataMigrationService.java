@@ -333,7 +333,8 @@ class RepositoryDataMigrationService {
     if (name == null || format == null || type == null) {
       return null;
     }
-    boolean supported = RepositoryRecipes.byName(format.id() + "-" + type.name().toLowerCase(Locale.ROOT)).isPresent();
+    boolean supported = format != RepositoryFormat.CARGO
+        && RepositoryRecipes.byName(format.id() + "-" + type.name().toLowerCase(Locale.ROOT)).isPresent();
     return new SourceRepository(name, format, type, supported, summary, null);
   }
 

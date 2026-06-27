@@ -16,6 +16,7 @@ import com.github.klboke.kkrepo.server.npm.NpmGroupPackumentCache;
 import com.github.klboke.kkrepo.server.pypi.PypiGroupSimpleIndexCache;
 import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CargoSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CreateCommand;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.DockerSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.GroupSettings;
@@ -196,6 +197,9 @@ public class RepositoryService {
       validateDockerConnectorPort(null, docker);
       attributes.put("docker", dockerAttributes(docker));
     }
+    if (usesCargoAuthenticationHint(recipe.format(), recipe.type())) {
+      attributes.put("cargo", cargoAttributes(normalizeCargo(command.cargo())));
+    }
 
     String versionPolicy = null;
     String layoutPolicy = null;
@@ -269,6 +273,13 @@ public class RepositoryService {
       DockerSettings merged = mergeDocker(current, command.docker());
       validateDockerConnectorPort(existing.id(), merged);
       attributes.put("docker", dockerAttributes(merged));
+    }
+    if (usesCargoAuthenticationHint(recipe.format(), existing.type())) {
+      CargoSettings current = readCargoAttributes(existing);
+      CargoSettings merged = mergeCargo(current, command.cargo());
+      attributes.put("cargo", cargoAttributes(merged));
+    } else {
+      attributes.remove("cargo");
     }
 
     String versionPolicy = existing.versionPolicy();
@@ -444,6 +455,36 @@ public class RepositoryService {
     return attrs;
   }
 
+  private CargoSettings normalizeCargo(CargoSettings settings) {
+    if (settings == null) {
+      return new CargoSettings(false);
+    }
+    return new CargoSettings(Boolean.TRUE.equals(settings.requireAuthentication()));
+  }
+
+  private CargoSettings readCargoAttributes(RepositoryRecord record) {
+    Map<String, Object> attrs = record.attributes() == null ? Map.of() : record.attributes();
+    Object raw = attrs.get("cargo");
+    if (!(raw instanceof Map<?, ?> map)) {
+      return new CargoSettings(false);
+    }
+    return new CargoSettings(boolValue(map.get("requireAuthentication")));
+  }
+
+  private CargoSettings mergeCargo(CargoSettings current, CargoSettings update) {
+    if (update == null || update.requireAuthentication() == null) {
+      return normalizeCargo(current);
+    }
+    return normalizeCargo(update);
+  }
+
+  private Map<String, Object> cargoAttributes(CargoSettings settings) {
+    CargoSettings normalized = normalizeCargo(settings);
+    Map<String, Object> attrs = new LinkedHashMap<>();
+    attrs.put("requireAuthentication", normalized.requireAuthentication());
+    return attrs;
+  }
+
   private void validateDockerConnectorPort(Long existingRepositoryId, DockerSettings settings) {
     if (settings == null) {
       return;
@@ -576,6 +617,10 @@ public class RepositoryService {
     return format == RepositoryFormat.NPM || format == RepositoryFormat.PYPI || format == RepositoryFormat.DOCKER;
   }
 
+  private static boolean usesCargoAuthenticationHint(RepositoryFormat format, RepositoryType type) {
+    return format == RepositoryFormat.CARGO && (type == RepositoryType.PROXY || type == RepositoryType.GROUP);
+  }
+
   // ---- view assembly --------------------------------------------------------
 
   private RepositoryView toView(RepositoryRecord record, Map<Long, String> blobStoreNames) {
@@ -598,6 +643,9 @@ public class RepositoryService {
     ProxySettings proxy = null;
     RawSettings raw = record.format() == RepositoryFormat.RAW ? readRawAttributes(record) : null;
     DockerSettings docker = record.format() == RepositoryFormat.DOCKER ? readDockerAttributes(record) : null;
+    CargoSettings cargo = usesCargoAuthenticationHint(record.format(), record.type())
+        ? readCargoAttributes(record)
+        : null;
     GroupSettings group = null;
     switch (record.type()) {
       case HOSTED -> hosted = new HostedSettings(
@@ -610,7 +658,7 @@ public class RepositoryService {
         record.id(), record.name(), record.recipeName(),
         record.format(), record.type(), record.online(),
         blobStoreName, record.strictContentTypeValidation(), url,
-        hosted, proxy, raw, docker, group);
+        hosted, proxy, raw, docker, cargo, group);
   }
 
   private Map<Long, String> blobStoreNameIndex() {
@@ -732,6 +780,8 @@ public class RepositoryService {
         incoming.autoBlock() == null ? base.autoBlock() : incoming.autoBlock(),
         incoming.remoteUsername() == null ? base.remoteUsername() : blankToNull(incoming.remoteUsername()),
         mergedProxyPassword(base, incoming),
+        null,
+        mergedProxyBearerToken(base, incoming),
         null);
   }
 
@@ -745,6 +795,16 @@ public class RepositoryService {
     return base.remotePassword();
   }
 
+  private static String mergedProxyBearerToken(ProxySettings base, ProxySettings incoming) {
+    if (incoming.remoteBearerToken() != null && !incoming.remoteBearerToken().isBlank()) {
+      return incoming.remoteBearerToken();
+    }
+    if (Boolean.FALSE.equals(incoming.remoteBearerTokenConfigured())) {
+      return null;
+    }
+    return base.remoteBearerToken();
+  }
+
   private static Map<String, Object> proxyAttributes(ProxySettings proxy) {
     Map<String, Object> map = new LinkedHashMap<>();
     map.put("remoteUrl", proxy.remoteUrl());
@@ -756,6 +816,9 @@ public class RepositoryService {
     }
     if (proxy.remotePassword() != null && !proxy.remotePassword().isBlank()) {
       map.put("remotePassword", proxy.remotePassword());
+    }
+    if (proxy.remoteBearerToken() != null && !proxy.remoteBearerToken().isBlank()) {
+      map.put("remoteBearerToken", proxy.remoteBearerToken());
     }
     return map;
   }
@@ -800,6 +863,8 @@ public class RepositoryService {
         boolValue(proxyMap.get("autoBlock")),
         blankToNull(proxyMap.get("remoteUsername") == null ? null : proxyMap.get("remoteUsername").toString()),
         blankToNull(proxyMap.get("remotePassword") == null ? null : proxyMap.get("remotePassword").toString()),
+        null,
+        blankToNull(proxyMap.get("remoteBearerToken") == null ? null : proxyMap.get("remoteBearerToken").toString()),
         null);
   }
 
@@ -815,7 +880,9 @@ public class RepositoryService {
         effective.autoBlock(),
         effective.remoteUsername(),
         null,
-        effective.remotePassword() != null && !effective.remotePassword().isBlank());
+        effective.remotePassword() != null && !effective.remotePassword().isBlank(),
+        null,
+        effective.remoteBearerToken() != null && !effective.remoteBearerToken().isBlank());
   }
 
   private List<Long> resolveMemberIds(String groupName, RepositoryFormat format, GroupSettings group) {

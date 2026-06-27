@@ -1483,6 +1483,8 @@ function refreshRepositoryRecipeControls() {
   document.getElementById("repository-proxy-fields").hidden = type !== "PROXY";
   document.getElementById("repository-group-fields").hidden = type !== "GROUP";
   document.getElementById("repository-docker-fields").hidden = format !== "docker";
+  document.getElementById("repository-cargo-fields").hidden =
+    format !== "cargo" || (type !== "PROXY" && type !== "GROUP");
   refreshDockerConnectorControls();
   document.getElementById("repository-blobstore").closest("label").hidden = false;
   refreshRepositoryBlobStoreLock();
@@ -1506,7 +1508,8 @@ function refreshRepositoryRemoteDefaults(recipe) {
     rubygems: "https://rubygems.org/",
     yum: "https://download.fedoraproject.org/pub/fedora/linux/",
     raw: "https://example.com/",
-    docker: "https://registry-1.docker.io/"
+    docker: "https://registry-1.docker.io/",
+    cargo: "https://index.crates.io/"
   };
   remote.placeholder = defaults[recipe.format] || "https://example.com/";
   if (repositoryFormMode === "create" && !remote.value.trim() && defaults[recipe.format]) {
@@ -1542,7 +1545,9 @@ function repositoryFormPayload() {
       autoBlock: document.getElementById("repository-auto-block").checked,
       remoteUsername: textInputValue("repository-remote-username"),
       remotePassword: textInputValue("repository-remote-password"),
-      remotePasswordConfigured: document.getElementById("repository-remote-password-clear").checked ? false : null
+      remotePasswordConfigured: document.getElementById("repository-remote-password-clear").checked ? false : null,
+      remoteBearerToken: textInputValue("repository-remote-bearer-token"),
+      remoteBearerTokenConfigured: document.getElementById("repository-remote-bearer-token-clear").checked ? false : null
     };
   } else if (type === "GROUP") {
     payload.group = {
@@ -1555,6 +1560,11 @@ function repositoryFormPayload() {
       connectorEnabled: document.getElementById("repository-docker-connector-enabled").checked,
       connectorPort: connectorPort === "" ? null : Number(connectorPort),
       connectorPublicUrl: textInputValue("repository-docker-connector-public-url")
+    };
+  }
+  if (recipe?.format === "cargo" && (type === "PROXY" || type === "GROUP")) {
+    payload.cargo = {
+      requireAuthentication: document.getElementById("repository-cargo-require-authentication").checked
     };
   }
   return payload;
@@ -1572,12 +1582,16 @@ function setRepositoryFormDefaults() {
   document.getElementById("repository-remote-password").value = "";
   document.getElementById("repository-remote-password").placeholder = "";
   document.getElementById("repository-remote-password-clear").checked = false;
+  document.getElementById("repository-remote-bearer-token").value = "";
+  document.getElementById("repository-remote-bearer-token").placeholder = "";
+  document.getElementById("repository-remote-bearer-token-clear").checked = false;
   document.getElementById("repository-content-max-age").value = "1440";
   document.getElementById("repository-metadata-max-age").value = "1440";
   document.getElementById("repository-auto-block").checked = true;
   document.getElementById("repository-docker-connector-enabled").checked = false;
   document.getElementById("repository-docker-connector-port").value = "";
   document.getElementById("repository-docker-connector-public-url").value = "";
+  document.getElementById("repository-cargo-require-authentication").checked = false;
   memberTransfer.selected = [];
   memberTransfer.highlight.available.clear();
   memberTransfer.highlight.selected.clear();
@@ -1651,6 +1665,10 @@ function showEditRepositoryForm(name) {
     document.getElementById("repository-remote-password").placeholder =
       repo.proxy.remotePasswordConfigured ? "Saved password unchanged" : "";
     document.getElementById("repository-remote-password-clear").checked = false;
+    document.getElementById("repository-remote-bearer-token").value = "";
+    document.getElementById("repository-remote-bearer-token").placeholder =
+      repo.proxy.remoteBearerTokenConfigured ? "Saved bearer token unchanged" : "";
+    document.getElementById("repository-remote-bearer-token-clear").checked = false;
     document.getElementById("repository-content-max-age").value = repo.proxy.contentMaxAgeMinutes ?? "1440";
     document.getElementById("repository-metadata-max-age").value = repo.proxy.metadataMaxAgeMinutes ?? "1440";
     document.getElementById("repository-auto-block").checked = repo.proxy.autoBlock !== false;
@@ -1662,6 +1680,10 @@ function showEditRepositoryForm(name) {
     document.getElementById("repository-docker-connector-enabled").checked = Boolean(repo.docker.connectorEnabled);
     document.getElementById("repository-docker-connector-port").value = repo.docker.connectorPort ?? "";
     document.getElementById("repository-docker-connector-public-url").value = repo.docker.connectorPublicUrl || "";
+  }
+  if (repo.cargo) {
+    document.getElementById("repository-cargo-require-authentication").checked =
+      Boolean(repo.cargo.requireAuthentication);
   }
   refreshRepositoryRecipeControls();
   clearRequiredFieldErrors(repositoryRequiredFields);
@@ -2807,7 +2829,7 @@ function renderSecurityApiKeys() {
 }
 
 function showSecurityApiKeyForm() {
-  document.getElementById("security-api-key-domain").value = "nexus";
+  document.getElementById("security-api-key-domain").value = "NpmToken";
   document.getElementById("security-api-key-owner-source").value = "Local";
   document.getElementById("security-api-key-owner-user-id").value = "";
   document.getElementById("security-api-key-display-name").value = "";
@@ -2824,7 +2846,7 @@ function hideSecurityApiKeyForm() {
 async function saveSecurityApiKey() {
   if (!validateRequiredFields(securityApiKeyRequiredFields)) return;
   const payload = {
-    domain: document.getElementById("security-api-key-domain").value.trim() || "nexus",
+    domain: document.getElementById("security-api-key-domain").value.trim() || "NpmToken",
     ownerSource: document.getElementById("security-api-key-owner-source").value.trim() || "Local",
     ownerUserId: document.getElementById("security-api-key-owner-user-id").value.trim(),
     displayName: document.getElementById("security-api-key-display-name").value.trim() || null,

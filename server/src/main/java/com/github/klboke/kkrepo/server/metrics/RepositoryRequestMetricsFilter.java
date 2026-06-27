@@ -234,6 +234,7 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
       case MAVEN2 -> mavenOperation(path, normalizedMethod);
       case NPM -> npmOperation(path, normalizedMethod);
       case PYPI -> pypiOperation(path, normalizedMethod);
+      case CARGO -> cargoOperation(path, normalizedMethod);
       case HELM -> helmOperation(path, normalizedMethod);
       case GO -> goOperation(path);
       case NUGET -> nugetOperation(path, normalizedMethod);
@@ -272,6 +273,17 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
     if (path.equals("simple") || path.equals("simple/") || path.startsWith("simple/")) return "pypi_simple";
     if (path.startsWith("packages/")) return "pypi_package";
     return "pypi_repository";
+  }
+
+  private static String cargoOperation(String path, String method) {
+    if ("PUT".equals(method) && "api/v1/crates/new".equals(path)) return "cargo_publish";
+    if ("DELETE".equals(method) && path.endsWith("/yank")) return "cargo_yank";
+    if ("PUT".equals(method) && path.endsWith("/unyank")) return "cargo_unyank";
+    if (path.equals("config.json")) return "cargo_config";
+    if (path.startsWith("api/v1/crates/") && path.endsWith("/download")) return "cargo_crate";
+    if (path.startsWith("crates/") && (path.endsWith("/download") || path.endsWith(".crate"))) return "cargo_crate";
+    if (path.startsWith("api/v1/crates")) return "cargo_api";
+    return "cargo_index";
   }
 
   private static String helmOperation(String path, String method) {

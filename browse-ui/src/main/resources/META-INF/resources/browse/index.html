@@ -47,6 +47,7 @@
             <span class="side-caret" aria-hidden="true">▾</span>
           </button>
           <div class="search-subnav" id="search-subnav" hidden>
+            <button class="side-subitem" data-search-format="cargo" type="button">Cargo</button>
             <button class="side-subitem" data-search-format="go" type="button">Go</button>
             <button class="side-subitem" data-search-format="helm" type="button">Helm</button>
             <button class="side-subitem" data-search-format="maven2" type="button">Maven</button>
@@ -204,16 +205,18 @@
             <span class="heading-copy">API keys for package clients</span>
           </div>
           <div class="token-layout">
-            <form class="token-panel token-form" id="my-token-form">
+            <form class="token-panel token-form" id="my-token-form" novalidate>
               <label>
                 <span>Domain</span>
                 <select id="my-token-domain">
                   <option value="NpmToken">NpmToken</option>
+                  <option value="CargoToken">CargoToken</option>
+                  <option value="NuGetApiKey">NuGetApiKey</option>
                 </select>
               </label>
               <label>
-                <span>Display name</span>
-                <input id="my-token-display-name" type="text" value="npm token" autocomplete="off">
+                <span>Display name <span class="required-mark">*</span></span>
+                <input id="my-token-display-name" type="text" autocomplete="off" required aria-required="true">
               </label>
               <button class="upload-button" id="my-token-create" type="submit">Generate</button>
               <div class="token-status" id="my-token-status" role="status"></div>

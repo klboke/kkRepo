@@ -13,6 +13,7 @@ import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayDeque;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
@@ -122,6 +123,29 @@ class HttpRemoteFetcherTest {
   }
 
   @Test
+  void requestWithRepositoryAddsBasicRemoteAuthorizationWhenConfigured() {
+    RepositoryRuntime runtime = runtime("robot", "secret", null);
+
+    HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request
+        .get("https://repo.example.com/maven2/com/example/app.jar")
+        .withRepository(runtime);
+
+    String encoded = Base64.getEncoder().encodeToString("robot:secret".getBytes(StandardCharsets.UTF_8));
+    assertEquals("Basic " + encoded, request.authorizationHeader());
+  }
+
+  @Test
+  void requestWithRepositoryPrefersBearerRemoteAuthorizationWhenConfigured() {
+    RepositoryRuntime runtime = runtime("robot", "secret", "upstream-token");
+
+    HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request
+        .get("https://repo.example.com/maven2/com/example/app.jar")
+        .withRepository(runtime);
+
+    assertEquals("Bearer upstream-token", request.authorizationHeader());
+  }
+
+  @Test
   void bodyReadFailureRetriesFreshGet() throws Exception {
     SequencedFetcher fetcher = new SequencedFetcher(
         result("first"),
@@ -178,6 +202,34 @@ class HttpRemoteFetcherTest {
         200,
         Map.of(),
         new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)));
+  }
+
+  private static RepositoryRuntime runtime(String username, String password, String bearerToken) {
+    return new RepositoryRuntime(
+        1,
+        "maven-proxy",
+        RepositoryFormat.MAVEN2,
+        RepositoryType.PROXY,
+        "maven2-proxy",
+        true,
+        1L,
+        null,
+        "RELEASE",
+        "STRICT",
+        true,
+        "https://repo.example.com/maven2",
+        1440,
+        1440,
+        null,
+        username,
+        password,
+        bearerToken,
+        null,
+        null,
+        null,
+        null,
+        null,
+        List.of());
   }
 
   private static class SequencedFetcher extends HttpRemoteFetcher {

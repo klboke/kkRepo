@@ -2370,6 +2370,7 @@ class NexusSecurityRestControllerTest {
                 null,
                 null,
                 null,
+                null,
                 null),
             new RepositoryView(
                 2L,
@@ -2381,6 +2382,7 @@ class NexusSecurityRestControllerTest {
                 "Local",
                 true,
                 "/repository/npm-group/",
+                null,
                 null,
                 null,
                 null,

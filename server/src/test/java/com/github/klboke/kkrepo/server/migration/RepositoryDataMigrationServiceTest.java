@@ -45,6 +45,19 @@ class RepositoryDataMigrationServiceTest {
         thrown.getMessage());
   }
 
+  @Test
+  void requestedRepositoriesRejectCargoRepositoriesUntilNexus377MigrationIsDesigned() {
+    IllegalArgumentException thrown = assertThrows(IllegalArgumentException.class, () ->
+        sourceRepositories(
+            List.of("cargo-hosted"),
+            List.of(),
+            inventory(repository("cargo-hosted", "cargo", "hosted"))));
+
+    assertEquals(
+        "Repositories are invalid for hosted data migration: [cargo-hosted (unsupported format cargo)]",
+        thrown.getMessage());
+  }
+
   private static List<?> sourceRepositories(
       List<String> repositories,
       List<String> backupProxyRepositories,
