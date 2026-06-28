@@ -57,6 +57,27 @@ class CargoPublishPayloadTest {
   }
 
   @Test
+  @SuppressWarnings("unchecked")
+  void buildsIndexEntryWithOptionalCargoMetadata() {
+    Map<String, Object> metadata = publishMetadata("hello_world", "1.2.3");
+    Map<String, Object> features2 = Map.of("namespaced", List.of("dep:serde"));
+    metadata.put("features2", features2);
+    metadata.put("links", "hello_world_native");
+    metadata.put("rust_version", "1.70");
+
+    CargoPublishPayload.CargoPackageMetadata cargoMetadata =
+        CargoPublishPayload.CargoPackageMetadata.fromPublishJson(metadata);
+    Map<String, Object> entry = cargoMetadata.indexEntry("abc123", false);
+
+    assertEquals(2, entry.get("v"));
+    assertEquals(features2, entry.get("features2"));
+    assertEquals("hello_world_native", entry.get("links"));
+    assertEquals("1.70", entry.get("rust_version"));
+    List<Map<String, Object>> deps = (List<Map<String, Object>>) entry.get("deps");
+    assertEquals("serde", deps.get(0).get("name"));
+  }
+
+  @Test
   void rejectsCrateArchiveWhoseManifestDoesNotMatchMetadata() throws Exception {
     Map<String, Object> metadata = publishMetadata("hello_world", "1.2.3");
     byte[] crate = crateArchive("other_name", "1.2.3");

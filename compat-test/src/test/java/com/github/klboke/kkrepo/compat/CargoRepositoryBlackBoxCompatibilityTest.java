@@ -801,9 +801,9 @@ class CargoRepositoryBlackBoxCompatibilityTest {
       metadata.put("vers", version);
       metadata.put("deps", List.of());
       metadata.put("features", Map.of());
-      metadata.put("features2", Map.of("namespaced", List.of()));
-      metadata.put("links", "kkrepo_compat_native");
-      metadata.put("rust_version", "1.70");
+      // Keep the live publish fixture limited to fields Nexus 3.77 accepts.
+      // Optional index fields are still compared when Nexus returns them and are
+      // covered by CargoPublishPayloadTest for kkrepo-generated entries.
       metadata.put("description", "kkrepo Cargo compatibility fixture");
       byte[] publishBody = publishBody(metadata, crate);
       return new CargoFixture(name, version, crate, publishBody, sha256Hex(crate));
