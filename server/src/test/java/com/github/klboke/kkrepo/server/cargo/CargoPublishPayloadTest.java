@@ -46,6 +46,7 @@ class CargoPublishPayloadTest {
       assertEquals("1.2.3", entry.get("vers"));
       assertEquals("abc123", entry.get("cksum"));
       assertEquals(false, entry.get("yanked"));
+      assertEquals(0, entry.get("v"));
       List<Map<String, Object>> deps = (List<Map<String, Object>>) entry.get("deps");
       assertEquals("serde", deps.get(0).get("name"));
       assertEquals("^1", deps.get(0).get("req"));

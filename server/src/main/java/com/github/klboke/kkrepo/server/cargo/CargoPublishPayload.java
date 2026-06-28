@@ -151,7 +151,7 @@ final class CargoPublishPayload implements AutoCloseable {
         entry.put("features2", features2);
         entry.put("v", 2);
       } else {
-        entry.put("v", 1);
+        entry.put("v", 0);
       }
       Object rustVersion = publishJson.get("rust_version");
       if (rustVersion != null) {
