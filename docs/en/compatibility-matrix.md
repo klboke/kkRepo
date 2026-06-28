@@ -20,6 +20,7 @@ For deeper validation workflow details, see [Nexus Compatibility Testing](nexus-
 | PyPI | hosted / proxy / group | `twine upload`, package download, simple index reads, admin UI upload | Simple index supported | Hosted by default; proxy optional | `PypiRepositoryBlackBoxCompatibilityTest`, `ComponentUploadBlackBoxCompatibilityTest` |
 | Go | proxy / group | Go module proxy reads: list, info, mod, zip, latest, group fallback | Supported | Proxy optional | `GoProxyBlackBoxCompatibilityTest` |
 | Helm | hosted / proxy | Chart push, PUT upload, chart download, `index.yaml`, proxy index rewrite, admin UI upload | `index.yaml` supported | Hosted by default; proxy optional | `HelmRepositoryBlackBoxCompatibilityTest`, `ComponentUploadBlackBoxCompatibilityTest` |
+| Cargo / Rust | hosted / proxy / group | Sparse registry reads, `cargo publish`, `.crate` download, yank/unyank, Cargo search, CargoToken auth, UI/API `.crate` upload | Sparse index and Cargo search supported | TBD; not part of the current Nexus migration flow | `CargoRepositoryBlackBoxCompatibilityTest`, `ComponentUploadBlackBoxCompatibilityTest` |
 | NuGet | hosted / proxy / group | Package push, package download, v3 service index, registration, flat container, search/autocomplete, admin UI upload | v3 service index/search supported | Hosted by default; proxy optional | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
 | RubyGems | hosted / proxy / group | Gem push/yank, gem download, compact and legacy index assets, admin UI upload | Supported | Hosted by default; proxy optional | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
 | Yum | hosted / proxy / group | RPM PUT/upload, package download, `repodata` metadata | `repodata` supported | Hosted by default; proxy optional | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
@@ -51,6 +52,8 @@ Examples:
 /repository/npm-hosted/@scope/package
 /repository/pypi-proxy/simple/demo/
 /repository/helm-hosted/index.yaml
+/repository/cargo-group/config.json
+/repository/cargo-hosted/crates/demo/1.0.0/download
 /repository/nuget-group/v3/index.json
 ```
 
@@ -73,6 +76,7 @@ kkrepo migration is treated as a product feature rather than a one-off script:
 - Metadata migration covers users, roles, privileges, blob stores, repository definitions, and related compatibility data.
 - Repository data migration scans hosted repositories by default.
 - Proxy repositories can be migrated explicitly as historical backup data or upstream cache data.
+- Cargo / Rust repository data migration remains TBD. Nexus Community Cargo support starts from the 3.77.x datastore-era H2/PostgreSQL shape, so it is not covered by the existing old-Nexus migration path.
 - Migration steps are designed for dry-run/preflight, resume, checksum validation, and reporting.
 - Unsupported or blocked items should be reported rather than silently skipped.
 
@@ -83,6 +87,7 @@ See [Nexus Migration Guide](nexus-migration-guide.md).
 - kkrepo is not a full reimplementation of Nexus internals. Karaf, OSGi, OrientDB, embedded Elasticsearch, and the Nexus task subsystem are not compatibility goals.
 - Docker / OCI uses Registry HTTP API V2 and OCI Distribution; Docker Registry V1 API and `docker search` are intentionally not part of the supported surface unless a future compatibility need requires a search-only shim.
 - Docker connector listener changes can be refreshed through the Docker operations endpoint. Advanced connector TLS/SNI management remains deployment-specific.
+- Cargo / Rust supports Cargo sparse registries. Cargo git index protocol, crates.io-style GitHub owner invitations, deleting published crate versions, and Nexus Cargo repository migration are not currently supported.
 - Go hosted upload is not supported; Go module proxy behavior is read-oriented.
 - Full coverage of every Nexus UI endpoint is not guaranteed. Endpoints are added when they are needed for supported user workflows or migration compatibility.
 - Exact ordering, timestamps, generated IDs, and hostnames may be normalized in tests when the protocol allows nondeterminism.

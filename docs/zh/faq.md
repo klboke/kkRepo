@@ -2,7 +2,7 @@
 
 ## kkrepo 是什么？
 
-kkrepo 是一个兼容 Nexus 的自托管制品仓库，面向 Maven、npm、PyPI、Go、Helm、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等常见包格式。
+kkrepo 是一个兼容 Nexus 的自托管制品仓库，面向 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等常见包格式。
 
 它保持 Nexus 风格客户端 URL、协议行为、权限和迁移目标，同时使用 MySQL 存储元数据，用 OSS/S3 兼容存储保存 blob。
 
@@ -27,6 +27,7 @@ kkrepo 面向需要 Nexus 兼容客户端路径、常见仓库格式、MySQL 元
 - PyPI
 - Go
 - Helm
+- Cargo / Rust
 - Docker / OCI
 - NuGet
 - RubyGems
@@ -41,7 +42,7 @@ kkrepo 面向需要 Nexus 兼容客户端路径、常见仓库格式、MySQL 元
 /repository/<repo>/<artifact-path>
 ```
 
-这有助于迁移时保留 Maven、npm、pip、Helm、NuGet、RubyGems、Yum、Raw 和 CI 客户端配置。
+这有助于在对应格式已被迁移流程覆盖时保留 Maven、npm、pip、Helm、Cargo、NuGet、RubyGems、Yum、Raw 和 CI 客户端配置。
 
 Docker / OCI 使用 Registry HTTP API V2 的 `/v2/...` 路由，不走 `/repository/<repo>/...`：共享入口部署使用 `<host>/<repo>/<image>:<tag>`，配置仓库级 connector port 后可使用 `<host>:<repo-port>/<image>:<tag>`。
 
@@ -124,6 +125,12 @@ Docker / OCI Registry 的 hosted、proxy、group 仓库已实现 Registry HTTP A
 Docker hosted 仓库迁移走 Nexus Repository Data 流程。Docker Registry V1 API 和 `docker search` 不属于当前支持面；现代 Docker/OCI 工作流使用 Registry V2 和 OCI Distribution。
 
 不要假设 Docker pull/push 可以通过 `/repository/<repo>/...` 工作。
+
+## Cargo / Rust 支持了吗？
+
+Cargo hosted、proxy、group 仓库已支持 Cargo sparse registry 协议。kkrepo 支持 `cargo publish`、fetch/download、yank/unyank、`cargo search`、`CargoToken` 认证，以及 hosted `.crate` 的 UI/API 上传。
+
+Nexus Cargo 仓库迁移当前仍为待定。Nexus Community Cargo 支持从 3.77.x datastore 时代的 H2/PostgreSQL 形态开始，因此不要把 Cargo 仓库视为已被现有 Nexus 迁移流程覆盖。
 
 ## kkrepo 可以用于生产吗？
 

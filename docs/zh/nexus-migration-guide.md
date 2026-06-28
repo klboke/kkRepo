@@ -2,7 +2,9 @@
 
 本文说明从 Nexus Repository 迁移到 kkrepo 的准备条件、执行顺序、增量迁移和域名切换方式。
 
-kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议行为和权限认证模型。迁移完成后，只需要把原 Nexus 域名指向 kkrepo，Maven、npm、PyPI、Go、Helm、NuGet、RubyGems、Yum 等非 Docker 客户端配置不需要修改。Docker / OCI 使用 Registry HTTP API V2 的 `/v2/...` 路由；切换 Docker 客户端时需要保持仓库名和 connector/path-based routing 入口一致。
+kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议行为和权限认证模型。迁移完成后，只需要把原 Nexus 域名指向 kkrepo，Maven、npm、PyPI、Go、Helm、NuGet、RubyGems、Yum 等已被迁移流程覆盖的非 Docker 客户端配置不需要修改。Docker / OCI 使用 Registry HTTP API V2 的 `/v2/...` 路由；切换 Docker 客户端时需要保持仓库名和 connector/path-based routing 入口一致。
+
+Cargo / Rust 在 kkrepo 中同样使用 `/repository/<repo>/...` sparse registry URL，但 Nexus Cargo 仓库迁移当前为待定，不属于本文描述的迁移流程。
 
 ## 迁移流程概览
 
@@ -41,6 +43,8 @@ kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议行
 
 1. 先迁移仓库元数据：扫描源 Nexus hosted 仓库中的 component、asset、路径、大小、content-type、时间戳和 blob 引用等信息，在 kkrepo MySQL 中生成迁移任务。
 2. 再迁移 blob 真实数据：按迁移任务下载源 Nexus asset 内容，并写入 kkrepo 的目标 blob store。
+
+Cargo / Rust 仓库数据不通过此流程迁移。Nexus Community Cargo 支持从 3.77.x datastore 时代的 H2/PostgreSQL 模型开始，需要单独完成源端读取和校验设计后才能启用迁移。
 
 ### 第一次迁移
 
@@ -95,7 +99,7 @@ scripts/docker-compat/migration-e2e.sh
 
 全量迁移和最终增量迁移完成后，检查关键仓库的 browse/search、包下载、checksum 和常用客户端拉取行为。
 
-确认无问题后，把原 Nexus 域名通过 DNS 或反向代理指向 kkrepo。由于 kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议和权限认证模型，客户端不需要修改 Maven settings、npm registry、PyPI index-url、Go GOPROXY、Helm repo 等配置。
+确认无问题后，把原 Nexus 域名通过 DNS 或反向代理指向 kkrepo。由于 kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议和权限认证模型，对于已迁移的仓库格式，客户端不需要修改 Maven settings、npm registry、PyPI index-url、Go GOPROXY、Helm repo 等配置。
 
 切换完成后，建议保留源 Nexus 一段观察期，并在确认不再需要补偿迁移后关闭源端脚本能力。
 

@@ -87,7 +87,7 @@ java -jar server/target/kkrepo-server-*.jar
 - 代理保留完整 path。
 - 允许足够大的上传 body。
 - 上传和下载 timeout 足够长。
-- 不会移除 Maven/npm/pip/Helm/NuGet/gem/yum 客户端需要的认证 header。
+- 不会移除 Maven/npm/pip/Helm/Cargo/NuGet/gem/yum 客户端需要的认证 header。
 
 ## 初始管理员设置问题
 
@@ -152,7 +152,7 @@ export SPRING_DATASOURCE_PASSWORD=kkrepo
 - 客户端使用了该协议正确的凭据类型。
 - 反向代理保留了 `Authorization` header。
 
-对于 npm、NuGet、RubyGems 等 token 型客户端，修改用户或 realm 设置后，建议重新生成相关 token 或 API key。
+对于 npm、Cargo、NuGet、RubyGems 等 token 型客户端，修改用户或 realm 设置后，建议重新生成相关 token 或 API key。
 
 如果问题是 Nexus 兼容差异，提交 issue 时请同时提供 Nexus 和 kkrepo 对同一请求的响应。
 
@@ -185,6 +185,7 @@ export SPRING_DATASOURCE_PASSWORD=kkrepo
 - 源 Nexus 凭据权限不足。
 - 源 Nexus 无法暴露本地用户密码 hash；这些用户需要重置密码。
 - 期望迁移 proxy 仓库，但没有在 `Optional proxy repositories` 中列出。
+- Cargo / Rust 仓库迁移当前不属于现有迁移流程支持范围。
 - blob 迁移慢，可能是并发过低、源 Nexus 压力过大，或对象存储限流。
 
 详见 [Nexus 迁移说明](nexus-migration-guide.md)。
@@ -206,6 +207,8 @@ scripts/ci/live-compat-setup.sh
 scripts/ci/run-live-compat.sh smoke
 docker compose -f docker-compose.compat.yml down -v
 ```
+
+Cargo 兼容性测试使用 Nexus 3.77.x+ 参考 compose 文件和 `cargo` suite。运行 Cargo 读写检查前请先查看 [compat-test README](../../compat-test/README.md)。
 
 如果 live 检查失败：
 

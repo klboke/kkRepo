@@ -185,6 +185,50 @@ curl -u alice:"$KKREPO_PASSWORD" \
 https://nexus.example.com/repository/helm-hosted/
 ```
 
+## Cargo / Rust
+
+依赖解析使用 group 或 proxy 仓库，发布使用 hosted 仓库。
+
+`.cargo/config.toml`：
+
+```toml
+[registries.kkrepo]
+index = "sparse+https://nexus.example.com/repository/cargo-group/"
+
+[registries.kkrepo_hosted]
+index = "sparse+https://nexus.example.com/repository/cargo-hosted/"
+```
+
+凭据使用 `CargoToken` domain 创建的 token。非交互客户端可以使用环境变量：
+
+```bash
+export CARGO_REGISTRIES_KKREPO_TOKEN="$CARGO_TOKEN"
+export CARGO_REGISTRIES_KKREPO_HOSTED_TOKEN="$CARGO_TOKEN"
+```
+
+本地 Cargo 凭据存储可以使用：
+
+```bash
+cargo login --registry kkrepo_hosted "$CARGO_TOKEN"
+```
+
+搜索和拉取：
+
+```bash
+cargo search serde --registry kkrepo
+cargo fetch
+```
+
+发布和管理 hosted crate version：
+
+```bash
+cargo publish --registry kkrepo_hosted
+cargo yank demo-crate --version 1.0.0 --registry kkrepo_hosted
+cargo yank demo-crate --version 1.0.0 --undo --registry kkrepo_hosted
+```
+
+Cargo source replacement 只适合替换源与原始源内容等价的场景。如果 group 同时混合私有 hosted crate 和 crates.io proxy，优先通过 `[registries]` 使用 alternate registry。
+
 ## NuGet
 
 添加 source：

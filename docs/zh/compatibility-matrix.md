@@ -20,6 +20,7 @@
 | PyPI | hosted / proxy / group | `twine upload`、包下载、simple index 读取、管理台上传 | 支持 simple index | 默认迁移 hosted；proxy 可选 | `PypiRepositoryBlackBoxCompatibilityTest`、`ComponentUploadBlackBoxCompatibilityTest` |
 | Go | proxy / group | Go module proxy 读取：list、info、mod、zip、latest、group fallback | 支持 | proxy 可选 | `GoProxyBlackBoxCompatibilityTest` |
 | Helm | hosted / proxy | Chart push、PUT 上传、chart 下载、`index.yaml`、proxy index rewrite、管理台上传 | 支持 `index.yaml` | 默认迁移 hosted；proxy 可选 | `HelmRepositoryBlackBoxCompatibilityTest`、`ComponentUploadBlackBoxCompatibilityTest` |
+| Cargo / Rust | hosted / proxy / group | Sparse registry 读取、`cargo publish`、`.crate` 下载、yank/unyank、Cargo search、CargoToken 认证、UI/API `.crate` 上传 | 支持 sparse index 和 Cargo search | 待定；不属于当前 Nexus 迁移流程 | `CargoRepositoryBlackBoxCompatibilityTest`、`ComponentUploadBlackBoxCompatibilityTest` |
 | NuGet | hosted / proxy / group | package push、包下载、v3 service index、registration、flat container、search/autocomplete、管理台上传 | 支持 v3 service index/search | 默认迁移 hosted；proxy 可选 | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
 | RubyGems | hosted / proxy / group | gem push/yank、gem 下载、compact 和 legacy index assets、管理台上传 | 支持 | 默认迁移 hosted；proxy 可选 | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
 | Yum | hosted / proxy / group | RPM PUT/upload、包下载、`repodata` metadata | 支持 `repodata` | 默认迁移 hosted；proxy 可选 | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
@@ -51,6 +52,8 @@
 /repository/npm-hosted/@scope/package
 /repository/pypi-proxy/simple/demo/
 /repository/helm-hosted/index.yaml
+/repository/cargo-group/config.json
+/repository/cargo-hosted/crates/demo/1.0.0/download
 /repository/nuget-group/v3/index.json
 ```
 
@@ -73,6 +76,7 @@ kkrepo 把迁移作为产品能力，而不是一次性脚本：
 - 元数据迁移覆盖用户、角色、权限、blob store、repository 定义和相关兼容数据。
 - 仓库数据迁移默认扫描 hosted 仓库。
 - proxy 仓库可显式指定，用于迁移历史备份数据或回源缓存数据。
+- Cargo / Rust 仓库数据迁移保持待定。Nexus Community Cargo 支持从 3.77.x datastore 时代的 H2/PostgreSQL 形态开始，因此不属于现有旧版 Nexus 迁移链路覆盖范围。
 - 迁移步骤按 preflight/dry-run、resume、checksum 校验和报告能力设计。
 - 不支持或被阻塞的条目应进入报告，而不是静默跳过。
 
@@ -83,6 +87,7 @@ kkrepo 把迁移作为产品能力，而不是一次性脚本：
 - kkrepo 不是 Nexus 内部机制的完整复刻。Karaf、OSGi、OrientDB、内嵌 Elasticsearch 和 Nexus task 子系统不是兼容目标。
 - Docker / OCI 使用 Registry HTTP API V2 和 OCI Distribution；Docker Registry V1 API 与 `docker search` 不属于当前支持面，除非后续出现明确兼容需求再评估 search-only shim。
 - Docker connector listener 变更可通过 Docker operations endpoint 刷新；高级 connector TLS/SNI 管理属于部署侧能力。
+- Cargo / Rust 支持 Cargo sparse registry。Cargo git index 协议、crates.io 风格 GitHub owner 邀请、删除已发布 crate version，以及 Nexus Cargo 仓库迁移当前不支持。
 - Go 不支持 hosted 上传；Go module proxy 行为以读取代理为主。
 - 不承诺覆盖每一个 Nexus UI endpoint。只有在支持用户工作流或迁移兼容需要时，才补对应 endpoint。
 - 当协议允许非确定性时，测试中可能规范化排序、时间戳、生成 ID 和 hostname。

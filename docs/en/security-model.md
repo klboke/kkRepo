@@ -100,7 +100,7 @@ The custom API-key header is:
 X-Nexus-Plus-Token
 ```
 
-Protocol-specific clients may still use their native auth mechanisms.
+Protocol-specific clients may still use their native auth mechanisms. Current protocol-token domains include `NpmToken`, `CargoToken`, and `NuGetApiKey` where the corresponding client protocol uses tokens or API keys; Cargo clients send their registry token through the `Authorization` header.
 
 ## Encryption Secrets
 

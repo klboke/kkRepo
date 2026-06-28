@@ -207,6 +207,7 @@ Validate:
 - RubyGems install and gem push.
 - Yum install and RPM upload.
 - Raw upload/download.
+- Cargo / Rust repository migration is not part of the current migration flow; validate Cargo separately only when repositories are created or moved outside this playbook.
 - Admin login.
 - Browse/search.
 - User roles and repository permissions.

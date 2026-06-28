@@ -20,7 +20,7 @@ compat-test/
 - hosted write, delete, and repeated-upload behavior
 - client-visible proxy, group, browse/search behavior
 
-The current module includes compatibility test classes for Maven, npm, PyPI, Go, Helm, Docker/OCI, NuGet, RubyGems, Yum, Raw, component upload, security management APIs, and related areas.
+The current module includes compatibility test classes for Maven, npm, PyPI, Go, Helm, Cargo/Rust, Docker/OCI, NuGet, RubyGems, Yum, Raw, component upload, security management APIs, and related areas.
 
 Regular test command:
 
@@ -56,11 +56,13 @@ COMPAT_WRITE_ENABLED=true
 
 This avoids accidentally writing test packages to a long-running Nexus reference instance. Write tests usually use one-off package names and paths, and cover delete, repeated upload, and metadata update behavior when feasible.
 
+Cargo / Rust compatibility uses a Nexus Repository 3.77.x+ Community Edition reference because older default compatibility references do not expose Community Cargo repositories. Use the `cargo` suite in `scripts/ci/run-live-compat.sh`; it covers hosted, proxy, and group repositories, including write behavior when enabled.
+
 ## Traffic Mirroring Validation
 
 In addition to in-project black-box compatibility tests, after migrating Nexus to kkrepo, we mirrored 100% of real production traffic to kkrepo through Istio to observe how kkrepo responds to real client requests.
 
-This validation stage aims to:
+This historical validation stage aims to:
 
 - Confirm that real Maven, npm, PyPI, Go, Helm, Docker/OCI, and similar client requests are recognized correctly by kkrepo.
 - Compare HTTP status, error types, and key response behavior between the Nexus main path and the kkrepo mirrored path.
@@ -101,6 +103,8 @@ Overall scale and observations:
 | hosted repository migration time | Completed overnight |
 
 These numbers show kkrepo validation results under real business traffic and migration scale. They do not represent a fixed SLA. Actual throughput and latency are affected by MySQL sizing, OSS/S3 performance, network, proxy upstream quality, repository count, package size, and replica count.
+
+Cargo / Rust is not included in the historical production-scale validation numbers above. Validate Cargo with the Nexus 3.77.x+ compatibility suite and real Cargo clients before production cutover.
 
 ## Compatibility Issue Handling Flow
 

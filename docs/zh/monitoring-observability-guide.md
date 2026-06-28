@@ -115,7 +115,7 @@ docs/resources/grafana/dashboard.json
 常用标签：
 
 - `repo`：仓库名
-- `format`：制品格式，例如 `maven2`、`npm`、`pypi`
+- `format`：制品格式，例如 `maven2`、`npm`、`pypi`、`cargo`
 - `type`：仓库类型，例如 `hosted`、`proxy`、`group`
 - `method`：HTTP method
 - `operation`：协议操作
@@ -131,6 +131,20 @@ docs/resources/grafana/dashboard.json
 | `kkrepo_proxy_cache_events_total` | counter | proxy cache 命中、未命中、negative cache 等事件 |
 
 重点关注 `remote_host`、`status` 和 `outcome`。如果 proxy 仓库拉包变慢，优先看回源延迟和回源错误。
+
+### Cargo / Rust
+
+Cargo / Rust 通过 `format="cargo"` 暴露仓库请求和 blob 存储指标。常见 Cargo operation 标签包括：
+
+- `cargo_config`
+- `cargo_index`
+- `cargo_crate`
+- `cargo_api`
+- `cargo_publish`
+- `cargo_yank`
+- `cargo_unyank`
+
+Cargo proxy 上游请求会通过 `kkrepo_proxy_remote_*` 记录，并带 `format="cargo"`。
 
 ### Blob 存储
 

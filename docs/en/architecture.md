@@ -8,7 +8,7 @@ The goal is not to copy Nexus internals. kkrepo keeps client-visible protocol be
 
 ```text
 Artifact clients
-  Maven / npm / PyPI / Go / Helm / Docker/OCI / NuGet / RubyGems / Yum / Raw
+  Maven / npm / PyPI / Go / Helm / Cargo/Rust / Docker/OCI / NuGet / RubyGems / Yum / Raw
         |
         v
 Load balancer / reverse proxy
@@ -76,6 +76,7 @@ Admin UI and Browse UI are served by the Spring Boot service as static assets:
 | `protocol-pypi` | PyPI protocol helpers |
 | `protocol-go` | Go module proxy helpers |
 | `protocol-helm` | Helm chart and index helpers |
+| `protocol-cargo` | Cargo sparse registry path, index, publish body, checksum, and error helpers |
 | `protocol-docker` | Docker Registry V2 / OCI path, digest, manifest, media type, and error helpers |
 | `protocol-nuget` | NuGet path helpers |
 | `protocol-rubygems` | RubyGems metadata helpers |

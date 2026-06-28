@@ -185,6 +185,50 @@ If using a Helm push plugin, point it at:
 https://nexus.example.com/repository/helm-hosted/
 ```
 
+## Cargo / Rust
+
+Use a group or proxy repository for dependency resolution and a hosted repository for publishing.
+
+`.cargo/config.toml`:
+
+```toml
+[registries.kkrepo]
+index = "sparse+https://nexus.example.com/repository/cargo-group/"
+
+[registries.kkrepo_hosted]
+index = "sparse+https://nexus.example.com/repository/cargo-hosted/"
+```
+
+Use a token created with the `CargoToken` domain. For non-interactive clients:
+
+```bash
+export CARGO_REGISTRIES_KKREPO_TOKEN="$CARGO_TOKEN"
+export CARGO_REGISTRIES_KKREPO_HOSTED_TOKEN="$CARGO_TOKEN"
+```
+
+For local Cargo credential storage:
+
+```bash
+cargo login --registry kkrepo_hosted "$CARGO_TOKEN"
+```
+
+Search and fetch:
+
+```bash
+cargo search serde --registry kkrepo
+cargo fetch
+```
+
+Publish and manage a hosted crate version:
+
+```bash
+cargo publish --registry kkrepo_hosted
+cargo yank demo-crate --version 1.0.0 --registry kkrepo_hosted
+cargo yank demo-crate --version 1.0.0 --undo --registry kkrepo_hosted
+```
+
+Cargo source replacement should only be used when the replacement source is intentionally equivalent to the original source. For a group that mixes private hosted crates with a crates.io proxy, prefer alternate registries through `[registries]`.
+
 ## NuGet
 
 Add a source:

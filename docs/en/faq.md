@@ -2,7 +2,7 @@
 
 ## What is kkrepo?
 
-kkrepo is a Nexus-compatible, self-hosted artifact repository for common package formats such as Maven, npm, PyPI, Go, Helm, Docker/OCI, NuGet, RubyGems, Yum, and Raw.
+kkrepo is a Nexus-compatible, self-hosted artifact repository for common package formats such as Maven, npm, PyPI, Go, Helm, Cargo/Rust, Docker/OCI, NuGet, RubyGems, Yum, and Raw.
 
 It keeps Nexus-like client URLs, protocol behavior, permissions, and migration goals while using MySQL for metadata and OSS/S3-compatible storage for blobs.
 
@@ -27,6 +27,7 @@ Current supported formats:
 - PyPI
 - Go
 - Helm
+- Cargo / Rust
 - Docker / OCI
 - NuGet
 - RubyGems
@@ -41,7 +42,7 @@ For supported non-Docker formats, the main client URL shape is compatible with N
 /repository/<repo>/<artifact-path>
 ```
 
-This helps preserve Maven, npm, pip, Helm, NuGet, RubyGems, Yum, Raw, and CI client configuration during migration.
+This helps preserve Maven, npm, pip, Helm, Cargo, NuGet, RubyGems, Yum, Raw, and CI client configuration during migration for formats covered by the migration flow.
 
 Docker / OCI uses the Registry HTTP API V2 `/v2/...` route instead of `/repository/<repo>/...`: shared-entrypoint deployments use `<host>/<repo>/<image>:<tag>`, and repository-level connector ports can expose `<host>:<repo-port>/<image>:<tag>`.
 
@@ -124,6 +125,12 @@ Docker / OCI Registry hosted, proxy, and group repositories are implemented for 
 Hosted Docker repository migration is supported through the Nexus Repository Data flow. Docker Registry V1 API and `docker search` are not part of the current supported surface; modern Docker/OCI workflows use Registry V2 and OCI Distribution.
 
 Do not assume Docker pull/push works through `/repository/<repo>/...`.
+
+## Is Cargo / Rust supported?
+
+Cargo hosted, proxy, and group repositories are supported through the Cargo sparse registry protocol. kkrepo supports `cargo publish`, fetch/download, yank/unyank, `cargo search`, `CargoToken` authentication, and hosted `.crate` upload through the UI/API.
+
+Nexus Cargo repository migration is currently TBD. Nexus Community Cargo support starts from the 3.77.x datastore-era H2/PostgreSQL shape, so Cargo repositories should not be treated as covered by the existing Nexus migration flow.
 
 ## Is kkrepo production-ready?
 

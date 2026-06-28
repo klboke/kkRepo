@@ -8,13 +8,15 @@ This project follows a pragmatic early-stage release process. Until a stable `1.
 
 ### Added
 
+- Cargo / Rust repository support for hosted, proxy, and group repositories using Cargo sparse registries, including `cargo publish`, fetch/download, yank/unyank, Cargo search, `CargoToken` authentication, and UI/API `.crate` upload.
+- Cargo / Rust live compatibility coverage against a Nexus Repository 3.77.x+ reference instance, including hosted, proxy, and group checks through the `run-live-compat` workflow path.
 - Docker / OCI Registry implementation planning docs in English and Chinese.
 - English documentation now lives under `docs/en`.
 - Community files for open source collaboration: Code of Conduct, Support policy, Dependabot configuration, compatibility matrix, and troubleshooting guide.
 
 ### Changed
 
-- README roadmaps now mark Docker / OCI Registry as in progress and link to the development plan.
+- README, compatibility, client recipe, and operations docs now list Docker / OCI and Cargo / Rust as implemented repository capabilities. Cargo Nexus repository migration remains explicitly TBD because Nexus Community Cargo support starts from the 3.77.x datastore-era H2/PostgreSQL shape.
 
 ## 0.1.0 - 2026-06-15
 

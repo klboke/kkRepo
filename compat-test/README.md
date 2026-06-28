@@ -16,9 +16,10 @@ NEXUS_COMPAT_USERNAME=admin
 NEXUS_COMPAT_PASSWORD=123456
 ```
 
-All current Maven compatibility checks and future repository-format compatibility checks
+Current Maven compatibility checks and non-Cargo repository-format compatibility checks
 (npm, PyPI, Go, Helm, and others) should compare against this same long-running Nexus reference
-unless a test explicitly documents why it needs an isolated throwaway Nexus instance.
+unless a test explicitly documents why it needs an isolated throwaway Nexus instance. Cargo/Rust
+checks use the Nexus 3.77.x+ reference documented below.
 
 ## Default Test Run
 

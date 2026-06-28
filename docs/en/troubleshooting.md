@@ -87,7 +87,7 @@ If using a reverse proxy, verify:
 - The proxy forwards the full path.
 - Large upload body size is allowed.
 - Read and write timeouts are long enough for artifact uploads.
-- The proxy does not strip authentication headers required by Maven/npm/pip/Helm/NuGet/gem/yum clients.
+- The proxy does not strip authentication headers required by Maven/npm/pip/Helm/Cargo/NuGet/gem/yum clients.
 
 ## Initial Admin Setup Problems
 
@@ -152,7 +152,7 @@ Check:
 - The client is using the right credential type for the protocol.
 - Reverse proxies preserve the `Authorization` header.
 
-For npm, NuGet, RubyGems, and other token-based clients, regenerate the relevant token or API key after changing user or realm settings.
+For npm, Cargo, NuGet, RubyGems, and other token-based clients, regenerate the relevant token or API key after changing user or realm settings.
 
 If the issue is a Nexus compatibility difference, include the same request against Nexus and kkrepo when opening an issue.
 
@@ -185,6 +185,7 @@ Common causes:
 - Source credentials lack sufficient permissions.
 - Source Nexus cannot expose local user password hashes; those users must reset passwords.
 - Proxy repositories were expected but not listed in `Optional proxy repositories`.
+- Cargo / Rust repository migration is currently not supported by the existing migration flow.
 - Blob migration is slow because concurrency is too low, source Nexus is overloaded, or object storage is throttling.
 
 See [Nexus Migration Guide](nexus-migration-guide.md).
@@ -206,6 +207,8 @@ scripts/ci/live-compat-setup.sh
 scripts/ci/run-live-compat.sh smoke
 docker compose -f docker-compose.compat.yml down -v
 ```
+
+Cargo compatibility uses a Nexus 3.77.x+ reference compose file and the `cargo` suite. See [compat-test README](../../compat-test/README.md) before running Cargo read/write checks.
 
 If live checks fail:
 

@@ -1,8 +1,8 @@
 # kkrepo MySQL ER 设计
 
-当前 MySQL schema 以 `server/src/main/resources/db/migration/V1__init_schema.sql` 到 `V24__remove_legacy_oss_accelerator_engine.sql` 为准，并由 Flyway 在服务启动时执行。目标数据库是 MySQL 8 InnoDB。
+当前 MySQL schema 以 `server/src/main/resources/db/migration/V1__init_schema.sql` 到 `V27__ui_settings.sql` 为准，并由 Flyway 在服务启动时执行。目标数据库是 MySQL 8 InnoDB。
 
-Schema 对共享 asset/blob 数据采用“统一内容表 + format 字段”的模型；对 Docker/OCI manifest、tag、upload session、referrers 等协议专有关系，则使用专用旁表。这样更适合从 Nexus 迁移和管理台统一查询；如果后续某个格式数据量明显过大，再通过分区或更多专用表优化。
+Schema 对共享 asset/blob 数据采用“统一内容表 + format 字段”的模型。Cargo / Rust 当前使用这套共享模型，Cargo 元数据保存在 component/asset attributes 中；对 Docker/OCI manifest、tag、upload session、auth token、referrers 等协议专有关系，则使用专用旁表。这样更适合从 Nexus 迁移和管理台统一查询；如果后续某个格式数据量明显过大，再通过分区或更多专用表优化。
 
 ## 仓库与内容 ER
 
@@ -99,6 +99,7 @@ erDiagram
 | `SPRING_SESSION_ATTRIBUTES` | Spring Session 属性表 |
 | `auth_ticket` | 短生命周期认证票据，按 token hash 存储并通过过期时间清理 |
 | `maintenance_cursor` | 后台维护任务的共享游标，例如 blob reconcile 扫描水位 |
+| `ui_settings` | 单行 UI 偏好设置表，当前用于默认语言选择 |
 
 ### 权限层
 

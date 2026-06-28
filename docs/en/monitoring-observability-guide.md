@@ -115,7 +115,7 @@ Background tasks, rebuild queues, GC, and rate-limit metrics:
 Common labels:
 
 - `repo`: repository name
-- `format`: artifact format, such as `maven2`, `npm`, `pypi`
+- `format`: artifact format, such as `maven2`, `npm`, `pypi`, `cargo`
 - `type`: repository type, such as `hosted`, `proxy`, `group`
 - `method`: HTTP method
 - `operation`: protocol operation
@@ -131,6 +131,22 @@ Common labels:
 | `kkrepo_proxy_cache_events_total` | counter | Proxy cache hit, miss, negative cache, and similar events |
 
 Focus on `remote_host`, `status`, and `outcome`. If package pulls from a proxy repository become slow, check upstream latency and upstream errors first.
+
+### Cargo / Rust
+
+Cargo / Rust emits repository request and blob storage metrics with `format="cargo"`.
+Common Cargo operation labels include:
+
+- `cargo_config`
+- `cargo_index`
+- `cargo_crate`
+- `cargo_api`
+- `cargo_publish`
+- `cargo_yank`
+- `cargo_unyank`
+
+Cargo proxy upstream requests are recorded through `kkrepo_proxy_remote_*` with
+`format="cargo"`.
 
 ### Blob Storage
 

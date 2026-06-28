@@ -2,7 +2,9 @@
 
 This document describes prerequisites, execution order, incremental migration, and domain cutover when migrating from Nexus Repository to kkrepo.
 
-kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client protocol behavior, and permission/authentication model. After migration, only point the original Nexus domain to kkrepo. Maven, npm, PyPI, Go, Helm, NuGet, RubyGems, Yum, and other non-Docker client configurations do not need to change. Docker / OCI uses Registry HTTP API V2 `/v2/...` routes; preserve repository names and connector/path-based routing when cutting Docker clients over.
+kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client protocol behavior, and permission/authentication model. After migration, only point the original Nexus domain to kkrepo. Maven, npm, PyPI, Go, Helm, NuGet, RubyGems, Yum, and other migrated non-Docker client configurations do not need to change. Docker / OCI uses Registry HTTP API V2 `/v2/...` routes; preserve repository names and connector/path-based routing when cutting Docker clients over.
+
+Cargo / Rust repositories also use `/repository/<repo>/...` sparse registry URLs in kkrepo, but Nexus Cargo repository migration is currently TBD and is not part of the migration flow described here.
 
 ## Migration Flow Overview
 
@@ -41,6 +43,8 @@ Repository data migration runs from the `Nexus Repository Data` page in the kkre
 
 1. Migrate repository metadata first: scan source Nexus hosted repository component, asset, path, size, content-type, timestamp, blob reference, and related metadata, then create migration tasks in kkrepo MySQL.
 2. Migrate real blob data: download source Nexus asset content according to migration tasks and write it to the target blob store in kkrepo.
+
+Cargo / Rust repository data is not migrated by this flow. Nexus Community Cargo support starts from the 3.77.x datastore-era H2/PostgreSQL model, which requires a separate source-reading and validation design before migration can be enabled.
 
 ### First Migration
 
@@ -95,7 +99,7 @@ Migration is designed to be interruptible and resumable. Completed data remains 
 
 After full migration and the final incremental migration are complete, check browse/search, package downloads, checksums, and common client pull behavior for key repositories.
 
-After confirming there are no issues, point the original Nexus domain to kkrepo through DNS or a reverse proxy. Because kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client protocols, and permission/authentication model, clients do not need to modify Maven settings, npm registry, PyPI index-url, Go GOPROXY, Helm repo, or similar configuration.
+After confirming there are no issues, point the original Nexus domain to kkrepo through DNS or a reverse proxy. Because kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client protocols, and permission/authentication model, clients do not need to modify Maven settings, npm registry, PyPI index-url, Go GOPROXY, Helm repo, or similar configuration for migrated repository formats.
 
 After cutover, keep the source Nexus for an observation period, and disable source script capability after confirming no further compensation migration is needed.
 
