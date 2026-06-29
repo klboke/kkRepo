@@ -132,6 +132,25 @@ run_logged_output() {
   return "$status"
 }
 
+run_logged_output_in() {
+  local name="$1"
+  local dir="$2"
+  local output="$3"
+  shift 3
+  local log_file="$ARTIFACT_DIR/$name.log"
+  log "running $name"
+  set +e
+  {
+    printf '$ cd %q\n' "$(redact_text "$dir")"
+    print_command "$@"
+    (cd "$dir" && "$@" >"$output")
+  } >"$log_file" 2>&1
+  local status=$?
+  set -e
+  redact_log_file "$log_file"
+  return "$status"
+}
+
 wait_for_http() {
   local label="$1"
   local url="$2"
@@ -444,11 +463,11 @@ EOF
     CARGO_TARGET_DIR="$cargo_target-fetch" \
     CARGO_REGISTRIES_KKREPO_TOKEN="$token" \
     cargo fetch
-  run_logged_output cargo-metadata "$ARTIFACT_DIR/cargo-metadata.json" env \
+  run_logged_output_in cargo-metadata "$fetch_dir" "$ARTIFACT_DIR/cargo-metadata.json" env \
     CARGO_HOME="$cargo_home" \
     CARGO_TARGET_DIR="$cargo_target-fetch" \
     CARGO_REGISTRIES_KKREPO_TOKEN="$token" \
-    cargo metadata --manifest-path "$fetch_dir/Cargo.toml" --format-version 1
+    cargo metadata --format-version 1
   grep -q "\"$crate\"" "$ARTIFACT_DIR/cargo-metadata.json"
 }
 
