@@ -587,8 +587,9 @@ EOF
     "$ARTIFACT_DIR/rubygems-versions"
   capture_rubygems_metadata "$name"
   run_logged rubygems-install env GEM_HOME="$gem_home" GEM_PATH="$gem_home" \
-    gem install "$name" --version 1.0.0 --source "$KKREPO_AUTH_URL/repository/rubygems-group/" \
-    --clear-sources --no-document --user-install --verbose
+    gem install "$name" --version 1.0.0 --clear-sources \
+    --source "$KKREPO_AUTH_URL/repository/rubygems-group/" \
+    --no-document --user-install --verbose
   test -f "$gem_home/gems/$name-1.0.0/lib/$name.rb"
 }
 
