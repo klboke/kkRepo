@@ -255,6 +255,30 @@ wait_for_body_contains() {
   return 1
 }
 
+capture_rubygems_metadata() {
+  local name="$1"
+  local dependencies="$ARTIFACT_DIR/rubygems-dependencies.marshal"
+  local specs="$ARTIFACT_DIR/rubygems-specs.4.8.gz"
+  local quick="$ARTIFACT_DIR/rubygems-quick-spec.rz"
+  local gem="$ARTIFACT_DIR/rubygems-package.gem"
+  run_logged_output rubygems-dependencies "$dependencies" \
+    curl -m 10 -fsS -u "$KKREPO_AUTH" \
+    "$KKREPO_URL/repository/rubygems-group/api/v1/dependencies?gems=$name"
+  run_logged rubygems-dependencies-decode ruby -e \
+    'p Marshal.load(File.binread(ARGV.fetch(0)))' "$dependencies"
+  run_logged_output rubygems-specs "$specs" \
+    curl -m 10 -fsS -u "$KKREPO_AUTH" \
+    "$KKREPO_URL/repository/rubygems-group/specs.4.8.gz"
+  run_logged rubygems-specs-decode ruby -rzlib -e \
+    'p Marshal.load(Zlib.gunzip(File.binread(ARGV.fetch(0)))).select { |row| row[0].to_s == ARGV.fetch(1) }' "$specs" "$name"
+  run_logged_output rubygems-quick-spec "$quick" \
+    curl -m 10 -fsS -u "$KKREPO_AUTH" \
+    "$KKREPO_URL/repository/rubygems-group/quick/Marshal.4.8/$name-1.0.0.gemspec.rz"
+  run_logged_output rubygems-package "$gem" \
+    curl -m 10 -fsS -u "$KKREPO_AUTH" \
+    "$KKREPO_URL/repository/rubygems-group/gems/$name-1.0.0.gem"
+}
+
 test_maven() {
   need mvn
   local dir="$WORK_DIR/maven"
@@ -561,9 +585,10 @@ EOF
   wait_for_body_contains rubygems-versions "$name" \
     "$KKREPO_URL/repository/rubygems-group/versions" \
     "$ARTIFACT_DIR/rubygems-versions"
+  capture_rubygems_metadata "$name"
   run_logged rubygems-install env GEM_HOME="$gem_home" GEM_PATH="$gem_home" \
     gem install "$name" --version 1.0.0 --source "$KKREPO_AUTH_URL/repository/rubygems-group/" \
-    --clear-sources --no-document --user-install
+    --clear-sources --no-document --user-install --verbose
   test -f "$gem_home/gems/$name-1.0.0/lib/$name.rb"
 }
 
