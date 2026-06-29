@@ -118,7 +118,7 @@ jobs:
         if: env.LIVE_COMPAT_SUITE == 'client-e2e'
         run: scripts/ci/run-live-compat.sh "$LIVE_COMPAT_SUITE"
 
-      - name: Run live compatibility suite
+      - name: Run non-client live compatibility suite
         if: env.LIVE_COMPAT_SUITE != 'client-e2e'
         run: scripts/ci/run-live-compat.sh "$LIVE_COMPAT_SUITE"
 

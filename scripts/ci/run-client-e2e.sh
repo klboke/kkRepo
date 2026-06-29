@@ -151,6 +151,16 @@ run_logged_output_in() {
   return "$status"
 }
 
+write_nuget_config() {
+  local file="$1"
+  cat >"$file" <<'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources />
+</configuration>
+EOF
+}
+
 wait_for_http() {
   local label="$1"
   local url="$2"
@@ -481,6 +491,8 @@ test_nuget() {
   token="$(create_api_key NuGetApiKey "client e2e nuget $STAMP")"
   add_redaction_value "$token"
   mkdir -p "$dir" "$restore_dir" "$packages_dir"
+  write_nuget_config "$dir/NuGet.Config"
+  write_nuget_config "$restore_dir/NuGet.Config"
   run_logged nuget-new dotnet new classlib -n "$package" -o "$dir/$package" --framework net8.0
   run_logged nuget-pack dotnet pack "$dir/$package/$package.csproj" \
     -p:PackageId="$package" -p:Version=1.0.0 -o "$dir/out"
