@@ -100,7 +100,7 @@ public class CargoProxyService {
       return reader.serveSnapshot(cached.get(), headOnly, path);
     }
     if (negativeCache.isNotFoundCached(runtime, path)) {
-      throw new CargoExceptions.CargoNotFoundException(crateName);
+      throw new CargoExceptions.CargoIndexNotFoundException(crateName);
     }
     if (proxyStateDao.isBlocked(runtime.id(), now)) {
       if (cached.isPresent()) {
@@ -162,9 +162,13 @@ public class CargoProxyService {
     if (cached.isPresent() && isFresh(cached.get(), runtime.metadataMaxAgeMinutesOrDefault(), now)) {
       return parseIndex(reader.readText(cached.get(), indexPath));
     }
-    MavenResponse response = index(runtime, crateName, false);
-    try (var body = response.body()) {
-      return parseIndex(new String(body.readAllBytes(), StandardCharsets.UTF_8));
+    try {
+      MavenResponse response = index(runtime, crateName, false);
+      try (var body = response.body()) {
+        return parseIndex(new String(body.readAllBytes(), StandardCharsets.UTF_8));
+      }
+    } catch (CargoExceptions.CargoIndexNotFoundException e) {
+      return List.of();
     } catch (IOException e) {
       throw new CargoExceptions.BadUpstreamException("Failed reading Cargo index response", e);
     }
@@ -263,7 +267,7 @@ public class CargoProxyService {
             return reader.serveSnapshot(cached.get(), headOnly, path);
           }
           negativeCache.rememberNotFound(runtime, path);
-          throw new CargoExceptions.CargoNotFoundException(crateName);
+          throw new CargoExceptions.CargoIndexNotFoundException(crateName);
         }
         return handleUpstreamFailure(runtime, path, cached, headOnly,
             "Upstream returned " + status, now);

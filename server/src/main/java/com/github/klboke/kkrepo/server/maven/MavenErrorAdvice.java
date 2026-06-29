@@ -73,6 +73,11 @@ public class MavenErrorAdvice {
     return cargoBody(HttpStatus.NOT_FOUND, e.getMessage());
   }
 
+  @ExceptionHandler(CargoExceptions.CargoIndexNotFoundException.class)
+  public ResponseEntity<Void> cargoIndexNotFound(CargoExceptions.CargoIndexNotFoundException e) {
+    return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
+  }
+
   @ExceptionHandler(CargoExceptions.BadRequestException.class)
   public ResponseEntity<Map<String, Object>> cargoBadRequest(CargoExceptions.BadRequestException e) {
     return cargoBody(HttpStatus.BAD_REQUEST, e.getMessage());

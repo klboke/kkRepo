@@ -271,7 +271,7 @@ public class RepositoryContentController {
     if (runtime.format() == RepositoryFormat.NUGET) {
       String raw = extractRepositoryPath(name, request, true);
       MavenResponse resp;
-      if (raw.isBlank() && isMultipart(contentType)) {
+      if (isNugetPackagePublishPath(raw) && isMultipart(contentType)) {
         Part part = nugetPackagePart(request);
         try (InputStream body = part.getInputStream()) {
           resp = nuget.putPackage(runtime, NugetPaths.PACKAGE_PUBLISH, body,
@@ -902,6 +902,13 @@ public class RepositoryContentController {
   private static boolean isMultipart(String contentType) {
     return contentType != null
         && contentType.toLowerCase(Locale.ROOT).startsWith(MediaType.MULTIPART_FORM_DATA_VALUE);
+  }
+
+  private static boolean isNugetPackagePublishPath(String rawPath) {
+    String path = rawPath == null ? "" : rawPath.trim().replaceAll("/+", "/");
+    while (path.startsWith("/")) path = path.substring(1);
+    while (path.endsWith("/")) path = path.substring(0, path.length() - 1);
+    return path.isEmpty() || NugetPaths.PACKAGE_PUBLISH.equals(path);
   }
 
   private static Part nugetPackagePart(HttpServletRequest request) throws IOException {

@@ -34,7 +34,8 @@ builds without Nexus.
 
 The GitHub `Live Compatibility` workflow uses the same commands below. It builds a candidate
 kkrepo image, starts MySQL, a disposable Nexus reference, and the candidate service, then
-bootstraps the admin user, default file blob store, and Maven/npm fixture repositories.
+bootstraps the admin user, default file blob store, and the fixture repositories used by
+live compatibility and real client E2E runs.
 The disposable defaults are `admin` / `123456` for Nexus and `admin` / `12345678` for kkrepo.
 
 ```bash
@@ -71,11 +72,34 @@ Available suites:
   `https://index.crates.io/`) and the same crate/version (`CARGO_COMPAT_CRATE`, default `itoa`;
   `CARGO_COMPAT_VERSION`, default `1.0.15`).
 - `extended`: smoke coverage plus currently separated PyPI, Helm, NuGet, RubyGems, and Yum checks.
+- `client-e2e`: starts from the disposable kkrepo service and uses real package clients to publish
+  and then download/resolve through hosted and group/proxy repositories. It covers Maven, npm,
+  PyPI, Helm, Cargo/Rust, NuGet, RubyGems, Yum, and Docker/OCI. Go is resolve-only through the Go
+  proxy because hosted Go publishing is not a supported repository mode.
 - `full`: all compat-test tests with live endpoint variables set; use this as a diagnostic suite
   when working through known protocol gaps.
 
 In GitHub Actions, add the `run-live-compat` label to a PR to run the smoke suite plus Cargo
-compatibility against the Nexus 3.77.x reference, or start the workflow manually and select a suite.
+compatibility against the Nexus 3.77.x reference. Add `run-client-e2e` to run the real client
+matrix, or start the workflow manually and select a suite.
+
+## Real Client E2E
+
+The `client-e2e` suite validates actual client command behavior rather than only protocol HTTP
+responses:
+
+```bash
+scripts/build-docker-image.sh kkrepo:compat
+docker compose -f docker-compose.compat.yml up -d mysql nexus kkrepo
+scripts/ci/live-compat-setup.sh
+scripts/ci/run-live-compat.sh client-e2e
+docker compose -f docker-compose.compat.yml down -v
+```
+
+The runner must have `mvn`, `npm`, `python3` with `build` and `twine`, `go`, `helm`, `cargo`,
+`dotnet`, `ruby`/`gem`, and Docker available. ORAS is optional; when present the Docker/OCI part
+also pushes and pulls a generic OCI artifact. Client logs, downloaded metadata, and selected
+inspect outputs are written under `artifacts/client-e2e/`.
 
 ## Live Console And Maven Read Checks
 

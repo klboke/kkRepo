@@ -71,9 +71,11 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       filterChain.doFilter(request, response);
       return;
     }
-    Optional<AuthenticatedSubject> authenticated = repository.get().format() == RepositoryFormat.CARGO
-        ? authenticationService.authenticateCargo(request)
-        : authenticationService.authenticate(request);
+    Optional<AuthenticatedSubject> authenticated = switch (repository.get().format()) {
+      case CARGO -> authenticationService.authenticateCargo(request);
+      case RUBYGEMS -> authenticationService.authenticateRubygems(request);
+      default -> authenticationService.authenticate(request);
+    };
     if (authenticated.isEmpty()) {
       authenticated = target.readOnly(repository.get().format())
           ? authenticationService.authenticateAnonymous(anonymousReadEnabled)

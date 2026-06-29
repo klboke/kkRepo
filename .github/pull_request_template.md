@@ -7,6 +7,7 @@
 - [ ] `mvn -pl server -am test`
 - [ ] `mvn -pl compat-test -am -Dtest=MavenMetadataMergeCompatibilityTest,MavenWritePolicyCompatibilityTest,NpmProtocolCompatibilityTest -Dsurefire.failIfNoSpecifiedTests=false test`
 - [ ] Live compatibility workflow with the `run-live-compat` label, or `scripts/ci/run-live-compat.sh smoke` for protocol/admin API changes, or not applicable.
+- [ ] Real client E2E with the `run-client-e2e` label, or `scripts/ci/run-live-compat.sh client-e2e` for package-client publish/download/resolve changes, or not applicable.
 - [ ] Other:
 
 ## Compatibility and design checklist

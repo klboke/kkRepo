@@ -88,6 +88,7 @@ Key conclusions:
    - Compare `config.json`, missing crate index, index ETag/304, private repository auth challenge, publish, download, yank, unyank, proxy cache, and group merge behavior.
    - Verify `cargo fetch`, `cargo build --locked`, `cargo publish`, `cargo yank`, and `cargo yank --undo` with Cargo 1.68+ and the current stable Cargo version.
    - Verify both alternate registry and source replacement configurations in `.cargo/config.toml`, and document the boundary between them.
+   - Run `scripts/ci/run-live-compat.sh client-e2e` when Cargo changes should be validated as part of the repository-wide real client matrix.
 
 ### Implemented Enhancements, TBD Items, And Non-Goals
 

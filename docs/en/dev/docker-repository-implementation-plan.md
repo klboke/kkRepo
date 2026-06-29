@@ -479,6 +479,12 @@ Comparison items:
 
 ### Real Client Tests
 
+The repository-wide real client matrix also covers Docker image push/pull and optional ORAS artifact push/pull:
+
+```bash
+scripts/ci/run-live-compat.sh client-e2e
+```
+
 Suggested script:
 
 ```bash

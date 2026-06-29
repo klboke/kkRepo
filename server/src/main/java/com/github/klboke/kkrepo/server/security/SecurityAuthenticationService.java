@@ -149,6 +149,15 @@ public class SecurityAuthenticationService {
   }
 
   @Transactional
+  public Optional<AuthenticatedSubject> authenticateRubygems(HttpServletRequest request) {
+    Optional<AuthenticatedSubject> apiKey = authenticateRubygemsApiKey(request);
+    if (apiKey.isPresent()) {
+      return apiKey;
+    }
+    return authenticate(request);
+  }
+
+  @Transactional
   public Optional<AuthenticatedSubject> authenticateCredentials(String username, String password) {
     if (username == null || username.isBlank() || password == null) {
       return Optional.empty();
@@ -268,6 +277,20 @@ public class SecurityAuthenticationService {
       }
     }
     return Optional.empty();
+  }
+
+  private Optional<AuthenticatedSubject> authenticateRubygemsApiKey(HttpServletRequest request) {
+    String authorization = request.getHeader("Authorization");
+    if (authorization == null || authorization.isBlank()
+        || authorization.regionMatches(true, 0, "Basic ", 0, 6)
+        || authorization.regionMatches(true, 0, "Bearer ", 0, 7)) {
+      return Optional.empty();
+    }
+    String token = authorization.trim();
+    return apiKeyAuthCache == null
+        ? resolveApiKey(ApiKeyTokenCandidate.fromPresentedRubygemsToken(token))
+        : apiKeyAuthCache.find("rubygems:" + token,
+            () -> resolveApiKey(ApiKeyTokenCandidate.fromPresentedRubygemsToken(token)));
   }
 
   private Optional<AuthenticatedSubject> resolveApiKey(List<ApiKeyTokenCandidate> candidates) {
@@ -881,6 +904,10 @@ public class SecurityAuthenticationService {
     if (fromKkRepoApiKey != null) {
       return fromKkRepoApiKey;
     }
+    String fromNuGetApiKey = headerValue(request, "X-NuGet-ApiKey");
+    if (fromNuGetApiKey != null) {
+      return domainScopedApiKey("NuGetApiKey", fromNuGetApiKey);
+    }
     String bearer = bearerToken(request);
     if (bearer != null) {
       return bearer;
@@ -914,6 +941,13 @@ public class SecurityAuthenticationService {
     if (!tokens.contains(normalized)) {
       tokens.add(normalized);
     }
+  }
+
+  private static String domainScopedApiKey(String domain, String token) {
+    if (token.regionMatches(true, 0, domain + ".", 0, domain.length() + 1)) {
+      return token;
+    }
+    return domain + "." + token;
   }
 
   private String bearerToken(HttpServletRequest request) {

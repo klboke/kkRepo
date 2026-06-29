@@ -27,6 +27,7 @@ class NugetPathParserTest {
   @Test
   void parsesPackagePublishAndDeleteEndpoints() {
     assertEquals(NugetPath.Kind.PACKAGE_PUBLISH, parser.parse("api/v2/package").kind());
+    assertEquals(NugetPath.Kind.PACKAGE_PUBLISH, parser.parse("api/v2/package/").kind());
     assertEquals(NugetPath.Kind.PACKAGE_DELETE, parser.parse("api/v2/package/Foo/1.0.0").kind());
   }
 }

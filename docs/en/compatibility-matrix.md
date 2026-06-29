@@ -4,6 +4,8 @@ This matrix summarizes the public compatibility surface of kkrepo. It is intenti
 
 For deeper validation workflow details, see [Nexus Compatibility Testing](nexus-compatibility-testing.md).
 
+The validation classes listed below are black-box protocol checks. The `client-e2e` suite adds real package-client coverage across Maven, npm, PyPI, Go resolve, Helm, Cargo/Rust, NuGet, RubyGems, Yum, and Docker/OCI; see [compat-test README](../../compat-test/README.md) for the runner requirements and `artifacts/client-e2e/` diagnostics.
+
 ## Compatibility Principles
 
 - Keep the Nexus `/repository/<repo>/...` URL layout for existing client configuration.

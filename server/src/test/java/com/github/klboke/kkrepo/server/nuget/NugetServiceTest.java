@@ -196,6 +196,20 @@ class NugetServiceTest {
   }
 
   @Test
+  void putPackageAcceptsDotnetPushTrailingSlashEndpoint() throws Exception {
+    FakeRawHostedService hosted = new FakeRawHostedService();
+    NugetService service = new NugetService(hosted, null, new FakeAssetDao(List.of()), MAPPER);
+
+    MavenResponse response = service.putPackage(hosted(), "api/v2/package/",
+        new ByteArrayInputStream(nupkg("NuGet.TrailingSlash", "1.2.3")),
+        "application/octet-stream", "admin", "127.0.0.1");
+
+    assertEquals(201, response.status());
+    assertEquals("v3-flatcontainer/nuget.trailingslash/1.2.3/nuget.trailingslash.1.2.3.nupkg",
+        hosted.packagePath);
+  }
+
+  @Test
   void deletePackageReturnsNoContentWhenAnyStoredAssetWasDeleted() {
     FakeRawHostedService hosted = new FakeRawHostedService();
     hosted.deleteStatuses = new int[] {204, 404};

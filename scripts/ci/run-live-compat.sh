@@ -46,13 +46,16 @@ case "$SUITE" in
     export CARGO_COMPAT_ENABLED=true
     run_tests "CargoRepositoryBlackBoxCompatibilityTest"
     ;;
+  client-e2e)
+    scripts/ci/run-client-e2e.sh
+    ;;
   full)
     export CARGO_COMPAT_ENABLED=true
     mvn "${COMMON_ARGS[@]}" test
     ;;
   *)
     echo "Unknown live compatibility suite: $SUITE" >&2
-    echo "Available suites: smoke, write-smoke, extended, cargo, full" >&2
+    echo "Available suites: smoke, write-smoke, extended, cargo, client-e2e, full" >&2
     exit 2
     ;;
 esac

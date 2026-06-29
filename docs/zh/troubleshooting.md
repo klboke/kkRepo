@@ -210,11 +210,20 @@ docker compose -f docker-compose.compat.yml down -v
 
 Cargo 兼容性测试使用 Nexus 3.77.x+ 参考 compose 文件和 `cargo` suite。运行 Cargo 读写检查前请先查看 [compat-test README](../../compat-test/README.md)。
 
+如果需要覆盖真实包管理器客户端，请对同一个一次性 kkrepo 候选实例运行客户端 E2E：
+
+```bash
+scripts/ci/run-live-compat.sh client-e2e
+```
+
+它依赖 [compat-test README](../../compat-test/README.md) 中列出的真实客户端和 SDK。日志、下载到的 metadata 和 inspect 输出会写入 `artifacts/client-e2e/`。
+
 如果 live 检查失败：
 
 - 确认选择的 suite。
 - 检查 Docker Compose 服务健康状态。
 - 查看 `nexus` 和 `kkrepo` 日志。
+- 对 `client-e2e`，优先查看对应的 `artifacts/client-e2e/*.log` 文件；里面包含脱敏后的真实客户端命令和输出。
 - 确认 base URL 和凭据配置正确。
 - 运行写入类 suite 前，确认确实需要启用写测试。
 

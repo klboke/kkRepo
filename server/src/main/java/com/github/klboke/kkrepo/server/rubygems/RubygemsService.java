@@ -305,7 +305,7 @@ public class RubygemsService {
           "name", gem.name(),
           "number", gem.version(),
           "platform", gem.platform(),
-          "dependencies", gem.dependencies()));
+          "dependencies", dependencyApiDependencies(gem.dependencies())));
     }
     return bytes(marshal.toByteArray(), "application/octet-stream", headOnly);
   }
@@ -1117,6 +1117,27 @@ public class RubygemsService {
       }
     }
     return out.toString();
+  }
+
+  private static Map<String, Object> dependencyApiDependencies(List<GemDependency> dependencies) {
+    Map<String, Object> out = new LinkedHashMap<>();
+    if (dependencies == null) {
+      return out;
+    }
+    for (GemDependency dep : dependencies) {
+      if (dep.name() == null || dep.name().isBlank()) {
+        continue;
+      }
+      out.put(dep.name(), dependencyApiRequirement(dep.requirements()));
+    }
+    return out;
+  }
+
+  private static String dependencyApiRequirement(List<String> requirements) {
+    if (requirements == null || requirements.isEmpty()) {
+      return ">= 0";
+    }
+    return String.join(", ", requirements);
   }
 
   private static int compareGemVersions(String left, String right) {

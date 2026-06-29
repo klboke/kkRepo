@@ -13,6 +13,7 @@ on:
           - write-smoke
           - extended
           - cargo
+          - client-e2e
           - full
   schedule:
     - cron: "0 19 * * *"
@@ -34,14 +35,14 @@ concurrency:
 
 jobs:
   live-compat:
-    name: Live compatibility
+    name: ${{ ((github.event_name == 'workflow_dispatch' && inputs.suite == 'client-e2e') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && 'Client E2E compatibility' || 'Live compatibility' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 75
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.suite != 'cargo') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-live-compat'))
+    timeout-minutes: 120
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.suite != 'cargo') || (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-live-compat') || contains(github.event.pull_request.labels.*.name, 'run-client-e2e')))
     env:
       COMPOSE_FILE: docker-compose.compat.yml
       COMPOSE_PROJECT_NAME: kkrepo-compat
-      LIVE_COMPAT_SUITE: ${{ github.event_name == 'workflow_dispatch' && inputs.suite || 'smoke' }}
+      LIVE_COMPAT_SUITE: ${{ github.event_name == 'workflow_dispatch' && inputs.suite || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e') && 'client-e2e') || 'smoke' }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -55,6 +56,52 @@ jobs:
           java-version: "25"
           cache: maven
 
+      - name: Set up Node.js
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e'
+        uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+
+      - name: Set up Python
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e'
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Set up Go
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e'
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.x"
+
+      - name: Set up .NET
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e'
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Set up Ruby
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e'
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+
+      - name: Set up Rust
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Helm
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e'
+        uses: azure/setup-helm@v4
+
+      - name: Set up ORAS
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e'
+        uses: oras-project/setup-oras@v1
+
+      - name: Install Python client build tools
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e'
+        run: python -m pip install --upgrade build twine
+
       - name: Validate live compatibility compose file
         run: docker compose -f "$COMPOSE_FILE" config
 
@@ -67,7 +114,12 @@ jobs:
       - name: Prepare live compatibility fixtures
         run: scripts/ci/live-compat-setup.sh
 
-      - name: Run live compatibility suite
+      - name: Run client E2E suite
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e'
+        run: scripts/ci/run-live-compat.sh "$LIVE_COMPAT_SUITE"
+
+      - name: Run non-client live compatibility suite
+        if: env.LIVE_COMPAT_SUITE != 'client-e2e'
         run: scripts/ci/run-live-compat.sh "$LIVE_COMPAT_SUITE"
 
       - name: Collect compose logs

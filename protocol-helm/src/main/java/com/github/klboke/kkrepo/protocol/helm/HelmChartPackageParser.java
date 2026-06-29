@@ -5,9 +5,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Map;
+import java.util.zip.GZIPInputStream;
 import org.apache.commons.compress.archivers.ArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
-import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
 import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.SafeConstructor;
@@ -28,16 +28,27 @@ public final class HelmChartPackageParser {
   }
 
   private byte[] readChartYaml(InputStream input) throws IOException {
-    try (GzipCompressorInputStream gzip = new GzipCompressorInputStream(input);
+    try (GZIPInputStream gzip = new GZIPInputStream(input);
          TarArchiveInputStream tar = new TarArchiveInputStream(gzip)) {
       ArchiveEntry entry;
       while ((entry = tar.getNextEntry()) != null) {
-        if (!entry.isDirectory() && entry.getName().endsWith(CHART_YAML)) {
+        if (!entry.isDirectory() && isChartYamlEntry(entry.getName())) {
           return readCurrentEntry(tar);
         }
       }
     }
     throw new IllegalArgumentException(CHART_YAML + " not found in Helm chart package");
+  }
+
+  private static boolean isChartYamlEntry(String name) {
+    if (name == null) return false;
+    String normalized = name.replace('\\', '/');
+    if (normalized.startsWith("./")) normalized = normalized.substring(2);
+    if (CHART_YAML.equals(normalized)) return true;
+    int firstSlash = normalized.indexOf('/');
+    return firstSlash > 0
+        && normalized.indexOf('/', firstSlash + 1) < 0
+        && normalized.substring(firstSlash + 1).equals(CHART_YAML);
   }
 
   private static byte[] readCurrentEntry(TarArchiveInputStream tar) throws IOException {

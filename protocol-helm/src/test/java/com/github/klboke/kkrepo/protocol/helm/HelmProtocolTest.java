@@ -1,10 +1,12 @@
 package com.github.klboke.kkrepo.protocol.helm;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
@@ -23,6 +25,26 @@ class HelmProtocolTest {
     assertEquals("demo", metadata.name());
     assertEquals("1.2.3", metadata.version());
     assertEquals("v2", metadata.apiVersion());
+  }
+
+  @Test
+  void parsesChartYamlFromHelmPackageWithGzipExtraHeader() throws Exception {
+    HelmChartMetadata metadata = new HelmChartPackageParser()
+        .parse(new ByteArrayInputStream(gzipWithExtraHeader(chartTar("demo", "1.2.3"))));
+
+    assertEquals("demo", metadata.name());
+    assertEquals("1.2.3", metadata.version());
+    assertEquals("v2", metadata.apiVersion());
+  }
+
+  @Test
+  void ignoresMetadataFilesThatOnlyEndWithChartYaml() throws Exception {
+    byte[] bytes = chartPackageWithEntry("demo/._Chart.yaml", "not valid utf8 \u0000");
+
+    IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+        () -> new HelmChartPackageParser().parse(new ByteArrayInputStream(bytes)));
+
+    assertEquals("Chart.yaml not found in Helm chart package", error.getMessage());
   }
 
   @Test
@@ -91,9 +113,12 @@ class HelmProtocolTest {
   }
 
   private static byte[] chartPackage(String name, String version) throws Exception {
-    ByteArrayOutputStream gzipBytes = new ByteArrayOutputStream();
-    try (GZIPOutputStream gzip = new GZIPOutputStream(gzipBytes);
-         TarArchiveOutputStream tar = new TarArchiveOutputStream(gzip)) {
+    return gzip(chartTar(name, version));
+  }
+
+  private static byte[] chartTar(String name, String version) throws Exception {
+    ByteArrayOutputStream tarBytes = new ByteArrayOutputStream();
+    try (TarArchiveOutputStream tar = new TarArchiveOutputStream(tarBytes)) {
       tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX);
       putEntry(tar, name + "/Chart.yaml", """
           apiVersion: v2
@@ -107,7 +132,42 @@ class HelmProtocolTest {
             name: demo
           """);
     }
+    return tarBytes.toByteArray();
+  }
+
+  private static byte[] chartPackageWithEntry(String entryName, String body) throws Exception {
+    ByteArrayOutputStream tarBytes = new ByteArrayOutputStream();
+    try (TarArchiveOutputStream tar = new TarArchiveOutputStream(tarBytes)) {
+      tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX);
+      putEntry(tar, entryName, body);
+    }
+    return gzip(tarBytes.toByteArray());
+  }
+
+  private static byte[] gzip(byte[] body) throws IOException {
+    ByteArrayOutputStream gzipBytes = new ByteArrayOutputStream();
+    try (GZIPOutputStream gzip = new GZIPOutputStream(gzipBytes)) {
+      gzip.write(body);
+    }
     return gzipBytes.toByteArray();
+  }
+
+  private static byte[] gzipWithExtraHeader(byte[] body) throws IOException {
+    byte[] gzip = gzip(body);
+    byte[] extra = "+aHR0cHM6Ly95b3V0dS5iZS96OVV6MWljandyTQo=Helm".getBytes(StandardCharsets.US_ASCII);
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    out.write(0x1f);
+    out.write(0x8b);
+    out.write(8);
+    out.write(4);
+    out.write(new byte[]{0, 0, 0, 0}, 0, 4);
+    out.write(0);
+    out.write(255);
+    out.write(extra.length & 0xff);
+    out.write((extra.length >>> 8) & 0xff);
+    out.write(extra, 0, extra.length);
+    out.write(gzip, 10, gzip.length - 10);
+    return out.toByteArray();
   }
 
   private static void putEntry(TarArchiveOutputStream tar, String name, String body) throws Exception {

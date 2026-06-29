@@ -1,6 +1,6 @@
 # Nexus Compatibility Testing
 
-kkrepo is not intended to reinvent artifact repository behavior. Its goal is to stay compatible with Nexus in client protocols, the permission/authentication model, and the `/repository/<repo>/...` URL layout. Compatibility validation is split into three layers: in-project black-box tests, mirrored-traffic observation after migration, and production-scale validation.
+kkrepo is not intended to reinvent artifact repository behavior. Its goal is to stay compatible with Nexus in client protocols, the permission/authentication model, and the `/repository/<repo>/...` URL layout. Compatibility validation is split into four layers: in-project black-box tests, real client E2E checks, mirrored-traffic observation after migration, and production-scale validation.
 
 ## In-Project Compatibility Test Module
 
@@ -58,9 +58,23 @@ This avoids accidentally writing test packages to a long-running Nexus reference
 
 Cargo / Rust compatibility uses a Nexus Repository 3.77.x+ Community Edition reference because older default compatibility references do not expose Community Cargo repositories. Use the `cargo` suite in `scripts/ci/run-live-compat.sh`; it covers hosted, proxy, and group repositories, including write behavior when enabled.
 
+## Real Client E2E
+
+The `client-e2e` suite validates the behavior of actual package clients against a disposable kkrepo candidate:
+
+```bash
+scripts/ci/run-live-compat.sh client-e2e
+```
+
+It runs publish/upload plus download/resolve flows for Maven, npm, PyPI, Helm, Cargo/Rust, NuGet, RubyGems, Yum, and Docker/OCI. Go is resolve-only through the Go module proxy because hosted Go publishing is not a supported repository mode. Docker image push/pull is always covered, and ORAS pushes/pulls a generic OCI artifact when the `oras` client is available.
+
+Use this suite when a change affects repository protocol behavior that real clients exercise: authentication headers or API keys, publish/upload paths, generated metadata, package index shape, checksum/download behavior, Docker connector ports, or group/proxy resolution. In GitHub Actions, run it manually by selecting `client-e2e` in the `Live Compatibility` workflow, or add the `run-client-e2e` label to a PR.
+
+Client command logs, downloaded metadata, selected inspect output, and other diagnostics are written under `artifacts/client-e2e/`. The suite depends on the real tools listed in [compat-test README](../../compat-test/README.md), so a local workstation may need extra SDKs or package managers before it can run the full matrix.
+
 ## Traffic Mirroring Validation
 
-In addition to in-project black-box compatibility tests, after migrating Nexus to kkrepo, we mirrored 100% of real production traffic to kkrepo through Istio to observe how kkrepo responds to real client requests.
+In addition to in-project black-box compatibility tests and real client E2E checks, after migrating Nexus to kkrepo, we mirrored 100% of real production traffic to kkrepo through Istio to observe how kkrepo responds to real client requests.
 
 This historical validation stage aims to:
 
@@ -112,7 +126,7 @@ When a compatibility difference is found, handle it in this order:
 
 1. Identify the request type first: repository protocol request, admin UI request, Script API request, or health check.
 2. If it is a repository protocol request, first add a reproducible Nexus comparison case in `compat-test`.
-3. Compare Nexus and kkrepo status, headers, response body, metadata, checksum, and real client behavior.
+3. Compare Nexus and kkrepo status, headers, response body, metadata, checksum, and real client behavior. Run `client-e2e` when the changed path is exercised by package clients directly.
 4. Implement the minimal compatible fix in kkrepo.
 5. Re-run the corresponding `compat-test`; if needed, observe mirrored traffic to verify real requests recover.
 

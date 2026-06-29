@@ -17,6 +17,7 @@ KKREPO_USER="${KKREPO_COMPAT_USERNAME:-admin}"
 KKREPO_PASSWORD="${KKREPO_COMPAT_PASSWORD:-12345678}"
 KKREPO_AUTH="$KKREPO_USER:$KKREPO_PASSWORD"
 KKREPO_BLOB_PATH="${KKREPO_COMPAT_BLOB_PATH:-/tmp/kkrepo-blobs/default}"
+KKREPO_DOCKER_CONNECTOR_PORT="${KKREPO_DOCKER_CONNECTOR_PORT:-18180}"
 
 START_TIMEOUT_SECONDS="${LIVE_COMPAT_START_TIMEOUT_SECONDS:-240}"
 
@@ -344,6 +345,179 @@ ensure_kkrepo_repositories() {
     "strictContentTypeValidation":true,
     "group":{"memberNames":["npm-hosted","npm-proxy"]}
   }'
+
+  kkrepo_create_repo "pypi-hosted" '{
+    "name":"pypi-hosted",
+    "recipe":"pypi-hosted",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "hosted":{"writePolicy":"ALLOW"}
+  }'
+
+  kkrepo_create_repo "pypi-proxy" '{
+    "name":"pypi-proxy",
+    "recipe":"pypi-proxy",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "proxy":{"remoteUrl":"https://pypi.org/","contentMaxAgeMinutes":1440,"metadataMaxAgeMinutes":1440,"autoBlock":true}
+  }'
+
+  kkrepo_create_repo "pypi-group" '{
+    "name":"pypi-group",
+    "recipe":"pypi-group",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "group":{"memberNames":["pypi-hosted","pypi-proxy"]}
+  }'
+
+  kkrepo_create_repo "go-proxy" '{
+    "name":"go-proxy",
+    "recipe":"go-proxy",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "proxy":{"remoteUrl":"https://proxy.golang.org/","contentMaxAgeMinutes":1440,"metadataMaxAgeMinutes":1440,"autoBlock":true}
+  }'
+
+  kkrepo_create_repo "go-group" '{
+    "name":"go-group",
+    "recipe":"go-group",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "group":{"memberNames":["go-proxy"]}
+  }'
+
+  kkrepo_create_repo "helm-hosted" '{
+    "name":"helm-hosted",
+    "recipe":"helm-hosted",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "hosted":{"writePolicy":"ALLOW"}
+  }'
+
+  kkrepo_create_repo "cargo-hosted" '{
+    "name":"cargo-hosted",
+    "recipe":"cargo-hosted",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "hosted":{"writePolicy":"ALLOW"}
+  }'
+
+  kkrepo_create_repo "cargo-proxy" '{
+    "name":"cargo-proxy",
+    "recipe":"cargo-proxy",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "proxy":{"remoteUrl":"https://index.crates.io/","contentMaxAgeMinutes":1440,"metadataMaxAgeMinutes":1440,"autoBlock":true},
+    "cargo":{"requireAuthentication":false}
+  }'
+
+  kkrepo_create_repo "cargo-group" '{
+    "name":"cargo-group",
+    "recipe":"cargo-group",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "group":{"memberNames":["cargo-hosted","cargo-proxy"]},
+    "cargo":{"requireAuthentication":true}
+  }'
+
+  kkrepo_create_repo "nuget-hosted" '{
+    "name":"nuget-hosted",
+    "recipe":"nuget-hosted",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "hosted":{"writePolicy":"ALLOW"}
+  }'
+
+  kkrepo_create_repo "nuget-proxy" '{
+    "name":"nuget-proxy",
+    "recipe":"nuget-proxy",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "proxy":{"remoteUrl":"https://api.nuget.org/v3/index.json","contentMaxAgeMinutes":1440,"metadataMaxAgeMinutes":1440,"autoBlock":false}
+  }'
+
+  kkrepo_create_repo "nuget-group" '{
+    "name":"nuget-group",
+    "recipe":"nuget-group",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "group":{"memberNames":["nuget-hosted","nuget-proxy"]}
+  }'
+
+  kkrepo_create_repo "rubygems-hosted" '{
+    "name":"rubygems-hosted",
+    "recipe":"rubygems-hosted",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "hosted":{"writePolicy":"ALLOW"}
+  }'
+
+  kkrepo_create_repo "rubygems-proxy" '{
+    "name":"rubygems-proxy",
+    "recipe":"rubygems-proxy",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "proxy":{"remoteUrl":"https://rubygems.org/","contentMaxAgeMinutes":1440,"metadataMaxAgeMinutes":1440,"autoBlock":true}
+  }'
+
+  kkrepo_create_repo "rubygems-group" '{
+    "name":"rubygems-group",
+    "recipe":"rubygems-group",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "group":{"memberNames":["rubygems-hosted","rubygems-proxy"]}
+  }'
+
+  kkrepo_create_repo "yum-hosted" '{
+    "name":"yum-hosted",
+    "recipe":"yum-hosted",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "hosted":{"writePolicy":"ALLOW"}
+  }'
+
+  kkrepo_create_repo "yum-group" '{
+    "name":"yum-group",
+    "recipe":"yum-group",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "group":{"memberNames":["yum-hosted"]}
+  }'
+
+  kkrepo_create_repo "docker-hosted" "{
+    \"name\":\"docker-hosted\",
+    \"recipe\":\"docker-hosted\",
+    \"online\":true,
+    \"blobStoreName\":\"default\",
+    \"strictContentTypeValidation\":true,
+    \"hosted\":{\"writePolicy\":\"ALLOW\"},
+    \"docker\":{\"connectorEnabled\":true,\"connectorPort\":$KKREPO_DOCKER_CONNECTOR_PORT}
+  }"
+}
+
+refresh_kkrepo_docker_connectors() {
+  echo "[compat] refreshing kkrepo Docker connectors"
+  curl -m 30 -fsS \
+    -u "$KKREPO_AUTH" \
+    -X POST \
+    "$KKREPO_URL/internal/docker/connectors/refresh" >/dev/null
 }
 
 wait_for_http "Nexus status endpoint" "$NEXUS_URL/service/rest/v1/status"
@@ -355,5 +529,6 @@ ensure_nexus_repositories
 initialize_kkrepo_admin
 ensure_kkrepo_blob_store
 ensure_kkrepo_repositories
+refresh_kkrepo_docker_connectors
 
 echo "[compat] live compatibility environment is ready"

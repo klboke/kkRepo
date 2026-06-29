@@ -84,7 +84,7 @@ public class CargoGroupService {
       if (lastUpstream != null) {
         throw lastUpstream;
       }
-      throw new CargoExceptions.CargoNotFoundException(crateName);
+      throw new CargoExceptions.CargoIndexNotFoundException(crateName);
     }
     return CargoResponses.text(String.join("\n", byVersion.values()) + "\n", null, lastModified, headOnly);
   }

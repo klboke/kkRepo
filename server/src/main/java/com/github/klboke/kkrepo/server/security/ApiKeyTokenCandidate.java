@@ -7,16 +7,22 @@ import java.util.List;
 record ApiKeyTokenCandidate(String domain, String tokenMaterial) {
   private static final String NPM_TOKEN_DOMAIN = "NpmToken";
   private static final String CARGO_TOKEN_DOMAIN = "CargoToken";
+  private static final String NUGET_API_KEY_DOMAIN = "NuGetApiKey";
+  private static final String RUBYGEMS_API_KEY_DOMAIN = "RubyGemsApiKey";
 
   static List<ApiKeyTokenCandidate> fromPresentedToken(String token) {
-    return fromPresentedToken(token, false);
+    return fromPresentedToken(token, null);
   }
 
   static List<ApiKeyTokenCandidate> fromPresentedCargoToken(String token) {
-    return fromPresentedToken(token, true);
+    return fromPresentedToken(token, CARGO_TOKEN_DOMAIN);
   }
 
-  private static List<ApiKeyTokenCandidate> fromPresentedToken(String token, boolean preferCargoDomain) {
+  static List<ApiKeyTokenCandidate> fromPresentedRubygemsToken(String token) {
+    return fromPresentedToken(token, RUBYGEMS_API_KEY_DOMAIN);
+  }
+
+  private static List<ApiKeyTokenCandidate> fromPresentedToken(String token, String preferredDomain) {
     String value = normalize(token);
     if (value == null) {
       return List.of();
@@ -31,8 +37,17 @@ record ApiKeyTokenCandidate(String domain, String tokenMaterial) {
       }
     } else {
       // Bare tokens are checked in Nexus-compatible token domains before the full-token fallback.
-      add(candidates, preferCargoDomain ? CARGO_TOKEN_DOMAIN : NPM_TOKEN_DOMAIN, value);
-      add(candidates, preferCargoDomain ? NPM_TOKEN_DOMAIN : CARGO_TOKEN_DOMAIN, value);
+      add(candidates, preferredDomain == null ? NPM_TOKEN_DOMAIN : preferredDomain, value);
+      if (!NPM_TOKEN_DOMAIN.equals(preferredDomain)) {
+        add(candidates, NPM_TOKEN_DOMAIN, value);
+      }
+      if (!CARGO_TOKEN_DOMAIN.equals(preferredDomain)) {
+        add(candidates, CARGO_TOKEN_DOMAIN, value);
+      }
+      add(candidates, NUGET_API_KEY_DOMAIN, value);
+      if (RUBYGEMS_API_KEY_DOMAIN.equals(preferredDomain)) {
+        add(candidates, RUBYGEMS_API_KEY_DOMAIN, value);
+      }
     }
     add(candidates, null, value);
     return new ArrayList<>(candidates.values());

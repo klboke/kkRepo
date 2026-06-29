@@ -69,6 +69,43 @@ class RepositoryContentControllerNugetTest {
     assertEquals("fake nupkg", nuget.body);
   }
 
+  @Test
+  void packagePublishPutPreservesDotnetPushPathWithTrailingSlash() throws Exception {
+    FakeRepositoryDao repositories = new FakeRepositoryDao();
+    repositories.repository(repository("nuget-hosted", RepositoryFormat.NUGET, RepositoryType.HOSTED));
+    CapturingNugetService nuget = new CapturingNugetService();
+    RepositoryContentController controller = controller(repositories, nuget);
+    MockHttpServletRequest request = new MockHttpServletRequest(
+        "PUT", "/repository/nuget-hosted/api/v2/package/");
+    request.setContentType("application/octet-stream");
+    request.setContent("fake nupkg".getBytes(StandardCharsets.UTF_8));
+
+    ResponseEntity<?> response = controller.put("nuget-hosted", request, request.getContentType());
+
+    assertEquals(201, response.getStatusCode().value());
+    assertEquals(NugetPaths.PACKAGE_PUBLISH + "/", nuget.rawPath);
+    assertEquals("fake nupkg", nuget.body);
+  }
+
+  @Test
+  void packagePublishMultipartPutAcceptsDotnetPushEndpoint() throws Exception {
+    FakeRepositoryDao repositories = new FakeRepositoryDao();
+    repositories.repository(repository("nuget-hosted", RepositoryFormat.NUGET, RepositoryType.HOSTED));
+    CapturingNugetService nuget = new CapturingNugetService();
+    RepositoryContentController controller = controller(repositories, nuget);
+    MockHttpServletRequest request = new MockHttpServletRequest(
+        "PUT", "/repository/nuget-hosted/api/v2/package/");
+    request.setContentType("multipart/form-data; boundary=test");
+    request.addPart(new MockPart("package", "fixture.nupkg",
+        "fake nupkg".getBytes(StandardCharsets.UTF_8)));
+
+    ResponseEntity<?> response = controller.put("nuget-hosted", request, request.getContentType());
+
+    assertEquals(201, response.getStatusCode().value());
+    assertEquals(NugetPaths.PACKAGE_PUBLISH, nuget.rawPath);
+    assertEquals("fake nupkg", nuget.body);
+  }
+
   private static RepositoryContentController controller(FakeRepositoryDao repositories, NugetService nuget) {
     return new RepositoryContentController(
         new com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry(repositories, 0),

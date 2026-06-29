@@ -151,6 +151,7 @@ class RubygemsServiceTest {
     assertTrue(hosted.generatedPaths.contains("info/demo"));
     assertTrue(hosted.generatedPaths.contains("quick/Marshal.4.8/demo-1.2.0.gemspec.rz"));
     assertFalse(hosted.generatedPaths.contains("specs.4.8.gz"));
+    assertFalse(hosted.generatedPaths.contains("latest_specs.4.8.gz"));
     assertFalse(hosted.generatedPaths.contains("versions"));
     assertFalse(hosted.generatedPaths.contains("names"));
     assertEquals(List.of("1:" + RepositoryIndexRebuildDao.RUBYGEMS_METADATA + ":"),
@@ -289,12 +290,21 @@ class RubygemsServiceTest {
   @Test
   void yankDeletesGemCoordinateAndRejectsMissingIdentity() {
     FakeRawHostedService hosted = new FakeRawHostedService(204);
-    RubygemsService service = new RubygemsService(hosted, null, null, null);
+    RecordingIndexRebuildDao indexRebuildDao = new RecordingIndexRebuildDao();
+    RubygemsService service = new RubygemsService(hosted, null, null, new FakeAssetDao(List.of()), indexRebuildDao);
 
     MavenResponse response = service.delete(hosted(), "api/v1/gems/yank?gem_name=demo&version=1.2.0");
 
     assertEquals(204, response.status());
-    assertEquals("gems/demo-1.2.0.gem", hosted.deletedPath);
+    assertEquals("gems/demo-1.2.0.gem", hosted.deletedPaths.get(0));
+    assertTrue(hosted.deletedPaths.contains("info/demo"));
+    assertTrue(hosted.deletedPaths.contains("quick/Marshal.4.8/demo-1.2.0.gemspec.rz"));
+    assertFalse(hosted.generatedPaths.contains("specs.4.8.gz"));
+    assertFalse(hosted.generatedPaths.contains("latest_specs.4.8.gz"));
+    assertFalse(hosted.generatedPaths.contains("versions"));
+    assertFalse(hosted.generatedPaths.contains("names"));
+    assertEquals(List.of("1:" + RepositoryIndexRebuildDao.RUBYGEMS_METADATA + ":"),
+        indexRebuildDao.enqueues);
     assertThrows(MavenExceptions.MethodNotAllowed.class,
         () -> service.delete(hosted(), "api/v1/gems/yank?gem_name=demo"));
   }
@@ -332,9 +342,8 @@ class RubygemsServiceTest {
     assertEquals(4, marshal[0]);
     assertEquals(8, marshal[1]);
     assertTrue(payload.contains("rack"));
-    assertTrue(payload.contains(">= 2.0.0"));
-    assertTrue(payload.contains("< 3.0.0"));
-    assertFlatBundlerDependency(marshal, "rack");
+    assertTrue(payload.contains(">= 2.0.0, < 3.0.0"));
+    assertDependencyApiUsesRequirementMap(marshal, "rack");
   }
 
   @Test
@@ -417,17 +426,17 @@ class RubygemsServiceTest {
     return count;
   }
 
-  private static void assertFlatBundlerDependency(byte[] marshal, String dependencyName) {
+  private static void assertDependencyApiUsesRequirementMap(byte[] marshal, String dependencyName) {
     byte[] needle = dependencyName.getBytes(StandardCharsets.ISO_8859_1);
     int index = indexOf(marshal, needle);
     assertTrue(index >= 0, "dependency name not found in marshal payload");
     int afterName = index + needle.length;
-    while (afterName < marshal.length && marshal[afterName] != 'T') {
+    assertTrue(index > 0 && marshal[index - 1] == dependencyName.length() + 5,
+        "dependency name should be encoded as a Ruby string key");
+    while (afterName < marshal.length && marshal[afterName] != 'I') {
       afterName++;
     }
-    assertTrue(afterName + 1 < marshal.length, "dependency string terminator not found");
-    assertEquals('I', marshal[afterName + 1],
-        "Bundler dependency constraints should be flat strings after the dependency name");
+    assertTrue(afterName < marshal.length, "dependency requirement string not found");
   }
 
   private static int indexOf(byte[] value, byte[] needle) {
@@ -583,6 +592,7 @@ class RubygemsServiceTest {
     private String putPath;
     private String generatedPath;
     private byte[] generatedBytes;
+    private final List<String> deletedPaths = new ArrayList<>();
     private final List<String> generatedPaths = new ArrayList<>();
 
     FakeRawHostedService(int deleteStatus) {
@@ -618,6 +628,7 @@ class RubygemsServiceTest {
     @Override
     public MavenResponse delete(RepositoryRuntime runtime, String rawPath) {
       deletedPath = rawPath;
+      deletedPaths.add(rawPath);
       return MavenResponse.noBody(deleteStatus);
     }
   }

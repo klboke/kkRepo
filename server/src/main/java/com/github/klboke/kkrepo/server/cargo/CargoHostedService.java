@@ -152,7 +152,7 @@ public class CargoHostedService {
     String normalizedName = CargoCrateName.parse(crateName).lowerDashUnderscoreKey();
     List<ComponentRecord> components = componentDao.listByName(runtime.id(), normalizedName);
     if (components.isEmpty()) {
-      throw new CargoExceptions.CargoNotFoundException(crateName);
+      throw new CargoExceptions.CargoIndexNotFoundException(crateName);
     }
     StringBuilder body = new StringBuilder();
     for (ComponentRecord component : components) {

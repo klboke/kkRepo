@@ -88,6 +88,7 @@ Cargo / Rust 第一阶段仓库能力已实现，覆盖 hosted、proxy 和 group
    - 对比 `config.json`、missing crate index、index ETag/304、private repository auth challenge、publish、download、yank、unyank、proxy cache 和 group merge 行为。
    - 使用 Cargo 1.68+ 和当前稳定版 Cargo 验证 `cargo fetch`、`cargo build --locked`、`cargo publish`、`cargo yank`、`cargo yank --undo`。
    - 验证 `.cargo/config.toml` 中 alternate registry 和 source replacement 两种配置，文档中明确二者适用边界。
+   - 需要把 Cargo 变更纳入全仓库真实客户端矩阵时，运行 `scripts/ci/run-live-compat.sh client-e2e`。
 
 ### 已落地增强、待定项和非目标
 

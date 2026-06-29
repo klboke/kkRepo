@@ -155,6 +155,14 @@ mvn -pl compat-test -am test
 
 Live black-box 测试默认跳过，需要显式提供 Nexus 参考实例和 kkrepo 地址。具体命令见 [compat-test/README.md](../../compat-test/README.md)。
 
+如果变更路径会被真实包管理器客户端直接触达，请在一次性兼容性环境准备完成后运行真实客户端 E2E：
+
+```bash
+scripts/ci/run-live-compat.sh client-e2e
+```
+
+该 suite 会通过 Maven、npm、PyPI、Helm、Cargo/Rust、NuGet、RubyGems、Yum、Docker/OCI 客户端发布/上传并下载/解析。Go 通过 Go module proxy 做 resolve-only 验证。客户端诊断信息会写入 `artifacts/client-e2e/`。
+
 ## 开发设计文档
 
 仓库格式和迁移工作的详细设计、实现计划集中放在 `docs/zh/dev/`：

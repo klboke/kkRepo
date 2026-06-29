@@ -48,6 +48,14 @@ scripts/ci/run-live-compat.sh smoke
 docker compose -f docker-compose.compat.yml down -v
 ```
 
+When a protocol change affects behavior that real package clients exercise directly, run the real client E2E suite against the same disposable kkrepo candidate:
+
+```bash
+scripts/ci/run-live-compat.sh client-e2e
+```
+
+It covers Maven, npm, PyPI, Go resolve, Helm, Cargo/Rust, NuGet, RubyGems, Yum, and Docker/OCI client flows. Logs and downloaded metadata are written under `artifacts/client-e2e/`.
+
 See [compat-test/README.md](compat-test/README.md) for suite options, environment variables, and Maven properties.
 
 ## Compatibility Expectations
@@ -90,9 +98,10 @@ mvn -B -ntp -pl compat-test -am -Dtest=MavenMetadataMergeCompatibilityTest,Maven
 ```
 
 The separate `Live Compatibility` workflow builds a candidate Docker image, starts a disposable
-Nexus reference plus kkrepo, bootstraps both environments, and runs black-box compatibility
-checks. It runs nightly, can be started manually, and runs for PRs only after the
-`run-live-compat` label is added.
+Nexus reference plus kkrepo, bootstraps both environments, and runs black-box compatibility or
+real client E2E checks. It runs nightly, can be started manually, runs smoke/Cargo checks for PRs
+after the `run-live-compat` label is added, and runs the real client matrix after the
+`run-client-e2e` label is added.
 
 ## Documentation
 

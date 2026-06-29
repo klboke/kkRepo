@@ -105,6 +105,31 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
+  void rubygemsRepositoriesUseRubygemsAuthentication() throws Exception {
+    AuthenticatedSubject alice = subject("alice");
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
+    authentication.rubygemsAuthenticated = Optional.of(alice);
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository("rubygems-hosted", RepositoryFormat.RUBYGEMS)),
+        false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("POST", "/repository/rubygems-hosted/api/v1/gems"),
+        response.proxy(),
+        chain);
+
+    assertEquals(1, authentication.rubygemsCalls);
+    assertEquals(1, chain.calls);
+    assertSame(alice.permissionSubject(), decisions.subject);
+    assertEquals(PermissionAction.ADD, decisions.permission.action());
+  }
+
+  @Test
   void cargoSparseIndexRequiresAuthenticationWhenAnonymousReadIsDisabled() throws Exception {
     assertCargoReadRequiresAuthenticationWithoutAnonymousFallback("/repository/cargo-hosted/kk/re/kkrepo_e2e");
   }
@@ -690,6 +715,8 @@ class RepositorySecurityFilterTest {
     private final Optional<AuthenticatedSubject> authenticated;
     private final AuthenticatedSubject anonymous;
     private int anonymousCalls;
+    private Optional<AuthenticatedSubject> rubygemsAuthenticated = Optional.empty();
+    private int rubygemsCalls;
 
     private StubAuthenticationService(AuthenticatedSubject anonymous) {
       this(Optional.empty(), anonymous);
@@ -708,6 +735,12 @@ class RepositorySecurityFilterTest {
     @Override
     public Optional<AuthenticatedSubject> authenticate(HttpServletRequest request) {
       return authenticated;
+    }
+
+    @Override
+    public Optional<AuthenticatedSubject> authenticateRubygems(HttpServletRequest request) {
+      rubygemsCalls++;
+      return rubygemsAuthenticated;
     }
 
     @Override

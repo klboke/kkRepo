@@ -155,6 +155,14 @@ mvn -pl compat-test -am test
 
 Live black-box tests are skipped by default and require explicit Nexus reference and kkrepo URLs. Commands are documented in [compat-test/README.md](../../compat-test/README.md).
 
+For protocol paths that real package managers exercise directly, run the real client E2E suite after the disposable compatibility environment is prepared:
+
+```bash
+scripts/ci/run-live-compat.sh client-e2e
+```
+
+This suite publishes/uploads and then downloads/resolves through Maven, npm, PyPI, Helm, Cargo/Rust, NuGet, RubyGems, Yum, and Docker/OCI clients. Go is resolve-only through the Go module proxy. Client diagnostics are written under `artifacts/client-e2e/`.
+
 ## Development Design Documents
 
 Detailed design and implementation plans for repository formats and migration work are kept under `docs/en/dev/`:

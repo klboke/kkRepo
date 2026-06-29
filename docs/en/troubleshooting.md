@@ -210,11 +210,20 @@ docker compose -f docker-compose.compat.yml down -v
 
 Cargo compatibility uses a Nexus 3.77.x+ reference compose file and the `cargo` suite. See [compat-test README](../../compat-test/README.md) before running Cargo read/write checks.
 
+For real package client coverage, run the client E2E suite against the same disposable kkrepo candidate:
+
+```bash
+scripts/ci/run-live-compat.sh client-e2e
+```
+
+It requires the real package clients and SDKs listed in [compat-test README](../../compat-test/README.md). Logs, downloaded metadata, and inspect outputs are stored under `artifacts/client-e2e/`.
+
 If live checks fail:
 
 - Confirm the selected suite.
 - Check Docker Compose service health.
 - Inspect `nexus` and `kkrepo` logs.
+- For `client-e2e`, inspect the matching `artifacts/client-e2e/*.log` file first; it contains the exact sanitized client command and output.
 - Verify the configured base URLs and credentials.
 - Make sure write tests are intentionally enabled before running write suites.
 

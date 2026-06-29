@@ -480,6 +480,12 @@ Browse UI：
 
 ### 真实客户端测试
 
+全仓库真实客户端矩阵也会覆盖 Docker image push/pull，以及可选的 ORAS artifact push/pull：
+
+```bash
+scripts/ci/run-live-compat.sh client-e2e
+```
+
 建议脚本：
 
 ```bash
