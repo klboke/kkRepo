@@ -82,6 +82,33 @@ class CargoProxyServiceTest {
   }
 
   @Test
+  void missingDownloadKeepsCargoApiNotFoundShapeWhenSparseIndexIsMissing() {
+    AssetDao assetDao = mock(AssetDao.class);
+    when(assetDao.findAssetByPath(anyLong(), anyString())).thenReturn(Optional.empty());
+    ProxyStateDao proxyState = mock(ProxyStateDao.class);
+    when(proxyState.isBlocked(anyLong(), org.mockito.ArgumentMatchers.any(Instant.class))).thenReturn(false);
+    CountingFetcher fetcher = new CountingFetcher(new HttpRemoteFetcher.Result(
+        451, Map.of(), InputStream.nullInputStream()));
+    CargoProxyService service = new CargoProxyService(
+        assetDao,
+        mock(ComponentDao.class),
+        mock(BlobStorageRegistry.class),
+        mock(CargoAssetWriter.class),
+        mock(CargoAssetReader.class),
+        proxyState,
+        fetcher,
+        new ProxyNegativeCache(new InMemorySharedCache(), true, 1440),
+        new AssetMetadataCache(new InMemorySharedCache(), false, 0, 0),
+        new ObjectMapper());
+
+    CargoExceptions.CargoNotFoundException error = assertThrows(CargoExceptions.CargoNotFoundException.class,
+        () -> service.download(runtime(), "missing-crate", "1.0.0", false));
+
+    assertFalse(error instanceof CargoExceptions.CargoIndexNotFoundException);
+    assertEquals("missing-crate 1.0.0", error.getMessage());
+  }
+
+  @Test
   void proxyConfigAdvertisesNexusCompatibleDownloadBase() throws Exception {
     ObjectMapper mapper = new ObjectMapper();
     CargoProxyService service = new CargoProxyService(

@@ -150,10 +150,10 @@ class RubygemsServiceTest {
     assertEquals("gems/demo-1.2.0.gem", hosted.putPath);
     assertTrue(hosted.generatedPaths.contains("info/demo"));
     assertTrue(hosted.generatedPaths.contains("quick/Marshal.4.8/demo-1.2.0.gemspec.rz"));
-    assertTrue(hosted.generatedPaths.contains("specs.4.8.gz"));
-    assertTrue(hosted.generatedPaths.contains("latest_specs.4.8.gz"));
-    assertTrue(hosted.generatedPaths.contains("versions"));
-    assertTrue(hosted.generatedPaths.contains("names"));
+    assertFalse(hosted.generatedPaths.contains("specs.4.8.gz"));
+    assertFalse(hosted.generatedPaths.contains("latest_specs.4.8.gz"));
+    assertFalse(hosted.generatedPaths.contains("versions"));
+    assertFalse(hosted.generatedPaths.contains("names"));
     assertEquals(List.of("1:" + RepositoryIndexRebuildDao.RUBYGEMS_METADATA + ":"),
         indexRebuildDao.enqueues);
   }
@@ -290,12 +290,21 @@ class RubygemsServiceTest {
   @Test
   void yankDeletesGemCoordinateAndRejectsMissingIdentity() {
     FakeRawHostedService hosted = new FakeRawHostedService(204);
-    RubygemsService service = new RubygemsService(hosted, null, null, null);
+    RecordingIndexRebuildDao indexRebuildDao = new RecordingIndexRebuildDao();
+    RubygemsService service = new RubygemsService(hosted, null, null, new FakeAssetDao(List.of()), indexRebuildDao);
 
     MavenResponse response = service.delete(hosted(), "api/v1/gems/yank?gem_name=demo&version=1.2.0");
 
     assertEquals(204, response.status());
-    assertEquals("gems/demo-1.2.0.gem", hosted.deletedPath);
+    assertEquals("gems/demo-1.2.0.gem", hosted.deletedPaths.get(0));
+    assertTrue(hosted.deletedPaths.contains("info/demo"));
+    assertTrue(hosted.deletedPaths.contains("quick/Marshal.4.8/demo-1.2.0.gemspec.rz"));
+    assertFalse(hosted.generatedPaths.contains("specs.4.8.gz"));
+    assertFalse(hosted.generatedPaths.contains("latest_specs.4.8.gz"));
+    assertFalse(hosted.generatedPaths.contains("versions"));
+    assertFalse(hosted.generatedPaths.contains("names"));
+    assertEquals(List.of("1:" + RepositoryIndexRebuildDao.RUBYGEMS_METADATA + ":"),
+        indexRebuildDao.enqueues);
     assertThrows(MavenExceptions.MethodNotAllowed.class,
         () -> service.delete(hosted(), "api/v1/gems/yank?gem_name=demo"));
   }
@@ -583,6 +592,7 @@ class RubygemsServiceTest {
     private String putPath;
     private String generatedPath;
     private byte[] generatedBytes;
+    private final List<String> deletedPaths = new ArrayList<>();
     private final List<String> generatedPaths = new ArrayList<>();
 
     FakeRawHostedService(int deleteStatus) {
@@ -618,6 +628,7 @@ class RubygemsServiceTest {
     @Override
     public MavenResponse delete(RepositoryRuntime runtime, String rawPath) {
       deletedPath = rawPath;
+      deletedPaths.add(rawPath);
       return MavenResponse.noBody(deleteStatus);
     }
   }

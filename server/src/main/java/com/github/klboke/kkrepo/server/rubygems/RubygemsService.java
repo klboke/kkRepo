@@ -375,7 +375,6 @@ public class RubygemsService {
       writeInfo(runtime, changed.name());
       writeQuickSpec(runtime, changed);
     }
-    rebuildGeneratedMetadata(runtime);
     enqueueGeneratedMetadataRebuild(runtime);
   }
 
@@ -394,7 +393,6 @@ public class RubygemsService {
     if (identity != null) {
       hosted.delete(runtime, quickSpecPath(fullName(identity)));
     }
-    rebuildGeneratedMetadata(runtime);
     enqueueGeneratedMetadataRebuild(runtime);
   }
 
