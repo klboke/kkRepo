@@ -282,7 +282,30 @@ gem push demo-1.0.0.gem \
   --host https://alice:${KKREPO_PASSWORD}@nexus.example.com/repository/rubygems-hosted/
 ```
 
-自动化场景建议使用短生命周期仓库用户或 API key，不要把凭据提交到代码仓库。对于能够设置自定义 header 的 HTTP 客户端，kkrepo 也接受配置的 API key header：`X-Nexus-Plus-Token`。
+使用 RubyGems API key 发布：
+
+```yaml
+# ~/.gem/credentials
+:kkrepo: $KKREPO_RUBYGEMS_API_KEY
+```
+
+```bash
+chmod 0600 ~/.gem/credentials
+gem push demo-1.0.0.gem \
+  --host https://nexus.example.com/repository/rubygems-hosted/ \
+  --key kkrepo
+```
+
+在 **My Token** 中创建 `RubyGemsApiKey` token，并把完整生成 token 值写入 credentials 文件，例如 `RubyGemsApiKey.<secret>`。RubyGems 会把选中的 key 作为请求 `Authorization` 值发送。
+
+对于不绑定特定协议 token 格式的 CI、脚本和 HTTP 客户端，可以创建 `GenericToken`，并通过配置的 API-key header 传完整生成 token：
+
+```bash
+curl -H "X-Nexus-Plus-Token: $KKREPO_GENERIC_TOKEN" \
+  https://nexus.example.com/repository/rubygems-hosted/api/v1/gems
+```
+
+不要把凭据提交到代码仓库。
 
 低层 HTTP 客户端的发布 endpoint：
 

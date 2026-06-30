@@ -153,9 +153,7 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 6. Conda
 7. Composer / PHP
 
-协议和客户端兼容性待办：
-
-- RubyGems Bearer/API-key 凭据示例：客户端兼容性验证完成后补充。
+用户和管理端 UI 已暴露的 token 类型包括 `NpmToken`、`CargoToken`、`NuGetApiKey`、`RubyGemsApiKey` 和 `GenericToken`，用于协议客户端和自动化场景。
 
 ## 参与贡献
 

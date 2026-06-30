@@ -300,6 +300,8 @@
     "My Token": "我的 Token",
     "API keys for package clients": "包客户端使用的 API Key",
     "NpmToken": "NpmToken",
+    "RubyGemsApiKey": "RubyGemsApiKey",
+    "GenericToken": "GenericToken",
     "npm token": "npm token",
     "Sign in": "登录",
     "Sign out": "退出登录",
