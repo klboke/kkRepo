@@ -155,9 +155,7 @@ Repository format roadmap:
 6. Conda
 7. Composer / PHP
 
-Protocol and client compatibility backlog:
-
-- RubyGems Bearer/API-key credential examples after client compatibility is verified.
+Token types exposed in the user and admin UI include protocol-specific tokens (`NpmToken`, `CargoToken`, `NuGetApiKey`, `RubyGemsApiKey`) plus `GenericToken` for CI, scripts, and custom HTTP clients that can send the configured API-key header or bearer token.
 
 ## Contributing
 

@@ -100,7 +100,7 @@ The custom API-key header is:
 X-Nexus-Plus-Token
 ```
 
-Protocol-specific clients may still use their native auth mechanisms. Current protocol-token domains include `NpmToken`, `CargoToken`, and `NuGetApiKey` where the corresponding client protocol uses tokens or API keys; Cargo clients send their registry token through the `Authorization` header.
+Protocol-specific clients should keep using their native auth mechanisms and matching token domains. Current protocol-token domains include `NpmToken`, `CargoToken`, `NuGetApiKey`, and `RubyGemsApiKey` where the corresponding client protocol uses tokens or API keys; Cargo and RubyGems clients send their registry/API key token through the `Authorization` header. Use `GenericToken` for CI jobs, scripts, and custom HTTP clients that can send the configured API-key header or bearer token, not as a universal replacement for every package client token format.
 
 ## Encryption Secrets
 

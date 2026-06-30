@@ -282,7 +282,31 @@ gem push demo-1.0.0.gem \
   --host https://alice:${KKREPO_PASSWORD}@nexus.example.com/repository/rubygems-hosted/
 ```
 
-For automation, prefer a short-lived repository user or API key and avoid committing credentials into source control. kkrepo also accepts the configured API-key header, `X-Nexus-Plus-Token`, for HTTP clients that can set custom headers.
+Push with a RubyGems API key:
+
+```yaml
+# ~/.gem/credentials
+:kkrepo: $KKREPO_RUBYGEMS_API_KEY
+```
+
+```bash
+chmod 0600 ~/.gem/credentials
+gem push demo-1.0.0.gem \
+  --host https://nexus.example.com/repository/rubygems-hosted/ \
+  --key kkrepo
+```
+
+Create the key as a `RubyGemsApiKey` token in **My Token** and store the full generated token value, for example `RubyGemsApiKey.<secret>`, in the credentials file. RubyGems sends the selected key as the request `Authorization` value.
+
+For CI jobs, scripts, and HTTP clients that are not tied to a protocol-specific token format, create a `GenericToken` and send the full generated token through the configured API-key header to the hosted upload endpoint:
+
+```bash
+curl -H "X-Nexus-Plus-Token: $KKREPO_GENERIC_TOKEN" \
+  --data-binary @demo-1.0.0.gem \
+  https://nexus.example.com/repository/rubygems-hosted/api/v1/gems
+```
+
+Avoid committing credentials into source control.
 
 Push endpoint for low-level clients:
 

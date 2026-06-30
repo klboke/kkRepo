@@ -204,6 +204,39 @@ class SecurityAuthenticationServiceTest {
   }
 
   @Test
+  void authenticatesGenericTokenWithDomainPrefixedBearerToken() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.user(user(1L, "Local", "ci-bot", NEXUS_SHIRO1_ADMIN123));
+    dao.roles(1L, "repo-ci");
+    dao.apiKey(new ApiKeyRecord(
+        20L,
+        "GenericToken",
+        "Local",
+        "ci-bot",
+        "CI token",
+        "ACTIVE",
+        SecurityHashing.sha256("generic-secret"),
+        "GenericToken",
+        Map.of("values", List.of("read", "write")),
+        "{}",
+        null,
+        null,
+        LocalDateTime.now().plusDays(1),
+        null));
+    SecurityAuthenticationService service = service(dao);
+
+    Optional<AuthenticatedSubject> authenticated = service.authenticate(request(Map.of(
+        "Authorization", "Bearer GenericToken.generic-secret")));
+
+    assertTrue(authenticated.isPresent());
+    assertEquals("ci-bot", authenticated.get().userId());
+    assertEquals("api-key", authenticated.get().realmId());
+    assertEquals(20L, authenticated.get().apiKeyId());
+    assertTrue(authenticated.get().permissionSubject().groupIds().contains("repo-ci"));
+    assertEquals(20L, dao.lastUsedApiKeyId);
+  }
+
+  @Test
   void authenticatedUsersReceiveConfiguredDefaultRoleWithoutPersistedUserRole() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.realm(new SecurityRealmRecord(1L, "local", "LOCAL", "Local", true, 0, Map.of("source", "Local")));
