@@ -75,7 +75,7 @@ class CargoAssetWriter {
       RepositoryRuntime runtime,
       BlobStorage storage,
       long blobStoreId,
-      CargoPublishPayload.CargoPackageMetadata metadata,
+      CargoPackageMetadata metadata,
       Path crateFile,
       String createdBy,
       String createdByIp) {
@@ -87,7 +87,7 @@ class CargoAssetWriter {
       RepositoryRuntime runtime,
       BlobStorage storage,
       long blobStoreId,
-      CargoPublishPayload.CargoPackageMetadata metadata,
+      CargoPackageMetadata metadata,
       Map<String, Object> indexEntry,
       String path,
       InputStream body,
@@ -117,7 +117,7 @@ class CargoAssetWriter {
       RepositoryRuntime runtime,
       BlobStorage storage,
       long blobStoreId,
-      CargoPublishPayload.CargoPackageMetadata metadata,
+      CargoPackageMetadata metadata,
       Map<String, Object> indexEntry,
       String path,
       InputStream body,
@@ -523,7 +523,7 @@ class CargoAssetWriter {
   }
 
   private record CargoCoordinate(
-      CargoPublishPayload.CargoPackageMetadata metadata,
+      CargoPackageMetadata metadata,
       Map<String, Object> indexEntry) {
 
     CargoCoordinate withChecksum(String checksum, String cratePath) {
@@ -532,9 +532,7 @@ class CargoAssetWriter {
           : new LinkedHashMap<>(indexEntry);
       entry.put("cksum", checksum);
       Map<String, Object> attrs = attributes(entry, cratePath);
-      return new CargoCoordinate(new CargoPublishPayload.CargoPackageMetadata(
-          metadata.name(), metadata.normalizedName(), metadata.version(), metadata.versionKey(),
-          metadata.description(), metadata.publishJson()), attrs);
+      return new CargoCoordinate(metadata, attrs);
     }
 
     @SuppressWarnings("unchecked")

@@ -149,9 +149,15 @@ public class MigrationPlanBuilder {
       NexusSourceProfile profile,
       String adapter) {
     List<String> reasons = new ArrayList<>();
+    List<String> warnings = new ArrayList<>();
     SupportStatus status;
     String readMode;
-    if (profile.scriptApi().runnable()) {
+    if (profile.securityModel() == NexusSourceProfile.SecurityModel.REST_WITH_MANUAL_SECRETS) {
+      status = SupportStatus.DATA_ONLY;
+      readMode = profile.scriptApi().runnable() ? "rest-and-script-manual-secrets" : "rest-only";
+      reasons.add("Security REST metadata can be migrated, but password hashes or token material require reset or reissue.");
+      warnings.add("Source security export did not include all secret material; manual reset or reissue is required.");
+    } else if (profile.scriptApi().runnable()) {
       status = SupportStatus.FULL;
       readMode = "rest-and-script";
       reasons.add("REST security metadata plus script compensation are available.");
@@ -173,7 +179,7 @@ public class MigrationPlanBuilder {
         "security-object-counts",
         "security/local",
         reasons,
-        List.of());
+        warnings);
   }
 
   private static String formatAdapter(String format) {

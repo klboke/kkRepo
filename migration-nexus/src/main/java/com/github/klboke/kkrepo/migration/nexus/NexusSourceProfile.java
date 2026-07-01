@@ -61,7 +61,7 @@ public record NexusSourceProfile(
         blobModel(source.blobStores()),
         repositories,
         formatCapabilities(repositories, metadataEngine, datastoreContentModels),
-        warnings(source.warnings(), probe, metadataEngine, repositories));
+        warnings(source.warnings(), probe));
   }
 
   private static ScriptApiProfile scriptApiProfile(
@@ -213,9 +213,7 @@ public record NexusSourceProfile(
 
   private static List<String> warnings(
       List<String> inventoryWarnings,
-      NexusRestClient.SourceProbe probe,
-      MetadataEngine metadataEngine,
-      List<RepositoryCapability> repositories) {
+      NexusRestClient.SourceProbe probe) {
     ArrayList<String> warnings = new ArrayList<>(inventoryWarnings == null ? List.of() : inventoryWarnings);
     if (probe == null) {
       warnings.add("Source profile uses legacy defaults because the source probe did not return metadata.");

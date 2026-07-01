@@ -212,6 +212,40 @@ class NexusApiMigrationServiceTest {
   }
 
   @Test
+  void securityPlanRequiresManualActionWhenSourceSecretsAreMissing() {
+    NexusApiMigrationService service = service(new FakeBlobStoreDao(), new FakeRepositoryDao());
+    SourceProbe probe = new SourceProbe(
+        "3.77.2-02",
+        true,
+        true,
+        true,
+        "text/plain",
+        "ok",
+        "DATASTORE_H2",
+        "H2 2.3.232",
+        "jdbc:h2:file:/nexus-data/db/nexus",
+        datastoreSchema(Map.of("maven2", true)),
+        List.of());
+
+    NexusMigrationPreflight preflight = service.preflight(new NexusInventory(
+        List.of(Map.of("name", "default", "type", "File")),
+        List.of(repository("maven-releases", "maven2", "hosted", Map.of("storage", storage("default")))),
+        NexusSecurityExport.empty(),
+        List.of("Source Nexus script API did not expose API keys"),
+        probe),
+        new NexusMigrationTargetBlobStore("default", "s3", null, null, null, "", Map.of()),
+        null);
+
+    NexusMigrationPlan.NexusMigrationPlanItem securityItem = preflight.migrationPlan().items().stream()
+        .filter(item -> "security".equals(item.area()))
+        .findFirst()
+        .orElseThrow();
+    assertEquals(SupportStatus.DATA_ONLY, securityItem.status());
+    assertEquals("rest-and-script-manual-secrets", securityItem.readMode());
+    assertTrue(preflight.migrationPlan().manualActions().contains("security:local-security"));
+  }
+
+  @Test
   void datastoreSourceProfilePlansRepositoryContentConfigOnlyWhenSchemaFingerprintIsIncomplete() {
     NexusApiMigrationService service = service(new FakeBlobStoreDao(), new FakeRepositoryDao());
     SourceProbe probe = new SourceProbe(

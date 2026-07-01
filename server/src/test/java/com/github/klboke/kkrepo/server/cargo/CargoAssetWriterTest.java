@@ -21,7 +21,6 @@ import com.github.klboke.kkrepo.persistence.mysql.dao.ComponentDao;
 import com.github.klboke.kkrepo.persistence.mysql.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
-import com.github.klboke.kkrepo.server.cargo.CargoPublishPayload.CargoPackageMetadata;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;

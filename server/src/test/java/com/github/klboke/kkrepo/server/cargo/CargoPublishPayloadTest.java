@@ -65,8 +65,7 @@ class CargoPublishPayloadTest {
     metadata.put("links", "hello_world_native");
     metadata.put("rust_version", "1.70");
 
-    CargoPublishPayload.CargoPackageMetadata cargoMetadata =
-        CargoPublishPayload.CargoPackageMetadata.fromPublishJson(metadata);
+    CargoPackageMetadata cargoMetadata = CargoPackageMetadata.fromPublishJson(metadata);
     Map<String, Object> entry = cargoMetadata.indexEntry("abc123", false);
 
     assertEquals(2, entry.get("v"));
@@ -97,7 +96,7 @@ class CargoPublishPayloadTest {
 
     CargoExceptions.BadRequestException thrown = assertThrows(
         CargoExceptions.BadRequestException.class,
-        () -> CargoPublishPayload.CargoPackageMetadata.fromPublishJson(metadata));
+        () -> CargoPackageMetadata.fromPublishJson(metadata));
 
     assertEquals("Invalid Cargo package metadata", thrown.getMessage());
   }
@@ -129,8 +128,7 @@ class CargoPublishPayloadTest {
     Path archive = Files.createTempFile("kkrepo-cargo-test-", ".crate");
     Files.write(archive, crate);
     try {
-      CargoPublishPayload.CargoPackageMetadata metadata =
-          CargoPublishPayload.CargoPackageMetadata.fromManifest(CargoCrateInspector.inspect(archive));
+      CargoPackageMetadata metadata = CargoPackageMetadata.fromManifest(CargoCrateInspector.inspect(archive));
       Map<String, Object> entry = metadata.indexEntry("abc123", false);
 
       assertEquals("ui_demo", entry.get("name"));
@@ -173,8 +171,7 @@ class CargoPublishPayloadTest {
     Path archive = Files.createTempFile("kkrepo-cargo-test-", ".crate");
     Files.write(archive, crate);
     try {
-      CargoPublishPayload.CargoPackageMetadata metadata =
-          CargoPublishPayload.CargoPackageMetadata.fromManifest(CargoCrateInspector.inspect(archive));
+      CargoPackageMetadata metadata = CargoPackageMetadata.fromManifest(CargoCrateInspector.inspect(archive));
       List<Map<String, Object>> deps = (List<Map<String, Object>>) metadata.indexEntry("abc123", false).get("deps");
 
       assertEquals(3, deps.size());
