@@ -94,11 +94,13 @@ KKREPO_FILE_SHARED_FILESYSTEM=true
 - 对客户端主动断开下载做合理日志分类，避免误判为服务端故障。
 - 一致设置 `X-Forwarded-*` header。
 
-需要时设置外部 URL 和可信代理：
+详细 Nginx 配置和生成仓库 URL 验证方式见 [Nginx 反向代理配置注意事项](nginx-reverse-proxy.md)。
+
+需要时设置 OIDC 外部 URL 和可信代理：
 
 ```bash
 KKREPO_EXTERNAL_BASE_URL=https://nexus.example.com
-KKREPO_TRUSTED_PROXIES=10.0.0.0/8,192.168.0.0/16
+KKREPO_TRUSTED_PROXIES=10.0.12.34,10.0.12.35
 ```
 
 ## Session 和 Cookie 安全

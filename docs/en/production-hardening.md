@@ -94,11 +94,13 @@ Reverse proxy checklist:
 - Configure client abort logging so disconnected downloads do not look like server faults.
 - Set `X-Forwarded-*` headers consistently.
 
-Set external URL/trusted proxy settings when required by your deployment:
+For exact Nginx settings and generated repository URL verification, see the [Nginx Reverse Proxy Notes](nginx-reverse-proxy.md).
+
+Set OIDC external URL and trusted proxy settings when required by your deployment:
 
 ```bash
 KKREPO_EXTERNAL_BASE_URL=https://nexus.example.com
-KKREPO_TRUSTED_PROXIES=10.0.0.0/8,192.168.0.0/16
+KKREPO_TRUSTED_PROXIES=10.0.12.34,10.0.12.35
 ```
 
 ## Session And Cookie Security
