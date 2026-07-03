@@ -1395,9 +1395,14 @@ public class SecurityManagementService implements AccessDecisionService {
     for (int i = 0; i < max; i++) {
       String grantedPart = i < grantedParts.length ? grantedParts[i] : "*";
       String requestedPart = i < requestedParts.length ? requestedParts[i] : "*";
-      boolean matches = isFormatSegment(grantedParts, requestedParts, i)
-          ? formatPartMatches(grantedPart, requestedPart)
-          : partMatches(grantedPart, requestedPart);
+      boolean matches;
+      if (isFormatSegment(grantedParts, requestedParts, i)) {
+        matches = formatPartMatches(grantedPart, requestedPart);
+      } else if (isActionSegment(grantedParts, requestedParts, i)) {
+        matches = actionPartMatches(grantedPart, requestedPart);
+      } else {
+        matches = partMatches(grantedPart, requestedPart);
+      }
       if (!matches) {
         return false;
       }
@@ -1413,6 +1418,18 @@ public class SecurityManagementService implements AccessDecisionService {
       case "repository-view", "repository-admin" -> index == 2;
       case "repository-content-selector" -> index == 3;
       default -> false;
+    };
+  }
+
+  private static boolean isActionSegment(String[] grantedParts, String[] requestedParts, int index) {
+    String grantedDomain = grantedParts.length > 1 ? grantedParts[1] : "";
+    String requestedDomain = requestedParts.length > 1 ? requestedParts[1] : "";
+    String domain = grantedDomain.equals(requestedDomain) ? grantedDomain : requestedDomain;
+    return switch (domain) {
+      case "repository-view", "repository-admin" -> index == 4;
+      case "repository-content-selector" -> index == 5;
+      default -> index == 2 && "nexus".equals(grantedParts.length > 0 ? grantedParts[0] : "")
+          && "nexus".equals(requestedParts.length > 0 ? requestedParts[0] : "");
     };
   }
 
@@ -1436,6 +1453,27 @@ public class SecurityManagementService implements AccessDecisionService {
       }
     }
     return false;
+  }
+
+  private static boolean actionPartMatches(String grantedPart, String requestedPart) {
+    String requested = normalizeActionPart(requestedPart);
+    for (String option : defaultString(grantedPart, "*").split(",")) {
+      String normalized = normalizeActionPart(option);
+      if ("*".equals(normalized) || normalized.equals(requested)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static String normalizeActionPart(String action) {
+    String normalized = defaultString(action, "*").trim().toLowerCase(Locale.ROOT);
+    return switch (normalized) {
+      case "all" -> "*";
+      case "create" -> "add";
+      case "update" -> "edit";
+      default -> normalized;
+    };
   }
 
   private static boolean globMatches(String pattern, String value) {
