@@ -97,6 +97,28 @@ class SecurityManagementServicePermissionTest {
   }
 
   @Test
+  void nexusAllActionDoesNotSatisfyRequestedWildcardActions() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.assign("Local", "alice", "nx-scoped-all");
+    dao.grant("nx-scoped-all", privilege(
+        "nx-privileges-all",
+        "application",
+        Map.of("domain", "privileges", "actions", List.of("ALL"))));
+    dao.grant("nx-scoped-all", privilege(
+        "nx-repository-view-maven2-releases-all",
+        "repository-view",
+        Map.of("format", "maven2", "repository", "releases", "actions", List.of("ALL"))));
+    SecurityManagementService service = new SecurityManagementService(dao);
+
+    assertTrue(service.decide(subject("alice"), "nexus:privileges:delete").allowed());
+    assertTrue(service.decide(subject("alice"), repositoryPermission("releases", "com/acme/app/1.0/app-1.0.pom", PermissionAction.ADD))
+        .allowed());
+    assertFalse(service.decide(subject("alice"), "nexus:privileges:*").allowed());
+    assertFalse(service.decide(subject("alice"), "nexus:repository-view:maven2:releases:*").allowed());
+    assertFalse(service.decide(subject("alice"), "nexus:*").allowed());
+  }
+
+  @Test
   void repositoryTargetPrivilegesDoNotGrantRepositoryAccess() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.assign("Local", "alice", "nx-target-reader");

@@ -1457,8 +1457,15 @@ public class SecurityManagementService implements AccessDecisionService {
 
   private static boolean actionPartMatches(String grantedPart, String requestedPart) {
     String requested = normalizeActionPart(requestedPart);
+    boolean requestedWildcard = "*".equals(defaultString(requestedPart, "*").trim());
     for (String option : defaultString(grantedPart, "*").split(",")) {
       String normalized = normalizeActionPart(option);
+      if (requestedWildcard) {
+        if ("*".equals(option.trim())) {
+          return true;
+        }
+        continue;
+      }
       if ("*".equals(normalized) || normalized.equals(requested)) {
         return true;
       }
