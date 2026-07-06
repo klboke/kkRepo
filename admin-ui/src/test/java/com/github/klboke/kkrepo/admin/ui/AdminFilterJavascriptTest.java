@@ -1,7 +1,7 @@
 package com.github.klboke.kkrepo.admin.ui;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
@@ -21,9 +21,14 @@ class AdminFilterJavascriptTest {
         Path.of("src/test/js/admin-filter.test.js").toString())
         .redirectErrorStream(true)
         .start();
-    String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
 
-    assertTrue(process.waitFor(30, TimeUnit.SECONDS), () -> "Timed out running admin-ui JavaScript tests:\n" + output);
+    if (!process.waitFor(30, TimeUnit.SECONDS)) {
+      process.destroyForcibly();
+      process.waitFor(5, TimeUnit.SECONDS);
+      String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+      fail("Timed out running admin-ui JavaScript tests:\n" + output);
+    }
+    String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
     assertEquals(0, process.exitValue(), () -> output);
   }
 
