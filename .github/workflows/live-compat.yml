@@ -96,7 +96,7 @@ jobs:
 
       - name: Set up ORAS
         if: env.LIVE_COMPAT_SUITE == 'client-e2e'
-        uses: oras-project/setup-oras@v1
+        uses: oras-project/setup-oras@v2
 
       - name: Install Python client build tools
         if: env.LIVE_COMPAT_SUITE == 'client-e2e'
