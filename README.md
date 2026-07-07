@@ -6,7 +6,7 @@
 [![Container](https://img.shields.io/badge/ghcr.io-kkrepo-blue)](https://github.com/klboke/kkrepo/pkgs/container/kkrepo)
 [![Security Policy](https://img.shields.io/badge/security-policy-green)](SECURITY.md)
 
-[中文](README.cn.md)
+**English** | [中文](README.cn.md)
 
 kkRepo is an independent, self-hosted artifact repository for Maven, npm, PyPI, Go, Helm, Cargo/Rust, Docker/OCI, NuGet, RubyGems, Yum, and Raw artifacts.
 
@@ -146,11 +146,12 @@ Repository format roadmap:
 
 1. Docker / OCI Registry - Completed ([implementation notes](docs/en/dev/docker-repository-implementation-plan.md))
 2. Cargo / Rust - Repository support completed, including search, UI/API upload, and migration ([design notes](docs/en/dev/cargo-rust-repository-design.md))
-3. APT / Debian
-4. Terraform Provider / Module Registry
-5. Conan
-6. Conda
-7. Composer / PHP
+3. ohpm / HarmonyOS - Planned with hosted, proxy, group, import, and admin capabilities ([Chinese design notes](docs/zh/dev/ohpm-repository-design.md))
+4. APT / Debian
+5. Terraform Provider / Module Registry
+6. Conan
+7. Conda
+8. Composer / PHP
 
 Token types exposed in the user and admin UI include protocol-specific tokens (`NpmToken`, `CargoToken`, `NuGetApiKey`, `RubyGemsApiKey`) plus `GenericToken` for CI, scripts, and custom HTTP clients that can send the configured API-key header or bearer token.
 
