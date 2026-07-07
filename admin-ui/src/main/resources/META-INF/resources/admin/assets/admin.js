@@ -124,6 +124,53 @@ function createTransferState() {
   };
 }
 
+const BANNER_ICONS = { info: "ⓘ", success: "", warning: "ⓘ", danger: "" };
+const BANNER_STORAGE_KEY = "kkrepo-banner-dismissed";
+
+function renderBanner() {
+  const settings = window.kkrepoI18n?.settings?.();
+  const region = document.getElementById("banner-region");
+  const textEl = document.getElementById("banner-text");
+  const iconEl = document.getElementById("banner-icon");
+  const closeBtn = document.getElementById("banner-close");
+  if (!region || !settings) return;
+  if (!settings.bannerEnabled || !settings.bannerMessage) {
+    region.hidden = true;
+    document.body.style.paddingTop = "";
+    return;
+  }
+  const dismissedKey = `${BANNER_STORAGE_KEY}:${settings.bannerMessage}`;
+  if (sessionStorage.getItem(dismissedKey)) {
+    region.hidden = true;
+    document.body.style.paddingTop = "";
+    return;
+  }
+  region.hidden = false;
+  region.className = `banner-region banner-${settings.bannerLevel || "info"}`;
+  if (textEl) textEl.textContent = settings.bannerMessage;
+  if (iconEl) iconEl.textContent = BANNER_ICONS[settings.bannerLevel] || "ⓘ";
+  if (closeBtn) closeBtn.hidden = !settings.bannerDismissible;
+  // Add padding to body to prevent banner from covering content
+  const bannerHeight = region.offsetHeight || 40;
+  document.body.style.paddingTop = `${bannerHeight}px`;
+}
+
+function initBannerClose() {
+  const closeBtn = document.getElementById("banner-close");
+  if (!closeBtn) return;
+  closeBtn.addEventListener("click", () => {
+    const settings = window.kkrepoI18n?.settings?.();
+    if (settings?.bannerMessage) {
+      sessionStorage.setItem(`${BANNER_STORAGE_KEY}:${settings.bannerMessage}`, "1");
+    }
+    const region = document.getElementById("banner-region");
+    if (region) {
+      region.hidden = true;
+      document.body.style.paddingTop = "";
+    }
+  });
+}
+
 const securityTransfers = {
   userRoles: createTransferState(),
   rolePrivileges: createTransferState(),
@@ -2148,6 +2195,26 @@ function syncUiSettingsForm() {
   if (select && settings) {
     select.value = settings.defaultLanguage || "en";
   }
+  // Sync banner fields
+  const bannerEnabled = document.getElementById("ui-banner-enabled");
+  const bannerLevel = document.getElementById("ui-banner-level");
+  const bannerMessage = document.getElementById("ui-banner-message");
+  const bannerDismissible = document.getElementById("ui-banner-dismissible");
+  if (bannerEnabled && settings) bannerEnabled.checked = settings.bannerEnabled === true;
+  if (bannerLevel && settings) bannerLevel.value = settings.bannerLevel || "info";
+  if (bannerMessage && settings) bannerMessage.value = settings.bannerMessage || "";
+  if (bannerDismissible && settings) bannerDismissible.checked = settings.bannerDismissible !== false;
+  // Sync branding fields
+  const productName = document.getElementById("ui-product-name");
+  const productSubtitle = document.getElementById("ui-product-subtitle");
+  const logoText = document.getElementById("ui-logo-text");
+  const logoUrl = document.getElementById("ui-logo-url");
+  const faviconUrl = document.getElementById("ui-favicon-url");
+  if (productName && settings) productName.value = settings.productName || "";
+  if (productSubtitle && settings) productSubtitle.value = settings.productSubtitle || "";
+  if (logoText && settings) logoText.value = settings.logoText || "";
+  if (logoUrl && settings) logoUrl.value = settings.logoUrl || "";
+  if (faviconUrl && settings) faviconUrl.value = settings.faviconUrl || "";
   clearRequiredFieldErrors(uiSettingsRequiredFields);
   updateUiSettingsStatus();
 }
@@ -2173,9 +2240,29 @@ async function saveUiSettings() {
   if (!validateRequiredFields(uiSettingsRequiredFields)) return;
   button.disabled = true;
   try {
-    await window.kkrepoI18n.saveDefaultLanguage(select.value);
+    const bannerEnabled = document.getElementById("ui-banner-enabled")?.checked === true;
+    const bannerLevel = document.getElementById("ui-banner-level")?.value || "info";
+    const bannerMessage = document.getElementById("ui-banner-message")?.value || "";
+    const bannerDismissible = document.getElementById("ui-banner-dismissible")?.checked !== false;
+    const productName = document.getElementById("ui-product-name")?.value || "";
+    const productSubtitle = document.getElementById("ui-product-subtitle")?.value || "";
+    const logoText = document.getElementById("ui-logo-text")?.value || "";
+    const logoUrl = document.getElementById("ui-logo-url")?.value || "";
+    const faviconUrl = document.getElementById("ui-favicon-url")?.value || "";
+    await window.kkrepoI18n.saveUiSettings({
+      defaultLanguage: select.value,
+      bannerEnabled,
+      bannerLevel,
+      bannerMessage,
+      bannerDismissible,
+      productName,
+      productSubtitle,
+      logoText,
+      logoUrl,
+      faviconUrl
+    });
     syncUiSettingsForm();
-    showToast("UI language settings saved.", "ok");
+    showToast("UI settings saved.", "ok");
   } catch (error) {
     showToast(`Save failed: ${error.message}`, "error");
   } finally {
@@ -3928,7 +4015,11 @@ document.getElementById("ui-settings-form").addEventListener("submit", (event) =
   saveUiSettings();
 });
 bindRequiredFieldErrors(uiSettingsRequiredFields);
-window.addEventListener("kkrepo:i18n-change", syncUiSettingsForm);
+window.addEventListener("kkrepo:i18n-change", () => {
+  syncUiSettingsForm();
+  renderBanner();
+});
+initBannerClose();
 
 document.getElementById("create-security-api-key-button").addEventListener("click", showSecurityApiKeyForm);
 document.getElementById("cancel-security-api-key-button").addEventListener("click", hideSecurityApiKeyForm);

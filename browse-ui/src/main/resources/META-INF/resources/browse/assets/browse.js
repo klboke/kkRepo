@@ -57,6 +57,53 @@ const FORMAT_ROUTE_SEGMENT = {
   npm: "npm",
 };
 
+const BANNER_ICONS = { info: "ⓘ", success: "", warning: "ⓘ", danger: "" };
+const BANNER_STORAGE_KEY = "kkrepo-banner-dismissed";
+
+function renderBanner() {
+  const settings = window.kkrepoI18n?.settings?.();
+  const region = document.getElementById("banner-region");
+  const textEl = document.getElementById("banner-text");
+  const iconEl = document.getElementById("banner-icon");
+  const closeBtn = document.getElementById("banner-close");
+  if (!region || !settings) return;
+  if (!settings.bannerEnabled || !settings.bannerMessage) {
+    region.hidden = true;
+    document.body.style.paddingTop = "";
+    return;
+  }
+  const dismissedKey = `${BANNER_STORAGE_KEY}:${settings.bannerMessage}`;
+  if (sessionStorage.getItem(dismissedKey)) {
+    region.hidden = true;
+    document.body.style.paddingTop = "";
+    return;
+  }
+  region.hidden = false;
+  region.className = `banner-region banner-${settings.bannerLevel || "info"}`;
+  if (textEl) textEl.textContent = settings.bannerMessage;
+  if (iconEl) iconEl.textContent = BANNER_ICONS[settings.bannerLevel] || "ⓘ";
+  if (closeBtn) closeBtn.hidden = !settings.bannerDismissible;
+  // Add padding to body to prevent banner from covering content
+  const bannerHeight = region.offsetHeight || 40;
+  document.body.style.paddingTop = `${bannerHeight}px`;
+}
+
+function initBannerClose() {
+  const closeBtn = document.getElementById("banner-close");
+  if (!closeBtn) return;
+  closeBtn.addEventListener("click", () => {
+    const settings = window.kkrepoI18n?.settings?.();
+    if (settings?.bannerMessage) {
+      sessionStorage.setItem(`${BANNER_STORAGE_KEY}:${settings.bannerMessage}`, "1");
+    }
+    const region = document.getElementById("banner-region");
+    if (region) {
+      region.hidden = true;
+      document.body.style.paddingTop = "";
+    }
+  });
+}
+
 function installCsrfFetch() {
   if (window.__nexusPlusCsrfFetchInstalled) return;
   window.__nexusPlusCsrfFetchInstalled = true;
@@ -86,6 +133,34 @@ function csrfToken() {
     .map((part) => part.trim())
     .find((part) => part.startsWith("KKREPO_CSRF="))
     ?.substring("KKREPO_CSRF=".length) || "";
+}
+
+async function loadBranding() {
+  try {
+    const res = await fetch("/internal/ui-settings/branding", { cache: "no-store" });
+    if (!res.ok) return;
+    const branding = await res.json();
+    if (branding.productName) {
+      document.querySelectorAll(".product-name").forEach((el) => {
+        el.innerHTML = `${escapeHtml(branding.productName)}<br>${escapeHtml(branding.productSubtitle || "Repository Manager")}`;
+      });
+      document.title = `${branding.productName} browse`;
+    }
+    if (branding.faviconUrl) {
+      document.querySelectorAll("link[rel='icon']").forEach((link) => {
+        link.href = branding.faviconUrl;
+      });
+    }
+    document.querySelectorAll(".logo-mark").forEach((el) => {
+      if (branding.logoUrl) {
+        el.innerHTML = `<img src="${escapeHtml(branding.logoUrl)}" alt="" style="width:100%;height:100%;object-fit:contain;border-radius:4px;">`;
+        el.style.background = "none";
+        el.style.border = "none";
+      } else if (branding.logoText) {
+        el.textContent = branding.logoText;
+      }
+    });
+  } catch { /* ignore */ }
 }
 
 function browseListHash() {
@@ -2600,6 +2675,15 @@ function applyHashRoute() {
 }
 
 async function bootstrap() {
+  // Load branding and banner settings
+  await Promise.all([
+    loadBranding(),
+    window.kkrepoI18n?.ready().then(() => {
+      renderBanner();
+      initBannerClose();
+    }).catch(() => {})
+  ]);
+
   try {
     adminBootstrapStatus = await fetchAdminBootstrapStatus();
   } catch (e) {

@@ -273,13 +273,29 @@
     "Refresh jobs": "刷新任务",
     "System": "系统",
     "UI Settings": "界面设置",
-    "Configure the default UI language shared by all replicas": "配置所有副本共享的默认界面语言",
+    "Configure the default UI language, banner messages, and branding shared by all replicas": "配置所有副本共享的默认界面语言、横幅消息和品牌标识",
     "Default language": "默认语言",
     "Follow browser": "跟随浏览器",
     "Chinese": "中文",
     "English": "英文",
     "Save UI settings": "保存界面设置",
     "This preference is stored in MySQL and applies to the administration, browse, and sign-in UI on every replica.": "此设置存储在 MySQL 中，对所有副本的管理、浏览和登录界面均生效。",
+    "Banner Message": "横幅消息",
+    "Enable banner": "启用横幅",
+    "Level": "级别",
+    "Info": "信息",
+    "Success": "成功",
+    "Warning": "警告",
+    "Danger": "危险",
+    "Message": "消息内容",
+    "Enter banner message...": "请输入横幅消息...",
+    "Dismissible": "可关闭",
+    "Branding": "品牌标识",
+    "Product name": "产品名称",
+    "Product subtitle": "产品副标题",
+    "Logo text": "Logo 文字",
+    "Logo URL": "Logo 地址",
+    "Favicon URL": "Favicon 地址",
     "Welcome": "欢迎",
     "Nexus-compatible repository access for internal packages": "面向内部包的 Nexus 兼容仓库访问",
     "Initial administrator setup": "初始管理员设置",
@@ -538,6 +554,18 @@
       supportedDefaultLanguages: Array.isArray(value?.supportedDefaultLanguages)
         ? value.supportedDefaultLanguages
         : ["browser", "zh-CN", "en"],
+      bannerEnabled: value?.bannerEnabled === true,
+      bannerLevel: value?.bannerLevel || "info",
+      bannerMessage: value?.bannerMessage || "",
+      bannerDismissible: value?.bannerDismissible !== false,
+      supportedBannerLevels: Array.isArray(value?.supportedBannerLevels)
+        ? value.supportedBannerLevels
+        : ["info", "success", "warning", "danger"],
+      productName: value?.productName || "",
+      productSubtitle: value?.productSubtitle || "",
+      logoText: value?.logoText || "",
+      logoUrl: value?.logoUrl || "",
+      faviconUrl: value?.faviconUrl || "",
       updatedAt: value?.updatedAt || null
     };
   }
@@ -592,6 +620,22 @@
         "Content-Type": "application/json"
       },
       body: JSON.stringify({ defaultLanguage: normalized }),
+      cache: "no-store"
+    });
+    if (!response.ok) {
+      throw new Error(await responseMessage(response, `HTTP ${response.status}`));
+    }
+    return updateSettings(await response.json(), { force: true });
+  }
+
+  async function saveUiSettings(payload) {
+    const response = await fetch("/internal/ui-settings", {
+      method: "PUT",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload),
       cache: "no-store"
     });
     if (!response.ok) {
@@ -840,6 +884,7 @@
     loadSettings,
     ready: () => readyPromise,
     saveDefaultLanguage,
+    saveUiSettings,
     setDefaultLanguage,
     settings: () => settings,
     text: translate

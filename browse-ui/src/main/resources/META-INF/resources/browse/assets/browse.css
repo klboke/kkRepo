@@ -41,6 +41,69 @@ select {
   min-height: 100vh;
 }
 
+.banner-region {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  padding: 0;
+}
+
+.banner-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 20px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.banner-icon {
+  flex-shrink: 0;
+  font-size: 16px;
+}
+
+.banner-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.banner-close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 2px 6px;
+  opacity: 0.7;
+}
+
+.banner-close:hover {
+  opacity: 1;
+}
+
+.banner-info {
+  background: #1e3a5f;
+  color: #ffffff;
+}
+
+.banner-success {
+  background: #1e4d2b;
+  color: #ffffff;
+}
+
+.banner-warning {
+  background: #7a6200;
+  color: #ffffff;
+}
+
+.banner-danger {
+  background: #7a1f1f;
+  color: #ffffff;
+}
+
 .nx-topbar {
   grid-column: 1 / -1;
   display: flex;
