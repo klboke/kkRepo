@@ -16,11 +16,11 @@ NEXUS_COMPAT_USERNAME=admin
 NEXUS_COMPAT_PASSWORD=Admin1234
 ```
 
-Current Maven compatibility checks and non-Cargo/non-Pub repository-format compatibility checks
-(npm, PyPI, Go, Helm, and others) should compare against this same long-running Nexus reference
-unless a test explicitly documents why it needs an isolated throwaway Nexus instance. Cargo/Rust
-checks use the Nexus 3.77.x+ reference documented below, and Pub checks use the Nexus 3.92.0+
-reference documented in the Pub section.
+Current Maven compatibility checks and repository-format compatibility checks can compare against
+this same long-running Nexus reference unless a test explicitly documents why it needs an isolated
+throwaway Nexus instance. Cargo/Rust requires Nexus 3.77.x+ and Pub requires Nexus 3.92.0+; the
+datastore-era PostgreSQL compose file below pins the disposable reference to Nexus 3.92.0 for those
+newer-format checks.
 
 ## Default Test Run
 
@@ -47,18 +47,19 @@ scripts/ci/run-live-compat.sh smoke
 docker compose -f docker-compose.compat.yml down -v
 ```
 
-For Cargo/Rust compatibility work, use the Nexus 3.77.x Community Edition
-reference compose file instead of the default Nexus 3.29.2 reference. Nexus
-3.73.0 contains the Cargo plugin, but exposes it only in Pro:
+For datastore-era compatibility work, use the Nexus PostgreSQL compose file instead of the default
+Nexus 3.29.2 OrientDB reference. It pins Nexus to 3.92.0 with PostgreSQL datastore enabled, which
+covers Cargo/Rust, Dart/Pub, and the other newer-format live checks:
 
 ```bash
 scripts/build-docker-image.sh kkrepo:compat
-export COMPOSE_FILE="$PWD/docker-compose.compat-rust.yml"
-export COMPOSE_PROJECT_NAME=kkrepo-rust-compat
+export COMPOSE_FILE="$PWD/docker-compose.compat-postgres.yml"
+export COMPOSE_PROJECT_NAME=kkrepo-postgres-compat
 export NEXUS_COMPAT_PORT=38090
 export KKREPO_COMPAT_PORT=18092
 export KKREPO_MANAGEMENT_PORT=18093
-docker compose -f "$COMPOSE_FILE" up -d mysql nexus kkrepo
+docker compose -f "$COMPOSE_FILE" up -d --wait mysql nexus-postgres
+docker compose -f "$COMPOSE_FILE" up -d nexus kkrepo
 scripts/ci/live-compat-setup.sh
 scripts/ci/run-live-compat.sh cargo
 docker compose -f "$COMPOSE_FILE" down -v
@@ -68,7 +69,8 @@ Available suites:
 
 - `smoke`: console API checks plus Maven proxy GET/HEAD/checksum read compatibility.
 - `write-smoke`: Maven hosted release/snapshot write compatibility with `COMPAT_WRITE_ENABLED=true`.
-- `cargo`: Cargo hosted/proxy/group compatibility against Nexus 3.77.x+. Proxy and group checks
+- `cargo`: Cargo hosted/proxy/group compatibility against Nexus 3.77.x+. The PostgreSQL compose
+  file pins the reference to Nexus 3.92.0. Proxy and group checks
   force both sides to use the same upstream sparse index (`CARGO_COMPAT_REMOTE_URL`, default
   `https://index.crates.io/`) and the same crate/version (`CARGO_COMPAT_CRATE`, default `itoa`;
   `CARGO_COMPAT_VERSION`, default `1.0.15`).
@@ -81,9 +83,10 @@ Available suites:
   when working through known protocol gaps.
 
 In GitHub Actions, add the `run-live-compat` label to a PR to run the smoke suite plus Cargo and
-Pub compatibility against the Nexus 3.92.0 reference. The live compatibility workflow pins Nexus to
-3.92.0 because Pub repositories are only available there. Add `run-client-e2e` to run the real
-client matrix, or start the workflow manually and select a suite.
+Pub compatibility against the Nexus 3.92.0 PostgreSQL reference. The live compatibility workflow
+uses `docker-compose.compat-postgres.yml` because Pub repositories require Nexus 3.92.0+ and the
+newer Nexus generation is covered here through a PostgreSQL datastore reference. Add
+`run-client-e2e` to run the real client matrix, or start the workflow manually and select a suite.
 
 ## Real Client E2E
 
@@ -106,15 +109,15 @@ metadata, and selected inspect outputs are written under `artifacts/client-e2e/`
 
 ## Live Pub Checks
 
-Pub compatibility requires Nexus 3.92.0 or later. With local Nexus 3.92.0 on `28093` using
-`admin` / `Admin1234` and local kkrepo dev on `18090` using `admin` / `123456`, run:
+Pub compatibility requires Nexus 3.92.0 or later. For the disposable reference, start
+`docker-compose.compat-postgres.yml` as described above and run:
 
 ```bash
 PUB_COMPAT_ENABLED=true \
-NEXUS_COMPAT_BASE_URL=http://127.0.0.1:28093 \
+NEXUS_COMPAT_BASE_URL=http://127.0.0.1:28090 \
 NEXUS_COMPAT_PASSWORD=Admin1234 \
 KKREPO_COMPAT_BASE_URL=http://127.0.0.1:18090 \
-KKREPO_COMPAT_PASSWORD=123456 \
+KKREPO_COMPAT_PASSWORD=12345678 \
 mvn -pl compat-test -am \
   -DfailIfNoTests=false \
   -Dsurefire.failIfNoSpecifiedTests=false \

@@ -4,7 +4,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 COMPOSE_FILE="${COMPOSE_FILE:-$PROJECT_ROOT/docker-compose.compat.yml}"
-export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-kkrepo-compat}"
+if [[ -z "${COMPOSE_PROJECT_NAME:-}" ]]; then
+  case "$(basename "$COMPOSE_FILE")" in
+    docker-compose.compat-postgres.yml) COMPOSE_PROJECT_NAME=kkrepo-postgres-compat ;;
+    *) COMPOSE_PROJECT_NAME=kkrepo-compat ;;
+  esac
+fi
+export COMPOSE_PROJECT_NAME
 
 NEXUS_URL="${NEXUS_COMPAT_BASE_URL:-http://127.0.0.1:${NEXUS_COMPAT_PORT:-28090}}"
 NEXUS_USER="${NEXUS_COMPAT_USERNAME:-admin}"

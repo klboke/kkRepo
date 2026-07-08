@@ -56,9 +56,9 @@ COMPAT_WRITE_ENABLED=true
 
 This avoids accidentally writing test packages to a long-running Nexus reference instance. Write tests usually use one-off package names and paths, and cover delete, repeated upload, and metadata update behavior when feasible.
 
-Cargo / Rust compatibility uses a Nexus Repository 3.77.x+ Community Edition reference because older default compatibility references do not expose Community Cargo repositories. Use the `cargo` suite in `scripts/ci/run-live-compat.sh`; it covers hosted, proxy, and group repositories, including write behavior when enabled.
+Cargo / Rust compatibility uses the datastore-era Nexus PostgreSQL reference because older default compatibility references do not expose Community Cargo repositories. Use the `cargo` suite in `scripts/ci/run-live-compat.sh`; it covers hosted, proxy, and group repositories, including write behavior when enabled. The current disposable PostgreSQL compose pins the reference to Nexus 3.92.0.
 
-Dart / Pub compatibility uses a Nexus Repository 3.92.0+ reference because Pub repositories are first available there. Use `PubRepositoryBlackBoxCompatibilityTest` or the `extended` live suite for Pub hosted/proxy/group metadata, archive, publish, `version.json`, checksum, and error-status coverage.
+Dart / Pub compatibility uses the same Nexus Repository 3.92.0+ PostgreSQL reference because Pub repositories are first available there. Use `PubRepositoryBlackBoxCompatibilityTest` or the `extended` live suite for Pub hosted/proxy/group metadata, archive, publish, `version.json`, checksum, and error-status coverage.
 
 ## Real Client E2E
 

@@ -56,9 +56,9 @@ COMPAT_WRITE_ENABLED=true
 
 这样可以避免误向长期运行的参考 Nexus 写入测试包。写入测试通常使用一次性包名和一次性路径，并在可行时覆盖删除、重复上传和元数据更新行为。
 
-Cargo / Rust 兼容性测试使用 Nexus Repository 3.77.x+ Community Edition 参考实例，因为旧的默认兼容性参考实例不暴露 Community Cargo 仓库。请使用 `scripts/ci/run-live-compat.sh` 的 `cargo` suite；它覆盖 hosted、proxy、group 仓库，并在启用写测试时覆盖写入行为。
+Cargo / Rust 兼容性测试使用 datastore 时代的 Nexus PostgreSQL 参考实例，因为旧的默认兼容性参考实例不暴露 Community Cargo 仓库。请使用 `scripts/ci/run-live-compat.sh` 的 `cargo` suite；它覆盖 hosted、proxy、group 仓库，并在启用写测试时覆盖写入行为。当前一次性 PostgreSQL compose 将参考实例固定为 Nexus 3.92.0。
 
-Dart / Pub 兼容性测试使用 Nexus Repository 3.92.0+ 参考实例，因为 Pub 仓库从该版本开始进入参考范围。可以使用 `PubRepositoryBlackBoxCompatibilityTest` 或 live `extended` suite 覆盖 Pub hosted/proxy/group metadata、archive、publish、`version.json`、checksum 和错误状态。
+Dart / Pub 兼容性测试使用同一个 Nexus Repository 3.92.0+ PostgreSQL 参考实例，因为 Pub 仓库从该版本开始进入参考范围。可以使用 `PubRepositoryBlackBoxCompatibilityTest` 或 live `extended` suite 覆盖 Pub hosted/proxy/group metadata、archive、publish、`version.json`、checksum 和错误状态。
 
 ## 真实客户端 E2E
 
