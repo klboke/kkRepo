@@ -122,7 +122,7 @@ public class NexusRestClient {
           }
         }
         try {
-          ['NpmToken', 'NuGetApiKey', 'RubyGemsApiKey', 'CargoToken'].each { domain ->
+          ['NpmToken', 'NuGetApiKey', 'RubyGemsApiKey', 'CargoToken', 'PubToken'].each { domain ->
             try {
               if (apiKeyService.count(domain) > 0) {
                 addDomain(domain)

@@ -12,13 +12,15 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Cleans expired Pub publish staging blobs from the shared blob store.
  *
- * <p>Upload session state is durable in MySQL, so any replica can retry this cleanup. Blob deletion
- * happens before the session is marked failed; if a blob store is temporarily unavailable, the row
- * remains open and the next cleanup cycle retries it.
+ * <p>Upload session state is durable in MySQL, so any replica can retry this cleanup. Each candidate
+ * row is locked and rechecked before blob deletion; if a blob store is temporarily unavailable, the
+ * row remains open and the next cleanup cycle retries it.
  */
 @Component
 class PubUploadSessionCleanupWorker {
@@ -26,16 +28,19 @@ class PubUploadSessionCleanupWorker {
 
   private final PubUploadSessionDao uploadSessionDao;
   private final BlobStorageRegistry blobStorageRegistry;
+  private final TransactionTemplate transactionTemplate;
   private final boolean enabled;
   private final int batchSize;
 
   PubUploadSessionCleanupWorker(
       PubUploadSessionDao uploadSessionDao,
       BlobStorageRegistry blobStorageRegistry,
+      PlatformTransactionManager transactionManager,
       @Value("${kkrepo.pub.upload-cleanup.enabled:true}") boolean enabled,
       @Value("${kkrepo.pub.upload-cleanup.batch-size:64}") int batchSize) {
     this.uploadSessionDao = uploadSessionDao;
     this.blobStorageRegistry = blobStorageRegistry;
+    this.transactionTemplate = new TransactionTemplate(transactionManager);
     this.enabled = enabled;
     this.batchSize = Math.max(1, batchSize);
   }
@@ -48,21 +53,36 @@ class PubUploadSessionCleanupWorker {
       return;
     }
     try {
+      Instant now = Instant.now();
       List<PubUploadSessionRecord> sessions =
-          uploadSessionDao.listExpiredOpen(Instant.now(), batchSize);
+          uploadSessionDao.listExpiredOpen(now, batchSize);
       for (PubUploadSessionRecord session : sessions) {
-        cleanupOne(session);
+        cleanupOne(session.id(), now);
       }
     } catch (RuntimeException e) {
       log.warn("Pub upload cleanup failed; will retry next cycle", e);
     }
   }
 
-  private void cleanupOne(PubUploadSessionRecord session) {
-    if (!deleteStagedBlob(session)) {
-      return;
-    }
-    uploadSessionDao.markFailed(session.id(), "Pub upload session expired");
+  private void cleanupOne(long sessionRowId, Instant now) {
+    transactionTemplate.executeWithoutResult(status -> {
+      PubUploadSessionRecord locked = uploadSessionDao.lockById(sessionRowId).orElse(null);
+      if (!isExpiredOpen(locked, now)) {
+        return;
+      }
+      if (!deleteStagedBlob(locked)) {
+        return;
+      }
+      uploadSessionDao.markFailed(locked.id(), "Pub upload session expired");
+    });
+  }
+
+  private static boolean isExpiredOpen(PubUploadSessionRecord session, Instant now) {
+    return session != null
+        && (PubUploadSessionDao.STATUS_NEW.equals(session.status())
+            || PubUploadSessionDao.STATUS_UPLOADED.equals(session.status()))
+        && session.expiresAt() != null
+        && session.expiresAt().isBefore(now);
   }
 
   private boolean deleteStagedBlob(PubUploadSessionRecord session) {

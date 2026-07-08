@@ -430,6 +430,11 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
+  void malformedPubPublishRoutesUseNormalPermissionMapping() throws Exception {
+    assertPubRouteAction("GET", "/repository/pub-hosted/api/packages/versions/finalize/", PermissionAction.READ);
+  }
+
+  @Test
   void pubProxyAndGroupPublishRoutesReachProtocolLayerWithoutChallenge() throws Exception {
     assertInvalidPubPublishRoutePassesThrough(repository(
         "pub-proxy", RepositoryFormat.PUB, RepositoryType.PROXY));

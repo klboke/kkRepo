@@ -348,6 +348,23 @@ public class HttpRemoteFetcher {
           includeAuthorization && trusted != null ? remoteAuthorizationHeader(runtime) : null);
     }
 
+    public Request withRepositoryAllowingUnsignedRedirects(
+        RepositoryRuntime runtime,
+        boolean includeAuthorization) {
+      String trusted = trustedRemoteHost(url, runtime);
+      return new Request(
+          url,
+          etag,
+          lastModified,
+          timeout,
+          timeoutProfile,
+          headOnly,
+          runtime == null ? null : runtime.name(),
+          runtime == null || runtime.format() == null ? null : runtime.format().name(),
+          null,
+          includeAuthorization && trusted != null ? remoteAuthorizationHeader(runtime) : null);
+    }
+
     public String method() {
       return headOnly ? "HEAD" : "GET";
     }
@@ -365,6 +382,9 @@ public class HttpRemoteFetcher {
         return authorizationHeader;
       }
       if (!sameOrigin(current, redirected)) {
+        if (trustedHost == null) {
+          return null;
+        }
         throw new SecurityValidationException("remote redirect URL origin must remain " + origin(current));
       }
       return authorizationHeader;

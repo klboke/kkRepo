@@ -125,6 +125,7 @@ class NexusRestClientTest {
     assertTrue(script.contains("metadataEngine == 'ORIENTDB'"));
     assertTrue(script.contains("metadataEngine.startsWith('DATASTORE')"));
     assertTrue(script.contains("container.lookup('org.sonatype.nexus.security.authc.apikey.ApiKeyLowLevelService')"));
+    assertTrue(script.contains("'PubToken'"));
     assertTrue(script.contains("select distinct domain from api_key_v2 order by domain"));
     assertTrue(script.contains("loadClass('org.sonatype.nexus.orient.DatabaseInstance')"));
     assertTrue(script.contains("loadClass('org.sonatype.nexus.orient.DatabaseInstanceNames')"));

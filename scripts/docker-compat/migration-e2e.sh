@@ -4,6 +4,7 @@ set -euo pipefail
 NEXUS_URL="${NEXUS_COMPAT_BASE_URL:-http://localhost:28090}"
 NEXUS_REPOSITORY="${DOCKER_MIGRATION_NEXUS_REPOSITORY:-docker-hosted}"
 CARGO_NEXUS_REPOSITORY="${CARGO_MIGRATION_NEXUS_REPOSITORY:-cargo-hosted}"
+PUB_NEXUS_REPOSITORY="${PUB_MIGRATION_NEXUS_REPOSITORY:-pub-hosted}"
 NEXUS_USER="${NEXUS_COMPAT_USERNAME:-admin}"
 NEXUS_PASSWORD="${NEXUS_COMPAT_PASSWORD:-Admin1234}"
 
@@ -12,6 +13,7 @@ KKREPO_HEALTH_URL="${KKREPO_MANAGEMENT_URL:-http://127.0.0.1:18091}/actuator/hea
 KKREPO_DOCKER_REGISTRY="${DOCKER_MIGRATION_KKREPO_REGISTRY:-127.0.0.1:18183}"
 KKREPO_REPOSITORY="${DOCKER_MIGRATION_KKREPO_REPOSITORY:-docker-hosted}"
 CARGO_KKREPO_REPOSITORY="${CARGO_MIGRATION_KKREPO_REPOSITORY:-cargo-hosted}"
+PUB_KKREPO_REPOSITORY="${PUB_MIGRATION_KKREPO_REPOSITORY:-pub-hosted}"
 KKREPO_USER="${KKREPO_COMPAT_USERNAME:-admin}"
 KKREPO_PASSWORD="${KKREPO_COMPAT_PASSWORD:-12345678}"
 KKREPO_BLOB_PATH="${KKREPO_COMPAT_BLOB_PATH:-/tmp/kkrepo-blobs/default}"
@@ -20,8 +22,11 @@ EXPECTED_CONNECTOR_PORT="${KKREPO_DOCKER_CONNECTOR_PORT:-18180}"
 
 IMAGE="${DOCKER_MIGRATION_IMAGE:-kkrepo-migration/e2e}"
 TAG="${DOCKER_MIGRATION_TAG:-$(date +%Y%m%d%H%M%S)}"
-CARGO_CRATE="${CARGO_MIGRATION_CRATE:-kkrepo_migration_e2e_${TAG//[^A-Za-z0-9_]/_}}"
+TAG_SAFE="${TAG//[^A-Za-z0-9_]/_}"
+CARGO_CRATE="${CARGO_MIGRATION_CRATE:-kkrepo_migration_e2e_${TAG_SAFE}}"
 CARGO_VERSION="${CARGO_MIGRATION_VERSION:-0.1.0}"
+PUB_PACKAGE="${PUB_MIGRATION_PACKAGE:-kkrepo_migration_e2e_${TAG_SAFE,,}}"
+PUB_VERSION="${PUB_MIGRATION_VERSION:-0.1.0}"
 PAGE_SIZE="${DOCKER_MIGRATION_PAGE_SIZE:-500}"
 CONCURRENCY="${DOCKER_MIGRATION_CONCURRENCY:-2}"
 WAIT_TIMEOUT_SECONDS="${DOCKER_MIGRATION_WAIT_TIMEOUT_SECONDS:-300}"
@@ -220,6 +225,16 @@ source_cargo_available() {
     "$NEXUS_URL/service/rest/v1/repositories/cargo/hosted/$CARGO_NEXUS_REPOSITORY" >/dev/null 2>&1
 }
 
+pub_migration_enabled() {
+  [[ "${NEXUS_COMPAT_IMAGE:-}" == *3.92* ]]
+}
+
+source_pub_available() {
+  curl -m 20 -fsS \
+    -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$NEXUS_URL/service/rest/v1/repositories/pub/hosted/$PUB_NEXUS_REPOSITORY" >/dev/null 2>&1
+}
+
 publish_cargo_fixture_to_source_nexus() {
   local crate="$1"
   local version="$2"
@@ -329,6 +344,176 @@ PY
   fi
   rm -f "$index_file" "$crate_file"
   log "Cargo fixture verified: $crate $version sha256=$expected_sha256"
+}
+
+publish_pub_fixture_to_source_nexus() {
+  local package_name="$1"
+  local version="$2"
+  local workdir archive init_file upload_url_file fields_file session_file headers_file response_file
+  local sha256 status upload_url finalize_location finalize_url session_id
+  workdir="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-pub-migration.XXXXXX")"
+  archive="$workdir/${package_name}-${version}.tar.gz"
+  init_file="$workdir/init.json"
+  upload_url_file="$workdir/upload_url.txt"
+  fields_file="$workdir/fields.txt"
+  session_file="$workdir/session.txt"
+  headers_file="$workdir/headers.txt"
+  response_file="$workdir/response.txt"
+
+  python3 - "$package_name" "$version" "$archive" <<'PY'
+import gzip
+import io
+import sys
+import tarfile
+
+package_name, version, archive_path = sys.argv[1:4]
+files = {
+    "pubspec.yaml": (
+        f"name: {package_name}\n"
+        f"version: {version}\n"
+        "description: kkRepo Pub migration e2e fixture\n"
+        "environment:\n"
+        "  sdk: '>=3.0.0 <4.0.0'\n"
+    ).encode(),
+    "lib/main.dart": b"int answer() => 42;\n",
+}
+with open(archive_path, "wb") as target:
+    with gzip.GzipFile(fileobj=target, mode="wb", mtime=0) as gz:
+        with tarfile.open(fileobj=gz, mode="w") as tar:
+            for path, payload in files.items():
+                info = tarfile.TarInfo(path)
+                info.size = len(payload)
+                info.mtime = 0
+                tar.addfile(info, io.BytesIO(payload))
+PY
+  sha256="$(file_sha256 "$archive")"
+
+  status="$(curl -m 60 -sS -o "$init_file" -w '%{http_code}' \
+    -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$NEXUS_URL/repository/$PUB_NEXUS_REPOSITORY/api/packages/versions/new")"
+  if [[ "$status" != "200" ]]; then
+    log "initialize Pub publish returned HTTP $status"
+    cat "$init_file" >&2 || true
+    rm -rf "$workdir"
+    exit 1
+  fi
+
+  python3 - "$init_file" "$upload_url_file" "$fields_file" "$session_file" <<'PY'
+import json
+import sys
+
+init_path, upload_url_path, fields_path, session_path = sys.argv[1:5]
+with open(init_path, "r", encoding="utf-8") as source:
+    payload = json.load(source)
+url = payload.get("url")
+if not url:
+    raise SystemExit(f"Pub publish init did not return upload url: {payload}")
+fields = payload.get("fields") or {}
+if not isinstance(fields, dict):
+    raise SystemExit(f"Pub publish init fields is not an object: {fields!r}")
+with open(upload_url_path, "w", encoding="utf-8") as target:
+    target.write(str(url))
+with open(fields_path, "w", encoding="utf-8") as target:
+    for key, value in fields.items():
+        target.write(f"{key}={value}\n")
+with open(session_path, "w", encoding="utf-8") as target:
+    target.write(str(fields.get("session") or ""))
+PY
+  upload_url="$(absolute_location "$(cat "$upload_url_file")")"
+  local curl_args=(-m 60 -sS -D "$headers_file" -o "$response_file" -w '%{http_code}' -X POST)
+  if [[ "$upload_url" == "${NEXUS_URL%/}/"* ]]; then
+    curl_args+=(-u "$NEXUS_USER:$NEXUS_PASSWORD")
+  fi
+  while IFS= read -r field; do
+    if [[ -n "$field" ]]; then
+      curl_args+=(-F "$field")
+    fi
+  done <"$fields_file"
+  curl_args+=(-F "file=@$archive;filename=${package_name}-${version}.tar.gz;type=application/octet-stream")
+  status="$(curl "${curl_args[@]}" "$upload_url")"
+  if [[ "$status" != "204" && "$status" != "303" ]]; then
+    log "upload Pub fixture returned HTTP $status"
+    cat "$response_file" >&2 || true
+    rm -rf "$workdir"
+    exit 1
+  fi
+
+  finalize_location="$(header_location "$headers_file")"
+  session_id="$(cat "$session_file")"
+  if [[ -z "$finalize_location" && -n "$session_id" ]]; then
+    finalize_location="/repository/$PUB_NEXUS_REPOSITORY/api/packages/versions/finalize/$session_id"
+  fi
+  if [[ -z "$finalize_location" ]]; then
+    log "Pub upload response did not include a finalize Location"
+    rm -rf "$workdir"
+    exit 1
+  fi
+  finalize_url="$(absolute_location "$finalize_location")"
+  status="$(curl -m 60 -sS -o "$response_file" -w '%{http_code}' \
+    -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$finalize_url")"
+  if [[ "$status" != "200" ]]; then
+    log "finalize Pub fixture returned HTTP $status"
+    cat "$response_file" >&2 || true
+    rm -rf "$workdir"
+    exit 1
+  fi
+
+  rm -rf "$workdir"
+  printf '%s' "$sha256"
+}
+
+verify_migrated_pub_fixture() {
+  local package_name="$1"
+  local version="$2"
+  local expected_sha256="$3"
+  local metadata_file archive_url archive_file downloaded_sha
+  metadata_file="$(mktemp)"
+  archive_file="$(mktemp)"
+  curl -m 30 -fsS \
+    -u "$(auth)" \
+    "$KKREPO_URL/repository/$PUB_KKREPO_REPOSITORY/api/packages/$package_name" >"$metadata_file"
+  archive_url="$(python3 - "$metadata_file" "$package_name" "$version" "$expected_sha256" <<'PY'
+import json
+import sys
+
+path, package_name, version, expected_sha256 = sys.argv[1:5]
+with open(path, "r", encoding="utf-8") as source:
+    body = json.load(source)
+if body.get("name") != package_name:
+    raise SystemExit(f"Pub metadata name mismatch: {body.get('name')!r} != {package_name!r}")
+versions = body.get("versions") or []
+matches = [entry for entry in versions if isinstance(entry, dict) and entry.get("version") == version]
+if not matches:
+    raise SystemExit(f"Pub metadata did not expose {package_name} {version}: {versions}")
+entry = matches[0]
+actual_sha256 = str(entry.get("archive_sha256") or "").lower()
+if actual_sha256 != expected_sha256:
+    raise SystemExit(f"Pub archive_sha256 mismatch: {actual_sha256} != {expected_sha256}")
+archive_url = entry.get("archive_url")
+if not archive_url:
+    raise SystemExit(f"Pub metadata entry did not include archive_url: {entry}")
+print(archive_url)
+PY
+)"
+  if [[ "$archive_url" == http://* || "$archive_url" == https://* ]]; then
+    :
+  elif [[ "$archive_url" == /* ]]; then
+    archive_url="${KKREPO_URL%/}$archive_url"
+  else
+    archive_url="${KKREPO_URL%/}/$archive_url"
+  fi
+  curl -m 30 -fsS \
+    -u "$(auth)" \
+    "$archive_url" >"$archive_file"
+  downloaded_sha="$(file_sha256 "$archive_file")"
+  if [[ "$downloaded_sha" != "$expected_sha256" ]]; then
+    log "Pub archive sha256 mismatch: source=$expected_sha256 target=$downloaded_sha"
+    rm -f "$metadata_file" "$archive_file"
+    exit 1
+  fi
+  rm -f "$metadata_file" "$archive_file"
+  log "Pub fixture verified: $package_name $version sha256=$expected_sha256"
 }
 
 kkrepo_repo_exists() {
@@ -678,7 +863,8 @@ docker_login "$KKREPO_DOCKER_REGISTRY" "$KKREPO_USER" "$KKREPO_PASSWORD"
 
 source_digest_value="$(push_fixture_to_source_nexus "$IMAGE" "$TAG")"
 cargo_sha256_value=""
-cargo_repositories_json="\"$(json_escape "$NEXUS_REPOSITORY")\""
+pub_sha256_value=""
+migration_repositories_json="\"$(json_escape "$NEXUS_REPOSITORY")\""
 if cargo_migration_enabled; then
   if ! source_cargo_available; then
     log "expected Cargo repository $CARGO_NEXUS_REPOSITORY is not available on datastore source"
@@ -686,14 +872,23 @@ if cargo_migration_enabled; then
   fi
   log "publishing Cargo fixture to source Nexus: $CARGO_CRATE $CARGO_VERSION"
   cargo_sha256_value="$(publish_cargo_fixture_to_source_nexus "$CARGO_CRATE" "$CARGO_VERSION")"
-  cargo_repositories_json="$cargo_repositories_json,\"$(json_escape "$CARGO_NEXUS_REPOSITORY")\""
+  migration_repositories_json="$migration_repositories_json,\"$(json_escape "$CARGO_NEXUS_REPOSITORY")\""
+fi
+if pub_migration_enabled; then
+  if ! source_pub_available; then
+    log "expected Pub repository $PUB_NEXUS_REPOSITORY is not available on Nexus 3.92 source"
+    exit 1
+  fi
+  log "publishing Pub fixture to source Nexus: $PUB_PACKAGE $PUB_VERSION"
+  pub_sha256_value="$(publish_pub_fixture_to_source_nexus "$PUB_PACKAGE" "$PUB_VERSION")"
+  migration_repositories_json="$migration_repositories_json,\"$(json_escape "$PUB_NEXUS_REPOSITORY")\""
 fi
 
 payload="{
   \"sourceBaseUrl\":\"$(json_escape "$NEXUS_URL")\",
   \"sourceUsername\":\"$(json_escape "$NEXUS_USER")\",
   \"sourcePassword\":\"$(json_escape "$NEXUS_PASSWORD")\",
-  \"repositories\":[$cargo_repositories_json],
+  \"repositories\":[$migration_repositories_json],
   \"pageSize\":$PAGE_SIZE,
   \"concurrency\":$CONCURRENCY,
   \"checksumValidation\":true
@@ -737,4 +932,8 @@ if [[ -n "$cargo_sha256_value" ]]; then
   verify_migrated_cargo_fixture "$CARGO_CRATE" "$CARGO_VERSION" "$cargo_sha256_value"
 fi
 
-log "Docker/Cargo migration E2E completed: job=$job_id source=${NEXUS_URL%/}/repository/${NEXUS_REPOSITORY}/v2/${IMAGE}:${TAG} target=$kkrepo_ref"
+if [[ -n "$pub_sha256_value" ]]; then
+  verify_migrated_pub_fixture "$PUB_PACKAGE" "$PUB_VERSION" "$pub_sha256_value"
+fi
+
+log "Docker/Cargo/Pub migration E2E completed: job=$job_id source=${NEXUS_URL%/}/repository/${NEXUS_REPOSITORY}/v2/${IMAGE}:${TAG} target=$kkrepo_ref"

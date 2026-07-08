@@ -11,11 +11,14 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
+import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 class PubRepositoryBlackBoxCompatibilityTest {
@@ -49,8 +52,8 @@ class PubRepositoryBlackBoxCompatibilityTest {
     assertEquals(referenceVersion.get("version"), candidateVersion.get("version"), "version");
     assertEquals(referenceVersion.get("archive_sha256"), candidateVersion.get("archive_sha256"), "archive_sha256");
 
-    Exchange referenceArchive = send(absolute(referenceVersion.get("archive_url")).GET());
-    Exchange candidateArchive = send(absolute(candidateVersion.get("archive_url")).GET());
+    Exchange referenceArchive = send(reference.absoluteRequest(referenceVersion.get("archive_url")).GET());
+    Exchange candidateArchive = send(candidate.absoluteRequest(candidateVersion.get("archive_url")).GET());
     assertSameStatus("hosted archive", referenceArchive, candidateArchive);
     assertArrayEquals(referenceArchive.body(), candidateArchive.body(), "archive body");
     assertVersionJsonAndChecksumSidecars("hosted", reference, candidate,
@@ -62,7 +65,8 @@ class PubRepositoryBlackBoxCompatibilityTest {
     PubCompatConfig config = PubCompatConfig.load();
     assumeTrue(config.enabled(), "Set PUB_COMPAT_ENABLED=true to run Pub compatibility");
 
-    Exchange candidateChallenge = send(config.candidateHosted().request("api/packages/versions/new").GET());
+    Exchange candidateChallenge = send(config.candidateHosted().withoutAuth()
+        .request("api/packages/versions/new").GET());
     assertEquals(401, candidateChallenge.status(), "kkrepo publish init should challenge without token");
     assertTrue(candidateChallenge.header("www-authenticate").toLowerCase().contains("bearer"),
         "kkrepo Pub challenge should be Bearer");
@@ -146,8 +150,8 @@ class PubRepositoryBlackBoxCompatibilityTest {
     assertEquals(referenceVersionBody.get("archive_sha256"), candidateVersionBody.get("archive_sha256"),
         label + " version endpoint archive_sha256");
 
-    Exchange referenceArchive = send(absolute(referenceVersion.get("archive_url")).GET());
-    Exchange candidateArchive = send(absolute(candidateVersion.get("archive_url")).GET());
+    Exchange referenceArchive = send(reference.absoluteRequest(referenceVersion.get("archive_url")).GET());
+    Exchange candidateArchive = send(candidate.absoluteRequest(candidateVersion.get("archive_url")).GET());
     assertSameStatus(label + " archive", referenceArchive, candidateArchive);
     assertEquals(200, candidateArchive.status(), "kkrepo " + label + " archive status");
     assertArrayEquals(referenceArchive.body(), candidateArchive.body(), label + " archive body");
@@ -257,11 +261,6 @@ class PubRepositoryBlackBoxCompatibilityTest {
     return JSON.readValue(exchange.body(), JSON_MAP);
   }
 
-  private static HttpRequest.Builder absolute(Object url) {
-    return HttpRequest.newBuilder(URI.create(String.valueOf(url)))
-        .timeout(Duration.ofSeconds(90));
-  }
-
   private static Exchange send(HttpRequest.Builder builder) throws Exception {
     HttpResponse<byte[]> response = HTTP.send(
         builder.header("User-Agent", "kkrepo-pub-compat-test/1").build(),
@@ -293,10 +292,30 @@ class PubRepositoryBlackBoxCompatibilityTest {
     }
   }
 
-  private record Endpoint(String baseUrl) {
+  private record Endpoint(String baseUrl, Optional<String> username, Optional<String> password) {
     HttpRequest.Builder request(String path) {
-      return HttpRequest.newBuilder(URI.create(baseUrl + "/" + path))
+      return authenticatedBuilder(baseUrl + "/" + path, true)
           .timeout(Duration.ofSeconds(60));
+    }
+
+    HttpRequest.Builder absoluteRequest(Object url) {
+      String value = String.valueOf(url);
+      return authenticatedBuilder(value, value.startsWith(baseUrl + "/"))
+          .timeout(Duration.ofSeconds(90));
+    }
+
+    Endpoint withoutAuth() {
+      return new Endpoint(baseUrl, Optional.empty(), Optional.empty());
+    }
+
+    private HttpRequest.Builder authenticatedBuilder(String url, boolean addCredentials) {
+      HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url));
+      if (addCredentials && username.isPresent() && password.isPresent()) {
+        String token = Base64.getEncoder().encodeToString(
+            (username.get() + ":" + password.get()).getBytes(StandardCharsets.UTF_8));
+        builder.header("Authorization", "Basic " + token);
+      }
+      return builder;
     }
   }
 
@@ -324,6 +343,10 @@ class PubRepositoryBlackBoxCompatibilityTest {
       String candidateHosted = setting("PUB_KKREPO_HOSTED_URL", kkrepoBase + "/repository/pub-hosted");
       String candidateProxy = setting("PUB_KKREPO_PROXY_URL", kkrepoBase + "/repository/pub-proxy");
       String candidateGroup = setting("PUB_KKREPO_GROUP_URL", kkrepoBase + "/repository/pub-group");
+      Optional<String> nexusUsername = CompatDefaults.nexusUsername();
+      Optional<String> nexusPassword = CompatDefaults.nexusPassword();
+      Optional<String> kkrepoUsername = CompatDefaults.nexusPlusUsername();
+      Optional<String> kkrepoPassword = CompatDefaults.nexusPlusPassword();
       String packageName = setting("PUB_COMPAT_PACKAGE", "");
       String version = setting("PUB_COMPAT_VERSION", "");
       return new PubCompatConfig(
@@ -332,12 +355,12 @@ class PubRepositoryBlackBoxCompatibilityTest {
           setting("PUB_COMPAT_HOSTED_VERSION", version),
           setting("PUB_COMPAT_PROXY_PACKAGE", packageName.isBlank() ? "path" : packageName),
           setting("PUB_COMPAT_PROXY_VERSION", version.isBlank() ? "1.9.0" : version),
-          new Endpoint(CompatDefaults.stripTrailingSlash(referenceHosted)),
-          new Endpoint(CompatDefaults.stripTrailingSlash(referenceProxy)),
-          new Endpoint(CompatDefaults.stripTrailingSlash(referenceGroup)),
-          new Endpoint(CompatDefaults.stripTrailingSlash(candidateHosted)),
-          new Endpoint(CompatDefaults.stripTrailingSlash(candidateProxy)),
-          new Endpoint(CompatDefaults.stripTrailingSlash(candidateGroup)),
+          new Endpoint(CompatDefaults.stripTrailingSlash(referenceHosted), nexusUsername, nexusPassword),
+          new Endpoint(CompatDefaults.stripTrailingSlash(referenceProxy), nexusUsername, nexusPassword),
+          new Endpoint(CompatDefaults.stripTrailingSlash(referenceGroup), nexusUsername, nexusPassword),
+          new Endpoint(CompatDefaults.stripTrailingSlash(candidateHosted), kkrepoUsername, kkrepoPassword),
+          new Endpoint(CompatDefaults.stripTrailingSlash(candidateProxy), kkrepoUsername, kkrepoPassword),
+          new Endpoint(CompatDefaults.stripTrailingSlash(candidateGroup), kkrepoUsername, kkrepoPassword),
           setting("PUB_COMPAT_MISSING_PACKAGE", "kkrepo_missing_package_zzzzzz"),
           setting("PUB_COMPAT_FLUTTER_PACKAGE", "_fe_analyzer_shared"));
     }

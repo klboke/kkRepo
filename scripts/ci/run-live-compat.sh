@@ -33,7 +33,7 @@ run_tests() {
 
 case "$SUITE" in
   smoke)
-    run_tests "KkRepoConsoleBlackBoxCompatibilityTest,MavenRepositoryBlackBoxCompatibilityTest#proxyReadRoundTripMatchesNexusWhenConfigured"
+    run_tests "KkRepoConsoleBlackBoxCompatibilityTest,MavenRepositoryBlackBoxCompatibilityTest#proxyReadRoundTripMatchesNexusWhenConfigured,PubRepositoryBlackBoxCompatibilityTest"
     ;;
   write-smoke)
     export COMPAT_WRITE_ENABLED=true
@@ -46,7 +46,13 @@ case "$SUITE" in
     export CARGO_COMPAT_ENABLED=true
     run_tests "CargoRepositoryBlackBoxCompatibilityTest"
     ;;
+  pub|dart-pub)
+    export PUB_COMPAT_ENABLED=true
+    run_tests "PubRepositoryBlackBoxCompatibilityTest"
+    ;;
   client-e2e)
+    export PUB_COMPAT_ENABLED=true
+    run_tests "PubRepositoryBlackBoxCompatibilityTest"
     scripts/ci/run-client-e2e.sh
     ;;
   full)
@@ -55,7 +61,7 @@ case "$SUITE" in
     ;;
   *)
     echo "Unknown live compatibility suite: $SUITE" >&2
-    echo "Available suites: smoke, write-smoke, extended, cargo, client-e2e, full" >&2
+    echo "Available suites: smoke, write-smoke, extended, cargo, pub, client-e2e, full" >&2
     exit 2
     ;;
 esac

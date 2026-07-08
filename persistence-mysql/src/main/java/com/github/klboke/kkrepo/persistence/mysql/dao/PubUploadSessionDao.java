@@ -101,6 +101,14 @@ public class PubUploadSessionDao {
         """, rowMapper, repositoryId, sessionId).stream().findFirst();
   }
 
+  public Optional<PubUploadSessionRecord> lockById(long id) {
+    return jdbcTemplate.query("""
+        SELECT * FROM pub_upload_session
+        WHERE id = ?
+        FOR UPDATE
+        """, rowMapper, id).stream().findFirst();
+  }
+
   public List<PubUploadSessionRecord> listExpiredOpen(Instant now, int limit) {
     return jdbcTemplate.query("""
         SELECT * FROM pub_upload_session

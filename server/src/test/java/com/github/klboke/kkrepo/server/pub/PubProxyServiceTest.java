@@ -27,6 +27,7 @@ class PubProxyServiceTest {
   void metadataResponseRewritesUpstreamArchiveUrlsToProxyRepositoryUrls() throws Exception {
     TestPubProxyService service = new TestPubProxyService(Map.of(
         "name", "example_package",
+        "advisoriesUpdated", "2026-07-08T00:00:00Z",
         "latest", Map.of(
             "version", "1.0.0",
             "archive_url", "https://pub.dev/packages/example_package/versions/1.0.0.tar.gz"),
@@ -41,6 +42,7 @@ class PubProxyServiceTest {
     Map<String, Object> body = readJson(response);
     String serialized = MAPPER.writeValueAsString(body);
     assertFalse(serialized.contains("https://pub.dev/packages"));
+    assertFalse(body.containsKey("advisoriesUpdated"));
     Map<?, ?> latest = (Map<?, ?>) body.get("latest");
     assertEquals("https://repo.test/repository/pub-proxy/api/archives/example_package-1.0.0.tar.gz",
         latest.get("archive_url"));

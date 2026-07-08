@@ -8,6 +8,8 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.protocol.pub.PubPath;
+import com.github.klboke.kkrepo.protocol.pub.PubPathParser;
 import com.github.klboke.kkrepo.server.npm.NpmTokenService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -31,6 +33,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   static final int FILTER_ORDER = SessionRepositoryFilter.DEFAULT_ORDER + 20;
   public static final String REPOSITORY_RECORD_ATTRIBUTE =
       RepositorySecurityFilter.class.getName() + ".REPOSITORY_RECORD";
+  private static final PubPathParser PUB_PATH_PARSER = new PubPathParser();
   private final SecurityAuthenticationService authenticationService;
   private final AccessDecisionService accessDecisionService;
   private final RepositoryDao repositoryDao;
@@ -218,13 +221,13 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   }
 
   private static boolean isPubPublishRoute(String method, String path) {
-    if ("GET".equalsIgnoreCase(method)
-        && ("api/packages/versions/new".equals(path)
-            || path.startsWith("api/packages/versions/finalize/"))) {
-      return true;
+    PubPath parsed = PUB_PATH_PARSER.parse(path);
+    if ("GET".equalsIgnoreCase(method)) {
+      return parsed.kind() == PubPath.Kind.PUBLISH_INIT
+          || parsed.kind() == PubPath.Kind.PUBLISH_FINALIZE;
     }
     return "POST".equalsIgnoreCase(method)
-        && path.startsWith("api/packages/versions/upload/");
+        && parsed.kind() == PubPath.Kind.PUBLISH_UPLOAD;
   }
 
   private static boolean isInvalidPubPublishRoute(RepositoryRecord repository, RepositoryRequest target) {

@@ -203,6 +203,22 @@ class HttpRemoteFetcherTest {
   }
 
   @Test
+  void repositoryRequestsCanDropAuthorizationForUnsignedCrossOriginRedirects() {
+    RepositoryRuntime runtime = runtime("robot", "secret", null);
+    HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request
+        .get("https://repo.example.com/maven2/com/example/app.jar")
+        .withRepositoryAllowingUnsignedRedirects(runtime, true);
+    URI current = URI.create("https://repo.example.com/maven2/com/example/app.jar");
+
+    assertNull(request.trustedHost());
+    assertNotNull(request.authorizationHeader());
+    assertEquals(
+        request.authorizationHeader(),
+        request.authorizationHeaderForRedirect(current, URI.create("https://repo.example.com/maven2/redirect.jar")));
+    assertNull(request.authorizationHeaderForRedirect(current, URI.create("https://storage.example.net/app.jar")));
+  }
+
+  @Test
   void bodyReadFailureRetriesFreshGet() throws Exception {
     SequencedFetcher fetcher = new SequencedFetcher(
         result("first"),

@@ -146,7 +146,7 @@ public class PubProxyService {
     String expectedSha256 = text(remoteVersion.get("archive_sha256"));
     HttpRemoteFetcher.Request req = HttpRemoteFetcher.Request.get(archiveUrl)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
-        .withRepository(runtime, sameOrigin(runtime.proxyRemoteUrl(), archiveUrl));
+        .withRepositoryAllowingUnsignedRedirects(runtime, sameOrigin(runtime.proxyRemoteUrl(), archiveUrl));
     try {
       return fetcher.fetchWithBodyRetry(req, path, result -> {
         int status = result.status();
@@ -288,6 +288,7 @@ public class PubProxyService {
 
   private Map<String, Object> rewriteMetadata(String packageName, Map<String, Object> body, String baseUrl) {
     Map<String, Object> rewritten = new LinkedHashMap<>(body);
+    rewritten.remove("advisoriesUpdated");
     List<Map<String, Object>> versionEntries = versions(body).stream()
         .map(entry -> rewriteVersion(entry, baseUrl, packageName))
         .toList();
