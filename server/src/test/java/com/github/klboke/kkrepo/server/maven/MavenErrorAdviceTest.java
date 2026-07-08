@@ -3,6 +3,8 @@ package com.github.klboke.kkrepo.server.maven;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import com.github.klboke.kkrepo.server.cargo.CargoExceptions;
+import com.github.klboke.kkrepo.protocol.pub.PubContentTypes;
+import com.github.klboke.kkrepo.server.pub.PubExceptions;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -59,5 +61,20 @@ class MavenErrorAdviceTest {
     assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
     var errors = (java.util.List<Map<String, Object>>) response.getBody().get("errors");
     assertEquals("Invalid Cargo publish body", errors.get(0).get("detail"));
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void pubBadRequestUsesPubErrorBodyShapeAndContentType() {
+    MavenErrorAdvice advice = new MavenErrorAdvice();
+
+    ResponseEntity<Map<String, Object>> response = advice.pubBadRequest(
+        new PubExceptions.BadRequestException("Invalid Pub upload form token"));
+
+    assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+    assertEquals(PubContentTypes.JSON, response.getHeaders().getContentType().toString());
+    Map<String, Object> error = (Map<String, Object>) response.getBody().get("error");
+    assertEquals("bad_request", error.get("code"));
+    assertEquals("Invalid Pub upload form token", error.get("message"));
   }
 }

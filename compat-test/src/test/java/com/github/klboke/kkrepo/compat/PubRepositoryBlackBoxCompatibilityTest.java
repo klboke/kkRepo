@@ -2,11 +2,14 @@ package com.github.klboke.kkrepo.compat;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -16,9 +19,14 @@ import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
+import java.util.zip.GZIPOutputStream;
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.junit.jupiter.api.Test;
 
 class PubRepositoryBlackBoxCompatibilityTest {
@@ -70,6 +78,73 @@ class PubRepositoryBlackBoxCompatibilityTest {
     assertEquals(401, candidateChallenge.status(), "kkrepo publish init should challenge without token");
     assertTrue(candidateChallenge.header("www-authenticate").toLowerCase().contains("bearer"),
         "kkrepo Pub challenge should be Bearer");
+  }
+
+  @Test
+  void kkrepoHostedPublishRoundTripUsesPubProtocolResponses() throws Exception {
+    PubCompatConfig config = PubCompatConfig.load();
+    assumeTrue(config.enabled(), "Set PUB_COMPAT_ENABLED=true to run Pub compatibility");
+
+    String token = createCandidatePubToken(config);
+    Endpoint candidate = config.candidateHosted().withBearer(token);
+    String packageName = uniquePackageName("kkrepo_compat_blackbox");
+    String version = "1.0.0";
+    byte[] archive = pubArchive(packageName, version);
+
+    Exchange init = send(candidate.request("api/packages/versions/new")
+        .header("Accept", PUB_CONTENT_TYPE)
+        .GET());
+    assertEquals(200, init.status(), "kkrepo publish init status");
+    assertPubJson("kkrepo publish init", init);
+    Map<String, Object> initBody = json(init);
+    Map<String, String> fields = stringMap(initBody.get("fields"));
+    assertFalse(fields.isEmpty(), "kkrepo publish init should return upload form fields");
+
+    Exchange upload = send(multipartPost(candidate, initBody.get("url"), fields, archive, packageName));
+    assertEquals(204, upload.status(), "kkrepo publish upload status");
+    assertFalse(upload.header("location").isBlank(), "kkrepo publish upload should return Location");
+
+    Exchange finalize = send(candidate.absoluteRequest(upload.header("location"))
+        .header("Accept", PUB_CONTENT_TYPE)
+        .GET());
+    assertEquals(200, finalize.status(), "kkrepo publish finalize status");
+    assertPubJson("kkrepo publish finalize", finalize);
+    Map<String, Object> success = stringObjectMap(json(finalize).get("success"));
+    assertEquals("Successfully uploaded package.", success.get("message"));
+
+    Exchange metadata = send(candidate.request("api/packages/" + packageName)
+        .header("Accept", PUB_CONTENT_TYPE)
+        .GET());
+    assertEquals(200, metadata.status(), "kkrepo hosted metadata status after publish");
+    assertPubJson("kkrepo hosted metadata after publish", metadata);
+    Map<String, Object> publishedVersion = version(metadata, version);
+    assertEquals(packageName, json(metadata).get("name"));
+    assertEquals(sha256(archive), publishedVersion.get("archive_sha256"));
+  }
+
+  @Test
+  void kkrepoHostedPublishRejectsInvalidUploadFormWithPubJsonError() throws Exception {
+    PubCompatConfig config = PubCompatConfig.load();
+    assumeTrue(config.enabled(), "Set PUB_COMPAT_ENABLED=true to run Pub compatibility");
+
+    String token = createCandidatePubToken(config);
+    Endpoint candidate = config.candidateHosted().withBearer(token);
+    String packageName = uniquePackageName("kkrepo_compat_bad_form");
+    byte[] archive = pubArchive(packageName, "1.0.0");
+
+    Exchange init = send(candidate.request("api/packages/versions/new")
+        .header("Accept", PUB_CONTENT_TYPE)
+        .GET());
+    assertEquals(200, init.status(), "kkrepo publish init status");
+    Map<String, String> fields = stringMap(json(init).get("fields"));
+    fields.put("token", "wrong-token");
+
+    Exchange upload = send(multipartPost(candidate, json(init).get("url"), fields, archive, packageName));
+    assertEquals(400, upload.status(), "kkrepo invalid Pub upload form status");
+    assertPubJson("kkrepo invalid Pub upload form", upload);
+    Map<String, Object> error = stringObjectMap(json(upload).get("error"));
+    assertEquals("bad_request", error.get("code"));
+    assertEquals("Invalid Pub upload form token", error.get("message"));
   }
 
   @Test
@@ -261,6 +336,106 @@ class PubRepositoryBlackBoxCompatibilityTest {
     return JSON.readValue(exchange.body(), JSON_MAP);
   }
 
+  private static String createCandidatePubToken(PubCompatConfig config) throws Exception {
+    byte[] payload = JSON.writeValueAsBytes(Map.of(
+        "domain", "PubToken",
+        "displayName", "Pub compatibility " + UUID.randomUUID()));
+    Exchange response = send(config.candidateService().request("internal/security/api-keys/current")
+        .header("Content-Type", "application/json")
+        .POST(HttpRequest.BodyPublishers.ofByteArray(payload)));
+    assertEquals(200, response.status(), "kkrepo Pub token creation status");
+    Object token = json(response).get("token");
+    assertFalse(String.valueOf(token).isBlank(), "kkrepo Pub token should be returned");
+    return String.valueOf(token);
+  }
+
+  private static HttpRequest.Builder multipartPost(
+      Endpoint endpoint,
+      Object uploadUrl,
+      Map<String, String> fields,
+      byte[] archive,
+      String packageName) throws IOException {
+    String boundary = "kkrepo-pub-compat-" + UUID.randomUUID();
+    byte[] body = multipartBody(boundary, fields, archive, packageName + "-1.0.0.tar.gz");
+    return endpoint.absoluteRequest(endpoint.resolve(uploadUrl))
+        .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+        .POST(HttpRequest.BodyPublishers.ofByteArray(body));
+  }
+
+  private static byte[] multipartBody(
+      String boundary,
+      Map<String, String> fields,
+      byte[] archive,
+      String filename) throws IOException {
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    for (Map.Entry<String, String> field : fields.entrySet()) {
+      writeAscii(out, "--" + boundary + "\r\n");
+      writeAscii(out, "Content-Disposition: form-data; name=\"" + field.getKey() + "\"\r\n\r\n");
+      writeAscii(out, field.getValue() + "\r\n");
+    }
+    writeAscii(out, "--" + boundary + "\r\n");
+    writeAscii(out, "Content-Disposition: form-data; name=\"file\"; filename=\"" + filename + "\"\r\n");
+    writeAscii(out, "Content-Type: application/gzip\r\n\r\n");
+    out.write(archive);
+    writeAscii(out, "\r\n--" + boundary + "--\r\n");
+    return out.toByteArray();
+  }
+
+  private static byte[] pubArchive(String packageName, String version) throws IOException {
+    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+    try (GZIPOutputStream gzip = new GZIPOutputStream(bytes);
+        TarArchiveOutputStream tar = new TarArchiveOutputStream(gzip)) {
+      tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX);
+      addTarEntry(tar, "pubspec.yaml", """
+          name: %s
+          version: %s
+          environment:
+            sdk: ">=3.0.0 <4.0.0"
+          """.formatted(packageName, version));
+      addTarEntry(tar, "README.md", "# " + packageName + "\n\nGenerated by kkRepo Pub compatibility tests.\n");
+      addTarEntry(tar, "CHANGELOG.md", "## " + version + "\n\n- Initial compatibility package.\n");
+      addTarEntry(tar, "LICENSE", "MIT License\n");
+      addTarEntry(tar, "lib/" + packageName + ".dart", "String message() => 'kkrepo pub compatibility';\n");
+    }
+    return bytes.toByteArray();
+  }
+
+  private static void addTarEntry(TarArchiveOutputStream tar, String name, String content) throws IOException {
+    byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+    TarArchiveEntry entry = new TarArchiveEntry(name);
+    entry.setSize(bytes.length);
+    tar.putArchiveEntry(entry);
+    tar.write(bytes);
+    tar.closeArchiveEntry();
+  }
+
+  private static String uniquePackageName(String prefix) {
+    return prefix + "_" + Long.toString(System.currentTimeMillis(), 36)
+        + "_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+  }
+
+  private static void writeAscii(ByteArrayOutputStream out, String value) throws IOException {
+    out.write(value.getBytes(StandardCharsets.UTF_8));
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, String> stringMap(Object value) {
+    if (!(value instanceof Map<?, ?> map)) {
+      throw new AssertionError("Expected JSON object but was " + value);
+    }
+    Map<String, String> result = new LinkedHashMap<>();
+    map.forEach((key, entry) -> result.put(String.valueOf(key), String.valueOf(entry)));
+    return result;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> stringObjectMap(Object value) {
+    if (value instanceof Map<?, ?> map) {
+      return (Map<String, Object>) map;
+    }
+    throw new AssertionError("Expected JSON object but was " + value);
+  }
+
   private static Exchange send(HttpRequest.Builder builder) throws Exception {
     HttpResponse<byte[]> response = HTTP.send(
         builder.header("User-Agent", "kkrepo-pub-compat-test/1").build(),
@@ -292,7 +467,15 @@ class PubRepositoryBlackBoxCompatibilityTest {
     }
   }
 
-  private record Endpoint(String baseUrl, Optional<String> username, Optional<String> password) {
+  private record Endpoint(
+      String baseUrl,
+      Optional<String> username,
+      Optional<String> password,
+      Optional<String> bearerToken) {
+    Endpoint(String baseUrl, Optional<String> username, Optional<String> password) {
+      this(baseUrl, username, password, Optional.empty());
+    }
+
     HttpRequest.Builder request(String path) {
       return authenticatedBuilder(baseUrl + "/" + path, true)
           .timeout(Duration.ofSeconds(60));
@@ -304,13 +487,28 @@ class PubRepositoryBlackBoxCompatibilityTest {
           .timeout(Duration.ofSeconds(90));
     }
 
+    String resolve(Object url) {
+      String value = String.valueOf(url);
+      URI uri = URI.create(value);
+      if (uri.isAbsolute()) {
+        return value;
+      }
+      return URI.create(baseUrl + "/").resolve(value).toString();
+    }
+
+    Endpoint withBearer(String token) {
+      return new Endpoint(baseUrl, Optional.empty(), Optional.empty(), Optional.of(token));
+    }
+
     Endpoint withoutAuth() {
-      return new Endpoint(baseUrl, Optional.empty(), Optional.empty());
+      return new Endpoint(baseUrl, Optional.empty(), Optional.empty(), Optional.empty());
     }
 
     private HttpRequest.Builder authenticatedBuilder(String url, boolean addCredentials) {
       HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url));
-      if (addCredentials && username.isPresent() && password.isPresent()) {
+      if (addCredentials && bearerToken.isPresent()) {
+        builder.header("Authorization", "Bearer " + bearerToken.get());
+      } else if (addCredentials && username.isPresent() && password.isPresent()) {
         String token = Base64.getEncoder().encodeToString(
             (username.get() + ":" + password.get()).getBytes(StandardCharsets.UTF_8));
         builder.header("Authorization", "Basic " + token);
@@ -331,6 +529,7 @@ class PubRepositoryBlackBoxCompatibilityTest {
       Endpoint candidateHosted,
       Endpoint candidateProxy,
       Endpoint candidateGroup,
+      Endpoint candidateService,
       String missingPackageName,
       String flutterPackageName) {
 
@@ -361,6 +560,7 @@ class PubRepositoryBlackBoxCompatibilityTest {
           new Endpoint(CompatDefaults.stripTrailingSlash(candidateHosted), kkrepoUsername, kkrepoPassword),
           new Endpoint(CompatDefaults.stripTrailingSlash(candidateProxy), kkrepoUsername, kkrepoPassword),
           new Endpoint(CompatDefaults.stripTrailingSlash(candidateGroup), kkrepoUsername, kkrepoPassword),
+          new Endpoint(CompatDefaults.stripTrailingSlash(kkrepoBase), kkrepoUsername, kkrepoPassword),
           setting("PUB_COMPAT_MISSING_PACKAGE", "kkrepo_missing_package_zzzzzz"),
           setting("PUB_COMPAT_FLUTTER_PACKAGE", "_fe_analyzer_shared"));
     }

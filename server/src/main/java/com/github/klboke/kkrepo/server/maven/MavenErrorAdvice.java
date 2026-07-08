@@ -6,8 +6,10 @@ import com.github.klboke.kkrepo.server.cargo.CargoResponses;
 import com.github.klboke.kkrepo.server.npm.NpmExceptions;
 import com.github.klboke.kkrepo.server.pub.PubExceptions;
 import com.github.klboke.kkrepo.server.pub.PubResponses;
+import com.github.klboke.kkrepo.protocol.pub.PubContentTypes;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -146,7 +148,18 @@ public class MavenErrorAdvice {
 
   @SuppressWarnings("unchecked")
   private ResponseEntity<Map<String, Object>> pubBody(HttpStatus status, String message) {
-    return ResponseEntity.status(status).body(PubResponses.errorBody(
-        message == null ? status.getReasonPhrase() : message));
+    return ResponseEntity.status(status)
+        .contentType(MediaType.parseMediaType(PubContentTypes.JSON))
+        .body(PubResponses.errorBody(pubErrorCode(status), message == null ? status.getReasonPhrase() : message));
+  }
+
+  private static String pubErrorCode(HttpStatus status) {
+    return switch (status) {
+      case BAD_REQUEST -> "bad_request";
+      case NOT_FOUND -> "not_found";
+      case METHOD_NOT_ALLOWED -> "method_not_allowed";
+      case BAD_GATEWAY -> "bad_upstream";
+      default -> "pub_error";
+    };
   }
 }

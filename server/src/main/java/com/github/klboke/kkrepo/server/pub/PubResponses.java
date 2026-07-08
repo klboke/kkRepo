@@ -56,7 +56,13 @@ public final class PubResponses {
   }
 
   public static Map<String, Object> errorBody(String message) {
-    return Map.of("error", Map.of("message", message == null ? "Pub request failed" : message));
+    return errorBody("pub_error", message);
+  }
+
+  public static Map<String, Object> errorBody(String code, String message) {
+    return Map.of("error", Map.of(
+        "code", code == null || code.isBlank() ? "pub_error" : code,
+        "message", message == null ? "Pub request failed" : message));
   }
 
   static byte[] writeJson(ObjectMapper objectMapper, Object value) {
