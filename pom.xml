@@ -21,6 +21,7 @@
     <module>protocol-npm</module>
     <module>protocol-pypi</module>
     <module>protocol-cargo</module>
+    <module>protocol-pub</module>
     <module>protocol-go</module>
     <module>protocol-helm</module>
     <module>protocol-docker</module>
@@ -155,6 +156,11 @@
       <dependency>
         <groupId>com.github.klboke</groupId>
         <artifactId>kkrepo-protocol-cargo</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.github.klboke</groupId>
+        <artifactId>kkrepo-protocol-pub</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>

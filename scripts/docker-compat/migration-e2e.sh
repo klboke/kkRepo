@@ -193,6 +193,7 @@ EOF
 cargo_migration_enabled() {
   [[ "$EXPECTED_ADAPTER" == "DatastoreH2NexusAdapter"
     || "$EXPECTED_ADAPTER" == "DatastorePostgresqlNexusAdapter"
+    || "${NEXUS_COMPAT_IMAGE:-}" == *3.92*
     || "${NEXUS_COMPAT_IMAGE:-}" == *3.77* ]]
 }
 
@@ -500,7 +501,7 @@ run_config_metadata_migration() {
   if [[ -z "$expected_adapter" ]]; then
     case "${NEXUS_COMPAT_IMAGE:-}" in
       *3.29*) expected_adapter="OrientDbNexusAdapter" ;;
-      *3.77*|*3.73*) expected_adapter="DatastoreH2NexusAdapter" ;;
+      *3.92*|*3.77*|*3.73*) expected_adapter="DatastoreH2NexusAdapter" ;;
     esac
   fi
   preflight_file="$(mktemp)"

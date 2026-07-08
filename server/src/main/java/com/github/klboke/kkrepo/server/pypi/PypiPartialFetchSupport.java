@@ -11,7 +11,7 @@ import org.springframework.http.HttpHeaders;
 /**
  * Single-range partial fetch support for PyPI package downloads.
  */
-final class PypiPartialFetchSupport {
+public final class PypiPartialFetchSupport {
   private static final SingleRangePartialFetchSupport<PypiResponse> SUPPORT =
       new SingleRangePartialFetchSupport<>();
   private static final ResponseAdapter<PypiResponse> ADAPTER = new ResponseAdapter<>() {
@@ -82,7 +82,7 @@ final class PypiPartialFetchSupport {
     }
   };
 
-  PypiResponse apply(HttpServletRequest request, PypiResponse response) {
+  public PypiResponse apply(HttpServletRequest request, PypiResponse response) {
     return apply(
         request.getMethod(),
         request.getHeader(HttpHeaders.RANGE),
@@ -90,7 +90,7 @@ final class PypiPartialFetchSupport {
         response);
   }
 
-  PypiResponse apply(String method, String rangeHeader, String ifRangeHeader, PypiResponse response) {
+  public PypiResponse apply(String method, String rangeHeader, String ifRangeHeader, PypiResponse response) {
     return SUPPORT.apply(method, rangeHeader, ifRangeHeader, response, ADAPTER);
   }
 }

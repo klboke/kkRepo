@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.repositories;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
@@ -21,8 +22,8 @@ import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.HostedSet
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.ProxySettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.UpdateCommand;
 import com.github.klboke.kkrepo.server.support.InMemoryVersionWatermark;
-import java.util.LinkedHashMap;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -372,6 +373,94 @@ class RepositoryServiceTest {
     assertNull(storedProxy.get("remoteBearerToken"));
   }
 
+  @Test
+  void createPubProxyDefaultsRemoteUrlWhenProxySettingsAreMissing() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "pub-proxy",
+        "pub-proxy",
+        true,
+        "default",
+        true,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null));
+
+    assertEquals("https://pub.dev/", created.proxy().remoteUrl());
+    assertEquals("https://pub.dev/", repositories.repository.proxyRemoteUrl());
+    Map<?, ?> proxy = (Map<?, ?>) repositories.repository.attributes().get("proxy");
+    assertEquals("https://pub.dev/", proxy.get("remoteUrl"));
+  }
+
+  @Test
+  void createPubProxyDefaultsRemoteUrlWhenProxyRemoteIsBlank() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "pub-proxy",
+        "pub-proxy",
+        true,
+        "default",
+        true,
+        null,
+        new ProxySettings("  ", 60, 30, true),
+        null,
+        null,
+        null,
+        null));
+
+    assertEquals("https://pub.dev/", created.proxy().remoteUrl());
+    assertEquals(60, created.proxy().contentMaxAgeMinutes());
+    assertEquals(30, created.proxy().metadataMaxAgeMinutes());
+  }
+
+  @Test
+  void replaceMembersAllowsNestedPubGroupMembers() {
+    StubRepositoryDao repositories = new StubRepositoryDao(
+        pubGroupRepository(10L, "pub-root"),
+        pubHostedRepository(11L, "pub-hosted"),
+        pubGroupRepository(12L, "pub-nested"));
+    RepositoryService service = service(repositories);
+
+    RepositoryView updated = service.replaceMembers("pub-root", List.of("pub-hosted", "pub-nested"));
+
+    assertEquals(List.of("pub-hosted", "pub-nested"), updated.group().memberNames());
+    assertEquals(List.of(11L, 12L), repositories.membersByGroupId.get(10L));
+  }
+
+  @Test
+  void replaceMembersStillRejectsNestedGroupsForOtherFormats() {
+    StubRepositoryDao repositories = new StubRepositoryDao(
+        mavenGroupRepository(20L, "maven-public"),
+        mavenGroupRepository(21L, "maven-nested"));
+    RepositoryService service = service(repositories);
+
+    RepositoryValidationException thrown = assertThrows(RepositoryValidationException.class,
+        () -> service.replaceMembers("maven-public", List.of("maven-nested")));
+
+    assertTrue(thrown.getMessage().contains("nested-groups=[maven-nested]"));
+  }
+
+  @Test
+  void replaceMembersRejectsPubGroupCycles() {
+    StubRepositoryDao repositories = new StubRepositoryDao(
+        pubGroupRepository(10L, "pub-root"),
+        pubGroupRepository(12L, "pub-nested"));
+    repositories.replaceMembers(12L, List.of(10L));
+    RepositoryService service = service(repositories);
+
+    RepositoryValidationException thrown = assertThrows(RepositoryValidationException.class,
+        () -> service.replaceMembers("pub-root", List.of("pub-nested")));
+
+    assertTrue(thrown.getMessage().contains("cyclic-groups=[pub-nested]"));
+  }
+
   private static RepositoryService service(StubRepositoryDao repositories) {
     return new RepositoryService(
         repositories,
@@ -459,22 +548,94 @@ class RepositoryServiceTest {
         attributes);
   }
 
+  private static RepositoryRecord pubHostedRepository(long id, String name) {
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", "pub-hosted");
+    return new RepositoryRecord(
+        id,
+        name,
+        RepositoryFormat.PUB,
+        RepositoryType.HOSTED,
+        "pub-hosted",
+        true,
+        1L,
+        null,
+        null,
+        null,
+        null,
+        "ALLOW",
+        true,
+        attributes);
+  }
+
+  private static RepositoryRecord pubGroupRepository(long id, String name) {
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", "pub-group");
+    attributes.put("group", Map.of());
+    return new RepositoryRecord(
+        id,
+        name,
+        RepositoryFormat.PUB,
+        RepositoryType.GROUP,
+        "pub-group",
+        true,
+        1L,
+        null,
+        null,
+        null,
+        null,
+        null,
+        true,
+        attributes);
+  }
+
+  private static RepositoryRecord mavenGroupRepository(long id, String name) {
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", "maven2-group");
+    attributes.put("group", Map.of());
+    return new RepositoryRecord(
+        id,
+        name,
+        RepositoryFormat.MAVEN2,
+        RepositoryType.GROUP,
+        "maven2-group",
+        true,
+        1L,
+        null,
+        null,
+        null,
+        null,
+        null,
+        true,
+        attributes);
+  }
+
   private static final class StubRepositoryDao extends RepositoryDao {
     private final List<RepositoryRecord> repositories = new ArrayList<>();
+    private final Map<Long, List<Long>> membersByGroupId = new LinkedHashMap<>();
     private RepositoryRecord repository;
     private RepositoryRecord updated;
     private long nextId = 100L;
 
-    private StubRepositoryDao(RepositoryRecord repository) {
+    private StubRepositoryDao(RepositoryRecord... repositories) {
       super(null, null);
-      this.repository = repository;
-      this.repositories.add(repository);
+      for (RepositoryRecord record : repositories) {
+        this.repositories.add(record);
+      }
+      this.repository = repositories.length == 0 ? null : repositories[0];
     }
 
     @Override
     public Optional<RepositoryRecord> findByName(String name) {
       return repositories.stream()
           .filter(row -> row.name().equals(name))
+          .findFirst();
+    }
+
+    @Override
+    public Optional<RepositoryRecord> findById(long id) {
+      return repositories.stream()
+          .filter(row -> row.id().equals(id))
           .findFirst();
     }
 
@@ -513,7 +674,36 @@ class RepositoryServiceTest {
 
     @Override
     public List<RepositoryRecord> listGroupsContaining(long memberRepositoryId) {
-      return List.of();
+      return membersByGroupId.entrySet().stream()
+          .filter(entry -> entry.getValue().contains(memberRepositoryId))
+          .map(entry -> findById(entry.getKey()).orElse(null))
+          .filter(row -> row != null)
+          .toList();
+    }
+
+    @Override
+    public List<RepositoryRecord> listMembers(long groupRepositoryId) {
+      return membersByGroupId.getOrDefault(groupRepositoryId, List.of()).stream()
+          .map(id -> findById(id).orElse(null))
+          .filter(row -> row != null)
+          .toList();
+    }
+
+    @Override
+    public Map<Long, List<String>> listAllGroupMembers() {
+      Map<Long, List<String>> result = new LinkedHashMap<>();
+      for (Map.Entry<Long, List<Long>> entry : membersByGroupId.entrySet()) {
+        result.put(entry.getKey(), entry.getValue().stream()
+            .map(id -> findById(id).map(RepositoryRecord::name).orElse(null))
+            .filter(name -> name != null)
+            .toList());
+      }
+      return result;
+    }
+
+    @Override
+    public void replaceMembers(long groupRepositoryId, List<Long> memberRepositoryIds) {
+      membersByGroupId.put(groupRepositoryId, List.copyOf(memberRepositoryIds));
     }
 
     @Override

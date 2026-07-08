@@ -214,7 +214,7 @@ public class RepositoryService {
         layoutPolicy = hosted.layoutPolicy();
       }
       case PROXY -> {
-        ProxySettings proxy = requireProxy(command.proxy());
+        ProxySettings proxy = requireProxy(command.proxy(), recipe.format());
         proxyRemoteUrl = proxy.remoteUrl();
         attributes.put("proxy", proxyAttributes(proxy));
       }
@@ -395,8 +395,17 @@ public class RepositoryService {
     if (proxyNegativeCache != null) {
       proxyNegativeCache.invalidateRepository(repositoryId);
     }
+    invalidateContainingRuntimeCaches(repositoryId, new HashSet<>());
+  }
+
+  private void invalidateContainingRuntimeCaches(long repositoryId, Set<Long> visited) {
     for (RepositoryRecord group : repositoryDao.listGroupsContaining(repositoryId)) {
+      Long groupId = group.id();
+      if (groupId == null || !visited.add(groupId)) {
+        continue;
+      }
       runtimeRegistry.invalidate(group.name());
+      invalidateContainingRuntimeCaches(groupId, visited);
     }
   }
 
@@ -614,7 +623,10 @@ public class RepositoryService {
   }
 
   private static boolean usesGroupMemberAssetCache(RepositoryFormat format) {
-    return format == RepositoryFormat.NPM || format == RepositoryFormat.PYPI || format == RepositoryFormat.DOCKER;
+    return format == RepositoryFormat.NPM
+        || format == RepositoryFormat.PYPI
+        || format == RepositoryFormat.DOCKER
+        || format == RepositoryFormat.PUB;
   }
 
   private static boolean usesCargoAuthenticationHint(RepositoryFormat format, RepositoryType type) {
@@ -741,9 +753,25 @@ public class RepositoryService {
         incoming.layoutPolicy() == null ? existing.layoutPolicy() : incoming.layoutPolicy());
   }
 
-  private ProxySettings requireProxy(ProxySettings settings) {
+  private ProxySettings requireProxy(ProxySettings settings, RepositoryFormat format) {
+    if (settings == null && format == RepositoryFormat.PUB) {
+      settings = new ProxySettings("https://pub.dev/", null, null, null);
+    }
     if (settings == null) {
       throw new RepositoryValidationException("proxy settings are required for proxy repositories");
+    }
+    if (format == RepositoryFormat.PUB
+        && (settings.remoteUrl() == null || settings.remoteUrl().isBlank())) {
+      settings = new ProxySettings(
+          "https://pub.dev/",
+          settings.contentMaxAgeMinutes(),
+          settings.metadataMaxAgeMinutes(),
+          settings.autoBlock(),
+          settings.remoteUsername(),
+          settings.remotePassword(),
+          settings.remotePasswordConfigured(),
+          settings.remoteBearerToken(),
+          settings.remoteBearerTokenConfigured());
     }
     validateProxy(settings);
     return settings;
@@ -894,6 +922,7 @@ public class RepositoryService {
     List<Long> ids = new ArrayList<>(names.size());
     Set<String> badFormat = new HashSet<>();
     Set<String> nested = new HashSet<>();
+    Set<String> cycles = new HashSet<>();
     Set<String> missing = new HashSet<>();
     for (String memberName : names) {
       if (memberName == null || memberName.isBlank()) continue;
@@ -910,20 +939,47 @@ public class RepositoryService {
         badFormat.add(memberName);
         continue;
       }
-      if (member.type() == RepositoryType.GROUP) {
+      if (member.type() == RepositoryType.GROUP && format != RepositoryFormat.PUB) {
         nested.add(memberName);
+        continue;
+      }
+      if (member.type() == RepositoryType.GROUP
+          && pubGroupWouldCreateCycle(member, groupName, new HashSet<>())) {
+        cycles.add(memberName);
         continue;
       }
       ids.add(member.id());
     }
-    if (!missing.isEmpty() || !badFormat.isEmpty() || !nested.isEmpty()) {
+    if (!missing.isEmpty() || !badFormat.isEmpty() || !nested.isEmpty() || !cycles.isEmpty()) {
       StringBuilder sb = new StringBuilder("Invalid group members for '").append(groupName).append("':");
       if (!missing.isEmpty()) sb.append(" missing=").append(missing);
       if (!badFormat.isEmpty()) sb.append(" wrong-format=").append(badFormat);
       if (!nested.isEmpty()) sb.append(" nested-groups=").append(nested);
+      if (!cycles.isEmpty()) sb.append(" cyclic-groups=").append(cycles);
       throw new RepositoryValidationException(sb.toString());
     }
     return ids;
+  }
+
+  private boolean pubGroupWouldCreateCycle(
+      RepositoryRecord candidateGroup,
+      String targetGroupName,
+      Set<Long> visited) {
+    Long candidateId = candidateGroup.id();
+    if (candidateId == null || !visited.add(candidateId)) {
+      return false;
+    }
+    for (RepositoryRecord member : repositoryDao.listMembers(candidateId)) {
+      if (targetGroupName.equals(member.name())) {
+        return true;
+      }
+      if (member.type() == RepositoryType.GROUP
+          && member.format() == RepositoryFormat.PUB
+          && pubGroupWouldCreateCycle(member, targetGroupName, visited)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static String stringValue(Object value, String fallback) {

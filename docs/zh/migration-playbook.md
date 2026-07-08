@@ -203,11 +203,13 @@ Script REST API 很重要，因为部分 Nexus 数据无法通过普通 REST API
 - npm install 和 publish。
 - PyPI pip install 和 twine upload。
 - Helm repo update 和 chart upload。
+- Dart / Pub `dart pub get`、`flutter pub get` 和 `dart pub publish`。
 - NuGet restore 和 package push。
 - RubyGems install 和 gem push。
 - Yum install 和 RPM upload。
 - Raw upload/download。
 - datastore H2/PostgreSQL Cargo 迁移后的 sparse registry config、index entry、`.crate` 下载和 checksum。
+- Nexus 3.92.0 Pub 迁移后的 package metadata、`version.json`、archive 下载、`archive_sha256` 和 publish token 行为。
 - 管理员登录。
 - Browse/search。
 - 用户角色和仓库权限。

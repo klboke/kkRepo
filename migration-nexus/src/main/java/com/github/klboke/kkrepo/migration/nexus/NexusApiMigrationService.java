@@ -411,7 +411,7 @@ public class NexusApiMigrationService {
     attributes.put("source", "nexus-migration");
     attributes.put("sourceRepository", document.detail().isEmpty() ? document.summary() : document.detail());
     if (recipe.type() == RepositoryType.PROXY) {
-      attributes.put("proxy", proxyAttributes(document));
+      attributes.put("proxy", proxyAttributes(document, recipe));
     }
     if (recipe.format().name().equals("RAW")) {
       attributes.put("raw", Map.of("contentDisposition", "ATTACHMENT"));
@@ -428,7 +428,7 @@ public class NexusApiMigrationService {
         bool(value(document, "online"), true),
         targetBlobStore == null ? null : targetBlobStore.id(),
         null,
-        remoteUrl(document),
+        proxyRemoteUrl(document, recipe),
         mavenSetting(document, "versionPolicy"),
         mavenSetting(document, "layoutPolicy"),
         normalizeWritePolicy(string(nested(value(document, "storage"), "writePolicy"))),
@@ -749,9 +749,20 @@ public class NexusApiMigrationService {
     return string(nested(nested(attributes, "proxy"), "remoteUrl"));
   }
 
-  private static Map<String, Object> proxyAttributes(RepositoryDocument document) {
+  private static String proxyRemoteUrl(RepositoryDocument document, RepositoryRecipe recipe) {
+    String remote = remoteUrl(document);
+    if ((remote == null || remote.isBlank())
+        && recipe != null
+        && recipe.format().name().equals("PUB")
+        && recipe.type() == RepositoryType.PROXY) {
+      return "https://pub.dev/";
+    }
+    return remote;
+  }
+
+  private static Map<String, Object> proxyAttributes(RepositoryDocument document, RepositoryRecipe recipe) {
     LinkedHashMap<String, Object> attributes = new LinkedHashMap<>();
-    putIfNotNull(attributes, "remoteUrl", remoteUrl(document));
+    putIfNotNull(attributes, "remoteUrl", proxyRemoteUrl(document, recipe));
     putIfNotNull(attributes, "contentMaxAgeMinutes", intValue(nested(value(document, "proxy"), "contentMaxAge")));
     putIfNotNull(attributes, "metadataMaxAgeMinutes", intValue(nested(value(document, "proxy"), "metadataMaxAge")));
     putIfNotNull(attributes, "autoBlock", boolOrNull(nested(value(document, "httpClient"), "autoBlock")));

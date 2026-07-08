@@ -229,6 +229,55 @@ cargo yank demo-crate --version 1.0.0 --undo --registry kkrepo_hosted
 
 Cargo source replacement should only be used when the replacement source is intentionally equivalent to the original source. For a group that mixes private hosted crates with a crates.io proxy, prefer alternate registries through `[registries]`.
 
+## Dart / Pub
+
+Use a group or proxy repository for dependency resolution and a hosted repository for publishing.
+
+Add a token for the hosted repository and paste the full `PubToken.<secret>` value when prompted:
+
+```bash
+dart pub token add https://nexus.example.com/repository/pub-hosted
+```
+
+Use a group repository for dependency resolution:
+
+```bash
+PUB_HOSTED_URL=https://nexus.example.com/repository/pub-group dart pub get
+```
+
+For Flutter projects, use the same hosted URL:
+
+```bash
+PUB_HOSTED_URL=https://nexus.example.com/repository/pub-group flutter pub get
+```
+
+Configure a single private dependency in `pubspec.yaml`:
+
+```yaml
+dependencies:
+  demo_package:
+    hosted:
+      url: https://nexus.example.com/repository/pub-group
+      name: demo_package
+    version: ^1.0.0
+```
+
+Publish to a hosted repository by setting `publish_to`:
+
+```yaml
+name: demo_package
+version: 1.0.0
+publish_to: https://nexus.example.com/repository/pub-hosted
+```
+
+Then publish:
+
+```bash
+dart pub publish
+```
+
+For package discovery through kkrepo search, use the Pub format filter in the Browse UI or the component search API with `format=pub`.
+
 ## NuGet
 
 Add a source:

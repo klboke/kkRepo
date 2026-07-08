@@ -85,6 +85,7 @@ public class ComponentSearchController {
       case "yum" -> RepositoryFormat.YUM;
       case "helm" -> RepositoryFormat.HELM;
       case "go" -> RepositoryFormat.GO;
+      case "pub" -> RepositoryFormat.PUB;
       case "raw" -> RepositoryFormat.RAW;
       default -> null;
     };

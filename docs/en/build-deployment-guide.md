@@ -274,7 +274,7 @@ WantedBy=multi-user.target
 Production deployments should use multiple kkrepo replicas, an independent MySQL instance, and an OSS/S3 blob store:
 
 ```text
-Maven/npm/PyPI/Go/Helm/Cargo/Docker/OCI/NuGet/RubyGems/Yum clients
+Maven/npm/PyPI/Go/Helm/Cargo/Pub/Docker/OCI/NuGet/RubyGems/Yum clients
         |
 DNS / Load Balancer / Reverse Proxy
         |

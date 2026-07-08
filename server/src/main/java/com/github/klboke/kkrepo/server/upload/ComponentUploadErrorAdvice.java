@@ -4,6 +4,7 @@ import com.github.klboke.kkrepo.server.cargo.CargoExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.npm.NpmExceptions;
 import com.github.klboke.kkrepo.server.pypi.PypiExceptions;
+import com.github.klboke.kkrepo.server.pub.PubExceptions;
 import java.io.IOException;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
@@ -82,6 +83,21 @@ public class ComponentUploadErrorAdvice {
 
   @ExceptionHandler(CargoExceptions.MethodNotAllowed.class)
   public ResponseEntity<Map<String, String>> cargoMethod(CargoExceptions.MethodNotAllowed e) {
+    return body(HttpStatus.METHOD_NOT_ALLOWED, e.getMessage());
+  }
+
+  @ExceptionHandler(PubExceptions.PubNotFoundException.class)
+  public ResponseEntity<Map<String, String>> pubNotFound(PubExceptions.PubNotFoundException e) {
+    return body(HttpStatus.NOT_FOUND, e.getMessage());
+  }
+
+  @ExceptionHandler({PubExceptions.BadRequestException.class, PubExceptions.WritePolicyDenied.class})
+  public ResponseEntity<Map<String, String>> pubBadRequest(RuntimeException e) {
+    return body(HttpStatus.BAD_REQUEST, e.getMessage());
+  }
+
+  @ExceptionHandler(PubExceptions.MethodNotAllowed.class)
+  public ResponseEntity<Map<String, String>> pubMethod(PubExceptions.MethodNotAllowed e) {
     return body(HttpStatus.METHOD_NOT_ALLOWED, e.getMessage());
   }
 

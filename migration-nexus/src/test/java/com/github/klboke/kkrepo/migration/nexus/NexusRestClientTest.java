@@ -132,7 +132,9 @@ class NexusRestClientTest {
     assertTrue(script.contains("container.lookup(databaseClass, 'security')"));
     assertTrue(script.contains("loadClass('com.orientechnologies.orient.core.sql.query.OSQLSynchQuery')"));
     assertTrue(script.contains("SecurityConfigurationManager unavailable"));
-    assertFalse(script.contains("OrientDB security database unavailable"));
+    assertTrue(script.contains("jdkClass('java.lang.ClassLoader')"));
+    assertTrue(script.contains("jdkClass('java.io.InputStream')"));
+    assertTrue(script.contains("jdkClass('java.io.ByteArrayInputStream')"));
     assertFalse(script.contains("import org.sonatype.nexus.orient.DatabaseInstance"));
     assertFalse(script.contains("import org.sonatype.nexus.orient.DatabaseInstanceNames"));
     assertFalse(script.contains("import org.sonatype.nexus.security.config.SecurityConfigurationManager"));
@@ -140,6 +142,10 @@ class NexusRestClientTest {
     assertFalse(script.contains("DatabaseInstance.class.name,"));
     assertFalse(script.contains("SecurityConfigurationManager.class.name, 'default'"));
     assertFalse(script.contains("ClassLoader.class.name, 'nexus-uber'"));
+    assertFalse(script.contains("ClassLoader.class"));
+    assertFalse(script.contains("java.io.InputStream.class"));
+    assertFalse(script.contains("catch (Throwable"));
+    assertFalse(script.contains("new LinkedHashSet"));
   }
 
   @Test
@@ -174,10 +180,14 @@ class NexusRestClientTest {
     String script = (String) field.get(null);
 
     assertTrue(script.contains("container.lookup('org.sonatype.nexus.datastore.api.DataStoreManager')"));
+    assertTrue(script.contains("jdkClass('javax.sql.DataSource')"));
     assertTrue(script.contains("datastore.openConnection()"));
     assertTrue(script.contains("inspectConnection(connection, 'DataStoreManager')"));
     assertTrue(script.contains("out.metadataEngine = 'DATASTORE_H2'"));
     assertTrue(script.contains("out.metadataEngine = 'DATASTORE_POSTGRESQL'"));
+    assertFalse(script.contains("javax.sql.DataSource.class"));
+    assertFalse(script.contains("catch (Throwable"));
+    assertFalse(script.contains(" as Set"));
     assertFalse(script.contains("new File("));
     assertFalse(script.contains("nexus-store.properties"));
   }
@@ -209,11 +219,17 @@ class NexusRestClientTest {
     assertTrue(script.contains("complete: rows.size() < pageSize"));
     assertFalse(script.contains("blob_updated >= ?"));
     assertFalse(script.contains("blob_created >= ?"));
-    assertTrue(script.contains("Date.from(Instant.parse(since))"));
+    assertTrue(script.contains("def instantClass = jdkClass('java.time.Instant')"));
+    assertTrue(script.contains("def parseInstant = { value ->"));
     assertTrue(script.contains("new JsonSlurper().parseText(args)"));
     assertFalse(script.contains("import org.sonatype.nexus.orient.DatabaseInstance"));
     assertFalse(script.contains("import org.sonatype.nexus.orient.DatabaseInstanceNames"));
     assertFalse(script.contains("import com.orientechnologies.orient.core.sql.query.OSQLSynchQuery"));
+    assertFalse(script.contains("import java.time.Instant"));
+    assertFalse(script.contains("Date.from(Instant.parse(since))"));
+    assertFalse(script.contains("Math.max"));
+    assertFalse(script.contains("new LinkedHashMap"));
+    assertFalse(script.contains("catch (Throwable"));
   }
 
   @Test

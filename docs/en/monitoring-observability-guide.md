@@ -115,7 +115,7 @@ Background tasks, rebuild queues, GC, and rate-limit metrics:
 Common labels:
 
 - `repo`: repository name
-- `format`: artifact format, such as `maven2`, `npm`, `pypi`, `cargo`
+- `format`: artifact format, such as `maven2`, `npm`, `pypi`, `cargo`, `pub`, `docker`
 - `type`: repository type, such as `hosted`, `proxy`, `group`
 - `method`: HTTP method
 - `operation`: protocol operation
@@ -147,6 +147,22 @@ Common Cargo operation labels include:
 
 Cargo proxy upstream requests are recorded through `kkrepo_proxy_remote_*` with
 `format="cargo"`.
+
+### Dart / Pub
+
+Dart / Pub emits repository request and blob storage metrics with `format="pub"`.
+Common Pub operation labels include:
+
+- `pub_package_metadata`
+- `pub_version_metadata`
+- `pub_archive`
+- `pub_publish_init`
+- `pub_publish_upload`
+- `pub_publish_finalize`
+- `pub_request`
+
+Pub proxy upstream requests are recorded through `kkrepo_proxy_remote_*` with
+`format="pub"`.
 
 ### Blob Storage
 

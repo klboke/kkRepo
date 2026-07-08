@@ -95,7 +95,7 @@ Check:
 - `/actuator/health` is `UP`.
 - Admin login works.
 - Repository list and blob store list load.
-- Key Maven/npm/PyPI/Go/Helm/Cargo/Docker/OCI/NuGet/RubyGems/Yum/Raw packages or images can be downloaded.
+- Key Maven/npm/PyPI/Go/Helm/Cargo/Pub/Docker/OCI/NuGet/RubyGems/Yum/Raw packages or images can be downloaded.
 - Hosted upload works on a test repository.
 - Browse/search returns expected assets.
 - Migration pages do not show stuck running jobs from the old environment unless intentionally resumed.

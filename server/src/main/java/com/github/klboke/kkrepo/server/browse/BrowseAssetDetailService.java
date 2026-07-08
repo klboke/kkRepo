@@ -100,6 +100,7 @@ public class BrowseAssetDetailService {
     Map<String, Object> docker = source.format() == RepositoryFormat.DOCKER
         ? dockerAttributes(source, asset, blob, path, resolved.dockerManifest())
         : Map.of();
+    Map<String, Object> pub = source.format() == RepositoryFormat.PUB ? pubAttributes(asset) : Map.of();
 
     return new BrowseAssetDetail(
         visibleRepository.name(),
@@ -116,6 +117,7 @@ public class BrowseAssetDetailService {
         content,
         docker,
         npm,
+        pub,
         provenance);
   }
 
@@ -144,6 +146,7 @@ public class BrowseAssetDetailService {
         null,
         Map.of(),
         content,
+        Map.of(),
         Map.of(),
         Map.of(),
         provenance);
@@ -267,6 +270,47 @@ public class BrowseAssetDetailService {
     LinkedHashMap<String, Object> npm = new LinkedHashMap<>(NpmFormatAttributes.extract(packageJson.get()));
     npm.put("asset_kind", "TARBALL");
     return npm;
+  }
+
+  @SuppressWarnings("unchecked")
+  private Map<String, Object> pubAttributes(AssetRecord asset) {
+    Map<String, Object> attributes = asset.attributes() == null ? Map.of() : asset.attributes();
+    Object rawPubspec = attributes.get("pubspec");
+    Map<String, Object> pubspec = rawPubspec instanceof Map<?, ?> map
+        ? (Map<String, Object>) map
+        : Map.of();
+    LinkedHashMap<String, Object> pub = new LinkedHashMap<>();
+    putNonBlank(pub, "asset_kind", asset.kind());
+    putNonBlank(pub, "package_name", firstPresent(attributes.get("packageName"), pubspec.get("name")));
+    putNonBlank(pub, "version", firstPresent(attributes.get("version"), pubspec.get("version")));
+    putNonBlank(pub, "archive_sha256", attributes.get("archiveSha256"));
+    put(pub, "archive_size_bytes", attributes.get("archiveSize"));
+    putNonBlank(pub, "published_at", attributes.get("publishedAt"));
+    putNonBlank(pub, "publish_source", attributes.get("publishSource"));
+    putNonBlank(pub, "published_by", attributes.get("publishedBy"));
+    put(pub, "publish_api_key_id", attributes.get("publishApiKeyId"));
+    putNonBlank(pub, "upload_session_id", attributes.get("uploadSessionId"));
+    putNonBlank(pub, "source_client", attributes.get("sourceClient"));
+    putNonBlank(pub, "cache_source", attributes.get("cacheSource"));
+    putNonBlank(pub, "source_repository", attributes.get("sourceRepository"));
+    copyPubspec(pub, pubspec, "description");
+    copyPubspec(pub, pubspec, "homepage");
+    copyPubspec(pub, pubspec, "repository");
+    copyPubspec(pub, pubspec, "issue_tracker");
+    copyPubspec(pub, pubspec, "environment");
+    copyPubspec(pub, pubspec, "dependencies");
+    copyPubspec(pub, pubspec, "dev_dependencies");
+    copyPubspec(pub, pubspec, "executables");
+    copyPubspec(pub, pubspec, "topics");
+    return Collections.unmodifiableMap(pub);
+  }
+
+  private static void copyPubspec(Map<String, Object> target, Map<String, Object> pubspec, String key) {
+    Object value = pubspec.get(key);
+    if (value instanceof String text && text.isBlank()) {
+      return;
+    }
+    put(target, key, value);
   }
 
   private Map<String, Object> dockerAttributes(AssetRecord asset, AssetBlobRecord blob) {
@@ -682,6 +726,10 @@ public class BrowseAssetDetailService {
     return text.isBlank() ? null : text;
   }
 
+  private static Object firstPresent(Object first, Object second) {
+    return text(first) != null ? first : second;
+  }
+
   private record NpmTarballPath(NpmPackageId packageId, String tarballName) {
     static Optional<NpmTarballPath> parse(String path) {
       int marker = path == null ? -1 : path.indexOf("/-/");
@@ -716,5 +764,6 @@ public class BrowseAssetDetailService {
       Map<String, Object> content,
       Map<String, Object> docker,
       Map<String, Object> npm,
+      Map<String, Object> pub,
       Map<String, Object> provenance) {}
 }

@@ -39,6 +39,26 @@ class RepositoryDataMigrationWorkerTest {
   }
 
   @Test
+  void pubDerivedApiEndpointsAreNotMigratedAsSourceBlob() {
+    assertTrue(RepositoryDataMigrationWorker.shouldMigrateSourceAsset(
+        RepositoryFormat.PUB,
+        "api/archives/demo_pkg-1.0.0.tar.gz"));
+    assertTrue(RepositoryDataMigrationWorker.shouldMigrateSourceAsset(
+        RepositoryFormat.PUB,
+        "packages/demo_pkg/versions/1.0.0.tar.gz"));
+    assertTrue(RepositoryDataMigrationWorker.shouldMigrateSourceAsset(
+        RepositoryFormat.PUB,
+        "api/packages/demo_pkg"));
+
+    assertFalse(RepositoryDataMigrationWorker.shouldMigrateSourceAsset(
+        RepositoryFormat.PUB,
+        "api/packages/demo_pkg/versions/1.0.0"));
+    assertFalse(RepositoryDataMigrationWorker.shouldMigrateSourceAsset(
+        RepositoryFormat.PUB,
+        "api/packages/versions/new"));
+  }
+
+  @Test
   void rubygemsDependencyIndexUsesDownloadedBytesInsteadOfSourceMetadataSize() {
     assertFalse(RepositoryDataMigrationWorker.shouldValidateDownloadedSize(
         claim(10L, 100L, RepositoryFormat.RUBYGEMS, "dependencies/demo.ruby")));

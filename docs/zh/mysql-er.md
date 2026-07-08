@@ -1,8 +1,8 @@
 # kkrepo MySQL ER 设计
 
-当前 MySQL schema 以 `server/src/main/resources/db/migration/V1__init_schema.sql` 到 `V27__ui_settings.sql` 为准，并由 Flyway 在服务启动时执行。目标数据库是 MySQL 8 InnoDB。
+当前 MySQL schema 以 `server/src/main/resources/db/migration/V1__init_schema.sql` 到 `V28__pub_upload_session.sql` 为准，并由 Flyway 在服务启动时执行。目标数据库是 MySQL 8 InnoDB。
 
-Schema 对共享 asset/blob 数据采用“统一内容表 + format 字段”的模型。Cargo / Rust 当前使用这套共享模型，Cargo 元数据保存在 component/asset attributes 中；对 Docker/OCI manifest、tag、upload session、auth token、referrers 等协议专有关系，则使用专用旁表。这样更适合从 Nexus 迁移和管理台统一查询；如果后续某个格式数据量明显过大，再通过分区或更多专用表优化。
+Schema 对共享 asset/blob 数据采用“统一内容表 + format 字段”的模型。Cargo / Rust 和 Dart / Pub 使用这套共享模型，协议元数据保存在 component/asset attributes 中；Pub 为官方多步骤 publish flow 增加 `pub_upload_session`，Docker/OCI manifest、tag、upload session、auth token、referrers 等其它协议专有关系也使用专用旁表。这样更适合从 Nexus 迁移和管理台统一查询；如果后续某个格式数据量明显过大，再通过分区或更多专用表优化。
 
 ## 仓库与内容 ER
 
@@ -50,6 +50,7 @@ erDiagram
   REPOSITORY ||--o| PROXY_REMOTE_STATE : remote_health
   REPOSITORY ||--o{ METADATA_REBUILD_MARKER : maven_metadata_queue
   REPOSITORY ||--o{ REPOSITORY_INDEX_REBUILD_MARKER : index_queue
+  REPOSITORY ||--o{ PUB_UPLOAD_SESSION : pub_upload
   SPRING_SESSION ||--o{ SPRING_SESSION_ATTRIBUTES : has
   MIGRATION_JOB ||--o{ MIGRATION_CHECKPOINT : records
   MIGRATION_JOB ||--o{ MIGRATION_VALIDATION_RESULT : validates
@@ -100,6 +101,7 @@ erDiagram
 | `auth_ticket` | 短生命周期认证票据，按 token hash 存储并通过过期时间清理 |
 | `maintenance_cursor` | 后台维护任务的共享游标，例如 blob reconcile 扫描水位 |
 | `ui_settings` | 单行 UI 偏好设置表，当前用于默认语言选择 |
+| `pub_upload_session` | Dart / Pub publish upload session 状态，包括 session/field token、principal、过期时间、临时 blob 引用、解析出的 package/version、checksum、size、错误和 finalized 时间 |
 
 ### 权限层
 
@@ -146,3 +148,4 @@ erDiagram
 14. anonymous 访问使用 `security_anonymous_config` 指定的用户身份和角色，不做绕过权限模型的全局只读放行；Nexus 默认的 `NexusAuthorizingRealm/anonymous` 映射到本地 `Local/anonymous`。
 15. 迁移被视为可恢复产品功能：`migration_checkpoint` 负责配置/安全对象幂等导入，`repository_data_migration_*` 负责仓库 asset 数据迁移的 discover、claim、retry、resume 和进度统计。
 16. V24 将历史 `jindo` / `jindo-oss` blob store engine 归一化为 `oss-native`；大 blob 的真相仍在 OSS/S3/File blob store，MySQL 只保存元数据、状态、索引和引用。
+17. V28 增加 `pub_upload_session`，原因是 Pub publish 是多请求协议。Session 状态、临时 blob 引用、解析出的 metadata 和 finalize 状态必须能跨副本切换和重启恢复；archive 字节仍存放在 blob storage，不进入 MySQL。

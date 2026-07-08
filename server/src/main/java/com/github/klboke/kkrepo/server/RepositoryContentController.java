@@ -9,6 +9,8 @@ import com.github.klboke.kkrepo.protocol.cargo.CargoPathParser;
 import com.github.klboke.kkrepo.protocol.npm.NpmPath;
 import com.github.klboke.kkrepo.protocol.npm.NpmPathParser;
 import com.github.klboke.kkrepo.protocol.nuget.NugetPaths;
+import com.github.klboke.kkrepo.protocol.pub.PubPath;
+import com.github.klboke.kkrepo.protocol.pub.PubPathParser;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.cargo.CargoExceptions;
 import com.github.klboke.kkrepo.server.cargo.CargoGroupService;
@@ -37,6 +39,16 @@ import com.github.klboke.kkrepo.server.npm.NpmProxyService;
 import com.github.klboke.kkrepo.server.npm.NpmSearchService;
 import com.github.klboke.kkrepo.server.npm.NpmTokenService;
 import com.github.klboke.kkrepo.server.nuget.NugetService;
+import com.github.klboke.kkrepo.server.pypi.PypiExceptions;
+import com.github.klboke.kkrepo.server.pypi.PypiGroupService;
+import com.github.klboke.kkrepo.server.pypi.PypiHostedService;
+import com.github.klboke.kkrepo.server.pypi.PypiPartialFetchSupport;
+import com.github.klboke.kkrepo.server.pypi.PypiProxyService;
+import com.github.klboke.kkrepo.server.pypi.PypiResponse;
+import com.github.klboke.kkrepo.server.pub.PubExceptions;
+import com.github.klboke.kkrepo.server.pub.PubGroupService;
+import com.github.klboke.kkrepo.server.pub.PubHostedService;
+import com.github.klboke.kkrepo.server.pub.PubProxyService;
 import com.github.klboke.kkrepo.server.raw.RawGroupService;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
 import com.github.klboke.kkrepo.server.raw.RawProxyService;
@@ -94,9 +106,15 @@ public class RepositoryContentController {
   private final NpmGroupService npmGroup;
   private final NpmSearchService npmSearch;
   private final NpmTokenService npmToken;
+  private final PypiHostedService pypiHosted;
+  private final PypiProxyService pypiProxy;
+  private final PypiGroupService pypiGroup;
   private final CargoHostedService cargoHosted;
   private final CargoProxyService cargoProxy;
   private final CargoGroupService cargoGroup;
+  private final PubHostedService pubHosted;
+  private final PubProxyService pubProxy;
+  private final PubGroupService pubGroup;
   private final NugetService nuget;
   private final RubygemsService rubygems;
   private final YumService yum;
@@ -108,7 +126,9 @@ public class RepositoryContentController {
   private final MavenPathParser parser = new MavenPathParser();
   private final NpmPathParser npmParser = new NpmPathParser();
   private final CargoPathParser cargoParser = new CargoPathParser();
+  private final PubPathParser pubParser = new PubPathParser();
   private final MavenPartialFetchSupport partialFetch = new MavenPartialFetchSupport();
+  private final PypiPartialFetchSupport pypiPartialFetch = new PypiPartialFetchSupport();
 
   public RepositoryContentController(RepositoryRuntimeRegistry registry,
       MavenHostedService hosted, MavenProxyService proxy, MavenGroupService group,
@@ -117,7 +137,9 @@ public class RepositoryContentController {
       MavenHtmlListingService htmlListing,
       NpmHostedService npmHosted, NpmProxyService npmProxy, NpmGroupService npmGroup,
       NpmSearchService npmSearch, NpmTokenService npmToken,
+      PypiHostedService pypiHosted, PypiProxyService pypiProxy, PypiGroupService pypiGroup,
       CargoHostedService cargoHosted, CargoProxyService cargoProxy, CargoGroupService cargoGroup,
+      PubHostedService pubHosted, PubProxyService pubProxy, PubGroupService pubGroup,
       NugetService nuget,
       RubygemsService rubygems,
       YumService yum,
@@ -138,9 +160,15 @@ public class RepositoryContentController {
     this.npmGroup = npmGroup;
     this.npmSearch = npmSearch;
     this.npmToken = npmToken;
+    this.pypiHosted = pypiHosted;
+    this.pypiProxy = pypiProxy;
+    this.pypiGroup = pypiGroup;
     this.cargoHosted = cargoHosted;
     this.cargoProxy = cargoProxy;
     this.cargoGroup = cargoGroup;
+    this.pubHosted = pubHosted;
+    this.pubProxy = pubProxy;
+    this.pubGroup = pubGroup;
     this.nuget = nuget;
     this.rubygems = rubygems;
     this.yum = yum;
@@ -183,6 +211,18 @@ public class RepositoryContentController {
       MavenResponse resp = dispatchCargoGet(
           runtime, path, repositoryBaseUrl(request, runtime.name()), cargoSearchQuery(request), true);
       return toHeadResponse(resp, request);
+    }
+    if (runtime.format() == RepositoryFormat.PUB) {
+      PubPath path = pubParser.parse(extractRepositoryPath(name, request, true));
+      MavenResponse resp = dispatchPubGet(runtime, path, request, true);
+      return toHeadResponse(resp, request);
+    }
+    if (runtime.format() == RepositoryFormat.PYPI) {
+      String raw = extractRepositoryPath(name, request, true);
+      PypiResponse resp = isDirectoryPath(raw)
+          ? pypiDirectoryListing(runtime.name(), raw, true)
+          : dispatchPypiPackage(runtime, raw, true);
+      return toHeadResponse(adapt(resp), request);
     }
     if (runtime.format() == RepositoryFormat.NUGET) {
       String raw = extractRepositoryPath(name, request, true);
@@ -413,6 +453,22 @@ public class RepositoryContentController {
       }
     }
     if (runtime.format() != RepositoryFormat.HELM) {
+      if (runtime.format() == RepositoryFormat.PUB) {
+        PubPath path = pubParser.parse(extractRepositoryPath(name, request, true));
+        if (!runtime.isHosted()) {
+          throw new PubExceptions.PubNotFoundException(path.rawPath());
+        }
+        if (path.kind() != PubPath.Kind.PUBLISH_UPLOAD) {
+          throw new PubExceptions.MethodNotAllowed("Unsupported Pub POST path: " + path.rawPath());
+        }
+        Part part = pubFilePart(request);
+        try {
+          return toStreamingResponse(pubHosted.upload(runtime, path.sessionId(), multipartFields(request), part,
+              repositoryBaseUrl(request, runtime.name()), requestUserId(request), requestApiKeyId(request)));
+        } catch (IOException e) {
+          throw new PubExceptions.BadRequestException("Failed reading Pub multipart upload", e);
+        }
+      }
       throw new MavenExceptions.MethodNotAllowed("POST is not supported for " + runtime.format() + " repositories");
     }
     throw new MavenExceptions.MethodNotAllowed("Unsupported Helm POST path: " + extractRepositoryPath(name, request));
@@ -477,6 +533,22 @@ public class RepositoryContentController {
       MavenResponse resp = dispatchCargoGet(
           runtime, path, repositoryBaseUrl(request, runtime.name()), cargoSearchQuery(request), headOnly);
       return toStreamingResponse(resp, request, false);
+    }
+    if (runtime.format() == RepositoryFormat.PUB) {
+      PubPath path = pubParser.parse(extractRepositoryPath(name, request, true));
+      MavenResponse resp = dispatchPubGet(runtime, path, request, headOnly);
+      return toStreamingResponse(resp, request, false);
+    }
+    if (runtime.format() == RepositoryFormat.PYPI) {
+      String raw = extractRepositoryPath(name, request, true);
+      boolean directory = isDirectoryPath(raw);
+      PypiResponse resp = directory
+          ? pypiDirectoryListing(runtime.name(), raw, headOnly)
+          : dispatchPypiPackage(runtime, raw, headOnly);
+      if (!headOnly && !directory) {
+        resp = pypiPartialFetch.apply(request, resp);
+      }
+      return toStreamingResponse(adapt(resp), request, false);
     }
     if (runtime.format() == RepositoryFormat.NUGET) {
       String raw = extractRepositoryPath(name, request, true);
@@ -632,6 +704,58 @@ public class RepositoryContentController {
     };
   }
 
+  private MavenResponse dispatchPubGet(
+      RepositoryRuntime runtime,
+      PubPath path,
+      HttpServletRequest request,
+      boolean headOnly) {
+    String baseUrl = repositoryBaseUrl(request, runtime.name());
+    return switch (runtime.type()) {
+      case HOSTED -> {
+        if (path.kind() == PubPath.Kind.PUBLISH_INIT) {
+          yield pubHosted.initPublish(runtime, baseUrl, requestUserId(request), requestApiKeyId(request), headOnly);
+        }
+        if (path.kind() == PubPath.Kind.PUBLISH_FINALIZE) {
+          yield pubHosted.finalizeUpload(runtime, path.sessionId(), requestUserId(request),
+              requestApiKeyId(request), request.getHeader(HttpHeaders.USER_AGENT), headOnly);
+        }
+        yield pubHosted.get(runtime, path, baseUrl, headOnly);
+      }
+      case PROXY -> pubProxy.get(runtime, path, baseUrl, headOnly);
+      case GROUP -> pubGroup.get(runtime, path, baseUrl, headOnly);
+    };
+  }
+
+  private PypiResponse dispatchPypiPackage(RepositoryRuntime runtime, String path, boolean headOnly) {
+    return switch (runtime.type()) {
+      case HOSTED -> pypiHosted.getPackage(runtime, path, headOnly);
+      case PROXY -> pypiProxy.getPackage(runtime, path, headOnly);
+      case GROUP -> pypiGroup.getPackage(runtime, path, headOnly);
+    };
+  }
+
+  private PypiResponse pypiDirectoryListing(String repository, String path, boolean headOnly) {
+    String listingPath = trimTrailingSlashes(path);
+    String html = htmlListing.render(repository, listingPath)
+        .orElseThrow(() -> new PypiExceptions.PypiNotFoundException(path));
+    byte[] bytes = html.getBytes(StandardCharsets.UTF_8);
+    if (headOnly) {
+      return PypiResponse.noBody(200, bytes.length, MediaType.TEXT_HTML_VALUE, null, null);
+    }
+    return PypiResponse.ok(new ByteArrayInputStream(bytes), bytes.length,
+        MediaType.TEXT_HTML_VALUE, null, null);
+  }
+
+  private MavenResponse adapt(PypiResponse response) {
+    MavenResponse converted = response.hasBody()
+        ? MavenResponse.ok(response::body, response.contentLength(), response.contentType(),
+            response.etag(), response.lastModified())
+        : MavenResponse.noBody(response.status(), response.contentLength(), response.contentType(),
+            response.etag(), response.lastModified());
+    response.headers().forEach(converted::withHeader);
+    return converted.withStatus(response.status());
+  }
+
   private RuntimeAndPath resolve(String name, HttpServletRequest request) {
     return resolve(resolveRuntime(name), name, request);
   }
@@ -698,6 +822,14 @@ public class RepositoryContentController {
       return authenticated.userId();
     }
     return "anonymous";
+  }
+
+  private Long requestApiKeyId(HttpServletRequest request) {
+    Object subject = request.getAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE);
+    if (subject instanceof AuthenticatedSubject authenticated) {
+      return authenticated.apiKeyId();
+    }
+    return null;
   }
 
   private MavenResponse npmRepositoryRoot(
@@ -911,6 +1043,18 @@ public class RepositoryContentController {
     return path.isEmpty() || NugetPaths.PACKAGE_PUBLISH.equals(path);
   }
 
+  private static boolean isDirectoryPath(String path) {
+    return path != null && path.endsWith("/");
+  }
+
+  private static String trimTrailingSlashes(String path) {
+    String result = path == null ? "" : path;
+    while (result.endsWith("/")) {
+      result = result.substring(0, result.length() - 1);
+    }
+    return result;
+  }
+
   private static Part nugetPackagePart(HttpServletRequest request) throws IOException {
     try {
       Part firstFile = null;
@@ -934,6 +1078,49 @@ public class RepositoryContentController {
       throw new MavenExceptions.LayoutPolicyViolation("NuGet multipart upload requires a package file part");
     } catch (ServletException e) {
       throw new MavenExceptions.LayoutPolicyViolation("Invalid NuGet multipart upload");
+    }
+  }
+
+  private static Part pubFilePart(HttpServletRequest request) {
+    try {
+      Part firstFile = null;
+      for (Part part : request.getParts()) {
+        if (part == null || part.getSize() <= 0) {
+          continue;
+        }
+        boolean namedFile = "file".equals(part.getName());
+        boolean hasFilename = part.getSubmittedFileName() != null
+            && !part.getSubmittedFileName().isBlank();
+        if (namedFile) {
+          return part;
+        }
+        if (firstFile == null && hasFilename) {
+          firstFile = part;
+        }
+      }
+      if (firstFile != null) {
+        return firstFile;
+      }
+      throw new PubExceptions.BadRequestException("Pub multipart upload requires a file part");
+    } catch (IOException | ServletException e) {
+      throw new PubExceptions.BadRequestException("Invalid Pub multipart upload", e);
+    }
+  }
+
+  private static Map<String, String> multipartFields(HttpServletRequest request) {
+    Map<String, String> fields = new java.util.LinkedHashMap<>();
+    try {
+      for (Part part : request.getParts()) {
+        if (part == null || part.getSubmittedFileName() != null) {
+          continue;
+        }
+        try (InputStream in = part.getInputStream()) {
+          fields.put(part.getName(), new String(in.readAllBytes(), StandardCharsets.UTF_8));
+        }
+      }
+      return fields;
+    } catch (IOException | ServletException e) {
+      throw new PubExceptions.BadRequestException("Invalid Pub multipart fields", e);
     }
   }
 

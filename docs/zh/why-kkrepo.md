@@ -51,7 +51,7 @@ Sonatype `nexus-public` 仓库里的公开讨论也反映了类似担忧：[Issu
 
 - 服务端运维同学需要把历史数据全部迁到新平台。
 - 需要重新维护用户、角色、权限、token、仓库配置和 blob 数据。
-- 使用方需要逐个修改 CI、构建脚本、Maven settings、npm registry、PyPI index-url、Go proxy、Helm repo 等配置。
+- 使用方需要逐个修改 CI、构建脚本、Maven settings、npm registry、PyPI index-url、Go proxy、Helm repo、Cargo registry 配置、Pub hosted URL 等配置。
 - 大规模公司里，这类改造会影响非常多的业务线、构建任务和发布链路。
 
 如果新平台不能兼容现有客户端依赖的 `/repository/<repo>/...` URL 布局、客户端协议和权限认证模型，那么迁移成本会非常高，而且很难做到无感切换。
@@ -88,7 +88,7 @@ kkRepo 的核心思路是：
 
 - 原制品仓库域名指向 kkRepo。
 - 客户端配置不需要修改。
-- CI 继续使用原来的 Maven settings、npm registry、PyPI index-url、Go proxy、Helm repo。
+- CI 继续使用原来的 Maven settings、npm registry、PyPI index-url、Go proxy、Helm repo、Cargo registry 配置和 Pub hosted URL。
 - 使用方没有感知到迁移过程。
 - 迁移后没有收到业务侧失败反馈。
 

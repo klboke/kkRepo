@@ -261,6 +261,28 @@ ensure_nexus_repositories() {
     "online":true,
     "storage":{"blobStoreName":"default","strictContentTypeValidation":true,"writePolicy":"ALLOW"}
   }'
+
+  nexus_try_create_repo "pub-hosted" "$NEXUS_URL/service/rest/v1/repositories/pub/hosted" '{
+    "name":"pub-hosted",
+    "online":true,
+    "storage":{"blobStoreName":"default","strictContentTypeValidation":true,"writePolicy":"ALLOW"}
+  }'
+
+  nexus_try_create_repo "pub-proxy" "$NEXUS_URL/service/rest/v1/repositories/pub/proxy" '{
+    "name":"pub-proxy",
+    "online":true,
+    "storage":{"blobStoreName":"default","strictContentTypeValidation":true},
+    "proxy":{"remoteUrl":"https://pub.dev/","contentMaxAge":1440,"metadataMaxAge":1440},
+    "negativeCache":{"enabled":true,"timeToLive":1440},
+    "httpClient":{"blocked":false,"autoBlock":true}
+  }'
+
+  nexus_try_create_repo "pub-group" "$NEXUS_URL/service/rest/v1/repositories/pub/group" '{
+    "name":"pub-group",
+    "online":true,
+    "storage":{"blobStoreName":"default","strictContentTypeValidation":true},
+    "group":{"memberNames":["pub-hosted","pub-proxy"]}
+  }'
 }
 
 initialize_kkrepo_admin() {
@@ -489,6 +511,33 @@ ensure_kkrepo_repositories() {
     "strictContentTypeValidation":true,
     "group":{"memberNames":["cargo-hosted","cargo-proxy"]},
     "cargo":{"requireAuthentication":true}
+  }'
+
+  kkrepo_create_repo "pub-hosted" '{
+    "name":"pub-hosted",
+    "recipe":"pub-hosted",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "hosted":{"writePolicy":"ALLOW"}
+  }'
+
+  kkrepo_create_repo "pub-proxy" '{
+    "name":"pub-proxy",
+    "recipe":"pub-proxy",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "proxy":{"remoteUrl":"https://pub.dev/","contentMaxAgeMinutes":1440,"metadataMaxAgeMinutes":1440,"autoBlock":true}
+  }'
+
+  kkrepo_create_repo "pub-group" '{
+    "name":"pub-group",
+    "recipe":"pub-group",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "group":{"memberNames":["pub-hosted","pub-proxy"]}
   }'
 
   kkrepo_create_repo "nuget-hosted" '{

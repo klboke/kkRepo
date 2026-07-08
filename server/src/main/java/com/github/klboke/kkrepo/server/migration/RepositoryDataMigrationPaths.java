@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.migration;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
+import com.github.klboke.kkrepo.server.pub.PubRepositoryDataMigrationWriter;
 import java.util.Locale;
 
 final class RepositoryDataMigrationPaths {
@@ -21,6 +22,9 @@ final class RepositoryDataMigrationPaths {
     }
     if (format == RepositoryFormat.DOCKER) {
       return path.contains("/manifests/") || path.contains("/blobs/");
+    }
+    if (format == RepositoryFormat.PUB) {
+      return PubRepositoryDataMigrationWriter.isMigratablePubPath(path);
     }
     return true;
   }

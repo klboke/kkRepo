@@ -1464,10 +1464,11 @@ function memberCandidates() {
   const recipe = currentRecipe();
   const format = recipe ? recipe.format : null;
   if (!format) return [];
+  const allowNestedGroups = format === "pub";
   return repositories.filter((repo) => {
     if (repo.format !== format) return false;
-    if (repo.type === "GROUP") return false;
     if (repositoryFormMode === "edit" && repo.name === editingRepositoryName) return false;
+    if (repo.type === "GROUP" && !allowNestedGroups) return false;
     return true;
   });
 }
@@ -1692,7 +1693,8 @@ function refreshRepositoryRemoteDefaults(recipe) {
     yum: "https://download.fedoraproject.org/pub/fedora/linux/",
     raw: "https://example.com/",
     docker: "https://registry-1.docker.io/",
-    cargo: "https://index.crates.io/"
+    cargo: "https://index.crates.io/",
+    pub: "https://pub.dev/"
   };
   remote.placeholder = defaults[recipe.format] || "https://example.com/";
   if (repositoryFormMode === "create" && !remote.value.trim() && defaults[recipe.format]) {

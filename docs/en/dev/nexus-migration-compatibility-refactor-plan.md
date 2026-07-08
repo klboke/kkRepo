@@ -75,7 +75,7 @@ Recommended fields:
 | `repositoryRecipes` | Repository name, recipe, online state, attributes, and blob store link |
 | `restCapabilities` | Available REST endpoints and observed status behavior |
 | `schemaFingerprints` | Table, column, index, and selected metadata fingerprints |
-| `formatCapabilities` | Format-specific capabilities, such as Maven metadata, npm tokens, Cargo sparse index, Docker connectors |
+| `formatCapabilities` | Format-specific capabilities, such as Maven metadata, npm tokens, Cargo sparse index, Pub package metadata/upload sessions, Docker connectors |
 | `warnings` | Risk notes surfaced to the user |
 | `unsupportedItems` | Items that must not be migrated automatically |
 
@@ -120,6 +120,7 @@ The probe pipeline should run in layers. Each layer can contribute facts and war
    - PyPI: simple index, metadata, file hashes.
    - Docker: manifests, blobs, tag lists, connector behavior.
    - Cargo: sparse `config.json`, crate index files, `.crate` blobs, yanked state.
+   - Pub: package metadata, `version.json`, archive blobs, `archive_sha256`, upload session shape, token behavior.
    - Other formats follow the same pattern before automatic migration is enabled.
 
 ### Adapter Layers
@@ -197,6 +198,7 @@ Version-based presets can help initialize expectations, but they must remain adv
 - `<= 3.70.x`: expect OrientDB, verify through probe.
 - `>= 3.71.x`: expect datastore, verify H2 or PostgreSQL through probe.
 - `>= 3.77.x`: expect Community access to previously Pro-only formats, verify actual recipes and UI/API exposure.
+- `>= 3.92.x`: expect Pub repository availability, verify actual recipes, content model, and client-visible behavior through probe.
 
 ## Execution Semantics
 
@@ -251,10 +253,11 @@ Migration execution must stay idempotent and safe for multi-replica kkrepo deplo
 
 ### Phase 6: Format-Specific Expansion
 
-- Enable Maven, npm, PyPI, Go, Helm, NuGet, RubyGems, Yum, Docker, and Cargo only after each format has probe evidence and validation logic.
+- Enable Maven, npm, PyPI, Go, Helm, NuGet, RubyGems, Yum, Docker, Cargo, and Pub only after each format has probe evidence and validation logic.
 - Start with config migration where content export is not yet safe.
 - Add content migration once asset/blob/checksum mapping is proven.
 - For Cargo specifically, keep migration enabled only when Nexus 3.77.x+ H2/PostgreSQL source profiles prove sparse index, crate blob, token, permission, checksum, and cutover behavior.
+- For Pub specifically, keep migration enabled only when Nexus 3.92.0+ datastore source profiles prove package metadata, `version.json`, archive blob, `archive_sha256`, token, permission, checksum, and cutover behavior.
 
 ### Phase 7: Reference Matrix and Automation
 
@@ -266,6 +269,7 @@ Maintain a compatibility matrix with disposable Nexus reference instances:
 | Nexus 3.73.0 datastore/H2 | Datastore-era reference where Cargo may not be exposed in Community |
 | Nexus 3.77.x Community/H2 | Current Community reference for previously Pro-only formats such as Cargo |
 | Nexus 3.77.x or newer PostgreSQL | External datastore behavior |
+| Nexus 3.92.0+ datastore | Pub hosted/proxy/group reference, Pub migration, and Dart/Flutter client behavior |
 | Optional Pro or feature-flagged instance | Feature-gated behavior when available |
 
 Automated checks should include:

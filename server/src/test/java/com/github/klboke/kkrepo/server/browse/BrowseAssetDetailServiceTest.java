@@ -27,6 +27,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -89,6 +90,68 @@ class BrowseAssetDetailServiceTest {
 
     assertEquals("/repository/pypi-hosted/packages/demo/1.0.0/demo-1.0.0-py3-none-any.whl", detail.downloadUrl());
     assertEquals(List.of(key(repository.id(), storagePath)), assets.pathLookups);
+  }
+
+  @Test
+  void pubArchiveDetailExposesStoredPubMetadata() {
+    RepositoryRecord repository = repository(1L, "pub-hosted", RepositoryFormat.PUB, RepositoryType.HOSTED);
+    String path = "packages/example_package/versions/1.0.0.tar.gz";
+    Map<String, Object> pubAttributes = new LinkedHashMap<>();
+    pubAttributes.put("packageName", "example_package");
+    pubAttributes.put("version", "1.0.0");
+    pubAttributes.put("archiveSha256", "a".repeat(64));
+    pubAttributes.put("archiveSize", 512L);
+    pubAttributes.put("publishedAt", "2026-07-08T00:00:00Z");
+    pubAttributes.put("publishSource", "pub-client");
+    pubAttributes.put("publishedBy", "alice");
+    pubAttributes.put("publishApiKeyId", 42L);
+    pubAttributes.put("uploadSessionId", "session-1");
+    pubAttributes.put("sourceClient", "Dart pub 3.9.0");
+    pubAttributes.put("pubspec", Map.of(
+        "name", "example_package",
+        "version", "1.0.0",
+        "description", "Demo package",
+        "environment", Map.of("sdk", "^3.0.0")));
+    AssetRecord archive = new AssetRecord(
+        10L,
+        repository.id(),
+        null,
+        100L,
+        RepositoryFormat.PUB,
+        path,
+        HashColumns.pathHash(path),
+        "1.0.0.tar.gz",
+        "archive",
+        "application/octet-stream",
+        512L,
+        null,
+        Instant.parse("2026-07-08T00:00:00Z"),
+        pubAttributes);
+    AssetBlobRecord blob = blob(100L, 512L);
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(repository.id(), path), archive),
+        Map.of(blob.id(), blob));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(),
+        assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    BrowseAssetDetailService.BrowseAssetDetail detail = service.detail(repository, path, null);
+
+    assertEquals("archive", detail.pub().get("asset_kind"));
+    assertEquals("example_package", detail.pub().get("package_name"));
+    assertEquals("1.0.0", detail.pub().get("version"));
+    assertEquals("a".repeat(64), detail.pub().get("archive_sha256"));
+    assertEquals(512L, detail.pub().get("archive_size_bytes"));
+    assertEquals("pub-client", detail.pub().get("publish_source"));
+    assertEquals("alice", detail.pub().get("published_by"));
+    assertEquals(42L, detail.pub().get("publish_api_key_id"));
+    assertEquals("session-1", detail.pub().get("upload_session_id"));
+    assertEquals("Dart pub 3.9.0", detail.pub().get("source_client"));
+    assertEquals("Demo package", detail.pub().get("description"));
+    assertEquals(Map.of("sdk", "^3.0.0"), detail.pub().get("environment"));
+    assertEquals("/repository/pub-hosted/" + path, detail.downloadUrl());
   }
 
   @Test

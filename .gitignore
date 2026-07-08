@@ -4,6 +4,7 @@ target/
 *.iml
 .DS_Store
 logs/
+artifacts/
 *.log
 .local/
 .claude/settings.local.json

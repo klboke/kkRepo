@@ -281,6 +281,77 @@ class NexusApiMigrationServiceTest {
   }
 
   @Test
+  void pubDatastoreSourceProfileEnablesFullHostedContentMigrationWhenSchemaFingerprintMatches() {
+    NexusApiMigrationService service = service(new FakeBlobStoreDao(), new FakeRepositoryDao());
+    SourceProbe probe = new SourceProbe(
+        "3.92.0-03",
+        true,
+        true,
+        true,
+        "text/plain",
+        "ok",
+        "DATASTORE_H2",
+        "H2",
+        "jdbc:h2:file:/nexus-data/db/nexus",
+        datastoreSchema(Map.of("pub", true)),
+        List.of());
+
+    NexusMigrationPreflight preflight = service.preflight(new NexusInventory(
+        List.of(Map.of("name", "default", "type", "File")),
+        List.of(
+            repository("pub-hosted", "pub", "hosted", Map.of("storage", storage("default"))),
+            repository("pub-proxy", "pub", "proxy", Map.of(
+                "storage", storage("default"),
+                "proxy", Map.of("remoteUrl", "https://pub.dev/"))),
+            repository("pub-group", "pub", "group", Map.of(
+                "storage", storage("default"),
+                "group", Map.of("memberNames", List.of("pub-hosted", "pub-proxy"))))),
+        NexusSecurityExport.empty(),
+        List.of(),
+        probe),
+        new NexusMigrationTargetBlobStore("default", "s3", null, null, null, "", Map.of()),
+        null);
+
+    assertEquals(3, preflight.supportedRepositories());
+    assertEquals(
+        List.of("pub-hosted", "pub-proxy", "pub-group"),
+        preflight.repositoriesToMigrate().stream().map(NexusApiMigrationService.RepositoryMigrationPlan::name).toList());
+    assertEquals("pub-hosted", preflight.repositoriesToMigrate().get(0).recipe());
+    assertEquals("pub-proxy", preflight.repositoriesToMigrate().get(1).recipe());
+    assertEquals("pub-group", preflight.repositoriesToMigrate().get(2).recipe());
+    assertEquals(List.of("pub-hosted", "pub-proxy"), preflight.groupRepositories().get(0).members());
+    assertEquals(true, preflight.sourceProfile().formatCapabilities().get("pub").contentMigration());
+    assertEquals(
+        "datastore-content-exporter:PUB",
+        preflight.sourceProfile().formatCapabilities().get("pub").evidence());
+    assertEquals(
+        SupportStatus.FULL,
+        preflight.migrationPlan().items().stream()
+            .filter(item -> "pub-hosted".equals(item.name()))
+            .findFirst()
+            .orElseThrow()
+            .status());
+    assertEquals(
+        SupportStatus.CONFIG_ONLY,
+        preflight.migrationPlan().items().stream()
+            .filter(item -> "pub-proxy".equals(item.name()))
+            .findFirst()
+            .orElseThrow()
+            .status());
+    NexusMigrationPlan proxyBackupPlan = new MigrationPlanBuilder().build(
+        preflight.sourceProfile(),
+        new MigrationPlanBuilder.MigrationScope(List.of("pub-proxy"), true, true));
+    assertEquals(
+        SupportStatus.FULL,
+        proxyBackupPlan.items().stream()
+            .filter(item -> "pub-proxy".equals(item.name()))
+            .findFirst()
+            .orElseThrow()
+            .status());
+    assertFalse(preflight.migrationPlan().manualActions().contains("repository:pub-hosted"));
+  }
+
+  @Test
   void migratesSupportedRepositoriesAndKeepsSourceGroupMembers() {
     FakeBlobStoreDao blobStores = new FakeBlobStoreDao();
     FakeRepositoryDao repositories = new FakeRepositoryDao();
@@ -317,6 +388,43 @@ class NexusApiMigrationServiceTest {
     assertEquals(
         List.of("maven-releases", "maven-central"),
         repositories.memberNames("maven-public"));
+  }
+
+  @Test
+  void migratesPubRepositoryConfigurationAndDefaultsProxyRemote() {
+    FakeBlobStoreDao blobStores = new FakeBlobStoreDao();
+    FakeRepositoryDao repositories = new FakeRepositoryDao();
+    NexusApiMigrationService service = service(blobStores, repositories);
+
+    ConfigMigrationCounts counts = service.migrateConfig(new NexusInventory(
+        List.of(Map.of("name", "default")),
+        List.of(
+            repository("pub-hosted", "pub", "hosted", Map.of(
+                "storage", Map.of(
+                    "blobStoreName", "default",
+                    "strictContentTypeValidation", true,
+                    "writePolicy", "allow"))),
+            repository("pub-proxy", "pub", "proxy", Map.of("storage", storage("default"))),
+            repository("pub-group", "pub", "group", Map.of(
+                "storage", storage("default"),
+                "group", Map.of("memberNames", List.of("pub-hosted", "pub-proxy"))))),
+        NexusSecurityExport.empty(),
+        List.of()), request("https://old-nexus.example"));
+
+    RepositoryRecord hosted = repositories.required("pub-hosted");
+    RepositoryRecord proxy = repositories.required("pub-proxy");
+    assertEquals(3, counts.repositories());
+    assertEquals(1, counts.proxyRepositories());
+    assertEquals(1, counts.groupRepositories());
+    assertEquals(RepositoryFormat.PUB, hosted.format());
+    assertEquals(RepositoryType.HOSTED, hosted.type());
+    assertEquals("pub-hosted", hosted.recipeName());
+    assertEquals("ALLOW", hosted.writePolicy());
+    assertEquals(RepositoryType.PROXY, proxy.type());
+    assertEquals("pub-proxy", proxy.recipeName());
+    assertEquals("https://pub.dev/", proxy.proxyRemoteUrl());
+    assertEquals("https://pub.dev/", ((Map<?, ?>) proxy.attributes().get("proxy")).get("remoteUrl"));
+    assertEquals(List.of("pub-hosted", "pub-proxy"), repositories.memberNames("pub-group"));
   }
 
   @Test

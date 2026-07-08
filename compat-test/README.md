@@ -16,10 +16,11 @@ NEXUS_COMPAT_USERNAME=admin
 NEXUS_COMPAT_PASSWORD=123456
 ```
 
-Current Maven compatibility checks and non-Cargo repository-format compatibility checks
+Current Maven compatibility checks and non-Cargo/non-Pub repository-format compatibility checks
 (npm, PyPI, Go, Helm, and others) should compare against this same long-running Nexus reference
 unless a test explicitly documents why it needs an isolated throwaway Nexus instance. Cargo/Rust
-checks use the Nexus 3.77.x+ reference documented below.
+checks use the Nexus 3.77.x+ reference documented below, and Pub checks use the Nexus 3.92.0+
+reference documented in the Pub section.
 
 ## Default Test Run
 
@@ -71,17 +72,18 @@ Available suites:
   force both sides to use the same upstream sparse index (`CARGO_COMPAT_REMOTE_URL`, default
   `https://index.crates.io/`) and the same crate/version (`CARGO_COMPAT_CRATE`, default `itoa`;
   `CARGO_COMPAT_VERSION`, default `1.0.15`).
-- `extended`: smoke coverage plus currently separated PyPI, Helm, NuGet, RubyGems, and Yum checks.
+- `extended`: smoke coverage plus currently separated PyPI, Helm, Pub, NuGet, RubyGems, and Yum checks.
 - `client-e2e`: starts from the disposable kkrepo service and uses real package clients to publish
   and then download/resolve through hosted and group/proxy repositories. It covers Maven, npm,
-  PyPI, Helm, Cargo/Rust, NuGet, RubyGems, Yum, and Docker/OCI. Go is resolve-only through the Go
-  proxy because hosted Go publishing is not a supported repository mode.
+  PyPI, Helm, Cargo/Rust, Dart/Pub, Flutter Pub, NuGet, RubyGems, Yum, and Docker/OCI. Go is
+  resolve-only through the Go proxy because hosted Go publishing is not a supported repository mode.
 - `full`: all compat-test tests with live endpoint variables set; use this as a diagnostic suite
   when working through known protocol gaps.
 
-In GitHub Actions, add the `run-live-compat` label to a PR to run the smoke suite plus Cargo
-compatibility against the Nexus 3.77.x reference. Add `run-client-e2e` to run the real client
-matrix, or start the workflow manually and select a suite.
+In GitHub Actions, add the `run-live-compat` label to a PR to run the smoke suite plus Cargo and
+Pub compatibility against the Nexus 3.92.0 reference. The live compatibility workflow pins Nexus to
+3.92.0 because Pub repositories are only available there. Add `run-client-e2e` to run the real
+client matrix, or start the workflow manually and select a suite.
 
 ## Real Client E2E
 
@@ -97,9 +99,33 @@ docker compose -f docker-compose.compat.yml down -v
 ```
 
 The runner must have `mvn`, `npm`, `python3` with `build` and `twine`, `go`, `helm`, `cargo`,
-`dotnet`, `ruby`/`gem`, and Docker available. ORAS is optional; when present the Docker/OCI part
-also pushes and pulls a generic OCI artifact. Client logs, downloaded metadata, and selected
-inspect outputs are written under `artifacts/client-e2e/`.
+`dart`, `dotnet`, `ruby`/`gem`, and Docker available. `flutter` is used for the Flutter Pub check
+when installed; GitHub Actions installs it for the `client-e2e` workflow. ORAS is optional; when
+present the Docker/OCI part also pushes and pulls a generic OCI artifact. Client logs, downloaded
+metadata, and selected inspect outputs are written under `artifacts/client-e2e/`.
+
+## Live Pub Checks
+
+Pub compatibility requires Nexus 3.92.0 or later. With local Nexus 3.92.0 on `28093` and local
+kkrepo dev on `18090`, both using `admin` / `123456`, run:
+
+```bash
+PUB_COMPAT_ENABLED=true \
+NEXUS_COMPAT_BASE_URL=http://127.0.0.1:28093 \
+NEXUS_COMPAT_PASSWORD=123456 \
+KKREPO_COMPAT_BASE_URL=http://127.0.0.1:18090 \
+KKREPO_COMPAT_PASSWORD=123456 \
+mvn -pl compat-test -am \
+  -DfailIfNoTests=false \
+  -Dsurefire.failIfNoSpecifiedTests=false \
+  -Dtest=PubRepositoryBlackBoxCompatibilityTest \
+  test
+```
+
+By default the Pub proxy/group checks compare the public `path` package at version `1.9.0`.
+Set `PUB_COMPAT_PROXY_PACKAGE` and `PUB_COMPAT_PROXY_VERSION` to use a different upstream package.
+Hosted Pub metadata/archive comparison is skipped unless `PUB_COMPAT_HOSTED_PACKAGE` and
+`PUB_COMPAT_HOSTED_VERSION` point at a package already present in both hosted repositories.
 
 ## Live Console And Maven Read Checks
 

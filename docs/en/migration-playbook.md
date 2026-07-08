@@ -203,11 +203,13 @@ Validate:
 - npm install and publish.
 - PyPI pip install and twine upload.
 - Helm repo update and chart upload.
+- Dart / Pub `dart pub get`, `flutter pub get`, and `dart pub publish`.
 - NuGet restore and package push.
 - RubyGems install and gem push.
 - Yum install and RPM upload.
 - Raw upload/download.
 - Cargo / Rust sparse registry config, index entry, `.crate` download, and checksum after datastore H2/PostgreSQL Cargo migration.
+- Dart / Pub package metadata, `version.json`, archive download, `archive_sha256`, and publish token behavior after Nexus 3.92.0 Pub migration.
 - Admin login.
 - Browse/search.
 - User roles and repository permissions.

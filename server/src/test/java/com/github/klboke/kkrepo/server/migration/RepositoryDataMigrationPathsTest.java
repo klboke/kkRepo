@@ -47,6 +47,31 @@ class RepositoryDataMigrationPathsTest {
   }
 
   @Test
+  void pubDiscoveryKeepsPackageMetadataAndArchiveAssetsOnly() {
+    assertTrue(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.PUB, "api/packages/example_package"));
+    assertTrue(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.PUB, "packages/example_package/versions/1.0.0.tar.gz"));
+    assertTrue(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.PUB, "api/archives/example_package-1.0.0-beta.1.tar.gz"));
+    assertTrue(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.PUB, "example_package/1.0.0/example_package-1.0.0.tar.gz"));
+    assertTrue(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.PUB, "example_package/1.0.0-beta.1/example_package-1.0.0-beta.1.tar.gz"));
+
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.PUB, "api/packages/example_package/versions/1.0.0"));
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.PUB, "example_package/1.0.0/version.json"));
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.PUB, "example_package/1.0.0/other_package-1.0.0.tar.gz"));
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.PUB, "api/packages/versions/new"));
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.PUB, "api/package-names"));
+  }
+
+  @Test
   void checksumGenerationRunsForMavenNonChecksumContent() {
     assertTrue(RepositoryDataMigrationPaths.shouldGenerateMavenChecksumSiblings(
         MAVEN_PATH_PARSER.parsePath("com/acme/app/1.0/app-1.0.jar")));

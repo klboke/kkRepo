@@ -13,6 +13,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmHostedService;
 import com.github.klboke.kkrepo.server.pypi.PypiHostedService;
+import com.github.klboke.kkrepo.server.pub.PubHostedService;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
 import com.github.klboke.kkrepo.server.yum.YumService;
 import java.io.ByteArrayInputStream;
@@ -52,6 +53,7 @@ public class ComponentUploadService {
       singleAsset("pypi"),
       singleAsset("helm"),
       singleAsset("cargo"),
+      singleAsset("pub"),
       rawLikeUpload("nuget"),
       rawLikeUpload("rubygems"),
       rawLikeUpload("yum"),
@@ -64,6 +66,7 @@ public class ComponentUploadService {
   private final PypiHostedService pypiHosted;
   private final HelmHostedService helmHosted;
   private final CargoHostedService cargoHosted;
+  private final PubHostedService pubHosted;
   private final RawHostedService rawHosted;
   private final YumService yumService;
   private final MavenPathParser mavenPathParser = new MavenPathParser();
@@ -76,6 +79,7 @@ public class ComponentUploadService {
       PypiHostedService pypiHosted,
       HelmHostedService helmHosted,
       CargoHostedService cargoHosted,
+      PubHostedService pubHosted,
       RawHostedService rawHosted,
       YumService yumService) {
     this.registry = registry;
@@ -85,6 +89,7 @@ public class ComponentUploadService {
     this.pypiHosted = pypiHosted;
     this.helmHosted = helmHosted;
     this.cargoHosted = cargoHosted;
+    this.pubHosted = pubHosted;
     this.rawHosted = rawHosted;
     this.yumService = yumService;
   }
@@ -124,6 +129,7 @@ public class ComponentUploadService {
       case HELM -> uploadHelm(runtime, upload, createdBy, createdByIp);
       case GO -> throw new UploadValidationException("Go hosted upload is not supported");
       case CARGO -> uploadCargo(runtime, upload, createdBy, createdByIp);
+      case PUB -> uploadPub(runtime, upload, createdBy, createdByIp);
       case DOCKER -> throw new UploadValidationException("Docker hosted upload must use the Docker Registry V2 API");
       case NUGET -> uploadRaw(runtime, upload, createdBy, createdByIp);
       case RUBYGEMS -> uploadRaw(runtime, upload, createdBy, createdByIp);
@@ -227,6 +233,21 @@ public class ComponentUploadService {
     }
     try (var input = asset.file().getInputStream()) {
       return List.of(cargoHosted.uploadCrate(runtime, input, createdBy, createdByIp));
+    }
+  }
+
+  private List<String> uploadPub(
+      RepositoryRuntime runtime,
+      NormalizedUpload upload,
+      String createdBy,
+      String createdByIp) throws IOException {
+    AssetUpload asset = singleAsset(upload, "Pub");
+    String filename = originalFilename(asset.file());
+    if (!filename.endsWith(".tar.gz")) {
+      throw new UploadValidationException("Pub upload requires a .tar.gz archive");
+    }
+    try (var input = asset.file().getInputStream()) {
+      return List.of(pubHosted.uploadArchive(runtime, input, createdBy, createdByIp, "component-upload"));
     }
   }
 
@@ -357,6 +378,7 @@ public class ComponentUploadService {
       case HELM -> "helm";
       case GO -> "go";
       case CARGO -> "cargo";
+      case PUB -> "pub";
       case DOCKER -> "docker";
       case NUGET -> "nuget";
       case RUBYGEMS -> "rubygems";

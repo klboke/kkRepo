@@ -87,7 +87,7 @@ java -jar server/target/kkrepo-server-*.jar
 - 代理保留完整 path。
 - 允许足够大的上传 body。
 - 上传和下载 timeout 足够长。
-- 不会移除 Maven/npm/pip/Helm/Cargo/NuGet/gem/yum 客户端需要的认证 header。
+- 不会移除 Maven/npm/pip/Helm/Cargo/Pub/NuGet/gem/yum 客户端需要的认证 header。
 
 ## 初始管理员设置问题
 
@@ -152,7 +152,7 @@ export SPRING_DATASOURCE_PASSWORD=kkrepo
 - 客户端使用了该协议正确的凭据类型。
 - 反向代理保留了 `Authorization` header。
 
-对于 npm、Cargo、NuGet、RubyGems 等 token 型客户端，修改用户或 realm 设置后，建议重新生成相关 token 或 API key。
+对于 npm、Cargo、Pub、NuGet、RubyGems 等 token 型客户端，修改用户或 realm 设置后，建议重新生成相关 token 或 API key。
 
 如果问题是 Nexus 兼容差异，提交 issue 时请同时提供 Nexus 和 kkrepo 对同一请求的响应。
 
@@ -208,7 +208,7 @@ scripts/ci/run-live-compat.sh smoke
 docker compose -f docker-compose.compat.yml down -v
 ```
 
-Cargo 兼容性测试使用 Nexus 3.77.x+ 参考 compose 文件和 `cargo` suite。运行 Cargo 读写检查前请先查看 [compat-test README](../../compat-test/README.md)。
+Cargo 兼容性测试使用 Nexus 3.77.x+ 参考 compose 文件和 `cargo` suite。Pub 兼容性测试使用 Nexus 3.92.0+ 参考实例，并通过 `PubRepositoryBlackBoxCompatibilityTest` 或 live `extended` suite 覆盖。运行 Cargo 或 Pub 读写检查前请先查看 [compat-test README](../../compat-test/README.md)。
 
 如果需要覆盖真实包管理器客户端，请对同一个一次性 kkrepo 候选实例运行客户端 E2E：
 
