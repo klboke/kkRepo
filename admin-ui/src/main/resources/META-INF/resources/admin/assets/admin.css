@@ -1884,6 +1884,87 @@ h1 {
   padding: 18px;
 }
 
+.has-form-modal {
+  overflow: hidden;
+}
+
+.form-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.form-modal[hidden] {
+  display: none !important;
+}
+
+.form-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(23, 36, 32, 0.48);
+}
+
+.form-modal-panel {
+  position: relative;
+  width: min(1120px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 28px 80px rgba(17, 24, 39, 0.28);
+}
+
+.form-modal-panel-narrow {
+  width: min(720px, 100%);
+}
+
+.form-modal-panel .blobstore-form.modal-form {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: #ffffff;
+  box-shadow: none;
+}
+
+.modal-form .form-title {
+  padding-right: 42px;
+}
+
+.form-modal-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 1;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  color: #344641;
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.form-modal-close:hover,
+.form-modal-close:focus-visible {
+  border-color: var(--active);
+  color: var(--active);
+  outline: none;
+}
+
+.modal-form .role-transfer .member-list {
+  max-height: min(240px, 28vh);
+}
+
+.modal-form .role-transfer .member-pane[data-side="selected"] .member-list {
+  max-height: min(278px, 32vh);
+}
+
 .audit-filter-bar {
   padding: 12px;
 }
@@ -2165,6 +2246,15 @@ code {
   .pagination-size {
     margin-left: 0;
   }
+
+  .form-modal {
+    align-items: stretch;
+    padding: 12px;
+  }
+
+  .form-modal-panel {
+    max-height: calc(100vh - 24px);
+  }
 }
 
 @media (max-width: 760px) {
@@ -2185,5 +2275,17 @@ code {
 
   .workspace-tab {
     flex: 1;
+  }
+
+  .form-modal {
+    padding: 0;
+  }
+
+  .form-modal-panel {
+    width: 100%;
+    max-height: 100vh;
+    border-right: 0;
+    border-left: 0;
+    border-radius: 0;
   }
 }

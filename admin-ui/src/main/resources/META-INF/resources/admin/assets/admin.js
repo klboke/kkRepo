@@ -32,6 +32,7 @@ let securityRoleMode = "create";
 let securityPrivilegeMode = "create";
 let repositorySort = { key: "name", direction: "asc" };
 const BUILT_IN_READ_ONLY_ROLE_IDS = new Set(["nx-admin", "nx-anonymous"]);
+const formModalDismissHandlers = new Map();
 
 function installCsrfFetch() {
   if (window.__nexusPlusCsrfFetchInstalled) return;
@@ -139,6 +140,116 @@ function applyOriginAwarePlaceholders() {
   if (oidcRedirectUri) {
     oidcRedirectUri.placeholder = `${window.location.origin}/internal/security/oidc/callback`;
   }
+}
+
+function formModalElement(formId) {
+  return document.getElementById(`${formId}-modal`);
+}
+
+function openFormModals() {
+  return Array.from(document.querySelectorAll(".form-modal:not([hidden])"));
+}
+
+function activeFormModal() {
+  const modals = openFormModals();
+  return modals.length > 0 ? modals[modals.length - 1] : null;
+}
+
+function updateFormModalBodyState() {
+  document.body.classList.toggle("has-form-modal", openFormModals().length > 0);
+}
+
+function isFocusableModalElement(element) {
+  return Boolean(element)
+    && !element.disabled
+    && !element.hidden
+    && !element.closest("[hidden]")
+    && element.type !== "hidden"
+    && element.getAttribute("aria-hidden") !== "true";
+}
+
+function modalFocusCandidates(modal) {
+  if (!modal) return [];
+  return Array.from(modal.querySelectorAll("button, input, select, textarea, [tabindex]:not([tabindex='-1'])"))
+    .filter(isFocusableModalElement);
+}
+
+function focusFormModal(formId, preferredFocusId = null) {
+  const modal = formModalElement(formId);
+  const preferred = preferredFocusId ? document.getElementById(preferredFocusId) : null;
+  const target = isFocusableModalElement(preferred)
+    ? preferred
+    : modalFocusCandidates(modal)[0];
+  if (target) setTimeout(() => target.focus(), 0);
+}
+
+function openFormModal(formId, preferredFocusId = null) {
+  const form = document.getElementById(formId);
+  if (!form) return;
+  const modal = formModalElement(formId);
+  form.hidden = false;
+  if (modal) {
+    modal.hidden = false;
+    modal.setAttribute("aria-hidden", "false");
+  }
+  updateFormModalBodyState();
+  focusFormModal(formId, preferredFocusId);
+}
+
+function closeFormModal(formId) {
+  const form = document.getElementById(formId);
+  if (form) form.hidden = true;
+  const modal = formModalElement(formId);
+  if (modal) {
+    modal.hidden = true;
+    modal.setAttribute("aria-hidden", "true");
+  }
+  updateFormModalBodyState();
+}
+
+function bindFormModalDismiss(formId, handler) {
+  formModalDismissHandlers.set(formId, handler);
+}
+
+function dismissFormModal(formId) {
+  const handler = formModalDismissHandlers.get(formId);
+  if (handler) {
+    handler();
+  } else {
+    closeFormModal(formId);
+  }
+}
+
+function trapFocusInFormModal(event) {
+  const modal = activeFormModal();
+  if (!modal) return false;
+  const candidates = modalFocusCandidates(modal);
+  if (candidates.length === 0) return false;
+  const first = candidates[0];
+  const last = candidates[candidates.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+    return true;
+  }
+  if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+    return true;
+  }
+  return false;
+}
+
+function handleFormModalKeydown(event) {
+  if (event.key === "Tab") {
+    return trapFocusInFormModal(event);
+  }
+  if (event.key !== "Escape") return false;
+  const modal = activeFormModal();
+  if (!modal) return false;
+  event.preventDefault();
+  dismissFormModal(modal.dataset.formId);
+  return true;
 }
 
 const blobStoreS3RequiredFields = [
@@ -1100,8 +1211,7 @@ function showCreateBlobStoreForm() {
   document.getElementById("blobstore-path-style").checked = true;
   refreshBlobStoreEngineControls();
   clearBlobStoreFormErrors();
-  document.getElementById("blobstore-form").hidden = false;
-  document.getElementById("blobstore-name").focus();
+  openFormModal("blobstore-form", "blobstore-name");
 }
 
 function showEditBlobStoreForm(id) {
@@ -1128,8 +1238,7 @@ function showEditBlobStoreForm(id) {
   document.getElementById("blobstore-path-style").checked = store.pathStyleAccess !== false;
   refreshBlobStoreEngineControls();
   clearBlobStoreFormErrors();
-  document.getElementById("blobstore-form").hidden = false;
-  document.getElementById(isFileBlobStore(store) ? "blobstore-path" : "blobstore-endpoint").focus();
+  openFormModal("blobstore-form", isFileBlobStore(store) ? "blobstore-path" : "blobstore-endpoint");
 }
 
 function normalizeBlobStoreEngine(engine) {
@@ -1146,7 +1255,7 @@ function hideBlobStoreForm() {
   setAccessFieldMode(true);
   setSecretFieldMode(true);
   document.getElementById("blobstore-path-style").disabled = false;
-  document.getElementById("blobstore-form").hidden = true;
+  closeFormModal("blobstore-form");
 }
 
 async function postBlobStoreAction(path, options, pendingMessage, successFallback = "Operation completed.") {
@@ -1701,8 +1810,7 @@ function showCreateRepositoryForm() {
   refreshRepositoryBlobStoreOptions();
   refreshRepositoryRecipeControls();
   clearRequiredFieldErrors(repositoryRequiredFields);
-  document.getElementById("repository-form").hidden = false;
-  document.getElementById("repository-name").focus();
+  openFormModal("repository-form", "repository-name");
 }
 
 function showEditRepositoryForm(name) {
@@ -1761,7 +1869,7 @@ function showEditRepositoryForm(name) {
   }
   refreshRepositoryRecipeControls();
   clearRequiredFieldErrors(repositoryRequiredFields);
-  document.getElementById("repository-form").hidden = false;
+  openFormModal("repository-form", "repository-online");
 }
 
 function hideRepositoryForm() {
@@ -1771,7 +1879,7 @@ function hideRepositoryForm() {
   document.getElementById("repository-blobstore").disabled = false;
   document.getElementById("repository-blobstore").title = "";
   clearRequiredFieldErrors(repositoryRequiredFields);
-  document.getElementById("repository-form").hidden = true;
+  closeFormModal("repository-form");
 }
 
 async function saveRepository() {
@@ -2231,11 +2339,11 @@ function showSecurityUserForm(user = null) {
   document.getElementById("security-user-password").value = "";
   setSecurityTransferSelection("userRoles", user?.roles || []);
   clearRequiredFieldErrors(securityUserRequiredFields);
-  document.getElementById("security-user-form").hidden = false;
+  openFormModal("security-user-form", user ? "security-user-first-name" : "security-user-id");
 }
 
 function hideSecurityUserForm() {
-  document.getElementById("security-user-form").hidden = true;
+  closeFormModal("security-user-form");
   document.getElementById("security-user-source").disabled = false;
   document.getElementById("security-user-id").disabled = false;
   clearRequiredFieldErrors(securityUserRequiredFields);
@@ -2336,11 +2444,11 @@ function showSecurityRoleForm(role = null, options = {}) {
   setSecurityTransferSelection("roleRoles", role?.roles || []);
   setSecurityRoleFormReadOnly(viewOnly);
   clearRequiredFieldErrors(securityRoleRequiredFields);
-  document.getElementById("security-role-form").hidden = false;
+  openFormModal("security-role-form", viewOnly ? "cancel-security-role-button" : role ? "security-role-name" : "security-role-id");
 }
 
 function hideSecurityRoleForm() {
-  document.getElementById("security-role-form").hidden = true;
+  closeFormModal("security-role-form");
   securityRoleMode = "create";
   setSecurityRoleFormReadOnly(false);
   document.getElementById("security-role-id").disabled = false;
@@ -2444,11 +2552,11 @@ function showSecurityPrivilegeForm(privilege = null) {
   document.getElementById("security-privilege-readonly").checked = Boolean(privilege?.readOnly);
   document.getElementById("security-privilege-properties").value = JSON.stringify(privilege?.properties || { pattern: "nexus:*" }, null, 2);
   clearRequiredFieldErrors(securityPrivilegeRequiredFields);
-  document.getElementById("security-privilege-form").hidden = false;
+  openFormModal("security-privilege-form", privilege ? "security-privilege-name" : "security-privilege-id");
 }
 
 function hideSecurityPrivilegeForm() {
-  document.getElementById("security-privilege-form").hidden = true;
+  closeFormModal("security-privilege-form");
   document.getElementById("security-privilege-id").disabled = false;
   clearRequiredFieldErrors(securityPrivilegeRequiredFields);
 }
@@ -2919,11 +3027,11 @@ function showSecurityApiKeyForm() {
   document.getElementById("security-api-key-display-name").value = "";
   document.getElementById("security-api-key-scopes").value = "";
   clearRequiredFieldErrors(securityApiKeyRequiredFields);
-  document.getElementById("security-api-key-form").hidden = false;
+  openFormModal("security-api-key-form", "security-api-key-owner-user-id");
 }
 
 function hideSecurityApiKeyForm() {
-  document.getElementById("security-api-key-form").hidden = true;
+  closeFormModal("security-api-key-form");
   clearRequiredFieldErrors(securityApiKeyRequiredFields);
 }
 
@@ -3748,6 +3856,14 @@ function applyHashRoute() {
 
 applyOriginAwarePlaceholders();
 initializeSideGroups();
+[
+  ["repository-form", hideRepositoryForm],
+  ["blobstore-form", hideBlobStoreForm],
+  ["security-user-form", hideSecurityUserForm],
+  ["security-role-form", hideSecurityRoleForm],
+  ["security-privilege-form", hideSecurityPrivilegeForm],
+  ["security-api-key-form", hideSecurityApiKeyForm]
+].forEach(([formId, handler]) => bindFormModalDismiss(formId, handler));
 
 document.querySelectorAll(".side-item[data-view]").forEach((item) => {
   item.addEventListener("click", () => switchView(item.dataset.view));
@@ -3775,9 +3891,16 @@ document.getElementById("signout-button").addEventListener("click", () => {
   window.location.href = `/internal/security/logout?returnTo=${encodeURIComponent("/browse/#browse/welcome")}`;
 });
 document.addEventListener("click", (event) => {
+  const dismissButton = event.target.closest("[data-modal-dismiss]");
+  if (!dismissButton) return;
+  event.preventDefault();
+  dismissFormModal(dismissButton.dataset.modalDismiss);
+});
+document.addEventListener("click", (event) => {
   if (!document.getElementById("user-menu").contains(event.target)) closeUserMenu();
 });
 document.addEventListener("keydown", (event) => {
+  if (handleFormModalKeydown(event)) return;
   if (event.key === "Escape") closeUserMenu();
 });
 document.getElementById("create-blobstore-button").addEventListener("click", showCreateBlobStoreForm);
