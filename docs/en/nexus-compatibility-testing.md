@@ -37,7 +37,7 @@ To run live black-box tests, provide both a Nexus reference instance and a kkrep
 ```bash
 NEXUS_COMPAT_BASE_URL=http://localhost:28090/ \
 NEXUS_COMPAT_USERNAME=admin \
-NEXUS_COMPAT_PASSWORD=123456 \
+NEXUS_COMPAT_PASSWORD=Admin1234 \
 KKREPO_COMPAT_BASE_URL=http://127.0.0.1:18090 \
 KKREPO_COMPAT_USERNAME=admin \
 KKREPO_COMPAT_PASSWORD=123456 \

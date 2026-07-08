@@ -5,7 +5,7 @@ import java.util.Optional;
 final class CompatDefaults {
   static final String NEXUS_BASE_URL = "http://localhost:28090";
   static final String NEXUS_USERNAME = "admin";
-  static final String NEXUS_PASSWORD = "123456";
+  static final String NEXUS_PASSWORD = "Admin1234";
   static final String KKREPO_BASE_URL = "http://127.0.0.1:18090";
   static final String KKREPO_USERNAME = "admin";
   static final String KKREPO_PASSWORD = "123456";

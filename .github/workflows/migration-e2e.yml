@@ -81,7 +81,7 @@ jobs:
       NEXUS_COMPAT_PORT: ${{ matrix.nexus-port }}
       NEXUS_COMPAT_BASE_URL: http://127.0.0.1:${{ matrix.nexus-port }}
       NEXUS_COMPAT_USERNAME: admin
-      NEXUS_COMPAT_PASSWORD: "123456"
+      NEXUS_COMPAT_PASSWORD: "Admin1234"
       KKREPO_COMPAT_PORT: ${{ matrix.kkrepo-port }}
       KKREPO_MANAGEMENT_PORT: ${{ matrix.management-port }}
       KKREPO_COMPAT_BASE_URL: http://127.0.0.1:${{ matrix.kkrepo-port }}

@@ -13,7 +13,7 @@ Use the Docker-resident Nexus service as the fixed reference endpoint:
 ```bash
 NEXUS_COMPAT_BASE_URL=http://localhost:28090/
 NEXUS_COMPAT_USERNAME=admin
-NEXUS_COMPAT_PASSWORD=123456
+NEXUS_COMPAT_PASSWORD=Admin1234
 ```
 
 Current Maven compatibility checks and non-Cargo/non-Pub repository-format compatibility checks
@@ -37,7 +37,7 @@ The GitHub `Live Compatibility` workflow uses the same commands below. It builds
 kkrepo image, starts MySQL, a disposable Nexus reference, and the candidate service, then
 bootstraps the admin user, default file blob store, and the fixture repositories used by
 live compatibility and real client E2E runs.
-The disposable defaults are `admin` / `123456` for Nexus and `admin` / `12345678` for kkrepo.
+The disposable defaults are `admin` / `Admin1234` for Nexus and `admin` / `12345678` for kkrepo.
 
 ```bash
 scripts/build-docker-image.sh kkrepo:compat
@@ -106,13 +106,13 @@ metadata, and selected inspect outputs are written under `artifacts/client-e2e/`
 
 ## Live Pub Checks
 
-Pub compatibility requires Nexus 3.92.0 or later. With local Nexus 3.92.0 on `28093` and local
-kkrepo dev on `18090`, both using `admin` / `123456`, run:
+Pub compatibility requires Nexus 3.92.0 or later. With local Nexus 3.92.0 on `28093` using
+`admin` / `Admin1234` and local kkrepo dev on `18090` using `admin` / `123456`, run:
 
 ```bash
 PUB_COMPAT_ENABLED=true \
 NEXUS_COMPAT_BASE_URL=http://127.0.0.1:28093 \
-NEXUS_COMPAT_PASSWORD=123456 \
+NEXUS_COMPAT_PASSWORD=Admin1234 \
 KKREPO_COMPAT_BASE_URL=http://127.0.0.1:18090 \
 KKREPO_COMPAT_PASSWORD=123456 \
 mvn -pl compat-test -am \
@@ -158,7 +158,7 @@ They are disabled by default and use the fixed Docker Nexus reference endpoint.
 COMPAT_SECURITY_ENABLED=true \
 NEXUS_COMPAT_BASE_URL=http://localhost:28090/ \
 NEXUS_COMPAT_USERNAME=admin \
-NEXUS_COMPAT_PASSWORD=123456 \
+NEXUS_COMPAT_PASSWORD=Admin1234 \
 KKREPO_COMPAT_BASE_URL=http://127.0.0.1:18090 \
 KKREPO_COMPAT_USERNAME=admin \
 KKREPO_COMPAT_PASSWORD=admin123 \
@@ -190,7 +190,8 @@ use their own token/session entry points instead of the Basic realm order.
 ## Live NuGet, RubyGems, And Yum Checks
 
 The NuGet, RubyGems, and Yum repository checks compare the fixed Nexus reference endpoint above
-with the local kkrepo dev server. The default credentials for both sides are `admin` / `123456`.
+with the local kkrepo dev server. The default credentials are `admin` / `Admin1234` for Nexus and
+`admin` / `123456` for kkrepo.
 
 ```bash
 mvn -pl compat-test -am \
@@ -198,7 +199,7 @@ mvn -pl compat-test -am \
   -Dsurefire.failIfNoSpecifiedTests=false \
   -Dcompat.nexus.baseUrl=http://localhost:28090/ \
   -Dcompat.nexus.username=admin \
-  -Dcompat.nexus.password=123456 \
+  -Dcompat.nexus.password=Admin1234 \
   -Dcompat.nexusPlus.baseUrl=http://127.0.0.1:18090 \
   -Dcompat.nexusPlus.username=admin \
   -Dcompat.nexusPlus.password=123456 \
@@ -233,7 +234,7 @@ Maven command line:
 ```bash
 NEXUS_COMPAT_BASE_URL=http://localhost:28090/ \
 NEXUS_COMPAT_USERNAME=admin \
-NEXUS_COMPAT_PASSWORD=123456 \
+NEXUS_COMPAT_PASSWORD=Admin1234 \
 KKREPO_COMPAT_BASE_URL=http://127.0.0.1:18090 \
 COMPAT_WRITE_ENABLED=true \
 mvn -pl compat-test -am \
@@ -255,7 +256,7 @@ mvn -pl compat-test -am \
   -Dsurefire.failIfNoSpecifiedTests=false \
   -Dcompat.nexus.baseUrl=http://127.0.0.1:28090 \
   -Dcompat.nexus.username=admin \
-  -Dcompat.nexus.password=123456 \
+  -Dcompat.nexus.password=Admin1234 \
   -Dcompat.nexusPlus.baseUrl=http://127.0.0.1:18090 \
   -Dcompat.write.enabled=true \
   -Dcompat.npm.readPackage=is-number \
@@ -287,7 +288,7 @@ Run the PyPI suite against the fixed reference Nexus:
 ```bash
 NEXUS_COMPAT_BASE_URL=http://localhost:28090/ \
 NEXUS_COMPAT_USERNAME=admin \
-NEXUS_COMPAT_PASSWORD=123456 \
+NEXUS_COMPAT_PASSWORD=Admin1234 \
 KKREPO_COMPAT_BASE_URL=http://127.0.0.1:18090 \
 mvn -pl compat-test -am \
   -DfailIfNoTests=false \
@@ -352,7 +353,7 @@ Useful thresholds:
 ## Go Proxy And Group Compatibility
 
 The Go black-box test compares kkrepo against Nexus Go proxy and group repositories. By default
-it targets the local Nexus at `http://localhost:28090` with `admin` / `123456`, and kkrepo at
+it targets the local Nexus at `http://localhost:28090` with `admin` / `Admin1234`, and kkrepo at
 `http://127.0.0.1:18090`. Override `GO_KKREPO_COMPAT_BASE_URL` when testing a non-default
 kkrepo port.
 
@@ -386,7 +387,7 @@ delete cleanup, plus proxy `index.yaml` URL rewriting and proxied chart download
 ```bash
 NEXUS_COMPAT_BASE_URL=http://localhost:28090/ \
 NEXUS_COMPAT_USERNAME=admin \
-NEXUS_COMPAT_PASSWORD=123456 \
+NEXUS_COMPAT_PASSWORD=Admin1234 \
 KKREPO_COMPAT_BASE_URL=http://127.0.0.1:18090 \
 mvn -pl compat-test -am \
   -DfailIfNoTests=false \
@@ -408,7 +409,7 @@ first-match reads, and proxy file download/`HEAD` against a static upstream.
 ```bash
 NEXUS_COMPAT_BASE_URL=http://localhost:28090/ \
 NEXUS_COMPAT_USERNAME=admin \
-NEXUS_COMPAT_PASSWORD=123456 \
+NEXUS_COMPAT_PASSWORD=Admin1234 \
 KKREPO_COMPAT_BASE_URL=http://127.0.0.1:18090 \
 mvn -pl compat-test -am \
   -DfailIfNoTests=false \
@@ -435,7 +436,7 @@ COMPAT_DOCKER_ENABLED=true \
 DOCKER_NEXUS_COMPAT_BASE_URL=http://192.168.215.6:28091 \
 DOCKER_NEXUS_PLUS_COMPAT_BASE_URL=http://127.0.0.1:18183 \
 NEXUS_COMPAT_USERNAME=admin \
-NEXUS_COMPAT_PASSWORD=123456 \
+NEXUS_COMPAT_PASSWORD=Admin1234 \
 KKREPO_COMPAT_USERNAME=admin \
 KKREPO_COMPAT_PASSWORD=123456 \
 mvn -pl compat-test -am \
@@ -463,7 +464,7 @@ DOCKER_NEXUS_PLUS_ALLOW_ONCE_COMPAT_BASE_URL=http://127.0.0.1:18184 \
 DOCKER_NEXUS_DENY_COMPAT_BASE_URL=http://192.168.215.6:28095 \
 DOCKER_NEXUS_PLUS_DENY_COMPAT_BASE_URL=http://127.0.0.1:18185 \
 NEXUS_COMPAT_USERNAME=admin \
-NEXUS_COMPAT_PASSWORD=123456 \
+NEXUS_COMPAT_PASSWORD=Admin1234 \
 KKREPO_COMPAT_USERNAME=admin \
 KKREPO_COMPAT_PASSWORD=123456 \
 mvn -pl compat-test -am \
