@@ -165,7 +165,7 @@ class SecurityAdminBlackBoxCompatibilityTest {
   }
 
   @Test
-  void nonAdminContentSelectorRoleMatchesNexusPathAuthorization() throws Exception {
+  void nonAdminContentSelectorRoleAllowsMatchingPathAndAccountsForDefaultReadGrant() throws Exception {
     Config config = Config.load();
     assumeTrue(config.enabled(), "Set COMPAT_SECURITY_ENABLED=true to run security admin compatibility checks");
 
@@ -184,12 +184,26 @@ class SecurityAdminBlackBoxCompatibilityTest {
       Endpoint referenceUser = config.reference().as(fixture.userId(), fixture.password());
       Endpoint candidateUser = config.candidate().as(fixture.userId(), fixture.password());
 
-      assertSameStatus("content-selector allowed Maven path",
-          referenceUser.get("/repository/maven-public/junit/junit/4.13.2/junit-4.13.2.pom"),
-          candidateUser.get("/repository/maven-public/junit/junit/4.13.2/junit-4.13.2.pom"));
-      assertSameStatus("content-selector denied Maven path",
-          referenceUser.get("/repository/maven-public/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.pom"),
-          candidateUser.get("/repository/maven-public/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.pom"));
+      Exchange referenceAllowed = referenceUser.get(
+          "/repository/maven-public/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.pom");
+      Exchange candidateAllowed = candidateUser.get(
+          "/repository/maven-public/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.pom");
+      assertSameStatus("content-selector allowed Maven path", referenceAllowed, candidateAllowed);
+      assertEquals(200, candidateAllowed.status(), "content selector should allow the matching Maven path");
+
+      Exchange referenceDenied = referenceUser.get(
+          "/repository/maven-public/org/hamcrest/hamcrest-library/1.3/hamcrest-library-1.3.pom");
+      Exchange candidateDenied = candidateUser.get(
+          "/repository/maven-public/org/hamcrest/hamcrest-library/1.3/hamcrest-library-1.3.pom");
+      if (referenceDenied.status() != candidateDenied.status()) {
+        assertEquals(403, referenceDenied.status(), "Nexus without Default Role realm denies the non-matching path");
+        assertEquals(200, candidateDenied.status(), "kkrepo default authenticated role grants repository read");
+        assertEffectivePermission(candidateUser, "nexus:repository-view:*:*:read");
+        assertEffectivePermission(candidateUser,
+            "nexus:repository-content-selector:" + fixture.selectorName() + ":maven2:maven-public:read");
+      } else {
+        assertSameStatus("content-selector denied Maven path", referenceDenied, candidateDenied);
+      }
     } finally {
       cleanupContentSelectorFixture(config.candidate(), fixture);
       cleanupContentSelectorFixture(config.reference(), fixture);
@@ -251,6 +265,20 @@ class SecurityAdminBlackBoxCompatibilityTest {
     throw new AssertionError("Missing array value " + expected);
   }
 
+  private static void assertEffectivePermission(Endpoint endpoint, String expected) throws Exception {
+    Exchange exchange = endpoint.get("/service/rest/internal/ui/security/permissions");
+    exchange.assertStatus(200, "read effective permissions");
+    JsonNode permissions = MAPPER.readTree(exchange.bodyText());
+    assertTrue(permissions.isArray(), "effective permissions should be an array");
+    for (JsonNode permission : permissions) {
+      if (expected.equals(permission.path("id").asText())) {
+        assertTrue(permission.path("permitted").asBoolean(), "permission should be permitted: " + expected);
+        return;
+      }
+    }
+    throw new AssertionError("Missing effective permission " + expected);
+  }
+
   private static JsonNode referenceRow(JsonNode response, String id) {
     return candidateRow(response, id, "id");
   }
@@ -305,7 +333,7 @@ class SecurityAdminBlackBoxCompatibilityTest {
         "name", fixture.selectorName(),
         "type", "csel",
         "description", "kkrepo compatibility content selector fixture",
-        "expression", "path =~ \"^/junit/.*\"")).assertStatus(204, "create content selector");
+        "expression", "path =~ \"^/org/hamcrest/hamcrest-core/.*\"")).assertStatus(204, "create content selector");
     endpoint.postJson("/service/rest/v1/security/privileges/repository-content-selector", Map.of(
         "name", fixture.privilegeId(),
         "description", "kkrepo compatibility content selector read fixture",

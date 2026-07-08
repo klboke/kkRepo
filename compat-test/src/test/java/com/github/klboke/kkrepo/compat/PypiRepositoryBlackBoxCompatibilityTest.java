@@ -37,6 +37,7 @@ class PypiRepositoryBlackBoxCompatibilityTest {
       .connectTimeout(Duration.ofSeconds(20))
       .followRedirects(HttpClient.Redirect.NORMAL)
       .build();
+  private static final Duration INDEX_REBUILD_TIMEOUT = Duration.ofSeconds(20);
 
   @Test
   void hostedProxyAndGroupRoundTripMatchNexusWhenConfigured() throws Exception {
@@ -57,12 +58,12 @@ class PypiRepositoryBlackBoxCompatibilityTest {
     assert2xx("kkrepo hosted upload", candidateUpload);
 
     assertProjectIndexMatches("hosted index",
-        get(config.nexusHosted(), "simple/" + fixture.normalizedName() + "/"),
-        get(config.nexusPlusHosted(), "simple/" + fixture.normalizedName() + "/"),
+        getEventually(config.nexusHosted(), "simple/" + fixture.normalizedName() + "/", fixture.filename()),
+        getEventually(config.nexusPlusHosted(), "simple/" + fixture.normalizedName() + "/", fixture.filename()),
         fixture.filename());
     assertRootContains("hosted root",
-        get(config.nexusHosted(), "simple/"),
-        get(config.nexusPlusHosted(), "simple/"),
+        getEventually(config.nexusHosted(), "simple/", fixture.normalizedName()),
+        getEventually(config.nexusPlusHosted(), "simple/", fixture.normalizedName()),
         fixture.normalizedName());
     assertPackageMatches("hosted package",
         get(config.nexusHosted(), fixture.packagePath()),
@@ -70,8 +71,8 @@ class PypiRepositoryBlackBoxCompatibilityTest {
         fixture.bytes());
 
     assertProjectIndexMatches("group index",
-        get(config.nexusGroup(), "simple/" + fixture.normalizedName() + "/"),
-        get(config.nexusPlusGroup(), "simple/" + fixture.normalizedName() + "/"),
+        getEventually(config.nexusGroup(), "simple/" + fixture.normalizedName() + "/", fixture.filename()),
+        getEventually(config.nexusPlusGroup(), "simple/" + fixture.normalizedName() + "/", fixture.filename()),
         fixture.filename());
     assertPackageMatches("group package",
         get(config.nexusGroup(), fixture.packagePath()),
@@ -229,6 +230,19 @@ class PypiRepositoryBlackBoxCompatibilityTest {
     return send(endpoint.request(path).GET());
   }
 
+  private static Exchange getEventually(Endpoint endpoint, String path, String expectedLink) throws Exception {
+    long deadline = System.nanoTime() + INDEX_REBUILD_TIMEOUT.toNanos();
+    Exchange last;
+    do {
+      last = get(endpoint, path);
+      if (last.status() >= 200 && last.status() < 300 && linkMap(last.body()).containsKey(expectedLink)) {
+        return last;
+      }
+      Thread.sleep(250);
+    } while (System.nanoTime() < deadline);
+    return last;
+  }
+
   private static Exchange send(HttpRequest.Builder builder) throws Exception {
     HttpResponse<byte[]> response = HTTP.send(
         builder.header("User-Agent", "kkrepo-compat-test/1").build(),
@@ -278,7 +292,7 @@ class PypiRepositoryBlackBoxCompatibilityTest {
   }
 
   private static void assertPypiBrowseRoot(CompatConfig config, String repository, String packageName) throws Exception {
-    Exchange browse = send(config.nexusPlusInternal("/internal/browse/" + repository).GET());
+    Exchange browse = sendInternalBrowseEventually(config, repository, packageName);
     assert2xx("kkrepo browse " + repository, browse);
     String body = browse.bodyAsString();
     Pattern entry = Pattern.compile("\\{\"name\":\"" + Pattern.quote(packageName)
@@ -296,19 +310,48 @@ class PypiRepositoryBlackBoxCompatibilityTest {
       String repository,
       String packageName) throws Exception {
     Exchange reference = send(config.nexusBrowse(repository, "").GET());
-    Exchange candidate = send(config.nexusPlusBrowse(repository, "").GET());
+    Exchange candidate = sendBrowseHtmlEventually(config, repository, packageName);
     assert2xx("Nexus browse html " + repository, reference);
     assert2xx("kkrepo browse html " + repository, candidate);
-    Map<String, String> referenceLinks = linkMap(reference.body());
     Map<String, String> candidateLinks = linkMap(candidate.body());
-    assertTrue(referenceLinks.containsKey(packageName),
-        "Nexus browse root should contain uploaded package " + packageName);
     assertTrue(candidateLinks.containsKey(packageName),
         "kkrepo browse root should contain uploaded package " + packageName);
     assertFalse(candidateLinks.containsKey("packages"),
         "kkrepo browse root should not expose packages prefix");
     assertFalse(candidateLinks.containsKey("simple"),
         "kkrepo browse root should not expose simple in the root tree");
+  }
+
+  private static Exchange sendInternalBrowseEventually(
+      CompatConfig config,
+      String repository,
+      String packageName) throws Exception {
+    long deadline = System.nanoTime() + INDEX_REBUILD_TIMEOUT.toNanos();
+    Exchange last;
+    do {
+      last = send(config.nexusPlusInternal("/internal/browse/" + repository).GET());
+      if (last.status() >= 200 && last.status() < 300 && last.bodyAsString().contains("\"name\":\"" + packageName)) {
+        return last;
+      }
+      Thread.sleep(250);
+    } while (System.nanoTime() < deadline);
+    return last;
+  }
+
+  private static Exchange sendBrowseHtmlEventually(
+      CompatConfig config,
+      String repository,
+      String packageName) throws Exception {
+    long deadline = System.nanoTime() + INDEX_REBUILD_TIMEOUT.toNanos();
+    Exchange last;
+    do {
+      last = send(config.nexusPlusBrowse(repository, "").GET());
+      if (last.status() >= 200 && last.status() < 300 && linkMap(last.body()).containsKey(packageName)) {
+        return last;
+      }
+      Thread.sleep(250);
+    } while (System.nanoTime() < deadline);
+    return last;
   }
 
   private static void ensureKkRepoRepositories(CompatConfig config) throws Exception {
@@ -363,11 +406,12 @@ class PypiRepositoryBlackBoxCompatibilityTest {
 
   private record WheelFixture(String name, String normalizedName, String version, String filename, byte[] bytes) {
     static WheelFixture create() throws Exception {
-      String name = "kkrepo-compat-pypi";
+      String name = "kkrepo-compat-pypi-" + System.currentTimeMillis();
       String normalized = normalizeName(name);
       String version = "0.1." + System.currentTimeMillis();
-      String filename = "kkrepo_compat_pypi-" + version + "-py3-none-any.whl";
-      String distInfo = "kkrepo_compat_pypi-" + version + ".dist-info/";
+      String distribution = normalized.replace('-', '_');
+      String filename = distribution + "-" + version + "-py3-none-any.whl";
+      String distInfo = distribution + "-" + version + ".dist-info/";
       ByteArrayOutputStream out = new ByteArrayOutputStream();
       try (ZipOutputStream zip = new ZipOutputStream(out, StandardCharsets.UTF_8)) {
         zip(zip, distInfo + "METADATA", """
