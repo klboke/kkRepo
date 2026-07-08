@@ -230,6 +230,21 @@ class HttpRemoteFetcherTest {
   }
 
   @Test
+  void repositoryRequestsAllowCrossOriginRedirectsWithoutAuthorization() {
+    RepositoryRuntime runtime = runtime(null, null, null);
+    HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request
+        .get("https://repo.example.com/maven2/com/example/app.jar")
+        .withRepositoryAllowingUnsignedRedirects(runtime, true, Set.of());
+    URI current = URI.create("https://repo.example.com/maven2/com/example/app.jar");
+    URI cdn = URI.create("https://cdn.example.net/app.jar");
+
+    assertEquals("repo.example.com", request.trustedHost());
+    assertNull(request.authorizationHeader());
+    assertNull(request.authorizationHeaderForRedirect(current, cdn));
+    assertEquals("cdn.example.net", request.trustedHostForRedirect(current, cdn));
+  }
+
+  @Test
   void repositoryRequestsRejectUnsignedCrossOriginRedirectsOutsideAllowlist() {
     RepositoryRuntime runtime = runtime("robot", "secret", null);
     HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request
