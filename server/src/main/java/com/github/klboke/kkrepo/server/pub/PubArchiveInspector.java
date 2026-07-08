@@ -11,10 +11,13 @@ import java.util.Map;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
+import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
+import org.yaml.snakeyaml.constructor.SafeConstructor;
 
 final class PubArchiveInspector {
   private static final int MAX_PUBSPEC_BYTES = 1024 * 1024;
+  private static final int MAX_PUBSPEC_ALIASES = 50;
 
   private PubArchiveInspector() {
   }
@@ -68,7 +71,7 @@ final class PubArchiveInspector {
 
   @SuppressWarnings("unchecked")
   static Map<String, Object> parsePubspec(String text) {
-    Object loaded = new Yaml().load(text == null ? "" : text);
+    Object loaded = loadYaml().load(text == null ? "" : text);
     if (!(loaded instanceof Map<?, ?> map)) {
       throw new PubExceptions.BadRequestException("pubspec.yaml must be a YAML mapping");
     }
@@ -79,6 +82,13 @@ final class PubArchiveInspector {
       }
     });
     return result;
+  }
+
+  private static Yaml loadYaml() {
+    LoaderOptions options = new LoaderOptions();
+    options.setCodePointLimit(MAX_PUBSPEC_BYTES);
+    options.setMaxAliasesForCollections(MAX_PUBSPEC_ALIASES);
+    return new Yaml(new SafeConstructor(options));
   }
 
   private static Object normalizeValue(Object value) {

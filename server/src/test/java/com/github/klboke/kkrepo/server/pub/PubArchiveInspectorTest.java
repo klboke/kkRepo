@@ -108,6 +108,20 @@ class PubArchiveInspectorTest {
   }
 
   @Test
+  void rejectsUnsafeYamlTagsInPubspec() throws Exception {
+    Path archive = writeArchive(entry("pubspec.yaml", """
+        name: example_package
+        version: 1.0.0
+        payload: !!java.net.URL ["http://example.com"]
+        """));
+
+    PubExceptions.BadRequestException thrown =
+        assertThrows(PubExceptions.BadRequestException.class, () -> PubArchiveInspector.inspect(archive));
+
+    assertTrue(thrown.getMessage().contains("Invalid Pub archive"));
+  }
+
+  @Test
   void stagedArchiveValidatesExpectedCoordinatesAndUsesOriginalArchiveSha256() throws Exception {
     byte[] archive = archiveBytes(entry("pubspec.yaml", "name: example_package\nversion: 1.0.0\n"));
     RecordingBlobStorage storage = new RecordingBlobStorage();
