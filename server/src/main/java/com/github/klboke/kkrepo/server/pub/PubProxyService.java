@@ -27,11 +27,16 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.springframework.stereotype.Service;
 
 @Service
 public class PubProxyService {
   private static final long[] BACKOFF_SECONDS = {30, 60, 120, 300, 600, 1800};
+  private static final Set<String> PUB_ARCHIVE_REDIRECT_HOSTS = Set.of(
+      "storage.googleapis.com",
+      "storage-download.googleapis.com",
+      "pub-packages.storage.googleapis.com");
   static final TypeReference<Map<String, Object>> JSON_MAP = new TypeReference<>() {
   };
 
@@ -146,7 +151,10 @@ public class PubProxyService {
     String expectedSha256 = text(remoteVersion.get("archive_sha256"));
     HttpRemoteFetcher.Request req = HttpRemoteFetcher.Request.get(archiveUrl)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
-        .withRepositoryAllowingUnsignedRedirects(runtime, sameOrigin(runtime.proxyRemoteUrl(), archiveUrl));
+        .withRepositoryAllowingUnsignedRedirects(
+            runtime,
+            sameOrigin(runtime.proxyRemoteUrl(), archiveUrl),
+            PUB_ARCHIVE_REDIRECT_HOSTS);
     try {
       return fetcher.fetchWithBodyRetry(req, path, result -> {
         int status = result.status();

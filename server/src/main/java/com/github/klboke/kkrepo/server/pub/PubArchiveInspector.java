@@ -111,12 +111,15 @@ final class PubArchiveInspector {
     return value;
   }
 
-  private static String readSmallText(InputStream in) throws IOException {
+  static String readSmallText(InputStream in) throws IOException {
     ByteArrayOutputStream out = new ByteArrayOutputStream();
     byte[] buffer = new byte[8192];
     int total = 0;
     int n;
-    while ((n = in.read(buffer)) > 0) {
+    while ((n = in.read(buffer)) != -1) {
+      if (n == 0) {
+        continue;
+      }
       total += n;
       if (total > MAX_PUBSPEC_BYTES) {
         throw new PubExceptions.BadRequestException("pubspec.yaml is too large");

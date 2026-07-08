@@ -122,6 +122,40 @@ class PubArchiveInspectorTest {
   }
 
   @Test
+  void readSmallTextContinuesAfterZeroLengthRead() throws Exception {
+    InputStream source = new InputStream() {
+      private final byte[] body = "name: example_package\nversion: 1.0.0\n".getBytes(StandardCharsets.UTF_8);
+      private int position;
+      private boolean returnedZero;
+
+      @Override
+      public int read(byte[] buffer, int offset, int length) {
+        if (!returnedZero) {
+          returnedZero = true;
+          return 0;
+        }
+        if (position >= body.length) {
+          return -1;
+        }
+        int count = Math.min(length, body.length - position);
+        System.arraycopy(body, position, buffer, offset, count);
+        position += count;
+        return count;
+      }
+
+      @Override
+      public int read() {
+        if (position >= body.length) {
+          return -1;
+        }
+        return body[position++];
+      }
+    };
+
+    assertEquals("name: example_package\nversion: 1.0.0\n", PubArchiveInspector.readSmallText(source));
+  }
+
+  @Test
   void stagedArchiveValidatesExpectedCoordinatesAndUsesOriginalArchiveSha256() throws Exception {
     byte[] archive = archiveBytes(entry("pubspec.yaml", "name: example_package\nversion: 1.0.0\n"));
     RecordingBlobStorage storage = new RecordingBlobStorage();

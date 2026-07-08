@@ -20,6 +20,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
+import java.util.Set;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
@@ -83,6 +84,14 @@ class HttpRemoteFetcherTest {
     assertThrows(
         SecurityValidationException.class,
         () -> request.validatedUri(new OutboundRequestPolicy(false, ""), "remote fetch"));
+  }
+
+  @Test
+  void requestWithoutTrustedHostDoesNotPinOutboundHost() {
+    HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request.get("https://repo.example.com/artifact.jar");
+
+    assertEquals("repo.example.com",
+        request.validatedUri(new OutboundRequestPolicy(false, "repo.example.com"), "remote fetch").getHost());
   }
 
   @Test
@@ -203,19 +212,35 @@ class HttpRemoteFetcherTest {
   }
 
   @Test
-  void repositoryRequestsCanDropAuthorizationForUnsignedCrossOriginRedirects() {
+  void repositoryRequestsCanDropAuthorizationForAllowedUnsignedCrossOriginRedirects() {
     RepositoryRuntime runtime = runtime("robot", "secret", null);
     HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request
         .get("https://repo.example.com/maven2/com/example/app.jar")
-        .withRepositoryAllowingUnsignedRedirects(runtime, true);
+        .withRepositoryAllowingUnsignedRedirects(runtime, true, Set.of("storage.example.net"));
     URI current = URI.create("https://repo.example.com/maven2/com/example/app.jar");
+    URI storage = URI.create("https://storage.example.net/app.jar");
 
-    assertNull(request.trustedHost());
+    assertEquals("repo.example.com", request.trustedHost());
     assertNotNull(request.authorizationHeader());
     assertEquals(
         request.authorizationHeader(),
         request.authorizationHeaderForRedirect(current, URI.create("https://repo.example.com/maven2/redirect.jar")));
-    assertNull(request.authorizationHeaderForRedirect(current, URI.create("https://storage.example.net/app.jar")));
+    assertNull(request.authorizationHeaderForRedirect(current, storage));
+    assertEquals("storage.example.net", request.trustedHostForRedirect(current, storage));
+  }
+
+  @Test
+  void repositoryRequestsRejectUnsignedCrossOriginRedirectsOutsideAllowlist() {
+    RepositoryRuntime runtime = runtime("robot", "secret", null);
+    HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request
+        .get("https://repo.example.com/maven2/com/example/app.jar")
+        .withRepositoryAllowingUnsignedRedirects(runtime, true, Set.of("storage.example.net"));
+    URI current = URI.create("https://repo.example.com/maven2/com/example/app.jar");
+
+    SecurityValidationException error = assertThrows(
+        SecurityValidationException.class,
+        () -> request.authorizationHeaderForRedirect(current, URI.create("https://evil.example.net/app.jar")));
+    assertEquals("remote redirect URL host is not allowed: evil.example.net", error.getMessage());
   }
 
   @Test
