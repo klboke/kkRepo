@@ -147,11 +147,12 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 1. Docker / OCI Registry - 已完成（[实现说明](docs/zh/dev/docker-repository-implementation-plan.md)）
 2. Cargo / Rust - 仓库能力已完成，包含搜索、UI/API 上传和迁移能力（[设计说明](docs/zh/dev/cargo-rust-repository-design.md)）
 3. ohpm / HarmonyOS - 规划中，覆盖 hosted、proxy、group、导入和管理端能力（[设计说明](docs/zh/dev/ohpm-repository-design.md)）
-4. APT / Debian
-5. Terraform Provider / Module Registry
-6. Conan
-7. Conda
-8. Composer / PHP
+4. Dart / Pub 包仓库 - 规划中，覆盖 hosted、proxy、group、导入和管理端能力（[设计说明](docs/zh/dev/dart-pub-repository-design.md)）
+5. APT / Debian
+6. Terraform Provider / Module Registry
+7. Conan
+8. Conda
+9. Composer / PHP
 
 用户和管理端 UI 已暴露的 token 类型包括协议专用 token（`NpmToken`、`CargoToken`、`NuGetApiKey`、`RubyGemsApiKey`），以及面向 CI、脚本和自定义 HTTP 客户端的 `GenericToken`；`GenericToken` 适用于能够发送已配置 API-key header 或 bearer token 的调用方。
 
