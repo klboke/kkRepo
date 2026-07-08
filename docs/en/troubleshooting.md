@@ -208,7 +208,7 @@ scripts/ci/run-live-compat.sh smoke
 docker compose -f docker-compose.compat.yml down -v
 ```
 
-Cargo compatibility uses the datastore-era Nexus PostgreSQL reference compose file and the `cargo` suite. Pub compatibility uses the same Nexus 3.92.0+ PostgreSQL reference and `PubRepositoryBlackBoxCompatibilityTest` or the live `extended` suite. See [compat-test README](../../compat-test/README.md) before running Cargo or Pub read/write checks.
+Nexus compatibility for newer repository formats uses the datastore-era Nexus PostgreSQL reference compose file and the `nexus` suite. See [compat-test README](../../compat-test/README.md) before running live read/write checks.
 
 For real package client coverage, run the client E2E suite against the same disposable kkrepo candidate:
 

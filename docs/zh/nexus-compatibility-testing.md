@@ -1,6 +1,6 @@
 # Nexus 兼容性测试说明
 
-kkrepo 的目标不是重新发明一套制品仓库行为，而是在客户端协议、权限认证模型和 `/repository/<repo>/...` URL 布局上尽量兼容 Nexus。兼容性验证分为项目内黑盒测试、真实客户端 E2E、迁移后的镜像流量观测和生产规模验证四层。
+kkrepo 的目标不是重新发明一套制品仓库行为，而是在客户端协议、权限认证模型和 `/repository/<repo>/...` URL 布局上尽量兼容 Nexus。CI 验证重点收敛为三块 E2E：Nexus compatibility、Client E2E compatibility 和 Migration E2E。迁移后的镜像流量观测和生产规模验证仍作为发布信心补充。
 
 ## 项目内兼容性测试模块
 
@@ -56,9 +56,9 @@ COMPAT_WRITE_ENABLED=true
 
 这样可以避免误向长期运行的参考 Nexus 写入测试包。写入测试通常使用一次性包名和一次性路径，并在可行时覆盖删除、重复上传和元数据更新行为。
 
-Cargo / Rust 兼容性测试使用 datastore 时代的 Nexus PostgreSQL 参考实例，因为旧的默认兼容性参考实例不暴露 Community Cargo 仓库。请使用 `scripts/ci/run-live-compat.sh` 的 `cargo` suite；它覆盖 hosted、proxy、group 仓库，并在启用写测试时覆盖写入行为。当前一次性 PostgreSQL compose 将参考实例固定为 Nexus 3.92.0。
+统一的 Nexus 兼容性矩阵使用 datastore 时代的 Nexus PostgreSQL 参考实例来覆盖较新的格式。对一次性 compose 环境运行 `scripts/ci/run-live-compat.sh nexus`，会对比 kkrepo 和 Nexus 在 Maven、npm、PyPI、Cargo/Rust、Dart/Pub、Raw、部分 NuGet/RubyGems/Yum 行为、Go proxy endpoints、Helm hosted round trip、component upload specs 和部分 security/admin 合约上的差异。该 suite 默认启用一次性写入检查。当前 PostgreSQL compose 将参考实例固定为 Nexus 3.92.0。在 GitHub Actions 中，通过 `run-live-compat` label 或定时 workflow 运行 `Live Compatibility / Nexus compatibility` job。
 
-Dart / Pub 兼容性测试使用同一个 Nexus Repository 3.92.0+ PostgreSQL 参考实例，因为 Pub 仓库从该版本开始进入参考范围。可以使用 `PubRepositoryBlackBoxCompatibilityTest` 或 live `extended` suite 覆盖 Pub hosted/proxy/group metadata、archive、publish、`version.json`、checksum 和错误状态。
+Dart / Pub 兼容性测试使用同一个 Nexus Repository 3.92.0+ PostgreSQL 参考实例，因为 Pub 仓库从该版本开始进入参考范围。`nexus` suite 会通过 `PubRepositoryBlackBoxCompatibilityTest` 覆盖 Pub hosted/proxy/group metadata、archive、publish、`version.json`、checksum 和错误状态。
 
 ## 真实客户端 E2E
 
@@ -73,6 +73,10 @@ scripts/ci/run-live-compat.sh client-e2e
 当变更影响真实客户端会直接走到的仓库协议行为时，应运行这个 suite，例如认证 header 或 API key、发布/上传路径、生成的 metadata、包索引形态、checksum/download 行为、Docker connector port、group/proxy 解析等。在 GitHub Actions 中，可以手动选择 `Live Compatibility` workflow 的 `client-e2e` suite，或给 PR 加 `run-client-e2e` label。
 
 客户端命令日志、下载到的 metadata、部分 inspect 输出和诊断信息会写入 `artifacts/client-e2e/`。该 suite 依赖 [compat-test README](../../compat-test/README.md) 中列出的真实工具，本地机器可能需要先安装对应 SDK 或包管理器才能跑完整矩阵。
+
+## 迁移 E2E
+
+`Migration E2E` workflow 会从受支持的 Nexus 代际导入配置、安全元数据和仓库数据，包括历史 3.29.x embedded/OrientDB 参考实例，以及 datastore 时代的 H2/PostgreSQL 参考实例。当变更影响 source detection、迁移 adapter、仓库数据导入、blob/checksum 校验、权限或迁移后的协议行为时，给 PR 加 `run-migration-e2e` label。
 
 ## 流量镜像验证
 

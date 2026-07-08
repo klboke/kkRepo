@@ -1,10 +1,13 @@
 # kkrepo compat-test
 
-`compat-test` contains compatibility checks that can run in three modes:
+`compat-test` is part of the three main CI validation blocks:
 
-- Unit-level Maven checks run during normal `mvn test`.
-- Live black-box checks run when endpoint URLs are supplied.
-- Performance smoke checks run only when explicitly enabled.
+- Nexus compatibility compares kkrepo with a disposable Nexus reference instance.
+- Client E2E compatibility runs real package clients against a disposable kkrepo candidate.
+- Migration E2E imports from supported Nexus source versions and validates migrated behavior.
+
+It also contains unit-level and diagnostic compatibility checks that run during normal `mvn test`
+or when explicitly enabled.
 
 ## Reference Nexus Endpoint
 
@@ -61,20 +64,19 @@ export KKREPO_MANAGEMENT_PORT=18093
 docker compose -f "$COMPOSE_FILE" up -d --wait mysql nexus-postgres
 docker compose -f "$COMPOSE_FILE" up -d nexus kkrepo
 scripts/ci/live-compat-setup.sh
-scripts/ci/run-live-compat.sh cargo
+scripts/ci/run-live-compat.sh nexus
 docker compose -f "$COMPOSE_FILE" down -v
 ```
 
 Available suites:
 
-- `smoke`: console API checks plus Maven proxy GET/HEAD/checksum read compatibility.
+- `smoke`: diagnostic console API checks plus Maven proxy GET/HEAD/checksum read compatibility.
 - `write-smoke`: Maven hosted release/snapshot write compatibility with `COMPAT_WRITE_ENABLED=true`.
-- `cargo`: Cargo hosted/proxy/group compatibility against Nexus 3.77.x+. The PostgreSQL compose
-  file pins the reference to Nexus 3.92.0. Proxy and group checks
-  force both sides to use the same upstream sparse index (`CARGO_COMPAT_REMOTE_URL`, default
-  `https://index.crates.io/`) and the same crate/version (`CARGO_COMPAT_CRATE`, default `itoa`;
-  `CARGO_COMPAT_VERSION`, default `1.0.15`).
-- `extended`: smoke coverage plus currently separated PyPI, Helm, Pub, NuGet, RubyGems, and Yum checks.
+- `nexus`: the disposable Nexus reference matrix. It enables write checks and compares kkrepo with
+  Nexus across Maven, npm, PyPI, Cargo/Rust, Dart/Pub, Raw, selected NuGet/RubyGems/Yum behavior,
+  Go proxy endpoints, Helm hosted round trips, component upload specs, and selected security/admin
+  contracts.
+- `extended`: diagnostic smoke coverage plus currently separated PyPI, Helm, Pub, NuGet, RubyGems, and Yum checks.
 - `client-e2e`: starts from the disposable kkrepo service and uses real package clients to publish
   and then download/resolve through hosted and group/proxy repositories. It covers Maven, npm,
   PyPI, Helm, Cargo/Rust, Dart/Pub, Flutter Pub, NuGet, RubyGems, Yum, and Docker/OCI. Go is
@@ -82,8 +84,8 @@ Available suites:
 - `full`: all compat-test tests with live endpoint variables set; use this as a diagnostic suite
   when working through known protocol gaps.
 
-In GitHub Actions, add the `run-live-compat` label to a PR to run the smoke suite plus Cargo and
-Pub compatibility against the Nexus 3.92.0 PostgreSQL reference. The live compatibility workflow
+In GitHub Actions, add the `run-live-compat` label to a PR to run the unified Nexus compatibility
+matrix against the Nexus 3.92.0 PostgreSQL reference. The live compatibility workflow
 uses `docker-compose.compat-postgres.yml` because Pub repositories require Nexus 3.92.0+ and the
 newer Nexus generation is covered here through a PostgreSQL datastore reference. Add
 `run-client-e2e` to run the real client matrix, or start the workflow manually and select a suite.
@@ -106,29 +108,6 @@ The runner must have `mvn`, `npm`, `python3` with `build` and `twine`, `go`, `he
 when installed; GitHub Actions installs it for the `client-e2e` workflow. ORAS is optional; when
 present the Docker/OCI part also pushes and pulls a generic OCI artifact. Client logs, downloaded
 metadata, and selected inspect outputs are written under `artifacts/client-e2e/`.
-
-## Live Pub Checks
-
-Pub compatibility requires Nexus 3.92.0 or later. For the disposable reference, start
-`docker-compose.compat-postgres.yml` as described above and run:
-
-```bash
-PUB_COMPAT_ENABLED=true \
-NEXUS_COMPAT_BASE_URL=http://127.0.0.1:28090 \
-NEXUS_COMPAT_PASSWORD=Admin1234 \
-KKREPO_COMPAT_BASE_URL=http://127.0.0.1:18090 \
-KKREPO_COMPAT_PASSWORD=12345678 \
-mvn -pl compat-test -am \
-  -DfailIfNoTests=false \
-  -Dsurefire.failIfNoSpecifiedTests=false \
-  -Dtest=PubRepositoryBlackBoxCompatibilityTest \
-  test
-```
-
-By default the Pub proxy/group checks compare the public `path` package at version `1.9.0`.
-Set `PUB_COMPAT_PROXY_PACKAGE` and `PUB_COMPAT_PROXY_VERSION` to use a different upstream package.
-Hosted Pub metadata/archive comparison is skipped unless `PUB_COMPAT_HOSTED_PACKAGE` and
-`PUB_COMPAT_HOSTED_VERSION` point at a package already present in both hosted repositories.
 
 ## Live Console And Maven Read Checks
 

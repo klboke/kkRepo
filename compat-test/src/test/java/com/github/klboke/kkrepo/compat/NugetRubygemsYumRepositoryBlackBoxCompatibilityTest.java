@@ -718,6 +718,11 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
   }
 
   private static List<List<String>> rubyDependencyList(Object value) {
+    if (value instanceof Map<?, ?> map) {
+      return map.entrySet().stream()
+          .map(entry -> List.of(String.valueOf(entry.getKey()), String.valueOf(entry.getValue())))
+          .toList();
+    }
     assertTrue(value instanceof List<?>, "RubyGems dependencies must be a list: " + value);
     List<List<String>> dependencies = new ArrayList<>();
     for (Object item : (List<?>) value) {
@@ -749,6 +754,13 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
         return "<cycle>";
       }
       try {
+        if ("Gem::Requirement".equals(userMarshaled.rubyClass())) {
+          Object normalized = normalizeRubyMarshalValue(userMarshaled.value(), active);
+          if (isDefaultRubyRequirement(normalized)) {
+            normalized = List.of(List.of());
+          }
+          return Map.of("class", userMarshaled.rubyClass(), "value", normalized);
+        }
         if ("Gem::Version".equals(userMarshaled.rubyClass())
             && userMarshaled.value() instanceof List<?> list
             && !list.isEmpty()) {
@@ -803,6 +815,20 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
       return normalized;
     }
     return value;
+  }
+
+  private static boolean isDefaultRubyRequirement(Object value) {
+    if (!(value instanceof List<?> list) || list.size() != 1) {
+      return false;
+    }
+    Object item = list.getFirst();
+    if (item instanceof List<?> pair && pair.size() == 2) {
+      return ">=".equals(String.valueOf(pair.get(0))) && "0".equals(String.valueOf(pair.get(1)));
+    }
+    if (item instanceof List<?>) {
+      return isDefaultRubyRequirement(item);
+    }
+    return false;
   }
 
   private record RubyQuickSpec(List<Object> fields) {

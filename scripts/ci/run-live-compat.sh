@@ -16,6 +16,8 @@ export KKREPO_COMPAT_PASSWORD="${KKREPO_COMPAT_PASSWORD:-12345678}"
 export NEXUS_COMPAT_READ_REPOSITORY="${NEXUS_COMPAT_READ_REPOSITORY:-maven-public}"
 export KKREPO_COMPAT_READ_REPOSITORY="${KKREPO_COMPAT_READ_REPOSITORY:-maven-public}"
 
+NEXUS_COMPAT_TESTS="KkRepoConsoleBlackBoxCompatibilityTest,MavenRepositoryBlackBoxCompatibilityTest#proxyReadRoundTripMatchesNexusWhenConfigured+hostedReleaseDeployRoundTripMatchesNexusWhenConfigured+hostedPlainPutDoesNotGenerateSidecarsOrMetadataLikeNexusWhenConfigured+hostedSnapshotDeployRoundTripMatchesNexusWhenConfigured,NpmRepositoryBlackBoxCompatibilityTest,PypiRepositoryBlackBoxCompatibilityTest,GoProxyBlackBoxCompatibilityTest#proxyModuleEndpointsMatchNexusWhenConfigured,HelmRepositoryBlackBoxCompatibilityTest#hostedRoundTripMatchesNexusWhenConfigured,CargoRepositoryBlackBoxCompatibilityTest,PubRepositoryBlackBoxCompatibilityTest,NugetRubygemsYumRepositoryBlackBoxCompatibilityTest#nugetHostedServiceIndexAndProxyReadsMatchNexusWhenConfigured+nugetHostedMultipartPushMatchesNexusWhenWriteEnabled+rubygemsHostedPushAndGroupReadMatchNexusWhenConfigured+yumHostedRootAndMissingPackageResponsesMatchNexusWhenConfigured+yumHostedRpmPutMatchesNexusWhenWriteEnabled,RawRepositoryBlackBoxCompatibilityTest,ComponentUploadBlackBoxCompatibilityTest#uploadSpecsExposeNexusCompatibleSupportedFormatsWhenConfigured,SecurityAdminBlackBoxCompatibilityTest"
+
 COMMON_ARGS=(
   -B
   -ntp
@@ -33,7 +35,7 @@ run_tests() {
 
 case "$SUITE" in
   smoke)
-    run_tests "KkRepoConsoleBlackBoxCompatibilityTest,MavenRepositoryBlackBoxCompatibilityTest#proxyReadRoundTripMatchesNexusWhenConfigured,PubRepositoryBlackBoxCompatibilityTest"
+    run_tests "KkRepoConsoleBlackBoxCompatibilityTest,MavenRepositoryBlackBoxCompatibilityTest#proxyReadRoundTripMatchesNexusWhenConfigured"
     ;;
   write-smoke)
     export COMPAT_WRITE_ENABLED=true
@@ -42,17 +44,14 @@ case "$SUITE" in
   extended)
     run_tests "KkRepoConsoleBlackBoxCompatibilityTest,MavenRepositoryBlackBoxCompatibilityTest,PypiRepositoryBlackBoxCompatibilityTest,HelmRepositoryBlackBoxCompatibilityTest,NugetRubygemsYumRepositoryBlackBoxCompatibilityTest,PubRepositoryBlackBoxCompatibilityTest"
     ;;
-  cargo)
+  nexus|nexus-compat)
+    export COMPAT_WRITE_ENABLED="${COMPAT_WRITE_ENABLED:-true}"
     export CARGO_COMPAT_ENABLED=true
-    run_tests "CargoRepositoryBlackBoxCompatibilityTest"
-    ;;
-  pub|dart-pub)
     export PUB_COMPAT_ENABLED=true
-    run_tests "PubRepositoryBlackBoxCompatibilityTest"
+    run_tests "$NEXUS_COMPAT_TESTS"
     ;;
   client-e2e)
     export PUB_COMPAT_ENABLED=true
-    run_tests "PubRepositoryBlackBoxCompatibilityTest"
     scripts/ci/run-client-e2e.sh
     ;;
   full)
@@ -61,7 +60,7 @@ case "$SUITE" in
     ;;
   *)
     echo "Unknown live compatibility suite: $SUITE" >&2
-    echo "Available suites: smoke, write-smoke, extended, cargo, pub, client-e2e, full" >&2
+    echo "Available suites: smoke, write-smoke, extended, nexus, client-e2e, full" >&2
     exit 2
     ;;
 esac

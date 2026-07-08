@@ -192,7 +192,7 @@ class RawRepositoryBlackBoxCompatibilityTest {
               """.formatted(config.proxyRepository(), config.remoteUrl())))));
     }
     String groupPayload = """
-        {"name":"%s","recipe":"raw-group","online":true,"strictContentTypeValidation":true,"group":{"memberNames":["%s","%s"]},"raw":{"contentDisposition":"ATTACHMENT"}}
+        {"name":"%s","recipe":"raw-group","online":true,"blobStoreName":"default","strictContentTypeValidation":true,"group":{"memberNames":["%s","%s"]},"raw":{"contentDisposition":"ATTACHMENT"}}
         """.formatted(config.groupRepository(), config.hostedRepository(), config.proxyRepository());
     repositories = send(config.nexusPlusInternal("/internal/repositories").GET()).bodyAsString();
     if (!repositories.contains("\"name\":\"" + config.groupRepository() + "\"")) {

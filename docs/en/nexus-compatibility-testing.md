@@ -1,6 +1,6 @@
 # Nexus Compatibility Testing
 
-kkrepo is not intended to reinvent artifact repository behavior. Its goal is to stay compatible with Nexus in client protocols, the permission/authentication model, and the `/repository/<repo>/...` URL layout. Compatibility validation is split into four layers: in-project black-box tests, real client E2E checks, mirrored-traffic observation after migration, and production-scale validation.
+kkrepo is not intended to reinvent artifact repository behavior. Its goal is to stay compatible with Nexus in client protocols, the permission/authentication model, and the `/repository/<repo>/...` URL layout. CI validation is centered on three E2E blocks: Nexus compatibility, client E2E compatibility, and Migration E2E. Mirrored-traffic observation and production-scale validation remain additional release confidence signals.
 
 ## In-Project Compatibility Test Module
 
@@ -56,9 +56,9 @@ COMPAT_WRITE_ENABLED=true
 
 This avoids accidentally writing test packages to a long-running Nexus reference instance. Write tests usually use one-off package names and paths, and cover delete, repeated upload, and metadata update behavior when feasible.
 
-Cargo / Rust compatibility uses the datastore-era Nexus PostgreSQL reference because older default compatibility references do not expose Community Cargo repositories. Use the `cargo` suite in `scripts/ci/run-live-compat.sh`; it covers hosted, proxy, and group repositories, including write behavior when enabled. The current disposable PostgreSQL compose pins the reference to Nexus 3.92.0.
+The unified Nexus compatibility matrix uses the datastore-era Nexus PostgreSQL reference for newer formats. Run `scripts/ci/run-live-compat.sh nexus` against the disposable compose environment to compare kkrepo with Nexus across Maven, npm, PyPI, Cargo/Rust, Dart/Pub, Raw, selected NuGet/RubyGems/Yum behavior, Go proxy endpoints, Helm hosted round trips, component upload specs, and selected security/admin contracts. This suite enables disposable write checks by default. The current PostgreSQL compose pins the reference to Nexus 3.92.0. In GitHub Actions, use the `Live Compatibility / Nexus compatibility` job through the `run-live-compat` label or the scheduled workflow.
 
-Dart / Pub compatibility uses the same Nexus Repository 3.92.0+ PostgreSQL reference because Pub repositories are first available there. Use `PubRepositoryBlackBoxCompatibilityTest` or the `extended` live suite for Pub hosted/proxy/group metadata, archive, publish, `version.json`, checksum, and error-status coverage.
+Dart / Pub compatibility uses the same Nexus Repository 3.92.0+ PostgreSQL reference because Pub repositories are first available there. The `nexus` suite includes Pub hosted/proxy/group metadata, archive, publish, `version.json`, checksum, and error-status coverage through `PubRepositoryBlackBoxCompatibilityTest`.
 
 ## Real Client E2E
 
@@ -73,6 +73,10 @@ It runs publish/upload plus download/resolve flows for Maven, npm, PyPI, Helm, C
 Use this suite when a change affects repository protocol behavior that real clients exercise: authentication headers or API keys, publish/upload paths, generated metadata, package index shape, checksum/download behavior, Docker connector ports, or group/proxy resolution. In GitHub Actions, run it manually by selecting `client-e2e` in the `Live Compatibility` workflow, or add the `run-client-e2e` label to a PR.
 
 Client command logs, downloaded metadata, selected inspect output, and other diagnostics are written under `artifacts/client-e2e/`. The suite depends on the real tools listed in [compat-test README](../../compat-test/README.md), so a local workstation may need extra SDKs or package managers before it can run the full matrix.
+
+## Migration E2E
+
+The `Migration E2E` workflow imports configuration, security metadata, and repository data from supported Nexus generations, including the historical 3.29.x embedded/OrientDB reference and datastore-era H2/PostgreSQL references. Add the `run-migration-e2e` label to a PR when a change affects source detection, migration adapters, repository-data import, blob/checksum validation, permissions, or post-migration protocol behavior.
 
 ## Traffic Mirroring Validation
 

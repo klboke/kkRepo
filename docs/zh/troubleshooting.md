@@ -208,7 +208,7 @@ scripts/ci/run-live-compat.sh smoke
 docker compose -f docker-compose.compat.yml down -v
 ```
 
-Cargo 兼容性测试使用 datastore 时代的 Nexus PostgreSQL 参考 compose 文件和 `cargo` suite。Pub 兼容性测试使用同一个 Nexus 3.92.0+ PostgreSQL 参考实例，并通过 `PubRepositoryBlackBoxCompatibilityTest` 或 live `extended` suite 覆盖。运行 Cargo 或 Pub 读写检查前请先查看 [compat-test README](../../compat-test/README.md)。
+较新仓库格式的 Nexus 兼容性测试使用 datastore 时代的 Nexus PostgreSQL 参考 compose 文件和 `nexus` suite。运行 live 读写检查前请先查看 [compat-test README](../../compat-test/README.md)。
 
 如果需要覆盖真实包管理器客户端，请对同一个一次性 kkrepo 候选实例运行客户端 E2E：
 
