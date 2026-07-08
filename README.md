@@ -147,11 +147,12 @@ Repository format roadmap:
 1. Docker / OCI Registry - Completed ([implementation notes](docs/en/dev/docker-repository-implementation-plan.md))
 2. Cargo / Rust - Repository support completed, including search, UI/API upload, and migration ([design notes](docs/en/dev/cargo-rust-repository-design.md))
 3. ohpm / HarmonyOS - Planned with hosted, proxy, group, import, and admin capabilities ([Chinese design notes](docs/zh/dev/ohpm-repository-design.md))
-4. APT / Debian
-5. Terraform Provider / Module Registry
-6. Conan
-7. Conda
-8. Composer / PHP
+4. Dart / Pub Package Repository - Planned with hosted, proxy, group, import, and admin capabilities ([Chinese design notes](docs/zh/dev/dart-pub-repository-design.md))
+5. APT / Debian
+6. Terraform Provider / Module Registry
+7. Conan
+8. Conda
+9. Composer / PHP
 
 Token types exposed in the user and admin UI include protocol-specific tokens (`NpmToken`, `CargoToken`, `NuGetApiKey`, `RubyGemsApiKey`) plus `GenericToken` for CI, scripts, and custom HTTP clients that can send the configured API-key header or bearer token.
 
