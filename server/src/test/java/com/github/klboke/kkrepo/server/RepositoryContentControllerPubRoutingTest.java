@@ -1,8 +1,10 @@
 package com.github.klboke.kkrepo.server;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -25,6 +27,8 @@ import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 class RepositoryContentControllerPubRoutingTest {
@@ -55,14 +59,14 @@ class RepositoryContentControllerPubRoutingTest {
         .standaloneSetup(contentController, pypiController)
         .build();
 
-    mvc.perform(get("/repository/pub-group/packages/demo_pkg/versions/1.0.0.tar.gz"))
+    streamingGet(mvc, "/repository/pub-group/packages/demo_pkg/versions/1.0.0.tar.gz")
         .andExpect(status().isOk())
         .andExpect(content().bytes("pub archive".getBytes(StandardCharsets.UTF_8)));
-    mvc.perform(get("/repository/pub-group/api/archives/demo_pkg-1.0.0.tar.gz"))
+    streamingGet(mvc, "/repository/pub-group/api/archives/demo_pkg-1.0.0.tar.gz")
         .andExpect(status().isOk());
-    mvc.perform(get("/repository/pub-group/demo_pkg/1.0.0/demo_pkg-1.0.0.tar.gz"))
+    streamingGet(mvc, "/repository/pub-group/demo_pkg/1.0.0/demo_pkg-1.0.0.tar.gz")
         .andExpect(status().isOk());
-    mvc.perform(get("/repository/pub-group/demo_pkg/1.0.0/version.json"))
+    streamingGet(mvc, "/repository/pub-group/demo_pkg/1.0.0/version.json")
         .andExpect(status().isOk());
     assertEquals(List.of(
         "packages/demo_pkg/versions/1.0.0.tar.gz:demo_pkg:1.0.0",
@@ -70,6 +74,13 @@ class RepositoryContentControllerPubRoutingTest {
         "demo_pkg/1.0.0/demo_pkg-1.0.0.tar.gz:demo_pkg:1.0.0",
         "demo_pkg/1.0.0/version.json:demo_pkg:1.0.0"),
         pubGroup.seen);
+  }
+
+  private static ResultActions streamingGet(MockMvc mvc, String path) throws Exception {
+    MvcResult result = mvc.perform(get(path))
+        .andExpect(request().asyncStarted())
+        .andReturn();
+    return mvc.perform(asyncDispatch(result));
   }
 
   private static RepositoryRecord repository(String name, RepositoryFormat format, RepositoryType type) {
