@@ -75,7 +75,7 @@ class CsrfProtectionFilterTest {
 
   @Test
   void authorizationHeaderBypassesCsrfForApiClients() throws Exception {
-    CsrfProtectionFilter filter = new CsrfProtectionFilter("X-Nexus-Plus-Token", false);
+    CsrfProtectionFilter filter = new CsrfProtectionFilter("X-Nexus-Plus-Token", false, true);
     MockHttpServletRequest request = new MockHttpServletRequest("POST", "/service/extdirect");
     request.addHeader("Authorization", "Basic abc");
     MockHttpServletResponse response = new MockHttpServletResponse();
@@ -85,6 +85,34 @@ class CsrfProtectionFilterTest {
 
     assertEquals(1, chain.calls);
     assertEquals(200, response.getStatus());
+  }
+
+  @Test
+  void legacyInternalUiRequestFallsThroughWhenLegacyUiDisabled() throws Exception {
+    CsrfProtectionFilter filter = new CsrfProtectionFilter("X-Nexus-Plus-Token", false);
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("POST", "/service/rest/internal/ui/upload/maven-releases");
+    MockHttpServletResponse response = new MockHttpServletResponse();
+    CountingChain chain = new CountingChain();
+
+    filter.doFilter(request, response, chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(200, response.getStatus());
+  }
+
+  @Test
+  void legacyInternalUiRequestIsProtectedWhenLegacyUiEnabled() throws Exception {
+    CsrfProtectionFilter filter = new CsrfProtectionFilter("X-Nexus-Plus-Token", false, true);
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("POST", "/service/rest/internal/ui/upload/maven-releases");
+    MockHttpServletResponse response = new MockHttpServletResponse();
+    CountingChain chain = new CountingChain();
+
+    filter.doFilter(request, response, chain);
+
+    assertEquals(0, chain.calls);
+    assertEquals(403, response.getStatus());
   }
 
   @Test

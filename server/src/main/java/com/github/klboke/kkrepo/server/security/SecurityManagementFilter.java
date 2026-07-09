@@ -124,7 +124,8 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
         || uri.startsWith("/internal/migration/nexus")) {
       return Optional.empty();
     }
-    if (uri.startsWith("/internal/") || uri.startsWith("/service/rest/internal/")) {
+    if (uri.startsWith("/internal/")
+        || (legacyUiEnabled && uri.startsWith("/service/rest/internal/"))) {
       return Optional.of(AUTHENTICATED_ONLY);
     }
     return Optional.empty();
@@ -284,7 +285,8 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
   }
 
   private boolean isUiInternalEndpoint(String uri) {
-    return uri.startsWith("/internal/") || uri.startsWith("/service/rest/internal/");
+    return uri.startsWith("/internal/")
+        || (legacyUiEnabled && uri.startsWith("/service/rest/internal/"));
   }
 
   private boolean isBrowserNavigation(HttpServletRequest request) {
