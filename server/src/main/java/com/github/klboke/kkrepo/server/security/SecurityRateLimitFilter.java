@@ -27,6 +27,7 @@ public class SecurityRateLimitFilter extends OncePerRequestFilter {
   private final ForwardedHeaderPolicy forwardedHeaderPolicy;
   private final KkRepoMetrics metrics;
   private final Duration window;
+  private final NexusLegacyUiCompatibility legacyUi;
 
   public SecurityRateLimitFilter(
       @Value("${kkrepo.security.rate-limit.login-per-minute:20}") int loginLimit,
@@ -34,7 +35,8 @@ public class SecurityRateLimitFilter extends OncePerRequestFilter {
       @Value("${kkrepo.security.token-header:X-Nexus-Plus-Token}") String apiKeyHeader,
       SharedCache sharedCache,
       ForwardedHeaderPolicy forwardedHeaderPolicy,
-      KkRepoMetrics metrics) {
+      KkRepoMetrics metrics,
+      NexusLegacyUiCompatibility legacyUi) {
     this.loginLimit = loginLimit;
     this.bootstrapLimit = bootstrapLimit;
     this.apiKeyHeader = apiKeyHeader;
@@ -42,6 +44,7 @@ public class SecurityRateLimitFilter extends OncePerRequestFilter {
     this.forwardedHeaderPolicy = forwardedHeaderPolicy;
     this.metrics = metrics;
     this.window = Duration.ofMinutes(1);
+    this.legacyUi = legacyUi;
   }
 
   @Override
@@ -66,10 +69,7 @@ public class SecurityRateLimitFilter extends OncePerRequestFilter {
     if ("POST".equals(method) && uri.equals("/internal/security/bootstrap/admin")) {
       return new Limit("bootstrap", "bootstrap:" + remote, bootstrapLimit);
     }
-    if ("POST".equals(method) && (uri.equals("/internal/security/login")
-        || uri.equals("/service/rapture/session")
-        || uri.equals("/service/rest/wonderland/authenticate")
-        || uri.equals("/service/extdirect"))) {
+    if ("POST".equals(method) && (uri.equals("/internal/security/login") || legacyUi.loginPath(uri))) {
       return new Limit("login", "login:" + remote, loginLimit);
     }
     if (managementAuthPath(uri) && hasPresentedCredentials(request)) {
@@ -81,8 +81,7 @@ public class SecurityRateLimitFilter extends OncePerRequestFilter {
   private boolean managementAuthPath(String uri) {
     return uri.startsWith("/internal/security/")
         || uri.startsWith("/service/rest/v1/security/")
-        || uri.startsWith("/service/rest/internal/ui/security/")
-        || uri.equals("/service/extdirect");
+        || legacyUi.managementAuthPath(uri);
   }
 
   private boolean hasPresentedCredentials(HttpServletRequest request) {

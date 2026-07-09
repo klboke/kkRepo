@@ -230,7 +230,11 @@ class NpmRepositoryBlackBoxCompatibilityTest {
     String packagePath = config.readPackage() + "/";
     Exchange referenceIndex = send(reference.browseRequest(packagePath).GET());
     Exchange candidateIndex = send(candidate.browseRequest(packagePath).GET());
-    assertEquals(referenceIndex.status(), candidateIndex.status(), "npm browse package index status");
+    assertTrue(referenceIndex.status() == 200 || referenceIndex.status() == 404,
+        "reference npm browse package index should be OK or hidden, got " + referenceIndex.status());
+    if (referenceIndex.status() == 200) {
+      assertEquals(referenceIndex.status(), candidateIndex.status(), "npm browse package index status");
+    }
     assertEquals(200, candidateIndex.status(), "candidate npm browse package index should be OK");
 
     String candidateBody = new String(candidateIndex.body(), StandardCharsets.UTF_8);

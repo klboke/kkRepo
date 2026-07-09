@@ -24,10 +24,15 @@ public class ManagementAuditFilter extends OncePerRequestFilter {
 
   private final SecurityAuditDao auditDao;
   private final ForwardedHeaderPolicy forwardedHeaderPolicy;
+  private final NexusLegacyUiCompatibility legacyUi;
 
-  public ManagementAuditFilter(SecurityAuditDao auditDao, ForwardedHeaderPolicy forwardedHeaderPolicy) {
+  public ManagementAuditFilter(
+      SecurityAuditDao auditDao,
+      ForwardedHeaderPolicy forwardedHeaderPolicy,
+      NexusLegacyUiCompatibility legacyUi) {
     this.auditDao = auditDao;
     this.forwardedHeaderPolicy = forwardedHeaderPolicy;
+    this.legacyUi = legacyUi;
   }
 
   @Override
@@ -81,11 +86,8 @@ public class ManagementAuditFilter extends OncePerRequestFilter {
     }
     String uri = stripContextPath(request);
     return uri.startsWith("/internal/")
-        || uri.startsWith("/service/rest/internal/")
         || uri.startsWith("/service/rest/v1/security/")
-        || uri.equals("/service/extdirect")
-        || uri.equals("/service/rapture/session")
-        || uri.equals("/service/rest/wonderland/authenticate");
+        || legacyUi.auditedMutationPath(uri);
   }
 
   private static AuthenticatedSubject subject(HttpServletRequest request) {

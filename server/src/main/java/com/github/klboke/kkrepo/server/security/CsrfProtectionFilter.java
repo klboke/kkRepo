@@ -27,12 +27,15 @@ public class CsrfProtectionFilter extends OncePerRequestFilter {
 
   private final String apiKeyHeader;
   private final boolean cookieSecure;
+  private final NexusLegacyUiCompatibility legacyUi;
 
   public CsrfProtectionFilter(
       @Value("${kkrepo.security.token-header:X-Nexus-Plus-Token}") String apiKeyHeader,
-      @Value("${kkrepo.security.csrf.cookie-secure:false}") boolean cookieSecure) {
+      @Value("${kkrepo.security.csrf.cookie-secure:false}") boolean cookieSecure,
+      NexusLegacyUiCompatibility legacyUi) {
     this.apiKeyHeader = apiKeyHeader;
     this.cookieSecure = cookieSecure;
+    this.legacyUi = legacyUi;
   }
 
   @Override
@@ -63,17 +66,14 @@ public class CsrfProtectionFilter extends OncePerRequestFilter {
   private boolean csrfProtectedPath(HttpServletRequest request) {
     String uri = stripContextPath(request);
     return uri.startsWith("/internal/")
-        || uri.startsWith("/service/rest/internal/")
-        || uri.startsWith("/service/extdirect")
-        || uri.equals("/service/rapture/session")
-        || uri.equals("/service/rest/wonderland/authenticate")
+        || legacyUi.csrfProtectedPath(uri)
         || uri.startsWith("/service/rest/v1/security/");
   }
 
   private boolean csrfTokenBootstrapPath(HttpServletRequest request) {
     String uri = stripContextPath(request);
     return uri.equals("/internal/security/session")
-        || uri.equals("/service/rapture/session");
+        || legacyUi.csrfTokenBootstrapPath(uri);
   }
 
   private String csrfToken(HttpServletRequest request, boolean create) {

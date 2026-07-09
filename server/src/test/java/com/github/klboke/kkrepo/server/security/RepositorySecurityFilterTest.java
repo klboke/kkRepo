@@ -514,7 +514,8 @@ class RepositorySecurityFilterTest {
         authentication,
         decisions,
         new FakeRepositoryDao(repository("maven-releases")),
-        false);
+        false,
+        true);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -536,7 +537,8 @@ class RepositorySecurityFilterTest {
         authentication,
         decisions,
         new FakeRepositoryDao(repository("maven-releases")),
-        false);
+        false,
+        true);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -558,7 +560,8 @@ class RepositorySecurityFilterTest {
         authentication,
         decisions,
         new FakeRepositoryDao(repository("maven-releases")),
-        false);
+        false,
+        true);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -570,6 +573,30 @@ class RepositorySecurityFilterTest {
     assertEquals(1, chain.calls);
     assertEquals(PermissionAction.EDIT, decisions.permission.action());
     assertEquals("maven-releases", decisions.permission.repository());
+  }
+
+  @Test
+  void internalUiComponentUploadPassesThroughWhenLegacyUiDisabled() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.deny("should not be checked"));
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository("maven-releases")),
+        false,
+        false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("POST", "/service/rest/internal/ui/upload/maven-releases"),
+        response.proxy(),
+        chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(0, authentication.calls);
+    assertEquals(0, decisions.decisions);
+    assertEquals(0, response.status);
   }
 
   private static AuthenticatedSubject subject(String userId) {
@@ -605,7 +632,23 @@ class RepositorySecurityFilterTest {
         accessDecisionService,
         repositoryDao,
         forwardedHeaderPolicy,
-        anonymousReadEnabled);
+        anonymousReadEnabled,
+        new NexusLegacyUiCompatibility(false));
+  }
+
+  private static RepositorySecurityFilter filter(
+      SecurityAuthenticationService authenticationService,
+      com.github.klboke.kkrepo.auth.AccessDecisionService accessDecisionService,
+      RepositoryDao repositoryDao,
+      boolean anonymousReadEnabled,
+      boolean legacyUiEnabled) {
+    return new RepositorySecurityFilter(
+        authenticationService,
+        accessDecisionService,
+        repositoryDao,
+        new ForwardedHeaderPolicy(""),
+        anonymousReadEnabled,
+        new NexusLegacyUiCompatibility(legacyUiEnabled));
   }
 
   private static void assertRepositoryContentAction(String method, PermissionAction action) throws Exception {
@@ -827,6 +870,7 @@ class RepositorySecurityFilterTest {
   private static class StubAuthenticationService extends SecurityAuthenticationService {
     private final Optional<AuthenticatedSubject> authenticated;
     private final AuthenticatedSubject anonymous;
+    private int calls;
     private int anonymousCalls;
     private Optional<AuthenticatedSubject> rubygemsAuthenticated = Optional.empty();
     private int rubygemsCalls;
@@ -849,6 +893,7 @@ class RepositorySecurityFilterTest {
 
     @Override
     public Optional<AuthenticatedSubject> authenticate(HttpServletRequest request) {
+      calls++;
       return authenticated;
     }
 

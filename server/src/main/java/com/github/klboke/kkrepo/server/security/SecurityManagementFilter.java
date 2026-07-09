@@ -25,12 +25,15 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
 
   private final SecurityAuthenticationService authenticationService;
   private final SecurityManagementService securityService;
+  private final NexusLegacyUiCompatibility legacyUi;
 
   public SecurityManagementFilter(
       SecurityAuthenticationService authenticationService,
-      SecurityManagementService securityService) {
+      SecurityManagementService securityService,
+      NexusLegacyUiCompatibility legacyUi) {
     this.authenticationService = authenticationService;
     this.securityService = securityService;
+    this.legacyUi = legacyUi;
   }
 
   @Override
@@ -74,25 +77,25 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
     if (uri.equals("/service/rest/v1/components") && "POST".equals(method)) {
       return Optional.of(AUTHENTICATED_ONLY);
     }
-    if (uri.equals("/service/rapture/session")) {
+    if (legacyUi.raptureSessionPath(uri)) {
       return Optional.empty();
     }
-    if (uri.equals("/service/rest/internal/ui/anonymous-settings")) {
+    if (legacyUi.internalUiAnonymousSettingsPath(uri)) {
       return Optional.of("GET".equals(method) ? "nexus:settings:read" : "nexus:settings:update");
     }
-    if (uri.startsWith("/service/rest/internal/ui/upload/")) {
+    if (legacyUi.internalUiUploadPath(uri)) {
       return Optional.of(AUTHENTICATED_ONLY);
     }
-    if (uri.equals("/service/rest/internal/ui/user")) {
+    if (legacyUi.internalUiUserPath(uri)) {
       return Optional.of(AUTHENTICATED_ONLY);
     }
-    if (uri.startsWith("/service/rest/internal/ui/user/")) {
+    if (legacyUi.internalUiUserChildPath(uri)) {
       if (uri.endsWith("/password") && "PUT".equals(method)) {
         return Optional.of("nexus:userschangepw:create");
       }
       return Optional.of(AUTHENTICATED_ONLY);
     }
-    if (uri.startsWith("/service/rest/internal/ui/security/")) {
+    if (legacyUi.internalUiSecurityPath(uri)) {
       return internalUiSecurityPermission(method, uri);
     }
     if (uri.startsWith("/internal/blob-stores")) {
@@ -112,7 +115,8 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
         || uri.startsWith("/internal/migration/nexus")) {
       return Optional.empty();
     }
-    if (uri.startsWith("/internal/") || uri.startsWith("/service/rest/internal/")) {
+    if (uri.startsWith("/internal/")
+        || legacyUi.serviceRestInternalPath(uri)) {
       return Optional.of(AUTHENTICATED_ONLY);
     }
     return Optional.empty();
@@ -151,7 +155,7 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
   }
 
   private Optional<String> internalUiSecurityPermission(String method, String uri) {
-    String path = uri.substring("/service/rest/internal/ui/security/".length());
+    String path = legacyUi.internalUiSecuritySubpath(uri);
     if (path.equals("permissions")) {
       return Optional.of(AUTHENTICATED_ONLY);
     }
@@ -187,7 +191,7 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
     if (path.equals("bootstrap") || path.equals("bootstrap/admin")) {
       return Optional.empty();
     }
-    if (path.equals("session") || path.equals("basic/login")) {
+    if (path.equals("session") || path.equals("basic/login") || path.equals("permissions")) {
       return Optional.of(AUTHENTICATED_ONLY);
     }
     if (path.equals("login/options") || path.equals("login")) {
@@ -272,7 +276,8 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
   }
 
   private boolean isUiInternalEndpoint(String uri) {
-    return uri.startsWith("/internal/") || uri.startsWith("/service/rest/internal/");
+    return uri.startsWith("/internal/")
+        || legacyUi.serviceRestInternalPath(uri);
   }
 
   private boolean isBrowserNavigation(HttpServletRequest request) {

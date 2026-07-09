@@ -39,18 +39,21 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   private final RepositoryDao repositoryDao;
   private final ForwardedHeaderPolicy forwardedHeaderPolicy;
   private final boolean anonymousReadEnabled;
+  private final NexusLegacyUiCompatibility legacyUi;
 
   public RepositorySecurityFilter(
       SecurityAuthenticationService authenticationService,
       AccessDecisionService accessDecisionService,
       RepositoryDao repositoryDao,
       ForwardedHeaderPolicy forwardedHeaderPolicy,
-      @Value("${kkrepo.security.anonymous-read-enabled:false}") boolean anonymousReadEnabled) {
+      @Value("${kkrepo.security.anonymous-read-enabled:false}") boolean anonymousReadEnabled,
+      NexusLegacyUiCompatibility legacyUi) {
     this.authenticationService = authenticationService;
     this.accessDecisionService = accessDecisionService;
     this.repositoryDao = repositoryDao;
     this.forwardedHeaderPolicy = forwardedHeaderPolicy;
     this.anonymousReadEnabled = anonymousReadEnabled;
+    this.legacyUi = legacyUi;
   }
 
   @Override
@@ -137,16 +140,14 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       }
       return Optional.of(new RepositoryRequest(repository.trim(), "", method, List.of(PermissionAction.EDIT), false));
     }
-    if (uri.startsWith("/service/rest/internal/ui/upload/")) {
-      String repository = uri.substring("/service/rest/internal/ui/upload/".length());
-      int slash = repository.indexOf('/');
-      if (slash >= 0) {
-        repository = repository.substring(0, slash);
-      }
-      if (repository.isBlank()) {
-        return Optional.empty();
-      }
-      return Optional.of(new RepositoryRequest(decode(repository), "", method, List.of(PermissionAction.EDIT), false));
+    Optional<String> legacyUploadRepository = legacyUi.internalUiUploadRepository(uri);
+    if (legacyUploadRepository.isPresent()) {
+      return Optional.of(new RepositoryRequest(
+          decode(legacyUploadRepository.get()),
+          "",
+          method,
+          List.of(PermissionAction.EDIT),
+          false));
     }
     return Optional.empty();
   }

@@ -50,11 +50,20 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Supplier;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * Legacy Nexus Rapture ExtDirect compatibility endpoint.
+ *
+ * @deprecated This endpoint is kept for mirrored Nexus UI traffic and black-box compatibility
+ *     tests only. New kkrepo management flows should use the REST or internal UI APIs instead.
+ */
+@Deprecated(since = "0.2.0", forRemoval = false)
+@ConditionalOnProperty(name = "kkrepo.nexus.legacy-ui.enabled", havingValue = "true")
 @RestController
 @RequestMapping("/service/extdirect")
 public class NexusExtDirectController {

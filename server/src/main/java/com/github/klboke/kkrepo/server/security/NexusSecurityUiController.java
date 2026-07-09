@@ -25,6 +25,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -38,6 +39,15 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+/**
+ * Legacy Nexus internal UI security compatibility endpoint.
+ *
+ * @deprecated This endpoint is kept for Nexus internal UI compatibility only. New kkrepo
+ *     management flows should use {@code /internal/security} or the Nexus REST API surface
+ *     instead.
+ */
+@Deprecated(since = "0.2.0", forRemoval = false)
+@ConditionalOnProperty(name = "kkrepo.nexus.legacy-ui.enabled", havingValue = "true")
 @RestController
 @RequestMapping("/service/rest/internal/ui/security")
 public class NexusSecurityUiController {

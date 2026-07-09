@@ -8,6 +8,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -18,6 +19,15 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+/**
+ * Legacy Nexus internal UI user-account compatibility endpoint.
+ *
+ * @deprecated This endpoint is kept for Nexus internal UI current-user compatibility only. New
+ *     kkrepo management flows should use {@code /internal/security} or the Nexus REST API surface
+ *     instead.
+ */
+@Deprecated(since = "0.2.0", forRemoval = false)
+@ConditionalOnProperty(name = "kkrepo.nexus.legacy-ui.enabled", havingValue = "true")
 @RestController
 @RequestMapping("/service/rest/internal/ui/user")
 public class NexusUserAccountController {

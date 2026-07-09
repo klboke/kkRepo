@@ -13,7 +13,7 @@ class CsrfProtectionFilterTest {
 
   @Test
   void safeInternalRequestIssuesToken() throws Exception {
-    CsrfProtectionFilter filter = new CsrfProtectionFilter("X-Nexus-Plus-Token", false);
+    CsrfProtectionFilter filter = filter(false);
     MockHttpServletRequest request = new MockHttpServletRequest("GET", "/internal/security/session");
     MockHttpServletResponse response = new MockHttpServletResponse();
     CountingChain chain = new CountingChain();
@@ -27,7 +27,7 @@ class CsrfProtectionFilterTest {
 
   @Test
   void safeRepositoryListDoesNotCreateSessionOrToken() throws Exception {
-    CsrfProtectionFilter filter = new CsrfProtectionFilter("X-Nexus-Plus-Token", false);
+    CsrfProtectionFilter filter = filter(false);
     MockHttpServletRequest request = new MockHttpServletRequest("GET", "/internal/repositories");
     MockHttpServletResponse response = new MockHttpServletResponse();
     CountingChain chain = new CountingChain();
@@ -42,7 +42,7 @@ class CsrfProtectionFilterTest {
 
   @Test
   void unsafeInternalRequestWithoutTokenIsRejected() throws Exception {
-    CsrfProtectionFilter filter = new CsrfProtectionFilter("X-Nexus-Plus-Token", false);
+    CsrfProtectionFilter filter = filter(false);
     MockHttpServletRequest request = new MockHttpServletRequest("POST", "/internal/security/users");
     MockHttpServletResponse response = new MockHttpServletResponse();
     CountingChain chain = new CountingChain();
@@ -55,7 +55,7 @@ class CsrfProtectionFilterTest {
 
   @Test
   void unsafeInternalRequestWithTokenPasses() throws Exception {
-    CsrfProtectionFilter filter = new CsrfProtectionFilter("X-Nexus-Plus-Token", false);
+    CsrfProtectionFilter filter = filter(false);
     MockHttpServletRequest bootstrap = new MockHttpServletRequest("GET", "/internal/security/session");
     MockHttpServletResponse bootstrapResponse = new MockHttpServletResponse();
     filter.doFilter(bootstrap, bootstrapResponse, new CountingChain());
@@ -75,7 +75,7 @@ class CsrfProtectionFilterTest {
 
   @Test
   void authorizationHeaderBypassesCsrfForApiClients() throws Exception {
-    CsrfProtectionFilter filter = new CsrfProtectionFilter("X-Nexus-Plus-Token", false);
+    CsrfProtectionFilter filter = filter(true);
     MockHttpServletRequest request = new MockHttpServletRequest("POST", "/service/extdirect");
     request.addHeader("Authorization", "Basic abc");
     MockHttpServletResponse response = new MockHttpServletResponse();
@@ -88,8 +88,36 @@ class CsrfProtectionFilterTest {
   }
 
   @Test
+  void legacyInternalUiRequestFallsThroughWhenLegacyUiDisabled() throws Exception {
+    CsrfProtectionFilter filter = filter(false);
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("POST", "/service/rest/internal/ui/upload/maven-releases");
+    MockHttpServletResponse response = new MockHttpServletResponse();
+    CountingChain chain = new CountingChain();
+
+    filter.doFilter(request, response, chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(200, response.getStatus());
+  }
+
+  @Test
+  void legacyInternalUiRequestIsProtectedWhenLegacyUiEnabled() throws Exception {
+    CsrfProtectionFilter filter = filter(true);
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("POST", "/service/rest/internal/ui/upload/maven-releases");
+    MockHttpServletResponse response = new MockHttpServletResponse();
+    CountingChain chain = new CountingChain();
+
+    filter.doFilter(request, response, chain);
+
+    assertEquals(0, chain.calls);
+    assertEquals(403, response.getStatus());
+  }
+
+  @Test
   void repositoryWritesAreNotCsrfProtected() throws Exception {
-    CsrfProtectionFilter filter = new CsrfProtectionFilter("X-Nexus-Plus-Token", false);
+    CsrfProtectionFilter filter = filter(false);
     MockHttpServletRequest request = new MockHttpServletRequest("PUT", "/repository/maven-releases/a.jar");
     MockHttpServletResponse response = new MockHttpServletResponse();
     CountingChain chain = new CountingChain();
@@ -98,6 +126,13 @@ class CsrfProtectionFilterTest {
 
     assertEquals(1, chain.calls);
     assertEquals(200, response.getStatus());
+  }
+
+  private static CsrfProtectionFilter filter(boolean legacyUiEnabled) {
+    return new CsrfProtectionFilter(
+        "X-Nexus-Plus-Token",
+        false,
+        new NexusLegacyUiCompatibility(legacyUiEnabled));
   }
 
   private static class CountingChain implements FilterChain {

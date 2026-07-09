@@ -16,12 +16,21 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.HexFormat;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * Legacy Nexus Rapture state polling compatibility endpoint.
+ *
+ * @deprecated This endpoint is kept for mirrored Nexus UI polling traffic only. It is not part of
+ *     kkrepo's primary management API surface.
+ */
+@Deprecated(since = "0.2.0", forRemoval = false)
+@ConditionalOnProperty(name = "kkrepo.nexus.legacy-ui.enabled", havingValue = "true")
 @RestController
 @RequestMapping("/service/extdirect/poll")
 public class NexusRaptureStateController {

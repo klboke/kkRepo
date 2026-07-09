@@ -41,6 +41,11 @@ kkrepo image, starts MySQL, a disposable Nexus reference, and the candidate serv
 bootstraps the admin user, default file blob store, and the fixture repositories used by
 live compatibility and real client E2E runs.
 The disposable defaults are `admin` / `Admin1234` for Nexus and `admin` / `12345678` for kkrepo.
+The compose files set `KKREPO_NEXUS_LEGACY_UI_ENABLED=true` before the candidate service starts
+because selected Nexus compatibility checks still compare legacy web UI routes. Normal kkrepo
+deployments should leave this coarse-grained startup flag disabled. If you run a candidate service
+outside these compose files, set the environment variable before starting or restarting that service;
+setting it only before the Maven test command does not affect an already-running process.
 
 ```bash
 scripts/build-docker-image.sh kkrepo:compat
