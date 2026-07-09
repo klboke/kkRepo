@@ -20,6 +20,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmHostedService;
 import com.github.klboke.kkrepo.server.pypi.PypiHostedService;
+import com.github.klboke.kkrepo.server.pub.PubHostedService;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
 import com.github.klboke.kkrepo.server.yum.YumService;
 import java.io.InputStream;
@@ -40,6 +41,17 @@ class ComponentUploadServiceTest {
 
     assertTrue(service.definitions().stream().anyMatch(def ->
         def.format().equals("cargo")
+            && !def.multipleUpload()
+            && def.assetFields().size() == 1
+            && def.assetFields().getFirst().name().equals("asset")));
+  }
+
+  @Test
+  void uploadSpecsIncludePubSingleAssetUpload() {
+    ComponentUploadService service = service(mock(CargoHostedService.class));
+
+    assertTrue(service.definitions().stream().anyMatch(def ->
+        def.format().equals("pub")
             && !def.multipleUpload()
             && def.assetFields().size() == 1
             && def.assetFields().getFirst().name().equals("asset")));
@@ -77,9 +89,53 @@ class ComponentUploadServiceTest {
     verify(cargoHosted, never()).uploadCrate(any(), any(), any(), any());
   }
 
+  @Test
+  void pubComponentUploadDelegatesToHostedArchiveUpload() throws Exception {
+    PubHostedService pubHosted = mock(PubHostedService.class);
+    when(pubHosted.uploadArchive(any(RepositoryRuntime.class), any(InputStream.class), eq("alice"), eq("127.0.0.1"),
+        eq("component-upload")))
+        .thenReturn("packages/demo/versions/1.0.0.tar.gz");
+    ComponentUploadService service = service(pubHosted);
+
+    ComponentUploadService.UploadResult result = service.upload(
+        "pub-hosted",
+        Map.of(),
+        files("pub.asset", "demo-1.0.0.tar.gz"),
+        "alice",
+        "127.0.0.1");
+
+    assertEquals(List.of("packages/demo/versions/1.0.0.tar.gz"), result.paths());
+    verify(pubHosted).uploadArchive(
+        any(RepositoryRuntime.class), any(InputStream.class), eq("alice"), eq("127.0.0.1"), eq("component-upload"));
+  }
+
+  @Test
+  void pubComponentUploadRejectsNonTarGzAsset() throws Exception {
+    PubHostedService pubHosted = mock(PubHostedService.class);
+    ComponentUploadService service = service(pubHosted);
+
+    UploadValidationException thrown = assertThrows(
+        UploadValidationException.class,
+        () -> service.upload("pub-hosted", Map.of(), files("pub.asset", "demo.zip"), "alice", "127.0.0.1"));
+
+    assertEquals("Pub upload requires a .tar.gz archive", thrown.getMessage());
+    verify(pubHosted, never()).uploadArchive(any(), any(), any(), any(), any());
+  }
+
   private static ComponentUploadService service(CargoHostedService cargoHosted) {
+    return service(runtime("cargo-hosted", RepositoryFormat.CARGO), cargoHosted, mock(PubHostedService.class));
+  }
+
+  private static ComponentUploadService service(PubHostedService pubHosted) {
+    return service(runtime("pub-hosted", RepositoryFormat.PUB), mock(CargoHostedService.class), pubHosted);
+  }
+
+  private static ComponentUploadService service(
+      RepositoryRuntime runtime,
+      CargoHostedService cargoHosted,
+      PubHostedService pubHosted) {
     RepositoryRuntimeRegistry registry = mock(RepositoryRuntimeRegistry.class);
-    when(registry.resolve("cargo-hosted")).thenReturn(Optional.of(runtime()));
+    when(registry.resolve(runtime.name())).thenReturn(Optional.of(runtime));
     return new ComponentUploadService(
         registry,
         mock(AssetDao.class),
@@ -88,6 +144,7 @@ class ComponentUploadServiceTest {
         mock(PypiHostedService.class),
         mock(HelmHostedService.class),
         cargoHosted,
+        pubHosted,
         mock(RawHostedService.class),
         mock(YumService.class));
   }
@@ -102,13 +159,13 @@ class ComponentUploadServiceTest {
     return files;
   }
 
-  private static RepositoryRuntime runtime() {
+  private static RepositoryRuntime runtime(String name, RepositoryFormat format) {
     return new RepositoryRuntime(
         1L,
-        "cargo-hosted",
-        RepositoryFormat.CARGO,
+        name,
+        format,
         RepositoryType.HOSTED,
-        "cargo-hosted",
+        name,
         true,
         1L,
         "ALLOW_ONCE",

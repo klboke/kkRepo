@@ -4,7 +4,7 @@
 
 更详细的验证流程见 [Nexus 兼容性测试说明](nexus-compatibility-testing.md)。
 
-下表中的验证类主要是黑盒协议检查。`client-e2e` suite 会额外覆盖 Maven、npm、PyPI、Go resolve、Helm、Cargo/Rust、NuGet、RubyGems、Yum、Docker/OCI 的真实包管理器客户端行为；运行环境要求和 `artifacts/client-e2e/` 诊断信息见 [compat-test README](../../compat-test/README.md)。
+下表中的验证类主要是黑盒协议检查。`client-e2e` suite 会额外覆盖 Maven、npm、PyPI、Go resolve、Helm、Cargo/Rust、Dart/Pub、NuGet、RubyGems、Yum、Docker/OCI 的真实包管理器客户端行为；运行环境要求和 `artifacts/client-e2e/` 诊断信息见 [compat-test README](../../compat-test/README.md)。
 
 ## 兼容原则
 
@@ -23,6 +23,7 @@
 | Go | proxy / group | Go module proxy 读取：list、info、mod、zip、latest、group fallback | 支持 | proxy 可选 | `GoProxyBlackBoxCompatibilityTest` |
 | Helm | hosted / proxy | Chart push、PUT 上传、chart 下载、`index.yaml`、proxy index rewrite、管理台上传 | 支持 `index.yaml` | 默认迁移 hosted；proxy 可选 | `HelmRepositoryBlackBoxCompatibilityTest`、`ComponentUploadBlackBoxCompatibilityTest` |
 | Cargo / Rust | hosted / proxy / group | Sparse registry 读取、`cargo publish`、`.crate` 下载、yank/unyank、Cargo search、CargoToken 认证、UI/API `.crate` 上传 | 支持 sparse index 和 Cargo search | source profile 确认 Cargo content 后支持 datastore H2/PostgreSQL hosted；proxy 仅在显式选择且计划为 `FULL` 时迁移 | `CargoRepositoryBlackBoxCompatibilityTest`、`ComponentUploadBlackBoxCompatibilityTest` |
+| Dart / Pub | hosted / proxy / group | `dart pub publish`、`dart pub get`、`flutter pub get`、package metadata、archive 下载、Nexus `api/archives` 下载别名、`archive_sha256`、PubToken 认证、UI/API `.tar.gz` 上传 | 支持 package/version metadata 和 archive 属性 | Nexus 3.92.0 datastore source profile 确认 Pub content 后支持 hosted full；proxy cache 仅在显式选择 backup 且计划为 `FULL` 时迁移 | `PubRepositoryBlackBoxCompatibilityTest`、`ComponentUploadBlackBoxCompatibilityTest` |
 | NuGet | hosted / proxy / group | package push、包下载、v3 service index、registration、flat container、search/autocomplete、管理台上传 | 支持 v3 service index/search | 默认迁移 hosted；proxy 可选 | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
 | RubyGems | hosted / proxy / group | gem push/yank、gem 下载、compact 和 legacy index assets、管理台上传 | 支持 | 默认迁移 hosted；proxy 可选 | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
 | Yum | hosted / proxy / group | RPM PUT/upload、包下载、`repodata` metadata | 支持 `repodata` | 默认迁移 hosted；proxy 可选 | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
@@ -56,6 +57,8 @@
 /repository/helm-hosted/index.yaml
 /repository/cargo-group/config.json
 /repository/cargo-hosted/crates/demo/1.0.0/download
+/repository/pub-group/api/packages/path
+/repository/pub-hosted/api/archives/demo_package-1.0.0.tar.gz
 /repository/nuget-group/v3/index.json
 ```
 
@@ -79,6 +82,7 @@ kkrepo 把迁移作为产品能力，而不是一次性脚本：
 - 仓库数据迁移默认扫描 hosted 仓库。
 - proxy 仓库可显式指定，用于迁移历史备份数据或回源缓存数据。
 - Cargo / Rust hosted 仓库数据迁移已支持 datastore H2/PostgreSQL 源端，但必须由 preflight 证明 Cargo content model；未知 schema 默认 fail closed。
+- Dart / Pub hosted 仓库数据迁移已支持 Nexus 3.92.0+ datastore 源端，但必须由 preflight 证明 Pub content model；Pub proxy cache 迁移要求显式选择且 plan 为 `FULL`。
 - 迁移步骤按 preflight/dry-run、resume、checksum 校验和报告能力设计。
 - 不支持或被阻塞的条目应进入报告，而不是静默跳过。
 
@@ -90,6 +94,7 @@ kkrepo 把迁移作为产品能力，而不是一次性脚本：
 - Docker / OCI 使用 Registry HTTP API V2 和 OCI Distribution；Docker Registry V1 API 与 `docker search` 不属于当前支持面，除非后续出现明确兼容需求再评估 search-only shim。
 - Docker connector listener 变更可通过 Docker operations endpoint 刷新；高级 connector TLS/SNI 管理属于部署侧能力。
 - Cargo / Rust 支持 Cargo sparse registry。Cargo git index 协议、crates.io 风格 GitHub owner 邀请、删除已发布 crate version 当前不支持。Cargo 迁移需要 datastore H2/PostgreSQL schema 指纹；OrientDB Cargo 内容导出不会启用。
+- Dart / Pub 支持 Hosted Pub Repository V2 hosted/proxy/group 工作流。pub.dev social、publisher、score、download-count 和 advisory API 不作为协议正确性依赖。
 - Go 不支持 hosted 上传；Go module proxy 行为以读取代理为主。
 - 不承诺覆盖每一个 Nexus UI endpoint。只有在支持用户工作流或迁移兼容需要时，才补对应 endpoint。
 - 当协议允许非确定性时，测试中可能规范化排序、时间戳、生成 ID 和 hostname。

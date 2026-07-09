@@ -237,6 +237,7 @@ class RepositoryDataMigrationWriterTest {
         mock(RepositoryIndexRebuildDao.class),
         dockerRegistryDao,
         new DockerManifestParser(new ObjectMapper()),
+        null,
         new TransientTransactionRetry(new RecordingTransactionManager(), 1, 0));
 
     RepositoryDataMigrationWriter.WriteResult result = writer.write(
@@ -283,6 +284,7 @@ class RepositoryDataMigrationWriterTest {
         mock(RepositoryIndexRebuildDao.class),
         mock(DockerRegistryDao.class),
         new DockerManifestParser(new ObjectMapper()),
+        null,
         new TransientTransactionRetry(new RecordingTransactionManager(), 1, 0));
 
     RepositoryDataMigrationWriter.WriteResult result = writer.write(
@@ -321,6 +323,7 @@ class RepositoryDataMigrationWriterTest {
         mock(RepositoryIndexRebuildDao.class),
         mock(DockerRegistryDao.class),
         new DockerManifestParser(new ObjectMapper()),
+        null,
         new TransientTransactionRetry(new RecordingTransactionManager(), 1, 0));
 
     RepositoryDataMigrationWriter.WriteResult result = writer.write(

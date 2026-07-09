@@ -4,7 +4,7 @@ This matrix summarizes the public compatibility surface of kkrepo. It is intenti
 
 For deeper validation workflow details, see [Nexus Compatibility Testing](nexus-compatibility-testing.md).
 
-The validation classes listed below are black-box protocol checks. The `client-e2e` suite adds real package-client coverage across Maven, npm, PyPI, Go resolve, Helm, Cargo/Rust, NuGet, RubyGems, Yum, and Docker/OCI; see [compat-test README](../../compat-test/README.md) for the runner requirements and `artifacts/client-e2e/` diagnostics.
+The validation classes listed below are black-box protocol checks. The `client-e2e` suite adds real package-client coverage across Maven, npm, PyPI, Go resolve, Helm, Cargo/Rust, Dart/Pub, NuGet, RubyGems, Yum, and Docker/OCI; see [compat-test README](../../compat-test/README.md) for the runner requirements and `artifacts/client-e2e/` diagnostics.
 
 ## Compatibility Principles
 
@@ -23,6 +23,7 @@ The validation classes listed below are black-box protocol checks. The `client-e
 | Go | proxy / group | Go module proxy reads: list, info, mod, zip, latest, group fallback | Supported | Proxy optional | `GoProxyBlackBoxCompatibilityTest` |
 | Helm | hosted / proxy | Chart push, PUT upload, chart download, `index.yaml`, proxy index rewrite, admin UI upload | `index.yaml` supported | Hosted by default; proxy optional | `HelmRepositoryBlackBoxCompatibilityTest`, `ComponentUploadBlackBoxCompatibilityTest` |
 | Cargo / Rust | hosted / proxy / group | Sparse registry reads, `cargo publish`, `.crate` download, yank/unyank, Cargo search, CargoToken auth, UI/API `.crate` upload | Sparse index and Cargo search supported | Hosted on datastore H2/PostgreSQL when the source profile proves Cargo content; proxy optional only when explicitly selected and planned `FULL` | `CargoRepositoryBlackBoxCompatibilityTest`, `ComponentUploadBlackBoxCompatibilityTest` |
+| Dart / Pub | hosted / proxy / group | `dart pub publish`, `dart pub get`, `flutter pub get`, package metadata, archive download, Nexus `api/archives` download alias, `archive_sha256`, PubToken auth, UI/API `.tar.gz` upload | Package/version metadata and archive attributes supported | Hosted full migration when the Nexus 3.92.0 datastore source profile proves Pub content; proxy cache migration only when explicitly selected for backup and planned `FULL` | `PubRepositoryBlackBoxCompatibilityTest`, `ComponentUploadBlackBoxCompatibilityTest` |
 | NuGet | hosted / proxy / group | Package push, package download, v3 service index, registration, flat container, search/autocomplete, admin UI upload | v3 service index/search supported | Hosted by default; proxy optional | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
 | RubyGems | hosted / proxy / group | Gem push/yank, gem download, compact and legacy index assets, admin UI upload | Supported | Hosted by default; proxy optional | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
 | Yum | hosted / proxy / group | RPM PUT/upload, package download, `repodata` metadata | `repodata` supported | Hosted by default; proxy optional | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
@@ -56,6 +57,8 @@ Examples:
 /repository/helm-hosted/index.yaml
 /repository/cargo-group/config.json
 /repository/cargo-hosted/crates/demo/1.0.0/download
+/repository/pub-group/api/packages/path
+/repository/pub-hosted/api/archives/demo_package-1.0.0.tar.gz
 /repository/nuget-group/v3/index.json
 ```
 
@@ -79,6 +82,7 @@ kkrepo migration is treated as a product feature rather than a one-off script:
 - Repository data migration scans hosted repositories by default.
 - Proxy repositories can be migrated explicitly as historical backup data or upstream cache data.
 - Cargo / Rust hosted repository data migration is supported for datastore H2/PostgreSQL sources when preflight proves the Cargo content model; unknown schemas fail closed.
+- Dart / Pub hosted repository data migration is supported for Nexus 3.92.0+ datastore sources when preflight proves the Pub content model; Pub proxy cache migration requires explicit selection and a `FULL` plan.
 - Migration steps are designed for dry-run/preflight, resume, checksum validation, and reporting.
 - Unsupported or blocked items should be reported rather than silently skipped.
 
@@ -90,6 +94,7 @@ See [Nexus Migration Guide](nexus-migration-guide.md).
 - Docker / OCI uses Registry HTTP API V2 and OCI Distribution; Docker Registry V1 API and `docker search` are intentionally not part of the supported surface unless a future compatibility need requires a search-only shim.
 - Docker connector listener changes can be refreshed through the Docker operations endpoint. Advanced connector TLS/SNI management remains deployment-specific.
 - Cargo / Rust supports Cargo sparse registries. Cargo git index protocol, crates.io-style GitHub owner invitations, and deleting published crate versions are not currently supported. Cargo migration requires datastore H2/PostgreSQL schema fingerprints; OrientDB Cargo content export is not enabled.
+- Dart / Pub supports Hosted Pub Repository V2 hosted/proxy/group workflows. Pub.dev social, publisher, score, download-count, and advisory APIs are not treated as protocol correctness dependencies.
 - Go hosted upload is not supported; Go module proxy behavior is read-oriented.
 - Full coverage of every Nexus UI endpoint is not guaranteed. Endpoints are added when they are needed for supported user workflows or migration compatibility.
 - Exact ordering, timestamps, generated IDs, and hostnames may be normalized in tests when the protocol allows nondeterminism.

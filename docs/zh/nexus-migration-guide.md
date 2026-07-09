@@ -2,9 +2,11 @@
 
 本文说明从 Nexus Repository 迁移到 kkrepo 的准备条件、执行顺序、增量迁移和域名切换方式。
 
-kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议行为和权限认证模型。迁移完成后，只需要把原 Nexus 域名指向 kkrepo，Maven、npm、PyPI、Go、Helm、NuGet、RubyGems、Yum 等已被迁移流程覆盖的非 Docker 客户端配置不需要修改。Docker / OCI 使用 Registry HTTP API V2 的 `/v2/...` 路由；切换 Docker 客户端时需要保持仓库名和 connector/path-based routing 入口一致。
+kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议行为和权限认证模型。迁移完成后，只需要把原 Nexus 域名指向 kkrepo，Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、NuGet、RubyGems、Yum 等已被迁移流程覆盖的非 Docker 客户端配置不需要修改。Docker / OCI 使用 Registry HTTP API V2 的 `/v2/...` 路由；切换 Docker 客户端时需要保持仓库名和 connector/path-based routing 入口一致。
 
 Cargo / Rust 在 kkrepo 中同样使用 `/repository/<repo>/...` sparse registry URL。对于 preflight 已确认 Cargo content model 指纹的 datastore 时代 Nexus H2/PostgreSQL 源端，hosted Cargo 仓库数据也走同一套迁移流程。
+
+Dart / Pub 在 kkrepo 中同样使用 `/repository/<repo>/...` hosted URL。对于 preflight 已确认 Pub content model 的 Nexus 3.92.0 源端，hosted Pub 仓库数据走同一套迁移流程；显式选择的 Pub proxy cache 只有在 plan 为 `FULL` 时才迁移。
 
 ## 迁移流程概览
 
@@ -44,7 +46,7 @@ Cargo / Rust 在 kkrepo 中同样使用 `/repository/<repo>/...` sparse registry
 1. 先迁移仓库元数据：扫描源 Nexus hosted 仓库中的 component、asset、路径、大小、content-type、时间戳和 blob 引用等信息，在 kkrepo MySQL 中生成迁移任务。
 2. 再迁移 blob 真实数据：按迁移任务下载源 Nexus asset 内容，并写入 kkrepo 的目标 blob store。
 
-对于 source profile 已确认支持 Cargo content model 的 Nexus 3.77.x+ datastore 时代 H2/PostgreSQL 源端，Cargo / Rust hosted 仓库数据通过此流程迁移。未知 datastore schema 指纹会在迁移计划中 fail closed；旧 OrientDB 源端不会启用 Cargo 内容导出。
+对于 source profile 已确认支持 Cargo content model 的 Nexus 3.77.x+ datastore 时代 H2/PostgreSQL 源端，Cargo / Rust hosted 仓库数据通过此流程迁移。对于 source profile 已确认 Pub content model 的 Nexus 3.92.0+ datastore 源端，Dart / Pub hosted 仓库数据也通过此流程迁移；Pub proxy cache 仅在显式选择且计划为 `FULL` 时迁移。未知 datastore schema 指纹会在迁移计划中 fail closed；旧 OrientDB 源端不会启用 datastore-only 内容导出。
 
 ### 第一次迁移
 
@@ -99,7 +101,7 @@ scripts/docker-compat/migration-e2e.sh
 
 全量迁移和最终增量迁移完成后，检查关键仓库的 browse/search、包下载、checksum 和常用客户端拉取行为。
 
-确认无问题后，把原 Nexus 域名通过 DNS 或反向代理指向 kkrepo。由于 kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议和权限认证模型，对于已迁移的仓库格式，客户端不需要修改 Maven settings、npm registry、PyPI index-url、Go GOPROXY、Helm repo 等配置。
+确认无问题后，把原 Nexus 域名通过 DNS 或反向代理指向 kkrepo。由于 kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议和权限认证模型，对于已迁移的仓库格式，客户端不需要修改 Maven settings、npm registry、PyPI index-url、Go GOPROXY、Helm repo、Cargo sparse registry URL、Pub hosted URL 等配置。
 
 切换完成后，建议保留源 Nexus 一段观察期，并在确认不再需要补偿迁移后关闭源端脚本能力。
 

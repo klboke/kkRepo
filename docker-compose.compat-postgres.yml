@@ -1,0 +1,83 @@
+# Modern Nexus compatibility reference. This file covers datastore-era Nexus
+# versions with an external PostgreSQL database; keep docker-compose.compat.yml
+# as the historical Nexus 3.29.x OrientDB/embedded-DB reference.
+name: kkrepo-postgres-compat
+
+services:
+  mysql:
+    image: mysql:8.0
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: kkrepo
+      MYSQL_USER: kkrepo
+      MYSQL_PASSWORD: kkrepo
+      TZ: Asia/Shanghai
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+  nexus-postgres:
+    image: postgres:16
+    command: ["postgres", "-c", "max_connections=300"]
+    environment:
+      POSTGRES_DB: nexus
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: nexus
+      TZ: Asia/Shanghai
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - nexus-postgres-data:/var/lib/postgresql/data
+      - ./scripts/docker-compat/nexus-postgres-init.sql:/docker-entrypoint-initdb.d/01-nexus.sql:ro
+
+  nexus:
+    image: ${NEXUS_COMPAT_IMAGE:-sonatype/nexus3:3.92.0}
+    depends_on:
+      nexus-postgres:
+        condition: service_healthy
+    environment:
+      INSTALL4J_ADD_VM_PARAMS: "-Xms512m -Xmx1536m -XX:MaxDirectMemorySize=1536m -Dnexus.scripts.allowCreation=true ${NEXUS_COMPAT_JVM_ARGS:--Dnexus.datastore.enabled=true -Dnexus.datastore.nexus.jdbcUrl=jdbc:postgresql://nexus-postgres:5432/nexus?currentSchema=nexus -Dnexus.datastore.nexus.username=nexus -Dnexus.datastore.nexus.password=nexus}"
+    ports:
+      - "${NEXUS_COMPAT_PORT:-28090}:8081"
+    volumes:
+      - nexus-data:/nexus-data
+
+  kkrepo:
+    image: ${KKREPO_COMPAT_IMAGE:-kkrepo:compat}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/kkrepo?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
+      SPRING_DATASOURCE_USERNAME: kkrepo
+      SPRING_DATASOURCE_PASSWORD: kkrepo
+      KKREPO_MANAGEMENT_PORT: "8081"
+      KKREPO_CREDENTIAL_SECRET: ci-compat-credential-secret-not-for-production
+      KKREPO_API_KEY_PAYLOAD_SECRET: ci-compat-api-key-payload-secret-not-for-production
+      KKREPO_LOGIN_RATE_LIMIT_PER_MINUTE: "200"
+      KKREPO_BOOTSTRAP_RATE_LIMIT_PER_MINUTE: "50"
+      KKREPO_FILE_ENABLED: "true"
+      KKREPO_FILE_BASE_DIR: /tmp/kkrepo-blobs
+      KKREPO_OUTBOUND_ALLOW_PRIVATE_ADDRESSES: "true"
+      JAVA_OPTS: "-Xms512m -Xmx1536m"
+    ports:
+      - "${KKREPO_COMPAT_PORT:-18090}:8080"
+      - "${KKREPO_MANAGEMENT_PORT:-18091}:8081"
+      - "${KKREPO_DOCKER_HOSTED_PORT:-18180}:${KKREPO_DOCKER_CONNECTOR_PORT:-18180}"
+
+volumes:
+  mysql-data:
+  nexus-data:
+  nexus-postgres-data:

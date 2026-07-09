@@ -32,6 +32,7 @@ import com.github.klboke.kkrepo.server.blob.BlobTransactionCleanup;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.docker.DockerManifestParser;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
+import com.github.klboke.kkrepo.server.pub.PubRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -66,6 +67,7 @@ class RepositoryDataMigrationWriter {
   private final RepositoryIndexRebuildDao indexRebuildDao;
   private final DockerRegistryDao dockerRegistryDao;
   private final DockerManifestParser dockerManifestParser;
+  private final PubRepositoryDataMigrationWriter pubMigrationWriter;
   private final TransientTransactionRetry transactionRetry;
   private final MavenPathParser mavenPathParser = new MavenPathParser();
 
@@ -78,6 +80,7 @@ class RepositoryDataMigrationWriter {
       RepositoryIndexRebuildDao indexRebuildDao,
       DockerRegistryDao dockerRegistryDao,
       DockerManifestParser dockerManifestParser,
+      PubRepositoryDataMigrationWriter pubMigrationWriter,
       TransientTransactionRetry transactionRetry) {
     this.repositoryDao = repositoryDao;
     this.componentDao = componentDao;
@@ -87,6 +90,7 @@ class RepositoryDataMigrationWriter {
     this.indexRebuildDao = indexRebuildDao;
     this.dockerRegistryDao = dockerRegistryDao;
     this.dockerManifestParser = dockerManifestParser;
+    this.pubMigrationWriter = pubMigrationWriter;
     this.transactionRetry = transactionRetry;
   }
 
@@ -98,6 +102,15 @@ class RepositoryDataMigrationWriter {
       throw new IllegalArgumentException("target repository has no blob store: " + repository.name());
     }
     BlobStorage storage = blobStorageRegistry.forBlobStoreId(repository.blobStoreId());
+    if (repository.format() == RepositoryFormat.PUB) {
+      if (pubMigrationWriter == null) {
+        throw new IllegalStateException("Pub migration writer is not configured");
+      }
+      PubRepositoryDataMigrationWriter.MigratedAsset migrated = pubMigrationWriter.write(
+          repository, storage, source, body, responseContentType, validateSize);
+      return new WriteResult(
+          migrated.componentId(), migrated.assetId(), migrated.assetBlobId(), migrated.assetBlobObjectKey());
+    }
     DigestedUpload upload = uploadWithDigests(repository, storage, source, body, validateSize);
     Map<MavenPath, ChecksumUpload> checksumUploads = new LinkedHashMap<>();
     Map<MavenPath, WriteResult> checksumResults = new LinkedHashMap<>();
@@ -727,6 +740,7 @@ class RepositoryDataMigrationWriter {
       case YUM -> source.sourcePath().endsWith(".rpm") ? "PACKAGE" : "METADATA";
       case DOCKER -> dockerAssetKind(source.sourcePath());
       case CARGO -> cargoAssetKind(source.sourcePath());
+      case PUB -> source.sourcePath().endsWith(".tar.gz") ? "archive" : "metadata";
       case RAW -> "asset";
     };
   }

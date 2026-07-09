@@ -1,10 +1,13 @@
 # kkrepo compat-test
 
-`compat-test` contains compatibility checks that can run in three modes:
+`compat-test` is part of the three main CI validation blocks:
 
-- Unit-level Maven checks run during normal `mvn test`.
-- Live black-box checks run when endpoint URLs are supplied.
-- Performance smoke checks run only when explicitly enabled.
+- Nexus compatibility compares kkrepo with a disposable Nexus reference instance.
+- Client E2E compatibility runs real package clients against a disposable kkrepo candidate.
+- Migration E2E imports from supported Nexus source versions and validates migrated behavior.
+
+It also contains unit-level and diagnostic compatibility checks that run during normal `mvn test`
+or when explicitly enabled.
 
 ## Reference Nexus Endpoint
 
@@ -13,13 +16,14 @@ Use the Docker-resident Nexus service as the fixed reference endpoint:
 ```bash
 NEXUS_COMPAT_BASE_URL=http://localhost:28090/
 NEXUS_COMPAT_USERNAME=admin
-NEXUS_COMPAT_PASSWORD=123456
+NEXUS_COMPAT_PASSWORD=Admin1234
 ```
 
-Current Maven compatibility checks and non-Cargo repository-format compatibility checks
-(npm, PyPI, Go, Helm, and others) should compare against this same long-running Nexus reference
-unless a test explicitly documents why it needs an isolated throwaway Nexus instance. Cargo/Rust
-checks use the Nexus 3.77.x+ reference documented below.
+Current Maven compatibility checks and repository-format compatibility checks can compare against
+this same long-running Nexus reference unless a test explicitly documents why it needs an isolated
+throwaway Nexus instance. Cargo/Rust requires Nexus 3.77.x+ and Pub requires Nexus 3.92.0+; the
+datastore-era PostgreSQL compose file below pins the disposable reference to Nexus 3.92.0 for those
+newer-format checks.
 
 ## Default Test Run
 
@@ -36,7 +40,7 @@ The GitHub `Live Compatibility` workflow uses the same commands below. It builds
 kkrepo image, starts MySQL, a disposable Nexus reference, and the candidate service, then
 bootstraps the admin user, default file blob store, and the fixture repositories used by
 live compatibility and real client E2E runs.
-The disposable defaults are `admin` / `123456` for Nexus and `admin` / `12345678` for kkrepo.
+The disposable defaults are `admin` / `Admin1234` for Nexus and `admin` / `12345678` for kkrepo.
 
 ```bash
 scripts/build-docker-image.sh kkrepo:compat
@@ -46,42 +50,45 @@ scripts/ci/run-live-compat.sh smoke
 docker compose -f docker-compose.compat.yml down -v
 ```
 
-For Cargo/Rust compatibility work, use the Nexus 3.77.x Community Edition
-reference compose file instead of the default Nexus 3.29.2 reference. Nexus
-3.73.0 contains the Cargo plugin, but exposes it only in Pro:
+For datastore-era compatibility work, use the Nexus PostgreSQL compose file instead of the default
+Nexus 3.29.2 OrientDB reference. It pins Nexus to 3.92.0 with PostgreSQL datastore enabled, which
+covers Cargo/Rust, Dart/Pub, and the other newer-format live checks:
 
 ```bash
 scripts/build-docker-image.sh kkrepo:compat
-export COMPOSE_FILE="$PWD/docker-compose.compat-rust.yml"
-export COMPOSE_PROJECT_NAME=kkrepo-rust-compat
+export COMPOSE_FILE="$PWD/docker-compose.compat-postgres.yml"
+export COMPOSE_PROJECT_NAME=kkrepo-postgres-compat
 export NEXUS_COMPAT_PORT=38090
 export KKREPO_COMPAT_PORT=18092
 export KKREPO_MANAGEMENT_PORT=18093
-docker compose -f "$COMPOSE_FILE" up -d mysql nexus kkrepo
+docker compose -f "$COMPOSE_FILE" up -d --wait mysql nexus-postgres
+docker compose -f "$COMPOSE_FILE" up -d nexus kkrepo
 scripts/ci/live-compat-setup.sh
-scripts/ci/run-live-compat.sh cargo
+scripts/ci/run-live-compat.sh nexus
 docker compose -f "$COMPOSE_FILE" down -v
 ```
 
 Available suites:
 
-- `smoke`: console API checks plus Maven proxy GET/HEAD/checksum read compatibility.
+- `smoke`: diagnostic console API checks plus Maven proxy GET/HEAD/checksum read compatibility.
 - `write-smoke`: Maven hosted release/snapshot write compatibility with `COMPAT_WRITE_ENABLED=true`.
-- `cargo`: Cargo hosted/proxy/group compatibility against Nexus 3.77.x+. Proxy and group checks
-  force both sides to use the same upstream sparse index (`CARGO_COMPAT_REMOTE_URL`, default
-  `https://index.crates.io/`) and the same crate/version (`CARGO_COMPAT_CRATE`, default `itoa`;
-  `CARGO_COMPAT_VERSION`, default `1.0.15`).
-- `extended`: smoke coverage plus currently separated PyPI, Helm, NuGet, RubyGems, and Yum checks.
+- `nexus`: the disposable Nexus reference matrix. It enables write checks and compares kkrepo with
+  Nexus across Maven, npm, PyPI, Cargo/Rust, Dart/Pub, Raw, selected NuGet/RubyGems/Yum behavior,
+  Go proxy endpoints, Helm hosted round trips, component upload specs, and selected security/admin
+  contracts.
+- `extended`: diagnostic smoke coverage plus currently separated PyPI, Helm, Pub, NuGet, RubyGems, and Yum checks.
 - `client-e2e`: starts from the disposable kkrepo service and uses real package clients to publish
   and then download/resolve through hosted and group/proxy repositories. It covers Maven, npm,
-  PyPI, Helm, Cargo/Rust, NuGet, RubyGems, Yum, and Docker/OCI. Go is resolve-only through the Go
-  proxy because hosted Go publishing is not a supported repository mode.
+  PyPI, Helm, Cargo/Rust, Dart/Pub, Flutter Pub, NuGet, RubyGems, Yum, and Docker/OCI. Go is
+  resolve-only through the Go proxy because hosted Go publishing is not a supported repository mode.
 - `full`: all compat-test tests with live endpoint variables set; use this as a diagnostic suite
   when working through known protocol gaps.
 
-In GitHub Actions, add the `run-live-compat` label to a PR to run the smoke suite plus Cargo
-compatibility against the Nexus 3.77.x reference. Add `run-client-e2e` to run the real client
-matrix, or start the workflow manually and select a suite.
+In GitHub Actions, add the `run-live-compat` label to a PR to run the unified Nexus compatibility
+matrix against the Nexus 3.92.0 PostgreSQL reference. The live compatibility workflow
+uses `docker-compose.compat-postgres.yml` because Pub repositories require Nexus 3.92.0+ and the
+newer Nexus generation is covered here through a PostgreSQL datastore reference. Add
+`run-client-e2e` to run the real client matrix, or start the workflow manually and select a suite.
 
 ## Real Client E2E
 
@@ -97,9 +104,10 @@ docker compose -f docker-compose.compat.yml down -v
 ```
 
 The runner must have `mvn`, `npm`, `python3` with `build` and `twine`, `go`, `helm`, `cargo`,
-`dotnet`, `ruby`/`gem`, and Docker available. ORAS is optional; when present the Docker/OCI part
-also pushes and pulls a generic OCI artifact. Client logs, downloaded metadata, and selected
-inspect outputs are written under `artifacts/client-e2e/`.
+`dart`, `dotnet`, `ruby`/`gem`, and Docker available. `flutter` is used for the Flutter Pub check
+when installed; GitHub Actions installs it for the `client-e2e` workflow. ORAS is optional; when
+present the Docker/OCI part also pushes and pulls a generic OCI artifact. Client logs, downloaded
+metadata, and selected inspect outputs are written under `artifacts/client-e2e/`.
 
 ## Live Console And Maven Read Checks
 
@@ -132,7 +140,7 @@ They are disabled by default and use the fixed Docker Nexus reference endpoint.
 COMPAT_SECURITY_ENABLED=true \
 NEXUS_COMPAT_BASE_URL=http://localhost:28090/ \
 NEXUS_COMPAT_USERNAME=admin \
-NEXUS_COMPAT_PASSWORD=123456 \
+NEXUS_COMPAT_PASSWORD=Admin1234 \
 KKREPO_COMPAT_BASE_URL=http://127.0.0.1:18090 \
 KKREPO_COMPAT_USERNAME=admin \
 KKREPO_COMPAT_PASSWORD=admin123 \
@@ -164,7 +172,8 @@ use their own token/session entry points instead of the Basic realm order.
 ## Live NuGet, RubyGems, And Yum Checks
 
 The NuGet, RubyGems, and Yum repository checks compare the fixed Nexus reference endpoint above
-with the local kkrepo dev server. The default credentials for both sides are `admin` / `123456`.
+with the local kkrepo dev server. The default credentials are `admin` / `Admin1234` for Nexus and
+`admin` / `123456` for kkrepo.
 
 ```bash
 mvn -pl compat-test -am \
@@ -172,7 +181,7 @@ mvn -pl compat-test -am \
   -Dsurefire.failIfNoSpecifiedTests=false \
   -Dcompat.nexus.baseUrl=http://localhost:28090/ \
   -Dcompat.nexus.username=admin \
-  -Dcompat.nexus.password=123456 \
+  -Dcompat.nexus.password=Admin1234 \
   -Dcompat.nexusPlus.baseUrl=http://127.0.0.1:18090 \
   -Dcompat.nexusPlus.username=admin \
   -Dcompat.nexusPlus.password=123456 \
@@ -207,7 +216,7 @@ Maven command line:
 ```bash
 NEXUS_COMPAT_BASE_URL=http://localhost:28090/ \
 NEXUS_COMPAT_USERNAME=admin \
-NEXUS_COMPAT_PASSWORD=123456 \
+NEXUS_COMPAT_PASSWORD=Admin1234 \
 KKREPO_COMPAT_BASE_URL=http://127.0.0.1:18090 \
 COMPAT_WRITE_ENABLED=true \
 mvn -pl compat-test -am \
@@ -229,7 +238,7 @@ mvn -pl compat-test -am \
   -Dsurefire.failIfNoSpecifiedTests=false \
   -Dcompat.nexus.baseUrl=http://127.0.0.1:28090 \
   -Dcompat.nexus.username=admin \
-  -Dcompat.nexus.password=123456 \
+  -Dcompat.nexus.password=Admin1234 \
   -Dcompat.nexusPlus.baseUrl=http://127.0.0.1:18090 \
   -Dcompat.write.enabled=true \
   -Dcompat.npm.readPackage=is-number \
@@ -261,7 +270,7 @@ Run the PyPI suite against the fixed reference Nexus:
 ```bash
 NEXUS_COMPAT_BASE_URL=http://localhost:28090/ \
 NEXUS_COMPAT_USERNAME=admin \
-NEXUS_COMPAT_PASSWORD=123456 \
+NEXUS_COMPAT_PASSWORD=Admin1234 \
 KKREPO_COMPAT_BASE_URL=http://127.0.0.1:18090 \
 mvn -pl compat-test -am \
   -DfailIfNoTests=false \
@@ -326,7 +335,7 @@ Useful thresholds:
 ## Go Proxy And Group Compatibility
 
 The Go black-box test compares kkrepo against Nexus Go proxy and group repositories. By default
-it targets the local Nexus at `http://localhost:28090` with `admin` / `123456`, and kkrepo at
+it targets the local Nexus at `http://localhost:28090` with `admin` / `Admin1234`, and kkrepo at
 `http://127.0.0.1:18090`. Override `GO_KKREPO_COMPAT_BASE_URL` when testing a non-default
 kkrepo port.
 
@@ -360,7 +369,7 @@ delete cleanup, plus proxy `index.yaml` URL rewriting and proxied chart download
 ```bash
 NEXUS_COMPAT_BASE_URL=http://localhost:28090/ \
 NEXUS_COMPAT_USERNAME=admin \
-NEXUS_COMPAT_PASSWORD=123456 \
+NEXUS_COMPAT_PASSWORD=Admin1234 \
 KKREPO_COMPAT_BASE_URL=http://127.0.0.1:18090 \
 mvn -pl compat-test -am \
   -DfailIfNoTests=false \
@@ -382,7 +391,7 @@ first-match reads, and proxy file download/`HEAD` against a static upstream.
 ```bash
 NEXUS_COMPAT_BASE_URL=http://localhost:28090/ \
 NEXUS_COMPAT_USERNAME=admin \
-NEXUS_COMPAT_PASSWORD=123456 \
+NEXUS_COMPAT_PASSWORD=Admin1234 \
 KKREPO_COMPAT_BASE_URL=http://127.0.0.1:18090 \
 mvn -pl compat-test -am \
   -DfailIfNoTests=false \
@@ -409,7 +418,7 @@ COMPAT_DOCKER_ENABLED=true \
 DOCKER_NEXUS_COMPAT_BASE_URL=http://192.168.215.6:28091 \
 DOCKER_NEXUS_PLUS_COMPAT_BASE_URL=http://127.0.0.1:18183 \
 NEXUS_COMPAT_USERNAME=admin \
-NEXUS_COMPAT_PASSWORD=123456 \
+NEXUS_COMPAT_PASSWORD=Admin1234 \
 KKREPO_COMPAT_USERNAME=admin \
 KKREPO_COMPAT_PASSWORD=123456 \
 mvn -pl compat-test -am \
@@ -437,7 +446,7 @@ DOCKER_NEXUS_PLUS_ALLOW_ONCE_COMPAT_BASE_URL=http://127.0.0.1:18184 \
 DOCKER_NEXUS_DENY_COMPAT_BASE_URL=http://192.168.215.6:28095 \
 DOCKER_NEXUS_PLUS_DENY_COMPAT_BASE_URL=http://127.0.0.1:18185 \
 NEXUS_COMPAT_USERNAME=admin \
-NEXUS_COMPAT_PASSWORD=123456 \
+NEXUS_COMPAT_PASSWORD=Admin1234 \
 KKREPO_COMPAT_USERNAME=admin \
 KKREPO_COMPAT_PASSWORD=123456 \
 mvn -pl compat-test -am \

@@ -5,8 +5,11 @@ import com.github.klboke.kkrepo.auth.AccessDecisionService;
 import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.protocol.pub.PubPath;
+import com.github.klboke.kkrepo.protocol.pub.PubPathParser;
 import com.github.klboke.kkrepo.server.npm.NpmTokenService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -30,6 +33,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   static final int FILTER_ORDER = SessionRepositoryFilter.DEFAULT_ORDER + 20;
   public static final String REPOSITORY_RECORD_ATTRIBUTE =
       RepositorySecurityFilter.class.getName() + ".REPOSITORY_RECORD";
+  private static final PubPathParser PUB_PATH_PARSER = new PubPathParser();
   private final SecurityAuthenticationService authenticationService;
   private final AccessDecisionService accessDecisionService;
   private final RepositoryDao repositoryDao;
@@ -71,8 +75,13 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       filterChain.doFilter(request, response);
       return;
     }
+    if (isInvalidPubPublishRoute(repository.get(), target)) {
+      filterChain.doFilter(request, response);
+      return;
+    }
     Optional<AuthenticatedSubject> authenticated = switch (repository.get().format()) {
       case CARGO -> authenticationService.authenticateCargo(request);
+      case PUB -> authenticationService.authenticatePub(request);
       case RUBYGEMS -> authenticationService.authenticateRubygems(request);
       default -> authenticationService.authenticate(request);
     };
@@ -191,6 +200,9 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     if (format == RepositoryFormat.CARGO && isCargoPublishRoute(method, path)) {
       return List.of(PermissionAction.ADD);
     }
+    if (format == RepositoryFormat.PUB && isPubPublishRoute(method, path)) {
+      return List.of(PermissionAction.ADD);
+    }
     if (format == RepositoryFormat.CARGO && isCargoYankRoute(method, path)) {
       return List.of(PermissionAction.EDIT);
     }
@@ -206,6 +218,22 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   private static boolean isCargoPublishRoute(String method, String path) {
     return "PUT".equalsIgnoreCase(method)
         && "api/v1/crates/new".equals(path);
+  }
+
+  private static boolean isPubPublishRoute(String method, String path) {
+    PubPath parsed = PUB_PATH_PARSER.parse(path);
+    if ("GET".equalsIgnoreCase(method)) {
+      return parsed.kind() == PubPath.Kind.PUBLISH_INIT
+          || parsed.kind() == PubPath.Kind.PUBLISH_FINALIZE;
+    }
+    return "POST".equalsIgnoreCase(method)
+        && parsed.kind() == PubPath.Kind.PUBLISH_UPLOAD;
+  }
+
+  private static boolean isInvalidPubPublishRoute(RepositoryRecord repository, RepositoryRequest target) {
+    return repository.format() == RepositoryFormat.PUB
+        && repository.type() != RepositoryType.HOSTED
+        && isPubPublishRoute(target.method(), target.path());
   }
 
   private static boolean isCargoYankRoute(String method, String path) {
@@ -245,6 +273,10 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       response.setHeader(
           HttpHeaders.WWW_AUTHENTICATE,
           "Cargo login_url=\"" + quoteHeaderValue(cargoLoginUrl(request, target.repository())) + "\"");
+    } else if (repository.format() == RepositoryFormat.PUB) {
+      response.setHeader(
+          HttpHeaders.WWW_AUTHENTICATE,
+          "Bearer realm=\"pub\", message=\"Authentication required\"");
     } else {
       response.setHeader(HttpHeaders.WWW_AUTHENTICATE, "Basic realm=\"kkrepo\"");
     }

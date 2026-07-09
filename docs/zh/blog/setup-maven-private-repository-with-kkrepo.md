@@ -4,7 +4,7 @@
 
 在团队开发中，Maven 私服几乎是 Java 工程的基础设施标配。它可以缓存中央仓库依赖、托管公司内部组件、统一 CI/CD 发布入口，也能减少公网网络抖动对构建的影响。
 
-kkRepo 是一个兼容 Nexus 客户端访问习惯的自托管制品仓库，支持 Maven、npm、PyPI、Go、Helm、Docker/OCI 等多种制品格式。对于 Maven 场景，它保留了常见的 `/repository/<repo>/...` URL 结构，因此从 Nexus 迁移或替换时，客户端配置成本比较低。
+kkRepo 是一个兼容 Nexus 客户端访问习惯的自托管制品仓库，支持 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Docker/OCI 等多种制品格式。对于 Maven 场景，它保留了常见的 `/repository/<repo>/...` URL 结构，因此从 Nexus 迁移或替换时，客户端配置成本比较低。
 
 - https://github.com/klboke/kkrepo
 - https://gitee.com/kailing/kkRepo

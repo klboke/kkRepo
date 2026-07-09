@@ -12,7 +12,7 @@ on:
           - smoke
           - write-smoke
           - extended
-          - cargo
+          - nexus
           - client-e2e
           - full
   schedule:
@@ -38,11 +38,17 @@ jobs:
     name: ${{ ((github.event_name == 'workflow_dispatch' && inputs.suite == 'client-e2e') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && 'Client E2E compatibility' || 'Live compatibility' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.suite != 'cargo') || (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-live-compat') || contains(github.event.pull_request.labels.*.name, 'run-client-e2e')))
+    if: (github.event_name == 'workflow_dispatch' && inputs.suite != 'nexus') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))
     env:
-      COMPOSE_FILE: docker-compose.compat.yml
+      COMPOSE_FILE: docker-compose.compat-postgres.yml
       COMPOSE_PROJECT_NAME: kkrepo-compat
-      LIVE_COMPAT_SUITE: ${{ github.event_name == 'workflow_dispatch' && inputs.suite || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e') && 'client-e2e') || 'smoke' }}
+      LIVE_COMPAT_SUITE: ${{ (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e') && 'client-e2e') || inputs.suite }}
+      NEXUS_COMPAT_IMAGE: sonatype/nexus3:3.92.0
+      PUB_COMPAT_ENABLED: "true"
+      PUB_COMPAT_HOSTED_PACKAGE: kkrepo_compat_hosted_fixture
+      PUB_COMPAT_HOSTED_VERSION: "1.0.0"
+      PUB_COMPAT_PROXY_PACKAGE: path
+      PUB_COMPAT_PROXY_VERSION: "1.9.0"
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -94,6 +100,17 @@ jobs:
         if: env.LIVE_COMPAT_SUITE == 'client-e2e'
         uses: azure/setup-helm@v5
 
+      - name: Set up Dart
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e'
+        uses: dart-lang/setup-dart@v1
+
+      - name: Set up Flutter
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e'
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
       - name: Set up ORAS
         if: env.LIVE_COMPAT_SUITE == 'client-e2e'
         uses: oras-project/setup-oras@v2
@@ -108,8 +125,11 @@ jobs:
       - name: Build candidate image
         run: scripts/build-docker-image.sh kkrepo:compat
 
+      - name: Start compatibility databases
+        run: docker compose -f "$COMPOSE_FILE" up -d --wait mysql nexus-postgres
+
       - name: Start reference and candidate services
-        run: docker compose -f "$COMPOSE_FILE" up -d mysql nexus kkrepo
+        run: docker compose -f "$COMPOSE_FILE" up -d nexus kkrepo
 
       - name: Prepare live compatibility fixtures
         run: scripts/ci/live-compat-setup.sh
@@ -141,18 +161,26 @@ jobs:
         if: always()
         run: docker compose -f "$COMPOSE_FILE" down -v
 
-  cargo-compat:
-    name: Cargo compatibility
+  nexus-compat:
+    name: Nexus compatibility
     runs-on: ubuntu-latest
-    timeout-minutes: 75
-    if: (github.event_name == 'workflow_dispatch' && inputs.suite == 'cargo') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-live-compat'))
+    timeout-minutes: 120
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.suite == 'nexus') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-live-compat'))
     env:
-      COMPOSE_FILE: docker-compose.compat-rust.yml
-      COMPOSE_PROJECT_NAME: kkrepo-rust-compat
-      LIVE_COMPAT_SUITE: cargo
+      COMPOSE_FILE: docker-compose.compat-postgres.yml
+      COMPOSE_PROJECT_NAME: kkrepo-nexus-compat
+      LIVE_COMPAT_SUITE: nexus
+      NEXUS_COMPAT_IMAGE: sonatype/nexus3:3.92.0
       NEXUS_COMPAT_PORT: "38090"
       KKREPO_COMPAT_PORT: "18092"
       KKREPO_MANAGEMENT_PORT: "18093"
+      COMPAT_WRITE_ENABLED: "true"
+      CARGO_COMPAT_ENABLED: "true"
+      PUB_COMPAT_ENABLED: "true"
+      PUB_COMPAT_HOSTED_PACKAGE: kkrepo_compat_hosted_fixture
+      PUB_COMPAT_HOSTED_VERSION: "1.0.0"
+      PUB_COMPAT_PROXY_PACKAGE: path
+      PUB_COMPAT_PROXY_VERSION: "1.9.0"
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -166,36 +194,39 @@ jobs:
           java-version: "25"
           cache: maven
 
-      - name: Validate Cargo compatibility compose file
+      - name: Validate Nexus compatibility compose file
         run: docker compose -f "$COMPOSE_FILE" config
 
       - name: Build candidate image
         run: scripts/build-docker-image.sh kkrepo:compat
 
-      - name: Start Cargo reference and candidate services
-        run: docker compose -f "$COMPOSE_FILE" up -d mysql nexus kkrepo
+      - name: Start Nexus compatibility databases
+        run: docker compose -f "$COMPOSE_FILE" up -d --wait mysql nexus-postgres
 
-      - name: Prepare Cargo compatibility fixtures
+      - name: Start Nexus reference and candidate services
+        run: docker compose -f "$COMPOSE_FILE" up -d nexus kkrepo
+
+      - name: Prepare Nexus compatibility fixtures
         run: scripts/ci/live-compat-setup.sh
 
-      - name: Run Cargo compatibility suite
+      - name: Run Nexus compatibility suite
         run: scripts/ci/run-live-compat.sh "$LIVE_COMPAT_SUITE"
 
-      - name: Collect Cargo compose logs
+      - name: Collect Nexus compatibility compose logs
         if: always()
         run: |
           mkdir -p artifacts
-          docker compose -f "$COMPOSE_FILE" ps > artifacts/cargo-compat-ps.txt || true
-          docker compose -f "$COMPOSE_FILE" logs --no-color --timestamps > artifacts/cargo-compat-compose.log || true
+          docker compose -f "$COMPOSE_FILE" ps > artifacts/nexus-compat-ps.txt || true
+          docker compose -f "$COMPOSE_FILE" logs --no-color --timestamps > artifacts/nexus-compat-compose.log || true
 
-      - name: Upload Cargo logs
+      - name: Upload Nexus compatibility logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: cargo-compat-logs
+          name: nexus-compat-logs
           path: artifacts/
           if-no-files-found: ignore
 
-      - name: Stop Cargo services
+      - name: Stop Nexus compatibility services
         if: always()
         run: docker compose -f "$COMPOSE_FILE" down -v

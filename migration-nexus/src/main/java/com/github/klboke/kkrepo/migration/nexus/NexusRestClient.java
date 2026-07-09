@@ -47,23 +47,23 @@ public class NexusRestClient {
   private static final String LOCAL_SECURITY_EXPORT_SCRIPT = """
       import groovy.json.JsonOutput
       import groovy.json.JsonSlurper
-      import java.io.ByteArrayInputStream
-      import java.util.Locale
 
+      def jdkClass = { name -> this.class.classLoader.loadClass(name) }
+      def errorText = { e -> e == null ? '' : e.class.name + ': ' + String.valueOf(e.message) }
       def request = args == null || args.trim().isEmpty()
           ? [:]
           : new JsonSlurper().parseText(args)
-      def metadataEngine = String.valueOf(request.metadataEngine ?: '').trim().toUpperCase(Locale.ROOT)
+      def metadataEngine = String.valueOf(request.metadataEngine ?: '').trim().toUpperCase()
       def warnings = []
       def users = []
       try {
         def security = null
         try {
           security = container.lookup('org.sonatype.nexus.security.config.SecurityConfigurationManager')
-        } catch (Throwable ignored) {
+        } catch (ignored) {
           try {
             security = container.lookup('org.sonatype.nexus.security.config.SecurityConfigurationManager', 'default')
-          } catch (Throwable ignoredAgain) {
+          } catch (ignoredAgain) {
             security = null
           }
         }
@@ -74,7 +74,7 @@ public class NexusRestClient {
             def passwordHash = null
             try {
               passwordHash = user.password
-            } catch (Throwable ignored) {
+            } catch (ignored) {
               passwordHash = null
             }
             [
@@ -84,8 +84,8 @@ public class NexusRestClient {
             ]
           }
         }
-      } catch (Throwable e) {
-        warnings << 'Source Nexus script API did not expose local password hashes: ' + e.class.name + ': ' + String.valueOf(e.message)
+      } catch (e) {
+        warnings << 'Source Nexus script API did not expose local password hashes: ' + errorText(e)
         users = []
       }
       def principalDetails = { bytes ->
@@ -93,12 +93,12 @@ public class NexusRestClient {
           return [:]
         }
         try {
-          def uberClassLoader = container.lookup(ClassLoader.class, 'nexus-uber')
+          def uberClassLoader = container.lookup(jdkClass('java.lang.ClassLoader'), 'nexus-uber')
           def streamClass = this.class.classLoader
               .loadClass('org.sonatype.nexus.common.io.ObjectInputStreamWithClassLoader')
           def input = streamClass
-              .getConstructor(java.io.InputStream.class, ClassLoader.class)
-              .newInstance(new ByteArrayInputStream(bytes), uberClassLoader)
+              .getConstructor(jdkClass('java.io.InputStream'), jdkClass('java.lang.ClassLoader'))
+              .newInstance(jdkClass('java.io.ByteArrayInputStream').newInstance(bytes), uberClassLoader)
           try {
             def principals = input.readObject()
             return [
@@ -109,23 +109,28 @@ public class NexusRestClient {
           } finally {
             input.close()
           }
-        } catch (Throwable ignored) {
+        } catch (ignored) {
           return [:]
         }
       }
       def apiKeys = []
       def apiKeyDomains = { apiKeyService ->
-        def domains = new LinkedHashSet()
+        def domains = []
+        def addDomain = { domain ->
+          if (domain != null && !domains.contains(domain)) {
+            domains << domain
+          }
+        }
         try {
-          ['NpmToken', 'NuGetApiKey', 'RubyGemsApiKey', 'CargoToken'].each { domain ->
+          ['NpmToken', 'NuGetApiKey', 'RubyGemsApiKey', 'CargoToken', 'PubToken'].each { domain ->
             try {
               if (apiKeyService.count(domain) > 0) {
-                domains << domain
+                addDomain(domain)
               }
-            } catch (Throwable ignored) {
+            } catch (ignored) {
             }
           }
-        } catch (Throwable ignored) {
+        } catch (ignored) {
         }
         try {
           def datastoreManager = container.lookup('org.sonatype.nexus.datastore.api.DataStoreManager')
@@ -133,7 +138,7 @@ public class NexusRestClient {
           try {
             def selected = datastoreManager.get('nexus')
             datastore = selected == null ? null : selected.orElse(null)
-          } catch (Throwable ignored) {
+          } catch (ignored) {
             datastore = null
           }
           if (datastore != null) {
@@ -142,7 +147,7 @@ public class NexusRestClient {
               def rs = connection.createStatement().executeQuery('select distinct domain from api_key_v2 order by domain')
               try {
                 while (rs.next()) {
-                  domains << rs.getString(1)
+                  addDomain(rs.getString(1))
                 }
               } finally {
                 rs.close()
@@ -151,7 +156,7 @@ public class NexusRestClient {
               connection.close()
             }
           }
-        } catch (Throwable ignored) {
+        } catch (ignored) {
         }
         return domains
       }
@@ -180,17 +185,18 @@ public class NexusRestClient {
           def namesClass = this.class.classLoader.loadClass('org.sonatype.nexus.orient.DatabaseInstanceNames')
           def securityName = namesClass.getField('SECURITY').get(null)
           securityDatabase = container.lookup(databaseClass, securityName)
-        } catch (Throwable ignored) {
+        } catch (ignored) {
           try {
             securityDatabase = databaseClass == null
                 ? container.lookup('org.sonatype.nexus.orient.DatabaseInstance', 'security')
                 : container.lookup(databaseClass, 'security')
-          } catch (Throwable ignoredAgain) {
+          } catch (ignoredAgain) {
             securityDatabase = null
           }
         }
         if (securityDatabase == null) {
-          throw new IllegalStateException('OrientDB security database is unavailable on this source metadata engine')
+          throw jdkClass('java.lang.IllegalStateException')
+              .newInstance('OrientDB security database is unavailable on this source metadata engine')
         }
         def db = securityDatabase.connect()
         try {
@@ -215,9 +221,9 @@ public class NexusRestClient {
       if (metadataEngine == 'ORIENTDB') {
         try {
           exportApiKeysFromOrientDb()
-        } catch (Throwable e) {
+        } catch (e) {
           warnings << ("Source Nexus script API did not expose API keys through the OrientDB security strategy: "
-              + e.class.name + ": " + String.valueOf(e.message))
+              + errorText(e))
           apiKeys = []
         }
         return JsonOutput.toJson([users: users, apiKeys: apiKeys, warnings: warnings])
@@ -225,9 +231,9 @@ public class NexusRestClient {
       if (metadataEngine.startsWith('DATASTORE')) {
         try {
           exportApiKeysFromService()
-        } catch (Throwable e) {
+        } catch (e) {
           warnings << ("Source Nexus script API did not expose API keys through the datastore security strategy: "
-              + e.class.name + ": " + String.valueOf(e.message))
+              + errorText(e))
           apiKeys = []
         }
         return JsonOutput.toJson([users: users, apiKeys: apiKeys, warnings: warnings])
@@ -235,18 +241,18 @@ public class NexusRestClient {
       try {
         exportApiKeysFromService()
         return JsonOutput.toJson([users: users, apiKeys: apiKeys, warnings: warnings])
-      } catch (Throwable ignored) {
+      } catch (ignored) {
         apiKeyServiceError = ignored
         apiKeys = []
       }
       try {
         exportApiKeysFromOrientDb()
-      } catch (Throwable e) {
+      } catch (e) {
         def serviceMessage = apiKeyServiceError == null
             ? ''
-            : '; ApiKeyLowLevelService strategy failed: ' + apiKeyServiceError.class.name + ': ' + String.valueOf(apiKeyServiceError.message)
+            : '; ApiKeyLowLevelService strategy failed: ' + errorText(apiKeyServiceError)
         warnings << ("Source Nexus script API did not expose API keys through the supported security strategies: "
-            + e.class.name + ": " + String.valueOf(e.message) + serviceMessage)
+            + errorText(e) + serviceMessage)
         apiKeys = []
       }
       return JsonOutput.toJson([users: users, apiKeys: apiKeys, warnings: warnings])
@@ -254,21 +260,72 @@ public class NexusRestClient {
   private static final String LOCAL_REPOSITORY_DATA_EXPORT_SCRIPT = """
       import groovy.json.JsonOutput
       import groovy.json.JsonSlurper
-      import java.time.Instant
 
+      def jdkClass = { name -> this.class.classLoader.loadClass(name) }
       def request = args == null || args.trim().isEmpty()
           ? [:]
           : new JsonSlurper().parseText(args)
       def repositoryName = String.valueOf(request.repositoryName ?: '').trim()
       if (repositoryName.isEmpty()) {
-        throw new IllegalArgumentException('repositoryName is required')
+        throw jdkClass('java.lang.IllegalArgumentException').newInstance('repositoryName is required')
       }
       def repositoryFormat = String.valueOf(request.repositoryFormat ?: '').trim().toLowerCase()
       def metadataEngine = String.valueOf(request.metadataEngine ?: '').trim().toUpperCase()
-      int pageSize = Math.max(1, Math.min(((request.pageSize ?: 1000) as Integer), 5000))
+      def pageSize = ((request.pageSize ?: 1000) as Integer)
+      if (pageSize < 1) {
+        pageSize = 1
+      }
+      if (pageSize > 5000) {
+        pageSize = 5000
+      }
       def afterPath = request.afterPath == null ? '' : String.valueOf(request.afterPath)
       def since = request.since == null ? '' : String.valueOf(request.since).trim()
-      def sinceDate = since.isEmpty() ? null : Date.from(Instant.parse(since))
+      def instantClass = jdkClass('java.time.Instant')
+      def parseInstant = { value ->
+        try {
+          return instantClass.parse(String.valueOf(value))
+        } catch (ignored) {
+          return null
+        }
+      }
+      def sinceInstant = since.isEmpty() ? null : parseInstant(since)
+      def instantValue = { value ->
+        if (value == null) {
+          return null
+        }
+        if (instantClass.isInstance(value)) {
+          return value
+        }
+        try {
+          if (value.respondsTo('toInstant')) {
+            return value.toInstant()
+          }
+        } catch (ignored) {
+        }
+        def valueClassName = value.getClass().name
+        try {
+          if (valueClassName == 'java.time.OffsetDateTime'
+              || valueClassName == 'java.time.ZonedDateTime') {
+            return value.toInstant()
+          }
+          if (valueClassName == 'java.time.LocalDateTime') {
+            return value.atZone(jdkClass('java.time.ZoneOffset').UTC).toInstant()
+          }
+        } catch (ignored) {
+        }
+        return parseInstant(value)
+      }
+      def isoValue = { value ->
+        if (value == null) {
+          return null
+        }
+        def instant = instantValue(value)
+        return instant == null ? String.valueOf(value) : String.valueOf(instant)
+      }
+      def iso = { value ->
+        def instant = instantValue(value)
+        return instant == null ? null : String.valueOf(instant)
+      }
 
       def normalize
       normalize = { value ->
@@ -278,32 +335,27 @@ public class NexusRestClient {
         if (value instanceof byte[]) {
           try {
             return normalize(new JsonSlurper().parseText(new String(value, 'UTF-8')))
-          } catch (Throwable ignored) {
+          } catch (ignored) {
             return String.valueOf(value)
           }
         }
-        if (value instanceof CharSequence) {
+        def valueClassName = value.getClass().name
+        if (value instanceof String || valueClassName.contains('GString')) {
           def raw = String.valueOf(value)
           def trimmed = raw.trim()
           if ((trimmed.startsWith('{') && trimmed.endsWith('}'))
               || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
             try {
               return normalize(new JsonSlurper().parseText(trimmed))
-            } catch (Throwable ignored) {
+            } catch (ignored) {
             }
           }
           return raw
         }
-        if (value instanceof Date) {
-          return value.toInstant().toString()
+        def instant = instantValue(value)
+        if (instant != null) {
+          return String.valueOf(instant)
         }
-        try {
-          if (value instanceof java.time.temporal.TemporalAccessor) {
-            return String.valueOf(value)
-          }
-        } catch (Throwable ignored) {
-        }
-        def valueClassName = value.getClass().name
         if (valueClassName == 'com.orientechnologies.orient.core.id.ORecordId'
             || valueClassName == 'com.orientechnologies.orient.core.id.ORID') {
           return String.valueOf(value)
@@ -311,66 +363,32 @@ public class NexusRestClient {
         if (valueClassName == 'com.orientechnologies.orient.core.record.impl.ODocument') {
           return normalize(value.toMap())
         }
+        if (valueClassName == 'org.postgresql.util.PGobject' && value.respondsTo('getValue')) {
+          return normalize(value.getValue())
+        }
         if (value instanceof Map) {
-          def out = new LinkedHashMap()
+          def out = [:]
           value.each { k, v -> out[String.valueOf(k)] = normalize(v) }
           return out
         }
-        if (value instanceof Iterable) {
+        if (value.getClass().isArray()) {
           return value.collect { normalize(it) }
+        }
+        try {
+          if ((valueClassName.startsWith('java.util.') || valueClassName.startsWith('groovy.json.'))
+              && value.respondsTo('iterator')) {
+            return value.collect { normalize(it) }
+          }
+        } catch (ignored) {
         }
         return value
       }
-      def iso = { value -> value instanceof Date ? value.toInstant().toString() : null }
       def text = { value ->
         if (value == null) {
           return null
         }
         def s = String.valueOf(value)
         return s.isEmpty() ? null : s
-      }
-      def isoValue = { value ->
-        if (value == null) {
-          return null
-        }
-        if (value instanceof Date) {
-          return value.toInstant().toString()
-        }
-        try {
-          if (value instanceof java.time.temporal.TemporalAccessor) {
-            return String.valueOf(value)
-          }
-        } catch (Throwable ignored) {
-        }
-        return String.valueOf(value)
-      }
-      def instantValue = { value ->
-        if (value == null) {
-          return null
-        }
-        if (value instanceof Date) {
-          return value.toInstant()
-        }
-        try {
-          if (value instanceof java.time.Instant) {
-            return value
-          }
-          if (value instanceof java.time.OffsetDateTime) {
-            return value.toInstant()
-          }
-          if (value instanceof java.time.ZonedDateTime) {
-            return value.toInstant()
-          }
-          if (value instanceof java.time.LocalDateTime) {
-            return value.atZone(java.time.ZoneOffset.UTC).toInstant()
-          }
-        } catch (Throwable ignored) {
-        }
-        try {
-          return Instant.parse(String.valueOf(value))
-        } catch (Throwable ignored) {
-          return null
-        }
       }
       def datastorePrefix = { format ->
         def prefixes = [
@@ -382,6 +400,7 @@ public class NexusRestClient {
           docker: 'DOCKER',
           nuget: 'NUGET',
           rubygems: 'RUBYGEMS',
+          pub: 'PUB',
           yum: 'YUM',
           raw: 'RAW',
           cargo: 'CARGO'
@@ -414,28 +433,30 @@ public class NexusRestClient {
         ])
       }
       def changedSinceOrient = { asset ->
-        if (sinceDate == null) {
+        if (sinceInstant == null) {
           return true
         }
         def blobUpdated = asset.field('blob_updated')
-        if (blobUpdated instanceof Date && !blobUpdated.before(sinceDate)) {
+        def blobUpdatedInstant = instantValue(blobUpdated)
+        if (blobUpdatedInstant != null && !blobUpdatedInstant.isBefore(sinceInstant)) {
           return true
         }
         def blobCreated = asset.field('blob_created')
-        if (blobCreated instanceof Date && !blobCreated.before(sinceDate)) {
+        def blobCreatedInstant = instantValue(blobCreated)
+        if (blobCreatedInstant != null && !blobCreatedInstant.isBefore(sinceInstant)) {
           return true
         }
         if (blobUpdated == null && blobCreated == null) {
           def lastUpdated = asset.field('last_updated')
-          return lastUpdated instanceof Date && !lastUpdated.before(sinceDate)
+          def lastUpdatedInstant = instantValue(lastUpdated)
+          return lastUpdatedInstant != null && !lastUpdatedInstant.isBefore(sinceInstant)
         }
         return false
       }
       def changedSinceDatastore = { row ->
-        if (sinceDate == null) {
+        if (sinceInstant == null) {
           return true
         }
-        def sinceInstant = sinceDate.toInstant()
         def blobUpdated = instantValue(row.blobUpdated)
         if (blobUpdated != null && !blobUpdated.isBefore(sinceInstant)) {
           return true
@@ -458,7 +479,7 @@ public class NexusRestClient {
           def namesClass = this.class.classLoader.loadClass('org.sonatype.nexus.orient.DatabaseInstanceNames')
           def componentName = namesClass.getField('COMPONENT').get(null)
           componentDatabase = container.lookup(databaseClass, componentName)
-        } catch (Throwable ignored) {
+        } catch (ignored) {
           componentDatabase = container.lookup(databaseClass, 'component')
         }
         def queryClass = this.class.classLoader
@@ -690,13 +711,15 @@ public class NexusRestClient {
       }
       try {
         return exportDatastore()
-      } catch (Throwable ignored) {
+      } catch (ignored) {
         return exportOrientDb()
       }
       """;
   private static final String SOURCE_PROFILE_PROBE_SCRIPT = """
       import groovy.json.JsonOutput
 
+      def jdkClass = { name -> this.class.classLoader.loadClass(name) }
+      def errorText = { e -> e == null ? '' : e.class.name + ': ' + String.valueOf(e.message) }
       def out = [
         metadataEngine: 'unknown',
         datastore: [:],
@@ -707,14 +730,14 @@ public class NexusRestClient {
         def applicationStatus = null
         try {
           applicationStatus = container.lookup('org.sonatype.nexus.common.app.ApplicationStatusSource')
-        } catch (Throwable ignoredAgain) {
+        } catch (ignoredAgain) {
           applicationStatus = null
         }
         def status = applicationStatus == null ? null : applicationStatus.getSystemStatus()
         if (status != null) {
           out.nexusVersion = status.version == null ? null : String.valueOf(status.version)
         }
-      } catch (Throwable ignored) {
+      } catch (ignored) {
         // Nexus also exposes the version in the Server header, so ApplicationStatusSource failures
         // are not actionable migration warnings.
       }
@@ -783,11 +806,18 @@ public class NexusRestClient {
           docker: 'DOCKER',
           nuget: 'NUGET',
           rubygems: 'RUBYGEMS',
+          pub: 'PUB',
           yum: 'YUM',
           raw: 'RAW',
           cargo: 'CARGO'
         ]
-        def upperTables = allTables.collect { String.valueOf(it).toUpperCase() } as Set
+        def upperTables = []
+        allTables.each { tableName ->
+          def upper = String.valueOf(tableName).toUpperCase()
+          if (!upperTables.contains(upper)) {
+            upperTables << upper
+          }
+        }
         def contentModels = [:]
         datastoreFormats.each { format, prefix ->
           def tableNames = [
@@ -811,7 +841,13 @@ public class NexusRestClient {
               columnResult.close()
             }
             columnsByTable[logicalName] = foundColumns
-            def upperColumns = foundColumns.collect { String.valueOf(it).toUpperCase() } as Set
+            def upperColumns = []
+            foundColumns.each { columnName ->
+              def upper = String.valueOf(columnName).toUpperCase()
+              if (!upperColumns.contains(upper)) {
+                upperColumns << upper
+              }
+            }
             def key = logicalName == 'contentRepository' ? 'content_repository'
                 : logicalName == 'assetBlob' ? 'asset_blob'
                 : logicalName
@@ -837,7 +873,7 @@ public class NexusRestClient {
         def datastoreManager = null
         try {
           datastoreManager = container.lookup('org.sonatype.nexus.datastore.api.DataStoreManager')
-        } catch (Throwable ignored) {
+        } catch (ignored) {
           datastoreManager = null
         }
         if (datastoreManager != null) {
@@ -845,7 +881,7 @@ public class NexusRestClient {
           try {
             def selected = datastoreManager.get('nexus')
             datastore = selected == null ? null : selected.orElse(null)
-          } catch (Throwable ignored) {
+          } catch (ignored) {
             datastore = null
           }
           if (datastore == null) {
@@ -865,11 +901,11 @@ public class NexusRestClient {
         def dataSource = null
         if (out.metadataEngine == 'unknown') {
           try {
-            dataSource = container.lookup(javax.sql.DataSource.class, 'nexus')
-          } catch (Throwable ignored) {
+            dataSource = container.lookup(jdkClass('javax.sql.DataSource'), 'nexus')
+          } catch (ignored) {
             try {
-              dataSource = container.lookup(javax.sql.DataSource.class)
-            } catch (Throwable ignoredAgain) {
+              dataSource = container.lookup(jdkClass('javax.sql.DataSource'))
+            } catch (ignoredAgain) {
               dataSource = null
             }
           }
@@ -882,18 +918,18 @@ public class NexusRestClient {
             connection.close()
           }
         }
-      } catch (Throwable e) {
-        out.warnings << 'datastore probe failed: ' + e.class.name + ': ' + String.valueOf(e.message)
+      } catch (e) {
+        out.warnings << 'datastore probe failed: ' + errorText(e)
       }
       if (out.metadataEngine == 'unknown') {
         try {
           container.lookup('org.sonatype.nexus.orient.DatabaseInstance')
           out.metadataEngine = 'ORIENTDB'
-        } catch (Throwable ignored) {
+        } catch (ignored) {
           try {
             container.lookup('org.sonatype.nexus.orient.DatabaseInstance', 'component')
             out.metadataEngine = 'ORIENTDB'
-          } catch (Throwable ignoredAgain) {
+          } catch (ignoredAgain) {
             out.warnings << 'metadata engine could not be identified'
           }
         }

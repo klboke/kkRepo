@@ -123,7 +123,8 @@ final class NexusMigrationAdapters {
 
     @Override
     protected boolean supportsContent(String format, String type) {
-      return !"cargo".equals(lower(format));
+      String normalized = lower(format);
+      return !"cargo".equals(normalized) && !"pub".equals(normalized);
     }
 
     @Override

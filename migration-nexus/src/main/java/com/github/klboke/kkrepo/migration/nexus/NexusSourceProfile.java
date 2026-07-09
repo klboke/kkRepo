@@ -196,7 +196,7 @@ public record NexusSourceProfile(
       ContentModelFingerprint contentModel = datastoreContentModels.get(format);
       boolean datastoreContent = contentModel != null && contentModel.supported();
       boolean content = config
-          && ((metadataEngine == MetadataEngine.ORIENTDB && !"cargo".equals(format))
+          && ((metadataEngine == MetadataEngine.ORIENTDB && !"cargo".equals(format) && !"pub".equals(format))
               || ((metadataEngine == MetadataEngine.DATASTORE_H2
                   || metadataEngine == MetadataEngine.DATASTORE_POSTGRESQL)
                   && datastoreContent));
@@ -205,7 +205,7 @@ public record NexusSourceProfile(
           recipes,
           config,
           content,
-          content ? contentEvidence(metadataEngine, contentModel) : config ? contentBlockedEvidence(metadataEngine, contentModel) : "unsupported-format",
+          content ? contentEvidence(metadataEngine, contentModel) : config ? contentBlockedEvidence(format, metadataEngine, contentModel) : "unsupported-format",
           contentModel));
     }
     return Map.copyOf(capabilities);
@@ -231,6 +231,7 @@ public record NexusSourceProfile(
   }
 
   private static String contentBlockedEvidence(
+      String format,
       MetadataEngine metadataEngine,
       ContentModelFingerprint contentModel) {
     if (metadataEngine == MetadataEngine.DATASTORE_H2

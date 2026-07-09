@@ -1,8 +1,8 @@
 # kkrepo MySQL ER Design
 
-The current MySQL schema is defined by `server/src/main/resources/db/migration/V1__init_schema.sql` through `V27__ui_settings.sql`, and is executed by Flyway during service startup. The target database is MySQL 8 InnoDB.
+The current MySQL schema is defined by `server/src/main/resources/db/migration/V1__init_schema.sql` through `V28__pub_upload_session.sql`, and is executed by Flyway during service startup. The target database is MySQL 8 InnoDB.
 
-The schema uses a "unified content table + format field" model for shared asset/blob data. Cargo / Rust currently uses this shared model with Cargo metadata stored in component/asset attributes. Formats with protocol-specific relationships, such as Docker/OCI manifests, tags, upload sessions, auth tokens, and referrers, add dedicated side tables. This is more suitable for migration from Nexus and unified admin-console queries. If a specific format becomes significantly larger later, it can be optimized with partitioning or additional dedicated tables.
+The schema uses a "unified content table + format field" model for shared asset/blob data. Cargo / Rust and Dart / Pub use this shared model with protocol metadata stored in component/asset attributes. Pub adds `pub_upload_session` for the official multi-step publish flow, and formats with other protocol-specific relationships, such as Docker/OCI manifests, tags, upload sessions, auth tokens, and referrers, add dedicated side tables. This is more suitable for migration from Nexus and unified admin-console queries. If a specific format becomes significantly larger later, it can be optimized with partitioning or additional dedicated tables.
 
 ## Repository And Content ER
 
@@ -50,6 +50,7 @@ erDiagram
   REPOSITORY ||--o| PROXY_REMOTE_STATE : remote_health
   REPOSITORY ||--o{ METADATA_REBUILD_MARKER : maven_metadata_queue
   REPOSITORY ||--o{ REPOSITORY_INDEX_REBUILD_MARKER : index_queue
+  REPOSITORY ||--o{ PUB_UPLOAD_SESSION : pub_upload
   SPRING_SESSION ||--o{ SPRING_SESSION_ATTRIBUTES : has
   MIGRATION_JOB ||--o{ MIGRATION_CHECKPOINT : records
   MIGRATION_JOB ||--o{ MIGRATION_VALIDATION_RESULT : validates
@@ -100,6 +101,7 @@ erDiagram
 | `auth_ticket` | Short-lived authentication ticket, stored by token hash and cleaned by expiration time |
 | `maintenance_cursor` | Shared cursor for background maintenance tasks, such as blob reconcile scan watermarks |
 | `ui_settings` | Singleton UI preference table, currently used for default language selection |
+| `pub_upload_session` | Dart / Pub publish upload session state, including session/field tokens, principal, expiration, temporary blob reference, parsed package/version, checksums, size, error, and finalized time |
 
 ### Permission Layer
 
@@ -146,3 +148,4 @@ erDiagram
 14. Anonymous access uses the identity and roles specified by `security_anonymous_config`; it does not bypass the permission model with a global read-only allow. Nexus default `NexusAuthorizingRealm/anonymous` maps to local `Local/anonymous`.
 15. Migration is treated as a recoverable product feature: `migration_checkpoint` handles idempotent import of configuration/security objects, and `repository_data_migration_*` handles discover, claim, retry, resume, and progress statistics for repository asset data migration.
 16. V24 normalizes historical `jindo` / `jindo-oss` blob store engines to `oss-native`. The source of truth for large blobs remains OSS/S3/File blob store; MySQL stores only metadata, state, indexes, and references.
+17. V28 adds `pub_upload_session` because Pub publish is a multi-request protocol. Session state, temporary blob references, parsed metadata, and finalization status must survive replica switches and restarts; archive bytes still live in blob storage and are not stored in MySQL.

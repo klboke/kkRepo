@@ -130,6 +130,55 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
+  void pubRepositoriesUseBearerAuthentication() throws Exception {
+    AuthenticatedSubject alice = subject("alice");
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
+    authentication.pubAuthenticated = Optional.of(alice);
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository("pub-hosted", RepositoryFormat.PUB, RepositoryType.HOSTED)),
+        false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/repository/pub-hosted/api/packages/example_package"),
+        response.proxy(),
+        chain);
+
+    assertEquals(1, authentication.pubCalls);
+    assertEquals(1, chain.calls);
+    assertSame(alice.permissionSubject(), decisions.subject);
+    assertEquals(PermissionAction.READ, decisions.permission.action());
+  }
+
+  @Test
+  void pubChallengeUsesBearerRealm() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        new RecordingDecisionService(AccessDecision.allow()),
+        new FakeRepositoryDao(repository("pub-hosted", RepositoryFormat.PUB)),
+        false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/repository/pub-hosted/api/packages/example_package"),
+        response.proxy(),
+        chain);
+
+    assertEquals(1, authentication.pubCalls);
+    assertEquals(0, chain.calls);
+    assertEquals(HttpServletResponse.SC_UNAUTHORIZED, response.status);
+    assertEquals(
+        "Bearer realm=\"pub\", message=\"Authentication required\"",
+        response.headers.get("WWW-Authenticate"));
+  }
+
+  @Test
   void cargoSparseIndexRequiresAuthenticationWhenAnonymousReadIsDisabled() throws Exception {
     assertCargoReadRequiresAuthenticationWithoutAnonymousFallback("/repository/cargo-hosted/kk/re/kkrepo_e2e");
   }
@@ -374,6 +423,26 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
+  void pubPublishRoutesRequireAddPermission() throws Exception {
+    assertPubRouteAction("GET", "/repository/pub-hosted/api/packages/versions/new", PermissionAction.ADD);
+    assertPubRouteAction("POST", "/repository/pub-hosted/api/packages/versions/upload/session-1", PermissionAction.ADD);
+    assertPubRouteAction("GET", "/repository/pub-hosted/api/packages/versions/finalize/session-1", PermissionAction.ADD);
+  }
+
+  @Test
+  void malformedPubPublishRoutesUseNormalPermissionMapping() throws Exception {
+    assertPubRouteAction("GET", "/repository/pub-hosted/api/packages/versions/finalize/", PermissionAction.READ);
+  }
+
+  @Test
+  void pubProxyAndGroupPublishRoutesReachProtocolLayerWithoutChallenge() throws Exception {
+    assertInvalidPubPublishRoutePassesThrough(repository(
+        "pub-proxy", RepositoryFormat.PUB, RepositoryType.PROXY));
+    assertInvalidPubPublishRoutePassesThrough(repository(
+        "pub-group", RepositoryFormat.PUB, RepositoryType.GROUP));
+  }
+
+  @Test
   void cargoYankRoutesUseEditPermission() throws Exception {
     assertCargoRouteAction(
         "DELETE",
@@ -585,6 +654,46 @@ class RepositorySecurityFilterTest {
     assertEquals(action, decisions.permission.action());
   }
 
+  private static void assertPubRouteAction(String method, String uri, PermissionAction action) throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
+    authentication.pubAuthenticated = Optional.of(subject("alice"));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository("pub-hosted", RepositoryFormat.PUB, RepositoryType.HOSTED)),
+        false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(request(method, uri), response.proxy(), chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(action, decisions.permission.action());
+  }
+
+  private static void assertInvalidPubPublishRoutePassesThrough(RepositoryRecord repository) throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.deny("should not decide"));
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository),
+        false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/repository/" + repository.name() + "/api/packages/versions/new"),
+        response.proxy(),
+        chain);
+
+    assertEquals(0, authentication.pubCalls);
+    assertEquals(0, decisions.decisions);
+    assertEquals(1, chain.calls);
+    assertEquals(0, response.status);
+  }
+
   private static void assertCargoPublishRouteDoesNotFallBackToEditWhenAddDenied() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("alice")));
     RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.deny("missing add")) {
@@ -617,12 +726,16 @@ class RepositorySecurityFilterTest {
   }
 
   private static RepositoryRecord repository(String name, RepositoryFormat format) {
+    return repository(name, format, RepositoryType.GROUP);
+  }
+
+  private static RepositoryRecord repository(String name, RepositoryFormat format, RepositoryType type) {
     return new RepositoryRecord(
         1L,
         name,
         format,
-        RepositoryType.GROUP,
-        format.name().toLowerCase() + "-group",
+        type,
+        format.name().toLowerCase() + "-" + type.name().toLowerCase(),
         true,
         1L,
         null,
@@ -717,6 +830,8 @@ class RepositorySecurityFilterTest {
     private int anonymousCalls;
     private Optional<AuthenticatedSubject> rubygemsAuthenticated = Optional.empty();
     private int rubygemsCalls;
+    private Optional<AuthenticatedSubject> pubAuthenticated = Optional.empty();
+    private int pubCalls;
 
     private StubAuthenticationService(AuthenticatedSubject anonymous) {
       this(Optional.empty(), anonymous);
@@ -741,6 +856,12 @@ class RepositorySecurityFilterTest {
     public Optional<AuthenticatedSubject> authenticateRubygems(HttpServletRequest request) {
       rubygemsCalls++;
       return rubygemsAuthenticated;
+    }
+
+    @Override
+    public Optional<AuthenticatedSubject> authenticatePub(HttpServletRequest request) {
+      pubCalls++;
+      return pubAuthenticated;
     }
 
     @Override

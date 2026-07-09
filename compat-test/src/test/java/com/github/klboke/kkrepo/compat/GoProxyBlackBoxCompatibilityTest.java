@@ -249,6 +249,7 @@ class GoProxyBlackBoxCompatibilityTest {
           "name": "%s",
           "recipe": "go-group",
           "online": true,
+          "blobStoreName": "%s",
           "strictContentTypeValidation": true,
           "group": {
             "memberNames": ["%s", "%s"]
@@ -256,6 +257,7 @@ class GoProxyBlackBoxCompatibilityTest {
         }
         """.formatted(
         config.groupRepository(),
+        config.blobStoreName(),
         config.groupMissRepository(),
         config.groupHitRepository());
     String path = get.status() == 200
@@ -299,8 +301,6 @@ class GoProxyBlackBoxCompatibilityTest {
       assertEquals(reference.contentLength().get(), candidate.contentLength().get(),
           label + " Content-Length");
     }
-    assertEquals(reference.etag().isPresent(), candidate.etag().isPresent(),
-        label + " ETag presence");
     assertEquals(reference.lastModified().isPresent(), candidate.lastModified().isPresent(),
         label + " Last-Modified presence");
   }

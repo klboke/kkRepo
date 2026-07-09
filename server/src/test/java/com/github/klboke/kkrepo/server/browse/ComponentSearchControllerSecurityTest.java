@@ -103,16 +103,17 @@ class ComponentSearchControllerSecurityTest {
   }
 
   @Test
-  void searchParsesNugetRubygemsAndYumFormats() {
+  void searchParsesNugetPubRubygemsAndYumFormats() {
     StubComponentDao components = new StubComponentDao();
     RecordingSecurityService security = new RecordingSecurityService(permission -> AccessDecision.allow());
     ComponentSearchController controller = controller(components, subject("alice"), null, security);
 
     controller.search(null, "nuget", null, request("GET", "/internal/search/components"));
+    controller.search(null, "pub", null, request("GET", "/internal/search/components"));
     controller.search(null, "rubygems", null, request("GET", "/internal/search/components"));
     controller.search(null, "yum", null, request("GET", "/internal/search/components"));
 
-    assertEquals(List.of("|nuget|300", "|rubygems|300", "|yum|300"), components.calls);
+    assertEquals(List.of("|nuget|300", "|pub|300", "|rubygems|300", "|yum|300"), components.calls);
   }
 
   @Test

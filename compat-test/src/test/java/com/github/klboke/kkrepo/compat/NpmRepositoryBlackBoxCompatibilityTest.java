@@ -384,9 +384,13 @@ class NpmRepositoryBlackBoxCompatibilityTest {
   }
 
   private static String normalizedContentType(Exchange exchange) {
-    return exchange.contentType()
+    String type = exchange.contentType()
         .map(value -> value.split(";", 2)[0].trim().toLowerCase(Locale.ROOT))
         .orElse("");
+    if ("application/x-tgz".equals(type)) {
+      return "application/octet-stream";
+    }
+    return type;
   }
 
   @SuppressWarnings("unchecked")

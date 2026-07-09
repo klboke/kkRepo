@@ -116,6 +116,8 @@ class RepositoryContentControllerNugetTest {
         null, null, null,
         null, null,
         null, null, null,
+        null, null, null,
+        null, null, null,
         nuget, null, null,
         null, null, null,
         new ObjectMapper(),

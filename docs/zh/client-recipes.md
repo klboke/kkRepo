@@ -229,6 +229,55 @@ cargo yank demo-crate --version 1.0.0 --undo --registry kkrepo_hosted
 
 Cargo source replacement 只适合替换源与原始源内容等价的场景。如果 group 同时混合私有 hosted crate 和 crates.io proxy，优先通过 `[registries]` 使用 alternate registry。
 
+## Dart / Pub
+
+依赖解析使用 group 或 proxy 仓库，发布使用 hosted 仓库。
+
+先为 hosted 仓库添加 token，命令提示输入时粘贴完整的 `PubToken.<secret>` 值：
+
+```bash
+dart pub token add https://nexus.example.com/repository/pub-hosted
+```
+
+依赖解析可以使用 group 仓库：
+
+```bash
+PUB_HOSTED_URL=https://nexus.example.com/repository/pub-group dart pub get
+```
+
+Flutter 项目使用同一个 hosted URL：
+
+```bash
+PUB_HOSTED_URL=https://nexus.example.com/repository/pub-group flutter pub get
+```
+
+在 `pubspec.yaml` 中配置单个私有依赖：
+
+```yaml
+dependencies:
+  demo_package:
+    hosted:
+      url: https://nexus.example.com/repository/pub-group
+      name: demo_package
+    version: ^1.0.0
+```
+
+发布到 hosted 仓库时设置 `publish_to`：
+
+```yaml
+name: demo_package
+version: 1.0.0
+publish_to: https://nexus.example.com/repository/pub-hosted
+```
+
+然后执行发布：
+
+```bash
+dart pub publish
+```
+
+如果要通过 kkrepo 搜索发现包，可以在 Browse UI 选择 Pub 格式过滤，或调用 component search API 时带上 `format=pub`。
+
 ## NuGet
 
 添加 source：

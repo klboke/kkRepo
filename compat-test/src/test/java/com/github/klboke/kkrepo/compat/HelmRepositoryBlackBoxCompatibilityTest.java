@@ -123,6 +123,44 @@ class HelmRepositoryBlackBoxCompatibilityTest {
     }
   }
 
+  @Test
+  void hostedRoundTripMatchesNexusWhenConfigured() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeTrue(config.configured(),
+        "Set NEXUS_COMPAT_BASE_URL and KKREPO_COMPAT_BASE_URL to run Helm black-box compatibility");
+
+    if (config.setupEnabled()) {
+      ensureNexusRepositories(config);
+      ensureKkRepoRepositories(config);
+    }
+
+    ChartFixture fixture = ChartFixture.create();
+    try {
+      Exchange referencePush = push(config.nexusHosted(), fixture);
+      Exchange candidatePush = push(config.nexusPlusHosted(), fixture);
+      assertSameStatus("hosted push", referencePush, candidatePush);
+      assertEquals(201, referencePush.status(), "reference hosted push status");
+      assertEquals(201, candidatePush.status(), "kkrepo hosted push status");
+
+      assertIndexContains("hosted index",
+          waitForIndexContains(config.nexusHosted(), fixture),
+          waitForIndexContains(config.nexusPlusHosted(), fixture),
+          fixture.chartName(),
+          fixture.version(),
+          fixture.fileName());
+      assertChartMatches("hosted chart",
+          get(config.nexusHosted(), fixture.fileName()),
+          get(config.nexusPlusHosted(), fixture.fileName()),
+          fixture.bytes());
+      assertSameStatus("hosted HEAD",
+          head(config.nexusHosted(), fixture.fileName()),
+          head(config.nexusPlusHosted(), fixture.fileName()));
+    } finally {
+      delete(config.nexusHosted(), fixture.fileName());
+      delete(config.nexusPlusHosted(), fixture.fileName());
+    }
+  }
+
   private static Exchange push(Endpoint endpoint, ChartFixture fixture) throws Exception {
     String boundary = "kkrepo-helm-compat-" + System.nanoTime();
     ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -374,7 +412,7 @@ class HelmRepositoryBlackBoxCompatibilityTest {
           setting("compat.helm.hostedRepository", "COMPAT_HELM_HOSTED_REPOSITORY").orElse("helm-hosted"),
           setting("compat.helm.proxyRepository", "COMPAT_HELM_PROXY_REPOSITORY").orElse("helm-proxy"),
           stripTrailingSlash(setting("compat.helm.remoteUrl", "COMPAT_HELM_REMOTE_URL")
-              .orElse("https://charts.bitnami.com/bitnami")));
+              .orElse("https://helm.github.io/examples")));
     }
 
     boolean configured() {

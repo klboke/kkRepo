@@ -2,7 +2,7 @@
 
 ## What is kkrepo?
 
-kkrepo is a Nexus-compatible, self-hosted artifact repository for common package formats such as Maven, npm, PyPI, Go, Helm, Cargo/Rust, Docker/OCI, NuGet, RubyGems, Yum, and Raw.
+kkrepo is a Nexus-compatible, self-hosted artifact repository for common package formats such as Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Docker/OCI, NuGet, RubyGems, Yum, and Raw.
 
 It keeps Nexus-like client URLs, protocol behavior, permissions, and migration goals while using MySQL for metadata and OSS/S3-compatible storage for blobs.
 
@@ -28,6 +28,7 @@ Current supported formats:
 - Go
 - Helm
 - Cargo / Rust
+- Dart / Pub
 - Docker / OCI
 - NuGet
 - RubyGems
@@ -42,7 +43,7 @@ For supported non-Docker formats, the main client URL shape is compatible with N
 /repository/<repo>/<artifact-path>
 ```
 
-This helps preserve Maven, npm, pip, Helm, Cargo, NuGet, RubyGems, Yum, Raw, and CI client configuration during migration for formats covered by the migration flow.
+This helps preserve Maven, npm, pip, Helm, Cargo, Dart/Flutter Pub, NuGet, RubyGems, Yum, Raw, and CI client configuration during migration for formats covered by the migration flow.
 
 Docker / OCI uses the Registry HTTP API V2 `/v2/...` route instead of `/repository/<repo>/...`: shared-entrypoint deployments use `<host>/<repo>/<image>:<tag>`, and repository-level connector ports can expose `<host>:<repo-port>/<image>:<tag>`.
 
@@ -131,6 +132,12 @@ Do not assume Docker pull/push works through `/repository/<repo>/...`.
 Cargo hosted, proxy, and group repositories are supported through the Cargo sparse registry protocol. kkrepo supports `cargo publish`, fetch/download, yank/unyank, `cargo search`, `CargoToken` authentication, and hosted `.crate` upload through the UI/API.
 
 Nexus Cargo hosted repository migration is supported for datastore-era H2/PostgreSQL sources when preflight proves the Cargo content model. Unknown schema fingerprints fail closed in the migration plan, and OrientDB-era sources do not enable Cargo content export.
+
+## Is Dart / Pub supported?
+
+Dart / Pub hosted, proxy, and group repositories are supported through the Hosted Pub Repository V2 protocol. kkrepo supports `dart pub publish`, `dart pub get`, `flutter pub get`, `PubToken` bearer authentication, package/version metadata, archive download, Pub search, and hosted `.tar.gz` upload through the UI/API.
+
+Nexus 3.92.0 Pub hosted repository migration is supported when preflight proves the Pub content model. Explicitly selected Pub proxy cache migration is also supported when the migration plan is `FULL`; otherwise proxy repositories refill from upstream after cutover.
 
 ## Is kkrepo production-ready?
 

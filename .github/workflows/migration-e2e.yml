@@ -61,6 +61,17 @@ jobs:
             kkrepo-port: 18096
             management-port: 18097
             docker-port: 18187
+          - nexus-version: 3.92.0
+            project-suffix: nexus-3920-pg
+            metadata-engine: datastore-postgresql
+            expected-adapter: DatastorePostgresqlNexusAdapter
+            nexus-db-service: nexus-postgres
+            nexus-jvm-args: "-Dnexus.datastore.enabled=true -Dnexus.datastore.nexus.jdbcUrl=jdbc:postgresql://nexus-postgres:5432/nexus?currentSchema=nexus -Dnexus.datastore.nexus.username=nexus -Dnexus.datastore.nexus.password=nexus"
+            compose-profiles: nexus-postgres
+            nexus-port: 28094
+            kkrepo-port: 18098
+            management-port: 18099
+            docker-port: 18189
     env:
       COMPOSE_FILE: docker-compose.compat.yml
       COMPOSE_PROJECT_NAME: kkrepo-migration-${{ matrix.project-suffix }}
@@ -70,7 +81,7 @@ jobs:
       NEXUS_COMPAT_PORT: ${{ matrix.nexus-port }}
       NEXUS_COMPAT_BASE_URL: http://127.0.0.1:${{ matrix.nexus-port }}
       NEXUS_COMPAT_USERNAME: admin
-      NEXUS_COMPAT_PASSWORD: "123456"
+      NEXUS_COMPAT_PASSWORD: "Admin1234"
       KKREPO_COMPAT_PORT: ${{ matrix.kkrepo-port }}
       KKREPO_MANAGEMENT_PORT: ${{ matrix.management-port }}
       KKREPO_COMPAT_BASE_URL: http://127.0.0.1:${{ matrix.kkrepo-port }}

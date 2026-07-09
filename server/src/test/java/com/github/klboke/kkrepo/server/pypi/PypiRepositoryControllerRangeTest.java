@@ -2,12 +2,15 @@ package com.github.klboke.kkrepo.server.pypi;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.server.RepositoryContentController;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
+import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -24,18 +27,27 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 class PypiRepositoryControllerRangeTest {
   @Test
   void packageDownloadHonorsSingleRangeRequest() throws Exception {
-    PypiRepositoryController controller = new PypiRepositoryController(
+    RepositoryContentController controller = new RepositoryContentController(
         new RepositoryRuntimeRegistry(new SingleRepositoryDao(), 0),
-        new RangeHostedService(),
+        null, null, null,
+        null, null,
+        null, null,
         null,
-        null,
-        null);
+        null, null, null,
+        null, null,
+        new RangeHostedService(), null, null,
+        null, null, null,
+        null, null, null,
+        null, null, null,
+        null, null, null,
+        new ObjectMapper(),
+        new ForwardedHeaderPolicy(""));
     MockHttpServletRequest request = new MockHttpServletRequest(
         "GET",
         "/repository/pypi/packages/demo/1.0.0/demo-1.0.0.whl");
     request.addHeader(HttpHeaders.RANGE, "bytes=2-4");
 
-    ResponseEntity<StreamingResponseBody> response = controller.getPackage("pypi", request);
+    ResponseEntity<StreamingResponseBody> response = controller.get("pypi", request);
     ByteArrayOutputStream out = new ByteArrayOutputStream();
     response.getBody().writeTo(out);
 

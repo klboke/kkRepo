@@ -149,6 +149,15 @@ public class SecurityAuthenticationService {
   }
 
   @Transactional
+  public Optional<AuthenticatedSubject> authenticatePub(HttpServletRequest request) {
+    Optional<AuthenticatedSubject> apiKey = authenticatePubApiKey(request);
+    if (apiKey.isPresent()) {
+      return apiKey;
+    }
+    return authenticate(request);
+  }
+
+  @Transactional
   public Optional<AuthenticatedSubject> authenticateRubygems(HttpServletRequest request) {
     Optional<AuthenticatedSubject> apiKey = authenticateRubygemsApiKey(request);
     if (apiKey.isPresent()) {
@@ -277,6 +286,17 @@ public class SecurityAuthenticationService {
       }
     }
     return Optional.empty();
+  }
+
+  private Optional<AuthenticatedSubject> authenticatePubApiKey(HttpServletRequest request) {
+    String token = bearerToken(request);
+    if (token == null) {
+      return Optional.empty();
+    }
+    return apiKeyAuthCache == null
+        ? resolveApiKey(ApiKeyTokenCandidate.fromPresentedPubToken(token))
+        : apiKeyAuthCache.find("pub:" + token,
+            () -> resolveApiKey(ApiKeyTokenCandidate.fromPresentedPubToken(token)));
   }
 
   private Optional<AuthenticatedSubject> authenticateRubygemsApiKey(HttpServletRequest request) {

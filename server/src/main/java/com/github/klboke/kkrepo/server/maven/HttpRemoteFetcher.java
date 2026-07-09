@@ -16,6 +16,7 @@ import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
 import com.github.klboke.kkrepo.server.security.SecurityValidationException;
 import com.github.klboke.kkrepo.server.metrics.KkRepoMetrics;
@@ -177,6 +178,7 @@ public class HttpRemoteFetcher {
         }
         var redirected = outboundPolicy.validateHttpUri(uri.resolve(redirect.get()), "remote redirect");
         String redirectAuthorization = req.authorizationHeaderForRedirect(uri, redirected);
+        String redirectTrustedHost = req.trustedHostForRedirect(uri, redirected);
         return fetchInternal(new Request(
             redirected.toString(),
             req.etag(),
@@ -186,8 +188,9 @@ public class HttpRemoteFetcher {
             req.headOnly(),
             req.repository(),
             req.format(),
-            req.trustedHost(),
-            redirectAuthorization), redirects + 1);
+            redirectTrustedHost,
+            redirectAuthorization,
+            req.allowedUnsignedRedirectHosts()), redirects + 1);
       }
       Map<String, String> headers = new LinkedHashMap<>();
       response.headers().map().forEach((k, v) -> {
@@ -281,9 +284,10 @@ public class HttpRemoteFetcher {
       String repository,
       String format,
       String trustedHost,
-      String authorizationHeader) {
+      String authorizationHeader,
+      Set<String> allowedUnsignedRedirectHosts) {
     public Request(String url, String etag, Instant lastModified, Duration timeout, boolean headOnly) {
-      this(url, etag, lastModified, timeout, TimeoutProfile.DEFAULT, headOnly, null, null, null, null);
+      this(url, etag, lastModified, timeout, TimeoutProfile.DEFAULT, headOnly, null, null, null, null, Set.of());
     }
 
     public Request(
@@ -295,7 +299,7 @@ public class HttpRemoteFetcher {
         boolean headOnly,
         String repository,
         String format) {
-      this(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format, null, null);
+      this(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format, null, null, Set.of());
     }
 
     public Request(
@@ -308,11 +312,19 @@ public class HttpRemoteFetcher {
         String repository,
         String format,
         String trustedHost) {
-      this(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format, trustedHost, null);
+      this(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format, trustedHost, null, Set.of());
     }
 
     public Request {
       timeoutProfile = timeoutProfile == null ? TimeoutProfile.DEFAULT : timeoutProfile;
+      String normalizedTrustedHost = normalizeHost(trustedHost);
+      trustedHost = normalizedTrustedHost.isBlank() ? null : normalizedTrustedHost;
+      allowedUnsignedRedirectHosts = allowedUnsignedRedirectHosts == null
+          ? Set.of()
+          : allowedUnsignedRedirectHosts.stream()
+              .map(Request::normalizeHost)
+              .filter(host -> !host.isBlank())
+              .collect(java.util.stream.Collectors.toUnmodifiableSet());
     }
 
     public static Request get(String url) {
@@ -321,12 +333,12 @@ public class HttpRemoteFetcher {
 
     public Request withConditional(String etag, Instant lastModified) {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
-          repository, format, trustedHost, authorizationHeader);
+          repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts);
     }
 
     public Request withTimeoutProfile(TimeoutProfile timeoutProfile) {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
-          repository, format, trustedHost, authorizationHeader);
+          repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts);
     }
 
     public Request withRepository(RepositoryRuntime runtime) {
@@ -345,7 +357,33 @@ public class HttpRemoteFetcher {
           runtime == null ? null : runtime.name(),
           runtime == null || runtime.format() == null ? null : runtime.format().name(),
           trusted,
-          includeAuthorization && trusted != null ? remoteAuthorizationHeader(runtime) : null);
+          includeAuthorization && trusted != null ? remoteAuthorizationHeader(runtime) : null,
+          Set.of());
+    }
+
+    public Request withRepositoryAllowingUnsignedRedirects(
+        RepositoryRuntime runtime,
+        boolean includeAuthorization) {
+      return withRepositoryAllowingUnsignedRedirects(runtime, includeAuthorization, Set.of());
+    }
+
+    public Request withRepositoryAllowingUnsignedRedirects(
+        RepositoryRuntime runtime,
+        boolean includeAuthorization,
+        Set<String> allowedUnsignedRedirectHosts) {
+      String trusted = trustedRemoteHost(url, runtime);
+      return new Request(
+          url,
+          etag,
+          lastModified,
+          timeout,
+          timeoutProfile,
+          headOnly,
+          runtime == null ? null : runtime.name(),
+          runtime == null || runtime.format() == null ? null : runtime.format().name(),
+          trusted,
+          includeAuthorization && trusted != null ? remoteAuthorizationHeader(runtime) : null,
+          allowedUnsignedRedirectHosts);
     }
 
     public String method() {
@@ -354,20 +392,39 @@ public class HttpRemoteFetcher {
 
     java.net.URI validatedUri(OutboundRequestPolicy policy, String purpose) {
       URI uri = policy.validateHttpUri(url, purpose);
-      if (trustedHost != null && !uri.getHost().equals(trustedHost)) {
+      if (trustedHost != null && !normalizeHost(uri.getHost()).equals(trustedHost)) {
         throw new SecurityValidationException(purpose + " URL host must remain " + trustedHost);
       }
       return uri;
     }
 
     String authorizationHeaderForRedirect(URI current, URI redirected) {
-      if (authorizationHeader == null || authorizationHeader.isBlank()) {
+      if (sameOrigin(current, redirected)) {
         return authorizationHeader;
       }
-      if (!sameOrigin(current, redirected)) {
-        throw new SecurityValidationException("remote redirect URL origin must remain " + origin(current));
+      if (trustedHost != null || (authorizationHeader != null && !authorizationHeader.isBlank())) {
+        ensureUnsignedRedirectAllowed(redirected);
       }
-      return authorizationHeader;
+      return null;
+    }
+
+    String trustedHostForRedirect(URI current, URI redirected) {
+      if (sameOrigin(current, redirected)) {
+        return trustedHost;
+      }
+      if (trustedHost == null) {
+        return null;
+      }
+      ensureUnsignedRedirectAllowed(redirected);
+      return normalizeHost(redirected.getHost());
+    }
+
+    private void ensureUnsignedRedirectAllowed(URI redirected) {
+      String host = normalizeHost(redirected == null ? null : redirected.getHost());
+      if (!host.isBlank() && allowedUnsignedRedirectHosts.contains(host)) {
+        return;
+      }
+      throw new SecurityValidationException("remote redirect URL host is not allowed: " + host);
     }
 
     private static String trustedRemoteHost(String url, RepositoryRuntime runtime) {
@@ -384,6 +441,14 @@ public class HttpRemoteFetcher {
         return null;
       }
       return null;
+    }
+
+    private static String normalizeHost(String host) {
+      String value = host == null ? "" : host.trim().toLowerCase(Locale.ROOT);
+      if (value.startsWith("[") && value.endsWith("]")) {
+        value = value.substring(1, value.length() - 1);
+      }
+      return value;
     }
 
     private static boolean sameOrigin(URI a, URI b) {

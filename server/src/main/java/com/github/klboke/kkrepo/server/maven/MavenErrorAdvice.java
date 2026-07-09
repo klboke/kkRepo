@@ -4,8 +4,12 @@ import com.github.klboke.kkrepo.server.RepositoryContentController;
 import com.github.klboke.kkrepo.server.cargo.CargoExceptions;
 import com.github.klboke.kkrepo.server.cargo.CargoResponses;
 import com.github.klboke.kkrepo.server.npm.NpmExceptions;
+import com.github.klboke.kkrepo.server.pub.PubExceptions;
+import com.github.klboke.kkrepo.server.pub.PubResponses;
+import com.github.klboke.kkrepo.protocol.pub.PubContentTypes;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -98,6 +102,31 @@ public class MavenErrorAdvice {
     return cargoBody(HttpStatus.BAD_GATEWAY, e.getMessage());
   }
 
+  @ExceptionHandler(PubExceptions.PubNotFoundException.class)
+  public ResponseEntity<Map<String, Object>> pubNotFound(PubExceptions.PubNotFoundException e) {
+    return pubBody(HttpStatus.NOT_FOUND, e.getMessage());
+  }
+
+  @ExceptionHandler(PubExceptions.BadRequestException.class)
+  public ResponseEntity<Map<String, Object>> pubBadRequest(PubExceptions.BadRequestException e) {
+    return pubBody(HttpStatus.BAD_REQUEST, e.getMessage());
+  }
+
+  @ExceptionHandler(PubExceptions.WritePolicyDenied.class)
+  public ResponseEntity<Map<String, Object>> pubWriteDenied(PubExceptions.WritePolicyDenied e) {
+    return pubBody(HttpStatus.BAD_REQUEST, e.getMessage());
+  }
+
+  @ExceptionHandler(PubExceptions.MethodNotAllowed.class)
+  public ResponseEntity<Map<String, Object>> pubMethod(PubExceptions.MethodNotAllowed e) {
+    return pubBody(HttpStatus.METHOD_NOT_ALLOWED, e.getMessage());
+  }
+
+  @ExceptionHandler(PubExceptions.BadUpstreamException.class)
+  public ResponseEntity<Map<String, Object>> pubUpstream(PubExceptions.BadUpstreamException e) {
+    return pubBody(HttpStatus.BAD_GATEWAY, e.getMessage());
+  }
+
   private ResponseEntity<Map<String, Object>> body(HttpStatus status, String message) {
     return ResponseEntity.status(status).body(Map.of(
         "status", status.value(),
@@ -115,5 +144,22 @@ public class MavenErrorAdvice {
   private ResponseEntity<Map<String, Object>> cargoBody(HttpStatus status, String message) {
     return ResponseEntity.status(status).body(CargoResponses.errorBody(
         message == null ? status.getReasonPhrase() : message));
+  }
+
+  @SuppressWarnings("unchecked")
+  private ResponseEntity<Map<String, Object>> pubBody(HttpStatus status, String message) {
+    return ResponseEntity.status(status)
+        .contentType(MediaType.parseMediaType(PubContentTypes.JSON))
+        .body(PubResponses.errorBody(pubErrorCode(status), message == null ? status.getReasonPhrase() : message));
+  }
+
+  private static String pubErrorCode(HttpStatus status) {
+    return switch (status) {
+      case BAD_REQUEST -> "bad_request";
+      case NOT_FOUND -> "not_found";
+      case METHOD_NOT_ALLOWED -> "method_not_allowed";
+      case BAD_GATEWAY -> "bad_upstream";
+      default -> "pub_error";
+    };
   }
 }

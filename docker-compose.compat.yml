@@ -1,3 +1,6 @@
+# Historical Nexus compatibility reference. Keep this file on Nexus 3.29.x to
+# cover the old OrientDB/embedded-DB generation; use
+# docker-compose.compat-postgres.yml for datastore-era Nexus versions.
 name: kkrepo-compat
 
 services:
@@ -23,6 +26,7 @@ services:
 
   nexus-postgres:
     image: postgres:16
+    command: ["postgres", "-c", "max_connections=300"]
     profiles:
       - nexus-postgres
     environment:
@@ -61,6 +65,8 @@ services:
       KKREPO_MANAGEMENT_PORT: "8081"
       KKREPO_CREDENTIAL_SECRET: ci-compat-credential-secret-not-for-production
       KKREPO_API_KEY_PAYLOAD_SECRET: ci-compat-api-key-payload-secret-not-for-production
+      KKREPO_LOGIN_RATE_LIMIT_PER_MINUTE: "200"
+      KKREPO_BOOTSTRAP_RATE_LIMIT_PER_MINUTE: "50"
       KKREPO_FILE_ENABLED: "true"
       KKREPO_FILE_BASE_DIR: /tmp/kkrepo-blobs
       KKREPO_OUTBOUND_ALLOW_PRIVATE_ADDRESSES: "true"

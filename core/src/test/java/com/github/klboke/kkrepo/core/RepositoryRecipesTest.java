@@ -25,6 +25,9 @@ class RepositoryRecipesTest {
     assertRecipe(recipes, "docker-hosted", RepositoryFormat.DOCKER, RepositoryType.HOSTED);
     assertRecipe(recipes, "docker-proxy", RepositoryFormat.DOCKER, RepositoryType.PROXY);
     assertRecipe(recipes, "docker-group", RepositoryFormat.DOCKER, RepositoryType.GROUP);
+    assertRecipe(recipes, "pub-hosted", RepositoryFormat.PUB, RepositoryType.HOSTED);
+    assertRecipe(recipes, "pub-proxy", RepositoryFormat.PUB, RepositoryType.PROXY);
+    assertRecipe(recipes, "pub-group", RepositoryFormat.PUB, RepositoryType.GROUP);
   }
 
   private static void assertRecipe(

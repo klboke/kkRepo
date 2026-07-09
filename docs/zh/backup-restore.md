@@ -95,7 +95,7 @@ mysqldump \
 - `/actuator/health` 为 `UP`。
 - 管理员登录可用。
 - 仓库列表和 blob store 列表可加载。
-- 关键 Maven/npm/PyPI/Go/Helm/Cargo/Docker/OCI/NuGet/RubyGems/Yum/Raw 包或镜像可下载。
+- 关键 Maven/npm/PyPI/Go/Helm/Cargo/Pub/Docker/OCI/NuGet/RubyGems/Yum/Raw 包或镜像可下载。
 - 测试仓库 hosted 上传可用。
 - Browse/search 返回预期 asset。
 - 迁移页面没有遗留非预期 running job；如有，应确认是否需要恢复运行。

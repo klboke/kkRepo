@@ -235,6 +235,7 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
       case NPM -> npmOperation(path, normalizedMethod);
       case PYPI -> pypiOperation(path, normalizedMethod);
       case CARGO -> cargoOperation(path, normalizedMethod);
+      case PUB -> pubOperation(path, normalizedMethod);
       case HELM -> helmOperation(path, normalizedMethod);
       case GO -> goOperation(path);
       case NUGET -> nugetOperation(path, normalizedMethod);
@@ -256,6 +257,16 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
       return "maven_metadata";
     }
     return "maven_artifact";
+  }
+
+  private static String pubOperation(String path, String method) {
+    if ("GET".equals(method) && path.equals("api/packages/versions/new")) return "pub_publish_init";
+    if ("POST".equals(method) && path.startsWith("api/packages/versions/upload/")) return "pub_publish_upload";
+    if ("GET".equals(method) && path.startsWith("api/packages/versions/finalize/")) return "pub_publish_finalize";
+    if (path.startsWith("api/packages/") && path.contains("/versions/")) return "pub_version_metadata";
+    if (path.startsWith("api/packages/")) return "pub_package_metadata";
+    if (path.startsWith("packages/")) return "pub_archive";
+    return "pub_request";
   }
 
   private static String npmOperation(String path, String method) {

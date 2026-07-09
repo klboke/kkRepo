@@ -82,30 +82,6 @@ public class PypiRepositoryController {
     return toHeadResponse(dispatchIndex(resolve(name), project, true), request);
   }
 
-  @GetMapping("/packages/**")
-  public ResponseEntity<StreamingResponseBody> getPackage(
-      @PathVariable("name") String name,
-      HttpServletRequest request) {
-    RepositoryRuntime runtime = resolve(name);
-    String path = extractRepositoryPath(name, request);
-    if (isDirectoryPath(path)) {
-      return toBodyResponse(directoryListing(name, path, false), request);
-    }
-    return toBodyResponse(dispatchPackage(runtime, path, false), request, true);
-  }
-
-  @RequestMapping(value = "/packages/**", method = RequestMethod.HEAD)
-  public ResponseEntity<Void> headPackage(
-      @PathVariable("name") String name,
-      HttpServletRequest request) {
-    RepositoryRuntime runtime = resolve(name);
-    String path = extractRepositoryPath(name, request);
-    if (isDirectoryPath(path)) {
-      return toHeadResponse(directoryListing(name, path, true), request);
-    }
-    return toHeadResponse(dispatchPackage(runtime, path, true), request);
-  }
-
   @PostMapping(value = {"", "/"}, consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
   public ResponseEntity<Void> upload(
       @PathVariable("name") String name,
@@ -139,26 +115,6 @@ public class PypiRepositoryController {
     };
   }
 
-  private PypiResponse dispatchPackage(RepositoryRuntime runtime, String path, boolean headOnly) {
-    return switch (runtime.type()) {
-      case HOSTED -> hosted.getPackage(runtime, path, headOnly);
-      case PROXY -> proxy.getPackage(runtime, path, headOnly);
-      case GROUP -> group.getPackage(runtime, path, headOnly);
-    };
-  }
-
-  private PypiResponse directoryListing(String repository, String path, boolean headOnly) {
-    String listingPath = trimTrailingSlashes(path);
-    String html = htmlListing.render(repository, listingPath)
-        .orElseThrow(() -> new PypiExceptions.PypiNotFoundException(path));
-    byte[] bytes = html.getBytes(StandardCharsets.UTF_8);
-    if (headOnly) {
-      return PypiResponse.noBody(200, bytes.length, MediaType.TEXT_HTML_VALUE, null, null);
-    }
-    return PypiResponse.ok(new ByteArrayInputStream(bytes), bytes.length,
-        MediaType.TEXT_HTML_VALUE, null, null);
-  }
-
   private RepositoryRuntime resolveHosted(String name) {
     RepositoryRuntime runtime = resolve(name);
     if (!runtime.isHosted()) {
@@ -176,38 +132,12 @@ public class PypiRepositoryController {
     return runtime;
   }
 
-  private String extractRepositoryPath(String name, HttpServletRequest request) {
-    String uri = request.getRequestURI();
-    String prefix = "/repository/" + name + "/";
-    int idx = uri.indexOf(prefix);
-    if (idx < 0) {
-      throw new PypiExceptions.PypiNotFoundException("Bad PyPI URL: " + uri);
-    }
-    String rest = uri.substring(idx + prefix.length());
-    if (rest.isBlank()) {
-      throw new PypiExceptions.PypiNotFoundException("Missing PyPI path");
-    }
-    return rest;
-  }
-
   private Map<String, String> flatten(MultiValueMap<String, String> values) {
     Map<String, String> result = new LinkedHashMap<>();
     values.forEach((key, list) -> {
       if (list == null || list.isEmpty()) return;
       result.put(key, String.join("\n", list));
     });
-    return result;
-  }
-
-  private static boolean isDirectoryPath(String path) {
-    return path != null && path.endsWith("/");
-  }
-
-  private static String trimTrailingSlashes(String path) {
-    String result = path == null ? "" : path;
-    while (result.endsWith("/")) {
-      result = result.substring(0, result.length() - 1);
-    }
     return result;
   }
 
