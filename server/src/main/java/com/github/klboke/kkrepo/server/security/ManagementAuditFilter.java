@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.Set;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.annotation.Order;
 import org.springframework.session.web.http.SessionRepositoryFilter;
 import org.springframework.stereotype.Component;
@@ -24,10 +25,15 @@ public class ManagementAuditFilter extends OncePerRequestFilter {
 
   private final SecurityAuditDao auditDao;
   private final ForwardedHeaderPolicy forwardedHeaderPolicy;
+  private final boolean legacyUiEnabled;
 
-  public ManagementAuditFilter(SecurityAuditDao auditDao, ForwardedHeaderPolicy forwardedHeaderPolicy) {
+  public ManagementAuditFilter(
+      SecurityAuditDao auditDao,
+      ForwardedHeaderPolicy forwardedHeaderPolicy,
+      @Value("${kkrepo.nexus.legacy-ui.enabled:false}") boolean legacyUiEnabled) {
     this.auditDao = auditDao;
     this.forwardedHeaderPolicy = forwardedHeaderPolicy;
+    this.legacyUiEnabled = legacyUiEnabled;
   }
 
   @Override
@@ -81,11 +87,12 @@ public class ManagementAuditFilter extends OncePerRequestFilter {
     }
     String uri = stripContextPath(request);
     return uri.startsWith("/internal/")
-        || uri.startsWith("/service/rest/internal/")
         || uri.startsWith("/service/rest/v1/security/")
-        || uri.equals("/service/extdirect")
-        || uri.equals("/service/rapture/session")
-        || uri.equals("/service/rest/wonderland/authenticate");
+        || (legacyUiEnabled
+            && (uri.startsWith("/service/rest/internal/")
+                || uri.equals("/service/extdirect")
+                || uri.equals("/service/rapture/session")
+                || uri.equals("/service/rest/wonderland/authenticate")));
   }
 
   private static AuthenticatedSubject subject(HttpServletRequest request) {

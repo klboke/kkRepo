@@ -6,6 +6,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.Optional;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -13,6 +14,14 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+/**
+ * Legacy Nexus Wonderland authentication compatibility endpoint.
+ *
+ * @deprecated This endpoint is kept for Nexus UI password-ticket compatibility only. New kkrepo
+ *     management flows should use the REST or internal UI authentication APIs instead.
+ */
+@Deprecated(since = "0.2.0", forRemoval = false)
+@ConditionalOnProperty(name = "kkrepo.nexus.legacy-ui.enabled", havingValue = "true")
 @RestController
 @RequestMapping("/service/rest/wonderland/authenticate")
 public class NexusWonderlandAuthenticateController {

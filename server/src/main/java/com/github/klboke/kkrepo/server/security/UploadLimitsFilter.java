@@ -19,10 +19,13 @@ public class UploadLimitsFilter extends OncePerRequestFilter {
   private static final Set<String> WRITE_METHODS = Set.of("POST", "PUT", "PATCH", "MKCOL");
 
   private final long maxRequestBytes;
+  private final boolean legacyUiEnabled;
 
   public UploadLimitsFilter(
-      @Value("${kkrepo.security.upload.max-request-bytes:1073741824}") long maxRequestBytes) {
+      @Value("${kkrepo.security.upload.max-request-bytes:1073741824}") long maxRequestBytes,
+      @Value("${kkrepo.nexus.legacy-ui.enabled:false}") boolean legacyUiEnabled) {
     this.maxRequestBytes = maxRequestBytes;
+    this.legacyUiEnabled = legacyUiEnabled;
   }
 
   @Override
@@ -45,7 +48,7 @@ public class UploadLimitsFilter extends OncePerRequestFilter {
     String uri = stripContextPath(request);
     return uri.startsWith("/repository/")
         || uri.equals("/service/rest/v1/components")
-        || uri.startsWith("/service/rest/internal/ui/upload/");
+        || (legacyUiEnabled && uri.startsWith("/service/rest/internal/ui/upload/"));
   }
 
   private static String stripContextPath(HttpServletRequest request) {

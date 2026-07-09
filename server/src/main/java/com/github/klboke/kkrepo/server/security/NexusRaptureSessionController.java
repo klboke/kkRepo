@@ -6,6 +6,7 @@ import java.util.Base64;
 import java.util.Optional;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -13,6 +14,14 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+/**
+ * Legacy Nexus Rapture session compatibility endpoint.
+ *
+ * @deprecated This endpoint is kept for mirrored Nexus UI login/logout traffic only. New kkrepo
+ *     management flows should use the REST or internal UI session APIs instead.
+ */
+@Deprecated(since = "0.2.0", forRemoval = false)
+@ConditionalOnProperty(name = "kkrepo.nexus.legacy-ui.enabled", havingValue = "true")
 @RestController
 @RequestMapping("/service/rapture/session")
 public class NexusRaptureSessionController {

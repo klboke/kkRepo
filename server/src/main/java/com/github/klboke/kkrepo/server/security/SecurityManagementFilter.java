@@ -8,6 +8,8 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.Locale;
 import java.util.Optional;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
 import org.springframework.session.web.http.SessionRepositoryFilter;
@@ -25,12 +27,22 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
 
   private final SecurityAuthenticationService authenticationService;
   private final SecurityManagementService securityService;
+  private final boolean legacyUiEnabled;
 
   public SecurityManagementFilter(
       SecurityAuthenticationService authenticationService,
       SecurityManagementService securityService) {
+    this(authenticationService, securityService, true);
+  }
+
+  @Autowired
+  public SecurityManagementFilter(
+      SecurityAuthenticationService authenticationService,
+      SecurityManagementService securityService,
+      @Value("${kkrepo.nexus.legacy-ui.enabled:false}") boolean legacyUiEnabled) {
     this.authenticationService = authenticationService;
     this.securityService = securityService;
+    this.legacyUiEnabled = legacyUiEnabled;
   }
 
   @Override
@@ -74,25 +86,25 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
     if (uri.equals("/service/rest/v1/components") && "POST".equals(method)) {
       return Optional.of(AUTHENTICATED_ONLY);
     }
-    if (uri.equals("/service/rapture/session")) {
+    if (legacyUiEnabled && uri.equals("/service/rapture/session")) {
       return Optional.empty();
     }
-    if (uri.equals("/service/rest/internal/ui/anonymous-settings")) {
+    if (legacyUiEnabled && uri.equals("/service/rest/internal/ui/anonymous-settings")) {
       return Optional.of("GET".equals(method) ? "nexus:settings:read" : "nexus:settings:update");
     }
-    if (uri.startsWith("/service/rest/internal/ui/upload/")) {
+    if (legacyUiEnabled && uri.startsWith("/service/rest/internal/ui/upload/")) {
       return Optional.of(AUTHENTICATED_ONLY);
     }
-    if (uri.equals("/service/rest/internal/ui/user")) {
+    if (legacyUiEnabled && uri.equals("/service/rest/internal/ui/user")) {
       return Optional.of(AUTHENTICATED_ONLY);
     }
-    if (uri.startsWith("/service/rest/internal/ui/user/")) {
+    if (legacyUiEnabled && uri.startsWith("/service/rest/internal/ui/user/")) {
       if (uri.endsWith("/password") && "PUT".equals(method)) {
         return Optional.of("nexus:userschangepw:create");
       }
       return Optional.of(AUTHENTICATED_ONLY);
     }
-    if (uri.startsWith("/service/rest/internal/ui/security/")) {
+    if (legacyUiEnabled && uri.startsWith("/service/rest/internal/ui/security/")) {
       return internalUiSecurityPermission(method, uri);
     }
     if (uri.startsWith("/internal/blob-stores")) {
