@@ -181,7 +181,7 @@ kkrepo is licensed under the [Apache License 2.0](../../LICENSE).
 Use:
 
 - GitHub issues for bugs, compatibility differences, feature requests, and documentation problems.
-- The [kkrepo Telegram group](https://t.me/+M6prtFUGnF9kYTU1) for community discussion.
+- The [kkrepo Telegram group](https://t.me/+UbIsTKXTzxBhYjFl) for community discussion.
 - GitHub Security Advisories for exploitable security issues.
 
 See [SUPPORT.md](../../SUPPORT.md).

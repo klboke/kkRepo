@@ -5,7 +5,7 @@ Thanks for trying kkrepo. This page explains where to ask questions, report bugs
 ## Community Support
 
 - Use GitHub issues for reproducible bugs, compatibility differences, feature requests, and documentation problems.
-- Use the [kkrepo Telegram group](https://t.me/+M6prtFUGnF9kYTU1) for community discussion and usage questions.
+- Use the [kkrepo Telegram group](https://t.me/+UbIsTKXTzxBhYjFl) for community discussion and usage questions.
 - Before opening an issue, check the README, build/deployment guide, compatibility testing guide, and troubleshooting guide.
 
 ## Issue Types

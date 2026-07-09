@@ -165,7 +165,7 @@ Local development and testing are documented in the [Development Guide](docs/en/
 
 ## Support
 
-Join the [kkRepo Telegram group](https://t.me/+M6prtFUGnF9kYTU1) for community support and usage discussion. See [SUPPORT.md](SUPPORT.md) for issue routing, support scope, and security-reporting boundaries.
+Join the [kkRepo Telegram group](https://t.me/+UbIsTKXTzxBhYjFl) for community support and usage discussion. See [SUPPORT.md](SUPPORT.md) for issue routing, support scope, and security-reporting boundaries.
 
 ## Security
 

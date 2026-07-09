@@ -165,7 +165,7 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 
 ## 支持
 
-加入 [kkRepo Telegram 群](https://t.me/+M6prtFUGnF9kYTU1) 获取社区支持和使用交流。Issue 分类、支持范围和安全问题报告边界见 [SUPPORT.md](SUPPORT.md)。
+加入 [kkRepo Telegram 群](https://t.me/+UbIsTKXTzxBhYjFl) 获取社区支持和使用交流。Issue 分类、支持范围和安全问题报告边界见 [SUPPORT.md](SUPPORT.md)。
 
 ## 安全
 

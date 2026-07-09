@@ -181,7 +181,7 @@ kkrepo 使用 [Apache License 2.0](../../LICENSE)。
 可使用：
 
 - GitHub issues：报告 bug、兼容差异、功能建议和文档问题。
-- [kkrepo Telegram 群](https://t.me/+M6prtFUGnF9kYTU1)：社区讨论。
+- [kkrepo Telegram 群](https://t.me/+UbIsTKXTzxBhYjFl)：社区讨论。
 - GitHub Security Advisories：报告可利用安全问题。
 
 详见 [SUPPORT.md](../../SUPPORT.md)。
