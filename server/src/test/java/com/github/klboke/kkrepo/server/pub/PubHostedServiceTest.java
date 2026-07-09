@@ -8,7 +8,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.mysql.dao.ComponentDao;
+import com.github.klboke.kkrepo.persistence.mysql.dao.PubUploadSessionDao;
 import com.github.klboke.kkrepo.persistence.mysql.model.ComponentRecord;
+import com.github.klboke.kkrepo.persistence.mysql.model.PubUploadSessionRecord;
 import com.github.klboke.kkrepo.protocol.pub.PubContentTypes;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
@@ -31,7 +33,8 @@ class PubHostedServiceTest {
         component("example_package", "1.0.0-dev.1", "aaa", Instant.parse("2026-07-01T00:00:00Z")),
         component("example_package", "1.0.0", "bbb", Instant.parse("2026-07-02T00:00:00Z")),
         component("example_package", "1.10.0", "ccc", Instant.parse("2026-07-03T00:00:00Z")),
-        component("example_package", "1.2.0", "ddd", Instant.parse("2026-07-04T00:00:00Z"))));
+        component("example_package", "1.2.0", "ddd", Instant.parse("2026-07-04T00:00:00Z")),
+        component("example_package", "2.0.0-dev.1", "eee", Instant.parse("2026-07-05T00:00:00Z"))));
     PubHostedService service = new PubHostedService(
         null, components, null, null, null, null, null, MAPPER);
 
@@ -44,7 +47,7 @@ class PubHostedServiceTest {
     assertEquals("example_package", body.get("name"));
     assertEquals("1.10.0", ((Map<?, ?>) body.get("latest")).get("version"));
     List<?> versions = (List<?>) body.get("versions");
-    assertEquals(List.of("1.0.0-dev.1", "1.0.0", "1.2.0", "1.10.0"),
+    assertEquals(List.of("1.0.0-dev.1", "1.0.0", "1.2.0", "1.10.0", "2.0.0-dev.1"),
         versions.stream().map(entry -> ((Map<?, ?>) entry).get("version")).toList());
     Map<?, ?> stable = (Map<?, ?>) versions.get(1);
     assertEquals("https://repo.test/repository/pub-hosted/api/archives/example_package-1.0.0.tar.gz",
@@ -79,6 +82,25 @@ class PubHostedServiceTest {
         () -> service.packageMetadata(runtime(), "missing_package", "https://repo.test/repository/pub-hosted", false));
   }
 
+  @Test
+  void finalizedUploadSessionCanBeRetriedAfterTtlExpires() {
+    PubUploadSessionRecord session = session(PubUploadSessionDao.STATUS_FINALIZED, Instant.EPOCH);
+
+    PubHostedService.validateSessionUsable(
+        session, PubUploadSessionDao.STATUS_UPLOADED, "alice", 42L);
+  }
+
+  @Test
+  void uploadFormTokenIsRequired() {
+    PubUploadSessionRecord session = session(PubUploadSessionDao.STATUS_NEW, Instant.now().plusSeconds(60));
+
+    assertThrows(PubExceptions.BadRequestException.class,
+        () -> PubHostedService.validateFieldToken(session, Map.of()));
+    assertThrows(PubExceptions.BadRequestException.class,
+        () -> PubHostedService.validateFieldToken(session, Map.of("token", "wrong")));
+    PubHostedService.validateFieldToken(session, Map.of("token", "field-token"));
+  }
+
   private static ComponentRecord component(String name, String version, String sha256, Instant updatedAt) {
     Map<String, Object> pubspec = new LinkedHashMap<>();
     pubspec.put("name", name);
@@ -99,6 +121,33 @@ class PubHostedServiceTest {
         new byte[] {1},
         attrs,
         updatedAt);
+  }
+
+  private static PubUploadSessionRecord session(String status, Instant expiresAt) {
+    return new PubUploadSessionRecord(
+        1L,
+        1L,
+        "session-1",
+        "field-token",
+        "alice",
+        42L,
+        status,
+        expiresAt,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        Map.of(),
+        null,
+        PubUploadSessionDao.STATUS_FINALIZED.equals(status) ? Instant.now() : null,
+        Instant.now(),
+        Instant.now());
   }
 
   private static Map<String, Object> readJson(MavenResponse response) throws IOException {

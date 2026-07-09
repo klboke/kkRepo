@@ -312,7 +312,8 @@ public class PubHostedService {
         .toList();
     Map<String, Object> body = new LinkedHashMap<>();
     body.put("name", packageName);
-    body.put("latest", versions.get(versions.size() - 1));
+    body.put("latest", PubMetadataSupport.latestStableFirst(
+        versions, entry -> String.valueOf(entry.get("version"))));
     body.put("versions", versions);
     return body;
   }
@@ -357,14 +358,11 @@ public class PubHostedService {
         headOnly);
   }
 
-  private static void validateSessionUsable(
+  static void validateSessionUsable(
       PubUploadSessionRecord session,
       String expectedStatus,
       String principalUserId,
       Long principalApiKeyId) {
-    if (session.expiresAt() == null || session.expiresAt().isBefore(Instant.now())) {
-      throw new PubExceptions.BadRequestException("Pub upload session expired");
-    }
     if (session.principalUserId() != null && principalUserId != null
         && !session.principalUserId().equals(principalUserId)) {
       throw new PubExceptions.BadRequestException("Pub upload session belongs to another principal");
@@ -377,14 +375,17 @@ public class PubHostedService {
         && PubUploadSessionDao.STATUS_UPLOADED.equals(expectedStatus)) {
       return;
     }
+    if (session.expiresAt() == null || session.expiresAt().isBefore(Instant.now())) {
+      throw new PubExceptions.BadRequestException("Pub upload session expired");
+    }
     if (!expectedStatus.equals(session.status())) {
       throw new PubExceptions.BadRequestException("Pub upload session is not " + expectedStatus);
     }
   }
 
-  private static void validateFieldToken(PubUploadSessionRecord session, Map<String, String> fields) {
+  static void validateFieldToken(PubUploadSessionRecord session, Map<String, String> fields) {
     String token = fields == null ? null : fields.get("token");
-    if (token != null && !token.equals(session.fieldToken())) {
+    if (token == null || !token.equals(session.fieldToken())) {
       throw new PubExceptions.BadRequestException("Invalid Pub upload form token");
     }
   }

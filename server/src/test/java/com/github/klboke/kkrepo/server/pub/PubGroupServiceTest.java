@@ -32,7 +32,8 @@ class PubGroupServiceTest {
             version("2.0.0", "first"))),
         "pub-b", metadata("example_package", List.of(
             version("1.0.0", "second"),
-            version("3.0.0", "second")))));
+            version("3.0.0", "second"),
+            version("4.0.0-dev.1", "second-dev")))));
     PubGroupService service = new PubGroupService(hosted, null, MAPPER);
 
     MavenResponse response =
@@ -41,7 +42,7 @@ class PubGroupServiceTest {
     Map<String, Object> body = readJson(response);
     assertEquals("3.0.0", ((Map<?, ?>) body.get("latest")).get("version"));
     List<?> versions = (List<?>) body.get("versions");
-    assertEquals(List.of("1.0.0", "2.0.0", "3.0.0"),
+    assertEquals(List.of("1.0.0", "2.0.0", "3.0.0", "4.0.0-dev.1"),
         versions.stream().map(entry -> ((Map<?, ?>) entry).get("version")).toList());
     assertEquals("first", ((Map<?, ?>) ((Map<?, ?>) versions.get(0)).get("pubspec")).get("source"));
     assertEquals("https://repo.test/repository/pub-group/api/archives/example_package-1.0.0.tar.gz",
@@ -88,6 +89,18 @@ class PubGroupServiceTest {
   }
 
   @Test
+  void groupVersionJsonDispatchDoesNotPreFetchPackageMetadata() throws Exception {
+    FakeHostedService hosted = new FakeHostedService(Map.of(
+        "pub-a", metadata("example_package", List.of(version("1.0.0", "first")))));
+    PubGroupService service = new PubGroupService(hosted, null, MAPPER);
+
+    service.versionJson(groupRuntime("pub-group", 10L, List.of(hostedMember("pub-a", 11L))),
+        "example_package", "1.0.0", "https://repo.test/repository/pub-group", false);
+
+    assertEquals(0, hosted.packageMetadataCalls());
+  }
+
+  @Test
   void groupDownloadRoutesToFirstMemberContainingVersion() throws Exception {
     FakeHostedService hosted = new FakeHostedService(Map.of(
         "pub-a", metadata("example_package", List.of(version("1.0.0", "first"))),
@@ -97,6 +110,20 @@ class PubGroupServiceTest {
     MavenResponse response = service.download(groupRuntime(), "example_package", "1.0.0", false);
 
     assertEquals("pub-a:example_package:1.0.0", new String(response.body().readAllBytes(), StandardCharsets.UTF_8));
+  }
+
+  @Test
+  void groupDownloadDispatchDoesNotPreFetchPackageMetadata() throws Exception {
+    FakeHostedService hosted = new FakeHostedService(Map.of(
+        "pub-a", metadata("example_package", List.of(version("1.0.0", "first")))));
+    PubGroupService service = new PubGroupService(hosted, null, MAPPER);
+
+    MavenResponse response = service.download(
+        groupRuntime("pub-group", 10L, List.of(hostedMember("pub-a", 11L))),
+        "example_package", "1.0.0", false);
+
+    assertEquals("pub-a:example_package:1.0.0", new String(response.body().readAllBytes(), StandardCharsets.UTF_8));
+    assertEquals(0, hosted.packageMetadataCalls());
   }
 
   @Test
@@ -204,6 +231,7 @@ class PubGroupServiceTest {
 
   private static final class FakeHostedService extends PubHostedService {
     private final Map<String, Map<String, Object>> metadataByRepository;
+    private int packageMetadataCalls;
 
     FakeHostedService(Map<String, Map<String, Object>> metadataByRepository) {
       super(null, null, null, null, null, null, null, MAPPER);
@@ -222,11 +250,16 @@ class PubGroupServiceTest {
 
     @Override
     MavenResponse packageMetadata(RepositoryRuntime runtime, String packageName, String baseUrl, boolean headOnly) {
+      packageMetadataCalls++;
       Map<String, Object> body = metadataByRepository.get(runtime.name());
       if (body == null) {
         throw new PubExceptions.PubNotFoundException(packageName);
       }
       return PubResponses.json(MAPPER, body, 200, null, Instant.parse("2026-07-08T00:00:00Z"), headOnly);
+    }
+
+    int packageMetadataCalls() {
+      return packageMetadataCalls;
     }
 
     @Override

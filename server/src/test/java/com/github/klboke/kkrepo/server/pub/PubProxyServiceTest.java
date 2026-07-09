@@ -68,6 +68,25 @@ class PubProxyServiceTest {
   }
 
   @Test
+  void metadataFallbackLatestPrefersStableVersion() throws Exception {
+    TestPubProxyService service = new TestPubProxyService(Map.of(
+        "name", "example_package",
+        "versions", List.of(
+            Map.of(
+                "version", "1.0.0",
+                "archive_url", "https://pub.dev/api/archives/example_package-1.0.0.tar.gz"),
+            Map.of(
+                "version", "2.0.0-dev.1",
+                "archive_url", "https://pub.dev/api/archives/example_package-2.0.0-dev.1.tar.gz"))));
+
+    MavenResponse response =
+        service.packageMetadata(runtime(), "example_package", "https://repo.test/repository/pub-proxy", false);
+
+    Map<String, Object> body = readJson(response);
+    assertEquals("1.0.0", ((Map<?, ?>) body.get("latest")).get("version"));
+  }
+
+  @Test
   void archiveRemoteAttrsRecordChecksumSource() {
     TestPubProxyService service = new TestPubProxyService(Map.of());
 

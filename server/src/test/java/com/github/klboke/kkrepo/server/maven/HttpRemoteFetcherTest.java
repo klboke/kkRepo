@@ -230,11 +230,11 @@ class HttpRemoteFetcherTest {
   }
 
   @Test
-  void repositoryRequestsAllowCrossOriginRedirectsWithoutAuthorization() {
+  void repositoryRequestsCanFollowAllowlistedCrossOriginRedirectsWithoutAuthorization() {
     RepositoryRuntime runtime = runtime(null, null, null);
     HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request
         .get("https://repo.example.com/maven2/com/example/app.jar")
-        .withRepositoryAllowingUnsignedRedirects(runtime, true, Set.of());
+        .withRepositoryAllowingUnsignedRedirects(runtime, true, Set.of("cdn.example.net"));
     URI current = URI.create("https://repo.example.com/maven2/com/example/app.jar");
     URI cdn = URI.create("https://cdn.example.net/app.jar");
 
@@ -256,6 +256,22 @@ class HttpRemoteFetcherTest {
         SecurityValidationException.class,
         () -> request.authorizationHeaderForRedirect(current, URI.create("https://evil.example.net/app.jar")));
     assertEquals("remote redirect URL host is not allowed: evil.example.net", error.getMessage());
+  }
+
+  @Test
+  void repositoryRequestsRejectUnsignedCrossOriginRedirectsWithoutAllowlist() {
+    RepositoryRuntime runtime = runtime(null, null, null);
+    HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request
+        .get("https://repo.example.com/maven2/com/example/app.jar")
+        .withRepository(runtime);
+    URI current = URI.create("https://repo.example.com/maven2/com/example/app.jar");
+    URI cdn = URI.create("https://cdn.example.net/app.jar");
+
+    assertNull(request.authorizationHeader());
+    SecurityValidationException error = assertThrows(
+        SecurityValidationException.class,
+        () -> request.trustedHostForRedirect(current, cdn));
+    assertEquals("remote redirect URL host is not allowed: cdn.example.net", error.getMessage());
   }
 
   @Test

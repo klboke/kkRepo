@@ -166,7 +166,7 @@ class PubAssetWriter {
       }
       Stored stored = persistArchive(runtime, storage, blobStoreId, ref, digests, metadata,
           archiveAttributes, remoteAttributes, createdBy, createdByIp, keepResponseFile ? tmp : null,
-          publishedAt, allowReplace);
+          publishedAt, allowReplace, reusable.orElse(null));
       if (!keepResponseFile) {
         TempBlobFiles.deleteQuietly(tmp);
       }
@@ -191,7 +191,7 @@ class PubAssetWriter {
       String createdBy,
       String createdByIp) {
     return persistArchive(runtime, storage, blobStoreId, reference, digests, metadata,
-        archiveAttributes, Map.of(), createdBy, createdByIp, null, null, false);
+        archiveAttributes, Map.of(), createdBy, createdByIp, null, null, false, null);
   }
 
   Stored writeMetadata(
@@ -221,12 +221,14 @@ class PubAssetWriter {
       String createdByIp,
       Path responseFile,
       Instant publishedAt,
-      boolean allowReplace) {
+      boolean allowReplace,
+      AssetBlobRecord reusableBlob) {
     try {
       return executePersist("Persist Pub archive " + runtime.name() + "/"
               + PubPaths.archivePath(metadata.packageName(), metadata.version()),
           () -> persistArchiveInternal(runtime, blobStoreId, reference, digests, metadata,
-              archiveAttributes, remoteAttributes, createdBy, createdByIp, responseFile, publishedAt, allowReplace));
+              archiveAttributes, remoteAttributes, createdBy, createdByIp, responseFile, publishedAt, allowReplace,
+              reusableBlob));
     } catch (RuntimeException e) {
       BlobTransactionCleanup.deleteIfUnreferenced(
           assetDao, storage, blobStoreId, reference, "Pub archive metadata persist failure");
@@ -246,12 +248,13 @@ class PubAssetWriter {
       String createdByIp,
       Path responseFile,
       Instant publishedAt,
-      boolean allowReplace) {
+      boolean allowReplace,
+      AssetBlobRecord reusableBlob) {
     Instant effectivePublishedAt = publishedAt == null ? Instant.now() : publishedAt;
     String path = PubPaths.archivePath(metadata.packageName(), metadata.version());
     Map<String, Object> attrs = componentAttributes(metadata, digests, path, effectivePublishedAt, extraAttributes);
     return persist(runtime, blobStoreId, path, reference, digests, PubContentTypes.ARCHIVE, "archive",
-        metadata, attrs, attrs, remoteAttributes, createdBy, createdByIp, responseFile, allowReplace);
+        metadata, attrs, attrs, remoteAttributes, createdBy, createdByIp, responseFile, allowReplace, reusableBlob);
   }
 
   private Stored writeAsset(
@@ -275,7 +278,7 @@ class PubAssetWriter {
       Stored stored = executePersist("Persist Pub asset " + runtime.name() + "/" + path,
           () -> persist(runtime, blobStoreId, path, upload.reference(), upload.digests(), contentType,
               kind, coordinate, assetAttributes, componentAttributes, remoteAttributes, createdBy, createdByIp,
-              keepResponseFile ? upload.tempFile() : null, allowReplace));
+              keepResponseFile ? upload.tempFile() : null, allowReplace, upload.reusableBlob()));
       cleanupUnusedUploadedBlob(storage, blobStoreId, upload, stored.blob());
       if (!keepResponseFile) {
         TempBlobFiles.deleteQuietly(upload.tempFile());
@@ -303,7 +306,8 @@ class PubAssetWriter {
       String createdBy,
       String createdByIp,
       Path responseFile,
-      boolean allowReplace) {
+      boolean allowReplace,
+      AssetBlobRecord reusableBlob) {
     Instant now = Instant.now();
     String blobRef = BlobReferenceCodec.format(reference);
     Map<String, Object> blobAttrs = new LinkedHashMap<>();
@@ -311,8 +315,7 @@ class PubAssetWriter {
     if (remoteAttributes != null) {
       remoteAttributes.forEach((key, value) -> { if (value != null) blobAttrs.put(key, value); });
     }
-    AssetBlobRecord persistedBlob = reusableBlob(blobStoreId, digests.sha256(), digests.size(), remoteAttributes)
-        .orElse(null);
+    AssetBlobRecord persistedBlob = reusableBlob;
     long blobId;
     if (persistedBlob == null) {
       AssetBlobRecord blobRecord = new AssetBlobRecord(
@@ -484,10 +487,10 @@ class PubAssetWriter {
       if (reusable.isPresent()) {
         AssetBlobRecord blob = reusable.get();
         BlobReference ref = BlobReferenceCodec.reference(blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size());
-        return new DigestedUpload(ref, digests, tmp, false);
+        return new DigestedUpload(ref, digests, tmp, false, blob);
       }
       BlobReference ref = storage.putFile(runtime.name(), path, tmp, digests.sha256());
-      return new DigestedUpload(ref, digests, tmp, true);
+      return new DigestedUpload(ref, digests, tmp, true, null);
     } catch (RuntimeException | IOException e) {
       TempBlobFiles.deleteQuietly(tmp);
       if (e instanceof IOException io) {
@@ -660,6 +663,11 @@ class PubAssetWriter {
     return HexFormat.of().formatHex(bytes);
   }
 
-  private record DigestedUpload(BlobReference reference, Digests digests, Path tempFile, boolean uploaded) {
+  private record DigestedUpload(
+      BlobReference reference,
+      Digests digests,
+      Path tempFile,
+      boolean uploaded,
+      AssetBlobRecord reusableBlob) {
   }
 }

@@ -32,6 +32,10 @@ public final class PubVersions {
     }
   }
 
+  public static boolean isPrerelease(String value) {
+    return Parsed.parse(value).prerelease != null;
+  }
+
   public static String normalize(String value) {
     if (value == null) {
       return null;

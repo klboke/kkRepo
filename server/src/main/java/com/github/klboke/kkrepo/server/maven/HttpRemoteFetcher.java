@@ -402,10 +402,9 @@ public class HttpRemoteFetcher {
       if (sameOrigin(current, redirected)) {
         return authorizationHeader;
       }
-      if (authorizationHeader == null || authorizationHeader.isBlank()) {
-        return null;
+      if (trustedHost != null || (authorizationHeader != null && !authorizationHeader.isBlank())) {
+        ensureUnsignedRedirectAllowed(redirected);
       }
-      ensureUnsignedRedirectAllowed(redirected);
       return null;
     }
 
@@ -413,8 +412,8 @@ public class HttpRemoteFetcher {
       if (sameOrigin(current, redirected)) {
         return trustedHost;
       }
-      if (authorizationHeader == null || authorizationHeader.isBlank()) {
-        return normalizeHost(redirected.getHost());
+      if (trustedHost == null) {
+        return null;
       }
       ensureUnsignedRedirectAllowed(redirected);
       return normalizeHost(redirected.getHost());

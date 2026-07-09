@@ -308,7 +308,12 @@ public class PubProxyService {
       Map<String, Object> latestMap = (Map<String, Object>) map;
       rewritten.put("latest", rewriteVersion(latestMap, baseUrl, packageName));
     } else if (!versionEntries.isEmpty()) {
-      rewritten.put("latest", versionEntries.get(versionEntries.size() - 1));
+      List<Map<String, Object>> sorted = versionEntries.stream()
+          .sorted(java.util.Comparator.comparing(
+              entry -> String.valueOf(entry.get("version")), PubVersions.COMPARATOR))
+          .toList();
+      rewritten.put("latest", PubMetadataSupport.latestStableFirst(
+          sorted, entry -> String.valueOf(entry.get("version"))));
     }
     return rewritten;
   }

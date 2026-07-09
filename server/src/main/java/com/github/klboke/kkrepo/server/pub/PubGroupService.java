@@ -103,9 +103,6 @@ public class PubGroupService {
           if (member.isGroup()) {
             return versionJson(member, packageName, version, memberBaseUrl, headOnly, resolvingGroups);
           }
-          if (!memberContainsVersion(member, packageName, version)) {
-            continue;
-          }
           return switch (member.type()) {
             case HOSTED -> hosted.versionJson(member, packageName, version, memberBaseUrl, headOnly);
             case PROXY -> proxy.versionJson(member, packageName, version, headOnly);
@@ -145,9 +142,6 @@ public class PubGroupService {
         try {
           if (member.isGroup()) {
             return download(member, packageName, version, headOnly, resolvingGroups);
-          }
-          if (!memberContainsVersion(member, packageName, version)) {
-            continue;
           }
           return switch (member.type()) {
             case HOSTED -> hosted.download(member, packageName, version, headOnly);
@@ -213,7 +207,8 @@ public class PubGroupService {
     versions.sort(Comparator.comparing(entry -> String.valueOf(entry.get("version")), PubVersions.COMPARATOR));
     Map<String, Object> body = new LinkedHashMap<>();
     body.put("name", normalized);
-    body.put("latest", versions.get(versions.size() - 1));
+    body.put("latest", PubMetadataSupport.latestStableFirst(
+        versions, entry -> String.valueOf(entry.get("version"))));
     body.put("versions", versions);
     return new MergedMetadata(body, lastModified);
   }
@@ -232,18 +227,6 @@ public class PubGroupService {
       case GROUP -> throw new IllegalStateException("Unexpected Pub group metadata branch");
     };
     return new MergedMetadata(readJson(response), response.lastModified());
-  }
-
-  private boolean memberContainsVersion(RepositoryRuntime member, String packageName, String version) {
-    String safeVersion = PubVersions.require(version);
-    MavenResponse response = switch (member.type()) {
-      case HOSTED -> hosted.packageMetadata(member, packageName, member.name(), false);
-      case PROXY -> proxy.packageMetadata(member, packageName, member.name(), false);
-      case GROUP -> throw new IllegalStateException("Unexpected Pub group contains-version branch");
-    };
-    Map<String, Object> body = readJson(response);
-    return PubProxyService.versions(body).stream()
-        .anyMatch(entry -> safeVersion.equals(String.valueOf(entry.get("version"))));
   }
 
   private MavenResponse packageNames(RepositoryRuntime runtime, boolean headOnly) {
