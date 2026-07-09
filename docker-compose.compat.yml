@@ -67,6 +67,7 @@ services:
       KKREPO_API_KEY_PAYLOAD_SECRET: ci-compat-api-key-payload-secret-not-for-production
       KKREPO_LOGIN_RATE_LIMIT_PER_MINUTE: "200"
       KKREPO_BOOTSTRAP_RATE_LIMIT_PER_MINUTE: "50"
+      # Compatibility-only: enables Nexus legacy web UI routes before service startup.
       KKREPO_NEXUS_LEGACY_UI_ENABLED: "${KKREPO_NEXUS_LEGACY_UI_ENABLED:-true}"
       KKREPO_FILE_ENABLED: "true"
       KKREPO_FILE_BASE_DIR: /tmp/kkrepo-blobs

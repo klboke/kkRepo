@@ -514,7 +514,8 @@ class RepositorySecurityFilterTest {
         authentication,
         decisions,
         new FakeRepositoryDao(repository("maven-releases")),
-        false);
+        false,
+        true);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -536,7 +537,8 @@ class RepositorySecurityFilterTest {
         authentication,
         decisions,
         new FakeRepositoryDao(repository("maven-releases")),
-        false);
+        false,
+        true);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -558,7 +560,8 @@ class RepositorySecurityFilterTest {
         authentication,
         decisions,
         new FakeRepositoryDao(repository("maven-releases")),
-        false);
+        false,
+        true);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -629,7 +632,8 @@ class RepositorySecurityFilterTest {
         accessDecisionService,
         repositoryDao,
         forwardedHeaderPolicy,
-        anonymousReadEnabled);
+        anonymousReadEnabled,
+        new NexusLegacyUiCompatibility(false));
   }
 
   private static RepositorySecurityFilter filter(
@@ -644,7 +648,7 @@ class RepositorySecurityFilterTest {
         repositoryDao,
         new ForwardedHeaderPolicy(""),
         anonymousReadEnabled,
-        legacyUiEnabled);
+        new NexusLegacyUiCompatibility(legacyUiEnabled));
   }
 
   private static void assertRepositoryContentAction(String method, PermissionAction action) throws Exception {

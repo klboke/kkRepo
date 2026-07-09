@@ -9,7 +9,6 @@ import java.io.IOException;
 import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.Set;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.annotation.Order;
 import org.springframework.session.web.http.SessionRepositoryFilter;
@@ -28,22 +27,15 @@ public class CsrfProtectionFilter extends OncePerRequestFilter {
 
   private final String apiKeyHeader;
   private final boolean cookieSecure;
-  private final boolean legacyUiEnabled;
+  private final NexusLegacyUiCompatibility legacyUi;
 
-  public CsrfProtectionFilter(
-      @Value("${kkrepo.security.token-header:X-Nexus-Plus-Token}") String apiKeyHeader,
-      @Value("${kkrepo.security.csrf.cookie-secure:false}") boolean cookieSecure) {
-    this(apiKeyHeader, cookieSecure, false);
-  }
-
-  @Autowired
   public CsrfProtectionFilter(
       @Value("${kkrepo.security.token-header:X-Nexus-Plus-Token}") String apiKeyHeader,
       @Value("${kkrepo.security.csrf.cookie-secure:false}") boolean cookieSecure,
-      @Value("${kkrepo.nexus.legacy-ui.enabled:false}") boolean legacyUiEnabled) {
+      NexusLegacyUiCompatibility legacyUi) {
     this.apiKeyHeader = apiKeyHeader;
     this.cookieSecure = cookieSecure;
-    this.legacyUiEnabled = legacyUiEnabled;
+    this.legacyUi = legacyUi;
   }
 
   @Override
@@ -74,22 +66,14 @@ public class CsrfProtectionFilter extends OncePerRequestFilter {
   private boolean csrfProtectedPath(HttpServletRequest request) {
     String uri = stripContextPath(request);
     return uri.startsWith("/internal/")
-        || (legacyUiEnabled && uri.startsWith("/service/rest/internal/"))
-        || legacyUiProtectedPath(uri)
+        || legacyUi.csrfProtectedPath(uri)
         || uri.startsWith("/service/rest/v1/security/");
   }
 
   private boolean csrfTokenBootstrapPath(HttpServletRequest request) {
     String uri = stripContextPath(request);
     return uri.equals("/internal/security/session")
-        || (legacyUiEnabled && uri.equals("/service/rapture/session"));
-  }
-
-  private boolean legacyUiProtectedPath(String uri) {
-    return legacyUiEnabled
-        && (uri.startsWith("/service/extdirect")
-            || uri.equals("/service/rapture/session")
-            || uri.equals("/service/rest/wonderland/authenticate"));
+        || legacyUi.csrfTokenBootstrapPath(uri);
   }
 
   private String csrfToken(HttpServletRequest request, boolean create) {

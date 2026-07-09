@@ -8,8 +8,6 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.Locale;
 import java.util.Optional;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
 import org.springframework.session.web.http.SessionRepositoryFilter;
@@ -27,22 +25,15 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
 
   private final SecurityAuthenticationService authenticationService;
   private final SecurityManagementService securityService;
-  private final boolean legacyUiEnabled;
+  private final NexusLegacyUiCompatibility legacyUi;
 
-  public SecurityManagementFilter(
-      SecurityAuthenticationService authenticationService,
-      SecurityManagementService securityService) {
-    this(authenticationService, securityService, true);
-  }
-
-  @Autowired
   public SecurityManagementFilter(
       SecurityAuthenticationService authenticationService,
       SecurityManagementService securityService,
-      @Value("${kkrepo.nexus.legacy-ui.enabled:false}") boolean legacyUiEnabled) {
+      NexusLegacyUiCompatibility legacyUi) {
     this.authenticationService = authenticationService;
     this.securityService = securityService;
-    this.legacyUiEnabled = legacyUiEnabled;
+    this.legacyUi = legacyUi;
   }
 
   @Override
@@ -86,25 +77,25 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
     if (uri.equals("/service/rest/v1/components") && "POST".equals(method)) {
       return Optional.of(AUTHENTICATED_ONLY);
     }
-    if (legacyUiEnabled && uri.equals("/service/rapture/session")) {
+    if (legacyUi.raptureSessionPath(uri)) {
       return Optional.empty();
     }
-    if (legacyUiEnabled && uri.equals("/service/rest/internal/ui/anonymous-settings")) {
+    if (legacyUi.internalUiAnonymousSettingsPath(uri)) {
       return Optional.of("GET".equals(method) ? "nexus:settings:read" : "nexus:settings:update");
     }
-    if (legacyUiEnabled && uri.startsWith("/service/rest/internal/ui/upload/")) {
+    if (legacyUi.internalUiUploadPath(uri)) {
       return Optional.of(AUTHENTICATED_ONLY);
     }
-    if (legacyUiEnabled && uri.equals("/service/rest/internal/ui/user")) {
+    if (legacyUi.internalUiUserPath(uri)) {
       return Optional.of(AUTHENTICATED_ONLY);
     }
-    if (legacyUiEnabled && uri.startsWith("/service/rest/internal/ui/user/")) {
+    if (legacyUi.internalUiUserChildPath(uri)) {
       if (uri.endsWith("/password") && "PUT".equals(method)) {
         return Optional.of("nexus:userschangepw:create");
       }
       return Optional.of(AUTHENTICATED_ONLY);
     }
-    if (legacyUiEnabled && uri.startsWith("/service/rest/internal/ui/security/")) {
+    if (legacyUi.internalUiSecurityPath(uri)) {
       return internalUiSecurityPermission(method, uri);
     }
     if (uri.startsWith("/internal/blob-stores")) {
@@ -125,7 +116,7 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
       return Optional.empty();
     }
     if (uri.startsWith("/internal/")
-        || (legacyUiEnabled && uri.startsWith("/service/rest/internal/"))) {
+        || legacyUi.serviceRestInternalPath(uri)) {
       return Optional.of(AUTHENTICATED_ONLY);
     }
     return Optional.empty();
@@ -164,7 +155,7 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
   }
 
   private Optional<String> internalUiSecurityPermission(String method, String uri) {
-    String path = uri.substring("/service/rest/internal/ui/security/".length());
+    String path = legacyUi.internalUiSecuritySubpath(uri);
     if (path.equals("permissions")) {
       return Optional.of(AUTHENTICATED_ONLY);
     }
@@ -286,7 +277,7 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
 
   private boolean isUiInternalEndpoint(String uri) {
     return uri.startsWith("/internal/")
-        || (legacyUiEnabled && uri.startsWith("/service/rest/internal/"));
+        || legacyUi.serviceRestInternalPath(uri);
   }
 
   private boolean isBrowserNavigation(HttpServletRequest request) {

@@ -36,7 +36,7 @@ class SecurityManagementFilterTest {
     AuthenticatedSubject subject = subject("alice");
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject));
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("should not be checked"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, false);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
     HttpServletRequest request = request("GET", "/service/rest/v1/security/api-keys/current");
@@ -55,7 +55,7 @@ class SecurityManagementFilterTest {
     AuthenticatedSubject subject = subject("alice");
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject));
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("should not be checked"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, true);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
     HttpServletRequest request = request("GET", "/service/rest/internal/ui/security/permissions");
@@ -73,7 +73,7 @@ class SecurityManagementFilterTest {
   void internalUiPermissionsFallThroughWhenLegacyUiDisabled() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("should not be checked"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security, false);
+    SecurityManagementFilter filter = filter(authentication, security, false);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
     HttpServletRequest request = request("GET", "/service/rest/internal/ui/security/permissions");
@@ -91,7 +91,7 @@ class SecurityManagementFilterTest {
     AuthenticatedSubject subject = subject("alice");
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject));
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("should not be checked"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security, false);
+    SecurityManagementFilter filter = filter(authentication, security, false);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
     HttpServletRequest request = request("GET", "/internal/security/permissions");
@@ -110,7 +110,7 @@ class SecurityManagementFilterTest {
     AuthenticatedSubject subject = subject("alice");
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject));
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("should not be checked"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, false);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
     HttpServletRequest request = request("GET", "/internal/security/session");
@@ -129,7 +129,7 @@ class SecurityManagementFilterTest {
     AuthenticatedSubject subject = subject("alice");
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject));
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("should not be checked"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, true);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
     HttpServletRequest request = request("PUT", "/service/rest/internal/ui/user");
@@ -147,7 +147,7 @@ class SecurityManagementFilterTest {
   void currentUserAccountPasswordRequiresChangePasswordPermission() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("admin")));
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("missing permission"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, true);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -168,7 +168,7 @@ class SecurityManagementFilterTest {
     AuthenticatedSubject subject = subject("alice");
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject));
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("should not be checked"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, false);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
     HttpServletRequest request = request("GET", "/internal/security/basic/login");
@@ -186,7 +186,7 @@ class SecurityManagementFilterTest {
   void raptureSessionCreateBypassesManagementFilterLikeNexusSessionServlet() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("should not be checked"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, true);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
     HttpServletRequest request = request("POST", "/service/rapture/session");
@@ -203,7 +203,7 @@ class SecurityManagementFilterTest {
   void raptureSessionDeleteBypassesAuthenticationLikeNexusLogout() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("should not be checked"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, true);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -222,7 +222,7 @@ class SecurityManagementFilterTest {
   void currentApiKeysRejectUnauthenticatedRequestsWithoutBrowserBasicChallenge() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.allow());
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, false);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -242,7 +242,7 @@ class SecurityManagementFilterTest {
   void internalSessionDoesNotTriggerBrowserBasicChallengeWhenUnauthenticated() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.allow());
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, false);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -261,7 +261,7 @@ class SecurityManagementFilterTest {
   void internalUiRequestsDoNotTriggerBrowserBasicChallengeWhenUnauthenticated() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.allow());
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, false);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -280,7 +280,7 @@ class SecurityManagementFilterTest {
   void internalUiBrowserNavigationsRedirectToWelcomeWhenUnauthenticated() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.allow());
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, false);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -300,7 +300,7 @@ class SecurityManagementFilterTest {
   void serviceRestSecurityStillTriggersBasicChallengeWhenUnauthenticated() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.allow());
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, false);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -319,7 +319,7 @@ class SecurityManagementFilterTest {
   void customLoginEndpointsBypassManagementFilter() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("should not be checked"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, false);
 
     ResponseState optionsResponse = new ResponseState();
     ChainState optionsChain = new ChainState();
@@ -347,7 +347,7 @@ class SecurityManagementFilterTest {
   void adminBootstrapEndpointsBypassManagementFilter() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("should not be checked"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, false);
 
     ResponseState statusResponse = new ResponseState();
     ChainState statusChain = new ChainState();
@@ -375,7 +375,7 @@ class SecurityManagementFilterTest {
   void uiSettingsReadBypassesManagementFilterForEarlyLocalization() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("should not be checked"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, false);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -394,7 +394,7 @@ class SecurityManagementFilterTest {
   void uiSettingsUpdateRequiresSettingsUpdatePermission() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("admin")));
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("missing permission"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, false);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -414,7 +414,7 @@ class SecurityManagementFilterTest {
   void adminApiKeysStillRequireApiKeyManagementPermission() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("admin")));
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("missing permission"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, false);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -434,7 +434,7 @@ class SecurityManagementFilterTest {
   void serviceRestAnonymousReadRequiresSettingsReadPermission() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("admin")));
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("missing permission"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, false);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -454,7 +454,7 @@ class SecurityManagementFilterTest {
   void auditLogReadRequiresSettingsReadPermission() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("admin")));
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("missing permission"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, false);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -474,7 +474,7 @@ class SecurityManagementFilterTest {
   void serviceRestAnonymousUpdateRequiresSettingsUpdatePermission() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("admin")));
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("missing permission"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, false);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -494,7 +494,7 @@ class SecurityManagementFilterTest {
   void internalUiUploadRequiresAuthenticationOnly() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("admin")));
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("missing permission"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, true);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -513,7 +513,7 @@ class SecurityManagementFilterTest {
   void internalUiUploadFallsThroughWhenLegacyUiDisabled() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("should not be checked"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security, false);
+    SecurityManagementFilter filter = filter(authentication, security, false);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -532,7 +532,7 @@ class SecurityManagementFilterTest {
   void serviceRestComponentsUploadRequiresAuthenticationOnly() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("admin")));
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("missing permission"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, false);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -551,7 +551,7 @@ class SecurityManagementFilterTest {
   void internalBlobStoreListRequiresBlobStoreReadPermission() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("admin")));
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("missing permission"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, false);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -571,7 +571,7 @@ class SecurityManagementFilterTest {
   void internalBlobStoreCreateRequiresBlobStoreCreatePermission() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("admin")));
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("missing permission"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, false);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -591,7 +591,7 @@ class SecurityManagementFilterTest {
   void internalBlobStoreCheckRequiresBlobStoreUpdatePermission() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("admin")));
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("missing permission"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, false);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -611,7 +611,7 @@ class SecurityManagementFilterTest {
   void oidcBrowserLoginEndpointsBypassManagementPermissions() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("should not be checked"));
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, false);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -630,7 +630,7 @@ class SecurityManagementFilterTest {
   void unknownInternalPathsAreFailClosedToAuthenticatedSubjects() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.allow());
-    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security);
+    SecurityManagementFilter filter = filter(authentication, security, false);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
 
@@ -643,6 +643,16 @@ class SecurityManagementFilterTest {
     assertEquals(0, security.decisions);
     assertEquals(0, chain.calls);
     assertEquals(HttpServletResponse.SC_UNAUTHORIZED, response.status);
+  }
+
+  private static SecurityManagementFilter filter(
+      SecurityAuthenticationService authentication,
+      SecurityManagementService security,
+      boolean legacyUiEnabled) {
+    return new SecurityManagementFilter(
+        authentication,
+        security,
+        new NexusLegacyUiCompatibility(legacyUiEnabled));
   }
 
   private static AuthenticatedSubject subject(String userId) {
