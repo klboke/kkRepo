@@ -42,7 +42,6 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   private final boolean anonymousReadEnabled;
   private final boolean legacyUiEnabled;
 
-  @Autowired
   public RepositorySecurityFilter(
       SecurityAuthenticationService authenticationService,
       AccessDecisionService accessDecisionService,
@@ -52,6 +51,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     this(authenticationService, accessDecisionService, repositoryDao, forwardedHeaderPolicy, anonymousReadEnabled, true);
   }
 
+  @Autowired
   public RepositorySecurityFilter(
       SecurityAuthenticationService authenticationService,
       AccessDecisionService accessDecisionService,

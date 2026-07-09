@@ -199,7 +199,7 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
     if (path.equals("bootstrap") || path.equals("bootstrap/admin")) {
       return Optional.empty();
     }
-    if (path.equals("session") || path.equals("basic/login")) {
+    if (path.equals("session") || path.equals("basic/login") || path.equals("permissions")) {
       return Optional.of(AUTHENTICATED_ONLY);
     }
     if (path.equals("login/options") || path.equals("login")) {

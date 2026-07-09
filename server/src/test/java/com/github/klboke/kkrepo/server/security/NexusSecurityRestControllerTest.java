@@ -1157,6 +1157,52 @@ class NexusSecurityRestControllerTest {
   }
 
   @Test
+  void internalPermissionsExposeCurrentUserEffectivePermissionCatalog() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.user(new SecurityUserRecord(
+        1L,
+        "Local",
+        "admin",
+        "Admin",
+        null,
+        "admin@example.com",
+        "$shiro1$hash",
+        "ACTIVE",
+        null,
+        Map.of()));
+    dao.roles(1L, "nx-admin");
+    dao.upsertRole(new SecurityRoleRecord("nx-admin", "Local", "Admin", null, false, Map.of()));
+    dao.privilege(new SecurityPrivilegeRecord(
+        "nx-all",
+        "All",
+        null,
+        "wildcard",
+        false,
+        Map.of("pattern", "nexus:*")));
+    dao.privilege(new SecurityPrivilegeRecord(
+        "nx-users-read",
+        "Users read",
+        null,
+        "wildcard",
+        false,
+        Map.of("pattern", "nexus:users:read")));
+    dao.privilege(new SecurityPrivilegeRecord(
+        "nx-repository-admin-maven2-all-add",
+        "Maven admin add",
+        null,
+        "repository-admin",
+        false,
+        Map.of("format", "maven2", "repository", "*", "actions", "add")));
+    dao.replaceRolePrivileges("nx-admin", List.of("nx-all"));
+    SecurityManagementController controller = new SecurityManagementController(new SecurityManagementService(dao));
+
+    var permissions = controller.permissions(request(subject("admin")));
+
+    assertTrue(permissions.contains("nexus:users:read"));
+    assertTrue(permissions.contains("nexus:repository-admin:maven2:*:add"));
+  }
+
+  @Test
   void extDirectGetUserReturnsRaptureCurrentUserShape() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.user(new SecurityUserRecord(

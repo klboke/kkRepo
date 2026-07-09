@@ -370,7 +370,7 @@ async function submitAdminBootstrap(event) {
 
 async function fetchPermissions() {
   if (!currentSession) return [];
-  const res = await fetch("/service/rest/internal/ui/security/permissions", {
+  const res = await fetch("/internal/security/permissions", {
     headers: { Accept: "application/json" },
     cache: "no-store",
   });

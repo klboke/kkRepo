@@ -42,9 +42,9 @@ import org.springframework.web.server.ResponseStatusException;
 /**
  * Legacy Nexus internal UI security compatibility endpoint.
  *
- * @deprecated This endpoint is kept for Nexus internal UI compatibility and selected browse UI
- *     permission checks only. New kkrepo management flows should use {@code /internal/security}
- *     or the Nexus REST API surface instead.
+ * @deprecated This endpoint is kept for Nexus internal UI compatibility only. New kkrepo
+ *     management flows should use {@code /internal/security} or the Nexus REST API surface
+ *     instead.
  */
 @Deprecated(since = "0.2.0", forRemoval = false)
 @ConditionalOnProperty(name = "kkrepo.nexus.legacy-ui.enabled", havingValue = "true")

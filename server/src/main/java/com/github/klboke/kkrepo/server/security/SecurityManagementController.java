@@ -73,6 +73,12 @@ public class SecurityManagementController {
         roles);
   }
 
+  @GetMapping("/permissions")
+  public List<String> permissions(HttpServletRequest request) {
+    AuthenticatedSubject subject = currentSubject(request);
+    return securityService.listEffectivePermissions(subject.permissionSubject());
+  }
+
   @GetMapping("/users")
   public List<UserView> users(
       @RequestParam(name = "source", required = false) String source,

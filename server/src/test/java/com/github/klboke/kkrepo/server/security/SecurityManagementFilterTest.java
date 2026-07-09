@@ -70,6 +70,25 @@ class SecurityManagementFilterTest {
   }
 
   @Test
+  void internalPermissionsRequireAuthenticationOnly() throws Exception {
+    AuthenticatedSubject subject = subject("alice");
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject));
+    RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("should not be checked"));
+    SecurityManagementFilter filter = new SecurityManagementFilter(authentication, security, false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+    HttpServletRequest request = request("GET", "/internal/security/permissions");
+
+    filter.doFilter(request, response.proxy(), chain);
+
+    assertEquals(1, authentication.calls);
+    assertEquals(0, security.decisions);
+    assertEquals(1, chain.calls);
+    assertSame(subject, request.getAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE));
+    assertEquals(0, response.status);
+  }
+
+  @Test
   void internalSessionRequiresAuthenticationOnly() throws Exception {
     AuthenticatedSubject subject = subject("alice");
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject));
