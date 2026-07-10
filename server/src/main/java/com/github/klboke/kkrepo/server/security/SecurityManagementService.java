@@ -1182,7 +1182,7 @@ public class SecurityManagementService implements AccessDecisionService {
 
   private boolean isAnonymousUser(String userId) {
     AnonymousSettingsView settings = anonymousSettings();
-    return settings.enabled() && requireText(userId, "userId").equals(settings.userId());
+    return requireText(userId, "userId").equals(settings.userId());
   }
 
   private ApiKeyView toApiKeyView(ApiKeyRecord record) {

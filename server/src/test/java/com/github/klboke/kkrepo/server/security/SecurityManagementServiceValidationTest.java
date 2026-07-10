@@ -739,7 +739,7 @@ class SecurityManagementServiceValidationTest {
   }
 
   @Test
-  void anonymousUserCannotBeDeletedOrHavePasswordChanged() {
+  void anonymousUserRemainsProtectedWhileAnonymousAccessIsDisabled() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.insertUser(new SecurityUserRecord(
         null,
@@ -753,7 +753,7 @@ class SecurityManagementServiceValidationTest {
         null,
         Map.of()));
     dao.upsertAnonymousConfig(new SecurityAnonymousConfigRecord(
-        true,
+        false,
         "Local",
         "anonymous",
         "NexusAuthorizingRealm"));
