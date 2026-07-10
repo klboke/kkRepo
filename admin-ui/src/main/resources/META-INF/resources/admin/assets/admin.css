@@ -312,9 +312,11 @@ select {
 }
 
 .product-version {
-  margin-top: 2px;
+  margin-left: 4px;
   color: #e2e2e2;
-  font-size: 13px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .product-copy {
@@ -1489,8 +1491,8 @@ textarea:focus-visible {
 .product {
   width: 272px;
   min-width: 272px;
-  gap: 12px;
-  padding: 0 18px;
+  gap: 10px;
+  padding: 0 14px;
 }
 
 .logo-mark {
@@ -1514,11 +1516,15 @@ textarea:focus-visible {
   font-size: 15px;
   font-weight: 750;
   line-height: 1.12;
+  white-space: nowrap;
 }
 
 .product-version {
+  margin-left: 4px;
   color: var(--topbar-muted);
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
 }
 
 .product-copy {
@@ -2194,7 +2200,7 @@ code {
 
   .product {
     width: auto;
-    min-width: min(100%, 260px);
+    min-width: min(100%, 272px);
   }
 
   .side-nav {
