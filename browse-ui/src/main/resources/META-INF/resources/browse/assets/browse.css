@@ -101,13 +101,6 @@ select {
   color: inherit;
 }
 
-.product-link:hover,
-.product-version:hover {
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 2px;
-}
-
 .logo-mark:hover {
   filter: brightness(1.08);
 }
