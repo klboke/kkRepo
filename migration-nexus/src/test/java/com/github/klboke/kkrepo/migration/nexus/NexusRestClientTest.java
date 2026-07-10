@@ -49,6 +49,7 @@ class NexusRestClientTest {
     assertEquals(1, inventory.securityExport().roles().size());
     assertEquals("nx-admin", inventory.securityExport().roles().get(0).get("id"));
     assertEquals(List.of(), inventory.securityExport().realmOrder());
+    assertEquals(false, inventory.securityExport().anonymous().get("enabled"));
     assertEquals(List.of(), inventory.warnings());
     assertEquals("3.77.2-02", inventory.probe().nexusVersion());
     assertEquals("DATASTORE_H2", inventory.probe().metadataEngine());

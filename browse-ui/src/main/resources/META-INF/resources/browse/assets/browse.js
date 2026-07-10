@@ -292,6 +292,10 @@ function renderAdminBootstrap() {
   if (userInput && adminBootstrapStatus) {
     userInput.value = `${adminBootstrapStatus.source || "Local"}/${adminBootstrapStatus.userId || "admin"}`;
   }
+  const anonymousInput = document.getElementById("admin-bootstrap-anonymous-enabled");
+  if (anonymousInput && adminBootstrapStatus) {
+    anonymousInput.checked = Boolean(adminBootstrapStatus.anonymousAccessEnabled);
+  }
 }
 
 function setAdminBootstrapStatus(message, type = "") {
@@ -315,6 +319,7 @@ async function submitAdminBootstrap(event) {
   event.preventDefault();
   const passwordInput = document.getElementById("admin-bootstrap-password");
   const confirmInput = document.getElementById("admin-bootstrap-password-confirm");
+  const anonymousInput = document.getElementById("admin-bootstrap-anonymous-enabled");
   const submitButton = document.getElementById("admin-bootstrap-submit");
   const password = passwordInput ? passwordInput.value : "";
   const passwordConfirm = confirmInput ? confirmInput.value : "";
@@ -340,7 +345,11 @@ async function submitAdminBootstrap(event) {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       cache: "no-store",
-      body: JSON.stringify({ password, passwordConfirm }),
+      body: JSON.stringify({
+        password,
+        passwordConfirm,
+        anonymousAccessEnabled: Boolean(anonymousInput && anonymousInput.checked),
+      }),
     });
     if (!createResponse.ok) {
       throw new Error(await responseMessage(createResponse, `Administrator setup failed: ${createResponse.status}`));

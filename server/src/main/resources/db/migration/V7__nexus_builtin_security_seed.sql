@@ -83,5 +83,5 @@ WHERE source = 'default' AND user_id = 'anonymous';
 INSERT INTO security_anonymous_config
   (id, enabled, user_source, user_id, realm_name)
 VALUES
-  (1, 1, 'default', 'anonymous', 'NexusAuthorizingRealm')
+  (1, 0, 'default', 'anonymous', 'NexusAuthorizingRealm')
 ON DUPLICATE KEY UPDATE id = id;

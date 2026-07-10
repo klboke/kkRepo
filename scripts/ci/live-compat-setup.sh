@@ -334,7 +334,7 @@ initialize_kkrepo_admin() {
     return 1
   fi
 
-  payload="$(printf '{"password":"%s","passwordConfirm":"%s"}' "$KKREPO_PASSWORD" "$KKREPO_PASSWORD")"
+  payload="$(printf '{"password":"%s","passwordConfirm":"%s","anonymousAccessEnabled":true}' "$KKREPO_PASSWORD" "$KKREPO_PASSWORD")"
   echo "[compat] bootstrapping kkrepo admin"
   curl -m 20 -fsS \
     -b "$cookie_file" \

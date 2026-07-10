@@ -10,7 +10,8 @@ public final class SecurityPayloads {
 
   public record AdminBootstrapCommand(
       String password,
-      String passwordConfirm) {
+      String passwordConfirm,
+      Boolean anonymousAccessEnabled) {
   }
 
   public record AdminBootstrapStatus(
@@ -18,7 +19,8 @@ public final class SecurityPayloads {
       String source,
       String userId,
       String roleId,
-      int minPasswordLength) {
+      int minPasswordLength,
+      boolean anonymousAccessEnabled) {
   }
 
   public record UserCommand(

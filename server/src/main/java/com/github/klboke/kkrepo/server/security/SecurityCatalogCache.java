@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.security;
 
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityDao;
+import com.github.klboke.kkrepo.persistence.mysql.model.SecurityAnonymousConfigRecord;
 import com.github.klboke.kkrepo.persistence.mysql.model.SecurityPrivilegeRecord;
 import com.github.klboke.kkrepo.persistence.mysql.model.SecurityRepositoryTargetRecord;
 import com.github.klboke.kkrepo.persistence.mysql.model.SecurityRoleRecord;
@@ -38,6 +39,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 public class SecurityCatalogCache {
   private static final Logger log = LoggerFactory.getLogger(SecurityCatalogCache.class);
   private static final String CATALOG_NAME = "security";
+  private static final String LOCAL_SOURCE = "Local";
+  private static final String DEFAULT_ANONYMOUS_USER_ID = "anonymous";
   private static final Object REFRESH_RESOURCE_KEY =
       SecurityCatalogCache.class.getName() + ".REFRESH";
 
@@ -195,6 +198,11 @@ public class SecurityCatalogCache {
   }
 
   private SecurityCatalog loadCatalog() {
+    SecurityAnonymousConfigRecord anonymousConfig = securityDao.findAnonymousConfig().orElse(null);
+    String anonymousUserId = anonymousConfig == null
+        ? null
+        : defaultString(anonymousConfig.userId(), DEFAULT_ANONYMOUS_USER_ID);
+    SecurityUserRecord anonymousUser = null;
     Map<String, List<String>> userRoleIds = new LinkedHashMap<>();
     List<SecurityUserRecord> users = securityDao.listUsers();
     for (SecurityUserRecord user : users) {
@@ -202,6 +210,11 @@ public class SecurityCatalogCache {
         continue;
       }
       userRoleIds.put(subjectKey(user.source(), user.userId()), securityDao.listUserRoleIds(user.id()));
+      if (anonymousUserId != null
+          && LOCAL_SOURCE.equals(user.source())
+          && anonymousUserId.equals(user.userId())) {
+        anonymousUser = user;
+      }
     }
 
     Map<String, List<String>> roleChildIds = new LinkedHashMap<>();
@@ -229,6 +242,8 @@ public class SecurityCatalogCache {
         Instant.now(),
         users.size(),
         roles.size(),
+        anonymousConfig,
+        anonymousUser,
         immutableStringListMap(userRoleIds),
         immutableStringListMap(roleChildIds),
         immutableStringListMap(rolePrivilegeIds),
@@ -266,6 +281,8 @@ public class SecurityCatalogCache {
       Instant loadedAt,
       int userCount,
       int roleCount,
+      SecurityAnonymousConfigRecord anonymousConfig,
+      SecurityUserRecord anonymousUser,
       Map<String, List<String>> userRoleIds,
       Map<String, List<String>> roleChildIds,
       Map<String, List<String>> rolePrivilegeIds,
@@ -279,6 +296,10 @@ public class SecurityCatalogCache {
 
     public int repositoryTargetCount() {
       return repositoryTargets.size();
+    }
+
+    public List<String> userRoleIds(String source, String userId) {
+      return userRoleIds.getOrDefault(subjectKey(source, userId), List.of());
     }
 
     public Set<String> effectiveRoleIds(PermissionSubject subject) {

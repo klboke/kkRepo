@@ -285,6 +285,8 @@
     "Initial administrator setup": "初始管理员设置",
     "Administrator": "管理员",
     "Confirm password": "确认密码",
+    "Allow anonymous repository reads": "允许匿名读取仓库",
+    "Users can browse and download readable repository content without signing in. You can change this later in Administration > Security > Anonymous Access.": "用户无需登录即可浏览和下载有读取权限的仓库内容。之后可在“管理后台 > 安全 > 匿名访问”中调整。",
     "Create administrator": "创建管理员",
     "Browse assets and components": "浏览资产和组件",
     "Copy": "复制",

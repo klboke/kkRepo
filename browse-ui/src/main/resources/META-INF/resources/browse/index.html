@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>kkrepo browse</title>
     <link rel="icon" type="image/svg+xml" href="/browse/assets/favicon.svg?v=20260609-kl-logo-1">
-    <link rel="stylesheet" href="/browse/assets/browse.css?v=20260617-search-result-jump-1">
+    <link rel="stylesheet" href="/browse/assets/browse.css?v=20260710-anonymous-bootstrap-1">
     <link rel="stylesheet" href="/login/assets/login-modal.css?v=20260616-login-method-tabs-2">
   </head>
   <body>
@@ -96,6 +96,13 @@
                 <input id="admin-bootstrap-password-confirm" type="password" autocomplete="new-password">
               </label>
             </div>
+            <label class="admin-bootstrap-option" for="admin-bootstrap-anonymous-enabled">
+              <input id="admin-bootstrap-anonymous-enabled" type="checkbox">
+              <span class="admin-bootstrap-option-copy">
+                <strong>Allow anonymous repository reads</strong>
+                <small>Users can browse and download readable repository content without signing in. You can change this later in Administration &gt; Security &gt; Anonymous Access.</small>
+              </span>
+            </label>
             <div class="admin-bootstrap-actions">
               <button class="admin-bootstrap-button" id="admin-bootstrap-submit" type="submit">Create administrator</button>
               <span class="admin-bootstrap-status" id="admin-bootstrap-status" role="status"></span>
@@ -262,8 +269,8 @@
       </main>
     </div>
 
-    <script src="/login/assets/ui-i18n.js?v=20260624-ui-i18n-5"></script>
+    <script src="/login/assets/ui-i18n.js?v=20260710-anonymous-bootstrap-2"></script>
     <script src="/login/assets/login-modal.js?v=20260624-ui-i18n-1"></script>
-    <script src="/browse/assets/browse.js?v=20260624-ui-i18n-1"></script>
+    <script src="/browse/assets/browse.js?v=20260710-anonymous-bootstrap-1"></script>
   </body>
 </html>

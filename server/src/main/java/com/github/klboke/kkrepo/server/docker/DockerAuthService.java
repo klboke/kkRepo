@@ -52,7 +52,7 @@ public class DockerAuthService {
   @Transactional
   public TokenView grant(HttpServletRequest request, String service, List<String> scopes) {
     AuthenticatedSubject subject = authenticationService.authenticate(request)
-        .or(() -> authenticationService.authenticateAnonymous(false))
+        .or(authenticationService::authenticateAnonymous)
         .orElseThrow(() -> new DockerProtocolException(DockerErrorCode.UNAUTHORIZED, "authentication required"));
     List<Scope> granted = new ArrayList<>();
     for (Scope scope : parseScopes(scopes, connectorRepositoryOrNull(request))) {

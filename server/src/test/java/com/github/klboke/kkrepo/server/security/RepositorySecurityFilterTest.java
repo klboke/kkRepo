@@ -101,7 +101,7 @@ class RepositorySecurityFilterTest {
 
   @Test
   void cargoConfigRequiresAuthenticationWhenAnonymousReadIsDisabled() throws Exception {
-    assertCargoReadRequiresAuthenticationWithoutAnonymousFallback("/repository/cargo-hosted/config.json");
+    assertCargoReadRequiresAuthenticationWhenAnonymousAccessDisabled("/repository/cargo-hosted/config.json");
   }
 
   @Test
@@ -180,12 +180,12 @@ class RepositorySecurityFilterTest {
 
   @Test
   void cargoSparseIndexRequiresAuthenticationWhenAnonymousReadIsDisabled() throws Exception {
-    assertCargoReadRequiresAuthenticationWithoutAnonymousFallback("/repository/cargo-hosted/kk/re/kkrepo_e2e");
+    assertCargoReadRequiresAuthenticationWhenAnonymousAccessDisabled("/repository/cargo-hosted/kk/re/kkrepo_e2e");
   }
 
   @Test
   void cargoSearchRequiresAuthenticationWhenAnonymousReadIsDisabled() throws Exception {
-    assertCargoReadRequiresAuthenticationWithoutAnonymousFallback("/repository/cargo-hosted/api/v1/crates");
+    assertCargoReadRequiresAuthenticationWhenAnonymousAccessDisabled("/repository/cargo-hosted/api/v1/crates");
   }
 
   private static void assertCargoReadUsesAnonymousPermissions(String uri) throws Exception {
@@ -209,7 +209,7 @@ class RepositorySecurityFilterTest {
     assertEquals(0, response.status);
   }
 
-  private static void assertCargoReadRequiresAuthenticationWithoutAnonymousFallback(String uri) throws Exception {
+  private static void assertCargoReadRequiresAuthenticationWhenAnonymousAccessDisabled(String uri) throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(subject("anonymous"));
     RepositorySecurityFilter filter = filter(
         authentication,
@@ -299,7 +299,7 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
-  void cargoDownloadsUseAnonymousReadFallbackLikeOtherRepositories() throws Exception {
+  void cargoDownloadsUseAnonymousAccessLikeOtherRepositories() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(subject("anonymous"));
     RepositorySecurityFilter filter = filter(
         authentication,
@@ -320,7 +320,7 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
-  void nexusCompatibleCargoDownloadsUseAnonymousReadFallbackLikeOtherRepositories() throws Exception {
+  void nexusCompatibleCargoDownloadsUseAnonymousAccessLikeOtherRepositories() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(subject("anonymous"));
     RepositorySecurityFilter filter = filter(
         authentication,
@@ -341,7 +341,7 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
-  void writeRequestsDoNotUseAnonymousFallback() throws Exception {
+  void writeRequestsDoNotUseAnonymousAccess() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(subject("anonymous"));
     RepositorySecurityFilter filter = filter(
         authentication,
@@ -612,13 +612,13 @@ class RepositorySecurityFilterTest {
       SecurityAuthenticationService authenticationService,
       com.github.klboke.kkrepo.auth.AccessDecisionService accessDecisionService,
       RepositoryDao repositoryDao,
-      boolean anonymousReadEnabled) {
+      boolean anonymousAccessEnabled) {
     return filter(
         authenticationService,
         accessDecisionService,
         repositoryDao,
         new ForwardedHeaderPolicy(""),
-        anonymousReadEnabled);
+        anonymousAccessEnabled);
   }
 
   private static RepositorySecurityFilter filter(
@@ -626,13 +626,15 @@ class RepositorySecurityFilterTest {
       com.github.klboke.kkrepo.auth.AccessDecisionService accessDecisionService,
       RepositoryDao repositoryDao,
       ForwardedHeaderPolicy forwardedHeaderPolicy,
-      boolean anonymousReadEnabled) {
+      boolean anonymousAccessEnabled) {
+    if (authenticationService instanceof StubAuthenticationService stub) {
+      stub.anonymousEnabled = anonymousAccessEnabled;
+    }
     return new RepositorySecurityFilter(
         authenticationService,
         accessDecisionService,
         repositoryDao,
         forwardedHeaderPolicy,
-        anonymousReadEnabled,
         new NexusLegacyUiCompatibility(false));
   }
 
@@ -640,14 +642,16 @@ class RepositorySecurityFilterTest {
       SecurityAuthenticationService authenticationService,
       com.github.klboke.kkrepo.auth.AccessDecisionService accessDecisionService,
       RepositoryDao repositoryDao,
-      boolean anonymousReadEnabled,
+      boolean anonymousAccessEnabled,
       boolean legacyUiEnabled) {
+    if (authenticationService instanceof StubAuthenticationService stub) {
+      stub.anonymousEnabled = anonymousAccessEnabled;
+    }
     return new RepositorySecurityFilter(
         authenticationService,
         accessDecisionService,
         repositoryDao,
         new ForwardedHeaderPolicy(""),
-        anonymousReadEnabled,
         new NexusLegacyUiCompatibility(legacyUiEnabled));
   }
 
@@ -876,6 +880,7 @@ class RepositorySecurityFilterTest {
     private int rubygemsCalls;
     private Optional<AuthenticatedSubject> pubAuthenticated = Optional.empty();
     private int pubCalls;
+    private boolean anonymousEnabled;
 
     private StubAuthenticationService(AuthenticatedSubject anonymous) {
       this(Optional.empty(), anonymous);
@@ -910,9 +915,9 @@ class RepositorySecurityFilterTest {
     }
 
     @Override
-    public Optional<AuthenticatedSubject> authenticateAnonymous(boolean fallbackEnabled) {
+    public Optional<AuthenticatedSubject> authenticateAnonymous() {
       anonymousCalls++;
-      return fallbackEnabled && anonymous != null ? Optional.of(anonymous) : Optional.empty();
+      return anonymousEnabled && anonymous != null ? Optional.of(anonymous) : Optional.empty();
     }
   }
 
