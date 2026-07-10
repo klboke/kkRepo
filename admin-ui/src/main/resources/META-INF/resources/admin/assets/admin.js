@@ -347,11 +347,15 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+function lucideIcon(name, className = "") {
+  return `<span class="lucide-icon icon-${name}${className ? ` ${className}` : ""}" aria-hidden="true"></span>`;
+}
+
 function repoIcon(type) {
   const lower = String(type || "").toLowerCase();
-  if (lower === "group") return '<span class="repo-icon group">▣</span>';
-  if (lower === "proxy") return '<span class="repo-icon proxy">▤</span>';
-  return '<span class="repo-icon hosted">▥</span>';
+  if (lower === "group") return lucideIcon("boxes", "repo-icon group");
+  if (lower === "proxy") return lucideIcon("cloud-download", "repo-icon proxy");
+  return lucideIcon("package", "repo-icon hosted");
 }
 
 const FORMAT_ICON_NAMES = Object.freeze({
@@ -395,7 +399,7 @@ function formatBadge(format) {
 }
 
 function blobStoreIcon(type) {
-  return `<span class="repo-icon ${type === "s3" ? "proxy" : "hosted"}">▤</span>`;
+  return lucideIcon("database", `repo-icon ${type === "s3" ? "proxy" : "hosted"}`);
 }
 
 function pathStyleBadge(enabled) {
@@ -861,7 +865,12 @@ function updateRepositorySortHeaders() {
       "aria-sort",
       !active ? "none" : direction === "asc" ? "ascending" : "descending",
     );
-    if (indicator) indicator.textContent = active ? (direction === "asc" ? "↑" : "↓") : "";
+    if (indicator) {
+      indicator.classList.add("lucide-icon");
+      indicator.classList.toggle("icon-arrow-up", active && direction === "asc");
+      indicator.classList.toggle("icon-arrow-down", active && direction === "desc");
+      indicator.style.visibility = active ? "visible" : "hidden";
+    }
   });
 }
 
@@ -1767,7 +1776,7 @@ function memberRowHtml(repo, side, order) {
   const highlightSet = memberTransfer.highlight[side];
   const isSelected = highlightSet.has(repo.name);
   const draggable = side === "selected";
-  const handle = draggable ? '<span class="member-handle" aria-hidden="true">⠿</span>' : "";
+  const handle = draggable ? lucideIcon("grip-vertical", "member-handle") : "";
   const orderBadge = order != null ? `<span class="member-order">${order}</span>` : "";
   return `<li class="member-row${isSelected ? " is-selected" : ""}" data-name="${escapeHtml(repo.name)}" data-side="${side}"${draggable ? ' draggable="true"' : ""}>${handle}${orderBadge}<span class="member-name">${escapeHtml(repo.name)}</span><span class="member-type">${escapeHtml(lowerOrEmpty(repo.type))}</span></li>`;
 }

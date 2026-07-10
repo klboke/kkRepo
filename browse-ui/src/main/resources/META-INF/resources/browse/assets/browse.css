@@ -1516,9 +1516,14 @@ h1 {
 }
 
 .kv-locked::after {
-  content: "🔒";
+  content: "";
+  display: inline-block;
+  width: 12px;
+  height: 12px;
   margin-left: 6px;
-  font-size: 12px;
+  background: currentColor;
+  -webkit-mask: url("./icons/lock.svg") center / contain no-repeat;
+  mask: url("./icons/lock.svg") center / contain no-repeat;
   opacity: 0.6;
 }
 
@@ -2424,6 +2429,92 @@ body {
   position: sticky;
   top: 0;
   z-index: 1;
+}
+
+/* Shared Lucide sizing keeps icon baselines stable across controls and tables. */
+.heading-icon > .lucide-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.side-icon {
+  height: 22px;
+}
+
+.side-caret,
+.user-menu-caret {
+  width: 12px;
+  height: 12px;
+}
+
+.filter-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.repo-sort-indicator {
+  width: 13px;
+  height: 13px;
+}
+
+.tree-toggle .lucide-icon {
+  width: 11px;
+  height: 11px;
+}
+
+.tree-icon.icon-folder {
+  color: #c68a1d;
+}
+
+.tree-icon.icon-archive {
+  color: #a96324;
+}
+
+.tree-icon.icon-file-code {
+  color: #356d90;
+}
+
+.tree-icon.icon-files,
+.tree-icon.icon-file {
+  color: #63736e;
+}
+
+.result-note,
+.copy-button,
+.analyze-btn {
+  display: flex;
+  align-items: center;
+}
+
+.result-note {
+  gap: 5px;
+}
+
+.result-note .lucide-icon,
+.copy-button .lucide-icon,
+.analyze-btn .lucide-icon {
+  width: 15px;
+  height: 15px;
+}
+
+.analyze-btn {
+  gap: 6px;
+}
+
+.usage-copy .lucide-icon {
+  width: 15px;
+  height: 15px;
+}
+
+.component-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.health-muted.lucide-icon,
+.expand-column .lucide-icon {
+  width: 16px;
+  height: 16px;
 }
 
 @media (max-width: 760px) {

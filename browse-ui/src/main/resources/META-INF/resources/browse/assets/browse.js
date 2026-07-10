@@ -598,10 +598,14 @@ async function fetchSearchComponents(format, keyword) {
   return res.json();
 }
 
+function lucideIcon(name, className = "") {
+  return `<span class="lucide-icon icon-${name}${className ? ` ${className}` : ""}" aria-hidden="true"></span>`;
+}
+
 function repoIcon(type) {
-  if (type === "group") return '<span class="repo-icon group">▣</span>';
-  if (type === "proxy") return '<span class="repo-icon proxy">▤</span>';
-  return '<span class="repo-icon hosted">▥</span>';
+  if (type === "group") return lucideIcon("boxes", "repo-icon group");
+  if (type === "proxy") return lucideIcon("cloud-download", "repo-icon proxy");
+  return lucideIcon("package", "repo-icon hosted");
 }
 
 const FORMAT_ICON_NAMES = Object.freeze({
@@ -629,35 +633,11 @@ function formatBadge(format) {
   return `<span class="format-cell"><span class="format-logo format-logo-${icon}" aria-hidden="true"></span><span class="format-cell-label">${escapeHtml(normalized)}</span></span>`;
 }
 
-// --- inline SVG icons (Nexus-style) -----------------------------------------
-
-const ICON_FOLDER = `<svg class="tree-icon" viewBox="0 0 16 14" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-  <path d="M1 3 L1 13 L15 13 L15 4 L8 4 L7 3 Z" fill="#f4c34a" stroke="#c79320" stroke-width="0.5"/>
-  <path d="M1 3 L7 3 L8 4 L15 4 L15 5 L1 5 Z" fill="#d99820"/>
-</svg>`;
-
-const ICON_ARCHIVE = `<svg class="tree-icon" viewBox="0 0 16 14" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-  <rect x="1" y="3" width="14" height="3" fill="#e07a1e" stroke="#a85a14" stroke-width="0.5"/>
-  <rect x="1" y="6" width="14" height="7" fill="#f0a050" stroke="#a85a14" stroke-width="0.5"/>
-  <rect x="6" y="3" width="4" height="10" fill="#d9892f" stroke="#a85a14" stroke-width="0.3"/>
-</svg>`;
-
-const ICON_POM = `<svg class="tree-icon" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-  <path d="M3 1 L10 1 L13 4 L13 15 L3 15 Z" fill="#ffffff" stroke="#7a98c1" stroke-width="0.8"/>
-  <path d="M10 1 L10 4 L13 4 Z" fill="#cfd8e3"/>
-  <circle cx="8" cy="10" r="2.6" fill="#3478c4"/>
-  <circle cx="8" cy="10" r="1.1" fill="#ffffff"/>
-</svg>`;
-
-const ICON_HASH = `<svg class="tree-icon" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-  <path d="M2 4 L9 4 L11 6 L11 14 L2 14 Z" fill="#ffffff" stroke="#9aa3ad" stroke-width="0.8"/>
-  <path d="M5 2 L12 2 L14 4 L14 12 L11 12 L11 6 L9 4 L5 4 Z" fill="#ffffff" stroke="#9aa3ad" stroke-width="0.8"/>
-</svg>`;
-
-const ICON_FILE = `<svg class="tree-icon" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-  <path d="M3 1 L10 1 L13 4 L13 15 L3 15 Z" fill="#ffffff" stroke="#7a98c1" stroke-width="0.8"/>
-  <path d="M10 1 L10 4 L13 4 Z" fill="#cfd8e3"/>
-</svg>`;
+const ICON_FOLDER = lucideIcon("folder", "tree-icon");
+const ICON_ARCHIVE = lucideIcon("archive", "tree-icon");
+const ICON_POM = lucideIcon("file-code", "tree-icon");
+const ICON_HASH = lucideIcon("files", "tree-icon");
+const ICON_FILE = lucideIcon("file", "tree-icon");
 
 const VERSION_DIR_RE = /^\d/;
 
@@ -719,7 +699,12 @@ function updateRepositorySortHeaders() {
       "aria-sort",
       !active ? "none" : direction === "asc" ? "ascending" : "descending",
     );
-    if (indicator) indicator.textContent = active ? (direction === "asc" ? "↑" : "↓") : "";
+    if (indicator) {
+      indicator.classList.add("lucide-icon");
+      indicator.classList.toggle("icon-arrow-up", active && direction === "asc");
+      indicator.classList.toggle("icon-arrow-down", active && direction === "desc");
+      indicator.style.visibility = active ? "visible" : "hidden";
+    }
   });
 }
 
@@ -738,7 +723,7 @@ function repositoryClientUrl(repo) {
 function renderBrowseHeading() {
   const browseView = document.getElementById("browse-view");
   browseView.querySelector(".page-heading").innerHTML = `
-    <span class="heading-icon">▣</span>
+    <span class="heading-icon">${lucideIcon("library")}</span>
     <h1>Browse</h1>
     <span class="heading-copy">Browse assets and components</span>
   `;
@@ -1132,13 +1117,7 @@ async function copyRepositoryUrl(button) {
 // --- tree view ---------------------------------------------------------------
 
 function repoTopIcon() {
-  // small dark cylinder/database icon used in Nexus's breadcrumb
-  return `<svg class="crumb-icon" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-    <ellipse cx="8" cy="3.5" rx="6" ry="2" fill="#3a3a3a"/>
-    <path d="M2 3.5 L2 12.5 Q2 14.5 8 14.5 Q14 14.5 14 12.5 L14 3.5 Q14 5.5 8 5.5 Q2 5.5 2 3.5 Z" fill="#3a3a3a"/>
-    <path d="M2 7 Q2 9 8 9 Q14 9 14 7" fill="none" stroke="#6e6e6e" stroke-width="0.6"/>
-    <path d="M2 10 Q2 12 8 12 Q14 12 14 10" fill="none" stroke="#6e6e6e" stroke-width="0.6"/>
-  </svg>`;
+  return lucideIcon("database", "crumb-icon");
 }
 
 function repositoryFormatIcon(repo = currentRepository()) {
@@ -1243,8 +1222,13 @@ function buildTreeNode(entry) {
   const toggle = document.createElement("button");
   toggle.type = "button";
   toggle.className = "tree-toggle";
-  toggle.textContent = entry.leaf ? "" : (isExpanded ? "−" : "+");
   toggle.disabled = entry.leaf;
+  if (entry.leaf) {
+    toggle.setAttribute("aria-hidden", "true");
+    toggle.tabIndex = -1;
+  } else {
+    setTreeToggleIcon(toggle, isExpanded);
+  }
   row.appendChild(toggle);
 
   const icon = document.createElement("span");
@@ -1280,12 +1264,12 @@ function buildTreeNode(entry) {
     const setExpanded = async (open) => {
       if (open) {
         expanded.add(key);
-        toggle.textContent = "−";
+        setTreeToggleIcon(toggle, true);
         childMount.style.display = "";
         await ensureLoaded();
       } else {
         expanded.delete(key);
-        toggle.textContent = "+";
+        setTreeToggleIcon(toggle, false);
         childMount.style.display = "none";
       }
     };
@@ -1308,6 +1292,13 @@ function buildTreeNode(entry) {
   }
 
   return li;
+}
+
+function setTreeToggleIcon(toggle, open) {
+  const label = open ? "Collapse folder" : "Expand folder";
+  toggle.innerHTML = lucideIcon(open ? "minus" : "plus");
+  toggle.title = label;
+  toggle.setAttribute("aria-label", label);
 }
 
 function selectRow(row) {
@@ -1357,7 +1348,7 @@ async function revealTreePath(path) {
     const toggle = node.querySelector(":scope > .tree-row > .tree-toggle");
     const childMount = node.querySelector(":scope > .tree-children");
     if (!childMount) return;
-    if (toggle) toggle.textContent = "−";
+    if (toggle) setTreeToggleIcon(toggle, true);
     childMount.style.display = "";
     await ensureTreeLevelLoaded(parentPath, childMount, 1);
   }
@@ -1506,7 +1497,7 @@ function renderUsageSection(snippets) {
               ${snippets.map((snippet, index) =>
                 `<option value="${index}">${escapeHtml(snippet.displayName)}</option>`).join("")}
             </select>
-            <button type="button" class="usage-copy" id="usage-copy" title="Copy">📋</button>
+            <button type="button" class="usage-copy" id="usage-copy" title="Copy" aria-label="Copy usage snippet">${lucideIcon("copy")}</button>
           </div>
           <p class="usage-hint" id="usage-hint">${escapeHtml(first.description || "")}</p>
           <pre class="snippet"><code id="usage-snippet">${colorizeSnippet(first.snippetText)}</code></pre>
@@ -1531,8 +1522,15 @@ function bindUsageControls(mount, snippets) {
     try {
       await navigator.clipboard.writeText(selected().snippetText);
       copy.classList.add("copied");
-      copy.textContent = "✓";
-      setTimeout(() => { copy.classList.remove("copied"); copy.textContent = "📋"; }, 1200);
+      copy.innerHTML = lucideIcon("check");
+      copy.title = "Copied";
+      copy.setAttribute("aria-label", "Usage snippet copied");
+      setTimeout(() => {
+        copy.classList.remove("copied");
+        copy.innerHTML = lucideIcon("copy");
+        copy.title = "Copy";
+        copy.setAttribute("aria-label", "Copy usage snippet");
+      }, 1200);
     } catch {
       /* clipboard blocked */
     }
@@ -1600,7 +1598,7 @@ function renderDetailPane({ crumbIcon, crumbText, summaryRows, snippets, deleteE
   mount.innerHTML = `
     <div class="detail-pane">
       ${detailHead(crumbIcon, crumbText, deleteEntry)}
-      <button type="button" class="analyze-btn">⚙ Analyze application</button>
+      <button type="button" class="analyze-btn">${lucideIcon("settings")} Analyze application</button>
       <section class="panel">
         <header class="panel-head">Summary</header>
         <div class="panel-body">
@@ -2299,7 +2297,7 @@ async function showAssetDetail(entry) {
   const downloadUrl = dockerDetail ? (entry.downloadUrl || detail?.downloadUrl) : (detail?.downloadUrl || entry.downloadUrl);
   mount.innerHTML = `
     <div class="detail-pane">
-      ${detailHead('<span class="crumb-icon">📄</span>', entry.path, entry)}
+      ${detailHead(lucideIcon("file", "crumb-icon"), entry.path, entry)}
       ${dockerDetail
         ? renderDockerSummaryPanel(entry, detail, sourceRepository)
         : renderGenericAssetSummaryPanel(entry, detail, sourceRepository, uploader, uploaderIp)}
@@ -2307,7 +2305,7 @@ async function showAssetDetail(entry) {
       ${renderUsageSection((dockerUsage || usage) ? (dockerUsage || usage).snippets : [])}
       ${renderAttributesSection(detail, { hideDocker: dockerDetail })}
       <div class="download-row">
-        <a class="copy-button" href="${downloadUrl}" target="_blank">Download ↓</a>
+        <a class="copy-button" href="${downloadUrl}" target="_blank">${lucideIcon("download")} Download</a>
       </div>
     </div>`;
   if (dockerUsage || usage) bindUsageControls(mount, (dockerUsage || usage).snippets);
@@ -2640,13 +2638,13 @@ async function renderSearch(format = DEFAULT_SEARCH_FORMAT) {
       : `Open ${component.repository} in Browse`;
     return `
     <tr class="component-result-row" data-component-result-index="${index}" tabindex="0" title="${escapeHtml(title)}">
-      <td class="icon-column"><span class="component-icon">▰</span></td>
+      <td class="icon-column">${lucideIcon("package-search", "component-icon")}</td>
       <td>${escapeHtml(component.name)}</td>
-      <td>${component.group ? escapeHtml(component.group) : '<span class="health-muted">⊘</span>'}</td>
+      <td>${component.group ? escapeHtml(component.group) : lucideIcon("circle-slash", "health-muted")}</td>
       <td>${escapeHtml(component.version)}</td>
       <td>${escapeHtml(component.format)}</td>
       <td>${escapeHtml(component.repository)}</td>
-      <td class="expand-column">›</td>
+      <td class="expand-column">${lucideIcon("chevron-right")}</td>
     </tr>
   `;
   }).join("");
