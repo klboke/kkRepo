@@ -11,14 +11,24 @@ import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 
 class BrowseProductVersionContractTest {
+  private static final String PROJECT_URL = "https://github.com/klboke/kkRepo";
+  private static final String RELEASES_URL = PROJECT_URL + "/releases";
+  private static final String EXTERNAL_LINK_ATTRIBUTES = "target=\"_blank\" rel=\"noopener noreferrer\"";
   private static final Pattern VERSION_BADGE = Pattern.compile(
-      "kkRepo <span class=\"product-version\">v[^<@]+</span><br>Repository Manager");
+      "<a class=\"product-version\" href=\"" + Pattern.quote(RELEASES_URL)
+          + "\" " + EXTERNAL_LINK_ATTRIBUTES + ">v[^<@]+</a>");
 
   @Test
-  void headerIncludesFilteredProjectVersion() throws IOException {
+  void headerLinksBrandAndFilteredVersion() throws IOException {
     String index = resource("/META-INF/resources/browse/index.html");
 
     assertTrue(VERSION_BADGE.matcher(index).find());
+    assertTrue(index.contains("class=\"logo-mark product-home-link\" href=\"" + PROJECT_URL
+        + "\" " + EXTERNAL_LINK_ATTRIBUTES));
+    assertTrue(index.contains("class=\"product-link\" href=\"" + PROJECT_URL + "\" "
+        + EXTERNAL_LINK_ATTRIBUTES + ">kkRepo</a>"));
+    assertTrue(index.contains("class=\"product-link\" href=\"" + PROJECT_URL + "\" "
+        + EXTERNAL_LINK_ATTRIBUTES + ">Repository Manager</a>"));
     assertFalse(index.contains("@project.version@"));
   }
 
