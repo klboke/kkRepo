@@ -633,11 +633,65 @@ function formatBadge(format) {
   return `<span class="format-cell"><span class="format-logo format-logo-${icon}" aria-hidden="true"></span><span class="format-cell-label">${escapeHtml(normalized)}</span></span>`;
 }
 
+const FILE_ICON_RULES = Object.freeze([
+  Object.freeze({
+    icon: "file-key",
+    suffixes: Object.freeze([".tgz.prov", ".prov", ".asc", ".sig", ".key"]),
+  }),
+  Object.freeze({
+    icon: "file-check",
+    suffixes: Object.freeze([".sha1", ".sha256", ".sha512", ".md5"]),
+  }),
+  Object.freeze({
+    icon: "file-json",
+    suffixes: Object.freeze([".json", ".module", ".info"]),
+  }),
+  Object.freeze({
+    icon: "file-code",
+    suffixes: Object.freeze([".pom", ".xml", ".nuspec"]),
+  }),
+  Object.freeze({
+    icon: "file-text",
+    suffixes: Object.freeze([".mod", ".sum", ".list", ".yaml", ".yml"]),
+  }),
+  Object.freeze({
+    icon: "file-box",
+    suffixes: Object.freeze([".whl", ".egg", ".nupkg", ".snupkg", ".crate", ".gem", ".rpm"]),
+  }),
+  Object.freeze({
+    icon: "file-java-archive",
+    suffixes: Object.freeze([".jar", ".war", ".ear", ".aar"]),
+  }),
+  Object.freeze({
+    icon: "file-archive",
+    suffixes: Object.freeze([
+      ".zip", ".tar.bz2", ".tbz", ".tar.gz", ".tgz",
+      ".tlz", ".tar.lz", ".tar.lzma", ".tar.xz", ".txz", ".tar.z", ".tz", ".taz",
+      ".tar", ".gemspec.rz", ".rz", ".xml.gz", ".sqlite.bz2", ".gz",
+    ]),
+  }),
+]);
+
+function fileIconName(name, repositoryFormat = "") {
+  const normalized = String(name || "").toLowerCase();
+  const format = String(repositoryFormat || "").toLowerCase();
+  if (format === "cargo" && normalized && !normalized.includes(".")) return "file-json";
+  if (format === "go" && normalized === "list") return "file-text";
+  if (format === "go" && normalized === "@latest") return "file-json";
+  if (format === "rubygems" && (normalized === "versions" || normalized === "names")) {
+    return "file-text";
+  }
+  if (format === "docker"
+      && (/^[a-f0-9]{64}$/.test(normalized) || /^sha256:[a-f0-9]{64}$/.test(normalized))) {
+    return "binary";
+  }
+  const rule = FILE_ICON_RULES.find(({ suffixes }) =>
+    suffixes.some((suffix) => normalized.endsWith(suffix)));
+  return rule?.icon || "file";
+}
+
 const ICON_FOLDER = lucideIcon("folder", "tree-icon");
 const ICON_ARCHIVE = lucideIcon("archive", "tree-icon");
-const ICON_POM = lucideIcon("file-code", "tree-icon");
-const ICON_HASH = lucideIcon("files", "tree-icon");
-const ICON_FILE = lucideIcon("file", "tree-icon");
 
 const VERSION_DIR_RE = /^\d/;
 
@@ -647,11 +701,8 @@ function iconForDir(name) {
   return VERSION_DIR_RE.test(name) ? ICON_ARCHIVE : ICON_FOLDER;
 }
 
-function iconForFile(name) {
-  if (name.endsWith(".tgz")) return ICON_ARCHIVE;
-  if (name.endsWith(".pom") || name.endsWith(".xml")) return ICON_POM;
-  if (/\.(sha1|sha256|sha512|md5|asc)$/.test(name)) return ICON_HASH;
-  return ICON_FILE;
+function iconForFile(name, className = "tree-icon") {
+  return lucideIcon(fileIconName(name, currentRepository()?.format), className);
 }
 
 // --- repo list ---------------------------------------------------------------
@@ -1055,10 +1106,10 @@ function renderRepoList() {
       <td>${formatBadge(repo.format)}</td>
       <td>${repo.status}</td>
       <td class="repo-url-cell">
-        <a class="repo-url-link" href="${escapeHtml(clientUrl)}" target="_blank" rel="noopener">${escapeHtml(clientUrl)}</a>
-      </td>
-      <td class="repo-copy-column">
-        <button type="button" class="repo-copy-button" data-repository-url="${escapeHtml(clientUrl)}" title="Copy ${escapeHtml(clientUrl)}">Copy</button>
+        <div class="repo-url-content">
+          <a class="repo-url-link" href="${escapeHtml(clientUrl)}" target="_blank" rel="noopener">${escapeHtml(clientUrl)}</a>
+          <button type="button" class="repo-copy-button" data-repository-url="${escapeHtml(clientUrl)}" title="Copy repository URL" aria-label="Copy repository URL">${lucideIcon("copy")}</button>
+        </div>
       </td>
     </tr>
   `;
@@ -1100,18 +1151,40 @@ async function copyTextToClipboard(text) {
 async function copyRepositoryUrl(button) {
   const url = button.dataset.repositoryUrl;
   if (!url) return;
+  if (button.copyResetTimer) clearTimeout(button.copyResetTimer);
   try {
     await copyTextToClipboard(url);
     button.classList.add("copied");
-    button.textContent = "Copied";
-    setTimeout(() => {
-      button.classList.remove("copied");
-      button.textContent = "Copy";
-    }, 1200);
+    button.classList.remove("copy-failed");
+    button.innerHTML = lucideIcon("check");
+    button.title = "Copied";
+    button.setAttribute("aria-label", "Repository URL copied");
+    announceRepositoryCopyStatus("Repository URL copied");
+    button.copyResetTimer = setTimeout(() => resetRepositoryCopyButton(button), 1200);
   } catch {
-    button.textContent = "Failed";
-    setTimeout(() => { button.textContent = "Copy"; }, 1400);
+    button.classList.add("copy-failed");
+    button.classList.remove("copied");
+    button.innerHTML = lucideIcon("x");
+    button.title = "Copy failed";
+    button.setAttribute("aria-label", "Unable to copy repository URL");
+    announceRepositoryCopyStatus("Unable to copy repository URL");
+    button.copyResetTimer = setTimeout(() => resetRepositoryCopyButton(button), 1400);
   }
+}
+
+function resetRepositoryCopyButton(button) {
+  button.copyResetTimer = null;
+  button.classList.remove("copied", "copy-failed");
+  button.innerHTML = lucideIcon("copy");
+  button.title = "Copy repository URL";
+  button.setAttribute("aria-label", "Copy repository URL");
+}
+
+function announceRepositoryCopyStatus(message) {
+  const status = document.getElementById("repository-copy-status");
+  if (!status) return;
+  status.textContent = "";
+  requestAnimationFrame(() => { status.textContent = message; });
 }
 
 // --- tree view ---------------------------------------------------------------
@@ -2297,7 +2370,7 @@ async function showAssetDetail(entry) {
   const downloadUrl = dockerDetail ? (entry.downloadUrl || detail?.downloadUrl) : (detail?.downloadUrl || entry.downloadUrl);
   mount.innerHTML = `
     <div class="detail-pane">
-      ${detailHead(lucideIcon("file", "crumb-icon"), entry.path, entry)}
+      ${detailHead(iconForFile(entry.name || entry.path, "crumb-icon"), entry.path, entry)}
       ${dockerDetail
         ? renderDockerSummaryPanel(entry, detail, sourceRepository)
         : renderGenericAssetSummaryPanel(entry, detail, sourceRepository, uploader, uploaderIp)}

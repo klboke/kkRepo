@@ -15,7 +15,8 @@ class BrowseLucideIconsContractTest {
   private static final List<String> REQUIRED_ICONS = List.of(
       "home", "search", "library", "upload", "key-round", "list-filter",
       "boxes", "cloud-download", "package", "folder", "archive", "file-code",
-      "files", "file", "copy", "check", "download", "x");
+      "files", "file", "file-archive", "file-java-archive", "file-box", "file-json", "file-text",
+      "file-key", "file-check", "binary", "copy", "check", "download", "x");
   private static final List<String> LEGACY_GLYPHS = List.of(
       "⌂", "⌕", "▣", "▤", "▥", "⇧", "ⓘ", "📋", "📄", "⚙", "▰", "⊘");
 
@@ -28,6 +29,7 @@ class BrowseLucideIconsContractTest {
     assertTrue(index.contains("/browse/assets/lucide-icons.css"));
     assertTrue(index.contains("lucide-icon icon-home"));
     assertTrue(javascript.contains("function lucideIcon(name, className = \"\")"));
+    assertTrue(javascript.contains("function fileIconName(name, repositoryFormat = \"\")"));
     assertTrue(stylesheet.contains("mask-image: var(--lucide-icon)"));
     assertFalse(javascript.contains("<svg class=\"tree-icon\""));
     for (String glyph : LEGACY_GLYPHS) {
@@ -45,8 +47,19 @@ class BrowseLucideIconsContractTest {
 
   @Test
   void iconOnlyButtonsHaveTooltipsAndAccessibleNames() throws IOException {
+    String index = resource("/META-INF/resources/browse/index.html");
     String javascript = resource("/META-INF/resources/browse/assets/browse.js");
 
+    assertFalse(index.contains("repo-copy-column"));
+    assertTrue(index.contains(
+        "id=\"repository-copy-status\" role=\"status\" aria-live=\"polite\""));
+    assertTrue(javascript.contains("class=\"repo-url-content\""));
+    assertTrue(javascript.contains(
+        "title=\"Copy repository URL\" aria-label=\"Copy repository URL\""));
+    assertTrue(javascript.contains(
+        ">${escapeHtml(clientUrl)}</a>"));
+    assertTrue(javascript.contains(
+        "iconForFile(entry.name || entry.path, \"crumb-icon\")"));
     assertTrue(javascript.contains(
         "title=\"Copy\" aria-label=\"Copy usage snippet\""));
     assertTrue(javascript.contains("toggle.title = label"));

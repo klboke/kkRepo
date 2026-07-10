@@ -59,6 +59,14 @@
 .icon-archive { --lucide-icon: url("./icons/archive.svg"); }
 .icon-file-code { --lucide-icon: url("./icons/file-code.svg"); }
 .icon-files { --lucide-icon: url("./icons/files.svg"); }
+.icon-file-archive { --lucide-icon: url("./icons/file-archive.svg"); }
+.icon-file-java-archive { --lucide-icon: url("./icons/file-java-archive.svg"); }
+.icon-file-box { --lucide-icon: url("./icons/file-box.svg"); }
+.icon-file-json { --lucide-icon: url("./icons/file-json.svg"); }
+.icon-file-text { --lucide-icon: url("./icons/file-text.svg"); }
+.icon-file-key { --lucide-icon: url("./icons/file-key.svg"); }
+.icon-file-check { --lucide-icon: url("./icons/file-check.svg"); }
+.icon-binary { --lucide-icon: url("./icons/binary.svg"); }
 .icon-minus { --lucide-icon: url("./icons/minus.svg"); }
 .icon-circle-slash { --lucide-icon: url("./icons/circle-slash-2.svg"); }
 .icon-list-filter { --lucide-icon: url("./icons/list-filter.svg"); }
