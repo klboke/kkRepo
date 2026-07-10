@@ -323,6 +323,28 @@ select {
   min-width: 0;
 }
 
+.logo-mark,
+.product-link,
+.product-version {
+  text-decoration: none;
+}
+
+.product-link {
+  color: inherit;
+}
+
+.logo-mark:hover {
+  filter: brightness(1.08);
+}
+
+.logo-mark:focus-visible,
+.product-link:focus-visible,
+.product-version:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid #ffffff;
+  outline-offset: 2px;
+}
+
 .workspace-tabs {
   display: flex;
   align-self: stretch;
