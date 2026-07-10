@@ -802,7 +802,8 @@ body {
   gap: 12px;
 }
 
-.form-grid label {
+.form-grid label,
+.form-grid .form-field {
   display: grid;
   gap: 5px;
   min-width: 0;
@@ -1987,11 +1988,169 @@ h1 {
 }
 
 .form-grid label,
+.form-grid .form-field,
 .member-pane-head {
   color: #344641;
   font-size: 13px;
   font-weight: 760;
   letter-spacing: 0;
+}
+
+.recipe-combobox {
+  position: relative;
+  min-width: 0;
+}
+
+.recipe-combobox-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-width: 0;
+  height: 42px;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0 10px;
+  text-align: left;
+}
+
+.recipe-combobox-trigger:hover,
+.recipe-combobox-trigger[aria-expanded="true"] {
+  border-color: #7ca79c;
+  background: #fbfdfc;
+}
+
+.recipe-combobox-trigger:focus-visible {
+  outline: 3px solid rgba(20, 117, 107, 0.18);
+  outline-offset: 1px;
+}
+
+.recipe-combobox-trigger.is-invalid {
+  border-color: #c97962;
+  box-shadow: 0 0 0 3px rgba(184, 95, 61, 0.16);
+}
+
+.recipe-combobox-trigger:disabled {
+  background: #f1f4f2;
+  color: #788681;
+  cursor: not-allowed;
+}
+
+.recipe-combobox-value {
+  min-width: 0;
+  flex: 1;
+}
+
+.recipe-combobox-caret {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+  transition: transform 0.12s ease;
+}
+
+.recipe-combobox-trigger[aria-expanded="true"] .recipe-combobox-caret {
+  transform: rotate(180deg);
+}
+
+.recipe-combobox-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 18px 40px rgba(17, 36, 31, 0.2);
+  padding: 8px;
+}
+
+.recipe-combobox-search {
+  width: 100%;
+  margin-bottom: 6px;
+}
+
+.recipe-combobox-options {
+  display: grid;
+  max-height: 304px;
+  gap: 3px;
+  overflow-y: auto;
+}
+
+.recipe-combobox-option {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  gap: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  padding: 5px 8px;
+  text-align: left;
+}
+
+.recipe-combobox-option:hover,
+.recipe-combobox-option.is-active {
+  background: #edf5f1;
+}
+
+.recipe-combobox-option[aria-selected="true"] {
+  background: #e2f1eb;
+}
+
+.recipe-combobox-option .format-logo,
+.recipe-selection .format-logo {
+  width: 20px;
+  height: 20px;
+  flex-basis: 20px;
+}
+
+.recipe-option-copy {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+}
+
+.recipe-option-copy strong {
+  overflow: hidden;
+  color: #172420;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recipe-type {
+  flex: 0 0 auto;
+  border-radius: 6px;
+  background: #eef2f0;
+  color: #53635e;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 4px 6px;
+  text-transform: uppercase;
+}
+
+.recipe-selection {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+}
+
+.recipe-combobox-empty {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 14px 10px;
+  text-align: center;
 }
 
 .form-grid input,

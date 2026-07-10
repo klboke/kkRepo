@@ -1,0 +1,94 @@
+.format-logo {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  background-color: var(--format-color);
+  -webkit-mask-image: var(--format-logo);
+  mask-image: var(--format-logo);
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+.format-logo-maven {
+  --format-color: #c71a36;
+  --format-logo: url("/browse/assets/formats/maven.svg");
+}
+
+.format-logo-npm {
+  --format-color: #cb3837;
+  --format-logo: url("/browse/assets/formats/npm.svg");
+}
+
+.format-logo-pypi {
+  --format-color: #3775a9;
+  --format-logo: url("/browse/assets/formats/pypi.svg");
+}
+
+.format-logo-cargo {
+  --format-color: #292524;
+  --format-logo: url("/browse/assets/formats/cargo.svg");
+}
+
+.format-logo-pub {
+  --format-color: #0175c2;
+  --format-logo: url("/browse/assets/formats/pub.svg");
+}
+
+.format-logo-go {
+  --format-color: #00a8cf;
+  --format-logo: url("/browse/assets/formats/go.svg");
+}
+
+.format-logo-helm {
+  --format-color: #0f1689;
+  --format-logo: url("/browse/assets/formats/helm.svg");
+}
+
+.format-logo-docker {
+  --format-color: #2496ed;
+  --format-logo: url("/browse/assets/formats/docker.svg");
+}
+
+.format-logo-nuget {
+  --format-color: #004880;
+  --format-logo: url("/browse/assets/formats/nuget.svg");
+}
+
+.format-logo-rubygems {
+  --format-color: #e9573f;
+  --format-logo: url("/browse/assets/formats/rubygems.svg");
+}
+
+.format-logo-yum {
+  --format-color: #9f3f32;
+  --format-logo: url("/browse/assets/formats/yum.svg");
+}
+
+.format-logo-raw {
+  --format-color: #52625e;
+  --format-logo: url("/browse/assets/formats/raw.svg");
+}
+
+.format-cell {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.format-cell .format-logo {
+  width: 20px;
+  height: 20px;
+  flex-basis: 20px;
+}
+
+.format-cell-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

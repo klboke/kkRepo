@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>kkrepo browse</title>
     <link rel="icon" type="image/svg+xml" href="/browse/assets/favicon.svg?v=20260609-kl-logo-1">
-    <link rel="stylesheet" href="/browse/assets/browse.css?v=20260710-anonymous-bootstrap-1">
+    <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20260710-format-table-icons-1">
+    <link rel="stylesheet" href="/browse/assets/browse.css?v=20260710-search-menu-format-icons-1">
     <link rel="stylesheet" href="/login/assets/login-modal.css?v=20260616-login-method-tabs-2">
   </head>
   <body>
@@ -47,16 +48,16 @@
             <span class="side-caret" aria-hidden="true">▾</span>
           </button>
           <div class="search-subnav" id="search-subnav" hidden>
-            <button class="side-subitem" data-search-format="cargo" type="button">Cargo</button>
-            <button class="side-subitem" data-search-format="go" type="button">Go</button>
-            <button class="side-subitem" data-search-format="helm" type="button">Helm</button>
-            <button class="side-subitem" data-search-format="maven2" type="button">Maven</button>
-            <button class="side-subitem" data-search-format="nuget" type="button">NuGet</button>
-            <button class="side-subitem" data-search-format="pub" type="button">Pub</button>
-            <button class="side-subitem" data-search-format="pypi" type="button">PyPI</button>
-            <button class="side-subitem" data-search-format="rubygems" type="button">RubyGems</button>
-            <button class="side-subitem" data-search-format="yum" type="button">Yum</button>
-            <button class="side-subitem" data-search-format="npm" type="button">npm</button>
+            <button class="side-subitem" data-search-format="cargo" type="button"><span class="format-logo format-logo-cargo" aria-hidden="true"></span><span>Cargo</span></button>
+            <button class="side-subitem" data-search-format="go" type="button"><span class="format-logo format-logo-go" aria-hidden="true"></span><span>Go</span></button>
+            <button class="side-subitem" data-search-format="helm" type="button"><span class="format-logo format-logo-helm" aria-hidden="true"></span><span>Helm</span></button>
+            <button class="side-subitem" data-search-format="maven2" type="button"><span class="format-logo format-logo-maven" aria-hidden="true"></span><span>Maven</span></button>
+            <button class="side-subitem" data-search-format="nuget" type="button"><span class="format-logo format-logo-nuget" aria-hidden="true"></span><span>NuGet</span></button>
+            <button class="side-subitem" data-search-format="pub" type="button"><span class="format-logo format-logo-pub" aria-hidden="true"></span><span>Pub</span></button>
+            <button class="side-subitem" data-search-format="pypi" type="button"><span class="format-logo format-logo-pypi" aria-hidden="true"></span><span>PyPI</span></button>
+            <button class="side-subitem" data-search-format="rubygems" type="button"><span class="format-logo format-logo-rubygems" aria-hidden="true"></span><span>RubyGems</span></button>
+            <button class="side-subitem" data-search-format="yum" type="button"><span class="format-logo format-logo-yum" aria-hidden="true"></span><span>Yum</span></button>
+            <button class="side-subitem" data-search-format="npm" type="button"><span class="format-logo format-logo-npm" aria-hidden="true"></span><span>npm</span></button>
           </div>
           <button class="side-item" data-view="browse" type="button">
             <span class="side-icon">▣</span>
@@ -75,10 +76,6 @@
             <span class="heading-icon">⌂</span>
             <h1>Welcome</h1>
             <span class="heading-copy">Nexus-compatible repository access for internal packages</span>
-          </div>
-          <div class="welcome-panel">
-            <h2>Repository entrypoints</h2>
-            <p>Use the Browse, Search, and Upload areas with Nexus-compatible repository URLs.</p>
           </div>
           <form class="admin-bootstrap-panel" id="admin-bootstrap-panel" hidden novalidate>
             <div class="admin-bootstrap-title">Initial administrator setup</div>
@@ -108,6 +105,101 @@
               <span class="admin-bootstrap-status" id="admin-bootstrap-status" role="status"></span>
             </div>
           </form>
+          <section class="format-showcase" aria-labelledby="supported-formats-title">
+            <div class="format-showcase-heading">
+              <div>
+                <h2 id="supported-formats-title">Supported repository formats</h2>
+                <p>Package ecosystems supported by this kkRepo release.</p>
+              </div>
+              <span class="format-showcase-count">12 formats</span>
+            </div>
+            <ul class="format-grid">
+              <li class="format-item" data-format="maven2">
+                <div class="format-brand">
+                  <span class="format-logo format-logo-maven" aria-hidden="true"></span>
+                  <strong>Maven</strong>
+                </div>
+                <span class="format-modes">Hosted · Proxy · Group</span>
+              </li>
+              <li class="format-item" data-format="npm">
+                <div class="format-brand">
+                  <span class="format-logo format-logo-npm" aria-hidden="true"></span>
+                  <strong>npm</strong>
+                </div>
+                <span class="format-modes">Hosted · Proxy · Group</span>
+              </li>
+              <li class="format-item" data-format="pypi">
+                <div class="format-brand">
+                  <span class="format-logo format-logo-pypi" aria-hidden="true"></span>
+                  <strong>PyPI</strong>
+                </div>
+                <span class="format-modes">Hosted · Proxy · Group</span>
+              </li>
+              <li class="format-item" data-format="cargo">
+                <div class="format-brand">
+                  <span class="format-logo format-logo-cargo" aria-hidden="true"></span>
+                  <strong>Cargo / Rust</strong>
+                </div>
+                <span class="format-modes">Hosted · Proxy · Group</span>
+              </li>
+              <li class="format-item" data-format="pub">
+                <div class="format-brand">
+                  <span class="format-logo format-logo-pub" aria-hidden="true"></span>
+                  <strong>Dart / Pub</strong>
+                </div>
+                <span class="format-modes">Hosted · Proxy · Group</span>
+              </li>
+              <li class="format-item" data-format="go">
+                <div class="format-brand">
+                  <span class="format-logo format-logo-go" aria-hidden="true"></span>
+                  <strong>Go</strong>
+                </div>
+                <span class="format-modes">Proxy · Group</span>
+              </li>
+              <li class="format-item" data-format="helm">
+                <div class="format-brand">
+                  <span class="format-logo format-logo-helm" aria-hidden="true"></span>
+                  <strong>Helm</strong>
+                </div>
+                <span class="format-modes">Hosted · Proxy</span>
+              </li>
+              <li class="format-item" data-format="docker">
+                <div class="format-brand">
+                  <span class="format-logo format-logo-docker" aria-hidden="true"></span>
+                  <strong>Docker / OCI</strong>
+                </div>
+                <span class="format-modes">Hosted · Proxy · Group</span>
+              </li>
+              <li class="format-item" data-format="nuget">
+                <div class="format-brand">
+                  <span class="format-logo format-logo-nuget" aria-hidden="true"></span>
+                  <strong>NuGet</strong>
+                </div>
+                <span class="format-modes">Hosted · Proxy · Group</span>
+              </li>
+              <li class="format-item" data-format="rubygems">
+                <div class="format-brand">
+                  <span class="format-logo format-logo-rubygems" aria-hidden="true"></span>
+                  <strong>RubyGems</strong>
+                </div>
+                <span class="format-modes">Hosted · Proxy · Group</span>
+              </li>
+              <li class="format-item" data-format="yum">
+                <div class="format-brand">
+                  <span class="format-logo format-logo-yum" aria-hidden="true"></span>
+                  <strong>Yum / RPM</strong>
+                </div>
+                <span class="format-modes">Hosted · Proxy · Group</span>
+              </li>
+              <li class="format-item" data-format="raw">
+                <div class="format-brand">
+                  <span class="format-logo format-logo-raw" aria-hidden="true"></span>
+                  <strong>Raw</strong>
+                </div>
+                <span class="format-modes">Hosted · Proxy · Group</span>
+              </li>
+            </ul>
+          </section>
         </section>
 
         <section class="view" id="browse-view">
@@ -271,6 +363,6 @@
 
     <script src="/login/assets/ui-i18n.js?v=20260710-anonymous-bootstrap-2"></script>
     <script src="/login/assets/login-modal.js?v=20260624-ui-i18n-1"></script>
-    <script src="/browse/assets/browse.js?v=20260710-anonymous-bootstrap-1"></script>
+    <script src="/browse/assets/browse.js?v=20260710-breadcrumb-format-icons-1"></script>
   </body>
 </html>

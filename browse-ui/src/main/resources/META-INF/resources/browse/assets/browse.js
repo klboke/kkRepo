@@ -604,6 +604,31 @@ function repoIcon(type) {
   return '<span class="repo-icon hosted">▥</span>';
 }
 
+const FORMAT_ICON_NAMES = Object.freeze({
+  maven2: "maven",
+  npm: "npm",
+  pypi: "pypi",
+  cargo: "cargo",
+  pub: "pub",
+  go: "go",
+  helm: "helm",
+  docker: "docker",
+  nuget: "nuget",
+  rubygems: "rubygems",
+  yum: "yum",
+  raw: "raw",
+});
+
+function formatIconName(format) {
+  return FORMAT_ICON_NAMES[String(format || "").toLowerCase()] || "raw";
+}
+
+function formatBadge(format) {
+  const normalized = String(format || "").toLowerCase();
+  const icon = formatIconName(normalized);
+  return `<span class="format-cell"><span class="format-logo format-logo-${icon}" aria-hidden="true"></span><span class="format-cell-label">${escapeHtml(normalized)}</span></span>`;
+}
+
 // --- inline SVG icons (Nexus-style) -----------------------------------------
 
 const ICON_FOLDER = `<svg class="tree-icon" viewBox="0 0 16 14" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -1042,7 +1067,7 @@ function renderRepoList() {
       <td class="icon-column">${repoIcon(repo.type)}</td>
       <td>${repo.name}</td>
       <td>${repo.type}</td>
-      <td>${repo.format}</td>
+      <td>${formatBadge(repo.format)}</td>
       <td>${repo.status}</td>
       <td class="repo-url-cell">
         <a class="repo-url-link" href="${escapeHtml(clientUrl)}" target="_blank" rel="noopener">${escapeHtml(clientUrl)}</a>
@@ -1116,10 +1141,8 @@ function repoTopIcon() {
   </svg>`;
 }
 
-function repoBreadcrumbIcon() {
-  return `<svg class="crumb-icon" viewBox="0 0 16 14" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-    <path d="M1 3 L7 3 L8 4 L15 4 L15 13 L1 13 Z" fill="#f4c34a" stroke="#c79320" stroke-width="0.5"/>
-  </svg>`;
+function repositoryFormatIcon(repo = currentRepository()) {
+  return `<span class="format-logo crumb-format-logo format-logo-${formatIconName(repo?.format)}" aria-hidden="true"></span>`;
 }
 
 function renderTree() {
@@ -1143,7 +1166,7 @@ function renderTree() {
         ${repoTopIcon()}
         <button type="button" class="crumb crumb-browse" data-crumb-root="1">Browse</button>
         <span class="crumb-sep">/</span>
-        ${repoBreadcrumbIcon()}
+        ${repositoryFormatIcon()}
         <span class="crumb-current">${state.repo}</span>
       </div>
       <div class="tree-actions">
