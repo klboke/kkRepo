@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 
 class BrowseProductVersionContractTest {
   private static final Pattern VERSION_BADGE = Pattern.compile(
-      "Repository Manager <span class=\"product-version\">v[^<@]+</span>");
+      "kkRepo <span class=\"product-version\">v[^<@]+</span><br>Repository Manager");
 
   @Test
   void headerIncludesFilteredProjectVersion() throws IOException {
