@@ -183,6 +183,17 @@ class NexusSecurityRecordMapperTest {
   }
 
   @Test
+  void preservesDisabledAnonymousConfig() {
+    SecurityAnonymousConfigRecord config = mapper.mapAnonymousConfig(new NexusAnonymousConfig(
+        false,
+        null,
+        "anonymous",
+        "NexusAuthorizingRealm"));
+
+    assertEquals(false, config.enabled());
+  }
+
+  @Test
   void mapsContentSelectorAsRepositoryTargetCompatibleRecord() {
     SecurityRepositoryTargetRecord selector = mapper.mapContentSelector(new NexusContentSelector(
         "team-a",

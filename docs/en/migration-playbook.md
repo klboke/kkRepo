@@ -110,7 +110,7 @@ After metadata migration:
 
 - Check repository definitions in Admin UI.
 - Check users and roles.
-- Check anonymous access settings.
+- Check anonymous access settings. API migration preserves the source enabled or disabled state.
 - Check LDAP/OIDC realm settings and update secrets if necessary.
 - Create or verify the target blob stores.
 

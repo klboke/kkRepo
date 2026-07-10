@@ -214,7 +214,7 @@ public class BrowseController {
       request.setAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE, authenticated.get());
       return authenticated;
     }
-    return authenticationService.authenticateAnonymous(false);
+    return authenticationService.authenticateAnonymous();
   }
 
   private Optional<AuthenticatedSubject> currentSubject(HttpServletRequest request) {

@@ -97,6 +97,26 @@ class NexusSecurityExportReaderTest {
   }
 
   @Test
+  void preservesDisabledAnonymousConfigFromRestExport() {
+    NexusSecurityMigrationBatch batch = reader.read(new NexusSecurityExport(
+        List.of(),
+        List.of(),
+        List.of(),
+        List.of(),
+        List.of(),
+        List.of(),
+        List.of(),
+        List.of(),
+        Map.of(
+            "enabled", false,
+            "userId", "anonymous",
+            "realmName", "NexusAuthorizingRealm")));
+
+    assertEquals(false, batch.anonymousConfig().enabled());
+    assertEquals("anonymous", batch.anonymousConfig().userId());
+  }
+
+  @Test
   void normalizesNexusSourceAliasesWhileReadingExport() {
     NexusSecurityMigrationBatch batch = reader.read(new NexusSecurityExport(
         List.of(Map.of("id", "admin", "source", "Nexus")),

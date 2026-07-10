@@ -110,7 +110,7 @@ Script REST API 很重要，因为部分 Nexus 数据无法通过普通 REST API
 
 - 在 Admin UI 检查 repository 定义。
 - 检查用户和角色。
-- 检查 anonymous access 设置。
+- 检查 anonymous access 设置。API 迁移会保留源端启用或关闭状态。
 - 检查 LDAP/OIDC realm 设置，必要时更新 secret。
 - 创建或验证目标 blob store。
 

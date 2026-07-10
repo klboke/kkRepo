@@ -312,7 +312,7 @@ class BrowseControllerSecurityTest {
     }
 
     @Override
-    public Optional<AuthenticatedSubject> authenticateAnonymous(boolean fallbackEnabled) {
+    public Optional<AuthenticatedSubject> authenticateAnonymous() {
       return Optional.ofNullable(anonymous);
     }
   }

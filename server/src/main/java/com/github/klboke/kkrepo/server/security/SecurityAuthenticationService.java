@@ -73,6 +73,7 @@ public class SecurityAuthenticationService {
   private final SharedCache sharedCache;
   private final ApiKeyAuthCache apiKeyAuthCache;
   private final BasicAuthCache basicAuthCache;
+  private final SecurityCatalogCache securityCatalogCache;
 
   @Autowired
   public SecurityAuthenticationService(
@@ -83,7 +84,8 @@ public class SecurityAuthenticationService {
       SharedCache sharedCache,
       OutboundRequestPolicy outboundPolicy,
       ApiKeyAuthCache apiKeyAuthCache,
-      BasicAuthCache basicAuthCache) {
+      BasicAuthCache basicAuthCache,
+      SecurityCatalogCache securityCatalogCache) {
     this.securityDao = securityDao;
     this.objectMapper = objectMapper;
     this.tokenHeader = tokenHeader;
@@ -92,6 +94,7 @@ public class SecurityAuthenticationService {
     this.outboundPolicy = outboundPolicy;
     this.apiKeyAuthCache = apiKeyAuthCache;
     this.basicAuthCache = basicAuthCache;
+    this.securityCatalogCache = securityCatalogCache;
     this.httpClient = HttpClient.newHttpClient();
   }
 
@@ -107,6 +110,15 @@ public class SecurityAuthenticationService {
       ObjectMapper objectMapper,
       String tokenHeader,
       String defaultAuthenticatedRoleId) {
+    this(securityDao, objectMapper, tokenHeader, defaultAuthenticatedRoleId, null);
+  }
+
+  SecurityAuthenticationService(
+      SecurityDao securityDao,
+      ObjectMapper objectMapper,
+      String tokenHeader,
+      String defaultAuthenticatedRoleId,
+      SecurityCatalogCache securityCatalogCache) {
     this.securityDao = securityDao;
     this.objectMapper = objectMapper;
     this.tokenHeader = tokenHeader;
@@ -115,6 +127,7 @@ public class SecurityAuthenticationService {
     this.outboundPolicy = OutboundRequestPolicy.allowPrivateForTests();
     this.apiKeyAuthCache = null;
     this.basicAuthCache = null;
+    this.securityCatalogCache = securityCatalogCache;
     this.httpClient = HttpClient.newHttpClient();
   }
 
@@ -185,23 +198,47 @@ public class SecurityAuthenticationService {
         .map(user -> toSubject(user, realmId, null, apiKeyId));
   }
 
-  @Transactional(readOnly = true)
-  public Optional<AuthenticatedSubject> authenticateAnonymous(boolean fallbackEnabled) {
-    SecurityAnonymousConfigRecord config = securityDao.findAnonymousConfig()
-        .orElseGet(() -> new SecurityAnonymousConfigRecord(
-            fallbackEnabled,
-            DEFAULT_SOURCE,
-            DEFAULT_ANONYMOUS_USER_ID,
-            DEFAULT_ANONYMOUS_REALM_NAME));
-    if (!config.enabled()) {
+  public Optional<AuthenticatedSubject> authenticateAnonymous() {
+    if (securityCatalogCache != null) {
+      Optional<SecurityCatalogCache.SecurityCatalog> catalog = securityCatalogCache.current();
+      if (catalog.isPresent()) {
+        return authenticateAnonymous(catalog.get());
+      }
+    }
+    return authenticateAnonymousFromDatabase();
+  }
+
+  private Optional<AuthenticatedSubject> authenticateAnonymous(
+      SecurityCatalogCache.SecurityCatalog catalog) {
+    SecurityAnonymousConfigRecord config = catalog.anonymousConfig();
+    if (config == null || !config.enabled()) {
       return Optional.empty();
     }
     String realmName = defaultString(config.realmName(), DEFAULT_ANONYMOUS_REALM_NAME);
-    String userSource = DEFAULT_SOURCE;
     String userId = defaultString(config.userId(), DEFAULT_ANONYMOUS_USER_ID);
-    return securityDao.findUser(userSource, userId)
-        .filter(this::activeUser)
-        .map(user -> toSubject(user, realmName, null, null, false));
+    SecurityUserRecord user = catalog.anonymousUser();
+    if (user == null || !userId.equals(user.userId()) || !activeUser(user)) {
+      return Optional.empty();
+    }
+    return Optional.of(toSubject(
+        user,
+        realmName,
+        null,
+        null,
+        false,
+        catalog.userRoleIds(DEFAULT_SOURCE, userId)));
+  }
+
+  private Optional<AuthenticatedSubject> authenticateAnonymousFromDatabase() {
+    return securityDao.findAnonymousConfig()
+        .filter(SecurityAnonymousConfigRecord::enabled)
+        .flatMap(config -> {
+          String realmName = defaultString(config.realmName(), DEFAULT_ANONYMOUS_REALM_NAME);
+          String userId = defaultString(config.userId(), DEFAULT_ANONYMOUS_USER_ID);
+          return securityDao.findUser(DEFAULT_SOURCE, userId)
+              .filter(this::activeUser)
+              .map(user -> toSubject(user, realmName, null, null, false));
+        });
   }
 
   @Transactional(readOnly = true)
@@ -786,11 +823,29 @@ public class SecurityAuthenticationService {
       Set<String> externalRoleIds,
       Long apiKeyId,
       boolean grantDefaultAuthenticatedRole) {
+    return toSubject(
+        user,
+        realmId,
+        externalRoleIds,
+        apiKeyId,
+        grantDefaultAuthenticatedRole,
+        securityDao.listUserRoleIds(user.id()));
+  }
+
+  private AuthenticatedSubject toSubject(
+      SecurityUserRecord user,
+      String realmId,
+      Set<String> externalRoleIds,
+      Long apiKeyId,
+      boolean grantDefaultAuthenticatedRole,
+      Collection<String> assignedRoleIds) {
     Set<String> roleIds = new LinkedHashSet<>();
     if (externalRoleIds != null) {
       roleIds.addAll(externalRoleIds);
     }
-    roleIds.addAll(securityDao.listUserRoleIds(user.id()));
+    if (assignedRoleIds != null) {
+      roleIds.addAll(assignedRoleIds);
+    }
     if (grantDefaultAuthenticatedRole) {
       addDefaultAuthenticatedRole(roleIds);
     }

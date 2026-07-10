@@ -929,6 +929,40 @@ h1 {
   color: #555555;
 }
 
+.admin-bootstrap-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border-top: 1px solid #e1e1e1;
+  color: #2d2d2d;
+  cursor: pointer;
+  padding-top: 14px;
+}
+
+.admin-bootstrap-option input {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  margin: 2px 0 0;
+  accent-color: var(--active);
+}
+
+.admin-bootstrap-option-copy {
+  display: grid;
+  gap: 3px;
+}
+
+.admin-bootstrap-option-copy strong {
+  font-size: 14px;
+}
+
+.admin-bootstrap-option-copy small {
+  color: #626262;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
 .admin-bootstrap-actions {
   display: flex;
   align-items: center;
@@ -2263,9 +2297,17 @@ body {
 }
 
 @media (max-width: 760px) {
+  .nx-topbar {
+    height: auto;
+  }
+
   .product {
-    flex: 1 1 100%;
+    flex: 1 1 auto;
     min-width: 0;
+  }
+
+  .top-spacer {
+    display: none;
   }
 
   .product-copy {

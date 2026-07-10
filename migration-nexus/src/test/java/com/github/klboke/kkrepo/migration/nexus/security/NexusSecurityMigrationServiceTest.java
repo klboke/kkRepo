@@ -111,6 +111,31 @@ class NexusSecurityMigrationServiceTest {
   }
 
   @Test
+  void writesDisabledAnonymousStateFromApiExport() {
+    NexusSecurityMigrationBatch batch = new NexusSecurityExportReader().read(new NexusSecurityExport(
+        List.of(),
+        List.of(),
+        List.of(),
+        List.of(),
+        List.of(),
+        List.of(),
+        List.of(),
+        List.of(),
+        Map.of(
+            "enabled", false,
+            "userId", "anonymous",
+            "realmName", "NexusAuthorizingRealm")));
+    RecordingWriter writer = new RecordingWriter();
+    NexusSecurityMigrationService service =
+        new NexusSecurityMigrationService(new NexusSecurityRecordMapper(), writer);
+
+    NexusSecurityMigrationResult result = service.migrate(batch);
+
+    assertEquals(new NexusSecurityMigrationResult(0, 0, 0, 0, 0, 0, 0, 1), result);
+    assertEquals(List.of("anonymous:Local/anonymous:false"), writer.operations);
+  }
+
+  @Test
   void migratesRealisticFullSecurityExportFixture() throws IOException {
     NexusSecurityMigrationBatch batch = new NexusSecurityExportReader().read(readFixture());
     RecordingWriter writer = new RecordingWriter();

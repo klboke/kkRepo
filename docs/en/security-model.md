@@ -74,13 +74,9 @@ Use least-privilege roles for CI users. Avoid granting broad `*` privileges to a
 
 ## Anonymous Access
 
-Anonymous read is disabled by default in application configuration:
+Anonymous read is persisted in MySQL and disabled by default for new installations. During initial administrator setup, choose whether unauthenticated users may browse and download repository content.
 
-```properties
-kkrepo.security.anonymous-read-enabled=false
-```
-
-Enable anonymous access only when public read behavior is intentional. Review which repositories are readable before exposing the service externally.
+After setup, manage anonymous access through **Security > Anonymous** in the administration UI or the security REST APIs. There is no application property that overrides the persisted setting. Enable anonymous access only when public read behavior is intentional, and review which repositories are readable before exposing the service externally.
 
 ## API Keys And Tokens
 

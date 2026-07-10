@@ -327,7 +327,7 @@ class RepositoriesControllerSecurityTest {
     }
 
     @Override
-    public Optional<AuthenticatedSubject> authenticateAnonymous(boolean fallbackEnabled) {
+    public Optional<AuthenticatedSubject> authenticateAnonymous() {
       return Optional.empty();
     }
   }

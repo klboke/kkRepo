@@ -91,6 +91,7 @@ class SecurityManagementServiceValidationTest {
     assertEquals("admin", status.userId());
     assertEquals("nx-admin", status.roleId());
     assertEquals(8, status.minPasswordLength());
+    assertEquals(false, status.anonymousAccessEnabled());
   }
 
   @Test
@@ -99,7 +100,7 @@ class SecurityManagementServiceValidationTest {
     seedAdminRole(dao);
     SecurityManagementService service = new SecurityManagementService(dao);
 
-    var saved = service.initializeAdmin(new AdminBootstrapCommand("Admin1234", "Admin1234"));
+    var saved = service.initializeAdmin(new AdminBootstrapCommand("Admin1234", "Admin1234", null));
 
     assertEquals("Local", saved.source());
     assertEquals("admin", saved.userId());
@@ -108,6 +109,19 @@ class SecurityManagementServiceValidationTest {
     assertNotEquals("Admin1234", stored.passwordHash());
     assertTrue(SecurityHashing.verifyPassword(stored.passwordHash(), "Admin1234"));
     assertEquals(false, service.adminBootstrapStatus().required());
+    assertEquals(false, service.anonymousSettings().enabled());
+  }
+
+  @Test
+  void initializeAdminCanEnableAnonymousAccess() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    seedAdminRole(dao);
+    SecurityManagementService service = new SecurityManagementService(dao);
+
+    service.initializeAdmin(new AdminBootstrapCommand("Admin1234", "Admin1234", true));
+
+    assertEquals(true, service.anonymousSettings().enabled());
+    assertEquals(true, service.adminBootstrapStatus().anonymousAccessEnabled());
   }
 
   @Test
@@ -115,10 +129,10 @@ class SecurityManagementServiceValidationTest {
     FakeSecurityDao dao = new FakeSecurityDao();
     seedAdminRole(dao);
     SecurityManagementService service = new SecurityManagementService(dao);
-    service.initializeAdmin(new AdminBootstrapCommand("Admin1234", "Admin1234"));
+    service.initializeAdmin(new AdminBootstrapCommand("Admin1234", "Admin1234", false));
 
     SecurityValidationException error = assertThrows(SecurityValidationException.class, () ->
-        service.initializeAdmin(new AdminBootstrapCommand("Changed1234", "Changed1234")));
+        service.initializeAdmin(new AdminBootstrapCommand("Changed1234", "Changed1234", true)));
 
     assertEquals("Administrator is already initialized.", error.getMessage());
   }
@@ -130,7 +144,7 @@ class SecurityManagementServiceValidationTest {
     SecurityManagementService service = new SecurityManagementService(dao);
 
     SecurityValidationException error = assertThrows(SecurityValidationException.class, () ->
-        service.initializeAdmin(new AdminBootstrapCommand("Admin1234", "Admin5678")));
+        service.initializeAdmin(new AdminBootstrapCommand("Admin1234", "Admin5678", true)));
 
     assertEquals("passwordConfirm does not match password", error.getMessage());
   }
@@ -725,7 +739,7 @@ class SecurityManagementServiceValidationTest {
   }
 
   @Test
-  void anonymousUserCannotBeDeletedOrHavePasswordChanged() {
+  void anonymousUserRemainsProtectedWhileAnonymousAccessIsDisabled() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.insertUser(new SecurityUserRecord(
         null,
@@ -739,7 +753,7 @@ class SecurityManagementServiceValidationTest {
         null,
         Map.of()));
     dao.upsertAnonymousConfig(new SecurityAnonymousConfigRecord(
-        true,
+        false,
         "Local",
         "anonymous",
         "NexusAuthorizingRealm"));

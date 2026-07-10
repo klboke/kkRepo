@@ -106,6 +106,7 @@ class NexusApiMigrationServiceTest {
     assertTrue(preflight.security().apiKeyDetails().get(0).rawKeyPresent());
     assertEquals("public-maven", preflight.security().contentSelectorDetails().get(0).name());
     assertEquals(List.of("NexusAuthenticatingRealm"), preflight.security().realmOrder());
+    assertTrue(preflight.security().anonymous().enabled());
     assertEquals(MetadataEngine.ORIENTDB, preflight.sourceProfile().metadataEngine());
     assertEquals("OrientDbNexusAdapter", preflight.migrationPlan().adapter());
     assertEquals(
@@ -117,6 +118,33 @@ class NexusApiMigrationServiceTest {
             .status());
     assertEquals(64, preflight.migrationPlan().profileHash().length());
     assertEquals(64, preflight.migrationPlan().planHash().length());
+  }
+
+  @Test
+  void preflightPreservesDisabledAnonymousState() {
+    NexusApiMigrationService service = service(new FakeBlobStoreDao(), new FakeRepositoryDao());
+
+    NexusMigrationPreflight preflight = service.preflight(new NexusInventory(
+        List.of(),
+        List.of(),
+        new NexusSecurityExport(
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            Map.of(
+                "enabled", false,
+                "userId", "anonymous",
+                "realmName", "NexusAuthorizingRealm")),
+        List.of()),
+        new NexusMigrationTargetBlobStore("default", "s3", null, null, null, "", Map.of()),
+        null);
+
+    assertFalse(preflight.security().anonymous().enabled());
   }
 
   @Test

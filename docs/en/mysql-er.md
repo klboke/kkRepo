@@ -1,6 +1,6 @@
 # kkrepo MySQL ER Design
 
-The current MySQL schema is defined by `server/src/main/resources/db/migration/V1__init_schema.sql` through `V28__pub_upload_session.sql`, and is executed by Flyway during service startup. The target database is MySQL 8 InnoDB.
+The current MySQL schema is defined by `server/src/main/resources/db/migration/V1__init_schema.sql` through `V29__disable_anonymous_for_uninitialized_installations.sql`, and is executed by Flyway during service startup. The target database is MySQL 8 InnoDB.
 
 The schema uses a "unified content table + format field" model for shared asset/blob data. Cargo / Rust and Dart / Pub use this shared model with protocol metadata stored in component/asset attributes. Pub adds `pub_upload_session` for the official multi-step publish flow, and formats with other protocol-specific relationships, such as Docker/OCI manifests, tags, upload sessions, auth tokens, and referrers, add dedicated side tables. This is more suitable for migration from Nexus and unified admin-console queries. If a specific format becomes significantly larger later, it can be optimized with partitioning or additional dedicated tables.
 

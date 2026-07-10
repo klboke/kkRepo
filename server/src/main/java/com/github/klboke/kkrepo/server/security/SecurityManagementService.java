@@ -154,7 +154,8 @@ public class SecurityManagementService implements AccessDecisionService {
         DEFAULT_SOURCE,
         DEFAULT_ADMIN_USER_ID,
         ADMIN_ROLE_ID,
-        ADMIN_BOOTSTRAP_MIN_PASSWORD_LENGTH);
+        ADMIN_BOOTSTRAP_MIN_PASSWORD_LENGTH,
+        anonymousSettings().enabled());
   }
 
   @Transactional
@@ -174,7 +175,7 @@ public class SecurityManagementService implements AccessDecisionService {
       throw new SecurityValidationException(
           "password must be at least " + ADMIN_BOOTSTRAP_MIN_PASSWORD_LENGTH + " characters");
     }
-    return saveUser(new UserCommand(
+    UserView administrator = saveUser(new UserCommand(
         DEFAULT_SOURCE,
         DEFAULT_ADMIN_USER_ID,
         "Administrator",
@@ -186,6 +187,12 @@ public class SecurityManagementService implements AccessDecisionService {
         null,
         List.of(ADMIN_ROLE_ID),
         Map.of("source", "nexus-bootstrap")));
+    saveAnonymousSettings(new AnonymousSettingsCommand(
+        Boolean.TRUE.equals(command.anonymousAccessEnabled()),
+        DEFAULT_SOURCE,
+        DEFAULT_ANONYMOUS_USER_ID,
+        DEFAULT_ANONYMOUS_REALM_NAME));
+    return administrator;
   }
 
   @Transactional
@@ -1175,7 +1182,7 @@ public class SecurityManagementService implements AccessDecisionService {
 
   private boolean isAnonymousUser(String userId) {
     AnonymousSettingsView settings = anonymousSettings();
-    return settings.enabled() && requireText(userId, "userId").equals(settings.userId());
+    return requireText(userId, "userId").equals(settings.userId());
   }
 
   private ApiKeyView toApiKeyView(ApiKeyRecord record) {

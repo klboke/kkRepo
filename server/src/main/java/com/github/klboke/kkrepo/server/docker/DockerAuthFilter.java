@@ -84,7 +84,7 @@ public class DockerAuthFilter extends OncePerRequestFilter {
       subject = authenticationService.authenticate(request);
     }
     if (subject.isEmpty() && "pull".equals(action)) {
-      subject = authenticationService.authenticateAnonymous(false);
+      subject = authenticationService.authenticateAnonymous();
     }
     if (subject.isEmpty()) {
       challenge(response, request, target, challengeActions);

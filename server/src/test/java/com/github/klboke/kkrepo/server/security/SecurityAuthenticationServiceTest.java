@@ -604,7 +604,7 @@ class SecurityAuthenticationServiceTest {
     dao.roles(3L, "nx-anonymous");
     SecurityAuthenticationService service = service(dao);
 
-    Optional<AuthenticatedSubject> authenticated = service.authenticateAnonymous(false);
+    Optional<AuthenticatedSubject> authenticated = service.authenticateAnonymous();
 
     assertTrue(authenticated.isPresent());
     assertEquals("Local", authenticated.get().source());
@@ -624,7 +624,7 @@ class SecurityAuthenticationServiceTest {
     dao.user(user(3L, "Local", "anonymous", null));
     SecurityAuthenticationService service = service(dao, "authenticated-default");
 
-    Optional<AuthenticatedSubject> authenticated = service.authenticateAnonymous(false);
+    Optional<AuthenticatedSubject> authenticated = service.authenticateAnonymous();
 
     assertTrue(authenticated.isPresent());
     assertFalse(authenticated.get().permissionSubject().groupIds().contains("authenticated-default"));
@@ -642,7 +642,7 @@ class SecurityAuthenticationServiceTest {
     dao.roles(3L, "nx-anonymous");
     SecurityAuthenticationService service = service(dao);
 
-    Optional<AuthenticatedSubject> authenticated = service.authenticateAnonymous(false);
+    Optional<AuthenticatedSubject> authenticated = service.authenticateAnonymous();
 
     assertTrue(authenticated.isPresent());
     assertEquals("Local", authenticated.get().source());
@@ -733,7 +733,7 @@ class SecurityAuthenticationServiceTest {
   }
 
   @Test
-  void anonymousAuthenticationHonorsDisabledConfigOverFallbackProperty() {
+  void anonymousAuthenticationHonorsDisabledConfig() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.anonymous(new SecurityAnonymousConfigRecord(
         false,
@@ -743,21 +743,17 @@ class SecurityAuthenticationServiceTest {
     dao.user(user(3L, "Local", "anonymous", null));
     SecurityAuthenticationService service = service(dao);
 
-    assertFalse(service.authenticateAnonymous(true).isPresent());
+    assertFalse(service.authenticateAnonymous().isPresent());
   }
 
   @Test
-  void anonymousAuthenticationCanUseLegacyFallbackWhenConfigIsMissing() {
+  void anonymousAuthenticationIsDisabledWhenConfigIsMissing() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.user(user(3L, "Local", "anonymous", null));
     dao.roles(3L, "nx-anonymous");
     SecurityAuthenticationService service = service(dao);
 
-    Optional<AuthenticatedSubject> authenticated = service.authenticateAnonymous(true);
-
-    assertTrue(authenticated.isPresent());
-    assertEquals("anonymous", authenticated.get().userId());
-    assertEquals("NexusAuthorizingRealm", authenticated.get().realmId());
+    assertFalse(service.authenticateAnonymous().isPresent());
   }
 
   @Test

@@ -20,7 +20,6 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
 import org.springframework.session.web.http.SessionRepositoryFilter;
@@ -38,7 +37,6 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   private final AccessDecisionService accessDecisionService;
   private final RepositoryDao repositoryDao;
   private final ForwardedHeaderPolicy forwardedHeaderPolicy;
-  private final boolean anonymousReadEnabled;
   private final NexusLegacyUiCompatibility legacyUi;
 
   public RepositorySecurityFilter(
@@ -46,13 +44,11 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       AccessDecisionService accessDecisionService,
       RepositoryDao repositoryDao,
       ForwardedHeaderPolicy forwardedHeaderPolicy,
-      @Value("${kkrepo.security.anonymous-read-enabled:false}") boolean anonymousReadEnabled,
       NexusLegacyUiCompatibility legacyUi) {
     this.authenticationService = authenticationService;
     this.accessDecisionService = accessDecisionService;
     this.repositoryDao = repositoryDao;
     this.forwardedHeaderPolicy = forwardedHeaderPolicy;
-    this.anonymousReadEnabled = anonymousReadEnabled;
     this.legacyUi = legacyUi;
   }
 
@@ -90,7 +86,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     };
     if (authenticated.isEmpty()) {
       authenticated = target.readOnly(repository.get().format())
-          ? authenticationService.authenticateAnonymous(anonymousReadEnabled)
+          ? authenticationService.authenticateAnonymous()
           : Optional.empty();
       if (authenticated.isEmpty()) {
         challenge(request, response, repository.get(), target);
