@@ -14,7 +14,7 @@ kkRepo is an independent, self-hosted artifact repository for Maven, npm, PyPI, 
 
 - Support for 13+ mainstream repository formats across hosted, proxy, and group repository types.
 - Compatibility with Sonatype Nexus APIs, user permission model, and the `/repository/<repo>/...` URL layout.
-- One-click migration from Sonatype Nexus Repository while preserving existing repository domains and URLs, so existing client configurations and CI workflows continue unchanged after migration.
+- Use kkRepo as a drop-in replacement for Sonatype Nexus, with one-click migration of existing data while preserving repository domains and URLs, so client configurations and CI workflows continue unchanged.
 - Comprehensive identity and access control with Local, LDAP, and OIDC authentication, configurable anonymous access policies, and fine-grained permissions.
 - Comprehensive observability with Prometheus metrics export and Grafana dashboards.
 - MySQL-backed metadata and shared runtime state.
