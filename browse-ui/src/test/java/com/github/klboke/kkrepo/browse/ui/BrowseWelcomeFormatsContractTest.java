@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 
 class BrowseWelcomeFormatsContractTest {
   private static final List<String> FORMATS = List.of(
-      "maven2", "npm", "pypi", "cargo", "pub", "go",
+      "maven2", "npm", "pypi", "cargo", "pub", "composer", "go",
       "helm", "docker", "nuget", "rubygems", "yum", "raw");
 
   @Test
@@ -22,10 +22,12 @@ class BrowseWelcomeFormatsContractTest {
 
     assertTrue(index.contains("id=\"supported-formats-title\""));
     assertTrue(stylesheet.contains(".format-grid {"));
-    assertTrue(stylesheet.contains("gap: 1px;"));
+    assertTrue(stylesheet.contains("gap: 0;"));
     assertTrue(stylesheet.contains("overflow: hidden;"));
     assertTrue(stylesheet.contains(".format-item {"));
     assertTrue(stylesheet.contains("min-height: 72px;"));
+    assertTrue(stylesheet.contains("border-right: 1px solid var(--line);"));
+    assertTrue(stylesheet.contains("border-bottom: 1px solid var(--line);"));
     assertTrue(stylesheet.contains("cursor: default;"));
     assertTrue(
         index.indexOf("id=\"admin-bootstrap-panel\"")

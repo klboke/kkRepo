@@ -25,6 +25,7 @@ KKREPO_AUTH="$KKREPO_USER:$KKREPO_PASSWORD"
 KKREPO_BLOB_PATH="${KKREPO_COMPAT_BLOB_PATH:-/tmp/kkrepo-blobs/default}"
 KKREPO_DOCKER_CONNECTOR_PORT="${KKREPO_DOCKER_CONNECTOR_PORT:-18180}"
 NEXUS_DOCKER_HTTP_PORT="${NEXUS_DOCKER_HTTP_PORT:-$KKREPO_DOCKER_CONNECTOR_PORT}"
+COMPOSER_NEXUS_REQUIRED="${COMPOSER_NEXUS_REQUIRED:-false}"
 
 START_TIMEOUT_SECONDS="${LIVE_COMPAT_START_TIMEOUT_SECONDS:-240}"
 
@@ -309,6 +310,20 @@ ensure_nexus_repositories() {
     "storage":{"blobStoreName":"default","strictContentTypeValidation":true},
     "group":{"memberNames":["pub-hosted","pub-proxy"]}
   }'
+
+  local composer_payload='{
+    "name":"composer-proxy",
+    "online":true,
+    "storage":{"blobStoreName":"default","strictContentTypeValidation":true},
+    "proxy":{"remoteUrl":"https://repo.packagist.org/","contentMaxAge":1440,"metadataMaxAge":1440},
+    "negativeCache":{"enabled":true,"timeToLive":1440},
+    "httpClient":{"blocked":false,"autoBlock":true}
+  }'
+  if [[ "$COMPOSER_NEXUS_REQUIRED" == "true" ]]; then
+    nexus_create_repo "composer-proxy" "$NEXUS_URL/service/rest/v1/repositories/composer/proxy" "$composer_payload"
+  else
+    nexus_try_create_repo "composer-proxy" "$NEXUS_URL/service/rest/v1/repositories/composer/proxy" "$composer_payload"
+  fi
 }
 
 initialize_kkrepo_admin() {
@@ -564,6 +579,33 @@ ensure_kkrepo_repositories() {
     "blobStoreName":"default",
     "strictContentTypeValidation":true,
     "group":{"memberNames":["pub-hosted","pub-proxy"]}
+  }'
+
+  kkrepo_create_repo "composer-hosted" '{
+    "name":"composer-hosted",
+    "recipe":"composer-hosted",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "hosted":{"writePolicy":"ALLOW_ONCE"}
+  }'
+
+  kkrepo_create_repo "composer-proxy" '{
+    "name":"composer-proxy",
+    "recipe":"composer-proxy",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "proxy":{"remoteUrl":"https://repo.packagist.org/","contentMaxAgeMinutes":1440,"metadataMaxAgeMinutes":1440,"autoBlock":true}
+  }'
+
+  kkrepo_create_repo "composer-group" '{
+    "name":"composer-group",
+    "recipe":"composer-group",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "group":{"memberNames":["composer-hosted","composer-proxy"]}
   }'
 
   kkrepo_create_repo "nuget-hosted" '{

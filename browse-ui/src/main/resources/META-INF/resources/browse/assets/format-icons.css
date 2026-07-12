@@ -38,6 +38,11 @@
   --format-logo: url("/browse/assets/formats/pub.svg");
 }
 
+.format-logo-composer {
+  --format-color: #885630;
+  --format-logo: url("/browse/assets/formats/composer.svg");
+}
+
 .format-logo-go {
   --format-color: #00a8cf;
   --format-logo: url("/browse/assets/formats/go.svg");

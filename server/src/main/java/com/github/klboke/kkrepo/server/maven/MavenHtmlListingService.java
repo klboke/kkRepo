@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.mysql.model.ComponentRecord;
 import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.server.browse.BrowseAssetVisibility;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -62,6 +63,9 @@ public class MavenHtmlListingService {
     RepositoryRecord repo = opt.get();
     String normalized = normalize(path);
     ListingPath listingPath = listingPath(repo.format(), normalized, browseMode);
+    if (BrowseAssetVisibility.hidden(repo.format(), listingPath.storagePath())) {
+      return Optional.empty();
+    }
     if (repo.format() == RepositoryFormat.NPM && isNpmInternalDashPath(listingPath.storagePath())) {
       return Optional.empty();
     }
@@ -74,7 +78,7 @@ public class MavenHtmlListingService {
     LinkedHashMap<String, BrowseNodeDao.BrowseChild> merged = new LinkedHashMap<>();
     for (RepositoryRecord src : sources) {
       for (BrowseNodeDao.BrowseChild child : browseNodeDao.listChildren(src.id(), listingPath.storagePath())) {
-        if (!child.hasAssetSubtree()) {
+        if (!child.hasAssetSubtree() || BrowseAssetVisibility.hidden(repo.format(), child.path())) {
           continue;
         }
         merged.putIfAbsent(child.path(), child);

@@ -1975,12 +1975,12 @@ h2 {
 .format-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 1px;
+  gap: 0;
   margin: 0;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: var(--line);
+  background: var(--panel);
   padding: 0;
   list-style: none;
 }
@@ -1993,6 +1993,8 @@ h2 {
   justify-content: space-between;
   gap: 10px;
   border: 0;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
   border-radius: 0;
   background: var(--panel);
   padding: 12px 14px;

@@ -14,6 +14,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
 import com.github.klboke.kkrepo.server.cargo.CargoHostedService;
+import com.github.klboke.kkrepo.server.composer.ComposerHostedService;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
 import com.github.klboke.kkrepo.server.maven.MavenHostedService;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
@@ -55,6 +56,27 @@ class ComponentUploadServiceTest {
             && !def.multipleUpload()
             && def.assetFields().size() == 1
             && def.assetFields().getFirst().name().equals("asset")));
+  }
+
+  @Test
+  void composerComponentUploadDelegatesWithCoordinateOverrides() throws Exception {
+    ComposerHostedService composerHosted = mock(ComposerHostedService.class);
+    when(composerHosted.uploadArchive(
+        any(), any(), eq("example.zip"), eq("application/x-tar"),
+        eq("company/example"), eq("1.2.3"), eq("alice"), eq("127.0.0.1")))
+        .thenReturn("company/example/1.0.0/company-example-1.0.0.zip");
+    ComponentUploadService service = service(composerHosted);
+
+    ComponentUploadService.UploadResult result = service.upload(
+        "composer-hosted",
+        Map.of(
+            "composer.name", new String[] {"company/example"},
+            "composer.version", new String[] {"1.2.3"}),
+        files("composer.asset", "example.zip"),
+        "alice",
+        "127.0.0.1");
+
+    assertEquals(List.of("company/example/1.0.0/company-example-1.0.0.zip"), result.paths());
   }
 
   @Test
@@ -128,6 +150,24 @@ class ComponentUploadServiceTest {
 
   private static ComponentUploadService service(PubHostedService pubHosted) {
     return service(runtime("pub-hosted", RepositoryFormat.PUB), mock(CargoHostedService.class), pubHosted);
+  }
+
+  private static ComponentUploadService service(ComposerHostedService composerHosted) {
+    RepositoryRuntime runtime = runtime("composer-hosted", RepositoryFormat.COMPOSER);
+    RepositoryRuntimeRegistry registry = mock(RepositoryRuntimeRegistry.class);
+    when(registry.resolve(runtime.name())).thenReturn(Optional.of(runtime));
+    return new ComponentUploadService(
+        registry,
+        mock(AssetDao.class),
+        mock(MavenHostedService.class),
+        mock(NpmHostedService.class),
+        mock(PypiHostedService.class),
+        mock(HelmHostedService.class),
+        mock(CargoHostedService.class),
+        mock(PubHostedService.class),
+        composerHosted,
+        mock(RawHostedService.class),
+        mock(YumService.class));
   }
 
   private static ComponentUploadService service(

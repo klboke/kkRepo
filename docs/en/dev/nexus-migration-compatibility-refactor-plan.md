@@ -75,7 +75,7 @@ Recommended fields:
 | `repositoryRecipes` | Repository name, recipe, online state, attributes, and blob store link |
 | `restCapabilities` | Available REST endpoints and observed status behavior |
 | `schemaFingerprints` | Table, column, index, and selected metadata fingerprints |
-| `formatCapabilities` | Format-specific capabilities, such as Maven metadata, npm tokens, Cargo sparse index, Pub package metadata/upload sessions, Docker connectors |
+| `formatCapabilities` | Format-specific capabilities, such as Maven metadata, npm tokens, Cargo sparse index, Pub package metadata/upload sessions, Composer datastore proxy content, and Docker connectors |
 | `warnings` | Risk notes surfaced to the user |
 | `unsupportedItems` | Items that must not be migrated automatically |
 
@@ -253,7 +253,7 @@ Migration execution must stay idempotent and safe for multi-replica kkrepo deplo
 
 ### Phase 6: Format-Specific Expansion
 
-- Enable Maven, npm, PyPI, Go, Helm, NuGet, RubyGems, Yum, Docker, Cargo, and Pub only after each format has probe evidence and validation logic.
+- Enable Maven, npm, PyPI, Go, Helm, NuGet, RubyGems, Yum, Docker, Cargo, Pub, and Composer only after each format has probe evidence and validation logic; Composer accepts only explicitly selected native Nexus proxies.
 - Start with config migration where content export is not yet safe.
 - Add content migration once asset/blob/checksum mapping is proven.
 - For Cargo specifically, keep migration enabled only when Nexus 3.77.x+ H2/PostgreSQL source profiles prove sparse index, crate blob, token, permission, checksum, and cutover behavior.

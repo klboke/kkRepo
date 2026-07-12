@@ -69,6 +69,7 @@ public class BrowseController {
     AuthenticatedSubject subject = currentOrAnonymous(request).orElseThrow(() ->
         new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication required"));
     requireBrowse(subject, repo, parent);
+    rejectHiddenPath(repo.format(), parent);
     // For GROUP repos browse_node has nothing of its own — fan out across members and merge.
     // The first member that surfaces a given path wins (matches Maven group "first-win" rules).
     List<RepositoryRecord> sources = repo.type() == RepositoryType.GROUP
@@ -80,19 +81,18 @@ public class BrowseController {
     BrowsePath browsePath = browsePath(repo.format(), parent);
     LinkedHashMap<String, BrowseEntry> merged = new LinkedHashMap<>();
     for (RepositoryRecord source : sources) {
-      String downloadPrefix = "/repository/" + repo.name() + "/";
       for (BrowseNodeDao.BrowseChild row : browseNodeDao.listChildren(source.id(), browsePath.storageParent())) {
-        if (!row.hasAssetSubtree()) {
+        if (!row.hasAssetSubtree() || BrowseAssetVisibility.hidden(repo.format(), row.path())) {
           continue;
         }
         if (isNpmInternalTarballDirectory(repo, browsePath.storageParent(), row)) {
           for (BrowseNodeDao.BrowseChild tarball : browseNodeDao.listChildren(source.id(), row.path())) {
             if (tarball.leaf()) {
-              mergeEntry(merged, toEntry(downloadPrefix, source.name(), tarball, browsePath));
+              mergeEntry(merged, toEntry(repo, source, tarball, browsePath));
             }
           }
         } else {
-          mergeEntry(merged, toEntry(downloadPrefix, source.name(), row, browsePath));
+          mergeEntry(merged, toEntry(repo, source, row, browsePath));
         }
       }
     }
@@ -137,25 +137,32 @@ public class BrowseController {
     AuthenticatedSubject subject = currentOrAnonymous(request).orElseThrow(() ->
         new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication required"));
     requireBrowse(subject, repo, normalizedPath);
+    rejectHiddenPath(repo.format(), normalizedPath);
     return assetDetailService.detail(repo, normalizedPath, source);
   }
 
+  private static void rejectHiddenPath(RepositoryFormat format, String path) {
+    if (BrowseAssetVisibility.hidden(format, path)) {
+      throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Asset not found");
+    }
+  }
+
   private static BrowseEntry toEntry(
-      String downloadPrefix,
-      String sourceRepository,
+      RepositoryRecord visibleRepository,
+      RepositoryRecord sourceRepository,
       BrowseNodeDao.BrowseChild row,
       BrowsePath browsePath) {
     String publicPath = browsePath.toPublicPath(row.path());
     return new BrowseEntry(
         row.displayName(),
         publicPath,
-        sourceRepository,
+        sourceRepository.name(),
         row.leaf(),
         row.assetSize(),
         row.assetContentType(),
         row.assetSha1(),
         row.assetLastUpdatedAt(),
-        row.leaf() ? downloadPrefix + row.path() : null);
+        row.leaf() ? BrowseDownloadUrls.asset(visibleRepository, row.path()) : null);
   }
 
   private static void mergeEntry(LinkedHashMap<String, BrowseEntry> merged, BrowseEntry entry) {

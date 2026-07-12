@@ -45,6 +45,7 @@ jobs:
       LIVE_COMPAT_SUITE: ${{ (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e') && 'client-e2e') || inputs.suite }}
       NEXUS_COMPAT_IMAGE: sonatype/nexus3:3.92.0
       PUB_COMPAT_ENABLED: "true"
+      COMPOSER_COMPAT_ENABLED: "true"
       PUB_COMPAT_HOSTED_PACKAGE: kkrepo_compat_hosted_fixture
       PUB_COMPAT_HOSTED_VERSION: "1.0.0"
       PUB_COMPAT_PROXY_PACKAGE: path
@@ -73,6 +74,13 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+
+      - name: Set up PHP and Composer
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e'
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          tools: composer:v2
 
       - name: Set up Go
         if: env.LIVE_COMPAT_SUITE == 'client-e2e'
@@ -177,6 +185,8 @@ jobs:
       COMPAT_WRITE_ENABLED: "true"
       CARGO_COMPAT_ENABLED: "true"
       PUB_COMPAT_ENABLED: "true"
+      COMPOSER_COMPAT_ENABLED: "true"
+      COMPOSER_NEXUS_REQUIRED: "true"
       PUB_COMPAT_HOSTED_PACKAGE: kkrepo_compat_hosted_fixture
       PUB_COMPAT_HOSTED_VERSION: "1.0.0"
       PUB_COMPAT_PROXY_PACKAGE: path

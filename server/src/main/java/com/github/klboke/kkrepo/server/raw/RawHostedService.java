@@ -67,6 +67,26 @@ public class RawHostedService {
     return put(runtime, rawPath, body, contentType, Map.of(), createdBy, createdByIp, false);
   }
 
+  /**
+   * Stores generated protocol content for any repository format. The caller owns format/type
+   * validation; this exists so protocol implementations can reuse the distributed blob/metadata
+   * transaction without pretending their content is a Raw repository.
+   */
+  public MavenResponse putInternal(RepositoryRuntime runtime, String rawPath, InputStream body,
+      String contentType, Map<String, ?> blobAttributes, String createdBy, String createdByIp) {
+    String path = normalizeAssetPath(rawPath);
+    writer.write(runtime, blobStorage(runtime), requireBlobStore(runtime), path, body, contentType,
+        blobAttributes == null ? Map.of() : blobAttributes, createdBy, createdByIp);
+    return MavenResponse.created();
+  }
+
+  /** Deletes protocol-generated content without applying Raw repository type checks. */
+  public MavenResponse deleteInternal(RepositoryRuntime runtime, String rawPath) {
+    String path = normalizeAssetPath(rawPath);
+    int deleted = writer.deleteAsset(runtime, blobStorage(runtime), path);
+    return deleted == 0 ? MavenResponse.noBody(404) : MavenResponse.noBody(204);
+  }
+
   private MavenResponse put(RepositoryRuntime runtime, String rawPath, InputStream body,
       String contentType, Map<String, ?> blobAttributes,
       String createdBy, String createdByIp, boolean enforcePolicy) {

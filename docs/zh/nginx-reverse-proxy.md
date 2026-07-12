@@ -4,7 +4,7 @@
 
 ## 为什么需要 Forwarded Header
 
-kkRepo 会基于当前请求生成部分客户端可见的绝对 URL。例如 npm package metadata 中的 `dist.tarball` 会被重写成返回给 `npm view` 和 `npm install` 的公开仓库 URL。
+kkRepo 会基于当前请求生成部分客户端可见的绝对 URL。例如 npm package metadata 会重写 `dist.tarball`，Composer p2 metadata 会重写 `dist.url`；两者都必须使用客户端可访问的公网 scheme 和 host。
 
 如果 Nginx 对外接收的是 `https://nexus.example.com`，但转发到 kkRepo 时变成后端 HTTP 请求，kkRepo 必须收到可信的 forwarded header。否则生成的 URL 可能会使用后端看到的请求信息，例如 `http://...` 或后端端口。
 
@@ -92,6 +92,15 @@ npm view --registry=https://nexus.example.com/repository/npm-group/ is-number di
 ```text
 https://nexus.example.com/repository/npm-group/
 ```
+
+Composer 还应验证 p2 metadata 中的 `dist.url`：
+
+```bash
+curl -u alice:"$KKREPO_PASSWORD" \
+  https://nexus.example.com/repository/composer-group/p2/psr/log.json
+```
+
+其中 `dist.url` 应以 `https://nexus.example.com/repository/composer-group/` 开头。
 
 如果返回值以 `http://` 开头、包含 `:8080`，或使用了内部 host，检查：
 

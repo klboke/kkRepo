@@ -5,6 +5,7 @@ import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.server.cargo.CargoHostedService;
+import com.github.klboke.kkrepo.server.composer.ComposerHostedService;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenHostedService;
@@ -28,6 +29,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import org.springframework.http.MediaType;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.multipart.MultipartFile;
@@ -54,6 +56,15 @@ public class ComponentUploadService {
       singleAsset("helm"),
       singleAsset("cargo"),
       singleAsset("pub"),
+      new UploadDefinition(
+          "composer",
+          false,
+          List.of(
+              field("name", "STRING", "Package name override (vendor/package)", true,
+                  "Component coordinates"),
+              field("version", "STRING", "Package version override", true,
+                  "Component coordinates")),
+          List.of(field("asset", "FILE", "Composer archive", false, null))),
       rawLikeUpload("nuget"),
       rawLikeUpload("rubygems"),
       rawLikeUpload("yum"),
@@ -67,10 +78,38 @@ public class ComponentUploadService {
   private final HelmHostedService helmHosted;
   private final CargoHostedService cargoHosted;
   private final PubHostedService pubHosted;
+  private final ComposerHostedService composerHosted;
   private final RawHostedService rawHosted;
   private final YumService yumService;
   private final MavenPathParser mavenPathParser = new MavenPathParser();
 
+  @Autowired
+  public ComponentUploadService(
+      RepositoryRuntimeRegistry registry,
+      AssetDao assetDao,
+      MavenHostedService mavenHosted,
+      NpmHostedService npmHosted,
+      PypiHostedService pypiHosted,
+      HelmHostedService helmHosted,
+      CargoHostedService cargoHosted,
+      PubHostedService pubHosted,
+      ComposerHostedService composerHosted,
+      RawHostedService rawHosted,
+      YumService yumService) {
+    this.registry = registry;
+    this.assetDao = assetDao;
+    this.mavenHosted = mavenHosted;
+    this.npmHosted = npmHosted;
+    this.pypiHosted = pypiHosted;
+    this.helmHosted = helmHosted;
+    this.cargoHosted = cargoHosted;
+    this.pubHosted = pubHosted;
+    this.composerHosted = composerHosted;
+    this.rawHosted = rawHosted;
+    this.yumService = yumService;
+  }
+
+  /** Backward-compatible constructor used by existing focused upload tests. */
   public ComponentUploadService(
       RepositoryRuntimeRegistry registry,
       AssetDao assetDao,
@@ -82,16 +121,8 @@ public class ComponentUploadService {
       PubHostedService pubHosted,
       RawHostedService rawHosted,
       YumService yumService) {
-    this.registry = registry;
-    this.assetDao = assetDao;
-    this.mavenHosted = mavenHosted;
-    this.npmHosted = npmHosted;
-    this.pypiHosted = pypiHosted;
-    this.helmHosted = helmHosted;
-    this.cargoHosted = cargoHosted;
-    this.pubHosted = pubHosted;
-    this.rawHosted = rawHosted;
-    this.yumService = yumService;
+    this(registry, assetDao, mavenHosted, npmHosted, pypiHosted, helmHosted, cargoHosted,
+        pubHosted, null, rawHosted, yumService);
   }
 
   public List<UploadDefinition> definitions() {
@@ -130,6 +161,7 @@ public class ComponentUploadService {
       case GO -> throw new UploadValidationException("Go hosted upload is not supported");
       case CARGO -> uploadCargo(runtime, upload, createdBy, createdByIp);
       case PUB -> uploadPub(runtime, upload, createdBy, createdByIp);
+      case COMPOSER -> uploadComposer(runtime, upload, createdBy, createdByIp);
       case DOCKER -> throw new UploadValidationException("Docker hosted upload must use the Docker Registry V2 API");
       case NUGET -> uploadRaw(runtime, upload, createdBy, createdByIp);
       case RUBYGEMS -> uploadRaw(runtime, upload, createdBy, createdByIp);
@@ -248,6 +280,31 @@ public class ComponentUploadService {
     }
     try (var input = asset.file().getInputStream()) {
       return List.of(pubHosted.uploadArchive(runtime, input, createdBy, createdByIp, "component-upload"));
+    }
+  }
+
+  private List<String> uploadComposer(
+      RepositoryRuntime runtime,
+      NormalizedUpload upload,
+      String createdBy,
+      String createdByIp) throws IOException {
+    AssetUpload asset = singleAsset(upload, "Composer");
+    String filename = originalFilename(asset.file());
+    String lower = filename.toLowerCase(Locale.ROOT);
+    if (!(lower.endsWith(".zip") || lower.endsWith(".tar") || lower.endsWith(".tar.gz")
+        || lower.endsWith(".tgz") || lower.endsWith(".tar.bz2") || lower.endsWith(".tbz2"))) {
+      throw new UploadValidationException("Composer upload requires a ZIP or TAR archive");
+    }
+    try (var input = asset.file().getInputStream()) {
+      return List.of(composerHosted.uploadArchive(
+          runtime,
+          input,
+          filename,
+          asset.file().getContentType(),
+          blankToNull(upload.fields().get("name")),
+          blankToNull(upload.fields().get("version")),
+          createdBy,
+          createdByIp));
     }
   }
 
@@ -379,6 +436,7 @@ public class ComponentUploadService {
       case GO -> "go";
       case CARGO -> "cargo";
       case PUB -> "pub";
+      case COMPOSER -> "composer";
       case DOCKER -> "docker";
       case NUGET -> "nuget";
       case RUBYGEMS -> "rubygems";

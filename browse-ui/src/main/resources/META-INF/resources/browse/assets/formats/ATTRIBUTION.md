@@ -7,6 +7,7 @@ Brand icons are sourced from Simple Icons 16.25.0.
 - PyPI: https://pypi.org
 - Rust: https://www.rust-lang.org (CC-BY-SA-4.0)
 - Dart: https://github.com/dart-lang/site-shared
+- Composer: https://getcomposer.org (MIT)
 - Go: https://go.dev/blog/go-brand
 - Helm: https://helm.sh
 - Docker: https://www.docker.com/company/newsroom/media-resources

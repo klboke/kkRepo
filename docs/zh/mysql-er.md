@@ -2,7 +2,7 @@
 
 当前 MySQL schema 以 `server/src/main/resources/db/migration/V1__init_schema.sql` 到 `V29__disable_anonymous_for_uninitialized_installations.sql` 为准，并由 Flyway 在服务启动时执行。目标数据库是 MySQL 8 InnoDB。
 
-Schema 对共享 asset/blob 数据采用“统一内容表 + format 字段”的模型。Cargo / Rust 和 Dart / Pub 使用这套共享模型，协议元数据保存在 component/asset attributes 中；Pub 为官方多步骤 publish flow 增加 `pub_upload_session`，Docker/OCI manifest、tag、upload session、auth token、referrers 等其它协议专有关系也使用专用旁表。这样更适合从 Nexus 迁移和管理台统一查询；如果后续某个格式数据量明显过大，再通过分区或更多专用表优化。
+Schema 对共享 asset/blob 数据采用“统一内容表 + format 字段”的模型。Cargo / Rust、Dart / Pub 和 Composer / PHP 使用这套共享模型，协议元数据保存在 component/asset attributes 中；Composer package/version/dist 不增加专用业务表，proxy route 也作为可重建内部 asset 保存。Pub 为官方多步骤 publish flow 增加 `pub_upload_session`，Docker/OCI manifest、tag、upload session、auth token、referrers 等其它协议专有关系使用专用旁表。这样更适合从 Nexus 迁移和管理台统一查询；如果后续某个格式数据量明显过大，再通过分区或更多专用表优化。
 
 ## 仓库与内容 ER
 

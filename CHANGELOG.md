@@ -8,6 +8,7 @@ This project follows a pragmatic early-stage release process. Until a stable `1.
 
 ### Added
 
+- Composer / PHP hosted, proxy, and group repositories for Composer 2, including Packagist proxy caching, Nexus-style semantic dist paths, Components API/UI archive upload, canonical group resolution, Browse/Search/Usage/HTML View integration, real Composer client E2E, required Nexus live comparison, and explicitly selected Nexus proxy-cache migration.
 - Dart / Pub hosted, proxy, and group repositories, including `dart pub publish`, `dart pub get`, Flutter package resolution, package metadata, archive downloads, `PubToken` authentication, MySQL-backed upload sessions, UI/API upload, browse metadata, cleanup, metrics, migration support, and Nexus 3.92.0 compatibility coverage. (#86)
 - Repository-format and artifact-type iconography across Browse and Administration, including precise package/archive file icons and a custom Java archive icon for JAR, WAR, EAR, and AAR assets. (#99)
 - Product version and GitHub project links in the Browse and Administration headers. (#97, #98)
@@ -35,9 +36,10 @@ This project follows a pragmatic early-stage release process. Until a stable `1.
 
 ### Compatibility And Validation
 
+- Composer / PHP includes protocol/server tests, a non-skipping Nexus proxy comparison, hosted-to-proxy transitive dependency resolution, Basic-auth rejection, client-cache-cleared lock replay, and Nexus 3.92 datastore migration E2E coverage.
 - Dart / Pub includes focused protocol and server tests, Nexus reference black-box tests, real `dart`/Flutter client E2E coverage, and datastore-era migration coverage. (#86)
 - Main-branch CI and CodeQL passed on the release baseline, including the Browse and Administration icon contract suites. (#99)
-- Existing Maven, npm, PyPI, Go, Helm, Cargo/Rust, Docker/OCI, NuGet, RubyGems, Yum, and Raw compatibility paths remain covered by the reactor and live compatibility workflows.
+- Existing Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Docker/OCI, NuGet, RubyGems, Yum, and Raw compatibility paths remain covered by the reactor and live compatibility workflows.
 
 ### Upgrade Notes
 
@@ -45,6 +47,7 @@ This project follows a pragmatic early-stage release process. Until a stable `1.
 - This release adds Flyway migrations for MySQL-backed Pub upload sessions and the secure anonymous-access default for databases that have not completed initial administrator setup.
 - Legacy Nexus UI compatibility routes now default to disabled. Deployments that still run compatibility tests or integrations against those legacy UI-only endpoints must explicitly set `KKREPO_NEXUS_LEGACY_UI_ENABLED=true`; normal repository clients and supported REST APIs do not require it.
 - Validate Dart / Pub repository configuration, PubToken handling, proxy/group behavior, and archive migration in staging before opening the new format to production clients.
+- Validate Composer hosted archive policy, group member order, Basic credentials, proxy caching, and explicitly selected Nexus proxy migration in staging before cutover.
 
 ## 0.2.0 - 2026-07-01
 

@@ -42,9 +42,19 @@ public class ComponentDao {
       """;
   private static final String SEARCH_SELECT = """
       SELECT c.id, c.repository_id, r.name AS repository_name, c.format, c.namespace,
-             c.name, c.version, c.kind, c.last_updated_at
+             c.name, c.version, c.kind, c.last_updated_at,
+             CASE WHEN c.format = 'composer'
+                  THEN COALESCE(
+                      NULLIF(JSON_UNQUOTE(JSON_EXTRACT(c.attributes_json, '$.distPath')), 'null'),
+                      c.name)
+                  ELSE NULL
+             END AS storage_path
       FROM component c
       JOIN repository r ON r.id = c.repository_id
+      """;
+  private static final String SEARCH_VISIBLE_PREDICATE = """
+      (c.format <> 'composer'
+       OR (c.name <> '_composer' AND LEFT(c.name, 10) <> '_composer/'))
       """;
 
   private final JdbcTemplate jdbcTemplate;
@@ -142,7 +152,7 @@ public class ComponentDao {
     String normalized = keyword == null ? "" : keyword.trim();
     int safeLimit = Math.max(1, Math.min(limit, 300));
     if (normalized.isEmpty() && format == null) {
-      return jdbcTemplate.query(SEARCH_SELECT + """
+      return jdbcTemplate.query(SEARCH_SELECT + "WHERE " + SEARCH_VISIBLE_PREDICATE + """
           ORDER BY c.last_updated_at DESC, c.id DESC
           LIMIT ?
           """, searchRowMapper, safeLimit);
@@ -150,6 +160,8 @@ public class ComponentDao {
     if (normalized.isEmpty()) {
       return jdbcTemplate.query(SEARCH_SELECT + """
           WHERE c.format = ?
+            AND
+          """ + SEARCH_VISIBLE_PREDICATE + """
           ORDER BY c.last_updated_at DESC, c.id DESC
           LIMIT ?
           """, searchRowMapper, EnumColumns.write(format), safeLimit);
@@ -161,25 +173,41 @@ public class ComponentDao {
     if (format == null) {
       return jdbcTemplate.query("""
           SELECT c.id, c.repository_id, r.name AS repository_name, c.format, c.namespace,
-                 c.name, c.version, c.kind, c.last_updated_at
+                 c.name, c.version, c.kind, c.last_updated_at,
+                 CASE WHEN c.format = 'composer'
+                      THEN COALESCE(
+                          NULLIF(JSON_UNQUOTE(JSON_EXTRACT(c.attributes_json, '$.distPath')), 'null'),
+                          c.name)
+                      ELSE NULL
+                 END AS storage_path
           FROM component_search cs
           JOIN component c ON c.id = cs.component_id
           JOIN repository r ON r.id = c.repository_id
           WHERE MATCH(cs.namespace, cs.name, cs.version, cs.keywords)
                 AGAINST (? IN BOOLEAN MODE)
+            AND
+          """ + SEARCH_VISIBLE_PREDICATE + """
           ORDER BY c.last_updated_at DESC, r.name, c.namespace, c.name, c.version
           LIMIT ?
           """, searchRowMapper, booleanQuery, safeLimit);
     }
     return jdbcTemplate.query("""
         SELECT c.id, c.repository_id, r.name AS repository_name, c.format, c.namespace,
-               c.name, c.version, c.kind, c.last_updated_at
+               c.name, c.version, c.kind, c.last_updated_at,
+               CASE WHEN c.format = 'composer'
+                    THEN COALESCE(
+                        NULLIF(JSON_UNQUOTE(JSON_EXTRACT(c.attributes_json, '$.distPath')), 'null'),
+                        c.name)
+                    ELSE NULL
+               END AS storage_path
         FROM component_search cs
         JOIN component c ON c.id = cs.component_id
         JOIN repository r ON r.id = c.repository_id
         WHERE c.format = ?
           AND MATCH(cs.namespace, cs.name, cs.version, cs.keywords)
               AGAINST (? IN BOOLEAN MODE)
+          AND
+        """ + SEARCH_VISIBLE_PREDICATE + """
         ORDER BY c.last_updated_at DESC, r.name, c.namespace, c.name, c.version
         LIMIT ?
         """, searchRowMapper, EnumColumns.write(format), booleanQuery, safeLimit);
@@ -204,12 +232,18 @@ public class ComponentDao {
     args.add(EnumColumns.write(format));
     StringBuilder sql = new StringBuilder("""
         SELECT c.id, c.repository_id, r.name AS repository_name, c.format, c.namespace,
-               c.name, c.version, c.kind, c.last_updated_at
+               c.name, c.version, c.kind, c.last_updated_at,
+               CASE WHEN c.format = 'composer'
+                    THEN COALESCE(
+                        NULLIF(JSON_UNQUOTE(JSON_EXTRACT(c.attributes_json, '$.distPath')), 'null'),
+                        c.name)
+                    ELSE NULL
+               END AS storage_path
         FROM component c
         JOIN repository r ON r.id = c.repository_id
         WHERE c.repository_id IN (
         """);
-    sql.append(placeholders).append(") AND c.format = ?");
+    sql.append(placeholders).append(") AND c.format = ?\n");
     if (!normalized.isEmpty()) {
       String booleanQuery = fulltextBooleanQuery(normalized);
       if (booleanQuery.isBlank()) return List.of();
@@ -418,7 +452,8 @@ public class ComponentDao {
       rs.getString("name"),
       rs.getString("version"),
       rs.getString("kind"),
-      nullableInstant(rs, "last_updated_at"));
+      nullableInstant(rs, "last_updated_at"),
+      rs.getString("storage_path"));
 
   public record ComponentSearchRow(
       long id,
@@ -429,6 +464,7 @@ public class ComponentDao {
       String name,
       String version,
       String kind,
-      java.time.Instant lastUpdatedAt) {
+      java.time.Instant lastUpdatedAt,
+      String storagePath) {
   }
 }

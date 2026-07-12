@@ -21,6 +21,11 @@ final class NexusRepositorySupport {
     if (repositoryFormat == null || repositoryType == null) {
       return Optional.empty();
     }
+    // Nexus native Composer support is proxy-only. kkrepo hosted/group are product extensions and
+    // must never be inferred from an unknown/community-plugin source model.
+    if (repositoryFormat == RepositoryFormat.COMPOSER && repositoryType != RepositoryType.PROXY) {
+      return Optional.empty();
+    }
     return RepositoryRecipes.byName(repositoryFormat.id() + "-" + repositoryType.name().toLowerCase(Locale.ROOT));
   }
 
@@ -64,6 +69,9 @@ final class NexusRepositorySupport {
     }
     if (repositoryFormat == RepositoryFormat.HELM && repositoryType == RepositoryType.GROUP) {
       return "helm group has no target recipe";
+    }
+    if (repositoryFormat == RepositoryFormat.COMPOSER && repositoryType != RepositoryType.PROXY) {
+      return "Nexus native Composer migration supports proxy repositories only";
     }
     return "recipe is not supported by kkrepo";
   }

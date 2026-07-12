@@ -5,6 +5,7 @@ NEXUS_URL="${NEXUS_COMPAT_BASE_URL:-http://localhost:28090}"
 NEXUS_REPOSITORY="${DOCKER_MIGRATION_NEXUS_REPOSITORY:-docker-hosted}"
 CARGO_NEXUS_REPOSITORY="${CARGO_MIGRATION_NEXUS_REPOSITORY:-cargo-hosted}"
 PUB_NEXUS_REPOSITORY="${PUB_MIGRATION_NEXUS_REPOSITORY:-pub-hosted}"
+COMPOSER_NEXUS_REPOSITORY="${COMPOSER_MIGRATION_NEXUS_REPOSITORY:-composer-proxy}"
 NEXUS_USER="${NEXUS_COMPAT_USERNAME:-admin}"
 NEXUS_PASSWORD="${NEXUS_COMPAT_PASSWORD:-Admin1234}"
 
@@ -14,6 +15,7 @@ KKREPO_DOCKER_REGISTRY="${DOCKER_MIGRATION_KKREPO_REGISTRY:-127.0.0.1:18183}"
 KKREPO_REPOSITORY="${DOCKER_MIGRATION_KKREPO_REPOSITORY:-docker-hosted}"
 CARGO_KKREPO_REPOSITORY="${CARGO_MIGRATION_KKREPO_REPOSITORY:-cargo-hosted}"
 PUB_KKREPO_REPOSITORY="${PUB_MIGRATION_KKREPO_REPOSITORY:-pub-hosted}"
+COMPOSER_KKREPO_REPOSITORY="${COMPOSER_MIGRATION_KKREPO_REPOSITORY:-composer-proxy}"
 KKREPO_USER="${KKREPO_COMPAT_USERNAME:-admin}"
 KKREPO_PASSWORD="${KKREPO_COMPAT_PASSWORD:-12345678}"
 KKREPO_BLOB_PATH="${KKREPO_COMPAT_BLOB_PATH:-/tmp/kkrepo-blobs/default}"
@@ -27,6 +29,8 @@ CARGO_CRATE="${CARGO_MIGRATION_CRATE:-kkrepo_migration_e2e_${TAG_SAFE}}"
 CARGO_VERSION="${CARGO_MIGRATION_VERSION:-0.1.0}"
 PUB_PACKAGE="${PUB_MIGRATION_PACKAGE:-kkrepo_migration_e2e_${TAG_SAFE,,}}"
 PUB_VERSION="${PUB_MIGRATION_VERSION:-0.1.0}"
+COMPOSER_MIGRATION_ENABLED="${COMPOSER_MIGRATION_ENABLED:-false}"
+COMPOSER_PACKAGE="${COMPOSER_MIGRATION_PACKAGE:-psr/log}"
 PAGE_SIZE="${DOCKER_MIGRATION_PAGE_SIZE:-500}"
 CONCURRENCY="${DOCKER_MIGRATION_CONCURRENCY:-2}"
 WAIT_TIMEOUT_SECONDS="${DOCKER_MIGRATION_WAIT_TIMEOUT_SECONDS:-300}"
@@ -83,6 +87,10 @@ file_size() {
 
 file_sha256() {
   shasum -a 256 "$1" | awk '{print $1}'
+}
+
+file_sha1() {
+  shasum -a 1 "$1" | awk '{print $1}'
 }
 
 append_query() {
@@ -233,6 +241,85 @@ source_pub_available() {
   curl -m 20 -fsS \
     -u "$NEXUS_USER:$NEXUS_PASSWORD" \
     "$NEXUS_URL/service/rest/v1/repositories/pub/hosted/$PUB_NEXUS_REPOSITORY" >/dev/null 2>&1
+}
+
+composer_migration_enabled() {
+  [[ "$COMPOSER_MIGRATION_ENABLED" == "true" ]]
+}
+
+source_composer_available() {
+  curl -m 20 -fsS \
+    -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$NEXUS_URL/service/rest/v1/repositories/composer/proxy/$COMPOSER_NEXUS_REPOSITORY" >/dev/null 2>&1
+}
+
+warm_composer_proxy_fixture() {
+  local metadata_file dist_file metadata_url dist_url actual_sha1 prefix
+  local -a fields
+  metadata_file="$(mktemp)"
+  dist_file="$(mktemp)"
+  metadata_url="${NEXUS_URL%/}/repository/$COMPOSER_NEXUS_REPOSITORY/p2/$COMPOSER_PACKAGE.json"
+
+  curl -m 60 -fsS \
+    -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "${NEXUS_URL%/}/repository/$COMPOSER_NEXUS_REPOSITORY/packages.json" >/dev/null
+  curl -m 60 -fsS \
+    -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$metadata_url" >"$metadata_file"
+  mapfile -t fields < <(python3 - "$metadata_file" "$COMPOSER_PACKAGE" <<'PY'
+import json
+import sys
+
+path, package = sys.argv[1:3]
+with open(path, "r", encoding="utf-8") as source:
+    payload = json.load(source)
+versions = (payload.get("packages") or {}).get(package) or []
+for version in versions:
+    dist = version.get("dist") or {}
+    if version.get("version") and dist.get("url") and dist.get("type"):
+        print(version["version"])
+        print(dist["url"])
+        print(dist["type"])
+        print(dist.get("shasum") or "")
+        break
+else:
+    raise SystemExit(f"Nexus Composer metadata has no dist version for {package}")
+PY
+)
+  if [[ "${#fields[@]}" -ne 4 ]]; then
+    log "could not parse Nexus Composer fixture metadata for $COMPOSER_PACKAGE"
+    exit 1
+  fi
+  COMPOSER_VERSION="${fields[0]}"
+  dist_url="$(python3 - "$metadata_url" "${fields[1]}" <<'PY'
+import sys
+from urllib.parse import urljoin
+print(urljoin(sys.argv[1], sys.argv[2]))
+PY
+)"
+  COMPOSER_DIST_TYPE="${fields[2]}"
+  curl -m 120 -fsS \
+    -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$dist_url" >"$dist_file"
+  actual_sha1="$(file_sha1 "$dist_file")"
+  if [[ -n "${fields[3]}" && "${fields[3],,}" != "${actual_sha1,,}" ]]; then
+    log "Nexus Composer fixture SHA-1 mismatch: metadata=${fields[3]} downloaded=$actual_sha1"
+    exit 1
+  fi
+  prefix="/repository/$COMPOSER_NEXUS_REPOSITORY/"
+  COMPOSER_DIST_PATH="$(python3 - "$dist_url" "$prefix" <<'PY'
+import sys
+from urllib.parse import urlsplit
+path = urlsplit(sys.argv[1]).path
+prefix = sys.argv[2]
+if not path.startswith(prefix):
+    raise SystemExit(f"Nexus Composer dist URL is outside the repository: {path}")
+print(path[len(prefix):])
+PY
+)"
+  COMPOSER_DIST_SHA1="$actual_sha1"
+  rm -f "$metadata_file" "$dist_file"
+  log "Composer proxy fixture warmed: $COMPOSER_PACKAGE $COMPOSER_VERSION path=$COMPOSER_DIST_PATH"
 }
 
 publish_cargo_fixture_to_source_nexus() {
@@ -516,6 +603,178 @@ PY
   log "Pub fixture verified: $package_name $version sha256=$expected_sha256"
 }
 
+verify_composer_requires_explicit_proxy_selection() {
+  local response status
+  response="$(mktemp)"
+  status="$(curl -m 60 -sS \
+    -u "$(auth)" \
+    -H "Content-Type: application/json" \
+    --data "{
+      \"sourceBaseUrl\":\"$(json_escape "$NEXUS_URL")\",
+      \"sourceUsername\":\"$(json_escape "$NEXUS_USER")\",
+      \"sourcePassword\":\"$(json_escape "$NEXUS_PASSWORD")\",
+      \"repositories\":[\"$(json_escape "$COMPOSER_NEXUS_REPOSITORY")\"],
+      \"checksumValidation\":true
+    }" \
+    -o "$response" \
+    -w '%{http_code}' \
+    "$KKREPO_URL/internal/migration/nexus/repository-data/start")"
+  if [[ "$status" != "400" ]]; then
+    log "Composer proxy migration without backupProxyRepositories returned HTTP $status, expected 400"
+    cat "$response" >&2 || true
+    exit 1
+  fi
+  if ! grep -qi 'proxy' "$response"; then
+    log "Composer proxy migration rejection did not explain the proxy selection error"
+    cat "$response" >&2 || true
+    exit 1
+  fi
+  rm -f "$response"
+  log "Composer proxy requires explicit backupProxyRepositories selection"
+}
+
+verify_migrated_composer_fixture() {
+  local job_id="$1"
+  local job_file repo_file update_file detail_file root_file metadata_file dist_file
+  local encoded_path target_dist_url target_sha1
+  job_file="$(mktemp)"
+  repo_file="$(mktemp)"
+  update_file="$(mktemp)"
+  detail_file="$(mktemp)"
+  root_file="$(mktemp)"
+  metadata_file="$(mktemp)"
+  dist_file="$(mktemp)"
+
+  curl -m 30 -fsS -u "$(auth)" \
+    "$KKREPO_URL/internal/migration/nexus/repository-data/jobs/$job_id" >"$job_file"
+  python3 - "$job_file" "$COMPOSER_NEXUS_REPOSITORY" <<'PY'
+import json
+import sys
+
+path, repository = sys.argv[1:3]
+with open(path, "r", encoding="utf-8") as source:
+    payload = json.load(source)
+rows = payload.get("repositoryJobs") or payload.get("repositoryStatuses") or payload.get("repositoryDetails") or []
+matches = [row for row in rows if (
+    row.get("sourceRepositoryName") or row.get("repositoryName") or row.get("name")
+) == repository]
+if not matches:
+    raise SystemExit(f"Composer migration repository status not found: {repository}")
+row = matches[0]
+if int(row.get("migratedAssets") or 0) < 1:
+    raise SystemExit(f"Composer migration did not migrate any assets: {row}")
+if int(row.get("failedAssets") or 0) != 0:
+    raise SystemExit(f"Composer migration has failed assets: {row}")
+PY
+
+  curl -m 30 -fsS -u "$(auth)" \
+    "$KKREPO_URL/internal/repositories/$COMPOSER_KKREPO_REPOSITORY" >"$repo_file"
+  python3 - "$repo_file" "$update_file" <<'PY'
+import json
+import sys
+
+source_path, update_path = sys.argv[1:3]
+with open(source_path, "r", encoding="utf-8") as source:
+    repository = json.load(source)
+if repository.get("recipe") != "composer-proxy" or repository.get("type") != "PROXY":
+    raise SystemExit(f"migrated Composer repository did not remain proxy: {repository}")
+proxy = repository.get("proxy") or {}
+if proxy.get("remoteUrl") != "https://repo.packagist.org/":
+    raise SystemExit(f"migrated Composer remote URL changed: {proxy.get('remoteUrl')!r}")
+update = {
+    "online": True,
+    "blobStoreName": repository.get("blobStoreName"),
+    "strictContentTypeValidation": repository.get("strictContentTypeValidation"),
+    "proxy": {
+        # Use a resolvable public host so repository URL validation accepts the update. Port 1 is
+        # intentionally unusable; successful reads below therefore prove the migrated cache is
+        # sufficient without waiting on or depending on the Composer upstream.
+        "remoteUrl": "https://example.com:1/composer-migration/",
+        "contentMaxAgeMinutes": proxy.get("contentMaxAgeMinutes"),
+        "metadataMaxAgeMinutes": proxy.get("metadataMaxAgeMinutes"),
+        "autoBlock": proxy.get("autoBlock"),
+    },
+}
+with open(update_path, "w", encoding="utf-8") as target:
+    json.dump(update, target, separators=(",", ":"))
+PY
+
+  encoded_path="$(python3 - "$COMPOSER_DIST_PATH" <<'PY'
+import sys
+from urllib.parse import quote
+print(quote(sys.argv[1], safe=""))
+PY
+)"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$KKREPO_URL/internal/browse/$COMPOSER_KKREPO_REPOSITORY/attributes?path=$encoded_path" >"$detail_file"
+  python3 - "$detail_file" "$COMPOSER_DIST_PATH" "$COMPOSER_DIST_SHA1" <<'PY'
+import json
+import sys
+
+path, expected_path, expected_sha1 = sys.argv[1:4]
+with open(path, "r", encoding="utf-8") as source:
+    detail = json.load(source)
+if detail.get("path") != expected_path:
+    raise SystemExit(f"migrated Composer dist path changed: {detail.get('path')!r}")
+actual_sha1 = (detail.get("checksum") or {}).get("sha1")
+if actual_sha1 != expected_sha1:
+    raise SystemExit(f"migrated Composer dist SHA-1 changed: {actual_sha1!r}")
+PY
+
+  curl -m 30 -fsS -u "$(auth)" \
+    -X PUT \
+    -H "Content-Type: application/json" \
+    --data-binary "@$update_file" \
+    "$KKREPO_URL/internal/repositories/$COMPOSER_KKREPO_REPOSITORY" >/dev/null
+  curl -m 60 -fsS -u "$(auth)" \
+    "$KKREPO_URL/repository/$COMPOSER_KKREPO_REPOSITORY/packages.json" >"$root_file"
+  python3 - "$root_file" "$KKREPO_URL/repository/$COMPOSER_KKREPO_REPOSITORY" <<'PY'
+import json
+import sys
+
+path, repository_url = sys.argv[1:3]
+with open(path, "r", encoding="utf-8") as source:
+    payload = json.load(source)
+expected = repository_url.rstrip("/") + "/p2/%package%.json"
+if payload.get("metadata-url") != expected:
+    raise SystemExit(
+        f"migrated Composer packages.json metadata-url changed: {payload.get('metadata-url')!r}"
+    )
+PY
+  curl -m 60 -fsS -u "$(auth)" \
+    "$KKREPO_URL/repository/$COMPOSER_KKREPO_REPOSITORY/p2/$COMPOSER_PACKAGE.json" >"$metadata_file"
+  target_dist_url="$(python3 - "$metadata_file" "$COMPOSER_PACKAGE" "$COMPOSER_VERSION" <<'PY'
+import json
+import sys
+
+path, package, expected_version = sys.argv[1:4]
+with open(path, "r", encoding="utf-8") as source:
+    payload = json.load(source)
+versions = (payload.get("packages") or {}).get(package) or []
+for version in versions:
+    if version.get("version") == expected_version and (version.get("dist") or {}).get("url"):
+        print(version["dist"]["url"])
+        break
+else:
+    raise SystemExit(f"migrated Composer metadata lacks {package} {expected_version}")
+PY
+)"
+  target_dist_url="$(python3 - "$KKREPO_URL/repository/$COMPOSER_KKREPO_REPOSITORY/" "$target_dist_url" <<'PY'
+import sys
+from urllib.parse import urljoin
+print(urljoin(sys.argv[1], sys.argv[2]))
+PY
+)"
+  curl -m 60 -fsS -u "$(auth)" "$target_dist_url" >"$dist_file"
+  target_sha1="$(file_sha1 "$dist_file")"
+  if [[ "$target_sha1" != "$COMPOSER_DIST_SHA1" ]]; then
+    log "migrated Composer dist SHA-1 mismatch: source=$COMPOSER_DIST_SHA1 target=$target_sha1"
+    exit 1
+  fi
+  rm -f "$job_file" "$repo_file" "$update_file" "$detail_file" "$root_file" "$metadata_file" "$dist_file"
+  log "Composer proxy migration verified offline: $COMPOSER_PACKAGE $COMPOSER_VERSION sha1=$target_sha1"
+}
+
 kkrepo_repo_exists() {
   local name="$1"
   curl -m 20 -fsS -u "$(auth)" \
@@ -589,12 +848,12 @@ fields = [
 parts = [f"{field}={body.get(field)}" for field in fields if field in body]
 repositories = body.get("repositoryStatuses")
 if not isinstance(repositories, list):
-    repositories = body.get("repositoryDetails")
+    repositories = body.get("repositoryJobs") or body.get("repositoryDetails")
 if not isinstance(repositories, list):
     repositories = []
 repo_parts = []
 for repo in repositories:
-    name = repo.get("repositoryName") or repo.get("name")
+    name = repo.get("sourceRepositoryName") or repo.get("repositoryName") or repo.get("name")
     if not name:
         continue
     repo_fields = []
@@ -855,7 +1114,17 @@ wait_for_http "kkrepo repositories endpoint" "$KKREPO_URL/internal/repositories?
 
 ensure_kkrepo_blob_store
 ensure_kkrepo_docker_repository
+if composer_migration_enabled; then
+  if ! source_composer_available; then
+    log "required Composer proxy repository $COMPOSER_NEXUS_REPOSITORY is not available on the source Nexus"
+    exit 1
+  fi
+  warm_composer_proxy_fixture
+fi
 run_config_metadata_migration
+if composer_migration_enabled; then
+  verify_composer_requires_explicit_proxy_selection
+fi
 
 kkrepo_ref="${KKREPO_DOCKER_REGISTRY}/${IMAGE}:${TAG}"
 
@@ -865,6 +1134,7 @@ source_digest_value="$(push_fixture_to_source_nexus "$IMAGE" "$TAG")"
 cargo_sha256_value=""
 pub_sha256_value=""
 migration_repositories_json="\"$(json_escape "$NEXUS_REPOSITORY")\""
+backup_proxy_repositories_json=""
 if cargo_migration_enabled; then
   if ! source_cargo_available; then
     log "expected Cargo repository $CARGO_NEXUS_REPOSITORY is not available on datastore source"
@@ -883,12 +1153,15 @@ if pub_migration_enabled; then
   pub_sha256_value="$(publish_pub_fixture_to_source_nexus "$PUB_PACKAGE" "$PUB_VERSION")"
   migration_repositories_json="$migration_repositories_json,\"$(json_escape "$PUB_NEXUS_REPOSITORY")\""
 fi
+if composer_migration_enabled; then
+  backup_proxy_repositories_json=",\"backupProxyRepositories\":[\"$(json_escape "$COMPOSER_NEXUS_REPOSITORY")\"]"
+fi
 
 payload="{
   \"sourceBaseUrl\":\"$(json_escape "$NEXUS_URL")\",
   \"sourceUsername\":\"$(json_escape "$NEXUS_USER")\",
   \"sourcePassword\":\"$(json_escape "$NEXUS_PASSWORD")\",
-  \"repositories\":[$migration_repositories_json],
+  \"repositories\":[$migration_repositories_json]$backup_proxy_repositories_json,
   \"pageSize\":$PAGE_SIZE,
   \"concurrency\":$CONCURRENCY,
   \"checksumValidation\":true
@@ -936,4 +1209,8 @@ if [[ -n "$pub_sha256_value" ]]; then
   verify_migrated_pub_fixture "$PUB_PACKAGE" "$PUB_VERSION" "$pub_sha256_value"
 fi
 
-log "Docker/Cargo/Pub migration E2E completed: job=$job_id source=${NEXUS_URL%/}/repository/${NEXUS_REPOSITORY}/v2/${IMAGE}:${TAG} target=$kkrepo_ref"
+if composer_migration_enabled; then
+  verify_migrated_composer_fixture "$job_id"
+fi
+
+log "Docker/Cargo/Pub/Composer migration E2E completed: job=$job_id source=${NEXUS_URL%/}/repository/${NEXUS_REPOSITORY}/v2/${IMAGE}:${TAG} target=$kkrepo_ref"

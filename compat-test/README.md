@@ -78,14 +78,17 @@ Available suites:
 - `smoke`: diagnostic console API checks plus Maven proxy GET/HEAD/checksum read compatibility.
 - `write-smoke`: Maven hosted release/snapshot write compatibility with `COMPAT_WRITE_ENABLED=true`.
 - `nexus`: the disposable Nexus reference matrix. It enables write checks and compares kkrepo with
-  Nexus across Maven, npm, PyPI, Cargo/Rust, Dart/Pub, Raw, selected NuGet/RubyGems/Yum behavior,
+  Nexus across Maven, npm, PyPI, Cargo/Rust, Dart/Pub, Composer/PHP, Raw, selected NuGet/RubyGems/Yum behavior,
   Go proxy endpoints, Helm hosted round trips, component upload specs, and selected security/admin
-  contracts.
+  contracts. Composer is required when enabled; a missing Nexus Composer endpoint fails instead of skipping.
 - `extended`: diagnostic smoke coverage plus currently separated PyPI, Helm, Pub, NuGet, RubyGems, and Yum checks.
 - `client-e2e`: starts from the disposable kkrepo service and uses real package clients to publish
   and then download/resolve through hosted and group/proxy repositories. It covers Maven, npm,
-  PyPI, Helm, Cargo/Rust, Dart/Pub, Flutter Pub, NuGet, RubyGems, Yum, and Docker/OCI. Go is
+  PyPI, Helm, Cargo/Rust, Dart/Pub, Flutter Pub, Composer/PHP, NuGet, RubyGems, Yum, and Docker/OCI. Go is
   resolve-only through the Go proxy because hosted Go publishing is not a supported repository mode.
+  The Composer flow additionally validates a hosted-to-proxy transitive dependency, rejected Basic
+  credentials, and lock replay from the server cache after clearing the client cache and detaching
+  the Packagist upstream.
 - `full`: all compat-test tests with live endpoint variables set; use this as a diagnostic suite
   when working through known protocol gaps.
 
@@ -109,7 +112,7 @@ docker compose -f docker-compose.compat.yml down -v
 ```
 
 The runner must have `mvn`, `npm`, `python3` with `build` and `twine`, `go`, `helm`, `cargo`,
-`dart`, `dotnet`, `ruby`/`gem`, and Docker available. `flutter` is used for the Flutter Pub check
+`dart`, `composer`, `php`, `dotnet`, `ruby`/`gem`, and Docker available. `flutter` is used for the Flutter Pub check
 when installed; GitHub Actions installs it for the `client-e2e` workflow. ORAS is optional; when
 present the Docker/OCI part also pushes and pulls a generic OCI artifact. Client logs, downloaded
 metadata, and selected inspect outputs are written under `artifacts/client-e2e/`.

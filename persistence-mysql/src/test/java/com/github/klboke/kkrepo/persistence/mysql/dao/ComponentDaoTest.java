@@ -68,6 +68,45 @@ class ComponentDaoTest {
   }
 
   @Test
+  void searchExcludesComposerInternalRoutesBeforeApplyingLimit() {
+    RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
+    ComponentDao dao = new ComponentDao(
+        jdbcTemplate,
+        new JsonColumns(new ObjectMapper()));
+
+    dao.search(null, RepositoryFormat.COMPOSER, 20);
+
+    assertTrue(jdbcTemplate.sql.contains("LEFT(c.name, 10) <> '_composer/'"));
+    assertTrue(jdbcTemplate.sql.indexOf("LEFT(c.name, 10)") < jdbcTemplate.sql.indexOf("LIMIT ?"));
+  }
+
+  @Test
+  void composerSearchReturnsStoredDistPathForBrowseNavigation() {
+    RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
+    ComponentDao dao = new ComponentDao(
+        jdbcTemplate,
+        new JsonColumns(new ObjectMapper()));
+
+    dao.search(null, RepositoryFormat.COMPOSER, 20);
+
+    assertTrue(jdbcTemplate.sql.contains("JSON_EXTRACT(c.attributes_json, '$.distPath')"));
+    assertTrue(jdbcTemplate.sql.contains("END AS storage_path"));
+  }
+
+  @Test
+  void repositoryScopedSearchIncludesStoragePathProjection() {
+    RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
+    ComponentDao dao = new ComponentDao(
+        jdbcTemplate,
+        new JsonColumns(new ObjectMapper()));
+
+    dao.searchByRepositoryIds(List.of(1L), RepositoryFormat.NPM, "example", 20);
+
+    assertTrue(jdbcTemplate.sql.contains("END AS storage_path"));
+    assertTrue(jdbcTemplate.sql.contains("c.format = ?\nAND MATCH"));
+  }
+
+  @Test
   void fulltextBooleanQueryTokenizesWithoutRegexBacktracking() {
     String keyword = "\"".repeat(4096) + "Com.Example artifact-1.0";
 

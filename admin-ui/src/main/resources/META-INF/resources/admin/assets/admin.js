@@ -364,6 +364,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   pypi: "pypi",
   cargo: "cargo",
   pub: "pub",
+  composer: "composer",
   go: "go",
   helm: "helm",
   docker: "docker",
@@ -379,6 +380,7 @@ const FORMAT_DISPLAY_NAMES = Object.freeze({
   pypi: "PyPI",
   cargo: "Cargo / Rust",
   pub: "Dart / Pub",
+  composer: "Composer / PHP",
   go: "Go",
   helm: "Helm",
   docker: "Docker / OCI",
@@ -1716,7 +1718,7 @@ function memberCandidates() {
   const recipe = currentRecipe();
   const format = recipe ? recipe.format : null;
   if (!format) return [];
-  const allowNestedGroups = format === "pub";
+  const allowNestedGroups = format === "pub" || format === "composer";
   return repositories.filter((repo) => {
     if (repo.format !== format) return false;
     if (repositoryFormMode === "edit" && repo.name === editingRepositoryName) return false;
@@ -1947,7 +1949,8 @@ function refreshRepositoryRemoteDefaults(recipe) {
     raw: "https://example.com/",
     docker: "https://registry-1.docker.io/",
     cargo: "https://index.crates.io/",
-    pub: "https://pub.dev/"
+    pub: "https://pub.dev/",
+    composer: "https://repo.packagist.org/"
   };
   remote.placeholder = defaults[recipe.format] || "https://example.com/";
   if (repositoryFormMode === "create" && !remote.value.trim() && defaults[recipe.format]) {

@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.upload;
 
 import com.github.klboke.kkrepo.server.cargo.CargoExceptions;
+import com.github.klboke.kkrepo.server.composer.ComposerExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.npm.NpmExceptions;
 import com.github.klboke.kkrepo.server.pypi.PypiExceptions;
@@ -21,6 +22,11 @@ public class ComponentUploadErrorAdvice {
 
   @ExceptionHandler(IOException.class)
   public ResponseEntity<Map<String, String>> badUpload(IOException e) {
+    return body(HttpStatus.BAD_REQUEST, e.getMessage());
+  }
+
+  @ExceptionHandler(ComposerExceptions.BadRequestException.class)
+  public ResponseEntity<Map<String, String>> composerBadRequest(ComposerExceptions.BadRequestException e) {
     return body(HttpStatus.BAD_REQUEST, e.getMessage());
   }
 

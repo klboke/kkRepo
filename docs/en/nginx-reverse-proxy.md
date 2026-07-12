@@ -4,7 +4,7 @@ This note covers the common deployment shape where Nginx terminates HTTPS and fo
 
 ## Why Forwarded Headers Matter
 
-kkRepo generates some client-visible absolute URLs from the incoming request. For example, npm package metadata rewrites `dist.tarball` to the public repository URL returned to `npm view` and `npm install`.
+kkRepo generates some client-visible absolute URLs from the incoming request. For example, npm package metadata rewrites `dist.tarball`, and Composer p2 metadata rewrites `dist.url`; both must use the client-visible public scheme and host.
 
 If Nginx receives `https://nexus.example.com` but forwards to kkRepo as plain HTTP, kkRepo must receive trusted forwarded headers. Otherwise generated URLs may use the backend view of the request, such as `http://...` or a backend port.
 
@@ -92,6 +92,15 @@ The returned tarball URL should start with:
 ```text
 https://nexus.example.com/repository/npm-group/
 ```
+
+For Composer, also inspect `dist.url` in p2 metadata:
+
+```bash
+curl -u alice:"$KKREPO_PASSWORD" \
+  https://nexus.example.com/repository/composer-group/p2/psr/log.json
+```
+
+The `dist.url` value should start with `https://nexus.example.com/repository/composer-group/`.
 
 If it starts with `http://`, contains `:8080`, or uses an internal host name, check:
 

@@ -41,6 +41,7 @@ const SEARCH_ROUTE_FORMAT = {
   maven2: "maven2",
   nuget: "nuget",
   pub: "pub",
+  composer: "composer",
   pypi: "pypi",
   rubygems: "rubygems",
   yum: "yum",
@@ -53,6 +54,7 @@ const FORMAT_ROUTE_SEGMENT = {
   maven2: "maven2",
   nuget: "nuget",
   pub: "pub",
+  composer: "composer",
   pypi: "pypi",
   rubygems: "rubygems",
   yum: "yum",
@@ -115,6 +117,8 @@ function repositoryBrowseHash(repoName, path = "") {
 }
 
 function componentBrowsePath(component) {
+  const storedPath = (component.browsePath || "").trim();
+  if (storedPath) return storedPath;
   const format = (component.format || "").toLowerCase();
   const group = (component.group || "").trim();
   const name = (component.name || "").trim();
@@ -137,6 +141,9 @@ function componentBrowsePath(component) {
   }
   if (format === "pub") {
     return version ? `packages/${name}/versions/${version}.tar.gz` : `packages/${name}`;
+  }
+  if (format === "composer" && component.kind !== "composer-package") {
+    return name;
   }
   return "";
 }
@@ -614,6 +621,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   pypi: "pypi",
   cargo: "cargo",
   pub: "pub",
+  composer: "composer",
   go: "go",
   helm: "helm",
   docker: "docker",
@@ -1222,7 +1230,7 @@ function renderTree() {
         <span class="crumb-current">${state.repo}</span>
       </div>
       <div class="tree-actions">
-        <a class="tree-link" href="/repository/${encodeURIComponent(state.repo)}/" target="_blank">HTML View</a>
+        <a class="tree-link" href="/service/rest/repository/browse/${encodeURIComponent(state.repo)}/" target="_blank">HTML View</a>
         <a class="tree-link" href="#" id="advanced-search-link">Advanced search…</a>
       </div>
     </div>
@@ -1546,6 +1554,7 @@ function renderAttributesSection(detail, opts = {}) {
     opts.hideDocker ? "" : renderAttributeGroup("Docker", detail.docker),
     renderAttributeGroup("Npm", detail.npm),
     renderAttributeGroup("Pub", detail.pub),
+    renderAttributeGroup("Composer", detail.composer),
     renderAttributeGroup("Provenance", detail.provenance),
   ].filter(Boolean).join("");
   if (!body) return "";
@@ -1713,6 +1722,10 @@ function hasDirectoryUsage(entry) {
   }
   if (repo.format === "pub") {
     return Boolean(pubCoordinates(entry).name);
+  }
+  if (repo.format === "composer") {
+    const reserved = new Set(["p2", "providers", "packages", "_composer"]);
+    return (parts.length === 2 || parts.length === 3) && !reserved.has(parts[0]);
   }
   return false;
 }
@@ -2112,6 +2125,60 @@ async function pubUsageDetail(entry) {
   };
 }
 
+function composerCoordinates(entry, detail = null) {
+  const composer = detail?.composer || {};
+  let name = composer.package_name || "";
+  let version = composer.version || "";
+  const parts = pathSegments(entry.path);
+  if (!name) {
+    if (parts[0] === "p2" && parts.length >= 3) {
+      const file = parts.at(-1) || "";
+      const packageLeaf = file.replace(/~dev\.json$|\.json$/, "");
+      name = `${parts.slice(1, -1).join("/")}/${packageLeaf}`;
+    } else if (parts.length >= 2 && !["p2", "providers", "packages", "_composer"].includes(parts[0])) {
+      name = `${parts[0]}/${parts[1]}`;
+      if (!version && parts.length >= 3) version = parts[2];
+    }
+  }
+  return { name, version };
+}
+
+function composerRepositoryKey(repoName) {
+  return String(repoName || "kkrepo").replace(/[^A-Za-z0-9_.-]+/g, "-") || "kkrepo";
+}
+
+function composerUsageDetail(entry, detail = null) {
+  const coordinates = composerCoordinates(entry, detail);
+  if (!coordinates.name) return null;
+  const repoUrl = repositoryBaseUrl();
+  const requirement = coordinates.version
+    ? `${coordinates.name}:${coordinates.version}`
+    : coordinates.name;
+  const constraint = coordinates.version || "*";
+  const repositoryKey = composerRepositoryKey(state.repo);
+  return {
+    crumbText: entry.path,
+    summaryRows: [
+      ["Repository", state.repo],
+      ["Format", "composer"],
+      ["Name", coordinates.name],
+      ["Version", coordinates.version || "latest"],
+      ["Repository URL", repoUrl],
+    ],
+    snippets: [
+      usageSnippet("composer require", `composer require ${requirement}`, "Install this package"),
+      usageSnippet("composer config", `composer config repositories.${repositoryKey} composer ${repoUrl}`,
+        "Add this repository to the current project"),
+      usageSnippet("composer.json", `"repositories": [
+  {"type": "composer", "url": "${repoUrl}"}
+],
+"require": {
+  "${coordinates.name}": "${constraint}"
+}`, "Add the repository and dependency to composer.json"),
+    ],
+  };
+}
+
 function dockerCoordinates(entry, detail = null) {
   const docker = detail?.docker || {};
   const image = docker.image_name || imageNameFromDockerPath(entry.path);
@@ -2326,7 +2393,7 @@ function renderDockerReferrers(referrers) {
     </div>`;
 }
 
-async function usageDetailForEntry(entry) {
+async function usageDetailForEntry(entry, detail = null) {
   const repo = currentRepository();
   if (!repo) return null;
   if (repo.format === "maven2") return mavenUsageDetail(entry);
@@ -2336,6 +2403,7 @@ async function usageDetailForEntry(entry) {
   if (repo.format === "helm") return helmUsageDetail(entry);
   if (repo.format === "go") return goUsageDetail(entry);
   if (repo.format === "pub") return pubUsageDetail(entry);
+  if (repo.format === "composer") return composerUsageDetail(entry, detail);
   if (repo.format === "docker") return dockerUsageDetail(entry);
   return null;
 }
@@ -2360,8 +2428,8 @@ async function showComponentDetail(entry) {
 async function showAssetDetail(entry) {
   const mount = detailPaneMount();
   if (!mount) return;
-  const usage = await usageDetailForEntry(entry);
   const detail = await fetchAssetAttributes(entry);
+  const usage = await usageDetailForEntry(entry, detail);
   const dockerUsage = currentRepository()?.format === "docker" ? dockerUsageDetail(entry, detail) : null;
   const uploader = detail?.uploader || "-";
   const uploaderIp = detail?.uploaderIp || "";

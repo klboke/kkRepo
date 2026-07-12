@@ -274,7 +274,7 @@ WantedBy=multi-user.target
 生产部署建议使用多副本 kkrepo 服务、独立 MySQL 和 OSS/S3 blob store：
 
 ```text
-Maven/npm/PyPI/Go/Helm/Cargo/Pub/Docker/OCI/NuGet/RubyGems/Yum clients
+Maven/npm/PyPI/Go/Helm/Cargo/Pub/Composer/Docker/OCI/NuGet/RubyGems/Yum clients
         |
 DNS / Load Balancer / Reverse Proxy
         |

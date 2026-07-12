@@ -401,6 +401,7 @@ public class NexusRestClient {
           nuget: 'NUGET',
           rubygems: 'RUBYGEMS',
           pub: 'PUB',
+          composer: 'COMPOSER',
           yum: 'YUM',
           raw: 'RAW',
           cargo: 'CARGO'
@@ -807,6 +808,7 @@ public class NexusRestClient {
           nuget: 'NUGET',
           rubygems: 'RUBYGEMS',
           pub: 'PUB',
+          composer: 'COMPOSER',
           yum: 'YUM',
           raw: 'RAW',
           cargo: 'CARGO'

@@ -6,6 +6,8 @@ import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.protocol.cargo.CargoPath;
 import com.github.klboke.kkrepo.protocol.cargo.CargoPathParser;
+import com.github.klboke.kkrepo.protocol.composer.ComposerPath;
+import com.github.klboke.kkrepo.protocol.composer.ComposerPathParser;
 import com.github.klboke.kkrepo.protocol.npm.NpmPath;
 import com.github.klboke.kkrepo.protocol.npm.NpmPathParser;
 import com.github.klboke.kkrepo.protocol.nuget.NugetPaths;
@@ -17,6 +19,9 @@ import com.github.klboke.kkrepo.server.cargo.CargoGroupService;
 import com.github.klboke.kkrepo.server.cargo.CargoHostedService;
 import com.github.klboke.kkrepo.server.cargo.CargoProxyService;
 import com.github.klboke.kkrepo.server.cargo.CargoSearchQuery;
+import com.github.klboke.kkrepo.server.composer.ComposerGroupService;
+import com.github.klboke.kkrepo.server.composer.ComposerHostedService;
+import com.github.klboke.kkrepo.server.composer.ComposerProxyService;
 import com.github.klboke.kkrepo.server.goartifact.GoGroupService;
 import com.github.klboke.kkrepo.server.goartifact.GoProxyService;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
@@ -83,6 +88,7 @@ import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
+import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * Unified content entry point for Nexus-compatible repository URLs. URL shape
@@ -115,6 +121,9 @@ public class RepositoryContentController {
   private final PubHostedService pubHosted;
   private final PubProxyService pubProxy;
   private final PubGroupService pubGroup;
+  private final ComposerHostedService composerHosted;
+  private final ComposerProxyService composerProxy;
+  private final ComposerGroupService composerGroup;
   private final NugetService nuget;
   private final RubygemsService rubygems;
   private final YumService yum;
@@ -127,9 +136,11 @@ public class RepositoryContentController {
   private final NpmPathParser npmParser = new NpmPathParser();
   private final CargoPathParser cargoParser = new CargoPathParser();
   private final PubPathParser pubParser = new PubPathParser();
+  private final ComposerPathParser composerParser = new ComposerPathParser();
   private final MavenPartialFetchSupport partialFetch = new MavenPartialFetchSupport();
   private final PypiPartialFetchSupport pypiPartialFetch = new PypiPartialFetchSupport();
 
+  @Autowired
   public RepositoryContentController(RepositoryRuntimeRegistry registry,
       MavenHostedService hosted, MavenProxyService proxy, MavenGroupService group,
       GoProxyService goProxy, GoGroupService goGroup,
@@ -140,6 +151,8 @@ public class RepositoryContentController {
       PypiHostedService pypiHosted, PypiProxyService pypiProxy, PypiGroupService pypiGroup,
       CargoHostedService cargoHosted, CargoProxyService cargoProxy, CargoGroupService cargoGroup,
       PubHostedService pubHosted, PubProxyService pubProxy, PubGroupService pubGroup,
+      ComposerHostedService composerHosted, ComposerProxyService composerProxy,
+      ComposerGroupService composerGroup,
       NugetService nuget,
       RubygemsService rubygems,
       YumService yum,
@@ -169,6 +182,9 @@ public class RepositoryContentController {
     this.pubHosted = pubHosted;
     this.pubProxy = pubProxy;
     this.pubGroup = pubGroup;
+    this.composerHosted = composerHosted;
+    this.composerProxy = composerProxy;
+    this.composerGroup = composerGroup;
     this.nuget = nuget;
     this.rubygems = rubygems;
     this.yum = yum;
@@ -177,6 +193,32 @@ public class RepositoryContentController {
     this.rawGroup = rawGroup;
     this.objectMapper = objectMapper;
     this.forwardedHeaderPolicy = forwardedHeaderPolicy;
+  }
+
+  /** Backward-compatible constructor used by focused controller unit tests. */
+  public RepositoryContentController(RepositoryRuntimeRegistry registry,
+      MavenHostedService hosted, MavenProxyService proxy, MavenGroupService group,
+      GoProxyService goProxy, GoGroupService goGroup,
+      HelmHostedService helmHosted, HelmProxyService helmProxy,
+      MavenHtmlListingService htmlListing,
+      NpmHostedService npmHosted, NpmProxyService npmProxy, NpmGroupService npmGroup,
+      NpmSearchService npmSearch, NpmTokenService npmToken,
+      PypiHostedService pypiHosted, PypiProxyService pypiProxy, PypiGroupService pypiGroup,
+      CargoHostedService cargoHosted, CargoProxyService cargoProxy, CargoGroupService cargoGroup,
+      PubHostedService pubHosted, PubProxyService pubProxy, PubGroupService pubGroup,
+      NugetService nuget,
+      RubygemsService rubygems,
+      YumService yum,
+      RawHostedService rawHosted, RawProxyService rawProxy, RawGroupService rawGroup,
+      ObjectMapper objectMapper,
+      ForwardedHeaderPolicy forwardedHeaderPolicy) {
+    this(registry, hosted, proxy, group, goProxy, goGroup, helmHosted, helmProxy, htmlListing,
+        npmHosted, npmProxy, npmGroup, npmSearch, npmToken,
+        pypiHosted, pypiProxy, pypiGroup,
+        cargoHosted, cargoProxy, cargoGroup,
+        pubHosted, pubProxy, pubGroup,
+        null, null, null,
+        nuget, rubygems, yum, rawHosted, rawProxy, rawGroup, objectMapper, forwardedHeaderPolicy);
   }
 
   @GetMapping("/**")
@@ -215,6 +257,11 @@ public class RepositoryContentController {
     if (runtime.format() == RepositoryFormat.PUB) {
       PubPath path = pubParser.parse(extractRepositoryPath(name, request, true));
       MavenResponse resp = dispatchPubGet(runtime, path, request, true);
+      return toHeadResponse(resp, request);
+    }
+    if (runtime.format() == RepositoryFormat.COMPOSER) {
+      ComposerPath path = composerParser.parse(extractRepositoryPath(name, request, true));
+      MavenResponse resp = dispatchComposerGet(runtime, path, request, true);
       return toHeadResponse(resp, request);
     }
     if (runtime.format() == RepositoryFormat.PYPI) {
@@ -539,6 +586,11 @@ public class RepositoryContentController {
       MavenResponse resp = dispatchPubGet(runtime, path, request, headOnly);
       return toStreamingResponse(resp, request, false);
     }
+    if (runtime.format() == RepositoryFormat.COMPOSER) {
+      ComposerPath path = composerParser.parse(extractRepositoryPath(name, request, true));
+      MavenResponse resp = dispatchComposerGet(runtime, path, request, headOnly);
+      return toStreamingResponse(resp, request, false);
+    }
     if (runtime.format() == RepositoryFormat.PYPI) {
       String raw = extractRepositoryPath(name, request, true);
       boolean directory = isDirectoryPath(raw);
@@ -723,6 +775,20 @@ public class RepositoryContentController {
       }
       case PROXY -> pubProxy.get(runtime, path, baseUrl, headOnly);
       case GROUP -> pubGroup.get(runtime, path, baseUrl, headOnly);
+    };
+  }
+
+  private MavenResponse dispatchComposerGet(
+      RepositoryRuntime runtime,
+      ComposerPath path,
+      HttpServletRequest request,
+      boolean headOnly) {
+    String baseUrl = repositoryBaseUrl(request, runtime.name());
+    String filter = request.getParameter("filter");
+    return switch (runtime.type()) {
+      case HOSTED -> composerHosted.get(runtime, path, baseUrl, filter, headOnly);
+      case PROXY -> composerProxy.get(runtime, path, baseUrl, filter, headOnly);
+      case GROUP -> composerGroup.get(runtime, path, baseUrl, filter, headOnly);
     };
   }
 

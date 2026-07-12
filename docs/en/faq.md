@@ -2,7 +2,7 @@
 
 ## What is kkrepo?
 
-kkrepo is a Nexus-compatible, self-hosted artifact repository for common package formats such as Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Docker/OCI, NuGet, RubyGems, Yum, and Raw.
+kkrepo is a Nexus-compatible, self-hosted artifact repository for common package formats such as Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Docker/OCI, NuGet, RubyGems, Yum, and Raw.
 
 It keeps Nexus-like client URLs, protocol behavior, permissions, and migration goals while using MySQL for metadata and OSS/S3-compatible storage for blobs.
 
@@ -29,6 +29,7 @@ Current supported formats:
 - Helm
 - Cargo / Rust
 - Dart / Pub
+- Composer / PHP
 - Docker / OCI
 - NuGet
 - RubyGems
@@ -43,7 +44,7 @@ For supported non-Docker formats, the main client URL shape is compatible with N
 /repository/<repo>/<artifact-path>
 ```
 
-This helps preserve Maven, npm, pip, Helm, Cargo, Dart/Flutter Pub, NuGet, RubyGems, Yum, Raw, and CI client configuration during migration for formats covered by the migration flow.
+This helps preserve Maven, npm, pip, Helm, Cargo, Dart/Flutter Pub, Composer, NuGet, RubyGems, Yum, Raw, and CI client configuration during migration for formats covered by the migration flow.
 
 Docker / OCI uses the Registry HTTP API V2 `/v2/...` route instead of `/repository/<repo>/...`: shared-entrypoint deployments use `<host>/<repo>/<image>:<tag>`, and repository-level connector ports can expose `<host>:<repo-port>/<image>:<tag>`.
 
@@ -138,6 +139,12 @@ Nexus Cargo hosted repository migration is supported for datastore-era H2/Postgr
 Dart / Pub hosted, proxy, and group repositories are supported through the Hosted Pub Repository V2 protocol. kkrepo supports `dart pub publish`, `dart pub get`, `flutter pub get`, `PubToken` bearer authentication, package/version metadata, archive download, Pub search, and hosted `.tar.gz` upload through the UI/API.
 
 Nexus 3.92.0 Pub hosted repository migration is supported when preflight proves the Pub content model. Explicitly selected Pub proxy cache migration is also supported when the migration plan is `FULL`; otherwise proxy repositories refill from upstream after cutover.
+
+## Is Composer / PHP supported?
+
+Composer hosted, proxy, and group repositories support Composer 2 repository metadata. kkrepo provides `packages.json`, stable/dev p2 metadata, Nexus-style `vendor/package/version/*.zip` dist paths, HTTP Basic, group canonical first-match behavior, Components API/UI archive upload, Browse/Search, HTML View, and Usage snippets.
+
+Composer has no standard publish command, so hosted packages are zip/tar archives containing `composer.json` uploaded through the Components API or UI. Native Nexus Composer is proxy-only; migration preserves proxy semantics, and cache content is migrated only when an administrator explicitly selects the source repository and preflight proves the Composer content model.
 
 ## Is kkrepo production-ready?
 

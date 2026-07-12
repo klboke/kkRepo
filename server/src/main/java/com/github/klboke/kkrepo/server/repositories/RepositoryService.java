@@ -626,7 +626,8 @@ public class RepositoryService {
     return format == RepositoryFormat.NPM
         || format == RepositoryFormat.PYPI
         || format == RepositoryFormat.DOCKER
-        || format == RepositoryFormat.PUB;
+        || format == RepositoryFormat.PUB
+        || format == RepositoryFormat.COMPOSER;
   }
 
   private static boolean usesCargoAuthenticationHint(RepositoryFormat format, RepositoryType type) {
@@ -754,8 +755,10 @@ public class RepositoryService {
   }
 
   private ProxySettings requireProxy(ProxySettings settings, RepositoryFormat format) {
-    if (settings == null && format == RepositoryFormat.PUB) {
-      settings = new ProxySettings("https://pub.dev/", null, null, null);
+    if (settings == null && (format == RepositoryFormat.PUB || format == RepositoryFormat.COMPOSER)) {
+      settings = new ProxySettings(
+          format == RepositoryFormat.PUB ? "https://pub.dev/" : "https://repo.packagist.org/",
+          null, null, null);
     }
     if (settings == null) {
       throw new RepositoryValidationException("proxy settings are required for proxy repositories");
@@ -764,6 +767,19 @@ public class RepositoryService {
         && (settings.remoteUrl() == null || settings.remoteUrl().isBlank())) {
       settings = new ProxySettings(
           "https://pub.dev/",
+          settings.contentMaxAgeMinutes(),
+          settings.metadataMaxAgeMinutes(),
+          settings.autoBlock(),
+          settings.remoteUsername(),
+          settings.remotePassword(),
+          settings.remotePasswordConfigured(),
+          settings.remoteBearerToken(),
+          settings.remoteBearerTokenConfigured());
+    }
+    if (format == RepositoryFormat.COMPOSER
+        && (settings.remoteUrl() == null || settings.remoteUrl().isBlank())) {
+      settings = new ProxySettings(
+          "https://repo.packagist.org/",
           settings.contentMaxAgeMinutes(),
           settings.metadataMaxAgeMinutes(),
           settings.autoBlock(),
@@ -939,12 +955,12 @@ public class RepositoryService {
         badFormat.add(memberName);
         continue;
       }
-      if (member.type() == RepositoryType.GROUP && format != RepositoryFormat.PUB) {
+      if (member.type() == RepositoryType.GROUP && !supportsNestedGroups(format)) {
         nested.add(memberName);
         continue;
       }
       if (member.type() == RepositoryType.GROUP
-          && pubGroupWouldCreateCycle(member, groupName, new HashSet<>())) {
+          && groupWouldCreateCycle(member, groupName, format, new HashSet<>())) {
         cycles.add(memberName);
         continue;
       }
@@ -961,9 +977,10 @@ public class RepositoryService {
     return ids;
   }
 
-  private boolean pubGroupWouldCreateCycle(
+  private boolean groupWouldCreateCycle(
       RepositoryRecord candidateGroup,
       String targetGroupName,
+      RepositoryFormat format,
       Set<Long> visited) {
     Long candidateId = candidateGroup.id();
     if (candidateId == null || !visited.add(candidateId)) {
@@ -974,12 +991,16 @@ public class RepositoryService {
         return true;
       }
       if (member.type() == RepositoryType.GROUP
-          && member.format() == RepositoryFormat.PUB
-          && pubGroupWouldCreateCycle(member, targetGroupName, visited)) {
+          && member.format() == format
+          && groupWouldCreateCycle(member, targetGroupName, format, visited)) {
         return true;
       }
     }
     return false;
+  }
+
+  private static boolean supportsNestedGroups(RepositoryFormat format) {
+    return format == RepositoryFormat.PUB || format == RepositoryFormat.COMPOSER;
   }
 
   private static String stringValue(Object value, String fallback) {

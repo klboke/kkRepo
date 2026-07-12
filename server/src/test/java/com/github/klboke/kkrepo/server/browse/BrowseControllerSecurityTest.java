@@ -148,6 +148,34 @@ class BrowseControllerSecurityTest {
   }
 
   @Test
+  void composerBrowseHidesInternalRouteAssetsAndRejectsDirectAccess() {
+    RepositoryRecord repository = repo(1L, "composer-proxy", RepositoryFormat.COMPOSER, RepositoryType.PROXY);
+    StubRepositoryDao repositories = new StubRepositoryDao(Map.of(repository.name(), repository));
+    StubBrowseNodeDao browseNodes = new StubBrowseNodeDao();
+    browseNodes.children.put(key(repository.id(), ""), List.of(
+        child("_composer", "_composer", false),
+        child("dists", "dists", false),
+        child("packages.json", "packages.json", true)));
+    RecordingSecurityService security = new RecordingSecurityService(permission -> AccessDecision.allow());
+    BrowseController controller = controller(repositories, browseNodes, subject("alice"), null, security);
+
+    BrowseController.BrowseListing listing = controller.list(
+        "composer-proxy", "", request("GET", "/internal/browse/composer-proxy"));
+
+    assertEquals(List.of("dists", "packages.json"),
+        listing.entries().stream().map(BrowseController.BrowseEntry::name).toList());
+    ResponseStatusException listingError = assertThrows(ResponseStatusException.class,
+        () -> controller.list(
+            "composer-proxy", "_composer/routes", request("GET", "/internal/browse/composer-proxy")));
+    assertEquals(HttpStatus.NOT_FOUND, listingError.getStatusCode());
+    ResponseStatusException detailError = assertThrows(ResponseStatusException.class,
+        () -> controller.attributes(
+            "composer-proxy", "_composer/routes/token.json", null,
+            request("GET", "/internal/browse/composer-proxy/attributes")));
+    assertEquals(HttpStatus.NOT_FOUND, detailError.getStatusCode());
+  }
+
+  @Test
   void listRejectsWhenNoAuthenticatedOrAnonymousSubjectExists() {
     RepositoryRecord repository = repo(1L, "maven-public", RepositoryFormat.MAVEN2, RepositoryType.GROUP);
     StubRepositoryDao repositories = new StubRepositoryDao(Map.of(repository.name(), repository));

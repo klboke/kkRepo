@@ -161,7 +161,7 @@ Live black-box 测试默认跳过，需要显式提供 Nexus 参考实例和 kkr
 scripts/ci/run-live-compat.sh client-e2e
 ```
 
-该 suite 会通过 Maven、npm、PyPI、Helm、Cargo/Rust、Dart/Pub、NuGet、RubyGems、Yum、Docker/OCI 客户端发布/上传并下载/解析。Go 通过 Go module proxy 做 resolve-only 验证。客户端诊断信息会写入 `artifacts/client-e2e/`。
+该 suite 会通过 Maven、npm、PyPI、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、NuGet、RubyGems、Yum、Docker/OCI 客户端发布/上传并下载/解析。Composer 额外覆盖 hosted 到 proxy 的传递依赖、错误 Basic 凭据和清空客户端缓存后的断上游 lock replay；Go 通过 Go module proxy 做 resolve-only 验证。客户端诊断信息会写入 `artifacts/client-e2e/`。
 
 ## 开发设计文档
 
@@ -170,6 +170,7 @@ scripts/ci/run-live-compat.sh client-e2e
 - [Docker 仓库实现说明](dev/docker-repository-implementation-plan.md)
 - [Cargo / Rust 仓库开发设计说明](dev/cargo-rust-repository-design.md)
 - [Dart / Pub 仓库开发设计说明](dev/dart-pub-repository-design.md)
+- [Composer / PHP 仓库开发设计说明](dev/composer-php-repository-design.md)
 - [Nexus 兼容迁移重构开发计划](dev/nexus-migration-compatibility-refactor-plan.md)
 
 ## 配置中心

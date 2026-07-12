@@ -18,6 +18,8 @@ import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerManifestRec
 import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerManifestReferenceRecord;
 import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerTagRecord;
 import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
+import com.github.klboke.kkrepo.protocol.composer.ComposerPath;
+import com.github.klboke.kkrepo.protocol.composer.ComposerPathParser;
 import com.github.klboke.kkrepo.protocol.docker.DockerDigest;
 import com.github.klboke.kkrepo.protocol.docker.DockerManifestDescriptor;
 import com.github.klboke.kkrepo.protocol.docker.DockerManifestMetadata;
@@ -58,6 +60,7 @@ import org.springframework.stereotype.Component;
 @Component
 class RepositoryDataMigrationWriter {
   private static final String CREATED_BY = "nexus-migration";
+  private static final ComposerPathParser COMPOSER_PATHS = new ComposerPathParser();
 
   private final RepositoryDao repositoryDao;
   private final ComponentDao componentDao;
@@ -741,6 +744,8 @@ class RepositoryDataMigrationWriter {
       case DOCKER -> dockerAssetKind(source.sourcePath());
       case CARGO -> cargoAssetKind(source.sourcePath());
       case PUB -> source.sourcePath().endsWith(".tar.gz") ? "archive" : "metadata";
+      case COMPOSER -> COMPOSER_PATHS.parse(source.sourcePath()).kind() == ComposerPath.Kind.DIST
+              ? "composer-dist" : "composer-metadata";
       case RAW -> "asset";
     };
   }

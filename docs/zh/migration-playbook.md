@@ -204,12 +204,14 @@ Script REST API 很重要，因为部分 Nexus 数据无法通过普通 REST API
 - PyPI pip install 和 twine upload。
 - Helm repo update 和 chart upload。
 - Dart / Pub `dart pub get`、`flutter pub get` 和 `dart pub publish`。
+- Composer 2 从 group 执行 `composer install --prefer-dist`，验证 hosted 包、proxy 传递依赖、autoload 和 lock replay。
 - NuGet restore 和 package push。
 - RubyGems install 和 gem push。
 - Yum install 和 RPM upload。
 - Raw upload/download。
 - datastore H2/PostgreSQL Cargo 迁移后的 sparse registry config、index entry、`.crate` 下载和 checksum。
 - Nexus 3.92.0 Pub 迁移后的 package metadata、`version.json`、archive 下载、`archive_sha256` 和 publish token 行为。
+- 显式选择 Nexus 原生 Composer proxy 后，验证 `packages.json`、p2 metadata、语义化 dist path、checksum，以及断开 Packagist 后的缓存下载；未选择时确认只迁移配置。
 - 管理员登录。
 - Browse/search。
 - 用户角色和仓库权限。
