@@ -16,7 +16,7 @@ class BrowseLucideIconsContractTest {
       "home", "search", "library", "upload", "key-round", "list-filter",
       "boxes", "cloud-download", "package", "folder", "archive", "file-code",
       "files", "file", "file-archive", "file-java-archive", "file-box", "file-json", "file-text",
-      "file-key", "file-check", "binary", "copy", "check", "download", "x");
+      "file-key", "file-check", "binary", "arrow-up-down", "copy", "check", "download", "x");
   private static final List<String> LEGACY_GLYPHS = List.of(
       "⌂", "⌕", "▣", "▤", "▥", "⇧", "ⓘ", "📋", "📄", "⚙", "▰", "⊘");
 
@@ -60,6 +60,10 @@ class BrowseLucideIconsContractTest {
         ">${escapeHtml(clientUrl)}</a>"));
     assertTrue(javascript.contains(
         "iconForFile(entry.name || entry.path, \"crumb-icon\")"));
+    assertTrue(index.contains(
+        "repo-sort-indicator lucide-icon icon-arrow-up-down\" aria-hidden=\"true\"></span>\n                      <span>Type</span>"));
+    assertTrue(javascript.contains(
+        "indicator.classList.toggle(\"icon-arrow-up-down\", !active)"));
     assertTrue(javascript.contains(
         "title=\"Copy\" aria-label=\"Copy usage snippet\""));
     assertTrue(javascript.contains("toggle.title = label"));

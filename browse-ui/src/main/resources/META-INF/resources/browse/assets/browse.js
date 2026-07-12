@@ -752,9 +752,9 @@ function updateRepositorySortHeaders() {
     );
     if (indicator) {
       indicator.classList.add("lucide-icon");
+      indicator.classList.toggle("icon-arrow-up-down", !active);
       indicator.classList.toggle("icon-arrow-up", active && direction === "asc");
       indicator.classList.toggle("icon-arrow-down", active && direction === "desc");
-      indicator.style.visibility = active ? "visible" : "hidden";
     }
   });
 }

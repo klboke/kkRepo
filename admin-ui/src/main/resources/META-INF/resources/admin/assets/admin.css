@@ -1272,6 +1272,13 @@ code {
 .repo-sort-indicator {
   display: inline-block;
   width: 12px;
+  color: #737f7b;
+  opacity: 0.65;
+}
+
+.repo-sort-button:hover .repo-sort-indicator,
+.repo-sort-button.is-active .repo-sort-indicator {
+  opacity: 1;
 }
 
 .nx-table td {

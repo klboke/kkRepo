@@ -28,6 +28,7 @@
 .icon-chevrons-right { --lucide-icon: url("./icons/chevrons-right.svg"); }
 .icon-arrow-up { --lucide-icon: url("./icons/arrow-up.svg"); }
 .icon-arrow-down { --lucide-icon: url("./icons/arrow-down.svg"); }
+.icon-arrow-up-down { --lucide-icon: url("./icons/arrow-up-down.svg"); }
 .icon-info { --lucide-icon: url("./icons/info.svg"); }
 .icon-plus { --lucide-icon: url("./icons/plus.svg"); }
 .icon-refresh-cw { --lucide-icon: url("./icons/refresh-cw.svg"); }

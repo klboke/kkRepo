@@ -40,6 +40,10 @@ class AdminLucideIconsContractTest {
         "id=\"audit-log-prev-page\" type=\"button\" title=\"Previous page\" aria-label=\"Previous page\""));
     assertTrue(index.contains(
         "aria-label=\"Close dialog\" title=\"Close dialog\"><span class=\"lucide-icon icon-x\""));
+    assertTrue(index.contains(
+        "repo-sort-indicator lucide-icon icon-arrow-up-down\" aria-hidden=\"true\"></span>\n                      <span>Recipe</span>"));
+    assertTrue(resource("/META-INF/resources/admin/assets/admin.js").contains(
+        "indicator.classList.toggle(\"icon-arrow-up-down\", !active)"));
     assertTrue(login.contains(
         "aria-label=\"Close sign-in dialog\" title=\"Close dialog\""));
   }

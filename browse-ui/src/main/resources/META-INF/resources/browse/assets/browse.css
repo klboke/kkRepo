@@ -456,6 +456,13 @@ h1 {
 .repo-sort-indicator {
   display: inline-block;
   width: 12px;
+  color: #737f7b;
+  opacity: 0.65;
+}
+
+.repo-sort-button:hover .repo-sort-indicator,
+.repo-sort-button.is-active .repo-sort-indicator {
+  opacity: 1;
 }
 
 .nx-table td {
@@ -1968,8 +1975,12 @@ h2 {
 .format-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 10px;
+  gap: 1px;
   margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--line);
   padding: 0;
   list-style: none;
 }
@@ -1977,14 +1988,15 @@ h2 {
 .format-item {
   display: flex;
   min-width: 0;
-  min-height: 94px;
+  min-height: 72px;
   flex-direction: column;
   justify-content: space-between;
-  gap: 14px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  gap: 10px;
+  border: 0;
+  border-radius: 0;
   background: var(--panel);
-  padding: 14px;
+  padding: 12px 14px;
+  cursor: default;
 }
 
 .format-brand {
@@ -2346,20 +2358,20 @@ code,
   }
 
   .format-item {
-    min-height: 102px;
-    padding: 12px;
+    min-height: 78px;
+    padding: 10px;
   }
 
   .format-brand {
-    align-items: start;
-    flex-direction: column;
+    align-items: center;
+    flex-direction: row;
     gap: 8px;
   }
 
   .format-logo {
-    width: 32px;
-    height: 32px;
-    flex-basis: 32px;
+    width: 28px;
+    height: 28px;
+    flex-basis: 28px;
   }
 }
 
