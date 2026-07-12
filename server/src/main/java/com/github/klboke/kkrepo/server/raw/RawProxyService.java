@@ -158,11 +158,23 @@ public class RawProxyService {
       etag = stringAttr(attrs, "remoteEtag");
       lastModified = instantAttr(attrs, "remoteLastModified");
     }
-    HttpRemoteFetcher.Request req = new HttpRemoteFetcher.Request(
+    HttpRemoteFetcher.Request req = cachePopulationRequest(
+        runtime, remoteUrl, etag, lastModified);
+    return fetchAndCache(runtime, path, cached, headOnly, now, req);
+  }
+
+  static HttpRemoteFetcher.Request cachePopulationRequest(
+      RepositoryRuntime runtime,
+      String remoteUrl,
+      String etag,
+      Instant lastModified) {
+    // Even when the client requested HEAD, an uncached proxy asset must be fetched with GET so
+    // the cache is populated with the complete body. headOnly is applied only to the response
+    // returned after persistence; forwarding HEAD upstream would create a zero-byte cached blob.
+    return new HttpRemoteFetcher.Request(
         remoteUrl, etag, lastModified, null, false)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
         .withRepository(runtime);
-    return fetchAndCache(runtime, path, cached, headOnly, now, req);
   }
 
   private MavenResponse fetchAndCache(
