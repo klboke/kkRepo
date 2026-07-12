@@ -10,7 +10,16 @@
 
 kkRepo 是一个独立的自托管制品仓库，面向 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 制品。
 
-项目提供面向 Sonatype Nexus Repository 部署的客户端可见兼容和迁移支持，包括 `/repository/<repo>/...` URL 布局，以及迁移所需的权限认证行为兼容。kkRepo 使用 MySQL 存储元数据和共享运行状态，支持 OSS/S3 blob 存储，并按多副本部署设计。
+## 功能特性
+
+- 支持 13+ 种主流仓库格式，覆盖 hosted、proxy 和 group 仓库管理。
+- 兼容 Sonatype Nexus API 协议、用户权限模型、和 `/repository/<repo>/...` URL 布局。
+- 支持从 Sonatype Nexus Repository 一键迁移；沿用原仓库域名和 URL，迁移后，现有客户端配置与 CI 工作流无需改动。
+- 支持完整的身份与访问控制，覆盖 Local、LDAP、OIDC 认证、匿名访问策略和细粒度权限管理。
+- 支持完整的可观测性，包括 Prometheus 指标导出、提供 Grafana 面板。
+- 使用 MySQL 存储元数据和共享运行状态。
+- 支持 OSS/S3/File 存储制品 blob。
+- 支持多副本高可用部署。
 
 <p align="center">
   <img src="docs/assets/kkrepo-project-map.svg" alt="kkRepo 架构图：支持的仓库格式、协议入口、服务副本、存储、UI，以及 Nexus 迁移" width="100%">
