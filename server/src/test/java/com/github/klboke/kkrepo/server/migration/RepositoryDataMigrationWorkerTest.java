@@ -71,6 +71,21 @@ class RepositoryDataMigrationWorkerTest {
         claim(10L, 100L, RepositoryFormat.MAVEN2, "dependencies/demo.ruby")));
   }
 
+  @Test
+  void composerRootMetadataUsesNexusGeneratedRepresentationSize() {
+    assertFalse(RepositoryDataMigrationWorker.shouldValidateDownloadedSize(
+        claim(10L, 100L, RepositoryFormat.COMPOSER, "packages.json")));
+    assertFalse(RepositoryDataMigrationWorker.shouldValidateDownloadedSize(
+        claim(10L, 100L, RepositoryFormat.COMPOSER, "/packages.json")));
+
+    assertTrue(RepositoryDataMigrationWorker.shouldValidateDownloadedSize(
+        claim(10L, 100L, RepositoryFormat.COMPOSER, "p2/psr/log.json")));
+    assertTrue(RepositoryDataMigrationWorker.shouldValidateDownloadedSize(
+        claim(10L, 100L, RepositoryFormat.COMPOSER, "psr/log/3.0.2/psr-log-3.0.2.zip")));
+    assertTrue(RepositoryDataMigrationWorker.shouldValidateDownloadedSize(
+        claim(10L, 100L, RepositoryFormat.MAVEN2, "packages.json")));
+  }
+
   private static AssetClaim claim(long repositoryJobId, long migrationJobId, String path) {
     return claim(repositoryJobId, migrationJobId, RepositoryFormat.MAVEN2, path);
   }

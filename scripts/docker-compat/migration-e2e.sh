@@ -635,12 +635,13 @@ verify_composer_requires_explicit_proxy_selection() {
 
 verify_migrated_composer_fixture() {
   local job_id="$1"
-  local job_file repo_file update_file detail_file metadata_file dist_file
+  local job_file repo_file update_file detail_file root_file metadata_file dist_file
   local encoded_path target_dist_url target_sha1
   job_file="$(mktemp)"
   repo_file="$(mktemp)"
   update_file="$(mktemp)"
   detail_file="$(mktemp)"
+  root_file="$(mktemp)"
   metadata_file="$(mktemp)"
   dist_file="$(mktemp)"
 
@@ -723,6 +724,21 @@ PY
     --data-binary "@$update_file" \
     "$KKREPO_URL/internal/repositories/$COMPOSER_KKREPO_REPOSITORY" >/dev/null
   curl -m 60 -fsS -u "$(auth)" \
+    "$KKREPO_URL/repository/$COMPOSER_KKREPO_REPOSITORY/packages.json" >"$root_file"
+  python3 - "$root_file" "$KKREPO_URL/repository/$COMPOSER_KKREPO_REPOSITORY" <<'PY'
+import json
+import sys
+
+path, repository_url = sys.argv[1:3]
+with open(path, "r", encoding="utf-8") as source:
+    payload = json.load(source)
+expected = repository_url.rstrip("/") + "/p2/%package%.json"
+if payload.get("metadata-url") != expected:
+    raise SystemExit(
+        f"migrated Composer packages.json metadata-url changed: {payload.get('metadata-url')!r}"
+    )
+PY
+  curl -m 60 -fsS -u "$(auth)" \
     "$KKREPO_URL/repository/$COMPOSER_KKREPO_REPOSITORY/p2/$COMPOSER_PACKAGE.json" >"$metadata_file"
   target_dist_url="$(python3 - "$metadata_file" "$COMPOSER_PACKAGE" "$COMPOSER_VERSION" <<'PY'
 import json
@@ -752,7 +768,7 @@ PY
     log "migrated Composer dist SHA-1 mismatch: source=$COMPOSER_DIST_SHA1 target=$target_sha1"
     exit 1
   fi
-  rm -f "$job_file" "$repo_file" "$update_file" "$detail_file" "$metadata_file" "$dist_file"
+  rm -f "$job_file" "$repo_file" "$update_file" "$detail_file" "$root_file" "$metadata_file" "$dist_file"
   log "Composer proxy migration verified offline: $COMPOSER_PACKAGE $COMPOSER_VERSION sha1=$target_sha1"
 }
 

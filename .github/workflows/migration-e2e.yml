@@ -79,7 +79,7 @@ jobs:
             management-port: 18099
             docker-port: 18189
             composer-migration-enabled: true
-            wait-timeout-seconds: 900
+            wait-timeout-seconds: 300
     env:
       COMPOSE_FILE: docker-compose.compat.yml
       COMPOSE_PROJECT_NAME: kkrepo-migration-${{ matrix.project-suffix }}

@@ -281,11 +281,29 @@ class RepositoryDataMigrationWorker {
         && !claim.asset().sourcePath().toLowerCase().endsWith(".tgz")) {
       return false;
     }
+    if (claim.repositoryFormat() == RepositoryFormat.COMPOSER
+        && isComposerRootMetadata(claim.asset().sourcePath())) {
+      // Nexus stores the upstream packages.json blob, but serves a generated capability document
+      // whose metadata-url points back to the Nexus repository. The public representation is the
+      // content kkrepo must migrate, so its length is intentionally different from blob_size.
+      return false;
+    }
     if (claim.repositoryFormat() == RepositoryFormat.RUBYGEMS
         && isRubygemsDependencyIndex(claim.asset().sourcePath())) {
       return false;
     }
     return true;
+  }
+
+  private static boolean isComposerRootMetadata(String path) {
+    if (path == null) {
+      return false;
+    }
+    String normalized = path.trim();
+    while (normalized.startsWith("/")) {
+      normalized = normalized.substring(1);
+    }
+    return "packages.json".equals(normalized);
   }
 
   static boolean shouldMigrateSourceAsset(RepositoryFormat format, String path) {
