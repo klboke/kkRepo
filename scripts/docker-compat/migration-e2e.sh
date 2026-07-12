@@ -686,7 +686,10 @@ update = {
     "blobStoreName": repository.get("blobStoreName"),
     "strictContentTypeValidation": repository.get("strictContentTypeValidation"),
     "proxy": {
-        "remoteUrl": "https://composer-migration.invalid/",
+        # Use a resolvable public host so repository URL validation accepts the update. Port 1 is
+        # intentionally unusable; successful reads below therefore prove the migrated cache is
+        # sufficient without waiting on or depending on the Composer upstream.
+        "remoteUrl": "https://example.com:1/composer-migration/",
         "contentMaxAgeMinutes": proxy.get("contentMaxAgeMinutes"),
         "metadataMaxAgeMinutes": proxy.get("metadataMaxAgeMinutes"),
         "autoBlock": proxy.get("autoBlock"),
