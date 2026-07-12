@@ -1,12 +1,9 @@
 package com.github.klboke.kkrepo.protocol.composer;
 
 import java.util.Locale;
-import java.util.regex.Pattern;
 
 /** Composer 2 package identity ({@code vendor/package}) validation. */
 public final class ComposerPackageName {
-  private static final Pattern VALID = Pattern.compile(
-      "^[a-z0-9]([_.-]?[a-z0-9]+)*/[a-z0-9](([_.]|-{1,2})?[a-z0-9]+)*$");
   private static final int MAX_LENGTH = 255;
 
   private ComposerPackageName() {
@@ -21,7 +18,34 @@ public final class ComposerPackageName {
   }
 
   public static boolean isValid(String value) {
-    return value != null && value.length() <= MAX_LENGTH && VALID.matcher(value).matches();
+    if (value == null || value.length() > MAX_LENGTH) return false;
+    int slash = value.indexOf('/');
+    if (slash <= 0 || slash != value.lastIndexOf('/') || slash == value.length() - 1) return false;
+    return isValidSegment(value, 0, slash, false)
+        && isValidSegment(value, slash + 1, value.length(), true);
+  }
+
+  private static boolean isValidSegment(String value, int start, int end, boolean allowDoubleHyphen) {
+    int index = start;
+    if (index >= end || !isLowerAlphanumeric(value.charAt(index++))) return false;
+    while (index < end) {
+      char current = value.charAt(index);
+      if (isLowerAlphanumeric(current)) {
+        index++;
+        continue;
+      }
+      if (current != '.' && current != '_' && current != '-') return false;
+      index++;
+      if (current == '-' && allowDoubleHyphen && index < end && value.charAt(index) == '-') {
+        index++;
+      }
+      if (index >= end || !isLowerAlphanumeric(value.charAt(index))) return false;
+    }
+    return true;
+  }
+
+  private static boolean isLowerAlphanumeric(char value) {
+    return (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9');
   }
 
   public static String normalize(String value) {
