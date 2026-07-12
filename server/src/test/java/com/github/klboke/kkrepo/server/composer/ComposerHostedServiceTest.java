@@ -4,12 +4,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -105,6 +107,23 @@ class ComposerHostedServiceTest {
         any(), eq("company/example/1.0.0/company-example-1.0.0.zip"));
   }
 
+  @Test
+  void denyWritePolicyRejectsComposerUploadBeforeStaging() throws Exception {
+    ComponentDao components = mock(ComponentDao.class);
+    ComposerAssetSupport assets = mock(ComposerAssetSupport.class);
+    ComposerArchiveInspector inspector = mock(ComposerArchiveInspector.class);
+    ComposerComponentWriter writer = mock(ComposerComponentWriter.class);
+    ComposerHostedService service = new ComposerHostedService(JSON, components, assets, inspector, writer);
+
+    assertThrows(MavenExceptions.WritePolicyDenied.class, () -> service.uploadArchive(
+        runtime("hosted", RepositoryType.HOSTED, "DENY", List.of()),
+        new ByteArrayInputStream(new byte[] {1, 2, 3}), "package.zip", "application/zip",
+        null, null, "admin", "127.0.0.1"));
+
+    verifyNoInteractions(assets, inspector, writer);
+    verify(components, never()).findByNameAndVersion(anyLong(), anyString(), anyString());
+  }
+
   private static ComponentRecord component(String version, boolean dev) {
     Map<String, Object> metadata = Map.of(
         "name", "company/example",
@@ -127,9 +146,14 @@ class ComposerHostedServiceTest {
   }
 
   static RepositoryRuntime runtime(String name, RepositoryType type, List<RepositoryRuntime> members) {
+    return runtime(name, type, "ALLOW_ONCE", members);
+  }
+
+  static RepositoryRuntime runtime(
+      String name, RepositoryType type, String writePolicy, List<RepositoryRuntime> members) {
     return new RepositoryRuntime(
         1L, name, RepositoryFormat.COMPOSER, type, "composer-" + type.name().toLowerCase(),
-        true, 1L, "ALLOW_ONCE", null, null, true,
+        true, 1L, writePolicy, null, null, true,
         type == RepositoryType.PROXY ? "https://repo.packagist.org/" : null,
         1440, 60, true, null, members);
   }

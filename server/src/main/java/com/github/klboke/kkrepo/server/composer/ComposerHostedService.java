@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.persistence.mysql.model.ComponentRecord;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPackageName;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPath;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPaths;
+import com.github.klboke.kkrepo.protocol.maven.policy.WritePolicy;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
@@ -84,6 +85,7 @@ public class ComposerHostedService {
       String createdBy,
       String createdByIp) throws IOException {
     ensureHosted(runtime);
+    enforceWritePolicy(runtime, fileName);
     String safeFileName = safeFileName(fileName);
     Path temp = Files.createTempFile("kkrepo-composer-", suffix(safeFileName));
     try {
@@ -130,6 +132,13 @@ public class ComposerHostedService {
     } catch (RuntimeException e) {
       log.warn("Failed to delete Composer upload staging asset {}/{}",
           runtime.name(), stagingPath, e);
+    }
+  }
+
+  private void enforceWritePolicy(RepositoryRuntime runtime, String path) {
+    WritePolicy policy = WritePolicy.parse(runtime.writePolicy());
+    if (!policy.checkCreateAllowed()) {
+      throw new MavenExceptions.WritePolicyDenied("Write policy DENY forbids writing " + path);
     }
   }
 

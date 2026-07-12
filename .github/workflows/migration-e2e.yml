@@ -40,6 +40,7 @@ jobs:
             management-port: 18091
             docker-port: 18183
             composer-migration-enabled: false
+            wait-timeout-seconds: 300
           - nexus-version: 3.77.2
             project-suffix: nexus-3772
             metadata-engine: datastore-h2
@@ -52,6 +53,7 @@ jobs:
             management-port: 18095
             docker-port: 18185
             composer-migration-enabled: false
+            wait-timeout-seconds: 300
           - nexus-version: 3.77.2
             project-suffix: nexus-3772-pg
             metadata-engine: datastore-postgresql
@@ -64,6 +66,7 @@ jobs:
             management-port: 18097
             docker-port: 18187
             composer-migration-enabled: false
+            wait-timeout-seconds: 300
           - nexus-version: 3.92.0
             project-suffix: nexus-3920-pg
             metadata-engine: datastore-postgresql
@@ -76,6 +79,7 @@ jobs:
             management-port: 18099
             docker-port: 18189
             composer-migration-enabled: true
+            wait-timeout-seconds: 900
     env:
       COMPOSE_FILE: docker-compose.compat.yml
       COMPOSE_PROJECT_NAME: kkrepo-migration-${{ matrix.project-suffix }}
@@ -100,6 +104,7 @@ jobs:
       MIGRATION_E2E_EXPECTED_ADAPTER: ${{ matrix.expected-adapter }}
       COMPOSER_MIGRATION_ENABLED: ${{ matrix.composer-migration-enabled }}
       COMPOSER_NEXUS_REQUIRED: ${{ matrix.composer-migration-enabled }}
+      DOCKER_MIGRATION_WAIT_TIMEOUT_SECONDS: ${{ matrix.wait-timeout-seconds }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
