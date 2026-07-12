@@ -1,0 +1,74 @@
+/* Lucide v1.24.0, ISC license. Assets are vendored in ./icons/. */
+.lucide-icon {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  flex: 0 0 auto;
+  background-color: currentColor;
+  -webkit-mask-image: var(--lucide-icon);
+  -webkit-mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-image: var(--lucide-icon);
+  mask-position: center;
+  mask-repeat: no-repeat;
+  mask-size: contain;
+  vertical-align: -0.125em;
+}
+
+.icon-home { --lucide-icon: url("./icons/home.svg"); }
+.icon-search { --lucide-icon: url("./icons/search.svg"); }
+.icon-library { --lucide-icon: url("./icons/library.svg"); }
+.icon-upload { --lucide-icon: url("./icons/upload.svg"); }
+.icon-key-round { --lucide-icon: url("./icons/key-round.svg"); }
+.icon-chevron-down { --lucide-icon: url("./icons/chevron-down.svg"); }
+.icon-chevron-right { --lucide-icon: url("./icons/chevron-right.svg"); }
+.icon-chevron-left { --lucide-icon: url("./icons/chevron-left.svg"); }
+.icon-chevrons-left { --lucide-icon: url("./icons/chevrons-left.svg"); }
+.icon-chevrons-right { --lucide-icon: url("./icons/chevrons-right.svg"); }
+.icon-arrow-up { --lucide-icon: url("./icons/arrow-up.svg"); }
+.icon-arrow-down { --lucide-icon: url("./icons/arrow-down.svg"); }
+.icon-arrow-up-down { --lucide-icon: url("./icons/arrow-up-down.svg"); }
+.icon-info { --lucide-icon: url("./icons/info.svg"); }
+.icon-plus { --lucide-icon: url("./icons/plus.svg"); }
+.icon-refresh-cw { --lucide-icon: url("./icons/refresh-cw.svg"); }
+.icon-database { --lucide-icon: url("./icons/database.svg"); }
+.icon-container { --lucide-icon: url("./icons/container.svg"); }
+.icon-users { --lucide-icon: url("./icons/users.svg"); }
+.icon-shield-check { --lucide-icon: url("./icons/shield-check.svg"); }
+.icon-key { --lucide-icon: url("./icons/key.svg"); }
+.icon-waypoints { --lucide-icon: url("./icons/waypoints.svg"); }
+.icon-network { --lucide-icon: url("./icons/network.svg"); }
+.icon-log-in { --lucide-icon: url("./icons/log-in.svg"); }
+.icon-user-round-x { --lucide-icon: url("./icons/user-round-x.svg"); }
+.icon-scroll-text { --lucide-icon: url("./icons/scroll-text.svg"); }
+.icon-sliders-horizontal { --lucide-icon: url("./icons/sliders-horizontal.svg"); }
+.icon-database-backup { --lucide-icon: url("./icons/database-backup.svg"); }
+.icon-arrow-left-right { --lucide-icon: url("./icons/arrow-left-right.svg"); }
+.icon-boxes { --lucide-icon: url("./icons/boxes.svg"); }
+.icon-cloud-download { --lucide-icon: url("./icons/cloud-download.svg"); }
+.icon-package { --lucide-icon: url("./icons/package.svg"); }
+.icon-copy { --lucide-icon: url("./icons/copy.svg"); }
+.icon-check { --lucide-icon: url("./icons/check.svg"); }
+.icon-settings { --lucide-icon: url("./icons/settings.svg"); }
+.icon-file { --lucide-icon: url("./icons/file.svg"); }
+.icon-download { --lucide-icon: url("./icons/download.svg"); }
+.icon-grip-vertical { --lucide-icon: url("./icons/grip-vertical.svg"); }
+.icon-x { --lucide-icon: url("./icons/x.svg"); }
+.icon-package-search { --lucide-icon: url("./icons/package-search.svg"); }
+.icon-folder { --lucide-icon: url("./icons/folder.svg"); }
+.icon-archive { --lucide-icon: url("./icons/archive.svg"); }
+.icon-file-code { --lucide-icon: url("./icons/file-code.svg"); }
+.icon-files { --lucide-icon: url("./icons/files.svg"); }
+.icon-file-archive { --lucide-icon: url("./icons/file-archive.svg"); }
+.icon-file-java-archive { --lucide-icon: url("./icons/file-java-archive.svg"); }
+.icon-file-box { --lucide-icon: url("./icons/file-box.svg"); }
+.icon-file-json { --lucide-icon: url("./icons/file-json.svg"); }
+.icon-file-text { --lucide-icon: url("./icons/file-text.svg"); }
+.icon-file-key { --lucide-icon: url("./icons/file-key.svg"); }
+.icon-file-check { --lucide-icon: url("./icons/file-check.svg"); }
+.icon-binary { --lucide-icon: url("./icons/binary.svg"); }
+.icon-minus { --lucide-icon: url("./icons/minus.svg"); }
+.icon-circle-slash { --lucide-icon: url("./icons/circle-slash-2.svg"); }
+.icon-list-filter { --lucide-icon: url("./icons/list-filter.svg"); }
+.icon-lock { --lucide-icon: url("./icons/lock.svg"); }

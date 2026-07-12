@@ -6,7 +6,8 @@
     <title>kkrepo browse</title>
     <link rel="icon" type="image/svg+xml" href="/browse/assets/favicon.svg?v=20260609-kl-logo-1">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20260710-format-table-icons-1">
-    <link rel="stylesheet" href="/browse/assets/browse.css?v=20260710-project-links-1">
+    <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20260712-sortable-headers-1">
+    <link rel="stylesheet" href="/browse/assets/browse.css?v=20260712-sortable-headers-1">
     <link rel="stylesheet" href="/login/assets/login-modal.css?v=20260616-login-method-tabs-2">
   </head>
   <body>
@@ -27,7 +28,7 @@
         <div class="user-menu" id="user-menu" hidden>
           <button class="user-menu-trigger" id="user-menu-trigger" type="button" aria-haspopup="menu" aria-expanded="false">
             <span class="user-pill" id="current-user" title="Current user"></span>
-            <span class="user-menu-caret" aria-hidden="true">▾</span>
+            <span class="user-menu-caret lucide-icon icon-chevron-down" aria-hidden="true"></span>
           </button>
           <div class="user-menu-popover" id="user-menu-popover" role="menu" aria-hidden="true">
             <button class="user-menu-item" id="my-token-menu-item" type="button" role="menuitem">My Token</button>
@@ -39,13 +40,13 @@
       <aside class="nx-sidebar">
         <nav class="side-nav" aria-label="Browse navigation">
           <button class="side-item is-active" data-view="welcome" type="button">
-            <span class="side-icon">⌂</span>
+            <span class="side-icon lucide-icon icon-home" aria-hidden="true"></span>
             <span>Welcome</span>
           </button>
           <button class="side-item" data-view="search" type="button" aria-expanded="false" aria-controls="search-subnav">
-            <span class="side-icon">⌕</span>
+            <span class="side-icon lucide-icon icon-search" aria-hidden="true"></span>
             <span>Search</span>
-            <span class="side-caret" aria-hidden="true">▾</span>
+            <span class="side-caret lucide-icon icon-chevron-down" aria-hidden="true"></span>
           </button>
           <div class="search-subnav" id="search-subnav" hidden>
             <button class="side-subitem" data-search-format="cargo" type="button"><span class="format-logo format-logo-cargo" aria-hidden="true"></span><span>Cargo</span></button>
@@ -60,11 +61,11 @@
             <button class="side-subitem" data-search-format="npm" type="button"><span class="format-logo format-logo-npm" aria-hidden="true"></span><span>npm</span></button>
           </div>
           <button class="side-item" data-view="browse" type="button">
-            <span class="side-icon">▣</span>
+            <span class="side-icon lucide-icon icon-library" aria-hidden="true"></span>
             <span>Browse</span>
           </button>
           <button class="side-item" id="upload-nav" data-view="upload" type="button" hidden>
-            <span class="side-icon">⇧</span>
+            <span class="side-icon lucide-icon icon-upload" aria-hidden="true"></span>
             <span>Upload</span>
           </button>
         </nav>
@@ -73,7 +74,7 @@
       <main class="nx-content">
         <section class="view is-active" id="welcome-view">
           <div class="page-heading">
-            <span class="heading-icon">⌂</span>
+            <span class="heading-icon"><span class="lucide-icon icon-home" aria-hidden="true"></span></span>
             <h1>Welcome</h1>
             <span class="heading-copy">Nexus-compatible repository access for internal packages</span>
           </div>
@@ -204,13 +205,13 @@
 
         <section class="view" id="browse-view">
           <div class="page-heading">
-            <span class="heading-icon">▣</span>
+            <span class="heading-icon"><span class="lucide-icon icon-library" aria-hidden="true"></span></span>
             <h1>Browse</h1>
             <span class="heading-copy">Browse assets and components</span>
           </div>
           <div class="table-tools">
             <label class="filter-box">
-              <span class="filter-icon">▾</span>
+              <span class="filter-icon lucide-icon icon-list-filter" aria-hidden="true"></span>
               <input id="repository-filter" type="search" placeholder="Filter">
             </label>
           </div>
@@ -218,38 +219,38 @@
             <table class="nx-table">
               <thead>
                 <tr>
-                  <th class="icon-column">↑</th>
+                  <th class="icon-column"></th>
                   <th aria-sort="ascending">
                     <button class="repo-sort-button is-active" data-repo-sort="name" type="button">
+                      <span class="repo-sort-indicator lucide-icon icon-arrow-up" aria-hidden="true"></span>
                       <span>Name</span>
-                      <span class="repo-sort-indicator" aria-hidden="true">↑</span>
                     </button>
                   </th>
                   <th aria-sort="none">
                     <button class="repo-sort-button" data-repo-sort="type" type="button">
+                      <span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span>
                       <span>Type</span>
-                      <span class="repo-sort-indicator" aria-hidden="true"></span>
                     </button>
                   </th>
                   <th aria-sort="none">
                     <button class="repo-sort-button" data-repo-sort="format" type="button">
+                      <span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span>
                       <span>Format</span>
-                      <span class="repo-sort-indicator" aria-hidden="true"></span>
                     </button>
                   </th>
                   <th>Status</th>
                   <th>URL</th>
-                  <th class="repo-copy-column">Copy</th>
                 </tr>
               </thead>
               <tbody id="repository-table"></tbody>
             </table>
           </div>
+          <div class="repository-copy-status" id="repository-copy-status" role="status" aria-live="polite" aria-atomic="true"></div>
         </section>
 
         <section class="view" id="search-view">
           <div class="page-heading">
-            <span class="heading-icon">⌕</span>
+            <span class="heading-icon"><span class="lucide-icon icon-search" aria-hidden="true"></span></span>
             <h1>Search</h1>
             <span class="heading-copy">Search for components by attribute</span>
           </div>
@@ -260,7 +261,7 @@
             </label>
             <button class="criteria-button" id="component-search-button" type="button">Search</button>
           </div>
-          <div class="result-note">ⓘ Only showing the first 20 of <span id="component-total">0</span> results</div>
+          <div class="result-note"><span class="lucide-icon icon-info" aria-hidden="true"></span> Only showing the first 20 of <span id="component-total">0</span> results</div>
           <div class="nx-table-frame">
             <table class="nx-table">
               <thead>
@@ -281,7 +282,7 @@
 
         <section class="view" id="upload-view">
           <div class="page-heading">
-            <span class="heading-icon">⇧</span>
+            <span class="heading-icon"><span class="lucide-icon icon-upload" aria-hidden="true"></span></span>
             <h1>Upload</h1>
             <span class="heading-copy">Upload content to the repository</span>
           </div>
@@ -300,7 +301,7 @@
 
         <section class="view" id="my-token-view">
           <div class="page-heading">
-            <span class="heading-icon">T</span>
+            <span class="heading-icon"><span class="lucide-icon icon-key-round" aria-hidden="true"></span></span>
             <h1>My Token</h1>
             <span class="heading-copy">API keys for package clients</span>
           </div>
@@ -362,7 +363,7 @@
     </div>
 
     <script src="/login/assets/ui-i18n.js?v=20260710-anonymous-bootstrap-2"></script>
-    <script src="/login/assets/login-modal.js?v=20260624-ui-i18n-1"></script>
-    <script src="/browse/assets/browse.js?v=20260710-breadcrumb-format-icons-1"></script>
+    <script src="/login/assets/login-modal.js?v=20260710-lucide-icons-1"></script>
+    <script src="/browse/assets/browse.js?v=20260712-sortable-headers-1"></script>
   </body>
 </html>

@@ -1272,6 +1272,13 @@ code {
 .repo-sort-indicator {
   display: inline-block;
   width: 12px;
+  color: #737f7b;
+  opacity: 0.65;
+}
+
+.repo-sort-button:hover .repo-sort-indicator,
+.repo-sort-button.is-active .repo-sort-indicator {
+  opacity: 1;
 }
 
 .nx-table td {
@@ -2475,4 +2482,72 @@ code {
     border-left: 0;
     border-radius: 0;
   }
+}
+
+/* Shared Lucide sizing keeps navigation and icon buttons visually aligned. */
+.side-item {
+  gap: 10px;
+}
+
+.side-item-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+
+.side-item:hover .side-item-icon,
+.side-item.is-active .side-item-icon {
+  color: currentColor;
+}
+
+.side-group-caret,
+.user-menu-caret,
+.recipe-combobox-caret {
+  width: 12px;
+  height: 12px;
+}
+
+.heading-icon > .lucide-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.filter-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.create-button,
+.row-action,
+.member-action,
+.form-modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.create-button {
+  gap: 6px;
+}
+
+.create-button .lucide-icon,
+.row-action .lucide-icon,
+.member-action .lucide-icon {
+  width: 15px;
+  height: 15px;
+}
+
+.form-modal-close .lucide-icon {
+  width: 17px;
+  height: 17px;
+}
+
+.repo-sort-indicator {
+  width: 13px;
+  height: 13px;
+}
+
+.member-handle {
+  width: 15px;
+  height: 15px;
 }

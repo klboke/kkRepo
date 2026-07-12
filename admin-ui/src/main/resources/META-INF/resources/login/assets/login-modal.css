@@ -53,6 +53,17 @@
   background: #edf1ef;
 }
 
+.login-dialog-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-dialog-close .lucide-icon {
+  width: 18px;
+  height: 18px;
+}
+
 .login-dialog-form {
   display: grid;
   gap: 14px;

@@ -52,7 +52,7 @@
       <section class="login-dialog" role="dialog" aria-modal="true" aria-labelledby="login-dialog-title">
         <header class="login-dialog-header">
           <h2 class="login-dialog-title" id="login-dialog-title">Sign in</h2>
-          <button class="login-dialog-close" type="button" aria-label="Close">×</button>
+          <button class="login-dialog-close" type="button" aria-label="Close sign-in dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
         </header>
         <div class="login-dialog-tabs" role="tablist" aria-label="Sign-in method" hidden>
           <button class="login-dialog-tab" id="login-tab-oidc" type="button" role="tab" aria-controls="login-panel-oidc" aria-selected="false">OIDC</button>

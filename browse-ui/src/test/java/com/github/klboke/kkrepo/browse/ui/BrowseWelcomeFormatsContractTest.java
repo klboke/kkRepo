@@ -18,8 +18,15 @@ class BrowseWelcomeFormatsContractTest {
   @Test
   void welcomePageShowsEverySupportedFormatWithAnIcon() throws IOException {
     String index = resource("/META-INF/resources/browse/index.html");
+    String stylesheet = resource("/META-INF/resources/browse/assets/browse.css");
 
     assertTrue(index.contains("id=\"supported-formats-title\""));
+    assertTrue(stylesheet.contains(".format-grid {"));
+    assertTrue(stylesheet.contains("gap: 1px;"));
+    assertTrue(stylesheet.contains("overflow: hidden;"));
+    assertTrue(stylesheet.contains(".format-item {"));
+    assertTrue(stylesheet.contains("min-height: 72px;"));
+    assertTrue(stylesheet.contains("cursor: default;"));
     assertTrue(
         index.indexOf("id=\"admin-bootstrap-panel\"")
             < index.indexOf("class=\"format-showcase\""));

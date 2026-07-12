@@ -6,7 +6,8 @@
     <title>kkrepo administration</title>
     <link rel="icon" type="image/svg+xml" href="/admin/assets/favicon.svg?v=20260609-kl-logo-1">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20260710-format-table-icons-1">
-    <link rel="stylesheet" href="./assets/admin.css?v=20260710-project-links-1">
+    <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20260712-sortable-headers-1">
+    <link rel="stylesheet" href="./assets/admin.css?v=20260712-sortable-headers-1">
   </head>
   <body>
     <div class="nx-shell">
@@ -25,7 +26,7 @@
         <div class="user-menu" id="user-menu" hidden>
           <button class="user-menu-trigger" id="user-menu-trigger" type="button" aria-haspopup="menu" aria-expanded="false">
             <span class="user-pill" id="current-user-pill" title="Current user"></span>
-            <span class="user-menu-caret" aria-hidden="true">▾</span>
+            <span class="user-menu-caret lucide-icon icon-chevron-down" aria-hidden="true"></span>
           </button>
           <div class="user-menu-popover" id="user-menu-popover" role="menu" aria-hidden="true">
             <button class="user-menu-item" id="signout-button" type="button" role="menuitem">Sign out</button>
@@ -37,43 +38,43 @@
       <aside class="nx-sidebar">
         <nav class="side-nav" aria-label="Administration navigation">
           <button class="side-group is-open" data-side-group="repository" type="button" aria-expanded="true" aria-controls="side-group-repository-items">
-            <span class="side-group-caret" aria-hidden="true">▸</span>
+            <span class="side-group-caret lucide-icon icon-chevron-right" aria-hidden="true"></span>
             <span class="side-group-label">Repository</span>
           </button>
           <div class="side-group-items" id="side-group-repository-items" data-side-group-items="repository">
-            <button class="side-item is-active" data-view="repositories" type="button">▥ Repositories</button>
-            <button class="side-item" data-view="blobstores" type="button">▤ Blob Stores</button>
-            <button class="side-item" data-view="docker-registry" type="button">▧ Docker Registry</button>
+            <button class="side-item is-active" data-view="repositories" type="button"><span class="side-item-icon lucide-icon icon-package" aria-hidden="true"></span><span>Repositories</span></button>
+            <button class="side-item" data-view="blobstores" type="button"><span class="side-item-icon lucide-icon icon-database" aria-hidden="true"></span><span>Blob Stores</span></button>
+            <button class="side-item" data-view="docker-registry" type="button"><span class="side-item-icon lucide-icon icon-container" aria-hidden="true"></span><span>Docker Registry</span></button>
           </div>
           <button class="side-group is-open" data-side-group="security" type="button" aria-expanded="true" aria-controls="side-group-security-items">
-            <span class="side-group-caret" aria-hidden="true">▸</span>
+            <span class="side-group-caret lucide-icon icon-chevron-right" aria-hidden="true"></span>
             <span class="side-group-label">Security</span>
           </button>
           <div class="side-group-items" id="side-group-security-items" data-side-group-items="security">
-            <button class="side-item" data-view="security-users" type="button">◉ Users</button>
-            <button class="side-item" data-view="security-roles" type="button">◈ Roles</button>
-            <button class="side-item" data-view="security-privileges" type="button">◍ Privileges</button>
-            <button class="side-item" data-view="security-realms" type="button">⇅ Realms</button>
-            <button class="side-item" data-view="security-ldap" type="button">◇ LDAP</button>
-            <button class="side-item" data-view="security-oidc" type="button">◒ OIDC</button>
-            <button class="side-item" data-view="security-anonymous" type="button">◌ Anonymous</button>
-            <button class="side-item" data-view="security-api-keys" type="button">⌘ API Keys</button>
-            <button class="side-item" data-view="security-audit-log" type="button">▦ Audit Log</button>
+            <button class="side-item" data-view="security-users" type="button"><span class="side-item-icon lucide-icon icon-users" aria-hidden="true"></span><span>Users</span></button>
+            <button class="side-item" data-view="security-roles" type="button"><span class="side-item-icon lucide-icon icon-shield-check" aria-hidden="true"></span><span>Roles</span></button>
+            <button class="side-item" data-view="security-privileges" type="button"><span class="side-item-icon lucide-icon icon-key" aria-hidden="true"></span><span>Privileges</span></button>
+            <button class="side-item" data-view="security-realms" type="button"><span class="side-item-icon lucide-icon icon-waypoints" aria-hidden="true"></span><span>Realms</span></button>
+            <button class="side-item" data-view="security-ldap" type="button"><span class="side-item-icon lucide-icon icon-network" aria-hidden="true"></span><span>LDAP</span></button>
+            <button class="side-item" data-view="security-oidc" type="button"><span class="side-item-icon lucide-icon icon-log-in" aria-hidden="true"></span><span>OIDC</span></button>
+            <button class="side-item" data-view="security-anonymous" type="button"><span class="side-item-icon lucide-icon icon-user-round-x" aria-hidden="true"></span><span>Anonymous</span></button>
+            <button class="side-item" data-view="security-api-keys" type="button"><span class="side-item-icon lucide-icon icon-key-round" aria-hidden="true"></span><span>API Keys</span></button>
+            <button class="side-item" data-view="security-audit-log" type="button"><span class="side-item-icon lucide-icon icon-scroll-text" aria-hidden="true"></span><span>Audit Log</span></button>
           </div>
           <button class="side-group is-open" data-side-group="system" type="button" aria-expanded="true" aria-controls="side-group-system-items">
-            <span class="side-group-caret" aria-hidden="true">▸</span>
+            <span class="side-group-caret lucide-icon icon-chevron-right" aria-hidden="true"></span>
             <span class="side-group-label">System</span>
           </button>
           <div class="side-group-items" id="side-group-system-items" data-side-group-items="system">
-            <button class="side-item" data-view="ui-settings" type="button">▨ UI Settings</button>
+            <button class="side-item" data-view="ui-settings" type="button"><span class="side-item-icon lucide-icon icon-sliders-horizontal" aria-hidden="true"></span><span>UI Settings</span></button>
           </div>
           <button class="side-group is-open" data-side-group="migration" type="button" aria-expanded="true" aria-controls="side-group-migration-items">
-            <span class="side-group-caret" aria-hidden="true">▸</span>
+            <span class="side-group-caret lucide-icon icon-chevron-right" aria-hidden="true"></span>
             <span class="side-group-label">Migration</span>
           </button>
           <div class="side-group-items" id="side-group-migration-items" data-side-group-items="migration">
-            <button class="side-item" data-view="nexus-migration" type="button">⇆ Nexus Metadata</button>
-            <button class="side-item" data-view="repository-data-migration" type="button">⇄ Nexus Repository Data</button>
+            <button class="side-item" data-view="nexus-migration" type="button"><span class="side-item-icon lucide-icon icon-database-backup" aria-hidden="true"></span><span>Nexus Metadata</span></button>
+            <button class="side-item" data-view="repository-data-migration" type="button"><span class="side-item-icon lucide-icon icon-arrow-left-right" aria-hidden="true"></span><span>Nexus Repository Data</span></button>
           </div>
         </nav>
       </aside>
@@ -81,21 +82,21 @@
       <main class="nx-content">
         <section class="view fixed-table-view is-active" id="repositories-view">
           <div class="page-heading">
-            <span class="heading-icon">▥</span>
+            <span class="heading-icon"><span class="lucide-icon icon-package" aria-hidden="true"></span></span>
             <h1>Repositories</h1>
             <span class="heading-copy">Manage repositories</span>
           </div>
           <div class="action-bar">
-            <button class="create-button" id="create-repository-button" type="button">⊕ Create repository</button>
+            <button class="create-button" id="create-repository-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create repository</button>
             <label class="filter-box">
-              <span class="filter-icon">▾</span>
+              <span class="filter-icon lucide-icon icon-list-filter" aria-hidden="true"></span>
               <input id="repository-filter" type="search" placeholder="Filter">
             </label>
           </div>
           <div class="form-modal" id="repository-form-modal" data-form-id="repository-form" role="dialog" aria-modal="true" aria-labelledby="repository-form-title" hidden>
             <div class="form-modal-backdrop" data-modal-dismiss="repository-form"></div>
             <div class="form-modal-panel">
-              <button class="form-modal-close" data-modal-dismiss="repository-form" type="button" aria-label="Close dialog">&times;</button>
+              <button class="form-modal-close" data-modal-dismiss="repository-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
           <form class="blobstore-form modal-form" id="repository-form" hidden novalidate>
             <div class="form-title" id="repository-form-title">Create repository</div>
             <div class="form-grid">
@@ -112,7 +113,7 @@
                       aria-controls="repository-recipe-options"
                       aria-labelledby="repository-recipe-label repository-recipe-value">
                     <span class="recipe-combobox-value" id="repository-recipe-value">Select a recipe</span>
-                    <span class="recipe-combobox-caret" aria-hidden="true">▾</span>
+                    <span class="recipe-combobox-caret lucide-icon icon-chevron-down" aria-hidden="true"></span>
                   </button>
                   <div class="recipe-combobox-popover" id="repository-recipe-popover" hidden>
                     <input
@@ -258,10 +259,10 @@
                   <ul class="member-list" id="member-available-list" tabindex="0" aria-label="Available repositories"></ul>
                 </div>
                 <div class="member-actions" role="group" aria-label="Move members">
-                  <button type="button" class="member-action" id="member-add-all" title="Add all">»</button>
-                  <button type="button" class="member-action" id="member-add" title="Add selected">›</button>
-                  <button type="button" class="member-action" id="member-remove" title="Remove selected">‹</button>
-                  <button type="button" class="member-action" id="member-remove-all" title="Remove all">«</button>
+                  <button type="button" class="member-action" id="member-add-all" title="Add all" aria-label="Add all"><span class="lucide-icon icon-chevrons-right" aria-hidden="true"></span></button>
+                  <button type="button" class="member-action" id="member-add" title="Add selected" aria-label="Add selected"><span class="lucide-icon icon-chevron-right" aria-hidden="true"></span></button>
+                  <button type="button" class="member-action" id="member-remove" title="Remove selected" aria-label="Remove selected"><span class="lucide-icon icon-chevron-left" aria-hidden="true"></span></button>
+                  <button type="button" class="member-action" id="member-remove-all" title="Remove all" aria-label="Remove all"><span class="lucide-icon icon-chevrons-left" aria-hidden="true"></span></button>
                 </div>
                 <div class="member-pane" data-side="selected">
                   <div class="member-pane-head">
@@ -283,29 +284,29 @@
             <table class="nx-table">
               <thead>
                 <tr>
-                  <th class="icon-column">↑</th>
+                  <th class="icon-column"></th>
                   <th aria-sort="ascending">
                     <button class="repo-sort-button is-active" data-repository-sort="name" type="button">
+                      <span class="repo-sort-indicator lucide-icon icon-arrow-up" aria-hidden="true"></span>
                       <span>Name</span>
-                      <span class="repo-sort-indicator" aria-hidden="true">↑</span>
                     </button>
                   </th>
                   <th aria-sort="none">
                     <button class="repo-sort-button" data-repository-sort="recipe" type="button">
+                      <span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span>
                       <span>Recipe</span>
-                      <span class="repo-sort-indicator" aria-hidden="true"></span>
                     </button>
                   </th>
                   <th aria-sort="none">
                     <button class="repo-sort-button" data-repository-sort="type" type="button">
+                      <span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span>
                       <span>Type</span>
-                      <span class="repo-sort-indicator" aria-hidden="true"></span>
                     </button>
                   </th>
                   <th aria-sort="none">
                     <button class="repo-sort-button" data-repository-sort="format" type="button">
+                      <span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span>
                       <span>Format</span>
-                      <span class="repo-sort-indicator" aria-hidden="true"></span>
                     </button>
                   </th>
                   <th>Status</th>
@@ -321,21 +322,21 @@
 
         <section class="view" id="blobstores-view">
           <div class="page-heading">
-            <span class="heading-icon">▤</span>
+            <span class="heading-icon"><span class="lucide-icon icon-database" aria-hidden="true"></span></span>
             <h1>Blob Stores</h1>
             <span class="heading-copy">Manage blob stores</span>
           </div>
           <div class="action-bar">
-            <button class="create-button" id="create-blobstore-button" type="button">⊕ Create blob store</button>
+            <button class="create-button" id="create-blobstore-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create blob store</button>
             <label class="filter-box">
-              <span class="filter-icon">▾</span>
+              <span class="filter-icon lucide-icon icon-list-filter" aria-hidden="true"></span>
               <input id="blobstore-filter" type="search" placeholder="Filter">
             </label>
           </div>
           <div class="form-modal" id="blobstore-form-modal" data-form-id="blobstore-form" role="dialog" aria-modal="true" aria-labelledby="blobstore-form-title" hidden>
             <div class="form-modal-backdrop" data-modal-dismiss="blobstore-form"></div>
             <div class="form-modal-panel">
-              <button class="form-modal-close" data-modal-dismiss="blobstore-form" type="button" aria-label="Close dialog">&times;</button>
+              <button class="form-modal-close" data-modal-dismiss="blobstore-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
           <form class="blobstore-form modal-form" id="blobstore-form" hidden novalidate>
             <div class="form-title" id="blobstore-form-title">Create blob store</div>
             <div class="form-grid">
@@ -395,7 +396,7 @@
             <table class="nx-table blobstores-table">
               <thead>
                 <tr>
-                  <th class="icon-column">↑</th>
+                  <th class="icon-column"></th>
                   <th>Name</th>
                   <th>Type</th>
                   <th>Engine</th>
@@ -414,12 +415,12 @@
 
         <section class="view" id="docker-registry-view">
           <div class="page-heading">
-            <span class="heading-icon">▧</span>
+            <span class="heading-icon"><span class="lucide-icon icon-container" aria-hidden="true"></span></span>
             <h1>Docker Registry</h1>
             <span class="heading-copy">Manage Docker connector runtime and repository cache</span>
           </div>
           <div class="action-bar">
-            <button class="create-button" id="docker-connectors-refresh-button" type="button">↻ Refresh connectors</button>
+            <button class="create-button" id="docker-connectors-refresh-button" type="button"><span class="lucide-icon icon-refresh-cw" aria-hidden="true"></span> Refresh connectors</button>
             <button class="create-button secondary" id="docker-cache-clear-button" type="button">Clear Docker cache</button>
           </div>
           <div class="docker-ops-layout">
@@ -443,12 +444,12 @@
 
         <section class="view fixed-table-view" id="security-users-view">
           <div class="page-heading">
-            <span class="heading-icon">◉</span>
+            <span class="heading-icon"><span class="lucide-icon icon-users" aria-hidden="true"></span></span>
             <h1>Users</h1>
             <span class="heading-copy">Manage local and external security users</span>
           </div>
           <div class="action-bar">
-            <button class="create-button" id="create-security-user-button" type="button">⊕ Create user</button>
+            <button class="create-button" id="create-security-user-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create user</button>
             <label class="select-filter">
               <span>Source</span>
               <select id="security-user-source-filter">
@@ -456,14 +457,14 @@
               </select>
             </label>
             <label class="filter-box">
-              <span class="filter-icon">▾</span>
+              <span class="filter-icon lucide-icon icon-list-filter" aria-hidden="true"></span>
               <input id="security-user-filter" type="search" placeholder="Filter">
             </label>
           </div>
           <div class="form-modal" id="security-user-form-modal" data-form-id="security-user-form" role="dialog" aria-modal="true" aria-labelledby="security-user-form-title" hidden>
             <div class="form-modal-backdrop" data-modal-dismiss="security-user-form"></div>
             <div class="form-modal-panel">
-              <button class="form-modal-close" data-modal-dismiss="security-user-form" type="button" aria-label="Close dialog">&times;</button>
+              <button class="form-modal-close" data-modal-dismiss="security-user-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
           <form class="blobstore-form modal-form" id="security-user-form" hidden novalidate>
             <div class="form-title" id="security-user-form-title">Create user</div>
             <div class="form-grid">
@@ -517,18 +518,18 @@
 
         <section class="view" id="security-roles-view">
           <div class="page-heading">
-            <span class="heading-icon">◈</span>
+            <span class="heading-icon"><span class="lucide-icon icon-shield-check" aria-hidden="true"></span></span>
             <h1>Roles</h1>
             <span class="heading-copy">Manage role privileges and inherited roles</span>
           </div>
           <div class="action-bar">
-            <button class="create-button" id="create-security-role-button" type="button">⊕ Create role</button>
-            <label class="filter-box"><span class="filter-icon">▾</span><input id="security-role-filter" type="search" placeholder="Filter"></label>
+            <button class="create-button" id="create-security-role-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create role</button>
+            <label class="filter-box"><span class="filter-icon lucide-icon icon-list-filter" aria-hidden="true"></span><input id="security-role-filter" type="search" placeholder="Filter"></label>
           </div>
           <div class="form-modal" id="security-role-form-modal" data-form-id="security-role-form" role="dialog" aria-modal="true" aria-labelledby="security-role-form-title" hidden>
             <div class="form-modal-backdrop" data-modal-dismiss="security-role-form"></div>
             <div class="form-modal-panel">
-              <button class="form-modal-close" data-modal-dismiss="security-role-form" type="button" aria-label="Close dialog">&times;</button>
+              <button class="form-modal-close" data-modal-dismiss="security-role-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
           <form class="blobstore-form modal-form" id="security-role-form" hidden novalidate>
             <div class="form-title" id="security-role-form-title">Create role</div>
             <div class="form-grid">
@@ -604,18 +605,18 @@
 
         <section class="view fixed-table-view" id="security-privileges-view">
           <div class="page-heading">
-            <span class="heading-icon">◍</span>
+            <span class="heading-icon"><span class="lucide-icon icon-key" aria-hidden="true"></span></span>
             <h1>Privileges</h1>
             <span class="heading-copy">Manage Nexus-compatible wildcard and repository privileges</span>
           </div>
           <div class="action-bar">
-            <button class="create-button" id="create-security-privilege-button" type="button">⊕ Create privilege</button>
-            <label class="filter-box"><span class="filter-icon">▾</span><input id="security-privilege-filter" type="search" placeholder="Filter"></label>
+            <button class="create-button" id="create-security-privilege-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create privilege</button>
+            <label class="filter-box"><span class="filter-icon lucide-icon icon-list-filter" aria-hidden="true"></span><input id="security-privilege-filter" type="search" placeholder="Filter"></label>
           </div>
           <div class="form-modal" id="security-privilege-form-modal" data-form-id="security-privilege-form" role="dialog" aria-modal="true" aria-labelledby="security-privilege-form-title" hidden>
             <div class="form-modal-backdrop" data-modal-dismiss="security-privilege-form"></div>
             <div class="form-modal-panel">
-              <button class="form-modal-close" data-modal-dismiss="security-privilege-form" type="button" aria-label="Close dialog">&times;</button>
+              <button class="form-modal-close" data-modal-dismiss="security-privilege-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
           <form class="blobstore-form modal-form" id="security-privilege-form" hidden novalidate>
             <div class="form-title" id="security-privilege-form-title">Create privilege</div>
             <div class="form-grid">
@@ -643,7 +644,7 @@
 
         <section class="view" id="security-realms-view">
           <div class="page-heading">
-            <span class="heading-icon">⇅</span>
+            <span class="heading-icon"><span class="lucide-icon icon-waypoints" aria-hidden="true"></span></span>
             <h1>Realms</h1>
             <span class="heading-copy">Manage local, LDAP and OIDC authentication priority</span>
           </div>
@@ -660,7 +661,7 @@
 
           <section class="view" id="security-ldap-view">
             <div class="page-heading">
-              <span class="heading-icon">◇</span>
+              <span class="heading-icon"><span class="lucide-icon icon-network" aria-hidden="true"></span></span>
               <h1>LDAP</h1>
               <span class="heading-copy">Manage LDAP connection, user mapping, and group roles</span>
             </div>
@@ -713,7 +714,7 @@
 
           <section class="view" id="security-oidc-view">
             <div class="page-heading">
-            <span class="heading-icon">◒</span>
+            <span class="heading-icon"><span class="lucide-icon icon-log-in" aria-hidden="true"></span></span>
             <h1>OIDC</h1>
             <span class="heading-copy">Manage OIDC issuer, token validation, and claim mapping</span>
           </div>
@@ -752,17 +753,17 @@
 
         <section class="view" id="security-api-keys-view">
           <div class="page-heading">
-            <span class="heading-icon">⌘</span>
+            <span class="heading-icon"><span class="lucide-icon icon-key-round" aria-hidden="true"></span></span>
             <h1>API Keys</h1>
             <span class="heading-copy">Manage API key ownership and domains</span>
           </div>
           <div class="action-bar">
-            <button class="create-button" id="create-security-api-key-button" type="button">⊕ Create API key</button>
+            <button class="create-button" id="create-security-api-key-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create API key</button>
           </div>
           <div class="form-modal" id="security-api-key-form-modal" data-form-id="security-api-key-form" role="dialog" aria-modal="true" aria-labelledby="security-api-key-form-title" hidden>
             <div class="form-modal-backdrop" data-modal-dismiss="security-api-key-form"></div>
             <div class="form-modal-panel form-modal-panel-narrow">
-              <button class="form-modal-close" data-modal-dismiss="security-api-key-form" type="button" aria-label="Close dialog">&times;</button>
+              <button class="form-modal-close" data-modal-dismiss="security-api-key-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
           <form class="blobstore-form modal-form" id="security-api-key-form" hidden novalidate>
             <div class="form-title" id="security-api-key-form-title">Create API key</div>
             <div class="form-grid">
@@ -799,17 +800,17 @@
 
         <section class="view" id="security-audit-log-view">
           <div class="page-heading">
-            <span class="heading-icon">▦</span>
+            <span class="heading-icon"><span class="lucide-icon icon-scroll-text" aria-hidden="true"></span></span>
             <h1>Audit Log</h1>
             <span class="heading-copy">Search management mutations recorded in MySQL</span>
           </div>
           <form class="audit-filter-bar" id="audit-log-filter-form">
             <label class="filter-box audit-query">
-              <span class="filter-icon">▾</span>
+              <span class="filter-icon lucide-icon icon-search" aria-hidden="true"></span>
               <input id="audit-log-query" type="search" placeholder="Search actor, path, permission, details">
             </label>
             <label class="filter-box audit-short">
-              <span class="filter-icon">◉</span>
+              <span class="filter-icon lucide-icon icon-users" aria-hidden="true"></span>
               <input id="audit-log-actor" type="search" placeholder="Actor">
             </label>
             <label class="select-filter">
@@ -851,9 +852,9 @@
           </div>
           <div class="pagination-bar" id="audit-log-pagination">
             <span class="pagination-summary" id="audit-log-summary">0 results</span>
-            <button class="row-action" id="audit-log-prev-page" type="button">‹</button>
+            <button class="row-action" id="audit-log-prev-page" type="button" title="Previous page" aria-label="Previous page"><span class="lucide-icon icon-chevron-left" aria-hidden="true"></span></button>
             <span class="pagination-page" id="audit-log-page-label">Page 1 / 1</span>
-            <button class="row-action" id="audit-log-next-page" type="button">›</button>
+            <button class="row-action" id="audit-log-next-page" type="button" title="Next page" aria-label="Next page"><span class="lucide-icon icon-chevron-right" aria-hidden="true"></span></button>
             <label class="select-filter pagination-size">
               <span>Rows</span>
               <select id="audit-log-size">
@@ -869,7 +870,7 @@
 
         <section class="view" id="security-anonymous-view">
           <div class="page-heading">
-            <span class="heading-icon">◌</span>
+            <span class="heading-icon"><span class="lucide-icon icon-user-round-x" aria-hidden="true"></span></span>
             <h1>Anonymous Access</h1>
             <span class="heading-copy">Configure the anonymous user used for unauthenticated repository reads</span>
           </div>
@@ -891,7 +892,7 @@
 
         <section class="view" id="ui-settings-view">
           <div class="page-heading">
-            <span class="heading-icon">▨</span>
+            <span class="heading-icon"><span class="lucide-icon icon-sliders-horizontal" aria-hidden="true"></span></span>
             <h1>UI Settings</h1>
             <span class="heading-copy">Configure the default UI language shared by all replicas</span>
           </div>
@@ -916,7 +917,7 @@
 
         <section class="view" id="nexus-migration-view">
           <div class="page-heading">
-            <span class="heading-icon">⇆</span>
+            <span class="heading-icon"><span class="lucide-icon icon-database-backup" aria-hidden="true"></span></span>
             <h1>Nexus Metadata</h1>
             <span class="heading-copy">Migrate Nexus users, roles, permissions, blob stores, and repository definitions</span>
           </div>
@@ -936,7 +937,7 @@
 
         <section class="view" id="repository-data-migration-view">
           <div class="page-heading">
-            <span class="heading-icon">⇄</span>
+            <span class="heading-icon"><span class="lucide-icon icon-arrow-left-right" aria-hidden="true"></span></span>
             <h1>Nexus Repository Data</h1>
             <span class="heading-copy">Discover and migrate hosted repository assets from Nexus</span>
           </div>
@@ -970,6 +971,6 @@
 
     <script src="/login/assets/ui-i18n.js?v=20260625-ui-i18n-5"></script>
     <script src="./assets/admin-filter.js?v=20260706-wildcard-filter-1"></script>
-    <script src="./assets/admin.js?v=20260710-recipe-combobox-3"></script>
+    <script src="./assets/admin.js?v=20260712-sortable-headers-1"></script>
   </body>
 </html>
