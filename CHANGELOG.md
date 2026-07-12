@@ -4,6 +4,48 @@ All notable public changes to kkrepo are documented in this file.
 
 This project follows a pragmatic early-stage release process. Until a stable `1.0.0` release is announced, minor versions may include behavior changes, but releases should call out migration impact, compatibility changes, and operational notes.
 
+## 0.3.0 - 2026-07-12
+
+### Added
+
+- Dart / Pub hosted, proxy, and group repositories, including `dart pub publish`, `dart pub get`, Flutter package resolution, package metadata, archive downloads, `PubToken` authentication, MySQL-backed upload sessions, UI/API upload, browse metadata, cleanup, metrics, migration support, and Nexus 3.92.0 compatibility coverage. (#86)
+- Repository-format and artifact-type iconography across Browse and Administration, including precise package/archive file icons and a custom Java archive icon for JAR, WAR, EAR, and AAR assets. (#99)
+- Product version and GitHub project links in the Browse and Administration headers. (#97, #98)
+- Nginx reverse-proxy deployment guidance and a Nexus-to-kkRepo migration case study. (#72, #78)
+- Design references for OpenHarmony ohpm repositories and Dart / Pub repository compatibility. (#80, #85)
+
+### Changed
+
+- Quickstart defaults now use `ghcr.io/klboke/kkrepo:0.3.0`.
+- Legacy Nexus Rapture, ExtDirect, Wonderland, internal UI, and legacy component-upload endpoints are disabled by default through `kkrepo.nexus.legacy-ui.enabled=false`; supported REST and repository protocol endpoints remain available. (#87)
+- Fresh installations start with anonymous access disabled and explicitly choose anonymous access during initial administrator setup. Existing configured installations are not rewritten. Anonymous identity and role reads now use the refreshable security catalog snapshot with MySQL watermark propagation across replicas. (#96)
+- Repository privilege filtering accepts wildcard action grants while preserving concrete action checks. (#73, #79)
+- Admin create/edit flows use consistent modal dialogs, recipe-aware repository selectors, and clearer form filtering. (#82)
+- Browse and Administration use a vendored Lucide icon system, clearer sortable-column indicators, synchronized tree/detail asset icons, quieter inline URL copy actions, and a less interactive-looking Welcome capability showcase. (#99)
+- Project documentation, screenshots, support links, compatibility coverage, and GitHub Actions dependencies were refreshed. (#63, #64, #74, #75, #76, #77, #89, #99)
+
+### Fixed
+
+- Fixed RubyGems migration validation for dependency assets whose blob size differs from the generated dependency payload size. (#65)
+- Fixed group repository cache expiry so member-specific maximum ages are honored. (#71)
+- Fixed Nexus `ALL` action permission matching and wildcard privilege filtering without broadening concrete authorization checks. (#73, #79)
+- Fixed credentialless proxy redirects to CDN-backed upstream content while retaining outbound host policy validation. (#86)
+- Fixed fresh-install anonymous defaults and removed the configuration-file fallback as a competing source of truth. (#96)
+- Fixed UI affordance and accessibility inconsistencies around icons, file types, URL copying, static capability cards, and sortable headers. (#99)
+
+### Compatibility And Validation
+
+- Dart / Pub includes focused protocol and server tests, Nexus reference black-box tests, real `dart`/Flutter client E2E coverage, and datastore-era migration coverage. (#86)
+- Main-branch CI and CodeQL passed on the release baseline, including the Browse and Administration icon contract suites. (#99)
+- Existing Maven, npm, PyPI, Go, Helm, Cargo/Rust, Docker/OCI, NuGet, RubyGems, Yum, and Raw compatibility paths remain covered by the reactor and live compatibility workflows.
+
+### Upgrade Notes
+
+- Existing 0.2.0 deployments can upgrade in place. Back up MySQL before upgrading production deployments.
+- This release adds Flyway migrations for MySQL-backed Pub upload sessions and the secure anonymous-access default for databases that have not completed initial administrator setup.
+- Legacy Nexus UI compatibility routes now default to disabled. Deployments that still run compatibility tests or integrations against those legacy UI-only endpoints must explicitly set `KKREPO_NEXUS_LEGACY_UI_ENABLED=true`; normal repository clients and supported REST APIs do not require it.
+- Validate Dart / Pub repository configuration, PubToken handling, proxy/group behavior, and archive migration in staging before opening the new format to production clients.
+
 ## 0.2.0 - 2026-07-01
 
 ### Added

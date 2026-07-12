@@ -194,7 +194,7 @@ if [[ -f .env ]]; then
   load_env_file_defaults .env
 fi
 
-: "${KKREPO_IMAGE_TAG:=0.2.0}"
+: "${KKREPO_IMAGE_TAG:=0.3.0}"
 : "${KKREPO_HTTP_PORT:=19090}"
 : "${KKREPO_MANAGEMENT_PORT:=19091}"
 : "${KKREPO_PROJECT_NAME:=kkrepo-quickstart}"
