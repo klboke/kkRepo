@@ -31,8 +31,10 @@ class ComposerRepositoryBlackBoxCompatibilityTest {
   void proxyV2MetadataMatchesNexusWhenConfigured() throws Exception {
     assumeTrue(Boolean.parseBoolean(System.getenv().getOrDefault("COMPOSER_COMPAT_ENABLED", "false")),
         "Set COMPOSER_COMPAT_ENABLED=true to run Composer proxy compatibility");
-    String nexus = env("COMPOSER_NEXUS_PROXY_URL", "http://127.0.0.1:28090/repository/composer-proxy");
-    String candidate = env("COMPOSER_KKREPO_PROXY_URL", "http://127.0.0.1:18090/repository/composer-proxy");
+    String nexus = repositoryUrl(
+        "COMPOSER_NEXUS_PROXY_URL", "NEXUS_COMPAT_BASE_URL", "http://127.0.0.1:28090");
+    String candidate = repositoryUrl(
+        "COMPOSER_KKREPO_PROXY_URL", "KKREPO_COMPAT_BASE_URL", "http://127.0.0.1:18090");
     String packageName = env("COMPOSER_COMPAT_PACKAGE", "monolog/monolog");
     Endpoint nexusEndpoint = new Endpoint(
         nexus,
@@ -164,6 +166,12 @@ class ComposerRepositoryBlackBoxCompatibilityTest {
   private static String env(String name, String fallback) {
     String value = System.getenv(name);
     return value == null || value.isBlank() ? fallback : value.replaceAll("/+$", "");
+  }
+
+  private static String repositoryUrl(String endpointEnv, String baseEnv, String defaultBaseUrl) {
+    String endpoint = System.getenv(endpointEnv);
+    if (endpoint != null && !endpoint.isBlank()) return endpoint.replaceAll("/+$", "");
+    return env(baseEnv, defaultBaseUrl) + "/repository/composer-proxy";
   }
 
   private record Endpoint(String baseUrl, String username, String password) {

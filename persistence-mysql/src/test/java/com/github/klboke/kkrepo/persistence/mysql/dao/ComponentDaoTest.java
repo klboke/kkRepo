@@ -94,6 +94,19 @@ class ComponentDaoTest {
   }
 
   @Test
+  void repositoryScopedSearchIncludesStoragePathProjection() {
+    RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
+    ComponentDao dao = new ComponentDao(
+        jdbcTemplate,
+        new JsonColumns(new ObjectMapper()));
+
+    dao.searchByRepositoryIds(List.of(1L), RepositoryFormat.NPM, "example", 20);
+
+    assertTrue(jdbcTemplate.sql.contains("END AS storage_path"));
+    assertTrue(jdbcTemplate.sql.contains("c.format = ?\nAND MATCH"));
+  }
+
+  @Test
   void fulltextBooleanQueryTokenizesWithoutRegexBacktracking() {
     String keyword = "\"".repeat(4096) + "Com.Example artifact-1.0";
 

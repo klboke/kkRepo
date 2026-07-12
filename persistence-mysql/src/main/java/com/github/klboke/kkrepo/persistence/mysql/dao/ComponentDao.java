@@ -232,12 +232,18 @@ public class ComponentDao {
     args.add(EnumColumns.write(format));
     StringBuilder sql = new StringBuilder("""
         SELECT c.id, c.repository_id, r.name AS repository_name, c.format, c.namespace,
-               c.name, c.version, c.kind, c.last_updated_at
+               c.name, c.version, c.kind, c.last_updated_at,
+               CASE WHEN c.format = 'composer'
+                    THEN COALESCE(
+                        NULLIF(JSON_UNQUOTE(JSON_EXTRACT(c.attributes_json, '$.distPath')), 'null'),
+                        c.name)
+                    ELSE NULL
+               END AS storage_path
         FROM component c
         JOIN repository r ON r.id = c.repository_id
         WHERE c.repository_id IN (
         """);
-    sql.append(placeholders).append(") AND c.format = ?");
+    sql.append(placeholders).append(") AND c.format = ?\n");
     if (!normalized.isEmpty()) {
       String booleanQuery = fulltextBooleanQuery(normalized);
       if (booleanQuery.isBlank()) return List.of();
