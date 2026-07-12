@@ -27,10 +27,14 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 @Service
 public class ComposerHostedService {
+  private static final Logger log = LoggerFactory.getLogger(ComposerHostedService.class);
   private final ObjectMapper objectMapper;
   private final ComponentDao componentDao;
   private final ComposerAssetSupport assets;
@@ -92,15 +96,17 @@ public class ComposerHostedService {
       }
       String archiveType = distType(safeFileName);
       String distPath = ComposerPaths.componentDist(inspected.name(), inspected.version(), archiveType);
+      // A request-unique path keeps a losing upload from overwriting or deleting the winner's blob.
+      String stagingPath = "_composer/uploads/" + UUID.randomUUID() + "/" + safeFileName;
       try (InputStream input = Files.newInputStream(temp)) {
-        assets.store(runtime, distPath, input, contentType(contentType, distPath),
+        assets.store(runtime, stagingPath, input, contentType(contentType, distPath),
             Map.of("composerPackage", inspected.name(), "composerVersion", inspected.version()),
             createdBy, createdByIp);
       }
       try {
-        AssetRecord asset = assets.find(runtime, distPath)
-            .orElseThrow(() -> new IllegalStateException("Composer dist asset was not persisted: " + distPath));
-        AssetBlobRecord blob = assets.blob(asset, distPath);
+        AssetRecord asset = assets.find(runtime, stagingPath)
+            .orElseThrow(() -> new IllegalStateException("Composer staging asset was not persisted: " + stagingPath));
+        AssetBlobRecord blob = assets.blob(asset, stagingPath);
         Map<String, Object> metadata = new LinkedHashMap<>(inspected.metadata());
         metadata.put("dist", Map.of(
             "type", archiveType,
@@ -110,12 +116,20 @@ public class ComposerHostedService {
         componentWriter.bindHostedArchive(
             runtime, asset, inspected.name(), inspected.version(), metadata, distPath, createdBy, createdByIp);
         return distPath;
-      } catch (RuntimeException e) {
-        assets.delete(runtime, distPath);
-        throw e;
+      } finally {
+        deleteStaging(runtime, stagingPath);
       }
     } finally {
       TempBlobFiles.deleteQuietly(temp);
+    }
+  }
+
+  private void deleteStaging(RepositoryRuntime runtime, String stagingPath) {
+    try {
+      assets.delete(runtime, stagingPath);
+    } catch (RuntimeException e) {
+      log.warn("Failed to delete Composer upload staging asset {}/{}",
+          runtime.name(), stagingPath, e);
     }
   }
 

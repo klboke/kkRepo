@@ -1,8 +1,15 @@
 package com.github.klboke.kkrepo.server.composer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -10,14 +17,20 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.mysql.dao.ComponentDao;
+import com.github.klboke.kkrepo.persistence.mysql.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.mysql.model.ComponentRecord;
 import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPathParser;
+import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import java.io.ByteArrayInputStream;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.Test;
 
 class ComposerHostedServiceTest {
@@ -53,6 +66,43 @@ class ComposerHostedServiceTest {
         "https://repo.test/repository/composer-hosted/company/example/1.0.0/company-example-1.0.0.zip",
         dist.get("url"));
     assertTrue(response.etag() != null && !response.etag().isBlank());
+  }
+
+  @Test
+  void bindFailureDeletesOnlyTheUploadStagingPath() throws Exception {
+    ComponentDao components = mock(ComponentDao.class);
+    ComposerAssetSupport assets = mock(ComposerAssetSupport.class);
+    ComposerArchiveInspector inspector = mock(ComposerArchiveInspector.class);
+    ComposerComponentWriter writer = mock(ComposerComponentWriter.class);
+    AssetRecord stagingAsset = mock(AssetRecord.class);
+    AssetBlobRecord blob = mock(AssetBlobRecord.class);
+    when(components.findByNameAndVersion(1L, "company/example", "1.0.0"))
+        .thenReturn(Optional.empty());
+    when(inspector.inspect(any(), eq("package.zip"), eq(null), eq(null)))
+        .thenReturn(new ComposerArchiveInspector.Inspected(
+            "company/example", "1.0.0",
+            Map.of("name", "company/example", "version", "1.0.0")));
+    when(assets.find(any(), anyString())).thenReturn(Optional.of(stagingAsset));
+    when(assets.blob(eq(stagingAsset), anyString())).thenReturn(blob);
+    when(blob.sha1()).thenReturn("abc123");
+    doThrow(new MavenExceptions.WritePolicyDenied("duplicate"))
+        .when(writer).bindHostedArchive(
+            any(), eq(stagingAsset), eq("company/example"), eq("1.0.0"), any(),
+            eq("company/example/1.0.0/company-example-1.0.0.zip"), eq("admin"), eq("127.0.0.1"));
+    ComposerHostedService service = new ComposerHostedService(JSON, components, assets, inspector, writer);
+
+    assertThrows(MavenExceptions.WritePolicyDenied.class, () -> service.uploadArchive(
+        runtime("hosted", RepositoryType.HOSTED, List.of()),
+        new ByteArrayInputStream(new byte[] {1, 2, 3}), "package.zip", "application/zip",
+        null, null, "admin", "127.0.0.1"));
+
+    ArgumentCaptor<String> stagedPath = ArgumentCaptor.forClass(String.class);
+    verify(assets).store(any(), stagedPath.capture(), any(), eq("application/zip"), any(),
+        eq("admin"), eq("127.0.0.1"));
+    assertTrue(stagedPath.getValue().startsWith("_composer/uploads/"));
+    verify(assets).delete(any(), eq(stagedPath.getValue()));
+    verify(assets, never()).delete(
+        any(), eq("company/example/1.0.0/company-example-1.0.0.zip"));
   }
 
   private static ComponentRecord component(String version, boolean dev) {
