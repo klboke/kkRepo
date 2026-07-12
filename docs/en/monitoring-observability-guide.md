@@ -115,7 +115,7 @@ Background tasks, rebuild queues, GC, and rate-limit metrics:
 Common labels:
 
 - `repo`: repository name
-- `format`: artifact format, such as `maven2`, `npm`, `pypi`, `cargo`, `pub`, `docker`
+- `format`: artifact format, such as `maven2`, `npm`, `pypi`, `cargo`, `pub`, `composer`, `docker`
 - `type`: repository type, such as `hosted`, `proxy`, `group`
 - `method`: HTTP method
 - `operation`: protocol operation
@@ -163,6 +163,16 @@ Common Pub operation labels include:
 
 Pub proxy upstream requests are recorded through `kkrepo_proxy_remote_*` with
 `format="pub"`.
+
+### Composer / PHP
+
+Composer / PHP emits repository request, proxy upstream, and blob storage metrics with `format="composer"`. Common operation labels include:
+
+- `composer_metadata`
+- `composer_dist`
+- `composer_repository`
+
+For slow installs, separate metadata latency from dist latency: metadata failures affect dependency resolution, while dist upstream or blob latency affects `--prefer-dist` downloads. Composer proxy upstream calls are recorded through `kkrepo_proxy_remote_*`.
 
 ### Blob Storage
 

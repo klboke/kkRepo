@@ -16,6 +16,8 @@ import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerManifestRec
 import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerManifestReferenceRecord;
 import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerTagRecord;
 import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
+import com.github.klboke.kkrepo.protocol.composer.ComposerPath;
+import com.github.klboke.kkrepo.protocol.composer.ComposerPathParser;
 import com.github.klboke.kkrepo.protocol.npm.NpmMetadata;
 import com.github.klboke.kkrepo.protocol.npm.NpmPackageId;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
@@ -45,6 +47,7 @@ import org.springframework.web.server.ResponseStatusException;
 public class BrowseAssetDetailService {
   private static final TypeReference<LinkedHashMap<String, Object>> MAP_TYPE = new TypeReference<>() {};
   private static final int MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
+  private static final ComposerPathParser COMPOSER_PATHS = new ComposerPathParser();
 
   private final RepositoryDao repositoryDao;
   private final AssetDao assetDao;
@@ -79,6 +82,9 @@ public class BrowseAssetDetailService {
       String path,
       String sourceRepositoryName) {
     String storagePath = storagePath(visibleRepository.format(), path);
+    if (BrowseAssetVisibility.hidden(visibleRepository.format(), storagePath)) {
+      throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Asset not found");
+    }
     if (isCargoDynamicConfig(visibleRepository, storagePath)) {
       return cargoDynamicConfigDetail(visibleRepository);
     }
@@ -101,6 +107,9 @@ public class BrowseAssetDetailService {
         ? dockerAttributes(source, asset, blob, path, resolved.dockerManifest())
         : Map.of();
     Map<String, Object> pub = source.format() == RepositoryFormat.PUB ? pubAttributes(asset) : Map.of();
+    Map<String, Object> composer = source.format() == RepositoryFormat.COMPOSER
+        ? composerAttributes(asset)
+        : Map.of();
 
     return new BrowseAssetDetail(
         visibleRepository.name(),
@@ -110,14 +119,15 @@ public class BrowseAssetDetailService {
         asset.size(),
         asset.contentType(),
         asset.lastUpdatedAt(),
-        "/repository/" + visibleRepository.name() + "/" + storagePath,
-        blob.createdBy(),
-        blob.createdByIp(),
+        BrowseDownloadUrls.asset(visibleRepository, storagePath),
+        text(firstPresent(asset.attributes().get("createdBy"), blob.createdBy())),
+        text(firstPresent(asset.attributes().get("createdByIp"), blob.createdByIp())),
         checksum,
         content,
         docker,
         npm,
         pub,
+        composer,
         provenance);
   }
 
@@ -149,7 +159,35 @@ public class BrowseAssetDetailService {
         Map.of(),
         Map.of(),
         Map.of(),
+        Map.of(),
         provenance);
+  }
+
+  private static Map<String, Object> composerAttributes(AssetRecord asset) {
+    Map<String, Object> attributes = asset.attributes() == null ? Map.of() : asset.attributes();
+    String packageName = text(firstPresent(attributes.get("packageName"), attributes.get("composerPackage")));
+    String version = text(firstPresent(attributes.get("version"), attributes.get("composerVersion")));
+    String path = normalize(asset.path());
+    ComposerPath parsedPath = COMPOSER_PATHS.parse(path);
+    if (parsedPath.kind() == ComposerPath.Kind.DIST) {
+      if (packageName == null) packageName = parsedPath.packageName();
+      if (version == null) version = parsedPath.version();
+    }
+    if (packageName == null && path.startsWith("p2/") && path.endsWith(".json")) {
+      String coordinate = path.substring("p2/".length(), path.length() - ".json".length());
+      if (coordinate.endsWith("~dev")) {
+        coordinate = coordinate.substring(0, coordinate.length() - "~dev".length());
+      }
+      if (coordinate.indexOf('/') > 0) {
+        packageName = coordinate;
+      }
+    }
+    LinkedHashMap<String, Object> composer = new LinkedHashMap<>();
+    put(composer, "asset_kind", parsedPath.kind() == ComposerPath.Kind.DIST
+        ? "DIST" : "METADATA");
+    put(composer, "package_name", packageName);
+    put(composer, "version", version);
+    return composer;
   }
 
   private ResolvedAsset resolveSourceAsset(
@@ -765,5 +803,6 @@ public class BrowseAssetDetailService {
       Map<String, Object> docker,
       Map<String, Object> npm,
       Map<String, Object> pub,
+      Map<String, Object> composer,
       Map<String, Object> provenance) {}
 }

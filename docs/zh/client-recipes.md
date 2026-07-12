@@ -278,6 +278,44 @@ dart pub publish
 
 如果要通过 kkrepo 搜索发现包，可以在 Browse UI 选择 Pub 格式过滤，或调用 component search API 时带上 `format=pub`。
 
+## Composer / PHP
+
+依赖解析使用 group 或 proxy 仓库。Composer 没有标准 package publish 命令；私有包通过管理端上传或 Nexus-compatible Components API 上传到 hosted 仓库。
+
+项目 `composer.json`：
+
+```json
+{
+  "repositories": [
+    {"type": "composer", "url": "https://nexus.example.com/repository/composer-group", "canonical": true},
+    {"packagist.org": false}
+  ],
+  "require": {
+    "acme/demo": "^1.0"
+  }
+}
+```
+
+私有仓库建议通过 `COMPOSER_AUTH` 或 Composer `auth.json` 配置 HTTP Basic，不要把密码写进项目文件：
+
+```bash
+export COMPOSER_AUTH='{"http-basic":{"nexus.example.com":{"username":"alice","password":"'"$KKREPO_PASSWORD"'"}}}'
+composer install --prefer-dist --no-interaction
+composer show acme/demo --locked
+```
+
+上传包含 `composer.json` 的 zip/tar archive：
+
+```bash
+curl -u alice:"$KKREPO_PASSWORD" \
+  -F "composer.asset=@acme-demo-1.0.0.zip;type=application/zip" \
+  -F "composer.name=acme/demo" \
+  -F "composer.version=1.0.0" \
+  "https://nexus.example.com/service/rest/v1/components?repository=composer-hosted"
+```
+
+Composer 2 使用 `packages.json` 和 `p2/<vendor>/<package>.json`。Hosted、proxy 和 group 都保持 `/repository/<repo>/...` URL；Browse 页的 Usage 会生成可复制的项目配置。
+
 ## NuGet
 
 添加 source：

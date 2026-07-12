@@ -20,7 +20,7 @@ compat-test/
 - hosted write, delete, and repeated-upload behavior
 - client-visible proxy, group, browse/search behavior
 
-The current module includes compatibility test classes for Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Docker/OCI, NuGet, RubyGems, Yum, Raw, component upload, security management APIs, and related areas.
+The current module includes compatibility test classes for Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Docker/OCI, NuGet, RubyGems, Yum, Raw, component upload, security management APIs, and related areas.
 
 Regular test command:
 
@@ -56,7 +56,7 @@ COMPAT_WRITE_ENABLED=true
 
 This avoids accidentally writing test packages to a long-running Nexus reference instance. Write tests usually use one-off package names and paths, and cover delete, repeated upload, and metadata update behavior when feasible.
 
-The unified Nexus compatibility matrix uses the datastore-era Nexus PostgreSQL reference for newer formats. Run `scripts/ci/run-live-compat.sh nexus` against the disposable compose environment to compare kkrepo with Nexus across Maven, npm, PyPI, Cargo/Rust, Dart/Pub, Raw, selected NuGet/RubyGems/Yum behavior, Go proxy endpoints, Helm hosted round trips, component upload specs, and selected security/admin contracts. This suite enables disposable write checks by default. The current PostgreSQL compose pins the reference to Nexus 3.92.0. In GitHub Actions, use the `Live Compatibility / Nexus compatibility` job through the `run-live-compat` label or the scheduled workflow.
+The unified Nexus compatibility matrix uses the datastore-era Nexus PostgreSQL reference for newer formats. Run `scripts/ci/run-live-compat.sh nexus` against the disposable compose environment to compare kkrepo with Nexus across Maven, npm, PyPI, Cargo/Rust, Dart/Pub, Composer/PHP, Raw, selected NuGet/RubyGems/Yum behavior, Go proxy endpoints, Helm hosted round trips, component upload specs, and selected security/admin contracts. The Composer reference endpoint is required; a missing capability fails instead of skipping. This suite enables disposable write checks by default. The current PostgreSQL compose pins the reference to Nexus 3.92.0. In GitHub Actions, use the `Live Compatibility / Nexus compatibility` job through the `run-live-compat` label or the scheduled workflow.
 
 Outside Dart / Pub, some component upload specs and security/admin contracts still compare Nexus legacy UI/internal API routes. kkrepo production and distribution configuration keeps `kkrepo.nexus.legacy-ui.enabled=false` by default to disable the Nexus Rapture, ExtDirect, Wonderland, internal UI REST, iframe upload, and related legacy web UI compatibility surface as one coarse-grained switch. The disposable compatibility compose environment sets `KKREPO_NEXUS_LEGACY_UI_ENABLED=true` for the candidate service by default only for those Nexus legacy-route compatibility checks. This is a startup-time runtime flag: when reproducing these live tests manually, set the environment variable before starting or restarting the candidate kkrepo service; setting it only before `mvn -pl compat-test ... test` does not affect an already-running service. Normal deployments should keep the default disabled, and the kkrepo Browse UI uses the native `/internal/security/permissions` endpoint instead of the legacy internal UI permissions route.
 
@@ -70,7 +70,7 @@ The `client-e2e` suite validates the behavior of actual package clients against 
 scripts/ci/run-live-compat.sh client-e2e
 ```
 
-It runs publish/upload plus download/resolve flows for Maven, npm, PyPI, Helm, Cargo/Rust, Dart/Pub, NuGet, RubyGems, Yum, and Docker/OCI. Go is resolve-only through the Go module proxy because hosted Go publishing is not a supported repository mode. Docker image push/pull is always covered, and ORAS pushes/pulls a generic OCI artifact when the `oras` client is available.
+It runs publish/upload plus download/resolve flows for Maven, npm, PyPI, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, NuGet, RubyGems, Yum, and Docker/OCI. Composer covers hosted archives, group resolution, Packagist proxying, a transitive dependency, Basic authentication, and lock replay from the server cache; Go is resolve-only through the Go module proxy because hosted Go publishing is not a supported repository mode. Docker image push/pull is always covered, and ORAS pushes/pulls a generic OCI artifact when the `oras` client is available.
 
 Use this suite when a change affects repository protocol behavior that real clients exercise: authentication headers or API keys, publish/upload paths, generated metadata, package index shape, checksum/download behavior, Docker connector ports, or group/proxy resolution. In GitHub Actions, run it manually by selecting `client-e2e` in the `Live Compatibility` workflow, or add the `run-client-e2e` label to a PR.
 
@@ -86,7 +86,7 @@ In addition to in-project black-box compatibility tests and real client E2E chec
 
 This historical validation stage aims to:
 
-- Confirm that real Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Docker/OCI, and similar client requests are recognized correctly by kkrepo.
+- Confirm that real Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Docker/OCI, and similar client requests are recognized correctly by kkrepo.
 - Compare HTTP status, error types, and key response behavior between the Nexus main path and the kkrepo mirrored path.
 - Observe proxy upstream access, blob storage, permission/authentication, and metadata/index rebuild stability under real traffic.
 - Discover edge requests not covered by `compat-test`, such as special client headers, old client behavior, CI plugin probe requests, and occasional proxy requests.
@@ -101,7 +101,7 @@ Istio traffic mirroring only copies requests to kkrepo. Clients still receive re
 - Proxy upstream errors and latency
 - Blob storage read/write errors
 
-Nexus UI admin requests, ExtDirect polling, Script API requests, and other management-plane traffic are not the same as Maven/npm/PyPI/Go/Helm/Cargo/Pub/Docker/OCI repository protocol traffic. When analyzing mirror anomalies, classify the request type first so management-plane requests are not mistaken for repository protocol compatibility issues.
+Nexus UI admin requests, ExtDirect polling, Script API requests, and other management-plane traffic are not the same as Maven/npm/PyPI/Go/Helm/Cargo/Pub/Composer/Docker/OCI repository protocol traffic. When analyzing mirror anomalies, classify the request type first so management-plane requests are not mistaken for repository protocol compatibility issues.
 
 ## Production-Scale Validation
 

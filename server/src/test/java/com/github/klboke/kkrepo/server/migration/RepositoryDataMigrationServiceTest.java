@@ -52,6 +52,32 @@ class RepositoryDataMigrationServiceTest {
   }
 
   @Test
+  void composerProxyIsNotSelectedUnlessExplicitlyRequestedForBackup() throws Exception {
+    List<?> sources = sourceRepositories(
+        List.of(),
+        List.of(),
+        inventory(
+            datastoreProbe("composer", true),
+            repository("composer-proxy", "composer", "proxy")));
+
+    assertEquals(List.of(), sources);
+  }
+
+  @Test
+  void composerProxyUsesExplicitProxyBackupMigrationMode() throws Exception {
+    List<?> sources = sourceRepositories(
+        List.of(),
+        List.of("composer-proxy"),
+        inventory(
+            datastoreProbe("composer", true),
+            repository("composer-proxy", "composer", "proxy")));
+
+    assertEquals(1, sources.size());
+    assertEquals("composer-proxy", sourceName(sources.getFirst()));
+    assertEquals("proxy-backup", sourceMigrationMode(sources.getFirst()));
+  }
+
+  @Test
   void requestedRepositoriesAllowDatastoreCargoHostedMigrationWhenContentSchemaIsPresent() throws Exception {
     List<?> sources = sourceRepositories(
         List.of("cargo-hosted"),
@@ -211,6 +237,12 @@ class RepositoryDataMigrationServiceTest {
 
   private static String sourceName(Object sourceRepository) throws Exception {
     Method method = sourceRepository.getClass().getDeclaredMethod("name");
+    method.setAccessible(true);
+    return (String) method.invoke(sourceRepository);
+  }
+
+  private static String sourceMigrationMode(Object sourceRepository) throws Exception {
+    Method method = sourceRepository.getClass().getDeclaredMethod("migrationMode");
     method.setAccessible(true);
     return (String) method.invoke(sourceRepository);
   }

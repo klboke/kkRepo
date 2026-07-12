@@ -2,6 +2,8 @@ package com.github.klboke.kkrepo.server.metrics;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.protocol.composer.ComposerPath;
+import com.github.klboke.kkrepo.protocol.composer.ComposerPathParser;
 import com.github.klboke.kkrepo.server.docker.DockerConnectorConfiguration;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.RepositorySecurityFilter;
@@ -34,6 +36,7 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
   static final int FILTER_ORDER = SessionRepositoryFilter.DEFAULT_ORDER + 18;
   private static final Logger log = LoggerFactory.getLogger(RepositoryRequestMetricsFilter.class);
   private static final int MAX_LOGGED_PARAM_VALUE_LENGTH = 512;
+  private static final ComposerPathParser COMPOSER_PATHS = new ComposerPathParser();
 
   private final KkRepoMetrics metrics;
   private final boolean logNonSuccessRequests;
@@ -236,6 +239,7 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
       case PYPI -> pypiOperation(path, normalizedMethod);
       case CARGO -> cargoOperation(path, normalizedMethod);
       case PUB -> pubOperation(path, normalizedMethod);
+      case COMPOSER -> composerOperation(path, normalizedMethod);
       case HELM -> helmOperation(path, normalizedMethod);
       case GO -> goOperation(path);
       case NUGET -> nugetOperation(path, normalizedMethod);
@@ -244,6 +248,15 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
       case DOCKER -> dockerOperation(path, normalizedMethod);
       case RAW -> rawOperation(normalizedMethod);
     };
+  }
+
+  private static String composerOperation(String path, String method) {
+    if (COMPOSER_PATHS.parse(path).kind() == ComposerPath.Kind.DIST) return "composer_dist";
+    if (path.equals("packages.json") || path.startsWith("p2/")
+        || path.startsWith("providers/") || path.startsWith("packages/list.json")) {
+      return "composer_metadata";
+    }
+    return "composer_repository";
   }
 
   private static String mavenOperation(String path, String method) {

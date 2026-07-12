@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.browse;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -37,8 +38,117 @@ import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 class BrowseAssetDetailServiceTest {
+
+  @Test
+  void composerInternalRouteDetailIsNotExposedAsDownloadableAsset() {
+    RepositoryRecord repository = repository(
+        1L, "composer-proxy", RepositoryFormat.COMPOSER, RepositoryType.PROXY);
+    StubAssetDao assets = new StubAssetDao(Map.of(), Map.of());
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(),
+        assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    ResponseStatusException error = assertThrows(ResponseStatusException.class,
+        () -> service.detail(repository, "_composer/routes/token.json", null));
+
+    assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode());
+    assertEquals(List.of(), assets.pathLookups);
+  }
+
+  @Test
+  void composerProxyDetailInfersPackageCoordinatesFromNexusPathForUsage() {
+    RepositoryRecord repository = repository(
+        1L, "composer-proxy", RepositoryFormat.COMPOSER, RepositoryType.PROXY);
+    String path = "company/example/1.2.3/company-example-1.2.3.zip";
+    AssetRecord archive = new AssetRecord(
+        10L,
+        repository.id(),
+        null,
+        100L,
+        RepositoryFormat.COMPOSER,
+        path,
+        HashColumns.pathHash(path),
+        "company-example-1.2.3.zip",
+        "composer-dist",
+        "application/zip",
+        1024L,
+        null,
+        Instant.parse("2026-07-12T00:00:00Z"),
+        Map.of());
+    AssetBlobRecord blob = blob(100L, 1024L);
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(repository.id(), path), archive),
+        Map.of(blob.id(), blob));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(),
+        assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    BrowseAssetDetailService.BrowseAssetDetail detail = service.detail(repository, path, null);
+
+    assertEquals("DIST", detail.composer().get("asset_kind"));
+    assertEquals("company/example", detail.composer().get("package_name"));
+    assertEquals("1.2.3", detail.composer().get("version"));
+  }
+
+  @Test
+  void composerHostedDetailUsesAssetUploaderWhenBlobWasReused() {
+    RepositoryRecord repository = repository(
+        1L, "composer-hosted", RepositoryFormat.COMPOSER, RepositoryType.HOSTED);
+    String path = "company/example/1.2.3/company-example-1.2.3.zip";
+    AssetRecord archive = new AssetRecord(
+        10L,
+        repository.id(),
+        null,
+        100L,
+        RepositoryFormat.COMPOSER,
+        path,
+        HashColumns.pathHash(path),
+        "company-example-1.2.3.zip",
+        "composer-dist",
+        "application/zip",
+        1024L,
+        null,
+        Instant.parse("2026-07-12T00:00:00Z"),
+        Map.of("createdBy", "admin", "createdByIp", "127.0.0.1"));
+    AssetBlobRecord reusedBlob = new AssetBlobRecord(
+        100L,
+        1L,
+        "s3://bucket/composer/company-example-1.2.3.zip",
+        HashColumns.pathHash("s3://bucket/composer/company-example-1.2.3.zip"),
+        "composer/company-example-1.2.3.zip",
+        HashColumns.pathHash("composer/company-example-1.2.3.zip"),
+        "sha1",
+        "sha256",
+        "md5",
+        1024L,
+        "application/zip",
+        "system",
+        null,
+        Instant.parse("2026-07-11T00:00:00Z"),
+        Instant.parse("2026-07-11T00:00:00Z"),
+        Map.of());
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(repository.id(), path), archive),
+        Map.of(reusedBlob.id(), reusedBlob));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(),
+        assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    BrowseAssetDetailService.BrowseAssetDetail detail = service.detail(repository, path, null);
+
+    assertEquals("admin", detail.uploader());
+    assertEquals("127.0.0.1", detail.uploaderIp());
+  }
 
   @Test
   void npmTarballWithoutRootDocumentFallsBackToTarballPackageJson() throws IOException {

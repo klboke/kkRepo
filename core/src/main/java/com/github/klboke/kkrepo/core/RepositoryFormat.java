@@ -10,6 +10,7 @@ public enum RepositoryFormat {
   PYPI,
   CARGO,
   PUB,
+  COMPOSER,
   GO,
   HELM,
   DOCKER,

@@ -187,6 +187,7 @@ class NexusRestClientTest {
     assertTrue(script.contains("inspectConnection(connection, 'DataStoreManager')"));
     assertTrue(script.contains("out.metadataEngine = 'DATASTORE_H2'"));
     assertTrue(script.contains("out.metadataEngine = 'DATASTORE_POSTGRESQL'"));
+    assertTrue(script.contains("composer: 'COMPOSER'"));
     assertFalse(script.contains("javax.sql.DataSource.class"));
     assertFalse(script.contains("catch (Throwable"));
     assertFalse(script.contains(" as Set"));
@@ -204,6 +205,7 @@ class NexusRestClientTest {
     assertTrue(script.contains("loadClass('org.sonatype.nexus.orient.DatabaseInstanceNames')"));
     assertTrue(script.contains("metadataEngine.startsWith('DATASTORE')"));
     assertTrue(script.contains("repositoryFormat"));
+    assertTrue(script.contains("composer: 'COMPOSER'"));
     assertTrue(script.contains("_CONTENT_REPOSITORY"));
     assertTrue(script.contains("_ASSET_BLOB"));
     assertTrue(script.contains("def sourcePathCursor = { value ->"));

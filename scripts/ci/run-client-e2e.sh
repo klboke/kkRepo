@@ -224,6 +224,42 @@ create_api_key() {
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])'
 }
 
+set_anonymous_access() {
+  local enabled="$1"
+  curl -m 20 -fsS \
+    -u "$KKREPO_AUTH" \
+    -X PUT \
+    -H "Content-Type: application/json" \
+    --data "{\"enabled\":$enabled}" \
+    "$KKREPO_URL/internal/security/anonymous" >/dev/null
+}
+
+repository_proxy_remote() {
+  local repository="$1"
+  curl -m 20 -fsS \
+    -u "$KKREPO_AUTH" \
+    "$KKREPO_URL/internal/repositories/$repository" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["proxy"]["remoteUrl"])'
+}
+
+set_repository_proxy_remote() {
+  local repository="$1"
+  local remote_url="$2"
+  local payload
+  payload="$(python3 - "$remote_url" <<'PY'
+import json
+import sys
+print(json.dumps({"proxy": {"remoteUrl": sys.argv[1]}}, separators=(",", ":")))
+PY
+)"
+  curl -m 20 -fsS \
+    -u "$KKREPO_AUTH" \
+    -X PUT \
+    -H "Content-Type: application/json" \
+    --data "$payload" \
+    "$KKREPO_URL/internal/repositories/$repository" >/dev/null
+}
+
 basic_auth_url() {
   python3 - "$KKREPO_URL" "$KKREPO_USER" "$KKREPO_PASSWORD" <<'PY'
 import sys
@@ -640,6 +676,162 @@ PY
   test_flutter_pub "$package" "$group_url" "$token" "$pub_home" "$pub_cache"
 }
 
+test_composer() {
+  need composer
+  need php
+  local dir="$WORK_DIR/composer"
+  local package_dir="$dir/package"
+  local consumer_dir="$dir/consumer"
+  local composer_home="$WORK_DIR/composer-home"
+  local package="kkrepo-client-e2e/package-$STAMP"
+  local archive="$dir/package-$STAMP.zip"
+  local group_url="$KKREPO_URL/repository/composer-group"
+  local auth_host composer_auth
+  auth_host="$(python3 - "$KKREPO_URL" <<'PY'
+import sys
+from urllib.parse import urlsplit
+print(urlsplit(sys.argv[1]).netloc)
+PY
+)"
+  composer_auth="$(python3 - "$auth_host" "$KKREPO_USER" "$KKREPO_PASSWORD" <<'PY'
+import json
+import sys
+host, user, password = sys.argv[1:]
+print(json.dumps({"http-basic": {host: {"username": user, "password": password}}}, separators=(",", ":")))
+PY
+)"
+  add_redaction_value "$composer_auth"
+  mkdir -p "$package_dir/src" "$consumer_dir" "$composer_home"
+  cat >"$package_dir/composer.json" <<EOF
+{
+  "name": "$package",
+  "version": "1.0.0",
+  "description": "kkRepo Composer client E2E package",
+  "type": "library",
+  "license": "MIT",
+  "require": {"psr/log": "^3.0"},
+  "autoload": {"psr-4": {"KkRepoClientE2E\\\\": "src/"}}
+}
+EOF
+  cat >"$package_dir/src/Message.php" <<'EOF'
+<?php
+namespace KkRepoClientE2E;
+final class Message {
+    public static function value(): string { return 'kkrepo client e2e'; }
+}
+EOF
+  python3 - "$package_dir" "$archive" <<'PY'
+import pathlib
+import sys
+import zipfile
+
+source = pathlib.Path(sys.argv[1])
+archive = pathlib.Path(sys.argv[2])
+with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as target:
+    for path in sorted(source.rglob("*")):
+        if path.is_file():
+            target.write(path, "package/" + path.relative_to(source).as_posix())
+PY
+  run_logged_in composer-validate "$package_dir" composer validate --strict --no-check-publish --no-check-version
+  run_logged composer-upload curl -m 60 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    -F "composer.asset=@$archive;type=application/zip" \
+    -F "composer.name=$package" \
+    -F "composer.version=1.0.0" \
+    "$KKREPO_URL/service/rest/v1/components?repository=composer-hosted"
+
+  cat >"$consumer_dir/composer.json" <<EOF
+{
+  "name": "kkrepo-client-e2e/consumer-$STAMP",
+  "repositories": [
+    {"type": "composer", "url": "$group_url", "canonical": true},
+    {"packagist.org": false}
+  ],
+  "require": {
+    "$package": "1.0.0"
+  },
+  "config": {
+    "secure-http": false,
+    "allow-plugins": {}
+  }
+}
+EOF
+  run_logged_in composer-install "$consumer_dir" env \
+    COMPOSER_HOME="$composer_home" \
+    COMPOSER_AUTH="$composer_auth" \
+    composer install --prefer-dist --no-interaction --no-plugins --no-scripts
+  run_logged_in composer-show "$consumer_dir" env \
+    COMPOSER_HOME="$composer_home" \
+    COMPOSER_AUTH="$composer_auth" \
+    composer show "$package" --locked --no-interaction
+  run_logged_in composer-show-transitive "$consumer_dir" env \
+    COMPOSER_HOME="$composer_home" \
+    COMPOSER_AUTH="$composer_auth" \
+    composer show psr/log --locked --no-interaction
+  run_logged_in composer-runtime "$consumer_dir" php -r \
+    'require "vendor/autoload.php"; if (KkRepoClientE2E\Message::value() !== "kkrepo client e2e" || Psr\Log\LogLevel::INFO !== "info") { exit(1); }'
+
+  local auth_consumer_dir="$dir/auth-consumer"
+  local auth_composer_home="$WORK_DIR/composer-auth-home"
+  local wrong_composer_auth auth_status
+  wrong_composer_auth="$(python3 - "$auth_host" "$KKREPO_USER" <<'PY'
+import json
+import sys
+host, user = sys.argv[1:]
+print(json.dumps({"http-basic": {host: {"username": user, "password": "definitely-wrong"}}}, separators=(",", ":")))
+PY
+)"
+  mkdir -p "$auth_consumer_dir" "$auth_composer_home"
+  cp "$consumer_dir/composer.json" "$auth_consumer_dir/composer.json"
+  set_anonymous_access false
+  if run_logged_in composer-auth-rejected "$auth_consumer_dir" env \
+      COMPOSER_HOME="$auth_composer_home" \
+      COMPOSER_AUTH="$wrong_composer_auth" \
+      composer --no-cache install --prefer-dist --no-interaction --no-plugins --no-scripts; then
+    auth_status=0
+  else
+    auth_status=$?
+  fi
+  set_anonymous_access true
+  if [[ "$auth_status" -eq 0 ]]; then
+    log "Composer install unexpectedly succeeded with invalid credentials"
+    exit 1
+  fi
+  if ! grep -Eqi '401|authentication required|invalid credentials' "$ARTIFACT_DIR/composer-auth-rejected.log"; then
+    log "Composer invalid-credentials failure did not report authentication rejection"
+    exit 1
+  fi
+
+  cp "$consumer_dir/composer.lock" "$ARTIFACT_DIR/composer.lock"
+  run_logged_in composer-clear-cache "$consumer_dir" env \
+    COMPOSER_HOME="$composer_home" \
+    COMPOSER_AUTH="$composer_auth" \
+    composer clear-cache --no-interaction
+  rm -rf "$consumer_dir/vendor" "$composer_home/cache"
+  local composer_proxy_remote replay_status
+  composer_proxy_remote="$(repository_proxy_remote composer-proxy)"
+  set_repository_proxy_remote composer-proxy "https://example.com/kkrepo-composer-client-e2e-offline/"
+  if run_logged_in composer-lock-replay-offline "$consumer_dir" env \
+      COMPOSER_HOME="$composer_home" \
+      COMPOSER_AUTH="$composer_auth" \
+      composer install --prefer-dist --no-interaction --no-plugins --no-scripts; then
+    replay_status=0
+  else
+    replay_status=$?
+  fi
+  set_repository_proxy_remote composer-proxy "$composer_proxy_remote"
+  if [[ "$replay_status" -ne 0 ]]; then
+    log "Composer lock replay failed after client cache clear with proxy upstream unavailable"
+    exit "$replay_status"
+  fi
+  test -f "$consumer_dir/vendor/kkrepo-client-e2e/package-$STAMP/src/Message.php"
+  test -f "$consumer_dir/vendor/psr/log/src/LogLevel.php"
+  run_logged_output composer-packages "$ARTIFACT_DIR/composer-packages.json" \
+    curl -m 10 -fsS -u "$KKREPO_AUTH" "$group_url/packages.json"
+  run_logged_output composer-hosted-metadata "$ARTIFACT_DIR/composer-hosted-metadata.json" \
+    curl -m 10 -fsS -u "$KKREPO_AUTH" "$group_url/p2/$package.json"
+  grep -q '"version":"1.0.0"' "$ARTIFACT_DIR/composer-hosted-metadata.json"
+}
+
 test_flutter_pub() {
   local package="$1"
   local group_url="$2"
@@ -809,7 +1001,7 @@ run_selected_tests() {
   local test
 
   if [[ -z "$selection" || "$selection" == "all" ]]; then
-    tests=(maven npm pypi go helm cargo pub nuget rubygems yum docker-oci)
+    tests=(maven npm pypi go helm cargo pub composer nuget rubygems yum docker-oci)
   else
     IFS=',' read -r -a tests <<<"$selection"
   fi
@@ -837,6 +1029,9 @@ run_selected_tests() {
         ;;
       pub|dart-pub|flutter-pub)
         test_pub
+        ;;
+      composer|php)
+        test_composer
         ;;
       nuget)
         test_nuget

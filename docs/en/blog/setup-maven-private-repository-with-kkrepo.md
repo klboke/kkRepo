@@ -4,7 +4,7 @@
 
 In team development, a Maven private repository is almost a standard piece of Java infrastructure. It can cache dependencies from central repositories, host internal company components, provide a unified CI/CD publishing endpoint, and reduce the impact of public network instability on builds.
 
-kkRepo is a self-hosted artifact repository that follows Nexus-style client access patterns. It supports Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Docker/OCI, and other artifact formats. For Maven usage, it keeps the familiar `/repository/<repo>/...` URL layout, which lowers the client-side configuration cost when migrating from or replacing Nexus.
+kkRepo is a self-hosted artifact repository that follows Nexus-style client access patterns. It supports Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Docker/OCI, and other artifact formats. For Maven usage, it keeps the familiar `/repository/<repo>/...` URL layout, which lowers the client-side configuration cost when migrating from or replacing Nexus.
 
 - https://github.com/klboke/kkrepo
 - https://gitee.com/kailing/kkRepo

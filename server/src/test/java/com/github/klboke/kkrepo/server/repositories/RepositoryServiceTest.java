@@ -421,6 +421,28 @@ class RepositoryServiceTest {
   }
 
   @Test
+  void createComposerProxyDefaultsToPackagistWhenProxySettingsAreMissing() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "composer-proxy",
+        "composer-proxy",
+        true,
+        "default",
+        true,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null));
+
+    assertEquals("https://repo.packagist.org/", created.proxy().remoteUrl());
+    assertEquals("https://repo.packagist.org/", repositories.repository.proxyRemoteUrl());
+  }
+
+  @Test
   void replaceMembersAllowsNestedPubGroupMembers() {
     StubRepositoryDao repositories = new StubRepositoryDao(
         pubGroupRepository(10L, "pub-root"),
@@ -432,6 +454,21 @@ class RepositoryServiceTest {
 
     assertEquals(List.of("pub-hosted", "pub-nested"), updated.group().memberNames());
     assertEquals(List.of(11L, 12L), repositories.membersByGroupId.get(10L));
+  }
+
+  @Test
+  void replaceMembersAllowsNestedComposerGroupMembers() {
+    StubRepositoryDao repositories = new StubRepositoryDao(
+        composerGroupRepository(30L, "composer-root"),
+        composerHostedRepository(31L, "composer-hosted"),
+        composerGroupRepository(32L, "composer-nested"));
+    RepositoryService service = service(repositories);
+
+    RepositoryView updated = service.replaceMembers(
+        "composer-root", List.of("composer-hosted", "composer-nested"));
+
+    assertEquals(List.of("composer-hosted", "composer-nested"), updated.group().memberNames());
+    assertEquals(List.of(31L, 32L), repositories.membersByGroupId.get(30L));
   }
 
   @Test
@@ -578,6 +615,47 @@ class RepositoryServiceTest {
         RepositoryFormat.PUB,
         RepositoryType.GROUP,
         "pub-group",
+        true,
+        1L,
+        null,
+        null,
+        null,
+        null,
+        null,
+        true,
+        attributes);
+  }
+
+  private static RepositoryRecord composerHostedRepository(long id, String name) {
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", "composer-hosted");
+    return new RepositoryRecord(
+        id,
+        name,
+        RepositoryFormat.COMPOSER,
+        RepositoryType.HOSTED,
+        "composer-hosted",
+        true,
+        1L,
+        null,
+        null,
+        null,
+        null,
+        "ALLOW",
+        true,
+        attributes);
+  }
+
+  private static RepositoryRecord composerGroupRepository(long id, String name) {
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", "composer-group");
+    attributes.put("group", Map.of());
+    return new RepositoryRecord(
+        id,
+        name,
+        RepositoryFormat.COMPOSER,
+        RepositoryType.GROUP,
+        "composer-group",
         true,
         1L,
         null,

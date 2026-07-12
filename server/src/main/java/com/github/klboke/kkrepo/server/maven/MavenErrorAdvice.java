@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.maven;
 import com.github.klboke.kkrepo.server.RepositoryContentController;
 import com.github.klboke.kkrepo.server.cargo.CargoExceptions;
 import com.github.klboke.kkrepo.server.cargo.CargoResponses;
+import com.github.klboke.kkrepo.server.composer.ComposerExceptions;
 import com.github.klboke.kkrepo.server.npm.NpmExceptions;
 import com.github.klboke.kkrepo.server.pub.PubExceptions;
 import com.github.klboke.kkrepo.server.pub.PubResponses;
@@ -45,6 +46,11 @@ public class MavenErrorAdvice {
   @ExceptionHandler(MavenExceptions.BadUpstreamException.class)
   public ResponseEntity<Map<String, Object>> upstream(MavenExceptions.BadUpstreamException e) {
     return body(HttpStatus.BAD_GATEWAY, e.getMessage());
+  }
+
+  @ExceptionHandler(ComposerExceptions.BadRequestException.class)
+  public ResponseEntity<Map<String, Object>> composerBadRequest(ComposerExceptions.BadRequestException e) {
+    return body(HttpStatus.BAD_REQUEST, e.getMessage());
   }
 
   @ExceptionHandler(NpmExceptions.NpmNotFoundException.class)

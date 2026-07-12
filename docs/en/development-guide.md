@@ -161,7 +161,7 @@ For protocol paths that real package managers exercise directly, run the real cl
 scripts/ci/run-live-compat.sh client-e2e
 ```
 
-This suite publishes/uploads and then downloads/resolves through Maven, npm, PyPI, Helm, Cargo/Rust, Dart/Pub, NuGet, RubyGems, Yum, and Docker/OCI clients. Go is resolve-only through the Go module proxy. Client diagnostics are written under `artifacts/client-e2e/`.
+This suite publishes/uploads and then downloads/resolves through Maven, npm, PyPI, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, NuGet, RubyGems, Yum, and Docker/OCI clients. Composer additionally covers a hosted-to-proxy transitive dependency, rejected Basic credentials, and lock replay after clearing the client cache and detaching the upstream; Go is resolve-only through the Go module proxy. Client diagnostics are written under `artifacts/client-e2e/`.
 
 ## Development Design Documents
 
@@ -170,6 +170,7 @@ Detailed design and implementation plans for repository formats and migration wo
 - [Docker Repository Implementation Notes](dev/docker-repository-implementation-plan.md)
 - [Cargo / Rust Repository Design Notes](dev/cargo-rust-repository-design.md)
 - [Dart / Pub Repository Design Notes](../zh/dev/dart-pub-repository-design.md) (Chinese)
+- [Composer / PHP Repository Design Notes](../zh/dev/composer-php-repository-design.md) (Chinese)
 - [Nexus Compatibility Migration Refactor Plan](dev/nexus-migration-compatibility-refactor-plan.md)
 
 ## Configuration Center

@@ -223,6 +223,7 @@ KKREPO_CATALOG_CACHE_BROADCAST_BACKEND=mysql
 - 在 staging 环境使用接近生产的数据形态测试新版本。
 - 确认 Flyway migration 符合预期。
 - 执行代表性的客户端 pull 和 push。
+- 对 Composer / PHP 执行 hosted archive 上传和 group `composer install --prefer-dist`，同时验证 `packages.json`、p2 metadata、dist 下载、HTTP Basic 和 lock replay。
 
 推荐发布流程：
 

@@ -54,6 +54,7 @@ public class ComponentSearchController {
     RepositoryFormat repositoryFormat = parseFormat(format);
     Map<RepositoryBrowseKey, Boolean> browseDecisions = new HashMap<>();
     List<ComponentSearchItem> items = componentDao.search(keyword, repositoryFormat, effectiveLimit).stream()
+        .filter(row -> !BrowseAssetVisibility.hidden(row.format(), row.name()))
         .filter(row -> repositoryBrowseAllowed(subject, row, browseDecisions))
         .map(ComponentSearchController::toItem)
         .toList();
@@ -68,7 +69,15 @@ public class ComponentSearchController {
         row.name(),
         row.version(),
         row.kind(),
-        row.lastUpdatedAt());
+        row.lastUpdatedAt(),
+        browsePath(row));
+  }
+
+  private static String browsePath(ComponentSearchRow row) {
+    if (row.format() != RepositoryFormat.COMPOSER || row.storagePath() == null || row.storagePath().isBlank()) {
+      return null;
+    }
+    return row.storagePath();
   }
 
   private static RepositoryFormat parseFormat(String value) {
@@ -86,6 +95,7 @@ public class ComponentSearchController {
       case "helm" -> RepositoryFormat.HELM;
       case "go" -> RepositoryFormat.GO;
       case "pub" -> RepositoryFormat.PUB;
+      case "composer" -> RepositoryFormat.COMPOSER;
       case "raw" -> RepositoryFormat.RAW;
       default -> null;
     };
@@ -145,6 +155,7 @@ public class ComponentSearchController {
       String name,
       String version,
       String kind,
-      Instant lastUpdatedAt) {
+      Instant lastUpdatedAt,
+      String browsePath) {
   }
 }

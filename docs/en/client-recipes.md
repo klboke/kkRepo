@@ -278,6 +278,44 @@ dart pub publish
 
 For package discovery through kkrepo search, use the Pub format filter in the Browse UI or the component search API with `format=pub`.
 
+## Composer / PHP
+
+Use a group or proxy repository for dependency resolution. Composer has no standard package publish command; upload private packages to a hosted repository through the administration UI or the Nexus-compatible Components API.
+
+Project `composer.json`:
+
+```json
+{
+  "repositories": [
+    {"type": "composer", "url": "https://nexus.example.com/repository/composer-group", "canonical": true},
+    {"packagist.org": false}
+  ],
+  "require": {
+    "acme/demo": "^1.0"
+  }
+}
+```
+
+Configure HTTP Basic through `COMPOSER_AUTH` or Composer `auth.json`; do not commit passwords to the project:
+
+```bash
+export COMPOSER_AUTH='{"http-basic":{"nexus.example.com":{"username":"alice","password":"'"$KKREPO_PASSWORD"'"}}}'
+composer install --prefer-dist --no-interaction
+composer show acme/demo --locked
+```
+
+Upload a zip/tar archive that contains `composer.json`:
+
+```bash
+curl -u alice:"$KKREPO_PASSWORD" \
+  -F "composer.asset=@acme-demo-1.0.0.zip;type=application/zip" \
+  -F "composer.name=acme/demo" \
+  -F "composer.version=1.0.0" \
+  "https://nexus.example.com/service/rest/v1/components?repository=composer-hosted"
+```
+
+Composer 2 uses `packages.json` and `p2/<vendor>/<package>.json`. Hosted, proxy, and group repositories keep the `/repository/<repo>/...` URL shape, and Browse Usage provides a copyable project snippet.
+
 ## NuGet
 
 Add a source:

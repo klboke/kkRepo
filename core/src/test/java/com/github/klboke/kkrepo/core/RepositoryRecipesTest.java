@@ -28,6 +28,9 @@ class RepositoryRecipesTest {
     assertRecipe(recipes, "pub-hosted", RepositoryFormat.PUB, RepositoryType.HOSTED);
     assertRecipe(recipes, "pub-proxy", RepositoryFormat.PUB, RepositoryType.PROXY);
     assertRecipe(recipes, "pub-group", RepositoryFormat.PUB, RepositoryType.GROUP);
+    assertRecipe(recipes, "composer-hosted", RepositoryFormat.COMPOSER, RepositoryType.HOSTED);
+    assertRecipe(recipes, "composer-proxy", RepositoryFormat.COMPOSER, RepositoryType.PROXY);
+    assertRecipe(recipes, "composer-group", RepositoryFormat.COMPOSER, RepositoryType.GROUP);
   }
 
   private static void assertRecipe(

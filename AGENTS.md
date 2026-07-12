@@ -6,7 +6,7 @@
 
 构建一个兼容 Nexus 的自托管制品仓库，包含：
 
-- Maven、npm、PyPI、Go、Helm、NuGet、RubyGems 和 Yum hosted 制品支持。
+- Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 制品支持；具体 hosted/proxy/group 边界以兼容性矩阵为准。
 - 面向用户、用户组、角色、仓库权限和 CI token 的完整权限管理。
 - 兼容 Nexus 的客户端协议行为和 `/repository/<repo>/...` URL 布局。
 - 使用 MySQL 存储元数据、用户数据、权限数据、token 数据、审计数据和迁移状态。
@@ -48,6 +48,10 @@
 - `protocol-pypi`：PyPI 仓库行为。
 - `protocol-go`：兼容 Go module proxy 的行为。
 - `protocol-helm`：Helm chart 仓库行为。
+- `protocol-cargo`：Cargo sparse registry、publish、index 和 crate 行为。
+- `protocol-pub`：Dart / Flutter Pub hosted repository 行为。
+- `protocol-composer`：Composer 2 repository metadata、dist、hosted、proxy 和 group 行为。
+- `protocol-docker`：Docker Registry HTTP API V2 和 OCI 行为。
 - `protocol-nuget`：NuGet 仓库行为。
 - `protocol-rubygems`：RubyGems 仓库行为。
 - `protocol-yum`：Yum 仓库行为。

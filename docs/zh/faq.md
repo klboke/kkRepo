@@ -2,7 +2,7 @@
 
 ## kkrepo 是什么？
 
-kkrepo 是一个兼容 Nexus 的自托管制品仓库，面向 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等常见包格式。
+kkrepo 是一个兼容 Nexus 的自托管制品仓库，面向 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等常见包格式。
 
 它保持 Nexus 风格客户端 URL、协议行为、权限和迁移目标，同时使用 MySQL 存储元数据，用 OSS/S3 兼容存储保存 blob。
 
@@ -29,6 +29,7 @@ kkrepo 面向需要 Nexus 兼容客户端路径、常见仓库格式、MySQL 元
 - Helm
 - Cargo / Rust
 - Dart / Pub
+- Composer / PHP
 - Docker / OCI
 - NuGet
 - RubyGems
@@ -43,7 +44,7 @@ kkrepo 面向需要 Nexus 兼容客户端路径、常见仓库格式、MySQL 元
 /repository/<repo>/<artifact-path>
 ```
 
-这有助于在对应格式已被迁移流程覆盖时保留 Maven、npm、pip、Helm、Cargo、Dart/Flutter Pub、NuGet、RubyGems、Yum、Raw 和 CI 客户端配置。
+这有助于在对应格式已被迁移流程覆盖时保留 Maven、npm、pip、Helm、Cargo、Dart/Flutter Pub、Composer、NuGet、RubyGems、Yum、Raw 和 CI 客户端配置。
 
 Docker / OCI 使用 Registry HTTP API V2 的 `/v2/...` 路由，不走 `/repository/<repo>/...`：共享入口部署使用 `<host>/<repo>/<image>:<tag>`，配置仓库级 connector port 后可使用 `<host>:<repo-port>/<image>:<tag>`。
 
@@ -138,6 +139,12 @@ Cargo hosted、proxy、group 仓库已支持 Cargo sparse registry 协议。kkre
 Dart / Pub hosted、proxy、group 仓库已支持 Hosted Pub Repository V2 协议。kkrepo 支持 `dart pub publish`、`dart pub get`、`flutter pub get`、`PubToken` bearer 认证、package/version metadata、archive 下载、Pub 搜索，以及 hosted `.tar.gz` 的 UI/API 上传。
 
 对于 preflight 已确认 Pub content model 的 Nexus 3.92.0 源端，Nexus Pub hosted 仓库迁移已支持。显式选择 Pub proxy cache 且 migration plan 为 `FULL` 时也支持 proxy 缓存迁移；否则 proxy 仓库在切换后从上游自然回填。
+
+## Composer / PHP 支持了吗？
+
+Composer hosted、proxy、group 仓库已支持 Composer 2 repository metadata。kkrepo 支持 `packages.json`、stable/dev p2 metadata、Nexus 风格 `vendor/package/version/*.zip` dist path、HTTP Basic、group canonical first-match、Components API/UI archive 上传、Browse/Search、HTML View 和 Usage。
+
+Composer 本身没有标准 publish 命令，因此 hosted 包通过 Components API 或 UI 上传包含 `composer.json` 的 zip/tar archive。Nexus 原生 Composer 只有 proxy；迁移配置时保持 proxy 语义，cache 只有在管理员显式选择源仓库且 preflight 证明 Composer content model 后才迁移。
 
 ## kkrepo 可以用于生产吗？
 

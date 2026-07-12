@@ -223,6 +223,7 @@ Before upgrading:
 - Test the new version in a staging environment using production-like data shape.
 - Verify Flyway migrations.
 - Run representative client pulls and pushes.
+- For Composer / PHP, upload a hosted archive and run group `composer install --prefer-dist`, then verify `packages.json`, p2 metadata, dist downloads, HTTP Basic, and lock replay.
 
 Recommended rollout:
 

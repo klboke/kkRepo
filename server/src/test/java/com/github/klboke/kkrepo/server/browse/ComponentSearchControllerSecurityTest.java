@@ -79,6 +79,33 @@ class ComponentSearchControllerSecurityTest {
   }
 
   @Test
+  void searchHidesComposerInternalRouteComponents() {
+    StubComponentDao components = new StubComponentDao();
+    components.rows = List.of(
+        row(1L, "composer-proxy", RepositoryFormat.COMPOSER, "/_composer/routes",
+            "_composer/routes/route-token.json", null),
+        row(2L, "composer-proxy", RepositoryFormat.COMPOSER, "/p2/psr", "p2/psr/log.json", null),
+        row(3L, "composer-hosted", RepositoryFormat.COMPOSER, "psr", "psr/log", "3.0.2",
+            "composer-package", "psr/log/3.0.2/psr-log-3.0.2.zip"));
+    RecordingSecurityService security = new RecordingSecurityService(permission -> AccessDecision.allow());
+    ComponentSearchController controller = controller(components, subject("alice"), null, security);
+
+    ComponentSearchController.ComponentSearchResponse response = controller.search(
+        null,
+        "composer",
+        null,
+        request("GET", "/internal/search/components"));
+
+    assertEquals(2, response.count());
+    assertEquals(List.of("p2/psr/log.json", "psr/log"), response.items().stream()
+        .map(ComponentSearchController.ComponentSearchItem::name)
+        .toList());
+    assertEquals(List.of("p2/psr/log.json", "psr/log/3.0.2/psr-log-3.0.2.zip"), response.items().stream()
+        .map(ComponentSearchController.ComponentSearchItem::browsePath)
+        .toList());
+  }
+
+  @Test
   void searchCanUseAnonymousSubjectWhenAnonymousAccessIsConfigured() {
     StubComponentDao components = new StubComponentDao();
     components.rows = List.of(row(1L, "pypi-group", RepositoryFormat.PYPI, null, "sample", "1.0.0"));
@@ -148,6 +175,30 @@ class ComponentSearchControllerSecurityTest {
       String namespace,
       String name,
       String version) {
+    return row(id, repositoryName, format, namespace, name, version,
+        format == RepositoryFormat.COMPOSER ? name : null);
+  }
+
+  private static ComponentDao.ComponentSearchRow row(
+      long id,
+      String repositoryName,
+      RepositoryFormat format,
+      String namespace,
+      String name,
+      String version,
+      String browsePath) {
+    return row(id, repositoryName, format, namespace, name, version, "component", browsePath);
+  }
+
+  private static ComponentDao.ComponentSearchRow row(
+      long id,
+      String repositoryName,
+      RepositoryFormat format,
+      String namespace,
+      String name,
+      String version,
+      String kind,
+      String browsePath) {
     return new ComponentDao.ComponentSearchRow(
         id,
         id,
@@ -156,8 +207,9 @@ class ComponentSearchControllerSecurityTest {
         namespace,
         name,
         version,
-        "component",
-        Instant.parse("2026-01-01T00:00:00Z"));
+        kind,
+        Instant.parse("2026-01-01T00:00:00Z"),
+        browsePath);
   }
 
   private static AuthenticatedSubject subject(String userId) {

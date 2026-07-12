@@ -32,9 +32,36 @@ class MavenHtmlListingServiceTest {
     assertFalse(html.contains("<script>alert(\"x\")</script>"));
   }
 
+  @Test
+  void composerBrowseHtmlHidesInternalCachePaths() {
+    MavenHtmlListingService service = new MavenHtmlListingService(
+        new FakeRepositoryDao(RepositoryFormat.COMPOSER, RepositoryType.PROXY, "composer-proxy"),
+        new ComposerBrowseNodeDao(),
+        new AssetDao(null, null),
+        new ComponentDao(null, null));
+
+    String html = service.renderBrowse("composer-proxy", "").orElseThrow();
+
+    assertFalse(html.contains("_composer"));
+    assertTrue(html.contains("symfony/"));
+    assertTrue(html.contains("/repository/composer-proxy/packages.json"));
+    assertTrue(service.renderBrowse("composer-proxy", "_composer").isEmpty());
+  }
+
   private static class FakeRepositoryDao extends RepositoryDao {
+    private final RepositoryFormat format;
+    private final RepositoryType type;
+    private final String recipe;
+
     FakeRepositoryDao() {
+      this(RepositoryFormat.MAVEN2, RepositoryType.HOSTED, "maven2-hosted");
+    }
+
+    FakeRepositoryDao(RepositoryFormat format, RepositoryType type, String recipe) {
       super(null, null);
+      this.format = format;
+      this.type = type;
+      this.recipe = recipe;
     }
 
     @Override
@@ -42,9 +69,9 @@ class MavenHtmlListingServiceTest {
       return Optional.of(new RepositoryRecord(
           10L,
           name,
-          RepositoryFormat.MAVEN2,
-          RepositoryType.HOSTED,
-          "maven2-hosted",
+          format,
+          type,
+          recipe,
           true,
           1L,
           null,
@@ -54,6 +81,37 @@ class MavenHtmlListingServiceTest {
           "ALLOW",
           true,
           Map.of()));
+    }
+  }
+
+  private static class ComposerBrowseNodeDao extends BrowseNodeDao {
+    ComposerBrowseNodeDao() {
+      super(null);
+    }
+
+    @Override
+    public List<BrowseChild> listChildren(long repositoryId, String parentPath) {
+      return List.of(
+          directory(1L, "_composer"),
+          directory(2L, "symfony"),
+          new BrowseChild(
+              3L,
+              "packages.json",
+              "packages.json",
+              0,
+              12L,
+              null,
+              888L,
+              "application/json",
+              "sha1",
+              null,
+              false,
+              true));
+    }
+
+    private static BrowseChild directory(long id, String path) {
+      return new BrowseChild(
+          id, path, path, 0, null, null, null, null, null, null, true, true);
     }
   }
 
