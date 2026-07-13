@@ -54,7 +54,7 @@ curl -i http://127.0.0.1:19091/actuator/health
 
 Common causes:
 
-- MySQL is not healthy or credentials are wrong.
+- The selected MySQL/PostgreSQL service is not healthy or credentials are wrong.
 - Flyway migration failed.
 - The application cannot write to the configured file blob directory.
 - Encryption secrets are missing or too short for a production-like configuration.
@@ -117,14 +117,20 @@ For production:
 - Keep bucket lifecycle, versioning, backup, and retention policies aligned with your recovery requirements.
 - Do not change encryption secrets casually after credentials or API key payloads have been written.
 
-## MySQL Problems
+## Database Problems
 
-The service requires MySQL. Core metadata, identities, permissions, sessions, audit logs, migration state, and cross-replica coordination state live in MySQL.
+The service requires MySQL or PostgreSQL. Core metadata, identities, permissions, sessions, audit logs, migration state, and cross-replica coordination state live in the selected shared database.
 
 Check connectivity:
 
 ```bash
 mysql -h127.0.0.1 -P13306 -ukkrepo -pkkrepo kkrepo
+```
+
+For PostgreSQL:
+
+```bash
+psql 'postgresql://kkrepo@127.0.0.1:15432/kkrepo'
 ```
 
 For source local startup, override the datasource:
@@ -133,14 +139,18 @@ For source local startup, override the datasource:
 export SPRING_DATASOURCE_URL='jdbc:mysql://127.0.0.1:3306/kkrepo?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai'
 export SPRING_DATASOURCE_USERNAME=kkrepo
 export SPRING_DATASOURCE_PASSWORD=kkrepo
+export KKREPO_DATABASE_TYPE=mysql
 ```
 
 Common causes:
 
-- MySQL port differs from the local default.
+- Database port differs from the local default.
 - User lacks privileges on the `kkrepo` database.
-- The database character set is not `utf8mb4`.
-- MySQL timezone or SSL parameters need adjustment for your environment.
+- MySQL is not `utf8mb4`, or PostgreSQL is not UTF-8.
+- Timezone or SSL parameters need adjustment for your environment.
+- `KKREPO_DATABASE_TYPE` does not match the JDBC URL or database metadata.
+
+Startup validates the declared backend before Flyway changes the schema. See [Database Backends](database-backends.md) for type mismatch, migration, JSON, and timezone diagnosis.
 
 ## Client Receives 401 Or 403
 

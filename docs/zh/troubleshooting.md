@@ -54,7 +54,7 @@ curl -i http://127.0.0.1:19091/actuator/health
 
 常见原因：
 
-- MySQL 未健康，或账号密码不正确。
+- 所选 MySQL/PostgreSQL 服务未健康，或账号密码不正确。
 - Flyway migration 执行失败。
 - 应用无法写入配置的 File blob 目录。
 - 生产类配置中缺少加密密钥，或密钥过短。
@@ -117,14 +117,20 @@ java -jar server/target/kkrepo-server-*.jar
 - 按恢复要求配置 bucket lifecycle、versioning、备份和保留策略。
 - 写入凭据或 API key payload 后，不要随意更改加密密钥。
 
-## MySQL 问题
+## 数据库问题
 
-服务运行时必须依赖 MySQL。核心元数据、身份、权限、session、审计日志、迁移状态和跨副本协调状态都在 MySQL 中。
+服务运行时必须依赖 MySQL 或 PostgreSQL。核心元数据、身份、权限、session、审计日志、迁移状态和跨副本协调状态都在所选共享数据库中。
 
 检查连通性：
 
 ```bash
 mysql -h127.0.0.1 -P13306 -ukkrepo -pkkrepo kkrepo
+```
+
+PostgreSQL 可使用：
+
+```bash
+psql 'postgresql://kkrepo@127.0.0.1:15432/kkrepo'
 ```
 
 源码本地启动时，可以覆盖 datasource：
@@ -133,14 +139,18 @@ mysql -h127.0.0.1 -P13306 -ukkrepo -pkkrepo kkrepo
 export SPRING_DATASOURCE_URL='jdbc:mysql://127.0.0.1:3306/kkrepo?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai'
 export SPRING_DATASOURCE_USERNAME=kkrepo
 export SPRING_DATASOURCE_PASSWORD=kkrepo
+export KKREPO_DATABASE_TYPE=mysql
 ```
 
 常见原因：
 
-- MySQL 端口和本地默认值不同。
+- 数据库端口和本地默认值不同。
 - 用户没有 `kkrepo` 数据库权限。
-- 数据库字符集不是 `utf8mb4`。
-- 当前环境需要调整 MySQL timezone 或 SSL 参数。
+- MySQL 不是 `utf8mb4`，或 PostgreSQL 不是 UTF-8。
+- 当前环境需要调整 timezone 或 SSL 参数。
+- `KKREPO_DATABASE_TYPE` 与 JDBC URL 或数据库 metadata 不一致。
+
+启动流程会在 Flyway 修改 schema 前校验声明后端。类型不匹配、migration、JSON 和时区问题见[数据库后端](database-backends.md)。
 
 ## 客户端收到 401 或 403
 

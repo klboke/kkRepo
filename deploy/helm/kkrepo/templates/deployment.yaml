@@ -1,0 +1,135 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kkrepo.fullname" . }}
+  labels:
+    {{- include "kkrepo.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "kkrepo.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kkrepo.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "kkrepo.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: kkrepo
+          image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 8081
+          env:
+            - name: KKREPO_DATABASE_TYPE
+              value: {{ .Values.database.type | quote }}
+            - name: SPRING_DATASOURCE_URL
+              value: {{ required "database.url is required" .Values.database.url | quote }}
+            - name: SPRING_DATASOURCE_USERNAME
+              value: {{ required "database.username is required" .Values.database.username | quote }}
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "database.existingSecret is required" .Values.database.existingSecret }}
+                  key: {{ .Values.database.passwordKey }}
+            - name: KKREPO_CREDENTIAL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "encryption.existingSecret is required" .Values.encryption.existingSecret }}
+                  key: {{ .Values.encryption.credentialSecretKey }}
+            - name: KKREPO_API_KEY_PAYLOAD_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.encryption.existingSecret }}
+                  key: {{ .Values.encryption.apiKeyPayloadSecretKey }}
+            - name: KKREPO_FILE_ENABLED
+              value: {{ .Values.blobStorage.file.enabled | quote }}
+            {{- if .Values.blobStorage.file.enabled }}
+            - name: KKREPO_FILE_BASE_DIR
+              value: {{ .Values.blobStorage.file.mountPath | quote }}
+            - name: KKREPO_FILE_PRODUCTION_ENABLED
+              value: "true"
+            - name: KKREPO_FILE_SHARED_FILESYSTEM
+              value: "true"
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          startupProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: management
+            {{- toYaml .Values.startupProbe | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: management
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.blobStorage.file.enabled }}
+            - name: blobs
+              mountPath: {{ .Values.blobStorage.file.mountPath }}
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.blobStorage.file.enabled }}
+        - name: blobs
+          persistentVolumeClaim:
+            claimName: {{ required "blobStorage.file.existingClaim is required when File storage is enabled" .Values.blobStorage.file.existingClaim }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

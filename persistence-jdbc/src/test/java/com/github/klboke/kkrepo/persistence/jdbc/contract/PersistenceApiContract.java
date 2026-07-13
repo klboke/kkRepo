@@ -2,33 +2,102 @@ package com.github.klboke.kkrepo.persistence.jdbc.contract;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceStores;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PubUploadSessionDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDataMigrationDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.PubUploadSessionRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryDataMigrationAssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityPrivilegeRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRoleRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerUploadSessionRecord;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Executors;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 
 /** Reusable black-box contract that every database backend must pass through the public API. */
 public abstract class PersistenceApiContract {
   protected abstract PersistenceStores stores();
+
+  protected abstract <T> T inTransaction(Supplier<T> action);
+
+  protected abstract Set<String> databaseTables();
+
+  @Test
+  void baselineContainsTheCompleteSharedLogicalSchema() {
+    assertEquals(Set.of(
+        "api_key",
+        "asset",
+        "asset_blob",
+        "auth_ticket",
+        "blob_store",
+        "browse_node",
+        "cache_version",
+        "cleanup_policy",
+        "component",
+        "component_search",
+        "content_selector",
+        "docker_auth_token",
+        "docker_manifest",
+        "docker_manifest_reference",
+        "docker_tag",
+        "docker_upload_chunk",
+        "docker_upload_session",
+        "maintenance_cursor",
+        "metadata_rebuild_marker",
+        "migration_checkpoint",
+        "migration_job",
+        "migration_validation_result",
+        "proxy_remote_state",
+        "pub_upload_session",
+        "repository",
+        "repository_cleanup_policy",
+        "repository_data_migration_asset",
+        "repository_data_migration_repository",
+        "repository_index_rebuild_marker",
+        "repository_member",
+        "routing_rule",
+        "security_anonymous_config",
+        "security_audit_log",
+        "security_privilege",
+        "security_realm",
+        "security_realm_config",
+        "security_repository_target",
+        "security_role",
+        "security_role_inheritance",
+        "security_role_privilege",
+        "security_user",
+        "security_user_role",
+        "spring_session",
+        "spring_session_attributes",
+        "ui_settings"), databaseTables());
+  }
 
   @Test
   void componentUpsertIsAtomicAndJsonValuesRoundTrip() throws Exception {
@@ -177,10 +246,365 @@ public abstract class PersistenceApiContract {
         stores().migrationJobs().findById(jobId).orElseThrow().summary().get("migrated"));
   }
 
+  @Test
+  void generatedKeysAndConcurrentBlobAndAssetNaturalKeysArePortable() throws Exception {
+    long firstStoreId = stores().blobStores().insert(blobStore("keys-one"));
+    long secondStoreId = stores().blobStores().insert(blobStore("keys-two"));
+    assertNotEquals(firstStoreId, secondStoreId);
+
+    AssetBlobRecord blob = blob(firstStoreId, "blobs/acme.jar", "blob-ref-acme");
+    List<Callable<Long>> blobWrites = new ArrayList<>();
+    for (int index = 0; index < 10; index++) {
+      blobWrites.add(() -> stores().assets().insertBlobOrFindExisting(blob).id());
+    }
+    List<Long> blobIds = invokeConcurrently(blobWrites, 5);
+    assertEquals(1, new HashSet<>(blobIds).size());
+    long blobId = blobIds.getFirst();
+    assertEquals(Map.of("origin", "contract"),
+        stores().assets().findBlobById(blobId).orElseThrow().attributes());
+
+    long repositoryId = insertRepository("asset-keys", RepositoryFormat.MAVEN2, firstStoreId);
+    String path = "com/acme/app/1.0/app-1.0.jar";
+    AssetRecord asset = new AssetRecord(
+        null, repositoryId, null, blobId, RepositoryFormat.MAVEN2, path, sha256(path),
+        "app-1.0.jar", "ARTIFACT", "application/java-archive", 42L, null,
+        Instant.parse("2026-07-13T10:00:00Z"), Map.of("classifier", ""));
+    List<Callable<Long>> assetWrites = new ArrayList<>();
+    for (int index = 0; index < 10; index++) {
+      assetWrites.add(() -> stores().assets().insertAsset(asset));
+    }
+    List<Long> assetIds = invokeConcurrently(assetWrites, 5);
+    assertEquals(1, new HashSet<>(assetIds).size());
+    assertEquals(path, stores().assets().findAssetById(assetIds.getFirst()).orElseThrow().path());
+  }
+
+  @Test
+  void pypiPrefixLookupsArePortableAcrossDatabaseCollations() {
+    long pypiRepositoryId = createRepository("pypi-prefix", RepositoryFormat.PYPI);
+    long pypiBlobStoreId = stores().repositories().findById(pypiRepositoryId)
+        .orElseThrow().blobStoreId();
+    long pypiBlobId = stores().assets().insertBlob(
+        blob(pypiBlobStoreId, "pypi/portable-pkg.whl", "pypi-portable-ref"));
+    String pypiPath = "packages/portable-pkg/1.0.0/portable_pkg-1.0.0-py3-none-any.whl";
+    stores().assets().insertAsset(new AssetRecord(
+        null, pypiRepositoryId, null, pypiBlobId, RepositoryFormat.PYPI,
+        pypiPath, sha256(pypiPath), "portable_pkg-1.0.0-py3-none-any.whl", "package",
+        "application/octet-stream", 42L, null, Instant.parse("2026-07-13T10:00:00Z"),
+        Map.of("normalizedName", "portable-pkg", "requires_python", ">=3.8")));
+
+    var pypiRows = stores().assets().listPypiProjectIndexRows(pypiRepositoryId, "portable-pkg");
+    assertEquals(1, pypiRows.size());
+    assertEquals(pypiPath, pypiRows.getFirst().path());
+    assertEquals(">=3.8", pypiRows.getFirst().attributes().get("requires_python"));
+    assertEquals(List.of(pypiPath), stores().assets()
+        .listAssetsByPrefix(pypiRepositoryId, "packages/portable-pkg/")
+        .stream().map(AssetRecord::path).toList());
+  }
+
+  @Test
+  void dockerUnreferencedBlobCleanupSqlIsPortable() {
+    long dockerRepositoryId = createRepository("docker-cleanup", RepositoryFormat.DOCKER);
+    long dockerBlobStoreId = stores().repositories().findById(dockerRepositoryId)
+        .orElseThrow().blobStoreId();
+    AssetBlobRecord dockerBlob = blob(
+        dockerBlobStoreId, "docker/blobs/sha256/layer", "docker-layer-ref");
+    long dockerBlobId = stores().assets().insertBlob(dockerBlob);
+    String digest = "sha256:" + dockerBlob.sha256();
+    String dockerPath = "v2/acme/app/blobs/" + digest;
+    long dockerAssetId = stores().assets().insertAsset(new AssetRecord(
+        null, dockerRepositoryId, null, dockerBlobId, RepositoryFormat.DOCKER,
+        dockerPath, sha256(dockerPath), digest, "BLOB", "application/octet-stream",
+        dockerBlob.size(), null, Instant.parse("2026-07-13T10:00:00Z"),
+        Map.of("docker", Map.of("digest", digest))));
+
+    assertEquals(dockerAssetId, stores().dockerRegistry()
+        .findUnreferencedBlobAssetIdForCleanup(
+            dockerRepositoryId, 0, 10, Instant.parse("2026-07-13T11:00:00Z"))
+        .orElseThrow());
+  }
+
+  @Test
+  void browseSubtreeFlagsSupportBooleanReactivationAndPruning() {
+    long repositoryId = createRepository("browse-boolean", RepositoryFormat.MAVEN2);
+    String path = "com/acme/app/1.0/app-1.0.jar";
+
+    stores().browseNodes().upsertPathAncestors(repositoryId, path, null, null);
+    var emptyRoot = stores().browseNodes().listChildren(repositoryId, "").getFirst();
+    assertEquals("com", emptyRoot.path());
+    assertFalse(emptyRoot.hasAssetSubtree());
+
+    long blobStoreId = stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
+    long blobId = stores().assets().insertBlob(
+        blob(blobStoreId, "browse/app-1.0.jar", "browse-app-ref"));
+    long assetId = stores().assets().insertAsset(new AssetRecord(
+        null, repositoryId, null, blobId, RepositoryFormat.MAVEN2,
+        path, sha256(path), "app-1.0.jar", "ARTIFACT", "application/java-archive",
+        42L, null, Instant.parse("2026-07-13T10:00:00Z"), Map.of()));
+
+    stores().browseNodes().upsertPathAncestors(repositoryId, path, assetId, null);
+    assertTrue(stores().browseNodes().listChildren(repositoryId, "").getFirst().hasAssetSubtree());
+
+    assertEquals(1, stores().browseNodes().deleteByAssetId(assetId));
+    assertTrue(stores().browseNodes().listChildren(repositoryId, "").isEmpty());
+  }
+
+  @Test
+  void groupMemberOrderAndReplacementAreStable() {
+    long first = createRepository("member-first", RepositoryFormat.MAVEN2);
+    long second = createRepository("member-second", RepositoryFormat.MAVEN2);
+    long third = createRepository("member-third", RepositoryFormat.MAVEN2);
+    long group = stores().repositories().insert(new RepositoryRecord(
+        null, "maven-public", RepositoryFormat.MAVEN2, RepositoryType.GROUP,
+        "maven2-group", true, null, null, null, null, null, null, true, Map.of()));
+
+    stores().repositories().addMember(group, first, 20);
+    stores().repositories().addMember(group, second, 10);
+    assertEquals(List.of("member-second", "member-first"),
+        stores().repositories().listMembers(group).stream().map(RepositoryRecord::name).toList());
+
+    stores().repositories().replaceMembers(group, List.of(third, first, second));
+    assertEquals(List.of("member-third", "member-first", "member-second"),
+        stores().repositories().listMembers(group).stream().map(RepositoryRecord::name).toList());
+    assertEquals(List.of("maven-public"),
+        stores().repositories().listGroupsContaining(first).stream().map(RepositoryRecord::name).toList());
+  }
+
+  @Test
+  void auditFilteringFreeTextAndPaginationHaveIdenticalSemantics() {
+    var audit = stores().securityAudit();
+    audit.insert(auditRecord(LocalDateTime.of(2026, 7, 13, 8, 0), "alice", "GET",
+        "/repository/releases/a.jar", 200, "SUCCESS", Map.of("traceId", "trace-one")));
+    audit.insert(auditRecord(LocalDateTime.of(2026, 7, 13, 9, 0), "bob", "PUT",
+        "/repository/releases/b.jar", 201, "SUCCESS", Map.of("traceId", "trace-two")));
+    audit.insert(auditRecord(LocalDateTime.of(2026, 7, 13, 10, 0), "alice", "DELETE",
+        "/repository/releases/c.jar", 403, "DENIED", Map.of("reason", "policy")));
+
+    var filtered = audit.search(new SecurityAuditDao.AuditLogQuery(
+        null, null, " ALICE ", null, null, "/repository/releases", null,
+        null, null, null, null, 0, 10));
+    assertEquals(2, filtered.total());
+    assertEquals(List.of("DELETE", "GET"), filtered.items().stream().map(item -> item.method()).toList());
+
+    var freeText = audit.search(new SecurityAuditDao.AuditLogQuery(
+        "trace-two", null, null, null, null, null, null, null, null,
+        null, null, 0, 10));
+    assertEquals(1, freeText.total());
+    assertEquals("bob", freeText.items().getFirst().actorUserId());
+
+    var firstPage = audit.search(new SecurityAuditDao.AuditLogQuery(
+        null, null, null, null, null, null, null, null, null,
+        null, null, 0, 1));
+    var secondPage = audit.search(new SecurityAuditDao.AuditLogQuery(
+        null, null, null, null, null, null, null, null, null,
+        null, null, 1, 1));
+    assertEquals(3, firstPage.total());
+    assertNotEquals(firstPage.items().getFirst().id(), secondPage.items().getFirst().id());
+  }
+
+  @Test
+  void markerClaimsPartitionConcurrentWorkersAndFailuresReenqueue() throws Exception {
+    long repositoryId = createRepository("claim-markers", RepositoryFormat.MAVEN2);
+    for (int index = 0; index < 8; index++) {
+      stores().metadataRebuild().enqueue(repositoryId, "ga:com.acme/app-" + index);
+      stores().repositoryIndexRebuild().enqueue(
+          repositoryId, RepositoryIndexRebuildDao.PYPI_PROJECT, "app-" + index);
+    }
+
+    List<Callable<String>> metadataClaims = new ArrayList<>();
+    List<Callable<String>> indexClaims = new ArrayList<>();
+    for (int index = 0; index < 8; index++) {
+      metadataClaims.add(() -> inTransaction(() ->
+          stores().metadataRebuild().claim(1).getFirst().scopeKey()));
+      indexClaims.add(() -> inTransaction(() ->
+          stores().repositoryIndexRebuild().claim(1).getFirst().scopeKey()));
+    }
+    Set<String> claimedMetadata = new HashSet<>(invokeConcurrently(metadataClaims, 4));
+    Set<String> claimedIndexes = new HashSet<>(invokeConcurrently(indexClaims, 4));
+    assertEquals(8, claimedMetadata.size());
+    assertEquals(8, claimedIndexes.size());
+    assertEquals(0L, stores().metadataRebuild().countBacklog());
+    assertEquals(0L, stores().repositoryIndexRebuild().countBacklog());
+
+    var metadataFailure = new com.github.klboke.kkrepo.persistence.jdbc.api.MetadataRebuildDao.Claim(
+        repositoryId, "ga:com.acme/failure", Instant.now(), 0, null);
+    stores().metadataRebuild().reenqueueFailure(metadataFailure, new IllegalStateException("boom"));
+    var indexFailure = new RepositoryIndexRebuildDao.Claim(
+        repositoryId, RepositoryIndexRebuildDao.HELM_INDEX, "", Instant.now(), 0, null);
+    stores().repositoryIndexRebuild().reenqueueFailure(indexFailure, new IllegalStateException("boom"));
+    assertEquals(1L, stores().metadataRebuild().countFailures());
+    assertEquals(1L, stores().repositoryIndexRebuild().countFailures());
+  }
+
+  @Test
+  void blobGcDockerAndPubUploadCoordinationRoundTrip() throws Exception {
+    long repositoryId = createRepository("upload-coordination", RepositoryFormat.DOCKER);
+    long blobStoreId = stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
+    long deletedBlobId = stores().assets().insertBlob(blob(
+        blobStoreId, "gc/deleted-layer", "gc-ref"));
+    stores().assets().markBlobDeletedById(deletedBlobId, "contract cleanup");
+    var gcClaims = inTransaction(() -> stores().assets().claimDeletedBlobsForGc(
+        10, Instant.now().plusSeconds(1), Instant.EPOCH));
+    assertEquals(List.of(deletedBlobId), gcClaims.stream().map(AssetBlobRecord::id).toList());
+    assertEquals(1, stores().assets().releaseBlobGcClaim(deletedBlobId));
+
+    Instant expiresAt = Instant.now().plusSeconds(600);
+    stores().dockerUploads().insertSession(new DockerUploadSessionRecord(
+        "docker-session", repositoryId, "acme/app", sha256("acme/app"), "STARTED", 0,
+        null, null, "alice", "127.0.0.1", expiresAt, null, null,
+        Map.of("node", "one"), null, null));
+    List<Callable<Long>> chunkAppends = new ArrayList<>();
+    for (int index = 0; index < 4; index++) {
+      chunkAppends.add(() -> inTransaction(() -> {
+        var session = stores().dockerUploads().lockSession("docker-session").orElseThrow();
+        int chunkIndex = stores().dockerUploads().nextChunkIndex("docker-session");
+        long startOffset = session.nextOffset();
+        long nextOffset = startOffset + 4;
+        stores().dockerUploads().appendChunk(
+            "docker-session", chunkIndex, startOffset, nextOffset - 1,
+            "chunk-ref-" + chunkIndex, "chunks/" + chunkIndex, "abcd", 4, nextOffset);
+        return startOffset;
+      }));
+    }
+    assertEquals(List.of(0L, 4L, 8L, 12L),
+        invokeConcurrently(chunkAppends, 4).stream().sorted().toList());
+    inTransaction(() -> {
+      stores().dockerUploads().lockSession("docker-session").orElseThrow();
+      stores().dockerUploads().completeSession("docker-session", "sha256:abcd", "sha256");
+      return null;
+    });
+    assertEquals(16L,
+        stores().dockerUploads().findSession("docker-session").orElseThrow().nextOffset());
+    assertEquals(List.of(0, 1, 2, 3), stores().dockerUploads().listChunks("docker-session")
+        .stream().map(chunk -> chunk.chunkIndex()).toList());
+    assertEquals(1, inTransaction(() -> stores().dockerUploads().claimTerminalSessions(
+        Instant.now(), "worker-one", Instant.now().plusSeconds(30), 10)).size());
+
+    long pubId = stores().pubUploadSessions().insert(new PubUploadSessionRecord(
+        null, repositoryId, "pub-session", "field-token", "alice", null,
+        PubUploadSessionDao.STATUS_NEW, expiresAt, null, null, null, null, null, null, null,
+        null, null, null, Map.of(), null, null, null, null));
+    inTransaction(() -> {
+      assertEquals(pubId, stores().pubUploadSessions().lockById(pubId).orElseThrow().id());
+      stores().pubUploadSessions().markUploaded(
+          pubId, blobStoreId, "pub-ref", "pub/pkg.tar.gz", "md5", "sha1", "sha256",
+          "sha512", 99, "acme_pkg", "1.0.0", Map.of("name", "acme_pkg"));
+      stores().pubUploadSessions().markFinalized(pubId, Instant.parse("2026-07-13T11:00:00Z"));
+      return null;
+    });
+    var finalized = stores().pubUploadSessions().find(repositoryId, "pub-session").orElseThrow();
+    assertEquals(PubUploadSessionDao.STATUS_FINALIZED, finalized.status());
+    assertEquals(Map.of("name", "acme_pkg"), finalized.pubspec());
+    assertNotNull(finalized.finalizedAt());
+  }
+
+  @Test
+  void repositoryMigrationAssetsCanBeClaimedFailedRetriedAndCompleted() throws Exception {
+    long repositoryId = createRepository("migration-target", RepositoryFormat.MAVEN2);
+    long migrationJobId = stores().migrationJobs().create(
+        "3.70.1", "/nexus-data", Map.of(
+            "scope", "repository-data", "packageMigrationEnabled", true));
+    long repositoryJobId = stores().repositoryDataMigrations().createRepositoryJob(
+        migrationJobId, "maven-releases", "migration-target", repositoryId,
+        RepositoryFormat.MAVEN2, 100, Map.of("sourceType", "hosted"));
+    List<RepositoryDataMigrationAssetRecord> discovered = new ArrayList<>();
+    for (int index = 0; index < 8; index++) {
+      String path = "com/acme/app/1.0/app-1.0-" + index + ".jar";
+      discovered.add(new RepositoryDataMigrationAssetRecord(
+          null, repositoryJobId, "source-asset-" + index, "source-component", path, sha256(path),
+          RepositoryFormat.MAVEN2, "com.acme", "app", "1.0", "ARTIFACT",
+          "application/java-archive", 1024L, "default@abc-" + index,
+          Instant.parse("2026-07-13T08:00:00Z"), null,
+          Instant.parse("2026-07-13T08:00:00Z"), Instant.parse("2026-07-13T08:00:00Z"),
+          "admin", "127.0.0.1", "pending", 0, null, null, null, null, null, null,
+          Map.of("sourceRepositoryType", "hosted"), null));
+    }
+    stores().repositoryDataMigrations().upsertDiscoveredAssets(
+        repositoryJobId, discovered, Map.of());
+    stores().repositoryDataMigrations().finishDiscoveryPage(repositoryJobId, null, true);
+
+    Set<Long> concurrentlyClaimedIds = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    List<Callable<List<RepositoryDataMigrationDao.AssetClaim>>> workerClaims = new ArrayList<>();
+    for (int index = 0; index < 4; index++) {
+      workerClaims.add(() -> {
+        List<RepositoryDataMigrationDao.AssetClaim> workerClaimsResult = new ArrayList<>();
+        // MySQL also locks the joined repository row, so competing replicas may briefly receive
+        // an empty batch. A real worker polls again after the winning transaction commits.
+        for (int attempt = 0; attempt < 100; attempt++) {
+          if (concurrentlyClaimedIds.size() == discovered.size()) {
+            return workerClaimsResult;
+          }
+          List<RepositoryDataMigrationDao.AssetClaim> claims = inTransaction(() ->
+              stores().repositoryDataMigrations().claimAssetsForMigration(
+                  migrationJobId, 2, 3, Instant.now().minusSeconds(60)));
+          for (RepositoryDataMigrationDao.AssetClaim claim : claims) {
+            assertTrue(concurrentlyClaimedIds.add(claim.asset().id()),
+                () -> "Asset was claimed by more than one worker: " + claim.asset().id());
+            workerClaimsResult.add(claim);
+          }
+          if (claims.isEmpty()) {
+            Thread.sleep(10);
+          }
+        }
+        return workerClaimsResult;
+      });
+    }
+    List<RepositoryDataMigrationDao.AssetClaim> claimed = invokeConcurrently(workerClaims, 4)
+        .stream().flatMap(List::stream).toList();
+    assertEquals(8, claimed.size());
+    assertEquals(8, concurrentlyClaimedIds.size());
+
+    var firstClaim = claimed.getFirst();
+    stores().repositoryDataMigrations().markAssetFailed(
+        firstClaim.asset().id(), repositoryJobId, 1, "upstream failed");
+    for (var successfulClaim : claimed.subList(1, claimed.size())) {
+      stores().repositoryDataMigrations().markAssetMigrated(
+          successfulClaim.asset().id(), repositoryJobId, null, null, null);
+    }
+    stores().repositoryDataMigrations().refreshRepositoryProgress(repositoryJobId);
+    assertEquals(1, stores().repositoryDataMigrations().retryFailedAssets(migrationJobId));
+
+    var retried = inTransaction(() -> stores().repositoryDataMigrations()
+        .claimAssetsForMigration(migrationJobId, 10, 3, Instant.now().plusSeconds(1)))
+        .getFirst();
+    stores().repositoryDataMigrations().markAssetMigrated(
+        retried.asset().id(), repositoryJobId, null, null, null);
+    stores().repositoryDataMigrations().refreshRepositoryProgress(repositoryJobId);
+    var progress = stores().repositoryDataMigrations().jobProgress(migrationJobId);
+    assertEquals(8, progress.migratedAssets());
+    assertEquals(0, progress.failedAssets());
+    assertFalse(progress.active());
+  }
+
+  @Test
+  void absoluteTimestampsRoundTripAcrossUtcShanghaiAndDstBoundaries() {
+    long blobStoreId = stores().blobStores().insert(blobStore("time-roundtrip"));
+    List<Instant> instants = List.of(
+        Instant.parse("2026-07-13T08:00:00.123Z"),
+        ZonedDateTime.of(2026, 7, 13, 16, 0, 0, 456_000_000,
+            ZoneId.of("Asia/Shanghai")).toInstant(),
+        ZonedDateTime.of(2026, 11, 1, 1, 30, 0, 789_000_000,
+            ZoneId.of("America/New_York")).withLaterOffsetAtOverlap().toInstant());
+
+    for (int index = 0; index < instants.size(); index++) {
+      Instant instant = instants.get(index);
+      AssetBlobRecord fixture = blob(blobStoreId, "time/" + index, "time-ref-" + index);
+      long id = stores().assets().insertBlob(new AssetBlobRecord(
+          fixture.id(), fixture.blobStoreId(), fixture.blobRef(), fixture.blobRefHash(),
+          fixture.objectKey(), fixture.objectKeyHash(), fixture.sha1(), fixture.sha256(), fixture.md5(),
+          fixture.size(), fixture.contentType(), fixture.createdBy(), fixture.createdByIp(),
+          instant, instant, fixture.attributes()));
+      AssetBlobRecord stored = stores().assets().findBlobById(id).orElseThrow();
+      assertEquals(instant, stored.blobCreatedAt());
+      assertEquals(instant, stored.blobUpdatedAt());
+    }
+  }
+
   private long createRepository(String name, RepositoryFormat format) {
-    long blobStoreId = stores().blobStores().insert(new BlobStoreRecord(
-        null, name + "-store", "S3", "https://s3.example", "cn-test-1", "artifacts", name,
-        Map.of("pathStyleAccess", true)));
+    long blobStoreId = stores().blobStores().insert(blobStore(name + "-store"));
+    return insertRepository(name, format, blobStoreId);
+  }
+
+  private long insertRepository(String name, RepositoryFormat format, long blobStoreId) {
     return stores().repositories().insert(new RepositoryRecord(
         null,
         name,
@@ -196,6 +620,44 @@ public abstract class PersistenceApiContract {
         "ALLOW_ONCE",
         true,
         Map.of("storage", Map.of("blobStoreName", name + "-store"))));
+  }
+
+  private static BlobStoreRecord blobStore(String name) {
+    return new BlobStoreRecord(
+        null, name, "S3", "https://s3.example", "cn-test-1", "artifacts", name,
+        Map.of("pathStyleAccess", true));
+  }
+
+  private static AssetBlobRecord blob(long blobStoreId, String objectKey, String blobRef) {
+    Instant now = Instant.parse("2026-07-13T08:00:00Z");
+    return new AssetBlobRecord(
+        null, blobStoreId, blobRef, sha256(blobRef), objectKey, sha256(objectKey),
+        "1".repeat(40), "2".repeat(64), "3".repeat(32), 42,
+        "application/octet-stream", "contract",
+        "127.0.0.1", now, now, Map.of("origin", "contract"));
+  }
+
+  private static SecurityAuditDao.AuditLogRecord auditRecord(
+      LocalDateTime occurredAt,
+      String actor,
+      String method,
+      String path,
+      int status,
+      String outcome,
+      Map<String, Object> details) {
+    return new SecurityAuditDao.AuditLogRecord(
+        occurredAt, "Local", actor, "LocalAuthenticatingRealm", null, "127.0.0.1",
+        method, path, "repository-view", status, outcome, details);
+  }
+
+  private static <T> List<T> invokeConcurrently(List<Callable<T>> calls, int threads) throws Exception {
+    try (var executor = Executors.newFixedThreadPool(threads)) {
+      List<T> results = new ArrayList<>(calls.size());
+      for (var future : executor.invokeAll(calls)) {
+        results.add(future.get());
+      }
+      return results;
+    }
   }
 
   private static ComponentRecord component(

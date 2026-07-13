@@ -10,7 +10,7 @@ kkrepo security aims to:
 
 - Preserve Nexus-like users, roles, privileges, repository permissions, and common client behavior.
 - Support local users, LDAP, OIDC, API keys, and sessions.
-- Keep security state in MySQL so multi-replica deployments behave consistently.
+- Keep security state in the shared MySQL/PostgreSQL database so multi-replica deployments behave consistently.
 - Encrypt reusable credentials and user-facing API-key payloads at rest.
 - Record security-sensitive administrative actions in audit logs.
 
@@ -20,7 +20,7 @@ Supported authentication sources include:
 
 | Source | Purpose |
 | --- | --- |
-| Local users | Built-in users stored in MySQL with password hashes |
+| Local users | Built-in users stored in the shared database with password hashes |
 | LDAP realm | External directory authentication and optional group-to-role mapping |
 | OIDC realm | Bearer/auth-code based identity integration using issuer/JWKS/client/scope/claim settings |
 | API keys and protocol tokens | Client and CI authentication for repository protocols |
@@ -29,9 +29,9 @@ Supported authentication sources include:
 
 Authentication order and exact behavior depend on the request type. Protocol clients commonly use Basic auth, API keys, or protocol-native token flows. Browser users use sessions after login.
 
-## MySQL-Backed State
+## Shared Database State
 
-Security state is stored in MySQL:
+Security state is stored in the selected MySQL or PostgreSQL database:
 
 - `security_user`
 - `security_role`
@@ -45,6 +45,8 @@ Security state is stored in MySQL:
 - `security_audit_log`
 
 This lets multiple replicas share sessions, authentication tickets, user state, and permission changes.
+
+Database selection does not change authorization semantics. See [Database Backends](database-backends.md).
 
 ## Authorization Model
 
@@ -74,13 +76,13 @@ Use least-privilege roles for CI users. Avoid granting broad `*` privileges to a
 
 ## Anonymous Access
 
-Anonymous read is persisted in MySQL and disabled by default for new installations. During initial administrator setup, choose whether unauthenticated users may browse and download repository content.
+Anonymous read is persisted in the shared database and disabled by default for new installations. During initial administrator setup, choose whether unauthenticated users may browse and download repository content.
 
 After setup, manage anonymous access through **Security > Anonymous** in the administration UI or the security REST APIs. There is no application property that overrides the persisted setting. Enable anonymous access only when public read behavior is intentional, and review which repositories are readable before exposing the service externally.
 
 ## API Keys And Tokens
 
-kkrepo stores API-key compatibility data in MySQL. Raw user-facing tokens are protected as encrypted payloads, and lookup uses hashed material rather than plaintext tokens.
+kkrepo stores API-key compatibility data in the shared database. Raw user-facing tokens are protected as encrypted payloads, and lookup uses hashed material rather than plaintext tokens.
 
 Operational guidance:
 

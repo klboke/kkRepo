@@ -35,10 +35,20 @@ concurrency:
 
 jobs:
   live-compat:
-    name: ${{ ((github.event_name == 'workflow_dispatch' && inputs.suite == 'client-e2e') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && 'Client E2E compatibility' || 'Live compatibility' }}
+    name: ${{ ((github.event_name == 'workflow_dispatch' && inputs.suite == 'client-e2e') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && 'Client E2E compatibility' || 'Live compatibility' }} (${{ matrix.database }})
     runs-on: ubuntu-latest
     timeout-minutes: 120
     if: (github.event_name == 'workflow_dispatch' && inputs.suite != 'nexus') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - database: mysql
+            database-service: mysql
+            candidate-service: kkrepo
+          - database: postgresql
+            database-service: kkrepo-postgres
+            candidate-service: kkrepo-postgresql
     env:
       COMPOSE_FILE: docker-compose.compat-postgres.yml
       COMPOSE_PROJECT_NAME: kkrepo-compat
@@ -134,10 +144,10 @@ jobs:
         run: scripts/build-docker-image.sh kkrepo:compat
 
       - name: Start compatibility databases
-        run: docker compose -f "$COMPOSE_FILE" up -d --wait mysql nexus-postgres
+        run: docker compose -f "$COMPOSE_FILE" up -d --wait ${{ matrix.database-service }} nexus-postgres
 
       - name: Start reference and candidate services
-        run: docker compose -f "$COMPOSE_FILE" up -d nexus kkrepo
+        run: docker compose -f "$COMPOSE_FILE" up -d nexus ${{ matrix.candidate-service }}
 
       - name: Prepare live compatibility fixtures
         run: scripts/ci/live-compat-setup.sh
@@ -155,13 +165,13 @@ jobs:
         run: |
           mkdir -p artifacts
           docker compose -f "$COMPOSE_FILE" ps > artifacts/live-compat-ps.txt || true
-          docker compose -f "$COMPOSE_FILE" logs --no-color --timestamps > artifacts/live-compat-compose.log || true
+          docker compose --profile kkrepo-postgresql -f "$COMPOSE_FILE" logs --no-color --timestamps > artifacts/live-compat-compose.log || true
 
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: live-compat-logs
+          name: live-compat-${{ matrix.database }}-logs
           path: artifacts/
           if-no-files-found: ignore
 

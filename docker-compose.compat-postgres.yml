@@ -42,6 +42,24 @@ services:
       - nexus-postgres-data:/var/lib/postgresql/data
       - ./scripts/docker-compat/nexus-postgres-init.sql:/docker-entrypoint-initdb.d/01-nexus.sql:ro
 
+  kkrepo-postgres:
+    image: postgres:16
+    profiles:
+      - kkrepo-postgresql
+    environment:
+      POSTGRES_DB: kkrepo
+      POSTGRES_USER: kkrepo
+      POSTGRES_PASSWORD: kkrepo
+      TZ: Asia/Shanghai
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - kkrepo-postgres-data:/var/lib/postgresql/data
+
   nexus:
     image: ${NEXUS_COMPAT_IMAGE:-sonatype/nexus3:3.92.0}
     depends_on:
@@ -79,7 +97,35 @@ services:
       - "${KKREPO_MANAGEMENT_PORT:-18091}:8081"
       - "${KKREPO_DOCKER_HOSTED_PORT:-18180}:${KKREPO_DOCKER_CONNECTOR_PORT:-18180}"
 
+  kkrepo-postgresql:
+    image: ${KKREPO_COMPAT_IMAGE:-kkrepo:compat}
+    profiles:
+      - kkrepo-postgresql
+    depends_on:
+      kkrepo-postgres:
+        condition: service_healthy
+    environment:
+      KKREPO_DATABASE_TYPE: postgresql
+      SPRING_DATASOURCE_URL: jdbc:postgresql://kkrepo-postgres:5432/kkrepo
+      SPRING_DATASOURCE_USERNAME: kkrepo
+      SPRING_DATASOURCE_PASSWORD: kkrepo
+      KKREPO_MANAGEMENT_PORT: "8081"
+      KKREPO_CREDENTIAL_SECRET: ci-compat-credential-secret-not-for-production
+      KKREPO_API_KEY_PAYLOAD_SECRET: ci-compat-api-key-payload-secret-not-for-production
+      KKREPO_LOGIN_RATE_LIMIT_PER_MINUTE: "200"
+      KKREPO_BOOTSTRAP_RATE_LIMIT_PER_MINUTE: "50"
+      KKREPO_NEXUS_LEGACY_UI_ENABLED: "${KKREPO_NEXUS_LEGACY_UI_ENABLED:-true}"
+      KKREPO_FILE_ENABLED: "true"
+      KKREPO_FILE_BASE_DIR: /tmp/kkrepo-blobs
+      KKREPO_OUTBOUND_ALLOW_PRIVATE_ADDRESSES: "true"
+      JAVA_OPTS: "-Xms512m -Xmx1536m"
+    ports:
+      - "${KKREPO_COMPAT_PORT:-18090}:8080"
+      - "${KKREPO_MANAGEMENT_PORT:-18091}:8081"
+      - "${KKREPO_DOCKER_HOSTED_PORT:-18180}:${KKREPO_DOCKER_CONNECTOR_PORT:-18180}"
+
 volumes:
   mysql-data:
   nexus-data:
   nexus-postgres-data:
+  kkrepo-postgres-data:

@@ -32,6 +32,7 @@
     <module>migration-nexus</module>
     <module>persistence-jdbc</module>
     <module>persistence-mysql</module>
+    <module>persistence-postgresql</module>
     <module>admin-ui</module>
     <module>browse-ui</module>
     <module>server</module>
@@ -214,6 +215,11 @@
       <dependency>
         <groupId>com.github.klboke</groupId>
         <artifactId>kkrepo-persistence-mysql</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.github.klboke</groupId>
+        <artifactId>kkrepo-persistence-postgresql</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>

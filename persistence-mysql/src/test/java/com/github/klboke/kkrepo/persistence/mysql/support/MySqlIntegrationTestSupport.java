@@ -1,14 +1,14 @@
 package com.github.klboke.kkrepo.persistence.mysql.support;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.github.klboke.kkrepo.persistence.jdbc.api.DatabaseConnectionSettings;
-import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceStoreFactories;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceStores;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.JdbcPersistenceStoreFactory;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
 import com.github.klboke.kkrepo.persistence.mysql.MySqlDatabaseDialect;
 import java.sql.Statement;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Supplier;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
@@ -31,6 +31,7 @@ public abstract class MySqlIntegrationTestSupport {
   private static DatabaseDialect dialect;
   private static TransactionTemplate transactionTemplate;
   private static PersistenceStores stores;
+  private static Flyway flyway;
 
   @BeforeAll
   protected static void startMySql() {
@@ -45,17 +46,13 @@ public abstract class MySqlIntegrationTestSupport {
       dialect = new MySqlDatabaseDialect();
       jsonColumns = new JsonColumns(new ObjectMapper(), dialect);
       transactionTemplate = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
-      Flyway.configure()
+      flyway = Flyway.configure()
           .dataSource(dataSource)
-          .locations("classpath:db/migration")
+          .locations("classpath:db/migration/mysql")
           .failOnMissingLocations(true)
-          .load()
-          .migrate();
-      stores = PersistenceStoreFactories.connect(new DatabaseConnectionSettings(
-          MYSQL.getJdbcUrl() + "?useUnicode=true&characterEncoding=utf8&useSSL=false"
-              + "&allowPublicKeyRetrieval=true&connectionTimeZone=LOCAL",
-          MYSQL.getUsername(),
-          MYSQL.getPassword()));
+          .load();
+      flyway.migrate();
+      stores = JdbcPersistenceStoreFactory.createStores(jdbcTemplate, dialect);
     }
   }
 
@@ -97,6 +94,20 @@ public abstract class MySqlIntegrationTestSupport {
 
   protected PersistenceStores stores() {
     return stores;
+  }
+
+  protected Flyway flyway() {
+    return flyway;
+  }
+
+  protected Set<String> databaseTables() {
+    return Set.copyOf(jdbcTemplate.queryForList("""
+        SELECT LOWER(table_name)
+        FROM information_schema.tables
+        WHERE table_schema = ?
+          AND table_type = 'BASE TABLE'
+          AND table_name <> 'flyway_schema_history'
+        """, String.class, MYSQL.getDatabaseName()));
   }
 
   protected <T> T inTransaction(Supplier<T> action) {

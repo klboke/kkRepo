@@ -1,21 +1,21 @@
 # 开发指南
 
-本文档面向本地开发、测试和调试。项目概览和用户侧介绍放在根目录 `README.md`；数据库模型见 [MySQL ER 设计](mysql-er.md)。
+本文档面向本地开发、测试和调试。项目概览和用户侧介绍放在根目录 `README.md`；数据库模型见[数据库 Schema](database-schema.md)和[MySQL ER 设计](mysql-er.md)。
 
 ## 前置要求
 
 - JDK 25
 - Maven 3.9 或兼容版本
-- MySQL 8.0
+- MySQL 8.0 或 PostgreSQL 12+
 - 可选：Docker，用于构建镜像或启动本地依赖
 
-服务运行时依赖 MySQL 和 blob 存储。开发时可以使用本地 File blob store；需要验证对象存储行为时再使用 S3 兼容对象存储，例如 MinIO、RustFS、阿里云 OSS 或 AWS S3。
+服务运行时依赖 MySQL 或 PostgreSQL 和 blob 存储。开发时可以使用本地 File blob store；需要验证对象存储行为时再使用 S3 兼容对象存储，例如 MinIO、RustFS、阿里云 OSS 或 AWS S3。
 
-短 TTL 性能缓存默认使用进程内存；HTTP session、认证 ticket、catalog 广播和跨副本 cache token 使用 MySQL。
+短 TTL 性能缓存默认使用进程内存；HTTP session、认证 ticket、catalog 广播和跨副本 cache token 使用共享数据库。
 
 ## 本地依赖
 
-本地运行至少需要 MySQL。blob store 可以使用 File blob store；如果要验证 S3 兼容对象存储行为，可以使用下表中的本地服务默认值：
+本地运行至少需要 MySQL 或 PostgreSQL。MySQL 仍是默认 Compose 服务，`postgresql` profile 可启动另一种后端。blob store 可以使用 File blob store；如果要验证 S3 兼容对象存储行为，可以使用下表中的本地服务默认值：
 
 | 依赖 | 默认值 |
 | --- | --- |
@@ -37,11 +37,20 @@ docker compose -f docker-compose.dev.yml up -d
 docker compose -f docker-compose.dev.yml ps
 ```
 
+如需使用 PostgreSQL 而不是默认 MySQL 服务：
+
+```bash
+docker compose -f docker-compose.dev.yml --profile postgresql up -d postgresql rustfs
+export KKREPO_DATABASE_TYPE=postgresql
+export SPRING_DATASOURCE_URL='jdbc:postgresql://127.0.0.1:15432/kkrepo'
+```
+
 该命令会启动：
 
 | 服务 | 镜像 | 本地地址 | 说明 |
 | --- | --- | --- | --- |
 | MySQL | `mysql:8.0` | `127.0.0.1:13306` | 自动创建 `kkrepo` 数据库和 `kkrepo` 用户 |
+| PostgreSQL | `postgres:16`（默认开发镜像；运行时最低版本为 12） | `127.0.0.1:15432` | 可选 `postgresql` profile；创建相同数据库和用户 |
 | RustFS | `rustfs/rustfs:latest` | S3 API: `http://127.0.0.1:9000`；Console: `http://127.0.0.1:9001` | S3 兼容对象存储，用于验证 OSS/S3 blob store 行为 |
 
 本地数据目录：
@@ -187,7 +196,7 @@ java -Dapollo.meta=http://apollo-config:8080 -jar server/target/kkrepo-server-*.
 ## 实现约束
 
 - 设计和实现默认按多副本部署考虑。状态、缓存、锁、后台任务、session、上传/删除、索引重建、metadata、negative cache 和权限判定不能只依赖单 JVM 进程内状态。
-- 进程内缓存只能作为节点本地热缓存，必须可重建、有 TTL 或明确失效条件，并以 MySQL、OSS/S3、共享 TTL cache、marker 队列或其他协调机制作为正确性来源。
+- 进程内缓存只能作为节点本地热缓存，必须可重建、有 TTL 或明确失效条件，并以共享数据库、OSS/S3、共享 TTL cache、marker 队列或其他协调机制作为正确性来源。
 - 实现任何仓库格式功能前，先检查该仓库的官方协议和 Nexus 参考行为。
 - 协议逻辑不要放在 controller 中。Controller 应委托给协议适配器或服务层。
-- 大 blob 只存储在 OSS/S3/File blob store 中。MySQL 只保存元数据、状态、索引和引用。
+- 大 blob 只存储在 OSS/S3/File blob store 中。所选关系数据库只保存元数据、状态、索引和引用。

@@ -164,7 +164,7 @@ The local quickstart helps you validate the flow quickly, but production deploym
 5. Replace `KKREPO_CREDENTIAL_SECRET` and `KKREPO_API_KEY_PAYLOAD_SECRET` with stable strong random strings.
 6. Expose a stable domain, such as `https://repo.example.com`, to make future migration and scaling easier.
 
-One important kkRepo design point is multi-replica deployment: sessions, permissions, tokens, migration state, and other shared state are stored in MySQL, while in-process cache is only a rebuildable local hot cache. This is helpful for rolling upgrades and horizontal scaling in production.
+One important kkRepo design point is multi-replica deployment: sessions, permissions, tokens, migration state, and other shared state are stored in MySQL or PostgreSQL, while in-process cache is only a rebuildable local hot cache. This is helpful for rolling upgrades and horizontal scaling in production.
 
 ## 7. Summary
 

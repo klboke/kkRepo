@@ -19,7 +19,8 @@ class RepositoryDataMigrationDaoMySqlIntegrationTest extends MySqlIntegrationTes
   void failedAssetCanBeRetriedAndClaimedAgainWithRealJsonAndLockingSql() {
     long repositoryId = insertRepository("migration-target", "maven2");
     long migrationJobId = insertMigrationJob(true);
-    RepositoryDataMigrationDao dao = new JdbcRepositoryDataMigrationDao(jdbc(), jsonColumns());
+    RepositoryDataMigrationDao dao = new JdbcRepositoryDataMigrationDao(
+        jdbc(), jsonColumns(), new com.github.klboke.kkrepo.persistence.mysql.MySqlDatabaseDialect());
     long repositoryJobId = dao.createRepositoryJob(
         migrationJobId,
         "maven-releases",
@@ -72,7 +73,8 @@ class RepositoryDataMigrationDaoMySqlIntegrationTest extends MySqlIntegrationTes
     long secondRepositoryId = insertRepository("target-two", "maven2");
     long firstJobId = insertMigrationJob(true);
     long secondJobId = insertMigrationJob(true);
-    RepositoryDataMigrationDao dao = new JdbcRepositoryDataMigrationDao(jdbc(), jsonColumns());
+    RepositoryDataMigrationDao dao = new JdbcRepositoryDataMigrationDao(
+        jdbc(), jsonColumns(), new com.github.klboke.kkrepo.persistence.mysql.MySqlDatabaseDialect());
     long firstRepositoryJobId = dao.createRepositoryJob(
         firstJobId, "source-one", "target-one", firstRepositoryId,
         RepositoryFormat.MAVEN2, 50, Map.of());

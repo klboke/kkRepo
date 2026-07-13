@@ -48,7 +48,8 @@ class SecurityAuditDaoTest {
     assertEquals(200, jdbcTemplate.rowArgs[jdbcTemplate.rowArgs.length - 2]);
     assertEquals(0, jdbcTemplate.rowArgs[jdbcTemplate.rowArgs.length - 1]);
     List<Object> countArgs = Arrays.asList(jdbcTemplate.countArgs);
-    assertTrue(countArgs.contains("%admin\\_\\%%"));
+    assertTrue(jdbcTemplate.countSql.contains("LIKE ? ESCAPE '!'"));
+    assertTrue(countArgs.contains("%admin!_!%%"));
     assertTrue(countArgs.contains("%local%"));
     assertTrue(countArgs.contains("%alice%"));
     assertTrue(countArgs.contains("POST"));

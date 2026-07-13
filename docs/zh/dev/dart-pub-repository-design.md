@@ -4,7 +4,7 @@
 
 ## 当前支持状态
 
-Dart / Pub 仓库基础能力已完成实现：当前代码已包含 `RepositoryFormat.PUB`、`pub-hosted`、`pub-proxy`、`pub-group` recipe、Hosted Pub Repository V2 metadata/archive 路由、Nexus 3.92.0 兼容的 `api/archives/...` 下载 URL、content browse `version.json` 路由、MySQL-backed publish upload session、Bearer `PubToken` 认证、proxy metadata/archive cache、group metadata 合并、Browse/Admin 基础展示、UI/API `.tar.gz` 上传、Nexus Pub repository-data 迁移/导入，以及真实 `dart pub` / `flutter pub` client E2E 覆盖。
+Dart / Pub 仓库基础能力已完成实现：当前代码已包含 `RepositoryFormat.PUB`、`pub-hosted`、`pub-proxy`、`pub-group` recipe、Hosted Pub Repository V2 metadata/archive 路由、Nexus 3.92.0 兼容的 `api/archives/...` 下载 URL、content browse `version.json` 路由、共享关系数据库 publish upload session、Bearer `PubToken` 认证、proxy metadata/archive cache、group metadata 合并、Browse/Admin 基础展示、UI/API `.tar.gz` 上传、Nexus Pub repository-data 迁移/导入，以及真实 `dart pub` / `flutter pub` client E2E 覆盖。
 
 已用本地 Nexus 3.92.0 + PostgreSQL 参考实例确认：metadata 和单版本 endpoint 返回 `application/vnd.pub.v2+json`，metadata 中的 `archive_url` 指向 `/api/archives/<package>-<version>.tar.gz`，content browse 额外暴露 `<package>/<version>/version.json` 和 `<package>/<version>/<package>-<version>.tar.gz`，而 `.sha1`、`.sha256`、`.sha512`、`.md5` checksum sidecar HTTP 路由返回 404；checksum 通过 metadata 的 `archive_sha256`、blob checksum 和 Search/Browse 资产信息体现。
 
@@ -392,7 +392,7 @@ Admin UI：
 
 3. Hosted 读取和发布
    - 已实现 package metadata、deprecated version endpoint、archive download、Nexus `api/archives` 下载别名和 content browse `version.json`。
-   - 已实现 publish init、multipart upload、finalize、MySQL-backed upload session 和过期清理。
+   - 已实现 publish init、multipart upload、finalize、共享关系数据库 upload session 和过期清理。
    - 已接入 `PubToken` bearer 认证、权限、审计和真实客户端测试。
 
 4. Proxy 和 Group

@@ -45,13 +45,13 @@
 
 按接近生产的方式部署 kkrepo：
 
-- 外部 MySQL。
+- 初始化安装前选定的外部 MySQL 或 PostgreSQL。
 - OSS/S3 兼容 blob 存储。
 - 稳定 `KKREPO_CREDENTIAL_SECRET`。
 - 稳定 `KKREPO_API_KEY_PAYLOAD_SECRET`。
 - HTTPS 反向代理。
 - 管理端口监控。
-- MySQL 和 blob storage 备份。
+- 所选数据库和 blob storage 备份。
 
 迁移前验证：
 
@@ -144,7 +144,7 @@ Script REST API 很重要，因为部分 Nexus 数据无法通过普通 REST API
 
 - 保持 checksum validation 开启。
 - 从适中并发开始，例如 `8`。
-- 在确认源 Nexus、网络、MySQL 和对象存储压力后，再提高并发。
+- 在确认源 Nexus、网络、数据库和对象存储压力后，再提高并发。
 - 监控失败 asset，修复根因后 retry。
 
 常见失败原因：
@@ -238,12 +238,14 @@ Script REST API 很重要，因为部分 Nexus 数据无法通过普通 REST API
 
 回滚窗口结束后：
 
-- 备份 kkrepo MySQL 和 blob storage。
+- 备份 kkrepo 数据库和 blob storage。
 - 确认源 Nexus 不再接收流量。
 - 归档源 Nexus 配置和迁移报告。
 - 业务确认后再下线源 Nexus。
 - 审查用户、角色和 token。
 - 记录已知兼容差异或后续 issue。
+
+目标数据库引擎是安装决策，不是迁移开关。不要只修改 JDBC URL 就把已初始化目标从 MySQL 切换到 PostgreSQL（或反过来）；应创建并验证新的目标库。详见[数据库后端](database-backends.md)。
 
 ## 什么时候停止并调查
 

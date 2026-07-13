@@ -373,19 +373,11 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
           ORDER BY path
           """, assetRowMapper, repositoryId);
     }
-    String upper = prefixUpperBound(prefix);
-    if (upper == null) {
-      return jdbcTemplate.query("""
-          SELECT * FROM asset
-          WHERE repository_id = ? AND path >= ?
-          ORDER BY path
-          """, assetRowMapper, repositoryId, prefix);
-    }
     return jdbcTemplate.query("""
         SELECT * FROM asset
-        WHERE repository_id = ? AND path >= ? AND path < ?
+        WHERE repository_id = ? AND path LIKE ? ESCAPE '!'
         ORDER BY path
-        """, assetRowMapper, repositoryId, prefix, upper);
+        """, assetRowMapper, repositoryId, escapeLikeLiteral(prefix) + "%");
   }
 
   public List<AssetRecord> listAssetsByComponent(long componentId) {
@@ -407,7 +399,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
   public int markBlobDeletedById(long assetBlobId, String reason) {
     return jdbcTemplate.update("""
         UPDATE asset_blob
-        SET deleted_at = COALESCE(deleted_at, NOW(3)),
+        SET deleted_at = COALESCE(deleted_at, CURRENT_TIMESTAMP),
             delete_reason = COALESCE(delete_reason, ?),
             delete_claimed_at = NULL
         WHERE id = ?
@@ -417,9 +409,9 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
   public int markBlobDeletedIfUnreferenced(long assetBlobId, String reason) {
     return jdbcTemplate.update("""
         UPDATE asset_blob b
-        SET b.deleted_at = COALESCE(b.deleted_at, NOW(3)),
-            b.delete_reason = COALESCE(b.delete_reason, ?),
-            b.delete_claimed_at = NULL
+        SET deleted_at = COALESCE(b.deleted_at, CURRENT_TIMESTAMP),
+            delete_reason = COALESCE(b.delete_reason, ?),
+            delete_claimed_at = NULL
         WHERE b.id = ?
           AND NOT EXISTS (SELECT 1 FROM asset a WHERE a.asset_blob_id = b.id)
         """, reason, assetBlobId);
@@ -483,7 +475,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
     List<Object[]> updateArgs = rows.stream()
         .map(row -> new Object[]{row.id()})
         .toList();
-    jdbcTemplate.batchUpdate("UPDATE asset_blob SET delete_claimed_at = NOW(3) WHERE id = ?", updateArgs);
+    jdbcTemplate.batchUpdate("UPDATE asset_blob SET delete_claimed_at = CURRENT_TIMESTAMP WHERE id = ?", updateArgs);
     return rows;
   }
 
@@ -546,9 +538,9 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
     args.addAll(orphanIds);
     return jdbcTemplate.update("""
         UPDATE asset_blob b
-        SET b.deleted_at = NOW(3),
-            b.delete_reason = COALESCE(?, 'unreferenced blob reconcile'),
-            b.delete_claimed_at = NULL
+        SET deleted_at = CURRENT_TIMESTAMP,
+            delete_reason = COALESCE(?, 'unreferenced blob reconcile'),
+            delete_claimed_at = NULL
         WHERE b.id IN (""" + placeholders(orphanIds.size()) + """
           )
           AND b.deleted_at IS NULL
@@ -665,21 +657,13 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
 
   public List<PypiProjectIndexRow> listPypiProjectIndexRows(long repositoryId, String normalizedName) {
     String prefix = "packages/" + normalizedName + "/";
-    String upper = prefixUpperBound(prefix);
-    String rangePredicate = upper == null ? "a.path >= ?" : "a.path >= ? AND a.path < ?";
-    List<Object> args = new ArrayList<>();
-    args.add(repositoryId);
-    args.add(EnumColumns.write(RepositoryFormat.PYPI));
-    args.add(prefix);
-    if (upper != null) args.add(upper);
     return jdbcTemplate.query("""
         SELECT a.path, a.kind, a.attributes_json, b.md5
         FROM asset a
         JOIN asset_blob b ON b.id = a.asset_blob_id
         WHERE a.repository_id = ?
           AND a.format = ?
-          AND (""" + rangePredicate + """
-          )
+          AND a.path LIKE ? ESCAPE '!'
           AND a.kind IN ('package', 'package-signature')
           AND b.deleted_at IS NULL
         ORDER BY a.path
@@ -688,19 +672,13 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
             rs.getString("kind"),
             rs.getString("md5"),
             jsonColumns.read(rs.getString("attributes_json"))),
-        args.toArray());
+        repositoryId,
+        EnumColumns.write(RepositoryFormat.PYPI),
+        escapeLikeLiteral(prefix) + "%");
   }
 
-  private static String prefixUpperBound(String prefix) {
-    if (prefix == null || prefix.isEmpty()) return null;
-    char[] chars = prefix.toCharArray();
-    for (int i = chars.length - 1; i >= 0; i--) {
-      if (chars[i] != Character.MAX_VALUE) {
-        chars[i]++;
-        return new String(chars, 0, i + 1);
-      }
-    }
-    return null;
+  private static String escapeLikeLiteral(String value) {
+    return value.replace("!", "!!").replace("%", "!%").replace("_", "!_");
   }
 
   private static String placeholders(int count) {

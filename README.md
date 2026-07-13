@@ -18,7 +18,7 @@ kkRepo is a community-driven, fully open-source, self-hosted artifact repository
 - Use kkRepo as a drop-in replacement for Sonatype Nexus, with one-click migration of existing data while preserving repository domains and URLs, so client configurations and CI workflows continue unchanged.
 - Comprehensive identity and access control with Local, LDAP, and OIDC authentication, configurable anonymous access policies, and fine-grained permissions.
 - Comprehensive observability with Prometheus metrics export and Grafana dashboards.
-- MySQL-backed metadata and shared runtime state.
+- MySQL or PostgreSQL-backed metadata and shared runtime state; MySQL remains the default.
 - OSS/S3/File storage support for artifact blobs.
 - Multi-replica high-availability deployment support.
 
@@ -36,6 +36,12 @@ Start a local trial environment with the public release image and MySQL:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quickstart.sh | bash
+```
+
+To run the same image with the default PostgreSQL 16 quickstart instead (the runtime supports PostgreSQL 12+):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quickstart.sh | KKREPO_DATABASE_TYPE=postgresql bash
 ```
 
 Open:
@@ -92,14 +98,14 @@ Migration supports interruption and resume. Completed data is skipped on later r
 
 | Dimension | Sonatype Nexus Repository OSS / Community Edition | kkRepo |
 | --- | --- | --- |
-| Product positioning | A general-purpose artifact repository management platform with broad format and management coverage | Provides migration-oriented client behavior, permission model, and `/repository/<repo>/...` URL compatibility while using a MySQL-first, OSS/S3-first, multi-replica-friendly architecture |
+| Product positioning | A general-purpose artifact repository management platform with broad format and management coverage | Provides migration-oriented client behavior, permission model, and `/repository/<repo>/...` URL compatibility while using a relational-database, OSS/S3-first, multi-replica-friendly architecture |
 | Supported formats | Officially supports more formats; exact capabilities vary by version and distribution | Focuses on common artifact formats. Currently supports Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Docker/OCI, NuGet, RubyGems, Yum, and Raw. Each format is implemented as an independent protocol module for prioritized extension and validation |
-| Usage limits | Community Edition targets individuals and small teams. Official limits are up to 40,000 components and 100,000 requests/day. When exceeded, new component creation is paused until usage returns below the limits | Does not include Community Edition-style license usage limits. Capacity is bounded by MySQL, OSS/S3, replica count, and deployment sizing, so it can scale with actual business needs |
-| High availability deployment | Open source editions are suitable for a single instance or basic Kubernetes deployment; official HA deployment is a Pro capability | Designed for multi-replica deployment by default: session, authentication tickets, catalog watermarks, locks, migration progress, and short-lived coordination state are stored in MySQL. In-process cache is only a rebuildable hot cache |
-| Stability and upgrade | Version boundaries are complex: 3.70.x is the last version supporting OrientDB; 3.71.0 defaults new installs to H2, but H2 is still embedded; Community Edition did not support free external PostgreSQL until 3.77.0+; search was fully moved to SQL and away from Elasticsearch only in 3.88.0. Older OrientDB/Elasticsearch/local-data-directory deployments carry heavy upgrade windows and recovery depends heavily on backups, repair tasks, and manual intervention | MySQL-first runtime with no dependency on OrientDB or embedded Elasticsearch. Core state is in MySQL, blobs are in OSS/S3/File blob store, and cache/index data is rebuildable, making rolling upgrade, failover, and recovery easier |
-| Metadata storage | Historical versions moved across OrientDB, H2, PostgreSQL, and related migration paths. Older instances must handle database migration constraints during upgrade | MySQL-first: repositories, components, assets, permissions, tokens, audit logs, migration state, and rebuildable indexes use explicit table structures for easier troubleshooting, governance, and horizontal scaling |
-| Blob storage | Common deployments use local file blob store; object storage availability depends on version and configuration | OSS/S3-first, with File blob store retained for development and testing. MySQL stores only metadata, state, indexes, and references, not large blobs |
-| Search and indexing | Before 3.88.0, Nexus search and indexing were based on embedded Elasticsearch, with index files and database state separated. Index corruption or inconsistency requires Nexus repair/rebuild tasks | Uses MySQL denormalized indexes and protocol-derived metadata. browse/search/index data is designed to be rebuildable, and node-local cache loss does not affect correctness |
+| Usage limits | Community Edition targets individuals and small teams. Official limits are up to 40,000 components and 100,000 requests/day. When exceeded, new component creation is paused until usage returns below the limits | Does not include Community Edition-style license usage limits. Capacity is bounded by the selected relational database, OSS/S3, replica count, and deployment sizing, so it can scale with actual business needs |
+| High availability deployment | Open source editions are suitable for a single instance or basic Kubernetes deployment; official HA deployment is a Pro capability | Designed for multi-replica deployment by default: session, authentication tickets, catalog watermarks, locks, migration progress, and short-lived coordination state are stored in MySQL or PostgreSQL. In-process cache is only a rebuildable hot cache |
+| Stability and upgrade | Version boundaries are complex: 3.70.x is the last version supporting OrientDB; 3.71.0 defaults new installs to H2, but H2 is still embedded; Community Edition did not support free external PostgreSQL until 3.77.0+; search was fully moved to SQL and away from Elasticsearch only in 3.88.0. Older OrientDB/Elasticsearch/local-data-directory deployments carry heavy upgrade windows and recovery depends heavily on backups, repair tasks, and manual intervention | MySQL/PostgreSQL runtime with no dependency on OrientDB or embedded Elasticsearch. Core state is in the shared relational database, blobs are in OSS/S3/File blob store, and cache/index data is rebuildable, making rolling upgrade, failover, and recovery easier |
+| Metadata storage | Historical versions moved across OrientDB, H2, PostgreSQL, and related migration paths. Older instances must handle database migration constraints during upgrade | Repositories, components, assets, permissions, tokens, audit logs, migration state, and rebuildable indexes use explicit MySQL or PostgreSQL table structures for easier troubleshooting, governance, and horizontal scaling |
+| Blob storage | Common deployments use local file blob store; object storage availability depends on version and configuration | OSS/S3-first, with File blob store retained for development and testing. The relational database stores only metadata, state, indexes, and references, not large blobs |
+| Search and indexing | Before 3.88.0, Nexus search and indexing were based on embedded Elasticsearch, with index files and database state separated. Index corruption or inconsistency requires Nexus repair/rebuild tasks | Uses relational-database denormalized indexes and protocol-derived metadata. browse/search/index data is designed to be rebuildable, and node-local cache loss does not affect correctness |
 | Architecture complexity | Nexus Repository is feature-rich and carries many general management capabilities and historical architecture mechanisms | kkRepo keeps the architecture simple and focuses on repository management and client protocol implementation |
 
 ## Selection Guidance
@@ -156,7 +162,7 @@ AI agent and contributor development instructions are in [AGENTS.md](AGENTS.md).
 
 Platform infrastructure roadmap:
 
-1. PostgreSQL database backend - Planned. Isolate database differences behind the public `persistence-jdbc` interfaces and single shared JDBC implementation, semantic dialect SPIs, and database-specific backend modules. MySQL remains the default backend, while PostgreSQL must preserve the same repository, security, session, audit, migration, cache-version, and multi-replica coordination semantics ([Chinese design plan](docs/zh/dev/pluggable-database-access-layer-design.md))
+1. PostgreSQL database backend - Implemented through the public `persistence-jdbc` contracts, semantic dialect SPIs, backend-owned Flyway migrations, dual-database contract tests, and multi-replica server smoke tests. MySQL remains the default backend ([database backend guide](docs/en/database-backends.md), [Chinese design plan](docs/zh/dev/pluggable-database-access-layer-design.md)).
 
 Repository format roadmap:
 
@@ -203,6 +209,8 @@ kkRepo is open sourced under the [Apache License 2.0](LICENSE).
 - [Backup And Restore Guide](docs/en/backup-restore.md)
 - [Security Model](docs/en/security-model.md)
 - [MySQL ER Design](docs/en/mysql-er.md)
+- [Database Backends](docs/en/database-backends.md)
+- [Database Schema](docs/en/database-schema.md)
 - [Nexus Migration Guide](docs/en/nexus-migration-guide.md)
 - [Nexus Migration Playbook](docs/en/migration-playbook.md)
 - [Monitoring And Observability Guide](docs/en/monitoring-observability-guide.md)

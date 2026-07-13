@@ -13,4 +13,6 @@ public interface DatabaseDialect {
   SearchPersistenceDialect search();
 
   SecurityPersistenceDialect security();
+
+  MigrationPersistenceDialect migrations();
 }

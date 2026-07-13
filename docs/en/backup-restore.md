@@ -1,10 +1,10 @@
 # Backup And Restore Guide
 
-kkrepo stores metadata and coordination state in MySQL, while artifact bytes live in blob storage. A recoverable production deployment must back up both.
+kkrepo stores metadata and coordination state in MySQL or PostgreSQL, while artifact bytes live in blob storage. A recoverable production deployment must back up both.
 
 ## What Must Be Backed Up
 
-Back up MySQL:
+Back up the selected relational database:
 
 - Repository definitions and group membership.
 - Components, assets, browse nodes, search indexes, and blob references.
@@ -19,31 +19,31 @@ Back up blob storage:
 - Migrated blob objects.
 - Generated metadata assets stored as blobs.
 
-The MySQL database contains references and checksums. Blob storage contains the actual bytes. Restoring only one side is not a complete recovery.
+The database contains references and checksums. Blob storage contains the actual bytes. Restoring only one side is not a complete recovery.
 
 ## Backup Strategy
 
 Recommended strategy:
 
-- Use automated MySQL backups with point-in-time recovery when available.
+- Use automated database backups with point-in-time recovery when available.
 - Use OSS/S3 versioning or provider snapshots when recovery requirements demand it.
 - Keep backups in a separate account, bucket, region, or failure domain when possible.
 - Encrypt backups at rest.
 - Test restore regularly.
 - Document RPO and RTO expectations.
 
-For small deployments, daily MySQL backups plus blob-storage versioning may be enough. For heavy CI/CD infrastructure, use shorter MySQL backup intervals and explicit restore drills.
+For small deployments, daily database backups plus blob-storage versioning may be enough. For heavy CI/CD infrastructure, use shorter backup intervals and explicit restore drills.
 
 ## Consistency Model
 
 A clean backup point should include:
 
-- MySQL snapshot at time `T`.
-- Blob storage state containing all objects referenced by MySQL at time `T`.
+- Database snapshot at time `T`.
+- Blob storage state containing all objects referenced by the database at time `T`.
 
-Blob storage may contain extra unreferenced objects. That is usually acceptable because MySQL controls visible repository content. Missing blob objects referenced by MySQL are not acceptable and will cause download failures.
+Blob storage may contain extra unreferenced objects. That is usually acceptable because the database controls visible repository content. Missing referenced blob objects are not acceptable and will cause download failures.
 
-If your object storage supports versioning, restoring MySQL to time `T` while keeping blob versions at or after `T` is usually safer than restoring blob storage to an earlier point.
+If your object storage supports versioning, restoring the database to time `T` while keeping blob versions at or after `T` is usually safer than restoring blob storage to an earlier point.
 
 ## MySQL Backup Example
 
@@ -60,6 +60,17 @@ mysqldump \
 
 Managed MySQL services often provide snapshot and point-in-time recovery. Prefer managed PITR for production when available.
 
+## PostgreSQL Backup Example
+
+Logical backup in custom format:
+
+```bash
+pg_dump --format=custom --dbname='postgresql://kkrepo@db:5432/kkrepo' \
+  --file="kkrepo-$(date +%Y%m%d%H%M%S).dump"
+```
+
+Restore it into an empty target with `pg_restore --clean --if-exists --dbname=<target> <dump>`. Managed PostgreSQL snapshots/PITR are preferred for production when available.
+
 ## Blob Storage Backup Options
 
 Choose one or more:
@@ -70,14 +81,14 @@ Choose one or more:
 - Scheduled object copy to another bucket/account.
 - Lifecycle policy that preserves deleted versions long enough for recovery.
 
-Do not configure lifecycle deletion so aggressively that recently referenced objects can disappear before MySQL backup retention expires.
+Do not configure lifecycle deletion so aggressively that recently referenced objects can disappear before database backup retention expires.
 
 ## Restore Order
 
 Recommended restore sequence:
 
 1. Stop kkrepo replicas or block repository write traffic.
-2. Restore MySQL to the selected recovery point.
+2. Restore the selected database to the recovery point.
 3. Restore or verify blob storage so all referenced objects exist.
 4. Start one kkrepo replica.
 5. Verify `/actuator/health`.
@@ -86,7 +97,7 @@ Recommended restore sequence:
 8. Run protocol-specific smoke checks.
 9. Start remaining replicas.
 
-If object storage already contains a superset of needed objects, you may only need to restore MySQL and verify blob availability.
+If object storage already contains a superset of needed objects, you may only need to restore the database and verify blob availability.
 
 ## Validation After Restore
 
@@ -101,14 +112,14 @@ Check:
 - Migration pages do not show stuck running jobs from the old environment unless intentionally resumed.
 - Audit log and security settings are visible.
 
-If browse or search looks stale but direct artifact download works, use rebuild or maintenance flows when available rather than manually editing MySQL.
+If browse or search looks stale but direct artifact download works, use rebuild or maintenance flows when available rather than manually editing the database.
 
 ## Disaster Recovery Drill
 
 At least periodically:
 
 1. Create a fresh environment.
-2. Restore a production-like MySQL backup.
+2. Restore a production-like MySQL or PostgreSQL backup.
 3. Point it to a restored or replicated blob store.
 4. Start kkrepo with the same encryption secrets.
 5. Verify representative client operations.

@@ -204,7 +204,7 @@ Preflight 应为每个迁移区域产出明确状态。
 
 迁移执行必须保持幂等，并适配 kkrepo 多副本部署。
 
-- 任务、profile、plan、阶段、checkpoint 和校验状态存储在 MySQL。
+- 任务、profile、plan、阶段、checkpoint 和校验状态存储在选定的共享关系数据库中。
 - 对仓库、component、asset 和权限使用稳定源端 identity key。
 - 导入对象使用显式唯一约束和 upsert。
 - Blob bytes 只存 OSS/S3 或 File blob store，不存 MySQL。

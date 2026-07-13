@@ -29,4 +29,16 @@ public enum DatabaseType {
     }
     throw new IllegalArgumentException("Unsupported database type: " + value);
   }
+
+  public static DatabaseType fromProductName(String productName) {
+    if (productName == null || productName.isBlank()) {
+      throw new IllegalArgumentException("Database product name is required");
+    }
+    return switch (productName.trim().toLowerCase(Locale.ROOT)) {
+      case "mysql" -> MYSQL;
+      case "postgresql" -> POSTGRESQL;
+      default -> throw new IllegalArgumentException(
+          "Unsupported database product: " + productName);
+    };
+  }
 }

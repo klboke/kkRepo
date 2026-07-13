@@ -30,7 +30,7 @@ public class JdbcMaintenanceCursorDao implements com.github.klboke.kkrepo.persis
   public int updateLastSeenId(String taskName, long lastSeenId) {
     return jdbcTemplate.update("""
         UPDATE maintenance_cursor
-        SET last_seen_id = ?, updated_at = NOW(3)
+        SET last_seen_id = ?, updated_at = CURRENT_TIMESTAMP
         WHERE task_name = ?
         """, Math.max(0, lastSeenId), taskName);
   }

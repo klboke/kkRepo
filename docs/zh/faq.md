@@ -48,9 +48,9 @@ kkrepo 面向需要 Nexus 兼容客户端路径、常见仓库格式、MySQL 元
 
 Docker / OCI 使用 Registry HTTP API V2 的 `/v2/...` 路由，不走 `/repository/<repo>/...`：共享入口部署使用 `<host>/<repo>/<image>:<tag>`，配置仓库级 connector port 后可使用 `<host>:<repo-port>/<image>:<tag>`。
 
-## 为什么使用 MySQL？
+## kkrepo 可以使用哪些数据库？
 
-MySQL 是以下数据的事实来源：
+kkrepo 支持 MySQL 8 和 PostgreSQL 12+；已有安装默认仍为 MySQL。PostgreSQL 12 是兼容性下限，生产应使用仍在维护期的 PostgreSQL 版本。所选数据库是以下数据的事实来源：
 
 - 仓库元数据。
 - Component 和 asset。
@@ -60,9 +60,11 @@ MySQL 是以下数据的事实来源：
 
 这样可以避免生产正确性依赖内嵌数据库或只存在本地的状态。
 
+两种后端使用同一个可执行文件/容器镜像，通过 `KKREPO_DATABASE_TYPE` 选择。不要只改 JDBC URL 就切换已有安装的数据库引擎，详见[数据库后端](database-backends.md)。
+
 ## kkrepo 必须依赖 Redis 吗？
 
-不需要。默认 cache backend 是进程本地内存，正确性由 MySQL 支撑。进程内 cache 是可重建热缓存，具备 TTL 或 MySQL 支撑的失效水位。
+不需要。默认 cache backend 是进程本地内存，正确性由共享数据库支撑。进程内 cache 是可重建热缓存，具备 TTL 或数据库支撑的失效水位。
 
 ## 制品文件存在哪里？
 

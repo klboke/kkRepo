@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRoleRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcInserts;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcUpserts;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.SecurityPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.SecurityPersistenceDialect.PrivilegeInsert;
@@ -190,23 +191,23 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
   }
 
   public void upsertRole(SecurityRoleRecord record) {
-    jdbcTemplate.update("""
+    Object attributes = jsonColumns.parameter(record.attributes());
+    JdbcUpserts.updateThenInsert(
+        jdbcTemplate,
+        """
+        UPDATE security_role
+        SET source = ?, name = ?, description = ?, read_only = ?, attributes_json = ?
+        WHERE role_id = ?
+        """,
+        new Object[]{record.source(), record.name(), record.description(), record.readOnly(),
+            attributes, record.roleId()},
+        """
         INSERT INTO security_role
           (role_id, source, name, description, read_only, attributes_json)
         VALUES (?, ?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE
-          source = VALUES(source),
-          name = VALUES(name),
-          description = VALUES(description),
-          read_only = VALUES(read_only),
-          attributes_json = VALUES(attributes_json)
         """,
-        record.roleId(),
-        record.source(),
-        record.name(),
-        record.description(),
-        record.readOnly(),
-        jsonColumns.parameter(record.attributes()));
+        new Object[]{record.roleId(), record.source(), record.name(), record.description(),
+            record.readOnly(), attributes});
   }
 
   public Optional<SecurityRoleRecord> findRole(String roleId) {
@@ -229,23 +230,23 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
   }
 
   public void upsertPrivilege(SecurityPrivilegeRecord record) {
-    jdbcTemplate.update("""
+    Object properties = jsonColumns.parameter(record.properties());
+    JdbcUpserts.updateThenInsert(
+        jdbcTemplate,
+        """
+        UPDATE security_privilege
+        SET name = ?, description = ?, type = ?, read_only = ?, properties_json = ?
+        WHERE privilege_id = ?
+        """,
+        new Object[]{record.name(), record.description(), record.type(), record.readOnly(),
+            properties, record.privilegeId()},
+        """
         INSERT INTO security_privilege
           (privilege_id, name, description, type, read_only, properties_json)
         VALUES (?, ?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE
-          name = VALUES(name),
-          description = VALUES(description),
-          type = VALUES(type),
-          read_only = VALUES(read_only),
-          properties_json = VALUES(properties_json)
         """,
-        record.privilegeId(),
-        record.name(),
-        record.description(),
-        record.type(),
-        record.readOnly(),
-        jsonColumns.parameter(record.properties()));
+        new Object[]{record.privilegeId(), record.name(), record.description(), record.type(),
+            record.readOnly(), properties});
   }
 
   public void insertPrivilegeIfAbsent(SecurityPrivilegeRecord record) {
@@ -388,23 +389,23 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
   }
 
   public void upsertRealm(SecurityRealmRecord record) {
-    jdbcTemplate.update("""
+    Object attributes = jsonColumns.parameter(encryptRealmAttributes(record.attributes()));
+    JdbcUpserts.updateThenInsert(
+        jdbcTemplate,
+        """
+        UPDATE security_realm
+        SET type = ?, name = ?, enabled = ?, priority = ?, attributes_json = ?
+        WHERE realm_id = ?
+        """,
+        new Object[]{record.type(), record.name(), record.enabled(), record.priority(), attributes,
+            record.realmId()},
+        """
         INSERT INTO security_realm
           (realm_id, type, name, enabled, priority, attributes_json)
         VALUES (?, ?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE
-          type = VALUES(type),
-          name = VALUES(name),
-          enabled = VALUES(enabled),
-          priority = VALUES(priority),
-          attributes_json = VALUES(attributes_json)
         """,
-        record.realmId(),
-        record.type(),
-        record.name(),
-        record.enabled(),
-        record.priority(),
-        jsonColumns.parameter(encryptRealmAttributes(record.attributes())));
+        new Object[]{record.realmId(), record.type(), record.name(), record.enabled(),
+            record.priority(), attributes});
   }
 
   /**
@@ -444,11 +445,17 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
   }
 
   public void updateRealmConfig(List<String> activeRealmIds) {
-    jdbcTemplate.update("""
+    Object realms = jsonColumns.parameter(
+        Map.of("realms", activeRealmIds == null ? List.of() : activeRealmIds));
+    JdbcUpserts.updateThenInsert(
+        jdbcTemplate,
+        "UPDATE security_realm_config SET realms_json = ? WHERE id = 1",
+        new Object[]{realms},
+        """
         INSERT INTO security_realm_config (id, realms_json)
         VALUES (1, ?)
-        ON DUPLICATE KEY UPDATE realms_json = VALUES(realms_json)
-        """, jsonColumns.parameter(Map.of("realms", activeRealmIds == null ? List.of() : activeRealmIds)));
+        """,
+        new Object[]{realms});
   }
 
   public Optional<SecurityAnonymousConfigRecord> findAnonymousConfig() {
@@ -460,20 +467,20 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
   }
 
   public void upsertAnonymousConfig(SecurityAnonymousConfigRecord record) {
-    jdbcTemplate.update("""
+    JdbcUpserts.updateThenInsert(
+        jdbcTemplate,
+        """
+        UPDATE security_anonymous_config
+        SET enabled = ?, user_source = ?, user_id = ?, realm_name = ?
+        WHERE id = 1
+        """,
+        new Object[]{record.enabled(), record.userSource(), record.userId(), record.realmName()},
+        """
         INSERT INTO security_anonymous_config
           (id, enabled, user_source, user_id, realm_name)
         VALUES (1, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE
-          enabled = VALUES(enabled),
-          user_source = VALUES(user_source),
-          user_id = VALUES(user_id),
-          realm_name = VALUES(realm_name)
         """,
-        record.enabled(),
-        record.userSource(),
-        record.userId(),
-        record.realmName());
+        new Object[]{record.enabled(), record.userSource(), record.userId(), record.realmName()});
   }
 
   public List<SecurityRepositoryTargetRecord> listRepositoryTargets() {
@@ -490,23 +497,25 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
   }
 
   public void upsertRepositoryTarget(SecurityRepositoryTargetRecord record) {
-    jdbcTemplate.update("""
+    Object pathPatterns = jsonColumns.parameter(record.pathPatterns());
+    Object attributes = jsonColumns.parameter(record.attributes());
+    JdbcUpserts.updateThenInsert(
+        jdbcTemplate,
+        """
+        UPDATE security_repository_target
+        SET name = ?, format = ?, content_expression = ?, path_patterns_json = ?,
+            attributes_json = ?
+        WHERE target_id = ?
+        """,
+        new Object[]{record.name(), record.format(), record.contentExpression(), pathPatterns,
+            attributes, record.targetId()},
+        """
         INSERT INTO security_repository_target
           (target_id, name, format, content_expression, path_patterns_json, attributes_json)
         VALUES (?, ?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE
-          name = VALUES(name),
-          format = VALUES(format),
-          content_expression = VALUES(content_expression),
-          path_patterns_json = VALUES(path_patterns_json),
-          attributes_json = VALUES(attributes_json)
         """,
-        record.targetId(),
-        record.name(),
-        record.format(),
-        record.contentExpression(),
-        jsonColumns.parameter(record.pathPatterns()),
-        jsonColumns.parameter(record.attributes()));
+        new Object[]{record.targetId(), record.name(), record.format(), record.contentExpression(),
+            pathPatterns, attributes});
   }
 
   public int deleteRepositoryTarget(String targetId) {
@@ -567,32 +576,30 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
   }
 
   public void upsertApiKey(ApiKeyRecord record) {
-    jdbcTemplate.update("""
+    Object scopes = jsonColumns.parameter(record.scopes());
+    Object[] updateArguments = {
+        record.displayName(), record.status(), record.apiKeyHash(), record.tokenPrefix(), scopes,
+        record.encryptedPayload(), record.expiresAt(), record.lastUsedAt(), record.domain(),
+        record.ownerSource(), record.ownerUserId()
+    };
+    JdbcUpserts.updateThenInsert(
+        jdbcTemplate,
+        """
+        UPDATE api_key
+        SET display_name = ?, status = ?, api_key_hash = ?, token_prefix = ?, scopes_json = ?,
+            encrypted_payload = ?, expires_at = ?, last_used_at = ?
+        WHERE domain = ? AND owner_source = ? AND owner_user_id = ?
+        """,
+        updateArguments,
+        """
         INSERT INTO api_key
           (domain, owner_source, owner_user_id, display_name, status, api_key_hash,
            token_prefix, scopes_json, encrypted_payload, expires_at, last_used_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE
-          display_name = VALUES(display_name),
-          status = VALUES(status),
-          api_key_hash = VALUES(api_key_hash),
-          token_prefix = VALUES(token_prefix),
-          scopes_json = VALUES(scopes_json),
-          encrypted_payload = VALUES(encrypted_payload),
-          expires_at = VALUES(expires_at),
-          last_used_at = VALUES(last_used_at)
         """,
-        record.domain(),
-        record.ownerSource(),
-        record.ownerUserId(),
-        record.displayName(),
-        record.status(),
-        record.apiKeyHash(),
-        record.tokenPrefix(),
-        jsonColumns.parameter(record.scopes()),
-        record.encryptedPayload(),
-        record.expiresAt(),
-        record.lastUsedAt());
+        new Object[]{record.domain(), record.ownerSource(), record.ownerUserId(),
+            record.displayName(), record.status(), record.apiKeyHash(), record.tokenPrefix(), scopes,
+            record.encryptedPayload(), record.expiresAt(), record.lastUsedAt()});
   }
 
   public int deleteApiKey(long id) {

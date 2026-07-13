@@ -42,11 +42,6 @@
       <optional>true</optional>
     </dependency>
     <dependency>
-      <groupId>com.mysql</groupId>
-      <artifactId>mysql-connector-j</artifactId>
-      <scope>runtime</scope>
-    </dependency>
-    <dependency>
       <groupId>org.flywaydb</groupId>
       <artifactId>flyway-core</artifactId>
     </dependency>
@@ -59,8 +54,12 @@
       <artifactId>flyway-mysql</artifactId>
     </dependency>
     <dependency>
-      <groupId>org.springframework.session</groupId>
-      <artifactId>spring-session-jdbc</artifactId>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-database-postgresql</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-session-jdbc</artifactId>
     </dependency>
     <dependency>
       <groupId>io.micrometer</groupId>
@@ -155,7 +154,10 @@
     <dependency>
       <groupId>com.github.klboke</groupId>
       <artifactId>kkrepo-persistence-mysql</artifactId>
-      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.github.klboke</groupId>
+      <artifactId>kkrepo-persistence-postgresql</artifactId>
     </dependency>
     <dependency>
       <groupId>com.github.klboke</groupId>
@@ -184,6 +186,16 @@
       <groupId>com.unboundid</groupId>
       <artifactId>unboundid-ldapsdk</artifactId>
       <version>7.0.5</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-mysql</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-postgresql</artifactId>
       <scope>test</scope>
     </dependency>
   </dependencies>

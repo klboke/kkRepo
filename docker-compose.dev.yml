@@ -24,6 +24,26 @@ services:
       retries: 10
       start_period: 30s
 
+  postgresql:
+    image: postgres:16
+    profiles:
+      - postgresql
+    environment:
+      POSTGRES_DB: kkrepo
+      POSTGRES_USER: kkrepo
+      POSTGRES_PASSWORD: kkrepo
+      TZ: Asia/Shanghai
+    ports:
+      - "15432:5432"
+    volumes:
+      - ./.local/postgresql:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   rustfs-perms:
     image: alpine:3.20
     user: root

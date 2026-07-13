@@ -1,6 +1,6 @@
 # 架构说明
 
-kkrepo 是一个兼容 Nexus 的制品仓库，核心设计是 MySQL-first 元数据、OSS/S3-first blob 存储，以及适合多副本部署的运行时行为。
+kkrepo 是一个兼容 Nexus 的制品仓库，核心设计是 MySQL/PostgreSQL 共享元数据、OSS/S3-first blob 存储，以及适合多副本部署的运行时行为。
 
 项目目标不是复制 Nexus 内部实现。kkrepo 保持客户端可见协议、权限模型和 `/repository/<repo>/...` URL 兼容，同时避免在生产运行时依赖 OrientDB、内嵌 Elasticsearch、Karaf、OSGi 和只能本地持久化的 blob 状态。
 
@@ -21,7 +21,7 @@ kkrepo 多副本
         |
         | 元数据、用户、权限、session、锁、迁移状态
         v
-      MySQL
+ MySQL 8 / PostgreSQL 12+
         |
         | blob 引用、checksum、object key
         v
@@ -49,10 +49,10 @@ Docker / OCI 客户端使用 Registry HTTP API V2 路由：
 
 服务端流程：
 
-1. `RepositoryContentController` 从 MySQL 支撑的仓库元数据解析 `<repo>`。
+1. `RepositoryContentController` 从共享关系数据库中的仓库元数据解析 `<repo>`。
 2. 安全过滤器完成 subject 认证并校验仓库权限。
 3. 服务端根据仓库 format 和 type 分发到协议实现。
-4. hosted 仓库通过 MySQL 事务和 blob storage 读写 asset 与 metadata。
+4. hosted 仓库通过关系数据库事务和 blob storage 读写 asset 与 metadata。
 5. proxy 仓库拉取上游内容，持久化可缓存 asset，并在安全条件下使用 negative cache。
 6. group 仓库按配置顺序解析 member，并缓存可重建的 member 命中结果。
 7. 响应从 blob storage 流式返回，或返回生成的 metadata asset。
@@ -83,7 +83,9 @@ Admin UI 和 Browse UI 由 Spring Boot 服务提供静态资源：
 | `protocol-nuget` | NuGet 路径辅助逻辑 |
 | `protocol-rubygems` | RubyGems metadata 辅助逻辑 |
 | `protocol-yum` | Yum/RPM metadata 辅助逻辑 |
-| `persistence-mysql` | MySQL DAO、模型、JSON/枚举/hash 辅助逻辑 |
+| `persistence-jdbc` | 公共 JDBC DAO 和数据库 dialect 契约 |
+| `persistence-mysql` | MySQL dialect、驱动、迁移和契约测试 |
+| `persistence-postgresql` | PostgreSQL dialect、驱动、迁移和契约测试 |
 | `migration-nexus` | Nexus 元数据和安全数据迁移支持 |
 | `server` | Spring Boot 运行时、controller、service、filter、worker |
 | `admin-ui` | 管理控制台静态资源 |
@@ -94,7 +96,7 @@ Admin UI 和 Browse UI 由 Spring Boot 服务提供静态资源：
 
 ## 数据归属
 
-MySQL 存储：
+所选关系数据库存储：
 
 - 仓库定义和 group member。
 - Component、asset、browse node 和 search index。
@@ -109,7 +111,7 @@ Blob storage 存储：
 - 缓存的上游制品。
 - 生成或迁移的 blob object。
 
-MySQL 只保存 blob 引用，不保存大 blob 内容。
+数据库只保存 blob 引用，不保存大 blob 内容。
 
 ## Blob 存储
 
@@ -120,7 +122,7 @@ Blob 写入流程：
 1. 将请求体或上游响应流写入临时位置。
 2. 计算 checksum 和 size。
 3. 在选定 blob store 中持久化或复用 blob object。
-4. 在 MySQL 事务中写入 asset/blob metadata。
+4. 在数据库事务中写入 asset/blob metadata。
 5. 清理临时文件或废弃 staging object。
 
 只有内容安全写入后，blob metadata 和 object 引用才应事务性可见。
@@ -130,11 +132,11 @@ Blob 写入流程：
 kkrepo 默认按多个应用副本设计：
 
 - HTTP session 使用 Spring Session JDBC。
-- 认证 ticket 存在 MySQL，生命周期很短。
-- 仓库、安全和 blob-store catalog 变更会推进 MySQL 支撑的 cache 水位。
+- 认证 ticket 存在共享数据库中，生命周期很短。
+- 仓库、安全和 blob-store catalog 变更会推进数据库支撑的 cache 水位。
 - 节点本地 cache 可重建，并具备 TTL 或显式失效规则。
-- 后台 worker 使用 MySQL claim、marker 或 cursor，而不是只存在本地队列。
-- 迁移进度和重试状态持久化在 MySQL。
+- 后台 worker 使用数据库 claim、marker 或 cursor，而不是只存在本地队列。
+- 迁移进度和重试状态持久化在数据库中。
 
 如果某个副本重启或丢失本地 cache，正确性不应受影响。可接受的最坏情况是 cache 回暖期间多读一些数据库或对象存储。
 
@@ -151,7 +153,7 @@ kkrepo 默认按多个应用副本设计：
 - Security authorization cache。
 - Repository/security/blob-store metadata 的 catalog snapshot。
 
-缓存失效依赖 TTL 和 MySQL version 水位。运维人员可以通过 `KKREPO_*` 环境变量调整 cache 大小和 TTL。
+缓存失效依赖 TTL 和数据库 version 水位。运维人员可以通过 `KKREPO_*` 环境变量调整 cache 大小和 TTL。
 
 ## 安全架构
 
@@ -174,9 +176,11 @@ kkrepo 默认按多个应用副本设计：
 - `Nexus Metadata`：源元数据 preflight 和迁移，包括用户、角色、权限、blob store 和 repository。
 - `Nexus Repository Data`：仓库 asset 发现和 package/blob 迁移。
 
-当普通 REST API 无法暴露必要数据时，元数据迁移可能使用源 Nexus Script REST API。仓库数据迁移先把源 asset 记录到 MySQL，再由 worker 迁移 blob，并支持重试和 checksum 校验。
+当普通 REST API 无法暴露必要数据时，元数据迁移可能使用源 Nexus Script REST API。仓库数据迁移先把源 asset 记录到共享数据库，再由 worker 迁移 blob，并支持重试和 checksum 校验。
 
 详见 [迁移实战手册](migration-playbook.md)。
+
+数据库选择、迁移和运维约束见[数据库后端](database-backends.md)与[数据库 Schema](database-schema.md)。
 
 ## 可观测性
 

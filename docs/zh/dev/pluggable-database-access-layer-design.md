@@ -4,7 +4,7 @@
 
 这不是一次 JDBC driver 替换。当前 MySQL 同时承载 repository、component、asset、权限、token、审计、Spring Session、cache version、后台任务 marker、upload session 和迁移 checkpoint。PostgreSQL 支持必须覆盖这些正确性边界，不能只做到应用能够连接数据库并启动。
 
-## 当前状态
+## 实施前基线
 
 截至 2026-07-13，项目数据库层具有以下特征：
 
@@ -28,6 +28,19 @@
 - `TINYINT(1)`、`BIGINT UNSIGNED`、`BINARY(32)`、`DATETIME(3)`、`ENGINE=InnoDB`。
 
 `FOR UPDATE`、`FOR UPDATE SKIP LOCKED`、普通 `LIMIT`、外键和大部分 CRUD SQL 可以继续使用标准或两边均支持的写法，不需要为了抽象而全部重写。
+
+## PR 3-PR 5 落地状态
+
+`feat/pluggable-database-access-layer` 在 PR 1-PR 2 基础上已经落地以下设计：
+
+- 新增 `persistence-postgresql`，由 ServiceLoader 按 `kkrepo.database.type` 选择 MySQL/PostgreSQL dialect；同一 `server` jar 同时包含两种 driver 和 Flyway database module。
+- MySQL V1-V29 原样移动到 `db/migration/mysql` 并由固定 SHA-256 契约保护；PostgreSQL 使用逻辑等价的 `V29__postgresql_baseline.sql`。`scripts/ci/check-flyway-parity.sh` 约束 V30 以后两套版本同步。
+- Flyway 前通过 JDBC metadata 校验配置类型；MySQL 保持默认和原 baseline-on-migrate 行为，PostgreSQL 不接受误 baseline。
+- 公共 persistence contract 同时在真实 MySQL 8/PostgreSQL 12 最低兼容版本上覆盖完整 45 表 schema、upsert/生成主键、JSON、搜索、安全关系、审计、时间、cache 水位、worker marker、blob GC、Docker/Pub upload 和 Nexus 迁移 claim/retry；默认 PostgreSQL 16 环境继续承担端到端兼容验证。
+- `DatabaseServerSmokeTest` 在两种数据库上分别启动两个完整 Spring Boot 实例，验证全新 migration、重复启动、health、管理员与三类仓库可见性，以及跨实例 Spring Session、制品 blob、audit、cache version 和 marker 协调。
+- CI 增加两种数据库的 persistence contract、server smoke、MySQL V29 upgrade compatibility、package boundary 和 Flyway parity 稳定检查名；live compatibility 增加 kkrepo 数据库矩阵。
+- 新增 PostgreSQL quickstart、dev/compat Compose profile，以及 `deploy/helm/kkrepo` 外部数据库、多副本、rolling update、probe、Secret 和 File/RWX 约束。
+- README、架构、部署、生产加固、排障、备份、安全、FAQ、兼容矩阵和迁移手册已经更新，并新增中英文 database backend/schema 指南。
 
 ## 目标
 
@@ -675,7 +688,7 @@ flyway-version-parity
 mvn -pl server -am -Dsurefire.failIfNoSpecifiedTests=false verify
 ```
 
-PostgreSQL 第一版建议以仓库已经使用的 `postgres:16` 作为最低 CI 基线，再增加一个较新 PostgreSQL 版本的定期 workflow，发现 driver、Flyway 和 SQL 兼容回归。
+PostgreSQL 第一版以 `postgres:12` 作为 SQL 兼容性最低 CI 基线，因为当前最晚依赖的数据库能力是 PostgreSQL 12 引入的 stored generated column；`jsonb`、`ON CONFLICT ... RETURNING` 和 `FOR UPDATE SKIP LOCKED` 均不要求 16。默认开发、quickstart 和端到端兼容环境继续使用 `postgres:16`，用于发现最低版本与常用生产版本之间的 driver、Flyway 和 SQL 兼容回归。PostgreSQL 12 已结束社区维护，因此这里只表示技术兼容下限，生产应使用仍在维护期的版本。
 
 Codecov 需要同时收集公共 API contract、公共 JDBC 实现和两个 dialect 的覆盖率，不能只跑 mock-based Store/DAO tests。
 
@@ -693,7 +706,7 @@ docker-compose.quickstart-postgresql.yml
 
 PostgreSQL quickstart 包含：
 
-- `postgres:16`。
+- 默认 `postgres:16`（运行时兼容 PostgreSQL 12+，生产使用仍在维护期的版本）。
 - 独立 `postgresql-data` volume。
 - `KKREPO_DATABASE_TYPE=postgresql`。
 - PostgreSQL JDBC URL。

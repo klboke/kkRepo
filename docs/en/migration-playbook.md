@@ -45,13 +45,13 @@ Decide:
 
 Set up kkrepo with production-like settings:
 
-- External MySQL.
+- External MySQL or PostgreSQL selected before the installation is initialized.
 - OSS/S3-compatible blob storage.
 - Stable `KKREPO_CREDENTIAL_SECRET`.
 - Stable `KKREPO_API_KEY_PAYLOAD_SECRET`.
 - HTTPS reverse proxy.
 - Monitoring on the management port.
-- Backups for MySQL and blob storage.
+- Backups for the selected database and blob storage.
 
 Before migrating, verify:
 
@@ -144,7 +144,7 @@ Recommendations:
 
 - Keep checksum validation enabled.
 - Start with moderate concurrency, such as `8`.
-- Increase concurrency only after checking source Nexus, network, MySQL, and object-storage pressure.
+- Increase concurrency only after checking source Nexus, network, database, and object-storage pressure.
 - Monitor failed assets and retry after fixing root causes.
 
 Common causes of failures:
@@ -238,12 +238,14 @@ If users publish new packages to kkrepo after cutover, rollback becomes a data r
 
 After the rollback window:
 
-- Back up kkrepo MySQL and blob storage.
+- Back up the kkrepo database and blob storage.
 - Confirm source Nexus is no longer receiving traffic.
 - Archive source Nexus configuration and migration reports.
 - Decommission source Nexus only after business sign-off.
 - Review users, roles, and tokens.
 - Document known compatibility differences or follow-up issues.
+
+The target database engine is an installation decision, not a migration toggle. Do not change an initialized target from MySQL to PostgreSQL (or vice versa) by editing the JDBC URL; provision and validate a new target database instead. See [Database Backends](database-backends.md).
 
 ## When To Stop And Investigate
 

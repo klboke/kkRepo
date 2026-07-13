@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.persistence.jdbc.internal;
 import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRows.nullableInstant;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.MigrationCheckpointRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcUpserts;
 import java.util.Optional;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -27,23 +28,23 @@ public class JdbcMigrationCheckpointDao implements com.github.klboke.kkrepo.pers
   }
 
   public void upsert(MigrationCheckpointRecord record) {
-    jdbcTemplate.update("""
+    JdbcUpserts.updateThenInsert(
+        jdbcTemplate,
+        """
+        UPDATE migration_checkpoint
+        SET target_table = ?, target_id = ?, source_checksum = ?,
+            migrated_at = CURRENT_TIMESTAMP
+        WHERE job_id = ? AND source_database = ? AND source_class = ? AND source_rid = ?
+        """,
+        new Object[]{record.targetTable(), record.targetId(), record.sourceChecksum(),
+            record.jobId(), record.sourceDatabase(), record.sourceClass(), record.sourceRid()},
+        """
         INSERT INTO migration_checkpoint
           (job_id, source_database, source_class, source_rid, target_table, target_id, source_checksum)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE
-          target_table = VALUES(target_table),
-          target_id = VALUES(target_id),
-          source_checksum = VALUES(source_checksum),
-          migrated_at = CURRENT_TIMESTAMP(3)
         """,
-        record.jobId(),
-        record.sourceDatabase(),
-        record.sourceClass(),
-        record.sourceRid(),
-        record.targetTable(),
-        record.targetId(),
-        record.sourceChecksum());
+        new Object[]{record.jobId(), record.sourceDatabase(), record.sourceClass(), record.sourceRid(),
+            record.targetTable(), record.targetId(), record.sourceChecksum()});
   }
 
   public Optional<MigrationCheckpointRecord> find(
