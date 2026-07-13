@@ -366,11 +366,10 @@ public class DockerRegistryDao {
       return DeletedManifest.notFound();
     }
     long id = manifest.get().id();
-    List<Long> assetBlobIds = jdbcTemplate.query(
+    Long assetBlobId = jdbcTemplate.queryForObject(
         "SELECT asset_blob_id FROM asset WHERE id = ?",
         (rs, rowNum) -> nullableLong(rs, "asset_blob_id"),
         manifest.get().assetId());
-    Long assetBlobId = assetBlobIds.isEmpty() ? null : assetBlobIds.get(0);
     jdbcTemplate.update("DELETE FROM docker_tag WHERE manifest_id = ?", id);
     int deleted = jdbcTemplate.update("""
         UPDATE docker_manifest
