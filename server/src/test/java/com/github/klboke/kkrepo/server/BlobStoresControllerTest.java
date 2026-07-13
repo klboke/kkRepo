@@ -4,10 +4,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.github.klboke.kkrepo.persistence.mysql.dao.BlobStoreDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.BlobStoreRecord;
-import com.github.klboke.kkrepo.storage.file.FileBlobStorePathValidator;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
+import com.github.klboke.kkrepo.server.support.dao.BlobStoreDaoAdapter;
 import com.github.klboke.kkrepo.storage.file.FileBlobStorageFactory;
+import com.github.klboke.kkrepo.storage.file.FileBlobStorePathValidator;
 import com.github.klboke.kkrepo.storage.file.admin.FileBlobStoreAdmin;
 import com.github.klboke.kkrepo.storage.file.config.FileStorageProperties;
 import com.github.klboke.kkrepo.storage.s3.config.S3StorageProperties;
@@ -218,7 +219,7 @@ class BlobStoresControllerTest {
         Map.of("engine", "file", "path", path));
   }
 
-  private static final class EmptyBlobStoreDao extends BlobStoreDao {
+  private static final class EmptyBlobStoreDao extends BlobStoreDaoAdapter {
     EmptyBlobStoreDao() {
       super(null, null);
     }
@@ -229,7 +230,7 @@ class BlobStoresControllerTest {
     }
   }
 
-  private static final class InMemoryBlobStoreDao extends BlobStoreDao {
+  private static final class InMemoryBlobStoreDao extends BlobStoreDaoAdapter {
     private final Map<Long, BlobStoreRecord> records = new LinkedHashMap<>();
     private long nextId = 1;
 

@@ -3,13 +3,13 @@ package com.github.klboke.kkrepo.server.pub;
 import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.BrowseNodeDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.ComponentDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetBlobRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.ComponentRecord;
-import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.protocol.pub.PubContentTypes;
 import com.github.klboke.kkrepo.protocol.pub.PubPaths;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
@@ -322,9 +322,9 @@ class PubAssetWriter {
           null,
           blobStoreId,
           blobRef,
-          HashColumns.blobRefHash(blobRef),
+          PersistenceHashes.blobRefHash(blobRef),
           reference.objectKey(),
-          HashColumns.objectKeyHash(reference.objectKey()),
+          PersistenceHashes.objectKeyHash(reference.objectKey()),
           digests.sha1(),
           digests.sha256(),
           digests.md5(),
@@ -368,7 +368,7 @@ class PubAssetWriter {
           blobId,
           RepositoryFormat.PUB,
           path,
-          HashColumns.pathHash(path),
+          PersistenceHashes.pathHash(path),
           fileName(path),
           kind,
           contentType,
@@ -448,7 +448,7 @@ class PubAssetWriter {
         metadata.packageName(),
         metadata.version(),
         "pub-package",
-        HashColumns.componentCoordinateHash(null, metadata.packageName(), metadata.version()),
+        PersistenceHashes.componentCoordinateHash(null, metadata.packageName(), metadata.version()),
         effectiveAttributes,
         now);
     try {

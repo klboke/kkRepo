@@ -1,7 +1,7 @@
 package com.github.klboke.kkrepo.server.settings;
 
-import com.github.klboke.kkrepo.persistence.mysql.dao.UiSettingsDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.UiSettingsRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.UiSettingsDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.UiSettingsRecord;
 import java.time.Instant;
 import java.util.List;
 import org.springframework.http.HttpStatus;

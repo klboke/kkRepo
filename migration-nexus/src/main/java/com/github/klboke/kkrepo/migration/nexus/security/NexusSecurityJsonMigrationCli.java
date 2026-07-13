@@ -2,20 +2,29 @@ package com.github.klboke.kkrepo.migration.nexus.security;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.github.klboke.kkrepo.persistence.mysql.dao.MigrationCheckpointDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.MigrationJobDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityDao;
-import com.github.klboke.kkrepo.persistence.mysql.support.JsonColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DatabaseConnectionSettings;
+import com.github.klboke.kkrepo.persistence.jdbc.api.MigrationJobDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceStoreFactories;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceStores;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import java.util.function.Function;
 
 public class NexusSecurityJsonMigrationCli {
   private static final String DEFAULT_NEXUS_VERSION = "3.29.2-02";
+  private final Function<DatabaseConnectionSettings, PersistenceStores> storesConnector;
+
+  public NexusSecurityJsonMigrationCli() {
+    this(PersistenceStoreFactories::connect);
+  }
+
+  NexusSecurityJsonMigrationCli(
+      Function<DatabaseConnectionSettings, PersistenceStores> storesConnector) {
+    this.storesConnector = storesConnector;
+  }
 
   public static void main(String[] args) {
     int code = new NexusSecurityJsonMigrationCli().run(args, System.out, System.err);
@@ -41,49 +50,42 @@ public class NexusSecurityJsonMigrationCli {
 
     try {
       ObjectMapper objectMapper = new ObjectMapper();
-      JdbcTemplate jdbcTemplate = new JdbcTemplate(dataSource(options));
-      JsonColumns jsonColumns = new JsonColumns(objectMapper);
-      MigrationJobDao jobDao = new MigrationJobDao(jdbcTemplate, jsonColumns);
-      long jobId = jobDao.create(
-          options.sourceNexusVersion(),
-          options.sourceDataPath(),
-          Map.of(
-              "scope", "security",
-              "exportPath", options.exportPath().toString()));
-      try {
-        NexusSecurityExport export = readExport(objectMapper, options.exportPath());
-        NexusSecurityMigrationResult result = new NexusSecurityMigrationService(
-            new NexusSecurityRecordMapper(),
-            new SecurityDaoMigrationWriter(new SecurityDao(jdbcTemplate, jsonColumns)))
-            .migrate(new NexusSecurityExportReader().read(export));
-        int checkpoints = new NexusSecurityMigrationCheckpointWriter(
-            new MigrationCheckpointDao(jdbcTemplate),
-            objectMapper)
-            .write(jobId, export);
-        Map<String, Object> summary = summary(jobId, result, checkpoints, "finished");
-        jobDao.markFinished(jobId, "finished", summary);
-        out.println(toJson(objectMapper, summary));
-        return 0;
-      } catch (Exception e) {
-        Map<String, Object> summary = new LinkedHashMap<>();
-        summary.put("jobId", jobId);
-        summary.put("status", "failed");
-        summary.put("error", e.getMessage());
-        jobDao.markFinished(jobId, "failed", summary);
-        throw e;
+      try (PersistenceStores stores = storesConnector.apply(new DatabaseConnectionSettings(
+          options.jdbcUrl(), options.username(), options.password()))) {
+        MigrationJobDao jobDao = stores.migrationJobs();
+        long jobId = jobDao.create(
+            options.sourceNexusVersion(),
+            options.sourceDataPath(),
+            Map.of(
+                "scope", "security",
+                "exportPath", options.exportPath().toString()));
+        try {
+          NexusSecurityExport export = readExport(objectMapper, options.exportPath());
+          NexusSecurityMigrationResult result = new NexusSecurityMigrationService(
+              new NexusSecurityRecordMapper(),
+              new SecurityDaoMigrationWriter(stores.security()))
+              .migrate(new NexusSecurityExportReader().read(export));
+          int checkpoints = new NexusSecurityMigrationCheckpointWriter(
+              stores.migrationCheckpoints(),
+              objectMapper)
+              .write(jobId, export);
+          Map<String, Object> summary = summary(jobId, result, checkpoints, "finished");
+          jobDao.markFinished(jobId, "finished", summary);
+          out.println(toJson(objectMapper, summary));
+          return 0;
+        } catch (Exception e) {
+          Map<String, Object> summary = new LinkedHashMap<>();
+          summary.put("jobId", jobId);
+          summary.put("status", "failed");
+          summary.put("error", e.getMessage());
+          jobDao.markFinished(jobId, "failed", summary);
+          throw e;
+        }
       }
     } catch (Exception e) {
       err.println("Nexus security migration failed: " + e.getMessage());
       return 1;
     }
-  }
-
-  private static DriverManagerDataSource dataSource(Options options) {
-    DriverManagerDataSource dataSource = new DriverManagerDataSource();
-    dataSource.setUrl(options.jdbcUrl());
-    dataSource.setUsername(options.username());
-    dataSource.setPassword(options.password());
-    return dataSource;
   }
 
   private static NexusSecurityExport readExport(ObjectMapper objectMapper, Path exportPath) throws IOException {

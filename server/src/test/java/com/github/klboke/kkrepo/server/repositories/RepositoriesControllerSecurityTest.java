@@ -11,12 +11,13 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryRecipe;
 import com.github.klboke.kkrepo.core.RepositoryRecipes;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CreateCommand;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.UpdateCommand;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
+import com.github.klboke.kkrepo.server.support.dao.SecurityDaoAdapter;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
 import java.lang.reflect.Proxy;
@@ -317,7 +318,7 @@ class RepositoriesControllerSecurityTest {
     private final AuthenticatedSubject subject;
 
     private StubAuthenticationService(AuthenticatedSubject subject) {
-      super(new SecurityDao(null, null), new ObjectMapper(), "X-Nexus-Plus-Token");
+      super(new SecurityDaoAdapter(null, null), new ObjectMapper(), "X-Nexus-Plus-Token");
       this.subject = subject;
     }
 
@@ -337,7 +338,7 @@ class RepositoriesControllerSecurityTest {
     private final List<String> permissions = new ArrayList<>();
 
     private RecordingSecurityService(Function<String, AccessDecision> decisions) {
-      super(new SecurityDao(null, null));
+      super(new SecurityDaoAdapter(null, null));
       this.decisions = decisions;
     }
 

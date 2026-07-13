@@ -9,17 +9,19 @@ import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.BrowseNodeDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.ComponentDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetBlobRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.ComponentRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryDataMigrationAssetRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
-import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryDataMigrationAssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.pub.PubContentTypes;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
+import com.github.klboke.kkrepo.server.support.dao.AssetDaoAdapter;
+import com.github.klboke.kkrepo.server.support.dao.ComponentDaoAdapter;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -106,7 +108,7 @@ class PubRepositoryDataMigrationWriterTest {
         "pub-asset-1",
         "pub-component-1",
         path,
-        HashColumns.pathHash(path),
+        PersistenceHashes.pathHash(path),
         RepositoryFormat.PUB,
         null,
         "example_package",
@@ -158,7 +160,7 @@ class PubRepositoryDataMigrationWriterTest {
     return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(body));
   }
 
-  private static final class RecordingComponentDao extends ComponentDao {
+  private static final class RecordingComponentDao extends ComponentDaoAdapter {
     private ComponentRecord component;
 
     private RecordingComponentDao() {
@@ -187,7 +189,7 @@ class PubRepositoryDataMigrationWriterTest {
     }
   }
 
-  private static final class RecordingAssetDao extends AssetDao {
+  private static final class RecordingAssetDao extends AssetDaoAdapter {
     private AssetBlobRecord blob;
     private AssetRecord asset;
 

@@ -5,11 +5,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.BlobStoreDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.BlobStoreRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.catalog.CatalogCacheBroadcaster;
+import com.github.klboke.kkrepo.server.support.dao.BlobStoreDaoAdapter;
+import com.github.klboke.kkrepo.server.support.dao.RepositoryDaoAdapter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -75,7 +77,7 @@ class RepositoryCatalogCacheTest {
         true, 1L, null, null, null, null, null, true, Map.of());
   }
 
-  private static final class StubRepositoryDao extends RepositoryDao {
+  private static final class StubRepositoryDao extends RepositoryDaoAdapter {
     private final List<RepositoryRecord> records = new ArrayList<>();
     private final Map<Long, List<String>> members = new LinkedHashMap<>();
     private int listAllCalls;
@@ -109,7 +111,7 @@ class RepositoryCatalogCacheTest {
     }
   }
 
-  private static final class StubBlobStoreDao extends BlobStoreDao {
+  private static final class StubBlobStoreDao extends BlobStoreDaoAdapter {
     private StubBlobStoreDao() {
       super(null, null);
     }

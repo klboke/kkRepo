@@ -8,12 +8,13 @@ import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.support.InMemoryVersionWatermark;
+import com.github.klboke.kkrepo.server.support.dao.RepositoryDaoAdapter;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -131,7 +132,7 @@ class MavenGroupMetadataInvalidatorTest {
         Map.of());
   }
 
-  private static class FakeRepositoryDao extends RepositoryDao {
+  private static class FakeRepositoryDao extends RepositoryDaoAdapter {
     private final Map<Long, RepositoryRecord> byId = new HashMap<>();
     private final Map<Long, List<RepositoryRecord>> members = new HashMap<>();
     private final Map<Long, List<RepositoryRecord>> containing = new HashMap<>();

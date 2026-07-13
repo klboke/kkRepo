@@ -1,7 +1,7 @@
 package com.github.klboke.kkrepo.server.security;
 
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityAuditDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityAuditDao.AuditLogRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao.AuditLogRecord;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;

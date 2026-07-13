@@ -4,8 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.DockerRegistryDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.server.support.dao.DockerRegistryDaoAdapter;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
@@ -104,7 +105,7 @@ class DockerBrowseServiceTest {
         Map.of());
   }
 
-  private static final class StubDockerRegistryDao extends DockerRegistryDao {
+  private static final class StubDockerRegistryDao extends DockerRegistryDaoAdapter {
     private List<BrowseImageRow> images = List.of();
     private List<BrowseReferenceRow> references = List.of();
     private final Map<Long, List<BrowseImageRow>> imagesByRepository = new java.util.LinkedHashMap<>();

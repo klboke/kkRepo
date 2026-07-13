@@ -1,6 +1,6 @@
 package com.github.klboke.kkrepo.server.security;
 
-import com.github.klboke.kkrepo.persistence.mysql.dao.AuthTicketDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AuthTicketDao;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;

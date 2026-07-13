@@ -2,9 +2,10 @@ package com.github.klboke.kkrepo.server.docker;
 
 import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
-import com.github.klboke.kkrepo.persistence.mysql.dao.DockerUploadDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerUploadChunkRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerUploadSessionRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerUploadDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerUploadChunkRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerUploadSessionRecord;
 import com.github.klboke.kkrepo.protocol.docker.DockerConstants;
 import com.github.klboke.kkrepo.protocol.docker.DockerDigest;
 import com.github.klboke.kkrepo.protocol.docker.DockerErrorCode;
@@ -82,7 +83,7 @@ public class DockerUploadService {
         uuid,
         runtime.id(),
         imageName,
-        DockerUploadDao.imageHash(imageName),
+        PersistenceHashes.sha256(imageName),
         "STARTED",
         0,
         null,

@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.persistence.mysql.support;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
 import java.sql.Statement;
 import java.util.List;
 import java.util.function.Supplier;

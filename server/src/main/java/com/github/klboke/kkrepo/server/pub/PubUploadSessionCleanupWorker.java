@@ -1,8 +1,8 @@
 package com.github.klboke.kkrepo.server.pub;
 
 import com.github.klboke.kkrepo.core.BlobReference;
-import com.github.klboke.kkrepo.persistence.mysql.dao.PubUploadSessionDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.PubUploadSessionRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PubUploadSessionDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.PubUploadSessionRecord;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import java.time.Instant;

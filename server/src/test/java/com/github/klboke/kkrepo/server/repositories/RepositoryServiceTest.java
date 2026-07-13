@@ -7,14 +7,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.BlobStoreDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.BlobStoreRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityPrivilegeRecord;
-import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityPrivilegeRecord;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CargoSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CreateCommand;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.DockerSettings;
@@ -22,6 +22,9 @@ import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.HostedSet
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.ProxySettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.UpdateCommand;
 import com.github.klboke.kkrepo.server.support.InMemoryVersionWatermark;
+import com.github.klboke.kkrepo.server.support.dao.BlobStoreDaoAdapter;
+import com.github.klboke.kkrepo.server.support.dao.RepositoryDaoAdapter;
+import com.github.klboke.kkrepo.server.support.dao.SecurityDaoAdapter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -688,7 +691,7 @@ class RepositoryServiceTest {
         attributes);
   }
 
-  private static final class StubRepositoryDao extends RepositoryDao {
+  private static final class StubRepositoryDao extends RepositoryDaoAdapter {
     private final List<RepositoryRecord> repositories = new ArrayList<>();
     private final Map<Long, List<Long>> membersByGroupId = new LinkedHashMap<>();
     private RepositoryRecord repository;
@@ -793,7 +796,7 @@ class RepositoryServiceTest {
     }
   }
 
-  private static final class StubBlobStoreDao extends BlobStoreDao {
+  private static final class StubBlobStoreDao extends BlobStoreDaoAdapter {
     private final List<BlobStoreRecord> stores = List.of(
         blobStore(1L, "default"),
         blobStore(2L, "v2"));
@@ -815,7 +818,7 @@ class RepositoryServiceTest {
     }
   }
 
-  private static final class StubSecurityDao extends SecurityDao {
+  private static final class StubSecurityDao extends SecurityDaoAdapter {
     private final List<SecurityPrivilegeRecord> privileges = new ArrayList<>();
 
     private StubSecurityDao() {

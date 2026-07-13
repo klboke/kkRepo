@@ -9,16 +9,17 @@ import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetBlobRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
-import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.protocol.docker.DockerDigest;
 import com.github.klboke.kkrepo.protocol.docker.DockerErrorCode;
 import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.support.dao.AssetDaoAdapter;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.time.Instant;
@@ -170,9 +171,9 @@ class DockerBlobStoreTest {
         300L,
         1L,
         "test:" + objectKey,
-        HashColumns.blobRefHash("test:" + objectKey),
+        PersistenceHashes.blobRefHash("test:" + objectKey),
         objectKey,
-        HashColumns.objectKeyHash(objectKey),
+        PersistenceHashes.objectKeyHash(objectKey),
         null,
         digest.hex(),
         null,
@@ -185,7 +186,7 @@ class DockerBlobStoreTest {
         Map.of("dockerDigest", digest.value()));
   }
 
-  private static final class RecordingAssetDao extends AssetDao {
+  private static final class RecordingAssetDao extends AssetDaoAdapter {
     private final AssetBlobRecord reusableBlob;
     private final List<String> reusedAssetPaths = new ArrayList<>();
     private boolean failAssetPersist;

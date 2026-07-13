@@ -1,10 +1,10 @@
 package com.github.klboke.kkrepo.server.maven;
 
 import com.github.klboke.kkrepo.core.BlobStorage;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.MetadataRebuildDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.MetadataRebuildDao.Claim;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.MetadataRebuildDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.MetadataRebuildDao.Claim;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.protocol.maven.path.Coordinates;
 import com.github.klboke.kkrepo.server.metrics.KkRepoMetrics;
 import io.micrometer.core.instrument.Timer;

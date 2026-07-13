@@ -1,9 +1,10 @@
-package com.github.klboke.kkrepo.persistence.mysql.dao;
+package com.github.klboke.kkrepo.persistence.jdbc.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.api.*;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.HashColumns;
 import java.lang.reflect.Proxy;
 import java.nio.ByteBuffer;
 import java.sql.ResultSet;
@@ -22,7 +23,7 @@ class BrowseNodeDaoTest {
         ByteBuffer.wrap(HashColumns.pathHash("com")), new ExistingRow(10L, true),
         ByteBuffer.wrap(HashColumns.pathHash("com/acme")), new ExistingRow(11L, true),
         ByteBuffer.wrap(HashColumns.pathHash("com/acme/app.jar")), new ExistingRow(12L, false)));
-    BrowseNodeDao dao = new BrowseNodeDao(jdbcTemplate);
+    BrowseNodeDao dao = new JdbcBrowseNodeDao(jdbcTemplate);
 
     dao.upsertPathAncestors(7L, "com/acme/app.jar", 101L, 201L);
 

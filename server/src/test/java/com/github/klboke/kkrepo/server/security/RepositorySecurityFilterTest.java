@@ -11,9 +11,11 @@ import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.server.support.dao.RepositoryDaoAdapter;
+import com.github.klboke.kkrepo.server.support.dao.SecurityDaoAdapter;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.http.HttpServletRequest;
@@ -891,7 +893,7 @@ class RepositorySecurityFilterTest {
     }
 
     private StubAuthenticationService(Optional<AuthenticatedSubject> authenticated, AuthenticatedSubject anonymous) {
-      super(new SecurityDao(null, null), new ObjectMapper(), "X-Nexus-Plus-Token");
+      super(new SecurityDaoAdapter(null, null), new ObjectMapper(), "X-Nexus-Plus-Token");
       this.authenticated = authenticated;
       this.anonymous = anonymous;
     }
@@ -940,7 +942,7 @@ class RepositorySecurityFilterTest {
     }
   }
 
-  private static class FakeRepositoryDao extends RepositoryDao {
+  private static class FakeRepositoryDao extends RepositoryDaoAdapter {
     private final RepositoryRecord repository;
 
     private FakeRepositoryDao(RepositoryRecord repository) {

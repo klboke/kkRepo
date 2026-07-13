@@ -7,7 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.server.support.dao.SecurityDaoAdapter;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.http.HttpServletRequest;
@@ -711,7 +712,7 @@ class SecurityManagementFilterTest {
     private int calls;
 
     private StubAuthenticationService(Optional<AuthenticatedSubject> subject) {
-      super(new SecurityDao(null, null), new ObjectMapper(), "X-Nexus-Plus-Token");
+      super(new SecurityDaoAdapter(null, null), new ObjectMapper(), "X-Nexus-Plus-Token");
       this.subject = subject;
     }
 
@@ -728,7 +729,7 @@ class SecurityManagementFilterTest {
     private String requestedPermission;
 
     private RecordingSecurityService(AccessDecision decision) {
-      super(new SecurityDao(null, null));
+      super(new SecurityDaoAdapter(null, null));
       this.decision = decision;
     }
 

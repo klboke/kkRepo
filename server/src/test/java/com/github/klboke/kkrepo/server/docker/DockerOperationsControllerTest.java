@@ -10,9 +10,9 @@ import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.NexusCacheType;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
@@ -20,6 +20,7 @@ import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
+import com.github.klboke.kkrepo.server.support.dao.SecurityDaoAdapter;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -158,7 +159,7 @@ class DockerOperationsControllerTest {
     private final Optional<AuthenticatedSubject> subject;
 
     private StubAuthenticationService(Optional<AuthenticatedSubject> subject) {
-      super(new SecurityDao(null, null), new ObjectMapper(), "X-Nexus-Plus-Token");
+      super(new SecurityDaoAdapter(null, null), new ObjectMapper(), "X-Nexus-Plus-Token");
       this.subject = subject;
     }
 
@@ -172,7 +173,7 @@ class DockerOperationsControllerTest {
     private final AccessDecision decision;
 
     private StubSecurityService(AccessDecision decision) {
-      super(new SecurityDao(null, null));
+      super(new SecurityDaoAdapter(null, null));
       this.decision = decision;
     }
 

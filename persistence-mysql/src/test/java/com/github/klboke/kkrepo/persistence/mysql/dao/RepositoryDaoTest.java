@@ -1,14 +1,15 @@
-package com.github.klboke.kkrepo.persistence.mysql.dao;
+package com.github.klboke.kkrepo.persistence.jdbc.internal;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.github.klboke.kkrepo.persistence.jdbc.api.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.core.security.SecretCipher;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
-import com.github.klboke.kkrepo.persistence.mysql.support.JsonColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -19,7 +20,7 @@ class RepositoryDaoTest {
   void proxyRemotePasswordIsEncryptedWhenAttributesAreWritten() {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
     JsonColumns jsonColumns = new JsonColumns(new ObjectMapper());
-    RepositoryDao dao = new RepositoryDao(jdbcTemplate, jsonColumns);
+    RepositoryDao dao = new JdbcRepositoryDao(jdbcTemplate, jsonColumns);
     Map<String, Object> proxy = new LinkedHashMap<>();
     proxy.put("remoteUrl", "https://registry.example.com");
     proxy.put("remoteUsername", "robot");

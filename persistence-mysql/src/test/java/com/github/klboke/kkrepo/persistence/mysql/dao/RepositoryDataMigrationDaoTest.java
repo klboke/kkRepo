@@ -1,15 +1,16 @@
-package com.github.klboke.kkrepo.persistence.mysql.dao;
+package com.github.klboke.kkrepo.persistence.jdbc.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.github.klboke.kkrepo.persistence.jdbc.api.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDataMigrationDao.TargetAssetRef;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryDataMigrationAssetRecord;
-import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
-import com.github.klboke.kkrepo.persistence.mysql.support.JsonColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDataMigrationDao.TargetAssetRef;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryDataMigrationAssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.HashColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
 import java.lang.reflect.Proxy;
 import java.nio.ByteBuffer;
 import java.sql.PreparedStatement;
@@ -26,7 +27,7 @@ class RepositoryDataMigrationDaoTest {
   @Test
   void discoveredAssetAlreadyPresentInTargetIsMarkedMigrated() throws Exception {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
-    RepositoryDataMigrationDao dao = new RepositoryDataMigrationDao(
+    RepositoryDataMigrationDao dao = new JdbcRepositoryDataMigrationDao(
         jdbcTemplate,
         new JsonColumns(new ObjectMapper()));
     RepositoryDataMigrationAssetRecord asset = asset("com/acme/app/1.0/app-1.0.jar");
@@ -37,7 +38,7 @@ class RepositoryDataMigrationDaoTest {
         Map.of(ByteBuffer.wrap(asset.sourcePathHash()), new TargetAssetRef(11L, 22L, 33L)));
 
     assertTrue(jdbcTemplate.sql.contains("VALUES(status)"));
-    assertEquals(RepositoryDataMigrationDao.ASSET_MIGRATED, jdbcTemplate.parameters.get(20));
+    assertEquals(JdbcRepositoryDataMigrationDao.ASSET_MIGRATED, jdbcTemplate.parameters.get(20));
     assertNotNull(jdbcTemplate.parameters.get(21));
     assertEquals(11L, jdbcTemplate.parameters.get(22));
     assertEquals(22L, jdbcTemplate.parameters.get(23));
@@ -47,7 +48,7 @@ class RepositoryDataMigrationDaoTest {
   @Test
   void discoveredAssetWithoutPrecomputedPathHashStillMatchesTarget() throws Exception {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
-    RepositoryDataMigrationDao dao = new RepositoryDataMigrationDao(
+    RepositoryDataMigrationDao dao = new JdbcRepositoryDataMigrationDao(
         jdbcTemplate,
         new JsonColumns(new ObjectMapper()));
     String path = "helm-hosted/charts/app-1.0.0.tgz";
@@ -57,7 +58,7 @@ class RepositoryDataMigrationDaoTest {
         List.of(asset(path, null)),
         Map.of(ByteBuffer.wrap(HashColumns.pathHash(path)), new TargetAssetRef(11L, 22L, 33L)));
 
-    assertEquals(RepositoryDataMigrationDao.ASSET_MIGRATED, jdbcTemplate.parameters.get(20));
+    assertEquals(JdbcRepositoryDataMigrationDao.ASSET_MIGRATED, jdbcTemplate.parameters.get(20));
     assertNotNull(jdbcTemplate.parameters.get(5));
     assertEquals(22L, jdbcTemplate.parameters.get(23));
   }
@@ -65,13 +66,13 @@ class RepositoryDataMigrationDaoTest {
   @Test
   void discoveredAssetMissingInTargetRemainsPending() throws Exception {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
-    RepositoryDataMigrationDao dao = new RepositoryDataMigrationDao(
+    RepositoryDataMigrationDao dao = new JdbcRepositoryDataMigrationDao(
         jdbcTemplate,
         new JsonColumns(new ObjectMapper()));
 
     dao.upsertDiscoveredAssets(100, List.of(asset("com/acme/app/1.0/app-1.0.pom")), Map.of());
 
-    assertEquals(RepositoryDataMigrationDao.ASSET_PENDING, jdbcTemplate.parameters.get(20));
+    assertEquals(JdbcRepositoryDataMigrationDao.ASSET_PENDING, jdbcTemplate.parameters.get(20));
     assertEquals(null, jdbcTemplate.parameters.get(21));
     assertEquals(null, jdbcTemplate.parameters.get(22));
     assertEquals(null, jdbcTemplate.parameters.get(23));
@@ -105,7 +106,7 @@ class RepositoryDataMigrationDaoTest {
         updated,
         "admin",
         "127.0.0.1",
-        RepositoryDataMigrationDao.ASSET_PENDING,
+        JdbcRepositoryDataMigrationDao.ASSET_PENDING,
         0,
         null,
         null,

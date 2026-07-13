@@ -7,27 +7,28 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.ApiKeyRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityAnonymousConfigRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityPrivilegeRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityRealmRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityRepositoryTargetRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityRoleRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityUserRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.ApiKeyRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityAnonymousConfigRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityPrivilegeRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRealmRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRepositoryTargetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRoleRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.HostedSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryService;
 import com.github.klboke.kkrepo.server.repositories.RepositoryView;
 import com.github.klboke.kkrepo.server.security.NexusSecurityPayloads.NexusAnonymousSettings;
 import com.github.klboke.kkrepo.server.security.NexusSecurityPayloads.NexusApiKeyCommand;
+import com.github.klboke.kkrepo.server.security.NexusSecurityPayloads.NexusAuthToken;
 import com.github.klboke.kkrepo.server.security.NexusSecurityPayloads.NexusContentSelector;
 import com.github.klboke.kkrepo.server.security.NexusSecurityPayloads.NexusCreatedApiKey;
 import com.github.klboke.kkrepo.server.security.NexusSecurityPayloads.NexusPrivilege;
 import com.github.klboke.kkrepo.server.security.NexusSecurityPayloads.NexusRealmSettings;
 import com.github.klboke.kkrepo.server.security.NexusSecurityPayloads.NexusRole;
-import com.github.klboke.kkrepo.server.security.NexusSecurityPayloads.NexusAuthToken;
 import com.github.klboke.kkrepo.server.security.NexusSecurityPayloads.NexusUiPrivilege;
 import com.github.klboke.kkrepo.server.security.NexusSecurityPayloads.NexusUiReference;
 import com.github.klboke.kkrepo.server.security.NexusSecurityPayloads.NexusUiRole;
@@ -36,7 +37,7 @@ import com.github.klboke.kkrepo.server.security.NexusSecurityPayloads.NexusUserA
 import com.github.klboke.kkrepo.server.security.NexusSecurityPayloads.NexusUserAccountPassword;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.OidcSettingsCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.RealmCommand;
-import com.github.klboke.kkrepo.auth.PermissionSubject;
+import com.github.klboke.kkrepo.server.support.dao.SecurityDaoAdapter;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
 import java.lang.reflect.Proxy;
@@ -2571,7 +2572,7 @@ class NexusSecurityRestControllerTest {
     private StubAuthenticationService(
         Optional<AuthenticatedSubject> subject,
         Map<String, AuthenticatedSubject> credentials) {
-      super(new SecurityDao(null, null), new ObjectMapper(), "X-Nexus-Plus-Token");
+      super(new SecurityDaoAdapter(null, null), new ObjectMapper(), "X-Nexus-Plus-Token");
       this.subject = subject;
       this.credentials = credentials;
     }
@@ -2592,7 +2593,7 @@ class NexusSecurityRestControllerTest {
     }
   }
 
-  private static class FakeSecurityDao extends SecurityDao {
+  private static class FakeSecurityDao extends SecurityDaoAdapter {
     private final List<SecurityRealmRecord> realms = new ArrayList<>();
     private final Map<String, SecurityUserRecord> users = new LinkedHashMap<>();
     private final Map<String, SecurityRoleRecord> roles = new LinkedHashMap<>();

@@ -7,16 +7,19 @@ import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.BrowseNodeDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.ComponentDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetBlobRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.ComponentRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.protocol.npm.NpmPackageId;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
+import com.github.klboke.kkrepo.server.support.dao.AssetDaoAdapter;
+import com.github.klboke.kkrepo.server.support.dao.BrowseNodeDaoAdapter;
+import com.github.klboke.kkrepo.server.support.dao.ComponentDaoAdapter;
 import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -177,7 +180,7 @@ class NpmAssetWriterConcurrencyTest {
 
   private record StoredPair(NpmAssetWriter.Stored first, NpmAssetWriter.Stored second) {}
 
-  private abstract static class RaceAssetDao extends AssetDao {
+  private abstract static class RaceAssetDao extends AssetDaoAdapter {
     private final AtomicLong blobIds = new AtomicLong(900);
     private final AtomicLong assetIds = new AtomicLong(100);
     private final ConcurrentHashMap<Long, AssetBlobRecord> blobs = new ConcurrentHashMap<>();
@@ -353,7 +356,7 @@ class NpmAssetWriterConcurrencyTest {
     }
   }
 
-  private static final class FixedComponentDao extends ComponentDao {
+  private static final class FixedComponentDao extends ComponentDaoAdapter {
     FixedComponentDao() {
       super(null, null);
     }
@@ -364,7 +367,7 @@ class NpmAssetWriterConcurrencyTest {
     }
   }
 
-  private static final class NoopBrowseNodeDao extends BrowseNodeDao {
+  private static final class NoopBrowseNodeDao extends BrowseNodeDaoAdapter {
     private final AtomicInteger upsertCalls = new AtomicInteger();
 
     NoopBrowseNodeDao() {

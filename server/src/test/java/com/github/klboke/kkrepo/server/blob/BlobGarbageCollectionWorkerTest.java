@@ -15,10 +15,10 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.core.BlobStorage;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao.BlobReconcileWindow;
-import com.github.klboke.kkrepo.persistence.mysql.dao.MaintenanceCursorDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao.BlobReconcileWindow;
+import com.github.klboke.kkrepo.persistence.jdbc.api.MaintenanceCursorDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.metrics.KkRepoMetrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;

@@ -1,14 +1,15 @@
-package com.github.klboke.kkrepo.persistence.mysql.dao;
+package com.github.klboke.kkrepo.persistence.jdbc.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.github.klboke.kkrepo.persistence.jdbc.api.*;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetBlobRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
-import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.HashColumns;
 import com.github.klboke.kkrepo.persistence.mysql.support.MySqlIntegrationTestSupport;
 import java.time.Instant;
 import java.util.List;
@@ -19,7 +20,7 @@ class AssetDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
   @Test
   void blobLifecycleDeduplicatesSoftDeletesAndRecovers() {
     long blobStoreId = insertBlobStore("asset-store");
-    AssetDao dao = new AssetDao(jdbc(), jsonColumns());
+    AssetDao dao = new JdbcAssetDao(jdbc(), jsonColumns());
     AssetBlobRecord candidate = blob(blobStoreId, "content/a.jar", "a".repeat(64), 12);
 
     AssetBlobRecord inserted = dao.insertBlobOrFindExisting(candidate);
@@ -44,7 +45,7 @@ class AssetDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
   void assetUniquenessLookupsAndPrefixQueriesUseRealIndexes() {
     long repositoryId = insertRepository("maven-one", "maven2");
     long secondRepositoryId = insertRepository("maven-two", "maven2");
-    AssetDao dao = new AssetDao(jdbc(), jsonColumns());
+    AssetDao dao = new JdbcAssetDao(jdbc(), jsonColumns());
 
     long firstId = dao.insertAsset(asset(repositoryId, "com/acme/a/1.0/a-1.0.jar"));
     long duplicateId = dao.insertAsset(asset(repositoryId, "com/acme/a/1.0/a-1.0.jar"));
@@ -74,7 +75,7 @@ class AssetDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
     long repositoryId = insertRepository("raw-hosted", "raw");
     long blobStoreId = jdbc().queryForObject(
         "SELECT blob_store_id FROM repository WHERE id = ?", Long.class, repositoryId);
-    AssetDao dao = new AssetDao(jdbc(), jsonColumns());
+    AssetDao dao = new JdbcAssetDao(jdbc(), jsonColumns());
     long referencedBlobId = dao.insertBlob(blob(blobStoreId, "referenced.bin", "b".repeat(64), 5));
     long orphanBlobId = dao.insertBlob(blob(blobStoreId, "orphan.bin", "c".repeat(64), 7));
     AssetRecord referencedAsset = asset(repositoryId, "files/referenced.bin");

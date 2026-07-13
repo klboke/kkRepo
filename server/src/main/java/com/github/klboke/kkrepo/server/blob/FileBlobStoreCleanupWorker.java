@@ -1,7 +1,7 @@
 package com.github.klboke.kkrepo.server.blob;
 
-import com.github.klboke.kkrepo.persistence.mysql.dao.BlobStoreDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.BlobStoreRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.storage.file.FileBlobStoreConfig;
 import com.github.klboke.kkrepo.storage.file.FileBlobStorageFactory;
 import com.github.klboke.kkrepo.storage.file.admin.FileBlobStoreAdmin;

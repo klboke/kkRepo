@@ -5,11 +5,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
 import com.github.klboke.kkrepo.server.support.InMemoryVersionWatermark;
+import com.github.klboke.kkrepo.server.support.dao.RepositoryDaoAdapter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -61,7 +62,7 @@ class GroupMemberAssetCacheTest {
         "pypi-group", true, null, null, null, null, null, "ALLOW", false, Map.of());
   }
 
-  private static class StubRepositoryDao extends RepositoryDao {
+  private static class StubRepositoryDao extends RepositoryDaoAdapter {
     private final Map<Long, List<RepositoryRecord>> groupsByMember = new HashMap<>();
 
     StubRepositoryDao() {

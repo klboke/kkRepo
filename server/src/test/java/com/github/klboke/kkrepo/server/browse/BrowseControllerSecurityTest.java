@@ -1,8 +1,8 @@
 package com.github.klboke.kkrepo.server.browse;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.auth.AccessDecision;
@@ -10,13 +10,16 @@ import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.BrowseNodeDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
+import com.github.klboke.kkrepo.server.support.dao.BrowseNodeDaoAdapter;
+import com.github.klboke.kkrepo.server.support.dao.RepositoryDaoAdapter;
+import com.github.klboke.kkrepo.server.support.dao.SecurityDaoAdapter;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
 import java.lang.reflect.Proxy;
@@ -288,7 +291,7 @@ class BrowseControllerSecurityTest {
     return null;
   }
 
-  private static class StubRepositoryDao extends RepositoryDao {
+  private static class StubRepositoryDao extends RepositoryDaoAdapter {
     private final Map<String, RepositoryRecord> repositories;
     private final Map<Long, List<RepositoryRecord>> members = new LinkedHashMap<>();
 
@@ -308,7 +311,7 @@ class BrowseControllerSecurityTest {
     }
   }
 
-  private static class StubBrowseNodeDao extends BrowseNodeDao {
+  private static class StubBrowseNodeDao extends BrowseNodeDaoAdapter {
     private final Map<String, List<BrowseChild>> children = new LinkedHashMap<>();
     private final List<String> calls = new ArrayList<>();
 
@@ -329,7 +332,7 @@ class BrowseControllerSecurityTest {
     private final AuthenticatedSubject anonymous;
 
     private StubAuthenticationService(AuthenticatedSubject authenticated, AuthenticatedSubject anonymous) {
-      super(new SecurityDao(null, null), new ObjectMapper(), "X-Nexus-Plus-Token");
+      super(new SecurityDaoAdapter(null, null), new ObjectMapper(), "X-Nexus-Plus-Token");
       this.authenticated = authenticated;
       this.anonymous = anonymous;
     }
@@ -351,7 +354,7 @@ class BrowseControllerSecurityTest {
     private final List<RepositoryPermission> repositoryPermissions = new ArrayList<>();
 
     private RecordingSecurityService(Function<String, AccessDecision> decisions) {
-      super(new SecurityDao(null, null));
+      super(new SecurityDaoAdapter(null, null));
       this.decisions = decisions;
     }
 

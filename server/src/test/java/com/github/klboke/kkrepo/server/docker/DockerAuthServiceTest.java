@@ -12,7 +12,7 @@ import com.github.klboke.kkrepo.auth.AccessDecisionService;
 import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
-import com.github.klboke.kkrepo.persistence.mysql.dao.DockerAuthTokenDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import java.time.Instant;

@@ -2,7 +2,7 @@ package com.github.klboke.kkrepo.server.cargo;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.github.klboke.kkrepo.persistence.mysql.model.ComponentRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.protocol.cargo.CargoCrateName;
 import com.github.klboke.kkrepo.protocol.cargo.CargoVersions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;

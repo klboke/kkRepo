@@ -17,10 +17,11 @@ import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.NexusInventory;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.RepositoryDocument;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.SourceProbe;
 import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityExport;
-import com.github.klboke.kkrepo.persistence.mysql.dao.BlobStoreDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.BlobStoreRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import java.lang.reflect.Proxy;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -502,11 +503,13 @@ class NexusApiMigrationServiceTest {
         record.attributes().get("docker"));
   }
 
-  private static NexusApiMigrationService service(BlobStoreDao blobStores, RepositoryDao repositories) {
+  private static NexusApiMigrationService service(
+      FakeBlobStoreDao blobStores,
+      FakeRepositoryDao repositories) {
     return new NexusApiMigrationService(
         new ObjectMapper(),
-        blobStores,
-        repositories,
+        blobStores.asDao(),
+        repositories.asDao(),
         null,
         null,
         null);
@@ -569,15 +572,10 @@ class NexusApiMigrationServiceTest {
         "datastoreContentModels", models);
   }
 
-  private static final class FakeBlobStoreDao extends BlobStoreDao {
+  private static final class FakeBlobStoreDao {
     private final AtomicLong ids = new AtomicLong(100);
     private final Map<String, BlobStoreRecord> records = new LinkedHashMap<>();
 
-    private FakeBlobStoreDao() {
-      super(null, null);
-    }
-
-    @Override
     public BlobStoreRecord upsertByName(BlobStoreRecord record) {
       Long id = Optional.ofNullable(records.get(record.name()))
           .map(BlobStoreRecord::id)
@@ -595,22 +593,27 @@ class NexusApiMigrationServiceTest {
       return stored;
     }
 
-    @Override
     public Optional<BlobStoreRecord> findByName(String name) {
       return Optional.ofNullable(records.get(name));
     }
+
+    private BlobStoreDao asDao() {
+      return (BlobStoreDao) Proxy.newProxyInstance(
+          BlobStoreDao.class.getClassLoader(),
+          new Class<?>[] {BlobStoreDao.class},
+          (proxy, method, args) -> switch (method.getName()) {
+            case "upsertByName" -> upsertByName((BlobStoreRecord) args[0]);
+            case "findByName" -> findByName((String) args[0]);
+            default -> throw new UnsupportedOperationException(method.getName());
+          });
+    }
   }
 
-  private static final class FakeRepositoryDao extends RepositoryDao {
+  private static final class FakeRepositoryDao {
     private final AtomicLong ids = new AtomicLong(200);
     private final Map<String, RepositoryRecord> records = new LinkedHashMap<>();
     private final Map<Long, List<Long>> members = new LinkedHashMap<>();
 
-    private FakeRepositoryDao() {
-      super(null, null);
-    }
-
-    @Override
     public RepositoryRecord upsertByName(RepositoryRecord record) {
       Long id = Optional.ofNullable(records.get(record.name()))
           .map(RepositoryRecord::id)
@@ -634,21 +637,36 @@ class NexusApiMigrationServiceTest {
       return stored;
     }
 
-    @Override
     public Optional<RepositoryRecord> findByName(String name) {
       return Optional.ofNullable(records.get(name));
     }
 
-    @Override
     public void replaceMembers(long groupRepositoryId, List<Long> memberRepositoryIds) {
       members.put(groupRepositoryId, List.copyOf(memberRepositoryIds));
     }
 
-    @Override
     public List<RepositoryRecord> listMembers(long groupRepositoryId) {
       return members.getOrDefault(groupRepositoryId, List.of()).stream()
           .map(this::requiredById)
           .toList();
+    }
+
+    private RepositoryDao asDao() {
+      return (RepositoryDao) Proxy.newProxyInstance(
+          RepositoryDao.class.getClassLoader(),
+          new Class<?>[] {RepositoryDao.class},
+          (proxy, method, args) -> switch (method.getName()) {
+            case "upsertByName" -> upsertByName((RepositoryRecord) args[0]);
+            case "findByName" -> findByName((String) args[0]);
+            case "replaceMembers" -> {
+              @SuppressWarnings("unchecked")
+              List<Long> memberIds = (List<Long>) args[1];
+              replaceMembers((Long) args[0], memberIds);
+              yield null;
+            }
+            case "listMembers" -> listMembers((Long) args[0]);
+            default -> throw new UnsupportedOperationException(method.getName());
+          });
     }
 
     private RepositoryRecord required(String name) {

@@ -1,15 +1,16 @@
-package com.github.klboke.kkrepo.persistence.mysql.dao;
+package com.github.klboke.kkrepo.persistence.jdbc.internal;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.github.klboke.kkrepo.persistence.jdbc.api.*;
 import org.junit.jupiter.api.Test;
 
 class AssetDaoTest {
   @Test
   void reusableBlobIdSqlSeparatesDeletedPredicateWithoutGapLocking() {
-    String liveSql = AssetDao.reusableBlobIdSql(false);
-    String deletedOnlySql = AssetDao.reusableBlobIdSql(true);
+    String liveSql = JdbcAssetDao.reusableBlobIdSql(false);
+    String deletedOnlySql = JdbcAssetDao.reusableBlobIdSql(true);
 
     assertFalse(liveSql.contains("ANDdeleted_at"));
     assertFalse(deletedOnlySql.contains("ANDdeleted_at"));

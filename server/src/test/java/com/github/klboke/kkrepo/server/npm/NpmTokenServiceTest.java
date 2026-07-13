@@ -4,7 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
@@ -12,6 +12,7 @@ import com.github.klboke.kkrepo.server.security.SecurityManagementService;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.ApiKeyCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.ApiKeyView;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.CreatedApiKeyView;
+import com.github.klboke.kkrepo.server.support.dao.SecurityDaoAdapter;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
@@ -98,7 +99,7 @@ class NpmTokenServiceTest {
     private final AuthenticatedSubject subject;
 
     private StubAuthenticationService(AuthenticatedSubject subject) {
-      super(new SecurityDao(null, null), new ObjectMapper(), "X-Nexus-Plus-Token");
+      super(new SecurityDaoAdapter(null, null), new ObjectMapper(), "X-Nexus-Plus-Token");
       this.subject = subject;
     }
 
@@ -123,7 +124,7 @@ class NpmTokenServiceTest {
     private boolean deleteResult;
 
     private StubSecurityManagementService() {
-      super(new SecurityDao(null, null));
+      super(new SecurityDaoAdapter(null, null));
     }
 
     @Override

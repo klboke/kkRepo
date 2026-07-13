@@ -1,15 +1,16 @@
-package com.github.klboke.kkrepo.persistence.mysql.dao;
+package com.github.klboke.kkrepo.persistence.jdbc.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.github.klboke.kkrepo.persistence.jdbc.api.*;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerManifestRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerManifestReferenceRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerTagRecord;
-import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestReferenceRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerTagRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.HashColumns;
 import com.github.klboke.kkrepo.persistence.mysql.support.MySqlIntegrationTestSupport;
 import java.time.Instant;
 import java.util.List;
@@ -20,9 +21,9 @@ class DockerRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
   @Test
   void manifestTagAndReferenceLifecycleUsesDockerUniqueKeys() {
     long repositoryId = insertRepository("docker-hosted", "docker");
-    AssetDao assetDao = new AssetDao(jdbc(), jsonColumns());
+    AssetDao assetDao = new JdbcAssetDao(jdbc(), jsonColumns());
     long assetId = assetDao.insertAsset(asset(repositoryId, "docker/manifests/acme/app/v1"));
-    DockerRegistryDao dao = new DockerRegistryDao(jdbc(), jsonColumns());
+    DockerRegistryDao dao = new JdbcDockerRegistryDao(jdbc(), jsonColumns());
     DockerManifestRecord first = manifest(repositoryId, assetId, "sha256:" + "a".repeat(64), 10);
 
     DockerManifestRecord inserted = inTransaction(() -> dao.upsertManifest(first));
@@ -63,8 +64,8 @@ class DockerRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
   @Test
   void paginationAndBrowsePathsReturnOnlyLiveImages() {
     long repositoryId = insertRepository("docker-browse", "docker");
-    AssetDao assetDao = new AssetDao(jdbc(), jsonColumns());
-    DockerRegistryDao dao = new DockerRegistryDao(jdbc(), jsonColumns());
+    AssetDao assetDao = new JdbcAssetDao(jdbc(), jsonColumns());
+    DockerRegistryDao dao = new JdbcDockerRegistryDao(jdbc(), jsonColumns());
     long alphaAssetId = assetDao.insertAsset(asset(repositoryId, "docker/manifests/acme/alpha/v1"));
     long betaAssetId = assetDao.insertAsset(asset(repositoryId, "docker/manifests/acme/beta/v1"));
     DockerManifestRecord alpha = inTransaction(() -> dao.upsertManifest(
@@ -114,10 +115,10 @@ class DockerRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
         null,
         repositoryId,
         imageName,
-        DockerRegistryDao.hash(imageName),
+        JdbcDockerRegistryDao.hash(imageName),
         "sha256",
         digest,
-        DockerRegistryDao.hash(digest),
+        JdbcDockerRegistryDao.hash(digest),
         "application/vnd.oci.image.manifest.v1+json",
         "application/vnd.example.sbom",
         null,
@@ -138,9 +139,9 @@ class DockerRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
         null,
         repositoryId,
         manifest.imageName(),
-        DockerRegistryDao.hash(manifest.imageName()),
+        JdbcDockerRegistryDao.hash(manifest.imageName()),
         tag,
-        DockerRegistryDao.hash(tag),
+        JdbcDockerRegistryDao.hash(tag),
         manifest.id(),
         manifest.digest(),
         "tester",
@@ -157,7 +158,7 @@ class DockerRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
         repositoryId,
         manifest.imageName(),
         referenceDigest(),
-        DockerRegistryDao.hash(referenceDigest()),
+        JdbcDockerRegistryDao.hash(referenceDigest()),
         "MANIFEST",
         "application/vnd.oci.image.manifest.v1+json",
         123L,

@@ -1,4 +1,4 @@
-package com.github.klboke.kkrepo.persistence.mysql.dao;
+package com.github.klboke.kkrepo.persistence.jdbc.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -6,12 +6,13 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.github.klboke.kkrepo.persistence.jdbc.api.*;
 import com.github.klboke.kkrepo.core.security.SecretCipher;
-import com.github.klboke.kkrepo.persistence.mysql.model.ApiKeyRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityPrivilegeRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityRealmRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityRoleRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityUserRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.ApiKeyRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityPrivilegeRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRealmRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRoleRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
 import com.github.klboke.kkrepo.persistence.mysql.support.MySqlIntegrationTestSupport;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -22,7 +23,7 @@ import org.springframework.dao.DuplicateKeyException;
 class SecurityDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
   @Test
   void userRoleAndPrivilegeRelationshipsRespectUniqueKeysAndForeignKeys() {
-    SecurityDao dao = new SecurityDao(jdbc(), jsonColumns());
+    SecurityDao dao = new JdbcSecurityDao(jdbc(), jsonColumns());
     long userId = dao.insertUser(user("alice"));
     assertThrows(DuplicateKeyException.class, () -> dao.insertUser(user("alice")));
 
@@ -53,7 +54,7 @@ class SecurityDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
 
   @Test
   void realmSecretsAreEncryptedAtRestAndDecryptedOnRead() {
-    SecurityDao dao = new SecurityDao(jdbc(), jsonColumns());
+    SecurityDao dao = new JdbcSecurityDao(jdbc(), jsonColumns());
     dao.upsertRealm(new SecurityRealmRecord(
         null,
         "oidc-test",
@@ -78,7 +79,7 @@ class SecurityDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
 
   @Test
   void apiKeyUpsertAndOwnerQueriesRoundTripJsonAndTimestamps() {
-    SecurityDao dao = new SecurityDao(jdbc(), jsonColumns());
+    SecurityDao dao = new JdbcSecurityDao(jdbc(), jsonColumns());
     LocalDateTime expiry = LocalDateTime.of(2027, 1, 1, 0, 0);
     dao.upsertApiKey(apiKey("hash-one", "ACTIVE", expiry));
     ApiKeyRecord created = dao.findApiKey("npm", "Local", "alice").orElseThrow();

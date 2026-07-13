@@ -7,21 +7,22 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
+import com.github.klboke.kkrepo.server.support.dao.SecurityDaoAdapter;
 import jakarta.servlet.http.HttpServletRequest;
 import java.lang.reflect.Proxy;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import org.junit.jupiter.api.Test;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.junit.jupiter.api.Test;
 
 class AdminUiControllerTest {
   @Test
@@ -111,7 +112,7 @@ class AdminUiControllerTest {
     private final Optional<AuthenticatedSubject> subject;
 
     private StubAuthenticationService(Optional<AuthenticatedSubject> subject) {
-      super(new SecurityDao(null, null), new ObjectMapper(), "X-Nexus-Plus-Token");
+      super(new SecurityDaoAdapter(null, null), new ObjectMapper(), "X-Nexus-Plus-Token");
       this.subject = subject;
     }
 
@@ -125,7 +126,7 @@ class AdminUiControllerTest {
     private final AccessDecision decision;
 
     private StubSecurityService(AccessDecision decision) {
-      super(new SecurityDao(null, null));
+      super(new SecurityDaoAdapter(null, null));
       this.decision = decision;
     }
 

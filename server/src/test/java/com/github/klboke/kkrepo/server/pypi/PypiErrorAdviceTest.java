@@ -1,12 +1,13 @@
 package com.github.klboke.kkrepo.server.pypi;
 
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
+import com.github.klboke.kkrepo.server.support.dao.RepositoryDaoAdapter;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -39,7 +40,7 @@ class PypiErrorAdviceTest {
     assertEquals("", result.getResponse().getContentAsString());
   }
 
-  private static final class EmptyRepositoryDao extends RepositoryDao {
+  private static final class EmptyRepositoryDao extends RepositoryDaoAdapter {
     EmptyRepositoryDao() {
       super(null, null);
     }

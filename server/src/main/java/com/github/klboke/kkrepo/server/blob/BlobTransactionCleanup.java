@@ -2,8 +2,8 @@ package com.github.klboke.kkrepo.server.blob;
 
 import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -23,7 +23,7 @@ public final class BlobTransactionCleanup {
       return;
     }
     try {
-      if (assetDao.hasLiveBlobForObjectKeyHash(blobStoreId, HashColumns.objectKeyHash(reference.objectKey()))) {
+      if (assetDao.hasLiveBlobForObjectKeyHash(blobStoreId, PersistenceHashes.objectKeyHash(reference.objectKey()))) {
         return;
       }
     } catch (RuntimeException e) {

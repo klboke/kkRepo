@@ -11,14 +11,14 @@ import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.BrowseNodeDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.ComponentDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetBlobRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
-import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.npm.NpmPackageId;
 import com.github.klboke.kkrepo.protocol.npm.NpmPath;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
@@ -28,6 +28,10 @@ import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
 import com.github.klboke.kkrepo.server.support.InMemoryVersionWatermark;
+import com.github.klboke.kkrepo.server.support.dao.AssetDaoAdapter;
+import com.github.klboke.kkrepo.server.support.dao.BrowseNodeDaoAdapter;
+import com.github.klboke.kkrepo.server.support.dao.ComponentDaoAdapter;
+import com.github.klboke.kkrepo.server.support.dao.RepositoryDaoAdapter;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -286,7 +290,7 @@ class NpmGroupServiceCacheTest {
     }
   }
 
-  private static class StubRepositoryDao extends RepositoryDao {
+  private static class StubRepositoryDao extends RepositoryDaoAdapter {
     private final Map<Long, List<RepositoryRecord>> groupsByMember = new HashMap<>();
 
     StubRepositoryDao() {
@@ -303,7 +307,7 @@ class NpmGroupServiceCacheTest {
     }
   }
 
-  private static class InMemoryAssetDao extends AssetDao {
+  private static class InMemoryAssetDao extends AssetDaoAdapter {
     private final AtomicLong blobIds = new AtomicLong(200);
     private final AtomicLong assetIds = new AtomicLong(100);
     private final Map<Long, AssetBlobRecord> blobs = new ConcurrentHashMap<>();
@@ -387,7 +391,7 @@ class NpmGroupServiceCacheTest {
     private static AssetRecord withId(AssetRecord record, long id) {
       return new AssetRecord(
           id, record.repositoryId(), record.componentId(), record.assetBlobId(),
-          record.format(), record.path(), HashColumns.pathHash(record.path()), record.name(),
+          record.format(), record.path(), PersistenceHashes.pathHash(record.path()), record.name(),
           record.kind(), record.contentType(), record.size(), record.lastDownloadedAt(),
           record.lastUpdatedAt(), record.attributes());
     }
@@ -448,7 +452,7 @@ class NpmGroupServiceCacheTest {
     }
   }
 
-  private static class NoopBrowseNodeDao extends BrowseNodeDao {
+  private static class NoopBrowseNodeDao extends BrowseNodeDaoAdapter {
     NoopBrowseNodeDao() {
       super(null);
     }
@@ -458,7 +462,7 @@ class NpmGroupServiceCacheTest {
     }
   }
 
-  private static class NoopComponentDao extends ComponentDao {
+  private static class NoopComponentDao extends ComponentDaoAdapter {
     NoopComponentDao() {
       super(null, null);
     }
