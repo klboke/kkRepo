@@ -154,6 +154,10 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 
 ## 路线图
 
+基础设施路线图：
+
+1. PostgreSQL 数据库后端支持 - 规划中。通过 `persistence-jdbc` 公共接口和唯一 JDBC 实现、语义化 dialect SPI、独立数据库 backend module 隔离数据库差异；MySQL 继续作为默认后端，PostgreSQL 需要覆盖相同的 repository、security、session、audit、migration、cache version 和多副本协调语义（[设计方案](docs/zh/dev/pluggable-database-access-layer-design.md)）
+
 仓库格式路线图：
 
 1. Docker / OCI Registry - 已完成（[实现说明](docs/zh/dev/docker-repository-implementation-plan.md)）
