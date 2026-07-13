@@ -48,6 +48,7 @@
     <aws.sdk.version>2.47.5</aws.sdk.version>
     <commons.compress.version>1.28.0</commons.compress.version>
     <commons.lang3.version>3.20.0</commons.lang3.version>
+    <jacoco.version>0.8.15</jacoco.version>
     <maven.compiler.release>${java.version}</maven.compiler.release>
     <kkrepo.dist.version>${project.version}</kkrepo.dist.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -248,5 +249,26 @@
         </plugin>
       </plugins>
     </pluginManagement>
+    <plugins>
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+        <version>${jacoco.version}</version>
+        <executions>
+          <execution>
+            <goals>
+              <goal>prepare-agent</goal>
+            </goals>
+          </execution>
+          <execution>
+            <id>jacoco-report</id>
+            <phase>verify</phase>
+            <goals>
+              <goal>report</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
   </build>
 </project>

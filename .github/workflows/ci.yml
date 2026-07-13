@@ -39,7 +39,14 @@ jobs:
         run: docker compose -f docker-compose.dev.yml config
 
       - name: Run server tests
-        run: mvn -B -ntp -pl server -am -Dsurefire.failIfNoSpecifiedTests=false test
+        run: mvn -B -ntp -pl server -am -Dsurefire.failIfNoSpecifiedTests=false verify
 
       - name: Run non-live compatibility tests
-        run: mvn -B -ntp -pl compat-test -am -Dtest=MavenMetadataMergeCompatibilityTest,MavenWritePolicyCompatibilityTest,NpmProtocolCompatibilityTest -Dsurefire.failIfNoSpecifiedTests=false test
+        run: mvn -B -ntp -pl compat-test -am -Dtest=MavenMetadataMergeCompatibilityTest,MavenWritePolicyCompatibilityTest,NpmProtocolCompatibilityTest -Dsurefire.failIfNoSpecifiedTests=false verify
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          directory: .
+          fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }}
