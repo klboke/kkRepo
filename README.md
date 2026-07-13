@@ -154,6 +154,10 @@ AI agent and contributor development instructions are in [AGENTS.md](AGENTS.md).
 
 ## Roadmap
 
+Platform infrastructure roadmap:
+
+1. PostgreSQL database backend - Planned. Isolate database differences behind the public `persistence-jdbc` interfaces and single shared JDBC implementation, semantic dialect SPIs, and database-specific backend modules. MySQL remains the default backend, while PostgreSQL must preserve the same repository, security, session, audit, migration, cache-version, and multi-replica coordination semantics ([Chinese design plan](docs/zh/dev/pluggable-database-access-layer-design.md))
+
 Repository format roadmap:
 
 1. Docker / OCI Registry - Completed ([implementation notes](docs/en/dev/docker-repository-implementation-plan.md))
