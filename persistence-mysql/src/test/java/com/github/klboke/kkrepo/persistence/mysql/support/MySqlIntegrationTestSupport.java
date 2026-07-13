@@ -1,7 +1,12 @@
 package com.github.klboke.kkrepo.persistence.mysql.support;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DatabaseConnectionSettings;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceStoreFactories;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceStores;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
+import com.github.klboke.kkrepo.persistence.mysql.MySqlDatabaseDialect;
 import java.sql.Statement;
 import java.util.List;
 import java.util.function.Supplier;
@@ -23,10 +28,12 @@ public abstract class MySqlIntegrationTestSupport {
 
   private static JdbcTemplate jdbcTemplate;
   private static JsonColumns jsonColumns;
+  private static DatabaseDialect dialect;
   private static TransactionTemplate transactionTemplate;
+  private static PersistenceStores stores;
 
   @BeforeAll
-  static void startMySql() {
+  protected static void startMySql() {
     if (!MYSQL.isRunning()) {
       MYSQL.start();
       DriverManagerDataSource dataSource = new DriverManagerDataSource(
@@ -35,7 +42,8 @@ public abstract class MySqlIntegrationTestSupport {
           MYSQL.getUsername(),
           MYSQL.getPassword());
       jdbcTemplate = new JdbcTemplate(dataSource);
-      jsonColumns = new JsonColumns(new ObjectMapper());
+      dialect = new MySqlDatabaseDialect();
+      jsonColumns = new JsonColumns(new ObjectMapper(), dialect);
       transactionTemplate = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
       Flyway.configure()
           .dataSource(dataSource)
@@ -43,11 +51,16 @@ public abstract class MySqlIntegrationTestSupport {
           .failOnMissingLocations(true)
           .load()
           .migrate();
+      stores = PersistenceStoreFactories.connect(new DatabaseConnectionSettings(
+          MYSQL.getJdbcUrl() + "?useUnicode=true&characterEncoding=utf8&useSSL=false"
+              + "&allowPublicKeyRetrieval=true&connectionTimeZone=LOCAL",
+          MYSQL.getUsername(),
+          MYSQL.getPassword()));
     }
   }
 
   @BeforeEach
-  void truncateDatabase() {
+  protected void truncateDatabase() {
     List<String> tables = jdbcTemplate.queryForList("""
         SELECT table_name
         FROM information_schema.tables
@@ -76,6 +89,14 @@ public abstract class MySqlIntegrationTestSupport {
 
   protected JsonColumns jsonColumns() {
     return jsonColumns;
+  }
+
+  protected DatabaseDialect dialect() {
+    return dialect;
+  }
+
+  protected PersistenceStores stores() {
+    return stores;
   }
 
   protected <T> T inTransaction(Supplier<T> action) {

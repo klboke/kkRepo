@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDataMigrationDao.
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryDataMigrationAssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.HashColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
+import com.github.klboke.kkrepo.persistence.mysql.MySqlDatabaseDialect;
 import java.lang.reflect.Proxy;
 import java.nio.ByteBuffer;
 import java.sql.PreparedStatement;
@@ -29,7 +30,7 @@ class RepositoryDataMigrationDaoTest {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
     RepositoryDataMigrationDao dao = new JdbcRepositoryDataMigrationDao(
         jdbcTemplate,
-        new JsonColumns(new ObjectMapper()));
+        new JsonColumns(new ObjectMapper(), new MySqlDatabaseDialect()));
     RepositoryDataMigrationAssetRecord asset = asset("com/acme/app/1.0/app-1.0.jar");
 
     dao.upsertDiscoveredAssets(
@@ -50,7 +51,7 @@ class RepositoryDataMigrationDaoTest {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
     RepositoryDataMigrationDao dao = new JdbcRepositoryDataMigrationDao(
         jdbcTemplate,
-        new JsonColumns(new ObjectMapper()));
+        new JsonColumns(new ObjectMapper(), new MySqlDatabaseDialect()));
     String path = "helm-hosted/charts/app-1.0.0.tgz";
 
     dao.upsertDiscoveredAssets(
@@ -68,7 +69,7 @@ class RepositoryDataMigrationDaoTest {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
     RepositoryDataMigrationDao dao = new JdbcRepositoryDataMigrationDao(
         jdbcTemplate,
-        new JsonColumns(new ObjectMapper()));
+        new JsonColumns(new ObjectMapper(), new MySqlDatabaseDialect()));
 
     dao.upsertDiscoveredAssets(100, List.of(asset("com/acme/app/1.0/app-1.0.pom")), Map.of());
 

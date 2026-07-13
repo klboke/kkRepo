@@ -1,6 +1,8 @@
 package com.github.klboke.kkrepo.persistence.jdbc.internal;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao.Claim;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.CoordinationPersistenceDialect;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -19,9 +21,13 @@ public class JdbcRepositoryIndexRebuildDao implements com.github.klboke.kkrepo.p
   public static final String ROOT_SCOPE = "";
 
   private final JdbcTemplate jdbcTemplate;
+  private final CoordinationPersistenceDialect coordinationDialect;
 
-  public JdbcRepositoryIndexRebuildDao(JdbcTemplate jdbcTemplate) {
+  public JdbcRepositoryIndexRebuildDao(
+      JdbcTemplate jdbcTemplate,
+      DatabaseDialect databaseDialect) {
     this.jdbcTemplate = jdbcTemplate;
+    this.coordinationDialect = databaseDialect.coordination();
   }
 
   public void enqueue(long repositoryId, String indexKind) {
@@ -95,10 +101,10 @@ public class JdbcRepositoryIndexRebuildDao implements com.github.klboke.kkrepo.p
   }
 
   public long oldestBacklogAgeSeconds() {
-    Long seconds = jdbcTemplate.queryForObject("""
-        SELECT COALESCE(TIMESTAMPDIFF(SECOND, MIN(requested_at), NOW(3)), 0)
-        FROM repository_index_rebuild_marker
-        """, Long.class);
+    Long seconds = jdbcTemplate.queryForObject(
+        "SELECT " + coordinationDialect.oldestBacklogAgeSecondsExpression("requested_at")
+            + " FROM repository_index_rebuild_marker",
+        Long.class);
     return seconds == null ? 0 : seconds;
   }
 

@@ -100,7 +100,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
       ps.setString(12, record.createdByIp());
       ps.setTimestamp(13, nullableTimestamp(record.blobCreatedAt()));
       ps.setTimestamp(14, nullableTimestamp(record.blobUpdatedAt()));
-      ps.setString(15, jsonColumns.write(record.attributes()));
+      jsonColumns.bind(ps, 15, record.attributes());
     });
   }
 
@@ -281,7 +281,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
     ps.setObject(10, record.size());
     ps.setTimestamp(11, nullableTimestamp(record.lastDownloadedAt()));
     ps.setTimestamp(12, nullableTimestamp(record.lastUpdatedAt()));
-    ps.setString(13, jsonColumns.write(record.attributes()));
+    jsonColumns.bind(ps, 13, record.attributes());
   }
 
   /**
@@ -602,7 +602,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         contentType,
         size,
         nullableTimestamp(lastUpdatedAt),
-        jsonColumns.write(attributes),
+        jsonColumns.parameter(attributes),
         assetId);
   }
 
@@ -621,19 +621,19 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
   public int touchAssetLastUpdatedAndAttributes(long assetId, Instant when, java.util.Map<String, Object> attributes) {
     return jdbcTemplate.update("""
         UPDATE asset SET last_updated_at = ?, attributes_json = ? WHERE id = ?
-        """, nullableTimestamp(when), jsonColumns.write(attributes), assetId);
+        """, nullableTimestamp(when), jsonColumns.parameter(attributes), assetId);
   }
 
   public int updateAssetAttributes(long assetId, java.util.Map<String, Object> attributes) {
     return jdbcTemplate.update("""
         UPDATE asset SET attributes_json = ? WHERE id = ?
-        """, jsonColumns.write(attributes), assetId);
+        """, jsonColumns.parameter(attributes), assetId);
   }
 
   public int updateBlobAttributes(long blobId, java.util.Map<String, Object> attributes) {
     return jdbcTemplate.update("""
         UPDATE asset_blob SET attributes_json = ? WHERE id = ?
-        """, jsonColumns.write(attributes), blobId);
+        """, jsonColumns.parameter(attributes), blobId);
   }
 
   public long countAssetsByRepositoryId(long repositoryId) {

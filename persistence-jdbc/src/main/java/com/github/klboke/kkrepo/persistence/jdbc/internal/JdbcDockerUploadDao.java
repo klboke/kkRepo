@@ -78,7 +78,7 @@ public class JdbcDockerUploadDao implements com.github.klboke.kkrepo.persistence
         nullableTimestamp(record.expiresAt()),
         record.lockedBy(),
         nullableTimestamp(record.lockedUntil()),
-        jsonColumns.write(record.attributes()));
+        jsonColumns.parameter(record.attributes()));
   }
 
   public Optional<DockerUploadSessionRecord> findSession(String uuid) {

@@ -8,6 +8,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.HashColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
+import com.github.klboke.kkrepo.persistence.mysql.MySqlDatabaseDialect;
 import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -22,21 +23,15 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 
 class ComponentDaoTest {
-  @Test
-  void upsertReturningIdUsesMysqlUniqueKeyAsAtomicComponentCreate() {
-    String sql = JdbcComponentDao.upsertReturningIdSql();
-
-    assertTrue(sql.contains("ON DUPLICATE KEY UPDATE"));
-    assertTrue(sql.contains("LAST_INSERT_ID(id)"));
-    assertTrue(sql.contains("last_updated_at = VALUES(last_updated_at)"));
-  }
+  private static final MySqlDatabaseDialect DIALECT = new MySqlDatabaseDialect();
 
   @Test
   void upsertReturningIdAlwaysTouchesDatabaseInsteadOfServingWritesFromLocalCache() {
     CountingJdbcTemplate jdbcTemplate = new CountingJdbcTemplate(101L, 102L);
     ComponentDao dao = new JdbcComponentDao(
         jdbcTemplate,
-        new JsonColumns(new ObjectMapper()));
+        new JsonColumns(new ObjectMapper(), DIALECT),
+        DIALECT);
     ComponentRecord record = new ComponentRecord(
         null,
         26,
@@ -59,7 +54,8 @@ class ComponentDaoTest {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
     ComponentDao dao = new JdbcComponentDao(
         jdbcTemplate,
-        new JsonColumns(new ObjectMapper()));
+        new JsonColumns(new ObjectMapper(), DIALECT),
+        DIALECT);
 
     dao.search(null, RepositoryFormat.MAVEN2, 20);
 
@@ -73,7 +69,8 @@ class ComponentDaoTest {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
     ComponentDao dao = new JdbcComponentDao(
         jdbcTemplate,
-        new JsonColumns(new ObjectMapper()));
+        new JsonColumns(new ObjectMapper(), DIALECT),
+        DIALECT);
 
     dao.search(null, RepositoryFormat.COMPOSER, 20);
 
@@ -86,7 +83,8 @@ class ComponentDaoTest {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
     ComponentDao dao = new JdbcComponentDao(
         jdbcTemplate,
-        new JsonColumns(new ObjectMapper()));
+        new JsonColumns(new ObjectMapper(), DIALECT),
+        DIALECT);
 
     dao.search(null, RepositoryFormat.COMPOSER, 20);
 
@@ -99,12 +97,30 @@ class ComponentDaoTest {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
     ComponentDao dao = new JdbcComponentDao(
         jdbcTemplate,
-        new JsonColumns(new ObjectMapper()));
+        new JsonColumns(new ObjectMapper(), DIALECT),
+        DIALECT);
 
     dao.searchByRepositoryIds(List.of(1L), RepositoryFormat.NPM, "example", 20);
 
     assertTrue(jdbcTemplate.sql.contains("END AS storage_path"));
-    assertTrue(jdbcTemplate.sql.contains("c.format = ?\nAND MATCH"));
+    assertTrue(jdbcTemplate.sql.contains("c.format = ?"));
+    assertTrue(jdbcTemplate.sql.contains("MATCH(cs.namespace, cs.name, cs.version, cs.keywords)"));
+  }
+
+  @Test
+  void formattedFulltextSearchContainsConcretePredicateAndSingleComponentSource() {
+    RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
+    ComponentDao dao = new JdbcComponentDao(
+        jdbcTemplate,
+        new JsonColumns(new ObjectMapper(), DIALECT),
+        DIALECT);
+
+    dao.search("observability", RepositoryFormat.MAVEN2, 20);
+
+    assertTrue(jdbcTemplate.sql.contains("AGAINST (? IN BOOLEAN MODE)"));
+    Assertions.assertFalse(jdbcTemplate.sql.contains("%s"));
+    assertTrue(jdbcTemplate.sql.indexOf("FROM component_search")
+        == jdbcTemplate.sql.lastIndexOf("FROM component_search"));
   }
 
   @Test
@@ -113,7 +129,7 @@ class ComponentDaoTest {
 
     Assertions.assertEquals(
         "+com* +example* +artifact* +1* +0*",
-        JdbcComponentDao.fulltextBooleanQuery(keyword));
+        DIALECT.search().prepareComponentQuery(keyword));
   }
 
   private static final class CountingJdbcTemplate extends JdbcTemplate {

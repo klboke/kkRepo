@@ -10,6 +10,7 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.core.security.SecretCipher;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
+import com.github.klboke.kkrepo.persistence.mysql.MySqlDatabaseDialect;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -19,7 +20,7 @@ class RepositoryDaoTest {
   @Test
   void proxyRemotePasswordIsEncryptedWhenAttributesAreWritten() {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
-    JsonColumns jsonColumns = new JsonColumns(new ObjectMapper());
+    JsonColumns jsonColumns = new JsonColumns(new ObjectMapper(), new MySqlDatabaseDialect());
     RepositoryDao dao = new JdbcRepositoryDao(jdbcTemplate, jsonColumns);
     Map<String, Object> proxy = new LinkedHashMap<>();
     proxy.put("remoteUrl", "https://registry.example.com");

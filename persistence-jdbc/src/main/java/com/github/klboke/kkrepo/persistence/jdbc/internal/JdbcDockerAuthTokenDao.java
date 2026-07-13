@@ -41,7 +41,7 @@ public class JdbcDockerAuthTokenDao implements com.github.klboke.kkrepo.persiste
         userId,
         realmId,
         apiKeyId,
-        jsonColumns.write(Map.of("scopes", scopes == null ? List.of() : scopes)),
+        jsonColumns.parameter(Map.of("scopes", scopes == null ? List.of() : scopes)),
         Timestamp.from(expiresAt));
   }
 
