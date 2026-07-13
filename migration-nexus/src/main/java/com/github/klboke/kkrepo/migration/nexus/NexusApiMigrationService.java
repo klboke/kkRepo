@@ -18,12 +18,12 @@ import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityRecordMapp
 import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityRecordMapper.NexusUser;
 import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityRecordMapper.NexusUserRoleMapping;
 import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityMigrationWriter;
-import com.github.klboke.kkrepo.persistence.mysql.dao.BlobStoreDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.MigrationJobDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.BlobStoreRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.MigrationJobDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -1192,17 +1192,17 @@ public class NexusApiMigrationService {
   private static final class NoopSecurityMigrationWriter implements NexusSecurityMigrationWriter {
     @Override
     public void upsertRepositoryTarget(
-        com.github.klboke.kkrepo.persistence.mysql.model.SecurityRepositoryTargetRecord record) {
+        com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRepositoryTargetRecord record) {
     }
 
     @Override
     public void upsertPrivilege(
-        com.github.klboke.kkrepo.persistence.mysql.model.SecurityPrivilegeRecord record) {
+        com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityPrivilegeRecord record) {
     }
 
     @Override
     public void upsertRole(
-        com.github.klboke.kkrepo.persistence.mysql.model.SecurityRoleRecord record) {
+        com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRoleRecord record) {
     }
 
     @Override
@@ -1215,7 +1215,7 @@ public class NexusApiMigrationService {
 
     @Override
     public void upsertUser(
-        com.github.klboke.kkrepo.persistence.mysql.model.SecurityUserRecord record) {
+        com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord record) {
     }
 
     @Override
@@ -1224,7 +1224,7 @@ public class NexusApiMigrationService {
 
     @Override
     public void upsertRealm(
-        com.github.klboke.kkrepo.persistence.mysql.model.SecurityRealmRecord record) {
+        com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRealmRecord record) {
     }
 
     @Override
@@ -1233,12 +1233,12 @@ public class NexusApiMigrationService {
 
     @Override
     public void upsertAnonymousConfig(
-        com.github.klboke.kkrepo.persistence.mysql.model.SecurityAnonymousConfigRecord record) {
+        com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityAnonymousConfigRecord record) {
     }
 
     @Override
     public void upsertApiKey(
-        com.github.klboke.kkrepo.persistence.mysql.model.ApiKeyRecord record) {
+        com.github.klboke.kkrepo.persistence.jdbc.api.model.ApiKeyRecord record) {
     }
   }
 }

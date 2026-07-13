@@ -1,8 +1,8 @@
 package com.github.klboke.kkrepo.server.cache;
 
 import com.github.klboke.kkrepo.cache.SharedCache;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.time.Duration;
 import java.time.Instant;

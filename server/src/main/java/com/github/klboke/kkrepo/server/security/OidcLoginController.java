@@ -3,7 +3,7 @@ package com.github.klboke.kkrepo.server.security;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.cache.SharedCache;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityRealmRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRealmRecord;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;

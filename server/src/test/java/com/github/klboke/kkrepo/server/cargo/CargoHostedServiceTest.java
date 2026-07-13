@@ -9,10 +9,10 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.ComponentDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.ComponentRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.protocol.cargo.CargoPath;
-import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.nio.charset.StandardCharsets;
@@ -158,7 +158,7 @@ class CargoHostedServiceTest {
         name.replace('-', '_'),
         version,
         "crate",
-        HashColumns.componentCoordinateHash(null, name.replace('-', '_'), version),
+        PersistenceHashes.componentCoordinateHash(null, name.replace('-', '_'), version),
         attrs,
         Instant.parse("2026-06-28T00:00:00Z"));
   }

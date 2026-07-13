@@ -1,11 +1,12 @@
-package com.github.klboke.kkrepo.persistence.mysql.dao;
+package com.github.klboke.kkrepo.persistence.jdbc.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.github.klboke.kkrepo.persistence.jdbc.api.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityAuditDao.AuditLogQuery;
-import com.github.klboke.kkrepo.persistence.mysql.support.JsonColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao.AuditLogQuery;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
@@ -17,7 +18,7 @@ class SecurityAuditDaoTest {
   @Test
   void searchBuildsBoundedPagedQueryWithEscapedFilters() {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
-    SecurityAuditDao dao = new SecurityAuditDao(jdbcTemplate, new JsonColumns(new ObjectMapper()));
+    SecurityAuditDao dao = new JdbcSecurityAuditDao(jdbcTemplate, new JsonColumns(new ObjectMapper()));
     LocalDateTime from = LocalDateTime.of(2026, 6, 1, 9, 0);
     LocalDateTime to = LocalDateTime.of(2026, 6, 1, 18, 0);
 

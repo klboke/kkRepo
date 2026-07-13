@@ -1,7 +1,7 @@
 package com.github.klboke.kkrepo.server.pub;
 
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;

@@ -5,7 +5,7 @@ import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
-import com.github.klboke.kkrepo.persistence.mysql.dao.DockerAuthTokenDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao;
 import com.github.klboke.kkrepo.protocol.docker.DockerErrorCode;
 import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;

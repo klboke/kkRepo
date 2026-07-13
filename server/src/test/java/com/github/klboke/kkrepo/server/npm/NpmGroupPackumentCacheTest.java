@@ -6,12 +6,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetBlobRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
-import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.npm.NpmPackageId;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.NexusCacheType;
@@ -20,6 +20,8 @@ import com.github.klboke.kkrepo.server.cache.NexusLikeCacheInfo;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
 import com.github.klboke.kkrepo.server.support.InMemoryVersionWatermark;
+import com.github.klboke.kkrepo.server.support.dao.AssetDaoAdapter;
+import com.github.klboke.kkrepo.server.support.dao.RepositoryDaoAdapter;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
@@ -195,7 +197,7 @@ class NpmGroupPackumentCacheTest {
       StubRepositoryDao repositories,
       StubAssetDao assets) {}
 
-  private static class StubRepositoryDao extends RepositoryDao {
+  private static class StubRepositoryDao extends RepositoryDaoAdapter {
     private final Map<Long, List<RepositoryRecord>> groupsByMember = new HashMap<>();
 
     StubRepositoryDao() {
@@ -212,7 +214,7 @@ class NpmGroupPackumentCacheTest {
     }
   }
 
-  private static class StubAssetDao extends AssetDao {
+  private static class StubAssetDao extends AssetDaoAdapter {
     private final AtomicLong assetIds = new AtomicLong(100);
     private final AtomicLong blobIds = new AtomicLong(200);
     private final Map<String, AssetRecord> assets = new HashMap<>();
@@ -253,7 +255,7 @@ class NpmGroupPackumentCacheTest {
       assetAttrs.putAll(attributes);
       assets.put(key(repositoryId, path), new AssetRecord(
           assetId, repositoryId, null, blobId, RepositoryFormat.NPM, path,
-          HashColumns.pathHash(path), path, kind, NpmResponseSupport.JSON,
+          PersistenceHashes.pathHash(path), path, kind, NpmResponseSupport.JSON,
           123L, null, updatedAt, assetAttrs));
     }
 

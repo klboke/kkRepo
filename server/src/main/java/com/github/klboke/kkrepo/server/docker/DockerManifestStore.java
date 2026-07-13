@@ -3,14 +3,14 @@ package com.github.klboke.kkrepo.server.docker;
 import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.DockerRegistryDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetBlobRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerManifestRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerManifestReferenceRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerTagRecord;
-import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestReferenceRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerTagRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.protocol.docker.DockerConstants;
 import com.github.klboke.kkrepo.protocol.docker.DockerDigest;
 import com.github.klboke.kkrepo.protocol.docker.DockerErrorCode;
@@ -279,9 +279,9 @@ public class DockerManifestStore {
         null,
         runtime.blobStoreId(),
         blobRef,
-        HashColumns.blobRefHash(blobRef),
+        PersistenceHashes.blobRefHash(blobRef),
         blobReference.objectKey(),
-        HashColumns.objectKeyHash(blobReference.objectKey()),
+        PersistenceHashes.objectKeyHash(blobReference.objectKey()),
         null,
         digest.hex(),
         null,
@@ -297,14 +297,14 @@ public class DockerManifestStore {
         null,
         runtime.id(),
         imageName,
-        DockerRegistryDao.hash(imageName),
+        PersistenceHashes.sha256(imageName),
         digest.algorithm(),
         digest.value(),
-        DockerRegistryDao.hash(digest.value()),
+        PersistenceHashes.sha256(digest.value()),
         metadata.mediaType(),
         metadata.artifactType(),
         metadata.subjectDigest(),
-        metadata.subjectDigest() == null ? null : DockerRegistryDao.hash(metadata.subjectDigest()),
+        metadata.subjectDigest() == null ? null : PersistenceHashes.sha256(metadata.subjectDigest()),
         asset.id(),
         size,
         createdBy,
@@ -323,9 +323,9 @@ public class DockerManifestStore {
             null,
             runtime.id(),
             imageName,
-            DockerRegistryDao.hash(imageName),
+            PersistenceHashes.sha256(imageName),
             tag,
-            DockerRegistryDao.hash(tag),
+            PersistenceHashes.sha256(tag),
             manifest.id(),
             digest.value(),
             createdBy,
@@ -379,7 +379,7 @@ public class DockerManifestStore {
         blob.id(),
         RepositoryFormat.DOCKER,
         path,
-        HashColumns.pathHash(path),
+        PersistenceHashes.pathHash(path),
         imageName + "@" + digest.value(),
         "MANIFEST",
         metadata.mediaType(),
@@ -509,7 +509,7 @@ public class DockerManifestStore {
         repositoryId,
         imageName,
         ref.digest(),
-        DockerRegistryDao.hash(ref.digest()),
+        PersistenceHashes.sha256(ref.digest()),
         ref.kind(),
         ref.mediaType(),
         ref.size(),

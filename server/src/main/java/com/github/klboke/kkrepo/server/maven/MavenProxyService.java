@@ -2,10 +2,10 @@ package com.github.klboke.kkrepo.server.maven;
 
 import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.ProxyStateDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetBlobRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;

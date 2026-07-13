@@ -1,7 +1,7 @@
 package com.github.klboke.kkrepo.server.npm;
 
-import com.github.klboke.kkrepo.persistence.mysql.dao.ComponentDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.ComponentDao.ComponentSearchRow;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.ComponentSearchRow;
 import com.github.klboke.kkrepo.protocol.npm.NpmMetadata;
 import com.github.klboke.kkrepo.protocol.npm.NpmPackageId;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;

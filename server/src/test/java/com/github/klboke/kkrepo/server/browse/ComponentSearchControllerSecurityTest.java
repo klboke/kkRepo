@@ -8,11 +8,13 @@ import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
-import com.github.klboke.kkrepo.persistence.mysql.dao.ComponentDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
+import com.github.klboke.kkrepo.server.support.dao.ComponentDaoAdapter;
+import com.github.klboke.kkrepo.server.support.dao.SecurityDaoAdapter;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
 import java.lang.reflect.Proxy;
@@ -258,7 +260,7 @@ class ComponentSearchControllerSecurityTest {
     return null;
   }
 
-  private static class StubComponentDao extends ComponentDao {
+  private static class StubComponentDao extends ComponentDaoAdapter {
     private List<ComponentSearchRow> rows = List.of();
     private final List<String> calls = new ArrayList<>();
 
@@ -278,7 +280,7 @@ class ComponentSearchControllerSecurityTest {
     private final AuthenticatedSubject anonymous;
 
     private StubAuthenticationService(AuthenticatedSubject authenticated, AuthenticatedSubject anonymous) {
-      super(new SecurityDao(null, null), new ObjectMapper(), "X-Nexus-Plus-Token");
+      super(new SecurityDaoAdapter(null, null), new ObjectMapper(), "X-Nexus-Plus-Token");
       this.authenticated = authenticated;
       this.anonymous = anonymous;
     }
@@ -299,7 +301,7 @@ class ComponentSearchControllerSecurityTest {
     private final List<String> permissions = new ArrayList<>();
 
     private RecordingSecurityService(Function<String, AccessDecision> decisions) {
-      super(new SecurityDao(null, null));
+      super(new SecurityDaoAdapter(null, null));
       this.decisions = decisions;
     }
 

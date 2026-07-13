@@ -17,11 +17,12 @@ import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.DockerUploadDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetBlobRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerUploadChunkRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerUploadSessionRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerUploadDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerUploadChunkRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerUploadSessionRecord;
 import com.github.klboke.kkrepo.protocol.docker.DockerDigest;
 import com.github.klboke.kkrepo.protocol.docker.DockerErrorCode;
 import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
@@ -336,7 +337,7 @@ class DockerUploadServiceTest {
         uuid,
         runtime.id(),
         "library/alpine",
-        DockerUploadDao.imageHash("library/alpine"),
+        PersistenceHashes.sha256("library/alpine"),
         "STARTED",
         nextOffset,
         null,

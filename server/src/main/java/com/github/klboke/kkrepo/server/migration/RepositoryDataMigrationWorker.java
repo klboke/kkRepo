@@ -7,13 +7,13 @@ import com.github.klboke.kkrepo.core.security.SecretCipher;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.RepositoryAssetMetadata;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.RepositoryAssetPage;
-import com.github.klboke.kkrepo.persistence.mysql.dao.MigrationJobDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDataMigrationDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDataMigrationDao.AssetClaim;
-import com.github.klboke.kkrepo.persistence.mysql.model.MigrationJobRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryDataMigrationAssetRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryDataMigrationRepositoryRecord;
-import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.api.MigrationJobDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDataMigrationDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDataMigrationDao.AssetClaim;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.MigrationJobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryDataMigrationAssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryDataMigrationRepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import jakarta.annotation.PreDestroy;
 import java.io.IOException;
 import java.io.InputStream;
@@ -417,7 +417,7 @@ class RepositoryDataMigrationWorker {
         source.assetId(),
         source.componentId(),
         source.path(),
-        HashColumns.pathHash(source.path()),
+        PersistenceHashes.pathHash(source.path()),
         repositoryJob.format(),
         blankToNull(source.namespace()),
         blankToNull(source.name()),

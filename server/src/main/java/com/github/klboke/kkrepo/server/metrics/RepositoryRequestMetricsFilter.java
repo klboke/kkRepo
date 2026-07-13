@@ -1,7 +1,7 @@
 package com.github.klboke.kkrepo.server.metrics;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPath;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPathParser;
 import com.github.klboke.kkrepo.server.docker.DockerConnectorConfiguration;

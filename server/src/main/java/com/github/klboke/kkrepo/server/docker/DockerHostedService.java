@@ -6,7 +6,7 @@ import com.github.klboke.kkrepo.protocol.docker.DockerDigest;
 import com.github.klboke.kkrepo.protocol.docker.DockerErrorCode;
 import com.github.klboke.kkrepo.protocol.docker.DockerPathParser;
 import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
-import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerManifestRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.IOException;
 import java.io.InputStream;

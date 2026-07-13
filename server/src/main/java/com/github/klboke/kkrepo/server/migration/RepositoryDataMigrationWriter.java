@@ -3,21 +3,21 @@ package com.github.klboke.kkrepo.server.migration;
 import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.BrowseNodeDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.ComponentDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.DockerRegistryDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryIndexRebuildDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetBlobRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.ComponentRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryDataMigrationAssetRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerManifestRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerManifestReferenceRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerTagRecord;
-import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryDataMigrationAssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestReferenceRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerTagRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPath;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPathParser;
 import com.github.klboke.kkrepo.protocol.docker.DockerDigest;
@@ -266,9 +266,9 @@ class RepositoryDataMigrationWriter {
           null,
           repository.blobStoreId(),
           blobRef,
-          HashColumns.blobRefHash(blobRef),
+          PersistenceHashes.blobRefHash(blobRef),
           ref.objectKey(),
-          HashColumns.objectKeyHash(ref.objectKey()),
+          PersistenceHashes.objectKeyHash(ref.objectKey()),
           digests.sha1(),
           digests.sha256(),
           digests.md5(),
@@ -303,7 +303,7 @@ class RepositoryDataMigrationWriter {
           blobId,
           repository.format(),
           source.sourcePath(),
-          HashColumns.pathHash(source.sourcePath()),
+          PersistenceHashes.pathHash(source.sourcePath()),
           fileName(source.sourcePath()),
           kind,
           contentType,
@@ -386,14 +386,14 @@ class RepositoryDataMigrationWriter {
         null,
         repository.id(),
         target.imageName(),
-        DockerRegistryDao.hash(target.imageName()),
+        PersistenceHashes.sha256(target.imageName()),
         digest.algorithm(),
         digest.value(),
-        DockerRegistryDao.hash(digest.value()),
+        PersistenceHashes.sha256(digest.value()),
         metadata.mediaType(),
         metadata.artifactType(),
         metadata.subjectDigest(),
-        metadata.subjectDigest() == null ? null : DockerRegistryDao.hash(metadata.subjectDigest()),
+        metadata.subjectDigest() == null ? null : PersistenceHashes.sha256(metadata.subjectDigest()),
         persisted.assetId(),
         upload.digests().size(),
         firstNonBlank(source.sourceCreatedBy(), CREATED_BY),
@@ -411,9 +411,9 @@ class RepositoryDataMigrationWriter {
           null,
           repository.id(),
           target.imageName(),
-          DockerRegistryDao.hash(target.imageName()),
+          PersistenceHashes.sha256(target.imageName()),
           target.reference(),
-          DockerRegistryDao.hash(target.reference()),
+          PersistenceHashes.sha256(target.reference()),
           manifest.id(),
           digest.value(),
           firstNonBlank(source.sourceCreatedBy(), CREATED_BY),
@@ -434,7 +434,7 @@ class RepositoryDataMigrationWriter {
         repositoryId,
         imageName,
         ref.digest(),
-        DockerRegistryDao.hash(ref.digest()),
+        PersistenceHashes.sha256(ref.digest()),
         ref.kind(),
         ref.mediaType(),
         ref.size(),
@@ -485,7 +485,7 @@ class RepositoryDataMigrationWriter {
         source.name(),
         blankToNull(source.version()),
         componentKind(repository.format(), source),
-        HashColumns.componentCoordinateHash(blankToNull(source.namespace()), source.name(), blankToNull(source.version())),
+        PersistenceHashes.componentCoordinateHash(blankToNull(source.namespace()), source.name(), blankToNull(source.version())),
         componentAttributes(source),
         lastUpdatedAt);
     return componentDao.upsertReturningId(component);
@@ -508,7 +508,7 @@ class RepositoryDataMigrationWriter {
         cargoMetadata.normalizedName(),
         cargoMetadata.versionKey(),
         "crate",
-        HashColumns.componentCoordinateHash(null, cargoMetadata.normalizedName(), cargoMetadata.versionKey()),
+        PersistenceHashes.componentCoordinateHash(null, cargoMetadata.normalizedName(), cargoMetadata.versionKey()),
         cargoMetadata.componentAttributes(digests.sha256(), source.sourcePath(), migratedCargoYanked(source)),
         lastUpdatedAt);
     return componentDao.upsertReturningId(component);

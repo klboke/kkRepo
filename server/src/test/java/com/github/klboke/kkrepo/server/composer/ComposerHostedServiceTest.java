@@ -18,11 +18,11 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.ComponentDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetBlobRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.ComponentRecord;
-import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPathParser;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
@@ -140,7 +140,7 @@ class ComposerHostedServiceTest {
         "company/example",
         version,
         "composer-package",
-        HashColumns.componentCoordinateHash(null, "company/example", version),
+        PersistenceHashes.componentCoordinateHash(null, "company/example", version),
         Map.of("composerMetadata", metadata),
         Instant.parse(dev ? "2026-01-02T00:00:00Z" : "2026-01-01T00:00:00Z"));
   }

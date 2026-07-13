@@ -1,9 +1,9 @@
 package com.github.klboke.kkrepo.server.repositories;
 
-import com.github.klboke.kkrepo.persistence.mysql.dao.BlobStoreDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.BlobStoreRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.catalog.CatalogCacheBroadcaster;
 import java.time.Instant;
 import java.util.Collections;

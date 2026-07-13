@@ -1,6 +1,6 @@
 package com.github.klboke.kkrepo.server.browse;
 
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 
 final class BrowseDownloadUrls {
   private BrowseDownloadUrls() {

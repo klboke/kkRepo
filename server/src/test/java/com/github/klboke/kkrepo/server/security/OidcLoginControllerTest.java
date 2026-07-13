@@ -7,8 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityRealmRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRealmRecord;
+import com.github.klboke.kkrepo.server.support.dao.SecurityDaoAdapter;
 import com.sun.net.httpserver.HttpServer;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
@@ -465,7 +466,7 @@ class OidcLoginControllerTest {
     }
   }
 
-  private static class SessionRoleDao extends SecurityDao {
+  private static class SessionRoleDao extends SecurityDaoAdapter {
     private SessionRoleDao() {
       super(null, null);
     }

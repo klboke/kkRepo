@@ -150,7 +150,12 @@
     </dependency>
     <dependency>
       <groupId>com.github.klboke</groupId>
+      <artifactId>kkrepo-persistence-jdbc</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.github.klboke</groupId>
       <artifactId>kkrepo-persistence-mysql</artifactId>
+      <scope>runtime</scope>
     </dependency>
     <dependency>
       <groupId>com.github.klboke</groupId>

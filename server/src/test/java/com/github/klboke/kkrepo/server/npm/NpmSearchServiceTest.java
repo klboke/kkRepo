@@ -11,8 +11,8 @@ import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.ComponentDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.ComponentDao.ComponentSearchRow;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.ComponentSearchRow;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.time.Instant;
 import java.util.LinkedHashMap;

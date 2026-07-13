@@ -1,10 +1,10 @@
 package com.github.klboke.kkrepo.server.pypi;
 
 import com.github.klboke.kkrepo.core.BlobStorage;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao.PypiProjectIndexRow;
-import com.github.klboke.kkrepo.persistence.mysql.dao.ComponentDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryIndexRebuildDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao.PypiProjectIndexRow;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;

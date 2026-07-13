@@ -7,9 +7,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.ProxyStateDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.support.dao.ProxyStateDaoAdapter;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -119,7 +120,7 @@ class NpmProxyServiceTest {
     }
   }
 
-  private static class RecordingProxyStateDao extends ProxyStateDao {
+  private static class RecordingProxyStateDao extends ProxyStateDaoAdapter {
     int successCount;
     int failureCount;
 

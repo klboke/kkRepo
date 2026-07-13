@@ -1,8 +1,8 @@
 package com.github.klboke.kkrepo.server.pypi;
 
 import com.github.klboke.kkrepo.core.BlobStorage;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.ProxyStateDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.cache.NexusCacheType;

@@ -2,7 +2,7 @@ package com.github.klboke.kkrepo.migration.nexus.security;
 
 import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityRecordMapper.MappedRole;
 import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityRecordMapper.MappedUserRoleMapping;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityRealmRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRealmRecord;
 import java.util.List;
 import java.util.Set;
 

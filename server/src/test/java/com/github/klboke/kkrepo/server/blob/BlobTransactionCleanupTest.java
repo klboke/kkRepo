@@ -5,7 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import com.github.klboke.kkrepo.core.BlobObjectMetadata;
 import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.server.support.dao.AssetDaoAdapter;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
@@ -87,7 +88,7 @@ class BlobTransactionCleanupTest {
     }
   }
 
-  private static final class RecordingAssetDao extends AssetDao {
+  private static final class RecordingAssetDao extends AssetDaoAdapter {
     private final boolean hasLiveBlob;
 
     private RecordingAssetDao(boolean hasLiveBlob) {

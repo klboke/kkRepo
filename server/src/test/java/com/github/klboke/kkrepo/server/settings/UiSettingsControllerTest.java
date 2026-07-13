@@ -3,8 +3,9 @@ package com.github.klboke.kkrepo.server.settings;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-import com.github.klboke.kkrepo.persistence.mysql.dao.UiSettingsDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.UiSettingsRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.UiSettingsDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.UiSettingsRecord;
+import com.github.klboke.kkrepo.server.support.dao.UiSettingsDaoAdapter;
 import java.time.Instant;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.server.ResponseStatusException;
@@ -44,7 +45,7 @@ class UiSettingsControllerTest {
         () -> controller.update(new UiSettingsController.UiSettingsCommand("fr")));
   }
 
-  private static final class RecordingUiSettingsDao extends UiSettingsDao {
+  private static final class RecordingUiSettingsDao extends UiSettingsDaoAdapter {
     private UiSettingsRecord record;
     private String savedDefaultLanguage;
 

@@ -1,12 +1,13 @@
-package com.github.klboke.kkrepo.persistence.mysql.dao;
+package com.github.klboke.kkrepo.persistence.jdbc.internal;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.github.klboke.kkrepo.persistence.jdbc.api.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
-import com.github.klboke.kkrepo.persistence.mysql.model.ComponentRecord;
-import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
-import com.github.klboke.kkrepo.persistence.mysql.support.JsonColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.HashColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
 import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -23,7 +24,7 @@ import org.springframework.jdbc.core.RowMapper;
 class ComponentDaoTest {
   @Test
   void upsertReturningIdUsesMysqlUniqueKeyAsAtomicComponentCreate() {
-    String sql = ComponentDao.upsertReturningIdSql();
+    String sql = JdbcComponentDao.upsertReturningIdSql();
 
     assertTrue(sql.contains("ON DUPLICATE KEY UPDATE"));
     assertTrue(sql.contains("LAST_INSERT_ID(id)"));
@@ -33,7 +34,7 @@ class ComponentDaoTest {
   @Test
   void upsertReturningIdAlwaysTouchesDatabaseInsteadOfServingWritesFromLocalCache() {
     CountingJdbcTemplate jdbcTemplate = new CountingJdbcTemplate(101L, 102L);
-    ComponentDao dao = new ComponentDao(
+    ComponentDao dao = new JdbcComponentDao(
         jdbcTemplate,
         new JsonColumns(new ObjectMapper()));
     ComponentRecord record = new ComponentRecord(
@@ -56,7 +57,7 @@ class ComponentDaoTest {
   @Test
   void latestSearchUsesIndexFriendlyOrder() {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
-    ComponentDao dao = new ComponentDao(
+    ComponentDao dao = new JdbcComponentDao(
         jdbcTemplate,
         new JsonColumns(new ObjectMapper()));
 
@@ -70,7 +71,7 @@ class ComponentDaoTest {
   @Test
   void searchExcludesComposerInternalRoutesBeforeApplyingLimit() {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
-    ComponentDao dao = new ComponentDao(
+    ComponentDao dao = new JdbcComponentDao(
         jdbcTemplate,
         new JsonColumns(new ObjectMapper()));
 
@@ -83,7 +84,7 @@ class ComponentDaoTest {
   @Test
   void composerSearchReturnsStoredDistPathForBrowseNavigation() {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
-    ComponentDao dao = new ComponentDao(
+    ComponentDao dao = new JdbcComponentDao(
         jdbcTemplate,
         new JsonColumns(new ObjectMapper()));
 
@@ -96,7 +97,7 @@ class ComponentDaoTest {
   @Test
   void repositoryScopedSearchIncludesStoragePathProjection() {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
-    ComponentDao dao = new ComponentDao(
+    ComponentDao dao = new JdbcComponentDao(
         jdbcTemplate,
         new JsonColumns(new ObjectMapper()));
 
@@ -112,7 +113,7 @@ class ComponentDaoTest {
 
     Assertions.assertEquals(
         "+com* +example* +artifact* +1* +0*",
-        ComponentDao.fulltextBooleanQuery(keyword));
+        JdbcComponentDao.fulltextBooleanQuery(keyword));
   }
 
   private static final class CountingJdbcTemplate extends JdbcTemplate {

@@ -1,8 +1,8 @@
 package com.github.klboke.kkrepo.server.security;
 
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityAuditDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityAuditDao.AuditLogPage;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityAuditDao.AuditLogQuery;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao.AuditLogPage;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao.AuditLogQuery;
 import java.time.LocalDateTime;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;

@@ -7,13 +7,14 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.ComponentDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.PubUploadSessionDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.ComponentRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.PubUploadSessionRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PubUploadSessionDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.PubUploadSessionRecord;
 import com.github.klboke.kkrepo.protocol.pub.PubContentTypes;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.support.dao.ComponentDaoAdapter;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -175,7 +176,7 @@ class PubHostedServiceTest {
         List.of());
   }
 
-  private static final class FakeComponentDao extends ComponentDao {
+  private static final class FakeComponentDao extends ComponentDaoAdapter {
     private final List<ComponentRecord> components;
 
     FakeComponentDao(List<ComponentRecord> components) {

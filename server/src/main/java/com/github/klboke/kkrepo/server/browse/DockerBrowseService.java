@@ -1,7 +1,7 @@
 package com.github.klboke.kkrepo.server.browse;
 
-import com.github.klboke.kkrepo.persistence.mysql.dao.DockerRegistryDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;

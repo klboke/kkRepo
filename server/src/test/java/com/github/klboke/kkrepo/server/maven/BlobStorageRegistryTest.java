@@ -2,9 +2,10 @@ package com.github.klboke.kkrepo.server.maven;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import com.github.klboke.kkrepo.persistence.mysql.dao.BlobStoreDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.BlobStoreRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.server.catalog.CatalogCacheBroadcaster;
+import com.github.klboke.kkrepo.server.support.dao.BlobStoreDaoAdapter;
 import com.github.klboke.kkrepo.storage.s3.S3BlobStoreConfig;
 import com.github.klboke.kkrepo.storage.s3.config.S3StorageProperties;
 import java.util.ArrayList;
@@ -111,7 +112,7 @@ class BlobStorageRegistryTest {
             "pathStyleAccess", false));
   }
 
-  private static final class InMemoryBlobStoreDao extends BlobStoreDao {
+  private static final class InMemoryBlobStoreDao extends BlobStoreDaoAdapter {
     private final Map<Long, BlobStoreRecord> records = new LinkedHashMap<>();
     private int listCalls;
     private int findByIdCalls;

@@ -11,9 +11,10 @@ import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.DockerRegistryDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerManifestRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
 import com.github.klboke.kkrepo.protocol.docker.DockerDigest;
 import com.github.klboke.kkrepo.protocol.docker.DockerErrorCode;
 import com.github.klboke.kkrepo.protocol.docker.DockerManifestMetadata;
@@ -155,7 +156,7 @@ class DockerManifestStoreTest {
             "application/vnd.oci.image.manifest.v1+json",
             "application/vnd.nhl.peanut.butter.bagel",
             subject,
-            DockerRegistryDao.hash(subject),
+            PersistenceHashes.sha256(subject),
             200L,
             123,
             "alice",

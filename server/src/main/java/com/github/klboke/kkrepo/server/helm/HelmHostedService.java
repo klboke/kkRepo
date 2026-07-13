@@ -1,10 +1,10 @@
 package com.github.klboke.kkrepo.server.helm;
 
 import com.github.klboke.kkrepo.core.BlobStorage;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao.HelmIndexRow;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryIndexRebuildDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao.HelmIndexRow;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.protocol.helm.HelmAssetKind;
 import com.github.klboke.kkrepo.protocol.helm.HelmChartMetadata;
 import com.github.klboke.kkrepo.protocol.helm.HelmChartPackageParser;

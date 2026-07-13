@@ -30,6 +30,7 @@
     <module>protocol-rubygems</module>
     <module>protocol-yum</module>
     <module>migration-nexus</module>
+    <module>persistence-jdbc</module>
     <module>persistence-mysql</module>
     <module>admin-ui</module>
     <module>browse-ui</module>
@@ -203,6 +204,11 @@
       <dependency>
         <groupId>com.github.klboke</groupId>
         <artifactId>kkrepo-migration-nexus</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.github.klboke</groupId>
+        <artifactId>kkrepo-persistence-jdbc</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>

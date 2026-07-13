@@ -5,11 +5,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.BrowseNodeDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.ComponentDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.server.support.dao.AssetDaoAdapter;
+import com.github.klboke.kkrepo.server.support.dao.BrowseNodeDaoAdapter;
+import com.github.klboke.kkrepo.server.support.dao.ComponentDaoAdapter;
+import com.github.klboke.kkrepo.server.support.dao.RepositoryDaoAdapter;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -22,8 +26,8 @@ class MavenHtmlListingServiceTest {
     MavenHtmlListingService service = new MavenHtmlListingService(
         new FakeRepositoryDao(),
         new FakeBrowseNodeDao(),
-        new AssetDao(null, null),
-        new ComponentDao(null, null));
+        new AssetDaoAdapter(null, null),
+        new ComponentDaoAdapter(null, null));
 
     String html = service.renderBrowse("maven-hosted", "").orElseThrow();
 
@@ -37,8 +41,8 @@ class MavenHtmlListingServiceTest {
     MavenHtmlListingService service = new MavenHtmlListingService(
         new FakeRepositoryDao(RepositoryFormat.COMPOSER, RepositoryType.PROXY, "composer-proxy"),
         new ComposerBrowseNodeDao(),
-        new AssetDao(null, null),
-        new ComponentDao(null, null));
+        new AssetDaoAdapter(null, null),
+        new ComponentDaoAdapter(null, null));
 
     String html = service.renderBrowse("composer-proxy", "").orElseThrow();
 
@@ -48,7 +52,7 @@ class MavenHtmlListingServiceTest {
     assertTrue(service.renderBrowse("composer-proxy", "_composer").isEmpty());
   }
 
-  private static class FakeRepositoryDao extends RepositoryDao {
+  private static class FakeRepositoryDao extends RepositoryDaoAdapter {
     private final RepositoryFormat format;
     private final RepositoryType type;
     private final String recipe;
@@ -84,7 +88,7 @@ class MavenHtmlListingServiceTest {
     }
   }
 
-  private static class ComposerBrowseNodeDao extends BrowseNodeDao {
+  private static class ComposerBrowseNodeDao extends BrowseNodeDaoAdapter {
     ComposerBrowseNodeDao() {
       super(null);
     }
@@ -115,7 +119,7 @@ class MavenHtmlListingServiceTest {
     }
   }
 
-  private static class FakeBrowseNodeDao extends BrowseNodeDao {
+  private static class FakeBrowseNodeDao extends BrowseNodeDaoAdapter {
     FakeBrowseNodeDao() {
       super(null);
     }

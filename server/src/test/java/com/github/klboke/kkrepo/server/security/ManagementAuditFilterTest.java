@@ -9,8 +9,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityAuditDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityAuditDao.AuditLogRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao.AuditLogRecord;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.Test;

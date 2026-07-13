@@ -4,7 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.github.klboke.kkrepo.persistence.mysql.model.MigrationCheckpointRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.MigrationCheckpointRecord;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;

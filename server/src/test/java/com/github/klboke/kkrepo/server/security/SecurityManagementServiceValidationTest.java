@@ -10,21 +10,22 @@ import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.security.ApiKeyTokenPayloads;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.ApiKeyRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityAnonymousConfigRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityPrivilegeRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityRealmRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityRepositoryTargetRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityRoleRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityUserRecord;
-import com.github.klboke.kkrepo.server.security.SecurityPayloads.ApiKeyCommand;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.ApiKeyRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityAnonymousConfigRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityPrivilegeRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRealmRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRepositoryTargetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRoleRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AdminBootstrapCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AnonymousSettingsCommand;
+import com.github.klboke.kkrepo.server.security.SecurityPayloads.ApiKeyCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.LdapSettingsCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.PrivilegeCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.RoleCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.UserCommand;
+import com.github.klboke.kkrepo.server.support.dao.SecurityDaoAdapter;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -967,7 +968,7 @@ class SecurityManagementServiceValidationTest {
         null);
   }
 
-  private static class FakeSecurityDao extends SecurityDao {
+  private static class FakeSecurityDao extends SecurityDaoAdapter {
     private final Map<String, SecurityRoleRecord> roles = new LinkedHashMap<>();
     private final Map<String, SecurityPrivilegeRecord> privileges = new LinkedHashMap<>();
     private final Map<String, SecurityUserRecord> users = new LinkedHashMap<>();

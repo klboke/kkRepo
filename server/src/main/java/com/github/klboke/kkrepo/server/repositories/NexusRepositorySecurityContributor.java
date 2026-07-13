@@ -1,8 +1,8 @@
 package com.github.klboke.kkrepo.server.repositories;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityPrivilegeRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityPrivilegeRecord;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;

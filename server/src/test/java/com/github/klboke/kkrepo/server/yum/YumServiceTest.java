@@ -16,15 +16,17 @@ import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryIndexRebuildDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetBlobRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
 import com.github.klboke.kkrepo.server.raw.RawProxyService;
+import com.github.klboke.kkrepo.server.support.dao.AssetDaoAdapter;
+import com.github.klboke.kkrepo.server.support.dao.RepositoryIndexRebuildDaoAdapter;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -500,7 +502,7 @@ class YumServiceTest {
     }
   }
 
-  private static final class FakeAssetDao extends AssetDao {
+  private static final class FakeAssetDao extends AssetDaoAdapter {
     private final List<AssetRecord> assets;
     private final Map<Long, AssetBlobRecord> blobs;
     private final Map<Long, Map<String, Object>> updatedAttributes = new LinkedHashMap<>();
@@ -572,7 +574,7 @@ class YumServiceTest {
     }
   }
 
-  private static final class RecordingIndexRebuildDao extends RepositoryIndexRebuildDao {
+  private static final class RecordingIndexRebuildDao extends RepositoryIndexRebuildDaoAdapter {
     private final List<String> enqueues = new ArrayList<>();
 
     RecordingIndexRebuildDao() {

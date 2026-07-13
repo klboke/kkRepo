@@ -2,10 +2,11 @@ package com.github.klboke.kkrepo.server.security;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityAuditDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityAuditDao.AuditLogEntry;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityAuditDao.AuditLogPage;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityAuditDao.AuditLogQuery;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao.AuditLogEntry;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao.AuditLogPage;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao.AuditLogQuery;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
+import com.github.klboke.kkrepo.server.support.dao.SecurityAuditDaoAdapter;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -50,7 +51,7 @@ class SecurityAuditLogControllerTest {
     assertEquals(25, dao.query.size());
   }
 
-  private static class FakeSecurityAuditDao extends SecurityAuditDao {
+  private static class FakeSecurityAuditDao extends SecurityAuditDaoAdapter {
     private AuditLogQuery query;
 
     private FakeSecurityAuditDao() {

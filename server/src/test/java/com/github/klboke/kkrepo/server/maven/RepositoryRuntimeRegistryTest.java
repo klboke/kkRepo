@@ -8,9 +8,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.cache.InMemorySharedCache;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.catalog.CatalogCacheBroadcaster;
+import com.github.klboke.kkrepo.server.support.dao.RepositoryDaoAdapter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -157,7 +158,7 @@ class RepositoryRuntimeRegistryTest {
             "remoteBearerToken", bearerToken)));
   }
 
-  private static class FakeRepositoryDao extends RepositoryDao {
+  private static class FakeRepositoryDao extends RepositoryDaoAdapter {
     private final Map<Long, RepositoryRecord> byId = new HashMap<>();
     private final Map<String, RepositoryRecord> byName = new HashMap<>();
     private final Map<Long, List<RepositoryRecord>> members = new HashMap<>();

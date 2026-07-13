@@ -5,15 +5,15 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
-import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.ConfigMigrationCounts;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationPreflight;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationRequest;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationResult;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationTargetBlobStore;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationValidation;
-import com.github.klboke.kkrepo.persistence.mysql.dao.BlobStoreDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.BlobStoreRecord;
+import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.server.catalog.CatalogCacheBroadcaster;
 import com.github.klboke.kkrepo.server.docker.DockerConnectorManager;
 import com.github.klboke.kkrepo.server.docker.DockerConnectorRuntime;
@@ -27,6 +27,7 @@ import com.github.klboke.kkrepo.server.security.SecurityAuthorizationCache;
 import com.github.klboke.kkrepo.server.security.SecurityCatalogCache;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
+import com.github.klboke.kkrepo.server.support.dao.BlobStoreDaoAdapter;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -36,8 +37,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import org.springframework.beans.factory.ObjectProvider;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -573,7 +574,7 @@ class NexusMigrationControllerTest {
     }
   }
 
-  private static final class StubBlobStoreDao extends BlobStoreDao {
+  private static final class StubBlobStoreDao extends BlobStoreDaoAdapter {
     private final BlobStoreRecord defaultStore;
 
     private StubBlobStoreDao(BlobStoreRecord defaultStore) {

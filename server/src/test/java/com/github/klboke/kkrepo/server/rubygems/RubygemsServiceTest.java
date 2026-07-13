@@ -7,15 +7,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryIndexRebuildDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetBlobRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
 import com.github.klboke.kkrepo.server.raw.RawProxyService;
+import com.github.klboke.kkrepo.server.support.dao.AssetDaoAdapter;
+import com.github.klboke.kkrepo.server.support.dao.RepositoryIndexRebuildDaoAdapter;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -24,8 +26,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.time.Instant;
-import java.util.HexFormat;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -521,7 +523,7 @@ class RubygemsServiceTest {
     return out.toString();
   }
 
-  private static final class FakeAssetDao extends AssetDao {
+  private static final class FakeAssetDao extends AssetDaoAdapter {
     private final List<AssetRecord> assets;
 
     FakeAssetDao(List<AssetRecord> assets) {
@@ -633,7 +635,7 @@ class RubygemsServiceTest {
     }
   }
 
-  private static final class RecordingIndexRebuildDao extends RepositoryIndexRebuildDao {
+  private static final class RecordingIndexRebuildDao extends RepositoryIndexRebuildDaoAdapter {
     private final List<String> enqueues = new ArrayList<>();
 
     RecordingIndexRebuildDao() {

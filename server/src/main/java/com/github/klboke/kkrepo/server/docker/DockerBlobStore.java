@@ -3,10 +3,10 @@ package com.github.klboke.kkrepo.server.docker;
 import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetBlobRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
-import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.protocol.docker.DockerConstants;
 import com.github.klboke.kkrepo.protocol.docker.DockerDigest;
 import com.github.klboke.kkrepo.protocol.docker.DockerErrorCode;
@@ -247,9 +247,9 @@ public class DockerBlobStore {
             null,
             runtime.blobStoreId(),
             blobRef,
-            HashColumns.blobRefHash(blobRef),
+            PersistenceHashes.blobRefHash(blobRef),
             reference.objectKey(),
-            HashColumns.objectKeyHash(reference.objectKey()),
+            PersistenceHashes.objectKeyHash(reference.objectKey()),
             null,
             digest.hex(),
             null,
@@ -314,7 +314,7 @@ public class DockerBlobStore {
           blob.id(),
           RepositoryFormat.DOCKER,
           path,
-          HashColumns.pathHash(path),
+          PersistenceHashes.pathHash(path),
           digest.value(),
           "BLOB",
           contentType(blob),

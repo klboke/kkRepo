@@ -1,9 +1,9 @@
 package com.github.klboke.kkrepo.server.metrics;
 
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.MaintenanceCursorDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.MetadataRebuildDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryIndexRebuildDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.MaintenanceCursorDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.MetadataRebuildDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;

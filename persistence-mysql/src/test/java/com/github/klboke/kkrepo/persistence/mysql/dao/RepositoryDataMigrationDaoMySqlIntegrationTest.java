@@ -1,12 +1,13 @@
-package com.github.klboke.kkrepo.persistence.mysql.dao;
+package com.github.klboke.kkrepo.persistence.jdbc.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.github.klboke.kkrepo.persistence.jdbc.api.*;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryDataMigrationAssetRecord;
-import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryDataMigrationAssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.HashColumns;
 import com.github.klboke.kkrepo.persistence.mysql.support.MySqlIntegrationTestSupport;
 import java.time.Instant;
 import java.util.List;
@@ -18,7 +19,7 @@ class RepositoryDataMigrationDaoMySqlIntegrationTest extends MySqlIntegrationTes
   void failedAssetCanBeRetriedAndClaimedAgainWithRealJsonAndLockingSql() {
     long repositoryId = insertRepository("migration-target", "maven2");
     long migrationJobId = insertMigrationJob(true);
-    RepositoryDataMigrationDao dao = new RepositoryDataMigrationDao(jdbc(), jsonColumns());
+    RepositoryDataMigrationDao dao = new JdbcRepositoryDataMigrationDao(jdbc(), jsonColumns());
     long repositoryJobId = dao.createRepositoryJob(
         migrationJobId,
         "maven-releases",
@@ -46,7 +47,7 @@ class RepositoryDataMigrationDaoMySqlIntegrationTest extends MySqlIntegrationTes
     dao.refreshRepositoryProgress(repositoryJobId);
 
     assertEquals(
-        RepositoryDataMigrationDao.REPOSITORY_FINISHED_WITH_FAILURES,
+        JdbcRepositoryDataMigrationDao.REPOSITORY_FINISHED_WITH_FAILURES,
         dao.findRepositoryJob(repositoryJobId).orElseThrow().status());
     assertEquals(1, dao.retryFailedAssets(migrationJobId));
     assertEquals("migrating", dao.findRepositoryJob(repositoryJobId).orElseThrow().status());
@@ -71,7 +72,7 @@ class RepositoryDataMigrationDaoMySqlIntegrationTest extends MySqlIntegrationTes
     long secondRepositoryId = insertRepository("target-two", "maven2");
     long firstJobId = insertMigrationJob(true);
     long secondJobId = insertMigrationJob(true);
-    RepositoryDataMigrationDao dao = new RepositoryDataMigrationDao(jdbc(), jsonColumns());
+    RepositoryDataMigrationDao dao = new JdbcRepositoryDataMigrationDao(jdbc(), jsonColumns());
     long firstRepositoryJobId = dao.createRepositoryJob(
         firstJobId, "source-one", "target-one", firstRepositoryId,
         RepositoryFormat.MAVEN2, 50, Map.of());
@@ -122,7 +123,7 @@ class RepositoryDataMigrationDaoMySqlIntegrationTest extends MySqlIntegrationTes
         updated,
         "admin",
         "127.0.0.1",
-        RepositoryDataMigrationDao.ASSET_PENDING,
+        JdbcRepositoryDataMigrationDao.ASSET_PENDING,
         0,
         null,
         null,

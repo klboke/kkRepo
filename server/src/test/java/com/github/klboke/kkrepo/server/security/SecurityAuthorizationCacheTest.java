@@ -3,7 +3,7 @@ package com.github.klboke.kkrepo.server.security;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import com.github.klboke.kkrepo.auth.PermissionSubject;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityPrivilegeRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityPrivilegeRecord;
 import com.github.klboke.kkrepo.server.security.SecurityAuthorizationCache.AuthorizationSnapshot;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
 import com.github.klboke.kkrepo.server.support.InMemoryVersionWatermark;

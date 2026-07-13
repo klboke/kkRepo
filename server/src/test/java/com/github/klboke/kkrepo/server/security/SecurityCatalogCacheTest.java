@@ -6,14 +6,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityAnonymousConfigRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityPrivilegeRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityRepositoryTargetRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityRoleRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityUserRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityAnonymousConfigRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityPrivilegeRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRepositoryTargetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRoleRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
 import com.github.klboke.kkrepo.server.catalog.CatalogCacheBroadcaster;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AnonymousSettingsCommand;
+import com.github.klboke.kkrepo.server.support.dao.SecurityDaoAdapter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -168,7 +169,7 @@ class SecurityCatalogCacheTest {
     return new SecurityPrivilegeRecord(privilegeId, privilegeId, null, type, false, properties);
   }
 
-  private static class FakeSecurityDao extends SecurityDao {
+  private static class FakeSecurityDao extends SecurityDaoAdapter {
     private final List<SecurityUserRecord> users = new ArrayList<>();
     private final Map<Long, List<String>> userRoles = new LinkedHashMap<>();
     private final Map<String, SecurityRoleRecord> roles = new LinkedHashMap<>();

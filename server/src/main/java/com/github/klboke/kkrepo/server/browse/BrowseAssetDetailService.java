@@ -6,16 +6,16 @@ import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.DockerRegistryDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetBlobRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerManifestRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerManifestReferenceRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerTagRecord;
-import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestReferenceRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerTagRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPath;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPathParser;
 import com.github.klboke.kkrepo.protocol.npm.NpmMetadata;
@@ -219,7 +219,7 @@ public class BrowseAssetDetailService {
     // member list so the original first-win ordering is preserved.
     List<Long> memberIds = members.stream().map(RepositoryRecord::id).toList();
     Map<Long, AssetRecord> assetsByRepository = assetDao.findAssetsByPathHash(
-        memberIds, HashColumns.pathHash(storagePath));
+        memberIds, PersistenceHashes.pathHash(storagePath));
     for (RepositoryRecord member : members) {
       if (member.format() == RepositoryFormat.DOCKER) {
         Optional<ResolvedAsset> docker = findDockerSourceAsset(member, storagePath);

@@ -5,9 +5,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
+import com.github.klboke.kkrepo.server.support.dao.RepositoryDaoAdapter;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -86,7 +87,7 @@ class RepositoryContentControllerNpmAuditTest {
         Map.of());
   }
 
-  private static class FakeRepositoryDao extends RepositoryDao {
+  private static class FakeRepositoryDao extends RepositoryDaoAdapter {
     private RepositoryRecord repository;
 
     FakeRepositoryDao() {

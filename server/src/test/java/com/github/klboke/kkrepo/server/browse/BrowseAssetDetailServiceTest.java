@@ -10,18 +10,20 @@ import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.DockerRegistryDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetBlobRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.RepositoryRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerManifestRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerManifestReferenceRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerTagRecord;
-import com.github.klboke.kkrepo.persistence.mysql.support.HashColumns;
-import com.github.klboke.kkrepo.persistence.mysql.support.JsonColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestReferenceRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerTagRecord;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
+import com.github.klboke.kkrepo.server.support.dao.AssetDaoAdapter;
+import com.github.klboke.kkrepo.server.support.dao.DockerRegistryDaoAdapter;
+import com.github.klboke.kkrepo.server.support.dao.RepositoryDaoAdapter;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -73,7 +75,7 @@ class BrowseAssetDetailServiceTest {
         100L,
         RepositoryFormat.COMPOSER,
         path,
-        HashColumns.pathHash(path),
+        PersistenceHashes.pathHash(path),
         "company-example-1.2.3.zip",
         "composer-dist",
         "application/zip",
@@ -110,7 +112,7 @@ class BrowseAssetDetailServiceTest {
         100L,
         RepositoryFormat.COMPOSER,
         path,
-        HashColumns.pathHash(path),
+        PersistenceHashes.pathHash(path),
         "company-example-1.2.3.zip",
         "composer-dist",
         "application/zip",
@@ -122,9 +124,9 @@ class BrowseAssetDetailServiceTest {
         100L,
         1L,
         "s3://bucket/composer/company-example-1.2.3.zip",
-        HashColumns.pathHash("s3://bucket/composer/company-example-1.2.3.zip"),
+        PersistenceHashes.pathHash("s3://bucket/composer/company-example-1.2.3.zip"),
         "composer/company-example-1.2.3.zip",
-        HashColumns.pathHash("composer/company-example-1.2.3.zip"),
+        PersistenceHashes.pathHash("composer/company-example-1.2.3.zip"),
         "sha1",
         "sha256",
         "md5",
@@ -229,7 +231,7 @@ class BrowseAssetDetailServiceTest {
         100L,
         RepositoryFormat.PUB,
         path,
-        HashColumns.pathHash(path),
+        PersistenceHashes.pathHash(path),
         "1.0.0.tar.gz",
         "archive",
         "application/octet-stream",
@@ -299,7 +301,7 @@ class BrowseAssetDetailServiceTest {
         100L,
         RepositoryFormat.DOCKER,
         path,
-        HashColumns.pathHash(path),
+        PersistenceHashes.pathHash(path),
         "library/alpine@" + digest,
         "MANIFEST",
         "application/vnd.oci.image.manifest.v1+json",
@@ -494,7 +496,7 @@ class BrowseAssetDetailServiceTest {
         blobId,
         format,
         path,
-        HashColumns.pathHash(path),
+        PersistenceHashes.pathHash(path),
         path.substring(path.lastIndexOf('/') + 1),
         "tarball",
         "application/x-tgz",
@@ -520,7 +522,7 @@ class BrowseAssetDetailServiceTest {
         blobId,
         RepositoryFormat.DOCKER,
         path,
-        HashColumns.pathHash(path),
+        PersistenceHashes.pathHash(path),
         imageName + "@" + digest,
         "MANIFEST",
         mediaType,
@@ -543,7 +545,7 @@ class BrowseAssetDetailServiceTest {
         blobId,
         RepositoryFormat.DOCKER,
         path,
-        HashColumns.pathHash(path),
+        PersistenceHashes.pathHash(path),
         digest,
         "BLOB",
         "application/octet-stream",
@@ -558,9 +560,9 @@ class BrowseAssetDetailServiceTest {
         id,
         1L,
         "s3://bucket/npm/demo/-/demo-1.0.0.tgz",
-        HashColumns.pathHash("s3://bucket/npm/demo/-/demo-1.0.0.tgz"),
+        PersistenceHashes.pathHash("s3://bucket/npm/demo/-/demo-1.0.0.tgz"),
         "npm/demo/-/demo-1.0.0.tgz",
-        HashColumns.pathHash("npm/demo/-/demo-1.0.0.tgz"),
+        PersistenceHashes.pathHash("npm/demo/-/demo-1.0.0.tgz"),
         "sha1",
         "sha256",
         "md5",
@@ -578,9 +580,9 @@ class BrowseAssetDetailServiceTest {
         id,
         1L,
         "s3://bucket/docker/manifests/" + digest,
-        HashColumns.pathHash("s3://bucket/docker/manifests/" + digest),
+        PersistenceHashes.pathHash("s3://bucket/docker/manifests/" + digest),
         "docker/manifests/" + digest,
-        HashColumns.pathHash("docker/manifests/" + digest),
+        PersistenceHashes.pathHash("docker/manifests/" + digest),
         null,
         digest.substring("sha256:".length()),
         null,
@@ -598,9 +600,9 @@ class BrowseAssetDetailServiceTest {
         id,
         1L,
         "s3://bucket/docker/blobs/" + digest,
-        HashColumns.pathHash("s3://bucket/docker/blobs/" + digest),
+        PersistenceHashes.pathHash("s3://bucket/docker/blobs/" + digest),
         "docker/blobs/" + digest,
-        HashColumns.pathHash("docker/blobs/" + digest),
+        PersistenceHashes.pathHash("docker/blobs/" + digest),
         null,
         digest.substring("sha256:".length()),
         null,
@@ -625,10 +627,10 @@ class BrowseAssetDetailServiceTest {
         id,
         repositoryId,
         imageName,
-        DockerRegistryDao.hash(imageName),
+        PersistenceHashes.sha256(imageName),
         "sha256",
         digest,
-        DockerRegistryDao.hash(digest),
+        PersistenceHashes.sha256(digest),
         mediaType,
         null,
         null,
@@ -655,7 +657,7 @@ class BrowseAssetDetailServiceTest {
         manifest.repositoryId(),
         manifest.imageName(),
         digest,
-        DockerRegistryDao.hash(digest),
+        PersistenceHashes.sha256(digest),
         kind,
         "application/vnd.oci.image.manifest.v1+json",
         size,
@@ -668,9 +670,9 @@ class BrowseAssetDetailServiceTest {
         null,
         manifest.repositoryId(),
         manifest.imageName(),
-        DockerRegistryDao.hash(manifest.imageName()),
+        PersistenceHashes.sha256(manifest.imageName()),
         tag,
-        DockerRegistryDao.hash(tag),
+        PersistenceHashes.sha256(tag),
         manifest.id(),
         manifest.digest(),
         manifest.pushedBy(),
@@ -697,13 +699,13 @@ class BrowseAssetDetailServiceTest {
     return bytes.toByteArray();
   }
 
-  private static class StubRepositoryDao extends RepositoryDao {
+  private static class StubRepositoryDao extends RepositoryDaoAdapter {
     private StubRepositoryDao() {
       super(null, null);
     }
   }
 
-  private static class StubAssetDao extends AssetDao {
+  private static class StubAssetDao extends AssetDaoAdapter {
     private final Map<String, AssetRecord> assetsByPath;
     private final Map<Long, AssetBlobRecord> blobsById;
     private final Map<String, AssetRecord> dockerBlobAssetsBySha256;
@@ -755,7 +757,7 @@ class BrowseAssetDetailServiceTest {
     return index < 0 ? asset.path() : asset.path().substring(index + marker.length());
   }
 
-  private static class StubDockerRegistryDao extends DockerRegistryDao {
+  private static class StubDockerRegistryDao extends DockerRegistryDaoAdapter {
     private final List<DockerManifestRecord> manifests;
     private final Map<Long, List<DockerManifestReferenceRecord>> referencesByManifestId;
     private final Map<Long, List<DockerTagRecord>> tagsByManifestId;
@@ -772,7 +774,7 @@ class BrowseAssetDetailServiceTest {
         Map<Long, List<DockerManifestReferenceRecord>> referencesByManifestId,
         Map<Long, List<DockerTagRecord>> tagsByManifestId,
         Map<String, List<DockerManifestRecord>> referrersBySubjectDigest) {
-      super(null, new JsonColumns(new ObjectMapper()));
+      super();
       this.manifests = manifests;
       this.referencesByManifestId = referencesByManifestId;
       this.tagsByManifestId = tagsByManifestId;

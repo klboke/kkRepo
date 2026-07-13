@@ -5,19 +5,20 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.ApiKeyRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityAnonymousConfigRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRealmRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
+import com.github.klboke.kkrepo.server.support.dao.SecurityDaoAdapter;
 import com.sun.net.httpserver.HttpServer;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.ApiKeyRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityAnonymousConfigRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityRealmRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityUserRecord;
 import com.unboundid.ldap.listener.InMemoryDirectoryServer;
 import com.unboundid.ldap.listener.InMemoryDirectoryServerConfig;
 import com.unboundid.ldap.listener.InMemoryListenerConfig;
 import jakarta.servlet.http.HttpServletRequest;
-import java.math.BigInteger;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.math.BigInteger;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -991,7 +992,7 @@ class SecurityAuthenticationServiceTest {
     return 0;
   }
 
-  private static class FakeSecurityDao extends SecurityDao {
+  private static class FakeSecurityDao extends SecurityDaoAdapter {
     private final List<SecurityRealmRecord> realms = new ArrayList<>();
     private final Map<String, SecurityUserRecord> users = new LinkedHashMap<>();
     private final Map<Long, List<String>> roles = new LinkedHashMap<>();

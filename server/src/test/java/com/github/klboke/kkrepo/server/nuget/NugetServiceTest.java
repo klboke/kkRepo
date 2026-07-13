@@ -8,13 +8,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
 import com.github.klboke.kkrepo.server.raw.RawProxyService;
+import com.github.klboke.kkrepo.server.support.dao.AssetDaoAdapter;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -335,7 +336,7 @@ class NugetServiceTest {
         Map.of());
   }
 
-  private static final class FakeAssetDao extends AssetDao {
+  private static final class FakeAssetDao extends AssetDaoAdapter {
     private final List<AssetRecord> assets;
 
     FakeAssetDao(List<AssetRecord> assets) {

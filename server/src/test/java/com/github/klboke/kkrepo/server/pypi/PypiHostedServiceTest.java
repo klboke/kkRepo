@@ -9,21 +9,24 @@ import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.mysql.dao.AssetDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.BrowseNodeDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.ComponentDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryIndexRebuildDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
+import com.github.klboke.kkrepo.server.support.dao.AssetDaoAdapter;
+import com.github.klboke.kkrepo.server.support.dao.ComponentDaoAdapter;
+import com.github.klboke.kkrepo.server.support.dao.RepositoryIndexRebuildDaoAdapter;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.util.HexFormat;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -249,7 +252,7 @@ class PypiHostedServiceTest {
         null, null, List.of());
   }
 
-  private static class EmptyAssetDao extends AssetDao {
+  private static class EmptyAssetDao extends AssetDaoAdapter {
     EmptyAssetDao() {
       super(null, null);
     }
@@ -266,13 +269,13 @@ class PypiHostedServiceTest {
     }
   }
 
-  private static class EmptyComponentDao extends ComponentDao {
+  private static class EmptyComponentDao extends ComponentDaoAdapter {
     EmptyComponentDao() {
       super(null, null);
     }
   }
 
-  private static class RecordingIndexRebuildDao extends RepositoryIndexRebuildDao {
+  private static class RecordingIndexRebuildDao extends RepositoryIndexRebuildDaoAdapter {
     final List<String> enqueues = new ArrayList<>();
 
     RecordingIndexRebuildDao() {

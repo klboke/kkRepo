@@ -7,9 +7,10 @@ import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityPrivilegeRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.SecurityRepositoryTargetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityPrivilegeRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRepositoryTargetRecord;
+import com.github.klboke.kkrepo.server.support.dao.SecurityDaoAdapter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -285,7 +286,7 @@ class SecurityManagementServicePermissionTest {
     return new SecurityPrivilegeRecord(privilegeId, privilegeId, null, type, false, properties);
   }
 
-  private static class FakeSecurityDao extends SecurityDao {
+  private static class FakeSecurityDao extends SecurityDaoAdapter {
     private final Map<String, List<String>> userRoles = new LinkedHashMap<>();
     private final Map<String, List<String>> childRoles = new LinkedHashMap<>();
     private final Map<String, List<SecurityPrivilegeRecord>> rolePrivileges = new LinkedHashMap<>();

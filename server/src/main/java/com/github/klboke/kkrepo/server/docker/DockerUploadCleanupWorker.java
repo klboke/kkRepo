@@ -2,10 +2,10 @@ package com.github.klboke.kkrepo.server.docker;
 
 import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
-import com.github.klboke.kkrepo.persistence.mysql.dao.DockerAuthTokenDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.DockerUploadDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerUploadChunkRecord;
-import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerUploadSessionRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerUploadDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerUploadChunkRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerUploadSessionRecord;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;

@@ -18,7 +18,7 @@
     </dependency>
     <dependency>
       <groupId>com.github.klboke</groupId>
-      <artifactId>kkrepo-persistence-mysql</artifactId>
+      <artifactId>kkrepo-persistence-jdbc</artifactId>
     </dependency>
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>

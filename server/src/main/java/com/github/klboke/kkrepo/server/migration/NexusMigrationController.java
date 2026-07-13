@@ -8,11 +8,11 @@ import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMi
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationResult;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationTargetBlobStore;
 import com.github.klboke.kkrepo.migration.nexus.security.SecurityDaoMigrationWriter;
-import com.github.klboke.kkrepo.persistence.mysql.dao.BlobStoreDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.MigrationJobDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.mysql.dao.SecurityDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.BlobStoreRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.MigrationJobDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.server.docker.DockerConnectorRuntime;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;

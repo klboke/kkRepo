@@ -11,8 +11,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.core.BlobStorage;
-import com.github.klboke.kkrepo.persistence.mysql.dao.PubUploadSessionDao;
-import com.github.klboke.kkrepo.persistence.mysql.model.PubUploadSessionRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PubUploadSessionDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.PubUploadSessionRecord;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import java.time.Instant;
 import java.util.List;
