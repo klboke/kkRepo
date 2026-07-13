@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.persistence.mysql.dao;
 
 import static com.github.klboke.kkrepo.persistence.mysql.support.JdbcRows.nullableInstant;
+import static com.github.klboke.kkrepo.persistence.mysql.support.JdbcRows.nullableLong;
 import static com.github.klboke.kkrepo.persistence.mysql.support.JdbcRows.nullableTimestamp;
 
 import com.github.klboke.kkrepo.persistence.mysql.model.docker.DockerManifestRecord;
@@ -365,10 +366,10 @@ public class DockerRegistryDao {
       return DeletedManifest.notFound();
     }
     long id = manifest.get().id();
-    Long assetBlobId = jdbcTemplate.queryForList(
+    Long assetBlobId = jdbcTemplate.queryForObject(
         "SELECT asset_blob_id FROM asset WHERE id = ?",
-        Long.class,
-        manifest.get().assetId()).stream().findFirst().orElse(null);
+        (rs, rowNum) -> nullableLong(rs, "asset_blob_id"),
+        manifest.get().assetId());
     jdbcTemplate.update("DELETE FROM docker_tag WHERE manifest_id = ?", id);
     int deleted = jdbcTemplate.update("""
         UPDATE docker_manifest
