@@ -25,12 +25,16 @@ import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
+import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.mock.web.MockMultipartFile;
@@ -157,6 +161,103 @@ class NpmHostedServiceTest {
         "alice", null).status());
   }
 
+  @Test
+  void multipartTarballUploadCreatesVersionDistAndLatestTag() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime("ALLOW", 7L);
+    when(fixture.assetDao.findAssetByPath(10L, "demo")).thenReturn(Optional.empty());
+    when(fixture.assetDao.findAssetByPath(10L, "demo/-/demo-1.0.0.tgz"))
+        .thenReturn(Optional.empty());
+    when(fixture.writer.writeTarball(
+        eq(runtime), eq(fixture.storage), eq(7L), eq(PACKAGE), eq("1.0.0"),
+        eq("demo-1.0.0.tgz"), any(), eq("application/gzip"), eq("alice"), eq("127.0.0.1"),
+        eq(Map.of())))
+        .thenReturn(new NpmAssetWriter.Stored(
+            null,
+            null,
+            new NpmAssetWriter.Digests("md5", "sha1-value", "sha256", "sha512", 123L),
+            true,
+            null));
+    MockMultipartFile upload = new MockMultipartFile(
+        "asset",
+        "demo-1.0.0.tgz",
+        "application/gzip",
+        tarball("package/package.json", """
+            {"name":"demo","version":"1.0.0","description":"demo package"}
+            """));
+
+    assertEquals(201, fixture.service.uploadTarball(
+        runtime, upload, "alice", "127.0.0.1").status());
+
+    ArgumentCaptor<byte[]> json = ArgumentCaptor.forClass(byte[].class);
+    verify(fixture.writer).writePackageRoot(
+        eq(runtime), eq(fixture.storage), eq(7L), eq(PACKAGE),
+        json.capture(), eq("alice"), eq("127.0.0.1"));
+    Map<String, Object> stored = fixture.mapper.readValue(json.getValue(), MAP);
+    assertEquals("1.0.0", map(stored.get("dist-tags")).get("latest"));
+    Map<String, Object> version = map(map(stored.get("versions")).get("1.0.0"));
+    assertEquals("demo-1.0.0.tgz", map(version.get("dist")).get("tarball"));
+    assertEquals("sha1-value", map(version.get("dist")).get("shasum"));
+    assertNotNull(stored.get("_rev"));
+  }
+
+  @Test
+  void multipartTarballRequiresPackageJsonNameAndVersion() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime("ALLOW", 7L);
+
+    assertThrows(NpmExceptions.BadRequestException.class, () -> fixture.service.uploadTarball(
+        runtime,
+        new MockMultipartFile(
+            "asset", "demo-1.0.0.tgz", "application/gzip",
+            tarball("package/README.md", "readme")),
+        "alice",
+        null));
+    assertThrows(NpmExceptions.BadRequestException.class, () -> fixture.service.uploadTarball(
+        runtime,
+        new MockMultipartFile(
+            "asset", "demo-1.0.0.tgz", "application/gzip",
+            tarball("package/package.json", "{\"name\":\"demo\"}")),
+        "alice",
+        null));
+
+    verify(fixture.writer, never()).writeTarball(
+        any(), any(), anyLong(), any(), anyString(), anyString(), any(),
+        anyString(), anyString(), any(), any());
+  }
+
+  @Test
+  void deletingTarballRemovesVersionAndTagsThatPointToIt() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime("ALLOW", 7L);
+    stubPackageRoot(fixture, """
+        {
+          "name":"demo",
+          "_rev":"2-existing",
+          "versions":{
+            "1.0.0":{"name":"demo","version":"1.0.0",
+              "dist":{"tarball":"demo-1.0.0.tgz"}},
+            "2.0.0":{"name":"demo","version":"2.0.0",
+              "dist":{"tarball":"demo-2.0.0.tgz"}}
+          },
+          "dist-tags":{"latest":"2.0.0","beta":"2.0.0","stable":"1.0.0"}
+        }
+        """);
+    when(fixture.writer.deletePath(
+        runtime, fixture.storage, "demo/-/demo-2.0.0.tgz")).thenReturn(1);
+
+    assertEquals(200, fixture.service.deleteTarball(
+        runtime, PACKAGE, "demo-2.0.0.tgz", "2-existing").status());
+
+    ArgumentCaptor<byte[]> json = ArgumentCaptor.forClass(byte[].class);
+    verify(fixture.writer).writePackageRoot(
+        eq(runtime), eq(fixture.storage), eq(7L), eq(PACKAGE),
+        json.capture(), eq("system"), eq(null));
+    Map<String, Object> stored = fixture.mapper.readValue(json.getValue(), MAP);
+    assertEquals(List.of("1.0.0"), map(stored.get("versions")).keySet().stream().toList());
+    assertEquals(Map.of("stable", "1.0.0"), map(stored.get("dist-tags")));
+  }
+
   private static void stubPackageRoot(Fixture fixture, String json) {
     AssetRecord asset = new AssetRecord(
         1L, 10L, 2L, 3L, RepositoryFormat.NPM, "demo", null,
@@ -170,6 +271,25 @@ class NpmHostedServiceTest {
     when(fixture.assetDao.findBlobById(3L)).thenReturn(Optional.of(blob));
     when(fixture.storage.get(any())).thenAnswer(invocation -> Optional.of(
         new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8))));
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> map(Object value) {
+    return (Map<String, Object>) value;
+  }
+
+  private static byte[] tarball(String entryName, String content) throws Exception {
+    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+    try (GzipCompressorOutputStream gzip = new GzipCompressorOutputStream(bytes);
+        TarArchiveOutputStream tar = new TarArchiveOutputStream(gzip)) {
+      byte[] body = content.getBytes(StandardCharsets.UTF_8);
+      TarArchiveEntry entry = new TarArchiveEntry(entryName);
+      entry.setSize(body.length);
+      tar.putArchiveEntry(entry);
+      tar.write(body);
+      tar.closeArchiveEntry();
+    }
+    return bytes.toByteArray();
   }
 
   private static Fixture fixture() {
