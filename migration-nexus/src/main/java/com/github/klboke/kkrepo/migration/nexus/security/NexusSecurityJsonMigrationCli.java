@@ -11,9 +11,20 @@ import java.io.PrintStream;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.function.Function;
 
 public class NexusSecurityJsonMigrationCli {
   private static final String DEFAULT_NEXUS_VERSION = "3.29.2-02";
+  private final Function<DatabaseConnectionSettings, PersistenceStores> storesConnector;
+
+  public NexusSecurityJsonMigrationCli() {
+    this(PersistenceStoreFactories::connect);
+  }
+
+  NexusSecurityJsonMigrationCli(
+      Function<DatabaseConnectionSettings, PersistenceStores> storesConnector) {
+    this.storesConnector = storesConnector;
+  }
 
   public static void main(String[] args) {
     int code = new NexusSecurityJsonMigrationCli().run(args, System.out, System.err);
@@ -39,7 +50,7 @@ public class NexusSecurityJsonMigrationCli {
 
     try {
       ObjectMapper objectMapper = new ObjectMapper();
-      try (PersistenceStores stores = PersistenceStoreFactories.connect(new DatabaseConnectionSettings(
+      try (PersistenceStores stores = storesConnector.apply(new DatabaseConnectionSettings(
           options.jdbcUrl(), options.username(), options.password()))) {
         MigrationJobDao jobDao = stores.migrationJobs();
         long jobId = jobDao.create(

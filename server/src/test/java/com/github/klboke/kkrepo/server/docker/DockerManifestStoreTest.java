@@ -1,32 +1,124 @@
 package com.github.klboke.kkrepo.server.docker;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.github.klboke.kkrepo.core.BlobReference;
+import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestReferenceRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerTagRecord;
 import com.github.klboke.kkrepo.protocol.docker.DockerDigest;
 import com.github.klboke.kkrepo.protocol.docker.DockerErrorCode;
+import com.github.klboke.kkrepo.protocol.docker.DockerManifestDescriptor;
 import com.github.klboke.kkrepo.protocol.docker.DockerManifestMetadata;
 import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
+import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import java.io.InputStream;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.annotation.Transactional;
 
 class DockerManifestStoreTest {
+  @Test
+  void persistsManifestIdentityHashesAcrossBlobAssetManifestTagAndReferences() {
+    AssetDao assetDao = mock(AssetDao.class);
+    DockerRegistryDao dockerDao = mock(DockerRegistryDao.class);
+    DockerBlobStore blobStore = mock(DockerBlobStore.class);
+    DockerManifestParser parser = mock(DockerManifestParser.class);
+    AssetMetadataCache assetMetadataCache = mock(AssetMetadataCache.class);
+    BlobStorage storage = mock(BlobStorage.class);
+    RepositoryRuntime runtime = runtime("ALLOW");
+    byte[] body = "{}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    DockerDigest digest = DockerDigest.sha256(body);
+    String subjectDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    String referencedDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    DockerManifestMetadata metadata = new DockerManifestMetadata(
+        "application/vnd.oci.image.manifest.v1+json",
+        "application/vnd.example.sbom",
+        subjectDigest,
+        Map.of("org.opencontainers.image.title", "example"),
+        List.of(new DockerManifestDescriptor(
+            "layer",
+            referencedDigest,
+            "application/vnd.oci.image.layer.v1.tar+gzip",
+            123L,
+            Map.of("os", "linux"),
+            Map.of())));
+    BlobReference uploaded = new BlobReference("bucket", "objects/manifest", digest.hex(), body.length);
+    when(parser.parse(body, metadata.mediaType())).thenReturn(metadata);
+    when(blobStore.storage(runtime)).thenReturn(storage);
+    when(storage.put(anyString(), anyString(), any(InputStream.class), anyLong(), anyString()))
+        .thenReturn(uploaded);
+    when(assetDao.insertBlobOrFindExisting(any(AssetBlobRecord.class)))
+        .thenAnswer(invocation -> invocation.<AssetBlobRecord>getArgument(0).withId(11L));
+    when(assetDao.findAssetByPath(runtime.id(), DockerManifestStore.manifestPath("team/app", digest)))
+        .thenReturn(Optional.empty());
+    when(assetDao.tryInsertAsset(any(AssetRecord.class))).thenReturn(OptionalLong.of(22L));
+    when(dockerDao.upsertManifest(any(DockerManifestRecord.class)))
+        .thenAnswer(invocation -> manifestWithId(invocation.getArgument(0), 33L));
+    DockerManifestStore store = new DockerManifestStore(
+        assetDao, dockerDao, blobStore, parser, assetMetadataCache, null);
+
+    DockerManifestStore.StoredManifest stored = store.putManifest(
+        runtime,
+        "team/app",
+        "latest",
+        body,
+        metadata.mediaType(),
+        "alice",
+        "127.0.0.1",
+        false);
+
+    ArgumentCaptor<AssetBlobRecord> blobCaptor = ArgumentCaptor.forClass(AssetBlobRecord.class);
+    ArgumentCaptor<AssetRecord> assetCaptor = ArgumentCaptor.forClass(AssetRecord.class);
+    ArgumentCaptor<DockerManifestRecord> manifestCaptor = ArgumentCaptor.forClass(DockerManifestRecord.class);
+    ArgumentCaptor<DockerTagRecord> tagCaptor = ArgumentCaptor.forClass(DockerTagRecord.class);
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<DockerManifestReferenceRecord>> referencesCaptor =
+        (ArgumentCaptor<List<DockerManifestReferenceRecord>>) (ArgumentCaptor<?>)
+            ArgumentCaptor.forClass(List.class);
+    verify(assetDao).insertBlobOrFindExisting(blobCaptor.capture());
+    verify(assetDao).tryInsertAsset(assetCaptor.capture());
+    verify(dockerDao).upsertManifest(manifestCaptor.capture());
+    verify(dockerDao).replaceManifestReferences(eq(33L), referencesCaptor.capture());
+    verify(dockerDao).upsertTag(tagCaptor.capture());
+
+    AssetBlobRecord blob = blobCaptor.getValue();
+    AssetRecord asset = assetCaptor.getValue();
+    DockerManifestRecord manifest = manifestCaptor.getValue();
+    DockerTagRecord tag = tagCaptor.getValue();
+    DockerManifestReferenceRecord manifestReference = referencesCaptor.getValue().get(0);
+    assertAllHashes(blob, asset, manifest, tag, manifestReference);
+    assertEquals(11L, stored.blob().id());
+    assertEquals(22L, stored.asset().id());
+    assertEquals(33L, stored.manifest().id());
+    verify(assetMetadataCache).evictAfterCommit(runtime.id(), asset.path());
+  }
+
   @Test
   void allowOnceRejectsExistingTagBeforeUploadingManifestBytes() {
     AssetDao assetDao = mock(AssetDao.class);
@@ -228,5 +320,45 @@ class DockerManifestStoreTest {
         Map.of(),
         null,
         null);
+  }
+
+  private static DockerManifestRecord manifestWithId(DockerManifestRecord record, long id) {
+    return new DockerManifestRecord(
+        id,
+        record.repositoryId(),
+        record.imageName(),
+        record.imageNameHash(),
+        record.digestAlgorithm(),
+        record.digest(),
+        record.digestHash(),
+        record.mediaType(),
+        record.artifactType(),
+        record.subjectDigest(),
+        record.subjectDigestHash(),
+        record.assetId(),
+        record.size(),
+        record.pushedBy(),
+        record.pushedByIp(),
+        record.deletedAt(),
+        record.attributes(),
+        record.createdAt(),
+        record.updatedAt());
+  }
+
+  private static void assertAllHashes(
+      AssetBlobRecord blob,
+      AssetRecord asset,
+      DockerManifestRecord manifest,
+      DockerTagRecord tag,
+      DockerManifestReferenceRecord manifestReference) {
+    assertArrayEquals(PersistenceHashes.blobRefHash(blob.blobRef()), blob.blobRefHash());
+    assertArrayEquals(PersistenceHashes.objectKeyHash(blob.objectKey()), blob.objectKeyHash());
+    assertArrayEquals(PersistenceHashes.pathHash(asset.path()), asset.pathHash());
+    assertArrayEquals(PersistenceHashes.sha256(manifest.imageName()), manifest.imageNameHash());
+    assertArrayEquals(PersistenceHashes.sha256(manifest.digest()), manifest.digestHash());
+    assertArrayEquals(PersistenceHashes.sha256(manifest.subjectDigest()), manifest.subjectDigestHash());
+    assertArrayEquals(PersistenceHashes.sha256(tag.imageName()), tag.imageNameHash());
+    assertArrayEquals(PersistenceHashes.sha256(tag.tag()), tag.tagHash());
+    assertArrayEquals(PersistenceHashes.sha256(manifestReference.digest()), manifestReference.digestHash());
   }
 }
