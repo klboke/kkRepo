@@ -169,7 +169,7 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
           record.size(),
           record.pushedBy(),
           record.pushedByIp(),
-          jsonColumns.write(record.attributes()),
+          jsonColumns.parameter(record.attributes()),
           record.repositoryId(),
           record.imageNameHash(),
           record.digestHash());
@@ -201,7 +201,7 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
       ps.setString(13, record.pushedBy());
       ps.setString(14, record.pushedByIp());
       ps.setTimestamp(15, nullableTimestamp(record.deletedAt()));
-      ps.setString(16, jsonColumns.write(record.attributes()));
+      jsonColumns.bind(ps, 16, record.attributes());
     });
   }
 
@@ -227,8 +227,8 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
             record.referenceKind(),
             record.mediaType(),
             record.size(),
-            jsonColumns.write(record.platform()),
-            jsonColumns.write(record.annotations())
+            jsonColumns.parameter(record.platform()),
+            jsonColumns.parameter(record.annotations())
         })
         .toList();
     jdbcTemplate.batchUpdate("""
@@ -388,7 +388,8 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
   public boolean referencedDigestExists(long repositoryId, String imageName, String digest) {
     byte[] digestHash = hash(digest);
     String sha256 = sha256Hex(digest);
-    Integer assetCount = jdbcTemplate.queryForObject("""
+    String storedDigest = jsonColumns.extractText("a.attributes_json", "docker", "digest");
+    String assetSql = """
         SELECT COUNT(*)
         FROM asset a
         JOIN asset_blob b ON b.id = a.asset_blob_id
@@ -397,10 +398,12 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
           AND a.kind = 'BLOB'
           AND b.deleted_at IS NULL
           AND (
-            JSON_UNQUOTE(JSON_EXTRACT(a.attributes_json, '$.docker.digest')) = ?
+            %s = ?
             OR (? IS NOT NULL AND b.sha256 = ?)
           )
-        """, Integer.class, repositoryId, digest, sha256, sha256);
+        """.formatted(storedDigest);
+    Integer assetCount = jdbcTemplate.queryForObject(
+        assetSql, Integer.class, repositoryId, digest, sha256, sha256);
     if (assetCount != null && assetCount > 0) {
       return true;
     }
@@ -450,7 +453,8 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
       args.add(nullableTimestamp(updatedBefore));
     }
     args.add(Math.max(1, maxCandidates));
-    return jdbcTemplate.queryForList("""
+    String storedDigest = jsonColumns.extractText("a.attributes_json", "docker", "digest");
+    String cleanupSql = """
         SELECT a.id
         FROM asset a
         JOIN asset_blob b ON b.id = a.asset_blob_id
@@ -459,7 +463,7 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
           AND a.format = 'docker'
           AND a.kind = 'BLOB'
           AND b.deleted_at IS NULL
-        """ + updatedBeforePredicate + """
+        %s
           AND NOT EXISTS (
             SELECT 1
             FROM docker_manifest_reference r
@@ -467,8 +471,8 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
             WHERE r.repository_id = a.repository_id
               AND m.deleted_at IS NULL
               AND (
-                r.digest = JSON_UNQUOTE(JSON_EXTRACT(a.attributes_json, '$.docker.digest'))
-                OR r.digest_hash = UNHEX(SHA2(JSON_UNQUOTE(JSON_EXTRACT(a.attributes_json, '$.docker.digest')), 256))
+                r.digest = %s
+                OR r.digest_hash = UNHEX(SHA2(%s, 256))
                 OR (
                   b.sha256 IS NOT NULL
                   AND r.digest = CONCAT('sha256:', b.sha256)
@@ -481,7 +485,7 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
             WHERE m.repository_id = a.repository_id
               AND m.deleted_at IS NULL
               AND (
-                m.digest = JSON_UNQUOTE(JSON_EXTRACT(a.attributes_json, '$.docker.digest'))
+                m.digest = %s
                 OR (
                   b.sha256 IS NOT NULL
                   AND m.digest = CONCAT('sha256:', b.sha256)
@@ -490,7 +494,8 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
           )
         ORDER BY a.id
         LIMIT ?
-        """, Long.class, args.toArray())
+        """.formatted(updatedBeforePredicate, storedDigest, storedDigest, storedDigest);
+    return jdbcTemplate.queryForList(cleanupSql, Long.class, args.toArray())
         .stream()
         .findFirst()
         .map(OptionalLong::of)

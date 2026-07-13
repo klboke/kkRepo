@@ -55,9 +55,9 @@ public class JdbcBlobStoreDao implements com.github.klboke.kkrepo.persistence.jd
     return local;
   }
 
-  /** Serializes attributes for storage, encrypting credential values in place. */
-  private String writeAttributes(Map<String, Object> attributes) {
-    return jsonColumns.write(transformSensitive(attributes, cipher()::encrypt));
+  /** Prepares attributes for storage, encrypting credential values in place. */
+  private Map<String, Object> storageAttributes(Map<String, Object> attributes) {
+    return transformSensitive(attributes, cipher()::encrypt);
   }
 
   /** Decrypts credential values after reading attributes back from storage. */
@@ -91,7 +91,7 @@ public class JdbcBlobStoreDao implements com.github.klboke.kkrepo.persistence.jd
       ps.setString(4, record.region());
       ps.setString(5, record.bucket());
       ps.setString(6, record.prefix());
-      ps.setString(7, writeAttributes(record.attributes()));
+      jsonColumns.bind(ps, 7, storageAttributes(record.attributes()));
     });
   }
 
@@ -106,7 +106,7 @@ public class JdbcBlobStoreDao implements com.github.klboke.kkrepo.persistence.jd
         record.region(),
         record.bucket(),
         record.prefix(),
-        writeAttributes(record.attributes()),
+        jsonColumns.parameter(storageAttributes(record.attributes())),
         record.name());
   }
 
@@ -121,7 +121,7 @@ public class JdbcBlobStoreDao implements com.github.klboke.kkrepo.persistence.jd
         record.region(),
         record.bucket(),
         record.prefix(),
-        writeAttributes(record.attributes()),
+        jsonColumns.parameter(storageAttributes(record.attributes())),
         record.id());
   }
 

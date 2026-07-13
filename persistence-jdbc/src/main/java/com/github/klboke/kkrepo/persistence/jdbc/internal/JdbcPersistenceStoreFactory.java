@@ -26,6 +26,9 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.UiSettingsDao;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
+import java.util.List;
+import java.util.ServiceLoader;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
@@ -38,29 +41,41 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
     dataSource.setUsername(settings.username());
     dataSource.setPassword(settings.password());
     JdbcTemplate jdbc = new JdbcTemplate(dataSource);
-    JsonColumns json = new JsonColumns(new ObjectMapper());
+    DatabaseDialect dialect = loadDialect();
+    JsonColumns json = new JsonColumns(new ObjectMapper(), dialect);
     return new DefaultPersistenceStores(
         new JdbcAssetDao(jdbc, json),
         new JdbcAuthTicketDao(jdbc),
         new JdbcBlobStoreDao(jdbc, json),
         new JdbcBrowseNodeDao(jdbc),
-        new JdbcCacheVersionDao(jdbc),
-        new JdbcComponentDao(jdbc, json),
+        new JdbcCacheVersionDao(jdbc, dialect),
+        new JdbcComponentDao(jdbc, json, dialect),
         new JdbcDockerAuthTokenDao(jdbc, json),
         new JdbcDockerRegistryDao(jdbc, json),
         new JdbcDockerUploadDao(jdbc, json),
         new JdbcMaintenanceCursorDao(jdbc),
-        new JdbcMetadataRebuildDao(jdbc),
+        new JdbcMetadataRebuildDao(jdbc, dialect),
         new JdbcMigrationCheckpointDao(jdbc),
         new JdbcMigrationJobDao(jdbc, json),
         new JdbcProxyStateDao(jdbc, 30),
         new JdbcPubUploadSessionDao(jdbc, json),
         new JdbcRepositoryDao(jdbc, json),
         new JdbcRepositoryDataMigrationDao(jdbc, json),
-        new JdbcRepositoryIndexRebuildDao(jdbc),
+        new JdbcRepositoryIndexRebuildDao(jdbc, dialect),
         new JdbcSecurityAuditDao(jdbc, json),
-        new JdbcSecurityDao(jdbc, json),
+        new JdbcSecurityDao(jdbc, json, dialect),
         new JdbcUiSettingsDao(jdbc));
+  }
+
+  private static DatabaseDialect loadDialect() {
+    List<DatabaseDialect> dialects = ServiceLoader.load(DatabaseDialect.class).stream()
+        .map(ServiceLoader.Provider::get)
+        .toList();
+    if (dialects.size() != 1) {
+      throw new IllegalStateException(
+          "Expected exactly one DatabaseDialect provider, found " + dialects.size());
+    }
+    return dialects.getFirst();
   }
 
   private record DefaultPersistenceStores(

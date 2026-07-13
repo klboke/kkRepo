@@ -80,7 +80,7 @@ public class JdbcPubUploadSessionDao implements com.github.klboke.kkrepo.persist
       ps.setObject(15, record.size());
       ps.setString(16, record.packageName());
       ps.setString(17, record.version());
-      ps.setString(18, jsonColumns.write(record.pubspec()));
+      jsonColumns.bind(ps, 18, record.pubspec());
       ps.setString(19, record.errorMessage());
       ps.setTimestamp(20, nullableTimestamp(record.finalizedAt()));
     });
@@ -154,7 +154,7 @@ public class JdbcPubUploadSessionDao implements com.github.klboke.kkrepo.persist
         size,
         packageName,
         version,
-        jsonColumns.write(pubspec),
+        jsonColumns.parameter(pubspec),
         id);
   }
 

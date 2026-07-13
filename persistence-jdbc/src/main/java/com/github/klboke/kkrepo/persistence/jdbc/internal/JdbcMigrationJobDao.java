@@ -39,7 +39,7 @@ public class JdbcMigrationJobDao implements com.github.klboke.kkrepo.persistence
         """, ps -> {
       ps.setString(1, sourceNexusVersion);
       ps.setString(2, sourceDataPath);
-      ps.setString(3, jsonColumns.write(options));
+      jsonColumns.bind(ps, 3, options);
     });
   }
 
@@ -54,6 +54,6 @@ public class JdbcMigrationJobDao implements com.github.klboke.kkrepo.persistence
         UPDATE migration_job
         SET status = ?, summary_json = ?, finished_at = CURRENT_TIMESTAMP(3)
         WHERE id = ?
-        """, status, jsonColumns.write(summary), id);
+        """, status, jsonColumns.parameter(summary), id);
   }
 }

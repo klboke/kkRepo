@@ -75,6 +75,39 @@ class PersistencePackageBoundaryTest {
         importName.startsWith("com.github.klboke.kkrepo.persistence.jdbc.internal"));
   }
 
+  @Test
+  void sharedJdbcImplementationContainsNoDatabaseBranchesOrExtractedMySqlSql() throws IOException {
+    Path internal = repositoryRoot().resolve(
+        "persistence-jdbc/src/main/java/com/github/klboke/kkrepo/persistence/jdbc/internal");
+    List<String> forbiddenFragments = List.of(
+        "DatabaseType.",
+        "LAST_INSERT_ID(",
+        "MATCH(",
+        "AGAINST (",
+        "INSERT IGNORE",
+        "TIMESTAMPDIFF(",
+        "JSON_UNQUOTE(",
+        "JSON_EXTRACT(",
+        "JSON_SET(");
+    List<String> violations = new ArrayList<>();
+    try (Stream<Path> files = Files.walk(internal)) {
+      for (Path file : files.filter(path -> path.toString().endsWith(".java")).toList()) {
+        int lineNumber = 0;
+        for (String line : Files.readAllLines(file)) {
+          lineNumber++;
+          for (String fragment : forbiddenFragments) {
+            if (line.contains(fragment)) {
+              violations.add(repositoryRoot().relativize(file) + ":" + lineNumber
+                  + " contains " + fragment);
+            }
+          }
+        }
+      }
+    }
+    assertTrue(violations.isEmpty(), () -> "Database-specific JDBC fragments:\n"
+        + String.join("\n", violations));
+  }
+
   private static void assertNoForbiddenImports(
       List<Path> sourceRoots,
       Predicate<String> forbidden) throws IOException {

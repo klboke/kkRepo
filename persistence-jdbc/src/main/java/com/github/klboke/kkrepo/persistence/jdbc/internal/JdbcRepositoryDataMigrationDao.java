@@ -136,7 +136,7 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
       ps.setString(5, EnumColumns.write(format));
       ps.setString(6, REPOSITORY_DISCOVERING);
       ps.setInt(7, pageSize);
-      ps.setString(8, jsonColumns.write(options));
+      jsonColumns.bind(ps, 8, options);
     });
   }
 
@@ -309,7 +309,7 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
     setNullableLong(ps, 22, target == null ? null : target.componentId());
     setNullableLong(ps, 23, target == null ? null : target.assetId());
     setNullableLong(ps, 24, target == null ? null : target.assetBlobId());
-    ps.setString(25, jsonColumns.write(record.metadata()));
+    jsonColumns.bind(ps, 25, record.metadata());
   }
 
   private static byte[] sourcePathHash(RepositoryDataMigrationAssetRecord record) {
@@ -394,7 +394,9 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
       args.add(migrationJobId);
     }
     args.add(safeLimit);
-    List<AssetClaim> claims = jdbcTemplate.query("""
+    String packageMigrationEnabled = jsonColumns.extractText(
+        "mj.options_json", "packageMigrationEnabled");
+    String claimSql = """
         SELECT a.*,
                r.migration_job_id,
                r.source_repository_name,
@@ -407,18 +409,19 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
         JOIN repository_data_migration_repository r ON r.id = a.repository_job_id
         JOIN migration_job mj ON mj.id = r.migration_job_id
         WHERE r.status IN (?, ?)
-          AND JSON_UNQUOTE(JSON_EXTRACT(mj.options_json, '$.packageMigrationEnabled')) = 'true'
+          AND %s = 'true'
           AND (
             a.status = ?
             OR (a.status = ? AND (a.claimed_at IS NULL OR a.claimed_at < ?))
           )
           AND a.attempts < ?
           AND (a.claimed_at IS NULL OR a.claimed_at < ?)
-        """ + jobPredicate + """
+        %s
         ORDER BY a.id
         LIMIT ?
         FOR UPDATE SKIP LOCKED
-        """, assetClaimRowMapper, args.toArray());
+        """.formatted(packageMigrationEnabled, jobPredicate);
+    List<AssetClaim> claims = jdbcTemplate.query(claimSql, assetClaimRowMapper, args.toArray());
     for (AssetClaim claim : claims) {
       jdbcTemplate.update("""
           UPDATE repository_data_migration_asset
@@ -548,28 +551,25 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
         UPDATE migration_job
         SET status = ?, summary_json = ?, finished_at = IF(? = 'running', NULL, CURRENT_TIMESTAMP(3))
         WHERE id = ?
-        """, status, jsonColumns.write(summary), status, migrationJobId);
+        """, status, jsonColumns.parameter(summary), status, migrationJobId);
   }
 
   public void setPackageMigrationEnabled(long migrationJobId, boolean enabled) {
-    String literal = enabled ? "true" : "false";
-    jdbcTemplate.update("""
-        UPDATE migration_job
-        SET options_json = JSON_SET(options_json, '$.packageMigrationEnabled',
-        """ + literal + """
-        )
-        WHERE id = ?
-        """, migrationJobId);
+    String sql = "UPDATE migration_job SET options_json = "
+        + jsonColumns.setBoolean("options_json", enabled, "packageMigrationEnabled")
+        + " WHERE id = ?";
+    jdbcTemplate.update(sql, migrationJobId);
   }
 
   public List<MigrationJobRecord> listRepositoryDataJobs(int limit) {
-    return jdbcTemplate.query("""
+    String sql = """
         SELECT *
         FROM migration_job
-        WHERE JSON_UNQUOTE(JSON_EXTRACT(options_json, '$.scope')) = 'repository-data'
+        WHERE %s = 'repository-data'
         ORDER BY id DESC
         LIMIT ?
-        """, (rs, rowNum) -> new MigrationJobRecord(
+        """.formatted(jsonColumns.extractText("options_json", "scope"));
+    return jdbcTemplate.query(sql, (rs, rowNum) -> new MigrationJobRecord(
             rs.getLong("id"),
             rs.getString("source_nexus_version"),
             rs.getString("source_data_path"),

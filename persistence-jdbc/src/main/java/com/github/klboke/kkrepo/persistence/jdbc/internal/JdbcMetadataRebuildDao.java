@@ -1,6 +1,8 @@
 package com.github.klboke.kkrepo.persistence.jdbc.internal;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.MetadataRebuildDao.Claim;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.CoordinationPersistenceDialect;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -19,9 +21,11 @@ import org.springframework.transaction.annotation.Transactional;
 @Repository
 public class JdbcMetadataRebuildDao implements com.github.klboke.kkrepo.persistence.jdbc.api.MetadataRebuildDao {
   private final JdbcTemplate jdbcTemplate;
+  private final CoordinationPersistenceDialect coordinationDialect;
 
-  public JdbcMetadataRebuildDao(JdbcTemplate jdbcTemplate) {
+  public JdbcMetadataRebuildDao(JdbcTemplate jdbcTemplate, DatabaseDialect databaseDialect) {
     this.jdbcTemplate = jdbcTemplate;
+    this.coordinationDialect = databaseDialect.coordination();
   }
 
   /** Idempotent enqueue — bumps {@code requested_at} on a re-enqueue so the worker re-runs. */
@@ -105,10 +109,10 @@ public class JdbcMetadataRebuildDao implements com.github.klboke.kkrepo.persiste
   }
 
   public long oldestBacklogAgeSeconds() {
-    Long seconds = jdbcTemplate.queryForObject("""
-        SELECT COALESCE(TIMESTAMPDIFF(SECOND, MIN(requested_at), NOW(3)), 0)
-        FROM metadata_rebuild_marker
-        """, Long.class);
+    Long seconds = jdbcTemplate.queryForObject(
+        "SELECT " + coordinationDialect.oldestBacklogAgeSecondsExpression("requested_at")
+            + " FROM metadata_rebuild_marker",
+        Long.class);
     return seconds == null ? 0 : seconds;
   }
 

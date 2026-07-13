@@ -11,6 +11,9 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRoleRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcInserts;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.SecurityPersistenceDialect;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.SecurityPersistenceDialect.PrivilegeInsert;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -38,6 +41,7 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
 
   private final JdbcTemplate jdbcTemplate;
   private final JsonColumns jsonColumns;
+  private final SecurityPersistenceDialect securityDialect;
   private volatile SecretCipher secretCipher;
   private final RowMapper<SecurityUserRecord> userRowMapper;
   private final RowMapper<SecurityRoleRecord> roleRowMapper;
@@ -47,9 +51,13 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
   private final RowMapper<SecurityAnonymousConfigRecord> anonymousConfigRowMapper;
   private final RowMapper<ApiKeyRecord> apiKeyRowMapper;
 
-  public JdbcSecurityDao(JdbcTemplate jdbcTemplate, JsonColumns jsonColumns) {
+  public JdbcSecurityDao(
+      JdbcTemplate jdbcTemplate,
+      JsonColumns jsonColumns,
+      DatabaseDialect databaseDialect) {
     this.jdbcTemplate = jdbcTemplate;
     this.jsonColumns = jsonColumns;
+    this.securityDialect = databaseDialect.security();
     this.userRowMapper = (rs, rowNum) -> new SecurityUserRecord(
         rs.getLong("id"),
         rs.getString("source"),
@@ -128,7 +136,7 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
       ps.setString(6, record.passwordHash());
       ps.setString(7, record.status());
       ps.setString(8, record.externalId());
-      ps.setString(9, jsonColumns.write(record.attributes()));
+      jsonColumns.bind(ps, 9, record.attributes());
     });
   }
 
@@ -145,7 +153,7 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
         record.passwordHash(),
         record.status(),
         record.externalId(),
-        jsonColumns.write(record.attributes()),
+        jsonColumns.parameter(record.attributes()),
         record.source(),
         record.userId());
   }
@@ -198,7 +206,7 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
         record.name(),
         record.description(),
         record.readOnly(),
-        jsonColumns.write(record.attributes()));
+        jsonColumns.parameter(record.attributes()));
   }
 
   public Optional<SecurityRoleRecord> findRole(String roleId) {
@@ -237,21 +245,17 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
         record.description(),
         record.type(),
         record.readOnly(),
-        jsonColumns.write(record.properties()));
+        jsonColumns.parameter(record.properties()));
   }
 
   public void insertPrivilegeIfAbsent(SecurityPrivilegeRecord record) {
-    jdbcTemplate.update("""
-        INSERT IGNORE INTO security_privilege
-          (privilege_id, name, description, type, read_only, properties_json)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
+    securityDialect.insertPrivilegeIfAbsent(jdbcTemplate, new PrivilegeInsert(
         record.privilegeId(),
         record.name(),
         record.description(),
         record.type(),
         record.readOnly(),
-        jsonColumns.write(record.properties()));
+        jsonColumns.write(record.properties())));
   }
 
   public Optional<SecurityPrivilegeRecord> findPrivilege(String privilegeId) {
@@ -290,10 +294,7 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
   }
 
   public void assignRole(long userNumericId, String roleId) {
-    jdbcTemplate.update("""
-        INSERT IGNORE INTO security_user_role (user_id, role_id)
-        VALUES (?, ?)
-        """, userNumericId, roleId);
+    securityDialect.assignRoleIfAbsent(jdbcTemplate, userNumericId, roleId);
   }
 
   public void replaceUserRoles(long userNumericId, List<String> roleIds) {
@@ -326,10 +327,7 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
   }
 
   public void grantPrivilege(String roleId, String privilegeId) {
-    jdbcTemplate.update("""
-        INSERT IGNORE INTO security_role_privilege (role_id, privilege_id)
-        VALUES (?, ?)
-        """, roleId, privilegeId);
+    securityDialect.grantPrivilegeIfAbsent(jdbcTemplate, roleId, privilegeId);
   }
 
   public void replaceRolePrivileges(String roleId, List<String> privilegeIds) {
@@ -352,10 +350,7 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
   }
 
   public void inheritRole(String roleId, String childRoleId) {
-    jdbcTemplate.update("""
-        INSERT IGNORE INTO security_role_inheritance (role_id, child_role_id)
-        VALUES (?, ?)
-        """, roleId, childRoleId);
+    securityDialect.inheritRoleIfAbsent(jdbcTemplate, roleId, childRoleId);
   }
 
   public void replaceRoleInheritance(String roleId, List<String> childRoleIds) {
@@ -409,7 +404,7 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
         record.name(),
         record.enabled(),
         record.priority(),
-        jsonColumns.write(encryptRealmAttributes(record.attributes())));
+        jsonColumns.parameter(encryptRealmAttributes(record.attributes())));
   }
 
   /**
@@ -453,7 +448,7 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
         INSERT INTO security_realm_config (id, realms_json)
         VALUES (1, ?)
         ON DUPLICATE KEY UPDATE realms_json = VALUES(realms_json)
-        """, jsonColumns.write(Map.of("realms", activeRealmIds == null ? List.of() : activeRealmIds)));
+        """, jsonColumns.parameter(Map.of("realms", activeRealmIds == null ? List.of() : activeRealmIds)));
   }
 
   public Optional<SecurityAnonymousConfigRecord> findAnonymousConfig() {
@@ -510,8 +505,8 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
         record.name(),
         record.format(),
         record.contentExpression(),
-        jsonColumns.write(record.pathPatterns()),
-        jsonColumns.write(record.attributes()));
+        jsonColumns.parameter(record.pathPatterns()),
+        jsonColumns.parameter(record.attributes()));
   }
 
   public int deleteRepositoryTarget(String targetId) {
@@ -594,7 +589,7 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
         record.status(),
         record.apiKeyHash(),
         record.tokenPrefix(),
-        jsonColumns.write(record.scopes()),
+        jsonColumns.parameter(record.scopes()),
         record.encryptedPayload(),
         record.expiresAt(),
         record.lastUsedAt());

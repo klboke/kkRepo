@@ -1,5 +1,7 @@
 package com.github.klboke.kkrepo.persistence.jdbc.internal;
 
+import com.github.klboke.kkrepo.persistence.jdbc.spi.CoordinationPersistenceDialect;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -10,23 +12,17 @@ import org.springframework.transaction.annotation.Transactional;
 @Repository
 public class JdbcCacheVersionDao implements com.github.klboke.kkrepo.persistence.jdbc.api.CacheVersionDao {
   private final JdbcTemplate jdbcTemplate;
+  private final CoordinationPersistenceDialect coordinationDialect;
 
-  public JdbcCacheVersionDao(JdbcTemplate jdbcTemplate) {
+  public JdbcCacheVersionDao(JdbcTemplate jdbcTemplate, DatabaseDialect databaseDialect) {
     this.jdbcTemplate = jdbcTemplate;
+    this.coordinationDialect = databaseDialect.coordination();
   }
 
   @Transactional
   public long bump(String name) {
     String normalized = normalize(name);
-    jdbcTemplate.update("""
-        INSERT INTO cache_version (name, version, updated_at)
-        VALUES (?, LAST_INSERT_ID(1), NOW(3))
-        ON DUPLICATE KEY UPDATE
-          version = LAST_INSERT_ID(version + 1),
-          updated_at = NOW(3)
-        """, normalized);
-    Long version = jdbcTemplate.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
-    return version == null ? 0 : version;
+    return coordinationDialect.bumpCacheVersion(jdbcTemplate, normalized);
   }
 
   public long current(String name) {

@@ -63,8 +63,8 @@ public class JdbcRepositoryDao implements com.github.klboke.kkrepo.persistence.j
     return local;
   }
 
-  private String writeAttributes(Map<String, Object> attributes) {
-    return jsonColumns.write(transformProxySensitive(attributes, cipher()::encrypt));
+  private Map<String, Object> storageAttributes(Map<String, Object> attributes) {
+    return transformProxySensitive(attributes, cipher()::encrypt);
   }
 
   private Map<String, Object> decryptAttributes(Map<String, Object> attributes) {
@@ -117,7 +117,7 @@ public class JdbcRepositoryDao implements com.github.klboke.kkrepo.persistence.j
       ps.setString(10, record.layoutPolicy());
       ps.setString(11, record.writePolicy());
       ps.setBoolean(12, record.strictContentTypeValidation());
-      ps.setString(13, writeAttributes(record.attributes()));
+      jsonColumns.bind(ps, 13, storageAttributes(record.attributes()));
     });
   }
 
@@ -153,7 +153,7 @@ public class JdbcRepositoryDao implements com.github.klboke.kkrepo.persistence.j
         record.layoutPolicy(),
         record.writePolicy(),
         record.strictContentTypeValidation(),
-        writeAttributes(record.attributes()),
+        jsonColumns.parameter(storageAttributes(record.attributes())),
         record.id());
   }
 
@@ -179,7 +179,7 @@ public class JdbcRepositoryDao implements com.github.klboke.kkrepo.persistence.j
           record.layoutPolicy(),
           record.writePolicy(),
           record.strictContentTypeValidation(),
-          writeAttributes(record.attributes()),
+          jsonColumns.parameter(storageAttributes(record.attributes())),
           record.name());
       return findByName(record.name()).orElseThrow();
     }

@@ -44,7 +44,7 @@ public class JdbcSecurityAuditDao implements com.github.klboke.kkrepo.persistenc
         record.permission(),
         record.status(),
         record.outcome(),
-        jsonColumns.write(record.details()));
+        jsonColumns.parameter(record.details()));
   }
 
   public AuditLogPage search(AuditLogQuery query) {

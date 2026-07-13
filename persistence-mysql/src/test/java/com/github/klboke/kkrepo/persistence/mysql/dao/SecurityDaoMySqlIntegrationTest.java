@@ -23,7 +23,7 @@ import org.springframework.dao.DuplicateKeyException;
 class SecurityDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
   @Test
   void userRoleAndPrivilegeRelationshipsRespectUniqueKeysAndForeignKeys() {
-    SecurityDao dao = new JdbcSecurityDao(jdbc(), jsonColumns());
+    SecurityDao dao = new JdbcSecurityDao(jdbc(), jsonColumns(), dialect());
     long userId = dao.insertUser(user("alice"));
     assertThrows(DuplicateKeyException.class, () -> dao.insertUser(user("alice")));
 
@@ -54,7 +54,7 @@ class SecurityDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
 
   @Test
   void realmSecretsAreEncryptedAtRestAndDecryptedOnRead() {
-    SecurityDao dao = new JdbcSecurityDao(jdbc(), jsonColumns());
+    SecurityDao dao = new JdbcSecurityDao(jdbc(), jsonColumns(), dialect());
     dao.upsertRealm(new SecurityRealmRecord(
         null,
         "oidc-test",
@@ -79,7 +79,7 @@ class SecurityDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
 
   @Test
   void apiKeyUpsertAndOwnerQueriesRoundTripJsonAndTimestamps() {
-    SecurityDao dao = new JdbcSecurityDao(jdbc(), jsonColumns());
+    SecurityDao dao = new JdbcSecurityDao(jdbc(), jsonColumns(), dialect());
     LocalDateTime expiry = LocalDateTime.of(2027, 1, 1, 0, 0);
     dao.upsertApiKey(apiKey("hash-one", "ACTIVE", expiry));
     ApiKeyRecord created = dao.findApiKey("npm", "Local", "alice").orElseThrow();

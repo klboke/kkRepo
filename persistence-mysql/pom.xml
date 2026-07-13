@@ -17,6 +17,13 @@
       <artifactId>kkrepo-persistence-jdbc</artifactId>
     </dependency>
     <dependency>
+      <groupId>com.github.klboke</groupId>
+      <artifactId>kkrepo-persistence-jdbc</artifactId>
+      <version>${project.version}</version>
+      <type>test-jar</type>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
       <scope>test</scope>
