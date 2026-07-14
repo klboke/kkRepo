@@ -1,0 +1,64 @@
+name: kkrepo
+
+services:
+  postgresql:
+    image: postgres:17-alpine
+    container_name: kkrepo-postgresql
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: Asia/Shanghai
+    volumes:
+      - ${KKREPO_DEPLOY_BASE:-../../..}/data/postgresql:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    restart: unless-stopped
+    mem_limit: 768m
+    cpus: 0.75
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "3"
+    networks:
+      kkrepo:
+        ipv4_address: 172.29.44.30
+
+  nginx:
+    image: nginx:stable-alpine
+    container_name: kkrepo-nginx
+    network_mode: host
+    volumes:
+      - ${KKREPO_DEPLOY_BASE:-../../..}/.github/deploy/dev/nginx/kkrepo.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${KKREPO_DEPLOY_BASE:-../../..}/tls/kkrepo.cn_bundle.crt:/etc/nginx/tls/kkrepo.cn_bundle.crt:ro
+      - ${KKREPO_DEPLOY_BASE:-../../..}/tls/kkrepo.cn.key:/etc/nginx/tls/kkrepo.cn.key:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/nginx-health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 128
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "3"
+
+networks:
+  kkrepo:
+    name: kkrepo-network
+    ipam:
+      config:
+        - subnet: 172.29.44.0/24

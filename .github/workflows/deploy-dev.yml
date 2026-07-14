@@ -1,0 +1,131 @@
+name: Deploy Dev
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    branches:
+      - main
+    types:
+      - completed
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy-dev:
+    name: deploy-dev-jar
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: dev
+    steps:
+      - name: Confirm the main commit came from a merged pull request
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          deploy=false
+          for attempt in 1 2 3 4 5; do
+            deploy="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/pulls" \
+              --jq 'any(.[]; .merged_at != null and .base.ref == "main")')"
+            if [[ "$deploy" == "true" ]]; then
+              break
+            fi
+            sleep 3
+          done
+          echo "deploy=$deploy" >> "$GITHUB_OUTPUT"
+
+      - name: Check out merged revision
+        if: steps.source.outputs.deploy == 'true'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - name: Set up JDK 25
+        if: steps.source.outputs.deploy == 'true'
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      - name: Build executable jar
+        if: steps.source.outputs.deploy == 'true'
+        id: build
+        run: |
+          mvn -B -ntp -pl server -am -DskipTests package spring-boot:repackage
+          project_version="$(mvn -q -N -DforceStdout help:evaluate -Dexpression=project.version)"
+          jar_file="server/target/kkrepo-server-${project_version}.jar"
+          manifest="$(unzip -p "$jar_file" META-INF/MANIFEST.MF)"
+          jar_listing="$(jar tf "$jar_file")"
+          [[ "$manifest" == *"Main-Class: org.springframework.boot.loader.launch.JarLauncher"* ]]
+          [[ "$manifest" == *"Start-Class: com.github.klboke.kkrepo.server.KkRepoApplication"* ]]
+          [[ "$jar_listing" == BOOT-INF/* || "$jar_listing" == *$'\n'BOOT-INF/* ]]
+          echo "jar_file=$jar_file" >> "$GITHUB_OUTPUT"
+
+      - name: Configure dev SSH
+        if: steps.source.outputs.deploy == 'true'
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.DEV_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DEV_SSH_KNOWN_HOSTS }}
+        run: |
+          install -d -m 0700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/dev"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 0600 "$HOME/.ssh/dev" "$HOME/.ssh/known_hosts"
+
+      - name: Upload executable jar and deployment script
+        if: steps.source.outputs.deploy == 'true'
+        env:
+          SSH_HOST: ${{ secrets.DEV_SSH_HOST }}
+          SSH_PORT: ${{ secrets.DEV_SSH_PORT }}
+          SSH_USER: ${{ secrets.DEV_SSH_USER }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          JAR_FILE: ${{ steps.build.outputs.jar_file }}
+        run: |
+          remote_dir="/opt/kkrepo/staging/${HEAD_SHA}"
+          ssh -q -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes \
+            -i "$HOME/.ssh/dev" -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "mkdir -p '$remote_dir'"
+          scp -q -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes \
+            -i "$HOME/.ssh/dev" -P "$SSH_PORT" \
+            "$JAR_FILE" "$SSH_USER@$SSH_HOST:$remote_dir/kkrepo.jar"
+          scp -q -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes \
+            -i "$HOME/.ssh/dev" -P "$SSH_PORT" \
+            scripts/deploy/kkrepo-jar-deploy.sh \
+            "$SSH_USER@$SSH_HOST:$remote_dir/kkrepo-jar-deploy.sh"
+
+      - name: Deploy and verify dev
+        if: steps.source.outputs.deploy == 'true'
+        env:
+          SSH_HOST: ${{ secrets.DEV_SSH_HOST }}
+          SSH_PORT: ${{ secrets.DEV_SSH_PORT }}
+          SSH_USER: ${{ secrets.DEV_SSH_USER }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          remote_dir="/opt/kkrepo/staging/${HEAD_SHA}"
+          ssh -q -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes \
+            -i "$HOME/.ssh/dev" -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "install -m 0755 '$remote_dir/kkrepo-jar-deploy.sh' /opt/kkrepo/bin/kkrepo-jar-deploy.sh && \
+             KKREPO_DEPLOY_ROOT=/opt/kkrepo/runtime /opt/kkrepo/bin/kkrepo-jar-deploy.sh \
+               deploy '$remote_dir/kkrepo.jar' '$HEAD_SHA'"
+
+      - name: Remove remote staging files
+        if: always() && steps.source.outputs.deploy == 'true'
+        env:
+          SSH_HOST: ${{ secrets.DEV_SSH_HOST }}
+          SSH_PORT: ${{ secrets.DEV_SSH_PORT }}
+          SSH_USER: ${{ secrets.DEV_SSH_USER }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          ssh -q -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes \
+            -i "$HOME/.ssh/dev" -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "rm -rf '/opt/kkrepo/staging/${HEAD_SHA}'"
