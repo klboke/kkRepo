@@ -6,7 +6,7 @@
   <parent>
     <groupId>com.github.klboke</groupId>
     <artifactId>kkrepo</artifactId>
-    <version>0.3.0</version>
+    <version>${revision}</version>
     <relativePath>../pom.xml</relativePath>
   </parent>
   <artifactId>kkrepo-protocol-maven</artifactId>
