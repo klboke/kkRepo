@@ -134,3 +134,17 @@ jobs:
           docker compose -f docker-compose.compat-postgres.yml --profile kkrepo-postgresql config
       - uses: azure/setup-helm@v5
       - run: helm lint deploy/helm/kkrepo
+
+  dev-jar-deploy-contract:
+    name: dev-jar-deploy-contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify dev jar deployment scripts
+        run: |
+          bash -n scripts/deploy/kkrepo-jar-deploy.sh
+          bash -n scripts/ci/test-dev-jar-deploy.sh
+          scripts/ci/test-dev-jar-deploy.sh
+          test -f .github/deploy/dev/systemd/kkrepo.service
+          POSTGRES_DB=kkrepo POSTGRES_USER=kkrepo POSTGRES_PASSWORD=kkrepo \
+            docker compose -f .github/deploy/dev/docker-compose.yml config --quiet
