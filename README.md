@@ -173,7 +173,7 @@ Repository format roadmap:
 5. ohpm / HarmonyOS - Planned with hosted, proxy, group, import, and admin capabilities ([Chinese design notes](docs/zh/dev/ohpm-repository-design.md))
 6. Swift Package Registry
 7. APT / Debian
-8. Terraform Provider / Module Registry
+8. Terraform Provider / Module Registry - Planned with hosted, proxy, group, provider GPG signing, Nexus-compatible paths, real Terraform CLI E2E, and Nexus migration ([Chinese design notes](docs/zh/dev/terraform-repository-design.md))
 9. Conan
 10. Conda
 
