@@ -1,7 +1,9 @@
 package com.github.klboke.kkrepo.persistence.mysql;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcInserts;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcUpserts;
 import com.github.klboke.kkrepo.persistence.mysql.support.MySqlIntegrationTestSupport;
 import java.lang.reflect.InvocationTargetException;
@@ -30,6 +32,26 @@ class MySqlJdbcUpsertsTransactionTest extends MySqlIntegrationTestSupport {
         "SELECT default_language FROM ui_settings WHERE id = 1", String.class));
   }
 
+  @Test
+  void duplicateInsertInsideOuterTransactionDoesNotUsePostgreSqlSavepoint() {
+    JdbcTemplate noSavepointJdbc = new SavepointRejectingJdbcTemplate(jdbc().getDataSource());
+
+    inTransaction(() -> {
+      assertTrue(JdbcInserts.tryInsert(
+          noSavepointJdbc,
+          "INSERT INTO blob_store (name, type, attributes_json) "
+              + "VALUES (?, 'S3', JSON_OBJECT())",
+          statement -> statement.setString(1, "shared-store")).isPresent());
+      assertTrue(JdbcInserts.tryInsert(
+          noSavepointJdbc,
+          "INSERT INTO blob_store (name, type, attributes_json) "
+              + "VALUES (?, 'S3', JSON_OBJECT())",
+          statement -> statement.setString(1, "shared-store")).isEmpty());
+      assertEquals("S3", noSavepointJdbc.queryForObject(
+          "SELECT type FROM blob_store WHERE name = 'shared-store'", String.class));
+    });
+  }
+
   private static final class SavepointRejectingJdbcTemplate extends JdbcTemplate {
     private SavepointRejectingJdbcTemplate(DataSource dataSource) {
       super(dataSource);
@@ -43,7 +65,7 @@ class MySqlJdbcUpsertsTransactionTest extends MySqlIntegrationTestSupport {
             new Class<?>[]{Connection.class},
             (proxy, method, args) -> {
               if (method.getName().equals("setSavepoint")) {
-                throw new AssertionError("MySQL upserts must not create PostgreSQL savepoints");
+                throw new AssertionError("MySQL conflict handling must not create PostgreSQL savepoints");
               }
               try {
                 return method.invoke(connection, args);

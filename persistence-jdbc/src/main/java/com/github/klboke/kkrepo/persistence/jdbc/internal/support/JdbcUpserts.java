@@ -25,9 +25,7 @@ public final class JdbcUpserts {
       return;
     }
     jdbc.execute((ConnectionCallback<Void>) connection -> {
-      Savepoint savepoint = requiresDuplicateRecoverySavepoint(connection)
-          ? connection.setSavepoint()
-          : null;
+      Savepoint savepoint = JdbcDuplicateRecovery.createSavepointIfRequired(connection);
       try {
         executeUpdate(connection, insertSql, insertArguments);
       } catch (SQLException insertFailure) {
@@ -47,14 +45,6 @@ public final class JdbcUpserts {
       }
       return null;
     });
-  }
-
-  private static boolean requiresDuplicateRecoverySavepoint(Connection connection)
-      throws SQLException {
-    // PostgreSQL aborts the transaction after a constraint violation. MySQL keeps the transaction
-    // usable and can invalidate a JDBC savepoint while the portable update/insert path is running.
-    return !connection.getAutoCommit()
-        && "PostgreSQL".equalsIgnoreCase(connection.getMetaData().getDatabaseProductName());
   }
 
   private static int executeUpdate(Connection connection, String sql, Object[] arguments)

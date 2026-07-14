@@ -24,6 +24,10 @@ public interface AssetDao {
 
   long insertAsset(AssetRecord record);
 
+  /**
+   * Attempts to insert an asset, returning empty when its natural path key already exists. The
+   * current transaction remains usable for callers to load and reuse the winning row.
+   */
   OptionalLong tryInsertAsset(AssetRecord record);
 
   Optional<AssetRecord> findAssetByPathHash(long repositoryId, byte[] pathHash);
