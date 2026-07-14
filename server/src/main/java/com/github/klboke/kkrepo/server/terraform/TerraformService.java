@@ -33,8 +33,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 
@@ -44,8 +42,6 @@ public class TerraformService {
   private static final String JSON = MediaType.APPLICATION_JSON_VALUE;
   private static final String OCTET = MediaType.APPLICATION_OCTET_STREAM_VALUE;
   private static final String PROTOCOLS = "5.0";
-  private static final Pattern CONTENT_DISPOSITION_FILENAME = Pattern.compile(
-      "(?i)(?:^|;)\\s*filename\\s*=\\s*(?:\"([^\"]+)\"|([^;]+))\\s*(?:;|$)");
 
   private final ObjectMapper mapper;
   private final TerraformAssetSupport assets;
@@ -577,15 +573,76 @@ public class TerraformService {
   }
 
   private String filename(String contentDisposition) {
+    return contentDispositionFilename(contentDisposition);
+  }
+
+  static String contentDispositionFilename(String contentDisposition) {
     if (contentDisposition == null) {
       throw new MavenExceptions.BadRequestException("Content-Disposition filename is required");
     }
-    Matcher matcher = CONTENT_DISPOSITION_FILENAME.matcher(contentDisposition);
-    if (!matcher.find()) throw new MavenExceptions.BadRequestException("Content-Disposition filename is required");
-    String value = matcher.group(1) == null ? matcher.group(2).trim() : matcher.group(1);
-    if (matcher.find()) throw new MavenExceptions.BadRequestException("Content-Disposition has duplicate filename values");
+    String value = null;
+    boolean filenameSeen = false;
+    boolean quoted = false;
+    boolean escaped = false;
+    int parameterStart = 0;
+    for (int i = 0; i <= contentDisposition.length(); i++) {
+      char current = i == contentDisposition.length() ? ';' : contentDisposition.charAt(i);
+      if (escaped) {
+        escaped = false;
+      } else if (quoted && current == '\\') {
+        escaped = true;
+      } else if (current == '"') {
+        quoted = !quoted;
+      } else if (current == ';' && !quoted) {
+        String parameter = contentDisposition.substring(parameterStart, i).trim();
+        parameterStart = i + 1;
+        int equals = parameter.indexOf('=');
+        if (equals <= 0 || !"filename".equalsIgnoreCase(parameter.substring(0, equals).trim())) {
+          continue;
+        }
+        if (filenameSeen) {
+          throw new MavenExceptions.BadRequestException(
+              "Content-Disposition has duplicate filename values");
+        }
+        filenameSeen = true;
+        value = dispositionParameterValue(parameter.substring(equals + 1).trim());
+      }
+    }
+    if (quoted || escaped) {
+      throw new MavenExceptions.BadRequestException("Content-Disposition has an invalid quoted value");
+    }
+    if (!filenameSeen) {
+      throw new MavenExceptions.BadRequestException("Content-Disposition filename is required");
+    }
     TerraformPathParser.requireFilename(value);
     return value;
+  }
+
+  private static String dispositionParameterValue(String raw) {
+    if (!raw.startsWith("\"")) return raw;
+    if (raw.length() < 2 || raw.charAt(raw.length() - 1) != '"') {
+      throw new MavenExceptions.BadRequestException("Content-Disposition has an invalid quoted value");
+    }
+    StringBuilder decoded = new StringBuilder(raw.length() - 2);
+    boolean escaped = false;
+    for (int i = 1; i < raw.length() - 1; i++) {
+      char current = raw.charAt(i);
+      if (escaped) {
+        decoded.append(current);
+        escaped = false;
+      } else if (current == '\\') {
+        escaped = true;
+      } else if (current == '"') {
+        throw new MavenExceptions.BadRequestException(
+            "Content-Disposition has an invalid quoted value");
+      } else {
+        decoded.append(current);
+      }
+    }
+    if (escaped) {
+      throw new MavenExceptions.BadRequestException("Content-Disposition has an invalid quoted value");
+    }
+    return decoded.toString();
   }
 
   private MavenResponse json(Map<String, ?> value, boolean headOnly) {
