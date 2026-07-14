@@ -162,14 +162,14 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 
 基础设施路线图：
 
-1. PostgreSQL 数据库后端支持 - 已实现。通过 `persistence-jdbc` 公共契约、语义化 dialect SPI、backend 自有 Flyway migration、双库 contract test 和多副本 server smoke test 隔离并验证差异；MySQL 继续作为默认后端（[数据库后端指南](docs/zh/database-backends.md)、[设计方案](docs/zh/dev/pluggable-database-access-layer-design.md)）。
+1. ✅ PostgreSQL 数据库后端支持 - 已实现。通过 `persistence-jdbc` 公共契约、语义化 dialect SPI、backend 自有 Flyway migration、双库 contract test 和多副本 server smoke test 隔离并验证差异；MySQL 继续作为默认后端（[数据库后端指南](docs/zh/database-backends.md)、[设计方案](docs/zh/dev/pluggable-database-access-layer-design.md)）。
 
 仓库格式路线图：
 
-1. Docker / OCI Registry - 已完成（[实现说明](docs/zh/dev/docker-repository-implementation-plan.md)）
-2. Cargo / Rust - 仓库能力已完成，包含搜索、UI/API 上传和迁移能力（[设计说明](docs/zh/dev/cargo-rust-repository-design.md)）
-3. Dart / Pub - 仓库能力已完成，包含 hosted/proxy/group、真实客户端 E2E、UI/API 上传、搜索和 Nexus 迁移能力（[设计说明](docs/zh/dev/dart-pub-repository-design.md)）
-4. Composer / PHP - hosted、proxy、group、UI/API 上传、搜索、真实客户端 E2E、强制 Nexus live 对比和显式选择的 Nexus proxy cache 迁移 E2E 已实现（[设计说明](docs/zh/dev/composer-php-repository-design.md)）
+1. ✅ Docker / OCI Registry - 已完成（[实现说明](docs/zh/dev/docker-repository-implementation-plan.md)）
+2. ✅ Cargo / Rust - 仓库能力已完成，包含搜索、UI/API 上传和迁移能力（[设计说明](docs/zh/dev/cargo-rust-repository-design.md)）
+3. ✅ Dart / Pub - 仓库能力已完成，包含 hosted/proxy/group、真实客户端 E2E、UI/API 上传、搜索和 Nexus 迁移能力（[设计说明](docs/zh/dev/dart-pub-repository-design.md)）
+4. ✅ Composer / PHP - hosted、proxy、group、UI/API 上传、搜索、真实客户端 E2E、强制 Nexus live 对比和显式选择的 Nexus proxy cache 迁移 E2E 已实现（[设计说明](docs/zh/dev/composer-php-repository-design.md)）
 5. ohpm / HarmonyOS - 规划中，覆盖 hosted、proxy、group、导入和管理端能力（[设计说明](docs/zh/dev/ohpm-repository-design.md)）
 6. Swift Package Registry
 7. APT / Debian
