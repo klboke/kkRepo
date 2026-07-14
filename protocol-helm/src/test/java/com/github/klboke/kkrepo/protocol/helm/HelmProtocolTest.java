@@ -9,14 +9,21 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.GZIPOutputStream;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.junit.jupiter.api.Test;
 
 class HelmProtocolTest {
+  private static final int CONCURRENT_PARSE_COUNT = 32;
+
   @Test
   void parsesChartYamlFromPackage() throws Exception {
     HelmChartMetadata metadata = new HelmChartPackageParser()
@@ -45,6 +52,56 @@ class HelmProtocolTest {
         () -> new HelmChartPackageParser().parse(new ByteArrayInputStream(bytes)));
 
     assertEquals("Chart.yaml not found in Helm chart package", error.getMessage());
+  }
+
+  @Test
+  void rejectsChartYamlThatIsNotAMapping() throws Exception {
+    byte[] bytes = chartPackageWithEntry("demo/Chart.yaml", "- not-a-mapping\n");
+
+    IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+        () -> new HelmChartPackageParser().parse(new ByteArrayInputStream(bytes)));
+
+    assertEquals("Chart.yaml is not a YAML mapping", error.getMessage());
+  }
+
+  @Test
+  void concurrentlyParsesPackagesWithOneSharedParser() throws Exception {
+    HelmChartPackageParser parser = new HelmChartPackageParser();
+    List<byte[]> charts = new ArrayList<>();
+    for (int i = 0; i < CONCURRENT_PARSE_COUNT; i++) {
+      charts.add(chartPackage("demo-" + i, "1.2." + i));
+    }
+    CountDownLatch ready = new CountDownLatch(CONCURRENT_PARSE_COUNT);
+    CountDownLatch start = new CountDownLatch(1);
+
+    try (var executor = Executors.newFixedThreadPool(CONCURRENT_PARSE_COUNT)) {
+      List<Future<?>> parses = new ArrayList<>();
+      for (int worker = 0; worker < CONCURRENT_PARSE_COUNT; worker++) {
+        int workerIndex = worker;
+        parses.add(executor.submit(() -> {
+          ready.countDown();
+          if (!start.await(5, TimeUnit.SECONDS)) {
+            throw new AssertionError("Concurrent Helm parses did not start together");
+          }
+          for (int iteration = 0; iteration < 25; iteration++) {
+            int chartIndex = (workerIndex + iteration) % charts.size();
+            HelmChartMetadata metadata = parser.parse(
+                new ByteArrayInputStream(charts.get(chartIndex)));
+            assertEquals("demo-" + chartIndex, metadata.name());
+            assertEquals("1.2." + chartIndex, metadata.version());
+          }
+          return null;
+        }));
+      }
+      try {
+        assertTrue(ready.await(5, TimeUnit.SECONDS), "All Helm parser workers should be ready");
+      } finally {
+        start.countDown();
+      }
+      for (Future<?> parse : parses) {
+        parse.get(15, TimeUnit.SECONDS);
+      }
+    }
   }
 
   @Test

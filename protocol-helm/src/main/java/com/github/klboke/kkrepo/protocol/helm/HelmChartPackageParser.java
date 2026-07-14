@@ -14,17 +14,21 @@ import org.yaml.snakeyaml.constructor.SafeConstructor;
 
 public final class HelmChartPackageParser {
   private static final String CHART_YAML = "Chart.yaml";
-  private final Yaml yaml = new Yaml(new SafeConstructor(new LoaderOptions()));
 
   public HelmChartMetadata parse(InputStream input) throws IOException {
     byte[] chartYaml = readChartYaml(input);
-    Object loaded = yaml.load(new ByteArrayInputStream(chartYaml));
+    Object loaded = newYaml().load(new ByteArrayInputStream(chartYaml));
     if (!(loaded instanceof Map<?, ?> map)) {
       throw new IllegalArgumentException("Chart.yaml is not a YAML mapping");
     }
     HelmChartMetadata metadata = HelmChartMetadata.fromYamlMap(castMap(map));
     metadata.requireNameAndVersion();
     return metadata;
+  }
+
+  private static Yaml newYaml() {
+    // Yaml retains mutable load state, while this parser is shared by singleton hosted services.
+    return new Yaml(new SafeConstructor(new LoaderOptions()));
   }
 
   private byte[] readChartYaml(InputStream input) throws IOException {
