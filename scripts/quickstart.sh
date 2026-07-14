@@ -60,6 +60,7 @@ load_env_file_defaults() {
   local key value
   [[ -f "$file" ]] || return 0
   for key in \
+    KKREPO_DATABASE_TYPE \
     KKREPO_IMAGE_TAG \
     KKREPO_HTTP_PORT \
     KKREPO_MANAGEMENT_PORT \
@@ -94,6 +95,7 @@ KKREPO_MANAGEMENT_PORT=${KKREPO_MANAGEMENT_PORT}
 KKREPO_PROJECT_NAME=${KKREPO_PROJECT_NAME}
 KKREPO_CREDENTIAL_SECRET=${KKREPO_CREDENTIAL_SECRET}
 KKREPO_API_KEY_PAYLOAD_SECRET=${KKREPO_API_KEY_PAYLOAD_SECRET}
+KKREPO_DATABASE_TYPE=${KKREPO_DATABASE_TYPE}
 EOF
   log "Created environment file: $file"
 }
@@ -126,7 +128,7 @@ download_compose_file() {
   local local_compose
 
   if [[ -n "${SCRIPT_DIR:-}" ]]; then
-    local_compose="${SCRIPT_DIR}/../docker-compose.quickstart.yml"
+    local_compose="${SCRIPT_DIR}/../${KKREPO_COMPOSE_SOURCE_NAME}"
     if [[ -f "$local_compose" && "${KKREPO_FORCE_DOWNLOAD:-false}" != "true" ]]; then
       cp "$local_compose" "$destination"
       log "Copied compose file from local checkout: $local_compose"
@@ -167,8 +169,23 @@ wait_for_health() {
 }
 
 WORKDIR="${KKREPO_DIR:-kkrepo-quickstart}"
-COMPOSE_FILE="${KKREPO_COMPOSE_FILE:-docker-compose.quickstart.yml}"
-KKREPO_COMPOSE_URL="${KKREPO_COMPOSE_URL:-https://raw.githubusercontent.com/klboke/kkrepo/main/docker-compose.quickstart.yml}"
+if [[ -f "${WORKDIR}/.env" ]]; then
+  load_env_file_defaults "${WORKDIR}/.env"
+fi
+KKREPO_DATABASE_TYPE="${KKREPO_DATABASE_TYPE:-mysql}"
+case "$KKREPO_DATABASE_TYPE" in
+  mysql)
+    KKREPO_COMPOSE_SOURCE_NAME="docker-compose.quickstart.yml"
+    ;;
+  postgresql)
+    KKREPO_COMPOSE_SOURCE_NAME="docker-compose.quickstart-postgresql.yml"
+    ;;
+  *)
+    fail "KKREPO_DATABASE_TYPE must be mysql or postgresql, got: $KKREPO_DATABASE_TYPE"
+    ;;
+esac
+COMPOSE_FILE="${KKREPO_COMPOSE_FILE:-$KKREPO_COMPOSE_SOURCE_NAME}"
+KKREPO_COMPOSE_URL="${KKREPO_COMPOSE_URL:-https://raw.githubusercontent.com/klboke/kkrepo/main/$KKREPO_COMPOSE_SOURCE_NAME}"
 KKREPO_WAIT_TIMEOUT="${KKREPO_WAIT_TIMEOUT:-180}"
 KKREPO_SKIP_PORT_CHECK="${KKREPO_SKIP_PORT_CHECK:-false}"
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
@@ -203,6 +220,7 @@ export \
   KKREPO_HTTP_PORT \
   KKREPO_MANAGEMENT_PORT \
   KKREPO_PROJECT_NAME \
+  KKREPO_DATABASE_TYPE \
   KKREPO_CREDENTIAL_SECRET \
   KKREPO_API_KEY_PAYLOAD_SECRET
 
@@ -212,6 +230,7 @@ step "Fetching Docker Compose quickstart file"
 download_compose_file "$COMPOSE_FILE"
 COMPOSE_READY=true
 log "Compose file: $(pwd)/$COMPOSE_FILE"
+log "Database backend: ${KKREPO_DATABASE_TYPE}"
 log "Image tag: ghcr.io/klboke/kkrepo:${KKREPO_IMAGE_TAG}"
 log "HTTP port: ${KKREPO_HTTP_PORT}"
 log "Management port: ${KKREPO_MANAGEMENT_PORT}"

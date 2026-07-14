@@ -11,7 +11,16 @@
 - 保持 Nexus `/repository/<repo>/...` URL 布局，尽量复用既有客户端配置。
 - 先对齐官方协议和 Nexus 用户可见行为，再增加项目自定义行为。
 - 对外可见行为优先通过真实 Nexus 参考实例做兼容性测试。
-- 有状态逻辑默认按多副本部署设计：MySQL 是元数据和协调状态的事实来源；blob 内容放在 OSS/S3/File 存储；进程内缓存必须可重建。
+- 有状态逻辑默认按多副本部署设计：所选 MySQL/PostgreSQL 数据库是元数据和协调状态的事实来源；blob 内容放在 OSS/S3/File 存储；进程内缓存必须可重建。
+
+## 数据库后端矩阵
+
+| 后端 | 运行时 | Flyway | 公共持久层契约 | 双实例 server smoke |
+| --- | --- | --- | --- | --- |
+| MySQL 8 | 支持；默认 | 不可变 V1-V29 历史，从 V30 成对迁移 | 真实 MySQL 容器 | 全新/重复启动与跨节点 session |
+| PostgreSQL 12+ | 支持；生产使用仍在维护期的版本 | 等价 V29 baseline，从 V30 成对迁移 | PostgreSQL 12 最低版本 contract，加 PostgreSQL 16 E2E | PostgreSQL 12 全新/重复启动与跨节点 session |
+
+数据库选择不会改变仓库协议行为。CI 会在两种引擎上执行同一套 JDBC API 契约，详见[数据库后端](database-backends.md)。
 
 ## 仓库格式矩阵
 

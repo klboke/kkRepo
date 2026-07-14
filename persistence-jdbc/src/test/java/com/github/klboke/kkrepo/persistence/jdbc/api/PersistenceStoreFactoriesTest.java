@@ -7,13 +7,13 @@ import org.junit.jupiter.api.Test;
 
 class PersistenceStoreFactoriesTest {
   @Test
-  void requiresAConcreteDatabaseDialectProvider() {
+  void reportsDatabaseDetectionFailuresAtTheApiBoundary() {
     IllegalStateException thrown = assertThrows(
         IllegalStateException.class,
         () -> PersistenceStoreFactories.connect(
             new DatabaseConnectionSettings("jdbc:test:kkrepo", "user", "password")));
 
-    assertEquals("Expected exactly one DatabaseDialect provider, found 0", thrown.getMessage());
+    assertEquals("Cannot detect database type from JDBC metadata", thrown.getMessage());
   }
 
   @Test

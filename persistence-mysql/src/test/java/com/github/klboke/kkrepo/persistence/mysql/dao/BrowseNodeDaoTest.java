@@ -29,11 +29,12 @@ class BrowseNodeDaoTest {
 
     assertTrue(jdbcTemplate.lookupSql.contains("has_asset_subtree"));
     List<String> subtreeUpdates = jdbcTemplate.updateSql.stream()
-        .filter(sql -> sql.contains("has_asset_subtree = 1"))
+        .filter(sql -> sql.contains("SET has_asset_subtree = ?"))
         .toList();
     assertEquals(1, subtreeUpdates.size());
-    assertTrue(subtreeUpdates.get(0).contains("AND has_asset_subtree = 0"));
+    assertTrue(subtreeUpdates.get(0).contains("AND has_asset_subtree = ?"));
     assertEquals(12L, jdbcTemplate.subtreeUpdateIds.get(0));
+    assertEquals(List.of(true, false), jdbcTemplate.subtreeUpdateFlags.get(0));
   }
 
   private record ExistingRow(long id, boolean hasAssetSubtree) {}
@@ -42,6 +43,7 @@ class BrowseNodeDaoTest {
     private final Map<ByteBuffer, ExistingRow> rows;
     private final List<String> updateSql = new ArrayList<>();
     private final List<Long> subtreeUpdateIds = new ArrayList<>();
+    private final List<List<Boolean>> subtreeUpdateFlags = new ArrayList<>();
     private String lookupSql;
 
     private RecordingJdbcTemplate(Map<ByteBuffer, ExistingRow> rows) {
@@ -63,8 +65,9 @@ class BrowseNodeDaoTest {
     @Override
     public int update(String sql, Object... args) {
       updateSql.add(sql);
-      if (sql.contains("has_asset_subtree = 1")) {
-        subtreeUpdateIds.add((Long) args[0]);
+      if (sql.contains("SET has_asset_subtree = ?")) {
+        subtreeUpdateIds.add((Long) args[1]);
+        subtreeUpdateFlags.add(List.of((Boolean) args[0], (Boolean) args[2]));
       }
       return 1;
     }

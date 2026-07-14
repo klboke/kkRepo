@@ -14,7 +14,7 @@ No. kkrepo is an independent implementation. Nexus is used as a compatibility re
 
 It depends on your usage.
 
-kkrepo is designed for teams that need Nexus-compatible client paths, common repository formats, MySQL-backed metadata, object storage, multi-replica-friendly behavior, and migration from existing Nexus deployments.
+kkrepo is designed for teams that need Nexus-compatible client paths, common repository formats, MySQL- or PostgreSQL-backed metadata, object storage, multi-replica-friendly behavior, and migration from existing Nexus deployments.
 
 It is not a full clone of every Nexus feature or every Nexus UI/API endpoint. Check the [Compatibility Matrix](compatibility-matrix.md) before planning production migration.
 
@@ -48,9 +48,9 @@ This helps preserve Maven, npm, pip, Helm, Cargo, Dart/Flutter Pub, Composer, Nu
 
 Docker / OCI uses the Registry HTTP API V2 `/v2/...` route instead of `/repository/<repo>/...`: shared-entrypoint deployments use `<host>/<repo>/<image>:<tag>`, and repository-level connector ports can expose `<host>:<repo-port>/<image>:<tag>`.
 
-## Why MySQL?
+## Which Database Can kkrepo Use?
 
-MySQL is used as the source of truth for:
+kkrepo supports MySQL 8 and PostgreSQL 12+; MySQL is the default for existing installations. PostgreSQL 12 is the compatibility floor, while production should use a maintained PostgreSQL release. The selected database is the source of truth for:
 
 - Repository metadata.
 - Components and assets.
@@ -60,9 +60,11 @@ MySQL is used as the source of truth for:
 
 This avoids relying on embedded databases or local-only state for production correctness.
 
+Use the same executable/container image and set `KKREPO_DATABASE_TYPE`. Do not switch an existing installation between engines by only changing its JDBC URL. See [Database Backends](database-backends.md).
+
 ## Does kkrepo require Redis?
 
-No. The default cache backend is process-local memory, and correctness is backed by MySQL. In-process caches are rebuildable hot caches with TTL or MySQL-backed invalidation watermarks.
+No. The default cache backend is process-local memory, and correctness is backed by the shared database. In-process caches are rebuildable hot caches with TTL or database-backed invalidation watermarks.
 
 ## Where are artifact files stored?
 

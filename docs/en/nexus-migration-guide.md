@@ -91,7 +91,7 @@ Already migrated paths are detected and skipped. Assets already existing on the 
 
 ### Interruption And Resume
 
-Migration tasks, repository scan cursors, asset states, and failure information are stored in MySQL. If kkrepo restarts, the network is interrupted, source Nexus is temporarily unavailable, or the page is closed during migration, continue with:
+Migration tasks, repository scan cursors, asset states, and failure information are stored in the shared database. If kkrepo restarts, the network is interrupted, source Nexus is temporarily unavailable, or the page is closed during migration, continue with:
 
 - If repository metadata scanning is interrupted, click `Continue metadata`.
 - If real blob data migration is interrupted, click `Sync packages` again to continue unfinished items.

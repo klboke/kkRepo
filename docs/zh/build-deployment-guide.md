@@ -6,10 +6,10 @@
 
 - JDK 25
 - Maven 3.9 或兼容版本
-- MySQL 8.0
+- MySQL 8.0 或 PostgreSQL 12+（生产使用仍在维护期的 PostgreSQL 版本）
 - 可选：Docker，用于构建镜像或运行容器化依赖
 
-服务运行时依赖 MySQL。blob store 本地试用可以使用 File，生产环境建议使用 OSS/S3。
+服务运行时依赖一个共享关系数据库：默认使用 MySQL，也支持 PostgreSQL。blob store 本地试用可以使用 File，生产环境建议使用 OSS/S3。详见[数据库后端](database-backends.md)。
 
 ## Docker Compose 快速试用
 
@@ -17,6 +17,13 @@
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quickstart.sh | bash
+```
+
+如需改用 PostgreSQL：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quickstart.sh \
+  | KKREPO_DATABASE_TYPE=postgresql bash
 ```
 
 该脚本会逐步打印日志并执行：
@@ -63,7 +70,7 @@ docker compose -f docker-compose.quickstart.yml down
 docker compose -f docker-compose.quickstart.yml down -v
 ```
 
-脚本生成的 `.env` 加密密钥仅用于本地试用。对外部署时必须替换 `KKREPO_CREDENTIAL_SECRET` 和 `KKREPO_API_KEY_PAYLOAD_SECRET`，并使用独立 MySQL 与 OSS/S3 blob store。
+脚本生成的 `.env` 加密密钥仅用于本地试用。对外部署时必须替换 `KKREPO_CREDENTIAL_SECRET` 和 `KKREPO_API_KEY_PAYLOAD_SECRET`，并使用独立 MySQL/PostgreSQL 与 OSS/S3 blob store。
 
 如果默认端口被占用，可以覆盖端口后启动：
 
@@ -82,13 +89,16 @@ GRANT ALL PRIVILEGES ON kkrepo.* TO 'kkrepo'@'%';
 FLUSH PRIVILEGES;
 ```
 
-默认配置连接 `127.0.0.1:13306/kkrepo`。如果本地 MySQL 使用其他端口或账号，可以通过 Spring Boot 环境变量覆盖：
+默认配置连接 `127.0.0.1:13306/kkrepo` 的 MySQL。如果本地数据库使用其他端口或账号，可以通过 Spring Boot 环境变量覆盖，并声明类型：
 
 ```bash
 export SPRING_DATASOURCE_URL='jdbc:mysql://127.0.0.1:3306/kkrepo?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai'
 export SPRING_DATASOURCE_USERNAME=kkrepo
 export SPRING_DATASOURCE_PASSWORD=kkrepo
+export KKREPO_DATABASE_TYPE=mysql
 ```
+
+PostgreSQL 使用 `KKREPO_DATABASE_TYPE=postgresql` 和 `jdbc:postgresql://...` URL。
 
 构建并启动：
 
@@ -271,7 +281,7 @@ WantedBy=multi-user.target
 
 ## 生产部署架构
 
-生产部署建议使用多副本 kkrepo 服务、独立 MySQL 和 OSS/S3 blob store：
+生产部署建议使用多副本 kkrepo 服务、独立 MySQL 或 PostgreSQL 和 OSS/S3 blob store：
 
 ```text
 Maven/npm/PyPI/Go/Helm/Cargo/Pub/Composer/Docker/OCI/NuGet/RubyGems/Yum clients
@@ -279,19 +289,19 @@ Maven/npm/PyPI/Go/Helm/Cargo/Pub/Composer/Docker/OCI/NuGet/RubyGems/Yum clients
 DNS / Load Balancer / Reverse Proxy
         |
 kkrepo replicas
-        |---------------- MySQL 8
+        |---------------- MySQL 8 / PostgreSQL 12+
         |---------------- OSS / S3 blob store
 ```
 
-kkrepo 运行时不依赖 OrientDB、内嵌 Elasticsearch 或本地持久化 blob 文件系统。仓库、组件、asset、用户、权限、token、审计、迁移状态和跨副本协调状态存储在 MySQL；大 blob 存储在 OSS/S3；进程内 TTL 缓存只作为可重建热缓存。
+kkrepo 运行时不依赖 OrientDB、内嵌 Elasticsearch 或本地持久化 blob 文件系统。仓库、组件、asset、用户、权限、token、审计、迁移状态和跨副本协调状态存储在所选关系数据库；大 blob 存储在 OSS/S3；进程内 TTL 缓存只作为可重建热缓存。
 
 ## 生产资源建议
 
 - kkrepo 服务实例：生产环境建议单实例至少 2C4G；如果需要高可用，建议至少部署 2 个副本，并根据请求量继续横向扩容。
-- MySQL：生产环境建议至少 2C4G，使用独立 MySQL 实例，并按仓库数量、包数量、索引规模和迁移任务量扩容 CPU、内存、磁盘和 IOPS。
+- 数据库：生产环境建议至少 2C4G，使用独立 MySQL/PostgreSQL 实例，并按仓库数量、包数量、索引规模和迁移任务量扩容 CPU、内存、磁盘和 IOPS。
 - blob 存储：生产环境建议使用 OSS/S3；File blob store 更适合本地开发、测试或有强一致共享文件系统的特定部署。
-- 生产环境建议使用独立 MySQL 和独立 OSS/S3 bucket，不建议把 File blob store 作为长期生产存储。
-- 多副本部署时，session、认证 ticket、catalog 水位、锁和迁移进度通过 MySQL 协调；节点本地缓存丢失不影响正确性。
+- 生产环境建议使用独立关系数据库和独立 OSS/S3 bucket，不建议把 File blob store 作为长期生产存储。
+- 多副本部署时，session、认证 ticket、catalog 水位、锁和迁移进度通过数据库协调；节点本地缓存丢失不影响正确性。
 - 迁移大仓库时，`Nexus Repository Data` 页面建议把 `Concurrency` 从默认 `8` 调整到 `32`，并根据源 Nexus、网络和对象存储压力继续调优。
 
 ## 升级建议
@@ -304,4 +314,4 @@ kkrepo 运行时不依赖 OrientDB、内嵌 Elasticsearch 或本地持久化 blo
 4. 启动新版本。
 5. 通过 `/actuator/health`、`/admin/`、`/browse/` 和关键仓库拉包验证。
 
-如果使用同一个 MySQL 和 OSS/S3 blob store，升级前请先备份 MySQL，并确认新版本的 Flyway migration 符合预期。
+继续使用同一个数据库和 OSS/S3 blob store 时，升级前请备份两者，并确认新版本对应数据库的 Flyway migration 符合预期。

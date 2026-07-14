@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.persistence.jdbc.internal;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao.Claim;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.CoordinationPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcUpserts;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -35,34 +36,42 @@ public class JdbcRepositoryIndexRebuildDao implements com.github.klboke.kkrepo.p
   }
 
   public void enqueue(long repositoryId, String indexKind, String scopeKey) {
-    jdbcTemplate.update("""
+    String normalizedScope = scope(scopeKey);
+    JdbcUpserts.updateThenInsert(
+        jdbcTemplate,
+        """
+        UPDATE repository_index_rebuild_marker
+        SET requested_at = CURRENT_TIMESTAMP, attempts = 0,
+            last_attempted_at = NULL, last_error = NULL
+        WHERE repository_id = ? AND index_kind = ? AND scope_key = ?
+        """,
+        new Object[]{repositoryId, indexKind, normalizedScope},
+        """
         INSERT INTO repository_index_rebuild_marker
           (repository_id, index_kind, scope_key, requested_at, attempts, last_attempted_at, last_error)
-        VALUES (?, ?, ?, NOW(3), 0, NULL, NULL)
-        ON DUPLICATE KEY UPDATE
-          requested_at = NOW(3),
-          attempts = 0,
-          last_attempted_at = NULL,
-          last_error = NULL
-        """, repositoryId, indexKind, scope(scopeKey));
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP, 0, NULL, NULL)
+        """,
+        new Object[]{repositoryId, indexKind, normalizedScope});
   }
 
   public void reenqueueFailure(Claim claim, RuntimeException error) {
-    jdbcTemplate.update("""
+    int attempts = claim.attempts() + 1;
+    String lastError = truncate(errorSummary(error), 2000);
+    JdbcUpserts.updateThenInsert(
+        jdbcTemplate,
+        """
+        UPDATE repository_index_rebuild_marker
+        SET requested_at = CURRENT_TIMESTAMP, attempts = ?,
+            last_attempted_at = CURRENT_TIMESTAMP, last_error = ?
+        WHERE repository_id = ? AND index_kind = ? AND scope_key = ?
+        """,
+        new Object[]{attempts, lastError, claim.repositoryId(), claim.indexKind(), claim.scopeKey()},
+        """
         INSERT INTO repository_index_rebuild_marker
           (repository_id, index_kind, scope_key, requested_at, attempts, last_attempted_at, last_error)
-        VALUES (?, ?, ?, NOW(3), ?, NOW(3), ?)
-        ON DUPLICATE KEY UPDATE
-          requested_at = NOW(3),
-          attempts = VALUES(attempts),
-          last_attempted_at = NOW(3),
-          last_error = VALUES(last_error)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?, CURRENT_TIMESTAMP, ?)
         """,
-        claim.repositoryId(),
-        claim.indexKind(),
-        claim.scopeKey(),
-        claim.attempts() + 1,
-        truncate(errorSummary(error), 2000));
+        new Object[]{claim.repositoryId(), claim.indexKind(), claim.scopeKey(), attempts, lastError});
   }
 
   @Transactional(propagation = Propagation.MANDATORY)

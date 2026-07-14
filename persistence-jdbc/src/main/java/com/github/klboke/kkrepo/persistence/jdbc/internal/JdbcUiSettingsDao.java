@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.persistence.jdbc.internal;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.UiSettingsRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRows;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcUpserts;
 import java.util.List;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -34,13 +35,19 @@ public class JdbcUiSettingsDao implements com.github.klboke.kkrepo.persistence.j
   @Transactional
   public UiSettingsRecord saveDefaultLanguage(String defaultLanguage) {
     String normalized = normalizeDefaultLanguage(defaultLanguage);
-    jdbcTemplate.update("""
+    JdbcUpserts.updateThenInsert(
+        jdbcTemplate,
+        """
+        UPDATE ui_settings
+        SET default_language = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = 1
+        """,
+        new Object[]{normalized},
+        """
         INSERT INTO ui_settings (id, default_language, updated_at)
-        VALUES (1, ?, NOW(3))
-        ON DUPLICATE KEY UPDATE
-          default_language = VALUES(default_language),
-          updated_at = NOW(3)
-        """, normalized);
+        VALUES (1, ?, CURRENT_TIMESTAMP)
+        """,
+        new Object[]{normalized});
     return read();
   }
 

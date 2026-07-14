@@ -1,0 +1,51 @@
+name: ${KKREPO_PROJECT_NAME:-kkrepo-quickstart-postgresql}
+
+services:
+  postgresql:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${KKREPO_POSTGRESQL_DATABASE:-kkrepo}
+      POSTGRES_USER: ${KKREPO_POSTGRESQL_USER:-kkrepo}
+      POSTGRES_PASSWORD: ${KKREPO_POSTGRESQL_PASSWORD:-kkrepo}
+      TZ: Asia/Shanghai
+    volumes:
+      - postgresql-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  app-data-perms:
+    image: alpine:3.20
+    user: root
+    volumes:
+      - kkrepo-data:/data
+    command: ["sh", "-c", "mkdir -p /data/blobs && chown -R 999:999 /data"]
+
+  kkrepo:
+    image: ghcr.io/klboke/kkrepo:${KKREPO_IMAGE_TAG:-0.3.0}
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      app-data-perms:
+        condition: service_completed_successfully
+    environment:
+      KKREPO_DATABASE_TYPE: postgresql
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgresql:5432/${KKREPO_POSTGRESQL_DATABASE:-kkrepo}
+      SPRING_DATASOURCE_USERNAME: ${KKREPO_POSTGRESQL_USER:-kkrepo}
+      SPRING_DATASOURCE_PASSWORD: ${KKREPO_POSTGRESQL_PASSWORD:-kkrepo}
+      KKREPO_CREDENTIAL_SECRET: ${KKREPO_CREDENTIAL_SECRET:-quickstart-credential-secret-change-me-0123456789}
+      KKREPO_API_KEY_PAYLOAD_SECRET: ${KKREPO_API_KEY_PAYLOAD_SECRET:-quickstart-api-key-payload-secret-change-me-0123456789}
+      KKREPO_FILE_BASE_DIR: ${KKREPO_FILE_BASE_DIR:-/var/lib/kkrepo/blobs}
+    ports:
+      - "${KKREPO_HTTP_PORT:-19090}:8080"
+      - "${KKREPO_MANAGEMENT_PORT:-19091}:8081"
+    volumes:
+      - kkrepo-data:/var/lib/kkrepo
+    restart: unless-stopped
+
+volumes:
+  postgresql-data:
+  kkrepo-data:

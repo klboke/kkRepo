@@ -20,7 +20,7 @@ public class JdbcAuthTicketDao implements com.github.klboke.kkrepo.persistence.j
   public void insert(String tokenHash, String payload, Instant expiresAt) {
     jdbcTemplate.update("""
         INSERT INTO auth_ticket (token_hash, payload, expires_at, created_at)
-        VALUES (?, ?, ?, NOW(3))
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
         """, normalizeTokenHash(tokenHash), requiredPayload(payload), Timestamp.from(expiresAt));
   }
 

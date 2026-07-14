@@ -10,6 +10,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.EnumColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcInserts;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcUpserts;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -198,11 +199,18 @@ public class JdbcRepositoryDao implements com.github.klboke.kkrepo.persistence.j
   }
 
   public void addMember(long groupRepositoryId, long memberRepositoryId, int sortOrder) {
-    jdbcTemplate.update("""
+    JdbcUpserts.updateThenInsert(
+        jdbcTemplate,
+        """
+        UPDATE repository_member SET sort_order = ?
+        WHERE repository_id = ? AND member_repository_id = ?
+        """,
+        new Object[]{sortOrder, groupRepositoryId, memberRepositoryId},
+        """
         INSERT INTO repository_member (repository_id, member_repository_id, sort_order)
         VALUES (?, ?, ?)
-        ON DUPLICATE KEY UPDATE sort_order = VALUES(sort_order)
-        """, groupRepositoryId, memberRepositoryId, sortOrder);
+        """,
+        new Object[]{groupRepositoryId, memberRepositoryId, sortOrder});
   }
 
   public List<RepositoryRecord> listMembers(long groupRepositoryId) {

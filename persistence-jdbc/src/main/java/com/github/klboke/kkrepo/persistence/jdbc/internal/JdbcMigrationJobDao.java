@@ -52,7 +52,7 @@ public class JdbcMigrationJobDao implements com.github.klboke.kkrepo.persistence
   public void markFinished(long id, String status, Map<String, Object> summary) {
     jdbcTemplate.update("""
         UPDATE migration_job
-        SET status = ?, summary_json = ?, finished_at = CURRENT_TIMESTAMP(3)
+        SET status = ?, summary_json = ?, finished_at = CURRENT_TIMESTAMP
         WHERE id = ?
         """, status, jsonColumns.parameter(summary), id);
   }

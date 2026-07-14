@@ -15,10 +15,9 @@ import com.github.klboke.kkrepo.persistence.jdbc.internal.support.EnumColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.HashColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcInserts;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.MigrationPersistenceDialect;
 import java.nio.ByteBuffer;
-import java.sql.PreparedStatement;
-import java.sql.SQLException;
-import java.sql.Types;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -47,13 +46,18 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
 
   private final JdbcTemplate jdbcTemplate;
   private final JsonColumns jsonColumns;
+  private final MigrationPersistenceDialect migrationDialect;
   private final RowMapper<RepositoryDataMigrationRepositoryRecord> repositoryRowMapper;
   private final RowMapper<RepositoryDataMigrationAssetRecord> assetRowMapper;
   private final RowMapper<AssetClaim> assetClaimRowMapper;
 
-  public JdbcRepositoryDataMigrationDao(JdbcTemplate jdbcTemplate, JsonColumns jsonColumns) {
+  public JdbcRepositoryDataMigrationDao(
+      JdbcTemplate jdbcTemplate,
+      JsonColumns jsonColumns,
+      DatabaseDialect databaseDialect) {
     this.jdbcTemplate = jdbcTemplate;
     this.jsonColumns = jsonColumns;
+    this.migrationDialect = databaseDialect.migrations();
     this.repositoryRowMapper = (rs, rowNum) -> new RepositoryDataMigrationRepositoryRecord(
         rs.getLong("id"),
         rs.getLong("migration_job_id"),
@@ -190,7 +194,7 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
     RepositoryDataMigrationRepositoryRecord row = rows.get(0);
     jdbcTemplate.update("""
         UPDATE repository_data_migration_repository
-        SET claimed_at = NOW(3)
+        SET claimed_at = CURRENT_TIMESTAMP
         WHERE id = ?
         """, row.id());
     return Optional.of(row);
@@ -237,79 +241,39 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
     }
     Map<ByteBuffer, TargetAssetRef> targetRefs = existingTargets == null ? Map.of() : existingTargets;
     Instant migratedAt = Instant.now();
-    jdbcTemplate.batchUpdate("""
-        INSERT INTO repository_data_migration_asset
-          (repository_job_id, source_asset_id, source_component_id, source_path, source_path_hash,
-           format, namespace, name, version, asset_kind, content_type, size, source_blob_ref,
-           source_last_updated_at, source_last_downloaded_at, source_blob_created_at,
-           source_blob_updated_at, source_created_by, source_created_by_ip, status,
-           migrated_at, target_component_id, target_asset_id, target_asset_blob_id, metadata_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE
-          source_asset_id = VALUES(source_asset_id),
-          source_component_id = VALUES(source_component_id),
-          format = VALUES(format),
-          namespace = VALUES(namespace),
-          name = VALUES(name),
-          version = VALUES(version),
-          asset_kind = VALUES(asset_kind),
-          content_type = VALUES(content_type),
-          size = VALUES(size),
-          source_blob_ref = VALUES(source_blob_ref),
-          source_last_updated_at = VALUES(source_last_updated_at),
-          source_last_downloaded_at = VALUES(source_last_downloaded_at),
-          source_blob_created_at = VALUES(source_blob_created_at),
-          source_blob_updated_at = VALUES(source_blob_updated_at),
-          source_created_by = VALUES(source_created_by),
-          source_created_by_ip = VALUES(source_created_by_ip),
-          status = IF(status = 'migrated', status, VALUES(status)),
-          attempts = IF(status = 'migrated' OR VALUES(status) = 'migrated', attempts, 0),
-          claimed_at = IF(status = 'migrated' OR VALUES(status) = 'migrated', claimed_at, NULL),
-          migrated_at = IF(status = 'migrated', migrated_at, VALUES(migrated_at)),
-          target_component_id = IF(status = 'migrated' AND target_component_id IS NOT NULL,
-              target_component_id, VALUES(target_component_id)),
-          target_asset_id = IF(status = 'migrated' AND target_asset_id IS NOT NULL,
-              target_asset_id, VALUES(target_asset_id)),
-          target_asset_blob_id = IF(status = 'migrated' AND target_asset_blob_id IS NOT NULL,
-              target_asset_blob_id, VALUES(target_asset_blob_id)),
-          last_error = IF(status = 'migrated', last_error, NULL),
-          metadata_json = VALUES(metadata_json)
-        """, assets, Math.min(assets.size(), 500), (ps, record) ->
-        setAssetInsertParameters(ps, repositoryJobId, record,
-            targetRefs.get(ByteBuffer.wrap(sourcePathHash(record))), migratedAt));
-  }
-
-  private void setAssetInsertParameters(
-      PreparedStatement ps,
-      long repositoryJobId,
-      RepositoryDataMigrationAssetRecord record,
-      TargetAssetRef target,
-      Instant migratedAt) throws SQLException {
-    ps.setLong(1, repositoryJobId);
-    ps.setString(2, record.sourceAssetId());
-    ps.setString(3, record.sourceComponentId());
-    ps.setString(4, record.sourcePath());
-    ps.setBytes(5, sourcePathHash(record));
-    ps.setString(6, EnumColumns.write(record.format()));
-    ps.setString(7, record.namespace());
-    ps.setString(8, record.name());
-    ps.setString(9, record.version());
-    ps.setString(10, record.assetKind());
-    ps.setString(11, record.contentType());
-    ps.setObject(12, record.size());
-    ps.setString(13, record.sourceBlobRef());
-    ps.setTimestamp(14, nullableTimestamp(record.sourceLastUpdatedAt()));
-    ps.setTimestamp(15, nullableTimestamp(record.sourceLastDownloadedAt()));
-    ps.setTimestamp(16, nullableTimestamp(record.sourceBlobCreatedAt()));
-    ps.setTimestamp(17, nullableTimestamp(record.sourceBlobUpdatedAt()));
-    ps.setString(18, record.sourceCreatedBy());
-    ps.setString(19, record.sourceCreatedByIp());
-    ps.setString(20, target == null ? ASSET_PENDING : ASSET_MIGRATED);
-    ps.setTimestamp(21, nullableTimestamp(target == null ? null : migratedAt));
-    setNullableLong(ps, 22, target == null ? null : target.componentId());
-    setNullableLong(ps, 23, target == null ? null : target.assetId());
-    setNullableLong(ps, 24, target == null ? null : target.assetBlobId());
-    jsonColumns.bind(ps, 25, record.metadata());
+    List<MigrationPersistenceDialect.DiscoveredAsset> commands = assets.stream()
+        .map(record -> {
+          byte[] pathHash = sourcePathHash(record);
+          TargetAssetRef target = targetRefs.get(ByteBuffer.wrap(pathHash));
+          return new MigrationPersistenceDialect.DiscoveredAsset(
+              repositoryJobId,
+              record.sourceAssetId(),
+              record.sourceComponentId(),
+              record.sourcePath(),
+              pathHash,
+              EnumColumns.write(record.format()),
+              record.namespace(),
+              record.name(),
+              record.version(),
+              record.assetKind(),
+              record.contentType(),
+              record.size(),
+              record.sourceBlobRef(),
+              nullableTimestamp(record.sourceLastUpdatedAt()),
+              nullableTimestamp(record.sourceLastDownloadedAt()),
+              nullableTimestamp(record.sourceBlobCreatedAt()),
+              nullableTimestamp(record.sourceBlobUpdatedAt()),
+              record.sourceCreatedBy(),
+              record.sourceCreatedByIp(),
+              target == null ? ASSET_PENDING : ASSET_MIGRATED,
+              nullableTimestamp(target == null ? null : migratedAt),
+              target == null ? null : target.componentId(),
+              target == null ? null : target.assetId(),
+              target == null ? null : target.assetBlobId(),
+              jsonColumns.write(record.metadata()));
+        })
+        .toList();
+    migrationDialect.upsertDiscoveredAssets(jdbcTemplate, commands);
   }
 
   private static byte[] sourcePathHash(RepositoryDataMigrationAssetRecord record) {
@@ -331,9 +295,9 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
     jdbcTemplate.update("""
         UPDATE repository_data_migration_repository
         SET cursor_path = ?, status = ?, claimed_at = NULL, last_error = NULL,
-            discovered_assets = ?, total_assets = IF(?, ?, total_assets),
+            discovered_assets = ?, total_assets = CASE WHEN ? THEN ? ELSE total_assets END,
             migrated_assets = ?, failed_assets = ?,
-            finished_at = IF(? IN (?, ?), CURRENT_TIMESTAMP(3), NULL)
+            finished_at = CASE WHEN ? IN (?, ?) THEN CURRENT_TIMESTAMP ELSE NULL END
         WHERE id = ?
         """,
         nextCursor,
@@ -367,7 +331,7 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
   public void markDiscoveryFailure(long repositoryJobId, String error) {
     jdbcTemplate.update("""
         UPDATE repository_data_migration_repository
-        SET claimed_at = NOW(3), last_error = ?
+        SET claimed_at = CURRENT_TIMESTAMP, last_error = ?
         WHERE id = ?
         """, truncate(error), repositoryJobId);
   }
@@ -425,7 +389,7 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
     for (AssetClaim claim : claims) {
       jdbcTemplate.update("""
           UPDATE repository_data_migration_asset
-          SET status = ?, attempts = attempts + 1, claimed_at = NOW(3)
+          SET status = ?, attempts = attempts + 1, claimed_at = CURRENT_TIMESTAMP
           WHERE id = ?
           """, ASSET_MIGRATING, claim.asset().id());
       jdbcTemplate.update("""
@@ -441,7 +405,7 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
       Long targetComponentId, Long targetAssetId, Long targetAssetBlobId) {
     jdbcTemplate.update("""
         UPDATE repository_data_migration_asset
-        SET status = ?, claimed_at = NULL, migrated_at = CURRENT_TIMESTAMP(3),
+        SET status = ?, claimed_at = NULL, migrated_at = CURRENT_TIMESTAMP,
             target_component_id = ?, target_asset_id = ?, target_asset_blob_id = ?,
             last_error = NULL
         WHERE id = ?
@@ -451,8 +415,8 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
   public void markAssetFailed(long assetId, long repositoryJobId, int maxAttempts, String error) {
     jdbcTemplate.update("""
         UPDATE repository_data_migration_asset
-        SET status = IF(attempts >= ?, ?, ?),
-            claimed_at = IF(attempts >= ?, NULL, NOW(3)),
+        SET status = CASE WHEN attempts >= ? THEN ? ELSE ? END,
+            claimed_at = CASE WHEN attempts >= ? THEN NULL ELSE CURRENT_TIMESTAMP END,
             last_error = ?
         WHERE id = ?
         """, maxAttempts, ASSET_FAILED, ASSET_PENDING, maxAttempts, truncate(error), assetId);
@@ -471,19 +435,22 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
       return 0;
     }
     int updated = jdbcTemplate.update("""
-        UPDATE repository_data_migration_asset a
-        JOIN repository_data_migration_repository r ON r.id = a.repository_job_id
-        SET a.status = ?,
-            a.attempts = 0,
-            a.claimed_at = NULL,
-            a.last_error = NULL,
-            a.migrated_at = NULL,
-            a.target_component_id = NULL,
-            a.target_asset_id = NULL,
-            a.target_asset_blob_id = NULL
-        WHERE r.migration_job_id = ?
-          AND a.status = ?
-        """, ASSET_PENDING, migrationJobId, ASSET_FAILED);
+        UPDATE repository_data_migration_asset
+        SET status = ?,
+            attempts = 0,
+            claimed_at = NULL,
+            last_error = NULL,
+            migrated_at = NULL,
+            target_component_id = NULL,
+            target_asset_id = NULL,
+            target_asset_blob_id = NULL
+        WHERE status = ?
+          AND repository_job_id IN (
+            SELECT id
+            FROM repository_data_migration_repository
+            WHERE migration_job_id = ?
+          )
+        """, ASSET_PENDING, ASSET_FAILED, migrationJobId);
     for (Long repositoryJobId : repositoryJobIds) {
       refreshRepositoryProgress(repositoryJobId);
     }
@@ -504,7 +471,7 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
         UPDATE repository_data_migration_repository
         SET status = ?, total_assets = ?, discovered_assets = ?, migrated_assets = ?,
             failed_assets = ?, claimed_at = NULL,
-            finished_at = IF(? IN (?, ?), CURRENT_TIMESTAMP(3), NULL)
+            finished_at = CASE WHEN ? IN (?, ?) THEN CURRENT_TIMESTAMP ELSE NULL END
         WHERE id = ?
           AND status IN (?, ?, ?, ?)
         """,
@@ -549,7 +516,8 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
   public void updateMigrationJobSummary(long migrationJobId, String status, Map<String, Object> summary) {
     jdbcTemplate.update("""
         UPDATE migration_job
-        SET status = ?, summary_json = ?, finished_at = IF(? = 'running', NULL, CURRENT_TIMESTAMP(3))
+        SET status = ?, summary_json = ?,
+            finished_at = CASE WHEN ? = 'running' THEN NULL ELSE CURRENT_TIMESTAMP END
         WHERE id = ?
         """, status, jsonColumns.parameter(summary), status, migrationJobId);
   }
@@ -611,14 +579,6 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
       return null;
     }
     return value.length() <= 4000 ? value : value.substring(0, 4000);
-  }
-
-  private static void setNullableLong(PreparedStatement ps, int index, Long value) throws SQLException {
-    if (value == null) {
-      ps.setNull(index, Types.BIGINT);
-    } else {
-      ps.setLong(index, value);
-    }
   }
 
   private static Long nullableNumber(Object value) {

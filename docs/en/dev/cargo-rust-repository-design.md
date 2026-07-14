@@ -35,12 +35,12 @@ Implementation must be checked against these protocols and reference behaviors f
 
 Key conclusions:
 
-- kkrepo should implement only sparse registry in the first phase. Cargo git index would require maintaining a client-cloneable/fetchable git repository, which does not fit kkrepo's MySQL truth, OSS/S3 blob model, or the Nexus reference requirement for the first phase.
-- Cargo sparse index produces many small HTTP requests. The server supports `ETag`, `Last-Modified`, and `304 Not Modified`, using generated body hashes and MySQL-backed updated timestamps as stable cache validators.
+- kkrepo should implement only sparse registry in the first phase. Cargo git index would require maintaining a client-cloneable/fetchable git repository, which does not fit kkrepo's shared database truth, OSS/S3 blob model, or the Nexus reference requirement for the first phase.
+- Cargo sparse index produces many small HTTP requests. The server supports `ETag`, `Last-Modified`, and `304 Not Modified`, using generated body hashes and database-backed updated timestamps as stable cache validators.
 - `config.json` is the client entrypoint contract. `dl` should point to the kkrepo download endpoint, and `api` should point to the same repository's web API root. `auth-required` is a Cargo protocol client hint, not the kkrepo repository permission switch. Hosted repositories always return `auth-required: true` to match Nexus 3.77+; proxy/group repositories expose Authentication requirements in Admin UI to decide whether the local `config.json` contains that hint.
 - Nexus 3.77+ Cargo UI states that leaving Authentication requirements unchecked only allows anonymous access when anonymous access is also enabled for the instance. Local reference-instance verification matches that: with global anonymous access disabled, `config.json`, sparse index files, and `.crate` downloads return `401`; with global anonymous enabled and the anonymous user granted repository read privileges, proxy/group reads are still allowed even when the hint is enabled. Therefore, kkrepo Cargo read requests use the normal repository read permission path, and unauthenticated requests pass only through the enabled and authorized anonymous fallback; write operations must be authenticated and authorized with add/edit privileges.
 - `.crate` files are immutable published objects. The server must calculate SHA-256 from the exact original `.crate` bytes and write it to the index `cksum`; do not calculate checksum from unpacked content or formatted metadata.
-- After publish succeeds, Cargo polls the index waiting for the new version to appear. kkrepo hosted publish should commit the MySQL version row and sparse-index visible state before returning success, avoiding short windows where the client cannot see its just-published version.
+- After publish succeeds, Cargo polls the index waiting for the new version to appear. kkrepo hosted publish should commit the shared-database version row and sparse-index visible state before returning success, avoiding short windows where the client cannot see its just-published version.
 - `yank` does not delete the `.crate` file; it only changes the `yanked` field in the index JSON. Existing `Cargo.lock` files should still be able to download the yanked version, while new resolution should not select it.
 - Crate index file names are lowercase, but the package name in index JSON is case-sensitive. To avoid case-only conflicts on the same index path, kkrepo should reject crate names that differ only by case within the same repository.
 - `cargo search` and kkrepo-native UI/API `.crate` upload are kkrepo product enhancements. `cargo search` implements Cargo Registry Web API query semantics: hosted queries the current repository's MySQL component/asset index, proxy prefers the upstream `api` search to avoid false negatives for uncached packages and falls back to the local cache when upstream is unavailable, and group aggregates members by order with crate-name dedupe. UI/API upload reuses the hosted publish validation, checksum, transaction write, permission, and audit path; it must not bypass the correctness constraints already established for `cargo publish`.
@@ -180,7 +180,7 @@ The first phase uses the existing kkrepo MySQL model instead of adding Cargo-spe
 - The Cargo index JSON line visible to clients is stored in `component.attributes.indexEntry`; the crate asset path and browse metadata are stored in component/asset attributes.
 - `.crate` objects are `asset` rows bound to `asset_blob` rows. Large bytes live only in OSS/S3; MySQL stores blob reference, hashes, size, content type, and attributes.
 - Hosted and proxy crate writes calculate SHA-256 from the exact `.crate` bytes. Proxy downloads reject checksum mismatches against the remote index `cksum` before persisting metadata.
-- Proxy `config.json` and sparse index files are cached as metadata assets, so their bodies and remote validators (`ETag`, `Last-Modified`) are durable through MySQL asset/blob references and OSS/S3 bytes.
+- Proxy `config.json` and sparse index files are cached as metadata assets, so their bodies and remote validators (`ETag`, `Last-Modified`) are durable through shared-database asset/blob references and OSS/S3 bytes.
 - Remote proxy auto-block state reuses the existing MySQL `ProxyStateDao`. Remote `404`, `410`, and `451` use the shared TTL `ProxyNegativeCache`, scoped by proxy repository and path.
 - Group index responses are rebuildable from member indexes by member order. The first phase does not store a dedicated group merge table; correctness comes from resolving members against their MySQL/OSS-backed state on each request.
 
@@ -309,11 +309,11 @@ Private repository behavior:
 
 Cargo repository implementation must not rely on single-JVM in-memory state as the only truth.
 
-- Published crate versions, index JSON, yank state, proxy revalidation state, and repository configuration are stored in MySQL-backed component/asset/repository rows.
+- Published crate versions, index JSON, yank state, proxy revalidation state, and repository configuration are stored in shared-database component/asset/repository rows.
 - `.crate` files are stored only in OSS/S3; MySQL stores blob references, checksum, size, and state.
 - In-memory/shared cache may only cache repository runtime snapshots, asset metadata snapshots, permission decisions, and negative results. It must have TTL or explicit invalidation and must be rebuildable from MySQL/OSS/S3.
 - Repository runtime snapshots containing upstream proxy passwords or bearer tokens are not written to the shared runtime cache.
-- Proxy revalidation and remote `.crate` downloads may duplicate remote work across replicas under concurrency, but correctness is protected by MySQL asset/component uniqueness and checksum validation.
+- Proxy revalidation and remote `.crate` downloads may duplicate remote work across replicas under concurrency, but correctness is protected by database asset/component uniqueness and checksum validation.
 - Publish and yank update component rows in MySQL; other replicas observe the committed state through DAO reads and bounded TTL cache invalidation.
 - Blob cleanup uses metadata reference checks so failed writes do not leave newly uploaded unreferenced objects as live metadata truth.
 

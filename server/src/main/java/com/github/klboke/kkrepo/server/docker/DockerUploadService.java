@@ -93,7 +93,7 @@ public class DockerUploadService {
         Instant.now().plusSeconds(uploadTtlSeconds),
         null,
         null,
-        Map.of("multiReplicaSemantics", "session and chunk offsets are MySQL truth; chunk bytes are blob-store objects"),
+        Map.of("multiReplicaSemantics", "session and chunk offsets are shared-database truth; chunk bytes are blob-store objects"),
         null,
         null));
     recordUpload(runtime, "start", "created");

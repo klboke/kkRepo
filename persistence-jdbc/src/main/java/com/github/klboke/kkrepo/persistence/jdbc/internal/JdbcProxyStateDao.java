@@ -4,9 +4,11 @@ import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRow
 import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRows.nullableTimestamp;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao.ProxyRemoteState;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Optional;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
@@ -50,42 +52,50 @@ public class JdbcProxyStateDao implements com.github.klboke.kkrepo.persistence.j
   /**
    * Records an upstream success. Proxy GETs fan out to hundreds per second per repo, so we throttle
    * the actual row write: if the row is already healthy (fail_count = 0, no block) and the last
-   * recorded success is within {@code successThrottleSeconds}, the UPSERT leaves every column
-   * untouched. InnoDB skips the redo log for genuine no-op updates, so the throttled path costs
-   * one round trip + an index lookup with no replication overhead. The transition out of a failure
-   * state (fail_count > 0 or blocked_until set) always writes immediately so the circuit breaker
-   * reopens without delay.
+   * recorded success is within {@code successThrottleSeconds}, the read path returns without a
+   * write. The throttled path costs one round trip plus an index lookup without changing the shared
+   * row. The transition out of a failure state (fail_count > 0 or blocked_until set) always writes
+   * immediately so the circuit breaker reopens without delay.
    */
   public void recordSuccess(long repositoryId, Instant now) {
-    jdbcTemplate.update("""
-        INSERT INTO proxy_remote_state
-          (repository_id, blocked_until, fail_count, last_success_at, last_failure_at, last_error)
-        VALUES (?, NULL, 0, ?, NULL, NULL)
-        ON DUPLICATE KEY UPDATE
-          blocked_until = CASE
-            WHEN fail_count <> 0 OR blocked_until IS NOT NULL
-              OR last_success_at IS NULL
-              OR last_success_at < (VALUES(last_success_at) - INTERVAL ? SECOND)
-            THEN NULL ELSE blocked_until END,
-          fail_count = CASE
-            WHEN fail_count <> 0 OR blocked_until IS NOT NULL
-              OR last_success_at IS NULL
-              OR last_success_at < (VALUES(last_success_at) - INTERVAL ? SECOND)
-            THEN 0 ELSE fail_count END,
-          last_success_at = CASE
-            WHEN fail_count <> 0 OR blocked_until IS NOT NULL
-              OR last_success_at IS NULL
-              OR last_success_at < (VALUES(last_success_at) - INTERVAL ? SECOND)
-            THEN VALUES(last_success_at) ELSE last_success_at END,
-          last_error = CASE
-            WHEN fail_count <> 0 OR blocked_until IS NOT NULL
-              OR last_success_at IS NULL
-              OR last_success_at < (VALUES(last_success_at) - INTERVAL ? SECOND)
-            THEN NULL ELSE last_error END
-        """,
-        repositoryId, nullableTimestamp(now),
-        successThrottleSeconds, successThrottleSeconds,
-        successThrottleSeconds, successThrottleSeconds);
+    var recordedAt = nullableTimestamp(now);
+    Instant throttleBoundaryInstant = now.minusSeconds(successThrottleSeconds);
+    var throttleBoundary = nullableTimestamp(throttleBoundaryInstant);
+    Optional<ProxyRemoteState> existing = loadState(repositoryId);
+    if (existing.isPresent()) {
+      ProxyRemoteState state = existing.orElseThrow();
+      if (state.failCount() == 0
+          && state.blockedUntil() == null
+          && state.lastSuccessAt() != null
+          && !state.lastSuccessAt().isBefore(throttleBoundaryInstant)) {
+        return;
+      }
+      clearFailureState(repositoryId, recordedAt, throttleBoundary);
+      return;
+    }
+    try {
+      jdbcTemplate.update("""
+          INSERT INTO proxy_remote_state
+            (repository_id, blocked_until, fail_count, last_success_at, last_failure_at, last_error)
+          VALUES (?, NULL, 0, ?, NULL, NULL)
+          """, repositoryId, recordedAt);
+    } catch (DuplicateKeyException concurrentInsertOrThrottledExistingRow) {
+      // A concurrent failure may have inserted the row after the initial read. Retry the clearing
+      // UPDATE so that success wins that race; a concurrently inserted healthy row remains a
+      // deliberate no-op when it is inside the throttle window.
+      clearFailureState(repositoryId, recordedAt, throttleBoundary);
+    }
+  }
+
+  private int clearFailureState(
+      long repositoryId, Timestamp recordedAt, Timestamp throttleBoundary) {
+    return jdbcTemplate.update("""
+        UPDATE proxy_remote_state
+        SET blocked_until = NULL, fail_count = 0, last_success_at = ?, last_error = NULL
+        WHERE repository_id = ?
+          AND (fail_count <> 0 OR blocked_until IS NOT NULL
+            OR last_success_at IS NULL OR last_success_at < ?)
+        """, recordedAt, repositoryId, throttleBoundary);
   }
 
   public ProxyRemoteState recordFailure(long repositoryId, long blockSeconds, String error, Instant now) {

@@ -50,16 +50,16 @@
     </dependency>
   </dependencies>
   <build>
-    <testResources>
-      <testResource>
-        <directory>src/test/resources</directory>
-      </testResource>
-      <testResource>
-        <directory>../server/src/main/resources</directory>
-        <includes>
-          <include>db/migration/**</include>
-        </includes>
-      </testResource>
-    </testResources>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <systemPropertyVariables>
+            <user.timezone>UTC</user.timezone>
+          </systemPropertyVariables>
+        </configuration>
+      </plugin>
+    </plugins>
   </build>
 </project>

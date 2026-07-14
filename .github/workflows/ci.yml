@@ -16,8 +16,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-test:
-    name: Build and test
+  unit-and-protocol-tests:
+    name: unit-and-protocol-tests
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -36,7 +36,11 @@ jobs:
           node-version: "24"
 
       - name: Validate development compose file
-        run: docker compose -f docker-compose.dev.yml config
+        run: |
+          docker compose -f docker-compose.dev.yml config
+          docker compose -f docker-compose.dev.yml --profile postgresql config
+          docker compose -f docker-compose.quickstart.yml config
+          docker compose -f docker-compose.quickstart-postgresql.yml config
 
       - name: Run server tests
         run: mvn -B -ntp -pl server -am -Dsurefire.failIfNoSpecifiedTests=false verify
@@ -50,3 +54,83 @@ jobs:
           directory: .
           fail_ci_if_error: true
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  persistence-package-boundary:
+    name: persistence-package-boundary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+      - run: mvn -B -ntp -pl server -am -Dtest=PersistencePackageBoundaryTest -Dsurefire.failIfNoSpecifiedTests=false test
+
+  persistence-contract:
+    name: persistence-contract (${{ matrix.database }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - database: mysql
+            module: persistence-mysql
+            test: MySqlPersistenceApiContractTest
+          - database: postgresql
+            module: persistence-postgresql
+            test: PostgreSqlPersistenceApiContractTest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+      - run: mvn -B -ntp -pl ${{ matrix.module }} -am -Dtest=${{ matrix.test }} -Dsurefire.failIfNoSpecifiedTests=false test
+
+  server-smoke:
+    name: server-smoke (${{ matrix.database }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - database: mysql
+            method: mysqlSupportsFreshAndRepeatStartupWithCrossNodeSession
+          - database: postgresql
+            method: postgresqlSupportsFreshAndRepeatStartupWithCrossNodeSession
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+      - run: mvn -B -ntp -pl server -am -Dtest=DatabaseServerSmokeTest#${{ matrix.method }} -Dsurefire.failIfNoSpecifiedTests=false test
+
+  mysql-v29-upgrade-compatibility:
+    name: mysql-v29-upgrade-compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+      - run: mvn -B -ntp -pl persistence-mysql -am -Dtest=MySqlV29MigrationCompatibilityTest -Dsurefire.failIfNoSpecifiedTests=false test
+
+  flyway-version-parity:
+    name: flyway-version-parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify migration and deployment contracts
+        run: |
+          scripts/ci/check-flyway-parity.sh
+          docker compose -f docker-compose.quickstart.yml config
+          docker compose -f docker-compose.quickstart-postgresql.yml config
+          docker compose -f docker-compose.compat-postgres.yml --profile kkrepo-postgresql config
+      - uses: azure/setup-helm@v5
+      - run: helm lint deploy/helm/kkrepo

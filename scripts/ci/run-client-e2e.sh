@@ -427,14 +427,17 @@ EOF
   run_logged pypi-upload twine upload --non-interactive \
     --repository-url "$KKREPO_URL/repository/pypi-hosted/" \
     -u "$KKREPO_USER" -p "$KKREPO_PASSWORD" "$dir"/dist/*.whl
+  # Hosted simple indexes are rebuilt through the shared marker queue. Wait for the
+  # uploaded release to become visible before asking pip to resolve it, otherwise a
+  # faster client can race a healthy worker on a slower database backend.
+  wait_for_body_contains pypi-simple "$name-1.0.0" \
+    "$KKREPO_URL/repository/pypi-group/simple/$name/" \
+    "$ARTIFACT_DIR/pypi-simple.html"
   run_logged pypi-install python3 -m pip install --disable-pip-version-check --no-deps \
     --target "$install_dir" \
     --index-url "$KKREPO_AUTH_URL/repository/pypi-group/simple/" \
     "$name==1.0.0"
   test -f "$install_dir/$name/__init__.py"
-  wait_for_body_contains pypi-simple "$name-1.0.0" \
-    "$KKREPO_URL/repository/pypi-group/simple/$name/" \
-    "$ARTIFACT_DIR/pypi-simple.html"
 }
 
 test_go() {

@@ -19,7 +19,7 @@ class SecurityMigrationDefaultsTest {
   @Test
   void appliedV7MigrationRemainsByteForByteStable()
       throws IOException, NoSuchAlgorithmException {
-    byte[] sql = resourceBytes("/db/migration/V7__nexus_builtin_security_seed.sql");
+    byte[] sql = resourceBytes("/db/migration/mysql/V7__nexus_builtin_security_seed.sql");
 
     assertEquals(V7_SHA256, HexFormat.of().formatHex(
         MessageDigest.getInstance("SHA-256").digest(sql)));
@@ -28,7 +28,7 @@ class SecurityMigrationDefaultsTest {
   @Test
   void newMigrationDisablesAnonymousAccessOnlyBeforeInitialization() throws IOException {
     String sql = new String(
-        resourceBytes("/db/migration/V29__disable_anonymous_for_uninitialized_installations.sql"),
+        resourceBytes("/db/migration/mysql/V29__disable_anonymous_for_uninitialized_installations.sql"),
         StandardCharsets.UTF_8).replaceAll("\\s+", " ");
 
     assertTrue(sql.contains("UPDATE security_anonymous_config SET enabled = 0"));

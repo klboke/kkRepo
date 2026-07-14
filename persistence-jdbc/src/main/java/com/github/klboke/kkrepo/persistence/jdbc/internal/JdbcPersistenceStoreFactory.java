@@ -27,8 +27,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.UiSettingsDao;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
-import java.util.List;
-import java.util.ServiceLoader;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialects;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
@@ -41,7 +40,12 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
     dataSource.setUsername(settings.username());
     dataSource.setPassword(settings.password());
     JdbcTemplate jdbc = new JdbcTemplate(dataSource);
-    DatabaseDialect dialect = loadDialect();
+    DatabaseDialect dialect = DatabaseDialects.detect(dataSource);
+    return createStores(jdbc, dialect);
+  }
+
+  /** Creates stores on a caller-owned JDBC template, including its transaction boundaries. */
+  public static PersistenceStores createStores(JdbcTemplate jdbc, DatabaseDialect dialect) {
     JsonColumns json = new JsonColumns(new ObjectMapper(), dialect);
     return new DefaultPersistenceStores(
         new JdbcAssetDao(jdbc, json),
@@ -60,22 +64,11 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
         new JdbcProxyStateDao(jdbc, 30),
         new JdbcPubUploadSessionDao(jdbc, json),
         new JdbcRepositoryDao(jdbc, json),
-        new JdbcRepositoryDataMigrationDao(jdbc, json),
+        new JdbcRepositoryDataMigrationDao(jdbc, json, dialect),
         new JdbcRepositoryIndexRebuildDao(jdbc, dialect),
         new JdbcSecurityAuditDao(jdbc, json),
         new JdbcSecurityDao(jdbc, json, dialect),
         new JdbcUiSettingsDao(jdbc));
-  }
-
-  private static DatabaseDialect loadDialect() {
-    List<DatabaseDialect> dialects = ServiceLoader.load(DatabaseDialect.class).stream()
-        .map(ServiceLoader.Provider::get)
-        .toList();
-    if (dialects.size() != 1) {
-      throw new IllegalStateException(
-          "Expected exactly one DatabaseDialect provider, found " + dialects.size());
-    }
-    return dialects.getFirst();
   }
 
   private record DefaultPersistenceStores(

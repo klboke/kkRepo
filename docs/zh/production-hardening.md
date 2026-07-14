@@ -7,11 +7,11 @@
 推荐生产基线：
 
 - 至少两个 kkrepo 副本，前面有负载均衡。
-- 独立 MySQL 8.0 实例或托管 MySQL 服务。
+- 独立 MySQL 8.0 或 PostgreSQL 12+ 实例/托管服务；生产使用仍在维护期内的 PostgreSQL 版本。
 - OSS/S3 兼容 blob 存储。
 - 在负载均衡或反向代理层终止 HTTPS。
 - 管理端口只暴露给可信监控和运维网络。
-- 定期备份 MySQL 和 blob storage。
+- 定期备份数据库和 blob storage。
 
 不要把 Docker Compose quickstart 配置直接用于公网可访问的生产部署。
 
@@ -33,12 +33,12 @@ KKREPO_API_KEY_PAYLOAD_SECRET=<strong-random-string>
 
 写入数据后不要随意轮换这些密钥。如确需轮换，应设计并测试受控的重新加密流程。
 
-## MySQL
+## 关系数据库
 
-使用外部 MySQL 实例：
+使用外部 MySQL 或 PostgreSQL 实例，通过 `KKREPO_DATABASE_TYPE` 明确选择，并让所有副本使用同一个后端：
 
-- MySQL 8.0 或兼容托管服务。
-- 数据库字符集使用 `utf8mb4`。
+- MySQL 8.0 或 PostgreSQL 12+，或兼容托管服务。PostgreSQL 12 是兼容性下限，不是生产推荐版本。
+- MySQL 使用 `utf8mb4`；PostgreSQL 使用 UTF-8，默认使用 `public` schema，除非部署规范提供等价独立 schema。
 - 独立数据库和最小权限应用账号。
 - 自动备份，并演练过恢复。
 - 为所有副本和后台 worker 预留足够连接数。
@@ -52,7 +52,7 @@ KKREPO_HIKARI_MINIMUM_IDLE=10
 KKREPO_HIKARI_CONNECTION_TIMEOUT_MS=5000
 ```
 
-大规模迁移场景下，先提升 MySQL 能力，再提高迁移并发。
+大规模迁移场景下，先提升数据库能力，再提高迁移并发。
 
 ## Blob 存储
 
@@ -152,7 +152,7 @@ KKREPO_OUTBOUND_ALLOWED_HOSTS=
 起步建议：
 
 - kkrepo 副本：至少 2 CPU / 4 GB 内存。
-- MySQL：至少 2 CPU / 4 GB 内存，根据仓库数、包数量和迁移负载扩容。
+- 关系数据库：至少 2 CPU / 4 GB 内存，根据仓库数、包数量和迁移负载扩容。
 - Blob storage：容量和请求吞吐同时覆盖日常流量和迁移峰值。
 
 并发提升时调整 Tomcat：
@@ -189,7 +189,7 @@ KKREPO_SECURITY_AUTHORIZATION_CACHE_TTL_MINUTES=10
 KKREPO_CATALOG_CACHE_BROADCAST_BACKEND=mysql
 ```
 
-如果怀疑缓存问题，逐个重启副本，并通过 MySQL 支撑的状态验证行为。
+如果怀疑缓存问题，逐个重启副本，并通过共享数据库状态验证行为。
 
 ## 监控
 
@@ -206,7 +206,7 @@ KKREPO_CATALOG_CACHE_BROADCAST_BACKEND=mysql
 - 应用健康状态。
 - 仓库请求量、状态码和延迟。
 - 上传/下载错误。
-- MySQL 连接池和慢查询。
+- 数据库连接池、慢查询、锁等待和死锁。
 - Blob-storage 延迟和错误。
 - 迁移队列、失败 asset 和吞吐。
 - JVM 内存、GC、线程和文件句柄。
@@ -218,7 +218,7 @@ KKREPO_CATALOG_CACHE_BROADCAST_BACKEND=mysql
 升级前：
 
 - 阅读 `CHANGELOG.md`。
-- 备份 MySQL。
+- 备份所选关系数据库。
 - 确认 blob-storage 备份或 versioning 策略。
 - 在 staging 环境使用接近生产的数据形态测试新版本。
 - 确认 Flyway migration 符合预期。
@@ -232,7 +232,7 @@ KKREPO_CATALOG_CACHE_BROADCAST_BACKEND=mysql
 3. 滚动升级剩余副本。
 4. 保留上一版本 artifact/image 以便回滚。
 
-如果已经执行数据库 migration，回滚可能需要恢复数据库，而不仅仅是重新部署旧镜像。
+如果已经执行数据库 migration，回滚可能需要恢复数据库，而不仅仅是重新部署旧镜像。数据库专有恢复命令见[数据库后端](database-backends.md)。
 
 ## 安全披露和公开日志
 

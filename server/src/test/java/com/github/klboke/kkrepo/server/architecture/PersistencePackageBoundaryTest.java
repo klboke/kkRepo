@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
@@ -36,8 +37,17 @@ class PersistencePackageBoundaryTest {
           .forEach(sourceRoots::add);
     }
 
-    assertNoForbiddenImports(sourceRoots, importName ->
-        UPPER_LAYER_FORBIDDEN_IMPORTS.stream().anyMatch(importName::startsWith));
+    Set<Path> bootstrapConfiguration = Set.of(
+        root.resolve(
+            "server/src/main/java/com/github/klboke/kkrepo/server/config/DatabaseBackendConfiguration.java"),
+        root.resolve(
+            "server/src/test/java/com/github/klboke/kkrepo/server/config/DatabaseBackendConfigurationTest.java"),
+        root.resolve(
+            "server/src/test/java/com/github/klboke/kkrepo/server/config/DatabaseServerSmokeTest.java"));
+    assertNoForbiddenImports(
+        sourceRoots,
+        importName -> UPPER_LAYER_FORBIDDEN_IMPORTS.stream().anyMatch(importName::startsWith),
+        bootstrapConfiguration::contains);
   }
 
   @Test
@@ -111,6 +121,13 @@ class PersistencePackageBoundaryTest {
   private static void assertNoForbiddenImports(
       List<Path> sourceRoots,
       Predicate<String> forbidden) throws IOException {
+    assertNoForbiddenImports(sourceRoots, forbidden, file -> false);
+  }
+
+  private static void assertNoForbiddenImports(
+      List<Path> sourceRoots,
+      Predicate<String> forbidden,
+      Predicate<Path> allowedFile) throws IOException {
     List<String> violations = new ArrayList<>();
     for (Path sourceRoot : sourceRoots) {
       if (!Files.isDirectory(sourceRoot)) {
@@ -118,6 +135,9 @@ class PersistencePackageBoundaryTest {
       }
       try (Stream<Path> files = Files.walk(sourceRoot)) {
         for (Path file : files.filter(path -> path.toString().endsWith(".java")).toList()) {
+          if (allowedFile.test(file)) {
+            continue;
+          }
           int lineNumber = 0;
           for (String line : Files.readAllLines(file)) {
             lineNumber++;

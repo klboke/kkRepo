@@ -16,6 +16,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerTagRecor
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.HashColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcInserts;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcUpserts;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -272,26 +273,24 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
 
   @Transactional(propagation = Propagation.MANDATORY)
   public void upsertTag(DockerTagRecord record) {
-    jdbcTemplate.update("""
+    JdbcUpserts.updateThenInsert(
+        jdbcTemplate,
+        """
+        UPDATE docker_tag
+        SET manifest_id = ?, manifest_digest = ?, pushed_by = ?, pushed_by_ip = ?
+        WHERE repository_id = ? AND image_name_hash = ? AND tag_hash = ?
+        """,
+        new Object[]{record.manifestId(), record.manifestDigest(), record.pushedBy(),
+            record.pushedByIp(), record.repositoryId(), record.imageNameHash(), record.tagHash()},
+        """
         INSERT INTO docker_tag
           (repository_id, image_name, image_name_hash, tag, tag_hash, manifest_id,
            manifest_digest, pushed_by, pushed_by_ip)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE
-          manifest_id = VALUES(manifest_id),
-          manifest_digest = VALUES(manifest_digest),
-          pushed_by = VALUES(pushed_by),
-          pushed_by_ip = VALUES(pushed_by_ip)
         """,
-        record.repositoryId(),
-        record.imageName(),
-        record.imageNameHash(),
-        record.tag(),
-        record.tagHash(),
-        record.manifestId(),
-        record.manifestDigest(),
-        record.pushedBy(),
-        record.pushedByIp());
+        new Object[]{record.repositoryId(), record.imageName(), record.imageNameHash(), record.tag(),
+            record.tagHash(), record.manifestId(), record.manifestDigest(), record.pushedBy(),
+            record.pushedByIp()});
   }
 
   public List<String> listTags(long repositoryId, String imageName, String last, int limit) {
@@ -379,7 +378,7 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
     jdbcTemplate.update("DELETE FROM docker_tag WHERE manifest_id = ?", id);
     int deleted = jdbcTemplate.update("""
         UPDATE docker_manifest
-        SET deleted_at = COALESCE(deleted_at, NOW(3))
+        SET deleted_at = COALESCE(deleted_at, CURRENT_TIMESTAMP)
         WHERE id = ?
         """, id);
     return new DeletedManifest(deleted, manifest.get().assetId(), assetBlobId);
@@ -472,7 +471,6 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
               AND m.deleted_at IS NULL
               AND (
                 r.digest = %s
-                OR r.digest_hash = UNHEX(SHA2(%s, 256))
                 OR (
                   b.sha256 IS NOT NULL
                   AND r.digest = CONCAT('sha256:', b.sha256)
@@ -494,7 +492,7 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
           )
         ORDER BY a.id
         LIMIT ?
-        """.formatted(updatedBeforePredicate, storedDigest, storedDigest, storedDigest);
+        """.formatted(updatedBeforePredicate, storedDigest, storedDigest);
     return jdbcTemplate.queryForList(cleanupSql, Long.class, args.toArray())
         .stream()
         .findFirst()

@@ -33,6 +33,7 @@ services:
       app-data-perms:
         condition: service_completed_successfully
     environment:
+      KKREPO_DATABASE_TYPE: mysql
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/${KKREPO_MYSQL_DATABASE:-kkrepo}?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
       SPRING_DATASOURCE_USERNAME: ${KKREPO_MYSQL_USER:-kkrepo}
       SPRING_DATASOURCE_PASSWORD: ${KKREPO_MYSQL_PASSWORD:-kkrepo}

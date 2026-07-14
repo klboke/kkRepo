@@ -1,0 +1,8 @@
+kkRepo is configured for {{ .Values.database.type }} at {{ .Values.database.url }}.
+
+The chart expects these Secrets to exist before install:
+  database:   {{ .Values.database.existingSecret }} / {{ .Values.database.passwordKey }}
+  encryption: {{ .Values.encryption.existingSecret }} / {{ .Values.encryption.credentialSecretKey }}, {{ .Values.encryption.apiKeyPayloadSecretKey }}
+
+Access the service inside the cluster at:
+  http://{{ include "kkrepo.fullname" . }}:{{ .Values.service.httpPort }}/

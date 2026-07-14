@@ -11,7 +11,16 @@ The validation classes listed below are black-box protocol checks. The `client-e
 - Keep the Nexus `/repository/<repo>/...` URL layout for existing client configuration.
 - Match official protocol behavior and Nexus client-visible behavior before adding project-specific behavior.
 - Prefer compatibility tests against a real Nexus reference instance for externally visible behavior.
-- Keep stateful behavior multi-replica safe: MySQL is the source of truth for metadata and coordination; blob content lives in OSS/S3/File storage; in-process caches must be rebuildable.
+- Keep stateful behavior multi-replica safe: the selected MySQL/PostgreSQL database is the source of truth for metadata and coordination; blob content lives in OSS/S3/File storage; in-process caches must be rebuildable.
+
+## Database Backend Matrix
+
+| Backend | Runtime | Flyway | Shared persistence contracts | Two-instance server smoke |
+| --- | --- | --- | --- | --- |
+| MySQL 8 | Supported; default | Immutable V1-V29 history, paired migrations from V30 | Real MySQL container | Fresh/repeat startup and cross-node session |
+| PostgreSQL 12+ | Supported; use a maintained release in production | Equivalent V29 baseline, paired migrations from V30 | PostgreSQL 12 minimum-version contract plus PostgreSQL 16 E2E | Fresh/repeat startup and cross-node session on PostgreSQL 12 |
+
+Database choice does not change repository protocol behavior. CI runs the same JDBC API contract against both engines; see [Database Backends](database-backends.md).
 
 ## Repository Format Matrix
 

@@ -188,7 +188,7 @@ http://127.0.0.1:19090/browse/
 5. 将 `KKREPO_CREDENTIAL_SECRET` 和 `KKREPO_API_KEY_PAYLOAD_SECRET` 换成稳定的强随机字符串。
 6. 对外提供统一域名，例如 `https://repo.example.com`，方便后续迁移和扩容。
 
-kkRepo 的一个重要设计点是面向多副本部署：session、权限、token、迁移状态等共享状态存储在 MySQL 中，进程内缓存只作为可重建的本地热缓存。这对生产环境的滚动升级和横向扩容比较友好。
+kkRepo 的一个重要设计点是面向多副本部署：session、权限、token、迁移状态等共享状态存储在 MySQL 或 PostgreSQL 中，进程内缓存只作为可重建的本地热缓存。这对生产环境的滚动升级和横向扩容比较友好。
 
 ## 七、总结
 

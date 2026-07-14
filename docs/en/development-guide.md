@@ -1,21 +1,21 @@
 # Development Guide
 
-This document is for local development, testing, and debugging. Project overview and user-facing introduction are in the root `README.md`; the database model is documented in [MySQL ER Design](mysql-er.md).
+This document is for local development, testing, and debugging. Project overview and user-facing introduction are in the root `README.md`; the database model is documented in [Database Schema](database-schema.md) and [MySQL ER Design](mysql-er.md).
 
 ## Prerequisites
 
 - JDK 25
 - Maven 3.9 or a compatible version
-- MySQL 8.0
+- MySQL 8.0 or PostgreSQL 12+
 - Optional: Docker, for building images or starting local dependencies
 
-The service requires MySQL and blob storage at runtime. During development, you can use the local File blob store. Use S3-compatible object storage such as MinIO, RustFS, Aliyun OSS, or AWS S3 only when validating object storage behavior.
+The service requires MySQL or PostgreSQL and blob storage at runtime. During development, you can use the local File blob store. Use S3-compatible object storage such as MinIO, RustFS, Aliyun OSS, or AWS S3 only when validating object storage behavior.
 
-Short-TTL performance cache uses in-process memory by default. HTTP sessions, authentication tickets, catalog broadcast, and cross-replica cache tokens use MySQL.
+Short-TTL performance cache uses in-process memory by default. HTTP sessions, authentication tickets, catalog broadcast, and cross-replica cache tokens use the shared database.
 
 ## Local Dependencies
 
-Local runtime requires at least MySQL. The blob store can use File blob store. If you need to validate S3-compatible object storage behavior, use these local defaults:
+Local runtime requires either MySQL or PostgreSQL. MySQL remains the default Compose service; the `postgresql` profile starts the alternative backend. The blob store can use File blob store. If you need to validate S3-compatible object storage behavior, use these local defaults:
 
 | Dependency | Default |
 | --- | --- |
@@ -37,11 +37,20 @@ docker compose -f docker-compose.dev.yml up -d
 docker compose -f docker-compose.dev.yml ps
 ```
 
+To develop against PostgreSQL instead of the default MySQL service:
+
+```bash
+docker compose -f docker-compose.dev.yml --profile postgresql up -d postgresql rustfs
+export KKREPO_DATABASE_TYPE=postgresql
+export SPRING_DATASOURCE_URL='jdbc:postgresql://127.0.0.1:15432/kkrepo'
+```
+
 This starts:
 
 | Service | Image | Local address | Description |
 | --- | --- | --- | --- |
 | MySQL | `mysql:8.0` | `127.0.0.1:13306` | Creates the `kkrepo` database and `kkrepo` user automatically |
+| PostgreSQL | `postgres:16` (default development image; runtime minimum is 12) | `127.0.0.1:15432` | Optional `postgresql` profile; creates the same database and user |
 | RustFS | `rustfs/rustfs:latest` | S3 API: `http://127.0.0.1:9000`; Console: `http://127.0.0.1:9001` | S3-compatible object storage for validating OSS/S3 blob store behavior |
 
 Local data directories:
@@ -187,7 +196,7 @@ java -Dapollo.meta=http://apollo-config:8080 -jar server/target/kkrepo-server-*.
 ## Implementation Constraints
 
 - Design and implementation must assume multi-replica deployment by default. State, cache, locks, background tasks, sessions, upload/delete, index rebuild, metadata, negative cache, and permission decisions must not rely only on a single JVM's in-process state.
-- In-process cache can only be node-local hot cache. It must be rebuildable, have TTL or clear invalidation conditions, and use MySQL, OSS/S3, shared TTL cache, marker queues, or other coordination mechanisms as the correctness source.
+- In-process cache can only be node-local hot cache. It must be rebuildable, have TTL or clear invalidation conditions, and use the shared database, OSS/S3, shared TTL cache, marker queues, or other coordination mechanisms as the correctness source.
 - Before implementing any repository format, check the official protocol and Nexus reference behavior.
 - Do not put protocol logic in controllers. Controllers should delegate to protocol adapters or service layers.
-- Large blobs are stored only in OSS/S3/File blob store. MySQL stores metadata, state, indexes, and references only.
+- Large blobs are stored only in OSS/S3/File blob store. The selected relational database stores metadata, state, indexes, and references only.

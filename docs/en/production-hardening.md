@@ -7,11 +7,11 @@ This checklist summarizes recommended production settings for kkrepo. It does no
 Recommended production baseline:
 
 - At least two kkrepo replicas behind a load balancer.
-- Independent MySQL 8.0 instance or managed MySQL service.
+- Independent MySQL 8.0 or PostgreSQL 12+ instance/managed service; use a PostgreSQL release that is still maintained in production.
 - OSS/S3-compatible blob storage.
 - HTTPS termination at a load balancer or reverse proxy.
 - Management port exposed only to trusted monitoring and operations networks.
-- Regular MySQL and blob-storage backups.
+- Regular database and blob-storage backups.
 
 Avoid using Docker Compose quickstart settings for externally reachable production deployments.
 
@@ -33,12 +33,12 @@ These secrets protect:
 
 Do not rotate them casually after data has been written. If rotation is needed, plan and test a controlled re-encryption process.
 
-## MySQL
+## Relational Database
 
-Use an external MySQL instance:
+Use an external MySQL or PostgreSQL instance. Select it explicitly with `KKREPO_DATABASE_TYPE` and keep every replica on the same backend:
 
-- MySQL 8.0 or compatible managed service.
-- `utf8mb4` database character set.
+- MySQL 8.0 or PostgreSQL 12+, or a compatible managed service. PostgreSQL 12 is the compatibility floor, not the recommended production release.
+- For MySQL, use `utf8mb4`. For PostgreSQL, use UTF-8 and the default `public` schema unless deployment policy provides an equivalent dedicated schema.
 - Dedicated database and least-privilege application account.
 - Automated backups and tested restore.
 - Sufficient connection capacity for every replica and background worker.
@@ -52,7 +52,7 @@ KKREPO_HIKARI_MINIMUM_IDLE=10
 KKREPO_HIKARI_CONNECTION_TIMEOUT_MS=5000
 ```
 
-For large migrations, increase MySQL capacity before increasing migration concurrency.
+For large migrations, increase database capacity before increasing migration concurrency.
 
 ## Blob Storage
 
@@ -152,7 +152,7 @@ KKREPO_OUTBOUND_ALLOWED_HOSTS=
 Starting point:
 
 - kkrepo replica: at least 2 CPU / 4 GB memory.
-- MySQL: at least 2 CPU / 4 GB memory, scaled by repository count, package count, and migration workload.
+- Relational database: at least 2 CPU / 4 GB memory, scaled by repository count, package count, and migration workload.
 - Blob storage: capacity and request throughput sized for both daily traffic and migration bursts.
 
 Tune Tomcat when concurrency grows:
@@ -189,7 +189,7 @@ KKREPO_SECURITY_AUTHORIZATION_CACHE_TTL_MINUTES=10
 KKREPO_CATALOG_CACHE_BROADCAST_BACKEND=mysql
 ```
 
-If cache issues are suspected, restart one replica at a time and verify behavior through MySQL-backed state.
+If cache issues are suspected, restart one replica at a time and verify behavior through shared database state.
 
 ## Monitoring
 
@@ -206,7 +206,7 @@ Monitor:
 - Application health.
 - Repository request rate, status, and latency.
 - Upload/download errors.
-- MySQL pool usage and slow queries.
+- Database pool usage, slow queries, lock waits, and deadlocks.
 - Blob-storage latency and errors.
 - Migration queue size, failed assets, and throughput.
 - JVM memory, GC, threads, and file descriptors.
@@ -218,7 +218,7 @@ See [Monitoring And Observability Guide](monitoring-observability-guide.md).
 Before upgrading:
 
 - Read `CHANGELOG.md`.
-- Back up MySQL.
+- Back up the selected relational database.
 - Confirm blob-storage backup or versioning posture.
 - Test the new version in a staging environment using production-like data shape.
 - Verify Flyway migrations.
@@ -232,7 +232,7 @@ Recommended rollout:
 3. Roll through remaining replicas.
 4. Keep the previous artifact/image available for rollback.
 
-If database migrations have run, rollback may require database restore rather than only redeploying the old image.
+If database migrations have run, rollback may require database restore rather than only redeploying the old image. See [Database Backends](database-backends.md) for backend-specific recovery commands.
 
 ## Security Disclosure And Public Logs
 

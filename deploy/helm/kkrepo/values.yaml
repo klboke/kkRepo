@@ -1,0 +1,94 @@
+replicaCount: 2
+
+image:
+  repository: ghcr.io/klboke/kkrepo
+  pullPolicy: IfNotPresent
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 999
+  runAsGroup: 999
+  fsGroup: 999
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+  readOnlyRootFilesystem: true
+
+service:
+  type: ClusterIP
+  httpPort: 8080
+  managementPort: 8081
+
+database:
+  # Supported values: mysql, postgresql.
+  type: mysql
+  url: jdbc:mysql://mysql.example:3306/kkrepo?useUnicode=true&characterEncoding=utf8&useSSL=true&serverTimezone=UTC
+  username: kkrepo
+  existingSecret: kkrepo-database
+  passwordKey: password
+
+externalDatabase:
+  enabled: true
+
+# The chart intentionally does not install a database StatefulSet by default.
+embeddedDatabase:
+  enabled: false
+
+encryption:
+  existingSecret: kkrepo-encryption
+  credentialSecretKey: credential-secret
+  apiKeyPayloadSecretKey: api-key-payload-secret
+
+# Reference an existing Secret containing S3/OSS credentials and any extra app environment values.
+extraEnvFrom: []
+extraEnv: []
+
+blobStorage:
+  file:
+    enabled: false
+    # File storage is safe with replicas >1 only on a strong-consistency ReadWriteMany volume.
+    existingClaim: ""
+    mountPath: /var/lib/kkrepo/blobs
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    memory: 2Gi
+
+startupProbe:
+  failureThreshold: 60
+  periodSeconds: 5
+readinessProbe:
+  periodSeconds: 10
+  timeoutSeconds: 3
+livenessProbe:
+  periodSeconds: 20
+  timeoutSeconds: 3
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+
+terminationGracePeriodSeconds: 45

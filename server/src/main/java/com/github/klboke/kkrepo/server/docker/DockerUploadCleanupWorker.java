@@ -25,7 +25,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 /**
  * Cleans Docker Registry V2 upload staging state from durable storage.
  *
- * <p>Upload sessions and chunk rows are MySQL truth; staged chunk bytes live in the repository's
+ * <p>Upload sessions and chunk rows are shared-database truth; staged chunk bytes live in the repository's
  * shared blob store. Multiple replicas can run this worker concurrently because terminal sessions
  * are claimed with {@code FOR UPDATE SKIP LOCKED} and a short lease before chunk object deletion.
  */

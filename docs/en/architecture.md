@@ -1,6 +1,6 @@
 # Architecture
 
-kkrepo is a Nexus-compatible artifact repository built around a MySQL-first metadata model, OSS/S3-first blob storage, and multi-replica-safe runtime behavior.
+kkrepo is a Nexus-compatible artifact repository built around a shared MySQL/PostgreSQL metadata model, OSS/S3-first blob storage, and multi-replica-safe runtime behavior.
 
 The goal is not to copy Nexus internals. kkrepo keeps client-visible protocol behavior, permissions, and `/repository/<repo>/...` URLs compatible while avoiding OrientDB, embedded Elasticsearch, Karaf, OSGi, and local-only blob state as production requirements.
 
@@ -21,7 +21,7 @@ kkrepo replicas
         |
         | metadata, users, permissions, sessions, locks, migration state
         v
-      MySQL
+ MySQL 8 / PostgreSQL 12+
         |
         | blob references, checksums, object keys
         v
@@ -49,10 +49,10 @@ The second shape is used on repository-level Docker connector ports, where the l
 
 The server flow is:
 
-1. `RepositoryContentController` resolves `<repo>` from MySQL-backed repository metadata.
+1. `RepositoryContentController` resolves `<repo>` from shared relational repository metadata.
 2. Security filters authenticate the subject and check repository permissions.
 3. The server dispatches to the protocol implementation based on repository format and type.
-4. Hosted repositories read/write assets and metadata through MySQL transactions and blob storage.
+4. Hosted repositories read/write assets and metadata through relational transactions and blob storage.
 5. Proxy repositories fetch upstream content, persist cacheable assets, and use negative cache where safe.
 6. Group repositories resolve members in configured order and cache rebuildable member-hit decisions.
 7. Responses are streamed from blob storage or generated metadata assets.
@@ -83,7 +83,9 @@ Admin UI and Browse UI are served by the Spring Boot service as static assets:
 | `protocol-nuget` | NuGet path helpers |
 | `protocol-rubygems` | RubyGems metadata helpers |
 | `protocol-yum` | Yum/RPM metadata helpers |
-| `persistence-mysql` | MySQL DAOs, models, JSON/enum/hash helpers |
+| `persistence-jdbc` | Shared JDBC DAOs and database-dialect contracts |
+| `persistence-mysql` | MySQL dialect, driver, migrations, and contract suite |
+| `persistence-postgresql` | PostgreSQL dialect, driver, migrations, and contract suite |
 | `migration-nexus` | Nexus metadata and security migration support |
 | `server` | Spring Boot runtime, controllers, services, filters, workers |
 | `admin-ui` | Static admin console resources |
@@ -94,7 +96,7 @@ Protocol logic should live in services and protocol modules, not in controllers.
 
 ## Data Ownership
 
-MySQL stores:
+The selected relational database stores:
 
 - Repository definitions and group membership.
 - Components, assets, browse nodes, and search indexes.
@@ -109,7 +111,7 @@ Blob storage stores:
 - Cached upstream artifacts.
 - Generated or migrated blob objects.
 
-MySQL stores references to blobs, not large blob payloads.
+The database stores references to blobs, not large blob payloads.
 
 ## Blob Storage
 
@@ -120,7 +122,7 @@ Blob writes follow this shape:
 1. Stream request or upstream response to a temporary location.
 2. Calculate checksums and size.
 3. Persist or reuse a blob object in the selected blob store.
-4. Write MySQL asset/blob metadata in a transaction.
+4. Write asset/blob metadata in a database transaction.
 5. Clean up temporary files or abandoned staging objects.
 
 Blob metadata and object references should be transactionally visible only after the content is safely stored.
@@ -130,11 +132,11 @@ Blob metadata and object references should be transactionally visible only after
 kkrepo assumes multiple application replicas by default:
 
 - HTTP sessions use Spring Session JDBC.
-- Authentication tickets live in MySQL and expire quickly.
-- Repository, security, and blob-store catalog changes bump MySQL-backed cache watermarks.
+- Authentication tickets live in the shared database and expire quickly.
+- Repository, security, and blob-store catalog changes bump database-backed cache watermarks.
 - Node-local caches are rebuildable and have TTL or explicit invalidation rules.
-- Background workers use MySQL claims, markers, or cursors rather than local-only queues.
-- Migration progress and retry state are persisted in MySQL.
+- Background workers use database claims, markers, or cursors rather than local-only queues.
+- Migration progress and retry state are persisted in the database.
 
 If a replica restarts or loses local cache, correctness should remain intact. The worst acceptable result is extra database or object-storage reads while caches warm up.
 
@@ -151,7 +153,7 @@ The default cache backend is in-process memory. Caches are used for performance,
 - Security authorization cache.
 - Catalog snapshots for repository/security/blob-store metadata.
 
-Cache invalidation relies on TTLs and MySQL version watermarks. Operators can tune cache sizes and TTLs with `KKREPO_*` environment variables.
+Cache invalidation relies on TTLs and database version watermarks. Operators can tune cache sizes and TTLs with `KKREPO_*` environment variables.
 
 ## Security Architecture
 
@@ -174,9 +176,11 @@ Migration is split into two major surfaces:
 - `Nexus Metadata`: preflight and migration of source metadata such as users, roles, privileges, blob stores, and repositories.
 - `Nexus Repository Data`: repository asset discovery and package/blob migration.
 
-Metadata migration may use source Nexus Script REST API when regular REST APIs cannot expose required data. Repository data migration records source assets in MySQL first, then workers migrate blobs with retry and checksum validation.
+Metadata migration may use source Nexus Script REST API when regular REST APIs cannot expose required data. Repository data migration records source assets in the shared database first, then workers migrate blobs with retry and checksum validation.
 
 See [Migration Playbook](migration-playbook.md).
+
+Database selection, migrations, and operational constraints are documented in [Database Backends](database-backends.md) and [Database Schema](database-schema.md).
 
 ## Observability
 

@@ -5,6 +5,7 @@ import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRow
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao.BrowseChild;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.HashColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcUpserts;
 import java.nio.ByteBuffer;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -76,19 +77,30 @@ public class JdbcBrowseNodeDao implements com.github.klboke.kkrepo.persistence.j
       Long componentForRow = leaf ? componentId : null;
       ExistingNode existing = existingByHash.get(ByteBuffer.wrap(level.pathHash));
       if (existing == null) {
-        jdbcTemplate.update("""
+        Object[] updateArguments = {
+            parentId, assetForRow != null, componentForRow, assetForRow != null, assetForRow,
+            containsAsset,
+            repositoryId, level.pathHash
+        };
+        JdbcUpserts.updateThenInsert(
+            jdbcTemplate,
+            """
+            UPDATE browse_node
+            SET parent_id = COALESCE(parent_id, ?),
+                component_id = CASE WHEN ? THEN ? ELSE component_id END,
+                asset_id = CASE WHEN ? THEN ? ELSE asset_id END,
+                has_asset_subtree = CASE WHEN ? THEN true ELSE has_asset_subtree END
+            WHERE repository_id = ? AND path_hash = ?
+            """,
+            updateArguments,
+            """
             INSERT INTO browse_node
               (repository_id, parent_id, component_id, asset_id, path, path_hash,
                display_name, depth, has_asset_subtree)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON DUPLICATE KEY UPDATE
-              parent_id = COALESCE(parent_id, VALUES(parent_id)),
-              component_id = IF(VALUES(asset_id) IS NOT NULL, VALUES(component_id), component_id),
-              asset_id = IF(VALUES(asset_id) IS NOT NULL, VALUES(asset_id), asset_id),
-              has_asset_subtree = IF(VALUES(has_asset_subtree) = 1, 1, has_asset_subtree)
             """,
-            repositoryId, parentId, componentForRow, assetForRow,
-            level.path, level.pathHash, level.displayName, level.depth, containsAsset);
+            new Object[]{repositoryId, parentId, componentForRow, assetForRow, level.path,
+                level.pathHash, level.displayName, level.depth, containsAsset});
         parentId = findIdByPathHash(repositoryId, level.pathHash);
       } else {
         if (leaf && (assetForRow != null || componentForRow != null)) {
@@ -98,8 +110,8 @@ public class JdbcBrowseNodeDao implements com.github.klboke.kkrepo.persistence.j
         }
         if (containsAsset && !existing.hasAssetSubtree()) {
           jdbcTemplate.update(
-              "UPDATE browse_node SET has_asset_subtree = 1 WHERE id = ? AND has_asset_subtree = 0",
-              existing.id());
+              "UPDATE browse_node SET has_asset_subtree = ? WHERE id = ? AND has_asset_subtree = ?",
+              true, existing.id(), false);
         }
         parentId = existing.id();
       }
@@ -262,7 +274,7 @@ public class JdbcBrowseNodeDao implements com.github.klboke.kkrepo.persistence.j
         child_stats AS (
           SELECT child_node.parent_id,
                  COUNT(child_node.id) AS child_count,
-                 SUM(CASE WHEN child_node.has_asset_subtree = 1 THEN 1 ELSE 0 END) AS child_subtree_count
+                 SUM(CASE WHEN child_node.has_asset_subtree THEN 1 ELSE 0 END) AS child_subtree_count
           FROM browse_node child_node
           JOIN ancestors ON child_node.parent_id = ancestors.id
           GROUP BY child_node.parent_id

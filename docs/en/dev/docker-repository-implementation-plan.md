@@ -538,7 +538,7 @@ Acceptance:
 ### M2: Hosted Pull/Push Core Loop
 
 - Add Docker Flyway tables and DAO classes.
-- Implement `DockerUploadService`, with all session/chunk state stored in MySQL/OSS staging.
+- Implement `DockerUploadService`, with all session/chunk state stored in the selected shared database and OSS staging.
 - Implement blob HEAD/GET/POST/PATCH/PUT/DELETE.
 - Implement manifest PUT/GET/HEAD.
 - Implement tag list and tag delete.

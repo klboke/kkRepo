@@ -5,25 +5,27 @@ import com.github.klboke.kkrepo.persistence.jdbc.spi.CoordinationPersistenceDial
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseType;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.JsonPersistenceDialect;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.MigrationPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.SearchPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.SecurityPersistenceDialect;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
 import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcOperations;
-import org.springframework.stereotype.Component;
 
 /** MySQL 8 implementation of the shared persistence dialect contracts. */
-@Component
 public final class MySqlDatabaseDialect implements DatabaseDialect {
   private final MySqlJsonPersistenceDialect json = new MySqlJsonPersistenceDialect();
   private final ComponentPersistenceDialect components = new MySqlComponentPersistenceDialect(json);
   private final CoordinationPersistenceDialect coordination = new MySqlCoordinationPersistenceDialect();
   private final SearchPersistenceDialect search = new MySqlSearchPersistenceDialect();
   private final SecurityPersistenceDialect security = new MySqlSecurityPersistenceDialect(json);
+  private final MigrationPersistenceDialect migrations =
+      new MySqlMigrationPersistenceDialect(json);
 
   @Override
   public DatabaseType type() {
@@ -53,6 +55,11 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
   @Override
   public SecurityPersistenceDialect security() {
     return security;
+  }
+
+  @Override
+  public MigrationPersistenceDialect migrations() {
+    return migrations;
   }
 
   private static final class MySqlComponentPersistenceDialect
@@ -291,6 +298,88 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
           INSERT IGNORE INTO security_role_inheritance (role_id, child_role_id)
           VALUES (?, ?)
           """, roleId, childRoleId);
+    }
+  }
+
+  private static final class MySqlMigrationPersistenceDialect
+      implements MigrationPersistenceDialect {
+    private static final String UPSERT_DISCOVERED_ASSET_SQL = """
+        INSERT INTO repository_data_migration_asset
+          (repository_job_id, source_asset_id, source_component_id, source_path, source_path_hash,
+           format, namespace, name, version, asset_kind, content_type, size, source_blob_ref,
+           source_last_updated_at, source_last_downloaded_at, source_blob_created_at,
+           source_blob_updated_at, source_created_by, source_created_by_ip, status,
+           migrated_at, target_component_id, target_asset_id, target_asset_blob_id, metadata_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          source_asset_id = VALUES(source_asset_id),
+          source_component_id = VALUES(source_component_id),
+          format = VALUES(format),
+          namespace = VALUES(namespace),
+          name = VALUES(name),
+          version = VALUES(version),
+          asset_kind = VALUES(asset_kind),
+          content_type = VALUES(content_type),
+          size = VALUES(size),
+          source_blob_ref = VALUES(source_blob_ref),
+          source_last_updated_at = VALUES(source_last_updated_at),
+          source_last_downloaded_at = VALUES(source_last_downloaded_at),
+          source_blob_created_at = VALUES(source_blob_created_at),
+          source_blob_updated_at = VALUES(source_blob_updated_at),
+          source_created_by = VALUES(source_created_by),
+          source_created_by_ip = VALUES(source_created_by_ip),
+          status = IF(status = 'migrated', status, VALUES(status)),
+          attempts = IF(status = 'migrated' OR VALUES(status) = 'migrated', attempts, 0),
+          claimed_at = IF(status = 'migrated' OR VALUES(status) = 'migrated', claimed_at, NULL),
+          migrated_at = IF(status = 'migrated', migrated_at, VALUES(migrated_at)),
+          target_component_id = IF(status = 'migrated' AND target_component_id IS NOT NULL,
+              target_component_id, VALUES(target_component_id)),
+          target_asset_id = IF(status = 'migrated' AND target_asset_id IS NOT NULL,
+              target_asset_id, VALUES(target_asset_id)),
+          target_asset_blob_id = IF(status = 'migrated' AND target_asset_blob_id IS NOT NULL,
+              target_asset_blob_id, VALUES(target_asset_blob_id)),
+          last_error = IF(status = 'migrated', last_error, NULL),
+          metadata_json = VALUES(metadata_json)
+        """;
+
+    private final JsonPersistenceDialect json;
+
+    private MySqlMigrationPersistenceDialect(JsonPersistenceDialect json) {
+      this.json = json;
+    }
+
+    @Override
+    public void upsertDiscoveredAssets(JdbcOperations jdbc, List<DiscoveredAsset> assets) {
+      jdbc.batchUpdate(UPSERT_DISCOVERED_ASSET_SQL, assets, Math.min(assets.size(), 500),
+          (statement, asset) -> bind(statement, asset));
+    }
+
+    private void bind(PreparedStatement statement, DiscoveredAsset asset) throws SQLException {
+      statement.setLong(1, asset.repositoryJobId());
+      statement.setString(2, asset.sourceAssetId());
+      statement.setString(3, asset.sourceComponentId());
+      statement.setString(4, asset.sourcePath());
+      statement.setBytes(5, asset.sourcePathHash());
+      statement.setString(6, asset.format());
+      statement.setString(7, asset.namespace());
+      statement.setString(8, asset.name());
+      statement.setString(9, asset.version());
+      statement.setString(10, asset.assetKind());
+      statement.setString(11, asset.contentType());
+      statement.setObject(12, asset.size(), Types.BIGINT);
+      statement.setString(13, asset.sourceBlobRef());
+      statement.setTimestamp(14, asset.sourceLastUpdatedAt());
+      statement.setTimestamp(15, asset.sourceLastDownloadedAt());
+      statement.setTimestamp(16, asset.sourceBlobCreatedAt());
+      statement.setTimestamp(17, asset.sourceBlobUpdatedAt());
+      statement.setString(18, asset.sourceCreatedBy());
+      statement.setString(19, asset.sourceCreatedByIp());
+      statement.setString(20, asset.status());
+      statement.setTimestamp(21, asset.migratedAt());
+      statement.setObject(22, asset.targetComponentId(), Types.BIGINT);
+      statement.setObject(23, asset.targetAssetId(), Types.BIGINT);
+      statement.setObject(24, asset.targetAssetBlobId(), Types.BIGINT);
+      json.bind(statement, 25, asset.metadataJson());
     }
   }
 }

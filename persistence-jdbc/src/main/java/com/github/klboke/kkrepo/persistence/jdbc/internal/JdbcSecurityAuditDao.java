@@ -95,17 +95,17 @@ public class JdbcSecurityAuditDao implements com.github.klboke.kkrepo.persistenc
       String pattern = likePattern(query.query());
       where.append("""
            AND (
-             LOWER(COALESCE(actor_source, '')) LIKE ? ESCAPE '\\\\'
-             OR LOWER(COALESCE(actor_user_id, '')) LIKE ? ESCAPE '\\\\'
-             OR LOWER(COALESCE(actor_realm_id, '')) LIKE ? ESCAPE '\\\\'
-             OR COALESCE(CAST(actor_api_key_id AS CHAR), '') LIKE ? ESCAPE '\\\\'
-             OR LOWER(COALESCE(remote_addr, '')) LIKE ? ESCAPE '\\\\'
-             OR LOWER(method) LIKE ? ESCAPE '\\\\'
-             OR LOWER(path) LIKE ? ESCAPE '\\\\'
-             OR LOWER(COALESCE(permission, '')) LIKE ? ESCAPE '\\\\'
-             OR COALESCE(CAST(status AS CHAR), '') LIKE ? ESCAPE '\\\\'
-             OR LOWER(outcome) LIKE ? ESCAPE '\\\\'
-             OR LOWER(COALESCE(CAST(details_json AS CHAR), '')) LIKE ? ESCAPE '\\\\'
+             LOWER(COALESCE(actor_source, '')) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(actor_user_id, '')) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(actor_realm_id, '')) LIKE ? ESCAPE '!'
+             OR COALESCE(CONCAT('', actor_api_key_id), '') LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(remote_addr, '')) LIKE ? ESCAPE '!'
+             OR LOWER(method) LIKE ? ESCAPE '!'
+             OR LOWER(path) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(permission, '')) LIKE ? ESCAPE '!'
+             OR COALESCE(CONCAT('', status), '') LIKE ? ESCAPE '!'
+             OR LOWER(outcome) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(CONCAT('', details_json), '')) LIKE ? ESCAPE '!'
            )
           """);
       for (int i = 0; i < 11; i++) {
@@ -119,7 +119,7 @@ public class JdbcSecurityAuditDao implements com.github.klboke.kkrepo.persistenc
     if (value == null) {
       return;
     }
-    where.append(" AND LOWER(").append(column).append(") LIKE ? ESCAPE '\\\\'");
+    where.append(" AND LOWER(").append(column).append(") LIKE ? ESCAPE '!'");
     args.add(likePattern(value));
   }
 
@@ -134,9 +134,9 @@ public class JdbcSecurityAuditDao implements com.github.klboke.kkrepo.persistenc
   private static String likePattern(String value) {
     String lower = value.toLowerCase(Locale.ROOT);
     return "%" + lower
-        .replace("\\", "\\\\")
-        .replace("%", "\\%")
-        .replace("_", "\\_") + "%";
+        .replace("!", "!!")
+        .replace("%", "!%")
+        .replace("_", "!_") + "%";
   }
 
   private static String blankToNull(String value) {
@@ -152,7 +152,7 @@ public class JdbcSecurityAuditDao implements com.github.klboke.kkrepo.persistenc
     public AuditLogEntry mapRow(ResultSet rs, int rowNum) throws SQLException {
       return new AuditLogEntry(
           rs.getLong("id"),
-          rs.getObject("occurred_at", LocalDateTime.class),
+          rs.getTimestamp("occurred_at").toLocalDateTime(),
           rs.getString("actor_source"),
           rs.getString("actor_user_id"),
           rs.getString("actor_realm_id"),

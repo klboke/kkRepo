@@ -295,7 +295,7 @@ public class JdbcComponentDao implements com.github.klboke.kkrepo.persistence.jd
         UPDATE component SET last_updated_at = ? WHERE id = ?
         """, nullableTimestamp(when), componentId);
     jdbcTemplate.update("""
-        UPDATE component_search SET refreshed_at = NOW(3) WHERE component_id = ?
+        UPDATE component_search SET refreshed_at = CURRENT_TIMESTAMP WHERE component_id = ?
         """, componentId);
     return updated;
   }

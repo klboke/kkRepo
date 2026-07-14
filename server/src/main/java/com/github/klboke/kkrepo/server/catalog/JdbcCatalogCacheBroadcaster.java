@@ -8,16 +8,13 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 @Component
-@ConditionalOnProperty(
-    prefix = "kkrepo.catalog-cache",
-    name = "broadcast-backend",
-    havingValue = "mysql",
-    matchIfMissing = true)
+@ConditionalOnExpression("'${kkrepo.catalog-cache.broadcast-backend:jdbc}' == 'jdbc' "
+    + "|| '${kkrepo.catalog-cache.broadcast-backend:jdbc}' == 'mysql'")
 class JdbcCatalogCacheBroadcaster implements CatalogCacheBroadcaster {
   private static final Logger log = LoggerFactory.getLogger(JdbcCatalogCacheBroadcaster.class);
   private static final String NAME_PREFIX = "catalog:";
@@ -38,7 +35,7 @@ class JdbcCatalogCacheBroadcaster implements CatalogCacheBroadcaster {
     }
     listeners.computeIfAbsent(name, ignored -> new CopyOnWriteArrayList<>()).add(refreshListener);
     lastSeen.putIfAbsent(name, watermark.current(name));
-    log.debug("Subscribed {} catalog-cache refresh listener to MySQL watermark", catalogName);
+    log.debug("Subscribed {} catalog-cache refresh listener to JDBC watermark", catalogName);
   }
 
   @Override
@@ -49,11 +46,11 @@ class JdbcCatalogCacheBroadcaster implements CatalogCacheBroadcaster {
   }
 
   @Scheduled(
-      fixedDelayString = "${kkrepo.catalog-cache.mysql.poll-delay-ms:500}",
+      fixedDelayString = "${kkrepo.catalog-cache.jdbc.poll-delay-ms:500}",
       initialDelayString =
-          "#{${kkrepo.catalog-cache.mysql.initial-delay-ms:500} "
+          "#{${kkrepo.catalog-cache.jdbc.initial-delay-ms:500} "
               + "+ T(java.util.concurrent.ThreadLocalRandom).current().nextLong("
-              + "T(java.lang.Math).max(0, ${kkrepo.catalog-cache.mysql.initial-jitter-ms:100}) + 1)}")
+              + "T(java.lang.Math).max(0, ${kkrepo.catalog-cache.jdbc.initial-jitter-ms:100}) + 1)}")
   public void poll() {
     if (listeners.isEmpty()) {
       return;
@@ -62,7 +59,7 @@ class JdbcCatalogCacheBroadcaster implements CatalogCacheBroadcaster {
     try {
       versions = watermark.currentAll();
     } catch (RuntimeException e) {
-      log.warn("Failed polling catalog cache MySQL watermarks", e);
+      log.warn("Failed polling catalog cache JDBC watermarks", e);
       return;
     }
     versions.forEach(this::refreshIfChanged);
@@ -86,7 +83,7 @@ class JdbcCatalogCacheBroadcaster implements CatalogCacheBroadcaster {
       }
       lastSeen.put(name, version);
     } catch (RuntimeException e) {
-      log.warn("Failed refreshing {} catalog after MySQL watermark advanced to {}; will retry",
+      log.warn("Failed refreshing {} catalog after JDBC watermark advanced to {}; will retry",
           name.substring(NAME_PREFIX.length()), version, e);
     }
   }

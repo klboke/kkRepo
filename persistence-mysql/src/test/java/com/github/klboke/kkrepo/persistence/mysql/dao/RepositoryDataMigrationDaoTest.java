@@ -30,7 +30,8 @@ class RepositoryDataMigrationDaoTest {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
     RepositoryDataMigrationDao dao = new JdbcRepositoryDataMigrationDao(
         jdbcTemplate,
-        new JsonColumns(new ObjectMapper(), new MySqlDatabaseDialect()));
+        new JsonColumns(new ObjectMapper(), new MySqlDatabaseDialect()),
+        new MySqlDatabaseDialect());
     RepositoryDataMigrationAssetRecord asset = asset("com/acme/app/1.0/app-1.0.jar");
 
     dao.upsertDiscoveredAssets(
@@ -51,7 +52,8 @@ class RepositoryDataMigrationDaoTest {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
     RepositoryDataMigrationDao dao = new JdbcRepositoryDataMigrationDao(
         jdbcTemplate,
-        new JsonColumns(new ObjectMapper(), new MySqlDatabaseDialect()));
+        new JsonColumns(new ObjectMapper(), new MySqlDatabaseDialect()),
+        new MySqlDatabaseDialect());
     String path = "helm-hosted/charts/app-1.0.0.tgz";
 
     dao.upsertDiscoveredAssets(
@@ -69,7 +71,8 @@ class RepositoryDataMigrationDaoTest {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
     RepositoryDataMigrationDao dao = new JdbcRepositoryDataMigrationDao(
         jdbcTemplate,
-        new JsonColumns(new ObjectMapper(), new MySqlDatabaseDialect()));
+        new JsonColumns(new ObjectMapper(), new MySqlDatabaseDialect()),
+        new MySqlDatabaseDialect());
 
     dao.upsertDiscoveredAssets(100, List.of(asset("com/acme/app/1.0/app-1.0.pom")), Map.of());
 
