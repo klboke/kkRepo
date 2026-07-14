@@ -8,11 +8,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceStores;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PubUploadSessionDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDataMigrationDao;
-import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
@@ -37,6 +38,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
@@ -276,6 +278,31 @@ public abstract class PersistenceApiContract {
     List<Long> assetIds = invokeConcurrently(assetWrites, 5);
     assertEquals(1, new HashSet<>(assetIds).size());
     assertEquals(path, stores().assets().findAssetById(assetIds.getFirst()).orElseThrow().path());
+  }
+
+  @Test
+  void duplicateAssetInsertKeepsProtocolWriterTransactionUsable() throws Exception {
+    long blobStoreId = stores().blobStores().insert(blobStore("asset-conflict-store"));
+    long repositoryId = insertRepository(
+        "asset-conflict", RepositoryFormat.HELM, blobStoreId);
+    long blobId = stores().assets().insertBlob(
+        blob(blobStoreId, "helm/index.yaml", "helm-index-ref"));
+    String path = "index.yaml";
+    AssetRecord asset = new AssetRecord(
+        null, repositoryId, null, blobId, RepositoryFormat.HELM, path,
+        PersistenceHashes.pathHash(path),
+        path, "INDEX", "text/x-yaml", 42L, null,
+        Instant.parse("2026-07-13T10:00:00Z"), Map.of("generated", true));
+    CyclicBarrier transactionsReady = new CyclicBarrier(2);
+
+    List<Callable<AssetInsertResult>> writes = List.of(
+        () -> insertOrFindAssetInWriterTransaction(asset, transactionsReady),
+        () -> insertOrFindAssetInWriterTransaction(asset, transactionsReady));
+    List<AssetInsertResult> results = invokeConcurrently(writes, 2);
+
+    assertEquals(1, results.stream().filter(AssetInsertResult::inserted).count());
+    assertEquals(1, results.stream().map(AssetInsertResult::assetId).distinct().count());
+    assertEquals(path, stores().assets().findAssetByPath(repositoryId, path).orElseThrow().path());
   }
 
   @Test
@@ -658,6 +685,29 @@ public abstract class PersistenceApiContract {
       }
       return results;
     }
+  }
+
+  private AssetInsertResult insertOrFindAssetInWriterTransaction(
+      AssetRecord asset, CyclicBarrier transactionsReady) {
+    return inTransaction(() -> {
+      await(transactionsReady);
+      var inserted = stores().assets().tryInsertAsset(asset);
+      long assetId = inserted.isPresent()
+          ? inserted.getAsLong()
+          : stores().assets().findAssetByPath(asset.repositoryId(), asset.path()).orElseThrow().id();
+      return new AssetInsertResult(assetId, inserted.isPresent());
+    });
+  }
+
+  private static void await(CyclicBarrier barrier) {
+    try {
+      barrier.await();
+    } catch (Exception e) {
+      throw new AssertionError("Failed to coordinate duplicate asset insert race", e);
+    }
+  }
+
+  private record AssetInsertResult(long assetId, boolean inserted) {
   }
 
   private static ComponentRecord component(

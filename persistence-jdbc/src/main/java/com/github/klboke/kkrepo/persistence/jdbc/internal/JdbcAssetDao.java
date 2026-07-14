@@ -211,16 +211,12 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
   }
 
   public OptionalLong tryInsertAsset(AssetRecord record) {
-    try {
-      return OptionalLong.of(JdbcInserts.insert(jdbcTemplate, """
-          INSERT INTO asset
-            (repository_id, component_id, asset_blob_id, format, path, path_hash,
-             name, kind, content_type, size, last_downloaded_at, last_updated_at, attributes_json)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          """, ps -> setAssetInsertParameters(ps, record)));
-    } catch (DuplicateKeyException e) {
-      return OptionalLong.empty();
-    }
+    return JdbcInserts.tryInsert(jdbcTemplate, """
+        INSERT INTO asset
+          (repository_id, component_id, asset_blob_id, format, path, path_hash,
+           name, kind, content_type, size, last_downloaded_at, last_updated_at, attributes_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, ps -> setAssetInsertParameters(ps, record));
   }
 
   public Optional<AssetRecord> findAssetByPathHash(long repositoryId, byte[] pathHash) {
