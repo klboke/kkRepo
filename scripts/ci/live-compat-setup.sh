@@ -680,6 +680,33 @@ ensure_kkrepo_repositories() {
     "group":{"memberNames":["yum-hosted"]}
   }'
 
+  kkrepo_create_repo "terraform-hosted" '{
+    "name":"terraform-hosted",
+    "recipe":"terraform-hosted",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "hosted":{"writePolicy":"ALLOW_ONCE"}
+  }'
+
+  kkrepo_create_repo "terraform-proxy" '{
+    "name":"terraform-proxy",
+    "recipe":"terraform-proxy",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "proxy":{"remoteUrl":"https://registry.terraform.io/","contentMaxAgeMinutes":1440,"metadataMaxAgeMinutes":1440,"autoBlock":true}
+  }'
+
+  kkrepo_create_repo "terraform-group" '{
+    "name":"terraform-group",
+    "recipe":"terraform-group",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "group":{"memberNames":["terraform-hosted","terraform-proxy"]}
+  }'
+
   kkrepo_create_repo "docker-hosted" "{
     \"name\":\"docker-hosted\",
     \"recipe\":\"docker-hosted\",

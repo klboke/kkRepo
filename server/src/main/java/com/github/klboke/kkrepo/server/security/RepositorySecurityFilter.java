@@ -10,6 +10,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.pub.PubPath;
 import com.github.klboke.kkrepo.protocol.pub.PubPathParser;
+import com.github.klboke.kkrepo.protocol.terraform.TerraformPathParser;
 import com.github.klboke.kkrepo.server.npm.NpmTokenService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -32,7 +33,12 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   static final int FILTER_ORDER = SessionRepositoryFilter.DEFAULT_ORDER + 20;
   public static final String REPOSITORY_RECORD_ATTRIBUTE =
       RepositorySecurityFilter.class.getName() + ".REPOSITORY_RECORD";
+  public static final String NORMALIZED_REPOSITORY_PATH_ATTRIBUTE =
+      RepositorySecurityFilter.class.getName() + ".NORMALIZED_REPOSITORY_PATH";
+  public static final String TERRAFORM_URL_TOKEN_SEGMENT_ATTRIBUTE =
+      RepositorySecurityFilter.class.getName() + ".TERRAFORM_URL_TOKEN_SEGMENT";
   private static final PubPathParser PUB_PATH_PARSER = new PubPathParser();
+  private static final TerraformPathParser TERRAFORM_PATH_PARSER = new TerraformPathParser();
   private final SecurityAuthenticationService authenticationService;
   private final AccessDecisionService accessDecisionService;
   private final RepositoryDao repositoryDao;
@@ -70,6 +76,25 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       return;
     }
     request.setAttribute(REPOSITORY_RECORD_ATTRIBUTE, repository.get());
+    String terraformUrlToken = null;
+    if (repository.get().format() == RepositoryFormat.TERRAFORM) {
+      try {
+        String presentedPath = target.path();
+        TerraformPathParser.ParsedRequest parsed = TERRAFORM_PATH_PARSER.parseRequestPath(target.path());
+        target = target.withPath(parsed.canonicalPath());
+        terraformUrlToken = parsed.credentialSegment();
+        request.setAttribute(NORMALIZED_REPOSITORY_PATH_ATTRIBUTE, parsed.canonicalPath());
+        if (terraformUrlToken != null) {
+          String[] segments = presentedPath.split("/", 4);
+          if (segments.length >= 3) {
+            request.setAttribute(TERRAFORM_URL_TOKEN_SEGMENT_ATTRIBUTE, segments[2]);
+          }
+        }
+      } catch (IllegalArgumentException e) {
+        response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid Terraform repository path");
+        return;
+      }
+    }
     if (target.npmTokenRoute() && repository.get().format() == RepositoryFormat.NPM) {
       filterChain.doFilter(request, response);
       return;
@@ -78,12 +103,14 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       filterChain.doFilter(request, response);
       return;
     }
-    Optional<AuthenticatedSubject> authenticated = switch (repository.get().format()) {
+    Optional<AuthenticatedSubject> authenticated = terraformUrlToken == null
+        ? switch (repository.get().format()) {
       case CARGO -> authenticationService.authenticateCargo(request);
       case PUB -> authenticationService.authenticatePub(request);
       case RUBYGEMS -> authenticationService.authenticateRubygems(request);
       default -> authenticationService.authenticate(request);
-    };
+    }
+        : authenticationService.authenticateTerraformUrlToken(terraformUrlToken);
     if (authenticated.isEmpty()) {
       authenticated = target.readOnly(repository.get().format())
           ? authenticationService.authenticateAnonymous()
@@ -200,6 +227,9 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     if (format == RepositoryFormat.PUB && isPubPublishRoute(method, path)) {
       return List.of(PermissionAction.ADD);
     }
+    if (format == RepositoryFormat.TERRAFORM && "PUT".equalsIgnoreCase(method)) {
+      return List.of(PermissionAction.ADD, PermissionAction.EDIT);
+    }
     if (format == RepositoryFormat.CARGO && isCargoYankRoute(method, path)) {
       return List.of(PermissionAction.EDIT);
     }
@@ -308,6 +338,10 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     private boolean readOnly(RepositoryFormat format) {
       return actions(format).stream()
           .allMatch(action -> action == PermissionAction.BROWSE || action == PermissionAction.READ);
+    }
+
+    private RepositoryRequest withPath(String normalizedPath) {
+      return new RepositoryRequest(repository, normalizedPath, method, fixedActions, npmTokenRoute);
     }
 
   }

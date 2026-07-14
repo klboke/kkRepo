@@ -10,7 +10,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
-/** Guards the relocated legacy migration chain and validates repeat startup at V29. */
+/** Guards the frozen V1-V29 chain and validates repeat startup after newer migrations. */
 class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
   private static final Map<String, String> V29_SHA256 = checksums();
 
@@ -28,11 +28,11 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
   }
 
   @Test
-  void existingV29HistoryValidatesAndSecondMigrateHasNoPendingWork() {
+  void existingV29HistoryUpgradesAndSecondMigrateHasNoPendingWork() {
     assertTrue(flyway().validateWithResult().validationSuccessful);
     var result = flyway().migrate();
     assertEquals(0, result.migrationsExecuted);
-    assertEquals("29", flyway().info().current().getVersion().getVersion());
+    assertEquals("30", flyway().info().current().getVersion().getVersion());
   }
 
   private static String hex(byte[] bytes) {

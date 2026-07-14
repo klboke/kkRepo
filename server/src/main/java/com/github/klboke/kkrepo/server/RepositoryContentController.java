@@ -13,6 +13,8 @@ import com.github.klboke.kkrepo.protocol.npm.NpmPathParser;
 import com.github.klboke.kkrepo.protocol.nuget.NugetPaths;
 import com.github.klboke.kkrepo.protocol.pub.PubPath;
 import com.github.klboke.kkrepo.protocol.pub.PubPathParser;
+import com.github.klboke.kkrepo.protocol.terraform.TerraformPath;
+import com.github.klboke.kkrepo.protocol.terraform.TerraformPathParser;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.cargo.CargoExceptions;
 import com.github.klboke.kkrepo.server.cargo.CargoGroupService;
@@ -60,6 +62,8 @@ import com.github.klboke.kkrepo.server.raw.RawProxyService;
 import com.github.klboke.kkrepo.server.rubygems.RubygemsService;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
+import com.github.klboke.kkrepo.server.security.RepositorySecurityFilter;
+import com.github.klboke.kkrepo.server.terraform.TerraformService;
 import com.github.klboke.kkrepo.server.yum.YumService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -124,6 +128,7 @@ public class RepositoryContentController {
   private final ComposerHostedService composerHosted;
   private final ComposerProxyService composerProxy;
   private final ComposerGroupService composerGroup;
+  private final TerraformService terraform;
   private final NugetService nuget;
   private final RubygemsService rubygems;
   private final YumService yum;
@@ -137,6 +142,7 @@ public class RepositoryContentController {
   private final CargoPathParser cargoParser = new CargoPathParser();
   private final PubPathParser pubParser = new PubPathParser();
   private final ComposerPathParser composerParser = new ComposerPathParser();
+  private final TerraformPathParser terraformParser = new TerraformPathParser();
   private final MavenPartialFetchSupport partialFetch = new MavenPartialFetchSupport();
   private final PypiPartialFetchSupport pypiPartialFetch = new PypiPartialFetchSupport();
 
@@ -158,7 +164,8 @@ public class RepositoryContentController {
       YumService yum,
       RawHostedService rawHosted, RawProxyService rawProxy, RawGroupService rawGroup,
       ObjectMapper objectMapper,
-      ForwardedHeaderPolicy forwardedHeaderPolicy) {
+      ForwardedHeaderPolicy forwardedHeaderPolicy,
+      TerraformService terraform) {
     this.registry = registry;
     this.hosted = hosted;
     this.proxy = proxy;
@@ -185,6 +192,7 @@ public class RepositoryContentController {
     this.composerHosted = composerHosted;
     this.composerProxy = composerProxy;
     this.composerGroup = composerGroup;
+    this.terraform = terraform;
     this.nuget = nuget;
     this.rubygems = rubygems;
     this.yum = yum;
@@ -193,6 +201,29 @@ public class RepositoryContentController {
     this.rawGroup = rawGroup;
     this.objectMapper = objectMapper;
     this.forwardedHeaderPolicy = forwardedHeaderPolicy;
+  }
+
+  /** Backward-compatible full constructor retained for focused unit tests. */
+  public RepositoryContentController(RepositoryRuntimeRegistry registry,
+      MavenHostedService hosted, MavenProxyService proxy, MavenGroupService group,
+      GoProxyService goProxy, GoGroupService goGroup,
+      HelmHostedService helmHosted, HelmProxyService helmProxy,
+      MavenHtmlListingService htmlListing,
+      NpmHostedService npmHosted, NpmProxyService npmProxy, NpmGroupService npmGroup,
+      NpmSearchService npmSearch, NpmTokenService npmToken,
+      PypiHostedService pypiHosted, PypiProxyService pypiProxy, PypiGroupService pypiGroup,
+      CargoHostedService cargoHosted, CargoProxyService cargoProxy, CargoGroupService cargoGroup,
+      PubHostedService pubHosted, PubProxyService pubProxy, PubGroupService pubGroup,
+      ComposerHostedService composerHosted, ComposerProxyService composerProxy,
+      ComposerGroupService composerGroup,
+      NugetService nuget, RubygemsService rubygems, YumService yum,
+      RawHostedService rawHosted, RawProxyService rawProxy, RawGroupService rawGroup,
+      ObjectMapper objectMapper, ForwardedHeaderPolicy forwardedHeaderPolicy) {
+    this(registry, hosted, proxy, group, goProxy, goGroup, helmHosted, helmProxy, htmlListing,
+        npmHosted, npmProxy, npmGroup, npmSearch, npmToken, pypiHosted, pypiProxy, pypiGroup,
+        cargoHosted, cargoProxy, cargoGroup, pubHosted, pubProxy, pubGroup,
+        composerHosted, composerProxy, composerGroup, nuget, rubygems, yum,
+        rawHosted, rawProxy, rawGroup, objectMapper, forwardedHeaderPolicy, null);
   }
 
   /** Backward-compatible constructor used by focused controller unit tests. */
@@ -218,7 +249,7 @@ public class RepositoryContentController {
         cargoHosted, cargoProxy, cargoGroup,
         pubHosted, pubProxy, pubGroup,
         null, null, null,
-        nuget, rubygems, yum, rawHosted, rawProxy, rawGroup, objectMapper, forwardedHeaderPolicy);
+        nuget, rubygems, yum, rawHosted, rawProxy, rawGroup, objectMapper, forwardedHeaderPolicy, null);
   }
 
   @GetMapping("/**")
@@ -263,6 +294,12 @@ public class RepositoryContentController {
       ComposerPath path = composerParser.parse(extractRepositoryPath(name, request, true));
       MavenResponse resp = dispatchComposerGet(runtime, path, request, true);
       return toHeadResponse(resp, request);
+    }
+    if (runtime.format() == RepositoryFormat.TERRAFORM) {
+      TerraformPath path = terraformParser.parse(extractRepositoryPath(name, request, true));
+      return toHeadResponse(terraform.get(
+          runtime, path, repositoryBaseUrl(request, runtime.name()),
+          terraformUrlTokenSegment(request), true), request);
     }
     if (runtime.format() == RepositoryFormat.PYPI) {
       String raw = extractRepositoryPath(name, request, true);
@@ -355,6 +392,15 @@ public class RepositoryContentController {
       }
       return toByteArrayResponse(resp);
     }
+    if (runtime.format() == RepositoryFormat.TERRAFORM) {
+      TerraformPath path = terraformParser.parse(extractRepositoryPath(name, request, true));
+      MavenResponse resp;
+      try (InputStream body = request.getInputStream()) {
+        resp = terraform.put(runtime, path, body, contentType,
+            request.getHeader(HttpHeaders.CONTENT_DISPOSITION), userId, request.getRemoteAddr());
+      }
+      return ResponseEntity.status(resp.status()).build();
+    }
     if (runtime.format() == RepositoryFormat.NUGET) {
       String raw = extractRepositoryPath(name, request, true);
       MavenResponse resp;
@@ -438,6 +484,9 @@ public class RepositoryContentController {
       }
       MavenResponse resp = cargoHosted.yank(runtime, path.crateName(), path.version(), true);
       return toByteArrayResponse(resp);
+    }
+    if (runtime.format() == RepositoryFormat.TERRAFORM) {
+      throw new MavenExceptions.MethodNotAllowed("Terraform client repository paths do not support DELETE");
     }
     if (runtime.format() == RepositoryFormat.NUGET) {
       String raw = extractRepositoryPath(name, request, true);
@@ -589,6 +638,13 @@ public class RepositoryContentController {
     if (runtime.format() == RepositoryFormat.COMPOSER) {
       ComposerPath path = composerParser.parse(extractRepositoryPath(name, request, true));
       MavenResponse resp = dispatchComposerGet(runtime, path, request, headOnly);
+      return toStreamingResponse(resp, request, false);
+    }
+    if (runtime.format() == RepositoryFormat.TERRAFORM) {
+      TerraformPath path = terraformParser.parse(extractRepositoryPath(name, request, true));
+      MavenResponse resp = terraform.get(
+          runtime, path, repositoryBaseUrl(request, runtime.name()),
+          terraformUrlTokenSegment(request), headOnly);
       return toStreamingResponse(resp, request, false);
     }
     if (runtime.format() == RepositoryFormat.PYPI) {
@@ -1026,6 +1082,8 @@ public class RepositoryContentController {
   }
 
   private String extractRepositoryPath(String name, HttpServletRequest request, boolean allowEmpty) {
+    Object normalized = request.getAttribute(RepositorySecurityFilter.NORMALIZED_REPOSITORY_PATH_ATTRIBUTE);
+    if (normalized instanceof String path) return path;
     String uri = request.getRequestURI();
     String root = request.getContextPath() + "/repository/" + name;
     if (uri.equals(root)) {
@@ -1044,6 +1102,8 @@ public class RepositoryContentController {
   }
 
   private String extractRepositoryPath(String name, HttpServletRequest request) {
+    Object normalized = request.getAttribute(RepositorySecurityFilter.NORMALIZED_REPOSITORY_PATH_ATTRIBUTE);
+    if (normalized instanceof String path) return path;
     String uri = request.getRequestURI();
     String base = request.getContextPath() + "/repository/" + name;
     if (uri.equals(base)) {
@@ -1064,6 +1124,11 @@ public class RepositoryContentController {
 
   private String repositoryBaseUrl(HttpServletRequest request, String name) {
     return serverBaseUrl(request) + request.getContextPath() + "/repository/" + name;
+  }
+
+  private static String terraformUrlTokenSegment(HttpServletRequest request) {
+    Object value = request.getAttribute(RepositorySecurityFilter.TERRAFORM_URL_TOKEN_SEGMENT_ATTRIBUTE);
+    return value instanceof String token && !token.isBlank() ? token : null;
   }
 
   private String serverBaseUrl(HttpServletRequest request) {

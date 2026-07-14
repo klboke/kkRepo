@@ -74,7 +74,8 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
       String repository = record == null ? "unknown" : record.name();
       String format = record == null ? "unknown" : KkRepoMetrics.format(record.format());
       String type = record == null ? "unknown" : KkRepoMetrics.type(record.type());
-      String operation = operation(target, record == null ? null : record.format(), request.getMethod());
+      Target effectiveTarget = effectiveTarget(request, target, record);
+      String operation = operation(effectiveTarget, record == null ? null : record.format(), request.getMethod());
       int status = failure == null ? response.getStatus() : statusFor(failure, response.getStatus());
       metrics.recordRepositoryRequest(
           repository,
@@ -87,7 +88,7 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
           contentLength(response),
           failure,
           sample);
-      logNonSuccessRequest(request, target, repository, format, type, operation, status, failure);
+      logNonSuccessRequest(request, effectiveTarget, repository, format, type, operation, status, failure);
     }
   }
 
@@ -111,7 +112,7 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
             + "userAgent={} failure={}",
         status,
         request.getMethod(),
-        stripContextPath(request),
+        loggedUri(request, target, format),
         target.path(),
         requestParameters(request),
         repository,
@@ -173,6 +174,28 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
   private static RepositoryRecord repositoryRecord(HttpServletRequest request) {
     Object value = request.getAttribute(RepositorySecurityFilter.REPOSITORY_RECORD_ATTRIBUTE);
     return value instanceof RepositoryRecord record ? record : null;
+  }
+
+  private static Target effectiveTarget(
+      HttpServletRequest request, Target target, RepositoryRecord repository) {
+    if (repository == null || repository.format() != RepositoryFormat.TERRAFORM) {
+      return target;
+    }
+    Object normalized = request.getAttribute(RepositorySecurityFilter.NORMALIZED_REPOSITORY_PATH_ATTRIBUTE);
+    if (normalized instanceof String path && !path.isBlank()) {
+      return new Target(target.repository(), path, target.route());
+    }
+    // A rejected Terraform URL may still contain a credential segment. If the security filter
+    // could not canonicalize it, discard the entire path rather than risk logging the token.
+    return new Target(target.repository(), "<redacted-terraform-path>", target.route());
+  }
+
+  private static String loggedUri(
+      HttpServletRequest request, Target target, String format) {
+    if (!"terraform".equals(format) || !"repository".equals(target.route())) {
+      return stripContextPath(request);
+    }
+    return "/repository/" + target.repository() + "/" + target.path();
   }
 
   private static Target target(HttpServletRequest request) {
@@ -246,8 +269,28 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
       case RUBYGEMS -> rubygemsOperation(path, normalizedMethod);
       case YUM -> yumOperation(path, normalizedMethod);
       case DOCKER -> dockerOperation(path, normalizedMethod);
+      case TERRAFORM -> terraformOperation(path, normalizedMethod);
       case RAW -> rawOperation(normalizedMethod);
     };
+  }
+
+  private static String terraformOperation(String path, String method) {
+    String redacted = path == null ? "" : path;
+    if (redacted.startsWith("v1/modules/")) {
+      if (redacted.endsWith("/versions")) return "terraform_module_versions";
+      if (redacted.endsWith("/download")) return "terraform_module_download_metadata";
+      return "PUT".equals(method) ? "terraform_module_upload" : "terraform_module_archive";
+    }
+    if (redacted.startsWith("v1/providers/")) {
+      if (redacted.endsWith("/versions")) return "terraform_provider_versions";
+      if (redacted.contains("/download/")) {
+        return "PUT".equals(method) ? "terraform_provider_upload" : "terraform_provider_download_metadata";
+      }
+      if (redacted.endsWith("_SHA256SUMS.sig")) return "terraform_provider_signature";
+      if (redacted.endsWith("_SHA256SUMS")) return "terraform_provider_shasums";
+      return "terraform_provider_archive";
+    }
+    return "terraform_repository";
   }
 
   private static String composerOperation(String path, String method) {

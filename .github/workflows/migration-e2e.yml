@@ -133,6 +133,27 @@ jobs:
       - name: Prepare migration fixtures
         run: scripts/ci/live-compat-setup.sh
 
+      - name: Set up Terraform current stable
+        if: matrix.nexus-version == '3.92.0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=1.15.8
+          archive="terraform_${version}_linux_amd64.zip"
+          mkdir -p "$RUNNER_TEMP/terraform/$version"
+          curl -fsSLO "https://releases.hashicorp.com/terraform/${version}/${archive}"
+          curl -fsSLO "https://releases.hashicorp.com/terraform/${version}/terraform_${version}_SHA256SUMS"
+          grep " ${archive}$" "terraform_${version}_SHA256SUMS" | sha256sum -c -
+          unzip -q "$archive" -d "$RUNNER_TEMP/terraform/$version"
+          echo "TERRAFORM_CURRENT_BIN=$RUNNER_TEMP/terraform/$version/terraform" >> "$GITHUB_ENV"
+
+      - name: Prepare Nexus Terraform migration fixture
+        if: matrix.nexus-version == '3.92.0'
+        run: >-
+          mvn -B -ntp -pl compat-test -am
+          -Dtest=TerraformRepositoryBlackBoxCompatibilityTest#preparesNexusHostedMigrationFixtureWhenConfigured
+          -Dsurefire.failIfNoSpecifiedTests=false test
+
       - name: Run Nexus metadata and repository-data migration E2E
         run: scripts/docker-compat/migration-e2e.sh
 

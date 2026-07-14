@@ -14,6 +14,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.PubUploadSessionDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDataMigrationDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
@@ -98,7 +99,55 @@ public abstract class PersistenceApiContract {
         "security_user_role",
         "spring_session",
         "spring_session_attributes",
+        "terraform_provider_platform",
+        "terraform_provider_signing_state",
+        "terraform_publish_lease",
+        "terraform_signing_key",
+        "terraform_source_binding",
         "ui_settings"), databaseTables());
+  }
+
+  @Test
+  void terraformRegistryStateIsSharedTransactionalAndReplicaSafe() {
+    long repositoryId = createRepository("terraform-hosted", RepositoryFormat.TERRAFORM);
+    long memberRepositoryId = createRepository("terraform-member", RepositoryFormat.TERRAFORM);
+    TerraformRegistryDao registry = stores().terraformRegistry();
+    Instant now = Instant.now();
+    registry.insertSigningKey(new TerraformRegistryDao.SigningKey(
+        repositoryId, 1, "0123456789ABCDEF", "encrypted-private", "public-key", now));
+
+    assertEquals("0123456789ABCDEF", registry.findActiveSigningKey(repositoryId).orElseThrow().keyId());
+    assertEquals(1, registry.findSigningKey(repositoryId, 1).orElseThrow().revision());
+
+    registry.publishProvider(
+        new TerraformRegistryDao.ProviderPlatform(
+            repositoryId, "kkrepo", "fixture", "1.2.3", "linux", "amd64",
+            "terraform-provider-fixture_1.2.3_linux_amd64.zip",
+            "v1/providers/kkrepo/fixture/1.2.3/package/linux/terraform-provider-fixture-fixture.zip",
+            "a".repeat(64), "5.0", 1, now),
+        new TerraformRegistryDao.ProviderState(
+            repositoryId, "kkrepo", "fixture", "1.2.3", 1,
+            "v1/providers/kkrepo/fixture/1.2.3/terraform-provider-fixture_1.2.3_SHA256SUMS",
+            "v1/providers/kkrepo/fixture/1.2.3/terraform-provider-fixture_1.2.3_SHA256SUMS.sig",
+            1, now));
+    assertEquals(1, registry.listProviderPlatforms(
+        repositoryId, "kkrepo", "fixture", "1.2.3").size());
+    assertEquals(1, registry.findProviderState(
+        repositoryId, "kkrepo", "fixture", "1.2.3").orElseThrow().revision());
+
+    assertTrue(registry.tryAcquirePublishLease("provider:fixture", "replica-a", now.plusSeconds(30)));
+    assertFalse(registry.tryAcquirePublishLease("provider:fixture", "replica-b", now.plusSeconds(30)));
+    registry.releasePublishLease("provider:fixture", "replica-a");
+    assertTrue(registry.tryAcquirePublishLease("provider:fixture", "replica-b", now.plusSeconds(30)));
+
+    registry.upsertSourceBinding(new TerraformRegistryDao.SourceBinding(
+        repositoryId, "asset:v1/providers/kkrepo/fixture", memberRepositoryId, 7,
+        now.plusSeconds(60), now));
+    assertEquals(memberRepositoryId, registry.findSourceBinding(
+        repositoryId, "asset:v1/providers/kkrepo/fixture").orElseThrow().memberRepositoryId());
+    registry.deleteSourceBindings(repositoryId);
+    assertTrue(registry.findSourceBinding(
+        repositoryId, "asset:v1/providers/kkrepo/fixture").isEmpty());
   }
 
   @Test

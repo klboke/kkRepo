@@ -998,13 +998,125 @@ test_docker_oci() {
   fi
 }
 
+test_terraform() {
+  need zip
+  local terraform_013="${TERRAFORM_013_BIN:-}"
+  local terraform_current="${TERRAFORM_CURRENT_BIN:-}"
+  if [[ -z "$terraform_013" || ! -x "$terraform_013" ]]; then
+    log "TERRAFORM_013_BIN must point to an executable Terraform 0.13 binary"
+    exit 2
+  fi
+  if [[ -z "$terraform_current" || ! -x "$terraform_current" ]]; then
+    log "TERRAFORM_CURRENT_BIN must point to an executable current stable Terraform binary"
+    exit 2
+  fi
+
+  local dir="$WORK_DIR/terraform"
+  local fixture_version="1.0.$STAMP"
+  local fixture_os="${TERRAFORM_E2E_OS:-$(uname -s | tr '[:upper:]' '[:lower:]')}"
+  local fixture_arch="${TERRAFORM_E2E_ARCH:-$(uname -m)}"
+  [[ "$fixture_arch" == "x86_64" ]] && fixture_arch="amd64"
+  [[ "$fixture_arch" == "aarch64" ]] && fixture_arch="arm64"
+  local module_dir="$dir/module"
+  local provider_dir="$dir/provider"
+  local module_zip="$dir/kkrepo-client-e2e-module_${fixture_version}.zip"
+  local provider_zip="$dir/terraform-provider-fixture_${fixture_version}_${fixture_os}_${fixture_arch}.zip"
+  local token config
+  mkdir -p "$module_dir" "$provider_dir"
+
+  cat >"$module_dir/main.tf" <<'EOF'
+output "message" {
+  value = "kkrepo Terraform module client e2e"
+}
+EOF
+  run_logged_in terraform-module-archive "$module_dir" zip -q -r "$module_zip" .
+
+  cat >"$provider_dir/terraform-provider-fixture_v$fixture_version" <<'EOF'
+#!/usr/bin/env sh
+echo "kkrepo Terraform provider fixture is install-only" >&2
+exit 1
+EOF
+  chmod +x "$provider_dir/terraform-provider-fixture_v$fixture_version"
+  run_logged_in terraform-provider-archive "$provider_dir" zip -q "$provider_zip" "terraform-provider-fixture_v$fixture_version"
+
+  run_logged terraform-module-upload curl -m 30 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    --upload-file "$module_zip" \
+    "$KKREPO_URL/repository/terraform-hosted/v1/modules/kkrepo/client-e2e/aws/$fixture_version/$(basename "$module_zip")"
+  run_logged terraform-provider-upload curl -m 30 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    -H "Content-Disposition: attachment; filename=$(basename "$provider_zip")" \
+    --upload-file "$provider_zip" \
+    "$KKREPO_URL/repository/terraform-hosted/v1/providers/kkrepo/fixture/$fixture_version/download/$fixture_os/$fixture_arch"
+
+  token="$(create_api_key GenericToken "client e2e terraform $STAMP")"
+  add_redaction_value "$token"
+  config="$dir/terraform.rc"
+  cat >"$config" <<EOF
+disable_checkpoint = true
+host "registry.terraform.io" {
+  services = {
+    "modules.v1"   = "$KKREPO_URL/repository/terraform-group/v1/modules/$token/"
+    "providers.v1" = "$KKREPO_URL/repository/terraform-group/v1/providers/$token/"
+  }
+}
+EOF
+
+  local version_label terraform_bin init_dir
+  for version_label in 0.13 current; do
+    terraform_bin="$terraform_current"
+    [[ "$version_label" == "0.13" ]] && terraform_bin="$terraform_013"
+    init_dir="$dir/init-$version_label"
+    mkdir -p "$init_dir"
+    cat >"$init_dir/main.tf" <<EOF
+terraform {
+  required_providers {
+    fixture = {
+      source  = "registry.terraform.io/kkrepo/fixture"
+      version = "$fixture_version"
+    }
+    null = {
+      source  = "registry.terraform.io/hashicorp/null"
+      version = "3.2.4"
+    }
+  }
+}
+
+module "hosted" {
+  source  = "registry.terraform.io/kkrepo/client-e2e/aws"
+  version = "$fixture_version"
+}
+EOF
+    run_logged_in "terraform-$version_label-version" "$init_dir" "$terraform_bin" version
+    run_logged_in "terraform-$version_label-init" "$init_dir" env \
+      TF_CLI_CONFIG_FILE="$config" CHECKPOINT_DISABLE=1 \
+      "$terraform_bin" init -backend=false -input=false -no-color
+    test -d "$init_dir/.terraform/modules/hosted"
+    local provider_root="$init_dir/.terraform/providers"
+    [[ "$version_label" == "0.13" ]] && provider_root="$init_dir/.terraform/plugins"
+    test -d "$provider_root/registry.terraform.io/kkrepo/fixture/$fixture_version/${fixture_os}_${fixture_arch}"
+    test -d "$provider_root/registry.terraform.io/hashicorp/null/3.2.4/${fixture_os}_${fixture_arch}"
+  done
+
+  run_logged_output terraform-provider-metadata "$ARTIFACT_DIR/terraform-provider-metadata.json" \
+    curl -m 20 -fsS \
+    "$KKREPO_URL/repository/terraform-group/v1/providers/$token/kkrepo/fixture/$fixture_version/download/$fixture_os/$fixture_arch"
+  python3 - "$ARTIFACT_DIR/terraform-provider-metadata.json" "$fixture_version" "$fixture_os" "$fixture_arch" <<'PY'
+import json
+import sys
+
+document = json.load(open(sys.argv[1], encoding="utf-8"))
+assert document["filename"].startswith(f"terraform-provider-fixture_{sys.argv[2]}_{sys.argv[3]}_{sys.argv[4]}")
+assert document["shasum"]
+assert document["signing_keys"]["gpg_public_keys"][0]["ascii_armor"].startswith("-----BEGIN PGP PUBLIC KEY BLOCK-----")
+PY
+}
+
 run_selected_tests() {
   local selection="${CLIENT_E2E_TESTS:-all}"
   local -a tests=()
   local test
 
   if [[ -z "$selection" || "$selection" == "all" ]]; then
-    tests=(maven npm pypi go helm cargo pub composer nuget rubygems yum docker-oci)
+    tests=(maven npm pypi go helm cargo pub composer nuget rubygems yum terraform docker-oci)
   else
     IFS=',' read -r -a tests <<<"$selection"
   fi
@@ -1044,6 +1156,9 @@ run_selected_tests() {
         ;;
       yum)
         test_yum
+        ;;
+      terraform)
+        test_terraform
         ;;
       docker|docker-oci|oci)
         test_docker_oci

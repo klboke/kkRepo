@@ -179,6 +179,25 @@ public class SecurityAuthenticationService {
     return authenticate(request);
   }
 
+  /** Authenticates the single decoded credential segment used by Nexus Terraform repository URLs. */
+  @Transactional
+  public Optional<AuthenticatedSubject> authenticateTerraformUrlToken(String token) {
+    if (token == null || token.isBlank()) return Optional.empty();
+    Optional<AuthenticatedSubject> apiKey = apiKeyAuthCache == null
+        ? resolveApiKey(ApiKeyTokenCandidate.fromPresentedToken(token))
+        : apiKeyAuthCache.find("terraform:" + token,
+            () -> resolveApiKey(ApiKeyTokenCandidate.fromPresentedToken(token)));
+    if (apiKey.isPresent()) return apiKey;
+    try {
+      String decoded = new String(java.util.Base64.getDecoder().decode(token), StandardCharsets.UTF_8);
+      int colon = decoded.indexOf(':');
+      if (colon > 0) return authenticateBasic(decoded.substring(0, colon), decoded.substring(colon + 1));
+    } catch (IllegalArgumentException ignored) {
+      // GenericToken/API-key URL tokens are not necessarily base64 Basic credentials.
+    }
+    return Optional.empty();
+  }
+
   @Transactional
   public Optional<AuthenticatedSubject> authenticateCredentials(String username, String password) {
     if (username == null || username.isBlank() || password == null) {

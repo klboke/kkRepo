@@ -181,6 +181,36 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
+  void terraformUrlTokenIsAuthenticatedButCanonicalPathIsUsedForAuthorization() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
+    authentication.terraformAuthenticated = Optional.of(subject("alice"));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "terraform-private", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED)),
+        false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+    HttpServletRequest request = request(
+        "GET",
+        "/repository/terraform-private/v1/modules/YWRtaW46QWRtaW4xMjM0/kkrepo/fixture/aws/versions");
+
+    filter.doFilter(request, response.proxy(), chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals("YWRtaW46QWRtaW4xMjM0", authentication.terraformToken);
+    assertEquals(
+        "YWRtaW46QWRtaW4xMjM0",
+        request.getAttribute(RepositorySecurityFilter.TERRAFORM_URL_TOKEN_SEGMENT_ATTRIBUTE));
+    assertEquals(
+        "v1/modules/kkrepo/fixture/aws/versions",
+        request.getAttribute(RepositorySecurityFilter.NORMALIZED_REPOSITORY_PATH_ATTRIBUTE));
+    assertEquals("v1/modules/kkrepo/fixture/aws/versions", decisions.permission.pathPattern());
+  }
+
+  @Test
   void cargoSparseIndexRequiresAuthenticationWhenAnonymousReadIsDisabled() throws Exception {
     assertCargoReadRequiresAuthenticationWhenAnonymousAccessDisabled("/repository/cargo-hosted/kk/re/kkrepo_e2e");
   }
@@ -882,6 +912,8 @@ class RepositorySecurityFilterTest {
     private int rubygemsCalls;
     private Optional<AuthenticatedSubject> pubAuthenticated = Optional.empty();
     private int pubCalls;
+    private Optional<AuthenticatedSubject> terraformAuthenticated = Optional.empty();
+    private String terraformToken;
     private boolean anonymousEnabled;
 
     private StubAuthenticationService(AuthenticatedSubject anonymous) {
@@ -914,6 +946,12 @@ class RepositorySecurityFilterTest {
     public Optional<AuthenticatedSubject> authenticatePub(HttpServletRequest request) {
       pubCalls++;
       return pubAuthenticated;
+    }
+
+    @Override
+    public Optional<AuthenticatedSubject> authenticateTerraformUrlToken(String token) {
+      terraformToken = token;
+      return terraformAuthenticated;
     }
 
     @Override

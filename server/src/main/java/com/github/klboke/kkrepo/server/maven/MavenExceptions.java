@@ -20,6 +20,11 @@ public final class MavenExceptions {
     public WritePolicyDenied(String message) { super(message); }
   }
 
+  public static class BadRequestException extends RuntimeException {
+    public BadRequestException(String message) { super(message); }
+    public BadRequestException(String message, Throwable cause) { super(message, cause); }
+  }
+
   public static class MethodNotAllowed extends RuntimeException {
     public MethodNotAllowed(String message) { super(message); }
   }

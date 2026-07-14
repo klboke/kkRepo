@@ -4,7 +4,7 @@
 
 ## 当前支持状态
 
-Terraform 仓库处于路线图设计阶段。当前代码尚未包含 `RepositoryFormat.TERRAFORM`、`terraform-hosted`、`terraform-proxy`、`terraform-group` recipe 或 `protocol-terraform` 模块。
+截至 2026-07-14，Terraform 第一阶段仓库能力已经落地：代码包含 `RepositoryFormat.TERRAFORM`、`terraform-hosted`、`terraform-proxy`、`terraform-group` recipe、独立 `protocol-terraform` 模块、共享 Provider revision/签名/source binding 数据模型，以及服务端、UI/API 上传、Browse/Search、迁移和兼容性测试入口。
 
 完整实现目标覆盖：
 
@@ -52,7 +52,7 @@ Terraform 仓库处于路线图设计阶段。当前代码尚未包含 `Reposito
    - Provider package 只接受 `.zip`；校验 `Content-Disposition`、URL identity、文件名、zip 结构、平台 identity 和 SHA256。
    - 为 hosted Provider 生成 SHA256SUMS、detached GPG signature 和 registry metadata；签名私钥按 secret 保存，不进入日志、公开 metadata 或普通 repository JSON。
    - 支持同一 Provider version 增量上传多个平台，并保证 versions/platforms/checksum/signature 一致可见。
-   - 支持 `HEAD`、Range、ETag、Last-Modified 和 conditional GET；具体状态/header 与 Nexus 参考行为对齐。
+   - hosted archive 支持 `HEAD`、ETag、Last-Modified 和 conditional GET；group archive 的 `HEAD` 保持 Nexus 3.92 当前的 `404`。Range 请求保持 Nexus 3.92 当前的 `200` 全量响应语义（若后续 Nexus 改变则由兼容测试驱动调整）。
 
 2. Terraform proxy
    - 新增 `terraform-proxy` recipe；每个 proxy 只配置一个上游 registry base URL。

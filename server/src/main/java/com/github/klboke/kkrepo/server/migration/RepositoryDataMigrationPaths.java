@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.migration;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.server.pub.PubRepositoryDataMigrationWriter;
+import com.github.klboke.kkrepo.server.terraform.TerraformRepositoryDataMigrationWriter;
 import java.util.Locale;
 
 final class RepositoryDataMigrationPaths {
@@ -25,6 +26,9 @@ final class RepositoryDataMigrationPaths {
     }
     if (format == RepositoryFormat.PUB) {
       return PubRepositoryDataMigrationWriter.isMigratablePubPath(path);
+    }
+    if (format == RepositoryFormat.TERRAFORM) {
+      return TerraformRepositoryDataMigrationWriter.isMigratableTerraformPath(path);
     }
     return true;
   }

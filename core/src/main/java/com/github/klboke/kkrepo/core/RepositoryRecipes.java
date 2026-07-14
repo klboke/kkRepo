@@ -47,6 +47,9 @@ public final class RepositoryRecipes {
       new RepositoryRecipe("yum-hosted", RepositoryFormat.YUM, RepositoryType.HOSTED),
       new RepositoryRecipe("yum-proxy", RepositoryFormat.YUM, RepositoryType.PROXY),
       new RepositoryRecipe("yum-group", RepositoryFormat.YUM, RepositoryType.GROUP),
+      new RepositoryRecipe("terraform-hosted", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED),
+      new RepositoryRecipe("terraform-proxy", RepositoryFormat.TERRAFORM, RepositoryType.PROXY),
+      new RepositoryRecipe("terraform-group", RepositoryFormat.TERRAFORM, RepositoryType.GROUP),
       new RepositoryRecipe("raw-hosted", RepositoryFormat.RAW, RepositoryType.HOSTED),
       new RepositoryRecipe("raw-proxy", RepositoryFormat.RAW, RepositoryType.PROXY),
       new RepositoryRecipe("raw-group", RepositoryFormat.RAW, RepositoryType.GROUP));

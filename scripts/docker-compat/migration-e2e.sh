@@ -6,6 +6,7 @@ NEXUS_REPOSITORY="${DOCKER_MIGRATION_NEXUS_REPOSITORY:-docker-hosted}"
 CARGO_NEXUS_REPOSITORY="${CARGO_MIGRATION_NEXUS_REPOSITORY:-cargo-hosted}"
 PUB_NEXUS_REPOSITORY="${PUB_MIGRATION_NEXUS_REPOSITORY:-pub-hosted}"
 COMPOSER_NEXUS_REPOSITORY="${COMPOSER_MIGRATION_NEXUS_REPOSITORY:-composer-proxy}"
+TERRAFORM_NEXUS_REPOSITORY="${TERRAFORM_MIGRATION_NEXUS_REPOSITORY:-terraform-compat-hosted}"
 NEXUS_USER="${NEXUS_COMPAT_USERNAME:-admin}"
 NEXUS_PASSWORD="${NEXUS_COMPAT_PASSWORD:-Admin1234}"
 
@@ -16,6 +17,7 @@ KKREPO_REPOSITORY="${DOCKER_MIGRATION_KKREPO_REPOSITORY:-docker-hosted}"
 CARGO_KKREPO_REPOSITORY="${CARGO_MIGRATION_KKREPO_REPOSITORY:-cargo-hosted}"
 PUB_KKREPO_REPOSITORY="${PUB_MIGRATION_KKREPO_REPOSITORY:-pub-hosted}"
 COMPOSER_KKREPO_REPOSITORY="${COMPOSER_MIGRATION_KKREPO_REPOSITORY:-composer-proxy}"
+TERRAFORM_KKREPO_REPOSITORY="${TERRAFORM_MIGRATION_KKREPO_REPOSITORY:-terraform-compat-hosted}"
 KKREPO_USER="${KKREPO_COMPAT_USERNAME:-admin}"
 KKREPO_PASSWORD="${KKREPO_COMPAT_PASSWORD:-12345678}"
 KKREPO_BLOB_PATH="${KKREPO_COMPAT_BLOB_PATH:-/tmp/kkrepo-blobs/default}"
@@ -251,6 +253,16 @@ source_composer_available() {
   curl -m 20 -fsS \
     -u "$NEXUS_USER:$NEXUS_PASSWORD" \
     "$NEXUS_URL/service/rest/v1/repositories/composer/proxy/$COMPOSER_NEXUS_REPOSITORY" >/dev/null 2>&1
+}
+
+terraform_migration_enabled() {
+  [[ "${NEXUS_COMPAT_IMAGE:-}" == *3.92* && -n "${TERRAFORM_CURRENT_BIN:-}" ]]
+}
+
+source_terraform_available() {
+  curl -m 20 -fsS \
+    -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$NEXUS_URL/service/rest/v1/repositories/terraform/hosted/$TERRAFORM_NEXUS_REPOSITORY" >/dev/null 2>&1
 }
 
 warm_composer_proxy_fixture() {
@@ -601,6 +613,130 @@ PY
   fi
   rm -f "$metadata_file" "$archive_file"
   log "Pub fixture verified: $package_name $version sha256=$expected_sha256"
+}
+
+verify_migrated_terraform_fixture() {
+  local workdir source_modules target_modules source_providers target_providers
+  local source_metadata target_metadata fields archive module_version provider_version
+  local expected_sha downloaded_sha token
+  workdir="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-terraform-migration.XXXXXX")"
+  source_modules="$workdir/source-modules.json"
+  target_modules="$workdir/target-modules.json"
+  source_providers="$workdir/source-providers.json"
+  target_providers="$workdir/target-providers.json"
+  source_metadata="$workdir/source-provider.json"
+  target_metadata="$workdir/target-provider.json"
+  fields="$workdir/provider-fields.txt"
+  archive="$workdir/provider.zip"
+
+  curl -m 30 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$NEXUS_URL/repository/$TERRAFORM_NEXUS_REPOSITORY/v1/modules/kkrepo/fixture/aws/versions" \
+    >"$source_modules"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$KKREPO_URL/repository/$TERRAFORM_KKREPO_REPOSITORY/v1/modules/kkrepo/fixture/aws/versions" \
+    >"$target_modules"
+  module_version="$(python3 - "$source_modules" "$target_modules" <<'PY'
+import json
+import sys
+
+def versions(path):
+    with open(path, "r", encoding="utf-8") as source:
+        body = json.load(source)
+    return [row["version"] for row in body["modules"][0]["versions"]]
+
+source = versions(sys.argv[1])
+target = versions(sys.argv[2])
+if not source or not set(source).issubset(set(target)):
+    raise SystemExit(f"migrated Terraform module versions are incomplete: source={source} target={target}")
+print(source[0])
+PY
+)"
+
+  curl -m 30 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$NEXUS_URL/repository/$TERRAFORM_NEXUS_REPOSITORY/v1/providers/kkrepo/fixture/versions" \
+    >"$source_providers"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$KKREPO_URL/repository/$TERRAFORM_KKREPO_REPOSITORY/v1/providers/kkrepo/fixture/versions" \
+    >"$target_providers"
+  provider_version="$(python3 - "$source_providers" "$target_providers" <<'PY'
+import json
+import sys
+
+def versions(path):
+    with open(path, "r", encoding="utf-8") as source:
+        body = json.load(source)
+    return [row["version"] for row in body["versions"]]
+
+source = versions(sys.argv[1])
+target = versions(sys.argv[2])
+if not source or not set(source).issubset(set(target)):
+    raise SystemExit(f"migrated Terraform provider versions are incomplete: source={source} target={target}")
+print(source[0])
+PY
+)"
+
+  curl -m 30 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$NEXUS_URL/repository/$TERRAFORM_NEXUS_REPOSITORY/v1/providers/kkrepo/fixture/$provider_version/download/linux/amd64" \
+    >"$source_metadata"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$KKREPO_URL/repository/$TERRAFORM_KKREPO_REPOSITORY/v1/providers/kkrepo/fixture/$provider_version/download/linux/amd64" \
+    >"$target_metadata"
+  python3 - "$source_metadata" "$target_metadata" "$KKREPO_URL/repository/$TERRAFORM_KKREPO_REPOSITORY/" "$fields" <<'PY'
+import json
+import sys
+from urllib.parse import urljoin
+
+source_path, target_path, repository_url, output_path = sys.argv[1:5]
+with open(source_path, "r", encoding="utf-8") as handle:
+    source = json.load(handle)
+with open(target_path, "r", encoding="utf-8") as handle:
+    target = json.load(handle)
+for field in ("filename", "shasum"):
+    if source.get(field) != target.get(field):
+        raise SystemExit(f"migrated Terraform provider {field} changed: {source.get(field)!r} != {target.get(field)!r}")
+source_keys = ((source.get("signing_keys") or {}).get("gpg_public_keys") or [])
+target_keys = ((target.get("signing_keys") or {}).get("gpg_public_keys") or [])
+if not source_keys or not target_keys or source_keys[0].get("key_id") != target_keys[0].get("key_id"):
+    raise SystemExit("migrated Terraform signing key id changed")
+with open(output_path, "w", encoding="utf-8") as output:
+    output.write(str(target["shasum"]) + "\n")
+    output.write(urljoin(repository_url, str(target["download_url"])) + "\n")
+PY
+  expected_sha="$(sed -n '1p' "$fields")"
+  curl -m 30 -fsS -u "$(auth)" "$(sed -n '2p' "$fields")" >"$archive"
+  downloaded_sha="$(file_sha256 "$archive")"
+  if [[ "$downloaded_sha" != "$expected_sha" ]]; then
+    log "Terraform provider checksum mismatch after migration: $downloaded_sha != $expected_sha"
+    exit 1
+  fi
+
+  curl -m 30 -fsS -u "$(auth)" \
+    "$KKREPO_URL/internal/repositories/$TERRAFORM_KKREPO_REPOSITORY" >"$workdir/repository.json"
+  if grep -q 'BEGIN PGP PRIVATE KEY BLOCK\|source-key-passphrase' "$workdir/repository.json"; then
+    log "Terraform signing secret leaked through migrated repository JSON"
+    exit 1
+  fi
+
+  token="$(printf '%s' "$(auth)" | base64 | tr -d '\r\n')"
+  mkdir -p "$workdir/module"
+  cat >"$workdir/terraform.rc" <<EOF
+host "registry.terraform.io" {
+  services = {
+    "modules.v1" = "$KKREPO_URL/repository/$TERRAFORM_KKREPO_REPOSITORY/v1/modules/$token/"
+  }
+}
+EOF
+  cat >"$workdir/module/main.tf" <<EOF
+module "fixture" {
+  source  = "registry.terraform.io/kkrepo/fixture/aws"
+  version = "$module_version"
+}
+EOF
+  TF_CLI_CONFIG_FILE="$workdir/terraform.rc" \
+    "$TERRAFORM_CURRENT_BIN" -chdir="$workdir/module" init -backend=false -input=false
+  test -f "$workdir/module/.terraform/modules/fixture/main.tf"
+  rm -rf "$workdir"
+  log "Terraform fixture verified after migration: module=$module_version provider=$provider_version sha256=$expected_sha"
 }
 
 verify_composer_requires_explicit_proxy_selection() {
@@ -1114,6 +1250,12 @@ wait_for_http "kkrepo repositories endpoint" "$KKREPO_URL/internal/repositories?
 
 ensure_kkrepo_blob_store
 ensure_kkrepo_docker_repository
+if terraform_migration_enabled; then
+  if ! source_terraform_available; then
+    log "required Terraform repository $TERRAFORM_NEXUS_REPOSITORY is not available on the Nexus 3.92 source"
+    exit 1
+  fi
+fi
 if composer_migration_enabled; then
   if ! source_composer_available; then
     log "required Composer proxy repository $COMPOSER_NEXUS_REPOSITORY is not available on the source Nexus"
@@ -1152,6 +1294,9 @@ if pub_migration_enabled; then
   log "publishing Pub fixture to source Nexus: $PUB_PACKAGE $PUB_VERSION"
   pub_sha256_value="$(publish_pub_fixture_to_source_nexus "$PUB_PACKAGE" "$PUB_VERSION")"
   migration_repositories_json="$migration_repositories_json,\"$(json_escape "$PUB_NEXUS_REPOSITORY")\""
+fi
+if terraform_migration_enabled; then
+  migration_repositories_json="$migration_repositories_json,\"$(json_escape "$TERRAFORM_NEXUS_REPOSITORY")\""
 fi
 if composer_migration_enabled; then
   backup_proxy_repositories_json=",\"backupProxyRepositories\":[\"$(json_escape "$COMPOSER_NEXUS_REPOSITORY")\"]"
@@ -1209,8 +1354,12 @@ if [[ -n "$pub_sha256_value" ]]; then
   verify_migrated_pub_fixture "$PUB_PACKAGE" "$PUB_VERSION" "$pub_sha256_value"
 fi
 
+if terraform_migration_enabled; then
+  verify_migrated_terraform_fixture
+fi
+
 if composer_migration_enabled; then
   verify_migrated_composer_fixture "$job_id"
 fi
 
-log "Docker/Cargo/Pub/Composer migration E2E completed: job=$job_id source=${NEXUS_URL%/}/repository/${NEXUS_REPOSITORY}/v2/${IMAGE}:${TAG} target=$kkrepo_ref"
+log "Docker/Cargo/Pub/Composer/Terraform migration E2E completed: job=$job_id source=${NEXUS_URL%/}/repository/${NEXUS_REPOSITORY}/v2/${IMAGE}:${TAG} target=$kkrepo_ref"

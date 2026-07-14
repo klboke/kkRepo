@@ -133,6 +133,22 @@ jobs:
         if: env.LIVE_COMPAT_SUITE == 'client-e2e'
         uses: oras-project/setup-oras@v2
 
+      - name: Set up Terraform 0.13 and current stable
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/terraform/0.13.7" "$RUNNER_TEMP/terraform/1.15.8"
+          for version in 0.13.7 1.15.8; do
+            archive="terraform_${version}_linux_amd64.zip"
+            curl -fsSLO "https://releases.hashicorp.com/terraform/${version}/${archive}"
+            curl -fsSLO "https://releases.hashicorp.com/terraform/${version}/terraform_${version}_SHA256SUMS"
+            grep " ${archive}$" "terraform_${version}_SHA256SUMS" | sha256sum -c -
+            unzip -q "$archive" -d "$RUNNER_TEMP/terraform/$version"
+          done
+          echo "TERRAFORM_013_BIN=$RUNNER_TEMP/terraform/0.13.7/terraform" >> "$GITHUB_ENV"
+          echo "TERRAFORM_CURRENT_BIN=$RUNNER_TEMP/terraform/1.15.8/terraform" >> "$GITHUB_ENV"
+
       - name: Install Python client build tools
         if: env.LIVE_COMPAT_SUITE == 'client-e2e'
         run: python -m pip install --upgrade build twine

@@ -173,7 +173,7 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 5. ohpm / HarmonyOS - 规划中，覆盖 hosted、proxy、group、导入和管理端能力（[设计说明](docs/zh/dev/ohpm-repository-design.md)）
 6. Swift Package Registry
 7. APT / Debian
-8. Terraform Provider / Module Registry - 规划中，覆盖 hosted、proxy、group、Provider GPG 签名、Nexus 路径兼容、真实 Terraform CLI E2E 和 Nexus 迁移（[设计说明](docs/zh/dev/terraform-repository-design.md)）
+8. ✅ Terraform Provider / Module Registry - hosted、proxy、group、Provider GPG 签名、Nexus 路径兼容、UI/API 上传、搜索、真实 Terraform CLI E2E 和 Nexus 迁移能力已实现（[设计说明](docs/zh/dev/terraform-repository-design.md)）
 9. Conan
 10. Conda
 

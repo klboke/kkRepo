@@ -35,6 +35,7 @@ import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.docker.DockerManifestParser;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.pub.PubRepositoryDataMigrationWriter;
+import com.github.klboke.kkrepo.server.terraform.TerraformRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -56,6 +57,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
 
 @Component
 class RepositoryDataMigrationWriter {
@@ -71,6 +73,7 @@ class RepositoryDataMigrationWriter {
   private final DockerRegistryDao dockerRegistryDao;
   private final DockerManifestParser dockerManifestParser;
   private final PubRepositoryDataMigrationWriter pubMigrationWriter;
+  private final TerraformRepositoryDataMigrationWriter terraformMigrationWriter;
   private final TransientTransactionRetry transactionRetry;
   private final MavenPathParser mavenPathParser = new MavenPathParser();
 
@@ -85,6 +88,33 @@ class RepositoryDataMigrationWriter {
       DockerManifestParser dockerManifestParser,
       PubRepositoryDataMigrationWriter pubMigrationWriter,
       TransientTransactionRetry transactionRetry) {
+    this(
+        repositoryDao,
+        componentDao,
+        assetDao,
+        browseNodeDao,
+        blobStorageRegistry,
+        indexRebuildDao,
+        dockerRegistryDao,
+        dockerManifestParser,
+        pubMigrationWriter,
+        null,
+        transactionRetry);
+  }
+
+  @Autowired
+  RepositoryDataMigrationWriter(
+      RepositoryDao repositoryDao,
+      ComponentDao componentDao,
+      AssetDao assetDao,
+      BrowseNodeDao browseNodeDao,
+      BlobStorageRegistry blobStorageRegistry,
+      RepositoryIndexRebuildDao indexRebuildDao,
+      DockerRegistryDao dockerRegistryDao,
+      DockerManifestParser dockerManifestParser,
+      PubRepositoryDataMigrationWriter pubMigrationWriter,
+      TerraformRepositoryDataMigrationWriter terraformMigrationWriter,
+      TransientTransactionRetry transactionRetry) {
     this.repositoryDao = repositoryDao;
     this.componentDao = componentDao;
     this.assetDao = assetDao;
@@ -94,6 +124,7 @@ class RepositoryDataMigrationWriter {
     this.dockerRegistryDao = dockerRegistryDao;
     this.dockerManifestParser = dockerManifestParser;
     this.pubMigrationWriter = pubMigrationWriter;
+    this.terraformMigrationWriter = terraformMigrationWriter;
     this.transactionRetry = transactionRetry;
   }
 
@@ -111,6 +142,15 @@ class RepositoryDataMigrationWriter {
       }
       PubRepositoryDataMigrationWriter.MigratedAsset migrated = pubMigrationWriter.write(
           repository, storage, source, body, responseContentType, validateSize);
+      return new WriteResult(
+          migrated.componentId(), migrated.assetId(), migrated.assetBlobId(), migrated.assetBlobObjectKey());
+    }
+    if (repository.format() == RepositoryFormat.TERRAFORM) {
+      if (terraformMigrationWriter == null) {
+        throw new IllegalStateException("Terraform migration writer is not configured");
+      }
+      TerraformRepositoryDataMigrationWriter.MigratedAsset migrated = terraformMigrationWriter.write(
+          repository, source, body, responseContentType, validateSize);
       return new WriteResult(
           migrated.componentId(), migrated.assetId(), migrated.assetBlobId(), migrated.assetBlobObjectKey());
     }
@@ -746,6 +786,7 @@ class RepositoryDataMigrationWriter {
       case PUB -> source.sourcePath().endsWith(".tar.gz") ? "archive" : "metadata";
       case COMPOSER -> COMPOSER_PATHS.parse(source.sourcePath()).kind() == ComposerPath.Kind.DIST
               ? "composer-dist" : "composer-metadata";
+      case TERRAFORM -> "terraform-asset";
       case RAW -> "asset";
     };
   }

@@ -42,6 +42,7 @@ const SEARCH_ROUTE_FORMAT = {
   nuget: "nuget",
   pub: "pub",
   composer: "composer",
+  terraform: "terraform",
   pypi: "pypi",
   rubygems: "rubygems",
   yum: "yum",
@@ -55,6 +56,7 @@ const FORMAT_ROUTE_SEGMENT = {
   nuget: "nuget",
   pub: "pub",
   composer: "composer",
+  terraform: "terraform",
   pypi: "pypi",
   rubygems: "rubygems",
   yum: "yum",
@@ -145,6 +147,7 @@ function componentBrowsePath(component) {
   if (format === "composer" && component.kind !== "composer-package") {
     return name;
   }
+  if (format === "terraform") return name;
   return "";
 }
 
@@ -622,6 +625,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   cargo: "cargo",
   pub: "pub",
   composer: "composer",
+  terraform: "terraform",
   go: "go",
   helm: "helm",
   docker: "docker",
@@ -1727,6 +1731,9 @@ function hasDirectoryUsage(entry) {
     const reserved = new Set(["p2", "providers", "packages", "_composer"]);
     return (parts.length === 2 || parts.length === 3) && !reserved.has(parts[0]);
   }
+  if (repo.format === "terraform") {
+    return parts[0] === "v1" && (parts[1] === "modules" || parts[1] === "providers");
+  }
   return false;
 }
 
@@ -2393,6 +2400,38 @@ function renderDockerReferrers(referrers) {
     </div>`;
 }
 
+function terraformUsageDetail(entry) {
+  const parts = pathSegments(entry.path);
+  if (parts[0] !== "v1" || parts.length < 4) return null;
+  const repoUrl = repositoryUrl(currentRepository()).replace(/\/+$/, "");
+  const host = window.location.host;
+  if (parts[1] === "modules" && parts.length >= 5) {
+    const [namespace, name, system] = parts.slice(2, 5);
+    const version = parts[5] || "1.0.0";
+    return {
+      summaryRows: [["Format", "terraform module"], ["Namespace", namespace], ["Name", name],
+        ["System", system], ["Version", version]],
+      snippets: [
+        usageSnippet("Terraform CLI config", `host "${host}" {\n  services = {\n    "modules.v1" = "${repoUrl}/v1/modules/"\n  }\n}`),
+        usageSnippet("module", `module "${name}" {\n  source  = "${host}/${namespace}/${name}/${system}"\n  version = "${version}"\n}`),
+      ],
+    };
+  }
+  if (parts[1] === "providers" && parts.length >= 4) {
+    const [namespace, type] = parts.slice(2, 4);
+    const version = parts[4] || "1.0.0";
+    return {
+      summaryRows: [["Format", "terraform provider"], ["Namespace", namespace], ["Type", type],
+        ["Version", version]],
+      snippets: [
+        usageSnippet("Terraform CLI config", `host "${host}" {\n  services = {\n    "providers.v1" = "${repoUrl}/v1/providers/"\n  }\n}`),
+        usageSnippet("required_providers", `terraform {\n  required_providers {\n    ${type} = {\n      source  = "${host}/${namespace}/${type}"\n      version = "${version}"\n    }\n  }\n}`),
+      ],
+    };
+  }
+  return null;
+}
+
 async function usageDetailForEntry(entry, detail = null) {
   const repo = currentRepository();
   if (!repo) return null;
@@ -2404,6 +2443,7 @@ async function usageDetailForEntry(entry, detail = null) {
   if (repo.format === "go") return goUsageDetail(entry);
   if (repo.format === "pub") return pubUsageDetail(entry);
   if (repo.format === "composer") return composerUsageDetail(entry, detail);
+  if (repo.format === "terraform") return terraformUsageDetail(entry);
   if (repo.format === "docker") return dockerUsageDetail(entry);
   return null;
 }
