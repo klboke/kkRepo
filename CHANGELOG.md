@@ -4,11 +4,41 @@ All notable public changes to kkrepo are documented in this file.
 
 This project follows a pragmatic early-stage release process. Until a stable `1.0.0` release is announced, minor versions may include behavior changes, but releases should call out migration impact, compatibility changes, and operational notes.
 
+## 0.4.0 - 2026-07-14
+
+### Added
+
+- First-class PostgreSQL 12+ persistence alongside MySQL, including an equivalent V29 baseline, PostgreSQL-specific JSONB, search, upsert, coordination, locking, and timestamp behavior, and startup validation that the declared database type matches JDBC metadata. MySQL remains the default backend. (#111)
+- Composer / PHP hosted, proxy, and group repositories for Composer 2, including Packagist proxy caching, Nexus-style semantic dist paths, Components API/UI archive upload, canonical group resolution, Browse/Search/Usage/HTML View integration, real Composer client E2E, required Nexus live comparison, and explicitly selected Nexus proxy-cache migration. (#100)
+- MySQL and PostgreSQL quickstart, development, and compatibility Compose environments, plus a multi-replica Helm chart that supports either external database backend. (#111)
+- Real MySQL/PostgreSQL persistence contract suites, two-instance server smoke tests, PostgreSQL 12 minimum-version coverage, PostgreSQL 16 E2E coverage, Flyway parity checks, and expanded protocol, storage, migration, and worker test coverage. (#105, #106, #111)
+
+### Changed
+
+- Persistence is split into a database-neutral `persistence-jdbc` API/shared implementation and ServiceLoader-selected MySQL or PostgreSQL dialect modules. Protocol, server business logic, and Nexus migration code no longer depend on a concrete database backend. (#109, #110, #111)
+- The MySQL V1-V29 migration history is preserved byte-for-byte under a backend-specific Flyway location; future migrations must keep MySQL and PostgreSQL versions logically aligned. (#111)
+- Quickstart defaults, Dockerfile packaging, deployment documentation, and the Helm application version now use `0.4.0`.
+- Maven reactor versioning is centralized in the root `revision` property and flattened to concrete versions in installed or deployed POMs. (#112)
+- Project positioning, dependency versions, Codecov reporting, CI coverage, and contributor-facing documentation were refreshed. (#101, #102, #103, #104, #105, #106)
+
+### Compatibility And Validation
+
+- PostgreSQL uses the same repository, security, session, audit, token, migration, cache-watermark, worker-claim, and upload-session contracts as MySQL, including multi-replica cross-node smoke coverage. (#111)
+- Composer includes protocol/server tests, a non-skipping Nexus proxy comparison, hosted-to-proxy transitive dependency resolution, Basic-auth rejection, client-cache-cleared lock replay, and Nexus 3.92 datastore migration E2E coverage. (#100)
+- The executable jar and container image contain both JDBC drivers, both Flyway database modules, and both persistence backends; the backend is selected at runtime. (#111)
+- Existing Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Docker/OCI, NuGet, RubyGems, Yum, and Raw compatibility paths remain covered by the reactor and live compatibility workflows.
+
+### Upgrade Notes
+
+- Existing v0.3.0 MySQL deployments can upgrade in place. Back up the database and blob store together before upgrading production deployments; MySQL remains the default when `KKREPO_DATABASE_TYPE` is not set.
+- PostgreSQL support is intended for new PostgreSQL-backed installations or a separately planned and validated data migration. Do not switch an initialized installation between MySQL and PostgreSQL by editing the JDBC URL.
+- For PostgreSQL, set `KKREPO_DATABASE_TYPE=postgresql` together with the PostgreSQL JDBC URL and credentials before first startup. Use a currently maintained PostgreSQL release in production; PostgreSQL 12 is the compatibility floor.
+- Validate Composer hosted archive policy, group member order, Basic credentials, proxy caching, and explicitly selected Nexus proxy migration in staging before cutover.
+
 ## 0.3.0 - 2026-07-12
 
 ### Added
 
-- Composer / PHP hosted, proxy, and group repositories for Composer 2, including Packagist proxy caching, Nexus-style semantic dist paths, Components API/UI archive upload, canonical group resolution, Browse/Search/Usage/HTML View integration, real Composer client E2E, required Nexus live comparison, and explicitly selected Nexus proxy-cache migration.
 - Dart / Pub hosted, proxy, and group repositories, including `dart pub publish`, `dart pub get`, Flutter package resolution, package metadata, archive downloads, `PubToken` authentication, MySQL-backed upload sessions, UI/API upload, browse metadata, cleanup, metrics, migration support, and Nexus 3.92.0 compatibility coverage. (#86)
 - Repository-format and artifact-type iconography across Browse and Administration, including precise package/archive file icons and a custom Java archive icon for JAR, WAR, EAR, and AAR assets. (#99)
 - Product version and GitHub project links in the Browse and Administration headers. (#97, #98)
@@ -36,10 +66,9 @@ This project follows a pragmatic early-stage release process. Until a stable `1.
 
 ### Compatibility And Validation
 
-- Composer / PHP includes protocol/server tests, a non-skipping Nexus proxy comparison, hosted-to-proxy transitive dependency resolution, Basic-auth rejection, client-cache-cleared lock replay, and Nexus 3.92 datastore migration E2E coverage.
 - Dart / Pub includes focused protocol and server tests, Nexus reference black-box tests, real `dart`/Flutter client E2E coverage, and datastore-era migration coverage. (#86)
 - Main-branch CI and CodeQL passed on the release baseline, including the Browse and Administration icon contract suites. (#99)
-- Existing Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Docker/OCI, NuGet, RubyGems, Yum, and Raw compatibility paths remain covered by the reactor and live compatibility workflows.
+- Existing Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Docker/OCI, NuGet, RubyGems, Yum, and Raw compatibility paths remain covered by the reactor and live compatibility workflows.
 
 ### Upgrade Notes
 
@@ -47,7 +76,6 @@ This project follows a pragmatic early-stage release process. Until a stable `1.
 - This release adds Flyway migrations for MySQL-backed Pub upload sessions and the secure anonymous-access default for databases that have not completed initial administrator setup.
 - Legacy Nexus UI compatibility routes now default to disabled. Deployments that still run compatibility tests or integrations against those legacy UI-only endpoints must explicitly set `KKREPO_NEXUS_LEGACY_UI_ENABLED=true`; normal repository clients and supported REST APIs do not require it.
 - Validate Dart / Pub repository configuration, PubToken handling, proxy/group behavior, and archive migration in staging before opening the new format to production clients.
-- Validate Composer hosted archive policy, group member order, Basic credentials, proxy caching, and explicitly selected Nexus proxy migration in staging before cutover.
 
 ## 0.2.0 - 2026-07-01
 
