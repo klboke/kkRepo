@@ -149,38 +149,37 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
 
   @Transactional(propagation = Propagation.MANDATORY)
   public DockerManifestRecord upsertManifest(DockerManifestRecord record) {
-    try {
-      long id = insertManifest(record);
-      return findManifestById(id).orElseThrow();
-    } catch (DuplicateKeyException e) {
-      jdbcTemplate.update("""
-          UPDATE docker_manifest
-          SET media_type = ?, artifact_type = ?, subject_digest = ?, subject_digest_hash = ?,
-              asset_id = ?, size = ?, pushed_by = ?, pushed_by_ip = ?, deleted_at = NULL,
-              attributes_json = ?
-          WHERE repository_id = ?
-            AND image_name_hash = ?
-            AND digest_hash = ?
-          """,
-          record.mediaType(),
-          record.artifactType(),
-          record.subjectDigest(),
-          record.subjectDigestHash(),
-          record.assetId(),
-          record.size(),
-          record.pushedBy(),
-          record.pushedByIp(),
-          jsonColumns.parameter(record.attributes()),
-          record.repositoryId(),
-          record.imageNameHash(),
-          record.digestHash());
-      return findManifestByDigest(record.repositoryId(), record.imageName(), record.digest())
-          .orElseThrow(() -> new DuplicateKeyException("Docker manifest conflict was not visible", e));
+    OptionalLong inserted = tryInsertManifest(record);
+    if (inserted.isPresent()) {
+      return findManifestById(inserted.getAsLong()).orElseThrow();
     }
+    jdbcTemplate.update("""
+        UPDATE docker_manifest
+        SET media_type = ?, artifact_type = ?, subject_digest = ?, subject_digest_hash = ?,
+            asset_id = ?, size = ?, pushed_by = ?, pushed_by_ip = ?, deleted_at = NULL,
+            attributes_json = ?
+        WHERE repository_id = ?
+          AND image_name_hash = ?
+          AND digest_hash = ?
+        """,
+        record.mediaType(),
+        record.artifactType(),
+        record.subjectDigest(),
+        record.subjectDigestHash(),
+        record.assetId(),
+        record.size(),
+        record.pushedBy(),
+        record.pushedByIp(),
+        jsonColumns.parameter(record.attributes()),
+        record.repositoryId(),
+        record.imageNameHash(),
+        record.digestHash());
+    return findManifestByDigest(record.repositoryId(), record.imageName(), record.digest())
+        .orElseThrow(() -> new DuplicateKeyException("Docker manifest conflict was not visible"));
   }
 
-  private long insertManifest(DockerManifestRecord record) {
-    return JdbcInserts.insert(jdbcTemplate, """
+  private OptionalLong tryInsertManifest(DockerManifestRecord record) {
+    return JdbcInserts.tryInsert(jdbcTemplate, """
         INSERT INTO docker_manifest
           (repository_id, image_name, image_name_hash, digest_algorithm, digest, digest_hash,
            media_type, artifact_type, subject_digest, subject_digest_hash, asset_id, size,
