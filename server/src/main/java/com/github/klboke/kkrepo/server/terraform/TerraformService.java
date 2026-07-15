@@ -198,13 +198,21 @@ public class TerraformService {
     }
     List<Map<String, Object>> values = new ArrayList<>();
     for (String version : TerraformVersions.descending(versions)) {
-      List<Map<String, Object>> platforms = registry.listProviderPlatforms(
-              runtime.id(), request.namespace(), request.name(), version).stream()
+      List<Map<String, Object>> platforms = publishedProviderPlatforms(
+              runtime, request.namespace(), request.name(), version).stream()
           .map(row -> Map.<String, Object>of("os", row.os(), "arch", row.arch()))
           .toList();
+      if (platforms.isEmpty()) continue;
       values.add(Map.of("version", version, "protocols", List.of(PROTOCOLS), "platforms", platforms));
     }
     return Map.of("versions", values);
+  }
+
+  private List<TerraformRegistryDao.ProviderPlatform> publishedProviderPlatforms(
+      RepositoryRuntime runtime, String namespace, String name, String version) {
+    return registry.listProviderPlatforms(runtime.id(), namespace, name, version).stream()
+        .filter(platform -> assets.find(runtime, platform.assetPath()).isPresent())
+        .toList();
   }
 
   private MavenResponse providerDownload(
@@ -212,8 +220,8 @@ public class TerraformService {
     TerraformRegistryDao.ProviderState state = registry.findProviderState(
             runtime.id(), request.namespace(), request.name(), request.version())
         .orElseThrow(() -> notFound(request.rawPath()));
-    TerraformRegistryDao.ProviderPlatform platform = registry.listProviderPlatforms(
-            runtime.id(), request.namespace(), request.name(), request.version()).stream()
+    TerraformRegistryDao.ProviderPlatform platform = publishedProviderPlatforms(
+            runtime, request.namespace(), request.name(), request.version()).stream()
         .filter(row -> row.os().equals(request.os()) && row.arch().equals(request.arch()))
         .findFirst().orElseThrow(() -> notFound(request.rawPath()));
     TerraformRegistryDao.SigningKey key = registry.findSigningKey(runtime.id(), state.signingKeyRevision())
@@ -234,8 +242,8 @@ public class TerraformService {
 
   private MavenResponse servePublishedProviderArchive(
       RepositoryRuntime runtime, TerraformPath path, boolean headOnly) {
-    boolean published = registry.listProviderPlatforms(
-            runtime.id(), path.namespace(), path.name(), path.version()).stream()
+    boolean published = publishedProviderPlatforms(
+            runtime, path.namespace(), path.name(), path.version()).stream()
         .anyMatch(row -> row.assetPath().equals(path.rawPath()));
     if (!published) throw notFound(path.rawPath());
     return assets.serve(runtime, path.rawPath(), headOnly);
@@ -312,25 +320,26 @@ public class TerraformService {
         "provider", runtime.id(), path.namespace(), path.name(), path.version());
     try (TerraformPublishLeaseManager.Lease lease = leases.acquire(
         leaseKey, java.time.Duration.ofMinutes(5), java.time.Duration.ofSeconds(30))) {
-      List<TerraformRegistryDao.ProviderPlatform> current = registry.listProviderPlatforms(
-          runtime.id(), path.namespace(), path.name(), path.version());
+      List<TerraformRegistryDao.ProviderPlatform> current = publishedProviderPlatforms(
+          runtime, path.namespace(), path.name(), path.version());
       boolean exists = current.stream().anyMatch(row -> row.os().equals(path.os()) && row.arch().equals(path.arch()));
       if (exists) throw new MavenExceptions.WritePolicyDenied("Terraform provider platform already exists");
       long revision = registry.findProviderState(runtime.id(), path.namespace(), path.name(), path.version())
           .map(state -> state.revision() + 1).orElse(1L);
       String assetPath = "v1/providers/" + path.namespace() + "/" + path.name() + "/" + path.version()
           + "/package/" + path.os() + "/" + filename;
-      if (assets.find(runtime, assetPath).isEmpty()) {
-        Path buffered = inspector.bufferAndInspect(body, filename, false, path.name());
-        try (InputStream in = Files.newInputStream(buffered)) {
-          assets.store(runtime, assetPath, in, contentType == null ? OCTET : contentType,
-              Map.of(
-                  "terraformKind", "provider-archive", "namespace", path.namespace(), "type", path.name(),
-                  "version", path.version(), "os", path.os(), "arch", path.arch(),
-                  "protocols", List.of(PROTOCOLS), "publishState", "STAGING", "revision", revision), actor, ip);
-        } finally {
-          try { Files.deleteIfExists(buffered); } catch (IOException ignored) {}
-        }
+      // Always validate and persist the incoming archive. A prior publication attempt may have
+      // failed after storing an orphaned STAGING asset but before committing the platform row;
+      // reusing that blob would publish stale content instead of the operator's retry.
+      Path buffered = inspector.bufferAndInspect(body, filename, false, path.name());
+      try (InputStream in = Files.newInputStream(buffered)) {
+        assets.store(runtime, assetPath, in, contentType == null ? OCTET : contentType,
+            Map.of(
+                "terraformKind", "provider-archive", "namespace", path.namespace(), "type", path.name(),
+                "version", path.version(), "os", path.os(), "arch", path.arch(),
+                "protocols", List.of(PROTOCOLS), "publishState", "STAGING", "revision", revision), actor, ip);
+      } finally {
+        try { Files.deleteIfExists(buffered); } catch (IOException ignored) {}
       }
       AssetRecord stored = assets.find(runtime, assetPath).orElseThrow(() -> notFound(assetPath));
       AssetBlobRecord blob = assets.blob(stored);

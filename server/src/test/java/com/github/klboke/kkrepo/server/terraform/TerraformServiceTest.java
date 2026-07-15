@@ -207,25 +207,31 @@ class TerraformServiceTest {
     String signaturePath = sumsPath + ".sig";
     String oldSumsPath = "v1/providers/acme/cloud/1.2.3/metadata-r1/"
         + "terraform-provider-cloud_1.2.3_SHA256SUMS";
+    String deletedPath = "v1/providers/acme/cloud/1.2.3/package/darwin/"
+        + "terraform-provider-cloud_1.2.3_darwin_arm64.zip";
     AssetRecord archive = asset(20, hosted, 21L, archivePath);
     TerraformRegistryDao.ProviderPlatform platform = platform(hosted, archivePath, "abc123", 1);
+    TerraformRegistryDao.ProviderPlatform deleted =
+        providerPlatform(hosted, deletedPath, "darwin", "arm64");
     TerraformRegistryDao.ProviderState state = new TerraformRegistryDao.ProviderState(
         hosted.id(), "acme", "cloud", "1.2.3", 2, sumsPath, signaturePath, 2, Instant.now());
     when(assets.list(eq(hosted), anyString())).thenReturn(List.of(archive));
     when(registry.findProviderState(hosted.id(), "acme", "cloud", "1.2.3"))
         .thenReturn(Optional.of(state));
     when(registry.listProviderPlatforms(hosted.id(), "acme", "cloud", "1.2.3"))
-        .thenReturn(List.of(platform));
+        .thenReturn(List.of(platform, deleted));
     when(registry.findSigningKey(hosted.id(), 2)).thenReturn(Optional.of(
         new TerraformRegistryDao.SigningKey(hosted.id(), 2, "0011223344556677",
             "encrypted", "PUBLIC KEY", Instant.now())));
     when(assets.find(hosted, oldSumsPath)).thenReturn(Optional.of(
         asset(22, hosted, 23L, oldSumsPath)));
+    when(assets.find(hosted, archivePath)).thenReturn(Optional.of(archive));
 
     Map<String, Object> versions = json(service.get(
         hosted, paths.parse("v1/providers/acme/cloud/versions"), BASE, false));
     assertTrue(versions.toString().contains("linux"));
     assertTrue(versions.toString().contains("amd64"));
+    assertFalse(versions.toString().contains("darwin"));
 
     Map<String, Object> download = json(service.get(
         hosted, paths.parse("v1/providers/acme/cloud/1.2.3/download/linux/amd64"), BASE,
@@ -236,6 +242,9 @@ class TerraformServiceTest {
     assertFalse(service.get(
         hosted, paths.parse("v1/providers/acme/cloud/1.2.3/download/linux/amd64"), BASE,
         null, true).hasBody());
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(hosted,
+            paths.parse("v1/providers/acme/cloud/1.2.3/download/darwin/arm64"), BASE, false));
 
     when(assets.serve(eq(hosted), anyString(), anyBoolean())).thenReturn(MavenResponse.noBody(200));
     assertEquals(200, service.get(hosted, paths.parse(archivePath), BASE, false).status());
@@ -254,7 +263,7 @@ class TerraformServiceTest {
   }
 
   @Test
-  void publishesMigratedProviderPlatformAtomicallyThroughDenyPolicy() throws Exception {
+  void reinspectsOrphanedMigratedProviderBeforePublishingThroughDenyPolicy() throws Exception {
     RepositoryRuntime hosted = runtime(
         30, "terraform", RepositoryType.HOSTED, null, List.of(), "DENY");
     TerraformPath upload = paths.parse("v1/providers/acme/cloud/1.2.3/download/linux/amd64");
@@ -270,7 +279,7 @@ class TerraformServiceTest {
     when(registry.findProviderState(hosted.id(), "acme", "cloud", "1.2.3"))
         .thenReturn(Optional.empty());
     when(inspector.bufferAndInspect(any(), eq(filename), eq(false), eq("cloud"))).thenReturn(buffered);
-    when(assets.find(hosted, archivePath)).thenReturn(Optional.empty(), Optional.of(archive));
+    when(assets.find(hosted, archivePath)).thenReturn(Optional.of(archive));
     when(assets.blob(archive)).thenReturn(blob);
     when(signing.active(hosted)).thenReturn(
         new TerraformSigningService.SigningMaterial(4, "AABBCCDDEEFF0011", "public", "private", "pass"));
@@ -287,6 +296,10 @@ class TerraformServiceTest {
     verify(registry).publishProvider(any(TerraformRegistryDao.ProviderPlatform.class), state.capture());
     assertEquals(1, state.getValue().revision());
     assertEquals(4, state.getValue().signingKeyRevision());
+    verify(inspector).bufferAndInspect(any(), eq(filename), eq(false), eq("cloud"));
+    verify(assets).store(
+        eq(hosted), eq(archivePath), any(), eq("application/zip"), any(),
+        eq("alice"), eq("127.0.0.1"));
     verify(assets, atLeastOnce()).storeBytes(eq(hosted), anyString(), any(), anyString(), any());
 
     assertThrows(MavenExceptions.BadRequestException.class,
@@ -488,6 +501,10 @@ class TerraformServiceTest {
         .thenReturn(List.of(providerPlatform(first, linuxPath, "linux", "amd64")));
     when(registry.listProviderPlatforms(second.id(), "acme", "cloud", "1.2.3"))
         .thenReturn(List.of(providerPlatform(second, darwinPath, "darwin", "arm64")));
+    when(assets.find(first, linuxPath)).thenReturn(Optional.of(
+        asset(53, first, 63L, linuxPath)));
+    when(assets.find(second, darwinPath)).thenReturn(Optional.of(
+        asset(54, second, 64L, darwinPath)));
 
     Map<String, Object> merged = json(service.get(
         group, paths.parse("v1/providers/acme/cloud/versions"), BASE, false));
