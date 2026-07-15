@@ -33,15 +33,17 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 
 /** HashiCorp Registry Protocol implementation shared by hosted, proxy, and group recipes. */
 @Service
 public class TerraformService {
+  public static final String PROVIDER_PROTOCOLS_HEADER = "X-Terraform-Provider-Protocols";
   private static final String JSON = MediaType.APPLICATION_JSON_VALUE;
   private static final String OCTET = MediaType.APPLICATION_OCTET_STREAM_VALUE;
-  private static final String PROTOCOLS = "5.0";
+  private static final String DEFAULT_PROVIDER_PROTOCOLS = "5.0";
 
   private final ObjectMapper mapper;
   private final TerraformAssetSupport assets;
@@ -110,7 +112,20 @@ public class TerraformService {
       String contentDisposition,
       String actor,
       String ip) {
-    return publish(runtime, path, body, contentType, contentDisposition, actor, ip, false);
+    return put(runtime, path, body, contentType, contentDisposition, null, actor, ip);
+  }
+
+  public MavenResponse put(
+      RepositoryRuntime runtime,
+      TerraformPath path,
+      InputStream body,
+      String contentType,
+      String contentDisposition,
+      String providerProtocols,
+      String actor,
+      String ip) {
+    return publish(
+        runtime, path, body, contentType, contentDisposition, providerProtocols, actor, ip, false);
   }
 
   /**
@@ -126,7 +141,7 @@ public class TerraformService {
       String contentDisposition,
       String actor,
       String ip) {
-    return publish(runtime, path, body, contentType, contentDisposition, actor, ip, true);
+    return publish(runtime, path, body, contentType, contentDisposition, null, actor, ip, true);
   }
 
   /**
@@ -201,6 +216,7 @@ public class TerraformService {
       InputStream body,
       String contentType,
       String contentDisposition,
+      String providerProtocols,
       String actor,
       String ip,
       boolean migration) {
@@ -208,7 +224,9 @@ public class TerraformService {
     return switch (path.kind()) {
       case MODULE_ARCHIVE -> putModule(runtime, path, body, contentType, actor, ip, migration);
       case PROVIDER_DOWNLOAD ->
-          putProvider(runtime, path, body, contentType, contentDisposition, actor, ip, migration);
+          putProvider(
+              runtime, path, body, contentType, contentDisposition, providerProtocols, actor, ip,
+              migration);
       default -> throw new MavenExceptions.MethodNotAllowed("Unsupported Terraform PUT path: " + path.rawPath());
     };
   }
@@ -265,12 +283,16 @@ public class TerraformService {
     }
     List<Map<String, Object>> values = new ArrayList<>();
     for (String version : TerraformVersions.descending(versions)) {
-      List<Map<String, Object>> platforms = publishedProviderPlatforms(
-              runtime, request.namespace(), request.name(), version).stream()
+      List<TerraformRegistryDao.ProviderPlatform> publishedPlatforms = publishedProviderPlatforms(
+          runtime, request.namespace(), request.name(), version);
+      List<Map<String, Object>> platforms = publishedPlatforms.stream()
           .map(row -> Map.<String, Object>of("os", row.os(), "arch", row.arch()))
           .toList();
       if (platforms.isEmpty()) continue;
-      values.add(Map.of("version", version, "protocols", List.of(PROTOCOLS), "platforms", platforms));
+      values.add(Map.of(
+          "version", version,
+          "protocols", providerVersionProtocols(publishedPlatforms),
+          "platforms", platforms));
     }
     if (values.isEmpty()) throw notFound(request.rawPath());
     return Map.of("versions", values);
@@ -371,8 +393,10 @@ public class TerraformService {
 
   private MavenResponse putProvider(
       RepositoryRuntime runtime, TerraformPath path, InputStream body, String contentType,
-      String contentDisposition, String actor, String ip, boolean migration) {
+      String contentDisposition, String requestedProtocols, String actor, String ip,
+      boolean migration) {
     enforceWrite(runtime, path.rawPath(), migration);
+    String protocols = normalizeProviderProtocols(requestedProtocols);
     String filename;
     try {
       filename = filename(contentDisposition);
@@ -401,6 +425,15 @@ public class TerraformService {
       if (existing.isPresent() && !"ALLOW".equals(effectiveWritePolicy(runtime, migration))) {
         throw new MavenExceptions.WritePolicyDenied("Terraform provider platform already exists");
       }
+      boolean inconsistentVersionProtocols = current.stream()
+          .filter(row -> !(row.os().equals(path.os()) && row.arch().equals(path.arch())))
+          .map(TerraformRegistryDao.ProviderPlatform::protocols)
+          .map(TerraformService::normalizeProviderProtocols)
+          .anyMatch(publishedProtocols -> !publishedProtocols.equals(protocols));
+      if (inconsistentVersionProtocols) {
+        throw new MavenExceptions.BadRequestException(
+            "Provider protocols must match every platform in the same version");
+      }
       long revision = registry.findProviderState(runtime.id(), path.namespace(), path.name(), path.version())
           .map(state -> state.revision() + 1).orElse(1L);
       String assetPath = "v1/providers/" + path.namespace() + "/" + path.name() + "/" + path.version()
@@ -413,14 +446,14 @@ public class TerraformService {
             Map.of(
                 "terraformKind", "provider-archive", "namespace", path.namespace(), "type", path.name(),
                 "version", path.version(), "os", path.os(), "arch", path.arch(),
-                "protocols", List.of(PROTOCOLS), "publishState", "STAGING", "revision", revision), actor, ip);
+                "protocols", protocolList(protocols), "publishState", "STAGING", "revision", revision), actor, ip);
       }
       AssetRecord stored = assets.find(runtime, assetPath).orElseThrow(() -> notFound(assetPath));
       AssetBlobRecord blob = assets.blob(stored);
       if (blob == null || blob.sha256() == null) throw new IllegalStateException("Provider archive digest is missing");
       TerraformRegistryDao.ProviderPlatform published = new TerraformRegistryDao.ProviderPlatform(
           runtime.id(), path.namespace(), path.name(), path.version(), path.os(), path.arch(), filename,
-          assetPath, blob.sha256(), PROTOCOLS, revision, Instant.now());
+          assetPath, blob.sha256(), protocols, revision, Instant.now());
       List<TerraformRegistryDao.ProviderPlatform> next = new ArrayList<>(current.stream()
           .filter(row -> !(row.os().equals(path.os()) && row.arch().equals(path.arch())))
           .toList());
@@ -985,8 +1018,45 @@ public class TerraformService {
   }
 
   private static List<String> protocolList(String value) {
-    if (value == null || value.isBlank()) return List.of(PROTOCOLS);
+    if (value == null || value.isBlank()) return List.of(DEFAULT_PROVIDER_PROTOCOLS);
     return java.util.Arrays.stream(value.split(",")).map(String::trim).filter(v -> !v.isBlank()).toList();
+  }
+
+  private static List<String> providerVersionProtocols(
+      List<TerraformRegistryDao.ProviderPlatform> platforms) {
+    if (platforms.isEmpty()) return List.of(DEFAULT_PROVIDER_PROTOCOLS);
+    String protocols = normalizeProviderProtocols(platforms.getFirst().protocols());
+    if (platforms.stream()
+        .skip(1)
+        .map(TerraformRegistryDao.ProviderPlatform::protocols)
+        .map(TerraformService::normalizeProviderProtocols)
+        .anyMatch(value -> !value.equals(protocols))) {
+      throw new IllegalStateException("Terraform provider version has inconsistent protocols");
+    }
+    return protocolList(protocols);
+  }
+
+  static String normalizeProviderProtocols(String value) {
+    String input = value == null || value.isBlank() ? DEFAULT_PROVIDER_PROTOCOLS : value.trim();
+    if (input.length() > 128) {
+      throw new MavenExceptions.BadRequestException("Invalid Terraform provider protocols");
+    }
+    TreeMap<Integer, Integer> versions = new TreeMap<>();
+    for (String raw : input.split(",", -1)) {
+      String protocol = raw.trim();
+      if (!protocol.matches("(?:0|[1-9][0-9]{0,2})\\.(?:0|[1-9][0-9]{0,2})")) {
+        throw new MavenExceptions.BadRequestException("Invalid Terraform provider protocols");
+      }
+      String[] parts = protocol.split("\\.");
+      int major = Integer.parseInt(parts[0]);
+      int minor = Integer.parseInt(parts[1]);
+      if (major < 5 || versions.putIfAbsent(major, minor) != null) {
+        throw new MavenExceptions.BadRequestException("Invalid Terraform provider protocols");
+      }
+    }
+    return versions.entrySet().stream()
+        .map(entry -> entry.getKey() + "." + entry.getValue())
+        .collect(java.util.stream.Collectors.joining(","));
   }
 
   private static String safeRemoteFilename(String url, String fallback) {

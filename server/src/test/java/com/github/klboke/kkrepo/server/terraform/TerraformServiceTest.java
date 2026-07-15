@@ -318,7 +318,10 @@ class TerraformServiceTest {
     String deletedPath = "v1/providers/acme/cloud/1.2.3/package/darwin/"
         + "terraform-provider-cloud_1.2.3_darwin_arm64.zip";
     AssetRecord archive = asset(20, hosted, 21L, archivePath);
-    TerraformRegistryDao.ProviderPlatform platform = platform(hosted, archivePath, "abc123", 1);
+    TerraformRegistryDao.ProviderPlatform platform = new TerraformRegistryDao.ProviderPlatform(
+        hosted.id(), "acme", "cloud", "1.2.3", "linux", "amd64",
+        archivePath.substring(archivePath.lastIndexOf('/') + 1), archivePath, "abc123", "6.0", 1,
+        Instant.now());
     TerraformRegistryDao.ProviderPlatform deleted =
         providerPlatform(hosted, deletedPath, "darwin", "arm64");
     TerraformRegistryDao.ProviderState state = new TerraformRegistryDao.ProviderState(
@@ -337,12 +340,15 @@ class TerraformServiceTest {
         hosted, paths.parse("v1/providers/acme/cloud/versions"), BASE, false));
     assertTrue(versions.toString().contains("linux"));
     assertTrue(versions.toString().contains("amd64"));
+    assertTrue(versions.toString().contains("6.0"));
+    assertFalse(versions.toString().contains("5.0"));
     assertFalse(versions.toString().contains("darwin"));
 
     Map<String, Object> download = json(service.get(
         hosted, paths.parse("v1/providers/acme/cloud/1.2.3/download/linux/amd64"), BASE,
         "token", false));
     assertEquals("abc123", download.get("shasum"));
+    assertEquals(List.of("6.0"), download.get("protocols"));
     assertEquals(
         BASE + "/v1/providers/token/acme/cloud/1.2.3/download/linux/amd64/"
             + "terraform-provider-cloud_1.2.3_linux_amd64.zip",
@@ -474,7 +480,7 @@ class TerraformServiceTest {
 
     MavenResponse response = service.put(
         allow, upload, new ByteArrayInputStream("replacement".getBytes(StandardCharsets.UTF_8)),
-        "application/zip", "attachment; filename=\"" + filename + "\"", "alice", null);
+        "application/zip", "attachment; filename=\"" + filename + "\"", "6.0", "alice", null);
 
     assertEquals(201, response.status());
     assertFalse(Files.exists(buffered));
@@ -484,6 +490,7 @@ class TerraformServiceTest {
         ArgumentCaptor.forClass(TerraformRegistryDao.ProviderState.class);
     verify(registry).publishProvider(platform.capture(), state.capture());
     assertEquals("new-sha", platform.getValue().sha256());
+    assertEquals("6.0", platform.getValue().protocols());
     assertEquals(3, platform.getValue().revision());
     assertEquals(3, state.getValue().revision());
     ArgumentCaptor<byte[]> sums = ArgumentCaptor.forClass(byte[].class);
@@ -493,6 +500,51 @@ class TerraformServiceTest {
         eq("text/plain"), any());
     assertEquals("new-sha  " + filename + "\n",
         new String(sums.getValue(), StandardCharsets.UTF_8));
+  }
+
+  @Test
+  void validatesAndCanonicalizesExplicitProviderProtocols() {
+    assertEquals("5.0", TerraformService.normalizeProviderProtocols(null));
+    assertEquals("5.0,6.0", TerraformService.normalizeProviderProtocols(" 6.0, 5.0 "));
+    assertThrows(MavenExceptions.BadRequestException.class,
+        () -> TerraformService.normalizeProviderProtocols("4.0"));
+    assertThrows(MavenExceptions.BadRequestException.class,
+        () -> TerraformService.normalizeProviderProtocols("5.0,5.1"));
+    assertThrows(MavenExceptions.BadRequestException.class,
+        () -> TerraformService.normalizeProviderProtocols("six"));
+  }
+
+  @Test
+  void rejectsProviderProtocolsThatDifferAcrossPlatformsOfOneVersion() throws Exception {
+    RepositoryRuntime hosted = runtime(
+        34, "terraform", RepositoryType.HOSTED, null, List.of(), "ALLOW");
+    TerraformPath upload = paths.parse("v1/providers/acme/cloud/1.2.3/download/linux/amd64");
+    String filename = "terraform-provider-cloud_1.2.3_linux_amd64.zip";
+    String existingPath = "v1/providers/acme/cloud/1.2.3/package/darwin/"
+        + "terraform-provider-cloud_1.2.3_darwin_arm64.zip";
+    Path buffered = Files.createTempFile("terraform-provider-protocol-mismatch-test", ".zip");
+    when(inspector.bufferAndInspect(any(), eq(filename), eq(false), eq("cloud")))
+        .thenReturn(buffered);
+    when(registry.tryAcquirePublishLease(anyString(), anyString(), any())).thenReturn(true);
+    when(registry.listProviderPlatforms(hosted.id(), "acme", "cloud", "1.2.3"))
+        .thenReturn(List.of(new TerraformRegistryDao.ProviderPlatform(
+            hosted.id(), "acme", "cloud", "1.2.3", "darwin", "arm64",
+            "terraform-provider-cloud_1.2.3_darwin_arm64.zip", existingPath, "old-sha", "5.0", 1,
+            Instant.now())));
+    when(assets.find(hosted, existingPath))
+        .thenReturn(Optional.of(asset(61, hosted, 62L, existingPath)));
+
+    MavenExceptions.BadRequestException thrown = assertThrows(
+        MavenExceptions.BadRequestException.class,
+        () -> service.put(
+            hosted, upload, new ByteArrayInputStream(new byte[0]), "application/zip",
+            "attachment; filename=\"" + filename + "\"", "6.0", "alice", null));
+
+    assertEquals(
+        "Provider protocols must match every platform in the same version", thrown.getMessage());
+    assertFalse(Files.exists(buffered));
+    verify(registry, never()).publishProvider(any(), any());
+    verify(registry).releasePublishLease(anyString(), anyString());
   }
 
   @Test

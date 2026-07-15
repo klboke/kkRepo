@@ -366,9 +366,16 @@ curl -u user:password --upload-file network-1.0.0.zip \
 
 curl -u user:password \
   -H 'Content-Disposition: attachment; filename=terraform-provider-demo_1.0.0_linux_amd64.zip' \
+  -H 'X-Terraform-Provider-Protocols: 6.0' \
   --upload-file terraform-provider-demo_1.0.0_linux_amd64.zip \
   https://repo.example.com/repository/terraform-hosted/v1/providers/acme/demo/1.0.0/download/linux/amd64
 ```
+
+兼容 Nexus 的 Provider PUT 未携带 `X-Terraform-Provider-Protocols` 时保留 Nexus 的 `5.0`
+默认值。仅支持 protocol 6 的 Provider 必须显式发送该 header；Browse/Admin 与 component upload
+API 使用同一 `terraform.protocols` 字段。一个 release 同时支持两个大版本时可传
+`5.0,6.0`，同一 Provider version 的所有 platform 必须声明相同协议集合。kkRepo 不会执行上传的
+Provider binary 来猜测该 metadata。
 
 kkRepo 将 hosted Provider SHA256SUMS 与 detached GPG signature 作为同一 revision 生成。Proxy 会保留并校验上游 checksum/signing metadata；group source binding 保证 metadata 与 archive 下载来自同一个 member。
 

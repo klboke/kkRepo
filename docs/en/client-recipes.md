@@ -366,9 +366,17 @@ curl -u user:password --upload-file network-1.0.0.zip \
 
 curl -u user:password \
   -H 'Content-Disposition: attachment; filename=terraform-provider-demo_1.0.0_linux_amd64.zip' \
+  -H 'X-Terraform-Provider-Protocols: 6.0' \
   --upload-file terraform-provider-demo_1.0.0_linux_amd64.zip \
   https://repo.example.com/repository/terraform-hosted/v1/providers/acme/demo/1.0.0/download/linux/amd64
 ```
+
+Nexus-compatible provider PUTs that omit `X-Terraform-Provider-Protocols` retain Nexus's `5.0`
+default. Protocol 6-only providers must send the explicit header; Browse/Admin and the component
+upload API expose the same value as `terraform.protocols`. A comma-separated value such as
+`5.0,6.0` is accepted when the release supports both major protocols. Every platform uploaded for
+one provider version must declare the same protocol set. kkRepo never executes an uploaded provider
+binary to infer this metadata.
 
 kkRepo generates hosted provider SHA256SUMS and detached GPG signatures as one revision. Proxy repositories preserve and verify upstream checksum/signing metadata, and group source bindings keep metadata and archive downloads on the same member.
 

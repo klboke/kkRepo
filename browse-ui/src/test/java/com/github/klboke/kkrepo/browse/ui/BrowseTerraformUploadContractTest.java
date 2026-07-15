@@ -22,13 +22,14 @@ class BrowseTerraformUploadContractTest {
     assertTrue(javascript.contains("id=\"upload-terraform-version\""));
     assertTrue(javascript.contains("data-terraform-kind=\"module\""));
     assertTrue(javascript.contains("data-terraform-kind=\"provider\""));
+    assertTrue(javascript.contains("id=\"upload-terraform-protocols\""));
     for (String field : new String[] {
-        "kind", "namespace", "name", "version", "system", "os", "arch", "asset"
+        "kind", "namespace", "name", "version", "system", "os", "arch", "protocols", "asset"
     }) {
       assertTrue(javascript.contains("form.append(\"terraform." + field + "\""), field);
     }
     assertTrue(javascript.contains("updateTerraformUploadKind"));
-    assertTrue(index.contains("/browse/assets/browse.js?v=20260715-terraform-upload-1"));
+    assertTrue(index.contains("/browse/assets/browse.js?v=20260715-terraform-upload-2"));
   }
 
   private String resource(String path) throws IOException {

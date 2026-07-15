@@ -397,7 +397,9 @@ public class RepositoryContentController {
       MavenResponse resp;
       try (InputStream body = request.getInputStream()) {
         resp = terraform.put(runtime, path, body, contentType,
-            request.getHeader(HttpHeaders.CONTENT_DISPOSITION), userId, request.getRemoteAddr());
+            request.getHeader(HttpHeaders.CONTENT_DISPOSITION),
+            request.getHeader(TerraformService.PROVIDER_PROTOCOLS_HEADER),
+            userId, request.getRemoteAddr());
       }
       return ResponseEntity.status(resp.status()).build();
     }

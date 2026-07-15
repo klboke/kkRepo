@@ -169,7 +169,46 @@ class ComponentUploadServiceTest {
             "127.0.0.1"));
 
     assertEquals("Terraform upload requires exactly one archive", thrown.getMessage());
-    verify(terraformService, never()).put(any(), any(), any(), any(), any(), any(), any());
+    verify(terraformService, never()).put(
+        any(), any(), any(), any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void terraformComponentUploadForwardsExplicitProviderProtocols() throws Exception {
+    TerraformService terraformService = mock(TerraformService.class);
+    ComponentUploadService service = service(terraformService);
+    LinkedMultiValueMap<String, MultipartFile> uploads = new LinkedMultiValueMap<>();
+    uploads.add("terraform.asset", new MockMultipartFile(
+        "terraform.asset",
+        "terraform-provider-cloud_1.2.3_linux_amd64.zip",
+        "application/zip",
+        new byte[] {1}));
+
+    ComponentUploadService.UploadResult result = service.upload(
+        "terraform-hosted",
+        Map.of(
+            "terraform.kind", new String[] {"provider"},
+            "terraform.namespace", new String[] {"acme"},
+            "terraform.name", new String[] {"cloud"},
+            "terraform.version", new String[] {"1.2.3"},
+            "terraform.os", new String[] {"linux"},
+            "terraform.arch", new String[] {"amd64"},
+            "terraform.protocols", new String[] {"6.0"}),
+        uploads,
+        "alice",
+        "127.0.0.1");
+
+    assertEquals(
+        List.of("v1/providers/acme/cloud/1.2.3/download/linux/amd64"), result.paths());
+    verify(terraformService).put(
+        any(),
+        any(),
+        any(),
+        eq("application/zip"),
+        eq("attachment; filename=\"terraform-provider-cloud_1.2.3_linux_amd64.zip\""),
+        eq("6.0"),
+        eq("alice"),
+        eq("127.0.0.1"));
   }
 
   private static ComponentUploadService service(CargoHostedService cargoHosted) {

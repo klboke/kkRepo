@@ -40,7 +40,7 @@
 - Provider archive、SHA256SUMS 和签名是一个一致性单元。新增一个 OS/architecture 平台会改变 version 的平台集合和 checksum 清单；必须通过关系数据库 revision 和原子可见状态协调多副本。
 - Provider metadata 的 OpenPGP `key_id` 使用 Nexus 的无前导零大写十六进制序列化；迁移时必须保持源 key ID，不得为了固定宽度补零。
 - Hosted 和 group 在 canonical archive route 之外继续接受 Nexus 已发布的 `download/{os}/{arch}/{filename}.zip` 直链；迁移后旧 metadata、lock/cache 中保存的 URL 不应失效。
-- Provider zip 和 module archive 只作为不可信数据检查；除展开大小、压缩比、条目数与超时限制外，XZ 在读取 header 时必须先应用 dictionary memory limit。服务端绝不能执行其中的 Provider binary 或 module code。无法安全推导的 protocol version 行为必须先以 Nexus 参考测试固定。
+- Provider zip 和 module archive 只作为不可信数据检查；除展开大小、压缩比、条目数与超时限制外，XZ 在读取 header 时必须先应用 dictionary memory limit。服务端绝不能执行其中的 Provider binary 或 module code。Nexus 兼容 PUT 未声明 protocol 时使用参考实例的 `5.0` 默认值；kkrepo 扩展 header `X-Terraform-Provider-Protocols` 与 component upload 的 `terraform.protocols` 字段允许安全声明 `5.0`、`6.0` 或两者，同一 Provider version 的所有 platform 必须一致。
 
 ## 功能范围
 
@@ -273,7 +273,7 @@ MySQL 与 PostgreSQL migration 必须同步增加，DAO 放在 `persistence-jdbc
 5. 根据全部 `READY` platform 加当前 staging platform 生成稳定排序的 SHA256SUMS，再生成 detached signature 和公开 signing key metadata；`ALLOW` 重部署同一 os/arch 时先从新快照移除旧 platform，再只加入 replacement，`ALLOW_ONCE`/`DENY` 仍拒绝已发布 platform。
 6. 将新 checksum/signature 写入临时 blob；在单个事务中绑定 archive、checksum、signature、platform row 和 provider revision，并把新状态切换为 `READY`。
 7. 新 revision 提交后，旧 checksum/signature 路由立即失效，随后异步 GC；因为 Nexus 兼容的 archive 下载别名始终解析到当前 platform，旧 metadata 请求必须失败并由客户端重试，不能把旧清单与 replacement archive 组合成可成功读取的不一致快照。
-8. Provider protocol version 的来源和默认值必须由 M0 对 Nexus hosted 上传实测确定。实现不得启动 provider binary 探测；若 Nexus 暴露显式 upload field/header，则完整对齐，否则只实现已验证的安全推导/default。
+8. Provider protocol version 默认值由 M0 对 Nexus hosted 上传实测确定为 `5.0`。实现不得启动 provider binary 探测；Nexus 兼容 PUT 保持该默认值，kkrepo 通过 `X-Terraform-Provider-Protocols` header、Browse/Admin 和 component upload `terraform.protocols` 显式接收真实值，并在同一 version 的跨 platform 发布中强制一致。
 
 签名 key 轮换不会隐式重签所有历史 version。轮换时保存 key revision；新上传使用新 key，历史 metadata 继续引用生成其签名的 public key，除非管理员显式启动可恢复的重签任务。
 

@@ -2643,6 +2643,10 @@ function renderUploadFields() {
         <span>Architecture</span>
         <input id="upload-terraform-arch" type="text" placeholder="amd64">
       </label>
+      <label data-terraform-kind="provider" hidden>
+        <span>Provider protocols</span>
+        <input id="upload-terraform-protocols" type="text" value="5.0" placeholder="5.0 or 6.0">
+      </label>
       <label class="upload-file">
         <span>File</span>
         <input id="upload-file" type="file" accept=".zip" required>
@@ -2869,11 +2873,13 @@ function buildUploadForm(repo, form) {
     } else if (kind === "provider") {
       const os = uploadFieldValue("upload-terraform-os");
       const arch = uploadFieldValue("upload-terraform-arch");
+      const protocols = uploadFieldValue("upload-terraform-protocols");
       if (!os || !arch) {
         throw new Error("Operating system and Architecture are required for a Terraform provider.");
       }
       form.append("terraform.os", os);
       form.append("terraform.arch", arch);
+      if (protocols) form.append("terraform.protocols", protocols);
     } else {
       throw new Error("Package kind must be module or provider.");
     }

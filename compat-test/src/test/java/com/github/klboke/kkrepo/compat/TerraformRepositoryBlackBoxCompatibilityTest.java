@@ -21,6 +21,7 @@ import java.time.Duration;
 import java.util.Base64;
 import java.util.Date;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -166,6 +167,33 @@ class TerraformRepositoryBlackBoxCompatibilityTest {
     }
   }
 
+  @Test
+  void explicitProviderProtocolsArePersistedWhenConfigured() throws Exception {
+    Config config = Config.load();
+    assumeTrue(config.configured(),
+        "Set NEXUS_COMPAT_BASE_URL and KKREPO_COMPAT_BASE_URL to run Terraform compatibility");
+    ensureKkRepo(config);
+
+    String version = "1.0." + System.currentTimeMillis();
+    String path = "v1/providers/kkrepo/protocol6/" + version + "/download/linux/amd64";
+    String filename = "terraform-provider-protocol6_" + version + "_linux_amd64.zip";
+    byte[] provider = zip("terraform-provider-protocol6_v" + version,
+        "#!/bin/sh\nexit 1\n".getBytes(StandardCharsets.UTF_8));
+    assert2xx("kkrepo protocol 6 provider upload", put(
+        config.kkrepoRepository(config.hosted), path, provider, filename, config.kkrepoAuth, "6.0"));
+
+    Exchange metadata = get(config.kkrepoRepository(config.hosted), path, config.kkrepoAuth);
+    assertEquals(200, metadata.status, metadata.text());
+    Map<String, Object> body = JSON.readValue(metadata.body, new TypeReference<>() {});
+    assertEquals(List.of("6.0"), body.get("protocols"));
+    Exchange versions = get(
+        config.kkrepoRepository(config.hosted),
+        "v1/providers/kkrepo/protocol6/versions",
+        config.kkrepoAuth);
+    assertEquals(200, versions.status, versions.text());
+    assertTrue(versions.text().contains("\"protocols\":[\"6.0\"]"), versions.text());
+  }
+
   private static void validateProvider(
       Config config, String repository, String authorization, String path, String filename,
       byte[] expectedArchive) throws Exception {
@@ -173,6 +201,7 @@ class TerraformRepositoryBlackBoxCompatibilityTest {
     assertEquals(200, metadata.status, metadata.text());
     Map<String, Object> body = JSON.readValue(metadata.body, new TypeReference<>() {});
     assertEquals(filename, body.get("filename"));
+    assertEquals(List.of("5.0"), body.get("protocols"));
     String shasum = body.get("shasum").toString();
     assertEquals(sha256(expectedArchive), shasum);
     byte[] archive = getAbsolute(
@@ -298,10 +327,19 @@ class TerraformRepositoryBlackBoxCompatibilityTest {
 
   private static Exchange put(
       String repository, String path, byte[] body, String filename, String authorization) throws Exception {
+    return put(repository, path, body, filename, authorization, null);
+  }
+
+  private static Exchange put(
+      String repository, String path, byte[] body, String filename, String authorization,
+      String providerProtocols) throws Exception {
     HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(repository + "/" + path))
         .header("Content-Type", "application/zip")
         .header("Authorization", authorization);
     if (filename != null) request.header("Content-Disposition", "attachment; filename=\"" + filename + "\"");
+    if (providerProtocols != null) {
+      request.header("X-Terraform-Provider-Protocols", providerProtocols);
+    }
     return send(request.PUT(HttpRequest.BodyPublishers.ofByteArray(body)));
   }
 

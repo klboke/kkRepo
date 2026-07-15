@@ -221,12 +221,14 @@ public class ComponentUploadService {
     if (filename == null || filename.isBlank()) filename = "terraform.zip";
     String path;
     String disposition = null;
+    String protocols = null;
     if ("module".equals(kind)) {
       String system = requireField(upload.fields(), "system");
       path = "v1/modules/" + namespace + "/" + name + "/" + system + "/" + version + "/" + filename;
     } else if ("provider".equals(kind)) {
       String os = requireField(upload.fields(), "os");
       String arch = requireField(upload.fields(), "arch");
+      protocols = upload.fields().get("protocols");
       path = "v1/providers/" + namespace + "/" + name + "/" + version + "/download/" + os + "/" + arch;
       disposition = "attachment; filename=\"" + filename.replace("\"", "") + "\"";
     } else {
@@ -234,7 +236,7 @@ public class ComponentUploadService {
     }
     try (var body = asset.file().getInputStream()) {
       terraformService.put(runtime, terraformPathParser.parse(path), body, asset.file().getContentType(),
-          disposition, createdBy, createdByIp);
+          disposition, protocols, createdBy, createdByIp);
     }
     return List.of(path);
   }
