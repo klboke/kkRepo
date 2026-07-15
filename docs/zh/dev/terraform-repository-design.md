@@ -79,7 +79,7 @@
    - URL token 使用现有安全主体、hash、过期、禁用、审计和权限模型，不新增一套独立用户真相。
    - URL token 只在认证 filter 中解析；进入协议 service 前 path 必须已经剥离 credential segment。
    - versions、download metadata、archive/checksum/signature 读取映射 repository `READ`。
-   - Hosted 首次上传映射 `ADD`；同 coordinate/platform 替换只有 write policy 允许时映射 `EDIT`；删除映射 `DELETE`。
+   - Hosted 首次上传映射 `ADD`；同 coordinate/platform 替换只有 write policy 允许时映射 `EDIT`；Provider platform 是否已发布以共享数据库中的 publication 记录判定，不能只看单节点状态；删除映射 `DELETE`。
    - Group 和 proxy 写请求不得因为具备 `ADD` 权限而绕过只读类型约束。
 
 5. 管理、搜索和迁移

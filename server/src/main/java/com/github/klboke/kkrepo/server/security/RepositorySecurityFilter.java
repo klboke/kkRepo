@@ -8,6 +8,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.pub.PubPath;
 import com.github.klboke.kkrepo.protocol.pub.PubPathParser;
@@ -46,6 +47,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   private final AccessDecisionService accessDecisionService;
   private final RepositoryDao repositoryDao;
   private final AssetDao assetDao;
+  private final TerraformRegistryDao terraformRegistryDao;
   private final ForwardedHeaderPolicy forwardedHeaderPolicy;
   private final NexusLegacyUiCompatibility legacyUi;
 
@@ -54,12 +56,14 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       AccessDecisionService accessDecisionService,
       RepositoryDao repositoryDao,
       AssetDao assetDao,
+      TerraformRegistryDao terraformRegistryDao,
       ForwardedHeaderPolicy forwardedHeaderPolicy,
       NexusLegacyUiCompatibility legacyUi) {
     this.authenticationService = authenticationService;
     this.accessDecisionService = accessDecisionService;
     this.repositoryDao = repositoryDao;
     this.assetDao = assetDao;
+    this.terraformRegistryDao = terraformRegistryDao;
     this.forwardedHeaderPolicy = forwardedHeaderPolicy;
     this.legacyUi = legacyUi;
   }
@@ -139,7 +143,9 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       response.sendError(HttpServletResponse.SC_FORBIDDEN, decision.reason());
       return;
     }
-    if (terraformUrlToken == null && isTerraformDownloadMetadata(terraformPath)) {
+    if (terraformUrlToken == null
+        && target.readOnly(repository.get().format())
+        && isTerraformDownloadMetadata(terraformPath)) {
       Optional<String> replayable = authenticationService.replayableTerraformUrlToken(
           request, authenticated.get());
       if (replayable.isPresent()) {
@@ -198,7 +204,13 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
           : List.of(PermissionAction.ADD);
     }
     if (path.kind() == TerraformPath.Kind.PROVIDER_DOWNLOAD) {
-      return List.of(PermissionAction.ADD);
+      boolean exists = terraformRegistryDao.listProviderPlatforms(
+              repository.id(), path.namespace(), path.name(), path.version()).stream()
+          .anyMatch(platform -> platform.os().equals(path.os())
+              && platform.arch().equals(path.arch()));
+      return exists
+          ? List.of(PermissionAction.EDIT)
+          : List.of(PermissionAction.ADD);
     }
     return List.of(PermissionAction.EDIT);
   }
