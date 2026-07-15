@@ -4,6 +4,8 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPath;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPathParser;
+import com.github.klboke.kkrepo.protocol.terraform.TerraformPath;
+import com.github.klboke.kkrepo.protocol.terraform.TerraformPathParser;
 import com.github.klboke.kkrepo.server.docker.DockerConnectorConfiguration;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.RepositorySecurityFilter;
@@ -36,7 +38,9 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
   static final int FILTER_ORDER = SessionRepositoryFilter.DEFAULT_ORDER + 18;
   private static final Logger log = LoggerFactory.getLogger(RepositoryRequestMetricsFilter.class);
   private static final int MAX_LOGGED_PARAM_VALUE_LENGTH = 512;
+  private static final String REDACTED_TERRAFORM_PATH = "<redacted-terraform-path>";
   private static final ComposerPathParser COMPOSER_PATHS = new ComposerPathParser();
+  private static final TerraformPathParser TERRAFORM_PATHS = new TerraformPathParser();
 
   private final KkRepoMetrics metrics;
   private final boolean logNonSuccessRequests;
@@ -178,24 +182,46 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
 
   private static Target effectiveTarget(
       HttpServletRequest request, Target target, RepositoryRecord repository) {
-    if (repository == null || repository.format() != RepositoryFormat.TERRAFORM) {
-      return target;
-    }
     Object normalized = request.getAttribute(RepositorySecurityFilter.NORMALIZED_REPOSITORY_PATH_ATTRIBUTE);
     if (normalized instanceof String path && !path.isBlank()) {
       return new Target(target.repository(), path, target.route());
     }
-    // A rejected Terraform URL may still contain a credential segment. If the security filter
-    // could not canonicalize it, discard the entire path rather than risk logging the token.
-    return new Target(target.repository(), "<redacted-terraform-path>", target.route());
+    if (repository != null && repository.format() == RepositoryFormat.TERRAFORM) {
+      // A rejected Terraform URL may still contain a credential segment. If the security filter
+      // could not canonicalize it, discard the entire path rather than risk logging the token.
+      return redactedTerraformTarget(target);
+    }
+    if (!terraformShaped(target.path())) return target;
+    try {
+      TerraformPathParser.ParsedRequest parsed = TERRAFORM_PATHS.parseRequestPath(target.path());
+      if (parsed.credentialSegment() != null) {
+        return new Target(target.repository(), parsed.canonicalPath(), target.route());
+      }
+      if (parsed.path().kind() != TerraformPath.Kind.UNKNOWN) return target;
+    } catch (IllegalArgumentException ignored) {
+      // Unsafe or malformed Terraform-shaped paths may contain credentials; redact below.
+    }
+    return redactedTerraformTarget(target);
   }
 
   private static String loggedUri(
       HttpServletRequest request, Target target, String format) {
-    if (!"terraform".equals(format) || !"repository".equals(target.route())) {
+    if (!"repository".equals(target.route())
+        || (!("terraform".equals(format))
+            && !terraformShaped(target.path())
+            && !REDACTED_TERRAFORM_PATH.equals(target.path()))) {
       return stripContextPath(request);
     }
     return "/repository/" + target.repository() + "/" + target.path();
+  }
+
+  private static boolean terraformShaped(String path) {
+    return path != null
+        && (path.startsWith("v1/modules/") || path.startsWith("v1/providers/"));
+  }
+
+  private static Target redactedTerraformTarget(Target target) {
+    return new Target(target.repository(), REDACTED_TERRAFORM_PATH, target.route());
   }
 
   private static Target target(HttpServletRequest request) {

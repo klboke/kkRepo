@@ -295,6 +295,50 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
+  void rejectsNonReplayableAuthenticationEvenWhenAnonymousMetadataReadIsEnabled() throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("alice")), subject("anonymous"));
+    authentication.anonymousEnabled = true;
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        new RecordingDecisionService(AccessDecision.allow()),
+        new FakeRepositoryDao(repository(
+            "terraform-public", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED)),
+        true);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/repository/terraform-public/v1/modules/acme/network/aws/1.2.3/download"),
+        response.proxy(), chain);
+
+    assertEquals(0, chain.calls);
+    assertEquals(HttpServletResponse.SC_UNAUTHORIZED, response.status);
+    assertEquals(0, authentication.anonymousCalls);
+  }
+
+  @Test
+  void allowsAnonymousTerraformDownloadMetadataWithoutReplayToken() throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.empty(), subject("anonymous"));
+    authentication.anonymousEnabled = true;
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        new RecordingDecisionService(AccessDecision.allow()),
+        new FakeRepositoryDao(repository(
+            "terraform-public", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED)),
+        true);
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/repository/terraform-public/v1/modules/acme/network/aws/1.2.3/download"),
+        new ResponseState().proxy(), chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(1, authentication.anonymousCalls);
+  }
+
+  @Test
   void cargoSparseIndexRequiresAuthenticationWhenAnonymousReadIsDisabled() throws Exception {
     assertCargoReadRequiresAuthenticationWhenAnonymousAccessDisabled("/repository/cargo-hosted/kk/re/kkrepo_e2e");
   }

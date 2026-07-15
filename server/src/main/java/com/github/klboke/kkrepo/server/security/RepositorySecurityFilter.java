@@ -121,10 +121,12 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       default -> authenticationService.authenticate(request);
     }
         : authenticationService.authenticateTerraformUrlToken(terraformUrlToken);
+    boolean authenticatedAnonymously = false;
     if (authenticated.isEmpty()) {
       authenticated = target.readOnly(repository.get().format())
           ? authenticationService.authenticateAnonymous()
           : Optional.empty();
+      authenticatedAnonymously = authenticated.isPresent();
       if (authenticated.isEmpty()) {
         challenge(request, response, repository.get(), target);
         return;
@@ -143,7 +145,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       if (replayable.isPresent()) {
         request.setAttribute(
             TERRAFORM_URL_TOKEN_SEGMENT_ATTRIBUTE, encodePathSegment(replayable.get()));
-      } else if (!anonymousCanRead(repository.get(), target)) {
+      } else if (!authenticatedAnonymously) {
         challenge(request, response, repository.get(), target);
         return;
       }
@@ -154,16 +156,6 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   private static boolean isTerraformDownloadMetadata(TerraformPath path) {
     return path != null && (path.kind() == TerraformPath.Kind.MODULE_DOWNLOAD
         || path.kind() == TerraformPath.Kind.PROVIDER_DOWNLOAD);
-  }
-
-  private boolean anonymousCanRead(RepositoryRecord repository, RepositoryRequest target) {
-    Optional<AuthenticatedSubject> anonymous = authenticationService.authenticateAnonymous();
-    if (anonymous.isEmpty()) return false;
-    return actionsForDecision(repository, target).stream().anyMatch(action ->
-        accessDecisionService.decide(
-            anonymous.get().permissionSubject(),
-            new RepositoryPermission(repository.name(), repository.format(), target.path(), action))
-            .allowed());
   }
 
   private static String encodePathSegment(String value) {

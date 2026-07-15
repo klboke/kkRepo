@@ -243,6 +243,61 @@ class RepositoryRequestMetricsFilterTest {
   }
 
   @Test
+  void stripsTerraformUrlTokenFromMissingRepositoryFailureLogs() throws Exception {
+    SimpleMeterRegistry registry = new SimpleMeterRegistry();
+    RepositoryRequestMetricsFilter filter = new RepositoryRequestMetricsFilter(
+        new KkRepoMetrics(registry), true, "");
+    String token = "GenericToken.missing-repository-secret";
+    String canonical = "v1/providers/kkrepo/fixture/versions";
+    MockHttpServletRequest request = new MockHttpServletRequest(
+        "GET", "/repository/deleted/v1/providers/" + token + "/kkrepo/fixture/versions");
+    MockHttpServletResponse response = new MockHttpServletResponse();
+    FilterChain chain = (req, resp) -> ((MockHttpServletResponse) resp).sendError(404);
+
+    ListAppender<ILoggingEvent> appender = attachAppender();
+    try {
+      filter.doFilter(request, response, chain);
+    } finally {
+      detachAppender(appender);
+    }
+
+    String message = appender.list.get(0).getFormattedMessage();
+    assertTrue(message.contains("uri=/repository/deleted/" + canonical));
+    assertTrue(message.contains("path=" + canonical));
+    assertFalse(message.contains(token));
+  }
+
+  @Test
+  void stripsTerraformUrlTokenFromWrongFormatRepositoryFailureLogs() throws Exception {
+    SimpleMeterRegistry registry = new SimpleMeterRegistry();
+    RepositoryRequestMetricsFilter filter = new RepositoryRequestMetricsFilter(
+        new KkRepoMetrics(registry), true, "");
+    String token = "GenericToken.raw-repository-secret";
+    String canonical = "v1/modules/acme/network/aws/versions";
+    MockHttpServletRequest request = new MockHttpServletRequest(
+        "GET", "/repository/raw/v1/modules/" + token + "/acme/network/aws/versions");
+    MockHttpServletResponse response = new MockHttpServletResponse();
+    FilterChain chain = (req, resp) -> {
+      req.setAttribute(
+          RepositorySecurityFilter.REPOSITORY_RECORD_ATTRIBUTE,
+          repository("raw", RepositoryFormat.RAW, RepositoryType.HOSTED));
+      ((MockHttpServletResponse) resp).sendError(404);
+    };
+
+    ListAppender<ILoggingEvent> appender = attachAppender();
+    try {
+      filter.doFilter(request, response, chain);
+    } finally {
+      detachAppender(appender);
+    }
+
+    String message = appender.list.get(0).getFormattedMessage();
+    assertTrue(message.contains("uri=/repository/raw/" + canonical));
+    assertTrue(message.contains("path=" + canonical));
+    assertFalse(message.contains(token));
+  }
+
+  @Test
   void doesNotLogNonSuccessRepositoryRequestDetailsWhenDisabled() throws Exception {
     SimpleMeterRegistry registry = new SimpleMeterRegistry();
     RepositoryRequestMetricsFilter filter = new RepositoryRequestMetricsFilter(new KkRepoMetrics(registry), false, "404");
