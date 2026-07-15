@@ -555,7 +555,7 @@ class TerraformServiceTest {
           return response("archive".getBytes(StandardCharsets.UTF_8), "application/zip");
         });
     InputStream checksumFailedBody = mock(InputStream.class);
-    when(proxy.getAssetFromUrl(eq(proxyRuntime), anyString(), anyString(), anyBoolean()))
+    when(proxy.getPinnedAssetFromUrl(eq(proxyRuntime), anyString(), anyString(), anyBoolean()))
         .thenReturn(
             MavenResponse.noBody(200),
             MavenResponse.ok(checksumFailedBody, 7, "application/zip", null, null));
@@ -603,6 +603,10 @@ class TerraformServiceTest {
         .findFirst().orElseThrow().get("sha256"));
 
     String localArchive = "v1/providers/acme/cloud/1.2.3/download/linux/amd64/" + filename;
+    String localRoute = ".terraform/routes/" + digest(
+        localArchive.getBytes(StandardCharsets.UTF_8)) + ".json";
+    when(assets.find(proxyRuntime, localRoute)).thenReturn(Optional.of(
+        asset(40, proxyRuntime, 41L, localRoute)));
     when(assets.bytes(eq(proxyRuntime), anyString())).thenReturn(mapper.writeValueAsBytes(Map.of(
         "remoteUrl", "https://registry.example/packages/" + filename, "sha256", checksum)));
     AssetRecord archive = asset(41, proxyRuntime, 42L, localArchive);
@@ -693,12 +697,81 @@ class TerraformServiceTest {
     assertEquals(204, download.status());
     assertEquals(BASE + "/v1/modules/acme/network/aws/1.2.3/network.zip",
         download.headers().get("X-Terraform-Get"));
-    ArgumentCaptor<byte[]> route = ArgumentCaptor.forClass(byte[].class);
-    verify(assets).storeBytes(eq(proxyRuntime), anyString(), route.capture(),
+    ArgumentCaptor<byte[]> routes = ArgumentCaptor.forClass(byte[].class);
+    verify(assets, times(2)).storeBytes(eq(proxyRuntime), anyString(), routes.capture(),
         eq("application/json"), any());
-    assertEquals(
-        "https://registry.example/api/modules/acme/network/aws/packages/network.zip",
-        mapper.readValue(route.getValue(), new TypeReference<Map<String, Object>>() {}).get("remoteUrl"));
+    assertTrue(routes.getAllValues().stream().map(bytes -> {
+      try {
+        return mapper.readValue(bytes, new TypeReference<Map<String, Object>>() {});
+      } catch (IOException e) {
+        throw new AssertionError(e);
+      }
+    }).anyMatch(route ->
+        "https://registry.example/api/modules/acme/network/aws/packages/network.zip"
+            .equals(route.get("remoteUrl"))));
+  }
+
+  @Test
+  void servesCachedProxyModuleDownloadMetadataWithoutCallingUpstream() throws Exception {
+    RepositoryRuntime proxyRuntime = runtime(
+        83, "terraform-proxy", RepositoryType.PROXY, "https://registry.example/root", List.of());
+    TerraformPath download = paths.parse("v1/modules/acme/network/aws/1.2.3/download");
+    String localArchive = "v1/modules/acme/network/aws/1.2.3/network.zip";
+    String cachePath = ".terraform/module-downloads/"
+        + digest(download.rawPath().getBytes(StandardCharsets.UTF_8)) + ".json";
+    when(assets.find(proxyRuntime, cachePath)).thenReturn(Optional.of(
+        asset(83, proxyRuntime, 84L, cachePath)));
+    when(assets.bytes(proxyRuntime, cachePath)).thenReturn(
+        mapper.writeValueAsBytes(Map.of("localPath", localArchive)));
+
+    MavenResponse response = service.get(proxyRuntime, download, BASE, false);
+
+    assertEquals(204, response.status());
+    assertEquals(BASE + "/" + localArchive, response.headers().get("X-Terraform-Get"));
+    verify(fetcher, never()).fetchWithBodyRetry(any(), anyString(), any());
+  }
+
+  @Test
+  void servesStaleProxyModuleDownloadMetadataWhenUpstreamIsUnavailable() throws Exception {
+    RepositoryRuntime proxyRuntime = runtime(
+        85, "terraform-proxy", RepositoryType.PROXY, "https://registry.example/root", List.of());
+    TerraformPath download = paths.parse("v1/modules/acme/network/aws/1.2.3/download");
+    String localArchive = "v1/modules/acme/network/aws/1.2.3/network.zip";
+    String cachePath = ".terraform/module-downloads/"
+        + digest(download.rawPath().getBytes(StandardCharsets.UTF_8)) + ".json";
+    when(assets.find(proxyRuntime, cachePath)).thenReturn(Optional.of(
+        asset(85, proxyRuntime, 86L, cachePath, Instant.EPOCH)));
+    when(assets.bytes(proxyRuntime, cachePath)).thenReturn(
+        mapper.writeValueAsBytes(Map.of("localPath", localArchive)));
+    when(proxy.getMetadataFromUrl(eq(proxyRuntime), anyString(), anyString(), anyBoolean()))
+        .thenThrow(new MavenExceptions.BadUpstreamException("registry unavailable"));
+
+    MavenResponse response = service.get(proxyRuntime, download, BASE, false);
+
+    assertEquals(204, response.status());
+    assertEquals(BASE + "/" + localArchive, response.headers().get("X-Terraform-Get"));
+    verify(fetcher, never()).fetchWithBodyRetry(any(), anyString(), any());
+  }
+
+  @Test
+  void servesMigratedProxyModuleArchiveWithoutReconstructingAnUpstreamRoute() throws Exception {
+    RepositoryRuntime proxyRuntime = runtime(
+        84, "terraform-proxy", RepositoryType.PROXY, "https://registry.example/root", List.of());
+    TerraformPath download = paths.parse("v1/modules/acme/network/aws/1.2.3/download");
+    String localArchive = "v1/modules/acme/network/aws/1.2.3/network.zip";
+    AssetRecord migrated = asset(84, proxyRuntime, 85L, localArchive);
+    when(assets.list(proxyRuntime, "v1/modules/acme/network/aws/1.2.3/"))
+        .thenReturn(List.of(migrated));
+    when(assets.find(proxyRuntime, localArchive)).thenReturn(Optional.of(migrated));
+    when(assets.serve(proxyRuntime, localArchive, false)).thenReturn(MavenResponse.noBody(200));
+
+    MavenResponse metadata = service.get(proxyRuntime, download, BASE, false);
+    MavenResponse archive = service.get(proxyRuntime, paths.parse(localArchive), BASE, false);
+
+    assertEquals(BASE + "/" + localArchive, metadata.headers().get("X-Terraform-Get"));
+    assertEquals(200, archive.status());
+    verify(fetcher, never()).fetchWithBodyRetry(any(), anyString(), any());
+    verify(proxy, never()).getAssetFromUrl(any(), anyString(), anyString(), anyBoolean());
   }
 
   @Test
@@ -996,10 +1069,15 @@ class TerraformServiceTest {
   }
 
   private static AssetRecord asset(long id, RepositoryRuntime runtime, Long blobId, String path) {
+    return asset(id, runtime, blobId, path, Instant.now());
+  }
+
+  private static AssetRecord asset(
+      long id, RepositoryRuntime runtime, Long blobId, String path, Instant updatedAt) {
     String name = path.substring(path.lastIndexOf('/') + 1);
     return new AssetRecord(
         id, runtime.id(), null, blobId, RepositoryFormat.TERRAFORM, path, new byte[32], name,
-        "terraform", "application/zip", 8L, null, Instant.now(), Map.of());
+        "terraform", "application/zip", 8L, null, updatedAt, Map.of());
   }
 
   private static AssetBlobRecord blob(long id, String sha256, long size) {

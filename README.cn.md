@@ -81,7 +81,7 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 | Yum | hosted / proxy / group | 支持 RPM 上传和管理台上传 | 支持 repodata | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 | Raw | hosted / proxy / group | 支持 PUT 上传和管理台上传 | 支持 | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 
-仓库数据迁移默认扫描 hosted 仓库；如需迁移源 Sonatype Nexus Repository 部署中作为历史备份或回源缓存使用的 proxy 仓库，可以在迁移页面的 `Optional proxy repositories` 中显式指定仓库名。Cargo / Rust、Dart / Pub、Nexus 原生 Composer 和 Terraform proxy cache 在显式选择且 source profile 接受时可迁移。Terraform 使用独立 proxy-cache writer 恢复 module/provider archive 并保留 Nexus 公开 asset path；remote route 与 checksum/signature snapshot 由目标端按已配置上游重建，不会把 cache asset 当作 hosted publication 重放。
+仓库数据迁移默认扫描 hosted 仓库；如需迁移源 Sonatype Nexus Repository 部署中作为历史备份或回源缓存使用的 proxy 仓库，可以在迁移页面的 `Optional proxy repositories` 中显式指定仓库名。Cargo / Rust、Dart / Pub、Nexus 原生 Composer 和 Terraform proxy cache 在显式选择且 source profile 接受时可迁移。Terraform 使用独立 proxy-cache writer 恢复 module/provider archive、保留 Nexus 公开 asset path，且不会把 cache asset 当作 hosted publication 重放。已恢复的 module archive 可不回源直接完成 module download discovery；Provider route 从已配置上游重建并校验 checksum/signature snapshot，其缓存 blob 在 metadata 有效期内保持固定。
 
 ## 从 Sonatype Nexus Repository 迁移
 

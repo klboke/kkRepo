@@ -99,7 +99,7 @@ kkrepo 把迁移作为产品能力，而不是一次性脚本：
 - Cargo / Rust hosted 仓库数据迁移已支持 datastore H2/PostgreSQL 源端，但必须由 preflight 证明 Cargo content model；未知 schema 默认 fail closed。
 - Dart / Pub hosted 仓库数据迁移已支持 Nexus 3.92.0+ datastore 源端，但必须由 preflight 证明 Pub content model；Pub proxy cache 迁移要求显式选择且 plan 为 `FULL`。
 - Composer 只迁移 Nexus 原生 proxy repository；未显式选择时只迁移配置，不迁移 cache。选择 cache 迁移时必须由 source profile 证明 Composer datastore content model，未知或非原生 Composer source fail closed。
-- Terraform hosted module/provider 数据通过协议感知的 writer 重建，包括 Provider platform、checksum 和签名 metadata。显式选择的 Nexus 原生 Terraform proxy 使用独立 cache restore 路径：module/provider archive 保留 Nexus 公开 path，remote route、validator、checksum manifest 和 signature snapshot 则从已配置上游重建。
+- Terraform hosted module/provider 数据通过协议感知的 writer 重建，包括 Provider platform、checksum 和签名 metadata。显式选择的 Nexus 原生 Terraform proxy 使用独立 cache restore 路径，module/provider archive 保留 Nexus 公开 path。Module download discovery 可直接选择已恢复的本地 archive；Provider remote route、validator、checksum manifest 和 signature snapshot 从已配置上游重建，并在 metadata 有效期内固定对应缓存 blob。
 - 迁移步骤按 preflight/dry-run、resume、checksum 校验和报告能力设计。
 - 不支持或被阻塞的条目应进入报告，而不是静默跳过。
 
@@ -114,7 +114,7 @@ kkrepo 把迁移作为产品能力，而不是一次性脚本：
 - Dart / Pub 支持 Hosted Pub Repository V2 hosted/proxy/group 工作流。pub.dev social、publisher、score、download-count 和 advisory API 不作为协议正确性依赖。
 - Composer 仅承诺 Composer 2 metadata；Composer 1 `provider-includes` 主线、Packagist security-advisories/metadata-changes、VCS source checkout 和标准 publish 命令不在当前支持面。Hosted 发布使用 Components API 或 UI archive 上传。
 - Terraform 当前支持通过 CLI `host.services` 显式配置的 Module Registry Protocol 与 Provider Registry Protocol；根域 discovery/virtual-host binding 和 Provider Network Mirror Protocol 暂未暴露。Proxy 保留并校验上游 signing key，不会用 kkrepo 签名冒充上游。
-- Terraform proxy 迁移只恢复协议可识别的 module/provider archive cache，不把它们当作 hosted publication。下次 metadata 请求会重建并校验上游 route/checksum/signature snapshot；未知 source schema、community plugin 和低于 `FULL` 的计划仍会 fail closed。
+- Terraform proxy 迁移只恢复协议可识别的 module/provider archive cache，不把它们当作 hosted publication。Module download metadata 可在不访问上游时解析已恢复的本地 path；Provider metadata 会重建并校验上游 route/checksum/signature snapshot。未知 source schema、community plugin 和低于 `FULL` 的计划仍会 fail closed。
 - Go 不支持 hosted 上传；Go module proxy 行为以读取代理为主。
 - 不承诺覆盖每一个 Nexus UI endpoint。只有在支持用户工作流或迁移兼容需要时，才补对应 endpoint。
 - 当协议允许非确定性时，测试中可能规范化排序、时间戳、生成 ID 和 hostname。

@@ -131,9 +131,10 @@ public class TerraformService {
 
   /**
    * Restores a Nexus Terraform proxy archive as cache data without treating it as a client
-   * publication. The next module/provider metadata request recreates the remote route from the
-   * configured upstream; {@link RawProxyService} then reuses this fresh local asset and the
-   * provider path verifies its SHA-256 against the current upstream download metadata.
+   * publication. Module download metadata discovers a restored module archive directly. Provider
+   * metadata recreates the remote route from the configured upstream; {@link RawProxyService} then
+   * reuses this fresh local asset and the provider path verifies its SHA-256 against the current
+   * upstream download metadata.
    */
   MavenResponse restoreProxyCacheForMigration(
       RepositoryRuntime runtime,
@@ -468,8 +469,17 @@ public class TerraformService {
   }
 
   private MavenResponse proxyModuleDownload(RepositoryRuntime runtime, TerraformPath path, RequestUrls urls) {
-    String remote = remoteUrl(runtime, path);
+    Optional<CachedModuleDownload> cachedRoute = cachedModuleDownload(runtime, path);
+    if (cachedRoute.filter(route -> route.isFresh(
+        runtime.metadataMaxAgeMinutesOrDefault(), Instant.now())).isPresent()) {
+      return moduleDownloadResponse(cachedRoute.orElseThrow().localPath(), urls);
+    }
+    Optional<String> cachedArchive = cachedModuleArchive(runtime, path);
+    if (cachedArchive.isPresent()) {
+      return moduleDownloadResponse(cachedArchive.orElseThrow(), urls);
+    }
     try {
+      String remote = remoteUrl(runtime, path);
       HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request.get(remote)
           .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.METADATA).withRepository(runtime);
       return fetcher.fetchWithBodyRetry(request, path.rawPath(), result -> {
@@ -491,9 +501,18 @@ public class TerraformService {
         String local = "v1/modules/" + path.namespace() + "/" + path.name() + "/" + path.system()
             + "/" + path.version() + "/" + filename;
         storeRoute(runtime, local, absolute, null);
-        return MavenResponse.noBody(204).withHeader("X-Terraform-Get", publicUrl(urls, local));
+        storeModuleDownload(runtime, path, local);
+        return moduleDownloadResponse(local, urls);
       });
+    } catch (MavenExceptions.MavenNotFoundException | MavenExceptions.BadUpstreamException e) {
+      if (cachedRoute.isPresent()) {
+        return moduleDownloadResponse(cachedRoute.orElseThrow().localPath(), urls);
+      }
+      throw e;
     } catch (IOException e) {
+      if (cachedRoute.isPresent()) {
+        return moduleDownloadResponse(cachedRoute.orElseThrow().localPath(), urls);
+      }
       throw new MavenExceptions.BadUpstreamException("Failed reading Terraform module upstream", e);
     }
   }
@@ -575,10 +594,18 @@ public class TerraformService {
   }
 
   private MavenResponse proxyRoute(RepositoryRuntime runtime, String localPath, boolean headOnly) {
+    if (assets.find(runtime, routePath(localPath)).isEmpty()) {
+      if (assets.find(runtime, localPath).isPresent()) {
+        return assets.serve(runtime, localPath, headOnly);
+      }
+      throw notFound(localPath);
+    }
     Map<String, Object> route = readJson(assets.bytes(runtime, routePath(localPath)));
     String remote = string(route.get("remoteUrl"));
     String expected = string(route.get("sha256"));
-    MavenResponse response = proxy.getAssetFromUrl(runtime, localPath, remote, headOnly);
+    MavenResponse response = expected == null || expected.isBlank()
+        ? proxy.getAssetFromUrl(runtime, localPath, remote, headOnly)
+        : proxy.getPinnedAssetFromUrl(runtime, localPath, remote, headOnly);
     if (expected != null && !expected.isBlank()) {
       AssetRecord asset = assets.find(runtime, localPath).orElseThrow(() -> notFound(localPath));
       AssetBlobRecord blob = assets.blob(asset);
@@ -761,6 +788,63 @@ public class TerraformService {
 
   private static String routePath(String localPath) {
     return ".terraform/routes/" + sha256(localPath) + ".json";
+  }
+
+  private void storeModuleDownload(
+      RepositoryRuntime runtime, TerraformPath download, String localPath) {
+    assets.storeBytes(
+        runtime,
+        moduleDownloadPath(download.rawPath()),
+        jsonBytes(Map.of("localPath", localPath)),
+        JSON,
+        Map.of("terraformKind", "module-download-metadata", "targetPath", download.rawPath()));
+  }
+
+  private Optional<CachedModuleDownload> cachedModuleDownload(
+      RepositoryRuntime runtime, TerraformPath download) {
+    String cachePath = moduleDownloadPath(download.rawPath());
+    Optional<AssetRecord> asset = assets.find(runtime, cachePath);
+    if (asset.isEmpty()) return Optional.empty();
+    String localPath = string(readJson(assets.bytes(runtime, cachePath)).get("localPath"));
+    TerraformPath archive = paths.parse(localPath);
+    if (!sameModuleArchive(download, archive)) {
+      throw new MavenExceptions.BadUpstreamException(
+          "Invalid cached Terraform module download route for " + download.rawPath());
+    }
+    return Optional.of(new CachedModuleDownload(localPath, asset.orElseThrow().lastUpdatedAt()));
+  }
+
+  private Optional<String> cachedModuleArchive(
+      RepositoryRuntime runtime, TerraformPath download) {
+    String prefix = "v1/modules/" + download.namespace() + "/" + download.name() + "/"
+        + download.system() + "/" + download.version() + "/";
+    return assets.list(runtime, prefix).stream()
+        .map(AssetRecord::path)
+        .filter(candidate -> {
+          try {
+            return sameModuleArchive(download, paths.parse(candidate));
+          } catch (IllegalArgumentException ignored) {
+            return false;
+          }
+        })
+        .sorted()
+        .findFirst();
+  }
+
+  private static boolean sameModuleArchive(TerraformPath download, TerraformPath archive) {
+    return archive.kind() == TerraformPath.Kind.MODULE_ARCHIVE
+        && download.namespace().equals(archive.namespace())
+        && download.name().equals(archive.name())
+        && download.system().equals(archive.system())
+        && download.version().equals(archive.version());
+  }
+
+  private static MavenResponse moduleDownloadResponse(String localPath, RequestUrls urls) {
+    return MavenResponse.noBody(204).withHeader("X-Terraform-Get", publicUrl(urls, localPath));
+  }
+
+  private static String moduleDownloadPath(String rawPath) {
+    return ".terraform/module-downloads/" + sha256(rawPath) + ".json";
   }
 
   private void enforceWrite(RepositoryRuntime runtime, String path, boolean migration) {
@@ -1015,6 +1099,14 @@ public class TerraformService {
 
   private static MavenExceptions.MavenNotFoundException notFound(String path) {
     return new MavenExceptions.MavenNotFoundException(path);
+  }
+
+  private record CachedModuleDownload(String localPath, Instant cachedAt) {
+    private boolean isFresh(int maxAgeMinutes, Instant now) {
+      if (cachedAt == null) return false;
+      return maxAgeMinutes < 0
+          || cachedAt.plusSeconds(maxAgeMinutes * 60L).isAfter(now);
+    }
   }
 
   private record RequestUrls(String repositoryBaseUrl, String urlTokenSegment) {}

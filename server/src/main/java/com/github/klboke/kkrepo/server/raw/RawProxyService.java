@@ -105,6 +105,17 @@ public class RawProxyService {
         HttpRemoteFetcher.TimeoutProfile.CONTENT, headOnly);
   }
 
+  /**
+   * Serves content pinned by a metadata response for the lifetime of that metadata snapshot.
+   * The content still uses the large-body timeout profile when it eventually needs refreshing.
+   */
+  public MavenResponse getPinnedAssetFromUrl(
+      RepositoryRuntime runtime, String path, String remoteUrl, boolean headOnly) {
+    return getAssetFromUrl(
+        runtime, path, remoteUrl, runtime.metadataMaxAgeMinutesOrDefault(),
+        HttpRemoteFetcher.TimeoutProfile.CONTENT, headOnly);
+  }
+
   public MavenResponse getMetadataFromUrl(
       RepositoryRuntime runtime, String path, String remoteUrl, boolean headOnly) {
     return getAssetFromUrl(

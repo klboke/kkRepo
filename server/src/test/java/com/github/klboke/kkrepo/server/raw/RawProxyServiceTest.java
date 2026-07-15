@@ -133,6 +133,23 @@ class RawProxyServiceTest {
   }
 
   @Test
+  void pinnedAssetsUseMetadataMaxAgeWithTheContentServingPath() {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 1, 60);
+    CachedAssetMetadata cached = snapshot(Instant.now().minusSeconds(5 * 60));
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.cache.find(eq(runtime.id()), eq("provider.zip"), any()))
+        .thenReturn(Optional.of(cached));
+    when(fixture.reader.serveSnapshot(cached, false, "provider.zip", "ATTACHMENT"))
+        .thenReturn(expected);
+
+    assertSame(expected, fixture.service.getPinnedAssetFromUrl(
+        runtime, "provider.zip", "https://upstream.example.test/provider.zip", false));
+
+    verify(fixture.proxyStateDao, never()).isBlocked(eq(runtime.id()), any());
+  }
+
+  @Test
   void reportsBlockedUpstreamWhenNoCacheExists() {
     Fixture fixture = fixture();
     RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 1);
