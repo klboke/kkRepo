@@ -36,6 +36,13 @@ class TerraformPathParserTest {
         "v1/providers/generic-token/acme/cloud/1.2.3/download/linux/amd64");
     assertEquals("generic-token", provider.credentialSegment());
     assertEquals(TerraformPath.Kind.PROVIDER_DOWNLOAD, provider.path().kind());
+
+    var literalPlus = parser.parseRequestPath(
+        "v1/modules/dXNlcjpwYXNz+/acme/network/aws/versions");
+    assertEquals("dXNlcjpwYXNz+", literalPlus.credentialSegment());
+    var encodedPlus = parser.parseRequestPath(
+        "v1/providers/generic%2Btoken/acme/cloud/1.2.3/download/linux/amd64");
+    assertEquals("generic+token", encodedPlus.credentialSegment());
   }
 
   @Test

@@ -245,6 +245,7 @@ public class TerraformService {
   private MavenResponse putProvider(
       RepositoryRuntime runtime, TerraformPath path, InputStream body, String contentType,
       String contentDisposition, String actor, String ip) {
+    enforceWrite(runtime, path.rawPath());
     String filename = filename(contentDisposition);
     String expectedPrefix = "terraform-provider-" + path.name() + "_" + path.version()
         + "_" + path.os() + "_" + path.arch();

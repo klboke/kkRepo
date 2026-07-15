@@ -219,6 +219,22 @@ class TerraformServiceTest {
   }
 
   @Test
+  void deniesProviderPublishBeforeAcquiringTheSharedLease() {
+    RepositoryRuntime denied = runtime(
+        31, "terraform-denied", RepositoryType.HOSTED, null, List.of(), "DENY");
+    TerraformPath upload = paths.parse("v1/providers/acme/cloud/1.2.3/download/linux/amd64");
+    String filename = "terraform-provider-cloud_1.2.3_linux_amd64.zip";
+
+    assertThrows(MavenExceptions.WritePolicyDenied.class,
+        () -> service.put(
+            denied, upload, new ByteArrayInputStream(new byte[0]), "application/zip",
+            "attachment; filename=\"" + filename + "\"", "alice", "127.0.0.1"));
+
+    verify(registry, never()).tryAcquirePublishLease(anyString(), anyString(), any());
+    verify(inspector, never()).bufferAndInspect(any(), anyString(), anyBoolean(), anyString());
+  }
+
+  @Test
   void rewritesAndVerifiesProxyProviderMetadataAndRoutes() throws Exception {
     RepositoryRuntime proxyRuntime = runtime(
         40, "terraform-proxy", RepositoryType.PROXY, "https://registry.example/root", List.of());

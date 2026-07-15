@@ -174,7 +174,9 @@ public final class TerraformPathParser {
 
   private static String decodeOnce(String value) {
     try {
-      return URLDecoder.decode(value, StandardCharsets.UTF_8);
+      // URLDecoder implements form semantics, where a literal '+' means a space. This value is a
+      // path segment, so protect literal plus signs while still decoding percent-encoded bytes.
+      return URLDecoder.decode(value.replace("+", "%2B"), StandardCharsets.UTF_8);
     } catch (IllegalArgumentException e) {
       throw new IllegalArgumentException("Invalid Terraform URL token encoding", e);
     }
