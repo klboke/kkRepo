@@ -66,7 +66,8 @@ class TerraformRepositoryDataMigrationWriterTest {
     assertEquals(101L, migrated.assetId());
     assertEquals(102L, migrated.assetBlobId());
     assertEquals("module-object", migrated.assetBlobObjectKey());
-    verify(fixture.service(), never()).put(any(), any(), any(), any(), any(), any(), any());
+    verify(fixture.service(), never())
+        .putForMigration(any(), any(), any(), any(), any(), any(), any());
 
     RepositoryDataMigrationAssetRecord wrongSize = source(path, 8L, null, null, null);
     assertThrows(IllegalStateException.class,
@@ -101,7 +102,8 @@ class TerraformRepositoryDataMigrationWriterTest {
 
     assertEquals(201L, migrated.assetId());
     assertEquals("provider-object", migrated.assetBlobObjectKey());
-    verify(fixture.service(), never()).put(any(), any(), any(), any(), any(), any(), any());
+    verify(fixture.service(), never())
+        .putForMigration(any(), any(), any(), any(), any(), any(), any());
   }
 
   @Test
@@ -115,7 +117,7 @@ class TerraformRepositoryDataMigrationWriterTest {
     when(fixture.assets().find(fixture.runtime(), path))
         .thenReturn(Optional.empty(), Optional.of(stored));
     when(fixture.assets().blob(stored)).thenReturn(blob(302, content.length, "module-new"));
-    when(fixture.service().put(any(), any(), any(), any(), any(), any(), any()))
+    when(fixture.service().putForMigration(any(), any(), any(), any(), any(), any(), any()))
         .thenReturn(MavenResponse.created());
 
     TerraformRepositoryDataMigrationWriter.MigratedAsset migrated = fixture.writer().write(
@@ -123,7 +125,7 @@ class TerraformRepositoryDataMigrationWriterTest {
 
     assertEquals(301L, migrated.assetId());
     ArgumentCaptor<TerraformPath> pathCaptor = ArgumentCaptor.forClass(TerraformPath.class);
-    verify(fixture.service()).put(
+    verify(fixture.service()).putForMigration(
         eq(fixture.runtime()), pathCaptor.capture(), any(InputStream.class),
         eq("application/x-terraform-module"), eq(null), eq("nexus-user"), eq("10.0.0.2"));
     assertEquals(TerraformPath.Kind.MODULE_ARCHIVE, pathCaptor.getValue().kind());
@@ -144,14 +146,14 @@ class TerraformRepositoryDataMigrationWriterTest {
     when(fixture.registry().listProviderPlatforms(
         fixture.runtime().id(), "kkrepo", "fixture", "1.2.3")).thenReturn(List.of());
     when(fixture.assets().blob(stored)).thenReturn(blob(402, content.length, "provider-new"));
-    when(fixture.service().put(any(), any(), any(), any(), any(), any(), any()))
+    when(fixture.service().putForMigration(any(), any(), any(), any(), any(), any(), any()))
         .thenReturn(MavenResponse.created());
 
     fixture.writer().write(
         fixture.repository(), source, new ByteArrayInputStream(content), " ", true);
 
     ArgumentCaptor<TerraformPath> pathCaptor = ArgumentCaptor.forClass(TerraformPath.class);
-    verify(fixture.service()).put(
+    verify(fixture.service()).putForMigration(
         eq(fixture.runtime()), pathCaptor.capture(), any(InputStream.class),
         eq("application/octet-stream"), eq("attachment; filename=\"" + filename + "\""),
         eq("nexus-migration"), eq(null));
@@ -188,9 +190,10 @@ class TerraformRepositoryDataMigrationWriterTest {
     assertThrows(IllegalStateException.class,
         () -> fixture.writer().write(fixture.repository(), source(modulePath, 99L, null, null, null),
             new ByteArrayInputStream(content), null, true));
-    verify(fixture.service(), never()).put(any(), any(), any(), any(), any(), any(), any());
+    verify(fixture.service(), never())
+        .putForMigration(any(), any(), any(), any(), any(), any(), any());
 
-    when(fixture.service().put(any(), any(), any(), any(), any(), any(), any()))
+    when(fixture.service().putForMigration(any(), any(), any(), any(), any(), any(), any()))
         .thenReturn(MavenResponse.created());
     assertThrows(IllegalStateException.class,
         () -> fixture.writer().write(fixture.repository(), source(modulePath, 6L, null, null, null),

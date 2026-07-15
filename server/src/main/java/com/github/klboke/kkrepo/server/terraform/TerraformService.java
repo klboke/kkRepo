@@ -110,10 +110,39 @@ public class TerraformService {
       String contentDisposition,
       String actor,
       String ip) {
+    return publish(runtime, path, body, contentType, contentDisposition, actor, ip, false);
+  }
+
+  /**
+   * Replays a validated migration asset while preserving publication leases and coordinate
+   * uniqueness. A Nexus repository may be frozen with DENY, so migration alone treats DENY as
+   * ALLOW_ONCE instead of requiring an operator to mutate the imported repository configuration.
+   */
+  MavenResponse putForMigration(
+      RepositoryRuntime runtime,
+      TerraformPath path,
+      InputStream body,
+      String contentType,
+      String contentDisposition,
+      String actor,
+      String ip) {
+    return publish(runtime, path, body, contentType, contentDisposition, actor, ip, true);
+  }
+
+  private MavenResponse publish(
+      RepositoryRuntime runtime,
+      TerraformPath path,
+      InputStream body,
+      String contentType,
+      String contentDisposition,
+      String actor,
+      String ip,
+      boolean migration) {
     if (!runtime.isHosted()) throw new MavenExceptions.MethodNotAllowed("Terraform group/proxy repositories are read-only");
     return switch (path.kind()) {
-      case MODULE_ARCHIVE -> putModule(runtime, path, body, contentType, actor, ip);
-      case PROVIDER_DOWNLOAD -> putProvider(runtime, path, body, contentType, contentDisposition, actor, ip);
+      case MODULE_ARCHIVE -> putModule(runtime, path, body, contentType, actor, ip, migration);
+      case PROVIDER_DOWNLOAD ->
+          putProvider(runtime, path, body, contentType, contentDisposition, actor, ip, migration);
       default -> throw new MavenExceptions.MethodNotAllowed("Unsupported Terraform PUT path: " + path.rawPath());
     };
   }
@@ -243,16 +272,16 @@ public class TerraformService {
 
   private MavenResponse putModule(
       RepositoryRuntime runtime, TerraformPath path, InputStream body, String contentType,
-      String actor, String ip) {
+      String actor, String ip, boolean migration) {
     // Fail fast before buffering, then repeat this authoritative check while holding the shared
     // coordinate lease so concurrent replicas cannot both publish different filenames.
-    enforceModuleWrite(runtime, path);
+    enforceModuleWrite(runtime, path, migration);
     Path buffered = inspector.bufferAndInspect(body, path.filename(), true, null);
     String leaseKey = publishLeaseKey(
         "module", runtime.id(), path.namespace(), path.name(), path.system(), path.version());
     try (TerraformPublishLeaseManager.Lease lease = leases.acquire(
         leaseKey, java.time.Duration.ofMinutes(5), java.time.Duration.ofSeconds(30))) {
-      enforceModuleWrite(runtime, path);
+      enforceModuleWrite(runtime, path, migration);
       try (InputStream in = Files.newInputStream(buffered)) {
         assets.store(runtime, path.rawPath(), in, contentType == null ? OCTET : contentType,
             Map.of(
@@ -270,8 +299,8 @@ public class TerraformService {
 
   private MavenResponse putProvider(
       RepositoryRuntime runtime, TerraformPath path, InputStream body, String contentType,
-      String contentDisposition, String actor, String ip) {
-    enforceWrite(runtime, path.rawPath());
+      String contentDisposition, String actor, String ip, boolean migration) {
+    enforceWrite(runtime, path.rawPath(), migration);
     String filename = filename(contentDisposition);
     String expectedPrefix = "terraform-provider-" + path.name() + "_" + path.version()
         + "_" + path.os() + "_" + path.arch();
@@ -605,7 +634,7 @@ public class TerraformService {
   private String discovery(RepositoryRuntime runtime, String key) {
     String root = ensureSlash(runtime.proxyRemoteUrl());
     String remote = root + ".well-known/terraform.json";
-    String local = ".terraform/upstream/discovery.json";
+    String local = ".terraform/upstream/discovery-" + sha256(remote) + ".json";
     Map<String, Object> document = readJson(responseBytes(
         proxy.getMetadataFromUrl(runtime, local, remote, false)));
     String value = string(document.get(key));
@@ -627,17 +656,17 @@ public class TerraformService {
     return ".terraform/routes/" + sha256(localPath) + ".json";
   }
 
-  private void enforceWrite(RepositoryRuntime runtime, String path) {
-    String policy = runtime.writePolicy() == null ? "ALLOW_ONCE" : runtime.writePolicy().toUpperCase(Locale.ROOT);
+  private void enforceWrite(RepositoryRuntime runtime, String path, boolean migration) {
+    String policy = effectiveWritePolicy(runtime, migration);
     if ("DENY".equals(policy)) throw new MavenExceptions.WritePolicyDenied("Repository write policy is DENY");
     if ("ALLOW_ONCE".equals(policy) && assets.find(runtime, path).isPresent()) {
       throw new MavenExceptions.WritePolicyDenied("Terraform coordinate already exists");
     }
   }
 
-  private void enforceModuleWrite(RepositoryRuntime runtime, TerraformPath path) {
-    String policy = runtime.writePolicy() == null
-        ? "ALLOW_ONCE" : runtime.writePolicy().toUpperCase(Locale.ROOT);
+  private void enforceModuleWrite(
+      RepositoryRuntime runtime, TerraformPath path, boolean migration) {
+    String policy = effectiveWritePolicy(runtime, migration);
     if ("DENY".equals(policy)) {
       throw new MavenExceptions.WritePolicyDenied("Repository write policy is DENY");
     }
@@ -653,6 +682,12 @@ public class TerraformService {
       return;
     }
     throw new MavenExceptions.WritePolicyDenied("Terraform module version already exists");
+  }
+
+  private static String effectiveWritePolicy(RepositoryRuntime runtime, boolean migration) {
+    String policy = runtime.writePolicy() == null
+        ? "ALLOW_ONCE" : runtime.writePolicy().toUpperCase(Locale.ROOT);
+    return migration && "DENY".equals(policy) ? "ALLOW_ONCE" : policy;
   }
 
   private String filename(String contentDisposition) {

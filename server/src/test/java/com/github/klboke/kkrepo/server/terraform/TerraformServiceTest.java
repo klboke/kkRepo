@@ -173,6 +173,31 @@ class TerraformServiceTest {
   }
 
   @Test
+  void migrationPublishesModuleThroughDenyPolicyWithSharedLease() throws Exception {
+    RepositoryRuntime denied = runtime(
+        6, "terraform-denied", RepositoryType.HOSTED, null, List.of(), "DENY");
+    TerraformPath upload = paths.parse("v1/modules/acme/network/aws/1.0.0/module.zip");
+    Path buffered = Files.createTempFile("terraform-module-migration-test", ".zip");
+    Files.writeString(buffered, "module");
+    when(assets.list(denied, "v1/modules/acme/network/aws/1.0.0/"))
+        .thenReturn(List.of());
+    when(inspector.bufferAndInspect(any(), eq("module.zip"), eq(true), eq(null)))
+        .thenReturn(buffered);
+    when(registry.tryAcquirePublishLease(anyString(), anyString(), any())).thenReturn(true);
+
+    MavenResponse response = service.putForMigration(
+        denied, upload, new ByteArrayInputStream(new byte[0]),
+        "application/zip", null, "nexus-migration", null);
+
+    assertEquals(201, response.status());
+    assertFalse(Files.exists(buffered));
+    verify(assets).store(
+        eq(denied), eq(upload.rawPath()), any(), eq("application/zip"), any(),
+        eq("nexus-migration"), eq(null));
+    verify(registry).releasePublishLease(anyString(), anyString());
+  }
+
+  @Test
   void servesHostedProviderMetadataArchivesAndSignatures() throws Exception {
     RepositoryRuntime hosted = runtime(10, "terraform", RepositoryType.HOSTED, null, List.of());
     String archivePath = "v1/providers/acme/cloud/1.2.3/package/linux/"
@@ -229,8 +254,9 @@ class TerraformServiceTest {
   }
 
   @Test
-  void publishesProviderPlatformAtomicallyUnderSharedLease() throws Exception {
-    RepositoryRuntime hosted = runtime(30, "terraform", RepositoryType.HOSTED, null, List.of());
+  void publishesMigratedProviderPlatformAtomicallyThroughDenyPolicy() throws Exception {
+    RepositoryRuntime hosted = runtime(
+        30, "terraform", RepositoryType.HOSTED, null, List.of(), "DENY");
     TerraformPath upload = paths.parse("v1/providers/acme/cloud/1.2.3/download/linux/amd64");
     String filename = "terraform-provider-cloud_1.2.3_linux_amd64.zip";
     String archivePath = "v1/providers/acme/cloud/1.2.3/package/linux/" + filename;
@@ -250,7 +276,7 @@ class TerraformServiceTest {
         new TerraformSigningService.SigningMaterial(4, "AABBCCDDEEFF0011", "public", "private", "pass"));
     when(signing.sign(any(), any())).thenReturn("signature".getBytes(StandardCharsets.UTF_8));
 
-    MavenResponse response = service.put(
+    MavenResponse response = service.putForMigration(
         hosted, upload, new ByteArrayInputStream("provider".getBytes(StandardCharsets.UTF_8)),
         "application/zip", "attachment; filename=\"" + filename + "\"", "alice", "127.0.0.1");
     assertEquals(201, response.status());
@@ -264,7 +290,7 @@ class TerraformServiceTest {
     verify(assets, atLeastOnce()).storeBytes(eq(hosted), anyString(), any(), anyString(), any());
 
     assertThrows(MavenExceptions.BadRequestException.class,
-        () -> service.put(hosted, upload, new ByteArrayInputStream(new byte[0]), null,
+        () -> service.putForMigration(hosted, upload, new ByteArrayInputStream(new byte[0]), null,
             "attachment; filename=\"wrong.zip\"", "alice", null));
   }
 
@@ -305,7 +331,7 @@ class TerraformServiceTest {
         .thenAnswer(invocation -> {
           String local = invocation.getArgument(1);
           String remote = invocation.getArgument(2);
-          if (local.equals(".terraform/upstream/discovery.json")) {
+          if (local.startsWith(".terraform/upstream/discovery-")) {
             return response(mapper.writeValueAsBytes(Map.of(
                 "modules.v1", "/api/modules/", "providers.v1", "/api/providers/")), "application/json");
           }
@@ -482,7 +508,7 @@ class TerraformServiceTest {
     when(proxy.getMetadataFromUrl(eq(proxyRuntime), anyString(), anyString(), anyBoolean()))
         .thenAnswer(invocation -> {
           String local = invocation.getArgument(1);
-          if (local.equals(".terraform/upstream/discovery.json")) {
+          if (local.startsWith(".terraform/upstream/discovery-")) {
             return response(mapper.writeValueAsBytes(Map.of("providers.v1", "/v1/providers/")),
                 "application/json");
           }
@@ -493,6 +519,38 @@ class TerraformServiceTest {
         () -> service.get(proxyRuntime,
             paths.parse("v1/providers/acme/cloud/1.2.3/download/linux/amd64"), BASE, false));
     verify(signatureVerifier, never()).verify(any(), any(), any());
+  }
+
+  @Test
+  void keysDiscoveryMetadataByConfiguredRemoteUrl() throws Exception {
+    RepositoryRuntime original = runtime(
+        71, "terraform-proxy", RepositoryType.PROXY,
+        "https://registry-one.example", List.of());
+    RepositoryRuntime changed = runtime(
+        71, "terraform-proxy", RepositoryType.PROXY,
+        "https://registry-two.example", List.of());
+    Map<String, String> discoveryCachePaths = new java.util.LinkedHashMap<>();
+    when(proxy.getMetadataFromUrl(any(), anyString(), anyString(), anyBoolean()))
+        .thenAnswer(invocation -> {
+          String local = invocation.getArgument(1);
+          String remote = invocation.getArgument(2);
+          if (remote.endsWith("/.well-known/terraform.json")) {
+            discoveryCachePaths.put(remote, local);
+            return response(mapper.writeValueAsBytes(Map.of("modules.v1", "/v1/modules/")),
+                "application/json");
+          }
+          return response(mapper.writeValueAsBytes(Map.of("modules", List.of())),
+              "application/json");
+        });
+
+    service.get(original, paths.parse("v1/modules/acme/network/aws/versions"), BASE, false);
+    service.get(changed, paths.parse("v1/modules/acme/network/aws/versions"), BASE, false);
+
+    assertEquals(2, discoveryCachePaths.size());
+    assertEquals(2, Set.copyOf(discoveryCachePaths.values()).size());
+    assertTrue(discoveryCachePaths.values().stream()
+        .allMatch(path -> path.startsWith(".terraform/upstream/discovery-")
+            && path.endsWith(".json")));
   }
 
   private Map<String, Object> json(MavenResponse response) throws Exception {

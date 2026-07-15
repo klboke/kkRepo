@@ -78,7 +78,7 @@ public class TerraformRepositoryDataMigrationWriter {
             + ": expected " + source.size() + ", actual " + size);
       }
       try (InputStream replay = Files.newInputStream(buffered)) {
-        service.put(
+        service.putForMigration(
             runtime,
             target.path(),
             replay,
