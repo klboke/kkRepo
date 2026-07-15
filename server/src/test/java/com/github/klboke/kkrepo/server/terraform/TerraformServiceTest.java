@@ -13,6 +13,7 @@ import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -37,7 +38,9 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.time.Instant;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -348,6 +351,7 @@ class TerraformServiceTest {
         "shasum", checksum,
         "signing_keys", Map.of("gpg_public_keys", List.of(Map.of("ascii_armor", "PUBLIC"))));
     byte[] sums = (checksum + "  " + filename + "\n").getBytes(StandardCharsets.UTF_8);
+    byte[] signature = "sig".getBytes(StandardCharsets.UTF_8);
     when(proxy.getMetadataFromUrl(eq(proxyRuntime), anyString(), anyString(), anyBoolean()))
         .thenAnswer(invocation -> {
           String local = invocation.getArgument(1);
@@ -366,7 +370,7 @@ class TerraformServiceTest {
           }
           if (remote.endsWith("_SHA256SUMS")) return response(sums, "text/plain");
           if (remote.endsWith("_SHA256SUMS.sig")) {
-            return response("sig".getBytes(StandardCharsets.UTF_8), "application/octet-stream");
+            return response(signature, "application/octet-stream");
           }
           return response("archive".getBytes(StandardCharsets.UTF_8), "application/zip");
         });
@@ -386,8 +390,23 @@ class TerraformServiceTest {
     assertTrue(rewritten.get("download_url").toString().contains("/v1/providers/url-token/"));
     assertTrue(rewritten.get("shasums_url").toString().contains("metadata-proxy"));
     verify(signatureVerifier).verify(eq(sums), any(), eq(List.of("PUBLIC")));
-    verify(assets, atLeastOnce()).storeBytes(eq(proxyRuntime), anyString(), any(),
+    ArgumentCaptor<byte[]> routeBodies = ArgumentCaptor.forClass(byte[].class);
+    verify(assets, times(3)).storeBytes(eq(proxyRuntime), anyString(), routeBodies.capture(),
         eq("application/json"), any());
+    List<Map<String, Object>> routes = routeBodies.getAllValues().stream()
+        .map(bytes -> {
+          try {
+            return mapper.readValue(bytes, new TypeReference<Map<String, Object>>() {});
+          } catch (IOException e) {
+            throw new AssertionError(e);
+          }
+        }).toList();
+    assertEquals(digest(sums), routes.stream()
+        .filter(route -> route.get("remoteUrl").toString().endsWith("_SHA256SUMS"))
+        .findFirst().orElseThrow().get("sha256"));
+    assertEquals(digest(signature), routes.stream()
+        .filter(route -> route.get("remoteUrl").toString().endsWith("_SHA256SUMS.sig"))
+        .findFirst().orElseThrow().get("sha256"));
 
     String localArchive = "v1/providers/acme/cloud/1.2.3/package/linux/" + filename;
     when(assets.bytes(eq(proxyRuntime), anyString())).thenReturn(mapper.writeValueAsBytes(Map.of(
@@ -660,6 +679,14 @@ class TerraformServiceTest {
   private Map<String, Object> json(MavenResponse response) throws Exception {
     try (var body = response.body()) {
       return mapper.readValue(body, new TypeReference<>() {});
+    }
+  }
+
+  private static String digest(byte[] value) {
+    try {
+      return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value));
+    } catch (java.security.NoSuchAlgorithmException e) {
+      throw new AssertionError(e);
     }
   }
 

@@ -462,8 +462,11 @@ public class TerraformService {
     verifyChecksumEntry(shasumsBytes, expected, filename);
     signatureVerifier.verify(shasumsBytes, signatureBytes, upstreamPublicKeys(body));
     storeRoute(runtime, localDownload, download, expected);
-    storeRoute(runtime, localSums, sums, null);
-    storeRoute(runtime, localSignature, signature, null);
+    // The download metadata, checksum manifest, and signature form one verified snapshot. Pin the
+    // metadata assets to that snapshot so a shorter content TTL cannot refresh either route
+    // independently while clients are still using the cached provider download response.
+    storeRoute(runtime, localSums, sums, sha256(shasumsBytes));
+    storeRoute(runtime, localSignature, signature, sha256(signatureBytes));
     Map<String, Object> rewritten = new LinkedHashMap<>(body);
     rewritten.put("download_url", publicUrl(urls, localDownload));
     rewritten.put("shasums_url", publicUrl(urls, localSums));
@@ -908,9 +911,13 @@ public class TerraformService {
   }
 
   private static String sha256(String value) {
+    return sha256(value.getBytes(StandardCharsets.UTF_8));
+  }
+
+  private static String sha256(byte[] value) {
     try {
       return java.util.HexFormat.of().formatHex(
-          MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
+          MessageDigest.getInstance("SHA-256").digest(value));
     } catch (java.security.NoSuchAlgorithmException e) {
       throw new IllegalStateException(e);
     }
