@@ -181,7 +181,7 @@ public final class TerraformPathParser {
 
   public static void requireFilename(String value) {
     if (value == null || value.isBlank() || value.length() > 255 || value.contains("/")
-        || value.contains("\\") || value.contains("\r") || value.contains("\n")
+        || value.contains("\\") || value.contains("%") || value.contains("\r") || value.contains("\n")
         || ".".equals(value) || "..".equals(value)) {
       throw new IllegalArgumentException("Invalid Terraform archive filename");
     }

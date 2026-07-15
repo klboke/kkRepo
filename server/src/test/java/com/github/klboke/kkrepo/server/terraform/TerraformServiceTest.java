@@ -309,6 +309,10 @@ class TerraformServiceTest {
     assertThrows(MavenExceptions.BadRequestException.class,
         () -> service.putForMigration(hosted, upload, new ByteArrayInputStream(new byte[0]), null,
             "attachment; filename=\"wrong.zip\"", "alice", null));
+    assertThrows(MavenExceptions.BadRequestException.class,
+        () -> service.putForMigration(hosted, upload, new ByteArrayInputStream(new byte[0]), null,
+            "attachment; filename=\"terraform-provider-cloud_1.2.3_linux_amd64%2Fevil.zip\"",
+            "alice", null));
   }
 
   @Test

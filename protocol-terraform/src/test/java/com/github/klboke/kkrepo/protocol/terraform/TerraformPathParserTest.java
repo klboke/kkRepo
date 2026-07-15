@@ -69,6 +69,10 @@ class TerraformPathParserTest {
     }
     assertThrows(IllegalArgumentException.class,
         () -> parser.parseRequestPath("v1/modules/token/acme/%2Fetc/aws/versions"));
+    assertThrows(IllegalArgumentException.class,
+        () -> TerraformPathParser.requireFilename("provider%2Fevil.zip"));
+    assertThrows(IllegalArgumentException.class,
+        () -> TerraformPathParser.requireFilename("provider%252Fevil.zip"));
   }
 
   @Test

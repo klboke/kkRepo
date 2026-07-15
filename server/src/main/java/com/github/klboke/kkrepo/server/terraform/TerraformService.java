@@ -309,7 +309,13 @@ public class TerraformService {
       RepositoryRuntime runtime, TerraformPath path, InputStream body, String contentType,
       String contentDisposition, String actor, String ip, boolean migration) {
     enforceWrite(runtime, path.rawPath(), migration);
-    String filename = filename(contentDisposition);
+    String filename;
+    try {
+      filename = filename(contentDisposition);
+      TerraformPathParser.requireFilename(filename);
+    } catch (IllegalArgumentException e) {
+      throw new MavenExceptions.BadRequestException("Invalid Terraform provider filename");
+    }
     String expectedPrefix = "terraform-provider-" + path.name() + "_" + path.version()
         + "_" + path.os() + "_" + path.arch();
     if (!filename.startsWith(expectedPrefix) || !filename.toLowerCase(Locale.ROOT).endsWith(".zip")) {

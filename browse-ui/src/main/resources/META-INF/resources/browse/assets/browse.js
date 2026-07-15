@@ -2610,6 +2610,53 @@ function renderUploadFields() {
     bindRemoveAssetButtons();
     return;
   }
+  if (repo.format === "terraform") {
+    fields.innerHTML = `
+      <label>
+        <span>Package kind</span>
+        <select id="upload-terraform-kind" required>
+          <option value="module">Module</option>
+          <option value="provider">Provider</option>
+        </select>
+      </label>
+      <label>
+        <span>Namespace</span>
+        <input id="upload-terraform-namespace" type="text" placeholder="acme" required>
+      </label>
+      <label>
+        <span>Name</span>
+        <input id="upload-terraform-name" type="text" placeholder="network" required>
+      </label>
+      <label>
+        <span>Version</span>
+        <input id="upload-terraform-version" type="text" placeholder="1.0.0" required>
+      </label>
+      <label data-terraform-kind="module">
+        <span>Target system</span>
+        <input id="upload-terraform-system" type="text" placeholder="aws" required>
+      </label>
+      <label data-terraform-kind="provider" hidden>
+        <span>Operating system</span>
+        <input id="upload-terraform-os" type="text" placeholder="linux">
+      </label>
+      <label data-terraform-kind="provider" hidden>
+        <span>Architecture</span>
+        <input id="upload-terraform-arch" type="text" placeholder="amd64">
+      </label>
+      <label class="upload-file">
+        <span>File</span>
+        <input id="upload-file" type="file" accept=".zip" required>
+      </label>
+      <label class="upload-path">
+        <span>Asset</span>
+        <input id="upload-path" type="text" readonly>
+      </label>
+    `;
+    document.getElementById("upload-terraform-kind")
+      .addEventListener("change", updateTerraformUploadKind);
+    updateTerraformUploadKind();
+    return;
+  }
   fields.innerHTML = `
     <label class="upload-file">
       <span>File</span>
@@ -2620,6 +2667,17 @@ function renderUploadFields() {
       <input id="upload-path" type="text" readonly>
     </label>
   `;
+}
+
+function updateTerraformUploadKind() {
+  const kind = uploadFieldValue("upload-terraform-kind") || "module";
+  document.querySelectorAll("[data-terraform-kind]").forEach((label) => {
+    const active = label.dataset.terraformKind === kind;
+    label.hidden = !active;
+    const input = label.querySelector("input");
+    if (input) input.required = active;
+  });
+  updateUploadPath();
 }
 
 function mavenAssetRows() {
@@ -2665,6 +2723,25 @@ function uploadFieldValue(id) {
 function computedUploadPaths() {
   const repo = selectedUploadRepository();
   if (!repo) return [];
+  if (repo.format === "terraform") {
+    const kind = uploadFieldValue("upload-terraform-kind");
+    const namespace = uploadFieldValue("upload-terraform-namespace");
+    const name = uploadFieldValue("upload-terraform-name");
+    const version = uploadFieldValue("upload-terraform-version");
+    const file = document.getElementById("upload-file")?.files?.[0];
+    if (!kind || !namespace || !name || !version || !file) return [];
+    if (kind === "module") {
+      const system = uploadFieldValue("upload-terraform-system");
+      return system
+        ? [`v1/modules/${namespace}/${name}/${system}/${version}/${file.name}`]
+        : [];
+    }
+    const os = uploadFieldValue("upload-terraform-os");
+    const arch = uploadFieldValue("upload-terraform-arch");
+    return os && arch
+      ? [`v1/providers/${namespace}/${name}/${version}/download/${os}/${arch}`]
+      : [];
+  }
   if (repo.format !== "maven2") {
     const file = document.getElementById("upload-file")?.files?.[0];
     return file ? [file.name] : [];
@@ -2770,6 +2847,37 @@ function buildUploadForm(repo, form) {
       form.append(`${assetKey}.extension`, extension.replace(/^\.+/, ""));
       if (classifier) form.append(`${assetKey}.classifier`, classifier);
     });
+    return;
+  }
+  if (repo.format === "terraform") {
+    const kind = uploadFieldValue("upload-terraform-kind");
+    const namespace = uploadFieldValue("upload-terraform-namespace");
+    const name = uploadFieldValue("upload-terraform-name");
+    const version = uploadFieldValue("upload-terraform-version");
+    const file = document.getElementById("upload-file")?.files?.[0];
+    if (!kind || !namespace || !name || !version || !file) {
+      throw new Error("Package kind, Namespace, Name, Version, and File are required.");
+    }
+    form.append("terraform.kind", kind);
+    form.append("terraform.namespace", namespace);
+    form.append("terraform.name", name);
+    form.append("terraform.version", version);
+    if (kind === "module") {
+      const system = uploadFieldValue("upload-terraform-system");
+      if (!system) throw new Error("Target system is required for a Terraform module.");
+      form.append("terraform.system", system);
+    } else if (kind === "provider") {
+      const os = uploadFieldValue("upload-terraform-os");
+      const arch = uploadFieldValue("upload-terraform-arch");
+      if (!os || !arch) {
+        throw new Error("Operating system and Architecture are required for a Terraform provider.");
+      }
+      form.append("terraform.os", os);
+      form.append("terraform.arch", arch);
+    } else {
+      throw new Error("Package kind must be module or provider.");
+    }
+    form.append("terraform.asset", file, file.name);
     return;
   }
   const file = document.getElementById("upload-file")?.files?.[0];
