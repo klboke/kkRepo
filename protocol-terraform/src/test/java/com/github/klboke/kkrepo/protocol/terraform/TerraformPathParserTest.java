@@ -23,6 +23,12 @@ class TerraformPathParserTest {
     assertEquals("amd64", upload.arch());
     assertEquals(TerraformPath.Kind.PROVIDER_ARCHIVE,
         parser.parse("v1/providers/acme/cloud/1.2.3/package/linux/terraform-provider-cloud_1.2.3_linux_amd64.zip").kind());
+    TerraformPath nexusArchive = parser.parse(
+        "v1/providers/acme/cloud/1.2.3/download/linux/amd64/terraform-provider-cloud_1.2.3_linux_amd64.zip");
+    assertEquals(TerraformPath.Kind.PROVIDER_ARCHIVE, nexusArchive.kind());
+    assertEquals("linux", nexusArchive.os());
+    assertEquals("amd64", nexusArchive.arch());
+    assertEquals("terraform-provider-cloud_1.2.3_linux_amd64.zip", nexusArchive.filename());
     assertEquals(TerraformPath.Kind.PROVIDER_SHA256SUMS,
         parser.parse("v1/providers/acme/cloud/1.2.3/metadata-r2/terraform-provider-cloud_1.2.3_SHA256SUMS").kind());
   }

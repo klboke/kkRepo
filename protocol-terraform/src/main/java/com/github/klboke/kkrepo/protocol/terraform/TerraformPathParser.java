@@ -89,6 +89,12 @@ public final class TerraformPathParser {
       requireVersion(s.get(4));
       return provider(TerraformPath.Kind.PROVIDER_DOWNLOAD, s, null, s.get(4), s.get(6), s.get(7), raw);
     }
+    if (s.size() == 9 && "download".equals(s.get(5))) {
+      requireVersion(s.get(4));
+      requireFilename(s.get(8));
+      return provider(
+          TerraformPath.Kind.PROVIDER_ARCHIVE, s, null, s.get(4), s.get(6), s.get(7), s.get(8), raw);
+    }
     if (s.size() == 8 && "package".equals(s.get(5))) {
       requireVersion(s.get(4));
       requireFilename(s.get(7));

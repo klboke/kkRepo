@@ -253,6 +253,10 @@ class TerraformServiceTest {
 
     when(assets.serve(eq(hosted), anyString(), anyBoolean())).thenReturn(MavenResponse.noBody(200));
     assertEquals(200, service.get(hosted, paths.parse(archivePath), BASE, false).status());
+    String nexusArchivePath = "v1/providers/acme/cloud/1.2.3/download/linux/amd64/"
+        + "terraform-provider-cloud_1.2.3_linux_amd64.zip";
+    assertEquals(200, service.get(hosted, paths.parse(nexusArchivePath), BASE, false).status());
+    verify(assets, times(2)).serve(hosted, archivePath, false);
     assertEquals(200, service.get(hosted, paths.parse(sumsPath), BASE, true).status());
     assertEquals(200, service.get(hosted, paths.parse(signaturePath), BASE, false).status());
     assertEquals(200, service.get(hosted, paths.parse(oldSumsPath), BASE, false).status());

@@ -305,7 +305,7 @@ PY
   COMPOSER_VERSION="${fields[0]}"
   dist_url="$(python3 - "$metadata_url" "${fields[1]}" <<'PY'
 import sys
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 print(urljoin(sys.argv[1], sys.argv[2]))
 PY
 )"
@@ -701,12 +701,29 @@ if not source_keys or not target_keys or source_keys[0].get("key_id") != target_
 with open(output_path, "w", encoding="utf-8") as output:
     output.write(str(target["shasum"]) + "\n")
     output.write(urljoin(repository_url, str(target["download_url"])) + "\n")
+    source_path = urlparse(str(source["download_url"])).path
+    marker = "/v1/providers/"
+    marker_index = source_path.find(marker)
+    if marker_index < 0:
+        raise SystemExit(f"Nexus Terraform provider download URL has no registry path: {source_path!r}")
+    provider_segments = source_path[marker_index + len(marker):].strip("/").split("/")
+    if len(provider_segments) < 7 or provider_segments[-4] != "download":
+        raise SystemExit(f"Nexus Terraform provider archive URL has an unexpected shape: {source_path!r}")
+    # A private Nexus URL may include its credential segment before the namespace. Exercise the
+    # path-compatible alias with target authentication instead of replaying a source credential.
+    output.write(urljoin(repository_url, "v1/providers/" + "/".join(provider_segments[-7:])) + "\n")
 PY
   expected_sha="$(sed -n '1p' "$fields")"
   curl -m 30 -fsS -u "$(auth)" "$(sed -n '2p' "$fields")" >"$archive"
   downloaded_sha="$(file_sha256 "$archive")"
   if [[ "$downloaded_sha" != "$expected_sha" ]]; then
     log "Terraform provider checksum mismatch after migration: $downloaded_sha != $expected_sha"
+    exit 1
+  fi
+  curl -m 30 -fsS -u "$(auth)" "$(sed -n '3p' "$fields")" >"$archive"
+  downloaded_sha="$(file_sha256 "$archive")"
+  if [[ "$downloaded_sha" != "$expected_sha" ]]; then
+    log "Terraform provider Nexus archive alias checksum mismatch after migration: $downloaded_sha != $expected_sha"
     exit 1
   fi
 

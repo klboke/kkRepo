@@ -242,11 +242,16 @@ public class TerraformService {
 
   private MavenResponse servePublishedProviderArchive(
       RepositoryRuntime runtime, TerraformPath path, boolean headOnly) {
-    boolean published = publishedProviderPlatforms(
+    TerraformRegistryDao.ProviderPlatform published = publishedProviderPlatforms(
             runtime, path.namespace(), path.name(), path.version()).stream()
-        .anyMatch(row -> row.assetPath().equals(path.rawPath()));
-    if (!published) throw notFound(path.rawPath());
-    return assets.serve(runtime, path.rawPath(), headOnly);
+        .filter(row -> path.arch() == null
+            ? row.assetPath().equals(path.rawPath())
+            : row.os().equals(path.os())
+                && row.arch().equals(path.arch())
+                && row.filename().equals(path.filename()))
+        .findFirst()
+        .orElseThrow(() -> notFound(path.rawPath()));
+    return assets.serve(runtime, published.assetPath(), headOnly);
   }
 
   private MavenResponse servePublishedProviderMetadata(
