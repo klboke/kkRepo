@@ -341,7 +341,10 @@ public class TerraformService {
         if (upstream == null || upstream.isBlank()) {
           throw new MavenExceptions.BadUpstreamException("Terraform upstream omitted X-Terraform-Get");
         }
-        String absolute = URI.create(remote).resolve(upstream).toString();
+        String absolute = httpModuleSource(remote, upstream);
+        if (absolute == null) {
+          return MavenResponse.noBody(204).withHeader("X-Terraform-Get", upstream);
+        }
         String filename = safeRemoteFilename(absolute,
             path.name() + "_" + path.version() + ".zip");
         String local = "v1/modules/" + path.namespace() + "/" + path.name() + "/" + path.system()
@@ -746,6 +749,21 @@ public class TerraformService {
   private static String absolute(String base, String value) {
     if (value == null || value.isBlank()) throw new MavenExceptions.BadUpstreamException("Terraform upstream URL is missing");
     return URI.create(base).resolve(value).toString();
+  }
+
+  private static String httpModuleSource(String base, String value) {
+    String candidate = value;
+    if (value.startsWith("/") || value.startsWith("./") || value.startsWith("../")) {
+      try {
+        candidate = URI.create(base).resolve(value).toString();
+      } catch (RuntimeException e) {
+        throw new MavenExceptions.BadUpstreamException("Terraform upstream module URL is invalid");
+      }
+    }
+    return candidate.regionMatches(true, 0, "http://", 0, "http://".length())
+            || candidate.regionMatches(true, 0, "https://", 0, "https://".length())
+        ? candidate
+        : null;
   }
 
   private static String repositoryPath(String url, String repository) {

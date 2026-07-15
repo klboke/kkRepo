@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -30,6 +31,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.raw.RawProxyService;
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -318,6 +320,50 @@ class TerraformServiceTest {
   }
 
   @Test
+  void preservesGoGetterSourceFromProxyModuleDownload() throws Exception {
+    RepositoryRuntime proxyRuntime = runtime(
+        42, "terraform-proxy", RepositoryType.PROXY, "https://registry.example/root", List.of());
+    when(proxy.getMetadataFromUrl(eq(proxyRuntime), anyString(), anyString(), anyBoolean()))
+        .thenReturn(response(mapper.writeValueAsBytes(Map.of("modules.v1", "/api/modules/")),
+            "application/json"));
+    String source = "git::https://github.com/acme/network.git?ref=v1.2.3";
+    respond(fetcher, new HttpRemoteFetcher.Result(
+        204, Map.of("X-Terraform-Get", source), new ByteArrayInputStream(new byte[0])));
+
+    MavenResponse download = service.get(
+        proxyRuntime, paths.parse("v1/modules/acme/network/aws/1.2.3/download"), BASE, false);
+
+    assertEquals(204, download.status());
+    assertEquals(source, download.headers().get("X-Terraform-Get"));
+    verify(assets, never()).storeBytes(eq(proxyRuntime), anyString(), any(), anyString(), any());
+  }
+
+  @Test
+  void resolvesAndCachesRelativeHttpSourceFromProxyModuleDownload() throws Exception {
+    RepositoryRuntime proxyRuntime = runtime(
+        43, "terraform-proxy", RepositoryType.PROXY, "https://registry.example/root", List.of());
+    when(proxy.getMetadataFromUrl(eq(proxyRuntime), anyString(), anyString(), anyBoolean()))
+        .thenReturn(response(mapper.writeValueAsBytes(Map.of("modules.v1", "/api/modules/")),
+            "application/json"));
+    respond(fetcher, new HttpRemoteFetcher.Result(
+        204, Map.of("X-Terraform-Get", "../packages/network.zip"),
+        new ByteArrayInputStream(new byte[0])));
+
+    MavenResponse download = service.get(
+        proxyRuntime, paths.parse("v1/modules/acme/network/aws/1.2.3/download"), BASE, false);
+
+    assertEquals(204, download.status());
+    assertEquals(BASE + "/v1/modules/acme/network/aws/1.2.3/network.zip",
+        download.headers().get("X-Terraform-Get"));
+    ArgumentCaptor<byte[]> route = ArgumentCaptor.forClass(byte[].class);
+    verify(assets).storeBytes(eq(proxyRuntime), anyString(), route.capture(),
+        eq("application/json"), any());
+    assertEquals(
+        "https://registry.example/api/modules/acme/network/aws/packages/network.zip",
+        mapper.readValue(route.getValue(), new TypeReference<Map<String, Object>>() {}).get("remoteUrl"));
+  }
+
+  @Test
   void mergesGroupVersionsAndPersistsStableMemberBinding() throws Exception {
     RepositoryRuntime first = runtime(51, "first", RepositoryType.HOSTED, null, List.of());
     RepositoryRuntime second = runtime(52, "second", RepositoryType.HOSTED, null, List.of());
@@ -422,6 +468,15 @@ class TerraformServiceTest {
 
   private static MavenResponse response(byte[] body, String contentType) {
     return MavenResponse.ok(new ByteArrayInputStream(body), body.length, contentType, null, null);
+  }
+
+  private static void respond(HttpRemoteFetcher fetcher, HttpRemoteFetcher.Result result)
+      throws IOException {
+    doAnswer(invocation -> {
+      @SuppressWarnings("unchecked")
+      HttpRemoteFetcher.ResultHandler<Object> handler = invocation.getArgument(2);
+      return handler.handle(result);
+    }).when(fetcher).fetchWithBodyRetry(any(), anyString(), any());
   }
 
   private static RepositoryRuntime runtime(
