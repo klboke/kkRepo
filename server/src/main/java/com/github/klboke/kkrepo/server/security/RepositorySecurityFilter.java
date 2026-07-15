@@ -20,6 +20,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.net.URLDecoder;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
@@ -82,11 +83,13 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     }
     request.setAttribute(REPOSITORY_RECORD_ATTRIBUTE, repository.get());
     String terraformUrlToken = null;
+    TerraformPath terraformPath = null;
     if (repository.get().format() == RepositoryFormat.TERRAFORM) {
       try {
         String presentedPath = target.path();
         TerraformPathParser.ParsedRequest parsed = TERRAFORM_PATH_PARSER.parseRequestPath(target.path());
         if (parsed.path().kind() != TerraformPath.Kind.UNKNOWN) {
+          terraformPath = parsed.path();
           target = target.withPath(parsed.canonicalPath());
           terraformUrlToken = parsed.credentialSegment();
           request.setAttribute(NORMALIZED_REPOSITORY_PATH_ATTRIBUTE, parsed.canonicalPath());
@@ -134,7 +137,37 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       response.sendError(HttpServletResponse.SC_FORBIDDEN, decision.reason());
       return;
     }
+    if (terraformUrlToken == null && isTerraformDownloadMetadata(terraformPath)) {
+      Optional<String> replayable = authenticationService.replayableTerraformUrlToken(
+          request, authenticated.get());
+      if (replayable.isPresent()) {
+        request.setAttribute(
+            TERRAFORM_URL_TOKEN_SEGMENT_ATTRIBUTE, encodePathSegment(replayable.get()));
+      } else if (!anonymousCanRead(repository.get(), target)) {
+        challenge(request, response, repository.get(), target);
+        return;
+      }
+    }
     filterChain.doFilter(request, response);
+  }
+
+  private static boolean isTerraformDownloadMetadata(TerraformPath path) {
+    return path != null && (path.kind() == TerraformPath.Kind.MODULE_DOWNLOAD
+        || path.kind() == TerraformPath.Kind.PROVIDER_DOWNLOAD);
+  }
+
+  private boolean anonymousCanRead(RepositoryRecord repository, RepositoryRequest target) {
+    Optional<AuthenticatedSubject> anonymous = authenticationService.authenticateAnonymous();
+    if (anonymous.isEmpty()) return false;
+    return actionsForDecision(repository, target).stream().anyMatch(action ->
+        accessDecisionService.decide(
+            anonymous.get().permissionSubject(),
+            new RepositoryPermission(repository.name(), repository.format(), target.path(), action))
+            .allowed());
+  }
+
+  private static String encodePathSegment(String value) {
+    return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
   }
 
   private AccessDecision decide(

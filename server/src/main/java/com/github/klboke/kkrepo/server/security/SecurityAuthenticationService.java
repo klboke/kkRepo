@@ -198,6 +198,40 @@ public class SecurityAuthenticationService {
     return Optional.empty();
   }
 
+  /**
+   * Returns a credential from this request only when it can be replayed through the Terraform URL
+   * token authentication path as the already-authenticated subject. Session and OIDC credentials
+   * intentionally do not qualify because standalone archive downloads cannot replay them safely.
+   */
+  @Transactional
+  public Optional<String> replayableTerraformUrlToken(
+      HttpServletRequest request, AuthenticatedSubject authenticated) {
+    if (request == null || authenticated == null) return Optional.empty();
+    if (authenticated.apiKeyId() != null) {
+      return boundedTerraformToken(apiKeyToken(request));
+    }
+    String authorization = request.getHeader("Authorization");
+    if (authorization == null || !authorization.regionMatches(true, 0, "Basic ", 0, 6)) {
+      return Optional.empty();
+    }
+    Optional<AuthenticatedSubject> basic = basicCredentials(request).flatMap(credentials ->
+        authenticateBasic(credentials.username(), credentials.password()));
+    if (basic.isEmpty()
+        || !java.util.Objects.equals(basic.get().source(), authenticated.source())
+        || !java.util.Objects.equals(basic.get().userId(), authenticated.userId())) {
+      return Optional.empty();
+    }
+    return boundedTerraformToken(authorization.substring(6).trim());
+  }
+
+  private static Optional<String> boundedTerraformToken(String token) {
+    if (token == null || token.isBlank() || token.length() > 4096
+        || token.indexOf('\r') >= 0 || token.indexOf('\n') >= 0) {
+      return Optional.empty();
+    }
+    return Optional.of(token);
+  }
+
   @Transactional
   public Optional<AuthenticatedSubject> authenticateCredentials(String username, String password) {
     if (username == null || username.isBlank() || password == null) {

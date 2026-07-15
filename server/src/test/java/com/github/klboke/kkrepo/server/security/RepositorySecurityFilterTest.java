@@ -234,6 +234,48 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
+  void embedsReplayableAuthenticationInPrivateTerraformDownloadUrls() throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("alice")));
+    authentication.terraformReplayToken = "dXNlcjpwYXNz/w==";
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        new RecordingDecisionService(AccessDecision.allow()),
+        new FakeRepositoryDao(repository(
+            "terraform-private", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED)),
+        false);
+    HttpServletRequest request = request(
+        "GET", "/repository/terraform-private/v1/modules/acme/network/aws/1.2.3/download");
+    ChainState chain = new ChainState();
+
+    filter.doFilter(request, new ResponseState().proxy(), chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(
+        "dXNlcjpwYXNz%2Fw%3D%3D",
+        request.getAttribute(RepositorySecurityFilter.TERRAFORM_URL_TOKEN_SEGMENT_ATTRIBUTE));
+  }
+
+  @Test
+  void rejectsNonReplayableAuthenticationForPrivateTerraformDownloadMetadata() throws Exception {
+    RepositorySecurityFilter filter = filter(
+        new StubAuthenticationService(Optional.of(subject("alice"))),
+        new RecordingDecisionService(AccessDecision.allow()),
+        new FakeRepositoryDao(repository(
+            "terraform-private", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED)),
+        false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/repository/terraform-private/v1/providers/acme/cloud/1.2.3/download/linux/amd64"),
+        response.proxy(), chain);
+
+    assertEquals(0, chain.calls);
+    assertEquals(HttpServletResponse.SC_UNAUTHORIZED, response.status);
+  }
+
+  @Test
   void cargoSparseIndexRequiresAuthenticationWhenAnonymousReadIsDisabled() throws Exception {
     assertCargoReadRequiresAuthenticationWhenAnonymousAccessDisabled("/repository/cargo-hosted/kk/re/kkrepo_e2e");
   }
@@ -1005,6 +1047,7 @@ class RepositorySecurityFilterTest {
     private int pubCalls;
     private Optional<AuthenticatedSubject> terraformAuthenticated = Optional.empty();
     private String terraformToken;
+    private String terraformReplayToken;
     private boolean anonymousEnabled;
 
     private StubAuthenticationService(AuthenticatedSubject anonymous) {
@@ -1043,6 +1086,12 @@ class RepositorySecurityFilterTest {
     public Optional<AuthenticatedSubject> authenticateTerraformUrlToken(String token) {
       terraformToken = token;
       return terraformAuthenticated;
+    }
+
+    @Override
+    public Optional<String> replayableTerraformUrlToken(
+        HttpServletRequest request, AuthenticatedSubject authenticated) {
+      return Optional.ofNullable(terraformReplayToken);
     }
 
     @Override

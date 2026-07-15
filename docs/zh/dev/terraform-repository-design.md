@@ -36,6 +36,7 @@
 - 一个部署可以有多个 Terraform 仓库，根域名只能有一个 `/.well-known/terraform.json`。后续若增加零配置 discovery，必须先引入域名到 repository/group 的显式绑定，不能根据请求临时猜仓库。
 - Module 下载 metadata 中可直接识别为 archive 的 `X-Terraform-Get`，以及 Provider 下载 metadata 中的 `download_url`、`shasums_url`、`shasums_signature_url`，必须指回当前 hosted/proxy/group 路径；HTTP vanity、VCS 和带 `//subdir` 的 go-getter source 保持官方语义并原样透传。反向代理下使用可信外部 base URL。
 - URL token 可能出现在 `/v1/modules/{token}/...` 或 `/v1/providers/{token}/...` 服务基址中。缓存中不得保存调用者 token；只缓存 token-free 规范化 metadata，请求返回时再渲染 URL。
+- 私有仓库的 module/provider download metadata 若通过普通 Basic 或 API key 认证，必须把已验证且可重放的 credential 编码为 URL-token segment 后再渲染后续 archive/checksum URL；匿名可读仓库保持裸 URL，session/OIDC 等不可安全重放的认证不得生成失效的后续 URL。
 - Provider archive、SHA256SUMS 和签名是一个一致性单元。新增一个 OS/architecture 平台会改变 version 的平台集合和 checksum 清单；必须通过关系数据库 revision 和原子可见状态协调多副本。
 - Provider zip 只作为不可信数据检查，服务端绝不能执行其中的 Provider binary。无法安全推导的 protocol version 行为必须先以 Nexus 参考测试固定。
 

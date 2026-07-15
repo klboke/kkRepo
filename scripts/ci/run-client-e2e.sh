@@ -1021,7 +1021,7 @@ test_terraform() {
   local provider_dir="$dir/provider"
   local module_zip="$dir/kkrepo-client-e2e-module_${fixture_version}.zip"
   local provider_zip="$dir/terraform-provider-fixture_${fixture_version}_${fixture_os}_${fixture_arch}.zip"
-  local token config
+  local token config basic_token basic_token_encoded module_headers module_download_url
   mkdir -p "$module_dir" "$provider_dir"
 
   cat >"$module_dir/main.tf" <<'EOF'
@@ -1046,6 +1046,37 @@ EOF
     -H "Content-Disposition: attachment; filename=$(basename "$provider_zip")" \
     --upload-file "$provider_zip" \
     "$KKREPO_URL/repository/terraform-hosted/v1/providers/kkrepo/fixture/$fixture_version/download/$fixture_os/$fixture_arch"
+
+  basic_token="$(printf '%s' "$KKREPO_AUTH" | base64 | tr -d '\r\n')"
+  basic_token_encoded="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$basic_token")"
+  add_redaction_value "$basic_token"
+  add_redaction_value "$basic_token_encoded"
+  module_headers="$dir/basic-module.headers"
+  run_logged terraform-basic-module-metadata curl -m 20 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    -D "$module_headers" -o /dev/null \
+    "$KKREPO_URL/repository/terraform-hosted/v1/modules/kkrepo/client-e2e/aws/$fixture_version/download"
+  module_download_url="$(awk 'BEGIN { IGNORECASE=1 } /^X-Terraform-Get:/ { sub(/^[^:]+:[[:space:]]*/, ""); sub(/\r$/, ""); print; exit }' "$module_headers")"
+  [[ "$module_download_url" == *"/$basic_token_encoded/"* ]]
+  run_logged terraform-basic-module-followup curl -m 20 --fail-with-body -sS \
+    -o "$dir/basic-module.zip" "$module_download_url"
+  cmp "$module_zip" "$dir/basic-module.zip"
+
+  run_logged_output terraform-basic-provider-metadata "$dir/basic-provider.json" \
+    curl -m 20 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    "$KKREPO_URL/repository/terraform-hosted/v1/providers/kkrepo/fixture/$fixture_version/download/$fixture_os/$fixture_arch"
+  while IFS= read -r provider_url; do
+    [[ "$provider_url" == *"/$basic_token_encoded/"* ]]
+    run_logged "terraform-basic-provider-followup-$(basename "$provider_url")" \
+      curl -m 20 --fail-with-body -sS -o /dev/null "$provider_url"
+  done < <(python3 - "$dir/basic-provider.json" <<'PY'
+import json
+import sys
+
+document = json.load(open(sys.argv[1], encoding="utf-8"))
+for field in ("download_url", "shasums_url", "shasums_signature_url"):
+    print(document[field])
+PY
+  )
 
   token="$(create_api_key GenericToken "client e2e terraform $STAMP")"
   add_redaction_value "$token"
