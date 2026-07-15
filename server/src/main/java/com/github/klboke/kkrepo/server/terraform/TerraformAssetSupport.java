@@ -38,6 +38,10 @@ final class TerraformAssetSupport {
     store(runtime, path, new ByteArrayInputStream(body), contentType, attributes, "terraform", null);
   }
 
+  void delete(RepositoryRuntime runtime, String path) {
+    hosted.deleteInternal(runtime, path);
+  }
+
   Optional<AssetRecord> find(RepositoryRuntime runtime, String path) {
     return assets.findAssetByPath(runtime.id(), path);
   }

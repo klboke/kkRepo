@@ -501,6 +501,14 @@ public class TerraformService {
       AssetRecord asset = assets.find(runtime, localPath).orElseThrow(() -> notFound(localPath));
       AssetBlobRecord blob = assets.blob(asset);
       if (blob == null || !expected.equalsIgnoreCase(blob.sha256())) {
+        if (response.hasBody()) {
+          try {
+            response.body().close();
+          } catch (IOException ignored) {
+            // The checksum failure is the actionable upstream error.
+          }
+        }
+        assets.delete(runtime, localPath);
         throw new MavenExceptions.BadUpstreamException("Terraform provider checksum mismatch for " + localPath);
       }
     }

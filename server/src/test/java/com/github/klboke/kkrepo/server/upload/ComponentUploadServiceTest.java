@@ -23,6 +23,7 @@ import com.github.klboke.kkrepo.server.npm.NpmHostedService;
 import com.github.klboke.kkrepo.server.pypi.PypiHostedService;
 import com.github.klboke.kkrepo.server.pub.PubHostedService;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
+import com.github.klboke.kkrepo.server.terraform.TerraformService;
 import com.github.klboke.kkrepo.server.yum.YumService;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -144,6 +145,33 @@ class ComponentUploadServiceTest {
     verify(pubHosted, never()).uploadArchive(any(), any(), any(), any(), any());
   }
 
+  @Test
+  void terraformComponentUploadRejectsMultipleAssets() throws Exception {
+    TerraformService terraformService = mock(TerraformService.class);
+    ComponentUploadService service = service(terraformService);
+    LinkedMultiValueMap<String, MultipartFile> uploads = files("terraform.asset", "provider.zip");
+    uploads.add("terraform.asset", new MockMultipartFile(
+        "terraform.asset", "extra.zip", "application/zip", new byte[] {1}));
+
+    UploadValidationException thrown = assertThrows(
+        UploadValidationException.class,
+        () -> service.upload(
+            "terraform-hosted",
+            Map.of(
+                "terraform.kind", new String[] {"provider"},
+                "terraform.namespace", new String[] {"acme"},
+                "terraform.name", new String[] {"cloud"},
+                "terraform.version", new String[] {"1.2.3"},
+                "terraform.os", new String[] {"linux"},
+                "terraform.arch", new String[] {"amd64"}),
+            uploads,
+            "alice",
+            "127.0.0.1"));
+
+    assertEquals("Terraform upload requires exactly one archive", thrown.getMessage());
+    verify(terraformService, never()).put(any(), any(), any(), any(), any(), any(), any());
+  }
+
   private static ComponentUploadService service(CargoHostedService cargoHosted) {
     return service(runtime("cargo-hosted", RepositoryFormat.CARGO), cargoHosted, mock(PubHostedService.class));
   }
@@ -168,6 +196,25 @@ class ComponentUploadServiceTest {
         composerHosted,
         mock(RawHostedService.class),
         mock(YumService.class));
+  }
+
+  private static ComponentUploadService service(TerraformService terraformService) {
+    RepositoryRuntime runtime = runtime("terraform-hosted", RepositoryFormat.TERRAFORM);
+    RepositoryRuntimeRegistry registry = mock(RepositoryRuntimeRegistry.class);
+    when(registry.resolve(runtime.name())).thenReturn(Optional.of(runtime));
+    return new ComponentUploadService(
+        registry,
+        mock(AssetDao.class),
+        mock(MavenHostedService.class),
+        mock(NpmHostedService.class),
+        mock(PypiHostedService.class),
+        mock(HelmHostedService.class),
+        mock(CargoHostedService.class),
+        mock(PubHostedService.class),
+        mock(ComposerHostedService.class),
+        mock(RawHostedService.class),
+        mock(YumService.class),
+        terraformService);
   }
 
   private static ComponentUploadService service(

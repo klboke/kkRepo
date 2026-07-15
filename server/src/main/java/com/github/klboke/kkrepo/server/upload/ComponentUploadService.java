@@ -178,6 +178,13 @@ public class ComponentUploadService {
     if (!runtime.isHosted()) {
       throw new MavenExceptions.MethodNotAllowed("Upload is only valid on hosted repositories");
     }
+    if (runtime.format() == RepositoryFormat.TERRAFORM
+        && rawFiles.values().stream()
+            .flatMap(List::stream)
+            .filter(file -> file != null && !file.isEmpty())
+            .count() != 1) {
+      throw new UploadValidationException("Terraform upload requires exactly one archive");
+    }
     String format = formatLabel(runtime.format());
     NormalizedUpload upload = normalize(format, rawFields, rawFiles);
     List<String> paths = switch (runtime.format()) {
@@ -202,12 +209,14 @@ public class ComponentUploadService {
   private List<String> uploadTerraform(
       RepositoryRuntime runtime, NormalizedUpload upload, String createdBy, String createdByIp) throws IOException {
     if (terraformService == null) throw new UploadValidationException("Terraform upload service is unavailable");
+    if (upload.assets().size() != 1) {
+      throw new UploadValidationException("Terraform upload requires exactly one archive");
+    }
     String kind = requireField(upload.fields(), "kind").trim().toLowerCase(Locale.ROOT);
     String namespace = requireField(upload.fields(), "namespace");
     String name = requireField(upload.fields(), "name");
     String version = requireField(upload.fields(), "version");
-    AssetUpload asset = upload.assets().stream().findFirst()
-        .orElseThrow(() -> new UploadValidationException("Terraform upload requires one archive"));
+    AssetUpload asset = upload.assets().getFirst();
     String filename = asset.file().getOriginalFilename();
     if (filename == null || filename.isBlank()) filename = "terraform.zip";
     String path;

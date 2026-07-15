@@ -33,6 +33,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.raw.RawProxyService;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -365,8 +366,11 @@ class TerraformServiceTest {
           }
           return response("archive".getBytes(StandardCharsets.UTF_8), "application/zip");
         });
+    InputStream checksumFailedBody = mock(InputStream.class);
     when(proxy.getAssetFromUrl(eq(proxyRuntime), anyString(), anyString(), anyBoolean()))
-        .thenReturn(MavenResponse.noBody(200));
+        .thenReturn(
+            MavenResponse.noBody(200),
+            MavenResponse.ok(checksumFailedBody, 7, "application/zip", null, null));
 
     Map<String, Object> versions = json(service.get(
         proxyRuntime, paths.parse("v1/providers/acme/cloud/versions"), BASE, false));
@@ -393,6 +397,8 @@ class TerraformServiceTest {
     when(assets.blob(archive)).thenReturn(blob(42, "different", 7));
     assertThrows(MavenExceptions.BadUpstreamException.class,
         () -> service.get(proxyRuntime, paths.parse(localArchive), BASE, false));
+    verify(checksumFailedBody).close();
+    verify(assets).delete(proxyRuntime, localArchive);
   }
 
   @Test

@@ -73,6 +73,8 @@ class TerraformAssetSupportTest {
         eq("application/zip"), any(), eq("alice"), eq("127.0.0.1"));
     verify(hosted).putInternal(eq(runtime), eq("v1/metadata.json"), any(),
         eq("application/json"), any(), eq("terraform"), eq(null));
+    support.delete(runtime, "v1/file.zip");
+    verify(hosted).deleteInternal(runtime, "v1/file.zip");
 
     when(assetDao.findAssetByPath(runtime.id(), asset.path())).thenReturn(Optional.of(asset));
     when(assetDao.listAssetsByPrefix(runtime.id(), "v1/")).thenReturn(List.of(asset));
