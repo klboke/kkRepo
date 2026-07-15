@@ -852,6 +852,48 @@ class TerraformServiceTest {
   }
 
   @Test
+  void skipsMissingGroupVersionMetadataWhenAnotherMemberProducesIt() throws Exception {
+    RepositoryRuntime missing = runtime(
+        76, "terraform-proxy", RepositoryType.PROXY, "https://registry.example", List.of());
+    RepositoryRuntime healthy = runtime(
+        77, "terraform-hosted", RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime group = runtime(
+        78, "terraform-group", RepositoryType.GROUP, null, List.of(missing, healthy));
+    when(proxy.getMetadataFromUrl(eq(missing), anyString(), anyString(), anyBoolean()))
+        .thenThrow(new MavenExceptions.MavenNotFoundException("package not found"));
+    when(assets.list(healthy, "v1/modules/acme/network/aws/"))
+        .thenReturn(List.of(asset(
+            77, healthy, 67L, "v1/modules/acme/network/aws/1.2.3/network.zip")));
+
+    Map<String, Object> merged = json(service.get(
+        group, paths.parse("v1/modules/acme/network/aws/versions"), BASE, false));
+
+    assertTrue(merged.toString().contains("1.2.3"));
+  }
+
+  @Test
+  void propagatesUnexpectedGroupVersionMergeFailureAfterHealthyMember() {
+    RepositoryRuntime healthy = runtime(
+        79, "terraform-hosted", RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime broken = runtime(
+        80, "terraform-broken", RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime group = runtime(
+        81, "terraform-group", RepositoryType.GROUP, null, List.of(healthy, broken));
+    when(assets.list(healthy, "v1/modules/acme/network/aws/"))
+        .thenReturn(List.of(asset(
+            79, healthy, 69L, "v1/modules/acme/network/aws/1.2.3/network.zip")));
+    when(assets.list(broken, "v1/modules/acme/network/aws/"))
+        .thenThrow(new IllegalStateException("registry data corrupt"));
+
+    IllegalStateException thrown = assertThrows(
+        IllegalStateException.class,
+        () -> service.get(
+            group, paths.parse("v1/modules/acme/network/aws/versions"), BASE, false));
+
+    assertEquals("registry data corrupt", thrown.getMessage());
+  }
+
+  @Test
   void keysDiscoveryMetadataByConfiguredRemoteUrl() throws Exception {
     RepositoryRuntime original = runtime(
         71, "terraform-proxy", RepositoryType.PROXY,

@@ -660,10 +660,10 @@ public class TerraformService {
           }
         }
         producedMetadata = true;
+      } catch (MavenExceptions.MavenNotFoundException ignored) {
+        // A group member may legitimately have no metadata for the requested package.
       } catch (MavenExceptions.BadUpstreamException e) {
         lastUpstreamFailure = e;
-      } catch (RuntimeException ignored) {
-        // Continue with healthy members.
       }
     }
     if (!producedMetadata && lastUpstreamFailure != null) {
