@@ -49,6 +49,20 @@ public class TerraformRepositoryDataMigrationWriter {
       InputStream body,
       String responseContentType,
       boolean validateSize) {
+    try (body) {
+      return writeOpenBody(repository, source, body, responseContentType, validateSize);
+    } catch (IOException e) {
+      throw new IllegalStateException(
+          "Failed reading Terraform migration asset " + source.sourcePath(), e);
+    }
+  }
+
+  private MigratedAsset writeOpenBody(
+      RepositoryRecord repository,
+      RepositoryDataMigrationAssetRecord source,
+      InputStream body,
+      String responseContentType,
+      boolean validateSize) throws IOException {
     if (repository.format() != RepositoryFormat.TERRAFORM) {
       throw new IllegalArgumentException("Terraform migration writer requires a Terraform repository");
     }
@@ -91,8 +105,6 @@ public class TerraformRepositoryDataMigrationWriter {
           .orElseThrow(() -> new IllegalStateException(
               "Terraform migration did not publish " + target.assetPath()));
       return verifiedExisting(source, stored, validateSize);
-    } catch (IOException e) {
-      throw new IllegalStateException("Failed buffering Terraform migration asset " + source.sourcePath(), e);
     } finally {
       if (buffered != null) {
         try {

@@ -132,6 +132,16 @@ run_logged_output() {
   return "$status"
 }
 
+run_logged_redacted_output() {
+  local name="$1"
+  local output="$2"
+  shift 2
+  local status=0
+  run_logged_output "$name" "$output" "$@" || status=$?
+  redact_log_file "$output"
+  return "$status"
+}
+
 run_logged_output_in() {
   local name="$1"
   local dir="$2"
@@ -1127,7 +1137,7 @@ EOF
     test -d "$provider_root/registry.terraform.io/hashicorp/null/3.2.4/${fixture_os}_${fixture_arch}"
   done
 
-  run_logged_output terraform-provider-metadata "$ARTIFACT_DIR/terraform-provider-metadata.json" \
+  run_logged_redacted_output terraform-provider-metadata "$ARTIFACT_DIR/terraform-provider-metadata.json" \
     curl -m 20 -fsS \
     "$KKREPO_URL/repository/terraform-group/v1/providers/$token/kkrepo/fixture/$fixture_version/download/$fixture_os/$fixture_arch"
   python3 - "$ARTIFACT_DIR/terraform-provider-metadata.json" "$fixture_version" "$fixture_os" "$fixture_arch" <<'PY'

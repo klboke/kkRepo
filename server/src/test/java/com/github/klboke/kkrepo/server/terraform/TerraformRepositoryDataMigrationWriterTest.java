@@ -59,9 +59,11 @@ class TerraformRepositoryDataMigrationWriterTest {
     when(fixture.assets().find(fixture.runtime(), path)).thenReturn(Optional.of(asset));
     when(fixture.assets().blob(asset)).thenReturn(blob);
 
+    CloseTrackingInputStream body = new CloseTrackingInputStream(new byte[0]);
     TerraformRepositoryDataMigrationWriter.MigratedAsset migrated = fixture.writer().write(
-        fixture.repository(), source, new ByteArrayInputStream(new byte[0]), null, true);
+        fixture.repository(), source, body, null, true);
 
+    assertTrue(body.closed());
     assertEquals(103L, migrated.componentId());
     assertEquals(101L, migrated.assetId());
     assertEquals(102L, migrated.assetBlobId());
@@ -120,9 +122,11 @@ class TerraformRepositoryDataMigrationWriterTest {
     when(fixture.service().putForMigration(any(), any(), any(), any(), any(), any(), any()))
         .thenReturn(MavenResponse.created());
 
+    CloseTrackingInputStream body = new CloseTrackingInputStream(content);
     TerraformRepositoryDataMigrationWriter.MigratedAsset migrated = fixture.writer().write(
-        fixture.repository(), source, new ByteArrayInputStream(content), "application/x-terraform-module", true);
+        fixture.repository(), source, body, "application/x-terraform-module", true);
 
+    assertTrue(body.closed());
     assertEquals(301L, migrated.assetId());
     ArgumentCaptor<TerraformPath> pathCaptor = ArgumentCaptor.forClass(TerraformPath.class);
     verify(fixture.service()).putForMigration(
@@ -249,4 +253,21 @@ class TerraformRepositoryDataMigrationWriterTest {
       RepositoryRuntimeRegistry runtimes,
       RepositoryRuntime runtime,
       RepositoryRecord repository) {}
+
+  private static final class CloseTrackingInputStream extends ByteArrayInputStream {
+    private boolean closed;
+
+    private CloseTrackingInputStream(byte[] body) {
+      super(body);
+    }
+
+    @Override
+    public void close() {
+      closed = true;
+    }
+
+    private boolean closed() {
+      return closed;
+    }
+  }
 }
