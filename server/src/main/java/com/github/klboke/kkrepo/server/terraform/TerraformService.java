@@ -485,7 +485,13 @@ public class TerraformService {
           }
         } else {
           for (Map<String, Object> version : (List<Map<String, Object>>) body.getOrDefault("versions", List.of())) {
-            versions.putIfAbsent(string(version.get("version")), version);
+            String number = string(version.get("version"));
+            Map<String, Object> existing = versions.get(number);
+            if (existing == null) {
+              versions.put(number, new LinkedHashMap<>(version));
+            } else {
+              mergeProviderVersion(existing, version);
+            }
           }
         }
       } catch (RuntimeException ignored) {
@@ -498,6 +504,28 @@ public class TerraformService {
         ? json(Map.of("modules", List.of(Map.of(
             "source", path.namespace() + "/" + path.name() + "/" + path.system(), "versions", sorted))), headOnly)
         : json(Map.of("versions", sorted), headOnly);
+  }
+
+  @SuppressWarnings("unchecked")
+  private static void mergeProviderVersion(
+      Map<String, Object> existing, Map<String, Object> incoming) {
+    Map<String, Map<String, Object>> platforms = new LinkedHashMap<>();
+    for (Map<String, Object> source : List.of(existing, incoming)) {
+      for (Map<String, Object> platform
+          : (List<Map<String, Object>>) source.getOrDefault("platforms", List.of())) {
+        String key = string(platform.get("os")) + "\u0000" + string(platform.get("arch"));
+        platforms.putIfAbsent(key, platform);
+      }
+    }
+    existing.put("platforms", List.copyOf(platforms.values()));
+
+    Set<String> protocols = new LinkedHashSet<>();
+    for (Map<String, Object> source : List.of(existing, incoming)) {
+      for (Object protocol : (List<?>) source.getOrDefault("protocols", List.of())) {
+        if (protocol != null) protocols.add(protocol.toString());
+      }
+    }
+    existing.put("protocols", List.copyOf(protocols));
   }
 
   @SuppressWarnings("unchecked")

@@ -37,6 +37,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -337,6 +338,46 @@ class TerraformServiceTest {
   }
 
   @Test
+  @SuppressWarnings("unchecked")
+  void mergesPlatformsForTheSameProviderVersionAcrossGroupMembers() throws Exception {
+    RepositoryRuntime first = runtime(53, "first-provider", RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime second = runtime(54, "second-provider", RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime group = runtime(
+        55, "terraform-group", RepositoryType.GROUP, null, List.of(first, second));
+    String linuxPath = "v1/providers/acme/cloud/1.2.3/package/linux/"
+        + "terraform-provider-cloud_1.2.3_linux_amd64.zip";
+    String darwinPath = "v1/providers/acme/cloud/1.2.3/package/darwin/"
+        + "terraform-provider-cloud_1.2.3_darwin_arm64.zip";
+    when(assets.list(first, "v1/providers/acme/cloud/"))
+        .thenReturn(List.of(asset(53, first, 63L, linuxPath)));
+    when(assets.list(second, "v1/providers/acme/cloud/"))
+        .thenReturn(List.of(asset(54, second, 64L, darwinPath)));
+    TerraformRegistryDao.ProviderState firstState = new TerraformRegistryDao.ProviderState(
+        first.id(), "acme", "cloud", "1.2.3", 1, "first-sums", "first-sig", 1, Instant.now());
+    TerraformRegistryDao.ProviderState secondState = new TerraformRegistryDao.ProviderState(
+        second.id(), "acme", "cloud", "1.2.3", 1, "second-sums", "second-sig", 1, Instant.now());
+    when(registry.findProviderState(first.id(), "acme", "cloud", "1.2.3"))
+        .thenReturn(Optional.of(firstState));
+    when(registry.findProviderState(second.id(), "acme", "cloud", "1.2.3"))
+        .thenReturn(Optional.of(secondState));
+    when(registry.listProviderPlatforms(first.id(), "acme", "cloud", "1.2.3"))
+        .thenReturn(List.of(providerPlatform(first, linuxPath, "linux", "amd64")));
+    when(registry.listProviderPlatforms(second.id(), "acme", "cloud", "1.2.3"))
+        .thenReturn(List.of(providerPlatform(second, darwinPath, "darwin", "arm64")));
+
+    Map<String, Object> merged = json(service.get(
+        group, paths.parse("v1/providers/acme/cloud/versions"), BASE, false));
+    List<Map<String, Object>> versions = (List<Map<String, Object>>) merged.get("versions");
+    List<Map<String, Object>> platforms =
+        (List<Map<String, Object>>) versions.getFirst().get("platforms");
+
+    assertEquals(1, versions.size());
+    assertEquals(Set.of("linux/amd64", "darwin/arm64"), Set.copyOf(platforms.stream()
+        .map(platform -> platform.get("os") + "/" + platform.get("arch"))
+        .toList()));
+  }
+
+  @Test
   void rejectsMalformedProxyProviderMetadata() throws Exception {
     RepositoryRuntime proxyRuntime = runtime(
         70, "terraform-proxy", RepositoryType.PROXY, "https://registry.example", List.of());
@@ -397,5 +438,13 @@ class TerraformServiceTest {
     return new TerraformRegistryDao.ProviderPlatform(
         runtime.id(), "acme", "cloud", "1.2.3", "linux", "amd64",
         path.substring(path.lastIndexOf('/') + 1), path, sha256, "5.0", revision, Instant.now());
+  }
+
+  private static TerraformRegistryDao.ProviderPlatform providerPlatform(
+      RepositoryRuntime runtime, String path, String os, String arch) {
+    return new TerraformRegistryDao.ProviderPlatform(
+        runtime.id(), "acme", "cloud", "1.2.3", os, arch,
+        path.substring(path.lastIndexOf('/') + 1), path, "sha256-" + os, "5.0", 1,
+        Instant.now());
   }
 }

@@ -6,10 +6,12 @@ import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.pub.PubPath;
 import com.github.klboke.kkrepo.protocol.pub.PubPathParser;
+import com.github.klboke.kkrepo.protocol.terraform.TerraformPath;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPathParser;
 import com.github.klboke.kkrepo.server.npm.NpmTokenService;
 import jakarta.servlet.FilterChain;
@@ -42,6 +44,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   private final SecurityAuthenticationService authenticationService;
   private final AccessDecisionService accessDecisionService;
   private final RepositoryDao repositoryDao;
+  private final AssetDao assetDao;
   private final ForwardedHeaderPolicy forwardedHeaderPolicy;
   private final NexusLegacyUiCompatibility legacyUi;
 
@@ -49,11 +52,13 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       SecurityAuthenticationService authenticationService,
       AccessDecisionService accessDecisionService,
       RepositoryDao repositoryDao,
+      AssetDao assetDao,
       ForwardedHeaderPolicy forwardedHeaderPolicy,
       NexusLegacyUiCompatibility legacyUi) {
     this.authenticationService = authenticationService;
     this.accessDecisionService = accessDecisionService;
     this.repositoryDao = repositoryDao;
+    this.assetDao = assetDao;
     this.forwardedHeaderPolicy = forwardedHeaderPolicy;
     this.legacyUi = legacyUi;
   }
@@ -135,7 +140,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       RepositoryRecord repository,
       RepositoryRequest target) {
     AccessDecision lastDenied = AccessDecision.deny("missing permission");
-    for (PermissionAction action : target.actions(repository.format())) {
+    for (PermissionAction action : actionsForDecision(repository, target)) {
       AccessDecision decision = accessDecisionService.decide(
           subject.permissionSubject(),
           new RepositoryPermission(repository.name(), repository.format(), target.path(), action));
@@ -145,6 +150,24 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       lastDenied = decision;
     }
     return lastDenied;
+  }
+
+  private List<PermissionAction> actionsForDecision(
+      RepositoryRecord repository, RepositoryRequest target) {
+    if (repository.format() != RepositoryFormat.TERRAFORM
+        || !"PUT".equalsIgnoreCase(target.method())) {
+      return target.actions(repository.format());
+    }
+    TerraformPath path = TERRAFORM_PATH_PARSER.parse(target.path());
+    if (path.kind() == TerraformPath.Kind.MODULE_ARCHIVE) {
+      return assetDao.findAssetByPath(repository.id(), target.path()).isPresent()
+          ? List.of(PermissionAction.EDIT)
+          : List.of(PermissionAction.ADD);
+    }
+    if (path.kind() == TerraformPath.Kind.PROVIDER_DOWNLOAD) {
+      return List.of(PermissionAction.ADD);
+    }
+    return List.of(PermissionAction.EDIT);
   }
 
   private Optional<RepositoryRequest> resolve(HttpServletRequest request) {

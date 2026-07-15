@@ -13,7 +13,9 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.server.support.dao.AssetDaoAdapter;
 import com.github.klboke.kkrepo.server.support.dao.RepositoryDaoAdapter;
 import com.github.klboke.kkrepo.server.support.dao.SecurityDaoAdapter;
 import jakarta.servlet.DispatcherType;
@@ -21,6 +23,7 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.lang.reflect.Proxy;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -449,6 +452,47 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
+  void terraformModuleCreatesRequireAddAndOverwritesRequireEdit() throws Exception {
+    String path = "v1/modules/acme/network/aws/1.2.3/module.zip";
+    assertTerraformModuleAction(path, Set.of(), PermissionAction.ADD);
+    assertTerraformModuleAction(path, Set.of(path), PermissionAction.EDIT);
+  }
+
+  @Test
+  void terraformModuleOverwriteDoesNotFallBackToAddWhenEditIsDenied() throws Exception {
+    String path = "v1/modules/acme/network/aws/1.2.3/module.zip";
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.deny("missing edit")) {
+      @Override
+      public AccessDecision decide(PermissionSubject subject, RepositoryPermission permission) {
+        super.decide(subject, permission);
+        return permission.action() == PermissionAction.ADD
+            ? AccessDecision.allow()
+            : AccessDecision.deny("missing edit");
+      }
+    };
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "terraform-hosted", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED)),
+        new FakeAssetDao(Set.of(path)),
+        new ForwardedHeaderPolicy(""),
+        new NexusLegacyUiCompatibility(false));
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("PUT", "/repository/terraform-hosted/" + path), response.proxy(), chain);
+
+    assertEquals(0, chain.calls);
+    assertEquals(1, decisions.decisions);
+    assertEquals(PermissionAction.EDIT, decisions.permission.action());
+    assertEquals(HttpServletResponse.SC_FORBIDDEN, response.status);
+  }
+
+  @Test
   void cargoPublishRouteRequiresAddPermission() throws Exception {
     assertCargoRouteAction("PUT", "/repository/cargo-hosted/api/v1/crates/new", PermissionAction.ADD);
     assertCargoPublishRouteDoesNotFallBackToEditWhenAddDenied();
@@ -666,6 +710,7 @@ class RepositorySecurityFilterTest {
         authenticationService,
         accessDecisionService,
         repositoryDao,
+        new FakeAssetDao(Set.of()),
         forwardedHeaderPolicy,
         new NexusLegacyUiCompatibility(false));
   }
@@ -683,6 +728,7 @@ class RepositorySecurityFilterTest {
         authenticationService,
         accessDecisionService,
         repositoryDao,
+        new FakeAssetDao(Set.of()),
         new ForwardedHeaderPolicy(""),
         new NexusLegacyUiCompatibility(legacyUiEnabled));
   }
@@ -693,6 +739,29 @@ class RepositorySecurityFilterTest {
         method,
         "/repository/maven-releases/com/acme/app/1.0/app-1.0.jar",
         action);
+  }
+
+  private static void assertTerraformModuleAction(
+      String path, Set<String> existingPaths, PermissionAction expected) throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "terraform-hosted", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED)),
+        new FakeAssetDao(existingPaths),
+        new ForwardedHeaderPolicy(""),
+        new NexusLegacyUiCompatibility(false));
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("PUT", "/repository/terraform-hosted/" + path), response.proxy(), chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(expected, decisions.permission.action());
   }
 
   private static void assertRepositoryPathAction(
@@ -991,6 +1060,23 @@ class RepositorySecurityFilterTest {
     @Override
     public Optional<RepositoryRecord> findByName(String name) {
       return repository.name().equals(name) ? Optional.of(repository) : Optional.empty();
+    }
+  }
+
+  private static final class FakeAssetDao extends AssetDaoAdapter {
+    private final Set<String> existingPaths;
+
+    private FakeAssetDao(Set<String> existingPaths) {
+      this.existingPaths = existingPaths;
+    }
+
+    @Override
+    public Optional<AssetRecord> findAssetByPath(long repositoryId, String path) {
+      if (!existingPaths.contains(path)) return Optional.empty();
+      return Optional.of(new AssetRecord(
+          1L, repositoryId, null, null, RepositoryFormat.TERRAFORM, path, new byte[32],
+          path.substring(path.lastIndexOf('/') + 1), "terraform", "application/zip", 1L,
+          null, Instant.EPOCH, Map.of()));
     }
   }
 
