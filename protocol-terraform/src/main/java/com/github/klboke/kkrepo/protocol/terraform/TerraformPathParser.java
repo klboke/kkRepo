@@ -39,13 +39,11 @@ public final class TerraformPathParser {
       directFailure = e;
     }
     if (direct.kind() != TerraformPath.Kind.UNKNOWN) return new ParsedRequest(raw, null, direct);
-    List<String> segments = splitAndValidate(raw);
+    List<String> segments = splitRequestSegments(raw);
     if (segments.size() <= 2 || !"v1".equals(segments.get(0))
         || !("modules".equals(segments.get(1)) || "providers".equals(segments.get(1)))) {
       return new ParsedRequest(raw, null, direct);
     }
-    String credential = decodeOnce(segments.get(2));
-    if (credential.length() > 4096) throw new IllegalArgumentException("Terraform URL token is too long");
     List<String> canonical = new ArrayList<>(segments);
     canonical.remove(2);
     String normalized = String.join("/", canonical);
@@ -60,6 +58,8 @@ public final class TerraformPathParser {
       if (directFailure != null) throw directFailure;
       return new ParsedRequest(raw, null, direct);
     }
+    String credential = decodeOnce(segments.get(2));
+    if (credential.length() > 4096) throw new IllegalArgumentException("Terraform URL token is too long");
     return new ParsedRequest(normalized, credential, parsed);
   }
 
@@ -136,6 +136,21 @@ public final class TerraformPathParser {
     if (raw.indexOf('\0') >= 0 || raw.toLowerCase(Locale.ROOT).contains("%00")
         || raw.toLowerCase(Locale.ROOT).contains("%2f") || raw.toLowerCase(Locale.ROOT).contains("%5c")
         || raw.toLowerCase(Locale.ROOT).contains("%25")) {
+      throw new IllegalArgumentException("Unsafe Terraform repository path");
+    }
+    String[] values = raw.split("/", -1);
+    List<String> result = new ArrayList<>(values.length);
+    for (String value : values) {
+      if (value.isEmpty() || ".".equals(value) || "..".equals(value) || value.indexOf('\\') >= 0) {
+        throw new IllegalArgumentException("Unsafe Terraform repository path segment");
+      }
+      result.add(value);
+    }
+    return List.copyOf(result);
+  }
+
+  private static List<String> splitRequestSegments(String raw) {
+    if (raw.indexOf('\0') >= 0 || raw.toLowerCase(Locale.ROOT).contains("%00")) {
       throw new IllegalArgumentException("Unsafe Terraform repository path");
     }
     String[] values = raw.split("/", -1);

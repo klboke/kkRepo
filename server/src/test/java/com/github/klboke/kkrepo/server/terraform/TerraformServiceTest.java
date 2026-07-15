@@ -387,11 +387,12 @@ class TerraformServiceTest {
     verify(registry).upsertSourceBinding(binding.capture());
     assertEquals(group.id(), binding.getValue().groupRepositoryId());
     assertEquals(first.id(), binding.getValue().memberRepositoryId());
-    assertTrue(binding.getValue().bindingKey().contains("one.zip"));
+    assertTrue(binding.getValue().bindingKey().startsWith("asset:sha256:"));
+    assertEquals(77, binding.getValue().bindingKey().length());
 
-    when(registry.findSourceBinding(group.id(), "asset:" + one.path())).thenReturn(Optional.of(
+    when(registry.findSourceBinding(group.id(), binding.getValue().bindingKey())).thenReturn(Optional.of(
         new TerraformRegistryDao.SourceBinding(
-            group.id(), "asset:" + one.path(), first.id(), 0,
+            group.id(), binding.getValue().bindingKey(), first.id(), 0,
             Instant.now().plusSeconds(60), Instant.now())));
     when(runtimes.resolveById(first.id())).thenReturn(Optional.of(first));
     when(assets.serve(first, one.path(), false)).thenReturn(MavenResponse.noBody(200));

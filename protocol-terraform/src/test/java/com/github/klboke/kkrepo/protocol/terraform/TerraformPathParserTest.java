@@ -43,6 +43,10 @@ class TerraformPathParserTest {
     var encodedPlus = parser.parseRequestPath(
         "v1/providers/generic%2Btoken/acme/cloud/1.2.3/download/linux/amd64");
     assertEquals("generic+token", encodedPlus.credentialSegment());
+    var encodedSlash = parser.parseRequestPath(
+        "v1/modules/dTo%2F/acme/network/aws/versions");
+    assertEquals("dTo/", encodedSlash.credentialSegment());
+    assertEquals("v1/modules/acme/network/aws/versions", encodedSlash.canonicalPath());
   }
 
   @Test
@@ -63,6 +67,8 @@ class TerraformPathParserTest {
         "v1/modules/acme/network/aws/latest/download")) {
       assertThrows(IllegalArgumentException.class, () -> parser.parse(path), path);
     }
+    assertThrows(IllegalArgumentException.class,
+        () -> parser.parseRequestPath("v1/modules/token/acme/%2Fetc/aws/versions"));
   }
 
   @Test

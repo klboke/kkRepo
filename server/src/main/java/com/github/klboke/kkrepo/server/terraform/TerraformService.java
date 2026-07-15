@@ -455,7 +455,7 @@ public class TerraformService {
         || path.kind() == TerraformPath.Kind.PROVIDER_VERSIONS) {
       return mergeGroupVersions(group, path, urls, headOnly);
     }
-    String bindingKey = "asset:" + path.rawPath();
+    String bindingKey = sourceBindingKey(path.rawPath());
     Optional<TerraformRegistryDao.SourceBinding> existing = registry.findSourceBinding(group.id(), bindingKey);
     if (existing.isPresent()) {
       RepositoryRuntime member = runtimes.resolveById(existing.get().memberRepositoryId()).orElse(null);
@@ -555,7 +555,7 @@ public class TerraformService {
     for (String bound : pathsToBind) {
       if (bound == null || bound.isBlank()) continue;
       registry.upsertSourceBinding(new TerraformRegistryDao.SourceBinding(
-          group.id(), "asset:" + bound, member.id(), memberRevision(member, request),
+          group.id(), sourceBindingKey(bound), member.id(), memberRevision(member, request),
           now.plus(24, ChronoUnit.HOURS), now));
     }
     return response;
@@ -814,6 +814,10 @@ public class TerraformService {
     } catch (java.security.NoSuchAlgorithmException e) {
       throw new IllegalStateException(e);
     }
+  }
+
+  private static String sourceBindingKey(String assetPath) {
+    return "asset:sha256:" + sha256(assetPath);
   }
 
   private static MavenExceptions.MavenNotFoundException notFound(String path) {
