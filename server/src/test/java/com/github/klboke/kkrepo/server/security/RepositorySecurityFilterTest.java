@@ -234,6 +234,25 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
+  void rejectsUnsafeNonProtocolTerraformPathBeforeControllerDispatch() throws Exception {
+    RepositorySecurityFilter filter = filter(
+        new StubAuthenticationService(Optional.of(subject("alice"))),
+        new RecordingDecisionService(AccessDecision.allow()),
+        new FakeRepositoryDao(repository(
+            "terraform-private", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED)),
+        false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/repository/terraform-private/bad%2Fpath"), response.proxy(), chain);
+
+    assertEquals(0, chain.calls);
+    assertEquals(HttpServletResponse.SC_BAD_REQUEST, response.status);
+    assertEquals("Invalid Terraform repository path", response.message);
+  }
+
+  @Test
   void embedsReplayableAuthenticationInPrivateTerraformDownloadUrls() throws Exception {
     StubAuthenticationService authentication =
         new StubAuthenticationService(Optional.of(subject("alice")));

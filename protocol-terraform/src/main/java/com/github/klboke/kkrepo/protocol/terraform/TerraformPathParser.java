@@ -42,6 +42,7 @@ public final class TerraformPathParser {
     List<String> segments = splitRequestSegments(raw);
     if (segments.size() <= 2 || !"v1".equals(segments.get(0))
         || !("modules".equals(segments.get(1)) || "providers".equals(segments.get(1)))) {
+      if (directFailure != null) throw directFailure;
       return new ParsedRequest(raw, null, direct);
     }
     List<String> canonical = new ArrayList<>(segments);
