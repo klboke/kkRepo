@@ -7,6 +7,7 @@ CARGO_NEXUS_REPOSITORY="${CARGO_MIGRATION_NEXUS_REPOSITORY:-cargo-hosted}"
 PUB_NEXUS_REPOSITORY="${PUB_MIGRATION_NEXUS_REPOSITORY:-pub-hosted}"
 COMPOSER_NEXUS_REPOSITORY="${COMPOSER_MIGRATION_NEXUS_REPOSITORY:-composer-proxy}"
 TERRAFORM_NEXUS_REPOSITORY="${TERRAFORM_MIGRATION_NEXUS_REPOSITORY:-terraform-compat-hosted}"
+TERRAFORM_PROXY_NEXUS_REPOSITORY="${TERRAFORM_PROXY_MIGRATION_NEXUS_REPOSITORY:-terraform-compat-proxy}"
 NEXUS_USER="${NEXUS_COMPAT_USERNAME:-admin}"
 NEXUS_PASSWORD="${NEXUS_COMPAT_PASSWORD:-Admin1234}"
 
@@ -18,6 +19,7 @@ CARGO_KKREPO_REPOSITORY="${CARGO_MIGRATION_KKREPO_REPOSITORY:-cargo-hosted}"
 PUB_KKREPO_REPOSITORY="${PUB_MIGRATION_KKREPO_REPOSITORY:-pub-hosted}"
 COMPOSER_KKREPO_REPOSITORY="${COMPOSER_MIGRATION_KKREPO_REPOSITORY:-composer-proxy}"
 TERRAFORM_KKREPO_REPOSITORY="${TERRAFORM_MIGRATION_KKREPO_REPOSITORY:-terraform-compat-hosted}"
+TERRAFORM_PROXY_KKREPO_REPOSITORY="${TERRAFORM_PROXY_MIGRATION_KKREPO_REPOSITORY:-terraform-compat-proxy}"
 KKREPO_USER="${KKREPO_COMPAT_USERNAME:-admin}"
 KKREPO_PASSWORD="${KKREPO_COMPAT_PASSWORD:-12345678}"
 KKREPO_BLOB_PATH="${KKREPO_COMPAT_BLOB_PATH:-/tmp/kkrepo-blobs/default}"
@@ -33,6 +35,12 @@ PUB_PACKAGE="${PUB_MIGRATION_PACKAGE:-kkrepo_migration_e2e_${TAG_SAFE,,}}"
 PUB_VERSION="${PUB_MIGRATION_VERSION:-0.1.0}"
 COMPOSER_MIGRATION_ENABLED="${COMPOSER_MIGRATION_ENABLED:-false}"
 COMPOSER_PACKAGE="${COMPOSER_MIGRATION_PACKAGE:-psr/log}"
+TERRAFORM_PROXY_PROVIDER_NAMESPACE="${TERRAFORM_PROXY_PROVIDER_NAMESPACE:-hashicorp}"
+TERRAFORM_PROXY_PROVIDER_NAME="${TERRAFORM_PROXY_PROVIDER_NAME:-null}"
+TERRAFORM_PROXY_PROVIDER_VERSION="${TERRAFORM_PROXY_PROVIDER_VERSION:-3.2.4}"
+TERRAFORM_PROXY_PROVIDER_PATH=""
+TERRAFORM_PROXY_PROVIDER_FILENAME=""
+TERRAFORM_PROXY_PROVIDER_SHA256=""
 PAGE_SIZE="${DOCKER_MIGRATION_PAGE_SIZE:-500}"
 CONCURRENCY="${DOCKER_MIGRATION_CONCURRENCY:-2}"
 WAIT_TIMEOUT_SECONDS="${DOCKER_MIGRATION_WAIT_TIMEOUT_SECONDS:-300}"
@@ -263,6 +271,83 @@ source_terraform_available() {
   curl -m 20 -fsS \
     -u "$NEXUS_USER:$NEXUS_PASSWORD" \
     "$NEXUS_URL/service/rest/v1/repositories/terraform/hosted/$TERRAFORM_NEXUS_REPOSITORY" >/dev/null 2>&1
+}
+
+source_terraform_proxy_available() {
+  curl -m 20 -fsS \
+    -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$NEXUS_URL/service/rest/v1/repositories/terraform/proxy/$TERRAFORM_PROXY_NEXUS_REPOSITORY" >/dev/null 2>&1
+}
+
+warm_terraform_proxy_fixture() {
+  local workdir versions metadata archive fields metadata_url download_url downloaded_sha
+  workdir="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-terraform-proxy-warm.XXXXXX")"
+  versions="$workdir/versions.json"
+  metadata="$workdir/provider.json"
+  archive="$workdir/provider.zip"
+  fields="$workdir/provider-fields.txt"
+
+  curl -m 60 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$NEXUS_URL/repository/$TERRAFORM_PROXY_NEXUS_REPOSITORY/v1/providers/$TERRAFORM_PROXY_PROVIDER_NAMESPACE/$TERRAFORM_PROXY_PROVIDER_NAME/versions" \
+    >"$versions"
+  python3 - "$versions" "$TERRAFORM_PROXY_PROVIDER_VERSION" <<'PY'
+import json
+import sys
+
+path, expected = sys.argv[1:3]
+with open(path, "r", encoding="utf-8") as source:
+    payload = json.load(source)
+for row in payload.get("versions") or []:
+    if row.get("version") == expected:
+        platforms = row.get("platforms") or []
+        if any(item.get("os") == "linux" and item.get("arch") == "amd64" for item in platforms):
+            break
+else:
+    raise SystemExit(f"Nexus Terraform proxy does not expose {expected} for linux/amd64")
+PY
+
+  metadata_url="$NEXUS_URL/repository/$TERRAFORM_PROXY_NEXUS_REPOSITORY/v1/providers/$TERRAFORM_PROXY_PROVIDER_NAMESPACE/$TERRAFORM_PROXY_PROVIDER_NAME/$TERRAFORM_PROXY_PROVIDER_VERSION/download/linux/amd64"
+  curl -m 60 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" "$metadata_url" >"$metadata"
+  python3 - "$metadata" "$metadata_url" "$fields" <<'PY'
+import json
+import sys
+from urllib.parse import urljoin, urlparse
+
+metadata_path, metadata_url, output_path = sys.argv[1:4]
+with open(metadata_path, "r", encoding="utf-8") as source:
+    payload = json.load(source)
+download_url = urljoin(metadata_url, str(payload.get("download_url") or ""))
+filename = str(payload.get("filename") or "")
+shasum = str(payload.get("shasum") or "").lower()
+if not filename or len(shasum) != 64:
+    raise SystemExit(f"Nexus Terraform proxy metadata is incomplete: {payload}")
+segments = urlparse(download_url).path.strip("/").split("/")
+try:
+    marker = segments.index("v1")
+except ValueError as error:
+    raise SystemExit(f"Nexus Terraform proxy archive URL has no v1 path: {download_url}") from error
+provider = segments[marker:]
+if len(provider) < 9 or provider[1] != "providers" or provider[-4] != "download":
+    raise SystemExit(f"Nexus Terraform proxy archive URL has an unexpected shape: {download_url}")
+canonical = "v1/providers/" + "/".join(provider[-7:])
+with open(output_path, "w", encoding="utf-8") as output:
+    output.write(filename + "\n")
+    output.write(shasum + "\n")
+    output.write(download_url + "\n")
+    output.write(canonical + "\n")
+PY
+  TERRAFORM_PROXY_PROVIDER_FILENAME="$(sed -n '1p' "$fields")"
+  TERRAFORM_PROXY_PROVIDER_SHA256="$(sed -n '2p' "$fields")"
+  download_url="$(sed -n '3p' "$fields")"
+  TERRAFORM_PROXY_PROVIDER_PATH="$(sed -n '4p' "$fields")"
+  curl -m 120 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" "$download_url" >"$archive"
+  downloaded_sha="$(file_sha256 "$archive")"
+  if [[ "$downloaded_sha" != "$TERRAFORM_PROXY_PROVIDER_SHA256" ]]; then
+    log "Nexus Terraform proxy fixture checksum mismatch: metadata=$TERRAFORM_PROXY_PROVIDER_SHA256 downloaded=$downloaded_sha"
+    exit 1
+  fi
+  rm -rf "$workdir"
+  log "Nexus Terraform proxy cache warmed: $TERRAFORM_PROXY_PROVIDER_PATH sha256=$downloaded_sha"
 }
 
 warm_composer_proxy_fixture() {
@@ -754,6 +839,118 @@ EOF
   test -f "$workdir/module/.terraform/modules/fixture/main.tf"
   rm -rf "$workdir"
   log "Terraform fixture verified after migration: module=$module_version provider=$provider_version sha256=$expected_sha"
+}
+
+verify_migrated_terraform_proxy_fixture() {
+  local job_id="$1"
+  local workdir job_file detail_file metadata_file archive_file encoded_path token downloaded_sha download_url
+  workdir="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-terraform-proxy-migration.XXXXXX")"
+  job_file="$workdir/job.json"
+  detail_file="$workdir/detail.json"
+  metadata_file="$workdir/provider.json"
+  archive_file="$workdir/provider.zip"
+
+  curl -m 30 -fsS -u "$(auth)" \
+    "$KKREPO_URL/internal/migration/nexus/repository-data/jobs/$job_id" >"$job_file"
+  python3 - "$job_file" "$TERRAFORM_PROXY_NEXUS_REPOSITORY" <<'PY'
+import json
+import sys
+
+path, repository = sys.argv[1:3]
+with open(path, "r", encoding="utf-8") as source:
+    payload = json.load(source)
+rows = payload.get("repositoryJobs") or payload.get("repositoryStatuses") or payload.get("repositoryDetails") or []
+matches = [row for row in rows if (
+    row.get("sourceRepositoryName") or row.get("repositoryName") or row.get("name")
+) == repository]
+if not matches:
+    raise SystemExit(f"Terraform proxy migration repository status not found: {repository}")
+row = matches[0]
+if int(row.get("migratedAssets") or 0) < 1:
+    raise SystemExit(f"Terraform proxy migration did not migrate any assets: {row}")
+if int(row.get("failedAssets") or 0) != 0:
+    raise SystemExit(f"Terraform proxy migration has failed assets: {row}")
+PY
+
+  encoded_path="$(python3 - "$TERRAFORM_PROXY_PROVIDER_PATH" <<'PY'
+import sys
+from urllib.parse import quote
+print(quote(sys.argv[1], safe=""))
+PY
+)"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$KKREPO_URL/internal/browse/$TERRAFORM_PROXY_KKREPO_REPOSITORY/attributes?path=$encoded_path" \
+    >"$detail_file"
+  python3 - "$detail_file" "$TERRAFORM_PROXY_PROVIDER_PATH" "$TERRAFORM_PROXY_PROVIDER_SHA256" <<'PY'
+import json
+import sys
+
+path, expected_path, expected_sha256 = sys.argv[1:4]
+with open(path, "r", encoding="utf-8") as source:
+    detail = json.load(source)
+if detail.get("path") != expected_path:
+    raise SystemExit(f"migrated Terraform proxy path changed: {detail.get('path')!r}")
+actual_sha256 = str((detail.get("checksum") or {}).get("sha256") or "").lower()
+if actual_sha256 != expected_sha256:
+    raise SystemExit(f"migrated Terraform proxy SHA-256 changed: {actual_sha256!r} != {expected_sha256!r}")
+PY
+
+  curl -m 60 -fsS -u "$(auth)" \
+    "$KKREPO_URL/repository/$TERRAFORM_PROXY_KKREPO_REPOSITORY/v1/providers/$TERRAFORM_PROXY_PROVIDER_NAMESPACE/$TERRAFORM_PROXY_PROVIDER_NAME/$TERRAFORM_PROXY_PROVIDER_VERSION/download/linux/amd64" \
+    >"$metadata_file"
+  python3 - "$metadata_file" "$TERRAFORM_PROXY_PROVIDER_FILENAME" "$TERRAFORM_PROXY_PROVIDER_SHA256" <<'PY'
+import json
+import sys
+
+path, expected_filename, expected_sha256 = sys.argv[1:4]
+with open(path, "r", encoding="utf-8") as source:
+    payload = json.load(source)
+if payload.get("filename") != expected_filename:
+    raise SystemExit(f"migrated Terraform proxy filename changed: {payload.get('filename')!r}")
+if str(payload.get("shasum") or "").lower() != expected_sha256:
+    raise SystemExit(f"migrated Terraform proxy metadata SHA-256 changed: {payload.get('shasum')!r}")
+PY
+
+  token="$(printf '%s' "$(auth)" | base64 | tr -d '\r\n')"
+  mkdir -p "$workdir/client"
+  cat >"$workdir/terraform.rc" <<EOF
+host "registry.terraform.io" {
+  services = {
+    "providers.v1" = "$KKREPO_URL/repository/$TERRAFORM_PROXY_KKREPO_REPOSITORY/v1/providers/$token/"
+  }
+}
+EOF
+  cat >"$workdir/client/main.tf" <<EOF
+terraform {
+  required_providers {
+    null = {
+      source  = "$TERRAFORM_PROXY_PROVIDER_NAMESPACE/$TERRAFORM_PROXY_PROVIDER_NAME"
+      version = "$TERRAFORM_PROXY_PROVIDER_VERSION"
+    }
+  }
+}
+EOF
+  TF_CLI_CONFIG_FILE="$workdir/terraform.rc" \
+    "$TERRAFORM_CURRENT_BIN" -chdir="$workdir/client" init -backend=false -input=false -no-color
+  test -d "$workdir/client/.terraform/providers/registry.terraform.io/$TERRAFORM_PROXY_PROVIDER_NAMESPACE/$TERRAFORM_PROXY_PROVIDER_NAME/$TERRAFORM_PROXY_PROVIDER_VERSION/linux_amd64"
+
+  download_url="$(python3 - "$metadata_file" "$KKREPO_URL/repository/$TERRAFORM_PROXY_KKREPO_REPOSITORY/" <<'PY'
+import json
+import sys
+from urllib.parse import urljoin
+with open(sys.argv[1], "r", encoding="utf-8") as source:
+    payload = json.load(source)
+print(urljoin(sys.argv[2], str(payload["download_url"])))
+PY
+)"
+  curl -m 60 -fsS -u "$(auth)" "$download_url" >"$archive_file"
+  downloaded_sha="$(file_sha256 "$archive_file")"
+  if [[ "$downloaded_sha" != "$TERRAFORM_PROXY_PROVIDER_SHA256" ]]; then
+    log "migrated Terraform proxy archive checksum mismatch: source=$TERRAFORM_PROXY_PROVIDER_SHA256 target=$downloaded_sha"
+    exit 1
+  fi
+  rm -rf "$workdir"
+  log "Terraform proxy cache migration verified with terraform init: $TERRAFORM_PROXY_PROVIDER_PATH sha256=$downloaded_sha"
 }
 
 verify_composer_requires_explicit_proxy_selection() {
@@ -1272,6 +1469,11 @@ if terraform_migration_enabled; then
     log "required Terraform repository $TERRAFORM_NEXUS_REPOSITORY is not available on the Nexus 3.92 source"
     exit 1
   fi
+  if ! source_terraform_proxy_available; then
+    log "required Terraform proxy repository $TERRAFORM_PROXY_NEXUS_REPOSITORY is not available on the Nexus 3.92 source"
+    exit 1
+  fi
+  warm_terraform_proxy_fixture
 fi
 if composer_migration_enabled; then
   if ! source_composer_available; then
@@ -1294,6 +1496,7 @@ cargo_sha256_value=""
 pub_sha256_value=""
 migration_repositories_json="\"$(json_escape "$NEXUS_REPOSITORY")\""
 backup_proxy_repositories_json=""
+backup_proxy_repository_values=""
 if cargo_migration_enabled; then
   if ! source_cargo_available; then
     log "expected Cargo repository $CARGO_NEXUS_REPOSITORY is not available on datastore source"
@@ -1314,9 +1517,16 @@ if pub_migration_enabled; then
 fi
 if terraform_migration_enabled; then
   migration_repositories_json="$migration_repositories_json,\"$(json_escape "$TERRAFORM_NEXUS_REPOSITORY")\""
+  backup_proxy_repository_values="\"$(json_escape "$TERRAFORM_PROXY_NEXUS_REPOSITORY")\""
 fi
 if composer_migration_enabled; then
-  backup_proxy_repositories_json=",\"backupProxyRepositories\":[\"$(json_escape "$COMPOSER_NEXUS_REPOSITORY")\"]"
+  if [[ -n "$backup_proxy_repository_values" ]]; then
+    backup_proxy_repository_values="$backup_proxy_repository_values,"
+  fi
+  backup_proxy_repository_values="$backup_proxy_repository_values\"$(json_escape "$COMPOSER_NEXUS_REPOSITORY")\""
+fi
+if [[ -n "$backup_proxy_repository_values" ]]; then
+  backup_proxy_repositories_json=",\"backupProxyRepositories\":[$backup_proxy_repository_values]"
 fi
 
 payload="{
@@ -1373,6 +1583,7 @@ fi
 
 if terraform_migration_enabled; then
   verify_migrated_terraform_fixture
+  verify_migrated_terraform_proxy_fixture "$job_id"
 fi
 
 if composer_migration_enabled; then

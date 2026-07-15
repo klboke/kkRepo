@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.terraform;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
@@ -19,7 +20,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
 
-/** Replays Nexus Terraform archives through the normal validation and atomic publication path. */
+/** Restores Nexus Terraform hosted publications or proxy cache archives through type-specific paths. */
 @Component
 public class TerraformRepositoryDataMigrationWriter {
   private static final Pattern NEXUS_PROVIDER_ARCHIVE = Pattern.compile(
@@ -69,9 +70,9 @@ public class TerraformRepositoryDataMigrationWriter {
     RepositoryRuntime runtime = runtimes.resolveById(repository.id())
         .orElseThrow(() -> new IllegalArgumentException(
             "Terraform migration target repository is unavailable: " + repository.name()));
-    SourceTarget target = target(source.sourcePath());
+    SourceTarget target = target(repository.type(), source.sourcePath());
     Optional<AssetRecord> existing = assets.find(runtime, target.assetPath());
-    if (existing.isPresent() && target.module()) {
+    if (existing.isPresent() && (repository.type() == RepositoryType.PROXY || target.module())) {
       return verifiedExisting(source, existing.get(), validateSize);
     }
     if (existing.isPresent() && !target.module()
@@ -92,14 +93,24 @@ public class TerraformRepositoryDataMigrationWriter {
             + ": expected " + source.size() + ", actual " + size);
       }
       try (InputStream replay = Files.newInputStream(buffered)) {
-        service.putForMigration(
-            runtime,
-            target.path(),
-            replay,
-            firstNonBlank(responseContentType, source.contentType()),
-            target.module() ? null : "attachment; filename=\"" + target.filename() + "\"",
-            firstNonBlank(source.sourceCreatedBy(), "nexus-migration"),
-            source.sourceCreatedByIp());
+        if (repository.type() == RepositoryType.PROXY) {
+          service.restoreProxyCacheForMigration(
+              runtime,
+              target.path(),
+              replay,
+              firstNonBlank(responseContentType, source.contentType()),
+              firstNonBlank(source.sourceCreatedBy(), "nexus-migration"),
+              source.sourceCreatedByIp());
+        } else {
+          service.putForMigration(
+              runtime,
+              target.path(),
+              replay,
+              firstNonBlank(responseContentType, source.contentType()),
+              target.module() ? null : "attachment; filename=\"" + target.filename() + "\"",
+              firstNonBlank(source.sourceCreatedBy(), "nexus-migration"),
+              source.sourceCreatedByIp());
+        }
       }
       AssetRecord stored = assets.find(runtime, target.assetPath())
           .orElseThrow(() -> new IllegalStateException(
@@ -139,7 +150,11 @@ public class TerraformRepositoryDataMigrationWriter {
     return new MigratedAsset(asset.componentId(), asset.id(), blob.id(), blob.objectKey());
   }
 
-  private SourceTarget target(String rawPath) {
+  private SourceTarget target(RepositoryType repositoryType, String rawPath) {
+    if (repositoryType == RepositoryType.GROUP) {
+      throw new IllegalArgumentException(
+          "Terraform repository data migration does not support group repositories");
+    }
     String normalized = normalize(rawPath);
     TerraformPath module = paths.parse(normalized);
     if (module.kind() == TerraformPath.Kind.MODULE_ARCHIVE) {
@@ -156,6 +171,17 @@ public class TerraformRepositoryDataMigrationWriter {
       throw new IllegalArgumentException("Invalid Nexus Terraform provider asset: " + rawPath);
     }
     TerraformPathParser.requireFilename(provider.group(6));
+    if (repositoryType == RepositoryType.PROXY) {
+      TerraformPath cached = paths.parse(normalized);
+      if (cached.kind() != TerraformPath.Kind.PROVIDER_ARCHIVE) {
+        throw new IllegalArgumentException("Invalid Nexus Terraform proxy cache asset: " + rawPath);
+      }
+      return new SourceTarget(cached, normalized, provider.group(6), false);
+    }
+    if (repositoryType != RepositoryType.HOSTED) {
+      throw new IllegalArgumentException(
+          "Terraform repository data migration does not support " + repositoryType.name().toLowerCase());
+    }
     String targetPath = "v1/providers/" + parsed.namespace() + "/" + parsed.name() + "/"
         + parsed.version() + "/package/" + parsed.os() + "/" + provider.group(6);
     return new SourceTarget(parsed, targetPath, provider.group(6), false);

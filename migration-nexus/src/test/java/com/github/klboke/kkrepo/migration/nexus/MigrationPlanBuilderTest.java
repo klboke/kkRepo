@@ -1,7 +1,7 @@
 package com.github.klboke.kkrepo.migration.nexus;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 import com.github.klboke.kkrepo.migration.nexus.NexusMigrationPlan.NexusMigrationPlanItem;
 import com.github.klboke.kkrepo.migration.nexus.NexusMigrationPlan.SupportStatus;
@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test;
 
 class MigrationPlanBuilderTest {
   @Test
-  void keepsTerraformProxyCacheConfigurationOnlyWhenBackupIsRequested() {
+  void plansTerraformProxyCacheDataWhenBackupIsExplicitlyRequested() {
     NexusSourceProfile profile = new NexusSourceProfile(
         "3.92.0-01",
         null,
@@ -47,10 +47,10 @@ class MigrationPlanBuilderTest {
         .filter(item -> "repository".equals(item.area()))
         .findFirst()
         .orElseThrow();
-    assertEquals(SupportStatus.CONFIG_ONLY, repository.status());
-    assertEquals("repository-config-rest", repository.readMode());
-    assertEquals("not-applicable", repository.checksumMode());
-    assertTrue(repository.reasons().stream().anyMatch(reason -> reason.contains("snapshot semantics")));
-    assertTrue(repository.warnings().stream().anyMatch(warning -> warning.contains("rejected before")));
+    assertEquals(SupportStatus.FULL, repository.status());
+    assertEquals("script-datastore", repository.readMode());
+    assertEquals("asset-blob-checksum-or-http-verify", repository.checksumMode());
+    assertFalse(repository.reasons().isEmpty());
+    assertFalse(repository.warnings().stream().anyMatch(warning -> warning.contains("rejected before")));
   }
 }

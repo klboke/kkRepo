@@ -86,13 +86,6 @@ public class MigrationPlanBuilder {
       readMode = adapter.repositoryReadMode(profile, repository.format(), repository.type(), false);
       checksumMode = adapter.checksumMode(profile, repository.format(), repository.type(), false);
       reasons.add("Proxy cache artifacts are not migrated by default; repository configuration is migrated.");
-    } else if ("proxy".equals(type) && "terraform".equals(format)) {
-      status = SupportStatus.CONFIG_ONLY;
-      readMode = "repository-config-rest";
-      checksumMode = "not-applicable";
-      reasons.add("Terraform proxy cache artifacts are not imported because the source profile does not prove "
-          + "remote route, validator, checksum, and signature snapshot semantics; repository configuration is migrated.");
-      warnings.add("Terraform proxy cache backup is rejected before a repository-data job is created.");
     } else if ("group".equals(type)) {
       status = SupportStatus.CONFIG_ONLY;
       readMode = "repository-config-rest";

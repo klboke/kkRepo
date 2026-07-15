@@ -153,7 +153,7 @@ Composer has no standard publish command, so hosted packages are zip/tar archive
 
 Yes. Terraform hosted, proxy, and group repositories implement the Module Registry and Provider Registry protocols using Nexus-compatible `/repository/<repo>/v1/modules/...` and `/v1/providers/...` paths. kkRepo supports module/provider upload, versions and platforms, registry.terraform.io proxying, group resolution, URL-token authentication, provider SHA256SUMS, hosted detached GPG signing, Browse/Search/Usage, and real `terraform init` validation on Terraform 0.13 and the current stable release.
 
-Configure Terraform CLI `host.services` to point `modules.v1` and `providers.v1` at the selected group. Root-domain discovery and the Provider Network Mirror Protocol are not part of the current public surface. Nexus Terraform hosted data and proxy/group configuration are migratable. Terraform proxy cache data import is currently rejected before job creation; the target proxy rebuilds its verified cache from the configured upstream.
+Configure Terraform CLI `host.services` to point `modules.v1` and `providers.v1` at the selected group. Root-domain discovery and the Provider Network Mirror Protocol are not part of the current public surface. Nexus Terraform hosted data and proxy/group configuration are migratable. When a native Nexus Terraform proxy is explicitly selected and its migration plan is `FULL`, kkrepo also restores module/provider archive caches through a proxy-only path; the target reconstructs and verifies the current upstream route, checksum manifest, and signature snapshot before serving the cached provider.
 
 ## Is kkrepo production-ready?
 

@@ -129,6 +129,71 @@ public class TerraformService {
     return publish(runtime, path, body, contentType, contentDisposition, actor, ip, true);
   }
 
+  /**
+   * Restores a Nexus Terraform proxy archive as cache data without treating it as a client
+   * publication. The next module/provider metadata request recreates the remote route from the
+   * configured upstream; {@link RawProxyService} then reuses this fresh local asset and the
+   * provider path verifies its SHA-256 against the current upstream download metadata.
+   */
+  MavenResponse restoreProxyCacheForMigration(
+      RepositoryRuntime runtime,
+      TerraformPath path,
+      InputStream body,
+      String contentType,
+      String actor,
+      String ip) {
+    if (!runtime.isProxy()) {
+      throw new MavenExceptions.MethodNotAllowed(
+          "Terraform proxy cache restore requires a proxy repository");
+    }
+    boolean module = path.kind() == TerraformPath.Kind.MODULE_ARCHIVE;
+    boolean provider = path.kind() == TerraformPath.Kind.PROVIDER_ARCHIVE;
+    if (!module && !provider) {
+      throw new MavenExceptions.MethodNotAllowed(
+          "Unsupported Terraform proxy cache path: " + path.rawPath());
+    }
+
+    Path buffered = inspector.bufferAndInspect(
+        body, path.filename(), module, provider ? path.name() : null);
+    String leaseKey = publishLeaseKey("proxy-cache-migration", runtime.id(), path.rawPath());
+    try (TerraformPublishLeaseManager.Lease lease = leases.acquire(
+        leaseKey, java.time.Duration.ofMinutes(5), java.time.Duration.ofSeconds(30))) {
+      if (assets.find(runtime, path.rawPath()).isPresent()) {
+        return MavenResponse.created();
+      }
+      Map<String, Object> attributes = new LinkedHashMap<>();
+      attributes.put("terraformKind", module ? "proxy-module-archive" : "proxy-provider-archive");
+      attributes.put("migrationSource", "nexus-repository-data-migration");
+      attributes.put("namespace", path.namespace());
+      attributes.put("name", path.name());
+      attributes.put("version", path.version());
+      if (module) {
+        attributes.put("system", path.system());
+      } else {
+        attributes.put("os", path.os());
+        attributes.put("arch", path.arch());
+      }
+      try (InputStream in = Files.newInputStream(buffered)) {
+        assets.store(
+            runtime,
+            path.rawPath(),
+            in,
+            contentType == null ? OCTET : contentType,
+            attributes,
+            actor,
+            ip);
+      }
+      return MavenResponse.created();
+    } catch (IOException e) {
+      throw new IllegalStateException("Failed restoring Terraform proxy cache archive", e);
+    } finally {
+      try {
+        Files.deleteIfExists(buffered);
+      } catch (IOException ignored) {
+      }
+    }
+  }
+
   private MavenResponse publish(
       RepositoryRuntime runtime,
       TerraformPath path,

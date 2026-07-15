@@ -203,6 +203,96 @@ class TerraformServiceTest {
   }
 
   @Test
+  void restoresValidatedProxyCacheArchivesWithoutHostedPublicationState() throws Exception {
+    RepositoryRuntime proxyRuntime = runtime(
+        7, "terraform-proxy", RepositoryType.PROXY, "https://registry.terraform.io/", List.of());
+    TerraformPath module = paths.parse(
+        "v1/modules/terraform-aws-modules/vpc/aws/5.21.0/module.zip");
+    TerraformPath provider = paths.parse(
+        "v1/providers/hashicorp/null/3.2.4/download/linux/amd64/"
+            + "terraform-provider-null_3.2.4_linux_amd64.zip");
+    Path bufferedModule = Files.createTempFile("terraform-proxy-module-migration", ".zip");
+    Path bufferedProvider = Files.createTempFile("terraform-proxy-provider-migration", ".zip");
+    Files.writeString(bufferedModule, "module");
+    Files.writeString(bufferedProvider, "provider");
+    when(inspector.bufferAndInspect(any(), eq(module.filename()), eq(true), eq(null)))
+        .thenReturn(bufferedModule);
+    when(inspector.bufferAndInspect(any(), eq(provider.filename()), eq(false), eq("null")))
+        .thenReturn(bufferedProvider);
+    when(registry.tryAcquirePublishLease(anyString(), anyString(), any())).thenReturn(true);
+    when(assets.find(proxyRuntime, module.rawPath())).thenReturn(Optional.empty());
+    when(assets.find(proxyRuntime, provider.rawPath())).thenReturn(Optional.empty());
+
+    assertEquals(201, service.restoreProxyCacheForMigration(
+        proxyRuntime, module, new ByteArrayInputStream(new byte[0]),
+        "application/zip", "nexus-migration", "10.0.0.4").status());
+    assertEquals(201, service.restoreProxyCacheForMigration(
+        proxyRuntime, provider, new ByteArrayInputStream(new byte[0]),
+        null, "nexus-migration", null).status());
+
+    assertFalse(Files.exists(bufferedModule));
+    assertFalse(Files.exists(bufferedProvider));
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<Map<String, Object>> attributes = ArgumentCaptor.forClass(Map.class);
+    verify(assets).store(
+        eq(proxyRuntime), eq(module.rawPath()), any(), eq("application/zip"),
+        attributes.capture(), eq("nexus-migration"), eq("10.0.0.4"));
+    verify(assets).store(
+        eq(proxyRuntime), eq(provider.rawPath()), any(), eq("application/octet-stream"),
+        attributes.capture(), eq("nexus-migration"), eq(null));
+    assertEquals("proxy-module-archive", attributes.getAllValues().get(0).get("terraformKind"));
+    assertEquals("aws", attributes.getAllValues().get(0).get("system"));
+    assertEquals("proxy-provider-archive", attributes.getAllValues().get(1).get("terraformKind"));
+    assertEquals("linux", attributes.getAllValues().get(1).get("os"));
+    assertEquals("amd64", attributes.getAllValues().get(1).get("arch"));
+    verify(registry, times(2)).releasePublishLease(anyString(), anyString());
+    verify(registry, never()).publishProvider(any(), any());
+    verify(signing, never()).active(any());
+  }
+
+  @Test
+  void proxyCacheRestoreIsIdempotentUnderTheSharedLease() throws Exception {
+    RepositoryRuntime proxyRuntime = runtime(
+        8, "terraform-proxy", RepositoryType.PROXY, "https://registry.terraform.io/", List.of());
+    TerraformPath module = paths.parse(
+        "v1/modules/terraform-aws-modules/vpc/aws/5.21.0/module.zip");
+    Path buffered = Files.createTempFile("terraform-proxy-idempotent-migration", ".zip");
+    Files.writeString(buffered, "module");
+    when(inspector.bufferAndInspect(any(), eq(module.filename()), eq(true), eq(null)))
+        .thenReturn(buffered);
+    when(registry.tryAcquirePublishLease(anyString(), anyString(), any())).thenReturn(true);
+    when(assets.find(proxyRuntime, module.rawPath()))
+        .thenReturn(Optional.of(asset(70, proxyRuntime, 71L, module.rawPath())));
+
+    assertEquals(201, service.restoreProxyCacheForMigration(
+        proxyRuntime, module, new ByteArrayInputStream(new byte[0]),
+        "application/zip", "nexus-migration", null).status());
+
+    assertFalse(Files.exists(buffered));
+    verify(assets, never()).store(
+        eq(proxyRuntime), anyString(), any(), anyString(), any(), any(), any());
+    verify(registry).releasePublishLease(anyString(), anyString());
+  }
+
+  @Test
+  void rejectsProxyCacheRestoreForTheWrongRepositoryTypeOrRoute() {
+    RepositoryRuntime hosted = runtime(9, "terraform", RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime proxyRuntime = runtime(
+        10, "terraform-proxy", RepositoryType.PROXY, "https://registry.terraform.io/", List.of());
+
+    assertThrows(MavenExceptions.MethodNotAllowed.class, () -> service.restoreProxyCacheForMigration(
+        hosted,
+        paths.parse("v1/modules/acme/network/aws/1.0.0/module.zip"),
+        new ByteArrayInputStream(new byte[0]), null, "nexus-migration", null));
+    assertThrows(MavenExceptions.MethodNotAllowed.class, () -> service.restoreProxyCacheForMigration(
+        proxyRuntime,
+        paths.parse("v1/providers/hashicorp/null/versions"),
+        new ByteArrayInputStream(new byte[0]), null, "nexus-migration", null));
+
+    verify(inspector, never()).bufferAndInspect(any(), anyString(), anyBoolean(), any());
+  }
+
+  @Test
   void servesHostedProviderMetadataArchivesAndSignatures() throws Exception {
     RepositoryRuntime hosted = runtime(10, "terraform", RepositoryType.HOSTED, null, List.of());
     String archivePath = "v1/providers/acme/cloud/1.2.3/package/linux/"

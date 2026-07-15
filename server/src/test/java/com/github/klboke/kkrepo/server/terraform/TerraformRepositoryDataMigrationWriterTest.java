@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -167,6 +168,63 @@ class TerraformRepositoryDataMigrationWriterTest {
   }
 
   @Test
+  void restoresProxyProviderArchiveAtItsNexusCachePath() {
+    Fixture fixture = fixture(RepositoryType.PROXY);
+    String filename = "terraform-provider-null_3.2.4_linux_amd64.zip";
+    String path = "v1/providers/hashicorp/null/3.2.4/download/linux/amd64/" + filename;
+    byte[] content = "cached-provider".getBytes(StandardCharsets.UTF_8);
+    RepositoryDataMigrationAssetRecord source = source(
+        path, (long) content.length, "application/zip", "nexus-proxy", "10.0.0.3");
+    AssetRecord stored = asset(fixture.runtime(), 501, 502L, path, null);
+    when(fixture.assets().find(fixture.runtime(), path))
+        .thenReturn(Optional.empty(), Optional.of(stored));
+    when(fixture.assets().blob(stored)).thenReturn(blob(502, content.length, "provider-cache"));
+    when(fixture.service().restoreProxyCacheForMigration(any(), any(), any(), any(), any(), any()))
+        .thenReturn(MavenResponse.created());
+
+    TerraformRepositoryDataMigrationWriter.MigratedAsset migrated = fixture.writer().write(
+        fixture.repository(), source, new ByteArrayInputStream(content), null, true);
+
+    assertEquals(501L, migrated.assetId());
+    assertEquals("provider-cache", migrated.assetBlobObjectKey());
+    ArgumentCaptor<TerraformPath> pathCaptor = ArgumentCaptor.forClass(TerraformPath.class);
+    verify(fixture.service()).restoreProxyCacheForMigration(
+        eq(fixture.runtime()), pathCaptor.capture(), any(InputStream.class),
+        eq("application/zip"), eq("nexus-proxy"), eq("10.0.0.3"));
+    assertEquals(TerraformPath.Kind.PROVIDER_ARCHIVE, pathCaptor.getValue().kind());
+    assertEquals(path, pathCaptor.getValue().rawPath());
+    verify(fixture.service(), never())
+        .putForMigration(any(), any(), any(), any(), any(), any(), any());
+    verify(fixture.registry(), never()).listProviderPlatforms(anyLong(), any(), any(), any());
+  }
+
+  @Test
+  void restoresProxyModuleArchiveWithoutUsingHostedPublication() {
+    Fixture fixture = fixture(RepositoryType.PROXY);
+    String path = "v1/modules/terraform-aws-modules/vpc/aws/5.21.0/module.zip";
+    byte[] content = "cached-module".getBytes(StandardCharsets.UTF_8);
+    RepositoryDataMigrationAssetRecord source = source(path, (long) content.length, null, null, null);
+    AssetRecord stored = asset(fixture.runtime(), 601, 602L, path, null);
+    when(fixture.assets().find(fixture.runtime(), path))
+        .thenReturn(Optional.empty(), Optional.of(stored));
+    when(fixture.assets().blob(stored)).thenReturn(blob(602, content.length, "module-cache"));
+    when(fixture.service().restoreProxyCacheForMigration(any(), any(), any(), any(), any(), any()))
+        .thenReturn(MavenResponse.created());
+
+    fixture.writer().write(
+        fixture.repository(), source, new ByteArrayInputStream(content), "application/zip", true);
+
+    ArgumentCaptor<TerraformPath> pathCaptor = ArgumentCaptor.forClass(TerraformPath.class);
+    verify(fixture.service()).restoreProxyCacheForMigration(
+        eq(fixture.runtime()), pathCaptor.capture(), any(InputStream.class),
+        eq("application/zip"), eq("nexus-migration"), eq(null));
+    assertEquals(TerraformPath.Kind.MODULE_ARCHIVE, pathCaptor.getValue().kind());
+    assertEquals(path, pathCaptor.getValue().rawPath());
+    verify(fixture.service(), never())
+        .putForMigration(any(), any(), any(), any(), any(), any(), any());
+  }
+
+  @Test
   void rejectsInvalidTargetsSizeMismatchAndMissingPublishedAsset() {
     Fixture fixture = fixture();
     byte[] content = "module".getBytes(StandardCharsets.UTF_8);
@@ -205,17 +263,27 @@ class TerraformRepositoryDataMigrationWriterTest {
   }
 
   private static Fixture fixture() {
+    return fixture(RepositoryType.HOSTED);
+  }
+
+  private static Fixture fixture(RepositoryType type) {
     TerraformService service = mock(TerraformService.class);
     TerraformAssetSupport assets = mock(TerraformAssetSupport.class);
     TerraformRegistryDao registry = mock(TerraformRegistryDao.class);
     RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
     RepositoryRuntime runtime = new RepositoryRuntime(
-        7L, "terraform-hosted", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED,
-        "terraform-hosted", true, 1L, "ALLOW_ONCE", null, null, true,
-        null, null, null, List.of());
+        7L, type == RepositoryType.PROXY ? "terraform-proxy" : "terraform-hosted",
+        RepositoryFormat.TERRAFORM, type,
+        type == RepositoryType.PROXY ? "terraform-proxy" : "terraform-hosted",
+        true, 1L, "ALLOW_ONCE", null, null, true,
+        type == RepositoryType.PROXY ? "https://registry.terraform.io/" : null,
+        null, null, null, null, List.of());
     RepositoryRecord repository = new RepositoryRecord(
-        runtime.id(), runtime.name(), RepositoryFormat.TERRAFORM, RepositoryType.HOSTED,
-        "terraform-hosted", true, 1L, null, null, null, null, "ALLOW_ONCE", true, Map.of());
+        runtime.id(), runtime.name(), RepositoryFormat.TERRAFORM, type,
+        runtime.recipeName(), true, 1L,
+        null,
+        type == RepositoryType.PROXY ? "https://registry.terraform.io/" : null,
+        null, null, "ALLOW_ONCE", true, Map.of());
     when(runtimes.resolveById(runtime.id())).thenReturn(Optional.of(runtime));
     return new Fixture(
         new TerraformRepositoryDataMigrationWriter(service, assets, registry, runtimes),

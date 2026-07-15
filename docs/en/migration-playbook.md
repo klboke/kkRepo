@@ -212,7 +212,7 @@ Validate:
 - Cargo / Rust sparse registry config, index entry, `.crate` download, and checksum after datastore H2/PostgreSQL Cargo migration.
 - Dart / Pub package metadata, `version.json`, archive download, `archive_sha256`, and publish token behavior after Nexus 3.92.0 Pub migration.
 - After explicitly selecting a native Nexus Composer proxy, verify `packages.json`, p2 metadata, semantic dist paths, checksums, and cached downloads with Packagist detached; when it is not selected, confirm that only configuration migrates.
-- For Terraform, run `terraform init` through the migrated group with a hosted module/provider and a provider resolved through the migrated proxy configuration; verify provider platform metadata, archive checksum, SHA256SUMS, and detached signature. Do not expect source proxy cache data to be imported: the target proxy repopulates its verified cache from the configured upstream.
+- For Terraform, run `terraform init` through the migrated group with a hosted module/provider and a provider resolved through the migrated proxy. For an explicitly selected proxy, first confirm that the source archive path and SHA-256 exist on the target before requesting target metadata; then verify provider platform metadata, archive checksum, SHA256SUMS, and detached signature. This distinguishes a migrated archive cache hit from a fresh target download while still proving that the target reconstructed a valid current upstream snapshot.
 - Admin login.
 - Browse/search.
 - User roles and repository permissions.
