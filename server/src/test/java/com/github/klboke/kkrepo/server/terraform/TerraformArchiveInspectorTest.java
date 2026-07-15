@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import java.util.zip.GZIPOutputStream;
+import org.apache.commons.compress.MemoryLimitException;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.apache.commons.compress.archivers.tar.TarConstants;
@@ -52,6 +53,19 @@ class TerraformArchiveInspectorTest {
     byte[] archive = tar(zeros, ".tar.gz");
     assertThrows(MavenExceptions.BadRequestException.class,
         () -> inspector.bufferAndInspect(new ByteArrayInputStream(archive), "module.tar.gz", true, null));
+  }
+
+  @Test
+  void rejectsXzDictionaryAboveConfiguredMemoryLimit() throws Exception {
+    TerraformArchiveInspector constrained = new TerraformArchiveInspector(1024);
+    byte[] archive = tar("terraform {}\n".getBytes(StandardCharsets.UTF_8), ".tar.xz");
+
+    MavenExceptions.BadRequestException error = assertThrows(
+        MavenExceptions.BadRequestException.class,
+        () -> constrained.bufferAndInspect(
+            new ByteArrayInputStream(archive), "module.tar.xz", true, null));
+
+    assertTrue(error.getCause() instanceof MemoryLimitException);
   }
 
   @Test

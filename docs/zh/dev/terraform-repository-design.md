@@ -40,7 +40,7 @@
 - Provider archive、SHA256SUMS 和签名是一个一致性单元。新增一个 OS/architecture 平台会改变 version 的平台集合和 checksum 清单；必须通过关系数据库 revision 和原子可见状态协调多副本。
 - Provider metadata 的 OpenPGP `key_id` 使用 Nexus 的无前导零大写十六进制序列化；迁移时必须保持源 key ID，不得为了固定宽度补零。
 - Hosted 和 group 在 canonical archive route 之外继续接受 Nexus 已发布的 `download/{os}/{arch}/{filename}.zip` 直链；迁移后旧 metadata、lock/cache 中保存的 URL 不应失效。
-- Provider zip 只作为不可信数据检查，服务端绝不能执行其中的 Provider binary。无法安全推导的 protocol version 行为必须先以 Nexus 参考测试固定。
+- Provider zip 和 module archive 只作为不可信数据检查；除展开大小、压缩比、条目数与超时限制外，XZ 在读取 header 时必须先应用 dictionary memory limit。服务端绝不能执行其中的 Provider binary 或 module code。无法安全推导的 protocol version 行为必须先以 Nexus 参考测试固定。
 
 ## 功能范围
 

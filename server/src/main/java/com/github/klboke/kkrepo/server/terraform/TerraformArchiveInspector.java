@@ -27,7 +27,18 @@ final class TerraformArchiveInspector {
   private static final long RATIO_FLOOR = 1024L * 1024;
   private static final long MAX_COMPRESSION_RATIO = 200;
   private static final int MAX_ENTRIES = 20_000;
+  private static final int MAX_XZ_MEMORY_KIB = 64 * 1024;
   private static final long MAX_INSPECTION_NANOS = Duration.ofMinutes(2).toNanos();
+  private final int xzMemoryLimitKiB;
+
+  TerraformArchiveInspector() {
+    this(MAX_XZ_MEMORY_KIB);
+  }
+
+  TerraformArchiveInspector(int xzMemoryLimitKiB) {
+    if (xzMemoryLimitKiB <= 0) throw new IllegalArgumentException("XZ memory limit must be positive");
+    this.xzMemoryLimitKiB = xzMemoryLimitKiB;
+  }
 
   Path bufferAndInspect(InputStream body, String filename, boolean module, String providerName) {
     Path file = null;
@@ -94,13 +105,17 @@ final class TerraformArchiveInspector {
     }
   }
 
-  private static InputStream decompressor(InputStream raw, String filename) throws IOException {
+  private InputStream decompressor(InputStream raw, String filename) throws IOException {
     String lower = filename == null ? "" : filename.toLowerCase(Locale.ROOT);
     if (lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) {
       return new GZIPInputStream(raw);
     }
     if (lower.endsWith(".tar.xz") || lower.endsWith(".txz") || lower.endsWith(".xz")) {
-      return new XZCompressorInputStream(raw, true);
+      return XZCompressorInputStream.builder()
+          .setInputStream(raw)
+          .setDecompressConcatenated(true)
+          .setMemoryLimitKiB(xzMemoryLimitKiB)
+          .get();
     }
     if (lower.endsWith(".tar.bz2") || lower.endsWith(".tbz2")) {
       return new BZip2CompressorInputStream(raw, true);
