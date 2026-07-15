@@ -57,6 +57,14 @@ class TerraformServiceUrlTest {
     assertThrows(MavenExceptions.BadRequestException.class,
         () -> TerraformService.contentDispositionFilename(
             "attachment; filename=\"unterminated.zip"));
+    for (String filename : new String[] {
+        "provider build.zip", "provider#fragment.zip", "provider?query.zip"
+    }) {
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> TerraformService.contentDispositionFilename(
+              "attachment; filename=\"" + filename + "\""));
+    }
   }
 
   @Test

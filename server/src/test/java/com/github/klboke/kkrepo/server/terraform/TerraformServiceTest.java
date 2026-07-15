@@ -228,8 +228,6 @@ class TerraformServiceTest {
     when(registry.findSigningKey(hosted.id(), 2)).thenReturn(Optional.of(
         new TerraformRegistryDao.SigningKey(hosted.id(), 2, "0011223344556677",
             "encrypted", "PUBLIC KEY", Instant.now())));
-    when(assets.find(hosted, oldSumsPath)).thenReturn(Optional.of(
-        asset(22, hosted, 23L, oldSumsPath)));
     when(assets.find(hosted, archivePath)).thenReturn(Optional.of(archive));
 
     Map<String, Object> versions = json(service.get(
@@ -262,7 +260,8 @@ class TerraformServiceTest {
     verify(assets, times(2)).serve(hosted, archivePath, false);
     assertEquals(200, service.get(hosted, paths.parse(sumsPath), BASE, true).status());
     assertEquals(200, service.get(hosted, paths.parse(signaturePath), BASE, false).status());
-    assertEquals(200, service.get(hosted, paths.parse(oldSumsPath), BASE, false).status());
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(hosted, paths.parse(oldSumsPath), BASE, false));
     assertThrows(MavenExceptions.MavenNotFoundException.class,
         () -> service.get(hosted, paths.parse(oldSumsPath.replace("metadata-r1", "metadata-r3")),
             BASE, false));

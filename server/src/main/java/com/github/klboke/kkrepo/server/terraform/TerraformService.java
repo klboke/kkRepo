@@ -268,26 +268,10 @@ public class TerraformService {
         .orElseThrow(() -> notFound(path.rawPath()));
     String published = path.kind() == TerraformPath.Kind.PROVIDER_SHA256SUMS
         ? state.shasumsPath() : state.signaturePath();
-    if (!published.equals(path.rawPath())
-        && !isStoredProviderMetadataRevision(runtime, path, state)) {
+    if (!published.equals(path.rawPath())) {
       throw notFound(path.rawPath());
     }
     return assets.serve(runtime, path.rawPath(), headOnly);
-  }
-
-  private boolean isStoredProviderMetadataRevision(
-      RepositoryRuntime runtime, TerraformPath path, TerraformRegistryDao.ProviderState state) {
-    String prefix = "v1/providers/" + path.namespace() + "/" + path.name() + "/"
-        + path.version() + "/metadata-r";
-    int separator = path.rawPath().indexOf('/', prefix.length());
-    if (!path.rawPath().startsWith(prefix) || separator < 0) return false;
-    try {
-      long revision = Long.parseLong(path.rawPath().substring(prefix.length(), separator));
-      return revision > 0 && revision <= state.revision()
-          && assets.find(runtime, path.rawPath()).isPresent();
-    } catch (NumberFormatException e) {
-      return false;
-    }
   }
 
   private MavenResponse putModule(

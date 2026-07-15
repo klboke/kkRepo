@@ -99,6 +99,15 @@ class TerraformPathParserTest {
         () -> TerraformPathParser.requireFilename("provider%2Fevil.zip"));
     assertThrows(IllegalArgumentException.class,
         () -> TerraformPathParser.requireFilename("provider%252Fevil.zip"));
+    for (String filename : List.of(
+        "provider build.zip", "provider#fragment.zip", "provider?query.zip",
+        "provider[linux].zip", "provider\u00e9.zip")) {
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> TerraformPathParser.requireFilename(filename),
+          filename);
+    }
+    TerraformPathParser.requireFilename("provider~linux+signed@acme:1.0.zip");
   }
 
   @Test

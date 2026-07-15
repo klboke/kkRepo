@@ -10,6 +10,8 @@ import java.util.regex.Pattern;
 /** Strict parser for the HashiCorp/Nexus Terraform registry paths. */
 public final class TerraformPathParser {
   private static final Pattern ID = Pattern.compile("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$");
+  private static final Pattern SAFE_FILENAME = Pattern.compile(
+      "^[A-Za-z0-9._~!$&'()*+,;=:@-]+$");
   private static final Pattern VERSION = Pattern.compile(
       "^(?:0|[1-9][0-9]*)(?:\\.(?:0|[1-9][0-9]*)){2}(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$");
 
@@ -189,7 +191,7 @@ public final class TerraformPathParser {
   public static void requireFilename(String value) {
     if (value == null || value.isBlank() || value.length() > 255 || value.contains("/")
         || value.contains("\\") || value.contains("%") || value.contains("\r") || value.contains("\n")
-        || ".".equals(value) || "..".equals(value)) {
+        || ".".equals(value) || "..".equals(value) || !SAFE_FILENAME.matcher(value).matches()) {
       throw new IllegalArgumentException("Invalid Terraform archive filename");
     }
   }

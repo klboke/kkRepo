@@ -191,7 +191,7 @@ host "registry.terraform.io" {
 - namespace、name、system、provider type、version、os、arch 和 filename 分 segment 校验；拒绝空 segment、`.`、`..`、编码 slash、双重编码、NUL 和 Unicode 混淆路径。
 - SemVer 使用 Terraform/Nexus reference 接受范围，预发布和 build metadata 用黑盒测试覆盖；不得使用字典序排序。
 - identity 的大小写规则分别由官方协议和 Nexus reference 固定。持久化同时保留 display value 与用于唯一约束的 normalized value。
-- Provider filename 必须与 `Content-Disposition` 安全解析结果一致，不允许目录、反斜线、CRLF 或重复 filename 参数。
+- Provider filename 必须与 `Content-Disposition` 安全解析结果一致，只接受 RFC 3986 path-segment 安全集，不允许目录、反斜线、百分号、空白、`?`、`#`、CRLF 或重复 filename 参数；生成的 archive URL 因而无需把不可信 delimiter 拼进 path。
 - 所有返回 URL 只使用通过 reverse-proxy trust 配置计算的 external base URL，不直接信任任意 `Forwarded` / `X-Forwarded-*`。
 
 ## 数据模型落地
@@ -265,7 +265,7 @@ MySQL 与 PostgreSQL migration 必须同步增加，DAO 放在 `persistence-jdbc
 4. 在数据库中锁定 provider version revision。并发上传不同 platform 可以写各自 staging archive，但 checksum 清单发布必须按 revision 串行化。
 5. 根据全部 `READY` platform 加当前 staging platform 生成稳定排序的 SHA256SUMS，再生成 detached signature 和公开 signing key metadata；`ALLOW` 重部署同一 os/arch 时先从新快照移除旧 platform，再只加入 replacement，`ALLOW_ONCE`/`DENY` 仍拒绝已发布 platform。
 6. 将新 checksum/signature 写入临时 blob；在单个事务中绑定 archive、checksum、signature、platform row 和 provider revision，并把新状态切换为 `READY`。
-7. 旧 checksum/signature 只有在新 revision 提交后才失去引用，随后异步 GC；读取中的旧 revision 仍能完成一致下载。
+7. 新 revision 提交后，旧 checksum/signature 路由立即失效，随后异步 GC；因为 Nexus 兼容的 archive 下载别名始终解析到当前 platform，旧 metadata 请求必须失败并由客户端重试，不能把旧清单与 replacement archive 组合成可成功读取的不一致快照。
 8. Provider protocol version 的来源和默认值必须由 M0 对 Nexus hosted 上传实测确定。实现不得启动 provider binary 探测；若 Nexus 暴露显式 upload field/header，则完整对齐，否则只实现已验证的安全推导/default。
 
 签名 key 轮换不会隐式重签所有历史 version。轮换时保存 key revision；新上传使用新 key，历史 metadata 继续引用生成其签名的 public key，除非管理员显式启动可恢复的重签任务。
