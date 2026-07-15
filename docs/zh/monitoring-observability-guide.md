@@ -170,6 +170,23 @@ Composer / PHP 通过 `format="composer"` 暴露仓库请求、proxy 回源和 b
 
 排查安装缓慢时，先区分 metadata 与 dist；metadata 回源异常通常影响 dependency resolution，dist 回源或 blob 延迟影响 `--prefer-dist` 下载。Composer proxy 上游请求通过 `kkrepo_proxy_remote_*` 记录。
 
+### Terraform Provider / Module Registry
+
+Terraform 通过 `format="terraform"` 暴露 repository、proxy 回源和 blob storage 指标。常见 operation label 包括：
+
+- `terraform_module_versions`
+- `terraform_module_download_metadata`
+- `terraform_module_upload`
+- `terraform_module_archive`
+- `terraform_provider_versions`
+- `terraform_provider_download_metadata`
+- `terraform_provider_upload`
+- `terraform_provider_archive`
+- `terraform_provider_shasums`
+- `terraform_provider_signature`
+
+监控时应把 Provider metadata、archive、SHA256SUMS 和 signature 视为同一个流程。Metadata 成功但 checksum/signature 失败，通常表示上游快照过期或不一致。Terraform URL token path segment 会在进入日志和 metric label 前脱敏；不要把包含 token 的原始 service URL 或 metadata 放入 dashboard/CI artifact。
+
 ### Blob 存储
 
 | 指标 | 类型 | 说明 |

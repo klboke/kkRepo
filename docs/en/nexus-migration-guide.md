@@ -2,13 +2,15 @@
 
 This document describes prerequisites, execution order, incremental migration, and domain cutover when migrating from Nexus Repository to kkrepo.
 
-kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client protocol behavior, and permission/authentication model. After migration, only point the original Nexus domain to kkrepo. Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, NuGet, RubyGems, Yum, and other migrated non-Docker client configurations do not need to change. Docker / OCI uses Registry HTTP API V2 `/v2/...` routes; preserve repository names and connector/path-based routing when cutting Docker clients over.
+kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client protocol behavior, and permission/authentication model. After migration, only point the original Nexus domain to kkrepo. Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, NuGet, RubyGems, Yum, and other migrated non-Docker client configurations do not need to change. Docker / OCI uses Registry HTTP API V2 `/v2/...` routes; preserve repository names and connector/path-based routing when cutting Docker clients over.
 
 Cargo / Rust repositories also use `/repository/<repo>/...` sparse registry URLs in kkrepo. Hosted Cargo repository data participates in the same migration flow for datastore-era Nexus H2/PostgreSQL sources when preflight proves the Cargo content model fingerprint.
 
 Dart / Pub repositories also use `/repository/<repo>/...` hosted URLs in kkrepo. Nexus 3.92.0 Pub hosted repository data participates in the same migration flow when preflight proves the Pub content model; explicitly selected Pub proxy cache data is migrated only when the plan is `FULL`.
 
 Composer / PHP keeps the `/repository/<repo>/...` Composer 2 URL shape. Native Nexus Composer is a 3.75.0+ Pro proxy-only capability, so migration accepts only native Nexus Composer proxies and preserves proxy semantics. Configuration is migrated without cache content unless the administrator explicitly selects the repository under `Optional proxy repositories`. kkRepo-native Composer hosted/group repositories are not inferred from the Nexus source.
+
+Terraform keeps the Nexus `/repository/<repo>/v1/modules/...` and `/v1/providers/...` service bases configured in Terraform CLI `host.services`. Metadata migration recognizes native `terraform-hosted`, `terraform-proxy`, and `terraform-group` recipes. Repository-data migration rebuilds hosted module/provider state, provider platforms, SHA256SUMS, and kkrepo signing metadata. Proxy cache is imported only when explicitly selected and the source profile proves the Terraform content model.
 
 ## Migration Flow Overview
 
@@ -48,7 +50,7 @@ Repository data migration runs from the `Nexus Repository Data` page in the kkre
 1. Migrate repository metadata first: scan source Nexus hosted repository component, asset, path, size, content-type, timestamp, blob reference, and related metadata, then create migration tasks in kkrepo MySQL.
 2. Migrate real blob data: download source Nexus asset content according to migration tasks and write it to the target blob store in kkrepo.
 
-Cargo / Rust hosted repository data is migrated by this flow for Nexus 3.77.x+ datastore-era H2/PostgreSQL sources whose source profile reports a supported Cargo content model. Dart / Pub hosted repository data is migrated for Nexus 3.92.0+ datastore sources whose source profile reports a supported Pub content model, and Pub proxy cache data is migrated only when explicitly selected and planned `FULL`. Native Nexus Composer proxy cache also requires explicit administrator selection and a source profile that proves the Composer datastore content model. Missing Composer Pro capability, unknown schema, community-plugin sources, and non-proxy Composer sources fail closed. Old OrientDB-era sources do not enable datastore-only content export.
+Cargo / Rust hosted repository data is migrated by this flow for Nexus 3.77.x+ datastore-era H2/PostgreSQL sources whose source profile reports a supported Cargo content model. Dart / Pub hosted repository data is migrated for Nexus 3.92.0+ datastore sources whose source profile reports a supported Pub content model, and Pub proxy cache data is migrated only when explicitly selected and planned `FULL`. Native Nexus Composer and Terraform proxy caches also require explicit administrator selection and source profiles that prove their content models. Missing product capability, unknown schema, community-plugin sources, or unsupported repository types fail closed. Old OrientDB-era sources do not enable datastore-only content export.
 
 ### First Migration
 
@@ -103,7 +105,7 @@ Migration is designed to be interruptible and resumable. Completed data remains 
 
 After full migration and the final incremental migration are complete, check browse/search, package downloads, checksums, and common client pull behavior for key repositories.
 
-After confirming there are no issues, point the original Nexus domain to kkrepo through DNS or a reverse proxy. Because kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client protocols, and permission/authentication model, clients do not need to modify Maven settings, npm registry, PyPI index-url, Go GOPROXY, Helm repo, Cargo sparse registry URL, Pub hosted URL, Composer repository URL, or similar configuration for migrated repository formats.
+After confirming there are no issues, point the original Nexus domain to kkrepo through DNS or a reverse proxy. Because kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client protocols, and permission/authentication model, clients do not need to modify Maven settings, npm registry, PyPI index-url, Go GOPROXY, Helm repo, Cargo sparse registry URL, Pub hosted URL, Composer repository URL, Terraform `host.services` URL, or similar configuration for migrated repository formats.
 
 After cutover, keep the source Nexus for an observation period, and disable source script capability after confirming no further compensation migration is needed.
 

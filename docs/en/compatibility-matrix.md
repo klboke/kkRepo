@@ -4,7 +4,7 @@ This matrix summarizes the public compatibility surface of kkrepo. It is intenti
 
 For deeper validation workflow details, see [Nexus Compatibility Testing](nexus-compatibility-testing.md).
 
-The validation classes listed below are black-box protocol checks. The `client-e2e` suite adds real package-client coverage across Maven, npm, PyPI, Go resolve, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, NuGet, RubyGems, Yum, and Docker/OCI; see [compat-test README](../../compat-test/README.md) for the runner requirements and `artifacts/client-e2e/` diagnostics.
+The validation classes listed below are black-box protocol checks. The `client-e2e` suite adds real package-client coverage across Maven, npm, PyPI, Go resolve, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform 0.13/current, NuGet, RubyGems, Yum, and Docker/OCI; see [compat-test README](../../compat-test/README.md) for the runner requirements and `artifacts/client-e2e/` diagnostics.
 
 ## Compatibility Principles
 
@@ -34,6 +34,7 @@ Database choice does not change repository protocol behavior. CI runs the same J
 | Cargo / Rust | hosted / proxy / group | Sparse registry reads, `cargo publish`, `.crate` download, yank/unyank, Cargo search, CargoToken auth, UI/API `.crate` upload | Sparse index and Cargo search supported | Hosted on datastore H2/PostgreSQL when the source profile proves Cargo content; proxy optional only when explicitly selected and planned `FULL` | `CargoRepositoryBlackBoxCompatibilityTest`, `ComponentUploadBlackBoxCompatibilityTest` |
 | Dart / Pub | hosted / proxy / group | `dart pub publish`, `dart pub get`, `flutter pub get`, package metadata, archive download, Nexus `api/archives` download alias, `archive_sha256`, PubToken auth, UI/API `.tar.gz` upload | Package/version metadata and archive attributes supported | Hosted full migration when the Nexus 3.92.0 datastore source profile proves Pub content; proxy cache migration only when explicitly selected for backup and planned `FULL` | `PubRepositoryBlackBoxCompatibilityTest`, `ComponentUploadBlackBoxCompatibilityTest` |
 | Composer / PHP | hosted / proxy / group | Composer 2 `install/show`, `packages.json`, stable/dev p2 metadata, Nexus-style dist paths, Basic auth, Components API/UI archive upload, and group canonical first-match behavior | Package/version metadata, dist, HTML View, Browse/Search, and Usage supported | Nexus-native Composer is proxy-only; after configuration migration, cache content is migrated only when explicitly selected through `backupProxyRepositories` and the source profile proves the content model | `ComposerRepositoryBlackBoxCompatibilityTest`, Composer server/protocol tests, real Composer client E2E, migration E2E |
+| Terraform Provider / Module Registry | hosted / proxy / group | Module/provider versions and downloads, Nexus-compatible PUT/UI/API upload, provider platforms, SHA256SUMS, detached GPG signatures, URL-token auth, registry.terraform.io proxying, and group source binding | Module/provider coordinates, versions, platforms, HTML View, Browse/Search, and Usage supported; internal route/cache assets are hidden | Nexus Terraform hosted full migration; explicitly selected proxy cache only when the source profile proves the content model | `TerraformRepositoryBlackBoxCompatibilityTest`, Terraform server/protocol tests, Terraform 0.13/current client E2E, migration E2E |
 | NuGet | hosted / proxy / group | Package push, package download, v3 service index, registration, flat container, search/autocomplete, admin UI upload | v3 service index/search supported | Hosted by default; proxy optional | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
 | RubyGems | hosted / proxy / group | Gem push/yank, gem download, compact and legacy index assets, admin UI upload | Supported | Hosted by default; proxy optional | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
 | Yum | hosted / proxy / group | RPM PUT/upload, package download, `repodata` metadata | `repodata` supported | Hosted by default; proxy optional | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
@@ -71,6 +72,8 @@ Examples:
 /repository/pub-hosted/api/archives/demo_package-1.0.0.tar.gz
 /repository/composer-group/packages.json
 /repository/composer-group/p2/vendor/package.json
+/repository/terraform-group/v1/modules/acme/network/aws/versions
+/repository/terraform-group/v1/providers/hashicorp/null/versions
 /repository/nuget-group/v3/index.json
 ```
 
@@ -96,6 +99,7 @@ kkrepo migration is treated as a product feature rather than a one-off script:
 - Cargo / Rust hosted repository data migration is supported for datastore H2/PostgreSQL sources when preflight proves the Cargo content model; unknown schemas fail closed.
 - Dart / Pub hosted repository data migration is supported for Nexus 3.92.0+ datastore sources when preflight proves the Pub content model; Pub proxy cache migration requires explicit selection and a `FULL` plan.
 - Composer migration accepts only Nexus-native proxy repositories. Configuration is migrated without cache content by default; cache migration requires explicit selection and a source profile that proves the Composer datastore content model. Unknown or non-native Composer sources fail closed.
+- Terraform hosted module/provider data is rebuilt through protocol-aware migration, including provider platform, checksum, and signing metadata. Terraform proxy cache is migrated only when explicitly selected and the datastore source profile proves the Terraform content model; unsupported source versions fail closed.
 - Migration steps are designed for dry-run/preflight, resume, checksum validation, and reporting.
 - Unsupported or blocked items should be reported rather than silently skipped.
 
@@ -109,6 +113,7 @@ See [Nexus Migration Guide](nexus-migration-guide.md).
 - Cargo / Rust supports Cargo sparse registries. Cargo git index protocol, crates.io-style GitHub owner invitations, and deleting published crate versions are not currently supported. Cargo migration requires datastore H2/PostgreSQL schema fingerprints; OrientDB Cargo content export is not enabled.
 - Dart / Pub supports Hosted Pub Repository V2 hosted/proxy/group workflows. Pub.dev social, publisher, score, download-count, and advisory APIs are not treated as protocol correctness dependencies.
 - Composer support targets Composer 2 metadata. Composer 1 `provider-includes`, Packagist security-advisories/metadata-changes, VCS source checkout, and a standard publish command are outside the current surface; hosted publication uses the Components API or UI archive upload.
+- Terraform support targets the Module Registry Protocol and Provider Registry Protocol through explicit CLI `host.services` configuration. Root-domain discovery/virtual-host binding and the Provider Network Mirror Protocol are not currently exposed; proxy signing keys are preserved and verified rather than replaced with a kkrepo signature.
 - Go hosted upload is not supported; Go module proxy behavior is read-oriented.
 - Full coverage of every Nexus UI endpoint is not guaranteed. Endpoints are added when they are needed for supported user workflows or migration compatibility.
 - Exact ordering, timestamps, generated IDs, and hostnames may be normalized in tests when the protocol allows nondeterminism.

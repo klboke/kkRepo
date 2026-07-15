@@ -4,7 +4,7 @@
 
 更详细的验证流程见 [Nexus 兼容性测试说明](nexus-compatibility-testing.md)。
 
-下表中的验证类主要是黑盒协议检查。`client-e2e` suite 会额外覆盖 Maven、npm、PyPI、Go resolve、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、NuGet、RubyGems、Yum、Docker/OCI 的真实包管理器客户端行为；运行环境要求和 `artifacts/client-e2e/` 诊断信息见 [compat-test README](../../compat-test/README.md)。
+下表中的验证类主要是黑盒协议检查。`client-e2e` suite 会额外覆盖 Maven、npm、PyPI、Go resolve、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform 0.13/当前稳定版、NuGet、RubyGems、Yum、Docker/OCI 的真实包管理器客户端行为；运行环境要求和 `artifacts/client-e2e/` 诊断信息见 [compat-test README](../../compat-test/README.md)。
 
 ## 兼容原则
 
@@ -34,6 +34,7 @@
 | Cargo / Rust | hosted / proxy / group | Sparse registry 读取、`cargo publish`、`.crate` 下载、yank/unyank、Cargo search、CargoToken 认证、UI/API `.crate` 上传 | 支持 sparse index 和 Cargo search | source profile 确认 Cargo content 后支持 datastore H2/PostgreSQL hosted；proxy 仅在显式选择且计划为 `FULL` 时迁移 | `CargoRepositoryBlackBoxCompatibilityTest`、`ComponentUploadBlackBoxCompatibilityTest` |
 | Dart / Pub | hosted / proxy / group | `dart pub publish`、`dart pub get`、`flutter pub get`、package metadata、archive 下载、Nexus `api/archives` 下载别名、`archive_sha256`、PubToken 认证、UI/API `.tar.gz` 上传 | 支持 package/version metadata 和 archive 属性 | Nexus 3.92.0 datastore source profile 确认 Pub content 后支持 hosted full；proxy cache 仅在显式选择 backup 且计划为 `FULL` 时迁移 | `PubRepositoryBlackBoxCompatibilityTest`、`ComponentUploadBlackBoxCompatibilityTest` |
 | Composer / PHP | hosted / proxy / group | Composer 2 `install/show`、`packages.json`、stable/dev p2 metadata、Nexus 风格 dist path、Basic auth、Components API/UI archive 上传、group canonical first-match | 支持 package/version、dist、HTML View、Browse/Search 和 Usage | Nexus 原生 Composer 仅支持 proxy；配置迁移后，cache 只有在管理员通过 `backupProxyRepositories` 显式选择且 source profile 证明 content model 时才迁移 | `ComposerRepositoryBlackBoxCompatibilityTest`、Composer server/protocol tests、真实 Composer client E2E、migration E2E |
+| Terraform Provider / Module Registry | hosted / proxy / group | Module/provider version 与下载、Nexus 兼容 PUT/UI/API 上传、Provider platform、SHA256SUMS、detached GPG signature、URL token 认证、registry.terraform.io proxy 和 group source binding | 支持 module/provider coordinate、version、platform、HTML View、Browse/Search 和 Usage；内部 route/cache asset 不对用户暴露 | Nexus Terraform hosted full 迁移；proxy cache 仅在显式选择且 source profile 证明 content model 时迁移 | `TerraformRepositoryBlackBoxCompatibilityTest`、Terraform server/protocol tests、Terraform 0.13/当前稳定版 client E2E、migration E2E |
 | NuGet | hosted / proxy / group | package push、包下载、v3 service index、registration、flat container、search/autocomplete、管理台上传 | 支持 v3 service index/search | 默认迁移 hosted；proxy 可选 | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
 | RubyGems | hosted / proxy / group | gem push/yank、gem 下载、compact 和 legacy index assets、管理台上传 | 支持 | 默认迁移 hosted；proxy 可选 | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
 | Yum | hosted / proxy / group | RPM PUT/upload、包下载、`repodata` metadata | 支持 `repodata` | 默认迁移 hosted；proxy 可选 | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
@@ -71,6 +72,8 @@
 /repository/pub-hosted/api/archives/demo_package-1.0.0.tar.gz
 /repository/composer-group/packages.json
 /repository/composer-group/p2/vendor/package.json
+/repository/terraform-group/v1/modules/acme/network/aws/versions
+/repository/terraform-group/v1/providers/hashicorp/null/versions
 /repository/nuget-group/v3/index.json
 ```
 
@@ -96,6 +99,7 @@ kkrepo 把迁移作为产品能力，而不是一次性脚本：
 - Cargo / Rust hosted 仓库数据迁移已支持 datastore H2/PostgreSQL 源端，但必须由 preflight 证明 Cargo content model；未知 schema 默认 fail closed。
 - Dart / Pub hosted 仓库数据迁移已支持 Nexus 3.92.0+ datastore 源端，但必须由 preflight 证明 Pub content model；Pub proxy cache 迁移要求显式选择且 plan 为 `FULL`。
 - Composer 只迁移 Nexus 原生 proxy repository；未显式选择时只迁移配置，不迁移 cache。选择 cache 迁移时必须由 source profile 证明 Composer datastore content model，未知或非原生 Composer source fail closed。
+- Terraform hosted module/provider 数据通过协议感知的 writer 重建，包括 Provider platform、checksum 和签名 metadata。Terraform proxy cache 只有在显式选择且 datastore source profile 证明 Terraform content model 后才迁移；不支持的源版本默认 fail closed。
 - 迁移步骤按 preflight/dry-run、resume、checksum 校验和报告能力设计。
 - 不支持或被阻塞的条目应进入报告，而不是静默跳过。
 
@@ -109,6 +113,7 @@ kkrepo 把迁移作为产品能力，而不是一次性脚本：
 - Cargo / Rust 支持 Cargo sparse registry。Cargo git index 协议、crates.io 风格 GitHub owner 邀请、删除已发布 crate version 当前不支持。Cargo 迁移需要 datastore H2/PostgreSQL schema 指纹；OrientDB Cargo 内容导出不会启用。
 - Dart / Pub 支持 Hosted Pub Repository V2 hosted/proxy/group 工作流。pub.dev social、publisher、score、download-count 和 advisory API 不作为协议正确性依赖。
 - Composer 仅承诺 Composer 2 metadata；Composer 1 `provider-includes` 主线、Packagist security-advisories/metadata-changes、VCS source checkout 和标准 publish 命令不在当前支持面。Hosted 发布使用 Components API 或 UI archive 上传。
+- Terraform 当前支持通过 CLI `host.services` 显式配置的 Module Registry Protocol 与 Provider Registry Protocol；根域 discovery/virtual-host binding 和 Provider Network Mirror Protocol 暂未暴露。Proxy 保留并校验上游 signing key，不会用 kkrepo 签名冒充上游。
 - Go 不支持 hosted 上传；Go module proxy 行为以读取代理为主。
 - 不承诺覆盖每一个 Nexus UI endpoint。只有在支持用户工作流或迁移兼容需要时，才补对应 endpoint。
 - 当协议允许非确定性时，测试中可能规范化排序、时间戳、生成 ID 和 hostname。

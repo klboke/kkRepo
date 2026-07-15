@@ -212,6 +212,7 @@ Script REST API 很重要，因为部分 Nexus 数据无法通过普通 REST API
 - datastore H2/PostgreSQL Cargo 迁移后的 sparse registry config、index entry、`.crate` 下载和 checksum。
 - Nexus 3.92.0 Pub 迁移后的 package metadata、`version.json`、archive 下载、`archive_sha256` 和 publish token 行为。
 - 显式选择 Nexus 原生 Composer proxy 后，验证 `packages.json`、p2 metadata、语义化 dist path、checksum，以及断开 Packagist 后的缓存下载；未选择时确认只迁移配置。
+- Terraform 迁移后通过 group 执行 `terraform init`，同时覆盖 hosted module/provider 和 proxy provider；验证 Provider platform metadata、archive checksum、SHA256SUMS、detached signature，并确认显式选择的 proxy cache 在断开上游后仍可用。
 - 管理员登录。
 - Browse/search。
 - 用户角色和仓库权限。

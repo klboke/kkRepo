@@ -316,6 +316,62 @@ curl -u alice:"$KKREPO_PASSWORD" \
 
 Composer 2 使用 `packages.json` 和 `p2/<vendor>/<package>.json`。Hosted、proxy 和 group 都保持 `/repository/<repo>/...` URL；Browse 页的 Usage 会生成可复制的项目配置。
 
+## Terraform Provider / Module Registry
+
+创建 `terraform-hosted`、`terraform-proxy` 和 `terraform-group` 仓库，再把 group 配置为 module/provider source 所使用 registry hostname 的服务端点。kkRepo 与 Nexus 一样采用 Terraform CLI 显式 `host.services` 配置，不抢占部署根路径的 `/.well-known/terraform.json`：
+
+```hcl
+# Linux/macOS: ~/.terraformrc；Windows: terraform.rc
+disable_checkpoint = true
+
+host "registry.terraform.io" {
+  services = {
+    "modules.v1"   = "https://repo.example.com/repository/terraform-group/v1/modules/<generic-token>/"
+    "providers.v1" = "https://repo.example.com/repository/terraform-group/v1/providers/<generic-token>/"
+  }
+}
+```
+
+在 **My Token** 创建 `GenericToken` 并替换 `<generic-token>`，把 CLI 配置文件权限设为 `0600`，不要提交到版本库。匿名仓库可省略 token segment。服务端也接受 Basic 认证；生成的下载 metadata 会携带编码后的 URL token，使 Terraform 在不添加自定义 header 的情况下继续访问 archive、checksum 和 signature URL。
+
+Terraform 项目继续使用标准 source address：
+
+```hcl
+terraform {
+  required_providers {
+    null = {
+      source  = "registry.terraform.io/hashicorp/null"
+      version = "3.2.4"
+    }
+  }
+}
+
+module "network" {
+  source  = "registry.terraform.io/acme/network/aws"
+  version = "1.0.0"
+}
+```
+
+然后通过已配置的 group 解析：
+
+```bash
+terraform init -backend=false
+```
+
+Hosted module/provider 可通过 Browse/Admin 或 Nexus 兼容 PUT 路径上传。Provider 上传必须指定精确 platform path 和安全的 `Content-Disposition` filename：
+
+```bash
+curl -u user:password --upload-file network-1.0.0.zip \
+  https://repo.example.com/repository/terraform-hosted/v1/modules/acme/network/aws/1.0.0/network-1.0.0.zip
+
+curl -u user:password \
+  -H 'Content-Disposition: attachment; filename=terraform-provider-demo_1.0.0_linux_amd64.zip' \
+  --upload-file terraform-provider-demo_1.0.0_linux_amd64.zip \
+  https://repo.example.com/repository/terraform-hosted/v1/providers/acme/demo/1.0.0/download/linux/amd64
+```
+
+kkRepo 将 hosted Provider SHA256SUMS 与 detached GPG signature 作为同一 revision 生成。Proxy 会保留并校验上游 checksum/signing metadata；group source binding 保证 metadata 与 archive 下载来自同一个 member。
+
 ## NuGet
 
 添加 source：

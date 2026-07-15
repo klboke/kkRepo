@@ -98,7 +98,7 @@ kkrepo 将 API-key 兼容数据存储在共享数据库中。用户可见原始 
 X-Nexus-Plus-Token
 ```
 
-协议客户端应继续使用各自原生认证机制和匹配的 token domain。当前协议 token domain 包含 `NpmToken`、`CargoToken`、`PubToken`、`NuGetApiKey` 和 `RubyGemsApiKey`；对应客户端协议使用 token 或 API key 时按各自协议处理，其中 Cargo、Pub 和 RubyGems 客户端通过 `Authorization` header 发送 registry/API key token。Composer 私有仓库优先使用 `COMPOSER_AUTH`/`auth.json` 的 HTTP Basic；能够显式发送 bearer 或自定义 API-key header 的 Composer/CI 场景可以使用 `GenericToken`。`GenericToken` 不作为所有包管理客户端 token 格式的通用替代。
+协议客户端应继续使用各自原生认证机制和匹配的 token domain。当前协议 token domain 包含 `NpmToken`、`CargoToken`、`PubToken`、`NuGetApiKey` 和 `RubyGemsApiKey`；对应客户端协议使用 token 或 API key 时按各自协议处理，其中 Cargo、Pub 和 RubyGems 客户端通过 `Authorization` header 发送 registry/API key token。Composer 私有仓库优先使用 `COMPOSER_AUTH`/`auth.json` 的 HTTP Basic；能够显式发送 bearer 或自定义 API-key header 的 Composer/CI 场景可以使用 `GenericToken`。Terraform CLI 可把 `GenericToken` 仅放在已配置的 `modules.v1`/`providers.v1` service URL 中；生成的 archive/checksum/signature URL 会保留 credential segment，但日志、指标和上传的 CI 诊断产物必须脱敏。`GenericToken` 不作为所有包管理客户端 token 格式的通用替代。
 
 ## 加密密钥
 

@@ -174,6 +174,23 @@ Composer / PHP emits repository request, proxy upstream, and blob storage metric
 
 For slow installs, separate metadata latency from dist latency: metadata failures affect dependency resolution, while dist upstream or blob latency affects `--prefer-dist` downloads. Composer proxy upstream calls are recorded through `kkrepo_proxy_remote_*`.
 
+### Terraform Provider / Module Registry
+
+Terraform emits repository, proxy-upstream, and blob-storage metrics with `format="terraform"`. Common operation labels include:
+
+- `terraform_module_versions`
+- `terraform_module_download_metadata`
+- `terraform_module_upload`
+- `terraform_module_archive`
+- `terraform_provider_versions`
+- `terraform_provider_download_metadata`
+- `terraform_provider_upload`
+- `terraform_provider_archive`
+- `terraform_provider_shasums`
+- `terraform_provider_signature`
+
+Treat provider metadata, archive, SHA256SUMS, and signature as one observable flow. A metadata success followed by checksum/signature failures normally indicates a stale or inconsistent upstream snapshot. Terraform URL-token path segments are redacted before request paths reach logs or metric labels; never add raw service URLs or captured metadata containing tokens to dashboards or CI artifacts.
+
 ### Blob Storage
 
 | Metric | Type | Description |

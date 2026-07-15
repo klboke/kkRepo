@@ -8,7 +8,7 @@ The goal is not to copy Nexus internals. kkrepo keeps client-visible protocol be
 
 ```text
 Artifact clients
-  Maven / npm / PyPI / Go / Helm / Cargo/Rust / Dart/Pub / Composer/PHP / Docker/OCI / NuGet / RubyGems / Yum / Raw
+  Maven / npm / PyPI / Go / Helm / Cargo/Rust / Dart/Pub / Composer/PHP / Terraform / Docker/OCI / NuGet / RubyGems / Yum / Raw
         |
         v
 Load balancer / reverse proxy
@@ -79,6 +79,7 @@ Admin UI and Browse UI are served by the Spring Boot service as static assets:
 | `protocol-cargo` | Cargo sparse registry path, index, publish body, checksum, and error helpers |
 | `protocol-pub` | Dart Pub package name, hosted URL, path, archive, version metadata, and error helpers |
 | `protocol-composer` | Composer 2 package name, metadata, dist path, URL rewrite, and error helpers |
+| `protocol-terraform` | Terraform Module/Provider Registry paths, versions, platforms, metadata, checksum, and URL-token helpers |
 | `protocol-docker` | Docker Registry V2 / OCI path, digest, manifest, media type, and error helpers |
 | `protocol-nuget` | NuGet path helpers |
 | `protocol-rubygems` | RubyGems metadata helpers |
@@ -103,6 +104,7 @@ The selected relational database stores:
 - Blob references, checksums, object keys, sizes, and content type.
 - Users, roles, privileges, realms, API keys, sessions, and audit logs.
 - Migration jobs, migration assets, cursors, markers, and checkpoints.
+- Terraform provider platform/revision/signing state, group source bindings, and publish leases.
 - Cache version watermarks and cross-replica coordination state.
 
 Blob storage stores:
