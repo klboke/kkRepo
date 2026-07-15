@@ -219,22 +219,48 @@ public class TerraformService {
         .orElseThrow(() -> notFound(path.rawPath()));
     String published = path.kind() == TerraformPath.Kind.PROVIDER_SHA256SUMS
         ? state.shasumsPath() : state.signaturePath();
-    if (!published.equals(path.rawPath())) throw notFound(path.rawPath());
+    if (!published.equals(path.rawPath())
+        && !isStoredProviderMetadataRevision(runtime, path, state)) {
+      throw notFound(path.rawPath());
+    }
     return assets.serve(runtime, path.rawPath(), headOnly);
+  }
+
+  private boolean isStoredProviderMetadataRevision(
+      RepositoryRuntime runtime, TerraformPath path, TerraformRegistryDao.ProviderState state) {
+    String prefix = "v1/providers/" + path.namespace() + "/" + path.name() + "/"
+        + path.version() + "/metadata-r";
+    int separator = path.rawPath().indexOf('/', prefix.length());
+    if (!path.rawPath().startsWith(prefix) || separator < 0) return false;
+    try {
+      long revision = Long.parseLong(path.rawPath().substring(prefix.length(), separator));
+      return revision > 0 && revision <= state.revision()
+          && assets.find(runtime, path.rawPath()).isPresent();
+    } catch (NumberFormatException e) {
+      return false;
+    }
   }
 
   private MavenResponse putModule(
       RepositoryRuntime runtime, TerraformPath path, InputStream body, String contentType,
       String actor, String ip) {
+    // Fail fast before buffering, then repeat this authoritative check while holding the shared
+    // coordinate lease so concurrent replicas cannot both publish different filenames.
     enforceModuleWrite(runtime, path);
     Path buffered = inspector.bufferAndInspect(body, path.filename(), true, null);
-    try (InputStream in = Files.newInputStream(buffered)) {
-      assets.store(runtime, path.rawPath(), in, contentType == null ? OCTET : contentType,
-          Map.of(
-              "terraformKind", "module-archive",
-              "namespace", path.namespace(), "name", path.name(), "system", path.system(),
-              "version", path.version(), "sha256Validated", true), actor, ip);
-      return MavenResponse.created();
+    String leaseKey = publishLeaseKey(
+        "module", runtime.id(), path.namespace(), path.name(), path.system(), path.version());
+    try (TerraformPublishLeaseManager.Lease lease = leases.acquire(
+        leaseKey, java.time.Duration.ofMinutes(5), java.time.Duration.ofSeconds(30))) {
+      enforceModuleWrite(runtime, path);
+      try (InputStream in = Files.newInputStream(buffered)) {
+        assets.store(runtime, path.rawPath(), in, contentType == null ? OCTET : contentType,
+            Map.of(
+                "terraformKind", "module-archive",
+                "namespace", path.namespace(), "name", path.name(), "system", path.system(),
+                "version", path.version(), "sha256Validated", true), actor, ip);
+        return MavenResponse.created();
+      }
     } catch (IOException e) {
       throw new IllegalStateException("Failed storing Terraform module archive", e);
     } finally {
@@ -253,7 +279,8 @@ public class TerraformService {
       throw new MavenExceptions.BadRequestException(
           "Provider filename must match " + expectedPrefix + "*.zip");
     }
-    String leaseKey = runtime.id() + ":" + path.namespace() + ":" + path.name() + ":" + path.version();
+    String leaseKey = publishLeaseKey(
+        "provider", runtime.id(), path.namespace(), path.name(), path.version());
     try (TerraformPublishLeaseManager.Lease lease = leases.acquire(
         leaseKey, java.time.Duration.ofMinutes(5), java.time.Duration.ofSeconds(30))) {
       List<TerraformRegistryDao.ProviderPlatform> current = registry.listProviderPlatforms(
@@ -818,6 +845,10 @@ public class TerraformService {
 
   private static String sourceBindingKey(String assetPath) {
     return "asset:sha256:" + sha256(assetPath);
+  }
+
+  private static String publishLeaseKey(String kind, long repositoryId, String... coordinates) {
+    return kind + ":" + repositoryId + ":" + sha256(String.join("\0", coordinates));
   }
 
   private static MavenExceptions.MavenNotFoundException notFound(String path) {

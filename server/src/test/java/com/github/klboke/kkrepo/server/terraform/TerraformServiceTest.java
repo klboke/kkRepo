@@ -107,6 +107,7 @@ class TerraformServiceTest {
     Path buffered = Files.createTempFile("terraform-module-service-test", ".zip");
     Files.writeString(buffered, "module");
     when(inspector.bufferAndInspect(any(), eq("new.zip"), eq(true), eq(null))).thenReturn(buffered);
+    when(registry.tryAcquirePublishLease(anyString(), anyString(), any())).thenReturn(true);
     when(assets.find(hosted, "v1/modules/acme/network/aws/3.0.0/new.zip"))
         .thenReturn(Optional.empty(), Optional.of(asset(3, hosted, 13L,
             "v1/modules/acme/network/aws/3.0.0/new.zip")));
@@ -117,6 +118,8 @@ class TerraformServiceTest {
         null, null, "alice", "127.0.0.1");
     assertEquals(201, published.status());
     assertFalse(Files.exists(buffered));
+    verify(registry).tryAcquirePublishLease(anyString(), anyString(), any());
+    verify(registry).releasePublishLease(anyString(), anyString());
     verify(assets).store(eq(hosted), eq("v1/modules/acme/network/aws/3.0.0/new.zip"),
         any(), eq("application/octet-stream"), any(), eq("alice"), eq("127.0.0.1"));
 
@@ -147,17 +150,42 @@ class TerraformServiceTest {
   }
 
   @Test
+  void rechecksModuleCoordinateWhileHoldingSharedPublishLease() throws Exception {
+    RepositoryRuntime hosted = runtime(5, "terraform", RepositoryType.HOSTED, null, List.of());
+    TerraformPath upload = paths.parse("v1/modules/acme/network/aws/1.0.0/alternate.zip");
+    AssetRecord concurrent = asset(
+        6, hosted, 16L, "v1/modules/acme/network/aws/1.0.0/network.zip");
+    Path buffered = Files.createTempFile("terraform-module-lease-test", ".zip");
+    Files.writeString(buffered, "module");
+    when(assets.list(hosted, "v1/modules/acme/network/aws/1.0.0/"))
+        .thenReturn(List.of(), List.of(concurrent));
+    when(inspector.bufferAndInspect(any(), eq("alternate.zip"), eq(true), eq(null)))
+        .thenReturn(buffered);
+    when(registry.tryAcquirePublishLease(anyString(), anyString(), any())).thenReturn(true);
+
+    assertThrows(MavenExceptions.WritePolicyDenied.class,
+        () -> service.put(hosted, upload, new ByteArrayInputStream(new byte[0]),
+            null, null, "alice", null));
+
+    assertFalse(Files.exists(buffered));
+    verify(registry).releasePublishLease(anyString(), anyString());
+    verify(assets, never()).store(eq(hosted), anyString(), any(), anyString(), any(), any(), any());
+  }
+
+  @Test
   void servesHostedProviderMetadataArchivesAndSignatures() throws Exception {
     RepositoryRuntime hosted = runtime(10, "terraform", RepositoryType.HOSTED, null, List.of());
     String archivePath = "v1/providers/acme/cloud/1.2.3/package/linux/"
         + "terraform-provider-cloud_1.2.3_linux_amd64.zip";
-    String sumsPath = "v1/providers/acme/cloud/1.2.3/metadata-r1/"
+    String sumsPath = "v1/providers/acme/cloud/1.2.3/metadata-r2/"
         + "terraform-provider-cloud_1.2.3_SHA256SUMS";
     String signaturePath = sumsPath + ".sig";
+    String oldSumsPath = "v1/providers/acme/cloud/1.2.3/metadata-r1/"
+        + "terraform-provider-cloud_1.2.3_SHA256SUMS";
     AssetRecord archive = asset(20, hosted, 21L, archivePath);
     TerraformRegistryDao.ProviderPlatform platform = platform(hosted, archivePath, "abc123", 1);
     TerraformRegistryDao.ProviderState state = new TerraformRegistryDao.ProviderState(
-        hosted.id(), "acme", "cloud", "1.2.3", 1, sumsPath, signaturePath, 2, Instant.now());
+        hosted.id(), "acme", "cloud", "1.2.3", 2, sumsPath, signaturePath, 2, Instant.now());
     when(assets.list(eq(hosted), anyString())).thenReturn(List.of(archive));
     when(registry.findProviderState(hosted.id(), "acme", "cloud", "1.2.3"))
         .thenReturn(Optional.of(state));
@@ -166,6 +194,8 @@ class TerraformServiceTest {
     when(registry.findSigningKey(hosted.id(), 2)).thenReturn(Optional.of(
         new TerraformRegistryDao.SigningKey(hosted.id(), 2, "0011223344556677",
             "encrypted", "PUBLIC KEY", Instant.now())));
+    when(assets.find(hosted, oldSumsPath)).thenReturn(Optional.of(
+        asset(22, hosted, 23L, oldSumsPath)));
 
     Map<String, Object> versions = json(service.get(
         hosted, paths.parse("v1/providers/acme/cloud/versions"), BASE, false));
@@ -186,6 +216,10 @@ class TerraformServiceTest {
     assertEquals(200, service.get(hosted, paths.parse(archivePath), BASE, false).status());
     assertEquals(200, service.get(hosted, paths.parse(sumsPath), BASE, true).status());
     assertEquals(200, service.get(hosted, paths.parse(signaturePath), BASE, false).status());
+    assertEquals(200, service.get(hosted, paths.parse(oldSumsPath), BASE, false).status());
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(hosted, paths.parse(oldSumsPath.replace("metadata-r1", "metadata-r3")),
+            BASE, false));
 
     when(registry.listProviderPlatforms(hosted.id(), "acme", "cloud", "9.9.9"))
         .thenReturn(List.of());
