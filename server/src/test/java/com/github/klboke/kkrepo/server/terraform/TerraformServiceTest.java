@@ -10,6 +10,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -290,13 +291,15 @@ class TerraformServiceTest {
         "application/zip", "attachment; filename=\"" + filename + "\"", "alice", "127.0.0.1");
     assertEquals(201, response.status());
     assertFalse(Files.exists(buffered));
+    var publicationOrder = inOrder(inspector, registry);
+    publicationOrder.verify(inspector).bufferAndInspect(any(), eq(filename), eq(false), eq("cloud"));
+    publicationOrder.verify(registry).tryAcquirePublishLease(anyString(), anyString(), any());
     verify(registry).releasePublishLease(anyString(), anyString());
     ArgumentCaptor<TerraformRegistryDao.ProviderState> state =
         ArgumentCaptor.forClass(TerraformRegistryDao.ProviderState.class);
     verify(registry).publishProvider(any(TerraformRegistryDao.ProviderPlatform.class), state.capture());
     assertEquals(1, state.getValue().revision());
     assertEquals(4, state.getValue().signingKeyRevision());
-    verify(inspector).bufferAndInspect(any(), eq(filename), eq(false), eq("cloud"));
     verify(assets).store(
         eq(hosted), eq(archivePath), any(), eq("application/zip"), any(),
         eq("alice"), eq("127.0.0.1"));

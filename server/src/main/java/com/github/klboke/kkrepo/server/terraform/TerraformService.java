@@ -316,6 +316,9 @@ public class TerraformService {
       throw new MavenExceptions.BadRequestException(
           "Provider filename must match " + expectedPrefix + "*.zip");
     }
+    // Buffer and inspect before acquiring the fixed-TTL lease. Slow uploads must not consume the
+    // lease lifetime and allow another replica to publish the same provider version concurrently.
+    Path buffered = inspector.bufferAndInspect(body, filename, false, path.name());
     String leaseKey = publishLeaseKey(
         "provider", runtime.id(), path.namespace(), path.name(), path.version());
     try (TerraformPublishLeaseManager.Lease lease = leases.acquire(
@@ -331,15 +334,12 @@ public class TerraformService {
       // Always validate and persist the incoming archive. A prior publication attempt may have
       // failed after storing an orphaned STAGING asset but before committing the platform row;
       // reusing that blob would publish stale content instead of the operator's retry.
-      Path buffered = inspector.bufferAndInspect(body, filename, false, path.name());
       try (InputStream in = Files.newInputStream(buffered)) {
         assets.store(runtime, assetPath, in, contentType == null ? OCTET : contentType,
             Map.of(
                 "terraformKind", "provider-archive", "namespace", path.namespace(), "type", path.name(),
                 "version", path.version(), "os", path.os(), "arch", path.arch(),
                 "protocols", List.of(PROTOCOLS), "publishState", "STAGING", "revision", revision), actor, ip);
-      } finally {
-        try { Files.deleteIfExists(buffered); } catch (IOException ignored) {}
       }
       AssetRecord stored = assets.find(runtime, assetPath).orElseThrow(() -> notFound(assetPath));
       AssetBlobRecord blob = assets.blob(stored);
@@ -369,6 +369,8 @@ public class TerraformService {
       return MavenResponse.created();
     } catch (IOException e) {
       throw new IllegalStateException("Failed storing Terraform provider archive", e);
+    } finally {
+      try { Files.deleteIfExists(buffered); } catch (IOException ignored) {}
     }
   }
 
