@@ -141,6 +141,31 @@ class TerraformRepositoryBlackBoxCompatibilityTest {
     assertEquals(404, badKkRepo.status);
   }
 
+  @Test
+  void missingHostedAndGroupPackagesMatchNexusNotFoundBehaviorWhenConfigured() throws Exception {
+    Config config = Config.load();
+    assumeTrue(config.configured(),
+        "Set NEXUS_COMPAT_BASE_URL and KKREPO_COMPAT_BASE_URL to run Terraform compatibility");
+    ensureNexus(config);
+    ensureKkRepo(config);
+
+    String namespace = "missing" + System.currentTimeMillis();
+    String[] paths = {
+        "v1/modules/" + namespace + "/fixture/aws/versions",
+        "v1/providers/" + namespace + "/fixture/versions"
+    };
+    for (String repository : new String[] {config.hosted, config.group}) {
+      for (String path : paths) {
+        Exchange nexus = get(config.nexusRepository(repository), path, config.nexusAuth);
+        Exchange kkrepo = get(config.kkrepoRepository(repository), path, config.kkrepoAuth);
+        assertEquals(nexus.status, kkrepo.status,
+            "missing Terraform package status for " + repository + "/" + path);
+        assertEquals(404, nexus.status,
+            "Nexus missing Terraform package status for " + repository + "/" + path);
+      }
+    }
+  }
+
   private static void validateProvider(
       Config config, String repository, String authorization, String path, String filename,
       byte[] expectedArchive) throws Exception {

@@ -155,6 +155,19 @@ class TerraformServiceTest {
   }
 
   @Test
+  void returnsNotFoundForHostedPackagesWithoutPublishedVersions() {
+    RepositoryRuntime hosted = runtime(
+        86, "terraform-hosted", RepositoryType.HOSTED, null, List.of());
+
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(
+            hosted, paths.parse("v1/modules/missing/network/aws/versions"), BASE, false));
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(
+            hosted, paths.parse("v1/providers/missing/cloud/versions"), BASE, false));
+  }
+
+  @Test
   void rechecksModuleCoordinateWhileHoldingSharedPublishLease() throws Exception {
     RepositoryRuntime hosted = runtime(5, "terraform", RepositoryType.HOSTED, null, List.of());
     TerraformPath upload = paths.parse("v1/modules/acme/network/aws/1.0.0/alternate.zip");
@@ -810,6 +823,23 @@ class TerraformServiceTest {
     assertEquals(200, service.get(group, paths.parse(one.path()), BASE, false).status());
     assertThrows(MavenExceptions.MavenNotFoundException.class,
         () -> service.get(group, paths.parse(one.path()), BASE, true));
+  }
+
+  @Test
+  void returnsNotFoundWhenNoGroupMemberHasPublishedVersions() {
+    RepositoryRuntime first = runtime(
+        87, "first-empty", RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime second = runtime(
+        88, "second-empty", RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime group = runtime(
+        89, "terraform-group", RepositoryType.GROUP, null, List.of(first, second));
+
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(
+            group, paths.parse("v1/modules/missing/network/aws/versions"), BASE, false));
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(
+            group, paths.parse("v1/providers/missing/cloud/versions"), BASE, false));
   }
 
   @Test

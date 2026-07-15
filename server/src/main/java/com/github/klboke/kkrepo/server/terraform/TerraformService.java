@@ -235,6 +235,7 @@ public class TerraformService {
       TerraformPath parsed = paths.parse(asset.path());
       if (parsed.kind() == TerraformPath.Kind.MODULE_ARCHIVE) versions.add(parsed.version());
     }
+    if (versions.isEmpty()) throw notFound(request.rawPath());
     List<Map<String, Object>> rows = TerraformVersions.descending(versions).stream()
         .map(version -> Map.<String, Object>of("version", version)).toList();
     return Map.of("modules", List.of(Map.of(
@@ -271,6 +272,7 @@ public class TerraformService {
       if (platforms.isEmpty()) continue;
       values.add(Map.of("version", version, "protocols", List.of(PROTOCOLS), "platforms", platforms));
     }
+    if (values.isEmpty()) throw notFound(request.rawPath());
     return Map.of("versions", values);
   }
 
@@ -694,6 +696,7 @@ public class TerraformService {
     if (versions.isEmpty() && lastUpstreamFailure != null) {
       throw lastUpstreamFailure;
     }
+    if (versions.isEmpty()) throw notFound(path.rawPath());
     List<Map<String, Object>> sorted = TerraformVersions.descending(versions.keySet()).stream()
         .map(versions::get).toList();
     return path.kind() == TerraformPath.Kind.MODULE_VERSIONS
