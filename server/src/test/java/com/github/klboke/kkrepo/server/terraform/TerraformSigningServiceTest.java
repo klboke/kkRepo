@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.core.security.OpenPgpKeyIds;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
@@ -55,7 +56,7 @@ class TerraformSigningServiceTest {
     PGPObjectFactory objects = new PGPObjectFactory(
         PGPUtil.getDecoderStream(new ByteArrayInputStream(detached)), new JcaKeyFingerprintCalculator());
     var signature = ((PGPSignatureList) objects.nextObject()).get(0);
-    assertEquals(material.keyId(), String.format("%016X", signature.getKeyID()));
+    assertEquals(material.keyId(), OpenPgpKeyIds.format(signature.getKeyID()));
     var primary = publicKeys.getPublicKey(signature.getKeyID());
     var identities = primary.getSignaturesForID(primary.getUserIDs().next());
     var certification = identities.next();

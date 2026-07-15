@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.terraform;
 
 import com.github.klboke.kkrepo.core.security.EncryptionSecrets;
+import com.github.klboke.kkrepo.core.security.OpenPgpKeyIds;
 import com.github.klboke.kkrepo.core.security.SecretCipher;
 import com.github.klboke.kkrepo.core.security.TerraformSigningKeyMaterial;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
@@ -150,7 +151,7 @@ final class TerraformSigningService {
       try (ArmoredOutputStream armor = new ArmoredOutputStream(privateBytes)) {
         rings.generateSecretKeyRing().encode(armor);
       }
-      String keyId = String.format("%016X", pair.getKeyID());
+      String keyId = OpenPgpKeyIds.format(pair.getKeyID());
       return new Generated(keyId, publicBytes.toString(java.nio.charset.StandardCharsets.UTF_8),
           privateBytes.toString(java.nio.charset.StandardCharsets.UTF_8));
     } catch (Exception e) {

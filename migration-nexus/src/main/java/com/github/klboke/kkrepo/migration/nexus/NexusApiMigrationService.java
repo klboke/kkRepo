@@ -5,6 +5,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryRecipe;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.core.security.EncryptionSecrets;
+import com.github.klboke.kkrepo.core.security.OpenPgpKeyIds;
 import com.github.klboke.kkrepo.core.security.SecretCipher;
 import com.github.klboke.kkrepo.core.security.TerraformSigningKeyMaterial;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.NexusInventory;
@@ -522,7 +523,7 @@ public class NexusApiMigrationService {
       terraformRegistry.insertSigningKey(new TerraformRegistryDao.SigningKey(
           repository.id(),
           1,
-          String.format("%016X", signingKey.getKeyID()),
+          OpenPgpKeyIds.format(signingKey.getKeyID()),
           encrypted,
           publicArmor.toString(java.nio.charset.StandardCharsets.UTF_8),
           java.time.Instant.now()));
