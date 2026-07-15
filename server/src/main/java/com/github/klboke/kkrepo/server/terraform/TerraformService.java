@@ -637,7 +637,6 @@ public class TerraformService {
       RepositoryRuntime group, TerraformPath path, RequestUrls urls, boolean headOnly) {
     Map<String, Map<String, Object>> versions = new LinkedHashMap<>();
     MavenExceptions.BadUpstreamException lastUpstreamFailure = null;
-    boolean producedMetadata = false;
     for (RepositoryRuntime member : group.members()) {
       try {
         Map<String, Object> body = readJson(responseBytes(get(member, path, urls, false)));
@@ -659,14 +658,13 @@ public class TerraformService {
             }
           }
         }
-        producedMetadata = true;
       } catch (MavenExceptions.MavenNotFoundException ignored) {
         // A group member may legitimately have no metadata for the requested package.
       } catch (MavenExceptions.BadUpstreamException e) {
         lastUpstreamFailure = e;
       }
     }
-    if (!producedMetadata && lastUpstreamFailure != null) {
+    if (versions.isEmpty() && lastUpstreamFailure != null) {
       throw lastUpstreamFailure;
     }
     List<Map<String, Object>> sorted = TerraformVersions.descending(versions.keySet()).stream()

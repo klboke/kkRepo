@@ -828,11 +828,15 @@ class TerraformServiceTest {
   }
 
   @Test
-  void propagatesGroupUpstreamFailureWhenNoMemberProducesVersionMetadata() throws Exception {
+  void propagatesGroupUpstreamFailureWhenEarlierMemberHasNoVersions() throws Exception {
+    RepositoryRuntime empty = runtime(
+        82, "terraform-hosted", RepositoryType.HOSTED, null, List.of());
     RepositoryRuntime unavailable = runtime(
         73, "terraform-proxy", RepositoryType.PROXY, "https://registry.example", List.of());
     RepositoryRuntime group = runtime(
-        74, "terraform-group", RepositoryType.GROUP, null, List.of(unavailable));
+        74, "terraform-group", RepositoryType.GROUP, null, List.of(empty, unavailable));
+    when(assets.list(empty, "v1/providers/acme/cloud/"))
+        .thenReturn(List.of());
     when(proxy.getMetadataFromUrl(eq(unavailable), anyString(), anyString(), anyBoolean()))
         .thenAnswer(invocation -> {
           String local = invocation.getArgument(1);
