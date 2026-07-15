@@ -426,9 +426,10 @@ public class TerraformService {
         if (upstream == null || upstream.isBlank()) {
           throw new MavenExceptions.BadUpstreamException("Terraform upstream omitted X-Terraform-Get");
         }
-        String absolute = directHttpModuleArchive(remote, upstream);
+        String resolved = resolveModuleSource(remote, upstream);
+        String absolute = directHttpModuleArchive(resolved);
         if (absolute == null) {
-          return MavenResponse.noBody(204).withHeader("X-Terraform-Get", upstream);
+          return MavenResponse.noBody(204).withHeader("X-Terraform-Get", resolved);
         }
         String filename = safeRemoteFilename(absolute,
             path.name() + "_" + path.version() + ".zip");
@@ -866,15 +867,16 @@ public class TerraformService {
     return URI.create(base).resolve(value).toString();
   }
 
-  private static String directHttpModuleArchive(String base, String value) {
-    String candidate = value;
-    if (value.startsWith("/") || value.startsWith("./") || value.startsWith("../")) {
-      try {
-        candidate = URI.create(base).resolve(value).toString();
-      } catch (RuntimeException e) {
-        throw new MavenExceptions.BadUpstreamException("Terraform upstream module URL is invalid");
-      }
+  private static String resolveModuleSource(String base, String value) {
+    try {
+      URI source = URI.create(value);
+      return source.isAbsolute() ? value : URI.create(base).resolve(source).toString();
+    } catch (RuntimeException e) {
+      throw new MavenExceptions.BadUpstreamException("Terraform upstream module URL is invalid");
     }
+  }
+
+  private static String directHttpModuleArchive(String candidate) {
     try {
       URI uri = URI.create(candidate);
       if (!("http".equalsIgnoreCase(uri.getScheme()) || "https".equalsIgnoreCase(uri.getScheme()))) {

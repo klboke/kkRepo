@@ -34,7 +34,7 @@
 - Terraform module 与 provider 共用一个 repository format 和一组 hosted/proxy/group recipe，但必须保持两套独立协议模型、路径 parser 和 metadata renderer。
 - 官方 registry protocol 的服务基址可以通过 hostname discovery 获得，也可以在 Terraform CLI `host` 配置中显式指定。kkrepo 第一阶段采用 Nexus 的显式 `host.services` 配置，不在 `/repository/{repo}/...` 下伪造无效的 `/.well-known/terraform.json`。
 - 一个部署可以有多个 Terraform 仓库，根域名只能有一个 `/.well-known/terraform.json`。后续若增加零配置 discovery，必须先引入域名到 repository/group 的显式绑定，不能根据请求临时猜仓库。
-- Module 下载 metadata 中可直接识别为 archive 的 `X-Terraform-Get`，以及 Provider 下载 metadata 中的 `download_url`、`shasums_url`、`shasums_signature_url`，必须指回当前 hosted/proxy/group 路径；HTTP vanity、VCS 和带 `//subdir` 的 go-getter source 保持官方语义并原样透传。反向代理下使用可信外部 base URL。
+- Module 下载 metadata 中可直接识别为 archive 的 `X-Terraform-Get`，以及 Provider 下载 metadata 中的 `download_url`、`shasums_url`、`shasums_signature_url`，必须指回当前 hosted/proxy/group 路径；HTTP vanity、VCS 和带 `//subdir` 的 go-getter source 保持官方语义，绝对地址原样透传，相对地址先按官方协议基于上游完整 download URL 解析。反向代理下使用可信外部 base URL。
 - URL token 可能出现在 `/v1/modules/{token}/...` 或 `/v1/providers/{token}/...` 服务基址中。缓存中不得保存调用者 token；只缓存 token-free 规范化 metadata，请求返回时再渲染 URL。
 - 私有仓库的 module/provider download metadata 若通过普通 Basic 或 API key 认证，必须把已验证且可重放的 credential 编码为 URL-token segment 后再渲染后续 archive/checksum URL；匿名可读仓库保持裸 URL，session/OIDC 等不可安全重放的认证不得生成失效的后续 URL。
 - Provider archive、SHA256SUMS 和签名是一个一致性单元。新增一个 OS/architecture 平台会改变 version 的平台集合和 checksum 清单；必须通过关系数据库 revision 和原子可见状态协调多副本。
@@ -286,7 +286,7 @@ Module：
 
 1. versions 请求优先读取新鲜共享 cache；过期后使用 conditional request 回源。
 2. download 请求读取上游 `204 + X-Terraform-Get`；只有具有官方 archive 扩展名、且不含 `//subdir`/VCS 等 go-getter 语义的 HTTP(S) source 才保存为受保护 remote route。
-3. 可缓存 archive 返回当前 proxy/group archive path；HTTP vanity、VCS 和其它 go-getter source 原样透传，避免丢失 Terraform 客户端负责解释的 query 与子目录语义。
+3. 可缓存 archive 返回当前 proxy/group archive path；HTTP vanity、VCS 和其它 go-getter source 保留 Terraform 客户端负责解释的 query 与子目录语义，其中绝对地址原样透传，相对地址基于上游完整 download URL 解析后再返回。
 4. 首次 archive 下载在分布式 singleflight/lease 下回源，流式写临时 blob并校验；提交后其它副本共享。
 
 Provider：

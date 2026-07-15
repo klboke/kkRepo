@@ -470,6 +470,26 @@ class TerraformServiceTest {
   }
 
   @Test
+  void resolvesRelativeGoGetterSourceFromProxyModuleDownload() throws Exception {
+    RepositoryRuntime proxyRuntime = runtime(
+        77, "terraform-proxy", RepositoryType.PROXY, "https://registry.example/root", List.of());
+    when(proxy.getMetadataFromUrl(eq(proxyRuntime), anyString(), anyString(), anyBoolean()))
+        .thenReturn(response(mapper.writeValueAsBytes(Map.of("modules.v1", "/api/modules/")),
+            "application/json"));
+    respond(fetcher, new HttpRemoteFetcher.Result(
+        204, Map.of("X-Terraform-Get", "/api/repos/foo//*?archive=tar.gz"),
+        new ByteArrayInputStream(new byte[0])));
+
+    MavenResponse download = service.get(
+        proxyRuntime, paths.parse("v1/modules/acme/network/aws/1.2.3/download"), BASE, false);
+
+    assertEquals(204, download.status());
+    assertEquals("https://registry.example/api/repos/foo//*?archive=tar.gz",
+        download.headers().get("X-Terraform-Get"));
+    verify(assets, never()).storeBytes(eq(proxyRuntime), anyString(), any(), anyString(), any());
+  }
+
+  @Test
   void resolvesAndCachesRelativeHttpSourceFromProxyModuleDownload() throws Exception {
     RepositoryRuntime proxyRuntime = runtime(
         43, "terraform-proxy", RepositoryType.PROXY, "https://registry.example/root", List.of());
