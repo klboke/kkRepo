@@ -242,7 +242,10 @@ class TerraformServiceTest {
         hosted, paths.parse("v1/providers/acme/cloud/1.2.3/download/linux/amd64"), BASE,
         "token", false));
     assertEquals("abc123", download.get("shasum"));
-    assertTrue(download.get("download_url").toString().contains("/v1/providers/token/"));
+    assertEquals(
+        BASE + "/v1/providers/token/acme/cloud/1.2.3/download/linux/amd64/"
+            + "terraform-provider-cloud_1.2.3_linux_amd64.zip",
+        download.get("download_url"));
     assertTrue(download.toString().contains("0011223344556677"));
     assertFalse(service.get(
         hosted, paths.parse("v1/providers/acme/cloud/1.2.3/download/linux/amd64"), BASE,

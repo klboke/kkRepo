@@ -231,13 +231,20 @@ public class TerraformService {
     body.put("os", platform.os());
     body.put("arch", platform.arch());
     body.put("filename", platform.filename());
-    body.put("download_url", publicUrl(urls, platform.assetPath()));
+    body.put("download_url", publicUrl(urls, nexusProviderArchivePath(request, platform)));
     body.put("shasums_url", publicUrl(urls, state.shasumsPath()));
     body.put("shasums_signature_url", publicUrl(urls, state.signaturePath()));
     body.put("shasum", platform.sha256());
     body.put("signing_keys", Map.of("gpg_public_keys", List.of(Map.of(
         "key_id", key.keyId(), "ascii_armor", key.publicKey(), "trust_signature", ""))));
     return json(body, headOnly);
+  }
+
+  private static String nexusProviderArchivePath(
+      TerraformPath request, TerraformRegistryDao.ProviderPlatform platform) {
+    return "v1/providers/" + request.namespace() + "/" + request.name() + "/"
+        + request.version() + "/download/" + platform.os() + "/" + platform.arch() + "/"
+        + platform.filename();
   }
 
   private MavenResponse servePublishedProviderArchive(

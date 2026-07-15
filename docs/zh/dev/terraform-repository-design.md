@@ -177,7 +177,7 @@ host "registry.terraform.io" {
 | `GET/HEAD {shasums_url}` | 下载该 provider version 的 SHA256SUMS |
 | `GET/HEAD {shasums_signature_url}` | 下载 detached GPG signature |
 
-`download_url`、`shasums_url`、`shasums_signature_url` 的具体 Nexus asset path 和 `Content-Disposition` 细节由 M0 reference suite 固定；实现不得另造 `/api/terraform/download` 之类的旁路。无论最终 URL 采用同级文件还是额外 path segment，都必须位于 `/repository/{repo}/v1/providers/...` 下并由相同权限检查覆盖。
+`download_url` 使用 Nexus 兼容的 `/v1/providers/{namespace}/{type}/{version}/download/{os}/{arch}/{filename}` 公开别名，底层仍映射到受发布状态约束的 `/package/{os}/{filename}` asset；`shasums_url`、`shasums_signature_url` 和 `Content-Disposition` 细节由 M0 reference suite 固定。实现不得另造 `/api/terraform/download` 之类的旁路，所有 URL 都必须位于 `/repository/{repo}/v1/providers/...` 下并由相同权限检查覆盖。
 
 ### Service discovery 边界
 
