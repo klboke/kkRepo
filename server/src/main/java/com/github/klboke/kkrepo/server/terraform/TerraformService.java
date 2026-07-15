@@ -343,8 +343,12 @@ public class TerraformService {
         leaseKey, java.time.Duration.ofMinutes(5), java.time.Duration.ofSeconds(30))) {
       List<TerraformRegistryDao.ProviderPlatform> current = publishedProviderPlatforms(
           runtime, path.namespace(), path.name(), path.version());
-      boolean exists = current.stream().anyMatch(row -> row.os().equals(path.os()) && row.arch().equals(path.arch()));
-      if (exists) throw new MavenExceptions.WritePolicyDenied("Terraform provider platform already exists");
+      Optional<TerraformRegistryDao.ProviderPlatform> existing = current.stream()
+          .filter(row -> row.os().equals(path.os()) && row.arch().equals(path.arch()))
+          .findFirst();
+      if (existing.isPresent() && !"ALLOW".equals(effectiveWritePolicy(runtime, migration))) {
+        throw new MavenExceptions.WritePolicyDenied("Terraform provider platform already exists");
+      }
       long revision = registry.findProviderState(runtime.id(), path.namespace(), path.name(), path.version())
           .map(state -> state.revision() + 1).orElse(1L);
       String assetPath = "v1/providers/" + path.namespace() + "/" + path.name() + "/" + path.version()
@@ -365,7 +369,9 @@ public class TerraformService {
       TerraformRegistryDao.ProviderPlatform published = new TerraformRegistryDao.ProviderPlatform(
           runtime.id(), path.namespace(), path.name(), path.version(), path.os(), path.arch(), filename,
           assetPath, blob.sha256(), PROTOCOLS, revision, Instant.now());
-      List<TerraformRegistryDao.ProviderPlatform> next = new ArrayList<>(current);
+      List<TerraformRegistryDao.ProviderPlatform> next = new ArrayList<>(current.stream()
+          .filter(row -> !(row.os().equals(path.os()) && row.arch().equals(path.arch())))
+          .toList());
       next.add(published);
       next.sort(Comparator.comparing(TerraformRegistryDao.ProviderPlatform::filename));
       byte[] shasums = next.stream().map(row -> row.sha256() + "  " + row.filename() + "\n")

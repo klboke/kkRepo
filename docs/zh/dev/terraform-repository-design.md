@@ -263,7 +263,7 @@ MySQL 与 PostgreSQL migration 必须同步增加，DAO 放在 `persistence-jdbc
 2. 流式写临时对象并计算 SHA256；以受限 zip reader 校验 archive 结构、文件名、展开大小和 platform identity，不执行 binary。
 3. 从 repository signing config 取得加密私钥引用和 passphrase secret；业务对象只读取临时解密材料，使用后立即释放，不写日志/attributes。
 4. 在数据库中锁定 provider version revision。并发上传不同 platform 可以写各自 staging archive，但 checksum 清单发布必须按 revision 串行化。
-5. 根据全部 `READY` platform 加当前 staging platform 生成稳定排序的 SHA256SUMS，再生成 detached signature 和公开 signing key metadata。
+5. 根据全部 `READY` platform 加当前 staging platform 生成稳定排序的 SHA256SUMS，再生成 detached signature 和公开 signing key metadata；`ALLOW` 重部署同一 os/arch 时先从新快照移除旧 platform，再只加入 replacement，`ALLOW_ONCE`/`DENY` 仍拒绝已发布 platform。
 6. 将新 checksum/signature 写入临时 blob；在单个事务中绑定 archive、checksum、signature、platform row 和 provider revision，并把新状态切换为 `READY`。
 7. 旧 checksum/signature 只有在新 revision 提交后才失去引用，随后异步 GC；读取中的旧 revision 仍能完成一致下载。
 8. Provider protocol version 的来源和默认值必须由 M0 对 Nexus hosted 上传实测确定。实现不得启动 provider binary 探测；若 Nexus 暴露显式 upload field/header，则完整对齐，否则只实现已验证的安全推导/default。

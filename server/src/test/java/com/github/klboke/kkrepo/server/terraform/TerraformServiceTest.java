@@ -342,6 +342,83 @@ class TerraformServiceTest {
   }
 
   @Test
+  void redeploysExistingProviderPlatformWhenWritePolicyAllows() throws Exception {
+    RepositoryRuntime allow = runtime(
+        32, "terraform-allow", RepositoryType.HOSTED, null, List.of(), "ALLOW");
+    TerraformPath upload = paths.parse("v1/providers/acme/cloud/1.2.3/download/linux/amd64");
+    String filename = "terraform-provider-cloud_1.2.3_linux_amd64.zip";
+    String archivePath = "v1/providers/acme/cloud/1.2.3/package/linux/" + filename;
+    Path buffered = Files.createTempFile("terraform-provider-redeploy-test", ".zip");
+    Files.writeString(buffered, "replacement");
+    AssetRecord oldAsset = asset(41, allow, 42L, archivePath);
+    AssetRecord replacement = asset(43, allow, 44L, archivePath);
+    TerraformRegistryDao.ProviderPlatform oldPlatform = platform(allow, archivePath, "old-sha", 2);
+    when(registry.tryAcquirePublishLease(anyString(), anyString(), any())).thenReturn(true);
+    when(registry.listProviderPlatforms(allow.id(), "acme", "cloud", "1.2.3"))
+        .thenReturn(List.of(oldPlatform));
+    when(registry.findProviderState(allow.id(), "acme", "cloud", "1.2.3"))
+        .thenReturn(Optional.of(new TerraformRegistryDao.ProviderState(
+            allow.id(), "acme", "cloud", "1.2.3", 2, "old-sums", "old-signature", 1,
+            Instant.now())));
+    when(inspector.bufferAndInspect(any(), eq(filename), eq(false), eq("cloud")))
+        .thenReturn(buffered);
+    when(assets.find(allow, archivePath))
+        .thenReturn(Optional.of(oldAsset), Optional.of(replacement));
+    when(assets.blob(replacement)).thenReturn(blob(44, "new-sha", 11));
+    when(signing.active(allow)).thenReturn(
+        new TerraformSigningService.SigningMaterial(
+            2, "AABBCCDDEEFF0011", "public", "private", "pass"));
+    when(signing.sign(any(), any())).thenReturn("signature".getBytes(StandardCharsets.UTF_8));
+
+    MavenResponse response = service.put(
+        allow, upload, new ByteArrayInputStream("replacement".getBytes(StandardCharsets.UTF_8)),
+        "application/zip", "attachment; filename=\"" + filename + "\"", "alice", null);
+
+    assertEquals(201, response.status());
+    assertFalse(Files.exists(buffered));
+    ArgumentCaptor<TerraformRegistryDao.ProviderPlatform> platform =
+        ArgumentCaptor.forClass(TerraformRegistryDao.ProviderPlatform.class);
+    ArgumentCaptor<TerraformRegistryDao.ProviderState> state =
+        ArgumentCaptor.forClass(TerraformRegistryDao.ProviderState.class);
+    verify(registry).publishProvider(platform.capture(), state.capture());
+    assertEquals("new-sha", platform.getValue().sha256());
+    assertEquals(3, platform.getValue().revision());
+    assertEquals(3, state.getValue().revision());
+    ArgumentCaptor<byte[]> sums = ArgumentCaptor.forClass(byte[].class);
+    verify(assets).storeBytes(
+        eq(allow), eq("v1/providers/acme/cloud/1.2.3/metadata-r3/"
+            + "terraform-provider-cloud_1.2.3_SHA256SUMS"), sums.capture(),
+        eq("text/plain"), any());
+    assertEquals("new-sha  " + filename + "\n",
+        new String(sums.getValue(), StandardCharsets.UTF_8));
+  }
+
+  @Test
+  void rejectsExistingProviderPlatformWhenWritePolicyIsAllowOnce() throws Exception {
+    RepositoryRuntime allowOnce = runtime(
+        33, "terraform-once", RepositoryType.HOSTED, null, List.of(), "ALLOW_ONCE");
+    TerraformPath upload = paths.parse("v1/providers/acme/cloud/1.2.3/download/linux/amd64");
+    String filename = "terraform-provider-cloud_1.2.3_linux_amd64.zip";
+    String archivePath = "v1/providers/acme/cloud/1.2.3/package/linux/" + filename;
+    Path buffered = Files.createTempFile("terraform-provider-redeploy-denied-test", ".zip");
+    when(registry.tryAcquirePublishLease(anyString(), anyString(), any())).thenReturn(true);
+    when(registry.listProviderPlatforms(allowOnce.id(), "acme", "cloud", "1.2.3"))
+        .thenReturn(List.of(platform(allowOnce, archivePath, "old-sha", 1)));
+    when(assets.find(allowOnce, archivePath))
+        .thenReturn(Optional.of(asset(51, allowOnce, 52L, archivePath)));
+    when(inspector.bufferAndInspect(any(), eq(filename), eq(false), eq("cloud")))
+        .thenReturn(buffered);
+
+    assertThrows(MavenExceptions.WritePolicyDenied.class, () -> service.put(
+        allowOnce, upload, new ByteArrayInputStream(new byte[0]), "application/zip",
+        "attachment; filename=\"" + filename + "\"", "alice", null));
+
+    assertFalse(Files.exists(buffered));
+    verify(assets, never()).store(eq(allowOnce), anyString(), any(), anyString(), any(), any(), any());
+    verify(registry, never()).publishProvider(any(), any());
+  }
+
+  @Test
   void rewritesAndVerifiesProxyProviderMetadataAndRoutes() throws Exception {
     RepositoryRuntime proxyRuntime = runtime(
         40, "terraform-proxy", RepositoryType.PROXY, "https://registry.example/root", List.of());
