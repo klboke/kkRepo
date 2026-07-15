@@ -4,14 +4,20 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 
 public final class BrowseAssetVisibility {
   private static final String COMPOSER_INTERNAL_PREFIX = "_composer";
+  private static final String TERRAFORM_INTERNAL_PREFIX = ".terraform";
 
   private BrowseAssetVisibility() {
   }
 
   public static boolean hidden(RepositoryFormat format, String path) {
-    return format == RepositoryFormat.COMPOSER
-        && path != null
-        && (COMPOSER_INTERNAL_PREFIX.equals(path)
-            || path.startsWith(COMPOSER_INTERNAL_PREFIX + "/"));
+    if (path == null) {
+      return false;
+    }
+    return (format == RepositoryFormat.COMPOSER && under(path, COMPOSER_INTERNAL_PREFIX))
+        || (format == RepositoryFormat.TERRAFORM && under(path, TERRAFORM_INTERNAL_PREFIX));
+  }
+
+  private static boolean under(String path, String prefix) {
+    return prefix.equals(path) || path.startsWith(prefix + "/");
   }
 }

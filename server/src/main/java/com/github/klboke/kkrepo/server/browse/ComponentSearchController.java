@@ -54,7 +54,8 @@ public class ComponentSearchController {
     RepositoryFormat repositoryFormat = parseFormat(format);
     Map<RepositoryBrowseKey, Boolean> browseDecisions = new HashMap<>();
     List<ComponentSearchItem> items = componentDao.search(keyword, repositoryFormat, effectiveLimit).stream()
-        .filter(row -> !BrowseAssetVisibility.hidden(row.format(), row.name()))
+        .filter(row -> !BrowseAssetVisibility.hidden(row.format(), row.name())
+            && !BrowseAssetVisibility.hidden(row.format(), row.storagePath()))
         .filter(row -> repositoryBrowseAllowed(subject, row, browseDecisions))
         .map(ComponentSearchController::toItem)
         .toList();

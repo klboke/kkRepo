@@ -385,6 +385,7 @@ Browse/Search：
 - Provider 展示 namespace/type/version、protocols、platform、filename、SHA256、signing key、签名验证状态和 `required_providers` 配置片段。
 - Proxy 展示 discovery URL/service base、validator、last verified、stale/negative 状态和 blob cached 状态。
 - Group 展示 coordinate 的 source member、binding revision、strategy 与失效原因。
+- `.terraform/upstream`、`.terraform/routes` 等内部 cache/route asset 不进入 Browse、HTML listing、资产详情或 Search，也不能形成可下载的用户仓库内容；用户侧只展示规范的 module/provider 路径。
 - 搜索走关系数据库反范式索引和权限过滤，不引入 Elasticsearch。
 
 Nexus 迁移：

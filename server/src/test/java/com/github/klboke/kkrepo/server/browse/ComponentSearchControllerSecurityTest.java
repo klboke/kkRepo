@@ -108,6 +108,28 @@ class ComponentSearchControllerSecurityTest {
   }
 
   @Test
+  void searchHidesTerraformInternalRouteComponents() {
+    StubComponentDao components = new StubComponentDao();
+    components.rows = List.of(
+        row(1L, "terraform-proxy", RepositoryFormat.TERRAFORM, null,
+            "route-token.json", null, ".terraform/routes/route-token.json"),
+        row(2L, "terraform-proxy", RepositoryFormat.TERRAFORM, "acme",
+            "v1/providers/acme/cloud/1.2.3/package/linux/provider.zip", "1.2.3"));
+    RecordingSecurityService security = new RecordingSecurityService(permission -> AccessDecision.allow());
+    ComponentSearchController controller = controller(components, subject("alice"), null, security);
+
+    ComponentSearchController.ComponentSearchResponse response = controller.search(
+        null,
+        "terraform",
+        null,
+        request("GET", "/internal/search/components"));
+
+    assertEquals(1, response.count());
+    assertEquals(List.of("v1/providers/acme/cloud/1.2.3/package/linux/provider.zip"),
+        response.items().stream().map(ComponentSearchController.ComponentSearchItem::name).toList());
+  }
+
+  @Test
   void searchCanUseAnonymousSubjectWhenAnonymousAccessIsConfigured() {
     StubComponentDao components = new StubComponentDao();
     components.rows = List.of(row(1L, "pypi-group", RepositoryFormat.PYPI, null, "sample", "1.0.0"));

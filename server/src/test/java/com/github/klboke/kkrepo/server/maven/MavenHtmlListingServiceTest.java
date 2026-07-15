@@ -52,6 +52,21 @@ class MavenHtmlListingServiceTest {
     assertTrue(service.renderBrowse("composer-proxy", "_composer").isEmpty());
   }
 
+  @Test
+  void terraformBrowseHtmlHidesInternalCachePaths() {
+    MavenHtmlListingService service = new MavenHtmlListingService(
+        new FakeRepositoryDao(RepositoryFormat.TERRAFORM, RepositoryType.PROXY, "terraform-proxy"),
+        new TerraformBrowseNodeDao(),
+        new AssetDaoAdapter(null, null),
+        new ComponentDaoAdapter(null, null));
+
+    String html = service.renderBrowse("terraform-proxy", "").orElseThrow();
+
+    assertFalse(html.contains(".terraform"));
+    assertTrue(html.contains("v1/"));
+    assertTrue(service.renderBrowse("terraform-proxy", ".terraform/routes").isEmpty());
+  }
+
   private static class FakeRepositoryDao extends RepositoryDaoAdapter {
     private final RepositoryFormat format;
     private final RepositoryType type;
@@ -111,6 +126,24 @@ class MavenHtmlListingServiceTest {
               null,
               false,
               true));
+    }
+
+    private static BrowseChild directory(long id, String path) {
+      return new BrowseChild(
+          id, path, path, 0, null, null, null, null, null, null, true, true);
+    }
+  }
+
+  private static class TerraformBrowseNodeDao extends BrowseNodeDaoAdapter {
+    TerraformBrowseNodeDao() {
+      super(null);
+    }
+
+    @Override
+    public List<BrowseChild> listChildren(long repositoryId, String parentPath) {
+      return List.of(
+          directory(1L, ".terraform"),
+          directory(2L, "v1"));
     }
 
     private static BrowseChild directory(long id, String path) {

@@ -64,6 +64,24 @@ class BrowseAssetDetailServiceTest {
   }
 
   @Test
+  void terraformInternalRouteDetailIsNotExposedAsDownloadableAsset() {
+    RepositoryRecord repository = repository(
+        1L, "terraform-proxy", RepositoryFormat.TERRAFORM, RepositoryType.PROXY);
+    StubAssetDao assets = new StubAssetDao(Map.of(), Map.of());
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(),
+        assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    ResponseStatusException error = assertThrows(ResponseStatusException.class,
+        () -> service.detail(repository, ".terraform/routes/token.json", null));
+
+    assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode());
+    assertEquals(List.of(), assets.pathLookups);
+  }
+
+  @Test
   void composerProxyDetailInfersPackageCoordinatesFromNexusPathForUsage() {
     RepositoryRecord repository = repository(
         1L, "composer-proxy", RepositoryFormat.COMPOSER, RepositoryType.PROXY);
