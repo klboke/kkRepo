@@ -77,6 +77,21 @@ class TerraformArchiveInspectorTest {
   }
 
   @Test
+  void acceptsJsonSyntaxOnlyModuleArchive() throws Exception {
+    Path module = null;
+    try {
+      module = inspector.bufferAndInspect(
+          new ByteArrayInputStream(zipEntry(
+              "fixture/main.tf.json", "{\"terraform\":{}}".getBytes(StandardCharsets.UTF_8))),
+          "module.zip", true, null);
+
+      assertTrue(Files.size(module) > 0);
+    } finally {
+      if (module != null) Files.deleteIfExists(module);
+    }
+  }
+
+  @Test
   void rejectsArchivesWithoutExpectedContentAndUnsafeZipEntries() throws Exception {
     byte[] noModule = zipEntry("fixture/README.md", "readme".getBytes(StandardCharsets.UTF_8));
     byte[] wrongProvider = zipEntry(

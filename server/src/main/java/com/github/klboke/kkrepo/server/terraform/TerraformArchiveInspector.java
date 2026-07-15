@@ -47,7 +47,7 @@ final class TerraformArchiveInspector {
           : inspectTar(file, filename, module, providerName);
       if (!valid) {
         throw bad(module
-            ? "Terraform module archive must contain at least one .tf file"
+            ? "Terraform module archive must contain at least one .tf or .tf.json file"
             : "Terraform provider archive does not contain the expected provider binary");
       }
       return file;
@@ -128,7 +128,7 @@ final class TerraformArchiveInspector {
   private static boolean matches(String name, boolean module, String providerName) {
     String leaf = name.replace('\\', '/');
     leaf = leaf.substring(leaf.lastIndexOf('/') + 1);
-    return module ? leaf.endsWith(".tf")
+    return module ? leaf.endsWith(".tf") || leaf.endsWith(".tf.json")
         : leaf.startsWith("terraform-provider-" + providerName);
   }
 
