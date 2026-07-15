@@ -226,7 +226,7 @@ public class TerraformService {
   private MavenResponse putModule(
       RepositoryRuntime runtime, TerraformPath path, InputStream body, String contentType,
       String actor, String ip) {
-    enforceWrite(runtime, path.rawPath());
+    enforceModuleWrite(runtime, path);
     Path buffered = inspector.bufferAndInspect(body, path.filename(), true, null);
     try (InputStream in = Files.newInputStream(buffered)) {
       assets.store(runtime, path.rawPath(), in, contentType == null ? OCTET : contentType,
@@ -322,7 +322,7 @@ public class TerraformService {
   private MavenResponse proxyMetadata(RepositoryRuntime runtime, TerraformPath path, boolean headOnly) {
     String remote = remoteUrl(runtime, path);
     String cachePath = ".terraform/upstream/" + sha256(remote) + ".json";
-    MavenResponse cached = proxy.getAssetFromUrl(runtime, cachePath, remote, false);
+    MavenResponse cached = proxy.getMetadataFromUrl(runtime, cachePath, remote, false);
     byte[] bytes = responseBytes(cached);
     return bytes(bytes, JSON, headOnly);
   }
@@ -359,7 +359,8 @@ public class TerraformService {
       RepositoryRuntime runtime, TerraformPath path, RequestUrls urls, boolean headOnly) {
     String remote = remoteUrl(runtime, path);
     String cachePath = ".terraform/upstream/" + sha256(remote) + ".json";
-    Map<String, Object> body = readJson(responseBytes(proxy.getAssetFromUrl(runtime, cachePath, remote, false)));
+    Map<String, Object> body = readJson(responseBytes(
+        proxy.getMetadataFromUrl(runtime, cachePath, remote, false)));
     String filename = string(body.get("filename"));
     TerraformPathParser.requireFilename(filename);
     String download = absolute(remote, string(body.get("download_url")));
@@ -373,8 +374,10 @@ public class TerraformService {
         + "/metadata-proxy/" + sumsFile;
     String localSignature = localSums + ".sig";
     String expected = string(body.get("shasum"));
-    byte[] shasumsBytes = responseBytes(proxy.getAssetFromUrl(runtime, localSums, sums, false));
-    byte[] signatureBytes = responseBytes(proxy.getAssetFromUrl(runtime, localSignature, signature, false));
+    byte[] shasumsBytes = responseBytes(
+        proxy.getMetadataFromUrl(runtime, localSums, sums, false));
+    byte[] signatureBytes = responseBytes(
+        proxy.getMetadataFromUrl(runtime, localSignature, signature, false));
     verifyChecksumEntry(shasumsBytes, expected, filename);
     signatureVerifier.verify(shasumsBytes, signatureBytes, upstreamPublicKeys(body));
     storeRoute(runtime, localDownload, download, expected);
@@ -573,7 +576,8 @@ public class TerraformService {
     String root = ensureSlash(runtime.proxyRemoteUrl());
     String remote = root + ".well-known/terraform.json";
     String local = ".terraform/upstream/discovery.json";
-    Map<String, Object> document = readJson(responseBytes(proxy.getAssetFromUrl(runtime, local, remote, false)));
+    Map<String, Object> document = readJson(responseBytes(
+        proxy.getMetadataFromUrl(runtime, local, remote, false)));
     String value = string(document.get(key));
     if (value == null || value.isBlank()) {
       throw new MavenExceptions.BadUpstreamException("Terraform discovery omitted " + key);
@@ -599,6 +603,26 @@ public class TerraformService {
     if ("ALLOW_ONCE".equals(policy) && assets.find(runtime, path).isPresent()) {
       throw new MavenExceptions.WritePolicyDenied("Terraform coordinate already exists");
     }
+  }
+
+  private void enforceModuleWrite(RepositoryRuntime runtime, TerraformPath path) {
+    String policy = runtime.writePolicy() == null
+        ? "ALLOW_ONCE" : runtime.writePolicy().toUpperCase(Locale.ROOT);
+    if ("DENY".equals(policy)) {
+      throw new MavenExceptions.WritePolicyDenied("Repository write policy is DENY");
+    }
+    String prefix = "v1/modules/" + path.namespace() + "/" + path.name() + "/"
+        + path.system() + "/" + path.version() + "/";
+    List<AssetRecord> existing = assets.list(runtime, prefix).stream()
+        .filter(asset -> asset.path().startsWith(prefix))
+        .filter(asset -> paths.parse(asset.path()).kind() == TerraformPath.Kind.MODULE_ARCHIVE)
+        .toList();
+    if (existing.isEmpty()) return;
+    if ("ALLOW".equals(policy) && existing.size() == 1
+        && existing.getFirst().path().equals(path.rawPath())) {
+      return;
+    }
+    throw new MavenExceptions.WritePolicyDenied("Terraform module version already exists");
   }
 
   private String filename(String contentDisposition) {

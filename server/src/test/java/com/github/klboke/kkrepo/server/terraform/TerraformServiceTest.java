@@ -122,6 +122,19 @@ class TerraformServiceTest {
         () -> service.put(runtime(2, "denied", RepositoryType.HOSTED, null, List.of(), "DENY"),
             paths.parse("v1/modules/acme/network/aws/3.0.0/new.zip"),
             new ByteArrayInputStream(new byte[0]), null, null, "alice", null));
+    assertThrows(MavenExceptions.WritePolicyDenied.class,
+        () -> service.put(hosted,
+            paths.parse("v1/modules/acme/network/aws/1.0.0/alternate.zip"),
+            new ByteArrayInputStream(new byte[0]), null, null, "alice", null));
+    RepositoryRuntime allow = runtime(
+        4, "allow", RepositoryType.HOSTED, null, List.of(), "ALLOW");
+    when(assets.list(allow, "v1/modules/acme/network/aws/1.0.0/"))
+        .thenReturn(List.of(asset(
+            4, allow, 14L, "v1/modules/acme/network/aws/1.0.0/network.zip")));
+    assertThrows(MavenExceptions.WritePolicyDenied.class,
+        () -> service.put(allow,
+            paths.parse("v1/modules/acme/network/aws/1.0.0/alternate.zip"),
+            new ByteArrayInputStream(new byte[0]), null, null, "alice", null));
     assertThrows(MavenExceptions.MethodNotAllowed.class,
         () -> service.put(runtime(3, "proxy", RepositoryType.PROXY, "https://registry.example", List.of()),
             paths.parse("v1/modules/acme/network/aws/3.0.0/new.zip"),
@@ -252,7 +265,7 @@ class TerraformServiceTest {
         "shasum", checksum,
         "signing_keys", Map.of("gpg_public_keys", List.of(Map.of("ascii_armor", "PUBLIC"))));
     byte[] sums = (checksum + "  " + filename + "\n").getBytes(StandardCharsets.UTF_8);
-    when(proxy.getAssetFromUrl(eq(proxyRuntime), anyString(), anyString(), anyBoolean()))
+    when(proxy.getMetadataFromUrl(eq(proxyRuntime), anyString(), anyString(), anyBoolean()))
         .thenAnswer(invocation -> {
           String local = invocation.getArgument(1);
           String remote = invocation.getArgument(2);
@@ -269,9 +282,13 @@ class TerraformServiceTest {
             return response(mapper.writeValueAsBytes(provider), "application/json");
           }
           if (remote.endsWith("_SHA256SUMS")) return response(sums, "text/plain");
-          if (remote.endsWith("_SHA256SUMS.sig")) return response("sig".getBytes(), "application/octet-stream");
-          return response("archive".getBytes(), "application/zip");
+          if (remote.endsWith("_SHA256SUMS.sig")) {
+            return response("sig".getBytes(StandardCharsets.UTF_8), "application/octet-stream");
+          }
+          return response("archive".getBytes(StandardCharsets.UTF_8), "application/zip");
         });
+    when(proxy.getAssetFromUrl(eq(proxyRuntime), anyString(), anyString(), anyBoolean()))
+        .thenReturn(MavenResponse.noBody(200));
 
     Map<String, Object> versions = json(service.get(
         proxyRuntime, paths.parse("v1/providers/acme/cloud/versions"), BASE, false));
@@ -381,7 +398,7 @@ class TerraformServiceTest {
   void rejectsMalformedProxyProviderMetadata() throws Exception {
     RepositoryRuntime proxyRuntime = runtime(
         70, "terraform-proxy", RepositoryType.PROXY, "https://registry.example", List.of());
-    when(proxy.getAssetFromUrl(eq(proxyRuntime), anyString(), anyString(), anyBoolean()))
+    when(proxy.getMetadataFromUrl(eq(proxyRuntime), anyString(), anyString(), anyBoolean()))
         .thenAnswer(invocation -> {
           String local = invocation.getArgument(1);
           if (local.equals(".terraform/upstream/discovery.json")) {

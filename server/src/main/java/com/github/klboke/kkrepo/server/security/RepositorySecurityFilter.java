@@ -160,7 +160,13 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     }
     TerraformPath path = TERRAFORM_PATH_PARSER.parse(target.path());
     if (path.kind() == TerraformPath.Kind.MODULE_ARCHIVE) {
-      return assetDao.findAssetByPath(repository.id(), target.path()).isPresent()
+      String prefix = "v1/modules/" + path.namespace() + "/" + path.name() + "/"
+          + path.system() + "/" + path.version() + "/";
+      boolean exists = assetDao.listAssetsByPrefix(repository.id(), prefix).stream()
+          .filter(asset -> asset.path().startsWith(prefix))
+          .anyMatch(asset -> TERRAFORM_PATH_PARSER.parse(asset.path()).kind()
+              == TerraformPath.Kind.MODULE_ARCHIVE);
+      return exists
           ? List.of(PermissionAction.EDIT)
           : List.of(PermissionAction.ADD);
     }

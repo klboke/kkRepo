@@ -25,6 +25,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.lang.reflect.Proxy;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -456,6 +457,8 @@ class RepositorySecurityFilterTest {
     String path = "v1/modules/acme/network/aws/1.2.3/module.zip";
     assertTerraformModuleAction(path, Set.of(), PermissionAction.ADD);
     assertTerraformModuleAction(path, Set.of(path), PermissionAction.EDIT);
+    assertTerraformModuleAction(
+        "v1/modules/acme/network/aws/1.2.3/alternate.zip", Set.of(path), PermissionAction.EDIT);
   }
 
   @Test
@@ -1071,12 +1074,14 @@ class RepositorySecurityFilterTest {
     }
 
     @Override
-    public Optional<AssetRecord> findAssetByPath(long repositoryId, String path) {
-      if (!existingPaths.contains(path)) return Optional.empty();
-      return Optional.of(new AssetRecord(
-          1L, repositoryId, null, null, RepositoryFormat.TERRAFORM, path, new byte[32],
-          path.substring(path.lastIndexOf('/') + 1), "terraform", "application/zip", 1L,
-          null, Instant.EPOCH, Map.of()));
+    public List<AssetRecord> listAssetsByPrefix(long repositoryId, String prefix) {
+      return existingPaths.stream()
+          .filter(path -> path.startsWith(prefix))
+          .map(path -> new AssetRecord(
+              1L, repositoryId, null, null, RepositoryFormat.TERRAFORM, path, new byte[32],
+              path.substring(path.lastIndexOf('/') + 1), "terraform", "application/zip", 1L,
+              null, Instant.EPOCH, Map.of()))
+          .toList();
     }
   }
 

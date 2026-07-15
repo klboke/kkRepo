@@ -100,9 +100,24 @@ public class RawProxyService {
   }
 
   public MavenResponse getAssetFromUrl(RepositoryRuntime runtime, String path, String remoteUrl, boolean headOnly) {
+    return getAssetFromUrl(
+        runtime, path, remoteUrl, runtime.contentMaxAgeMinutesOrDefault(),
+        HttpRemoteFetcher.TimeoutProfile.CONTENT, headOnly);
+  }
+
+  public MavenResponse getMetadataFromUrl(
+      RepositoryRuntime runtime, String path, String remoteUrl, boolean headOnly) {
+    return getAssetFromUrl(
+        runtime, path, remoteUrl, runtime.metadataMaxAgeMinutesOrDefault(),
+        HttpRemoteFetcher.TimeoutProfile.METADATA, headOnly);
+  }
+
+  private MavenResponse getAssetFromUrl(
+      RepositoryRuntime runtime, String path, String remoteUrl, int maxAgeMinutes,
+      HttpRemoteFetcher.TimeoutProfile timeoutProfile, boolean headOnly) {
     Optional<CachedAssetMetadata> cached = lookupCached(runtime, path);
     Instant now = Instant.now();
-    if (cached.isPresent() && isFresh(cached.get(), runtime.contentMaxAgeMinutesOrDefault(), now)) {
+    if (cached.isPresent() && isFresh(cached.get(), maxAgeMinutes, now)) {
       return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
     }
     if (negativeCache.isNotFoundCached(runtime, path)) {
@@ -114,7 +129,7 @@ public class RawProxyService {
       }
       throw new MavenExceptions.BadUpstreamException("Upstream temporarily blocked: " + remoteUrl);
     }
-    return fetchAndCacheUrl(runtime, path, remoteUrl, cached, headOnly, now);
+    return fetchAndCacheUrl(runtime, path, remoteUrl, cached, headOnly, now, timeoutProfile);
   }
 
   private Optional<CachedAssetMetadata> lookupCached(RepositoryRuntime runtime, String path) {
@@ -150,7 +165,8 @@ public class RawProxyService {
       String remoteUrl,
       Optional<CachedAssetMetadata> cached,
       boolean headOnly,
-      Instant now) {
+      Instant now,
+      HttpRemoteFetcher.TimeoutProfile timeoutProfile) {
     String etag = null;
     Instant lastModified = null;
     if (cached.isPresent() && cached.get().blob() != null) {
@@ -159,7 +175,7 @@ public class RawProxyService {
       lastModified = instantAttr(attrs, "remoteLastModified");
     }
     HttpRemoteFetcher.Request req = cachePopulationRequest(
-        runtime, remoteUrl, etag, lastModified);
+        runtime, remoteUrl, etag, lastModified).withTimeoutProfile(timeoutProfile);
     return fetchAndCache(runtime, path, cached, headOnly, now, req);
   }
 
