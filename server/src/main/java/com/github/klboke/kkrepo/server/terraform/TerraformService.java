@@ -432,7 +432,12 @@ public class TerraformService {
     Map<String, Object> body = readJson(responseBytes(
         proxy.getMetadataFromUrl(runtime, cachePath, remote, false)));
     String filename = string(body.get("filename"));
-    TerraformPathParser.requireFilename(filename);
+    try {
+      TerraformPathParser.requireFilename(filename);
+    } catch (IllegalArgumentException e) {
+      throw new MavenExceptions.BadUpstreamException(
+          "Invalid Terraform upstream provider filename", e);
+    }
     String download = absolute(remote, string(body.get("download_url")));
     String sums = absolute(remote, string(body.get("shasums_url")));
     String signature = absolute(remote, string(body.get("shasums_signature_url")));
@@ -554,6 +559,8 @@ public class TerraformService {
   private MavenResponse mergeGroupVersions(
       RepositoryRuntime group, TerraformPath path, RequestUrls urls, boolean headOnly) {
     Map<String, Map<String, Object>> versions = new LinkedHashMap<>();
+    MavenExceptions.BadUpstreamException lastUpstreamFailure = null;
+    boolean producedMetadata = false;
     for (RepositoryRuntime member : group.members()) {
       try {
         Map<String, Object> body = readJson(responseBytes(get(member, path, urls, false)));
@@ -575,9 +582,15 @@ public class TerraformService {
             }
           }
         }
+        producedMetadata = true;
+      } catch (MavenExceptions.BadUpstreamException e) {
+        lastUpstreamFailure = e;
       } catch (RuntimeException ignored) {
         // Continue with healthy members.
       }
+    }
+    if (!producedMetadata && lastUpstreamFailure != null) {
+      throw lastUpstreamFailure;
     }
     List<Map<String, Object>> sorted = TerraformVersions.descending(versions.keySet()).stream()
         .map(versions::get).toList();

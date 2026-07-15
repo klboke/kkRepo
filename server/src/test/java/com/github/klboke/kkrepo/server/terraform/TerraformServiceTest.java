@@ -548,6 +548,54 @@ class TerraformServiceTest {
   }
 
   @Test
+  void wrapsInvalidProxyProviderFilenameAsBadUpstream() throws Exception {
+    RepositoryRuntime proxyRuntime = runtime(
+        72, "terraform-proxy", RepositoryType.PROXY, "https://registry.example", List.of());
+    when(proxy.getMetadataFromUrl(eq(proxyRuntime), anyString(), anyString(), anyBoolean()))
+        .thenAnswer(invocation -> {
+          String local = invocation.getArgument(1);
+          if (local.startsWith(".terraform/upstream/discovery-")) {
+            return response(mapper.writeValueAsBytes(Map.of("providers.v1", "/v1/providers/")),
+                "application/json");
+          }
+          return response(mapper.writeValueAsBytes(Map.of("filename", "../provider.zip")),
+              "application/json");
+        });
+
+    MavenExceptions.BadUpstreamException thrown = assertThrows(
+        MavenExceptions.BadUpstreamException.class,
+        () -> service.get(proxyRuntime,
+            paths.parse("v1/providers/acme/cloud/1.2.3/download/linux/amd64"), BASE, false));
+
+    assertTrue(thrown.getMessage().contains("provider filename"));
+    assertTrue(thrown.getCause() instanceof IllegalArgumentException);
+  }
+
+  @Test
+  void propagatesGroupUpstreamFailureWhenNoMemberProducesVersionMetadata() throws Exception {
+    RepositoryRuntime unavailable = runtime(
+        73, "terraform-proxy", RepositoryType.PROXY, "https://registry.example", List.of());
+    RepositoryRuntime group = runtime(
+        74, "terraform-group", RepositoryType.GROUP, null, List.of(unavailable));
+    when(proxy.getMetadataFromUrl(eq(unavailable), anyString(), anyString(), anyBoolean()))
+        .thenAnswer(invocation -> {
+          String local = invocation.getArgument(1);
+          if (local.startsWith(".terraform/upstream/discovery-")) {
+            return response(mapper.writeValueAsBytes(Map.of("providers.v1", "/v1/providers/")),
+                "application/json");
+          }
+          throw new MavenExceptions.BadUpstreamException("registry unavailable");
+        });
+
+    MavenExceptions.BadUpstreamException thrown = assertThrows(
+        MavenExceptions.BadUpstreamException.class,
+        () -> service.get(
+            group, paths.parse("v1/providers/acme/cloud/versions"), BASE, false));
+
+    assertEquals("registry unavailable", thrown.getMessage());
+  }
+
+  @Test
   void keysDiscoveryMetadataByConfiguredRemoteUrl() throws Exception {
     RepositoryRuntime original = runtime(
         71, "terraform-proxy", RepositoryType.PROXY,
