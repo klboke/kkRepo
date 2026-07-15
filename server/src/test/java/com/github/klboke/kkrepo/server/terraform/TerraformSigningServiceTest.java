@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.terraform;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -11,6 +12,7 @@ import static org.mockito.Mockito.when;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
+import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
@@ -62,5 +64,15 @@ class TerraformSigningServiceTest {
         primary);
     signature.update(contents);
     assertTrue(signature.verify());
+
+    TerraformSignatureVerifier verifier = new TerraformSignatureVerifier();
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> verifier.verify("tampered".getBytes(StandardCharsets.UTF_8), detached,
+            List.of(material.publicArmor())));
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> verifier.verify(contents, detached, List.of()));
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> verifier.verify(contents, "not a signature".getBytes(StandardCharsets.UTF_8),
+            List.of(material.publicArmor())));
   }
 }
