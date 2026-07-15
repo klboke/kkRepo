@@ -63,6 +63,7 @@
    - 支持 registry.terraform.io；OpenTofu registry 和 registry.coder.com 在 Nexus 3.94+ reference suite 通过后进入兼容范围。
    - 缓存 module/provider version metadata、module archive、provider archive、SHA256SUMS、signature 和 public signing key metadata。
    - 把上游 `X-Terraform-Get`、`download_url`、`shasums_url` 和 `shasums_signature_url` 改写到本地 repository path。
+   - Provider proxy 的本地 `download_url` 必须保留 `{os}/{arch}`；即使第三方上游为多个平台复用 `provider.zip` 等同名 archive，也不能让 route、checksum 或 cache asset 相互覆盖。
    - Provider archive 必须同时通过响应中的 `shasum` 和 SHA256SUMS 对应行校验；签名和 signing key 原样保留，不由 proxy 冒充上游重新签名。
    - 支持 metadata/content TTL、conditional revalidation、共享 negative cache、auto-block、stale policy、远端认证和 redirect/SSRF 防护。
 

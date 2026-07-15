@@ -421,7 +421,9 @@ class TerraformServiceTest {
   void rewritesAndVerifiesProxyProviderMetadataAndRoutes() throws Exception {
     RepositoryRuntime proxyRuntime = runtime(
         40, "terraform-proxy", RepositoryType.PROXY, "https://registry.example/root", List.of());
-    String filename = "terraform-provider-cloud_1.2.3_linux_amd64.zip";
+    // Some third-party registries use the same generic filename for every platform. The local
+    // route must retain both os and arch so one platform cannot replace another's route.
+    String filename = "provider.zip";
     String checksum = "0123456789abcdef";
     Map<String, Object> provider = Map.of(
         "protocols", List.of("5.0", "6.0"),
@@ -433,6 +435,8 @@ class TerraformServiceTest {
         "shasums_signature_url", "../../packages/terraform-provider-cloud_1.2.3_SHA256SUMS.sig",
         "shasum", checksum,
         "signing_keys", Map.of("gpg_public_keys", List.of(Map.of("ascii_armor", "PUBLIC"))));
+    Map<String, Object> providerArm64 = new java.util.LinkedHashMap<>(provider);
+    providerArm64.put("arch", "arm64");
     byte[] sums = (checksum + "  " + filename + "\n").getBytes(StandardCharsets.UTF_8);
     byte[] signature = "sig".getBytes(StandardCharsets.UTF_8);
     when(proxy.getMetadataFromUrl(eq(proxyRuntime), anyString(), anyString(), anyBoolean()))
@@ -450,6 +454,9 @@ class TerraformServiceTest {
           }
           if (remote.endsWith("/download/linux/amd64")) {
             return response(mapper.writeValueAsBytes(provider), "application/json");
+          }
+          if (remote.endsWith("/download/linux/arm64")) {
+            return response(mapper.writeValueAsBytes(providerArm64), "application/json");
           }
           if (remote.endsWith("_SHA256SUMS")) return response(sums, "text/plain");
           if (remote.endsWith("_SHA256SUMS.sig")) {
@@ -470,12 +477,26 @@ class TerraformServiceTest {
     Map<String, Object> rewritten = json(service.get(
         proxyRuntime, paths.parse("v1/providers/acme/cloud/1.2.3/download/linux/amd64"),
         BASE, "url-token", false));
-    assertTrue(rewritten.get("download_url").toString().contains("/v1/providers/url-token/"));
+    assertEquals(BASE + "/v1/providers/url-token/acme/cloud/1.2.3/download/linux/amd64/"
+        + filename, rewritten.get("download_url"));
     assertTrue(rewritten.get("shasums_url").toString().contains("metadata-proxy"));
-    verify(signatureVerifier).verify(eq(sums), any(), eq(List.of("PUBLIC")));
+    Map<String, Object> rewrittenArm64 = json(service.get(
+        proxyRuntime, paths.parse("v1/providers/acme/cloud/1.2.3/download/linux/arm64"),
+        BASE, false));
+    assertEquals(BASE + "/v1/providers/acme/cloud/1.2.3/download/linux/arm64/"
+        + filename, rewrittenArm64.get("download_url"));
+    verify(signatureVerifier, times(2)).verify(eq(sums), any(), eq(List.of("PUBLIC")));
     ArgumentCaptor<byte[]> routeBodies = ArgumentCaptor.forClass(byte[].class);
-    verify(assets, times(3)).storeBytes(eq(proxyRuntime), anyString(), routeBodies.capture(),
-        eq("application/json"), any());
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<Map<String, Object>> routeAttributes = ArgumentCaptor.forClass(Map.class);
+    verify(assets, times(6)).storeBytes(eq(proxyRuntime), anyString(), routeBodies.capture(),
+        eq("application/json"), routeAttributes.capture());
+    assertTrue(routeAttributes.getAllValues().stream().anyMatch(attributes ->
+        ("v1/providers/acme/cloud/1.2.3/download/linux/amd64/" + filename)
+            .equals(attributes.get("targetPath"))));
+    assertTrue(routeAttributes.getAllValues().stream().anyMatch(attributes ->
+        ("v1/providers/acme/cloud/1.2.3/download/linux/arm64/" + filename)
+            .equals(attributes.get("targetPath"))));
     List<Map<String, Object>> routes = routeBodies.getAllValues().stream()
         .map(bytes -> {
           try {
@@ -491,7 +512,7 @@ class TerraformServiceTest {
         .filter(route -> route.get("remoteUrl").toString().endsWith("_SHA256SUMS.sig"))
         .findFirst().orElseThrow().get("sha256"));
 
-    String localArchive = "v1/providers/acme/cloud/1.2.3/package/linux/" + filename;
+    String localArchive = "v1/providers/acme/cloud/1.2.3/download/linux/amd64/" + filename;
     when(assets.bytes(eq(proxyRuntime), anyString())).thenReturn(mapper.writeValueAsBytes(Map.of(
         "remoteUrl", "https://registry.example/packages/" + filename, "sha256", checksum)));
     AssetRecord archive = asset(41, proxyRuntime, 42L, localArchive);

@@ -451,7 +451,7 @@ public class TerraformService {
     String sums = absolute(remote, string(body.get("shasums_url")));
     String signature = absolute(remote, string(body.get("shasums_signature_url")));
     String localDownload = "v1/providers/" + path.namespace() + "/" + path.name() + "/" + path.version()
-        + "/package/" + path.os() + "/" + filename;
+        + "/download/" + path.os() + "/" + path.arch() + "/" + filename;
     String sumsFile = safeRemoteFilename(sums,
         "terraform-provider-" + path.name() + "_" + path.version() + "_SHA256SUMS");
     String localSums = "v1/providers/" + path.namespace() + "/" + path.name() + "/" + path.version()
