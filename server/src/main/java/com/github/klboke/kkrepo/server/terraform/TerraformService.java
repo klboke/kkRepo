@@ -679,7 +679,7 @@ public class TerraformService {
     if (value == null || value.isBlank()) {
       throw new MavenExceptions.BadUpstreamException("Terraform discovery omitted " + key);
     }
-    return URI.create(root).resolve(value).toString();
+    return URI.create(remote).resolve(value).toString();
   }
 
   private void storeRoute(RepositoryRuntime runtime, String localPath, String remoteUrl, String expectedSha256) {

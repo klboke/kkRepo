@@ -631,6 +631,32 @@ class TerraformServiceTest {
             && path.endsWith(".json")));
   }
 
+  @Test
+  void resolvesRelativeServiceAgainstDiscoveryDocumentUrl() throws Exception {
+    RepositoryRuntime proxyRuntime = runtime(
+        75, "terraform-proxy", RepositoryType.PROXY,
+        "https://registry.example/prefix/", List.of());
+    List<String> requestedRemotes = new java.util.ArrayList<>();
+    when(proxy.getMetadataFromUrl(eq(proxyRuntime), anyString(), anyString(), anyBoolean()))
+        .thenAnswer(invocation -> {
+          String remote = invocation.getArgument(2);
+          requestedRemotes.add(remote);
+          if (remote.endsWith("/.well-known/terraform.json")) {
+            return response(mapper.writeValueAsBytes(Map.of(
+                "modules.v1", "terraform/modules/v1/")), "application/json");
+          }
+          return response(mapper.writeValueAsBytes(Map.of("modules", List.of())),
+              "application/json");
+        });
+
+    service.get(proxyRuntime,
+        paths.parse("v1/modules/acme/network/aws/versions"), BASE, false);
+
+    assertTrue(requestedRemotes.contains(
+        "https://registry.example/prefix/.well-known/terraform/modules/v1/"
+            + "acme/network/aws/versions"));
+  }
+
   private Map<String, Object> json(MavenResponse response) throws Exception {
     try (var body = response.body()) {
       return mapper.readValue(body, new TypeReference<>() {});
