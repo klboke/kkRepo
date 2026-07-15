@@ -86,13 +86,15 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       try {
         String presentedPath = target.path();
         TerraformPathParser.ParsedRequest parsed = TERRAFORM_PATH_PARSER.parseRequestPath(target.path());
-        target = target.withPath(parsed.canonicalPath());
-        terraformUrlToken = parsed.credentialSegment();
-        request.setAttribute(NORMALIZED_REPOSITORY_PATH_ATTRIBUTE, parsed.canonicalPath());
-        if (terraformUrlToken != null) {
-          String[] segments = presentedPath.split("/", 4);
-          if (segments.length >= 3) {
-            request.setAttribute(TERRAFORM_URL_TOKEN_SEGMENT_ATTRIBUTE, segments[2]);
+        if (parsed.path().kind() != TerraformPath.Kind.UNKNOWN) {
+          target = target.withPath(parsed.canonicalPath());
+          terraformUrlToken = parsed.credentialSegment();
+          request.setAttribute(NORMALIZED_REPOSITORY_PATH_ATTRIBUTE, parsed.canonicalPath());
+          if (terraformUrlToken != null) {
+            String[] segments = presentedPath.split("/", 4);
+            if (segments.length >= 3) {
+              request.setAttribute(TERRAFORM_URL_TOKEN_SEGMENT_ATTRIBUTE, segments[2]);
+            }
           }
         }
       } catch (IllegalArgumentException e) {

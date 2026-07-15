@@ -96,6 +96,8 @@ class TerraformArchiveInspectorTest {
     byte[] noModule = zipEntry("fixture/README.md", "readme".getBytes(StandardCharsets.UTF_8));
     byte[] wrongProvider = zipEntry(
         "terraform-provider-other", "binary".getBytes(StandardCharsets.UTF_8));
+    byte[] providerPrefixCollision = zipEntry(
+        "terraform-provider-fixture-extra", "binary".getBytes(StandardCharsets.UTF_8));
     byte[] traversal = zipEntry("../escape.tf", "terraform {}".getBytes(StandardCharsets.UTF_8));
 
     assertThrows(MavenExceptions.BadRequestException.class,
@@ -103,6 +105,9 @@ class TerraformArchiveInspectorTest {
     assertThrows(MavenExceptions.BadRequestException.class,
         () -> inspector.bufferAndInspect(
             new ByteArrayInputStream(wrongProvider), "provider.zip", false, "fixture"));
+    assertThrows(MavenExceptions.BadRequestException.class,
+        () -> inspector.bufferAndInspect(
+            new ByteArrayInputStream(providerPrefixCollision), "provider.zip", false, "fixture"));
     assertThrows(MavenExceptions.BadRequestException.class,
         () -> inspector.bufferAndInspect(new ByteArrayInputStream(traversal), "module.zip", true, null));
   }

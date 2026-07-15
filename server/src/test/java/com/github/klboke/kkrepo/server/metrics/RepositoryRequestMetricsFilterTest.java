@@ -215,6 +215,34 @@ class RepositoryRequestMetricsFilterTest {
   }
 
   @Test
+  void redactsUncanonicalizedTerraformPathsFromFailureLogs() throws Exception {
+    SimpleMeterRegistry registry = new SimpleMeterRegistry();
+    RepositoryRequestMetricsFilter filter = new RepositoryRequestMetricsFilter(
+        new KkRepoMetrics(registry), true, "");
+    String token = "GenericToken.super-secret-value";
+    MockHttpServletRequest request = new MockHttpServletRequest(
+        "GET", "/repository/terraform-group/v1/modules/" + token + "/bad");
+    MockHttpServletResponse response = new MockHttpServletResponse();
+    FilterChain chain = (req, resp) -> {
+      req.setAttribute(
+          RepositorySecurityFilter.REPOSITORY_RECORD_ATTRIBUTE,
+          repository("terraform-group", RepositoryFormat.TERRAFORM, RepositoryType.GROUP));
+      ((MockHttpServletResponse) resp).sendError(404);
+    };
+
+    ListAppender<ILoggingEvent> appender = attachAppender();
+    try {
+      filter.doFilter(request, response, chain);
+    } finally {
+      detachAppender(appender);
+    }
+
+    String message = appender.list.get(0).getFormattedMessage();
+    assertTrue(message.contains("path=<redacted-terraform-path>"));
+    assertFalse(message.contains(token));
+  }
+
+  @Test
   void doesNotLogNonSuccessRepositoryRequestDetailsWhenDisabled() throws Exception {
     SimpleMeterRegistry registry = new SimpleMeterRegistry();
     RepositoryRequestMetricsFilter filter = new RepositoryRequestMetricsFilter(new KkRepoMetrics(registry), false, "404");

@@ -128,8 +128,11 @@ final class TerraformArchiveInspector {
   private static boolean matches(String name, boolean module, String providerName) {
     String leaf = name.replace('\\', '/');
     leaf = leaf.substring(leaf.lastIndexOf('/') + 1);
-    return module ? leaf.endsWith(".tf") || leaf.endsWith(".tf.json")
-        : leaf.startsWith("terraform-provider-" + providerName);
+    if (module) return leaf.endsWith(".tf") || leaf.endsWith(".tf.json");
+    String executable = "terraform-provider-" + providerName;
+    if (!leaf.startsWith(executable)) return false;
+    String suffix = leaf.substring(executable.length());
+    return suffix.isEmpty() || suffix.startsWith("_") || ".exe".equalsIgnoreCase(suffix);
   }
 
   private static void drain(InputStream in, State state) throws IOException {

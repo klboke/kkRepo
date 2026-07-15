@@ -414,7 +414,7 @@ public class TerraformService {
         if (upstream == null || upstream.isBlank()) {
           throw new MavenExceptions.BadUpstreamException("Terraform upstream omitted X-Terraform-Get");
         }
-        String absolute = httpModuleSource(remote, upstream);
+        String absolute = directHttpModuleArchive(remote, upstream);
         if (absolute == null) {
           return MavenResponse.noBody(204).withHeader("X-Terraform-Get", upstream);
         }
@@ -854,7 +854,7 @@ public class TerraformService {
     return URI.create(base).resolve(value).toString();
   }
 
-  private static String httpModuleSource(String base, String value) {
+  private static String directHttpModuleArchive(String base, String value) {
     String candidate = value;
     if (value.startsWith("/") || value.startsWith("./") || value.startsWith("../")) {
       try {
@@ -863,10 +863,25 @@ public class TerraformService {
         throw new MavenExceptions.BadUpstreamException("Terraform upstream module URL is invalid");
       }
     }
-    return candidate.regionMatches(true, 0, "http://", 0, "http://".length())
-            || candidate.regionMatches(true, 0, "https://", 0, "https://".length())
-        ? candidate
-        : null;
+    try {
+      URI uri = URI.create(candidate);
+      if (!("http".equalsIgnoreCase(uri.getScheme()) || "https".equalsIgnoreCase(uri.getScheme()))) {
+        return null;
+      }
+      String path = uri.getRawPath();
+      if (path == null || path.contains("//") || uri.getRawFragment() != null) return null;
+      String lower = path.toLowerCase(Locale.ROOT);
+      for (String suffix : List.of(
+          ".zip", ".bz2", ".tar.bz2", ".tar.tbz2", ".tbz2",
+          ".gz", ".tar.gz", ".tgz", ".xz", ".tar.xz", ".txz")) {
+        if (lower.endsWith(suffix)) return candidate;
+      }
+      // Non-archive HTTP addresses can be vanity URLs or go-getter/VCS sources. Their query and
+      // subdirectory semantics belong to Terraform and must survive unchanged.
+      return null;
+    } catch (IllegalArgumentException e) {
+      throw new MavenExceptions.BadUpstreamException("Terraform upstream module URL is invalid");
+    }
   }
 
   private static String repositoryPath(String url, String repository) {

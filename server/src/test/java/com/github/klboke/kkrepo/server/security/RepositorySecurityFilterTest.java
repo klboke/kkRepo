@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.security;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -212,6 +213,24 @@ class RepositorySecurityFilterTest {
         "v1/modules/kkrepo/fixture/aws/versions",
         request.getAttribute(RepositorySecurityFilter.NORMALIZED_REPOSITORY_PATH_ATTRIBUTE));
     assertEquals("v1/modules/kkrepo/fixture/aws/versions", decisions.permission.pathPattern());
+  }
+
+  @Test
+  void malformedTerraformUrlTokenPathIsNotMarkedSafeForFailureLogs() throws Exception {
+    String token = "GenericToken.super-secret-value";
+    HttpServletRequest request = request(
+        "GET", "/repository/terraform-private/v1/modules/" + token + "/bad");
+    RepositorySecurityFilter filter = filter(
+        new StubAuthenticationService(Optional.of(subject("alice"))),
+        new RecordingDecisionService(AccessDecision.allow()),
+        new FakeRepositoryDao(repository(
+            "terraform-private", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED)),
+        false);
+
+    filter.doFilter(request, new ResponseState().proxy(), new ChainState());
+
+    assertNull(request.getAttribute(RepositorySecurityFilter.NORMALIZED_REPOSITORY_PATH_ATTRIBUTE));
+    assertNull(request.getAttribute(RepositorySecurityFilter.TERRAFORM_URL_TOKEN_SEGMENT_ATTRIBUTE));
   }
 
   @Test
