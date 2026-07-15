@@ -96,6 +96,7 @@ public class ComponentSearchController {
       case "go" -> RepositoryFormat.GO;
       case "pub" -> RepositoryFormat.PUB;
       case "composer" -> RepositoryFormat.COMPOSER;
+      case "terraform" -> RepositoryFormat.TERRAFORM;
       case "raw" -> RepositoryFormat.RAW;
       default -> null;
     };
