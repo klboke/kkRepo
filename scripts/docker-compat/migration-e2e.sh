@@ -305,7 +305,7 @@ PY
   COMPOSER_VERSION="${fields[0]}"
   dist_url="$(python3 - "$metadata_url" "${fields[1]}" <<'PY'
 import sys
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 print(urljoin(sys.argv[1], sys.argv[2]))
 PY
 )"
@@ -684,7 +684,7 @@ PY
   python3 - "$source_metadata" "$target_metadata" "$KKREPO_URL/repository/$TERRAFORM_KKREPO_REPOSITORY/" "$fields" <<'PY'
 import json
 import sys
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 source_path, target_path, repository_url, output_path = sys.argv[1:5]
 with open(source_path, "r", encoding="utf-8") as handle:
