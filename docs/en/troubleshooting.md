@@ -197,7 +197,7 @@ Common causes:
 - Proxy repositories were expected but not listed in `Optional proxy repositories`.
 - Cargo / Rust migration was blocked because preflight did not prove a supported datastore Cargo content model; review the Source Profile and plan item status.
 - For blocked Composer migration, confirm that the source is a native Nexus 3.75.0+ Pro `composer-proxy` and explicitly select it under `Optional proxy repositories`. Community plugins, hosted/group sources, and sources without a Composer content schema do not silently downgrade to migration.
-- For blocked Terraform migration, confirm the source uses native `terraform-hosted`/`terraform-proxy` recipes from a supported Nexus version. Proxy cache must be explicitly selected, and unknown source-profile fingerprints fail closed rather than importing unverified routes or signing metadata.
+- For blocked Terraform migration, confirm the source uses a native `terraform-hosted` recipe from a supported Nexus version. Terraform proxy/group configuration migrates, but proxy cache data backup is intentionally rejected before job creation because unverified route, validator, checksum, and signing snapshots cannot be imported safely.
 - Blob migration is slow because concurrency is too low, source Nexus is overloaded, or object storage is throttling.
 
 See [Nexus Migration Guide](nexus-migration-guide.md).

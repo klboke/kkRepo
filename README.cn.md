@@ -74,14 +74,14 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 | Cargo / Rust | hosted / proxy / group | 支持 `cargo publish`、yank/unyank、`CargoToken` 认证和 UI/API `.crate` 上传 | 支持 sparse index 和 `cargo search` | 支持 Cargo 仓库迁移 |
 | Dart / Pub | hosted / proxy / group | 支持 `dart pub publish`、`dart pub get`、`flutter pub get`、`PubToken` 认证和 UI/API `.tar.gz` 上传 | 支持 package/version metadata、archive 属性和 Pub 搜索 | 支持 Nexus 3.92.0 Pub hosted 迁移，以及显式选择的 proxy cache 迁移 |
 | Composer / PHP | hosted / proxy / group | Composer 没有标准 publish 命令；支持 Components API 和 UI 上传 zip/tar archive，并通过 Composer 2 安装 | 支持 package/version、dist、HTML View、Browse/Search 和 Usage | Nexus 原生 Composer proxy 配置可迁移；cache 仅在管理员显式选择且 source profile 证明后迁移 |
-| Terraform Provider / Module Registry | hosted / proxy / group | 支持 Nexus 兼容 PUT 和 UI/API archive 上传；`terraform init` 可通过 group 解析 hosted 与 proxy module/provider | 支持 module/provider coordinate、version、platform、Browse/Search 和 Usage | 支持 Nexus Terraform hosted 数据迁移；proxy cache 仅在显式选择且 source profile 证明后迁移 |
+| Terraform Provider / Module Registry | hosted / proxy / group | 支持 Nexus 兼容 PUT 和 UI/API archive 上传；`terraform init` 可通过 group 解析 hosted 与 proxy module/provider | 支持 module/provider coordinate、version、platform、Browse/Search 和 Usage | 支持 Nexus Terraform hosted 数据迁移；proxy 配置可迁移，但 proxy cache 数据在 route/checksum/signature snapshot 证据完整前会被明确拒绝导入 |
 | Docker / OCI | hosted / proxy / group | 支持 Registry V2 login、hosted push/pull、proxy pull、group pull、OCI referrers、cleanup 和 connector port 访问 | 支持 manifest/tag/blob metadata | Docker hosted 仓库数据迁移走 Nexus Repository Data 流程 |
 | NuGet | hosted / proxy / group | 支持 package push 和管理台上传 | 支持 v3 service index / search | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 | RubyGems | hosted / proxy / group | 支持 gem push/yank 和管理台上传 | 支持 | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 | Yum | hosted / proxy / group | 支持 RPM 上传和管理台上传 | 支持 repodata | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 | Raw | hosted / proxy / group | 支持 PUT 上传和管理台上传 | 支持 | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 
-仓库数据迁移默认扫描 hosted 仓库；如需迁移源 Sonatype Nexus Repository 部署中作为历史备份或回源缓存使用的 proxy 仓库，可以在迁移页面的 `Optional proxy repositories` 中显式指定仓库名。Cargo / Rust、Dart / Pub、Nexus 原生 Composer 和 Terraform proxy cache 迁移已支持；需要 source profile 证明的格式必须由管理员显式选择。
+仓库数据迁移默认扫描 hosted 仓库；如需迁移源 Sonatype Nexus Repository 部署中作为历史备份或回源缓存使用的 proxy 仓库，可以在迁移页面的 `Optional proxy repositories` 中显式指定仓库名。Cargo / Rust、Dart / Pub 和 Nexus 原生 Composer proxy cache 在显式选择且 source profile 接受时可迁移。Terraform proxy 配置可迁移，但 Terraform proxy cache 数据当前会在创建 repository-data job 前 fail fast。
 
 ## 从 Sonatype Nexus Repository 迁移
 
@@ -171,7 +171,7 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 2. ✅ Cargo / Rust - 仓库能力已完成，包含搜索、UI/API 上传和迁移能力（[设计说明](docs/zh/dev/cargo-rust-repository-design.md)）
 3. ✅ Dart / Pub - 仓库能力已完成，包含 hosted/proxy/group、真实客户端 E2E、UI/API 上传、搜索和 Nexus 迁移能力（[设计说明](docs/zh/dev/dart-pub-repository-design.md)）
 4. ✅ Composer / PHP - hosted、proxy、group、UI/API 上传、搜索、真实客户端 E2E、强制 Nexus live 对比和显式选择的 Nexus proxy cache 迁移 E2E 已实现（[设计说明](docs/zh/dev/composer-php-repository-design.md)）
-5. ✅ Terraform Provider / Module Registry - hosted、proxy、group、Provider GPG 签名、Nexus 路径兼容、UI/API 上传、搜索、真实 Terraform CLI E2E 和 Nexus 迁移能力已实现（[设计说明](docs/zh/dev/terraform-repository-design.md)）
+5. ✅ Terraform Provider / Module Registry - hosted、proxy、group、Provider GPG 签名、Nexus 路径兼容、UI/API 上传、搜索、真实 Terraform CLI E2E、Nexus hosted 数据与配置迁移已实现（[设计说明](docs/zh/dev/terraform-repository-design.md)）
 6. ohpm / HarmonyOS - 规划中，覆盖 hosted、proxy、group、导入和管理端能力（[设计说明](docs/zh/dev/ohpm-repository-design.md)）
 7. Swift Package Registry
 8. APT / Debian

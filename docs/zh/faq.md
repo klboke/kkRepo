@@ -153,7 +153,7 @@ Composer 本身没有标准 publish 命令，因此 hosted 包通过 Components 
 
 已支持。Terraform hosted、proxy、group 仓库实现 Module Registry 与 Provider Registry 协议，使用 Nexus 兼容的 `/repository/<repo>/v1/modules/...` 和 `/v1/providers/...` 路径。kkRepo 支持 module/provider 上传、version/platform、registry.terraform.io proxy、group 解析、URL token 认证、Provider SHA256SUMS、hosted detached GPG 签名、Browse/Search/Usage，并使用 Terraform 0.13 与当前稳定版执行真实 `terraform init` 验证。
 
-Terraform CLI 需要通过 `host.services` 把 `modules.v1`、`providers.v1` 指向目标 group。根域 discovery 与 Provider Network Mirror Protocol 暂不在公开支持面。Nexus Terraform hosted 数据可迁移；proxy cache 必须显式选择，并由 source profile 证明 content model。
+Terraform CLI 需要通过 `host.services` 把 `modules.v1`、`providers.v1` 指向目标 group。根域 discovery 与 Provider Network Mirror Protocol 暂不在公开支持面。Nexus Terraform hosted 数据及 proxy/group 配置可迁移。Terraform proxy cache 数据当前会在创建 job 前被拒绝；目标 proxy 从已配置上游重建经过校验的 cache。
 
 ## kkrepo 可以用于生产吗？
 

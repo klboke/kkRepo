@@ -197,7 +197,7 @@ export KKREPO_DATABASE_TYPE=mysql
 - 期望迁移 proxy 仓库，但没有在 `Optional proxy repositories` 中列出。
 - Cargo / Rust 迁移被阻断，通常是因为 preflight 未证明受支持的 datastore Cargo content model；请查看 Source Profile 和对应 plan item 状态。
 - Composer 迁移被阻断时，确认源仓库是 Nexus 3.75.0+ Pro 原生 `composer-proxy`，并通过 `Optional proxy repositories` 显式选择。Community plugin、hosted/group 或没有 Composer content schema 的源不会自动降级迁移。
-- Terraform 迁移被阻断时，确认源仓库使用受支持 Nexus 版本的原生 `terraform-hosted`/`terraform-proxy` recipe。Proxy cache 必须显式选择；未知 source-profile fingerprint 会 fail closed，不会导入未经验证的 route 或 signing metadata。
+- Terraform 迁移被阻断时，确认源仓库使用受支持 Nexus 版本的原生 `terraform-hosted` recipe。Terraform proxy/group 配置可迁移，但 proxy cache 数据 backup 会在创建 job 前被明确拒绝，避免导入未经验证的 route、validator、checksum 和 signing snapshot。
 - blob 迁移慢，可能是并发过低、源 Nexus 压力过大，或对象存储限流。
 
 详见 [Nexus 迁移说明](nexus-migration-guide.md)。

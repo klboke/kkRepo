@@ -78,6 +78,21 @@ class RepositoryDataMigrationServiceTest {
   }
 
   @Test
+  void terraformProxyBackupIsRejectedBeforeRepositoryDataJobCreation() {
+    IllegalArgumentException thrown = assertThrows(IllegalArgumentException.class, () ->
+        sourceRepositories(
+            List.of(),
+            List.of("terraform-proxy"),
+            inventory(
+                datastoreProbe("terraform", true),
+                repository("terraform-proxy", "terraform", "proxy"))));
+
+    assertEquals(
+        "Backup proxy repositories are invalid: [terraform-proxy (plan status CONFIG_ONLY)]",
+        thrown.getMessage());
+  }
+
+  @Test
   void requestedRepositoriesAllowDatastoreCargoHostedMigrationWhenContentSchemaIsPresent() throws Exception {
     List<?> sources = sourceRepositories(
         List.of("cargo-hosted"),
