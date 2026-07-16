@@ -444,7 +444,11 @@ public class RepositoryContentController {
           accept,
           userId,
           request.getRemoteAddr());
-      return toStreamingResponse(response, request, false);
+      // This handler returns ResponseEntity<?> for all repository formats. Returning a
+      // StreamingResponseBody here makes Spring treat the lambda as a regular JSON object and
+      // serialize it as "{}" while preserving SwiftService's larger Content-Length. Publish
+      // responses are tiny JSON documents, so materialize them before returning.
+      return toByteArrayResponse(response);
     }
     if (runtime.format() == RepositoryFormat.NUGET) {
       String raw = extractRepositoryPath(name, request, true);

@@ -168,6 +168,11 @@ public abstract class PersistenceApiContract {
         registry.findManifest(stored.id(), null).orElseThrow().assetId());
     assertEquals("Acme", registry.findIdentities(
         repositoryId, "https://github.com/acme/fixture").getFirst().scopeDisplay());
+    assertEquals(
+        List.of("https://github.com/acme/fixture"),
+        registry.listRepositoryUrls(repositoryId, "acme", "fixture").stream()
+            .map(SwiftRegistryDao.RepositoryUrl::normalizedUrl)
+            .toList());
     assertThrows(RuntimeException.class, () -> inTransaction(() -> registry.insertRelease(
         release, List.of(), List.of())));
     assertEquals(1, registry.listReleases(repositoryId, "acme", "fixture").size());
@@ -203,6 +208,21 @@ public abstract class PersistenceApiContract {
         .toList());
     assertEquals(now.plusSeconds(1), registry.listProxySources(
         repositoryId, "acme", "fixture").getFirst().lastCheckedAt());
+
+    List<SwiftRegistryDao.ProxySource> bulkSources = registry.bindProxySources(List.of(
+        new SwiftRegistryDao.ProxySource(
+            repositoryId, "acme", "fixture", "1.2.3", "https://github.com/acme/fixture",
+            "v1.2.3", "e".repeat(40), "github-archive-v1", null, "DISCOVERED", null,
+            now.plusSeconds(2), revision, 0, now.plusSeconds(2)),
+        new SwiftRegistryDao.ProxySource(
+            repositoryId, "acme", "fixture", "2.0.0", "https://github.com/acme/fixture",
+            "v2.0.0", "f".repeat(40), "github-archive-v1", null, "DISCOVERED", null,
+            now.plusSeconds(2), revision, 0, now.plusSeconds(2))));
+    assertEquals(List.of("1.2.3", "2.0.0"), bulkSources.stream()
+        .map(SwiftRegistryDao.ProxySource::version)
+        .toList());
+    assertEquals(firstSource.commitSha(), bulkSources.getFirst().commitSha());
+    assertEquals(3, bulkSources.getFirst().observedCount());
 
     SwiftRegistryDao.Lease lowerCasePrereleaseLease = registry.tryAcquireLease(
         "swift:acme:fixture:1.0.0-alpha", "replica-a", Instant.now().plusSeconds(30))

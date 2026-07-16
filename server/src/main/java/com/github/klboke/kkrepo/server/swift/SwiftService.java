@@ -236,7 +236,10 @@ public class SwiftService {
       throw new SwiftExceptions.Conflict("Swift release already exists");
     }
 
-    try (SwiftPublishLeaseManager.Lease lease = leases.acquire(leaseKey)) {
+    try (SwiftPublishLeaseManager.Lease lease = leases.acquire(
+        leaseKey,
+        () -> registry.findRelease(
+            runtime.id(), scopeLc, nameLc, path.version()).isPresent())) {
       if (registry.findRelease(runtime.id(), scopeLc, nameLc, path.version()).isPresent()) {
         throw new SwiftExceptions.Conflict("Swift release already exists");
       }
@@ -368,7 +371,8 @@ public class SwiftService {
       throw new SwiftExceptions.Conflict("Swift release already exists or is tombstoned");
     }
     try (SwiftPublishLeaseManager.Lease lease = leases.acquire(
-        coordinateLeaseKey(runtime.id(), scopeLc, nameLc, version))) {
+        coordinateLeaseKey(runtime.id(), scopeLc, nameLc, version),
+        () -> registry.findRelease(runtime.id(), scopeLc, nameLc, version).isPresent())) {
       if (registry.findRelease(runtime.id(), scopeLc, nameLc, version).isPresent()) {
         throw new SwiftExceptions.Conflict("Swift release already exists");
       }
@@ -555,10 +559,7 @@ public class SwiftService {
         return;
       }
       if (runtime.isHosted()) {
-        registry.listReleases(runtime.id(), scopeLc, nameLc).stream()
-            .filter(release -> SwiftRegistryDao.RELEASE_READY.equals(release.status()))
-            .filter(release -> release.id() != null)
-            .flatMap(release -> registry.listRepositoryUrls(release.id()).stream())
+        registry.listRepositoryUrls(runtime.id(), scopeLc, nameLc).stream()
             .map(SwiftRegistryDao.RepositoryUrl::normalizedUrl)
             .forEach(urls::add);
         return;
@@ -766,12 +767,14 @@ public class SwiftService {
     }
     try {
       if (runtime.isHosted() || runtime.isProxy()) {
-        registry.listTombstones(runtime.id(), scopeLc, nameLc).forEach(tombstone ->
+        List<SwiftRegistryDao.Tombstone> tombstones =
+            registry.listTombstones(runtime.id(), scopeLc, nameLc);
+        tombstones.forEach(tombstone ->
             states.putIfAbsent(
                 tombstone.version(), VersionState.unavailable(tombstone.reason())));
         Set<String> available = runtime.isHosted()
             ? readyVersions(runtime.id(), scopeLc, nameLc)
-            : proxyVersions(runtime, scopeLc, nameLc);
+            : proxyVersions(runtime, scopeLc, nameLc, tombstones);
         available.forEach(version -> states.putIfAbsent(version, VersionState.availableVersion()));
         return states;
       }
@@ -785,12 +788,16 @@ public class SwiftService {
   }
 
   private Set<String> proxyVersions(
-      RepositoryRuntime runtime, String scopeLc, String nameLc) {
+      RepositoryRuntime runtime,
+      String scopeLc,
+      String nameLc,
+      List<SwiftRegistryDao.Tombstone> tombstones) {
     String cacheKey = "tags:" + scopeLc + "/" + nameLc;
     List<SwiftRegistryDao.ProxySource> cachedSources =
         registry.listProxySources(runtime.id(), scopeLc, nameLc);
-    Set<String> stale = persistedProxyVersions(
-        runtime.id(), scopeLc, nameLc, cachedSources);
+    Set<String> ready = readyVersions(runtime.id(), scopeLc, nameLc);
+    Set<String> tombstoned = tombstoneVersions(tombstones);
+    Set<String> stale = persistedProxyVersions(cachedSources, tombstoned, ready);
     Optional<SwiftRegistryDao.NegativeCache> negative =
         registry.findNegativeCache(runtime.id(), cacheKey);
     if (negative.isPresent() && negative.get().expiresAt().isAfter(Instant.now())) {
@@ -812,20 +819,12 @@ public class SwiftService {
     if (proxyMetadataFresh(cachedSources, runtime.metadataMaxAgeMinutesOrDefault())) {
       return stale;
     }
-    LinkedHashSet<String> versions = new LinkedHashSet<>();
     try {
-      SwiftGitHubClient.Coordinates coordinates = SwiftGitHubClient.coordinates(scopeLc, nameLc);
-      for (SwiftGitHubClient.Tag tag : fetchProxyTags(runtime, coordinates, cacheKey)) {
-        if (registry.findTombstone(runtime.id(), scopeLc, nameLc, tag.version()).isPresent()) {
-          continue;
-        }
-        SwiftRegistryDao.ProxySource source = bindProxySource(runtime, coordinates, tag);
-        versions.add(source.version());
-      }
-      registry.listReleases(runtime.id(), scopeLc, nameLc).stream()
-          .filter(release -> SwiftRegistryDao.RELEASE_READY.equals(release.status()))
-          .map(SwiftRegistryDao.Release::version)
-          .forEach(versions::add);
+      List<SwiftRegistryDao.ProxySource> refreshed =
+          refreshProxySources(runtime, scopeLc, nameLc, cacheKey);
+      Set<String> refreshedTombstones = tombstoneVersions(
+          registry.listTombstones(runtime.id(), scopeLc, nameLc));
+      Set<String> versions = persistedProxyVersions(refreshed, refreshedTombstones, ready);
       if (versions.isEmpty()) {
         rememberNotFound(runtime.id(), cacheKey);
       }
@@ -850,22 +849,30 @@ public class SwiftService {
     }
   }
 
-  private Set<String> persistedProxyVersions(
-      long repositoryId,
-      String scopeLc,
-      String nameLc,
-      List<SwiftRegistryDao.ProxySource> sources) {
+  private static Set<String> persistedProxyVersions(
+      List<SwiftRegistryDao.ProxySource> sources,
+      Set<String> tombstones,
+      Set<String> readyVersions) {
     LinkedHashSet<String> versions = new LinkedHashSet<>();
     if (sources != null) {
       for (SwiftRegistryDao.ProxySource source : sources) {
-        if (registry.findTombstone(
-            repositoryId, scopeLc, nameLc, source.version()).isEmpty()) {
+        if (!tombstones.contains(source.version())) {
           versions.add(source.version());
         }
       }
     }
-    versions.addAll(readyVersions(repositoryId, scopeLc, nameLc));
+    versions.addAll(readyVersions);
     return versions;
+  }
+
+  private static Set<String> tombstoneVersions(
+      List<SwiftRegistryDao.Tombstone> tombstones) {
+    if (tombstones == null || tombstones.isEmpty()) {
+      return Set.of();
+    }
+    return tombstones.stream()
+        .map(SwiftRegistryDao.Tombstone::version)
+        .collect(java.util.stream.Collectors.toUnmodifiableSet());
   }
 
   private static boolean proxyMetadataFresh(
@@ -1015,11 +1022,10 @@ public class SwiftService {
     SwiftGitHubClient.Coordinates coordinates = SwiftGitHubClient.coordinates(scopeLc, nameLc);
     SwiftRegistryDao.ProxySource source = registry.findProxySource(
             runtime.id(), scopeLc, nameLc, version)
-        .orElseGet(() -> fetchProxyTags(
-            runtime, coordinates, "tags:" + scopeLc + "/" + nameLc).stream()
-            .filter(tag -> tag.version().equals(version))
+        .orElseGet(() -> refreshProxySources(
+            runtime, scopeLc, nameLc, "tags:" + scopeLc + "/" + nameLc).stream()
+            .filter(candidate -> candidate.version().equals(version))
             .findFirst()
-            .map(tag -> bindProxySource(runtime, coordinates, tag))
             .orElseThrow(() -> new SwiftExceptions.NotFound("GitHub tag was not found")));
     if (source.releaseId() != null) {
       Optional<SwiftRegistryDao.Release> release = registry.findReleaseById(source.releaseId());
@@ -1091,36 +1097,66 @@ public class SwiftService {
     }
   }
 
-  private SwiftRegistryDao.ProxySource bindProxySource(
+  private List<SwiftRegistryDao.ProxySource> refreshProxySources(
       RepositoryRuntime runtime,
-      SwiftGitHubClient.Coordinates coordinates,
-      SwiftGitHubClient.Tag tag) {
-    Optional<SwiftRegistryDao.ProxySource> existing = registry.findProxySource(
-        runtime.id(),
-        coordinates.owner().toLowerCase(Locale.ROOT),
-        coordinates.repository().toLowerCase(Locale.ROOT),
-        tag.version());
-    Instant now = Instant.now();
-    SwiftRegistryDao.ProxySource bound = registry.bindProxySource(new SwiftRegistryDao.ProxySource(
-        runtime.id(),
-        coordinates.owner().toLowerCase(Locale.ROOT),
-        coordinates.repository().toLowerCase(Locale.ROOT),
-        tag.version(),
-        coordinates.repositoryUrl(),
-        tag.tag(),
-        tag.commitSha(),
-        GENERATION_PROFILE,
-        null,
-        "DISCOVERED",
-        null,
-        null,
-        existing.map(SwiftRegistryDao.ProxySource::revision)
-            .orElseGet(() -> registry.nextRepositoryRevision(runtime.id())),
-        existing.map(SwiftRegistryDao.ProxySource::observedCount).orElse(0L),
-        now));
-    existing.filter(previous -> !previous.commitSha().equalsIgnoreCase(tag.commitSha()))
-        .ifPresent(previous -> auditMovedProxyTag(runtime, coordinates, tag, previous, now));
-    return bound;
+      String scopeLc,
+      String nameLc,
+      String cacheKey) {
+    try (SwiftPublishLeaseManager.Lease lease = leases.acquire(
+        tagRefreshLeaseKey(runtime.id(), scopeLc, nameLc))) {
+      List<SwiftRegistryDao.ProxySource> current =
+          registry.listProxySources(runtime.id(), scopeLc, nameLc);
+      if (proxyMetadataFresh(current, runtime.metadataMaxAgeMinutesOrDefault())) {
+        return current;
+      }
+
+      SwiftGitHubClient.Coordinates coordinates = SwiftGitHubClient.coordinates(scopeLc, nameLc);
+      List<SwiftGitHubClient.Tag> tags = fetchProxyTags(runtime, coordinates, cacheKey);
+      lease.assertHeld();
+      Set<String> tombstones = tombstoneVersions(
+          registry.listTombstones(runtime.id(), scopeLc, nameLc));
+      Map<String, SwiftRegistryDao.ProxySource> existing = new LinkedHashMap<>();
+      current.forEach(source -> existing.put(source.version(), source));
+      LinkedHashMap<String, SwiftGitHubClient.Tag> observed = new LinkedHashMap<>();
+      tags.stream()
+          .filter(tag -> !tombstones.contains(tag.version()))
+          .forEach(tag -> observed.putIfAbsent(tag.version(), tag));
+      boolean discoveredNewVersion = observed.keySet().stream().anyMatch(
+          version -> !existing.containsKey(version));
+      long discoveryRevision = discoveredNewVersion
+          ? registry.nextRepositoryRevision(runtime.id())
+          : 0L;
+      Instant now = Instant.now();
+      List<SwiftRegistryDao.ProxySource> candidates = observed.values().stream()
+          .map(tag -> {
+            SwiftRegistryDao.ProxySource previous = existing.get(tag.version());
+            return new SwiftRegistryDao.ProxySource(
+                runtime.id(),
+                scopeLc,
+                nameLc,
+                tag.version(),
+                coordinates.repositoryUrl(),
+                tag.tag(),
+                tag.commitSha(),
+                GENERATION_PROFILE,
+                null,
+                "DISCOVERED",
+                null,
+                null,
+                previous == null ? discoveryRevision : previous.revision(),
+                previous == null ? 0L : previous.observedCount(),
+                now);
+          })
+          .toList();
+      List<SwiftRegistryDao.ProxySource> bound = candidates.isEmpty()
+          ? List.of()
+          : registry.bindProxySources(candidates);
+      observed.values().forEach(tag -> Optional.ofNullable(existing.get(tag.version()))
+          .filter(previous -> !previous.commitSha().equalsIgnoreCase(tag.commitSha()))
+          .ifPresent(previous -> auditMovedProxyTag(
+              runtime, coordinates, tag, previous, now)));
+      return bound;
+    }
   }
 
   private void auditMovedProxyTag(
@@ -1373,10 +1409,6 @@ public class SwiftService {
           releaseUrl(baseUrl, release.scopeDisplay(), release.nameDisplay(), versions.get(index + 1)),
           "successor-version"));
     }
-    for (SwiftRegistryDao.RepositoryUrl url : registry.listRepositoryUrls(release.id())) {
-      links.add(SwiftLink.of(url.normalizedUrl(), links.stream()
-          .noneMatch(link -> "canonical".equals(link.relation())) ? "canonical" : "alternate"));
-    }
     if (!links.isEmpty()) {
       response.withHeader("Link", SwiftLinkHeader.render(links));
     }
@@ -1503,6 +1535,9 @@ public class SwiftService {
   }
 
   private static void validateOptionalUri(Map<?, ?> object, String field, String qualified) {
+    if (!object.containsKey(field)) {
+      return;
+    }
     Object value = object.get(field);
     if (!(value instanceof String text) || text.isBlank()
         || text.length() > MAX_METADATA_URL_LENGTH) {
@@ -1743,6 +1778,11 @@ public class SwiftService {
   private static String coordinateLeaseKey(
       long repositoryId, String scopeLc, String nameLc, String version) {
     return "swift:" + repositoryId + ":" + scopeLc + ":" + nameLc + ":" + version;
+  }
+
+  private static String tagRefreshLeaseKey(
+      long repositoryId, String scopeLc, String nameLc) {
+    return "swift-tags:" + repositoryId + ":" + scopeLc + ":" + nameLc;
   }
 
   private static void requireHostedWritable(RepositoryRuntime runtime) {

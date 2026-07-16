@@ -729,21 +729,50 @@ class NexusApiMigrationServiceTest {
   }
 
   @Test
-  void rejectsNonGithubSwiftProxyDuringDefinitionMigration() {
-    NexusApiMigrationService service = service(new FakeBlobStoreDao(), new FakeRepositoryDao());
+  void skipsNonGithubSwiftProxyAsManualActionWithoutAbortingMigration() {
+    FakeRepositoryDao repositories = new FakeRepositoryDao();
+    FakeMigrationJobDao migrationJobs = new FakeMigrationJobDao();
+    NexusApiMigrationService service = new NexusApiMigrationService(
+        new ObjectMapper(),
+        new FakeBlobStoreDao().asDao(),
+        repositories.asDao(),
+        null,
+        migrationJobs,
+        noopSecurityWriter());
     NexusInventory inventory = new NexusInventory(
         List.of(Map.of("name", "default")),
-        List.of(repository("swift-proxy", "swift", "proxy", Map.of(
-            "storage", storage("default"),
-            "proxy", Map.of("remoteUrl", "https://gitlab.com/")))),
+        List.of(
+            repository("swift-hosted", "swift", "hosted", Map.of(
+                "storage", storage("default"))),
+            repository("swift-proxy", "swift", "proxy", Map.of(
+                "storage", storage("default"),
+                "proxy", Map.of("remoteUrl", "https://gitlab.com/"))),
+            repository("swift-group", "swift", "group", Map.of(
+                "storage", storage("default"),
+                "group", Map.of("memberNames", List.of("swift-proxy", "swift-hosted"))))),
         NexusSecurityExport.empty(),
         List.of());
 
-    IllegalArgumentException thrown = assertThrows(
-        IllegalArgumentException.class,
-        () -> service.migrateConfig(inventory, request("https://old-nexus.example")));
+    NexusMigrationPreflight preflight = service.preflight(
+        inventory,
+        request("https://old-nexus.example").targetBlobStore());
+    NexusApiMigrationService.NexusMigrationResult result = service.migrate(
+        inventory,
+        request("https://old-nexus.example"));
 
-    assertEquals("Nexus Swift proxy remote must be the GitHub base URL https://github.com/", thrown.getMessage());
+    assertEquals(2, preflight.supportedRepositories());
+    assertEquals(1, preflight.unsupportedRepositories());
+    assertEquals("unsupported_swift_remote", preflight.unsupported().getFirst().reason());
+    assertEquals("unsupported_swift_remote", preflight.proxyRemoteRisks().getFirst().status());
+    assertFalse(preflight.repositoriesToMigrate().stream()
+        .anyMatch(repository -> "swift-proxy".equals(repository.name())));
+    assertEquals(List.of("swift-hosted"), preflight.groupRepositories().getFirst().members());
+    assertEquals(SupportStatus.NEEDS_MANUAL_ACTION, status(preflight, "swift-proxy"));
+    assertTrue(preflight.migrationPlan().manualActions().contains("repository:swift-proxy"));
+    assertEquals("finished_with_manual_actions", result.status());
+    assertEquals("finished_with_manual_actions", migrationJobs.status);
+    assertTrue(repositories.findByName("swift-proxy").isEmpty());
+    assertEquals(List.of("swift-hosted"), repositories.memberNames("swift-group"));
   }
 
   @Test

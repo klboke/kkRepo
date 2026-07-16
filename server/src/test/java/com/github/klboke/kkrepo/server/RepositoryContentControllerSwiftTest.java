@@ -121,6 +121,7 @@ class RepositoryContentControllerSwiftTest {
     RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
     SwiftService swift = mock(SwiftService.class);
     when(runtimes.resolve("swift")).thenReturn(Optional.of(runtime));
+    byte[] publishBody = "{\"message\":\"published\"}".getBytes(StandardCharsets.UTF_8);
     when(swift.publish(
             eq(runtime),
             eq("Acme/Demo/1.2.3"),
@@ -131,7 +132,13 @@ class RepositoryContentControllerSwiftTest {
             eq(SwiftMediaTypes.VENDOR_JSON),
             eq("anonymous"),
             eq("192.0.2.10")))
-        .thenReturn(MavenResponse.created()
+        .thenReturn(MavenResponse.ok(
+                new ByteArrayInputStream(publishBody),
+                publishBody.length,
+                SwiftMediaTypes.JSON,
+                null,
+                null)
+            .withStatus(201)
             .withHeader("Content-Version", "1")
             .withHeader("Location", "https://repo.example/repository/swift/Acme/Demo/1.2.3"));
     RepositoryContentController controller = controller(runtimes, swift);
@@ -151,6 +158,10 @@ class RepositoryContentControllerSwiftTest {
     assertEquals("1", response.getHeaders().getFirst("Content-Version"));
     assertEquals("https://repo.example/repository/swift/Acme/Demo/1.2.3",
         response.getHeaders().getFirst(HttpHeaders.LOCATION));
+    assertEquals(publishBody.length, response.getHeaders().getContentLength());
+    assertEquals(
+        "{\"message\":\"published\"}",
+        new String((byte[]) response.getBody(), StandardCharsets.UTF_8));
     verify(swift).publish(
         eq(runtime),
         eq("Acme/Demo/1.2.3"),

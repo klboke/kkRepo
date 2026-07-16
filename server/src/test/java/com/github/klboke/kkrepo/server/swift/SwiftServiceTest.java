@@ -38,6 +38,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
@@ -83,6 +84,32 @@ class SwiftServiceTest {
     assertTrue(body.contains("\"status\":410"));
     assertTrue(body.contains("administratively deleted"));
     assertTrue(body.contains("https://repo.example/repository/swift/Acme/Demo/2.0.0-beta.1"));
+  }
+
+  @Test
+  void hostedReleaseListLoadsRepositoryUrlsInOnePackageQuery() throws Exception {
+    Fixture fixture = fixture();
+    when(fixture.registry.listReleases(1L, "acme", "demo")).thenReturn(List.of(
+        release(1L, "1.0.0", SwiftRegistryDao.RELEASE_READY),
+        release(2L, "2.0.0", SwiftRegistryDao.RELEASE_READY)));
+    when(fixture.registry.listRepositoryUrls(1L, "acme", "demo")).thenReturn(List.of(
+        new SwiftRegistryDao.RepositoryUrl(
+            1L, 1L, 1L, "acme", "demo",
+            "https://github.com/acme/demo", "https://github.com/Acme/Demo")));
+
+    MavenResponse response = fixture.service.get(
+        fixture.runtime,
+        "Acme/Demo",
+        null,
+        "https://repo.example/repository/swift/",
+        SwiftMediaTypes.VENDOR_JSON,
+        false);
+
+    assertEquals(200, response.status());
+    assertTrue(response.headers().get("Link").contains("https://github.com/acme/demo"));
+    verify(fixture.registry).listRepositoryUrls(1L, "acme", "demo");
+    verify(fixture.registry, never()).listRepositoryUrls(1L);
+    verify(fixture.registry, never()).listRepositoryUrls(2L);
   }
 
   @Test
@@ -360,7 +387,6 @@ class SwiftServiceTest {
     when(fixture.registry.findRelease(1L, "acme", "demo", "1.2.3"))
         .thenReturn(Optional.of(release));
     when(fixture.registry.listReleases(1L, "acme", "demo")).thenReturn(List.of(release));
-    when(fixture.registry.listRepositoryUrls(1L)).thenReturn(List.of());
     when(fixture.assets.bytes(1L, 12L)).thenReturn(signature);
 
     MavenResponse metadata = fixture.service.get(
@@ -379,6 +405,7 @@ class SwiftServiceTest {
     assertTrue(metadataJson.contains(
         "\"signatureBase64Encoded\":\""
             + Base64.getEncoder().encodeToString(signature) + "\""));
+    verify(fixture.registry, never()).listRepositoryUrls(1L);
 
     byte[] archiveBytes = new byte[] {1, 2, 3};
     when(fixture.assets.serve(1L, 10L, false)).thenReturn(MavenResponse.ok(
@@ -587,13 +614,15 @@ class SwiftServiceTest {
   }
 
   @Test
-  void proxyTombstoneHidesUpstreamTagAndPreventsRematerialization() {
+  void proxyTombstoneHidesUpstreamTagAndPreventsRematerialization() throws Exception {
     Fixture fixture = fixture();
     RepositoryRuntime proxy = proxy(4L, "swift-proxy");
     SwiftRegistryDao.Tombstone tombstone = new SwiftRegistryDao.Tombstone(
         proxy.id(), "acme", "demo", "1.2.3", "deleted", 9L, Instant.EPOCH);
     when(fixture.registry.findTombstone(proxy.id(), "acme", "demo", "1.2.3"))
         .thenReturn(Optional.of(tombstone));
+    when(fixture.registry.listTombstones(proxy.id(), "acme", "demo"))
+        .thenReturn(List.of(tombstone));
     when(fixture.github.tags(any(), any())).thenReturn(List.of(
         new SwiftGitHubClient.Tag("1.2.3", "v1.2.3", "a".repeat(40))));
 
@@ -604,16 +633,18 @@ class SwiftServiceTest {
         "https://repo.example/repository/swift-proxy/",
         SwiftMediaTypes.VENDOR_JSON,
         false));
-    assertThrows(SwiftExceptions.NotFound.class, () -> fixture.service.get(
+    MavenResponse tombstonedList = fixture.service.get(
         proxy,
         "Acme/Demo",
         null,
         "https://repo.example/repository/swift-proxy/",
         SwiftMediaTypes.VENDOR_JSON,
-        false));
+        false);
 
+    assertEquals(200, tombstonedList.status());
+    assertTrue(responseBody(tombstonedList).contains("\"status\":410"));
     verify(fixture.github, never()).archive(any(), any(), anyString());
-    verify(fixture.registry, never()).bindProxySource(any());
+    verify(fixture.registry, never()).bindProxySources(any());
   }
 
   @Test
@@ -651,12 +682,10 @@ class SwiftServiceTest {
         "v1.2.3", pinnedCommit, "github-zipball-v1", null, "DISCOVERED",
         null, null, 3L, 1L, Instant.EPOCH);
     when(fixture.registry.listProxySources(proxy.id(), "acme", "demo"))
-        .thenReturn(List.of());
+        .thenReturn(List.of(), List.of(pinned));
     when(fixture.github.tags(any(), any())).thenReturn(List.of(
         new SwiftGitHubClient.Tag("1.2.3", "v1.2.3", observedCommit)));
-    when(fixture.registry.findProxySource(proxy.id(), "acme", "demo", "1.2.3"))
-        .thenReturn(Optional.of(pinned));
-    when(fixture.registry.bindProxySource(any())).thenReturn(pinned);
+    when(fixture.registry.bindProxySources(any())).thenReturn(List.of(pinned));
 
     MavenResponse response = fixture.service.get(
         proxy,
@@ -675,6 +704,80 @@ class SwiftServiceTest {
     assertEquals("swift_proxy_tag_moved", audit.getValue().details().get("event"));
     assertEquals(pinnedCommit, audit.getValue().details().get("pinnedCommit"));
     assertEquals(observedCommit, audit.getValue().details().get("observedCommit"));
+  }
+
+  @Test
+  void proxyTagRefreshBindsLargeInventoriesInOneBatchAndOneRevision() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime proxy = proxy(4L, "swift-proxy");
+    ArrayList<SwiftGitHubClient.Tag> tags = new ArrayList<>();
+    ArrayList<SwiftRegistryDao.ProxySource> bound = new ArrayList<>();
+    for (int index = 0; index < 1_200; index++) {
+      String version = "1.0." + index;
+      String commit = "%040x".formatted(index + 1);
+      tags.add(new SwiftGitHubClient.Tag(version, "v" + version, commit));
+      bound.add(new SwiftRegistryDao.ProxySource(
+          proxy.id(), "acme", "demo", version, "https://github.com/acme/demo",
+          "v" + version, commit, "github-zipball-v1", null, "DISCOVERED", null,
+          null, 7L, 1L, Instant.now()));
+    }
+    when(fixture.github.tags(any(), any())).thenReturn(tags);
+    when(fixture.registry.nextRepositoryRevision(proxy.id())).thenReturn(7L);
+    when(fixture.registry.bindProxySources(any())).thenReturn(bound);
+
+    MavenResponse response = fixture.service.get(
+        proxy,
+        "Acme/Demo",
+        null,
+        "https://repo.example/repository/swift-proxy/",
+        SwiftMediaTypes.VENDOR_JSON,
+        false);
+
+    assertEquals(200, response.status());
+    verify(fixture.registry).bindProxySources(argThat(candidates -> candidates.size() == 1_200));
+    verify(fixture.registry).nextRepositoryRevision(proxy.id());
+    verify(fixture.registry, never()).bindProxySource(any());
+    verify(fixture.registry, never()).findProxySource(
+        eq(proxy.id()), eq("acme"), eq("demo"), anyString());
+    verify(fixture.registry, never()).findTombstone(
+        eq(proxy.id()), eq("acme"), eq("demo"), anyString());
+  }
+
+  @Test
+  void directProxyMaterializationPersistsTheCompleteTagInventoryBeforeSelectingVersion()
+      throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime proxy = proxy(4L, "swift-proxy");
+    SwiftRegistryDao.Release materialized = release(
+        77L, proxy.id(), "2.0.0", SwiftRegistryDao.RELEASE_READY);
+    SwiftRegistryDao.ProxySource first = new SwiftRegistryDao.ProxySource(
+        proxy.id(), "acme", "demo", "1.0.0", "https://github.com/acme/demo",
+        "v1.0.0", "a".repeat(40), "github-zipball-v1", null, "DISCOVERED", null,
+        null, 8L, 1L, Instant.now());
+    SwiftRegistryDao.ProxySource requested = new SwiftRegistryDao.ProxySource(
+        proxy.id(), "acme", "demo", "2.0.0", "https://github.com/acme/demo",
+        "v2.0.0", "b".repeat(40), "github-zipball-v1", null, "READY", 77L,
+        Instant.now(), 8L, 1L, Instant.now());
+    when(fixture.github.tags(any(), any())).thenReturn(List.of(
+        new SwiftGitHubClient.Tag("1.0.0", "v1.0.0", "a".repeat(40)),
+        new SwiftGitHubClient.Tag("2.0.0", "v2.0.0", "b".repeat(40))));
+    when(fixture.registry.nextRepositoryRevision(proxy.id())).thenReturn(8L);
+    when(fixture.registry.bindProxySources(any())).thenReturn(List.of(first, requested));
+    when(fixture.registry.listProxySources(proxy.id(), "acme", "demo"))
+        .thenReturn(List.of(), List.of(first, requested));
+    when(fixture.registry.findReleaseById(77L)).thenReturn(Optional.of(materialized));
+
+    MavenResponse response = fixture.service.get(
+        proxy,
+        "Acme/Demo/2.0.0",
+        null,
+        "https://repo.example/repository/swift-proxy/",
+        SwiftMediaTypes.VENDOR_JSON,
+        false);
+
+    assertEquals(200, response.status());
+    verify(fixture.registry).bindProxySources(argThat(candidates -> candidates.size() == 2));
+    verify(fixture.github, never()).archive(any(), any(), anyString());
   }
 
   @Test
@@ -811,7 +914,7 @@ class SwiftServiceTest {
             "Package.swift", "", "5.9", manifestBytes, "b".repeat(64))));
     when(fixture.inspector.inspect(any(InputStream.class))).thenReturn(inspected);
     SwiftPublishLeaseManager.Lease lease = mock(SwiftPublishLeaseManager.Lease.class);
-    when(fixture.leases.acquire(anyString())).thenReturn(lease);
+    when(fixture.leases.acquire(anyString(), any())).thenReturn(lease);
     when(fixture.assets.stageFile(
         eq(fixture.runtime), eq("acme/demo/1.2.3.zip"), eq(source),
         eq(SwiftMediaTypes.ARCHIVE), any(), eq("alice"), eq("192.0.2.10")))
@@ -972,7 +1075,7 @@ class SwiftServiceTest {
             "Package.swift", "", "5.9", manifestBytes, "b".repeat(64))));
     when(fixture.inspector.inspect(any(InputStream.class))).thenReturn(inspected);
     SwiftPublishLeaseManager.Lease lease = mock(SwiftPublishLeaseManager.Lease.class);
-    when(fixture.leases.acquire(anyString())).thenReturn(lease);
+    when(fixture.leases.acquire(anyString(), any())).thenReturn(lease);
     String stagedArchive = ".swift/staging/request-a/source.zip";
     String stagedManifest = ".swift/staging/request-a/Package.swift";
     when(fixture.assets.stageFile(
@@ -1063,6 +1166,34 @@ class SwiftServiceTest {
     }
   }
 
+  @Test
+  void publishAcceptsAuthorAndOrganizationWithoutOptionalUrls() {
+    Fixture fixture = fixture();
+    when(fixture.registry.findRelease(1L, "acme", "demo", "1.2.3"))
+        .thenReturn(
+            Optional.empty(),
+            Optional.of(release(1L, "1.2.3", SwiftRegistryDao.RELEASE_READY)));
+    MockPart archive = part(
+        "source-archive", "source.zip", "application/zip", new byte[] {1});
+    MockPart metadata = part(
+        "metadata",
+        null,
+        "application/json",
+        "{\"author\":{\"name\":\"Alice\",\"organization\":{\"name\":\"Acme\"}}}"
+            .getBytes(StandardCharsets.UTF_8));
+
+    assertThrows(SwiftExceptions.Conflict.class, () -> fixture.service.publish(
+        fixture.runtime,
+        "Acme/Demo/1.2.3",
+        null,
+        List.of(archive, metadata),
+        null,
+        "https://repo.example/repository/swift/",
+        null,
+        "alice",
+        null));
+  }
+
   private static Fixture fixture() {
     SwiftRegistryDao registry = mock(SwiftRegistryDao.class);
     RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
@@ -1070,6 +1201,9 @@ class SwiftServiceTest {
     SwiftArchiveInspector inspector = mock(SwiftArchiveInspector.class);
     SwiftGitHubClient github = mock(SwiftGitHubClient.class);
     SwiftPublishLeaseManager leases = mock(SwiftPublishLeaseManager.class);
+    SwiftPublishLeaseManager.Lease defaultLease = mock(SwiftPublishLeaseManager.Lease.class);
+    when(leases.acquire(anyString())).thenReturn(defaultLease);
+    when(leases.acquire(anyString(), any())).thenReturn(defaultLease);
     SwiftComponentService components = mock(SwiftComponentService.class);
     SecurityAuditDao audit = mock(SecurityAuditDao.class);
     AccessDecisionService accessDecisions = mock(AccessDecisionService.class);

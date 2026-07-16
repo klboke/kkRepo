@@ -158,7 +158,7 @@ public class NexusApiMigrationService {
             validateMigration(inventory, request, preflight, passwordResetRequired);
         String status = validation.failed()
             ? "finished_with_validation_failures"
-            : hasProxyCredentialManualAction(inventory)
+            : hasProxyManualAction(inventory)
                 ? "finished_with_manual_actions"
                 : !passwordResetRequired.isEmpty()
                     ? "finished_with_password_resets_required"
@@ -215,13 +215,18 @@ public class NexusApiMigrationService {
       NexusMigrationTargetBlobStore targetBlobStore,
       String requestedVersion) {
     NexusSourceProfile sourceProfile = NexusSourceProfile.fromInventory(inventory, requestedVersion);
-    NexusMigrationPlan migrationPlan = withProxyCredentialManualActions(
+    NexusMigrationPlan migrationPlan = withProxyManualActions(
         new MigrationPlanBuilder().build(sourceProfile, new MigrationScope(List.of(), true, false)),
         inventory);
     List<UnsupportedRepository> unsupported = new ArrayList<>();
     List<RepositoryMigrationPlan> repositoriesToMigrate = new ArrayList<>();
     List<GroupRepositoryMigrationPlan> groupRepositories = new ArrayList<>();
     List<ProxyRemoteRisk> proxyRemoteRisks = new ArrayList<>();
+    LinkedHashSet<String> migratableNames = inventory.repositories().stream()
+        .filter(NexusApiMigrationService::migratableRepository)
+        .map(NexusApiMigrationService::repositoryName)
+        .filter(name -> name != null && !name.isBlank())
+        .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
     int supported = 0;
     for (RepositoryDocument document : inventory.repositories()) {
       String name = repositoryName(document);
@@ -230,6 +235,13 @@ public class NexusApiMigrationService {
       if (!NexusRepositorySupport.supportedRecipe(format, type)) {
         unsupported.add(new UnsupportedRepository(name, format, type,
             NexusRepositorySupport.unsupportedReason(format, type)));
+        continue;
+      }
+      if (unsupportedSwiftProxyRemote(document)) {
+        unsupported.add(new UnsupportedRepository(
+            name, format, type, "unsupported_swift_remote"));
+        proxyRemoteRisks.add(new ProxyRemoteRisk(
+            name, format, remoteUrl(document), "unsupported_swift_remote"));
         continue;
       }
       supported++;
@@ -245,7 +257,10 @@ public class NexusApiMigrationService {
           credentialRisk == null && bool(value(document, "online"), true),
           remoteUrl(document)));
       if (repositoryTypeEnum(document) == RepositoryType.GROUP) {
-        groupRepositories.add(new GroupRepositoryMigrationPlan(name, format, groupMembers(document)));
+        groupRepositories.add(new GroupRepositoryMigrationPlan(
+            name,
+            format,
+            groupMembers(document).stream().filter(migratableNames::contains).toList()));
       }
       if ("proxy".equalsIgnoreCase(type)) {
         String remote = remoteUrl(document);
@@ -267,9 +282,17 @@ public class NexusApiMigrationService {
     if (!missingPasswordUsers.isEmpty()) {
       warnings.add("Local users without password hash compensation will need password reset.");
     }
-    proxyCredentialRisks(inventory).forEach((repository, risk) -> warnings.add(
-        "Proxy repository " + repository + " requires manual upstream credential configuration ("
-            + risk + "); the migrated repository will be offline."));
+    proxyManualActionRisks(inventory).forEach((repository, risk) -> {
+      if ("unsupported_swift_remote".equals(risk)) {
+        warnings.add("Swift proxy repository " + repository
+            + " uses an unsupported remote and will be skipped; recreate it manually with "
+            + "the GitHub base URL https://github.com/.");
+      } else {
+        warnings.add("Proxy repository " + repository
+            + " requires manual upstream credential configuration (" + risk
+            + "); the migrated repository will be offline.");
+      }
+    });
     return new NexusMigrationPreflight(
         inventory.blobStores().size(),
         inventory.repositories().size(),
@@ -400,9 +423,7 @@ public class NexusApiMigrationService {
     Map<String, BlobStoreRecord> targetBlobStores = migrateBlobStores(inventory, request.targetBlobStore());
     Map<String, RepositoryRecord> migrated = new LinkedHashMap<>();
     List<RepositoryDocument> supported = inventory.repositories().stream()
-        .filter(document -> NexusRepositorySupport.supportedRecipe(
-            repositoryFormat(document),
-            repositoryType(document)))
+        .filter(NexusApiMigrationService::migratableRepository)
         .sorted(Comparator.comparing((RepositoryDocument document) ->
             repositoryTypeEnum(document) == RepositoryType.GROUP ? 1 : 0))
         .toList();
@@ -436,7 +457,7 @@ public class NexusApiMigrationService {
     int proxy = 0;
     int group = 0;
     for (RepositoryDocument document : inventory.repositories()) {
-      if (NexusRepositorySupport.supportedRecipe(repositoryFormat(document), repositoryType(document))) {
+      if (migratableRepository(document)) {
         supported++;
         if ("proxy".equalsIgnoreCase(repositoryType(document))) {
           proxy++;
@@ -905,7 +926,7 @@ public class NexusApiMigrationService {
   private List<String> expectedRepositoryNames(NexusInventory inventory) {
     LinkedHashSet<String> names = new LinkedHashSet<>();
     inventory.repositories().stream()
-        .filter(document -> NexusRepositorySupport.supportedRecipe(repositoryFormat(document), repositoryType(document)))
+        .filter(NexusApiMigrationService::migratableRepository)
         .map(NexusApiMigrationService::repositoryName)
         .forEach(names::add);
     return List.copyOf(names);
@@ -996,6 +1017,18 @@ public class NexusApiMigrationService {
     }
   }
 
+  private static boolean unsupportedSwiftProxyRemote(RepositoryDocument document) {
+    return "swift".equalsIgnoreCase(repositoryFormat(document))
+        && repositoryTypeEnum(document) == RepositoryType.PROXY
+        && !validSwiftRemote(remoteUrl(document));
+  }
+
+  private static boolean migratableRepository(RepositoryDocument document) {
+    return NexusRepositorySupport.supportedRecipe(
+        repositoryFormat(document), repositoryType(document))
+        && !unsupportedSwiftProxyRemote(document);
+  }
+
   private static Map<String, Object> proxyAttributes(RepositoryDocument document, RepositoryRecipe recipe) {
     LinkedHashMap<String, Object> attributes = new LinkedHashMap<>();
     putIfNotNull(attributes, "remoteUrl", proxyRemoteUrl(document, recipe));
@@ -1010,10 +1043,10 @@ public class NexusApiMigrationService {
     return Map.copyOf(attributes);
   }
 
-  private static NexusMigrationPlan withProxyCredentialManualActions(
+  private static NexusMigrationPlan withProxyManualActions(
       NexusMigrationPlan plan,
       NexusInventory inventory) {
-    Map<String, String> risks = proxyCredentialRisks(inventory);
+    Map<String, String> risks = proxyManualActionRisks(inventory);
     if (risks.isEmpty()) {
       return plan;
     }
@@ -1024,11 +1057,18 @@ public class NexusApiMigrationService {
             return item;
           }
           ArrayList<String> reasons = new ArrayList<>(item.reasons());
-          reasons.add("Source Nexus omitted or masked the configured upstream credential; "
-              + "configure it manually before enabling the migrated proxy repository.");
           ArrayList<String> warnings = new ArrayList<>(item.warnings());
-          warnings.add("Target repository will be migrated offline because the upstream credential "
-              + "cannot be recovered from the Nexus REST response (" + risk + ").");
+          if ("unsupported_swift_remote".equals(risk)) {
+            reasons.add("Source Nexus uses a Swift proxy remote that kkrepo cannot reproduce; "
+                + "recreate the repository manually with https://github.com/.");
+            warnings.add("Target repository will be skipped because Swift proxy mode only supports "
+                + "the GitHub base URL.");
+          } else {
+            reasons.add("Source Nexus omitted or masked the configured upstream credential; "
+                + "configure it manually before enabling the migrated proxy repository.");
+            warnings.add("Target repository will be migrated offline because the upstream credential "
+                + "cannot be recovered from the Nexus REST response (" + risk + ").");
+          }
           return new NexusMigrationPlanItem(
               item.area(),
               item.name(),
@@ -1046,8 +1086,13 @@ public class NexusApiMigrationService {
         })
         .toList();
     LinkedHashSet<String> warnings = new LinkedHashSet<>(plan.warnings());
-    warnings.add("Some proxy credentials were omitted or masked by the source Nexus REST API; "
-        + "the affected target repositories are offline until credentials are configured manually.");
+    if (risks.containsValue("unsupported_swift_remote")) {
+      warnings.add("Swift proxies with non-GitHub remotes are skipped and require manual recreation.");
+    }
+    if (risks.values().stream().anyMatch(risk -> !"unsupported_swift_remote".equals(risk))) {
+      warnings.add("Some proxy credentials were omitted or masked by the source Nexus REST API; "
+          + "the affected target repositories are offline until credentials are configured manually.");
+    }
     LinkedHashSet<String> manualActions = new LinkedHashSet<>(plan.manualActions());
     risks.keySet().forEach(repository -> manualActions.add("repository:" + repository));
     List<String> warningList = List.copyOf(warnings);
@@ -1061,8 +1106,20 @@ public class NexusApiMigrationService {
         manualActionList);
   }
 
-  private static boolean hasProxyCredentialManualAction(NexusInventory inventory) {
-    return !proxyCredentialRisks(inventory).isEmpty();
+  private static boolean hasProxyManualAction(NexusInventory inventory) {
+    return !proxyManualActionRisks(inventory).isEmpty();
+  }
+
+  private static Map<String, String> proxyManualActionRisks(NexusInventory inventory) {
+    LinkedHashMap<String, String> risks = new LinkedHashMap<>(proxyCredentialRisks(inventory));
+    inventory.repositories().stream()
+        .filter(NexusApiMigrationService::unsupportedSwiftProxyRemote)
+        .sorted(Comparator.comparing(
+            NexusApiMigrationService::repositoryName,
+            Comparator.nullsLast(String::compareTo)))
+        .forEach(document -> risks.put(
+            repositoryName(document), "unsupported_swift_remote"));
+    return java.util.Collections.unmodifiableMap(risks);
   }
 
   private static Map<String, String> proxyCredentialRisks(NexusInventory inventory) {

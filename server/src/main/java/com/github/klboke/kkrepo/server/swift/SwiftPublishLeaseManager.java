@@ -4,6 +4,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.function.BooleanSupplier;
 import org.springframework.stereotype.Component;
 
 /** Database lease with a fencing token for cross-replica publish/cache miss coalescing. */
@@ -18,12 +19,19 @@ final class SwiftPublishLeaseManager {
   }
 
   Lease acquire(String key) {
+    return acquire(key, () -> false);
+  }
+
+  Lease acquire(String key, BooleanSupplier completedByAnotherReplica) {
     String owner = UUID.randomUUID().toString();
     Instant deadline = Instant.now().plus(ACQUIRE_TIMEOUT);
     do {
       OptionalLease acquired = tryAcquire(key, owner);
       if (acquired.lease() != null) {
         return acquired.lease();
+      }
+      if (completedByAnotherReplica != null && completedByAnotherReplica.getAsBoolean()) {
+        throw new SwiftExceptions.Conflict("Swift release already exists");
       }
       try {
         Thread.sleep(100);

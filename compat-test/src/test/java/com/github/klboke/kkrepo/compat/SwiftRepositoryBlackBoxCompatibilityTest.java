@@ -11,6 +11,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
@@ -121,6 +122,23 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
             + "rel=latest-version");
 
     assertSameSuccessJson("canonical success", reference, candidate);
+  }
+
+  @Test
+  void successJsonComparisonAllowsOfficialReleaseMetadataFieldsMissingFromNexus() throws Exception {
+    Exchange reference = successJsonExchange(
+        """
+        {"id":"kkrepo.fixture","version":"1.2.3","resources":[]}
+        """,
+        "");
+    Exchange candidate = successJsonExchange(
+        """
+        {"id":"kkrepo.fixture","version":"1.2.3","resources":[],
+         "metadata":{"description":"fixture"},"publishedAt":"2026-07-16T01:02:03Z"}
+        """,
+        "");
+
+    assertSameSuccessJson("Nexus release metadata extensions", reference, candidate);
   }
 
   @Test
@@ -280,7 +298,11 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
     Fixture semanticVersion = Fixture.unsigned(
         uniqueName("semver"), "1.0.0-beta.1+build.5", "semantic-version");
     assertEquals(201, publish(reference, semanticVersion, false).status());
-    assertEquals(201, publish(candidate, semanticVersion, false).status());
+    Exchange candidatePublish = publish(candidate, semanticVersion, false);
+    assertEquals(
+        201,
+        candidatePublish.status(),
+        () -> "candidate semantic-version publish response: " + candidatePublish.text());
 
     Exchange nexusNoAccept = getWithoutAccept(reference, semanticVersion.coordinatePath());
     Exchange candidateNoAccept = getWithoutAccept(candidate, semanticVersion.coordinatePath());
@@ -305,25 +327,30 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
     assertEquals(sourceChecksum(json(candidateUnversioned)),
         sourceChecksum(json(candidateCaseInsensitive)));
 
-    List<RequestCase> cases = List.of(
-        new RequestCase("missing package", "missing/package", JSON_ACCEPT),
-        new RequestCase("missing identifiers URL", "identifiers", JSON_ACCEPT),
-        new RequestCase("invalid scope", "-invalid/package", JSON_ACCEPT),
-        new RequestCase("invalid package", "valid/_invalid", JSON_ACCEPT),
-        new RequestCase("encoded slash", "valid/package%2Fescape", JSON_ACCEPT),
-        new RequestCase("dot segment", "valid/%2e%2e", JSON_ACCEPT),
-        new RequestCase("invalid SemVer", "valid/package/not-a-version", JSON_ACCEPT),
-        new RequestCase("invalid API version", "missing/package",
-            "application/vnd.swift.registry.vbogus+json"),
-        new RequestCase("unsupported API version", "missing/package",
-            "application/vnd.swift.registry.v2+json"),
-        new RequestCase("wrong representation", "missing/package", "application/xml"));
+    List<ErrorRequestCase> cases = List.of(
+        new ErrorRequestCase("missing package", "missing/package", JSON_ACCEPT, 404, 404),
+        // Nexus resolves these requests before applying the corresponding v1 validation rules.
+        new ErrorRequestCase("missing identifiers URL", "identifiers", JSON_ACCEPT, 404, 400),
+        new ErrorRequestCase("invalid scope", "-invalid/package", JSON_ACCEPT, 404, 404),
+        new ErrorRequestCase("invalid package", "valid/_invalid", JSON_ACCEPT, 404, 404),
+        new ErrorRequestCase("encoded slash", "valid/package%2Fescape", JSON_ACCEPT, 404, 404),
+        new ErrorRequestCase("dot segment", "valid/%2e%2e", JSON_ACCEPT, 200, 404),
+        new ErrorRequestCase(
+            "invalid SemVer", "valid/package/not-a-version", JSON_ACCEPT, 404, 404),
+        new ErrorRequestCase("invalid API version", "missing/package",
+            "application/vnd.swift.registry.vbogus+json", 404, 400),
+        new ErrorRequestCase("unsupported API version", "missing/package",
+            "application/vnd.swift.registry.v2+json", 404, 415),
+        new ErrorRequestCase(
+            "wrong representation", "missing/package", "application/xml", 404, 415));
 
-    for (RequestCase requestCase : cases) {
+    for (ErrorRequestCase requestCase : cases) {
       Exchange nexus = get(reference, requestCase.path(), requestCase.accept());
       Exchange kkrepo = get(candidate, requestCase.path(), requestCase.accept());
-      assertEquals(nexus.status(), kkrepo.status(), requestCase.label() + " status");
-      assertTrue(kkrepo.status() >= 400, requestCase.label() + " must be an error");
+      assertEquals(requestCase.nexusStatus(), nexus.status(),
+          requestCase.label() + " Nexus reference status");
+      assertEquals(requestCase.candidateStatus(), kkrepo.status(),
+          requestCase.label() + " candidate protocol status");
       assertProblem("candidate " + requestCase.label(), kkrepo);
     }
 
@@ -331,10 +358,8 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
         "not a ZIP".getBytes(StandardCharsets.UTF_8), null, "{}");
     Exchange nexusInvalid = publish(reference, invalid, true);
     Exchange candidateInvalid = publish(candidate, invalid, true);
-    assertEquals(nexusInvalid.status(), candidateInvalid.status(), "invalid archive publish status");
-    assertTrue(candidateInvalid.status() == 400 || candidateInvalid.status() == 413
-        || candidateInvalid.status() == 415 || candidateInvalid.status() == 422,
-        "invalid archive must be rejected as a client error");
+    assertEquals(400, nexusInvalid.status(), "invalid archive Nexus reference status");
+    assertEquals(422, candidateInvalid.status(), "invalid archive candidate protocol status");
     assertProblem("candidate invalid archive", candidateInvalid);
   }
 
@@ -1304,10 +1329,38 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
     assertContentType(candidate, "application/json", label + " candidate Content-Type");
     assertEquals("1", reference.header("content-version"), label + " Nexus Content-Version");
     assertEquals("1", candidate.header("content-version"), label + " candidate Content-Version");
-    assertEquals(canonicalJson(json(reference)), canonicalJson(json(candidate)),
+    JsonNode referenceBody = json(reference);
+    JsonNode candidateBody = json(candidate);
+    assertEquals(canonicalJson(referenceBody),
+        canonicalJson(candidateForNexusComparison(referenceBody, candidateBody, label)),
         label + " canonical JSON body");
     assertEquals(canonicalLinks(reference), canonicalLinks(candidate),
         label + " Link relation/target set");
+  }
+
+  private static JsonNode candidateForNexusComparison(
+      JsonNode reference, JsonNode candidate, String label) {
+    JsonNode comparable = candidate.deepCopy();
+    if (!isReleaseMetadata(reference) || !comparable.isObject()) {
+      return comparable;
+    }
+    if (!reference.has("metadata")) {
+      assertTrue(comparable.path("metadata").isObject(),
+          label + " candidate release metadata must include the official metadata object");
+      ((ObjectNode) comparable).remove("metadata");
+    }
+    if (!reference.has("publishedAt") && comparable.has("publishedAt")) {
+      requireDateTime(comparable.get("publishedAt"), label + " publishedAt");
+      ((ObjectNode) comparable).remove("publishedAt");
+    }
+    return comparable;
+  }
+
+  private static boolean isReleaseMetadata(JsonNode value) {
+    return value.isObject()
+        && value.path("id").isTextual()
+        && value.path("version").isTextual()
+        && value.path("resources").isArray();
   }
 
   private static JsonNode canonicalJson(JsonNode value) {
@@ -1365,8 +1418,9 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
         String relations = relation.group(1) == null ? relation.group(2) : relation.group(1);
         for (String relationName : relations.trim().split("\\s+")) {
           if (!relationName.isBlank()) {
-            result.add(relationName.toLowerCase(Locale.ROOT) + " "
-                + canonicalRegistryTarget(target));
+            String normalizedRelation = relationName.toLowerCase(Locale.ROOT);
+            result.add(normalizedRelation + " "
+                + canonicalLinkTarget(normalizedRelation, target));
           }
         }
       }
@@ -1436,6 +1490,30 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
       canonical.append('#').append(uri.getRawFragment());
     }
     return canonical.toString();
+  }
+
+  private static String canonicalLinkTarget(String relation, String value) {
+    if (!Set.of("latest-version", "predecessor-version", "successor-version")
+        .contains(relation)) {
+      return canonicalRegistryTarget(value);
+    }
+    final URI uri;
+    try {
+      uri = URI.create(value);
+    } catch (IllegalArgumentException ignored) {
+      return value;
+    }
+    String path = uri.getPath();
+    if (path == null) {
+      return value;
+    }
+    List<String> segments = java.util.Arrays.stream(path.split("/"))
+        .filter(segment -> !segment.isBlank())
+        .toList();
+    if (segments.size() < 3) {
+      return canonicalRegistryTarget(value);
+    }
+    return "$RELEASE/" + String.join("/", segments.subList(segments.size() - 3, segments.size()));
   }
 
   private static Exchange successJsonExchange(String body, String link) {
@@ -1535,6 +1613,10 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
   }
 
   private record RequestCase(String label, String path, String accept) {
+  }
+
+  private record ErrorRequestCase(
+      String label, String path, String accept, int nexusStatus, int candidateStatus) {
   }
 
   private record CandidateGenericToken(long id, String token) {

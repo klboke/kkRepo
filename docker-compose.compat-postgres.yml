@@ -72,11 +72,24 @@ services:
     volumes:
       - nexus-data:/nexus-data
 
+  kkrepo-blob-volume-init:
+    image: busybox:1.37
+    command:
+      - sh
+      - -c
+      - mkdir -p /mysql/default /postgresql/default && chmod 0777 /mysql/default /postgresql/default
+    restart: "no"
+    volumes:
+      - kkrepo-mysql-blobs:/mysql
+      - kkrepo-postgresql-blobs:/postgresql
+
   kkrepo:
     image: ${KKREPO_COMPAT_IMAGE:-kkrepo:compat}
     depends_on:
       mysql:
         condition: service_healthy
+      kkrepo-blob-volume-init:
+        condition: service_completed_successfully
     environment:
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/kkrepo?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
       SPRING_DATASOURCE_USERNAME: kkrepo
@@ -104,6 +117,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      kkrepo-blob-volume-init:
+        condition: service_completed_successfully
     environment:
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/kkrepo?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
       SPRING_DATASOURCE_USERNAME: kkrepo
@@ -130,6 +145,8 @@ services:
     depends_on:
       kkrepo-postgres:
         condition: service_healthy
+      kkrepo-blob-volume-init:
+        condition: service_completed_successfully
     environment:
       KKREPO_DATABASE_TYPE: postgresql
       SPRING_DATASOURCE_URL: jdbc:postgresql://kkrepo-postgres:5432/kkrepo
@@ -159,6 +176,8 @@ services:
     depends_on:
       kkrepo-postgres:
         condition: service_healthy
+      kkrepo-blob-volume-init:
+        condition: service_completed_successfully
     environment:
       KKREPO_DATABASE_TYPE: postgresql
       SPRING_DATASOURCE_URL: jdbc:postgresql://kkrepo-postgres:5432/kkrepo

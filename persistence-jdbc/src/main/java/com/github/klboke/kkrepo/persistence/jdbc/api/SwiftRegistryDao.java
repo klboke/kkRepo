@@ -34,6 +34,10 @@ public interface SwiftRegistryDao {
 
   List<RepositoryUrl> listRepositoryUrls(long releaseId);
 
+  /** Loads every repository URL for a ready package release without a per-release query. */
+  List<RepositoryUrl> listRepositoryUrls(
+      long repositoryId, String scopeLc, String nameLc);
+
   List<PackageIdentity> findIdentities(long repositoryId, String normalizedUrl);
 
   /**
@@ -41,6 +45,12 @@ public interface SwiftRegistryDao {
    * immutable binding and return the already stored source to let callers detect moved tags.
    */
   ProxySource bindProxySource(ProxySource candidate);
+
+  /**
+   * Binds a complete upstream tag observation in bulk. Candidates must belong to one package;
+   * existing first-observed tag/commit bindings remain immutable.
+   */
+  List<ProxySource> bindProxySources(List<ProxySource> candidates);
 
   Optional<ProxySource> findProxySource(
       long repositoryId, String scopeLc, String nameLc, String version);

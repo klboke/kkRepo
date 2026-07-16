@@ -99,7 +99,7 @@ class SwiftArchiveInspectorTest {
   void rejectsUnsafeDuplicateAndMalformedArchives() throws Exception {
     SwiftArchiveInspector inspector = new SwiftArchiveInspector(1024 * 1024, 1024 * 1024, 20);
 
-    assertThrows(SwiftExceptions.UnsupportedMediaType.class,
+    assertThrows(SwiftExceptions.UnprocessableEntity.class,
         () -> inspector.inspect(new ByteArrayInputStream("not-a-zip".getBytes(StandardCharsets.UTF_8))));
     assertThrows(SwiftExceptions.UnprocessableEntity.class,
         () -> inspector.inspect(new ByteArrayInputStream(zip(Map.of(
@@ -156,6 +156,44 @@ class SwiftArchiveInspectorTest {
         1024 * 1024, 1024 * 1024, 20);
     assertThrows(SwiftExceptions.UnprocessableEntity.class,
         () -> inspector.inspect(new ByteArrayInputStream(zip(conflict))));
+  }
+
+  @Test
+  void boundsRetainedManifestCountAndAggregateBytesBeforePackageRootSelection() throws Exception {
+    LinkedHashMap<String, byte[]> manyManifests = new LinkedHashMap<>();
+    manyManifests.put("fixture/Package.swift", manifest("5.9"));
+    manyManifests.put("fixture/nested-a/Package.swift", manifest("5.9"));
+    manyManifests.put("fixture/nested-b/Package.swift", manifest("5.9"));
+    SwiftArchiveInspector countBounded = new SwiftArchiveInspector(
+        1024 * 1024, 1024 * 1024, 20, 1024 * 1024, 2, 1024 * 1024);
+    assertThrows(SwiftExceptions.ContentTooLarge.class,
+        () -> countBounded.inspect(new ByteArrayInputStream(zip(manyManifests))));
+
+    LinkedHashMap<String, byte[]> aggregateManifests = new LinkedHashMap<>();
+    aggregateManifests.put("fixture/Package.swift", manifest("5.9"));
+    aggregateManifests.put("fixture/nested/Package.swift", manifest("5.9"));
+    SwiftArchiveInspector byteBounded = new SwiftArchiveInspector(
+        1024 * 1024, 1024 * 1024, 20, 1024 * 1024, 10,
+        manifest("5.9").length + 1L);
+    assertThrows(SwiftExceptions.ContentTooLarge.class,
+        () -> byteBounded.inspect(new ByteArrayInputStream(zip(aggregateManifests))));
+  }
+
+  @Test
+  void acceptsSemverBuildMetadataInTheTopLevelDirectoryName() throws Exception {
+    LinkedHashMap<String, byte[]> entries = new LinkedHashMap<>();
+    entries.put("fixture-1.0.0-beta.1+build.5/Package.swift", manifest("5.9"));
+    entries.put("fixture-1.0.0-beta.1+build.5/README.md", new byte[] {1});
+    SwiftArchiveInspector inspector = new SwiftArchiveInspector(
+        1024 * 1024, 1024 * 1024, 20);
+
+    SwiftArchiveInspector.InspectedArchive inspected =
+        inspector.inspect(new ByteArrayInputStream(zip(entries)));
+    try {
+      assertEquals(1, inspected.manifests().size());
+    } finally {
+      Files.deleteIfExists(inspected.file());
+    }
   }
 
   private static byte[] manifest(String toolsVersion) {

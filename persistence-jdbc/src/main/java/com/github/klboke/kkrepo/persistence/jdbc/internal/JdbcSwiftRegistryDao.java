@@ -18,8 +18,10 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.ArrayDeque;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -179,6 +181,23 @@ public class JdbcSwiftRegistryDao implements SwiftRegistryDao {
   }
 
   @Override
+  public List<RepositoryUrl> listRepositoryUrls(
+      long repositoryId, String scopeLc, String nameLc) {
+    return jdbc.query("""
+        SELECT u.*
+        FROM swift_repository_url u
+        JOIN swift_release r ON r.id = u.release_id
+        WHERE r.repository_id = ? AND r.scope_lc = ? AND r.name_lc = ?
+          AND r.status = 'READY'
+        ORDER BY r.revision DESC, r.version DESC, u.id
+        """, (rs, row) -> new RepositoryUrl(
+        rs.getLong("id"), rs.getLong("release_id"), rs.getLong("repository_id"),
+        rs.getString("scope_lc"), rs.getString("name_lc"),
+        rs.getString("normalized_url"), rs.getString("display_url")),
+        repositoryId, scopeLc, nameLc);
+  }
+
+  @Override
   public List<PackageIdentity> findIdentities(long repositoryId, String normalizedUrl) {
     return jdbc.query("""
         SELECT DISTINCT r.scope_lc, r.scope_display, r.name_lc, r.name_display
@@ -224,6 +243,71 @@ public class JdbcSwiftRegistryDao implements SwiftRegistryDao {
     return findProxySource(
             candidate.repositoryId(), candidate.scopeLc(), candidate.nameLc(), candidate.version())
         .orElseThrow();
+  }
+
+  @Override
+  @Transactional
+  public List<ProxySource> bindProxySources(List<ProxySource> candidates) {
+    if (candidates == null || candidates.isEmpty()) {
+      return List.of();
+    }
+    ProxySource first = candidates.getFirst();
+    LinkedHashMap<String, ProxySource> unique = new LinkedHashMap<>();
+    for (ProxySource candidate : candidates) {
+      if (candidate.repositoryId() != first.repositoryId()
+          || !candidate.scopeLc().equals(first.scopeLc())
+          || !candidate.nameLc().equals(first.nameLc())) {
+        throw new IllegalArgumentException("Bulk Swift proxy bindings must target one package");
+      }
+      unique.putIfAbsent(candidate.version(), candidate);
+    }
+
+    Map<String, ProxySource> existing = new LinkedHashMap<>();
+    listProxySources(first.repositoryId(), first.scopeLc(), first.nameLc())
+        .forEach(source -> existing.put(source.version(), source));
+    Instant defaultCheckedAt = Instant.now();
+    List<Object[]> updates = new java.util.ArrayList<>();
+    List<Object[]> inserts = new java.util.ArrayList<>();
+    for (ProxySource candidate : unique.values()) {
+      Instant checkedAt = candidate.lastCheckedAt() == null
+          ? defaultCheckedAt
+          : candidate.lastCheckedAt();
+      if (existing.containsKey(candidate.version())) {
+        updates.add(new Object[]{
+            nullableTimestamp(checkedAt), nullableTimestamp(checkedAt), candidate.repositoryId(),
+            candidate.scopeLc(), candidate.nameLc(), candidate.version()
+        });
+      } else {
+        inserts.add(new Object[]{
+            candidate.repositoryId(), candidate.scopeLc(), candidate.nameLc(), candidate.version(),
+            candidate.upstreamRepositoryUrl(), candidate.upstreamTag(), candidate.commitSha(),
+            candidate.generationProfile(), candidate.archiveSha256(), candidate.cacheState(),
+            candidate.releaseId(), nullableTimestamp(candidate.verifiedAt()), candidate.revision(),
+            nullableTimestamp(checkedAt), nullableTimestamp(checkedAt)
+        });
+      }
+    }
+    if (!updates.isEmpty()) {
+      jdbc.batchUpdate("""
+          UPDATE swift_proxy_source
+          SET observed_count = observed_count + 1, last_checked_at = ?, updated_at = ?
+          WHERE repository_id = ? AND scope_lc = ? AND name_lc = ? AND version = ?
+          """, updates);
+    }
+    if (!inserts.isEmpty()) {
+      jdbc.batchUpdate("""
+          INSERT INTO swift_proxy_source
+            (repository_id, scope_lc, name_lc, version, upstream_repository_url, upstream_tag,
+             commit_sha, generation_profile, archive_sha256, cache_state, release_id,
+             verified_at, revision, observed_count, last_checked_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+          """, inserts);
+    }
+
+    Map<String, ProxySource> bound = new LinkedHashMap<>();
+    listProxySources(first.repositoryId(), first.scopeLc(), first.nameLc())
+        .forEach(source -> bound.put(source.version(), source));
+    return unique.keySet().stream().map(bound::get).filter(java.util.Objects::nonNull).toList();
   }
 
   @Override

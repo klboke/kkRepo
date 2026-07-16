@@ -35,6 +35,8 @@ final class SwiftArchiveInspector {
   private static final Pattern TOOLS_VERSION =
       Pattern.compile("^\\s*//\\s*swift-tools-version\\s*:\\s*(\\d+\\.\\d+(?:\\.\\d+)?).*$");
   private static final int MAX_MANIFEST_BYTES = 2 * 1024 * 1024;
+  private static final int DEFAULT_MAX_MANIFESTS = 64;
+  private static final long DEFAULT_MAX_MANIFEST_TOTAL_BYTES = 16L * 1024 * 1024;
   private static final long RATIO_FLOOR = 1024L * 1024;
   private static final long DEFAULT_MAX_COMPRESSION_RATIO = 200;
   private static final Duration DEFAULT_MAX_INSPECTION_TIME = Duration.ofMinutes(2);
@@ -43,6 +45,8 @@ final class SwiftArchiveInspector {
   private final long maxExpandedBytes;
   private final long maxEntryBytes;
   private final int maxEntries;
+  private final int maxManifests;
+  private final long maxManifestTotalBytes;
   private final long maxCompressionRatio;
   private final long maxInspectionNanos;
 
@@ -52,12 +56,18 @@ final class SwiftArchiveInspector {
       @Value("${kkrepo.swift.archive.max-expanded-bytes:2147483648}") long maxExpandedBytes,
       @Value("${kkrepo.swift.archive.max-entries:100000}") int maxEntries,
       @Value("${kkrepo.swift.archive.max-entry-bytes:1073741824}") long maxEntryBytes,
+      @Value("${kkrepo.swift.archive.max-manifests:64}") int maxManifests,
+      @Value("${kkrepo.swift.archive.max-manifest-total-bytes:16777216}")
+          long maxManifestTotalBytes,
       @Value("${kkrepo.swift.archive.max-compression-ratio:200}") long maxCompressionRatio,
       @Value("${kkrepo.swift.archive.max-inspection-seconds:120}") long maxInspectionSeconds) {
     this.maxCompressedBytes = Math.max(1L, maxCompressedBytes);
     this.maxExpandedBytes = Math.max(1L, maxExpandedBytes);
     this.maxEntryBytes = Math.max(1L, Math.min(maxEntryBytes, this.maxExpandedBytes));
     this.maxEntries = Math.max(1, maxEntries);
+    this.maxManifests = Math.max(1, maxManifests);
+    this.maxManifestTotalBytes = Math.max(
+        1L, Math.min(maxManifestTotalBytes, this.maxExpandedBytes));
     this.maxCompressionRatio = Math.max(1L, maxCompressionRatio);
     this.maxInspectionNanos = Duration.ofSeconds(Math.max(1L, maxInspectionSeconds)).toNanos();
   }
@@ -69,6 +79,19 @@ final class SwiftArchiveInspector {
   SwiftArchiveInspector(
       long maxCompressedBytes, long maxExpandedBytes, int maxEntries, long maxEntryBytes) {
     this(maxCompressedBytes, maxExpandedBytes, maxEntries, maxEntryBytes,
+        DEFAULT_MAX_MANIFESTS, DEFAULT_MAX_MANIFEST_TOTAL_BYTES,
+        DEFAULT_MAX_COMPRESSION_RATIO, DEFAULT_MAX_INSPECTION_TIME.toSeconds());
+  }
+
+  SwiftArchiveInspector(
+      long maxCompressedBytes,
+      long maxExpandedBytes,
+      int maxEntries,
+      long maxEntryBytes,
+      int maxManifests,
+      long maxManifestTotalBytes) {
+    this(maxCompressedBytes, maxExpandedBytes, maxEntries, maxEntryBytes,
+        maxManifests, maxManifestTotalBytes,
         DEFAULT_MAX_COMPRESSION_RATIO, DEFAULT_MAX_INSPECTION_TIME.toSeconds());
   }
 
@@ -129,7 +152,7 @@ final class SwiftArchiveInspector {
       int first = input.read();
       int second = input.read();
       if (first != 'P' || second != 'K') {
-        throw new SwiftExceptions.UnsupportedMediaType("source-archive must be a ZIP archive");
+        throw new SwiftExceptions.UnprocessableEntity("source-archive must be a ZIP archive");
       }
     }
   }
@@ -137,7 +160,9 @@ final class SwiftArchiveInspector {
   private InspectedEntries inspectEntries(Path file, long compressedSize) throws IOException {
     long started = System.nanoTime();
     long expanded = 0;
+    long capturedManifestBytes = 0;
     int entries = 0;
+    int manifests = 0;
     Set<String> exactNames = new HashSet<>();
     Set<String> caseFoldedNames = new HashSet<>();
     Set<String> fileNames = new HashSet<>();
@@ -169,6 +194,10 @@ final class SwiftArchiveInspector {
         String leaf = leaf(name);
         boolean manifest = "Package.swift".equals(leaf)
             || VERSIONED_MANIFEST.matcher(leaf).matches();
+        if (manifest && ++manifests > maxManifests) {
+          throw new SwiftExceptions.ContentTooLarge(
+              "Swift source archive contains too many package manifests");
+        }
         ByteArrayOutputStream captured = manifest ? new ByteArrayOutputStream() : null;
         long entryExpanded = 0;
         byte[] buffer = new byte[32 * 1024];
@@ -191,6 +220,11 @@ final class SwiftArchiveInspector {
           if (captured != null) {
             if (captured.size() + read > MAX_MANIFEST_BYTES) {
               throw new SwiftExceptions.ContentTooLarge("Swift package manifest is too large");
+            }
+            capturedManifestBytes += read;
+            if (capturedManifestBytes > maxManifestTotalBytes) {
+              throw new SwiftExceptions.ContentTooLarge(
+                  "Swift package manifests exceed the aggregate safe limit");
             }
             captured.write(buffer, 0, read);
           }
