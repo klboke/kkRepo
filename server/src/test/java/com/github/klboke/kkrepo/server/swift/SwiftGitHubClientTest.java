@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.swift;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -179,6 +180,95 @@ class SwiftGitHubClientTest {
   }
 
   @Test
+  void fallsBackToAnonymousForAPublicRepositoryAfterAuthenticatedTransientFailures()
+      throws Exception {
+    ObjectMapper mapper = new ObjectMapper();
+    byte[] tags = mapper.writeValueAsBytes(List.of(Map.of(
+        "name", "1.2.3",
+        "commit", Map.of("sha", "a".repeat(40)))));
+    SequencedFetcher fetcher = new SequencedFetcher(
+        result(503, Map.of(), new byte[0]),
+        result(503, Map.of(), new byte[0]),
+        result(503, Map.of(), new byte[0]),
+        result(503, Map.of(), new byte[0]),
+        result(200, Map.of("Content-Type", "application/json"), tags));
+    List<Duration> delays = new ArrayList<>();
+    SwiftGitHubClient client = new SwiftGitHubClient(
+        fetcher,
+        mapper,
+        mock(SwiftArchiveInspector.class),
+        delays::add);
+
+    List<SwiftGitHubClient.Tag> result = client.tags(
+        proxy("https://github.com/", "workflow-token"),
+        SwiftGitHubClient.coordinates("apple", "swift-log"));
+
+    assertEquals(List.of(
+        new SwiftGitHubClient.Tag("1.2.3", "1.2.3", "a".repeat(40))), result);
+    assertEquals(5, fetcher.calls);
+    for (int index = 0; index < 4; index++) {
+      assertEquals(
+          "Bearer workflow-token", fetcher.requests.get(index).authorizationHeader());
+    }
+    assertNull(fetcher.requests.get(4).authorizationHeader());
+    assertEquals(
+        List.of(Duration.ofSeconds(1), Duration.ofSeconds(2), Duration.ofSeconds(4)),
+        delays);
+  }
+
+  @Test
+  void preservesTheAuthenticatedFailureWhenAnonymousCannotSeeTheRepository() {
+    SequencedFetcher fetcher = new SequencedFetcher(
+        result(503, Map.of(), new byte[0]),
+        result(503, Map.of(), new byte[0]),
+        result(503, Map.of(), new byte[0]),
+        result(503, Map.of(), new byte[0]),
+        result(404, Map.of(), new byte[0]));
+    SwiftGitHubClient client = new SwiftGitHubClient(
+        fetcher,
+        new ObjectMapper(),
+        mock(SwiftArchiveInspector.class),
+        ignored -> {});
+
+    SwiftExceptions.BadUpstream failure = assertThrows(
+        SwiftExceptions.BadUpstream.class,
+        () -> client.tags(
+            proxy("https://github.com/", "private-token"),
+            SwiftGitHubClient.coordinates("private", "repository")));
+
+    assertEquals(502, failure.status());
+    assertTrue(failure.getMessage().contains("HTTP 503"));
+    assertEquals(5, fetcher.calls);
+    assertNull(fetcher.requests.get(4).authorizationHeader());
+  }
+
+  @Test
+  void doesNotDoubleTheRetryDelayWhenAnonymousGitHubIsAlsoUnavailable() {
+    SequencedFetcher fetcher = new SequencedFetcher(
+        result(503, Map.of(), new byte[0]),
+        result(503, Map.of(), new byte[0]),
+        result(503, Map.of(), new byte[0]),
+        result(503, Map.of(), new byte[0]),
+        result(503, Map.of(), new byte[0]));
+    List<Duration> delays = new ArrayList<>();
+    SwiftGitHubClient client = new SwiftGitHubClient(
+        fetcher,
+        new ObjectMapper(),
+        mock(SwiftArchiveInspector.class),
+        delays::add);
+
+    assertThrows(SwiftExceptions.BadUpstream.class, () -> client.tags(
+        proxy("https://github.com/", "workflow-token"),
+        SwiftGitHubClient.coordinates("apple", "swift-log")));
+
+    assertEquals(5, fetcher.calls);
+    assertNull(fetcher.requests.get(4).authorizationHeader());
+    assertEquals(
+        List.of(Duration.ofSeconds(1), Duration.ofSeconds(2), Duration.ofSeconds(4)),
+        delays);
+  }
+
+  @Test
   void doesNotRetryBeforeALongGitHubRetryAfterWindow() {
     SequencedFetcher fetcher = new SequencedFetcher(
         result(503, Map.of("Retry-After", "30"), new byte[0]));
@@ -190,9 +280,11 @@ class SwiftGitHubClientTest {
         delays::add);
 
     assertThrows(SwiftExceptions.BadUpstream.class, () -> client.tags(
-        proxy("https://github.com/"), SwiftGitHubClient.coordinates("apple", "swift-log")));
+        proxy("https://github.com/", "workflow-token"),
+        SwiftGitHubClient.coordinates("apple", "swift-log")));
 
     assertEquals(1, fetcher.calls);
+    assertEquals("Bearer workflow-token", fetcher.requests.get(0).authorizationHeader());
     assertTrue(delays.isEmpty());
   }
 
@@ -264,7 +356,16 @@ class SwiftGitHubClientTest {
     return runtime(RepositoryType.PROXY, remoteUrl);
   }
 
+  private static RepositoryRuntime proxy(String remoteUrl, String bearerToken) {
+    return runtime(RepositoryType.PROXY, remoteUrl, bearerToken);
+  }
+
   private static RepositoryRuntime runtime(RepositoryType type, String remoteUrl) {
+    return runtime(type, remoteUrl, null);
+  }
+
+  private static RepositoryRuntime runtime(
+      RepositoryType type, String remoteUrl, String bearerToken) {
     return new RepositoryRuntime(
         1L,
         "swift",
@@ -282,11 +383,19 @@ class SwiftGitHubClientTest {
         null,
         true,
         null,
+        null,
+        bearerToken,
+        null,
+        null,
+        null,
+        null,
+        null,
         List.of());
   }
 
   private static final class SequencedFetcher extends HttpRemoteFetcher {
     private final Queue<HttpRemoteFetcher.Result> results = new ArrayDeque<>();
+    private final List<HttpRemoteFetcher.Request> requests = new ArrayList<>();
     private int calls;
 
     private SequencedFetcher(HttpRemoteFetcher.Result... results) {
@@ -297,6 +406,7 @@ class SwiftGitHubClientTest {
     @Override
     public HttpRemoteFetcher.Result fetch(HttpRemoteFetcher.Request request) {
       calls++;
+      requests.add(request);
       return results.remove();
     }
   }

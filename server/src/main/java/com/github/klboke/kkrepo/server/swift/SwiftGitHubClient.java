@@ -41,6 +41,8 @@ final class SwiftGitHubClient {
   private static final int MAX_TAG_PAGES = 100;
   /** Bounds transient GitHub retries to seven seconds without a Retry-After response. */
   private static final int MAX_TRANSIENT_STATUS_ATTEMPTS = 4;
+  /** A fallback only separates credential-specific failures; it must not double the wait budget. */
+  private static final int MAX_ANONYMOUS_FALLBACK_ATTEMPTS = 1;
   private static final Duration BASE_TRANSIENT_RETRY_DELAY = Duration.ofSeconds(1);
   private static final Duration MAX_RETRY_AFTER_DELAY = Duration.ofSeconds(10);
   private static final Set<Integer> TRANSIENT_STATUSES = Set.of(408, 425, 500, 502, 503, 504);
@@ -156,6 +158,46 @@ final class SwiftGitHubClient {
       HttpRemoteFetcher.Request request,
       String resource,
       HttpRemoteFetcher.ResultHandler<T> handler) throws IOException {
+    try {
+      return fetchWithinTransientStatusRetryBudget(
+          request, resource, handler, MAX_TRANSIENT_STATUS_ATTEMPTS);
+    } catch (ExhaustedTransientGitHubStatus exhausted) {
+      SwiftExceptions.BadUpstream authenticatedFailure = new SwiftExceptions.BadUpstream(
+          resource + " request returned HTTP " + exhausted.status());
+      if (request.authorizationHeader() == null || request.authorizationHeader().isBlank()) {
+        throw authenticatedFailure;
+      }
+
+      log.warn(
+          "Authenticated GitHub requests exhausted transient retries for repository={} "
+              + "resource={} status={}; retrying without credentials for a public repository",
+          request.repository(),
+          resource,
+          exhausted.status());
+      try {
+        return fetchWithinTransientStatusRetryBudget(
+            withoutAuthorization(request),
+            resource,
+            handler,
+            MAX_ANONYMOUS_FALLBACK_ATTEMPTS);
+      } catch (ExhaustedTransientGitHubStatus
+          | SwiftExceptions.NotFound
+          | SwiftExceptions.UpstreamRateLimited
+          | SwiftExceptions.BadUpstream fallbackFailure) {
+        authenticatedFailure.addSuppressed(fallbackFailure);
+        throw authenticatedFailure;
+      } catch (IOException fallbackFailure) {
+        authenticatedFailure.addSuppressed(fallbackFailure);
+        throw authenticatedFailure;
+      }
+    }
+  }
+
+  private <T> T fetchWithinTransientStatusRetryBudget(
+      HttpRemoteFetcher.Request request,
+      String resource,
+      HttpRemoteFetcher.ResultHandler<T> handler,
+      int maxAttempts) throws IOException {
     for (int attempt = 1; ; attempt++) {
       try {
         return fetcher.fetchWithBodyRetry(request, resource, result -> {
@@ -166,11 +208,13 @@ final class SwiftGitHubClient {
           return handler.handle(result);
         });
       } catch (TransientGitHubStatus transientStatus) {
-        if (attempt >= MAX_TRANSIENT_STATUS_ATTEMPTS
-            || transientStatus.retryAfter().filter(
-                delay -> delay.compareTo(MAX_RETRY_AFTER_DELAY) > 0).isPresent()) {
+        if (transientStatus.retryAfter().filter(
+            delay -> delay.compareTo(MAX_RETRY_AFTER_DELAY) > 0).isPresent()) {
           throw new SwiftExceptions.BadUpstream(
               resource + " request returned HTTP " + transientStatus.status());
+        }
+        if (attempt >= maxAttempts) {
+          throw new ExhaustedTransientGitHubStatus(transientStatus.status());
         }
         Duration delay = transientStatus.retryAfter().orElse(
             BASE_TRANSIENT_RETRY_DELAY.multipliedBy(1L << (attempt - 1)));
@@ -180,11 +224,27 @@ final class SwiftGitHubClient {
             resource,
             transientStatus.status(),
             attempt,
-            MAX_TRANSIENT_STATUS_ATTEMPTS,
+            maxAttempts,
             delay.toMillis());
         sleepBeforeRetry(resource, delay);
       }
     }
+  }
+
+  private static HttpRemoteFetcher.Request withoutAuthorization(
+      HttpRemoteFetcher.Request request) {
+    return new HttpRemoteFetcher.Request(
+        request.url(),
+        request.etag(),
+        request.lastModified(),
+        request.timeout(),
+        request.timeoutProfile(),
+        request.headOnly(),
+        request.repository(),
+        request.format(),
+        request.trustedHost(),
+        null,
+        request.allowedUnsignedRedirectHosts());
   }
 
   private void sleepBeforeRetry(String resource, Duration delay) {
@@ -386,6 +446,19 @@ final class SwiftGitHubClient {
 
     private Optional<Duration> retryAfter() {
       return retryAfter;
+    }
+  }
+
+  private static final class ExhaustedTransientGitHubStatus extends RuntimeException {
+    private final int status;
+
+    private ExhaustedTransientGitHubStatus(int status) {
+      super("GitHub transient retry budget exhausted with HTTP " + status);
+      this.status = status;
+    }
+
+    private int status() {
+      return status;
     }
   }
 }
