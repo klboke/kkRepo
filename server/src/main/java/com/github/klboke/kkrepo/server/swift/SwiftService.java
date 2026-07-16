@@ -1037,7 +1037,7 @@ public class SwiftService {
     }
 
     String leaseKey = coordinateLeaseKey(runtime.id(), scopeLc, nameLc, version);
-    try (SwiftPublishLeaseManager.Lease lease = leases.acquire(leaseKey)) {
+    try (SwiftPublishLeaseManager.Lease lease = leases.acquireForCoalescedRead(leaseKey)) {
       if (registry.findTombstone(runtime.id(), scopeLc, nameLc, version).isPresent()) {
         throw new SwiftExceptions.NotFound("Swift release was permanently deleted");
       }

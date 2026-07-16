@@ -797,7 +797,7 @@ class SwiftServiceTest {
     when(fixture.registry.findProxySource(proxy.id(), "acme", "demo", "1.2.3"))
         .thenReturn(Optional.of(source));
     SwiftPublishLeaseManager.Lease lease = mock(SwiftPublishLeaseManager.Lease.class);
-    when(fixture.leases.acquire(anyString())).thenReturn(lease);
+    when(fixture.leases.acquireForCoalescedRead(anyString())).thenReturn(lease);
     when(fixture.github.archive(eq(proxy), any(), eq("a".repeat(40))))
         .thenThrow(new SwiftExceptions.NotFound("gone"));
 
@@ -1211,6 +1211,7 @@ class SwiftServiceTest {
     SwiftPublishLeaseManager leases = mock(SwiftPublishLeaseManager.class);
     SwiftPublishLeaseManager.Lease defaultLease = mock(SwiftPublishLeaseManager.Lease.class);
     when(leases.acquire(anyString())).thenReturn(defaultLease);
+    when(leases.acquireForCoalescedRead(anyString())).thenReturn(defaultLease);
     when(leases.acquire(anyString(), any())).thenReturn(defaultLease);
     SwiftComponentService components = mock(SwiftComponentService.class);
     SecurityAuditDao audit = mock(SecurityAuditDao.class);

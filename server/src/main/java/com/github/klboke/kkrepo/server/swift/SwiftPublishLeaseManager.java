@@ -12,6 +12,8 @@ import org.springframework.stereotype.Component;
 final class SwiftPublishLeaseManager {
   private static final Duration LEASE_TIME = Duration.ofMinutes(5);
   private static final Duration ACQUIRE_TIMEOUT = Duration.ofSeconds(30);
+  private static final Duration COALESCED_READ_ACQUIRE_TIMEOUT =
+      LEASE_TIME.plus(ACQUIRE_TIMEOUT);
   private final SwiftRegistryDao registry;
 
   SwiftPublishLeaseManager(SwiftRegistryDao registry) {
@@ -23,8 +25,23 @@ final class SwiftPublishLeaseManager {
   }
 
   Lease acquire(String key, BooleanSupplier completedByAnotherReplica) {
+    return acquire(key, completedByAnotherReplica, ACQUIRE_TIMEOUT);
+  }
+
+  /**
+   * Acquires the lease used to coalesce a proxy cache miss. A proxy reader must be willing to wait
+   * for the current lease lifetime: the owner can legitimately spend longer than the hosted
+   * publish acquire timeout downloading and inspecting an upstream archive. Once this lease is
+   * acquired, the caller re-reads the durable release before doing any upstream work.
+   */
+  Lease acquireForCoalescedRead(String key) {
+    return acquire(key, () -> false, COALESCED_READ_ACQUIRE_TIMEOUT);
+  }
+
+  private Lease acquire(
+      String key, BooleanSupplier completedByAnotherReplica, Duration acquireTimeout) {
     String owner = UUID.randomUUID().toString();
-    Instant deadline = Instant.now().plus(ACQUIRE_TIMEOUT);
+    Instant deadline = Instant.now().plus(acquireTimeout);
     do {
       OptionalLease acquired = tryAcquire(key, owner);
       if (acquired.lease() != null) {
