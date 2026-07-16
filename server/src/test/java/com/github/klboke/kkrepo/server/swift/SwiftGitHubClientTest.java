@@ -180,18 +180,28 @@ class SwiftGitHubClientTest {
   }
 
   @Test
-  void fallsBackToAnonymousForAPublicRepositoryAfterAuthenticatedTransientFailures()
+  void keepsUsingAnonymousAcrossTagPagesAfterAuthenticatedTransientFailures()
       throws Exception {
     ObjectMapper mapper = new ObjectMapper();
-    byte[] tags = mapper.writeValueAsBytes(List.of(Map.of(
-        "name", "1.2.3",
-        "commit", Map.of("sha", "a".repeat(40)))));
+    List<Map<String, Object>> firstPage = new ArrayList<>();
+    for (int index = 0; index < 100; index++) {
+      firstPage.add(Map.of(
+          "name", "1.2." + index,
+          "commit", Map.of("sha", "%040x".formatted(index + 1))));
+    }
     SequencedFetcher fetcher = new SequencedFetcher(
         result(503, Map.of(), new byte[0]),
         result(503, Map.of(), new byte[0]),
         result(503, Map.of(), new byte[0]),
         result(503, Map.of(), new byte[0]),
-        result(200, Map.of("Content-Type", "application/json"), tags));
+        result(
+            200,
+            Map.of("Content-Type", "application/json"),
+            mapper.writeValueAsBytes(firstPage)),
+        result(
+            200,
+            Map.of("Content-Type", "application/json"),
+            "[]".getBytes(StandardCharsets.UTF_8)));
     List<Duration> delays = new ArrayList<>();
     SwiftGitHubClient client = new SwiftGitHubClient(
         fetcher,
@@ -203,14 +213,14 @@ class SwiftGitHubClientTest {
         proxy("https://github.com/", "workflow-token"),
         SwiftGitHubClient.coordinates("apple", "swift-log"));
 
-    assertEquals(List.of(
-        new SwiftGitHubClient.Tag("1.2.3", "1.2.3", "a".repeat(40))), result);
-    assertEquals(5, fetcher.calls);
+    assertEquals(100, result.size());
+    assertEquals(6, fetcher.calls);
     for (int index = 0; index < 4; index++) {
       assertEquals(
           "Bearer workflow-token", fetcher.requests.get(index).authorizationHeader());
     }
     assertNull(fetcher.requests.get(4).authorizationHeader());
+    assertNull(fetcher.requests.get(5).authorizationHeader());
     assertEquals(
         List.of(Duration.ofSeconds(1), Duration.ofSeconds(2), Duration.ofSeconds(4)),
         delays);

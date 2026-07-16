@@ -73,11 +73,13 @@ final class SwiftGitHubClient {
     requireGitHubProxy(runtime);
     List<Tag> tags = new ArrayList<>();
     Map<String, Tag> byVersion = new LinkedHashMap<>();
+    CredentialFallbackState credentialState = new CredentialFallbackState();
     boolean exhausted = false;
     for (int page = 1; page <= MAX_TAG_PAGES; page++) {
       String url = API + coordinates.owner() + "/" + coordinates.repository()
           + "/tags?per_page=100&page=" + page;
-      List<Map<String, Object>> rows = getJsonList(runtime, url, "GitHub tags");
+      List<Map<String, Object>> rows = getJsonList(
+          runtime, url, "GitHub tags", credentialState);
       for (Map<String, Object> row : rows) {
         String tagName = text(row.get("name"));
         String version = normalizeTag(tagName).orElse(null);
@@ -134,9 +136,14 @@ final class SwiftGitHubClient {
   }
 
   private List<Map<String, Object>> getJsonList(
-      RepositoryRuntime runtime, String url, String resource) {
+      RepositoryRuntime runtime,
+      String url,
+      String resource,
+      CredentialFallbackState credentialState) {
     try {
-      return fetchWithTransientStatusRetry(request(runtime, url, false), resource, result -> {
+      HttpRemoteFetcher.Request request = credentialState.apply(
+          request(runtime, url, false));
+      return fetchWithTransientStatusRetry(request, resource, result -> {
         if (result.status() == 404 || result.status() == 410) {
           throw new SwiftExceptions.NotFound(resource + " not found");
         }
@@ -148,7 +155,7 @@ final class SwiftGitHubClient {
               resource + " request returned HTTP " + result.status());
         }
         return mapper.readValue(result.body(), LIST_OF_MAPS);
-      });
+      }, credentialState);
     } catch (IOException e) {
       throw new SwiftExceptions.BadUpstream("Unable to fetch " + resource, e);
     }
@@ -158,6 +165,14 @@ final class SwiftGitHubClient {
       HttpRemoteFetcher.Request request,
       String resource,
       HttpRemoteFetcher.ResultHandler<T> handler) throws IOException {
+    return fetchWithTransientStatusRetry(request, resource, handler, null);
+  }
+
+  private <T> T fetchWithTransientStatusRetry(
+      HttpRemoteFetcher.Request request,
+      String resource,
+      HttpRemoteFetcher.ResultHandler<T> handler,
+      CredentialFallbackState credentialState) throws IOException {
     try {
       return fetchWithinTransientStatusRetryBudget(
           request, resource, handler, MAX_TRANSIENT_STATUS_ATTEMPTS);
@@ -175,11 +190,15 @@ final class SwiftGitHubClient {
           resource,
           exhausted.status());
       try {
-        return fetchWithinTransientStatusRetryBudget(
+        T result = fetchWithinTransientStatusRetryBudget(
             withoutAuthorization(request),
             resource,
             handler,
             MAX_ANONYMOUS_FALLBACK_ATTEMPTS);
+        if (credentialState != null) {
+          credentialState.useAnonymous();
+        }
+        return result;
       } catch (ExhaustedTransientGitHubStatus
           | SwiftExceptions.NotFound
           | SwiftExceptions.UpstreamRateLimited
@@ -459,6 +478,18 @@ final class SwiftGitHubClient {
 
     private int status() {
       return status;
+    }
+  }
+
+  private static final class CredentialFallbackState {
+    private boolean anonymous;
+
+    private HttpRemoteFetcher.Request apply(HttpRemoteFetcher.Request request) {
+      return anonymous ? withoutAuthorization(request) : request;
+    }
+
+    private void useAnonymous() {
+      anonymous = true;
     }
   }
 }
