@@ -398,7 +398,7 @@ final class SwiftGitHubClient {
           if (TRANSIENT_STATUSES.contains(result.status())) {
             throw new SwiftExceptions.BadUpstream(
                 "GitHub smart HTTP tag request returned HTTP " + result.status(),
-                new ExhaustedTransientGitHubStatus(result.status()));
+                new ExhaustedTransientGitSmartHttpStatus(result.status()));
           }
           if (result.status() < 200 || result.status() >= 300) {
             throw new SwiftExceptions.BadUpstream(
@@ -519,7 +519,7 @@ final class SwiftGitHubClient {
     }
     for (Throwable suppressed : failure.getSuppressed()) {
       if (suppressed instanceof SwiftExceptions.BadUpstream fallback
-          && fallback.getCause() instanceof ExhaustedTransientGitHubStatus) {
+          && fallback.getCause() instanceof ExhaustedTransientGitSmartHttpStatus) {
         return true;
       }
     }
@@ -702,6 +702,12 @@ final class SwiftGitHubClient {
 
     private int status() {
       return status;
+    }
+  }
+
+  static final class ExhaustedTransientGitSmartHttpStatus extends RuntimeException {
+    ExhaustedTransientGitSmartHttpStatus(int status) {
+      super("GitHub smart HTTP transient request failed with HTTP " + status);
     }
   }
 

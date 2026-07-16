@@ -353,16 +353,44 @@ class SwiftGitHubClientTest {
         mock(SwiftArchiveInspector.class),
         delays::add);
 
-    assertThrows(SwiftExceptions.BadUpstream.class, () -> client.tags(
-        proxy("https://github.com/", "workflow-token"),
-        SwiftGitHubClient.coordinates("apple", "swift-log")));
+    SwiftExceptions.BadUpstream failure = assertThrows(
+        SwiftExceptions.BadUpstream.class,
+        () -> client.tags(
+            proxy("https://github.com/", "workflow-token"),
+            SwiftGitHubClient.coordinates("apple", "swift-log")));
 
     assertEquals(6, fetcher.calls);
     assertNull(fetcher.requests.get(4).authorizationHeader());
     assertNull(fetcher.requests.get(5).authorizationHeader());
+    assertTrue(SwiftGitHubClient.isTransientTagAvailabilityFailure(failure));
     assertEquals(
         List.of(Duration.ofSeconds(1), Duration.ofSeconds(2), Duration.ofSeconds(4)),
         delays);
+  }
+
+  @Test
+  void doesNotTreatAnonymousRestFailureAsSmartHttpOutage() {
+    SequencedFetcher fetcher = new SequencedFetcher(
+        result(503, Map.of(), new byte[0]),
+        result(503, Map.of(), new byte[0]),
+        result(503, Map.of(), new byte[0]),
+        result(503, Map.of(), new byte[0]),
+        result(503, Map.of(), new byte[0]),
+        result(404, Map.of(), new byte[0]));
+    SwiftGitHubClient client = new SwiftGitHubClient(
+        fetcher,
+        new ObjectMapper(),
+        mock(SwiftArchiveInspector.class),
+        ignored -> {});
+
+    SwiftExceptions.BadUpstream failure = assertThrows(
+        SwiftExceptions.BadUpstream.class,
+        () -> client.tags(
+            proxy("https://github.com/", "private-token"),
+            SwiftGitHubClient.coordinates("private", "repository")));
+
+    assertEquals(6, fetcher.calls);
+    assertFalse(SwiftGitHubClient.isTransientTagAvailabilityFailure(failure));
   }
 
   @Test

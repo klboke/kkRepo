@@ -431,7 +431,7 @@ class SwiftServiceTest {
         new SwiftGitHubClient.ExhaustedTransientGitHubStatus(503));
     apiFailure.addSuppressed(new SwiftExceptions.BadUpstream(
         "GitHub smart HTTP tag request returned HTTP 503",
-        new SwiftGitHubClient.ExhaustedTransientGitHubStatus(503)));
+        new SwiftGitHubClient.ExhaustedTransientGitSmartHttpStatus(503)));
     when(fixture.github.tags(any(), any())).thenThrow(apiFailure);
 
     assertThrows(SwiftExceptions.BadUpstream.class, () -> fixture.service.get(
