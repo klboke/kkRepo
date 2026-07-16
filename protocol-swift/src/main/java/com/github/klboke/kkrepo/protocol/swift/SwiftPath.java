@@ -5,7 +5,12 @@ public record SwiftPath(
     String rawPath,
     String scope,
     String name,
-    String version) {
+    String version,
+    boolean jsonAlias) {
+
+  public SwiftPath(Kind kind, String rawPath, String scope, String name, String version) {
+    this(kind, rawPath, scope, name, version, false);
+  }
 
   public enum Kind {
     ROOT,

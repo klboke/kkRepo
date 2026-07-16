@@ -458,6 +458,26 @@ class SwiftServiceTest {
   }
 
   @Test
+  void releaseMetadataPreservesAValidSemverThatEndsInJson() throws Exception {
+    Fixture fixture = fixture();
+    String version = "1.2.3+linux.json";
+    when(fixture.registry.findRelease(1L, "acme", "demo", version))
+        .thenReturn(Optional.of(release(1L, version, SwiftRegistryDao.RELEASE_READY)));
+
+    MavenResponse response = fixture.service.get(
+        fixture.runtime,
+        "Acme/Demo/" + version,
+        null,
+        "https://repo.example/repository/swift/",
+        SwiftMediaTypes.VENDOR_JSON,
+        false);
+
+    assertEquals(200, response.status());
+    assertTrue(responseBody(response).contains("\"version\":\"" + version + "\""));
+    verify(fixture.registry).findRelease(1L, "acme", "demo", version);
+  }
+
+  @Test
   void groupReloadsFreshMembershipWhenDatabaseRevisionFencesStaleBinding() {
     Fixture fixture = fixture();
     RepositoryRuntime staleMember = hosted(1L, "swift-old");
@@ -1065,6 +1085,17 @@ class SwiftServiceTest {
         anyLong(), anyString(), anyString(), anyString());
     verify(suffixed.registry, never()).findRelease(
         anyLong(), anyString(), anyString(), anyString());
+
+    Fixture jsonVersion = fixture();
+    assertEquals("1.2.3+linux.json", jsonVersion.service.validatePublishRequest(
+        jsonVersion.runtime,
+        "Acme/Demo/1.2.3+linux.json",
+        null,
+        SwiftMediaTypes.VENDOR_JSON).version());
+    verify(jsonVersion.registry).findTombstone(
+        1L, "acme", "demo", "1.2.3+linux.json");
+    verify(jsonVersion.registry).findRelease(
+        1L, "acme", "demo", "1.2.3+linux.json");
 
     Fixture existing = fixture();
     when(existing.registry.findRelease(1L, "acme", "demo", "1.2.3"))

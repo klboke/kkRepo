@@ -304,7 +304,7 @@ public class SwiftService {
     SwiftPath path = target.path();
     if (path.kind() != SwiftPath.Kind.RELEASE_METADATA
         || rawPath == null
-        || rawPath.endsWith(".json")) {
+        || path.jsonAlias()) {
       throw new SwiftExceptions.MethodNotAllowed(
           "Swift publish requires /{scope}/{name}/{version}");
     }

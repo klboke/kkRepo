@@ -44,9 +44,11 @@ public final class SwiftPathParser {
       };
     }
     if (segments.length == 2) {
-      String name = stripSuffix(segments[1], ".json");
+      boolean jsonAlias = segments[1].endsWith(".json");
+      String name = jsonAlias ? stripSuffix(segments[1], ".json") : segments[1];
       return validIdentity(segments[0], name)
-          ? new SwiftPath(SwiftPath.Kind.RELEASE_LIST, raw, segments[0], name, null)
+          ? new SwiftPath(
+              SwiftPath.Kind.RELEASE_LIST, raw, segments[0], name, null, jsonAlias)
           : unknown(raw);
     }
     if (segments.length == 3) {
@@ -102,9 +104,13 @@ public final class SwiftPathParser {
           ? new SwiftPath(SwiftPath.Kind.SOURCE_ARCHIVE, raw, scope, name, version)
           : unknown(raw);
     }
+    if (validCoordinate(scope, name, resource)) {
+      return new SwiftPath(SwiftPath.Kind.RELEASE_METADATA, raw, scope, name, resource);
+    }
     String version = stripSuffix(resource, ".json");
-    return validCoordinate(scope, name, version)
-        ? new SwiftPath(SwiftPath.Kind.RELEASE_METADATA, raw, scope, name, version)
+    return resource.endsWith(".json") && validCoordinate(scope, name, version)
+        ? new SwiftPath(
+            SwiftPath.Kind.RELEASE_METADATA, raw, scope, name, version, true)
         : unknown(raw);
   }
 

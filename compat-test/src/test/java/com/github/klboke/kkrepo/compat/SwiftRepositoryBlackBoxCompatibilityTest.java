@@ -385,6 +385,25 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
   }
 
   @Test
+  void semverEndingInJsonRemainsACanonicalCoordinateWhenConfigured() throws Exception {
+    Config config = configured();
+    ensureRepositories(config);
+    Fixture fixture = Fixture.unsigned(
+        uniqueName("json-semver"), "1.0.0+linux.json", "json-semver-coordinate");
+
+    Exchange published = publish(config.candidateHosted(), fixture, false);
+    assertEquals(
+        201,
+        published.status(),
+        () -> "candidate .json SemVer publish response: " + published.text());
+
+    Exchange metadata = get(config.candidateHosted(), fixture.coordinatePath(), JSON_ACCEPT);
+    assertEquals(200, metadata.status(), "candidate .json SemVer metadata status");
+    assertEquals(fixture.version(), json(metadata).path("version").asText(),
+        "candidate .json SemVer metadata version");
+  }
+
+  @Test
   void oversizedMultipartPublishReturnsSwiftProblemDetailsWhenConfigured() throws Exception {
     Config config = configuredCandidate();
     String configuredBytes = CompatDefaults.setting(

@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.protocol.swift;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -50,6 +51,7 @@ class SwiftIdentityAndPathTest {
     SwiftPath releasesAlias = parser.parse("mona/LinkedList.json");
     assertEquals(SwiftPath.Kind.RELEASE_LIST, releasesAlias.kind());
     assertEquals("LinkedList", releasesAlias.name());
+    assertTrue(releasesAlias.jsonAlias());
 
     SwiftPath metadata = parser.parse("mona/LinkedList/1.2.3-beta.1+build.7");
     assertEquals(SwiftPath.Kind.RELEASE_METADATA, metadata.kind());
@@ -59,6 +61,13 @@ class SwiftIdentityAndPathTest {
     SwiftPath metadataAlias = parser.parse("mona/LinkedList/1.2.3.json");
     assertEquals(SwiftPath.Kind.RELEASE_METADATA, metadataAlias.kind());
     assertEquals("1.2.3", metadataAlias.version());
+    assertTrue(metadataAlias.jsonAlias());
+
+    SwiftPath metadataVersionEndingInJson =
+        parser.parse("mona/LinkedList/1.2.3+linux.json");
+    assertEquals(SwiftPath.Kind.RELEASE_METADATA, metadataVersionEndingInJson.kind());
+    assertEquals("1.2.3+linux.json", metadataVersionEndingInJson.version());
+    assertFalse(metadataVersionEndingInJson.jsonAlias());
 
     assertEquals(
         SwiftPath.Kind.MANIFEST,
