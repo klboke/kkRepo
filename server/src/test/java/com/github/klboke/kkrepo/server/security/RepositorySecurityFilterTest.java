@@ -217,6 +217,29 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
+  void normalTerraformPathIsCanonicalizedWithoutUrlToken() throws Exception {
+    String path = "v1/providers/acme/cloud/versions";
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = filter(
+        new StubAuthenticationService(Optional.of(subject("alice"))),
+        decisions,
+        new FakeRepositoryDao(repository(
+            "terraform-private", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED)),
+        false);
+    HttpServletRequest request = request("GET", "/repository/terraform-private/" + path);
+    ChainState chain = new ChainState();
+
+    filter.doFilter(request, new ResponseState().proxy(), chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(
+        path,
+        request.getAttribute(RepositorySecurityFilter.NORMALIZED_REPOSITORY_PATH_ATTRIBUTE));
+    assertNull(request.getAttribute(RepositorySecurityFilter.TERRAFORM_URL_TOKEN_SEGMENT_ATTRIBUTE));
+    assertEquals(path, decisions.permission.pathPattern());
+  }
+
+  @Test
   void malformedTerraformUrlTokenPathIsNotMarkedSafeForFailureLogs() throws Exception {
     String token = "GenericToken.super-secret-value";
     HttpServletRequest request = request(
