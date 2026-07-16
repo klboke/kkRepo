@@ -88,7 +88,8 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     request.setAttribute(REPOSITORY_RECORD_ATTRIBUTE, repository.get());
     String terraformUrlToken = null;
     TerraformPath terraformPath = null;
-    if (repository.get().format() == RepositoryFormat.TERRAFORM) {
+    if (repository.get().format() == RepositoryFormat.TERRAFORM
+        && !target.repositoryBrowseRoute()) {
       try {
         String presentedPath = target.path();
         TerraformPathParser.ParsedRequest parsed = TERRAFORM_PATH_PARSER.parseRequestPath(target.path());
@@ -406,6 +407,12 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     private boolean readOnly(RepositoryFormat format) {
       return actions(format).stream()
           .allMatch(action -> action == PermissionAction.BROWSE || action == PermissionAction.READ);
+    }
+
+    private boolean repositoryBrowseRoute() {
+      return fixedActions != null
+          && fixedActions.size() == 1
+          && fixedActions.get(0) == PermissionAction.BROWSE;
     }
 
     private RepositoryRequest withPath(String normalizedPath) {

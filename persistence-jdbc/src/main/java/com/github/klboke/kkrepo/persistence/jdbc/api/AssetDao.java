@@ -87,6 +87,8 @@ public interface AssetDao {
       String kind, String contentType, long size, Instant lastUpdatedAt,
       java.util.Map<String, Object> attributes);
 
+  int updateAssetComponentBinding(long assetId, Long componentId);
+
   int touchLastDownloaded(long assetId, Instant when);
 
   int touchAssetLastUpdated(long assetId, Instant when);

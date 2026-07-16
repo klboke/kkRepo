@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.raw;
 
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.protocol.maven.policy.WritePolicy;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
@@ -77,6 +78,37 @@ public class RawHostedService {
     String path = normalizeAssetPath(rawPath);
     writer.write(runtime, blobStorage(runtime), requireBlobStore(runtime), path, body, contentType,
         blobAttributes == null ? Map.of() : blobAttributes, createdBy, createdByIp);
+    return MavenResponse.created();
+  }
+
+  public MavenResponse putInternalUnindexed(
+      RepositoryRuntime runtime,
+      String rawPath,
+      InputStream body,
+      String contentType,
+      Map<String, ?> blobAttributes,
+      String createdBy,
+      String createdByIp) {
+    String path = normalizeAssetPath(rawPath);
+    writer.writeUnindexed(
+        runtime, blobStorage(runtime), requireBlobStore(runtime), path, body, contentType,
+        blobAttributes == null ? Map.of() : blobAttributes, createdBy, createdByIp, false);
+    return MavenResponse.created();
+  }
+
+  public MavenResponse putInternalWithComponent(
+      RepositoryRuntime runtime,
+      String rawPath,
+      InputStream body,
+      String contentType,
+      Map<String, ?> blobAttributes,
+      String createdBy,
+      String createdByIp,
+      ComponentRecord component) {
+    String path = normalizeAssetPath(rawPath);
+    writer.writeWithComponent(
+        runtime, blobStorage(runtime), requireBlobStore(runtime), path, body, contentType,
+        blobAttributes == null ? Map.of() : blobAttributes, createdBy, createdByIp, component, false);
     return MavenResponse.created();
   }
 

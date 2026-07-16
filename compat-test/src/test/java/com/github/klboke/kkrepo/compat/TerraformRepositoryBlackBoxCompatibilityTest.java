@@ -129,6 +129,34 @@ class TerraformRepositoryBlackBoxCompatibilityTest {
     assertEquals(nexusProviderPut.status, kkrepoProviderPut.status, "provider upload status");
     assert2xx("Nexus provider upload", nexusProviderPut);
 
+    String providerVersionsPath = "v1/providers/kkrepo/fixture/versions";
+    Exchange nexusProviderVersions = get(
+        config.nexusRepository(config.group), providerVersionsPath, config.nexusAuth);
+    Exchange kkrepoProviderVersions = get(
+        config.kkrepoRepository(config.group), providerVersionsPath, config.kkrepoAuth);
+    assertEquals(nexusProviderVersions.status, kkrepoProviderVersions.status,
+        "provider versions status");
+    assertEquals(200, kkrepoProviderVersions.status);
+    Map<String, Object> nexusProviderVersionsBody =
+        JSON.readValue(nexusProviderVersions.body, new TypeReference<>() {});
+    Map<String, Object> kkrepoProviderVersionsBody =
+        JSON.readValue(kkrepoProviderVersions.body, new TypeReference<>() {});
+    assertEquals(nexusProviderVersionsBody.get("id"), kkrepoProviderVersionsBody.get("id"));
+    assertEquals(nexusProviderVersionsBody.get("warnings"),
+        kkrepoProviderVersionsBody.get("warnings"));
+    assertTrue(kkrepoProviderVersions.text().contains(version));
+
+    Exchange nexusProviderVersionsAlias = get(
+        config.nexusRepository(config.group), providerVersionsPath + ".json", config.nexusAuth);
+    Exchange kkrepoProviderVersionsAlias = get(
+        config.kkrepoRepository(config.group), providerVersionsPath + ".json", config.kkrepoAuth);
+    assertEquals(nexusProviderVersions.status, nexusProviderVersionsAlias.status);
+    assertEquals(kkrepoProviderVersions.status, kkrepoProviderVersionsAlias.status);
+    assertEquals(nexusProviderVersionsBody,
+        JSON.readValue(nexusProviderVersionsAlias.body, new TypeReference<>() {}));
+    assertEquals(kkrepoProviderVersionsBody,
+        JSON.readValue(kkrepoProviderVersionsAlias.body, new TypeReference<>() {}));
+
     validateProvider(config, config.nexusRepository(config.group), config.nexusAuth,
         providerPath, providerFilename, provider);
     validateProvider(config, config.kkrepoRepository(config.group), config.kkrepoAuth,
@@ -204,6 +232,18 @@ class TerraformRepositoryBlackBoxCompatibilityTest {
     assertEquals(List.of("5.0"), body.get("protocols"));
     String shasum = body.get("shasum").toString();
     assertEquals(sha256(expectedArchive), shasum);
+    String[] coordinates = path.split("/");
+    assertProviderAssetPath(
+        body.get("download_url").toString(),
+        coordinates[2], coordinates[3], coordinates[4], coordinates[6], coordinates[7], filename);
+    assertProviderAssetPath(
+        body.get("shasums_url").toString(),
+        coordinates[2], coordinates[3], coordinates[4], coordinates[6], coordinates[7],
+        "SHA256SUMS");
+    assertProviderAssetPath(
+        body.get("shasums_signature_url").toString(),
+        coordinates[2], coordinates[3], coordinates[4], coordinates[6], coordinates[7],
+        "SHA256SUMS.sig");
     byte[] archive = getAbsolute(
         config.resolve(body.get("download_url").toString(), repository), authorization).body;
     assertArrayEquals(expectedArchive, archive);
@@ -218,6 +258,31 @@ class TerraformRepositoryBlackBoxCompatibilityTest {
     Map<String, Object> signingKeys = (Map<String, Object>) body.get("signing_keys");
     assertFalse(signingKeys.isEmpty());
     assertTrue(signingKeys.toString().contains("BEGIN PGP PUBLIC KEY BLOCK"));
+  }
+
+  private static void assertProviderAssetPath(
+      String url,
+      String namespace,
+      String type,
+      String version,
+      String os,
+      String arch,
+      String filename) {
+    String path = URI.create(url).getPath();
+    String marker = "/v1/providers/";
+    int markerIndex = path.indexOf(marker);
+    assertTrue(markerIndex >= 0, url);
+    List<String> segments = List.of(path.substring(markerIndex + marker.length()).split("/"));
+    int offset = segments.size() - 7;
+    assertTrue(offset == 0 || offset == 1,
+        "provider URL must contain only an optional URL-token segment: " + url);
+    assertEquals(namespace, segments.get(offset), url);
+    assertEquals(type, segments.get(offset + 1), url);
+    assertEquals(version, segments.get(offset + 2), url);
+    assertEquals("download", segments.get(offset + 3), url);
+    assertEquals(os, segments.get(offset + 4), url);
+    assertEquals(arch, segments.get(offset + 5), url);
+    assertEquals(filename, segments.get(offset + 6), url);
   }
 
   private static void assertDownloadValidatorsAndRangeParity(

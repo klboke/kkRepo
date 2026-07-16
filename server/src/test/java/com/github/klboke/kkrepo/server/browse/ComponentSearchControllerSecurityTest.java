@@ -108,13 +108,15 @@ class ComponentSearchControllerSecurityTest {
   }
 
   @Test
-  void searchHidesTerraformInternalRouteComponents() {
+  void searchHidesTerraformPhysicalComponentsAndReturnsLogicalBrowsePath() {
     StubComponentDao components = new StubComponentDao();
     components.rows = List.of(
         row(1L, "terraform-proxy", RepositoryFormat.TERRAFORM, null,
             "route-token.json", null, ".terraform/routes/route-token.json"),
         row(2L, "terraform-proxy", RepositoryFormat.TERRAFORM, "acme",
-            "v1/providers/acme/cloud/1.2.3/package/linux/provider.zip", "1.2.3"));
+            "v1/providers/acme/cloud/1.2.3/package/linux/provider.zip", "1.2.3"),
+        row(3L, "terraform-proxy", RepositoryFormat.TERRAFORM, "acme",
+            "cloud", "1.2.3", "terraform-provider", "v1/providers/acme/cloud/1.2.3"));
     RecordingSecurityService security = new RecordingSecurityService(permission -> AccessDecision.allow());
     ComponentSearchController controller = controller(components, subject("alice"), null, security);
 
@@ -125,8 +127,12 @@ class ComponentSearchControllerSecurityTest {
         request("GET", "/internal/search/components"));
 
     assertEquals(1, response.count());
-    assertEquals(List.of("v1/providers/acme/cloud/1.2.3/package/linux/provider.zip"),
+    assertEquals(List.of("cloud"),
         response.items().stream().map(ComponentSearchController.ComponentSearchItem::name).toList());
+    assertEquals(List.of("v1/providers/acme/cloud/1.2.3"),
+        response.items().stream()
+            .map(ComponentSearchController.ComponentSearchItem::browsePath)
+            .toList());
   }
 
   @Test

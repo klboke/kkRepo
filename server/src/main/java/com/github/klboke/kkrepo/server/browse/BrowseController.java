@@ -19,6 +19,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.server.ResponseStatusException;
@@ -39,9 +40,28 @@ public class BrowseController {
   private final RepositoryDao repositoryDao;
   private final BrowseNodeDao browseNodeDao;
   private final DockerBrowseService dockerBrowseService;
+  private final TerraformBrowseService terraformBrowseService;
   private final BrowseAssetDetailService assetDetailService;
   private final SecurityAuthenticationService authenticationService;
   private final SecurityManagementService securityService;
+
+  @Autowired
+  public BrowseController(
+      RepositoryDao repositoryDao,
+      BrowseNodeDao browseNodeDao,
+      DockerBrowseService dockerBrowseService,
+      TerraformBrowseService terraformBrowseService,
+      BrowseAssetDetailService assetDetailService,
+      SecurityAuthenticationService authenticationService,
+      SecurityManagementService securityService) {
+    this.repositoryDao = repositoryDao;
+    this.browseNodeDao = browseNodeDao;
+    this.dockerBrowseService = dockerBrowseService;
+    this.terraformBrowseService = terraformBrowseService;
+    this.assetDetailService = assetDetailService;
+    this.authenticationService = authenticationService;
+    this.securityService = securityService;
+  }
 
   public BrowseController(
       RepositoryDao repositoryDao,
@@ -50,12 +70,14 @@ public class BrowseController {
       BrowseAssetDetailService assetDetailService,
       SecurityAuthenticationService authenticationService,
       SecurityManagementService securityService) {
-    this.repositoryDao = repositoryDao;
-    this.browseNodeDao = browseNodeDao;
-    this.dockerBrowseService = dockerBrowseService;
-    this.assetDetailService = assetDetailService;
-    this.authenticationService = authenticationService;
-    this.securityService = securityService;
+    this(
+        repositoryDao,
+        browseNodeDao,
+        dockerBrowseService,
+        null,
+        assetDetailService,
+        authenticationService,
+        securityService);
   }
 
   @GetMapping("/{repository}")
@@ -78,6 +100,12 @@ public class BrowseController {
     if (repo.format() == RepositoryFormat.DOCKER && dockerBrowseService != null) {
       return new BrowseListing(repo.name(), parent, dockerBrowseService.list(repo, sources, parent));
     }
+    if (repo.format() == RepositoryFormat.TERRAFORM && terraformBrowseService != null) {
+      Optional<List<BrowseEntry>> projected = terraformBrowseService.list(repo, sources, parent);
+      if (projected.isPresent()) {
+        return new BrowseListing(repo.name(), parent, sorted(projected.orElseThrow()));
+      }
+    }
     BrowsePath browsePath = browsePath(repo.format(), parent);
     LinkedHashMap<String, BrowseEntry> merged = new LinkedHashMap<>();
     for (RepositoryRecord source : sources) {
@@ -97,13 +125,32 @@ public class BrowseController {
       }
     }
     addCargoDynamicRootEntries(repo, browsePath, merged);
+    if (repo.format() == RepositoryFormat.TERRAFORM
+        && terraformBrowseService != null
+        && isTerraformProviderTypePath(parent)
+        && merged.values().stream().anyMatch(entry -> !entry.leaf())) {
+      BrowseEntry versions = terraformBrowseService.versionsJson(repo, parent);
+      merged.putIfAbsent(versions.path(), versions);
+    }
     // Final ordering: directories first then files, alphabetical within each bucket.
-    List<BrowseEntry> entries = new ArrayList<>(merged.values());
+    List<BrowseEntry> entries = sorted(new ArrayList<>(merged.values()));
+    return new BrowseListing(repo.name(), browsePath.publicParent(), entries);
+  }
+
+  private static List<BrowseEntry> sorted(List<BrowseEntry> entries) {
+    entries = new ArrayList<>(entries);
     entries.sort((a, b) -> {
       if (a.leaf() != b.leaf()) return a.leaf() ? 1 : -1;
       return a.path().compareTo(b.path());
     });
-    return new BrowseListing(repo.name(), browsePath.publicParent(), entries);
+    return entries;
+  }
+
+  private static boolean isTerraformProviderTypePath(String path) {
+    String[] parts = path.split("/");
+    return parts.length == 4
+        && "v1".equals(parts[0])
+        && "providers".equals(parts[1]);
   }
 
   private static void addCargoDynamicRootEntries(

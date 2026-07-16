@@ -14,7 +14,16 @@ public final class BrowseAssetVisibility {
       return false;
     }
     return (format == RepositoryFormat.COMPOSER && under(path, COMPOSER_INTERNAL_PREFIX))
-        || (format == RepositoryFormat.TERRAFORM && under(path, TERRAFORM_INTERNAL_PREFIX));
+        || (format == RepositoryFormat.TERRAFORM
+            && (under(path, TERRAFORM_INTERNAL_PREFIX) || terraformProviderInternal(path)));
+  }
+
+  private static boolean terraformProviderInternal(String path) {
+    String[] parts = path.split("/");
+    return parts.length >= 6
+        && "v1".equals(parts[0])
+        && "providers".equals(parts[1])
+        && ("package".equals(parts[5]) || parts[5].startsWith("metadata-"));
   }
 
   private static boolean under(String path, String prefix) {

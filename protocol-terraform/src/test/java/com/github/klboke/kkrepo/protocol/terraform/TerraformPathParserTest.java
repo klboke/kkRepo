@@ -21,6 +21,10 @@ class TerraformPathParserTest {
     assertEquals(TerraformPath.Kind.PROVIDER_DOWNLOAD, upload.kind());
     assertEquals("linux", upload.os());
     assertEquals("amd64", upload.arch());
+    assertEquals(TerraformPath.Kind.PROVIDER_VERSIONS,
+        parser.parse("v1/providers/acme/cloud/versions").kind());
+    assertEquals(TerraformPath.Kind.PROVIDER_VERSIONS,
+        parser.parse("v1/providers/acme/cloud/versions.json").kind());
     assertEquals(TerraformPath.Kind.PROVIDER_ARCHIVE,
         parser.parse("v1/providers/acme/cloud/1.2.3/package/linux/terraform-provider-cloud_1.2.3_linux_amd64.zip").kind());
     TerraformPath nexusArchive = parser.parse(
@@ -29,6 +33,16 @@ class TerraformPathParserTest {
     assertEquals("linux", nexusArchive.os());
     assertEquals("amd64", nexusArchive.arch());
     assertEquals("terraform-provider-cloud_1.2.3_linux_amd64.zip", nexusArchive.filename());
+    TerraformPath nexusSums = parser.parse(
+        "v1/providers/acme/cloud/1.2.3/download/linux/amd64/SHA256SUMS");
+    assertEquals(TerraformPath.Kind.PROVIDER_SHA256SUMS, nexusSums.kind());
+    assertEquals("linux", nexusSums.os());
+    assertEquals("amd64", nexusSums.arch());
+    assertEquals("SHA256SUMS", nexusSums.filename());
+    TerraformPath nexusSignature = parser.parse(
+        "v1/providers/acme/cloud/1.2.3/download/linux/amd64/SHA256SUMS.sig");
+    assertEquals(TerraformPath.Kind.PROVIDER_SHA256SUMS_SIGNATURE, nexusSignature.kind());
+    assertEquals("SHA256SUMS.sig", nexusSignature.filename());
     assertEquals(TerraformPath.Kind.PROVIDER_SHA256SUMS,
         parser.parse("v1/providers/acme/cloud/1.2.3/metadata-r2/terraform-provider-cloud_1.2.3_SHA256SUMS").kind());
     assertEquals(TerraformPath.Kind.PROVIDER_SHA256SUMS_SIGNATURE,
@@ -52,12 +66,10 @@ class TerraformPathParserTest {
     assertEquals("generic-token", provider.credentialSegment());
     assertEquals(TerraformPath.Kind.PROVIDER_DOWNLOAD, provider.path().kind());
     var providerChecksum = parser.parseRequestPath(
-        "v1/providers/generic-token/acme/cloud/1.2.3/metadata-proxy/"
-            + "terraform-provider-cloud_1.2.3_SHA256SUMS");
+        "v1/providers/generic-token/acme/cloud/1.2.3/download/linux/amd64/SHA256SUMS");
     assertEquals("generic-token", providerChecksum.credentialSegment());
     assertEquals(
-        "v1/providers/acme/cloud/1.2.3/metadata-proxy/"
-            + "terraform-provider-cloud_1.2.3_SHA256SUMS",
+        "v1/providers/acme/cloud/1.2.3/download/linux/amd64/SHA256SUMS",
         providerChecksum.canonicalPath());
     assertEquals(TerraformPath.Kind.PROVIDER_SHA256SUMS, providerChecksum.path().kind());
 

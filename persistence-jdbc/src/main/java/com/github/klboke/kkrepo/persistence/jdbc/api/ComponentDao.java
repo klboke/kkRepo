@@ -45,6 +45,8 @@ public interface ComponentDao {
 
   int deleteIfNoAssets(long componentId);
 
+  int deleteByRepositoryIdAndFormat(long repositoryId, RepositoryFormat format);
+
   int touchLastUpdated(long componentId, java.time.Instant when);
 
   int updateAttributes(long componentId, Map<String, Object> attributes, java.time.Instant when);

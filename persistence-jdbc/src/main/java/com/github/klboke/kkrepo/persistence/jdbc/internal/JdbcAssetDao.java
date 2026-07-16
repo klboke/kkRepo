@@ -594,6 +594,13 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         assetId);
   }
 
+  public int updateAssetComponentBinding(long assetId, Long componentId) {
+    return jdbcTemplate.update(
+        "UPDATE asset SET component_id = ? WHERE id = ?",
+        componentId,
+        assetId);
+  }
+
   public int touchLastDownloaded(long assetId, Instant when) {
     return jdbcTemplate.update("""
         UPDATE asset SET last_downloaded_at = ? WHERE id = ?

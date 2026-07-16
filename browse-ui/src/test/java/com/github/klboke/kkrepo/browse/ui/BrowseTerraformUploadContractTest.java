@@ -29,7 +29,17 @@ class BrowseTerraformUploadContractTest {
       assertTrue(javascript.contains("form.append(\"terraform." + field + "\""), field);
     }
     assertTrue(javascript.contains("updateTerraformUploadKind"));
-    assertTrue(index.contains("/browse/assets/browse.js?v=20260715-terraform-upload-2"));
+    assertTrue(javascript.contains("return parts[0] === \"v1\";"));
+    assertTrue(javascript.contains("crumbText: entry.path"));
+    assertTrue(javascript.contains("\"Terraform registry\""));
+    assertTrue(javascript.contains("\"Terraform modules\""));
+    assertTrue(javascript.contains("\"Terraform providers\""));
+    assertTrue(javascript.contains("treeNodeEntries.set(li, entry)"));
+    assertTrue(javascript.contains("treeNodeEntries.get(node) || findCachedTreeEntry(state.path)"));
+    assertTrue(javascript.contains("const repoUrl = repositoryBaseUrl().replace(/\\/+$/, \"\")"));
+    assertTrue(javascript.contains("crumbIcon: repositoryFormatIcon()"));
+    assertTrue(javascript.contains("await activateTreeBranch(entry, toggleExpand)"));
+    assertTrue(index.contains("/browse/assets/browse.js?v=20260716-terraform-details-5"));
   }
 
   private String resource(String path) throws IOException {

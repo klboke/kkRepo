@@ -9,6 +9,7 @@ const state = { mode: "repos", repo: null, path: "" };
 const treeCache = new Map(); // key = `${repo}::${path}`, value = entries[]
 const expanded = new Set();   // keys (same shape as treeCache) currently expanded
 const treeMountLoads = new WeakMap();
+const treeNodeEntries = new WeakMap();
 let userMenuCloseTimer = null;
 
 let repositoriesCache = [];
@@ -1294,10 +1295,19 @@ async function ensureTreeLevelLoaded(path, mountEl, depth) {
   return true;
 }
 
+async function activateTreeBranch(entry, toggleExpand) {
+  const expansion = toggleExpand();
+  if (VERSION_DIR_RE.test(entry.name) || hasDirectoryUsage(entry)) {
+    await showComponentDetail(entry);
+  }
+  await expansion;
+}
+
 function buildTreeNode(entry) {
   const li = document.createElement("li");
   li.className = entry.leaf ? "tree-node leaf" : "tree-node branch";
   li.dataset.path = entry.path;
+  treeNodeEntries.set(li, entry);
 
   const row = document.createElement("div");
   row.className = "tree-row";
@@ -1342,7 +1352,6 @@ function buildTreeNode(entry) {
     childMount.className = "tree-children";
     childMount.style.display = isExpanded ? "" : "none";
     li.appendChild(childMount);
-    const isVersionDir = VERSION_DIR_RE.test(entry.name);
     const ensureLoaded = async () => {
       await ensureTreeLevelLoaded(entry.path, childMount, 1);
     };
@@ -1364,12 +1373,7 @@ function buildTreeNode(entry) {
     label.addEventListener("click", async () => {
       selectRow(row);
       syncTreePath(entry);
-      if (isVersionDir || hasDirectoryUsage(entry)) {
-        await showComponentDetail(entry);
-        await setExpanded(true);
-      } else {
-        await toggleExpand();
-      }
+      await activateTreeBranch(entry, toggleExpand);
     });
     if (isExpanded) {
       ensureLoaded();
@@ -1414,11 +1418,12 @@ function pathSelectorValue(path) {
 async function selectInitialTreePath() {
   if (!state.path) return;
   await revealTreePath(state.path);
-  const row = document.querySelector(`.tree-node[data-path="${pathSelectorValue(state.path)}"] > .tree-row`);
+  const node = document.querySelector(`.tree-node[data-path="${pathSelectorValue(state.path)}"]`);
+  const row = node?.querySelector(":scope > .tree-row");
   if (!row) return;
   selectRow(row);
   row.scrollIntoView({ block: "center" });
-  const entry = findCachedTreeEntry(state.path);
+  const entry = treeNodeEntries.get(node) || findCachedTreeEntry(state.path);
   if (!entry) return;
   if (entry.leaf) await showAssetDetail(entry);
   else if (VERSION_DIR_RE.test(entry.name) || hasDirectoryUsage(entry)) await showComponentDetail(entry);
@@ -1732,7 +1737,7 @@ function hasDirectoryUsage(entry) {
     return (parts.length === 2 || parts.length === 3) && !reserved.has(parts[0]);
   }
   if (repo.format === "terraform") {
-    return parts[0] === "v1" && (parts[1] === "modules" || parts[1] === "providers");
+    return parts[0] === "v1";
   }
   return false;
 }
@@ -2402,34 +2407,65 @@ function renderDockerReferrers(referrers) {
 
 function terraformUsageDetail(entry) {
   const parts = pathSegments(entry.path);
-  if (parts[0] !== "v1" || parts.length < 4) return null;
-  const repoUrl = repositoryUrl(currentRepository()).replace(/\/+$/, "");
+  if (parts[0] !== "v1") return null;
+  const repoUrl = repositoryBaseUrl().replace(/\/+$/, "");
   const host = window.location.host;
-  if (parts[1] === "modules" && parts.length >= 5) {
-    const [namespace, name, system] = parts.slice(2, 5);
-    const version = parts[5] || "1.0.0";
-    return {
-      summaryRows: [["Format", "terraform module"], ["Namespace", namespace], ["Name", name],
-        ["System", system], ["Version", version]],
-      snippets: [
-        usageSnippet("Terraform CLI config", `host "${host}" {\n  services = {\n    "modules.v1" = "${repoUrl}/v1/modules/"\n  }\n}`),
-        usageSnippet("module", `module "${name}" {\n  source  = "${host}/${namespace}/${name}/${system}"\n  version = "${version}"\n}`),
-      ],
-    };
+  const section = parts[1] || "";
+  const isModule = section === "modules";
+  const isProvider = section === "providers";
+  const summaryRows = [
+    ["Repository", state.repo],
+    ["Format", "terraform"],
+    ["Path", entry.path],
+    ["Scope", isModule ? "Terraform modules" : isProvider ? "Terraform providers" : "Terraform registry"],
+  ];
+  const snippets = [];
+
+  if (isModule) {
+    const [namespace, name, system, version] = parts.slice(2, 6);
+    if (namespace) summaryRows.push(["Namespace", namespace]);
+    if (name) summaryRows.push(["Name", name]);
+    if (system) summaryRows.push(["System", system]);
+    if (version) summaryRows.push(["Version", version]);
+    snippets.push(usageSnippet(
+      "Terraform CLI config",
+      `host "${host}" {\n  services = {\n    "modules.v1" = "${repoUrl}/v1/modules/"\n  }\n}`,
+    ));
+    if (namespace && name && system) {
+      snippets.push(usageSnippet(
+        "module",
+        `module "${name}" {\n  source  = "${host}/${namespace}/${name}/${system}"\n  version = "${version || "latest"}"\n}`,
+      ));
+    }
+  } else if (isProvider) {
+    const [namespace, type, version] = parts.slice(2, 5);
+    if (namespace) summaryRows.push(["Namespace", namespace]);
+    if (type) summaryRows.push(["Type", type]);
+    if (version) summaryRows.push(["Version", version]);
+    snippets.push(usageSnippet(
+      "Terraform CLI config",
+      `host "${host}" {\n  services = {\n    "providers.v1" = "${repoUrl}/v1/providers/"\n  }\n}`,
+    ));
+    if (namespace && type) {
+      snippets.push(usageSnippet(
+        "required_providers",
+        `terraform {\n  required_providers {\n    ${type} = {\n      source  = "${host}/${namespace}/${type}"\n      version = "${version || "latest"}"\n    }\n  }\n}`,
+      ));
+    }
+  } else if (section) {
+    summaryRows.push(["Scope", `Terraform path: ${section}`]);
+  } else {
+    snippets.push(usageSnippet(
+      "Terraform CLI config",
+      `host "${host}" {\n  services = {\n    "modules.v1" = "${repoUrl}/v1/modules/"\n    "providers.v1" = "${repoUrl}/v1/providers/"\n  }\n}`,
+    ));
   }
-  if (parts[1] === "providers" && parts.length >= 4) {
-    const [namespace, type] = parts.slice(2, 4);
-    const version = parts[4] || "1.0.0";
-    return {
-      summaryRows: [["Format", "terraform provider"], ["Namespace", namespace], ["Type", type],
-        ["Version", version]],
-      snippets: [
-        usageSnippet("Terraform CLI config", `host "${host}" {\n  services = {\n    "providers.v1" = "${repoUrl}/v1/providers/"\n  }\n}`),
-        usageSnippet("required_providers", `terraform {\n  required_providers {\n    ${type} = {\n      source  = "${host}/${namespace}/${type}"\n      version = "${version}"\n    }\n  }\n}`),
-      ],
-    };
-  }
-  return null;
+
+  return {
+    crumbText: entry.path,
+    summaryRows,
+    snippets,
+  };
 }
 
 async function usageDetailForEntry(entry, detail = null) {
@@ -2457,7 +2493,7 @@ async function showComponentDetail(entry) {
     return;
   }
   renderDetailPane({
-    crumbIcon: repoBreadcrumbIcon(),
+    crumbIcon: repositoryFormatIcon(),
     crumbText: detail.crumbText,
     summaryRows: detail.summaryRows,
     snippets: detail.snippets,

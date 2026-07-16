@@ -52,6 +52,7 @@ public class TerraformService {
   private final TerraformSignatureVerifier signatureVerifier;
   private final TerraformRegistryDao registry;
   private final TerraformPublishLeaseManager leases;
+  private final TerraformComponentService components;
   private final RepositoryRuntimeRegistry runtimes;
   private final RawProxyService proxy;
   private final HttpRemoteFetcher fetcher;
@@ -65,6 +66,7 @@ public class TerraformService {
       TerraformSignatureVerifier signatureVerifier,
       TerraformRegistryDao registry,
       TerraformPublishLeaseManager leases,
+      TerraformComponentService components,
       RepositoryRuntimeRegistry runtimes,
       RawProxyService proxy,
       HttpRemoteFetcher fetcher) {
@@ -75,6 +77,7 @@ public class TerraformService {
     this.signatureVerifier = signatureVerifier;
     this.registry = registry;
     this.leases = leases;
+    this.components = components;
     this.runtimes = runtimes;
     this.proxy = proxy;
     this.fetcher = fetcher;
@@ -190,14 +193,17 @@ public class TerraformService {
         attributes.put("arch", path.arch());
       }
       try (InputStream in = Files.newInputStream(buffered)) {
-        assets.store(
+        assets.storeWithComponent(
             runtime,
             path.rawPath(),
             in,
             contentType == null ? OCTET : contentType,
             attributes,
             actor,
-            ip);
+            ip,
+            path.module()
+                ? components.moduleComponent(runtime, path, Instant.now())
+                : components.providerComponent(runtime, path, Instant.now()));
       }
       return MavenResponse.created();
     } catch (IOException e) {
@@ -295,7 +301,16 @@ public class TerraformService {
           "platforms", platforms));
     }
     if (values.isEmpty()) throw notFound(request.rawPath());
-    return Map.of("versions", values);
+    return providerVersionsDocument(request, values);
+  }
+
+  private static Map<String, Object> providerVersionsDocument(
+      TerraformPath request, List<Map<String, Object>> versions) {
+    LinkedHashMap<String, Object> body = new LinkedHashMap<>();
+    body.put("id", request.namespace() + "/" + request.name());
+    body.put("versions", versions);
+    body.put("warnings", null);
+    return body;
   }
 
   private List<TerraformRegistryDao.ProviderPlatform> publishedProviderPlatforms(
@@ -322,8 +337,8 @@ public class TerraformService {
     body.put("arch", platform.arch());
     body.put("filename", platform.filename());
     body.put("download_url", publicUrl(urls, nexusProviderArchivePath(request, platform)));
-    body.put("shasums_url", publicUrl(urls, state.shasumsPath()));
-    body.put("shasums_signature_url", publicUrl(urls, state.signaturePath()));
+    body.put("shasums_url", publicUrl(urls, nexusProviderShasumsPath(request)));
+    body.put("shasums_signature_url", publicUrl(urls, nexusProviderSignaturePath(request)));
     body.put("shasum", platform.sha256());
     body.put("signing_keys", Map.of("gpg_public_keys", List.of(Map.of(
         "key_id", key.keyId(), "ascii_armor", key.publicKey(), "trust_signature", ""))));
@@ -332,9 +347,20 @@ public class TerraformService {
 
   private static String nexusProviderArchivePath(
       TerraformPath request, TerraformRegistryDao.ProviderPlatform platform) {
+    return nexusProviderPlatformPath(request) + "/" + platform.filename();
+  }
+
+  private static String nexusProviderShasumsPath(TerraformPath request) {
+    return nexusProviderPlatformPath(request) + "/SHA256SUMS";
+  }
+
+  private static String nexusProviderSignaturePath(TerraformPath request) {
+    return nexusProviderPlatformPath(request) + "/SHA256SUMS.sig";
+  }
+
+  private static String nexusProviderPlatformPath(TerraformPath request) {
     return "v1/providers/" + request.namespace() + "/" + request.name() + "/"
-        + request.version() + "/download/" + platform.os() + "/" + platform.arch() + "/"
-        + platform.filename();
+        + request.version() + "/download/" + request.os() + "/" + request.arch();
   }
 
   private MavenResponse servePublishedProviderArchive(
@@ -358,10 +384,26 @@ public class TerraformService {
         .orElseThrow(() -> notFound(path.rawPath()));
     String published = path.kind() == TerraformPath.Kind.PROVIDER_SHA256SUMS
         ? state.shasumsPath() : state.signaturePath();
+    if (isNexusProviderMetadataAlias(path)) {
+      boolean platformPublished = publishedProviderPlatforms(
+              runtime, path.namespace(), path.name(), path.version()).stream()
+          .anyMatch(platform -> platform.os().equals(path.os())
+              && platform.arch().equals(path.arch()));
+      if (!platformPublished) {
+        throw notFound(path.rawPath());
+      }
+      return assets.serve(runtime, published, headOnly);
+    }
     if (!published.equals(path.rawPath())) {
       throw notFound(path.rawPath());
     }
     return assets.serve(runtime, path.rawPath(), headOnly);
+  }
+
+  private static boolean isNexusProviderMetadataAlias(TerraformPath path) {
+    return path.os() != null
+        && path.arch() != null
+        && ("SHA256SUMS".equals(path.filename()) || "SHA256SUMS.sig".equals(path.filename()));
   }
 
   private MavenResponse putModule(
@@ -377,11 +419,13 @@ public class TerraformService {
         leaseKey, java.time.Duration.ofMinutes(5), java.time.Duration.ofSeconds(30))) {
       enforceModuleWrite(runtime, path, migration);
       try (InputStream in = Files.newInputStream(buffered)) {
-        assets.store(runtime, path.rawPath(), in, contentType == null ? OCTET : contentType,
+        assets.storeWithComponent(
+            runtime, path.rawPath(), in, contentType == null ? OCTET : contentType,
             Map.of(
                 "terraformKind", "module-archive",
                 "namespace", path.namespace(), "name", path.name(), "system", path.system(),
-                "version", path.version(), "sha256Validated", true), actor, ip);
+                "version", path.version(), "sha256Validated", true), actor, ip,
+            components.moduleComponent(runtime, path, Instant.now()));
         return MavenResponse.created();
       }
     } catch (IOException e) {
@@ -442,7 +486,7 @@ public class TerraformService {
       // failed after storing an orphaned STAGING asset but before committing the platform row;
       // reusing that blob would publish stale content instead of the operator's retry.
       try (InputStream in = Files.newInputStream(buffered)) {
-        assets.store(runtime, assetPath, in, contentType == null ? OCTET : contentType,
+        assets.storeUnindexed(runtime, assetPath, in, contentType == null ? OCTET : contentType,
             Map.of(
                 "terraformKind", "provider-archive", "namespace", path.namespace(), "type", path.name(),
                 "version", path.version(), "os", path.os(), "arch", path.arch(),
@@ -472,9 +516,14 @@ public class TerraformService {
           Map.of("terraformKind", "provider-shasums", "revision", revision));
       assets.storeBytes(runtime, signaturePath, signature, OCTET,
           Map.of("terraformKind", "provider-signature", "revision", revision, "keyId", key.keyId()));
-      registry.publishProvider(published, new TerraformRegistryDao.ProviderState(
+      TerraformRegistryDao.ProviderState state = new TerraformRegistryDao.ProviderState(
           runtime.id(), path.namespace(), path.name(), path.version(), revision,
-          sumsPath, signaturePath, key.revision(), Instant.now()));
+          sumsPath, signaturePath, key.revision(), Instant.now());
+      List<String> activePaths = new ArrayList<>(
+          next.stream().map(TerraformRegistryDao.ProviderPlatform::assetPath).toList());
+      activePaths.add(sumsPath);
+      activePaths.add(signaturePath);
+      components.publishProvider(runtime, published, state, activePaths);
       return MavenResponse.created();
     } catch (IOException e) {
       throw new IllegalStateException("Failed storing Terraform provider archive", e);
@@ -498,7 +547,7 @@ public class TerraformService {
   private MavenResponse proxyMetadata(RepositoryRuntime runtime, TerraformPath path, boolean headOnly) {
     String remote = remoteUrl(runtime, path);
     String cachePath = ".terraform/upstream/" + sha256(remote) + ".json";
-    MavenResponse cached = proxy.getMetadataFromUrl(runtime, cachePath, remote, false);
+    MavenResponse cached = proxy.getMetadataFromUrlUnindexed(runtime, cachePath, remote, false);
     byte[] bytes = responseBytes(cached);
     return bytes(bytes, JSON, headOnly);
   }
@@ -558,7 +607,7 @@ public class TerraformService {
     String remote = remoteUrl(runtime, path);
     String cachePath = ".terraform/upstream/" + sha256(remote) + ".json";
     Map<String, Object> body = readJson(responseBytes(
-        proxy.getMetadataFromUrl(runtime, cachePath, remote, false)));
+        proxy.getMetadataFromUrlUnindexed(runtime, cachePath, remote, false)));
     String filename = string(body.get("filename"));
     try {
       TerraformPathParser.requireFilename(filename);
@@ -571,16 +620,15 @@ public class TerraformService {
     String signature = absolute(remote, string(body.get("shasums_signature_url")));
     String localDownload = "v1/providers/" + path.namespace() + "/" + path.name() + "/" + path.version()
         + "/download/" + path.os() + "/" + path.arch() + "/" + filename;
-    String sumsFile = safeRemoteFilename(sums,
-        "terraform-provider-" + path.name() + "_" + path.version() + "_SHA256SUMS");
-    String localSums = "v1/providers/" + path.namespace() + "/" + path.name() + "/" + path.version()
-        + "/metadata-proxy/" + sumsFile;
-    String localSignature = localSums + ".sig";
+    String localSums = nexusProviderShasumsPath(path);
+    String localSignature = nexusProviderSignaturePath(path);
     String expected = string(body.get("shasum"));
+    var component = components.providerComponent(runtime, path, Instant.now());
     byte[] shasumsBytes = responseBytes(
-        proxy.getMetadataFromUrl(runtime, localSums, sums, false));
+        proxy.getMetadataFromUrlWithComponent(runtime, localSums, sums, component, false));
     byte[] signatureBytes = responseBytes(
-        proxy.getMetadataFromUrl(runtime, localSignature, signature, false));
+        proxy.getMetadataFromUrlWithComponent(
+            runtime, localSignature, signature, component, false));
     verifyChecksumEntry(shasumsBytes, expected, filename);
     signatureVerifier.verify(shasumsBytes, signatureBytes, upstreamPublicKeys(body));
     storeRoute(runtime, localDownload, download, expected);
@@ -638,9 +686,14 @@ public class TerraformService {
     Map<String, Object> route = readJson(assets.bytes(runtime, routePath(localPath)));
     String remote = string(route.get("remoteUrl"));
     String expected = string(route.get("sha256"));
+    var component = components.componentForPublicPath(
+            runtime, paths.parse(localPath), Instant.now())
+        .orElseThrow(() -> new IllegalStateException(
+            "Terraform proxy route has no logical component: " + localPath));
     MavenResponse response = expected == null || expected.isBlank()
-        ? proxy.getAssetFromUrl(runtime, localPath, remote, headOnly)
-        : proxy.getPinnedAssetFromUrl(runtime, localPath, remote, headOnly);
+        ? proxy.getAssetFromUrlWithComponent(runtime, localPath, remote, component, headOnly)
+        : proxy.getPinnedAssetFromUrlWithComponent(
+            runtime, localPath, remote, component, headOnly);
     if (expected != null && !expected.isBlank()) {
       AssetRecord asset = assets.find(runtime, localPath).orElseThrow(() -> notFound(localPath));
       AssetBlobRecord blob = assets.blob(asset);
@@ -735,7 +788,7 @@ public class TerraformService {
     return path.kind() == TerraformPath.Kind.MODULE_VERSIONS
         ? json(Map.of("modules", List.of(Map.of(
             "source", path.namespace() + "/" + path.name() + "/" + path.system(), "versions", sorted))), headOnly)
-        : json(Map.of("versions", sorted), headOnly);
+        : json(providerVersionsDocument(path, sorted), headOnly);
   }
 
   @SuppressWarnings("unchecked")
@@ -797,7 +850,11 @@ public class TerraformService {
     String key = path.module() ? "modules.v1" : "providers.v1";
     String service = discovery(runtime, key);
     String prefix = path.module() ? "v1/modules/" : "v1/providers/";
-    String suffix = path.rawPath().substring(prefix.length());
+    String canonicalPath = path.kind() == TerraformPath.Kind.PROVIDER_VERSIONS
+            && path.rawPath().endsWith("/versions.json")
+        ? path.rawPath().substring(0, path.rawPath().length() - ".json".length())
+        : path.rawPath();
+    String suffix = canonicalPath.substring(prefix.length());
     return ensureSlash(service) + suffix;
   }
 
@@ -806,7 +863,7 @@ public class TerraformService {
     String remote = root + ".well-known/terraform.json";
     String local = ".terraform/upstream/discovery-" + sha256(remote) + ".json";
     Map<String, Object> document = readJson(responseBytes(
-        proxy.getMetadataFromUrl(runtime, local, remote, false)));
+        proxy.getMetadataFromUrlUnindexed(runtime, local, remote, false)));
     String value = string(document.get(key));
     if (value == null || value.isBlank()) {
       throw new MavenExceptions.BadUpstreamException("Terraform discovery omitted " + key);

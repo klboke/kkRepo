@@ -71,7 +71,7 @@ class TerraformAssetSupportTest {
         "application/json", Map.of("kind", "metadata"));
     verify(hosted).putInternal(eq(runtime), eq("v1/file.zip"), any(),
         eq("application/zip"), any(), eq("alice"), eq("127.0.0.1"));
-    verify(hosted).putInternal(eq(runtime), eq("v1/metadata.json"), any(),
+    verify(hosted).putInternalUnindexed(eq(runtime), eq("v1/metadata.json"), any(),
         eq("application/json"), any(), eq("terraform"), eq(null));
     support.delete(runtime, "v1/file.zip");
     verify(hosted).deleteInternal(runtime, "v1/file.zip");

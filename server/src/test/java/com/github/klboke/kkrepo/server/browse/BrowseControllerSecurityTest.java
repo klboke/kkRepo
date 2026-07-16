@@ -205,6 +205,21 @@ class BrowseControllerSecurityTest {
             "terraform-proxy", ".terraform/routes/token.json", null,
             request("GET", "/internal/browse/terraform-proxy/attributes")));
     assertEquals(HttpStatus.NOT_FOUND, detailError.getStatusCode());
+    for (String internal : List.of(
+        "v1/providers/acme/demo/1.0.1/package",
+        "v1/providers/acme/demo/1.0.1/metadata-r1",
+        "v1/providers/acme/demo/1.0.1/metadata-proxy")) {
+      ResponseStatusException internalListing = assertThrows(ResponseStatusException.class,
+          () -> controller.list(
+              "terraform-proxy", internal,
+              request("GET", "/internal/browse/terraform-proxy")));
+      assertEquals(HttpStatus.NOT_FOUND, internalListing.getStatusCode(), internal);
+      ResponseStatusException internalDetail = assertThrows(ResponseStatusException.class,
+          () -> controller.attributes(
+              "terraform-proxy", internal + "/asset", null,
+              request("GET", "/internal/browse/terraform-proxy/attributes")));
+      assertEquals(HttpStatus.NOT_FOUND, internalDetail.getStatusCode(), internal);
+    }
   }
 
   @Test

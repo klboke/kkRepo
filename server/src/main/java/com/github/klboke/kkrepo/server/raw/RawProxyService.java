@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.raw;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
@@ -102,7 +103,18 @@ public class RawProxyService {
   public MavenResponse getAssetFromUrl(RepositoryRuntime runtime, String path, String remoteUrl, boolean headOnly) {
     return getAssetFromUrl(
         runtime, path, remoteUrl, runtime.contentMaxAgeMinutesOrDefault(),
-        HttpRemoteFetcher.TimeoutProfile.CONTENT, headOnly);
+        HttpRemoteFetcher.TimeoutProfile.CONTENT, ComponentBinding.perAsset(), headOnly);
+  }
+
+  public MavenResponse getAssetFromUrlWithComponent(
+      RepositoryRuntime runtime,
+      String path,
+      String remoteUrl,
+      ComponentRecord component,
+      boolean headOnly) {
+    return getAssetFromUrl(
+        runtime, path, remoteUrl, runtime.contentMaxAgeMinutesOrDefault(),
+        HttpRemoteFetcher.TimeoutProfile.CONTENT, ComponentBinding.explicit(component), headOnly);
   }
 
   /**
@@ -113,19 +125,50 @@ public class RawProxyService {
       RepositoryRuntime runtime, String path, String remoteUrl, boolean headOnly) {
     return getAssetFromUrl(
         runtime, path, remoteUrl, runtime.metadataMaxAgeMinutesOrDefault(),
-        HttpRemoteFetcher.TimeoutProfile.CONTENT, headOnly);
+        HttpRemoteFetcher.TimeoutProfile.CONTENT, ComponentBinding.perAsset(), headOnly);
+  }
+
+  public MavenResponse getPinnedAssetFromUrlWithComponent(
+      RepositoryRuntime runtime,
+      String path,
+      String remoteUrl,
+      ComponentRecord component,
+      boolean headOnly) {
+    return getAssetFromUrl(
+        runtime, path, remoteUrl, runtime.metadataMaxAgeMinutesOrDefault(),
+        HttpRemoteFetcher.TimeoutProfile.CONTENT, ComponentBinding.explicit(component), headOnly);
   }
 
   public MavenResponse getMetadataFromUrl(
       RepositoryRuntime runtime, String path, String remoteUrl, boolean headOnly) {
     return getAssetFromUrl(
         runtime, path, remoteUrl, runtime.metadataMaxAgeMinutesOrDefault(),
-        HttpRemoteFetcher.TimeoutProfile.METADATA, headOnly);
+        HttpRemoteFetcher.TimeoutProfile.METADATA, ComponentBinding.perAsset(), headOnly);
+  }
+
+  public MavenResponse getMetadataFromUrlUnindexed(
+      RepositoryRuntime runtime, String path, String remoteUrl, boolean headOnly) {
+    return getAssetFromUrl(
+        runtime, path, remoteUrl, runtime.metadataMaxAgeMinutesOrDefault(),
+        HttpRemoteFetcher.TimeoutProfile.METADATA, ComponentBinding.none(), headOnly);
+  }
+
+  public MavenResponse getMetadataFromUrlWithComponent(
+      RepositoryRuntime runtime,
+      String path,
+      String remoteUrl,
+      ComponentRecord component,
+      boolean headOnly) {
+    return getAssetFromUrl(
+        runtime, path, remoteUrl, runtime.metadataMaxAgeMinutesOrDefault(),
+        HttpRemoteFetcher.TimeoutProfile.METADATA, ComponentBinding.explicit(component), headOnly);
   }
 
   private MavenResponse getAssetFromUrl(
       RepositoryRuntime runtime, String path, String remoteUrl, int maxAgeMinutes,
-      HttpRemoteFetcher.TimeoutProfile timeoutProfile, boolean headOnly) {
+      HttpRemoteFetcher.TimeoutProfile timeoutProfile,
+      ComponentBinding componentBinding,
+      boolean headOnly) {
     Optional<CachedAssetMetadata> cached = lookupCached(runtime, path);
     Instant now = Instant.now();
     if (cached.isPresent() && isFresh(cached.get(), maxAgeMinutes, now)) {
@@ -140,7 +183,8 @@ public class RawProxyService {
       }
       throw new MavenExceptions.BadUpstreamException("Upstream temporarily blocked: " + remoteUrl);
     }
-    return fetchAndCacheUrl(runtime, path, remoteUrl, cached, headOnly, now, timeoutProfile);
+    return fetchAndCacheUrl(
+        runtime, path, remoteUrl, cached, headOnly, now, timeoutProfile, componentBinding);
   }
 
   private Optional<CachedAssetMetadata> lookupCached(RepositoryRuntime runtime, String path) {
@@ -167,7 +211,8 @@ public class RawProxyService {
         buildRemoteUrl(runtime.proxyRemoteUrl(), remotePath), etag, lastModified, null, false)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
         .withRepository(runtime);
-    return fetchAndCache(runtime, path, cached, headOnly, now, req);
+    return fetchAndCache(
+        runtime, path, cached, headOnly, now, req, ComponentBinding.perAsset());
   }
 
   private MavenResponse fetchAndCacheUrl(
@@ -177,7 +222,8 @@ public class RawProxyService {
       Optional<CachedAssetMetadata> cached,
       boolean headOnly,
       Instant now,
-      HttpRemoteFetcher.TimeoutProfile timeoutProfile) {
+      HttpRemoteFetcher.TimeoutProfile timeoutProfile,
+      ComponentBinding componentBinding) {
     String etag = null;
     Instant lastModified = null;
     if (cached.isPresent() && cached.get().blob() != null) {
@@ -187,7 +233,7 @@ public class RawProxyService {
     }
     HttpRemoteFetcher.Request req = cachePopulationRequest(
         runtime, remoteUrl, etag, lastModified).withTimeoutProfile(timeoutProfile);
-    return fetchAndCache(runtime, path, cached, headOnly, now, req);
+    return fetchAndCache(runtime, path, cached, headOnly, now, req, componentBinding);
   }
 
   static HttpRemoteFetcher.Request cachePopulationRequest(
@@ -210,7 +256,8 @@ public class RawProxyService {
       Optional<CachedAssetMetadata> cached,
       boolean headOnly,
       Instant now,
-      HttpRemoteFetcher.Request req) {
+      HttpRemoteFetcher.Request req,
+      ComponentBinding componentBinding) {
     try {
       return fetcher.fetchWithBodyRetry(req, path, result -> {
         int status = result.status();
@@ -223,7 +270,7 @@ public class RawProxyService {
         }
         if (status >= 200 && status < 300) {
           negativeCache.invalidate(runtime, path);
-          RawAssetWriter.Stored stored = persist(runtime, path, result);
+          RawAssetWriter.Stored stored = persist(runtime, path, result, componentBinding);
           try {
             proxyStateDao.recordSuccess(runtime.id(), now);
             if (headOnly) {
@@ -256,21 +303,26 @@ public class RawProxyService {
     }
   }
 
-  private RawAssetWriter.Stored persist(RepositoryRuntime runtime, String path, HttpRemoteFetcher.Result result) {
+  private RawAssetWriter.Stored persist(
+      RepositoryRuntime runtime,
+      String path,
+      HttpRemoteFetcher.Result result,
+      ComponentBinding componentBinding) {
     Map<String, String> extras = new HashMap<>();
     if (result.etag() != null) extras.put("remoteEtag", result.etag());
     if (result.lastModified() != null) extras.put("remoteLastModified", result.lastModified().toString());
-    return writer.write(
-        runtime,
-        blobStorage(runtime),
-        requireBlobStore(runtime),
-        path,
-        result.body(),
-        result.contentType(),
-        extras,
-        "proxy",
-        runtime.proxyRemoteUrl(),
-        true);
+    return switch (componentBinding.mode()) {
+      case PER_ASSET -> writer.write(
+          runtime, blobStorage(runtime), requireBlobStore(runtime), path, result.body(),
+          result.contentType(), extras, "proxy", runtime.proxyRemoteUrl(), true);
+      case NONE -> writer.writeUnindexed(
+          runtime, blobStorage(runtime), requireBlobStore(runtime), path, result.body(),
+          result.contentType(), extras, "proxy", runtime.proxyRemoteUrl(), true);
+      case EXPLICIT -> writer.writeWithComponent(
+          runtime, blobStorage(runtime), requireBlobStore(runtime), path, result.body(),
+          result.contentType(), extras, "proxy", runtime.proxyRemoteUrl(),
+          componentBinding.component(), true);
+    };
   }
 
   private MavenResponse handleUpstreamFailure(
@@ -333,6 +385,29 @@ public class RawProxyService {
       return Instant.parse(value);
     } catch (RuntimeException ignored) {
       return null;
+    }
+  }
+
+  private enum ComponentMode {
+    PER_ASSET,
+    NONE,
+    EXPLICIT
+  }
+
+  private record ComponentBinding(ComponentMode mode, ComponentRecord component) {
+    private static ComponentBinding perAsset() {
+      return new ComponentBinding(ComponentMode.PER_ASSET, null);
+    }
+
+    private static ComponentBinding none() {
+      return new ComponentBinding(ComponentMode.NONE, null);
+    }
+
+    private static ComponentBinding explicit(ComponentRecord component) {
+      if (component == null) {
+        throw new IllegalArgumentException("Explicit component is required");
+      }
+      return new ComponentBinding(ComponentMode.EXPLICIT, component);
     }
   }
 }

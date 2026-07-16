@@ -85,7 +85,7 @@ public final class TerraformPathParser {
 
   private TerraformPath parseProviders(String raw, List<String> input) {
     List<String> s = input;
-    if (s.size() == 5 && "versions".equals(s.get(4))) {
+    if (s.size() == 5 && ("versions".equals(s.get(4)) || "versions.json".equals(s.get(4)))) {
       return provider(TerraformPath.Kind.PROVIDER_VERSIONS, s, null, null, null, null, raw);
     }
     if (s.size() == 8 && "download".equals(s.get(5))) {
@@ -94,9 +94,15 @@ public final class TerraformPathParser {
     }
     if (s.size() == 9 && "download".equals(s.get(5))) {
       requireVersion(s.get(4));
-      requireFilename(s.get(8));
+      String filename = s.get(8);
+      requireFilename(filename);
+      TerraformPath.Kind kind = "SHA256SUMS.sig".equals(filename)
+          ? TerraformPath.Kind.PROVIDER_SHA256SUMS_SIGNATURE
+          : "SHA256SUMS".equals(filename)
+              ? TerraformPath.Kind.PROVIDER_SHA256SUMS
+              : TerraformPath.Kind.PROVIDER_ARCHIVE;
       return provider(
-          TerraformPath.Kind.PROVIDER_ARCHIVE, s, null, s.get(4), s.get(6), s.get(7), s.get(8), raw);
+          kind, s, null, s.get(4), s.get(6), s.get(7), filename, raw);
     }
     if (s.size() == 8 && "package".equals(s.get(5))) {
       requireVersion(s.get(4));

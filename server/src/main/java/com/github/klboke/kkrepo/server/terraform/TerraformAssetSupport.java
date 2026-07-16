@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.terraform;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
@@ -33,9 +34,28 @@ final class TerraformAssetSupport {
     hosted.putInternal(runtime, path, body, contentType, attributes, actor, ip);
   }
 
+  void storeUnindexed(RepositoryRuntime runtime, String path, InputStream body, String contentType,
+      Map<String, ?> attributes, String actor, String ip) {
+    hosted.putInternalUnindexed(runtime, path, body, contentType, attributes, actor, ip);
+  }
+
+  void storeWithComponent(
+      RepositoryRuntime runtime,
+      String path,
+      InputStream body,
+      String contentType,
+      Map<String, ?> attributes,
+      String actor,
+      String ip,
+      ComponentRecord component) {
+    hosted.putInternalWithComponent(
+        runtime, path, body, contentType, attributes, actor, ip, component);
+  }
+
   void storeBytes(RepositoryRuntime runtime, String path, byte[] body, String contentType,
       Map<String, ?> attributes) {
-    store(runtime, path, new ByteArrayInputStream(body), contentType, attributes, "terraform", null);
+    storeUnindexed(
+        runtime, path, new ByteArrayInputStream(body), contentType, attributes, "terraform", null);
   }
 
   void delete(RepositoryRuntime runtime, String path) {

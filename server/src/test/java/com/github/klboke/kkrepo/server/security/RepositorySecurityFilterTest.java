@@ -568,6 +568,31 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
+  void terraformBrowseRestRootSkipsProtocolParsingAndRequiresBrowsePermission() throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "terraform-proxy", RepositoryFormat.TERRAFORM, RepositoryType.PROXY)),
+        false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/service/rest/repository/browse/terraform-proxy/"),
+        response.proxy(),
+        chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(0, response.status);
+    assertEquals(PermissionAction.BROWSE, decisions.permission.action());
+    assertEquals("", decisions.permission.pathPattern());
+  }
+
+  @Test
   void repositoryContentRoutesUseNexusBreadActionMapping() throws Exception {
     assertRepositoryContentAction("GET", PermissionAction.READ);
     assertRepositoryContentAction("HEAD", PermissionAction.READ);

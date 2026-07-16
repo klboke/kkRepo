@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.pypi.PypiHostedService;
 import com.github.klboke.kkrepo.server.metrics.KkRepoMetrics;
 import com.github.klboke.kkrepo.server.rubygems.RubygemsService;
+import com.github.klboke.kkrepo.server.terraform.TerraformComponentService;
 import com.github.klboke.kkrepo.server.yum.YumService;
 import io.micrometer.core.instrument.Timer;
 import java.util.List;
@@ -33,6 +34,7 @@ class RepositoryIndexRebuildWorker {
   private final PypiHostedService pypiHostedService;
   private final YumService yumService;
   private final RubygemsService rubygemsService;
+  private final TerraformComponentService terraformComponentService;
   private final TransactionTemplate transactionTemplate;
   private final KkRepoMetrics metrics;
   private final int batchSize;
@@ -46,6 +48,7 @@ class RepositoryIndexRebuildWorker {
       PypiHostedService pypiHostedService,
       YumService yumService,
       RubygemsService rubygemsService,
+      TerraformComponentService terraformComponentService,
       PlatformTransactionManager transactionManager,
       @Value("${kkrepo.repository-index-rebuild.batch-size:16}") int batchSize,
       @Value("${kkrepo.repository-index-rebuild.enabled:true}") boolean enabled,
@@ -57,6 +60,7 @@ class RepositoryIndexRebuildWorker {
     this.pypiHostedService = pypiHostedService;
     this.yumService = yumService;
     this.rubygemsService = rubygemsService;
+    this.terraformComponentService = terraformComponentService;
     this.transactionTemplate = new TransactionTemplate(transactionManager);
     this.metrics = metrics;
     this.batchSize = batchSize;
@@ -97,7 +101,16 @@ class RepositoryIndexRebuildWorker {
 
   private void execute(Claim claim) {
     RepositoryRuntime runtime = runtimeRegistry.resolveById(claim.repositoryId()).orElse(null);
-    if (runtime == null || !runtime.isHosted() || runtime.blobStoreId() == null) {
+    if (runtime == null) {
+      return;
+    }
+    if (RepositoryIndexRebuildDao.TERRAFORM_COMPONENTS.equals(claim.indexKind())) {
+      if (runtime.format() == RepositoryFormat.TERRAFORM) {
+        terraformComponentService.rebuild(runtime);
+      }
+      return;
+    }
+    if (!runtime.isHosted() || runtime.blobStoreId() == null) {
       return;
     }
     switch (claim.indexKind()) {

@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
@@ -20,6 +21,8 @@ import com.github.klboke.kkrepo.protocol.composer.ComposerPath;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPathParser;
 import com.github.klboke.kkrepo.protocol.npm.NpmMetadata;
 import com.github.klboke.kkrepo.protocol.npm.NpmPackageId;
+import com.github.klboke.kkrepo.protocol.terraform.TerraformPath;
+import com.github.klboke.kkrepo.protocol.terraform.TerraformPathParser;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmFormatAttributes;
@@ -48,10 +51,12 @@ public class BrowseAssetDetailService {
   private static final TypeReference<LinkedHashMap<String, Object>> MAP_TYPE = new TypeReference<>() {};
   private static final int MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
   private static final ComposerPathParser COMPOSER_PATHS = new ComposerPathParser();
+  private static final TerraformPathParser TERRAFORM_PATHS = new TerraformPathParser();
 
   private final RepositoryDao repositoryDao;
   private final AssetDao assetDao;
   private final DockerRegistryDao dockerDao;
+  private final TerraformRegistryDao terraformDao;
   private final BlobStorageRegistry blobStorageRegistry;
   private final ObjectMapper objectMapper;
 
@@ -60,11 +65,13 @@ public class BrowseAssetDetailService {
       RepositoryDao repositoryDao,
       AssetDao assetDao,
       DockerRegistryDao dockerDao,
+      TerraformRegistryDao terraformDao,
       BlobStorageRegistry blobStorageRegistry,
       ObjectMapper objectMapper) {
     this.repositoryDao = repositoryDao;
     this.assetDao = assetDao;
     this.dockerDao = dockerDao;
+    this.terraformDao = terraformDao;
     this.blobStorageRegistry = blobStorageRegistry;
     this.objectMapper = objectMapper;
   }
@@ -72,18 +79,37 @@ public class BrowseAssetDetailService {
   public BrowseAssetDetailService(
       RepositoryDao repositoryDao,
       AssetDao assetDao,
+      DockerRegistryDao dockerDao,
       BlobStorageRegistry blobStorageRegistry,
       ObjectMapper objectMapper) {
-    this(repositoryDao, assetDao, null, blobStorageRegistry, objectMapper);
+    this(repositoryDao, assetDao, dockerDao, null, blobStorageRegistry, objectMapper);
+  }
+
+  public BrowseAssetDetailService(
+      RepositoryDao repositoryDao,
+      AssetDao assetDao,
+      BlobStorageRegistry blobStorageRegistry,
+      ObjectMapper objectMapper) {
+    this(repositoryDao, assetDao, null, null, blobStorageRegistry, objectMapper);
   }
 
   public BrowseAssetDetail detail(
       RepositoryRecord visibleRepository,
       String path,
       String sourceRepositoryName) {
-    String storagePath = storagePath(visibleRepository.format(), path);
-    if (BrowseAssetVisibility.hidden(visibleRepository.format(), storagePath)) {
+    String publicPath = normalize(path);
+    if (BrowseAssetVisibility.hidden(visibleRepository.format(), publicPath)) {
       throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Asset not found");
+    }
+    ResolvedStoragePath resolvedPath = storagePath(
+        visibleRepository, publicPath, sourceRepositoryName);
+    String storagePath = resolvedPath.path();
+    sourceRepositoryName = resolvedPath.sourceRepositoryName();
+    if (isTerraformProviderVersionsDocument(visibleRepository, publicPath)) {
+      if (!terraformProviderExists(visibleRepository, publicPath)) {
+        throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Terraform provider not found");
+      }
+      return terraformProviderVersionsDetail(visibleRepository, publicPath);
     }
     if (isCargoDynamicConfig(visibleRepository, storagePath)) {
       return cargoDynamicConfigDetail(visibleRepository);
@@ -110,16 +136,23 @@ public class BrowseAssetDetailService {
     Map<String, Object> composer = source.format() == RepositoryFormat.COMPOSER
         ? composerAttributes(asset)
         : Map.of();
+    String displayName = storagePath.equals(publicPath)
+        ? asset.name()
+        : publicPath.substring(publicPath.lastIndexOf('/') + 1);
+    String downloadPath = visibleRepository.format() == RepositoryFormat.TERRAFORM
+            && !storagePath.equals(publicPath)
+        ? publicPath
+        : storagePath;
 
     return new BrowseAssetDetail(
         visibleRepository.name(),
         source.name(),
-        path,
-        asset.name(),
+        publicPath,
+        displayName,
         asset.size(),
         asset.contentType(),
         asset.lastUpdatedAt(),
-        BrowseDownloadUrls.asset(visibleRepository, storagePath),
+        BrowseDownloadUrls.asset(visibleRepository, downloadPath),
         text(firstPresent(asset.attributes().get("createdBy"), blob.createdBy())),
         text(firstPresent(asset.attributes().get("createdByIp"), blob.createdByIp())),
         checksum,
@@ -133,6 +166,59 @@ public class BrowseAssetDetailService {
 
   private static boolean isCargoDynamicConfig(RepositoryRecord repository, String storagePath) {
     return repository.format() == RepositoryFormat.CARGO && "config.json".equals(storagePath);
+  }
+
+  private static boolean isTerraformProviderVersionsDocument(
+      RepositoryRecord repository, String publicPath) {
+    if (repository.format() != RepositoryFormat.TERRAFORM
+        || !publicPath.endsWith("/versions.json")) {
+      return false;
+    }
+    try {
+      return TERRAFORM_PATHS.parse(publicPath).kind() == TerraformPath.Kind.PROVIDER_VERSIONS;
+    } catch (IllegalArgumentException e) {
+      return false;
+    }
+  }
+
+  private boolean terraformProviderExists(
+      RepositoryRecord visibleRepository, String publicPath) {
+    TerraformPath versions = TERRAFORM_PATHS.parse(publicPath);
+    String prefix = "v1/providers/" + versions.namespace() + "/" + versions.name() + "/";
+    List<RepositoryRecord> sources = visibleRepository.type() == RepositoryType.GROUP
+        ? repositoryDao.listMembers(visibleRepository.id())
+        : List.of(visibleRepository);
+    return sources.stream().anyMatch(source ->
+        !assetDao.listAssetsByPrefix(source.id(), prefix).isEmpty());
+  }
+
+  private static BrowseAssetDetail terraformProviderVersionsDetail(
+      RepositoryRecord repository, String publicPath) {
+    LinkedHashMap<String, Object> content = new LinkedHashMap<>();
+    content.put("generated", true);
+    content.put("last_modified", null);
+    LinkedHashMap<String, Object> provenance = new LinkedHashMap<>();
+    provenance.put("source", "kkrepo-terraform-provider-registry");
+    provenance.put("dynamic", true);
+    provenance.put("hashes_not_verified", false);
+    return new BrowseAssetDetail(
+        repository.name(),
+        repository.name(),
+        publicPath,
+        "versions.json",
+        null,
+        "application/json",
+        null,
+        BrowseDownloadUrls.asset(repository, publicPath),
+        "kkrepo",
+        null,
+        Map.of(),
+        content,
+        Map.of(),
+        Map.of(),
+        Map.of(),
+        Map.of(),
+        provenance);
   }
 
   private static BrowseAssetDetail cargoDynamicConfigDetail(RepositoryRecord repository) {
@@ -259,16 +345,77 @@ public class BrowseAssetDetailService {
         .map(asset -> new ResolvedAsset(source, asset, manifest.get()));
   }
 
-  private String storagePath(RepositoryFormat format, String path) {
-    String normalized = normalize(path);
-    if (format == RepositoryFormat.PYPI
+  private ResolvedStoragePath storagePath(
+      RepositoryRecord visibleRepository,
+      String normalized,
+      String sourceRepositoryName) {
+    if (visibleRepository.format() == RepositoryFormat.TERRAFORM && terraformDao != null) {
+      Optional<ResolvedStoragePath> terraform = terraformStoragePath(
+          visibleRepository, normalized, sourceRepositoryName);
+      if (terraform.isPresent()) {
+        return terraform.orElseThrow();
+      }
+    }
+    if (visibleRepository.format() == RepositoryFormat.PYPI
         && !normalized.isEmpty()
         && !normalized.equals("simple")
         && !normalized.startsWith("simple/")
         && !normalized.startsWith("packages/")) {
-      return "packages/" + normalized;
+      return new ResolvedStoragePath("packages/" + normalized, sourceRepositoryName);
     }
-    return normalized;
+    return new ResolvedStoragePath(normalized, sourceRepositoryName);
+  }
+
+  private Optional<ResolvedStoragePath> terraformStoragePath(
+      RepositoryRecord visibleRepository,
+      String publicPath,
+      String sourceRepositoryName) {
+    TerraformPath parsed;
+    try {
+      parsed = TERRAFORM_PATHS.parse(publicPath);
+    } catch (IllegalArgumentException e) {
+      return Optional.empty();
+    }
+    boolean publicArchive = parsed.kind() == TerraformPath.Kind.PROVIDER_ARCHIVE
+        && parsed.os() != null && parsed.arch() != null;
+    boolean publicMetadata = (parsed.kind() == TerraformPath.Kind.PROVIDER_SHA256SUMS
+        || parsed.kind() == TerraformPath.Kind.PROVIDER_SHA256SUMS_SIGNATURE)
+        && parsed.os() != null && parsed.arch() != null;
+    if (!publicArchive && !publicMetadata) {
+      return Optional.empty();
+    }
+    List<RepositoryRecord> sources = visibleRepository.type() == RepositoryType.GROUP
+        ? repositoryDao.listMembers(visibleRepository.id())
+        : List.of(visibleRepository);
+    if (sourceRepositoryName != null && !sourceRepositoryName.isBlank()) {
+      sources = sources.stream()
+          .filter(source -> source.name().equals(sourceRepositoryName))
+          .toList();
+    }
+    for (RepositoryRecord source : sources) {
+      Optional<TerraformRegistryDao.ProviderPlatform> platform = terraformDao.listProviderPlatforms(
+              source.id(), parsed.namespace(), parsed.name(), parsed.version()).stream()
+          .filter(row -> row.os().equals(parsed.os()) && row.arch().equals(parsed.arch()))
+          .filter(row -> !publicArchive || row.filename().equals(parsed.filename()))
+          .filter(row -> assetDao.findAssetByPath(source.id(), row.assetPath()).isPresent())
+          .findFirst();
+      if (platform.isEmpty()) {
+        continue;
+      }
+      if (publicArchive) {
+        return Optional.of(new ResolvedStoragePath(
+            platform.orElseThrow().assetPath(), source.name()));
+      }
+      Optional<TerraformRegistryDao.ProviderState> state = terraformDao.findProviderState(
+          source.id(), parsed.namespace(), parsed.name(), parsed.version());
+      if (state.isPresent()) {
+        String metadataPath = parsed.kind() == TerraformPath.Kind.PROVIDER_SHA256SUMS
+            ? state.orElseThrow().shasumsPath()
+            : state.orElseThrow().signaturePath();
+        return Optional.of(new ResolvedStoragePath(metadataPath, source.name()));
+      }
+    }
+    return Optional.empty();
   }
 
   private static String normalize(String path) {
@@ -278,6 +425,8 @@ public class BrowseAssetDetailService {
     while (value.endsWith("/")) value = value.substring(0, value.length() - 1);
     return value;
   }
+
+  private record ResolvedStoragePath(String path, String sourceRepositoryName) {}
 
   private LinkedHashMap<String, Object> checksum(AssetBlobRecord blob) {
     LinkedHashMap<String, Object> checksum = new LinkedHashMap<>();

@@ -75,7 +75,7 @@ public class ComponentSearchController {
   }
 
   private static String browsePath(ComponentSearchRow row) {
-    if (row.format() != RepositoryFormat.COMPOSER || row.storagePath() == null || row.storagePath().isBlank()) {
+    if (row.storagePath() == null || row.storagePath().isBlank()) {
       return null;
     }
     return row.storagePath();

@@ -175,14 +175,14 @@ Proxy 将 direct HTTP module 的本地 archive 映射持久化到共享 asset/bl
 
 | 方法与路径 | 行为 |
 | --- | --- |
-| `GET /v1/providers/{namespace}/{type}/versions` | 返回 versions、protocols 和 platforms |
+| `GET /v1/providers/{namespace}/{type}/versions`、`GET /v1/providers/{namespace}/{type}/versions.json` | 返回相同的 versions、protocols 和 platforms |
 | `GET /v1/providers/{namespace}/{type}/{version}/download/{os}/{arch}` | 返回 Provider Registry Protocol download metadata JSON |
 | `PUT /v1/providers/{namespace}/{type}/{version}/download/{os}/{arch}` | Nexus 兼容 hosted provider 上传；文件名从 `Content-Disposition` 读取 |
 | `GET/HEAD {download_url}` | 下载 provider `.zip` |
 | `GET/HEAD {shasums_url}` | 下载该 provider version 的 SHA256SUMS |
 | `GET/HEAD {shasums_signature_url}` | 下载 detached GPG signature |
 
-`download_url` 使用 Nexus 兼容的 `/v1/providers/{namespace}/{type}/{version}/download/{os}/{arch}/{filename}` 公开别名，底层仍映射到受发布状态约束的 `/package/{os}/{filename}` asset；`shasums_url`、`shasums_signature_url` 和 `Content-Disposition` 细节由 M0 reference suite 固定。实现不得另造 `/api/terraform/download` 之类的旁路，所有 URL 都必须位于 `/repository/{repo}/v1/providers/...` 下并由相同权限检查覆盖。
+`download_url` 使用 Nexus 兼容的 `/v1/providers/{namespace}/{type}/{version}/download/{os}/{arch}/{filename}` 公开别名，`shasums_url` 和 `shasums_signature_url` 分别固定为同一平台目录下的 `SHA256SUMS` 与 `SHA256SUMS.sig`；底层仍可映射到受发布状态约束的 `/package/{os}/{filename}` 和 `/metadata-r{revision}/...` asset。带 URL token 时只在 `v1/providers/` 后增加 token segment，不改变后续路径。实现不得另造 `/api/terraform/download` 之类的旁路，所有 URL 都必须位于 `/repository/{repo}/v1/providers/...` 下并由相同权限检查覆盖。
 
 Proxy 的 download metadata、SHA256SUMS、signature 与 expected archive SHA-256 是一个已验证快照。对应公开 route 在 metadata TTL 内必须优先服务同一个缓存 blob；只有 metadata snapshot 过期后才允许重新验证上游，不能按更短的 content TTL 独立刷新 archive 或签名材料。
 
@@ -212,7 +212,7 @@ Module version：
 - `namespace={namespace}`
 - `name={name}`
 - `version={semver}`
-- attributes 保存 `system`、normalized identity、source registry/member 和 archive format。
+- attributes 保存 `system`、normalized identity、source registry/member、archive format 和可跳转的 `browsePath`。
 - 唯一 identity 为 `(repository_id, module, namespace_norm, name_norm, system_norm, version_norm)`。
 
 Provider version：
@@ -222,7 +222,7 @@ Provider version：
 - `namespace={namespace}`
 - `name={type}`
 - `version={semver}`
-- attributes 保存 protocols、source registry/member、signing key fingerprint 和 metadata revision。
+- attributes 保存 protocols、source registry/member、signing key fingerprint、metadata revision 和可跳转的 `browsePath`。
 - 一个 component 下挂多个 `(os, arch)` platform archive。
 
 Asset：
@@ -231,6 +231,14 @@ Asset：
 - Asset attributes 保存公开、可重建的 Terraform metadata，例如 kind、coordinate、platform、filename、SHA256、upstream validator 和来源；不保存 secret。
 - Provider versions JSON、download metadata JSON 和 Module versions JSON 优先从规范化行与 revision 派生；如缓存为 asset，也必须标记为可重建派生 metadata。
 - Browse node 只作为可重建索引，不作为协议查询真相。
+
+### 搜索组件与历史重建
+
+- 搜索按 Terraform 逻辑版本展示：一个 Module version 对应一个 component；一个 Provider version 对应一个 component，其 platform archive、SHA256SUMS 和 signature 绑定到同一 component。
+- `.terraform/...` 内部缓存、Provider `package/...` 存储路径和历史 `metadata-r...` revision 不创建独立搜索 component。Group 只合并成员结果，不持久化重复 component。
+- 默认搜索继续使用现有 `idx_component_format_last_updated`，关键词搜索继续使用现有 `ft_component_search`；Terraform 内部物理 component 必须在 SQL `LIMIT` 前过滤，因此不需要新增 Terraform 专用表或索引 migration。
+- 历史 hosted/proxy 数据通过现有 `repository_index_rebuild_marker` 写入 `TERRAFORM_COMPONENTS` marker 幂等重建：先删除该仓库旧 Terraform component，再从公开 READY asset 恢复逻辑 component 和 asset 绑定。Group 不执行持久化重建。
+- 开发阶段的既有本地数据由运维手动触发上述 marker；不增加一次性历史数据 migration SQL。
 
 ### Terraform 专用关系
 
