@@ -137,8 +137,14 @@ public abstract class PersistenceApiContract {
 
     assertTrue(registry.tryAcquirePublishLease("provider:fixture", "replica-a", now.plusSeconds(30)));
     assertFalse(registry.tryAcquirePublishLease("provider:fixture", "replica-b", now.plusSeconds(30)));
+    assertFalse(registry.renewPublishLease("provider:fixture", "replica-b", now.plusSeconds(60)));
+    assertTrue(registry.renewPublishLease("provider:fixture", "replica-a", now.plusSeconds(60)));
     registry.releasePublishLease("provider:fixture", "replica-a");
     assertTrue(registry.tryAcquirePublishLease("provider:fixture", "replica-b", now.plusSeconds(30)));
+    assertTrue(registry.tryAcquirePublishLease(
+        "provider:expired", "replica-a", now.minusSeconds(1)));
+    assertFalse(registry.renewPublishLease(
+        "provider:expired", "replica-a", now.plusSeconds(60)));
 
     registry.upsertSourceBinding(new TerraformRegistryDao.SourceBinding(
         repositoryId, "asset:v1/providers/kkrepo/fixture", memberRepositoryId, 7,

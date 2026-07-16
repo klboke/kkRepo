@@ -145,6 +145,17 @@ public class JdbcTerraformRegistryDao implements TerraformRegistryDao {
   }
 
   @Override
+  public boolean renewPublishLease(String leaseKey, String owner, Instant expiresAt) {
+    Instant now = Instant.now();
+    return jdbc.update("""
+        UPDATE terraform_publish_lease
+        SET expires_at = ?, updated_at = ?
+        WHERE lease_key = ? AND owner = ? AND expires_at >= ?
+        """, nullableTimestamp(expiresAt), nullableTimestamp(now), leaseKey, owner,
+        nullableTimestamp(now)) > 0;
+  }
+
+  @Override
   public void releasePublishLease(String leaseKey, String owner) {
     jdbc.update("DELETE FROM terraform_publish_lease WHERE lease_key = ? AND owner = ?", leaseKey, owner);
   }

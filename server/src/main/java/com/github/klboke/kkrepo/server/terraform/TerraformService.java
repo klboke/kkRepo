@@ -180,6 +180,7 @@ public class TerraformService {
       if (assets.find(runtime, path.rawPath()).isPresent()) {
         return MavenResponse.created();
       }
+      lease.assertHeld();
       Map<String, Object> attributes = new LinkedHashMap<>();
       attributes.put("terraformKind", module ? "proxy-module-archive" : "proxy-provider-archive");
       attributes.put("migrationSource", "nexus-repository-data-migration");
@@ -205,6 +206,7 @@ public class TerraformService {
                 ? components.moduleComponent(runtime, path, Instant.now())
                 : components.providerComponent(runtime, path, Instant.now()));
       }
+      lease.assertHeld();
       return MavenResponse.created();
     } catch (IOException e) {
       throw new IllegalStateException("Failed restoring Terraform proxy cache archive", e);
@@ -418,6 +420,7 @@ public class TerraformService {
     try (TerraformPublishLeaseManager.Lease lease = leases.acquire(
         leaseKey, java.time.Duration.ofMinutes(5), java.time.Duration.ofSeconds(30))) {
       enforceModuleWrite(runtime, path, migration);
+      lease.assertHeld();
       try (InputStream in = Files.newInputStream(buffered)) {
         assets.storeWithComponent(
             runtime, path.rawPath(), in, contentType == null ? OCTET : contentType,
@@ -426,8 +429,9 @@ public class TerraformService {
                 "namespace", path.namespace(), "name", path.name(), "system", path.system(),
                 "version", path.version(), "sha256Validated", true), actor, ip,
             components.moduleComponent(runtime, path, Instant.now()));
-        return MavenResponse.created();
       }
+      lease.assertHeld();
+      return MavenResponse.created();
     } catch (IOException e) {
       throw new IllegalStateException("Failed storing Terraform module archive", e);
     } finally {
@@ -454,8 +458,8 @@ public class TerraformService {
       throw new MavenExceptions.BadRequestException(
           "Provider filename must match " + expectedPrefix + "*.zip");
     }
-    // Buffer and inspect before acquiring the fixed-TTL lease. Slow uploads must not consume the
-    // lease lifetime and allow another replica to publish the same provider version concurrently.
+    // Buffer and inspect before acquiring the renewable lease so slow client uploads do not hold a
+    // shared database claim before publication work starts.
     Path buffered = inspector.bufferAndInspect(body, filename, false, path.name());
     String leaseKey = publishLeaseKey(
         "provider", runtime.id(), path.namespace(), path.name(), path.version());
@@ -523,6 +527,7 @@ public class TerraformService {
           next.stream().map(TerraformRegistryDao.ProviderPlatform::assetPath).toList());
       activePaths.add(sumsPath);
       activePaths.add(signaturePath);
+      lease.assertHeld();
       components.publishProvider(runtime, published, state, activePaths);
       return MavenResponse.created();
     } catch (IOException e) {

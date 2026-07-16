@@ -66,9 +66,11 @@ final class TerraformSigningService {
     TerraformRegistryDao.SigningKey row = registry.findActiveSigningKey(runtime.id()).orElse(null);
     if (row == null) {
       String leaseKey = "signing-key:" + runtime.id();
-      try (TerraformPublishLeaseManager.Lease ignored = leases.acquire(
+      try (TerraformPublishLeaseManager.Lease lease = leases.acquire(
           leaseKey, java.time.Duration.ofMinutes(2), java.time.Duration.ofSeconds(30))) {
+        lease.assertHeld();
         row = registry.findActiveSigningKey(runtime.id()).orElseGet(() -> create(runtime));
+        lease.assertHeld();
       }
     }
     String decrypted = new SecretCipher(EncryptionSecrets.credentialSecret())

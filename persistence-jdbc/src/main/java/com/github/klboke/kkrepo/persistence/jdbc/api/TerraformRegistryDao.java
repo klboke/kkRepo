@@ -22,6 +22,8 @@ public interface TerraformRegistryDao {
 
   boolean tryAcquirePublishLease(String leaseKey, String owner, Instant expiresAt);
 
+  boolean renewPublishLease(String leaseKey, String owner, Instant expiresAt);
+
   void releasePublishLease(String leaseKey, String owner);
 
   Optional<SourceBinding> findSourceBinding(long groupRepositoryId, String bindingKey);
