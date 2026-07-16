@@ -303,8 +303,8 @@ public class ComponentUploadService {
           version,
           body,
           metadata,
-          bytes(sourceSignature, SwiftPublishLimits.MAX_SIGNATURE_BYTES),
-          bytes(metadataSignature, SwiftPublishLimits.MAX_SIGNATURE_BYTES),
+          bytes(sourceSignature, SwiftPublishLimits.MAX_SOURCE_ARCHIVE_SIGNATURE_BYTES),
+          bytes(metadataSignature, SwiftPublishLimits.MAX_METADATA_SIGNATURE_BYTES),
           blankToNull(upload.fields().get("signature-format")),
           null,
           createdBy,
@@ -658,19 +658,28 @@ public class ComponentUploadService {
       return null;
     }
     if (asset.file().getSize() > limit) {
-      throw new UploadValidationException(asset.key() + " exceeds the 4 MiB size limit");
+      throw new UploadValidationException(
+          asset.key() + " exceeds the " + displaySize(limit) + " size limit");
     }
     try (InputStream input = asset.file().getInputStream();
          java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream()) {
       byte[] buffer = new byte[16 * 1024];
       for (int count; (count = input.read(buffer)) >= 0;) {
         if (output.size() + count > limit) {
-          throw new UploadValidationException(asset.key() + " exceeds the 4 MiB size limit");
+          throw new UploadValidationException(
+              asset.key() + " exceeds the " + displaySize(limit) + " size limit");
         }
         output.write(buffer, 0, count);
       }
       return output.toByteArray();
     }
+  }
+
+  private static String displaySize(int bytes) {
+    if (bytes % (1024 * 1024) == 0) {
+      return (bytes / (1024 * 1024)) + " MiB";
+    }
+    return (bytes / 1024) + " KiB";
   }
 
   private static boolean utf8LengthExceeds(String value, int limit) {

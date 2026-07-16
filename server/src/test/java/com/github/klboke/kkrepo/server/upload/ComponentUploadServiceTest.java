@@ -121,7 +121,7 @@ class ComponentUploadServiceTest {
         "swift.source-archive-signature",
         "archive.sig",
         "application/octet-stream",
-        new byte[SwiftPublishLimits.MAX_SIGNATURE_BYTES + 1]));
+        new byte[SwiftPublishLimits.MAX_SOURCE_ARCHIVE_SIGNATURE_BYTES + 1]));
 
     UploadValidationException failure = assertThrows(
         UploadValidationException.class,
@@ -135,7 +135,7 @@ class ComponentUploadServiceTest {
             "alice",
             "127.0.0.1"));
 
-    assertTrue(failure.getMessage().contains("4 MiB"));
+    assertTrue(failure.getMessage().contains("4 KiB"));
     verify(swiftService, never()).publishUpload(
         any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
   }

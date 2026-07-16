@@ -108,6 +108,28 @@ class SwiftRepositoryDataMigrationWriterTest {
   }
 
   @Test
+  void rejectsMigratedSourceSignatureThatCannotFitResponseHeaders() throws Exception {
+    Fixture fixture = fixture(1024 * 1024);
+    byte[] archive = "PK-swift-package-archive".getBytes(StandardCharsets.UTF_8);
+    byte[] oversizedSignature =
+        new byte[SwiftPublishLimits.MAX_SOURCE_ARCHIVE_SIGNATURE_BYTES + 1];
+    Map<String, Object> metadata = Map.of(
+        "attributes", Map.of(
+            "checksums", Map.of("sha256", sha256(archive)),
+            "sourceArchiveSignature", Base64.getEncoder().encodeToString(oversizedSignature),
+            "signatureFormat", "cms-1.0.0"));
+
+    assertThrows(IllegalArgumentException.class, () -> fixture.writer().write(
+        fixture.repository(),
+        source("Acme/Demo/1.2.3.zip", (long) archive.length, metadata),
+        new ByteArrayInputStream(archive),
+        true));
+
+    verify(fixture.service(), never()).restoreHostedReleaseForMigration(
+        any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+  }
+
+  @Test
   void unwrapsProductionWorkerMetadataContainingOnlyDescriptionAndAuthor() throws Exception {
     Fixture fixture = fixture(1024 * 1024);
     byte[] archive = "PK-worker-wrapped-metadata".getBytes(StandardCharsets.UTF_8);

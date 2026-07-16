@@ -40,7 +40,6 @@ import org.springframework.stereotype.Component;
 @Component
 public class SwiftRepositoryDataMigrationWriter {
   private static final TypeReference<Map<String, Object>> MAP = new TypeReference<>() {};
-  private static final int MAX_SIGNATURE_BYTES = 4 * 1024 * 1024;
   private static final String CMS_SIGNATURE_FORMAT = "cms-1.0.0";
   private static final SwiftPathParser PATHS = new SwiftPathParser();
   private static final List<String> REGISTRY_METADATA_KEYS = List.of(
@@ -116,14 +115,20 @@ public class SwiftRepositoryDataMigrationWriter {
     if (existing.isPresent()) {
       return verifiedExisting(existing.get(), source, sourceSha256, validateSize);
     }
+    byte[] sourceSignature = signature(
+        source.metadata(),
+        "sourceArchiveSignature",
+        SwiftPublishLimits.MAX_SOURCE_ARCHIVE_SIGNATURE_BYTES);
+    byte[] metadataSignature = signature(
+        source.metadata(),
+        "metadataSignature",
+        SwiftPublishLimits.MAX_METADATA_SIGNATURE_BYTES);
 
     Path buffered = null;
     try {
       buffered = Files.createTempFile("kkrepo-swift-migration-", ".zip");
       DigestedArchive archive = copyAndDigest(body, buffered);
       validateSource(source, sourceSha256, archive, validateSize);
-      byte[] sourceSignature = signature(source.metadata(), "sourceArchiveSignature");
-      byte[] metadataSignature = signature(source.metadata(), "metadataSignature");
       String signatureFormat = sourceSignature == null
           ? null
           : firstNonBlank(
@@ -347,14 +352,14 @@ public class SwiftRepositoryDataMigrationWriter {
     source.forEach(target::putIfAbsent);
   }
 
-  private static byte[] signature(Map<String, Object> metadata, String key) {
+  private static byte[] signature(Map<String, Object> metadata, String key, int limit) {
     Object value = findKey(metadata, key);
     if (!(value instanceof String encoded) || encoded.isBlank()) {
       return null;
     }
     try {
       byte[] decoded = Base64.getDecoder().decode(encoded.trim());
-      if (decoded.length == 0 || decoded.length > MAX_SIGNATURE_BYTES) {
+      if (decoded.length == 0 || decoded.length > limit) {
         throw new IllegalArgumentException("Nexus Swift " + key + " exceeds the size limit");
       }
       return decoded;

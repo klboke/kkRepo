@@ -51,10 +51,11 @@ record SwiftMultipartRequest(
     requireContentType(unique.get("metadata-signature"),
         "application/octet-stream", false, false);
     byte[] sourceSignature = read(
-        unique.get("source-archive-signature"), SwiftPublishLimits.MAX_SIGNATURE_BYTES);
+        unique.get("source-archive-signature"),
+        SwiftPublishLimits.MAX_SOURCE_ARCHIVE_SIGNATURE_BYTES);
     byte[] metadata = read(unique.get("metadata"), SwiftPublishLimits.MAX_METADATA_BYTES);
     byte[] metadataSignature = read(
-        unique.get("metadata-signature"), SwiftPublishLimits.MAX_SIGNATURE_BYTES);
+        unique.get("metadata-signature"), SwiftPublishLimits.MAX_METADATA_SIGNATURE_BYTES);
     return new SwiftMultipartRequest(
         archive,
         sourceSignature,

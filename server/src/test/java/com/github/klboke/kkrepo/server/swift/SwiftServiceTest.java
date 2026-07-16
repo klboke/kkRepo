@@ -458,6 +458,35 @@ class SwiftServiceTest {
   }
 
   @Test
+  void oversizedStoredSourceSignatureCannotBecomeAResponseHeader() {
+    Fixture fixture = fixture();
+    SwiftRegistryDao.Release release = signedRelease(1L, "1.2.3", 12L);
+    when(fixture.registry.findRelease(1L, "acme", "demo", "1.2.3"))
+        .thenReturn(Optional.of(release));
+    when(fixture.assets.serve(1L, 10L, false)).thenReturn(MavenResponse.ok(
+        new ByteArrayInputStream(new byte[] {1}),
+        1,
+        SwiftMediaTypes.ARCHIVE,
+        "archive-etag",
+        Instant.EPOCH));
+    when(fixture.assets.bytes(1L, 12L)).thenReturn(
+        new byte[SwiftPublishLimits.MAX_SOURCE_ARCHIVE_SIGNATURE_BYTES + 1]);
+
+    SwiftExceptions.ContentTooLarge failure = assertThrows(
+        SwiftExceptions.ContentTooLarge.class,
+        () -> fixture.service.get(
+            fixture.runtime,
+            "Acme/Demo/1.2.3.zip",
+            null,
+            "https://repo.example/repository/swift/",
+            SwiftMediaTypes.VENDOR_ZIP,
+            false));
+
+    assertTrue(failure.getMessage().contains("4 KiB"));
+    verify(fixture.assets, never()).serve(anyLong(), anyLong(), eq(false));
+  }
+
+  @Test
   void releaseMetadataPreservesAValidSemverThatEndsInJson() throws Exception {
     Fixture fixture = fixture();
     String version = "1.2.3+linux.json";
@@ -1184,6 +1213,31 @@ class SwiftServiceTest {
         "alice",
         "192.0.2.10"));
 
+    verify(fixture.inspector, never()).inspect(any(InputStream.class));
+    verify(fixture.leases, never()).acquire(anyString());
+  }
+
+  @Test
+  void publishUploadRejectsSourceSignatureThatCannotFitResponseHeaders() {
+    Fixture fixture = fixture();
+
+    SwiftExceptions.ContentTooLarge failure = assertThrows(
+        SwiftExceptions.ContentTooLarge.class,
+        () -> fixture.service.publishUpload(
+            fixture.runtime,
+            "Acme",
+            "Demo",
+            "1.2.3",
+            new ByteArrayInputStream(new byte[] {1}),
+            "{}",
+            new byte[SwiftPublishLimits.MAX_SOURCE_ARCHIVE_SIGNATURE_BYTES + 1],
+            null,
+            "cms-1.0.0",
+            null,
+            "alice",
+            "192.0.2.10"));
+
+    assertTrue(failure.getMessage().contains("4 KiB"));
     verify(fixture.inspector, never()).inspect(any(InputStream.class));
     verify(fixture.leases, never()).acquire(anyString());
   }

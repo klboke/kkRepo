@@ -131,6 +131,14 @@ class SwiftMultipartRequestTest {
         new ByteArrayInputStream(new byte[1024 * 1024 + 1]));
     assertThrows(SwiftExceptions.ContentTooLarge.class,
         () -> SwiftMultipartRequest.parse(List.of(archive, misleadingSize)));
+
+    MockPart oversizedSourceSignature = part(
+        "source-archive-signature",
+        "source.cms",
+        "application/octet-stream",
+        new byte[SwiftPublishLimits.MAX_SOURCE_ARCHIVE_SIGNATURE_BYTES + 1]);
+    assertThrows(SwiftExceptions.ContentTooLarge.class,
+        () -> SwiftMultipartRequest.parse(List.of(archive, oversizedSourceSignature)));
   }
 
   private static MockPart part(String name, String filename, String contentType, byte[] bytes) {

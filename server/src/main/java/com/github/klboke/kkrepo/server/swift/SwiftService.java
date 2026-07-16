@@ -221,8 +221,14 @@ public class SwiftService {
       String ip) {
     SwiftPath path = validatePublishRequest(runtime, rawPath, rawQuery, accept);
     SwiftMultipartRequest multipart = SwiftMultipartRequest.parse(parts);
-    byte[] sourceSignature = emptyToNull(multipart.sourceArchiveSignature());
-    byte[] metadataSignature = emptyToNull(multipart.metadataSignature());
+    byte[] sourceSignature = boundedSignature(
+        multipart.sourceArchiveSignature(),
+        SwiftPublishLimits.MAX_SOURCE_ARCHIVE_SIGNATURE_BYTES,
+        "source-archive-signature");
+    byte[] metadataSignature = boundedSignature(
+        multipart.metadataSignature(),
+        SwiftPublishLimits.MAX_METADATA_SIGNATURE_BYTES,
+        "metadata-signature");
     boolean signed = sourceSignature != null;
     String normalizedSignatureFormat = normalizeSignatureFormat(signatureFormat, signed);
     Map<String, Object> metadata = validateMetadata(multipart.metadataJson());
@@ -360,8 +366,14 @@ public class SwiftService {
     } catch (IllegalArgumentException e) {
       throw new SwiftExceptions.BadRequest(e.getMessage(), e);
     }
-    byte[] normalizedSourceSignature = emptyToNull(sourceSignature);
-    byte[] normalizedMetadataSignature = emptyToNull(metadataSignature);
+    byte[] normalizedSourceSignature = boundedSignature(
+        sourceSignature,
+        SwiftPublishLimits.MAX_SOURCE_ARCHIVE_SIGNATURE_BYTES,
+        "source-archive-signature");
+    byte[] normalizedMetadataSignature = boundedSignature(
+        metadataSignature,
+        SwiftPublishLimits.MAX_METADATA_SIGNATURE_BYTES,
+        "metadata-signature");
     String normalizedFormat = normalizeSignatureFormat(
         signatureFormat, normalizedSourceSignature != null);
     Map<String, Object> metadata = validateMetadata(
@@ -453,8 +465,14 @@ public class SwiftService {
     if (registry.findTombstone(runtime.id(), scopeLc, nameLc, version).isPresent()) {
       throw new SwiftExceptions.Conflict("This Swift release coordinate is tombstoned");
     }
-    byte[] normalizedSourceSignature = emptyToNull(sourceSignature);
-    byte[] normalizedMetadataSignature = emptyToNull(metadataSignature);
+    byte[] normalizedSourceSignature = boundedSignature(
+        sourceSignature,
+        SwiftPublishLimits.MAX_SOURCE_ARCHIVE_SIGNATURE_BYTES,
+        "source-archive-signature");
+    byte[] normalizedMetadataSignature = boundedSignature(
+        metadataSignature,
+        SwiftPublishLimits.MAX_METADATA_SIGNATURE_BYTES,
+        "metadata-signature");
     String normalizedFormat = normalizeSignatureFormat(
         signatureFormat, normalizedSourceSignature != null);
     Map<String, Object> metadata = validateMetadata(
@@ -637,6 +655,13 @@ public class SwiftService {
       RepositoryRuntime runtime, SwiftPath request, boolean headOnly) {
     ResolvedRelease resolved = resolveRelease(runtime, request, new LinkedHashSet<>());
     SwiftRegistryDao.Release release = resolved.release();
+    byte[] sourceSignature = release.signatureFormat() != null
+            && release.sourceSignatureAssetId() != null
+        ? boundedSignature(
+            assets.bytes(release.repositoryId(), release.sourceSignatureAssetId()),
+            SwiftPublishLimits.MAX_SOURCE_ARCHIVE_SIGNATURE_BYTES,
+            "Stored source-archive-signature")
+        : null;
     MavenResponse response = assets.serve(release.repositoryId(), release.archiveAssetId(), headOnly)
         .withHeader("Accept-Ranges", "bytes")
         .withHeader("Content-Version", SwiftMediaTypes.CONTENT_VERSION)
@@ -645,12 +670,11 @@ public class SwiftService {
             "Content-Disposition",
             "attachment; filename=\"" + safeFilename(release.nameDisplay()) + "-"
                 + release.version() + ".zip\"");
-    if (release.signatureFormat() != null && release.sourceSignatureAssetId() != null) {
+    if (sourceSignature != null) {
       response.withHeader("X-Swift-Package-Signature-Format", release.signatureFormat());
       response.withHeader(
           "X-Swift-Package-Signature",
-          Base64.getEncoder().encodeToString(
-              assets.bytes(release.repositoryId(), release.sourceSignatureAssetId())));
+          Base64.getEncoder().encodeToString(sourceSignature));
     }
     return response;
   }
@@ -1417,10 +1441,12 @@ public class SwiftService {
     if (release.signatureFormat() == null || release.sourceSignatureAssetId() == null) {
       return null;
     }
+    byte[] sourceSignature = boundedSignature(
+        assets.bytes(release.repositoryId(), release.sourceSignatureAssetId()),
+        SwiftPublishLimits.MAX_SOURCE_ARCHIVE_SIGNATURE_BYTES,
+        "Stored source-archive-signature");
     return new SwiftReleaseSigning(
-        Base64.getEncoder().encodeToString(
-            assets.bytes(release.repositoryId(), release.sourceSignatureAssetId())),
-        release.signatureFormat());
+        Base64.getEncoder().encodeToString(sourceSignature), release.signatureFormat());
   }
 
   private String declaredToolsVersion(long repositoryId, SwiftRegistryDao.Manifest manifest) {
@@ -1857,6 +1883,18 @@ public class SwiftService {
 
   private static byte[] emptyToNull(byte[] value) {
     return value == null || value.length == 0 ? null : value;
+  }
+
+  private static byte[] boundedSignature(byte[] value, int limit, String field) {
+    byte[] normalized = emptyToNull(value);
+    if (normalized != null && normalized.length > limit) {
+      String size = limit % (1024 * 1024) == 0
+          ? (limit / (1024 * 1024)) + " MiB"
+          : (limit / 1024) + " KiB";
+      throw new SwiftExceptions.ContentTooLarge(
+          field + " exceeds the " + size + " size limit");
+    }
+    return normalized;
   }
 
   private static void deleteQuietly(java.nio.file.Path file) {
