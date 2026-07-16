@@ -1118,6 +1118,28 @@ swift_version_line() {
   "$1" --version | head -n 1
 }
 
+swift_proxy_fixture_version() {
+  local swift_bin="$1"
+  if [[ -n "${SWIFT_E2E_PROXY_VERSION:-}" ]]; then
+    printf '%s' "$SWIFT_E2E_PROXY_VERSION"
+    return 0
+  fi
+
+  local version_line major minor
+  version_line="$(swift_version_line "$swift_bin")"
+  if [[ "$version_line" =~ Swift[[:space:]]version[[:space:]]([0-9]+)\.([0-9]+) ]]; then
+    major="${BASH_REMATCH[1]}"
+    minor="${BASH_REMATCH[2]}"
+    if (( major < 5 || (major == 5 && minor < 9) )); then
+      # swift-log 1.6.x requires swift-tools-version 5.9. Keep the oldest
+      # registry clients on the latest fixture they can actually resolve.
+      printf '1.5.4'
+      return 0
+    fi
+  fi
+  printf '1.6.3'
+}
+
 swift_registry_set() {
   local label="$1"
   local swift_bin="$2"
@@ -1273,7 +1295,8 @@ test_swift_proxy_binary() {
   local proxy_dir="$dir/proxy-consumer"
   local proxy_scope="${SWIFT_E2E_PROXY_SCOPE:-apple}"
   local proxy_name="${SWIFT_E2E_PROXY_NAME:-swift-log}"
-  local proxy_version="${SWIFT_E2E_PROXY_VERSION:-1.6.3}"
+  local proxy_version
+  proxy_version="$(swift_proxy_fixture_version "$swift_bin")"
   mkdir -p "$proxy_dir/Sources/ProxyConsumer"
   cat >"$proxy_dir/Package.swift" <<EOF
 // swift-tools-version:5.7

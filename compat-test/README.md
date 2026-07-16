@@ -179,7 +179,9 @@ real `package-registry login` command when the selected toolchain supports it an
 documented embedded-credentials registry configuration; the black-box suite still exercises
 `POST /login` with valid/invalid Basic and Bearer credentials directly. The HTTPS client path runs
 valid Basic login, rejected invalid credentials, and a real `--token` GenericToken login before
-publishing.
+publishing. The proxy client fixture follows the selected toolchain: Swift 5.7/5.8 uses
+`apple/swift-log` `1.5.4` (tools 5.6), while Swift 5.9+ uses `1.6.3` (tools 5.9). Set
+`SWIFT_E2E_PROXY_VERSION` to override that selection explicitly.
 
 The registry specification makes `POST /login` optional and allows `501 Not Implemented` when a
 server omits it. kkRepo implements this endpoint, so candidate assertions expect `200` for valid
