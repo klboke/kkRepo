@@ -350,10 +350,17 @@ public class BrowseAssetDetailService {
       String normalized,
       String sourceRepositoryName) {
     if (visibleRepository.format() == RepositoryFormat.TERRAFORM && terraformDao != null) {
-      Optional<ResolvedStoragePath> terraform = terraformStoragePath(
-          visibleRepository, normalized, sourceRepositoryName);
+      Optional<TerraformBrowseAssetPathResolver.ResolvedStoragePath> terraform =
+          TerraformBrowseAssetPathResolver.resolve(
+              visibleRepository,
+              normalized,
+              sourceRepositoryName,
+              repositoryDao,
+              assetDao,
+              terraformDao);
       if (terraform.isPresent()) {
-        return terraform.orElseThrow();
+        TerraformBrowseAssetPathResolver.ResolvedStoragePath resolved = terraform.orElseThrow();
+        return new ResolvedStoragePath(resolved.path(), resolved.sourceRepositoryName());
       }
     }
     if (visibleRepository.format() == RepositoryFormat.PYPI
@@ -364,58 +371,6 @@ public class BrowseAssetDetailService {
       return new ResolvedStoragePath("packages/" + normalized, sourceRepositoryName);
     }
     return new ResolvedStoragePath(normalized, sourceRepositoryName);
-  }
-
-  private Optional<ResolvedStoragePath> terraformStoragePath(
-      RepositoryRecord visibleRepository,
-      String publicPath,
-      String sourceRepositoryName) {
-    TerraformPath parsed;
-    try {
-      parsed = TERRAFORM_PATHS.parse(publicPath);
-    } catch (IllegalArgumentException e) {
-      return Optional.empty();
-    }
-    boolean publicArchive = parsed.kind() == TerraformPath.Kind.PROVIDER_ARCHIVE
-        && parsed.os() != null && parsed.arch() != null;
-    boolean publicMetadata = (parsed.kind() == TerraformPath.Kind.PROVIDER_SHA256SUMS
-        || parsed.kind() == TerraformPath.Kind.PROVIDER_SHA256SUMS_SIGNATURE)
-        && parsed.os() != null && parsed.arch() != null;
-    if (!publicArchive && !publicMetadata) {
-      return Optional.empty();
-    }
-    List<RepositoryRecord> sources = visibleRepository.type() == RepositoryType.GROUP
-        ? repositoryDao.listMembers(visibleRepository.id())
-        : List.of(visibleRepository);
-    if (sourceRepositoryName != null && !sourceRepositoryName.isBlank()) {
-      sources = sources.stream()
-          .filter(source -> source.name().equals(sourceRepositoryName))
-          .toList();
-    }
-    for (RepositoryRecord source : sources) {
-      Optional<TerraformRegistryDao.ProviderPlatform> platform = terraformDao.listProviderPlatforms(
-              source.id(), parsed.namespace(), parsed.name(), parsed.version()).stream()
-          .filter(row -> row.os().equals(parsed.os()) && row.arch().equals(parsed.arch()))
-          .filter(row -> !publicArchive || row.filename().equals(parsed.filename()))
-          .filter(row -> assetDao.findAssetByPath(source.id(), row.assetPath()).isPresent())
-          .findFirst();
-      if (platform.isEmpty()) {
-        continue;
-      }
-      if (publicArchive) {
-        return Optional.of(new ResolvedStoragePath(
-            platform.orElseThrow().assetPath(), source.name()));
-      }
-      Optional<TerraformRegistryDao.ProviderState> state = terraformDao.findProviderState(
-          source.id(), parsed.namespace(), parsed.name(), parsed.version());
-      if (state.isPresent()) {
-        String metadataPath = parsed.kind() == TerraformPath.Kind.PROVIDER_SHA256SUMS
-            ? state.orElseThrow().shasumsPath()
-            : state.orElseThrow().signaturePath();
-        return Optional.of(new ResolvedStoragePath(metadataPath, source.name()));
-      }
-    }
-    return Optional.empty();
   }
 
   private static String normalize(String path) {

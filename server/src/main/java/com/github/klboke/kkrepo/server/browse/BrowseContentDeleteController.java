@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MetadataRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
@@ -44,6 +45,7 @@ public class BrowseContentDeleteController {
 
   private final RepositoryDao repositoryDao;
   private final AssetDao assetDao;
+  private final TerraformRegistryDao terraformRegistryDao;
   private final BrowseNodeDao browseNodeDao;
   private final ComponentDao componentDao;
   private final MetadataRebuildDao metadataRebuildDao;
@@ -59,6 +61,7 @@ public class BrowseContentDeleteController {
   public BrowseContentDeleteController(
       RepositoryDao repositoryDao,
       AssetDao assetDao,
+      TerraformRegistryDao terraformRegistryDao,
       BrowseNodeDao browseNodeDao,
       ComponentDao componentDao,
       MetadataRebuildDao metadataRebuildDao,
@@ -72,6 +75,7 @@ public class BrowseContentDeleteController {
       NexusLikeCacheController cacheController) {
     this.repositoryDao = repositoryDao;
     this.assetDao = assetDao;
+    this.terraformRegistryDao = terraformRegistryDao;
     this.browseNodeDao = browseNodeDao;
     this.componentDao = componentDao;
     this.metadataRebuildDao = metadataRebuildDao;
@@ -106,7 +110,25 @@ public class BrowseContentDeleteController {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "path is required");
     }
     String storagePath = toStoragePath(requested.format(), publicPath);
-    RepositoryRecord target = resolveTargetRepository(requested, storagePath, sourceRepository);
+    String resolvedSourceRepository = sourceRepository;
+    if (requested.format() == RepositoryFormat.TERRAFORM) {
+      Optional<TerraformBrowseAssetPathResolver.ResolvedStoragePath> resolved =
+          TerraformBrowseAssetPathResolver.resolve(
+              requested,
+              publicPath,
+              sourceRepository,
+              repositoryDao,
+              assetDao,
+              terraformRegistryDao);
+      if (resolved.isPresent()) {
+        TerraformBrowseAssetPathResolver.ResolvedStoragePath resolvedPath =
+            resolved.orElseThrow();
+        storagePath = resolvedPath.path();
+        resolvedSourceRepository = resolvedPath.sourceRepositoryName();
+      }
+    }
+    RepositoryRecord target = resolveTargetRepository(
+        requested, storagePath, resolvedSourceRepository);
     List<AssetRecord> assets = matchingAssets(target, storagePath);
     if (assets.isEmpty()) {
       throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Browse path not found: " + publicPath);

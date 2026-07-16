@@ -20,6 +20,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MetadataRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
@@ -163,6 +164,71 @@ class BrowseContentDeleteControllerTest {
     verify(fixture.cacheController).invalidateAfterCommit(1L, NexusCacheType.METADATA);
   }
 
+  @Test
+  void mapsTerraformProviderPublicAliasesBeforeDelete() {
+    String base = "v1/providers/acme/demo/1.0.10";
+    String filename = "terraform-provider-demo_1.0.10_linux_amd64.zip";
+    assertTerraformProviderAliasDeleted(
+        base, filename, base + "/package/linux/" + filename, 11L);
+    assertTerraformProviderAliasDeleted(
+        base, "SHA256SUMS",
+        base + "/metadata-r2/terraform-provider-demo_1.0.10_SHA256SUMS", 12L);
+    assertTerraformProviderAliasDeleted(
+        base, "SHA256SUMS.sig",
+        base + "/metadata-r2/terraform-provider-demo_1.0.10_SHA256SUMS.sig", 13L);
+  }
+
+  private static void assertTerraformProviderAliasDeleted(
+      String base, String publicFilename, String storagePath, long assetId) {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord group =
+        repository(2L, "terraform-group", RepositoryFormat.TERRAFORM, RepositoryType.GROUP);
+    RepositoryRecord hosted =
+        repository(1L, "terraform-hosted", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED);
+    String archivePath = base + "/package/linux/"
+        + "terraform-provider-demo_1.0.10_linux_amd64.zip";
+    String sumsPath = base + "/metadata-r2/terraform-provider-demo_1.0.10_SHA256SUMS";
+    String signaturePath = sumsPath + ".sig";
+    AssetRecord archive = asset(
+        11L, null, 31L, RepositoryFormat.TERRAFORM, archivePath, "provider-archive", Map.of());
+    AssetRecord target = storagePath.equals(archivePath)
+        ? archive
+        : asset(
+            assetId, null, 30L + assetId, RepositoryFormat.TERRAFORM, storagePath,
+            "provider-metadata", Map.of());
+    when(fixture.repositoryDao.findByName("terraform-group")).thenReturn(Optional.of(group));
+    when(fixture.repositoryDao.findByName("terraform-hosted")).thenReturn(Optional.of(hosted));
+    when(fixture.repositoryDao.listMembers(group.id())).thenReturn(List.of(hosted));
+    when(fixture.terraformRegistryDao.listProviderPlatforms(
+        hosted.id(), "acme", "demo", "1.0.10"))
+        .thenReturn(List.of(new TerraformRegistryDao.ProviderPlatform(
+            hosted.id(), "acme", "demo", "1.0.10", "linux", "amd64",
+            "terraform-provider-demo_1.0.10_linux_amd64.zip", archivePath,
+            "sha256", "5.0", 2, Instant.EPOCH)));
+    when(fixture.terraformRegistryDao.findProviderState(
+        hosted.id(), "acme", "demo", "1.0.10"))
+        .thenReturn(Optional.of(new TerraformRegistryDao.ProviderState(
+            hosted.id(), "acme", "demo", "1.0.10", 2,
+            sumsPath, signaturePath, 1, Instant.EPOCH)));
+    when(fixture.assetDao.findAssetByPath(hosted.id(), archivePath))
+        .thenReturn(Optional.of(archive));
+    when(fixture.assetDao.findAssetByPath(hosted.id(), storagePath))
+        .thenReturn(Optional.of(target));
+    when(fixture.assetDao.listAssetsByPrefix(hosted.id(), storagePath + "/"))
+        .thenReturn(List.of());
+    String publicPath = base + "/download/linux/amd64/" + publicFilename;
+
+    BrowseContentDeleteController.BrowseDeleteResult result = fixture.controller.delete(
+        "terraform-group", publicPath, "terraform-hosted", new MockHttpServletRequest());
+
+    assertEquals(publicPath, result.path());
+    assertEquals("terraform-hosted", result.sourceRepository());
+    assertEquals(1, result.deletedAssets());
+    verify(fixture.assetDao).deleteAssetById(assetId);
+    verify(fixture.cacheController).invalidateAfterCommit(
+        hosted.id(), NexusCacheType.METADATA);
+  }
+
   private static void assertStatus(HttpStatus status, Runnable invocation) {
     ResponseStatusException error = assertThrows(ResponseStatusException.class, invocation::run);
     assertEquals(status, error.getStatusCode());
@@ -171,6 +237,7 @@ class BrowseContentDeleteControllerTest {
   private static Fixture fixture(boolean authenticated, AccessDecision decision) {
     RepositoryDao repositoryDao = mock(RepositoryDao.class);
     AssetDao assetDao = mock(AssetDao.class);
+    TerraformRegistryDao terraformRegistryDao = mock(TerraformRegistryDao.class);
     BrowseNodeDao browseNodeDao = mock(BrowseNodeDao.class);
     ComponentDao componentDao = mock(ComponentDao.class);
     MetadataRebuildDao metadataRebuildDao = mock(MetadataRebuildDao.class);
@@ -189,11 +256,11 @@ class BrowseContentDeleteControllerTest {
         authenticated ? Optional.of(subject) : Optional.empty());
     when(security.decide(permissionSubject, "nexus:*")).thenReturn(decision);
     BrowseContentDeleteController controller = new BrowseContentDeleteController(
-        repositoryDao, assetDao, browseNodeDao, componentDao, metadataRebuildDao,
+        repositoryDao, assetDao, terraformRegistryDao, browseNodeDao, componentDao, metadataRebuildDao,
         indexRebuildDao, authentication, security, assetCache, npmCache, pypiCache,
         groupMemberAssetCache, cacheController);
     return new Fixture(
-        repositoryDao, assetDao, browseNodeDao, componentDao, metadataRebuildDao,
+        repositoryDao, assetDao, terraformRegistryDao, browseNodeDao, componentDao, metadataRebuildDao,
         indexRebuildDao, npmCache, pypiCache, groupMemberAssetCache, cacheController, controller);
   }
 
@@ -221,6 +288,7 @@ class BrowseContentDeleteControllerTest {
   private record Fixture(
       RepositoryDao repositoryDao,
       AssetDao assetDao,
+      TerraformRegistryDao terraformRegistryDao,
       BrowseNodeDao browseNodeDao,
       ComponentDao componentDao,
       MetadataRebuildDao metadataRebuildDao,
