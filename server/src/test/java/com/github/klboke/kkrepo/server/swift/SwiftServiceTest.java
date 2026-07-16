@@ -293,7 +293,7 @@ class SwiftServiceTest {
   }
 
   @Test
-  void groupDoesNotSwallowCachedProxyRateLimitOrBadGateway() {
+  void groupPropagatesCachedProxyRateLimitOrBadGatewayWhenNoMemberHasData() {
     for (int status : List.of(429, 502)) {
       Fixture fixture = fixture();
       RepositoryRuntime proxy = proxy(1L, "swift-proxy");
@@ -312,8 +312,119 @@ class SwiftServiceTest {
       assertThrows(expected, () -> fixture.service.get(
           group, "Acme/Demo", null,
           "https://repo.example/repository/swift-group/", SwiftMediaTypes.VENDOR_JSON, false));
-      verify(fixture.registry, never()).listReleases(hosted.id(), "acme", "demo");
+      verify(fixture.registry).listReleases(hosted.id(), "acme", "demo");
     }
+  }
+
+  @Test
+  void groupServesHostedVersionsWhileAProxyMemberIsUnavailable() throws Exception {
+    for (int status : List.of(429, 502)) {
+      Fixture fixture = fixture();
+      RepositoryRuntime proxy = proxy(1L, "swift-proxy");
+      RepositoryRuntime hosted = hosted(3L, "swift-hosted");
+      RepositoryRuntime group = group(2L, List.of(proxy, hosted));
+      when(fixture.runtimes.resolveById(group.id())).thenReturn(Optional.of(group));
+      when(fixture.registry.findNegativeCache(proxy.id(), "tags:acme/demo"))
+          .thenReturn(Optional.of(new SwiftRegistryDao.NegativeCache(
+              proxy.id(),
+              "tags:acme/demo",
+              status,
+              status == 429 ? Instant.now().plusSeconds(60) : null,
+              Instant.now().plusSeconds(60),
+              Instant.now())));
+      when(fixture.registry.listReleases(hosted.id(), "acme", "demo")).thenReturn(List.of(
+          release(33L, hosted.id(), "1.2.3", SwiftRegistryDao.RELEASE_READY)));
+
+      MavenResponse response = fixture.service.get(
+          group,
+          "Acme/Demo",
+          null,
+          "https://repo.example/repository/swift-group/",
+          SwiftMediaTypes.VENDOR_JSON,
+          false);
+
+      assertEquals(200, response.status());
+      assertTrue(responseBody(response).contains("1.2.3"));
+    }
+  }
+
+  @Test
+  void groupResolvesHostedReleaseWhileAnEarlierProxyMemberIsUnavailable() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime proxy = proxy(1L, "swift-proxy");
+    RepositoryRuntime hosted = hosted(3L, "swift-hosted");
+    RepositoryRuntime group = group(2L, List.of(proxy, hosted));
+    SwiftRegistryDao.Release hostedRelease =
+        release(33L, hosted.id(), "1.2.3", SwiftRegistryDao.RELEASE_READY);
+    SwiftRegistryDao.GroupSourceBinding binding = new SwiftRegistryDao.GroupSourceBinding(
+        group.id(), "acme", "demo", "1.2.3", hosted.id(), hostedRelease.id(),
+        hostedRelease.revision(), 7L, Instant.EPOCH);
+    when(fixture.runtimes.resolveById(group.id())).thenReturn(Optional.of(group));
+    when(fixture.runtimes.resolveById(hosted.id())).thenReturn(Optional.of(hosted));
+    when(fixture.registry.currentRepositoryRevision(group.id())).thenReturn(7L);
+    when(fixture.registry.findNegativeCache(proxy.id(), "tags:acme/demo"))
+        .thenReturn(Optional.of(new SwiftRegistryDao.NegativeCache(
+            proxy.id(),
+            "tags:acme/demo",
+            502,
+            null,
+            Instant.now().plusSeconds(60),
+            Instant.now())));
+    when(fixture.registry.listReleases(hosted.id(), "acme", "demo"))
+        .thenReturn(List.of(hostedRelease));
+    when(fixture.registry.findRelease(hosted.id(), "acme", "demo", "1.2.3"))
+        .thenReturn(Optional.of(hostedRelease));
+    when(fixture.registry.upsertGroupSourceBindingIfCurrent(any())).thenReturn(true);
+    when(fixture.registry.findGroupSourceBinding(group.id(), "acme", "demo", "1.2.3"))
+        .thenReturn(Optional.empty(), Optional.of(binding));
+    when(fixture.registry.findReleaseById(hostedRelease.id()))
+        .thenReturn(Optional.of(hostedRelease));
+
+    MavenResponse response = fixture.service.get(
+        group,
+        "Acme/Demo/1.2.3",
+        null,
+        "https://repo.example/repository/swift-group/",
+        SwiftMediaTypes.VENDOR_JSON,
+        false);
+
+    assertEquals(200, response.status());
+    verify(fixture.registry).upsertGroupSourceBindingIfCurrent(argThat(candidate ->
+        candidate.memberRepositoryId() == hosted.id()));
+  }
+
+  @Test
+  void proxySharesTransientGitHubTagFailureAcrossPackageCoordinates() {
+    Fixture fixture = fixture();
+    RepositoryRuntime proxy = proxy(1L, "swift-proxy");
+    when(fixture.github.tags(any(), any()))
+        .thenThrow(new SwiftExceptions.BadUpstream("GitHub tags request returned HTTP 503"));
+
+    assertThrows(SwiftExceptions.BadUpstream.class, () -> fixture.service.get(
+        proxy,
+        "Acme/Demo",
+        null,
+        "https://repo.example/repository/swift-proxy/",
+        SwiftMediaTypes.VENDOR_JSON,
+        false));
+
+    ArgumentCaptor<SwiftRegistryDao.NegativeCache> cache =
+        ArgumentCaptor.forClass(SwiftRegistryDao.NegativeCache.class);
+    verify(fixture.registry).putNegativeCache(cache.capture());
+    assertEquals("upstream:github:tags", cache.getValue().cacheKey());
+    assertEquals(502, cache.getValue().statusCode());
+    when(fixture.registry.findNegativeCache(proxy.id(), "upstream:github:tags"))
+        .thenReturn(Optional.of(cache.getValue()));
+
+    assertThrows(SwiftExceptions.BadUpstream.class, () -> fixture.service.get(
+        proxy,
+        "Other/Package",
+        null,
+        "https://repo.example/repository/swift-proxy/",
+        SwiftMediaTypes.VENDOR_JSON,
+        false));
+
+    verify(fixture.github, times(1)).tags(any(), any());
   }
 
   @Test

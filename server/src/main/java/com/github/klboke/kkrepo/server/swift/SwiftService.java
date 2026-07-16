@@ -82,6 +82,8 @@ public class SwiftService {
   private static final String SOURCE_HOSTED = "HOSTED";
   private static final String SOURCE_PROXY = "GITHUB_PROXY";
   private static final String GENERATION_PROFILE = "github-zipball-v1";
+  private static final String GITHUB_TAGS_FAILURE_CACHE_KEY = "upstream:github:tags";
+  private static final long BAD_GATEWAY_CACHE_SECONDS = 15L;
 
   private final ObjectMapper mapper;
   private final SwiftRegistryDao registry;
@@ -806,8 +808,18 @@ public class SwiftService {
         available.forEach(version -> states.putIfAbsent(version, VersionState.availableVersion()));
         return states;
       }
+      SwiftExceptions.SwiftException upstreamFailure = null;
       for (RepositoryRuntime member : runtime.members()) {
-        listedVersions(member, scopeLc, nameLc, visiting).forEach(states::putIfAbsent);
+        try {
+          listedVersions(member, scopeLc, nameLc, visiting).forEach(states::putIfAbsent);
+        } catch (SwiftExceptions.UpstreamRateLimited | SwiftExceptions.BadUpstream e) {
+          if (upstreamFailure == null) {
+            upstreamFailure = e;
+          }
+        }
+      }
+      if (states.isEmpty() && upstreamFailure != null) {
+        throw upstreamFailure;
       }
       return states;
     } finally {
@@ -972,8 +984,17 @@ public class SwiftService {
         .filter(RepositoryRuntime::isGroup)
         .filter(RepositoryRuntime::online)
         .orElseThrow(() -> new SwiftExceptions.NotFound("Swift group was not found"));
+    SwiftExceptions.SwiftException upstreamFailure = null;
     for (RepositoryRuntime member : snapshot.members()) {
-      VersionState state = listedVersions(member, scopeLc, nameLc, visiting).get(path.version());
+      VersionState state;
+      try {
+        state = listedVersions(member, scopeLc, nameLc, visiting).get(path.version());
+      } catch (SwiftExceptions.UpstreamRateLimited | SwiftExceptions.BadUpstream e) {
+        if (upstreamFailure == null) {
+          upstreamFailure = e;
+        }
+        continue;
+      }
       if (state == null) {
         continue;
       }
@@ -986,6 +1007,11 @@ public class SwiftService {
       } catch (SwiftExceptions.NotFound ignored) {
         // The advertised version disappeared between discovery and materialization. This is a
         // member miss, unlike the terminal tombstone state handled above.
+        continue;
+      } catch (SwiftExceptions.UpstreamRateLimited | SwiftExceptions.BadUpstream e) {
+        if (upstreamFailure == null) {
+          upstreamFailure = e;
+        }
         continue;
       }
       SwiftRegistryDao.Release release = winner.release();
@@ -1019,6 +1045,9 @@ public class SwiftService {
             "Swift group configuration changed while resolving the release");
       }
       return resolveGroup(snapshot, path, visiting, true);
+    }
+    if (upstreamFailure != null) {
+      throw upstreamFailure;
     }
     throw new SwiftExceptions.NotFound("Swift release was not found in group members");
   }
@@ -1226,6 +1255,7 @@ public class SwiftService {
       RepositoryRuntime runtime,
       SwiftGitHubClient.Coordinates coordinates,
       String cacheKey) {
+    throwIfNegativeCached(runtime.id(), GITHUB_TAGS_FAILURE_CACHE_KEY);
     throwIfNegativeCached(runtime.id(), cacheKey);
     try {
       return github.tags(runtime, coordinates);
@@ -1234,6 +1264,9 @@ public class SwiftService {
       throw e;
     } catch (SwiftExceptions.NotFound e) {
       rememberNotFound(runtime.id(), cacheKey);
+      throw e;
+    } catch (SwiftExceptions.BadUpstream e) {
+      rememberBadGateway(runtime.id(), GITHUB_TAGS_FAILURE_CACHE_KEY);
       throw e;
     }
   }
@@ -1858,6 +1891,17 @@ public class SwiftService {
         repositoryId, key, 429, retry, retry, now));
   }
 
+  private void rememberBadGateway(long repositoryId, String key) {
+    Instant now = Instant.now();
+    registry.putNegativeCache(new SwiftRegistryDao.NegativeCache(
+        repositoryId,
+        key,
+        502,
+        null,
+        now.plusSeconds(BAD_GATEWAY_CACHE_SECONDS),
+        now));
+  }
+
   private void throwIfNegativeCached(long repositoryId, String key) {
     registry.findNegativeCache(repositoryId, key)
         .filter(entry -> entry.expiresAt().isAfter(Instant.now()))
@@ -1870,6 +1914,9 @@ public class SwiftService {
             throw new SwiftExceptions.NotFound(
                 "GitHub Swift package was not found (cached)");
           }
+          throw new SwiftExceptions.BadUpstream(
+              "GitHub upstream is temporarily unavailable (cached status "
+                  + entry.statusCode() + ")");
         });
   }
 
