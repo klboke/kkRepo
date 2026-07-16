@@ -2496,7 +2496,7 @@ function swiftUsageDetail(entry) {
   ];
   const snippets = [
     usageSnippet("Configure registry", `swift package-registry set "${repoUrl}"`),
-    usageSnippet("Login", `swift package-registry login "${repoUrl}login" --username <username>`),
+    usageSnippet("Login", `swift package-registry login "${repoUrl}" --username <username>`),
     usageSnippet(
       "registries.json",
       JSON.stringify({

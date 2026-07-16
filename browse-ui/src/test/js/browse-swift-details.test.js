@@ -59,6 +59,10 @@ test("preserves a .zip build-metadata suffix on Swift release coordinates", () =
   });
 
   assert.equal(detailVersion(detail), "1.0.0+linux.zip");
+  assert.equal(
+    detail.snippets[1].snippetText,
+    'swift package-registry login "http://localhost:18090/repository/swift-hosted/" --username <username>',
+  );
   assert.match(detail.snippets[3].snippetText, /from: "1\.0\.0\+linux\.zip"/);
   assert.match(detail.snippets[4].snippetText, /acme\.library 1\.0\.0\+linux\.zip$/);
 });

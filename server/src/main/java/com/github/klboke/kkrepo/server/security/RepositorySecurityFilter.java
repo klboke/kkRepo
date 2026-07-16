@@ -200,6 +200,9 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
 
   private List<PermissionAction> actionsForDecision(
       RepositoryRecord repository, RepositoryRequest target) {
+    if (repository.format() == RepositoryFormat.SWIFT && target.componentUploadRoute()) {
+      return List.of(PermissionAction.ADD);
+    }
     if (repository.format() != RepositoryFormat.TERRAFORM
         || !"PUT".equalsIgnoreCase(target.method())) {
       return target.actions(repository.format());
@@ -242,7 +245,8 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       if (repository == null || repository.isBlank()) {
         return Optional.empty();
       }
-      return Optional.of(new RepositoryRequest(repository.trim(), "", method, List.of(PermissionAction.EDIT), false));
+      return Optional.of(new RepositoryRequest(
+          repository.trim(), "", method, List.of(PermissionAction.EDIT), false, true));
     }
     Optional<String> legacyUploadRepository = legacyUi.internalUiUploadRepository(uri);
     if (legacyUploadRepository.isPresent()) {
@@ -251,7 +255,8 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
           "",
           method,
           List.of(PermissionAction.EDIT),
-          false));
+          false,
+          true));
     }
     return Optional.empty();
   }
@@ -272,7 +277,8 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
         path,
         method,
         null,
-        isNpmTokenRoute(method, path)));
+        isNpmTokenRoute(method, path),
+        false));
   }
 
   private Optional<RepositoryRequest> browseRoute(String method, String uri) {
@@ -289,7 +295,8 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     if (repository.isBlank()) {
       return Optional.empty();
     }
-    return Optional.of(new RepositoryRequest(decode(repository), path, method, List.of(PermissionAction.BROWSE), false));
+    return Optional.of(new RepositoryRequest(
+        decode(repository), path, method, List.of(PermissionAction.BROWSE), false, false));
   }
 
   private boolean isNpmTokenRoute(String method, String path) {
@@ -474,7 +481,8 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       String path,
       String method,
       List<PermissionAction> fixedActions,
-      boolean npmTokenRoute) {
+      boolean npmTokenRoute,
+      boolean componentUploadRoute) {
     private List<PermissionAction> actions(RepositoryFormat format) {
       return fixedActions == null ? actionsForRepository(method, path, format) : fixedActions;
     }
@@ -491,7 +499,8 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     }
 
     private RepositoryRequest withPath(String normalizedPath) {
-      return new RepositoryRequest(repository, normalizedPath, method, fixedActions, npmTokenRoute);
+      return new RepositoryRequest(
+          repository, normalizedPath, method, fixedActions, npmTokenRoute, componentUploadRoute);
     }
 
   }

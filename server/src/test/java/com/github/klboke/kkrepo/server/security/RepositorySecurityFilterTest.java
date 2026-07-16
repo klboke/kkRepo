@@ -1010,6 +1010,12 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
+  void restSwiftComponentUploadRequiresAddWithoutEditFallback() throws Exception {
+    assertSwiftComponentUploadRequiresAdd(
+        request("POST", "/service/rest/v1/components", Map.of("repository", "swift-hosted")));
+  }
+
+  @Test
   void nonPostComponentsEndpointIsNotTreatedAsUploadPermission() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("alice")));
     RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.deny("should not be checked"));
@@ -1053,6 +1059,12 @@ class RepositorySecurityFilterTest {
     assertEquals(1, chain.calls);
     assertEquals(PermissionAction.EDIT, decisions.permission.action());
     assertEquals("maven-releases", decisions.permission.repository());
+  }
+
+  @Test
+  void internalUiSwiftComponentUploadRequiresAddWithoutEditFallback() throws Exception {
+    assertSwiftComponentUploadRequiresAdd(
+        request("POST", "/service/rest/internal/ui/upload/swift-hosted"));
   }
 
   @Test
@@ -1323,6 +1335,39 @@ class RepositorySecurityFilterTest {
     assertEquals(1, decisions.decisions);
     assertEquals(PermissionAction.ADD, decisions.permission.action());
     assertEquals(HttpServletResponse.SC_FORBIDDEN, response.status);
+  }
+
+  private static void assertSwiftComponentUploadRequiresAdd(HttpServletRequest request)
+      throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingDecisionService decisions = new RecordingDecisionService(
+        AccessDecision.deny("missing add")) {
+      @Override
+      public AccessDecision decide(PermissionSubject subject, RepositoryPermission permission) {
+        super.decide(subject, permission);
+        return permission.action() == PermissionAction.EDIT
+            ? AccessDecision.allow()
+            : AccessDecision.deny("missing add");
+      }
+    };
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED)),
+        false,
+        true);
+    MockHttpServletResponse response = new MockHttpServletResponse();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(request, response, chain);
+
+    assertEquals(0, chain.calls);
+    assertEquals(1, decisions.decisions);
+    assertEquals(PermissionAction.ADD, decisions.permission.action());
+    assertEquals("swift-hosted", decisions.permission.repository());
+    assertEquals(HttpServletResponse.SC_FORBIDDEN, response.getStatus());
   }
 
   private static RepositoryRecord repository(String name) {
