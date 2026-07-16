@@ -1220,7 +1220,11 @@ swift_supports_registry_login() {
 }
 
 swift_supports_registry_publish() {
-  "$1" package-registry publish --help >/dev/null 2>&1
+  local help
+  help="$("$1" package-registry publish --help 2>&1 || true)"
+  grep -q -- '--url' <<<"$help" \
+    && grep -q -- '--metadata-path' <<<"$help" \
+    && grep -q -- '--scratch-directory' <<<"$help"
 }
 
 authenticated_registry_url() {
