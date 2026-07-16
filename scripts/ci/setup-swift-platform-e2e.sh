@@ -122,13 +122,31 @@ ensure_repository swift-hosted '{
   "blobStoreName":"default","strictContentTypeValidation":true,
   "hosted":{"writePolicy":"ALLOW_ONCE"}
 }'
-ensure_repository swift-proxy '{
-  "name":"swift-proxy","recipe":"swift-proxy","online":true,
-  "blobStoreName":"default","strictContentTypeValidation":true,
-  "proxy":{"remoteUrl":"https://github.com/","contentMaxAgeMinutes":1440,
-    "metadataMaxAgeMinutes":1440,"negativeCacheEnabled":true,
-    "negativeCacheTtlMinutes":1,"autoBlock":true}
-}'
+swift_proxy_payload="$(python3 - "${SWIFT_GITHUB_TOKEN:-}" <<'PY'
+import json
+import sys
+
+proxy = {
+    "remoteUrl": "https://github.com/",
+    "contentMaxAgeMinutes": 1440,
+    "metadataMaxAgeMinutes": 1440,
+    "negativeCacheEnabled": True,
+    "negativeCacheTtlMinutes": 1,
+    "autoBlock": True,
+}
+if sys.argv[1]:
+    proxy["remoteBearerToken"] = sys.argv[1]
+print(json.dumps({
+    "name": "swift-proxy",
+    "recipe": "swift-proxy",
+    "online": True,
+    "blobStoreName": "default",
+    "strictContentTypeValidation": True,
+    "proxy": proxy,
+}, separators=(",", ":")))
+PY
+)"
+ensure_repository swift-proxy "$swift_proxy_payload"
 ensure_repository swift-group '{
   "name":"swift-group","recipe":"swift-group","online":true,
   "blobStoreName":"default","strictContentTypeValidation":true,

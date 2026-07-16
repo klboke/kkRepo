@@ -30,6 +30,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # Keep live GitHub proxy checks deterministic without exposing the repository token to forks.
+  SWIFT_GITHUB_TOKEN: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.token || '' }}
+
 concurrency:
   group: live-compat-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

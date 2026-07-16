@@ -765,14 +765,32 @@ ensure_kkrepo_repositories() {
     "hosted":{"writePolicy":"ALLOW_ONCE"}
   }'
 
-  kkrepo_create_repo "swift-proxy" '{
-    "name":"swift-proxy",
-    "recipe":"swift-proxy",
-    "online":true,
-    "blobStoreName":"default",
-    "strictContentTypeValidation":true,
-    "proxy":{"remoteUrl":"https://github.com/","contentMaxAgeMinutes":1440,"metadataMaxAgeMinutes":1440,"negativeCacheEnabled":true,"negativeCacheTtlMinutes":1,"autoBlock":true}
-  }'
+  local swift_proxy_payload
+  swift_proxy_payload="$(python3 - "${SWIFT_GITHUB_TOKEN:-}" <<'PY'
+import json
+import sys
+
+proxy = {
+    "remoteUrl": "https://github.com/",
+    "contentMaxAgeMinutes": 1440,
+    "metadataMaxAgeMinutes": 1440,
+    "negativeCacheEnabled": True,
+    "negativeCacheTtlMinutes": 1,
+    "autoBlock": True,
+}
+if sys.argv[1]:
+    proxy["remoteBearerToken"] = sys.argv[1]
+print(json.dumps({
+    "name": "swift-proxy",
+    "recipe": "swift-proxy",
+    "online": True,
+    "blobStoreName": "default",
+    "strictContentTypeValidation": True,
+    "proxy": proxy,
+}, separators=(",", ":")))
+PY
+)"
+  kkrepo_create_repo "swift-proxy" "$swift_proxy_payload"
 
   kkrepo_create_repo "swift-group" '{
     "name":"swift-group",

@@ -147,8 +147,10 @@ scripts/ci/run-live-compat.sh swift
 Set `SWIFT_KKREPO_SECONDARY_BASE_URL` to a second replica sharing the same database and blob store
 to enable publish-on-primary/read-on-secondary validation. The GitHub proxy fixture defaults to
 `apple/swift-log` `1.6.3`; override `SWIFT_COMPAT_PROXY_SCOPE`, `SWIFT_COMPAT_PROXY_NAME`, and
-`SWIFT_COMPAT_PROXY_VERSION` for a controlled tag fixture. To run the Nexus 3.93+ leading-tag
-regression, set `SWIFT_COMPAT_PROXY_TAG_CASES` to comma-separated
+`SWIFT_COMPAT_PROXY_VERSION` for a controlled tag fixture. Set `SWIFT_GITHUB_TOKEN` to configure
+the candidate proxy with an encrypted Bearer credential and avoid anonymous GitHub API limits;
+fork-based CI deliberately leaves it unset. To run the Nexus 3.93+ leading-tag regression, set
+`SWIFT_COMPAT_PROXY_TAG_CASES` to comma-separated
 `scope/name/rawTag/normalizedVersion` entries backed by controlled GitHub repositories; the test
 requires at least one lowercase `v` and one uppercase `V` case and otherwise reports an explicit
 skip.

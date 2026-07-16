@@ -858,16 +858,25 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
     }
     repositories = json(send(config.candidateAdmin("/internal/repositories").GET()));
     if (!containsRepository(repositories, config.proxy())) {
-      String body = """
-          {"name":"%s","recipe":"swift-proxy","online":true,"blobStoreName":"default",
-           "strictContentTypeValidation":true,
-           "proxy":{"remoteUrl":"https://github.com/","contentMaxAgeMinutes":1440,
-                    "metadataMaxAgeMinutes":1440,"negativeCacheEnabled":true,
-                    "negativeCacheTtlMinutes":1,"autoBlock":true}}
-          """.formatted(config.proxy());
+      ObjectNode body = JSON.createObjectNode();
+      body.put("name", config.proxy());
+      body.put("recipe", "swift-proxy");
+      body.put("online", true);
+      body.put("blobStoreName", "default");
+      body.put("strictContentTypeValidation", true);
+      ObjectNode proxy = body.putObject("proxy");
+      proxy.put("remoteUrl", "https://github.com/");
+      proxy.put("contentMaxAgeMinutes", 1440);
+      proxy.put("metadataMaxAgeMinutes", 1440);
+      proxy.put("negativeCacheEnabled", true);
+      proxy.put("negativeCacheTtlMinutes", 1);
+      proxy.put("autoBlock", true);
+      if (!config.githubToken().isBlank()) {
+        proxy.put("remoteBearerToken", config.githubToken());
+      }
       assert2xx("create kkrepo Swift proxy", send(config.candidateAdmin("/internal/repositories")
           .header("Content-Type", "application/json")
-          .POST(HttpRequest.BodyPublishers.ofString(body))));
+          .POST(HttpRequest.BodyPublishers.ofString(JSON.writeValueAsString(body)))));
     }
     repositories = json(send(config.candidateAdmin("/internal/repositories").GET()));
     if (!containsRepository(repositories, config.group())) {
@@ -1880,6 +1889,7 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
       String candidateSecondaryBase,
       String nexusAuth,
       String candidateAuth,
+      String githubToken,
       String hosted,
       String secondaryHosted,
       String proxy,
@@ -1911,6 +1921,7 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
                   .orElseGet(() -> CompatDefaults.nexusPlusUsername().orElse("")),
               CompatDefaults.setting("compat.swift.kkrepo.password", "SWIFT_KKREPO_COMPAT_PASSWORD")
                   .orElseGet(() -> CompatDefaults.nexusPlusPassword().orElse(""))),
+          CompatDefaults.setting("compat.swift.githubToken", "SWIFT_GITHUB_TOKEN").orElse(""),
           CompatDefaults.setting("compat.swift.hostedRepository", "SWIFT_COMPAT_HOSTED_REPOSITORY")
               .orElse("swift-compat-hosted"),
           CompatDefaults.setting(
