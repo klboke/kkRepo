@@ -791,9 +791,18 @@ public class SwiftService {
    */
   private LinkedHashMap<String, VersionState> listedVersions(
       RepositoryRuntime runtime, String scopeLc, String nameLc, Set<Long> visiting) {
+    VersionListing listing = versionListing(runtime, scopeLc, nameLc, visiting);
+    if (listing.states().isEmpty() && listing.upstreamFailure() != null) {
+      throw listing.upstreamFailure();
+    }
+    return listing.states();
+  }
+
+  private VersionListing versionListing(
+      RepositoryRuntime runtime, String scopeLc, String nameLc, Set<Long> visiting) {
     LinkedHashMap<String, VersionState> states = new LinkedHashMap<>();
     if (runtime == null || !runtime.online() || !visiting.add(runtime.id())) {
-      return states;
+      return new VersionListing(states, null);
     }
     try {
       if (runtime.isHosted() || runtime.isProxy()) {
@@ -806,22 +815,24 @@ public class SwiftService {
             ? readyVersions(runtime.id(), scopeLc, nameLc)
             : proxyVersions(runtime, scopeLc, nameLc, tombstones);
         available.forEach(version -> states.putIfAbsent(version, VersionState.availableVersion()));
-        return states;
+        return new VersionListing(states, null);
       }
       SwiftExceptions.SwiftException upstreamFailure = null;
       for (RepositoryRuntime member : runtime.members()) {
         try {
-          listedVersions(member, scopeLc, nameLc, visiting).forEach(states::putIfAbsent);
+          VersionListing memberListing =
+              versionListing(member, scopeLc, nameLc, visiting);
+          memberListing.states().forEach(states::putIfAbsent);
+          if (upstreamFailure == null && memberListing.upstreamFailure() != null) {
+            upstreamFailure = memberListing.upstreamFailure();
+          }
         } catch (SwiftExceptions.UpstreamRateLimited | SwiftExceptions.BadUpstream e) {
           if (upstreamFailure == null) {
             upstreamFailure = e;
           }
         }
       }
-      if (states.isEmpty() && upstreamFailure != null) {
-        throw upstreamFailure;
-      }
-      return states;
+      return new VersionListing(states, upstreamFailure);
     } finally {
       visiting.remove(runtime.id());
     }
@@ -988,7 +999,11 @@ public class SwiftService {
     for (RepositoryRuntime member : snapshot.members()) {
       VersionState state;
       try {
-        state = listedVersions(member, scopeLc, nameLc, visiting).get(path.version());
+        VersionListing listing = versionListing(member, scopeLc, nameLc, visiting);
+        state = listing.states().get(path.version());
+        if (state == null && upstreamFailure == null && listing.upstreamFailure() != null) {
+          upstreamFailure = listing.upstreamFailure();
+        }
       } catch (SwiftExceptions.UpstreamRateLimited | SwiftExceptions.BadUpstream e) {
         if (upstreamFailure == null) {
           upstreamFailure = e;
@@ -1266,7 +1281,9 @@ public class SwiftService {
       rememberNotFound(runtime.id(), cacheKey);
       throw e;
     } catch (SwiftExceptions.BadUpstream e) {
-      rememberBadGateway(runtime.id(), GITHUB_TAGS_FAILURE_CACHE_KEY);
+      if (SwiftGitHubClient.isTransientTagAvailabilityFailure(e)) {
+        rememberBadGateway(runtime.id(), GITHUB_TAGS_FAILURE_CACHE_KEY);
+      }
       throw e;
     }
   }
@@ -1954,6 +1971,10 @@ public class SwiftService {
 
   private record ResolvedRelease(
       RepositoryRuntime sourceRuntime, SwiftRegistryDao.Release release) {}
+
+  private record VersionListing(
+      LinkedHashMap<String, VersionState> states,
+      SwiftExceptions.SwiftException upstreamFailure) {}
 
   private record VersionState(boolean available, String unavailableReason) {
     private static VersionState availableVersion() {

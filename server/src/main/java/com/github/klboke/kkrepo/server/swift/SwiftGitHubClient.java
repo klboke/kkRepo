@@ -7,13 +7,13 @@ import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -39,6 +39,10 @@ final class SwiftGitHubClient {
       new TypeReference<>() {};
   /** Bounds one refresh to 10,000 upstream tags while still supporting large Swift repositories. */
   private static final int MAX_TAG_PAGES = 100;
+  private static final int MAX_TAGS = MAX_TAG_PAGES * 100;
+  private static final int MAX_GIT_PACKET_BYTES = 65_520;
+  private static final long MAX_GIT_ADVERTISEMENT_BYTES = 16L * 1024L * 1024L;
+  private static final String GIT_TAG_PREFIX = "refs/tags/";
   /** Bounds transient GitHub retries to seven seconds without a Retry-After response. */
   private static final int MAX_TRANSIENT_STATUS_ATTEMPTS = 4;
   /** A fallback only separates credential-specific failures; it must not double the wait budget. */
@@ -71,7 +75,27 @@ final class SwiftGitHubClient {
 
   List<Tag> tags(RepositoryRuntime runtime, Coordinates coordinates) {
     requireGitHubProxy(runtime);
-    List<Tag> tags = new ArrayList<>();
+    try {
+      return tagsFromApi(runtime, coordinates);
+    } catch (SwiftExceptions.BadUpstream apiFailure) {
+      if (!fallbackEligible(apiFailure)) {
+        throw apiFailure;
+      }
+      log.warn(
+          "GitHub REST tag discovery failed for repository={} coordinate={}; "
+              + "falling back to bounded Git smart HTTP ref discovery",
+          runtime.name(),
+          coordinates.identity());
+      try {
+        return tagsFromGitAdvertisement(runtime, coordinates);
+      } catch (SwiftExceptions.SwiftException | IOException fallbackFailure) {
+        apiFailure.addSuppressed(fallbackFailure);
+        throw apiFailure;
+      }
+    }
+  }
+
+  private List<Tag> tagsFromApi(RepositoryRuntime runtime, Coordinates coordinates) {
     Map<String, Tag> byVersion = new LinkedHashMap<>();
     CredentialFallbackState credentialState = new CredentialFallbackState();
     boolean exhausted = false;
@@ -102,8 +126,7 @@ final class SwiftGitHubClient {
       throw new SwiftExceptions.BadUpstream(
           "GitHub tag listing exceeded the configured pagination safety limit");
     }
-    tags.addAll(byVersion.values());
-    return List.copyOf(tags);
+    return List.copyOf(byVersion.values());
   }
 
   SwiftArchiveInspector.InspectedArchive archive(
@@ -112,27 +135,65 @@ final class SwiftGitHubClient {
     if (commitSha == null || !SHA.matcher(commitSha).matches()) {
       throw new SwiftExceptions.BadUpstream("GitHub returned an invalid commit SHA");
     }
+    SwiftExceptions.BadUpstream apiFailure;
+    try {
+      return archiveFromApi(runtime, coordinates, commitSha);
+    } catch (SwiftExceptions.BadUpstream failure) {
+      if (!fallbackEligible(failure)) {
+        throw failure;
+      }
+      apiFailure = failure;
+    } catch (IOException e) {
+      apiFailure = new SwiftExceptions.BadUpstream(
+          "Unable to download GitHub source archive", e);
+    }
+
+    log.warn(
+        "GitHub REST archive download failed for repository={} coordinate={} commit={}; "
+            + "falling back to the GitHub commit archive URL",
+        runtime.name(),
+        coordinates.identity(),
+        commitSha);
+    try {
+      return archiveFromWeb(runtime, coordinates, commitSha);
+    } catch (SwiftExceptions.SwiftException | IOException fallbackFailure) {
+      apiFailure.addSuppressed(fallbackFailure);
+      throw apiFailure;
+    }
+  }
+
+  private SwiftArchiveInspector.InspectedArchive archiveFromApi(
+      RepositoryRuntime runtime, Coordinates coordinates, String commitSha) throws IOException {
     String url = API + coordinates.owner() + "/" + coordinates.repository()
         + "/zipball/" + commitSha;
-    HttpRemoteFetcher.Request request = request(runtime, url, true);
-    try {
-      return fetchWithTransientStatusRetry(
-          request, coordinates.identity() + "/" + commitSha, result -> {
-        if (result.status() == 404 || result.status() == 410) {
-          throw new SwiftExceptions.NotFound("GitHub release source was not found");
-        }
-        if (result.status() == 403 || result.status() == 429) {
-          throw rateLimited(result);
-        }
-        if (result.status() < 200 || result.status() >= 300) {
-          throw new SwiftExceptions.BadUpstream(
-              "GitHub archive request returned HTTP " + result.status());
-        }
-        return inspector.inspect(UpstreamBodyReadException.wrap(result.body()));
-      });
-    } catch (IOException e) {
-      throw new SwiftExceptions.BadUpstream("Unable to download GitHub source archive", e);
+    return fetchWithTransientStatusRetry(
+        apiRequest(runtime, url, true),
+        coordinates.identity() + "/" + commitSha,
+        this::inspectArchiveResponse);
+  }
+
+  private SwiftArchiveInspector.InspectedArchive archiveFromWeb(
+      RepositoryRuntime runtime, Coordinates coordinates, String commitSha) throws IOException {
+    String url = coordinates.repositoryUrl() + "/archive/" + commitSha + ".zip";
+    return fetcher.fetchWithBodyRetry(
+        githubWebRequest(runtime, url, true),
+        coordinates.identity() + "/" + commitSha + "-github-web-fallback",
+        this::inspectArchiveResponse);
+  }
+
+  private SwiftArchiveInspector.InspectedArchive inspectArchiveResponse(
+      HttpRemoteFetcher.Result result) throws IOException {
+    if (result.status() == 404 || result.status() == 410) {
+      throw new SwiftExceptions.NotFound("GitHub release source was not found");
     }
+    if (result.status() == 403 || result.status() == 429) {
+      throw rateLimited(result);
+    }
+    if (result.status() < 200 || result.status() >= 300) {
+      throw new SwiftExceptions.BadUpstream(
+          "GitHub archive request returned HTTP " + result.status());
+    }
+    return inspector.inspect(UpstreamBodyReadException.wrap(result.body()));
   }
 
   private List<Map<String, Object>> getJsonList(
@@ -142,7 +203,7 @@ final class SwiftGitHubClient {
       CredentialFallbackState credentialState) {
     try {
       HttpRemoteFetcher.Request request = credentialState.apply(
-          request(runtime, url, false));
+          apiRequest(runtime, url, false));
       return fetchWithTransientStatusRetry(request, resource, result -> {
         if (result.status() == 404 || result.status() == 410) {
           throw new SwiftExceptions.NotFound(resource + " not found");
@@ -178,7 +239,7 @@ final class SwiftGitHubClient {
           request, resource, handler, MAX_TRANSIENT_STATUS_ATTEMPTS);
     } catch (ExhaustedTransientGitHubStatus exhausted) {
       SwiftExceptions.BadUpstream authenticatedFailure = new SwiftExceptions.BadUpstream(
-          resource + " request returned HTTP " + exhausted.status());
+          resource + " request returned HTTP " + exhausted.status(), exhausted);
       if (request.authorizationHeader() == null || request.authorizationHeader().isBlank()) {
         throw authenticatedFailure;
       }
@@ -320,7 +381,152 @@ final class SwiftGitHubClient {
     }
   }
 
-  private static HttpRemoteFetcher.Request request(
+  private List<Tag> tagsFromGitAdvertisement(
+      RepositoryRuntime runtime, Coordinates coordinates) throws IOException {
+    String url = coordinates.repositoryUrl()
+        + ".git/info/refs?service=git-upload-pack";
+    return fetcher.fetchWithBodyRetry(
+        githubWebRequest(runtime, url, false),
+        coordinates.identity() + "/git-info-refs",
+        result -> {
+          if (result.status() == 404 || result.status() == 410) {
+            throw new SwiftExceptions.NotFound("GitHub repository was not found");
+          }
+          if (result.status() == 403 || result.status() == 429) {
+            throw rateLimited(result);
+          }
+          if (TRANSIENT_STATUSES.contains(result.status())) {
+            throw new SwiftExceptions.BadUpstream(
+                "GitHub smart HTTP tag request returned HTTP " + result.status(),
+                new ExhaustedTransientGitHubStatus(result.status()));
+          }
+          if (result.status() < 200 || result.status() >= 300) {
+            throw new SwiftExceptions.BadUpstream(
+                "GitHub smart HTTP tag request returned HTTP " + result.status());
+          }
+          return parseGitTagAdvertisement(UpstreamBodyReadException.wrap(result.body()));
+        });
+  }
+
+  private static List<Tag> parseGitTagAdvertisement(InputStream body) throws IOException {
+    Map<String, String> tagObjects = new LinkedHashMap<>();
+    Map<String, String> peeledObjects = new LinkedHashMap<>();
+    long consumed = 0L;
+    while (true) {
+      byte[] header = readPacketBytes(body, 4, true);
+      if (header == null) {
+        break;
+      }
+      consumed += header.length;
+      int packetLength;
+      try {
+        packetLength = Integer.parseInt(new String(header, StandardCharsets.US_ASCII), 16);
+      } catch (NumberFormatException invalidLength) {
+        throw new SwiftExceptions.BadUpstream(
+            "GitHub smart HTTP returned an invalid packet length", invalidLength);
+      }
+      if (packetLength == 0 || packetLength == 1 || packetLength == 2) {
+        continue;
+      }
+      if (packetLength < 4 || packetLength > MAX_GIT_PACKET_BYTES) {
+        throw new SwiftExceptions.BadUpstream(
+            "GitHub smart HTTP returned an oversized packet");
+      }
+      int payloadLength = packetLength - 4;
+      byte[] payload = readPacketBytes(body, payloadLength, false);
+      consumed += payloadLength;
+      if (consumed > MAX_GIT_ADVERTISEMENT_BYTES) {
+        throw new SwiftExceptions.BadUpstream(
+            "GitHub smart HTTP tag advertisement exceeded the configured size limit");
+      }
+      collectGitTagReference(payload, tagObjects, peeledObjects);
+      if (tagObjects.size() > MAX_TAGS) {
+        throw new SwiftExceptions.BadUpstream(
+            "GitHub tag listing exceeded the configured tag safety limit");
+      }
+    }
+
+    Map<String, Tag> byVersion = new LinkedHashMap<>();
+    tagObjects.forEach((rawTag, objectSha) -> normalizeTag(rawTag).ifPresent(version ->
+        byVersion.putIfAbsent(
+            version,
+            new Tag(
+                version,
+                rawTag,
+                peeledObjects.getOrDefault(rawTag, objectSha).toLowerCase(Locale.ROOT)))));
+    return List.copyOf(byVersion.values());
+  }
+
+  private static void collectGitTagReference(
+      byte[] payload,
+      Map<String, String> tagObjects,
+      Map<String, String> peeledObjects) {
+    String line = new String(payload, StandardCharsets.UTF_8);
+    int newline = line.indexOf('\n');
+    if (newline >= 0) {
+      line = line.substring(0, newline);
+    }
+    int capabilityMarker = line.indexOf('\0');
+    if (capabilityMarker >= 0) {
+      line = line.substring(0, capabilityMarker);
+    }
+    int separator = line.indexOf(' ');
+    if (separator <= 0 || separator == line.length() - 1) {
+      return;
+    }
+    String sha = line.substring(0, separator);
+    String reference = line.substring(separator + 1);
+    if (!SHA.matcher(sha).matches() || !reference.startsWith(GIT_TAG_PREFIX)) {
+      return;
+    }
+    String tag = reference.substring(GIT_TAG_PREFIX.length());
+    if (tag.endsWith("^{}")) {
+      String baseTag = tag.substring(0, tag.length() - 3);
+      if (!baseTag.isBlank()) {
+        peeledObjects.putIfAbsent(baseTag, sha);
+      }
+    } else if (!tag.isBlank()) {
+      tagObjects.putIfAbsent(tag, sha);
+    }
+  }
+
+  private static byte[] readPacketBytes(
+      InputStream body, int length, boolean allowCleanEof) throws IOException {
+    byte[] bytes = new byte[length];
+    int offset = 0;
+    while (offset < length) {
+      int read = body.read(bytes, offset, length - offset);
+      if (read < 0) {
+        if (allowCleanEof && offset == 0) {
+          return null;
+        }
+        throw new SwiftExceptions.BadUpstream(
+            "GitHub smart HTTP tag advertisement was truncated");
+      }
+      offset += read;
+    }
+    return bytes;
+  }
+
+  private static boolean fallbackEligible(SwiftExceptions.BadUpstream failure) {
+    return failure.getCause() instanceof ExhaustedTransientGitHubStatus
+        || failure.getCause() instanceof IOException;
+  }
+
+  static boolean isTransientTagAvailabilityFailure(SwiftExceptions.BadUpstream failure) {
+    if (failure == null || !(failure.getCause() instanceof ExhaustedTransientGitHubStatus)) {
+      return false;
+    }
+    for (Throwable suppressed : failure.getSuppressed()) {
+      if (suppressed instanceof SwiftExceptions.BadUpstream fallback
+          && fallback.getCause() instanceof ExhaustedTransientGitHubStatus) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static HttpRemoteFetcher.Request apiRequest(
       RepositoryRuntime runtime, String url, boolean allowCodeloadRedirect) {
     return new HttpRemoteFetcher.Request(
         url,
@@ -335,6 +541,24 @@ final class SwiftGitHubClient {
         runtime.format().name(),
         "api.github.com",
         authorization(runtime),
+        allowCodeloadRedirect ? Set.of("codeload.github.com") : Set.of());
+  }
+
+  private static HttpRemoteFetcher.Request githubWebRequest(
+      RepositoryRuntime runtime, String url, boolean allowCodeloadRedirect) {
+    return new HttpRemoteFetcher.Request(
+        url,
+        null,
+        null,
+        null,
+        allowCodeloadRedirect
+            ? HttpRemoteFetcher.TimeoutProfile.CONTENT
+            : HttpRemoteFetcher.TimeoutProfile.METADATA,
+        false,
+        runtime.name(),
+        runtime.format().name(),
+        "github.com",
+        null,
         allowCodeloadRedirect ? Set.of("codeload.github.com") : Set.of());
   }
 
@@ -468,10 +692,10 @@ final class SwiftGitHubClient {
     }
   }
 
-  private static final class ExhaustedTransientGitHubStatus extends RuntimeException {
+  static final class ExhaustedTransientGitHubStatus extends RuntimeException {
     private final int status;
 
-    private ExhaustedTransientGitHubStatus(int status) {
+    ExhaustedTransientGitHubStatus(int status) {
       super("GitHub transient retry budget exhausted with HTTP " + status);
       this.status = status;
     }

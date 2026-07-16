@@ -162,6 +162,7 @@ class SwiftGitHubClientTest {
         result(503, Map.of(), new byte[0]),
         result(503, Map.of(), new byte[0]),
         result(503, Map.of(), new byte[0]),
+        result(503, Map.of(), new byte[0]),
         result(503, Map.of(), new byte[0]));
     List<Duration> delays = new ArrayList<>();
     SwiftGitHubClient client = new SwiftGitHubClient(
@@ -170,13 +171,94 @@ class SwiftGitHubClientTest {
         mock(SwiftArchiveInspector.class),
         delays::add);
 
-    assertThrows(SwiftExceptions.BadUpstream.class, () -> client.tags(
-        proxy("https://github.com/"), SwiftGitHubClient.coordinates("apple", "swift-log")));
+    SwiftExceptions.BadUpstream failure = assertThrows(
+        SwiftExceptions.BadUpstream.class,
+        () -> client.tags(
+            proxy("https://github.com/"),
+            SwiftGitHubClient.coordinates("apple", "swift-log")));
 
-    assertEquals(4, fetcher.calls);
+    assertEquals(5, fetcher.calls);
+    assertTrue(SwiftGitHubClient.isTransientTagAvailabilityFailure(failure));
     assertEquals(
         List.of(Duration.ofSeconds(1), Duration.ofSeconds(2), Duration.ofSeconds(4)),
         delays);
+  }
+
+  @Test
+  void fallsBackToBoundedGitSmartHttpTagDiscoveryAfterApiOutage() throws Exception {
+    byte[] advertisement = gitAdvertisement(
+        "a".repeat(40) + " refs/tags/v1.2.3\n",
+        "b".repeat(40) + " refs/tags/V2.0.0\n",
+        "c".repeat(40) + " refs/tags/V2.0.0^{}\n",
+        "d".repeat(40) + " refs/tags/not-semver\n");
+    SequencedFetcher fetcher = new SequencedFetcher(
+        result(503, Map.of(), new byte[0]),
+        result(503, Map.of(), new byte[0]),
+        result(503, Map.of(), new byte[0]),
+        result(503, Map.of(), new byte[0]),
+        result(
+            200,
+            Map.of("Content-Type", "application/x-git-upload-pack-advertisement"),
+            advertisement));
+    List<Duration> delays = new ArrayList<>();
+    SwiftGitHubClient client = new SwiftGitHubClient(
+        fetcher,
+        new ObjectMapper(),
+        mock(SwiftArchiveInspector.class),
+        delays::add);
+
+    List<SwiftGitHubClient.Tag> tags = client.tags(
+        proxy("https://github.com/"), SwiftGitHubClient.coordinates("apple", "swift-log"));
+
+    assertEquals(List.of(
+        new SwiftGitHubClient.Tag("1.2.3", "v1.2.3", "a".repeat(40)),
+        new SwiftGitHubClient.Tag("2.0.0", "V2.0.0", "c".repeat(40))), tags);
+    assertEquals(5, fetcher.calls);
+    assertEquals(
+        "https://github.com/apple/swift-log.git/info/refs?service=git-upload-pack",
+        fetcher.requests.get(4).url());
+    assertNull(fetcher.requests.get(4).authorizationHeader());
+    assertEquals(
+        List.of(Duration.ofSeconds(1), Duration.ofSeconds(2), Duration.ofSeconds(4)),
+        delays);
+  }
+
+  @Test
+  void fallsBackToGithubCommitArchiveAfterArchiveApiOutage() throws Exception {
+    byte[] archive = swiftArchive();
+    SequencedFetcher fetcher = new SequencedFetcher(
+        result(503, Map.of(), new byte[0]),
+        result(503, Map.of(), new byte[0]),
+        result(503, Map.of(), new byte[0]),
+        result(503, Map.of(), new byte[0]),
+        result(200, Map.of("Content-Type", "application/zip"), archive));
+    List<Duration> delays = new ArrayList<>();
+    SwiftGitHubClient client = new SwiftGitHubClient(
+        fetcher,
+        new ObjectMapper(),
+        new SwiftArchiveInspector(1024 * 1024, 1024 * 1024, 20),
+        delays::add);
+
+    SwiftArchiveInspector.InspectedArchive inspected = client.archive(
+        proxy("https://github.com/"),
+        SwiftGitHubClient.coordinates("apple", "swift-log"),
+        "a".repeat(40));
+
+    try {
+      assertEquals(archive.length, inspected.size());
+      assertEquals(5, fetcher.calls);
+      assertEquals(
+          "https://github.com/apple/swift-log/archive/" + "a".repeat(40) + ".zip",
+          fetcher.requests.get(4).url());
+      assertNull(fetcher.requests.get(4).authorizationHeader());
+      assertTrue(fetcher.requests.get(4).allowedUnsignedRedirectHosts()
+          .contains("codeload.github.com"));
+      assertEquals(
+          List.of(Duration.ofSeconds(1), Duration.ofSeconds(2), Duration.ofSeconds(4)),
+          delays);
+    } finally {
+      Files.deleteIfExists(inspected.file());
+    }
   }
 
   @Test
@@ -233,6 +315,7 @@ class SwiftGitHubClientTest {
         result(503, Map.of(), new byte[0]),
         result(503, Map.of(), new byte[0]),
         result(503, Map.of(), new byte[0]),
+        result(404, Map.of(), new byte[0]),
         result(404, Map.of(), new byte[0]));
     SwiftGitHubClient client = new SwiftGitHubClient(
         fetcher,
@@ -248,13 +331,16 @@ class SwiftGitHubClientTest {
 
     assertEquals(502, failure.status());
     assertTrue(failure.getMessage().contains("HTTP 503"));
-    assertEquals(5, fetcher.calls);
+    assertFalse(SwiftGitHubClient.isTransientTagAvailabilityFailure(failure));
+    assertEquals(6, fetcher.calls);
     assertNull(fetcher.requests.get(4).authorizationHeader());
+    assertNull(fetcher.requests.get(5).authorizationHeader());
   }
 
   @Test
   void doesNotDoubleTheRetryDelayWhenAnonymousGitHubIsAlsoUnavailable() {
     SequencedFetcher fetcher = new SequencedFetcher(
+        result(503, Map.of(), new byte[0]),
         result(503, Map.of(), new byte[0]),
         result(503, Map.of(), new byte[0]),
         result(503, Map.of(), new byte[0]),
@@ -271,8 +357,9 @@ class SwiftGitHubClientTest {
         proxy("https://github.com/", "workflow-token"),
         SwiftGitHubClient.coordinates("apple", "swift-log")));
 
-    assertEquals(5, fetcher.calls);
+    assertEquals(6, fetcher.calls);
     assertNull(fetcher.requests.get(4).authorizationHeader());
+    assertNull(fetcher.requests.get(5).authorizationHeader());
     assertEquals(
         List.of(Duration.ofSeconds(1), Duration.ofSeconds(2), Duration.ofSeconds(4)),
         delays);
@@ -289,13 +376,16 @@ class SwiftGitHubClientTest {
         mock(SwiftArchiveInspector.class),
         delays::add);
 
-    assertThrows(SwiftExceptions.BadUpstream.class, () -> client.tags(
-        proxy("https://github.com/", "workflow-token"),
-        SwiftGitHubClient.coordinates("apple", "swift-log")));
+    SwiftExceptions.BadUpstream failure = assertThrows(
+        SwiftExceptions.BadUpstream.class,
+        () -> client.tags(
+            proxy("https://github.com/", "workflow-token"),
+            SwiftGitHubClient.coordinates("apple", "swift-log")));
 
     assertEquals(1, fetcher.calls);
     assertEquals("Bearer workflow-token", fetcher.requests.get(0).authorizationHeader());
     assertTrue(delays.isEmpty());
+    assertFalse(SwiftGitHubClient.isTransientTagAvailabilityFailure(failure));
   }
 
   @Test
@@ -347,6 +437,24 @@ class SwiftGitHubClientTest {
       zip.closeEntry();
     }
     return output.toByteArray();
+  }
+
+  private static byte[] gitAdvertisement(String... references) throws IOException {
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    writeGitPacket(output, "# service=git-upload-pack\n");
+    output.write("0000".getBytes(StandardCharsets.US_ASCII));
+    for (String reference : references) {
+      writeGitPacket(output, reference);
+    }
+    output.write("0000".getBytes(StandardCharsets.US_ASCII));
+    return output.toByteArray();
+  }
+
+  private static void writeGitPacket(ByteArrayOutputStream output, String payload)
+      throws IOException {
+    byte[] bytes = payload.getBytes(StandardCharsets.UTF_8);
+    output.write("%04x".formatted(bytes.length + 4).getBytes(StandardCharsets.US_ASCII));
+    output.write(bytes);
   }
 
   private static void assertCoordinates(String url, String owner, String repository) {

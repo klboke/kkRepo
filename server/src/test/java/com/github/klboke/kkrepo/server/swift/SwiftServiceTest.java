@@ -394,11 +394,45 @@ class SwiftServiceTest {
   }
 
   @Test
+  void nestedGroupPreservesProxyFailureWhenNoMemberHasTheRequestedVersion() {
+    Fixture fixture = fixture();
+    RepositoryRuntime proxy = proxy(1L, "swift-proxy");
+    RepositoryRuntime hosted = hosted(3L, "swift-hosted");
+    RepositoryRuntime nested = group(2L, List.of(proxy, hosted));
+    RepositoryRuntime outer = group(4L, List.of(nested));
+    when(fixture.runtimes.resolveById(outer.id())).thenReturn(Optional.of(outer));
+    when(fixture.registry.currentRepositoryRevision(outer.id())).thenReturn(7L);
+    when(fixture.registry.findNegativeCache(proxy.id(), "tags:acme/demo"))
+        .thenReturn(Optional.of(new SwiftRegistryDao.NegativeCache(
+            proxy.id(),
+            "tags:acme/demo",
+            502,
+            null,
+            Instant.now().plusSeconds(60),
+            Instant.now())));
+    when(fixture.registry.listReleases(hosted.id(), "acme", "demo")).thenReturn(List.of(
+        release(33L, hosted.id(), "1.0.0", SwiftRegistryDao.RELEASE_READY)));
+
+    assertThrows(SwiftExceptions.BadUpstream.class, () -> fixture.service.get(
+        outer,
+        "Acme/Demo/2.0.0",
+        null,
+        "https://repo.example/repository/swift-outer/",
+        SwiftMediaTypes.VENDOR_JSON,
+        false));
+  }
+
+  @Test
   void proxySharesTransientGitHubTagFailureAcrossPackageCoordinates() {
     Fixture fixture = fixture();
     RepositoryRuntime proxy = proxy(1L, "swift-proxy");
-    when(fixture.github.tags(any(), any()))
-        .thenThrow(new SwiftExceptions.BadUpstream("GitHub tags request returned HTTP 503"));
+    SwiftExceptions.BadUpstream apiFailure = new SwiftExceptions.BadUpstream(
+        "GitHub tags request returned HTTP 503",
+        new SwiftGitHubClient.ExhaustedTransientGitHubStatus(503));
+    apiFailure.addSuppressed(new SwiftExceptions.BadUpstream(
+        "GitHub smart HTTP tag request returned HTTP 503",
+        new SwiftGitHubClient.ExhaustedTransientGitHubStatus(503)));
+    when(fixture.github.tags(any(), any())).thenThrow(apiFailure);
 
     assertThrows(SwiftExceptions.BadUpstream.class, () -> fixture.service.get(
         proxy,
@@ -425,6 +459,24 @@ class SwiftServiceTest {
         false));
 
     verify(fixture.github, times(1)).tags(any(), any());
+  }
+
+  @Test
+  void proxyDoesNotShareCoordinateSpecificGitHubTagFailures() {
+    Fixture fixture = fixture();
+    RepositoryRuntime proxy = proxy(1L, "swift-proxy");
+    when(fixture.github.tags(any(), any())).thenThrow(new SwiftExceptions.BadUpstream(
+        "GitHub tag listing exceeded the configured pagination safety limit"));
+
+    assertThrows(SwiftExceptions.BadUpstream.class, () -> fixture.service.get(
+        proxy,
+        "Acme/Demo",
+        null,
+        "https://repo.example/repository/swift-proxy/",
+        SwiftMediaTypes.VENDOR_JSON,
+        false));
+
+    verify(fixture.registry, never()).putNegativeCache(any());
   }
 
   @Test
