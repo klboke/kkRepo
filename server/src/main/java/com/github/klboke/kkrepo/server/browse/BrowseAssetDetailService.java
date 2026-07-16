@@ -22,6 +22,9 @@ import com.github.klboke.kkrepo.protocol.composer.ComposerPath;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPathParser;
 import com.github.klboke.kkrepo.protocol.npm.NpmMetadata;
 import com.github.klboke.kkrepo.protocol.npm.NpmPackageId;
+import com.github.klboke.kkrepo.protocol.swift.SwiftPath;
+import com.github.klboke.kkrepo.protocol.swift.SwiftPathParser;
+import com.github.klboke.kkrepo.protocol.swift.SwiftToolsVersions;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPath;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPathParser;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
@@ -52,6 +55,7 @@ public class BrowseAssetDetailService {
   private static final TypeReference<LinkedHashMap<String, Object>> MAP_TYPE = new TypeReference<>() {};
   private static final int MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
   private static final ComposerPathParser COMPOSER_PATHS = new ComposerPathParser();
+  private static final SwiftPathParser SWIFT_PATHS = new SwiftPathParser();
   private static final TerraformPathParser TERRAFORM_PATHS = new TerraformPathParser();
 
   private final RepositoryDao repositoryDao;
@@ -183,15 +187,13 @@ public class BrowseAssetDetailService {
   }
 
   private Map<String, Object> swiftAttributes(RepositoryRecord source, AssetRecord asset) {
-    String[] segments = normalize(asset.path()).split("/");
-    if (segments.length < 3) {
+    SwiftPath path = swiftPath(asset.path());
+    if (path == null) {
       return Map.of();
     }
-    String scope = segments[0];
-    String name = segments[1];
-    String version = segments[2].endsWith(".zip")
-        ? segments[2].substring(0, segments[2].length() - 4)
-        : segments[2];
+    String scope = path.scope();
+    String name = path.name();
+    String version = path.version();
     LinkedHashMap<String, Object> swift = new LinkedHashMap<>();
     putNonBlank(swift, "scope", scope);
     putNonBlank(swift, "name", name);
@@ -230,6 +232,28 @@ public class BrowseAssetDetailService {
           }
         });
     return Map.copyOf(swift);
+  }
+
+  private static SwiftPath swiftPath(String path) {
+    String normalized = normalize(path);
+    SwiftPath parsed;
+    try {
+      parsed = SWIFT_PATHS.parse(normalized);
+    } catch (IllegalArgumentException e) {
+      return null;
+    }
+    if (parsed.kind() == SwiftPath.Kind.UNKNOWN) {
+      String[] segments = normalized.split("/", -1);
+      if (segments.length == 4
+          && SwiftToolsVersions.fromManifestFilename(segments[3]).isPresent()) {
+        parsed = SWIFT_PATHS.parse(
+            segments[0] + "/" + segments[1] + "/" + segments[2] + "/Package.swift");
+      }
+    }
+    return parsed.kind() == SwiftPath.Kind.SOURCE_ARCHIVE
+            || parsed.kind() == SwiftPath.Kind.MANIFEST
+        ? parsed
+        : null;
   }
 
   private static boolean isCargoDynamicConfig(RepositoryRecord repository, String storagePath) {

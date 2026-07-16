@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.protocol.swift.SwiftVersions;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -101,7 +102,7 @@ final class SwiftGitHubClient {
           throw new SwiftExceptions.BadUpstream(
               "GitHub archive request returned HTTP " + result.status());
         }
-        return inspector.inspect(result.body());
+        return inspector.inspect(UpstreamBodyReadException.wrap(result.body()));
       });
     } catch (IOException e) {
       throw new SwiftExceptions.BadUpstream("Unable to download GitHub source archive", e);

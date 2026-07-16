@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -390,6 +391,48 @@ class BrowseAssetDetailServiceTest {
     assertEquals(List.of("5.9"), detail.swift().get("swift_tools_versions"));
     assertEquals(
         List.of("https://github.com/Acme/Library"), detail.swift().get("repository_urls"));
+  }
+
+  @Test
+  void swiftManifestDetailPreservesSemverEndingInZip() {
+    RepositoryRecord repository = repository(
+        1L, "swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    String version = "1.2.3+linux.zip";
+    String path = "Acme/Library/" + version + "/Package.swift";
+    AssetRecord manifest = new AssetRecord(
+        10L,
+        repository.id(),
+        20L,
+        100L,
+        RepositoryFormat.SWIFT,
+        path,
+        PersistenceHashes.pathHash(path),
+        "Package.swift",
+        "swift-manifest",
+        "text/x-swift",
+        128L,
+        null,
+        Instant.parse("2026-07-16T00:00:00Z"),
+        Map.of("swiftKind", "manifest"));
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(repository.id(), path), manifest),
+        Map.of(100L, blob(100L, 128L)));
+    SwiftRegistryDao swift = mock(SwiftRegistryDao.class);
+    when(swift.findRelease(repository.id(), "acme", "library", version))
+        .thenReturn(Optional.empty());
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(),
+        assets,
+        null,
+        null,
+        swift,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    BrowseAssetDetailService.BrowseAssetDetail detail = service.detail(repository, path, null);
+
+    assertEquals(version, detail.swift().get("version"));
+    verify(swift).findRelease(repository.id(), "acme", "library", version);
   }
 
   @Test

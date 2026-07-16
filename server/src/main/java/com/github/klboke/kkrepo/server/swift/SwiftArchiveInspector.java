@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.swift;
 
+import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -120,6 +121,9 @@ final class SwiftArchiveInspector {
       }
       if (e instanceof SwiftExceptions.SwiftException swiftFailure) {
         throw swiftFailure;
+      }
+      if (e instanceof UpstreamBodyReadException upstreamFailure) {
+        throw upstreamFailure;
       }
       throw new SwiftExceptions.UnprocessableEntity("Unable to inspect Swift source archive", e);
     }

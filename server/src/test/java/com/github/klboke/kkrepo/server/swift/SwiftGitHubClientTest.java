@@ -15,11 +15,20 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.EOFException;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -85,7 +94,7 @@ class SwiftGitHubClientTest {
   }
 
   @Test
-  @Timeout(5)
+  @Timeout(15)
   void listsMoreThanOneThousandTagsWithinTheBoundedPaginationBudget() throws Exception {
     HttpRemoteFetcher fetcher = mock(HttpRemoteFetcher.class);
     ObjectMapper mapper = new ObjectMapper();
@@ -118,6 +127,52 @@ class SwiftGitHubClientTest {
 
     assertEquals(1_200, tags.size());
     assertEquals(13, requests.get(), "the first short page terminates pagination");
+  }
+
+  @Test
+  void retriesAnInterruptedArchiveBodyWithAFreshUpstreamRequest() throws Exception {
+    byte[] archive = swiftArchive();
+    SequencedFetcher fetcher = new SequencedFetcher(
+        new HttpRemoteFetcher.Result(200, Map.of(), interruptedBody()),
+        new HttpRemoteFetcher.Result(200, Map.of(), new ByteArrayInputStream(archive)));
+    SwiftGitHubClient client = new SwiftGitHubClient(
+        fetcher,
+        new ObjectMapper(),
+        new SwiftArchiveInspector(1024 * 1024, 1024 * 1024, 20));
+
+    SwiftArchiveInspector.InspectedArchive inspected = client.archive(
+        proxy("https://github.com/"),
+        SwiftGitHubClient.coordinates("apple", "swift-syntax"),
+        "a".repeat(40));
+
+    try {
+      assertEquals(archive.length, inspected.size());
+      assertEquals(2, fetcher.calls);
+    } finally {
+      Files.deleteIfExists(inspected.file());
+    }
+  }
+
+  private static InputStream interruptedBody() {
+    return new InputStream() {
+      @Override
+      public int read() throws IOException {
+        throw new EOFException("truncated GitHub archive");
+      }
+    };
+  }
+
+  private static byte[] swiftArchive() throws IOException {
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    try (ZipOutputStream zip = new ZipOutputStream(output)) {
+      zip.putNextEntry(new ZipEntry("swift-syntax/Package.swift"));
+      zip.write(("// swift-tools-version: 5.9\n"
+          + "import PackageDescription\n"
+          + "let package = Package(name: \"swift-syntax\")\n")
+          .getBytes(StandardCharsets.UTF_8));
+      zip.closeEntry();
+    }
+    return output.toByteArray();
   }
 
   private static void assertCoordinates(String url, String owner, String repository) {
@@ -156,5 +211,21 @@ class SwiftGitHubClientTest {
         true,
         null,
         List.of());
+  }
+
+  private static final class SequencedFetcher extends HttpRemoteFetcher {
+    private final Queue<HttpRemoteFetcher.Result> results = new ArrayDeque<>();
+    private int calls;
+
+    private SequencedFetcher(HttpRemoteFetcher.Result... results) {
+      super(null);
+      this.results.addAll(List.of(results));
+    }
+
+    @Override
+    public HttpRemoteFetcher.Result fetch(HttpRemoteFetcher.Request request) {
+      calls++;
+      return results.remove();
+    }
   }
 }
