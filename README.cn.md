@@ -172,8 +172,8 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 3. ✅ Dart / Pub - 仓库能力已完成，包含 hosted/proxy/group、真实客户端 E2E、UI/API 上传、搜索和 Nexus 迁移能力（[设计说明](docs/zh/dev/dart-pub-repository-design.md)）
 4. ✅ Composer / PHP - hosted、proxy、group、UI/API 上传、搜索、真实客户端 E2E、强制 Nexus live 对比和显式选择的 Nexus proxy cache 迁移 E2E 已实现（[设计说明](docs/zh/dev/composer-php-repository-design.md)）
 5. ✅ Terraform Provider / Module Registry - hosted、proxy、group、Provider GPG 签名、Nexus 路径兼容、UI/API 上传、搜索、真实 Terraform CLI E2E、Nexus hosted 数据迁移和显式选择的 proxy cache 迁移已实现（[设计说明](docs/zh/dev/terraform-repository-design.md)）
-6. ohpm / HarmonyOS - 规划中，覆盖 hosted、proxy、group、导入和管理端能力（[设计说明](docs/zh/dev/ohpm-repository-design.md)）
-7. Swift Package Registry
+6. Swift Package Registry - 规划中，覆盖 hosted、GitHub-backed proxy、group、Swift Registry v1、真实 SwiftPM / Xcode E2E 和 Nexus 迁移（[设计说明](docs/zh/dev/swift-package-registry-design.md)）
+7. ohpm / HarmonyOS - 规划中，覆盖 hosted、proxy、group、导入和管理端能力（[设计说明](docs/zh/dev/ohpm-repository-design.md)）
 8. APT / Debian
 9. Conan
 10. Conda
