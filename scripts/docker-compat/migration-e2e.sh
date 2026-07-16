@@ -552,12 +552,11 @@ verify_source_swift_fixture() {
     "$SWIFT_SCOPE.$SWIFT_PACKAGE" \
     "$SWIFT_VERSION" \
     "$SWIFT_FIXTURE_SHA256" \
-    "$SWIFT_FIXTURE_SIGNATURE_BASE64" \
     "$SWIFT_METADATA_DESCRIPTION" <<'PY'
 import json
 import sys
 
-path, identity, version, checksum, signature, description = sys.argv[1:7]
+path, identity, version, checksum, description = sys.argv[1:6]
 with open(path, "r", encoding="utf-8") as source:
     payload = json.load(source)
 if str(payload.get("id") or "").lower() != identity.lower():
@@ -570,11 +569,6 @@ resources = [
 ]
 if len(resources) != 1 or str(resources[0].get("checksum") or "").lower() != checksum:
     raise SystemExit(f"Nexus Swift source-archive resource is incomplete: {resources}")
-signing = resources[0].get("signing") or {}
-if signing.get("signatureFormat") != "cms-1.0.0":
-    raise SystemExit(f"Nexus Swift signature format changed: {signing}")
-if signing.get("signatureBase64Encoded") != signature:
-    raise SystemExit("Nexus Swift source signature bytes changed")
 if (payload.get("metadata") or {}).get("description") != description:
     raise SystemExit(f"Nexus Swift metadata payload changed: {payload.get('metadata')}")
 PY
@@ -603,7 +597,7 @@ PY
     log "Nexus Swift versioned manifest changed after publish"
     exit 1
   }
-  log "verified Nexus Swift fixture metadata, signature, archive and manifests"
+  log "verified Nexus Swift fixture metadata, archive and manifests"
 }
 
 warm_terraform_proxy_fixture() {

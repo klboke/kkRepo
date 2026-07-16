@@ -196,6 +196,10 @@ class NexusRestClientTest {
     assertTrue(script.contains("signatureAttributes: false"));
     assertTrue(script.contains("sha256Checksum: false"));
     assertTrue(script.contains("value instanceof byte[]"));
+    assertTrue(script.contains("def swiftAttributes = (assetAttributes.contains"));
+    assertTrue(script.contains("def archiveAsset = (pathParts.length == 3"));
+    assertTrue(script.contains("def manifestAsset = ((path.endsWith"));
+    assertTrue(script.contains("def knownSignatureKey = (attributes.contains"));
     assertTrue(script.contains("kind == 'package_archive'"));
     assertTrue(script.contains("kind == 'package_manifest'"));
     assertTrue(script.contains("limit 512"));

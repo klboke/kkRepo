@@ -876,14 +876,14 @@ public class NexusRestClient {
                   def attributes = assetAttributes + ' ' + componentAttributes
                   def checksums = fingerprintText(rows.getObject('blob_checksums'))
                   def pathParts = path.replaceFirst('^/+', '').split('/')
-                  def swiftAttributes = assetAttributes.contains('"swift"')
+                  def swiftAttributes = (assetAttributes.contains('"swift"')
                       && assetAttributes.contains('"scope"')
                       && assetAttributes.contains('"name"')
                       && assetAttributes.contains('"version"')
-                      && assetAttributes.contains('"asset_kind"')
-                  def archiveAsset = pathParts.length == 3
+                      && assetAttributes.contains('"asset_kind"'))
+                  def archiveAsset = (pathParts.length == 3
                       && pathParts[2] ==~ /[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9a-z.-]+)?\\.zip/
-                      && kind == 'package_archive'
+                      && kind == 'package_archive')
                   if (archiveAsset) {
                     shape.archiveAssetPath = true
                     archiveAttributesPresent = archiveAttributesPresent || swiftAttributes
@@ -892,21 +892,21 @@ public class NexusRestClient {
                       shape.sha256Checksum = true
                     }
                   }
-                  def manifestAsset = (path.endsWith('/package.swift')
+                  def manifestAsset = ((path.endsWith('/package.swift')
                           || path.contains('/package@swift-'))
-                      && kind == 'package_manifest'
+                      && kind == 'package_manifest')
                   if (manifestAsset) {
                     shape.manifestShape = true
                     manifestAttributesPresent = manifestAttributesPresent || swiftAttributes
                   }
                   if (attributes.contains('signature')) {
                     shape.signatureObserved = true
-                    def knownSignatureKey = attributes.contains('sourcearchivesignature')
+                    def knownSignatureKey = (attributes.contains('sourcearchivesignature')
                         || attributes.contains('source-archive-signature')
                         || attributes.contains('metadatasignature')
                         || attributes.contains('metadata-signature')
                         || attributes.contains('signatureformat')
-                        || attributes.contains('signature_format')
+                        || attributes.contains('signature_format'))
                     signatureShapeValid = signatureShapeValid && knownSignatureKey
                     if ((attributes.contains('signatureformat')
                             || attributes.contains('signature_format'))
