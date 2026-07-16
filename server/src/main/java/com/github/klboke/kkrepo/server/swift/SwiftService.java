@@ -73,6 +73,7 @@ public class SwiftService {
   private static final TypeReference<Map<String, Object>> MAP = new TypeReference<>() {};
   private static final int MAX_METADATA_URLS = 100;
   private static final int MAX_METADATA_URL_LENGTH = 4096;
+  private static final int MAX_REPOSITORY_URL_LENGTH = 1024;
   private static final Pattern METADATA_EMAIL =
       Pattern.compile("^[^\\s@]+@[^\\s@]+$");
   private static final Set<String> REPOSITORY_URL_SCHEMES =
@@ -178,7 +179,8 @@ public class SwiftService {
       String accept,
       boolean headOnly,
       PermissionSubject subject) {
-    SwiftRequestTarget target = parse(rawPath, rawQuery);
+    SwiftRequestTarget target = parse(
+        rawPath, rawQuery, prefersReleaseMetadata(accept));
     SwiftPath path = target.path();
     return switch (path.kind()) {
       case RELEASE_LIST -> {
@@ -297,7 +299,7 @@ public class SwiftService {
     requireHostedWritable(runtime);
     SwiftRequestTarget target;
     try {
-      target = paths.parse(rawPath, rawQuery);
+      target = paths.parseReleaseMetadata(rawPath, rawQuery);
     } catch (IllegalArgumentException e) {
       throw new SwiftExceptions.BadRequest(e.getMessage(), e);
     }
@@ -797,9 +799,8 @@ public class SwiftService {
     String cacheKey = "tags:" + scopeLc + "/" + nameLc;
     List<SwiftRegistryDao.ProxySource> cachedSources =
         registry.listProxySources(runtime.id(), scopeLc, nameLc);
-    Set<String> ready = readyVersions(runtime.id(), scopeLc, nameLc);
     Set<String> tombstoned = tombstoneVersions(tombstones);
-    Set<String> stale = persistedProxyVersions(cachedSources, tombstoned, ready);
+    Set<String> stale = persistedProxyVersions(cachedSources, tombstoned);
     Optional<SwiftRegistryDao.NegativeCache> negative =
         registry.findNegativeCache(runtime.id(), cacheKey);
     if (negative.isPresent() && negative.get().expiresAt().isAfter(Instant.now())) {
@@ -826,7 +827,7 @@ public class SwiftService {
           refreshProxySources(runtime, scopeLc, nameLc, cacheKey);
       Set<String> refreshedTombstones = tombstoneVersions(
           registry.listTombstones(runtime.id(), scopeLc, nameLc));
-      Set<String> versions = persistedProxyVersions(refreshed, refreshedTombstones, ready);
+      Set<String> versions = persistedProxyVersions(refreshed, refreshedTombstones);
       if (versions.isEmpty()) {
         rememberNotFound(runtime.id(), cacheKey);
       }
@@ -853,8 +854,7 @@ public class SwiftService {
 
   private static Set<String> persistedProxyVersions(
       List<SwiftRegistryDao.ProxySource> sources,
-      Set<String> tombstones,
-      Set<String> readyVersions) {
+      Set<String> tombstones) {
     LinkedHashSet<String> versions = new LinkedHashSet<>();
     if (sources != null) {
       for (SwiftRegistryDao.ProxySource source : sources) {
@@ -863,7 +863,6 @@ public class SwiftService {
         }
       }
     }
-    versions.addAll(readyVersions);
     return versions;
   }
 
@@ -1123,9 +1122,8 @@ public class SwiftService {
       tags.stream()
           .filter(tag -> !tombstones.contains(tag.version()))
           .forEach(tag -> observed.putIfAbsent(tag.version(), tag));
-      boolean discoveredNewVersion = observed.keySet().stream().anyMatch(
-          version -> !existing.containsKey(version));
-      long discoveryRevision = discoveredNewVersion
+      boolean inventoryChanged = !existing.keySet().equals(observed.keySet());
+      long discoveryRevision = inventoryChanged
           ? registry.nextRepositoryRevision(runtime.id())
           : 0L;
       Instant now = Instant.now();
@@ -1150,9 +1148,8 @@ public class SwiftService {
                 now);
           })
           .toList();
-      List<SwiftRegistryDao.ProxySource> bound = candidates.isEmpty()
-          ? List.of()
-          : registry.bindProxySources(candidates);
+      List<SwiftRegistryDao.ProxySource> bound = registry.replaceProxySources(
+          runtime.id(), scopeLc, nameLc, candidates);
       observed.values().forEach(tag -> Optional.ofNullable(existing.get(tag.version()))
           .filter(previous -> !previous.commitSha().equalsIgnoreCase(tag.commitSha()))
           .ifPresent(previous -> auditMovedProxyTag(
@@ -1452,10 +1449,12 @@ public class SwiftService {
       }
       for (Object value : list) {
         if (!(value instanceof String text) || text.isBlank()
-            || text.length() > MAX_METADATA_URL_LENGTH) {
+            || text.length() > MAX_REPOSITORY_URL_LENGTH) {
           throw new SwiftExceptions.UnprocessableEntity("metadata contains an invalid repository URL");
         }
-        normalizeRepositoryUrl(text);
+        if (normalizeRepositoryUrl(text).length() > MAX_REPOSITORY_URL_LENGTH) {
+          throw new SwiftExceptions.UnprocessableEntity("metadata contains an invalid repository URL");
+        }
       }
     }
     validateOptionalUri(metadata, "readmeURL");
@@ -1629,9 +1628,12 @@ public class SwiftService {
     return false;
   }
 
-  private SwiftRequestTarget parse(String rawPath, String rawQuery) {
+  private SwiftRequestTarget parse(
+      String rawPath, String rawQuery, boolean preferReleaseMetadata) {
     try {
-      SwiftRequestTarget target = paths.parse(rawPath, rawQuery);
+      SwiftRequestTarget target = preferReleaseMetadata
+          ? paths.parseReleaseMetadata(rawPath, rawQuery)
+          : paths.parse(rawPath, rawQuery);
       if (target.path().kind() == SwiftPath.Kind.UNKNOWN) {
         throw new SwiftExceptions.NotFound("Swift registry resource was not found");
       }
@@ -1641,6 +1643,14 @@ public class SwiftService {
     } catch (IllegalArgumentException e) {
       throw new SwiftExceptions.BadRequest(e.getMessage(), e);
     }
+  }
+
+  private static boolean prefersReleaseMetadata(String accept) {
+    if (accept == null || accept.isBlank()) {
+      return false;
+    }
+    return SwiftMediaTypes.negotiate(accept, SwiftMediaTypes.Resource.JSON).accepted()
+        && !SwiftMediaTypes.negotiate(accept, SwiftMediaTypes.Resource.ARCHIVE).accepted();
   }
 
   private static void negotiate(String accept, SwiftMediaTypes.Resource resource) {

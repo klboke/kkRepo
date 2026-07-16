@@ -52,6 +52,13 @@ public interface SwiftRegistryDao {
    */
   List<ProxySource> bindProxySources(List<ProxySource> candidates);
 
+  /**
+   * Atomically replaces one package's observed upstream tag inventory while preserving immutable
+   * first-seen bindings for versions that are still present.
+   */
+  List<ProxySource> replaceProxySources(
+      long repositoryId, String scopeLc, String nameLc, List<ProxySource> candidates);
+
   Optional<ProxySource> findProxySource(
       long repositoryId, String scopeLc, String nameLc, String version);
 

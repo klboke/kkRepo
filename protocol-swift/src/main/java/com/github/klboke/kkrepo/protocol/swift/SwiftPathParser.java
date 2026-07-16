@@ -11,6 +11,15 @@ import java.util.Map;
 /** Strict parser for the path and query portion below a Nexus-style repository base URL. */
 public final class SwiftPathParser {
   public SwiftPath parse(String rawPath) {
+    return parse(rawPath, false);
+  }
+
+  /** Parses a request whose method or representation requires release metadata semantics. */
+  public SwiftPath parseReleaseMetadata(String rawPath) {
+    return parse(rawPath, true);
+  }
+
+  private SwiftPath parse(String rawPath, boolean preferReleaseMetadata) {
     String raw = rawPath == null ? "" : rawPath;
     if (raw.isEmpty() || raw.equals("/")) {
       return new SwiftPath(SwiftPath.Kind.ROOT, raw, null, null, null);
@@ -52,7 +61,7 @@ public final class SwiftPathParser {
           : unknown(raw);
     }
     if (segments.length == 3) {
-      return parseReleaseResource(raw, segments);
+      return parseReleaseResource(raw, segments, preferReleaseMetadata);
     }
     if (segments.length == 4
         && segments[3].equals("Package.swift")
@@ -68,7 +77,14 @@ public final class SwiftPathParser {
    * Invalid query input is a client error and therefore throws rather than becoming UNKNOWN.
    */
   public SwiftRequestTarget parse(String rawPath, String rawQuery) {
-    SwiftPath path = parse(rawPath);
+    return parseTarget(parse(rawPath), rawQuery);
+  }
+
+  public SwiftRequestTarget parseReleaseMetadata(String rawPath, String rawQuery) {
+    return parseTarget(parseReleaseMetadata(rawPath), rawQuery);
+  }
+
+  private static SwiftRequestTarget parseTarget(SwiftPath path, String rawQuery) {
     Map<String, String> query = parseQuery(rawQuery);
     return switch (path.kind()) {
       case MANIFEST -> {
@@ -94,10 +110,14 @@ public final class SwiftPathParser {
     };
   }
 
-  private static SwiftPath parseReleaseResource(String raw, String[] segments) {
+  private static SwiftPath parseReleaseResource(
+      String raw, String[] segments, boolean preferReleaseMetadata) {
     String scope = segments[0];
     String name = segments[1];
     String resource = segments[2];
+    if (preferReleaseMetadata && validCoordinate(scope, name, resource)) {
+      return new SwiftPath(SwiftPath.Kind.RELEASE_METADATA, raw, scope, name, resource);
+    }
     if (resource.endsWith(".zip")) {
       String version = stripSuffix(resource, ".zip");
       return validCoordinate(scope, name, version)

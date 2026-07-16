@@ -95,6 +95,7 @@ class RepositoryRequestMetricsFilterTest {
         {"GET", "/repository/swift-group/identifiers", "swift_identifiers"},
         {"POST", "/repository/swift-group/login", "swift_login"},
         {"PUT", "/repository/swift-hosted/acme/library/1.2.3", "swift_publish"},
+        {"PUT", "/repository/swift-hosted/acme/library/1.2.3+linux.zip", "swift_publish"},
     };
 
     for (String[] item : requests) {
@@ -113,7 +114,8 @@ class RepositoryRequestMetricsFilterTest {
           .tags("operation", item[2], "status", "200")
           .counter();
       assertNotNull(counter, item[2]);
-      assertEquals(1.0, counter.count(), item[2]);
+      double expectedCount = item[1].endsWith("+linux.zip") ? 2.0 : 1.0;
+      assertEquals(expectedCount, counter.count(), item[2]);
     }
   }
 

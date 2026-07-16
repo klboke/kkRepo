@@ -401,6 +401,19 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
     assertEquals(200, metadata.status(), "candidate .json SemVer metadata status");
     assertEquals(fixture.version(), json(metadata).path("version").asText(),
         "candidate .json SemVer metadata version");
+
+    Fixture zipFixture = Fixture.unsigned(
+        uniqueName("zip-semver"), "1.0.0+linux.zip", "zip-semver-coordinate");
+    Exchange zipPublished = publish(config.candidateHosted(), zipFixture, false);
+    assertEquals(
+        201,
+        zipPublished.status(),
+        () -> "candidate .zip SemVer publish response: " + zipPublished.text());
+    Exchange zipMetadata = get(
+        config.candidateHosted(), zipFixture.coordinatePath(), JSON_ACCEPT);
+    assertEquals(200, zipMetadata.status(), "candidate .zip SemVer metadata status");
+    assertEquals(zipFixture.version(), json(zipMetadata).path("version").asText(),
+        "candidate .zip SemVer metadata version");
   }
 
   @Test

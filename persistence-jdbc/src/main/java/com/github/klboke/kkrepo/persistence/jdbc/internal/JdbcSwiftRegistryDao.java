@@ -252,18 +252,40 @@ public class JdbcSwiftRegistryDao implements SwiftRegistryDao {
       return List.of();
     }
     ProxySource first = candidates.getFirst();
+    return bindProxySources(
+        first.repositoryId(), first.scopeLc(), first.nameLc(), candidates, false);
+  }
+
+  @Override
+  @Transactional
+  public List<ProxySource> replaceProxySources(
+      long repositoryId, String scopeLc, String nameLc, List<ProxySource> candidates) {
+    return bindProxySources(
+        repositoryId,
+        scopeLc,
+        nameLc,
+        candidates == null ? List.of() : candidates,
+        true);
+  }
+
+  private List<ProxySource> bindProxySources(
+      long repositoryId,
+      String scopeLc,
+      String nameLc,
+      List<ProxySource> candidates,
+      boolean replaceInventory) {
     LinkedHashMap<String, ProxySource> unique = new LinkedHashMap<>();
     for (ProxySource candidate : candidates) {
-      if (candidate.repositoryId() != first.repositoryId()
-          || !candidate.scopeLc().equals(first.scopeLc())
-          || !candidate.nameLc().equals(first.nameLc())) {
+      if (candidate.repositoryId() != repositoryId
+          || !candidate.scopeLc().equals(scopeLc)
+          || !candidate.nameLc().equals(nameLc)) {
         throw new IllegalArgumentException("Bulk Swift proxy bindings must target one package");
       }
       unique.putIfAbsent(candidate.version(), candidate);
     }
 
     Map<String, ProxySource> existing = new LinkedHashMap<>();
-    listProxySources(first.repositoryId(), first.scopeLc(), first.nameLc())
+    listProxySources(repositoryId, scopeLc, nameLc)
         .forEach(source -> existing.put(source.version(), source));
     Instant defaultCheckedAt = Instant.now();
     List<Object[]> updates = new java.util.ArrayList<>();
@@ -303,9 +325,24 @@ public class JdbcSwiftRegistryDao implements SwiftRegistryDao {
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
           """, inserts);
     }
+    if (replaceInventory) {
+      List<Object[]> removals = existing.keySet().stream()
+          .filter(version -> !unique.containsKey(version))
+          .map(version -> new Object[]{repositoryId, scopeLc, nameLc, version})
+          .toList();
+      if (!removals.isEmpty()) {
+        jdbc.batchUpdate("""
+            DELETE FROM swift_proxy_source
+            WHERE repository_id = ? AND scope_lc = ? AND name_lc = ? AND version = ?
+            """, removals);
+      }
+    }
+    if (unique.isEmpty()) {
+      return List.of();
+    }
 
     Map<String, ProxySource> bound = new LinkedHashMap<>();
-    listProxySources(first.repositoryId(), first.scopeLc(), first.nameLc())
+    listProxySources(repositoryId, scopeLc, nameLc)
         .forEach(source -> bound.put(source.version(), source));
     return unique.keySet().stream().map(bound::get).filter(java.util.Objects::nonNull).toList();
   }

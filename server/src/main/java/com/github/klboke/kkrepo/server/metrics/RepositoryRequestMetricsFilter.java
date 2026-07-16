@@ -305,7 +305,9 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
   }
 
   private static String swiftOperation(String path, String method) {
-    SwiftPath parsed = SWIFT_PATHS.parse(path);
+    SwiftPath parsed = "PUT".equals(method)
+        ? SWIFT_PATHS.parseReleaseMetadata(path)
+        : SWIFT_PATHS.parse(path);
     return switch (parsed.kind()) {
       case LOGIN -> "swift_login";
       case IDENTIFIERS -> "swift_identifiers";

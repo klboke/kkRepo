@@ -69,6 +69,15 @@ class SwiftIdentityAndPathTest {
     assertEquals("1.2.3+linux.json", metadataVersionEndingInJson.version());
     assertFalse(metadataVersionEndingInJson.jsonAlias());
 
+    SwiftPath archiveWithBuildMetadata = parser.parse("mona/LinkedList/1.2.3+linux.zip");
+    assertEquals(SwiftPath.Kind.SOURCE_ARCHIVE, archiveWithBuildMetadata.kind());
+    assertEquals("1.2.3+linux", archiveWithBuildMetadata.version());
+
+    SwiftPath metadataVersionEndingInZip =
+        parser.parseReleaseMetadata("mona/LinkedList/1.2.3+linux.zip");
+    assertEquals(SwiftPath.Kind.RELEASE_METADATA, metadataVersionEndingInZip.kind());
+    assertEquals("1.2.3+linux.zip", metadataVersionEndingInZip.version());
+
     assertEquals(
         SwiftPath.Kind.MANIFEST,
         parser.parse("mona/LinkedList/1.2.3/Package.swift").kind());

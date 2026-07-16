@@ -224,6 +224,34 @@ public abstract class PersistenceApiContract {
     assertEquals(firstSource.commitSha(), bulkSources.getFirst().commitSha());
     assertEquals(3, bulkSources.getFirst().observedCount());
 
+    registry.bindProxySources(List.of(
+        new SwiftRegistryDao.ProxySource(
+            repositoryId, "acme", "pruned", "1.0.0", "https://github.com/acme/pruned",
+            "v1.0.0", "1".repeat(40), "github-archive-v1", null, "DISCOVERED", null,
+            null, revision, 0, now),
+        new SwiftRegistryDao.ProxySource(
+            repositoryId, "acme", "pruned", "2.0.0", "https://github.com/acme/pruned",
+            "v2.0.0", "2".repeat(40), "github-archive-v1", null, "DISCOVERED", null,
+            null, revision, 0, now)));
+    List<SwiftRegistryDao.ProxySource> replacedSources = registry.replaceProxySources(
+        repositoryId,
+        "acme",
+        "pruned",
+        List.of(new SwiftRegistryDao.ProxySource(
+            repositoryId, "acme", "pruned", "2.0.0", "https://github.com/acme/pruned",
+            "v2.0.0", "2".repeat(40), "github-archive-v1", null, "DISCOVERED", null,
+            null, revision, 0, now.plusSeconds(1))));
+    assertEquals(List.of("2.0.0"), replacedSources.stream()
+        .map(SwiftRegistryDao.ProxySource::version)
+        .toList());
+    assertEquals(List.of("2.0.0"), registry.listProxySources(
+        repositoryId, "acme", "pruned").stream()
+        .map(SwiftRegistryDao.ProxySource::version)
+        .toList());
+    assertTrue(registry.replaceProxySources(
+        repositoryId, "acme", "pruned", List.of()).isEmpty());
+    assertTrue(registry.listProxySources(repositoryId, "acme", "pruned").isEmpty());
+
     SwiftRegistryDao.Lease lowerCasePrereleaseLease = registry.tryAcquireLease(
         "swift:acme:fixture:1.0.0-alpha", "replica-a", Instant.now().plusSeconds(30))
         .orElseThrow();
