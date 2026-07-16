@@ -740,6 +740,32 @@ class TerraformServiceTest {
   }
 
   @Test
+  void requiresVerifiedRouteBeforeServingMigratedProxyProviderArchive() {
+    RepositoryRuntime proxyRuntime = runtime(
+        41, "terraform-proxy", RepositoryType.PROXY, "https://registry.example/root", List.of());
+    String moduleArchive = "v1/modules/acme/network/aws/1.2.3/network.zip";
+    String providerArchive = "v1/providers/acme/cloud/1.2.3/download/linux/amd64/provider.zip";
+    String moduleRoute = ".terraform/routes/"
+        + digest(moduleArchive.getBytes(StandardCharsets.UTF_8)) + ".json";
+    String providerRoute = ".terraform/routes/"
+        + digest(providerArchive.getBytes(StandardCharsets.UTF_8)) + ".json";
+    when(assets.find(proxyRuntime, moduleRoute)).thenReturn(Optional.empty());
+    when(assets.find(proxyRuntime, providerRoute)).thenReturn(Optional.empty());
+    when(assets.find(proxyRuntime, moduleArchive)).thenReturn(Optional.of(
+        asset(43, proxyRuntime, 44L, moduleArchive)));
+    when(assets.find(proxyRuntime, providerArchive)).thenReturn(Optional.of(
+        asset(45, proxyRuntime, 46L, providerArchive)));
+    when(assets.serve(proxyRuntime, moduleArchive, false)).thenReturn(MavenResponse.noBody(200));
+
+    assertEquals(200,
+        service.get(proxyRuntime, paths.parse(moduleArchive), BASE, false).status());
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(proxyRuntime, paths.parse(providerArchive), BASE, false));
+
+    verify(assets, never()).serve(proxyRuntime, providerArchive, false);
+  }
+
+  @Test
   void preservesGoGetterSourceFromProxyModuleDownload() throws Exception {
     RepositoryRuntime proxyRuntime = runtime(
         42, "terraform-proxy", RepositoryType.PROXY, "https://registry.example/root", List.of());

@@ -682,8 +682,10 @@ public class TerraformService {
   }
 
   private MavenResponse proxyRoute(RepositoryRuntime runtime, String localPath, boolean headOnly) {
+    TerraformPath path = paths.parse(localPath);
     if (assets.find(runtime, routePath(localPath)).isEmpty()) {
-      if (assets.find(runtime, localPath).isPresent()) {
+      if (path.kind() == TerraformPath.Kind.MODULE_ARCHIVE
+          && assets.find(runtime, localPath).isPresent()) {
         return assets.serve(runtime, localPath, headOnly);
       }
       throw notFound(localPath);
@@ -692,7 +694,7 @@ public class TerraformService {
     String remote = string(route.get("remoteUrl"));
     String expected = string(route.get("sha256"));
     var component = components.componentForPublicPath(
-            runtime, paths.parse(localPath), Instant.now())
+            runtime, path, Instant.now())
         .orElseThrow(() -> new IllegalStateException(
             "Terraform proxy route has no logical component: " + localPath));
     MavenResponse response = expected == null || expected.isBlank()
