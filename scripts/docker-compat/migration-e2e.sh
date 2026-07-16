@@ -8,6 +8,9 @@ PUB_NEXUS_REPOSITORY="${PUB_MIGRATION_NEXUS_REPOSITORY:-pub-hosted}"
 COMPOSER_NEXUS_REPOSITORY="${COMPOSER_MIGRATION_NEXUS_REPOSITORY:-composer-proxy}"
 TERRAFORM_NEXUS_REPOSITORY="${TERRAFORM_MIGRATION_NEXUS_REPOSITORY:-terraform-compat-hosted}"
 TERRAFORM_PROXY_NEXUS_REPOSITORY="${TERRAFORM_PROXY_MIGRATION_NEXUS_REPOSITORY:-terraform-compat-proxy}"
+SWIFT_NEXUS_REPOSITORY="${SWIFT_MIGRATION_NEXUS_REPOSITORY:-swift-hosted}"
+SWIFT_PROXY_NEXUS_REPOSITORY="${SWIFT_PROXY_MIGRATION_NEXUS_REPOSITORY:-swift-proxy}"
+SWIFT_GROUP_NEXUS_REPOSITORY="${SWIFT_GROUP_MIGRATION_NEXUS_REPOSITORY:-swift-group}"
 NEXUS_USER="${NEXUS_COMPAT_USERNAME:-admin}"
 NEXUS_PASSWORD="${NEXUS_COMPAT_PASSWORD:-Admin1234}"
 
@@ -20,6 +23,17 @@ PUB_KKREPO_REPOSITORY="${PUB_MIGRATION_KKREPO_REPOSITORY:-pub-hosted}"
 COMPOSER_KKREPO_REPOSITORY="${COMPOSER_MIGRATION_KKREPO_REPOSITORY:-composer-proxy}"
 TERRAFORM_KKREPO_REPOSITORY="${TERRAFORM_MIGRATION_KKREPO_REPOSITORY:-terraform-compat-hosted}"
 TERRAFORM_PROXY_KKREPO_REPOSITORY="${TERRAFORM_PROXY_MIGRATION_KKREPO_REPOSITORY:-terraform-compat-proxy}"
+SWIFT_KKREPO_REPOSITORY="${SWIFT_MIGRATION_KKREPO_REPOSITORY:-swift-hosted}"
+SWIFT_PROXY_KKREPO_REPOSITORY="${SWIFT_PROXY_MIGRATION_KKREPO_REPOSITORY:-swift-proxy}"
+SWIFT_GROUP_KKREPO_REPOSITORY="${SWIFT_GROUP_MIGRATION_KKREPO_REPOSITORY:-swift-group}"
+KKREPO_SECONDARY_URL="${KKREPO_MIGRATION_SECONDARY_URL:-}"
+KKREPO_TARGET_DATABASE="${KKREPO_MIGRATION_TARGET_DATABASE:-mysql}"
+KKREPO_TARGET_DATABASE_SERVICE="${KKREPO_MIGRATION_TARGET_DATABASE_SERVICE:-mysql}"
+if [[ "$KKREPO_TARGET_DATABASE" == "postgresql" ]]; then
+  KKREPO_PRIMARY_SERVICE="${KKREPO_MIGRATION_PRIMARY_SERVICE:-kkrepo-postgresql}"
+else
+  KKREPO_PRIMARY_SERVICE="${KKREPO_MIGRATION_PRIMARY_SERVICE:-kkrepo}"
+fi
 KKREPO_USER="${KKREPO_COMPAT_USERNAME:-admin}"
 KKREPO_PASSWORD="${KKREPO_COMPAT_PASSWORD:-12345678}"
 KKREPO_BLOB_PATH="${KKREPO_COMPAT_BLOB_PATH:-/tmp/kkrepo-blobs/default}"
@@ -35,6 +49,23 @@ PUB_PACKAGE="${PUB_MIGRATION_PACKAGE:-kkrepo_migration_e2e_${TAG_SAFE,,}}"
 PUB_VERSION="${PUB_MIGRATION_VERSION:-0.1.0}"
 COMPOSER_MIGRATION_ENABLED="${COMPOSER_MIGRATION_ENABLED:-false}"
 COMPOSER_PACKAGE="${COMPOSER_MIGRATION_PACKAGE:-psr/log}"
+SWIFT_MIGRATION_ENABLED="${SWIFT_MIGRATION_ENABLED:-false}"
+SWIFT_SCOPE="${SWIFT_MIGRATION_SCOPE:-kkrepo}"
+SWIFT_PACKAGE="${SWIFT_MIGRATION_PACKAGE:-migration-${TAG_SAFE,,}}"
+SWIFT_PACKAGE="${SWIFT_PACKAGE//_/-}"
+SWIFT_PACKAGE="${SWIFT_PACKAGE:0:90}"
+SWIFT_VERSION="${SWIFT_MIGRATION_VERSION:-1.2.3}"
+SWIFT_PROXY_USERNAME="${SWIFT_MIGRATION_PROXY_USERNAME:-swift-migration-user}"
+SWIFT_PROXY_SECRET="${SWIFT_MIGRATION_PROXY_SECRET:-swift-migration-password-not-for-production}"
+SWIFT_METADATA_DESCRIPTION="kkrepo Swift migration e2e fixture"
+SWIFT_METADATA_PUBLICATION_TIME="2025-02-03T04:05:06Z"
+SWIFT_FIXTURE_WORKDIR=""
+SWIFT_FIXTURE_ARCHIVE=""
+SWIFT_FIXTURE_SIGNATURE=""
+SWIFT_FIXTURE_MANIFEST=""
+SWIFT_FIXTURE_VERSIONED_MANIFEST=""
+SWIFT_FIXTURE_SHA256=""
+SWIFT_FIXTURE_SIGNATURE_BASE64=""
 TERRAFORM_PROXY_PROVIDER_NAMESPACE="${TERRAFORM_PROXY_PROVIDER_NAMESPACE:-hashicorp}"
 TERRAFORM_PROXY_PROVIDER_NAME="${TERRAFORM_PROXY_PROVIDER_NAME:-null}"
 TERRAFORM_PROXY_PROVIDER_VERSION="${TERRAFORM_PROXY_PROVIDER_VERSION:-3.2.4}"
@@ -61,6 +92,32 @@ json_escape() {
   value="${value//\\/\\\\}"
   value="${value//\"/\\\"}"
   printf '%s' "$value"
+}
+
+sql_literal() {
+  local value="$1"
+  value=${value//\'/\'\'}
+  printf "'%s'" "$value"
+}
+
+target_db_query() {
+  local query="$1"
+  case "$KKREPO_TARGET_DATABASE" in
+    mysql)
+      docker compose -f "${COMPOSE_FILE:-docker-compose.compat.yml}" exec -T \
+        -e MYSQL_PWD=kkrepo "$KKREPO_TARGET_DATABASE_SERVICE" \
+        mysql -ukkrepo -Dkkrepo -N -B -e "$query"
+      ;;
+    postgresql)
+      docker compose -f "${COMPOSE_FILE:-docker-compose.compat.yml}" exec -T \
+        -e PGPASSWORD=kkrepo "$KKREPO_TARGET_DATABASE_SERVICE" \
+        psql -U kkrepo -d kkrepo -A -t -F $'\t' -c "$query"
+      ;;
+    *)
+      log "unsupported kkrepo migration target database: $KKREPO_TARGET_DATABASE"
+      exit 1
+      ;;
+  esac
 }
 
 wait_for_http() {
@@ -131,6 +188,29 @@ header_location() {
     print
   }' "$1" | tail -n 1
 }
+
+header_value() {
+  local name="$1"
+  local headers="$2"
+  awk -v wanted="$name" 'BEGIN{IGNORECASE=1} {
+    line=$0
+    sub(/\r$/, "", line)
+    separator=index(line, ":")
+    if (separator > 0 && tolower(substr(line, 1, separator - 1)) == tolower(wanted)) {
+      value=substr(line, separator + 1)
+      sub(/^[[:space:]]*/, "", value)
+      found=value
+    }
+  } END { print found }' "$headers"
+}
+
+cleanup() {
+  if [[ -n "$SWIFT_FIXTURE_WORKDIR" ]]; then
+    rm -rf "$SWIFT_FIXTURE_WORKDIR"
+  fi
+}
+
+trap cleanup EXIT
 
 expect_status() {
   local status="$1"
@@ -277,6 +357,253 @@ source_terraform_proxy_available() {
   curl -m 20 -fsS \
     -u "$NEXUS_USER:$NEXUS_PASSWORD" \
     "$NEXUS_URL/service/rest/v1/repositories/terraform/proxy/$TERRAFORM_PROXY_NEXUS_REPOSITORY" >/dev/null 2>&1
+}
+
+swift_migration_enabled() {
+  [[ "$SWIFT_MIGRATION_ENABLED" == "true" ]]
+}
+
+source_swift_available() {
+  local endpoint
+  for endpoint in \
+      "hosted/$SWIFT_NEXUS_REPOSITORY" \
+      "proxy/$SWIFT_PROXY_NEXUS_REPOSITORY" \
+      "group/$SWIFT_GROUP_NEXUS_REPOSITORY"; do
+    if ! curl -m 20 -fsS \
+        -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+        "$NEXUS_URL/service/rest/v1/repositories/swift/$endpoint" \
+        >/dev/null 2>&1; then
+      return 1
+    fi
+  done
+}
+
+configure_swift_source_proxy_authentication() {
+  local response status
+  response="$(mktemp)"
+  status="$(curl -m 30 -sS \
+    -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    -X PUT \
+    -H "Content-Type: application/json" \
+    --data "{
+      \"name\":\"$(json_escape "$SWIFT_PROXY_NEXUS_REPOSITORY")\",
+      \"online\":true,
+      \"storage\":{\"blobStoreName\":\"default\",\"strictContentTypeValidation\":true},
+      \"proxy\":{\"remoteUrl\":\"https://github.com/\",\"contentMaxAge\":17,\"metadataMaxAge\":23},
+      \"negativeCache\":{\"enabled\":true,\"timeToLive\":60},
+      \"httpClient\":{
+        \"blocked\":false,
+        \"autoBlock\":false,
+        \"authentication\":{
+          \"type\":\"username\",
+          \"username\":\"$(json_escape "$SWIFT_PROXY_USERNAME")\",
+          \"password\":\"$(json_escape "$SWIFT_PROXY_SECRET")\"
+        }
+      }
+    }" \
+    -o "$response" \
+    -w '%{http_code}' \
+    "$NEXUS_URL/service/rest/v1/repositories/swift/proxy/$SWIFT_PROXY_NEXUS_REPOSITORY")"
+  if [[ "$status" != "200" && "$status" != "204" ]]; then
+    log "configuring authenticated Nexus Swift proxy returned HTTP $status"
+    cat "$response" >&2 || true
+    rm -f "$response"
+    exit 1
+  fi
+  rm -f "$response"
+  log "Nexus Swift proxy authentication fixture configured (secret omitted)"
+}
+
+prepare_swift_fixture() {
+  local module metadata key certificate
+  SWIFT_FIXTURE_WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-swift-migration.XXXXXX")"
+  SWIFT_FIXTURE_ARCHIVE="$SWIFT_FIXTURE_WORKDIR/$SWIFT_PACKAGE-$SWIFT_VERSION.zip"
+  SWIFT_FIXTURE_SIGNATURE="$SWIFT_FIXTURE_WORKDIR/source-archive.cms"
+  SWIFT_FIXTURE_MANIFEST="$SWIFT_FIXTURE_WORKDIR/Package.swift"
+  SWIFT_FIXTURE_VERSIONED_MANIFEST="$SWIFT_FIXTURE_WORKDIR/Package@swift-5.9.swift"
+  metadata="$SWIFT_FIXTURE_WORKDIR/metadata.json"
+  key="$SWIFT_FIXTURE_WORKDIR/signing-key.pem"
+  certificate="$SWIFT_FIXTURE_WORKDIR/signing-certificate.pem"
+  module="MigrationFixture"
+
+  cat >"$SWIFT_FIXTURE_MANIFEST" <<EOF
+// swift-tools-version:5.7
+import PackageDescription
+let package = Package(
+    name: "$module",
+    products: [.library(name: "$module", targets: ["$module"])],
+    targets: [.target(name: "$module")]
+)
+// kkrepo Swift Nexus migration fixture
+EOF
+  cat >"$SWIFT_FIXTURE_VERSIONED_MANIFEST" <<EOF
+// swift-tools-version:5.9
+import PackageDescription
+let package = Package(
+    name: "$module",
+    products: [.library(name: "$module", targets: ["$module"])],
+    targets: [.target(name: "$module")]
+)
+// kkrepo Swift Nexus migration fixture swift-5.9
+EOF
+  cat >"$metadata" <<EOF
+{
+  "description":"$SWIFT_METADATA_DESCRIPTION",
+  "repositoryURLs":["https://github.com/kkrepo-fixtures/$SWIFT_PACKAGE.git"],
+  "author":{"name":"kkrepo migration e2e"},
+  "originalPublicationTime":"$SWIFT_METADATA_PUBLICATION_TIME"
+}
+EOF
+
+  python3 - \
+    "$SWIFT_FIXTURE_ARCHIVE" \
+    "$SWIFT_PACKAGE" \
+    "$SWIFT_VERSION" \
+    "$SWIFT_FIXTURE_MANIFEST" \
+    "$SWIFT_FIXTURE_VERSIONED_MANIFEST" <<'PY'
+import pathlib
+import sys
+import zipfile
+
+archive, package, version, manifest, versioned = sys.argv[1:6]
+root = f"{package}-{version}/"
+entries = {
+    root + "Package.swift": pathlib.Path(manifest).read_bytes(),
+    root + "Package@swift-5.9.swift": pathlib.Path(versioned).read_bytes(),
+    root + "Sources/MigrationFixture/MigrationFixture.swift": (
+        b'public enum MigrationFixture { public static let answer = 42 }\n'
+    ),
+    root + "README.md": b"# Swift migration fixture\n",
+}
+with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as target:
+    for name, body in entries.items():
+        info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+        info.compress_type = zipfile.ZIP_DEFLATED
+        info.external_attr = 0o100644 << 16
+        target.writestr(info, body)
+PY
+
+  openssl req -x509 -newkey rsa:2048 -nodes \
+    -keyout "$key" \
+    -out "$certificate" \
+    -days 1 \
+    -subj '/CN=kkrepo Swift migration e2e' >/dev/null 2>&1
+  openssl cms -sign -binary \
+    -in "$SWIFT_FIXTURE_ARCHIVE" \
+    -signer "$certificate" \
+    -inkey "$key" \
+    -outform DER \
+    -out "$SWIFT_FIXTURE_SIGNATURE" \
+    -md sha256 >/dev/null 2>&1
+  openssl cms -verify -binary -inform DER \
+    -in "$SWIFT_FIXTURE_SIGNATURE" \
+    -content "$SWIFT_FIXTURE_ARCHIVE" \
+    -noverify -out /dev/null >/dev/null 2>&1
+
+  SWIFT_FIXTURE_SHA256="$(file_sha256 "$SWIFT_FIXTURE_ARCHIVE")"
+  SWIFT_FIXTURE_SIGNATURE_BASE64="$(python3 - "$SWIFT_FIXTURE_SIGNATURE" <<'PY'
+import base64
+import pathlib
+import sys
+print(base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode("ascii"))
+PY
+)"
+}
+
+publish_swift_fixture_to_source_nexus() {
+  local metadata response status
+  metadata="$SWIFT_FIXTURE_WORKDIR/metadata.json"
+  response="$SWIFT_FIXTURE_WORKDIR/publish-response.txt"
+  status="$(curl -m 120 -sS \
+    -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    -X PUT \
+    -H "Accept: application/vnd.swift.registry.v1+json" \
+    -H "X-Swift-Package-Signature-Format: cms-1.0.0" \
+    -H "Expect:" \
+    -F "source-archive=@$SWIFT_FIXTURE_ARCHIVE;type=application/zip" \
+    -F "source-archive-signature=@$SWIFT_FIXTURE_SIGNATURE;type=application/octet-stream" \
+    -F "metadata=<$metadata;type=application/json" \
+    -o "$response" \
+    -w '%{http_code}' \
+    "$NEXUS_URL/repository/$SWIFT_NEXUS_REPOSITORY/$SWIFT_SCOPE/$SWIFT_PACKAGE/$SWIFT_VERSION")"
+  if [[ "$status" != "201" ]]; then
+    log "publishing signed Swift fixture to Nexus returned HTTP $status"
+    cat "$response" >&2 || true
+    exit 1
+  fi
+  log "published signed Swift fixture to Nexus: $SWIFT_SCOPE.$SWIFT_PACKAGE $SWIFT_VERSION sha256=$SWIFT_FIXTURE_SHA256"
+}
+
+verify_source_swift_fixture() {
+  local workdir metadata archive manifest versioned
+  workdir="$SWIFT_FIXTURE_WORKDIR/source-verification"
+  mkdir -p "$workdir"
+  metadata="$workdir/metadata.json"
+  archive="$workdir/archive.zip"
+  manifest="$workdir/Package.swift"
+  versioned="$workdir/Package@swift-5.9.swift"
+
+  curl -m 60 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    -H "Accept: application/vnd.swift.registry.v1+json" \
+    "$NEXUS_URL/repository/$SWIFT_NEXUS_REPOSITORY/$SWIFT_SCOPE/$SWIFT_PACKAGE/$SWIFT_VERSION" \
+    >"$metadata"
+  python3 - \
+    "$metadata" \
+    "$SWIFT_SCOPE.$SWIFT_PACKAGE" \
+    "$SWIFT_VERSION" \
+    "$SWIFT_FIXTURE_SHA256" \
+    "$SWIFT_FIXTURE_SIGNATURE_BASE64" \
+    "$SWIFT_METADATA_DESCRIPTION" <<'PY'
+import json
+import sys
+
+path, identity, version, checksum, signature, description = sys.argv[1:7]
+with open(path, "r", encoding="utf-8") as source:
+    payload = json.load(source)
+if str(payload.get("id") or "").lower() != identity.lower():
+    raise SystemExit(f"Nexus Swift metadata identity changed: {payload.get('id')!r}")
+if payload.get("version") != version:
+    raise SystemExit(f"Nexus Swift metadata version changed: {payload.get('version')!r}")
+resources = [
+    resource for resource in payload.get("resources") or []
+    if resource.get("name") == "source-archive" and resource.get("type") == "application/zip"
+]
+if len(resources) != 1 or str(resources[0].get("checksum") or "").lower() != checksum:
+    raise SystemExit(f"Nexus Swift source-archive resource is incomplete: {resources}")
+signing = resources[0].get("signing") or {}
+if signing.get("signatureFormat") != "cms-1.0.0":
+    raise SystemExit(f"Nexus Swift signature format changed: {signing}")
+if signing.get("signatureBase64Encoded") != signature:
+    raise SystemExit("Nexus Swift source signature bytes changed")
+if (payload.get("metadata") or {}).get("description") != description:
+    raise SystemExit(f"Nexus Swift metadata payload changed: {payload.get('metadata')}")
+PY
+
+  curl -m 60 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    -H "Accept: application/vnd.swift.registry.v1+zip" \
+    "$NEXUS_URL/repository/$SWIFT_NEXUS_REPOSITORY/$SWIFT_SCOPE/$SWIFT_PACKAGE/$SWIFT_VERSION.zip" \
+    >"$archive"
+  if [[ "$(file_sha256 "$archive")" != "$SWIFT_FIXTURE_SHA256" ]]; then
+    log "Nexus Swift source archive checksum changed after publish"
+    exit 1
+  fi
+  curl -m 60 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    -H "Accept: application/vnd.swift.registry.v1+swift" \
+    "$NEXUS_URL/repository/$SWIFT_NEXUS_REPOSITORY/$SWIFT_SCOPE/$SWIFT_PACKAGE/$SWIFT_VERSION/Package.swift" \
+    >"$manifest"
+  curl -m 60 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    -H "Accept: application/vnd.swift.registry.v1+swift" \
+    "$NEXUS_URL/repository/$SWIFT_NEXUS_REPOSITORY/$SWIFT_SCOPE/$SWIFT_PACKAGE/$SWIFT_VERSION/Package.swift?swift-version=5.9" \
+    >"$versioned"
+  cmp -s "$manifest" "$SWIFT_FIXTURE_MANIFEST" || {
+    log "Nexus Swift default manifest changed after publish"
+    exit 1
+  }
+  cmp -s "$versioned" "$SWIFT_FIXTURE_VERSIONED_MANIFEST" || {
+    log "Nexus Swift versioned manifest changed after publish"
+    exit 1
+  }
+  log "verified Nexus Swift fixture metadata, signature, archive and manifests"
 }
 
 warm_terraform_proxy_fixture() {
@@ -1125,6 +1452,463 @@ PY
   log "Composer proxy migration verified offline: $COMPOSER_PACKAGE $COMPOSER_VERSION sha1=$target_sha1"
 }
 
+verify_swift_repository_definitions() {
+  local target_url="${1:-$KKREPO_URL}"
+  local label="${2:-primary}"
+  local expected_proxy_online="${3:-false}"
+  local expected_proxy_credential="${4:-missing}"
+  local workdir hosted proxy group
+  workdir="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-swift-definition.XXXXXX")"
+  hosted="$workdir/hosted.json"
+  proxy="$workdir/proxy.json"
+  group="$workdir/group.json"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/internal/repositories/$SWIFT_KKREPO_REPOSITORY" >"$hosted"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/internal/repositories/$SWIFT_PROXY_KKREPO_REPOSITORY" >"$proxy"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/internal/repositories/$SWIFT_GROUP_KKREPO_REPOSITORY" >"$group"
+  python3 - \
+    "$hosted" "$proxy" "$group" \
+    "$SWIFT_PROXY_USERNAME" "$SWIFT_PROXY_SECRET" \
+    "$SWIFT_KKREPO_REPOSITORY" "$SWIFT_PROXY_KKREPO_REPOSITORY" \
+    "$expected_proxy_online" "$expected_proxy_credential" <<'PY'
+import json
+import pathlib
+import sys
+
+(
+    hosted_path,
+    proxy_path,
+    group_path,
+    expected_username,
+    forbidden_secret,
+    expected_hosted,
+    expected_proxy,
+    expected_proxy_online,
+    expected_proxy_credential,
+) = sys.argv[1:10]
+hosted = json.loads(pathlib.Path(hosted_path).read_text(encoding="utf-8"))
+proxy = json.loads(pathlib.Path(proxy_path).read_text(encoding="utf-8"))
+group = json.loads(pathlib.Path(group_path).read_text(encoding="utf-8"))
+if hosted.get("recipe") != "swift-hosted" or hosted.get("type") != "HOSTED":
+    raise SystemExit(f"migrated Swift hosted definition is invalid: {hosted}")
+if (hosted.get("hosted") or {}).get("writePolicy") != "ALLOW_ONCE":
+    raise SystemExit(f"migrated Swift hosted write policy changed: {hosted.get('hosted')}")
+if proxy.get("recipe") != "swift-proxy" or proxy.get("type") != "PROXY":
+    raise SystemExit(f"migrated Swift proxy definition is invalid: {proxy}")
+if proxy.get("online") != (expected_proxy_online == "true"):
+    raise SystemExit(
+        f"migrated Swift proxy online state is {proxy.get('online')!r}, "
+        f"expected {expected_proxy_online}"
+    )
+settings = proxy.get("proxy") or {}
+if settings.get("remoteUrl") != "https://github.com/":
+    raise SystemExit(f"migrated Swift proxy remote changed: {settings}")
+if settings.get("contentMaxAgeMinutes") != 17 or settings.get("metadataMaxAgeMinutes") != 23:
+    raise SystemExit(f"migrated Swift proxy TTLs changed: {settings}")
+if settings.get("autoBlock") is not False:
+    raise SystemExit(f"migrated Swift proxy autoBlock changed: {settings}")
+if expected_proxy_credential == "configured" and settings.get("remoteUsername") != expected_username:
+    raise SystemExit(f"manually configured Swift proxy username changed: {settings}")
+if expected_proxy_credential == "missing" and settings.get("remoteUsername") not in (None, expected_username):
+    raise SystemExit(f"migrated Swift proxy username changed: {settings}")
+if settings.get("remotePassword") is not None or settings.get("remoteBearerToken") is not None:
+    raise SystemExit("migrated Swift proxy API exposed an upstream secret")
+if bool(settings.get("remotePasswordConfigured")) != (expected_proxy_credential == "configured"):
+    raise SystemExit(
+        "migrated Swift proxy API credential marker changed: "
+        f"expected={expected_proxy_credential} proxy={settings}"
+    )
+if forbidden_secret in pathlib.Path(proxy_path).read_text(encoding="utf-8"):
+    raise SystemExit("migrated Swift proxy API leaked the source password")
+if group.get("recipe") != "swift-group" or group.get("type") != "GROUP":
+    raise SystemExit(f"migrated Swift group definition is invalid: {group}")
+if (group.get("group") or {}).get("memberNames") != [expected_hosted, expected_proxy]:
+    raise SystemExit(f"migrated Swift group member order changed: {group.get('group')}")
+PY
+  rm -rf "$workdir"
+  log "Swift repository definitions verified through $label replica (proxyOnline=$expected_proxy_online credential=$expected_proxy_credential)"
+}
+
+verify_swift_proxy_secret_storage() {
+  local expected_credential="${1:-missing}"
+  local label="${2:-target database}"
+  local attributes repository_name
+  attributes="$(mktemp)"
+  repository_name="$(sql_literal "$SWIFT_PROXY_KKREPO_REPOSITORY")"
+  target_db_query \
+    "SELECT attributes_json FROM repository WHERE name = $repository_name" \
+    >"$attributes"
+  python3 - \
+    "$attributes" "$SWIFT_PROXY_SECRET" "$SWIFT_PROXY_USERNAME" \
+    "$expected_credential" <<'PY'
+import json
+import pathlib
+import sys
+
+path, forbidden, expected_username, expected_credential = sys.argv[1:5]
+raw = pathlib.Path(path).read_text(encoding="utf-8").strip()
+if not raw:
+    raise SystemExit("migrated Swift proxy database row is missing")
+if forbidden in raw:
+    raise SystemExit("migrated Swift proxy source password is plaintext in the database")
+payload = json.loads(raw)
+proxy = payload.get("proxy") or {}
+stored_password = proxy.get("remotePassword")
+if expected_credential == "missing":
+    if stored_password is not None or proxy.get("remoteBearerToken") is not None:
+        raise SystemExit(
+            "fail-closed Swift proxy retained an unavailable credential: "
+            f"password={stored_password!r} bearer={proxy.get('remoteBearerToken')!r}"
+        )
+elif expected_credential == "configured":
+    if not isinstance(stored_password, str) or not stored_password.startswith("{aes-gcm-v1}"):
+        raise SystemExit("manually supplied Swift proxy password is not AES-GCM ciphertext")
+    if proxy.get("remoteBearerToken") is not None:
+        raise SystemExit("manually configured basic-auth proxy unexpectedly stores a bearer token")
+else:
+    raise SystemExit(f"unknown expected credential state: {expected_credential}")
+
+source_repository = payload.get("sourceRepository")
+if not isinstance(source_repository, dict):
+    raise SystemExit("migrated Swift proxy source snapshot is missing")
+
+def authentication(value):
+    if isinstance(value, dict):
+        candidate = value.get("authentication")
+        if isinstance(candidate, dict):
+            return candidate
+        for child in value.values():
+            found = authentication(child)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = authentication(child)
+            if found is not None:
+                return found
+    return None
+
+source_authentication = authentication(source_repository)
+if source_authentication is None:
+    raise SystemExit("migrated Swift proxy source authentication snapshot is missing")
+if source_authentication.get("username") != expected_username:
+    raise SystemExit(f"migrated Swift proxy source username changed: {source_authentication}")
+
+redacted_fields = []
+def visit(value, inside_source=False):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_inside = inside_source or key == "sourceRepository"
+            normalized = key.lower()
+            if child_inside and any(part in normalized for part in (
+                "password", "passphrase", "secret", "credential", "bearer", "token"
+            )):
+                redacted_fields.append(child)
+            visit(child, child_inside)
+    elif isinstance(value, list):
+        for child in value:
+            visit(child, inside_source)
+visit(payload)
+if any(value != "<redacted>" for value in redacted_fields):
+    raise SystemExit(f"migrated Swift source authentication was not recursively redacted: {redacted_fields}")
+PY
+  rm -f "$attributes"
+  log "Swift proxy credentials verified through $label (database=$KKREPO_TARGET_DATABASE credential=$expected_credential)"
+}
+
+configure_swift_target_proxy_credentials() {
+  local target_url="${1:-$KKREPO_URL}"
+  local label="${2:-primary}"
+  local response status
+  response="$(mktemp)"
+  status="$(curl -m 30 -sS \
+    -u "$(auth)" \
+    -X PUT \
+    -H "Content-Type: application/json" \
+    --data "{
+      \"online\":true,
+      \"proxy\":{
+        \"remoteUrl\":\"https://github.com/\",
+        \"contentMaxAgeMinutes\":17,
+        \"metadataMaxAgeMinutes\":23,
+        \"autoBlock\":false,
+        \"remoteUsername\":\"$(json_escape "$SWIFT_PROXY_USERNAME")\",
+        \"remotePassword\":\"$(json_escape "$SWIFT_PROXY_SECRET")\",
+        \"remotePasswordConfigured\":true,
+        \"remoteBearerTokenConfigured\":false
+      }
+    }" \
+    -o "$response" \
+    -w '%{http_code}' \
+    "$target_url/internal/repositories/$SWIFT_PROXY_KKREPO_REPOSITORY")"
+  if [[ "$status" != "200" ]]; then
+    log "manual Swift proxy credential completion through $label returned HTTP $status"
+    rm -f "$response"
+    exit 1
+  fi
+  if grep -Fq -- "$SWIFT_PROXY_SECRET" "$response"; then
+    log "manual Swift proxy update response exposed the supplied secret"
+    rm -f "$response"
+    exit 1
+  fi
+  rm -f "$response"
+  verify_swift_repository_definitions "$target_url" "$label after manual credential completion" true configured
+  verify_swift_proxy_secret_storage configured "$label after manual credential completion"
+  log "Swift proxy credential was explicitly completed through the admin API on $label"
+}
+
+swift_fixture_row_counts() {
+  local repository_name scope package version
+  repository_name="$(sql_literal "$SWIFT_KKREPO_REPOSITORY")"
+  scope="$(sql_literal "${SWIFT_SCOPE,,}")"
+  package="$(sql_literal "${SWIFT_PACKAGE,,}")"
+  version="$(sql_literal "$SWIFT_VERSION")"
+  target_db_query "
+    SELECT
+      (SELECT COUNT(*)
+         FROM swift_release sr JOIN repository r ON r.id = sr.repository_id
+        WHERE r.name = $repository_name AND sr.scope_lc = $scope
+          AND sr.name_lc = $package AND sr.version = $version),
+      (SELECT COUNT(*)
+         FROM component c JOIN repository r ON r.id = c.repository_id
+        WHERE r.name = $repository_name AND c.format = 'swift'
+          AND LOWER(c.namespace) = $scope AND LOWER(c.name) = $package
+          AND c.version = $version),
+      (SELECT COUNT(*)
+         FROM asset a JOIN component c ON c.id = a.component_id
+         JOIN repository r ON r.id = c.repository_id
+        WHERE r.name = $repository_name AND c.format = 'swift'
+          AND LOWER(c.namespace) = $scope AND LOWER(c.name) = $package
+          AND c.version = $version),
+      (SELECT COUNT(DISTINCT ab.id)
+         FROM asset_blob ab JOIN asset a ON a.asset_blob_id = ab.id
+         JOIN component c ON c.id = a.component_id
+         JOIN repository r ON r.id = c.repository_id
+        WHERE r.name = $repository_name AND c.format = 'swift'
+          AND LOWER(c.namespace) = $scope AND LOWER(c.name) = $package
+          AND c.version = $version),
+      (SELECT COUNT(*)
+         FROM swift_manifest sm JOIN swift_release sr ON sr.id = sm.release_id
+         JOIN repository r ON r.id = sr.repository_id
+        WHERE r.name = $repository_name AND sr.scope_lc = $scope
+          AND sr.name_lc = $package AND sr.version = $version),
+      (SELECT COUNT(*)
+         FROM swift_repository_url su JOIN swift_release sr ON sr.id = su.release_id
+         JOIN repository r ON r.id = sr.repository_id
+        WHERE r.name = $repository_name AND sr.scope_lc = $scope
+          AND sr.name_lc = $package AND sr.version = $version)"
+}
+
+assert_swift_fixture_counts_nonzero() {
+  local counts="$1"
+  local label="$2"
+  python3 - "$counts" "$label" <<'PY'
+import sys
+
+raw, label = sys.argv[1:3]
+values = [int(value) for value in raw.split()]
+names = ["release", "component", "asset", "blob", "manifest", "repository_url"]
+if len(values) != len(names):
+    raise SystemExit(f"unexpected Swift row-count snapshot for {label}: {raw!r}")
+missing = [name for name, value in zip(names, values) if value <= 0]
+if missing:
+    raise SystemExit(
+        f"Swift row-count snapshot for {label} has empty core tables {missing}: {raw!r}"
+    )
+print(" ".join(f"{name}={value}" for name, value in zip(names, values)))
+PY
+}
+
+verify_migrated_swift_fixture() {
+  local job_id="$1"
+  local target_url="${2:-$KKREPO_URL}"
+  local label="${3:-primary}"
+  local workdir job_file releases metadata archive headers manifest versioned identifiers
+  local actual_sha actual_signature_format actual_signature repository_url
+  workdir="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-swift-migrated.XXXXXX")"
+  job_file="$workdir/job.json"
+  releases="$workdir/releases.json"
+  metadata="$workdir/metadata.json"
+  archive="$workdir/archive.zip"
+  headers="$workdir/archive.headers"
+  manifest="$workdir/Package.swift"
+  versioned="$workdir/Package@swift-5.9.swift"
+  identifiers="$workdir/identifiers.json"
+
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/internal/migration/nexus/repository-data/jobs/$job_id" >"$job_file"
+  python3 - "$job_file" "$SWIFT_NEXUS_REPOSITORY" <<'PY'
+import json
+import sys
+
+path, repository = sys.argv[1:3]
+with open(path, "r", encoding="utf-8") as source:
+    payload = json.load(source)
+rows = payload.get("repositoryJobs") or payload.get("repositoryStatuses") or payload.get("repositoryDetails") or []
+matches = [row for row in rows if (
+    row.get("sourceRepositoryName") or row.get("repositoryName") or row.get("name")
+) == repository]
+if not matches:
+    raise SystemExit(f"Swift migration repository status not found: {repository}")
+row = matches[0]
+if int(row.get("migratedAssets") or 0) < 1:
+    raise SystemExit(f"Swift migration did not restore an archive: {row}")
+if int(row.get("failedAssets") or 0) != 0:
+    raise SystemExit(f"Swift migration has failed assets: {row}")
+PY
+
+  curl -m 30 -fsS -u "$(auth)" \
+    -H "Accept: application/vnd.swift.registry.v1+json" \
+    "$target_url/repository/$SWIFT_KKREPO_REPOSITORY/$SWIFT_SCOPE/$SWIFT_PACKAGE" \
+    >"$releases"
+  python3 - "$releases" "$SWIFT_VERSION" <<'PY'
+import json
+import sys
+
+path, version = sys.argv[1:3]
+with open(path, "r", encoding="utf-8") as source:
+    payload = json.load(source)
+releases = payload.get("releases") or {}
+if version not in releases or not isinstance(releases.get(version), dict):
+    raise SystemExit(f"migrated Swift release list does not contain {version}: {payload}")
+PY
+
+  curl -m 30 -fsS -u "$(auth)" \
+    -H "Accept: application/vnd.swift.registry.v1+json" \
+    "$target_url/repository/$SWIFT_KKREPO_REPOSITORY/$SWIFT_SCOPE/$SWIFT_PACKAGE/$SWIFT_VERSION" \
+    >"$metadata"
+  python3 - \
+    "$metadata" \
+    "$SWIFT_SCOPE.$SWIFT_PACKAGE" \
+    "$SWIFT_VERSION" \
+    "$SWIFT_FIXTURE_SHA256" \
+    "$SWIFT_FIXTURE_SIGNATURE_BASE64" \
+    "$SWIFT_METADATA_DESCRIPTION" \
+    "$SWIFT_METADATA_PUBLICATION_TIME" <<'PY'
+import json
+import sys
+
+path, identity, version, checksum, signature, description, published_at = sys.argv[1:8]
+with open(path, "r", encoding="utf-8") as source:
+    payload = json.load(source)
+if str(payload.get("id") or "").lower() != identity.lower():
+    raise SystemExit(f"migrated Swift identity changed: {payload.get('id')!r}")
+if payload.get("version") != version:
+    raise SystemExit(f"migrated Swift version changed: {payload.get('version')!r}")
+resources = [
+    resource for resource in payload.get("resources") or []
+    if resource.get("name") == "source-archive" and resource.get("type") == "application/zip"
+]
+if len(resources) != 1 or str(resources[0].get("checksum") or "").lower() != checksum:
+    raise SystemExit(f"migrated Swift checksum changed: {resources}")
+signing = resources[0].get("signing") or {}
+if signing.get("signatureFormat") != "cms-1.0.0":
+    raise SystemExit(f"migrated Swift signature format changed: {signing}")
+if signing.get("signatureBase64Encoded") != signature:
+    raise SystemExit("migrated Swift signature bytes changed")
+metadata = payload.get("metadata") or {}
+if metadata.get("description") != description:
+    raise SystemExit(f"migrated Swift original metadata changed: {metadata}")
+if metadata.get("originalPublicationTime") != published_at:
+    raise SystemExit(f"migrated Swift original publication time changed: {metadata}")
+if payload.get("publishedAt") != published_at:
+    raise SystemExit(f"migrated Swift publishedAt changed: {payload.get('publishedAt')!r}")
+PY
+
+  curl -m 60 -fsS -u "$(auth)" \
+    -D "$headers" \
+    -H "Accept: application/vnd.swift.registry.v1+zip" \
+    "$target_url/repository/$SWIFT_KKREPO_REPOSITORY/$SWIFT_SCOPE/$SWIFT_PACKAGE/$SWIFT_VERSION.zip" \
+    >"$archive"
+  actual_sha="$(file_sha256 "$archive")"
+  if [[ "$actual_sha" != "$SWIFT_FIXTURE_SHA256" ]]; then
+    log "migrated Swift archive checksum mismatch through $label: $actual_sha != $SWIFT_FIXTURE_SHA256"
+    rm -rf "$workdir"
+    exit 1
+  fi
+  actual_signature_format="$(header_value 'X-Swift-Package-Signature-Format' "$headers")"
+  actual_signature="$(header_value 'X-Swift-Package-Signature' "$headers")"
+  if [[ "$actual_signature_format" != "cms-1.0.0" \
+      || "$actual_signature" != "$SWIFT_FIXTURE_SIGNATURE_BASE64" ]]; then
+    log "migrated Swift archive signature headers changed through $label"
+    rm -rf "$workdir"
+    exit 1
+  fi
+
+  curl -m 30 -fsS -u "$(auth)" \
+    -H "Accept: application/vnd.swift.registry.v1+swift" \
+    "$target_url/repository/$SWIFT_KKREPO_REPOSITORY/$SWIFT_SCOPE/$SWIFT_PACKAGE/$SWIFT_VERSION/Package.swift" \
+    >"$manifest"
+  curl -m 30 -fsS -u "$(auth)" \
+    -H "Accept: application/vnd.swift.registry.v1+swift" \
+    "$target_url/repository/$SWIFT_KKREPO_REPOSITORY/$SWIFT_SCOPE/$SWIFT_PACKAGE/$SWIFT_VERSION/Package.swift?swift-version=5.9" \
+    >"$versioned"
+  cmp -s "$manifest" "$SWIFT_FIXTURE_MANIFEST" || {
+    log "migrated Swift default manifest changed through $label"
+    rm -rf "$workdir"
+    exit 1
+  }
+  cmp -s "$versioned" "$SWIFT_FIXTURE_VERSIONED_MANIFEST" || {
+    log "migrated Swift versioned manifest changed through $label"
+    rm -rf "$workdir"
+    exit 1
+  }
+
+  repository_url="https://github.com/kkrepo-fixtures/$SWIFT_PACKAGE.git"
+  curl -m 30 -fsS -u "$(auth)" \
+    -H "Accept: application/vnd.swift.registry.v1+json" \
+    --get \
+    --data-urlencode "url=$repository_url" \
+    "$target_url/repository/$SWIFT_KKREPO_REPOSITORY/identifiers" \
+    >"$identifiers"
+  python3 - "$identifiers" "$SWIFT_SCOPE.$SWIFT_PACKAGE" <<'PY'
+import json
+import sys
+
+path, expected = sys.argv[1:3]
+with open(path, "r", encoding="utf-8") as source:
+    payload = json.load(source)
+identifiers = {str(value).lower() for value in payload.get("identifiers") or []}
+if expected.lower() not in identifiers:
+    raise SystemExit(f"migrated Swift repository URL mapping is missing: {payload}")
+PY
+  rm -rf "$workdir"
+  log "Swift fixture verified through $label replica: $SWIFT_SCOPE.$SWIFT_PACKAGE $SWIFT_VERSION sha256=$actual_sha"
+}
+
+run_swift_idempotency_migration() {
+  local payload start_body
+  payload="{
+    \"sourceBaseUrl\":\"$(json_escape "$NEXUS_URL")\",
+    \"sourceUsername\":\"$(json_escape "$NEXUS_USER")\",
+    \"sourcePassword\":\"$(json_escape "$NEXUS_PASSWORD")\",
+    \"repositories\":[\"$(json_escape "$SWIFT_NEXUS_REPOSITORY")\"],
+    \"pageSize\":$PAGE_SIZE,
+    \"concurrency\":$CONCURRENCY,
+    \"checksumValidation\":true
+  }"
+  start_body="$(curl -m 60 -fsS \
+    -u "$(auth)" \
+    -H "Content-Type: application/json" \
+    --data "$payload" \
+    "$KKREPO_URL/internal/migration/nexus/repository-data/start")"
+  SWIFT_IDEMPOTENCY_JOB_ID="$(printf '%s' "$start_body" | json_field jobId)"
+  if [[ -z "$SWIFT_IDEMPOTENCY_JOB_ID" ]]; then
+    log "could not parse Swift idempotency migration job id from: $start_body"
+    exit 1
+  fi
+  wait_for_discovery_ready "$SWIFT_IDEMPOTENCY_JOB_ID"
+  curl -m 30 -fsS \
+    -u "$(auth)" \
+    -X POST \
+    "$KKREPO_URL/internal/migration/nexus/repository-data/jobs/$SWIFT_IDEMPOTENCY_JOB_ID/packages/start" \
+    >/dev/null
+  wait_for_migration_idle "$SWIFT_IDEMPOTENCY_JOB_ID"
+  log "Swift idempotency migration completed: job=$SWIFT_IDEMPOTENCY_JOB_ID"
+}
+
 kkrepo_repo_exists() {
   local name="$1"
   curl -m 20 -fsS -u "$(auth)" \
@@ -1219,11 +2003,13 @@ print(" ".join(parts))
 
 wait_for_migration_idle() {
   local job_id="$1"
-  local path="$KKREPO_URL/internal/migration/nexus/repository-data/jobs/$job_id"
+  local target_url="${2:-$KKREPO_URL}"
+  local label="${3:-primary}"
+  local path="$target_url/internal/migration/nexus/repository-data/jobs/$job_id"
   for ((i = 1; i <= WAIT_TIMEOUT_SECONDS; i++)); do
     local body
     body="$(curl -m 20 -fsS -u "$(auth)" "$path")"
-    log "job $job_id status: $(printf '%s' "$body" | job_status_summary)"
+    log "job $job_id status through $label: $(printf '%s' "$body" | job_status_summary)"
     if printf '%s' "$body" | grep -q '"active"[[:space:]]*:[[:space:]]*false'; then
       if printf '%s' "$body" | grep -q '"failedAssets"[[:space:]]*:[[:space:]]*[1-9]'; then
         log "migration job has failed assets"
@@ -1239,11 +2025,13 @@ wait_for_migration_idle() {
 
 wait_for_discovery_ready() {
   local job_id="$1"
-  local path="$KKREPO_URL/internal/migration/nexus/repository-data/jobs/$job_id"
+  local target_url="${2:-$KKREPO_URL}"
+  local label="${3:-primary}"
+  local path="$target_url/internal/migration/nexus/repository-data/jobs/$job_id"
   for ((i = 1; i <= WAIT_TIMEOUT_SECONDS; i++)); do
     local body
     body="$(curl -m 20 -fsS -u "$(auth)" "$path")"
-    log "job $job_id discovery status: $(printf '%s' "$body" | job_status_summary)"
+    log "job $job_id discovery status through $label: $(printf '%s' "$body" | job_status_summary)"
     if printf '%s' "$body" | grep -q '"failedRepositories"[[:space:]]*:[[:space:]]*true'; then
       log "migration discovery failed"
       exit 1
@@ -1260,6 +2048,81 @@ wait_for_discovery_ready() {
   done
   log "timed out waiting for migration discovery on job $job_id"
   exit 1
+}
+
+wait_for_pre_package_stage_boundary() {
+  local job_id="$1"
+  local target_url="${2:-$KKREPO_URL}"
+  local label="${3:-primary}"
+  local path="$target_url/internal/migration/nexus/repository-data/jobs/$job_id"
+  for ((i = 1; i <= WAIT_TIMEOUT_SECONDS; i++)); do
+    local body
+    body="$(curl -m 20 -fsS -u "$(auth)" "$path")"
+    if printf '%s' "$body" | python3 -c '
+import json
+import sys
+
+payload = json.load(sys.stdin)
+repositories = payload.get("repositoryJobs") or []
+statuses = {str(row.get("status") or "") for row in repositories}
+stable = (
+    bool(repositories)
+    and payload.get("packageMigrationEnabled") is False
+    and int(payload.get("pendingAssets") or 0) > 0
+    and payload.get("failedRepositories") is False
+    and statuses <= {"ready", "finished"}
+)
+raise SystemExit(0 if stable else 1)
+'; then
+      log "job $job_id reached deterministic pre-package boundary through $label: "\
+"$(printf '%s' "$body" | job_status_summary)"
+      return 0
+    fi
+    log "job $job_id has not reached the pre-package boundary through $label: "\
+"$(printf '%s' "$body" | job_status_summary)"
+    sleep 2
+  done
+  log "timed out waiting for deterministic pre-package boundary on job $job_id through $label"
+  exit 1
+}
+
+verify_migration_job_visible() {
+  local job_id="$1"
+  local target_url="$2"
+  local label="$3"
+  local body
+  body="$(curl -m 20 -fsS -u "$(auth)" \
+    "$target_url/internal/migration/nexus/repository-data/jobs/$job_id")"
+  if [[ -z "$body" ]] || ! printf '%s' "$body" | grep -q "\"jobId\"[[:space:]]*:[[:space:]]*$job_id"; then
+    log "migration job $job_id is not visible through $label"
+    exit 1
+  fi
+  log "migration job $job_id is durable through $label: "\
+"$(printf '%s' "$body" | job_status_summary)"
+}
+
+restart_primary_at_swift_migration_stage_boundary() {
+  local job_id="$1"
+  if [[ -z "$KKREPO_SECONDARY_URL" ]]; then
+    log "Swift migration restart/resume acceptance requires KKREPO_MIGRATION_SECONDARY_URL"
+    exit 1
+  fi
+
+  wait_for_pre_package_stage_boundary "$job_id" "$KKREPO_URL" "primary"
+  wait_for_http "kkrepo migration read replica" \
+    "$KKREPO_SECONDARY_URL/internal/repositories?purpose=admin" "$(auth)"
+  wait_for_pre_package_stage_boundary "$job_id" "$KKREPO_SECONDARY_URL" "secondary"
+
+  log "restarting $KKREPO_PRIMARY_SERVICE at the deterministic post-discovery/pre-package boundary"
+  docker compose -f "${COMPOSE_FILE:-docker-compose.compat.yml}" restart "$KKREPO_PRIMARY_SERVICE" >/dev/null
+  wait_for_http "kkrepo health endpoint after migration worker restart" "$KKREPO_HEALTH_URL"
+  wait_for_http "kkrepo repositories endpoint after migration worker restart" \
+    "$KKREPO_URL/internal/repositories?purpose=admin" "$(auth)"
+
+  wait_for_pre_package_stage_boundary \
+    "$job_id" "$KKREPO_SECONDARY_URL" "secondary after primary restart"
+  wait_for_pre_package_stage_boundary "$job_id" "$KKREPO_URL" "restarted primary"
+  log "persisted migration job survived the primary worker restart; package work will resume through secondary"
 }
 
 json_field() {
@@ -1304,11 +2167,26 @@ run_config_metadata_migration() {
 
   log "running Nexus config/security metadata preflight"
   curl_kkrepo_json "/internal/migration/nexus/preflight" "$payload" >"$preflight_file"
-  python3 - "$preflight_file" "$expected_adapter" "$NEXUS_REPOSITORY" "$EXPECTED_CONNECTOR_PORT" <<'PY'
+  python3 - \
+    "$preflight_file" \
+    "$expected_adapter" \
+    "$NEXUS_REPOSITORY" \
+    "$EXPECTED_CONNECTOR_PORT" \
+    "$SWIFT_MIGRATION_ENABLED" \
+    "$SWIFT_NEXUS_REPOSITORY" \
+    "$SWIFT_PROXY_NEXUS_REPOSITORY" <<'PY'
 import json
 import sys
 
-path, expected_adapter, repository, expected_connector_port = sys.argv[1:5]
+(
+    path,
+    expected_adapter,
+    repository,
+    expected_connector_port,
+    swift_enabled,
+    swift_repository,
+    swift_proxy_repository,
+) = sys.argv[1:8]
 with open(path, "r", encoding="utf-8") as source:
     payload = json.load(source)
 plan = payload.get("migrationPlan") or {}
@@ -1362,6 +2240,48 @@ if expected_adapter in {"DatastoreH2NexusAdapter", "DatastorePostgresqlNexusAdap
         raise SystemExit(f"cargo-hosted plan status is {cargo[0].get('status')!r}, expected FULL")
     if cargo[0].get("readMode") != "script-datastore":
         raise SystemExit(f"cargo-hosted readMode is {cargo[0].get('readMode')!r}")
+if swift_enabled == "true":
+    capability = ((profile.get("formatCapabilities") or {}).get("swift") or {})
+    if capability.get("contentMigration") is not True:
+        raise SystemExit(f"Swift datastore content model was not proven: {capability}")
+    swift = [
+        item for item in items
+        if item.get("area") == "repository" and item.get("name") == swift_repository
+    ]
+    if not swift:
+        raise SystemExit(f"Swift hosted plan item not found: {swift_repository}")
+    if swift[0].get("status") != "FULL" or swift[0].get("readMode") != "script-datastore":
+        raise SystemExit(f"Swift hosted migration is not fail-closed FULL: {swift[0]}")
+    swift_proxy = [
+        item
+        for item in items
+        if item.get("area") == "repository" and item.get("name") == swift_proxy_repository
+    ]
+    if not swift_proxy:
+        raise SystemExit(f"Swift proxy plan item not found: {swift_proxy_repository}")
+    if swift_proxy[0].get("status") != "NEEDS_MANUAL_ACTION":
+        raise SystemExit(
+            "Swift proxy with an unrecoverable source credential did not fail closed: "
+            f"{swift_proxy[0]}"
+        )
+    expected_action = "repository:" + swift_proxy_repository
+    if expected_action not in (plan.get("manualActions") or []):
+        raise SystemExit(
+            f"Swift proxy preflight omitted manual action {expected_action}: "
+            f"{plan.get('manualActions')}"
+        )
+    proxy_risks = [
+        risk
+        for risk in payload.get("proxyRemoteRisks") or []
+        if risk.get("repository") == swift_proxy_repository
+    ]
+    if len(proxy_risks) != 1 or proxy_risks[0].get("status") not in {
+        "masked_proxy_credential_secret",
+        "missing_proxy_credential_secret",
+    }:
+        raise SystemExit(
+            f"Swift proxy preflight did not report an unavailable credential: {proxy_risks}"
+        )
 print(
     "preflight adapter="
     + str(adapter)
@@ -1378,21 +2298,35 @@ PY
 
   log "running Nexus config/security metadata migration"
   curl_kkrepo_json "/internal/migration/nexus/run" "$payload" >"$run_file"
-  python3 - "$run_file" "$expected_adapter" "$NEXUS_REPOSITORY" <<'PY'
+  python3 - \
+    "$run_file" "$expected_adapter" "$NEXUS_REPOSITORY" \
+    "$SWIFT_MIGRATION_ENABLED" "$SWIFT_PROXY_NEXUS_REPOSITORY" <<'PY'
 import json
 import sys
 
-path, expected_adapter, repository = sys.argv[1:4]
+path, expected_adapter, repository, swift_enabled, swift_proxy_repository = sys.argv[1:6]
 with open(path, "r", encoding="utf-8") as source:
     payload = json.load(source)
 status = payload.get("status")
-if status not in {"finished", "finished_with_password_resets_required"}:
+if swift_enabled == "true":
+    if status != "finished_with_manual_actions":
+        raise SystemExit(
+            "metadata migration with an unavailable Swift proxy credential returned "
+            f"unexpected status: {status!r}"
+        )
+elif status not in {"finished", "finished_with_password_resets_required"}:
     raise SystemExit(f"metadata migration returned unexpected status: {status!r}")
 validation = payload.get("validation") or {}
 if validation.get("failed"):
     raise SystemExit(f"metadata migration validation failed: {validation}")
 manual = validation.get("manualActions") or []
-if manual:
+if swift_enabled == "true":
+    if "repository/proxy credentials" not in manual:
+        raise SystemExit(
+            "metadata migration did not require manual Swift proxy credential completion: "
+            f"{manual}"
+        )
+elif manual:
     raise SystemExit(f"metadata migration requires manual actions: {manual}")
 plan = ((payload.get("preflight") or {}).get("migrationPlan") or {})
 if expected_adapter and plan.get("adapter") != expected_adapter:
@@ -1406,8 +2340,28 @@ if security.get("users", 0) < 1:
 checks = validation.get("checks") or []
 failed_checks = [check for check in checks if check.get("status") == "FAIL"]
 manual_checks = [check for check in checks if check.get("status") == "MANUAL"]
-if failed_checks or manual_checks:
-    raise SystemExit(f"metadata migration had failed/manual checks: failed={failed_checks}, manual={manual_checks}")
+if failed_checks:
+    raise SystemExit(f"metadata migration had failed checks: {failed_checks}")
+if swift_enabled == "true":
+    proxy_checks = [
+        check
+        for check in manual_checks
+        if check.get("scope") == "repository" and check.get("name") == "proxy credentials"
+    ]
+    other_manual_checks = [check for check in manual_checks if check not in proxy_checks]
+    if len(proxy_checks) != 1 or other_manual_checks:
+        raise SystemExit(
+            "metadata migration manual checks differ from the expected fail-closed Swift proxy "
+            f"credential check: proxy={proxy_checks} other={other_manual_checks}"
+        )
+    expected_action = "repository:" + swift_proxy_repository
+    plan_manual = plan.get("manualActions") or []
+    if expected_action not in plan_manual:
+        raise SystemExit(
+            f"metadata migration run omitted preflight action {expected_action}: {plan_manual}"
+        )
+elif manual_checks:
+    raise SystemExit(f"metadata migration had manual checks: {manual_checks}")
 print(f"metadata migration status={status} repositories={config.get('repositories')} users={security.get('users')}")
 PY
 
@@ -1482,9 +2436,30 @@ if composer_migration_enabled; then
   fi
   warm_composer_proxy_fixture
 fi
+if swift_migration_enabled; then
+  need python3
+  need openssl
+  need cmp
+  if ! source_swift_available; then
+    log "required Swift hosted repository $SWIFT_NEXUS_REPOSITORY is not available on the Nexus source"
+    exit 1
+  fi
+  configure_swift_source_proxy_authentication
+  # The fail-closed source-profile probe only marks Swift content as FULL after it has
+  # fingerprinted a real archive, manifest, checksum, and optional CMS signature.
+  # Seed that evidence before the first configuration preflight.
+  prepare_swift_fixture
+  publish_swift_fixture_to_source_nexus
+  verify_source_swift_fixture
+fi
 run_config_metadata_migration
 if composer_migration_enabled; then
   verify_composer_requires_explicit_proxy_selection
+fi
+if swift_migration_enabled; then
+  verify_swift_repository_definitions "$KKREPO_URL" "primary fail-closed migration" false missing
+  verify_swift_proxy_secret_storage missing "primary fail-closed migration"
+  configure_swift_target_proxy_credentials "$KKREPO_URL" "primary"
 fi
 
 kkrepo_ref="${KKREPO_DOCKER_REGISTRY}/${IMAGE}:${TAG}"
@@ -1514,6 +2489,9 @@ if pub_migration_enabled; then
   log "publishing Pub fixture to source Nexus: $PUB_PACKAGE $PUB_VERSION"
   pub_sha256_value="$(publish_pub_fixture_to_source_nexus "$PUB_PACKAGE" "$PUB_VERSION")"
   migration_repositories_json="$migration_repositories_json,\"$(json_escape "$PUB_NEXUS_REPOSITORY")\""
+fi
+if swift_migration_enabled; then
+  migration_repositories_json="$migration_repositories_json,\"$(json_escape "$SWIFT_NEXUS_REPOSITORY")\""
 fi
 if terraform_migration_enabled; then
   migration_repositories_json="$migration_repositories_json,\"$(json_escape "$TERRAFORM_NEXUS_REPOSITORY")\""
@@ -1553,12 +2531,24 @@ fi
 
 wait_for_discovery_ready "$job_id"
 
-log "starting Docker package/blob migration for job $job_id"
+package_migration_url="$KKREPO_URL"
+package_migration_label="primary"
+if swift_migration_enabled; then
+  restart_primary_at_swift_migration_stage_boundary "$job_id"
+  package_migration_url="$KKREPO_SECONDARY_URL"
+  package_migration_label="secondary after primary restart"
+fi
+
+log "starting package/blob migration for job $job_id through $package_migration_label"
 curl -m 30 -fsS \
   -u "$(auth)" \
   -X POST \
-  "$KKREPO_URL/internal/migration/nexus/repository-data/jobs/$job_id/packages/start" >/dev/null
-wait_for_migration_idle "$job_id"
+  "$package_migration_url/internal/migration/nexus/repository-data/jobs/$job_id/packages/start" >/dev/null
+wait_for_migration_idle "$job_id" "$package_migration_url" "$package_migration_label"
+if swift_migration_enabled; then
+  verify_migration_job_visible "$job_id" "$KKREPO_URL" "primary after secondary completion"
+  verify_migration_job_visible "$job_id" "$KKREPO_SECONDARY_URL" "secondary after completion"
+fi
 
 log "pulling migrated image from kkrepo: $kkrepo_ref"
 docker pull "$kkrepo_ref" >/dev/null
@@ -1590,4 +2580,41 @@ if composer_migration_enabled; then
   verify_migrated_composer_fixture "$job_id"
 fi
 
-log "Docker/Cargo/Pub/Composer/Terraform migration E2E completed: job=$job_id source=${NEXUS_URL%/}/repository/${NEXUS_REPOSITORY}/v2/${IMAGE}:${TAG} target=$kkrepo_ref"
+if swift_migration_enabled; then
+  swift_counts_before=""
+  swift_counts_after=""
+  verify_migrated_swift_fixture "$job_id" "$KKREPO_URL" "primary"
+  swift_counts_before="$(swift_fixture_row_counts)"
+  log "Swift idempotency baseline: "\
+"$(assert_swift_fixture_counts_nonzero "$swift_counts_before" "before rerun")"
+
+  log "rerunning Nexus definition migration before the Swift idempotency pass"
+  run_config_metadata_migration
+  verify_swift_repository_definitions \
+    "$KKREPO_URL" "primary fail-closed definition rerun" false missing
+  verify_swift_proxy_secret_storage missing "primary fail-closed definition rerun"
+  configure_swift_target_proxy_credentials "$KKREPO_URL" "primary after definition rerun"
+  run_swift_idempotency_migration
+  verify_migrated_swift_fixture "$SWIFT_IDEMPOTENCY_JOB_ID" "$KKREPO_URL" "primary after idempotency rerun"
+  swift_counts_after="$(swift_fixture_row_counts)"
+  log "Swift idempotency rerun counts: "\
+"$(assert_swift_fixture_counts_nonzero "$swift_counts_after" "after rerun")"
+  if [[ "$swift_counts_before" != "$swift_counts_after" ]]; then
+    log "Swift idempotency row counts changed: before=$swift_counts_before after=$swift_counts_after"
+    exit 1
+  fi
+  log "Swift release/component/asset/blob/manifest/url row counts are exactly stable across rerun"
+
+  if [[ -n "$KKREPO_SECONDARY_URL" ]]; then
+    wait_for_http "kkrepo migration read replica" \
+      "$KKREPO_SECONDARY_URL/internal/repositories?purpose=admin" "$(auth)"
+    verify_swift_repository_definitions "$KKREPO_SECONDARY_URL" "secondary" true configured
+    verify_migrated_swift_fixture \
+      "$SWIFT_IDEMPOTENCY_JOB_ID" "$KKREPO_SECONDARY_URL" "secondary"
+  else
+    log "SWIFT_MIGRATION_ENABLED requires KKREPO_MIGRATION_SECONDARY_URL for the cross-replica read acceptance"
+    exit 1
+  fi
+fi
+
+log "Docker/Cargo/Pub/Composer/Terraform/Swift migration E2E completed: job=$job_id source=${NEXUS_URL%/}/repository/${NEXUS_REPOSITORY}/v2/${IMAGE}:${TAG} target=$kkrepo_ref"

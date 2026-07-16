@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 KKREPO_URL="${KKREPO_COMPAT_BASE_URL:-http://127.0.0.1:${KKREPO_COMPAT_PORT:-18090}}"
+SWIFT_KKREPO_URL="${SWIFT_KKREPO_BASE_URL:-$KKREPO_URL}"
 KKREPO_USER="${KKREPO_COMPAT_USERNAME:-admin}"
 KKREPO_PASSWORD="${KKREPO_COMPAT_PASSWORD:-12345678}"
 KKREPO_AUTH="$KKREPO_USER:$KKREPO_PASSWORD"
@@ -18,6 +19,7 @@ KKREPO_AUTH_URL=""
 REDACTION_VALUES=("$KKREPO_PASSWORD" "$KKREPO_AUTH")
 
 mkdir -p "$ARTIFACT_DIR" "$WORK_DIR"
+export CLIENT_E2E_WORK_DIR="$WORK_DIR"
 export DOTNET_CLI_TELEMETRY_OPTOUT="${DOTNET_CLI_TELEMETRY_OPTOUT:-1}"
 export DOTNET_NOLOGO="${DOTNET_NOLOGO:-1}"
 export DOTNET_SKIP_FIRST_TIME_EXPERIENCE="${DOTNET_SKIP_FIRST_TIME_EXPERIENCE:-1}"
@@ -1039,6 +1041,667 @@ output "message" {
   value = "kkrepo Terraform module client e2e"
 }
 EOF
+  run_terraform_fixture
+}
+
+file_sha256() {
+  python3 - "$1" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+}
+
+assert_swift_registry_pin() {
+  local resolved_file="$1"
+  local scope="$2"
+  local package_name="$3"
+  local expected_version="$4"
+  local label="$5"
+  python3 - "$resolved_file" "$scope" "$package_name" "$expected_version" "$label" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+scope, package_name, expected_version, label = sys.argv[2:]
+payload = json.loads(path.read_text(encoding="utf-8"))
+pins = payload.get("pins")
+if pins is None:
+    pins = payload.get("object", {}).get("pins")
+if not isinstance(pins, list):
+    raise SystemExit(f"{label}: unsupported Package.resolved shape in {path}")
+
+coordinate = f"{scope}.{package_name}".lower()
+package_name_lower = package_name.lower()
+
+def target(pin):
+    identity = str(pin.get("identity") or pin.get("package") or "").lower()
+    location = str(pin.get("location") or pin.get("repositoryURL") or "").lower()
+    return identity in {package_name_lower, coordinate} or location.rstrip("/") in {
+        coordinate,
+        f"https://github.com/{scope}/{package_name}.git".lower(),
+        f"https://github.com/{scope}/{package_name}".lower(),
+    }
+
+matches = [pin for pin in pins if isinstance(pin, dict) and target(pin)]
+if not matches:
+    summary = [
+        {
+            "identity": pin.get("identity") or pin.get("package"),
+            "kind": pin.get("kind"),
+            "location": pin.get("location") or pin.get("repositoryURL"),
+        }
+        for pin in pins if isinstance(pin, dict)
+    ]
+    raise SystemExit(f"{label}: target dependency is absent from Package.resolved: {summary}")
+
+registry_matches = [pin for pin in matches if pin.get("kind") == "registry"]
+if not registry_matches:
+    raise SystemExit(
+        f"{label}: target dependency did not resolve through the registry: {matches}"
+    )
+if not any(str(pin.get("state", {}).get("version") or "") == expected_version
+           for pin in registry_matches):
+    raise SystemExit(
+        f"{label}: registry pin does not contain expected version {expected_version}: "
+        f"{registry_matches}"
+    )
+PY
+}
+
+swift_version_line() {
+  "$1" --version | head -n 1
+}
+
+swift_registry_set() {
+  local label="$1"
+  local swift_bin="$2"
+  local directory="$3"
+  local home="$4"
+  local registry="$5"
+  local help
+  local write_config=false
+  help="$("$swift_bin" package-registry set --help 2>&1 || true)"
+  if [[ "$registry" == *://*'@'* ]]; then
+    write_config=true
+  elif [[ "$registry" == https://* ]]; then
+    run_logged_in "swift-$label-registry-set" "$directory" env \
+      HOME="$home" XDG_CONFIG_HOME="$home/.config" \
+      "$swift_bin" package-registry set "$registry/"
+  elif grep -q -- '--allow-insecure-http' <<<"$help"; then
+    run_logged_in "swift-$label-registry-set" "$directory" env \
+      HOME="$home" XDG_CONFIG_HOME="$home/.config" \
+      "$swift_bin" package-registry set --allow-insecure-http "$registry/"
+  else
+    write_config=true
+  fi
+  if [[ "$write_config" == "true" ]]; then
+    local config_file="$directory/.swiftpm/configuration/registries.json"
+    mkdir -p "$(dirname "$config_file")"
+    run_logged "swift-$label-registry-config" python3 - "$config_file" "$registry/" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+path.write_text(json.dumps({
+    "registries": {"[default]": {"url": sys.argv[2]}},
+    "version": 1,
+}, separators=(",", ":")), encoding="utf-8")
+PY
+    chmod 0600 "$config_file"
+  fi
+}
+
+swift_registry_login() {
+  local label="$1"
+  local swift_bin="$2"
+  local directory="$3"
+  local home="$4"
+  local registry="$5"
+  run_logged_in "swift-$label-registry-login" "$directory" env \
+    HOME="$home" XDG_CONFIG_HOME="$home/.config" \
+    "$swift_bin" package-registry login "$registry/login" \
+    --username "$KKREPO_USER" --password "$KKREPO_PASSWORD" --no-confirm
+}
+
+assert_swift_invalid_login() {
+  local label="$1"
+  local swift_bin="$2"
+  local directory="$3"
+  local home="$4"
+  local registry="$5"
+  local status=0
+  if run_logged_in "swift-$label-registry-login-invalid" "$directory" env \
+      HOME="$home" XDG_CONFIG_HOME="$home/.config" \
+      "$swift_bin" package-registry login "$registry/login" \
+      --username "$KKREPO_USER" --password 'definitely-invalid' --no-confirm; then
+    status=0
+  else
+    status=$?
+  fi
+  if [[ "$status" -eq 0 ]]; then
+    log "Swift $label registry login unexpectedly accepted invalid credentials"
+    return 1
+  fi
+  grep -Eqi '401|unauthorized|authentication|login failed|invalid credentials' \
+    "$ARTIFACT_DIR/swift-$label-registry-login-invalid.log"
+}
+
+swift_registry_token_login() {
+  local label="$1"
+  local swift_bin="$2"
+  local directory="$3"
+  local home="$4"
+  local registry="$5"
+  local token
+  token="$(create_api_key GenericToken "Swift client E2E $label $STAMP")"
+  add_redaction_value "$token"
+  run_logged_in "swift-$label-registry-token-login" "$directory" env \
+    HOME="$home" XDG_CONFIG_HOME="$home/.config" \
+    "$swift_bin" package-registry login "$registry/login" \
+    --token "$token" --no-confirm
+}
+
+swift_supports_registry_login() {
+  local swift_bin="$1"
+  local registry="$2"
+  [[ "$registry" == https://* ]] \
+    && "$swift_bin" package-registry login --help >/dev/null 2>&1
+}
+
+swift_supports_registry_publish() {
+  "$1" package-registry publish --help >/dev/null 2>&1
+}
+
+authenticated_registry_url() {
+  local registry="$1"
+  local repository_base_url="${2:-$KKREPO_URL}"
+  local authenticated_base_url
+  if [[ "$registry" != "$repository_base_url"* ]]; then
+    log "cannot embed credentials into registry outside repository base URL: $registry"
+    return 2
+  fi
+  authenticated_base_url="$(python3 - "$repository_base_url" "$KKREPO_USER" "$KKREPO_PASSWORD" <<'PY'
+import sys
+import urllib.parse
+
+url = urllib.parse.urlsplit(sys.argv[1])
+username = urllib.parse.quote(sys.argv[2], safe="")
+password = urllib.parse.quote(sys.argv[3], safe="")
+print(urllib.parse.urlunsplit((url.scheme, f"{username}:{password}@{url.netloc}", url.path, url.query, url.fragment)))
+PY
+)"
+  printf '%s%s' "$authenticated_base_url" "${registry#"$repository_base_url"}"
+}
+
+swift_registry_login_is_required() {
+  local label="$1"
+  case ",${SWIFT_E2E_REQUIRE_REGISTRY_LOGIN_LABELS:-}," in
+    *,"$label",*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_windows_runner() {
+  [[ "${OS:-}" == "Windows_NT" ]] || [[ "$(uname -s)" =~ ^(MINGW|MSYS|CYGWIN) ]]
+}
+
+test_swift_proxy_binary() {
+  local label="$1"
+  local swift_bin="$2"
+  local home="$3"
+  local dir="$4"
+  if [[ "${SWIFT_E2E_PROXY_ENABLED:-true}" != "true" ]]; then
+    log "Swift $label SCM-to-registry proxy flow skipped by SWIFT_E2E_PROXY_ENABLED=false"
+    return 0
+  fi
+  local group_url="$SWIFT_KKREPO_URL/repository/swift-group"
+  local proxy_dir="$dir/proxy-consumer"
+  local proxy_scope="${SWIFT_E2E_PROXY_SCOPE:-apple}"
+  local proxy_name="${SWIFT_E2E_PROXY_NAME:-swift-log}"
+  local proxy_version="${SWIFT_E2E_PROXY_VERSION:-1.6.3}"
+  mkdir -p "$proxy_dir/Sources/ProxyConsumer"
+  cat >"$proxy_dir/Package.swift" <<EOF
+// swift-tools-version:5.7
+import PackageDescription
+let package = Package(
+    name: "ProxyConsumer",
+    dependencies: [
+        .package(url: "https://github.com/$proxy_scope/$proxy_name.git", exact: "$proxy_version")
+    ],
+    targets: [
+        .executableTarget(
+            name: "ProxyConsumer",
+            dependencies: [.product(name: "Logging", package: "$proxy_name")]
+        )
+    ]
+)
+EOF
+  cat >"$proxy_dir/Sources/ProxyConsumer/main.swift" <<'EOF'
+import Logging
+var logger = Logger(label: "kkrepo.swift.client-e2e")
+logger.info("Swift proxy client E2E")
+EOF
+  swift_registry_set "$label-proxy-group" "$swift_bin" "$proxy_dir" "$home" "$group_url"
+  run_logged_in "swift-$label-proxy-resolve" "$proxy_dir" env \
+    HOME="$home" XDG_CONFIG_HOME="$home/.config" \
+    "$swift_bin" package resolve --replace-scm-with-registry
+  run_logged_in "swift-$label-proxy-build" "$proxy_dir" env \
+    HOME="$home" XDG_CONFIG_HOME="$home/.config" \
+    "$swift_bin" build --replace-scm-with-registry
+  cp "$proxy_dir/Package.resolved" "$ARTIFACT_DIR/swift-$label-proxy-Package.resolved"
+  assert_swift_registry_pin "$ARTIFACT_DIR/swift-$label-proxy-Package.resolved" \
+    "$proxy_scope" "$proxy_name" "$proxy_version" "Swift $label proxy"
+}
+
+test_swift_binary() {
+  local label="$1"
+  local swift_bin="$2"
+  local ordinal="$3"
+  local label_slug package_name module version dir package_dir consumer_dir home target_declaration
+  local hosted_url="$SWIFT_KKREPO_URL/repository/swift-hosted"
+  local group_url="$SWIFT_KKREPO_URL/repository/swift-group"
+  local hosted_access_url group_access_url
+  label_slug="$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-//;s/-$//')"
+  package_name="client-e2e-${STAMP}-${label_slug:-swift}"
+  module="KkRepoSwiftE2E${ordinal}"
+  version="1.0.$ordinal"
+  dir="$WORK_DIR/swift-$label_slug"
+  package_dir="$dir/package"
+  consumer_dir="$dir/consumer"
+  home="$dir/home"
+  mkdir -p "$package_dir/Sources/$module" "$consumer_dir/Sources/Consumer" "$home"
+  if is_windows_runner; then
+    log "Swift $label hosted publish skipped on Windows; running documented proxy resolve/build path"
+    test_swift_proxy_binary "$label" "$swift_bin" "$home" "$dir"
+    return 0
+  fi
+  if ! swift_supports_registry_publish "$swift_bin"; then
+    log "Swift $label has no package-registry publish command; running its supported proxy resolve/build path"
+    test_swift_proxy_binary "$label" "$swift_bin" "$home" "$dir"
+    return 0
+  fi
+
+  target_declaration=".target(name: \"$module\")"
+  if [[ "${SWIFT_E2E_LARGE_FIXTURE_BYTES:-0}" =~ ^[0-9]+$ ]] \
+      && [[ "${SWIFT_E2E_LARGE_FIXTURE_BYTES:-0}" -gt 0 ]]; then
+    target_declaration=".target(name: \"$module\", resources: [.copy(\"LargeFixture.bin\")])"
+    python3 - "$package_dir/Sources/$module/LargeFixture.bin" \
+        "$SWIFT_E2E_LARGE_FIXTURE_BYTES" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+remaining = int(sys.argv[2])
+counter = 0
+with path.open("wb") as stream:
+    while remaining:
+        block = hashlib.sha256(f"kkrepo-swift-e2e-{counter}".encode()).digest()
+        chunk = block[:remaining]
+        stream.write(chunk)
+        remaining -= len(chunk)
+        counter += 1
+PY
+  fi
+  cat >"$package_dir/Package.swift" <<EOF
+// swift-tools-version:5.7
+import PackageDescription
+let package = Package(
+    name: "$module",
+    products: [.library(name: "$module", targets: ["$module"])],
+    targets: [$target_declaration]
+)
+EOF
+  cat >"$package_dir/Sources/$module/$module.swift" <<EOF
+public enum $module {
+    public static let marker = "kkrepo Swift client E2E $label"
+}
+EOF
+  cat >"$package_dir/Package@swift-5.9.swift" <<EOF
+// swift-tools-version:5.9
+import PackageDescription
+let package = Package(
+    name: "$module",
+    products: [.library(name: "$module", targets: ["$module"])],
+    targets: [$target_declaration]
+)
+EOF
+  cat >"$package_dir/package-metadata.json" <<EOF
+{
+  "description": "kkrepo Swift client E2E $label",
+  "repositoryURLs": ["https://github.com/kkrepo-fixtures/$package_name.git"]
+}
+EOF
+
+  run_logged_in "swift-$label-version" "$package_dir" "$swift_bin" --version
+  hosted_access_url="$hosted_url"
+  if swift_supports_registry_login "$swift_bin" "$hosted_url"; then
+    swift_registry_set "$label-hosted" "$swift_bin" "$package_dir" "$home" "$hosted_url"
+    swift_registry_login "$label-hosted" "$swift_bin" "$package_dir" "$home" "$hosted_url"
+    local invalid_login_home="$dir/invalid-login-home"
+    mkdir -p "$invalid_login_home"
+    assert_swift_invalid_login "$label-hosted" "$swift_bin" "$package_dir" \
+      "$invalid_login_home" "$hosted_url"
+    swift_registry_token_login "$label-hosted" "$swift_bin" "$package_dir" \
+      "$home" "$hosted_url"
+  else
+    if swift_registry_login_is_required "$label"; then
+      log "Swift $label must execute package-registry login over HTTPS, but the command or HTTPS registry is unavailable"
+      return 2
+    fi
+    hosted_access_url="$(authenticated_registry_url "$hosted_url" "$SWIFT_KKREPO_URL")"
+    add_redaction_value "$hosted_access_url"
+    swift_registry_set "$label-hosted-embedded-auth" \
+      "$swift_bin" "$package_dir" "$home" "$hosted_access_url"
+    log "Swift $label registry login CLI skipped: it requires HTTPS and Swift 5.8+; embedded credentials are used"
+  fi
+  local -a publish_transport_args=()
+  if [[ "$hosted_access_url" == http://* ]]; then
+    publish_transport_args+=(--allow-insecure-http)
+  fi
+  run_logged_in "swift-$label-publish" "$package_dir" env \
+    HOME="$home" XDG_CONFIG_HOME="$home/.config" \
+    "$swift_bin" package-registry publish "kkrepo.$package_name" "$version" \
+    --url "$hosted_access_url/" --metadata-path "$package_dir/package-metadata.json" \
+    --scratch-directory "$dir/publish-scratch" "${publish_transport_args[@]}"
+
+  local duplicate_status=0
+  if run_logged_in "swift-$label-publish-duplicate" "$package_dir" env \
+      HOME="$home" XDG_CONFIG_HOME="$home/.config" \
+      "$swift_bin" package-registry publish "kkrepo.$package_name" "$version" \
+      --url "$hosted_access_url/" --metadata-path "$package_dir/package-metadata.json" \
+      --scratch-directory "$dir/duplicate-scratch" "${publish_transport_args[@]}"; then
+    duplicate_status=0
+  else
+    duplicate_status=$?
+  fi
+  if [[ "$duplicate_status" -eq 0 ]]; then
+    log "Swift $label duplicate publish unexpectedly succeeded"
+    return 1
+  fi
+  if ! grep -Eqi '409|conflict|already exists|already published' \
+      "$ARTIFACT_DIR/swift-$label-publish-duplicate.log"; then
+    log "Swift $label duplicate publish did not report immutable conflict"
+    return 1
+  fi
+
+  run_logged_output "swift-$label-release-list" "$ARTIFACT_DIR/swift-$label-releases.json" \
+    curl -m 30 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    -H 'Accept: application/vnd.swift.registry.v1+json' \
+    "$group_url/kkrepo/$package_name"
+  run_logged_output "swift-$label-release-metadata" "$ARTIFACT_DIR/swift-$label-metadata.json" \
+    curl -m 30 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    -H 'Accept: application/vnd.swift.registry.v1+json' \
+    "$group_url/kkrepo/$package_name/$version"
+  run_logged_output "swift-$label-manifest" "$ARTIFACT_DIR/swift-$label-Package.swift" \
+    curl -m 30 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    -H 'Accept: application/vnd.swift.registry.v1+swift' \
+    "$group_url/kkrepo/$package_name/$version/Package.swift"
+  run_logged_output "swift-$label-versioned-manifest" \
+    "$ARTIFACT_DIR/swift-$label-Package@swift-5.9.swift" \
+    curl -m 30 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    -H 'Accept: application/vnd.swift.registry.v1+swift' \
+    "$group_url/kkrepo/$package_name/$version/Package.swift?swift-version=5.9"
+  run_logged_output "swift-$label-archive" "$ARTIFACT_DIR/swift-$label-source.zip" \
+    curl -m 60 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    -H 'Accept: application/vnd.swift.registry.v1+zip' \
+    "$group_url/kkrepo/$package_name/$version.zip"
+  python3 - "$ARTIFACT_DIR/swift-$label-releases.json" \
+      "$ARTIFACT_DIR/swift-$label-metadata.json" \
+      "$ARTIFACT_DIR/swift-$label-source.zip" "$version" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+releases = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+metadata = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+archive = pathlib.Path(sys.argv[3]).read_bytes()
+version = sys.argv[4]
+assert version in releases["releases"]
+resource = next(item for item in metadata["resources"] if item["name"] == "source-archive")
+assert resource["type"] == "application/zip"
+assert resource["checksum"] == hashlib.sha256(archive).hexdigest()
+PY
+  cmp "$package_dir/Package.swift" "$ARTIFACT_DIR/swift-$label-Package.swift"
+  cmp "$package_dir/Package@swift-5.9.swift" \
+    "$ARTIFACT_DIR/swift-$label-Package@swift-5.9.swift"
+
+  cat >"$consumer_dir/Package.swift" <<EOF
+// swift-tools-version:5.7
+import PackageDescription
+let package = Package(
+    name: "Consumer",
+    dependencies: [.package(id: "kkrepo.$package_name", exact: "$version")],
+    targets: [
+        .executableTarget(
+            name: "Consumer",
+            dependencies: [.product(name: "$module", package: "$package_name")]
+        )
+    ]
+)
+EOF
+  cat >"$consumer_dir/Sources/Consumer/main.swift" <<EOF
+import $module
+print($module.marker)
+EOF
+  group_access_url="$group_url"
+  if swift_supports_registry_login "$swift_bin" "$group_url"; then
+    swift_registry_set "$label-group" "$swift_bin" "$consumer_dir" "$home" "$group_url"
+    swift_registry_login "$label-group" "$swift_bin" "$consumer_dir" "$home" "$group_url"
+  else
+    group_access_url="$(authenticated_registry_url "$group_url" "$SWIFT_KKREPO_URL")"
+    add_redaction_value "$group_access_url"
+    swift_registry_set "$label-group-embedded-auth" \
+      "$swift_bin" "$consumer_dir" "$home" "$group_access_url"
+  fi
+  run_logged_in "swift-$label-resolve" "$consumer_dir" env \
+    HOME="$home" XDG_CONFIG_HOME="$home/.config" \
+    "$swift_bin" package resolve
+  run_logged_in "swift-$label-build" "$consumer_dir" env \
+    HOME="$home" XDG_CONFIG_HOME="$home/.config" \
+    "$swift_bin" build
+  cp "$consumer_dir/Package.resolved" "$ARTIFACT_DIR/swift-$label-Package.resolved"
+  assert_swift_registry_pin "$ARTIFACT_DIR/swift-$label-Package.resolved" \
+    kkrepo "$package_name" "$version" "Swift $label hosted"
+  local first_lock_hash
+  first_lock_hash="$(file_sha256 "$consumer_dir/Package.resolved")"
+  rm -rf "$consumer_dir/.build"
+  run_logged_in "swift-$label-resolve-replay" "$consumer_dir" env \
+    HOME="$home" XDG_CONFIG_HOME="$home/.config" \
+    "$swift_bin" package resolve
+  [[ "$first_lock_hash" == "$(file_sha256 "$consumer_dir/Package.resolved")" ]]
+  run_logged_in "swift-$label-build-replay" "$consumer_dir" env \
+    HOME="$home" XDG_CONFIG_HOME="$home/.config" \
+    "$swift_bin" build
+
+  if [[ -n "${SWIFT_KKREPO_SECONDARY_BASE_URL:-}" ]]; then
+    local secondary_consumer_dir="$dir/secondary-consumer"
+    local secondary_home="$dir/secondary-home"
+    local secondary_group_url="${SWIFT_KKREPO_SECONDARY_BASE_URL%/}/repository/swift-group"
+    mkdir -p "$secondary_consumer_dir/Sources" "$secondary_home"
+    cp "$consumer_dir/Package.swift" "$secondary_consumer_dir/Package.swift"
+    cp -R "$consumer_dir/Sources/Consumer" "$secondary_consumer_dir/Sources/Consumer"
+    swift_registry_set "$label-secondary-group" "$swift_bin" \
+      "$secondary_consumer_dir" "$secondary_home" "$secondary_group_url"
+    run_logged_in "swift-$label-secondary-resolve" "$secondary_consumer_dir" env \
+      HOME="$secondary_home" XDG_CONFIG_HOME="$secondary_home/.config" \
+      "$swift_bin" package resolve
+    run_logged_in "swift-$label-secondary-build" "$secondary_consumer_dir" env \
+      HOME="$secondary_home" XDG_CONFIG_HOME="$secondary_home/.config" \
+      "$swift_bin" build
+    cp "$secondary_consumer_dir/Package.resolved" \
+      "$ARTIFACT_DIR/swift-$label-secondary-Package.resolved"
+    assert_swift_registry_pin "$ARTIFACT_DIR/swift-$label-secondary-Package.resolved" \
+      kkrepo "$package_name" "$version" "Swift $label secondary hosted"
+  fi
+
+  if [[ "$(uname -s)" == "Darwin" && -z "${SWIFT_XCODE_E2E_GENERATED_PACKAGE:-}" ]]; then
+    export SWIFT_XCODE_E2E_GENERATED_PACKAGE="$consumer_dir"
+    export SWIFT_XCODE_E2E_GENERATED_SCHEME=Consumer
+    export SWIFT_XCODE_E2E_GENERATED_HOME="$home"
+    export SWIFT_XCODE_E2E_GENERATED_SCOPE=kkrepo
+    export SWIFT_XCODE_E2E_GENERATED_NAME="$package_name"
+    export SWIFT_XCODE_E2E_GENERATED_VERSION="$version"
+  fi
+
+  test_swift_proxy_binary "$label" "$swift_bin" "$home" "$dir"
+}
+
+test_swift_xcode() {
+  local project="${SWIFT_XCODE_E2E_PROJECT:-}"
+  local package="${SWIFT_XCODE_E2E_PACKAGE:-${SWIFT_XCODE_E2E_GENERATED_PACKAGE:-}}"
+  if [[ "$(uname -s)" != "Darwin" || ! -x "$(command -v xcodebuild 2>/dev/null || true)" ]]; then
+    if [[ "${SWIFT_E2E_REQUIRE_XCODE:-false}" == "true" ]]; then
+      log "Xcode Swift registry flow is required but xcodebuild is unavailable"
+      return 2
+    fi
+    log "Xcode Swift registry flow skipped: xcodebuild is only available on macOS runners"
+    return 0
+  fi
+  if [[ -z "$project" && -z "$package" ]]; then
+    if [[ "${SWIFT_E2E_REQUIRE_XCODE:-false}" == "true" ]]; then
+      log "Xcode Swift registry flow is required but no generated package or project is available"
+      return 2
+    fi
+    log "Xcode Swift registry flow skipped: no registry fixture package or project is available"
+    return 0
+  fi
+
+  if [[ -n "$project" ]]; then
+    local -a project_command=(xcodebuild -resolvePackageDependencies -project "$project")
+    if [[ -n "${SWIFT_XCODE_E2E_SCHEME:-}" ]]; then
+      project_command+=( -scheme "$SWIFT_XCODE_E2E_SCHEME" )
+    fi
+    run_logged swift-xcode-resolve "${project_command[@]}"
+    return 0
+  fi
+
+  local scheme="${SWIFT_XCODE_E2E_SCHEME:-${SWIFT_XCODE_E2E_GENERATED_SCHEME:-Consumer}}"
+  local xcode_home="${SWIFT_XCODE_E2E_HOME:-${SWIFT_XCODE_E2E_GENERATED_HOME:-$HOME}}"
+  local xcode_source_packages="$WORK_DIR/xcode-source-packages"
+  local xcode_derived_data="$WORK_DIR/xcode-derived-data"
+  local xcode_config="$package/.swiftpm/configuration/registries.json"
+  mkdir -p "$(dirname "$xcode_config")" "$xcode_source_packages" "$xcode_derived_data"
+  run_logged swift-xcode-registry-config python3 - "$xcode_config" \
+      "$SWIFT_KKREPO_URL/repository/swift-group/" <<'PY'
+import json
+import pathlib
+import sys
+
+pathlib.Path(sys.argv[1]).write_text(json.dumps({
+    "registries": {"[default]": {"url": sys.argv[2]}},
+    "version": 1,
+}, separators=(",", ":")), encoding="utf-8")
+PY
+  rm -rf "$package/.build"
+  rm -f "$package/Package.resolved"
+  run_logged_in swift-xcode-resolve "$package" \
+    env HOME="$xcode_home" XDG_CONFIG_HOME="$xcode_home/.config" \
+    xcodebuild -resolvePackageDependencies \
+    -scheme "$scheme" \
+    -clonedSourcePackagesDirPath "$xcode_source_packages"
+  run_logged_in swift-xcode-build "$package" \
+    env HOME="$xcode_home" XDG_CONFIG_HOME="$xcode_home/.config" \
+    xcodebuild \
+    -scheme "$scheme" \
+    -destination 'platform=macOS' \
+    -derivedDataPath "$xcode_derived_data" \
+    -clonedSourcePackagesDirPath "$xcode_source_packages" \
+    CODE_SIGNING_ALLOWED=NO \
+    build
+
+  local resolved_file
+  resolved_file="$(find "$package" -name Package.resolved -type f -print | head -n 1)"
+  if [[ -z "$resolved_file" ]]; then
+    log "Xcode did not produce Package.resolved for the registry fixture"
+    return 1
+  fi
+  cp "$resolved_file" "$ARTIFACT_DIR/swift-xcode-Package.resolved"
+  if [[ -n "${SWIFT_XCODE_E2E_GENERATED_NAME:-}" ]]; then
+    assert_swift_registry_pin "$ARTIFACT_DIR/swift-xcode-Package.resolved" \
+      "${SWIFT_XCODE_E2E_GENERATED_SCOPE:-kkrepo}" \
+      "$SWIFT_XCODE_E2E_GENERATED_NAME" \
+      "$SWIFT_XCODE_E2E_GENERATED_VERSION" \
+      "Xcode hosted"
+  else
+    grep -Eqi '"kind"[[:space:]]*:[[:space:]]*"registry"' \
+      "$ARTIFACT_DIR/swift-xcode-Package.resolved"
+  fi
+}
+
+test_swift() {
+  local configured_bins="${SWIFT_E2E_BINS:-}"
+  local -a entries=()
+  local entry label swift_bin actual_version
+  if [[ -n "$configured_bins" ]]; then
+    IFS=',' read -r -a entries <<<"$configured_bins"
+  elif command -v swift >/dev/null 2>&1; then
+    entries=("current=$(command -v swift)")
+  else
+    log "Swift client matrix skipped: install Swift or set SWIFT_E2E_BINS"
+    return 0
+  fi
+
+  : >"$ARTIFACT_DIR/swift-client-matrix.tsv"
+  local ordinal=0
+  for entry in "${entries[@]}"; do
+    entry="${entry#${entry%%[![:space:]]*}}"
+    entry="${entry%${entry##*[![:space:]]}}"
+    [[ -z "$entry" ]] && continue
+    if [[ "$entry" != *=* ]]; then
+      log "invalid SWIFT_E2E_BINS entry '$entry'; expected label=/path/to/swift"
+      return 2
+    fi
+    label="${entry%%=*}"
+    swift_bin="${entry#*=}"
+    if [[ ! -x "$swift_bin" ]]; then
+      log "Swift $label binary is not executable: $swift_bin"
+      return 2
+    fi
+    actual_version="$(swift_version_line "$swift_bin")"
+    printf '%s\t%s\t%s\n' "$label" "$swift_bin" "$actual_version" \
+      >>"$ARTIFACT_DIR/swift-client-matrix.tsv"
+    ordinal=$((ordinal + 1))
+    test_swift_binary "$label" "$swift_bin" "$ordinal"
+  done
+  [[ "$ordinal" -gt 0 ]]
+
+  if [[ "${SWIFT_E2E_REQUIRE_WINDOWS:-false}" == "true" ]] && ! is_windows_runner; then
+    log "strict Windows Swift lane requires a native Windows runner"
+    return 2
+  fi
+
+  if [[ "${SWIFT_E2E_REQUIRE_5_7_5_9_6:-false}" == "true" ]]; then
+    python3 - "$ARTIFACT_DIR/swift-client-matrix.tsv" <<'PY'
+import re
+import sys
+
+rows = []
+for line in open(sys.argv[1], encoding="utf-8"):
+    label, binary, reported = line.rstrip("\n").split("\t", 2)
+    match = re.search(r"Swift version (\d+)\.(\d+)", reported)
+    if not match:
+        raise SystemExit(f"cannot parse Swift version for {label}: {reported}")
+    rows.append((label, int(match.group(1)), int(match.group(2))))
+if not any(label == "5.7" and (major, minor) == (5, 7) for label, major, minor in rows):
+    raise SystemExit("strict Swift matrix requires a real 5.7 toolchain labeled 5.7")
+if not any(label in {"5.9", "5.9+"} and major == 5 and minor >= 9
+           for label, major, minor in rows):
+    raise SystemExit("strict Swift matrix requires a real 5.9+ toolchain labeled 5.9 or 5.9+")
+if not any(label in {"6", "6.x"} and major == 6 for label, major, minor in rows):
+    raise SystemExit("strict Swift matrix requires a real Swift 6 toolchain labeled 6 or 6.x")
+PY
+  fi
+  test_swift_xcode
+}
+
+run_terraform_fixture() {
   run_logged_in terraform-module-archive "$module_dir" zip -q -r "$module_zip" .
 
   cat >"$provider_dir/terraform-provider-fixture_v$fixture_version" <<'EOF'
@@ -1157,7 +1820,7 @@ run_selected_tests() {
   local test
 
   if [[ -z "$selection" || "$selection" == "all" ]]; then
-    tests=(maven npm pypi go helm cargo pub composer nuget rubygems yum terraform docker-oci)
+    tests=(maven npm pypi go helm cargo pub composer nuget rubygems yum terraform swift docker-oci)
   else
     IFS=',' read -r -a tests <<<"$selection"
   fi
@@ -1200,6 +1863,9 @@ run_selected_tests() {
         ;;
       terraform)
         test_terraform
+        ;;
+      swift|swiftpm)
+        test_swift
         ;;
       docker|docker-oci|oci)
         test_docker_oci

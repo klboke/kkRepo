@@ -189,6 +189,7 @@ class NexusMigrationControllerTest {
         null,
         null,
         null,
+        null,
         null);
     MockHttpServletRequest request = new MockHttpServletRequest(
         "POST",
@@ -320,6 +321,7 @@ class NexusMigrationControllerTest {
         null,
         null,
         null,
+        null,
         null);
   }
 
@@ -435,6 +437,7 @@ class NexusMigrationControllerTest {
           apiKeyAuthCache,
           basicAuthCache,
           dockerConnectorRuntime,
+          null,
           null);
       this.migrationService = migrationService;
     }

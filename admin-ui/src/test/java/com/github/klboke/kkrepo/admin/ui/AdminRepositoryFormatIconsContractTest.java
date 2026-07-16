@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test;
 
 class AdminRepositoryFormatIconsContractTest {
   private static final List<String> FORMATS = List.of(
-      "maven2", "npm", "pypi", "cargo", "pub", "go",
+      "maven2", "npm", "pypi", "cargo", "pub", "composer", "terraform", "swift", "go",
       "helm", "docker", "nuget", "rubygems", "yum", "raw");
 
   @Test

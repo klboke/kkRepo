@@ -446,6 +446,68 @@ class RepositoryServiceTest {
   }
 
   @Test
+  void createSwiftProxyDefaultsAndNormalizesRemoteToGitHubRoot() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "swift-proxy",
+        "swift-proxy",
+        true,
+        "default",
+        true,
+        null,
+        new ProxySettings("https://GITHUB.com:443", 60, 30, true),
+        null,
+        null,
+        null,
+        null));
+
+    assertEquals("https://github.com/", created.proxy().remoteUrl());
+    assertEquals("https://github.com/", repositories.repository.proxyRemoteUrl());
+  }
+
+  @Test
+  void createSwiftProxyRejectsRepositorySpecificOrNonGithubRemote() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryValidationException repositoryPath = assertThrows(
+        RepositoryValidationException.class,
+        () -> service.create(new CreateCommand(
+            "swift-proxy",
+            "swift-proxy",
+            true,
+            "default",
+            true,
+            null,
+            new ProxySettings("https://github.com/apple/swift-nio", 60, 30, true),
+            null,
+            null,
+            null,
+            null)));
+    RepositoryValidationException wrongHost = assertThrows(
+        RepositoryValidationException.class,
+        () -> service.create(new CreateCommand(
+            "swift-proxy-2",
+            "swift-proxy",
+            true,
+            "default",
+            true,
+            null,
+            new ProxySettings("https://gitlab.com/", 60, 30, true),
+            null,
+            null,
+            null,
+            null)));
+
+    assertEquals(
+        "Swift proxy.remoteUrl must be the GitHub base URL https://github.com/",
+        repositoryPath.getMessage());
+    assertEquals(repositoryPath.getMessage(), wrongHost.getMessage());
+  }
+
+  @Test
   void replaceMembersAllowsNestedPubGroupMembers() {
     StubRepositoryDao repositories = new StubRepositoryDao(
         pubGroupRepository(10L, "pub-root"),
@@ -472,6 +534,36 @@ class RepositoryServiceTest {
 
     assertEquals(List.of("composer-hosted", "composer-nested"), updated.group().memberNames());
     assertEquals(List.of(31L, 32L), repositories.membersByGroupId.get(30L));
+  }
+
+  @Test
+  void replaceMembersAllowsOrderedNestedSwiftGroups() {
+    StubRepositoryDao repositories = new StubRepositoryDao(
+        swiftGroupRepository(40L, "swift-root"),
+        swiftHostedRepository(41L, "swift-hosted"),
+        swiftGroupRepository(42L, "swift-nested"));
+    RepositoryService service = service(repositories);
+
+    RepositoryView updated = service.replaceMembers(
+        "swift-root", List.of("swift-nested", "swift-hosted"));
+
+    assertEquals(List.of("swift-nested", "swift-hosted"), updated.group().memberNames());
+    assertEquals(List.of(42L, 41L), repositories.membersByGroupId.get(40L));
+  }
+
+  @Test
+  void replaceMembersRejectsSwiftGroupCycles() {
+    StubRepositoryDao repositories = new StubRepositoryDao(
+        swiftGroupRepository(40L, "swift-root"),
+        swiftGroupRepository(42L, "swift-nested"));
+    repositories.replaceMembers(42L, List.of(40L));
+    RepositoryService service = service(repositories);
+
+    RepositoryValidationException thrown = assertThrows(
+        RepositoryValidationException.class,
+        () -> service.replaceMembers("swift-root", List.of("swift-nested")));
+
+    assertTrue(thrown.getMessage().contains("cyclic-groups=[swift-nested]"));
   }
 
   @Test
@@ -645,6 +737,47 @@ class RepositoryServiceTest {
         null,
         null,
         "ALLOW",
+        true,
+        attributes);
+  }
+
+  private static RepositoryRecord swiftHostedRepository(long id, String name) {
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", "swift-hosted");
+    return new RepositoryRecord(
+        id,
+        name,
+        RepositoryFormat.SWIFT,
+        RepositoryType.HOSTED,
+        "swift-hosted",
+        true,
+        1L,
+        null,
+        null,
+        null,
+        null,
+        "ALLOW_ONCE",
+        true,
+        attributes);
+  }
+
+  private static RepositoryRecord swiftGroupRepository(long id, String name) {
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", "swift-group");
+    attributes.put("group", Map.of());
+    return new RepositoryRecord(
+        id,
+        name,
+        RepositoryFormat.SWIFT,
+        RepositoryType.GROUP,
+        "swift-group",
+        true,
+        1L,
+        null,
+        null,
+        null,
+        null,
+        null,
         true,
         attributes);
   }

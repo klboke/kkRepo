@@ -21,6 +21,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.metrics.KkRepoMetrics;
 import com.github.klboke.kkrepo.server.pypi.PypiHostedService;
 import com.github.klboke.kkrepo.server.rubygems.RubygemsService;
+import com.github.klboke.kkrepo.server.swift.SwiftComponentService;
 import com.github.klboke.kkrepo.server.terraform.TerraformComponentService;
 import com.github.klboke.kkrepo.server.yum.YumService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -170,6 +171,37 @@ class RepositoryIndexRebuildWorkerTest {
     verify(terraform).rebuild(proxy);
   }
 
+  @Test
+  void dispatchesSwiftComponentRebuildForHostedAndProxyRepositories() {
+    RepositoryIndexRebuildDao dao = mock(RepositoryIndexRebuildDao.class);
+    RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
+    SwiftComponentService swift = mock(SwiftComponentService.class);
+    RepositoryRuntime hosted = runtime(
+        7L, RepositoryFormat.SWIFT, RepositoryType.HOSTED, 7L);
+    RepositoryRuntime proxy = runtime(
+        8L, RepositoryFormat.SWIFT, RepositoryType.PROXY, 7L);
+    when(dao.claim(8)).thenReturn(List.of(
+        claim(hosted.id(), RepositoryIndexRebuildDao.SWIFT_COMPONENTS, null, Instant.now()),
+        claim(proxy.id(), RepositoryIndexRebuildDao.SWIFT_COMPONENTS, null, Instant.now())));
+    when(runtimes.resolveById(hosted.id())).thenReturn(Optional.of(hosted));
+    when(runtimes.resolveById(proxy.id())).thenReturn(Optional.of(proxy));
+
+    worker(
+        dao,
+        runtimes,
+        mock(BlobStorageRegistry.class),
+        mock(HelmHostedService.class),
+        mock(PypiHostedService.class),
+        mock(YumService.class),
+        mock(RubygemsService.class),
+        mock(TerraformComponentService.class),
+        swift,
+        true).drain();
+
+    verify(swift).rebuild(hosted);
+    verify(swift).rebuild(proxy);
+  }
+
   private static RepositoryIndexRebuildWorker worker(
       RepositoryIndexRebuildDao dao,
       RepositoryRuntimeRegistry runtimes,
@@ -181,7 +213,7 @@ class RepositoryIndexRebuildWorkerTest {
       boolean enabled) {
     return worker(
         dao, runtimes, storages, helm, pypi, yum, rubygems,
-        mock(TerraformComponentService.class), enabled);
+        mock(TerraformComponentService.class), mock(SwiftComponentService.class), enabled);
   }
 
   private static RepositoryIndexRebuildWorker worker(
@@ -194,6 +226,22 @@ class RepositoryIndexRebuildWorkerTest {
       RubygemsService rubygems,
       TerraformComponentService terraform,
       boolean enabled) {
+    return worker(
+        dao, runtimes, storages, helm, pypi, yum, rubygems, terraform,
+        mock(SwiftComponentService.class), enabled);
+  }
+
+  private static RepositoryIndexRebuildWorker worker(
+      RepositoryIndexRebuildDao dao,
+      RepositoryRuntimeRegistry runtimes,
+      BlobStorageRegistry storages,
+      HelmHostedService helm,
+      PypiHostedService pypi,
+      YumService yum,
+      RubygemsService rubygems,
+      TerraformComponentService terraform,
+      SwiftComponentService swift,
+      boolean enabled) {
     return new RepositoryIndexRebuildWorker(
         dao,
         runtimes,
@@ -203,6 +251,7 @@ class RepositoryIndexRebuildWorkerTest {
         yum,
         rubygems,
         terraform,
+        swift,
         new RecordingTransactionManager(),
         8,
         enabled,

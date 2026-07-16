@@ -72,6 +72,29 @@ class RepositoryDataMigrationPathsTest {
   }
 
   @Test
+  void swiftDiscoveryKeepsOnlyValidSourceArchives() {
+    assertTrue(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.SWIFT, "Acme/Demo/1.2.3.zip"));
+    assertTrue(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.SWIFT, "/Acme/Demo/2.0.0-beta.1+build.7.zip"));
+
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.SWIFT, "Acme/Demo/1.2.3"));
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.SWIFT, "Acme/Demo/1.2.3/Package.swift"));
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.SWIFT, "Acme/Demo/1.2.zip"));
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.SWIFT, "Acme/Demo/1.2.3.ZIP"));
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.SWIFT, "Acme/../1.2.3.zip"));
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.SWIFT, "Acme/Demo/1.2.3.zip/"));
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.SWIFT, null));
+  }
+
+  @Test
   void checksumGenerationRunsForMavenNonChecksumContent() {
     assertTrue(RepositoryDataMigrationPaths.shouldGenerateMavenChecksumSiblings(
         MAVEN_PATH_PARSER.parsePath("com/acme/app/1.0/app-1.0.jar")));

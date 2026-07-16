@@ -16,7 +16,7 @@ export KKREPO_COMPAT_PASSWORD="${KKREPO_COMPAT_PASSWORD:-12345678}"
 export NEXUS_COMPAT_READ_REPOSITORY="${NEXUS_COMPAT_READ_REPOSITORY:-maven-public}"
 export KKREPO_COMPAT_READ_REPOSITORY="${KKREPO_COMPAT_READ_REPOSITORY:-maven-public}"
 
-NEXUS_COMPAT_TESTS="KkRepoConsoleBlackBoxCompatibilityTest,MavenRepositoryBlackBoxCompatibilityTest#proxyReadRoundTripMatchesNexusWhenConfigured+hostedReleaseDeployRoundTripMatchesNexusWhenConfigured+hostedPlainPutDoesNotGenerateSidecarsOrMetadataLikeNexusWhenConfigured+hostedSnapshotDeployRoundTripMatchesNexusWhenConfigured,NpmRepositoryBlackBoxCompatibilityTest,PypiRepositoryBlackBoxCompatibilityTest,GoProxyBlackBoxCompatibilityTest#proxyModuleEndpointsMatchNexusWhenConfigured,HelmRepositoryBlackBoxCompatibilityTest#hostedRoundTripMatchesNexusWhenConfigured,CargoRepositoryBlackBoxCompatibilityTest,PubRepositoryBlackBoxCompatibilityTest,ComposerRepositoryBlackBoxCompatibilityTest,NugetRubygemsYumRepositoryBlackBoxCompatibilityTest#nugetHostedServiceIndexAndProxyReadsMatchNexusWhenConfigured+nugetHostedMultipartPushMatchesNexusWhenWriteEnabled+rubygemsHostedPushAndGroupReadMatchNexusWhenConfigured+yumHostedRootAndMissingPackageResponsesMatchNexusWhenConfigured+yumHostedRpmPutMatchesNexusWhenWriteEnabled,RawRepositoryBlackBoxCompatibilityTest,TerraformRepositoryBlackBoxCompatibilityTest,ComponentUploadBlackBoxCompatibilityTest#uploadSpecsExposeNexusCompatibleSupportedFormatsWhenConfigured,SecurityAdminBlackBoxCompatibilityTest#privilegeFormRepositoryFieldsMatchNexusStoreContracts+repositoryReferenceStoreIncludesAllRepositorySelectors+roleAndPrivilegeReadContractsIncludeCoreBuiltIns+nonAdminRepositoryRoleCanBrowseButCannotUseSecurityAdministration+nonAdminContentSelectorRoleAllowsMatchingPathAndAccountsForDefaultReadGrant"
+NEXUS_COMPAT_TESTS="KkRepoConsoleBlackBoxCompatibilityTest,MavenRepositoryBlackBoxCompatibilityTest#proxyReadRoundTripMatchesNexusWhenConfigured+hostedReleaseDeployRoundTripMatchesNexusWhenConfigured+hostedPlainPutDoesNotGenerateSidecarsOrMetadataLikeNexusWhenConfigured+hostedSnapshotDeployRoundTripMatchesNexusWhenConfigured,NpmRepositoryBlackBoxCompatibilityTest,PypiRepositoryBlackBoxCompatibilityTest,GoProxyBlackBoxCompatibilityTest#proxyModuleEndpointsMatchNexusWhenConfigured,HelmRepositoryBlackBoxCompatibilityTest#hostedRoundTripMatchesNexusWhenConfigured,CargoRepositoryBlackBoxCompatibilityTest,PubRepositoryBlackBoxCompatibilityTest,ComposerRepositoryBlackBoxCompatibilityTest,NugetRubygemsYumRepositoryBlackBoxCompatibilityTest#nugetHostedServiceIndexAndProxyReadsMatchNexusWhenConfigured+nugetHostedMultipartPushMatchesNexusWhenWriteEnabled+rubygemsHostedPushAndGroupReadMatchNexusWhenConfigured+yumHostedRootAndMissingPackageResponsesMatchNexusWhenConfigured+yumHostedRpmPutMatchesNexusWhenWriteEnabled,RawRepositoryBlackBoxCompatibilityTest,TerraformRepositoryBlackBoxCompatibilityTest,SwiftRepositoryBlackBoxCompatibilityTest,ComponentUploadBlackBoxCompatibilityTest#uploadSpecsExposeNexusCompatibleSupportedFormatsWhenConfigured,SecurityAdminBlackBoxCompatibilityTest#privilegeFormRepositoryFieldsMatchNexusStoreContracts+repositoryReferenceStoreIncludesAllRepositorySelectors+roleAndPrivilegeReadContractsIncludeCoreBuiltIns+nonAdminRepositoryRoleCanBrowseButCannotUseSecurityAdministration+nonAdminContentSelectorRoleAllowsMatchingPathAndAccountsForDefaultReadGrant"
 
 COMMON_ARGS=(
   -B
@@ -49,6 +49,11 @@ case "$SUITE" in
     export CARGO_COMPAT_ENABLED=true
     export PUB_COMPAT_ENABLED=true
     export COMPOSER_COMPAT_ENABLED=true
+    export SWIFT_COMPAT_ENABLED=true
+    export SWIFT_COMPAT_PROXY_ENABLED="${SWIFT_COMPAT_PROXY_ENABLED:-true}"
+    if [[ -n "${SWIFT_COMPAT_PROXY_TAG_CASES:-}" ]]; then
+      export SWIFT_COMPAT_REQUIRE_PROXY_TAG_CASES=true
+    fi
     export COMPAT_SECURITY_ENABLED="${COMPAT_SECURITY_ENABLED:-true}"
     export GO_NEXUS_COMPAT_BASE_URL="${GO_NEXUS_COMPAT_BASE_URL:-$NEXUS_COMPAT_BASE_URL}"
     export GO_KKREPO_COMPAT_BASE_URL="${GO_KKREPO_COMPAT_BASE_URL:-$KKREPO_COMPAT_BASE_URL}"
@@ -60,13 +65,25 @@ case "$SUITE" in
     export PUB_COMPAT_ENABLED=true
     scripts/ci/run-client-e2e.sh
     ;;
+  swift)
+    export SWIFT_COMPAT_ENABLED=true
+    export SWIFT_COMPAT_PROXY_ENABLED="${SWIFT_COMPAT_PROXY_ENABLED:-true}"
+    run_tests "SwiftRepositoryBlackBoxCompatibilityTest"
+    ;;
   full)
     export CARGO_COMPAT_ENABLED=true
+    export PUB_COMPAT_ENABLED=true
+    export COMPOSER_COMPAT_ENABLED=true
+    export SWIFT_COMPAT_ENABLED=true
+    export SWIFT_COMPAT_PROXY_ENABLED="${SWIFT_COMPAT_PROXY_ENABLED:-true}"
+    if [[ -n "${SWIFT_COMPAT_PROXY_TAG_CASES:-}" ]]; then
+      export SWIFT_COMPAT_REQUIRE_PROXY_TAG_CASES=true
+    fi
     mvn "${COMMON_ARGS[@]}" test
     ;;
   *)
     echo "Unknown live compatibility suite: $SUITE" >&2
-    echo "Available suites: smoke, write-smoke, extended, nexus, client-e2e, full" >&2
+    echo "Available suites: smoke, write-smoke, extended, nexus, client-e2e, swift, full" >&2
     exit 2
     ;;
 esac

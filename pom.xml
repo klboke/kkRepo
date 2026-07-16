@@ -24,6 +24,7 @@
     <module>protocol-pub</module>
     <module>protocol-composer</module>
     <module>protocol-terraform</module>
+    <module>protocol-swift</module>
     <module>protocol-go</module>
     <module>protocol-helm</module>
     <module>protocol-docker</module>
@@ -195,6 +196,11 @@
       <dependency>
         <groupId>com.github.klboke</groupId>
         <artifactId>kkrepo-protocol-terraform</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.github.klboke</groupId>
+        <artifactId>kkrepo-protocol-swift</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>

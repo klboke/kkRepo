@@ -16,6 +16,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
@@ -79,6 +80,24 @@ class BrowseAssetDetailServiceTest {
 
     ResponseStatusException error = assertThrows(ResponseStatusException.class,
         () -> service.detail(repository, ".terraform/routes/token.json", null));
+
+    assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode());
+    assertEquals(List.of(), assets.pathLookups);
+  }
+
+  @Test
+  void swiftInternalSignatureDetailIsNotExposedAsDownloadableAsset() {
+    RepositoryRecord repository = repository(
+        1L, "swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    StubAssetDao assets = new StubAssetDao(Map.of(), Map.of());
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(),
+        assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    ResponseStatusException error = assertThrows(ResponseStatusException.class,
+        () -> service.detail(repository, ".swift/signatures/acme/library/1.2.3/source.cms", null));
 
     assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode());
     assertEquals(List.of(), assets.pathLookups);
@@ -292,6 +311,85 @@ class BrowseAssetDetailServiceTest {
     assertEquals("/repository/terraform-hosted/" + versionsPath, versionsDetail.downloadUrl());
     assertTrue((Boolean) versionsDetail.content().get("generated"));
     assertTrue((Boolean) versionsDetail.provenance().get("dynamic"));
+  }
+
+  @Test
+  void swiftArchiveDetailExposesReleaseIdentityChecksumSigningAndRepositoryUrls() {
+    RepositoryRecord repository = repository(
+        1L, "swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    String path = "Acme/Library/1.2.3.zip";
+    AssetRecord archive = new AssetRecord(
+        10L,
+        repository.id(),
+        20L,
+        100L,
+        RepositoryFormat.SWIFT,
+        path,
+        PersistenceHashes.pathHash(path),
+        "1.2.3.zip",
+        "swift-source-archive",
+        "application/zip",
+        1024L,
+        null,
+        Instant.parse("2026-07-16T00:00:00Z"),
+        Map.of("swiftKind", "source-archive"));
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(repository.id(), path), archive),
+        Map.of(100L, blob(100L, 1024L)));
+    SwiftRegistryDao swift = mock(SwiftRegistryDao.class);
+    SwiftRegistryDao.Release release = new SwiftRegistryDao.Release(
+        50L,
+        repository.id(),
+        20L,
+        "acme",
+        "Acme",
+        "library",
+        "Library",
+        "1.2.3",
+        Instant.parse("2026-07-16T00:00:00Z"),
+        "{}",
+        "a".repeat(64),
+        archive.id(),
+        "cms-1.0.0",
+        11L,
+        null,
+        "HOSTED",
+        7L,
+        SwiftRegistryDao.RELEASE_READY,
+        Instant.parse("2026-07-16T00:00:00Z"),
+        Instant.parse("2026-07-16T00:00:00Z"));
+    when(swift.findRelease(repository.id(), "acme", "library", "1.2.3"))
+        .thenReturn(Optional.of(release));
+    when(swift.listManifests(release.id())).thenReturn(List.of(
+        new SwiftRegistryDao.Manifest(release.id(), "Package.swift", "", 12L, "b".repeat(64)),
+        new SwiftRegistryDao.Manifest(
+            release.id(), "Package@swift-5.9.swift", "5.9", 13L, "c".repeat(64))));
+    when(swift.listRepositoryUrls(release.id())).thenReturn(List.of(
+        new SwiftRegistryDao.RepositoryUrl(
+            1L, release.id(), repository.id(), "acme", "library",
+            "https://github.com/acme/library", "https://github.com/Acme/Library")));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(),
+        assets,
+        null,
+        null,
+        swift,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    BrowseAssetDetailService.BrowseAssetDetail detail = service.detail(repository, path, null);
+
+    assertEquals("Acme", detail.swift().get("scope"));
+    assertEquals("Library", detail.swift().get("name"));
+    assertEquals("1.2.3", detail.swift().get("version"));
+    assertEquals("source-archive", detail.swift().get("asset_kind"));
+    assertEquals("a".repeat(64), detail.swift().get("archive_sha256"));
+    assertEquals("HOSTED", detail.swift().get("source_kind"));
+    assertEquals("signed", detail.swift().get("signature_status"));
+    assertEquals("cms-1.0.0", detail.swift().get("signature_format"));
+    assertEquals(List.of("5.9"), detail.swift().get("swift_tools_versions"));
+    assertEquals(
+        List.of("https://github.com/Acme/Library"), detail.swift().get("repository_urls"));
   }
 
   @Test

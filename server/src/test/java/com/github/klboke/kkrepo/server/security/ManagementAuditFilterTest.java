@@ -9,8 +9,11 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
+import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao.AuditLogRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.Test;
@@ -69,6 +72,40 @@ class ManagementAuditFilterTest {
         });
 
     verify(auditDao, never()).insert(any());
+  }
+
+  @Test
+  void swiftRegistryPublishRecordsCoordinateAndOutcome() throws Exception {
+    SecurityAuditDao auditDao = mock(SecurityAuditDao.class);
+    ManagementAuditFilter filter = filter(auditDao, "", false);
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("PUT", "/repository/swift-hosted/Acme/Demo/1.2.3");
+    request.setRemoteAddr("192.0.2.10");
+    request.setAttribute(
+        AuthenticatedSubject.REQUEST_ATTRIBUTE,
+        new AuthenticatedSubject("api_key", "publisher", "local", 44L, null));
+    request.setAttribute(
+        RepositorySecurityFilter.REPOSITORY_RECORD_ATTRIBUTE,
+        new RepositoryRecord(
+            7L, "swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED,
+            "swift-hosted", true, 1L, null, null, "RELEASE", "STRICT",
+            "ALLOW_ONCE", true, java.util.Map.of()));
+
+    filter.doFilter(
+        request,
+        new MockHttpServletResponse(),
+        (req, resp) -> ((HttpServletResponse) resp).setStatus(201));
+
+    ArgumentCaptor<AuditLogRecord> record = ArgumentCaptor.forClass(AuditLogRecord.class);
+    verify(auditDao).insert(record.capture());
+    assertEquals("publisher", record.getValue().actorUserId());
+    assertEquals("PUT", record.getValue().method());
+    assertEquals(201, record.getValue().status());
+    assertEquals("SUCCESS", record.getValue().outcome());
+    assertEquals("swift", record.getValue().details().get("format"));
+    assertEquals("swift-hosted", record.getValue().details().get("repository"));
+    assertEquals("publish", record.getValue().details().get("operation"));
+    assertEquals("Acme.Demo@1.2.3", record.getValue().details().get("coordinate"));
   }
 
   @Test

@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -23,6 +24,8 @@ import com.github.klboke.kkrepo.server.npm.NpmHostedService;
 import com.github.klboke.kkrepo.server.pypi.PypiHostedService;
 import com.github.klboke.kkrepo.server.pub.PubHostedService;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
+import com.github.klboke.kkrepo.server.swift.SwiftService;
+import com.github.klboke.kkrepo.server.swift.SwiftPublishLimits;
 import com.github.klboke.kkrepo.server.terraform.TerraformService;
 import com.github.klboke.kkrepo.server.yum.YumService;
 import java.io.InputStream;
@@ -57,6 +60,108 @@ class ComponentUploadServiceTest {
             && !def.multipleUpload()
             && def.assetFields().size() == 1
             && def.assetFields().getFirst().name().equals("asset")));
+  }
+
+  @Test
+  void uploadSpecsExposeSwiftPublicationContract() {
+    ComponentUploadService service = service(mock(CargoHostedService.class));
+
+    UploadDefinition definition = service.definition("swift");
+
+    assertEquals(List.of("scope", "name", "version", "metadata", "signature-format"),
+        definition.componentFields().stream().map(UploadFieldDefinition::name).toList());
+    assertEquals(List.of("source-archive", "source-archive-signature", "metadata-signature"),
+        definition.assetFields().stream().map(UploadFieldDefinition::name).toList());
+  }
+
+  @Test
+  void swiftComponentUploadDelegatesToSharedImmutablePublishService() throws Exception {
+    SwiftService swiftService = mock(SwiftService.class);
+    ComponentUploadService service = service(swiftService);
+    LinkedMultiValueMap<String, MultipartFile> uploads = files(
+        "swift.source-archive", "acme-library-1.2.3.zip");
+    uploads.add("swift.source-archive-signature", new MockMultipartFile(
+        "swift.source-archive-signature", "archive.sig", "application/octet-stream", new byte[] {7, 8}));
+
+    ComponentUploadService.UploadResult result = service.upload(
+        "swift-hosted",
+        Map.of(
+            "swift.scope", new String[] {"acme"},
+            "swift.name", new String[] {"library"},
+            "swift.version", new String[] {"1.2.3"},
+            "swift.metadata", new String[] {"{\"repositoryURLs\":[\"https://github.com/acme/library\"]}"},
+            "swift.signature-format", new String[] {"cms-1.0.0"}),
+        uploads,
+        "alice",
+        "127.0.0.1");
+
+    assertEquals(List.of("acme/library/1.2.3"), result.paths());
+    verify(swiftService).publishUpload(
+        any(RepositoryRuntime.class),
+        eq("acme"),
+        eq("library"),
+        eq("1.2.3"),
+        any(InputStream.class),
+        eq("{\"repositoryURLs\":[\"https://github.com/acme/library\"]}"),
+        any(byte[].class),
+        isNull(),
+        eq("cms-1.0.0"),
+        isNull(),
+        eq("alice"),
+        eq("127.0.0.1"));
+  }
+
+  @Test
+  void swiftComponentUploadRejectsOversizedSignatureBeforePublication() {
+    SwiftService swiftService = mock(SwiftService.class);
+    ComponentUploadService service = service(swiftService);
+    LinkedMultiValueMap<String, MultipartFile> uploads = files(
+        "swift.source-archive", "acme-library-1.2.3.zip");
+    uploads.add("swift.source-archive-signature", new MockMultipartFile(
+        "swift.source-archive-signature",
+        "archive.sig",
+        "application/octet-stream",
+        new byte[SwiftPublishLimits.MAX_SIGNATURE_BYTES + 1]));
+
+    UploadValidationException failure = assertThrows(
+        UploadValidationException.class,
+        () -> service.upload(
+            "swift-hosted",
+            Map.of(
+                "swift.scope", new String[] {"acme"},
+                "swift.name", new String[] {"library"},
+                "swift.version", new String[] {"1.2.3"}),
+            uploads,
+            "alice",
+            "127.0.0.1"));
+
+    assertTrue(failure.getMessage().contains("4 MiB"));
+    verify(swiftService, never()).publishUpload(
+        any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void swiftComponentUploadRejectsOversizedMetadataBeforePublication() {
+    SwiftService swiftService = mock(SwiftService.class);
+    ComponentUploadService service = service(swiftService);
+    String metadata = "x".repeat(SwiftPublishLimits.MAX_METADATA_BYTES + 1);
+
+    UploadValidationException failure = assertThrows(
+        UploadValidationException.class,
+        () -> service.upload(
+            "swift-hosted",
+            Map.of(
+                "swift.scope", new String[] {"acme"},
+                "swift.name", new String[] {"library"},
+                "swift.version", new String[] {"1.2.3"},
+                "swift.metadata", new String[] {metadata}),
+            files("swift.source-archive", "acme-library-1.2.3.zip"),
+            "alice",
+            "127.0.0.1"));
+
+    assertTrue(failure.getMessage().contains("1 MiB"));
+    verify(swiftService, never()).publishUpload(
+        any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
   }
 
   @Test
@@ -254,6 +359,26 @@ class ComponentUploadServiceTest {
         mock(RawHostedService.class),
         mock(YumService.class),
         terraformService);
+  }
+
+  private static ComponentUploadService service(SwiftService swiftService) {
+    RepositoryRuntime runtime = runtime("swift-hosted", RepositoryFormat.SWIFT);
+    RepositoryRuntimeRegistry registry = mock(RepositoryRuntimeRegistry.class);
+    when(registry.resolve(runtime.name())).thenReturn(Optional.of(runtime));
+    return new ComponentUploadService(
+        registry,
+        mock(AssetDao.class),
+        mock(MavenHostedService.class),
+        mock(NpmHostedService.class),
+        mock(PypiHostedService.class),
+        mock(HelmHostedService.class),
+        mock(CargoHostedService.class),
+        mock(PubHostedService.class),
+        mock(ComposerHostedService.class),
+        mock(RawHostedService.class),
+        mock(YumService.class),
+        mock(TerraformService.class),
+        swiftService);
   }
 
   private static ComponentUploadService service(

@@ -50,6 +50,9 @@ public final class RepositoryRecipes {
       new RepositoryRecipe("terraform-hosted", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED),
       new RepositoryRecipe("terraform-proxy", RepositoryFormat.TERRAFORM, RepositoryType.PROXY),
       new RepositoryRecipe("terraform-group", RepositoryFormat.TERRAFORM, RepositoryType.GROUP),
+      new RepositoryRecipe("swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED),
+      new RepositoryRecipe("swift-proxy", RepositoryFormat.SWIFT, RepositoryType.PROXY),
+      new RepositoryRecipe("swift-group", RepositoryFormat.SWIFT, RepositoryType.GROUP),
       new RepositoryRecipe("raw-hosted", RepositoryFormat.RAW, RepositoryType.HOSTED),
       new RepositoryRecipe("raw-proxy", RepositoryFormat.RAW, RepositoryType.PROXY),
       new RepositoryRecipe("raw-group", RepositoryFormat.RAW, RepositoryType.GROUP));

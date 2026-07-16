@@ -2,6 +2,8 @@ package com.github.klboke.kkrepo.server.browse;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.auth.AccessDecision;
@@ -10,6 +12,7 @@ import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
@@ -160,7 +163,7 @@ class ComponentSearchControllerSecurityTest {
   }
 
   @Test
-  void searchParsesNugetPubRubygemsYumAndTerraformFormats() {
+  void searchParsesNugetPubRubygemsYumTerraformAndSwiftFormats() {
     StubComponentDao components = new StubComponentDao();
     RecordingSecurityService security = new RecordingSecurityService(permission -> AccessDecision.allow());
     ComponentSearchController controller = controller(components, subject("alice"), null, security);
@@ -170,10 +173,56 @@ class ComponentSearchControllerSecurityTest {
     controller.search(null, "rubygems", null, request("GET", "/internal/search/components"));
     controller.search(null, "yum", null, request("GET", "/internal/search/components"));
     controller.search(null, "terraform", null, request("GET", "/internal/search/components"));
+    controller.search(null, "swift", null, request("GET", "/internal/search/components"));
 
     assertEquals(
-        List.of("|nuget|300", "|pub|300", "|rubygems|300", "|yum|300", "|terraform|300"),
+        List.of(
+            "|nuget|300", "|pub|300", "|rubygems|300", "|yum|300", "|terraform|300", "|swift|300"),
         components.calls);
+  }
+
+  @Test
+  void swiftSearchIncludesChecksumSignatureToolsAndSourceDetails() {
+    StubComponentDao components = new StubComponentDao();
+    components.rows = List.of(row(
+        42L,
+        "swift-hosted",
+        RepositoryFormat.SWIFT,
+        "Acme",
+        "Demo",
+        "1.2.3",
+        "swift-package-release",
+        "acme/demo/1.2.3.zip"));
+    SwiftRegistryDao swift = mock(SwiftRegistryDao.class);
+    Instant now = Instant.parse("2026-07-16T08:00:00Z");
+    SwiftRegistryDao.Release release = new SwiftRegistryDao.Release(
+        42L, 42L, 42L, "acme", "Acme", "demo", "Demo", "1.2.3", now,
+        "{}", "a".repeat(64), 100L, "cms-1.0.0", 101L, null,
+        "HOSTED", 7L, SwiftRegistryDao.RELEASE_READY, now, now);
+    when(swift.findRelease(42L, "acme", "demo", "1.2.3"))
+        .thenReturn(Optional.of(release));
+    when(swift.listManifests(42L)).thenReturn(List.of(
+        new SwiftRegistryDao.Manifest(1L, "Package.swift", "", 102L, "b".repeat(64)),
+        new SwiftRegistryDao.Manifest(
+            2L, "Package@swift-5.9.swift", "5.9", 103L, "c".repeat(64))));
+    RecordingSecurityService security =
+        new RecordingSecurityService(permission -> AccessDecision.allow());
+    ComponentSearchController controller = new ComponentSearchController(
+        components,
+        new StubAuthenticationService(subject("alice"), null),
+        security,
+        swift);
+
+    ComponentSearchController.ComponentSearchItem item = controller.search(
+        "demo", "swift", 10, request("GET", "/internal/search/components"))
+        .items().getFirst();
+
+    assertEquals("a".repeat(64), item.details().get("checksum"));
+    assertEquals("signed", item.details().get("signatureStatus"));
+    assertEquals("cms-1.0.0", item.details().get("signatureFormat"));
+    assertEquals("HOSTED", item.details().get("sourceKind"));
+    assertEquals("swift-hosted", item.details().get("sourceRepository"));
+    assertEquals(List.of("5.9"), item.details().get("swiftToolsVersions"));
   }
 
   @Test

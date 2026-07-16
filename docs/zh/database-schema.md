@@ -23,9 +23,9 @@ persistence-postgresql/src/main/resources/db/migration/postgresql/
 | 安全 | `security_user`、`security_role`、`security_privilege`、映射表、`api_key` | 身份与 Nexus 兼容授权 |
 | 审计 | `security_audit_log` | 可搜索的安全与管理操作历史 |
 | Session | `SPRING_SESSION`、`SPRING_SESSION_ATTRIBUTES`、`auth_ticket` | 跨副本登录和短生命周期认证状态 |
-| 协同 | `cache_version`、重建 marker、`maintenance_cursor`、代理、Docker 与 Terraform lease/binding 状态 | 缓存失效、claim/retry 工作和共享运行时状态 |
+| 协同 | `cache_version`、重建 marker、`maintenance_cursor`、代理、Docker、Terraform 与 Swift lease/binding 状态 | 缓存失效、claim/retry 工作和共享运行时状态 |
 | 迁移 | `migration_job`、checkpoint、校验、仓库/资产迁移表 | 可恢复的 Nexus 迁移与报告 |
-| 协议侧表 | Docker/OCI、Pub、Terraform 等协议专有关系 | 无法只通过公共 asset attributes 表达的状态；Terraform 在 V30 增加 signing key、Provider revision/platform、group source binding 和 publish lease |
+| 协议侧表 | Docker/OCI、Pub、Terraform、Swift 等协议专有关系 | 无法只通过公共 asset attributes 表达的状态；Terraform 在 V30 增加 signing key、Provider revision/platform、group source binding 和 publish lease；Swift V31 增加 release/manifest/SCM URL、GitHub source pin、group binding、lease、tombstone、negative cache 和 repository revision |
 
 自然键和显式唯一约束保护仓库名、路径、package/version identity、blob hash、token identity 和 claim marker，确保并发副本下不会重复。后台 worker claim 持久化行，不依赖 JVM 本地队列。
 

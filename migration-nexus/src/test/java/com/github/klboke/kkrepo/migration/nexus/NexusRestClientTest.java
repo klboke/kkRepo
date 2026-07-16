@@ -188,6 +188,18 @@ class NexusRestClientTest {
     assertTrue(script.contains("out.metadataEngine = 'DATASTORE_H2'"));
     assertTrue(script.contains("out.metadataEngine = 'DATASTORE_POSTGRESQL'"));
     assertTrue(script.contains("composer: 'COMPOSER'"));
+    assertTrue(script.contains("swift: 'SWIFT'"));
+    assertTrue(script.contains("def inspectSwiftShape = { tableNames ->"));
+    assertTrue(script.contains("archiveAssetPath: false"));
+    assertTrue(script.contains("manifestShape: false"));
+    assertTrue(script.contains("swiftAssetAttributes: false"));
+    assertTrue(script.contains("signatureAttributes: false"));
+    assertTrue(script.contains("sha256Checksum: false"));
+    assertTrue(script.contains("value instanceof byte[]"));
+    assertTrue(script.contains("kind == 'package_archive'"));
+    assertTrue(script.contains("kind == 'package_manifest'"));
+    assertTrue(script.contains("limit 512"));
+    assertTrue(script.contains("Swift datastore content shape probe failed:"));
     assertFalse(script.contains("javax.sql.DataSource.class"));
     assertFalse(script.contains("catch (Throwable"));
     assertFalse(script.contains(" as Set"));

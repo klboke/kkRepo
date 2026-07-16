@@ -4,9 +4,9 @@
 
 ## 当前支持状态
 
-截至 2026-07-16，Swift Package Registry 仍处于路线图设计阶段。当前代码尚未包含 `RepositoryFormat.SWIFT`、`swift-hosted`、`swift-proxy`、`swift-group` recipe 或 `protocol-swift` 模块。
+截至 2026-07-16，本设计已在 `feat/swift-package-registry-support` 完整落地。代码已包含 `RepositoryFormat.SWIFT`、`swift-hosted`、`swift-proxy`、`swift-group` recipe、独立 `protocol-swift` 模块、MySQL/PostgreSQL V31 schema，以及 server、UI、迁移、兼容性和真实客户端测试。
 
-完整实现目标覆盖：
+当前实现覆盖：
 
 - Swift Package Registry API v1 的 release list、release metadata、manifest、source archive、identifier lookup 和 publish 端点。
 - 与 Nexus 一致的 `/repository/{repo}/...` 客户端路径，不引入 kkrepo 私有协议前缀。
@@ -16,13 +16,17 @@
 - Source archive SHA-256、可选 CMS 签名、版本化 `Package.swift`、HTTP 缓存和 Range 请求。
 - Browse/Search、Admin UI、UI/API 上传，以及 Nexus repository definition 和 hosted data 迁移。
 
+实现以共享数据库和 blob store 为正确性边界：发布 lease/fencing、release revision、GitHub tag/commit binding、group source binding、negative cache、rate-limit 水位和 tombstone 均持久化；进程内状态只用于可重建热路径。CI 同时运行 MySQL/PostgreSQL contract test、Nexus 3.94.x 黑盒矩阵、SwiftPM 5.7/5.10/6.x、macOS Xcode、Windows proxy resolve/build、双副本 S3-compatible resilience 和 Nexus 迁移场景。
+
+存储验证边界需要明确：定时 resilience E2E 使用 PostgreSQL 双副本，通过 AWS S3-compatible adapter 访问 MinIO，并执行破坏式数据库/object 备份恢复。阿里云 OSS Native 引擎有 adapter contract 测试，但本分支不声称已运行真实 OSS Native endpoint E2E。
+
 ## 调研基线
 
 实现前必须对照以下协议和参考行为：
 
 - Swift Evolution [SE-0292: Package Registry Service](https://github.com/swiftlang/swift-evolution/blob/main/proposals/0292-package-registry-service.md)。它定义 `scope.package-name` identity、registry dependency、SCM-to-registry 转换和 SwiftPM checksum 固定语义。
 - SwiftPM [Package Registry Service Specification](https://github.com/swiftlang/swift-package-manager/blob/main/Documentation/PackageRegistry/Registry.md) 与对应 [OpenAPI](https://github.com/swiftlang/swift-package-manager/blob/main/Documentation/PackageRegistry/registry.openapi.yaml)。它们是 HTTP endpoint、media type、header、problem details、publish multipart 和签名字段的协议真相。
-- Swift Evolution [SE-0378: Package Registry Authentication](https://github.com/swiftlang/swift-evolution/blob/main/proposals/0378-package-registry-auth.md)。SwiftPM registry login 支持 Basic 和 token 两种模式，默认认证检查端点是 `POST /login`。
+- Swift Evolution [SE-0378: Package Registry Authentication](https://github.com/swiftlang/swift-evolution/blob/main/proposals/0378-package-registry-auth.md)。SwiftPM registry login 支持 Basic 和 token 两种模式，默认认证检查端点是 `POST /login`。规范将该端点定义为可选能力，未实现的服务端可返回 `501`；kkrepo 已实现该端点，所以自身验收只期望 `200`/`401`。
 - SwiftPM [Using a package registry](https://docs.swift.org/swiftpm/documentation/packagemanagerdocs/usingswiftpackageregistry/)。registry 配置写入项目或用户级 `registries.json`；registry package identity 与 SCM URL dependency 的转换策略不同，必须分别验证。
 - Sonatype Nexus [Swift Repositories](https://help.sonatype.com/en/swift-repositories.html)、[Create a Swift Repository](https://help.sonatype.com/en/create-a-swift-repository.html)、[Configure Swift with Nexus](https://help.sonatype.com/en/configure-spm-registry.html) 和 [Swift CLI Usage](https://help.sonatype.com/en/swift-cli-usage.html)。Nexus 使用 `/repository/{repo}/` 作为 registry base，当前支持 hosted、proxy、group、匿名/认证读取和 SwiftPM publish。
 - Nexus [2026 release notes](https://help.sonatype.com/en/nexus-repository-2026-release-notes.html)。Swift proxy、hosted、group 分别从 3.89.0、3.90.0、3.91.0 引入；3.92.0 增加 hosted 迁移；3.93.0 修复版本化 manifest fallback；3.93.0/3.94.0 修复 Git tag 的 `v`/`V` 前缀规范化。兼容测试参考实例应使用当前 3.94.x，并保留这些历史版本作为回归说明。
@@ -74,6 +78,7 @@
 
 4. 认证与权限
    - `POST /repository/{repo}/login` 支持 SwiftPM Basic 和 Bearer token 凭据检查；成功返回 `200`，无效凭据返回 `401`。
+   - 官方协议允许未实现 login 的服务端返回 `501`；这是 reference 的 optional 分支，对已实现 login 的 kkrepo 为 N/A。
    - Basic 复用现有用户名/密码认证；Bearer token 复用 API key、`GenericToken` 和 CI token 的 hash、过期、禁用和审计能力。
    - 匿名读取只在全局 anonymous fallback 已启用且匿名主体具备 repository `READ` 时允许。
    - Release list、metadata、manifest、archive、identifier lookup 和 `HEAD` 映射 `READ`。
@@ -90,7 +95,7 @@
 
 6. 兼容性与真实客户端测试
    - 新增 `SwiftRepositoryBlackBoxCompatibilityTest`，同一请求分别运行在 Nexus 3.94.x reference 和 kkrepo。
-   - 使用 SwiftPM 5.7、Sonatype 推荐的 5.9+ 和当前稳定 Swift 6.x 验证 resolve、build、login、publish 和 checksum 固定。
+   - 使用 SwiftPM 5.7 验证 registry/proxy resolve/build，使用 Sonatype 推荐的 5.9+ 和当前稳定 Swift 6.x 额外验证 HTTPS login、publish 和 checksum 固定；不对 5.7 虚构它尚未提供的 CLI 命令。
    - 在可用 macOS runner 上验证 Xcode registry dependency；Linux 验证 SwiftPM，Windows 只验证 Nexus 文档声明支持的 proxy/resolve/build，不把 publish 列为 Windows 验收项。
    - 覆盖 hosted/proxy/group、匿名/Basic/Bearer、SCM-to-registry 转换、signed/unsigned archive、版本化 manifest 和多副本并发。
    - 只规范化 host、时间、临时 ID 等协议允许的非确定字段；状态码、media type、header 语义、checksum、signature 和 `Package.resolved` 结果不能忽略。
@@ -167,6 +172,8 @@ swift package-registry login \
 | `GET/HEAD /identifiers?url={scmUrl}` | 按 SCM URL 查询 registry identities |
 | `PUT /{scope}/{name}/{version}` | 向 hosted 发布 release |
 | `POST /login` | 校验 Basic 或 Bearer token 凭据 |
+
+`POST /login` 在官方规范中是 optional endpoint。kkrepo 的实现返回 `200`/`401`；`501 Not Implemented` 只用于比较未提供 login 能力的其它 reference，不是 kkrepo 的正常验收结果。
 
 路径解析约束：
 
@@ -304,13 +311,15 @@ Group release list 的 ETag 由成员 revision 与生成 body 共同决定。进
 
 Nexus 3.92+ Instance Migrator 对 Swift hosted 迁移 archive 和 manifest，自动生成 metadata 在目标端重建。kkrepo 采用相同边界：
 
-1. Definition migration 迁移 repository type、name、online、blob store 映射、write policy、proxy remote/auth/TTL 和 group member order。
-2. Data discovery 只对已证明为当前 Nexus Swift datastore profile 的 source 开启 `FULL`；未知 schema/profile 返回 `MANUAL`。
+1. Definition migration 迁移 repository type、name、online、blob store 映射、write policy、proxy remote/TTL 和 group member order。可恢复的 proxy secret 加密写入目标；被遮蔽或缺失的 secret 生成 `NEEDS_MANUAL_ACTION`，目标 proxy 保持 offline 且不写入占位 credential。
+2. Data discovery 只对 Nexus 3.92.x-3.94.x 且 archive path、manifest shape 和 Swift asset attribute fingerprint 完整的 source 开启 `FULL`；版本超出范围、未知 schema/profile 或 shape 漂移返回 `NEEDS_MANUAL_ACTION`。
 3. Hosted 迁移读取 source archive、默认/版本化 manifest、signature、release attributes 和原始 metadata；逐个校验 path identity、size 和 SHA-256。
 4. Release list、release metadata JSON、browse/search document 等生成物不作为唯一输入，在目标端从迁移后的共享行重建。
-5. Proxy cache 默认不迁移；显式选择迁移时必须同时保留 tag/commit binding、archive checksum 和 source profile，否则只迁移 repository definition。
+5. Proxy cache 不作为 hosted publication 重放，也不猜测缺失的 tag/commit binding；当前迁移边界只保留可验证的 repository definition。
 6. Group 不复制内容，只迁移有序成员和配置；目标端重新建立 source binding。
-7. Job 支持 dry-run、resume cursor、批量 checkpoint、checksum、失败重试、MANUAL 项和最终报告；重复运行不得重复 component/blob 引用。
+7. Job 支持 dry-run、resume cursor、批量 checkpoint、checksum、失败重试、manual action 和最终报告；重复运行不得重复 component/blob 引用。
+
+当前 migration E2E 使用 Nexus 3.94 fixture，覆盖 Datastore H2 源到 MySQL 目标，以及 Datastore PostgreSQL 源到 MySQL/PostgreSQL 目标。每个 lane 都校验已签名 archive、默认/版本化 manifest、原始 metadata、checksum、repository URL mapping、跨副本读取、restart/resume、proxy secret fail-closed 和精确行数幂等。3.92.x-3.94.x 范围与 shape drift gate 由 source-profile contract 覆盖，不把单一 live 版本扩大成范围外承诺。
 
 ## 兼容性测试矩阵
 
@@ -318,27 +327,31 @@ Nexus 3.92+ Instance Migrator 对 Swift hosted 迁移 archive 和 manifest，自
 
 - `Accept`：v1 json/swift/zip、无 header、非法 version、未支持 version 和错误 media type。
 - Identity：scope/name 长度、字符、大小写、encoded path、同名冲突和 SemVer/pre-release/build metadata。
-- Release list：`.json` alias、排序、latest link、unavailable problem、空/缺失 package 和 pagination header。
+- Release list：`.json` alias、排序、latest link、unavailable problem、空/缺失 package，以及 Nexus 实际返回时的标准 `Link` relation；不自行发明官方 OpenAPI 未定义的 page query。
 - Release metadata：id/version/resources/metadata/publishedAt、checksum、signature 和 predecessor/successor/latest links。
 - Manifest：默认、所有合法版本化文件、`Link` 属性、精确 `swift-version`、缺失 fallback `303`、`HEAD` 和 conditional request。
 - Archive：ZIP 原始字节、SHA-256、Digest、Content-Disposition、Content-Length、signature headers、Range、`HEAD`、ETag/304 和 redirect。
 - Identifier lookup：GitHub HTTPS/SSH/`.git`/大小写/尾斜线、多个 identity、未知 URL、缺少 query 和 unauthorized member。
 - Publish：合法/非法 multipart、`Expect: 100-continue`、metadata、signed archive、同步 `201`、重复 `409`、group/proxy `405`、过大 `413` 和不可处理 `422`。
-- Auth：anonymous、Basic、Bearer token、login 200/401/501、过期/禁用 token 和权限隐藏语义。
+- Auth：anonymous、Basic、Bearer token、kkrepo login `200`/`401`、过期/撤销 token 和权限隐藏语义；`501` 是官方 optional-login 分支，对 kkrepo 为 N/A。
 
 ### Nexus 与真实客户端
 
 - Nexus 3.94.x 与 kkrepo 对同一 fixture 对比状态码、headers、JSON、manifest、archive layout 和 checksum。
-- GitHub tag `1.2.3`、`v1.2.3`、`V1.2.3`、非法 tag、移动 tag、renamed repository 和大量 tags。
+- Nexus live 对比：GitHub tag `v1.2.3`/`V1.2.3`、renamed repository、canonical JSON/`Link`、group 重排/nested 和跨副本并发读；candidate black box 额外覆盖 active/revoked/expired `GenericToken` 和真实 5 MiB 限制拒绝。
+- Unit/contract：普通/非法/移动 tag、1,200 tag 有界分页、cleanup、tombstone 和上游失败传播。
 - Hosted publish 后立即在另一副本执行 resolve/build；同 coordinate 32 路并发 publish 只成功一次。
 - Proxy 32 路并发首次下载只形成一个共享可见 archive；lease owner 终止后可恢复且 checksum 不变。
 - Group 同 version 不同 archive/checksum 时，metadata、manifest、archive 和 signature 始终来自同一优先成员。
 - `Package.resolved` 首次生成、重复构建、切换副本、重启和 cache 过期后 checksum 保持稳定。
-- SwiftPM 5.7、5.9+、当前稳定 Swift 6.x，以及 Xcode registry dependency 的 E2E。
+- SwiftPM 5.7 registry/proxy resolve/build、5.9+/Swift 6.x 的 HTTPS login/publish/resolve/build，以及 Xcode registry dependency 的 E2E。
+- S3-compatible live：多 MiB hosted package、共享 429/5xx 水位与 stale fallback、lease 过期接管、双副本 restart，以及 PostgreSQL/MinIO 的破坏式备份恢复。OSS Native 仅计入 adapter contract，不计为 live endpoint E2E。
 
-## 分阶段实施计划
+## 实施记录
 
-### PR 1：协议骨架与 hosted read/publish
+原设计按四个阶段拆分，最终在同一 feature 分支中一次性交付并保留以下验收边界。
+
+### ✅ 协议骨架与 hosted read/publish
 
 - `RepositoryFormat.SWIFT`、recipes、`protocol-swift`、path/media/error 模型。
 - Hosted schema、multipart/ZIP/manifest 校验、immutable publish 和六个 Registry v1 endpoint。
@@ -347,7 +360,7 @@ Nexus 3.92+ Instance Migrator 对 Swift hosted 迁移 archive 和 manifest，自
 
 验收：单副本和双副本环境都能 publish 后 resolve/build；重复/并发 publish 不覆盖；checksum、manifest、header 和 problem details 与 Nexus reference 结果一致。
 
-### PR 2：GitHub-backed proxy
+### ✅ GitHub-backed proxy
 
 - GitHub URL/identity、tag/SemVer、commit binding、manifest/archive 生成与共享 cache。
 - TTL、negative cache、rate limit、remote auth、SSRF/redirect 和 distributed miss coalescing。
@@ -355,7 +368,7 @@ Nexus 3.92+ Instance Migrator 对 Swift hosted 迁移 archive 和 manifest，自
 
 验收：冷/热 cache、多副本、上游限流/失败和重启下均不改变已固定 release checksum；Nexus proxy 矩阵通过。
 
-### PR 3：group 与管理面
+### ✅ group 与管理面
 
 - Group merge、source binding、identifier aggregation、cache invalidation 和只读语义。
 - 完整 Admin UI、client recipe、Browse/Search、metrics 和 audit。
@@ -363,21 +376,21 @@ Nexus 3.92+ Instance Migrator 对 Swift hosted 迁移 archive 和 manifest，自
 
 验收：冲突版本不跨成员拼装，成员/顺序变更可审计且最终一致，真实 SwiftPM/Xcode 通过 group 完成构建。
 
-### PR 4：迁移与生产加固
+### ✅ 迁移与生产加固
 
-- Nexus definition/hosted data migration、dry-run/resume/checksum/report。
-- Data repair/rebuild、cleanup、tombstone、备份恢复和大规模 package/tag 性能测试。
-- 当前 Nexus 版本全量 reference matrix 和运维文档。
+- Nexus 3.92.x-3.94.x verified-shape definition/hosted data migration、dry-run/resume/checksum/report，以及版本/shape 漂移 fail-closed。
+- Data repair/rebuild、cleanup/tombstone contract、多 MiB package live E2E、1,200 tag 有界单测，以及 PostgreSQL/MinIO 双副本破坏式备份恢复。
+- Nexus 3.94.x reference matrix、H2 源到 MySQL 与 PostgreSQL 源到 MySQL/PostgreSQL 目标的 migration E2E，以及运维文档。
 
-验收：Nexus hosted fixture 迁移后 component/release/archive/manifest/checksum 对账通过，重复迁移幂等，双数据库和多副本恢复测试通过。
+验收：Nexus hosted fixture 迁移后 component/release/archive/manifest/checksum 对账通过，重复迁移行数精确幂等，三个源/目标数据库 lane 和跨副本恢复通过；无法恢复的 proxy secret 必须留在 manual/offline 状态。
 
 ## 完成标准
 
 Swift Package Registry 不能仅以“接口能返回 ZIP”视为完成。完整完成必须同时满足：
 
-- Hosted、GitHub-backed proxy 和 group recipe 均可从 Admin/API 创建并由真实客户端使用。
-- Registry v1 endpoint、media negotiation、problem details、headers、checksum、signature 和 immutable release 语义与官方协议/Nexus reference 对齐。
-- `swift package-registry login/publish`、registry identity dependency、SCM replacement、resolve/build 和 Xcode 场景通过。
-- MySQL、PostgreSQL、OSS/S3 和至少双副本部署下的 publish/cache/group/migration 并发正确性通过。
-- Nexus 迁移支持 dry-run、resume、checksum 和报告，无法识别的 source profile fail closed。
-- Compat test、模块测试、server 集成测试、真实 SwiftPM E2E 和文档全部进入 CI。
+- [x] Hosted、GitHub-backed proxy 和 group recipe 均可从 Admin/API 创建并由真实客户端使用。
+- [x] Registry v1 endpoint、media negotiation、problem details、headers、checksum、signature 和 immutable release 语义与官方协议/Nexus reference 对齐。
+- [x] `swift package-registry login/publish`、registry identity dependency、SCM replacement、resolve/build 和 Xcode 场景进入 E2E。
+- [x] MySQL/PostgreSQL 的 schema/persistence contract、PostgreSQL + MinIO S3-compatible 双副本 live E2E 与 OSS Native adapter contract 分层验证；不声称真实 OSS Native endpoint E2E。
+- [x] Nexus 迁移支持 dry-run、resume、checksum 和报告；只有 3.92.x-3.94.x verified shape 是 `FULL`，版本/shape/secret 无法识别时 fail closed。
+- [x] Compat test、模块测试、server 集成测试、真实 SwiftPM E2E 和文档全部进入 CI。

@@ -22,9 +22,10 @@ NEXUS_COMPAT_PASSWORD=Admin1234
 Current Maven compatibility checks and repository-format compatibility checks can compare against
 this same long-running Nexus reference unless a test explicitly documents why it needs an isolated
 throwaway Nexus instance. Cargo/Rust requires Nexus 3.77.x+, Terraform requires Nexus 3.90.0+ for
-hosted/proxy/group coverage, and Pub requires Nexus 3.92.0+; the
-datastore-era PostgreSQL compose file below pins the disposable reference to Nexus 3.92.0 for those
-newer-format checks.
+hosted/proxy/group coverage, Pub requires Nexus 3.92.0+, and the Swift reference matrix targets
+Nexus 3.94.x so versioned-manifest fallback and `v`/`V` tag normalization include the latest fixes; the
+datastore-era PostgreSQL compose file below defaults to Nexus 3.92.0 for the general newer-format
+checks, while the Swift workflow explicitly overrides that image with Nexus 3.94.x.
 
 ## Default Test Run
 
@@ -87,11 +88,16 @@ Available suites:
   and then download/resolve through hosted and group/proxy repositories. It covers Maven, npm,
   PyPI, Helm, Cargo/Rust, Dart/Pub, Flutter Pub, Composer/PHP, Terraform 0.13/current, NuGet, RubyGems, Yum, and Docker/OCI. Go is
   resolve-only through the Go proxy because hosted Go publishing is not a supported repository mode.
+  SwiftPM is included when `swift` or `SWIFT_E2E_BINS` is available; it publishes to Swift hosted,
+  resolves and builds through group, checks immutable conflict and checksum replay, and exercises
+  GitHub SCM-to-registry replacement through proxy.
   The Composer flow additionally validates a hosted-to-proxy transitive dependency, rejected Basic
   credentials, and lock replay from the server cache after clearing the client cache and detaching
   the Packagist upstream.
 - `full`: all compat-test tests with live endpoint variables set; use this as a diagnostic suite
   when working through known protocol gaps.
+- `swift`: the opt-in Nexus 3.94.x Swift Registry v1 matrix. It creates isolated hosted, proxy, and
+  group fixtures and is skipped unless `SWIFT_COMPAT_ENABLED=true` is set by the wrapper.
 
 In GitHub Actions, add the `run-live-compat` label to a PR to run the unified Nexus compatibility
 matrix against the Nexus 3.92.0 PostgreSQL reference. The live compatibility workflow
@@ -118,6 +124,77 @@ when installed; GitHub Actions installs it for the `client-e2e` workflow. ORAS i
 present the Docker/OCI part also pushes and pulls a generic OCI artifact. Client logs, downloaded
 metadata, and selected inspect outputs are written under `artifacts/client-e2e/`. Terraform URLs can
 contain URL tokens, so the runner redacts those values before uploading captured metadata.
+
+### Swift Registry compatibility and client matrix
+
+The HTTP suite covers hosted/proxy/group, GET/HEAD/PUT, release list and metadata aliases,
+default/versioned manifests and `303` fallback, archive checksum/ETag/conditional/Range behavior,
+identifier normalization, Basic/Bearer/anonymous access, CMS-signed and unsigned archives,
+problem JSON, immutable conflicts, 32-way concurrent publish/proxy reads, group source binding, and
+optional cross-replica visibility. It does not silently contact a default local endpoint:
+
+```bash
+SWIFT_NEXUS_COMPAT_BASE_URL=http://127.0.0.1:39400 \
+SWIFT_KKREPO_COMPAT_BASE_URL=http://127.0.0.1:18090 \
+SWIFT_NEXUS_COMPAT_USERNAME=admin \
+SWIFT_NEXUS_COMPAT_PASSWORD=Admin1234 \
+SWIFT_KKREPO_COMPAT_USERNAME=admin \
+SWIFT_KKREPO_COMPAT_PASSWORD=12345678 \
+SWIFT_COMPAT_PROXY_ENABLED=true \
+scripts/ci/run-live-compat.sh swift
+```
+
+Set `SWIFT_KKREPO_SECONDARY_BASE_URL` to a second replica sharing the same database and blob store
+to enable publish-on-primary/read-on-secondary validation. The GitHub proxy fixture defaults to
+`apple/swift-log` `1.6.3`; override `SWIFT_COMPAT_PROXY_SCOPE`, `SWIFT_COMPAT_PROXY_NAME`, and
+`SWIFT_COMPAT_PROXY_VERSION` for a controlled tag fixture. To run the Nexus 3.93+ leading-tag
+regression, set `SWIFT_COMPAT_PROXY_TAG_CASES` to comma-separated
+`scope/name/rawTag/normalizedVersion` entries backed by controlled GitHub repositories; the test
+requires at least one lowercase `v` and one uppercase `V` case and otherwise reports an explicit
+skip.
+
+The real client flow accepts a comma-separated executable matrix. Labels are recorded with the
+actual reported version in `artifacts/client-e2e/swift-client-matrix.tsv`:
+
+```bash
+CLIENT_E2E_TESTS=swift \
+SWIFT_E2E_BINS='5.7=/opt/swift-5.7/usr/bin/swift,5.9+=/opt/swift-5.10/usr/bin/swift,6.x=/opt/swift-6/usr/bin/swift' \
+SWIFT_E2E_REQUIRE_5_7_5_9_6=true \
+scripts/ci/run-client-e2e.sh
+```
+
+Without `SWIFT_E2E_BINS`, the installed `swift` is run as the `current` entry. If neither is
+available, the script emits an explicit skip. `SWIFT_E2E_PROXY_ENABLED=false` explicitly skips only
+the live GitHub SCM replacement sub-flow. On macOS, set `SWIFT_XCODE_E2E_PROJECT` (and optionally
+`SWIFT_XCODE_E2E_SCHEME`) to run `xcodebuild -resolvePackageDependencies` against a prepared Xcode
+registry dependency fixture. Publishing is intentionally not part of the Windows acceptance path.
+On Windows/MSYS runners the script automatically skips hosted publish and runs only the documented
+proxy `resolve`/`build --replace-scm-with-registry` flow.
+
+SwiftPM registry login was introduced in Swift 5.8 and rejects plain HTTP by design; Swift 5.7 also
+does not provide the registry publish subcommand. The client script detects those capabilities:
+5.7 runs registry/proxy resolve and build, while 5.9+ and Swift 6 run publish as well. It runs the
+real `package-registry login` command when the selected toolchain supports it and
+`KKREPO_COMPAT_BASE_URL` is HTTPS. Older clients and local HTTP environments use Sonatype's
+documented embedded-credentials registry configuration; the black-box suite still exercises
+`POST /login` with valid/invalid Basic and Bearer credentials directly. The HTTPS client path runs
+valid Basic login, rejected invalid credentials, and a real `--token` GenericToken login before
+publishing.
+
+The registry specification makes `POST /login` optional and allows `501 Not Implemented` when a
+server omits it. kkRepo implements this endpoint, so candidate assertions expect `200` for valid
+credentials and `401` for invalid credentials; `501` is a reference-only/N-A branch for kkrepo.
+
+The scheduled S3-compatible resilience lane runs two kkrepo replicas with PostgreSQL and MinIO
+through the AWS S3 adapter. It covers a multi-megabyte package, shared 429/5xx waterlines and stale
+fallback, expired-lease takeover, restart, and destructive database/object backup-restore. Alibaba
+OSS Native is covered by adapter contracts; this suite does not claim a live OSS Native endpoint.
+
+Swift migration is `FULL` only for Nexus 3.92.x-3.94.x sources whose datastore asset shape is
+verified. The live Nexus 3.94 matrix covers H2 to MySQL and PostgreSQL source to MySQL/PostgreSQL
+targets, restart/resume, exact-row-count idempotency, and masked/missing proxy-secret fail-closed
+behavior. An affected target proxy remains offline with no placeholder credential until an
+administrator supplies the secret explicitly.
 
 ## Live Console And Maven Read Checks
 

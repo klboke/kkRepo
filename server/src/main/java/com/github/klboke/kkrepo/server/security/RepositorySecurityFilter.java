@@ -118,6 +118,10 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       filterChain.doFilter(request, response);
       return;
     }
+    if (isInvalidSwiftPublishRoute(repository.get(), target)) {
+      filterChain.doFilter(request, response);
+      return;
+    }
     Optional<AuthenticatedSubject> authenticated = terraformUrlToken == null
         ? switch (repository.get().format()) {
       case CARGO -> authenticationService.authenticateCargo(request);
@@ -129,6 +133,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     boolean authenticatedAnonymously = false;
     if (authenticated.isEmpty()) {
       authenticated = target.readOnly(repository.get().format())
+              && !isSwiftLogin(repository.get(), target)
           ? authenticationService.authenticateAnonymous()
           : Optional.empty();
       authenticatedAnonymously = authenticated.isPresent();
@@ -141,6 +146,10 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
 
     AccessDecision decision = decide(authenticated.get(), repository.get(), target);
     if (!decision.allowed()) {
+      if (repository.get().format() == RepositoryFormat.SWIFT) {
+        swiftProblem(response, HttpServletResponse.SC_FORBIDDEN, "Forbidden", decision.reason());
+        return;
+      }
       response.sendError(HttpServletResponse.SC_FORBIDDEN, decision.reason());
       return;
     }
@@ -299,6 +308,13 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     if (format == RepositoryFormat.TERRAFORM && "PUT".equalsIgnoreCase(method)) {
       return List.of(PermissionAction.ADD, PermissionAction.EDIT);
     }
+    if (format == RepositoryFormat.SWIFT && "PUT".equalsIgnoreCase(method)) {
+      return List.of(PermissionAction.ADD);
+    }
+    if (format == RepositoryFormat.SWIFT && "POST".equalsIgnoreCase(method)
+        && "login".equals(path)) {
+      return List.of(PermissionAction.READ);
+    }
     if (format == RepositoryFormat.CARGO && isCargoYankRoute(method, path)) {
       return List.of(PermissionAction.EDIT);
     }
@@ -330,6 +346,13 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     return repository.format() == RepositoryFormat.PUB
         && repository.type() != RepositoryType.HOSTED
         && isPubPublishRoute(target.method(), target.path());
+  }
+
+  private static boolean isInvalidSwiftPublishRoute(
+      RepositoryRecord repository, RepositoryRequest target) {
+    return repository.format() == RepositoryFormat.SWIFT
+        && repository.type() != RepositoryType.HOSTED
+        && "PUT".equalsIgnoreCase(target.method());
   }
 
   private static boolean isCargoYankRoute(String method, String path) {
@@ -376,7 +399,56 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     } else {
       response.setHeader(HttpHeaders.WWW_AUTHENTICATE, "Basic realm=\"kkrepo\"");
     }
+    if (repository.format() == RepositoryFormat.SWIFT) {
+      swiftProblem(
+          response,
+          HttpServletResponse.SC_UNAUTHORIZED,
+          "Unauthorized",
+          "Authentication required");
+      return;
+    }
     response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Authentication required");
+  }
+
+  private static boolean isSwiftLogin(
+      RepositoryRecord repository, RepositoryRequest target) {
+    return repository.format() == RepositoryFormat.SWIFT
+        && "POST".equalsIgnoreCase(target.method())
+        && "login".equals(target.path());
+  }
+
+  private static void swiftProblem(
+      HttpServletResponse response, int status, String title, String detail) throws IOException {
+    response.setStatus(status);
+    response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+    response.setContentType("application/problem+json");
+    response.setHeader("Content-Version", "1");
+    response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
+    response.getWriter().write("{\"type\":\"about:blank\",\"title\":\""
+        + json(title) + "\",\"status\":" + status + ",\"detail\":\""
+        + json(detail == null ? title : detail) + "\"}");
+  }
+
+  private static String json(String value) {
+    StringBuilder escaped = new StringBuilder();
+    for (int i = 0; i < value.length(); i++) {
+      char character = value.charAt(i);
+      switch (character) {
+        case '\\' -> escaped.append("\\\\");
+        case '"' -> escaped.append("\\\"");
+        case '\n' -> escaped.append("\\n");
+        case '\r' -> escaped.append("\\r");
+        case '\t' -> escaped.append("\\t");
+        default -> {
+          if (character < 0x20) {
+            escaped.append(String.format("\\u%04x", (int) character));
+          } else {
+            escaped.append(character);
+          }
+        }
+      }
+    }
+    return escaped.toString();
   }
 
   private String cargoLoginUrl(HttpServletRequest request, String repository) {

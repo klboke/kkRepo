@@ -11,6 +11,8 @@ import com.github.klboke.kkrepo.core.security.TerraformSigningKeyMaterial;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.NexusInventory;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.RepositoryDocument;
 import com.github.klboke.kkrepo.migration.nexus.MigrationPlanBuilder.MigrationScope;
+import com.github.klboke.kkrepo.migration.nexus.NexusMigrationPlan.NexusMigrationPlanItem;
+import com.github.klboke.kkrepo.migration.nexus.NexusMigrationPlan.SupportStatus;
 import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityExport;
 import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityExportReader;
 import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityMigrationBatch;
@@ -30,6 +32,8 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.security.Security;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -39,6 +43,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Supplier;
 import org.bouncycastle.bcpg.ArmoredOutputStream;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.openpgp.PGPSecretKey;
@@ -47,7 +52,9 @@ import org.bouncycastle.openpgp.PGPSecretKeyRingCollection;
 import org.bouncycastle.openpgp.PGPUtil;
 import org.bouncycastle.openpgp.operator.jcajce.JcaKeyFingerprintCalculator;
 import org.bouncycastle.openpgp.operator.jcajce.JcePBESecretKeyDecryptorBuilder;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 
 public class NexusApiMigrationService {
   private static final String DEFAULT_NEXUS_VERSION = "3.29.2-02";
@@ -59,6 +66,10 @@ public class NexusApiMigrationService {
   private final MigrationJobDao migrationJobDao;
   private final NexusSecurityMigrationWriter securityWriter;
   private final TerraformRegistryDao terraformRegistry;
+  // The server controller constructs this service directly, so transaction annotations would not
+  // be intercepted by a Spring proxy. Keep the atomic migration boundary explicit instead.
+  private final TransactionTemplate migrationTransaction;
+  private final TransactionTemplate jobTransaction;
 
   public NexusApiMigrationService(
       ObjectMapper objectMapper,
@@ -78,6 +89,26 @@ public class NexusApiMigrationService {
       MigrationJobDao migrationJobDao,
       NexusSecurityMigrationWriter securityWriter,
       TerraformRegistryDao terraformRegistry) {
+    this(
+        objectMapper,
+        blobStoreDao,
+        repositoryDao,
+        securityDao,
+        migrationJobDao,
+        securityWriter,
+        terraformRegistry,
+        null);
+  }
+
+  public NexusApiMigrationService(
+      ObjectMapper objectMapper,
+      BlobStoreDao blobStoreDao,
+      RepositoryDao repositoryDao,
+      SecurityDao securityDao,
+      MigrationJobDao migrationJobDao,
+      NexusSecurityMigrationWriter securityWriter,
+      TerraformRegistryDao terraformRegistry,
+      PlatformTransactionManager transactionManager) {
     this.objectMapper = objectMapper;
     this.blobStoreDao = blobStoreDao;
     this.repositoryDao = repositoryDao;
@@ -85,6 +116,11 @@ public class NexusApiMigrationService {
     this.migrationJobDao = migrationJobDao;
     this.securityWriter = securityWriter;
     this.terraformRegistry = terraformRegistry;
+    this.migrationTransaction = transactionManager == null ? null : new TransactionTemplate(transactionManager);
+    this.jobTransaction = transactionManager == null ? null : new TransactionTemplate(transactionManager);
+    if (jobTransaction != null) {
+      jobTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    }
   }
 
   public NexusMigrationPreflight preflight(NexusMigrationRequest request)
@@ -93,12 +129,15 @@ public class NexusApiMigrationService {
     return preflight(inventory, request.targetBlobStore(), request.sourceNexusVersion());
   }
 
-  @Transactional
   public NexusMigrationResult migrate(NexusMigrationRequest request) throws Exception {
     NexusInventory inventory = inventory(request);
+    return migrate(inventory, request);
+  }
+
+  NexusMigrationResult migrate(NexusInventory inventory, NexusMigrationRequest request) {
     NexusMigrationPreflight preflight = preflight(inventory, request.targetBlobStore(), request.sourceNexusVersion());
     NexusMigrationPlan plan = preflight.migrationPlan();
-    long jobId = migrationJobDao.create(
+    long jobId = inJobTransaction(() -> migrationJobDao.create(
         defaultString(preflight.sourceProfile().nexusVersion(),
             defaultString(request.sourceNexusVersion(), DEFAULT_NEXUS_VERSION)),
         request.sourceBaseUrl(),
@@ -109,37 +148,52 @@ public class NexusApiMigrationService {
             "target", "current",
             "profileHash", plan.profileHash(),
             "planHash", plan.planHash(),
-            "sourceAdapter", plan.adapter()));
+            "sourceAdapter", plan.adapter())));
     try {
-      ConfigMigrationCounts configCounts = migrateConfig(inventory, request);
-      NexusSecurityMigrationResult apiSecurity = migrateSecurity(inventory.securityExport(), request.dryRun());
-      List<String> passwordResetRequired = passwordResetRequiredUsers(inventory.securityExport());
-      NexusMigrationValidation validation =
-          validateMigration(inventory, request, preflight, passwordResetRequired);
-      String status = validation.failed()
-          ? "finished_with_validation_failures"
-          : !passwordResetRequired.isEmpty()
-              ? "finished_with_password_resets_required"
-              : request.dryRun() ? "dry_run_finished" : "finished";
-      NexusMigrationResult result = new NexusMigrationResult(
-          jobId,
-          status,
-          request.dryRun(),
-          preflight,
-          configCounts,
-          apiSecurity,
-          passwordResetRequired,
-          validation);
-      migrationJobDao.markFinished(jobId, status, result.toSummary());
-      return result;
+      return inMigrationTransaction(() -> {
+        ConfigMigrationCounts configCounts = migrateConfig(inventory, request);
+        NexusSecurityMigrationResult apiSecurity = migrateSecurity(inventory.securityExport(), request.dryRun());
+        List<String> passwordResetRequired = passwordResetRequiredUsers(inventory.securityExport());
+        NexusMigrationValidation validation =
+            validateMigration(inventory, request, preflight, passwordResetRequired);
+        String status = validation.failed()
+            ? "finished_with_validation_failures"
+            : hasProxyCredentialManualAction(inventory)
+                ? "finished_with_manual_actions"
+                : !passwordResetRequired.isEmpty()
+                    ? "finished_with_password_resets_required"
+                    : request.dryRun() ? "dry_run_finished" : "finished";
+        NexusMigrationResult result = new NexusMigrationResult(
+            jobId,
+            status,
+            request.dryRun(),
+            preflight,
+            configCounts,
+            apiSecurity,
+            passwordResetRequired,
+            validation);
+        migrationJobDao.markFinished(jobId, status, result.toSummary());
+        return result;
+      });
     } catch (Exception e) {
       Map<String, Object> summary = new LinkedHashMap<>();
       summary.put("jobId", jobId);
       summary.put("status", "failed");
       summary.put("error", e.getMessage());
-      migrationJobDao.markFinished(jobId, "failed", summary);
+      inJobTransaction(() -> {
+        migrationJobDao.markFinished(jobId, "failed", summary);
+        return null;
+      });
       throw e;
     }
+  }
+
+  private <T> T inMigrationTransaction(Supplier<T> work) {
+    return migrationTransaction == null ? work.get() : migrationTransaction.execute(status -> work.get());
+  }
+
+  private <T> T inJobTransaction(Supplier<T> work) {
+    return jobTransaction == null ? work.get() : jobTransaction.execute(status -> work.get());
   }
 
   private NexusInventory inventory(NexusMigrationRequest request) throws Exception {
@@ -161,8 +215,9 @@ public class NexusApiMigrationService {
       NexusMigrationTargetBlobStore targetBlobStore,
       String requestedVersion) {
     NexusSourceProfile sourceProfile = NexusSourceProfile.fromInventory(inventory, requestedVersion);
-    NexusMigrationPlan migrationPlan = new MigrationPlanBuilder()
-        .build(sourceProfile, new MigrationScope(List.of(), true, false));
+    NexusMigrationPlan migrationPlan = withProxyCredentialManualActions(
+        new MigrationPlanBuilder().build(sourceProfile, new MigrationScope(List.of(), true, false)),
+        inventory);
     List<UnsupportedRepository> unsupported = new ArrayList<>();
     List<RepositoryMigrationPlan> repositoriesToMigrate = new ArrayList<>();
     List<GroupRepositoryMigrationPlan> groupRepositories = new ArrayList<>();
@@ -178,6 +233,7 @@ public class NexusApiMigrationService {
         continue;
       }
       supported++;
+      String credentialRisk = "proxy".equalsIgnoreCase(type) ? proxyCredentialRisk(document) : null;
       repositoriesToMigrate.add(new RepositoryMigrationPlan(
           name,
           format,
@@ -186,14 +242,19 @@ public class NexusApiMigrationService {
               .map(RepositoryRecipe::name)
               .orElse(null),
           sourceBlobStoreName(document),
-          bool(value(document, "online"), true),
+          credentialRisk == null && bool(value(document, "online"), true),
           remoteUrl(document)));
       if (repositoryTypeEnum(document) == RepositoryType.GROUP) {
         groupRepositories.add(new GroupRepositoryMigrationPlan(name, format, groupMembers(document)));
       }
       if ("proxy".equalsIgnoreCase(type)) {
-        proxyRemoteRisks.add(new ProxyRemoteRisk(name, format, remoteUrl(document),
-            remoteUrl(document) == null ? "missing_remote_url" : "not_checked"));
+        String remote = remoteUrl(document);
+        proxyRemoteRisks.add(new ProxyRemoteRisk(name, format, remote,
+            "swift".equalsIgnoreCase(format) && !validSwiftRemote(remote)
+                ? "unsupported_swift_remote"
+                : credentialRisk != null
+                    ? credentialRisk
+                    : remote == null ? "missing_remote_url" : "not_checked"));
       }
     }
     NexusSecurityPreflight security = securityPreflight(inventory.securityExport());
@@ -206,6 +267,9 @@ public class NexusApiMigrationService {
     if (!missingPasswordUsers.isEmpty()) {
       warnings.add("Local users without password hash compensation will need password reset.");
     }
+    proxyCredentialRisks(inventory).forEach((repository, risk) -> warnings.add(
+        "Proxy repository " + repository + " requires manual upstream credential configuration ("
+            + risk + "); the migrated repository will be offline."));
     return new NexusMigrationPreflight(
         inventory.blobStores().size(),
         inventory.repositories().size(),
@@ -450,13 +514,17 @@ public class NexusApiMigrationService {
     if (recipe.format().name().equals("DOCKER")) {
       putIfNotNull(attributes, "docker", dockerAttributes(document));
     }
+    boolean online = bool(value(document, "online"), true);
+    if (recipe.type() == RepositoryType.PROXY && proxyCredentialRisk(document) != null) {
+      online = false;
+    }
     return new RepositoryRecord(
         null,
         repositoryName(document),
         recipe.format(),
         recipe.type(),
         recipe.name(),
-        bool(value(document, "online"), true),
+        online,
         targetBlobStore == null ? null : targetBlobStore.id(),
         null,
         proxyRemoteUrl(document, recipe),
@@ -605,6 +673,7 @@ public class NexusApiMigrationService {
           "No unsupported repositories were reported by source inventory.",
           List.of()));
     }
+    checks.add(validateProxyCredentials(inventory));
     checks.add(validateApiKeyExport(inventory));
     checks.add(validatePlanHashes(preflight));
     return new NexusMigrationValidation(checks.stream()
@@ -775,6 +844,27 @@ public class NexusApiMigrationService {
             List.of("apiKeys=0"));
   }
 
+  private ValidationCheck validateProxyCredentials(NexusInventory inventory) {
+    Map<String, String> risks = proxyCredentialRisks(inventory);
+    if (risks.isEmpty()) {
+      return new ValidationCheck(
+          "repository",
+          "proxy credentials",
+          ValidationStatus.PASS.name(),
+          "No configured proxy credential was omitted or masked by the source Nexus REST API.",
+          List.of());
+    }
+    return new ValidationCheck(
+        "repository",
+        "proxy credentials",
+        ValidationStatus.MANUAL.name(),
+        "Some source proxy credentials cannot be recovered; affected target repositories are offline "
+            + "until credentials are configured manually.",
+        risks.entrySet().stream()
+            .map(entry -> entry.getKey() + ": " + entry.getValue())
+            .toList());
+  }
+
   private ValidationCheck validatePlanHashes(NexusMigrationPreflight preflight) {
     NexusMigrationPlan plan = preflight.migrationPlan();
     String profileHash = plan == null ? null : plan.profileHash();
@@ -872,6 +962,14 @@ public class NexusApiMigrationService {
 
   private static String proxyRemoteUrl(RepositoryDocument document, RepositoryRecipe recipe) {
     String remote = remoteUrl(document);
+    if (recipe != null && recipe.format() == RepositoryFormat.SWIFT
+        && recipe.type() == RepositoryType.PROXY) {
+      if (!validSwiftRemote(remote)) {
+        throw new IllegalArgumentException(
+            "Nexus Swift proxy remote must be the GitHub base URL https://github.com/");
+      }
+      return "https://github.com/";
+    }
     if ((remote == null || remote.isBlank())
         && recipe != null
         && recipe.format().name().equals("PUB")
@@ -881,15 +979,201 @@ public class NexusApiMigrationService {
     return remote;
   }
 
+  private static boolean validSwiftRemote(String remote) {
+    String candidate = remote == null || remote.isBlank() ? "https://github.com/" : remote.trim();
+    try {
+      URI uri = new URI(candidate);
+      String path = uri.getPath();
+      return "https".equalsIgnoreCase(uri.getScheme())
+          && "github.com".equalsIgnoreCase(uri.getHost())
+          && (uri.getPort() == -1 || uri.getPort() == 443)
+          && uri.getUserInfo() == null
+          && uri.getQuery() == null
+          && uri.getFragment() == null
+          && (path == null || path.isBlank() || "/".equals(path));
+    } catch (URISyntaxException e) {
+      return false;
+    }
+  }
+
   private static Map<String, Object> proxyAttributes(RepositoryDocument document, RepositoryRecipe recipe) {
     LinkedHashMap<String, Object> attributes = new LinkedHashMap<>();
     putIfNotNull(attributes, "remoteUrl", proxyRemoteUrl(document, recipe));
     putIfNotNull(attributes, "contentMaxAgeMinutes", intValue(nested(value(document, "proxy"), "contentMaxAge")));
     putIfNotNull(attributes, "metadataMaxAgeMinutes", intValue(nested(value(document, "proxy"), "metadataMaxAge")));
-    putIfNotNull(attributes, "autoBlock", boolOrNull(nested(value(document, "httpClient"), "autoBlock")));
+    Object httpClient = value(document, "httpClient");
+    putIfNotNull(attributes, "autoBlock", boolOrNull(nested(httpClient, "autoBlock")));
+    putProxyAuthentication(attributes, nested(httpClient, "authentication"));
     putIfNotNull(attributes, "negativeCache", value(document, "negativeCache"));
-    putIfNotNull(attributes, "httpClient", value(document, "httpClient"));
+    // The source snapshot already keeps a recursively redacted copy. Do not persist the raw
+    // nested httpClient here; runtime credentials live only in the DAO-encrypted fields above.
     return Map.copyOf(attributes);
+  }
+
+  private static NexusMigrationPlan withProxyCredentialManualActions(
+      NexusMigrationPlan plan,
+      NexusInventory inventory) {
+    Map<String, String> risks = proxyCredentialRisks(inventory);
+    if (risks.isEmpty()) {
+      return plan;
+    }
+    List<NexusMigrationPlanItem> items = plan.items().stream()
+        .map(item -> {
+          String risk = "repository".equals(item.area()) ? risks.get(item.name()) : null;
+          if (risk == null) {
+            return item;
+          }
+          ArrayList<String> reasons = new ArrayList<>(item.reasons());
+          reasons.add("Source Nexus omitted or masked the configured upstream credential; "
+              + "configure it manually before enabling the migrated proxy repository.");
+          ArrayList<String> warnings = new ArrayList<>(item.warnings());
+          warnings.add("Target repository will be migrated offline because the upstream credential "
+              + "cannot be recovered from the Nexus REST response (" + risk + ").");
+          return new NexusMigrationPlanItem(
+              item.area(),
+              item.name(),
+              item.format(),
+              item.type(),
+              SupportStatus.NEEDS_MANUAL_ACTION,
+              item.sourceAdapter(),
+              item.formatAdapter(),
+              item.readMode(),
+              item.writeMode(),
+              item.checksumMode(),
+              item.resumeKey(),
+              reasons,
+              warnings);
+        })
+        .toList();
+    LinkedHashSet<String> warnings = new LinkedHashSet<>(plan.warnings());
+    warnings.add("Some proxy credentials were omitted or masked by the source Nexus REST API; "
+        + "the affected target repositories are offline until credentials are configured manually.");
+    LinkedHashSet<String> manualActions = new LinkedHashSet<>(plan.manualActions());
+    risks.keySet().forEach(repository -> manualActions.add("repository:" + repository));
+    List<String> warningList = List.copyOf(warnings);
+    List<String> manualActionList = List.copyOf(manualActions);
+    return new NexusMigrationPlan(
+        plan.adapter(),
+        plan.profileHash(),
+        MigrationPlanHashes.planHash(plan.adapter(), items, warningList, manualActionList),
+        items,
+        warningList,
+        manualActionList);
+  }
+
+  private static boolean hasProxyCredentialManualAction(NexusInventory inventory) {
+    return !proxyCredentialRisks(inventory).isEmpty();
+  }
+
+  private static Map<String, String> proxyCredentialRisks(NexusInventory inventory) {
+    LinkedHashMap<String, String> risks = new LinkedHashMap<>();
+    for (RepositoryDocument document : inventory.repositories().stream()
+        .sorted(Comparator.comparing(
+            NexusApiMigrationService::repositoryName,
+            Comparator.nullsLast(String::compareTo)))
+        .toList()) {
+      if (repositoryTypeEnum(document) != RepositoryType.PROXY
+          || !NexusRepositorySupport.supportedRecipe(
+              repositoryFormat(document), repositoryType(document))) {
+        continue;
+      }
+      String risk = proxyCredentialRisk(document);
+      if (risk != null) {
+        risks.put(repositoryName(document), risk);
+      }
+    }
+    return java.util.Collections.unmodifiableMap(risks);
+  }
+
+  private static String proxyCredentialRisk(RepositoryDocument document) {
+    Object authentication = nested(value(document, "httpClient"), "authentication");
+    if (!(authentication instanceof Map<?, ?> values) || values.isEmpty()) {
+      return null;
+    }
+    String type = string(nested(authentication, "type"));
+    String username = string(nested(authentication, "username"));
+    String password = string(nested(authentication, "password"));
+    String bearerToken = firstNonBlank(
+        string(nested(authentication, "bearerToken")),
+        string(nested(authentication, "token")));
+    String value = string(nested(authentication, "value"));
+    boolean noAuthentication = type != null
+        && ("none".equalsIgnoreCase(type) || "anonymous".equalsIgnoreCase(type))
+        && username == null
+        && password == null
+        && bearerToken == null
+        && value == null;
+    if (noAuthentication) {
+      return null;
+    }
+    boolean configured = type != null
+        || username != null
+        || password != null
+        || bearerToken != null
+        || value != null;
+    if (!configured) {
+      return null;
+    }
+    boolean bearer = bearerAuthentication(type) || bearerToken != null;
+    String secret = bearer
+        ? firstNonBlank(bearerToken, password, value)
+        : firstNonBlank(password, value);
+    if (secret == null) {
+      return "missing_proxy_credential_secret";
+    }
+    if (maskedSecret(secret)) {
+      return "masked_proxy_credential_secret";
+    }
+    if (!bearer && username == null) {
+      return "missing_proxy_credential_username";
+    }
+    return null;
+  }
+
+  private static boolean maskedSecret(String value) {
+    if (value == null) {
+      return false;
+    }
+    String normalized = value.trim().toLowerCase(Locale.ROOT);
+    return normalized.matches("[\\*\\u2022]+")
+        || "redacted".equals(normalized)
+        || "<redacted>".equals(normalized)
+        || "[redacted]".equals(normalized);
+  }
+
+  private static void putProxyAuthentication(
+      Map<String, Object> attributes,
+      Object authentication) {
+    String type = string(nested(authentication, "type"));
+    String bearerToken = firstNonBlank(
+        string(nested(authentication, "bearerToken")),
+        string(nested(authentication, "token")));
+    String password = string(nested(authentication, "password"));
+    if (bearerToken == null && bearerAuthentication(type)) {
+      bearerToken = firstNonBlank(password, string(nested(authentication, "value")));
+    }
+    if (maskedSecret(bearerToken)) {
+      bearerToken = null;
+    }
+    if (bearerToken != null) {
+      attributes.put("remoteBearerToken", bearerToken);
+      return;
+    }
+
+    String username = string(nested(authentication, "username"));
+    String basicPassword = firstNonBlank(password, string(nested(authentication, "value")));
+    putIfNotNull(attributes, "remoteUsername", username);
+    if (username != null && !maskedSecret(basicPassword)) {
+      putIfNotNull(attributes, "remotePassword", basicPassword);
+    }
+  }
+
+  private static boolean bearerAuthentication(String type) {
+    if (type == null) {
+      return false;
+    }
+    String normalized = type.trim().toLowerCase(Locale.ROOT);
+    return normalized.contains("bearer") || normalized.equals("token");
   }
 
   private static List<String> groupMembers(RepositoryDocument document) {
@@ -998,6 +1282,16 @@ public class NexusApiMigrationService {
   private static String defaultString(String value, String fallback) {
     String normalized = string(value);
     return normalized == null ? fallback : normalized;
+  }
+
+  private static String firstNonBlank(String... values) {
+    for (String value : values) {
+      String normalized = string(value);
+      if (normalized != null) {
+        return normalized;
+      }
+    }
+    return null;
   }
 
   public record NexusMigrationRequest(

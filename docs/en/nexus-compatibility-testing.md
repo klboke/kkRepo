@@ -20,7 +20,7 @@ compat-test/
 - hosted write, delete, and repeated-upload behavior
 - client-visible proxy, group, browse/search behavior
 
-The current module includes compatibility test classes for Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Docker/OCI, NuGet, RubyGems, Yum, Raw, component upload, security management APIs, and related areas.
+The current module includes compatibility test classes for Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift Package Registry, Docker/OCI, NuGet, RubyGems, Yum, Raw, component upload, security management APIs, and related areas.
 
 Regular test command:
 
@@ -64,6 +64,10 @@ Dart / Pub compatibility uses the same Nexus Repository 3.92.0+ PostgreSQL refer
 
 Terraform compatibility uses a Nexus 3.90.0+ reference for hosted/proxy/group recipes. `TerraformRepositoryBlackBoxCompatibilityTest` compares module/provider versions, download metadata, archive/checksum/signature behavior, URL-token follow-up requests, write policy, and group resolution. The real-client suite then runs `terraform init` with Terraform 0.13 and a current stable binary.
 
+Swift compatibility overrides the general 3.92.0 compose default with a Nexus 3.94.x reference for hosted/proxy/group recipes. `SwiftRepositoryBlackBoxCompatibilityTest` compares canonical Registry v1 JSON/`Link` output, negotiation, release/manifest/archive/identifier behavior, immutable multipart publication, signatures, `v`/`V` and renamed-GitHub-repository handling, group reorder/nesting, concurrent first access, unavailable problems, and cross-replica visibility. `POST /login` is optional in the Swift specification, so `501` is a valid reference branch for a server that omits it; kkrepo implements the endpoint and its expected results are `200`/`401`. The client workflows run SwiftPM 5.7/5.10/6.x on Linux, an Xcode registry fixture on macOS, and proxy resolve/build on Windows.
+
+Evidence stays at the appropriate layer: the compatibility black box covers active/revoked/expired `GenericToken` behavior, while server/persistence tests cover moving-tag immutability, 1,200-tag pagination bounds, cleanup, and 429/5xx propagation. The scheduled Swift resilience lane uses two replicas and MinIO through the AWS S3-compatible adapter to exercise a multi-megabyte package, shared 429/5xx waterlines with stale fallback, lease takeover, restart, and destructive relational-database/object backup-restore. Alibaba OSS Native has adapter-contract coverage but no live endpoint E2E claim.
+
 ## Real Client E2E
 
 The `client-e2e` suite validates the behavior of actual package clients against a disposable kkrepo candidate:
@@ -72,7 +76,7 @@ The `client-e2e` suite validates the behavior of actual package clients against 
 scripts/ci/run-live-compat.sh client-e2e
 ```
 
-It runs publish/upload plus download/resolve flows for Maven, npm, PyPI, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform 0.13/current, NuGet, RubyGems, Yum, and Docker/OCI. Composer covers hosted archives, group resolution, Packagist proxying, a transitive dependency, Basic authentication, and lock replay from the server cache. Terraform covers hosted module/provider upload, registry.terraform.io proxying, group resolution, URL-token authentication, checksums, and signatures. Go is resolve-only through the Go module proxy because hosted Go publishing is not a supported repository mode. Docker image push/pull is always covered, and ORAS pushes/pulls a generic OCI artifact when the `oras` client is available.
+It runs publish/upload plus download/resolve flows for Maven, npm, PyPI, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform 0.13/current, SwiftPM/Xcode, NuGet, RubyGems, Yum, and Docker/OCI. Composer covers hosted archives, group resolution, Packagist proxying, a transitive dependency, Basic authentication, and lock replay from the server cache. Terraform covers hosted module/provider upload, registry.terraform.io proxying, group resolution, URL-token authentication, checksums, and signatures. Swift 5.7 covers registry/proxy resolve/build; 5.10/6.x additionally cover hosted publication, Basic/GenericToken login, group resolution/build, GitHub SCM replacement, checksum replay, and cross-replica reads. macOS and Windows have dedicated Xcode and proxy-only lanes. Go is resolve-only through the Go module proxy because hosted Go publishing is not a supported repository mode. Docker image push/pull is always covered, and ORAS pushes/pulls a generic OCI artifact when the `oras` client is available.
 
 Use this suite when a change affects repository protocol behavior that real clients exercise: authentication headers or API keys, publish/upload paths, generated metadata, package index shape, checksum/download behavior, Docker connector ports, or group/proxy resolution. In GitHub Actions, run it manually by selecting `client-e2e` in the `Live Compatibility` workflow, or add the `run-client-e2e` label to a PR.
 
@@ -80,7 +84,7 @@ Client command logs, downloaded metadata, selected inspect output, and other dia
 
 ## Migration E2E
 
-The `Migration E2E` workflow imports configuration, security metadata, and repository data from supported Nexus generations, including the historical 3.29.x embedded/OrientDB reference and datastore-era H2/PostgreSQL references. Add the `run-migration-e2e` label to a PR when a change affects source detection, migration adapters, repository-data import, blob/checksum validation, permissions, or post-migration protocol behavior.
+The `Migration E2E` workflow imports configuration, security metadata, and repository data from supported Nexus generations, including the historical 3.29.x embedded/OrientDB reference and datastore-era H2/PostgreSQL references. Swift hosted data is `FULL` only for verified Nexus 3.92.x-3.94.x datastore shapes; out-of-range versions or shape drift remain manual. The live Swift matrix uses Nexus 3.94 and covers H2 to MySQL plus PostgreSQL source to MySQL/PostgreSQL targets, restart/resume, exact-row-count idempotency, and fail-closed masked/missing proxy secrets. Such a proxy stays offline without a placeholder credential until the target secret is supplied explicitly. Add the `run-migration-e2e` label to a PR when a change affects source detection, migration adapters, repository-data import, blob/checksum validation, permissions, or post-migration protocol behavior.
 
 ## Traffic Mirroring Validation
 
@@ -88,7 +92,7 @@ In addition to in-project black-box compatibility tests and real client E2E chec
 
 This historical validation stage aims to:
 
-- Confirm that real Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Docker/OCI, Terraform, and similar client requests are recognized correctly by kkrepo.
+- Confirm that real Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Docker/OCI, Terraform, SwiftPM/Xcode, and similar client requests are recognized correctly by kkrepo.
 - Compare HTTP status, error types, and key response behavior between the Nexus main path and the kkrepo mirrored path.
 - Observe proxy upstream access, blob storage, permission/authentication, and metadata/index rebuild stability under real traffic.
 - Discover edge requests not covered by `compat-test`, such as special client headers, old client behavior, CI plugin probe requests, and occasional proxy requests.
@@ -128,7 +132,7 @@ Overall scale and observations:
 
 These numbers show kkrepo validation results under real business traffic and migration scale. They do not represent a fixed SLA. Actual throughput and latency are affected by MySQL sizing, OSS/S3 performance, network, proxy upstream quality, repository count, package size, and replica count.
 
-Cargo / Rust, Dart / Pub, and Terraform are not included in the historical production-scale validation numbers above. Validate Cargo with the Nexus 3.77.x+ compatibility suite and real Cargo clients, validate Pub with the Nexus 3.92.0+ compatibility suite plus real `dart pub` / `flutter pub` clients, and validate Terraform with the Nexus 3.90.0+ reference plus Terraform 0.13/current `terraform init` before production cutover.
+Cargo / Rust, Dart / Pub, Terraform, and Swift are not included in the historical production-scale validation numbers above. Validate Cargo with the Nexus 3.77.x+ compatibility suite and real Cargo clients, validate Pub with the Nexus 3.92.0+ compatibility suite plus real `dart pub` / `flutter pub` clients, validate Terraform with the Nexus 3.90.0+ reference plus Terraform 0.13/current `terraform init`, and validate Swift with the Nexus 3.94.x reference plus the cross-platform SwiftPM/Xcode matrix before production cutover.
 
 ## Compatibility Issue Handling Flow
 

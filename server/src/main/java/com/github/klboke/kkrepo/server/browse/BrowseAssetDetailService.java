@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
@@ -57,6 +58,7 @@ public class BrowseAssetDetailService {
   private final AssetDao assetDao;
   private final DockerRegistryDao dockerDao;
   private final TerraformRegistryDao terraformDao;
+  private final SwiftRegistryDao swiftDao;
   private final BlobStorageRegistry blobStorageRegistry;
   private final ObjectMapper objectMapper;
 
@@ -66,12 +68,14 @@ public class BrowseAssetDetailService {
       AssetDao assetDao,
       DockerRegistryDao dockerDao,
       TerraformRegistryDao terraformDao,
+      SwiftRegistryDao swiftDao,
       BlobStorageRegistry blobStorageRegistry,
       ObjectMapper objectMapper) {
     this.repositoryDao = repositoryDao;
     this.assetDao = assetDao;
     this.dockerDao = dockerDao;
     this.terraformDao = terraformDao;
+    this.swiftDao = swiftDao;
     this.blobStorageRegistry = blobStorageRegistry;
     this.objectMapper = objectMapper;
   }
@@ -80,9 +84,19 @@ public class BrowseAssetDetailService {
       RepositoryDao repositoryDao,
       AssetDao assetDao,
       DockerRegistryDao dockerDao,
+      TerraformRegistryDao terraformDao,
       BlobStorageRegistry blobStorageRegistry,
       ObjectMapper objectMapper) {
-    this(repositoryDao, assetDao, dockerDao, null, blobStorageRegistry, objectMapper);
+    this(repositoryDao, assetDao, dockerDao, terraformDao, null, blobStorageRegistry, objectMapper);
+  }
+
+  public BrowseAssetDetailService(
+      RepositoryDao repositoryDao,
+      AssetDao assetDao,
+      DockerRegistryDao dockerDao,
+      BlobStorageRegistry blobStorageRegistry,
+      ObjectMapper objectMapper) {
+    this(repositoryDao, assetDao, dockerDao, null, null, blobStorageRegistry, objectMapper);
   }
 
   public BrowseAssetDetailService(
@@ -90,7 +104,7 @@ public class BrowseAssetDetailService {
       AssetDao assetDao,
       BlobStorageRegistry blobStorageRegistry,
       ObjectMapper objectMapper) {
-    this(repositoryDao, assetDao, null, null, blobStorageRegistry, objectMapper);
+    this(repositoryDao, assetDao, null, null, null, blobStorageRegistry, objectMapper);
   }
 
   public BrowseAssetDetail detail(
@@ -136,6 +150,9 @@ public class BrowseAssetDetailService {
     Map<String, Object> composer = source.format() == RepositoryFormat.COMPOSER
         ? composerAttributes(asset)
         : Map.of();
+    Map<String, Object> swift = source.format() == RepositoryFormat.SWIFT
+        ? swiftAttributes(source, asset)
+        : Map.of();
     String displayName = storagePath.equals(publicPath)
         ? asset.name()
         : publicPath.substring(publicPath.lastIndexOf('/') + 1);
@@ -161,7 +178,58 @@ public class BrowseAssetDetailService {
         npm,
         pub,
         composer,
+        swift,
         provenance);
+  }
+
+  private Map<String, Object> swiftAttributes(RepositoryRecord source, AssetRecord asset) {
+    String[] segments = normalize(asset.path()).split("/");
+    if (segments.length < 3) {
+      return Map.of();
+    }
+    String scope = segments[0];
+    String name = segments[1];
+    String version = segments[2].endsWith(".zip")
+        ? segments[2].substring(0, segments[2].length() - 4)
+        : segments[2];
+    LinkedHashMap<String, Object> swift = new LinkedHashMap<>();
+    putNonBlank(swift, "scope", scope);
+    putNonBlank(swift, "name", name);
+    putNonBlank(swift, "version", version);
+    putNonBlank(swift, "asset_kind", asset.attributes() == null ? asset.kind() : asset.attributes().get("swiftKind"));
+    putNonBlank(swift, "swift_tools_version",
+        asset.attributes() == null ? null : asset.attributes().get("swiftToolsVersion"));
+    putNonBlank(swift, "declared_swift_tools_version",
+        asset.attributes() == null ? null : asset.attributes().get("declaredSwiftToolsVersion"));
+    putNonBlank(swift, "source_repository", source.name());
+    if (swiftDao == null) {
+      return Map.copyOf(swift);
+    }
+    swiftDao.findRelease(source.id(), scope.toLowerCase(Locale.ROOT), name.toLowerCase(Locale.ROOT), version)
+        .ifPresent(release -> {
+          putNonBlank(swift, "archive_sha256", release.archiveSha256());
+          putNonBlank(swift, "source_kind", release.sourceKind());
+          putNonBlank(swift, "signature_status", release.signatureFormat() == null ? "unsigned" : "signed");
+          putNonBlank(swift, "signature_format", release.signatureFormat());
+          List<String> toolsVersions = swiftDao.listManifests(release.id()).stream()
+              .map(SwiftRegistryDao.Manifest::toolsVersion)
+              .filter(value -> value != null && !value.isBlank())
+              .distinct()
+              .sorted()
+              .toList();
+          if (!toolsVersions.isEmpty()) {
+            swift.put("swift_tools_versions", toolsVersions);
+          }
+          List<String> repositoryUrls = swiftDao.listRepositoryUrls(release.id()).stream()
+              .map(SwiftRegistryDao.RepositoryUrl::displayUrl)
+              .filter(value -> value != null && !value.isBlank())
+              .distinct()
+              .toList();
+          if (!repositoryUrls.isEmpty()) {
+            swift.put("repository_urls", repositoryUrls);
+          }
+        });
+    return Map.copyOf(swift);
   }
 
   private static boolean isCargoDynamicConfig(RepositoryRecord repository, String storagePath) {
@@ -218,6 +286,7 @@ public class BrowseAssetDetailService {
         Map.of(),
         Map.of(),
         Map.of(),
+        Map.of(),
         provenance);
   }
 
@@ -242,6 +311,7 @@ public class BrowseAssetDetailService {
         null,
         Map.of(),
         content,
+        Map.of(),
         Map.of(),
         Map.of(),
         Map.of(),
@@ -908,5 +978,6 @@ public class BrowseAssetDetailService {
       Map<String, Object> npm,
       Map<String, Object> pub,
       Map<String, Object> composer,
+      Map<String, Object> swift,
       Map<String, Object> provenance) {}
 }

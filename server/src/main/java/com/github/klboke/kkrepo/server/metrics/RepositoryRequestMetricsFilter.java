@@ -4,6 +4,8 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPath;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPathParser;
+import com.github.klboke.kkrepo.protocol.swift.SwiftPath;
+import com.github.klboke.kkrepo.protocol.swift.SwiftPathParser;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPath;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPathParser;
 import com.github.klboke.kkrepo.server.docker.DockerConnectorConfiguration;
@@ -40,6 +42,7 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
   private static final int MAX_LOGGED_PARAM_VALUE_LENGTH = 512;
   private static final String REDACTED_TERRAFORM_PATH = "<redacted-terraform-path>";
   private static final ComposerPathParser COMPOSER_PATHS = new ComposerPathParser();
+  private static final SwiftPathParser SWIFT_PATHS = new SwiftPathParser();
   private static final TerraformPathParser TERRAFORM_PATHS = new TerraformPathParser();
 
   private final KkRepoMetrics metrics;
@@ -118,7 +121,7 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
         request.getMethod(),
         loggedUri(request, target, format),
         target.path(),
-        requestParameters(request),
+        requestParameters(request, target),
         repository,
         format,
         type,
@@ -296,7 +299,21 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
       case YUM -> yumOperation(path, normalizedMethod);
       case DOCKER -> dockerOperation(path, normalizedMethod);
       case TERRAFORM -> terraformOperation(path, normalizedMethod);
+      case SWIFT -> swiftOperation(path, normalizedMethod);
       case RAW -> rawOperation(normalizedMethod);
+    };
+  }
+
+  private static String swiftOperation(String path, String method) {
+    SwiftPath parsed = SWIFT_PATHS.parse(path);
+    return switch (parsed.kind()) {
+      case LOGIN -> "swift_login";
+      case IDENTIFIERS -> "swift_identifiers";
+      case RELEASE_LIST -> "swift_release_list";
+      case RELEASE_METADATA -> "PUT".equals(method) ? "swift_publish" : "swift_release_metadata";
+      case MANIFEST -> "swift_manifest";
+      case SOURCE_ARCHIVE -> "swift_source_archive";
+      case ROOT, UNKNOWN -> "swift_repository";
     };
   }
 
@@ -458,7 +475,7 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
     }
   }
 
-  private static String requestParameters(HttpServletRequest request) {
+  private static String requestParameters(HttpServletRequest request, Target target) {
     Map<String, String[]> parameters;
     try {
       parameters = request.getParameterMap();
@@ -470,21 +487,22 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
     }
     return parameters.entrySet().stream()
         .sorted(Map.Entry.comparingByKey())
-        .map(entry -> entry.getKey() + "=" + parameterValues(entry.getKey(), entry.getValue()))
+        .map(entry -> entry.getKey() + "="
+            + parameterValues(entry.getKey(), entry.getValue(), target))
         .collect(Collectors.joining(", ", "{", "}"));
   }
 
-  private static String parameterValues(String name, String[] values) {
+  private static String parameterValues(String name, String[] values, Target target) {
     if (values == null || values.length == 0) {
       return "[]";
     }
     return Arrays.stream(values)
-        .map(value -> parameterValue(name, value))
+        .map(value -> parameterValue(name, value, target))
         .collect(Collectors.joining(", ", "[", "]"));
   }
 
-  private static String parameterValue(String name, String value) {
-    if (isSensitiveParameter(name)) {
+  private static String parameterValue(String name, String value, Target target) {
+    if (isSensitiveParameter(name) || isSwiftIdentifiersUrl(name, target)) {
       return "<redacted>";
     }
     if (value == null) {
@@ -494,6 +512,13 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
       return value;
     }
     return value.substring(0, MAX_LOGGED_PARAM_VALUE_LENGTH) + "...";
+  }
+
+  private static boolean isSwiftIdentifiersUrl(String name, Target target) {
+    return target != null
+        && "repository".equals(target.route())
+        && "identifiers".equals(target.path())
+        && "url".equalsIgnoreCase(name);
   }
 
   private static boolean isSensitiveParameter(String name) {

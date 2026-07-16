@@ -33,6 +33,7 @@ import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.annotation.Order;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.session.web.http.SessionRepositoryFilter;
 
 class RepositorySecurityFilterTest {
@@ -184,6 +185,153 @@ class RepositorySecurityFilterTest {
     assertEquals(
         "Bearer realm=\"pub\", message=\"Authentication required\"",
         response.headers.get("WWW-Authenticate"));
+  }
+
+  @Test
+  void swiftReadUsesAnonymousReadPermissionWhenEnabled() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(subject("anonymous"));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "swift-public", RepositoryFormat.SWIFT, RepositoryType.HOSTED)),
+        true);
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/repository/swift-public/Acme/Demo/1.2.3.zip"),
+        new MockHttpServletResponse(),
+        chain);
+
+    assertEquals(1, authentication.calls);
+    assertEquals(1, authentication.anonymousCalls);
+    assertEquals(1, chain.calls);
+    assertEquals(PermissionAction.READ, decisions.permission.action());
+    assertEquals("Acme/Demo/1.2.3.zip", decisions.permission.pathPattern());
+  }
+
+  @Test
+  void swiftPublishRequiresAddPermission() throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED)),
+        false);
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("PUT", "/repository/swift-hosted/Acme/Demo/1.2.3"),
+        new MockHttpServletResponse(),
+        chain);
+
+    assertEquals(1, authentication.calls);
+    assertEquals(1, chain.calls);
+    assertEquals(PermissionAction.ADD, decisions.permission.action());
+    assertEquals("Acme/Demo/1.2.3", decisions.permission.pathPattern());
+  }
+
+  @Test
+  void swiftReadOnlyRepositoryPublishReachesProtocolServiceFor405WithoutAddPermission() throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.empty());
+    RecordingDecisionService decisions =
+        new RecordingDecisionService(AccessDecision.deny("should not decide"));
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "swift-proxy", RepositoryFormat.SWIFT, RepositoryType.PROXY)),
+        false);
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("PUT", "/repository/swift-proxy/Acme/Demo/1.2.3"),
+        new MockHttpServletResponse(),
+        chain);
+
+    assertEquals(0, authentication.calls);
+    assertEquals(0, decisions.decisions);
+    assertEquals(1, chain.calls);
+  }
+
+  @Test
+  void swiftLoginNeverFallsBackToAnonymousAndReturnsProblemDetails() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(subject("anonymous"));
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        new RecordingDecisionService(AccessDecision.allow()),
+        new FakeRepositoryDao(repository(
+            "swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED)),
+        true);
+    MockHttpServletResponse response = new MockHttpServletResponse();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("POST", "/repository/swift-hosted/login"), response, chain);
+
+    assertEquals(1, authentication.calls);
+    assertEquals(0, authentication.anonymousCalls);
+    assertEquals(0, chain.calls);
+    assertEquals(HttpServletResponse.SC_UNAUTHORIZED, response.getStatus());
+    assertEquals("Basic realm=\"kkrepo\"", response.getHeader("WWW-Authenticate"));
+    assertEquals("1", response.getHeader("Content-Version"));
+    assertEquals("no-store", response.getHeader("Cache-Control"));
+    assertTrue(response.getContentType().startsWith("application/problem+json"));
+    var problem = new ObjectMapper().readTree(response.getContentAsByteArray());
+    assertEquals("Unauthorized", problem.path("title").asText());
+    assertEquals(401, problem.path("status").asInt());
+    assertEquals("Authentication required", problem.path("detail").asText());
+  }
+
+  @Test
+  void swiftLoginUsesReadPermissionAfterAuthentication() throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED)),
+        false);
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("POST", "/repository/swift-hosted/login"),
+        new MockHttpServletResponse(),
+        chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(PermissionAction.READ, decisions.permission.action());
+  }
+
+  @Test
+  void swiftAuthorizationDenialReturnsProblemDetailsInsteadOfServletErrorPage() throws Exception {
+    RepositorySecurityFilter filter = filter(
+        new StubAuthenticationService(Optional.of(subject("alice"))),
+        new RecordingDecisionService(AccessDecision.deny("missing Swift read permission")),
+        new FakeRepositoryDao(repository(
+            "swift-private", RepositoryFormat.SWIFT, RepositoryType.HOSTED)),
+        false);
+    MockHttpServletResponse response = new MockHttpServletResponse();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/repository/swift-private/Acme/Demo"), response, chain);
+
+    assertEquals(0, chain.calls);
+    assertEquals(HttpServletResponse.SC_FORBIDDEN, response.getStatus());
+    assertEquals("1", response.getHeader("Content-Version"));
+    assertTrue(response.getContentType().startsWith("application/problem+json"));
+    var problem = new ObjectMapper().readTree(response.getContentAsByteArray());
+    assertEquals("Forbidden", problem.path("title").asText());
+    assertEquals(403, problem.path("status").asInt());
+    assertEquals("missing Swift read permission", problem.path("detail").asText());
   }
 
   @Test

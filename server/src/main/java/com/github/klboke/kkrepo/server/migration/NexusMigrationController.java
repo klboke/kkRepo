@@ -37,6 +37,7 @@ import java.util.Optional;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -68,6 +69,7 @@ public class NexusMigrationController {
   private final BasicAuthCache basicAuthCache;
   private final DockerConnectorRuntime dockerConnectorRuntime;
   private final TerraformRegistryDao terraformRegistry;
+  private final PlatformTransactionManager transactionManager;
 
   public NexusMigrationController(
       ObjectMapper objectMapper,
@@ -87,7 +89,8 @@ public class NexusMigrationController {
       ApiKeyAuthCache apiKeyAuthCache,
       BasicAuthCache basicAuthCache,
       DockerConnectorRuntime dockerConnectorRuntime,
-      TerraformRegistryDao terraformRegistry) {
+      TerraformRegistryDao terraformRegistry,
+      PlatformTransactionManager transactionManager) {
     this.objectMapper = objectMapper;
     this.blobStoreDao = blobStoreDao;
     this.repositoryDao = repositoryDao;
@@ -106,6 +109,7 @@ public class NexusMigrationController {
     this.basicAuthCache = basicAuthCache;
     this.dockerConnectorRuntime = dockerConnectorRuntime;
     this.terraformRegistry = terraformRegistry;
+    this.transactionManager = transactionManager;
   }
 
   @PostMapping("/preflight")
@@ -261,7 +265,8 @@ public class NexusMigrationController {
         securityDao,
         migrationJobDao,
         new SecurityDaoMigrationWriter(securityDao),
-        terraformRegistry);
+        terraformRegistry,
+        transactionManager);
   }
 
   private NexusMigrationRequest toRequest(NexusMigrationCommand command, boolean dryRun) {

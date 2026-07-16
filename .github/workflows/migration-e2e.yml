@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   nexus-migration-e2e:
-    name: Nexus ${{ matrix.nexus-version }} (${{ matrix.metadata-engine }}) migration E2E
+    name: Nexus ${{ matrix.nexus-version }} (${{ matrix.metadata-engine }}) to ${{ matrix.target-database || 'mysql' }} migration E2E
     runs-on: ubuntu-latest
     timeout-minutes: 120
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-migration-e2e'))
@@ -40,6 +40,9 @@ jobs:
             management-port: 18091
             docker-port: 18183
             composer-migration-enabled: false
+            swift-migration-enabled: false
+            secondary-port: 19090
+            secondary-management-port: 19091
             wait-timeout-seconds: 300
           - nexus-version: 3.77.2
             project-suffix: nexus-3772
@@ -53,6 +56,9 @@ jobs:
             management-port: 18095
             docker-port: 18185
             composer-migration-enabled: false
+            swift-migration-enabled: false
+            secondary-port: 19092
+            secondary-management-port: 19093
             wait-timeout-seconds: 300
           - nexus-version: 3.77.2
             project-suffix: nexus-3772-pg
@@ -66,6 +72,9 @@ jobs:
             management-port: 18097
             docker-port: 18187
             composer-migration-enabled: false
+            swift-migration-enabled: false
+            secondary-port: 19094
+            secondary-management-port: 19095
             wait-timeout-seconds: 300
           - nexus-version: 3.92.0
             project-suffix: nexus-3920-pg
@@ -79,7 +88,62 @@ jobs:
             management-port: 18099
             docker-port: 18189
             composer-migration-enabled: true
+            swift-migration-enabled: false
+            secondary-port: 19096
+            secondary-management-port: 19097
             wait-timeout-seconds: 300
+          - nexus-version: 3.94.0
+            project-suffix: nexus-3940-pg-swift
+            metadata-engine: datastore-postgresql
+            expected-adapter: DatastorePostgresqlNexusAdapter
+            nexus-db-service: nexus-postgres
+            nexus-jvm-args: "-Dnexus.datastore.enabled=true -Dnexus.datastore.nexus.jdbcUrl=jdbc:postgresql://nexus-postgres:5432/nexus?currentSchema=nexus -Dnexus.datastore.nexus.username=nexus -Dnexus.datastore.nexus.password=nexus"
+            compose-profiles: nexus-postgres,kkrepo-secondary
+            nexus-port: 28095
+            kkrepo-port: 18100
+            management-port: 18101
+            docker-port: 18191
+            composer-migration-enabled: false
+            swift-migration-enabled: true
+            secondary-port: 18102
+            secondary-management-port: 18103
+            wait-timeout-seconds: 420
+          - nexus-version: 3.94.0
+            project-suffix: nexus-3940-h2-swift
+            metadata-engine: datastore-h2
+            expected-adapter: DatastoreH2NexusAdapter
+            nexus-db-service: ""
+            nexus-jvm-args: ""
+            compose-profiles: kkrepo-secondary
+            nexus-port: 28096
+            kkrepo-port: 18104
+            management-port: 18105
+            docker-port: 18193
+            composer-migration-enabled: false
+            swift-migration-enabled: true
+            secondary-port: 18106
+            secondary-management-port: 18107
+            wait-timeout-seconds: 420
+          - nexus-version: 3.94.0
+            project-suffix: nexus-3940-pg-swift-target-pg
+            metadata-engine: datastore-postgresql
+            expected-adapter: DatastorePostgresqlNexusAdapter
+            nexus-db-service: nexus-postgres
+            nexus-jvm-args: "-Dnexus.datastore.enabled=true -Dnexus.datastore.nexus.jdbcUrl=jdbc:postgresql://nexus-postgres:5432/nexus?currentSchema=nexus -Dnexus.datastore.nexus.username=nexus -Dnexus.datastore.nexus.password=nexus"
+            compose-profiles: nexus-postgres,kkrepo-postgresql
+            target-database: postgresql
+            target-database-service: kkrepo-postgres
+            candidate-service: kkrepo-postgresql
+            secondary-service: kkrepo-postgresql-secondary
+            nexus-port: 28097
+            kkrepo-port: 18108
+            management-port: 18109
+            docker-port: 18195
+            composer-migration-enabled: false
+            swift-migration-enabled: true
+            secondary-port: 18110
+            secondary-management-port: 18111
+            wait-timeout-seconds: 420
     env:
       COMPOSE_FILE: docker-compose.compat.yml
       COMPOSE_PROJECT_NAME: kkrepo-migration-${{ matrix.project-suffix }}
@@ -104,6 +168,12 @@ jobs:
       MIGRATION_E2E_EXPECTED_ADAPTER: ${{ matrix.expected-adapter }}
       COMPOSER_MIGRATION_ENABLED: ${{ matrix.composer-migration-enabled }}
       COMPOSER_NEXUS_REQUIRED: ${{ matrix.composer-migration-enabled }}
+      SWIFT_MIGRATION_ENABLED: ${{ matrix.swift-migration-enabled }}
+      KKREPO_MIGRATION_TARGET_DATABASE: ${{ matrix.target-database || 'mysql' }}
+      KKREPO_MIGRATION_TARGET_DATABASE_SERVICE: ${{ matrix.target-database-service || 'mysql' }}
+      KKREPO_SECONDARY_COMPAT_PORT: ${{ matrix.secondary-port }}
+      KKREPO_SECONDARY_MANAGEMENT_PORT: ${{ matrix.secondary-management-port }}
+      KKREPO_MIGRATION_SECONDARY_URL: http://127.0.0.1:${{ matrix.secondary-port }}
       DOCKER_MIGRATION_WAIT_TIMEOUT_SECONDS: ${{ matrix.wait-timeout-seconds }}
     steps:
       - name: Check out repository
@@ -125,13 +195,17 @@ jobs:
         run: scripts/build-docker-image.sh kkrepo:compat
 
       - name: Start databases
-        run: docker compose -f "$COMPOSE_FILE" up -d --wait mysql ${{ matrix.nexus-db-service }}
+        run: docker compose -f "$COMPOSE_FILE" up -d --wait ${{ matrix.target-database-service || 'mysql' }} ${{ matrix.nexus-db-service }}
 
       - name: Start Nexus ${{ matrix.nexus-version }} and candidate kkrepo
-        run: docker compose -f "$COMPOSE_FILE" up -d nexus kkrepo
+        run: docker compose -f "$COMPOSE_FILE" up -d nexus ${{ matrix.candidate-service || 'kkrepo' }}
 
       - name: Prepare migration fixtures
         run: scripts/ci/live-compat-setup.sh
+
+      - name: Start shared-database migration read replica
+        if: matrix.swift-migration-enabled
+        run: docker compose -f "$COMPOSE_FILE" up -d ${{ matrix.secondary-service || 'kkrepo-secondary' }}
 
       - name: Set up Terraform current stable
         if: matrix.nexus-version == '3.92.0'

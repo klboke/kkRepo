@@ -23,9 +23,9 @@ From V30 onward, add a migration with the same version and description to both d
 | Security | `security_user`, `security_role`, `security_privilege`, mapping tables, `api_key` | Identity and Nexus-compatible authorization |
 | Audit | `security_audit_log` | Searchable security and administration history |
 | Sessions | `SPRING_SESSION`, `SPRING_SESSION_ATTRIBUTES`, `auth_ticket` | Cross-replica login and short-lived authentication state |
-| Coordination | `cache_version`, rebuild markers, `maintenance_cursor`, proxy, Docker, and Terraform lease/binding state | Cache invalidation, claim/retry work, and shared runtime state |
+| Coordination | `cache_version`, rebuild markers, `maintenance_cursor`, proxy, Docker, Terraform, and Swift lease/binding state | Cache invalidation, claim/retry work, and shared runtime state |
 | Migration | `migration_job`, checkpoints, validation, repository/asset migration tables | Resumable Nexus migration and reporting |
-| Protocol side tables | Docker/OCI, Pub, Terraform, and other protocol-specific relations | State that cannot be represented only by common asset attributes; Terraform adds signing keys, provider revisions/platforms, group source bindings, and publish leases in V30 |
+| Protocol side tables | Docker/OCI, Pub, Terraform, Swift, and other protocol-specific relations | State that cannot be represented only by common asset attributes; Terraform adds signing keys, provider revisions/platforms, group source bindings, and publish leases in V30; Swift V31 adds releases/manifests/SCM URLs, GitHub source pins, group bindings, leases, tombstones, negative cache, and repository revisions |
 
 Natural keys and explicit unique constraints protect repository names, paths, package/version identities, blob hashes, token identities, and claim markers across concurrent replicas. Workers claim persistent rows rather than relying on a JVM-local queue.
 

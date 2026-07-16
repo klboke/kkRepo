@@ -1,7 +1,9 @@
 package com.github.klboke.kkrepo.server.security;
 
+import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao.AuditLogRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -9,6 +11,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpServletResponseWrapper;
 import java.io.IOException;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import org.springframework.core.annotation.Order;
@@ -40,7 +43,8 @@ public class ManagementAuditFilter extends OncePerRequestFilter {
       HttpServletRequest request,
       HttpServletResponse response,
       FilterChain filterChain) throws ServletException, IOException {
-    if (!auditedMutation(request)) {
+    boolean managementMutation = auditedMutation(request);
+    if (!managementMutation && !possibleRepositoryPublish(request)) {
       filterChain.doFilter(request, response);
       return;
     }
@@ -53,7 +57,9 @@ public class ManagementAuditFilter extends OncePerRequestFilter {
       failure = e;
       throw e;
     } finally {
-      record(request, wrapped.status(), failure);
+      if (managementMutation || swiftRepositoryPublish(request)) {
+        record(request, wrapped.status(), failure);
+      }
     }
   }
 
@@ -73,7 +79,7 @@ public class ManagementAuditFilter extends OncePerRequestFilter {
           permission(request),
           status,
           outcome,
-          failure == null ? Map.of() : Map.of("error", failure.getClass().getSimpleName())));
+          auditDetails(request, failure)));
     } catch (RuntimeException ignored) {
       // Audit persistence must not hide the original management outcome.
     }
@@ -88,6 +94,39 @@ public class ManagementAuditFilter extends OncePerRequestFilter {
     return uri.startsWith("/internal/")
         || uri.startsWith("/service/rest/v1/security/")
         || legacyUi.auditedMutationPath(uri);
+  }
+
+  private static boolean possibleRepositoryPublish(HttpServletRequest request) {
+    return "PUT".equalsIgnoreCase(request.getMethod())
+        && stripContextPath(request).startsWith("/repository/");
+  }
+
+  private static boolean swiftRepositoryPublish(HttpServletRequest request) {
+    Object value = request.getAttribute(RepositorySecurityFilter.REPOSITORY_RECORD_ATTRIBUTE);
+    return possibleRepositoryPublish(request)
+        && value instanceof RepositoryRecord repository
+        && repository.format() == RepositoryFormat.SWIFT;
+  }
+
+  private static Map<String, Object> auditDetails(
+      HttpServletRequest request, Throwable failure) {
+    LinkedHashMap<String, Object> details = new LinkedHashMap<>();
+    Object value = request.getAttribute(RepositorySecurityFilter.REPOSITORY_RECORD_ATTRIBUTE);
+    if (value instanceof RepositoryRecord repository
+        && repository.format() == RepositoryFormat.SWIFT
+        && "PUT".equalsIgnoreCase(request.getMethod())) {
+      details.put("format", "swift");
+      details.put("repository", repository.name());
+      details.put("operation", "publish");
+      String[] segments = stripContextPath(request).split("/", -1);
+      if (segments.length == 6 && "repository".equals(segments[1])) {
+        details.put("coordinate", segments[3] + "." + segments[4] + "@" + segments[5]);
+      }
+    }
+    if (failure != null) {
+      details.put("error", failure.getClass().getSimpleName());
+    }
+    return details.isEmpty() ? Map.of() : Map.copyOf(details);
   }
 
   private static AuthenticatedSubject subject(HttpServletRequest request) {

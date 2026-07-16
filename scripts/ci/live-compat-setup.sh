@@ -311,6 +311,28 @@ ensure_nexus_repositories() {
     "group":{"memberNames":["pub-hosted","pub-proxy"]}
   }'
 
+  nexus_try_create_repo "swift-hosted" "$NEXUS_URL/service/rest/v1/repositories/swift/hosted" '{
+    "name":"swift-hosted",
+    "online":true,
+    "storage":{"blobStoreName":"default","strictContentTypeValidation":true,"writePolicy":"ALLOW_ONCE"}
+  }'
+
+  nexus_try_create_repo "swift-proxy" "$NEXUS_URL/service/rest/v1/repositories/swift/proxy" '{
+    "name":"swift-proxy",
+    "online":true,
+    "storage":{"blobStoreName":"default","strictContentTypeValidation":true},
+    "proxy":{"remoteUrl":"https://github.com/","contentMaxAge":1440,"metadataMaxAge":1440},
+    "negativeCache":{"enabled":true,"timeToLive":60},
+    "httpClient":{"blocked":false,"autoBlock":true}
+  }'
+
+  nexus_try_create_repo "swift-group" "$NEXUS_URL/service/rest/v1/repositories/swift/group" '{
+    "name":"swift-group",
+    "online":true,
+    "storage":{"blobStoreName":"default","strictContentTypeValidation":true},
+    "group":{"memberNames":["swift-hosted","swift-proxy"]}
+  }'
+
   local composer_payload='{
     "name":"composer-proxy",
     "online":true,
@@ -705,6 +727,33 @@ ensure_kkrepo_repositories() {
     "blobStoreName":"default",
     "strictContentTypeValidation":true,
     "group":{"memberNames":["terraform-hosted","terraform-proxy"]}
+  }'
+
+  kkrepo_create_repo "swift-hosted" '{
+    "name":"swift-hosted",
+    "recipe":"swift-hosted",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "hosted":{"writePolicy":"ALLOW_ONCE"}
+  }'
+
+  kkrepo_create_repo "swift-proxy" '{
+    "name":"swift-proxy",
+    "recipe":"swift-proxy",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "proxy":{"remoteUrl":"https://github.com/","contentMaxAgeMinutes":1440,"metadataMaxAgeMinutes":1440,"negativeCacheEnabled":true,"negativeCacheTtlMinutes":1,"autoBlock":true}
+  }'
+
+  kkrepo_create_repo "swift-group" '{
+    "name":"swift-group",
+    "recipe":"swift-group",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "group":{"memberNames":["swift-hosted","swift-proxy"]}
   }'
 
   kkrepo_create_repo "docker-hosted" "{

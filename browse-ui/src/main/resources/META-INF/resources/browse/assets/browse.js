@@ -44,6 +44,7 @@ const SEARCH_ROUTE_FORMAT = {
   pub: "pub",
   composer: "composer",
   terraform: "terraform",
+  swift: "swift",
   pypi: "pypi",
   rubygems: "rubygems",
   yum: "yum",
@@ -58,6 +59,7 @@ const FORMAT_ROUTE_SEGMENT = {
   pub: "pub",
   composer: "composer",
   terraform: "terraform",
+  swift: "swift",
   pypi: "pypi",
   rubygems: "rubygems",
   yum: "yum",
@@ -149,6 +151,9 @@ function componentBrowsePath(component) {
     return name;
   }
   if (format === "terraform") return name;
+  if (format === "swift") {
+    return [group, name, version].filter(Boolean).join("/");
+  }
   return "";
 }
 
@@ -627,6 +632,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   pub: "pub",
   composer: "composer",
   terraform: "terraform",
+  swift: "swift",
   go: "go",
   helm: "helm",
   docker: "docker",
@@ -1564,6 +1570,7 @@ function renderAttributesSection(detail, opts = {}) {
     renderAttributeGroup("Npm", detail.npm),
     renderAttributeGroup("Pub", detail.pub),
     renderAttributeGroup("Composer", detail.composer),
+    renderAttributeGroup("Swift", detail.swift),
     renderAttributeGroup("Provenance", detail.provenance),
   ].filter(Boolean).join("");
   if (!body) return "";
@@ -2468,6 +2475,59 @@ function terraformUsageDetail(entry) {
   };
 }
 
+function swiftUsageDetail(entry) {
+  const parts = pathSegments(entry.path);
+  const scope = parts[0] || "";
+  const name = parts[1] || "";
+  const rawVersion = parts[2] || "";
+  const version = rawVersion.endsWith(".zip") ? rawVersion.slice(0, -4) : rawVersion;
+  const identity = scope && name ? `${scope}.${name}` : "";
+  const repoUrl = repositoryBaseUrl();
+  const summaryRows = [
+    ["Repository", state.repo],
+    ["Format", "swift"],
+    ["Scope", scope || "-"],
+    ["Name", name || "-"],
+    ["Version", version || "latest"],
+    ["Registry URL", repoUrl],
+  ];
+  const snippets = [
+    usageSnippet("Configure registry", `swift package-registry set "${repoUrl}"`),
+    usageSnippet("Login", `swift package-registry login "${repoUrl}login" --username <username>`),
+    usageSnippet(
+      "registries.json",
+      JSON.stringify({
+        registries: {
+          "[default]": {
+            url: repoUrl,
+            supportsAvailability: false,
+          },
+        },
+        version: 1,
+      }, null, 2),
+      "Nexus-compatible Swift registry configuration",
+    ),
+  ];
+  if (identity) {
+    snippets.push(usageSnippet(
+      "Package.swift",
+      `.package(id: "${identity}", from: "${version || "1.0.0"}")`,
+      "Declare a registry identity dependency",
+    ));
+  }
+  if (currentRepository()?.type === "hosted" && identity && version) {
+    snippets.push(usageSnippet(
+      "Publish",
+      `swift package-registry publish ${identity} ${version}`,
+      "Publishes the source archive through the configured registry",
+    ));
+  }
+  if (window.location.protocol !== "https:") {
+    summaryRows.push(["Transport warning", "Use HTTPS in production for credentials and archive integrity"]);
+  }
+  return { crumbText: entry.path, summaryRows, snippets };
+}
+
 async function usageDetailForEntry(entry, detail = null) {
   const repo = currentRepository();
   if (!repo) return null;
@@ -2480,6 +2540,7 @@ async function usageDetailForEntry(entry, detail = null) {
   if (repo.format === "pub") return pubUsageDetail(entry);
   if (repo.format === "composer") return composerUsageDetail(entry, detail);
   if (repo.format === "terraform") return terraformUsageDetail(entry);
+  if (repo.format === "swift") return swiftUsageDetail(entry);
   if (repo.format === "docker") return dockerUsageDetail(entry);
   return null;
 }
@@ -2697,6 +2758,47 @@ function renderUploadFields() {
     updateTerraformUploadKind();
     return;
   }
+  if (repo.format === "swift") {
+    fields.innerHTML = `
+      <label>
+        <span>Scope</span>
+        <input id="upload-swift-scope" type="text" placeholder="acme" required>
+      </label>
+      <label>
+        <span>Package name</span>
+        <input id="upload-swift-name" type="text" placeholder="library" required>
+      </label>
+      <label>
+        <span>Version</span>
+        <input id="upload-swift-version" type="text" placeholder="1.0.0" required>
+      </label>
+      <label class="full-width">
+        <span>Registry metadata JSON</span>
+        <textarea id="upload-swift-metadata" rows="4" placeholder='{"repositoryURLs":["https://github.com/acme/library"]}'>{}</textarea>
+      </label>
+      <label>
+        <span>Signature format</span>
+        <input id="upload-swift-signature-format" type="text" value="cms-1.0.0" placeholder="cms-1.0.0">
+      </label>
+      <label class="upload-file">
+        <span>Source archive</span>
+        <input id="upload-file" type="file" accept=".zip,application/zip" required>
+      </label>
+      <label class="upload-file">
+        <span>Source archive signature (optional)</span>
+        <input id="upload-swift-source-signature" type="file">
+      </label>
+      <label class="upload-file">
+        <span>Metadata signature (optional)</span>
+        <input id="upload-swift-metadata-signature" type="file">
+      </label>
+      <label class="upload-path">
+        <span>Release coordinate</span>
+        <input id="upload-path" type="text" readonly>
+      </label>
+    `;
+    return;
+  }
   fields.innerHTML = `
     <label class="upload-file">
       <span>File</span>
@@ -2781,6 +2883,13 @@ function computedUploadPaths() {
     return os && arch
       ? [`v1/providers/${namespace}/${name}/${version}/download/${os}/${arch}`]
       : [];
+  }
+  if (repo.format === "swift") {
+    const scope = uploadFieldValue("upload-swift-scope");
+    const name = uploadFieldValue("upload-swift-name");
+    const version = uploadFieldValue("upload-swift-version");
+    const archive = document.getElementById("upload-file")?.files?.[0];
+    return scope && name && version && archive ? [`${scope}/${name}/${version}`] : [];
   }
   if (repo.format !== "maven2") {
     const file = document.getElementById("upload-file")?.files?.[0];
@@ -2920,6 +3029,32 @@ function buildUploadForm(repo, form) {
       throw new Error("Package kind must be module or provider.");
     }
     form.append("terraform.asset", file, file.name);
+    return;
+  }
+  if (repo.format === "swift") {
+    const scope = uploadFieldValue("upload-swift-scope");
+    const name = uploadFieldValue("upload-swift-name");
+    const version = uploadFieldValue("upload-swift-version");
+    const archive = document.getElementById("upload-file")?.files?.[0];
+    if (!scope || !name || !version || !archive) {
+      throw new Error("Scope, Package name, Version, and Source archive are required.");
+    }
+    form.append("swift.scope", scope);
+    form.append("swift.name", name);
+    form.append("swift.version", version);
+    const metadata = uploadFieldValue("upload-swift-metadata");
+    if (metadata) form.append("swift.metadata", metadata);
+    const sourceSignature = document.getElementById("upload-swift-source-signature")?.files?.[0];
+    const metadataSignature = document.getElementById("upload-swift-metadata-signature")?.files?.[0];
+    const signatureFormat = uploadFieldValue("upload-swift-signature-format");
+    if (sourceSignature) {
+      form.append("swift.source-archive-signature", sourceSignature, sourceSignature.name);
+      if (signatureFormat) form.append("swift.signature-format", signatureFormat);
+    }
+    if (metadataSignature) {
+      form.append("swift.metadata-signature", metadataSignature, metadataSignature.name);
+    }
+    form.append("swift.source-archive", archive, archive.name);
     return;
   }
   const file = document.getElementById("upload-file")?.files?.[0];

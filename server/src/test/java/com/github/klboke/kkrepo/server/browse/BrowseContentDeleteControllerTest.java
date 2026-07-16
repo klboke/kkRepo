@@ -20,6 +20,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MetadataRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
@@ -165,6 +166,56 @@ class BrowseContentDeleteControllerTest {
   }
 
   @Test
+  void deletingAnySwiftPublicAssetTombstonesAndRemovesTheWholeRelease() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord repository =
+        repository(1L, "swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    AssetRecord archive = asset(
+        11L, 21L, 31L, RepositoryFormat.SWIFT,
+        "acme/library/1.2.3.zip", "swift-source-archive", Map.of());
+    AssetRecord manifest = asset(
+        12L, 21L, 32L, RepositoryFormat.SWIFT,
+        "acme/library/1.2.3/Package.swift", "swift-manifest", Map.of());
+    AssetRecord versionedManifest = asset(
+        13L, 21L, 33L, RepositoryFormat.SWIFT,
+        "acme/library/1.2.3/Package@swift-5.9.swift", "swift-manifest", Map.of());
+    AssetRecord sourceSignature = asset(
+        14L, 21L, 34L, RepositoryFormat.SWIFT,
+        ".swift/signatures/acme/library/1.2.3/source.cms", "swift-signature", Map.of());
+    AssetRecord metadataSignature = asset(
+        15L, 21L, 35L, RepositoryFormat.SWIFT,
+        ".swift/signatures/acme/library/1.2.3/metadata.sig", "swift-signature", Map.of());
+    List<AssetRecord> releaseAssets = List.of(
+        archive, manifest, versionedManifest, sourceSignature, metadataSignature);
+    when(fixture.repositoryDao.findByName(repository.name())).thenReturn(Optional.of(repository));
+    when(fixture.assetDao.findAssetByPath(repository.id(), versionedManifest.path()))
+        .thenReturn(Optional.of(versionedManifest));
+    when(fixture.assetDao.listAssetsByPrefix(repository.id(), versionedManifest.path() + "/"))
+        .thenReturn(List.of());
+    when(fixture.swiftRegistryDao.tombstoneAndDeleteReleaseState(
+        eq(repository.id()), eq("acme"), eq("library"), eq("1.2.3"),
+        eq("administrative delete by admin"), any()))
+        .thenReturn(Optional.of(new SwiftRegistryDao.DeletedRelease(
+            21L, releaseAssets.stream().map(AssetRecord::id).toList(), 9L)));
+    for (AssetRecord asset : releaseAssets) {
+      when(fixture.assetDao.findAssetById(asset.id())).thenReturn(Optional.of(asset));
+    }
+
+    BrowseContentDeleteController.BrowseDeleteResult result = fixture.controller.delete(
+        repository.name(), versionedManifest.path(), null, new MockHttpServletRequest());
+
+    assertEquals(5, result.deletedAssets());
+    verify(fixture.swiftRegistryDao).tombstoneAndDeleteReleaseState(
+        eq(repository.id()), eq("acme"), eq("library"), eq("1.2.3"),
+        eq("administrative delete by admin"), any());
+    for (AssetRecord asset : releaseAssets) {
+      verify(fixture.assetDao).deleteAssetById(asset.id());
+      verify(fixture.assetDao).markBlobDeletedIfUnreferenced(asset.assetBlobId(), "asset unlinked");
+    }
+    verify(fixture.componentDao).deleteIfNoAssets(21L);
+  }
+
+  @Test
   void mapsTerraformProviderPublicAliasesBeforeDelete() {
     String base = "v1/providers/acme/demo/1.0.10";
     String filename = "terraform-provider-demo_1.0.10_linux_amd64.zip";
@@ -238,6 +289,7 @@ class BrowseContentDeleteControllerTest {
     RepositoryDao repositoryDao = mock(RepositoryDao.class);
     AssetDao assetDao = mock(AssetDao.class);
     TerraformRegistryDao terraformRegistryDao = mock(TerraformRegistryDao.class);
+    SwiftRegistryDao swiftRegistryDao = mock(SwiftRegistryDao.class);
     BrowseNodeDao browseNodeDao = mock(BrowseNodeDao.class);
     ComponentDao componentDao = mock(ComponentDao.class);
     MetadataRebuildDao metadataRebuildDao = mock(MetadataRebuildDao.class);
@@ -256,11 +308,13 @@ class BrowseContentDeleteControllerTest {
         authenticated ? Optional.of(subject) : Optional.empty());
     when(security.decide(permissionSubject, "nexus:*")).thenReturn(decision);
     BrowseContentDeleteController controller = new BrowseContentDeleteController(
-        repositoryDao, assetDao, terraformRegistryDao, browseNodeDao, componentDao, metadataRebuildDao,
+        repositoryDao, assetDao, terraformRegistryDao, swiftRegistryDao,
+        browseNodeDao, componentDao, metadataRebuildDao,
         indexRebuildDao, authentication, security, assetCache, npmCache, pypiCache,
         groupMemberAssetCache, cacheController);
     return new Fixture(
-        repositoryDao, assetDao, terraformRegistryDao, browseNodeDao, componentDao, metadataRebuildDao,
+        repositoryDao, assetDao, terraformRegistryDao, swiftRegistryDao,
+        browseNodeDao, componentDao, metadataRebuildDao,
         indexRebuildDao, npmCache, pypiCache, groupMemberAssetCache, cacheController, controller);
   }
 
@@ -289,6 +343,7 @@ class BrowseContentDeleteControllerTest {
       RepositoryDao repositoryDao,
       AssetDao assetDao,
       TerraformRegistryDao terraformRegistryDao,
+      SwiftRegistryDao swiftRegistryDao,
       BrowseNodeDao browseNodeDao,
       ComponentDao componentDao,
       MetadataRebuildDao metadataRebuildDao,

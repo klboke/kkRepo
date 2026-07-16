@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.pypi.PypiHostedService;
 import com.github.klboke.kkrepo.server.metrics.KkRepoMetrics;
 import com.github.klboke.kkrepo.server.rubygems.RubygemsService;
+import com.github.klboke.kkrepo.server.swift.SwiftComponentService;
 import com.github.klboke.kkrepo.server.terraform.TerraformComponentService;
 import com.github.klboke.kkrepo.server.yum.YumService;
 import io.micrometer.core.instrument.Timer;
@@ -35,6 +36,7 @@ class RepositoryIndexRebuildWorker {
   private final YumService yumService;
   private final RubygemsService rubygemsService;
   private final TerraformComponentService terraformComponentService;
+  private final SwiftComponentService swiftComponentService;
   private final TransactionTemplate transactionTemplate;
   private final KkRepoMetrics metrics;
   private final int batchSize;
@@ -49,6 +51,7 @@ class RepositoryIndexRebuildWorker {
       YumService yumService,
       RubygemsService rubygemsService,
       TerraformComponentService terraformComponentService,
+      SwiftComponentService swiftComponentService,
       PlatformTransactionManager transactionManager,
       @Value("${kkrepo.repository-index-rebuild.batch-size:16}") int batchSize,
       @Value("${kkrepo.repository-index-rebuild.enabled:true}") boolean enabled,
@@ -61,6 +64,7 @@ class RepositoryIndexRebuildWorker {
     this.yumService = yumService;
     this.rubygemsService = rubygemsService;
     this.terraformComponentService = terraformComponentService;
+    this.swiftComponentService = swiftComponentService;
     this.transactionTemplate = new TransactionTemplate(transactionManager);
     this.metrics = metrics;
     this.batchSize = batchSize;
@@ -107,6 +111,12 @@ class RepositoryIndexRebuildWorker {
     if (RepositoryIndexRebuildDao.TERRAFORM_COMPONENTS.equals(claim.indexKind())) {
       if (runtime.format() == RepositoryFormat.TERRAFORM) {
         terraformComponentService.rebuild(runtime);
+      }
+      return;
+    }
+    if (RepositoryIndexRebuildDao.SWIFT_COMPONENTS.equals(claim.indexKind())) {
+      if (runtime.format() == RepositoryFormat.SWIFT) {
+        swiftComponentService.rebuild(runtime);
       }
       return;
     }
