@@ -1211,8 +1211,12 @@ swift_registry_token_login() {
 swift_supports_registry_login() {
   local swift_bin="$1"
   local registry="$2"
-  [[ "$registry" == https://* ]] \
-    && "$swift_bin" package-registry login --help >/dev/null 2>&1
+  local help
+  [[ "$registry" == https://* ]] || return 1
+  help="$("$swift_bin" package-registry login --help 2>&1 || true)"
+  grep -q -- '--username' <<<"$help" \
+    && grep -q -- '--password' <<<"$help" \
+    && grep -q -- '--no-confirm' <<<"$help"
 }
 
 swift_supports_registry_publish() {
