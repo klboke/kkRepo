@@ -198,6 +198,21 @@ jobs:
           echo "TERRAFORM_013_BIN=$RUNNER_TEMP/terraform/0.13.7/terraform" >> "$GITHUB_ENV"
           echo "TERRAFORM_CURRENT_BIN=$RUNNER_TEMP/terraform/1.15.8/terraform" >> "$GITHUB_ENV"
 
+      - name: Free disk space for the containerized client matrix
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e' || env.LIVE_COMPAT_SUITE == 'swift'
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -h /
+          sudo rm -rf \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/.ghcup \
+            /usr/local/lib/android
+          sudo apt-get clean
+          docker system prune --all --force
+          df -h /
+
       - name: Set up SwiftPM 5.7, 5.9+, and current Swift 6
         if: env.LIVE_COMPAT_SUITE == 'client-e2e' || env.LIVE_COMPAT_SUITE == 'swift'
         shell: bash
