@@ -146,10 +146,15 @@ public class BrowseContentDeleteController {
 
     Long swiftComponentId = null;
     if (target.format() == RepositoryFormat.SWIFT) {
-      SwiftCoordinate coordinate = swiftCoordinate(publicPath);
+      String childPrefix = storagePath.endsWith("/") ? storagePath : storagePath + "/";
+      boolean releaseDirectory = assets.stream()
+          .map(AssetRecord::path)
+          .anyMatch(assetPath -> assetPath.startsWith(childPrefix));
+      SwiftCoordinate coordinate = swiftCoordinate(publicPath, releaseDirectory);
       if (coordinate == null) {
         throw new ResponseStatusException(
-            HttpStatus.BAD_REQUEST, "Swift deletion requires a release archive or manifest path");
+            HttpStatus.BAD_REQUEST,
+            "Swift deletion requires a release, archive, or manifest path");
       }
       SwiftRegistryDao.DeletedRelease deleted = swiftRegistryDao
           .tombstoneAndDeleteReleaseState(
@@ -289,11 +294,13 @@ public class BrowseContentDeleteController {
     return MAVEN_HASH_SUFFIXES.stream().anyMatch(path::endsWith);
   }
 
-  private static SwiftCoordinate swiftCoordinate(String path) {
+  private static SwiftCoordinate swiftCoordinate(String path, boolean releaseDirectory) {
     String normalized = normalize(path);
     SwiftPath parsed;
     try {
-      parsed = SWIFT_PATHS.parse(normalized);
+      parsed = releaseDirectory
+          ? SWIFT_PATHS.parseReleaseMetadata(normalized)
+          : SWIFT_PATHS.parse(normalized);
     } catch (IllegalArgumentException e) {
       return null;
     }
@@ -305,7 +312,8 @@ public class BrowseContentDeleteController {
             segments[0] + "/" + segments[1] + "/" + segments[2] + "/Package.swift");
       }
     }
-    if (parsed.kind() != SwiftPath.Kind.SOURCE_ARCHIVE
+    if (parsed.kind() != SwiftPath.Kind.RELEASE_METADATA
+        && parsed.kind() != SwiftPath.Kind.SOURCE_ARCHIVE
         && parsed.kind() != SwiftPath.Kind.MANIFEST) {
       return null;
     }

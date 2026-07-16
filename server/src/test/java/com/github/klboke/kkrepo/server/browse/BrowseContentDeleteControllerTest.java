@@ -246,6 +246,41 @@ class BrowseContentDeleteControllerTest {
   }
 
   @Test
+  void deletingSwiftReleaseDirectoryFromComponentDetailsDeletesWholeRelease() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord repository =
+        repository(1L, "swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    String version = "1.2.3+linux.zip";
+    String releasePath = "acme/library/" + version;
+    AssetRecord archive = asset(
+        11L, 21L, 31L, RepositoryFormat.SWIFT,
+        releasePath + ".zip", "swift-source-archive", Map.of());
+    AssetRecord manifest = asset(
+        12L, 21L, 32L, RepositoryFormat.SWIFT,
+        releasePath + "/Package.swift", "swift-manifest", Map.of());
+    when(fixture.repositoryDao.findByName(repository.name())).thenReturn(Optional.of(repository));
+    when(fixture.assetDao.listAssetsByPrefix(repository.id(), releasePath + "/"))
+        .thenReturn(List.of(manifest));
+    when(fixture.swiftRegistryDao.tombstoneAndDeleteReleaseState(
+        eq(repository.id()), eq("acme"), eq("library"), eq(version),
+        eq("administrative delete by admin"), any()))
+        .thenReturn(Optional.of(new SwiftRegistryDao.DeletedRelease(
+            21L, List.of(archive.id(), manifest.id()), 9L)));
+    when(fixture.assetDao.findAssetById(archive.id())).thenReturn(Optional.of(archive));
+    when(fixture.assetDao.findAssetById(manifest.id())).thenReturn(Optional.of(manifest));
+
+    BrowseContentDeleteController.BrowseDeleteResult result = fixture.controller.delete(
+        repository.name(), releasePath, null, new MockHttpServletRequest());
+
+    assertEquals(2, result.deletedAssets());
+    verify(fixture.swiftRegistryDao).tombstoneAndDeleteReleaseState(
+        eq(repository.id()), eq("acme"), eq("library"), eq(version),
+        eq("administrative delete by admin"), any());
+    verify(fixture.assetDao).deleteAssetById(archive.id());
+    verify(fixture.assetDao).deleteAssetById(manifest.id());
+  }
+
+  @Test
   void mapsTerraformProviderPublicAliasesBeforeDelete() {
     String base = "v1/providers/acme/demo/1.0.10";
     String filename = "terraform-provider-demo_1.0.10_linux_amd64.zip";
