@@ -4,6 +4,8 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPath;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPathParser;
+import com.github.klboke.kkrepo.protocol.terraform.TerraformPath;
+import com.github.klboke.kkrepo.protocol.terraform.TerraformPathParser;
 import com.github.klboke.kkrepo.server.docker.DockerConnectorConfiguration;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.RepositorySecurityFilter;
@@ -36,7 +38,9 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
   static final int FILTER_ORDER = SessionRepositoryFilter.DEFAULT_ORDER + 18;
   private static final Logger log = LoggerFactory.getLogger(RepositoryRequestMetricsFilter.class);
   private static final int MAX_LOGGED_PARAM_VALUE_LENGTH = 512;
+  private static final String REDACTED_TERRAFORM_PATH = "<redacted-terraform-path>";
   private static final ComposerPathParser COMPOSER_PATHS = new ComposerPathParser();
+  private static final TerraformPathParser TERRAFORM_PATHS = new TerraformPathParser();
 
   private final KkRepoMetrics metrics;
   private final boolean logNonSuccessRequests;
@@ -74,7 +78,8 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
       String repository = record == null ? "unknown" : record.name();
       String format = record == null ? "unknown" : KkRepoMetrics.format(record.format());
       String type = record == null ? "unknown" : KkRepoMetrics.type(record.type());
-      String operation = operation(target, record == null ? null : record.format(), request.getMethod());
+      Target effectiveTarget = effectiveTarget(request, target, record);
+      String operation = operation(effectiveTarget, record == null ? null : record.format(), request.getMethod());
       int status = failure == null ? response.getStatus() : statusFor(failure, response.getStatus());
       metrics.recordRepositoryRequest(
           repository,
@@ -87,7 +92,7 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
           contentLength(response),
           failure,
           sample);
-      logNonSuccessRequest(request, target, repository, format, type, operation, status, failure);
+      logNonSuccessRequest(request, effectiveTarget, repository, format, type, operation, status, failure);
     }
   }
 
@@ -111,7 +116,7 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
             + "userAgent={} failure={}",
         status,
         request.getMethod(),
-        stripContextPath(request),
+        loggedUri(request, target, format),
         target.path(),
         requestParameters(request),
         repository,
@@ -173,6 +178,50 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
   private static RepositoryRecord repositoryRecord(HttpServletRequest request) {
     Object value = request.getAttribute(RepositorySecurityFilter.REPOSITORY_RECORD_ATTRIBUTE);
     return value instanceof RepositoryRecord record ? record : null;
+  }
+
+  private static Target effectiveTarget(
+      HttpServletRequest request, Target target, RepositoryRecord repository) {
+    Object normalized = request.getAttribute(RepositorySecurityFilter.NORMALIZED_REPOSITORY_PATH_ATTRIBUTE);
+    if (normalized instanceof String path && !path.isBlank()) {
+      return new Target(target.repository(), path, target.route());
+    }
+    if (repository != null && repository.format() == RepositoryFormat.TERRAFORM) {
+      // A rejected Terraform URL may still contain a credential segment. If the security filter
+      // could not canonicalize it, discard the entire path rather than risk logging the token.
+      return redactedTerraformTarget(target);
+    }
+    if (!terraformShaped(target.path())) return target;
+    try {
+      TerraformPathParser.ParsedRequest parsed = TERRAFORM_PATHS.parseRequestPath(target.path());
+      if (parsed.credentialSegment() != null) {
+        return new Target(target.repository(), parsed.canonicalPath(), target.route());
+      }
+      if (parsed.path().kind() != TerraformPath.Kind.UNKNOWN) return target;
+    } catch (IllegalArgumentException ignored) {
+      // Unsafe or malformed Terraform-shaped paths may contain credentials; redact below.
+    }
+    return redactedTerraformTarget(target);
+  }
+
+  private static String loggedUri(
+      HttpServletRequest request, Target target, String format) {
+    if (!"repository".equals(target.route())
+        || (!("terraform".equals(format))
+            && !terraformShaped(target.path())
+            && !REDACTED_TERRAFORM_PATH.equals(target.path()))) {
+      return stripContextPath(request);
+    }
+    return "/repository/" + target.repository() + "/" + target.path();
+  }
+
+  private static boolean terraformShaped(String path) {
+    return path != null
+        && (path.startsWith("v1/modules/") || path.startsWith("v1/providers/"));
+  }
+
+  private static Target redactedTerraformTarget(Target target) {
+    return new Target(target.repository(), REDACTED_TERRAFORM_PATH, target.route());
   }
 
   private static Target target(HttpServletRequest request) {
@@ -246,8 +295,28 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
       case RUBYGEMS -> rubygemsOperation(path, normalizedMethod);
       case YUM -> yumOperation(path, normalizedMethod);
       case DOCKER -> dockerOperation(path, normalizedMethod);
+      case TERRAFORM -> terraformOperation(path, normalizedMethod);
       case RAW -> rawOperation(normalizedMethod);
     };
+  }
+
+  private static String terraformOperation(String path, String method) {
+    String redacted = path == null ? "" : path;
+    if (redacted.startsWith("v1/modules/")) {
+      if (redacted.endsWith("/versions")) return "terraform_module_versions";
+      if (redacted.endsWith("/download")) return "terraform_module_download_metadata";
+      return "PUT".equals(method) ? "terraform_module_upload" : "terraform_module_archive";
+    }
+    if (redacted.startsWith("v1/providers/")) {
+      if (redacted.endsWith("/versions")) return "terraform_provider_versions";
+      if (redacted.contains("/download/")) {
+        return "PUT".equals(method) ? "terraform_provider_upload" : "terraform_provider_download_metadata";
+      }
+      if (redacted.endsWith("_SHA256SUMS.sig")) return "terraform_provider_signature";
+      if (redacted.endsWith("_SHA256SUMS")) return "terraform_provider_shasums";
+      return "terraform_provider_archive";
+    }
+    return "terraform_repository";
   }
 
   private static String composerOperation(String path, String method) {

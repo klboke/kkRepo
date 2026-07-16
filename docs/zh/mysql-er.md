@@ -2,7 +2,7 @@
 
 历史 MySQL schema 以 `persistence-mysql/src/main/resources/db/migration/mysql/V1__init_schema.sql` 到 `V29__disable_anonymous_for_uninitialized_installations.sql` 为准，并由 Flyway 在服务启动时执行。MySQL 8 使用 InnoDB；PostgreSQL 提供逻辑等价的 V29 baseline。本文继续作为两种引擎的详细逻辑 ER 参考，另见[数据库 Schema](database-schema.md)。
 
-Schema 对共享 asset/blob 数据采用“统一内容表 + format 字段”的模型。Cargo / Rust、Dart / Pub 和 Composer / PHP 使用这套共享模型，协议元数据保存在 component/asset attributes 中；Composer package/version/dist 不增加专用业务表，proxy route 也作为可重建内部 asset 保存。Pub 为官方多步骤 publish flow 增加 `pub_upload_session`，Docker/OCI manifest、tag、upload session、auth token、referrers 等其它协议专有关系使用专用旁表。这样更适合从 Nexus 迁移和管理台统一查询；如果后续某个格式数据量明显过大，再通过分区或更多专用表优化。
+Schema 对共享 asset/blob 数据采用“统一内容表 + format 字段”的模型。Cargo / Rust、Dart / Pub、Composer / PHP 和 Terraform 使用这套共享模型，协议元数据保存在 component/asset attributes 中；Composer package/version/dist 不增加专用业务表，proxy route 也作为可重建内部 asset 保存。Pub 为官方多步骤 publish flow 增加 `pub_upload_session`。Terraform 的 signing key、Provider revision/platform、group source binding 和 publish lease 需要跨副本保持一致，因此使用协议专用旁表；Docker/OCI manifest、tag、upload session、auth token、referrers 等其它协议专有关系同样使用专用旁表。这样更适合从 Nexus 迁移和管理台统一查询；如果后续某个格式数据量明显过大，再通过分区或更多专用表优化。
 
 ## 仓库与内容 ER
 
@@ -51,6 +51,10 @@ erDiagram
   REPOSITORY ||--o{ METADATA_REBUILD_MARKER : maven_metadata_queue
   REPOSITORY ||--o{ REPOSITORY_INDEX_REBUILD_MARKER : index_queue
   REPOSITORY ||--o{ PUB_UPLOAD_SESSION : pub_upload
+  REPOSITORY ||--o{ TERRAFORM_SIGNING_KEY : signs
+  REPOSITORY ||--o{ TERRAFORM_PROVIDER_SIGNING_STATE : provider_revision
+  REPOSITORY ||--o{ TERRAFORM_PROVIDER_PLATFORM : provider_platform
+  REPOSITORY ||--o{ TERRAFORM_SOURCE_BINDING : group_source
   SPRING_SESSION ||--o{ SPRING_SESSION_ATTRIBUTES : has
   MIGRATION_JOB ||--o{ MIGRATION_CHECKPOINT : records
   MIGRATION_JOB ||--o{ MIGRATION_VALIDATION_RESULT : validates
@@ -102,6 +106,11 @@ erDiagram
 | `maintenance_cursor` | 后台维护任务的共享游标，例如 blob reconcile 扫描水位 |
 | `ui_settings` | 单行 UI 偏好设置表，当前用于默认语言选择 |
 | `pub_upload_session` | Dart / Pub publish upload session 状态，包括 session/field token、principal、过期时间、临时 blob 引用、解析出的 package/version、checksum、size、错误和 finalized 时间 |
+| `terraform_signing_key` | 加密保存 hosted Provider signing key revision 与 public key material；每个仓库选择一个 active revision |
+| `terraform_provider_signing_state` | 已就绪的 Provider version revision，以及匹配的 SHA256SUMS/signature path 和 signing-key revision |
+| `terraform_provider_platform` | Provider platform identity 与 archive path/checksum；按 repository/namespace/type/version/os/arch 唯一 |
+| `terraform_source_binding` | 带过期时间的 group coordinate-to-member binding，保证 metadata 与 archive 读取命中同一 member/revision |
+| `terraform_publish_lease` | 数据库支持的过期 lease，用于跨副本串行化 module/provider 发布 |
 
 ### 权限层
 

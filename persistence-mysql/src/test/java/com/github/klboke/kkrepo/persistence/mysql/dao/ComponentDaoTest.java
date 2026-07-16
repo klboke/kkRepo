@@ -93,6 +93,24 @@ class ComponentDaoTest {
   }
 
   @Test
+  void terraformSearchReturnsLogicalBrowsePathAndFiltersPhysicalRowsBeforeLimit() {
+    RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
+    ComponentDao dao = new JdbcComponentDao(
+        jdbcTemplate,
+        new JsonColumns(new ObjectMapper(), DIALECT),
+        DIALECT);
+
+    dao.search(null, RepositoryFormat.TERRAFORM, 20);
+
+    assertTrue(jdbcTemplate.sql.contains(
+        "JSON_EXTRACT(c.attributes_json, '$.browsePath')"));
+    assertTrue(jdbcTemplate.sql.contains(
+        "c.name NOT LIKE 'v1/providers/%/package/%'"));
+    assertTrue(jdbcTemplate.sql.indexOf("c.name NOT LIKE 'v1/providers/%/package/%'")
+        < jdbcTemplate.sql.indexOf("LIMIT ?"));
+  }
+
+  @Test
   void repositoryScopedSearchIncludesStoragePathProjection() {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
     ComponentDao dao = new JdbcComponentDao(

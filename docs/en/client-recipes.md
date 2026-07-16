@@ -316,6 +316,70 @@ curl -u alice:"$KKREPO_PASSWORD" \
 
 Composer 2 uses `packages.json` and `p2/<vendor>/<package>.json`. Hosted, proxy, and group repositories keep the `/repository/<repo>/...` URL shape, and Browse Usage provides a copyable project snippet.
 
+## Terraform Provider / Module Registry
+
+Create `terraform-hosted`, `terraform-proxy`, and `terraform-group` repositories, then configure the group as the service endpoint for the registry hostname used in module/provider source addresses. kkRepo follows Nexus's explicit Terraform CLI `host.services` configuration instead of claiming the deployment root `/.well-known/terraform.json`:
+
+```hcl
+# ~/.terraformrc on Linux/macOS, terraform.rc on Windows
+disable_checkpoint = true
+
+host "registry.terraform.io" {
+  services = {
+    "modules.v1"   = "https://repo.example.com/repository/terraform-group/v1/modules/<generic-token>/"
+    "providers.v1" = "https://repo.example.com/repository/terraform-group/v1/providers/<generic-token>/"
+  }
+}
+```
+
+Create `<generic-token>` as a `GenericToken` under **My Token**, keep the CLI configuration file mode at `0600`, and never commit it. Anonymous repositories can omit the token segment. Basic authentication is also accepted; generated download metadata carries an encoded URL token so Terraform can follow archive, checksum, and signature URLs without adding custom headers.
+
+Use normal source addresses in Terraform configuration:
+
+```hcl
+terraform {
+  required_providers {
+    null = {
+      source  = "registry.terraform.io/hashicorp/null"
+      version = "3.2.4"
+    }
+  }
+}
+
+module "network" {
+  source  = "registry.terraform.io/acme/network/aws"
+  version = "1.0.0"
+}
+```
+
+Then resolve through the configured group:
+
+```bash
+terraform init -backend=false
+```
+
+Hosted modules and providers can be uploaded through Browse/Admin or the Nexus-compatible PUT routes. A provider upload requires an exact platform path and a safe `Content-Disposition` filename:
+
+```bash
+curl -u user:password --upload-file network-1.0.0.zip \
+  https://repo.example.com/repository/terraform-hosted/v1/modules/acme/network/aws/1.0.0/network-1.0.0.zip
+
+curl -u user:password \
+  -H 'Content-Disposition: attachment; filename=terraform-provider-demo_1.0.0_linux_amd64.zip' \
+  -H 'X-Terraform-Provider-Protocols: 6.0' \
+  --upload-file terraform-provider-demo_1.0.0_linux_amd64.zip \
+  https://repo.example.com/repository/terraform-hosted/v1/providers/acme/demo/1.0.0/download/linux/amd64
+```
+
+Nexus-compatible provider PUTs that omit `X-Terraform-Provider-Protocols` retain Nexus's `5.0`
+default. Protocol 6-only providers must send the explicit header; Browse/Admin and the component
+upload API expose the same value as `terraform.protocols`. A comma-separated value such as
+`5.0,6.0` is accepted when the release supports both major protocols. Every platform uploaded for
+one provider version must declare the same protocol set. kkRepo never executes an uploaded provider
+binary to infer this metadata.
+
+kkRepo generates hosted provider SHA256SUMS and detached GPG signatures as one revision. Proxy repositories preserve and verify upstream checksum/signing metadata, and group source bindings keep metadata and archive downloads on the same member.
+
 ## NuGet
 
 Add a source:

@@ -2,7 +2,7 @@
 
 The historical MySQL schema is defined by `persistence-mysql/src/main/resources/db/migration/mysql/V1__init_schema.sql` through `V29__disable_anonymous_for_uninitialized_installations.sql`, and is executed by Flyway during service startup. MySQL 8 uses InnoDB. PostgreSQL has an equivalent V29 baseline; this document remains the detailed logical ER reference for both engines. See [Database Schema](database-schema.md).
 
-The schema uses a "unified content table + format field" model for shared asset/blob data. Cargo / Rust, Dart / Pub, and Composer / PHP use this shared model with protocol metadata stored in component/asset attributes. Composer package/version/dist data does not add a dedicated business table, and proxy routes are stored as rebuildable internal assets. Pub adds `pub_upload_session` for the official multi-step publish flow, while formats with other protocol-specific relationships, such as Docker/OCI manifests, tags, upload sessions, auth tokens, and referrers, add dedicated side tables. This is more suitable for migration from Nexus and unified admin-console queries. If a specific format becomes significantly larger later, it can be optimized with partitioning or additional dedicated tables.
+The schema uses a "unified content table + format field" model for shared asset/blob data. Cargo / Rust, Dart / Pub, Composer / PHP, and Terraform use this shared model with protocol metadata stored in component/asset attributes. Composer package/version/dist data does not add a dedicated business table, and proxy routes are stored as rebuildable internal assets. Pub adds `pub_upload_session` for the official multi-step publish flow. Terraform adds signing-key, provider revision/platform, group source-binding, and publish-lease side tables because those relationships must remain consistent across replicas. Formats with other protocol-specific relationships, such as Docker/OCI manifests, tags, upload sessions, auth tokens, and referrers, also add dedicated side tables. This is more suitable for migration from Nexus and unified admin-console queries. If a specific format becomes significantly larger later, it can be optimized with partitioning or additional dedicated tables.
 
 ## Repository And Content ER
 
@@ -51,6 +51,10 @@ erDiagram
   REPOSITORY ||--o{ METADATA_REBUILD_MARKER : maven_metadata_queue
   REPOSITORY ||--o{ REPOSITORY_INDEX_REBUILD_MARKER : index_queue
   REPOSITORY ||--o{ PUB_UPLOAD_SESSION : pub_upload
+  REPOSITORY ||--o{ TERRAFORM_SIGNING_KEY : signs
+  REPOSITORY ||--o{ TERRAFORM_PROVIDER_SIGNING_STATE : provider_revision
+  REPOSITORY ||--o{ TERRAFORM_PROVIDER_PLATFORM : provider_platform
+  REPOSITORY ||--o{ TERRAFORM_SOURCE_BINDING : group_source
   SPRING_SESSION ||--o{ SPRING_SESSION_ATTRIBUTES : has
   MIGRATION_JOB ||--o{ MIGRATION_CHECKPOINT : records
   MIGRATION_JOB ||--o{ MIGRATION_VALIDATION_RESULT : validates
@@ -102,6 +106,11 @@ erDiagram
 | `maintenance_cursor` | Shared cursor for background maintenance tasks, such as blob reconcile scan watermarks |
 | `ui_settings` | Singleton UI preference table, currently used for default language selection |
 | `pub_upload_session` | Dart / Pub publish upload session state, including session/field tokens, principal, expiration, temporary blob reference, parsed package/version, checksums, size, error, and finalized time |
+| `terraform_signing_key` | Encrypted hosted Provider signing key revisions and public key material; one active revision is selected per repository |
+| `terraform_provider_signing_state` | Ready Provider-version revision and the matching SHA256SUMS/signature paths and signing-key revision |
+| `terraform_provider_platform` | Provider platform identity and archive path/checksum, unique by repository/namespace/type/version/os/arch |
+| `terraform_source_binding` | Expiring group coordinate-to-member binding that keeps metadata and archive reads on the same member/revision |
+| `terraform_publish_lease` | Database-backed expiring lease used to serialize module/provider publication across replicas |
 
 ### Permission Layer
 

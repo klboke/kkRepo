@@ -76,7 +76,7 @@ class RawAssetWriter {
       String createdBy,
       String createdByIp) {
     return write(runtime, storage, blobStoreId, path, body, contentTypeHint,
-        extraBlobAttributes, createdBy, createdByIp, false);
+        extraBlobAttributes, createdBy, createdByIp, ComponentBinding.perAsset(), false);
   }
 
   Stored write(
@@ -90,12 +90,89 @@ class RawAssetWriter {
       String createdBy,
       String createdByIp,
       boolean keepResponseFile) {
+    return write(runtime, storage, blobStoreId, path, body, contentTypeHint,
+        extraBlobAttributes, createdBy, createdByIp, ComponentBinding.perAsset(), keepResponseFile);
+  }
+
+  Stored writeUnindexed(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      String path,
+      InputStream body,
+      String contentTypeHint,
+      Map<String, ?> extraBlobAttributes,
+      String createdBy,
+      String createdByIp,
+      boolean keepResponseFile) {
+    return write(runtime, storage, blobStoreId, path, body, contentTypeHint,
+        extraBlobAttributes, createdBy, createdByIp, ComponentBinding.none(), keepResponseFile);
+  }
+
+  Stored writeWithComponent(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      String path,
+      InputStream body,
+      String contentTypeHint,
+      Map<String, ?> extraBlobAttributes,
+      String createdBy,
+      String createdByIp,
+      ComponentRecord component,
+      boolean keepResponseFile) {
+    return write(runtime, storage, blobStoreId, path, body, contentTypeHint,
+        extraBlobAttributes, createdBy, createdByIp, ComponentBinding.explicit(component),
+        keepResponseFile);
+  }
+
+  Stored writeFile(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      String path,
+      Path file,
+      String contentTypeHint,
+      Map<String, ?> extraBlobAttributes,
+      String createdBy,
+      String createdByIp,
+      ComponentRecord component) {
+    DigestedUpload upload = uploadFileWithDigests(
+        runtime, storage, blobStoreId, path, file, extraBlobAttributes);
+    try {
+      Stored stored = executePersist(
+          "Persist raw asset " + runtime.name() + "/" + path,
+          () -> persist(runtime, storage, blobStoreId, path, upload, contentTypeHint,
+              extraBlobAttributes, createdBy, createdByIp,
+              component == null ? ComponentBinding.none() : ComponentBinding.explicit(component),
+              null));
+      cleanupUnusedUploadedBlob(storage, blobStoreId, upload, stored.blob());
+      return stored;
+    } catch (RuntimeException e) {
+      cleanupUploadedBlob(storage, blobStoreId, upload);
+      throw e;
+    }
+  }
+
+  private Stored write(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      String path,
+      InputStream body,
+      String contentTypeHint,
+      Map<String, ?> extraBlobAttributes,
+      String createdBy,
+      String createdByIp,
+      ComponentBinding componentBinding,
+      boolean keepResponseFile) {
     DigestedUpload upload = uploadWithDigests(runtime, storage, blobStoreId, path, body, extraBlobAttributes);
     try {
       Stored stored = executePersist(
           "Persist raw asset " + runtime.name() + "/" + path,
           () -> persist(runtime, storage, blobStoreId, path, upload, contentTypeHint,
-              extraBlobAttributes, createdBy, createdByIp, keepResponseFile ? upload.tempFile() : null));
+              extraBlobAttributes, createdBy, createdByIp, componentBinding,
+              keepResponseFile ? upload.tempFile() : null));
       cleanupUnusedUploadedBlob(storage, blobStoreId, upload, stored.blob());
       if (!keepResponseFile) {
         TempBlobFiles.deleteQuietly(upload.tempFile());
@@ -140,6 +217,7 @@ class RawAssetWriter {
       Map<String, ?> extraBlobAttributes,
       String createdBy,
       String createdByIp,
+      ComponentBinding componentBinding,
       Path responseFile) {
     Instant now = Instant.now();
     String contentType = contentTypeHint == null || contentTypeHint.isBlank()
@@ -150,6 +228,7 @@ class RawAssetWriter {
     String blobRef = BlobReferenceCodec.format(ref);
 
     Optional<AssetRecord> existing = assetDao.findAssetByPath(runtime.id(), path);
+    Long previousComponentId = existing.map(AssetRecord::componentId).orElse(null);
     Long previousBlobId = existing.map(AssetRecord::assetBlobId).orElse(null);
     AssetBlobRecord previousBlob = previousBlobId == null
         ? null
@@ -198,7 +277,7 @@ class RawAssetWriter {
       }
     }
 
-    long componentId = upsertComponent(runtime, path, now);
+    Long componentId = componentId(runtime, path, now, componentBinding);
     Map<String, Object> assetAttrs = Map.of("path", path);
     AssetRecord persistedAsset;
     boolean created;
@@ -236,6 +315,7 @@ class RawAssetWriter {
         AssetRecord prior = assetDao.findAssetByPath(runtime.id(), path)
             .orElseThrow(() -> new IllegalStateException(
                 "Concurrent raw asset insert won but row is not visible for " + runtime.name() + "/" + path));
+        previousComponentId = prior.componentId();
         previousBlob = prior.assetBlobId() == null ? null : assetDao.findBlobById(prior.assetBlobId()).orElse(null);
         persistedAsset = updateExistingAsset(prior, componentId, blobId, contentType,
             digests.size(), now, assetAttrs);
@@ -247,13 +327,16 @@ class RawAssetWriter {
       assetDao.markBlobDeletedIfUnreferenced(previousBlob.id(), "asset replaced");
     }
     browseNodeDao.upsertPathAncestors(runtime.id(), path, persistedAsset.id(), componentId);
+    if (previousComponentId != null && !previousComponentId.equals(componentId)) {
+      componentDao.deleteIfNoAssets(previousComponentId);
+    }
     assetMetadataCache.evictAfterCommit(runtime.id(), path);
     return new Stored(persistedAsset, persistedBlob, digests, created, responseFile);
   }
 
   private AssetRecord updateExistingAsset(
       AssetRecord prior,
-      long componentId,
+      Long componentId,
       long blobId,
       String contentType,
       long size,
@@ -282,6 +365,48 @@ class RawAssetWriter {
         Map.of("path", path),
         now);
     return componentDao.upsertReturningId(rec);
+  }
+
+  private Long componentId(
+      RepositoryRuntime runtime,
+      String path,
+      Instant now,
+      ComponentBinding binding) {
+    return switch (binding.mode()) {
+      case PER_ASSET -> upsertComponent(runtime, path, now);
+      case NONE -> null;
+      case EXPLICIT -> {
+        ComponentRecord component = binding.component();
+        if (component.repositoryId() != runtime.id() || component.format() != runtime.format()) {
+          throw new IllegalArgumentException(
+              "Explicit component must belong to the raw asset repository and format");
+        }
+        yield componentDao.upsertReturningId(component);
+      }
+    };
+  }
+
+  private enum ComponentMode {
+    PER_ASSET,
+    NONE,
+    EXPLICIT
+  }
+
+  private record ComponentBinding(ComponentMode mode, ComponentRecord component) {
+    private static ComponentBinding perAsset() {
+      return new ComponentBinding(ComponentMode.PER_ASSET, null);
+    }
+
+    private static ComponentBinding none() {
+      return new ComponentBinding(ComponentMode.NONE, null);
+    }
+
+    private static ComponentBinding explicit(ComponentRecord component) {
+      if (component == null) {
+        throw new IllegalArgumentException("Explicit component is required");
+      }
+      return new ComponentBinding(ComponentMode.EXPLICIT, component);
+    }
   }
 
   private record DigestedUpload(
@@ -328,6 +453,39 @@ class RawAssetWriter {
         throw new IllegalStateException("Failed to buffer raw content for " + path, io);
       }
       throw (RuntimeException) e;
+    }
+  }
+
+  private DigestedUpload uploadFileWithDigests(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      String path,
+      Path file,
+      Map<String, ?> extraBlobAttributes) {
+    try {
+      MessageDigest md5 = digest("MD5");
+      MessageDigest sha1 = digest("SHA-1");
+      MessageDigest sha256 = digest("SHA-256");
+      MessageDigest sha512 = digest("SHA-512");
+      long size;
+      try (InputStream in = Files.newInputStream(file)) {
+        size = streamWithDigests(in, null, md5, sha1, sha256, sha512);
+      }
+      Digests digests = new Digests(
+          hex(md5.digest()), hex(sha1.digest()), hex(sha256.digest()), hex(sha512.digest()), size);
+      Optional<AssetBlobRecord> reusable =
+          precheckedReusableBlob(blobStoreId, digests.sha256(), digests.size(), extraBlobAttributes);
+      if (reusable.isPresent()) {
+        AssetBlobRecord blob = reusable.get();
+        return new DigestedUpload(
+            BlobReferenceCodec.reference(blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size()),
+            digests, null, false);
+      }
+      BlobReference ref = storage.putFile(runtime.name(), path, file, digests.sha256());
+      return new DigestedUpload(ref, digests, null, true);
+    } catch (IOException e) {
+      throw new java.io.UncheckedIOException("Failed to digest raw file " + path, e);
     }
   }
 
@@ -391,7 +549,9 @@ class RawAssetWriter {
     int n;
     while ((n = in.read(buf)) > 0) {
       for (MessageDigest d : digests) d.update(buf, 0, n);
-      out.write(buf, 0, n);
+      if (out != null) {
+        out.write(buf, 0, n);
+      }
       total += n;
     }
     return total;

@@ -87,7 +87,7 @@ If using a reverse proxy, verify:
 - The proxy forwards the full path.
 - Large upload body size is allowed.
 - Read and write timeouts are long enough for artifact uploads.
-- The proxy does not strip authentication headers required by Maven/npm/pip/Helm/Cargo/Pub/Composer/NuGet/gem/yum clients.
+- The proxy does not strip authentication headers required by Maven/npm/pip/Helm/Cargo/Pub/Composer/NuGet/gem/yum clients, and Terraform `host.services` keeps its URL-token segment through generated archive/checksum/signature URLs.
 
 ## Initial Admin Setup Problems
 
@@ -162,7 +162,7 @@ Check:
 - The client is using the right credential type for the protocol.
 - Reverse proxies preserve the `Authorization` header.
 
-For npm, Cargo, Pub, NuGet, RubyGems, and other token-based clients, regenerate the relevant token or API key after changing user or realm settings. Private Composer repositories normally use HTTP Basic through `COMPOSER_AUTH`/`auth.json`; for a 401, verify that the host key exactly matches the repository host and port, and do not commit credentials to `composer.json`.
+For npm, Cargo, Pub, NuGet, RubyGems, and other token-based clients, regenerate the relevant token or API key after changing user or realm settings. Terraform uses a `GenericToken` embedded in the configured `host.services` URL; regenerate the token and update the CLI configuration together. Private Composer repositories normally use HTTP Basic through `COMPOSER_AUTH`/`auth.json`; for a 401, verify that the host key exactly matches the repository host and port, and do not commit credentials to `composer.json`.
 
 If the issue is a Nexus compatibility difference, include the same request against Nexus and kkrepo when opening an issue.
 
@@ -197,6 +197,7 @@ Common causes:
 - Proxy repositories were expected but not listed in `Optional proxy repositories`.
 - Cargo / Rust migration was blocked because preflight did not prove a supported datastore Cargo content model; review the Source Profile and plan item status.
 - For blocked Composer migration, confirm that the source is a native Nexus 3.75.0+ Pro `composer-proxy` and explicitly select it under `Optional proxy repositories`. Community plugins, hosted/group sources, and sources without a Composer content schema do not silently downgrade to migration.
+- For blocked Terraform migration, confirm the source uses a native `terraform-hosted` or `terraform-proxy` recipe from a supported Nexus version. Proxy cache data requires explicit selection under `Optional proxy repositories` and a `FULL` source plan. Only recognized module/provider archives are restored. Restored module archives are discoverable from their local Nexus paths; provider routes, validators, checksum manifests, and signing snapshots are rebuilt from the configured upstream and pin their cache for the metadata lifetime. Unknown schemas, community plugins, and unsupported product capabilities still fail closed.
 - Blob migration is slow because concurrency is too low, source Nexus is overloaded, or object storage is throttling.
 
 See [Nexus Migration Guide](nexus-migration-guide.md).

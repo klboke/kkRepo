@@ -21,6 +21,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.metrics.KkRepoMetrics;
 import com.github.klboke.kkrepo.server.pypi.PypiHostedService;
 import com.github.klboke.kkrepo.server.rubygems.RubygemsService;
+import com.github.klboke.kkrepo.server.terraform.TerraformComponentService;
 import com.github.klboke.kkrepo.server.yum.YumService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Instant;
@@ -144,6 +145,31 @@ class RepositoryIndexRebuildWorkerTest {
     verify(pypi).rebuildRootIndex(pypiRuntime, storage, 7L, "system", null);
   }
 
+  @Test
+  void dispatchesTerraformComponentRebuildForProxyRepositories() {
+    RepositoryIndexRebuildDao dao = mock(RepositoryIndexRebuildDao.class);
+    RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
+    TerraformComponentService terraform = mock(TerraformComponentService.class);
+    RepositoryRuntime proxy = runtime(
+        6L, RepositoryFormat.TERRAFORM, RepositoryType.PROXY, 7L);
+    when(dao.claim(8)).thenReturn(List.of(claim(
+        proxy.id(), RepositoryIndexRebuildDao.TERRAFORM_COMPONENTS, null, Instant.now())));
+    when(runtimes.resolveById(proxy.id())).thenReturn(Optional.of(proxy));
+
+    worker(
+        dao,
+        runtimes,
+        mock(BlobStorageRegistry.class),
+        mock(HelmHostedService.class),
+        mock(PypiHostedService.class),
+        mock(YumService.class),
+        mock(RubygemsService.class),
+        terraform,
+        true).drain();
+
+    verify(terraform).rebuild(proxy);
+  }
+
   private static RepositoryIndexRebuildWorker worker(
       RepositoryIndexRebuildDao dao,
       RepositoryRuntimeRegistry runtimes,
@@ -153,6 +179,21 @@ class RepositoryIndexRebuildWorkerTest {
       YumService yum,
       RubygemsService rubygems,
       boolean enabled) {
+    return worker(
+        dao, runtimes, storages, helm, pypi, yum, rubygems,
+        mock(TerraformComponentService.class), enabled);
+  }
+
+  private static RepositoryIndexRebuildWorker worker(
+      RepositoryIndexRebuildDao dao,
+      RepositoryRuntimeRegistry runtimes,
+      BlobStorageRegistry storages,
+      HelmHostedService helm,
+      PypiHostedService pypi,
+      YumService yum,
+      RubygemsService rubygems,
+      TerraformComponentService terraform,
+      boolean enabled) {
     return new RepositoryIndexRebuildWorker(
         dao,
         runtimes,
@@ -161,6 +202,7 @@ class RepositoryIndexRebuildWorkerTest {
         pypi,
         yum,
         rubygems,
+        terraform,
         new RecordingTransactionManager(),
         8,
         enabled,

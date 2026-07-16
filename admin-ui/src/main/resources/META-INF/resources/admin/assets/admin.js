@@ -371,6 +371,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   nuget: "nuget",
   rubygems: "rubygems",
   yum: "yum",
+  terraform: "terraform",
   raw: "raw",
 });
 
@@ -387,6 +388,7 @@ const FORMAT_DISPLAY_NAMES = Object.freeze({
   nuget: "NuGet",
   rubygems: "RubyGems",
   yum: "Yum / RPM",
+  terraform: "Terraform",
   raw: "Raw",
 });
 
@@ -1718,7 +1720,7 @@ function memberCandidates() {
   const recipe = currentRecipe();
   const format = recipe ? recipe.format : null;
   if (!format) return [];
-  const allowNestedGroups = format === "pub" || format === "composer";
+  const allowNestedGroups = format === "pub" || format === "composer" || format === "terraform";
   return repositories.filter((repo) => {
     if (repo.format !== format) return false;
     if (repositoryFormMode === "edit" && repo.name === editingRepositoryName) return false;
@@ -1950,7 +1952,8 @@ function refreshRepositoryRemoteDefaults(recipe) {
     docker: "https://registry-1.docker.io/",
     cargo: "https://index.crates.io/",
     pub: "https://pub.dev/",
-    composer: "https://repo.packagist.org/"
+    composer: "https://repo.packagist.org/",
+    terraform: "https://registry.terraform.io/"
   };
   remote.placeholder = defaults[recipe.format] || "https://example.com/";
   if (repositoryFormMode === "create" && !remote.value.trim() && defaults[recipe.format]) {

@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.security;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -13,7 +14,10 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.server.support.dao.AssetDaoAdapter;
 import com.github.klboke.kkrepo.server.support.dao.RepositoryDaoAdapter;
 import com.github.klboke.kkrepo.server.support.dao.SecurityDaoAdapter;
 import jakarta.servlet.DispatcherType;
@@ -21,7 +25,9 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.lang.reflect.Proxy;
+import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -178,6 +184,182 @@ class RepositorySecurityFilterTest {
     assertEquals(
         "Bearer realm=\"pub\", message=\"Authentication required\"",
         response.headers.get("WWW-Authenticate"));
+  }
+
+  @Test
+  void terraformUrlTokenIsAuthenticatedButCanonicalPathIsUsedForAuthorization() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
+    authentication.terraformAuthenticated = Optional.of(subject("alice"));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "terraform-private", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED)),
+        false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+    HttpServletRequest request = request(
+        "GET",
+        "/repository/terraform-private/v1/modules/YWRtaW46QWRtaW4xMjM0/kkrepo/fixture/aws/versions");
+
+    filter.doFilter(request, response.proxy(), chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals("YWRtaW46QWRtaW4xMjM0", authentication.terraformToken);
+    assertEquals(
+        "YWRtaW46QWRtaW4xMjM0",
+        request.getAttribute(RepositorySecurityFilter.TERRAFORM_URL_TOKEN_SEGMENT_ATTRIBUTE));
+    assertEquals(
+        "v1/modules/kkrepo/fixture/aws/versions",
+        request.getAttribute(RepositorySecurityFilter.NORMALIZED_REPOSITORY_PATH_ATTRIBUTE));
+    assertEquals("v1/modules/kkrepo/fixture/aws/versions", decisions.permission.pathPattern());
+  }
+
+  @Test
+  void normalTerraformPathIsCanonicalizedWithoutUrlToken() throws Exception {
+    String path = "v1/providers/acme/cloud/versions";
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = filter(
+        new StubAuthenticationService(Optional.of(subject("alice"))),
+        decisions,
+        new FakeRepositoryDao(repository(
+            "terraform-private", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED)),
+        false);
+    HttpServletRequest request = request("GET", "/repository/terraform-private/" + path);
+    ChainState chain = new ChainState();
+
+    filter.doFilter(request, new ResponseState().proxy(), chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(
+        path,
+        request.getAttribute(RepositorySecurityFilter.NORMALIZED_REPOSITORY_PATH_ATTRIBUTE));
+    assertNull(request.getAttribute(RepositorySecurityFilter.TERRAFORM_URL_TOKEN_SEGMENT_ATTRIBUTE));
+    assertEquals(path, decisions.permission.pathPattern());
+  }
+
+  @Test
+  void malformedTerraformUrlTokenPathIsNotMarkedSafeForFailureLogs() throws Exception {
+    String token = "GenericToken.super-secret-value";
+    HttpServletRequest request = request(
+        "GET", "/repository/terraform-private/v1/modules/" + token + "/bad");
+    RepositorySecurityFilter filter = filter(
+        new StubAuthenticationService(Optional.of(subject("alice"))),
+        new RecordingDecisionService(AccessDecision.allow()),
+        new FakeRepositoryDao(repository(
+            "terraform-private", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED)),
+        false);
+
+    filter.doFilter(request, new ResponseState().proxy(), new ChainState());
+
+    assertNull(request.getAttribute(RepositorySecurityFilter.NORMALIZED_REPOSITORY_PATH_ATTRIBUTE));
+    assertNull(request.getAttribute(RepositorySecurityFilter.TERRAFORM_URL_TOKEN_SEGMENT_ATTRIBUTE));
+  }
+
+  @Test
+  void rejectsUnsafeNonProtocolTerraformPathBeforeControllerDispatch() throws Exception {
+    RepositorySecurityFilter filter = filter(
+        new StubAuthenticationService(Optional.of(subject("alice"))),
+        new RecordingDecisionService(AccessDecision.allow()),
+        new FakeRepositoryDao(repository(
+            "terraform-private", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED)),
+        false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/repository/terraform-private/bad%2Fpath"), response.proxy(), chain);
+
+    assertEquals(0, chain.calls);
+    assertEquals(HttpServletResponse.SC_BAD_REQUEST, response.status);
+    assertEquals("Invalid Terraform repository path", response.message);
+  }
+
+  @Test
+  void embedsReplayableAuthenticationInPrivateTerraformDownloadUrls() throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("alice")));
+    authentication.terraformReplayToken = "dXNlcjpwYXNz/w==";
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        new RecordingDecisionService(AccessDecision.allow()),
+        new FakeRepositoryDao(repository(
+            "terraform-private", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED)),
+        false);
+    HttpServletRequest request = request(
+        "GET", "/repository/terraform-private/v1/modules/acme/network/aws/1.2.3/download");
+    ChainState chain = new ChainState();
+
+    filter.doFilter(request, new ResponseState().proxy(), chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(
+        "dXNlcjpwYXNz%2Fw%3D%3D",
+        request.getAttribute(RepositorySecurityFilter.TERRAFORM_URL_TOKEN_SEGMENT_ATTRIBUTE));
+  }
+
+  @Test
+  void rejectsNonReplayableAuthenticationForPrivateTerraformDownloadMetadata() throws Exception {
+    RepositorySecurityFilter filter = filter(
+        new StubAuthenticationService(Optional.of(subject("alice"))),
+        new RecordingDecisionService(AccessDecision.allow()),
+        new FakeRepositoryDao(repository(
+            "terraform-private", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED)),
+        false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/repository/terraform-private/v1/providers/acme/cloud/1.2.3/download/linux/amd64"),
+        response.proxy(), chain);
+
+    assertEquals(0, chain.calls);
+    assertEquals(HttpServletResponse.SC_UNAUTHORIZED, response.status);
+  }
+
+  @Test
+  void rejectsNonReplayableAuthenticationEvenWhenAnonymousMetadataReadIsEnabled() throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("alice")), subject("anonymous"));
+    authentication.anonymousEnabled = true;
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        new RecordingDecisionService(AccessDecision.allow()),
+        new FakeRepositoryDao(repository(
+            "terraform-public", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED)),
+        true);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/repository/terraform-public/v1/modules/acme/network/aws/1.2.3/download"),
+        response.proxy(), chain);
+
+    assertEquals(0, chain.calls);
+    assertEquals(HttpServletResponse.SC_UNAUTHORIZED, response.status);
+    assertEquals(0, authentication.anonymousCalls);
+  }
+
+  @Test
+  void allowsAnonymousTerraformDownloadMetadataWithoutReplayToken() throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.empty(), subject("anonymous"));
+    authentication.anonymousEnabled = true;
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        new RecordingDecisionService(AccessDecision.allow()),
+        new FakeRepositoryDao(repository(
+            "terraform-public", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED)),
+        true);
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/repository/terraform-public/v1/modules/acme/network/aws/1.2.3/download"),
+        new ResponseState().proxy(), chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(1, authentication.anonymousCalls);
   }
 
   @Test
@@ -409,6 +591,31 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
+  void terraformBrowseRestRootSkipsProtocolParsingAndRequiresBrowsePermission() throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "terraform-proxy", RepositoryFormat.TERRAFORM, RepositoryType.PROXY)),
+        false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/service/rest/repository/browse/terraform-proxy/"),
+        response.proxy(),
+        chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(0, response.status);
+    assertEquals(PermissionAction.BROWSE, decisions.permission.action());
+    assertEquals("", decisions.permission.pathPattern());
+  }
+
+  @Test
   void repositoryContentRoutesUseNexusBreadActionMapping() throws Exception {
     assertRepositoryContentAction("GET", PermissionAction.READ);
     assertRepositoryContentAction("HEAD", PermissionAction.READ);
@@ -416,6 +623,96 @@ class RepositorySecurityFilterTest {
     assertRepositoryContentAction("PATCH", PermissionAction.ADD);
     assertRepositoryContentAction("PUT", PermissionAction.EDIT);
     assertRepositoryContentAction("DELETE", PermissionAction.DELETE);
+  }
+
+  @Test
+  void terraformModuleCreatesRequireAddAndOverwritesRequireEdit() throws Exception {
+    String path = "v1/modules/acme/network/aws/1.2.3/module.zip";
+    assertTerraformModuleAction(path, Set.of(), PermissionAction.ADD);
+    assertTerraformModuleAction(path, Set.of(path), PermissionAction.EDIT);
+    assertTerraformModuleAction(
+        "v1/modules/acme/network/aws/1.2.3/alternate.zip", Set.of(path), PermissionAction.EDIT);
+  }
+
+  @Test
+  void terraformModuleOverwriteDoesNotFallBackToAddWhenEditIsDenied() throws Exception {
+    String path = "v1/modules/acme/network/aws/1.2.3/module.zip";
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.deny("missing edit")) {
+      @Override
+      public AccessDecision decide(PermissionSubject subject, RepositoryPermission permission) {
+        super.decide(subject, permission);
+        return permission.action() == PermissionAction.ADD
+            ? AccessDecision.allow()
+            : AccessDecision.deny("missing edit");
+      }
+    };
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "terraform-hosted", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED)),
+        new FakeAssetDao(Set.of(path)),
+        terraformRegistry(Set.of()),
+        new ForwardedHeaderPolicy(""),
+        new NexusLegacyUiCompatibility(false));
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("PUT", "/repository/terraform-hosted/" + path), response.proxy(), chain);
+
+    assertEquals(0, chain.calls);
+    assertEquals(1, decisions.decisions);
+    assertEquals(PermissionAction.EDIT, decisions.permission.action());
+    assertEquals(HttpServletResponse.SC_FORBIDDEN, response.status);
+  }
+
+  @Test
+  void terraformProviderCreatesRequireAddAndOverwritesRequireEdit() throws Exception {
+    String path = "v1/providers/acme/cloud/1.2.3/download/linux/amd64";
+    assertTerraformProviderAction(path, Set.of(), PermissionAction.ADD);
+    assertTerraformProviderAction(path, Set.of("linux/amd64"), PermissionAction.EDIT);
+    assertTerraformProviderAction(
+        "v1/providers/acme/cloud/1.2.3/download/darwin/arm64",
+        Set.of("linux/amd64"),
+        PermissionAction.ADD);
+  }
+
+  @Test
+  void terraformProviderOverwriteDoesNotFallBackToAddWhenEditIsDenied() throws Exception {
+    String path = "v1/providers/acme/cloud/1.2.3/download/linux/amd64";
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.deny("missing edit")) {
+      @Override
+      public AccessDecision decide(PermissionSubject subject, RepositoryPermission permission) {
+        super.decide(subject, permission);
+        return permission.action() == PermissionAction.ADD
+            ? AccessDecision.allow()
+            : AccessDecision.deny("missing edit");
+      }
+    };
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "terraform-hosted", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED)),
+        new FakeAssetDao(Set.of()),
+        terraformRegistry(Set.of("linux/amd64")),
+        new ForwardedHeaderPolicy(""),
+        new NexusLegacyUiCompatibility(false));
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("PUT", "/repository/terraform-hosted/" + path), response.proxy(), chain);
+
+    assertEquals(0, chain.calls);
+    assertEquals(1, decisions.decisions);
+    assertEquals(PermissionAction.EDIT, decisions.permission.action());
+    assertEquals(HttpServletResponse.SC_FORBIDDEN, response.status);
   }
 
   @Test
@@ -636,6 +933,8 @@ class RepositorySecurityFilterTest {
         authenticationService,
         accessDecisionService,
         repositoryDao,
+        new FakeAssetDao(Set.of()),
+        terraformRegistry(Set.of()),
         forwardedHeaderPolicy,
         new NexusLegacyUiCompatibility(false));
   }
@@ -653,6 +952,8 @@ class RepositorySecurityFilterTest {
         authenticationService,
         accessDecisionService,
         repositoryDao,
+        new FakeAssetDao(Set.of()),
+        terraformRegistry(Set.of()),
         new ForwardedHeaderPolicy(""),
         new NexusLegacyUiCompatibility(legacyUiEnabled));
   }
@@ -663,6 +964,79 @@ class RepositorySecurityFilterTest {
         method,
         "/repository/maven-releases/com/acme/app/1.0/app-1.0.jar",
         action);
+  }
+
+  private static void assertTerraformModuleAction(
+      String path, Set<String> existingPaths, PermissionAction expected) throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "terraform-hosted", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED)),
+        new FakeAssetDao(existingPaths),
+        terraformRegistry(Set.of()),
+        new ForwardedHeaderPolicy(""),
+        new NexusLegacyUiCompatibility(false));
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("PUT", "/repository/terraform-hosted/" + path), response.proxy(), chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(expected, decisions.permission.action());
+  }
+
+  private static void assertTerraformProviderAction(
+      String path, Set<String> publishedPlatforms, PermissionAction expected) throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "terraform-hosted", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED)),
+        new FakeAssetDao(Set.of()),
+        terraformRegistry(publishedPlatforms),
+        new ForwardedHeaderPolicy(""),
+        new NexusLegacyUiCompatibility(false));
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("PUT", "/repository/terraform-hosted/" + path), response.proxy(), chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(expected, decisions.permission.action());
+  }
+
+  private static TerraformRegistryDao terraformRegistry(Set<String> publishedPlatforms) {
+    return (TerraformRegistryDao) Proxy.newProxyInstance(
+        RepositorySecurityFilterTest.class.getClassLoader(),
+        new Class<?>[] {TerraformRegistryDao.class},
+        (proxy, method, args) -> {
+          if ("listProviderPlatforms".equals(method.getName())) {
+            long repositoryId = (Long) args[0];
+            String namespace = (String) args[1];
+            String type = (String) args[2];
+            String version = (String) args[3];
+            return publishedPlatforms.stream().map(platform -> {
+              String[] parts = platform.split("/", 2);
+              String filename = "terraform-provider-" + type + "_" + version + "_"
+                  + parts[0] + "_" + parts[1] + ".zip";
+              return new TerraformRegistryDao.ProviderPlatform(
+                  repositoryId, namespace, type, version, parts[0], parts[1], filename,
+                  "v1/providers/" + namespace + "/" + type + "/" + version + "/package/"
+                      + parts[0] + "/" + filename,
+                  "sha256", "5.0", 1L, Instant.EPOCH);
+            }).toList();
+          }
+          throw new UnsupportedOperationException(method.getName());
+        });
   }
 
   private static void assertRepositoryPathAction(
@@ -882,6 +1256,9 @@ class RepositorySecurityFilterTest {
     private int rubygemsCalls;
     private Optional<AuthenticatedSubject> pubAuthenticated = Optional.empty();
     private int pubCalls;
+    private Optional<AuthenticatedSubject> terraformAuthenticated = Optional.empty();
+    private String terraformToken;
+    private String terraformReplayToken;
     private boolean anonymousEnabled;
 
     private StubAuthenticationService(AuthenticatedSubject anonymous) {
@@ -914,6 +1291,18 @@ class RepositorySecurityFilterTest {
     public Optional<AuthenticatedSubject> authenticatePub(HttpServletRequest request) {
       pubCalls++;
       return pubAuthenticated;
+    }
+
+    @Override
+    public Optional<AuthenticatedSubject> authenticateTerraformUrlToken(String token) {
+      terraformToken = token;
+      return terraformAuthenticated;
+    }
+
+    @Override
+    public Optional<String> replayableTerraformUrlToken(
+        HttpServletRequest request, AuthenticatedSubject authenticated) {
+      return Optional.ofNullable(terraformReplayToken);
     }
 
     @Override
@@ -953,6 +1342,25 @@ class RepositorySecurityFilterTest {
     @Override
     public Optional<RepositoryRecord> findByName(String name) {
       return repository.name().equals(name) ? Optional.of(repository) : Optional.empty();
+    }
+  }
+
+  private static final class FakeAssetDao extends AssetDaoAdapter {
+    private final Set<String> existingPaths;
+
+    private FakeAssetDao(Set<String> existingPaths) {
+      this.existingPaths = existingPaths;
+    }
+
+    @Override
+    public List<AssetRecord> listAssetsByPrefix(long repositoryId, String prefix) {
+      return existingPaths.stream()
+          .filter(path -> path.startsWith(prefix))
+          .map(path -> new AssetRecord(
+              1L, repositoryId, null, null, RepositoryFormat.TERRAFORM, path, new byte[32],
+              path.substring(path.lastIndexOf('/') + 1), "terraform", "application/zip", 1L,
+              null, Instant.EPOCH, Map.of()))
+          .toList();
     }
   }
 

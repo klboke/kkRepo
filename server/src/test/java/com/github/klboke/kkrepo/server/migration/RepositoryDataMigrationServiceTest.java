@@ -78,6 +78,20 @@ class RepositoryDataMigrationServiceTest {
   }
 
   @Test
+  void terraformProxyUsesExplicitProxyBackupMigrationMode() throws Exception {
+    List<?> sources = sourceRepositories(
+        List.of(),
+        List.of("terraform-proxy"),
+        inventory(
+            datastoreProbe("terraform", true),
+            repository("terraform-proxy", "terraform", "proxy")));
+
+    assertEquals(1, sources.size());
+    assertEquals("terraform-proxy", sourceName(sources.getFirst()));
+    assertEquals("proxy-backup", sourceMigrationMode(sources.getFirst()));
+  }
+
+  @Test
   void requestedRepositoriesAllowDatastoreCargoHostedMigrationWhenContentSchemaIsPresent() throws Exception {
     List<?> sources = sourceRepositories(
         List.of("cargo-hosted"),

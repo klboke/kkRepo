@@ -12,6 +12,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MigrationJobDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.server.docker.DockerConnectorRuntime;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
@@ -66,6 +67,7 @@ public class NexusMigrationController {
   private final ApiKeyAuthCache apiKeyAuthCache;
   private final BasicAuthCache basicAuthCache;
   private final DockerConnectorRuntime dockerConnectorRuntime;
+  private final TerraformRegistryDao terraformRegistry;
 
   public NexusMigrationController(
       ObjectMapper objectMapper,
@@ -84,7 +86,8 @@ public class NexusMigrationController {
       SecurityAuthorizationCache securityAuthorizationCache,
       ApiKeyAuthCache apiKeyAuthCache,
       BasicAuthCache basicAuthCache,
-      DockerConnectorRuntime dockerConnectorRuntime) {
+      DockerConnectorRuntime dockerConnectorRuntime,
+      TerraformRegistryDao terraformRegistry) {
     this.objectMapper = objectMapper;
     this.blobStoreDao = blobStoreDao;
     this.repositoryDao = repositoryDao;
@@ -102,6 +105,7 @@ public class NexusMigrationController {
     this.apiKeyAuthCache = apiKeyAuthCache;
     this.basicAuthCache = basicAuthCache;
     this.dockerConnectorRuntime = dockerConnectorRuntime;
+    this.terraformRegistry = terraformRegistry;
   }
 
   @PostMapping("/preflight")
@@ -256,7 +260,8 @@ public class NexusMigrationController {
         repositoryDao,
         securityDao,
         migrationJobDao,
-        new SecurityDaoMigrationWriter(securityDao));
+        new SecurityDaoMigrationWriter(securityDao),
+        terraformRegistry);
   }
 
   private NexusMigrationRequest toRequest(NexusMigrationCommand command, boolean dryRun) {

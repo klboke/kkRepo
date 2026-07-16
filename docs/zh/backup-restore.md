@@ -106,7 +106,7 @@ pg_dump --format=custom --dbname='postgresql://kkrepo@db:5432/kkrepo' \
 - `/actuator/health` 为 `UP`。
 - 管理员登录可用。
 - 仓库列表和 blob store 列表可加载。
-- 关键 Maven/npm/PyPI/Go/Helm/Cargo/Pub/Composer/Docker/OCI/NuGet/RubyGems/Yum/Raw 包或镜像可下载；Composer 同时验证 `packages.json`、p2 metadata 和 dist archive。
+- 关键 Maven/npm/PyPI/Go/Helm/Cargo/Pub/Composer/Terraform/Docker/OCI/NuGet/RubyGems/Yum/Raw 包或镜像可下载；Composer 同时验证 `packages.json`、p2 metadata 和 dist archive；Terraform 通过 group 验证 module/provider metadata、platform archive、SHA256SUMS 和 detached signature。
 - 测试仓库 hosted 上传可用。
 - Browse/search 返回预期 asset。
 - 迁移页面没有遗留非预期 running job；如有，应确认是否需要恢复运行。

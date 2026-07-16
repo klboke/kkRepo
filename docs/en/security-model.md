@@ -98,7 +98,7 @@ The custom API-key header is:
 X-Nexus-Plus-Token
 ```
 
-Protocol-specific clients should keep using their native auth mechanisms and matching token domains. Current protocol-token domains include `NpmToken`, `CargoToken`, `PubToken`, `NuGetApiKey`, and `RubyGemsApiKey` where the corresponding client protocol uses tokens or API keys; Cargo, Pub, and RubyGems clients send their registry/API key token through the `Authorization` header. Private Composer repositories should normally use HTTP Basic through `COMPOSER_AUTH`/`auth.json`; Composer or CI callers that explicitly send bearer or custom API-key headers can use `GenericToken`. `GenericToken` is not a universal replacement for every package client token format.
+Protocol-specific clients should keep using their native auth mechanisms and matching token domains. Current protocol-token domains include `NpmToken`, `CargoToken`, `PubToken`, `NuGetApiKey`, and `RubyGemsApiKey` where the corresponding client protocol uses tokens or API keys; Cargo, Pub, and RubyGems clients send their registry/API key token through the `Authorization` header. Private Composer repositories should normally use HTTP Basic through `COMPOSER_AUTH`/`auth.json`; Composer or CI callers that explicitly send bearer or custom API-key headers can use `GenericToken`. Terraform CLI can use a `GenericToken` embedded only in the configured `modules.v1`/`providers.v1` service URL; generated archive/checksum/signature URLs preserve that credential segment, while logs, metrics, and uploaded CI diagnostics must redact it. `GenericToken` is not a universal replacement for every package client token format.
 
 ## Encryption Secrets
 

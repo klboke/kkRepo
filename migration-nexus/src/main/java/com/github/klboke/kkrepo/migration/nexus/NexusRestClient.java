@@ -404,7 +404,8 @@ public class NexusRestClient {
           composer: 'COMPOSER',
           yum: 'YUM',
           raw: 'RAW',
-          cargo: 'CARGO'
+          cargo: 'CARGO',
+          terraform: 'TERRAFORM'
         ]
         return prefixes[format]
       }
@@ -811,7 +812,8 @@ public class NexusRestClient {
           composer: 'COMPOSER',
           yum: 'YUM',
           raw: 'RAW',
-          cargo: 'CARGO'
+          cargo: 'CARGO',
+          terraform: 'TERRAFORM'
         ]
         def upperTables = []
         allTables.each { tableName ->

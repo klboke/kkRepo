@@ -179,6 +179,50 @@ class BrowseControllerSecurityTest {
   }
 
   @Test
+  void terraformBrowseHidesInternalRouteAssetsAndRejectsDirectAccess() {
+    RepositoryRecord repository = repo(
+        1L, "terraform-proxy", RepositoryFormat.TERRAFORM, RepositoryType.PROXY);
+    StubRepositoryDao repositories = new StubRepositoryDao(Map.of(repository.name(), repository));
+    StubBrowseNodeDao browseNodes = new StubBrowseNodeDao();
+    browseNodes.children.put(key(repository.id(), ""), List.of(
+        child(".terraform", ".terraform", false),
+        child("v1", "v1", false)));
+    RecordingSecurityService security = new RecordingSecurityService(permission -> AccessDecision.allow());
+    BrowseController controller = controller(repositories, browseNodes, subject("alice"), null, security);
+
+    BrowseController.BrowseListing listing = controller.list(
+        "terraform-proxy", "", request("GET", "/internal/browse/terraform-proxy"));
+
+    assertEquals(List.of("v1"),
+        listing.entries().stream().map(BrowseController.BrowseEntry::name).toList());
+    ResponseStatusException listingError = assertThrows(ResponseStatusException.class,
+        () -> controller.list(
+            "terraform-proxy", ".terraform/routes",
+            request("GET", "/internal/browse/terraform-proxy")));
+    assertEquals(HttpStatus.NOT_FOUND, listingError.getStatusCode());
+    ResponseStatusException detailError = assertThrows(ResponseStatusException.class,
+        () -> controller.attributes(
+            "terraform-proxy", ".terraform/routes/token.json", null,
+            request("GET", "/internal/browse/terraform-proxy/attributes")));
+    assertEquals(HttpStatus.NOT_FOUND, detailError.getStatusCode());
+    for (String internal : List.of(
+        "v1/providers/acme/demo/1.0.1/package",
+        "v1/providers/acme/demo/1.0.1/metadata-r1",
+        "v1/providers/acme/demo/1.0.1/metadata-proxy")) {
+      ResponseStatusException internalListing = assertThrows(ResponseStatusException.class,
+          () -> controller.list(
+              "terraform-proxy", internal,
+              request("GET", "/internal/browse/terraform-proxy")));
+      assertEquals(HttpStatus.NOT_FOUND, internalListing.getStatusCode(), internal);
+      ResponseStatusException internalDetail = assertThrows(ResponseStatusException.class,
+          () -> controller.attributes(
+              "terraform-proxy", internal + "/asset", null,
+              request("GET", "/internal/browse/terraform-proxy/attributes")));
+      assertEquals(HttpStatus.NOT_FOUND, internalDetail.getStatusCode(), internal);
+    }
+  }
+
+  @Test
   void listRejectsWhenNoAuthenticatedOrAnonymousSubjectExists() {
     RepositoryRecord repository = repo(1L, "maven-public", RepositoryFormat.MAVEN2, RepositoryType.GROUP);
     StubRepositoryDao repositories = new StubRepositoryDao(Map.of(repository.name(), repository));

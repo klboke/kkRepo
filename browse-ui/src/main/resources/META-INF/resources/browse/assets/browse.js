@@ -9,6 +9,7 @@ const state = { mode: "repos", repo: null, path: "" };
 const treeCache = new Map(); // key = `${repo}::${path}`, value = entries[]
 const expanded = new Set();   // keys (same shape as treeCache) currently expanded
 const treeMountLoads = new WeakMap();
+const treeNodeEntries = new WeakMap();
 let userMenuCloseTimer = null;
 
 let repositoriesCache = [];
@@ -42,6 +43,7 @@ const SEARCH_ROUTE_FORMAT = {
   nuget: "nuget",
   pub: "pub",
   composer: "composer",
+  terraform: "terraform",
   pypi: "pypi",
   rubygems: "rubygems",
   yum: "yum",
@@ -55,6 +57,7 @@ const FORMAT_ROUTE_SEGMENT = {
   nuget: "nuget",
   pub: "pub",
   composer: "composer",
+  terraform: "terraform",
   pypi: "pypi",
   rubygems: "rubygems",
   yum: "yum",
@@ -145,6 +148,7 @@ function componentBrowsePath(component) {
   if (format === "composer" && component.kind !== "composer-package") {
     return name;
   }
+  if (format === "terraform") return name;
   return "";
 }
 
@@ -622,6 +626,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   cargo: "cargo",
   pub: "pub",
   composer: "composer",
+  terraform: "terraform",
   go: "go",
   helm: "helm",
   docker: "docker",
@@ -1290,10 +1295,19 @@ async function ensureTreeLevelLoaded(path, mountEl, depth) {
   return true;
 }
 
+async function activateTreeBranch(entry, toggleExpand) {
+  const expansion = toggleExpand();
+  if (VERSION_DIR_RE.test(entry.name) || hasDirectoryUsage(entry)) {
+    await showComponentDetail(entry);
+  }
+  await expansion;
+}
+
 function buildTreeNode(entry) {
   const li = document.createElement("li");
   li.className = entry.leaf ? "tree-node leaf" : "tree-node branch";
   li.dataset.path = entry.path;
+  treeNodeEntries.set(li, entry);
 
   const row = document.createElement("div");
   row.className = "tree-row";
@@ -1338,7 +1352,6 @@ function buildTreeNode(entry) {
     childMount.className = "tree-children";
     childMount.style.display = isExpanded ? "" : "none";
     li.appendChild(childMount);
-    const isVersionDir = VERSION_DIR_RE.test(entry.name);
     const ensureLoaded = async () => {
       await ensureTreeLevelLoaded(entry.path, childMount, 1);
     };
@@ -1360,12 +1373,7 @@ function buildTreeNode(entry) {
     label.addEventListener("click", async () => {
       selectRow(row);
       syncTreePath(entry);
-      if (isVersionDir || hasDirectoryUsage(entry)) {
-        await showComponentDetail(entry);
-        await setExpanded(true);
-      } else {
-        await toggleExpand();
-      }
+      await activateTreeBranch(entry, toggleExpand);
     });
     if (isExpanded) {
       ensureLoaded();
@@ -1410,11 +1418,12 @@ function pathSelectorValue(path) {
 async function selectInitialTreePath() {
   if (!state.path) return;
   await revealTreePath(state.path);
-  const row = document.querySelector(`.tree-node[data-path="${pathSelectorValue(state.path)}"] > .tree-row`);
+  const node = document.querySelector(`.tree-node[data-path="${pathSelectorValue(state.path)}"]`);
+  const row = node?.querySelector(":scope > .tree-row");
   if (!row) return;
   selectRow(row);
   row.scrollIntoView({ block: "center" });
-  const entry = findCachedTreeEntry(state.path);
+  const entry = treeNodeEntries.get(node) || findCachedTreeEntry(state.path);
   if (!entry) return;
   if (entry.leaf) await showAssetDetail(entry);
   else if (VERSION_DIR_RE.test(entry.name) || hasDirectoryUsage(entry)) await showComponentDetail(entry);
@@ -1726,6 +1735,9 @@ function hasDirectoryUsage(entry) {
   if (repo.format === "composer") {
     const reserved = new Set(["p2", "providers", "packages", "_composer"]);
     return (parts.length === 2 || parts.length === 3) && !reserved.has(parts[0]);
+  }
+  if (repo.format === "terraform") {
+    return parts[0] === "v1";
   }
   return false;
 }
@@ -2393,6 +2405,69 @@ function renderDockerReferrers(referrers) {
     </div>`;
 }
 
+function terraformUsageDetail(entry) {
+  const parts = pathSegments(entry.path);
+  if (parts[0] !== "v1") return null;
+  const repoUrl = repositoryBaseUrl().replace(/\/+$/, "");
+  const host = window.location.host;
+  const section = parts[1] || "";
+  const isModule = section === "modules";
+  const isProvider = section === "providers";
+  const summaryRows = [
+    ["Repository", state.repo],
+    ["Format", "terraform"],
+    ["Path", entry.path],
+    ["Scope", isModule ? "Terraform modules" : isProvider ? "Terraform providers" : "Terraform registry"],
+  ];
+  const snippets = [];
+
+  if (isModule) {
+    const [namespace, name, system, version] = parts.slice(2, 6);
+    if (namespace) summaryRows.push(["Namespace", namespace]);
+    if (name) summaryRows.push(["Name", name]);
+    if (system) summaryRows.push(["System", system]);
+    if (version) summaryRows.push(["Version", version]);
+    snippets.push(usageSnippet(
+      "Terraform CLI config",
+      `host "${host}" {\n  services = {\n    "modules.v1" = "${repoUrl}/v1/modules/"\n  }\n}`,
+    ));
+    if (namespace && name && system) {
+      snippets.push(usageSnippet(
+        "module",
+        `module "${name}" {\n  source  = "${host}/${namespace}/${name}/${system}"\n  version = "${version || "latest"}"\n}`,
+      ));
+    }
+  } else if (isProvider) {
+    const [namespace, type, version] = parts.slice(2, 5);
+    if (namespace) summaryRows.push(["Namespace", namespace]);
+    if (type) summaryRows.push(["Type", type]);
+    if (version) summaryRows.push(["Version", version]);
+    snippets.push(usageSnippet(
+      "Terraform CLI config",
+      `host "${host}" {\n  services = {\n    "providers.v1" = "${repoUrl}/v1/providers/"\n  }\n}`,
+    ));
+    if (namespace && type) {
+      snippets.push(usageSnippet(
+        "required_providers",
+        `terraform {\n  required_providers {\n    ${type} = {\n      source  = "${host}/${namespace}/${type}"\n      version = "${version || "latest"}"\n    }\n  }\n}`,
+      ));
+    }
+  } else if (section) {
+    summaryRows.push(["Scope", `Terraform path: ${section}`]);
+  } else {
+    snippets.push(usageSnippet(
+      "Terraform CLI config",
+      `host "${host}" {\n  services = {\n    "modules.v1" = "${repoUrl}/v1/modules/"\n    "providers.v1" = "${repoUrl}/v1/providers/"\n  }\n}`,
+    ));
+  }
+
+  return {
+    crumbText: entry.path,
+    summaryRows,
+    snippets,
+  };
+}
+
 async function usageDetailForEntry(entry, detail = null) {
   const repo = currentRepository();
   if (!repo) return null;
@@ -2404,6 +2479,7 @@ async function usageDetailForEntry(entry, detail = null) {
   if (repo.format === "go") return goUsageDetail(entry);
   if (repo.format === "pub") return pubUsageDetail(entry);
   if (repo.format === "composer") return composerUsageDetail(entry, detail);
+  if (repo.format === "terraform") return terraformUsageDetail(entry);
   if (repo.format === "docker") return dockerUsageDetail(entry);
   return null;
 }
@@ -2417,7 +2493,7 @@ async function showComponentDetail(entry) {
     return;
   }
   renderDetailPane({
-    crumbIcon: repoBreadcrumbIcon(),
+    crumbIcon: repositoryFormatIcon(),
     crumbText: detail.crumbText,
     summaryRows: detail.summaryRows,
     snippets: detail.snippets,
@@ -2570,6 +2646,57 @@ function renderUploadFields() {
     bindRemoveAssetButtons();
     return;
   }
+  if (repo.format === "terraform") {
+    fields.innerHTML = `
+      <label>
+        <span>Package kind</span>
+        <select id="upload-terraform-kind" required>
+          <option value="module">Module</option>
+          <option value="provider">Provider</option>
+        </select>
+      </label>
+      <label>
+        <span>Namespace</span>
+        <input id="upload-terraform-namespace" type="text" placeholder="acme" required>
+      </label>
+      <label>
+        <span>Name</span>
+        <input id="upload-terraform-name" type="text" placeholder="network" required>
+      </label>
+      <label>
+        <span>Version</span>
+        <input id="upload-terraform-version" type="text" placeholder="1.0.0" required>
+      </label>
+      <label data-terraform-kind="module">
+        <span>Target system</span>
+        <input id="upload-terraform-system" type="text" placeholder="aws" required>
+      </label>
+      <label data-terraform-kind="provider" hidden>
+        <span>Operating system</span>
+        <input id="upload-terraform-os" type="text" placeholder="linux">
+      </label>
+      <label data-terraform-kind="provider" hidden>
+        <span>Architecture</span>
+        <input id="upload-terraform-arch" type="text" placeholder="amd64">
+      </label>
+      <label data-terraform-kind="provider" hidden>
+        <span>Provider protocols</span>
+        <input id="upload-terraform-protocols" type="text" value="5.0" placeholder="5.0 or 6.0">
+      </label>
+      <label class="upload-file">
+        <span>File</span>
+        <input id="upload-file" type="file" accept=".zip" required>
+      </label>
+      <label class="upload-path">
+        <span>Asset</span>
+        <input id="upload-path" type="text" readonly>
+      </label>
+    `;
+    document.getElementById("upload-terraform-kind")
+      .addEventListener("change", updateTerraformUploadKind);
+    updateTerraformUploadKind();
+    return;
+  }
   fields.innerHTML = `
     <label class="upload-file">
       <span>File</span>
@@ -2580,6 +2707,17 @@ function renderUploadFields() {
       <input id="upload-path" type="text" readonly>
     </label>
   `;
+}
+
+function updateTerraformUploadKind() {
+  const kind = uploadFieldValue("upload-terraform-kind") || "module";
+  document.querySelectorAll("[data-terraform-kind]").forEach((label) => {
+    const active = label.dataset.terraformKind === kind;
+    label.hidden = !active;
+    const input = label.querySelector("input");
+    if (input) input.required = active;
+  });
+  updateUploadPath();
 }
 
 function mavenAssetRows() {
@@ -2625,6 +2763,25 @@ function uploadFieldValue(id) {
 function computedUploadPaths() {
   const repo = selectedUploadRepository();
   if (!repo) return [];
+  if (repo.format === "terraform") {
+    const kind = uploadFieldValue("upload-terraform-kind");
+    const namespace = uploadFieldValue("upload-terraform-namespace");
+    const name = uploadFieldValue("upload-terraform-name");
+    const version = uploadFieldValue("upload-terraform-version");
+    const file = document.getElementById("upload-file")?.files?.[0];
+    if (!kind || !namespace || !name || !version || !file) return [];
+    if (kind === "module") {
+      const system = uploadFieldValue("upload-terraform-system");
+      return system
+        ? [`v1/modules/${namespace}/${name}/${system}/${version}/${file.name}`]
+        : [];
+    }
+    const os = uploadFieldValue("upload-terraform-os");
+    const arch = uploadFieldValue("upload-terraform-arch");
+    return os && arch
+      ? [`v1/providers/${namespace}/${name}/${version}/download/${os}/${arch}`]
+      : [];
+  }
   if (repo.format !== "maven2") {
     const file = document.getElementById("upload-file")?.files?.[0];
     return file ? [file.name] : [];
@@ -2730,6 +2887,39 @@ function buildUploadForm(repo, form) {
       form.append(`${assetKey}.extension`, extension.replace(/^\.+/, ""));
       if (classifier) form.append(`${assetKey}.classifier`, classifier);
     });
+    return;
+  }
+  if (repo.format === "terraform") {
+    const kind = uploadFieldValue("upload-terraform-kind");
+    const namespace = uploadFieldValue("upload-terraform-namespace");
+    const name = uploadFieldValue("upload-terraform-name");
+    const version = uploadFieldValue("upload-terraform-version");
+    const file = document.getElementById("upload-file")?.files?.[0];
+    if (!kind || !namespace || !name || !version || !file) {
+      throw new Error("Package kind, Namespace, Name, Version, and File are required.");
+    }
+    form.append("terraform.kind", kind);
+    form.append("terraform.namespace", namespace);
+    form.append("terraform.name", name);
+    form.append("terraform.version", version);
+    if (kind === "module") {
+      const system = uploadFieldValue("upload-terraform-system");
+      if (!system) throw new Error("Target system is required for a Terraform module.");
+      form.append("terraform.system", system);
+    } else if (kind === "provider") {
+      const os = uploadFieldValue("upload-terraform-os");
+      const arch = uploadFieldValue("upload-terraform-arch");
+      const protocols = uploadFieldValue("upload-terraform-protocols");
+      if (!os || !arch) {
+        throw new Error("Operating system and Architecture are required for a Terraform provider.");
+      }
+      form.append("terraform.os", os);
+      form.append("terraform.arch", arch);
+      if (protocols) form.append("terraform.protocols", protocols);
+    } else {
+      throw new Error("Package kind must be module or provider.");
+    }
+    form.append("terraform.asset", file, file.name);
     return;
   }
   const file = document.getElementById("upload-file")?.files?.[0];

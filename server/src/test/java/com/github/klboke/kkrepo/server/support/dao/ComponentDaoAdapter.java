@@ -31,6 +31,11 @@ public class ComponentDaoAdapter implements ComponentDao {
   }
 
   @Override
+  public int deleteByRepositoryIdAndFormat(long arg0, RepositoryFormat arg1) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
   public Optional<ComponentRecord> findByCoordinateHash(long arg0, byte[] arg1) {
     throw new UnsupportedOperationException();
   }

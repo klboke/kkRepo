@@ -310,7 +310,8 @@ class RepositoryDataMigrationWorker {
     if (format == RepositoryFormat.CARGO && isCargoDynamicConfig(path)) {
       return false;
     }
-    if (format == RepositoryFormat.PUB && !RepositoryDataMigrationPaths.shouldDiscoverAsset(format, path)) {
+    if ((format == RepositoryFormat.PUB || format == RepositoryFormat.TERRAFORM)
+        && !RepositoryDataMigrationPaths.shouldDiscoverAsset(format, path)) {
       return false;
     }
     return true;

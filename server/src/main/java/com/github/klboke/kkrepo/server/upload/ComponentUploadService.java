@@ -16,6 +16,8 @@ import com.github.klboke.kkrepo.server.npm.NpmHostedService;
 import com.github.klboke.kkrepo.server.pypi.PypiHostedService;
 import com.github.klboke.kkrepo.server.pub.PubHostedService;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
+import com.github.klboke.kkrepo.server.terraform.TerraformService;
+import com.github.klboke.kkrepo.protocol.terraform.TerraformPathParser;
 import com.github.klboke.kkrepo.server.yum.YumService;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -65,6 +67,18 @@ public class ComponentUploadService {
               field("version", "STRING", "Package version override", true,
                   "Component coordinates")),
           List.of(field("asset", "FILE", "Composer archive", false, null))),
+      new UploadDefinition(
+          "terraform",
+          false,
+          List.of(
+              field("kind", "STRING", "module or provider", false, "Component coordinates"),
+              field("namespace", "STRING", "Namespace", false, "Component coordinates"),
+              field("name", "STRING", "Module name or provider type", false, "Component coordinates"),
+              field("version", "STRING", "Semantic version", false, "Component coordinates"),
+              field("system", "STRING", "Module target system", true, "Component coordinates"),
+              field("os", "STRING", "Provider operating system", true, "Component coordinates"),
+              field("arch", "STRING", "Provider architecture", true, "Component coordinates")),
+          List.of(field("asset", "FILE", "Terraform module/provider archive", false, null))),
       rawLikeUpload("nuget"),
       rawLikeUpload("rubygems"),
       rawLikeUpload("yum"),
@@ -81,7 +95,9 @@ public class ComponentUploadService {
   private final ComposerHostedService composerHosted;
   private final RawHostedService rawHosted;
   private final YumService yumService;
+  private final TerraformService terraformService;
   private final MavenPathParser mavenPathParser = new MavenPathParser();
+  private final TerraformPathParser terraformPathParser = new TerraformPathParser();
 
   @Autowired
   public ComponentUploadService(
@@ -95,7 +111,8 @@ public class ComponentUploadService {
       PubHostedService pubHosted,
       ComposerHostedService composerHosted,
       RawHostedService rawHosted,
-      YumService yumService) {
+      YumService yumService,
+      TerraformService terraformService) {
     this.registry = registry;
     this.assetDao = assetDao;
     this.mavenHosted = mavenHosted;
@@ -107,6 +124,16 @@ public class ComponentUploadService {
     this.composerHosted = composerHosted;
     this.rawHosted = rawHosted;
     this.yumService = yumService;
+    this.terraformService = terraformService;
+  }
+
+  public ComponentUploadService(
+      RepositoryRuntimeRegistry registry, AssetDao assetDao, MavenHostedService mavenHosted,
+      NpmHostedService npmHosted, PypiHostedService pypiHosted, HelmHostedService helmHosted,
+      CargoHostedService cargoHosted, PubHostedService pubHosted, ComposerHostedService composerHosted,
+      RawHostedService rawHosted, YumService yumService) {
+    this(registry, assetDao, mavenHosted, npmHosted, pypiHosted, helmHosted, cargoHosted,
+        pubHosted, composerHosted, rawHosted, yumService, null);
   }
 
   /** Backward-compatible constructor used by existing focused upload tests. */
@@ -122,7 +149,7 @@ public class ComponentUploadService {
       RawHostedService rawHosted,
       YumService yumService) {
     this(registry, assetDao, mavenHosted, npmHosted, pypiHosted, helmHosted, cargoHosted,
-        pubHosted, null, rawHosted, yumService);
+        pubHosted, null, rawHosted, yumService, null);
   }
 
   public List<UploadDefinition> definitions() {
@@ -151,6 +178,13 @@ public class ComponentUploadService {
     if (!runtime.isHosted()) {
       throw new MavenExceptions.MethodNotAllowed("Upload is only valid on hosted repositories");
     }
+    if (runtime.format() == RepositoryFormat.TERRAFORM
+        && rawFiles.values().stream()
+            .flatMap(List::stream)
+            .filter(file -> file != null && !file.isEmpty())
+            .count() != 1) {
+      throw new UploadValidationException("Terraform upload requires exactly one archive");
+    }
     String format = formatLabel(runtime.format());
     NormalizedUpload upload = normalize(format, rawFields, rawFiles);
     List<String> paths = switch (runtime.format()) {
@@ -162,6 +196,7 @@ public class ComponentUploadService {
       case CARGO -> uploadCargo(runtime, upload, createdBy, createdByIp);
       case PUB -> uploadPub(runtime, upload, createdBy, createdByIp);
       case COMPOSER -> uploadComposer(runtime, upload, createdBy, createdByIp);
+      case TERRAFORM -> uploadTerraform(runtime, upload, createdBy, createdByIp);
       case DOCKER -> throw new UploadValidationException("Docker hosted upload must use the Docker Registry V2 API");
       case NUGET -> uploadRaw(runtime, upload, createdBy, createdByIp);
       case RUBYGEMS -> uploadRaw(runtime, upload, createdBy, createdByIp);
@@ -169,6 +204,41 @@ public class ComponentUploadService {
       case RAW -> uploadRaw(runtime, upload, createdBy, createdByIp);
     };
     return new UploadResult(paths);
+  }
+
+  private List<String> uploadTerraform(
+      RepositoryRuntime runtime, NormalizedUpload upload, String createdBy, String createdByIp) throws IOException {
+    if (terraformService == null) throw new UploadValidationException("Terraform upload service is unavailable");
+    if (upload.assets().size() != 1) {
+      throw new UploadValidationException("Terraform upload requires exactly one archive");
+    }
+    String kind = requireField(upload.fields(), "kind").trim().toLowerCase(Locale.ROOT);
+    String namespace = requireField(upload.fields(), "namespace");
+    String name = requireField(upload.fields(), "name");
+    String version = requireField(upload.fields(), "version");
+    AssetUpload asset = upload.assets().getFirst();
+    String filename = asset.file().getOriginalFilename();
+    if (filename == null || filename.isBlank()) filename = "terraform.zip";
+    String path;
+    String disposition = null;
+    String protocols = null;
+    if ("module".equals(kind)) {
+      String system = requireField(upload.fields(), "system");
+      path = "v1/modules/" + namespace + "/" + name + "/" + system + "/" + version + "/" + filename;
+    } else if ("provider".equals(kind)) {
+      String os = requireField(upload.fields(), "os");
+      String arch = requireField(upload.fields(), "arch");
+      protocols = upload.fields().get("protocols");
+      path = "v1/providers/" + namespace + "/" + name + "/" + version + "/download/" + os + "/" + arch;
+      disposition = "attachment; filename=\"" + filename.replace("\"", "") + "\"";
+    } else {
+      throw new UploadValidationException("terraform.kind must be module or provider");
+    }
+    try (var body = asset.file().getInputStream()) {
+      terraformService.put(runtime, terraformPathParser.parse(path), body, asset.file().getContentType(),
+          disposition, protocols, createdBy, createdByIp);
+    }
+    return List.of(path);
   }
 
   private List<String> uploadMaven(
@@ -441,6 +511,7 @@ public class ComponentUploadService {
       case NUGET -> "nuget";
       case RUBYGEMS -> "rubygems";
       case YUM -> "yum";
+      case TERRAFORM -> "terraform";
       case RAW -> "raw";
     };
   }

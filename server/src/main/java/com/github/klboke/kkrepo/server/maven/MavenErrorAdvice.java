@@ -38,6 +38,11 @@ public class MavenErrorAdvice {
     return body(HttpStatus.BAD_REQUEST, e.getMessage());
   }
 
+  @ExceptionHandler(MavenExceptions.BadRequestException.class)
+  public ResponseEntity<Map<String, Object>> badRequest(MavenExceptions.BadRequestException e) {
+    return body(HttpStatus.BAD_REQUEST, e.getMessage());
+  }
+
   @ExceptionHandler(MavenExceptions.MethodNotAllowed.class)
   public ResponseEntity<Map<String, Object>> method(MavenExceptions.MethodNotAllowed e) {
     return body(HttpStatus.METHOD_NOT_ALLOWED, e.getMessage());

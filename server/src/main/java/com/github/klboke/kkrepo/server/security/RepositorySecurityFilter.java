@@ -6,10 +6,14 @@ import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.pub.PubPath;
 import com.github.klboke.kkrepo.protocol.pub.PubPathParser;
+import com.github.klboke.kkrepo.protocol.terraform.TerraformPath;
+import com.github.klboke.kkrepo.protocol.terraform.TerraformPathParser;
 import com.github.klboke.kkrepo.server.npm.NpmTokenService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -17,6 +21,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.net.URLDecoder;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
@@ -32,10 +37,17 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   static final int FILTER_ORDER = SessionRepositoryFilter.DEFAULT_ORDER + 20;
   public static final String REPOSITORY_RECORD_ATTRIBUTE =
       RepositorySecurityFilter.class.getName() + ".REPOSITORY_RECORD";
+  public static final String NORMALIZED_REPOSITORY_PATH_ATTRIBUTE =
+      RepositorySecurityFilter.class.getName() + ".NORMALIZED_REPOSITORY_PATH";
+  public static final String TERRAFORM_URL_TOKEN_SEGMENT_ATTRIBUTE =
+      RepositorySecurityFilter.class.getName() + ".TERRAFORM_URL_TOKEN_SEGMENT";
   private static final PubPathParser PUB_PATH_PARSER = new PubPathParser();
+  private static final TerraformPathParser TERRAFORM_PATH_PARSER = new TerraformPathParser();
   private final SecurityAuthenticationService authenticationService;
   private final AccessDecisionService accessDecisionService;
   private final RepositoryDao repositoryDao;
+  private final AssetDao assetDao;
+  private final TerraformRegistryDao terraformRegistryDao;
   private final ForwardedHeaderPolicy forwardedHeaderPolicy;
   private final NexusLegacyUiCompatibility legacyUi;
 
@@ -43,11 +55,15 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       SecurityAuthenticationService authenticationService,
       AccessDecisionService accessDecisionService,
       RepositoryDao repositoryDao,
+      AssetDao assetDao,
+      TerraformRegistryDao terraformRegistryDao,
       ForwardedHeaderPolicy forwardedHeaderPolicy,
       NexusLegacyUiCompatibility legacyUi) {
     this.authenticationService = authenticationService;
     this.accessDecisionService = accessDecisionService;
     this.repositoryDao = repositoryDao;
+    this.assetDao = assetDao;
+    this.terraformRegistryDao = terraformRegistryDao;
     this.forwardedHeaderPolicy = forwardedHeaderPolicy;
     this.legacyUi = legacyUi;
   }
@@ -70,6 +86,30 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       return;
     }
     request.setAttribute(REPOSITORY_RECORD_ATTRIBUTE, repository.get());
+    String terraformUrlToken = null;
+    TerraformPath terraformPath = null;
+    if (repository.get().format() == RepositoryFormat.TERRAFORM
+        && !target.repositoryBrowseRoute()) {
+      try {
+        String presentedPath = target.path();
+        TerraformPathParser.ParsedRequest parsed = TERRAFORM_PATH_PARSER.parseRequestPath(target.path());
+        if (parsed.path().kind() != TerraformPath.Kind.UNKNOWN) {
+          terraformPath = parsed.path();
+          target = target.withPath(parsed.canonicalPath());
+          terraformUrlToken = parsed.credentialSegment();
+          request.setAttribute(NORMALIZED_REPOSITORY_PATH_ATTRIBUTE, parsed.canonicalPath());
+          if (terraformUrlToken != null) {
+            String[] segments = presentedPath.split("/", 4);
+            if (segments.length >= 3) {
+              request.setAttribute(TERRAFORM_URL_TOKEN_SEGMENT_ATTRIBUTE, segments[2]);
+            }
+          }
+        }
+      } catch (IllegalArgumentException e) {
+        response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid Terraform repository path");
+        return;
+      }
+    }
     if (target.npmTokenRoute() && repository.get().format() == RepositoryFormat.NPM) {
       filterChain.doFilter(request, response);
       return;
@@ -78,16 +118,20 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       filterChain.doFilter(request, response);
       return;
     }
-    Optional<AuthenticatedSubject> authenticated = switch (repository.get().format()) {
+    Optional<AuthenticatedSubject> authenticated = terraformUrlToken == null
+        ? switch (repository.get().format()) {
       case CARGO -> authenticationService.authenticateCargo(request);
       case PUB -> authenticationService.authenticatePub(request);
       case RUBYGEMS -> authenticationService.authenticateRubygems(request);
       default -> authenticationService.authenticate(request);
-    };
+    }
+        : authenticationService.authenticateTerraformUrlToken(terraformUrlToken);
+    boolean authenticatedAnonymously = false;
     if (authenticated.isEmpty()) {
       authenticated = target.readOnly(repository.get().format())
           ? authenticationService.authenticateAnonymous()
           : Optional.empty();
+      authenticatedAnonymously = authenticated.isPresent();
       if (authenticated.isEmpty()) {
         challenge(request, response, repository.get(), target);
         return;
@@ -100,7 +144,29 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       response.sendError(HttpServletResponse.SC_FORBIDDEN, decision.reason());
       return;
     }
+    if (terraformUrlToken == null
+        && target.readOnly(repository.get().format())
+        && isTerraformDownloadMetadata(terraformPath)) {
+      Optional<String> replayable = authenticationService.replayableTerraformUrlToken(
+          request, authenticated.get());
+      if (replayable.isPresent()) {
+        request.setAttribute(
+            TERRAFORM_URL_TOKEN_SEGMENT_ATTRIBUTE, encodePathSegment(replayable.get()));
+      } else if (!authenticatedAnonymously) {
+        challenge(request, response, repository.get(), target);
+        return;
+      }
+    }
     filterChain.doFilter(request, response);
+  }
+
+  private static boolean isTerraformDownloadMetadata(TerraformPath path) {
+    return path != null && (path.kind() == TerraformPath.Kind.MODULE_DOWNLOAD
+        || path.kind() == TerraformPath.Kind.PROVIDER_DOWNLOAD);
+  }
+
+  private static String encodePathSegment(String value) {
+    return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
   }
 
   private AccessDecision decide(
@@ -108,7 +174,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       RepositoryRecord repository,
       RepositoryRequest target) {
     AccessDecision lastDenied = AccessDecision.deny("missing permission");
-    for (PermissionAction action : target.actions(repository.format())) {
+    for (PermissionAction action : actionsForDecision(repository, target)) {
       AccessDecision decision = accessDecisionService.decide(
           subject.permissionSubject(),
           new RepositoryPermission(repository.name(), repository.format(), target.path(), action));
@@ -118,6 +184,36 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       lastDenied = decision;
     }
     return lastDenied;
+  }
+
+  private List<PermissionAction> actionsForDecision(
+      RepositoryRecord repository, RepositoryRequest target) {
+    if (repository.format() != RepositoryFormat.TERRAFORM
+        || !"PUT".equalsIgnoreCase(target.method())) {
+      return target.actions(repository.format());
+    }
+    TerraformPath path = TERRAFORM_PATH_PARSER.parse(target.path());
+    if (path.kind() == TerraformPath.Kind.MODULE_ARCHIVE) {
+      String prefix = "v1/modules/" + path.namespace() + "/" + path.name() + "/"
+          + path.system() + "/" + path.version() + "/";
+      boolean exists = assetDao.listAssetsByPrefix(repository.id(), prefix).stream()
+          .filter(asset -> asset.path().startsWith(prefix))
+          .anyMatch(asset -> TERRAFORM_PATH_PARSER.parse(asset.path()).kind()
+              == TerraformPath.Kind.MODULE_ARCHIVE);
+      return exists
+          ? List.of(PermissionAction.EDIT)
+          : List.of(PermissionAction.ADD);
+    }
+    if (path.kind() == TerraformPath.Kind.PROVIDER_DOWNLOAD) {
+      boolean exists = terraformRegistryDao.listProviderPlatforms(
+              repository.id(), path.namespace(), path.name(), path.version()).stream()
+          .anyMatch(platform -> platform.os().equals(path.os())
+              && platform.arch().equals(path.arch()));
+      return exists
+          ? List.of(PermissionAction.EDIT)
+          : List.of(PermissionAction.ADD);
+    }
+    return List.of(PermissionAction.EDIT);
   }
 
   private Optional<RepositoryRequest> resolve(HttpServletRequest request) {
@@ -199,6 +295,9 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     }
     if (format == RepositoryFormat.PUB && isPubPublishRoute(method, path)) {
       return List.of(PermissionAction.ADD);
+    }
+    if (format == RepositoryFormat.TERRAFORM && "PUT".equalsIgnoreCase(method)) {
+      return List.of(PermissionAction.ADD, PermissionAction.EDIT);
     }
     if (format == RepositoryFormat.CARGO && isCargoYankRoute(method, path)) {
       return List.of(PermissionAction.EDIT);
@@ -308,6 +407,16 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     private boolean readOnly(RepositoryFormat format) {
       return actions(format).stream()
           .allMatch(action -> action == PermissionAction.BROWSE || action == PermissionAction.READ);
+    }
+
+    private boolean repositoryBrowseRoute() {
+      return fixedActions != null
+          && fixedActions.size() == 1
+          && fixedActions.get(0) == PermissionAction.BROWSE;
+    }
+
+    private RepositoryRequest withPath(String normalizedPath) {
+      return new RepositoryRequest(repository, normalizedPath, method, fixedActions, npmTokenRoute);
     }
 
   }

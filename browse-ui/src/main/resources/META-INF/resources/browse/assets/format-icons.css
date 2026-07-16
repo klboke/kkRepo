@@ -73,6 +73,11 @@
   --format-logo: url("/browse/assets/formats/yum.svg");
 }
 
+.format-logo-terraform {
+  --format-color: #7b42bc;
+  --format-logo: url("/browse/assets/formats/terraform.svg");
+}
+
 .format-logo-raw {
   --format-color: #52625e;
   --format-logo: url("/browse/assets/formats/raw.svg");

@@ -7,6 +7,7 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.docker.DockerConnectorRuntime;
@@ -66,6 +67,7 @@ public class RepositoryService {
   private final NexusLikeCacheController cacheController;
   private final RepositoryCatalogCache repositoryCatalogCache;
   private final DockerConnectorRuntime dockerConnectorRuntime;
+  private final TerraformRegistryDao terraformRegistry;
   private final String urlPrefix;
   private final int serverPort;
   private final int managementPort;
@@ -86,6 +88,7 @@ public class RepositoryService {
       NexusLikeCacheController cacheController,
       RepositoryCatalogCache repositoryCatalogCache,
       DockerConnectorRuntime dockerConnectorRuntime,
+      TerraformRegistryDao terraformRegistry,
       @Value("${kkrepo.compatibility.repository-url-prefix:/repository}") String urlPrefix,
       @Value("${server.port:8080}") int serverPort,
       @Value("${management.server.port:${server.port:8080}}") int managementPort) {
@@ -103,6 +106,7 @@ public class RepositoryService {
     this.cacheController = cacheController;
     this.repositoryCatalogCache = repositoryCatalogCache;
     this.dockerConnectorRuntime = dockerConnectorRuntime;
+    this.terraformRegistry = terraformRegistry;
     this.urlPrefix = urlPrefix;
     this.serverPort = serverPort;
     this.managementPort = managementPort;
@@ -116,7 +120,7 @@ public class RepositoryService {
       String urlPrefix) {
     this(repositoryDao, blobStoreDao, securityDao, runtimeRegistry, null, null,
         null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, null, null, null,
-        urlPrefix, 8080, 8080);
+        null, urlPrefix, 8080, 8080);
   }
 
   public RepositoryService(
@@ -128,7 +132,7 @@ public class RepositoryService {
       String urlPrefix) {
     this(repositoryDao, blobStoreDao, securityDao, runtimeRegistry, null, null,
         null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, cacheController, null, null,
-        urlPrefix, 8080, 8080);
+        null, urlPrefix, 8080, 8080);
   }
 
   RepositoryService(
@@ -140,7 +144,7 @@ public class RepositoryService {
       int serverPort,
       int managementPort) {
     this(repositoryDao, blobStoreDao, securityDao, runtimeRegistry, null, null,
-        null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, null, null, null, urlPrefix,
+        null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, null, null, null, null, urlPrefix,
         serverPort, managementPort);
   }
 
@@ -321,10 +325,12 @@ public class RepositoryService {
       invalidateNpmGroupAfterCommit(existing.format(), existing.id());
       invalidatePypiGroupAfterCommit(existing.format(), existing.id());
       invalidateGroupMemberGroupAfterCommit(existing.format(), existing.id());
+      invalidateTerraformGroupBindings(existing.format(), existing.id());
     } else if (recipe.type() != RepositoryType.GROUP) {
       invalidateNpmMemberAfterCommit(existing.format(), existing.id());
       invalidatePypiMemberAfterCommit(existing.format(), existing.id());
       invalidateGroupMemberMemberAfterCommit(existing.format(), existing.id());
+      invalidateTerraformContainingGroupBindings(existing.format(), existing.id(), new HashSet<>());
     }
 
     invalidateRuntimeCache(existing.id(), name);
@@ -375,6 +381,7 @@ public class RepositoryService {
     invalidateNpmGroupAfterCommit(existing.format(), existing.id());
     invalidatePypiGroupAfterCommit(existing.format(), existing.id());
     invalidateGroupMemberGroupAfterCommit(existing.format(), existing.id());
+    invalidateTerraformGroupBindings(existing.format(), existing.id());
     runtimeRegistry.invalidate(name);
     invalidateRepositoryCacheTokensAfterCommit(existing.id());
     refreshRepositoryCatalogAfterCommit();
@@ -406,6 +413,28 @@ public class RepositoryService {
       }
       runtimeRegistry.invalidate(group.name());
       invalidateContainingRuntimeCaches(groupId, visited);
+    }
+  }
+
+  private void invalidateTerraformGroupBindings(RepositoryFormat format, long groupRepositoryId) {
+    if (format != RepositoryFormat.TERRAFORM || terraformRegistry == null) {
+      return;
+    }
+    terraformRegistry.deleteSourceBindings(groupRepositoryId);
+    invalidateTerraformContainingGroupBindings(format, groupRepositoryId, new HashSet<>());
+  }
+
+  private void invalidateTerraformContainingGroupBindings(
+      RepositoryFormat format, long repositoryId, Set<Long> visited) {
+    if (format != RepositoryFormat.TERRAFORM || terraformRegistry == null) {
+      return;
+    }
+    for (RepositoryRecord group : repositoryDao.listGroupsContaining(repositoryId)) {
+      if (group.id() == null || !visited.add(group.id())) {
+        continue;
+      }
+      terraformRegistry.deleteSourceBindings(group.id());
+      invalidateTerraformContainingGroupBindings(format, group.id(), visited);
     }
   }
 
@@ -755,9 +784,12 @@ public class RepositoryService {
   }
 
   private ProxySettings requireProxy(ProxySettings settings, RepositoryFormat format) {
-    if (settings == null && (format == RepositoryFormat.PUB || format == RepositoryFormat.COMPOSER)) {
+    if (settings == null && (format == RepositoryFormat.PUB
+        || format == RepositoryFormat.COMPOSER || format == RepositoryFormat.TERRAFORM)) {
       settings = new ProxySettings(
-          format == RepositoryFormat.PUB ? "https://pub.dev/" : "https://repo.packagist.org/",
+          format == RepositoryFormat.PUB ? "https://pub.dev/"
+              : format == RepositoryFormat.COMPOSER ? "https://repo.packagist.org/"
+              : "https://registry.terraform.io/",
           null, null, null);
     }
     if (settings == null) {
@@ -788,6 +820,14 @@ public class RepositoryService {
           settings.remotePasswordConfigured(),
           settings.remoteBearerToken(),
           settings.remoteBearerTokenConfigured());
+    }
+    if (format == RepositoryFormat.TERRAFORM
+        && (settings.remoteUrl() == null || settings.remoteUrl().isBlank())) {
+      settings = new ProxySettings(
+          "https://registry.terraform.io/",
+          settings.contentMaxAgeMinutes(), settings.metadataMaxAgeMinutes(), settings.autoBlock(),
+          settings.remoteUsername(), settings.remotePassword(), settings.remotePasswordConfigured(),
+          settings.remoteBearerToken(), settings.remoteBearerTokenConfigured());
     }
     validateProxy(settings);
     return settings;
@@ -1000,7 +1040,8 @@ public class RepositoryService {
   }
 
   private static boolean supportsNestedGroups(RepositoryFormat format) {
-    return format == RepositoryFormat.PUB || format == RepositoryFormat.COMPOSER;
+    return format == RepositoryFormat.PUB || format == RepositoryFormat.COMPOSER
+        || format == RepositoryFormat.TERRAFORM;
   }
 
   private static String stringValue(Object value, String fallback) {

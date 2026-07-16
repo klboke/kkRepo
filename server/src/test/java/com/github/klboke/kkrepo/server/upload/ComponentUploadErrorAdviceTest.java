@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.upload;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import com.github.klboke.kkrepo.server.cargo.CargoExceptions;
+import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -37,5 +38,14 @@ class ComponentUploadErrorAdviceTest {
 
     assertEquals(HttpStatus.METHOD_NOT_ALLOWED, response.getStatusCode());
     assertEquals("Operation is only valid on hosted Cargo repositories", response.getBody().get("error"));
+  }
+
+  @Test
+  void terraformUploadBadRequestUsesUploadErrorBody() {
+    ResponseEntity<Map<String, String>> response =
+        advice.mavenBadRequest(new MavenExceptions.BadRequestException("Invalid Terraform archive"));
+
+    assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+    assertEquals("Invalid Terraform archive", response.getBody().get("error"));
   }
 }

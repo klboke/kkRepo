@@ -2,11 +2,15 @@ package com.github.klboke.kkrepo.migration.nexus;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.core.security.EncryptionSecrets;
+import com.github.klboke.kkrepo.core.security.SecretCipher;
+import com.github.klboke.kkrepo.core.security.TerraformSigningKeyMaterial;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationPreflight;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.ConfigMigrationCounts;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationRequest;
@@ -19,14 +23,35 @@ import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.SourceProbe;
 import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityExport;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import java.io.ByteArrayOutputStream;
 import java.lang.reflect.Proxy;
+import java.nio.charset.StandardCharsets;
+import java.security.KeyPairGenerator;
+import java.security.Security;
+import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
+import org.bouncycastle.bcpg.ArmoredOutputStream;
+import org.bouncycastle.bcpg.HashAlgorithmTags;
+import org.bouncycastle.bcpg.SymmetricKeyAlgorithmTags;
+import org.bouncycastle.bcpg.sig.KeyFlags;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.bouncycastle.openpgp.PGPKeyPair;
+import org.bouncycastle.openpgp.PGPKeyRingGenerator;
+import org.bouncycastle.openpgp.PGPPublicKey;
+import org.bouncycastle.openpgp.PGPSignature;
+import org.bouncycastle.openpgp.PGPSignatureSubpacketGenerator;
+import org.bouncycastle.openpgp.operator.PGPDigestCalculator;
+import org.bouncycastle.openpgp.operator.jcajce.JcaPGPDigestCalculatorProviderBuilder;
+import org.bouncycastle.openpgp.operator.jcajce.JcaPGPKeyPair;
+import org.bouncycastle.openpgp.operator.jcajce.JcaPGPContentSignerBuilder;
+import org.bouncycastle.openpgp.operator.jcajce.JcePBESecretKeyEncryptorBuilder;
 import org.junit.jupiter.api.Test;
 
 class NexusApiMigrationServiceTest {
@@ -161,14 +186,15 @@ class NexusApiMigrationServiceTest {
         "DATASTORE_H2",
         "H2 2.3.232",
         "jdbc:h2:file:/nexus-data/db/nexus",
-        datastoreSchema(Map.of("maven2", true, "cargo", true)),
+        datastoreSchema(Map.of("maven2", true, "cargo", true, "terraform", true)),
         List.of());
 
     NexusMigrationPreflight preflight = service.preflight(new NexusInventory(
         List.of(Map.of("name", "default", "type", "File")),
         List.of(
             repository("maven-releases", "maven2", "hosted", Map.of("storage", storage("default"))),
-            repository("cargo-hosted", "cargo", "hosted", Map.of("storage", storage("default")))),
+            repository("cargo-hosted", "cargo", "hosted", Map.of("storage", storage("default"))),
+            repository("terraform-hosted", "terraform", "hosted", Map.of("storage", storage("default")))),
         NexusSecurityExport.empty(),
         List.of(),
         probe),
@@ -185,6 +211,9 @@ class NexusApiMigrationServiceTest {
     assertEquals(
         true,
         preflight.sourceProfile().formatCapabilities().get("cargo").contentMigration());
+    assertEquals(
+        true,
+        preflight.sourceProfile().formatCapabilities().get("terraform").contentMigration());
     assertTrue(preflight.warnings().stream()
         .noneMatch(value -> value.contains("Cargo migration remains configuration-only")));
     assertEquals(
@@ -198,6 +227,13 @@ class NexusApiMigrationServiceTest {
         SupportStatus.FULL,
         preflight.migrationPlan().items().stream()
             .filter(item -> "cargo-hosted".equals(item.name()))
+            .findFirst()
+            .orElseThrow()
+            .status());
+    assertEquals(
+        SupportStatus.FULL,
+        preflight.migrationPlan().items().stream()
+            .filter(item -> "terraform-hosted".equals(item.name()))
             .findFirst()
             .orElseThrow()
             .status());
@@ -503,6 +539,46 @@ class NexusApiMigrationServiceTest {
         record.attributes().get("docker"));
   }
 
+  @Test
+  void importsTerraformSigningKeyAndRedactsSourceSecrets() throws Exception {
+    EncryptionSecrets.configure("terraform-migration-test-secret", null);
+    FakeBlobStoreDao blobStores = new FakeBlobStoreDao();
+    FakeRepositoryDao repositories = new FakeRepositoryDao();
+    FakeTerraformRegistryDao terraformRegistry = new FakeTerraformRegistryDao();
+    NexusApiMigrationService service = new NexusApiMigrationService(
+        new ObjectMapper(), blobStores.asDao(), repositories.asDao(), null, null, null,
+        terraformRegistry.asDao());
+    String passphrase = "source-key-passphrase";
+    String privateKey = signingKey(passphrase);
+    NexusInventory inventory = new NexusInventory(
+        List.of(Map.of("name", "default")),
+        List.of(repository("terraform-hosted", "terraform", "hosted", Map.of(
+            "storage", storage("default"),
+            "terraformSigning", Map.of("keypair", privateKey, "passphrase", passphrase)))),
+        NexusSecurityExport.empty(),
+        List.of());
+
+    service.migrateConfig(inventory, request("https://old-nexus.example"));
+    RepositoryRecord repository = repositories.required("terraform-hosted");
+    TerraformRegistryDao.SigningKey imported = terraformRegistry.key;
+    assertNotNull(imported);
+    assertEquals(repository.id().longValue(), imported.repositoryId());
+    assertTrue(imported.publicKey().contains("BEGIN PGP PUBLIC KEY BLOCK"));
+    TerraformSigningKeyMaterial.Material keyMaterial = TerraformSigningKeyMaterial.decode(
+        new SecretCipher(EncryptionSecrets.credentialSecret()).decrypt(imported.encryptedPrivateKey()));
+    assertEquals(privateKey.strip(), keyMaterial.privateKeyArmor().strip());
+    assertEquals(passphrase, keyMaterial.passphrase());
+    @SuppressWarnings("unchecked")
+    Map<String, Object> source = (Map<String, Object>) repository.attributes().get("sourceRepository");
+    @SuppressWarnings("unchecked")
+    Map<String, Object> signing = (Map<String, Object>) source.get("terraformSigning");
+    assertEquals("<redacted>", signing.get("keypair"));
+    assertEquals("<redacted>", signing.get("passphrase"));
+
+    service.migrateConfig(inventory, request("https://old-nexus.example"));
+    assertEquals(1, terraformRegistry.inserts);
+  }
+
   private static NexusApiMigrationService service(
       FakeBlobStoreDao blobStores,
       FakeRepositoryDao repositories) {
@@ -513,6 +589,35 @@ class NexusApiMigrationServiceTest {
         null,
         null,
         null);
+  }
+
+  private static String signingKey(String passphrase) throws Exception {
+    if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
+      Security.addProvider(new BouncyCastleProvider());
+    }
+    KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA", BouncyCastleProvider.PROVIDER_NAME);
+    generator.initialize(2048);
+    PGPKeyPair pair = new JcaPGPKeyPair(PGPPublicKey.RSA_SIGN, generator.generateKeyPair(), new Date());
+    PGPDigestCalculator sha1 = new JcaPGPDigestCalculatorProviderBuilder()
+        .setProvider(BouncyCastleProvider.PROVIDER_NAME).build().get(HashAlgorithmTags.SHA1);
+    PGPSignatureSubpacketGenerator certification = new PGPSignatureSubpacketGenerator();
+    certification.setKeyFlags(false, KeyFlags.CERTIFY_OTHER | KeyFlags.SIGN_DATA);
+    PGPKeyRingGenerator rings = new PGPKeyRingGenerator(
+        PGPSignature.POSITIVE_CERTIFICATION,
+        pair,
+        "Terraform migration test <terraform-migration@kkrepo.test>",
+        sha1,
+        certification.generate(),
+        null,
+        new JcaPGPContentSignerBuilder(pair.getPublicKey().getAlgorithm(), HashAlgorithmTags.SHA256)
+            .setProvider(BouncyCastleProvider.PROVIDER_NAME),
+        new JcePBESecretKeyEncryptorBuilder(SymmetricKeyAlgorithmTags.AES_256, sha1)
+            .setProvider(BouncyCastleProvider.PROVIDER_NAME).build(passphrase.toCharArray()));
+    ByteArrayOutputStream armored = new ByteArrayOutputStream();
+    try (ArmoredOutputStream output = new ArmoredOutputStream(armored)) {
+      rings.generateSecretKeyRing().encode(output);
+    }
+    return armored.toString(StandardCharsets.UTF_8);
   }
 
   private static NexusMigrationRequest request(String sourceBaseUrl) {
@@ -684,6 +789,27 @@ class NexusApiMigrationServiceTest {
           .filter(record -> record.id().equals(id))
           .findFirst()
           .orElseThrow();
+    }
+  }
+
+  private static final class FakeTerraformRegistryDao {
+    private TerraformRegistryDao.SigningKey key;
+    private int inserts;
+
+    private TerraformRegistryDao asDao() {
+      return (TerraformRegistryDao) Proxy.newProxyInstance(
+          TerraformRegistryDao.class.getClassLoader(),
+          new Class<?>[] {TerraformRegistryDao.class},
+          (proxy, method, args) -> switch (method.getName()) {
+            case "findActiveSigningKey" -> key == null || key.repositoryId() != (Long) args[0]
+                ? Optional.empty() : Optional.of(key);
+            case "insertSigningKey" -> {
+              key = (TerraformRegistryDao.SigningKey) args[0];
+              inserts++;
+              yield null;
+            }
+            default -> throw new UnsupportedOperationException(method.getName());
+          });
     }
   }
 }

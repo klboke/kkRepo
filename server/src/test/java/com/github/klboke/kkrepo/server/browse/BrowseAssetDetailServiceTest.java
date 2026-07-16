@@ -3,6 +3,8 @@ package com.github.klboke.kkrepo.server.browse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.BlobObjectMetadata;
@@ -14,6 +16,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
@@ -58,6 +61,24 @@ class BrowseAssetDetailServiceTest {
 
     ResponseStatusException error = assertThrows(ResponseStatusException.class,
         () -> service.detail(repository, "_composer/routes/token.json", null));
+
+    assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode());
+    assertEquals(List.of(), assets.pathLookups);
+  }
+
+  @Test
+  void terraformInternalRouteDetailIsNotExposedAsDownloadableAsset() {
+    RepositoryRecord repository = repository(
+        1L, "terraform-proxy", RepositoryFormat.TERRAFORM, RepositoryType.PROXY);
+    StubAssetDao assets = new StubAssetDao(Map.of(), Map.of());
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(),
+        assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    ResponseStatusException error = assertThrows(ResponseStatusException.class,
+        () -> service.detail(repository, ".terraform/routes/token.json", null));
 
     assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode());
     assertEquals(List.of(), assets.pathLookups);
@@ -202,6 +223,75 @@ class BrowseAssetDetailServiceTest {
 
     assertEquals("/repository/pypi-hosted/packages/demo/1.0.0/demo-1.0.0-py3-none-any.whl", detail.downloadUrl());
     assertEquals(List.of(key(repository.id(), storagePath)), assets.pathLookups);
+  }
+
+  @Test
+  void terraformPublicProviderPathsResolveToRevisionedStorageAssets() {
+    RepositoryRecord repository = repository(
+        1L, "terraform-hosted", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED);
+    String base = "v1/providers/acme/demo/1.0.10";
+    String filename = "terraform-provider-demo_1.0.10_linux_amd64.zip";
+    String archivePath = base + "/package/linux/" + filename;
+    String sumsPath = base + "/metadata-r2/terraform-provider-demo_1.0.10_SHA256SUMS";
+    String signaturePath = sumsPath + ".sig";
+    AssetRecord archive = asset(
+        10L, repository.id(), 100L, archivePath, RepositoryFormat.TERRAFORM);
+    AssetRecord sums = asset(
+        11L, repository.id(), 101L, sumsPath, RepositoryFormat.TERRAFORM);
+    AssetRecord signature = asset(
+        12L, repository.id(), 102L, signaturePath, RepositoryFormat.TERRAFORM);
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(
+            key(repository.id(), archivePath), archive,
+            key(repository.id(), sumsPath), sums,
+            key(repository.id(), signaturePath), signature),
+        Map.of(
+            100L, blob(100L, 1024L),
+            101L, blob(101L, 128L),
+            102L, blob(102L, 287L)));
+    TerraformRegistryDao terraform = mock(TerraformRegistryDao.class);
+    when(terraform.listProviderPlatforms(repository.id(), "acme", "demo", "1.0.10"))
+        .thenReturn(List.of(new TerraformRegistryDao.ProviderPlatform(
+            repository.id(), "acme", "demo", "1.0.10", "linux", "amd64",
+            filename, archivePath, "sha256", "5.0", 2,
+            Instant.parse("2026-07-16T02:30:42Z"))));
+    when(terraform.findProviderState(repository.id(), "acme", "demo", "1.0.10"))
+        .thenReturn(Optional.of(new TerraformRegistryDao.ProviderState(
+            repository.id(), "acme", "demo", "1.0.10", 2,
+            sumsPath, signaturePath, 1, Instant.parse("2026-07-16T02:30:42Z"))));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(),
+        assets,
+        null,
+        terraform,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    String publicArchive = base + "/download/linux/amd64/" + filename;
+    BrowseAssetDetailService.BrowseAssetDetail archiveDetail =
+        service.detail(repository, publicArchive, null);
+    assertEquals(publicArchive, archiveDetail.path());
+    assertEquals(filename, archiveDetail.name());
+    assertEquals("/repository/terraform-hosted/" + publicArchive, archiveDetail.downloadUrl());
+
+    String publicSums = base + "/download/linux/amd64/SHA256SUMS";
+    BrowseAssetDetailService.BrowseAssetDetail sumsDetail =
+        service.detail(repository, publicSums, null);
+    assertEquals(publicSums, sumsDetail.path());
+    assertEquals("SHA256SUMS", sumsDetail.name());
+    assertEquals("/repository/terraform-hosted/" + publicSums, sumsDetail.downloadUrl());
+    assertTrue(assets.pathLookups.contains(key(repository.id(), archivePath)));
+    assertTrue(assets.pathLookups.contains(key(repository.id(), sumsPath)));
+
+    String versionsPath = "v1/providers/acme/demo/versions.json";
+    BrowseAssetDetailService.BrowseAssetDetail versionsDetail =
+        service.detail(repository, versionsPath, null);
+    assertEquals(versionsPath, versionsDetail.path());
+    assertEquals("versions.json", versionsDetail.name());
+    assertEquals("application/json", versionsDetail.contentType());
+    assertEquals("/repository/terraform-hosted/" + versionsPath, versionsDetail.downloadUrl());
+    assertTrue((Boolean) versionsDetail.content().get("generated"));
+    assertTrue((Boolean) versionsDetail.provenance().get("dynamic"));
   }
 
   @Test
@@ -733,6 +823,14 @@ class BrowseAssetDetailServiceTest {
     @Override
     public Optional<AssetBlobRecord> findBlobById(long assetBlobId) {
       return Optional.ofNullable(blobsById.get(assetBlobId));
+    }
+
+    @Override
+    public List<AssetRecord> listAssetsByPrefix(long repositoryId, String pathPrefix) {
+      return assetsByPath.values().stream()
+          .filter(asset -> asset.repositoryId() == repositoryId)
+          .filter(asset -> asset.path().startsWith(pathPrefix))
+          .toList();
     }
 
     @Override

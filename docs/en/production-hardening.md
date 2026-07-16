@@ -224,6 +224,7 @@ Before upgrading:
 - Verify Flyway migrations.
 - Run representative client pulls and pushes.
 - For Composer / PHP, upload a hosted archive and run group `composer install --prefer-dist`, then verify `packages.json`, p2 metadata, dist downloads, HTTP Basic, and lock replay.
+- For Terraform, upload a hosted module/provider and run Terraform 0.13 plus the current stable `terraform init` through a group; verify the proxied provider, SHA256SUMS, detached signature, lock file, and URL-token redaction in diagnostics.
 
 Recommended rollout:
 

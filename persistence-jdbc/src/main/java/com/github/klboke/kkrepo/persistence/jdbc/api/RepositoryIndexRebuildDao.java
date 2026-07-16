@@ -9,6 +9,7 @@ public interface RepositoryIndexRebuildDao {
   String PYPI_PROJECT = "PYPI_PROJECT";
   String YUM_METADATA = "YUM_METADATA";
   String RUBYGEMS_METADATA = "RUBYGEMS_METADATA";
+  String TERRAFORM_COMPONENTS = "TERRAFORM_COMPONENTS";
   String ROOT_SCOPE = "";
 
   void enqueue(long repositoryId, String indexKind);

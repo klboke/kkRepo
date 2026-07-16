@@ -24,6 +24,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.ByteArrayInputStream;
@@ -35,6 +36,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 class RawAssetWriterTest {
   private static final String PATH = "docs/file.txt";
@@ -166,6 +168,47 @@ class RawAssetWriterTest {
         "text/plain", Map.of(), "alice", "127.0.0.1"));
 
     verify(fixture.storage).delete(uploaded);
+  }
+
+  @Test
+  void writesUnindexedAssetWithoutCreatingAComponent() {
+    Fixture fixture = fixture();
+    stubUploadedBlob(fixture);
+    when(fixture.assetDao.findAssetByPath(1L, PATH)).thenReturn(Optional.empty());
+    when(fixture.assetDao.tryInsertAsset(any())).thenReturn(OptionalLong.of(11L));
+
+    RawAssetWriter.Stored stored = fixture.writer.writeUnindexed(
+        runtime(), fixture.storage, 1L, PATH,
+        new ByteArrayInputStream("body".getBytes(StandardCharsets.UTF_8)),
+        "text/plain", Map.of(), "terraform", null, false);
+
+    assertEquals(null, stored.asset().componentId());
+    verifyNoInteractions(fixture.componentDao);
+    verify(fixture.browseNodeDao).upsertPathAncestors(1L, PATH, 11L, null);
+  }
+
+  @Test
+  void writesAssetAgainstAnExplicitLogicalComponent() {
+    Fixture fixture = fixture();
+    stubUploadedBlob(fixture);
+    when(fixture.assetDao.findAssetByPath(1L, PATH)).thenReturn(Optional.empty());
+    when(fixture.assetDao.tryInsertAsset(any())).thenReturn(OptionalLong.of(11L));
+    when(fixture.componentDao.upsertReturningId(any())).thenReturn(77L);
+    ComponentRecord component = new ComponentRecord(
+        null, 1L, RepositoryFormat.RAW, "docs", "logical", "1.0.0", "logical",
+        new byte[32], Map.of("browsePath", "docs/logical/1.0.0"), Instant.now());
+
+    RawAssetWriter.Stored stored = fixture.writer.writeWithComponent(
+        runtime(), fixture.storage, 1L, PATH,
+        new ByteArrayInputStream("body".getBytes(StandardCharsets.UTF_8)),
+        "text/plain", Map.of(), "terraform", null, component, false);
+
+    assertEquals(77L, stored.asset().componentId());
+    verify(fixture.componentDao).upsertReturningId(component);
+    ArgumentCaptor<AssetRecord> inserted = ArgumentCaptor.forClass(AssetRecord.class);
+    verify(fixture.assetDao).tryInsertAsset(inserted.capture());
+    assertEquals(77L, inserted.getValue().componentId());
+    verify(fixture.browseNodeDao).upsertPathAncestors(1L, PATH, 11L, 77L);
   }
 
   @Test

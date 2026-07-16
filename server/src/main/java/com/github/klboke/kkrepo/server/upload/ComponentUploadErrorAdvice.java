@@ -37,7 +37,8 @@ public class ComponentUploadErrorAdvice {
 
   @ExceptionHandler({MavenExceptions.LayoutPolicyViolation.class,
       MavenExceptions.VersionPolicyViolation.class,
-      MavenExceptions.WritePolicyDenied.class})
+      MavenExceptions.WritePolicyDenied.class,
+      MavenExceptions.BadRequestException.class})
   public ResponseEntity<Map<String, String>> mavenBadRequest(RuntimeException e) {
     return body(HttpStatus.BAD_REQUEST, e.getMessage());
   }

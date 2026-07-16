@@ -39,6 +39,12 @@ public class JdbcComponentDao implements com.github.klboke.kkrepo.persistence.jd
   private static final String SEARCH_VISIBLE_PREDICATE = """
       (c.format <> 'composer'
        OR (c.name <> '_composer' AND LEFT(c.name, 10) <> '_composer/'))
+      AND
+      (c.format <> 'terraform'
+       OR (c.name <> '.terraform'
+           AND c.name NOT LIKE '.terraform/%'
+           AND c.name NOT LIKE 'v1/providers/%/package/%'
+           AND c.name NOT LIKE 'v1/providers/%/metadata-%'))
       """;
 
   private final JdbcTemplate jdbcTemplate;
@@ -61,13 +67,16 @@ public class JdbcComponentDao implements com.github.klboke.kkrepo.persistence.jd
     this.searchProjection = """
         SELECT c.id, c.repository_id, r.name AS repository_name, c.format, c.namespace,
                c.name, c.version, c.kind, c.last_updated_at,
-               CASE WHEN c.format = 'composer'
-                    THEN COALESCE(
-                        NULLIF(%s, 'null'),
-                        c.name)
+               CASE
+                    WHEN c.format = 'composer'
+                      THEN COALESCE(NULLIF(%s, 'null'), c.name)
+                    WHEN c.format = 'terraform'
+                      THEN NULLIF(%s, 'null')
                     ELSE NULL
                END AS storage_path
-        """.formatted(jsonColumns.extractText("c.attributes_json", "distPath"));
+        """.formatted(
+        jsonColumns.extractText("c.attributes_json", "distPath"),
+        jsonColumns.extractText("c.attributes_json", "browsePath"));
     this.searchSelect = searchProjection + """
         FROM component c
         JOIN repository r ON r.id = c.repository_id
@@ -187,7 +196,7 @@ public class JdbcComponentDao implements com.github.klboke.kkrepo.persistence.jd
           """ + SEARCH_VISIBLE_PREDICATE + """
           ORDER BY c.last_updated_at DESC, r.name, c.namespace, c.name, c.version
           LIMIT ?
-          """).formatted(searchDialect.componentSearchPredicate("cs"));
+          """).replace("%s", searchDialect.componentSearchPredicate("cs"));
       return jdbcTemplate.query(sql, searchRowMapper, booleanQuery, safeLimit);
     }
     String sql = (searchProjection + """
@@ -200,7 +209,7 @@ public class JdbcComponentDao implements com.github.klboke.kkrepo.persistence.jd
         """ + SEARCH_VISIBLE_PREDICATE + """
         ORDER BY c.last_updated_at DESC, r.name, c.namespace, c.name, c.version
         LIMIT ?
-        """).formatted(searchDialect.componentSearchPredicate("cs"));
+        """).replace("%s", searchDialect.componentSearchPredicate("cs"));
     return jdbcTemplate.query(
         sql, searchRowMapper, EnumColumns.write(format), booleanQuery, safeLimit);
   }
@@ -288,6 +297,13 @@ public class JdbcComponentDao implements com.github.klboke.kkrepo.persistence.jd
         DELETE FROM component
         WHERE id = ? AND NOT EXISTS (SELECT 1 FROM asset WHERE component_id = ?)
         """, componentId, componentId);
+  }
+
+  public int deleteByRepositoryIdAndFormat(long repositoryId, RepositoryFormat format) {
+    return jdbcTemplate.update(
+        "DELETE FROM component WHERE repository_id = ? AND format = ?",
+        repositoryId,
+        EnumColumns.write(format));
   }
 
   public int touchLastUpdated(long componentId, java.time.Instant when) {

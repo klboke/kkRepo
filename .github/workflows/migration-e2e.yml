@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   nexus-migration-e2e:
-    name: Nexus ${{ matrix.nexus-version }} migration E2E
+    name: Nexus ${{ matrix.nexus-version }} (${{ matrix.metadata-engine }}) migration E2E
     runs-on: ubuntu-latest
     timeout-minutes: 120
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-migration-e2e'))
@@ -133,6 +133,27 @@ jobs:
       - name: Prepare migration fixtures
         run: scripts/ci/live-compat-setup.sh
 
+      - name: Set up Terraform current stable
+        if: matrix.nexus-version == '3.92.0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=1.15.8
+          archive="terraform_${version}_linux_amd64.zip"
+          mkdir -p "$RUNNER_TEMP/terraform/$version"
+          curl -fsSLO "https://releases.hashicorp.com/terraform/${version}/${archive}"
+          curl -fsSLO "https://releases.hashicorp.com/terraform/${version}/terraform_${version}_SHA256SUMS"
+          grep " ${archive}$" "terraform_${version}_SHA256SUMS" | sha256sum -c -
+          unzip -q "$archive" -d "$RUNNER_TEMP/terraform/$version"
+          echo "TERRAFORM_CURRENT_BIN=$RUNNER_TEMP/terraform/$version/terraform" >> "$GITHUB_ENV"
+
+      - name: Prepare Nexus Terraform migration fixture
+        if: matrix.nexus-version == '3.92.0'
+        run: >-
+          mvn -B -ntp -pl compat-test -am
+          -Dtest=TerraformRepositoryBlackBoxCompatibilityTest#preparesNexusHostedMigrationFixtureWhenConfigured
+          -Dsurefire.failIfNoSpecifiedTests=false test
+
       - name: Run Nexus metadata and repository-data migration E2E
         run: scripts/docker-compat/migration-e2e.sh
 
@@ -140,14 +161,14 @@ jobs:
         if: always()
         run: |
           mkdir -p artifacts
-          docker compose -f "$COMPOSE_FILE" ps > "artifacts/migration-e2e-${{ matrix.nexus-version }}-ps.txt" || true
-          docker compose -f "$COMPOSE_FILE" logs --no-color --timestamps > "artifacts/migration-e2e-${{ matrix.nexus-version }}-compose.log" || true
+          docker compose -f "$COMPOSE_FILE" ps > "artifacts/migration-e2e-${{ matrix.nexus-version }}-${{ matrix.metadata-engine }}-ps.txt" || true
+          docker compose -f "$COMPOSE_FILE" logs --no-color --timestamps > "artifacts/migration-e2e-${{ matrix.nexus-version }}-${{ matrix.metadata-engine }}-compose.log" || true
 
       - name: Upload migration logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: migration-e2e-${{ matrix.nexus-version }}-logs
+          name: migration-e2e-${{ matrix.nexus-version }}-${{ matrix.metadata-engine }}-logs
           path: artifacts/
           if-no-files-found: ignore
 

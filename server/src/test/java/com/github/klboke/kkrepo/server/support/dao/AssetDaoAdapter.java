@@ -225,6 +225,11 @@ public class AssetDaoAdapter implements AssetDao {
   }
 
   @Override
+  public int updateAssetComponentBinding(long arg0, Long arg1) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
   public int updateBlobAttributes(long arg0, Map<String, Object> arg1) {
     throw new UnsupportedOperationException();
   }

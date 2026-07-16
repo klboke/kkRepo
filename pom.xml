@@ -23,6 +23,7 @@
     <module>protocol-cargo</module>
     <module>protocol-pub</module>
     <module>protocol-composer</module>
+    <module>protocol-terraform</module>
     <module>protocol-go</module>
     <module>protocol-helm</module>
     <module>protocol-docker</module>
@@ -50,7 +51,9 @@
     <maven.artifact.version>3.9.16</maven.artifact.version>
     <aws.sdk.version>2.47.5</aws.sdk.version>
     <commons.compress.version>1.28.0</commons.compress.version>
+    <xz.version>1.10</xz.version>
     <commons.lang3.version>3.20.0</commons.lang3.version>
+    <bouncycastle.version>1.83</bouncycastle.version>
     <jacoco.version>0.8.15</jacoco.version>
     <flatten.maven.plugin.version>1.7.3</flatten.maven.plugin.version>
     <maven.compiler.release>${java.version}</maven.compiler.release>
@@ -113,9 +116,24 @@
         <version>${commons.compress.version}</version>
       </dependency>
       <dependency>
+        <groupId>org.tukaani</groupId>
+        <artifactId>xz</artifactId>
+        <version>${xz.version}</version>
+      </dependency>
+      <dependency>
         <groupId>org.apache.commons</groupId>
         <artifactId>commons-lang3</artifactId>
         <version>${commons.lang3.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.bouncycastle</groupId>
+        <artifactId>bcprov-jdk18on</artifactId>
+        <version>${bouncycastle.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.bouncycastle</groupId>
+        <artifactId>bcpg-jdk18on</artifactId>
+        <version>${bouncycastle.version}</version>
       </dependency>
       <dependency>
         <groupId>software.amazon.awssdk</groupId>
@@ -172,6 +190,11 @@
       <dependency>
         <groupId>com.github.klboke</groupId>
         <artifactId>kkrepo-protocol-composer</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.github.klboke</groupId>
+        <artifactId>kkrepo-protocol-terraform</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>

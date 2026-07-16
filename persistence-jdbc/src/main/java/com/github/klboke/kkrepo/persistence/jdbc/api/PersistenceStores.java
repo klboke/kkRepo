@@ -42,6 +42,8 @@ public interface PersistenceStores extends AutoCloseable {
 
   SecurityDao security();
 
+  TerraformRegistryDao terraformRegistry();
+
   UiSettingsDao uiSettings();
 
   @Override

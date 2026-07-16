@@ -108,6 +108,34 @@ class ComponentSearchControllerSecurityTest {
   }
 
   @Test
+  void searchHidesTerraformPhysicalComponentsAndReturnsLogicalBrowsePath() {
+    StubComponentDao components = new StubComponentDao();
+    components.rows = List.of(
+        row(1L, "terraform-proxy", RepositoryFormat.TERRAFORM, null,
+            "route-token.json", null, ".terraform/routes/route-token.json"),
+        row(2L, "terraform-proxy", RepositoryFormat.TERRAFORM, "acme",
+            "v1/providers/acme/cloud/1.2.3/package/linux/provider.zip", "1.2.3"),
+        row(3L, "terraform-proxy", RepositoryFormat.TERRAFORM, "acme",
+            "cloud", "1.2.3", "terraform-provider", "v1/providers/acme/cloud/1.2.3"));
+    RecordingSecurityService security = new RecordingSecurityService(permission -> AccessDecision.allow());
+    ComponentSearchController controller = controller(components, subject("alice"), null, security);
+
+    ComponentSearchController.ComponentSearchResponse response = controller.search(
+        null,
+        "terraform",
+        null,
+        request("GET", "/internal/search/components"));
+
+    assertEquals(1, response.count());
+    assertEquals(List.of("cloud"),
+        response.items().stream().map(ComponentSearchController.ComponentSearchItem::name).toList());
+    assertEquals(List.of("v1/providers/acme/cloud/1.2.3"),
+        response.items().stream()
+            .map(ComponentSearchController.ComponentSearchItem::browsePath)
+            .toList());
+  }
+
+  @Test
   void searchCanUseAnonymousSubjectWhenAnonymousAccessIsConfigured() {
     StubComponentDao components = new StubComponentDao();
     components.rows = List.of(row(1L, "pypi-group", RepositoryFormat.PYPI, null, "sample", "1.0.0"));
@@ -132,7 +160,7 @@ class ComponentSearchControllerSecurityTest {
   }
 
   @Test
-  void searchParsesNugetPubRubygemsAndYumFormats() {
+  void searchParsesNugetPubRubygemsYumAndTerraformFormats() {
     StubComponentDao components = new StubComponentDao();
     RecordingSecurityService security = new RecordingSecurityService(permission -> AccessDecision.allow());
     ComponentSearchController controller = controller(components, subject("alice"), null, security);
@@ -141,8 +169,11 @@ class ComponentSearchControllerSecurityTest {
     controller.search(null, "pub", null, request("GET", "/internal/search/components"));
     controller.search(null, "rubygems", null, request("GET", "/internal/search/components"));
     controller.search(null, "yum", null, request("GET", "/internal/search/components"));
+    controller.search(null, "terraform", null, request("GET", "/internal/search/components"));
 
-    assertEquals(List.of("|nuget|300", "|pub|300", "|rubygems|300", "|yum|300"), components.calls);
+    assertEquals(
+        List.of("|nuget|300", "|pub|300", "|rubygems|300", "|yum|300", "|terraform|300"),
+        components.calls);
   }
 
   @Test

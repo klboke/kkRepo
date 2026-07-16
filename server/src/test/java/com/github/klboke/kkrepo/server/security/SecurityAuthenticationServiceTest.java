@@ -47,6 +47,31 @@ class SecurityAuthenticationServiceTest {
   private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
   @Test
+  void exposesOnlyReplayableTerraformCredentialsForTheAuthenticatedSubject() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.realm(new SecurityRealmRecord(1L, "local", "LOCAL", "Local", true, 0, Map.of("source", "Local")));
+    dao.user(user(1L, "Local", "admin", NEXUS_SHIRO1_ADMIN123));
+    SecurityAuthenticationService service = service(dao);
+    String basic = basic("admin", "admin123");
+    AuthenticatedSubject local = new AuthenticatedSubject(
+        "Local", "admin", "local", null,
+        new com.github.klboke.kkrepo.auth.PermissionSubject("Local", "admin", Set.of(), null));
+    AuthenticatedSubject apiKey = new AuthenticatedSubject(
+        "Local", "admin", "api-key", 10L, local.permissionSubject());
+
+    assertEquals(basic.substring(6), service.replayableTerraformUrlToken(
+        request(Map.of("Authorization", basic)), local).orElseThrow());
+    AuthenticatedSubject anotherUser = new AuthenticatedSubject(
+        "Local", "other", "local", null,
+        new com.github.klboke.kkrepo.auth.PermissionSubject("Local", "other", Set.of(), null));
+    assertTrue(service.replayableTerraformUrlToken(
+        request(Map.of("Authorization", basic)), anotherUser).isEmpty());
+    assertEquals("GenericToken.secret", service.replayableTerraformUrlToken(
+        request(Map.of("X-Nexus-Plus-Token", "GenericToken.secret")), apiKey).orElseThrow());
+    assertTrue(service.replayableTerraformUrlToken(request(Map.of()), local).isEmpty());
+  }
+
+  @Test
   void authenticatesLocalUserWithNexusPasswordHashAndAssignedRoles() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.realm(new SecurityRealmRecord(1L, "local", "LOCAL", "Local", true, 0, Map.of("source", "Local")));

@@ -115,6 +115,41 @@ class RawProxyServiceTest {
   }
 
   @Test
+  void metadataRequestsUseTheMetadataMaxAgeInsteadOfTheContentMaxAge() {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 60, 1);
+    CachedAssetMetadata cached = snapshot(Instant.now().minusSeconds(5 * 60));
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.cache.find(eq(runtime.id()), eq("versions.json"), any()))
+        .thenReturn(Optional.of(cached));
+    when(fixture.proxyStateDao.isBlocked(eq(runtime.id()), any())).thenReturn(true);
+    when(fixture.reader.serveSnapshot(cached, false, "versions.json", "ATTACHMENT"))
+        .thenReturn(expected);
+
+    assertSame(expected, fixture.service.getMetadataFromUrl(
+        runtime, "versions.json", "https://upstream.example.test/versions", false));
+
+    verify(fixture.proxyStateDao).isBlocked(eq(runtime.id()), any());
+  }
+
+  @Test
+  void pinnedAssetsUseMetadataMaxAgeWithTheContentServingPath() {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 1, 60);
+    CachedAssetMetadata cached = snapshot(Instant.now().minusSeconds(5 * 60));
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.cache.find(eq(runtime.id()), eq("provider.zip"), any()))
+        .thenReturn(Optional.of(cached));
+    when(fixture.reader.serveSnapshot(cached, false, "provider.zip", "ATTACHMENT"))
+        .thenReturn(expected);
+
+    assertSame(expected, fixture.service.getPinnedAssetFromUrl(
+        runtime, "provider.zip", "https://upstream.example.test/provider.zip", false));
+
+    verify(fixture.proxyStateDao, never()).isBlocked(eq(runtime.id()), any());
+  }
+
+  @Test
   void reportsBlockedUpstreamWhenNoCacheExists() {
     Fixture fixture = fixture();
     RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 1);
@@ -154,6 +189,11 @@ class RawProxyServiceTest {
   }
 
   private static RepositoryRuntime runtime(RepositoryType type, int maxAgeMinutes) {
+    return runtime(type, maxAgeMinutes, maxAgeMinutes);
+  }
+
+  private static RepositoryRuntime runtime(
+      RepositoryType type, int contentMaxAgeMinutes, int metadataMaxAgeMinutes) {
     return new RepositoryRuntime(
         10L,
         "raw-proxy",
@@ -167,8 +207,8 @@ class RawProxyServiceTest {
         null,
         true,
         "https://upstream.example.test/",
-        maxAgeMinutes,
-        maxAgeMinutes,
+        contentMaxAgeMinutes,
+        metadataMaxAgeMinutes,
         true,
         "ATTACHMENT",
         List.of());

@@ -87,7 +87,7 @@ java -jar server/target/kkrepo-server-*.jar
 - 代理保留完整 path。
 - 允许足够大的上传 body。
 - 上传和下载 timeout 足够长。
-- 不会移除 Maven/npm/pip/Helm/Cargo/Pub/Composer/NuGet/gem/yum 客户端需要的认证 header。
+- 不会移除 Maven/npm/pip/Helm/Cargo/Pub/Composer/NuGet/gem/yum 客户端需要的认证 header；Terraform `host.services` 的 URL token segment 会继续出现在生成的 archive/checksum/signature URL 中。
 
 ## 初始管理员设置问题
 
@@ -162,7 +162,7 @@ export KKREPO_DATABASE_TYPE=mysql
 - 客户端使用了该协议正确的凭据类型。
 - 反向代理保留了 `Authorization` header。
 
-对于 npm、Cargo、Pub、NuGet、RubyGems 等 token 型客户端，修改用户或 realm 设置后，建议重新生成相关 token 或 API key。Composer 私有仓库通常使用 `COMPOSER_AUTH`/`auth.json` 的 HTTP Basic；出现 401 时检查 host key 是否与实际仓库 host:port 完全一致，并避免把 credentials 写入 `composer.json`。
+对于 npm、Cargo、Pub、NuGet、RubyGems 等 token 型客户端，修改用户或 realm 设置后，建议重新生成相关 token 或 API key。Terraform 使用嵌入 `host.services` URL 的 `GenericToken`，轮换 token 时应同步更新 CLI 配置。Composer 私有仓库通常使用 `COMPOSER_AUTH`/`auth.json` 的 HTTP Basic；出现 401 时检查 host key 是否与实际仓库 host:port 完全一致，并避免把 credentials 写入 `composer.json`。
 
 如果问题是 Nexus 兼容差异，提交 issue 时请同时提供 Nexus 和 kkrepo 对同一请求的响应。
 
@@ -197,6 +197,7 @@ export KKREPO_DATABASE_TYPE=mysql
 - 期望迁移 proxy 仓库，但没有在 `Optional proxy repositories` 中列出。
 - Cargo / Rust 迁移被阻断，通常是因为 preflight 未证明受支持的 datastore Cargo content model；请查看 Source Profile 和对应 plan item 状态。
 - Composer 迁移被阻断时，确认源仓库是 Nexus 3.75.0+ Pro 原生 `composer-proxy`，并通过 `Optional proxy repositories` 显式选择。Community plugin、hosted/group 或没有 Composer content schema 的源不会自动降级迁移。
+- Terraform 迁移被阻断时，确认源仓库使用受支持 Nexus 版本的原生 `terraform-hosted` 或 `terraform-proxy` recipe。Proxy cache 数据必须在 `Optional proxy repositories` 中显式选择，且 source plan 为 `FULL`。迁移只恢复可识别的 module/provider archive；已恢复的 module archive 可从本地 Nexus path 直接发现，Provider route、validator、checksum manifest 和 signing snapshot 从已配置上游重建，并在 metadata 有效期内固定对应缓存。未知 schema、community plugin 和不支持的产品能力仍会 fail closed。
 - blob 迁移慢，可能是并发过低、源 Nexus 压力过大，或对象存储限流。
 
 详见 [Nexus 迁移说明](nexus-migration-guide.md)。

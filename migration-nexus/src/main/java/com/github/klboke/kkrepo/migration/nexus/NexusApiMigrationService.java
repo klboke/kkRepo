@@ -1,8 +1,13 @@
 package com.github.klboke.kkrepo.migration.nexus;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryRecipe;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.core.security.EncryptionSecrets;
+import com.github.klboke.kkrepo.core.security.OpenPgpKeyIds;
+import com.github.klboke.kkrepo.core.security.SecretCipher;
+import com.github.klboke.kkrepo.core.security.TerraformSigningKeyMaterial;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.NexusInventory;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.RepositoryDocument;
 import com.github.klboke.kkrepo.migration.nexus.MigrationPlanBuilder.MigrationScope;
@@ -22,8 +27,10 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MigrationJobDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import java.security.Security;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -32,6 +39,14 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import org.bouncycastle.bcpg.ArmoredOutputStream;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.bouncycastle.openpgp.PGPSecretKey;
+import org.bouncycastle.openpgp.PGPSecretKeyRing;
+import org.bouncycastle.openpgp.PGPSecretKeyRingCollection;
+import org.bouncycastle.openpgp.PGPUtil;
+import org.bouncycastle.openpgp.operator.jcajce.JcaKeyFingerprintCalculator;
+import org.bouncycastle.openpgp.operator.jcajce.JcePBESecretKeyDecryptorBuilder;
 import org.springframework.transaction.annotation.Transactional;
 
 public class NexusApiMigrationService {
@@ -43,6 +58,7 @@ public class NexusApiMigrationService {
   private final SecurityDao securityDao;
   private final MigrationJobDao migrationJobDao;
   private final NexusSecurityMigrationWriter securityWriter;
+  private final TerraformRegistryDao terraformRegistry;
 
   public NexusApiMigrationService(
       ObjectMapper objectMapper,
@@ -51,12 +67,24 @@ public class NexusApiMigrationService {
       SecurityDao securityDao,
       MigrationJobDao migrationJobDao,
       NexusSecurityMigrationWriter securityWriter) {
+    this(objectMapper, blobStoreDao, repositoryDao, securityDao, migrationJobDao, securityWriter, null);
+  }
+
+  public NexusApiMigrationService(
+      ObjectMapper objectMapper,
+      BlobStoreDao blobStoreDao,
+      RepositoryDao repositoryDao,
+      SecurityDao securityDao,
+      MigrationJobDao migrationJobDao,
+      NexusSecurityMigrationWriter securityWriter,
+      TerraformRegistryDao terraformRegistry) {
     this.objectMapper = objectMapper;
     this.blobStoreDao = blobStoreDao;
     this.repositoryDao = repositoryDao;
     this.securityDao = securityDao;
     this.migrationJobDao = migrationJobDao;
     this.securityWriter = securityWriter;
+    this.terraformRegistry = terraformRegistry;
   }
 
   public NexusMigrationPreflight preflight(NexusMigrationRequest request)
@@ -316,7 +344,9 @@ public class NexusApiMigrationService {
         .toList();
     for (RepositoryDocument document : supported) {
       RepositoryRecord record = repositoryRecord(document, targetBlobStores);
-      migrated.put(record.name(), repositoryDao.upsertByName(record));
+      RepositoryRecord stored = repositoryDao.upsertByName(record);
+      migrated.put(record.name(), stored);
+      migrateTerraformSigningKey(document, stored);
     }
     for (RepositoryDocument document : supported) {
       if (repositoryTypeEnum(document) != RepositoryType.GROUP) {
@@ -409,7 +439,8 @@ public class NexusApiMigrationService {
     LinkedHashMap<String, Object> attributes = new LinkedHashMap<>();
     attributes.put("recipe", recipe.name());
     attributes.put("source", "nexus-migration");
-    attributes.put("sourceRepository", document.detail().isEmpty() ? document.summary() : document.detail());
+    attributes.put("sourceRepository", redactSecrets(
+        document.detail().isEmpty() ? document.summary() : document.detail()));
     if (recipe.type() == RepositoryType.PROXY) {
       attributes.put("proxy", proxyAttributes(document, recipe));
     }
@@ -434,6 +465,96 @@ public class NexusApiMigrationService {
         normalizeWritePolicy(string(nested(value(document, "storage"), "writePolicy"))),
         bool(nested(value(document, "storage"), "strictContentTypeValidation"), true),
         Map.copyOf(attributes));
+  }
+
+  private void migrateTerraformSigningKey(RepositoryDocument document, RepositoryRecord repository) {
+    if (terraformRegistry == null
+        || repository.id() == null
+        || repository.format() != RepositoryFormat.TERRAFORM
+        || repository.type() != RepositoryType.HOSTED
+        || terraformRegistry.findActiveSigningKey(repository.id()).isPresent()) {
+      return;
+    }
+    Object raw = value(document, "terraformSigning");
+    if (!(raw instanceof Map<?, ?> signing)) {
+      return;
+    }
+    String privateArmor = string(signing.get("keypair"));
+    if (privateArmor == null || privateArmor.isBlank()) {
+      return;
+    }
+    String passphrase = defaultString(string(signing.get("passphrase")), "");
+    try {
+      if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
+        Security.addProvider(new BouncyCastleProvider());
+      }
+      PGPSecretKeyRingCollection rings = new PGPSecretKeyRingCollection(
+          PGPUtil.getDecoderStream(new java.io.ByteArrayInputStream(
+              privateArmor.getBytes(java.nio.charset.StandardCharsets.UTF_8))),
+          new JcaKeyFingerprintCalculator());
+      PGPSecretKeyRing selectedRing = null;
+      PGPSecretKey signingKey = null;
+      java.util.Iterator<PGPSecretKeyRing> ringIterator = rings.getKeyRings();
+      while (ringIterator.hasNext() && signingKey == null) {
+        PGPSecretKeyRing candidateRing = ringIterator.next();
+        java.util.Iterator<PGPSecretKey> keys = candidateRing.getSecretKeys();
+        while (keys.hasNext()) {
+          PGPSecretKey candidate = keys.next();
+          if (candidate.isSigningKey()) {
+            candidate.extractPrivateKey(new JcePBESecretKeyDecryptorBuilder()
+                .setProvider(BouncyCastleProvider.PROVIDER_NAME)
+                .build(passphrase.toCharArray()));
+            selectedRing = candidateRing;
+            signingKey = candidate;
+            break;
+          }
+        }
+      }
+      if (selectedRing == null || signingKey == null) {
+        throw new IllegalArgumentException(
+            "Nexus Terraform signing key cannot sign for repository " + repository.name());
+      }
+      java.io.ByteArrayOutputStream publicArmor = new java.io.ByteArrayOutputStream();
+      try (ArmoredOutputStream armor = new ArmoredOutputStream(publicArmor)) {
+        selectedRing.toCertificate().encode(armor);
+      }
+      String encrypted = new SecretCipher(EncryptionSecrets.credentialSecret()).encrypt(
+          TerraformSigningKeyMaterial.encode(privateArmor, passphrase));
+      terraformRegistry.insertSigningKey(new TerraformRegistryDao.SigningKey(
+          repository.id(),
+          1,
+          OpenPgpKeyIds.format(signingKey.getKeyID()),
+          encrypted,
+          publicArmor.toString(java.nio.charset.StandardCharsets.UTF_8),
+          java.time.Instant.now()));
+    } catch (Exception e) {
+      throw new IllegalArgumentException(
+          "Failed importing Nexus Terraform signing key for repository " + repository.name(), e);
+    }
+  }
+
+  private static Object redactSecrets(Object value) {
+    if (value instanceof Map<?, ?> source) {
+      LinkedHashMap<String, Object> sanitized = new LinkedHashMap<>();
+      source.forEach((key, child) -> {
+        String name = String.valueOf(key);
+        String lower = name.toLowerCase(Locale.ROOT);
+        boolean sensitive = lower.contains("password")
+            || lower.contains("passphrase")
+            || lower.contains("secret")
+            || lower.contains("credential")
+            || lower.contains("bearer")
+            || lower.contains("token")
+            || lower.contains("keypair")
+            || lower.contains("privatekey");
+        sanitized.put(name, sensitive ? "<redacted>" : redactSecrets(child));
+      });
+      return java.util.Collections.unmodifiableMap(sanitized);
+    }
+    if (value instanceof List<?> values) {
+      return values.stream().map(NexusApiMigrationService::redactSecrets).toList();
+    }
+    return value;
   }
 
   private NexusSecurityMigrationResult migrateSecurity(

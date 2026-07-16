@@ -54,7 +54,7 @@ When a protocol change affects behavior that real package clients exercise direc
 scripts/ci/run-live-compat.sh client-e2e
 ```
 
-It covers Maven, npm, PyPI, Go resolve, Helm, Cargo/Rust, Dart/Pub, Flutter Pub, Composer/PHP, NuGet, RubyGems, Yum, and Docker/OCI client flows. Logs and downloaded metadata are written under `artifacts/client-e2e/`.
+It covers Maven, npm, PyPI, Go resolve, Helm, Cargo/Rust, Dart/Pub, Flutter Pub, Composer/PHP, Terraform 0.13/current, NuGet, RubyGems, Yum, and Docker/OCI client flows. Logs and downloaded metadata are written under `artifacts/client-e2e/`; credential-bearing Terraform metadata is redacted before artifacts are uploaded.
 
 See [compat-test/README.md](compat-test/README.md) for suite options, environment variables, and Maven properties.
 

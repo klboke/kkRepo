@@ -224,6 +224,7 @@ KKREPO_CATALOG_CACHE_BROADCAST_BACKEND=mysql
 - 确认 Flyway migration 符合预期。
 - 执行代表性的客户端 pull 和 push。
 - 对 Composer / PHP 执行 hosted archive 上传和 group `composer install --prefer-dist`，同时验证 `packages.json`、p2 metadata、dist 下载、HTTP Basic 和 lock replay。
+- 对 Terraform 上传 hosted module/provider，并使用 Terraform 0.13 与当前稳定版从 group 执行 `terraform init`；验证 proxy Provider、SHA256SUMS、detached signature、lock file，以及诊断信息中的 URL token 脱敏。
 
 推荐发布流程：
 

@@ -4,7 +4,7 @@
 
 在 Python 项目中，PyPI 私服通常承担两个角色：一是托管公司内部的 Python 包，二是代理和缓存 PyPI 官方仓库的第三方依赖。这样既能让 CI/CD 发布内部包有统一入口，也能减少公网网络波动对 `pip install` 的影响。
 
-kkRepo 是一个兼容 Nexus 客户端访问习惯的自托管制品仓库，支持 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Docker/OCI 等多种制品格式。对于 PyPI 场景，它支持 hosted、proxy 和 group 仓库，并保留常见的 `/repository/<repo>/...` URL 结构，方便从 Nexus 迁移或替换。
+kkRepo 是一个兼容 Nexus 客户端访问习惯的自托管制品仓库，支持 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Docker/OCI 等多种制品格式。对于 PyPI 场景，它支持 hosted、proxy 和 group 仓库，并保留常见的 `/repository/<repo>/...` URL 结构，方便从 Nexus 迁移或替换。
 
 - https://github.com/klboke/kkrepo
 - https://gitee.com/kailing/kkRepo
