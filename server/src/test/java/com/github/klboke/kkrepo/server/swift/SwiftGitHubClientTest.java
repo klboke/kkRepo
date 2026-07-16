@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
@@ -130,6 +131,72 @@ class SwiftGitHubClientTest {
   }
 
   @Test
+  void retriesBoundedTransientGitHubStatusesAndHonorsRetryAfter() throws Exception {
+    ObjectMapper mapper = new ObjectMapper();
+    byte[] tags = mapper.writeValueAsBytes(List.of(Map.of(
+        "name", "1.2.3",
+        "commit", Map.of("sha", "a".repeat(40)))));
+    SequencedFetcher fetcher = new SequencedFetcher(
+        result(503, Map.of("Retry-After", "2"), new byte[0]),
+        result(502, Map.of(), new byte[0]),
+        result(200, Map.of("Content-Type", "application/json"), tags));
+    List<Duration> delays = new ArrayList<>();
+    SwiftGitHubClient client = new SwiftGitHubClient(
+        fetcher,
+        mapper,
+        mock(SwiftArchiveInspector.class),
+        delays::add);
+
+    List<SwiftGitHubClient.Tag> result = client.tags(
+        proxy("https://github.com/"), SwiftGitHubClient.coordinates("apple", "swift-log"));
+
+    assertEquals(List.of(new SwiftGitHubClient.Tag("1.2.3", "1.2.3", "a".repeat(40))), result);
+    assertEquals(3, fetcher.calls);
+    assertEquals(List.of(Duration.ofSeconds(2), Duration.ofSeconds(2)), delays);
+  }
+
+  @Test
+  void stopsAfterTheBoundedTransientGitHubRetryBudget() {
+    SequencedFetcher fetcher = new SequencedFetcher(
+        result(503, Map.of(), new byte[0]),
+        result(503, Map.of(), new byte[0]),
+        result(503, Map.of(), new byte[0]),
+        result(503, Map.of(), new byte[0]));
+    List<Duration> delays = new ArrayList<>();
+    SwiftGitHubClient client = new SwiftGitHubClient(
+        fetcher,
+        new ObjectMapper(),
+        mock(SwiftArchiveInspector.class),
+        delays::add);
+
+    assertThrows(SwiftExceptions.BadUpstream.class, () -> client.tags(
+        proxy("https://github.com/"), SwiftGitHubClient.coordinates("apple", "swift-log")));
+
+    assertEquals(4, fetcher.calls);
+    assertEquals(
+        List.of(Duration.ofSeconds(1), Duration.ofSeconds(2), Duration.ofSeconds(4)),
+        delays);
+  }
+
+  @Test
+  void doesNotRetryBeforeALongGitHubRetryAfterWindow() {
+    SequencedFetcher fetcher = new SequencedFetcher(
+        result(503, Map.of("Retry-After", "30"), new byte[0]));
+    List<Duration> delays = new ArrayList<>();
+    SwiftGitHubClient client = new SwiftGitHubClient(
+        fetcher,
+        new ObjectMapper(),
+        mock(SwiftArchiveInspector.class),
+        delays::add);
+
+    assertThrows(SwiftExceptions.BadUpstream.class, () -> client.tags(
+        proxy("https://github.com/"), SwiftGitHubClient.coordinates("apple", "swift-log")));
+
+    assertEquals(1, fetcher.calls);
+    assertTrue(delays.isEmpty());
+  }
+
+  @Test
   void retriesAnInterruptedArchiveBodyWithAFreshUpstreamRequest() throws Exception {
     byte[] archive = swiftArchive();
     SequencedFetcher fetcher = new SequencedFetcher(
@@ -160,6 +227,11 @@ class SwiftGitHubClientTest {
         throw new EOFException("truncated GitHub archive");
       }
     };
+  }
+
+  private static HttpRemoteFetcher.Result result(
+      int status, Map<String, String> headers, byte[] body) {
+    return new HttpRemoteFetcher.Result(status, headers, new ByteArrayInputStream(body));
   }
 
   private static byte[] swiftArchive() throws IOException {

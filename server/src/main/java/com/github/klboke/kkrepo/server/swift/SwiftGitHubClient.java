@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
@@ -21,11 +22,15 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /** Bounded GitHub source adapter used by Nexus-compatible Swift proxy repositories. */
 @Component
 final class SwiftGitHubClient {
+  private static final Logger log = LoggerFactory.getLogger(SwiftGitHubClient.class);
   private static final String API = "https://api.github.com/repos/";
   private static final Pattern OWNER = Pattern.compile("[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})");
   private static final Pattern REPOSITORY = Pattern.compile("[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})");
@@ -34,16 +39,32 @@ final class SwiftGitHubClient {
       new TypeReference<>() {};
   /** Bounds one refresh to 10,000 upstream tags while still supporting large Swift repositories. */
   private static final int MAX_TAG_PAGES = 100;
+  /** Bounds transient GitHub retries to seven seconds without a Retry-After response. */
+  private static final int MAX_TRANSIENT_STATUS_ATTEMPTS = 4;
+  private static final Duration BASE_TRANSIENT_RETRY_DELAY = Duration.ofSeconds(1);
+  private static final Duration MAX_RETRY_AFTER_DELAY = Duration.ofSeconds(10);
+  private static final Set<Integer> TRANSIENT_STATUSES = Set.of(408, 425, 500, 502, 503, 504);
 
   private final HttpRemoteFetcher fetcher;
   private final ObjectMapper mapper;
   private final SwiftArchiveInspector inspector;
+  private final RetrySleeper retrySleeper;
 
+  @Autowired
   SwiftGitHubClient(
       HttpRemoteFetcher fetcher, ObjectMapper mapper, SwiftArchiveInspector inspector) {
+    this(fetcher, mapper, inspector, delay -> Thread.sleep(delay.toMillis()));
+  }
+
+  SwiftGitHubClient(
+      HttpRemoteFetcher fetcher,
+      ObjectMapper mapper,
+      SwiftArchiveInspector inspector,
+      RetrySleeper retrySleeper) {
     this.fetcher = fetcher;
     this.mapper = mapper;
     this.inspector = inspector;
+    this.retrySleeper = retrySleeper;
   }
 
   List<Tag> tags(RepositoryRuntime runtime, Coordinates coordinates) {
@@ -91,7 +112,8 @@ final class SwiftGitHubClient {
         + "/zipball/" + commitSha;
     HttpRemoteFetcher.Request request = request(runtime, url, true);
     try {
-      return fetcher.fetchWithBodyRetry(request, coordinates.identity() + "/" + commitSha, result -> {
+      return fetchWithTransientStatusRetry(
+          request, coordinates.identity() + "/" + commitSha, result -> {
         if (result.status() == 404 || result.status() == 410) {
           throw new SwiftExceptions.NotFound("GitHub release source was not found");
         }
@@ -112,7 +134,7 @@ final class SwiftGitHubClient {
   private List<Map<String, Object>> getJsonList(
       RepositoryRuntime runtime, String url, String resource) {
     try {
-      return fetcher.fetchWithBodyRetry(request(runtime, url, false), resource, result -> {
+      return fetchWithTransientStatusRetry(request(runtime, url, false), resource, result -> {
         if (result.status() == 404 || result.status() == 410) {
           throw new SwiftExceptions.NotFound(resource + " not found");
         }
@@ -128,6 +150,57 @@ final class SwiftGitHubClient {
     } catch (IOException e) {
       throw new SwiftExceptions.BadUpstream("Unable to fetch " + resource, e);
     }
+  }
+
+  private <T> T fetchWithTransientStatusRetry(
+      HttpRemoteFetcher.Request request,
+      String resource,
+      HttpRemoteFetcher.ResultHandler<T> handler) throws IOException {
+    for (int attempt = 1; ; attempt++) {
+      try {
+        return fetcher.fetchWithBodyRetry(request, resource, result -> {
+          if (TRANSIENT_STATUSES.contains(result.status())) {
+            throw new TransientGitHubStatus(
+                result.status(), retryAfterDelay(result.header("Retry-After")));
+          }
+          return handler.handle(result);
+        });
+      } catch (TransientGitHubStatus transientStatus) {
+        if (attempt >= MAX_TRANSIENT_STATUS_ATTEMPTS
+            || transientStatus.retryAfter().filter(
+                delay -> delay.compareTo(MAX_RETRY_AFTER_DELAY) > 0).isPresent()) {
+          throw new SwiftExceptions.BadUpstream(
+              resource + " request returned HTTP " + transientStatus.status());
+        }
+        Duration delay = transientStatus.retryAfter().orElse(
+            BASE_TRANSIENT_RETRY_DELAY.multipliedBy(1L << (attempt - 1)));
+        log.warn(
+            "Transient GitHub response for repository={} resource={} status={} attempt={}/{}; retrying in {} ms",
+            request.repository(),
+            resource,
+            transientStatus.status(),
+            attempt,
+            MAX_TRANSIENT_STATUS_ATTEMPTS,
+            delay.toMillis());
+        sleepBeforeRetry(resource, delay);
+      }
+    }
+  }
+
+  private void sleepBeforeRetry(String resource, Duration delay) {
+    try {
+      retrySleeper.sleep(delay);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new SwiftExceptions.BadUpstream("Interrupted while retrying " + resource, e);
+    }
+  }
+
+  private static Optional<Duration> retryAfterDelay(String value) {
+    Instant now = Instant.now();
+    return parseRetryAfter(value, now)
+        .map(retryAfter -> Duration.between(now, retryAfter))
+        .filter(delay -> !delay.isNegative() && !delay.isZero());
   }
 
   private static SwiftExceptions.UpstreamRateLimited rateLimited(
@@ -291,4 +364,28 @@ final class SwiftGitHubClient {
   }
 
   record Tag(String version, String tag, String commitSha) {}
+
+  @FunctionalInterface
+  interface RetrySleeper {
+    void sleep(Duration delay) throws InterruptedException;
+  }
+
+  private static final class TransientGitHubStatus extends RuntimeException {
+    private final int status;
+    private final Optional<Duration> retryAfter;
+
+    private TransientGitHubStatus(int status, Optional<Duration> retryAfter) {
+      super("GitHub returned transient HTTP " + status);
+      this.status = status;
+      this.retryAfter = retryAfter;
+    }
+
+    private int status() {
+      return status;
+    }
+
+    private Optional<Duration> retryAfter() {
+      return retryAfter;
+    }
+  }
 }
