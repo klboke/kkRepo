@@ -2480,7 +2480,10 @@ function swiftUsageDetail(entry) {
   const scope = parts[0] || "";
   const name = parts[1] || "";
   const rawVersion = parts[2] || "";
-  const version = rawVersion.endsWith(".zip") ? rawVersion.slice(0, -4) : rawVersion;
+  const archiveAsset = entry.leaf === true && parts.length === 3;
+  const version = archiveAsset && rawVersion.endsWith(".zip")
+    ? rawVersion.slice(0, -4)
+    : rawVersion;
   const identity = scope && name ? `${scope}.${name}` : "";
   const repoUrl = repositoryBaseUrl();
   const summaryRows = [

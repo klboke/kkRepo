@@ -882,7 +882,7 @@ public class NexusRestClient {
                       && assetAttributes.contains('"version"')
                       && assetAttributes.contains('"asset_kind"'))
                   def archiveAsset = (pathParts.length == 3
-                      && pathParts[2] ==~ /[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9a-z.-]+)?\\.zip/
+                      && pathParts[2] ==~ /[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9a-z.-]+)?(?:\\+[0-9a-z.-]+)?\\.zip/
                       && kind == 'package_archive')
                   if (archiveAsset) {
                     shape.archiveAssetPath = true

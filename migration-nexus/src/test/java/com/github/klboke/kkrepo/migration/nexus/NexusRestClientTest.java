@@ -212,6 +212,25 @@ class NexusRestClientTest {
   }
 
   @Test
+  void sourceProfileScriptRecognizesFullSwiftArchiveSemver() throws Exception {
+    var field = NexusRestClient.class.getDeclaredField("SOURCE_PROFILE_PROBE_SCRIPT");
+    field.setAccessible(true);
+    String script = (String) field.get(null);
+    String marker = "pathParts[2] ==~ /";
+    int regexStart = script.indexOf(marker);
+    assertTrue(regexStart >= 0);
+    regexStart += marker.length();
+    int regexEnd = script.indexOf("/\n", regexStart);
+    assertTrue(regexEnd > regexStart);
+    String archiveRegex = script.substring(regexStart, regexEnd);
+
+    assertTrue("1.0.0.zip".matches(archiveRegex));
+    assertTrue("1.0.0-beta.1+build.5.zip".matches(archiveRegex));
+    assertTrue("1.0.0+linux.zip.zip".matches(archiveRegex));
+    assertFalse("1.0.zip".matches(archiveRegex));
+  }
+
+  @Test
   void repositoryDataScriptPagesAssetsByBucketAndNameCursor() throws Exception {
     var field = NexusRestClient.class.getDeclaredField("LOCAL_REPOSITORY_DATA_EXPORT_SCRIPT");
     field.setAccessible(true);
