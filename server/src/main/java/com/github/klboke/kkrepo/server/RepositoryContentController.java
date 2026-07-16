@@ -14,6 +14,7 @@ import com.github.klboke.kkrepo.protocol.npm.NpmPathParser;
 import com.github.klboke.kkrepo.protocol.nuget.NugetPaths;
 import com.github.klboke.kkrepo.protocol.pub.PubPath;
 import com.github.klboke.kkrepo.protocol.pub.PubPathParser;
+import com.github.klboke.kkrepo.protocol.swift.SwiftMediaTypes;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPath;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPathParser;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
@@ -721,7 +722,9 @@ public class RepositoryContentController {
           request.getHeader(HttpHeaders.ACCEPT),
           headOnly,
           requestPermissionSubject(request));
-      return toStreamingResponse(resp, request, !headOnly && raw.endsWith(".zip"));
+      boolean archiveResponse = !headOnly
+          && SwiftMediaTypes.ARCHIVE.equalsIgnoreCase(resp.contentType());
+      return toStreamingResponse(resp, request, archiveResponse);
     }
     if (runtime.format() == RepositoryFormat.PYPI) {
       String raw = extractRepositoryPath(name, request, true);

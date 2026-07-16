@@ -13,6 +13,9 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.protocol.swift.SwiftPath;
+import com.github.klboke.kkrepo.protocol.swift.SwiftPathParser;
+import com.github.klboke.kkrepo.protocol.swift.SwiftToolsVersions;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
 import com.github.klboke.kkrepo.server.cache.NexusCacheType;
@@ -45,6 +48,7 @@ import org.springframework.web.server.ResponseStatusException;
 @RequestMapping("/internal/browse")
 public class BrowseContentDeleteController {
   private static final List<String> MAVEN_HASH_SUFFIXES = List.of(".sha1", ".sha256", ".sha512", ".md5");
+  private static final SwiftPathParser SWIFT_PATHS = new SwiftPathParser();
 
   private final RepositoryDao repositoryDao;
   private final AssetDao assetDao;
@@ -287,23 +291,28 @@ public class BrowseContentDeleteController {
 
   private static SwiftCoordinate swiftCoordinate(String path) {
     String normalized = normalize(path);
-    String[] segments = normalized.split("/");
-    if (segments.length < 3 || ".swift".equals(segments[0])) {
+    SwiftPath parsed;
+    try {
+      parsed = SWIFT_PATHS.parse(normalized);
+    } catch (IllegalArgumentException e) {
       return null;
     }
-    String version = segments[2];
-    if (version.endsWith(".zip")) {
-      version = version.substring(0, version.length() - 4);
-    } else if (segments.length < 4 || !segments[3].startsWith("Package")) {
-      return null;
+    if (parsed.kind() == SwiftPath.Kind.UNKNOWN) {
+      String[] segments = normalized.split("/", -1);
+      if (segments.length == 4
+          && SwiftToolsVersions.fromManifestFilename(segments[3]).isPresent()) {
+        parsed = SWIFT_PATHS.parse(
+            segments[0] + "/" + segments[1] + "/" + segments[2] + "/Package.swift");
+      }
     }
-    if (segments[0].isBlank() || segments[1].isBlank() || version.isBlank()) {
+    if (parsed.kind() != SwiftPath.Kind.SOURCE_ARCHIVE
+        && parsed.kind() != SwiftPath.Kind.MANIFEST) {
       return null;
     }
     return new SwiftCoordinate(
-        segments[0].toLowerCase(Locale.ROOT),
-        segments[1].toLowerCase(Locale.ROOT),
-        version);
+        parsed.scope().toLowerCase(Locale.ROOT),
+        parsed.name().toLowerCase(Locale.ROOT),
+        parsed.version());
   }
 
   private void deleteAsset(AssetRecord asset) {

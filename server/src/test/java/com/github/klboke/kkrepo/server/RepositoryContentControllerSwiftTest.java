@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -79,6 +80,46 @@ class RepositoryContentControllerSwiftTest {
     assertEquals("bcd", body.toString(StandardCharsets.UTF_8));
     assertEquals("bytes 1-3/6", response.getHeaders().getFirst(HttpHeaders.CONTENT_RANGE));
     assertEquals("\"archive-etag\"", response.getHeaders().getETag());
+  }
+
+  @Test
+  void rangeDoesNotSliceMetadataWhoseSemverEndsInZip() throws Exception {
+    RepositoryRuntime runtime = hosted();
+    RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
+    SwiftService swift = mock(SwiftService.class);
+    when(runtimes.resolve("swift")).thenReturn(Optional.of(runtime));
+    byte[] metadata = "{\"version\":\"1.2.3+linux.zip\"}"
+        .getBytes(StandardCharsets.UTF_8);
+    when(swift.get(
+            eq(runtime),
+            eq("Acme/Demo/1.2.3+linux.zip"),
+            eq(null),
+            eq("https://repo.example/repository/swift"),
+            eq(SwiftMediaTypes.VENDOR_JSON),
+            eq(false),
+            eq(null)))
+        .thenReturn(MavenResponse.ok(
+            new ByteArrayInputStream(metadata),
+            metadata.length,
+            SwiftMediaTypes.JSON,
+            "metadata-etag",
+            Instant.EPOCH));
+    RepositoryContentController controller = controller(runtimes, swift);
+    MockHttpServletRequest request = request(
+        "GET", "/repository/swift/Acme/Demo/1.2.3+linux.zip");
+    request.addHeader(HttpHeaders.ACCEPT, SwiftMediaTypes.VENDOR_JSON);
+    request.addHeader(HttpHeaders.RANGE, "bytes=1-3");
+
+    ResponseEntity<StreamingResponseBody> response = controller.get("swift", request);
+    ByteArrayOutputStream body = new ByteArrayOutputStream();
+    response.getBody().writeTo(body);
+
+    assertEquals(200, response.getStatusCode().value());
+    assertEquals(metadata.length, response.getHeaders().getContentLength());
+    assertNull(response.getHeaders().getFirst(HttpHeaders.CONTENT_RANGE));
+    assertEquals(
+        new String(metadata, StandardCharsets.UTF_8),
+        body.toString(StandardCharsets.UTF_8));
   }
 
   @Test

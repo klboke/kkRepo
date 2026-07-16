@@ -216,6 +216,36 @@ class BrowseContentDeleteControllerTest {
   }
 
   @Test
+  void deletingManifestPreservesSemverEndingInZip() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord repository =
+        repository(1L, "swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    String version = "1.2.3+linux.zip";
+    AssetRecord manifest = asset(
+        12L, 21L, 32L, RepositoryFormat.SWIFT,
+        "acme/library/" + version + "/Package.swift", "swift-manifest", Map.of());
+    when(fixture.repositoryDao.findByName(repository.name())).thenReturn(Optional.of(repository));
+    when(fixture.assetDao.findAssetByPath(repository.id(), manifest.path()))
+        .thenReturn(Optional.of(manifest));
+    when(fixture.assetDao.listAssetsByPrefix(repository.id(), manifest.path() + "/"))
+        .thenReturn(List.of());
+    when(fixture.swiftRegistryDao.tombstoneAndDeleteReleaseState(
+        eq(repository.id()), eq("acme"), eq("library"), eq(version),
+        eq("administrative delete by admin"), any()))
+        .thenReturn(Optional.of(new SwiftRegistryDao.DeletedRelease(
+            21L, List.of(manifest.id()), 9L)));
+    when(fixture.assetDao.findAssetById(manifest.id())).thenReturn(Optional.of(manifest));
+
+    BrowseContentDeleteController.BrowseDeleteResult result = fixture.controller.delete(
+        repository.name(), manifest.path(), null, new MockHttpServletRequest());
+
+    assertEquals(1, result.deletedAssets());
+    verify(fixture.swiftRegistryDao).tombstoneAndDeleteReleaseState(
+        eq(repository.id()), eq("acme"), eq("library"), eq(version),
+        eq("administrative delete by admin"), any());
+  }
+
+  @Test
   void mapsTerraformProviderPublicAliasesBeforeDelete() {
     String base = "v1/providers/acme/demo/1.0.10";
     String filename = "terraform-provider-demo_1.0.10_linux_amd64.zip";
