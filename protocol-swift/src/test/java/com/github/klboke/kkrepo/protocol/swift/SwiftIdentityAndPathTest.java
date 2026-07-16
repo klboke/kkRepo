@@ -47,10 +47,18 @@ class SwiftIdentityAndPathTest {
     assertEquals("mona.linkedlist", releases.identityKey());
     assertNull(releases.version());
 
+    SwiftPath releasesAlias = parser.parse("mona/LinkedList.json");
+    assertEquals(SwiftPath.Kind.RELEASE_LIST, releasesAlias.kind());
+    assertEquals("LinkedList", releasesAlias.name());
+
     SwiftPath metadata = parser.parse("mona/LinkedList/1.2.3-beta.1+build.7");
     assertEquals(SwiftPath.Kind.RELEASE_METADATA, metadata.kind());
     assertEquals("1.2.3-beta.1+build.7", metadata.version());
     assertTrue(metadata.hasReleaseCoordinate());
+
+    SwiftPath metadataAlias = parser.parse("mona/LinkedList/1.2.3.json");
+    assertEquals(SwiftPath.Kind.RELEASE_METADATA, metadataAlias.kind());
+    assertEquals("1.2.3", metadataAlias.version());
 
     assertEquals(
         SwiftPath.Kind.MANIFEST,
@@ -73,8 +81,10 @@ class SwiftIdentityAndPathTest {
         "mona\\other/LinkedList",
         "%252e%252e/LinkedList",
         "mona/%ZZ",
-        "mona/LinkedList.json",
-        "mona/LinkedList/1.0.0.json",
+        "mona/LinkedList.JSON",
+        "mona/LinkedList.json.json",
+        "mona/LinkedList/1.0.0.JSON",
+        "mona/LinkedList/1.0.0.json.json",
         "mona/LinkedList?version=1.0.0",
         "mona/LinkedList/v1.0.0",
         "mona/LinkedList/1.0.0/Package@swift-5.9.swift"

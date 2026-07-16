@@ -85,6 +85,16 @@ class SwiftServiceTest {
     assertTrue(body.contains("\"status\":410"));
     assertTrue(body.contains("administratively deleted"));
     assertTrue(body.contains("https://repo.example/repository/swift/Acme/Demo/2.0.0-beta.1"));
+
+    MavenResponse alias = fixture.service.get(
+        fixture.runtime,
+        "Acme/Demo.json",
+        null,
+        "https://repo.example/repository/swift/",
+        SwiftMediaTypes.VENDOR_JSON,
+        false);
+    assertEquals(200, alias.status());
+    assertEquals(body, responseBody(alias));
   }
 
   @Test
@@ -411,6 +421,16 @@ class SwiftServiceTest {
         metadataJson);
     assertFalse(metadataJson.contains("2026-07-16T00:00:00.123Z"));
     verify(fixture.registry, never()).listRepositoryUrls(1L);
+
+    MavenResponse metadataAlias = fixture.service.get(
+        fixture.runtime,
+        "Acme/Demo/1.2.3.json",
+        null,
+        "https://repo.example/repository/swift/",
+        SwiftMediaTypes.VENDOR_JSON,
+        false);
+    assertEquals(200, metadataAlias.status());
+    assertEquals(metadataJson, responseBody(metadataAlias));
 
     byte[] archiveBytes = new byte[] {1, 2, 3};
     when(fixture.assets.serve(1L, 10L, false)).thenReturn(MavenResponse.ok(
@@ -1037,6 +1057,15 @@ class SwiftServiceTest {
 
   @Test
   void publishPreflightRejectsExistingOrTombstonedCoordinateBeforeMultipartParsing() {
+    Fixture suffixed = fixture();
+    assertThrows(SwiftExceptions.MethodNotAllowed.class, () ->
+        suffixed.service.validatePublishRequest(
+            suffixed.runtime, "Acme/Demo/1.2.3.json", null, SwiftMediaTypes.VENDOR_JSON));
+    verify(suffixed.registry, never()).findTombstone(
+        anyLong(), anyString(), anyString(), anyString());
+    verify(suffixed.registry, never()).findRelease(
+        anyLong(), anyString(), anyString(), anyString());
+
     Fixture existing = fixture();
     when(existing.registry.findRelease(1L, "acme", "demo", "1.2.3"))
         .thenReturn(Optional.of(release(

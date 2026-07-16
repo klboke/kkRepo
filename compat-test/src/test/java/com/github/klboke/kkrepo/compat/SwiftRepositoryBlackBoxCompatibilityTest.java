@@ -931,9 +931,15 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
 
     Exchange referenceListAlias = get(reference, packagePath + ".json", JSON_ACCEPT);
     Exchange candidateListAlias = get(candidate, packagePath + ".json", JSON_ACCEPT);
-    assertEquals(referenceListAlias.status(), candidateListAlias.status(),
-        "release list .json non-protocol path status");
-    assertEquals(404, candidateListAlias.status(), "release list .json must not be an alias");
+    assertTrue(referenceListAlias.status() == 200 || referenceListAlias.status() == 404,
+        "Nexus may omit the spec-permitted release list .json alias");
+    if (referenceListAlias.status() == 200) {
+      assertEquals(json(referenceList), json(referenceListAlias),
+          "Nexus release list .json alias body");
+    }
+    assertEquals(200, candidateListAlias.status(), "candidate release list .json alias status");
+    assertEquals(json(candidateList), json(candidateListAlias),
+        "candidate release list .json alias body");
 
     Exchange referenceMetadata = get(reference, fixture.coordinatePath(), JSON_ACCEPT);
     Exchange candidateMetadata = get(candidate, fixture.coordinatePath(), JSON_ACCEPT);
@@ -950,9 +956,16 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
 
     Exchange referenceMetadataAlias = get(reference, fixture.coordinatePath() + ".json", JSON_ACCEPT);
     Exchange candidateMetadataAlias = get(candidate, fixture.coordinatePath() + ".json", JSON_ACCEPT);
-    assertEquals(referenceMetadataAlias.status(), candidateMetadataAlias.status(),
-        "release metadata .json non-protocol path status");
-    assertEquals(404, candidateMetadataAlias.status(), "release metadata .json must not be an alias");
+    assertTrue(referenceMetadataAlias.status() == 200 || referenceMetadataAlias.status() == 404,
+        "Nexus may omit the spec-permitted release metadata .json alias");
+    if (referenceMetadataAlias.status() == 200) {
+      assertEquals(json(referenceMetadata), json(referenceMetadataAlias),
+          "Nexus release metadata .json alias body");
+    }
+    assertEquals(200, candidateMetadataAlias.status(),
+        "candidate release metadata .json alias status");
+    assertEquals(json(candidateMetadata), json(candidateMetadataAlias),
+        "candidate release metadata .json alias body");
 
     Exchange referenceManifest = get(reference, fixture.manifestPath(), SWIFT_ACCEPT);
     Exchange candidateManifest = get(candidate, fixture.manifestPath(), SWIFT_ACCEPT);
