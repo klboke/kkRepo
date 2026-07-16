@@ -18,6 +18,9 @@ public interface TerraformRegistryDao {
   List<ProviderPlatform> listProviderPlatforms(
       long repositoryId, String namespace, String type, String version);
 
+  List<ProviderPlatform> listProviderPlatformsForProvider(
+      long repositoryId, String namespace, String type);
+
   void publishProvider(ProviderPlatform platform, ProviderState state);
 
   boolean tryAcquirePublishLease(String leaseKey, String owner, Instant expiresAt);

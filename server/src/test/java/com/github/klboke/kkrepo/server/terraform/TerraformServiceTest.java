@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -63,6 +64,7 @@ class TerraformServiceTest {
   private RepositoryRuntimeRegistry runtimes;
   private RawProxyService proxy;
   private HttpRemoteFetcher fetcher;
+  private TerraformMetadataCache metadataCache;
   private TerraformService service;
 
   @BeforeEach
@@ -77,6 +79,7 @@ class TerraformServiceTest {
     runtimes = mock(RepositoryRuntimeRegistry.class);
     proxy = mock(RawProxyService.class);
     fetcher = mock(HttpRemoteFetcher.class);
+    metadataCache = mock(TerraformMetadataCache.class);
     ComponentRecord logicalComponent = new ComponentRecord(
         null, 1L, RepositoryFormat.TERRAFORM, "acme", "logical", "1.0.0",
         "terraform-provider", new byte[32], Map.of(), Instant.now());
@@ -86,7 +89,8 @@ class TerraformServiceTest {
         .thenReturn(Optional.of(logicalComponent));
     service = new TerraformService(
         mapper, assets, inspector, signing, signatureVerifier, registry,
-        new TerraformPublishLeaseManager(registry), components, runtimes, proxy, fetcher);
+        new TerraformPublishLeaseManager(registry), components, runtimes, proxy, fetcher,
+        metadataCache);
   }
 
   @Test
@@ -135,7 +139,7 @@ class TerraformServiceTest {
     assertFalse(Files.exists(buffered));
     verify(registry).tryAcquirePublishLease(anyString(), anyString(), any());
     verify(registry).releasePublishLease(anyString(), anyString());
-    verify(assets).storeWithComponent(
+    verify(assets).storeWithComponentFile(
         eq(hosted), eq("v1/modules/acme/network/aws/3.0.0/new.zip"),
         any(), eq("application/octet-stream"), any(), eq("alice"), eq("127.0.0.1"), any());
 
@@ -198,7 +202,7 @@ class TerraformServiceTest {
 
     assertFalse(Files.exists(buffered));
     verify(registry).releasePublishLease(anyString(), anyString());
-    verify(assets, never()).storeWithComponent(
+    verify(assets, never()).storeWithComponentFile(
         eq(hosted), anyString(), any(), anyString(), any(), any(), any(), any());
   }
 
@@ -221,7 +225,7 @@ class TerraformServiceTest {
 
     assertEquals(201, response.status());
     assertFalse(Files.exists(buffered));
-    verify(assets).storeWithComponent(
+    verify(assets).storeWithComponentFile(
         eq(denied), eq(upload.rawPath()), any(), eq("application/zip"), any(),
         eq("nexus-migration"), eq(null), any());
     verify(registry).releasePublishLease(anyString(), anyString());
@@ -259,10 +263,10 @@ class TerraformServiceTest {
     assertFalse(Files.exists(bufferedProvider));
     @SuppressWarnings("unchecked")
     ArgumentCaptor<Map<String, Object>> attributes = ArgumentCaptor.forClass(Map.class);
-    verify(assets).storeWithComponent(
+    verify(assets).storeWithComponentFile(
         eq(proxyRuntime), eq(module.rawPath()), any(), eq("application/zip"),
         attributes.capture(), eq("nexus-migration"), eq("10.0.0.4"), any());
-    verify(assets).storeWithComponent(
+    verify(assets).storeWithComponentFile(
         eq(proxyRuntime), eq(provider.rawPath()), any(), eq("application/octet-stream"),
         attributes.capture(), eq("nexus-migration"), eq(null), any());
     assertEquals("proxy-module-archive", attributes.getAllValues().get(0).get("terraformKind"));
@@ -271,6 +275,7 @@ class TerraformServiceTest {
     assertEquals("linux", attributes.getAllValues().get(1).get("os"));
     assertEquals("amd64", attributes.getAllValues().get(1).get("arch"));
     verify(registry, times(2)).releasePublishLease(anyString(), anyString());
+    verify(metadataCache, times(2)).invalidateMemberAfterCommit(proxyRuntime.id());
     verify(components, never()).publishProvider(any(), any(), any(), any());
     verify(signing, never()).active(any());
   }
@@ -294,7 +299,7 @@ class TerraformServiceTest {
         "application/zip", "nexus-migration", null).status());
 
     assertFalse(Files.exists(buffered));
-    verify(assets, never()).storeWithComponent(
+    verify(assets, never()).storeWithComponentFile(
         eq(proxyRuntime), anyString(), any(), anyString(), any(), any(), any(), any());
     verify(registry).releasePublishLease(anyString(), anyString());
   }
@@ -343,10 +348,13 @@ class TerraformServiceTest {
         .thenReturn(Optional.of(state));
     when(registry.listProviderPlatforms(hosted.id(), "acme", "cloud", "1.2.3"))
         .thenReturn(List.of(platform, deleted));
+    when(registry.listProviderPlatformsForProvider(hosted.id(), "acme", "cloud"))
+        .thenReturn(List.of(platform, deleted));
     when(registry.findSigningKey(hosted.id(), 2)).thenReturn(Optional.of(
         new TerraformRegistryDao.SigningKey(hosted.id(), 2, "0011223344556677",
             "encrypted", "PUBLIC KEY", Instant.now())));
     when(assets.find(hosted, archivePath)).thenReturn(Optional.of(archive));
+    when(assets.findExistingPaths(eq(hosted), any())).thenReturn(Set.of(archivePath));
 
     Map<String, Object> versions = json(service.get(
         hosted, paths.parse("v1/providers/acme/cloud/versions"), BASE, false));
@@ -454,7 +462,7 @@ class TerraformServiceTest {
         eq(hosted), any(TerraformRegistryDao.ProviderPlatform.class), state.capture(), any());
     assertEquals(1, state.getValue().revision());
     assertEquals(4, state.getValue().signingKeyRevision());
-    verify(assets).storeUnindexed(
+    verify(assets).storeUnindexedFile(
         eq(hosted), eq(archivePath), any(), eq("application/zip"), any(),
         eq("alice"), eq("127.0.0.1"));
     verify(assets, atLeastOnce()).storeBytes(eq(hosted), anyString(), any(), anyString(), any());
@@ -604,7 +612,7 @@ class TerraformServiceTest {
         "attachment; filename=\"" + filename + "\"", "alice", null));
 
     assertFalse(Files.exists(buffered));
-    verify(assets, never()).storeUnindexed(
+    verify(assets, never()).storeUnindexedFile(
         eq(allowOnce), anyString(), any(), anyString(), any(), any(), any());
     verify(components, never()).publishProvider(any(), any(), any(), any());
   }
@@ -996,14 +1004,12 @@ class TerraformServiceTest {
         .thenReturn(Optional.of(firstState));
     when(registry.findProviderState(second.id(), "acme", "cloud", "1.2.3"))
         .thenReturn(Optional.of(secondState));
-    when(registry.listProviderPlatforms(first.id(), "acme", "cloud", "1.2.3"))
+    when(registry.listProviderPlatformsForProvider(first.id(), "acme", "cloud"))
         .thenReturn(List.of(providerPlatform(first, linuxPath, "linux", "amd64")));
-    when(registry.listProviderPlatforms(second.id(), "acme", "cloud", "1.2.3"))
+    when(registry.listProviderPlatformsForProvider(second.id(), "acme", "cloud"))
         .thenReturn(List.of(providerPlatform(second, darwinPath, "darwin", "arm64")));
-    when(assets.find(first, linuxPath)).thenReturn(Optional.of(
-        asset(53, first, 63L, linuxPath)));
-    when(assets.find(second, darwinPath)).thenReturn(Optional.of(
-        asset(54, second, 64L, darwinPath)));
+    when(assets.findExistingPaths(eq(first), any())).thenReturn(Set.of(linuxPath));
+    when(assets.findExistingPaths(eq(second), any())).thenReturn(Set.of(darwinPath));
 
     Map<String, Object> merged = json(service.get(
         group, paths.parse("v1/providers/acme/cloud/versions"), BASE, false));
@@ -1107,6 +1113,34 @@ class TerraformServiceTest {
         group, paths.parse("v1/modules/acme/network/aws/versions"), BASE, false));
 
     assertTrue(merged.toString().contains("1.2.3"));
+  }
+
+  @Test
+  void doesNotCachePartialGroupVersionsWhileAProxyMemberIsUnavailable() throws Exception {
+    RepositoryRuntime healthy = runtime(
+        90, "terraform-hosted", RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime unavailable = runtime(
+        91, "terraform-proxy", RepositoryType.PROXY, "https://registry.example", List.of());
+    RepositoryRuntime group = runtime(
+        92, "terraform-group", RepositoryType.GROUP, null, List.of(healthy, unavailable));
+    when(assets.list(healthy, "v1/modules/acme/network/aws/"))
+        .thenReturn(List.of(asset(
+            90, healthy, 91L, "v1/modules/acme/network/aws/1.2.3/network.zip")));
+    when(proxy.getMetadataFromUrlUnindexed(eq(unavailable), anyString(), anyString(), anyBoolean()))
+        .thenAnswer(invocation -> {
+          String local = invocation.getArgument(1);
+          if (local.startsWith(".terraform/upstream/discovery-")) {
+            return response(mapper.writeValueAsBytes(Map.of("modules.v1", "/v1/modules/")),
+                "application/json");
+          }
+          throw new MavenExceptions.BadUpstreamException("registry unavailable");
+        });
+
+    Map<String, Object> merged = json(service.get(
+        group, paths.parse("v1/modules/acme/network/aws/versions"), BASE, false));
+
+    assertTrue(merged.toString().contains("1.2.3"));
+    verify(metadataCache, never()).putGroup(any(), any(), anyString(), anyInt(), any(), any());
   }
 
   @Test

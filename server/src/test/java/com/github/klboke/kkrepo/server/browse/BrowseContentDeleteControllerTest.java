@@ -24,6 +24,8 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
+import com.github.klboke.kkrepo.server.cache.NexusCacheType;
+import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.npm.NpmGroupPackumentCache;
 import com.github.klboke.kkrepo.server.pypi.PypiGroupSimpleIndexCache;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
@@ -143,6 +145,24 @@ class BrowseContentDeleteControllerTest {
     verify(fixture.groupMemberAssetCache).invalidateMemberAfterCommit(1L);
   }
 
+  @Test
+  void invalidatesTerraformMetadataAfterDelete() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord repository =
+        repository(1L, "terraform", RepositoryFormat.TERRAFORM, RepositoryType.HOSTED);
+    AssetRecord archive = asset(
+        11L, null, 31L, RepositoryFormat.TERRAFORM,
+        "v1/modules/acme/network/aws/1.0.0/network.zip", "module-archive", Map.of());
+    when(fixture.repositoryDao.findByName("terraform")).thenReturn(Optional.of(repository));
+    when(fixture.assetDao.findAssetByPath(1L, archive.path())).thenReturn(Optional.of(archive));
+    when(fixture.assetDao.listAssetsByPrefix(1L, archive.path() + "/")).thenReturn(List.of());
+
+    fixture.controller.delete(
+        "terraform", archive.path(), null, new MockHttpServletRequest());
+
+    verify(fixture.cacheController).invalidateAfterCommit(1L, NexusCacheType.METADATA);
+  }
+
   private static void assertStatus(HttpStatus status, Runnable invocation) {
     ResponseStatusException error = assertThrows(ResponseStatusException.class, invocation::run);
     assertEquals(status, error.getStatusCode());
@@ -161,6 +181,7 @@ class BrowseContentDeleteControllerTest {
     NpmGroupPackumentCache npmCache = mock(NpmGroupPackumentCache.class);
     PypiGroupSimpleIndexCache pypiCache = mock(PypiGroupSimpleIndexCache.class);
     GroupMemberAssetCache groupMemberAssetCache = mock(GroupMemberAssetCache.class);
+    NexusLikeCacheController cacheController = mock(NexusLikeCacheController.class);
     PermissionSubject permissionSubject = mock(PermissionSubject.class);
     AuthenticatedSubject subject =
         new AuthenticatedSubject("test", "admin", "local", null, permissionSubject);
@@ -170,10 +191,10 @@ class BrowseContentDeleteControllerTest {
     BrowseContentDeleteController controller = new BrowseContentDeleteController(
         repositoryDao, assetDao, browseNodeDao, componentDao, metadataRebuildDao,
         indexRebuildDao, authentication, security, assetCache, npmCache, pypiCache,
-        groupMemberAssetCache);
+        groupMemberAssetCache, cacheController);
     return new Fixture(
         repositoryDao, assetDao, browseNodeDao, componentDao, metadataRebuildDao,
-        indexRebuildDao, npmCache, pypiCache, groupMemberAssetCache, controller);
+        indexRebuildDao, npmCache, pypiCache, groupMemberAssetCache, cacheController, controller);
   }
 
   private static RepositoryRecord repository(
@@ -207,6 +228,7 @@ class BrowseContentDeleteControllerTest {
       NpmGroupPackumentCache npmCache,
       PypiGroupSimpleIndexCache pypiCache,
       GroupMemberAssetCache groupMemberAssetCache,
+      NexusLikeCacheController cacheController,
       BrowseContentDeleteController controller) {
   }
 }

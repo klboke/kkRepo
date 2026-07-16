@@ -13,6 +13,8 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
+import com.github.klboke.kkrepo.server.cache.NexusCacheType;
+import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.npm.NpmGroupPackumentCache;
 import com.github.klboke.kkrepo.server.pypi.PypiGroupSimpleIndexCache;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
@@ -52,6 +54,7 @@ public class BrowseContentDeleteController {
   private final NpmGroupPackumentCache npmGroupPackumentCache;
   private final PypiGroupSimpleIndexCache pypiGroupSimpleIndexCache;
   private final GroupMemberAssetCache groupMemberAssetCache;
+  private final NexusLikeCacheController cacheController;
 
   public BrowseContentDeleteController(
       RepositoryDao repositoryDao,
@@ -65,7 +68,8 @@ public class BrowseContentDeleteController {
       AssetMetadataCache assetMetadataCache,
       NpmGroupPackumentCache npmGroupPackumentCache,
       PypiGroupSimpleIndexCache pypiGroupSimpleIndexCache,
-      GroupMemberAssetCache groupMemberAssetCache) {
+      GroupMemberAssetCache groupMemberAssetCache,
+      NexusLikeCacheController cacheController) {
     this.repositoryDao = repositoryDao;
     this.assetDao = assetDao;
     this.browseNodeDao = browseNodeDao;
@@ -78,6 +82,7 @@ public class BrowseContentDeleteController {
     this.npmGroupPackumentCache = npmGroupPackumentCache;
     this.pypiGroupSimpleIndexCache = pypiGroupSimpleIndexCache;
     this.groupMemberAssetCache = groupMemberAssetCache;
+    this.cacheController = cacheController;
   }
 
   @DeleteMapping("/{repository}")
@@ -146,6 +151,9 @@ public class BrowseContentDeleteController {
     if ((target.format() == RepositoryFormat.NPM || target.format() == RepositoryFormat.PYPI)
         && groupMemberAssetCache != null) {
       groupMemberAssetCache.invalidateMemberAfterCommit(target.id());
+    }
+    if (target.format() == RepositoryFormat.TERRAFORM && cacheController != null) {
+      cacheController.invalidateAfterCommit(target.id(), NexusCacheType.METADATA);
     }
     return new BrowseDeleteResult(requested.name(), target.name(), publicPath, assets.size());
   }

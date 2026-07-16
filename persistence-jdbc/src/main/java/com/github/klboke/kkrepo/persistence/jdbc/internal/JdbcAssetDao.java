@@ -5,6 +5,7 @@ import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRow
 import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRows.nullableTimestamp;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao.BlobReconcileWindow;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao.HelmIndexRow;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao.PypiProjectIndexRow;
@@ -252,6 +253,35 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         ORDER BY a.id
         LIMIT 1
         """, assetRowMapper, repositoryId, sha256).stream().findFirst();
+  }
+
+  @Override
+  public Set<String> findExistingAssetPaths(long repositoryId, Collection<String> paths) {
+    if (paths == null || paths.isEmpty()) {
+      return Set.of();
+    }
+    List<String> unique = paths.stream()
+        .filter(java.util.Objects::nonNull)
+        .distinct()
+        .toList();
+    if (unique.isEmpty()) {
+      return Set.of();
+    }
+    Set<String> existing = new LinkedHashSet<>();
+    for (int offset = 0; offset < unique.size(); offset += 500) {
+      List<String> batch = unique.subList(offset, Math.min(unique.size(), offset + 500));
+      String placeholders = String.join(",", Collections.nCopies(batch.size(), "?"));
+      Object[] args = new Object[batch.size() + 1];
+      args[0] = repositoryId;
+      for (int i = 0; i < batch.size(); i++) {
+        args[i + 1] = PersistenceHashes.pathHash(batch.get(i));
+      }
+      existing.addAll(jdbcTemplate.queryForList(
+          "SELECT path FROM asset WHERE repository_id = ? AND path_hash IN (" + placeholders + ")",
+          String.class, args));
+    }
+    existing.retainAll(new java.util.HashSet<>(unique));
+    return existing;
   }
 
   private Optional<Long> lockAssetIdByPathHash(long repositoryId, byte[] pathHash) {

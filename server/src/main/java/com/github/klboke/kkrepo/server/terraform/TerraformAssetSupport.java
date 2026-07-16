@@ -13,6 +13,7 @@ import com.github.klboke.kkrepo.server.raw.RawHostedService;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Path;
 import java.util.Map;
 import java.util.Optional;
 import org.springframework.stereotype.Component;
@@ -52,6 +53,30 @@ final class TerraformAssetSupport {
         runtime, path, body, contentType, attributes, actor, ip, component);
   }
 
+  void storeUnindexedFile(
+      RepositoryRuntime runtime,
+      String path,
+      Path file,
+      String contentType,
+      Map<String, ?> attributes,
+      String actor,
+      String ip) {
+    hosted.putInternalUnindexedFile(runtime, path, file, contentType, attributes, actor, ip);
+  }
+
+  void storeWithComponentFile(
+      RepositoryRuntime runtime,
+      String path,
+      Path file,
+      String contentType,
+      Map<String, ?> attributes,
+      String actor,
+      String ip,
+      ComponentRecord component) {
+    hosted.putInternalWithComponentFile(
+        runtime, path, file, contentType, attributes, actor, ip, component);
+  }
+
   void storeBytes(RepositoryRuntime runtime, String path, byte[] body, String contentType,
       Map<String, ?> attributes) {
     storeUnindexed(
@@ -68,6 +93,10 @@ final class TerraformAssetSupport {
 
   java.util.List<AssetRecord> list(RepositoryRuntime runtime, String prefix) {
     return assets.listAssetsByPrefix(runtime.id(), prefix);
+  }
+
+  java.util.Set<String> findExistingPaths(RepositoryRuntime runtime, java.util.Collection<String> paths) {
+    return assets.findExistingAssetPaths(runtime.id(), paths);
   }
 
   AssetBlobRecord blob(AssetRecord asset) {

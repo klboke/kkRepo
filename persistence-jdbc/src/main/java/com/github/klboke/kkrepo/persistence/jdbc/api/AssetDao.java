@@ -4,10 +4,12 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import java.time.Instant;
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.Set;
 
 public interface AssetDao {
   long insertBlob(AssetBlobRecord record);
@@ -37,6 +39,23 @@ public interface AssetDao {
   Optional<AssetRecord> findAssetById(long assetId);
 
   Optional<AssetRecord> findDockerBlobAssetBySha256(long repositoryId, String sha256);
+
+  /**
+   * Returns existing paths in one backend-specific batch when available. The default keeps
+   * lightweight test adapters source-compatible.
+   */
+  default Set<String> findExistingAssetPaths(long repositoryId, Collection<String> paths) {
+    if (paths == null || paths.isEmpty()) {
+      return Set.of();
+    }
+    Set<String> existing = new LinkedHashSet<>();
+    for (String path : paths) {
+      if (path != null && findAssetByPath(repositoryId, path).isPresent()) {
+        existing.add(path);
+      }
+    }
+    return existing;
+  }
 
   Map<Long, AssetRecord> findAssetsByPathHash(Collection<Long> repositoryIds, byte[] pathHash);
 

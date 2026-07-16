@@ -84,6 +84,28 @@ public class JdbcTerraformRegistryDao implements TerraformRegistryDao {
   }
 
   @Override
+  public List<ProviderPlatform> listProviderPlatformsForProvider(
+      long repositoryId, String namespace, String type) {
+    return jdbc.query("""
+        SELECT p.*
+        FROM terraform_provider_platform p
+        JOIN terraform_provider_signing_state s
+          ON s.repository_id = p.repository_id
+         AND s.namespace = p.namespace
+         AND s.provider_type = p.provider_type
+         AND s.version = p.version
+        WHERE p.repository_id = ? AND p.namespace = ? AND p.provider_type = ?
+          AND p.status = 'READY'
+        ORDER BY p.version, p.os, p.arch
+        """, (rs, row) -> new ProviderPlatform(
+        rs.getLong("repository_id"), rs.getString("namespace"), rs.getString("provider_type"),
+        rs.getString("version"), rs.getString("os"), rs.getString("arch"),
+        rs.getString("filename"), rs.getString("asset_path"), rs.getString("sha256"),
+        rs.getString("protocols"), rs.getLong("revision"), nullableInstant(rs, "updated_at")),
+        repositoryId, namespace, type);
+  }
+
+  @Override
   @org.springframework.transaction.annotation.Transactional
   public void publishProvider(ProviderPlatform platform, ProviderState state) {
     int updated = jdbc.update("""

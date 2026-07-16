@@ -56,6 +56,7 @@ public class TerraformService {
   private final RepositoryRuntimeRegistry runtimes;
   private final RawProxyService proxy;
   private final HttpRemoteFetcher fetcher;
+  private final TerraformMetadataCache metadataCache;
   private final TerraformPathParser paths = new TerraformPathParser();
 
   public TerraformService(
@@ -69,7 +70,8 @@ public class TerraformService {
       TerraformComponentService components,
       RepositoryRuntimeRegistry runtimes,
       RawProxyService proxy,
-      HttpRemoteFetcher fetcher) {
+      HttpRemoteFetcher fetcher,
+      TerraformMetadataCache metadataCache) {
     this.mapper = mapper;
     this.assets = assets;
     this.inspector = inspector;
@@ -81,6 +83,7 @@ public class TerraformService {
     this.runtimes = runtimes;
     this.proxy = proxy;
     this.fetcher = fetcher;
+    this.metadataCache = metadataCache;
   }
 
   public MavenResponse get(
@@ -193,23 +196,20 @@ public class TerraformService {
         attributes.put("os", path.os());
         attributes.put("arch", path.arch());
       }
-      try (InputStream in = Files.newInputStream(buffered)) {
-        assets.storeWithComponent(
-            runtime,
-            path.rawPath(),
-            in,
-            contentType == null ? OCTET : contentType,
-            attributes,
-            actor,
-            ip,
-            path.module()
-                ? components.moduleComponent(runtime, path, Instant.now())
-                : components.providerComponent(runtime, path, Instant.now()));
-      }
+      assets.storeWithComponentFile(
+          runtime,
+          path.rawPath(),
+          buffered,
+          contentType == null ? OCTET : contentType,
+          attributes,
+          actor,
+          ip,
+          path.module()
+              ? components.moduleComponent(runtime, path, Instant.now())
+              : components.providerComponent(runtime, path, Instant.now()));
       lease.assertHeld();
+      metadataCache.invalidateMemberAfterCommit(runtime.id());
       return MavenResponse.created();
-    } catch (IOException e) {
-      throw new IllegalStateException("Failed restoring Terraform proxy cache archive", e);
     } finally {
       try {
         Files.deleteIfExists(buffered);
@@ -280,19 +280,24 @@ public class TerraformService {
   }
 
   private Map<String, Object> providerVersions(RepositoryRuntime runtime, TerraformPath request) {
-    String prefix = "v1/providers/" + request.namespace() + "/" + request.name() + "/";
-    Set<String> versions = new LinkedHashSet<>();
-    for (AssetRecord asset : assets.list(runtime, prefix)) {
-      TerraformPath parsed = paths.parse(asset.path());
-      if (parsed.kind() == TerraformPath.Kind.PROVIDER_ARCHIVE
-          && registry.findProviderState(runtime.id(), request.namespace(), request.name(), parsed.version()).isPresent()) {
-        versions.add(parsed.version());
+    List<TerraformRegistryDao.ProviderPlatform> candidates =
+        registry.listProviderPlatformsForProvider(
+            runtime.id(), request.namespace(), request.name());
+    Set<String> existingPaths = assets.findExistingPaths(
+        runtime, candidates.stream()
+            .map(TerraformRegistryDao.ProviderPlatform::assetPath)
+            .toList());
+    Map<String, List<TerraformRegistryDao.ProviderPlatform>> platformsByVersion = new LinkedHashMap<>();
+    for (TerraformRegistryDao.ProviderPlatform candidate : candidates) {
+      if (existingPaths.contains(candidate.assetPath())) {
+        platformsByVersion.computeIfAbsent(candidate.version(), ignored -> new ArrayList<>())
+            .add(candidate);
       }
     }
     List<Map<String, Object>> values = new ArrayList<>();
-    for (String version : TerraformVersions.descending(versions)) {
-      List<TerraformRegistryDao.ProviderPlatform> publishedPlatforms = publishedProviderPlatforms(
-          runtime, request.namespace(), request.name(), version);
+    for (String version : TerraformVersions.descending(platformsByVersion.keySet())) {
+      List<TerraformRegistryDao.ProviderPlatform> publishedPlatforms =
+          platformsByVersion.getOrDefault(version, List.of());
       List<Map<String, Object>> platforms = publishedPlatforms.stream()
           .map(row -> Map.<String, Object>of("os", row.os(), "arch", row.arch()))
           .toList();
@@ -421,19 +426,16 @@ public class TerraformService {
         leaseKey, java.time.Duration.ofMinutes(5), java.time.Duration.ofSeconds(30))) {
       enforceModuleWrite(runtime, path, migration);
       lease.assertHeld();
-      try (InputStream in = Files.newInputStream(buffered)) {
-        assets.storeWithComponent(
-            runtime, path.rawPath(), in, contentType == null ? OCTET : contentType,
-            Map.of(
-                "terraformKind", "module-archive",
-                "namespace", path.namespace(), "name", path.name(), "system", path.system(),
-                "version", path.version(), "sha256Validated", true), actor, ip,
-            components.moduleComponent(runtime, path, Instant.now()));
-      }
+      assets.storeWithComponentFile(
+          runtime, path.rawPath(), buffered, contentType == null ? OCTET : contentType,
+          Map.of(
+              "terraformKind", "module-archive",
+              "namespace", path.namespace(), "name", path.name(), "system", path.system(),
+              "version", path.version(), "sha256Validated", true), actor, ip,
+          components.moduleComponent(runtime, path, Instant.now()));
       lease.assertHeld();
+      metadataCache.invalidateMemberAfterCommit(runtime.id());
       return MavenResponse.created();
-    } catch (IOException e) {
-      throw new IllegalStateException("Failed storing Terraform module archive", e);
     } finally {
       try { Files.deleteIfExists(buffered); } catch (IOException ignored) {}
     }
@@ -489,13 +491,13 @@ public class TerraformService {
       // Always validate and persist the incoming archive. A prior publication attempt may have
       // failed after storing an orphaned STAGING asset but before committing the platform row;
       // reusing that blob would publish stale content instead of the operator's retry.
-      try (InputStream in = Files.newInputStream(buffered)) {
-        assets.storeUnindexed(runtime, assetPath, in, contentType == null ? OCTET : contentType,
-            Map.of(
-                "terraformKind", "provider-archive", "namespace", path.namespace(), "type", path.name(),
-                "version", path.version(), "os", path.os(), "arch", path.arch(),
-                "protocols", protocolList(protocols), "publishState", "STAGING", "revision", revision), actor, ip);
-      }
+      assets.storeUnindexedFile(
+          runtime, assetPath, buffered, contentType == null ? OCTET : contentType,
+          Map.of(
+              "terraformKind", "provider-archive", "namespace", path.namespace(), "type", path.name(),
+              "version", path.version(), "os", path.os(), "arch", path.arch(),
+              "protocols", protocolList(protocols), "publishState", "STAGING", "revision", revision),
+          actor, ip);
       AssetRecord stored = assets.find(runtime, assetPath).orElseThrow(() -> notFound(assetPath));
       AssetBlobRecord blob = assets.blob(stored);
       if (blob == null || blob.sha256() == null) throw new IllegalStateException("Provider archive digest is missing");
@@ -529,9 +531,8 @@ public class TerraformService {
       activePaths.add(signaturePath);
       lease.assertHeld();
       components.publishProvider(runtime, published, state, activePaths);
+      metadataCache.invalidateMemberAfterCommit(runtime.id());
       return MavenResponse.created();
-    } catch (IOException e) {
-      throw new IllegalStateException("Failed storing Terraform provider archive", e);
     } finally {
       try { Files.deleteIfExists(buffered); } catch (IOException ignored) {}
     }
@@ -610,6 +611,21 @@ public class TerraformService {
   private MavenResponse proxyProviderDownload(
       RepositoryRuntime runtime, TerraformPath path, RequestUrls urls, boolean headOnly) {
     String remote = remoteUrl(runtime, path);
+    String cacheIdentity = path.rawPath() + "\0" + remote;
+    int metadataMaxAge = runtime.metadataMaxAgeMinutesOrDefault();
+    Optional<TerraformMetadataCache.ProviderSnapshot> cached =
+        metadataCache.findProvider(runtime, cacheIdentity, metadataMaxAge, Instant.now());
+    if (cached.isPresent()) {
+      TerraformMetadataCache.ProviderSnapshot snapshot = cached.orElseThrow();
+      return json(
+          rewrittenProviderMetadata(
+              snapshot.body(),
+              snapshot.localDownload(),
+              snapshot.localSums(),
+              snapshot.localSignature(),
+              urls),
+          headOnly);
+    }
     String cachePath = ".terraform/upstream/" + sha256(remote) + ".json";
     Map<String, Object> body = readJson(responseBytes(
         proxy.getMetadataFromUrlUnindexed(runtime, cachePath, remote, false)));
@@ -642,11 +658,24 @@ public class TerraformService {
     // independently while clients are still using the cached provider download response.
     storeRoute(runtime, localSums, sums, sha256(shasumsBytes));
     storeRoute(runtime, localSignature, signature, sha256(signatureBytes));
+    metadataCache.putProvider(
+        runtime, cacheIdentity, metadataMaxAge, Instant.now(), body,
+        localDownload, localSums, localSignature);
+    return json(
+        rewrittenProviderMetadata(body, localDownload, localSums, localSignature, urls), headOnly);
+  }
+
+  private Map<String, Object> rewrittenProviderMetadata(
+      Map<String, Object> body,
+      String localDownload,
+      String localSums,
+      String localSignature,
+      RequestUrls urls) {
     Map<String, Object> rewritten = new LinkedHashMap<>(body);
     rewritten.put("download_url", publicUrl(urls, localDownload));
     rewritten.put("shasums_url", publicUrl(urls, localSums));
     rewritten.put("shasums_signature_url", publicUrl(urls, localSignature));
-    return json(rewritten, headOnly);
+    return rewritten;
   }
 
   @SuppressWarnings("unchecked")
@@ -757,9 +786,17 @@ public class TerraformService {
   @SuppressWarnings("unchecked")
   private MavenResponse mergeGroupVersions(
       RepositoryRuntime group, TerraformPath path, RequestUrls urls, boolean headOnly) {
+    List<RepositoryRuntime> members = group.members() == null ? List.of() : group.members();
+    int metadataMaxAge = group.effectiveMetadataMaxAgeMinutesOrDefault();
+    Optional<TerraformMetadataCache.GroupSnapshot> cached =
+        metadataCache.findGroup(group, members, path.rawPath(), metadataMaxAge, Instant.now());
+    if (cached.isPresent()) {
+      return json(cached.orElseThrow().body(), headOnly);
+    }
+
     Map<String, Map<String, Object>> versions = new LinkedHashMap<>();
     MavenExceptions.BadUpstreamException lastUpstreamFailure = null;
-    for (RepositoryRuntime member : group.members()) {
+    for (RepositoryRuntime member : members) {
       try {
         Map<String, Object> body = readJson(responseBytes(get(member, path, urls, false)));
         if (path.kind() == TerraformPath.Kind.MODULE_VERSIONS) {
@@ -792,10 +829,14 @@ public class TerraformService {
     if (versions.isEmpty()) throw notFound(path.rawPath());
     List<Map<String, Object>> sorted = TerraformVersions.descending(versions.keySet()).stream()
         .map(versions::get).toList();
-    return path.kind() == TerraformPath.Kind.MODULE_VERSIONS
-        ? json(Map.of("modules", List.of(Map.of(
-            "source", path.namespace() + "/" + path.name() + "/" + path.system(), "versions", sorted))), headOnly)
-        : json(providerVersionsDocument(path, sorted), headOnly);
+    Map<String, Object> body = path.kind() == TerraformPath.Kind.MODULE_VERSIONS
+        ? Map.of("modules", List.of(Map.of(
+            "source", path.namespace() + "/" + path.name() + "/" + path.system(), "versions", sorted)))
+        : providerVersionsDocument(path, sorted);
+    if (lastUpstreamFailure == null) {
+      metadataCache.putGroup(group, members, path.rawPath(), metadataMaxAge, Instant.now(), body);
+    }
+    return json(body, headOnly);
   }
 
   @SuppressWarnings("unchecked")

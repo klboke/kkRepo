@@ -126,6 +126,34 @@ class RawAssetWriter {
         keepResponseFile);
   }
 
+  Stored writeFile(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      String path,
+      Path file,
+      String contentTypeHint,
+      Map<String, ?> extraBlobAttributes,
+      String createdBy,
+      String createdByIp,
+      ComponentRecord component) {
+    DigestedUpload upload = uploadFileWithDigests(
+        runtime, storage, blobStoreId, path, file, extraBlobAttributes);
+    try {
+      Stored stored = executePersist(
+          "Persist raw asset " + runtime.name() + "/" + path,
+          () -> persist(runtime, storage, blobStoreId, path, upload, contentTypeHint,
+              extraBlobAttributes, createdBy, createdByIp,
+              component == null ? ComponentBinding.none() : ComponentBinding.explicit(component),
+              null));
+      cleanupUnusedUploadedBlob(storage, blobStoreId, upload, stored.blob());
+      return stored;
+    } catch (RuntimeException e) {
+      cleanupUploadedBlob(storage, blobStoreId, upload);
+      throw e;
+    }
+  }
+
   private Stored write(
       RepositoryRuntime runtime,
       BlobStorage storage,
@@ -428,6 +456,39 @@ class RawAssetWriter {
     }
   }
 
+  private DigestedUpload uploadFileWithDigests(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      String path,
+      Path file,
+      Map<String, ?> extraBlobAttributes) {
+    try {
+      MessageDigest md5 = digest("MD5");
+      MessageDigest sha1 = digest("SHA-1");
+      MessageDigest sha256 = digest("SHA-256");
+      MessageDigest sha512 = digest("SHA-512");
+      long size;
+      try (InputStream in = Files.newInputStream(file)) {
+        size = streamWithDigests(in, null, md5, sha1, sha256, sha512);
+      }
+      Digests digests = new Digests(
+          hex(md5.digest()), hex(sha1.digest()), hex(sha256.digest()), hex(sha512.digest()), size);
+      Optional<AssetBlobRecord> reusable =
+          precheckedReusableBlob(blobStoreId, digests.sha256(), digests.size(), extraBlobAttributes);
+      if (reusable.isPresent()) {
+        AssetBlobRecord blob = reusable.get();
+        return new DigestedUpload(
+            BlobReferenceCodec.reference(blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size()),
+            digests, null, false);
+      }
+      BlobReference ref = storage.putFile(runtime.name(), path, file, digests.sha256());
+      return new DigestedUpload(ref, digests, null, true);
+    } catch (IOException e) {
+      throw new java.io.UncheckedIOException("Failed to digest raw file " + path, e);
+    }
+  }
+
   private void cleanupUploadedBlob(BlobStorage storage, long blobStoreId, DigestedUpload upload) {
     if (upload == null || !upload.uploaded()) {
       return;
@@ -488,7 +549,9 @@ class RawAssetWriter {
     int n;
     while ((n = in.read(buf)) > 0) {
       for (MessageDigest d : digests) d.update(buf, 0, n);
-      out.write(buf, 0, n);
+      if (out != null) {
+        out.write(buf, 0, n);
+      }
       total += n;
     }
     return total;

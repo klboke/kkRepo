@@ -132,6 +132,8 @@ public abstract class PersistenceApiContract {
             1, now));
     assertEquals(1, registry.listProviderPlatforms(
         repositoryId, "kkrepo", "fixture", "1.2.3").size());
+    assertEquals(1, registry.listProviderPlatformsForProvider(
+        repositoryId, "kkrepo", "fixture").size());
     assertEquals(1, registry.findProviderState(
         repositoryId, "kkrepo", "fixture", "1.2.3").orElseThrow().revision());
 
@@ -333,6 +335,26 @@ public abstract class PersistenceApiContract {
     List<Long> assetIds = invokeConcurrently(assetWrites, 5);
     assertEquals(1, new HashSet<>(assetIds).size());
     assertEquals(path, stores().assets().findAssetById(assetIds.getFirst()).orElseThrow().path());
+  }
+
+  @Test
+  void batchedAssetPathLookupUsesExactProtocolPaths() {
+    long blobStoreId = stores().blobStores().insert(blobStore("asset-batch-store"));
+    long repositoryId = insertRepository("asset-batch", RepositoryFormat.TERRAFORM, blobStoreId);
+    long blobId = stores().assets().insertBlob(
+        blob(blobStoreId, "terraform/provider.zip", "terraform-provider-ref"));
+    String existingPath = "v1/providers/acme/cloud/1.2.3/package/linux/provider.zip";
+    stores().assets().insertAsset(new AssetRecord(
+        null, repositoryId, null, blobId, RepositoryFormat.TERRAFORM, existingPath,
+        PersistenceHashes.pathHash(existingPath), "provider.zip", "provider-archive",
+        "application/zip", 42L, null, Instant.parse("2026-07-13T10:00:00Z"), Map.of()));
+
+    assertEquals(
+        Set.of(existingPath),
+        stores().assets().findExistingAssetPaths(
+            repositoryId,
+            List.of(existingPath, "v1/providers/acme/cloud/1.2.3/package/darwin/missing.zip",
+                existingPath)));
   }
 
   @Test

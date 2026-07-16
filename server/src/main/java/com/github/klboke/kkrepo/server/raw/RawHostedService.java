@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.InputStream;
+import java.nio.file.Path;
 import java.util.Map;
 import java.util.Optional;
 import org.springframework.stereotype.Service;
@@ -109,6 +110,37 @@ public class RawHostedService {
     writer.writeWithComponent(
         runtime, blobStorage(runtime), requireBlobStore(runtime), path, body, contentType,
         blobAttributes == null ? Map.of() : blobAttributes, createdBy, createdByIp, component, false);
+    return MavenResponse.created();
+  }
+
+  public MavenResponse putInternalUnindexedFile(
+      RepositoryRuntime runtime,
+      String rawPath,
+      Path file,
+      String contentType,
+      Map<String, ?> blobAttributes,
+      String createdBy,
+      String createdByIp) {
+    String path = normalizeAssetPath(rawPath);
+    writer.writeFile(
+        runtime, blobStorage(runtime), requireBlobStore(runtime), path, file, contentType,
+        blobAttributes == null ? Map.of() : blobAttributes, createdBy, createdByIp, null);
+    return MavenResponse.created();
+  }
+
+  public MavenResponse putInternalWithComponentFile(
+      RepositoryRuntime runtime,
+      String rawPath,
+      Path file,
+      String contentType,
+      Map<String, ?> blobAttributes,
+      String createdBy,
+      String createdByIp,
+      ComponentRecord component) {
+    String path = normalizeAssetPath(rawPath);
+    writer.writeFile(
+        runtime, blobStorage(runtime), requireBlobStore(runtime), path, file, contentType,
+        blobAttributes == null ? Map.of() : blobAttributes, createdBy, createdByIp, component);
     return MavenResponse.created();
   }
 
