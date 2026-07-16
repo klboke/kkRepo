@@ -128,6 +128,16 @@ PY
   rm -f "$current" "$accepted"
 }
 
+configure_nexus_anonymous_access() {
+  log "enabling Nexus anonymous access to match the kkrepo fixture"
+  curl -m 20 -fsS \
+    -u "$NEXUS_AUTH" \
+    -X PUT \
+    -H 'Content-Type: application/json' \
+    --data '{"enabled":true,"userId":"anonymous","realmName":"NexusAuthorizingRealm"}' \
+    "$NEXUS_URL/service/rest/v1/security/anonymous" >/dev/null
+}
+
 nexus_repository_exists() {
   local name="$1"
   curl -m 20 -fsS -u "$NEXUS_AUTH" \
@@ -456,7 +466,7 @@ assert_persisted_upstream_failure_contracts() {
     swift-compat-group "$bad_scope" "$bad_name" 502
 
   seed_proxy_negative_cache "$repository_id_value" \
-    "tags:${SWIFT_PROXY_SCOPE,,}/${SWIFT_PROXY_NAME,,}" 502
+    "tags:$(printf '%s' "$SWIFT_PROXY_SCOPE" | tr '[:upper:]' '[:lower:]')/$(printf '%s' "$SWIFT_PROXY_NAME" | tr '[:upper:]' '[:lower:]')" 502
   curl -m 30 -fsS -u "$KKREPO_AUTH" \
     -H 'Accept: application/vnd.swift.registry.v1+json' \
     "$SECONDARY_URL/repository/swift-compat-group/$SWIFT_PROXY_SCOPE/$SWIFT_PROXY_NAME" \
@@ -574,22 +584,41 @@ verify_minio_objects() {
   fi
 }
 
+start_minio_transfer_container() {
+  local container_name="$1"
+  docker rm -f "$container_name" >/dev/null 2>&1 || true
+  compose run -d --no-deps \
+    --name "$container_name" \
+    --entrypoint /bin/sh minio-init -ec 'sleep 600' >/dev/null
+}
+
+stop_minio_transfer_container() {
+  docker rm -f "$1" >/dev/null 2>&1 || true
+}
+
 backup_and_restore_state() {
   local database_backup="$ARTIFACT_DIR/backup/kkrepo.dump"
   local object_backup="$ARTIFACT_DIR/backup/kkrepo-swift.tar"
+  local object_stage="$WORK_DIR/object-backup-$STAMP"
+  local transfer_container="${COMPOSE_PROJECT_NAME}-swift-object-transfer-$STAMP"
   mkdir -p "$ARTIFACT_DIR/backup"
+  rm -rf "$object_stage"
+  mkdir -p "$object_stage"
 
   log "backing up the shared PostgreSQL metadata and S3-compatible object state"
   compose exec -T postgresql \
     pg_dump -U kkrepo -d kkrepo --format=custom --no-owner --no-acl \
     >"$database_backup"
-  compose run --rm -T --no-deps --entrypoint /bin/sh minio-init -ec '
+  start_minio_transfer_container "$transfer_container"
+  docker exec "$transfer_container" /bin/sh -ec '
     rm -rf /tmp/kkrepo-swift-backup
     mkdir -p /tmp/kkrepo-swift-backup
     mc alias set local http://minio:9000 minioadmin minioadmin >/dev/null
     mc mirror --quiet local/kkrepo-swift /tmp/kkrepo-swift-backup
-    tar -C /tmp/kkrepo-swift-backup -cf - .
-  ' >"$object_backup"
+  ' >/dev/null
+  docker cp "$transfer_container:/tmp/kkrepo-swift-backup/." "$object_stage/"
+  stop_minio_transfer_container "$transfer_container"
+  tar -C "$object_stage" -cf "$object_backup" .
   if [[ ! -s "$database_backup" || ! -s "$object_backup" ]]; then
     log "backup artifacts are empty"
     return 1
@@ -615,13 +644,20 @@ SQL
   compose exec -T postgresql \
     pg_restore -U kkrepo -d kkrepo --exit-on-error --no-owner --no-acl \
     <"$database_backup"
-  compose run --rm -T --no-deps --entrypoint /bin/sh minio-init -ec '
-    rm -rf /tmp/kkrepo-swift-restore
+  rm -rf "$object_stage"
+  mkdir -p "$object_stage"
+  tar -C "$object_stage" -xf "$object_backup"
+  start_minio_transfer_container "$transfer_container"
+  docker exec "$transfer_container" /bin/sh -ec '
     mkdir -p /tmp/kkrepo-swift-restore
-    tar -C /tmp/kkrepo-swift-restore -xf -
+  '
+  docker cp "$object_stage/." "$transfer_container:/tmp/kkrepo-swift-restore/"
+  docker exec "$transfer_container" /bin/sh -ec '
     mc alias set local http://minio:9000 minioadmin minioadmin >/dev/null
     mc mirror --quiet --overwrite /tmp/kkrepo-swift-restore local/kkrepo-swift
-  ' <"$object_backup"
+  ' >/dev/null
+  stop_minio_transfer_container "$transfer_container"
+  rm -rf "$object_stage"
 
   compose start primary secondary
   wait_for_http "restored primary management health" "$PRIMARY_MANAGEMENT_URL/actuator/health"
@@ -645,6 +681,7 @@ wait_for_http "secondary management health" "$SECONDARY_MANAGEMENT_URL/actuator/
 wait_for_http "Nexus status" "$NEXUS_URL/service/rest/v1/status"
 initialize_nexus_admin
 accept_nexus_eula_if_required
+configure_nexus_anonymous_access
 ensure_nexus_swift_repositories
 
 export KKREPO_COMPAT_BASE_URL="$PRIMARY_URL"
@@ -668,7 +705,9 @@ if [[ ! "$proxy_repository_id_value" =~ ^[0-9]+$ ]]; then
   log "cannot find swift-compat-proxy repository id: $proxy_repository_id_value"
   exit 1
 fi
-proxy_lease_key="swift:$proxy_repository_id_value:${SWIFT_PROXY_SCOPE,,}:${SWIFT_PROXY_NAME,,}:$SWIFT_PROXY_VERSION"
+proxy_scope_normalized="$(printf '%s' "$SWIFT_PROXY_SCOPE" | tr '[:upper:]' '[:lower:]')"
+proxy_name_normalized="$(printf '%s' "$SWIFT_PROXY_NAME" | tr '[:upper:]' '[:lower:]')"
+proxy_lease_key="swift:$proxy_repository_id_value:$proxy_scope_normalized:$proxy_name_normalized:$SWIFT_PROXY_VERSION"
 seed_expired_lease "$proxy_lease_key"
 run_swift_proxy_cold_read_blackbox
 assert_lease_takeover "$proxy_lease_key" proxy
@@ -696,7 +735,7 @@ export SWIFT_E2E_PROXY_ENABLED=true
 export SWIFT_E2E_PROXY_SCOPE="$SWIFT_PROXY_SCOPE"
 export SWIFT_E2E_PROXY_NAME="$SWIFT_PROXY_NAME"
 export SWIFT_E2E_PROXY_VERSION="$SWIFT_PROXY_VERSION"
-export SWIFT_E2E_LARGE_FIXTURE_BYTES=2097152
+export SWIFT_E2E_LARGE_FIXTURE_BYTES="${SWIFT_E2E_LARGE_FIXTURE_BYTES:-2097152}"
 export SWIFT_KKREPO_BASE_URL="$PRIMARY_URL"
 export SWIFT_KKREPO_SECONDARY_BASE_URL="$SECONDARY_URL"
 "$SCRIPT_DIR/run-client-e2e.sh"

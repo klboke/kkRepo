@@ -209,7 +209,10 @@ jobs:
           ARG BASE_IMAGE
           FROM ${BASE_IMAGE}
           COPY ca.crt /usr/local/share/ca-certificates/kkrepo-swift-e2e.crt
-          RUN update-ca-certificates
+          RUN apt-get update \
+              && apt-get install -y --no-install-recommends zip \
+              && rm -rf /var/lib/apt/lists/* \
+              && update-ca-certificates
           EOF
           for spec in \
             'swift:5.7.3-jammy kkrepo/swift:5.7.3-jammy-tls' \
@@ -632,6 +635,15 @@ jobs:
           set -euo pipefail
           docker pull swift:6.3.3-jammy
           mkdir -p "$RUNNER_TEMP/swift-s3-bin"
+          cat > "$RUNNER_TEMP/swift-s3-bin/Dockerfile" <<'EOF'
+          FROM swift:6.3.3-jammy
+          RUN apt-get update \
+              && apt-get install -y --no-install-recommends zip \
+              && rm -rf /var/lib/apt/lists/*
+          EOF
+          docker build \
+            --tag kkrepo/swift:6.3.3-jammy-e2e \
+            "$RUNNER_TEMP/swift-s3-bin"
           cat > "$RUNNER_TEMP/swift-s3-bin/swift-6" <<'EOF'
           #!/usr/bin/env bash
           set -euo pipefail
@@ -650,7 +662,7 @@ jobs:
           if [[ -n "${HOME:-}" && "$HOME" != "$PWD" ]]; then
             args+=( -v "$HOME:$HOME" )
           fi
-          exec docker run "${args[@]}" swift:6.3.3-jammy swift "$@"
+          exec docker run "${args[@]}" kkrepo/swift:6.3.3-jammy-e2e swift "$@"
           EOF
           chmod 0755 "$RUNNER_TEMP/swift-s3-bin/swift-6"
           echo "SWIFT_S3_E2E_SWIFT_BIN=$RUNNER_TEMP/swift-s3-bin/swift-6" >> "$GITHUB_ENV"

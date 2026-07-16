@@ -476,6 +476,9 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
   }
 
   private static String requestParameters(HttpServletRequest request, Target target) {
+    if (isMultipart(request)) {
+      return "{_multipart=[<omitted>]}";
+    }
     Map<String, String[]> parameters;
     try {
       parameters = request.getParameterMap();
@@ -490,6 +493,12 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
         .map(entry -> entry.getKey() + "="
             + parameterValues(entry.getKey(), entry.getValue(), target))
         .collect(Collectors.joining(", ", "{", "}"));
+  }
+
+  private static boolean isMultipart(HttpServletRequest request) {
+    String contentType = request.getContentType();
+    return contentType != null
+        && contentType.toLowerCase(Locale.ROOT).startsWith("multipart/");
   }
 
   private static String parameterValues(String name, String[] values, Target target) {

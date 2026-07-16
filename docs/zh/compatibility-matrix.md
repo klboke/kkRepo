@@ -103,7 +103,7 @@ kkrepo 把迁移作为产品能力，而不是一次性脚本：
 - Dart / Pub hosted 仓库数据迁移已支持 Nexus 3.92.0+ datastore 源端，但必须由 preflight 证明 Pub content model；Pub proxy cache 迁移要求显式选择且 plan 为 `FULL`。
 - Composer 只迁移 Nexus 原生 proxy repository；未显式选择时只迁移配置，不迁移 cache。选择 cache 迁移时必须由 source profile 证明 Composer datastore content model，未知或非原生 Composer source fail closed。
 - Terraform hosted module/provider 数据通过协议感知的 writer 重建，包括 Provider platform、checksum 和签名 metadata。显式选择的 Nexus 原生 Terraform proxy 使用独立 cache restore 路径，module/provider archive 保留 Nexus 公开 path。Module download discovery 可直接选择已恢复的本地 archive；Provider remote route、validator、checksum manifest 和 signature snapshot 从已配置上游重建，并在 metadata 有效期内固定对应缓存 blob。
-- Swift repository definition 会保留 hosted/proxy/group 配置、TTL 和有序成员。可恢复的 proxy credential 以密文保存；源 secret 被遮蔽或缺失时生成 `NEEDS_MANUAL_ACTION`，目标 proxy 保持 offline，且不写入占位 credential。Hosted archive、manifest、签名、原始 metadata 和 repository URL mapping 仅对已验证 Nexus 3.92.x-3.94.x datastore shape 规划为 `FULL`；版本超出范围、未知 profile 和 shape 漂移均 fail closed。Migration E2E 覆盖 Nexus 3.94 H2 源到 MySQL，以及 PostgreSQL 源到 MySQL/PostgreSQL 目标，并验证 restart/resume 和精确行数幂等。
+- Swift repository definition 会保留 hosted/proxy/group 配置、TTL 和有序成员。可恢复的 proxy credential 以密文保存；源 secret 被遮蔽或缺失时生成 `NEEDS_MANUAL_ACTION`，目标 proxy 保持 offline，且不写入占位 credential。Hosted archive、checksum 和 manifest 仅对已验证 Nexus 3.92.x-3.94.x datastore shape 规划为 `FULL`；签名、原始 metadata 和 repository URL mapping 仅在源导出实际包含对应字段时保留，绝不伪造。原生 Nexus 3.94 接受这些可选字段后并不会持久化。版本超出范围、未知 profile 和 shape 漂移均 fail closed。Migration E2E 覆盖 Nexus 3.94 H2 源到 MySQL，以及 PostgreSQL 源到 MySQL/PostgreSQL 目标，并验证 restart/resume 和精确行数幂等。
 - 迁移步骤按 preflight/dry-run、resume、checksum 校验和报告能力设计。
 - 不支持或被阻塞的条目应进入报告，而不是静默跳过。
 

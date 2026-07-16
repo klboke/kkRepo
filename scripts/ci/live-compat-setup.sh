@@ -164,6 +164,33 @@ PY
   rm -f "$eula_file" "$accepted_file"
 }
 
+configure_nexus_anonymous_access() {
+  local body_file http_status
+  body_file="$(mktemp)"
+  http_status="$(curl -m 20 -sS \
+    -u "$NEXUS_AUTH" \
+    -X PUT \
+    -H "Content-Type: application/json" \
+    --data '{"enabled":true,"userId":"anonymous","realmName":"NexusAuthorizingRealm"}' \
+    -o "$body_file" \
+    -w "%{http_code}" \
+    "$NEXUS_URL/service/rest/v1/security/anonymous" || true)"
+  if [[ "$http_status" =~ ^2[0-9][0-9]$ ]]; then
+    echo "[compat] Nexus anonymous access is enabled"
+    rm -f "$body_file"
+    return 0
+  fi
+  if [[ "$http_status" == "404" ]]; then
+    echo "[compat] Nexus anonymous configuration endpoint is not available; skipping"
+    rm -f "$body_file"
+    return 0
+  fi
+  echo "[compat] Nexus anonymous configuration failed with HTTP $http_status" >&2
+  cat "$body_file" >&2 || true
+  rm -f "$body_file"
+  return 1
+}
+
 nexus_repo_exists() {
   local name="$1"
   local repositories
@@ -970,6 +997,7 @@ wait_for_http "kkrepo management health" "$KKREPO_MANAGEMENT_URL/actuator/health
 
 initialize_nexus_admin
 accept_nexus_eula_if_required
+configure_nexus_anonymous_access
 ensure_nexus_repositories
 initialize_kkrepo_admin
 ensure_kkrepo_blob_store

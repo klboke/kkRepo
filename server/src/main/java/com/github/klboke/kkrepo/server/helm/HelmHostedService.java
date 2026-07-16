@@ -62,6 +62,9 @@ public class HelmHostedService {
     HelmAssetKind kind = readableKind(path);
     if (kind == HelmAssetKind.INDEX) {
       ensureIndex(runtime);
+      // A sibling replica may rebuild this generated asset. Bypass the node-local hot entry so
+      // the durable DB/blob binding becomes visible immediately instead of after the 60s TTL.
+      assetMetadataCache.evict(runtime.id(), path);
     }
     CachedAssetMetadata snapshot = assetMetadataCache.find(
         runtime.id(), path,

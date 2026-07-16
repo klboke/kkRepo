@@ -19,6 +19,8 @@ KKREPO_AUTH_URL=""
 REDACTION_VALUES=("$KKREPO_PASSWORD" "$KKREPO_AUTH")
 
 mkdir -p "$ARTIFACT_DIR" "$WORK_DIR"
+ARTIFACT_DIR="$(cd "$ARTIFACT_DIR" && pwd)"
+WORK_DIR="$(cd "$WORK_DIR" && pwd)"
 export CLIENT_E2E_WORK_DIR="$WORK_DIR"
 export DOTNET_CLI_TELEMETRY_OPTOUT="${DOTNET_CLI_TELEMETRY_OPTOUT:-1}"
 export DOTNET_NOLOGO="${DOTNET_NOLOGO:-1}"
@@ -1404,6 +1406,7 @@ EOF
   if [[ "$hosted_access_url" == http://* ]]; then
     publish_transport_args+=(--allow-insecure-http)
   fi
+  mkdir -p "$dir/publish-scratch" "$dir/duplicate-scratch"
   run_logged_in "swift-$label-publish" "$package_dir" env \
     HOME="$home" XDG_CONFIG_HOME="$home/.config" \
     "$swift_bin" package-registry publish "kkrepo.$package_name" "$version" \
@@ -1481,7 +1484,7 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "Consumer",
-            dependencies: [.product(name: "$module", package: "$package_name")]
+            dependencies: [.product(name: "$module", package: "kkrepo.$package_name")]
         )
     ]
 )
@@ -1556,12 +1559,22 @@ EOF
 test_swift_xcode() {
   local project="${SWIFT_XCODE_E2E_PROJECT:-}"
   local package="${SWIFT_XCODE_E2E_PACKAGE:-${SWIFT_XCODE_E2E_GENERATED_PACKAGE:-}}"
-  if [[ "$(uname -s)" != "Darwin" || ! -x "$(command -v xcodebuild 2>/dev/null || true)" ]]; then
+  local xcodebuild_bin=""
+  xcodebuild_bin="$(command -v xcodebuild 2>/dev/null || true)"
+  if [[ "$(uname -s)" != "Darwin" || -z "$xcodebuild_bin" || ! -x "$xcodebuild_bin" ]]; then
     if [[ "${SWIFT_E2E_REQUIRE_XCODE:-false}" == "true" ]]; then
       log "Xcode Swift registry flow is required but xcodebuild is unavailable"
       return 2
     fi
     log "Xcode Swift registry flow skipped: xcodebuild is only available on macOS runners"
+    return 0
+  fi
+  if ! "$xcodebuild_bin" -version >/dev/null 2>&1; then
+    if [[ "${SWIFT_E2E_REQUIRE_XCODE:-false}" == "true" ]]; then
+      log "Xcode Swift registry flow is required but the active developer directory is not a full Xcode installation"
+      return 2
+    fi
+    log "Xcode Swift registry flow skipped: the active developer directory is not a full Xcode installation"
     return 0
   fi
   if [[ -z "$project" && -z "$package" ]]; then

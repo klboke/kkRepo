@@ -313,13 +313,13 @@ Nexus 3.92+ Instance Migrator 对 Swift hosted 迁移 archive 和 manifest，自
 
 1. Definition migration 迁移 repository type、name、online、blob store 映射、write policy、proxy remote/TTL 和 group member order。可恢复的 proxy secret 加密写入目标；被遮蔽或缺失的 secret 生成 `NEEDS_MANUAL_ACTION`，目标 proxy 保持 offline 且不写入占位 credential。
 2. Data discovery 只对 Nexus 3.92.x-3.94.x 且 archive path、manifest shape 和 Swift asset attribute fingerprint 完整的 source 开启 `FULL`；版本超出范围、未知 schema/profile 或 shape 漂移返回 `NEEDS_MANUAL_ACTION`。
-3. Hosted 迁移读取 source archive、默认/版本化 manifest、signature、release attributes 和原始 metadata；逐个校验 path identity、size 和 SHA-256。
-4. Release list、release metadata JSON、browse/search document 等生成物不作为唯一输入，在目标端从迁移后的共享行重建。
+3. Hosted 迁移读取 source archive 和源端实际持久化的 attributes，逐个校验 path identity、size 和 SHA-256；默认/版本化 manifest 从 archive 校验并重建。Signature、原始 metadata 和 repository URL mapping 只在源导出实际包含时传入，不从上传请求或公开响应反推，也不伪造。
+4. Release list、release metadata JSON、browse/search document 等生成物不作为唯一输入，在目标端从迁移后的共享行重建。原生 Nexus 3.94 虽接受签名、metadata 和 repository URL，却不把它们持久化或重新暴露；这种源 release 在目标端保持 unsigned、空 metadata 和无 URL mapping，并使用源 blob 时间作为 `publishedAt`。
 5. Proxy cache 不作为 hosted publication 重放，也不猜测缺失的 tag/commit binding；当前迁移边界只保留可验证的 repository definition。
 6. Group 不复制内容，只迁移有序成员和配置；目标端重新建立 source binding。
 7. Job 支持 dry-run、resume cursor、批量 checkpoint、checksum、失败重试、manual action 和最终报告；重复运行不得重复 component/blob 引用。
 
-当前 migration E2E 使用 Nexus 3.94 fixture，覆盖 Datastore H2 源到 MySQL 目标，以及 Datastore PostgreSQL 源到 MySQL/PostgreSQL 目标。每个 lane 都校验已签名 archive、默认/版本化 manifest、原始 metadata、checksum、repository URL mapping、跨副本读取、restart/resume、proxy secret fail-closed 和精确行数幂等。3.92.x-3.94.x 范围与 shape drift gate 由 source-profile contract 覆盖，不把单一 live 版本扩大成范围外承诺。
+当前 migration E2E 使用 Nexus 3.94 fixture，覆盖 Datastore H2 源到 MySQL 目标，以及 Datastore PostgreSQL 源到 MySQL/PostgreSQL 目标。每个 lane 都向源端发布带签名、metadata 和 repository URL 的 archive，并校验 Nexus 实际保留的 archive/checksum、默认 manifest、从 archive 重建的版本化 manifest、源 blob 时间、跨副本读取、restart/resume、proxy secret fail-closed 和精确行数幂等；同时断言目标没有伪造 Nexus 已丢弃的签名、metadata 或 URL mapping。独立 writer contract 覆盖源 attributes 确有这些可选字段时的原样恢复。3.92.x-3.94.x 范围与 shape drift gate 由 source-profile contract 覆盖，不把单一 live 版本扩大成范围外承诺。
 
 ## 兼容性测试矩阵
 

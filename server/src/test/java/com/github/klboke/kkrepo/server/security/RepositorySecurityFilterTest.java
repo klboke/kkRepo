@@ -94,6 +94,39 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
+  void invalidExplicitSwiftCredentialDoesNotDowngradeToAnonymousRead() throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.empty(), subject("anonymous"));
+    authentication.anonymousEnabled = true;
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        new RecordingDecisionService(AccessDecision.allow()),
+        new FakeRepositoryDao(repository(
+            "swift-public", RepositoryFormat.SWIFT, RepositoryType.HOSTED)),
+        true);
+    MockHttpServletResponse response = new MockHttpServletResponse();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request(
+            "GET",
+            "/repository/swift-public/apple/swift-log/1.6.3",
+            Map.of(),
+            Map.of("Authorization", "Bearer GenericToken.revoked"),
+            null,
+            null,
+            null,
+            0),
+        response,
+        chain);
+
+    assertEquals(0, authentication.anonymousCalls);
+    assertEquals(0, chain.calls);
+    assertEquals(HttpServletResponse.SC_UNAUTHORIZED, response.getStatus());
+    assertEquals("1", response.getHeader("Content-Version"));
+  }
+
+  @Test
   void cargoConfigUsesAnonymousReadPermissionsWhenAvailable() throws Exception {
     assertCargoReadUsesAnonymousPermissions("/repository/cargo-hosted/config.json");
   }

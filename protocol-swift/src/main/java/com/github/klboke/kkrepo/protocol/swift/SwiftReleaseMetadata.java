@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.protocol.swift;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -25,5 +26,9 @@ public record SwiftReleaseMetadata(
     metadata = metadata == null
         ? Map.of()
         : Collections.unmodifiableMap(new LinkedHashMap<>(metadata));
+    // SwiftPM's registry client uses Foundation's ISO-8601 date decoder, which rejects
+    // fractional seconds on supported client versions. Preserve protocol interoperability by
+    // emitting the publication timestamp at second precision.
+    publishedAt = publishedAt == null ? null : publishedAt.truncatedTo(ChronoUnit.SECONDS);
   }
 }

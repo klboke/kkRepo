@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.swift;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -142,6 +143,56 @@ class SwiftRepositoryDataMigrationWriterTest {
         Map.of("description", "Migrated from Nexus", "author", author),
         MAPPER.readValue(
             restoredMetadata.get(), new TypeReference<Map<String, Object>>() {}));
+  }
+
+  @Test
+  void doesNotFabricateOptionalFieldsMissingFromNativeNexusMetadata() throws Exception {
+    Fixture fixture = fixture(1024 * 1024);
+    byte[] archive = "PK-native-nexus-metadata".getBytes(StandardCharsets.UTF_8);
+    Map<String, Object> workerMetadata = Map.of(
+        "format", "swift",
+        "attributes", Map.of(
+            "checksums", Map.of("sha256", sha256(archive)),
+            "sourceAssetAttributes", Map.of(
+                "swift", Map.of(
+                    "name", "Demo",
+                    "scope", "Acme",
+                    "version", "1.2.3",
+                    "asset_kind", "PACKAGE_ARCHIVE"))),
+        "componentAttributes", Map.of("swift", Map.of("scope", "Acme")));
+    SwiftRegistryDao.Release restored = release(sha256(archive));
+    AtomicReference<RestoreCall> restoreCall = new AtomicReference<>();
+    when(fixture.service().restoreHostedReleaseForMigration(
+        any(), anyString(), anyString(), anyString(), any(InputStream.class),
+        anyString(), any(), any(), any(), any(), anyString(), anyString()))
+        .thenAnswer(invocation -> {
+          restoreCall.set(new RestoreCall(
+              invocation.getArgument(1),
+              invocation.getArgument(2),
+              invocation.getArgument(3),
+              invocation.getArgument(5),
+              invocation.getArgument(6),
+              invocation.getArgument(7),
+              invocation.getArgument(8),
+              invocation.getArgument(9),
+              invocation.getArgument(10),
+              invocation.getArgument(11)));
+          return restored;
+        });
+    stubStoredArchive(fixture, restored, archive.length);
+
+    fixture.writer().write(
+        fixture.repository(),
+        source("Acme/Demo/1.2.3.zip", (long) archive.length, workerMetadata),
+        new ByteArrayInputStream(archive),
+        true);
+
+    RestoreCall call = restoreCall.get();
+    assertEquals("{}", call.metadataJson());
+    assertNull(call.sourceSignature());
+    assertNull(call.metadataSignature());
+    assertNull(call.signatureFormat());
+    assertEquals(Instant.parse("2025-01-01T00:00:00Z"), call.publishedAt());
   }
 
   @Test

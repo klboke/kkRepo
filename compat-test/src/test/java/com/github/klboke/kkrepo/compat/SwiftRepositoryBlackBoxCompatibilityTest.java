@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.github.klboke.kkrepo.protocol.swift.SwiftVersions;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
@@ -104,7 +105,7 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
     Exchange reference = successJsonExchange(
         """
         {"id":"kkrepo.fixture","version":"1.2.3",
-         "url":"https://nexus.example/nexus/repository/swift-hosted/kkrepo/fixture/1.2.3",
+         "url":"/kkrepo/fixture/1.2.3",
          "metadata":{"repositoryURLs":["https://github.com/kkrepo/fixture.git"]},
          "publishedAt":"2026-07-16T01:02:03Z"}
         """,
@@ -125,6 +126,24 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
   }
 
   @Test
+  void successJsonComparisonIgnoresInvalidNexusGitRefPseudoVersions() throws Exception {
+    Exchange reference = successJsonExchange(
+        """
+        {"releases":{"1.0.0":{"url":"/apple/swift-log/1.0.0"},
+         "1.0.0^{}":{"url":"/apple/swift-log/1.0.0^{}"}}}
+        """,
+        "");
+    Exchange candidate = successJsonExchange(
+        """
+        {"releases":{"1.0.0":{"url":
+         "http://kkrepo:8080/repository/swift-proxy/apple/swift-log/1.0.0"}}}
+        """,
+        "");
+
+    assertSameSuccessJson("invalid Nexus Git pseudo-version", reference, candidate);
+  }
+
+  @Test
   void successJsonComparisonAllowsOfficialReleaseMetadataFieldsMissingFromNexus() throws Exception {
     Exchange reference = successJsonExchange(
         """
@@ -136,7 +155,9 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
         {"id":"kkrepo.fixture","version":"1.2.3","resources":[],
          "metadata":{"description":"fixture"},"publishedAt":"2026-07-16T01:02:03Z"}
         """,
-        "");
+        "<https://github.com/kkrepo/fixture>; rel=canonical, "
+            + "<http://kkrepo:8080/repository/swift-hosted/kkrepo/fixture/1.2.3>; "
+            + "rel=latest-version");
 
     assertSameSuccessJson("Nexus release metadata extensions", reference, candidate);
   }
@@ -403,7 +424,8 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
     String bad = basic("invalid-user", "invalid-password");
     Exchange nexusBadLogin = post(config.nexusHosted(), "login", bad);
     Exchange candidateBadLogin = post(config.candidateHosted(), "login", bad);
-    assertEquals(nexusBadLogin.status(), candidateBadLogin.status(), "invalid Basic login status");
+    assertTrue(nexusBadLogin.status() == 401 || nexusBadLogin.status() == 429,
+        "Nexus invalid Basic login is rejected or rate limited");
     assertEquals(401, candidateBadLogin.status(), "invalid Basic login");
 
     CandidateGenericToken activeToken = null;
@@ -676,8 +698,9 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
       Exchange nexusMetadata = get(config.nexusProxy(), release, JSON_ACCEPT);
       Exchange candidateMetadata = get(config.candidateProxy(), release, JSON_ACCEPT);
       assertEquals(nexusMetadata.status(), candidateMetadata.status(), "proxy metadata status");
-      assertEquals(sourceChecksum(json(nexusMetadata)), sourceChecksum(json(candidateMetadata)),
-          "Nexus and kkrepo proxy archive checksum");
+      Exchange nexusArchive = get(config.nexusProxy(), archivePath, ZIP_ACCEPT);
+      assertEquals(sourceChecksum(json(nexusMetadata)), sha256Hex(nexusArchive.body()),
+          "Nexus metadata must advertise its own generated archive checksum");
       assertEquals(expectedChecksum, sourceChecksum(json(candidateMetadata)),
           "concurrent cold download must persist the checksum advertised by metadata");
     } finally {
@@ -687,8 +710,8 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
     Exchange nexusArchive = get(config.nexusProxy(), archivePath, ZIP_ACCEPT);
     Exchange candidateArchive = get(config.candidateProxy(), archivePath, ZIP_ACCEPT);
     assertEquals(nexusArchive.status(), candidateArchive.status(), "proxy archive status");
-    assertArrayEquals(nexusArchive.body(), candidateArchive.body(),
-        "GitHub archive generation must match Nexus bytes");
+    assertEquals(archiveEntryDigests(nexusArchive.body()), archiveEntryDigests(candidateArchive.body()),
+        "GitHub proxy archives must contain the same normalized source tree");
   }
 
   @Test
@@ -899,9 +922,9 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
 
     Exchange referenceListAlias = get(reference, packagePath + ".json", JSON_ACCEPT);
     Exchange candidateListAlias = get(candidate, packagePath + ".json", JSON_ACCEPT);
-    assertSameSuccessJson("release list .json alias", referenceListAlias, candidateListAlias);
-    assertEquals(json(candidateList).path("releases").fieldNames().next(),
-        json(candidateListAlias).path("releases").fieldNames().next(), "release list alias version");
+    assertEquals(referenceListAlias.status(), candidateListAlias.status(),
+        "release list .json non-protocol path status");
+    assertEquals(404, candidateListAlias.status(), "release list .json must not be an alias");
 
     Exchange referenceMetadata = get(reference, fixture.coordinatePath(), JSON_ACCEPT);
     Exchange candidateMetadata = get(candidate, fixture.coordinatePath(), JSON_ACCEPT);
@@ -918,8 +941,9 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
 
     Exchange referenceMetadataAlias = get(reference, fixture.coordinatePath() + ".json", JSON_ACCEPT);
     Exchange candidateMetadataAlias = get(candidate, fixture.coordinatePath() + ".json", JSON_ACCEPT);
-    assertSameSuccessJson("release metadata .json alias", referenceMetadataAlias, candidateMetadataAlias);
-    assertEquals(sourceChecksum(candidateBody), sourceChecksum(json(candidateMetadataAlias)));
+    assertEquals(referenceMetadataAlias.status(), candidateMetadataAlias.status(),
+        "release metadata .json non-protocol path status");
+    assertEquals(404, candidateMetadataAlias.status(), "release metadata .json must not be an alias");
 
     Exchange referenceManifest = get(reference, fixture.manifestPath(), SWIFT_ACCEPT);
     Exchange candidateManifest = get(candidate, fixture.manifestPath(), SWIFT_ACCEPT);
@@ -932,7 +956,13 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
 
     Exchange referenceVersioned = get(reference, fixture.manifestPath() + "?swift-version=5.9", SWIFT_ACCEPT);
     Exchange candidateVersioned = get(candidate, fixture.manifestPath() + "?swift-version=5.9", SWIFT_ACCEPT);
-    assertSameBody("versioned manifest", referenceVersioned, candidateVersioned, "text/x-swift");
+    assertEquals(referenceVersioned.status(), candidateVersioned.status(), "versioned manifest status");
+    assertEquals(200, candidateVersioned.status(), "candidate versioned manifest status");
+    assertContentType(referenceVersioned, "text/x-swift", "versioned manifest Nexus Content-Type");
+    assertContentType(candidateVersioned, "text/x-swift", "versioned manifest candidate Content-Type");
+    assertTrue(MessageDigest.isEqual(referenceVersioned.body(), fixture.versionedManifest())
+            || MessageDigest.isEqual(referenceVersioned.body(), fixture.manifest()),
+        "Nexus returns either the requested versioned manifest or its known default-manifest fallback");
     assertArrayEquals(fixture.versionedManifest(), candidateVersioned.body(),
         "versioned manifest bytes");
     assertTrue(candidateVersioned.header("content-disposition").contains("Package@swift-5.9.swift"));
@@ -954,7 +984,12 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
     String path = fixture.manifestPath() + "?swift-version=5.8";
     Exchange nexus = get(noFollowReference, path, SWIFT_ACCEPT);
     Exchange kkrepo = get(noFollowCandidate, path, SWIFT_ACCEPT);
-    assertEquals(nexus.status(), kkrepo.status(), "missing versioned manifest fallback status");
+    assertTrue(nexus.status() == 200 || nexus.status() == 303,
+        "Nexus missing versioned manifest uses its known body or redirect fallback");
+    if (nexus.status() == 200) {
+      assertArrayEquals(fixture.manifest(), nexus.body(),
+          "Nexus 200 fallback must return the default manifest");
+    }
     assertEquals(303, kkrepo.status(), "missing exact versioned manifest uses 303");
     assertTrue(kkrepo.header("location").endsWith("/" + fixture.manifestPath()),
         "manifest fallback Location");
@@ -964,20 +999,28 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
       Endpoint reference, Endpoint candidate, Fixture fixture) throws Exception {
     Exchange referenceHead = head(reference, fixture.archivePath(), ZIP_ACCEPT, Map.of());
     Exchange candidateHead = head(candidate, fixture.archivePath(), ZIP_ACCEPT, Map.of());
-    assertEquals(referenceHead.status(), candidateHead.status(), "archive HEAD status");
+    assertTrue(referenceHead.status() == 200 || referenceHead.status() == 405,
+        "Nexus archive HEAD is supported or uses its known method fallback");
     assertEquals(200, candidateHead.status(), "archive HEAD");
-    assertEquals(0, referenceHead.body().length, "Nexus HEAD body");
+    if (referenceHead.status() == 200) {
+      assertEquals(0, referenceHead.body().length, "Nexus HEAD body");
+    }
     assertEquals(0, candidateHead.body().length, "candidate HEAD body");
     assertEquals(Integer.toString(fixture.archive().length), candidateHead.header("content-length"));
     assertFalse(candidateHead.header("etag").isBlank(), "archive ETag");
     assertFalse(candidateHead.header("last-modified").isBlank(), "archive Last-Modified");
 
-    Exchange referenceConditional = get(reference, fixture.archivePath(), ZIP_ACCEPT,
-        Map.of("If-None-Match", referenceHead.header("etag")));
+    Exchange referenceValidator = referenceHead.status() == 200
+        ? referenceHead
+        : get(reference, fixture.archivePath(), ZIP_ACCEPT);
+    assertEquals(200, referenceValidator.status(), "Nexus archive validator source");
+    if (!referenceValidator.header("etag").isBlank()) {
+      Exchange referenceConditional = get(reference, fixture.archivePath(), ZIP_ACCEPT,
+          Map.of("If-None-Match", referenceValidator.header("etag")));
+      assertEquals(304, referenceConditional.status(), "Nexus archive conditional GET");
+    }
     Exchange candidateConditional = get(candidate, fixture.archivePath(), ZIP_ACCEPT,
         Map.of("If-None-Match", candidateHead.header("etag")));
-    assertEquals(referenceConditional.status(), candidateConditional.status(),
-        "archive conditional GET status");
     assertEquals(304, candidateConditional.status(), "archive conditional GET");
     assertEquals(0, candidateConditional.body().length, "304 response body");
 
@@ -1023,9 +1066,13 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
     for (RequestCase resource : resources) {
       Exchange nexus = head(reference, resource.path(), resource.accept(), Map.of());
       Exchange kkrepo = head(candidate, resource.path(), resource.accept(), Map.of());
-      assertEquals(nexus.status(), kkrepo.status(), resource.label() + " status");
+      assertTrue(nexus.status() == 200 || nexus.status() == 404 || nexus.status() == 405,
+          resource.label() + " Nexus status is supported or its known HEAD fallback: "
+              + nexus.status());
       assertEquals(200, kkrepo.status(), resource.label());
-      assertEquals(0, nexus.body().length, resource.label() + " Nexus body");
+      if (nexus.status() == 200) {
+        assertEquals(0, nexus.body().length, resource.label() + " Nexus body");
+      }
       assertEquals(0, kkrepo.body().length, resource.label() + " candidate body");
       assertFalse(kkrepo.header("content-type").isBlank(), resource.label() + " Content-Type");
     }
@@ -1040,14 +1087,19 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
       String path = "identifiers?url=" + encode(url);
       Exchange nexus = get(reference, path, JSON_ACCEPT);
       Exchange kkrepo = get(candidate, path, JSON_ACCEPT);
-      assertEquals(nexus.status(), kkrepo.status(), "identifier status for " + url);
       if (nexus.status() == 200) {
+        assertEquals(200, kkrepo.status(), "candidate identifier status for " + url);
         assertEquals(identifierSet(json(nexus)), identifierSet(json(kkrepo)),
             "identifier values for " + url);
-        assertTrue(identifierSet(json(kkrepo)).stream()
-            .anyMatch(value -> value.equalsIgnoreCase(fixture.scope() + "." + fixture.name())));
       } else {
-        assertEquals(404, kkrepo.status(), "unknown normalized URL variant");
+        assertEquals(404, nexus.status(), "Nexus unknown normalized URL variant");
+        assertTrue(kkrepo.status() == 200 || kkrepo.status() == 404,
+            "candidate normalized URL variant is either mapped or unknown: " + url);
+      }
+      if (kkrepo.status() == 200) {
+        assertTrue(identifierSet(json(kkrepo)).stream()
+            .anyMatch(value -> value.equalsIgnoreCase(fixture.scope() + "." + fixture.name())),
+            "candidate normalized identifier value for " + url);
       }
     }
   }
@@ -1186,12 +1238,18 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
       return false;
     }
 
-    assertSameSuccessJson(label + " release metadata", referenceMetadata, candidateMetadata);
-    assertSameBody(label + " archive", referenceArchive, candidateArchive, "application/zip");
+    assertSameProxyReleaseMetadata(label + " release metadata", referenceMetadata, candidateMetadata);
+    assertEquals(200, referenceArchive.status(), label + " Nexus archive status");
+    assertEquals(200, candidateArchive.status(), label + " candidate archive status");
+    assertContentType(referenceArchive, "application/zip", label + " Nexus archive Content-Type");
+    assertContentType(candidateArchive, "application/zip", label + " candidate archive Content-Type");
     assertEquals(sourceChecksum(json(referenceMetadata)), sha256Hex(referenceArchive.body()),
         label + " Nexus metadata/archive checksum");
     assertEquals(sourceChecksum(json(candidateMetadata)), sha256Hex(candidateArchive.body()),
         label + " candidate metadata/archive checksum");
+    assertEquals(archiveEntryDigests(referenceArchive.body()),
+        archiveEntryDigests(candidateArchive.body()),
+        label + " generated archives must contain the same normalized source tree");
     return true;
   }
 
@@ -1331,11 +1389,83 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
     assertEquals("1", candidate.header("content-version"), label + " candidate Content-Version");
     JsonNode referenceBody = json(reference);
     JsonNode candidateBody = json(candidate);
-    assertEquals(canonicalJson(referenceBody),
-        canonicalJson(candidateForNexusComparison(referenceBody, candidateBody, label)),
+    JsonNode comparableReference = referenceForNexusComparison(referenceBody, candidateBody, label);
+    assertEquals(canonicalJson(comparableReference),
+        canonicalJson(candidateForNexusComparison(comparableReference, candidateBody, label)),
         label + " canonical JSON body");
-    assertEquals(canonicalLinks(reference), canonicalLinks(candidate),
-        label + " Link relation/target set");
+    Set<String> referenceLinks = canonicalLinks(reference);
+    Set<String> candidateLinks = canonicalLinks(candidate);
+    assertTrue(candidateLinks.containsAll(referenceLinks),
+        () -> label + " missing Nexus Link relations/targets: "
+            + referenceLinks.stream().filter(link -> !candidateLinks.contains(link)).toList());
+  }
+
+  private static void assertSameProxyReleaseMetadata(
+      String label, Exchange reference, Exchange candidate) throws Exception {
+    assertEquals(reference.status(), candidate.status(), label + " status");
+    assertEquals(200, candidate.status(), label + " candidate status");
+    assertContentType(reference, "application/json", label + " Nexus Content-Type");
+    assertContentType(candidate, "application/json", label + " candidate Content-Type");
+    assertEquals("1", reference.header("content-version"), label + " Nexus Content-Version");
+    assertEquals("1", candidate.header("content-version"), label + " candidate Content-Version");
+
+    ObjectNode referenceBody = ((ObjectNode) json(reference)).deepCopy();
+    ObjectNode candidateBody = ((ObjectNode) json(candidate)).deepCopy();
+    normalizeGeneratedProxyMetadata(referenceBody, label + " Nexus");
+    normalizeGeneratedProxyMetadata(candidateBody, label + " candidate");
+    assertEquals(canonicalJson(referenceBody), canonicalJson(candidateBody),
+        label + " canonical JSON body excluding generated archive checksum and optional metadata");
+
+    Set<String> referenceLinks = canonicalLinks(reference);
+    Set<String> candidateLinks = canonicalLinks(candidate);
+    assertTrue(candidateLinks.containsAll(referenceLinks),
+        () -> label + " missing Nexus Link relations/targets: "
+            + referenceLinks.stream().filter(link -> !candidateLinks.contains(link)).toList());
+  }
+
+  private static void normalizeGeneratedProxyMetadata(ObjectNode body, String label) {
+    if (body.has("publishedAt")) {
+      requireDateTime(body.get("publishedAt"), label + " publishedAt");
+      body.remove("publishedAt");
+    }
+    if (body.has("metadata")) {
+      assertTrue(body.path("metadata").isObject(), label + " metadata object");
+      body.remove("metadata");
+    }
+    JsonNode resources = body.path("resources");
+    assertTrue(resources.isArray() && resources.size() == 1,
+        label + " must advertise one source archive resource");
+    JsonNode resource = resources.get(0);
+    assertEquals("source-archive", resource.path("name").asText(),
+        label + " source archive name");
+    assertEquals("application/zip", resource.path("type").asText(),
+        label + " source archive type");
+    assertTrue(resource.path("checksum").isTextual()
+            && resource.path("checksum").asText().matches("[0-9a-f]{64}"),
+        label + " source archive checksum");
+    ((ObjectNode) resource).remove("checksum");
+  }
+
+  private static JsonNode referenceForNexusComparison(
+      JsonNode reference, JsonNode candidate, String label) {
+    if (!isReleaseList(reference) || !reference.path("releases").isObject()) {
+      return reference;
+    }
+    ObjectNode comparable = reference.deepCopy();
+    ObjectNode releases = (ObjectNode) comparable.path("releases");
+    List<String> invalidVersions = new ArrayList<>();
+    releases.fieldNames().forEachRemaining(version -> {
+      if (!SwiftVersions.isValid(version)) {
+        invalidVersions.add(version);
+      }
+    });
+    for (String invalidVersion : invalidVersions) {
+      releases.remove(invalidVersion);
+      assertFalse(candidate.path("releases").has(invalidVersion),
+          label + " candidate must not expose Nexus's invalid Git ref pseudo-version "
+              + invalidVersion);
+    }
+    return comparable;
   }
 
   private static JsonNode candidateForNexusComparison(
@@ -1361,6 +1491,10 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
         && value.path("id").isTextual()
         && value.path("version").isTextual()
         && value.path("resources").isArray();
+  }
+
+  private static boolean isReleaseList(JsonNode value) {
+    return value.isObject() && value.path("releases").isObject();
   }
 
   private static JsonNode canonicalJson(JsonNode value) {
@@ -1481,8 +1615,12 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
     if (repository < 0) {
       return value;
     }
-    StringBuilder canonical = new StringBuilder("$REGISTRY")
-        .append(path.substring(repository));
+    int repositoryNameStart = repository + "/repository/".length();
+    int coordinateStart = path.indexOf('/', repositoryNameStart);
+    if (coordinateStart < 0) {
+      return value;
+    }
+    StringBuilder canonical = new StringBuilder(path.substring(coordinateStart));
     if (uri.getRawQuery() != null) {
       canonical.append('?').append(uri.getRawQuery());
     }
@@ -1490,6 +1628,30 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
       canonical.append('#').append(uri.getRawFragment());
     }
     return canonical.toString();
+  }
+
+  private static Map<String, String> archiveEntryDigests(byte[] archive) throws Exception {
+    Map<String, String> entries = new LinkedHashMap<>();
+    try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(archive))) {
+      ZipEntry entry;
+      while ((entry = zip.getNextEntry()) != null) {
+        if (entry.isDirectory()) {
+          continue;
+        }
+        String path = entry.getName().replace('\\', '/');
+        int rootEnd = path.indexOf('/');
+        String normalized = rootEnd < 0 ? path : path.substring(rootEnd + 1);
+        if (normalized.isBlank()) {
+          continue;
+        }
+        String previous = entries.putIfAbsent(normalized, sha256Hex(zip.readAllBytes()));
+        if (previous != null) {
+          throw new AssertionError("Duplicate normalized Swift archive entry: " + normalized);
+        }
+      }
+    }
+    assertFalse(entries.isEmpty(), "Swift source archive must contain files");
+    return entries;
   }
 
   private static String canonicalLinkTarget(String relation, String value) {

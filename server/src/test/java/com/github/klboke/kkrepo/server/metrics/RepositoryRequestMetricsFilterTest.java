@@ -216,6 +216,40 @@ class RepositoryRequestMetricsFilterTest {
   }
 
   @Test
+  void doesNotParseOrLogMultipartBodiesForNonSuccessRequests() throws Exception {
+    SimpleMeterRegistry registry = new SimpleMeterRegistry();
+    RepositoryRequestMetricsFilter filter = new RepositoryRequestMetricsFilter(
+        new KkRepoMetrics(registry), true, "");
+    MockHttpServletRequest request = new MockHttpServletRequest(
+        "PUT", "/repository/swift-hosted/kkrepo/example/1.0.0") {
+      @Override
+      public Map<String, String[]> getParameterMap() {
+        throw new AssertionError("multipart body must not be parsed for request logging");
+      }
+    };
+    request.setContentType("multipart/form-data; boundary=swift-package-registry");
+    MockHttpServletResponse response = new MockHttpServletResponse();
+    FilterChain chain = (req, resp) -> {
+      req.setAttribute(
+          RepositorySecurityFilter.REPOSITORY_RECORD_ATTRIBUTE,
+          repository("swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED));
+      ((MockHttpServletResponse) resp).sendError(401);
+    };
+
+    ListAppender<ILoggingEvent> appender = attachAppender();
+    try {
+      filter.doFilter(request, response, chain);
+    } finally {
+      detachAppender(appender);
+    }
+
+    assertEquals(1, appender.list.size());
+    String message = appender.list.getFirst().getFormattedMessage();
+    assertTrue(message.contains("operation=swift_publish"));
+    assertTrue(message.contains("params={_multipart=[<omitted>]}"));
+  }
+
+  @Test
   void redactsSwiftIdentifiersRepositoryUrlFromFailureLogs() throws Exception {
     SimpleMeterRegistry registry = new SimpleMeterRegistry();
     RepositoryRequestMetricsFilter filter = new RepositoryRequestMetricsFilter(

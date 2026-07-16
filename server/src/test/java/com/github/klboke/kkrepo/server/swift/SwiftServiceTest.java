@@ -18,6 +18,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.auth.AccessDecisionService;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
@@ -148,7 +149,7 @@ class SwiftServiceTest {
 
     MavenResponse response = fixture.service.get(
         fixture.runtime,
-        "Acme/Demo.json",
+        "Acme/Demo",
         null,
         "https://repo.example/repository/swift/",
         null,
@@ -405,6 +406,10 @@ class SwiftServiceTest {
     assertTrue(metadataJson.contains(
         "\"signatureBase64Encoded\":\""
             + Base64.getEncoder().encodeToString(signature) + "\""));
+    assertTrue(
+        metadataJson.contains("\"publishedAt\":\"2026-07-16T00:00:00Z\""),
+        metadataJson);
+    assertFalse(metadataJson.contains("2026-07-16T00:00:00.123Z"));
     verify(fixture.registry, never()).listRepositoryUrls(1L);
 
     byte[] archiveBytes = new byte[] {1, 2, 3};
@@ -423,6 +428,7 @@ class SwiftServiceTest {
         false);
 
     assertEquals("bytes", archive.headers().get("Accept-Ranges"));
+    assertEquals("1", archive.headers().get("Content-Version"));
     assertTrue(archive.headers().get("Digest").startsWith("sha-256="));
     assertEquals("attachment; filename=\"Demo-1.2.3.zip\"",
         archive.headers().get("Content-Disposition"));
@@ -853,6 +859,7 @@ class SwiftServiceTest {
         false);
 
     assertEquals(200, exact.status());
+    assertEquals("1", exact.headers().get("Content-Version"));
     assertEquals("attachment; filename=\"Package.swift\"",
         exact.headers().get("Content-Disposition"));
     assertTrue(exact.headers().get("Link").contains("swift-version=5.9"));
@@ -867,6 +874,7 @@ class SwiftServiceTest {
         SwiftMediaTypes.VENDOR_SWIFT,
         false);
     assertEquals(303, fallback.status());
+    assertEquals("1", fallback.headers().get("Content-Version"));
     assertEquals("https://repo.example/repository/swift/Acme/Demo/1.2.3/Package.swift",
         fallback.headers().get("Location"));
   }
@@ -1208,7 +1216,8 @@ class SwiftServiceTest {
     SecurityAuditDao audit = mock(SecurityAuditDao.class);
     AccessDecisionService accessDecisions = mock(AccessDecisionService.class);
     SwiftService service = new SwiftService(
-        new ObjectMapper().findAndRegisterModules(),
+        new ObjectMapper().findAndRegisterModules()
+            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS),
         registry,
         runtimes,
         assets,
@@ -1349,7 +1358,7 @@ class SwiftServiceTest {
 
   private static SwiftRegistryDao.Release signedRelease(
       Long id, String version, Long signatureAssetId) {
-    Instant now = Instant.parse("2026-07-16T00:00:00Z");
+    Instant now = Instant.parse("2026-07-16T00:00:00.123Z");
     return new SwiftRegistryDao.Release(
         id,
         1L,

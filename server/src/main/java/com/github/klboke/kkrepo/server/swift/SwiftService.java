@@ -611,7 +611,8 @@ public class SwiftService {
     SwiftRegistryDao.Manifest manifest = selected
         .orElseThrow(() -> new SwiftExceptions.NotFound("Swift package manifest was not found"));
     MavenResponse response = assets.serve(release.repositoryId(), manifest.assetId(), headOnly)
-        .withHeader("Content-Disposition", "attachment; filename=\"" + manifest.filename() + "\"");
+        .withHeader("Content-Disposition", "attachment; filename=\"" + manifest.filename() + "\"")
+        .withHeader("Content-Version", SwiftMediaTypes.CONTENT_VERSION);
     List<SwiftLink> links = new ArrayList<>();
     for (SwiftRegistryDao.Manifest candidate : registry.listManifests(release.id())) {
       if (candidate.toolsVersion() == null || candidate.toolsVersion().isBlank()) {
@@ -636,6 +637,7 @@ public class SwiftService {
     SwiftRegistryDao.Release release = resolved.release();
     MavenResponse response = assets.serve(release.repositoryId(), release.archiveAssetId(), headOnly)
         .withHeader("Accept-Ranges", "bytes")
+        .withHeader("Content-Version", SwiftMediaTypes.CONTENT_VERSION)
         .withHeader("Digest", "sha-256=" + base64Sha256(release.archiveSha256()))
         .withHeader(
             "Content-Disposition",

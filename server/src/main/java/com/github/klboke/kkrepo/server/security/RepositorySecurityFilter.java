@@ -132,7 +132,10 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
         : authenticationService.authenticateTerraformUrlToken(terraformUrlToken);
     boolean authenticatedAnonymously = false;
     if (authenticated.isEmpty()) {
-      authenticated = target.readOnly(repository.get().format())
+      boolean explicitCredential = terraformUrlToken != null
+          || authenticationService.hasPresentedCredentials(request);
+      authenticated = !explicitCredential
+              && target.readOnly(repository.get().format())
               && !isSwiftLogin(repository.get(), target)
           ? authenticationService.authenticateAnonymous()
           : Optional.empty();

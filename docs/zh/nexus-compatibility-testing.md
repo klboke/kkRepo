@@ -84,7 +84,7 @@ scripts/ci/run-live-compat.sh client-e2e
 
 ## 迁移 E2E
 
-`Migration E2E` workflow 会从受支持的 Nexus 代际导入配置、安全元数据和仓库数据，包括历史 3.29.x embedded/OrientDB 参考实例，以及 datastore 时代的 H2/PostgreSQL 参考实例。Swift hosted 数据仅对已验证 Nexus 3.92.x-3.94.x datastore shape 规划为 `FULL`，版本超出范围或 shape 漂移保持 manual。Swift live 矩阵使用 Nexus 3.94，覆盖 H2 源到 MySQL，以及 PostgreSQL 源到 MySQL/PostgreSQL 目标、restart/resume、精确行数幂等和被遮蔽/缺失 proxy secret 的 fail-closed 路径。这类 proxy 保持 offline 且不写入占位 credential，直到在目标端显式补齐。当变更影响 source detection、迁移 adapter、仓库数据导入、blob/checksum 校验、权限或迁移后的协议行为时，给 PR 加 `run-migration-e2e` label。
+`Migration E2E` workflow 会从受支持的 Nexus 代际导入配置、安全元数据和仓库数据，包括历史 3.29.x embedded/OrientDB 参考实例，以及 datastore 时代的 H2/PostgreSQL 参考实例。Swift hosted 数据仅对已验证 Nexus 3.92.x-3.94.x datastore shape 规划为 `FULL`，版本超出范围或 shape 漂移保持 manual。Swift live 矩阵使用 Nexus 3.94，覆盖 H2 源到 MySQL，以及 PostgreSQL 源到 MySQL/PostgreSQL 目标、restart/resume、精确行数幂等和被遮蔽/缺失 proxy secret 的 fail-closed 路径；同时证明原生 Nexus 3.94 不会把上传的可选签名、原始 metadata 和 repository URL 写入源导出，目标也不会伪造，独立 writer contract 则保证源导出确有这些字段时原样保留。这类 proxy 保持 offline 且不写入占位 credential，直到在目标端显式补齐。当变更影响 source detection、迁移 adapter、仓库数据导入、blob/checksum 校验、权限或迁移后的协议行为时，给 PR 加 `run-migration-e2e` label。
 
 ## 流量镜像验证
 

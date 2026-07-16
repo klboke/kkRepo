@@ -70,8 +70,9 @@ class SwiftProtocolModelsTest {
         "1.0.0",
         List.of(resource),
         Map.of("repositoryURLs", List.of("https://github.com/mona/LinkedList")),
-        Instant.parse("2026-01-01T00:00:00Z"));
+        Instant.parse("2026-01-01T00:00:00.123Z"));
     assertEquals("a".repeat(64), metadata.resources().getFirst().checksum());
+    assertEquals(Instant.parse("2026-01-01T00:00:00Z"), metadata.publishedAt());
     assertThrows(UnsupportedOperationException.class,
         () -> metadata.metadata().put("description", "changed"));
     assertThrows(IllegalArgumentException.class, () -> new SwiftReleaseMetadata(

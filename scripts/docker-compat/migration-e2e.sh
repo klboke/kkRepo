@@ -43,15 +43,16 @@ EXPECTED_CONNECTOR_PORT="${KKREPO_DOCKER_CONNECTOR_PORT:-18180}"
 IMAGE="${DOCKER_MIGRATION_IMAGE:-kkrepo-migration/e2e}"
 TAG="${DOCKER_MIGRATION_TAG:-$(date +%Y%m%d%H%M%S)}"
 TAG_SAFE="${TAG//[^A-Za-z0-9_]/_}"
+TAG_SAFE_LC="$(printf '%s' "$TAG_SAFE" | tr '[:upper:]' '[:lower:]')"
 CARGO_CRATE="${CARGO_MIGRATION_CRATE:-kkrepo_migration_e2e_${TAG_SAFE}}"
 CARGO_VERSION="${CARGO_MIGRATION_VERSION:-0.1.0}"
-PUB_PACKAGE="${PUB_MIGRATION_PACKAGE:-kkrepo_migration_e2e_${TAG_SAFE,,}}"
+PUB_PACKAGE="${PUB_MIGRATION_PACKAGE:-kkrepo_migration_e2e_${TAG_SAFE_LC}}"
 PUB_VERSION="${PUB_MIGRATION_VERSION:-0.1.0}"
 COMPOSER_MIGRATION_ENABLED="${COMPOSER_MIGRATION_ENABLED:-false}"
 COMPOSER_PACKAGE="${COMPOSER_MIGRATION_PACKAGE:-psr/log}"
 SWIFT_MIGRATION_ENABLED="${SWIFT_MIGRATION_ENABLED:-false}"
 SWIFT_SCOPE="${SWIFT_MIGRATION_SCOPE:-kkrepo}"
-SWIFT_PACKAGE="${SWIFT_MIGRATION_PACKAGE:-migration-${TAG_SAFE,,}}"
+SWIFT_PACKAGE="${SWIFT_MIGRATION_PACKAGE:-migration-${TAG_SAFE_LC}}"
 SWIFT_PACKAGE="${SWIFT_PACKAGE//_/-}"
 SWIFT_PACKAGE="${SWIFT_PACKAGE:0:90}"
 SWIFT_VERSION="${SWIFT_MIGRATION_VERSION:-1.2.3}"
@@ -66,6 +67,7 @@ SWIFT_FIXTURE_MANIFEST=""
 SWIFT_FIXTURE_VERSIONED_MANIFEST=""
 SWIFT_FIXTURE_SHA256=""
 SWIFT_FIXTURE_SIGNATURE_BASE64=""
+SWIFT_MIGRATED_PUBLISHED_AT=""
 TERRAFORM_PROXY_PROVIDER_NAMESPACE="${TERRAFORM_PROXY_PROVIDER_NAMESPACE:-hashicorp}"
 TERRAFORM_PROXY_PROVIDER_NAME="${TERRAFORM_PROXY_PROVIDER_NAME:-null}"
 TERRAFORM_PROXY_PROVIDER_VERSION="${TERRAFORM_PROXY_PROVIDER_VERSION:-3.2.4}"
@@ -535,11 +537,12 @@ publish_swift_fixture_to_source_nexus() {
 }
 
 verify_source_swift_fixture() {
-  local workdir metadata archive manifest versioned
+  local workdir metadata archive headers manifest versioned
   workdir="$SWIFT_FIXTURE_WORKDIR/source-verification"
   mkdir -p "$workdir"
   metadata="$workdir/metadata.json"
   archive="$workdir/archive.zip"
+  headers="$workdir/archive.headers"
   manifest="$workdir/Package.swift"
   versioned="$workdir/Package@swift-5.9.swift"
 
@@ -551,12 +554,11 @@ verify_source_swift_fixture() {
     "$metadata" \
     "$SWIFT_SCOPE.$SWIFT_PACKAGE" \
     "$SWIFT_VERSION" \
-    "$SWIFT_FIXTURE_SHA256" \
-    "$SWIFT_METADATA_DESCRIPTION" <<'PY'
+    "$SWIFT_FIXTURE_SHA256" <<'PY'
 import json
 import sys
 
-path, identity, version, checksum, description = sys.argv[1:6]
+path, identity, version, checksum = sys.argv[1:5]
 with open(path, "r", encoding="utf-8") as source:
     payload = json.load(source)
 if str(payload.get("id") or "").lower() != identity.lower():
@@ -569,16 +571,24 @@ resources = [
 ]
 if len(resources) != 1 or str(resources[0].get("checksum") or "").lower() != checksum:
     raise SystemExit(f"Nexus Swift source-archive resource is incomplete: {resources}")
-if (payload.get("metadata") or {}).get("description") != description:
-    raise SystemExit(f"Nexus Swift metadata payload changed: {payload.get('metadata')}")
+if resources[0].get("signing"):
+    raise SystemExit(f"Nexus 3.94 unexpectedly re-exposed the uploaded signature: {resources[0]}")
+if payload.get("metadata"):
+    raise SystemExit(f"Nexus 3.94 unexpectedly re-exposed the uploaded metadata: {payload['metadata']}")
 PY
 
   curl -m 60 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    -D "$headers" \
     -H "Accept: application/vnd.swift.registry.v1+zip" \
     "$NEXUS_URL/repository/$SWIFT_NEXUS_REPOSITORY/$SWIFT_SCOPE/$SWIFT_PACKAGE/$SWIFT_VERSION.zip" \
     >"$archive"
   if [[ "$(file_sha256 "$archive")" != "$SWIFT_FIXTURE_SHA256" ]]; then
     log "Nexus Swift source archive checksum changed after publish"
+    exit 1
+  fi
+  if [[ -n "$(header_value 'X-Swift-Package-Signature-Format' "$headers")" \
+      || -n "$(header_value 'X-Swift-Package-Signature' "$headers")" ]]; then
+    log "Nexus 3.94 unexpectedly re-exposed Swift signature headers"
     exit 1
   fi
   curl -m 60 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
@@ -593,10 +603,11 @@ PY
     log "Nexus Swift default manifest changed after publish"
     exit 1
   }
-  cmp -s "$versioned" "$SWIFT_FIXTURE_VERSIONED_MANIFEST" || {
-    log "Nexus Swift versioned manifest changed after publish"
+  if ! cmp -s "$versioned" "$SWIFT_FIXTURE_VERSIONED_MANIFEST" \
+      && ! cmp -s "$versioned" "$SWIFT_FIXTURE_MANIFEST"; then
+    log "Nexus Swift versioned-manifest response is neither the uploaded version nor its known default-manifest fallback"
     exit 1
-  }
+  fi
   log "verified Nexus Swift fixture metadata, archive and manifests"
 }
 
@@ -720,7 +731,9 @@ PY
     -u "$NEXUS_USER:$NEXUS_PASSWORD" \
     "$dist_url" >"$dist_file"
   actual_sha1="$(file_sha1 "$dist_file")"
-  if [[ -n "${fields[3]}" && "${fields[3],,}" != "${actual_sha1,,}" ]]; then
+  expected_sha1="$(printf '%s' "${fields[3]}" | tr '[:upper:]' '[:lower:]')"
+  actual_sha1_normalized="$(printf '%s' "$actual_sha1" | tr '[:upper:]' '[:lower:]')"
+  if [[ -n "$expected_sha1" && "$expected_sha1" != "$actual_sha1_normalized" ]]; then
     log "Nexus Composer fixture SHA-1 mismatch: metadata=${fields[3]} downloaded=$actual_sha1"
     exit 1
   fi
@@ -1656,8 +1669,8 @@ configure_swift_target_proxy_credentials() {
 swift_fixture_row_counts() {
   local repository_name scope package version
   repository_name="$(sql_literal "$SWIFT_KKREPO_REPOSITORY")"
-  scope="$(sql_literal "${SWIFT_SCOPE,,}")"
-  package="$(sql_literal "${SWIFT_PACKAGE,,}")"
+  scope="$(sql_literal "$(printf '%s' "$SWIFT_SCOPE" | tr '[:upper:]' '[:lower:]')")"
+  package="$(sql_literal "$(printf '%s' "$SWIFT_PACKAGE" | tr '[:upper:]' '[:lower:]')")"
   version="$(sql_literal "$SWIFT_VERSION")"
   target_db_query "
     SELECT
@@ -1695,7 +1708,7 @@ swift_fixture_row_counts() {
           AND sr.name_lc = $package AND sr.version = $version)"
 }
 
-assert_swift_fixture_counts_nonzero() {
+assert_swift_fixture_counts() {
   local counts="$1"
   local label="$2"
   python3 - "$counts" "$label" <<'PY'
@@ -1706,10 +1719,15 @@ values = [int(value) for value in raw.split()]
 names = ["release", "component", "asset", "blob", "manifest", "repository_url"]
 if len(values) != len(names):
     raise SystemExit(f"unexpected Swift row-count snapshot for {label}: {raw!r}")
-missing = [name for name, value in zip(names, values) if value <= 0]
+missing = [name for name, value in zip(names[:5], values[:5]) if value <= 0]
 if missing:
     raise SystemExit(
         f"Swift row-count snapshot for {label} has empty core tables {missing}: {raw!r}"
+    )
+if values[5] != 0:
+    raise SystemExit(
+        "Nexus 3.94 did not persist the uploaded repository URL, but migration "
+        f"created {values[5]} URL mapping row(s): {raw!r}"
     )
 print(" ".join(f"{name}={value}" for name, value in zip(names, values)))
 PY
@@ -1720,7 +1738,7 @@ verify_migrated_swift_fixture() {
   local target_url="${2:-$KKREPO_URL}"
   local label="${3:-primary}"
   local workdir job_file releases metadata archive headers manifest versioned identifiers
-  local actual_sha actual_signature_format actual_signature repository_url
+  local actual_sha actual_signature_format actual_signature actual_published_at repository_url status
   workdir="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-swift-migrated.XXXXXX")"
   job_file="$workdir/job.json"
   releases="$workdir/releases.json"
@@ -1777,14 +1795,12 @@ PY
     "$metadata" \
     "$SWIFT_SCOPE.$SWIFT_PACKAGE" \
     "$SWIFT_VERSION" \
-    "$SWIFT_FIXTURE_SHA256" \
-    "$SWIFT_FIXTURE_SIGNATURE_BASE64" \
-    "$SWIFT_METADATA_DESCRIPTION" \
-    "$SWIFT_METADATA_PUBLICATION_TIME" <<'PY'
+    "$SWIFT_FIXTURE_SHA256" <<'PY'
 import json
 import sys
+from datetime import datetime
 
-path, identity, version, checksum, signature, description, published_at = sys.argv[1:8]
+path, identity, version, checksum = sys.argv[1:5]
 with open(path, "r", encoding="utf-8") as source:
     payload = json.load(source)
 if str(payload.get("id") or "").lower() != identity.lower():
@@ -1797,19 +1813,31 @@ resources = [
 ]
 if len(resources) != 1 or str(resources[0].get("checksum") or "").lower() != checksum:
     raise SystemExit(f"migrated Swift checksum changed: {resources}")
-signing = resources[0].get("signing") or {}
-if signing.get("signatureFormat") != "cms-1.0.0":
-    raise SystemExit(f"migrated Swift signature format changed: {signing}")
-if signing.get("signatureBase64Encoded") != signature:
-    raise SystemExit("migrated Swift signature bytes changed")
+if resources[0].get("signing"):
+    raise SystemExit(f"migration fabricated a Swift signature absent from Nexus 3.94: {resources[0]}")
 metadata = payload.get("metadata") or {}
-if metadata.get("description") != description:
-    raise SystemExit(f"migrated Swift original metadata changed: {metadata}")
-if metadata.get("originalPublicationTime") != published_at:
-    raise SystemExit(f"migrated Swift original publication time changed: {metadata}")
-if payload.get("publishedAt") != published_at:
-    raise SystemExit(f"migrated Swift publishedAt changed: {payload.get('publishedAt')!r}")
+if metadata:
+    raise SystemExit(f"migration fabricated Swift metadata absent from Nexus 3.94: {metadata}")
+published_at = str(payload.get("publishedAt") or "")
+try:
+    datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+except ValueError as exc:
+    raise SystemExit(f"migrated Swift publishedAt is invalid: {published_at!r}") from exc
 PY
+  actual_published_at="$(python3 - "$metadata" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as source:
+    print(json.load(source).get("publishedAt") or "")
+PY
+)"
+  if [[ -z "$SWIFT_MIGRATED_PUBLISHED_AT" ]]; then
+    SWIFT_MIGRATED_PUBLISHED_AT="$actual_published_at"
+  elif [[ "$actual_published_at" != "$SWIFT_MIGRATED_PUBLISHED_AT" ]]; then
+    log "migrated Swift publishedAt changed through $label: $actual_published_at != $SWIFT_MIGRATED_PUBLISHED_AT"
+    rm -rf "$workdir"
+    exit 1
+  fi
 
   curl -m 60 -fsS -u "$(auth)" \
     -D "$headers" \
@@ -1824,9 +1852,8 @@ PY
   fi
   actual_signature_format="$(header_value 'X-Swift-Package-Signature-Format' "$headers")"
   actual_signature="$(header_value 'X-Swift-Package-Signature' "$headers")"
-  if [[ "$actual_signature_format" != "cms-1.0.0" \
-      || "$actual_signature" != "$SWIFT_FIXTURE_SIGNATURE_BASE64" ]]; then
-    log "migrated Swift archive signature headers changed through $label"
+  if [[ -n "$actual_signature_format" || -n "$actual_signature" ]]; then
+    log "migration fabricated Swift archive signature headers through $label"
     rm -rf "$workdir"
     exit 1
   fi
@@ -1851,22 +1878,26 @@ PY
   }
 
   repository_url="https://github.com/kkrepo-fixtures/$SWIFT_PACKAGE.git"
-  curl -m 30 -fsS -u "$(auth)" \
+  status="$(curl -m 30 -sS -u "$(auth)" \
     -H "Accept: application/vnd.swift.registry.v1+json" \
     --get \
     --data-urlencode "url=$repository_url" \
     "$target_url/repository/$SWIFT_KKREPO_REPOSITORY/identifiers" \
-    >"$identifiers"
-  python3 - "$identifiers" "$SWIFT_SCOPE.$SWIFT_PACKAGE" <<'PY'
+    -o "$identifiers" \
+    -w '%{http_code}')"
+  if [[ "$status" != "404" ]]; then
+    log "migration fabricated a repository URL mapping absent from Nexus 3.94 through $label: HTTP $status"
+    rm -rf "$workdir"
+    exit 1
+  fi
+  python3 - "$identifiers" <<'PY'
 import json
 import sys
 
-path, expected = sys.argv[1:3]
-with open(path, "r", encoding="utf-8") as source:
+with open(sys.argv[1], "r", encoding="utf-8") as source:
     payload = json.load(source)
-identifiers = {str(value).lower() for value in payload.get("identifiers") or []}
-if expected.lower() not in identifiers:
-    raise SystemExit(f"migrated Swift repository URL mapping is missing: {payload}")
+if payload.get("status") != 404:
+    raise SystemExit(f"unexpected Swift identifier response for an unpersisted Nexus URL: {payload}")
 PY
   rm -rf "$workdir"
   log "Swift fixture verified through $label replica: $SWIFT_SCOPE.$SWIFT_PACKAGE $SWIFT_VERSION sha256=$actual_sha"
@@ -2580,7 +2611,7 @@ if swift_migration_enabled; then
   verify_migrated_swift_fixture "$job_id" "$KKREPO_URL" "primary"
   swift_counts_before="$(swift_fixture_row_counts)"
   log "Swift idempotency baseline: "\
-"$(assert_swift_fixture_counts_nonzero "$swift_counts_before" "before rerun")"
+"$(assert_swift_fixture_counts "$swift_counts_before" "before rerun")"
 
   log "rerunning Nexus definition migration before the Swift idempotency pass"
   run_config_metadata_migration
@@ -2592,12 +2623,12 @@ if swift_migration_enabled; then
   verify_migrated_swift_fixture "$SWIFT_IDEMPOTENCY_JOB_ID" "$KKREPO_URL" "primary after idempotency rerun"
   swift_counts_after="$(swift_fixture_row_counts)"
   log "Swift idempotency rerun counts: "\
-"$(assert_swift_fixture_counts_nonzero "$swift_counts_after" "after rerun")"
+"$(assert_swift_fixture_counts "$swift_counts_after" "after rerun")"
   if [[ "$swift_counts_before" != "$swift_counts_after" ]]; then
     log "Swift idempotency row counts changed: before=$swift_counts_before after=$swift_counts_after"
     exit 1
   fi
-  log "Swift release/component/asset/blob/manifest/url row counts are exactly stable across rerun"
+  log "Swift release/component/asset/blob/manifest counts and absent URL mapping are exactly stable across rerun"
 
   if [[ -n "$KKREPO_SECONDARY_URL" ]]; then
     wait_for_http "kkrepo migration read replica" \
