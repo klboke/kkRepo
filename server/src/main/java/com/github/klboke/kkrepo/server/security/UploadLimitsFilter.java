@@ -1,5 +1,7 @@
 package com.github.klboke.kkrepo.server.security;
 
+import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -20,12 +22,15 @@ public class UploadLimitsFilter extends OncePerRequestFilter {
 
   private final long maxRequestBytes;
   private final NexusLegacyUiCompatibility legacyUi;
+  private final RepositoryDao repositories;
 
   public UploadLimitsFilter(
       @Value("${kkrepo.security.upload.max-request-bytes:1073741824}") long maxRequestBytes,
-      NexusLegacyUiCompatibility legacyUi) {
+      NexusLegacyUiCompatibility legacyUi,
+      RepositoryDao repositories) {
     this.maxRequestBytes = maxRequestBytes;
     this.legacyUi = legacyUi;
+    this.repositories = repositories;
   }
 
   @Override
@@ -34,10 +39,38 @@ public class UploadLimitsFilter extends OncePerRequestFilter {
       HttpServletResponse response,
       FilterChain filterChain) throws ServletException, IOException {
     if (maxRequestBytes > 0 && uploadPath(request) && request.getContentLengthLong() > maxRequestBytes) {
+      if (swiftRepositoryPath(request)) {
+        swiftTooLarge(response);
+        return;
+      }
       response.sendError(HttpServletResponse.SC_REQUEST_ENTITY_TOO_LARGE, "Upload exceeds configured limit");
       return;
     }
     filterChain.doFilter(request, response);
+  }
+
+  private boolean swiftRepositoryPath(HttpServletRequest request) {
+    String uri = stripContextPath(request);
+    if (!uri.startsWith("/repository/")) {
+      return false;
+    }
+    String remaining = uri.substring("/repository/".length());
+    int slash = remaining.indexOf('/');
+    String repositoryName = slash < 0 ? remaining : remaining.substring(0, slash);
+    return !repositoryName.isBlank()
+        && repositories.findByName(repositoryName)
+            .filter(repository -> repository.format() == RepositoryFormat.SWIFT)
+            .isPresent();
+  }
+
+  private static void swiftTooLarge(HttpServletResponse response) throws IOException {
+    response.setStatus(HttpServletResponse.SC_REQUEST_ENTITY_TOO_LARGE);
+    response.setContentType("application/problem+json");
+    response.setHeader("Content-Version", "1");
+    response.setHeader("Cache-Control", "no-store");
+    response.getOutputStream().write(("{\"type\":\"about:blank\",\"title\":\"Content Too Large\","
+        + "\"status\":413,\"detail\":\"Upload exceeds configured limit\"}")
+        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
   }
 
   private boolean uploadPath(HttpServletRequest request) {

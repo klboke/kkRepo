@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
@@ -13,6 +14,7 @@ import com.github.klboke.kkrepo.protocol.npm.NpmPathParser;
 import com.github.klboke.kkrepo.protocol.nuget.NugetPaths;
 import com.github.klboke.kkrepo.protocol.pub.PubPath;
 import com.github.klboke.kkrepo.protocol.pub.PubPathParser;
+import com.github.klboke.kkrepo.protocol.swift.SwiftMediaTypes;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPath;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPathParser;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
@@ -63,6 +65,8 @@ import com.github.klboke.kkrepo.server.rubygems.RubygemsService;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
 import com.github.klboke.kkrepo.server.security.RepositorySecurityFilter;
+import com.github.klboke.kkrepo.server.swift.SwiftExceptions;
+import com.github.klboke.kkrepo.server.swift.SwiftService;
 import com.github.klboke.kkrepo.server.terraform.TerraformService;
 import com.github.klboke.kkrepo.server.yum.YumService;
 import jakarta.servlet.ServletException;
@@ -72,6 +76,7 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -129,6 +134,7 @@ public class RepositoryContentController {
   private final ComposerProxyService composerProxy;
   private final ComposerGroupService composerGroup;
   private final TerraformService terraform;
+  private SwiftService swift;
   private final NugetService nuget;
   private final RubygemsService rubygems;
   private final YumService yum;
@@ -145,6 +151,11 @@ public class RepositoryContentController {
   private final TerraformPathParser terraformParser = new TerraformPathParser();
   private final MavenPartialFetchSupport partialFetch = new MavenPartialFetchSupport();
   private final PypiPartialFetchSupport pypiPartialFetch = new PypiPartialFetchSupport();
+
+  @Autowired(required = false)
+  void setSwiftService(SwiftService swift) {
+    this.swift = swift;
+  }
 
   @Autowired
   public RepositoryContentController(RepositoryRuntimeRegistry registry,
@@ -301,6 +312,18 @@ public class RepositoryContentController {
           runtime, path, repositoryBaseUrl(request, runtime.name()),
           terraformUrlTokenSegment(request), true), request);
     }
+    if (runtime.format() == RepositoryFormat.SWIFT) {
+      String raw = extractRepositoryPath(name, request, true);
+      MavenResponse response = swift().get(
+          runtime,
+          raw,
+          request.getQueryString(),
+          repositoryBaseUrl(request, runtime.name()),
+          request.getHeader(HttpHeaders.ACCEPT),
+          true,
+          requestPermissionSubject(request));
+      return toHeadResponse(response, request);
+    }
     if (runtime.format() == RepositoryFormat.PYPI) {
       String raw = extractRepositoryPath(name, request, true);
       PypiResponse resp = isDirectoryPath(raw)
@@ -346,7 +369,8 @@ public class RepositoryContentController {
   public ResponseEntity<?> put(
       @PathVariable("name") String name,
       HttpServletRequest request,
-      @RequestHeader(value = HttpHeaders.CONTENT_TYPE, required = false) String contentType) throws IOException {
+      @RequestHeader(value = HttpHeaders.CONTENT_TYPE, required = false) String contentType)
+      throws IOException, ServletException {
     RepositoryRuntime runtime = resolveRuntime(name);
     String userId = requestUserId(request);
     if (runtime.format() == RepositoryFormat.NPM) {
@@ -402,6 +426,30 @@ public class RepositoryContentController {
             userId, request.getRemoteAddr());
       }
       return ResponseEntity.status(resp.status()).build();
+    }
+    if (runtime.format() == RepositoryFormat.SWIFT) {
+      String rawPath = extractRepositoryPath(name, request, true);
+      String accept = request.getHeader(HttpHeaders.ACCEPT);
+      swift().validatePublishRequest(runtime, rawPath, request.getQueryString(), accept);
+      if (!isMultipart(contentType)) {
+        throw new SwiftExceptions.UnsupportedMediaType(
+            "Swift publish requires multipart/form-data");
+      }
+      MavenResponse response = swift().publish(
+          runtime,
+          rawPath,
+          request.getQueryString(),
+          swiftParts(request),
+          request.getHeader("X-Swift-Package-Signature-Format"),
+          repositoryBaseUrl(request, runtime.name()),
+          accept,
+          userId,
+          request.getRemoteAddr());
+      // This handler returns ResponseEntity<?> for all repository formats. Returning a
+      // StreamingResponseBody here makes Spring treat the lambda as a regular JSON object and
+      // serialize it as "{}" while preserving SwiftService's larger Content-Length. Publish
+      // responses are tiny JSON documents, so materialize them before returning.
+      return toByteArrayResponse(response);
     }
     if (runtime.format() == RepositoryFormat.NUGET) {
       String raw = extractRepositoryPath(name, request, true);
@@ -490,6 +538,10 @@ public class RepositoryContentController {
     if (runtime.format() == RepositoryFormat.TERRAFORM) {
       throw new MavenExceptions.MethodNotAllowed("Terraform client repository paths do not support DELETE");
     }
+    if (runtime.format() == RepositoryFormat.SWIFT) {
+      throw new SwiftExceptions.MethodNotAllowed(
+          "Swift client repository paths do not support DELETE");
+    }
     if (runtime.format() == RepositoryFormat.NUGET) {
       String raw = extractRepositoryPath(name, request, true);
       MavenResponse resp = nuget.deletePackage(runtime, raw);
@@ -521,6 +573,17 @@ public class RepositoryContentController {
   @PostMapping("/**")
   public ResponseEntity<?> post(@PathVariable("name") String name, HttpServletRequest request) {
     RepositoryRuntime runtime = resolveRuntime(name);
+    if (runtime.format() == RepositoryFormat.SWIFT) {
+      String raw = extractRepositoryPath(name, request, true);
+      if (!"login".equals(raw) || (request.getQueryString() != null
+          && !request.getQueryString().isBlank())) {
+        throw new SwiftExceptions.MethodNotAllowed("Unsupported Swift POST path");
+      }
+      return ResponseEntity.status(swift().login(runtime).status())
+          .header("Content-Version", "1")
+          .header(HttpHeaders.CACHE_CONTROL, "no-store")
+          .build();
+    }
     if (runtime.format() == RepositoryFormat.NPM) {
       NpmPath path = npmParser.parse(extractRepositoryPath(name, request));
       if (path.kind() == NpmPath.Kind.ADVISORIES_BULK) {
@@ -648,6 +711,20 @@ public class RepositoryContentController {
           runtime, path, repositoryBaseUrl(request, runtime.name()),
           terraformUrlTokenSegment(request), headOnly);
       return toStreamingResponse(resp, request, false);
+    }
+    if (runtime.format() == RepositoryFormat.SWIFT) {
+      String raw = extractRepositoryPath(name, request, true);
+      MavenResponse resp = swift().get(
+          runtime,
+          raw,
+          request.getQueryString(),
+          repositoryBaseUrl(request, runtime.name()),
+          request.getHeader(HttpHeaders.ACCEPT),
+          headOnly,
+          requestPermissionSubject(request));
+      boolean archiveResponse = !headOnly
+          && SwiftMediaTypes.ARCHIVE.equalsIgnoreCase(resp.contentType());
+      return toStreamingResponse(resp, request, archiveResponse);
     }
     if (runtime.format() == RepositoryFormat.PYPI) {
       String raw = extractRepositoryPath(name, request, true);
@@ -898,6 +975,13 @@ public class RepositoryContentController {
         .orElseThrow(() -> new MavenExceptions.MavenNotFoundException("Repository not found: " + name));
   }
 
+  private SwiftService swift() {
+    if (swift == null) {
+      throw new IllegalStateException("Swift repository service is unavailable");
+    }
+    return swift;
+  }
+
   private MavenResponse dispatchNpmGet(
       RepositoryRuntime runtime,
       NpmPath path,
@@ -954,6 +1038,13 @@ public class RepositoryContentController {
       return authenticated.apiKeyId();
     }
     return null;
+  }
+
+  private PermissionSubject requestPermissionSubject(HttpServletRequest request) {
+    Object subject = request.getAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE);
+    return subject instanceof AuthenticatedSubject authenticated
+        ? authenticated.permissionSubject()
+        : null;
   }
 
   private MavenResponse npmRepositoryRoot(
@@ -1167,6 +1258,17 @@ public class RepositoryContentController {
   private static boolean isMultipart(String contentType) {
     return contentType != null
         && contentType.toLowerCase(Locale.ROOT).startsWith(MediaType.MULTIPART_FORM_DATA_VALUE);
+  }
+
+  private static Collection<Part> swiftParts(HttpServletRequest request) {
+    try {
+      return request.getParts();
+    } catch (IllegalStateException e) {
+      throw new SwiftExceptions.ContentTooLarge(
+          "Swift publish multipart body exceeds the configured limit");
+    } catch (ServletException | IOException e) {
+      throw new SwiftExceptions.BadRequest("Unable to parse Swift publish multipart body", e);
+    }
   }
 
   private static boolean isNugetPackagePublishPath(String rawPath) {

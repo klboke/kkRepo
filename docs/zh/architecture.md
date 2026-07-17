@@ -8,7 +8,7 @@ kkrepo 是一个兼容 Nexus 的制品仓库，核心设计是 MySQL/PostgreSQL 
 
 ```text
 制品客户端
-  Maven / npm / PyPI / Go / Helm / Cargo/Rust / Dart/Pub / Composer/PHP / Terraform / Docker/OCI / NuGet / RubyGems / Yum / Raw
+  Maven / npm / PyPI / Go / Helm / Cargo/Rust / Dart/Pub / Composer/PHP / Terraform / Swift / Docker/OCI / NuGet / RubyGems / Yum / Raw
         |
         v
 负载均衡 / 反向代理
@@ -80,6 +80,7 @@ Admin UI 和 Browse UI 由 Spring Boot 服务提供静态资源：
 | `protocol-pub` | Dart Pub package name、hosted URL、路径、archive、version metadata 和错误模型辅助逻辑 |
 | `protocol-composer` | Composer 2 package name、metadata、dist path、URL rewrite 和错误模型辅助逻辑 |
 | `protocol-terraform` | Terraform Module/Provider Registry 路径、版本、平台、metadata、checksum 和 URL token 辅助逻辑 |
+| `protocol-swift` | Swift Package Registry v1 路径、media type、SemVer、identity、release model、Link 和 problem details |
 | `protocol-docker` | Docker Registry V2 / OCI 路径、digest、manifest、media type 和错误模型辅助逻辑 |
 | `protocol-nuget` | NuGet 路径辅助逻辑 |
 | `protocol-rubygems` | RubyGems metadata 辅助逻辑 |
@@ -105,6 +106,7 @@ Admin UI 和 Browse UI 由 Spring Boot 服务提供静态资源：
 - 用户、角色、权限、realm、API key、session 和审计日志。
 - 迁移 job、迁移 asset、cursor、marker 和 checkpoint。
 - Terraform Provider platform/revision/signing state、group source binding 和 publish lease。
+- Swift 不可变 release/manifest、SCM URL mapping、GitHub source pin、group binding、repository revision、publish lease、tombstone 和 negative cache。
 - Cache version 水位和跨副本协调状态。
 
 Blob storage 存储：

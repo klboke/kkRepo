@@ -38,6 +38,17 @@ public interface AssetDao {
 
   Optional<AssetRecord> findAssetById(long assetId);
 
+  /**
+   * Loads an asset and its live blob metadata in one database round trip when supported.
+   *
+   * <p>The default keeps lightweight test adapters source-compatible.
+   */
+  default Optional<AssetWithBlob> findAssetWithBlobById(long assetId) {
+    return findAssetById(assetId).map(asset -> new AssetWithBlob(
+        asset,
+        asset.assetBlobId() == null ? null : findBlobById(asset.assetBlobId()).orElse(null)));
+  }
+
   Optional<AssetRecord> findDockerBlobAssetBySha256(long repositoryId, String sha256);
 
   /**
@@ -68,6 +79,14 @@ public interface AssetDao {
   Optional<AssetBlobRecord> lockDeletedBlobById(long assetBlobId);
 
   List<AssetRecord> listAssetsByPrefix(long repositoryId, String pathPrefix);
+
+  /**
+   * Locks a bounded batch of stale assets below a repository path prefix for cleanup. Callers must
+   * invoke this inside the transaction that deletes the returned rows; {@code SKIP LOCKED}
+   * semantics let every replica run the same cleanup worker without duplicate ownership.
+   */
+  List<AssetRecord> claimStaleAssetsByPrefix(
+      long repositoryId, String pathPrefix, Instant updatedBefore, int maxItems);
 
   List<AssetRecord> listAssetsByComponent(long componentId);
 
@@ -123,6 +142,8 @@ public interface AssetDao {
   List<HelmIndexRow> listHelmIndexRows(long repositoryId);
 
   List<PypiProjectIndexRow> listPypiProjectIndexRows(long repositoryId, String normalizedName);
+
+  record AssetWithBlob(AssetRecord asset, AssetBlobRecord blob) {}
 
   record HelmIndexRow(
       String path,

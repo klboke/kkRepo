@@ -180,6 +180,11 @@
             </fieldset>
             <fieldset class="form-grid" id="repository-proxy-fields" hidden>
               <legend>Proxy settings</legend>
+              <p class="form-note full-width" id="repository-swift-proxy-note" hidden>
+                Swift proxy follows the Nexus-compatible GitHub source mode. The remote is fixed to
+                https://github.com/; use the username/token fields for private GitHub repositories.
+                Production SwiftPM clients should always connect to kkrepo over HTTPS.
+              </p>
               <label>
                 <span>Remote URL <span class="required-mark">*</span></span>
                 <input id="repository-remote-url" type="url" placeholder="https://repo.maven.apache.org/maven2/">

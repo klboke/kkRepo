@@ -372,6 +372,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   rubygems: "rubygems",
   yum: "yum",
   terraform: "terraform",
+  swift: "swift",
   raw: "raw",
 });
 
@@ -389,6 +390,7 @@ const FORMAT_DISPLAY_NAMES = Object.freeze({
   rubygems: "RubyGems",
   yum: "Yum / RPM",
   terraform: "Terraform",
+  swift: "Swift",
   raw: "Raw",
 });
 
@@ -1720,7 +1722,7 @@ function memberCandidates() {
   const recipe = currentRecipe();
   const format = recipe ? recipe.format : null;
   if (!format) return [];
-  const allowNestedGroups = format === "pub" || format === "composer" || format === "terraform";
+  const allowNestedGroups = format === "pub" || format === "composer" || format === "terraform" || format === "swift";
   return repositories.filter((repo) => {
     if (repo.format !== format) return false;
     if (repositoryFormMode === "edit" && repo.name === editingRepositoryName) return false;
@@ -1926,6 +1928,8 @@ function refreshRepositoryRecipeControls() {
   document.getElementById("repository-docker-fields").hidden = format !== "docker";
   document.getElementById("repository-cargo-fields").hidden =
     format !== "cargo";
+  document.getElementById("repository-swift-proxy-note").hidden =
+    !(format === "swift" && type === "PROXY");
   refreshDockerConnectorControls();
   document.getElementById("repository-blobstore").closest("label").hidden = false;
   refreshRepositoryBlobStoreLock();
@@ -1940,6 +1944,7 @@ function refreshRepositoryRecipeControls() {
 
 function refreshRepositoryRemoteDefaults(recipe) {
   const remote = document.getElementById("repository-remote-url");
+  remote.readOnly = Boolean(recipe?.type === "PROXY" && recipe?.format === "swift");
   if (!recipe || recipe.type !== "PROXY") return;
   const defaults = {
     maven2: "https://repo.maven.apache.org/maven2/",
@@ -1954,8 +1959,12 @@ function refreshRepositoryRemoteDefaults(recipe) {
     cargo: "https://index.crates.io/",
     pub: "https://pub.dev/",
     composer: "https://repo.packagist.org/",
-    terraform: "https://registry.terraform.io/"
+    terraform: "https://registry.terraform.io/",
+    swift: "https://github.com/"
   };
+  if (recipe.format === "swift") {
+    remote.value = defaults.swift;
+  }
   remote.placeholder = defaults[recipe.format] || "https://example.com/";
   if (repositoryFormMode === "create" && !remote.value.trim() && defaults[recipe.format]) {
     remote.value = defaults[recipe.format];

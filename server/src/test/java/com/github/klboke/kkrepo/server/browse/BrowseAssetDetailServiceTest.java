@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -16,6 +18,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
@@ -81,6 +84,102 @@ class BrowseAssetDetailServiceTest {
         () -> service.detail(repository, ".terraform/routes/token.json", null));
 
     assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode());
+    assertEquals(List.of(), assets.pathLookups);
+  }
+
+  @Test
+  void swiftInternalSignatureDetailIsNotExposedAsDownloadableAsset() {
+    RepositoryRecord repository = repository(
+        1L, "swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    StubAssetDao assets = new StubAssetDao(Map.of(), Map.of());
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(),
+        assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    ResponseStatusException error = assertThrows(ResponseStatusException.class,
+        () -> service.detail(repository, ".swift/signatures/acme/library/1.2.3/source.cms", null));
+
+    assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode());
+    assertEquals(List.of(), assets.pathLookups);
+  }
+
+  @Test
+  void swiftBrowseOnlyManifestDetailShowsFileInfoWithoutDownload() {
+    RepositoryRecord repository = repository(
+        1L, "swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    String actualPath = "Alamofire/Alamofire/5.12.0/Package@swift-6.0.swift";
+    AssetRecord manifest = new AssetRecord(
+        10L,
+        repository.id(),
+        null,
+        null,
+        RepositoryFormat.SWIFT,
+        actualPath,
+        PersistenceHashes.pathHash(actualPath),
+        "Package@swift-6.0.swift",
+        "swift-manifest",
+        "text/x-swift",
+        128L,
+        null,
+        Instant.parse("2026-07-17T00:00:00Z"),
+        Map.of());
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(repository.id(), actualPath), manifest),
+        Map.of());
+    SwiftRegistryDao swift = mock(SwiftRegistryDao.class);
+    Instant updatedAt = Instant.parse("2026-07-17T00:00:00Z");
+    SwiftRegistryDao.Release release = new SwiftRegistryDao.Release(
+        50L,
+        repository.id(),
+        20L,
+        "alamofire",
+        "Alamofire",
+        "alamofire",
+        "Alamofire",
+        "5.12.0",
+        updatedAt,
+        "{}",
+        "a".repeat(64),
+        11L,
+        null,
+        null,
+        null,
+        "GITHUB_PROXY",
+        7L,
+        SwiftRegistryDao.RELEASE_READY,
+        updatedAt,
+        updatedAt);
+    when(swift.findRelease(repository.id(), "alamofire", "alamofire", "5.12.0"))
+        .thenReturn(Optional.of(release));
+    when(swift.listManifests(release.id())).thenReturn(List.of(
+        new SwiftRegistryDao.Manifest(
+            release.id(), "Package@swift-6.0.swift", "6.0", manifest.id(), "b".repeat(64))));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(),
+        assets,
+        null,
+        null,
+        swift,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    BrowseAssetDetailService.BrowseAssetDetail detail = service.detail(
+        repository,
+        "Alamofire/Alamofire/5.12.0/swift_manifests/Package@swift-6.0.swift",
+        null);
+
+    assertEquals("Package@swift-6.0.swift", detail.name());
+    assertEquals(128L, detail.size());
+    assertEquals("text/x-swift", detail.contentType());
+    assertEquals(null, detail.downloadUrl());
+    assertEquals("b".repeat(64), detail.checksum().get("sha256"));
+    assertEquals("manifest", detail.swift().get("asset_kind"));
+    assertEquals("Package@swift-6.0.swift", detail.swift().get("manifest_filename"));
+    assertEquals("6.0", detail.swift().get("swift_tools_version"));
+    assertTrue((Boolean) detail.content().get("generated"));
+    assertTrue((Boolean) detail.provenance().get("dynamic"));
     assertEquals(List.of(), assets.pathLookups);
   }
 
@@ -292,6 +391,388 @@ class BrowseAssetDetailServiceTest {
     assertEquals("/repository/terraform-hosted/" + versionsPath, versionsDetail.downloadUrl());
     assertTrue((Boolean) versionsDetail.content().get("generated"));
     assertTrue((Boolean) versionsDetail.provenance().get("dynamic"));
+  }
+
+  @Test
+  void swiftArchiveDetailExposesReleaseIdentityChecksumSigningAndRepositoryUrls() {
+    RepositoryRecord repository = repository(
+        1L, "swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    String path = "Acme/Library/1.2.3.zip";
+    AssetRecord archive = new AssetRecord(
+        10L,
+        repository.id(),
+        20L,
+        100L,
+        RepositoryFormat.SWIFT,
+        path,
+        PersistenceHashes.pathHash(path),
+        "1.2.3.zip",
+        "swift-source-archive",
+        "application/zip",
+        1024L,
+        null,
+        Instant.parse("2026-07-16T00:00:00Z"),
+        Map.of("swiftKind", "source-archive"));
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(repository.id(), path), archive),
+        Map.of(100L, blob(100L, 1024L)));
+    SwiftRegistryDao swift = mock(SwiftRegistryDao.class);
+    SwiftRegistryDao.Release release = new SwiftRegistryDao.Release(
+        50L,
+        repository.id(),
+        20L,
+        "acme",
+        "Acme",
+        "library",
+        "Library",
+        "1.2.3",
+        Instant.parse("2026-07-16T00:00:00Z"),
+        "{}",
+        "a".repeat(64),
+        archive.id(),
+        "cms-1.0.0",
+        11L,
+        null,
+        "HOSTED",
+        7L,
+        SwiftRegistryDao.RELEASE_READY,
+        Instant.parse("2026-07-16T00:00:00Z"),
+        Instant.parse("2026-07-16T00:00:00Z"));
+    when(swift.findRelease(repository.id(), "acme", "library", "1.2.3"))
+        .thenReturn(Optional.of(release));
+    when(swift.listManifests(release.id())).thenReturn(List.of(
+        new SwiftRegistryDao.Manifest(release.id(), "Package.swift", "", 12L, "b".repeat(64)),
+        new SwiftRegistryDao.Manifest(
+            release.id(), "Package@swift-5.9.swift", "5.9", 13L, "c".repeat(64))));
+    when(swift.listRepositoryUrls(release.id())).thenReturn(List.of(
+        new SwiftRegistryDao.RepositoryUrl(
+            1L, release.id(), repository.id(), "acme", "library",
+            "https://github.com/acme/library", "https://github.com/Acme/Library")));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(),
+        assets,
+        null,
+        null,
+        swift,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    BrowseAssetDetailService.BrowseAssetDetail detail = service.detail(repository, path, null);
+
+    assertEquals("Acme", detail.swift().get("scope"));
+    assertEquals("Library", detail.swift().get("name"));
+    assertEquals("1.2.3", detail.swift().get("version"));
+    assertEquals("source-archive", detail.swift().get("asset_kind"));
+    assertEquals("a".repeat(64), detail.swift().get("archive_sha256"));
+    assertEquals("HOSTED", detail.swift().get("source_kind"));
+    assertEquals("signed", detail.swift().get("signature_status"));
+    assertEquals("cms-1.0.0", detail.swift().get("signature_format"));
+    assertEquals(List.of("5.9"), detail.swift().get("swift_tools_versions"));
+    assertEquals(
+        List.of("https://github.com/Acme/Library"), detail.swift().get("repository_urls"));
+  }
+
+  @Test
+  void swiftReleaseMetadataDetailUsesResolvedGroupMemberWithoutStoredAsset() {
+    RepositoryRecord group = repository(
+        1L, "swift-group", RepositoryFormat.SWIFT, RepositoryType.GROUP);
+    RepositoryRecord stale = repository(
+        2L, "swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    RepositoryRecord source = repository(
+        3L, "swift-proxy", RepositoryFormat.SWIFT, RepositoryType.PROXY);
+    String path = "Alamofire/Alamofire/5.12.0";
+    Instant updatedAt = Instant.parse("2026-07-17T05:27:58Z");
+    SwiftRegistryDao.Release release = new SwiftRegistryDao.Release(
+        50L,
+        source.id(),
+        20L,
+        "alamofire",
+        "Alamofire",
+        "alamofire",
+        "Alamofire",
+        "5.12.0",
+        updatedAt,
+        "{}",
+        "a".repeat(64),
+        10L,
+        null,
+        null,
+        null,
+        "GITHUB_PROXY",
+        7L,
+        SwiftRegistryDao.RELEASE_READY,
+        updatedAt,
+        updatedAt);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    when(repositories.listMembers(group.id())).thenReturn(List.of(stale, source));
+    SwiftRegistryDao swift = mock(SwiftRegistryDao.class);
+    when(swift.findRelease(stale.id(), "alamofire", "alamofire", "5.12.0"))
+        .thenReturn(Optional.empty());
+    when(swift.findRelease(source.id(), "alamofire", "alamofire", "5.12.0"))
+        .thenReturn(Optional.of(release));
+    when(swift.listManifests(release.id())).thenReturn(List.of(
+        new SwiftRegistryDao.Manifest(release.id(), "Package.swift", "", 12L, "b".repeat(64)),
+        new SwiftRegistryDao.Manifest(
+            release.id(), "Package@swift-6.0.swift", "6.0", 13L, "c".repeat(64)),
+        new SwiftRegistryDao.Manifest(
+            release.id(), "Package@swift-6.1.swift", "6.1", 14L, "d".repeat(64))));
+    when(swift.listRepositoryUrls(release.id())).thenReturn(List.of(
+        new SwiftRegistryDao.RepositoryUrl(
+            1L,
+            release.id(),
+            source.id(),
+            "alamofire",
+            "alamofire",
+            "https://github.com/alamofire/alamofire",
+            "https://github.com/alamofire/alamofire")));
+    StubAssetDao assets = new StubAssetDao(Map.of(), Map.of());
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        repositories,
+        assets,
+        null,
+        null,
+        swift,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    BrowseAssetDetailService.BrowseAssetDetail detail = service.detail(group, path, null);
+
+    assertEquals(group.name(), detail.repository());
+    assertEquals(source.name(), detail.sourceRepository());
+    assertEquals(path, detail.path());
+    assertEquals("5.12.0", detail.name());
+    assertEquals("text/plain", detail.contentType());
+    assertEquals(updatedAt, detail.lastUpdatedAt());
+    assertEquals("/repository/swift-group/" + path, detail.downloadUrl());
+    assertEquals("release-metadata", detail.swift().get("asset_kind"));
+    assertEquals("GITHUB_PROXY", detail.swift().get("source_kind"));
+    assertEquals(source.name(), detail.swift().get("source_repository"));
+    assertEquals(List.of("6.0", "6.1"), detail.swift().get("swift_tools_versions"));
+    assertEquals(
+        List.of("https://github.com/alamofire/alamofire"),
+        detail.swift().get("repository_urls"));
+    assertTrue((Boolean) detail.content().get("generated"));
+    assertTrue((Boolean) detail.provenance().get("dynamic"));
+    assertEquals(List.of(), assets.pathLookups);
+  }
+
+  @Test
+  void swiftReleaseMetadataDetailPreservesSemverEndingInZip() {
+    RepositoryRecord repository = repository(
+        1L, "swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    String version = "1.2.3+linux.zip";
+    String path = "Acme/Library/" + version;
+    SwiftRegistryDao swift = mock(SwiftRegistryDao.class);
+    Instant updatedAt = Instant.parse("2026-07-16T00:00:00Z");
+    SwiftRegistryDao.Release release = new SwiftRegistryDao.Release(
+        50L,
+        repository.id(),
+        20L,
+        "acme",
+        "Acme",
+        "library",
+        "Library",
+        version,
+        updatedAt,
+        "{}",
+        "a".repeat(64),
+        10L,
+        null,
+        null,
+        null,
+        "HOSTED",
+        7L,
+        SwiftRegistryDao.RELEASE_READY,
+        updatedAt,
+        updatedAt);
+    when(swift.findRelease(repository.id(), "acme", "library", version))
+        .thenReturn(Optional.of(release));
+    StubAssetDao assets = new StubAssetDao(Map.of(), Map.of());
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(),
+        assets,
+        null,
+        null,
+        swift,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    BrowseAssetDetailService.BrowseAssetDetail detail = service.detail(repository, path, null);
+
+    assertEquals(version, detail.swift().get("version"));
+    assertEquals("release-metadata", detail.swift().get("asset_kind"));
+    assertEquals(List.of(), assets.pathLookups);
+  }
+
+  @Test
+  void swiftReleaseMetadataDetailStopsAtGroupTombstone() {
+    RepositoryRecord group = repository(
+        1L, "swift-group", RepositoryFormat.SWIFT, RepositoryType.GROUP);
+    RepositoryRecord deleted = repository(
+        2L, "swift-deleted", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    RepositoryRecord later = repository(
+        3L, "swift-later", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    String path = "Alamofire/Alamofire/5.12.0";
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    when(repositories.listMembers(group.id())).thenReturn(List.of(deleted, later));
+    SwiftRegistryDao swift = mock(SwiftRegistryDao.class);
+    when(swift.findTombstone(deleted.id(), "alamofire", "alamofire", "5.12.0"))
+        .thenReturn(Optional.of(new SwiftRegistryDao.Tombstone(
+            deleted.id(),
+            "alamofire",
+            "alamofire",
+            "5.12.0",
+            "deleted",
+            8L,
+            Instant.parse("2026-07-17T05:27:58Z"))));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        repositories,
+        new StubAssetDao(Map.of(), Map.of()),
+        null,
+        null,
+        swift,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    ResponseStatusException error = assertThrows(
+        ResponseStatusException.class, () -> service.detail(group, path, null));
+
+    assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode());
+    verify(swift, never()).findRelease(later.id(), "alamofire", "alamofire", "5.12.0");
+  }
+
+  @Test
+  void swiftManifestDetailPreservesSemverEndingInZip() {
+    RepositoryRecord repository = repository(
+        1L, "swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    String version = "1.2.3+linux.zip";
+    String path = "Acme/Library/" + version + "/Package.swift";
+    AssetRecord manifest = new AssetRecord(
+        10L,
+        repository.id(),
+        20L,
+        100L,
+        RepositoryFormat.SWIFT,
+        path,
+        PersistenceHashes.pathHash(path),
+        "Package.swift",
+        "swift-manifest",
+        "text/x-swift",
+        128L,
+        null,
+        Instant.parse("2026-07-16T00:00:00Z"),
+        Map.of("swiftKind", "manifest"));
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(repository.id(), path), manifest),
+        Map.of(100L, blob(100L, 128L)));
+    SwiftRegistryDao swift = mock(SwiftRegistryDao.class);
+    when(swift.findRelease(repository.id(), "acme", "library", version))
+        .thenReturn(Optional.empty());
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(),
+        assets,
+        null,
+        null,
+        swift,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    BrowseAssetDetailService.BrowseAssetDetail detail = service.detail(repository, path, null);
+
+    assertEquals(version, detail.swift().get("version"));
+    verify(swift).findRelease(repository.id(), "acme", "library", version);
+  }
+
+  @Test
+  void swiftManifestDetailStopsAtGroupTombstone() {
+    RepositoryRecord group = repository(
+        1L, "swift-group", RepositoryFormat.SWIFT, RepositoryType.GROUP);
+    RepositoryRecord deleted = repository(
+        2L, "swift-deleted", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    RepositoryRecord later = repository(
+        3L, "swift-later", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    String path = "Alamofire/Alamofire/5.12.0/swift_manifests/Package.swift";
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    when(repositories.listMembers(group.id())).thenReturn(List.of(deleted, later));
+    SwiftRegistryDao swift = mock(SwiftRegistryDao.class);
+    when(swift.findTombstone(deleted.id(), "alamofire", "alamofire", "5.12.0"))
+        .thenReturn(Optional.of(new SwiftRegistryDao.Tombstone(
+            deleted.id(),
+            "alamofire",
+            "alamofire",
+            "5.12.0",
+            "deleted",
+            8L,
+            Instant.parse("2026-07-17T05:27:58Z"))));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        repositories,
+        new StubAssetDao(Map.of(), Map.of()),
+        null,
+        null,
+        swift,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    ResponseStatusException error = assertThrows(
+        ResponseStatusException.class, () -> service.detail(group, path, null));
+
+    assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode());
+    verify(swift, never()).findRelease(later.id(), "alamofire", "alamofire", "5.12.0");
+  }
+
+  @Test
+  void swiftArchiveDetailStopsAtGroupTombstoneBeforePhysicalAssetFallback() {
+    RepositoryRecord group = repository(
+        1L, "swift-group", RepositoryFormat.SWIFT, RepositoryType.GROUP);
+    RepositoryRecord deleted = repository(
+        2L, "swift-deleted", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    RepositoryRecord later = repository(
+        3L, "swift-later", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    String path = "Alamofire/Alamofire/5.12.0.zip";
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    when(repositories.listMembers(group.id())).thenReturn(List.of(deleted, later));
+    SwiftRegistryDao swift = mock(SwiftRegistryDao.class);
+    when(swift.findTombstone(deleted.id(), "alamofire", "alamofire", "5.12.0"))
+        .thenReturn(Optional.of(new SwiftRegistryDao.Tombstone(
+            deleted.id(),
+            "alamofire",
+            "alamofire",
+            "5.12.0",
+            "deleted",
+            8L,
+            Instant.parse("2026-07-17T05:27:58Z"))));
+    AssetRecord archive = new AssetRecord(
+        10L,
+        later.id(),
+        null,
+        100L,
+        RepositoryFormat.SWIFT,
+        path,
+        PersistenceHashes.pathHash(path),
+        "5.12.0.zip",
+        "swift-source-archive",
+        "application/zip",
+        128L,
+        null,
+        Instant.parse("2026-07-17T00:00:00Z"),
+        Map.of("swiftKind", "source-archive"));
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(later.id(), path), archive),
+        Map.of(100L, blob(100L, 128L)));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        repositories,
+        assets,
+        null,
+        null,
+        swift,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    ResponseStatusException error = assertThrows(
+        ResponseStatusException.class, () -> service.detail(group, path, null));
+
+    assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode());
+    assertEquals(List.of(), assets.pathLookups);
   }
 
   @Test

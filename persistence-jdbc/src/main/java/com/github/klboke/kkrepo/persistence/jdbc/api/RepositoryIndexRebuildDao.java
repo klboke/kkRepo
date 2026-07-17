@@ -10,6 +10,7 @@ public interface RepositoryIndexRebuildDao {
   String YUM_METADATA = "YUM_METADATA";
   String RUBYGEMS_METADATA = "RUBYGEMS_METADATA";
   String TERRAFORM_COMPONENTS = "TERRAFORM_COMPONENTS";
+  String SWIFT_COMPONENTS = "SWIFT_COMPONENTS";
   String ROOT_SCOPE = "";
 
   void enqueue(long repositoryId, String indexKind);

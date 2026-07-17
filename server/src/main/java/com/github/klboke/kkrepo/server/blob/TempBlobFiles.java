@@ -188,9 +188,26 @@ public final class TempBlobFiles {
       return "-";
     }
     Object errorUri = request.getAttribute(RequestDispatcher.ERROR_REQUEST_URI);
-    String uri = safe(errorUri instanceof String value ? value : request.getRequestURI());
-    String query = safe(request.getQueryString());
+    String rawUri = errorUri instanceof String value ? value : request.getRequestURI();
+    String uri = safe(rawUri);
+    String rawQuery = request.getQueryString();
+    String query = swiftIdentifiersUri(rawUri) && rawQuery != null
+        ? "url=<redacted>"
+        : safe(rawQuery);
     return "-".equals(query) ? uri : uri + "?" + query;
+  }
+
+  private static boolean swiftIdentifiersUri(String uri) {
+    if (uri == null) {
+      return false;
+    }
+    int repositorySegment = uri.lastIndexOf("/repository/");
+    if (repositorySegment < 0) {
+      return false;
+    }
+    String repositoryPath = uri.substring(repositorySegment + "/repository/".length());
+    int pathSeparator = repositoryPath.indexOf('/');
+    return pathSeparator > 0 && "identifiers".equals(repositoryPath.substring(pathSeparator + 1));
   }
 
   private static String requestHeader(HttpServletRequest request, String name) {

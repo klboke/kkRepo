@@ -379,6 +379,49 @@ Provider binary 来猜测该 metadata。
 
 kkRepo 将 hosted Provider SHA256SUMS 与 detached GPG signature 作为同一 revision 生成。Proxy 会保留并校验上游 checksum/signing metadata；group source binding 保证 metadata 与 archive 下载来自同一个 member。
 
+## Swift Package Registry
+
+创建 `swift-hosted`、`swift-proxy` 和 `swift-group` 仓库。发布使用 hosted URL，依赖解析使用 group URL。生产环境的 SwiftPM login 必须使用 HTTPS：
+
+```bash
+swift package-registry set \
+  https://nexus.example.com/repository/swift-group/
+
+swift package-registry login \
+  https://nexus.example.com/repository/swift-group/login \
+  --username alice \
+  --password "$KKREPO_PASSWORD" \
+  --no-confirm
+```
+
+Swift registry 规范将 `POST /login` 定义为可选能力，未实现该能力的服务端可返回 `501 Not Implemented`。kkrepo 已实现该端点：有效 Basic 或 Bearer/`GenericToken` 凭据返回 `200`，无效凭据返回 `401`。SwiftPM 5.8+ 可在 HTTPS 上执行 login 命令；因此 `501` 只是协议参考分支，不是 kkrepo 的预期结果。
+
+在 package 目录中发布不可变 source archive。Archive 必须只有一个顶层 package root，并包含合法 `Package.swift`；版本化 `Package@swift-X.Y.swift` manifest 会原样保留：
+
+```bash
+swift package-registry publish acme.demo 1.2.3 \
+  --url https://nexus.example.com/repository/swift-hosted/ \
+  --metadata-path package-metadata.json
+```
+
+在 `Package.swift` 中使用 registry identity：
+
+```swift
+dependencies: [
+    .package(id: "acme.demo", exact: "1.2.3")
+]
+```
+
+然后通过已配置的 group 解析和构建。GitHub SCM dependency 可通过 registry `/identifiers` mapping 转换：
+
+```bash
+swift package resolve
+swift build
+swift package resolve --replace-scm-with-registry
+```
+
+CI 可创建 `GenericToken`，并使用 `swift package-registry login --token <token>`。GitHub-backed proxy 接受 GitHub HTTPS/SSH repository identity，首次观察 tag 后固定 commit 和 archive checksum；上游 tag 移动不会改写已缓存 release。
+
 ## NuGet
 
 添加 source：

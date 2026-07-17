@@ -118,6 +118,10 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       filterChain.doFilter(request, response);
       return;
     }
+    if (isInvalidSwiftPublishRoute(repository.get(), target)) {
+      filterChain.doFilter(request, response);
+      return;
+    }
     Optional<AuthenticatedSubject> authenticated = terraformUrlToken == null
         ? switch (repository.get().format()) {
       case CARGO -> authenticationService.authenticateCargo(request);
@@ -128,7 +132,11 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
         : authenticationService.authenticateTerraformUrlToken(terraformUrlToken);
     boolean authenticatedAnonymously = false;
     if (authenticated.isEmpty()) {
-      authenticated = target.readOnly(repository.get().format())
+      boolean explicitCredential = terraformUrlToken != null
+          || authenticationService.hasPresentedCredentials(request);
+      authenticated = !explicitCredential
+              && target.readOnly(repository.get().format())
+              && !isSwiftLogin(repository.get(), target)
           ? authenticationService.authenticateAnonymous()
           : Optional.empty();
       authenticatedAnonymously = authenticated.isPresent();
@@ -141,6 +149,10 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
 
     AccessDecision decision = decide(authenticated.get(), repository.get(), target);
     if (!decision.allowed()) {
+      if (repository.get().format() == RepositoryFormat.SWIFT) {
+        swiftProblem(response, HttpServletResponse.SC_FORBIDDEN, "Forbidden", decision.reason());
+        return;
+      }
       response.sendError(HttpServletResponse.SC_FORBIDDEN, decision.reason());
       return;
     }
@@ -188,6 +200,9 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
 
   private List<PermissionAction> actionsForDecision(
       RepositoryRecord repository, RepositoryRequest target) {
+    if (repository.format() == RepositoryFormat.SWIFT && target.componentUploadRoute()) {
+      return List.of(PermissionAction.ADD);
+    }
     if (repository.format() != RepositoryFormat.TERRAFORM
         || !"PUT".equalsIgnoreCase(target.method())) {
       return target.actions(repository.format());
@@ -230,7 +245,8 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       if (repository == null || repository.isBlank()) {
         return Optional.empty();
       }
-      return Optional.of(new RepositoryRequest(repository.trim(), "", method, List.of(PermissionAction.EDIT), false));
+      return Optional.of(new RepositoryRequest(
+          repository.trim(), "", method, List.of(PermissionAction.EDIT), false, true));
     }
     Optional<String> legacyUploadRepository = legacyUi.internalUiUploadRepository(uri);
     if (legacyUploadRepository.isPresent()) {
@@ -239,7 +255,8 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
           "",
           method,
           List.of(PermissionAction.EDIT),
-          false));
+          false,
+          true));
     }
     return Optional.empty();
   }
@@ -260,7 +277,8 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
         path,
         method,
         null,
-        isNpmTokenRoute(method, path)));
+        isNpmTokenRoute(method, path),
+        false));
   }
 
   private Optional<RepositoryRequest> browseRoute(String method, String uri) {
@@ -277,7 +295,8 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     if (repository.isBlank()) {
       return Optional.empty();
     }
-    return Optional.of(new RepositoryRequest(decode(repository), path, method, List.of(PermissionAction.BROWSE), false));
+    return Optional.of(new RepositoryRequest(
+        decode(repository), path, method, List.of(PermissionAction.BROWSE), false, false));
   }
 
   private boolean isNpmTokenRoute(String method, String path) {
@@ -298,6 +317,13 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     }
     if (format == RepositoryFormat.TERRAFORM && "PUT".equalsIgnoreCase(method)) {
       return List.of(PermissionAction.ADD, PermissionAction.EDIT);
+    }
+    if (format == RepositoryFormat.SWIFT && "PUT".equalsIgnoreCase(method)) {
+      return List.of(PermissionAction.ADD);
+    }
+    if (format == RepositoryFormat.SWIFT && "POST".equalsIgnoreCase(method)
+        && "login".equals(path)) {
+      return List.of(PermissionAction.READ);
     }
     if (format == RepositoryFormat.CARGO && isCargoYankRoute(method, path)) {
       return List.of(PermissionAction.EDIT);
@@ -330,6 +356,13 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     return repository.format() == RepositoryFormat.PUB
         && repository.type() != RepositoryType.HOSTED
         && isPubPublishRoute(target.method(), target.path());
+  }
+
+  private static boolean isInvalidSwiftPublishRoute(
+      RepositoryRecord repository, RepositoryRequest target) {
+    return repository.format() == RepositoryFormat.SWIFT
+        && repository.type() != RepositoryType.HOSTED
+        && "PUT".equalsIgnoreCase(target.method());
   }
 
   private static boolean isCargoYankRoute(String method, String path) {
@@ -376,7 +409,56 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     } else {
       response.setHeader(HttpHeaders.WWW_AUTHENTICATE, "Basic realm=\"kkrepo\"");
     }
+    if (repository.format() == RepositoryFormat.SWIFT) {
+      swiftProblem(
+          response,
+          HttpServletResponse.SC_UNAUTHORIZED,
+          "Unauthorized",
+          "Authentication required");
+      return;
+    }
     response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Authentication required");
+  }
+
+  private static boolean isSwiftLogin(
+      RepositoryRecord repository, RepositoryRequest target) {
+    return repository.format() == RepositoryFormat.SWIFT
+        && "POST".equalsIgnoreCase(target.method())
+        && "login".equals(target.path());
+  }
+
+  private static void swiftProblem(
+      HttpServletResponse response, int status, String title, String detail) throws IOException {
+    response.setStatus(status);
+    response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+    response.setContentType("application/problem+json");
+    response.setHeader("Content-Version", "1");
+    response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
+    response.getWriter().write("{\"type\":\"about:blank\",\"title\":\""
+        + json(title) + "\",\"status\":" + status + ",\"detail\":\""
+        + json(detail == null ? title : detail) + "\"}");
+  }
+
+  private static String json(String value) {
+    StringBuilder escaped = new StringBuilder();
+    for (int i = 0; i < value.length(); i++) {
+      char character = value.charAt(i);
+      switch (character) {
+        case '\\' -> escaped.append("\\\\");
+        case '"' -> escaped.append("\\\"");
+        case '\n' -> escaped.append("\\n");
+        case '\r' -> escaped.append("\\r");
+        case '\t' -> escaped.append("\\t");
+        default -> {
+          if (character < 0x20) {
+            escaped.append(String.format("\\u%04x", (int) character));
+          } else {
+            escaped.append(character);
+          }
+        }
+      }
+    }
+    return escaped.toString();
   }
 
   private String cargoLoginUrl(HttpServletRequest request, String repository) {
@@ -399,7 +481,8 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       String path,
       String method,
       List<PermissionAction> fixedActions,
-      boolean npmTokenRoute) {
+      boolean npmTokenRoute,
+      boolean componentUploadRoute) {
     private List<PermissionAction> actions(RepositoryFormat format) {
       return fixedActions == null ? actionsForRepository(method, path, format) : fixedActions;
     }
@@ -416,7 +499,8 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     }
 
     private RepositoryRequest withPath(String normalizedPath) {
-      return new RepositoryRequest(repository, normalizedPath, method, fixedActions, npmTokenRoute);
+      return new RepositoryRequest(
+          repository, normalizedPath, method, fixedActions, npmTokenRoute, componentUploadRoute);
     }
 
   }

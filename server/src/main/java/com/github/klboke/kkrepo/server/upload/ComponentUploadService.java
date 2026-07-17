@@ -16,11 +16,14 @@ import com.github.klboke.kkrepo.server.npm.NpmHostedService;
 import com.github.klboke.kkrepo.server.pypi.PypiHostedService;
 import com.github.klboke.kkrepo.server.pub.PubHostedService;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
+import com.github.klboke.kkrepo.server.swift.SwiftService;
+import com.github.klboke.kkrepo.server.swift.SwiftPublishLimits;
 import com.github.klboke.kkrepo.server.terraform.TerraformService;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPathParser;
 import com.github.klboke.kkrepo.server.yum.YumService;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -79,6 +82,20 @@ public class ComponentUploadService {
               field("os", "STRING", "Provider operating system", true, "Component coordinates"),
               field("arch", "STRING", "Provider architecture", true, "Component coordinates")),
           List.of(field("asset", "FILE", "Terraform module/provider archive", false, null))),
+      new UploadDefinition(
+          "swift",
+          false,
+          List.of(
+              field("scope", "STRING", "Package scope", false, "Component coordinates"),
+              field("name", "STRING", "Package name", false, "Component coordinates"),
+              field("version", "STRING", "Semantic version", false, "Component coordinates"),
+              field("metadata", "STRING", "Registry metadata JSON", true, "Publication metadata"),
+              field("signature-format", "STRING", "Source signature format (cms-1.0.0)", true,
+                  "Publication metadata")),
+          List.of(
+              field("source-archive", "FILE", "Swift source archive", false, null),
+              field("source-archive-signature", "FILE", "Optional source archive CMS signature", true, null),
+              field("metadata-signature", "FILE", "Optional metadata signature", true, null))),
       rawLikeUpload("nuget"),
       rawLikeUpload("rubygems"),
       rawLikeUpload("yum"),
@@ -96,6 +113,7 @@ public class ComponentUploadService {
   private final RawHostedService rawHosted;
   private final YumService yumService;
   private final TerraformService terraformService;
+  private final SwiftService swiftService;
   private final MavenPathParser mavenPathParser = new MavenPathParser();
   private final TerraformPathParser terraformPathParser = new TerraformPathParser();
 
@@ -112,7 +130,8 @@ public class ComponentUploadService {
       ComposerHostedService composerHosted,
       RawHostedService rawHosted,
       YumService yumService,
-      TerraformService terraformService) {
+      TerraformService terraformService,
+      SwiftService swiftService) {
     this.registry = registry;
     this.assetDao = assetDao;
     this.mavenHosted = mavenHosted;
@@ -125,6 +144,24 @@ public class ComponentUploadService {
     this.rawHosted = rawHosted;
     this.yumService = yumService;
     this.terraformService = terraformService;
+    this.swiftService = swiftService;
+  }
+
+  public ComponentUploadService(
+      RepositoryRuntimeRegistry registry,
+      AssetDao assetDao,
+      MavenHostedService mavenHosted,
+      NpmHostedService npmHosted,
+      PypiHostedService pypiHosted,
+      HelmHostedService helmHosted,
+      CargoHostedService cargoHosted,
+      PubHostedService pubHosted,
+      ComposerHostedService composerHosted,
+      RawHostedService rawHosted,
+      YumService yumService,
+      TerraformService terraformService) {
+    this(registry, assetDao, mavenHosted, npmHosted, pypiHosted, helmHosted, cargoHosted,
+        pubHosted, composerHosted, rawHosted, yumService, terraformService, null);
   }
 
   public ComponentUploadService(
@@ -133,7 +170,7 @@ public class ComponentUploadService {
       CargoHostedService cargoHosted, PubHostedService pubHosted, ComposerHostedService composerHosted,
       RawHostedService rawHosted, YumService yumService) {
     this(registry, assetDao, mavenHosted, npmHosted, pypiHosted, helmHosted, cargoHosted,
-        pubHosted, composerHosted, rawHosted, yumService, null);
+        pubHosted, composerHosted, rawHosted, yumService, null, null);
   }
 
   /** Backward-compatible constructor used by existing focused upload tests. */
@@ -149,7 +186,7 @@ public class ComponentUploadService {
       RawHostedService rawHosted,
       YumService yumService) {
     this(registry, assetDao, mavenHosted, npmHosted, pypiHosted, helmHosted, cargoHosted,
-        pubHosted, null, rawHosted, yumService, null);
+        pubHosted, null, rawHosted, yumService, null, null);
   }
 
   public List<UploadDefinition> definitions() {
@@ -197,6 +234,7 @@ public class ComponentUploadService {
       case PUB -> uploadPub(runtime, upload, createdBy, createdByIp);
       case COMPOSER -> uploadComposer(runtime, upload, createdBy, createdByIp);
       case TERRAFORM -> uploadTerraform(runtime, upload, createdBy, createdByIp);
+      case SWIFT -> uploadSwift(runtime, upload, createdBy, createdByIp);
       case DOCKER -> throw new UploadValidationException("Docker hosted upload must use the Docker Registry V2 API");
       case NUGET -> uploadRaw(runtime, upload, createdBy, createdByIp);
       case RUBYGEMS -> uploadRaw(runtime, upload, createdBy, createdByIp);
@@ -239,6 +277,40 @@ public class ComponentUploadService {
           disposition, protocols, createdBy, createdByIp);
     }
     return List.of(path);
+  }
+
+  private List<String> uploadSwift(
+      RepositoryRuntime runtime, NormalizedUpload upload, String createdBy, String createdByIp) throws IOException {
+    if (swiftService == null) {
+      throw new UploadValidationException("Swift upload service is unavailable");
+    }
+    String scope = requireField(upload.fields(), "scope");
+    String name = requireField(upload.fields(), "name");
+    String version = requireField(upload.fields(), "version");
+    AssetUpload archive = asset(upload, "source-archive", false);
+    AssetUpload sourceSignature = asset(upload, "source-archive-signature", true);
+    AssetUpload metadataSignature = asset(upload, "metadata-signature", true);
+    String metadata = blankToNull(upload.fields().get("metadata"));
+    if (metadata != null
+        && utf8LengthExceeds(metadata, SwiftPublishLimits.MAX_METADATA_BYTES)) {
+      throw new UploadValidationException("swift.metadata exceeds the 1 MiB size limit");
+    }
+    try (InputStream body = archive.file().getInputStream()) {
+      swiftService.publishUpload(
+          runtime,
+          scope,
+          name,
+          version,
+          body,
+          metadata,
+          bytes(sourceSignature, SwiftPublishLimits.MAX_SOURCE_ARCHIVE_SIGNATURE_BYTES),
+          bytes(metadataSignature, SwiftPublishLimits.MAX_METADATA_SIGNATURE_BYTES),
+          blankToNull(upload.fields().get("signature-format")),
+          null,
+          createdBy,
+          createdByIp);
+    }
+    return List.of(scope + "/" + name + "/" + version);
   }
 
   private List<String> uploadMaven(
@@ -512,6 +584,7 @@ public class ComponentUploadService {
       case RUBYGEMS -> "rubygems";
       case YUM -> "yum";
       case TERRAFORM -> "terraform";
+      case SWIFT -> "swift";
       case RAW -> "raw";
     };
   }
@@ -567,6 +640,59 @@ public class ComponentUploadService {
       throw new UploadValidationException(label + " upload requires exactly one asset");
     }
     return upload.assets().getFirst();
+  }
+
+  private static AssetUpload asset(NormalizedUpload upload, String key, boolean optional) {
+    AssetUpload result = upload.assets().stream()
+        .filter(candidate -> key.equals(candidate.key()))
+        .findFirst()
+        .orElse(null);
+    if (result == null && !optional) {
+      throw new UploadValidationException("Upload is missing file: " + key);
+    }
+    return result;
+  }
+
+  private static byte[] bytes(AssetUpload asset, int limit) throws IOException {
+    if (asset == null) {
+      return null;
+    }
+    if (asset.file().getSize() > limit) {
+      throw new UploadValidationException(
+          asset.key() + " exceeds the " + displaySize(limit) + " size limit");
+    }
+    try (InputStream input = asset.file().getInputStream();
+         java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream()) {
+      byte[] buffer = new byte[16 * 1024];
+      for (int count; (count = input.read(buffer)) >= 0;) {
+        if (output.size() + count > limit) {
+          throw new UploadValidationException(
+              asset.key() + " exceeds the " + displaySize(limit) + " size limit");
+        }
+        output.write(buffer, 0, count);
+      }
+      return output.toByteArray();
+    }
+  }
+
+  private static String displaySize(int bytes) {
+    if (bytes % (1024 * 1024) == 0) {
+      return (bytes / (1024 * 1024)) + " MiB";
+    }
+    return (bytes / 1024) + " KiB";
+  }
+
+  private static boolean utf8LengthExceeds(String value, int limit) {
+    long bytes = 0L;
+    for (int index = 0; index < value.length();) {
+      int codePoint = value.codePointAt(index);
+      bytes += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+      if (bytes > limit) {
+        return true;
+      }
+      index += Character.charCount(codePoint);
+    }
+    return false;
   }
 
   private void ensureNoExistingAssets(RepositoryRuntime runtime, List<String> paths) {

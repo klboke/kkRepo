@@ -3,9 +3,13 @@ package com.github.klboke.kkrepo.server.blob;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.github.klboke.kkrepo.core.BlobFileRegion;
 import com.github.klboke.kkrepo.core.BlobObjectMetadata;
 import com.github.klboke.kkrepo.core.BlobReference;
@@ -26,6 +30,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
 class TempBlobFilesTest {
@@ -88,6 +93,32 @@ class TempBlobFilesTest {
 
     assertDoesNotThrow(() -> TempBlobFiles.copyResponse(body, new FailingOutputStream("Broken pipe"), request));
     assertTrue(TempBlobFiles.hasHandledClientAbort(request));
+  }
+
+  @Test
+  void clientAbortLogRedactsSwiftIdentifiersUrlQuery() {
+    Map<String, Object> attributes = new HashMap<>();
+    String sensitiveQuery =
+        "url=https%3A%2F%2Ftoken%40github.com%2Fprivate-owner%2Fprivate-package.git%3Faccess_token%3Dsecret";
+    HttpServletRequest request = requestWithAttributes(
+        attributes,
+        "/repository/swift-group/identifiers",
+        sensitiveQuery);
+    ListAppender<ILoggingEvent> appender = attachAppender();
+
+    try {
+      TempBlobFiles.logClientAbort(request, new IOException("Broken pipe"));
+    } finally {
+      detachAppender(appender);
+    }
+
+    assertEquals(1, appender.list.size());
+    String message = appender.list.get(0).getFormattedMessage();
+    assertTrue(message.contains("uri=/repository/swift-group/identifiers?url=<redacted>"));
+    assertFalse(message.contains("private-owner"));
+    assertFalse(message.contains("private-package"));
+    assertFalse(message.contains("access_token"));
+    assertFalse(message.contains("secret"));
   }
 
   @Test
@@ -216,6 +247,13 @@ class TempBlobFilesTest {
   }
 
   private static HttpServletRequest requestWithAttributes(Map<String, Object> attributes) {
+    return requestWithAttributes(attributes, "/repository/pypi/packages/example.whl", null);
+  }
+
+  private static HttpServletRequest requestWithAttributes(
+      Map<String, Object> attributes,
+      String requestUri,
+      String queryString) {
     return (HttpServletRequest) Proxy.newProxyInstance(
         TempBlobFilesTest.class.getClassLoader(),
         new Class<?>[]{HttpServletRequest.class},
@@ -226,8 +264,8 @@ class TempBlobFilesTest {
             yield null;
           }
           case "getMethod" -> "GET";
-          case "getRequestURI" -> "/repository/pypi/packages/example.whl";
-          case "getQueryString" -> null;
+          case "getRequestURI" -> requestUri;
+          case "getQueryString" -> queryString;
           case "getRemoteAddr" -> "127.0.0.1";
           case "getHeader" -> switch ((String) args[0]) {
             case "User-Agent" -> "uv/0.11.19";
@@ -240,6 +278,19 @@ class TempBlobFilesTest {
           };
           default -> defaultValue(method.getReturnType());
         });
+  }
+
+  private static ListAppender<ILoggingEvent> attachAppender() {
+    Logger logger = (Logger) LoggerFactory.getLogger(TempBlobFiles.class);
+    ListAppender<ILoggingEvent> appender = new ListAppender<>();
+    appender.start();
+    logger.addAppender(appender);
+    return appender;
+  }
+
+  private static void detachAppender(ListAppender<ILoggingEvent> appender) {
+    Logger logger = (Logger) LoggerFactory.getLogger(TempBlobFiles.class);
+    logger.detachAppender(appender);
   }
 
   private static Object defaultValue(Class<?> returnType) {

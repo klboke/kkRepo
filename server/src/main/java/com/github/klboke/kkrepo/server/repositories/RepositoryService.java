@@ -7,6 +7,7 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
@@ -31,6 +32,8 @@ import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
 import com.github.klboke.kkrepo.server.security.SecurityAuthorizationCache;
 import com.github.klboke.kkrepo.server.security.SecurityCatalogCache;
 import com.github.klboke.kkrepo.server.security.SecurityValidationException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -71,6 +74,7 @@ public class RepositoryService {
   private final DockerConnectorRuntime dockerConnectorRuntime;
   private final TerraformRegistryDao terraformRegistry;
   private final ProxiedHttpClientFactory proxiedHttpClientFactory;
+  private final SwiftRegistryDao swiftRegistry;
   private final String urlPrefix;
   private final int serverPort;
   private final int managementPort;
@@ -93,6 +97,7 @@ public class RepositoryService {
       DockerConnectorRuntime dockerConnectorRuntime,
       TerraformRegistryDao terraformRegistry,
       ProxiedHttpClientFactory proxiedHttpClientFactory,
+      SwiftRegistryDao swiftRegistry,
       @Value("${kkrepo.compatibility.repository-url-prefix:/repository}") String urlPrefix,
       @Value("${server.port:8080}") int serverPort,
       @Value("${management.server.port:${server.port:8080}}") int managementPort) {
@@ -112,6 +117,7 @@ public class RepositoryService {
     this.dockerConnectorRuntime = dockerConnectorRuntime;
     this.terraformRegistry = terraformRegistry;
     this.proxiedHttpClientFactory = proxiedHttpClientFactory;
+    this.swiftRegistry = swiftRegistry;
     this.urlPrefix = urlPrefix;
     this.serverPort = serverPort;
     this.managementPort = managementPort;
@@ -125,7 +131,7 @@ public class RepositoryService {
       String urlPrefix) {
     this(repositoryDao, blobStoreDao, securityDao, runtimeRegistry, null, null,
         null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, null, null, null,
-        null, null, urlPrefix, 8080, 8080);
+        null, null, null, urlPrefix, 8080, 8080);
   }
 
   public RepositoryService(
@@ -137,7 +143,7 @@ public class RepositoryService {
       String urlPrefix) {
     this(repositoryDao, blobStoreDao, securityDao, runtimeRegistry, null, null,
         null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, cacheController, null, null,
-        null, null, urlPrefix, 8080, 8080);
+        null, null, null, urlPrefix, 8080, 8080);
   }
 
   RepositoryService(
@@ -149,7 +155,7 @@ public class RepositoryService {
       String urlPrefix) {
     this(repositoryDao, blobStoreDao, securityDao, runtimeRegistry, null, null,
         null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, null, null, null,
-        null, proxiedHttpClientFactory, urlPrefix, 8080, 8080);
+        null, proxiedHttpClientFactory, null, urlPrefix, 8080, 8080);
   }
 
   RepositoryService(
@@ -161,8 +167,8 @@ public class RepositoryService {
       int serverPort,
       int managementPort) {
     this(repositoryDao, blobStoreDao, securityDao, runtimeRegistry, null, null,
-        null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, null, null, null, null, null, urlPrefix,
-        serverPort, managementPort);
+        null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, null, null, null, null, null, null,
+        urlPrefix, serverPort, managementPort);
   }
 
   @Transactional(readOnly = true)
@@ -320,8 +326,8 @@ public class RepositoryService {
       }
       case PROXY -> {
         ProxySettings existingProxy = readProxyAttributes(existing);
-        ProxySettings merged = mergeProxy(existingProxy, existing.proxyRemoteUrl(), command.proxy());
-        validateProxy(merged);
+        ProxySettings merged = requireProxy(
+            mergeProxy(existingProxy, existing.proxyRemoteUrl(), command.proxy()), recipe.format());
         proxyRemoteUrl = merged.remoteUrl();
         attributes.put("proxy", proxyAttributes(merged));
       }
@@ -344,11 +350,13 @@ public class RepositoryService {
       invalidatePypiGroupAfterCommit(existing.format(), existing.id());
       invalidateGroupMemberGroupAfterCommit(existing.format(), existing.id());
       invalidateTerraformGroupBindings(existing.format(), existing.id());
+      invalidateSwiftGroupBindings(existing.format(), existing.id());
     } else if (recipe.type() != RepositoryType.GROUP) {
       invalidateNpmMemberAfterCommit(existing.format(), existing.id());
       invalidatePypiMemberAfterCommit(existing.format(), existing.id());
       invalidateGroupMemberMemberAfterCommit(existing.format(), existing.id());
       invalidateTerraformContainingGroupBindings(existing.format(), existing.id(), new HashSet<>());
+      invalidateSwiftContainingGroupBindings(existing.format(), existing.id(), new HashSet<>());
     }
 
     invalidateRuntimeCache(existing.id(), name);
@@ -401,6 +409,7 @@ public class RepositoryService {
     invalidatePypiGroupAfterCommit(existing.format(), existing.id());
     invalidateGroupMemberGroupAfterCommit(existing.format(), existing.id());
     invalidateTerraformGroupBindings(existing.format(), existing.id());
+    invalidateSwiftGroupBindings(existing.format(), existing.id());
     runtimeRegistry.invalidate(name);
     invalidateRepositoryCacheTokensAfterCommit(existing.id());
     refreshRepositoryCatalogAfterCommit();
@@ -491,6 +500,32 @@ public class RepositoryService {
       }
       terraformRegistry.deleteSourceBindings(group.id());
       invalidateTerraformContainingGroupBindings(format, group.id(), visited);
+    }
+  }
+
+  private void invalidateSwiftGroupBindings(RepositoryFormat format, long groupRepositoryId) {
+    if (format != RepositoryFormat.SWIFT || swiftRegistry == null) {
+      return;
+    }
+    // The shared revision is the fencing token for group membership snapshots. Bump it before
+    // deleting bindings so an in-flight request using the old member order cannot recreate one.
+    swiftRegistry.nextRepositoryRevision(groupRepositoryId);
+    swiftRegistry.deleteGroupSourceBindings(groupRepositoryId);
+    invalidateSwiftContainingGroupBindings(format, groupRepositoryId, new HashSet<>());
+  }
+
+  private void invalidateSwiftContainingGroupBindings(
+      RepositoryFormat format, long repositoryId, Set<Long> visited) {
+    if (format != RepositoryFormat.SWIFT || swiftRegistry == null) {
+      return;
+    }
+    for (RepositoryRecord group : repositoryDao.listGroupsContaining(repositoryId)) {
+      if (group.id() == null || !visited.add(group.id())) {
+        continue;
+      }
+      swiftRegistry.nextRepositoryRevision(group.id());
+      swiftRegistry.deleteGroupSourceBindings(group.id());
+      invalidateSwiftContainingGroupBindings(format, group.id(), visited);
     }
   }
 
@@ -851,7 +886,14 @@ public class RepositoryService {
         && (settings.remoteUrl() == null || settings.remoteUrl().isBlank())) {
       settings = withRemoteUrl(settings, defaultRemote);
     }
-    validateProxy(settings);
+    if (format == RepositoryFormat.SWIFT) {
+      settings = new ProxySettings(
+          normalizeSwiftRemoteUrl(settings.remoteUrl()),
+          settings.contentMaxAgeMinutes(), settings.metadataMaxAgeMinutes(), settings.autoBlock(),
+          settings.remoteUsername(), settings.remotePassword(), settings.remotePasswordConfigured(),
+          settings.remoteBearerToken(), settings.remoteBearerTokenConfigured());
+    }
+    validateProxy(settings, format);
     return settings;
   }
 
@@ -860,6 +902,7 @@ public class RepositoryService {
       case PUB -> "https://pub.dev/";
       case COMPOSER -> "https://repo.packagist.org/";
       case TERRAFORM -> "https://registry.terraform.io/";
+      case SWIFT -> "https://github.com/";
       default -> null;
     };
   }
@@ -888,7 +931,7 @@ public class RepositoryService {
         settings.outboundProxyPasswordConfigured());
   }
 
-  private void validateProxy(ProxySettings settings) {
+  private void validateProxy(ProxySettings settings, RepositoryFormat format) {
     if (settings.remoteUrl() == null || settings.remoteUrl().isBlank()) {
       throw new RepositoryValidationException("proxy.remoteUrl is required");
     }
@@ -902,6 +945,9 @@ public class RepositoryService {
       throw new RepositoryValidationException(e.getMessage());
     }
     validateOutboundProxy(settings);
+    if (format == RepositoryFormat.SWIFT) {
+      normalizeSwiftRemoteUrl(settings.remoteUrl());
+    }
   }
 
   private void validateOutboundProxy(ProxySettings settings) {
@@ -929,6 +975,29 @@ public class RepositoryService {
         && (settings.outboundProxyUsername() == null || settings.outboundProxyUsername().isBlank())) {
       throw new RepositoryValidationException(
           "proxy.outboundProxyUsername is required when proxy.outboundProxyPassword is set");
+    }
+  }
+
+  private static String normalizeSwiftRemoteUrl(String remoteUrl) {
+    String candidate = remoteUrl == null || remoteUrl.isBlank() ? "https://github.com/" : remoteUrl.trim();
+    try {
+      URI uri = new URI(candidate);
+      String path = uri.getPath();
+      boolean githubRoot = "https".equalsIgnoreCase(uri.getScheme())
+          && "github.com".equalsIgnoreCase(uri.getHost())
+          && (uri.getPort() == -1 || uri.getPort() == 443)
+          && uri.getUserInfo() == null
+          && uri.getQuery() == null
+          && uri.getFragment() == null
+          && (path == null || path.isBlank() || "/".equals(path));
+      if (!githubRoot) {
+        throw new RepositoryValidationException(
+            "Swift proxy.remoteUrl must be the GitHub base URL https://github.com/");
+      }
+      return "https://github.com/";
+    } catch (URISyntaxException e) {
+      throw new RepositoryValidationException(
+          "Swift proxy.remoteUrl must be the GitHub base URL https://github.com/");
     }
   }
 
@@ -1205,7 +1274,7 @@ public class RepositoryService {
 
   private static boolean supportsNestedGroups(RepositoryFormat format) {
     return format == RepositoryFormat.PUB || format == RepositoryFormat.COMPOSER
-        || format == RepositoryFormat.TERRAFORM;
+        || format == RepositoryFormat.TERRAFORM || format == RepositoryFormat.SWIFT;
   }
 
   private static String stringValue(Object value, String fallback) {

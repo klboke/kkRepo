@@ -9,9 +9,13 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MetadataRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.protocol.swift.SwiftPath;
+import com.github.klboke.kkrepo.protocol.swift.SwiftPathParser;
+import com.github.klboke.kkrepo.protocol.swift.SwiftToolsVersions;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
 import com.github.klboke.kkrepo.server.cache.NexusCacheType;
@@ -22,9 +26,11 @@ import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
 import jakarta.servlet.http.HttpServletRequest;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -42,10 +48,12 @@ import org.springframework.web.server.ResponseStatusException;
 @RequestMapping("/internal/browse")
 public class BrowseContentDeleteController {
   private static final List<String> MAVEN_HASH_SUFFIXES = List.of(".sha1", ".sha256", ".sha512", ".md5");
+  private static final SwiftPathParser SWIFT_PATHS = new SwiftPathParser();
 
   private final RepositoryDao repositoryDao;
   private final AssetDao assetDao;
   private final TerraformRegistryDao terraformRegistryDao;
+  private final SwiftRegistryDao swiftRegistryDao;
   private final BrowseNodeDao browseNodeDao;
   private final ComponentDao componentDao;
   private final MetadataRebuildDao metadataRebuildDao;
@@ -62,6 +70,7 @@ public class BrowseContentDeleteController {
       RepositoryDao repositoryDao,
       AssetDao assetDao,
       TerraformRegistryDao terraformRegistryDao,
+      SwiftRegistryDao swiftRegistryDao,
       BrowseNodeDao browseNodeDao,
       ComponentDao componentDao,
       MetadataRebuildDao metadataRebuildDao,
@@ -76,6 +85,7 @@ public class BrowseContentDeleteController {
     this.repositoryDao = repositoryDao;
     this.assetDao = assetDao;
     this.terraformRegistryDao = terraformRegistryDao;
+    this.swiftRegistryDao = swiftRegistryDao;
     this.browseNodeDao = browseNodeDao;
     this.componentDao = componentDao;
     this.metadataRebuildDao = metadataRebuildDao;
@@ -134,10 +144,49 @@ public class BrowseContentDeleteController {
       throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Browse path not found: " + publicPath);
     }
 
+    Long swiftComponentId = null;
+    if (target.format() == RepositoryFormat.SWIFT) {
+      String childPrefix = storagePath.endsWith("/") ? storagePath : storagePath + "/";
+      boolean releaseDirectory = assets.stream()
+          .map(AssetRecord::path)
+          .anyMatch(assetPath -> assetPath.startsWith(childPrefix));
+      SwiftCoordinate coordinate = swiftCoordinate(publicPath, releaseDirectory);
+      if (coordinate == null) {
+        throw new ResponseStatusException(
+            HttpStatus.BAD_REQUEST,
+            "Swift deletion requires a release, archive, or manifest path");
+      }
+      SwiftRegistryDao.DeletedRelease deleted = swiftRegistryDao
+          .tombstoneAndDeleteReleaseState(
+              target.id(),
+              coordinate.scopeLc(),
+              coordinate.nameLc(),
+              coordinate.version(),
+              "administrative delete by " + subject.userId(),
+              Instant.now())
+          .orElseThrow(() -> new ResponseStatusException(
+              HttpStatus.CONFLICT,
+              "Swift release state was not found for " + coordinate.display()));
+      swiftComponentId = deleted.componentId();
+      assets = deleted.assetIds().stream()
+          .map(assetDao::findAssetById)
+          .flatMap(Optional::stream)
+          .filter(asset -> asset.repositoryId() == target.id())
+          .toList();
+      if (assets.size() != deleted.assetIds().size()) {
+        throw new ResponseStatusException(
+            HttpStatus.CONFLICT,
+            "Swift release assets are incomplete for " + coordinate.display());
+      }
+    }
+
     Set<Long> componentIds = assets.stream()
         .map(AssetRecord::componentId)
         .filter(id -> id != null)
         .collect(Collectors.toSet());
+    if (swiftComponentId != null) {
+      componentIds.add(swiftComponentId);
+    }
     Set<String> npmPackageIds = assets.stream()
         .map(BrowseContentDeleteController::npmPackageIdForInvalidation)
         .filter(id -> id != null && !id.isBlank())
@@ -195,7 +244,10 @@ public class BrowseContentDeleteController {
     if (requested.type() != RepositoryType.GROUP) {
       return requested;
     }
-    return repositoryDao.listMembers(requested.id()).stream()
+    List<RepositoryRecord> members = requested.format() == RepositoryFormat.SWIFT
+        ? BrowseRepositorySources.swiftSources(requested, repositoryDao)
+        : repositoryDao.listMembers(requested.id());
+    return members.stream()
         .filter(member -> !matchingAssets(member, storagePath).isEmpty())
         .findFirst()
         .orElseThrow(() -> new ResponseStatusException(
@@ -206,7 +258,10 @@ public class BrowseContentDeleteController {
     if (requested.type() != RepositoryType.GROUP) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "source must match repository");
     }
-    boolean member = repositoryDao.listMembers(requested.id()).stream()
+    List<RepositoryRecord> members = requested.format() == RepositoryFormat.SWIFT
+        ? BrowseRepositorySources.swiftSources(requested, repositoryDao)
+        : repositoryDao.listMembers(requested.id());
+    boolean member = members.stream()
         .anyMatch(row -> row.id().equals(target.id()));
     if (!member) {
       throw new ResponseStatusException(
@@ -243,6 +298,35 @@ public class BrowseContentDeleteController {
 
   private boolean isMavenHash(String path) {
     return MAVEN_HASH_SUFFIXES.stream().anyMatch(path::endsWith);
+  }
+
+  private static SwiftCoordinate swiftCoordinate(String path, boolean releaseDirectory) {
+    String normalized = normalize(path);
+    SwiftPath parsed;
+    try {
+      parsed = releaseDirectory
+          ? SWIFT_PATHS.parseReleaseMetadata(normalized)
+          : SWIFT_PATHS.parse(normalized);
+    } catch (IllegalArgumentException e) {
+      return null;
+    }
+    if (parsed.kind() == SwiftPath.Kind.UNKNOWN) {
+      String[] segments = normalized.split("/", -1);
+      if (segments.length == 4
+          && SwiftToolsVersions.fromManifestFilename(segments[3]).isPresent()) {
+        parsed = SWIFT_PATHS.parse(
+            segments[0] + "/" + segments[1] + "/" + segments[2] + "/Package.swift");
+      }
+    }
+    if (parsed.kind() != SwiftPath.Kind.RELEASE_METADATA
+        && parsed.kind() != SwiftPath.Kind.SOURCE_ARCHIVE
+        && parsed.kind() != SwiftPath.Kind.MANIFEST) {
+      return null;
+    }
+    return new SwiftCoordinate(
+        parsed.scope().toLowerCase(Locale.ROOT),
+        parsed.name().toLowerCase(Locale.ROOT),
+        parsed.version());
   }
 
   private void deleteAsset(AssetRecord asset) {
@@ -409,6 +493,12 @@ public class BrowseContentDeleteController {
   }
 
   private record MavenCoordinates(String groupId, String artifactId, String version) {}
+
+  private record SwiftCoordinate(String scopeLc, String nameLc, String version) {
+    String display() {
+      return scopeLc + "." + nameLc + "@" + version;
+    }
+  }
 
   public record BrowseDeleteResult(
       String repository,

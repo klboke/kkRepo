@@ -188,11 +188,46 @@ class NexusRestClientTest {
     assertTrue(script.contains("out.metadataEngine = 'DATASTORE_H2'"));
     assertTrue(script.contains("out.metadataEngine = 'DATASTORE_POSTGRESQL'"));
     assertTrue(script.contains("composer: 'COMPOSER'"));
+    assertTrue(script.contains("swift: 'SWIFT'"));
+    assertTrue(script.contains("def inspectSwiftShape = { tableNames ->"));
+    assertTrue(script.contains("archiveAssetPath: false"));
+    assertTrue(script.contains("manifestShape: false"));
+    assertTrue(script.contains("swiftAssetAttributes: false"));
+    assertTrue(script.contains("signatureAttributes: false"));
+    assertTrue(script.contains("sha256Checksum: false"));
+    assertTrue(script.contains("value instanceof byte[]"));
+    assertTrue(script.contains("def swiftAttributes = (assetAttributes.contains"));
+    assertTrue(script.contains("def archiveAsset = (pathParts.length == 3"));
+    assertTrue(script.contains("def manifestAsset = ((path.endsWith"));
+    assertTrue(script.contains("def knownSignatureKey = (attributes.contains"));
+    assertTrue(script.contains("kind == 'package_archive'"));
+    assertTrue(script.contains("kind == 'package_manifest'"));
+    assertTrue(script.contains("limit 512"));
+    assertTrue(script.contains("Swift datastore content shape probe failed:"));
     assertFalse(script.contains("javax.sql.DataSource.class"));
     assertFalse(script.contains("catch (Throwable"));
     assertFalse(script.contains(" as Set"));
     assertFalse(script.contains("new File("));
     assertFalse(script.contains("nexus-store.properties"));
+  }
+
+  @Test
+  void sourceProfileScriptRecognizesFullSwiftArchiveSemver() throws Exception {
+    var field = NexusRestClient.class.getDeclaredField("SOURCE_PROFILE_PROBE_SCRIPT");
+    field.setAccessible(true);
+    String script = (String) field.get(null);
+    String marker = "pathParts[2] ==~ /";
+    int regexStart = script.indexOf(marker);
+    assertTrue(regexStart >= 0);
+    regexStart += marker.length();
+    int regexEnd = script.indexOf("/\n", regexStart);
+    assertTrue(regexEnd > regexStart);
+    String archiveRegex = script.substring(regexStart, regexEnd);
+
+    assertTrue("1.0.0.zip".matches(archiveRegex));
+    assertTrue("1.0.0-beta.1+build.5.zip".matches(archiveRegex));
+    assertTrue("1.0.0+linux.zip.zip".matches(archiveRegex));
+    assertFalse("1.0.zip".matches(archiveRegex));
   }
 
   @Test

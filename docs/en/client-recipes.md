@@ -380,6 +380,49 @@ binary to infer this metadata.
 
 kkRepo generates hosted provider SHA256SUMS and detached GPG signatures as one revision. Proxy repositories preserve and verify upstream checksum/signing metadata, and group source bindings keep metadata and archive downloads on the same member.
 
+## Swift Package Registry
+
+Create `swift-hosted`, `swift-proxy`, and `swift-group` repositories. Use the hosted URL for publication and the group URL for dependency resolution. Production SwiftPM login requires HTTPS:
+
+```bash
+swift package-registry set \
+  https://nexus.example.com/repository/swift-group/
+
+swift package-registry login \
+  https://nexus.example.com/repository/swift-group/login \
+  --username alice \
+  --password "$KKREPO_PASSWORD" \
+  --no-confirm
+```
+
+The Swift registry specification makes `POST /login` optional and permits `501 Not Implemented` from servers that do not provide it. kkrepo does provide the endpoint: valid Basic or Bearer/`GenericToken` credentials return `200`, and invalid credentials return `401`. SwiftPM 5.8+ can exercise the login command over HTTPS; `501` is therefore a protocol-reference case, not an expected kkrepo result.
+
+Publish an immutable source archive from the package directory. The archive must contain one top-level package root and a valid `Package.swift`; versioned `Package@swift-X.Y.swift` manifests are preserved:
+
+```bash
+swift package-registry publish acme.demo 1.2.3 \
+  --url https://nexus.example.com/repository/swift-hosted/ \
+  --metadata-path package-metadata.json
+```
+
+Consume a registry identity from `Package.swift`:
+
+```swift
+dependencies: [
+    .package(id: "acme.demo", exact: "1.2.3")
+]
+```
+
+Then resolve and build through the configured group. GitHub SCM dependencies can be converted through the registry `/identifiers` mapping:
+
+```bash
+swift package resolve
+swift build
+swift package resolve --replace-scm-with-registry
+```
+
+Use a `GenericToken` with `swift package-registry login --token <token>` for CI. The GitHub-backed proxy accepts GitHub HTTPS/SSH repository identities, pins the first observed tag commit and archive checksum, and never rewrites an already cached release after a tag moves.
+
 ## NuGet
 
 Add a source:
