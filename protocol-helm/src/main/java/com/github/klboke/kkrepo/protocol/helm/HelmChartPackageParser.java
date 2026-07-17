@@ -14,6 +14,7 @@ import org.yaml.snakeyaml.constructor.SafeConstructor;
 
 public final class HelmChartPackageParser {
   private static final String CHART_YAML = "Chart.yaml";
+  private static final int MAX_CHART_YAML_BYTES = 1024 * 1024;
 
   public HelmChartMetadata parse(InputStream input) throws IOException {
     byte[] chartYaml = readChartYaml(input);
@@ -28,7 +29,10 @@ public final class HelmChartPackageParser {
 
   private static Yaml newYaml() {
     // Yaml retains mutable load state, while this parser is shared by singleton hosted services.
-    return new Yaml(new SafeConstructor(new LoaderOptions()));
+    LoaderOptions options = new LoaderOptions();
+    options.setCodePointLimit(MAX_CHART_YAML_BYTES);
+    options.setMaxAliasesForCollections(50);
+    return new Yaml(new SafeConstructor(options));
   }
 
   private byte[] readChartYaml(InputStream input) throws IOException {
@@ -56,11 +60,17 @@ public final class HelmChartPackageParser {
   }
 
   private static byte[] readCurrentEntry(TarArchiveInputStream tar) throws IOException {
-    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    ByteArrayOutputStream out = new ByteArrayOutputStream(8192);
     byte[] buffer = new byte[8192];
+    int total = 0;
     int n;
     while ((n = tar.read(buffer)) > 0) {
+      if (total > MAX_CHART_YAML_BYTES - n) {
+        throw new IllegalArgumentException(
+            CHART_YAML + " exceeds the " + MAX_CHART_YAML_BYTES + " byte limit");
+      }
       out.write(buffer, 0, n);
+      total += n;
     }
     return out.toByteArray();
   }
