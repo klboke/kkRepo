@@ -1204,15 +1204,20 @@ PY
   fi
 }
 
+prepare_swift_netrc() {
+  local home="$1"
+  mkdir -p "$home"
+  touch "$home/.netrc"
+  chmod 0600 "$home/.netrc"
+}
+
 swift_registry_login() {
   local label="$1"
   local swift_bin="$2"
   local directory="$3"
   local home="$4"
   local registry="$5"
-  mkdir -p "$home"
-  touch "$home/.netrc"
-  chmod 0600 "$home/.netrc"
+  prepare_swift_netrc "$home"
   run_logged_in "swift-$label-registry-login" "$directory" \
     run_with_timeout "$SWIFT_LOGIN_TIMEOUT_SECONDS" env \
     HOME="$home" XDG_CONFIG_HOME="$home/.config" \
@@ -1259,6 +1264,7 @@ swift_registry_token_login() {
   local token
   token="$(create_api_key GenericToken "Swift client E2E $label $STAMP")"
   add_redaction_value "$token"
+  prepare_swift_netrc "$home"
   run_logged_in "swift-$label-registry-token-login" "$directory" \
     run_with_timeout "$SWIFT_LOGIN_TIMEOUT_SECONDS" env \
     HOME="$home" XDG_CONFIG_HOME="$home/.config" \
