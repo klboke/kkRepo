@@ -41,6 +41,7 @@ class SwiftGitHubClientTest {
   @Test
   void normalizesSupportedGitHubRepositoryUrlForms() {
     assertCoordinates("https://github.com/Apple/swift-log", "Apple", "swift-log");
+    assertCoordinates("https://github.com:443/Apple/swift-log", "Apple", "swift-log");
     assertCoordinates("https://github.com/Apple/swift-log.git/", "Apple", "swift-log");
     assertCoordinates("git@github.com:Apple/swift-log.git", "Apple", "swift-log");
     assertCoordinates("ssh://git@github.com/Apple/swift-log.git", "Apple", "swift-log");
@@ -53,6 +54,8 @@ class SwiftGitHubClientTest {
         "https://github.com/apple/swift-log/tree/main",
         "https://github.com/apple/swift-log?ref=main",
         "https://github.com/apple/swift-log#readme",
+        "https://github.com:8443/apple/swift-log",
+        "ssh://git@github.com:2222/apple/swift-log",
         "https://github.example/apple/swift-log",
         "http://github.com/apple/swift-log",
         "https://github.com/-apple/swift-log",

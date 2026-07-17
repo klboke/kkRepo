@@ -675,7 +675,8 @@ final class SwiftGitHubClient {
     if (uri.getUserInfo() != null || uri.getFragment() != null || uri.getQuery() != null
         || uri.getHost() == null || !"github.com".equalsIgnoreCase(uri.getHost())
         || uri.getScheme() == null
-        || !("https".equalsIgnoreCase(uri.getScheme()) || "ssh".equalsIgnoreCase(uri.getScheme()))) {
+        || !("https".equalsIgnoreCase(uri.getScheme()) || "ssh".equalsIgnoreCase(uri.getScheme()))
+        || !isDefaultGithubPort(uri)) {
       return Optional.empty();
     }
     String path = uri.getPath() == null ? "" : uri.getPath();
@@ -691,6 +692,17 @@ final class SwiftGitHubClient {
     } catch (SwiftExceptions.BadRequest ignored) {
       return Optional.empty();
     }
+  }
+
+  private static boolean isDefaultGithubPort(URI uri) {
+    int port = uri.getPort();
+    if (port < 0) {
+      return true;
+    }
+    if ("https".equalsIgnoreCase(uri.getScheme())) {
+      return port == 443;
+    }
+    return "ssh".equalsIgnoreCase(uri.getScheme()) && port == 22;
   }
 
   static Optional<String> normalizeTag(String rawTag) {
