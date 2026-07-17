@@ -58,19 +58,42 @@ kkrepo uses Nexus-style privileges. Repository privileges include:
 - `edit`
 - `delete`
 
-Repository permission checks include repository name, repository format, path/content selector information where applicable, and action.
+Repository permission checks include repository name, repository format, path/content selector information where applicable, and action. The action is
+defined by the protocol route and repository operation. It is not a universal
+"asset does not exist means `add`, asset exists means `edit`" classifier.
 
-Typical mapping:
+For the Nexus-compatible repository entrypoints, the baseline mapping is:
 
 | Operation | Required permission |
 | --- | --- |
 | List repository or browse metadata | `browse` |
 | Download artifact content | `read` |
-| Upload new artifact | `add` |
-| Overwrite or mutate existing artifact metadata/content | `edit` |
-| Delete artifact content | `delete` |
+| Generic repository `GET` or `HEAD` | `read` |
+| Generic repository `POST`, `PATCH`, or `MKCOL` | `add` |
+| Generic repository `PUT` | `edit` |
+| Generic repository `DELETE` | `delete` |
+| Nexus Components API `POST /service/rest/v1/components` | repository `edit` |
 | Manage repository configuration | repository administration privilege |
 | Manage users, roles, realms, blob stores | application/security/blob-store privileges |
+
+The generic `PUT -> edit` mapping also applies when the target path is new.
+This matches Nexus client-visible behavior; changing it to an existence lookup
+would make ordinary Maven, Raw, Helm, Yum, and similar PUT clients
+incompatible. Protocol-specific publish routes may intentionally use different
+actions. For example, Cargo, Pub, and Swift publish flows use `add`, while
+Terraform distinguishes a new module/provider coordinate or platform from a
+redeployment, and Docker push scopes may combine `add` and `edit` for different
+parts of the push.
+
+Repository permissions and hosted write policy are separate checks. Having
+`edit` permission does not override a repository write policy such as
+`ALLOW_ONCE` or `DENY`; the protocol service still applies its duplicate and
+overwrite rules after authorization. Content selectors continue to restrict
+the requested path, but asset existence must not be used as a generic
+replacement for the protocol-specific permission mapping above.
+
+When adding or changing a protocol route, document its action mapping in the
+format design document and validate it against a real Nexus reference instance.
 
 Use least-privilege roles for CI users. Avoid granting broad `*` privileges to automation unless the automation is truly administrative.
 
