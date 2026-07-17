@@ -1096,7 +1096,7 @@ public class SwiftService {
           ? Optional.empty()
           : registry.findTombstone(member.id(), scopeLc, nameLc, path.version());
       if (tombstone.isPresent()) {
-        throw new SwiftExceptions.NotFound("Swift release was permanently deleted");
+        throw new SwiftExceptions.Tombstoned("Swift release was permanently deleted");
       }
       try {
         ResolvedRelease winner = resolveRelease(member, path, visiting);
@@ -1131,6 +1131,8 @@ public class SwiftService {
               "Swift group configuration changed while resolving the release");
         }
         return resolveGroup(snapshot, path, visiting, true);
+      } catch (SwiftExceptions.Tombstoned tombstoned) {
+        throw tombstoned;
       } catch (SwiftExceptions.NotFound ignored) {
         // A point miss falls through to the next member. Permanent tombstones were checked above.
         continue;
@@ -1161,7 +1163,7 @@ public class SwiftService {
     String scopeLc = SwiftScope.key(scope);
     String nameLc = SwiftPackageName.key(name);
     if (registry.findTombstone(runtime.id(), scopeLc, nameLc, version).isPresent()) {
-      throw new SwiftExceptions.NotFound("Swift release was permanently deleted");
+      throw new SwiftExceptions.Tombstoned("Swift release was permanently deleted");
     }
     Optional<SwiftRegistryDao.Release> ready = registry.findRelease(
         runtime.id(), scopeLc, nameLc, version);
@@ -1201,13 +1203,13 @@ public class SwiftService {
         return completed.get();
       }
       if (registry.findTombstone(runtime.id(), scopeLc, nameLc, version).isPresent()) {
-        throw new SwiftExceptions.NotFound("Swift release was permanently deleted");
+        throw new SwiftExceptions.Tombstoned("Swift release was permanently deleted");
       }
       throw completedOrBusy;
     }
     try (SwiftPublishLeaseManager.Lease lease = acquired) {
       if (registry.findTombstone(runtime.id(), scopeLc, nameLc, version).isPresent()) {
-        throw new SwiftExceptions.NotFound("Swift release was permanently deleted");
+        throw new SwiftExceptions.Tombstoned("Swift release was permanently deleted");
       }
       Optional<SwiftRegistryDao.Release> afterLease = registry.findRelease(
           runtime.id(), scopeLc, nameLc, version);

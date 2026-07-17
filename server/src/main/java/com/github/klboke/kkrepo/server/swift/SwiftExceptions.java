@@ -36,8 +36,12 @@ public final class SwiftExceptions {
     public BadRequest(String detail, Throwable cause) { super(400, "Bad Request", detail, cause); }
   }
 
-  public static final class NotFound extends SwiftException {
+  public static class NotFound extends SwiftException {
     public NotFound(String detail) { super(404, "Not Found", detail); }
+  }
+
+  public static final class Tombstoned extends NotFound {
+    public Tombstoned(String detail) { super(detail); }
   }
 
   public static final class MethodNotAllowed extends SwiftException {

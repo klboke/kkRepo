@@ -266,6 +266,35 @@ class SwiftServiceTest {
   }
 
   @Test
+  void nestedGroupTombstoneIsTerminalForOuterGroupResolution() {
+    Fixture fixture = fixture();
+    RepositoryRuntime deletedMember = hosted(1L, "swift-deleted");
+    RepositoryRuntime nestedGroup = group(2L, List.of(deletedMember));
+    RepositoryRuntime fallbackMember = hosted(3L, "swift-fallback");
+    RepositoryRuntime outerGroup = group(4L, List.of(nestedGroup, fallbackMember));
+    SwiftRegistryDao.Tombstone tombstone = new SwiftRegistryDao.Tombstone(
+        deletedMember.id(), "acme", "demo", "1.2.3", "permanently deleted", 8L,
+        Instant.EPOCH);
+    when(fixture.runtimes.resolveById(outerGroup.id())).thenReturn(Optional.of(outerGroup));
+    when(fixture.runtimes.resolveById(nestedGroup.id())).thenReturn(Optional.of(nestedGroup));
+    when(fixture.registry.currentRepositoryRevision(outerGroup.id())).thenReturn(7L);
+    when(fixture.registry.currentRepositoryRevision(nestedGroup.id())).thenReturn(7L);
+    when(fixture.registry.findTombstone(
+        deletedMember.id(), "acme", "demo", "1.2.3")).thenReturn(Optional.of(tombstone));
+
+    assertThrows(SwiftExceptions.Tombstoned.class, () -> fixture.service.get(
+        outerGroup,
+        "Acme/Demo/1.2.3",
+        null,
+        "https://repo.example/repository/swift-group/",
+        SwiftMediaTypes.VENDOR_JSON,
+        false));
+
+    verify(fixture.registry, never()).findRelease(
+        fallbackMember.id(), "acme", "demo", "1.2.3");
+  }
+
+  @Test
   void groupFallsThroughCachedProxyNotFoundOnEveryReleaseListRequest() throws Exception {
     Fixture fixture = fixture();
     RepositoryRuntime proxy = proxy(1L, "swift-proxy");
