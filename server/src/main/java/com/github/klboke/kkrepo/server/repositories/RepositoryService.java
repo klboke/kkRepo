@@ -889,11 +889,7 @@ public class RepositoryService {
       settings = withRemoteUrl(settings, defaultRemote);
     }
     if (format == RepositoryFormat.SWIFT) {
-      settings = new ProxySettings(
-          normalizeSwiftRemoteUrl(settings.remoteUrl()),
-          settings.contentMaxAgeMinutes(), settings.metadataMaxAgeMinutes(), settings.autoBlock(),
-          settings.remoteUsername(), settings.remotePassword(), settings.remotePasswordConfigured(),
-          settings.remoteBearerToken(), settings.remoteBearerTokenConfigured());
+      settings = withRemoteUrl(settings, normalizeSwiftRemoteUrl(settings.remoteUrl()));
     }
     validateProxy(settings, format);
     return settings;

@@ -8,7 +8,9 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketAddress;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.TimeUnit;
 
 /**
  * A {@link Socket} whose {@link #connect(SocketAddress, int)} first opens a TCP connection to a
@@ -39,8 +41,15 @@ final class Socks5TunnelSocket extends Socket {
       throw new IOException("SOCKS5 tunnel requires an InetSocketAddress target, got " + endpoint);
     }
     super.connect(proxyAddress, timeoutMillis);
+    // timeoutMillis bounds the whole tunnel establishment, not just the TCP connect: a proxy that
+    // accepts and then stalls (no greeting/auth/CONNECT reply) must not hold the request thread
+    // past the remaining connect deadline. SO_TIMEOUT is re-armed before every handshake read so
+    // the cumulative handshake time stays within the budget.
+    long deadlineNanos = timeoutMillis > 0
+        ? System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+        : 0L;
     try {
-      handshake(target);
+      handshake(target, deadlineNanos);
     } catch (IOException | RuntimeException failure) {
       try {
         close();
@@ -48,10 +57,16 @@ final class Socks5TunnelSocket extends Socket {
         // best effort — the tunnel is unusable either way
       }
       throw failure;
+    } finally {
+      if (deadlineNanos != 0L && !isClosed()) {
+        // Hand the established tunnel back with blocking reads; the HTTP client applies its own
+        // per-request response timeout from here on.
+        setSoTimeout(0);
+      }
     }
   }
 
-  private void handshake(InetSocketAddress target) throws IOException {
+  private void handshake(InetSocketAddress target, long deadlineNanos) throws IOException {
     OutputStream out = getOutputStream();
     InputStream in = getInputStream();
     boolean authenticated = username != null;
@@ -60,6 +75,7 @@ final class Socks5TunnelSocket extends Socket {
     out.write(1);
     out.write(offered);
     out.flush();
+    armDeadline(deadlineNanos);
     int version = readByte(in);
     int method = readByte(in);
     if (version != 0x05) {
@@ -74,12 +90,31 @@ final class Socks5TunnelSocket extends Socket {
           + " selected unexpected authentication method 0x" + Integer.toHexString(method));
     }
     if (authenticated) {
-      authenticate(in, out);
+      authenticate(in, out, deadlineNanos);
     }
-    requestConnect(in, out, target);
+    requestConnect(in, out, target, deadlineNanos);
   }
 
-  private void authenticate(InputStream in, OutputStream out) throws IOException {
+  /**
+   * Re-arms SO_TIMEOUT with the time left until the overall connect deadline, so the greeting,
+   * authentication and CONNECT-response reads together cannot outlive the configured connect
+   * timeout. A {@code deadlineNanos} of 0 means "no deadline" (infinite connect timeout).
+   */
+  private void armDeadline(long deadlineNanos) throws IOException {
+    if (deadlineNanos == 0L) {
+      return;
+    }
+    long remainingNanos = deadlineNanos - System.nanoTime();
+    if (remainingNanos <= 0L) {
+      throw new SocketTimeoutException(
+          "SOCKS5 handshake with " + describeProxy() + " exceeded the connect timeout");
+    }
+    setSoTimeout((int) Math.min(Integer.MAX_VALUE,
+        Math.max(1L, TimeUnit.NANOSECONDS.toMillis(remainingNanos))));
+  }
+
+  private void authenticate(InputStream in, OutputStream out, long deadlineNanos)
+      throws IOException {
     byte[] user = username.getBytes(StandardCharsets.UTF_8);
     byte[] pass = (password != null ? password : "").getBytes(StandardCharsets.UTF_8);
     if (user.length > 255 || pass.length > 255) {
@@ -91,6 +126,7 @@ final class Socks5TunnelSocket extends Socket {
     out.write(pass.length);
     out.write(pass);
     out.flush();
+    armDeadline(deadlineNanos);
     readByte(in); // sub-negotiation version
     int status = readByte(in);
     if (status != 0x00) {
@@ -99,7 +135,8 @@ final class Socks5TunnelSocket extends Socket {
     }
   }
 
-  private void requestConnect(InputStream in, OutputStream out, InetSocketAddress target)
+  private void requestConnect(
+      InputStream in, OutputStream out, InetSocketAddress target, long deadlineNanos)
       throws IOException {
     out.write(0x05);
     out.write(0x01); // CONNECT
@@ -123,6 +160,7 @@ final class Socks5TunnelSocket extends Socket {
     out.write((port >> 8) & 0xFF);
     out.write(port & 0xFF);
     out.flush();
+    armDeadline(deadlineNanos);
     int version = readByte(in);
     int reply = readByte(in);
     readByte(in); // reserved

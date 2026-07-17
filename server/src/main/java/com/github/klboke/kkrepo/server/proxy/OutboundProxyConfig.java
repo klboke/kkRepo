@@ -111,9 +111,11 @@ public record OutboundProxyConfig(Type type, String host, int port, String usern
   }
 
   /**
-   * Parse a user-supplied proxy type string. Recognises {@code http}/{@code https} and
-   * {@code socks}/{@code socks5}/{@code socks4}. Returns {@code null} for blank/unrecognised input
-   * so callers can treat "absent" as "no proxy".
+   * Parse a user-supplied proxy type string. Only the wire protocols the client factory actually
+   * implements are recognised: plaintext HTTP ({@code http}) and SOCKS5 ({@code socks}/
+   * {@code socks5}). Aliases for unimplemented protocols (HTTPS proxies, SOCKS4) return
+   * {@code null} — as does blank/unrecognised input — so validators reject them instead of
+   * silently executing the handshake with a different protocol than configured.
    */
   public static Type parseType(String value) {
     if (value == null) {
@@ -124,15 +126,9 @@ public record OutboundProxyConfig(Type type, String host, int port, String usern
       return null;
     }
     return switch (normalized) {
-      case "HTTP", "HTTPS", "HTTP_PROXY", "HTTPS_PROXY" -> Type.HTTP;
-      case "SOCKS", "SOCKS5", "SOCKS4", "SOCKS_PROXY" -> Type.SOCKS;
-      default -> {
-        try {
-          yield Type.valueOf(normalized);
-        } catch (IllegalArgumentException ignored) {
-          yield null;
-        }
-      }
+      case "HTTP" -> Type.HTTP;
+      case "SOCKS", "SOCKS5" -> Type.SOCKS;
+      default -> null;
     };
   }
 }

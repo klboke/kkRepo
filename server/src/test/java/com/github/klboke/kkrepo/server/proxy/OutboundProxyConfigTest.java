@@ -11,18 +11,25 @@ import org.junit.jupiter.api.Test;
 class OutboundProxyConfigTest {
 
   @Test
-  void parseTypeRecognisesCommonAliases() {
+  void parseTypeRecognisesImplementedProtocols() {
     assertEquals(OutboundProxyConfig.Type.HTTP, OutboundProxyConfig.parseType("http"));
-    assertEquals(OutboundProxyConfig.Type.HTTP, OutboundProxyConfig.parseType("HTTPS"));
-    assertEquals(OutboundProxyConfig.Type.HTTP, OutboundProxyConfig.parseType("http_proxy"));
-    assertEquals(OutboundProxyConfig.Type.HTTP, OutboundProxyConfig.parseType(" HTTPS_PROXY "));
-    assertEquals(OutboundProxyConfig.Type.SOCKS, OutboundProxyConfig.parseType("socks5"));
-    assertEquals(OutboundProxyConfig.Type.SOCKS, OutboundProxyConfig.parseType("socks4"));
-    assertEquals(OutboundProxyConfig.Type.SOCKS, OutboundProxyConfig.parseType("SOCKS_PROXY"));
+    assertEquals(OutboundProxyConfig.Type.HTTP, OutboundProxyConfig.parseType(" HTTP "));
     assertEquals(OutboundProxyConfig.Type.SOCKS, OutboundProxyConfig.parseType("SOCKS"));
+    assertEquals(OutboundProxyConfig.Type.SOCKS, OutboundProxyConfig.parseType("socks5"));
     assertNull(OutboundProxyConfig.parseType(null));
     assertNull(OutboundProxyConfig.parseType(""));
     assertNull(OutboundProxyConfig.parseType("garbage"));
+  }
+
+  @Test
+  void parseTypeRejectsAliasesForUnimplementedProtocols() {
+    // The client factory always speaks plaintext HTTP (CONNECT) or SOCKS5, so aliases that imply
+    // a different wire protocol must be rejected instead of silently re-interpreted.
+    assertNull(OutboundProxyConfig.parseType("https"));
+    assertNull(OutboundProxyConfig.parseType("HTTPS_PROXY"));
+    assertNull(OutboundProxyConfig.parseType("http_proxy"));
+    assertNull(OutboundProxyConfig.parseType("socks4"));
+    assertNull(OutboundProxyConfig.parseType("SOCKS_PROXY"));
   }
 
   @Test

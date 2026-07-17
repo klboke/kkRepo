@@ -57,6 +57,46 @@ class ProxiedHttpClientFactoryTest {
   }
 
   @Test
+  void stalledSocksHandshakeIsBoundedByConnectTimeout() throws Exception {
+    // A proxy that accepts the TCP connection but never answers the SOCKS5 greeting must not hold
+    // the request thread past kkrepo.outbound-proxy.connect-timeout-ms; without a handshake
+    // deadline the blocking greeting read would hang forever (the HTTP response timeout only
+    // starts after connection establishment).
+    ServerSocket staller = new ServerSocket(0, 50, java.net.InetAddress.getByName("127.0.0.1"));
+    List<Socket> accepted = new CopyOnWriteArrayList<>();
+    Thread acceptor = new Thread(() -> {
+      try {
+        while (!staller.isClosed()) {
+          accepted.add(staller.accept()); // greet nothing, reply nothing — just hold the socket
+        }
+      } catch (IOException ignored) {
+        // stopped
+      }
+    }, "stalling-socks-server");
+    acceptor.setDaemon(true);
+    acceptor.start();
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 500)) {
+      OutboundProxyConfig config = new OutboundProxyConfig(
+          OutboundProxyConfig.Type.SOCKS, "127.0.0.1", staller.getLocalPort(), null, null);
+      long startNanos = System.nanoTime();
+      assertThrows(IOException.class, () ->
+          factory.execute("repo-a", config, "GET", java.net.URI.create("http://localhost/"),
+              java.util.Map.of(), 60000));
+      long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+      assertTrue(elapsedMillis < 30000,
+          "stalled SOCKS5 handshake outlived the connect timeout: " + elapsedMillis + "ms");
+    } finally {
+      staller.close();
+      for (Socket socket : accepted) {
+        try {
+          socket.close();
+        } catch (IOException ignored) {
+        }
+      }
+    }
+  }
+
+  @Test
   void socksClientTunnelsAndAuthenticatesThroughConfiguredProxy() throws Exception {
     // An in-process SOCKS5 server that demands RFC 1929 auth and records the credential it receives.
     // The tunnel is established by the client's own Socks5TunnelSocket, which must supply this

@@ -881,6 +881,72 @@ class RepositoryServiceTest {
   }
 
   @Test
+  void swiftProxyRoundTripKeepsOutboundProxyThroughToRuntime() {
+    // The Swift remote-URL normalization used to rebuild ProxySettings through the compatibility
+    // constructor, silently nulling every outbound proxy field on both create and update.
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryRuntimeRegistry runtimes = new RepositoryRuntimeRegistry(repositories, 0);
+    RepositoryService service = new RepositoryService(
+        repositories,
+        new StubBlobStoreDao(),
+        new StubSecurityDao(),
+        runtimes,
+        "/repository");
+
+    RepositoryView created = service.create(new CreateCommand(
+        "swift-proxy",
+        "swift-proxy",
+        true,
+        "default",
+        true,
+        null,
+        new ProxySettings("https://github.com", 60, 30, true,
+            null, null, null, null, null,
+            "HTTP", "192.168.1.40", 7890, "clash-user", "clash-pass", null),
+        null,
+        null,
+        null,
+        null));
+
+    assertEquals("https://github.com/", created.proxy().remoteUrl());
+    assertEquals("HTTP", created.proxy().outboundProxyType());
+    assertEquals("192.168.1.40", created.proxy().outboundProxyHost());
+    assertEquals(7890, created.proxy().outboundProxyPort());
+    assertEquals("clash-user", created.proxy().outboundProxyUsername());
+    assertEquals(true, created.proxy().outboundProxyPasswordConfigured());
+    Map<?, ?> storedProxy = (Map<?, ?>) repositories.repository.attributes().get("proxy");
+    assertEquals("192.168.1.40", storedProxy.get("outboundProxyHost"));
+    assertEquals("clash-pass", storedProxy.get("outboundProxyPassword"));
+
+    OutboundProxyConfig runtimeProxy =
+        runtimes.resolve("swift-proxy").orElseThrow().outboundProxy();
+    assertEquals(OutboundProxyConfig.Type.HTTP, runtimeProxy.type());
+    assertEquals("192.168.1.40", runtimeProxy.host());
+    assertEquals(7890, runtimeProxy.port());
+    assertEquals("clash-user", runtimeProxy.username());
+    assertEquals("clash-pass", runtimeProxy.password());
+
+    RepositoryView updated = service.update("swift-proxy",
+        new UpdateCommand(true, null, null, null,
+            new ProxySettings("https://GITHUB.com:443/", 120, 60, true,
+                null, null, null, null, null,
+                "SOCKS", "192.168.1.41", 7891, "socks-user", "socks-pass", null),
+            null, null, null, null));
+
+    assertEquals("https://github.com/", updated.proxy().remoteUrl());
+    assertEquals("SOCKS", updated.proxy().outboundProxyType());
+    assertEquals("192.168.1.41", updated.proxy().outboundProxyHost());
+    assertEquals(7891, updated.proxy().outboundProxyPort());
+    OutboundProxyConfig updatedRuntimeProxy =
+        runtimes.resolve("swift-proxy").orElseThrow().outboundProxy();
+    assertEquals(OutboundProxyConfig.Type.SOCKS, updatedRuntimeProxy.type());
+    assertEquals("192.168.1.41", updatedRuntimeProxy.host());
+    assertEquals(7891, updatedRuntimeProxy.port());
+    assertEquals("socks-user", updatedRuntimeProxy.username());
+    assertEquals("socks-pass", updatedRuntimeProxy.password());
+  }
+
+  @Test
   void replaceMembersAllowsNestedPubGroupMembers() {
     StubRepositoryDao repositories = new StubRepositoryDao(
         pubGroupRepository(10L, "pub-root"),
