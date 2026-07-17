@@ -1,13 +1,17 @@
 package com.github.klboke.kkrepo.server.docker;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.server.metrics.KkRepoMetrics;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
+import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
+import com.github.klboke.kkrepo.server.support.FakeHttpProxyServer;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
 import com.sun.net.httpserver.HttpServer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -435,6 +439,205 @@ class DockerRemoteRegistryClientTest {
           "status", "200",
           "outcome", "success").count());
     }
+  }
+
+  @Test
+  void proxiedRemoteFetchGoesThroughProxyWithBasicCredentials() throws Exception {
+    try (FakeHttpProxyServer proxy = FakeHttpProxyServer.start(request ->
+            FakeHttpProxyServer.FakeResponse.bytes(200,
+                Map.of("Content-Type", "application/vnd.docker.distribution.manifest.v2+json"),
+                "{}".getBytes(StandardCharsets.UTF_8)));
+        ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      DockerRemoteRegistryClient client = proxiedClient(factory);
+
+      try (HttpRemoteFetcher.Result result = client.get(
+          proxiedRuntime("http://localhost", "robot", "secret",
+              outboundProxy(proxy.port())),
+          "library/alpine/manifests/latest",
+          "application/vnd.docker.distribution.manifest.v2+json")) {
+        assertEquals(200, result.status());
+      }
+
+      assertEquals(1, proxy.requests().size());
+      FakeHttpProxyServer.RecordedRequest recorded = proxy.requests().get(0);
+      assertEquals("http://localhost/v2/library/alpine/manifests/latest",
+          recorded.target());
+      assertEquals(basic("robot", "secret"), recorded.header("Authorization"));
+      assertEquals("application/vnd.docker.distribution.manifest.v2+json", recorded.header("Accept"));
+    }
+  }
+
+  @Test
+  void proxiedCrossOriginRedirectStripsRegistryCredentials() throws Exception {
+    try (FakeHttpProxyServer proxy = FakeHttpProxyServer.start(request -> {
+          if (request.target().endsWith("/v2/library/nginx/blobs/sha256:abc")) {
+            return FakeHttpProxyServer.FakeResponse.status(307,
+                Map.of("Location", "http://127.0.0.1/layers/abc"));
+          }
+          return FakeHttpProxyServer.FakeResponse.bytes(200,
+              Map.of("Content-Type", "application/octet-stream"),
+              "layer".getBytes(StandardCharsets.UTF_8));
+        });
+        ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      DockerRemoteRegistryClient client = proxiedClient(factory);
+
+      try (HttpRemoteFetcher.Result result = client.get(
+          proxiedRuntime("http://localhost", "robot", "secret",
+              outboundProxy(proxy.port())),
+          "library/nginx/blobs/sha256:abc",
+          "application/octet-stream")) {
+        assertEquals(200, result.status());
+        assertEquals("layer", new String(result.body().readAllBytes(), StandardCharsets.UTF_8));
+      }
+
+      assertEquals(2, proxy.requests().size());
+      assertEquals(basic("robot", "secret"), proxy.requests().get(0).header("Authorization"));
+      assertEquals("http://127.0.0.1/layers/abc", proxy.requests().get(1).target());
+      assertNull(proxy.requests().get(1).header("Authorization"),
+          "registry credentials must not leak to the cross-origin storage URL");
+    }
+  }
+
+  @Test
+  void proxiedSameOriginRedirectPreservesRegistryCredentials() throws Exception {
+    try (FakeHttpProxyServer proxy = FakeHttpProxyServer.start(request -> {
+          if (request.target().endsWith("/v2/library/nginx/blobs/sha256:abc")) {
+            return FakeHttpProxyServer.FakeResponse.status(307,
+                Map.of("Location", "http://localhost/cdn/layers/abc"));
+          }
+          return FakeHttpProxyServer.FakeResponse.bytes(200, Map.of(),
+              "layer".getBytes(StandardCharsets.UTF_8));
+        });
+        ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      DockerRemoteRegistryClient client = proxiedClient(factory);
+
+      try (HttpRemoteFetcher.Result result = client.get(
+          proxiedRuntime("http://localhost", "robot", "secret",
+              outboundProxy(proxy.port())),
+          "library/nginx/blobs/sha256:abc",
+          "application/octet-stream")) {
+        assertEquals(200, result.status());
+      }
+
+      assertEquals(2, proxy.requests().size());
+      assertEquals(basic("robot", "secret"), proxy.requests().get(0).header("Authorization"));
+      assertEquals(basic("robot", "secret"), proxy.requests().get(1).header("Authorization"));
+    }
+  }
+
+  @Test
+  void proxiedBearerTokenFlowFetchesTokenThroughProxy() throws Exception {
+    AtomicInteger manifestCalls = new AtomicInteger();
+    try (FakeHttpProxyServer proxy = FakeHttpProxyServer.start(request -> {
+          if (request.target().startsWith("http://127.0.0.1/token")) {
+            return FakeHttpProxyServer.FakeResponse.bytes(200,
+                Map.of("Content-Type", "application/json"),
+                "{\"token\":\"proxied-remote-token\"}".getBytes(StandardCharsets.UTF_8));
+          }
+          int call = manifestCalls.incrementAndGet();
+          if (call == 1) {
+            return FakeHttpProxyServer.FakeResponse.status(401,
+                Map.of("WWW-Authenticate",
+                    "Bearer realm=\"http://127.0.0.1/token\",service=\"registry.local\",scope=\"repository:library/alpine:pull\""));
+          }
+          return FakeHttpProxyServer.FakeResponse.bytes(200,
+              Map.of("Content-Type", "application/json"),
+              "{}".getBytes(StandardCharsets.UTF_8));
+        });
+        ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      DockerRemoteRegistryClient client = proxiedClient(factory);
+
+      try (HttpRemoteFetcher.Result result = client.get(
+          proxiedRuntime("http://localhost", "robot", "secret",
+              outboundProxy(proxy.port())),
+          "library/alpine/manifests/latest",
+          "application/json")) {
+        assertEquals(200, result.status());
+      }
+
+      FakeHttpProxyServer.RecordedRequest tokenRequest = proxy.requests().stream()
+          .filter(request -> request.target().startsWith("http://127.0.0.1/token"))
+          .findFirst()
+          .orElseThrow();
+      assertEquals(basic("robot", "secret"), tokenRequest.header("Authorization"));
+      assertEquals(2, manifestCalls.get());
+      assertEquals("Bearer proxied-remote-token",
+          proxy.requests().get(proxy.requests().size() - 1).header("Authorization"));
+    }
+  }
+
+  @Test
+  void proxiedRemoteFetchRecordsDockerProxyRemoteMetrics() throws Exception {
+    try (FakeHttpProxyServer proxy = FakeHttpProxyServer.start(request ->
+            FakeHttpProxyServer.FakeResponse.bytes(200,
+                Map.of("Content-Type", "application/json"),
+                "{}".getBytes(StandardCharsets.UTF_8)));
+        ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
+      DockerRemoteRegistryClient client = new DockerRemoteRegistryClient(
+          null,
+          OutboundRequestPolicy.allowPrivateForTests(),
+          null,
+          true,
+          300,
+          new KkRepoMetrics(meterRegistry),
+          factory);
+
+      try (HttpRemoteFetcher.Result result = client.get(
+          proxiedRuntime("http://localhost", null, null, outboundProxy(proxy.port())),
+          "library/alpine/manifests/latest",
+          "application/json")) {
+        assertEquals(200, result.status());
+      }
+
+      assertEquals(1.0, meterRegistry.counter(
+          "kkrepo_proxy_remote_requests_total",
+          "repo", "docker-proxy",
+          "format", "docker",
+          "method", "get",
+          "remote_host", "localhost",
+          "status", "200",
+          "outcome", "success").count());
+    }
+  }
+
+  private static DockerRemoteRegistryClient proxiedClient(ProxiedHttpClientFactory factory) {
+    return new DockerRemoteRegistryClient(
+        null, OutboundRequestPolicy.allowPrivateForTests(), null, true, 300, null, factory);
+  }
+
+  private static OutboundProxyConfig outboundProxy(int port) {
+    return new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "127.0.0.1", port, null, null);
+  }
+
+  private static RepositoryRuntime proxiedRuntime(
+      String remoteUrl, String username, String password, OutboundProxyConfig outboundProxy) {
+    return new RepositoryRuntime(
+        10L,
+        "docker-proxy",
+        RepositoryFormat.DOCKER,
+        RepositoryType.PROXY,
+        "docker-proxy",
+        true,
+        1L,
+        null,
+        null,
+        null,
+        true,
+        remoteUrl,
+        1440,
+        1440,
+        true,
+        username,
+        password,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        List.of(),
+        outboundProxy);
   }
 
   private static DockerRemoteRegistryClient client() {

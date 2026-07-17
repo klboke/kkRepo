@@ -1,18 +1,25 @@
 package com.github.klboke.kkrepo.server.proxy;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
+import com.github.klboke.kkrepo.server.support.FakeHttpProxyServer;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -114,6 +121,174 @@ class ProxiedHttpClientFactoryTest {
         "unexpected usernames: " + server.usernames());
     assertTrue(server.passwords().stream().allMatch(expectedPass::equals),
         "unexpected passwords: " + server.passwords());
+  }
+
+  @Test
+  void httpProxyReceivesAbsoluteFormRequestsAndStreamsResponse() throws Exception {
+    try (FakeHttpProxyServer proxy = FakeHttpProxyServer.start(request ->
+            FakeHttpProxyServer.FakeResponse.bytes(200,
+                Map.of("Content-Type", "text/plain"),
+                "proxied-body".getBytes(StandardCharsets.UTF_8)));
+        ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      OutboundProxyConfig config =
+          new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "127.0.0.1", proxy.port(), null, null);
+      try (ProxiedHttpClientFactory.ProxiedResponse response = factory.execute(
+          config,
+          "GET",
+          URI.create("http://repo.example.com/org/foo/1.0/foo-1.0.jar"),
+          Map.of("X-Test", "yes"),
+          5000)) {
+        assertEquals(200, response.status());
+        assertEquals("text/plain", response.header("content-type"));
+        assertEquals("proxied-body",
+            new String(response.body().readAllBytes(), StandardCharsets.UTF_8));
+      }
+      FakeHttpProxyServer.RecordedRequest recorded = proxy.requests().get(0);
+      assertEquals("GET", recorded.method());
+      assertEquals("http://repo.example.com/org/foo/1.0/foo-1.0.jar", recorded.target());
+      assertEquals("yes", recorded.header("X-Test"));
+    }
+  }
+
+  @Test
+  void httpProxyHeadRequestReturnsEntityLessResponse() throws Exception {
+    try (FakeHttpProxyServer proxy = FakeHttpProxyServer.start(request ->
+            FakeHttpProxyServer.FakeResponse.status(200, Map.of("ETag", "\"abc\"")));
+        ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      OutboundProxyConfig config =
+          new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "127.0.0.1", proxy.port(), null, null);
+      try (ProxiedHttpClientFactory.ProxiedResponse response = factory.execute(
+          config, "HEAD", URI.create("http://repo.example.com/artifact"), Map.of(), 5000)) {
+        assertEquals(200, response.status());
+        assertEquals("\"abc\"", response.header("etag"));
+        assertEquals(0, response.body().readAllBytes().length);
+      }
+      assertEquals("HEAD", proxy.requests().get(0).method());
+    }
+  }
+
+  @Test
+  void httpProxyCredentialsAnswerProxyAuthenticationChallenge() throws Exception {
+    try (FakeHttpProxyServer proxy = FakeHttpProxyServer.start(request -> {
+          if (request.header("Proxy-Authorization") == null) {
+            return FakeHttpProxyServer.FakeResponse.status(407,
+                Map.of("Proxy-Authenticate", "Basic realm=\"fake-proxy\""));
+          }
+          return FakeHttpProxyServer.FakeResponse.bytes(200, Map.of(),
+              "ok".getBytes(StandardCharsets.UTF_8));
+        });
+        ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      OutboundProxyConfig config = new OutboundProxyConfig(
+          OutboundProxyConfig.Type.HTTP, "127.0.0.1", proxy.port(), "proxy-user", "proxy-pass");
+      try (ProxiedHttpClientFactory.ProxiedResponse response = factory.execute(
+          config, "GET", URI.create("http://repo.example.com/artifact"), Map.of(), 5000)) {
+        assertEquals(200, response.status());
+      }
+      assertEquals(2, proxy.requests().size());
+      assertNull(proxy.requests().get(0).header("Proxy-Authorization"));
+      String expected = "Basic " + Base64.getEncoder()
+          .encodeToString("proxy-user:proxy-pass".getBytes(StandardCharsets.UTF_8));
+      assertEquals(expected, proxy.requests().get(1).header("Proxy-Authorization"));
+    }
+  }
+
+  @Test
+  void httpProxyCredentialsAreIsolatedPerProxyEndpoint() throws Exception {
+    try (FakeHttpProxyServer first = FakeHttpProxyServer.start(challengeResponder());
+        FakeHttpProxyServer second = FakeHttpProxyServer.start(challengeResponder());
+        ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      OutboundProxyConfig configOne = new OutboundProxyConfig(
+          OutboundProxyConfig.Type.HTTP, "127.0.0.1", first.port(), "user-one", "pw-one");
+      OutboundProxyConfig configTwo = new OutboundProxyConfig(
+          OutboundProxyConfig.Type.HTTP, "127.0.0.1", second.port(), "user-two", "pw-two");
+      try (ProxiedHttpClientFactory.ProxiedResponse ignored = factory.execute(
+              configOne, "GET", URI.create("http://repo.example.com/a"), Map.of(), 5000);
+          ProxiedHttpClientFactory.ProxiedResponse ignored2 = factory.execute(
+              configTwo, "GET", URI.create("http://repo.example.com/b"), Map.of(), 5000)) {
+        assertEquals(200, ignored.status());
+        assertEquals(200, ignored2.status());
+      }
+      assertEquals(basic("user-one", "pw-one"),
+          first.requests().get(first.requests().size() - 1).header("Proxy-Authorization"));
+      assertEquals(basic("user-two", "pw-two"),
+          second.requests().get(second.requests().size() - 1).header("Proxy-Authorization"));
+    }
+  }
+
+  private static FakeHttpProxyServer.Responder challengeResponder() {
+    return request -> request.header("Proxy-Authorization") == null
+        ? FakeHttpProxyServer.FakeResponse.status(407,
+            Map.of("Proxy-Authenticate", "Basic realm=\"fake-proxy\""))
+        : FakeHttpProxyServer.FakeResponse.bytes(200, Map.of(),
+            "ok".getBytes(StandardCharsets.UTF_8));
+  }
+
+  private static String basic(String username, String password) {
+    return "Basic " + Base64.getEncoder()
+        .encodeToString((username + ":" + password).getBytes(StandardCharsets.UTF_8));
+  }
+
+  @Test
+  void redirectsAreReturnedToCallerInsteadOfFollowedAutomatically() throws Exception {
+    try (FakeHttpProxyServer proxy = FakeHttpProxyServer.start(request ->
+            FakeHttpProxyServer.FakeResponse.status(302,
+                Map.of("Location", "http://elsewhere.example.com/redirected")));
+        ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      OutboundProxyConfig config =
+          new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "127.0.0.1", proxy.port(), null, null);
+      try (ProxiedHttpClientFactory.ProxiedResponse response = factory.execute(
+          config, "GET", URI.create("http://repo.example.com/original"), Map.of(), 5000)) {
+        assertEquals(302, response.status());
+        assertEquals("http://elsewhere.example.com/redirected", response.header("Location"));
+      }
+      assertEquals(1, proxy.requests().size(), "redirect must not be followed automatically");
+    }
+  }
+
+  @Test
+  void httpsTargetsAreTunnelledViaConnect() throws Exception {
+    try (FakeHttpProxyServer proxy = FakeHttpProxyServer.start(request ->
+            FakeHttpProxyServer.FakeResponse.status(500, Map.of()));
+        ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      OutboundProxyConfig config =
+          new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "127.0.0.1", proxy.port(), null, null);
+      // The fake proxy answers CONNECT and then drops the tunnel, so the TLS handshake fails —
+      // only the CONNECT request line matters here.
+      assertThrows(IOException.class, () -> factory.execute(
+          config, "GET", URI.create("https://secure.example.com:8443/path"), Map.of(), 5000));
+      FakeHttpProxyServer.RecordedRequest connect = proxy.requests().get(0);
+      assertEquals("CONNECT", connect.method());
+      assertEquals("secure.example.com:8443", connect.target());
+    }
+  }
+
+  @Test
+  void idleEvictionClosesStaleClients() throws Exception {
+    ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(100, 10000);
+    try {
+      OutboundProxyConfig stale =
+          new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "10.0.0.6", 7890, null, null);
+      OutboundProxyConfig active =
+          new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "10.0.0.7", 7890, null, null);
+      CloseableHttpClient staleClient = factory.clientFor(stale);
+      assertNotNull(staleClient);
+      Thread.sleep(1200);
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+      while (System.nanoTime() < deadline) {
+        factory.clientFor(active); // touching the cache runs eviction maintenance
+        try {
+          staleClient.executeOpen(null, new HttpGet("http://localhost/"), null);
+        } catch (IllegalStateException closed) {
+          return;
+        } catch (IOException stillOpen) {
+          // pool not shut down yet
+        }
+        Thread.sleep(50);
+      }
+      fail("stale client was not closed after the idle TTL expired");
+    } finally {
+      factory.close();
+    }
   }
 
   @Test

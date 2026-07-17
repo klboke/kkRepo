@@ -574,6 +574,121 @@ class RepositoryServiceTest {
   }
 
   @Test
+  void outboundProxyWithInvalidPortIsRejected() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryValidationException ex = assertThrows(RepositoryValidationException.class, () -> service.create(
+        new CreateCommand(
+            "maven-proxy",
+            "maven2-proxy",
+            true,
+            "default",
+            true,
+            null,
+            new ProxySettings(
+                "https://repo.maven.apache.org/maven2/", 1440, 1440, true,
+                null, null, null, null, null,
+                "HTTP", "192.168.1.10", 70000, null, null, null),
+            null, null, null, null)));
+    assertTrue(ex.getMessage().contains("outboundProxyPort"));
+  }
+
+  @Test
+  void outboundProxyWithUnknownTypeIsRejected() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryValidationException ex = assertThrows(RepositoryValidationException.class, () -> service.create(
+        new CreateCommand(
+            "maven-proxy",
+            "maven2-proxy",
+            true,
+            "default",
+            true,
+            null,
+            new ProxySettings(
+                "https://repo.maven.apache.org/maven2/", 1440, 1440, true,
+                null, null, null, null, null,
+                "GOPHER", "192.168.1.10", 7890, null, null, null),
+            null, null, null, null)));
+    assertTrue(ex.getMessage().contains("outboundProxyType"));
+  }
+
+  @Test
+  void outboundProxyPasswordWithoutUsernameIsRejected() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryValidationException ex = assertThrows(RepositoryValidationException.class, () -> service.create(
+        new CreateCommand(
+            "maven-proxy",
+            "maven2-proxy",
+            true,
+            "default",
+            true,
+            null,
+            new ProxySettings(
+                "https://repo.maven.apache.org/maven2/", 1440, 1440, true,
+                null, null, null, null, null,
+                "HTTP", "192.168.1.10", 7890, null, "clash-pass", null),
+            null, null, null, null)));
+    assertTrue(ex.getMessage().contains("outboundProxyUsername"));
+  }
+
+  @Test
+  void createTerraformProxyDefaultsRemoteUrlWhenProxySettingsAreMissing() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "terraform-proxy",
+        "terraform-proxy",
+        true,
+        "default",
+        true,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null));
+
+    assertEquals("https://registry.terraform.io/", created.proxy().remoteUrl());
+    assertEquals("https://registry.terraform.io/", repositories.repository.proxyRemoteUrl());
+    Map<?, ?> proxy = (Map<?, ?>) repositories.repository.attributes().get("proxy");
+    assertEquals("https://registry.terraform.io/", proxy.get("remoteUrl"));
+  }
+
+  @Test
+  void createComposerProxyWithBlankRemoteKeepsOutboundProxyWhenDefaultingRemoteUrl() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "composer-proxy",
+        "composer-proxy",
+        true,
+        "default",
+        true,
+        null,
+        new ProxySettings("", 60, 30, true,
+            null, null, null, null, null,
+            "HTTP", "192.168.1.30", 7890, null, null, null),
+        null,
+        null,
+        null,
+        null));
+
+    assertEquals("https://repo.packagist.org/", created.proxy().remoteUrl());
+    assertEquals("HTTP", created.proxy().outboundProxyType());
+    assertEquals("192.168.1.30", created.proxy().outboundProxyHost());
+    assertEquals(7890, created.proxy().outboundProxyPort());
+    Map<?, ?> proxy = (Map<?, ?>) repositories.repository.attributes().get("proxy");
+    assertEquals("192.168.1.30", proxy.get("outboundProxyHost"));
+  }
+
+  @Test
   void createPubProxyDefaultsRemoteUrlWhenProxySettingsAreMissing() {
     StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
     RepositoryService service = service(repositories);

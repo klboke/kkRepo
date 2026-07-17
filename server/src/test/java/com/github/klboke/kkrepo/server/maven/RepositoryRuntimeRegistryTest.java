@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.maven;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
@@ -102,8 +103,86 @@ class RepositoryRuntimeRegistryTest {
     assertEquals(2, dao.findByNameCalls);
   }
 
-  private static RepositoryRecord repo(long id, String name, RepositoryType type) {
+  @Test
+  void resolveReadsOutboundProxyAttributes() {
+    FakeRepositoryDao dao = new FakeRepositoryDao();
+    dao.add(mavenProxyRepo(7, "maven-proxy", Map.of(
+        "remoteUrl", "https://repo.maven.apache.org/maven2/",
+        "outboundProxyType", "SOCKS",
+        "outboundProxyHost", "192.168.1.10",
+        "outboundProxyPort", 7891,
+        "outboundProxyUsername", "clash-user",
+        "outboundProxyPassword", "clash-pass")), List.of());
+
+    RepositoryRuntime runtime = new RepositoryRuntimeRegistry(dao, 0)
+        .resolve("maven-proxy")
+        .orElseThrow();
+
+    assertEquals(
+        com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.Type.SOCKS,
+        runtime.outboundProxy().type());
+    assertEquals("192.168.1.10", runtime.outboundProxy().host());
+    assertEquals(7891, runtime.outboundProxy().port());
+    assertEquals("clash-user", runtime.outboundProxy().username());
+    assertEquals("clash-pass", runtime.outboundProxy().password());
+    assertTrue(runtime.outboundProxy().enabled());
+  }
+
+  @Test
+  void resolveReturnsNullOutboundProxyWhenHostOrPortIsMissing() {
+    FakeRepositoryDao dao = new FakeRepositoryDao();
+    dao.add(mavenProxyRepo(8, "maven-proxy", Map.of(
+        "remoteUrl", "https://repo.maven.apache.org/maven2/",
+        "outboundProxyType", "HTTP",
+        "outboundProxyPort", 7890)), List.of());
+
+    RepositoryRuntime runtime = new RepositoryRuntimeRegistry(dao, 0)
+        .resolve("maven-proxy")
+        .orElseThrow();
+
+    assertNull(runtime.outboundProxy());
+  }
+
+  @Test
+  void runtimeWithOutboundProxyPasswordIsNotWrittenToSharedCache() {
+    FakeRepositoryDao dao = new FakeRepositoryDao();
+    dao.add(mavenProxyRepo(9, "maven-proxied-proxy", Map.of(
+        "remoteUrl", "https://repo.maven.apache.org/maven2/",
+        "outboundProxyType", "HTTP",
+        "outboundProxyHost", "192.168.1.10",
+        "outboundProxyPort", 7890,
+        "outboundProxyUsername", "clash-user",
+        "outboundProxyPassword", "clash-pass")), List.of());
+    ObjectMapper mapper = new ObjectMapper()
+        .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+    RepositoryRuntimeRegistry registry = new RepositoryRuntimeRegistry(
+        dao, new InMemorySharedCache(mapper, 1000, null), mapper, (CatalogCacheBroadcaster) null, 300);
+
+    registry.resolve("maven-proxied-proxy").orElseThrow();
+    registry.resolve("maven-proxied-proxy").orElseThrow();
+
+    assertEquals(2, dao.findByNameCalls);
+  }
+
+  private static RepositoryRecord mavenProxyRepo(long id, String name, Map<String, Object> proxy) {
     return new RepositoryRecord(
+        id,
+        name,
+        RepositoryFormat.MAVEN2,
+        RepositoryType.PROXY,
+        "maven2-proxy",
+        true,
+        1L,
+        null,
+        "https://repo.maven.apache.org/maven2/",
+        null,
+        null,
+        "ALLOW",
+        true,
+        Map.of("proxy", proxy));
+  }
+
+  private static RepositoryRecord repo(long id, String name, RepositoryType type) {    return new RepositoryRecord(
         id,
         name,
         RepositoryFormat.MAVEN2,
