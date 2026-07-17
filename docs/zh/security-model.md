@@ -58,19 +58,37 @@ kkrepo 使用 Nexus 风格 privilege。仓库权限动作包括：
 - `edit`
 - `delete`
 
-仓库权限判定会考虑仓库名、仓库 format、适用时的 path/content selector 信息，以及 action。
+仓库权限判定会考虑仓库名、仓库 format、适用时的 path/content selector 信息，以及 action。action 由具体协议入口和仓库操作定义，不是一个全局的“asset 不存在就是 `add`、asset 存在就是 `edit`”分类器。
 
-典型映射：
+对于 Nexus 兼容仓库入口，基础映射如下：
 
 | 操作 | 所需权限 |
 | --- | --- |
 | 列出仓库或浏览 metadata | `browse` |
 | 下载制品内容 | `read` |
-| 上传新制品 | `add` |
-| 覆盖或修改已有制品 metadata/content | `edit` |
-| 删除制品内容 | `delete` |
+| 通用仓库 `GET` 或 `HEAD` | `read` |
+| 通用仓库 `POST`、`PATCH` 或 `MKCOL` | `add` |
+| 通用仓库 `PUT` | `edit` |
+| 通用仓库 `DELETE` | `delete` |
+| Nexus Components API `POST /service/rest/v1/components` | 仓库 `edit` |
 | 管理仓库配置 | repository administration privilege |
 | 管理用户、角色、realm、blob store | application/security/blob-store privilege |
+
+通用 `PUT -> edit` 映射同样适用于目标路径尚不存在的情况。这符合
+Nexus 的客户端可见行为；如果改成先查询 asset 是否存在再决定权限，
+普通 Maven、Raw、Helm、Yum 等使用 PUT 的客户端就会产生兼容性差异。
+协议专用 publish 入口可以有不同动作。例如 Cargo、Pub、Swift 的发布
+流程使用 `add`；Terraform 会区分新的 module/provider coordinate 或
+platform 与重新发布；Docker push 则可能对 blob 和 manifest/tag 使用
+不同的 `add`、`edit` 组合。
+
+仓库权限和 hosted write policy 是两层独立检查。拥有 `edit` 权限不代表
+可以绕过 `ALLOW_ONCE` 或 `DENY` 等 write policy；完成授权后，协议服务
+仍会继续执行重复发布和覆盖规则。Content selector 仍会限制请求路径，
+但不能用 asset 是否存在替代上面的协议专用权限映射。
+
+新增或修改协议入口时，应在对应格式设计文档中记录权限动作映射，并
+使用真实 Nexus 参考实例进行验证。
 
 CI 用户应使用最小权限角色。除非确实是管理自动化，否则避免给自动化账号授予宽泛 `*` 权限。
 
