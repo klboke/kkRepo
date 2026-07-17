@@ -236,6 +236,7 @@ public class HttpRemoteFetcher {
     ProxiedHttpClientFactory.ProxiedResponse response = null;
     try {
       response = proxyFactory.execute(
+          req.repository(),
           req.outboundProxy(),
           req.headOnly() ? "HEAD" : "GET",
           uri,

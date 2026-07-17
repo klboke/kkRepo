@@ -341,7 +341,7 @@ public class RepositoryService {
         online, blobStoreId, existing.routingRuleId(), proxyRemoteUrl,
         versionPolicy, layoutPolicy, writePolicy, strict, attributes);
     repositoryDao.update(toUpdate);
-    evictStaleOutboundProxyClient(existing.attributes(), attributes);
+    evictStaleOutboundProxyClient(existing.name(), existing.attributes(), attributes);
 
     if (recipe.type() == RepositoryType.GROUP && command.group() != null) {
       List<Long> memberIds = resolveMemberIds(name, recipe.format(), command.group());
@@ -387,7 +387,7 @@ public class RepositoryService {
     if (removed == 0) {
       throw new RepositoryNotFoundException(name);
     }
-    evictOutboundProxyClient(existing.attributes());
+    evictOutboundProxyClient(existing.name(), existing.attributes());
     NexusRepositorySecurityContributor.removeRepositoryPrivileges(securityDao, existing.format(), name);
     invalidateRuntimeCache(existing.id(), name);
     invalidateRepositoryCacheTokensAfterCommit(existing.id());
@@ -434,13 +434,14 @@ public class RepositoryService {
   }
 
   /**
-   * Evicts the cached outbound-proxy HTTP client when the proxy block changed (or disappeared)
-   * across an update, so a rotated credential or a switched-off proxy never keeps a stale
-   * connection pool alive until the idle TTL. Compared on the collision-safe cache key, so an
-   * untouched block keeps its pooled client.
+   * Evicts the cached outbound-proxy HTTP client owned by this repository when the proxy block
+   * changed (or disappeared) across an update, so a rotated credential or a switched-off proxy
+   * never keeps a stale connection pool alive until the idle TTL. Compared on the collision-safe
+   * cache key, so an untouched block keeps its pooled client. Eviction is scoped to this
+   * repository's own client — another repository with identical proxy settings keeps its pool.
    */
   private void evictStaleOutboundProxyClient(
-      Map<String, Object> previousAttributes, Map<String, Object> newAttributes) {
+      String repositoryName, Map<String, Object> previousAttributes, Map<String, Object> newAttributes) {
     if (proxiedHttpClientFactory == null) {
       return;
     }
@@ -452,14 +453,15 @@ public class RepositoryService {
     if (current != null && current.cacheKey().equals(previous.cacheKey())) {
       return;
     }
-    proxiedHttpClientFactory.invalidate(previous);
+    proxiedHttpClientFactory.invalidate(repositoryName, previous);
   }
 
-  private void evictOutboundProxyClient(Map<String, Object> attributes) {
+  private void evictOutboundProxyClient(String repositoryName, Map<String, Object> attributes) {
     if (proxiedHttpClientFactory == null) {
       return;
     }
-    proxiedHttpClientFactory.invalidate(OutboundProxyConfig.fromAttributes(proxyChildMap(attributes)));
+    proxiedHttpClientFactory.invalidate(
+        repositoryName, OutboundProxyConfig.fromAttributes(proxyChildMap(attributes)));
   }
 
   private static Map<?, ?> proxyChildMap(Map<String, Object> attributes) {

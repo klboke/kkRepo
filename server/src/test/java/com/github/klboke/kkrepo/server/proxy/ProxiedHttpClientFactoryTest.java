@@ -36,7 +36,7 @@ class ProxiedHttpClientFactoryTest {
       // NPE inside buildHttp because config.password().toCharArray() was dereferenced unconditionally.
       OutboundProxyConfig usernameOnly =
           new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "127.0.0.1", 7890, "clash-user", null);
-      try (CloseableHttpClient client = factory.clientFor(usernameOnly)) {
+      try (CloseableHttpClient client = factory.clientFor("repo-a", usernameOnly)) {
         assertNotNull(client);
       }
     }
@@ -49,10 +49,10 @@ class ProxiedHttpClientFactoryTest {
           new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "10.0.0.5", 7890, "u", "pw-a");
       OutboundProxyConfig b =
           new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "10.0.0.5", 7890, "u", "pw-b");
-      CloseableHttpClient same = factory.clientFor(a);
-      assertSame(same, factory.clientFor(a));
+      CloseableHttpClient same = factory.clientFor("repo-a", a);
+      assertSame(same, factory.clientFor("repo-a", a));
       // A credential rotation must produce a distinct client, not reuse the stale one.
-      assertNotSame(same, factory.clientFor(b));
+      assertNotSame(same, factory.clientFor("repo-a", b));
     }
   }
 
@@ -66,11 +66,11 @@ class ProxiedHttpClientFactoryTest {
     try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
       OutboundProxyConfig config = new OutboundProxyConfig(
           OutboundProxyConfig.Type.SOCKS, "127.0.0.1", server.port(), "alice", "s3cret");
-      try (CloseableHttpClient client = factory.clientFor(config)) {
+      try (CloseableHttpClient client = factory.clientFor("repo-a", config)) {
         // "localhost" resolves locally; the tunnel to it succeeds at the SOCKS layer and the server
         // then closes, so the HTTP exchange itself fails — only the handshake matters here.
         assertThrows(IOException.class, () ->
-            factory.execute(config, "GET", java.net.URI.create("http://localhost/"),
+            factory.execute("repo-a", config, "GET", java.net.URI.create("http://localhost/"),
                 java.util.Map.of(), 5000));
       }
       assertTrue(server.awaitHandshake(), "SOCKS server never saw an authentication attempt");
@@ -93,13 +93,13 @@ class ProxiedHttpClientFactoryTest {
           OutboundProxyConfig.Type.SOCKS, "127.0.0.1", first.port(), "user-one", "pw-one");
       OutboundProxyConfig configTwo = new OutboundProxyConfig(
           OutboundProxyConfig.Type.SOCKS, "127.0.0.1", second.port(), "user-two", "pw-two");
-      try (CloseableHttpClient ignored = factory.clientFor(configOne);
-          CloseableHttpClient ignored2 = factory.clientFor(configTwo)) {
+      try (CloseableHttpClient ignored = factory.clientFor("repo-one", configOne);
+          CloseableHttpClient ignored2 = factory.clientFor("repo-two", configTwo)) {
         assertThrows(IOException.class, () ->
-            factory.execute(configOne, "GET", java.net.URI.create("http://localhost/"),
+            factory.execute("repo-one", configOne, "GET", java.net.URI.create("http://localhost/"),
                 java.util.Map.of(), 5000));
         assertThrows(IOException.class, () ->
-            factory.execute(configTwo, "GET", java.net.URI.create("http://localhost/"),
+            factory.execute("repo-two", configTwo, "GET", java.net.URI.create("http://localhost/"),
                 java.util.Map.of(), 5000));
       }
       assertTrue(first.awaitHandshake());
@@ -127,14 +127,14 @@ class ProxiedHttpClientFactoryTest {
           OutboundProxyConfig.Type.SOCKS, "127.0.0.1", server.port(), "alice", "pw-a");
       OutboundProxyConfig bob = new OutboundProxyConfig(
           OutboundProxyConfig.Type.SOCKS, "127.0.0.1", server.port(), "bob", "pw-b");
-      try (CloseableHttpClient clientA = factory.clientFor(alice);
-          CloseableHttpClient clientB = factory.clientFor(bob)) {
+      try (CloseableHttpClient clientA = factory.clientFor("repo-alice", alice);
+          CloseableHttpClient clientB = factory.clientFor("repo-bob", bob)) {
         assertNotSame(clientA, clientB);
         assertThrows(IOException.class, () ->
-            factory.execute(alice, "GET", java.net.URI.create("http://localhost/"),
+            factory.execute("repo-alice", alice, "GET", java.net.URI.create("http://localhost/"),
                 java.util.Map.of(), 5000));
         assertThrows(IOException.class, () ->
-            factory.execute(bob, "GET", java.net.URI.create("http://localhost/"),
+            factory.execute("repo-bob", bob, "GET", java.net.URI.create("http://localhost/"),
                 java.util.Map.of(), 5000));
       }
       assertTrue(server.awaitHandshake());
@@ -163,19 +163,19 @@ class ProxiedHttpClientFactoryTest {
           OutboundProxyConfig.Type.SOCKS, "127.0.0.1", server.port(), "alice", "pw-a");
       OutboundProxyConfig anonymous = new OutboundProxyConfig(
           OutboundProxyConfig.Type.SOCKS, "127.0.0.1", server.port(), null, null);
-      try (CloseableHttpClient ignored = factory.clientFor(authed)) {
+      try (CloseableHttpClient ignored = factory.clientFor("repo-a", authed)) {
         assertThrows(IOException.class, () ->
-            factory.execute(authed, "GET", java.net.URI.create("http://localhost/"),
+            factory.execute("repo-a", authed, "GET", java.net.URI.create("http://localhost/"),
                 java.util.Map.of(), 5000));
       }
       int authedAttempts = server.attempts().size();
       assertTrue(authedAttempts >= 1, "expected at least one authenticated attempt");
       // RepositoryService evicts the cached client on update/delete; after that the cleared
       // repository fetches anonymously and the stale account must never be offered again.
-      factory.invalidate(authed);
-      try (CloseableHttpClient ignored = factory.clientFor(anonymous)) {
+      factory.invalidate("repo-a", authed);
+      try (CloseableHttpClient ignored = factory.clientFor("repo-a", anonymous)) {
         assertThrows(IOException.class, () ->
-            factory.execute(anonymous, "GET", java.net.URI.create("http://localhost/"),
+            factory.execute("repo-a", anonymous, "GET", java.net.URI.create("http://localhost/"),
                 java.util.Map.of(), 5000));
       }
       assertEquals(authedAttempts, server.attempts().size(),
@@ -208,6 +208,7 @@ class ProxiedHttpClientFactoryTest {
       OutboundProxyConfig config =
           new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "127.0.0.1", proxy.port(), null, null);
       try (ProxiedHttpClientFactory.ProxiedResponse response = factory.execute(
+          "repo-a",
           config,
           "GET",
           URI.create("http://repo.example.com/org/foo/1.0/foo-1.0.jar"),
@@ -233,7 +234,7 @@ class ProxiedHttpClientFactoryTest {
       OutboundProxyConfig config =
           new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "127.0.0.1", proxy.port(), null, null);
       try (ProxiedHttpClientFactory.ProxiedResponse response = factory.execute(
-          config, "HEAD", URI.create("http://repo.example.com/artifact"), Map.of(), 5000)) {
+          "repo-a", config, "HEAD", URI.create("http://repo.example.com/artifact"), Map.of(), 5000)) {
         assertEquals(200, response.status());
         assertEquals("\"abc\"", response.header("etag"));
         assertEquals(0, response.body().readAllBytes().length);
@@ -256,7 +257,7 @@ class ProxiedHttpClientFactoryTest {
       OutboundProxyConfig config = new OutboundProxyConfig(
           OutboundProxyConfig.Type.HTTP, "127.0.0.1", proxy.port(), "proxy-user", "proxy-pass");
       try (ProxiedHttpClientFactory.ProxiedResponse response = factory.execute(
-          config, "GET", URI.create("http://repo.example.com/artifact"), Map.of(), 5000)) {
+          "repo-a", config, "GET", URI.create("http://repo.example.com/artifact"), Map.of(), 5000)) {
         assertEquals(200, response.status());
       }
       assertEquals(2, proxy.requests().size());
@@ -277,9 +278,9 @@ class ProxiedHttpClientFactoryTest {
       OutboundProxyConfig configTwo = new OutboundProxyConfig(
           OutboundProxyConfig.Type.HTTP, "127.0.0.1", second.port(), "user-two", "pw-two");
       try (ProxiedHttpClientFactory.ProxiedResponse ignored = factory.execute(
-              configOne, "GET", URI.create("http://repo.example.com/a"), Map.of(), 5000);
+              "repo-one", configOne, "GET", URI.create("http://repo.example.com/a"), Map.of(), 5000);
           ProxiedHttpClientFactory.ProxiedResponse ignored2 = factory.execute(
-              configTwo, "GET", URI.create("http://repo.example.com/b"), Map.of(), 5000)) {
+              "repo-two", configTwo, "GET", URI.create("http://repo.example.com/b"), Map.of(), 5000)) {
         assertEquals(200, ignored.status());
         assertEquals(200, ignored2.status());
       }
@@ -312,7 +313,7 @@ class ProxiedHttpClientFactoryTest {
       OutboundProxyConfig config =
           new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "127.0.0.1", proxy.port(), null, null);
       try (ProxiedHttpClientFactory.ProxiedResponse response = factory.execute(
-          config, "GET", URI.create("http://repo.example.com/original"), Map.of(), 5000)) {
+          "repo-a", config, "GET", URI.create("http://repo.example.com/original"), Map.of(), 5000)) {
         assertEquals(302, response.status());
         assertEquals("http://elsewhere.example.com/redirected", response.header("Location"));
       }
@@ -330,7 +331,7 @@ class ProxiedHttpClientFactoryTest {
       // The fake proxy answers CONNECT and then drops the tunnel, so the TLS handshake fails —
       // only the CONNECT request line matters here.
       assertThrows(IOException.class, () -> factory.execute(
-          config, "GET", URI.create("https://secure.example.com:8443/path"), Map.of(), 5000));
+          "repo-a", config, "GET", URI.create("https://secure.example.com:8443/path"), Map.of(), 5000));
       FakeHttpProxyServer.RecordedRequest connect = proxy.requests().get(0);
       assertEquals("CONNECT", connect.method());
       assertEquals("secure.example.com:8443", connect.target());
@@ -345,12 +346,12 @@ class ProxiedHttpClientFactoryTest {
           new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "10.0.0.6", 7890, null, null);
       OutboundProxyConfig active =
           new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "10.0.0.7", 7890, null, null);
-      CloseableHttpClient staleClient = factory.clientFor(stale);
+      CloseableHttpClient staleClient = factory.clientFor("repo-stale", stale);
       assertNotNull(staleClient);
       Thread.sleep(1200);
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
       while (System.nanoTime() < deadline) {
-        factory.clientFor(active); // touching the cache runs eviction maintenance
+        factory.clientFor("repo-active", active); // touching the cache runs eviction maintenance
         try {
           staleClient.executeOpen(null, new HttpGet("http://localhost/"), null);
         } catch (IllegalStateException closed) {
@@ -371,10 +372,10 @@ class ProxiedHttpClientFactoryTest {
     try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
       OutboundProxyConfig config =
           new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "10.0.0.8", 7890, "u", "pw");
-      CloseableHttpClient cached = factory.clientFor(config);
-      assertSame(cached, factory.clientFor(config));
-      factory.invalidate(config);
-      assertNotSame(cached, factory.clientFor(config),
+      CloseableHttpClient cached = factory.clientFor("repo-a", config);
+      assertSame(cached, factory.clientFor("repo-a", config));
+      factory.invalidate("repo-a", config);
+      assertNotSame(cached, factory.clientFor("repo-a", config),
           "invalidate must drop the cached client so the next lookup rebuilds it");
       assertThrows(IllegalStateException.class, () ->
           cached.executeOpen(null, new HttpGet("http://localhost/"), null));
@@ -382,10 +383,35 @@ class ProxiedHttpClientFactoryTest {
   }
 
   @Test
+  void invalidateIsScopedToTheOwningRepository() throws Exception {
+    // Two repositories with identical proxy settings get independent clients; evicting one
+    // repository's client (update/delete) must not close the other repository's pool, which may
+    // still be streaming an in-flight response.
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      OutboundProxyConfig config =
+          new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "10.0.0.9", 7890, "u", "pw");
+      OutboundProxyConfig identical =
+          new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "10.0.0.9", 7890, "u", "pw");
+      CloseableHttpClient clientA = factory.clientFor("repo-a", config);
+      CloseableHttpClient clientB = factory.clientFor("repo-b", identical);
+      assertNotSame(clientA, clientB,
+          "repositories sharing a proxy config must not share one pooled client");
+
+      factory.invalidate("repo-a", config);
+
+      assertSame(clientB, factory.clientFor("repo-b", identical),
+          "invalidating repo-a must keep repo-b's pooled client alive");
+      assertNotSame(clientA, factory.clientFor("repo-a", config),
+          "repo-a's own client must be rebuilt after invalidation");
+    }
+  }
+
+  @Test
   void invalidateIgnoresNullAndDisabledConfigs() throws Exception {
     try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
-      factory.invalidate(null);
-      factory.invalidate(new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "", 0, null, null));
+      factory.invalidate("repo-a", null);
+      factory.invalidate("repo-a",
+          new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "", 0, null, null));
     }
   }
 
@@ -394,7 +420,7 @@ class ProxiedHttpClientFactoryTest {
     ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000);
     OutboundProxyConfig config =
         new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "127.0.0.1", 7890, null, null);
-    CloseableHttpClient client = factory.clientFor(config);
+    CloseableHttpClient client = factory.clientFor("repo-a", config);
     assertNotNull(client);
     factory.close();
     // After close the client must be shut down: executing against it throws IllegalStateException.

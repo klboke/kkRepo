@@ -53,11 +53,18 @@ import org.springframework.stereotype.Component;
  * repositories sharing one SOCKS endpoint with different accounts stay isolated and evicting a
  * cached client drops its credentials with it.
  *
- * <p>Each distinct {@link OutboundProxyConfig#cacheKey()} gets its own pooled
- * {@link CloseableHttpClient} in a Caffeine cache. Entries expire after a period without use
+ * <p>Each distinct (owning repository, {@link OutboundProxyConfig#cacheKey()}) pair gets its own
+ * pooled {@link CloseableHttpClient} in a Caffeine cache. Keying by owner means two repositories
+ * that happen to share identical proxy settings never share one client, so an update or delete of
+ * one repository can never close a pool the other repository is still streaming from. Entries
+ * expire after a period without use
  * ({@code kkrepo.outbound-proxy.idle-ttl-ms}, default 1h) and the removal listener closes the
  * underlying connection pool, so a credential rotation or a repository deletion does not leave a
  * stale pool behind. {@link #close()} closes everything on application stop.
+ *
+ * <p>This cache is a rebuildable node-local hot cache: every replica builds its own clients on
+ * demand, and losing an entry only costs a rebuild. Evictions triggered by repository
+ * update/delete apply to the local node; other replicas drop their stale pools via the idle TTL.
  */
 @Component
 public class ProxiedHttpClientFactory implements AutoCloseable {
@@ -79,26 +86,35 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
         .build();
   }
 
-  /** Returns the pooled client for the given config, building it on first use. */
-  public CloseableHttpClient clientFor(OutboundProxyConfig config) {
+  /**
+   * Returns the pooled client for the given owning repository and config, building it on first
+   * use. {@code owner} is the repository identity (name); it is part of the cache key so two
+   * repositories with identical proxy settings get independent clients.
+   */
+  public CloseableHttpClient clientFor(String owner, OutboundProxyConfig config) {
     if (config == null || !config.enabled()) {
       throw new IllegalArgumentException("outbound proxy config is not enabled");
     }
-    return cache.get(config.cacheKey(), key -> build(config));
+    return cache.get(cacheKey(owner, config), key -> build(config));
   }
 
   /**
-   * Evicts the cached client for the given config and closes its connection pool via the removal
-   * listener. Called when a repository's outbound proxy settings change or the repository is
-   * deleted, so a stale pool never lingers until the idle TTL. A no-op for absent/disabled
+   * Evicts the cached client owned by the given repository and closes its connection pool via the
+   * removal listener. Called when that repository's outbound proxy settings change or the
+   * repository is deleted, so a stale pool never lingers until the idle TTL. Other repositories
+   * sharing the same proxy settings keep their own clients untouched. A no-op for absent/disabled
    * configs.
    */
-  public void invalidate(OutboundProxyConfig config) {
+  public void invalidate(String owner, OutboundProxyConfig config) {
     if (config == null || !config.enabled()) {
       return;
     }
-    cache.invalidate(config.cacheKey());
+    cache.invalidate(cacheKey(owner, config));
     cache.cleanUp();
+  }
+
+  private static String cacheKey(String owner, OutboundProxyConfig config) {
+    return (owner == null ? "" : owner) + "\n" + config.cacheKey();
   }
 
   /**
@@ -127,6 +143,7 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
   /**
    * Executes a GET/HEAD through the proxy and returns the live response. The caller must
    * {@link ProxiedResponse#close()} it after draining the body so the connection returns to the pool.
+   * {@code owner} is the repository identity (name) used to key the pooled client.
    *
    * <p>The connect timeout is configured once per cached client on its connection manager
    * ({@code kkrepo.outbound-proxy.connect-timeout-ms}), because HttpClient 5.4+ removed per-request
@@ -135,13 +152,14 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
    */
   @SuppressWarnings("resource") // the cached client is shared; it is closed by the cache, not per request
   public ProxiedResponse execute(
+      String owner,
       OutboundProxyConfig config,
       String method,
       URI uri,
       Map<String, String> headers,
       long responseTimeoutMillis)
       throws IOException {
-    CloseableHttpClient client = clientFor(config);
+    CloseableHttpClient client = clientFor(owner, config);
     ClassicHttpRequest request = "HEAD".equalsIgnoreCase(method) ? new HttpHead(uri) : new HttpGet(uri);
     if (headers != null) {
       headers.forEach((name, value) -> {

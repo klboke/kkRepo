@@ -973,7 +973,7 @@ class RepositoryServiceTest {
       RepositoryService service = service(repositories, factory);
       OutboundProxyConfig oldConfig = new OutboundProxyConfig(
           OutboundProxyConfig.Type.HTTP, "192.168.1.10", 7890, "clash-user", "old-pass");
-      Object staleClient = factory.clientFor(oldConfig);
+      Object staleClient = factory.clientFor("maven-proxy", oldConfig);
 
       service.update("maven-proxy",
           new UpdateCommand(true, null, null, null,
@@ -983,7 +983,7 @@ class RepositoryServiceTest {
                   "HTTP", "192.168.1.10", 7890, "clash-user", "new-pass", null),
               null, null, null, null));
 
-      assertNotSame(staleClient, factory.clientFor(oldConfig),
+      assertNotSame(staleClient, factory.clientFor("maven-proxy", oldConfig),
           "a credential rotation must evict the stale pooled client immediately");
     }
   }
@@ -995,12 +995,12 @@ class RepositoryServiceTest {
       RepositoryService service = service(repositories, factory);
       OutboundProxyConfig config = new OutboundProxyConfig(
           OutboundProxyConfig.Type.HTTP, "192.168.1.10", 7890, "clash-user", "clash-pass");
-      Object cachedClient = factory.clientFor(config);
+      Object cachedClient = factory.clientFor("maven-proxy", config);
 
       service.update("maven-proxy",
           new UpdateCommand(false, null, null, null, null, null, null, null, null));
 
-      assertSame(cachedClient, factory.clientFor(config),
+      assertSame(cachedClient, factory.clientFor("maven-proxy", config),
           "an update that does not touch the outbound proxy must keep the pooled client");
     }
   }
@@ -1012,7 +1012,7 @@ class RepositoryServiceTest {
       RepositoryService service = service(repositories, factory);
       OutboundProxyConfig oldConfig = new OutboundProxyConfig(
           OutboundProxyConfig.Type.HTTP, "192.168.1.10", 7890, "clash-user", "clash-pass");
-      Object staleClient = factory.clientFor(oldConfig);
+      Object staleClient = factory.clientFor("maven-proxy", oldConfig);
 
       service.update("maven-proxy",
           new UpdateCommand(true, null, null, null,
@@ -1022,7 +1022,7 @@ class RepositoryServiceTest {
                   "", null, null, null, null, null),
               null, null, null, null));
 
-      assertNotSame(staleClient, factory.clientFor(oldConfig),
+      assertNotSame(staleClient, factory.clientFor("maven-proxy", oldConfig),
           "clearing the proxy must evict the stale pooled client immediately");
     }
   }
@@ -1034,16 +1034,65 @@ class RepositoryServiceTest {
       RepositoryService service = service(repositories, factory);
       OutboundProxyConfig config = new OutboundProxyConfig(
           OutboundProxyConfig.Type.HTTP, "192.168.1.10", 7890, "clash-user", "clash-pass");
-      Object staleClient = factory.clientFor(config);
+      Object staleClient = factory.clientFor("maven-proxy", config);
 
       service.delete("maven-proxy");
 
-      assertNotSame(staleClient, factory.clientFor(config),
+      assertNotSame(staleClient, factory.clientFor("maven-proxy", config),
           "deleting the repository must evict its pooled proxy client immediately");
     }
   }
 
+  @Test
+  void updateKeepsOtherRepositoryClientWhenProxyConfigsAreIdentical() throws Exception {
+    StubRepositoryDao repositories = new StubRepositoryDao(
+        mavenProxyWithOutboundProxy("clash-pass"),
+        mavenProxyWithOutboundProxy(2L, "maven-proxy-two", "clash-pass"));
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      RepositoryService service = service(repositories, factory);
+      OutboundProxyConfig shared = new OutboundProxyConfig(
+          OutboundProxyConfig.Type.HTTP, "192.168.1.10", 7890, "clash-user", "clash-pass");
+      Object otherClient = factory.clientFor("maven-proxy-two", shared);
+
+      service.update("maven-proxy",
+          new UpdateCommand(true, null, null, null,
+              new ProxySettings(
+                  "https://repo.maven.apache.org/maven2/", 1440, 1440, true,
+                  null, null, null, null, null,
+                  "HTTP", "192.168.1.10", 7890, "clash-user", "rotated-pass", null),
+              null, null, null, null));
+
+      assertSame(otherClient, factory.clientFor("maven-proxy-two", shared),
+          "updating one repository must not close the other repository's pooled client, "
+              + "even when both share identical proxy settings");
+    }
+  }
+
+  @Test
+  void deleteKeepsOtherRepositoryClientWhenProxyConfigsAreIdentical() throws Exception {
+    StubRepositoryDao repositories = new StubRepositoryDao(
+        mavenProxyWithOutboundProxy("clash-pass"),
+        mavenProxyWithOutboundProxy(2L, "maven-proxy-two", "clash-pass"));
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      RepositoryService service = service(repositories, factory);
+      OutboundProxyConfig shared = new OutboundProxyConfig(
+          OutboundProxyConfig.Type.HTTP, "192.168.1.10", 7890, "clash-user", "clash-pass");
+      Object otherClient = factory.clientFor("maven-proxy-two", shared);
+
+      service.delete("maven-proxy");
+
+      assertSame(otherClient, factory.clientFor("maven-proxy-two", shared),
+          "deleting one repository must not close the other repository's pooled client, "
+              + "even when both share identical proxy settings");
+    }
+  }
+
   private static RepositoryRecord mavenProxyWithOutboundProxy(String outboundPassword) {
+    return mavenProxyWithOutboundProxy(1L, "maven-proxy", outboundPassword);
+  }
+
+  private static RepositoryRecord mavenProxyWithOutboundProxy(
+      long id, String name, String outboundPassword) {
     Map<String, Object> proxy = new LinkedHashMap<>();
     proxy.put("remoteUrl", "https://repo.maven.apache.org/maven2/");
     proxy.put("outboundProxyType", "HTTP");
@@ -1055,8 +1104,8 @@ class RepositoryServiceTest {
     attributes.put("recipe", "maven2-proxy");
     attributes.put("proxy", proxy);
     return new RepositoryRecord(
-        1L,
-        "maven-proxy",
+        id,
+        name,
         RepositoryFormat.MAVEN2,
         RepositoryType.PROXY,
         "maven2-proxy",

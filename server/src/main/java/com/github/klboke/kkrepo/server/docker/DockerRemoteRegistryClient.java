@@ -293,6 +293,7 @@ public class DockerRemoteRegistryClient {
         basicAuthorization(runtime).ifPresent(value -> headers.put("Authorization", value));
       }
       response = proxyFactory.execute(
+          runtime.name(),
           runtime.outboundProxy(),
           "GET",
           uri,
@@ -350,6 +351,7 @@ public class DockerRemoteRegistryClient {
       headers.put("User-Agent", "kkrepo/0.1");
       basicAuthorization(runtime).ifPresent(value -> headers.put("Authorization", value));
       response = proxyFactory.execute(
+          runtime.name(),
           runtime.outboundProxy(),
           "GET",
           uri,
