@@ -457,6 +457,102 @@ class RepositoryServiceTest {
   }
 
   @Test
+  void outboundProxyCanBeClearedBySelectingDirect() {
+    Map<String, Object> proxy = new LinkedHashMap<>();
+    proxy.put("remoteUrl", "https://repo.maven.apache.org/maven2/");
+    proxy.put("outboundProxyType", "SOCKS");
+    proxy.put("outboundProxyHost", "192.168.1.10");
+    proxy.put("outboundProxyPort", 7891);
+    proxy.put("outboundProxyUsername", "clash-user");
+    proxy.put("outboundProxyPassword", "clash-pass");
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", "maven2-proxy");
+    attributes.put("proxy", proxy);
+    StubRepositoryDao repositories = new StubRepositoryDao(new RepositoryRecord(
+        1L,
+        "maven-proxy",
+        RepositoryFormat.MAVEN2,
+        RepositoryType.PROXY,
+        "maven2-proxy",
+        true,
+        1L,
+        null,
+        "https://repo.maven.apache.org/maven2/",
+        null,
+        null,
+        null,
+        true,
+        attributes));
+    RepositoryService service = service(repositories);
+
+    // The admin form sends "" for the "Direct (no proxy)" option and null for the other
+    // outbound fields; the merge must clear the whole block instead of preserving the old values.
+    RepositoryView updated = service.update("maven-proxy",
+        new UpdateCommand(true, null, null, null,
+            new ProxySettings(
+                "https://repo.maven.apache.org/maven2/", 1440, 1440, true,
+                null, null, null, null, null,
+                "", null, null, null, null, null),
+            null, null, null, null));
+
+    assertNull(updated.proxy().outboundProxyType());
+    assertNull(updated.proxy().outboundProxyHost());
+    assertNull(updated.proxy().outboundProxyPort());
+    assertNull(updated.proxy().outboundProxyUsername());
+    assertNull(updated.proxy().outboundProxyPassword());
+    Map<?, ?> storedProxy = (Map<?, ?>) repositories.updated.attributes().get("proxy");
+    assertNull(storedProxy.get("outboundProxyType"));
+    assertNull(storedProxy.get("outboundProxyHost"));
+    assertNull(storedProxy.get("outboundProxyPort"));
+    assertNull(storedProxy.get("outboundProxyUsername"));
+    assertNull(storedProxy.get("outboundProxyPassword"));
+  }
+
+  @Test
+  void outboundProxyUnchangedWhenTypeFieldOmitted() {
+    Map<String, Object> proxy = new LinkedHashMap<>();
+    proxy.put("remoteUrl", "https://repo.maven.apache.org/maven2/");
+    proxy.put("outboundProxyType", "SOCKS");
+    proxy.put("outboundProxyHost", "192.168.1.10");
+    proxy.put("outboundProxyPort", 7891);
+    proxy.put("outboundProxyUsername", "clash-user");
+    proxy.put("outboundProxyPassword", "clash-pass");
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", "maven2-proxy");
+    attributes.put("proxy", proxy);
+    StubRepositoryDao repositories = new StubRepositoryDao(new RepositoryRecord(
+        1L,
+        "maven-proxy",
+        RepositoryFormat.MAVEN2,
+        RepositoryType.PROXY,
+        "maven2-proxy",
+        true,
+        1L,
+        null,
+        "https://repo.maven.apache.org/maven2/",
+        null,
+        null,
+        null,
+        true,
+        attributes));
+    RepositoryService service = service(repositories);
+
+    // A null outboundProxyType means "block not touched"; the saved proxy must survive.
+    RepositoryView updated = service.update("maven-proxy",
+        new UpdateCommand(true, null, null, null,
+            new ProxySettings(
+                "https://repo.maven.apache.org/maven2/", 1440, 1440, true,
+                null, null, null, null, null,
+                null, null, null, null, null, null),
+            null, null, null, null));
+
+    assertEquals("SOCKS", updated.proxy().outboundProxyType());
+    assertEquals("192.168.1.10", updated.proxy().outboundProxyHost());
+    assertEquals(7891, updated.proxy().outboundProxyPort());
+    assertEquals("clash-user", updated.proxy().outboundProxyUsername());
+  }
+
+  @Test
   void outboundProxyWithoutHostIsRejected() {
     StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
     RepositoryService service = service(repositories);

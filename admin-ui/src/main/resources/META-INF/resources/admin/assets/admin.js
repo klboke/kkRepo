@@ -1993,7 +1993,7 @@ function repositoryFormPayload() {
       remotePasswordConfigured: document.getElementById("repository-remote-password-clear").checked ? false : null,
       remoteBearerToken: textInputValue("repository-remote-bearer-token"),
       remoteBearerTokenConfigured: document.getElementById("repository-remote-bearer-token-clear").checked ? false : null,
-      outboundProxyType: textInputValue("repository-outbound-proxy-type"),
+      outboundProxyType: document.getElementById("repository-outbound-proxy-type").value,
       outboundProxyHost: textInputValue("repository-outbound-proxy-host"),
       outboundProxyPort: (function () {
         const port = document.getElementById("repository-outbound-proxy-port").value;

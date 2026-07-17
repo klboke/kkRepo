@@ -886,6 +886,38 @@ public class RepositoryService {
     ProxySettings base = existing == null
         ? new ProxySettings(existingRemoteUrl, null, null, null)
         : existing;
+
+    // The outbound proxy is one logical block governed by outboundProxyType:
+    //  - null/absent type  => caller did not touch the block => preserve the saved values;
+    //  - blank type ("")   => "Direct (no proxy)" selected    => clear the whole block, including
+    //                        host/port/username/password, so upstream fetches stop being proxied;
+    //  - non-blank type    => caller is setting/changing the proxy => take the incoming values and
+    //                        let validateOutboundProxy reject invalid types / missing host+port.
+    String mergedOutboundProxyType;
+    String mergedOutboundProxyHost;
+    Integer mergedOutboundProxyPort;
+    String mergedOutboundProxyUsername;
+    String mergedOutboundProxyPassword;
+    if (incoming.outboundProxyType() == null) {
+      mergedOutboundProxyType = base.outboundProxyType();
+      mergedOutboundProxyHost = base.outboundProxyHost();
+      mergedOutboundProxyPort = base.outboundProxyPort();
+      mergedOutboundProxyUsername = base.outboundProxyUsername();
+      mergedOutboundProxyPassword = base.outboundProxyPassword();
+    } else if (incoming.outboundProxyType().isBlank()) {
+      mergedOutboundProxyType = null;
+      mergedOutboundProxyHost = null;
+      mergedOutboundProxyPort = null;
+      mergedOutboundProxyUsername = null;
+      mergedOutboundProxyPassword = null;
+    } else {
+      mergedOutboundProxyType = incoming.outboundProxyType();
+      mergedOutboundProxyHost = blankToNull(incoming.outboundProxyHost());
+      mergedOutboundProxyPort = incoming.outboundProxyPort();
+      mergedOutboundProxyUsername = blankToNull(incoming.outboundProxyUsername());
+      mergedOutboundProxyPassword = mergedOutboundProxyPassword(base, incoming);
+    }
+
     return new ProxySettings(
         incoming.remoteUrl() == null ? base.remoteUrl() : incoming.remoteUrl(),
         incoming.contentMaxAgeMinutes() == null ? base.contentMaxAgeMinutes() : incoming.contentMaxAgeMinutes(),
@@ -896,11 +928,11 @@ public class RepositoryService {
         null,
         mergedProxyBearerToken(base, incoming),
         null,
-        incoming.outboundProxyType() == null ? base.outboundProxyType() : incoming.outboundProxyType(),
-        incoming.outboundProxyHost() == null ? base.outboundProxyHost() : blankToNull(incoming.outboundProxyHost()),
-        incoming.outboundProxyPort() == null ? base.outboundProxyPort() : incoming.outboundProxyPort(),
-        incoming.outboundProxyUsername() == null ? base.outboundProxyUsername() : blankToNull(incoming.outboundProxyUsername()),
-        mergedOutboundProxyPassword(base, incoming),
+        mergedOutboundProxyType,
+        mergedOutboundProxyHost,
+        mergedOutboundProxyPort,
+        mergedOutboundProxyUsername,
+        mergedOutboundProxyPassword,
         null);
   }
 
