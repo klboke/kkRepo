@@ -730,9 +730,9 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
       Exchange nexusMetadata = get(config.nexusProxy(), release, JSON_ACCEPT);
       Exchange candidateMetadata = get(config.candidateProxy(), release, JSON_ACCEPT);
       assertEquals(nexusMetadata.status(), candidateMetadata.status(), "proxy metadata status");
-      Exchange nexusArchive = get(config.nexusProxy(), archivePath, ZIP_ACCEPT);
-      assertEquals(sourceChecksum(json(nexusMetadata)), sha256Hex(nexusArchive.body()),
-          "Nexus metadata must advertise its own generated archive checksum");
+      // Nexus can regenerate GitHub-backed ZIP containers between metadata and archive requests.
+      // Their entry contents remain equivalent, but container timestamps make a cross-request raw
+      // checksum assertion flaky. The candidate must still advertise its persisted snapshot exactly.
       assertEquals(expectedChecksum, sourceChecksum(json(candidateMetadata)),
           "concurrent cold download must persist the checksum advertised by metadata");
     } finally {
@@ -1297,8 +1297,8 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
     assertEquals(200, candidateArchive.status(), label + " candidate archive status");
     assertContentType(referenceArchive, "application/zip", label + " Nexus archive Content-Type");
     assertContentType(candidateArchive, "application/zip", label + " candidate archive Content-Type");
-    assertEquals(sourceChecksum(json(referenceMetadata)), sha256Hex(referenceArchive.body()),
-        label + " Nexus metadata/archive checksum");
+    // Compare generated Nexus archives by normalized entry contents below. GitHub-backed ZIP
+    // container bytes are not stable across independent Nexus metadata and archive requests.
     assertEquals(sourceChecksum(json(candidateMetadata)), sha256Hex(candidateArchive.body()),
         label + " candidate metadata/archive checksum");
     assertEquals(archiveEntryDigests(referenceArchive.body()),
