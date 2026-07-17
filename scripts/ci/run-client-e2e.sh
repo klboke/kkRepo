@@ -1460,8 +1460,10 @@ EOF
     swift_registry_set "$label-hosted" "$swift_bin" "$package_dir" "$home" "$hosted_url"
     swift_registry_login "$label-hosted" "$swift_bin" "$package_dir" "$home" "$hosted_url"
     assert_swift_invalid_login "$label-hosted" "$hosted_url"
+    local token_login_home="$dir/token-login-home"
+    mkdir -p "$token_login_home"
     swift_registry_token_login "$label-hosted" "$swift_bin" "$package_dir" \
-      "$home" "$hosted_url"
+      "$token_login_home" "$hosted_url"
   else
     if swift_registry_login_is_required "$label"; then
       log "Swift $label must execute package-registry login over HTTPS, but the command or HTTPS registry is unavailable"
