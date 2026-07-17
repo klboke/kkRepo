@@ -134,6 +134,7 @@ public class BrowseAssetDetailService {
       if (releaseMetadata.isPresent()) {
         return releaseMetadata.orElseThrow();
       }
+      rejectSwiftTombstoneForPhysicalPath(visibleRepository, publicPath, sourceRepositoryName);
     }
     ResolvedStoragePath resolvedPath = storagePath(
         visibleRepository, publicPath, sourceRepositoryName);
@@ -309,6 +310,34 @@ public class BrowseAssetDetailService {
           Map.of("dynamic", true, "hashes_not_verified", false)));
     }
     return Optional.empty();
+  }
+
+  private void rejectSwiftTombstoneForPhysicalPath(
+      RepositoryRecord visibleRepository,
+      String publicPath,
+      String sourceRepositoryName) {
+    SwiftPath parsed = SWIFT_PATHS.parse(publicPath);
+    if (parsed.kind() != SwiftPath.Kind.SOURCE_ARCHIVE
+        && parsed.kind() != SwiftPath.Kind.MANIFEST) {
+      return;
+    }
+    List<RepositoryRecord> sources = visibleRepository.type() == RepositoryType.GROUP
+        ? BrowseRepositorySources.swiftSources(visibleRepository, repositoryDao)
+        : List.of(visibleRepository);
+    if (sourceRepositoryName != null && !sourceRepositoryName.isBlank()) {
+      sources = sources.stream()
+          .filter(source -> source.name().equals(sourceRepositoryName))
+          .toList();
+    }
+    for (RepositoryRecord source : sources) {
+      if (swiftDao.findTombstone(
+          source.id(),
+          parsed.scope().toLowerCase(Locale.ROOT),
+          parsed.name().toLowerCase(Locale.ROOT),
+          parsed.version()).isPresent()) {
+        throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Swift release not found");
+      }
+    }
   }
 
   private Optional<BrowseAssetDetail> swiftManifestBrowseDetail(

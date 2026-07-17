@@ -721,6 +721,61 @@ class BrowseAssetDetailServiceTest {
   }
 
   @Test
+  void swiftArchiveDetailStopsAtGroupTombstoneBeforePhysicalAssetFallback() {
+    RepositoryRecord group = repository(
+        1L, "swift-group", RepositoryFormat.SWIFT, RepositoryType.GROUP);
+    RepositoryRecord deleted = repository(
+        2L, "swift-deleted", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    RepositoryRecord later = repository(
+        3L, "swift-later", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    String path = "Alamofire/Alamofire/5.12.0.zip";
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    when(repositories.listMembers(group.id())).thenReturn(List.of(deleted, later));
+    SwiftRegistryDao swift = mock(SwiftRegistryDao.class);
+    when(swift.findTombstone(deleted.id(), "alamofire", "alamofire", "5.12.0"))
+        .thenReturn(Optional.of(new SwiftRegistryDao.Tombstone(
+            deleted.id(),
+            "alamofire",
+            "alamofire",
+            "5.12.0",
+            "deleted",
+            8L,
+            Instant.parse("2026-07-17T05:27:58Z"))));
+    AssetRecord archive = new AssetRecord(
+        10L,
+        later.id(),
+        null,
+        100L,
+        RepositoryFormat.SWIFT,
+        path,
+        PersistenceHashes.pathHash(path),
+        "5.12.0.zip",
+        "swift-source-archive",
+        "application/zip",
+        128L,
+        null,
+        Instant.parse("2026-07-17T00:00:00Z"),
+        Map.of("swiftKind", "source-archive"));
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(later.id(), path), archive),
+        Map.of(100L, blob(100L, 128L)));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        repositories,
+        assets,
+        null,
+        null,
+        swift,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    ResponseStatusException error = assertThrows(
+        ResponseStatusException.class, () -> service.detail(group, path, null));
+
+    assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode());
+    assertEquals(List.of(), assets.pathLookups);
+  }
+
+  @Test
   void pubArchiveDetailExposesStoredPubMetadata() {
     RepositoryRecord repository = repository(1L, "pub-hosted", RepositoryFormat.PUB, RepositoryType.HOSTED);
     String path = "packages/example_package/versions/1.0.0.tar.gz";
