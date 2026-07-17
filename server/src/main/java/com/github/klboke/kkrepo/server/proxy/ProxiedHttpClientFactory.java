@@ -121,7 +121,7 @@ public class ProxiedHttpClientFactory {
       BasicCredentialsProvider credentials = new BasicCredentialsProvider();
       credentials.setCredentials(
           new AuthScope(config.host(), config.port()),
-          new UsernamePasswordCredentials(config.username(), config.password().toCharArray()));
+          new UsernamePasswordCredentials(config.username(), passwordChars(config.password())));
       builder.setDefaultCredentialsProvider(credentials);
     }
     log.info("Configured outbound HTTP proxy {}:{} for upstream repository fetches",
@@ -167,11 +167,19 @@ public class ProxiedHttpClientFactory {
       @Override
       protected java.net.PasswordAuthentication getPasswordAuthentication() {
         if (getRequestorType() == RequestorType.SERVER || getRequestingHost() != null) {
-          return new java.net.PasswordAuthentication(username, password.toCharArray());
+          return new java.net.PasswordAuthentication(username, passwordChars(password));
         }
         return null;
       }
     });
+  }
+
+  /**
+   * A username-only proxy config is valid ({@link OutboundProxyConfig#authenticated()} only requires
+   * a username), so a null/blank password must be treated as an empty secret rather than dereferenced.
+   */
+  private static char[] passwordChars(String password) {
+    return password != null ? password.toCharArray() : new char[0];
   }
 
   /** Live Apache response; closing it releases the pooled connection. */
