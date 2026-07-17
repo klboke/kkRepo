@@ -15,8 +15,14 @@ ARTIFACT_DIR="${CLIENT_E2E_ARTIFACT_DIR:-$PROJECT_ROOT/artifacts/client-e2e}"
 WORK_DIR="${CLIENT_E2E_WORK_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-client-e2e.XXXXXX")}"
 STAMP="${CLIENT_E2E_STAMP:-$(date +%Y%m%d%H%M%S)}"
 START_TIMEOUT_SECONDS="${LIVE_COMPAT_START_TIMEOUT_SECONDS:-240}"
+SWIFT_LOGIN_TIMEOUT_SECONDS="${SWIFT_E2E_LOGIN_TIMEOUT_SECONDS:-60}"
 KKREPO_AUTH_URL=""
 REDACTION_VALUES=("$KKREPO_PASSWORD" "$KKREPO_AUTH")
+
+if [[ ! "$SWIFT_LOGIN_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  printf '[client-e2e] SWIFT_E2E_LOGIN_TIMEOUT_SECONDS must be a positive integer\n' >&2
+  exit 2
+fi
 
 mkdir -p "$ARTIFACT_DIR" "$WORK_DIR"
 ARTIFACT_DIR="$(cd "$ARTIFACT_DIR" && pwd)"
@@ -117,6 +123,24 @@ run_logged_in() {
   set -e
   redact_log_file "$log_file"
   return "$status"
+}
+
+run_with_timeout() {
+  local timeout_seconds="$1"
+  shift
+  python3 - "$timeout_seconds" "$@" <<'PY'
+import subprocess
+import sys
+
+timeout = int(sys.argv[1])
+command = sys.argv[2:]
+try:
+    completed = subprocess.run(command, timeout=timeout, check=False)
+except subprocess.TimeoutExpired:
+    print(f"command timed out after {timeout} seconds", file=sys.stderr)
+    raise SystemExit(124)
+raise SystemExit(completed.returncode)
+PY
 }
 
 run_logged_output() {
@@ -1186,23 +1210,26 @@ swift_registry_login() {
   local directory="$3"
   local home="$4"
   local registry="$5"
-  run_logged_in "swift-$label-registry-login" "$directory" env \
+  run_logged_in "swift-$label-registry-login" "$directory" \
+    run_with_timeout "$SWIFT_LOGIN_TIMEOUT_SECONDS" env \
     HOME="$home" XDG_CONFIG_HOME="$home/.config" \
     "$swift_bin" package-registry login "$registry/login" \
+    --netrc --netrc-file "$home/.netrc" \
     --username "$KKREPO_USER" --password "$KKREPO_PASSWORD" --no-confirm
 }
 
 assert_swift_invalid_login() {
   local label="$1"
-  local swift_bin="$2"
-  local directory="$3"
-  local home="$4"
-  local registry="$5"
+  local registry="$2"
   local status=0
-  if run_logged_in "swift-$label-registry-login-invalid" "$directory" env \
-      HOME="$home" XDG_CONFIG_HOME="$home/.config" \
-      "$swift_bin" package-registry login "$registry/login" \
-      --username "$KKREPO_USER" --password 'definitely-invalid' --no-confirm; then
+  # SwiftPM 5.10 can wait indefinitely after a server returns the Nexus-compatible
+  # 401 Basic challenge. The successful path above exercises the real login CLI;
+  # use a bounded protocol probe for the negative credential contract.
+  if run_logged "swift-$label-registry-login-invalid" \
+      curl --connect-timeout 10 --max-time 20 --fail-with-body -sS \
+      -X POST -u "$KKREPO_USER:definitely-invalid" \
+      -H 'Accept: application/vnd.swift.registry.v1+json' \
+      "$registry/login"; then
     status=0
   else
     status=$?
@@ -1224,10 +1251,11 @@ swift_registry_token_login() {
   local token
   token="$(create_api_key GenericToken "Swift client E2E $label $STAMP")"
   add_redaction_value "$token"
-  run_logged_in "swift-$label-registry-token-login" "$directory" env \
+  run_logged_in "swift-$label-registry-token-login" "$directory" \
+    run_with_timeout "$SWIFT_LOGIN_TIMEOUT_SECONDS" env \
     HOME="$home" XDG_CONFIG_HOME="$home/.config" \
     "$swift_bin" package-registry login "$registry/login" \
-    --token "$token" --no-confirm
+    --netrc --netrc-file "$home/.netrc" --token "$token" --no-confirm
 }
 
 swift_supports_registry_login() {
@@ -1296,7 +1324,11 @@ test_swift_proxy_binary() {
   local proxy_scope="${SWIFT_E2E_PROXY_SCOPE:-apple}"
   local proxy_name="${SWIFT_E2E_PROXY_NAME:-swift-log}"
   local proxy_version
+  local -a swift_auth_args=()
   proxy_version="$(swift_proxy_fixture_version "$swift_bin")"
+  if [[ -f "$home/.netrc" ]]; then
+    swift_auth_args=(--netrc --netrc-file "$home/.netrc")
+  fi
   mkdir -p "$proxy_dir/Sources/ProxyConsumer"
   cat >"$proxy_dir/Package.swift" <<EOF
 // swift-tools-version:5.7
@@ -1322,10 +1354,10 @@ EOF
   swift_registry_set "$label-proxy-group" "$swift_bin" "$proxy_dir" "$home" "$group_url"
   run_logged_in "swift-$label-proxy-resolve" "$proxy_dir" env \
     HOME="$home" XDG_CONFIG_HOME="$home/.config" \
-    "$swift_bin" package resolve --replace-scm-with-registry
+    "$swift_bin" package resolve --replace-scm-with-registry "${swift_auth_args[@]}"
   run_logged_in "swift-$label-proxy-build" "$proxy_dir" env \
     HOME="$home" XDG_CONFIG_HOME="$home/.config" \
-    "$swift_bin" build --replace-scm-with-registry
+    "$swift_bin" build --replace-scm-with-registry "${swift_auth_args[@]}"
   cp "$proxy_dir/Package.resolved" "$ARTIFACT_DIR/swift-$label-proxy-Package.resolved"
   assert_swift_registry_pin "$ARTIFACT_DIR/swift-$label-proxy-Package.resolved" \
     "$proxy_scope" "$proxy_name" "$proxy_version" "Swift $label proxy"
@@ -1339,6 +1371,7 @@ test_swift_binary() {
   local hosted_url="$SWIFT_KKREPO_URL/repository/swift-hosted"
   local group_url="$SWIFT_KKREPO_URL/repository/swift-group"
   local hosted_access_url group_access_url
+  local -a swift_auth_args=()
   label_slug="$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-//;s/-$//')"
   package_name="client-e2e-${STAMP}-${label_slug:-swift}"
   module="KkRepoSwiftE2E${ordinal}"
@@ -1416,10 +1449,7 @@ EOF
   if swift_supports_registry_login "$swift_bin" "$hosted_url"; then
     swift_registry_set "$label-hosted" "$swift_bin" "$package_dir" "$home" "$hosted_url"
     swift_registry_login "$label-hosted" "$swift_bin" "$package_dir" "$home" "$hosted_url"
-    local invalid_login_home="$dir/invalid-login-home"
-    mkdir -p "$invalid_login_home"
-    assert_swift_invalid_login "$label-hosted" "$swift_bin" "$package_dir" \
-      "$invalid_login_home" "$hosted_url"
+    assert_swift_invalid_login "$label-hosted" "$hosted_url"
     swift_registry_token_login "$label-hosted" "$swift_bin" "$package_dir" \
       "$home" "$hosted_url"
   else
@@ -1433,6 +1463,9 @@ EOF
       "$swift_bin" "$package_dir" "$home" "$hosted_access_url"
     log "Swift $label registry login CLI skipped: it requires HTTPS and Swift 5.8+; embedded credentials are used"
   fi
+  if [[ -f "$home/.netrc" ]]; then
+    swift_auth_args=(--netrc --netrc-file "$home/.netrc")
+  fi
   local -a publish_transport_args=()
   if [[ "$hosted_access_url" == http://* ]]; then
     publish_transport_args+=(--allow-insecure-http)
@@ -1442,14 +1475,16 @@ EOF
     HOME="$home" XDG_CONFIG_HOME="$home/.config" \
     "$swift_bin" package-registry publish "kkrepo.$package_name" "$version" \
     --url "$hosted_access_url/" --metadata-path "$package_dir/package-metadata.json" \
-    --scratch-directory "$dir/publish-scratch" "${publish_transport_args[@]}"
+    --scratch-directory "$dir/publish-scratch" "${publish_transport_args[@]}" \
+    "${swift_auth_args[@]}"
 
   local duplicate_status=0
   if run_logged_in "swift-$label-publish-duplicate" "$package_dir" env \
       HOME="$home" XDG_CONFIG_HOME="$home/.config" \
       "$swift_bin" package-registry publish "kkrepo.$package_name" "$version" \
       --url "$hosted_access_url/" --metadata-path "$package_dir/package-metadata.json" \
-      --scratch-directory "$dir/duplicate-scratch" "${publish_transport_args[@]}"; then
+      --scratch-directory "$dir/duplicate-scratch" "${publish_transport_args[@]}" \
+      "${swift_auth_args[@]}"; then
     duplicate_status=0
   else
     duplicate_status=$?
@@ -1536,10 +1571,10 @@ EOF
   fi
   run_logged_in "swift-$label-resolve" "$consumer_dir" env \
     HOME="$home" XDG_CONFIG_HOME="$home/.config" \
-    "$swift_bin" package resolve
+    "$swift_bin" package resolve "${swift_auth_args[@]}"
   run_logged_in "swift-$label-build" "$consumer_dir" env \
     HOME="$home" XDG_CONFIG_HOME="$home/.config" \
-    "$swift_bin" build
+    "$swift_bin" build "${swift_auth_args[@]}"
   cp "$consumer_dir/Package.resolved" "$ARTIFACT_DIR/swift-$label-Package.resolved"
   assert_swift_registry_pin "$ARTIFACT_DIR/swift-$label-Package.resolved" \
     kkrepo "$package_name" "$version" "Swift $label hosted"
@@ -1548,27 +1583,33 @@ EOF
   rm -rf "$consumer_dir/.build"
   run_logged_in "swift-$label-resolve-replay" "$consumer_dir" env \
     HOME="$home" XDG_CONFIG_HOME="$home/.config" \
-    "$swift_bin" package resolve
+    "$swift_bin" package resolve "${swift_auth_args[@]}"
   [[ "$first_lock_hash" == "$(file_sha256 "$consumer_dir/Package.resolved")" ]]
   run_logged_in "swift-$label-build-replay" "$consumer_dir" env \
     HOME="$home" XDG_CONFIG_HOME="$home/.config" \
-    "$swift_bin" build
+    "$swift_bin" build "${swift_auth_args[@]}"
 
   if [[ -n "${SWIFT_KKREPO_SECONDARY_BASE_URL:-}" ]]; then
     local secondary_consumer_dir="$dir/secondary-consumer"
     local secondary_home="$dir/secondary-home"
     local secondary_group_url="${SWIFT_KKREPO_SECONDARY_BASE_URL%/}/repository/swift-group"
+    local -a secondary_auth_args=()
     mkdir -p "$secondary_consumer_dir/Sources" "$secondary_home"
     cp "$consumer_dir/Package.swift" "$secondary_consumer_dir/Package.swift"
     cp -R "$consumer_dir/Sources/Consumer" "$secondary_consumer_dir/Sources/Consumer"
     swift_registry_set "$label-secondary-group" "$swift_bin" \
       "$secondary_consumer_dir" "$secondary_home" "$secondary_group_url"
+    if swift_supports_registry_login "$swift_bin" "$secondary_group_url"; then
+      swift_registry_login "$label-secondary-group" "$swift_bin" \
+        "$secondary_consumer_dir" "$secondary_home" "$secondary_group_url"
+      secondary_auth_args=(--netrc --netrc-file "$secondary_home/.netrc")
+    fi
     run_logged_in "swift-$label-secondary-resolve" "$secondary_consumer_dir" env \
       HOME="$secondary_home" XDG_CONFIG_HOME="$secondary_home/.config" \
-      "$swift_bin" package resolve
+      "$swift_bin" package resolve "${secondary_auth_args[@]}"
     run_logged_in "swift-$label-secondary-build" "$secondary_consumer_dir" env \
       HOME="$secondary_home" XDG_CONFIG_HOME="$secondary_home/.config" \
-      "$swift_bin" build
+      "$swift_bin" build "${secondary_auth_args[@]}"
     cp "$secondary_consumer_dir/Package.resolved" \
       "$ARTIFACT_DIR/swift-$label-secondary-Package.resolved"
     assert_swift_registry_pin "$ARTIFACT_DIR/swift-$label-secondary-Package.resolved" \
@@ -1631,6 +1672,16 @@ test_swift_xcode() {
   local xcode_source_packages="$WORK_DIR/xcode-source-packages"
   local xcode_derived_data="$WORK_DIR/xcode-derived-data"
   local xcode_config="$package/.swiftpm/configuration/registries.json"
+  local xcode_netrc_data=""
+  local -a xcode_auth_env=()
+  if [[ -f "$xcode_home/.netrc" ]]; then
+    xcode_netrc_data="$(<"$xcode_home/.netrc")"
+    xcode_auth_env=(
+      "SWIFTPM_NETRC_DATA=$xcode_netrc_data"
+      "SWIFTPM_REGISTRY_LOGIN=$KKREPO_USER"
+      "SWIFTPM_REGISTRY_PASSWORD=$KKREPO_PASSWORD"
+    )
+  fi
   mkdir -p "$(dirname "$xcode_config")" "$xcode_source_packages" "$xcode_derived_data"
   run_logged swift-xcode-registry-config python3 - "$xcode_config" \
       "$SWIFT_KKREPO_URL/repository/swift-group/" <<'PY'
@@ -1647,11 +1698,13 @@ PY
   rm -f "$package/Package.resolved"
   run_logged_in swift-xcode-resolve "$package" \
     env HOME="$xcode_home" XDG_CONFIG_HOME="$xcode_home/.config" \
+    "${xcode_auth_env[@]}" \
     xcodebuild -resolvePackageDependencies \
     -scheme "$scheme" \
     -clonedSourcePackagesDirPath "$xcode_source_packages"
   run_logged_in swift-xcode-build "$package" \
     env HOME="$xcode_home" XDG_CONFIG_HOME="$xcode_home/.config" \
+    "${xcode_auth_env[@]}" \
     xcodebuild \
     -scheme "$scheme" \
     -destination 'platform=macOS' \
