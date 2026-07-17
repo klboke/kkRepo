@@ -235,6 +235,8 @@ class SwiftServiceTest {
     when(fixture.runtimes.resolveById(group.id())).thenReturn(Optional.of(group));
     when(fixture.registry.listTombstones(firstMember.id(), "acme", "demo"))
         .thenReturn(List.of(tombstone));
+    when(fixture.registry.findTombstone(firstMember.id(), "acme", "demo", "1.2.3"))
+        .thenReturn(Optional.of(tombstone));
     when(fixture.registry.listReleases(secondMember.id(), "acme", "demo")).thenReturn(List.of(
         release(33L, secondMember.id(), "1.2.3", SwiftRegistryDao.RELEASE_READY)));
     when(fixture.registry.currentRepositoryRevision(group.id())).thenReturn(7L);
@@ -349,7 +351,7 @@ class SwiftServiceTest {
   }
 
   @Test
-  void groupResolvesHostedReleaseWhileAnEarlierProxyMemberIsUnavailable() throws Exception {
+  void groupArchiveUsesPointLookupsWhileAnEarlierProxyMemberIsUnavailable() {
     Fixture fixture = fixture();
     RepositoryRuntime proxy = proxy(1L, "swift-proxy");
     RepositoryRuntime hosted = hosted(3L, "swift-hosted");
@@ -370,8 +372,6 @@ class SwiftServiceTest {
             null,
             Instant.now().plusSeconds(60),
             Instant.now())));
-    when(fixture.registry.listReleases(hosted.id(), "acme", "demo"))
-        .thenReturn(List.of(hostedRelease));
     when(fixture.registry.findRelease(hosted.id(), "acme", "demo", "1.2.3"))
         .thenReturn(Optional.of(hostedRelease));
     when(fixture.registry.upsertGroupSourceBindingIfCurrent(any())).thenReturn(true);
@@ -379,18 +379,27 @@ class SwiftServiceTest {
         .thenReturn(Optional.empty(), Optional.of(binding));
     when(fixture.registry.findReleaseById(hostedRelease.id()))
         .thenReturn(Optional.of(hostedRelease));
+    when(fixture.assets.serve(hosted.id(), hostedRelease.archiveAssetId(), false))
+        .thenReturn(MavenResponse.ok(
+            new ByteArrayInputStream(new byte[] {1, 2, 3}),
+            3L,
+            SwiftMediaTypes.ARCHIVE,
+            hostedRelease.archiveSha256(),
+            Instant.EPOCH));
 
     MavenResponse response = fixture.service.get(
         group,
-        "Acme/Demo/1.2.3",
+        "Acme/Demo/1.2.3.zip",
         null,
         "https://repo.example/repository/swift-group/",
-        SwiftMediaTypes.VENDOR_JSON,
+        SwiftMediaTypes.VENDOR_ZIP,
         false);
 
     assertEquals(200, response.status());
     verify(fixture.registry).upsertGroupSourceBindingIfCurrent(argThat(candidate ->
         candidate.memberRepositoryId() == hosted.id()));
+    verify(fixture.registry, never()).listProxySources(proxy.id(), "acme", "demo");
+    verify(fixture.registry, never()).listReleases(hosted.id(), "acme", "demo");
   }
 
   @Test
@@ -401,7 +410,9 @@ class SwiftServiceTest {
     RepositoryRuntime nested = group(2L, List.of(proxy, hosted));
     RepositoryRuntime outer = group(4L, List.of(nested));
     when(fixture.runtimes.resolveById(outer.id())).thenReturn(Optional.of(outer));
+    when(fixture.runtimes.resolveById(nested.id())).thenReturn(Optional.of(nested));
     when(fixture.registry.currentRepositoryRevision(outer.id())).thenReturn(7L);
+    when(fixture.registry.currentRepositoryRevision(nested.id())).thenReturn(6L);
     when(fixture.registry.findNegativeCache(proxy.id(), "tags:acme/demo"))
         .thenReturn(Optional.of(new SwiftRegistryDao.NegativeCache(
             proxy.id(),
@@ -904,6 +915,11 @@ class SwiftServiceTest {
         .thenReturn(Optional.of(tombstone));
     when(fixture.registry.listTombstones(proxy.id(), "acme", "demo"))
         .thenReturn(List.of(tombstone));
+    when(fixture.registry.listProxySources(proxy.id(), "acme", "demo")).thenReturn(List.of(
+        new SwiftRegistryDao.ProxySource(
+            proxy.id(), "acme", "demo", "1.2.3", "https://github.com/acme/demo",
+            "v1.2.3", "a".repeat(40), "github-zipball-v1", null, "DISCOVERED",
+            null, null, 8L, 1L, Instant.EPOCH)));
     when(fixture.github.tags(any(), any())).thenReturn(List.of(
         new SwiftGitHubClient.Tag("1.2.3", "v1.2.3", "a".repeat(40))));
 
@@ -1044,6 +1060,8 @@ class SwiftServiceTest {
     assertEquals("swift_proxy_tag_moved", audit.getValue().details().get("event"));
     assertEquals(pinnedCommit, audit.getValue().details().get("pinnedCommit"));
     assertEquals(observedCommit, audit.getValue().details().get("observedCommit"));
+    verify(fixture.registry, never()).replaceProxySources(
+        eq(proxy.id()), eq("acme"), eq("demo"), any());
   }
 
   @Test
@@ -1180,7 +1198,7 @@ class SwiftServiceTest {
     SwiftRegistryDao.Manifest defaultManifest = new SwiftRegistryDao.Manifest(
         1L, "Package.swift", "", 20L, "b".repeat(64));
     SwiftRegistryDao.Manifest versionedManifest = new SwiftRegistryDao.Manifest(
-        1L, "Package@swift-5.9.swift", "5.9", 21L, "c".repeat(64));
+        1L, "Package@swift-5.9.swift", "5.9", 21L, "c".repeat(64), "5.9.1");
     when(fixture.registry.findRelease(1L, "acme", "demo", "1.2.3"))
         .thenReturn(Optional.of(release));
     when(fixture.registry.findManifest(1L, "")).thenReturn(Optional.of(defaultManifest));
@@ -1192,8 +1210,6 @@ class SwiftServiceTest {
         SwiftMediaTypes.MANIFEST,
         "manifest-etag",
         Instant.EPOCH));
-    when(fixture.assets.bytes(1L, 21L)).thenReturn(
-        "// swift-tools-version:5.9.1\n".getBytes(StandardCharsets.UTF_8));
 
     MavenResponse exact = fixture.service.get(
         fixture.runtime,
@@ -1210,6 +1226,7 @@ class SwiftServiceTest {
     assertTrue(exact.headers().get("Link").contains("swift-version=5.9"));
     assertTrue(exact.headers().get("Link").contains("filename=\"Package@swift-5.9.swift\""));
     assertTrue(exact.headers().get("Link").contains("swift-tools-version=\"5.9.1\""));
+    verify(fixture.assets, never()).bytes(1L, 21L);
 
     MavenResponse fallback = fixture.service.get(
         fixture.runtime,
@@ -1618,6 +1635,7 @@ class SwiftServiceTest {
     SwiftPublishLeaseManager.Lease defaultLease = mock(SwiftPublishLeaseManager.Lease.class);
     when(leases.acquire(anyString())).thenReturn(defaultLease);
     when(leases.acquireForCoalescedRead(anyString())).thenReturn(defaultLease);
+    when(leases.acquireForCoalescedRead(anyString(), any())).thenReturn(defaultLease);
     when(leases.acquire(anyString(), any())).thenReturn(defaultLease);
     SwiftComponentService components = mock(SwiftComponentService.class);
     SecurityAuditDao audit = mock(SecurityAuditDao.class);

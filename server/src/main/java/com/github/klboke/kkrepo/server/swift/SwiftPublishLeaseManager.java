@@ -4,6 +4,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.BooleanSupplier;
 import org.springframework.stereotype.Component;
 
@@ -14,6 +15,8 @@ final class SwiftPublishLeaseManager {
   private static final Duration ACQUIRE_TIMEOUT = Duration.ofSeconds(30);
   private static final Duration COALESCED_READ_ACQUIRE_TIMEOUT =
       LEASE_TIME.plus(ACQUIRE_TIMEOUT);
+  private static final long INITIAL_BACKOFF_MILLIS = 50L;
+  private static final long MAX_BACKOFF_MILLIS = 1000L;
   private final SwiftRegistryDao registry;
 
   SwiftPublishLeaseManager(SwiftRegistryDao registry) {
@@ -38,10 +41,15 @@ final class SwiftPublishLeaseManager {
     return acquire(key, () -> false, COALESCED_READ_ACQUIRE_TIMEOUT);
   }
 
+  Lease acquireForCoalescedRead(String key, BooleanSupplier completedByAnotherReplica) {
+    return acquire(key, completedByAnotherReplica, COALESCED_READ_ACQUIRE_TIMEOUT);
+  }
+
   private Lease acquire(
       String key, BooleanSupplier completedByAnotherReplica, Duration acquireTimeout) {
     String owner = UUID.randomUUID().toString();
     Instant deadline = Instant.now().plus(acquireTimeout);
+    long backoffMillis = INITIAL_BACKOFF_MILLIS;
     do {
       OptionalLease acquired = tryAcquire(key, owner);
       if (acquired.lease() != null) {
@@ -51,11 +59,14 @@ final class SwiftPublishLeaseManager {
         throw new SwiftExceptions.Conflict("Swift release already exists");
       }
       try {
-        Thread.sleep(100);
+        long jitter = ThreadLocalRandom.current().nextLong(
+            Math.max(1L, backoffMillis / 2L), backoffMillis + 1L);
+        Thread.sleep(jitter);
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
         throw new SwiftExceptions.Conflict("Interrupted while waiting for Swift publication lease");
       }
+      backoffMillis = Math.min(MAX_BACKOFF_MILLIS, backoffMillis * 2L);
     } while (Instant.now().isBefore(deadline));
     throw new SwiftExceptions.Conflict("Another replica is publishing this Swift release");
   }

@@ -13,6 +13,7 @@ import static org.mockito.Mockito.mock;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.ByteArrayInputStream;
@@ -28,6 +29,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -129,6 +131,68 @@ class SwiftGitHubClientTest {
 
     assertEquals(1_200, tags.size());
     assertEquals(13, requests.get(), "the first short page terminates pagination");
+  }
+
+  @Test
+  void reusesPersistedPageWhenGithubReturnsNotModified() {
+    SwiftRegistryDao.ProxyTag cached =
+        new SwiftRegistryDao.ProxyTag("1.2.3", "v1.2.3", "a".repeat(40));
+    SwiftRegistryDao.ProxyInventory inventory = new SwiftRegistryDao.ProxyInventory(
+        1L,
+        "apple",
+        "swift-log",
+        7L,
+        java.time.Instant.EPOCH,
+        Map.of("1", List.of(cached)),
+        Map.of("1", "page-one"));
+    SequencedFetcher fetcher = new SequencedFetcher(result(304, Map.of(), new byte[0]));
+    SwiftGitHubClient client = new SwiftGitHubClient(
+        fetcher, new ObjectMapper(), mock(SwiftArchiveInspector.class));
+
+    SwiftGitHubClient.TagDiscovery discovery = client.discoverTags(
+        proxy("https://github.com/"),
+        SwiftGitHubClient.coordinates("apple", "swift-log"),
+        inventory);
+
+    assertEquals(
+        List.of(new SwiftGitHubClient.Tag("1.2.3", "v1.2.3", "a".repeat(40))),
+        discovery.tags());
+    assertEquals(Map.of("1", List.of(cached)), discovery.pages());
+    assertEquals(Map.of("1", "page-one"), discovery.pageEtags());
+    assertEquals("page-one", fetcher.requests.getFirst().etag());
+  }
+
+  @Test
+  void aShortChangedPageDropsPersistedTrailingPages() throws Exception {
+    SwiftRegistryDao.ProxyTag old =
+        new SwiftRegistryDao.ProxyTag("1.0.0", "v1.0.0", "a".repeat(40));
+    SwiftRegistryDao.ProxyInventory inventory = new SwiftRegistryDao.ProxyInventory(
+        1L,
+        "apple",
+        "swift-log",
+        7L,
+        java.time.Instant.EPOCH,
+        Map.of("1", List.of(old), "2", List.of(old)),
+        Map.of("1", "old-one", "2", "old-two"));
+    ObjectMapper mapper = new ObjectMapper();
+    byte[] body = mapper.writeValueAsBytes(List.of(Map.of(
+        "name", "2.0.0",
+        "commit", Map.of("sha", "b".repeat(40)))));
+    SequencedFetcher fetcher = new SequencedFetcher(
+        result(200, Map.of("ETag", "\"new-one\""), body));
+    SwiftGitHubClient client = new SwiftGitHubClient(
+        fetcher, mapper, mock(SwiftArchiveInspector.class));
+
+    SwiftGitHubClient.TagDiscovery discovery = client.discoverTags(
+        proxy("https://github.com/"),
+        SwiftGitHubClient.coordinates("apple", "swift-log"),
+        inventory);
+
+    assertEquals(Set.of("1"), discovery.pages().keySet());
+    assertEquals(Map.of("1", "new-one"), discovery.pageEtags());
+    assertEquals(List.of("2.0.0"), discovery.tags().stream()
+        .map(SwiftGitHubClient.Tag::version)
+        .toList());
   }
 
   @Test

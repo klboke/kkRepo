@@ -2569,28 +2569,32 @@ async function showAssetDetail(entry) {
   const mount = detailPaneMount();
   if (!mount) return;
   const detail = await fetchAssetAttributes(entry);
-  const usage = await usageDetailForEntry(entry, detail);
+  const browseOnly = !entry.downloadUrl;
+  const usage = browseOnly ? null : await usageDetailForEntry(entry, detail);
   const dockerUsage = currentRepository()?.format === "docker" ? dockerUsageDetail(entry, detail) : null;
   const uploader = detail?.uploader || "-";
   const uploaderIp = detail?.uploaderIp || "";
   const sourceRepository = detail?.sourceRepository || entry.sourceRepository || "";
   const dockerDetail = isDockerDetail(detail);
   const downloadUrl = dockerDetail ? (entry.downloadUrl || detail?.downloadUrl) : (detail?.downloadUrl || entry.downloadUrl);
+  const download = downloadUrl
+    ? `<div class="download-row">
+        <a class="copy-button" href="${downloadUrl}" target="_blank">${lucideIcon("download")} Download</a>
+      </div>`
+    : "";
   mount.innerHTML = `
     <div class="detail-pane">
-      ${detailHead(iconForFile(entry.name || entry.path, "crumb-icon"), entry.path, entry)}
+      ${detailHead(iconForFile(entry.name || entry.path, "crumb-icon"), entry.path, browseOnly ? null : entry)}
       ${dockerDetail
         ? renderDockerSummaryPanel(entry, detail, sourceRepository)
         : renderGenericAssetSummaryPanel(entry, detail, sourceRepository, uploader, uploaderIp)}
       ${dockerDetail ? renderDockerMetadataPanel(detail) : ""}
       ${renderUsageSection((dockerUsage || usage) ? (dockerUsage || usage).snippets : [])}
       ${renderAttributesSection(detail, { hideDocker: dockerDetail })}
-      <div class="download-row">
-        <a class="copy-button" href="${downloadUrl}" target="_blank">${lucideIcon("download")} Download</a>
-      </div>
+      ${download}
     </div>`;
   if (dockerUsage || usage) bindUsageControls(mount, (dockerUsage || usage).snippets);
-  bindDeleteControl(mount, entry);
+  bindDeleteControl(mount, browseOnly ? null : entry);
 }
 
 async function fetchAssetAttributes(entry) {

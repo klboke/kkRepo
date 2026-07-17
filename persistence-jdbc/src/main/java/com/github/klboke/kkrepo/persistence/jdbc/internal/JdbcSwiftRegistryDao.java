@@ -4,6 +4,7 @@ import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRow
 import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRows.nullableLong;
 import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRows.nullableTimestamp;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
@@ -18,11 +19,13 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.ArrayDeque;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,6 +33,10 @@ import org.springframework.transaction.annotation.Transactional;
 @Repository
 public class JdbcSwiftRegistryDao implements SwiftRegistryDao {
   private static final String REVISION_PREFIX = "swift:repository:";
+  private static final TypeReference<Map<String, List<ProxyTag>>> PROXY_PAGES =
+      new TypeReference<>() {};
+  private static final TypeReference<Map<String, String>> PROXY_PAGE_ETAGS =
+      new TypeReference<>() {};
 
   private final JdbcTemplate jdbc;
   private final JsonColumns jsonColumns;
@@ -56,6 +63,33 @@ public class JdbcSwiftRegistryDao implements SwiftRegistryDao {
         .stream()
         .findFirst()
         .orElse(0L);
+  }
+
+  @Override
+  public Map<Long, Long> currentRepositoryRevisions(Collection<Long> repositoryIds) {
+    LinkedHashSet<Long> ids = new LinkedHashSet<>();
+    if (repositoryIds != null) {
+      repositoryIds.stream().filter(java.util.Objects::nonNull).forEach(ids::add);
+    }
+    if (ids.isEmpty()) {
+      return Map.of();
+    }
+    LinkedHashMap<Long, Long> revisions = new LinkedHashMap<>();
+    ids.forEach(id -> revisions.put(id, 0L));
+    List<String> names = ids.stream().map(JdbcSwiftRegistryDao::revisionKey).toList();
+    String placeholders = String.join(",", java.util.Collections.nCopies(names.size(), "?"));
+    jdbc.query(
+        "SELECT name, version FROM cache_version WHERE name IN (" + placeholders + ")",
+        rs -> {
+          String name = rs.getString("name");
+          if (name != null && name.startsWith(REVISION_PREFIX)) {
+            revisions.put(
+                Long.parseLong(name.substring(REVISION_PREFIX.length())),
+                rs.getLong("version"));
+          }
+        },
+        names.toArray());
+    return revisions;
   }
 
   @Override
@@ -99,10 +133,12 @@ public class JdbcSwiftRegistryDao implements SwiftRegistryDao {
 
     for (Manifest manifest : safeList(manifests)) {
       jdbc.update("""
-          INSERT INTO swift_manifest (release_id, filename, tools_version, asset_id, sha256)
-          VALUES (?, ?, ?, ?, ?)
+          INSERT INTO swift_manifest
+            (release_id, filename, tools_version, asset_id, sha256, declared_tools_version)
+          VALUES (?, ?, ?, ?, ?, ?)
           """, releaseId, manifest.filename(), normalizeToolsVersion(manifest.toolsVersion()),
-          manifest.assetId(), manifest.sha256());
+          manifest.assetId(), manifest.sha256(),
+          normalizeDeclaredToolsVersion(manifest.declaredToolsVersion()));
     }
     for (RepositoryUrl repositoryUrl : safeList(repositoryUrls)) {
       jdbc.update("""
@@ -157,7 +193,8 @@ public class JdbcSwiftRegistryDao implements SwiftRegistryDao {
         SELECT * FROM swift_manifest WHERE release_id = ? ORDER BY tools_version, filename
         """, (rs, row) -> new Manifest(
         rs.getLong("release_id"), rs.getString("filename"), rs.getString("tools_version"),
-        rs.getLong("asset_id"), rs.getString("sha256")), releaseId);
+        rs.getLong("asset_id"), rs.getString("sha256"),
+        rs.getString("declared_tools_version")), releaseId);
   }
 
   @Override
@@ -166,7 +203,8 @@ public class JdbcSwiftRegistryDao implements SwiftRegistryDao {
         SELECT * FROM swift_manifest WHERE release_id = ? AND tools_version = ?
         """, (rs, row) -> new Manifest(
         rs.getLong("release_id"), rs.getString("filename"), rs.getString("tools_version"),
-        rs.getLong("asset_id"), rs.getString("sha256")), releaseId,
+        rs.getLong("asset_id"), rs.getString("sha256"),
+        rs.getString("declared_tools_version")), releaseId,
         normalizeToolsVersion(toolsVersion)).stream().findFirst();
   }
 
@@ -288,17 +326,21 @@ public class JdbcSwiftRegistryDao implements SwiftRegistryDao {
     listProxySources(repositoryId, scopeLc, nameLc)
         .forEach(source -> existing.put(source.version(), source));
     Instant defaultCheckedAt = Instant.now();
+    Map<String, Instant> checkedAtByVersion = new LinkedHashMap<>();
     List<Object[]> updates = new java.util.ArrayList<>();
     List<Object[]> inserts = new java.util.ArrayList<>();
     for (ProxySource candidate : unique.values()) {
       Instant checkedAt = candidate.lastCheckedAt() == null
           ? defaultCheckedAt
           : candidate.lastCheckedAt();
+      checkedAtByVersion.put(candidate.version(), checkedAt);
       if (existing.containsKey(candidate.version())) {
-        updates.add(new Object[]{
-            nullableTimestamp(checkedAt), nullableTimestamp(checkedAt), candidate.repositoryId(),
-            candidate.scopeLc(), candidate.nameLc(), candidate.version()
-        });
+        if (!replaceInventory) {
+          updates.add(new Object[]{
+              nullableTimestamp(checkedAt), nullableTimestamp(checkedAt), candidate.repositoryId(),
+              candidate.scopeLc(), candidate.nameLc(), candidate.version()
+          });
+        }
       } else {
         inserts.add(new Object[]{
             candidate.repositoryId(), candidate.scopeLc(), candidate.nameLc(), candidate.version(),
@@ -341,10 +383,49 @@ public class JdbcSwiftRegistryDao implements SwiftRegistryDao {
       return List.of();
     }
 
-    Map<String, ProxySource> bound = new LinkedHashMap<>();
-    listProxySources(repositoryId, scopeLc, nameLc)
-        .forEach(source -> bound.put(source.version(), source));
-    return unique.keySet().stream().map(bound::get).filter(java.util.Objects::nonNull).toList();
+    return unique.values().stream()
+        .map(candidate -> {
+          ProxySource previous = existing.get(candidate.version());
+          Instant checkedAt = checkedAtByVersion.get(candidate.version());
+          if (previous == null) {
+            return new ProxySource(
+                candidate.repositoryId(),
+                candidate.scopeLc(),
+                candidate.nameLc(),
+                candidate.version(),
+                candidate.upstreamRepositoryUrl(),
+                candidate.upstreamTag(),
+                candidate.commitSha(),
+                candidate.generationProfile(),
+                candidate.archiveSha256(),
+                candidate.cacheState(),
+                candidate.releaseId(),
+                candidate.verifiedAt(),
+                candidate.revision(),
+                1L,
+                checkedAt);
+          }
+          if (replaceInventory) {
+            return previous;
+          }
+          return new ProxySource(
+              previous.repositoryId(),
+              previous.scopeLc(),
+              previous.nameLc(),
+              previous.version(),
+              previous.upstreamRepositoryUrl(),
+              previous.upstreamTag(),
+              previous.commitSha(),
+              previous.generationProfile(),
+              previous.archiveSha256(),
+              previous.cacheState(),
+              previous.releaseId(),
+              previous.verifiedAt(),
+              previous.revision(),
+              previous.observedCount() + 1L,
+              checkedAt);
+        })
+        .toList();
   }
 
   @Override
@@ -380,6 +461,61 @@ public class JdbcSwiftRegistryDao implements SwiftRegistryDao {
         nullableInstant(rs, "verified_at"), rs.getLong("revision"),
         rs.getLong("observed_count"), nullableInstant(rs, "last_checked_at")),
         repositoryId, scopeLc, nameLc);
+  }
+
+  @Override
+  public Optional<ProxyInventory> findProxyInventory(
+      long repositoryId, String scopeLc, String nameLc) {
+    return jdbc.query("""
+        SELECT * FROM swift_proxy_inventory
+        WHERE repository_id = ? AND scope_lc = ? AND name_lc = ?
+        """, (rs, row) -> new ProxyInventory(
+        rs.getLong("repository_id"),
+        rs.getString("scope_lc"),
+        rs.getString("name_lc"),
+        rs.getLong("revision"),
+        nullableInstant(rs, "last_checked_at"),
+        safeProxyPages(jsonColumns.readValue(rs.getString("pages_json"), PROXY_PAGES)),
+        safeProxyEtags(jsonColumns.readValue(rs.getString("page_etags_json"), PROXY_PAGE_ETAGS))),
+        repositoryId, scopeLc, nameLc).stream().findFirst();
+  }
+
+  @Override
+  public void upsertProxyInventory(ProxyInventory inventory) {
+    if (inventory == null) {
+      return;
+    }
+    Instant checkedAt = inventory.lastCheckedAt() == null
+        ? Instant.now() : inventory.lastCheckedAt();
+    int updated = jdbc.update("""
+        UPDATE swift_proxy_inventory
+        SET revision = ?, last_checked_at = ?, pages_json = ?, page_etags_json = ?, updated_at = ?
+        WHERE repository_id = ? AND scope_lc = ? AND name_lc = ?
+        """,
+        inventory.revision(),
+        nullableTimestamp(checkedAt),
+        jsonColumns.serializedParameter(jsonColumns.writeValue(inventory.pages())),
+        jsonColumns.serializedParameter(jsonColumns.writeValue(inventory.pageEtags())),
+        nullableTimestamp(Instant.now()),
+        inventory.repositoryId(),
+        inventory.scopeLc(),
+        inventory.nameLc());
+    if (updated == 0) {
+      jdbc.update("""
+          INSERT INTO swift_proxy_inventory
+            (repository_id, scope_lc, name_lc, revision, last_checked_at, pages_json,
+             page_etags_json, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          """,
+          inventory.repositoryId(),
+          inventory.scopeLc(),
+          inventory.nameLc(),
+          inventory.revision(),
+          nullableTimestamp(checkedAt),
+          jsonColumns.serializedParameter(jsonColumns.writeValue(inventory.pages())),
+          jsonColumns.serializedParameter(jsonColumns.writeValue(inventory.pageEtags())),
+          nullableTimestamp(Instant.now()));
+    }
   }
 
   @Override
@@ -492,28 +628,25 @@ public class JdbcSwiftRegistryDao implements SwiftRegistryDao {
     if (expiresAt == null || !expiresAt.isAfter(now)) {
       throw new IllegalArgumentException("Lease expiry must be in the future");
     }
-    JdbcUpserts.updateThenInsert(
-        jdbc,
-        """
-            UPDATE swift_coordinate_lease
-            SET owner = CASE WHEN expires_at < ? THEN ? ELSE owner END,
-                fencing_token = CASE WHEN expires_at < ?
-                  THEN fencing_token + 1 ELSE fencing_token END,
-                expires_at = CASE WHEN expires_at < ? THEN ? ELSE expires_at END,
-                updated_at = CASE WHEN expires_at < ? THEN ? ELSE updated_at END,
-                attempt_count = attempt_count + 1
-            WHERE lease_key = ?
-            """,
-        new Object[]{
-            nullableTimestamp(now), owner, nullableTimestamp(now), nullableTimestamp(now),
-            nullableTimestamp(expiresAt), nullableTimestamp(now), nullableTimestamp(now), leaseKey
-        },
-        """
+    int updated = jdbc.update("""
+        UPDATE swift_coordinate_lease
+        SET owner = ?, fencing_token = fencing_token + 1, expires_at = ?, updated_at = ?,
+            attempt_count = attempt_count + 1
+        WHERE lease_key = ? AND expires_at < ?
+        """, owner, nullableTimestamp(expiresAt), nullableTimestamp(now), leaseKey,
+        nullableTimestamp(now));
+    if (updated == 0) {
+      try {
+        jdbc.update("""
             INSERT INTO swift_coordinate_lease
               (lease_key, owner, fencing_token, attempt_count, expires_at, updated_at)
             VALUES (?, ?, 1, 1, ?, ?)
-            """,
-        new Object[]{leaseKey, owner, nullableTimestamp(expiresAt), nullableTimestamp(now)});
+            """, leaseKey, owner, nullableTimestamp(expiresAt), nullableTimestamp(now));
+      } catch (DuplicateKeyException ignored) {
+        // Another replica either owns the live lease or won the expired-row race. The durable
+        // owner check below decides whether this caller acquired it.
+      }
+    }
     return findLease(leaseKey).filter(
         lease -> lease.owner().equals(owner) && lease.expiresAt().isAfter(now));
   }
@@ -768,6 +901,19 @@ public class JdbcSwiftRegistryDao implements SwiftRegistryDao {
 
   private static String normalizeToolsVersion(String toolsVersion) {
     return toolsVersion == null ? "" : toolsVersion;
+  }
+
+  private static String normalizeDeclaredToolsVersion(String toolsVersion) {
+    return toolsVersion == null ? "" : toolsVersion;
+  }
+
+  private static Map<String, List<ProxyTag>> safeProxyPages(
+      Map<String, List<ProxyTag>> pages) {
+    return pages == null ? Map.of() : pages;
+  }
+
+  private static Map<String, String> safeProxyEtags(Map<String, String> etags) {
+    return etags == null ? Map.of() : etags;
   }
 
   private static String revisionKey(long repositoryId) {

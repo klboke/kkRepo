@@ -141,7 +141,11 @@ public class SwiftComponentService {
           releaseBase + "/" + manifest.filename(),
           componentId);
       promotedManifests.add(new ManifestDraft(
-          manifest.filename(), manifest.toolsVersion(), promoted.id(), manifest.sha256()));
+          manifest.filename(),
+          manifest.toolsVersion(),
+          manifest.declaredToolsVersion(),
+          promoted.id(),
+          manifest.sha256()));
     }
     Long sourceSignatureAssetId = promoteOptional(
         runtime,
@@ -182,7 +186,8 @@ public class SwiftComponentService {
             manifest.filename(),
             manifest.toolsVersion(),
             manifest.assetId(),
-            manifest.sha256()))
+            manifest.sha256(),
+            manifest.declaredToolsVersion()))
         .toList();
     List<SwiftRegistryDao.RepositoryUrl> urls = publication.repositoryUrls().stream()
         .map(url -> new SwiftRegistryDao.RepositoryUrl(
@@ -367,7 +372,16 @@ public class SwiftComponentService {
     }
   }
 
-  record ManifestDraft(String filename, String toolsVersion, long assetId, String sha256) {}
+  record ManifestDraft(
+      String filename,
+      String toolsVersion,
+      String declaredToolsVersion,
+      long assetId,
+      String sha256) {
+    ManifestDraft(String filename, String toolsVersion, long assetId, String sha256) {
+      this(filename, toolsVersion, null, assetId, sha256);
+    }
+  }
 
   record RepositoryUrlDraft(String normalizedUrl, String displayUrl) {}
 

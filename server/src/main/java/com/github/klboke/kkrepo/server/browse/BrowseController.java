@@ -41,6 +41,7 @@ public class BrowseController {
   private final BrowseNodeDao browseNodeDao;
   private final DockerBrowseService dockerBrowseService;
   private final TerraformBrowseService terraformBrowseService;
+  private final SwiftBrowseService swiftBrowseService;
   private final BrowseAssetDetailService assetDetailService;
   private final SecurityAuthenticationService authenticationService;
   private final SecurityManagementService securityService;
@@ -51,6 +52,7 @@ public class BrowseController {
       BrowseNodeDao browseNodeDao,
       DockerBrowseService dockerBrowseService,
       TerraformBrowseService terraformBrowseService,
+      SwiftBrowseService swiftBrowseService,
       BrowseAssetDetailService assetDetailService,
       SecurityAuthenticationService authenticationService,
       SecurityManagementService securityService) {
@@ -58,6 +60,7 @@ public class BrowseController {
     this.browseNodeDao = browseNodeDao;
     this.dockerBrowseService = dockerBrowseService;
     this.terraformBrowseService = terraformBrowseService;
+    this.swiftBrowseService = swiftBrowseService;
     this.assetDetailService = assetDetailService;
     this.authenticationService = authenticationService;
     this.securityService = securityService;
@@ -74,6 +77,7 @@ public class BrowseController {
         repositoryDao,
         browseNodeDao,
         dockerBrowseService,
+        null,
         null,
         assetDetailService,
         authenticationService,
@@ -103,7 +107,13 @@ public class BrowseController {
     if (repo.format() == RepositoryFormat.TERRAFORM && terraformBrowseService != null) {
       Optional<List<BrowseEntry>> projected = terraformBrowseService.list(repo, sources, parent);
       if (projected.isPresent()) {
-        return new BrowseListing(repo.name(), parent, sorted(projected.orElseThrow()));
+        return new BrowseListing(repo.name(), parent, sorted(repo.format(), projected.orElseThrow()));
+      }
+    }
+    if (repo.format() == RepositoryFormat.SWIFT && swiftBrowseService != null) {
+      Optional<List<BrowseEntry>> projected = swiftBrowseService.list(repo, sources, parent);
+      if (projected.isPresent()) {
+        return new BrowseListing(repo.name(), parent, sorted(repo.format(), projected.orElseThrow()));
       }
     }
     BrowsePath browsePath = browsePath(repo.format(), parent);
@@ -132,14 +142,31 @@ public class BrowseController {
       BrowseEntry versions = terraformBrowseService.versionsJson(repo, parent);
       merged.putIfAbsent(versions.path(), versions);
     }
+    List<BrowseEntry> entries = new ArrayList<>(merged.values());
+    if (repo.format() == RepositoryFormat.SWIFT && swiftBrowseService != null) {
+      entries = swiftBrowseService.project(repo, sources, parent, entries);
+    }
     // Final ordering: directories first then files, alphabetical within each bucket.
-    List<BrowseEntry> entries = sorted(new ArrayList<>(merged.values()));
+    entries = sorted(repo.format(), entries);
     return new BrowseListing(repo.name(), browsePath.publicParent(), entries);
   }
 
   private static List<BrowseEntry> sorted(List<BrowseEntry> entries) {
+    return sorted(null, entries);
+  }
+
+  private static List<BrowseEntry> sorted(
+      RepositoryFormat format,
+      List<BrowseEntry> entries) {
     entries = new ArrayList<>(entries);
     entries.sort((a, b) -> {
+      if (format == RepositoryFormat.SWIFT) {
+        boolean aManifestDirectory = !a.leaf() && "swift_manifests".equals(a.name());
+        boolean bManifestDirectory = !b.leaf() && "swift_manifests".equals(b.name());
+        if (aManifestDirectory != bManifestDirectory) {
+          return aManifestDirectory ? 1 : -1;
+        }
+      }
       if (a.leaf() != b.leaf()) return a.leaf() ? 1 : -1;
       return a.path().compareTo(b.path());
     });

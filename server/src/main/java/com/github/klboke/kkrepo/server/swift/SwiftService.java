@@ -25,7 +25,6 @@ import com.github.klboke.kkrepo.protocol.swift.SwiftReleaseResource;
 import com.github.klboke.kkrepo.protocol.swift.SwiftReleaseSigning;
 import com.github.klboke.kkrepo.protocol.swift.SwiftRequestTarget;
 import com.github.klboke.kkrepo.protocol.swift.SwiftScope;
-import com.github.klboke.kkrepo.protocol.swift.SwiftToolsVersions;
 import com.github.klboke.kkrepo.protocol.swift.SwiftVersions;
 import com.github.klboke.kkrepo.protocol.maven.policy.WritePolicy;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
@@ -95,6 +94,7 @@ public class SwiftService {
   private final SwiftComponentService components;
   private final SecurityAuditDao audit;
   private final AccessDecisionService accessDecisions;
+  private final SwiftResponseCache responseCache;
   private final SwiftPathParser paths = new SwiftPathParser();
 
   @Autowired
@@ -108,7 +108,8 @@ public class SwiftService {
       SwiftPublishLeaseManager leases,
       SwiftComponentService components,
       SecurityAuditDao audit,
-      AccessDecisionService accessDecisions) {
+      AccessDecisionService accessDecisions,
+      SwiftResponseCache responseCache) {
     this.mapper = mapper;
     this.registry = registry;
     this.runtimes = runtimes;
@@ -119,6 +120,32 @@ public class SwiftService {
     this.components = components;
     this.audit = audit;
     this.accessDecisions = accessDecisions;
+    this.responseCache = responseCache;
+  }
+
+  public SwiftService(
+      ObjectMapper mapper,
+      SwiftRegistryDao registry,
+      RepositoryRuntimeRegistry runtimes,
+      SwiftAssetSupport assets,
+      SwiftArchiveInspector inspector,
+      SwiftGitHubClient github,
+      SwiftPublishLeaseManager leases,
+      SwiftComponentService components,
+      SecurityAuditDao audit,
+      AccessDecisionService accessDecisions) {
+    this(
+        mapper,
+        registry,
+        runtimes,
+        assets,
+        inspector,
+        github,
+        leases,
+        components,
+        audit,
+        accessDecisions,
+        null);
   }
 
   public SwiftService(
@@ -141,6 +168,7 @@ public class SwiftService {
         leases,
         components,
         audit,
+        null,
         null);
   }
 
@@ -153,7 +181,18 @@ public class SwiftService {
       SwiftGitHubClient github,
       SwiftPublishLeaseManager leases,
       SwiftComponentService components) {
-    this(mapper, registry, runtimes, assets, inspector, github, leases, components, null, null);
+    this(
+        mapper,
+        registry,
+        runtimes,
+        assets,
+        inspector,
+        github,
+        leases,
+        components,
+        null,
+        null,
+        null);
   }
 
   public MavenResponse get(
@@ -520,6 +559,17 @@ public class SwiftService {
     RepositoryRuntime snapshot = currentGroupSnapshot(runtime);
     String scopeLc = SwiftScope.key(request.scope());
     String nameLc = SwiftPackageName.key(request.name());
+    int maxAgeMinutes = snapshot.effectiveMetadataMaxAgeMinutesOrDefault();
+    String cacheIdentity =
+        "release-list\0" + snapshot.id() + "\0" + scopeLc + "\0" + nameLc + "\0" + baseUrl;
+    if (responseCache != null) {
+      String initialRevisionState = releaseListRevisionState(snapshot);
+      Optional<SwiftResponseCache.Snapshot> cached = responseCache.find(
+          cacheIdentity, initialRevisionState, maxAgeMinutes, Instant.now());
+      if (cached.isPresent()) {
+        return cached.orElseThrow().response(headOnly);
+      }
+    }
     LinkedHashMap<String, VersionState> states = listedVersions(
         snapshot, scopeLc, nameLc, new LinkedHashSet<>());
     LinkedHashSet<String> versions = new LinkedHashSet<>();
@@ -538,7 +588,9 @@ public class SwiftService {
         versions,
         unavailable,
         version -> releaseUrl(baseUrl, request.scope(), request.name(), version));
-    MavenResponse response = json(body, 200, headOnly, releaseListRevisionState(snapshot))
+    String revisionState = releaseListRevisionState(snapshot);
+    byte[] responseBytes = jsonBytes(body);
+    MavenResponse response = json(responseBytes, 200, headOnly, revisionState)
         .withHeader("Content-Version", SwiftMediaTypes.CONTENT_VERSION);
     List<SwiftLink> links = new ArrayList<>();
     if (!versions.isEmpty()) {
@@ -562,6 +614,16 @@ public class SwiftService {
     }
     if (!links.isEmpty()) {
       response.withHeader("Link", SwiftLinkHeader.render(links));
+    }
+    if (responseCache != null) {
+      responseCache.put(
+          cacheIdentity,
+          revisionState,
+          maxAgeMinutes,
+          Instant.now(),
+          responseBytes,
+          response.etag(),
+          response.headers());
     }
     return response;
   }
@@ -596,6 +658,20 @@ public class SwiftService {
 
   private MavenResponse releaseMetadata(
       RepositoryRuntime runtime, SwiftPath request, String baseUrl, boolean headOnly) {
+    int maxAgeMinutes = runtime.effectiveMetadataMaxAgeMinutesOrDefault();
+    String cacheIdentity = "release-metadata\0" + runtime.id() + "\0"
+        + SwiftScope.key(request.scope()) + "\0" + SwiftPackageName.key(request.name()) + "\0"
+        + request.version() + "\0" + baseUrl;
+    if (responseCache != null) {
+      RepositoryRuntime cacheSnapshot = currentGroupSnapshot(runtime);
+      maxAgeMinutes = cacheSnapshot.effectiveMetadataMaxAgeMinutesOrDefault();
+      String initialRevisionState = releaseListRevisionState(cacheSnapshot);
+      Optional<SwiftResponseCache.Snapshot> cached = responseCache.find(
+          cacheIdentity, initialRevisionState, maxAgeMinutes, Instant.now());
+      if (cached.isPresent()) {
+        return cached.orElseThrow().response(headOnly);
+      }
+    }
     ResolvedRelease resolved = resolveRelease(runtime, request, new LinkedHashSet<>());
     SwiftRegistryDao.Release release = resolved.release();
     Map<String, Object> metadata = readMetadata(release.metadataJson());
@@ -606,12 +682,24 @@ public class SwiftService {
         List.of(SwiftReleaseResource.sourceArchive(release.archiveSha256(), signing)),
         metadata,
         release.publishedAt());
-    MavenResponse response = json(body, 200, headOnly)
+    byte[] responseBytes = jsonBytes(body);
+    MavenResponse response = json(responseBytes, 200, headOnly, null)
         .withHeader("Content-Version", SwiftMediaTypes.CONTENT_VERSION);
     // Group runtimes supplied by request routing are recoverable node-local cache entries. Resolve
     // current membership again before calculating navigation links so a cross-replica member
     // update cannot leak stale latest/predecessor/successor relations into fresh metadata.
-    addReleaseLinks(response, currentGroupSnapshot(runtime), release, baseUrl);
+    RepositoryRuntime navigationSnapshot = currentGroupSnapshot(runtime);
+    addReleaseLinks(response, navigationSnapshot, release, baseUrl);
+    if (responseCache != null) {
+      responseCache.put(
+          cacheIdentity,
+          releaseListRevisionState(navigationSnapshot),
+          maxAgeMinutes,
+          Instant.now(),
+          responseBytes,
+          response.etag(),
+          response.headers());
+    }
     return response;
   }
 
@@ -640,7 +728,10 @@ public class SwiftService {
       if (candidate.toolsVersion() == null || candidate.toolsVersion().isBlank()) {
         continue;
       }
-      String declared = declaredToolsVersion(release.repositoryId(), candidate);
+      String declared = candidate.declaredToolsVersion();
+      if (declared == null || declared.isBlank()) {
+        declared = candidate.toolsVersion();
+      }
       links.add(new SwiftLink(
           URI.create(releaseUrl(baseUrl, release)
               + "/Package.swift?swift-version=" + candidate.toolsVersion()),
@@ -846,6 +937,8 @@ public class SwiftService {
     String cacheKey = "tags:" + scopeLc + "/" + nameLc;
     List<SwiftRegistryDao.ProxySource> cachedSources =
         registry.listProxySources(runtime.id(), scopeLc, nameLc);
+    Optional<SwiftRegistryDao.ProxyInventory> inventory =
+        registry.findProxyInventory(runtime.id(), scopeLc, nameLc);
     Set<String> tombstoned = tombstoneVersions(tombstones);
     Set<String> stale = persistedProxyVersions(cachedSources, tombstoned);
     Optional<SwiftRegistryDao.NegativeCache> negative =
@@ -866,7 +959,8 @@ public class SwiftService {
           "GitHub tag metadata is temporarily unavailable (cached status "
               + negative.get().statusCode() + ")");
     }
-    if (proxyMetadataFresh(cachedSources, runtime.metadataMaxAgeMinutesOrDefault())) {
+    if (proxyMetadataFresh(
+        inventory, cachedSources, runtime.metadataMaxAgeMinutesOrDefault())) {
       return stale;
     }
     try {
@@ -924,18 +1018,21 @@ public class SwiftService {
   }
 
   private static boolean proxyMetadataFresh(
-      List<SwiftRegistryDao.ProxySource> sources, int ttlMinutes) {
-    if (sources == null || sources.isEmpty()) {
-      return false;
-    }
+      Optional<SwiftRegistryDao.ProxyInventory> inventory,
+      List<SwiftRegistryDao.ProxySource> sources,
+      int ttlMinutes) {
     if (ttlMinutes < 0) {
-      return true;
+      return inventory.isPresent() || (sources != null && !sources.isEmpty());
     }
-    Instant newestCheck = sources.stream()
-        .map(SwiftRegistryDao.ProxySource::lastCheckedAt)
-        .filter(Objects::nonNull)
-        .max(Comparator.naturalOrder())
-        .orElse(null);
+    Instant newestCheck = inventory
+        .map(SwiftRegistryDao.ProxyInventory::lastCheckedAt)
+        .orElseGet(() -> sources == null
+            ? null
+            : sources.stream()
+                .map(SwiftRegistryDao.ProxySource::lastCheckedAt)
+                .filter(Objects::nonNull)
+                .max(Comparator.naturalOrder())
+                .orElse(null));
     return newestCheck != null
         && newestCheck.plusSeconds(Math.max(0, ttlMinutes) * 60L).isAfter(Instant.now());
   }
@@ -997,69 +1094,54 @@ public class SwiftService {
         .orElseThrow(() -> new SwiftExceptions.NotFound("Swift group was not found"));
     SwiftExceptions.SwiftException upstreamFailure = null;
     for (RepositoryRuntime member : snapshot.members()) {
-      VersionState state;
-      try {
-        VersionListing listing = versionListing(member, scopeLc, nameLc, visiting);
-        state = listing.states().get(path.version());
-        if (state == null && upstreamFailure == null && listing.upstreamFailure() != null) {
-          upstreamFailure = listing.upstreamFailure();
-        }
-      } catch (SwiftExceptions.UpstreamRateLimited | SwiftExceptions.BadUpstream e) {
-        if (upstreamFailure == null) {
-          upstreamFailure = e;
-        }
-        continue;
-      }
-      if (state == null) {
-        continue;
-      }
-      if (!state.available()) {
+      Optional<SwiftRegistryDao.Tombstone> tombstone = member.isGroup()
+          ? Optional.empty()
+          : registry.findTombstone(member.id(), scopeLc, nameLc, path.version());
+      if (tombstone.isPresent()) {
         throw new SwiftExceptions.NotFound("Swift release was permanently deleted");
       }
-      ResolvedRelease winner;
       try {
-        winner = resolveRelease(member, path, visiting);
-      } catch (SwiftExceptions.NotFound ignored) {
-        // The advertised version disappeared between discovery and materialization. This is a
-        // member miss, unlike the terminal tombstone state handled above.
-        continue;
-      } catch (SwiftExceptions.UpstreamRateLimited | SwiftExceptions.BadUpstream e) {
-        if (upstreamFailure == null) {
-          upstreamFailure = e;
-        }
-        continue;
-      }
-      SwiftRegistryDao.Release release = winner.release();
-      boolean current = registry.upsertGroupSourceBindingIfCurrent(
-          new SwiftRegistryDao.GroupSourceBinding(
-              group.id(),
-              scopeLc,
-              nameLc,
-              path.version(),
-              member.id(),
-              release.id(),
-              release.revision(),
-              configRevision,
-              Instant.now()));
-      if (current) {
-        Optional<ResolvedRelease> canonical = registry.findGroupSourceBinding(
-                group.id(), scopeLc, nameLc, path.version())
-            .filter(binding -> binding.groupConfigRevision() == configRevision)
-            .flatMap(this::resolveBoundRelease);
-        if (canonical.isPresent()) {
-          return canonical.get();
+        ResolvedRelease winner = resolveRelease(member, path, visiting);
+        SwiftRegistryDao.Release release = winner.release();
+        boolean current = registry.upsertGroupSourceBindingIfCurrent(
+            new SwiftRegistryDao.GroupSourceBinding(
+                group.id(),
+                scopeLc,
+                nameLc,
+                path.version(),
+                member.id(),
+                release.id(),
+                release.revision(),
+                configRevision,
+                Instant.now()));
+        if (current) {
+          Optional<ResolvedRelease> canonical = registry.findGroupSourceBinding(
+                  group.id(), scopeLc, nameLc, path.version())
+              .filter(binding -> binding.groupConfigRevision() == configRevision)
+              .flatMap(this::resolveBoundRelease);
+          if (canonical.isPresent()) {
+            return canonical.get();
+          }
+          if (retriedAfterConfigurationChange) {
+            throw new SwiftExceptions.Conflict(
+                "Swift group source binding changed while resolving the release");
+          }
+          return resolveGroup(snapshot, path, visiting, true);
         }
         if (retriedAfterConfigurationChange) {
           throw new SwiftExceptions.Conflict(
-              "Swift group source binding changed while resolving the release");
+              "Swift group configuration changed while resolving the release");
         }
         return resolveGroup(snapshot, path, visiting, true);
+      } catch (SwiftExceptions.NotFound ignored) {
+        // A point miss falls through to the next member. Permanent tombstones were checked above.
+        continue;
+      } catch (SwiftExceptions.UpstreamRateLimited | SwiftExceptions.BadUpstream e) {
+        if (upstreamFailure == null) {
+          upstreamFailure = e;
+        }
+        continue;
       }
-      if (retriedAfterConfigurationChange) {
-        throw new SwiftExceptions.Conflict(
-            "Swift group configuration changed while resolving the release");
-      }
-      return resolveGroup(snapshot, path, visiting, true);
     }
     if (upstreamFailure != null) {
       throw upstreamFailure;
@@ -1091,11 +1173,15 @@ public class SwiftService {
     SwiftGitHubClient.Coordinates coordinates = SwiftGitHubClient.coordinates(scopeLc, nameLc);
     SwiftRegistryDao.ProxySource source = registry.findProxySource(
             runtime.id(), scopeLc, nameLc, version)
-        .orElseGet(() -> refreshProxySources(
-            runtime, scopeLc, nameLc, "tags:" + scopeLc + "/" + nameLc).stream()
-            .filter(candidate -> candidate.version().equals(version))
-            .findFirst()
-            .orElseThrow(() -> new SwiftExceptions.NotFound("GitHub tag was not found")));
+        .orElseGet(() -> {
+          String tagsCacheKey = "tags:" + scopeLc + "/" + nameLc;
+          throwIfNegativeCached(runtime.id(), GITHUB_TAGS_FAILURE_CACHE_KEY);
+          throwIfNegativeCached(runtime.id(), tagsCacheKey);
+          return refreshProxySources(runtime, scopeLc, nameLc, tagsCacheKey).stream()
+              .filter(candidate -> candidate.version().equals(version))
+              .findFirst()
+              .orElseThrow(() -> new SwiftExceptions.NotFound("GitHub tag was not found"));
+        });
     if (source.releaseId() != null) {
       Optional<SwiftRegistryDao.Release> release = registry.findReleaseById(source.releaseId());
       if (release.isPresent()) {
@@ -1104,7 +1190,24 @@ public class SwiftService {
     }
 
     String leaseKey = coordinateLeaseKey(runtime.id(), scopeLc, nameLc, version);
-    try (SwiftPublishLeaseManager.Lease lease = leases.acquireForCoalescedRead(leaseKey)) {
+    SwiftPublishLeaseManager.Lease acquired;
+    try {
+      acquired = leases.acquireForCoalescedRead(
+          leaseKey,
+          () -> registry.findRelease(runtime.id(), scopeLc, nameLc, version).isPresent()
+              || registry.findTombstone(runtime.id(), scopeLc, nameLc, version).isPresent());
+    } catch (SwiftExceptions.Conflict completedOrBusy) {
+      Optional<SwiftRegistryDao.Release> completed = registry.findRelease(
+          runtime.id(), scopeLc, nameLc, version);
+      if (completed.isPresent()) {
+        return completed.get();
+      }
+      if (registry.findTombstone(runtime.id(), scopeLc, nameLc, version).isPresent()) {
+        throw new SwiftExceptions.NotFound("Swift release was permanently deleted");
+      }
+      throw completedOrBusy;
+    }
+    try (SwiftPublishLeaseManager.Lease lease = acquired) {
       if (registry.findTombstone(runtime.id(), scopeLc, nameLc, version).isPresent()) {
         throw new SwiftExceptions.NotFound("Swift release was permanently deleted");
       }
@@ -1175,19 +1278,23 @@ public class SwiftService {
         tagRefreshLeaseKey(runtime.id(), scopeLc, nameLc))) {
       List<SwiftRegistryDao.ProxySource> current =
           registry.listProxySources(runtime.id(), scopeLc, nameLc);
-      if (proxyMetadataFresh(current, runtime.metadataMaxAgeMinutesOrDefault())) {
+      Optional<SwiftRegistryDao.ProxyInventory> inventory =
+          registry.findProxyInventory(runtime.id(), scopeLc, nameLc);
+      if (proxyMetadataFresh(
+          inventory, current, runtime.metadataMaxAgeMinutesOrDefault())) {
         return current;
       }
 
       SwiftGitHubClient.Coordinates coordinates = SwiftGitHubClient.coordinates(scopeLc, nameLc);
-      List<SwiftGitHubClient.Tag> tags = fetchProxyTags(runtime, coordinates, cacheKey);
+      SwiftGitHubClient.TagDiscovery discovery =
+          fetchProxyTags(runtime, coordinates, cacheKey, inventory.orElse(null));
       lease.assertHeld();
       Set<String> tombstones = tombstoneVersions(
           registry.listTombstones(runtime.id(), scopeLc, nameLc));
       Map<String, SwiftRegistryDao.ProxySource> existing = new LinkedHashMap<>();
       current.forEach(source -> existing.put(source.version(), source));
       LinkedHashMap<String, SwiftGitHubClient.Tag> observed = new LinkedHashMap<>();
-      tags.stream()
+      discovery.tags().stream()
           .filter(tag -> !tombstones.contains(tag.version()))
           .forEach(tag -> observed.putIfAbsent(tag.version(), tag));
       boolean inventoryChanged = !existing.keySet().equals(observed.keySet());
@@ -1216,12 +1323,23 @@ public class SwiftService {
                 now);
           })
           .toList();
-      List<SwiftRegistryDao.ProxySource> bound = registry.replaceProxySources(
-          runtime.id(), scopeLc, nameLc, candidates);
+      List<SwiftRegistryDao.ProxySource> bound = inventoryChanged
+          ? registry.replaceProxySources(runtime.id(), scopeLc, nameLc, candidates)
+          : current;
       observed.values().forEach(tag -> Optional.ofNullable(existing.get(tag.version()))
           .filter(previous -> !previous.commitSha().equalsIgnoreCase(tag.commitSha()))
           .ifPresent(previous -> auditMovedProxyTag(
               runtime, coordinates, tag, previous, now)));
+      registry.upsertProxyInventory(new SwiftRegistryDao.ProxyInventory(
+          runtime.id(),
+          scopeLc,
+          nameLc,
+          inventoryChanged
+              ? discoveryRevision
+              : inventory.map(SwiftRegistryDao.ProxyInventory::revision).orElse(0L),
+          now,
+          discovery.pages(),
+          discovery.pageEtags()));
       return bound;
     }
   }
@@ -1266,14 +1384,21 @@ public class SwiftService {
     }
   }
 
-  private List<SwiftGitHubClient.Tag> fetchProxyTags(
+  private SwiftGitHubClient.TagDiscovery fetchProxyTags(
       RepositoryRuntime runtime,
       SwiftGitHubClient.Coordinates coordinates,
-      String cacheKey) {
+      String cacheKey,
+      SwiftRegistryDao.ProxyInventory inventory) {
     throwIfNegativeCached(runtime.id(), GITHUB_TAGS_FAILURE_CACHE_KEY);
     throwIfNegativeCached(runtime.id(), cacheKey);
     try {
-      return github.tags(runtime, coordinates);
+      SwiftGitHubClient.TagDiscovery discovery =
+          github.discoverTags(runtime, coordinates, inventory);
+      if (discovery != null) {
+        return discovery;
+      }
+      return new SwiftGitHubClient.TagDiscovery(
+          github.tags(runtime, coordinates), Map.of(), Map.of());
     } catch (SwiftExceptions.UpstreamRateLimited e) {
       rememberRateLimit(runtime.id(), cacheKey, e.retryAfter());
       throw e;
@@ -1390,6 +1515,7 @@ public class SwiftService {
         manifestDrafts.add(new SwiftComponentService.ManifestDraft(
             manifest.filename(),
             manifest.lookupToolsVersion(),
+            manifest.declaredToolsVersion(),
             manifestAsset.id(),
             manifest.sha256Hex()));
       }
@@ -1497,11 +1623,6 @@ public class SwiftService {
         "Stored source-archive-signature");
     return new SwiftReleaseSigning(
         Base64.getEncoder().encodeToString(sourceSignature), release.signatureFormat());
-  }
-
-  private String declaredToolsVersion(long repositoryId, SwiftRegistryDao.Manifest manifest) {
-    String source = new String(assets.bytes(repositoryId, manifest.assetId()), StandardCharsets.UTF_8);
-    return SwiftToolsVersions.fromManifest(source).orElse(manifest.toolsVersion());
   }
 
   private Map<String, Object> validateMetadata(String json) {
@@ -1749,18 +1870,25 @@ public class SwiftService {
 
   private MavenResponse json(
       Object value, int status, boolean headOnly, String validatorState) {
-    byte[] bytes;
-    try {
-      bytes = mapper.writeValueAsBytes(value);
-    } catch (JsonProcessingException e) {
-      throw new IllegalStateException("Failed serializing Swift registry response", e);
-    }
+    return json(jsonBytes(value), status, headOnly, validatorState);
+  }
+
+  private MavenResponse json(
+      byte[] bytes, int status, boolean headOnly, String validatorState) {
     String etag = sha256Hex(bytes, validatorState);
     return headOnly
         ? MavenResponse.noBody(status, bytes.length, SwiftMediaTypes.JSON, etag, null)
         : MavenResponse.ok(
             new ByteArrayInputStream(bytes), bytes.length, SwiftMediaTypes.JSON, etag, null)
             .withStatus(status);
+  }
+
+  private byte[] jsonBytes(Object value) {
+    try {
+      return mapper.writeValueAsBytes(value);
+    } catch (JsonProcessingException e) {
+      throw new IllegalStateException("Failed serializing Swift registry response", e);
+    }
   }
 
   private static String sha256Hex(byte[] bytes) {
@@ -1782,13 +1910,40 @@ public class SwiftService {
   }
 
   private String releaseListRevisionState(RepositoryRuntime runtime) {
+    LinkedHashSet<Long> repositoryIds = new LinkedHashSet<>();
+    collectRepositoryIds(runtime, repositoryIds, new LinkedHashSet<>());
+    Map<Long, Long> revisions = registry.currentRepositoryRevisions(repositoryIds);
+    if (revisions == null || revisions.isEmpty()) {
+      revisions = new LinkedHashMap<>();
+      for (Long repositoryId : repositoryIds) {
+        revisions.put(repositoryId, registry.currentRepositoryRevision(repositoryId));
+      }
+    }
     StringBuilder state = new StringBuilder();
-    appendReleaseListRevisionState(runtime, state, new LinkedHashSet<>());
+    appendReleaseListRevisionState(runtime, state, new LinkedHashSet<>(), revisions);
     return state.toString();
   }
 
+  private void collectRepositoryIds(
+      RepositoryRuntime runtime, Set<Long> repositoryIds, Set<Long> visiting) {
+    if (runtime == null || !visiting.add(runtime.id())) {
+      return;
+    }
+    try {
+      repositoryIds.add(runtime.id());
+      for (RepositoryRuntime member : runtime.members()) {
+        collectRepositoryIds(member, repositoryIds, visiting);
+      }
+    } finally {
+      visiting.remove(runtime.id());
+    }
+  }
+
   private void appendReleaseListRevisionState(
-      RepositoryRuntime runtime, StringBuilder state, Set<Long> visiting) {
+      RepositoryRuntime runtime,
+      StringBuilder state,
+      Set<Long> visiting,
+      Map<Long, Long> revisions) {
     if (runtime == null) {
       state.append("null");
       return;
@@ -1797,7 +1952,7 @@ public class SwiftService {
         .append(runtime.id()).append(':')
         .append(runtime.type()).append(':')
         .append(runtime.online()).append(':')
-        .append(registry.currentRepositoryRevision(runtime.id()));
+        .append(revisions.getOrDefault(runtime.id(), 0L));
     if (!visiting.add(runtime.id())) {
       state.append(":cycle]");
       return;
@@ -1805,7 +1960,7 @@ public class SwiftService {
     try {
       for (RepositoryRuntime member : runtime.members()) {
         state.append('|');
-        appendReleaseListRevisionState(member, state, visiting);
+        appendReleaseListRevisionState(member, state, visiting, revisions);
       }
     } finally {
       visiting.remove(runtime.id());

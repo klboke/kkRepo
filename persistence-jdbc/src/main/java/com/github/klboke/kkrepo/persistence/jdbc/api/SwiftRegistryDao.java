@@ -1,7 +1,10 @@
 package com.github.klboke.kkrepo.persistence.jdbc.api;
 
 import java.time.Instant;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -17,6 +20,18 @@ public interface SwiftRegistryDao {
   long nextRepositoryRevision(long repositoryId);
 
   long currentRepositoryRevision(long repositoryId);
+
+  default Map<Long, Long> currentRepositoryRevisions(Collection<Long> repositoryIds) {
+    LinkedHashMap<Long, Long> revisions = new LinkedHashMap<>();
+    if (repositoryIds != null) {
+      repositoryIds.stream()
+          .filter(java.util.Objects::nonNull)
+          .distinct()
+          .forEach(repositoryId ->
+              revisions.put(repositoryId, currentRepositoryRevision(repositoryId)));
+    }
+    return revisions;
+  }
 
   Release insertRelease(
       Release release, List<Manifest> manifests, List<RepositoryUrl> repositoryUrls);
@@ -63,6 +78,11 @@ public interface SwiftRegistryDao {
       long repositoryId, String scopeLc, String nameLc, String version);
 
   List<ProxySource> listProxySources(long repositoryId, String scopeLc, String nameLc);
+
+  Optional<ProxyInventory> findProxyInventory(
+      long repositoryId, String scopeLc, String nameLc);
+
+  void upsertProxyInventory(ProxyInventory inventory);
 
   boolean completeProxySource(
       long repositoryId,
@@ -156,7 +176,17 @@ public interface SwiftRegistryDao {
       Instant updatedAt) {}
 
   record Manifest(
-      Long releaseId, String filename, String toolsVersion, long assetId, String sha256) {}
+      Long releaseId,
+      String filename,
+      String toolsVersion,
+      long assetId,
+      String sha256,
+      String declaredToolsVersion) {
+    public Manifest(
+        Long releaseId, String filename, String toolsVersion, long assetId, String sha256) {
+      this(releaseId, filename, toolsVersion, assetId, sha256, null);
+    }
+  }
 
   record RepositoryUrl(
       Long id,
@@ -186,6 +216,27 @@ public interface SwiftRegistryDao {
       long revision,
       long observedCount,
       Instant lastCheckedAt) {}
+
+  record ProxyInventory(
+      long repositoryId,
+      String scopeLc,
+      String nameLc,
+      long revision,
+      Instant lastCheckedAt,
+      Map<String, List<ProxyTag>> pages,
+      Map<String, String> pageEtags) {
+    public ProxyInventory {
+      pages = pages == null ? Map.of() : Map.copyOf(pages);
+      pageEtags = pageEtags == null ? Map.of() : Map.copyOf(pageEtags);
+    }
+
+    public ProxyInventory withLastCheckedAt(Instant checkedAt) {
+      return new ProxyInventory(
+          repositoryId, scopeLc, nameLc, revision, checkedAt, pages, pageEtags);
+    }
+  }
+
+  record ProxyTag(String version, String tag, String commitSha) {}
 
   record GroupSourceBinding(
       long groupRepositoryId,

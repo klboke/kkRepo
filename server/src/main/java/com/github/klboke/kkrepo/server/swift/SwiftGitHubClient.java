@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.swift;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.protocol.swift.SwiftVersions;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
@@ -19,6 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -74,9 +76,16 @@ final class SwiftGitHubClient {
   }
 
   List<Tag> tags(RepositoryRuntime runtime, Coordinates coordinates) {
+    return discoverTags(runtime, coordinates, null).tags();
+  }
+
+  TagDiscovery discoverTags(
+      RepositoryRuntime runtime,
+      Coordinates coordinates,
+      SwiftRegistryDao.ProxyInventory previousInventory) {
     requireGitHubProxy(runtime);
     try {
-      return tagsFromApi(runtime, coordinates);
+      return tagsFromApi(runtime, coordinates, previousInventory);
     } catch (SwiftExceptions.BadUpstream apiFailure) {
       if (!fallbackEligible(apiFailure)) {
         throw apiFailure;
@@ -87,7 +96,7 @@ final class SwiftGitHubClient {
           runtime.name(),
           coordinates.identity());
       try {
-        return tagsFromGitAdvertisement(runtime, coordinates);
+        return new TagDiscovery(tagsFromGitAdvertisement(runtime, coordinates), Map.of(), Map.of());
       } catch (SwiftExceptions.SwiftException | IOException fallbackFailure) {
         apiFailure.addSuppressed(fallbackFailure);
         throw apiFailure;
@@ -95,29 +104,43 @@ final class SwiftGitHubClient {
     }
   }
 
-  private List<Tag> tagsFromApi(RepositoryRuntime runtime, Coordinates coordinates) {
+  private TagDiscovery tagsFromApi(
+      RepositoryRuntime runtime,
+      Coordinates coordinates,
+      SwiftRegistryDao.ProxyInventory previousInventory) {
     Map<String, Tag> byVersion = new LinkedHashMap<>();
+    Map<String, List<SwiftRegistryDao.ProxyTag>> pages = new LinkedHashMap<>();
+    Map<String, String> pageEtags = new LinkedHashMap<>();
+    Map<String, List<SwiftRegistryDao.ProxyTag>> previousPages =
+        previousInventory == null ? Map.of() : previousInventory.pages();
+    Map<String, String> previousEtags =
+        previousInventory == null ? Map.of() : previousInventory.pageEtags();
     CredentialFallbackState credentialState = new CredentialFallbackState();
     boolean exhausted = false;
     for (int page = 1; page <= MAX_TAG_PAGES; page++) {
+      String pageKey = Integer.toString(page);
       String url = API + coordinates.owner() + "/" + coordinates.repository()
           + "/tags?per_page=100&page=" + page;
-      List<Map<String, Object>> rows = getJsonList(
-          runtime, url, "GitHub tags", credentialState);
-      for (Map<String, Object> row : rows) {
-        String tagName = text(row.get("name"));
-        String version = normalizeTag(tagName).orElse(null);
-        Object commitRaw = row.get("commit");
-        String commit = commitRaw instanceof Map<?, ?> commitMap
-            ? text(commitMap.get("sha")) : null;
-        if (version == null || commit == null || !SHA.matcher(commit).matches()) {
-          continue;
-        }
+      TagPage tagPage = getTagPage(
+          runtime,
+          url,
+          "GitHub tags page " + page,
+          credentialState,
+          previousPages.get(pageKey),
+          previousEtags.get(pageKey));
+      pages.put(pageKey, tagPage.tags());
+      if (tagPage.etag() != null && !tagPage.etag().isBlank()) {
+        pageEtags.put(pageKey, tagPage.etag());
+      }
+      for (SwiftRegistryDao.ProxyTag row : tagPage.tags()) {
+        String tagName = row.tag();
+        String version = row.version();
+        String commit = row.commitSha();
         byVersion.putIfAbsent(
             version,
             new Tag(version, tagName, commit.toLowerCase(Locale.ROOT)));
       }
-      if (rows.size() < 100) {
+      if (tagPage.tags().size() < 100) {
         exhausted = true;
         break;
       }
@@ -126,7 +149,61 @@ final class SwiftGitHubClient {
       throw new SwiftExceptions.BadUpstream(
           "GitHub tag listing exceeded the configured pagination safety limit");
     }
-    return List.copyOf(byVersion.values());
+    return new TagDiscovery(
+        List.copyOf(byVersion.values()), Map.copyOf(pages), Map.copyOf(pageEtags));
+  }
+
+  private TagPage getTagPage(
+      RepositoryRuntime runtime,
+      String url,
+      String resource,
+      CredentialFallbackState credentialState,
+      List<SwiftRegistryDao.ProxyTag> previousTags,
+      String previousEtag) {
+    try {
+      HttpRemoteFetcher.Request request = credentialState.apply(
+          apiRequest(runtime, url, false, previousEtag));
+      return fetchWithTransientStatusRetry(request, resource, result -> {
+        if (result.status() == 304) {
+          if (previousTags == null) {
+            throw new SwiftExceptions.BadUpstream(
+                resource + " returned HTTP 304 without a persisted page snapshot");
+          }
+          return new TagPage(List.copyOf(previousTags), previousEtag);
+        }
+        if (result.status() == 404 || result.status() == 410) {
+          throw new SwiftExceptions.NotFound(resource + " not found");
+        }
+        if (result.status() == 403 || result.status() == 429) {
+          throw rateLimited(result);
+        }
+        if (result.status() < 200 || result.status() >= 300) {
+          throw new SwiftExceptions.BadUpstream(
+              resource + " request returned HTTP " + result.status());
+        }
+        List<Map<String, Object>> rows = mapper.readValue(result.body(), LIST_OF_MAPS);
+        List<SwiftRegistryDao.ProxyTag> tags = rows.stream()
+            .map(SwiftGitHubClient::proxyTag)
+            .filter(Objects::nonNull)
+            .toList();
+        return new TagPage(tags, result.etag());
+      }, credentialState);
+    } catch (IOException e) {
+      throw new SwiftExceptions.BadUpstream("Unable to fetch " + resource, e);
+    }
+  }
+
+  private static SwiftRegistryDao.ProxyTag proxyTag(Map<String, Object> row) {
+    String tagName = text(row.get("name"));
+    String version = normalizeTag(tagName).orElse(null);
+    Object commitRaw = row.get("commit");
+    String commit = commitRaw instanceof Map<?, ?> commitMap
+        ? text(commitMap.get("sha")) : null;
+    if (version == null || commit == null || !SHA.matcher(commit).matches()) {
+      return null;
+    }
+    return new SwiftRegistryDao.ProxyTag(
+        version, tagName, commit.toLowerCase(Locale.ROOT));
   }
 
   SwiftArchiveInspector.InspectedArchive archive(
@@ -528,9 +605,17 @@ final class SwiftGitHubClient {
 
   private static HttpRemoteFetcher.Request apiRequest(
       RepositoryRuntime runtime, String url, boolean allowCodeloadRedirect) {
+    return apiRequest(runtime, url, allowCodeloadRedirect, null);
+  }
+
+  private static HttpRemoteFetcher.Request apiRequest(
+      RepositoryRuntime runtime,
+      String url,
+      boolean allowCodeloadRedirect,
+      String etag) {
     return new HttpRemoteFetcher.Request(
         url,
-        null,
+        etag,
         null,
         null,
         allowCodeloadRedirect
@@ -667,6 +752,19 @@ final class SwiftGitHubClient {
   }
 
   record Tag(String version, String tag, String commitSha) {}
+
+  record TagDiscovery(
+      List<Tag> tags,
+      Map<String, List<SwiftRegistryDao.ProxyTag>> pages,
+      Map<String, String> pageEtags) {
+    TagDiscovery {
+      tags = tags == null ? List.of() : List.copyOf(tags);
+      pages = pages == null ? Map.of() : Map.copyOf(pages);
+      pageEtags = pageEtags == null ? Map.of() : Map.copyOf(pageEtags);
+    }
+  }
+
+  private record TagPage(List<SwiftRegistryDao.ProxyTag> tags, String etag) {}
 
   @FunctionalInterface
   interface RetrySleeper {

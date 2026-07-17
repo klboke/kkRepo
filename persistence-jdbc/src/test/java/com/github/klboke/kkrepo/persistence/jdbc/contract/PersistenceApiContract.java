@@ -106,6 +106,7 @@ public abstract class PersistenceApiContract {
         "swift_coordinate_lease",
         "swift_group_source_binding",
         "swift_manifest",
+        "swift_proxy_inventory",
         "swift_proxy_negative_cache",
         "swift_proxy_source",
         "swift_release",
@@ -157,7 +158,7 @@ public abstract class PersistenceApiContract {
     SwiftRegistryDao.Release stored = inTransaction(() -> registry.insertRelease(
         release,
         List.of(new SwiftRegistryDao.Manifest(
-            null, "Package.swift", "", manifestAssetId, "b".repeat(64))),
+            null, "Package.swift", "", manifestAssetId, "b".repeat(64), "5.9")),
         List.of(new SwiftRegistryDao.RepositoryUrl(
             null, null, repositoryId, "acme", "fixture",
             "https://github.com/acme/fixture", "https://github.com/Acme/Fixture"))));
@@ -166,6 +167,11 @@ public abstract class PersistenceApiContract {
     assertEquals(1, registry.listReleases(repositoryId, "acme", "fixture").size());
     assertEquals(manifestAssetId,
         registry.findManifest(stored.id(), null).orElseThrow().assetId());
+    assertEquals("5.9",
+        registry.findManifest(stored.id(), null).orElseThrow().declaredToolsVersion());
+    assertEquals(
+        Map.of(repositoryId, revision, groupRepositoryId, 0L),
+        registry.currentRepositoryRevisions(List.of(repositoryId, groupRepositoryId)));
     assertEquals("Acme", registry.findIdentities(
         repositoryId, "https://github.com/acme/fixture").getFirst().scopeDisplay());
     assertEquals(
@@ -223,6 +229,19 @@ public abstract class PersistenceApiContract {
         .toList());
     assertEquals(firstSource.commitSha(), bulkSources.getFirst().commitSha());
     assertEquals(3, bulkSources.getFirst().observedCount());
+
+    SwiftRegistryDao.ProxyInventory inventory = new SwiftRegistryDao.ProxyInventory(
+        repositoryId,
+        "acme",
+        "fixture",
+        revision,
+        now.plusSeconds(3),
+        Map.of("1", List.of(new SwiftRegistryDao.ProxyTag(
+            "1.2.3", "v1.2.3", firstSource.commitSha()))),
+        Map.of("1", "github-page-one"));
+    registry.upsertProxyInventory(inventory);
+    assertEquals(inventory,
+        registry.findProxyInventory(repositoryId, "acme", "fixture").orElseThrow());
 
     registry.bindProxySources(List.of(
         new SwiftRegistryDao.ProxySource(

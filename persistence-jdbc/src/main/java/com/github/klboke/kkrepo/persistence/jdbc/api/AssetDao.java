@@ -38,6 +38,17 @@ public interface AssetDao {
 
   Optional<AssetRecord> findAssetById(long assetId);
 
+  /**
+   * Loads an asset and its live blob metadata in one database round trip when supported.
+   *
+   * <p>The default keeps lightweight test adapters source-compatible.
+   */
+  default Optional<AssetWithBlob> findAssetWithBlobById(long assetId) {
+    return findAssetById(assetId).map(asset -> new AssetWithBlob(
+        asset,
+        asset.assetBlobId() == null ? null : findBlobById(asset.assetBlobId()).orElse(null)));
+  }
+
   Optional<AssetRecord> findDockerBlobAssetBySha256(long repositoryId, String sha256);
 
   /**
@@ -131,6 +142,8 @@ public interface AssetDao {
   List<HelmIndexRow> listHelmIndexRows(long repositoryId);
 
   List<PypiProjectIndexRow> listPypiProjectIndexRows(long repositoryId, String normalizedName);
+
+  record AssetWithBlob(AssetRecord asset, AssetBlobRecord blob) {}
 
   record HelmIndexRow(
       String path,

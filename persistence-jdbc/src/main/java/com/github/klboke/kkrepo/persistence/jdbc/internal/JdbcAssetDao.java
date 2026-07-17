@@ -237,6 +237,55 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         .findFirst();
   }
 
+  @Override
+  public Optional<AssetWithBlob> findAssetWithBlobById(long assetId) {
+    return jdbcTemplate.query("""
+        SELECT a.*,
+               b.id AS joined_blob_id,
+               b.blob_store_id AS joined_blob_store_id,
+               b.blob_ref AS joined_blob_ref,
+               b.blob_ref_hash AS joined_blob_ref_hash,
+               b.object_key AS joined_object_key,
+               b.object_key_hash AS joined_object_key_hash,
+               b.sha1 AS joined_sha1,
+               b.sha256 AS joined_sha256,
+               b.md5 AS joined_md5,
+               b.size AS joined_size,
+               b.content_type AS joined_content_type,
+               b.created_by AS joined_created_by,
+               b.created_by_ip AS joined_created_by_ip,
+               b.blob_created_at AS joined_blob_created_at,
+               b.blob_updated_at AS joined_blob_updated_at,
+               b.attributes_json AS joined_blob_attributes_json
+        FROM asset a
+        LEFT JOIN asset_blob b ON b.id = a.asset_blob_id
+        WHERE a.id = ?
+        """, (rs, rowNum) -> {
+      AssetRecord asset = assetRowMapper.mapRow(rs, rowNum);
+      if (asset.assetBlobId() == null || rs.getObject("joined_blob_id") == null) {
+        return new AssetWithBlob(asset, null);
+      }
+      AssetBlobRecord blob = new AssetBlobRecord(
+          rs.getLong("joined_blob_id"),
+          rs.getLong("joined_blob_store_id"),
+          rs.getString("joined_blob_ref"),
+          rs.getBytes("joined_blob_ref_hash"),
+          rs.getString("joined_object_key"),
+          rs.getBytes("joined_object_key_hash"),
+          rs.getString("joined_sha1"),
+          rs.getString("joined_sha256"),
+          rs.getString("joined_md5"),
+          rs.getLong("joined_size"),
+          rs.getString("joined_content_type"),
+          rs.getString("joined_created_by"),
+          rs.getString("joined_created_by_ip"),
+          nullableInstant(rs, "joined_blob_created_at"),
+          nullableInstant(rs, "joined_blob_updated_at"),
+          jsonColumns.read(rs.getString("joined_blob_attributes_json")));
+      return new AssetWithBlob(asset, blob);
+    }, assetId).stream().findFirst();
+  }
+
   public Optional<AssetRecord> findDockerBlobAssetBySha256(long repositoryId, String sha256) {
     if (sha256 == null || sha256.isBlank()) {
       return Optional.empty();

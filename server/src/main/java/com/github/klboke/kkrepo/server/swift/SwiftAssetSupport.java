@@ -111,8 +111,13 @@ final class SwiftAssetSupport {
   }
 
   byte[] bytes(long repositoryId, long assetId) {
-    AssetRecord asset = required(repositoryId, assetId);
-    AssetBlobRecord blob = requiredBlob(asset);
+    AssetDao.AssetWithBlob stored = assets.findAssetWithBlobById(assetId)
+        .filter(value -> value.asset().repositoryId() == repositoryId)
+        .orElseThrow(() -> new SwiftExceptions.NotFound("Swift release asset is missing"));
+    AssetBlobRecord blob = stored.blob();
+    if (blob == null) {
+      throw new SwiftExceptions.NotFound("Swift release blob is missing");
+    }
     try (InputStream input = open(blob)) {
       return input.readAllBytes();
     } catch (IOException e) {
@@ -121,21 +126,25 @@ final class SwiftAssetSupport {
   }
 
   MavenResponse serve(long repositoryId, long assetId, boolean headOnly) {
-    AssetRecord asset = required(repositoryId, assetId);
-    AssetBlobRecord blob = requiredBlob(asset);
+    AssetDao.AssetWithBlob stored = assets.findAssetWithBlobById(assetId)
+        .filter(value -> value.asset().repositoryId() == repositoryId)
+        .orElseThrow(() -> new SwiftExceptions.NotFound("Swift release asset is missing"));
+    AssetRecord asset = stored.asset();
+    AssetBlobRecord blob = stored.blob();
+    if (blob == null) {
+      throw new SwiftExceptions.NotFound("Swift release blob is missing");
+    }
     var storage = storages.forBlobStoreId(blob.blobStoreId());
     var reference = BlobReferenceCodec.reference(
         blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size());
-    if (storage.stat(reference).isEmpty()) {
-      throw new SwiftExceptions.NotFound("Swift release blob is missing");
+    if (headOnly) {
+      return MavenResponse.noBody(
+          200, blob.size(), asset.contentType(), blob.sha256(), asset.lastUpdatedAt());
     }
-    return headOnly
-        ? MavenResponse.noBody(
-            200, blob.size(), asset.contentType(), blob.sha256(), asset.lastUpdatedAt())
-        : MavenResponse.ok(
-            () -> storage.get(reference)
-                .orElseThrow(() -> new SwiftExceptions.NotFound("Swift release blob is missing")),
-            blob.size(), asset.contentType(), blob.sha256(), asset.lastUpdatedAt());
+    return MavenResponse.ok(
+        () -> storage.get(reference)
+            .orElseThrow(() -> new SwiftExceptions.NotFound("Swift release blob is missing")),
+        blob.size(), asset.contentType(), blob.sha256(), asset.lastUpdatedAt());
   }
 
   void delete(RepositoryRuntime runtime, String path) {
