@@ -244,7 +244,10 @@ public class BrowseContentDeleteController {
     if (requested.type() != RepositoryType.GROUP) {
       return requested;
     }
-    return repositoryDao.listMembers(requested.id()).stream()
+    List<RepositoryRecord> members = requested.format() == RepositoryFormat.SWIFT
+        ? BrowseRepositorySources.swiftSources(requested, repositoryDao)
+        : repositoryDao.listMembers(requested.id());
+    return members.stream()
         .filter(member -> !matchingAssets(member, storagePath).isEmpty())
         .findFirst()
         .orElseThrow(() -> new ResponseStatusException(
@@ -255,7 +258,10 @@ public class BrowseContentDeleteController {
     if (requested.type() != RepositoryType.GROUP) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "source must match repository");
     }
-    boolean member = repositoryDao.listMembers(requested.id()).stream()
+    List<RepositoryRecord> members = requested.format() == RepositoryFormat.SWIFT
+        ? BrowseRepositorySources.swiftSources(requested, repositoryDao)
+        : repositoryDao.listMembers(requested.id());
+    boolean member = members.stream()
         .anyMatch(row -> row.id().equals(target.id()));
     if (!member) {
       throw new ResponseStatusException(

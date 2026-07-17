@@ -264,7 +264,7 @@ public class BrowseAssetDetailService {
       return Optional.empty();
     }
     List<RepositoryRecord> sources = visibleRepository.type() == RepositoryType.GROUP
-        ? repositoryDao.listMembers(visibleRepository.id())
+        ? BrowseRepositorySources.swiftSources(visibleRepository, repositoryDao)
         : List.of(visibleRepository);
     if (sourceRepositoryName != null && !sourceRepositoryName.isBlank()) {
       sources = sources.stream()
@@ -315,7 +315,7 @@ public class BrowseAssetDetailService {
     String releasePath = parts[0] + "/" + parts[1] + "/" + parts[2];
     String filename = parts[4];
     List<RepositoryRecord> sources = visibleRepository.type() == RepositoryType.GROUP
-        ? repositoryDao.listMembers(visibleRepository.id())
+        ? BrowseRepositorySources.swiftSources(visibleRepository, repositoryDao)
         : List.of(visibleRepository);
     if (sourceRepositoryName != null && !sourceRepositoryName.isBlank()) {
       sources = sources.stream()
@@ -571,7 +571,9 @@ public class BrowseAssetDetailService {
           .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Asset not found"));
       return new ResolvedAsset(visibleRepository, asset, null);
     }
-    List<RepositoryRecord> members = repositoryDao.listMembers(visibleRepository.id());
+    List<RepositoryRecord> members = visibleRepository.format() == RepositoryFormat.SWIFT
+        ? BrowseRepositorySources.swiftSources(visibleRepository, repositoryDao)
+        : repositoryDao.listMembers(visibleRepository.id());
     if (sourceRepositoryName != null && !sourceRepositoryName.isBlank()) {
       RepositoryRecord source = members.stream()
           .filter(member -> member.name().equals(sourceRepositoryName))

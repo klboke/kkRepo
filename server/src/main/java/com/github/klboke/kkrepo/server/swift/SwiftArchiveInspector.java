@@ -34,7 +34,7 @@ final class SwiftArchiveInspector {
   private static final Pattern VERSIONED_MANIFEST =
       Pattern.compile("Package@swift-(\\d+(?:\\.\\d+){0,2})\\.swift");
   private static final Pattern TOOLS_VERSION =
-      Pattern.compile("^\\s*//\\s*swift-tools-version\\s*:\\s*(\\d+\\.\\d+(?:\\.\\d+)?).*$");
+      Pattern.compile("^\\uFEFF?\\s*//\\s*swift-tools-version\\s*:\\s*(\\d+\\.\\d+(?:\\.\\d+)?).*$");
   private static final int MAX_MANIFEST_BYTES = 2 * 1024 * 1024;
   private static final int DEFAULT_MAX_MANIFESTS = 64;
   private static final long DEFAULT_MAX_MANIFEST_TOTAL_BYTES = 16L * 1024 * 1024;

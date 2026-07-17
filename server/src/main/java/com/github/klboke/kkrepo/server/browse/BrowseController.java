@@ -99,7 +99,9 @@ public class BrowseController {
     // For GROUP repos browse_node has nothing of its own — fan out across members and merge.
     // The first member that surfaces a given path wins (matches Maven group "first-win" rules).
     List<RepositoryRecord> sources = repo.type() == RepositoryType.GROUP
-        ? repositoryDao.listMembers(repo.id())
+        ? repo.format() == RepositoryFormat.SWIFT
+            ? BrowseRepositorySources.swiftSources(repo, repositoryDao)
+            : repositoryDao.listMembers(repo.id())
         : List.of(repo);
     if (repo.format() == RepositoryFormat.DOCKER && dockerBrowseService != null) {
       return new BrowseListing(repo.name(), parent, dockerBrowseService.list(repo, sources, parent));

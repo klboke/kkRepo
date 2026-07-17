@@ -57,6 +57,23 @@ class SwiftArchiveInspectorTest {
   }
 
   @Test
+  void acceptsBomPrefixedPackageManifest() throws Exception {
+    byte[] archive = zip(Map.of(
+        "fixture/Package.swift",
+        ("\uFEFF" + new String(manifest("5.9"), StandardCharsets.UTF_8))
+            .getBytes(StandardCharsets.UTF_8)));
+    SwiftArchiveInspector inspector = new SwiftArchiveInspector(1024 * 1024, 1024 * 1024, 20);
+
+    SwiftArchiveInspector.InspectedArchive inspected =
+        inspector.inspect(new ByteArrayInputStream(archive));
+    try {
+      assertEquals("5.9", inspected.manifests().getFirst().declaredToolsVersion());
+    } finally {
+      Files.deleteIfExists(inspected.file());
+    }
+  }
+
+  @Test
   void requiresPackageManifestAtTheSoleTopLevelDirectoryRoot() throws Exception {
     LinkedHashMap<String, byte[]> entries = new LinkedHashMap<>();
     entries.put("outer/nested/Package.swift", manifest("5.6"));
