@@ -99,7 +99,7 @@ public class DockerRemoteRegistryClient {
 
   private HttpRemoteFetcher.Result fetch(
       String url, RepositoryRuntime runtime, String bearerToken, String accept) throws IOException {
-    return fetchWithHeaders(url, runtime, bearerToken, accept, 0);
+    return fetchWithHeaders(url, runtime, bearerToken, accept, 0, true);
   }
 
   private HttpRemoteFetcher.Result fetchWithHeaders(
@@ -108,8 +108,18 @@ public class DockerRemoteRegistryClient {
       String bearerToken,
       String accept,
       int redirects) throws IOException {
+    return fetchWithHeaders(url, runtime, bearerToken, accept, redirects, true);
+  }
+
+  private HttpRemoteFetcher.Result fetchWithHeaders(
+      String url,
+      RepositoryRuntime runtime,
+      String bearerToken,
+      String accept,
+      int redirects,
+      boolean sendCredentials) throws IOException {
     if (proxyEnabled(runtime)) {
-      return proxiedFetchWithHeaders(url, runtime, bearerToken, accept, redirects);
+      return proxiedFetchWithHeaders(url, runtime, bearerToken, accept, redirects, sendCredentials);
     }
     Timer.Sample sample = metrics == null ? null : metrics.startTimer();
     int status = 0;
@@ -121,9 +131,9 @@ public class DockerRemoteRegistryClient {
           .timeout(Duration.ofSeconds(180))
           .header("User-Agent", "kkrepo/0.1")
           .header("Accept", accept == null || accept.isBlank() ? "*/*" : accept);
-      if (bearerToken != null && !bearerToken.isBlank()) {
+      if (sendCredentials && bearerToken != null && !bearerToken.isBlank()) {
         builder.header("Authorization", "Bearer " + bearerToken);
-      } else {
+      } else if (sendCredentials) {
         basicAuthorization(runtime).ifPresent(value -> builder.header("Authorization", value));
       }
       HttpResponse<java.io.InputStream> response = tokenClient.send(
@@ -136,9 +146,16 @@ public class DockerRemoteRegistryClient {
           throw new IOException("Too many redirects fetching Docker remote " + url);
         }
         URI redirected = outboundPolicy.validateHttpUri(uri.resolve(redirect.get()), "docker remote redirect");
+        boolean forwardCredentials = sendCredentials && sameOrigin(uri, redirected);
         recordRemote(runtime, "GET", url, status, null, sample);
         recorded = true;
-        return fetchWithHeaders(redirected.toString(), runtime, bearerToken, accept, redirects + 1);
+        return fetchWithHeaders(
+            redirected.toString(),
+            runtime,
+            forwardCredentials ? bearerToken : null,
+            accept,
+            redirects + 1,
+            forwardCredentials);
       }
       Map<String, String> headers = new LinkedHashMap<>();
       response.headers().map().forEach((k, v) -> {
@@ -250,6 +267,16 @@ public class DockerRemoteRegistryClient {
       String bearerToken,
       String accept,
       int redirects) throws IOException {
+    return proxiedFetchWithHeaders(url, runtime, bearerToken, accept, redirects, true);
+  }
+
+  private HttpRemoteFetcher.Result proxiedFetchWithHeaders(
+      String url,
+      RepositoryRuntime runtime,
+      String bearerToken,
+      String accept,
+      int redirects,
+      boolean sendCredentials) throws IOException {
     Timer.Sample sample = metrics == null ? null : metrics.startTimer();
     int status = 0;
     Throwable failure = null;
@@ -260,9 +287,9 @@ public class DockerRemoteRegistryClient {
       Map<String, String> headers = new LinkedHashMap<>();
       headers.put("User-Agent", "kkrepo/0.1");
       headers.put("Accept", accept == null || accept.isBlank() ? "*/*" : accept);
-      if (bearerToken != null && !bearerToken.isBlank()) {
+      if (sendCredentials && bearerToken != null && !bearerToken.isBlank()) {
         headers.put("Authorization", "Bearer " + bearerToken);
-      } else {
+      } else if (sendCredentials) {
         basicAuthorization(runtime).ifPresent(value -> headers.put("Authorization", value));
       }
       response = proxyFactory.execute(
@@ -282,9 +309,16 @@ public class DockerRemoteRegistryClient {
           throw new IOException("Too many redirects fetching Docker remote " + url);
         }
         URI redirected = outboundPolicy.validateHttpUri(uri.resolve(location), "docker remote redirect");
+        boolean forwardCredentials = sendCredentials && sameOrigin(uri, redirected);
         recordRemote(runtime, "GET", url, status, null, sample);
         recorded = true;
-        return proxiedFetchWithHeaders(redirected.toString(), runtime, bearerToken, accept, redirects + 1);
+        return proxiedFetchWithHeaders(
+            redirected.toString(),
+            runtime,
+            forwardCredentials ? bearerToken : null,
+            accept,
+            redirects + 1,
+            forwardCredentials);
       }
       return new HttpRemoteFetcher.Result(response.status(), response.headers(), releaseOnClose(response));
     } catch (IOException | RuntimeException e) {
@@ -399,6 +433,29 @@ public class DockerRemoteRegistryClient {
         + nullToEmpty(bearer.scope()) + "\n"
         + credentialFingerprint(runtime);
     return runtimeId(runtime) + ":" + sha256(source);
+  }
+
+  private static boolean sameOrigin(URI from, URI to) {
+    if (from.getScheme() == null || to.getScheme() == null
+        || from.getHost() == null || to.getHost() == null) {
+      return false;
+    }
+    return from.getScheme().equalsIgnoreCase(to.getScheme())
+        && from.getHost().equalsIgnoreCase(to.getHost())
+        && effectivePort(from) == effectivePort(to);
+  }
+
+  private static int effectivePort(URI uri) {
+    if (uri.getPort() >= 0) {
+      return uri.getPort();
+    }
+    if ("http".equalsIgnoreCase(uri.getScheme())) {
+      return 80;
+    }
+    if ("https".equalsIgnoreCase(uri.getScheme())) {
+      return 443;
+    }
+    return -1;
   }
 
   private static Optional<String> redirectLocation(HttpResponse<?> response) {

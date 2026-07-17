@@ -238,6 +238,116 @@ class DockerRemoteRegistryClientTest {
   }
 
   @Test
+  void sameOriginRedirectPreservesRegistryCredentials() throws Exception {
+    try (TestRegistry registry = TestRegistry.start()) {
+      List<String> authorizations = new ArrayList<>();
+      registry.server.createContext("/v2/library/nginx/blobs/sha256:abc", exchange -> {
+        authorizations.add(exchange.getRequestHeaders().getFirst("Authorization"));
+        exchange.getResponseHeaders().add("Location", registry.baseUrl + "/cdn/layers/abc");
+        exchange.sendResponseHeaders(307, -1);
+        exchange.close();
+      });
+      registry.server.createContext("/cdn/layers/abc", exchange -> {
+        authorizations.add(exchange.getRequestHeaders().getFirst("Authorization"));
+        byte[] body = "layer".getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().add("Content-Type", "application/octet-stream");
+        exchange.sendResponseHeaders(200, body.length);
+        exchange.getResponseBody().write(body);
+        exchange.close();
+      });
+      DockerRemoteRegistryClient client = client();
+
+      try (HttpRemoteFetcher.Result result = client.get(
+          runtime(registry.baseUrl, "robot", "secret"),
+          "library/nginx/blobs/sha256:abc",
+          "application/octet-stream")) {
+        assertEquals(200, result.status());
+      }
+
+      assertEquals(List.of(basic("robot", "secret"), basic("robot", "secret")), authorizations);
+    }
+  }
+
+  @Test
+  void crossOriginRedirectStripsRegistryCredentials() throws Exception {
+    try (TestRegistry registry = TestRegistry.start(); TestRegistry storage = TestRegistry.start()) {
+      List<String> registryAuthorizations = new ArrayList<>();
+      List<String> storageAuthorizations = new ArrayList<>();
+      registry.server.createContext("/v2/library/nginx/blobs/sha256:abc", exchange -> {
+        registryAuthorizations.add(exchange.getRequestHeaders().getFirst("Authorization"));
+        exchange.getResponseHeaders().add("Location", storage.baseUrl + "/layers/abc");
+        exchange.sendResponseHeaders(307, -1);
+        exchange.close();
+      });
+      storage.server.createContext("/layers/abc", exchange -> {
+        storageAuthorizations.add(exchange.getRequestHeaders().getFirst("Authorization"));
+        byte[] body = "layer".getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().add("Content-Type", "application/octet-stream");
+        exchange.sendResponseHeaders(200, body.length);
+        exchange.getResponseBody().write(body);
+        exchange.close();
+      });
+      DockerRemoteRegistryClient client = client();
+
+      try (HttpRemoteFetcher.Result result = client.get(
+          runtime(registry.baseUrl, "robot", "secret"),
+          "library/nginx/blobs/sha256:abc",
+          "application/octet-stream")) {
+        assertEquals(200, result.status());
+      }
+
+      assertEquals(List.of(basic("robot", "secret")), registryAuthorizations);
+      assertEquals(Collections.singletonList(null), storageAuthorizations);
+    }
+  }
+
+  @Test
+  void crossOriginRedirectStripsRegistryBearerToken() throws Exception {
+    try (TestRegistry registry = TestRegistry.start(); TestRegistry storage = TestRegistry.start()) {
+      List<String> storageAuthorizations = new ArrayList<>();
+      AtomicInteger manifestCalls = new AtomicInteger();
+      registry.server.createContext("/token", exchange -> {
+        byte[] body = "{\"token\":\"remote-token\"}".getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().add("Content-Type", "application/json");
+        exchange.sendResponseHeaders(200, body.length);
+        exchange.getResponseBody().write(body);
+        exchange.close();
+      });
+      registry.server.createContext("/v2/library/nginx/blobs/sha256:abc", exchange -> {
+        int call = manifestCalls.incrementAndGet();
+        if (call == 1) {
+          exchange.getResponseHeaders().add(
+              "WWW-Authenticate",
+              "Bearer realm=\"" + registry.baseUrl + "/token\",service=\"registry.local\",scope=\"repository:library/nginx:pull\"");
+          exchange.sendResponseHeaders(401, -1);
+        } else {
+          exchange.getResponseHeaders().add("Location", storage.baseUrl + "/layers/abc");
+          exchange.sendResponseHeaders(307, -1);
+        }
+        exchange.close();
+      });
+      storage.server.createContext("/layers/abc", exchange -> {
+        storageAuthorizations.add(exchange.getRequestHeaders().getFirst("Authorization"));
+        byte[] body = "layer".getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().add("Content-Type", "application/octet-stream");
+        exchange.sendResponseHeaders(200, body.length);
+        exchange.getResponseBody().write(body);
+        exchange.close();
+      });
+      DockerRemoteRegistryClient client = client();
+
+      try (HttpRemoteFetcher.Result result = client.get(
+          runtime(registry.baseUrl, "robot", "secret"),
+          "library/nginx/blobs/sha256:abc",
+          "application/octet-stream")) {
+        assertEquals(200, result.status());
+      }
+
+      assertEquals(Collections.singletonList(null), storageAuthorizations);
+    }
+  }
+
+  @Test
   void bearerTokenIsCachedAcrossRemoteChallenges() throws Exception {
     try (TestRegistry registry = TestRegistry.start()) {
       AtomicInteger tokenCalls = new AtomicInteger();
