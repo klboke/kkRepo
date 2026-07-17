@@ -261,6 +261,7 @@ jobs:
                 proxy_pass http://127.0.0.1:18090;
                 proxy_http_version 1.1;
                 proxy_set_header Host $http_host;
+                proxy_set_header X-Forwarded-Host $http_host;
                 proxy_set_header X-Forwarded-Proto https;
                 proxy_set_header X-Forwarded-Port $server_port;
               }
@@ -276,6 +277,7 @@ jobs:
                 proxy_pass http://127.0.0.1:18094;
                 proxy_http_version 1.1;
                 proxy_set_header Host $http_host;
+                proxy_set_header X-Forwarded-Host $http_host;
                 proxy_set_header X-Forwarded-Proto https;
                 proxy_set_header X-Forwarded-Port $server_port;
               }
@@ -368,6 +370,19 @@ jobs:
 
       - name: Start compatibility databases
         run: docker compose -f "$COMPOSE_FILE" up -d --wait ${{ matrix.database-service }} nexus-postgres
+
+      - name: Trust the local Swift HTTPS proxy gateway
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e' || env.LIVE_COMPAT_SUITE == 'swift'
+        shell: bash
+        run: |
+          set -euo pipefail
+          proxy_gateway="$(docker network inspect "${COMPOSE_PROJECT_NAME}_default" \
+            --format '{{(index .IPAM.Config 0).Gateway}}')"
+          if [[ -z "$proxy_gateway" ]]; then
+            echo "Unable to determine the compatibility network gateway" >&2
+            exit 1
+          fi
+          echo "KKREPO_TRUSTED_PROXIES=$proxy_gateway" >> "$GITHUB_ENV"
 
       - name: Start reference and candidate services
         run: docker compose -f "$COMPOSE_FILE" up -d nexus ${{ matrix.candidate-service }}
