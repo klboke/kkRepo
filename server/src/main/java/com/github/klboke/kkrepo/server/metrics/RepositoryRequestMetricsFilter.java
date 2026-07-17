@@ -526,10 +526,16 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
   }
 
   private static boolean isSwiftIdentifiersUrl(String name, Target target) {
-    return target != null
-        && "repository".equals(target.route())
-        && "identifiers".equals(target.path())
-        && "url".equalsIgnoreCase(name);
+    if (target == null
+        || !"repository".equals(target.route())
+        || !"url".equalsIgnoreCase(name)) {
+      return false;
+    }
+    try {
+      return SWIFT_PATHS.parse(target.path()).kind() == SwiftPath.Kind.IDENTIFIERS;
+    } catch (IllegalArgumentException ignored) {
+      return false;
+    }
   }
 
   private static boolean isSensitiveParameter(String name) {

@@ -289,6 +289,41 @@ class RepositoryRequestMetricsFilterTest {
   }
 
   @Test
+  void redactsSwiftIdentifiersRepositoryUrlFromEncodedFailureLogs() throws Exception {
+    SimpleMeterRegistry registry = new SimpleMeterRegistry();
+    RepositoryRequestMetricsFilter filter = new RepositoryRequestMetricsFilter(
+        new KkRepoMetrics(registry), true, "");
+    String repositoryUrl = "https://token@github.com/private-owner/private-package";
+    MockHttpServletRequest request = new MockHttpServletRequest(
+        "GET", "/repository/swift-group/%69dentifiers");
+    request.setQueryString("url=" + java.net.URLEncoder.encode(
+        repositoryUrl, java.nio.charset.StandardCharsets.UTF_8));
+    request.addParameter("url", repositoryUrl);
+    MockHttpServletResponse response = new MockHttpServletResponse();
+    FilterChain chain = (req, resp) -> {
+      req.setAttribute(
+          RepositorySecurityFilter.REPOSITORY_RECORD_ATTRIBUTE,
+          repository("swift-group", RepositoryFormat.SWIFT, RepositoryType.GROUP));
+      ((MockHttpServletResponse) resp).sendError(404);
+    };
+
+    ListAppender<ILoggingEvent> appender = attachAppender();
+    try {
+      filter.doFilter(request, response, chain);
+    } finally {
+      detachAppender(appender);
+    }
+
+    assertEquals(1, appender.list.size());
+    String message = appender.list.getFirst().getFormattedMessage();
+    assertTrue(message.contains("operation=swift_identifiers"));
+    assertTrue(message.contains("params={url=[<redacted>]}"));
+    assertFalse(message.contains("private-owner"));
+    assertFalse(message.contains("private-package"));
+    assertFalse(message.contains("token@"));
+  }
+
+  @Test
   void stripsTerraformUrlTokenBeforeOperationMetricsAndFailureLogs() throws Exception {
     SimpleMeterRegistry registry = new SimpleMeterRegistry();
     RepositoryRequestMetricsFilter filter = new RepositoryRequestMetricsFilter(new KkRepoMetrics(registry), true, "");
