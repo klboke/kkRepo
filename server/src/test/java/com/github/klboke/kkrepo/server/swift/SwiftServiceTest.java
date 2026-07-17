@@ -1242,6 +1242,35 @@ class SwiftServiceTest {
   }
 
   @Test
+  void manifestAlwaysIncludesLinkHeaderWhenNoVersionedVariantsExist() {
+    Fixture fixture = fixture();
+    SwiftRegistryDao.Release release = release(1L, "1.2.3", SwiftRegistryDao.RELEASE_READY);
+    SwiftRegistryDao.Manifest defaultManifest = new SwiftRegistryDao.Manifest(
+        1L, "Package.swift", "", 20L, "b".repeat(64));
+    when(fixture.registry.findRelease(1L, "acme", "demo", "1.2.3"))
+        .thenReturn(Optional.of(release));
+    when(fixture.registry.findManifest(1L, "")).thenReturn(Optional.of(defaultManifest));
+    when(fixture.registry.listManifests(1L)).thenReturn(List.of(defaultManifest));
+    when(fixture.assets.serve(1L, 20L, false)).thenReturn(MavenResponse.ok(
+        new ByteArrayInputStream("// swift-tools-version:5.7\n".getBytes(StandardCharsets.UTF_8)),
+        27L,
+        SwiftMediaTypes.MANIFEST,
+        "manifest-etag",
+        Instant.EPOCH));
+
+    MavenResponse response = fixture.service.get(
+        fixture.runtime,
+        "Acme/Demo/1.2.3/Package.swift",
+        null,
+        "https://repo.example/repository/swift/",
+        SwiftMediaTypes.VENDOR_SWIFT,
+        false);
+
+    assertEquals(200, response.status());
+    assertEquals("", response.headers().get("Link"));
+  }
+
+  @Test
   void rejectsInvalidAndUnsupportedMediaNegotiationBeforeStorageLookup() {
     Fixture fixture = fixture();
 

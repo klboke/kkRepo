@@ -32,7 +32,7 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
     assertTrue(flyway().validateWithResult().validationSuccessful);
     var result = flyway().migrate();
     assertEquals(0, result.migrationsExecuted);
-    assertEquals("31", flyway().info().current().getVersion().getVersion());
+    assertEquals("33", flyway().info().current().getVersion().getVersion());
   }
 
   private static String hex(byte[] bytes) {

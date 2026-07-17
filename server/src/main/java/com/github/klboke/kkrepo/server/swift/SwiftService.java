@@ -738,9 +738,7 @@ public class SwiftService {
           "alternate",
           Map.of("filename", candidate.filename(), "swift-tools-version", declared)));
     }
-    if (!links.isEmpty()) {
-      response.withHeader("Link", SwiftLinkHeader.render(links));
-    }
+    response.withHeader("Link", SwiftLinkHeader.render(links));
     return response;
   }
 
