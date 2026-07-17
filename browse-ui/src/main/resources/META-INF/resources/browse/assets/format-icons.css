@@ -78,6 +78,11 @@
   --format-logo: url("/browse/assets/formats/terraform.svg");
 }
 
+.format-logo-swift {
+  --format-color: #f05138;
+  --format-logo: url("/browse/assets/formats/swift.svg");
+}
+
 .format-logo-raw {
   --format-color: #52625e;
   --format-logo: url("/browse/assets/formats/raw.svg");

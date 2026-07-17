@@ -2,7 +2,7 @@
 
 This document describes prerequisites, execution order, incremental migration, and domain cutover when migrating from Nexus Repository to kkrepo.
 
-kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client protocol behavior, and permission/authentication model. After migration, only point the original Nexus domain to kkrepo. Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, NuGet, RubyGems, Yum, and other migrated non-Docker client configurations do not need to change. Docker / OCI uses Registry HTTP API V2 `/v2/...` routes; preserve repository names and connector/path-based routing when cutting Docker clients over.
+kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client protocol behavior, and permission/authentication model. After migration, only point the original Nexus domain to kkrepo. Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift Package Registry, NuGet, RubyGems, Yum, and other migrated non-Docker client configurations do not need to change. Docker / OCI uses Registry HTTP API V2 `/v2/...` routes; preserve repository names and connector/path-based routing when cutting Docker clients over.
 
 Cargo / Rust repositories also use `/repository/<repo>/...` sparse registry URLs in kkrepo. Hosted Cargo repository data participates in the same migration flow for datastore-era Nexus H2/PostgreSQL sources when preflight proves the Cargo content model fingerprint.
 
@@ -11,6 +11,8 @@ Dart / Pub repositories also use `/repository/<repo>/...` hosted URLs in kkrepo.
 Composer / PHP keeps the `/repository/<repo>/...` Composer 2 URL shape. Native Nexus Composer is a 3.75.0+ Pro proxy-only capability, so migration accepts only native Nexus Composer proxies and preserves proxy semantics. Configuration is migrated without cache content unless the administrator explicitly selects the repository under `Optional proxy repositories`. kkRepo-native Composer hosted/group repositories are not inferred from the Nexus source.
 
 Terraform keeps the Nexus `/repository/<repo>/v1/modules/...` and `/v1/providers/...` service bases configured in Terraform CLI `host.services`. Metadata migration recognizes native `terraform-hosted`, `terraform-proxy`, and `terraform-group` recipes. Repository-data migration rebuilds hosted module/provider state, provider platforms, SHA256SUMS, and kkrepo signing metadata. Proxy/group configuration also migrates. When an administrator explicitly selects a native Nexus Terraform proxy and the source profile plans it as `FULL`, a separate cache writer restores protocol-recognized module/provider archives at their Nexus public paths. It does not create hosted publication or signing state. Module download discovery can select a restored local archive directly; provider metadata reconstructs and verifies its route, validators, checksum manifest, and signature snapshot from the configured upstream, then pins the corresponding cache for that metadata lifetime.
+
+Swift Package Registry keeps the Nexus `/repository/<repo>/` registry base. Metadata migration recognizes `swift-hosted`, `swift-proxy`, and `swift-group` and preserves proxy TTLs and ordered members. A recoverable source proxy secret is encrypted in the target. A masked or missing source secret instead produces `NEEDS_MANUAL_ACTION`; the target proxy stays offline with no placeholder credential until an administrator supplies one. Hosted data migration restores immutable source archives, checksums, and default/versioned manifests only for Nexus 3.92.x-3.94.x sources whose datastore asset fingerprint proves the expected Swift content shape. Optional CMS signatures, original release metadata, and repository URL mappings are preserved only when they are present in the exported source attributes. Native Nexus 3.94 accepts these optional publication fields but does not persist or re-expose them, so the target does not fabricate them. Out-of-range versions, unknown profiles, and shape drift fail closed; proxy cache data is not replayed as hosted publication.
 
 ## Migration Flow Overview
 
@@ -27,7 +29,7 @@ Migration runs in this order:
 
 ## Before Migration
 
-- Confirm kkrepo is deployed and connected to production MySQL.
+- Confirm kkrepo is deployed and connected to production MySQL or PostgreSQL.
 - Create a blob store named `default` in kkrepo first. OSS/S3 blob store is recommended for production.
 - Confirm the source Nexus account has migration permissions. The source Nexus admin account is recommended.
 - Enable script capability on the source Nexus, as described in "Source Script Capability Configuration" below.
@@ -47,10 +49,10 @@ Repository data migration depends on target repositories and blob stores already
 
 Repository data migration runs from the `Nexus Repository Data` page in the kkrepo `/admin/` console and has two steps:
 
-1. Migrate repository metadata first: scan source Nexus hosted repository component, asset, path, size, content-type, timestamp, blob reference, and related metadata, then create migration tasks in kkrepo MySQL.
+1. Migrate repository metadata first: scan source Nexus hosted repository component, asset, path, size, content-type, timestamp, blob reference, and related metadata, then create migration tasks in the selected kkrepo relational database.
 2. Migrate real blob data: download source Nexus asset content according to migration tasks and write it to the target blob store in kkrepo.
 
-Cargo / Rust hosted repository data is migrated by this flow for Nexus 3.77.x+ datastore-era H2/PostgreSQL sources whose source profile reports a supported Cargo content model. Dart / Pub hosted repository data is migrated for Nexus 3.92.0+ datastore sources whose source profile reports a supported Pub content model, and Pub proxy cache data is migrated only when explicitly selected and planned `FULL`. Native Nexus Composer and Terraform proxy caches also require explicit administrator selection and a source profile that proves the native content model. Terraform imports only protocol-recognized archive assets; module download discovery can use restored paths directly, while provider route/checksum/signature state is reconstructed from the target upstream. Missing product capability, unknown schema, community-plugin sources, unsupported repository types, or plans below `FULL` fail closed. Old OrientDB-era sources do not enable datastore-only content export.
+Cargo / Rust hosted repository data is migrated by this flow for Nexus 3.77.x+ datastore-era H2/PostgreSQL sources whose source profile reports a supported Cargo content model. Dart / Pub hosted repository data is migrated for Nexus 3.92.0+ datastore sources whose source profile reports a supported Pub content model, and Pub proxy cache data is migrated only when explicitly selected and planned `FULL`. Native Nexus Composer and Terraform proxy caches also require explicit administrator selection and a source profile that proves the native content model. Swift hosted data is `FULL` only for Nexus 3.92.x-3.94.x with a verified Swift datastore fingerprint and is restored through the protocol-aware writer; an out-of-range version, incomplete fingerprint, or shape drift produces a manual action. Terraform imports only protocol-recognized archive assets; module download discovery can use restored paths directly, while provider route/checksum/signature state is reconstructed from the target upstream. Missing product capability, unknown schema, community-plugin sources, unsupported repository types, or plans below `FULL` fail closed. Old OrientDB-era sources do not enable datastore-only content export.
 
 ### First Migration
 
@@ -79,6 +81,18 @@ scripts/docker-compat/migration-e2e.sh
 
 The script pushes a fixture image to the source `docker-hosted` repository, migrates only that Docker hosted repository's metadata and blob data, then pulls the same image from the kkrepo Docker connector and verifies the digest.
 
+### Swift Migration E2E Boundaries
+
+The current Swift migration workflow uses a Nexus 3.94 fixture and runs these source/target database lanes:
+
+| Nexus source metadata | kkrepo target |
+| --- | --- |
+| Datastore H2 | MySQL |
+| Datastore PostgreSQL | MySQL |
+| Datastore PostgreSQL | PostgreSQL |
+
+Each lane publishes a signed archive with metadata and a repository URL to Nexus, then verifies the actual Nexus 3.94 persistence boundary: archive bytes and checksum survive, the default manifest is exported, the versioned manifest is reconstructed from the archive, and the source-blob timestamp becomes `publishedAt`. Nexus 3.94 does not persist the supplied signature, original metadata, or repository URL, so the target must remain unsigned and must not fabricate metadata or an identifier mapping. The lanes also verify cross-replica reads, restart/resume, exact row-count idempotency, the fail-closed proxy-secret path, and explicit target-side credential completion. Conditional writer contracts separately prove that optional fields are preserved when a source export does contain them. The 3.92.x-3.94.x version/shape gate is covered by source-profile contracts; the live matrix does not imply support for versions outside that range or for an unrecognized datastore shape.
+
 ### Incremental Migration
 
 For the second and later migrations, set `Metadata since` for incremental migration. `Metadata since` filters by source Nexus asset/blob update time and scans only assets added or updated after that time.
@@ -105,7 +119,7 @@ Migration is designed to be interruptible and resumable. Completed data remains 
 
 After full migration and the final incremental migration are complete, check browse/search, package downloads, checksums, and common client pull behavior for key repositories.
 
-After confirming there are no issues, point the original Nexus domain to kkrepo through DNS or a reverse proxy. Because kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client protocols, and permission/authentication model, clients do not need to modify Maven settings, npm registry, PyPI index-url, Go GOPROXY, Helm repo, Cargo sparse registry URL, Pub hosted URL, Composer repository URL, Terraform `host.services` URL, or similar configuration for migrated repository formats.
+After confirming there are no issues, point the original Nexus domain to kkrepo through DNS or a reverse proxy. Because kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client protocols, and permission/authentication model, clients do not need to modify Maven settings, npm registry, PyPI index-url, Go GOPROXY, Helm repo, Cargo sparse registry URL, Pub hosted URL, Composer repository URL, Terraform `host.services` URL, Swift registry base, or similar configuration for migrated repository formats.
 
 After cutover, keep the source Nexus for an observation period, and disable source script capability after confirming no further compensation migration is needed.
 

@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
@@ -21,6 +22,9 @@ import com.github.klboke.kkrepo.protocol.composer.ComposerPath;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPathParser;
 import com.github.klboke.kkrepo.protocol.npm.NpmMetadata;
 import com.github.klboke.kkrepo.protocol.npm.NpmPackageId;
+import com.github.klboke.kkrepo.protocol.swift.SwiftPath;
+import com.github.klboke.kkrepo.protocol.swift.SwiftPathParser;
+import com.github.klboke.kkrepo.protocol.swift.SwiftToolsVersions;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPath;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPathParser;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
@@ -51,12 +55,14 @@ public class BrowseAssetDetailService {
   private static final TypeReference<LinkedHashMap<String, Object>> MAP_TYPE = new TypeReference<>() {};
   private static final int MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
   private static final ComposerPathParser COMPOSER_PATHS = new ComposerPathParser();
+  private static final SwiftPathParser SWIFT_PATHS = new SwiftPathParser();
   private static final TerraformPathParser TERRAFORM_PATHS = new TerraformPathParser();
 
   private final RepositoryDao repositoryDao;
   private final AssetDao assetDao;
   private final DockerRegistryDao dockerDao;
   private final TerraformRegistryDao terraformDao;
+  private final SwiftRegistryDao swiftDao;
   private final BlobStorageRegistry blobStorageRegistry;
   private final ObjectMapper objectMapper;
 
@@ -66,12 +72,14 @@ public class BrowseAssetDetailService {
       AssetDao assetDao,
       DockerRegistryDao dockerDao,
       TerraformRegistryDao terraformDao,
+      SwiftRegistryDao swiftDao,
       BlobStorageRegistry blobStorageRegistry,
       ObjectMapper objectMapper) {
     this.repositoryDao = repositoryDao;
     this.assetDao = assetDao;
     this.dockerDao = dockerDao;
     this.terraformDao = terraformDao;
+    this.swiftDao = swiftDao;
     this.blobStorageRegistry = blobStorageRegistry;
     this.objectMapper = objectMapper;
   }
@@ -80,9 +88,19 @@ public class BrowseAssetDetailService {
       RepositoryDao repositoryDao,
       AssetDao assetDao,
       DockerRegistryDao dockerDao,
+      TerraformRegistryDao terraformDao,
       BlobStorageRegistry blobStorageRegistry,
       ObjectMapper objectMapper) {
-    this(repositoryDao, assetDao, dockerDao, null, blobStorageRegistry, objectMapper);
+    this(repositoryDao, assetDao, dockerDao, terraformDao, null, blobStorageRegistry, objectMapper);
+  }
+
+  public BrowseAssetDetailService(
+      RepositoryDao repositoryDao,
+      AssetDao assetDao,
+      DockerRegistryDao dockerDao,
+      BlobStorageRegistry blobStorageRegistry,
+      ObjectMapper objectMapper) {
+    this(repositoryDao, assetDao, dockerDao, null, null, blobStorageRegistry, objectMapper);
   }
 
   public BrowseAssetDetailService(
@@ -90,7 +108,7 @@ public class BrowseAssetDetailService {
       AssetDao assetDao,
       BlobStorageRegistry blobStorageRegistry,
       ObjectMapper objectMapper) {
-    this(repositoryDao, assetDao, null, null, blobStorageRegistry, objectMapper);
+    this(repositoryDao, assetDao, null, null, null, blobStorageRegistry, objectMapper);
   }
 
   public BrowseAssetDetail detail(
@@ -100,6 +118,23 @@ public class BrowseAssetDetailService {
     String publicPath = normalize(path);
     if (BrowseAssetVisibility.hidden(visibleRepository.format(), publicPath)) {
       throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Asset not found");
+    }
+    if (visibleRepository.format() == RepositoryFormat.SWIFT
+        && SwiftBrowseService.isVirtualManifestPath(publicPath)) {
+      Optional<BrowseAssetDetail> manifest = swiftManifestBrowseDetail(
+          visibleRepository, publicPath, sourceRepositoryName);
+      if (manifest.isPresent()) {
+        return manifest.orElseThrow();
+      }
+      throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Swift manifest not found");
+    }
+    if (visibleRepository.format() == RepositoryFormat.SWIFT && swiftDao != null) {
+      Optional<BrowseAssetDetail> releaseMetadata = swiftReleaseMetadataDetail(
+          visibleRepository, publicPath, sourceRepositoryName);
+      if (releaseMetadata.isPresent()) {
+        return releaseMetadata.orElseThrow();
+      }
+      rejectSwiftTombstoneForPhysicalPath(visibleRepository, publicPath, sourceRepositoryName);
     }
     ResolvedStoragePath resolvedPath = storagePath(
         visibleRepository, publicPath, sourceRepositoryName);
@@ -136,6 +171,9 @@ public class BrowseAssetDetailService {
     Map<String, Object> composer = source.format() == RepositoryFormat.COMPOSER
         ? composerAttributes(asset)
         : Map.of();
+    Map<String, Object> swift = source.format() == RepositoryFormat.SWIFT
+        ? swiftAttributes(source, asset)
+        : Map.of();
     String displayName = storagePath.equals(publicPath)
         ? asset.name()
         : publicPath.substring(publicPath.lastIndexOf('/') + 1);
@@ -161,7 +199,293 @@ public class BrowseAssetDetailService {
         npm,
         pub,
         composer,
+        swift,
         provenance);
+  }
+
+  private Map<String, Object> swiftAttributes(RepositoryRecord source, AssetRecord asset) {
+    SwiftPath path = swiftPath(asset.path());
+    if (path == null) {
+      return Map.of();
+    }
+    String scope = path.scope();
+    String name = path.name();
+    String version = path.version();
+    LinkedHashMap<String, Object> swift = new LinkedHashMap<>();
+    putNonBlank(swift, "scope", scope);
+    putNonBlank(swift, "name", name);
+    putNonBlank(swift, "version", version);
+    putNonBlank(swift, "asset_kind", asset.attributes() == null ? asset.kind() : asset.attributes().get("swiftKind"));
+    putNonBlank(swift, "swift_tools_version",
+        asset.attributes() == null ? null : asset.attributes().get("swiftToolsVersion"));
+    putNonBlank(swift, "declared_swift_tools_version",
+        asset.attributes() == null ? null : asset.attributes().get("declaredSwiftToolsVersion"));
+    putNonBlank(swift, "source_repository", source.name());
+    if (swiftDao == null) {
+      return Map.copyOf(swift);
+    }
+    swiftDao.findRelease(source.id(), scope.toLowerCase(Locale.ROOT), name.toLowerCase(Locale.ROOT), version)
+        .ifPresent(release -> {
+          putNonBlank(swift, "archive_sha256", release.archiveSha256());
+          putNonBlank(swift, "source_kind", release.sourceKind());
+          putNonBlank(swift, "signature_status", release.signatureFormat() == null ? "unsigned" : "signed");
+          putNonBlank(swift, "signature_format", release.signatureFormat());
+          List<String> toolsVersions = swiftDao.listManifests(release.id()).stream()
+              .map(SwiftRegistryDao.Manifest::toolsVersion)
+              .filter(value -> value != null && !value.isBlank())
+              .distinct()
+              .sorted()
+              .toList();
+          if (!toolsVersions.isEmpty()) {
+            swift.put("swift_tools_versions", toolsVersions);
+          }
+          List<String> repositoryUrls = swiftDao.listRepositoryUrls(release.id()).stream()
+              .map(SwiftRegistryDao.RepositoryUrl::displayUrl)
+              .filter(value -> value != null && !value.isBlank())
+              .distinct()
+              .toList();
+          if (!repositoryUrls.isEmpty()) {
+            swift.put("repository_urls", repositoryUrls);
+          }
+        });
+    return Map.copyOf(swift);
+  }
+
+  private Optional<BrowseAssetDetail> swiftReleaseMetadataDetail(
+      RepositoryRecord visibleRepository,
+      String publicPath,
+      String sourceRepositoryName) {
+    SwiftPath parsed;
+    try {
+      parsed = SWIFT_PATHS.parseReleaseMetadata(publicPath);
+    } catch (IllegalArgumentException e) {
+      return Optional.empty();
+    }
+    if (parsed.kind() != SwiftPath.Kind.RELEASE_METADATA) {
+      return Optional.empty();
+    }
+    List<RepositoryRecord> sources = visibleRepository.type() == RepositoryType.GROUP
+        ? BrowseRepositorySources.swiftSources(visibleRepository, repositoryDao)
+        : List.of(visibleRepository);
+    if (sourceRepositoryName != null && !sourceRepositoryName.isBlank()) {
+      sources = sources.stream()
+          .filter(source -> source.name().equals(sourceRepositoryName))
+          .toList();
+    }
+    for (RepositoryRecord source : sources) {
+      if (swiftDao.findTombstone(
+          source.id(),
+          parsed.scope().toLowerCase(Locale.ROOT),
+          parsed.name().toLowerCase(Locale.ROOT),
+          parsed.version()).isPresent()) {
+        throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Swift release not found");
+      }
+      Optional<SwiftRegistryDao.Release> release = swiftDao.findRelease(
+          source.id(),
+          parsed.scope().toLowerCase(Locale.ROOT),
+          parsed.name().toLowerCase(Locale.ROOT),
+          parsed.version());
+      if (release.isEmpty()) {
+        continue;
+      }
+      SwiftRegistryDao.Release row = release.orElseThrow();
+      return Optional.of(new BrowseAssetDetail(
+          visibleRepository.name(),
+          source.name(),
+          publicPath,
+          parsed.version(),
+          null,
+          "text/plain",
+          row.updatedAt(),
+          BrowseDownloadUrls.asset(visibleRepository, publicPath),
+          "kkrepo",
+          null,
+          Map.of(),
+          Map.of("generated", true, "format", "swift-release-metadata"),
+          Map.of(),
+          Map.of(),
+          Map.of(),
+          Map.of(),
+          swiftReleaseAttributes(source, row),
+          Map.of("dynamic", true, "hashes_not_verified", false)));
+    }
+    return Optional.empty();
+  }
+
+  private void rejectSwiftTombstoneForPhysicalPath(
+      RepositoryRecord visibleRepository,
+      String publicPath,
+      String sourceRepositoryName) {
+    SwiftPath parsed = SWIFT_PATHS.parse(publicPath);
+    if (parsed.kind() != SwiftPath.Kind.SOURCE_ARCHIVE
+        && parsed.kind() != SwiftPath.Kind.MANIFEST) {
+      return;
+    }
+    List<RepositoryRecord> sources = visibleRepository.type() == RepositoryType.GROUP
+        ? BrowseRepositorySources.swiftSources(visibleRepository, repositoryDao)
+        : List.of(visibleRepository);
+    if (sourceRepositoryName != null && !sourceRepositoryName.isBlank()) {
+      sources = sources.stream()
+          .filter(source -> source.name().equals(sourceRepositoryName))
+          .toList();
+    }
+    for (RepositoryRecord source : sources) {
+      if (swiftDao.findTombstone(
+          source.id(),
+          parsed.scope().toLowerCase(Locale.ROOT),
+          parsed.name().toLowerCase(Locale.ROOT),
+          parsed.version()).isPresent()) {
+        throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Swift release not found");
+      }
+    }
+  }
+
+  private Optional<BrowseAssetDetail> swiftManifestBrowseDetail(
+      RepositoryRecord visibleRepository,
+      String publicPath,
+      String sourceRepositoryName) {
+    String[] parts = publicPath.split("/");
+    if (parts.length != 5) {
+      return Optional.empty();
+    }
+    String releasePath = parts[0] + "/" + parts[1] + "/" + parts[2];
+    String filename = parts[4];
+    List<RepositoryRecord> sources = visibleRepository.type() == RepositoryType.GROUP
+        ? BrowseRepositorySources.swiftSources(visibleRepository, repositoryDao)
+        : List.of(visibleRepository);
+    if (sourceRepositoryName != null && !sourceRepositoryName.isBlank()) {
+      sources = sources.stream()
+          .filter(source -> source.name().equals(sourceRepositoryName))
+          .toList();
+    }
+    for (RepositoryRecord source : sources) {
+      if (swiftDao.findTombstone(
+          source.id(),
+          parts[0].toLowerCase(Locale.ROOT),
+          parts[1].toLowerCase(Locale.ROOT),
+          parts[2]).isPresent()) {
+        throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Swift release not found");
+      }
+      Optional<SwiftRegistryDao.Release> release = swiftDao.findRelease(
+          source.id(),
+          parts[0].toLowerCase(Locale.ROOT),
+          parts[1].toLowerCase(Locale.ROOT),
+          parts[2]);
+      if (release.isEmpty()) {
+        continue;
+      }
+      SwiftRegistryDao.Release row = release.orElseThrow();
+      Optional<SwiftRegistryDao.Manifest> manifest = swiftDao.listManifests(row.id()).stream()
+          .filter(candidate -> candidate.filename().equals(filename))
+          .findFirst();
+      if (manifest.isEmpty()) {
+        continue;
+      }
+      SwiftRegistryDao.Manifest manifestRow = manifest.orElseThrow();
+      AssetRecord asset = assetDao.findAssetById(manifestRow.assetId()).orElse(null);
+      LinkedHashMap<String, Object> checksum = new LinkedHashMap<>();
+      putNonBlank(checksum, "sha256", manifestRow.sha256());
+      return Optional.of(new BrowseAssetDetail(
+          visibleRepository.name(),
+          source.name(),
+          publicPath,
+          filename,
+          asset == null ? null : asset.size(),
+          asset == null ? "text/x-swift" : asset.contentType(),
+          asset == null ? row.updatedAt() : asset.lastUpdatedAt(),
+          null,
+          "kkrepo",
+          null,
+          Map.copyOf(checksum),
+          Map.of("generated", true, "format", "swift-manifest-browse"),
+          Map.of(),
+          Map.of(),
+          Map.of(),
+          Map.of(),
+          swiftManifestAttributes(source, row, manifestRow),
+          Map.of("dynamic", true, "hashes_not_verified", false)));
+    }
+    return Optional.empty();
+  }
+
+  private Map<String, Object> swiftManifestAttributes(
+      RepositoryRecord source,
+      SwiftRegistryDao.Release release,
+      SwiftRegistryDao.Manifest manifest) {
+    LinkedHashMap<String, Object> swift = new LinkedHashMap<>();
+    putNonBlank(swift, "scope", release.scopeDisplay());
+    putNonBlank(swift, "name", release.nameDisplay());
+    putNonBlank(swift, "version", release.version());
+    putNonBlank(swift, "asset_kind", "manifest");
+    putNonBlank(swift, "manifest_filename", manifest.filename());
+    putNonBlank(
+        swift,
+        "swift_tools_version",
+        manifest.toolsVersion() == null || manifest.toolsVersion().isBlank()
+            ? "default"
+            : manifest.toolsVersion());
+    putNonBlank(swift, "source_repository", source.name());
+    return Map.copyOf(swift);
+  }
+
+  private Map<String, Object> swiftReleaseAttributes(
+      RepositoryRecord source,
+      SwiftRegistryDao.Release release) {
+    LinkedHashMap<String, Object> swift = new LinkedHashMap<>();
+    putNonBlank(swift, "scope", release.scopeDisplay());
+    putNonBlank(swift, "name", release.nameDisplay());
+    putNonBlank(swift, "version", release.version());
+    putNonBlank(swift, "asset_kind", "release-metadata");
+    putNonBlank(swift, "source_repository", source.name());
+    putNonBlank(swift, "archive_sha256", release.archiveSha256());
+    putNonBlank(swift, "source_kind", release.sourceKind());
+    putNonBlank(
+        swift,
+        "signature_status",
+        release.signatureFormat() == null ? "unsigned" : "signed");
+    if (release.signatureFormat() != null) {
+      putNonBlank(swift, "signature_format", release.signatureFormat());
+    }
+    List<String> toolsVersions = swiftDao.listManifests(release.id()).stream()
+        .map(SwiftRegistryDao.Manifest::toolsVersion)
+        .filter(value -> value != null && !value.isBlank())
+        .distinct()
+        .sorted()
+        .toList();
+    if (!toolsVersions.isEmpty()) {
+      swift.put("swift_tools_versions", toolsVersions);
+    }
+    List<String> repositoryUrls = swiftDao.listRepositoryUrls(release.id()).stream()
+        .map(SwiftRegistryDao.RepositoryUrl::displayUrl)
+        .filter(value -> value != null && !value.isBlank())
+        .distinct()
+        .toList();
+    if (!repositoryUrls.isEmpty()) {
+      swift.put("repository_urls", repositoryUrls);
+    }
+    return Map.copyOf(swift);
+  }
+
+  private static SwiftPath swiftPath(String path) {
+    String normalized = normalize(path);
+    SwiftPath parsed;
+    try {
+      parsed = SWIFT_PATHS.parse(normalized);
+    } catch (IllegalArgumentException e) {
+      return null;
+    }
+    if (parsed.kind() == SwiftPath.Kind.UNKNOWN) {
+      String[] segments = normalized.split("/", -1);
+      if (segments.length == 4
+          && SwiftToolsVersions.fromManifestFilename(segments[3]).isPresent()) {
+        parsed = SWIFT_PATHS.parse(
+            segments[0] + "/" + segments[1] + "/" + segments[2] + "/Package.swift");
+      }
+    }
+    return parsed.kind() == SwiftPath.Kind.SOURCE_ARCHIVE
+            || parsed.kind() == SwiftPath.Kind.MANIFEST
+        ? parsed
+        : null;
   }
 
   private static boolean isCargoDynamicConfig(RepositoryRecord repository, String storagePath) {
@@ -218,6 +542,7 @@ public class BrowseAssetDetailService {
         Map.of(),
         Map.of(),
         Map.of(),
+        Map.of(),
         provenance);
   }
 
@@ -242,6 +567,7 @@ public class BrowseAssetDetailService {
         null,
         Map.of(),
         content,
+        Map.of(),
         Map.of(),
         Map.of(),
         Map.of(),
@@ -288,7 +614,9 @@ public class BrowseAssetDetailService {
           .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Asset not found"));
       return new ResolvedAsset(visibleRepository, asset, null);
     }
-    List<RepositoryRecord> members = repositoryDao.listMembers(visibleRepository.id());
+    List<RepositoryRecord> members = visibleRepository.format() == RepositoryFormat.SWIFT
+        ? BrowseRepositorySources.swiftSources(visibleRepository, repositoryDao)
+        : repositoryDao.listMembers(visibleRepository.id());
     if (sourceRepositoryName != null && !sourceRepositoryName.isBlank()) {
       RepositoryRecord source = members.stream()
           .filter(member -> member.name().equals(sourceRepositoryName))
@@ -908,5 +1236,6 @@ public class BrowseAssetDetailService {
       Map<String, Object> npm,
       Map<String, Object> pub,
       Map<String, Object> composer,
+      Map<String, Object> swift,
       Map<String, Object> provenance) {}
 }

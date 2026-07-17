@@ -6,6 +6,7 @@ import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.ComponentSearchRow;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
@@ -16,6 +17,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.LinkedHashMap;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -31,14 +34,25 @@ public class ComponentSearchController {
   private final ComponentDao componentDao;
   private final SecurityAuthenticationService authenticationService;
   private final SecurityManagementService securityService;
+  private final SwiftRegistryDao swiftRegistry;
+
+  @Autowired
+  public ComponentSearchController(
+      ComponentDao componentDao,
+      SecurityAuthenticationService authenticationService,
+      SecurityManagementService securityService,
+      SwiftRegistryDao swiftRegistry) {
+    this.componentDao = componentDao;
+    this.authenticationService = authenticationService;
+    this.securityService = securityService;
+    this.swiftRegistry = swiftRegistry;
+  }
 
   public ComponentSearchController(
       ComponentDao componentDao,
       SecurityAuthenticationService authenticationService,
       SecurityManagementService securityService) {
-    this.componentDao = componentDao;
-    this.authenticationService = authenticationService;
-    this.securityService = securityService;
+    this(componentDao, authenticationService, securityService, null);
   }
 
   @GetMapping
@@ -57,12 +71,12 @@ public class ComponentSearchController {
         .filter(row -> !BrowseAssetVisibility.hidden(row.format(), row.name())
             && !BrowseAssetVisibility.hidden(row.format(), row.storagePath()))
         .filter(row -> repositoryBrowseAllowed(subject, row, browseDecisions))
-        .map(ComponentSearchController::toItem)
+        .map(this::toItem)
         .toList();
     return new ComponentSearchResponse(Math.max(1, Math.min(effectiveLimit, DEFAULT_LIMIT)), items.size(), items);
   }
 
-  private static ComponentSearchItem toItem(ComponentSearchRow row) {
+  private ComponentSearchItem toItem(ComponentSearchRow row) {
     return new ComponentSearchItem(
         row.repositoryName(),
         formatLabel(row.format()),
@@ -71,7 +85,40 @@ public class ComponentSearchController {
         row.version(),
         row.kind(),
         row.lastUpdatedAt(),
-        browsePath(row));
+        browsePath(row),
+        swiftDetails(row));
+  }
+
+  private Map<String, Object> swiftDetails(ComponentSearchRow row) {
+    if (swiftRegistry == null || row.format() != RepositoryFormat.SWIFT
+        || row.namespace() == null || row.name() == null || row.version() == null) {
+      return Map.of();
+    }
+    return swiftRegistry.findRelease(
+            row.repositoryId(),
+            row.namespace().toLowerCase(Locale.ROOT),
+            row.name().toLowerCase(Locale.ROOT),
+            row.version())
+        .map(release -> {
+          LinkedHashMap<String, Object> details = new LinkedHashMap<>();
+          details.put("checksum", release.archiveSha256());
+          details.put("signatureStatus",
+              release.signatureFormat() == null ? "unsigned" : "signed");
+          if (release.signatureFormat() != null) {
+            details.put("signatureFormat", release.signatureFormat());
+          }
+          details.put("sourceKind", release.sourceKind());
+          details.put("sourceRepository", row.repositoryName());
+          List<String> toolsVersions = swiftRegistry.listManifests(release.id()).stream()
+              .map(SwiftRegistryDao.Manifest::toolsVersion)
+              .filter(value -> value != null && !value.isBlank())
+              .distinct()
+              .sorted()
+              .toList();
+          details.put("swiftToolsVersions", toolsVersions);
+          return Map.copyOf(details);
+        })
+        .orElseGet(Map::of);
   }
 
   private static String browsePath(ComponentSearchRow row) {
@@ -98,6 +145,7 @@ public class ComponentSearchController {
       case "pub" -> RepositoryFormat.PUB;
       case "composer" -> RepositoryFormat.COMPOSER;
       case "terraform" -> RepositoryFormat.TERRAFORM;
+      case "swift" -> RepositoryFormat.SWIFT;
       case "raw" -> RepositoryFormat.RAW;
       default -> null;
     };
@@ -158,6 +206,7 @@ public class ComponentSearchController {
       String version,
       String kind,
       Instant lastUpdatedAt,
-      String browsePath) {
+      String browsePath,
+      Map<String, Object> details) {
   }
 }

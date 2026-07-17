@@ -1,0 +1,130 @@
+name: kkrepo-swift-s3-e2e
+
+services:
+  postgresql:
+    image: postgres:17-alpine
+    command: ["postgres", "-c", "max_connections=300"]
+    environment:
+      POSTGRES_DB: kkrepo
+      POSTGRES_USER: kkrepo
+      POSTGRES_PASSWORD: kkrepo
+      TZ: Asia/Shanghai
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+    volumes:
+      - postgresql-data:/var/lib/postgresql/data
+
+  nexus-postgresql:
+    image: postgres:16-alpine
+    command: ["postgres", "-c", "max_connections=300"]
+    environment:
+      POSTGRES_DB: nexus
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: nexus
+      TZ: Asia/Shanghai
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+    volumes:
+      - nexus-postgresql-data:/var/lib/postgresql/data
+      - ./scripts/docker-compat/nexus-postgres-init.sql:/docker-entrypoint-initdb.d/01-nexus.sql:ro
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+    volumes:
+      - minio-data:/data
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        mc alias set local http://minio:9000 minioadmin minioadmin
+        mc mb --ignore-existing local/kkrepo-swift
+        mc anonymous set private local/kkrepo-swift
+        mc stat local/kkrepo-swift
+
+  nexus:
+    image: ${NEXUS_COMPAT_IMAGE:-sonatype/nexus3:3.94.0}
+    depends_on:
+      nexus-postgresql:
+        condition: service_healthy
+    environment:
+      INSTALL4J_ADD_VM_PARAMS: >-
+        -Xms512m -Xmx1536m -XX:MaxDirectMemorySize=1536m
+        -Dnexus.scripts.allowCreation=true
+        -Dnexus.datastore.enabled=true
+        -Dnexus.datastore.nexus.jdbcUrl=jdbc:postgresql://nexus-postgresql:5432/nexus?currentSchema=nexus
+        -Dnexus.datastore.nexus.username=nexus
+        -Dnexus.datastore.nexus.password=nexus
+    ports:
+      - "${SWIFT_S3_NEXUS_PORT:-48090}:8081"
+    volumes:
+      - nexus-data:/nexus-data
+
+  primary:
+    image: ${KKREPO_SWIFT_S3_IMAGE:-kkrepo:swift-s3-e2e}
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment: &kkrepo-environment
+      KKREPO_DATABASE_TYPE: postgresql
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgresql:5432/kkrepo
+      SPRING_DATASOURCE_USERNAME: kkrepo
+      SPRING_DATASOURCE_PASSWORD: kkrepo
+      KKREPO_MANAGEMENT_PORT: "8081"
+      KKREPO_CREDENTIAL_SECRET: ci-swift-s3-credential-secret-not-for-production
+      KKREPO_API_KEY_PAYLOAD_SECRET: ci-swift-s3-api-key-secret-not-for-production
+      KKREPO_LOGIN_RATE_LIMIT_PER_MINUTE: "200"
+      KKREPO_BOOTSTRAP_RATE_LIMIT_PER_MINUTE: "50"
+      KKREPO_UPLOAD_MAX_REQUEST_BYTES: "4194304"
+      SPRING_SERVLET_MULTIPART_MAX_FILE_SIZE: 4MB
+      SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE: 4MB
+      SERVER_TOMCAT_MAX_HTTP_FORM_POST_SIZE: 4MB
+      KKREPO_FILE_ENABLED: "false"
+      KKREPO_OUTBOUND_ALLOW_PRIVATE_ADDRESSES: "true"
+      JAVA_OPTS: -Xms256m -Xmx768m
+    ports:
+      - "${SWIFT_S3_PRIMARY_PORT:-38090}:8080"
+      - "${SWIFT_S3_PRIMARY_MANAGEMENT_PORT:-38091}:8081"
+
+  secondary:
+    image: ${KKREPO_SWIFT_S3_IMAGE:-kkrepo:swift-s3-e2e}
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment: *kkrepo-environment
+    ports:
+      - "${SWIFT_S3_SECONDARY_PORT:-38094}:8080"
+      - "${SWIFT_S3_SECONDARY_MANAGEMENT_PORT:-38095}:8081"
+
+volumes:
+  postgresql-data:
+  nexus-postgresql-data:
+  minio-data:
+  nexus-data:

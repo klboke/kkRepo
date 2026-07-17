@@ -145,6 +145,12 @@ public class AssetDaoAdapter implements AssetDao {
   }
 
   @Override
+  public List<AssetRecord> claimStaleAssetsByPrefix(
+      long arg0, String arg1, Instant arg2, int arg3) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
   public List<HelmIndexRow> listHelmIndexRows(long arg0) {
     throw new UnsupportedOperationException();
   }

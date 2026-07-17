@@ -30,6 +30,10 @@ public class JsonColumns {
   }
 
   public String write(Map<String, Object> value) {
+    return writeValue(value == null ? Map.of() : value);
+  }
+
+  public String writeValue(Object value) {
     try {
       return objectMapper.writeValueAsString(value == null ? Map.of() : value);
     } catch (JsonProcessingException e) {
@@ -64,11 +68,16 @@ public class JsonColumns {
   }
 
   public Map<String, Object> read(String value) {
+    Map<String, Object> result = readValue(value, MAP_TYPE);
+    return result == null ? Map.of() : result;
+  }
+
+  public <T> T readValue(String value, TypeReference<T> type) {
     if (value == null || value.isBlank()) {
-      return Map.of();
+      return null;
     }
     try {
-      return objectMapper.readValue(value, MAP_TYPE);
+      return objectMapper.readValue(value, type);
     } catch (JsonProcessingException e) {
       throw new IllegalArgumentException("Failed to deserialize JSON column", e);
     }

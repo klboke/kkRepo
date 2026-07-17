@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
@@ -14,11 +15,13 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.PubUploadSessionDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDataMigrationDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.MigrationCheckpointRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.PubUploadSessionRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryDataMigrationAssetRecord;
@@ -39,6 +42,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
 import java.util.function.Supplier;
@@ -99,12 +103,413 @@ public abstract class PersistenceApiContract {
         "security_user_role",
         "spring_session",
         "spring_session_attributes",
+        "swift_coordinate_lease",
+        "swift_group_source_binding",
+        "swift_manifest",
+        "swift_proxy_inventory",
+        "swift_proxy_negative_cache",
+        "swift_proxy_source",
+        "swift_release",
+        "swift_release_tombstone",
+        "swift_repository_url",
         "terraform_provider_platform",
         "terraform_provider_signing_state",
         "terraform_publish_lease",
         "terraform_signing_key",
         "terraform_source_binding",
         "ui_settings"), databaseTables());
+  }
+
+  @Test
+  void swiftRegistryStateIsImmutableFencedAndSharedAcrossReplicas() {
+    long repositoryId = createRepository("swift-hosted", RepositoryFormat.SWIFT);
+    long groupRepositoryId = createRepository("swift-group", RepositoryFormat.SWIFT);
+    long otherMemberId = createRepository("swift-other-member", RepositoryFormat.SWIFT);
+    long blobStoreId = stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
+    Instant now = Instant.parse("2026-07-16T08:00:00Z");
+
+    long componentId = stores().components().upsertReturningId(component(
+        repositoryId, RepositoryFormat.SWIFT, "acme", "fixture", "1.2.3",
+        Map.of("kind", "swift-package-release"), now));
+    long archiveBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "swift/acme/fixture/1.2.3.zip", "swift-archive-ref"));
+    String archivePath = "acme/fixture/1.2.3.zip";
+    long archiveAssetId = stores().assets().insertAsset(new AssetRecord(
+        null, repositoryId, componentId, archiveBlobId, RepositoryFormat.SWIFT, archivePath,
+        PersistenceHashes.pathHash(archivePath), "1.2.3.zip", "source-archive",
+        "application/zip", 42L, null, now, Map.of()));
+    long manifestBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "swift/acme/fixture/Package.swift", "swift-manifest-ref"));
+    String manifestPath = "acme/fixture/1.2.3/Package.swift";
+    long manifestAssetId = stores().assets().insertAsset(new AssetRecord(
+        null, repositoryId, componentId, manifestBlobId, RepositoryFormat.SWIFT, manifestPath,
+        PersistenceHashes.pathHash(manifestPath), "Package.swift", "manifest", "text/x-swift",
+        42L, null, now, Map.of("toolsVersion", "5.9")));
+
+    SwiftRegistryDao registry = stores().swiftRegistry();
+    assertEquals(0, registry.currentRepositoryRevision(repositoryId));
+    long revision = registry.nextRepositoryRevision(repositoryId);
+    assertEquals(1, revision);
+    SwiftRegistryDao.Release release = new SwiftRegistryDao.Release(
+        null, repositoryId, componentId, "acme", "Acme", "fixture", "Fixture", "1.2.3",
+        now, "{\"repositoryURLs\":[\"https://github.com/acme/fixture\"]}", "a".repeat(64),
+        archiveAssetId, null, null, null, "HOSTED", revision,
+        SwiftRegistryDao.RELEASE_READY, now, now);
+    SwiftRegistryDao.Release stored = inTransaction(() -> registry.insertRelease(
+        release,
+        List.of(new SwiftRegistryDao.Manifest(
+            null, "Package.swift", "", manifestAssetId, "b".repeat(64), "5.9")),
+        List.of(new SwiftRegistryDao.RepositoryUrl(
+            null, null, repositoryId, "acme", "fixture",
+            "https://github.com/acme/fixture", "https://github.com/Acme/Fixture"))));
+
+    assertNotNull(stored.id());
+    assertEquals(1, registry.listReleases(repositoryId, "acme", "fixture").size());
+    assertEquals(manifestAssetId,
+        registry.findManifest(stored.id(), null).orElseThrow().assetId());
+    assertEquals("5.9",
+        registry.findManifest(stored.id(), null).orElseThrow().declaredToolsVersion());
+    assertEquals(
+        Map.of(repositoryId, revision, groupRepositoryId, 0L),
+        registry.currentRepositoryRevisions(List.of(repositoryId, groupRepositoryId)));
+    assertEquals("Acme", registry.findIdentities(
+        repositoryId, "https://github.com/acme/fixture").getFirst().scopeDisplay());
+    assertEquals(
+        List.of("https://github.com/acme/fixture"),
+        registry.listRepositoryUrls(repositoryId, "acme", "fixture").stream()
+            .map(SwiftRegistryDao.RepositoryUrl::normalizedUrl)
+            .toList());
+    assertThrows(RuntimeException.class, () -> inTransaction(() -> registry.insertRelease(
+        release, List.of(), List.of())));
+    assertEquals(1, registry.listReleases(repositoryId, "acme", "fixture").size());
+
+    for (String distinctVersion : List.of(
+        "1.0.0-alpha", "1.0.0-ALPHA", "1.0.0+build.one", "1.0.0+build.two")) {
+      insertSwiftReleaseFixture(
+          registry, repositoryId, blobStoreId, distinctVersion, now.plusSeconds(10));
+    }
+    assertEquals(
+        Set.of("1.2.3", "1.0.0-alpha", "1.0.0-ALPHA",
+            "1.0.0+build.one", "1.0.0+build.two"),
+        registry.listReleases(repositoryId, "acme", "fixture").stream()
+            .map(SwiftRegistryDao.Release::version)
+            .collect(java.util.stream.Collectors.toSet()),
+        "SemVer prerelease and build identifiers must remain case-sensitive on every database");
+
+    SwiftRegistryDao.ProxySource firstSource = registry.bindProxySource(
+        new SwiftRegistryDao.ProxySource(
+            repositoryId, "acme", "fixture", "1.2.3", "https://github.com/acme/fixture",
+            "v1.2.3", "c".repeat(40), "github-archive-v1", null, "DISCOVERED", null,
+            now, revision, 0, now));
+    SwiftRegistryDao.ProxySource movedTag = registry.bindProxySource(
+        new SwiftRegistryDao.ProxySource(
+            repositoryId, "acme", "fixture", "1.2.3", "https://github.com/acme/fixture",
+            "v1.2.3", "d".repeat(40), "github-archive-v1", null, "DISCOVERED", null,
+            now.plusSeconds(1), revision, 0, now.plusSeconds(1)));
+    assertEquals(firstSource.commitSha(), movedTag.commitSha());
+    assertEquals(2, movedTag.observedCount());
+    assertEquals(List.of("1.2.3"), registry.listProxySources(
+        repositoryId, "acme", "fixture").stream()
+        .map(SwiftRegistryDao.ProxySource::version)
+        .toList());
+    assertEquals(now.plusSeconds(1), registry.listProxySources(
+        repositoryId, "acme", "fixture").getFirst().lastCheckedAt());
+
+    List<SwiftRegistryDao.ProxySource> bulkSources = registry.bindProxySources(List.of(
+        new SwiftRegistryDao.ProxySource(
+            repositoryId, "acme", "fixture", "1.2.3", "https://github.com/acme/fixture",
+            "v1.2.3", "e".repeat(40), "github-archive-v1", null, "DISCOVERED", null,
+            now.plusSeconds(2), revision, 0, now.plusSeconds(2)),
+        new SwiftRegistryDao.ProxySource(
+            repositoryId, "acme", "fixture", "2.0.0", "https://github.com/acme/fixture",
+            "v2.0.0", "f".repeat(40), "github-archive-v1", null, "DISCOVERED", null,
+            now.plusSeconds(2), revision, 0, now.plusSeconds(2))));
+    assertEquals(List.of("1.2.3", "2.0.0"), bulkSources.stream()
+        .map(SwiftRegistryDao.ProxySource::version)
+        .toList());
+    assertEquals(firstSource.commitSha(), bulkSources.getFirst().commitSha());
+    assertEquals(3, bulkSources.getFirst().observedCount());
+
+    SwiftRegistryDao.ProxyInventory inventory = new SwiftRegistryDao.ProxyInventory(
+        repositoryId,
+        "acme",
+        "fixture",
+        revision,
+        now.plusSeconds(3),
+        Map.of("1", List.of(new SwiftRegistryDao.ProxyTag(
+            "1.2.3", "v1.2.3", firstSource.commitSha()))),
+        Map.of("1", "github-page-one"));
+    registry.upsertProxyInventory(inventory);
+    assertEquals(inventory,
+        registry.findProxyInventory(repositoryId, "acme", "fixture").orElseThrow());
+
+    registry.bindProxySources(List.of(
+        new SwiftRegistryDao.ProxySource(
+            repositoryId, "acme", "pruned", "1.0.0", "https://github.com/acme/pruned",
+            "v1.0.0", "1".repeat(40), "github-archive-v1", null, "DISCOVERED", null,
+            null, revision, 0, now),
+        new SwiftRegistryDao.ProxySource(
+            repositoryId, "acme", "pruned", "2.0.0", "https://github.com/acme/pruned",
+            "v2.0.0", "2".repeat(40), "github-archive-v1", null, "DISCOVERED", null,
+            null, revision, 0, now)));
+    List<SwiftRegistryDao.ProxySource> replacedSources = registry.replaceProxySources(
+        repositoryId,
+        "acme",
+        "pruned",
+        List.of(new SwiftRegistryDao.ProxySource(
+            repositoryId, "acme", "pruned", "2.0.0", "https://github.com/acme/pruned",
+            "v2.0.0", "2".repeat(40), "github-archive-v1", null, "DISCOVERED", null,
+            null, revision, 0, now.plusSeconds(1))));
+    assertEquals(List.of("2.0.0"), replacedSources.stream()
+        .map(SwiftRegistryDao.ProxySource::version)
+        .toList());
+    assertEquals(List.of("2.0.0"), registry.listProxySources(
+        repositoryId, "acme", "pruned").stream()
+        .map(SwiftRegistryDao.ProxySource::version)
+        .toList());
+    assertTrue(registry.replaceProxySources(
+        repositoryId, "acme", "pruned", List.of()).isEmpty());
+    assertTrue(registry.listProxySources(repositoryId, "acme", "pruned").isEmpty());
+
+    SwiftRegistryDao.Lease lowerCasePrereleaseLease = registry.tryAcquireLease(
+        "swift:acme:fixture:1.0.0-alpha", "replica-a", Instant.now().plusSeconds(30))
+        .orElseThrow();
+    SwiftRegistryDao.Lease upperCasePrereleaseLease = registry.tryAcquireLease(
+        "swift:acme:fixture:1.0.0-ALPHA", "replica-b", Instant.now().plusSeconds(30))
+        .orElseThrow();
+    assertNotEquals(
+        lowerCasePrereleaseLease.leaseKey(), upperCasePrereleaseLease.leaseKey(),
+        "coordinate leases must preserve SemVer identifier case");
+    registry.releaseLease(
+        lowerCasePrereleaseLease.leaseKey(), lowerCasePrereleaseLease.owner(),
+        lowerCasePrereleaseLease.fencingToken());
+    registry.releaseLease(
+        upperCasePrereleaseLease.leaseKey(), upperCasePrereleaseLease.owner(),
+        upperCasePrereleaseLease.fencingToken());
+
+    SwiftRegistryDao.Lease firstLease = registry.tryAcquireLease(
+        "swift:acme:fixture:1.2.3", "replica-a", Instant.now().plusSeconds(30)).orElseThrow();
+    assertTrue(registry.tryAcquireLease(
+        "swift:acme:fixture:1.2.3", "replica-b", Instant.now().plusSeconds(30)).isEmpty());
+    assertFalse(registry.completeProxySource(
+        repositoryId, "acme", "fixture", "1.2.3", firstSource.commitSha(), "e".repeat(64),
+        "READY", stored.id(), now, revision, firstLease.leaseKey(), firstLease.owner(),
+        firstLease.fencingToken() + 1));
+    assertTrue(registry.completeProxySource(
+        repositoryId, "acme", "fixture", "1.2.3", firstSource.commitSha(), "e".repeat(64),
+        "READY", stored.id(), now, revision, firstLease.leaseKey(), firstLease.owner(),
+        firstLease.fencingToken()));
+    registry.releaseLease(firstLease.leaseKey(), firstLease.owner(), firstLease.fencingToken());
+    SwiftRegistryDao.Lease secondLease = registry.tryAcquireLease(
+        firstLease.leaseKey(), "replica-b", Instant.now().plusSeconds(30)).orElseThrow();
+    assertTrue(secondLease.fencingToken() > firstLease.fencingToken());
+    assertFalse(registry.renewLease(
+        firstLease.leaseKey(), firstLease.owner(), firstLease.fencingToken(),
+        Instant.now().plusSeconds(60)));
+    assertTrue(registry.renewLease(
+        secondLease.leaseKey(), secondLease.owner(), secondLease.fencingToken(),
+        Instant.now().plusSeconds(60)));
+
+    long groupConfigRevision = registry.nextRepositoryRevision(groupRepositoryId);
+    assertTrue(inTransaction(() -> registry.upsertGroupSourceBindingIfCurrent(
+        new SwiftRegistryDao.GroupSourceBinding(
+            groupRepositoryId, "acme", "fixture", "1.2.3", repositoryId, stored.id(),
+            revision, groupConfigRevision, now))));
+    assertTrue(inTransaction(() -> registry.upsertGroupSourceBindingIfCurrent(
+        new SwiftRegistryDao.GroupSourceBinding(
+            groupRepositoryId, "acme", "fixture", "1.2.3", otherMemberId, stored.id(),
+            revision, groupConfigRevision, now.plusMillis(500)))));
+    assertEquals(repositoryId, registry.findGroupSourceBinding(
+        groupRepositoryId, "acme", "fixture", "1.2.3").orElseThrow().memberRepositoryId(),
+        "the first binding for one configuration revision remains canonical across replicas");
+    long updatedGroupConfigRevision = registry.nextRepositoryRevision(groupRepositoryId);
+    assertFalse(inTransaction(() -> registry.upsertGroupSourceBindingIfCurrent(
+        new SwiftRegistryDao.GroupSourceBinding(
+            groupRepositoryId, "acme", "fixture", "1.2.3", otherMemberId, stored.id(),
+            revision, groupConfigRevision, now.plusSeconds(1)))));
+    assertEquals(repositoryId, registry.findGroupSourceBinding(
+        groupRepositoryId, "acme", "fixture", "1.2.3").orElseThrow().memberRepositoryId());
+    registry.deleteGroupSourceBindings(groupRepositoryId);
+    assertFalse(inTransaction(() -> registry.upsertGroupSourceBindingIfCurrent(
+        new SwiftRegistryDao.GroupSourceBinding(
+            groupRepositoryId, "acme", "fixture", "1.2.3", repositoryId, stored.id(),
+            revision, groupConfigRevision, now.plusSeconds(2)))));
+    assertTrue(registry.findGroupSourceBinding(
+        groupRepositoryId, "acme", "fixture", "1.2.3").isEmpty());
+    assertTrue(inTransaction(() -> registry.upsertGroupSourceBindingIfCurrent(
+        new SwiftRegistryDao.GroupSourceBinding(
+            groupRepositoryId, "acme", "fixture", "1.2.3", otherMemberId, stored.id(),
+            revision, updatedGroupConfigRevision, now.plusSeconds(3)))));
+    assertEquals(otherMemberId, registry.findGroupSourceBinding(
+        groupRepositoryId, "acme", "fixture", "1.2.3").orElseThrow().memberRepositoryId());
+
+    registry.putNegativeCache(new SwiftRegistryDao.NegativeCache(
+        repositoryId, "github:missing", 404, null, Instant.now().plusSeconds(30), now));
+    assertEquals(404, registry.findNegativeCache(
+        repositoryId, "github:missing").orElseThrow().statusCode());
+    assertEquals(1, registry.deleteExpiredNegativeCache(Instant.now().plusSeconds(60)));
+
+    long tombstoneRevision = registry.nextRepositoryRevision(repositoryId);
+    registry.tombstoneRelease(new SwiftRegistryDao.Tombstone(
+        repositoryId, "acme", "fixture", "1.2.3", "deleted", tombstoneRevision, now));
+    assertTrue(registry.findRelease(repositoryId, "acme", "fixture", "1.2.3").isEmpty());
+    assertEquals(tombstoneRevision, registry.findTombstone(
+        repositoryId, "acme", "fixture", "1.2.3").orElseThrow().revision());
+    assertEquals(List.of("1.2.3"), registry.listTombstones(
+        repositoryId, "acme", "fixture").stream()
+        .map(SwiftRegistryDao.Tombstone::version)
+        .toList());
+
+    long migrationJobId = stores().migrationJobs().create(
+        "3.94.0", "/nexus-data", Map.of("scope", "swift", "dryRun", false));
+    MigrationCheckpointRecord checkpoint = new MigrationCheckpointRecord(
+        migrationJobId, "component", "swift-package-release", "#12:0", "swift_release",
+        stored.id().toString(), "f".repeat(64), now);
+    stores().migrationCheckpoints().upsert(checkpoint);
+    stores().migrationCheckpoints().upsert(checkpoint);
+    assertEquals(stored.id().toString(), stores().migrationCheckpoints().find(
+        migrationJobId, "component", "swift-package-release", "#12:0")
+        .orElseThrow().targetId());
+  }
+
+  @Test
+  void swiftMemberMutationsRecursivelyInvalidateGroupBindingsInTheSameTransaction() {
+    long memberRepositoryId = createRepository("swift-member", RepositoryFormat.SWIFT);
+    long groupRepositoryId = createRepository(
+        "swift-inner-group", RepositoryFormat.SWIFT, RepositoryType.GROUP);
+    long outerGroupRepositoryId = createRepository(
+        "swift-outer-group", RepositoryFormat.SWIFT, RepositoryType.GROUP);
+    stores().repositories().addMember(groupRepositoryId, memberRepositoryId, 0);
+    stores().repositories().addMember(outerGroupRepositoryId, groupRepositoryId, 0);
+    SwiftRegistryDao registry = stores().swiftRegistry();
+    long blobStoreId = stores().repositories().findById(memberRepositoryId)
+        .orElseThrow().blobStoreId();
+    Instant now = Instant.parse("2026-07-16T09:00:00Z");
+
+    SwiftRegistryDao.Release first = insertSwiftReleaseFixture(
+        registry, memberRepositoryId, blobStoreId, "1.0.0", now);
+    long innerRevision = registry.currentRepositoryRevision(groupRepositoryId);
+    long outerRevision = registry.currentRepositoryRevision(outerGroupRepositoryId);
+    assertTrue(innerRevision > 0);
+    assertTrue(outerRevision > 0);
+    assertTrue(inTransaction(() -> registry.upsertGroupSourceBindingIfCurrent(
+        new SwiftRegistryDao.GroupSourceBinding(
+            groupRepositoryId, "acme", "fixture", first.version(), memberRepositoryId,
+            first.id(), first.revision(), innerRevision, now))));
+    assertTrue(inTransaction(() -> registry.upsertGroupSourceBindingIfCurrent(
+        new SwiftRegistryDao.GroupSourceBinding(
+            outerGroupRepositoryId, "acme", "fixture", first.version(), groupRepositoryId,
+            first.id(), first.revision(), outerRevision, now))));
+
+    SwiftRegistryDao.Release second = insertSwiftReleaseFixture(
+        registry, memberRepositoryId, blobStoreId, "2.0.0", now.plusSeconds(1));
+
+    long innerAfterPublish = registry.currentRepositoryRevision(groupRepositoryId);
+    long outerAfterPublish = registry.currentRepositoryRevision(outerGroupRepositoryId);
+    assertTrue(innerAfterPublish > innerRevision);
+    assertTrue(outerAfterPublish > outerRevision);
+    assertTrue(registry.findGroupSourceBinding(
+        groupRepositoryId, "acme", "fixture", first.version()).isEmpty());
+    assertTrue(registry.findGroupSourceBinding(
+        outerGroupRepositoryId, "acme", "fixture", first.version()).isEmpty());
+
+    assertTrue(inTransaction(() -> registry.upsertGroupSourceBindingIfCurrent(
+        new SwiftRegistryDao.GroupSourceBinding(
+            groupRepositoryId, "acme", "fixture", second.version(), memberRepositoryId,
+            second.id(), second.revision(), innerAfterPublish, now.plusSeconds(1)))));
+    assertTrue(inTransaction(() -> registry.upsertGroupSourceBindingIfCurrent(
+        new SwiftRegistryDao.GroupSourceBinding(
+            outerGroupRepositoryId, "acme", "fixture", second.version(), groupRepositoryId,
+            second.id(), second.revision(), outerAfterPublish, now.plusSeconds(1)))));
+
+    assertThrows(IllegalStateException.class, () -> inTransaction(() -> {
+      registry.tombstoneAndDeleteReleaseState(
+          memberRepositoryId, "acme", "fixture", second.version(), "rollback", now.plusSeconds(2))
+          .orElseThrow();
+      throw new IllegalStateException("force rollback");
+    }));
+    assertEquals(innerAfterPublish, registry.currentRepositoryRevision(groupRepositoryId));
+    assertEquals(outerAfterPublish, registry.currentRepositoryRevision(outerGroupRepositoryId));
+    assertTrue(registry.findGroupSourceBinding(
+        groupRepositoryId, "acme", "fixture", second.version()).isPresent());
+    assertTrue(registry.findGroupSourceBinding(
+        outerGroupRepositoryId, "acme", "fixture", second.version()).isPresent());
+    assertTrue(registry.findRelease(
+        memberRepositoryId, "acme", "fixture", second.version()).isPresent());
+    assertTrue(registry.findTombstone(
+        memberRepositoryId, "acme", "fixture", second.version()).isEmpty());
+
+    SwiftRegistryDao.DeletedRelease deleted = inTransaction(() ->
+        registry.tombstoneAndDeleteReleaseState(
+            memberRepositoryId, "acme", "fixture", second.version(), "deleted",
+            now.plusSeconds(3)).orElseThrow());
+
+    assertEquals(second.componentId(), deleted.componentId());
+    assertTrue(registry.currentRepositoryRevision(groupRepositoryId) > innerAfterPublish);
+    assertTrue(registry.currentRepositoryRevision(outerGroupRepositoryId) > outerAfterPublish);
+    assertTrue(registry.findGroupSourceBinding(
+        groupRepositoryId, "acme", "fixture", second.version()).isEmpty());
+    assertTrue(registry.findGroupSourceBinding(
+        outerGroupRepositoryId, "acme", "fixture", second.version()).isEmpty());
+    assertTrue(registry.findRelease(
+        memberRepositoryId, "acme", "fixture", second.version()).isEmpty());
+    assertTrue(registry.findTombstone(
+        memberRepositoryId, "acme", "fixture", second.version()).isPresent());
+  }
+
+  @Test
+  void swiftAdministrativeDeleteSerializesWithTheCoordinatePublishFence() throws Exception {
+    long repositoryId = createRepository("swift-delete-fence", RepositoryFormat.SWIFT);
+    long blobStoreId = stores().repositories().findById(repositoryId)
+        .orElseThrow().blobStoreId();
+    SwiftRegistryDao registry = stores().swiftRegistry();
+    String version = "3.0.0";
+    insertSwiftReleaseFixture(
+        registry, repositoryId, blobStoreId, version, Instant.parse("2026-07-16T10:00:00Z"));
+    String leaseKey = "swift:" + repositoryId + ":acme:fixture:" + version;
+    SwiftRegistryDao.Lease lease = registry.tryAcquireLease(
+        leaseKey, "publishing-replica", Instant.now().plusSeconds(30)).orElseThrow();
+    CountDownLatch publishFenceLocked = new CountDownLatch(1);
+    CountDownLatch allowPublishCommit = new CountDownLatch(1);
+
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var publishing = executor.submit(() -> inTransaction(() -> {
+        assertTrue(registry.renewLease(
+            lease.leaseKey(), lease.owner(), lease.fencingToken(), Instant.now().plusSeconds(30)));
+        publishFenceLocked.countDown();
+        await(allowPublishCommit);
+        assertTrue(registry.findTombstone(
+            repositoryId, "acme", "fixture", version).isEmpty());
+        return null;
+      }));
+      assertTrue(publishFenceLocked.await(30, java.util.concurrent.TimeUnit.SECONDS));
+
+      var deleting = executor.submit(() -> inTransaction(() ->
+          registry.tombstoneAndDeleteReleaseState(
+              repositoryId,
+              "acme",
+              "fixture",
+              version,
+              "administrative delete",
+              Instant.now()).orElseThrow()));
+
+      assertThrows(
+          java.util.concurrent.TimeoutException.class,
+          () -> deleting.get(250, java.util.concurrent.TimeUnit.MILLISECONDS),
+          "delete must wait for the in-transaction publication fence");
+      allowPublishCommit.countDown();
+      publishing.get(30, java.util.concurrent.TimeUnit.SECONDS);
+      assertEquals(
+          1L,
+          deleting.get(30, java.util.concurrent.TimeUnit.SECONDS).assetIds().size());
+    } finally {
+      allowPublishCommit.countDown();
+    }
+
+    assertTrue(registry.findRelease(
+        repositoryId, "acme", "fixture", version).isEmpty());
+    assertTrue(registry.findTombstone(
+        repositoryId, "acme", "fixture", version).isPresent());
   }
 
   @Test
@@ -406,6 +811,42 @@ public abstract class PersistenceApiContract {
   }
 
   @Test
+  void staleAssetPrefixClaimsAreBoundedAndPortable() {
+    long repositoryId = createRepository("swift-staging-cleanup", RepositoryFormat.SWIFT);
+    long blobStoreId = stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
+    long oldBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "swift/staging/old.zip", "swift-staging-old-ref"));
+    long freshBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "swift/staging/fresh.zip", "swift-staging-fresh-ref"));
+    long publicBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "swift/releases/public.zip", "swift-release-public-ref"));
+    String oldPath = ".swift/staging/old/source.zip";
+    String freshPath = ".swift/staging/fresh/source.zip";
+    String publicPath = "acme/demo/1.0.0.zip";
+    stores().assets().insertAsset(new AssetRecord(
+        null, repositoryId, null, oldBlobId, RepositoryFormat.SWIFT,
+        oldPath, sha256(oldPath), "source.zip", "swift", "application/zip", 42L,
+        null, Instant.parse("2026-07-13T08:00:00Z"), Map.of()));
+    stores().assets().insertAsset(new AssetRecord(
+        null, repositoryId, null, freshBlobId, RepositoryFormat.SWIFT,
+        freshPath, sha256(freshPath), "source.zip", "swift", "application/zip", 42L,
+        null, Instant.parse("2026-07-13T10:00:00Z"), Map.of()));
+    stores().assets().insertAsset(new AssetRecord(
+        null, repositoryId, null, publicBlobId, RepositoryFormat.SWIFT,
+        publicPath, sha256(publicPath), "1.0.0.zip", "swift", "application/zip", 42L,
+        null, Instant.parse("2026-07-13T08:00:00Z"), Map.of()));
+
+    List<AssetRecord> claimed = inTransaction(() -> stores().assets()
+        .claimStaleAssetsByPrefix(
+            repositoryId,
+            ".swift/staging/",
+            Instant.parse("2026-07-13T09:00:00Z"),
+            1));
+
+    assertEquals(List.of(oldPath), claimed.stream().map(AssetRecord::path).toList());
+  }
+
+  @Test
   void dockerUnreferencedBlobCleanupSqlIsPortable() {
     long dockerRepositoryId = createRepository("docker-cleanup", RepositoryFormat.DOCKER);
     long dockerBlobStoreId = stores().repositories().findById(dockerRepositoryId)
@@ -704,17 +1145,85 @@ public abstract class PersistenceApiContract {
   }
 
   private long createRepository(String name, RepositoryFormat format) {
+    return createRepository(name, format, RepositoryType.HOSTED);
+  }
+
+  private long createRepository(
+      String name, RepositoryFormat format, RepositoryType type) {
     long blobStoreId = stores().blobStores().insert(blobStore(name + "-store"));
-    return insertRepository(name, format, blobStoreId);
+    return insertRepository(name, format, type, blobStoreId);
+  }
+
+  private SwiftRegistryDao.Release insertSwiftReleaseFixture(
+      SwiftRegistryDao registry,
+      long repositoryId,
+      long blobStoreId,
+      String version,
+      Instant now) {
+    long componentId = stores().components().upsertReturningId(component(
+        repositoryId,
+        RepositoryFormat.SWIFT,
+        "acme",
+        "fixture",
+        version,
+        Map.of("kind", "swift-package-release"),
+        now));
+    String token = version.replaceAll("[^A-Za-z0-9]", "-");
+    long blobId = stores().assets().insertBlob(
+        blob(blobStoreId, "swift/acme/fixture/" + token + ".zip", "swift-" + token));
+    String path = "acme/fixture/" + version + ".zip";
+    long assetId = stores().assets().insertAsset(new AssetRecord(
+        null,
+        repositoryId,
+        componentId,
+        blobId,
+        RepositoryFormat.SWIFT,
+        path,
+        PersistenceHashes.pathHash(path),
+        version + ".zip",
+        "source-archive",
+        "application/zip",
+        42L,
+        null,
+        now,
+        Map.of()));
+    long revision = registry.nextRepositoryRevision(repositoryId);
+    SwiftRegistryDao.Release fixture = new SwiftRegistryDao.Release(
+        null,
+        repositoryId,
+        componentId,
+        "acme",
+        "Acme",
+        "fixture",
+        "Fixture",
+        version,
+        now,
+        "{}",
+        "a".repeat(64),
+        assetId,
+        null,
+        null,
+        null,
+        "HOSTED",
+        revision,
+        SwiftRegistryDao.RELEASE_READY,
+        now,
+        now);
+    return inTransaction(() -> registry.insertRelease(fixture, List.of(), List.of()));
   }
 
   private long insertRepository(String name, RepositoryFormat format, long blobStoreId) {
+    return insertRepository(name, format, RepositoryType.HOSTED, blobStoreId);
+  }
+
+  private long insertRepository(
+      String name, RepositoryFormat format, RepositoryType type, long blobStoreId) {
     return stores().repositories().insert(new RepositoryRecord(
         null,
         name,
         format,
-        RepositoryType.HOSTED,
-        format.id() + "-hosted",
+        type,
+        format.id() + "-" + type.name().toLowerCase(java.util.Locale.ROOT),
         true,
         blobStoreId,
         null,
@@ -781,6 +1290,17 @@ public abstract class PersistenceApiContract {
       barrier.await();
     } catch (Exception e) {
       throw new AssertionError("Failed to coordinate duplicate asset insert race", e);
+    }
+  }
+
+  private static void await(CountDownLatch latch) {
+    try {
+      if (!latch.await(30, java.util.concurrent.TimeUnit.SECONDS)) {
+        throw new IllegalStateException("Timed out waiting for concurrent transaction");
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("Interrupted while waiting for concurrent transaction", e);
     }
   }
 

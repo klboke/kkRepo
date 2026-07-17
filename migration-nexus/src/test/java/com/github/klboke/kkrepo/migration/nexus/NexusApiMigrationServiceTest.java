@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.migration.nexus;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -21,7 +22,9 @@ import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.NexusInventory;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.RepositoryDocument;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.SourceProbe;
 import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityExport;
+import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityMigrationWriter;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.MigrationJobDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
@@ -31,6 +34,7 @@ import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPairGenerator;
 import java.security.Security;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -53,6 +57,10 @@ import org.bouncycastle.openpgp.operator.jcajce.JcaPGPKeyPair;
 import org.bouncycastle.openpgp.operator.jcajce.JcaPGPContentSignerBuilder;
 import org.bouncycastle.openpgp.operator.jcajce.JcePBESecretKeyEncryptorBuilder;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 
 class NexusApiMigrationServiceTest {
 
@@ -417,6 +425,46 @@ class NexusApiMigrationServiceTest {
   }
 
   @Test
+  void swiftHostedContentRequiresVerifiedDatastoreProfile() {
+    NexusApiMigrationService service = service(new FakeBlobStoreDao(), new FakeRepositoryDao());
+    SourceProbe verified = new SourceProbe(
+        "3.94.0-01", true, true, true, "text/plain", "ok",
+        "DATASTORE_H2", "H2", "jdbc:h2:file:/nexus-data/db/nexus",
+        datastoreSchema(Map.of("swift", true)), List.of());
+    SourceProbe unknownModel = new SourceProbe(
+        "3.94.0-01", true, true, true, "text/plain", "ok",
+        "DATASTORE_H2", "H2", "jdbc:h2:file:/nexus-data/db/nexus",
+        datastoreSchema("swift", false), List.of());
+    List<RepositoryDocument> repositories = List.of(
+        repository("swift-hosted", "swift", "hosted", Map.of("storage", storage("default"))),
+        repository("swift-proxy", "swift", "proxy", Map.of(
+            "storage", storage("default"),
+            "proxy", Map.of("remoteUrl", "https://github.com/"))),
+        repository("swift-group", "swift", "group", Map.of(
+            "storage", storage("default"),
+            "group", Map.of("memberNames", List.of("swift-hosted", "swift-proxy")))));
+
+    NexusMigrationPreflight full = service.preflight(new NexusInventory(
+        List.of(Map.of("name", "default", "type", "File")), repositories,
+        NexusSecurityExport.empty(), List.of(), verified),
+        new NexusMigrationTargetBlobStore("default", "s3", null, null, null, "", Map.of()), null);
+    NexusMigrationPreflight manual = service.preflight(new NexusInventory(
+        List.of(Map.of("name", "default", "type", "File")), repositories,
+        NexusSecurityExport.empty(), List.of(), unknownModel),
+        new NexusMigrationTargetBlobStore("default", "s3", null, null, null, "", Map.of()), null);
+
+    assertEquals(3, full.supportedRepositories());
+    assertTrue(
+        full.sourceProfile().formatCapabilities().get("swift").contentMigration(),
+        () -> String.valueOf(full.sourceProfile().formatCapabilities().get("swift")));
+    assertEquals(SupportStatus.FULL, status(full, "swift-hosted"));
+    assertEquals(SupportStatus.CONFIG_ONLY, status(full, "swift-proxy"));
+    assertEquals(SupportStatus.CONFIG_ONLY, status(full, "swift-group"));
+    assertEquals(SupportStatus.NEEDS_MANUAL_ACTION, status(manual, "swift-hosted"));
+    assertTrue(manual.migrationPlan().manualActions().contains("repository:swift-hosted"));
+  }
+
+  @Test
   void migratesSupportedRepositoriesAndKeepsSourceGroupMembers() {
     FakeBlobStoreDao blobStores = new FakeBlobStoreDao();
     FakeRepositoryDao repositories = new FakeRepositoryDao();
@@ -490,6 +538,241 @@ class NexusApiMigrationServiceTest {
     assertEquals("https://pub.dev/", proxy.proxyRemoteUrl());
     assertEquals("https://pub.dev/", ((Map<?, ?>) proxy.attributes().get("proxy")).get("remoteUrl"));
     assertEquals(List.of("pub-hosted", "pub-proxy"), repositories.memberNames("pub-group"));
+  }
+
+  @Test
+  void migratesSwiftDefinitionsWithCanonicalGithubRemoteAndOrderedMembers() {
+    FakeBlobStoreDao blobStores = new FakeBlobStoreDao();
+    FakeRepositoryDao repositories = new FakeRepositoryDao();
+    NexusApiMigrationService service = service(blobStores, repositories);
+    NexusInventory inventory = new NexusInventory(
+        List.of(Map.of("name", "default")),
+        List.of(
+            repository("swift-hosted", "swift", "hosted", Map.of("storage", storage("default"))),
+            repository("swift-proxy", "swift", "proxy", Map.of(
+                "storage", storage("default"),
+                "proxy", Map.of("remoteUrl", "https://GITHUB.com:443"))),
+            repository("swift-group", "swift", "group", Map.of(
+                "storage", storage("default"),
+                "group", Map.of("memberNames", List.of("swift-proxy", "swift-hosted"))))),
+        NexusSecurityExport.empty(),
+        List.of());
+
+    ConfigMigrationCounts counts = service.migrateConfig(inventory, request("https://old-nexus.example"));
+
+    assertEquals(3, counts.repositories());
+    assertEquals(RepositoryFormat.SWIFT, repositories.required("swift-hosted").format());
+    assertEquals("swift-hosted", repositories.required("swift-hosted").recipeName());
+    assertEquals("https://github.com/", repositories.required("swift-proxy").proxyRemoteUrl());
+    assertEquals(List.of("swift-proxy", "swift-hosted"), repositories.memberNames("swift-group"));
+  }
+
+  @Test
+  void migratesSwiftProxyAuthenticationAndTtlsWithoutKeepingNestedSecrets() {
+    FakeRepositoryDao repositories = new FakeRepositoryDao();
+    NexusApiMigrationService service = service(new FakeBlobStoreDao(), repositories);
+    NexusInventory inventory = new NexusInventory(
+        List.of(Map.of("name", "default")),
+        List.of(
+            repository("swift-basic", "swift", "proxy", Map.of(
+                "storage", storage("default"),
+                "proxy", Map.of(
+                    "remoteUrl", "https://github.com/",
+                    "contentMaxAge", 17,
+                    "metadataMaxAge", "23"),
+                "httpClient", Map.of(
+                    "autoBlock", false,
+                    "authentication", Map.of(
+                        "type", "username",
+                        "username", "github-bot",
+                        "password", "basic-secret")))),
+            repository("swift-bearer", "swift", "proxy", Map.of(
+                "storage", storage("default"),
+                "proxy", Map.of("remoteUrl", "https://github.com/"),
+                "httpClient", Map.of(
+                    "autoBlock", true,
+                    "authentication", Map.of(
+                        "type", "bearerToken",
+                        "token", "github-token"))))),
+        NexusSecurityExport.empty(),
+        List.of());
+
+    service.migrateConfig(inventory, request("https://old-nexus.example"));
+
+    RepositoryRecord basic = repositories.required("swift-basic");
+    Map<?, ?> basicProxy = (Map<?, ?>) basic.attributes().get("proxy");
+    assertEquals(17, basicProxy.get("contentMaxAgeMinutes"));
+    assertEquals(23, basicProxy.get("metadataMaxAgeMinutes"));
+    assertEquals(false, basicProxy.get("autoBlock"));
+    assertEquals("github-bot", basicProxy.get("remoteUsername"));
+    assertEquals("basic-secret", basicProxy.get("remotePassword"));
+    assertFalse(basicProxy.containsKey("httpClient"));
+
+    Map<?, ?> sourceRepository = (Map<?, ?>) basic.attributes().get("sourceRepository");
+    Map<?, ?> sourceHttpClient = (Map<?, ?>) sourceRepository.get("httpClient");
+    Map<?, ?> sourceAuthentication = (Map<?, ?>) sourceHttpClient.get("authentication");
+    assertEquals("github-bot", sourceAuthentication.get("username"));
+    assertEquals("<redacted>", sourceAuthentication.get("password"));
+
+    RepositoryRecord bearer = repositories.required("swift-bearer");
+    Map<?, ?> bearerProxy = (Map<?, ?>) bearer.attributes().get("proxy");
+    assertEquals(true, bearerProxy.get("autoBlock"));
+    assertEquals("github-token", bearerProxy.get("remoteBearerToken"));
+    assertFalse(bearerProxy.containsKey("httpClient"));
+    Map<?, ?> bearerSource = (Map<?, ?>) bearer.attributes().get("sourceRepository");
+    Map<?, ?> bearerHttpClient = (Map<?, ?>) bearerSource.get("httpClient");
+    Map<?, ?> bearerAuthentication = (Map<?, ?>) bearerHttpClient.get("authentication");
+    assertEquals("<redacted>", bearerAuthentication.get("token"));
+  }
+
+  @Test
+  void reportsMissingOrMaskedProxyCredentialsAndMigratesAffectedRepositoriesOffline() {
+    FakeBlobStoreDao blobStores = new FakeBlobStoreDao();
+    FakeRepositoryDao repositories = new FakeRepositoryDao();
+    FakeMigrationJobDao migrationJobs = new FakeMigrationJobDao();
+    NexusApiMigrationService service = new NexusApiMigrationService(
+        new ObjectMapper(),
+        blobStores.asDao(),
+        repositories.asDao(),
+        null,
+        migrationJobs,
+        noopSecurityWriter());
+    NexusInventory inventory = new NexusInventory(
+        List.of(Map.of("name", "default")),
+        List.of(
+            repository("swift-masked", "swift", "proxy", Map.of(
+                "storage", storage("default"),
+                "proxy", Map.of("remoteUrl", "https://github.com/"),
+                "httpClient", Map.of("authentication", Map.of(
+                    "type", "username",
+                    "username", "github-bot",
+                    "password", "********")))),
+            repository("swift-missing", "swift", "proxy", Map.of(
+                "storage", storage("default"),
+                "proxy", Map.of("remoteUrl", "https://github.com/"),
+                "httpClient", Map.of("authentication", Map.of(
+                    "type", "bearerToken"))))),
+        NexusSecurityExport.empty(),
+        List.of());
+
+    NexusMigrationPreflight preflight = service.preflight(
+        inventory,
+        request("https://old-nexus.example").targetBlobStore());
+    NexusApiMigrationService.NexusMigrationResult result = service.migrate(
+        inventory,
+        request("https://old-nexus.example"));
+
+    assertEquals(SupportStatus.NEEDS_MANUAL_ACTION, status(preflight, "swift-masked"));
+    assertEquals(SupportStatus.NEEDS_MANUAL_ACTION, status(preflight, "swift-missing"));
+    assertTrue(preflight.migrationPlan().manualActions().contains("repository:swift-masked"));
+    assertTrue(preflight.migrationPlan().manualActions().contains("repository:swift-missing"));
+    assertEquals(
+        List.of("masked_proxy_credential_secret", "missing_proxy_credential_secret"),
+        preflight.proxyRemoteRisks().stream()
+            .map(NexusApiMigrationService.ProxyRemoteRisk::status)
+            .toList());
+    assertEquals("finished_with_manual_actions", result.status());
+    assertTrue(result.validation().manualActions().contains("repository/proxy credentials"));
+    assertEquals("finished_with_manual_actions", migrationJobs.status);
+    assertFalse(repositories.required("swift-masked").online());
+    assertFalse(repositories.required("swift-missing").online());
+    Map<?, ?> maskedProxy = (Map<?, ?>) repositories.required("swift-masked").attributes().get("proxy");
+    Map<?, ?> missingProxy = (Map<?, ?>) repositories.required("swift-missing").attributes().get("proxy");
+    assertEquals("github-bot", maskedProxy.get("remoteUsername"));
+    assertFalse(maskedProxy.containsKey("remotePassword"));
+    assertFalse(missingProxy.containsKey("remoteBearerToken"));
+  }
+
+  @Test
+  void rollsBackRepositoryAndGroupDefinitionWritesButKeepsFailedJobSummary() {
+    FakeBlobStoreDao blobStores = new FakeBlobStoreDao();
+    FakeRepositoryDao repositories = new FakeRepositoryDao();
+    repositories.failGroupReplacement = true;
+    FakeMigrationJobDao migrationJobs = new FakeMigrationJobDao();
+    SnapshotTransactionManager transactions = new SnapshotTransactionManager(blobStores, repositories);
+    NexusApiMigrationService service = new NexusApiMigrationService(
+        new ObjectMapper(),
+        blobStores.asDao(),
+        repositories.asDao(),
+        null,
+        migrationJobs,
+        null,
+        null,
+        transactions);
+    NexusInventory inventory = new NexusInventory(
+        List.of(Map.of("name", "default")),
+        List.of(
+            repository("swift-hosted", "swift", "hosted", Map.of("storage", storage("default"))),
+            repository("swift-group", "swift", "group", Map.of(
+                "storage", storage("default"),
+                "group", Map.of("memberNames", List.of("swift-hosted"))))),
+        NexusSecurityExport.empty(),
+        List.of());
+
+    IllegalStateException thrown = assertThrows(
+        IllegalStateException.class,
+        () -> service.migrate(inventory, request("https://old-nexus.example")));
+
+    assertEquals("simulated group member insert failure", thrown.getMessage());
+    assertTrue(blobStores.records.isEmpty());
+    assertTrue(repositories.records.isEmpty());
+    assertTrue(repositories.members.isEmpty());
+    assertEquals("failed", migrationJobs.status);
+    assertEquals("failed", migrationJobs.summary.get("status"));
+    assertEquals("simulated group member insert failure", migrationJobs.summary.get("error"));
+    assertEquals(
+        List.of(
+            TransactionDefinition.PROPAGATION_REQUIRES_NEW,
+            TransactionDefinition.PROPAGATION_REQUIRED,
+            TransactionDefinition.PROPAGATION_REQUIRES_NEW),
+        transactions.propagations);
+  }
+
+  @Test
+  void skipsNonGithubSwiftProxyAsManualActionWithoutAbortingMigration() {
+    FakeRepositoryDao repositories = new FakeRepositoryDao();
+    FakeMigrationJobDao migrationJobs = new FakeMigrationJobDao();
+    NexusApiMigrationService service = new NexusApiMigrationService(
+        new ObjectMapper(),
+        new FakeBlobStoreDao().asDao(),
+        repositories.asDao(),
+        null,
+        migrationJobs,
+        noopSecurityWriter());
+    NexusInventory inventory = new NexusInventory(
+        List.of(Map.of("name", "default")),
+        List.of(
+            repository("swift-hosted", "swift", "hosted", Map.of(
+                "storage", storage("default"))),
+            repository("swift-proxy", "swift", "proxy", Map.of(
+                "storage", storage("default"),
+                "proxy", Map.of("remoteUrl", "https://gitlab.com/"))),
+            repository("swift-group", "swift", "group", Map.of(
+                "storage", storage("default"),
+                "group", Map.of("memberNames", List.of("swift-proxy", "swift-hosted"))))),
+        NexusSecurityExport.empty(),
+        List.of());
+
+    NexusMigrationPreflight preflight = service.preflight(
+        inventory,
+        request("https://old-nexus.example").targetBlobStore());
+    NexusApiMigrationService.NexusMigrationResult result = service.migrate(
+        inventory,
+        request("https://old-nexus.example"));
+
+    assertEquals(2, preflight.supportedRepositories());
+    assertEquals(1, preflight.unsupportedRepositories());
+    assertEquals("unsupported_swift_remote", preflight.unsupported().getFirst().reason());
+    assertEquals("unsupported_swift_remote", preflight.proxyRemoteRisks().getFirst().status());
+    assertFalse(preflight.repositoriesToMigrate().stream()
+        .anyMatch(repository -> "swift-proxy".equals(repository.name())));
+    assertEquals(List.of("swift-hosted"), preflight.groupRepositories().getFirst().members());
+    assertEquals(SupportStatus.NEEDS_MANUAL_ACTION, status(preflight, "swift-proxy"));
+    assertTrue(preflight.migrationPlan().manualActions().contains("repository:swift-proxy"));
+    assertEquals("finished_with_manual_actions", result.status());
+    assertEquals("finished_with_manual_actions", migrationJobs.status);
+    assertTrue(repositories.findByName("swift-proxy").isEmpty());
+    assertEquals(List.of("swift-hosted"), repositories.memberNames("swift-group"));
   }
 
   @Test
@@ -591,6 +874,21 @@ class NexusApiMigrationServiceTest {
         null);
   }
 
+  private static NexusSecurityMigrationWriter noopSecurityWriter() {
+    return (NexusSecurityMigrationWriter) Proxy.newProxyInstance(
+        NexusSecurityMigrationWriter.class.getClassLoader(),
+        new Class<?>[] {NexusSecurityMigrationWriter.class},
+        (proxy, method, args) -> null);
+  }
+
+  private static SupportStatus status(NexusMigrationPreflight preflight, String repositoryName) {
+    return preflight.migrationPlan().items().stream()
+        .filter(item -> repositoryName.equals(item.name()))
+        .findFirst()
+        .orElseThrow()
+        .status();
+  }
+
   private static String signingKey(String passphrase) throws Exception {
     if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
       Security.addProvider(new BouncyCastleProvider());
@@ -670,7 +968,15 @@ class NexusApiMigrationServiceTest {
               "asset", prefix + "_ASSET",
               "assetBlob", prefix + "_ASSET_BLOB",
               "component", prefix + "_COMPONENT"),
-          "columns", Map.of()));
+          "columns", Map.of(),
+          "formatShape", "swift".equals(format) && complete
+              ? Map.of(
+                  "archiveAssetPath", true,
+                  "manifestShape", true,
+                  "swiftAssetAttributes", true,
+                  "signatureAttributes", true,
+                  "sha256Checksum", true)
+              : Map.of()));
     });
     return Map.of(
         "columns", List.of("ID", "NAME", "RECIPE_NAME", "ATTRIBUTES"),
@@ -702,6 +1008,15 @@ class NexusApiMigrationServiceTest {
       return Optional.ofNullable(records.get(name));
     }
 
+    private Map<String, BlobStoreRecord> snapshot() {
+      return new LinkedHashMap<>(records);
+    }
+
+    private void restore(Map<String, BlobStoreRecord> snapshot) {
+      records.clear();
+      records.putAll(snapshot);
+    }
+
     private BlobStoreDao asDao() {
       return (BlobStoreDao) Proxy.newProxyInstance(
           BlobStoreDao.class.getClassLoader(),
@@ -718,6 +1033,7 @@ class NexusApiMigrationServiceTest {
     private final AtomicLong ids = new AtomicLong(200);
     private final Map<String, RepositoryRecord> records = new LinkedHashMap<>();
     private final Map<Long, List<Long>> members = new LinkedHashMap<>();
+    private boolean failGroupReplacement;
 
     public RepositoryRecord upsertByName(RepositoryRecord record) {
       Long id = Optional.ofNullable(records.get(record.name()))
@@ -747,6 +1063,12 @@ class NexusApiMigrationServiceTest {
     }
 
     public void replaceMembers(long groupRepositoryId, List<Long> memberRepositoryIds) {
+      if (failGroupReplacement) {
+        members.put(
+            groupRepositoryId,
+            memberRepositoryIds.isEmpty() ? List.of() : List.of(memberRepositoryIds.getFirst()));
+        throw new IllegalStateException("simulated group member insert failure");
+      }
       members.put(groupRepositoryId, List.copyOf(memberRepositoryIds));
     }
 
@@ -789,6 +1111,91 @@ class NexusApiMigrationServiceTest {
           .filter(record -> record.id().equals(id))
           .findFirst()
           .orElseThrow();
+    }
+
+    private RepositorySnapshot snapshot() {
+      LinkedHashMap<Long, List<Long>> memberSnapshot = new LinkedHashMap<>();
+      members.forEach((group, values) -> memberSnapshot.put(group, List.copyOf(values)));
+      return new RepositorySnapshot(new LinkedHashMap<>(records), memberSnapshot);
+    }
+
+    private void restore(RepositorySnapshot snapshot) {
+      records.clear();
+      records.putAll(snapshot.records());
+      members.clear();
+      members.putAll(snapshot.members());
+    }
+
+    private record RepositorySnapshot(
+        Map<String, RepositoryRecord> records,
+        Map<Long, List<Long>> members) {
+    }
+  }
+
+  private static final class FakeMigrationJobDao implements MigrationJobDao {
+    private long id;
+    private String status;
+    private Map<String, Object> summary = Map.of();
+
+    @Override
+    public long create(String sourceNexusVersion, String sourceDataPath, Map<String, Object> options) {
+      id++;
+      status = "running";
+      summary = Map.of();
+      return id;
+    }
+
+    @Override
+    public Optional<com.github.klboke.kkrepo.persistence.jdbc.api.model.MigrationJobRecord> findById(long id) {
+      return Optional.empty();
+    }
+
+    @Override
+    public void markFinished(long id, String status, Map<String, Object> summary) {
+      this.status = status;
+      this.summary = java.util.Collections.unmodifiableMap(new LinkedHashMap<>(summary));
+    }
+  }
+
+  private static final class SnapshotTransactionManager implements PlatformTransactionManager {
+    private final FakeBlobStoreDao blobStores;
+    private final FakeRepositoryDao repositories;
+    private final List<Integer> propagations = new ArrayList<>();
+
+    private SnapshotTransactionManager(
+        FakeBlobStoreDao blobStores,
+        FakeRepositoryDao repositories) {
+      this.blobStores = blobStores;
+      this.repositories = repositories;
+    }
+
+    @Override
+    public TransactionStatus getTransaction(TransactionDefinition definition) {
+      propagations.add(definition.getPropagationBehavior());
+      return new SnapshotTransactionStatus(blobStores.snapshot(), repositories.snapshot());
+    }
+
+    @Override
+    public void commit(TransactionStatus status) {
+    }
+
+    @Override
+    public void rollback(TransactionStatus status) {
+      SnapshotTransactionStatus snapshot = (SnapshotTransactionStatus) status;
+      blobStores.restore(snapshot.blobStores);
+      repositories.restore(snapshot.repositories);
+    }
+
+    private static final class SnapshotTransactionStatus extends SimpleTransactionStatus {
+      private final Map<String, BlobStoreRecord> blobStores;
+      private final FakeRepositoryDao.RepositorySnapshot repositories;
+
+      private SnapshotTransactionStatus(
+          Map<String, BlobStoreRecord> blobStores,
+          FakeRepositoryDao.RepositorySnapshot repositories) {
+        this.blobStores = blobStores;
+        this.repositories = repositories;
+      }
     }
   }
 

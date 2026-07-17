@@ -102,8 +102,13 @@ public class MigrationPlanBuilder {
       status = adapter.repositoryStatus(profile, repository.format(), repository.type(), scope.migrateProxyArtifacts());
       readMode = adapter.repositoryReadMode(profile, repository.format(), repository.type(), scope.migrateProxyArtifacts());
       checksumMode = adapter.checksumMode(profile, repository.format(), repository.type(), scope.migrateProxyArtifacts());
-      reasons.add("Datastore content schema fingerprint is incomplete for this format; repository content migration stays configuration-only.");
-      warnings.add("Datastore content exporter is not enabled until required tables and columns are present for this format.");
+      if ("swift".equals(format) && "hosted".equals(type)) {
+        reasons.add("Nexus Swift hosted content model was not proven by the datastore schema fingerprint; content migration requires manual action.");
+        warnings.add("Swift hosted archives and manifests are not imported until the source datastore profile is verified.");
+      } else {
+        reasons.add("Datastore content schema fingerprint is incomplete for this format; repository content migration stays configuration-only.");
+        warnings.add("Datastore content exporter is not enabled until required tables and columns are present for this format.");
+      }
     } else {
       status = SupportStatus.NEEDS_MANUAL_ACTION;
       readMode = "repository-config-rest";

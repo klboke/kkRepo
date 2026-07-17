@@ -179,6 +179,22 @@ public class SecurityAuthenticationService {
     return authenticate(request);
   }
 
+  /**
+   * Returns whether the request explicitly presented a credential understood by repository
+   * authentication. An invalid explicit credential must never silently downgrade to anonymous
+   * access, even when anonymous reads are enabled for the repository.
+   */
+  public boolean hasPresentedCredentials(HttpServletRequest request) {
+    if (request == null) {
+      return false;
+    }
+    String authorization = request.getHeader("Authorization");
+    return (authorization != null && !authorization.isBlank())
+        || headerValue(request, tokenHeader) != null
+        || headerValue(request, "X-Nexus-Plus-Api-Key") != null
+        || headerValue(request, "X-NuGet-ApiKey") != null;
+  }
+
   /** Authenticates the single decoded credential segment used by Nexus Terraform repository URLs. */
   @Transactional
   public Optional<AuthenticatedSubject> authenticateTerraformUrlToken(String token) {

@@ -6,6 +6,7 @@ import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.npm.NpmExceptions;
 import com.github.klboke.kkrepo.server.pypi.PypiExceptions;
 import com.github.klboke.kkrepo.server.pub.PubExceptions;
+import com.github.klboke.kkrepo.server.swift.SwiftExceptions;
 import java.io.IOException;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
@@ -23,6 +24,12 @@ public class ComponentUploadErrorAdvice {
   @ExceptionHandler(IOException.class)
   public ResponseEntity<Map<String, String>> badUpload(IOException e) {
     return body(HttpStatus.BAD_REQUEST, e.getMessage());
+  }
+
+  @ExceptionHandler(SwiftExceptions.SwiftException.class)
+  public ResponseEntity<Map<String, String>> swiftFailure(
+      SwiftExceptions.SwiftException e) {
+    return body(HttpStatus.valueOf(e.status()), e.getMessage());
   }
 
   @ExceptionHandler(ComposerExceptions.BadRequestException.class)

@@ -18,6 +18,7 @@ public enum RepositoryFormat {
   RUBYGEMS,
   YUM,
   TERRAFORM,
+  SWIFT,
   RAW;
 
   @JsonCreator

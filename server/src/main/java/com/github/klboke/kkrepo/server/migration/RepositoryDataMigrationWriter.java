@@ -35,6 +35,7 @@ import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.docker.DockerManifestParser;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.pub.PubRepositoryDataMigrationWriter;
+import com.github.klboke.kkrepo.server.swift.SwiftRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.terraform.TerraformRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import java.io.ByteArrayInputStream;
@@ -74,6 +75,7 @@ class RepositoryDataMigrationWriter {
   private final DockerManifestParser dockerManifestParser;
   private final PubRepositoryDataMigrationWriter pubMigrationWriter;
   private final TerraformRepositoryDataMigrationWriter terraformMigrationWriter;
+  private final SwiftRepositoryDataMigrationWriter swiftMigrationWriter;
   private final TransientTransactionRetry transactionRetry;
   private final MavenPathParser mavenPathParser = new MavenPathParser();
 
@@ -99,6 +101,34 @@ class RepositoryDataMigrationWriter {
         dockerManifestParser,
         pubMigrationWriter,
         null,
+        null,
+        transactionRetry);
+  }
+
+  RepositoryDataMigrationWriter(
+      RepositoryDao repositoryDao,
+      ComponentDao componentDao,
+      AssetDao assetDao,
+      BrowseNodeDao browseNodeDao,
+      BlobStorageRegistry blobStorageRegistry,
+      RepositoryIndexRebuildDao indexRebuildDao,
+      DockerRegistryDao dockerRegistryDao,
+      DockerManifestParser dockerManifestParser,
+      PubRepositoryDataMigrationWriter pubMigrationWriter,
+      TerraformRepositoryDataMigrationWriter terraformMigrationWriter,
+      TransientTransactionRetry transactionRetry) {
+    this(
+        repositoryDao,
+        componentDao,
+        assetDao,
+        browseNodeDao,
+        blobStorageRegistry,
+        indexRebuildDao,
+        dockerRegistryDao,
+        dockerManifestParser,
+        pubMigrationWriter,
+        terraformMigrationWriter,
+        null,
         transactionRetry);
   }
 
@@ -114,6 +144,7 @@ class RepositoryDataMigrationWriter {
       DockerManifestParser dockerManifestParser,
       PubRepositoryDataMigrationWriter pubMigrationWriter,
       TerraformRepositoryDataMigrationWriter terraformMigrationWriter,
+      SwiftRepositoryDataMigrationWriter swiftMigrationWriter,
       TransientTransactionRetry transactionRetry) {
     this.repositoryDao = repositoryDao;
     this.componentDao = componentDao;
@@ -125,6 +156,7 @@ class RepositoryDataMigrationWriter {
     this.dockerManifestParser = dockerManifestParser;
     this.pubMigrationWriter = pubMigrationWriter;
     this.terraformMigrationWriter = terraformMigrationWriter;
+    this.swiftMigrationWriter = swiftMigrationWriter;
     this.transactionRetry = transactionRetry;
   }
 
@@ -151,6 +183,15 @@ class RepositoryDataMigrationWriter {
       }
       TerraformRepositoryDataMigrationWriter.MigratedAsset migrated = terraformMigrationWriter.write(
           repository, source, body, responseContentType, validateSize);
+      return new WriteResult(
+          migrated.componentId(), migrated.assetId(), migrated.assetBlobId(), migrated.assetBlobObjectKey());
+    }
+    if (repository.format() == RepositoryFormat.SWIFT) {
+      if (swiftMigrationWriter == null) {
+        throw new IllegalStateException("Swift migration writer is not configured");
+      }
+      SwiftRepositoryDataMigrationWriter.MigratedAsset migrated = swiftMigrationWriter.write(
+          repository, source, body, validateSize);
       return new WriteResult(
           migrated.componentId(), migrated.assetId(), migrated.assetBlobId(), migrated.assetBlobObjectKey());
     }
@@ -787,6 +828,7 @@ class RepositoryDataMigrationWriter {
       case COMPOSER -> COMPOSER_PATHS.parse(source.sourcePath()).kind() == ComposerPath.Kind.DIST
               ? "composer-dist" : "composer-metadata";
       case TERRAFORM -> "terraform-asset";
+      case SWIFT -> swiftAssetKind(source.sourcePath());
       case RAW -> "asset";
     };
   }
@@ -795,7 +837,26 @@ class RepositoryDataMigrationWriter {
     if (format == RepositoryFormat.MAVEN2) {
       return source.version() != null && source.version().endsWith("-SNAPSHOT") ? "snapshot" : "release";
     }
+    if (format == RepositoryFormat.SWIFT) {
+      return "swift-package-release";
+    }
     return "package";
+  }
+
+  private static String swiftAssetKind(String path) {
+    if (path == null) {
+      return "swift-asset";
+    }
+    if (path.endsWith(".zip")) {
+      return "swift-source-archive";
+    }
+    if (path.endsWith("Package.swift") || (path.contains("Package@swift-") && path.endsWith(".swift"))) {
+      return "swift-manifest";
+    }
+    if (path.endsWith(".signature") || path.endsWith(".sig")) {
+      return "swift-signature";
+    }
+    return "swift-metadata";
   }
 
   private static String mavenAssetKind(String path) {

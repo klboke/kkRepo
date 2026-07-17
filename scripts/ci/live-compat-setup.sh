@@ -164,6 +164,33 @@ PY
   rm -f "$eula_file" "$accepted_file"
 }
 
+configure_nexus_anonymous_access() {
+  local body_file http_status
+  body_file="$(mktemp)"
+  http_status="$(curl -m 20 -sS \
+    -u "$NEXUS_AUTH" \
+    -X PUT \
+    -H "Content-Type: application/json" \
+    --data '{"enabled":true,"userId":"anonymous","realmName":"NexusAuthorizingRealm"}' \
+    -o "$body_file" \
+    -w "%{http_code}" \
+    "$NEXUS_URL/service/rest/v1/security/anonymous" || true)"
+  if [[ "$http_status" =~ ^2[0-9][0-9]$ ]]; then
+    echo "[compat] Nexus anonymous access is enabled"
+    rm -f "$body_file"
+    return 0
+  fi
+  if [[ "$http_status" == "404" ]]; then
+    echo "[compat] Nexus anonymous configuration endpoint is not available; skipping"
+    rm -f "$body_file"
+    return 0
+  fi
+  echo "[compat] Nexus anonymous configuration failed with HTTP $http_status" >&2
+  cat "$body_file" >&2 || true
+  rm -f "$body_file"
+  return 1
+}
+
 nexus_repo_exists() {
   local name="$1"
   local repositories
@@ -309,6 +336,28 @@ ensure_nexus_repositories() {
     "online":true,
     "storage":{"blobStoreName":"default","strictContentTypeValidation":true},
     "group":{"memberNames":["pub-hosted","pub-proxy"]}
+  }'
+
+  nexus_try_create_repo "swift-hosted" "$NEXUS_URL/service/rest/v1/repositories/swift/hosted" '{
+    "name":"swift-hosted",
+    "online":true,
+    "storage":{"blobStoreName":"default","strictContentTypeValidation":true,"writePolicy":"ALLOW_ONCE"}
+  }'
+
+  nexus_try_create_repo "swift-proxy" "$NEXUS_URL/service/rest/v1/repositories/swift/proxy" '{
+    "name":"swift-proxy",
+    "online":true,
+    "storage":{"blobStoreName":"default","strictContentTypeValidation":true},
+    "proxy":{"remoteUrl":"https://github.com/","contentMaxAge":1440,"metadataMaxAge":1440},
+    "negativeCache":{"enabled":true,"timeToLive":60},
+    "httpClient":{"blocked":false,"autoBlock":true}
+  }'
+
+  nexus_try_create_repo "swift-group" "$NEXUS_URL/service/rest/v1/repositories/swift/group" '{
+    "name":"swift-group",
+    "online":true,
+    "storage":{"blobStoreName":"default","strictContentTypeValidation":true},
+    "group":{"memberNames":["swift-hosted","swift-proxy"]}
   }'
 
   local composer_payload='{
@@ -707,6 +756,51 @@ ensure_kkrepo_repositories() {
     "group":{"memberNames":["terraform-hosted","terraform-proxy"]}
   }'
 
+  kkrepo_create_repo "swift-hosted" '{
+    "name":"swift-hosted",
+    "recipe":"swift-hosted",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "hosted":{"writePolicy":"ALLOW_ONCE"}
+  }'
+
+  local swift_proxy_payload
+  swift_proxy_payload="$(python3 - "${SWIFT_GITHUB_TOKEN:-}" <<'PY'
+import json
+import sys
+
+proxy = {
+    "remoteUrl": "https://github.com/",
+    "contentMaxAgeMinutes": 1440,
+    "metadataMaxAgeMinutes": 1440,
+    "negativeCacheEnabled": True,
+    "negativeCacheTtlMinutes": 1,
+    "autoBlock": True,
+}
+if sys.argv[1]:
+    proxy["remoteBearerToken"] = sys.argv[1]
+print(json.dumps({
+    "name": "swift-proxy",
+    "recipe": "swift-proxy",
+    "online": True,
+    "blobStoreName": "default",
+    "strictContentTypeValidation": True,
+    "proxy": proxy,
+}, separators=(",", ":")))
+PY
+)"
+  kkrepo_create_repo "swift-proxy" "$swift_proxy_payload"
+
+  kkrepo_create_repo "swift-group" '{
+    "name":"swift-group",
+    "recipe":"swift-group",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "group":{"memberNames":["swift-hosted","swift-proxy"]}
+  }'
+
   kkrepo_create_repo "docker-hosted" "{
     \"name\":\"docker-hosted\",
     \"recipe\":\"docker-hosted\",
@@ -921,6 +1015,7 @@ wait_for_http "kkrepo management health" "$KKREPO_MANAGEMENT_URL/actuator/health
 
 initialize_nexus_admin
 accept_nexus_eula_if_required
+configure_nexus_anonymous_access
 ensure_nexus_repositories
 initialize_kkrepo_admin
 ensure_kkrepo_blob_store

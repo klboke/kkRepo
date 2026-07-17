@@ -405,7 +405,8 @@ public class NexusRestClient {
           yum: 'YUM',
           raw: 'RAW',
           cargo: 'CARGO',
-          terraform: 'TERRAFORM'
+          terraform: 'TERRAFORM',
+          swift: 'SWIFT'
         ]
         return prefixes[format]
       }
@@ -813,7 +814,8 @@ public class NexusRestClient {
           yum: 'YUM',
           raw: 'RAW',
           cargo: 'CARGO',
-          terraform: 'TERRAFORM'
+          terraform: 'TERRAFORM',
+          swift: 'SWIFT'
         ]
         def upperTables = []
         allTables.each { tableName ->
@@ -821,6 +823,117 @@ public class NexusRestClient {
           if (!upperTables.contains(upper)) {
             upperTables << upper
           }
+        }
+        def inspectSwiftShape = { tableNames ->
+          def shape = [
+            archiveAssetPath: false,
+            manifestShape: false,
+            swiftAssetAttributes: false,
+            signatureAttributes: false,
+            signatureObserved: false,
+            sha256Checksum: false,
+            inspectedAssetCount: 0
+          ]
+          def fingerprintText = { value ->
+            if (value == null) {
+              return ''
+            }
+            if (value instanceof byte[]) {
+              return new String(value, 'UTF-8').toLowerCase()
+            }
+            if (value.getClass().name == 'org.postgresql.util.PGobject'
+                && value.respondsTo('getValue')) {
+              return String.valueOf(value.getValue()).toLowerCase()
+            }
+            return String.valueOf(value).toLowerCase()
+          }
+          def archiveAttributesPresent = false
+          def manifestAttributesPresent = false
+          def signatureShapeValid = true
+          def sql = '''
+              select
+                a.path as asset_path,
+                a.kind as asset_kind,
+                a.attributes as asset_attributes,
+                b.checksums as blob_checksums,
+                c.attributes as component_attributes
+              from ''' + tableNames.asset + ''' a
+              left join ''' + tableNames.assetBlob + ''' b on a.asset_blob_id = b.asset_blob_id
+              left join ''' + tableNames.component + ''' c on a.component_id = c.component_id
+              order by a.path
+              limit 512'''
+          try {
+            def statement = connection.prepareStatement(sql)
+            try {
+              def rows = statement.executeQuery()
+              try {
+                while (rows.next()) {
+                  shape.inspectedAssetCount++
+                  def path = fingerprintText(rows.getObject('asset_path'))
+                  def kind = fingerprintText(rows.getObject('asset_kind'))
+                  def assetAttributes = fingerprintText(rows.getObject('asset_attributes'))
+                  def componentAttributes = fingerprintText(rows.getObject('component_attributes'))
+                  def attributes = assetAttributes + ' ' + componentAttributes
+                  def checksums = fingerprintText(rows.getObject('blob_checksums'))
+                  def pathParts = path.replaceFirst('^/+', '').split('/')
+                  def swiftAttributes = (assetAttributes.contains('"swift"')
+                      && assetAttributes.contains('"scope"')
+                      && assetAttributes.contains('"name"')
+                      && assetAttributes.contains('"version"')
+                      && assetAttributes.contains('"asset_kind"'))
+                  def archiveAsset = (pathParts.length == 3
+                      && pathParts[2] ==~ /[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9a-z.-]+)?(?:\\+[0-9a-z.-]+)?\\.zip/
+                      && kind == 'package_archive')
+                  if (archiveAsset) {
+                    shape.archiveAssetPath = true
+                    archiveAttributesPresent = archiveAttributesPresent || swiftAttributes
+                    if ((checksums.contains('"sha256"') || checksums.contains('"sha-256"'))
+                        && (checksums =~ /[0-9a-f]{64}/).find()) {
+                      shape.sha256Checksum = true
+                    }
+                  }
+                  def manifestAsset = ((path.endsWith('/package.swift')
+                          || path.contains('/package@swift-'))
+                      && kind == 'package_manifest')
+                  if (manifestAsset) {
+                    shape.manifestShape = true
+                    manifestAttributesPresent = manifestAttributesPresent || swiftAttributes
+                  }
+                  if (attributes.contains('signature')) {
+                    shape.signatureObserved = true
+                    def knownSignatureKey = (attributes.contains('sourcearchivesignature')
+                        || attributes.contains('source-archive-signature')
+                        || attributes.contains('metadatasignature')
+                        || attributes.contains('metadata-signature')
+                        || attributes.contains('signatureformat')
+                        || attributes.contains('signature_format'))
+                    signatureShapeValid = signatureShapeValid && knownSignatureKey
+                    if ((attributes.contains('signatureformat')
+                            || attributes.contains('signature_format'))
+                        && !attributes.contains('cms-1.0.0')) {
+                      signatureShapeValid = false
+                    }
+                  }
+                }
+                shape.swiftAssetAttributes = archiveAttributesPresent && manifestAttributesPresent
+                // Swift signatures are optional. Absence is a known shape; when signature
+                // attributes are present, only the documented CMS field family is accepted.
+                shape.signatureAttributes = shape.swiftAssetAttributes && signatureShapeValid
+              } finally {
+                rows.close()
+              }
+            } finally {
+              statement.close()
+            }
+          } catch (e) {
+            shape.archiveAssetPath = false
+            shape.manifestShape = false
+            shape.swiftAssetAttributes = false
+            shape.signatureAttributes = false
+            shape.sha256Checksum = false
+            out.warnings << 'Swift datastore content shape probe failed: ' + errorText(e)
+          }
+          return shape
         }
         def contentModels = [:]
         datastoreFormats.each { format, prefix ->
@@ -858,13 +971,17 @@ public class NexusRestClient {
             def required = requiredContentColumns[key] ?: []
             requiredColumnsPresent = requiredColumnsPresent && required.every { upperColumns.contains(it) }
           }
-          contentModels[format] = [
+          def contentModel = [
             prefix: prefix,
             tables: tableNames,
             tablesPresent: tablesPresent,
             requiredColumnsPresent: requiredColumnsPresent,
             columns: columnsByTable
           ]
+          if (format == 'swift' && requiredColumnsPresent) {
+            contentModel.formatShape = inspectSwiftShape(tableNames)
+          }
+          contentModels[format] = contentModel
         }
         out.repositorySchema = [
           tables: tables,

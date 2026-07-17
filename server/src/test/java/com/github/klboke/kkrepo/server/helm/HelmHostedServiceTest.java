@@ -52,6 +52,7 @@ class HelmHostedServiceTest {
 
     assertSame(expected, fixture.service.get(runtime, "/index.yaml", true));
 
+    verify(fixture.cache).evict(runtime.id(), "index.yaml");
     verify(fixture.writer).write(
         eq(runtime), eq(fixture.storage), eq(7L), eq("index.yaml"), any(),
         eq("text/x-yaml"), eq(HelmAssetKind.INDEX), eq(null),

@@ -23,6 +23,11 @@ public record NexusSourceProfile(
     Map<String, FormatCapability> formatCapabilities,
     List<String> warnings) {
 
+  // Nexus Swift datastore layouts are verified for 3.92.x through 3.94.x.
+  // Newer minors must be fingerprinted deliberately instead of being accepted optimistically.
+  private static final int SWIFT_MIGRATION_MIN_MINOR = 92;
+  private static final int SWIFT_MIGRATION_MAX_MINOR = 94;
+
   public NexusSourceProfile {
     scriptApi = scriptApi == null ? ScriptApiProfile.unknown() : scriptApi;
     metadataEngine = metadataEngine == null ? MetadataEngine.UNKNOWN : metadataEngine;
@@ -60,7 +65,11 @@ public record NexusSourceProfile(
         securityModel(metadataEngine, source.warnings()),
         blobModel(source.blobStores()),
         repositories,
-        formatCapabilities(repositories, metadataEngine, datastoreContentModels),
+        formatCapabilities(
+            repositories,
+            metadataEngine,
+            probe == null ? null : probe.nexusVersion(),
+            datastoreContentModels),
         warnings(source.warnings(), probe));
   }
 
@@ -179,6 +188,7 @@ public record NexusSourceProfile(
   private static Map<String, FormatCapability> formatCapabilities(
       List<RepositoryCapability> repositories,
       MetadataEngine metadataEngine,
+      String probedNexusVersion,
       Map<String, ContentModelFingerprint> datastoreContentModels) {
     LinkedHashMap<String, FormatCapability> capabilities = new LinkedHashMap<>();
     for (RepositoryCapability repository : repositories) {
@@ -194,9 +204,13 @@ public record NexusSourceProfile(
       }
       boolean config = NexusRepositorySupport.supportedRecipe(repository.format(), repository.type());
       ContentModelFingerprint contentModel = datastoreContentModels.get(format);
-      boolean datastoreContent = contentModel != null && contentModel.supported();
+      boolean datastoreContent = contentModel != null
+          && contentModel.supported()
+          && (!"swift".equals(format)
+              || swiftContentModelSupported(probedNexusVersion, contentModel));
       boolean content = config
-          && ((metadataEngine == MetadataEngine.ORIENTDB && !"cargo".equals(format) && !"pub".equals(format))
+          && ((metadataEngine == MetadataEngine.ORIENTDB
+                  && !"cargo".equals(format) && !"pub".equals(format) && !"swift".equals(format))
               || ((metadataEngine == MetadataEngine.DATASTORE_H2
                   || metadataEngine == MetadataEngine.DATASTORE_POSTGRESQL)
                   && datastoreContent));
@@ -205,7 +219,10 @@ public record NexusSourceProfile(
           recipes,
           config,
           content,
-          content ? contentEvidence(metadataEngine, contentModel) : config ? contentBlockedEvidence(format, metadataEngine, contentModel) : "unsupported-format",
+          content ? contentEvidence(metadataEngine, contentModel)
+              : config ? contentBlockedEvidence(
+                  format, metadataEngine, probedNexusVersion, contentModel)
+              : "unsupported-format",
           contentModel));
     }
     return Map.copyOf(capabilities);
@@ -233,11 +250,19 @@ public record NexusSourceProfile(
   private static String contentBlockedEvidence(
       String format,
       MetadataEngine metadataEngine,
+      String probedNexusVersion,
       ContentModelFingerprint contentModel) {
     if (metadataEngine == MetadataEngine.DATASTORE_H2
         || metadataEngine == MetadataEngine.DATASTORE_POSTGRESQL) {
       if (contentModel == null) {
         return "datastore-content-schema-missing";
+      }
+      if ("swift".equals(format)
+          && !knownSwiftMigrationVersion(probedNexusVersion)) {
+        return "swift-source-version-unverified";
+      }
+      if ("swift".equals(format) && !swiftFormatShapeSupported(contentModel.formatShape())) {
+        return "swift-content-shape-incomplete";
       }
       return "datastore-content-schema-incomplete";
     }
@@ -264,10 +289,49 @@ public record NexusSourceProfile(
           bool(model.get("tablesPresent"), false),
           bool(model.get("requiredColumnsPresent"), false),
           objectMapValue(model.get("tables")),
-          objectMapValue(model.get("columns")));
+          objectMapValue(model.get("columns")),
+          objectMapValue(model.get("formatShape")));
       fingerprints.put(format, fingerprint);
     }
     return Map.copyOf(fingerprints);
+  }
+
+  private static boolean swiftContentModelSupported(
+      String probedNexusVersion,
+      ContentModelFingerprint contentModel) {
+    return knownSwiftMigrationVersion(probedNexusVersion)
+        && swiftFormatShapeSupported(contentModel.formatShape());
+  }
+
+  private static boolean knownSwiftMigrationVersion(String version) {
+    String normalized = string(version);
+    if (normalized == null) {
+      return false;
+    }
+    String core = normalized.split("[-+]", 2)[0];
+    String[] parts = core.split("\\.");
+    if (parts.length < 3) {
+      return false;
+    }
+    try {
+      int major = Integer.parseInt(parts[0]);
+      int minor = Integer.parseInt(parts[1]);
+      Integer.parseInt(parts[2]);
+      return major == 3
+          && minor >= SWIFT_MIGRATION_MIN_MINOR
+          && minor <= SWIFT_MIGRATION_MAX_MINOR;
+    } catch (NumberFormatException ignored) {
+      return false;
+    }
+  }
+
+  private static boolean swiftFormatShapeSupported(Map<String, Object> shape) {
+    return shape != null
+        && bool(shape.get("archiveAssetPath"), false)
+        && bool(shape.get("manifestShape"), false)
+        && bool(shape.get("swiftAssetAttributes"), false)
+        && bool(shape.get("signatureAttributes"), false)
+        && bool(shape.get("sha256Checksum"), false);
   }
 
   private static Map<String, Object> attributesFingerprint(RepositoryDocument document) {
@@ -463,11 +527,22 @@ public record NexusSourceProfile(
       boolean tablesPresent,
       boolean requiredColumnsPresent,
       Map<String, Object> tables,
-      Map<String, Object> columns) {
+      Map<String, Object> columns,
+      Map<String, Object> formatShape) {
+
+    public ContentModelFingerprint(
+        String prefix,
+        boolean tablesPresent,
+        boolean requiredColumnsPresent,
+        Map<String, Object> tables,
+        Map<String, Object> columns) {
+      this(prefix, tablesPresent, requiredColumnsPresent, tables, columns, Map.of());
+    }
 
     public ContentModelFingerprint {
       tables = tables == null ? Map.of() : Map.copyOf(tables);
       columns = columns == null ? Map.of() : Map.copyOf(columns);
+      formatShape = formatShape == null ? Map.of() : Map.copyOf(formatShape);
     }
 
     public boolean supported() {

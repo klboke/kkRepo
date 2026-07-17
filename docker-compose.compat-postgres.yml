@@ -72,11 +72,24 @@ services:
     volumes:
       - nexus-data:/nexus-data
 
+  kkrepo-blob-volume-init:
+    image: busybox:1.37
+    command:
+      - sh
+      - -c
+      - mkdir -p /mysql/default /postgresql/default && chmod 0777 /mysql/default /postgresql/default
+    restart: "no"
+    volumes:
+      - kkrepo-mysql-blobs:/mysql
+      - kkrepo-postgresql-blobs:/postgresql
+
   kkrepo:
     image: ${KKREPO_COMPAT_IMAGE:-kkrepo:compat}
     depends_on:
       mysql:
         condition: service_healthy
+      kkrepo-blob-volume-init:
+        condition: service_completed_successfully
     environment:
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/kkrepo?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
       SPRING_DATASOURCE_USERNAME: kkrepo
@@ -86,16 +99,46 @@ services:
       KKREPO_API_KEY_PAYLOAD_SECRET: ci-compat-api-key-payload-secret-not-for-production
       KKREPO_LOGIN_RATE_LIMIT_PER_MINUTE: "200"
       KKREPO_BOOTSTRAP_RATE_LIMIT_PER_MINUTE: "50"
+      KKREPO_TRUSTED_PROXIES: "${KKREPO_TRUSTED_PROXIES:-}"
       # Compatibility-only: enables Nexus legacy web UI routes before service startup.
       KKREPO_NEXUS_LEGACY_UI_ENABLED: "${KKREPO_NEXUS_LEGACY_UI_ENABLED:-true}"
       KKREPO_FILE_ENABLED: "true"
       KKREPO_FILE_BASE_DIR: /tmp/kkrepo-blobs
       KKREPO_OUTBOUND_ALLOW_PRIVATE_ADDRESSES: "true"
       JAVA_OPTS: "-Xms512m -Xmx1536m"
+    volumes:
+      - kkrepo-mysql-blobs:/tmp/kkrepo-blobs
     ports:
       - "${KKREPO_COMPAT_PORT:-18090}:8080"
       - "${KKREPO_MANAGEMENT_PORT:-18091}:8081"
       - "${KKREPO_DOCKER_HOSTED_PORT:-18180}:${KKREPO_DOCKER_CONNECTOR_PORT:-18180}"
+
+  kkrepo-secondary:
+    image: ${KKREPO_COMPAT_IMAGE:-kkrepo:compat}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      kkrepo-blob-volume-init:
+        condition: service_completed_successfully
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/kkrepo?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
+      SPRING_DATASOURCE_USERNAME: kkrepo
+      SPRING_DATASOURCE_PASSWORD: kkrepo
+      KKREPO_MANAGEMENT_PORT: "8081"
+      KKREPO_CREDENTIAL_SECRET: ci-compat-credential-secret-not-for-production
+      KKREPO_API_KEY_PAYLOAD_SECRET: ci-compat-api-key-payload-secret-not-for-production
+      KKREPO_LOGIN_RATE_LIMIT_PER_MINUTE: "200"
+      KKREPO_BOOTSTRAP_RATE_LIMIT_PER_MINUTE: "50"
+      KKREPO_TRUSTED_PROXIES: "${KKREPO_TRUSTED_PROXIES:-}"
+      KKREPO_NEXUS_LEGACY_UI_ENABLED: "${KKREPO_NEXUS_LEGACY_UI_ENABLED:-true}"
+      KKREPO_FILE_ENABLED: "true"
+      KKREPO_FILE_BASE_DIR: /tmp/kkrepo-blobs
+      KKREPO_OUTBOUND_ALLOW_PRIVATE_ADDRESSES: "true"
+      JAVA_OPTS: "-Xms512m -Xmx1536m"
+    volumes:
+      - kkrepo-mysql-blobs:/tmp/kkrepo-blobs
+    ports:
+      - "${KKREPO_SECONDARY_COMPAT_PORT:-18094}:8080"
 
   kkrepo-postgresql:
     image: ${KKREPO_COMPAT_IMAGE:-kkrepo:compat}
@@ -104,6 +147,8 @@ services:
     depends_on:
       kkrepo-postgres:
         condition: service_healthy
+      kkrepo-blob-volume-init:
+        condition: service_completed_successfully
     environment:
       KKREPO_DATABASE_TYPE: postgresql
       SPRING_DATASOURCE_URL: jdbc:postgresql://kkrepo-postgres:5432/kkrepo
@@ -114,18 +159,53 @@ services:
       KKREPO_API_KEY_PAYLOAD_SECRET: ci-compat-api-key-payload-secret-not-for-production
       KKREPO_LOGIN_RATE_LIMIT_PER_MINUTE: "200"
       KKREPO_BOOTSTRAP_RATE_LIMIT_PER_MINUTE: "50"
+      KKREPO_TRUSTED_PROXIES: "${KKREPO_TRUSTED_PROXIES:-}"
       KKREPO_NEXUS_LEGACY_UI_ENABLED: "${KKREPO_NEXUS_LEGACY_UI_ENABLED:-true}"
       KKREPO_FILE_ENABLED: "true"
       KKREPO_FILE_BASE_DIR: /tmp/kkrepo-blobs
       KKREPO_OUTBOUND_ALLOW_PRIVATE_ADDRESSES: "true"
       JAVA_OPTS: "-Xms512m -Xmx1536m"
+    volumes:
+      - kkrepo-postgresql-blobs:/tmp/kkrepo-blobs
     ports:
       - "${KKREPO_COMPAT_PORT:-18090}:8080"
       - "${KKREPO_MANAGEMENT_PORT:-18091}:8081"
       - "${KKREPO_DOCKER_HOSTED_PORT:-18180}:${KKREPO_DOCKER_CONNECTOR_PORT:-18180}"
+
+  kkrepo-postgresql-secondary:
+    image: ${KKREPO_COMPAT_IMAGE:-kkrepo:compat}
+    profiles:
+      - kkrepo-postgresql
+    depends_on:
+      kkrepo-postgres:
+        condition: service_healthy
+      kkrepo-blob-volume-init:
+        condition: service_completed_successfully
+    environment:
+      KKREPO_DATABASE_TYPE: postgresql
+      SPRING_DATASOURCE_URL: jdbc:postgresql://kkrepo-postgres:5432/kkrepo
+      SPRING_DATASOURCE_USERNAME: kkrepo
+      SPRING_DATASOURCE_PASSWORD: kkrepo
+      KKREPO_MANAGEMENT_PORT: "8081"
+      KKREPO_CREDENTIAL_SECRET: ci-compat-credential-secret-not-for-production
+      KKREPO_API_KEY_PAYLOAD_SECRET: ci-compat-api-key-payload-secret-not-for-production
+      KKREPO_LOGIN_RATE_LIMIT_PER_MINUTE: "200"
+      KKREPO_BOOTSTRAP_RATE_LIMIT_PER_MINUTE: "50"
+      KKREPO_TRUSTED_PROXIES: "${KKREPO_TRUSTED_PROXIES:-}"
+      KKREPO_NEXUS_LEGACY_UI_ENABLED: "${KKREPO_NEXUS_LEGACY_UI_ENABLED:-true}"
+      KKREPO_FILE_ENABLED: "true"
+      KKREPO_FILE_BASE_DIR: /tmp/kkrepo-blobs
+      KKREPO_OUTBOUND_ALLOW_PRIVATE_ADDRESSES: "true"
+      JAVA_OPTS: "-Xms512m -Xmx1536m"
+    volumes:
+      - kkrepo-postgresql-blobs:/tmp/kkrepo-blobs
+    ports:
+      - "${KKREPO_SECONDARY_COMPAT_PORT:-18094}:8080"
 
 volumes:
   mysql-data:
   nexus-data:
   nexus-postgres-data:
   kkrepo-postgres-data:
+  kkrepo-mysql-blobs:
+  kkrepo-postgresql-blobs:

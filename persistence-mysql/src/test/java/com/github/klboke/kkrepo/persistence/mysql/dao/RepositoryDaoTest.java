@@ -18,7 +18,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 class RepositoryDaoTest {
   @Test
-  void proxyRemotePasswordIsEncryptedWhenAttributesAreWritten() {
+  void proxyRemoteCredentialsAreEncryptedWhenAttributesAreWritten() {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
     JsonColumns jsonColumns = new JsonColumns(new ObjectMapper(), new MySqlDatabaseDialect());
     RepositoryDao dao = new JdbcRepositoryDao(jdbcTemplate, jsonColumns);
@@ -26,6 +26,7 @@ class RepositoryDaoTest {
     proxy.put("remoteUrl", "https://registry.example.com");
     proxy.put("remoteUsername", "robot");
     proxy.put("remotePassword", "top-secret");
+    proxy.put("remoteBearerToken", "bearer-secret");
     Map<String, Object> attributes = new LinkedHashMap<>();
     attributes.put("proxy", proxy);
 
@@ -47,9 +48,11 @@ class RepositoryDaoTest {
 
     String storedJson = jdbcTemplate.attributesJson;
     assertFalse(storedJson.contains("top-secret"));
+    assertFalse(storedJson.contains("bearer-secret"));
     @SuppressWarnings("unchecked")
     Map<String, Object> storedProxy = (Map<String, Object>) jsonColumns.read(storedJson).get("proxy");
     assertTrue(SecretCipher.isEncrypted(storedProxy.get("remotePassword").toString()));
+    assertTrue(SecretCipher.isEncrypted(storedProxy.get("remoteBearerToken").toString()));
   }
 
   private static final class RecordingJdbcTemplate extends JdbcTemplate {
