@@ -1776,7 +1776,7 @@ public class SwiftService {
     }
     try {
       URI uri = new URI(raw.trim()).normalize();
-      if (uri.getScheme() == null || uri.getScheme().isBlank() || uri.getUserInfo() != null
+      if (uri.getScheme() == null || uri.getScheme().isBlank()
           || uri.getFragment() != null || uri.getQuery() != null) {
         throw new URISyntaxException(raw, "absolute URI without credentials or fragment required");
       }
@@ -1785,13 +1785,16 @@ public class SwiftService {
       if (!REPOSITORY_URL_SCHEMES.contains(scheme) || host == null || host.isBlank()) {
         throw new URISyntaxException(raw, "supported network repository URI required");
       }
+      String userInfo = uri.getUserInfo();
+      if (userInfo != null
+          && (!"ssh".equals(scheme) || userInfo.isBlank() || userInfo.indexOf(':') >= 0)) {
+        throw new URISyntaxException(raw, "only SSH username user info is allowed");
+      }
       String path = uri.getPath();
       if (path != null && path.endsWith("/")) {
         path = path.substring(0, path.length() - 1);
       }
-      URI normalized = host == null
-          ? uri
-          : new URI(scheme, null, host, uri.getPort(), path, uri.getQuery(), null);
+      URI normalized = new URI(scheme, userInfo, host, uri.getPort(), path, null, null);
       return normalized.toASCIIString();
     } catch (URISyntaxException e) {
       throw new SwiftExceptions.UnprocessableEntity("Invalid repository URL", e);

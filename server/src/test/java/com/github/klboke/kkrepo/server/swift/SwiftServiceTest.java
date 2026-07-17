@@ -1332,7 +1332,8 @@ class SwiftServiceTest {
         "metadata",
         null,
         "application/json",
-        "{\"repositoryURLs\":[\"https://github.com/Acme/Demo.git\"]}"
+        ("{\"repositoryURLs\":[\"https://github.com/Acme/Demo.git\","
+            + "\"ssh://git@gitlab.com/acme/lib.git\"]}")
             .getBytes(StandardCharsets.UTF_8));
     MavenResponse response = fixture.service.publish(
         fixture.runtime,
@@ -1379,6 +1380,8 @@ class SwiftServiceTest {
     assertEquals("Demo", publication.getValue().nameDisplay());
     assertEquals("https://github.com/acme/demo",
         publication.getValue().repositoryUrls().getFirst().normalizedUrl());
+    assertEquals("ssh://git@gitlab.com/acme/lib.git",
+        publication.getValue().repositoryUrls().get(1).normalizedUrl());
     assertEquals("", publication.getValue().manifests().getFirst().toolsVersion());
   }
 
@@ -1607,6 +1610,8 @@ class SwiftServiceTest {
         "{\"author\":{\"name\":\"Alice\",\"email\":7}}",
         "{\"author\":{\"name\":\"Alice\",\"email\":\"not-an-email\"}}",
         "{\"author\":{\"name\":\"Alice\",\"organization\":{}}}",
+        "{\"repositoryURLs\":[\"https://user:pass@example.test/repo.git\"]}",
+        "{\"repositoryURLs\":[\"ssh://git:pass@gitlab.com/acme/lib.git\"]}",
         "{\"repositoryURLs\":[\"https://example.test/repo?token=secret\"]}",
         "{\"repositoryURLs\":[\"" + oversizedRepositoryUrl + "\"]}",
         "{\"readmeURL\":\"https://example.test/readme?api_key=secret\"}")) {
