@@ -4,6 +4,7 @@ import com.github.klboke.kkrepo.auth.AccessDecisionService;
 import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.protocol.docker.DockerConstants;
 import com.github.klboke.kkrepo.protocol.docker.DockerPath;
 import com.github.klboke.kkrepo.protocol.docker.DockerPathParser;
@@ -33,17 +34,20 @@ public class DockerAuthFilter extends OncePerRequestFilter {
   private final DockerAuthService authService;
   private final SecurityAuthenticationService authenticationService;
   private final AccessDecisionService accessDecisionService;
+  private final DockerRegistryDao dockerRegistryDao;
   private final DockerPathParser parser = new DockerPathParser();
 
   public DockerAuthFilter(
       RepositoryRuntimeRegistry registry,
       DockerAuthService authService,
       SecurityAuthenticationService authenticationService,
-      AccessDecisionService accessDecisionService) {
+      AccessDecisionService accessDecisionService,
+      DockerRegistryDao dockerRegistryDao) {
     this.registry = registry;
     this.authService = authService;
     this.authenticationService = authenticationService;
     this.accessDecisionService = accessDecisionService;
+    this.dockerRegistryDao = dockerRegistryDao;
   }
 
   @Override
@@ -90,7 +94,8 @@ public class DockerAuthFilter extends OncePerRequestFilter {
       challenge(response, request, target, challengeActions);
       return;
     }
-    PermissionAction permission = permissionFor(action, request.getMethod(), target.path());
+    PermissionAction permission = permissionFor(
+        action, request.getMethod(), target.path(), runtime.get());
     if (permission != null && !accessDecisionService.decide(
         subject.get().permissionSubject(),
         new RepositoryPermission(
@@ -207,11 +212,15 @@ public class DockerAuthFilter extends OncePerRequestFilter {
     };
   }
 
-  private static PermissionAction permissionFor(String action, String method, DockerPath path) {
+  private PermissionAction permissionFor(
+      String action, String method, DockerPath path, RepositoryRuntime runtime) {
     if ("push".equals(action)) {
-      return path.kind() == DockerPath.Kind.MANIFEST
-          ? PermissionAction.EDIT
-          : PermissionAction.ADD;
+      if (path.kind() == DockerPath.Kind.MANIFEST) {
+        boolean exists = dockerRegistryDao.findManifestByReference(
+            runtime.id(), path.imageName(), path.reference()).isPresent();
+        return exists ? PermissionAction.EDIT : PermissionAction.ADD;
+      }
+      return PermissionAction.ADD;
     }
     return permissionFor(action);
   }
