@@ -10,11 +10,7 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 import java.time.Duration;
 import java.util.LinkedHashMap;
-import java.util.Locale;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.hc.client5.http.auth.AuthScope;
 import org.apache.hc.client5.http.auth.UsernamePasswordCredentials;
 import org.apache.hc.client5.http.classic.methods.HttpGet;
@@ -24,14 +20,20 @@ import org.apache.hc.client5.http.config.RequestConfig;
 import org.apache.hc.client5.http.impl.auth.BasicCredentialsProvider;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.impl.classic.HttpClients;
+import org.apache.hc.client5.http.impl.io.DefaultHttpClientConnectionOperator;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
+import org.apache.hc.client5.http.io.DetachedSocketFactory;
+import org.apache.hc.client5.http.io.HttpClientConnectionOperator;
+import org.apache.hc.client5.http.ssl.DefaultClientTlsStrategy;
+import org.apache.hc.client5.http.ssl.TlsSocketStrategy;
 import org.apache.hc.core5.http.Header;
 import org.apache.hc.core5.http.HttpEntity;
 import org.apache.hc.core5.http.ClassicHttpRequest;
 import org.apache.hc.core5.http.ClassicHttpResponse;
 import org.apache.hc.core5.http.HttpHost;
 import org.apache.hc.core5.http.URIScheme;
-import org.apache.hc.core5.http.io.SocketConfig;
+import org.apache.hc.core5.http.config.Lookup;
+import org.apache.hc.core5.http.config.RegistryBuilder;
 import org.apache.hc.client5.http.protocol.HttpClientContext;
 import org.apache.hc.core5.util.Timeout;
 import org.slf4j.Logger;
@@ -45,12 +47,11 @@ import org.springframework.stereotype.Component;
  *
  * <p>HTTP proxies use Apache HttpClient 5's native CONNECT support with a per-client
  * {@code CredentialsProvider}, so HTTP proxy credentials are fully isolated per repository. SOCKS
- * uses HttpClient 5's native {@code SocketConfig.socksProxyAddress} support (the JDK's
- * {@code java.net.Proxy(SOCKS)} under the hood). Because the JDK only surfaces SOCKS5
- * username/password auth through the JVM-global {@link java.net.Authenticator}, this class installs
- * a single dispatcher authenticator that routes each challenge to the credentials registered for
- * that proxy's host:port — so repositories using different SOCKS proxies keep their own credentials
- * instead of overwriting one another (see the note on {@link #buildSocks}).
+ * clients get their own {@link DefaultHttpClientConnectionOperator} whose sockets perform the
+ * RFC 1928/1929 handshake themselves (see {@link Socks5TunnelSocket}): the credentials are captured
+ * in that client's socket factory, never in the JVM-global {@code java.net.Authenticator}, so
+ * repositories sharing one SOCKS endpoint with different accounts stay isolated and evicting a
+ * cached client drops its credentials with it.
  *
  * <p>Each distinct {@link OutboundProxyConfig#cacheKey()} gets its own pooled
  * {@link CloseableHttpClient} in a Caffeine cache. Entries expire after a period without use
@@ -193,18 +194,28 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
   }
 
   private CloseableHttpClient buildSocks(OutboundProxyConfig config) {
-    registerSocksCredentials(config);
-    // HttpClient 5 natively supports SOCKS via SocketConfig.socksProxyAddress: the connection
-    // operator builds a java.net.Proxy(SOCKS) and tunnels every connection (plain and TLS) through
-    // it. This is the supported path — registering a custom ConnectionSocketFactory for "http" is
-    // ignored by the operator in HttpClient 5.4+.
-    PoolingHttpClientConnectionManager connectionManager = new PoolingHttpClientConnectionManager();
+    // The JDK's java.net.Proxy(SOCKS) support only surfaces SOCKS5 username/password auth through
+    // the JVM-global Authenticator, which cannot be scoped per repository. Instead each client gets
+    // its own connection operator whose DetachedSocketFactory hands out Socks5TunnelSockets that
+    // capture this config's proxy address and credentials — the RFC 1928/1929 handshake runs
+    // entirely inside Socket.connect, before any TLS layering. Nothing static or JVM-global is
+    // touched, so same-endpoint repositories never overwrite each other's credentials and a
+    // credential clear/delete leaves no residue once the client is evicted.
+    InetSocketAddress proxyAddress = new InetSocketAddress(config.host(), config.port());
+    String username = config.authenticated() ? config.username() : null;
+    String password = config.password();
+    DetachedSocketFactory socketFactory = proxy ->
+        new Socks5TunnelSocket(proxyAddress, username, password);
+    Lookup<TlsSocketStrategy> tlsStrategies = RegistryBuilder.<TlsSocketStrategy>create()
+        .register(URIScheme.HTTPS.getId(), DefaultClientTlsStrategy.createDefault())
+        .build();
+    HttpClientConnectionOperator operator =
+        new DefaultHttpClientConnectionOperator(socketFactory, null, null, tlsStrategies);
+    PoolingHttpClientConnectionManager connectionManager =
+        new PoolingHttpClientConnectionManager(operator, null, null, null, null);
     connectionManager.setMaxTotal(50);
     connectionManager.setDefaultMaxPerRoute(20);
     connectionManager.setDefaultConnectionConfig(defaultConnectionConfig());
-    connectionManager.setDefaultSocketConfig(SocketConfig.custom()
-        .setSocksProxyAddress(new InetSocketAddress(config.host(), config.port()))
-        .build());
     log.info("Configured outbound SOCKS proxy {}:{} for upstream repository fetches",
         config.host(), config.port());
     return HttpClients.custom()
@@ -234,52 +245,8 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
 
   // --- SOCKS5 username/password authentication -------------------------------------------------
   //
-  // The JDK's java.net.Proxy(SOCKS) implementation only surfaces username/password auth through
-  // the JVM-global Authenticator. Installing one authenticator per repository would make
-  // repositories overwrite each other's credentials. Instead we install a single dispatcher that
-  // routes each SOCKS auth challenge to the credentials registered for that proxy's host:port, so
-  // repositories using different SOCKS proxies (or different accounts) stay isolated. The same
-  // proxy host:port can only carry one credential set — that is an accepted, documented limit.
-
-  private static final ConcurrentMap<String, UsernamePasswordCredentials> SOCKS_CREDENTIALS =
-      new ConcurrentHashMap<>();
-  private static final AtomicBoolean DISPATCHER_INSTALLED = new AtomicBoolean();
-
-  private static void registerSocksCredentials(OutboundProxyConfig config) {
-    if (!config.authenticated()) {
-      return;
-    }
-    installSocksDispatcher();
-    SOCKS_CREDENTIALS.put(
-        socksKey(config.host(), config.port()),
-        new UsernamePasswordCredentials(config.username(), passwordChars(config.password())));
-  }
-
-  private static String socksKey(String host, int port) {
-    return host.trim().toLowerCase(Locale.ROOT) + ":" + port;
-  }
-
-  private static void installSocksDispatcher() {
-    if (!DISPATCHER_INSTALLED.compareAndSet(false, true)) {
-      return;
-    }
-    java.net.Authenticator.setDefault(new java.net.Authenticator() {
-      @Override
-      protected java.net.PasswordAuthentication getPasswordAuthentication() {
-        String host = getRequestingHost();
-        if (host == null) {
-          return null;
-        }
-        UsernamePasswordCredentials credentials =
-            SOCKS_CREDENTIALS.get(socksKey(host, getRequestingPort()));
-        if (credentials == null) {
-          return null;
-        }
-        return new java.net.PasswordAuthentication(
-            credentials.getUserName(), credentials.getUserPassword());
-      }
-    });
-  }
+  // No JVM-global state: each SOCKS client performs the handshake (including RFC 1929 auth) in
+  // its own Socks5TunnelSocket instances; see buildSocks.
 
   /** Live Apache response; closing it releases the pooled connection. */
   public static final class ProxiedResponse implements AutoCloseable {

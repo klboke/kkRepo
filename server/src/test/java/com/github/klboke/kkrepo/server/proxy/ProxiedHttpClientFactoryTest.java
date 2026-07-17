@@ -59,8 +59,8 @@ class ProxiedHttpClientFactoryTest {
   @Test
   void socksClientTunnelsAndAuthenticatesThroughConfiguredProxy() throws Exception {
     // An in-process SOCKS5 server that demands RFC 1929 auth and records the credential it receives.
-    // The request is tunnelled through the JDK's native SOCKS support; the factory's dispatcher
-    // authenticator must supply this config's credentials to the JDK.
+    // The tunnel is established by the client's own Socks5TunnelSocket, which must supply this
+    // config's credentials during the handshake.
     RecordingSocksServer server = new RecordingSocksServer("alice", "s3cret");
     server.start();
     try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
@@ -112,6 +112,81 @@ class ProxiedHttpClientFactoryTest {
       first.stop();
       second.stop();
     }
+  }
+
+  @Test
+  void socksCredentialsAreClientScopedOnSharedEndpoint() throws Exception {
+    // Two repositories sharing one SOCKS host:port with different accounts. The second client is
+    // built before the first one is exercised, so a static host:port-keyed credential map (the old
+    // implementation) would have overwritten the first account. Every recorded attempt must pair
+    // each username with its own password.
+    RecordingSocksServer server = RecordingSocksServer.acceptingAny();
+    server.start();
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      OutboundProxyConfig alice = new OutboundProxyConfig(
+          OutboundProxyConfig.Type.SOCKS, "127.0.0.1", server.port(), "alice", "pw-a");
+      OutboundProxyConfig bob = new OutboundProxyConfig(
+          OutboundProxyConfig.Type.SOCKS, "127.0.0.1", server.port(), "bob", "pw-b");
+      try (CloseableHttpClient clientA = factory.clientFor(alice);
+          CloseableHttpClient clientB = factory.clientFor(bob)) {
+        assertNotSame(clientA, clientB);
+        assertThrows(IOException.class, () ->
+            factory.execute(alice, "GET", java.net.URI.create("http://localhost/"),
+                java.util.Map.of(), 5000));
+        assertThrows(IOException.class, () ->
+            factory.execute(bob, "GET", java.net.URI.create("http://localhost/"),
+                java.util.Map.of(), 5000));
+      }
+      assertTrue(server.awaitHandshake());
+      assertTrue(server.attempts().stream().anyMatch("alice/pw-a"::equals),
+          "alice's client never offered her own credentials: " + server.attempts());
+      assertTrue(server.attempts().stream().anyMatch("bob/pw-b"::equals),
+          "bob's client never offered his own credentials: " + server.attempts());
+      assertTrue(server.attempts().stream()
+              .allMatch(pair -> pair.equals("alice/pw-a") || pair.equals("bob/pw-b")),
+          "cross-wired credential pair observed: " + server.attempts());
+    } finally {
+      server.stop();
+    }
+  }
+
+  @Test
+  void clearedSocksCredentialsLeaveNoJvmGlobalResidue() throws Exception {
+    // A repository that switches from authenticated SOCKS to anonymous (or is deleted) must not
+    // leave its account behind in any static state, and the JVM-wide Authenticator must never be
+    // replaced — otherwise unrelated code in the same JVM would consult our dispatcher.
+    java.net.Authenticator defaultBefore = java.net.Authenticator.getDefault();
+    RecordingSocksServer server = RecordingSocksServer.acceptingAny();
+    server.start();
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      OutboundProxyConfig authed = new OutboundProxyConfig(
+          OutboundProxyConfig.Type.SOCKS, "127.0.0.1", server.port(), "alice", "pw-a");
+      OutboundProxyConfig anonymous = new OutboundProxyConfig(
+          OutboundProxyConfig.Type.SOCKS, "127.0.0.1", server.port(), null, null);
+      try (CloseableHttpClient ignored = factory.clientFor(authed)) {
+        assertThrows(IOException.class, () ->
+            factory.execute(authed, "GET", java.net.URI.create("http://localhost/"),
+                java.util.Map.of(), 5000));
+      }
+      int authedAttempts = server.attempts().size();
+      assertTrue(authedAttempts >= 1, "expected at least one authenticated attempt");
+      // RepositoryService evicts the cached client on update/delete; after that the cleared
+      // repository fetches anonymously and the stale account must never be offered again.
+      factory.invalidate(authed);
+      try (CloseableHttpClient ignored = factory.clientFor(anonymous)) {
+        assertThrows(IOException.class, () ->
+            factory.execute(anonymous, "GET", java.net.URI.create("http://localhost/"),
+                java.util.Map.of(), 5000));
+      }
+      assertEquals(authedAttempts, server.attempts().size(),
+          "stale credentials were offered after the switch to anonymous: " + server.attempts());
+      assertTrue(server.selectedMethods().contains(0x00),
+          "expected an anonymous SOCKS5 handshake, methods: " + server.selectedMethods());
+    } finally {
+      server.stop();
+    }
+    assertSame(defaultBefore, java.net.Authenticator.getDefault(),
+        "authenticated SOCKS must not install a JVM-global Authenticator");
   }
 
   private static void assertOnlyCredentials(
@@ -328,14 +403,19 @@ class ProxiedHttpClientFactoryTest {
   }
 
   /**
-   * Minimal single-shot SOCKS5 server that demands RFC 1929 username/password auth, records the
-   * credentials, answers CONNECT with success, then closes (the client fails afterwards — fine).
+   * Minimal single-shot SOCKS5 server that records each handshake, answers CONNECT with success,
+   * then closes (the client fails afterwards — fine). In the default mode it demands RFC 1929
+   * username/password auth for one expected account; {@link #acceptingAny()} also accepts any
+   * credentials and anonymous (0x00) handshakes, so tests can observe exactly what each client
+   * offered.
    */
   private static final class RecordingSocksServer {
     private final String expectedUser;
     private final String expectedPass;
     private final List<String> usernames = new CopyOnWriteArrayList<>();
     private final List<String> passwords = new CopyOnWriteArrayList<>();
+    private final List<String> attempts = new CopyOnWriteArrayList<>();
+    private final List<Integer> selectedMethods = new CopyOnWriteArrayList<>();
     private final CountDownLatch handshakeSeen = new CountDownLatch(1);
     private ServerSocket serverSocket;
     private Thread thread;
@@ -344,6 +424,10 @@ class ProxiedHttpClientFactoryTest {
     RecordingSocksServer(String expectedUser, String expectedPass) {
       this.expectedUser = expectedUser;
       this.expectedPass = expectedPass;
+    }
+
+    static RecordingSocksServer acceptingAny() {
+      return new RecordingSocksServer(null, null);
     }
 
     void start() throws IOException {
@@ -364,6 +448,16 @@ class ProxiedHttpClientFactoryTest {
 
     List<String> passwords() {
       return passwords;
+    }
+
+    /** Recorded {@code username/password} pairs, one per RFC 1929 attempt. */
+    List<String> attempts() {
+      return attempts;
+    }
+
+    /** Auth method the server selected per handshake (0x00 anonymous, 0x02 username/password). */
+    List<Integer> selectedMethods() {
+      return selectedMethods;
     }
 
     boolean awaitHandshake() throws InterruptedException {
@@ -400,31 +494,45 @@ class ProxiedHttpClientFactoryTest {
         }
         byte[] methods = in.readNBytes(nMethods);
         boolean offersUserPass = false;
+        boolean offersNone = false;
         for (byte m : methods) {
           if (m == 0x02) {
             offersUserPass = true;
           }
+          if (m == 0x00) {
+            offersNone = true;
+          }
         }
-        if (!offersUserPass) {
+        boolean requireAuth = expectedUser != null;
+        if (offersUserPass) {
+          selectedMethods.add(0x02);
+          out.write(new byte[] {0x05, 0x02});
+          out.flush();
+          // RFC 1929 sub-negotiation.
+          int authVer = in.read();
+          int ulen = in.read();
+          String user = new String(in.readNBytes(Math.max(0, ulen)), StandardCharsets.UTF_8);
+          int plen = in.read();
+          String pass = new String(in.readNBytes(Math.max(0, plen)), StandardCharsets.UTF_8);
+          usernames.add(user);
+          passwords.add(pass);
+          attempts.add(user + "/" + pass);
+          handshakeSeen.countDown();
+          boolean ok = !requireAuth
+              || (authVer == 0x01 && user.equals(expectedUser) && pass.equals(expectedPass));
+          out.write(new byte[] {0x01, (byte) (ok ? 0x00 : 0x01)});
+          out.flush();
+          if (!ok) {
+            return;
+          }
+        } else if (offersNone && !requireAuth) {
+          selectedMethods.add(0x00);
+          out.write(new byte[] {0x05, 0x00});
+          out.flush();
+          handshakeSeen.countDown();
+        } else {
           out.write(new byte[] {0x05, (byte) 0xFF});
           out.flush();
-          return;
-        }
-        out.write(new byte[] {0x05, 0x02});
-        out.flush();
-        // RFC 1929 sub-negotiation.
-        int authVer = in.read();
-        int ulen = in.read();
-        String user = new String(in.readNBytes(Math.max(0, ulen)), StandardCharsets.UTF_8);
-        int plen = in.read();
-        String pass = new String(in.readNBytes(Math.max(0, plen)), StandardCharsets.UTF_8);
-        usernames.add(user);
-        passwords.add(pass);
-        handshakeSeen.countDown();
-        boolean ok = authVer == 0x01 && user.equals(expectedUser) && pass.equals(expectedPass);
-        out.write(new byte[] {0x01, (byte) (ok ? 0x00 : 0x01)});
-        out.flush();
-        if (!ok) {
           return;
         }
         // CONNECT request.
