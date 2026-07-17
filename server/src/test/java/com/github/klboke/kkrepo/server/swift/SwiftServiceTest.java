@@ -594,6 +594,42 @@ class SwiftServiceTest {
   }
 
   @Test
+  void proxyAndGroupIdentifiersAcceptDefaultPortGithubSshUrls() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime proxy = proxy(4L, "swift-proxy");
+    String query = "url=ssh%3A%2F%2Fgit%40github.com%3A22%2FAcme%2FDemo.git";
+
+    MavenResponse direct = fixture.service.get(
+        proxy,
+        "identifiers",
+        query,
+        "https://repo.example/repository/swift-proxy/",
+        SwiftMediaTypes.VENDOR_JSON,
+        false);
+
+    PermissionSubject subject = new PermissionSubject("Local", "alice", Set.of(), null);
+    RepositoryRuntime group = group(2L, List.of(proxy));
+    when(fixture.runtimes.resolveById(group.id())).thenReturn(Optional.of(group));
+    when(fixture.accessDecisions.decide(eq(subject), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.allow());
+    MavenResponse aggregated = fixture.service.get(
+        group,
+        "identifiers",
+        query,
+        "https://repo.example/repository/swift-group/",
+        SwiftMediaTypes.VENDOR_JSON,
+        false,
+        subject);
+
+    assertTrue(responseBody(direct).contains("Acme.Demo"));
+    assertTrue(responseBody(aggregated).contains("Acme.Demo"));
+    verify(fixture.accessDecisions).decide(
+        eq(subject),
+        argThat(permission -> "swift-proxy".equals(permission.repository())
+            && "identifiers".equals(permission.pathPattern())));
+  }
+
+  @Test
   void releaseMetadataAndArchiveExposeChecksumAndStoredSourceSignature() throws Exception {
     Fixture fixture = fixture();
     byte[] signature = new byte[] {7, 8, 9};

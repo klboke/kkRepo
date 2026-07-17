@@ -663,8 +663,6 @@ final class SwiftGitHubClient {
     String value = rawUrl.trim();
     if (value.startsWith("git@github.com:")) {
       value = "https://github.com/" + value.substring("git@github.com:".length());
-    } else if (value.startsWith("ssh://git@github.com/")) {
-      value = "https://github.com/" + value.substring("ssh://git@github.com/".length());
     }
     URI uri;
     try {
@@ -672,7 +670,7 @@ final class SwiftGitHubClient {
     } catch (RuntimeException e) {
       return Optional.empty();
     }
-    if (uri.getUserInfo() != null || uri.getFragment() != null || uri.getQuery() != null
+    if (!isSupportedGithubUserInfo(uri) || uri.getFragment() != null || uri.getQuery() != null
         || uri.getHost() == null || !"github.com".equalsIgnoreCase(uri.getHost())
         || uri.getScheme() == null
         || !("https".equalsIgnoreCase(uri.getScheme()) || "ssh".equalsIgnoreCase(uri.getScheme()))
@@ -692,6 +690,12 @@ final class SwiftGitHubClient {
     } catch (SwiftExceptions.BadRequest ignored) {
       return Optional.empty();
     }
+  }
+
+  private static boolean isSupportedGithubUserInfo(URI uri) {
+    String userInfo = uri.getRawUserInfo();
+    return userInfo == null
+        || ("ssh".equalsIgnoreCase(uri.getScheme()) && "git".equals(userInfo));
   }
 
   private static boolean isDefaultGithubPort(URI uri) {
