@@ -1333,7 +1333,8 @@ class SwiftServiceTest {
         null,
         "application/json",
         ("{\"repositoryURLs\":[\"https://github.com/Acme/Demo.git\","
-            + "\"ssh://git@gitlab.com/acme/lib.git\"]}")
+            + "\"ssh://git@gitlab.com/acme/lib.git\","
+            + "\"ssh://git@github.com/Org/Repo.git\"]}")
             .getBytes(StandardCharsets.UTF_8));
     MavenResponse response = fixture.service.publish(
         fixture.runtime,
@@ -1382,6 +1383,8 @@ class SwiftServiceTest {
         publication.getValue().repositoryUrls().getFirst().normalizedUrl());
     assertEquals("ssh://git@gitlab.com/acme/lib.git",
         publication.getValue().repositoryUrls().get(1).normalizedUrl());
+    assertEquals("ssh://git@github.com/Org/Repo.git",
+        publication.getValue().repositoryUrls().get(2).normalizedUrl());
     assertEquals("", publication.getValue().manifests().getFirst().toolsVersion());
   }
 

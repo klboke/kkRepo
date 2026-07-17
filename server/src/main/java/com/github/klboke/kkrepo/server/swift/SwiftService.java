@@ -1766,8 +1766,10 @@ public class SwiftService {
   }
 
   private static String normalizeRepositoryUrl(String raw) {
+    String trimmed = raw == null ? null : raw.trim();
     Optional<SwiftGitHubClient.Coordinates> github = SwiftGitHubClient.coordinatesFromUrl(raw);
-    if (github.isPresent()) {
+    if (github.isPresent()
+        && (trimmed == null || !trimmed.regionMatches(true, 0, "ssh://", 0, 6))) {
       return github.get().repositoryUrl().toLowerCase(Locale.ROOT);
     }
     if (raw == null || raw.isBlank() || raw.length() > MAX_METADATA_URL_LENGTH
@@ -1775,7 +1777,7 @@ public class SwiftService {
       throw new SwiftExceptions.UnprocessableEntity("Invalid repository URL");
     }
     try {
-      URI uri = new URI(raw.trim()).normalize();
+      URI uri = new URI(trimmed).normalize();
       if (uri.getScheme() == null || uri.getScheme().isBlank()
           || uri.getFragment() != null || uri.getQuery() != null) {
         throw new URISyntaxException(raw, "absolute URI without credentials or fragment required");
