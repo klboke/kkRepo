@@ -1,7 +1,9 @@
 package com.github.klboke.kkrepo.server.repositories;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -15,6 +17,8 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityPrivilegeRecord;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
+import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CargoSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CreateCommand;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.DockerSettings;
@@ -870,12 +874,127 @@ class RepositoryServiceTest {
     assertTrue(thrown.getMessage().contains("cyclic-groups=[pub-nested]"));
   }
 
+  @Test
+  void updateEvictsCachedProxyClientWhenOutboundCredentialsRotate() throws Exception {
+    StubRepositoryDao repositories = new StubRepositoryDao(mavenProxyWithOutboundProxy("old-pass"));
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      RepositoryService service = service(repositories, factory);
+      OutboundProxyConfig oldConfig = new OutboundProxyConfig(
+          OutboundProxyConfig.Type.HTTP, "192.168.1.10", 7890, "clash-user", "old-pass");
+      Object staleClient = factory.clientFor(oldConfig);
+
+      service.update("maven-proxy",
+          new UpdateCommand(true, null, null, null,
+              new ProxySettings(
+                  "https://repo.maven.apache.org/maven2/", 1440, 1440, true,
+                  null, null, null, null, null,
+                  "HTTP", "192.168.1.10", 7890, "clash-user", "new-pass", null),
+              null, null, null, null));
+
+      assertNotSame(staleClient, factory.clientFor(oldConfig),
+          "a credential rotation must evict the stale pooled client immediately");
+    }
+  }
+
+  @Test
+  void updateKeepsCachedProxyClientWhenOutboundProxyIsUntouched() throws Exception {
+    StubRepositoryDao repositories = new StubRepositoryDao(mavenProxyWithOutboundProxy("clash-pass"));
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      RepositoryService service = service(repositories, factory);
+      OutboundProxyConfig config = new OutboundProxyConfig(
+          OutboundProxyConfig.Type.HTTP, "192.168.1.10", 7890, "clash-user", "clash-pass");
+      Object cachedClient = factory.clientFor(config);
+
+      service.update("maven-proxy",
+          new UpdateCommand(false, null, null, null, null, null, null, null, null));
+
+      assertSame(cachedClient, factory.clientFor(config),
+          "an update that does not touch the outbound proxy must keep the pooled client");
+    }
+  }
+
+  @Test
+  void updateEvictsCachedProxyClientWhenOutboundProxyIsCleared() throws Exception {
+    StubRepositoryDao repositories = new StubRepositoryDao(mavenProxyWithOutboundProxy("clash-pass"));
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      RepositoryService service = service(repositories, factory);
+      OutboundProxyConfig oldConfig = new OutboundProxyConfig(
+          OutboundProxyConfig.Type.HTTP, "192.168.1.10", 7890, "clash-user", "clash-pass");
+      Object staleClient = factory.clientFor(oldConfig);
+
+      service.update("maven-proxy",
+          new UpdateCommand(true, null, null, null,
+              new ProxySettings(
+                  "https://repo.maven.apache.org/maven2/", 1440, 1440, true,
+                  null, null, null, null, null,
+                  "", null, null, null, null, null),
+              null, null, null, null));
+
+      assertNotSame(staleClient, factory.clientFor(oldConfig),
+          "clearing the proxy must evict the stale pooled client immediately");
+    }
+  }
+
+  @Test
+  void deleteEvictsCachedOutboundProxyClient() throws Exception {
+    StubRepositoryDao repositories = new StubRepositoryDao(mavenProxyWithOutboundProxy("clash-pass"));
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      RepositoryService service = service(repositories, factory);
+      OutboundProxyConfig config = new OutboundProxyConfig(
+          OutboundProxyConfig.Type.HTTP, "192.168.1.10", 7890, "clash-user", "clash-pass");
+      Object staleClient = factory.clientFor(config);
+
+      service.delete("maven-proxy");
+
+      assertNotSame(staleClient, factory.clientFor(config),
+          "deleting the repository must evict its pooled proxy client immediately");
+    }
+  }
+
+  private static RepositoryRecord mavenProxyWithOutboundProxy(String outboundPassword) {
+    Map<String, Object> proxy = new LinkedHashMap<>();
+    proxy.put("remoteUrl", "https://repo.maven.apache.org/maven2/");
+    proxy.put("outboundProxyType", "HTTP");
+    proxy.put("outboundProxyHost", "192.168.1.10");
+    proxy.put("outboundProxyPort", 7890);
+    proxy.put("outboundProxyUsername", "clash-user");
+    proxy.put("outboundProxyPassword", outboundPassword);
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", "maven2-proxy");
+    attributes.put("proxy", proxy);
+    return new RepositoryRecord(
+        1L,
+        "maven-proxy",
+        RepositoryFormat.MAVEN2,
+        RepositoryType.PROXY,
+        "maven2-proxy",
+        true,
+        1L,
+        null,
+        "https://repo.maven.apache.org/maven2/",
+        null,
+        null,
+        null,
+        true,
+        attributes);
+  }
+
   private static RepositoryService service(StubRepositoryDao repositories) {
     return new RepositoryService(
         repositories,
         new StubBlobStoreDao(),
         new StubSecurityDao(),
         new RepositoryRuntimeRegistry(repositories, 0),
+        "/repository");
+  }
+
+  private static RepositoryService service(StubRepositoryDao repositories, ProxiedHttpClientFactory factory) {
+    return new RepositoryService(
+        repositories,
+        new StubBlobStoreDao(),
+        new StubSecurityDao(),
+        new RepositoryRuntimeRegistry(repositories, 0),
+        factory,
         "/repository");
   }
 
@@ -1154,6 +1273,17 @@ class RepositoryServiceTest {
     @Override
     public void replaceMembers(long groupRepositoryId, List<Long> memberRepositoryIds) {
       membersByGroupId.put(groupRepositoryId, List.copyOf(memberRepositoryIds));
+    }
+
+    @Override
+    public boolean hasComponents(long repositoryId) {
+      return false;
+    }
+
+    @Override
+    public int deleteById(long id) {
+      boolean removed = repositories.removeIf(row -> row.id().equals(id));
+      return removed ? 1 : 0;
     }
 
     @Override

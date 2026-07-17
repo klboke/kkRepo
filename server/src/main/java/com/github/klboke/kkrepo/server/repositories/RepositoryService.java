@@ -15,6 +15,8 @@ import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmGroupPackumentCache;
 import com.github.klboke.kkrepo.server.pypi.PypiGroupSimpleIndexCache;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
+import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CargoSettings;
@@ -68,6 +70,7 @@ public class RepositoryService {
   private final RepositoryCatalogCache repositoryCatalogCache;
   private final DockerConnectorRuntime dockerConnectorRuntime;
   private final TerraformRegistryDao terraformRegistry;
+  private final ProxiedHttpClientFactory proxiedHttpClientFactory;
   private final String urlPrefix;
   private final int serverPort;
   private final int managementPort;
@@ -89,6 +92,7 @@ public class RepositoryService {
       RepositoryCatalogCache repositoryCatalogCache,
       DockerConnectorRuntime dockerConnectorRuntime,
       TerraformRegistryDao terraformRegistry,
+      ProxiedHttpClientFactory proxiedHttpClientFactory,
       @Value("${kkrepo.compatibility.repository-url-prefix:/repository}") String urlPrefix,
       @Value("${server.port:8080}") int serverPort,
       @Value("${management.server.port:${server.port:8080}}") int managementPort) {
@@ -107,6 +111,7 @@ public class RepositoryService {
     this.repositoryCatalogCache = repositoryCatalogCache;
     this.dockerConnectorRuntime = dockerConnectorRuntime;
     this.terraformRegistry = terraformRegistry;
+    this.proxiedHttpClientFactory = proxiedHttpClientFactory;
     this.urlPrefix = urlPrefix;
     this.serverPort = serverPort;
     this.managementPort = managementPort;
@@ -120,7 +125,7 @@ public class RepositoryService {
       String urlPrefix) {
     this(repositoryDao, blobStoreDao, securityDao, runtimeRegistry, null, null,
         null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, null, null, null,
-        null, urlPrefix, 8080, 8080);
+        null, null, urlPrefix, 8080, 8080);
   }
 
   public RepositoryService(
@@ -132,7 +137,19 @@ public class RepositoryService {
       String urlPrefix) {
     this(repositoryDao, blobStoreDao, securityDao, runtimeRegistry, null, null,
         null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, cacheController, null, null,
-        null, urlPrefix, 8080, 8080);
+        null, null, urlPrefix, 8080, 8080);
+  }
+
+  RepositoryService(
+      RepositoryDao repositoryDao,
+      BlobStoreDao blobStoreDao,
+      SecurityDao securityDao,
+      RepositoryRuntimeRegistry runtimeRegistry,
+      ProxiedHttpClientFactory proxiedHttpClientFactory,
+      String urlPrefix) {
+    this(repositoryDao, blobStoreDao, securityDao, runtimeRegistry, null, null,
+        null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, null, null, null,
+        null, proxiedHttpClientFactory, urlPrefix, 8080, 8080);
   }
 
   RepositoryService(
@@ -144,7 +161,7 @@ public class RepositoryService {
       int serverPort,
       int managementPort) {
     this(repositoryDao, blobStoreDao, securityDao, runtimeRegistry, null, null,
-        null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, null, null, null, null, urlPrefix,
+        null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, null, null, null, null, null, urlPrefix,
         serverPort, managementPort);
   }
 
@@ -318,6 +335,7 @@ public class RepositoryService {
         online, blobStoreId, existing.routingRuleId(), proxyRemoteUrl,
         versionPolicy, layoutPolicy, writePolicy, strict, attributes);
     repositoryDao.update(toUpdate);
+    evictStaleOutboundProxyClient(existing.attributes(), attributes);
 
     if (recipe.type() == RepositoryType.GROUP && command.group() != null) {
       List<Long> memberIds = resolveMemberIds(name, recipe.format(), command.group());
@@ -361,6 +379,7 @@ public class RepositoryService {
     if (removed == 0) {
       throw new RepositoryNotFoundException(name);
     }
+    evictOutboundProxyClient(existing.attributes());
     NexusRepositorySecurityContributor.removeRepositoryPrivileges(securityDao, existing.format(), name);
     invalidateRuntimeCache(existing.id(), name);
     invalidateRepositoryCacheTokensAfterCommit(existing.id());
@@ -403,6 +422,43 @@ public class RepositoryService {
       proxyNegativeCache.invalidateRepository(repositoryId);
     }
     invalidateContainingRuntimeCaches(repositoryId, new HashSet<>());
+  }
+
+  /**
+   * Evicts the cached outbound-proxy HTTP client when the proxy block changed (or disappeared)
+   * across an update, so a rotated credential or a switched-off proxy never keeps a stale
+   * connection pool alive until the idle TTL. Compared on the collision-safe cache key, so an
+   * untouched block keeps its pooled client.
+   */
+  private void evictStaleOutboundProxyClient(
+      Map<String, Object> previousAttributes, Map<String, Object> newAttributes) {
+    if (proxiedHttpClientFactory == null) {
+      return;
+    }
+    OutboundProxyConfig previous = OutboundProxyConfig.fromAttributes(proxyChildMap(previousAttributes));
+    if (previous == null) {
+      return;
+    }
+    OutboundProxyConfig current = OutboundProxyConfig.fromAttributes(proxyChildMap(newAttributes));
+    if (current != null && current.cacheKey().equals(previous.cacheKey())) {
+      return;
+    }
+    proxiedHttpClientFactory.invalidate(previous);
+  }
+
+  private void evictOutboundProxyClient(Map<String, Object> attributes) {
+    if (proxiedHttpClientFactory == null) {
+      return;
+    }
+    proxiedHttpClientFactory.invalidate(OutboundProxyConfig.fromAttributes(proxyChildMap(attributes)));
+  }
+
+  private static Map<?, ?> proxyChildMap(Map<String, Object> attributes) {
+    if (attributes == null) {
+      return null;
+    }
+    Object proxy = attributes.get("proxy");
+    return proxy instanceof Map<?, ?> map ? map : null;
   }
 
   private void invalidateContainingRuntimeCaches(long repositoryId, Set<Long> visited) {

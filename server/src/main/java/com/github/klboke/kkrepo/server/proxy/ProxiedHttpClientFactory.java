@@ -87,6 +87,20 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
   }
 
   /**
+   * Evicts the cached client for the given config and closes its connection pool via the removal
+   * listener. Called when a repository's outbound proxy settings change or the repository is
+   * deleted, so a stale pool never lingers until the idle TTL. A no-op for absent/disabled
+   * configs.
+   */
+  public void invalidate(OutboundProxyConfig config) {
+    if (config == null || !config.enabled()) {
+      return;
+    }
+    cache.invalidate(config.cacheKey());
+    cache.cleanUp();
+  }
+
+  /**
    * Closes every cached client and its connection pool. Invoked on application shutdown so pooled
    * connections do not outlive the process; the Caffeine removal listener also closes any client
    * evicted by the idle TTL.

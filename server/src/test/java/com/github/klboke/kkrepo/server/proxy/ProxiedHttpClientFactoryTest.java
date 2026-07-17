@@ -292,6 +292,29 @@ class ProxiedHttpClientFactoryTest {
   }
 
   @Test
+  void invalidateEvictsAndClosesCachedClient() throws Exception {
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      OutboundProxyConfig config =
+          new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "10.0.0.8", 7890, "u", "pw");
+      CloseableHttpClient cached = factory.clientFor(config);
+      assertSame(cached, factory.clientFor(config));
+      factory.invalidate(config);
+      assertNotSame(cached, factory.clientFor(config),
+          "invalidate must drop the cached client so the next lookup rebuilds it");
+      assertThrows(IllegalStateException.class, () ->
+          cached.executeOpen(null, new HttpGet("http://localhost/"), null));
+    }
+  }
+
+  @Test
+  void invalidateIgnoresNullAndDisabledConfigs() throws Exception {
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      factory.invalidate(null);
+      factory.invalidate(new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "", 0, null, null));
+    }
+  }
+
+  @Test
   void shutdownClosesCachedClients() throws Exception {
     ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000);
     OutboundProxyConfig config =

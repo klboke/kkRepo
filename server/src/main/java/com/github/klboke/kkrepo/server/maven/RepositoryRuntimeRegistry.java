@@ -271,22 +271,7 @@ public class RepositoryRuntimeRegistry {
   }
 
   private static com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig readOutboundProxy(Map<?, ?> proxyMap) {
-    Object typeRaw = proxyMap.get("outboundProxyType");
-    com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.Type type =
-        com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.parseType(
-            typeRaw == null ? null : typeRaw.toString());
-    Object hostRaw = proxyMap.get("outboundProxyHost");
-    String host = hostRaw == null ? null : hostRaw.toString();
-    Integer port = asInt(proxyMap.get("outboundProxyPort"));
-    Object userRaw = proxyMap.get("outboundProxyUsername");
-    String username = userRaw == null || userRaw.toString().isBlank() ? null : userRaw.toString();
-    Object passRaw = proxyMap.get("outboundProxyPassword");
-    String password = passRaw == null || passRaw.toString().isBlank() ? null : passRaw.toString();
-    if (host == null || host.isBlank() || port == null || port <= 0) {
-      return null;
-    }
-    return new com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig(
-        type, host.trim(), port, username, password);
+    return com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.fromAttributes(proxyMap);
   }
 
   private static Integer asInt(Object value) {

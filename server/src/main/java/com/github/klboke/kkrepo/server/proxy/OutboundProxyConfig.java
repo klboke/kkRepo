@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * Per-repository outbound network proxy configuration for proxy-type repositories.
@@ -67,6 +68,45 @@ public record OutboundProxyConfig(Type type, String host, int port, String usern
       return sb.toString();
     } catch (NoSuchAlgorithmException e) {
       throw new IllegalStateException("SHA-256 is required by the JRE", e);
+    }
+  }
+
+  /**
+   * Reads the outbound proxy block from a repository's {@code attributes.proxy} map. Returns
+   * {@code null} when no usable host/port is stored, so "no proxy" and "incomplete proxy" both
+   * collapse to absent. Shared by the runtime registry and by {@code RepositoryService}, which
+   * needs the previous config to evict its cached client on update/delete.
+   */
+  public static OutboundProxyConfig fromAttributes(Map<?, ?> proxyMap) {
+    if (proxyMap == null) {
+      return null;
+    }
+    Object typeRaw = proxyMap.get("outboundProxyType");
+    Type type = parseType(typeRaw == null ? null : typeRaw.toString());
+    Object hostRaw = proxyMap.get("outboundProxyHost");
+    String host = hostRaw == null ? null : hostRaw.toString();
+    Integer port = asInt(proxyMap.get("outboundProxyPort"));
+    Object userRaw = proxyMap.get("outboundProxyUsername");
+    String username = userRaw == null || userRaw.toString().isBlank() ? null : userRaw.toString();
+    Object passRaw = proxyMap.get("outboundProxyPassword");
+    String password = passRaw == null || passRaw.toString().isBlank() ? null : passRaw.toString();
+    if (host == null || host.isBlank() || port == null || port <= 0) {
+      return null;
+    }
+    return new OutboundProxyConfig(type, host.trim(), port, username, password);
+  }
+
+  private static Integer asInt(Object value) {
+    if (value == null) {
+      return null;
+    }
+    if (value instanceof Number number) {
+      return number.intValue();
+    }
+    try {
+      return Integer.parseInt(value.toString());
+    } catch (NumberFormatException e) {
+      return null;
     }
   }
 
