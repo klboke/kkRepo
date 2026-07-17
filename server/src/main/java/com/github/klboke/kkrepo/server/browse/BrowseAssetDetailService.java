@@ -256,7 +256,7 @@ public class BrowseAssetDetailService {
       String sourceRepositoryName) {
     SwiftPath parsed;
     try {
-      parsed = SWIFT_PATHS.parse(publicPath);
+      parsed = SWIFT_PATHS.parseReleaseMetadata(publicPath);
     } catch (IllegalArgumentException e) {
       return Optional.empty();
     }
@@ -272,6 +272,13 @@ public class BrowseAssetDetailService {
           .toList();
     }
     for (RepositoryRecord source : sources) {
+      if (swiftDao.findTombstone(
+          source.id(),
+          parsed.scope().toLowerCase(Locale.ROOT),
+          parsed.name().toLowerCase(Locale.ROOT),
+          parsed.version()).isPresent()) {
+        throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Swift release not found");
+      }
       Optional<SwiftRegistryDao.Release> release = swiftDao.findRelease(
           source.id(),
           parsed.scope().toLowerCase(Locale.ROOT),
@@ -323,6 +330,13 @@ public class BrowseAssetDetailService {
           .toList();
     }
     for (RepositoryRecord source : sources) {
+      if (swiftDao.findTombstone(
+          source.id(),
+          parts[0].toLowerCase(Locale.ROOT),
+          parts[1].toLowerCase(Locale.ROOT),
+          parts[2]).isPresent()) {
+        throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Swift release not found");
+      }
       Optional<SwiftRegistryDao.Release> release = swiftDao.findRelease(
           source.id(),
           parts[0].toLowerCase(Locale.ROOT),

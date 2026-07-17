@@ -2,7 +2,9 @@ package com.github.klboke.kkrepo.server.browse;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
@@ -50,6 +52,36 @@ class SwiftBrowseServiceTest {
     assertTrue(!projected.getFirst().leaf());
     assertEquals(source.name(), projected.getFirst().sourceRepository());
     assertEquals(null, projected.getFirst().downloadUrl());
+  }
+
+  @Test
+  void tombstoneStopsLaterBrowseSourceFromRevivingRelease() {
+    RepositoryRecord group = repository(1L, "swift-group", RepositoryType.GROUP);
+    RepositoryRecord deleted = repository(2L, "swift-deleted", RepositoryType.HOSTED);
+    RepositoryRecord later = repository(3L, "swift-later", RepositoryType.HOSTED);
+    String releasePath = "Alamofire/Alamofire/5.12.0";
+    SwiftRegistryDao registry = mock(SwiftRegistryDao.class);
+    AssetDao assets = mock(AssetDao.class);
+    SwiftRegistryDao.Tombstone tombstone = new SwiftRegistryDao.Tombstone(
+        deleted.id(),
+        "alamofire",
+        "alamofire",
+        "5.12.0",
+        "deleted",
+        8L,
+        Instant.parse("2026-07-17T05:27:58Z"));
+    when(registry.findTombstone(deleted.id(), "alamofire", "alamofire", "5.12.0"))
+        .thenReturn(Optional.of(tombstone));
+    when(registry.findRelease(later.id(), "alamofire", "alamofire", "5.12.0"))
+        .thenReturn(Optional.of(release(later, "5.12.0")));
+    SwiftBrowseService service = new SwiftBrowseService(registry, assets);
+
+    assertTrue(service.list(group, List.of(deleted, later), releasePath).isEmpty());
+
+    verify(registry, never()).findRelease(
+        deleted.id(), "alamofire", "alamofire", "5.12.0");
+    verify(registry, never()).findRelease(
+        later.id(), "alamofire", "alamofire", "5.12.0");
   }
 
   @Test

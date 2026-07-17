@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -556,6 +557,91 @@ class BrowseAssetDetailServiceTest {
   }
 
   @Test
+  void swiftReleaseMetadataDetailPreservesSemverEndingInZip() {
+    RepositoryRecord repository = repository(
+        1L, "swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    String version = "1.2.3+linux.zip";
+    String path = "Acme/Library/" + version;
+    SwiftRegistryDao swift = mock(SwiftRegistryDao.class);
+    Instant updatedAt = Instant.parse("2026-07-16T00:00:00Z");
+    SwiftRegistryDao.Release release = new SwiftRegistryDao.Release(
+        50L,
+        repository.id(),
+        20L,
+        "acme",
+        "Acme",
+        "library",
+        "Library",
+        version,
+        updatedAt,
+        "{}",
+        "a".repeat(64),
+        10L,
+        null,
+        null,
+        null,
+        "HOSTED",
+        7L,
+        SwiftRegistryDao.RELEASE_READY,
+        updatedAt,
+        updatedAt);
+    when(swift.findRelease(repository.id(), "acme", "library", version))
+        .thenReturn(Optional.of(release));
+    StubAssetDao assets = new StubAssetDao(Map.of(), Map.of());
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(),
+        assets,
+        null,
+        null,
+        swift,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    BrowseAssetDetailService.BrowseAssetDetail detail = service.detail(repository, path, null);
+
+    assertEquals(version, detail.swift().get("version"));
+    assertEquals("release-metadata", detail.swift().get("asset_kind"));
+    assertEquals(List.of(), assets.pathLookups);
+  }
+
+  @Test
+  void swiftReleaseMetadataDetailStopsAtGroupTombstone() {
+    RepositoryRecord group = repository(
+        1L, "swift-group", RepositoryFormat.SWIFT, RepositoryType.GROUP);
+    RepositoryRecord deleted = repository(
+        2L, "swift-deleted", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    RepositoryRecord later = repository(
+        3L, "swift-later", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    String path = "Alamofire/Alamofire/5.12.0";
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    when(repositories.listMembers(group.id())).thenReturn(List.of(deleted, later));
+    SwiftRegistryDao swift = mock(SwiftRegistryDao.class);
+    when(swift.findTombstone(deleted.id(), "alamofire", "alamofire", "5.12.0"))
+        .thenReturn(Optional.of(new SwiftRegistryDao.Tombstone(
+            deleted.id(),
+            "alamofire",
+            "alamofire",
+            "5.12.0",
+            "deleted",
+            8L,
+            Instant.parse("2026-07-17T05:27:58Z"))));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        repositories,
+        new StubAssetDao(Map.of(), Map.of()),
+        null,
+        null,
+        swift,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    ResponseStatusException error = assertThrows(
+        ResponseStatusException.class, () -> service.detail(group, path, null));
+
+    assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode());
+    verify(swift, never()).findRelease(later.id(), "alamofire", "alamofire", "5.12.0");
+  }
+
+  @Test
   void swiftManifestDetailPreservesSemverEndingInZip() {
     RepositoryRecord repository = repository(
         1L, "swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
@@ -595,6 +681,43 @@ class BrowseAssetDetailServiceTest {
 
     assertEquals(version, detail.swift().get("version"));
     verify(swift).findRelease(repository.id(), "acme", "library", version);
+  }
+
+  @Test
+  void swiftManifestDetailStopsAtGroupTombstone() {
+    RepositoryRecord group = repository(
+        1L, "swift-group", RepositoryFormat.SWIFT, RepositoryType.GROUP);
+    RepositoryRecord deleted = repository(
+        2L, "swift-deleted", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    RepositoryRecord later = repository(
+        3L, "swift-later", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
+    String path = "Alamofire/Alamofire/5.12.0/swift_manifests/Package.swift";
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    when(repositories.listMembers(group.id())).thenReturn(List.of(deleted, later));
+    SwiftRegistryDao swift = mock(SwiftRegistryDao.class);
+    when(swift.findTombstone(deleted.id(), "alamofire", "alamofire", "5.12.0"))
+        .thenReturn(Optional.of(new SwiftRegistryDao.Tombstone(
+            deleted.id(),
+            "alamofire",
+            "alamofire",
+            "5.12.0",
+            "deleted",
+            8L,
+            Instant.parse("2026-07-17T05:27:58Z"))));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        repositories,
+        new StubAssetDao(Map.of(), Map.of()),
+        null,
+        null,
+        swift,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    ResponseStatusException error = assertThrows(
+        ResponseStatusException.class, () -> service.detail(group, path, null));
+
+    assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode());
+    verify(swift, never()).findRelease(later.id(), "alamofire", "alamofire", "5.12.0");
   }
 
   @Test

@@ -171,6 +171,9 @@ final class SwiftBrowseService {
     String scope = parts[0].toLowerCase(Locale.ROOT);
     String name = parts[1].toLowerCase(Locale.ROOT);
     for (RepositoryRecord source : sources) {
+      if (registry.findTombstone(source.id(), scope, name, parts[2]).isPresent()) {
+        return Optional.empty();
+      }
       Optional<SwiftRegistryDao.Release> release = registry.findRelease(
           source.id(), scope, name, parts[2]);
       if (release.isPresent()) {
