@@ -270,7 +270,6 @@ public class DockerRemoteRegistryClient {
           "GET",
           uri,
           headers,
-          Duration.ofSeconds(10).toMillis(),
           Duration.ofSeconds(180).toMillis());
       status = response.status();
       boolean redirectStatus =
@@ -321,7 +320,6 @@ public class DockerRemoteRegistryClient {
           "GET",
           uri,
           headers,
-          Duration.ofSeconds(10).toMillis(),
           Duration.ofSeconds(30).toMillis());
       status = response.status();
       if (status < 200 || status >= 300) {

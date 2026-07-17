@@ -240,7 +240,6 @@ public class HttpRemoteFetcher {
           req.headOnly() ? "HEAD" : "GET",
           uri,
           headers,
-          Duration.ofSeconds(10).toMillis(),
           timeout.toMillis());
       String location = redirectLocationProxy(response);
       if (location != null) {

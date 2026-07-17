@@ -784,53 +784,52 @@ public class RepositoryService {
   }
 
   private ProxySettings requireProxy(ProxySettings settings, RepositoryFormat format) {
-    if (settings == null && (format == RepositoryFormat.PUB
-        || format == RepositoryFormat.COMPOSER || format == RepositoryFormat.TERRAFORM)) {
-      settings = new ProxySettings(
-          format == RepositoryFormat.PUB ? "https://pub.dev/"
-              : format == RepositoryFormat.COMPOSER ? "https://repo.packagist.org/"
-              : "https://registry.terraform.io/",
-          null, null, null);
+    String defaultRemote = defaultRemoteUrl(format);
+    if (settings == null && defaultRemote != null) {
+      settings = new ProxySettings(defaultRemote, null, null, null);
     }
     if (settings == null) {
       throw new RepositoryValidationException("proxy settings are required for proxy repositories");
     }
-    if (format == RepositoryFormat.PUB
+    if (defaultRemote != null
         && (settings.remoteUrl() == null || settings.remoteUrl().isBlank())) {
-      settings = new ProxySettings(
-          "https://pub.dev/",
-          settings.contentMaxAgeMinutes(),
-          settings.metadataMaxAgeMinutes(),
-          settings.autoBlock(),
-          settings.remoteUsername(),
-          settings.remotePassword(),
-          settings.remotePasswordConfigured(),
-          settings.remoteBearerToken(),
-          settings.remoteBearerTokenConfigured());
-    }
-    if (format == RepositoryFormat.COMPOSER
-        && (settings.remoteUrl() == null || settings.remoteUrl().isBlank())) {
-      settings = new ProxySettings(
-          "https://repo.packagist.org/",
-          settings.contentMaxAgeMinutes(),
-          settings.metadataMaxAgeMinutes(),
-          settings.autoBlock(),
-          settings.remoteUsername(),
-          settings.remotePassword(),
-          settings.remotePasswordConfigured(),
-          settings.remoteBearerToken(),
-          settings.remoteBearerTokenConfigured());
-    }
-    if (format == RepositoryFormat.TERRAFORM
-        && (settings.remoteUrl() == null || settings.remoteUrl().isBlank())) {
-      settings = new ProxySettings(
-          "https://registry.terraform.io/",
-          settings.contentMaxAgeMinutes(), settings.metadataMaxAgeMinutes(), settings.autoBlock(),
-          settings.remoteUsername(), settings.remotePassword(), settings.remotePasswordConfigured(),
-          settings.remoteBearerToken(), settings.remoteBearerTokenConfigured());
+      settings = withRemoteUrl(settings, defaultRemote);
     }
     validateProxy(settings);
     return settings;
+  }
+
+  private static String defaultRemoteUrl(RepositoryFormat format) {
+    return switch (format) {
+      case PUB -> "https://pub.dev/";
+      case COMPOSER -> "https://repo.packagist.org/";
+      case TERRAFORM -> "https://registry.terraform.io/";
+      default -> null;
+    };
+  }
+
+  /**
+   * Rebuilds settings with a new remote URL while preserving every other field, including the
+   * outbound network proxy. Using the compatibility constructor here previously dropped all
+   * outbound proxy fields to null whenever a default remote was applied.
+   */
+  private static ProxySettings withRemoteUrl(ProxySettings settings, String remoteUrl) {
+    return new ProxySettings(
+        remoteUrl,
+        settings.contentMaxAgeMinutes(),
+        settings.metadataMaxAgeMinutes(),
+        settings.autoBlock(),
+        settings.remoteUsername(),
+        settings.remotePassword(),
+        settings.remotePasswordConfigured(),
+        settings.remoteBearerToken(),
+        settings.remoteBearerTokenConfigured(),
+        settings.outboundProxyType(),
+        settings.outboundProxyHost(),
+        settings.outboundProxyPort(),
+        settings.outboundProxyUsername(),
+        settings.outboundProxyPassword(),
+        settings.outboundProxyPasswordConfigured());
   }
 
   private void validateProxy(ProxySettings settings) {

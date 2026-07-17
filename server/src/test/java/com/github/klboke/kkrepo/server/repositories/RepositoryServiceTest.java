@@ -621,6 +621,63 @@ class RepositoryServiceTest {
   }
 
   @Test
+  void createPubProxyWithBlankRemoteKeepsOutboundProxyWhenDefaultingRemoteUrl() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "pub-proxy",
+        "pub-proxy",
+        true,
+        "default",
+        true,
+        null,
+        new ProxySettings("  ", 60, 30, true,
+            null, null, null, null, null,
+            "HTTP", "192.168.1.10", 7890, "clash-user", "clash-pass", null),
+        null,
+        null,
+        null,
+        null));
+
+    assertEquals("https://pub.dev/", created.proxy().remoteUrl());
+    assertEquals("HTTP", created.proxy().outboundProxyType());
+    assertEquals("192.168.1.10", created.proxy().outboundProxyHost());
+    assertEquals(7890, created.proxy().outboundProxyPort());
+    assertEquals("clash-user", created.proxy().outboundProxyUsername());
+    Map<?, ?> proxy = (Map<?, ?>) repositories.repository.attributes().get("proxy");
+    assertEquals("https://pub.dev/", proxy.get("remoteUrl"));
+    assertEquals("192.168.1.10", proxy.get("outboundProxyHost"));
+    assertEquals("clash-pass", proxy.get("outboundProxyPassword"));
+  }
+
+  @Test
+  void createTerraformProxyWithBlankRemoteKeepsOutboundProxyWhenDefaultingRemoteUrl() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "terraform-proxy",
+        "terraform-proxy",
+        true,
+        "default",
+        true,
+        null,
+        new ProxySettings(null, null, null, null,
+            null, null, null, null, null,
+            "SOCKS", "192.168.1.20", 7891, null, null, null),
+        null,
+        null,
+        null,
+        null));
+
+    assertEquals("https://registry.terraform.io/", created.proxy().remoteUrl());
+    assertEquals("SOCKS", created.proxy().outboundProxyType());
+    assertEquals("192.168.1.20", created.proxy().outboundProxyHost());
+    assertEquals(7891, created.proxy().outboundProxyPort());
+  }
+
+  @Test
   void createComposerProxyDefaultsToPackagistWhenProxySettingsAreMissing() {
     StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
     RepositoryService service = service(repositories);

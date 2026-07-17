@@ -1,5 +1,8 @@
 package com.github.klboke.kkrepo.server.proxy;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Locale;
 
 /**
@@ -39,16 +42,32 @@ public record OutboundProxyConfig(Type type, String host, int port, String usern
   }
 
   /**
-   * Stable identity for the per-proxy {@code HttpClient} cache. Includes a non-revealing hash of the
-   * password so a credential rotation produces a fresh client instead of reusing a stale one.
+   * Stable identity for the per-proxy {@code HttpClient} cache. Includes a non-revealing,
+   * collision-resistant SHA-256 digest of the password so a credential rotation produces a fresh
+   * client and two different passwords can never share a cached client the way a 32-bit
+   * {@code String.hashCode()} collision would allow.
    */
   public String cacheKey() {
-    int passwordHash = password == null ? 0 : password.hashCode();
     return type.name()
         + ":" + host.toLowerCase(Locale.ROOT)
         + ":" + port
         + ":" + (username == null ? "" : username)
-        + ":" + passwordHash;
+        + ":" + (password == null ? "-" : sha256Hex(password));
+  }
+
+  private static String sha256Hex(String value) {
+    try {
+      MessageDigest digest = MessageDigest.getInstance("SHA-256");
+      byte[] hash = digest.digest(value.getBytes(StandardCharsets.UTF_8));
+      StringBuilder sb = new StringBuilder(hash.length * 2);
+      for (byte b : hash) {
+        sb.append(Character.forDigit((b >> 4) & 0xF, 16));
+        sb.append(Character.forDigit(b & 0xF, 16));
+      }
+      return sb.toString();
+    } catch (NoSuchAlgorithmException e) {
+      throw new IllegalStateException("SHA-256 is required by the JRE", e);
+    }
   }
 
   /**
