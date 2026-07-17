@@ -240,9 +240,10 @@ swift package-registry login \
 6. 提取根 `Package.swift` 和所有合法 `Package@swift-X[.Y[.Z]].swift`；只解析首行 tools version，不执行 manifest。
 7. 校验 metadata JSON schema、URL 数量/长度和 `originalPublicationTime`；规范化 `repositoryURLs` 用于 identifier mapping。
 8. 若存在 source signature，要求 `X-Swift-Package-Signature-Format` 与 signature part 一致并限制 format/size；source/metadata signature 均持久化，source signature 按协议回传，不冒充客户端信任策略执行任意证书链。
-9. 先把 archive、manifest 和可选 signature 写入 OSS/S3 临时 blob，再在一个关系数据库事务中插入 component、asset、asset_blob、`swift_release`、`swift_manifest`、URL mapping 和 browse node。
-10. 唯一约束冲突返回 `409`。事务失败后只清理确认未被引用的新 blob；不能删除并发请求已经引用的去重 blob。
-11. 提交后失效共享 revision 关联的本地 cache，返回 `201`、`Content-Version: 1` 和当前 repository 下的 `Location`。
+9. 先把 archive、manifest 和可选 signature 写入 OSS/S3，并用请求唯一的 `.swift/staging/<uuid>/...` asset 路径记录临时引用，再在一个关系数据库事务中插入 component、公开 asset、`swift_release`、`swift_manifest`、URL mapping 和 browse node，同时移除 staging asset。
+10. 所有副本都可运行 staging cleanup：默认只领取超过 24 小时的 `.swift/staging/` 行，按 repository path-prefix 索引有界扫描，并用 `FOR UPDATE SKIP LOCKED` 避免多副本重复处理；事务内移除 browse/asset 引用，只有最后一个引用消失时才把 blob 标记给全局 GC。进程在 promote 前终止也不会永久遗留隐藏对象。
+11. 唯一约束冲突返回 `409`。事务失败后只清理确认未被引用的新 blob；不能删除并发请求已经引用的去重 blob。
+12. 提交后失效共享 revision 关联的本地 cache，返回 `201`、`Content-Version: 1` 和当前 repository 下的 `Location`。
 
 并发语义：
 

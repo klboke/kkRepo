@@ -69,6 +69,14 @@ public interface AssetDao {
 
   List<AssetRecord> listAssetsByPrefix(long repositoryId, String pathPrefix);
 
+  /**
+   * Locks a bounded batch of stale assets below a repository path prefix for cleanup. Callers must
+   * invoke this inside the transaction that deletes the returned rows; {@code SKIP LOCKED}
+   * semantics let every replica run the same cleanup worker without duplicate ownership.
+   */
+  List<AssetRecord> claimStaleAssetsByPrefix(
+      long repositoryId, String pathPrefix, Instant updatedBefore, int maxItems);
+
   List<AssetRecord> listAssetsByComponent(long componentId);
 
   int deleteAssetById(long assetId);

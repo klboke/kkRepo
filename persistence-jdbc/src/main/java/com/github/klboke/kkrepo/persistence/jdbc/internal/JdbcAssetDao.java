@@ -406,6 +406,31 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         """, assetRowMapper, repositoryId, escapeLikeLiteral(prefix) + "%");
   }
 
+  @Transactional(propagation = Propagation.MANDATORY)
+  public List<AssetRecord> claimStaleAssetsByPrefix(
+      long repositoryId, String pathPrefix, Instant updatedBefore, int maxItems) {
+    if (pathPrefix == null || pathPrefix.isBlank()) {
+      throw new IllegalArgumentException("Cleanup path prefix is required");
+    }
+    if (updatedBefore == null) {
+      throw new IllegalArgumentException("Cleanup cutoff is required");
+    }
+    return jdbcTemplate.query("""
+        SELECT *
+        FROM asset
+        WHERE repository_id = ?
+          AND path LIKE ? ESCAPE '!'
+          AND last_updated_at < ?
+        ORDER BY last_updated_at, id
+        LIMIT ?
+        FOR UPDATE SKIP LOCKED
+        """, assetRowMapper,
+        repositoryId,
+        escapeLikeLiteral(pathPrefix) + "%",
+        nullableTimestamp(updatedBefore),
+        Math.max(1, maxItems));
+  }
+
   public List<AssetRecord> listAssetsByComponent(long componentId) {
     return jdbcTemplate.query("""
         SELECT * FROM asset

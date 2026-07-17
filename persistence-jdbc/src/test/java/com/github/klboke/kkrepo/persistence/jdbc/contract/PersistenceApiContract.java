@@ -792,6 +792,42 @@ public abstract class PersistenceApiContract {
   }
 
   @Test
+  void staleAssetPrefixClaimsAreBoundedAndPortable() {
+    long repositoryId = createRepository("swift-staging-cleanup", RepositoryFormat.SWIFT);
+    long blobStoreId = stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
+    long oldBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "swift/staging/old.zip", "swift-staging-old-ref"));
+    long freshBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "swift/staging/fresh.zip", "swift-staging-fresh-ref"));
+    long publicBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "swift/releases/public.zip", "swift-release-public-ref"));
+    String oldPath = ".swift/staging/old/source.zip";
+    String freshPath = ".swift/staging/fresh/source.zip";
+    String publicPath = "acme/demo/1.0.0.zip";
+    stores().assets().insertAsset(new AssetRecord(
+        null, repositoryId, null, oldBlobId, RepositoryFormat.SWIFT,
+        oldPath, sha256(oldPath), "source.zip", "swift", "application/zip", 42L,
+        null, Instant.parse("2026-07-13T08:00:00Z"), Map.of()));
+    stores().assets().insertAsset(new AssetRecord(
+        null, repositoryId, null, freshBlobId, RepositoryFormat.SWIFT,
+        freshPath, sha256(freshPath), "source.zip", "swift", "application/zip", 42L,
+        null, Instant.parse("2026-07-13T10:00:00Z"), Map.of()));
+    stores().assets().insertAsset(new AssetRecord(
+        null, repositoryId, null, publicBlobId, RepositoryFormat.SWIFT,
+        publicPath, sha256(publicPath), "1.0.0.zip", "swift", "application/zip", 42L,
+        null, Instant.parse("2026-07-13T08:00:00Z"), Map.of()));
+
+    List<AssetRecord> claimed = inTransaction(() -> stores().assets()
+        .claimStaleAssetsByPrefix(
+            repositoryId,
+            ".swift/staging/",
+            Instant.parse("2026-07-13T09:00:00Z"),
+            1));
+
+    assertEquals(List.of(oldPath), claimed.stream().map(AssetRecord::path).toList());
+  }
+
+  @Test
   void dockerUnreferencedBlobCleanupSqlIsPortable() {
     long dockerRepositoryId = createRepository("docker-cleanup", RepositoryFormat.DOCKER);
     long dockerBlobStoreId = stores().repositories().findById(dockerRepositoryId)
