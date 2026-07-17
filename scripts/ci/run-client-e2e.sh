@@ -1464,12 +1464,13 @@ EOF
   hosted_access_url="$hosted_url"
   if swift_supports_registry_login "$swift_bin" "$hosted_url"; then
     swift_registry_set "$label-hosted" "$swift_bin" "$package_dir" "$home" "$hosted_url"
-    swift_registry_login "$label-hosted" "$swift_bin" "$package_dir" "$home" "$hosted_url"
+    local basic_login_home="$dir/basic-login-home"
+    mkdir -p "$basic_login_home"
+    swift_registry_login "$label-hosted" "$swift_bin" "$package_dir" \
+      "$basic_login_home" "$hosted_url"
     assert_swift_invalid_login "$label-hosted" "$hosted_url"
-    local token_login_home="$dir/token-login-home"
-    mkdir -p "$token_login_home"
     swift_registry_token_login "$label-hosted" "$swift_bin" "$package_dir" \
-      "$token_login_home" "$hosted_url"
+      "$home" "$hosted_url"
   else
     if swift_registry_login_is_required "$label"; then
       log "Swift $label must execute package-registry login over HTTPS, but the command or HTTPS registry is unavailable"
@@ -1582,7 +1583,7 @@ EOF
   group_access_url="$group_url"
   if swift_supports_registry_login "$swift_bin" "$group_url"; then
     swift_registry_set "$label-group" "$swift_bin" "$consumer_dir" "$home" "$group_url"
-    swift_registry_login "$label-group" "$swift_bin" "$consumer_dir" "$home" "$group_url"
+    swift_registry_token_login "$label-group" "$swift_bin" "$consumer_dir" "$home" "$group_url"
   else
     group_access_url="$(authenticated_registry_url "$group_url" "$SWIFT_KKREPO_URL")"
     add_redaction_value "$group_access_url"
@@ -1620,7 +1621,7 @@ EOF
     swift_registry_set "$label-secondary-group" "$swift_bin" \
       "$secondary_consumer_dir" "$secondary_home" "$secondary_group_url"
     if swift_supports_registry_login "$swift_bin" "$secondary_group_url"; then
-      swift_registry_login "$label-secondary-group" "$swift_bin" \
+      swift_registry_token_login "$label-secondary-group" "$swift_bin" \
         "$secondary_consumer_dir" "$secondary_home" "$secondary_group_url"
       secondary_auth_args=(--netrc --netrc-file "$secondary_home/.netrc")
     fi
