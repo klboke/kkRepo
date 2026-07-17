@@ -1693,19 +1693,13 @@ test_swift_xcode() {
   local xcode_source_packages="$WORK_DIR/xcode-source-packages"
   local xcode_derived_data="$WORK_DIR/xcode-derived-data"
   local xcode_config="$package/.swiftpm/configuration/registries.json"
-  local xcode_netrc_data=""
-  local -a xcode_auth_env=()
-  if [[ -f "$xcode_home/.netrc" ]]; then
-    xcode_netrc_data="$(<"$xcode_home/.netrc")"
-    xcode_auth_env=(
-      "SWIFTPM_NETRC_DATA=$xcode_netrc_data"
-      "SWIFTPM_REGISTRY_LOGIN=$KKREPO_USER"
-      "SWIFTPM_REGISTRY_PASSWORD=$KKREPO_PASSWORD"
-    )
-  fi
+  local xcode_registry_url
+  xcode_registry_url="$(authenticated_registry_url \
+    "$SWIFT_KKREPO_URL/repository/swift-group" "$SWIFT_KKREPO_URL")/"
+  add_redaction_value "$xcode_registry_url"
   mkdir -p "$(dirname "$xcode_config")" "$xcode_source_packages" "$xcode_derived_data"
   run_logged swift-xcode-registry-config python3 - "$xcode_config" \
-      "$SWIFT_KKREPO_URL/repository/swift-group/" <<'PY'
+      "$xcode_registry_url" <<'PY'
 import json
 import pathlib
 import sys
@@ -1719,13 +1713,11 @@ PY
   rm -f "$package/Package.resolved"
   run_logged_in swift-xcode-resolve "$package" \
     env HOME="$xcode_home" XDG_CONFIG_HOME="$xcode_home/.config" \
-    ${xcode_auth_env[@]+"${xcode_auth_env[@]}"} \
     xcodebuild -resolvePackageDependencies \
     -scheme "$scheme" \
     -clonedSourcePackagesDirPath "$xcode_source_packages"
   run_logged_in swift-xcode-build "$package" \
     env HOME="$xcode_home" XDG_CONFIG_HOME="$xcode_home/.config" \
-    ${xcode_auth_env[@]+"${xcode_auth_env[@]}"} \
     xcodebuild \
     -scheme "$scheme" \
     -destination 'platform=macOS' \
