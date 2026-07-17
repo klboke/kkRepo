@@ -1229,6 +1229,7 @@ assert_swift_invalid_login() {
       curl --connect-timeout 10 --max-time 20 --fail-with-body -sS \
       -X POST -u "$KKREPO_USER:definitely-invalid" \
       -H 'Accept: application/vnd.swift.registry.v1+json' \
+      --write-out $'\nhttp_status=%{http_code}\n' \
       "$registry/login"; then
     status=0
   else
@@ -1238,7 +1239,11 @@ assert_swift_invalid_login() {
     log "Swift $label registry login unexpectedly accepted invalid credentials"
     return 1
   fi
-  grep -Eqi '401|unauthorized|authentication|login failed|invalid credentials' \
+  if [[ "$status" -ne 22 ]]; then
+    log "Swift $label invalid login probe failed before receiving an HTTP rejection"
+    return 1
+  fi
+  grep -Eq '^http_status=401\r?$' \
     "$ARTIFACT_DIR/swift-$label-registry-login-invalid.log"
 }
 
@@ -1354,10 +1359,12 @@ EOF
   swift_registry_set "$label-proxy-group" "$swift_bin" "$proxy_dir" "$home" "$group_url"
   run_logged_in "swift-$label-proxy-resolve" "$proxy_dir" env \
     HOME="$home" XDG_CONFIG_HOME="$home/.config" \
-    "$swift_bin" package resolve --replace-scm-with-registry "${swift_auth_args[@]}"
+    "$swift_bin" package resolve --replace-scm-with-registry \
+    ${swift_auth_args[@]+"${swift_auth_args[@]}"}
   run_logged_in "swift-$label-proxy-build" "$proxy_dir" env \
     HOME="$home" XDG_CONFIG_HOME="$home/.config" \
-    "$swift_bin" build --replace-scm-with-registry "${swift_auth_args[@]}"
+    "$swift_bin" build --replace-scm-with-registry \
+    ${swift_auth_args[@]+"${swift_auth_args[@]}"}
   cp "$proxy_dir/Package.resolved" "$ARTIFACT_DIR/swift-$label-proxy-Package.resolved"
   assert_swift_registry_pin "$ARTIFACT_DIR/swift-$label-proxy-Package.resolved" \
     "$proxy_scope" "$proxy_name" "$proxy_version" "Swift $label proxy"
@@ -1475,16 +1482,18 @@ EOF
     HOME="$home" XDG_CONFIG_HOME="$home/.config" \
     "$swift_bin" package-registry publish "kkrepo.$package_name" "$version" \
     --url "$hosted_access_url/" --metadata-path "$package_dir/package-metadata.json" \
-    --scratch-directory "$dir/publish-scratch" "${publish_transport_args[@]}" \
-    "${swift_auth_args[@]}"
+    --scratch-directory "$dir/publish-scratch" \
+    ${publish_transport_args[@]+"${publish_transport_args[@]}"} \
+    ${swift_auth_args[@]+"${swift_auth_args[@]}"}
 
   local duplicate_status=0
   if run_logged_in "swift-$label-publish-duplicate" "$package_dir" env \
       HOME="$home" XDG_CONFIG_HOME="$home/.config" \
       "$swift_bin" package-registry publish "kkrepo.$package_name" "$version" \
       --url "$hosted_access_url/" --metadata-path "$package_dir/package-metadata.json" \
-      --scratch-directory "$dir/duplicate-scratch" "${publish_transport_args[@]}" \
-      "${swift_auth_args[@]}"; then
+      --scratch-directory "$dir/duplicate-scratch" \
+      ${publish_transport_args[@]+"${publish_transport_args[@]}"} \
+      ${swift_auth_args[@]+"${swift_auth_args[@]}"}; then
     duplicate_status=0
   else
     duplicate_status=$?
@@ -1571,10 +1580,10 @@ EOF
   fi
   run_logged_in "swift-$label-resolve" "$consumer_dir" env \
     HOME="$home" XDG_CONFIG_HOME="$home/.config" \
-    "$swift_bin" package resolve "${swift_auth_args[@]}"
+    "$swift_bin" package resolve ${swift_auth_args[@]+"${swift_auth_args[@]}"}
   run_logged_in "swift-$label-build" "$consumer_dir" env \
     HOME="$home" XDG_CONFIG_HOME="$home/.config" \
-    "$swift_bin" build "${swift_auth_args[@]}"
+    "$swift_bin" build ${swift_auth_args[@]+"${swift_auth_args[@]}"}
   cp "$consumer_dir/Package.resolved" "$ARTIFACT_DIR/swift-$label-Package.resolved"
   assert_swift_registry_pin "$ARTIFACT_DIR/swift-$label-Package.resolved" \
     kkrepo "$package_name" "$version" "Swift $label hosted"
@@ -1583,11 +1592,11 @@ EOF
   rm -rf "$consumer_dir/.build"
   run_logged_in "swift-$label-resolve-replay" "$consumer_dir" env \
     HOME="$home" XDG_CONFIG_HOME="$home/.config" \
-    "$swift_bin" package resolve "${swift_auth_args[@]}"
+    "$swift_bin" package resolve ${swift_auth_args[@]+"${swift_auth_args[@]}"}
   [[ "$first_lock_hash" == "$(file_sha256 "$consumer_dir/Package.resolved")" ]]
   run_logged_in "swift-$label-build-replay" "$consumer_dir" env \
     HOME="$home" XDG_CONFIG_HOME="$home/.config" \
-    "$swift_bin" build "${swift_auth_args[@]}"
+    "$swift_bin" build ${swift_auth_args[@]+"${swift_auth_args[@]}"}
 
   if [[ -n "${SWIFT_KKREPO_SECONDARY_BASE_URL:-}" ]]; then
     local secondary_consumer_dir="$dir/secondary-consumer"
@@ -1606,10 +1615,11 @@ EOF
     fi
     run_logged_in "swift-$label-secondary-resolve" "$secondary_consumer_dir" env \
       HOME="$secondary_home" XDG_CONFIG_HOME="$secondary_home/.config" \
-      "$swift_bin" package resolve "${secondary_auth_args[@]}"
+      "$swift_bin" package resolve \
+      ${secondary_auth_args[@]+"${secondary_auth_args[@]}"}
     run_logged_in "swift-$label-secondary-build" "$secondary_consumer_dir" env \
       HOME="$secondary_home" XDG_CONFIG_HOME="$secondary_home/.config" \
-      "$swift_bin" build "${secondary_auth_args[@]}"
+      "$swift_bin" build ${secondary_auth_args[@]+"${secondary_auth_args[@]}"}
     cp "$secondary_consumer_dir/Package.resolved" \
       "$ARTIFACT_DIR/swift-$label-secondary-Package.resolved"
     assert_swift_registry_pin "$ARTIFACT_DIR/swift-$label-secondary-Package.resolved" \
@@ -1698,13 +1708,13 @@ PY
   rm -f "$package/Package.resolved"
   run_logged_in swift-xcode-resolve "$package" \
     env HOME="$xcode_home" XDG_CONFIG_HOME="$xcode_home/.config" \
-    "${xcode_auth_env[@]}" \
+    ${xcode_auth_env[@]+"${xcode_auth_env[@]}"} \
     xcodebuild -resolvePackageDependencies \
     -scheme "$scheme" \
     -clonedSourcePackagesDirPath "$xcode_source_packages"
   run_logged_in swift-xcode-build "$package" \
     env HOME="$xcode_home" XDG_CONFIG_HOME="$xcode_home/.config" \
-    "${xcode_auth_env[@]}" \
+    ${xcode_auth_env[@]+"${xcode_auth_env[@]}"} \
     xcodebuild \
     -scheme "$scheme" \
     -destination 'platform=macOS' \
