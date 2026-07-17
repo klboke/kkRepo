@@ -141,7 +141,8 @@ class CargoHostedServiceTest {
         null,
         null,
         requireAuthentication,
-        List.of());
+        List.of(),
+        null);
   }
 
   private static ComponentRecord component(String name, String version, String description) {

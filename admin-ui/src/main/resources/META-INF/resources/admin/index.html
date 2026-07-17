@@ -217,6 +217,44 @@
                 <span>Clear saved bearer token</span>
               </label>
             </fieldset>
+            <fieldset class="form-grid" id="repository-outbound-proxy-fields" hidden>
+              <legend>Outbound network proxy</legend>
+              <p class="form-note full-width">
+                Route upstream fetches for this proxy repository through an HTTP or SOCKS proxy
+                (e.g. a corporate Clash on the LAN). Useful when the remote registry (hub.docker.com,
+                pypi.org, ...) is unreachable from the server.
+              </p>
+              <label>
+                <span>Proxy type</span>
+                <select id="repository-outbound-proxy-type">
+                  <option value="">Direct (no proxy)</option>
+                  <option value="HTTP">HTTP</option>
+                  <option value="SOCKS">SOCKS</option>
+                </select>
+              </label>
+              <label>
+                <span>Proxy host</span>
+                <input id="repository-outbound-proxy-host" type="text" autocomplete="off"
+                  placeholder="192.168.1.10">
+              </label>
+              <label>
+                <span>Proxy port</span>
+                <input id="repository-outbound-proxy-port" type="number" min="1" max="65535"
+                  placeholder="7890">
+              </label>
+              <label>
+                <span>Proxy username</span>
+                <input id="repository-outbound-proxy-username" type="text" autocomplete="off">
+              </label>
+              <label>
+                <span>Proxy password</span>
+                <input id="repository-outbound-proxy-password" type="password" autocomplete="new-password">
+              </label>
+              <label class="checkbox-field">
+                <input id="repository-outbound-proxy-password-clear" type="checkbox">
+                <span>Clear saved proxy password</span>
+              </label>
+            </fieldset>
             <fieldset class="form-grid" id="repository-docker-fields" hidden>
               <legend>Docker connector</legend>
               <p class="form-note full-width">

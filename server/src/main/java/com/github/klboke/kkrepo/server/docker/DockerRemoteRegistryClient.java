@@ -7,6 +7,7 @@ import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.metrics.KkRepoMetrics;
+import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
 import io.micrometer.core.instrument.Timer;
 import java.io.IOException;
@@ -36,13 +37,14 @@ public class DockerRemoteRegistryClient {
   private final HttpRemoteFetcher fetcher;
   private final OutboundRequestPolicy outboundPolicy;
   private final HttpClient tokenClient = HttpClient.newHttpClient();
+  private final ProxiedHttpClientFactory proxyFactory;
   private final SharedCache tokenCache;
   private final boolean tokenCacheEnabled;
   private final Duration tokenCacheTtl;
   private final KkRepoMetrics metrics;
 
   public DockerRemoteRegistryClient(HttpRemoteFetcher fetcher, OutboundRequestPolicy outboundPolicy) {
-    this(fetcher, outboundPolicy, null, true, 300, null);
+    this(fetcher, outboundPolicy, null, true, 300, null, null);
   }
 
   @Autowired
@@ -52,13 +54,15 @@ public class DockerRemoteRegistryClient {
       SharedCache tokenCache,
       @Value("${kkrepo.docker.proxy.remote-token-cache.enabled:true}") boolean tokenCacheEnabled,
       @Value("${kkrepo.docker.proxy.remote-token-cache.ttl-seconds:300}") long tokenCacheTtlSeconds,
-      KkRepoMetrics metrics) {
+      KkRepoMetrics metrics,
+      ProxiedHttpClientFactory proxyFactory) {
     this.fetcher = fetcher;
     this.outboundPolicy = outboundPolicy;
     this.tokenCache = tokenCache;
     this.tokenCacheEnabled = tokenCacheEnabled;
     this.tokenCacheTtl = tokenCacheTtlSeconds <= 0 ? Duration.ZERO : Duration.ofSeconds(tokenCacheTtlSeconds);
     this.metrics = metrics;
+    this.proxyFactory = proxyFactory;
   }
 
   public DockerRemoteRegistryClient(
@@ -67,7 +71,7 @@ public class DockerRemoteRegistryClient {
       SharedCache tokenCache,
       boolean tokenCacheEnabled,
       long tokenCacheTtlSeconds) {
-    this(fetcher, outboundPolicy, tokenCache, tokenCacheEnabled, tokenCacheTtlSeconds, null);
+    this(fetcher, outboundPolicy, tokenCache, tokenCacheEnabled, tokenCacheTtlSeconds, null, null);
   }
 
   public HttpRemoteFetcher.Result get(RepositoryRuntime runtime, String remotePath, String accept) throws IOException {
@@ -104,6 +108,9 @@ public class DockerRemoteRegistryClient {
       String bearerToken,
       String accept,
       int redirects) throws IOException {
+    if (proxyEnabled(runtime)) {
+      return proxiedFetchWithHeaders(url, runtime, bearerToken, accept, redirects);
+    }
     Timer.Sample sample = metrics == null ? null : metrics.startTimer();
     int status = 0;
     Throwable failure = null;
@@ -179,6 +186,9 @@ public class DockerRemoteRegistryClient {
     String url = bearer.realm()
         + "?service=" + encode(bearer.service())
         + (bearer.scope() == null ? "" : "&scope=" + encode(bearer.scope()));
+    if (proxyEnabled(runtime)) {
+      return proxiedFetchToken(runtime, bearer, cacheable, url);
+    }
     Timer.Sample sample = metrics == null ? null : metrics.startTimer();
     int status = 0;
     Throwable failure = null;
@@ -224,6 +234,135 @@ public class DockerRemoteRegistryClient {
     if (tokenCache != null && cacheKey != null) {
       tokenCache.evict(TOKEN_CACHE_NAMESPACE, cacheKey);
     }
+  }
+
+  private boolean proxyEnabled(RepositoryRuntime runtime) {
+    return proxyFactory != null
+        && runtime != null
+        && runtime.outboundProxy() != null
+        && runtime.outboundProxy().enabled();
+  }
+
+  /** Proxied counterpart of {@link #fetchWithHeaders} — same headers/redirect/metrics, via SOCKS/HTTP proxy. */
+  private HttpRemoteFetcher.Result proxiedFetchWithHeaders(
+      String url,
+      RepositoryRuntime runtime,
+      String bearerToken,
+      String accept,
+      int redirects) throws IOException {
+    Timer.Sample sample = metrics == null ? null : metrics.startTimer();
+    int status = 0;
+    Throwable failure = null;
+    boolean recorded = false;
+    ProxiedHttpClientFactory.ProxiedResponse response = null;
+    try {
+      URI uri = outboundPolicy.validateHttpUri(url, "docker remote fetch");
+      Map<String, String> headers = new LinkedHashMap<>();
+      headers.put("User-Agent", "kkrepo/0.1");
+      headers.put("Accept", accept == null || accept.isBlank() ? "*/*" : accept);
+      if (bearerToken != null && !bearerToken.isBlank()) {
+        headers.put("Authorization", "Bearer " + bearerToken);
+      } else {
+        basicAuthorization(runtime).ifPresent(value -> headers.put("Authorization", value));
+      }
+      response = proxyFactory.execute(
+          runtime.outboundProxy(),
+          "GET",
+          uri,
+          headers,
+          Duration.ofSeconds(10).toMillis(),
+          Duration.ofSeconds(180).toMillis());
+      status = response.status();
+      boolean redirectStatus =
+          status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+      String location = response.header("Location");
+      if (redirectStatus && location != null && !location.isBlank()) {
+        response.close();
+        response = null;
+        if (redirects >= MAX_REDIRECTS) {
+          throw new IOException("Too many redirects fetching Docker remote " + url);
+        }
+        URI redirected = outboundPolicy.validateHttpUri(uri.resolve(location), "docker remote redirect");
+        recordRemote(runtime, "GET", url, status, null, sample);
+        recorded = true;
+        return proxiedFetchWithHeaders(redirected.toString(), runtime, bearerToken, accept, redirects + 1);
+      }
+      return new HttpRemoteFetcher.Result(response.status(), response.headers(), releaseOnClose(response));
+    } catch (IOException | RuntimeException e) {
+      failure = e;
+      if (response != null) {
+        response.close();
+      }
+      throw e;
+    } finally {
+      if (!recorded) {
+        recordRemote(runtime, "GET", url, status, failure, sample);
+      }
+    }
+  }
+
+  /** Proxied counterpart of {@link #fetchToken} for the Docker OAuth token exchange. */
+  private Optional<RemoteToken> proxiedFetchToken(
+      RepositoryRuntime runtime,
+      BearerChallenge bearer,
+      boolean cacheable,
+      String url) throws IOException {
+    Timer.Sample sample = metrics == null ? null : metrics.startTimer();
+    int status = 0;
+    Throwable failure = null;
+    ProxiedHttpClientFactory.ProxiedResponse response = null;
+    try {
+      URI uri = outboundPolicy.validateHttpUri(url, "docker token fetch");
+      Map<String, String> headers = new LinkedHashMap<>();
+      headers.put("User-Agent", "kkrepo/0.1");
+      basicAuthorization(runtime).ifPresent(value -> headers.put("Authorization", value));
+      response = proxyFactory.execute(
+          runtime.outboundProxy(),
+          "GET",
+          uri,
+          headers,
+          Duration.ofSeconds(10).toMillis(),
+          Duration.ofSeconds(30).toMillis());
+      status = response.status();
+      if (status < 200 || status >= 300) {
+        return Optional.empty();
+      }
+      String body = new String(response.body().readAllBytes(), StandardCharsets.UTF_8);
+      String token = extractJsonString(body, "token");
+      if (token == null) {
+        token = extractJsonString(body, "access_token");
+      }
+      if (token == null || token.isBlank()) {
+        return Optional.empty();
+      }
+      String cacheKey = tokenCacheKey(runtime, bearer);
+      if (cacheable && tokenCacheEnabled && !tokenCacheTtl.isZero() && tokenCache != null) {
+        tokenCache.putString(TOKEN_CACHE_NAMESPACE, cacheKey, token, tokenTtl(body));
+      }
+      return Optional.of(new RemoteToken(token, cacheKey, false));
+    } catch (IOException | RuntimeException e) {
+      failure = e;
+      throw e;
+    } finally {
+      if (response != null) {
+        response.close();
+      }
+      recordRemote(runtime, "TOKEN", url, status, failure, sample);
+    }
+  }
+
+  private static java.io.InputStream releaseOnClose(ProxiedHttpClientFactory.ProxiedResponse response) throws IOException {
+    java.io.InputStream body = response.body();
+    return new java.io.FilterInputStream(body) {
+      @Override
+      public void close() throws java.io.IOException {
+        try {
+          super.close();
+        } finally {
+          response.close();
+        }
+      }
+    };
   }
 
   private static String remoteUrl(RepositoryRuntime runtime, String remotePath) {

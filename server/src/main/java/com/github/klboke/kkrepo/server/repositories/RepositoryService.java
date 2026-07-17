@@ -846,6 +846,35 @@ public class RepositoryService {
     } catch (SecurityValidationException e) {
       throw new RepositoryValidationException(e.getMessage());
     }
+    validateOutboundProxy(settings);
+  }
+
+  private void validateOutboundProxy(ProxySettings settings) {
+    boolean hasType = settings.outboundProxyType() != null && !settings.outboundProxyType().isBlank();
+    boolean hasHost = settings.outboundProxyHost() != null && !settings.outboundProxyHost().isBlank();
+    Integer port = settings.outboundProxyPort();
+    if (!hasType && !hasHost && port == null
+        && (settings.outboundProxyUsername() == null || settings.outboundProxyUsername().isBlank())
+        && (settings.outboundProxyPassword() == null || settings.outboundProxyPassword().isBlank())) {
+      return;
+    }
+    if (!hasHost) {
+      throw new RepositoryValidationException("proxy.outboundProxyHost is required when an outbound proxy is configured");
+    }
+    if (port == null || port < 1 || port > 65535) {
+      throw new RepositoryValidationException("proxy.outboundProxyPort must be between 1 and 65535");
+    }
+    com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.Type type =
+        com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.parseType(settings.outboundProxyType());
+    if (type == null) {
+      throw new RepositoryValidationException(
+          "proxy.outboundProxyType must be HTTP or SOCKS (was: " + settings.outboundProxyType() + ")");
+    }
+    if ((settings.outboundProxyPassword() != null && !settings.outboundProxyPassword().isBlank())
+        && (settings.outboundProxyUsername() == null || settings.outboundProxyUsername().isBlank())) {
+      throw new RepositoryValidationException(
+          "proxy.outboundProxyUsername is required when proxy.outboundProxyPassword is set");
+    }
   }
 
   private static ProxySettings mergeProxy(ProxySettings existing, String existingRemoteUrl, ProxySettings incoming) {
@@ -866,7 +895,23 @@ public class RepositoryService {
         mergedProxyPassword(base, incoming),
         null,
         mergedProxyBearerToken(base, incoming),
+        null,
+        incoming.outboundProxyType() == null ? base.outboundProxyType() : incoming.outboundProxyType(),
+        incoming.outboundProxyHost() == null ? base.outboundProxyHost() : blankToNull(incoming.outboundProxyHost()),
+        incoming.outboundProxyPort() == null ? base.outboundProxyPort() : incoming.outboundProxyPort(),
+        incoming.outboundProxyUsername() == null ? base.outboundProxyUsername() : blankToNull(incoming.outboundProxyUsername()),
+        mergedOutboundProxyPassword(base, incoming),
         null);
+  }
+
+  private static String mergedOutboundProxyPassword(ProxySettings base, ProxySettings incoming) {
+    if (incoming.outboundProxyPassword() != null && !incoming.outboundProxyPassword().isBlank()) {
+      return incoming.outboundProxyPassword();
+    }
+    if (Boolean.FALSE.equals(incoming.outboundProxyPasswordConfigured())) {
+      return null;
+    }
+    return base.outboundProxyPassword();
   }
 
   private static String mergedProxyPassword(ProxySettings base, ProxySettings incoming) {
@@ -903,6 +948,21 @@ public class RepositoryService {
     }
     if (proxy.remoteBearerToken() != null && !proxy.remoteBearerToken().isBlank()) {
       map.put("remoteBearerToken", proxy.remoteBearerToken());
+    }
+    if (proxy.outboundProxyType() != null && !proxy.outboundProxyType().isBlank()) {
+      map.put("outboundProxyType", proxy.outboundProxyType());
+    }
+    if (proxy.outboundProxyHost() != null && !proxy.outboundProxyHost().isBlank()) {
+      map.put("outboundProxyHost", proxy.outboundProxyHost());
+    }
+    if (proxy.outboundProxyPort() != null) {
+      map.put("outboundProxyPort", proxy.outboundProxyPort());
+    }
+    if (proxy.outboundProxyUsername() != null && !proxy.outboundProxyUsername().isBlank()) {
+      map.put("outboundProxyUsername", proxy.outboundProxyUsername());
+    }
+    if (proxy.outboundProxyPassword() != null && !proxy.outboundProxyPassword().isBlank()) {
+      map.put("outboundProxyPassword", proxy.outboundProxyPassword());
     }
     return map;
   }
@@ -949,6 +1009,12 @@ public class RepositoryService {
         blankToNull(proxyMap.get("remotePassword") == null ? null : proxyMap.get("remotePassword").toString()),
         null,
         blankToNull(proxyMap.get("remoteBearerToken") == null ? null : proxyMap.get("remoteBearerToken").toString()),
+        null,
+        stringOrNull(proxyMap.get("outboundProxyType")),
+        blankToNull(stringOrNull(proxyMap.get("outboundProxyHost"))),
+        intValue(proxyMap.get("outboundProxyPort")),
+        blankToNull(stringOrNull(proxyMap.get("outboundProxyUsername"))),
+        blankToNull(stringOrNull(proxyMap.get("outboundProxyPassword"))),
         null);
   }
 
@@ -957,6 +1023,7 @@ public class RepositoryService {
     ProxySettings effective = parsed == null
         ? new ProxySettings(record.proxyRemoteUrl(), null, null, null)
         : parsed;
+    String outboundPassword = effective.outboundProxyPassword();
     return new ProxySettings(
         effective.remoteUrl(),
         effective.contentMaxAgeMinutes(),
@@ -966,7 +1033,17 @@ public class RepositoryService {
         null,
         effective.remotePassword() != null && !effective.remotePassword().isBlank(),
         null,
-        effective.remoteBearerToken() != null && !effective.remoteBearerToken().isBlank());
+        effective.remoteBearerToken() != null && !effective.remoteBearerToken().isBlank(),
+        effective.outboundProxyType(),
+        effective.outboundProxyHost(),
+        effective.outboundProxyPort(),
+        effective.outboundProxyUsername(),
+        null,
+        outboundPassword != null && !outboundPassword.isBlank());
+  }
+
+  private static String stringOrNull(Object value) {
+    return value == null ? null : value.toString();
   }
 
   private List<Long> resolveMemberIds(String groupName, RepositoryFormat format, GroupSettings group) {

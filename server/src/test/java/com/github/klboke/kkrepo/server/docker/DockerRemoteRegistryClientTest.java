@@ -306,7 +306,8 @@ class DockerRemoteRegistryClientTest {
           null,
           true,
           300,
-          new KkRepoMetrics(meterRegistry));
+          new KkRepoMetrics(meterRegistry),
+          null);
 
       try (HttpRemoteFetcher.Result result = client.get(
           runtime(registry.baseUrl, null, null),

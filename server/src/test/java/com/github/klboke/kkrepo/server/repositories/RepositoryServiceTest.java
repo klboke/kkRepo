@@ -377,6 +377,107 @@ class RepositoryServiceTest {
   }
 
   @Test
+  void outboundProxyRoundTripStoresAndMasksPassword() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "maven-proxy",
+        "maven2-proxy",
+        true,
+        "default",
+        true,
+        null,
+        new ProxySettings(
+            "https://repo.maven.apache.org/maven2/",
+            1440, 1440, true,
+            null, null, null,
+            null, null,
+            "HTTP", "192.168.1.10", 7890,
+            "clash-user", "clash-pass",
+            null),
+        null, null, null, null));
+
+    assertEquals("HTTP", created.proxy().outboundProxyType());
+    assertEquals("192.168.1.10", created.proxy().outboundProxyHost());
+    assertEquals(7890, created.proxy().outboundProxyPort());
+    assertEquals("clash-user", created.proxy().outboundProxyUsername());
+    assertNull(created.proxy().outboundProxyPassword());
+    assertEquals(true, created.proxy().outboundProxyPasswordConfigured());
+
+    Map<?, ?> proxy = (Map<?, ?>) repositories.repository.attributes().get("proxy");
+    assertEquals("HTTP", proxy.get("outboundProxyType"));
+    assertEquals("192.168.1.10", proxy.get("outboundProxyHost"));
+    assertEquals(7890, proxy.get("outboundProxyPort"));
+    assertEquals("clash-user", proxy.get("outboundProxyUsername"));
+    assertEquals("clash-pass", proxy.get("outboundProxyPassword"));
+  }
+
+  @Test
+  void outboundProxyPasswordCanBeClearedWithoutSendingPlaintext() {
+    Map<String, Object> proxy = new LinkedHashMap<>();
+    proxy.put("remoteUrl", "https://repo.maven.apache.org/maven2/");
+    proxy.put("outboundProxyType", "SOCKS");
+    proxy.put("outboundProxyHost", "192.168.1.10");
+    proxy.put("outboundProxyPort", 7891);
+    proxy.put("outboundProxyUsername", "clash-user");
+    proxy.put("outboundProxyPassword", "clash-pass");
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", "maven2-proxy");
+    attributes.put("proxy", proxy);
+    StubRepositoryDao repositories = new StubRepositoryDao(new RepositoryRecord(
+        1L,
+        "maven-proxy",
+        RepositoryFormat.MAVEN2,
+        RepositoryType.PROXY,
+        "maven2-proxy",
+        true,
+        1L,
+        null,
+        "https://repo.maven.apache.org/maven2/",
+        null,
+        null,
+        null,
+        true,
+        attributes));
+    RepositoryService service = service(repositories);
+
+    RepositoryView updated = service.update("maven-proxy",
+        new UpdateCommand(true, null, null, null,
+            new ProxySettings(
+                "https://repo.maven.apache.org/maven2/", 1440, 1440, true,
+                null, null, null, null, null,
+                "SOCKS", "192.168.1.10", 7891, "clash-user", null, false),
+            null, null, null, null));
+
+    assertEquals(false, updated.proxy().outboundProxyPasswordConfigured());
+    Map<?, ?> storedProxy = (Map<?, ?>) repositories.updated.attributes().get("proxy");
+    assertNull(storedProxy.get("outboundProxyPassword"));
+    assertEquals("clash-user", storedProxy.get("outboundProxyUsername"));
+  }
+
+  @Test
+  void outboundProxyWithoutHostIsRejected() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryValidationException ex = assertThrows(RepositoryValidationException.class, () -> service.create(
+        new CreateCommand(
+            "maven-proxy",
+            "maven2-proxy",
+            true,
+            "default",
+            true,
+            null,
+            new ProxySettings(
+                "https://repo.maven.apache.org/maven2/", 1440, 1440, true,
+                null, null, null, null, null,
+                "HTTP", null, 7890, null, null, null),
+            null, null, null, null)));
+    assertTrue(ex.getMessage().contains("outboundProxyHost"));
+  }
+
+  @Test
   void createPubProxyDefaultsRemoteUrlWhenProxySettingsAreMissing() {
     StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
     RepositoryService service = service(repositories);

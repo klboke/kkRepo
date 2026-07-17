@@ -182,6 +182,7 @@ public class RepositoryRuntimeRegistry {
     String proxyRemoteUsername = null;
     String proxyRemotePassword = null;
     String proxyRemoteBearerToken = null;
+    com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig outboundProxy = null;
     if (proxyRaw instanceof Map<?, ?> proxyMap) {
       contentMaxAge = asInt(proxyMap.get("contentMaxAgeMinutes"));
       metadataMaxAge = asInt(proxyMap.get("metadataMaxAgeMinutes"));
@@ -198,6 +199,7 @@ public class RepositoryRuntimeRegistry {
       if (bearerToken != null && !bearerToken.toString().isBlank()) {
         proxyRemoteBearerToken = bearerToken.toString();
       }
+      outboundProxy = readOutboundProxy(proxyMap);
     }
     String rawContentDisposition = null;
     if (rawRaw instanceof Map<?, ?> rawMap) {
@@ -264,7 +266,27 @@ public class RepositoryRuntimeRegistry {
         dockerConnectorPort,
         dockerConnectorPublicUrl,
         cargoRequireAuthentication,
-        members);
+        members,
+        outboundProxy);
+  }
+
+  private static com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig readOutboundProxy(Map<?, ?> proxyMap) {
+    Object typeRaw = proxyMap.get("outboundProxyType");
+    com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.Type type =
+        com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.parseType(
+            typeRaw == null ? null : typeRaw.toString());
+    Object hostRaw = proxyMap.get("outboundProxyHost");
+    String host = hostRaw == null ? null : hostRaw.toString();
+    Integer port = asInt(proxyMap.get("outboundProxyPort"));
+    Object userRaw = proxyMap.get("outboundProxyUsername");
+    String username = userRaw == null || userRaw.toString().isBlank() ? null : userRaw.toString();
+    Object passRaw = proxyMap.get("outboundProxyPassword");
+    String password = passRaw == null || passRaw.toString().isBlank() ? null : passRaw.toString();
+    if (host == null || host.isBlank() || port == null || port <= 0) {
+      return null;
+    }
+    return new com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig(
+        type, host.trim(), port, username, password);
   }
 
   private static Integer asInt(Object value) {
@@ -288,6 +310,11 @@ public class RepositoryRuntimeRegistry {
       return true;
     }
     if (runtime.proxyRemoteBearerToken() != null && !runtime.proxyRemoteBearerToken().isBlank()) {
+      return true;
+    }
+    if (runtime.outboundProxy() != null
+        && runtime.outboundProxy().password() != null
+        && !runtime.outboundProxy().password().isBlank()) {
       return true;
     }
     for (RepositoryRuntime member : runtime.members()) {

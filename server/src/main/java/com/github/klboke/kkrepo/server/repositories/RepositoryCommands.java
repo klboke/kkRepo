@@ -51,7 +51,13 @@ public final class RepositoryCommands {
       String remotePassword,
       Boolean remotePasswordConfigured,
       String remoteBearerToken,
-      Boolean remoteBearerTokenConfigured) {
+      Boolean remoteBearerTokenConfigured,
+      String outboundProxyType,
+      String outboundProxyHost,
+      Integer outboundProxyPort,
+      String outboundProxyUsername,
+      String outboundProxyPassword,
+      Boolean outboundProxyPasswordConfigured) {
     public ProxySettings(
         String remoteUrl,
         Integer contentMaxAgeMinutes,
@@ -61,7 +67,23 @@ public final class RepositoryCommands {
         String remotePassword,
         Boolean remotePasswordConfigured) {
       this(remoteUrl, contentMaxAgeMinutes, metadataMaxAgeMinutes, autoBlock,
-          remoteUsername, remotePassword, remotePasswordConfigured, null, null);
+          remoteUsername, remotePassword, remotePasswordConfigured, null, null, null, null, null, null, null, null);
+    }
+
+    public ProxySettings(
+        String remoteUrl,
+        Integer contentMaxAgeMinutes,
+        Integer metadataMaxAgeMinutes,
+        Boolean autoBlock,
+        String remoteUsername,
+        String remotePassword,
+        Boolean remotePasswordConfigured,
+        String remoteBearerToken,
+        Boolean remoteBearerTokenConfigured) {
+      this(remoteUrl, contentMaxAgeMinutes, metadataMaxAgeMinutes, autoBlock,
+          remoteUsername, remotePassword, remotePasswordConfigured,
+          remoteBearerToken, remoteBearerTokenConfigured,
+          null, null, null, null, null, null);
     }
 
     public ProxySettings(
@@ -69,7 +91,8 @@ public final class RepositoryCommands {
         Integer contentMaxAgeMinutes,
         Integer metadataMaxAgeMinutes,
         Boolean autoBlock) {
-      this(remoteUrl, contentMaxAgeMinutes, metadataMaxAgeMinutes, autoBlock, null, null, null, null, null);
+      this(remoteUrl, contentMaxAgeMinutes, metadataMaxAgeMinutes, autoBlock,
+          null, null, null, null, null, null, null, null, null, null, null);
     }
   }
 
