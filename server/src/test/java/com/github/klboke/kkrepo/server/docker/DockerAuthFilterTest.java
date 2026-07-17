@@ -305,6 +305,73 @@ class DockerAuthFilterTest {
   }
 
   @Test
+  void newQueryTagOnExistingManifestRequiresAddPermission() throws Exception {
+    RepositoryRuntime runtime = dockerProxy("docker-live-proxy");
+    when(registry.resolve("docker-live-proxy")).thenReturn(Optional.of(runtime));
+    when(dockerRegistryDao.findManifestByReference(65L, "library/alpine", "latest"))
+        .thenReturn(Optional.of(mock(DockerManifestRecord.class)));
+    when(authService.authenticateBearer(
+        "valid-token", "docker-live-proxy", "library/alpine", "push"))
+        .thenReturn(Optional.of(subject));
+    when(accessDecisionService.decide(
+        org.mockito.ArgumentMatchers.eq(permissionSubject), org.mockito.ArgumentMatchers.any()))
+        .thenReturn(AccessDecision.allow());
+    DockerAuthFilter filter = new DockerAuthFilter(
+        registry,
+        authService,
+        mock(SecurityAuthenticationService.class),
+        accessDecisionService,
+        dockerRegistryDao);
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("PUT", "/v2/docker-live-proxy/library/alpine/manifests/latest");
+    request.addParameter("tag", "stable");
+    request.addHeader(HttpHeaders.AUTHORIZATION, "Bearer valid-token");
+    MockHttpServletResponse response = new MockHttpServletResponse();
+
+    filter.doFilter(request, response, new MockFilterChain());
+
+    RepositoryPermission permission = capturedPermission();
+    assertEquals(PermissionAction.ADD, permission.action());
+    assertEquals("library/alpine", permission.pathPattern());
+  }
+
+  @Test
+  void existingQueryTagsOnExistingManifestRequireEditPermission() throws Exception {
+    RepositoryRuntime runtime = dockerProxy("docker-live-proxy");
+    when(registry.resolve("docker-live-proxy")).thenReturn(Optional.of(runtime));
+    DockerManifestRecord manifest = mock(DockerManifestRecord.class);
+    when(dockerRegistryDao.findManifestByReference(65L, "library/alpine", "latest"))
+        .thenReturn(Optional.of(manifest));
+    when(dockerRegistryDao.findManifestByReference(65L, "library/alpine", "stable"))
+        .thenReturn(Optional.of(manifest));
+    when(dockerRegistryDao.findManifestByReference(65L, "library/alpine", "1.0"))
+        .thenReturn(Optional.of(manifest));
+    when(authService.authenticateBearer(
+        "valid-token", "docker-live-proxy", "library/alpine", "push"))
+        .thenReturn(Optional.of(subject));
+    when(accessDecisionService.decide(
+        org.mockito.ArgumentMatchers.eq(permissionSubject), org.mockito.ArgumentMatchers.any()))
+        .thenReturn(AccessDecision.allow());
+    DockerAuthFilter filter = new DockerAuthFilter(
+        registry,
+        authService,
+        mock(SecurityAuthenticationService.class),
+        accessDecisionService,
+        dockerRegistryDao);
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("PUT", "/v2/docker-live-proxy/library/alpine/manifests/latest");
+    request.addParameter("tag", "stable,1.0");
+    request.addHeader(HttpHeaders.AUTHORIZATION, "Bearer valid-token");
+    MockHttpServletResponse response = new MockHttpServletResponse();
+
+    filter.doFilter(request, response, new MockFilterChain());
+
+    RepositoryPermission permission = capturedPermission();
+    assertEquals(PermissionAction.EDIT, permission.action());
+    assertEquals("library/alpine", permission.pathPattern());
+  }
+
+  @Test
   void catalogRequiresRepositoryAdminPermission() throws Exception {
     RepositoryRuntime runtime = dockerProxy("docker-live-proxy");
     when(registry.resolve("docker-live-proxy")).thenReturn(Optional.of(runtime));

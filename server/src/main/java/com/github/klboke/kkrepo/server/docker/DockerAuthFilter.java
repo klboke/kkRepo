@@ -23,6 +23,7 @@ import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
 import org.springframework.session.web.http.SessionRepositoryFilter;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 @Component
@@ -94,8 +95,7 @@ public class DockerAuthFilter extends OncePerRequestFilter {
       challenge(response, request, target, challengeActions);
       return;
     }
-    PermissionAction permission = permissionFor(
-        action, request.getMethod(), target.path(), runtime.get());
+    PermissionAction permission = permissionFor(action, target.path(), runtime.get(), request);
     if (permission != null && !accessDecisionService.decide(
         subject.get().permissionSubject(),
         new RepositoryPermission(
@@ -213,16 +213,37 @@ public class DockerAuthFilter extends OncePerRequestFilter {
   }
 
   private PermissionAction permissionFor(
-      String action, String method, DockerPath path, RepositoryRuntime runtime) {
+      String action, DockerPath path, RepositoryRuntime runtime, HttpServletRequest request) {
     if ("push".equals(action)) {
       if (path.kind() == DockerPath.Kind.MANIFEST) {
-        boolean exists = dockerRegistryDao.findManifestByReference(
-            runtime.id(), path.imageName(), path.reference()).isPresent();
-        return exists ? PermissionAction.EDIT : PermissionAction.ADD;
+        return allManifestReferencesExist(runtime, path, request)
+            ? PermissionAction.EDIT
+            : PermissionAction.ADD;
       }
       return PermissionAction.ADD;
     }
     return permissionFor(action);
+  }
+
+  private boolean allManifestReferencesExist(
+      RepositoryRuntime runtime, DockerPath path, HttpServletRequest request) {
+    if (dockerRegistryDao.findManifestByReference(
+        runtime.id(), path.imageName(), path.reference()).isEmpty()) {
+      return false;
+    }
+    String[] rawTags = request.getParameterValues("tag");
+    if (rawTags == null) {
+      return true;
+    }
+    for (String rawTag : rawTags) {
+      for (String tag : StringUtils.commaDelimitedListToStringArray(rawTag)) {
+        if (!tag.isBlank() && dockerRegistryDao.findManifestByReference(
+            runtime.id(), path.imageName(), tag).isEmpty()) {
+          return false;
+        }
+      }
+    }
+    return true;
   }
 
   private static String[] challengeActions(String action) {
