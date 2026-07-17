@@ -1210,6 +1210,9 @@ swift_registry_login() {
   local directory="$3"
   local home="$4"
   local registry="$5"
+  mkdir -p "$home"
+  touch "$home/.netrc"
+  chmod 0600 "$home/.netrc"
   run_logged_in "swift-$label-registry-login" "$directory" \
     run_with_timeout "$SWIFT_LOGIN_TIMEOUT_SECONDS" env \
     HOME="$home" XDG_CONFIG_HOME="$home/.config" \
