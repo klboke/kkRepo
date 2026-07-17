@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 
 class HelmProtocolTest {
   private static final int CONCURRENT_PARSE_COUNT = 32;
+  private static final int MAX_CHART_YAML_BYTES = 1024 * 1024;
 
   @Test
   void parsesChartYamlFromPackage() throws Exception {
@@ -62,6 +63,23 @@ class HelmProtocolTest {
         () -> new HelmChartPackageParser().parse(new ByteArrayInputStream(bytes)));
 
     assertEquals("Chart.yaml is not a YAML mapping", error.getMessage());
+  }
+
+  @Test
+  void rejectsChartYamlThatExceedsDecompressedSizeLimit() throws Exception {
+    String chartYaml = """
+        apiVersion: v2
+        name: demo
+        version: 1.2.3
+        #
+        """ + "x".repeat(MAX_CHART_YAML_BYTES);
+    byte[] bytes = chartPackageWithEntry("demo/Chart.yaml", chartYaml);
+    assertTrue(bytes.length < 16 * 1024, "Test package should remain highly compressed");
+
+    IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+        () -> new HelmChartPackageParser().parse(new ByteArrayInputStream(bytes)));
+
+    assertEquals("Chart.yaml exceeds the 1048576 byte limit", error.getMessage());
   }
 
   @Test
