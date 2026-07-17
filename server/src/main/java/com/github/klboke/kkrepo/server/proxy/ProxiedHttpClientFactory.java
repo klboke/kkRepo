@@ -115,7 +115,8 @@ public class ProxiedHttpClientFactory {
     HttpHost proxy = new HttpHost(URIScheme.HTTP.getId(), config.host(), config.port());
     var builder = HttpClients.custom()
         .setProxy(proxy)
-        .disableContentCompression();
+        .disableContentCompression()
+        .disableRedirectHandling();
     if (config.authenticated()) {
       BasicCredentialsProvider credentials = new BasicCredentialsProvider();
       credentials.setCredentials(
@@ -153,6 +154,7 @@ public class ProxiedHttpClientFactory {
     return HttpClients.custom()
         .setConnectionManager(connectionManager)
         .disableContentCompression()
+        .disableRedirectHandling()
         .build();
   }
 
