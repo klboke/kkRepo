@@ -1,0 +1,10 @@
+coverage:
+  status:
+    # Coverage is uploaded on main to keep the baseline current, but status
+    # checks should gate pull requests rather than post-merge commits.
+    project:
+      default:
+        only_pulls: true
+    patch:
+      default:
+        only_pulls: true
