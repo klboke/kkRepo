@@ -2139,7 +2139,11 @@ function showEditRepositoryForm(name) {
     document.getElementById("repository-remote-bearer-token").placeholder =
       repo.proxy.remoteBearerTokenConfigured ? "Saved bearer token unchanged" : "";
     document.getElementById("repository-remote-bearer-token-clear").checked = false;
-    document.getElementById("repository-outbound-proxy-type").value = repo.proxy.outboundProxyType || "";
+    // Normalize legacy/alias values stored before the backend canonicalized the type,
+    // so the select (HTTP/SOCKS only) still shows the effective choice.
+    const outboundProxyType = (repo.proxy.outboundProxyType || "").toUpperCase();
+    document.getElementById("repository-outbound-proxy-type").value =
+      outboundProxyType === "SOCKS5" ? "SOCKS" : outboundProxyType;
     document.getElementById("repository-outbound-proxy-host").value = repo.proxy.outboundProxyHost || "";
     document.getElementById("repository-outbound-proxy-port").value = repo.proxy.outboundProxyPort ?? "";
     document.getElementById("repository-outbound-proxy-username").value = repo.proxy.outboundProxyUsername || "";

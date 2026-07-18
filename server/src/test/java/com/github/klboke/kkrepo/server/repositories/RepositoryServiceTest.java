@@ -418,6 +418,60 @@ class RepositoryServiceTest {
   }
 
   @Test
+  void outboundProxyTypeAliasIsStoredAsCanonicalType() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "maven-proxy",
+        "maven2-proxy",
+        true,
+        "default",
+        true,
+        null,
+        new ProxySettings(
+            "https://repo.maven.apache.org/maven2/",
+            1440, 1440, true,
+            null, null, null,
+            null, null,
+            "socks5", "192.168.1.10", 7890,
+            null, null,
+            null),
+        null, null, null, null));
+
+    assertEquals("SOCKS", created.proxy().outboundProxyType());
+    Map<?, ?> proxy = (Map<?, ?>) repositories.repository.attributes().get("proxy");
+    assertEquals("SOCKS", proxy.get("outboundProxyType"));
+  }
+
+  @Test
+  void outboundProxyLowercaseHttpIsStoredAsCanonicalType() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "maven-proxy",
+        "maven2-proxy",
+        true,
+        "default",
+        true,
+        null,
+        new ProxySettings(
+            "https://repo.maven.apache.org/maven2/",
+            1440, 1440, true,
+            null, null, null,
+            null, null,
+            "http", "192.168.1.10", 7890,
+            null, null,
+            null),
+        null, null, null, null));
+
+    assertEquals("HTTP", created.proxy().outboundProxyType());
+    Map<?, ?> proxy = (Map<?, ?>) repositories.repository.attributes().get("proxy");
+    assertEquals("HTTP", proxy.get("outboundProxyType"));
+  }
+
+  @Test
   void outboundProxyPasswordCanBeClearedWithoutSendingPlaintext() {
     Map<String, Object> proxy = new LinkedHashMap<>();
     proxy.put("remoteUrl", "https://repo.maven.apache.org/maven2/");

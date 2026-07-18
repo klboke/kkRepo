@@ -892,7 +892,41 @@ public class RepositoryService {
       settings = withRemoteUrl(settings, normalizeSwiftRemoteUrl(settings.remoteUrl()));
     }
     validateProxy(settings, format);
-    return settings;
+    return normalizeOutboundProxyType(settings);
+  }
+
+  /**
+   * Rewrites a validated outbound proxy type to its canonical enum name (HTTP/SOCKS) so aliases
+   * the validator accepts (e.g. "socks5", lowercase "http") round-trip through the admin UI,
+   * whose select only offers the canonical values. Without this, loading an API-created alias
+   * leaves the select blank and the next save clears the whole outbound proxy block.
+   */
+  private static ProxySettings normalizeOutboundProxyType(ProxySettings settings) {
+    String raw = settings.outboundProxyType();
+    if (raw == null || raw.isBlank()) {
+      return settings;
+    }
+    com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.Type type =
+        com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.parseType(raw);
+    if (type == null || type.name().equals(raw)) {
+      return settings;
+    }
+    return new ProxySettings(
+        settings.remoteUrl(),
+        settings.contentMaxAgeMinutes(),
+        settings.metadataMaxAgeMinutes(),
+        settings.autoBlock(),
+        settings.remoteUsername(),
+        settings.remotePassword(),
+        settings.remotePasswordConfigured(),
+        settings.remoteBearerToken(),
+        settings.remoteBearerTokenConfigured(),
+        type.name(),
+        settings.outboundProxyHost(),
+        settings.outboundProxyPort(),
+        settings.outboundProxyUsername(),
+        settings.outboundProxyPassword(),
+        settings.outboundProxyPasswordConfigured());
   }
 
   private static String defaultRemoteUrl(RepositoryFormat format) {
