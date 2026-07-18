@@ -241,6 +241,8 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
     HttpHost originalTarget = new HttpHost(uri.getScheme(), originalHost, port);
     ClassicHttpRequest request = new BasicClassicHttpRequest(method, requestPath(uri));
     if (body != null) {
+      // This entity is sent to the validated upstream target; it is never rendered in a web response.
+      // codeql[java/xss]
       request.setEntity(new ByteArrayEntity(body, null));
     }
     if (headers != null) {
