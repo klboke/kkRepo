@@ -98,20 +98,22 @@ public class DockerRemoteRegistryClient {
 
   public HttpRemoteFetcher.Result get(RepositoryRuntime runtime, String remotePath, String accept) throws IOException {
     String url = remoteUrl(runtime, remotePath);
-    HttpRemoteFetcher.Result result = fetch(url, runtime, null, accept);
-    if (result.status() == 401) {
+    RemoteFetch fetched = fetch(url, runtime, null, accept);
+    HttpRemoteFetcher.Result result = fetched.result();
+    if (result.status() == 401 && fetched.credentialsAllowed()) {
       String challenge = result.header("WWW-Authenticate");
       RemoteToken token = token(runtime, challenge).orElse(null);
-      result.close();
       if (token != null) {
-        result = fetch(url, runtime, token.value(), accept);
+        result.close();
+        fetched = fetch(fetched.effectiveUri().toString(), runtime, token.value(), accept);
+        result = fetched.result();
         if (result.status() == 401 && token.cached()) {
           evictToken(token.cacheKey());
           challenge = result.header("WWW-Authenticate");
           token = fetchToken(runtime, BearerChallenge.parse(challenge).orElse(null), true).orElse(null);
           if (token != null) {
             result.close();
-            result = fetch(url, runtime, token.value(), accept);
+            result = fetch(fetched.effectiveUri().toString(), runtime, token.value(), accept).result();
           }
         }
       }
@@ -119,12 +121,12 @@ public class DockerRemoteRegistryClient {
     return result;
   }
 
-  private HttpRemoteFetcher.Result fetch(
+  private RemoteFetch fetch(
       String url, RepositoryRuntime runtime, String bearerToken, String accept) throws IOException {
     return fetchWithHeaders(url, runtime, bearerToken, accept, 0, true);
   }
 
-  private HttpRemoteFetcher.Result fetchWithHeaders(
+  private RemoteFetch fetchWithHeaders(
       String url,
       RepositoryRuntime runtime,
       String bearerToken,
@@ -133,7 +135,7 @@ public class DockerRemoteRegistryClient {
     return fetchWithHeaders(url, runtime, bearerToken, accept, redirects, true);
   }
 
-  private HttpRemoteFetcher.Result fetchWithHeaders(
+  private RemoteFetch fetchWithHeaders(
       String url,
       RepositoryRuntime runtime,
       String bearerToken,
@@ -183,7 +185,10 @@ public class DockerRemoteRegistryClient {
       response.headers().map().forEach((k, v) -> {
         if (!v.isEmpty()) headers.put(k, v.get(0));
       });
-      return new HttpRemoteFetcher.Result(response.statusCode(), headers, response.body());
+      return new RemoteFetch(
+          new HttpRemoteFetcher.Result(response.statusCode(), headers, response.body()),
+          uri,
+          sendCredentials);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       IOException wrapped = new IOException("Interrupted fetching Docker remote " + url, e);
@@ -283,7 +288,7 @@ public class DockerRemoteRegistryClient {
   }
 
   /** Proxied counterpart of {@link #fetchWithHeaders} — same headers/redirect/metrics, via SOCKS/HTTP proxy. */
-  private HttpRemoteFetcher.Result proxiedFetchWithHeaders(
+  private RemoteFetch proxiedFetchWithHeaders(
       String url,
       RepositoryRuntime runtime,
       String bearerToken,
@@ -292,7 +297,7 @@ public class DockerRemoteRegistryClient {
     return proxiedFetchWithHeaders(url, runtime, bearerToken, accept, redirects, true);
   }
 
-  private HttpRemoteFetcher.Result proxiedFetchWithHeaders(
+  private RemoteFetch proxiedFetchWithHeaders(
       String url,
       RepositoryRuntime runtime,
       String bearerToken,
@@ -343,7 +348,10 @@ public class DockerRemoteRegistryClient {
             redirects + 1,
             forwardCredentials);
       }
-      return new HttpRemoteFetcher.Result(response.status(), response.headers(), releaseOnClose(response));
+      return new RemoteFetch(
+          new HttpRemoteFetcher.Result(response.status(), response.headers(), releaseOnClose(response)),
+          uri,
+          sendCredentials);
     } catch (IOException | RuntimeException e) {
       failure = e;
       if (response != null) {
@@ -612,6 +620,12 @@ public class DockerRemoteRegistryClient {
   }
 
   private record RemoteToken(String value, String cacheKey, boolean cached) {
+  }
+
+  private record RemoteFetch(
+      HttpRemoteFetcher.Result result,
+      URI effectiveUri,
+      boolean credentialsAllowed) {
   }
 
   private record BearerChallenge(String realm, String service, String scope) {

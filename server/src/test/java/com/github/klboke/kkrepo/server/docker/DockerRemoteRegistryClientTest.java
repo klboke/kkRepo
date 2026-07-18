@@ -359,7 +359,8 @@ class DockerRemoteRegistryClientTest {
           .filter(request -> "GET".equals(request.method()))
           .map(request -> request.header("Authorization"))
           .toList();
-      assertEquals(List.of(basic("robot", "secret"), "Bearer tls-token"), plainHttpAuthorizations);
+      assertEquals(List.of(basic("robot", "secret")), plainHttpAuthorizations,
+          "the bearer token must retry directly on the upgraded HTTPS URL");
       assertEquals(List.of(basic("robot", "secret"), "Bearer tls-token"), manifestAuthorizations);
       assertEquals(List.of(basic("robot", "secret")), tokenAuthorizations);
       List<FakeHttpProxyServer.RecordedRequest> connectRequests = router.requests().stream()
@@ -432,6 +433,46 @@ class DockerRemoteRegistryClientTest {
 
       assertEquals(List.of(basic("robot", "secret")), registryAuthorizations);
       assertEquals(Collections.singletonList(null), storageAuthorizations);
+    }
+  }
+
+  @Test
+  void crossOriginRedirectDoesNotHonorStorageBearerChallenge() throws Exception {
+    try (TestRegistry registry = TestRegistry.start(); TestRegistry storage = TestRegistry.start()) {
+      List<String> storageAuthorizations = new ArrayList<>();
+      AtomicInteger storageTokenCalls = new AtomicInteger();
+      registry.server.createContext("/v2/library/nginx/blobs/sha256:abc", exchange -> {
+        exchange.getResponseHeaders().add("Location", storage.baseUrl + "/layers/abc");
+        exchange.sendResponseHeaders(307, -1);
+        exchange.close();
+      });
+      storage.server.createContext("/layers/abc", exchange -> {
+        storageAuthorizations.add(exchange.getRequestHeaders().getFirst("Authorization"));
+        exchange.getResponseHeaders().add(
+            "WWW-Authenticate",
+            "Bearer realm=\"" + storage.baseUrl + "/token\",service=\"storage.local\"");
+        exchange.sendResponseHeaders(401, -1);
+        exchange.close();
+      });
+      storage.server.createContext("/token", exchange -> {
+        storageTokenCalls.incrementAndGet();
+        byte[] body = "{\"token\":\"storage-token\"}".getBytes(StandardCharsets.UTF_8);
+        exchange.sendResponseHeaders(200, body.length);
+        exchange.getResponseBody().write(body);
+        exchange.close();
+      });
+      DockerRemoteRegistryClient client = client();
+
+      try (HttpRemoteFetcher.Result result = client.get(
+          runtime(registry.baseUrl, "robot", "secret"),
+          "library/nginx/blobs/sha256:abc",
+          "application/octet-stream")) {
+        assertEquals(401, result.status());
+      }
+
+      assertEquals(Collections.singletonList(null), storageAuthorizations);
+      assertEquals(0, storageTokenCalls.get(),
+          "a cross-origin storage challenge must not trigger a Registry credential exchange");
     }
   }
 
