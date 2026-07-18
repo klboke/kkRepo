@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
@@ -18,8 +19,10 @@ import java.util.concurrent.CopyOnWriteArrayList;
 /**
  * In-process fake HTTP proxy for tests. Records every request it receives (request line in
  * absolute or CONNECT form plus headers) and answers plain-HTTP requests through a
- * {@link Responder}. CONNECT requests get a canned "200 Connection established" and the tunnel is
- * then dropped, which is enough to assert that HTTPS targets are tunnelled via CONNECT.
+ * {@link Responder}. By default, CONNECT requests get a canned "200 Connection established" and
+ * the tunnel is then dropped, which is enough to assert that HTTPS targets use CONNECT. Tests that
+ * need a real TLS exchange can provide a {@link ConnectTargetResolver} to relay the tunnel to a
+ * loopback TLS server.
  */
 public final class FakeHttpProxyServer implements AutoCloseable {
 
@@ -51,13 +54,22 @@ public final class FakeHttpProxyServer implements AutoCloseable {
     FakeResponse respond(RecordedRequest request) throws IOException;
   }
 
+  @FunctionalInterface
+  public interface ConnectTargetResolver {
+    InetSocketAddress resolve(RecordedRequest request) throws IOException;
+  }
+
   private final ServerSocket serverSocket;
   private final Responder responder;
+  private final ConnectTargetResolver connectTargetResolver;
   private final List<RecordedRequest> requests = new CopyOnWriteArrayList<>();
   private volatile boolean running = true;
 
-  private FakeHttpProxyServer(Responder responder) throws IOException {
+  private FakeHttpProxyServer(
+      Responder responder,
+      ConnectTargetResolver connectTargetResolver) throws IOException {
     this.responder = responder;
+    this.connectTargetResolver = connectTargetResolver;
     this.serverSocket = new ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"));
     Thread acceptor = new Thread(this::acceptLoop, "fake-http-proxy-accept");
     acceptor.setDaemon(true);
@@ -65,7 +77,13 @@ public final class FakeHttpProxyServer implements AutoCloseable {
   }
 
   public static FakeHttpProxyServer start(Responder responder) throws IOException {
-    return new FakeHttpProxyServer(responder);
+    return new FakeHttpProxyServer(responder, null);
+  }
+
+  public static FakeHttpProxyServer startTunneling(
+      Responder responder,
+      ConnectTargetResolver connectTargetResolver) throws IOException {
+    return new FakeHttpProxyServer(responder, connectTargetResolver);
   }
 
   public int port() {
@@ -109,6 +127,10 @@ public final class FakeHttpProxyServer implements AutoCloseable {
       requests.add(request);
       OutputStream out = socket.getOutputStream();
       if ("CONNECT".equalsIgnoreCase(request.method())) {
+        if (connectTargetResolver != null) {
+          tunnel(socket, in, out, connectTargetResolver.resolve(request));
+          return;
+        }
         out.write("HTTP/1.1 200 Connection established\r\n\r\n".getBytes(StandardCharsets.ISO_8859_1));
         out.flush();
         drainBriefly(in);
@@ -133,6 +155,53 @@ public final class FakeHttpProxyServer implements AutoCloseable {
       out.write(head.toString().getBytes(StandardCharsets.ISO_8859_1));
       out.write(body);
       out.flush();
+    } catch (IOException ignored) {
+    }
+  }
+
+  private static void tunnel(
+      Socket client,
+      InputStream clientIn,
+      OutputStream clientOut,
+      InetSocketAddress target) throws IOException {
+    try (Socket upstream = new Socket()) {
+      upstream.connect(target, 10000);
+      clientOut.write("HTTP/1.1 200 Connection established\r\n\r\n"
+          .getBytes(StandardCharsets.ISO_8859_1));
+      clientOut.flush();
+
+      Thread requestPipe = new Thread(
+          () -> transfer(clientIn, upstream),
+          "fake-http-proxy-client-to-upstream");
+      requestPipe.setDaemon(true);
+      requestPipe.start();
+      transfer(upstream.getInputStream(), clientOut);
+      try {
+        requestPipe.join(1000);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+    } finally {
+      client.close();
+    }
+  }
+
+  private static void transfer(InputStream in, Socket target) {
+    try {
+      transfer(in, target.getOutputStream());
+      target.shutdownOutput();
+    } catch (IOException ignored) {
+    }
+  }
+
+  private static void transfer(InputStream in, OutputStream out) {
+    byte[] buffer = new byte[8192];
+    try {
+      int read;
+      while ((read = in.read(buffer)) >= 0) {
+        out.write(buffer, 0, read);
+        out.flush();
+      }
     } catch (IOException ignored) {
     }
   }

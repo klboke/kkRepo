@@ -24,6 +24,7 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -36,7 +37,7 @@ public class DockerRemoteRegistryClient {
 
   private final HttpRemoteFetcher fetcher;
   private final OutboundRequestPolicy outboundPolicy;
-  private final HttpClient tokenClient = HttpClient.newHttpClient();
+  private final HttpClient tokenClient;
   private final ProxiedHttpClientFactory proxyFactory;
   private final SharedCache tokenCache;
   private final boolean tokenCacheEnabled;
@@ -56,6 +57,26 @@ public class DockerRemoteRegistryClient {
       @Value("${kkrepo.docker.proxy.remote-token-cache.ttl-seconds:300}") long tokenCacheTtlSeconds,
       KkRepoMetrics metrics,
       ProxiedHttpClientFactory proxyFactory) {
+    this(
+        fetcher,
+        outboundPolicy,
+        tokenCache,
+        tokenCacheEnabled,
+        tokenCacheTtlSeconds,
+        metrics,
+        proxyFactory,
+        HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build());
+  }
+
+  DockerRemoteRegistryClient(
+      HttpRemoteFetcher fetcher,
+      OutboundRequestPolicy outboundPolicy,
+      SharedCache tokenCache,
+      boolean tokenCacheEnabled,
+      long tokenCacheTtlSeconds,
+      KkRepoMetrics metrics,
+      ProxiedHttpClientFactory proxyFactory,
+      HttpClient tokenClient) {
     this.fetcher = fetcher;
     this.outboundPolicy = outboundPolicy;
     this.tokenCache = tokenCache;
@@ -63,6 +84,7 @@ public class DockerRemoteRegistryClient {
     this.tokenCacheTtl = tokenCacheTtlSeconds <= 0 ? Duration.ZERO : Duration.ofSeconds(tokenCacheTtlSeconds);
     this.metrics = metrics;
     this.proxyFactory = proxyFactory;
+    this.tokenClient = Objects.requireNonNull(tokenClient, "tokenClient");
   }
 
   public DockerRemoteRegistryClient(
