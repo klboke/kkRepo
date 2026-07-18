@@ -39,8 +39,7 @@ import org.apache.hc.core5.http.ProtocolException;
 import org.apache.hc.core5.http.URIScheme;
 import org.apache.hc.core5.http.config.Lookup;
 import org.apache.hc.core5.http.config.RegistryBuilder;
-import org.apache.hc.core5.http.io.entity.ByteArrayEntity;
-import org.apache.hc.core5.http.message.BasicClassicHttpRequest;
+import org.apache.hc.core5.http.io.support.ClassicRequestBuilder;
 import org.apache.hc.core5.net.NamedEndpoint;
 import org.apache.hc.core5.net.URIAuthority;
 import org.apache.hc.core5.util.Timeout;
@@ -239,12 +238,12 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
     HttpHost pinnedTarget =
         new HttpHost(uri.getScheme(), address, address.getHostAddress(), port);
     HttpHost originalTarget = new HttpHost(uri.getScheme(), originalHost, port);
-    ClassicHttpRequest request = new BasicClassicHttpRequest(method, requestPath(uri));
+    ClassicRequestBuilder requestBuilder =
+        ClassicRequestBuilder.create(method).setPath(requestPath(uri));
     if (body != null) {
-      // This entity is sent to the validated upstream target; it is never rendered in a web response.
-      // codeql[java/xss]
-      request.setEntity(new ByteArrayEntity(body, null));
+      requestBuilder.setEntity(body, null);
     }
+    ClassicHttpRequest request = requestBuilder.build();
     if (headers != null) {
       headers.forEach((name, value) -> {
         if (name != null && value != null) {
