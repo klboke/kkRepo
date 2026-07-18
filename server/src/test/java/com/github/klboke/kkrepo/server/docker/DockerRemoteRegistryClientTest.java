@@ -1,7 +1,9 @@
 package com.github.klboke.kkrepo.server.docker;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
@@ -239,6 +241,31 @@ class DockerRemoteRegistryClientTest {
 
       assertEquals(List.of("/v2/library/nginx/blobs/sha256:abc", "/cdn/layers/abc"), requestPaths);
     }
+  }
+
+  @Test
+  void sameOriginTreatsSameHostHttpToHttpsUpgradeAsOriginPreserving() {
+    assertTrue(DockerRemoteRegistryClient.sameOrigin(
+        java.net.URI.create("http://registry.example.com/v2/a/b"),
+        java.net.URI.create("https://registry.example.com/v2/a/b")));
+    assertTrue(DockerRemoteRegistryClient.sameOrigin(
+        java.net.URI.create("http://registry.example.com:8080/v2/a/b"),
+        java.net.URI.create("https://registry.example.com:8080/v2/a/b")));
+    assertTrue(DockerRemoteRegistryClient.sameOrigin(
+        java.net.URI.create("http://registry.example.com:80/v2/a/b"),
+        java.net.URI.create("https://registry.example.com:443/v2/a/b")));
+    assertFalse(DockerRemoteRegistryClient.sameOrigin(
+        java.net.URI.create("https://registry.example.com/v2/a/b"),
+        java.net.URI.create("http://registry.example.com/v2/a/b")));
+    assertFalse(DockerRemoteRegistryClient.sameOrigin(
+        java.net.URI.create("http://registry.example.com/v2/a/b"),
+        java.net.URI.create("https://other.example.com/v2/a/b")));
+    assertFalse(DockerRemoteRegistryClient.sameOrigin(
+        java.net.URI.create("http://registry.example.com:8080/v2/a/b"),
+        java.net.URI.create("https://registry.example.com/v2/a/b")));
+    assertTrue(DockerRemoteRegistryClient.sameOrigin(
+        java.net.URI.create("https://registry.example.com/v2/a/b"),
+        java.net.URI.create("https://registry.example.com:443/v2/a/b")));
   }
 
   @Test

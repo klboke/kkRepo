@@ -437,14 +437,27 @@ public class DockerRemoteRegistryClient {
     return runtimeId(runtime) + ":" + sha256(source);
   }
 
-  private static boolean sameOrigin(URI from, URI to) {
+  static boolean sameOrigin(URI from, URI to) {
     if (from.getScheme() == null || to.getScheme() == null
         || from.getHost() == null || to.getHost() == null) {
       return false;
     }
-    return from.getScheme().equalsIgnoreCase(to.getScheme())
-        && from.getHost().equalsIgnoreCase(to.getHost())
-        && effectivePort(from) == effectivePort(to);
+    if (!from.getHost().equalsIgnoreCase(to.getHost())) {
+      return false;
+    }
+    if (from.getScheme().equalsIgnoreCase(to.getScheme())) {
+      return effectivePort(from) == effectivePort(to);
+    }
+    return isHttpToHttpsUpgrade(from, to);
+  }
+
+  private static boolean isHttpToHttpsUpgrade(URI from, URI to) {
+    if (!"http".equalsIgnoreCase(from.getScheme()) || !"https".equalsIgnoreCase(to.getScheme())) {
+      return false;
+    }
+    int fromPort = effectivePort(from);
+    int toPort = effectivePort(to);
+    return (fromPort == 80 && toPort == 443) || fromPort == toPort;
   }
 
   private static int effectivePort(URI uri) {
