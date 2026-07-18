@@ -107,7 +107,7 @@ public class DockerRemoteRegistryClient {
         result.close();
         fetched = fetch(fetched.effectiveUri().toString(), runtime, token.value(), accept);
         result = fetched.result();
-        if (result.status() == 401 && token.cached()) {
+        if (result.status() == 401 && token.cached() && fetched.credentialsAllowed()) {
           evictToken(token.cacheKey());
           challenge = result.header("WWW-Authenticate");
           token = fetchToken(runtime, BearerChallenge.parse(challenge).orElse(null), true).orElse(null);

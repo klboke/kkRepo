@@ -575,6 +575,82 @@ class DockerRemoteRegistryClientTest {
   }
 
   @Test
+  void cachedBearerTokenDoesNotHonorCrossOriginStorageChallenge() throws Exception {
+    try (TestRegistry registry = TestRegistry.start(); TestRegistry storage = TestRegistry.start()) {
+      AtomicInteger tokenCalls = new AtomicInteger();
+      AtomicInteger bearerCalls = new AtomicInteger();
+      List<String> storageAuthorizations = new ArrayList<>();
+      registry.server.createContext("/token", exchange -> {
+        tokenCalls.incrementAndGet();
+        byte[] body = "{\"token\":\"cached-remote-token\",\"expires_in\":3600}"
+            .getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().add("Content-Type", "application/json");
+        exchange.sendResponseHeaders(200, body.length);
+        exchange.getResponseBody().write(body);
+        exchange.close();
+      });
+      registry.server.createContext("/v2/library/alpine/manifests/latest", exchange -> {
+        String authorization = exchange.getRequestHeaders().getFirst("Authorization");
+        if (!"Bearer cached-remote-token".equals(authorization)) {
+          exchange.getResponseHeaders().add(
+              "WWW-Authenticate",
+              "Bearer realm=\"" + registry.baseUrl
+                  + "/token\",service=\"registry.local\",scope=\"repository:library/alpine:pull\"");
+          exchange.sendResponseHeaders(401, -1);
+        } else if (bearerCalls.incrementAndGet() == 1) {
+          byte[] body = "{}".getBytes(StandardCharsets.UTF_8);
+          exchange.getResponseHeaders().add("Content-Type", "application/json");
+          exchange.sendResponseHeaders(200, body.length);
+          exchange.getResponseBody().write(body);
+        } else {
+          exchange.getResponseHeaders().add("Location", storage.baseUrl + "/layers/abc");
+          exchange.sendResponseHeaders(307, -1);
+        }
+        exchange.close();
+      });
+      storage.server.createContext("/layers/abc", exchange -> {
+        storageAuthorizations.add(exchange.getRequestHeaders().getFirst("Authorization"));
+        exchange.getResponseHeaders().add(
+            "WWW-Authenticate",
+            "Bearer realm=\"" + storage.baseUrl + "/token\",service=\"storage.local\"");
+        exchange.sendResponseHeaders(401, -1);
+        exchange.close();
+      });
+      storage.server.createContext("/token", exchange -> {
+        tokenCalls.incrementAndGet();
+        byte[] body = "{\"token\":\"storage-token\"}".getBytes(StandardCharsets.UTF_8);
+        exchange.sendResponseHeaders(200, body.length);
+        exchange.getResponseBody().write(body);
+        exchange.close();
+      });
+      DockerRemoteRegistryClient client = new DockerRemoteRegistryClient(
+          null,
+          OutboundRequestPolicy.allowPrivateForTests(),
+          new InMemorySharedCache(),
+          true,
+          300);
+      RepositoryRuntime runtime = runtime(registry.baseUrl, "robot", "secret");
+
+      try (HttpRemoteFetcher.Result result = client.get(
+          runtime,
+          "library/alpine/manifests/latest",
+          "application/json")) {
+        assertEquals(200, result.status());
+      }
+      try (HttpRemoteFetcher.Result result = client.get(
+          runtime,
+          "library/alpine/manifests/latest",
+          "application/json")) {
+        assertEquals(401, result.status());
+      }
+
+      assertEquals(Collections.singletonList(null), storageAuthorizations);
+      assertEquals(1, tokenCalls.get(),
+          "a cached Registry token must not let storage refresh credentials cross-origin");
+    }
+  }
+
+  @Test
   void remoteFetchRecordsDockerProxyRemoteMetrics() throws Exception {
     try (TestRegistry registry = TestRegistry.start()) {
       registry.server.createContext("/v2/library/alpine/manifests/latest", exchange -> {
