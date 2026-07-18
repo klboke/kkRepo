@@ -39,6 +39,7 @@ import org.apache.hc.core5.http.ProtocolException;
 import org.apache.hc.core5.http.URIScheme;
 import org.apache.hc.core5.http.config.Lookup;
 import org.apache.hc.core5.http.config.RegistryBuilder;
+import org.apache.hc.core5.http.io.entity.ByteArrayEntity;
 import org.apache.hc.core5.http.message.BasicClassicHttpRequest;
 import org.apache.hc.core5.net.NamedEndpoint;
 import org.apache.hc.core5.net.URIAuthority;
@@ -177,6 +178,24 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
       Map<String, String> headers,
       long responseTimeoutMillis)
       throws IOException {
+    return execute(owner, config, method, target, headers, null, responseTimeoutMillis);
+  }
+
+  /**
+   * Executes an HTTP request with an optional repeatable body against an already validated and
+   * DNS-resolved target. Non-idempotent requests are not retried against another approved address
+   * after an I/O failure, because doing so could submit the same operation twice.
+   */
+  @SuppressWarnings("resource") // the shared client is closed by this factory, not per request
+  public ProxiedResponse execute(
+      String owner,
+      OutboundProxyConfig config,
+      String method,
+      ResolvedHttpTarget target,
+      Map<String, String> headers,
+      byte[] body,
+      long responseTimeoutMillis)
+      throws IOException {
     if (target == null) {
       throw new IllegalArgumentException("resolved outbound target is required");
     }
@@ -186,13 +205,19 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
     RequestConfig requestConfig = RequestConfig.custom()
         .setResponseTimeout(Timeout.ofMilliseconds(Math.max(1L, responseTimeoutMillis)))
         .build();
+    String requestMethod = method == null || method.isBlank() ? "GET" : method;
+    boolean retryable =
+        "GET".equalsIgnoreCase(requestMethod) || "HEAD".equalsIgnoreCase(requestMethod);
     IOException failure = null;
     for (InetAddress address : target.addresses()) {
       try {
         return executeAtAddress(
-            client, config, method, target.uri(), address, headers, requestConfig);
+            client, config, requestMethod, target.uri(), address, headers, body, requestConfig);
       } catch (IOException e) {
         failure = e;
+        if (!retryable) {
+          throw e;
+        }
       }
     }
     throw failure != null ? failure : new IOException("resolved outbound target has no addresses");
@@ -206,6 +231,7 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
       URI uri,
       InetAddress address,
       Map<String, String> headers,
+      byte[] body,
       RequestConfig requestConfig)
       throws IOException {
     int port = effectivePort(uri);
@@ -213,8 +239,10 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
     HttpHost pinnedTarget =
         new HttpHost(uri.getScheme(), address, address.getHostAddress(), port);
     HttpHost originalTarget = new HttpHost(uri.getScheme(), originalHost, port);
-    ClassicHttpRequest request =
-        new BasicClassicHttpRequest("HEAD".equalsIgnoreCase(method) ? "HEAD" : "GET", requestPath(uri));
+    ClassicHttpRequest request = new BasicClassicHttpRequest(method, requestPath(uri));
+    if (body != null) {
+      request.setEntity(new ByteArrayEntity(body, null));
+    }
     if (headers != null) {
       headers.forEach((name, value) -> {
         if (name != null && value != null) {

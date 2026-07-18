@@ -45,6 +45,11 @@ public class OutboundRequestPolicy {
     return new OutboundRequestPolicy(true, Set.of(), InetAddress::getAllByName);
   }
 
+  /**
+   * Validates a URL for configuration storage or a client-side redirect only. Server-side HTTP
+   * callers must use {@link #resolveHttpTarget(String, String)} and connect through the pinned
+   * transport so the approved DNS answers cannot be discarded before connection establishment.
+   */
   public URI validateHttpUri(String rawUrl, String purpose) {
     if (rawUrl == null || rawUrl.isBlank()) {
       throw new SecurityValidationException(purpose + " URL is required");
@@ -56,6 +61,7 @@ public class OutboundRequestPolicy {
     }
   }
 
+  /** See {@link #validateHttpUri(String, String)}. */
   public URI validateHttpUri(URI uri, String purpose) {
     String host = validatedHost(uri, purpose);
     if (allowedHosts.contains(normalizeHost(host))) {

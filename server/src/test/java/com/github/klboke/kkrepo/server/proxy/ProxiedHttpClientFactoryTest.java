@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.core5.http.HttpHost;
 import org.apache.hc.core5.http.message.BasicClassicHttpRequest;
@@ -74,13 +75,74 @@ class ProxiedHttpClientFactoryTest {
           "http://127.0.0.1:" + upstream.getAddress().getPort() + "?source=test");
 
       try (ProxiedHttpClientFactory.ProxiedResponse response = factory.execute(
-          "repo-a", disabled, "GET", target, Map.of(), 5000)) {
+          "repo-a", disabled, null, target, Map.of(), 5000)) {
         assertEquals(200, response.status());
         assertEquals("/?source=test",
             new String(response.body().readAllBytes(), StandardCharsets.UTF_8));
       }
     } finally {
       upstream.stop(0);
+    }
+  }
+
+  @Test
+  void pinnedDirectClientSendsPostBodyAndHeaders() throws Exception {
+    AtomicReference<String> method = new AtomicReference<>();
+    AtomicReference<String> contentType = new AtomicReference<>();
+    AtomicReference<String> requestBody = new AtomicReference<>();
+    HttpServer upstream = HttpServer.create(
+        new InetSocketAddress(java.net.InetAddress.getByName("127.0.0.1"), 0), 0);
+    upstream.createContext("/token", exchange -> {
+      method.set(exchange.getRequestMethod());
+      contentType.set(exchange.getRequestHeaders().getFirst("Content-Type"));
+      requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+      byte[] response = "ok".getBytes(StandardCharsets.UTF_8);
+      exchange.sendResponseHeaders(200, response.length);
+      exchange.getResponseBody().write(response);
+      exchange.close();
+    });
+    upstream.start();
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      ResolvedHttpTarget target = target(
+          "http://127.0.0.1:" + upstream.getAddress().getPort() + "/token");
+
+      try (ProxiedHttpClientFactory.ProxiedResponse response = factory.execute(
+          "security:oidc-token",
+          null,
+          "POST",
+          target,
+          Map.of("Content-Type", "application/x-www-form-urlencoded"),
+          "code=one-time".getBytes(StandardCharsets.UTF_8),
+          5000)) {
+        assertEquals(200, response.status());
+        assertEquals("ok", new String(response.body().readAllBytes(), StandardCharsets.UTF_8));
+      }
+      assertEquals("POST", method.get());
+      assertEquals("application/x-www-form-urlencoded", contentType.get());
+      assertEquals("code=one-time", requestBody.get());
+    } finally {
+      upstream.stop(0);
+    }
+  }
+
+  @Test
+  void failedPostIsNotRetriedAgainstAnotherResolvedAddress() throws Exception {
+    int closedPort;
+    try (ServerSocket socket = new ServerSocket(
+        0, 50, java.net.InetAddress.getByName("127.0.0.1"))) {
+      closedPort = socket.getLocalPort();
+    }
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 1000)) {
+      ResolvedHttpTarget target = target("http://localhost:" + closedPort + "/token");
+
+      assertThrows(IOException.class, () -> factory.execute(
+          "security:oidc-token",
+          null,
+          "POST",
+          target,
+          Map.of("Content-Type", "application/x-www-form-urlencoded"),
+          "code=one-time".getBytes(StandardCharsets.UTF_8),
+          1000));
     }
   }
 

@@ -10,6 +10,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.ApiKeyRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityAnonymousConfigRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRealmRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
+import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.support.dao.SecurityDaoAdapter;
 import com.sun.net.httpserver.HttpServer;
 import com.unboundid.ldap.listener.InMemoryDirectoryServer;
@@ -37,6 +38,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.session.FindByIndexNameSessionRepository;
 
@@ -45,6 +47,13 @@ class SecurityAuthenticationServiceTest {
   private static final String NEXUS_SHIRO1_ADMIN123 = "$shiro1$SHA-512$1024$zjU1u+Zg9UNwuB+HEawvtA==$"
       + "IzF/OWzJxrqvB5FCe/2+UcZhhZYM2pTu0TEz7Ybnk65AbbEdUk9ntdtBzkN8P3gZby2qz6MHKqAe8Cjai9c4Gg==";
   private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+  private final ProxiedHttpClientFactory transportFactory =
+      new ProxiedHttpClientFactory(60_000, 10_000);
+
+  @AfterEach
+  void closeTransportFactory() {
+    transportFactory.close();
+  }
 
   @Test
   void exposesOnlyReplayableTerraformCredentialsForTheAuthenticatedSubject() {
@@ -561,6 +570,40 @@ class SecurityAuthenticationServiceTest {
   }
 
   @Test
+  void rejectsOidcBearerTokenWhenJwksEndpointIsNotSuccessful() throws Exception {
+    HttpServer jwks = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    jwks.createContext("/jwks", exchange -> {
+      exchange.sendResponseHeaders(503, -1);
+      exchange.close();
+    });
+    jwks.start();
+    try {
+      FakeSecurityDao dao = new FakeSecurityDao();
+      dao.realm(new SecurityRealmRecord(
+          1L,
+          "oidc",
+          "OIDC",
+          "OIDC",
+          true,
+          0,
+          Map.of(
+              "source", "OIDC",
+              "jwksUri", "http://127.0.0.1:" + jwks.getAddress().getPort() + "/jwks")));
+      SecurityAuthenticationService service = service(dao);
+
+      Optional<AuthenticatedSubject> authenticated = service.authenticate(request(Map.of(
+          "Authorization", "Bearer " + jwt(
+              "{\"alg\":\"RS256\",\"kid\":\"missing\"}",
+              "{\"sub\":\"alice\",\"exp\":4102444800}",
+              "signature"))));
+
+      assertFalse(authenticated.isPresent());
+    } finally {
+      jwks.stop(0);
+    }
+  }
+
+  @Test
   void authenticatesOidcBearerJwtAgainstLiveJwksAndMapsClaimsToExternalRoles() throws Exception {
     KeyPair keyPair = rsaKeyPair();
     String kid = "test-key";
@@ -579,11 +622,16 @@ class SecurityAuthenticationServiceTest {
               "source", "OIDC",
               "issuer", "https://issuer.example.com",
               "audience", "kkrepo",
-              "jwksUri", "http://127.0.0.1:" + jwks.getAddress().getPort() + "/jwks",
+              "jwksUri", "http://jwks.rebind.invalid:" + jwks.getAddress().getPort() + "/jwks",
               "userIdClaim", "preferred_username",
               "groupsClaim", "groups",
               "rolesClaim", "roles")));
-      SecurityAuthenticationService service = service(dao);
+      OutboundRequestPolicy pinnedPolicy = new OutboundRequestPolicy(
+          true,
+          "",
+          host -> new InetAddress[] {InetAddress.getByAddress(
+              host, new byte[] {127, 0, 0, 1})});
+      SecurityAuthenticationService service = service(dao, "nx-anonymous", pinnedPolicy);
       String token = signedJwt(
           keyPair,
           kid,
@@ -797,16 +845,31 @@ class SecurityAuthenticationServiceTest {
         new SecurityRealmRecord(3L, "oidc", "OIDC", "OIDC", true, 20, Map.of())));
   }
 
-  private static SecurityAuthenticationService service(FakeSecurityDao dao) {
-    return new SecurityAuthenticationService(dao, new ObjectMapper(), "X-Nexus-Plus-Token");
+  private SecurityAuthenticationService service(FakeSecurityDao dao) {
+    return service(dao, "nx-anonymous");
   }
 
-  private static SecurityAuthenticationService service(FakeSecurityDao dao, String defaultAuthenticatedRoleId) {
+  private SecurityAuthenticationService service(
+      FakeSecurityDao dao, String defaultAuthenticatedRoleId) {
+    return service(
+        dao, defaultAuthenticatedRoleId, OutboundRequestPolicy.allowPrivateForTests());
+  }
+
+  private SecurityAuthenticationService service(
+      FakeSecurityDao dao,
+      String defaultAuthenticatedRoleId,
+      OutboundRequestPolicy outboundPolicy) {
     return new SecurityAuthenticationService(
         dao,
         new ObjectMapper(),
         "X-Nexus-Plus-Token",
-        defaultAuthenticatedRoleId);
+        defaultAuthenticatedRoleId,
+        null,
+        outboundPolicy,
+        transportFactory,
+        null,
+        null,
+        null);
   }
 
   private static SecurityUserRecord user(Long id, String source, String userId, String passwordHash) {

@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRealmRecord;
+import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.support.dao.SecurityDaoAdapter;
 import com.sun.net.httpserver.HttpServer;
 import jakarta.servlet.DispatcherType;
@@ -16,6 +17,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import java.lang.reflect.Proxy;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URLDecoder;
@@ -25,10 +27,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.server.ResponseStatusException;
 
 class OidcLoginControllerTest {
+  private final ProxiedHttpClientFactory transportFactory =
+      new ProxiedHttpClientFactory(60_000, 10_000);
+
+  @AfterEach
+  void closeTransportFactory() {
+    transportFactory.close();
+  }
 
   @Test
   void loginRedirectsToConfiguredAuthorizationEndpointAndStoresReturnState() throws Exception {
@@ -41,7 +52,7 @@ class OidcLoginControllerTest {
         "authorizationEndpoint", "https://localhost/oauth2/authorize",
         "redirectUri", "http://nexus.example.com/internal/security/oidc/callback",
         "scopes", "openid profile email groups")));
-    OidcLoginController controller = new OidcLoginController(authentication, new ObjectMapper());
+    OidcLoginController controller = controller(authentication);
 
     controller.login(request(session), response.proxy(), "/browse/");
 
@@ -67,12 +78,8 @@ class OidcLoginControllerTest {
         "issuerUri", "https://localhost",
         "authorizationEndpoint", "http://127.0.0.1/oauth2/authorize",
         "redirectUri", "http://nexus.example.com/internal/security/oidc/callback")));
-    OidcLoginController controller = new OidcLoginController(
-        authentication,
-        new ObjectMapper(),
-        new OutboundRequestPolicy(false, ""),
-        null,
-        "");
+    OidcLoginController controller = controller(
+        authentication, new OutboundRequestPolicy(false, ""), "");
 
     SecurityValidationException error = assertThrows(
         SecurityValidationException.class,
@@ -91,11 +98,9 @@ class OidcLoginControllerTest {
         "issuerUri", "https://issuer.example.com",
         "authorizationEndpoint", "https://login.example.net/oauth2/authorize",
         "redirectUri", "http://nexus.example.com/internal/security/oidc/callback")));
-    OidcLoginController controller = new OidcLoginController(
+    OidcLoginController controller = controller(
         authentication,
-        new ObjectMapper(),
         new OutboundRequestPolicy(false, "issuer.example.com,login.example.net"),
-        null,
         "");
 
     controller.login(request(session), response.proxy(), "/browse/");
@@ -114,11 +119,9 @@ class OidcLoginControllerTest {
         "clientId", "kkrepo",
         "issuerUri", "https://localhost",
         "authorizationEndpoint", "https://localhost/oauth2/authorize")));
-    OidcLoginController controller = new OidcLoginController(
+    OidcLoginController controller = controller(
         authentication,
-        new ObjectMapper(),
         OutboundRequestPolicy.allowPrivateForTests(),
-        null,
         "https://nexus.example.com/");
 
     controller.login(request(session), response.proxy(), "/browse/");
@@ -138,7 +141,7 @@ class OidcLoginControllerTest {
         "clientId", "kkrepo",
         "issuerUri", "https://localhost",
         "authorizationEndpoint", "https://localhost/oauth2/authorize")));
-    OidcLoginController controller = new OidcLoginController(authentication, new ObjectMapper());
+    OidcLoginController controller = controller(authentication);
 
     ResponseStatusException error = assertThrows(
         ResponseStatusException.class,
@@ -160,13 +163,37 @@ class OidcLoginControllerTest {
           "clientId", "kkrepo",
           "issuerUri", discovery.issuer(),
           "redirectUri", "http://nexus.example.com/internal/security/oidc/callback")));
-      OidcLoginController controller = new OidcLoginController(authentication, new ObjectMapper());
+      OidcLoginController controller = controller(authentication);
 
       controller.login(request(session), response.proxy(), "/browse/");
 
       URI redirect = URI.create(response.redirect);
       assertEquals("localhost", redirect.getHost());
       assertEquals("/oauth2/authorize", redirect.getPath());
+    }
+  }
+
+  @Test
+  void discoveryConnectsToThePolicyResolvedAddressWithoutASecondDnsLookup() throws Exception {
+    try (TestOidcDiscovery discovery =
+        oidcDiscoveryServer("issuer.rebind.invalid", "login.rebind.invalid", false)) {
+      SessionState session = new SessionState();
+      ResponseState response = new ResponseState();
+      StubAuthenticationService authentication = new StubAuthenticationService();
+      authentication.oidcRealm = Optional.of(oidcRealm(Map.of(
+          "clientId", "kkrepo",
+          "issuerUri", discovery.issuer(),
+          "redirectUri", "http://nexus.example.com/internal/security/oidc/callback")));
+      OutboundRequestPolicy pinnedPolicy = new OutboundRequestPolicy(
+          true,
+          "",
+          host -> new InetAddress[] {InetAddress.getByAddress(
+              host, new byte[] {127, 0, 0, 1})});
+      OidcLoginController controller = controller(authentication, pinnedPolicy, "");
+
+      controller.login(request(session), response.proxy(), "/browse/");
+
+      assertEquals("login.rebind.invalid", URI.create(response.redirect).getHost());
     }
   }
 
@@ -180,13 +207,42 @@ class OidcLoginControllerTest {
           "clientId", "kkrepo",
           "issuerUri", discovery.issuer(),
           "redirectUri", "http://nexus.example.com/internal/security/oidc/callback")));
-      OidcLoginController controller = new OidcLoginController(authentication, new ObjectMapper());
+      OidcLoginController controller = controller(authentication);
 
       SecurityValidationException error = assertThrows(
           SecurityValidationException.class,
           () -> controller.login(request(session), response.proxy(), "/browse/"));
 
       assertEquals("OIDC discovery issuer must match configured issuer", error.getMessage());
+    }
+  }
+
+  @Test
+  void discoveryRejectsNonSuccessfulResponse() throws Exception {
+    HttpServer discovery = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    discovery.createContext("/.well-known/openid-configuration", exchange -> {
+      exchange.sendResponseHeaders(503, -1);
+      exchange.close();
+    });
+    discovery.start();
+    try {
+      SessionState session = new SessionState();
+      StubAuthenticationService authentication = new StubAuthenticationService();
+      authentication.oidcRealm = Optional.of(oidcRealm(Map.of(
+          "clientId", "kkrepo",
+          "issuerUri", "http://127.0.0.1:" + discovery.getAddress().getPort(),
+          "redirectUri", "http://nexus.example.com/internal/security/oidc/callback")));
+      OidcLoginController controller = controller(authentication);
+
+      ResponseStatusException error = assertThrows(
+          ResponseStatusException.class,
+          () -> controller.login(
+              request(session), new ResponseState().proxy(), "/browse/"));
+
+      assertTrue(error.getStatusCode().isSameCodeAs(org.springframework.http.HttpStatus.BAD_REQUEST));
+      assertEquals("OIDC discovery endpoint returned 503", error.getReason());
+    } finally {
+      discovery.stop(0);
     }
   }
 
@@ -200,7 +256,7 @@ class OidcLoginControllerTest {
         "local",
         null,
         new PermissionSubject("Local", "admin", Set.of("nx-admin"), null));
-    OidcLoginController controller = new OidcLoginController(new StubAuthenticationService(), new ObjectMapper());
+    OidcLoginController controller = controller(new StubAuthenticationService());
 
     controller.basicLogin(request(session, Map.of(AuthenticatedSubject.REQUEST_ATTRIBUTE, subject)), response.proxy(), "/admin/#security-users");
 
@@ -221,7 +277,7 @@ class OidcLoginControllerTest {
         null,
         new PermissionSubject("Local", "admin", Set.of("nx-admin"), null));
     authentication.credentialSubject = Optional.of(subject);
-    OidcLoginController controller = new OidcLoginController(authentication, new ObjectMapper());
+    OidcLoginController controller = controller(authentication);
 
     OidcLoginController.LoginResult result = controller.passwordLogin(
         request(session),
@@ -238,7 +294,7 @@ class OidcLoginControllerTest {
   @Test
   void loginOptionsExposeActiveExternalRealms() {
     StubAuthenticationService authentication = new StubAuthenticationService();
-    OidcLoginController controller = new OidcLoginController(authentication, new ObjectMapper());
+    OidcLoginController controller = controller(authentication);
 
     assertEquals(false, controller.loginOptions().oidcEnabled());
     assertEquals(false, controller.loginOptions().ldapEnabled());
@@ -272,7 +328,7 @@ class OidcLoginControllerTest {
         new PermissionSubject("Local", "admin", Set.of("nx-admin"), null)));
     session.exists = true;
     ResponseState response = new ResponseState();
-    OidcLoginController controller = new OidcLoginController(new StubAuthenticationService(), new ObjectMapper());
+    OidcLoginController controller = controller(new StubAuthenticationService());
 
     controller.logout(request(session), response.proxy(), null);
 
@@ -297,7 +353,7 @@ class OidcLoginControllerTest {
         "authorizationEndpoint", "https://localhost/oauth2/authorize",
         "redirectUri", "http://nexus.example.com/callback")));
     authentication.subject = Optional.of(subject);
-    OidcLoginController controller = new OidcLoginController(authentication, new ObjectMapper());
+    OidcLoginController controller = controller(authentication);
     controller.login(request(session), response.proxy(), "/browse/");
     String state = query(URI.create(response.redirect)).get("state");
 
@@ -320,10 +376,79 @@ class OidcLoginControllerTest {
   }
 
   @Test
+  void callbackPostsTokenRequestToThePolicyResolvedAddress() throws Exception {
+    AtomicReference<String> requestMethod = new AtomicReference<>();
+    AtomicReference<String> requestContentType = new AtomicReference<>();
+    AtomicReference<String> requestBody = new AtomicReference<>();
+    HttpServer tokenServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    tokenServer.createContext("/oauth2/token", exchange -> {
+      requestMethod.set(exchange.getRequestMethod());
+      requestContentType.set(exchange.getRequestHeaders().getFirst("Content-Type"));
+      requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+      byte[] body = "{\"id_token\":\"header.claims.signature\"}"
+          .getBytes(StandardCharsets.UTF_8);
+      exchange.getResponseHeaders().add("Content-Type", "application/json");
+      exchange.sendResponseHeaders(200, body.length);
+      exchange.getResponseBody().write(body);
+      exchange.close();
+    });
+    tokenServer.start();
+    try {
+      int port = tokenServer.getAddress().getPort();
+      SessionState session = new SessionState();
+      ResponseState loginResponse = new ResponseState();
+      StubAuthenticationService authentication = new StubAuthenticationService();
+      authentication.oidcRealm = Optional.of(oidcRealm(Map.of(
+          "clientId", "kkrepo",
+          "clientSecret", "top-secret",
+          "issuerUri", "http://issuer.rebind.invalid:" + port,
+          "authorizationEndpoint", "http://login.rebind.invalid:" + port + "/oauth2/authorize",
+          "tokenEndpoint", "http://token.rebind.invalid:" + port + "/oauth2/token",
+          "redirectUri", "http://nexus.example.com/internal/security/oidc/callback")));
+      authentication.subject = Optional.of(new AuthenticatedSubject(
+          "OIDC",
+          "alice",
+          "oidc",
+          null,
+          new PermissionSubject("OIDC", "alice", Set.of("nx-admin"), null)));
+      OutboundRequestPolicy pinnedPolicy = new OutboundRequestPolicy(
+          true,
+          "",
+          host -> new InetAddress[] {InetAddress.getByAddress(
+              host, new byte[] {127, 0, 0, 1})});
+      OidcLoginController controller = controller(authentication, pinnedPolicy, "");
+      controller.login(request(session), loginResponse.proxy(), "/browse/");
+      String state = query(URI.create(loginResponse.redirect)).get("state");
+
+      ResponseState callbackResponse = new ResponseState();
+      controller.callback(
+          request(session),
+          callbackResponse.proxy(),
+          state,
+          "one-time-code",
+          null,
+          null,
+          null,
+          null);
+
+      assertEquals("POST", requestMethod.get());
+      assertEquals("application/x-www-form-urlencoded", requestContentType.get());
+      Map<String, String> form = query(URI.create("http://localhost/?" + requestBody.get()));
+      assertEquals("authorization_code", form.get("grant_type"));
+      assertEquals("one-time-code", form.get("code"));
+      assertEquals("top-secret", form.get("client_secret"));
+      assertEquals("header.claims.signature", authentication.presentedToken);
+      assertEquals("/browse/", callbackResponse.redirect);
+    } finally {
+      tokenServer.stop(0);
+    }
+  }
+
+  @Test
   void callbackRejectsMissingOrMismatchedState() {
     StubAuthenticationService authentication = new StubAuthenticationService();
     authentication.oidcRealm = Optional.of(oidcRealm(Map.of("clientId", "kkrepo")));
-    OidcLoginController controller = new OidcLoginController(authentication, new ObjectMapper());
+    OidcLoginController controller = controller(authentication);
 
     ResponseStatusException error = assertThrows(ResponseStatusException.class, () ->
         controller.callback(
@@ -337,6 +462,23 @@ class OidcLoginControllerTest {
             null));
 
     assertTrue(error.getStatusCode().isSameCodeAs(org.springframework.http.HttpStatus.UNAUTHORIZED));
+  }
+
+  private OidcLoginController controller(SecurityAuthenticationService authentication) {
+    return controller(authentication, OutboundRequestPolicy.allowPrivateForTests(), "");
+  }
+
+  private OidcLoginController controller(
+      SecurityAuthenticationService authentication,
+      OutboundRequestPolicy outboundPolicy,
+      String externalBaseUrl) {
+    return new OidcLoginController(
+        authentication,
+        new ObjectMapper(),
+        outboundPolicy,
+        transportFactory,
+        null,
+        externalBaseUrl);
   }
 
   private static SecurityRealmRecord oidcRealm(Map<String, Object> attributes) {
@@ -439,7 +581,12 @@ class OidcLoginControllerTest {
     private String presentedPassword;
 
     private StubAuthenticationService() {
-      super(new SessionRoleDao(), new ObjectMapper(), "X-Nexus-Plus-Token");
+      super(
+          new SessionRoleDao(),
+          new ObjectMapper(),
+          "X-Nexus-Plus-Token",
+          "nx-anonymous",
+          null);
     }
 
     @Override
