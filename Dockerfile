@@ -2,7 +2,7 @@ FROM eclipse-temurin:25-jre-jammy
 
 WORKDIR /app
 
-ARG JAR_FILE=server/target/kkrepo-server-0.5.0.jar
+ARG JAR_FILE=server/target/kkrepo-server-0.5.1.jar
 
 RUN groupadd --system kkrepo \
     && useradd --system --gid kkrepo --home-dir /app --shell /usr/sbin/nologin kkrepo
