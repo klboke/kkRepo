@@ -35,6 +35,17 @@ import org.junit.jupiter.api.Test;
 class ProxiedHttpClientFactoryTest {
 
   @Test
+  void ipv6LiteralUsesUnbracketedApacheEndpointHost() {
+    URI uri = URI.create("https://[2001:db8::1]/artifact");
+
+    String endpointHost = ProxiedHttpClientFactory.endpointHost(uri);
+
+    assertEquals("2001:db8::1", endpointHost);
+    assertEquals("2001:db8::1", new HttpHost(uri.getScheme(), endpointHost, 443).getHostName(),
+        "TLS peer name must not include URI-only IPv6 brackets");
+  }
+
+  @Test
   void executeRejectsMissingResolvedTargetCapability() throws Exception {
     try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
       IllegalArgumentException error = assertThrows(

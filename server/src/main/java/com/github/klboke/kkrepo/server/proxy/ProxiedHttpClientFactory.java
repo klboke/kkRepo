@@ -209,9 +209,10 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
       RequestConfig requestConfig)
       throws IOException {
     int port = effectivePort(uri);
+    String originalHost = endpointHost(uri);
     HttpHost pinnedTarget =
         new HttpHost(uri.getScheme(), address, address.getHostAddress(), port);
-    HttpHost originalTarget = new HttpHost(uri.getScheme(), uri.getHost(), port);
+    HttpHost originalTarget = new HttpHost(uri.getScheme(), originalHost, port);
     ClassicHttpRequest request =
         new BasicClassicHttpRequest("HEAD".equalsIgnoreCase(method) ? "HEAD" : "GET", requestPath(uri));
     if (headers != null) {
@@ -228,7 +229,7 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
         && URIScheme.HTTP.same(uri.getScheme());
     request.setScheme(uri.getScheme());
     request.setAuthority(new URIAuthority(
-        plainHttpProxy ? address.getHostAddress() : uri.getHost(), uri.getPort()));
+        plainHttpProxy ? address.getHostAddress() : originalHost, uri.getPort()));
     if (plainHttpProxy) {
       request.setHeader(HttpHeaders.HOST, hostHeader(uri));
     }
@@ -260,9 +261,19 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
     return URIScheme.HTTPS.same(uri.getScheme()) ? 443 : 80;
   }
 
-  private static String hostHeader(URI uri) {
+  static String endpointHost(URI uri) {
+    // URI.getHost() keeps IPv6 literal brackets, but Apache needs the bare address for TLS peer
+    // naming and request authority; its serializers add brackets back where URI syntax requires.
     String host = uri.getHost();
-    if (host.indexOf(':') >= 0 && !(host.startsWith("[") && host.endsWith("]"))) {
+    if (host != null && host.startsWith("[") && host.endsWith("]")) {
+      return host.substring(1, host.length() - 1);
+    }
+    return host;
+  }
+
+  private static String hostHeader(URI uri) {
+    String host = endpointHost(uri);
+    if (host.indexOf(':') >= 0) {
       host = "[" + host + "]";
     }
     return uri.getPort() >= 0 ? host + ":" + uri.getPort() : host;
