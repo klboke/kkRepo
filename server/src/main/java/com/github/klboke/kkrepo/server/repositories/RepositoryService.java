@@ -16,6 +16,8 @@ import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmGroupPackumentCache;
 import com.github.klboke.kkrepo.server.pypi.PypiGroupSimpleIndexCache;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
+import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CargoSettings;
@@ -71,6 +73,7 @@ public class RepositoryService {
   private final RepositoryCatalogCache repositoryCatalogCache;
   private final DockerConnectorRuntime dockerConnectorRuntime;
   private final TerraformRegistryDao terraformRegistry;
+  private final ProxiedHttpClientFactory proxiedHttpClientFactory;
   private final SwiftRegistryDao swiftRegistry;
   private final String urlPrefix;
   private final int serverPort;
@@ -93,6 +96,7 @@ public class RepositoryService {
       RepositoryCatalogCache repositoryCatalogCache,
       DockerConnectorRuntime dockerConnectorRuntime,
       TerraformRegistryDao terraformRegistry,
+      ProxiedHttpClientFactory proxiedHttpClientFactory,
       SwiftRegistryDao swiftRegistry,
       @Value("${kkrepo.compatibility.repository-url-prefix:/repository}") String urlPrefix,
       @Value("${server.port:8080}") int serverPort,
@@ -112,6 +116,7 @@ public class RepositoryService {
     this.repositoryCatalogCache = repositoryCatalogCache;
     this.dockerConnectorRuntime = dockerConnectorRuntime;
     this.terraformRegistry = terraformRegistry;
+    this.proxiedHttpClientFactory = proxiedHttpClientFactory;
     this.swiftRegistry = swiftRegistry;
     this.urlPrefix = urlPrefix;
     this.serverPort = serverPort;
@@ -126,7 +131,7 @@ public class RepositoryService {
       String urlPrefix) {
     this(repositoryDao, blobStoreDao, securityDao, runtimeRegistry, null, null,
         null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, null, null, null,
-        null, null, urlPrefix, 8080, 8080);
+        null, null, null, urlPrefix, 8080, 8080);
   }
 
   public RepositoryService(
@@ -138,7 +143,19 @@ public class RepositoryService {
       String urlPrefix) {
     this(repositoryDao, blobStoreDao, securityDao, runtimeRegistry, null, null,
         null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, cacheController, null, null,
-        null, null, urlPrefix, 8080, 8080);
+        null, null, null, urlPrefix, 8080, 8080);
+  }
+
+  RepositoryService(
+      RepositoryDao repositoryDao,
+      BlobStoreDao blobStoreDao,
+      SecurityDao securityDao,
+      RepositoryRuntimeRegistry runtimeRegistry,
+      ProxiedHttpClientFactory proxiedHttpClientFactory,
+      String urlPrefix) {
+    this(repositoryDao, blobStoreDao, securityDao, runtimeRegistry, null, null,
+        null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, null, null, null,
+        null, proxiedHttpClientFactory, null, urlPrefix, 8080, 8080);
   }
 
   RepositoryService(
@@ -150,8 +167,8 @@ public class RepositoryService {
       int serverPort,
       int managementPort) {
     this(repositoryDao, blobStoreDao, securityDao, runtimeRegistry, null, null,
-        null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, null, null, null, null, null, urlPrefix,
-        serverPort, managementPort);
+        null, OutboundRequestPolicy.allowPrivateForTests(), null, null, null, null, null, null, null, null, null,
+        urlPrefix, serverPort, managementPort);
   }
 
   @Transactional(readOnly = true)
@@ -324,6 +341,7 @@ public class RepositoryService {
         online, blobStoreId, existing.routingRuleId(), proxyRemoteUrl,
         versionPolicy, layoutPolicy, writePolicy, strict, attributes);
     repositoryDao.update(toUpdate);
+    evictStaleOutboundProxyClient(existing.name(), existing.attributes(), attributes);
 
     if (recipe.type() == RepositoryType.GROUP && command.group() != null) {
       List<Long> memberIds = resolveMemberIds(name, recipe.format(), command.group());
@@ -369,6 +387,7 @@ public class RepositoryService {
     if (removed == 0) {
       throw new RepositoryNotFoundException(name);
     }
+    evictOutboundProxyClient(existing.name(), existing.attributes());
     NexusRepositorySecurityContributor.removeRepositoryPrivileges(securityDao, existing.format(), name);
     invalidateRuntimeCache(existing.id(), name);
     invalidateRepositoryCacheTokensAfterCommit(existing.id());
@@ -412,6 +431,45 @@ public class RepositoryService {
       proxyNegativeCache.invalidateRepository(repositoryId);
     }
     invalidateContainingRuntimeCaches(repositoryId, new HashSet<>());
+  }
+
+  /**
+   * Evicts the cached outbound-proxy HTTP client owned by this repository when the proxy block
+   * changed (or disappeared) across an update, so a rotated credential or a switched-off proxy
+   * never keeps a stale connection pool alive until the idle TTL. Compared on the collision-safe
+   * cache key, so an untouched block keeps its pooled client. Eviction is scoped to this
+   * repository's own client — another repository with identical proxy settings keeps its pool.
+   */
+  private void evictStaleOutboundProxyClient(
+      String repositoryName, Map<String, Object> previousAttributes, Map<String, Object> newAttributes) {
+    if (proxiedHttpClientFactory == null) {
+      return;
+    }
+    OutboundProxyConfig previous = OutboundProxyConfig.fromAttributes(proxyChildMap(previousAttributes));
+    if (previous == null) {
+      return;
+    }
+    OutboundProxyConfig current = OutboundProxyConfig.fromAttributes(proxyChildMap(newAttributes));
+    if (current != null && current.cacheKey().equals(previous.cacheKey())) {
+      return;
+    }
+    proxiedHttpClientFactory.invalidate(repositoryName, previous);
+  }
+
+  private void evictOutboundProxyClient(String repositoryName, Map<String, Object> attributes) {
+    if (proxiedHttpClientFactory == null) {
+      return;
+    }
+    proxiedHttpClientFactory.invalidate(
+        repositoryName, OutboundProxyConfig.fromAttributes(proxyChildMap(attributes)));
+  }
+
+  private static Map<?, ?> proxyChildMap(Map<String, Object> attributes) {
+    if (attributes == null) {
+      return null;
+    }
+    Object proxy = attributes.get("proxy");
+    return proxy instanceof Map<?, ?> map ? map : null;
   }
 
   private void invalidateContainingRuntimeCaches(long repositoryId, Set<Long> visited) {
@@ -819,62 +877,90 @@ public class RepositoryService {
   }
 
   private ProxySettings requireProxy(ProxySettings settings, RepositoryFormat format) {
-    if (settings == null && (format == RepositoryFormat.PUB
-        || format == RepositoryFormat.COMPOSER || format == RepositoryFormat.TERRAFORM
-        || format == RepositoryFormat.SWIFT)) {
-      settings = new ProxySettings(
-          format == RepositoryFormat.PUB ? "https://pub.dev/"
-              : format == RepositoryFormat.COMPOSER ? "https://repo.packagist.org/"
-              : format == RepositoryFormat.TERRAFORM ? "https://registry.terraform.io/"
-              : "https://github.com/",
-          null, null, null);
+    String defaultRemote = defaultRemoteUrl(format);
+    if (settings == null && defaultRemote != null) {
+      settings = new ProxySettings(defaultRemote, null, null, null);
     }
     if (settings == null) {
       throw new RepositoryValidationException("proxy settings are required for proxy repositories");
     }
-    if (format == RepositoryFormat.PUB
+    if (defaultRemote != null
         && (settings.remoteUrl() == null || settings.remoteUrl().isBlank())) {
-      settings = new ProxySettings(
-          "https://pub.dev/",
-          settings.contentMaxAgeMinutes(),
-          settings.metadataMaxAgeMinutes(),
-          settings.autoBlock(),
-          settings.remoteUsername(),
-          settings.remotePassword(),
-          settings.remotePasswordConfigured(),
-          settings.remoteBearerToken(),
-          settings.remoteBearerTokenConfigured());
-    }
-    if (format == RepositoryFormat.COMPOSER
-        && (settings.remoteUrl() == null || settings.remoteUrl().isBlank())) {
-      settings = new ProxySettings(
-          "https://repo.packagist.org/",
-          settings.contentMaxAgeMinutes(),
-          settings.metadataMaxAgeMinutes(),
-          settings.autoBlock(),
-          settings.remoteUsername(),
-          settings.remotePassword(),
-          settings.remotePasswordConfigured(),
-          settings.remoteBearerToken(),
-          settings.remoteBearerTokenConfigured());
-    }
-    if (format == RepositoryFormat.TERRAFORM
-        && (settings.remoteUrl() == null || settings.remoteUrl().isBlank())) {
-      settings = new ProxySettings(
-          "https://registry.terraform.io/",
-          settings.contentMaxAgeMinutes(), settings.metadataMaxAgeMinutes(), settings.autoBlock(),
-          settings.remoteUsername(), settings.remotePassword(), settings.remotePasswordConfigured(),
-          settings.remoteBearerToken(), settings.remoteBearerTokenConfigured());
+      settings = withRemoteUrl(settings, defaultRemote);
     }
     if (format == RepositoryFormat.SWIFT) {
-      settings = new ProxySettings(
-          normalizeSwiftRemoteUrl(settings.remoteUrl()),
-          settings.contentMaxAgeMinutes(), settings.metadataMaxAgeMinutes(), settings.autoBlock(),
-          settings.remoteUsername(), settings.remotePassword(), settings.remotePasswordConfigured(),
-          settings.remoteBearerToken(), settings.remoteBearerTokenConfigured());
+      settings = withRemoteUrl(settings, normalizeSwiftRemoteUrl(settings.remoteUrl()));
     }
     validateProxy(settings, format);
-    return settings;
+    return normalizeOutboundProxyType(settings);
+  }
+
+  /**
+   * Rewrites a validated outbound proxy type to its canonical enum name (HTTP/SOCKS) so aliases
+   * the validator accepts (e.g. "socks5", lowercase "http") round-trip through the admin UI,
+   * whose select only offers the canonical values. Without this, loading an API-created alias
+   * leaves the select blank and the next save clears the whole outbound proxy block.
+   */
+  private static ProxySettings normalizeOutboundProxyType(ProxySettings settings) {
+    String raw = settings.outboundProxyType();
+    if (raw == null || raw.isBlank()) {
+      return settings;
+    }
+    com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.Type type =
+        com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.parseType(raw);
+    if (type == null || type.name().equals(raw)) {
+      return settings;
+    }
+    return new ProxySettings(
+        settings.remoteUrl(),
+        settings.contentMaxAgeMinutes(),
+        settings.metadataMaxAgeMinutes(),
+        settings.autoBlock(),
+        settings.remoteUsername(),
+        settings.remotePassword(),
+        settings.remotePasswordConfigured(),
+        settings.remoteBearerToken(),
+        settings.remoteBearerTokenConfigured(),
+        type.name(),
+        settings.outboundProxyHost(),
+        settings.outboundProxyPort(),
+        settings.outboundProxyUsername(),
+        settings.outboundProxyPassword(),
+        settings.outboundProxyPasswordConfigured());
+  }
+
+  private static String defaultRemoteUrl(RepositoryFormat format) {
+    return switch (format) {
+      case PUB -> "https://pub.dev/";
+      case COMPOSER -> "https://repo.packagist.org/";
+      case TERRAFORM -> "https://registry.terraform.io/";
+      case SWIFT -> "https://github.com/";
+      default -> null;
+    };
+  }
+
+  /**
+   * Rebuilds settings with a new remote URL while preserving every other field, including the
+   * outbound network proxy. Using the compatibility constructor here previously dropped all
+   * outbound proxy fields to null whenever a default remote was applied.
+   */
+  private static ProxySettings withRemoteUrl(ProxySettings settings, String remoteUrl) {
+    return new ProxySettings(
+        remoteUrl,
+        settings.contentMaxAgeMinutes(),
+        settings.metadataMaxAgeMinutes(),
+        settings.autoBlock(),
+        settings.remoteUsername(),
+        settings.remotePassword(),
+        settings.remotePasswordConfigured(),
+        settings.remoteBearerToken(),
+        settings.remoteBearerTokenConfigured(),
+        settings.outboundProxyType(),
+        settings.outboundProxyHost(),
+        settings.outboundProxyPort(),
+        settings.outboundProxyUsername(),
+        settings.outboundProxyPassword(),
+        settings.outboundProxyPasswordConfigured());
   }
 
   private void validateProxy(ProxySettings settings, RepositoryFormat format) {
@@ -890,8 +976,37 @@ public class RepositoryService {
     } catch (SecurityValidationException e) {
       throw new RepositoryValidationException(e.getMessage());
     }
+    validateOutboundProxy(settings);
     if (format == RepositoryFormat.SWIFT) {
       normalizeSwiftRemoteUrl(settings.remoteUrl());
+    }
+  }
+
+  private void validateOutboundProxy(ProxySettings settings) {
+    boolean hasType = settings.outboundProxyType() != null && !settings.outboundProxyType().isBlank();
+    boolean hasHost = settings.outboundProxyHost() != null && !settings.outboundProxyHost().isBlank();
+    Integer port = settings.outboundProxyPort();
+    if (!hasType && !hasHost && port == null
+        && (settings.outboundProxyUsername() == null || settings.outboundProxyUsername().isBlank())
+        && (settings.outboundProxyPassword() == null || settings.outboundProxyPassword().isBlank())) {
+      return;
+    }
+    if (!hasHost) {
+      throw new RepositoryValidationException("proxy.outboundProxyHost is required when an outbound proxy is configured");
+    }
+    if (port == null || port < 1 || port > 65535) {
+      throw new RepositoryValidationException("proxy.outboundProxyPort must be between 1 and 65535");
+    }
+    com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.Type type =
+        com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.parseType(settings.outboundProxyType());
+    if (type == null) {
+      throw new RepositoryValidationException(
+          "proxy.outboundProxyType must be HTTP or SOCKS (was: " + settings.outboundProxyType() + ")");
+    }
+    if ((settings.outboundProxyPassword() != null && !settings.outboundProxyPassword().isBlank())
+        && (settings.outboundProxyUsername() == null || settings.outboundProxyUsername().isBlank())) {
+      throw new RepositoryValidationException(
+          "proxy.outboundProxyUsername is required when proxy.outboundProxyPassword is set");
     }
   }
 
@@ -927,6 +1042,38 @@ public class RepositoryService {
     ProxySettings base = existing == null
         ? new ProxySettings(existingRemoteUrl, null, null, null)
         : existing;
+
+    // The outbound proxy is one logical block governed by outboundProxyType:
+    //  - null/absent type  => caller did not touch the block => preserve the saved values;
+    //  - blank type ("")   => "Direct (no proxy)" selected    => clear the whole block, including
+    //                        host/port/username/password, so upstream fetches stop being proxied;
+    //  - non-blank type    => caller is setting/changing the proxy => take the incoming values and
+    //                        let validateOutboundProxy reject invalid types / missing host+port.
+    String mergedOutboundProxyType;
+    String mergedOutboundProxyHost;
+    Integer mergedOutboundProxyPort;
+    String mergedOutboundProxyUsername;
+    String mergedOutboundProxyPassword;
+    if (incoming.outboundProxyType() == null) {
+      mergedOutboundProxyType = base.outboundProxyType();
+      mergedOutboundProxyHost = base.outboundProxyHost();
+      mergedOutboundProxyPort = base.outboundProxyPort();
+      mergedOutboundProxyUsername = base.outboundProxyUsername();
+      mergedOutboundProxyPassword = base.outboundProxyPassword();
+    } else if (incoming.outboundProxyType().isBlank()) {
+      mergedOutboundProxyType = null;
+      mergedOutboundProxyHost = null;
+      mergedOutboundProxyPort = null;
+      mergedOutboundProxyUsername = null;
+      mergedOutboundProxyPassword = null;
+    } else {
+      mergedOutboundProxyType = incoming.outboundProxyType();
+      mergedOutboundProxyHost = blankToNull(incoming.outboundProxyHost());
+      mergedOutboundProxyPort = incoming.outboundProxyPort();
+      mergedOutboundProxyUsername = blankToNull(incoming.outboundProxyUsername());
+      mergedOutboundProxyPassword = mergedOutboundProxyPassword(base, incoming);
+    }
+
     return new ProxySettings(
         incoming.remoteUrl() == null ? base.remoteUrl() : incoming.remoteUrl(),
         incoming.contentMaxAgeMinutes() == null ? base.contentMaxAgeMinutes() : incoming.contentMaxAgeMinutes(),
@@ -936,7 +1083,23 @@ public class RepositoryService {
         mergedProxyPassword(base, incoming),
         null,
         mergedProxyBearerToken(base, incoming),
+        null,
+        mergedOutboundProxyType,
+        mergedOutboundProxyHost,
+        mergedOutboundProxyPort,
+        mergedOutboundProxyUsername,
+        mergedOutboundProxyPassword,
         null);
+  }
+
+  private static String mergedOutboundProxyPassword(ProxySettings base, ProxySettings incoming) {
+    if (incoming.outboundProxyPassword() != null && !incoming.outboundProxyPassword().isBlank()) {
+      return incoming.outboundProxyPassword();
+    }
+    if (Boolean.FALSE.equals(incoming.outboundProxyPasswordConfigured())) {
+      return null;
+    }
+    return base.outboundProxyPassword();
   }
 
   private static String mergedProxyPassword(ProxySettings base, ProxySettings incoming) {
@@ -973,6 +1136,21 @@ public class RepositoryService {
     }
     if (proxy.remoteBearerToken() != null && !proxy.remoteBearerToken().isBlank()) {
       map.put("remoteBearerToken", proxy.remoteBearerToken());
+    }
+    if (proxy.outboundProxyType() != null && !proxy.outboundProxyType().isBlank()) {
+      map.put("outboundProxyType", proxy.outboundProxyType());
+    }
+    if (proxy.outboundProxyHost() != null && !proxy.outboundProxyHost().isBlank()) {
+      map.put("outboundProxyHost", proxy.outboundProxyHost());
+    }
+    if (proxy.outboundProxyPort() != null) {
+      map.put("outboundProxyPort", proxy.outboundProxyPort());
+    }
+    if (proxy.outboundProxyUsername() != null && !proxy.outboundProxyUsername().isBlank()) {
+      map.put("outboundProxyUsername", proxy.outboundProxyUsername());
+    }
+    if (proxy.outboundProxyPassword() != null && !proxy.outboundProxyPassword().isBlank()) {
+      map.put("outboundProxyPassword", proxy.outboundProxyPassword());
     }
     return map;
   }
@@ -1019,6 +1197,12 @@ public class RepositoryService {
         blankToNull(proxyMap.get("remotePassword") == null ? null : proxyMap.get("remotePassword").toString()),
         null,
         blankToNull(proxyMap.get("remoteBearerToken") == null ? null : proxyMap.get("remoteBearerToken").toString()),
+        null,
+        stringOrNull(proxyMap.get("outboundProxyType")),
+        blankToNull(stringOrNull(proxyMap.get("outboundProxyHost"))),
+        intValue(proxyMap.get("outboundProxyPort")),
+        blankToNull(stringOrNull(proxyMap.get("outboundProxyUsername"))),
+        blankToNull(stringOrNull(proxyMap.get("outboundProxyPassword"))),
         null);
   }
 
@@ -1027,6 +1211,7 @@ public class RepositoryService {
     ProxySettings effective = parsed == null
         ? new ProxySettings(record.proxyRemoteUrl(), null, null, null)
         : parsed;
+    String outboundPassword = effective.outboundProxyPassword();
     return new ProxySettings(
         effective.remoteUrl(),
         effective.contentMaxAgeMinutes(),
@@ -1036,7 +1221,17 @@ public class RepositoryService {
         null,
         effective.remotePassword() != null && !effective.remotePassword().isBlank(),
         null,
-        effective.remoteBearerToken() != null && !effective.remoteBearerToken().isBlank());
+        effective.remoteBearerToken() != null && !effective.remoteBearerToken().isBlank(),
+        effective.outboundProxyType(),
+        effective.outboundProxyHost(),
+        effective.outboundProxyPort(),
+        effective.outboundProxyUsername(),
+        null,
+        outboundPassword != null && !outboundPassword.isBlank());
+  }
+
+  private static String stringOrNull(Object value) {
+    return value == null ? null : value.toString();
   }
 
   private List<Long> resolveMemberIds(String groupName, RepositoryFormat format, GroupSettings group) {

@@ -373,7 +373,8 @@ class CargoProxyServiceTest {
         null,
         null,
         requireAuthentication,
-        List.of());
+        List.of(),
+        null);
   }
 
   private static RepositoryRuntime runtimeWithCredentials() {
@@ -401,7 +402,8 @@ class CargoProxyServiceTest {
         null,
         null,
         null,
-        List.of());
+        List.of(),
+        null);
   }
 
   private static AssetRecord asset(String path, long blobId) {

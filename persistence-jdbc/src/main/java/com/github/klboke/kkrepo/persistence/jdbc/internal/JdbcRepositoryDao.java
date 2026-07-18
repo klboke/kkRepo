@@ -23,8 +23,8 @@ import org.springframework.stereotype.Repository;
 
 @Repository
 public class JdbcRepositoryDao implements com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao {
-  private static final List<String> SENSITIVE_PROXY_ATTRIBUTES = List.of(
-      "remotePassword", "remoteBearerToken");
+  private static final List<String> SENSITIVE_PROXY_ATTRIBUTES =
+      List.of("remotePassword", "remoteBearerToken", "outboundProxyPassword");
 
   private final JdbcTemplate jdbcTemplate;
   private final JsonColumns jsonColumns;

@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.maven;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -35,7 +36,8 @@ public record RepositoryRuntime(
     Integer dockerConnectorPort,
     String dockerConnectorPublicUrl,
     Boolean cargoRequireAuthentication,
-    List<RepositoryRuntime> members) {
+    List<RepositoryRuntime> members,
+    OutboundProxyConfig outboundProxy) {
 
   public RepositoryRuntime(
       long id,
@@ -79,7 +81,8 @@ public record RepositoryRuntime(
         null,
         null,
         null,
-        members);
+        members,
+        null);
   }
 
   public RepositoryRuntime(
@@ -127,7 +130,8 @@ public record RepositoryRuntime(
         dockerConnectorPort,
         dockerConnectorPublicUrl,
         null,
-        members);
+        members,
+        null);
   }
 
   public RepositoryRuntime(
@@ -177,7 +181,8 @@ public record RepositoryRuntime(
         dockerConnectorPort,
         dockerConnectorPublicUrl,
         null,
-        members);
+        members,
+        null);
   }
 
   public RepositoryRuntime(
@@ -220,7 +225,8 @@ public record RepositoryRuntime(
         null,
         null,
         null,
-        members);
+        members,
+        null);
   }
 
   public boolean isHosted() {

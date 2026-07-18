@@ -606,7 +606,8 @@ class SwiftGitHubClientTest {
         null,
         null,
         null,
-        List.of());
+        List.of(),
+        null);
   }
 
   private static final class SequencedFetcher extends HttpRemoteFetcher {

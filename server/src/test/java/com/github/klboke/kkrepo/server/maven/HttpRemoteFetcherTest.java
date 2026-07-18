@@ -46,7 +46,7 @@ class HttpRemoteFetcherTest {
 
   @Test
   void requestTimeoutUsesSharedProxyDefaults() {
-    HttpRemoteFetcher fetcher = new HttpRemoteFetcher(null, null, "HTTP_1_1", 11, 22, 33, 7, 1);
+    HttpRemoteFetcher fetcher = new HttpRemoteFetcher(null, null, null, "HTTP_1_1", 11, 22, 33, 7, 1);
 
     assertEquals(
         Duration.ofSeconds(11),
@@ -358,7 +358,8 @@ class HttpRemoteFetcherTest {
         null,
         null,
         null,
-        List.of());
+        List.of(),
+        null);
   }
 
   private static class SequencedFetcher extends HttpRemoteFetcher {

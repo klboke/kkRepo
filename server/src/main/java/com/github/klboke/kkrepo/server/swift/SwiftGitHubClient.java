@@ -401,7 +401,8 @@ final class SwiftGitHubClient {
         request.format(),
         request.trustedHost(),
         null,
-        request.allowedUnsignedRedirectHosts());
+        request.allowedUnsignedRedirectHosts(),
+        request.outboundProxy());
   }
 
   private void sleepBeforeRetry(String resource, Duration delay) {
@@ -626,7 +627,8 @@ final class SwiftGitHubClient {
         runtime.format().name(),
         "api.github.com",
         authorization(runtime),
-        allowCodeloadRedirect ? Set.of("codeload.github.com") : Set.of());
+        allowCodeloadRedirect ? Set.of("codeload.github.com") : Set.of(),
+        runtime.outboundProxy());
   }
 
   private static HttpRemoteFetcher.Request githubWebRequest(
@@ -644,7 +646,8 @@ final class SwiftGitHubClient {
         runtime.format().name(),
         "github.com",
         null,
-        allowCodeloadRedirect ? Set.of("codeload.github.com") : Set.of());
+        allowCodeloadRedirect ? Set.of("codeload.github.com") : Set.of(),
+        runtime.outboundProxy());
   }
 
   static Coordinates coordinates(String owner, String repository) {

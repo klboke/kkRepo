@@ -17,6 +17,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
+import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
 import com.github.klboke.kkrepo.server.security.SecurityValidationException;
 import com.github.klboke.kkrepo.server.metrics.KkRepoMetrics;
@@ -46,6 +48,7 @@ public class HttpRemoteFetcher {
       DateTimeFormatter.RFC_1123_DATE_TIME.withZone(ZoneOffset.UTC);
 
   private final HttpClient client;
+  private final ProxiedHttpClientFactory proxyFactory;
   private final OutboundRequestPolicy outboundPolicy;
   private final KkRepoMetrics metrics;
   private final Duration searchTimeout;
@@ -62,6 +65,7 @@ public class HttpRemoteFetcher {
     this(
         outboundPolicy,
         metrics,
+        null,
         "HTTP_1_1",
         DEFAULT_SEARCH_TIMEOUT.toSeconds(),
         DEFAULT_METADATA_TIMEOUT.toSeconds(),
@@ -74,6 +78,7 @@ public class HttpRemoteFetcher {
   public HttpRemoteFetcher(
       OutboundRequestPolicy outboundPolicy,
       KkRepoMetrics metrics,
+      ProxiedHttpClientFactory proxyFactory,
       @Value("${kkrepo.proxy.remote-http-version:HTTP_1_1}") String remoteHttpVersion,
       @Value("${kkrepo.proxy.search-timeout-seconds:30}") long searchTimeoutSeconds,
       @Value("${kkrepo.proxy.metadata-timeout-seconds:60}") long metadataTimeoutSeconds,
@@ -82,6 +87,7 @@ public class HttpRemoteFetcher {
       @Value("${kkrepo.proxy.body-read-retry-attempts:1}") int bodyReadRetryAttempts) {
     this.outboundPolicy = outboundPolicy;
     this.metrics = metrics;
+    this.proxyFactory = proxyFactory;
     this.searchTimeout = Duration.ofSeconds(Math.max(1L, searchTimeoutSeconds));
     this.metadataTimeout = Duration.ofSeconds(Math.max(1L, metadataTimeoutSeconds));
     this.contentTimeout = Duration.ofSeconds(Math.max(1L, contentTimeoutSeconds));
@@ -149,6 +155,9 @@ public class HttpRemoteFetcher {
   }
 
   private Result fetchInternal(Request req, int redirects) throws IOException {
+    if (proxyFactory != null && req.outboundProxy() != null && req.outboundProxy().enabled()) {
+      return fetchViaProxy(req, redirects);
+    }
     var uri = req.validatedUri(outboundPolicy, "remote fetch");
     HttpRequest.Builder b = HttpRequest.newBuilder()
         .uri(uri)
@@ -190,7 +199,8 @@ public class HttpRemoteFetcher {
             req.format(),
             redirectTrustedHost,
             redirectAuthorization,
-            req.allowedUnsignedRedirectHosts()), redirects + 1);
+            req.allowedUnsignedRedirectHosts(),
+            req.outboundProxy()), redirects + 1);
       }
       Map<String, String> headers = new LinkedHashMap<>();
       response.headers().map().forEach((k, v) -> {
@@ -201,6 +211,95 @@ public class HttpRemoteFetcher {
       Thread.currentThread().interrupt();
       throw new IOException("Interrupted fetching " + req.url(), e);
     }
+  }
+
+  /**
+   * Proxied fetch path using Apache HttpClient 5 (the JDK client cannot do SOCKS). Mirrors
+   * {@link #fetchInternal} semantics — same headers, redirects, trusted-host/auth re-derivation and
+   * Result shape — but tunnels the connection through the configured outbound proxy.
+   */
+  private Result fetchViaProxy(Request req, int redirects) throws IOException {
+    URI uri = req.validatedUri(outboundPolicy, "remote fetch");
+    Map<String, String> headers = new LinkedHashMap<>();
+    headers.put("Accept", "*/*");
+    headers.put("User-Agent", "kkrepo/0.1");
+    if (req.etag() != null && !req.etag().isBlank()) {
+      headers.put("If-None-Match", "\"" + req.etag() + "\"");
+    }
+    if (req.lastModified() != null) {
+      headers.put("If-Modified-Since", RFC1123.format(req.lastModified()));
+    }
+    if (req.authorizationHeader() != null && !req.authorizationHeader().isBlank()) {
+      headers.put("Authorization", req.authorizationHeader());
+    }
+    Duration timeout = requestTimeout(req);
+    ProxiedHttpClientFactory.ProxiedResponse response = null;
+    try {
+      response = proxyFactory.execute(
+          req.repository(),
+          req.outboundProxy(),
+          req.headOnly() ? "HEAD" : "GET",
+          uri,
+          headers,
+          timeout.toMillis());
+      String location = redirectLocationProxy(response);
+      if (location != null) {
+        response.close();
+        if (redirects >= MAX_REDIRECTS) {
+          throw new IOException("Too many redirects fetching " + req.url());
+        }
+        URI redirected = outboundPolicy.validateHttpUri(uri.resolve(location), "remote redirect");
+        String redirectAuthorization = req.authorizationHeaderForRedirect(uri, redirected);
+        String redirectTrustedHost = req.trustedHostForRedirect(uri, redirected);
+        return fetchViaProxy(new Request(
+            redirected.toString(),
+            req.etag(),
+            req.lastModified(),
+            req.timeout(),
+            req.timeoutProfile(),
+            req.headOnly(),
+            req.repository(),
+            req.format(),
+            redirectTrustedHost,
+            redirectAuthorization,
+            req.allowedUnsignedRedirectHosts(),
+            req.outboundProxy()), redirects + 1);
+      }
+      return new Result(response.status(), response.headers(), releaseOnClose(response));
+    } catch (IOException | RuntimeException e) {
+      if (response != null) {
+        response.close();
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Wraps the proxied response body so that draining/closing the {@link Result} also closes the
+   * underlying Apache response, guaranteeing the pooled connection is released even for entity-less
+   * responses (HEAD, 304, errors).
+   */
+  private static InputStream releaseOnClose(ProxiedHttpClientFactory.ProxiedResponse response) throws IOException {
+    InputStream body = response.body();
+    return new java.io.FilterInputStream(body) {
+      @Override
+      public void close() throws java.io.IOException {
+        try {
+          super.close();
+        } finally {
+          response.close();
+        }
+      }
+    };
+  }
+
+  private static String redirectLocationProxy(ProxiedHttpClientFactory.ProxiedResponse response) {
+    int status = response.status();
+    if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {
+      String location = response.header("Location");
+      return location == null || location.isBlank() ? null : location;
+    }
+    return null;
   }
 
   Duration requestTimeout(Request req) {
@@ -285,9 +384,10 @@ public class HttpRemoteFetcher {
       String format,
       String trustedHost,
       String authorizationHeader,
-      Set<String> allowedUnsignedRedirectHosts) {
+      Set<String> allowedUnsignedRedirectHosts,
+      OutboundProxyConfig outboundProxy) {
     public Request(String url, String etag, Instant lastModified, Duration timeout, boolean headOnly) {
-      this(url, etag, lastModified, timeout, TimeoutProfile.DEFAULT, headOnly, null, null, null, null, Set.of());
+      this(url, etag, lastModified, timeout, TimeoutProfile.DEFAULT, headOnly, null, null, null, null, Set.of(), null);
     }
 
     public Request(
@@ -299,7 +399,7 @@ public class HttpRemoteFetcher {
         boolean headOnly,
         String repository,
         String format) {
-      this(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format, null, null, Set.of());
+      this(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format, null, null, Set.of(), null);
     }
 
     public Request(
@@ -312,7 +412,7 @@ public class HttpRemoteFetcher {
         String repository,
         String format,
         String trustedHost) {
-      this(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format, trustedHost, null, Set.of());
+      this(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format, trustedHost, null, Set.of(), null);
     }
 
     public Request {
@@ -333,12 +433,12 @@ public class HttpRemoteFetcher {
 
     public Request withConditional(String etag, Instant lastModified) {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
-          repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts);
+          repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts, outboundProxy);
     }
 
     public Request withTimeoutProfile(TimeoutProfile timeoutProfile) {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
-          repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts);
+          repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts, outboundProxy);
     }
 
     public Request withRepository(RepositoryRuntime runtime) {
@@ -358,7 +458,8 @@ public class HttpRemoteFetcher {
           runtime == null || runtime.format() == null ? null : runtime.format().name(),
           trusted,
           includeAuthorization && trusted != null ? remoteAuthorizationHeader(runtime) : null,
-          Set.of());
+          Set.of(),
+          runtime == null ? null : runtime.outboundProxy());
     }
 
     public Request withRepositoryAllowingUnsignedRedirects(
@@ -383,7 +484,8 @@ public class HttpRemoteFetcher {
           runtime == null || runtime.format() == null ? null : runtime.format().name(),
           trusted,
           includeAuthorization && trusted != null ? remoteAuthorizationHeader(runtime) : null,
-          allowedUnsignedRedirectHosts);
+          allowedUnsignedRedirectHosts,
+          runtime == null ? null : runtime.outboundProxy());
     }
 
     public String method() {

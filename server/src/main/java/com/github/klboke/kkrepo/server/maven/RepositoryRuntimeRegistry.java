@@ -182,6 +182,7 @@ public class RepositoryRuntimeRegistry {
     String proxyRemoteUsername = null;
     String proxyRemotePassword = null;
     String proxyRemoteBearerToken = null;
+    com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig outboundProxy = null;
     if (proxyRaw instanceof Map<?, ?> proxyMap) {
       contentMaxAge = asInt(proxyMap.get("contentMaxAgeMinutes"));
       metadataMaxAge = asInt(proxyMap.get("metadataMaxAgeMinutes"));
@@ -198,6 +199,7 @@ public class RepositoryRuntimeRegistry {
       if (bearerToken != null && !bearerToken.toString().isBlank()) {
         proxyRemoteBearerToken = bearerToken.toString();
       }
+      outboundProxy = readOutboundProxy(proxyMap);
     }
     String rawContentDisposition = null;
     if (rawRaw instanceof Map<?, ?> rawMap) {
@@ -264,7 +266,12 @@ public class RepositoryRuntimeRegistry {
         dockerConnectorPort,
         dockerConnectorPublicUrl,
         cargoRequireAuthentication,
-        members);
+        members,
+        outboundProxy);
+  }
+
+  private static com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig readOutboundProxy(Map<?, ?> proxyMap) {
+    return com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.fromAttributes(proxyMap);
   }
 
   private static Integer asInt(Object value) {
@@ -288,6 +295,11 @@ public class RepositoryRuntimeRegistry {
       return true;
     }
     if (runtime.proxyRemoteBearerToken() != null && !runtime.proxyRemoteBearerToken().isBlank()) {
+      return true;
+    }
+    if (runtime.outboundProxy() != null
+        && runtime.outboundProxy().password() != null
+        && !runtime.outboundProxy().password().isBlank()) {
       return true;
     }
     for (RepositoryRuntime member : runtime.members()) {

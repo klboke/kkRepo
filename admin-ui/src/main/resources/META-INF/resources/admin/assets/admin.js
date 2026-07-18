@@ -1923,6 +1923,7 @@ function refreshRepositoryRecipeControls() {
   const format = recipe ? recipe.format : null;
   document.getElementById("repository-hosted-fields").hidden = type !== "HOSTED";
   document.getElementById("repository-proxy-fields").hidden = type !== "PROXY";
+  document.getElementById("repository-outbound-proxy-fields").hidden = type !== "PROXY";
   document.getElementById("repository-group-fields").hidden = type !== "GROUP";
   document.getElementById("repository-docker-fields").hidden = format !== "docker";
   document.getElementById("repository-cargo-fields").hidden =
@@ -2000,7 +2001,17 @@ function repositoryFormPayload() {
       remotePassword: textInputValue("repository-remote-password"),
       remotePasswordConfigured: document.getElementById("repository-remote-password-clear").checked ? false : null,
       remoteBearerToken: textInputValue("repository-remote-bearer-token"),
-      remoteBearerTokenConfigured: document.getElementById("repository-remote-bearer-token-clear").checked ? false : null
+      remoteBearerTokenConfigured: document.getElementById("repository-remote-bearer-token-clear").checked ? false : null,
+      outboundProxyType: document.getElementById("repository-outbound-proxy-type").value,
+      outboundProxyHost: textInputValue("repository-outbound-proxy-host"),
+      outboundProxyPort: (function () {
+        const port = document.getElementById("repository-outbound-proxy-port").value;
+        return port === "" ? null : Number(port);
+      })(),
+      outboundProxyUsername: textInputValue("repository-outbound-proxy-username"),
+      outboundProxyPassword: textInputValue("repository-outbound-proxy-password"),
+      outboundProxyPasswordConfigured:
+        document.getElementById("repository-outbound-proxy-password-clear").checked ? false : null
     };
   } else if (type === "GROUP") {
     payload.group = {
@@ -2038,6 +2049,13 @@ function setRepositoryFormDefaults() {
   document.getElementById("repository-remote-bearer-token").value = "";
   document.getElementById("repository-remote-bearer-token").placeholder = "";
   document.getElementById("repository-remote-bearer-token-clear").checked = false;
+  document.getElementById("repository-outbound-proxy-type").value = "";
+  document.getElementById("repository-outbound-proxy-host").value = "";
+  document.getElementById("repository-outbound-proxy-port").value = "";
+  document.getElementById("repository-outbound-proxy-username").value = "";
+  document.getElementById("repository-outbound-proxy-password").value = "";
+  document.getElementById("repository-outbound-proxy-password").placeholder = "";
+  document.getElementById("repository-outbound-proxy-password-clear").checked = false;
   document.getElementById("repository-content-max-age").value = "1440";
   document.getElementById("repository-metadata-max-age").value = "1440";
   document.getElementById("repository-auto-block").checked = true;
@@ -2121,6 +2139,18 @@ function showEditRepositoryForm(name) {
     document.getElementById("repository-remote-bearer-token").placeholder =
       repo.proxy.remoteBearerTokenConfigured ? "Saved bearer token unchanged" : "";
     document.getElementById("repository-remote-bearer-token-clear").checked = false;
+    // Normalize legacy/alias values stored before the backend canonicalized the type,
+    // so the select (HTTP/SOCKS only) still shows the effective choice.
+    const outboundProxyType = (repo.proxy.outboundProxyType || "").toUpperCase();
+    document.getElementById("repository-outbound-proxy-type").value =
+      outboundProxyType === "SOCKS5" ? "SOCKS" : outboundProxyType;
+    document.getElementById("repository-outbound-proxy-host").value = repo.proxy.outboundProxyHost || "";
+    document.getElementById("repository-outbound-proxy-port").value = repo.proxy.outboundProxyPort ?? "";
+    document.getElementById("repository-outbound-proxy-username").value = repo.proxy.outboundProxyUsername || "";
+    document.getElementById("repository-outbound-proxy-password").value = "";
+    document.getElementById("repository-outbound-proxy-password").placeholder =
+      repo.proxy.outboundProxyPasswordConfigured ? "Saved proxy password unchanged" : "";
+    document.getElementById("repository-outbound-proxy-password-clear").checked = false;
     document.getElementById("repository-content-max-age").value = repo.proxy.contentMaxAgeMinutes ?? "1440";
     document.getElementById("repository-metadata-max-age").value = repo.proxy.metadataMaxAgeMinutes ?? "1440";
     document.getElementById("repository-auto-block").checked = repo.proxy.autoBlock !== false;

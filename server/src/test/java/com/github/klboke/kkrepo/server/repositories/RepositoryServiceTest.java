@@ -1,7 +1,9 @@
 package com.github.klboke.kkrepo.server.repositories;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -15,6 +17,8 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityPrivilegeRecord;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
+import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CargoSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CreateCommand;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.DockerSettings;
@@ -377,6 +381,372 @@ class RepositoryServiceTest {
   }
 
   @Test
+  void outboundProxyRoundTripStoresAndMasksPassword() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "maven-proxy",
+        "maven2-proxy",
+        true,
+        "default",
+        true,
+        null,
+        new ProxySettings(
+            "https://repo.maven.apache.org/maven2/",
+            1440, 1440, true,
+            null, null, null,
+            null, null,
+            "HTTP", "192.168.1.10", 7890,
+            "clash-user", "clash-pass",
+            null),
+        null, null, null, null));
+
+    assertEquals("HTTP", created.proxy().outboundProxyType());
+    assertEquals("192.168.1.10", created.proxy().outboundProxyHost());
+    assertEquals(7890, created.proxy().outboundProxyPort());
+    assertEquals("clash-user", created.proxy().outboundProxyUsername());
+    assertNull(created.proxy().outboundProxyPassword());
+    assertEquals(true, created.proxy().outboundProxyPasswordConfigured());
+
+    Map<?, ?> proxy = (Map<?, ?>) repositories.repository.attributes().get("proxy");
+    assertEquals("HTTP", proxy.get("outboundProxyType"));
+    assertEquals("192.168.1.10", proxy.get("outboundProxyHost"));
+    assertEquals(7890, proxy.get("outboundProxyPort"));
+    assertEquals("clash-user", proxy.get("outboundProxyUsername"));
+    assertEquals("clash-pass", proxy.get("outboundProxyPassword"));
+  }
+
+  @Test
+  void outboundProxyTypeAliasIsStoredAsCanonicalType() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "maven-proxy",
+        "maven2-proxy",
+        true,
+        "default",
+        true,
+        null,
+        new ProxySettings(
+            "https://repo.maven.apache.org/maven2/",
+            1440, 1440, true,
+            null, null, null,
+            null, null,
+            "socks5", "192.168.1.10", 7890,
+            null, null,
+            null),
+        null, null, null, null));
+
+    assertEquals("SOCKS", created.proxy().outboundProxyType());
+    Map<?, ?> proxy = (Map<?, ?>) repositories.repository.attributes().get("proxy");
+    assertEquals("SOCKS", proxy.get("outboundProxyType"));
+  }
+
+  @Test
+  void outboundProxyLowercaseHttpIsStoredAsCanonicalType() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "maven-proxy",
+        "maven2-proxy",
+        true,
+        "default",
+        true,
+        null,
+        new ProxySettings(
+            "https://repo.maven.apache.org/maven2/",
+            1440, 1440, true,
+            null, null, null,
+            null, null,
+            "http", "192.168.1.10", 7890,
+            null, null,
+            null),
+        null, null, null, null));
+
+    assertEquals("HTTP", created.proxy().outboundProxyType());
+    Map<?, ?> proxy = (Map<?, ?>) repositories.repository.attributes().get("proxy");
+    assertEquals("HTTP", proxy.get("outboundProxyType"));
+  }
+
+  @Test
+  void outboundProxyPasswordCanBeClearedWithoutSendingPlaintext() {
+    Map<String, Object> proxy = new LinkedHashMap<>();
+    proxy.put("remoteUrl", "https://repo.maven.apache.org/maven2/");
+    proxy.put("outboundProxyType", "SOCKS");
+    proxy.put("outboundProxyHost", "192.168.1.10");
+    proxy.put("outboundProxyPort", 7891);
+    proxy.put("outboundProxyUsername", "clash-user");
+    proxy.put("outboundProxyPassword", "clash-pass");
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", "maven2-proxy");
+    attributes.put("proxy", proxy);
+    StubRepositoryDao repositories = new StubRepositoryDao(new RepositoryRecord(
+        1L,
+        "maven-proxy",
+        RepositoryFormat.MAVEN2,
+        RepositoryType.PROXY,
+        "maven2-proxy",
+        true,
+        1L,
+        null,
+        "https://repo.maven.apache.org/maven2/",
+        null,
+        null,
+        null,
+        true,
+        attributes));
+    RepositoryService service = service(repositories);
+
+    RepositoryView updated = service.update("maven-proxy",
+        new UpdateCommand(true, null, null, null,
+            new ProxySettings(
+                "https://repo.maven.apache.org/maven2/", 1440, 1440, true,
+                null, null, null, null, null,
+                "SOCKS", "192.168.1.10", 7891, "clash-user", null, false),
+            null, null, null, null));
+
+    assertEquals(false, updated.proxy().outboundProxyPasswordConfigured());
+    Map<?, ?> storedProxy = (Map<?, ?>) repositories.updated.attributes().get("proxy");
+    assertNull(storedProxy.get("outboundProxyPassword"));
+    assertEquals("clash-user", storedProxy.get("outboundProxyUsername"));
+  }
+
+  @Test
+  void outboundProxyCanBeClearedBySelectingDirect() {
+    Map<String, Object> proxy = new LinkedHashMap<>();
+    proxy.put("remoteUrl", "https://repo.maven.apache.org/maven2/");
+    proxy.put("outboundProxyType", "SOCKS");
+    proxy.put("outboundProxyHost", "192.168.1.10");
+    proxy.put("outboundProxyPort", 7891);
+    proxy.put("outboundProxyUsername", "clash-user");
+    proxy.put("outboundProxyPassword", "clash-pass");
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", "maven2-proxy");
+    attributes.put("proxy", proxy);
+    StubRepositoryDao repositories = new StubRepositoryDao(new RepositoryRecord(
+        1L,
+        "maven-proxy",
+        RepositoryFormat.MAVEN2,
+        RepositoryType.PROXY,
+        "maven2-proxy",
+        true,
+        1L,
+        null,
+        "https://repo.maven.apache.org/maven2/",
+        null,
+        null,
+        null,
+        true,
+        attributes));
+    RepositoryService service = service(repositories);
+
+    // The admin form sends "" for the "Direct (no proxy)" option and null for the other
+    // outbound fields; the merge must clear the whole block instead of preserving the old values.
+    RepositoryView updated = service.update("maven-proxy",
+        new UpdateCommand(true, null, null, null,
+            new ProxySettings(
+                "https://repo.maven.apache.org/maven2/", 1440, 1440, true,
+                null, null, null, null, null,
+                "", null, null, null, null, null),
+            null, null, null, null));
+
+    assertNull(updated.proxy().outboundProxyType());
+    assertNull(updated.proxy().outboundProxyHost());
+    assertNull(updated.proxy().outboundProxyPort());
+    assertNull(updated.proxy().outboundProxyUsername());
+    assertNull(updated.proxy().outboundProxyPassword());
+    Map<?, ?> storedProxy = (Map<?, ?>) repositories.updated.attributes().get("proxy");
+    assertNull(storedProxy.get("outboundProxyType"));
+    assertNull(storedProxy.get("outboundProxyHost"));
+    assertNull(storedProxy.get("outboundProxyPort"));
+    assertNull(storedProxy.get("outboundProxyUsername"));
+    assertNull(storedProxy.get("outboundProxyPassword"));
+  }
+
+  @Test
+  void outboundProxyUnchangedWhenTypeFieldOmitted() {
+    Map<String, Object> proxy = new LinkedHashMap<>();
+    proxy.put("remoteUrl", "https://repo.maven.apache.org/maven2/");
+    proxy.put("outboundProxyType", "SOCKS");
+    proxy.put("outboundProxyHost", "192.168.1.10");
+    proxy.put("outboundProxyPort", 7891);
+    proxy.put("outboundProxyUsername", "clash-user");
+    proxy.put("outboundProxyPassword", "clash-pass");
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", "maven2-proxy");
+    attributes.put("proxy", proxy);
+    StubRepositoryDao repositories = new StubRepositoryDao(new RepositoryRecord(
+        1L,
+        "maven-proxy",
+        RepositoryFormat.MAVEN2,
+        RepositoryType.PROXY,
+        "maven2-proxy",
+        true,
+        1L,
+        null,
+        "https://repo.maven.apache.org/maven2/",
+        null,
+        null,
+        null,
+        true,
+        attributes));
+    RepositoryService service = service(repositories);
+
+    // A null outboundProxyType means "block not touched"; the saved proxy must survive.
+    RepositoryView updated = service.update("maven-proxy",
+        new UpdateCommand(true, null, null, null,
+            new ProxySettings(
+                "https://repo.maven.apache.org/maven2/", 1440, 1440, true,
+                null, null, null, null, null,
+                null, null, null, null, null, null),
+            null, null, null, null));
+
+    assertEquals("SOCKS", updated.proxy().outboundProxyType());
+    assertEquals("192.168.1.10", updated.proxy().outboundProxyHost());
+    assertEquals(7891, updated.proxy().outboundProxyPort());
+    assertEquals("clash-user", updated.proxy().outboundProxyUsername());
+  }
+
+  @Test
+  void outboundProxyWithoutHostIsRejected() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryValidationException ex = assertThrows(RepositoryValidationException.class, () -> service.create(
+        new CreateCommand(
+            "maven-proxy",
+            "maven2-proxy",
+            true,
+            "default",
+            true,
+            null,
+            new ProxySettings(
+                "https://repo.maven.apache.org/maven2/", 1440, 1440, true,
+                null, null, null, null, null,
+                "HTTP", null, 7890, null, null, null),
+            null, null, null, null)));
+    assertTrue(ex.getMessage().contains("outboundProxyHost"));
+  }
+
+  @Test
+  void outboundProxyWithInvalidPortIsRejected() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryValidationException ex = assertThrows(RepositoryValidationException.class, () -> service.create(
+        new CreateCommand(
+            "maven-proxy",
+            "maven2-proxy",
+            true,
+            "default",
+            true,
+            null,
+            new ProxySettings(
+                "https://repo.maven.apache.org/maven2/", 1440, 1440, true,
+                null, null, null, null, null,
+                "HTTP", "192.168.1.10", 70000, null, null, null),
+            null, null, null, null)));
+    assertTrue(ex.getMessage().contains("outboundProxyPort"));
+  }
+
+  @Test
+  void outboundProxyWithUnknownTypeIsRejected() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryValidationException ex = assertThrows(RepositoryValidationException.class, () -> service.create(
+        new CreateCommand(
+            "maven-proxy",
+            "maven2-proxy",
+            true,
+            "default",
+            true,
+            null,
+            new ProxySettings(
+                "https://repo.maven.apache.org/maven2/", 1440, 1440, true,
+                null, null, null, null, null,
+                "GOPHER", "192.168.1.10", 7890, null, null, null),
+            null, null, null, null)));
+    assertTrue(ex.getMessage().contains("outboundProxyType"));
+  }
+
+  @Test
+  void outboundProxyPasswordWithoutUsernameIsRejected() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryValidationException ex = assertThrows(RepositoryValidationException.class, () -> service.create(
+        new CreateCommand(
+            "maven-proxy",
+            "maven2-proxy",
+            true,
+            "default",
+            true,
+            null,
+            new ProxySettings(
+                "https://repo.maven.apache.org/maven2/", 1440, 1440, true,
+                null, null, null, null, null,
+                "HTTP", "192.168.1.10", 7890, null, "clash-pass", null),
+            null, null, null, null)));
+    assertTrue(ex.getMessage().contains("outboundProxyUsername"));
+  }
+
+  @Test
+  void createTerraformProxyDefaultsRemoteUrlWhenProxySettingsAreMissing() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "terraform-proxy",
+        "terraform-proxy",
+        true,
+        "default",
+        true,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null));
+
+    assertEquals("https://registry.terraform.io/", created.proxy().remoteUrl());
+    assertEquals("https://registry.terraform.io/", repositories.repository.proxyRemoteUrl());
+    Map<?, ?> proxy = (Map<?, ?>) repositories.repository.attributes().get("proxy");
+    assertEquals("https://registry.terraform.io/", proxy.get("remoteUrl"));
+  }
+
+  @Test
+  void createComposerProxyWithBlankRemoteKeepsOutboundProxyWhenDefaultingRemoteUrl() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "composer-proxy",
+        "composer-proxy",
+        true,
+        "default",
+        true,
+        null,
+        new ProxySettings("", 60, 30, true,
+            null, null, null, null, null,
+            "HTTP", "192.168.1.30", 7890, null, null, null),
+        null,
+        null,
+        null,
+        null));
+
+    assertEquals("https://repo.packagist.org/", created.proxy().remoteUrl());
+    assertEquals("HTTP", created.proxy().outboundProxyType());
+    assertEquals("192.168.1.30", created.proxy().outboundProxyHost());
+    assertEquals(7890, created.proxy().outboundProxyPort());
+    Map<?, ?> proxy = (Map<?, ?>) repositories.repository.attributes().get("proxy");
+    assertEquals("192.168.1.30", proxy.get("outboundProxyHost"));
+  }
+
+  @Test
   void createPubProxyDefaultsRemoteUrlWhenProxySettingsAreMissing() {
     StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
     RepositoryService service = service(repositories);
@@ -421,6 +791,63 @@ class RepositoryServiceTest {
     assertEquals("https://pub.dev/", created.proxy().remoteUrl());
     assertEquals(60, created.proxy().contentMaxAgeMinutes());
     assertEquals(30, created.proxy().metadataMaxAgeMinutes());
+  }
+
+  @Test
+  void createPubProxyWithBlankRemoteKeepsOutboundProxyWhenDefaultingRemoteUrl() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "pub-proxy",
+        "pub-proxy",
+        true,
+        "default",
+        true,
+        null,
+        new ProxySettings("  ", 60, 30, true,
+            null, null, null, null, null,
+            "HTTP", "192.168.1.10", 7890, "clash-user", "clash-pass", null),
+        null,
+        null,
+        null,
+        null));
+
+    assertEquals("https://pub.dev/", created.proxy().remoteUrl());
+    assertEquals("HTTP", created.proxy().outboundProxyType());
+    assertEquals("192.168.1.10", created.proxy().outboundProxyHost());
+    assertEquals(7890, created.proxy().outboundProxyPort());
+    assertEquals("clash-user", created.proxy().outboundProxyUsername());
+    Map<?, ?> proxy = (Map<?, ?>) repositories.repository.attributes().get("proxy");
+    assertEquals("https://pub.dev/", proxy.get("remoteUrl"));
+    assertEquals("192.168.1.10", proxy.get("outboundProxyHost"));
+    assertEquals("clash-pass", proxy.get("outboundProxyPassword"));
+  }
+
+  @Test
+  void createTerraformProxyWithBlankRemoteKeepsOutboundProxyWhenDefaultingRemoteUrl() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "terraform-proxy",
+        "terraform-proxy",
+        true,
+        "default",
+        true,
+        null,
+        new ProxySettings(null, null, null, null,
+            null, null, null, null, null,
+            "SOCKS", "192.168.1.20", 7891, null, null, null),
+        null,
+        null,
+        null,
+        null));
+
+    assertEquals("https://registry.terraform.io/", created.proxy().remoteUrl());
+    assertEquals("SOCKS", created.proxy().outboundProxyType());
+    assertEquals("192.168.1.20", created.proxy().outboundProxyHost());
+    assertEquals(7891, created.proxy().outboundProxyPort());
   }
 
   @Test
@@ -505,6 +932,72 @@ class RepositoryServiceTest {
         "Swift proxy.remoteUrl must be the GitHub base URL https://github.com/",
         repositoryPath.getMessage());
     assertEquals(repositoryPath.getMessage(), wrongHost.getMessage());
+  }
+
+  @Test
+  void swiftProxyRoundTripKeepsOutboundProxyThroughToRuntime() {
+    // The Swift remote-URL normalization used to rebuild ProxySettings through the compatibility
+    // constructor, silently nulling every outbound proxy field on both create and update.
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryRuntimeRegistry runtimes = new RepositoryRuntimeRegistry(repositories, 0);
+    RepositoryService service = new RepositoryService(
+        repositories,
+        new StubBlobStoreDao(),
+        new StubSecurityDao(),
+        runtimes,
+        "/repository");
+
+    RepositoryView created = service.create(new CreateCommand(
+        "swift-proxy",
+        "swift-proxy",
+        true,
+        "default",
+        true,
+        null,
+        new ProxySettings("https://github.com", 60, 30, true,
+            null, null, null, null, null,
+            "HTTP", "192.168.1.40", 7890, "clash-user", "clash-pass", null),
+        null,
+        null,
+        null,
+        null));
+
+    assertEquals("https://github.com/", created.proxy().remoteUrl());
+    assertEquals("HTTP", created.proxy().outboundProxyType());
+    assertEquals("192.168.1.40", created.proxy().outboundProxyHost());
+    assertEquals(7890, created.proxy().outboundProxyPort());
+    assertEquals("clash-user", created.proxy().outboundProxyUsername());
+    assertEquals(true, created.proxy().outboundProxyPasswordConfigured());
+    Map<?, ?> storedProxy = (Map<?, ?>) repositories.repository.attributes().get("proxy");
+    assertEquals("192.168.1.40", storedProxy.get("outboundProxyHost"));
+    assertEquals("clash-pass", storedProxy.get("outboundProxyPassword"));
+
+    OutboundProxyConfig runtimeProxy =
+        runtimes.resolve("swift-proxy").orElseThrow().outboundProxy();
+    assertEquals(OutboundProxyConfig.Type.HTTP, runtimeProxy.type());
+    assertEquals("192.168.1.40", runtimeProxy.host());
+    assertEquals(7890, runtimeProxy.port());
+    assertEquals("clash-user", runtimeProxy.username());
+    assertEquals("clash-pass", runtimeProxy.password());
+
+    RepositoryView updated = service.update("swift-proxy",
+        new UpdateCommand(true, null, null, null,
+            new ProxySettings("https://GITHUB.com:443/", 120, 60, true,
+                null, null, null, null, null,
+                "SOCKS", "192.168.1.41", 7891, "socks-user", "socks-pass", null),
+            null, null, null, null));
+
+    assertEquals("https://github.com/", updated.proxy().remoteUrl());
+    assertEquals("SOCKS", updated.proxy().outboundProxyType());
+    assertEquals("192.168.1.41", updated.proxy().outboundProxyHost());
+    assertEquals(7891, updated.proxy().outboundProxyPort());
+    OutboundProxyConfig updatedRuntimeProxy =
+        runtimes.resolve("swift-proxy").orElseThrow().outboundProxy();
+    assertEquals(OutboundProxyConfig.Type.SOCKS, updatedRuntimeProxy.type());
+    assertEquals("192.168.1.41", updatedRuntimeProxy.host());
+    assertEquals(7891, updatedRuntimeProxy.port());
+    assertEquals("socks-user", updatedRuntimeProxy.username());
+    assertEquals("socks-pass", updatedRuntimeProxy.password());
   }
 
   @Test
@@ -593,12 +1086,176 @@ class RepositoryServiceTest {
     assertTrue(thrown.getMessage().contains("cyclic-groups=[pub-nested]"));
   }
 
+  @Test
+  void updateEvictsCachedProxyClientWhenOutboundCredentialsRotate() throws Exception {
+    StubRepositoryDao repositories = new StubRepositoryDao(mavenProxyWithOutboundProxy("old-pass"));
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      RepositoryService service = service(repositories, factory);
+      OutboundProxyConfig oldConfig = new OutboundProxyConfig(
+          OutboundProxyConfig.Type.HTTP, "192.168.1.10", 7890, "clash-user", "old-pass");
+      Object staleClient = factory.clientFor("maven-proxy", oldConfig);
+
+      service.update("maven-proxy",
+          new UpdateCommand(true, null, null, null,
+              new ProxySettings(
+                  "https://repo.maven.apache.org/maven2/", 1440, 1440, true,
+                  null, null, null, null, null,
+                  "HTTP", "192.168.1.10", 7890, "clash-user", "new-pass", null),
+              null, null, null, null));
+
+      assertNotSame(staleClient, factory.clientFor("maven-proxy", oldConfig),
+          "a credential rotation must evict the stale pooled client immediately");
+    }
+  }
+
+  @Test
+  void updateKeepsCachedProxyClientWhenOutboundProxyIsUntouched() throws Exception {
+    StubRepositoryDao repositories = new StubRepositoryDao(mavenProxyWithOutboundProxy("clash-pass"));
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      RepositoryService service = service(repositories, factory);
+      OutboundProxyConfig config = new OutboundProxyConfig(
+          OutboundProxyConfig.Type.HTTP, "192.168.1.10", 7890, "clash-user", "clash-pass");
+      Object cachedClient = factory.clientFor("maven-proxy", config);
+
+      service.update("maven-proxy",
+          new UpdateCommand(false, null, null, null, null, null, null, null, null));
+
+      assertSame(cachedClient, factory.clientFor("maven-proxy", config),
+          "an update that does not touch the outbound proxy must keep the pooled client");
+    }
+  }
+
+  @Test
+  void updateEvictsCachedProxyClientWhenOutboundProxyIsCleared() throws Exception {
+    StubRepositoryDao repositories = new StubRepositoryDao(mavenProxyWithOutboundProxy("clash-pass"));
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      RepositoryService service = service(repositories, factory);
+      OutboundProxyConfig oldConfig = new OutboundProxyConfig(
+          OutboundProxyConfig.Type.HTTP, "192.168.1.10", 7890, "clash-user", "clash-pass");
+      Object staleClient = factory.clientFor("maven-proxy", oldConfig);
+
+      service.update("maven-proxy",
+          new UpdateCommand(true, null, null, null,
+              new ProxySettings(
+                  "https://repo.maven.apache.org/maven2/", 1440, 1440, true,
+                  null, null, null, null, null,
+                  "", null, null, null, null, null),
+              null, null, null, null));
+
+      assertNotSame(staleClient, factory.clientFor("maven-proxy", oldConfig),
+          "clearing the proxy must evict the stale pooled client immediately");
+    }
+  }
+
+  @Test
+  void deleteEvictsCachedOutboundProxyClient() throws Exception {
+    StubRepositoryDao repositories = new StubRepositoryDao(mavenProxyWithOutboundProxy("clash-pass"));
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      RepositoryService service = service(repositories, factory);
+      OutboundProxyConfig config = new OutboundProxyConfig(
+          OutboundProxyConfig.Type.HTTP, "192.168.1.10", 7890, "clash-user", "clash-pass");
+      Object staleClient = factory.clientFor("maven-proxy", config);
+
+      service.delete("maven-proxy");
+
+      assertNotSame(staleClient, factory.clientFor("maven-proxy", config),
+          "deleting the repository must evict its pooled proxy client immediately");
+    }
+  }
+
+  @Test
+  void updateKeepsOtherRepositoryClientWhenProxyConfigsAreIdentical() throws Exception {
+    StubRepositoryDao repositories = new StubRepositoryDao(
+        mavenProxyWithOutboundProxy("clash-pass"),
+        mavenProxyWithOutboundProxy(2L, "maven-proxy-two", "clash-pass"));
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      RepositoryService service = service(repositories, factory);
+      OutboundProxyConfig shared = new OutboundProxyConfig(
+          OutboundProxyConfig.Type.HTTP, "192.168.1.10", 7890, "clash-user", "clash-pass");
+      Object otherClient = factory.clientFor("maven-proxy-two", shared);
+
+      service.update("maven-proxy",
+          new UpdateCommand(true, null, null, null,
+              new ProxySettings(
+                  "https://repo.maven.apache.org/maven2/", 1440, 1440, true,
+                  null, null, null, null, null,
+                  "HTTP", "192.168.1.10", 7890, "clash-user", "rotated-pass", null),
+              null, null, null, null));
+
+      assertSame(otherClient, factory.clientFor("maven-proxy-two", shared),
+          "updating one repository must not close the other repository's pooled client, "
+              + "even when both share identical proxy settings");
+    }
+  }
+
+  @Test
+  void deleteKeepsOtherRepositoryClientWhenProxyConfigsAreIdentical() throws Exception {
+    StubRepositoryDao repositories = new StubRepositoryDao(
+        mavenProxyWithOutboundProxy("clash-pass"),
+        mavenProxyWithOutboundProxy(2L, "maven-proxy-two", "clash-pass"));
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      RepositoryService service = service(repositories, factory);
+      OutboundProxyConfig shared = new OutboundProxyConfig(
+          OutboundProxyConfig.Type.HTTP, "192.168.1.10", 7890, "clash-user", "clash-pass");
+      Object otherClient = factory.clientFor("maven-proxy-two", shared);
+
+      service.delete("maven-proxy");
+
+      assertSame(otherClient, factory.clientFor("maven-proxy-two", shared),
+          "deleting one repository must not close the other repository's pooled client, "
+              + "even when both share identical proxy settings");
+    }
+  }
+
+  private static RepositoryRecord mavenProxyWithOutboundProxy(String outboundPassword) {
+    return mavenProxyWithOutboundProxy(1L, "maven-proxy", outboundPassword);
+  }
+
+  private static RepositoryRecord mavenProxyWithOutboundProxy(
+      long id, String name, String outboundPassword) {
+    Map<String, Object> proxy = new LinkedHashMap<>();
+    proxy.put("remoteUrl", "https://repo.maven.apache.org/maven2/");
+    proxy.put("outboundProxyType", "HTTP");
+    proxy.put("outboundProxyHost", "192.168.1.10");
+    proxy.put("outboundProxyPort", 7890);
+    proxy.put("outboundProxyUsername", "clash-user");
+    proxy.put("outboundProxyPassword", outboundPassword);
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", "maven2-proxy");
+    attributes.put("proxy", proxy);
+    return new RepositoryRecord(
+        id,
+        name,
+        RepositoryFormat.MAVEN2,
+        RepositoryType.PROXY,
+        "maven2-proxy",
+        true,
+        1L,
+        null,
+        "https://repo.maven.apache.org/maven2/",
+        null,
+        null,
+        null,
+        true,
+        attributes);
+  }
+
   private static RepositoryService service(StubRepositoryDao repositories) {
     return new RepositoryService(
         repositories,
         new StubBlobStoreDao(),
         new StubSecurityDao(),
         new RepositoryRuntimeRegistry(repositories, 0),
+        "/repository");
+  }
+
+  private static RepositoryService service(StubRepositoryDao repositories, ProxiedHttpClientFactory factory) {
+    return new RepositoryService(
+        repositories,
+        new StubBlobStoreDao(),
+        new StubSecurityDao(),
+        new RepositoryRuntimeRegistry(repositories, 0),
+        factory,
         "/repository");
   }
 
@@ -918,6 +1575,17 @@ class RepositoryServiceTest {
     @Override
     public void replaceMembers(long groupRepositoryId, List<Long> memberRepositoryIds) {
       membersByGroupId.put(groupRepositoryId, List.copyOf(memberRepositoryIds));
+    }
+
+    @Override
+    public boolean hasComponents(long repositoryId) {
+      return false;
+    }
+
+    @Override
+    public int deleteById(long id) {
+      boolean removed = repositories.removeIf(row -> row.id().equals(id));
+      return removed ? 1 : 0;
     }
 
     @Override
