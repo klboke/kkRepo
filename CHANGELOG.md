@@ -4,6 +4,42 @@ All notable public changes to kkrepo are documented in this file.
 
 This project follows a pragmatic early-stage release process. Until a stable `1.0.0` release is announced, minor versions may include behavior changes, but releases should call out migration impact, compatibility changes, and operational notes.
 
+## 0.5.0 - 2026-07-18
+
+### Added
+
+- Nexus-compatible Terraform module and provider repositories with hosted, proxy, and group recipes, official discovery endpoints, checksums and detached PGP signatures, archive validation, component upload, Browse/Search/Admin integration, metrics, and Nexus migration support. (#124)
+- Swift Package Registry v1 hosted, GitHub-backed proxy, and group repositories with immutable signed publication, manifests, range and cache behavior, identifier lookup, proxy pinning, Browse/Search/Admin integration, cleanup and rebuild workers, and Nexus migration support. (#128)
+- Per-repository outbound HTTP and SOCKS5 proxy settings for proxy repositories, including optional credentials, Admin UI configuration, isolated client state, redirect and SSRF controls, and support across shared remote fetch paths and Docker registry authentication flows. (#134, #136)
+- A main-merge development deployment workflow for the executable Java 25 jar with health verification, retained releases, and automatic rollback while PostgreSQL and Nginx remain containerized. (#121)
+
+### Changed
+
+- MySQL and PostgreSQL now include equivalent V30-V33 migrations for Terraform registry state and Swift release, manifest, proxy inventory, lease, cache, and group-binding state. (#124, #128)
+- Quickstart defaults, Dockerfile packaging, deployment documentation, and the Helm application version now use `0.5.0`.
+- Repository permission documentation now defines actions by protocol route and operation, including protocol-specific behavior for Cargo, Pub, Swift, Terraform, and Docker. (#132)
+- Pull requests remain gated by Codecov project and patch checks, while main-branch coverage uploads update the baseline without publishing misleading post-merge statuses. (#133)
+- Bouncy Castle OpenPGP support was updated to `bcpg-jdk18on` 1.84. (#126)
+
+### Fixed
+
+- PostgreSQL duplicate asset inserts and concurrent Docker manifest upserts now roll expected unique-key conflicts back to transaction savepoints before continuing, while preserving MySQL transaction behavior and database-backed cross-replica coordination. (#117, #122)
+- Helm chart parsing is safe under concurrent uploads, and decompressed `Chart.yaml` metadata is capped at 1 MiB before YAML parsing to prevent disproportionate heap use. (#120, #130)
+- Docker proxy redirects keep repository credentials on same-origin HTTP-to-HTTPS upgrades, drop them for cross-origin targets, and keep bearer-token retries on the validated HTTPS endpoint. (#136)
+
+### Compatibility And Validation
+
+- Terraform coverage includes official CLI 0.13 and current releases, Nexus 3.92 black-box behavior, hosted and proxy/group resolution, signing continuity, multi-replica coordination, and native proxy-cache migration. (#124)
+- Swift coverage includes Nexus 3.94 comparisons, SwiftPM 5.7, 5.10, and 6.x clients, platform-specific lanes, S3-compatible dual-replica resilience, backup/restore, and H2/PostgreSQL source migration. (#128)
+- HTTP and SOCKS5 outbound proxy behavior includes authenticated and anonymous isolation, timeout, redirect, TLS, Docker Basic and bearer exchange, and credential-forwarding regressions. (#134, #136)
+- Existing Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Docker/OCI, NuGet, RubyGems, Yum, and Raw compatibility paths remain covered by the reactor and live compatibility workflows.
+
+### Upgrade Notes
+
+- Existing `0.4.0` MySQL and PostgreSQL deployments can upgrade in place through Flyway V30-V33. Back up the database and blob store together before upgrading production deployments.
+- Terraform and Swift add shared relational coordination and metadata state while keeping artifact blobs behind the configured OSS/S3 storage abstraction. Do not run mixed application versions against a database after the new migrations are applied.
+- Validate Terraform signing and proxy/group resolution, Swift publication and migration policy, and any authenticated outbound proxy configuration in staging before enabling the new formats or network path in production.
+
 ## 0.4.0 - 2026-07-14
 
 ### Added
