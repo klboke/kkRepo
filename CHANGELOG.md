@@ -4,6 +4,28 @@ All notable public changes to kkrepo are documented in this file.
 
 This project follows a pragmatic early-stage release process. Until a stable `1.0.0` release is announced, minor versions may include behavior changes, but releases should call out migration impact, compatibility changes, and operational notes.
 
+## 0.5.1 - 2026-07-18
+
+### Changed
+
+- Quickstart defaults, Dockerfile packaging, deployment documentation, and the Helm application version now use `0.5.1`.
+- DNS-pinned outbound requests use Apache HttpClient 5 classic HTTP/1.1. Deployments configured with `kkrepo.proxy.remote-http-version=HTTP_2` log an explicit downgrade warning.
+
+### Fixed
+
+- Outbound URL validation now binds the approved DNS answers to the addresses used by direct, HTTP CONNECT, and SOCKS connections while preserving the original hostname for HTTP Host, TLS SNI, and certificate verification. Redirects are re-resolved and revalidated before connecting, closing the DNS-rebinding/TOCTOU SSRF gap in shared proxy fetches and Docker authentication flows. (#138)
+- Terraform upstream paths now use `RemoteUrlBuilder`, preventing request-derived paths from replacing the configured upstream authority. (#138)
+
+### Compatibility And Validation
+
+- Regression coverage verifies immutable DNS snapshots, multi-address failover, direct and proxied DNS pinning, redirect revalidation, TLS hostname verification, Docker registry/token routing, and Terraform upstream URL construction. (#138)
+- The full Maven reactor, focused outbound/Terraform suites, GitHub CI, CodeQL, and Codecov patch checks pass for the fix. (#138)
+
+### Upgrade Notes
+
+- `0.5.0` deployments should upgrade promptly, especially when proxy repositories are reachable by untrusted users or can access private networks or cloud metadata endpoints.
+- This patch does not add a database migration or require configuration changes. Existing MySQL and PostgreSQL installations can upgrade in place.
+
 ## 0.5.0 - 2026-07-18
 
 ### Added

@@ -45,7 +45,7 @@ bash quickstart.sh
 
 By default, it starts:
 
-- `ghcr.io/klboke/kkrepo:0.5.0`
+- `ghcr.io/klboke/kkrepo:0.5.1`
 - MySQL 8.0
 - Persistent MySQL and File blob storage volumes for local trials
 
@@ -137,7 +137,7 @@ Note: a normal `server` module jar does not contain a Spring Boot executable ent
 Pull the latest public release image:
 
 ```bash
-docker pull ghcr.io/klboke/kkrepo:0.5.0
+docker pull ghcr.io/klboke/kkrepo:0.5.1
 ```
 
 You can also use `latest` to follow the latest public release:
