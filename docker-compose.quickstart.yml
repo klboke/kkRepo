@@ -26,7 +26,7 @@ services:
     command: ["sh", "-c", "mkdir -p /data/blobs && chown -R 999:999 /data"]
 
   kkrepo:
-    image: ghcr.io/klboke/kkrepo:${KKREPO_IMAGE_TAG:-0.4.0}
+    image: ghcr.io/klboke/kkrepo:${KKREPO_IMAGE_TAG:-0.5.0}
     depends_on:
       mysql:
         condition: service_healthy

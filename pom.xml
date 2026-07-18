@@ -42,7 +42,7 @@
   </modules>
 
   <properties>
-    <revision>0.4.0</revision>
+    <revision>0.5.0</revision>
     <java.version>25</java.version>
     <spring.boot.version>4.1.0</spring.boot.version>
     <apollo.client.version>2.5.0</apollo.client.version>
