@@ -13,6 +13,7 @@ import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
+import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.raw.RawProxyService;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -903,7 +904,7 @@ public class TerraformService {
         ? path.rawPath().substring(0, path.rawPath().length() - ".json".length())
         : path.rawPath();
     String suffix = canonicalPath.substring(prefix.length());
-    return ensureSlash(service) + suffix;
+    return RemoteUrlBuilder.repositoryPathString(service, suffix);
   }
 
   private String discovery(RepositoryRuntime runtime, String key) {

@@ -142,7 +142,9 @@ final class Socks5TunnelSocket extends Socket {
     out.write(0x00);
     InetAddress resolved = target.getAddress();
     String hostString = target.getHostString();
-    if (resolved != null && hostString.equals(resolved.getHostAddress())) {
+    if (resolved != null) {
+      // A resolved socket address is a policy-approved connection capability. Always serialize its
+      // IP bytes so the SOCKS proxy cannot perform a second, potentially rebound DNS lookup.
       byte[] address = resolved.getAddress();
       out.write(address.length == 4 ? 0x01 : 0x04);
       out.write(address);

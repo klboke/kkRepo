@@ -9,6 +9,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
+import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
+import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy.ResolvedHttpTarget;
 import com.github.klboke.kkrepo.server.support.FakeHttpProxyServer;
 import java.io.IOException;
 import java.io.InputStream;
@@ -23,8 +25,9 @@ import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import org.apache.hc.client5.http.classic.methods.HttpGet;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.core5.http.HttpHost;
+import org.apache.hc.core5.http.message.BasicClassicHttpRequest;
 import org.junit.jupiter.api.Test;
 
 class ProxiedHttpClientFactoryTest {
@@ -80,7 +83,7 @@ class ProxiedHttpClientFactoryTest {
           OutboundProxyConfig.Type.SOCKS, "127.0.0.1", staller.getLocalPort(), null, null);
       long startNanos = System.nanoTime();
       assertThrows(IOException.class, () ->
-          factory.execute("repo-a", config, "GET", java.net.URI.create("http://localhost/"),
+          factory.execute("repo-a", config, "GET", target("http://localhost/"),
               java.util.Map.of(), 60000));
       long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
       // The connect timeout is 500 ms; the greeting read must time out near it. The upper bound
@@ -128,7 +131,7 @@ class ProxiedHttpClientFactoryTest {
           OutboundProxyConfig.Type.SOCKS, "127.0.0.1", dripper.getLocalPort(), null, null);
       long startNanos = System.nanoTime();
       assertThrows(IOException.class, () ->
-          factory.execute("repo-a", config, "GET", java.net.URI.create("http://localhost/"),
+          factory.execute("repo-a", config, "GET", target("http://localhost/"),
               java.util.Map.of(), 60000));
       long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
       assertTrue(elapsedMillis >= 400,
@@ -202,11 +205,15 @@ class ProxiedHttpClientFactoryTest {
         // "localhost" resolves locally; the tunnel to it succeeds at the SOCKS layer and the server
         // then closes, so the HTTP exchange itself fails — only the handshake matters here.
         assertThrows(IOException.class, () ->
-            factory.execute("repo-a", config, "GET", java.net.URI.create("http://localhost/"),
+            factory.execute("repo-a", config, "GET", target("http://localhost/"),
                 java.util.Map.of(), 5000));
       }
       assertTrue(server.awaitHandshake(), "SOCKS server never saw an authentication attempt");
       assertOnlyCredentials(server, "alice", "s3cret");
+      assertTrue(!server.targetAddressTypes().isEmpty(), "SOCKS server never saw CONNECT");
+      assertTrue(server.targetAddressTypes().stream().allMatch(type -> type != 0x03),
+          "SOCKS CONNECT must use a policy-approved IP, not ask the proxy to resolve a domain: "
+              + server.targetAddressTypes());
     } finally {
       server.stop();
     }
@@ -228,10 +235,10 @@ class ProxiedHttpClientFactoryTest {
       try (CloseableHttpClient ignored = factory.clientFor("repo-one", configOne);
           CloseableHttpClient ignored2 = factory.clientFor("repo-two", configTwo)) {
         assertThrows(IOException.class, () ->
-            factory.execute("repo-one", configOne, "GET", java.net.URI.create("http://localhost/"),
+            factory.execute("repo-one", configOne, "GET", target("http://localhost/"),
                 java.util.Map.of(), 5000));
         assertThrows(IOException.class, () ->
-            factory.execute("repo-two", configTwo, "GET", java.net.URI.create("http://localhost/"),
+            factory.execute("repo-two", configTwo, "GET", target("http://localhost/"),
                 java.util.Map.of(), 5000));
       }
       assertTrue(first.awaitHandshake());
@@ -263,10 +270,10 @@ class ProxiedHttpClientFactoryTest {
           CloseableHttpClient clientB = factory.clientFor("repo-bob", bob)) {
         assertNotSame(clientA, clientB);
         assertThrows(IOException.class, () ->
-            factory.execute("repo-alice", alice, "GET", java.net.URI.create("http://localhost/"),
+            factory.execute("repo-alice", alice, "GET", target("http://localhost/"),
                 java.util.Map.of(), 5000));
         assertThrows(IOException.class, () ->
-            factory.execute("repo-bob", bob, "GET", java.net.URI.create("http://localhost/"),
+            factory.execute("repo-bob", bob, "GET", target("http://localhost/"),
                 java.util.Map.of(), 5000));
       }
       assertTrue(server.awaitHandshake());
@@ -297,7 +304,7 @@ class ProxiedHttpClientFactoryTest {
           OutboundProxyConfig.Type.SOCKS, "127.0.0.1", server.port(), null, null);
       try (CloseableHttpClient ignored = factory.clientFor("repo-a", authed)) {
         assertThrows(IOException.class, () ->
-            factory.execute("repo-a", authed, "GET", java.net.URI.create("http://localhost/"),
+            factory.execute("repo-a", authed, "GET", target("http://localhost/"),
                 java.util.Map.of(), 5000));
       }
       int authedAttempts = server.attempts().size();
@@ -307,7 +314,7 @@ class ProxiedHttpClientFactoryTest {
       factory.invalidate("repo-a", authed);
       try (CloseableHttpClient ignored = factory.clientFor("repo-a", anonymous)) {
         assertThrows(IOException.class, () ->
-            factory.execute("repo-a", anonymous, "GET", java.net.URI.create("http://localhost/"),
+            factory.execute("repo-a", anonymous, "GET", target("http://localhost/"),
                 java.util.Map.of(), 5000));
       }
       assertEquals(authedAttempts, server.attempts().size(),
@@ -339,11 +346,13 @@ class ProxiedHttpClientFactoryTest {
         ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
       OutboundProxyConfig config =
           new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "127.0.0.1", proxy.port(), null, null);
+      ResolvedHttpTarget target =
+          target("http://localhost/org/foo/1.0/foo-1.0.jar");
       try (ProxiedHttpClientFactory.ProxiedResponse response = factory.execute(
           "repo-a",
           config,
           "GET",
-          URI.create("http://repo.example.com/org/foo/1.0/foo-1.0.jar"),
+          target,
           Map.of("X-Test", "yes"),
           5000)) {
         assertEquals(200, response.status());
@@ -353,7 +362,8 @@ class ProxiedHttpClientFactoryTest {
       }
       FakeHttpProxyServer.RecordedRequest recorded = proxy.requests().get(0);
       assertEquals("GET", recorded.method());
-      assertEquals("http://repo.example.com/org/foo/1.0/foo-1.0.jar", recorded.target());
+      assertPinnedProxyTarget(target, recorded);
+      assertEquals("localhost", recorded.header("Host"));
       assertEquals("yes", recorded.header("X-Test"));
     }
   }
@@ -366,7 +376,7 @@ class ProxiedHttpClientFactoryTest {
       OutboundProxyConfig config =
           new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "127.0.0.1", proxy.port(), null, null);
       try (ProxiedHttpClientFactory.ProxiedResponse response = factory.execute(
-          "repo-a", config, "HEAD", URI.create("http://repo.example.com/artifact"), Map.of(), 5000)) {
+          "repo-a", config, "HEAD", target("http://localhost/artifact"), Map.of(), 5000)) {
         assertEquals(200, response.status());
         assertEquals("\"abc\"", response.header("etag"));
         assertEquals(0, response.body().readAllBytes().length);
@@ -389,7 +399,7 @@ class ProxiedHttpClientFactoryTest {
       OutboundProxyConfig config = new OutboundProxyConfig(
           OutboundProxyConfig.Type.HTTP, "127.0.0.1", proxy.port(), "proxy-user", "proxy-pass");
       try (ProxiedHttpClientFactory.ProxiedResponse response = factory.execute(
-          "repo-a", config, "GET", URI.create("http://repo.example.com/artifact"), Map.of(), 5000)) {
+          "repo-a", config, "GET", target("http://localhost/artifact"), Map.of(), 5000)) {
         assertEquals(200, response.status());
       }
       assertEquals(2, proxy.requests().size());
@@ -410,9 +420,9 @@ class ProxiedHttpClientFactoryTest {
       OutboundProxyConfig configTwo = new OutboundProxyConfig(
           OutboundProxyConfig.Type.HTTP, "127.0.0.1", second.port(), "user-two", "pw-two");
       try (ProxiedHttpClientFactory.ProxiedResponse ignored = factory.execute(
-              "repo-one", configOne, "GET", URI.create("http://repo.example.com/a"), Map.of(), 5000);
+              "repo-one", configOne, "GET", target("http://localhost/a"), Map.of(), 5000);
           ProxiedHttpClientFactory.ProxiedResponse ignored2 = factory.execute(
-              "repo-two", configTwo, "GET", URI.create("http://repo.example.com/b"), Map.of(), 5000)) {
+              "repo-two", configTwo, "GET", target("http://localhost/b"), Map.of(), 5000)) {
         assertEquals(200, ignored.status());
         assertEquals(200, ignored2.status());
       }
@@ -445,7 +455,7 @@ class ProxiedHttpClientFactoryTest {
       OutboundProxyConfig config =
           new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "127.0.0.1", proxy.port(), null, null);
       try (ProxiedHttpClientFactory.ProxiedResponse response = factory.execute(
-          "repo-a", config, "GET", URI.create("http://repo.example.com/original"), Map.of(), 5000)) {
+          "repo-a", config, "GET", target("http://localhost/original"), Map.of(), 5000)) {
         assertEquals(302, response.status());
         assertEquals("http://elsewhere.example.com/redirected", response.header("Location"));
       }
@@ -462,11 +472,14 @@ class ProxiedHttpClientFactoryTest {
           new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "127.0.0.1", proxy.port(), null, null);
       // The fake proxy answers CONNECT and then drops the tunnel, so the TLS handshake fails —
       // only the CONNECT request line matters here.
+      ResolvedHttpTarget target = target("https://localhost:8443/path");
       assertThrows(IOException.class, () -> factory.execute(
-          "repo-a", config, "GET", URI.create("https://secure.example.com:8443/path"), Map.of(), 5000));
+          "repo-a", config, "GET", target, Map.of(), 5000));
       FakeHttpProxyServer.RecordedRequest connect = proxy.requests().get(0);
       assertEquals("CONNECT", connect.method());
-      assertEquals("secure.example.com:8443", connect.target());
+      assertEquals(target.addresses().get(0),
+          java.net.InetAddress.getByName(URI.create("http://" + connect.target()).getHost()));
+      assertTrue(connect.target().endsWith(":8443"));
     }
   }
 
@@ -475,9 +488,9 @@ class ProxiedHttpClientFactoryTest {
     ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(100, 10000);
     try {
       OutboundProxyConfig stale =
-          new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "10.0.0.6", 7890, null, null);
+          new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "127.0.0.1", 1, null, null);
       OutboundProxyConfig active =
-          new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "10.0.0.7", 7890, null, null);
+          new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "127.0.0.1", 2, null, null);
       CloseableHttpClient staleClient = factory.clientFor("repo-stale", stale);
       assertNotNull(staleClient);
       Thread.sleep(1200);
@@ -485,7 +498,7 @@ class ProxiedHttpClientFactoryTest {
       while (System.nanoTime() < deadline) {
         factory.clientFor("repo-active", active); // touching the cache runs eviction maintenance
         try {
-          staleClient.executeOpen(null, new HttpGet("http://localhost/"), null);
+          probeClient(staleClient);
         } catch (IllegalStateException closed) {
           return;
         } catch (IOException stillOpen) {
@@ -510,7 +523,7 @@ class ProxiedHttpClientFactoryTest {
       assertNotSame(cached, factory.clientFor("repo-a", config),
           "invalidate must drop the cached client so the next lookup rebuilds it");
       assertThrows(IllegalStateException.class, () ->
-          cached.executeOpen(null, new HttpGet("http://localhost/"), null));
+          probeClient(cached));
     }
   }
 
@@ -557,7 +570,30 @@ class ProxiedHttpClientFactoryTest {
     factory.close();
     // After close the client must be shut down: executing against it throws IllegalStateException.
     assertThrows(IllegalStateException.class, () ->
-        client.executeOpen(null, new HttpGet("http://localhost/"), null));
+        probeClient(client));
+  }
+
+  private static void probeClient(CloseableHttpClient client) throws IOException {
+    java.net.InetAddress address = java.net.InetAddress.getLoopbackAddress();
+    HttpHost target = new HttpHost("http", address, address.getHostAddress(), 1);
+    try (var response = client.executeOpen(
+        target, new BasicClassicHttpRequest("GET", "/"), null)) {
+      // A live client may reach a test listener; closing is enough for this lifecycle probe.
+    }
+  }
+
+  private static ResolvedHttpTarget target(String url) {
+    return OutboundRequestPolicy.allowPrivateForTests()
+        .resolveHttpTarget(url, "outbound client test");
+  }
+
+  private static void assertPinnedProxyTarget(
+      ResolvedHttpTarget target, FakeHttpProxyServer.RecordedRequest recorded)
+      throws Exception {
+    URI routed = URI.create(recorded.target());
+    assertEquals(target.addresses().get(0), java.net.InetAddress.getByName(routed.getHost()));
+    assertEquals(target.uri().getRawPath(), routed.getRawPath());
+    assertEquals(target.uri().getRawQuery(), routed.getRawQuery());
   }
 
   /**
@@ -574,6 +610,7 @@ class ProxiedHttpClientFactoryTest {
     private final List<String> passwords = new CopyOnWriteArrayList<>();
     private final List<String> attempts = new CopyOnWriteArrayList<>();
     private final List<Integer> selectedMethods = new CopyOnWriteArrayList<>();
+    private final List<Integer> targetAddressTypes = new CopyOnWriteArrayList<>();
     private final CountDownLatch handshakeSeen = new CountDownLatch(1);
     private ServerSocket serverSocket;
     private Thread thread;
@@ -616,6 +653,11 @@ class ProxiedHttpClientFactoryTest {
     /** Auth method the server selected per handshake (0x00 anonymous, 0x02 username/password). */
     List<Integer> selectedMethods() {
       return selectedMethods;
+    }
+
+    /** SOCKS5 address types used by CONNECT (0x01 IPv4, 0x03 domain, 0x04 IPv6). */
+    List<Integer> targetAddressTypes() {
+      return targetAddressTypes;
     }
 
     boolean awaitHandshake() throws InterruptedException {
@@ -698,6 +740,7 @@ class ProxiedHttpClientFactoryTest {
         in.read(); // cmd
         in.read(); // rsv
         int atyp = in.read();
+        targetAddressTypes.add(atyp);
         if (atyp == 0x03) {
           int len = in.read();
           in.readNBytes(Math.max(0, len));

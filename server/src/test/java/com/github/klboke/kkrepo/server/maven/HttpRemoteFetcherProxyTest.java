@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.maven;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
@@ -53,7 +54,8 @@ class HttpRemoteFetcherProxyTest {
       assertEquals(1, proxy.requests().size());
       FakeHttpProxyServer.RecordedRequest recorded = proxy.requests().get(0);
       assertEquals("GET", recorded.method());
-      assertEquals("http://localhost/com/acme/lib/1.0/lib-1.0.pom", recorded.target());
+      assertPinnedLocalhostTarget(recorded, "/com/acme/lib/1.0/lib-1.0.pom");
+      assertEquals("localhost", recorded.header("Host"));
       assertEquals("\"abc123\"", recorded.header("If-None-Match"));
       assertEquals(
           DateTimeFormatter.RFC_1123_DATE_TIME.withZone(ZoneOffset.UTC).format(lastModified),
@@ -95,7 +97,9 @@ class HttpRemoteFetcherProxyTest {
 
       assertEquals(2, proxy.requests().size());
       assertEquals("Basic cm9ib3Q6c2VjcmV0", proxy.requests().get(0).header("Authorization"));
-      assertEquals("http://127.0.0.1/files/lib-1.0.jar", proxy.requests().get(1).target());
+      URI redirectedTarget = URI.create(proxy.requests().get(1).target());
+      assertEquals("127.0.0.1", redirectedTarget.getHost());
+      assertEquals("/files/lib-1.0.jar", redirectedTarget.getRawPath());
       assertNull(proxy.requests().get(1).header("Authorization"),
           "credentials must not leak to the cross-origin redirect target");
     }
@@ -131,7 +135,7 @@ class HttpRemoteFetcherProxyTest {
       }
 
       assertEquals(2, proxy.requests().size());
-      assertEquals("http://localhost/moved/lib-1.0.jar", proxy.requests().get(1).target());
+      assertPinnedLocalhostTarget(proxy.requests().get(1), "/moved/lib-1.0.jar");
       assertEquals("Basic cm9ib3Q6c2VjcmV0", proxy.requests().get(1).header("Authorization"));
     }
   }
@@ -217,5 +221,15 @@ class HttpRemoteFetcherProxyTest {
 
   private static OutboundProxyConfig proxyConfig(int port, String username, String password) {
     return new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "127.0.0.1", port, username, password);
+  }
+
+  private static void assertPinnedLocalhostTarget(
+      FakeHttpProxyServer.RecordedRequest recorded, String expectedPath)
+      throws Exception {
+    URI routed = URI.create(recorded.target());
+    java.net.InetAddress routedAddress = java.net.InetAddress.getByName(routed.getHost());
+    assertTrue(java.util.Arrays.stream(java.net.InetAddress.getAllByName("localhost"))
+        .anyMatch(routedAddress::equals));
+    assertEquals(expectedPath, routed.getRawPath());
   }
 }

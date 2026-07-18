@@ -707,8 +707,12 @@ class DockerRemoteRegistryClientTest {
 
       assertEquals(1, proxy.requests().size());
       FakeHttpProxyServer.RecordedRequest recorded = proxy.requests().get(0);
-      assertEquals("http://localhost/v2/library/alpine/manifests/latest",
-          recorded.target());
+      URI routed = URI.create(recorded.target());
+      java.net.InetAddress routedAddress = java.net.InetAddress.getByName(routed.getHost());
+      assertTrue(java.util.Arrays.stream(java.net.InetAddress.getAllByName("localhost"))
+          .anyMatch(routedAddress::equals));
+      assertEquals("/v2/library/alpine/manifests/latest", routed.getRawPath());
+      assertEquals("localhost", recorded.header("Host"));
       assertEquals(basic("robot", "secret"), recorded.header("Authorization"));
       assertEquals("application/vnd.docker.distribution.manifest.v2+json", recorded.header("Accept"));
     }
@@ -739,7 +743,9 @@ class DockerRemoteRegistryClientTest {
 
       assertEquals(2, proxy.requests().size());
       assertEquals(basic("robot", "secret"), proxy.requests().get(0).header("Authorization"));
-      assertEquals("http://127.0.0.1/layers/abc", proxy.requests().get(1).target());
+      URI redirected = URI.create(proxy.requests().get(1).target());
+      assertEquals("127.0.0.1", redirected.getHost());
+      assertEquals("/layers/abc", redirected.getRawPath());
       assertNull(proxy.requests().get(1).header("Authorization"),
           "registry credentials must not leak to the cross-origin storage URL");
     }
@@ -776,7 +782,8 @@ class DockerRemoteRegistryClientTest {
   void proxiedBearerTokenFlowFetchesTokenThroughProxy() throws Exception {
     AtomicInteger manifestCalls = new AtomicInteger();
     try (FakeHttpProxyServer proxy = FakeHttpProxyServer.start(request -> {
-          if (request.target().startsWith("http://127.0.0.1/token")) {
+          URI target = URI.create(request.target());
+          if ("127.0.0.1".equals(target.getHost()) && "/token".equals(target.getPath())) {
             return FakeHttpProxyServer.FakeResponse.bytes(200,
                 Map.of("Content-Type", "application/json"),
                 "{\"token\":\"proxied-remote-token\"}".getBytes(StandardCharsets.UTF_8));
@@ -803,7 +810,7 @@ class DockerRemoteRegistryClientTest {
       }
 
       FakeHttpProxyServer.RecordedRequest tokenRequest = proxy.requests().stream()
-          .filter(request -> request.target().startsWith("http://127.0.0.1/token"))
+          .filter(request -> "/token".equals(URI.create(request.target()).getPath()))
           .findFirst()
           .orElseThrow();
       assertEquals(basic("robot", "secret"), tokenRequest.header("Authorization"));

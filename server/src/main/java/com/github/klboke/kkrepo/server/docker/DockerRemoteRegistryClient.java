@@ -310,7 +310,9 @@ public class DockerRemoteRegistryClient {
     boolean recorded = false;
     ProxiedHttpClientFactory.ProxiedResponse response = null;
     try {
-      URI uri = outboundPolicy.validateHttpUri(url, "docker remote fetch");
+      OutboundRequestPolicy.ResolvedHttpTarget target =
+          outboundPolicy.resolveHttpTarget(url, "docker remote fetch");
+      URI uri = target.uri();
       Map<String, String> headers = new LinkedHashMap<>();
       headers.put("User-Agent", "kkrepo/0.1");
       headers.put("Accept", accept == null || accept.isBlank() ? "*/*" : accept);
@@ -323,7 +325,7 @@ public class DockerRemoteRegistryClient {
           runtime.name(),
           runtime.outboundProxy(),
           "GET",
-          uri,
+          target,
           headers,
           Duration.ofSeconds(180).toMillis());
       status = response.status();
@@ -376,7 +378,8 @@ public class DockerRemoteRegistryClient {
     Throwable failure = null;
     ProxiedHttpClientFactory.ProxiedResponse response = null;
     try {
-      URI uri = outboundPolicy.validateHttpUri(url, "docker token fetch");
+      OutboundRequestPolicy.ResolvedHttpTarget target =
+          outboundPolicy.resolveHttpTarget(url, "docker token fetch");
       Map<String, String> headers = new LinkedHashMap<>();
       headers.put("User-Agent", "kkrepo/0.1");
       basicAuthorization(runtime).ifPresent(value -> headers.put("Authorization", value));
@@ -384,7 +387,7 @@ public class DockerRemoteRegistryClient {
           runtime.name(),
           runtime.outboundProxy(),
           "GET",
-          uri,
+          target,
           headers,
           Duration.ofSeconds(30).toMillis());
       status = response.status();
