@@ -4,8 +4,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -15,7 +13,6 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
@@ -30,9 +27,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 /**
- * Outbound HTTP client used by the Maven proxy facet. Wraps {@link HttpClient} with the bits
- * we actually need: conditional GET, configurable timeouts, simple HEAD/GET API. Keeps Spring
- * out of the proxy logic so it can be tested standalone.
+ * Outbound HTTP client used by repository proxy facets. It validates and pins DNS answers before
+ * delegating GET/HEAD streaming to the shared Apache client factory.
  */
 @Component
 public class HttpRemoteFetcher {
@@ -47,7 +43,6 @@ public class HttpRemoteFetcher {
   private static final DateTimeFormatter RFC1123 =
       DateTimeFormatter.RFC_1123_DATE_TIME.withZone(ZoneOffset.UTC);
 
-  private final HttpClient client;
   private final ProxiedHttpClientFactory proxyFactory;
   private final OutboundRequestPolicy outboundPolicy;
   private final KkRepoMetrics metrics;
@@ -93,11 +88,11 @@ public class HttpRemoteFetcher {
     this.contentTimeout = Duration.ofSeconds(Math.max(1L, contentTimeoutSeconds));
     this.headTimeout = Duration.ofSeconds(Math.max(1L, headTimeoutSeconds));
     this.bodyReadRetryAttempts = Math.max(0, bodyReadRetryAttempts);
-    this.client = HttpClient.newBuilder()
-        .followRedirects(HttpClient.Redirect.NEVER)
-        .connectTimeout(Duration.ofSeconds(10))
-        .version(httpVersion(remoteHttpVersion))
-        .build();
+    if (httpVersion(remoteHttpVersion) == HttpClient.Version.HTTP_2) {
+      log.warn(
+          "kkrepo.proxy.remote-http-version=HTTP_2 is ignored because DNS-pinned outbound "
+              + "connections currently use Apache HttpClient 5 classic (HTTP/1.1)");
+    }
   }
 
   /** Issues a conditional GET (or HEAD) and returns the streaming body for the caller to drain. */
@@ -155,71 +150,18 @@ public class HttpRemoteFetcher {
   }
 
   private Result fetchInternal(Request req, int redirects) throws IOException {
-    if (proxyFactory != null && req.outboundProxy() != null && req.outboundProxy().enabled()) {
-      return fetchViaProxy(req, redirects);
+    if (proxyFactory == null) {
+      throw new IllegalStateException("Outbound HTTP client factory is required");
     }
-    var uri = req.validatedUri(outboundPolicy, "remote fetch");
-    HttpRequest.Builder b = HttpRequest.newBuilder()
-        .uri(uri)
-        .timeout(requestTimeout(req))
-        .header("Accept", "*/*")
-        .header("User-Agent", "kkrepo/0.1");
-    if (req.etag() != null && !req.etag().isBlank()) {
-      b.header("If-None-Match", "\"" + req.etag() + "\"");
-    }
-    if (req.lastModified() != null) {
-      b.header("If-Modified-Since", RFC1123.format(req.lastModified()));
-    }
-    if (req.authorizationHeader() != null && !req.authorizationHeader().isBlank()) {
-      b.header("Authorization", req.authorizationHeader());
-    }
-    HttpRequest request = req.headOnly()
-        ? b.method("HEAD", HttpRequest.BodyPublishers.noBody()).build()
-        : b.GET().build();
-    try {
-      HttpResponse<InputStream> response = client.send(request,
-          HttpResponse.BodyHandlers.ofInputStream());
-      Optional<String> redirect = redirectLocation(response);
-      if (redirect.isPresent()) {
-        response.body().close();
-        if (redirects >= MAX_REDIRECTS) {
-          throw new IOException("Too many redirects fetching " + req.url());
-        }
-        var redirected = outboundPolicy.validateHttpUri(uri.resolve(redirect.get()), "remote redirect");
-        String redirectAuthorization = req.authorizationHeaderForRedirect(uri, redirected);
-        String redirectTrustedHost = req.trustedHostForRedirect(uri, redirected);
-        return fetchInternal(new Request(
-            redirected.toString(),
-            req.etag(),
-            req.lastModified(),
-            req.timeout(),
-            req.timeoutProfile(),
-            req.headOnly(),
-            req.repository(),
-            req.format(),
-            redirectTrustedHost,
-            redirectAuthorization,
-            req.allowedUnsignedRedirectHosts(),
-            req.outboundProxy()), redirects + 1);
-      }
-      Map<String, String> headers = new LinkedHashMap<>();
-      response.headers().map().forEach((k, v) -> {
-        if (!v.isEmpty()) headers.put(k, v.get(0));
-      });
-      return new Result(response.statusCode(), headers, response.body());
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      throw new IOException("Interrupted fetching " + req.url(), e);
-    }
+    return fetchInternal(req, redirects, req.resolvedTarget(outboundPolicy, "remote fetch"));
   }
 
-  /**
-   * Proxied fetch path using Apache HttpClient 5 (the JDK client cannot do SOCKS). Mirrors
-   * {@link #fetchInternal} semantics — same headers, redirects, trusted-host/auth re-derivation and
-   * Result shape — but tunnels the connection through the configured outbound proxy.
-   */
-  private Result fetchViaProxy(Request req, int redirects) throws IOException {
-    URI uri = req.validatedUri(outboundPolicy, "remote fetch");
+  private Result fetchInternal(
+      Request req,
+      int redirects,
+      OutboundRequestPolicy.ResolvedHttpTarget target)
+      throws IOException {
+    URI uri = target.uri();
     Map<String, String> headers = new LinkedHashMap<>();
     headers.put("Accept", "*/*");
     headers.put("User-Agent", "kkrepo/0.1");
@@ -239,19 +181,19 @@ public class HttpRemoteFetcher {
           req.repository(),
           req.outboundProxy(),
           req.headOnly() ? "HEAD" : "GET",
-          uri,
+          target,
           headers,
           timeout.toMillis());
-      String location = redirectLocationProxy(response);
+      String location = redirectLocation(response);
       if (location != null) {
         response.close();
         if (redirects >= MAX_REDIRECTS) {
           throw new IOException("Too many redirects fetching " + req.url());
         }
-        URI redirected = outboundPolicy.validateHttpUri(uri.resolve(location), "remote redirect");
+        URI redirected = uri.resolve(location);
         String redirectAuthorization = req.authorizationHeaderForRedirect(uri, redirected);
         String redirectTrustedHost = req.trustedHostForRedirect(uri, redirected);
-        return fetchViaProxy(new Request(
+        Request redirectedRequest = new Request(
             redirected.toString(),
             req.etag(),
             req.lastModified(),
@@ -263,7 +205,11 @@ public class HttpRemoteFetcher {
             redirectTrustedHost,
             redirectAuthorization,
             req.allowedUnsignedRedirectHosts(),
-            req.outboundProxy()), redirects + 1);
+            req.outboundProxy());
+        return fetchInternal(
+            redirectedRequest,
+            redirects + 1,
+            redirectedRequest.resolvedTarget(outboundPolicy, "remote redirect"));
       }
       return new Result(response.status(), response.headers(), releaseOnClose(response));
     } catch (IOException | RuntimeException e) {
@@ -293,7 +239,7 @@ public class HttpRemoteFetcher {
     };
   }
 
-  private static String redirectLocationProxy(ProxiedHttpClientFactory.ProxiedResponse response) {
+  private static String redirectLocation(ProxiedHttpClientFactory.ProxiedResponse response) {
     int status = response.status();
     if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {
       String location = response.header("Location");
@@ -314,14 +260,6 @@ public class HttpRemoteFetcher {
       case METADATA -> metadataTimeout;
       case CONTENT, DEFAULT -> contentTimeout;
     };
-  }
-
-  private static Optional<String> redirectLocation(HttpResponse<?> response) {
-    int status = response.statusCode();
-    if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {
-      return response.headers().firstValue("Location").filter(value -> !value.isBlank());
-    }
-    return Optional.empty();
   }
 
   private static String remoteHost(String url) {
@@ -492,12 +430,17 @@ public class HttpRemoteFetcher {
       return headOnly ? "HEAD" : "GET";
     }
 
-    java.net.URI validatedUri(OutboundRequestPolicy policy, String purpose) {
-      URI uri = policy.validateHttpUri(url, purpose);
-      if (trustedHost != null && !normalizeHost(uri.getHost()).equals(trustedHost)) {
+    OutboundRequestPolicy.ResolvedHttpTarget resolvedTarget(
+        OutboundRequestPolicy policy, String purpose) {
+      OutboundRequestPolicy.ResolvedHttpTarget target = policy.resolveHttpTarget(url, purpose);
+      if (trustedHost != null && !normalizeHost(target.uri().getHost()).equals(trustedHost)) {
         throw new SecurityValidationException(purpose + " URL host must remain " + trustedHost);
       }
-      return uri;
+      return target;
+    }
+
+    java.net.URI validatedUri(OutboundRequestPolicy policy, String purpose) {
+      return resolvedTarget(policy, purpose).uri();
     }
 
     String authorizationHeaderForRedirect(URI current, URI redirected) {

@@ -4,15 +4,14 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.cache.SharedCache;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRealmRecord;
+import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
+import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory.ProxiedResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.Base64;
@@ -41,11 +40,12 @@ public class OidcLoginController {
   private static final String DEFAULT_SCOPES = "openid profile email";
   private static final String DEFAULT_RETURN_TO = "/browse/#browse/welcome";
   private static final String DISCOVERY_CACHE_NAMESPACE = "oidc-discovery";
+  private static final long OIDC_HTTP_TIMEOUT_MILLIS = 30_000L;
 
   private final SecurityAuthenticationService authenticationService;
   private final ObjectMapper objectMapper;
-  private final HttpClient httpClient;
   private final OutboundRequestPolicy outboundPolicy;
+  private final ProxiedHttpClientFactory transportFactory;
   private final String externalBaseUrl;
   private final SharedCache sharedCache;
   private final SecureRandom secureRandom = new SecureRandom();
@@ -55,25 +55,16 @@ public class OidcLoginController {
       SecurityAuthenticationService authenticationService,
       ObjectMapper objectMapper,
       OutboundRequestPolicy outboundPolicy,
+      ProxiedHttpClientFactory transportFactory,
       SharedCache sharedCache,
       @Value("${kkrepo.security.external-base-url:}") String externalBaseUrl) {
     this.authenticationService = authenticationService;
     this.objectMapper = objectMapper;
     this.outboundPolicy = outboundPolicy;
+    this.transportFactory = java.util.Objects.requireNonNull(
+        transportFactory, "transportFactory");
     this.sharedCache = sharedCache;
     this.externalBaseUrl = asString(externalBaseUrl);
-    this.httpClient = HttpClient.newHttpClient();
-  }
-
-  public OidcLoginController(
-      SecurityAuthenticationService authenticationService,
-      ObjectMapper objectMapper) {
-    this(
-        authenticationService,
-        objectMapper,
-        OutboundRequestPolicy.allowPrivateForTests(),
-        null,
-        "");
   }
 
   @GetMapping("/login/options")
@@ -130,7 +121,7 @@ public class OidcLoginController {
     params.put("redirect_uri", redirectUri);
     params.put("scope", defaultString(stringConfig(config, "scopes", "scope"), DEFAULT_SCOPES));
     params.put("state", state);
-    OidcEndpoint authorizationEndpoint = endpoint(
+    OidcEndpoint authorizationEndpoint = browserEndpoint(
         config,
         "OIDC authorization endpoint",
         "authorizationEndpoint",
@@ -199,7 +190,7 @@ public class OidcLoginController {
       String code,
       String redirectUri) {
     String clientId = required(config, "clientId", "audience");
-    OidcEndpoint tokenEndpoint = endpoint(
+    OutboundRequestPolicy.ResolvedHttpTarget tokenEndpoint = resolvedEndpoint(
         config,
         "OIDC token endpoint",
         "tokenEndpoint",
@@ -214,45 +205,59 @@ public class OidcLoginController {
     if (clientSecret != null) {
       body.put("client_secret", clientSecret);
     }
-    HttpRequest tokenRequest = HttpRequest.newBuilder(tokenEndpoint.uri())
-        .header("Content-Type", MediaType.APPLICATION_FORM_URLENCODED_VALUE)
-        .POST(HttpRequest.BodyPublishers.ofString(form(body)))
-        .build();
-    try {
-      HttpResponse<String> tokenResponse = httpClient.send(tokenRequest, HttpResponse.BodyHandlers.ofString());
-      if (tokenResponse.statusCode() < 200 || tokenResponse.statusCode() >= 300) {
-        throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "OIDC token endpoint returned " + tokenResponse.statusCode());
+    try (ProxiedResponse tokenResponse = transportFactory.execute(
+        "security:oidc-token",
+        null,
+        "POST",
+        tokenEndpoint,
+        Map.of("Content-Type", MediaType.APPLICATION_FORM_URLENCODED_VALUE),
+        form(body).getBytes(StandardCharsets.UTF_8),
+        OIDC_HTTP_TIMEOUT_MILLIS)) {
+      if (tokenResponse.status() < 200 || tokenResponse.status() >= 300) {
+        throw new ResponseStatusException(
+            HttpStatus.UNAUTHORIZED,
+            "OIDC token endpoint returned " + tokenResponse.status());
       }
       return objectMapper.readValue(tokenResponse.body(), JSON_MAP);
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "OIDC token exchange was interrupted", e);
     } catch (IOException e) {
       throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "OIDC token exchange failed", e);
     }
   }
 
-  private OidcEndpoint endpoint(Map<String, Object> config, String purpose, String... keys) {
+  private OidcEndpoint browserEndpoint(
+      Map<String, Object> config, String purpose, String... keys) {
+    URI uri = outboundPolicy.validateHttpUri(endpointUrl(config, keys), purpose);
+    validateEndpointFragment(uri, purpose);
+    return new OidcEndpoint(uri, uri.getHost());
+  }
+
+  private OutboundRequestPolicy.ResolvedHttpTarget resolvedEndpoint(
+      Map<String, Object> config, String purpose, String... keys) {
+    OutboundRequestPolicy.ResolvedHttpTarget target =
+        outboundPolicy.resolveHttpTarget(endpointUrl(config, keys), purpose);
+    validateEndpointFragment(target.uri(), purpose);
+    return target;
+  }
+
+  private String endpointUrl(Map<String, Object> config, String... keys) {
     String direct = stringConfig(config, keys);
     if (direct != null) {
-      return validatedEndpoint(direct, purpose);
+      return direct;
     }
     Map<String, Object> discovery = discovery(config);
     for (String key : keys) {
       String discovered = asString(discovery.get(key));
       if (discovered != null) {
-        return validatedEndpoint(discovered, purpose);
+        return discovered;
       }
     }
     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "OIDC endpoint is not configured: " + String.join("/", keys));
   }
 
-  private OidcEndpoint validatedEndpoint(String rawUrl, String purpose) {
-    URI uri = outboundPolicy.validateHttpUri(rawUrl, purpose);
+  private void validateEndpointFragment(URI uri, String purpose) {
     if (uri.getRawFragment() != null) {
       throw new SecurityValidationException(purpose + " URL must not include a fragment");
     }
-    return new OidcEndpoint(uri, uri.getHost());
   }
 
   private Map<String, Object> discovery(Map<String, Object> config) {
@@ -269,12 +274,19 @@ public class OidcLoginController {
         return document;
       }
     }
-    try {
-      HttpResponse<String> response = httpClient.send(
-          HttpRequest.newBuilder(outboundPolicy.validateHttpUri(uri, "OIDC discovery")).GET().build(),
-          HttpResponse.BodyHandlers.ofString());
-      if (response.statusCode() < 200 || response.statusCode() >= 300) {
-        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "OIDC discovery endpoint returned " + response.statusCode());
+    OutboundRequestPolicy.ResolvedHttpTarget target =
+        outboundPolicy.resolveHttpTarget(uri, "OIDC discovery");
+    try (ProxiedResponse response = transportFactory.execute(
+        "security:oidc-discovery",
+        null,
+        "GET",
+        target,
+        Map.of(),
+        OIDC_HTTP_TIMEOUT_MILLIS)) {
+      if (response.status() < 200 || response.status() >= 300) {
+        throw new ResponseStatusException(
+            HttpStatus.BAD_REQUEST,
+            "OIDC discovery endpoint returned " + response.status());
       }
       Map<String, Object> document = objectMapper.readValue(response.body(), JSON_MAP);
       validateDiscoveryDocument(config, document);
@@ -282,9 +294,6 @@ public class OidcLoginController {
         sharedCache.putJson(DISCOVERY_CACHE_NAMESPACE, uri, document, java.time.Duration.ofSeconds(300));
       }
       return document;
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "OIDC discovery was interrupted", e);
     } catch (IOException e) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "OIDC discovery failed", e);
     }

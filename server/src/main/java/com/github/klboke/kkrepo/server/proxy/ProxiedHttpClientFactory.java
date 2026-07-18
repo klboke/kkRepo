@@ -3,18 +3,19 @@ package com.github.klboke.kkrepo.server.proxy;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.RemovalCause;
+import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy.ResolvedHttpTarget;
 import jakarta.annotation.PreDestroy;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.apache.hc.client5.http.HttpRoute;
 import org.apache.hc.client5.http.auth.AuthScope;
 import org.apache.hc.client5.http.auth.UsernamePasswordCredentials;
-import org.apache.hc.client5.http.classic.methods.HttpGet;
-import org.apache.hc.client5.http.classic.methods.HttpHead;
 import org.apache.hc.client5.http.config.ConnectionConfig;
 import org.apache.hc.client5.http.config.RequestConfig;
 import org.apache.hc.client5.http.impl.auth.BasicCredentialsProvider;
@@ -24,17 +25,23 @@ import org.apache.hc.client5.http.impl.io.DefaultHttpClientConnectionOperator;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
 import org.apache.hc.client5.http.io.DetachedSocketFactory;
 import org.apache.hc.client5.http.io.HttpClientConnectionOperator;
+import org.apache.hc.client5.http.protocol.HttpClientContext;
+import org.apache.hc.client5.http.routing.HttpRoutePlanner;
 import org.apache.hc.client5.http.ssl.DefaultClientTlsStrategy;
 import org.apache.hc.client5.http.ssl.TlsSocketStrategy;
-import org.apache.hc.core5.http.Header;
-import org.apache.hc.core5.http.HttpEntity;
 import org.apache.hc.core5.http.ClassicHttpRequest;
 import org.apache.hc.core5.http.ClassicHttpResponse;
+import org.apache.hc.core5.http.Header;
+import org.apache.hc.core5.http.HttpEntity;
+import org.apache.hc.core5.http.HttpHeaders;
 import org.apache.hc.core5.http.HttpHost;
+import org.apache.hc.core5.http.ProtocolException;
 import org.apache.hc.core5.http.URIScheme;
 import org.apache.hc.core5.http.config.Lookup;
 import org.apache.hc.core5.http.config.RegistryBuilder;
-import org.apache.hc.client5.http.protocol.HttpClientContext;
+import org.apache.hc.core5.http.io.support.ClassicRequestBuilder;
+import org.apache.hc.core5.net.NamedEndpoint;
+import org.apache.hc.core5.net.URIAuthority;
 import org.apache.hc.core5.util.Timeout;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,7 +49,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 /**
- * Builds and caches outbound HTTP clients that tunnel upstream repository traffic through a
+ * Builds outbound HTTP clients for upstream repository traffic, optionally tunnelling through a
  * per-repository configured proxy (HTTP CONNECT or SOCKS).
  *
  * <p>HTTP proxies use Apache HttpClient 5's native CONNECT support with a per-client
@@ -69,8 +76,11 @@ import org.springframework.stereotype.Component;
 @Component
 public class ProxiedHttpClientFactory implements AutoCloseable {
   private static final Logger log = LoggerFactory.getLogger(ProxiedHttpClientFactory.class);
+  private static final String ORIGINAL_TARGET_CONTEXT =
+      ProxiedHttpClientFactory.class.getName() + ".originalTarget";
 
   private final Cache<String, CloseableHttpClient> cache;
+  private final CloseableHttpClient directClient;
   private final Duration idleTtl;
   private final Duration connectTimeout;
 
@@ -84,6 +94,7 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
         .removalListener((String key, CloseableHttpClient client, RemovalCause cause) ->
             closeQuietly(client))
         .build();
+    this.directClient = buildDirect();
   }
 
   /**
@@ -127,6 +138,7 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
   public void close() {
     cache.invalidateAll();
     cache.cleanUp();
+    closeQuietly(directClient);
   }
 
   private static void closeQuietly(CloseableHttpClient client) {
@@ -141,26 +153,97 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
   }
 
   /**
-   * Executes a GET/HEAD through the proxy and returns the live response. The caller must
+   * Executes a GET/HEAD against an already validated and DNS-resolved target. The caller must
    * {@link ProxiedResponse#close()} it after draining the body so the connection returns to the pool.
-   * {@code owner} is the repository identity (name) used to key the pooled client.
+   * When {@code config} is enabled, {@code owner} keys the proxy client; otherwise the shared direct
+   * client is used.
+   *
+   * <p>The actual socket or HTTP CONNECT destination is one of the policy-approved IP addresses.
+   * The original host remains the HTTP Host / TLS SNI and certificate-verification name. This binds
+   * address validation to connection establishment and prevents a second DNS lookup from changing
+   * the destination after validation.
    *
    * <p>The connect timeout is configured once per cached client on its connection manager
    * ({@code kkrepo.outbound-proxy.connect-timeout-ms}), because HttpClient 5.4+ removed per-request
    * connect timeouts ({@code RequestConfig.setConnectTimeout} is deprecated). The response timeout
    * stays per-request in {@link RequestConfig}.
    */
-  @SuppressWarnings("resource") // the cached client is shared; it is closed by the cache, not per request
+  @SuppressWarnings("resource") // the shared client is closed by this factory, not per request
   public ProxiedResponse execute(
       String owner,
       OutboundProxyConfig config,
       String method,
-      URI uri,
+      ResolvedHttpTarget target,
       Map<String, String> headers,
       long responseTimeoutMillis)
       throws IOException {
-    CloseableHttpClient client = clientFor(owner, config);
-    ClassicHttpRequest request = "HEAD".equalsIgnoreCase(method) ? new HttpHead(uri) : new HttpGet(uri);
+    return execute(owner, config, method, target, headers, null, responseTimeoutMillis);
+  }
+
+  /**
+   * Executes an HTTP request with an optional repeatable body against an already validated and
+   * DNS-resolved target. Non-idempotent requests are not retried against another approved address
+   * after an I/O failure, because doing so could submit the same operation twice.
+   */
+  @SuppressWarnings("resource") // the shared client is closed by this factory, not per request
+  public ProxiedResponse execute(
+      String owner,
+      OutboundProxyConfig config,
+      String method,
+      ResolvedHttpTarget target,
+      Map<String, String> headers,
+      byte[] body,
+      long responseTimeoutMillis)
+      throws IOException {
+    if (target == null) {
+      throw new IllegalArgumentException("resolved outbound target is required");
+    }
+    CloseableHttpClient client = config != null && config.enabled()
+        ? clientFor(owner, config)
+        : directClient;
+    RequestConfig requestConfig = RequestConfig.custom()
+        .setResponseTimeout(Timeout.ofMilliseconds(Math.max(1L, responseTimeoutMillis)))
+        .build();
+    String requestMethod = method == null || method.isBlank() ? "GET" : method;
+    boolean retryable =
+        "GET".equalsIgnoreCase(requestMethod) || "HEAD".equalsIgnoreCase(requestMethod);
+    IOException failure = null;
+    for (InetAddress address : target.addresses()) {
+      try {
+        return executeAtAddress(
+            client, config, requestMethod, target.uri(), address, headers, body, requestConfig);
+      } catch (IOException e) {
+        failure = e;
+        if (!retryable) {
+          throw e;
+        }
+      }
+    }
+    throw failure != null ? failure : new IOException("resolved outbound target has no addresses");
+  }
+
+  @SuppressWarnings("resource") // the client is pooled and closed by this factory, not per request
+  private ProxiedResponse executeAtAddress(
+      CloseableHttpClient client,
+      OutboundProxyConfig config,
+      String method,
+      URI uri,
+      InetAddress address,
+      Map<String, String> headers,
+      byte[] body,
+      RequestConfig requestConfig)
+      throws IOException {
+    int port = effectivePort(uri);
+    String originalHost = endpointHost(uri);
+    HttpHost pinnedTarget =
+        new HttpHost(uri.getScheme(), address, address.getHostAddress(), port);
+    HttpHost originalTarget = new HttpHost(uri.getScheme(), originalHost, port);
+    ClassicRequestBuilder requestBuilder =
+        ClassicRequestBuilder.create(method).setPath(requestPath(uri));
+    if (body != null) {
+      requestBuilder.setEntity(body, null);
+    }
+    ClassicHttpRequest request = requestBuilder.build();
     if (headers != null) {
       headers.forEach((name, value) -> {
         if (name != null && value != null) {
@@ -168,19 +251,61 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
         }
       });
     }
-    RequestConfig requestConfig = RequestConfig.custom()
-        .setResponseTimeout(Timeout.ofMilliseconds(Math.max(1L, responseTimeoutMillis)))
-        .build();
+
+    boolean plainHttpProxy = config != null
+        && config.enabled()
+        && config.type() == OutboundProxyConfig.Type.HTTP
+        && URIScheme.HTTP.same(uri.getScheme());
+    request.setScheme(uri.getScheme());
+    request.setAuthority(new URIAuthority(
+        plainHttpProxy ? address.getHostAddress() : originalHost, uri.getPort()));
+    if (plainHttpProxy) {
+      request.setHeader(HttpHeaders.HOST, hostHeader(uri));
+    }
+
     HttpClientContext context = HttpClientContext.create();
     context.setRequestConfig(requestConfig);
-    // executeOpen (unlike the deprecated execute overloads) returns a live, caller-closed response,
-    // which is what the streaming callers (releaseOnClose) require.
-    ClassicHttpResponse response = client.executeOpen(null, request, context);
+    context.setAttribute(ORIGINAL_TARGET_CONTEXT, originalTarget);
+    // executeOpen returns a live, caller-closed response required by streaming callers.
+    ClassicHttpResponse response = client.executeOpen(pinnedTarget, request, context);
     Map<String, String> responseHeaders = new LinkedHashMap<>();
     for (Header header : response.getHeaders()) {
       responseHeaders.putIfAbsent(header.getName(), header.getValue());
     }
     return new ProxiedResponse(response, responseHeaders);
+  }
+
+  private static String requestPath(URI uri) {
+    String path = uri.getRawPath();
+    if (path == null || path.isEmpty()) {
+      path = "/";
+    }
+    return uri.getRawQuery() == null ? path : path + "?" + uri.getRawQuery();
+  }
+
+  private static int effectivePort(URI uri) {
+    if (uri.getPort() >= 0) {
+      return uri.getPort();
+    }
+    return URIScheme.HTTPS.same(uri.getScheme()) ? 443 : 80;
+  }
+
+  static String endpointHost(URI uri) {
+    // URI.getHost() keeps IPv6 literal brackets, but Apache needs the bare address for TLS peer
+    // naming and request authority; its serializers add brackets back where URI syntax requires.
+    String host = uri.getHost();
+    if (host != null && host.startsWith("[") && host.endsWith("]")) {
+      return host.substring(1, host.length() - 1);
+    }
+    return host;
+  }
+
+  private static String hostHeader(URI uri) {
+    String host = endpointHost(uri);
+    if (host.indexOf(':') >= 0) {
+      host = "[" + host + "]";
+    }
+    return uri.getPort() >= 0 ? host + ":" + uri.getPort() : host;
   }
 
   private CloseableHttpClient build(OutboundProxyConfig config) {
@@ -190,13 +315,25 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
     return buildHttp(config);
   }
 
+  private CloseableHttpClient buildDirect() {
+    PoolingHttpClientConnectionManager connectionManager =
+        new PoolingHttpClientConnectionManager();
+    configureConnectionManager(connectionManager);
+    return HttpClients.custom()
+        .setConnectionManager(connectionManager)
+        .setRoutePlanner(new PinnedRoutePlanner(null))
+        .disableContentCompression()
+        .disableRedirectHandling()
+        .build();
+  }
+
   private CloseableHttpClient buildHttp(OutboundProxyConfig config) {
     HttpHost proxy = new HttpHost(URIScheme.HTTP.getId(), config.host(), config.port());
     PoolingHttpClientConnectionManager connectionManager = new PoolingHttpClientConnectionManager();
-    connectionManager.setDefaultConnectionConfig(defaultConnectionConfig());
+    configureConnectionManager(connectionManager);
     var builder = HttpClients.custom()
         .setConnectionManager(connectionManager)
-        .setProxy(proxy)
+        .setRoutePlanner(new PinnedRoutePlanner(proxy))
         .disableContentCompression()
         .disableRedirectHandling();
     if (config.authenticated()) {
@@ -231,13 +368,12 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
         new DefaultHttpClientConnectionOperator(socketFactory, null, null, tlsStrategies);
     PoolingHttpClientConnectionManager connectionManager =
         new PoolingHttpClientConnectionManager(operator, null, null, null, null);
-    connectionManager.setMaxTotal(50);
-    connectionManager.setDefaultMaxPerRoute(20);
-    connectionManager.setDefaultConnectionConfig(defaultConnectionConfig());
+    configureConnectionManager(connectionManager);
     log.info("Configured outbound SOCKS proxy {}:{} for upstream repository fetches",
         config.host(), config.port());
     return HttpClients.custom()
         .setConnectionManager(connectionManager)
+        .setRoutePlanner(new PinnedRoutePlanner(null))
         .disableContentCompression()
         .disableRedirectHandling()
         .build();
@@ -253,12 +389,42 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
         .build();
   }
 
+  private void configureConnectionManager(PoolingHttpClientConnectionManager connectionManager) {
+    connectionManager.setMaxTotal(50);
+    connectionManager.setDefaultMaxPerRoute(20);
+    connectionManager.setDefaultConnectionConfig(defaultConnectionConfig());
+  }
+
   /**
    * A username-only proxy config is valid ({@link OutboundProxyConfig#authenticated()} only requires
    * a username), so a null/blank password must be treated as an empty secret rather than dereferenced.
    */
   private static char[] passwordChars(String password) {
     return password != null ? password.toCharArray() : new char[0];
+  }
+
+  private static final class PinnedRoutePlanner implements HttpRoutePlanner {
+    private final HttpHost proxy;
+
+    private PinnedRoutePlanner(HttpHost proxy) {
+      this.proxy = proxy;
+    }
+
+    @Override
+    public HttpRoute determineRoute(
+        HttpHost target, org.apache.hc.core5.http.protocol.HttpContext context)
+        throws ProtocolException {
+      if (target == null || target.getAddress() == null) {
+        throw new ProtocolException("Resolved target address is required");
+      }
+      Object original = context.getAttribute(ORIGINAL_TARGET_CONTEXT);
+      NamedEndpoint originalTarget =
+          original instanceof NamedEndpoint endpoint ? endpoint : target;
+      boolean secure = URIScheme.HTTPS.same(target.getSchemeName());
+      return proxy == null
+          ? new HttpRoute(target, originalTarget, null, secure)
+          : new HttpRoute(target, originalTarget, null, proxy, secure);
+    }
   }
 
   // --- SOCKS5 username/password authentication -------------------------------------------------

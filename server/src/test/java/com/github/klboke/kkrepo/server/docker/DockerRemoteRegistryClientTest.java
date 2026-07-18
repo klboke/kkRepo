@@ -4,6 +4,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
@@ -15,46 +23,32 @@ import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
 import com.github.klboke.kkrepo.server.support.FakeHttpProxyServer;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
-import com.sun.net.httpserver.HttpsConfigurator;
-import com.sun.net.httpserver.HttpsServer;
 import com.sun.net.httpserver.HttpServer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.math.BigInteger;
 import java.net.InetSocketAddress;
-import java.net.ProxySelector;
 import java.net.URI;
 import java.net.URLDecoder;
-import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
-import java.security.KeyPair;
-import java.security.KeyPairGenerator;
-import java.security.KeyStore;
-import java.security.SecureRandom;
-import java.security.cert.Certificate;
-import java.security.cert.X509Certificate;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
-import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
-import javax.net.ssl.KeyManagerFactory;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.TrustManagerFactory;
-import org.bouncycastle.asn1.x500.X500Name;
-import org.bouncycastle.asn1.x509.Extension;
-import org.bouncycastle.asn1.x509.GeneralName;
-import org.bouncycastle.asn1.x509.GeneralNames;
-import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
-import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
-import org.bouncycastle.operator.ContentSigner;
-import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 class DockerRemoteRegistryClientTest {
+  private final ProxiedHttpClientFactory directFactory =
+      new ProxiedHttpClientFactory(60000, 10000);
+
+  @AfterEach
+  void closeDirectFactory() {
+    directFactory.close();
+  }
+
   @Test
   void remoteFetchUsesConfiguredBasicCredentials() throws Exception {
     try (TestRegistry registry = TestRegistry.start()) {
@@ -294,82 +288,62 @@ class DockerRemoteRegistryClientTest {
   }
 
   @Test
-  void httpToHttpsUpgradePreservesBasicAndBearerCredentialsOverTls() throws Exception {
-    List<String> manifestAuthorizations = new ArrayList<>();
-    List<String> tokenAuthorizations = new ArrayList<>();
-    // Keep the Docker URLs on their real default ports so the redirect exercises the production
-    // 80-to-443 origin rule. This loopback router only maps those connections to an ephemeral TLS
-    // listener; the RepositoryRuntime itself has no outbound proxy, so the direct client path runs.
-    try (TestTlsRegistry registry = TestTlsRegistry.start();
-        FakeHttpProxyServer router = FakeHttpProxyServer.startTunneling(request -> {
-          URI target = URI.create(request.target());
-          String location = "https://localhost" + target.getRawPath()
-              + (target.getRawQuery() == null ? "" : "?" + target.getRawQuery());
-          return FakeHttpProxyServer.FakeResponse.status(307, Map.of("Location", location));
-        }, request -> new InetSocketAddress("127.0.0.1", registry.port()))) {
-      registry.server.createContext("/token", exchange -> {
-        tokenAuthorizations.add(exchange.getRequestHeaders().getFirst("Authorization"));
-        byte[] body = "{\"token\":\"tls-token\"}".getBytes(StandardCharsets.UTF_8);
-        exchange.getResponseHeaders().add("Content-Type", "application/json");
-        exchange.getResponseHeaders().add("Connection", "close");
-        exchange.sendResponseHeaders(200, body.length);
-        exchange.getResponseBody().write(body);
-        exchange.close();
-      });
-      registry.server.createContext("/v2/library/alpine/manifests/latest", exchange -> {
-        String authorization = exchange.getRequestHeaders().getFirst("Authorization");
-        manifestAuthorizations.add(authorization);
-        exchange.getResponseHeaders().add("Connection", "close");
-        if (!"Bearer tls-token".equals(authorization)) {
-          exchange.getResponseHeaders().add(
+  void directHttpToHttpsUpgradeUsesPinnedTransportAndPreservesCredentials() throws Exception {
+    ProxiedHttpClientFactory transport = mock(ProxiedHttpClientFactory.class);
+    List<TransportCall> calls = new ArrayList<>();
+    when(transport.execute(
+        anyString(),
+        nullable(OutboundProxyConfig.class),
+        eq("GET"),
+        any(OutboundRequestPolicy.ResolvedHttpTarget.class),
+        anyMap(),
+        anyLong())).thenAnswer(invocation -> {
+          OutboundProxyConfig proxy = invocation.getArgument(1);
+          OutboundRequestPolicy.ResolvedHttpTarget target = invocation.getArgument(3);
+          Map<String, String> headers = Map.copyOf(invocation.getArgument(4));
+          URI uri = target.uri();
+          calls.add(new TransportCall(uri, proxy, headers));
+          if ("http".equals(uri.getScheme())) {
+            return response(307, Map.of(
+                "Location", "https://localhost" + uri.getRawPath()), "");
+          }
+          if ("/token".equals(uri.getPath())) {
+            return response(200, Map.of(), "{\"token\":\"tls-token\"}");
+          }
+          if ("Bearer tls-token".equals(headers.get("Authorization"))) {
+            return response(200, Map.of("Content-Type", "application/json"), "{}");
+          }
+          return response(401, Map.of(
               "WWW-Authenticate",
-              "Bearer realm=\"https://localhost/token\",service=\"registry.local\",scope=\"repository:library/alpine:pull\"");
-          exchange.sendResponseHeaders(401, -1);
-        } else {
-          byte[] body = "{}".getBytes(StandardCharsets.UTF_8);
-          exchange.getResponseHeaders().add("Content-Type", "application/json");
-          exchange.sendResponseHeaders(200, body.length);
-          exchange.getResponseBody().write(body);
-        }
-        exchange.close();
-      });
-      HttpClient tlsClient = HttpClient.newBuilder()
-          .followRedirects(HttpClient.Redirect.NEVER)
-          .proxy(ProxySelector.of(new InetSocketAddress("127.0.0.1", router.port())))
-          .sslContext(registry.clientSslContext)
-          .build();
-      DockerRemoteRegistryClient client = new DockerRemoteRegistryClient(
-          null,
-          OutboundRequestPolicy.allowPrivateForTests(),
-          null,
-          true,
-          300,
-          null,
-          null,
-          tlsClient);
+              "Bearer realm=\"https://localhost/token\",service=\"registry.local\","
+                  + "scope=\"repository:library/alpine:pull\""), "");
+        });
+    DockerRemoteRegistryClient client = new DockerRemoteRegistryClient(
+        null,
+        OutboundRequestPolicy.allowPrivateForTests(),
+        null,
+        true,
+        300,
+        null,
+        transport);
 
-      try (HttpRemoteFetcher.Result result = client.get(
-          runtime("http://localhost", "robot", "secret"),
-          "library/alpine/manifests/latest",
-          "application/json")) {
-        assertEquals(200, result.status());
-      }
-
-      List<String> plainHttpAuthorizations = router.requests().stream()
-          .filter(request -> "GET".equals(request.method()))
-          .map(request -> request.header("Authorization"))
-          .toList();
-      assertEquals(List.of(basic("robot", "secret")), plainHttpAuthorizations,
-          "the bearer token must retry directly on the upgraded HTTPS URL");
-      assertEquals(List.of(basic("robot", "secret"), "Bearer tls-token"), manifestAuthorizations);
-      assertEquals(List.of(basic("robot", "secret")), tokenAuthorizations);
-      List<FakeHttpProxyServer.RecordedRequest> connectRequests = router.requests().stream()
-          .filter(request -> "CONNECT".equals(request.method()))
-          .toList();
-      assertFalse(connectRequests.isEmpty());
-      assertTrue(connectRequests.stream()
-          .allMatch(request -> "localhost:443".equals(request.target())));
+    try (HttpRemoteFetcher.Result result = client.get(
+        runtime("http://localhost", "robot", "secret"),
+        "library/alpine/manifests/latest",
+        "application/json")) {
+      assertEquals(200, result.status());
     }
+
+    assertEquals(List.of("http", "https", "https", "https"),
+        calls.stream().map(call -> call.uri().getScheme()).toList());
+    assertEquals(List.of(
+            basic("robot", "secret"),
+            basic("robot", "secret"),
+            basic("robot", "secret"),
+            "Bearer tls-token"),
+        calls.stream().map(call -> call.headers().get("Authorization")).toList());
+    assertTrue(calls.stream().allMatch(call -> call.proxy() == null),
+        "a repository without an outbound proxy must still use the DNS-pinned transport");
   }
 
   @Test
@@ -556,7 +530,9 @@ class DockerRemoteRegistryClientTest {
           OutboundRequestPolicy.allowPrivateForTests(),
           new InMemorySharedCache(),
           true,
-          300);
+          300,
+          null,
+          directFactory);
       RepositoryRuntime runtime = runtime(registry.baseUrl, null, null);
 
       for (int i = 0; i < 2; i++) {
@@ -628,7 +604,9 @@ class DockerRemoteRegistryClientTest {
           OutboundRequestPolicy.allowPrivateForTests(),
           new InMemorySharedCache(),
           true,
-          300);
+          300,
+          null,
+          directFactory);
       RepositoryRuntime runtime = runtime(registry.baseUrl, "robot", "secret");
 
       try (HttpRemoteFetcher.Result result = client.get(
@@ -668,7 +646,7 @@ class DockerRemoteRegistryClientTest {
           true,
           300,
           new KkRepoMetrics(meterRegistry),
-          null);
+          directFactory);
 
       try (HttpRemoteFetcher.Result result = client.get(
           runtime(registry.baseUrl, null, null),
@@ -707,8 +685,12 @@ class DockerRemoteRegistryClientTest {
 
       assertEquals(1, proxy.requests().size());
       FakeHttpProxyServer.RecordedRequest recorded = proxy.requests().get(0);
-      assertEquals("http://localhost/v2/library/alpine/manifests/latest",
-          recorded.target());
+      URI routed = URI.create(recorded.target());
+      java.net.InetAddress routedAddress = java.net.InetAddress.getByName(routed.getHost());
+      assertTrue(java.util.Arrays.stream(java.net.InetAddress.getAllByName("localhost"))
+          .anyMatch(routedAddress::equals));
+      assertEquals("/v2/library/alpine/manifests/latest", routed.getRawPath());
+      assertEquals("localhost", recorded.header("Host"));
       assertEquals(basic("robot", "secret"), recorded.header("Authorization"));
       assertEquals("application/vnd.docker.distribution.manifest.v2+json", recorded.header("Accept"));
     }
@@ -739,7 +721,9 @@ class DockerRemoteRegistryClientTest {
 
       assertEquals(2, proxy.requests().size());
       assertEquals(basic("robot", "secret"), proxy.requests().get(0).header("Authorization"));
-      assertEquals("http://127.0.0.1/layers/abc", proxy.requests().get(1).target());
+      URI redirected = URI.create(proxy.requests().get(1).target());
+      assertEquals("127.0.0.1", redirected.getHost());
+      assertEquals("/layers/abc", redirected.getRawPath());
       assertNull(proxy.requests().get(1).header("Authorization"),
           "registry credentials must not leak to the cross-origin storage URL");
     }
@@ -776,7 +760,8 @@ class DockerRemoteRegistryClientTest {
   void proxiedBearerTokenFlowFetchesTokenThroughProxy() throws Exception {
     AtomicInteger manifestCalls = new AtomicInteger();
     try (FakeHttpProxyServer proxy = FakeHttpProxyServer.start(request -> {
-          if (request.target().startsWith("http://127.0.0.1/token")) {
+          URI target = URI.create(request.target());
+          if ("127.0.0.1".equals(target.getHost()) && "/token".equals(target.getPath())) {
             return FakeHttpProxyServer.FakeResponse.bytes(200,
                 Map.of("Content-Type", "application/json"),
                 "{\"token\":\"proxied-remote-token\"}".getBytes(StandardCharsets.UTF_8));
@@ -803,7 +788,7 @@ class DockerRemoteRegistryClientTest {
       }
 
       FakeHttpProxyServer.RecordedRequest tokenRequest = proxy.requests().stream()
-          .filter(request -> request.target().startsWith("http://127.0.0.1/token"))
+          .filter(request -> "/token".equals(URI.create(request.target()).getPath()))
           .findFirst()
           .orElseThrow();
       assertEquals(basic("robot", "secret"), tokenRequest.header("Authorization"));
@@ -887,8 +872,9 @@ class DockerRemoteRegistryClientTest {
         outboundProxy);
   }
 
-  private static DockerRemoteRegistryClient client() {
-    return new DockerRemoteRegistryClient(null, OutboundRequestPolicy.allowPrivateForTests());
+  private DockerRemoteRegistryClient client() {
+    return new DockerRemoteRegistryClient(
+        null, OutboundRequestPolicy.allowPrivateForTests(), null, true, 300, null, directFactory);
   }
 
   private static RepositoryRuntime runtime(String remoteUrl, String username, String password) {
@@ -922,6 +908,29 @@ class DockerRemoteRegistryClientTest {
         .encodeToString((username + ":" + password).getBytes(StandardCharsets.UTF_8));
   }
 
+  private static ProxiedHttpClientFactory.ProxiedResponse response(
+      int status, Map<String, String> headers, String body) throws IOException {
+    ProxiedHttpClientFactory.ProxiedResponse response =
+        mock(ProxiedHttpClientFactory.ProxiedResponse.class);
+    when(response.status()).thenReturn(status);
+    when(response.headers()).thenReturn(headers);
+    when(response.header(anyString())).thenAnswer(invocation -> {
+      String name = invocation.getArgument(0);
+      return headers.entrySet().stream()
+          .filter(entry -> entry.getKey().equalsIgnoreCase(name))
+          .map(Map.Entry::getValue)
+          .findFirst()
+          .orElse(null);
+    });
+    when(response.body()).thenAnswer(ignored ->
+        new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)));
+    return response;
+  }
+
+  private record TransportCall(
+      URI uri, OutboundProxyConfig proxy, Map<String, String> headers) {
+  }
+
   private static final class TestRegistry implements AutoCloseable {
     private final HttpServer server;
     private final String baseUrl;
@@ -935,78 +944,6 @@ class DockerRemoteRegistryClientTest {
       HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
       server.start();
       return new TestRegistry(server);
-    }
-
-    @Override
-    public void close() {
-      server.stop(0);
-    }
-  }
-
-  private static final class TestTlsRegistry implements AutoCloseable {
-    private static final char[] KEY_PASSWORD = "test-password".toCharArray();
-
-    private final HttpsServer server;
-    private final SSLContext clientSslContext;
-
-    private TestTlsRegistry(HttpsServer server, SSLContext clientSslContext) {
-      this.server = server;
-      this.clientSslContext = clientSslContext;
-    }
-
-    static TestTlsRegistry start() throws Exception {
-      SecureRandom random = new SecureRandom();
-      KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance("RSA");
-      keyPairGenerator.initialize(2048, random);
-      KeyPair keyPair = keyPairGenerator.generateKeyPair();
-
-      Instant now = Instant.now();
-      X500Name subject = new X500Name("CN=localhost");
-      JcaX509v3CertificateBuilder certificateBuilder = new JcaX509v3CertificateBuilder(
-          subject,
-          new BigInteger(128, random).setBit(127),
-          Date.from(now.minusSeconds(60)),
-          Date.from(now.plusSeconds(86400)),
-          subject,
-          keyPair.getPublic());
-      certificateBuilder.addExtension(
-          Extension.subjectAlternativeName,
-          false,
-          new GeneralNames(new GeneralName(GeneralName.dNSName, "localhost")));
-      ContentSigner signer = new JcaContentSignerBuilder("SHA256withRSA")
-          .build(keyPair.getPrivate());
-      X509Certificate certificate = new JcaX509CertificateConverter()
-          .getCertificate(certificateBuilder.build(signer));
-      certificate.verify(keyPair.getPublic());
-
-      KeyStore keyStore = KeyStore.getInstance("PKCS12");
-      keyStore.load(null, KEY_PASSWORD);
-      keyStore.setKeyEntry(
-          "server",
-          keyPair.getPrivate(),
-          KEY_PASSWORD,
-          new Certificate[] {certificate});
-      KeyManagerFactory keyManagers = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-      keyManagers.init(keyStore, KEY_PASSWORD);
-
-      SSLContext serverContext = SSLContext.getInstance("TLS");
-      serverContext.init(keyManagers.getKeyManagers(), null, random);
-      HttpsServer server = HttpsServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-      server.setHttpsConfigurator(new HttpsConfigurator(serverContext));
-      server.start();
-
-      KeyStore trustStore = KeyStore.getInstance("PKCS12");
-      trustStore.load(null, null);
-      trustStore.setCertificateEntry("server", certificate);
-      TrustManagerFactory trustManagers = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
-      trustManagers.init(trustStore);
-      SSLContext clientContext = SSLContext.getInstance("TLS");
-      clientContext.init(null, trustManagers.getTrustManagers(), random);
-      return new TestTlsRegistry(server, clientContext);
-    }
-
-    int port() {
-      return server.getAddress().getPort();
     }
 
     @Override

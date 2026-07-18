@@ -7,7 +7,9 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.UnknownHostException;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -18,24 +20,36 @@ import org.springframework.stereotype.Component;
 public class OutboundRequestPolicy {
   private final boolean allowPrivateAddresses;
   private final Set<String> allowedHosts;
+  private final HostResolver hostResolver;
 
   @Autowired
   public OutboundRequestPolicy(
       @Value("${kkrepo.security.outbound.allow-private-addresses:false}") boolean allowPrivateAddresses,
       @Value("${kkrepo.security.outbound.allowed-hosts:}") String allowedHosts) {
-    this.allowPrivateAddresses = allowPrivateAddresses;
-    this.allowedHosts = parseHosts(allowedHosts);
+    this(allowPrivateAddresses, parseHosts(allowedHosts), InetAddress::getAllByName);
   }
 
-  private OutboundRequestPolicy(boolean allowPrivateAddresses, Set<String> allowedHosts) {
+  OutboundRequestPolicy(
+      boolean allowPrivateAddresses, String allowedHosts, HostResolver hostResolver) {
+    this(allowPrivateAddresses, parseHosts(allowedHosts), hostResolver);
+  }
+
+  private OutboundRequestPolicy(
+      boolean allowPrivateAddresses, Set<String> allowedHosts, HostResolver hostResolver) {
     this.allowPrivateAddresses = allowPrivateAddresses;
     this.allowedHosts = allowedHosts;
+    this.hostResolver = Objects.requireNonNull(hostResolver, "hostResolver");
   }
 
   public static OutboundRequestPolicy allowPrivateForTests() {
-    return new OutboundRequestPolicy(true, Set.of());
+    return new OutboundRequestPolicy(true, Set.of(), InetAddress::getAllByName);
   }
 
+  /**
+   * Validates a URL for configuration storage or a client-side redirect only. Server-side HTTP
+   * callers must use {@link #resolveHttpTarget(String, String)} and connect through the pinned
+   * transport so the approved DNS answers cannot be discarded before connection establishment.
+   */
   public URI validateHttpUri(String rawUrl, String purpose) {
     if (rawUrl == null || rawUrl.isBlank()) {
       throw new SecurityValidationException(purpose + " URL is required");
@@ -47,7 +61,62 @@ public class OutboundRequestPolicy {
     }
   }
 
+  /** See {@link #validateHttpUri(String, String)}. */
   public URI validateHttpUri(URI uri, String purpose) {
+    String host = validatedHost(uri, purpose);
+    if (allowedHosts.contains(normalizeHost(host))) {
+      return uri;
+    }
+    return resolveHttpTarget(uri, purpose).uri();
+  }
+
+  /**
+   * Validates an outbound HTTP URL and captures the exact DNS answers approved by the policy.
+   * Callers must connect to one of {@link ResolvedHttpTarget#addresses()} instead of resolving the
+   * host name again; otherwise a DNS change between validation and connect can bypass the address
+   * checks.
+   */
+  public ResolvedHttpTarget resolveHttpTarget(String rawUrl, String purpose) {
+    if (rawUrl == null || rawUrl.isBlank()) {
+      throw new SecurityValidationException(purpose + " URL is required");
+    }
+    try {
+      return resolveHttpTarget(new URI(rawUrl), purpose);
+    } catch (URISyntaxException e) {
+      throw new SecurityValidationException(purpose + " URL is not valid: " + e.getMessage(), e);
+    }
+  }
+
+  public ResolvedHttpTarget resolveHttpTarget(URI uri, String purpose) {
+    String host = validatedHost(uri, purpose);
+    InetAddress[] addresses;
+    try {
+      addresses = hostResolver.resolve(host);
+    } catch (UnknownHostException e) {
+      throw new SecurityValidationException(purpose + " URL host cannot be resolved: " + host, e);
+    }
+    if (addresses == null || addresses.length == 0) {
+      throw new SecurityValidationException(purpose + " URL host cannot be resolved: " + host);
+    }
+    for (InetAddress address : addresses) {
+      if (address == null) {
+        throw new SecurityValidationException(purpose + " URL host cannot be resolved: " + host);
+      }
+    }
+    boolean addressChecksRequired =
+        !allowPrivateAddresses && !allowedHosts.contains(normalizeHost(host));
+    if (addressChecksRequired) {
+      for (InetAddress address : addresses) {
+        if (blockedAddress(address)) {
+          throw new SecurityValidationException(
+              purpose + " URL resolves to a private or local address: " + host + " -> " + address.getHostAddress());
+        }
+      }
+    }
+    return new ResolvedHttpTarget(uri, Arrays.asList(addresses));
+  }
+
+  private String validatedHost(URI uri, String purpose) {
     if (uri == null) {
       throw new SecurityValidationException(purpose + " URL is required");
     }
@@ -62,32 +131,10 @@ public class OutboundRequestPolicy {
     if (host == null || host.isBlank()) {
       throw new SecurityValidationException(purpose + " URL must have a host");
     }
-    validateHost(host, purpose);
-    return uri;
-  }
-
-  private void validateHost(String host, String purpose) {
-    String normalized = normalizeHost(host);
-    if (allowedHosts.contains(normalized)) {
-      return;
+    if (uri.getPort() == 0 || uri.getPort() > 65535) {
+      throw new SecurityValidationException(purpose + " URL has an invalid port");
     }
-    InetAddress[] addresses;
-    try {
-      addresses = InetAddress.getAllByName(host);
-    } catch (UnknownHostException e) {
-      throw new SecurityValidationException(purpose + " URL host cannot be resolved: " + host, e);
-    }
-    if (addresses.length == 0) {
-      throw new SecurityValidationException(purpose + " URL host cannot be resolved: " + host);
-    }
-    if (!allowPrivateAddresses) {
-      for (InetAddress address : addresses) {
-        if (blockedAddress(address)) {
-          throw new SecurityValidationException(
-              purpose + " URL resolves to a private or local address: " + host + " -> " + address.getHostAddress());
-        }
-      }
-    }
+    return host;
   }
 
   private boolean blockedAddress(InetAddress address) {
@@ -134,5 +181,29 @@ public class OutboundRequestPolicy {
       value = value.substring(1, value.length() - 1);
     }
     return value;
+  }
+
+  @FunctionalInterface
+  interface HostResolver {
+    InetAddress[] resolve(String host) throws UnknownHostException;
+  }
+
+  /** Policy-issued connection capability; only this class can create a validated instance. */
+  public static final class ResolvedHttpTarget {
+    private final URI uri;
+    private final List<InetAddress> addresses;
+
+    private ResolvedHttpTarget(URI uri, List<InetAddress> addresses) {
+      this.uri = uri;
+      this.addresses = List.copyOf(addresses);
+    }
+
+    public URI uri() {
+      return uri;
+    }
+
+    public List<InetAddress> addresses() {
+      return addresses;
+    }
   }
 }

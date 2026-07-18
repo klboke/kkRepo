@@ -9,13 +9,12 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.ApiKeyRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityAnonymousConfigRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRealmRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
+import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
+import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory.ProxiedResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
 import java.io.Serializable;
 import java.math.BigInteger;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyFactory;
 import java.security.Signature;
@@ -61,14 +60,15 @@ public class SecurityAuthenticationService {
   private static final String STATUS_ACTIVE = "ACTIVE";
   private static final String STATUS_CHANGE_PASSWORD = "CHANGEPASSWORD";
   private static final String JWKS_CACHE_NAMESPACE = "oidc-jwks";
+  private static final long OIDC_HTTP_TIMEOUT_MILLIS = 30_000L;
   private static final TypeReference<Map<String, Object>> JSON_MAP = new TypeReference<>() {
   };
 
   private final SecurityDao securityDao;
   private final String tokenHeader;
   private final ObjectMapper objectMapper;
-  private final HttpClient httpClient;
   private final OutboundRequestPolicy outboundPolicy;
+  private final ProxiedHttpClientFactory transportFactory;
   private final String defaultAuthenticatedRoleId;
   private final SharedCache sharedCache;
   private final ApiKeyAuthCache apiKeyAuthCache;
@@ -83,6 +83,7 @@ public class SecurityAuthenticationService {
       @Value("${kkrepo.security.default-authenticated-role-id:nx-anonymous}") String defaultAuthenticatedRoleId,
       SharedCache sharedCache,
       OutboundRequestPolicy outboundPolicy,
+      ProxiedHttpClientFactory transportFactory,
       ApiKeyAuthCache apiKeyAuthCache,
       BasicAuthCache basicAuthCache,
       SecurityCatalogCache securityCatalogCache) {
@@ -92,25 +93,23 @@ public class SecurityAuthenticationService {
     this.defaultAuthenticatedRoleId = optionalText(defaultAuthenticatedRoleId);
     this.sharedCache = sharedCache;
     this.outboundPolicy = outboundPolicy;
+    this.transportFactory = java.util.Objects.requireNonNull(
+        transportFactory, "transportFactory");
     this.apiKeyAuthCache = apiKeyAuthCache;
     this.basicAuthCache = basicAuthCache;
     this.securityCatalogCache = securityCatalogCache;
-    this.httpClient = HttpClient.newHttpClient();
   }
 
   public SecurityAuthenticationService(
       SecurityDao securityDao,
       ObjectMapper objectMapper,
       @Value("${kkrepo.security.token-header:X-Nexus-Plus-Token}") String tokenHeader) {
-    this(securityDao, objectMapper, tokenHeader, DEFAULT_AUTHENTICATED_ROLE_ID);
-  }
-
-  public SecurityAuthenticationService(
-      SecurityDao securityDao,
-      ObjectMapper objectMapper,
-      String tokenHeader,
-      String defaultAuthenticatedRoleId) {
-    this(securityDao, objectMapper, tokenHeader, defaultAuthenticatedRoleId, null);
+    this(
+        securityDao,
+        objectMapper,
+        tokenHeader,
+        DEFAULT_AUTHENTICATED_ROLE_ID,
+        null);
   }
 
   SecurityAuthenticationService(
@@ -125,10 +124,10 @@ public class SecurityAuthenticationService {
     this.defaultAuthenticatedRoleId = optionalText(defaultAuthenticatedRoleId);
     this.sharedCache = null;
     this.outboundPolicy = OutboundRequestPolicy.allowPrivateForTests();
+    this.transportFactory = null;
     this.apiKeyAuthCache = null;
     this.basicAuthCache = null;
     this.securityCatalogCache = securityCatalogCache;
-    this.httpClient = HttpClient.newHttpClient();
   }
 
   @Transactional
@@ -813,13 +812,20 @@ public class SecurityAuthenticationService {
         ? null
         : sharedCache.getJson(JWKS_CACHE_NAMESPACE, jwksUri, JSON_MAP).orElse(null);
     if (jwks == null) {
-      HttpRequest request = HttpRequest.newBuilder(
-          outboundPolicy.validateHttpUri(jwksUri, "OIDC JWKS")).GET().build();
-      HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-      if (response.statusCode() < 200 || response.statusCode() >= 300) {
-        throw new SecurityValidationException("JWKS endpoint returned " + response.statusCode());
+      OutboundRequestPolicy.ResolvedHttpTarget target =
+          outboundPolicy.resolveHttpTarget(jwksUri, "OIDC JWKS");
+      try (ProxiedResponse response = transportFactory.execute(
+          "security:oidc-jwks",
+          null,
+          "GET",
+          target,
+          Map.of(),
+          OIDC_HTTP_TIMEOUT_MILLIS)) {
+        if (response.status() < 200 || response.status() >= 300) {
+          throw new SecurityValidationException("JWKS endpoint returned " + response.status());
+        }
+        jwks = objectMapper.readValue(response.body(), JSON_MAP);
       }
-      jwks = objectMapper.readValue(response.body(), JSON_MAP);
       if (sharedCache != null) {
         sharedCache.putJson(JWKS_CACHE_NAMESPACE, jwksUri, jwks, java.time.Duration.ofSeconds(cacheSeconds));
       }

@@ -38,10 +38,28 @@ class HttpRemoteFetcherTest {
   }
 
   @Test
-  void httpVersionAllowsHttp2OptIn() {
+  void httpVersionRecognizesHttp2ForDowngradeWarning() {
     assertEquals(HttpClient.Version.HTTP_2, HttpRemoteFetcher.httpVersion("HTTP_2"));
     assertEquals(HttpClient.Version.HTTP_2, HttpRemoteFetcher.httpVersion("http2"));
     assertEquals(HttpClient.Version.HTTP_2, HttpRemoteFetcher.httpVersion("2"));
+
+    HttpRemoteFetcher fetcher = new HttpRemoteFetcher(
+        null, null, null, "HTTP_2", 11, 22, 33, 7, 1);
+    assertEquals(
+        Duration.ofSeconds(33),
+        fetcher.requestTimeout(HttpRemoteFetcher.Request.get("https://repo.example/artifact.jar")));
+  }
+
+  @Test
+  void convenienceConstructorCannotExecuteWithoutPinnedTransportFactory() {
+    HttpRemoteFetcher fetcher =
+        new HttpRemoteFetcher(OutboundRequestPolicy.allowPrivateForTests());
+
+    IllegalStateException error = assertThrows(
+        IllegalStateException.class,
+        () -> fetcher.fetch(HttpRemoteFetcher.Request.get("http://localhost/artifact.jar")));
+
+    assertEquals("Outbound HTTP client factory is required", error.getMessage());
   }
 
   @Test
@@ -88,10 +106,10 @@ class HttpRemoteFetcherTest {
 
   @Test
   void requestWithoutTrustedHostDoesNotPinOutboundHost() {
-    HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request.get("https://repo.example.com/artifact.jar");
+    HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request.get("https://localhost/artifact.jar");
 
-    assertEquals("repo.example.com",
-        request.validatedUri(new OutboundRequestPolicy(false, "repo.example.com"), "remote fetch").getHost());
+    assertEquals("localhost",
+        request.validatedUri(new OutboundRequestPolicy(false, "localhost"), "remote fetch").getHost());
   }
 
   @Test
@@ -108,15 +126,15 @@ class HttpRemoteFetcherTest {
         "RELEASE",
         "STRICT",
         true,
-        "https://repo.example.com/maven2",
+        "https://localhost/maven2",
         1440,
         1440,
         List.of());
     HttpRemoteFetcher.Request trusted = HttpRemoteFetcher.Request
-        .get("https://repo.example.com/maven2/com/example/app.jar")
+        .get("https://localhost/maven2/com/example/app.jar")
         .withRepository(runtime);
     HttpRemoteFetcher.Request tampered = new HttpRemoteFetcher.Request(
-        "https://evil.example.com/maven2/com/example/app.jar",
+        "https://127.0.0.1/maven2/com/example/app.jar",
         trusted.etag(),
         trusted.lastModified(),
         trusted.timeout(),
@@ -126,12 +144,12 @@ class HttpRemoteFetcherTest {
         trusted.format(),
         trusted.trustedHost());
 
-    OutboundRequestPolicy policy = new OutboundRequestPolicy(false, "repo.example.com,evil.example.com");
-    assertEquals("repo.example.com", trusted.validatedUri(policy, "remote fetch").getHost());
+    OutboundRequestPolicy policy = new OutboundRequestPolicy(false, "localhost,127.0.0.1");
+    assertEquals("localhost", trusted.validatedUri(policy, "remote fetch").getHost());
     SecurityValidationException error = assertThrows(
         SecurityValidationException.class,
         () -> tampered.validatedUri(policy, "remote fetch"));
-    assertEquals("remote fetch URL host must remain repo.example.com", error.getMessage());
+    assertEquals("remote fetch URL host must remain localhost", error.getMessage());
   }
 
   @Test
