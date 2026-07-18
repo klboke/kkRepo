@@ -83,7 +83,13 @@ class ProxiedHttpClientFactoryTest {
           factory.execute("repo-a", config, "GET", java.net.URI.create("http://localhost/"),
               java.util.Map.of(), 60000));
       long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
-      assertTrue(elapsedMillis < 30000,
+      // The connect timeout is 500 ms; the greeting read must time out near it. The upper bound
+      // leaves scheduling margin plus one retried attempt (localhost resolves to IPv4 and IPv6)
+      // while staying far below any "handshake hung" scenario.
+      assertTrue(elapsedMillis >= 400,
+          "stalled SOCKS5 handshake failed before the connect timeout fired: "
+              + elapsedMillis + "ms");
+      assertTrue(elapsedMillis < 4000,
           "stalled SOCKS5 handshake outlived the connect timeout: " + elapsedMillis + "ms");
     } finally {
       staller.close();
@@ -93,6 +99,92 @@ class ProxiedHttpClientFactoryTest {
         } catch (IOException ignored) {
         }
       }
+    }
+  }
+
+  @Test
+  void slowDripSocksHandshakeStaysWithinConnectTimeout() throws Exception {
+    // A proxy that answers one byte at a time with pauses just below a naive per-read timeout.
+    // Re-arming SO_TIMEOUT once per handshake phase (or with a fresh full budget per read) would
+    // let the ~12 reply bytes accumulate several seconds; the absolute deadline must instead cut
+    // the handshake off close to the 500 ms connect timeout.
+    ServerSocket dripper = new ServerSocket(0, 50, java.net.InetAddress.getByName("127.0.0.1"));
+    List<Socket> accepted = new CopyOnWriteArrayList<>();
+    Thread server = new Thread(() -> {
+      try {
+        while (!dripper.isClosed()) {
+          Socket socket = dripper.accept();
+          accepted.add(socket);
+          dripHandshake(socket, 400);
+        }
+      } catch (IOException ignored) {
+        // stopped
+      }
+    }, "dripping-socks-server");
+    server.setDaemon(true);
+    server.start();
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 500)) {
+      OutboundProxyConfig config = new OutboundProxyConfig(
+          OutboundProxyConfig.Type.SOCKS, "127.0.0.1", dripper.getLocalPort(), null, null);
+      long startNanos = System.nanoTime();
+      assertThrows(IOException.class, () ->
+          factory.execute("repo-a", config, "GET", java.net.URI.create("http://localhost/"),
+              java.util.Map.of(), 60000));
+      long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+      assertTrue(elapsedMillis >= 400,
+          "slow-drip SOCKS5 handshake failed before the connect timeout fired: "
+              + elapsedMillis + "ms");
+      // With per-phase arming the drip would stretch one attempt to ~5 s; the absolute deadline
+      // must keep it near 500 ms (margin covers scheduling plus one retried attempt).
+      assertTrue(elapsedMillis < 4000,
+          "slow-drip SOCKS5 handshake outlived the connect timeout: " + elapsedMillis + "ms");
+    } finally {
+      dripper.close();
+      for (Socket socket : accepted) {
+        try {
+          socket.close();
+        } catch (IOException ignored) {
+        }
+      }
+    }
+  }
+
+  /**
+   * Speaks just enough SOCKS5 to keep a per-read-timeout client interested: answers the greeting
+   * with a "no auth" selection, consumes the CONNECT request, then drips the success reply — one
+   * byte every {@code pauseMillis}, each pause below a naive per-read timeout.
+   */
+  private static void dripHandshake(Socket socket, long pauseMillis) {
+    try (socket) {
+      InputStream in = socket.getInputStream();
+      OutputStream out = socket.getOutputStream();
+      byte[] greeting = in.readNBytes(3);
+      if (greeting.length < 3 || greeting[0] != 0x05) {
+        return;
+      }
+      out.write(0x05);
+      out.flush();
+      Thread.sleep(pauseMillis);
+      out.write(0x00);
+      out.flush();
+      // CONNECT request: ver/cmd/rsv/atyp plus address and port.
+      Thread.sleep(pauseMillis);
+      int atyp = in.readNBytes(4)[3] & 0xFF;
+      int addressBytes = switch (atyp) {
+        case 0x01 -> 4;
+        case 0x04 -> 16;
+        case 0x03 -> 1 + (in.readNBytes(1)[0] & 0xFF);
+        default -> 0;
+      };
+      in.readNBytes(addressBytes + 2);
+      byte[] reply = {0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0};
+      for (byte b : reply) {
+        Thread.sleep(pauseMillis);
+        out.write(b);
+        out.flush();
+      }
+    } catch (IOException | InterruptedException | ArrayIndexOutOfBoundsException ignored) {
+      // client gave up — expected once the deadline fires
     }
   }
 

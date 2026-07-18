@@ -40,14 +40,15 @@ final class Socks5TunnelSocket extends Socket {
     if (!(endpoint instanceof InetSocketAddress target)) {
       throw new IOException("SOCKS5 tunnel requires an InetSocketAddress target, got " + endpoint);
     }
-    super.connect(proxyAddress, timeoutMillis);
-    // timeoutMillis bounds the whole tunnel establishment, not just the TCP connect: a proxy that
-    // accepts and then stalls (no greeting/auth/CONNECT reply) must not hold the request thread
-    // past the remaining connect deadline. SO_TIMEOUT is re-armed before every handshake read so
-    // the cumulative handshake time stays within the budget.
+    // One absolute deadline covers the TCP connect plus the complete SOCKS handshake: the budget
+    // starts before super.connect so a slow TCP connect cannot be followed by a fresh full
+    // handshake timeout. SO_TIMEOUT is re-armed with the remaining budget before every individual
+    // blocking read, so a proxy that drips one byte per socket timeout cannot stretch the
+    // cumulative greeting/auth/CONNECT reads past the configured connect timeout.
     long deadlineNanos = timeoutMillis > 0
         ? System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
         : 0L;
+    super.connect(proxyAddress, timeoutMillis);
     try {
       handshake(target, deadlineNanos);
     } catch (IOException | RuntimeException failure) {
@@ -75,9 +76,8 @@ final class Socks5TunnelSocket extends Socket {
     out.write(1);
     out.write(offered);
     out.flush();
-    armDeadline(deadlineNanos);
-    int version = readByte(in);
-    int method = readByte(in);
+    int version = readByte(in, deadlineNanos);
+    int method = readByte(in, deadlineNanos);
     if (version != 0x05) {
       throw new IOException("SOCKS5 proxy " + describeProxy() + " replied with version " + version);
     }
@@ -126,9 +126,8 @@ final class Socks5TunnelSocket extends Socket {
     out.write(pass.length);
     out.write(pass);
     out.flush();
-    armDeadline(deadlineNanos);
-    readByte(in); // sub-negotiation version
-    int status = readByte(in);
+    readByte(in, deadlineNanos); // sub-negotiation version
+    int status = readByte(in, deadlineNanos);
     if (status != 0x00) {
       throw new IOException(
           "SOCKS5 proxy " + describeProxy() + " rejected the configured credentials");
@@ -160,11 +159,10 @@ final class Socks5TunnelSocket extends Socket {
     out.write((port >> 8) & 0xFF);
     out.write(port & 0xFF);
     out.flush();
-    armDeadline(deadlineNanos);
-    int version = readByte(in);
-    int reply = readByte(in);
-    readByte(in); // reserved
-    int addressType = readByte(in);
+    int version = readByte(in, deadlineNanos);
+    int reply = readByte(in, deadlineNanos);
+    readByte(in, deadlineNanos); // reserved
+    int addressType = readByte(in, deadlineNanos);
     if (version != 0x05) {
       throw new IOException("SOCKS5 proxy " + describeProxy() + " replied with version " + version);
     }
@@ -173,21 +171,22 @@ final class Socks5TunnelSocket extends Socket {
           + describeProxy() + " failed: " + replyMessage(reply));
     }
     switch (addressType) {
-      case 0x01 -> skipFully(in, 4);
-      case 0x04 -> skipFully(in, 16);
-      case 0x03 -> skipFully(in, readByte(in));
+      case 0x01 -> skipFully(in, 4, deadlineNanos);
+      case 0x04 -> skipFully(in, 16, deadlineNanos);
+      case 0x03 -> skipFully(in, readByte(in, deadlineNanos), deadlineNanos);
       default -> throw new IOException(
           "SOCKS5 proxy replied with unknown address type " + addressType);
     }
-    readByte(in); // bound port, high
-    readByte(in); // bound port, low
+    readByte(in, deadlineNanos); // bound port, high
+    readByte(in, deadlineNanos); // bound port, low
   }
 
   private String describeProxy() {
     return proxyAddress.getHostString() + ":" + proxyAddress.getPort();
   }
 
-  private static int readByte(InputStream in) throws IOException {
+  private int readByte(InputStream in, long deadlineNanos) throws IOException {
+    armDeadline(deadlineNanos);
     int value = in.read();
     if (value < 0) {
       throw new EOFException("SOCKS5 proxy closed the connection during the handshake");
@@ -195,9 +194,9 @@ final class Socks5TunnelSocket extends Socket {
     return value;
   }
 
-  private static void skipFully(InputStream in, int bytes) throws IOException {
+  private void skipFully(InputStream in, int bytes, long deadlineNanos) throws IOException {
     for (int i = 0; i < bytes; i++) {
-      readByte(in);
+      readByte(in, deadlineNanos);
     }
   }
 
