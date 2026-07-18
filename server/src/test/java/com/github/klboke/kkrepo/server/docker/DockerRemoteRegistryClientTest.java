@@ -15,18 +15,43 @@ import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
 import com.github.klboke.kkrepo.server.support.FakeHttpProxyServer;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
+import com.sun.net.httpserver.HttpsConfigurator;
+import com.sun.net.httpserver.HttpsServer;
 import com.sun.net.httpserver.HttpServer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.io.IOException;
+import java.math.BigInteger;
 import java.net.InetSocketAddress;
+import java.net.ProxySelector;
+import java.net.URI;
 import java.net.URLDecoder;
+import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.KeyStore;
+import java.security.SecureRandom;
+import java.security.cert.Certificate;
+import java.security.cert.X509Certificate;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
+import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManagerFactory;
+import org.bouncycastle.asn1.x500.X500Name;
+import org.bouncycastle.asn1.x509.Extension;
+import org.bouncycastle.asn1.x509.GeneralName;
+import org.bouncycastle.asn1.x509.GeneralNames;
+import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
+import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
+import org.bouncycastle.operator.ContentSigner;
+import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 import org.junit.jupiter.api.Test;
 
 class DockerRemoteRegistryClientTest {
@@ -269,6 +294,85 @@ class DockerRemoteRegistryClientTest {
   }
 
   @Test
+  void httpToHttpsUpgradePreservesBasicAndBearerCredentialsOverTls() throws Exception {
+    List<String> manifestAuthorizations = new ArrayList<>();
+    List<String> tokenAuthorizations = new ArrayList<>();
+    // Keep the Docker URLs on their real default ports so the redirect exercises the production
+    // 80-to-443 origin rule. This loopback router only maps those connections to an ephemeral TLS
+    // listener; the RepositoryRuntime itself has no outbound proxy, so the direct client path runs.
+    try (TestTlsRegistry registry = TestTlsRegistry.start();
+        FakeHttpProxyServer router = FakeHttpProxyServer.startTunneling(request -> {
+          URI target = URI.create(request.target());
+          String location = "https://localhost" + target.getRawPath()
+              + (target.getRawQuery() == null ? "" : "?" + target.getRawQuery());
+          return FakeHttpProxyServer.FakeResponse.status(307, Map.of("Location", location));
+        }, request -> new InetSocketAddress("127.0.0.1", registry.port()))) {
+      registry.server.createContext("/token", exchange -> {
+        tokenAuthorizations.add(exchange.getRequestHeaders().getFirst("Authorization"));
+        byte[] body = "{\"token\":\"tls-token\"}".getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().add("Content-Type", "application/json");
+        exchange.getResponseHeaders().add("Connection", "close");
+        exchange.sendResponseHeaders(200, body.length);
+        exchange.getResponseBody().write(body);
+        exchange.close();
+      });
+      registry.server.createContext("/v2/library/alpine/manifests/latest", exchange -> {
+        String authorization = exchange.getRequestHeaders().getFirst("Authorization");
+        manifestAuthorizations.add(authorization);
+        exchange.getResponseHeaders().add("Connection", "close");
+        if (!"Bearer tls-token".equals(authorization)) {
+          exchange.getResponseHeaders().add(
+              "WWW-Authenticate",
+              "Bearer realm=\"https://localhost/token\",service=\"registry.local\",scope=\"repository:library/alpine:pull\"");
+          exchange.sendResponseHeaders(401, -1);
+        } else {
+          byte[] body = "{}".getBytes(StandardCharsets.UTF_8);
+          exchange.getResponseHeaders().add("Content-Type", "application/json");
+          exchange.sendResponseHeaders(200, body.length);
+          exchange.getResponseBody().write(body);
+        }
+        exchange.close();
+      });
+      HttpClient tlsClient = HttpClient.newBuilder()
+          .followRedirects(HttpClient.Redirect.NEVER)
+          .proxy(ProxySelector.of(new InetSocketAddress("127.0.0.1", router.port())))
+          .sslContext(registry.clientSslContext)
+          .build();
+      DockerRemoteRegistryClient client = new DockerRemoteRegistryClient(
+          null,
+          OutboundRequestPolicy.allowPrivateForTests(),
+          null,
+          true,
+          300,
+          null,
+          null,
+          tlsClient);
+
+      try (HttpRemoteFetcher.Result result = client.get(
+          runtime("http://localhost", "robot", "secret"),
+          "library/alpine/manifests/latest",
+          "application/json")) {
+        assertEquals(200, result.status());
+      }
+
+      List<String> plainHttpAuthorizations = router.requests().stream()
+          .filter(request -> "GET".equals(request.method()))
+          .map(request -> request.header("Authorization"))
+          .toList();
+      assertEquals(List.of(basic("robot", "secret")), plainHttpAuthorizations,
+          "the bearer token must retry directly on the upgraded HTTPS URL");
+      assertEquals(List.of(basic("robot", "secret"), "Bearer tls-token"), manifestAuthorizations);
+      assertEquals(List.of(basic("robot", "secret")), tokenAuthorizations);
+      List<FakeHttpProxyServer.RecordedRequest> connectRequests = router.requests().stream()
+          .filter(request -> "CONNECT".equals(request.method()))
+          .toList();
+      assertFalse(connectRequests.isEmpty());
+      assertTrue(connectRequests.stream()
+          .allMatch(request -> "localhost:443".equals(request.target())));
+    }
+  }
+
+  @Test
   void sameOriginRedirectPreservesRegistryCredentials() throws Exception {
     try (TestRegistry registry = TestRegistry.start()) {
       List<String> authorizations = new ArrayList<>();
@@ -329,6 +433,46 @@ class DockerRemoteRegistryClientTest {
 
       assertEquals(List.of(basic("robot", "secret")), registryAuthorizations);
       assertEquals(Collections.singletonList(null), storageAuthorizations);
+    }
+  }
+
+  @Test
+  void crossOriginRedirectDoesNotHonorStorageBearerChallenge() throws Exception {
+    try (TestRegistry registry = TestRegistry.start(); TestRegistry storage = TestRegistry.start()) {
+      List<String> storageAuthorizations = new ArrayList<>();
+      AtomicInteger storageTokenCalls = new AtomicInteger();
+      registry.server.createContext("/v2/library/nginx/blobs/sha256:abc", exchange -> {
+        exchange.getResponseHeaders().add("Location", storage.baseUrl + "/layers/abc");
+        exchange.sendResponseHeaders(307, -1);
+        exchange.close();
+      });
+      storage.server.createContext("/layers/abc", exchange -> {
+        storageAuthorizations.add(exchange.getRequestHeaders().getFirst("Authorization"));
+        exchange.getResponseHeaders().add(
+            "WWW-Authenticate",
+            "Bearer realm=\"" + storage.baseUrl + "/token\",service=\"storage.local\"");
+        exchange.sendResponseHeaders(401, -1);
+        exchange.close();
+      });
+      storage.server.createContext("/token", exchange -> {
+        storageTokenCalls.incrementAndGet();
+        byte[] body = "{\"token\":\"storage-token\"}".getBytes(StandardCharsets.UTF_8);
+        exchange.sendResponseHeaders(200, body.length);
+        exchange.getResponseBody().write(body);
+        exchange.close();
+      });
+      DockerRemoteRegistryClient client = client();
+
+      try (HttpRemoteFetcher.Result result = client.get(
+          runtime(registry.baseUrl, "robot", "secret"),
+          "library/nginx/blobs/sha256:abc",
+          "application/octet-stream")) {
+        assertEquals(401, result.status());
+      }
+
+      assertEquals(Collections.singletonList(null), storageAuthorizations);
+      assertEquals(0, storageTokenCalls.get(),
+          "a cross-origin storage challenge must not trigger a Registry credential exchange");
     }
   }
 
@@ -427,6 +571,82 @@ class DockerRemoteRegistryClientTest {
       assertEquals(1, tokenCalls.get());
       assertEquals(java.util.Arrays.asList(null, "Bearer cached-remote-token", null, "Bearer cached-remote-token"),
           manifestAuthorizations);
+    }
+  }
+
+  @Test
+  void cachedBearerTokenDoesNotHonorCrossOriginStorageChallenge() throws Exception {
+    try (TestRegistry registry = TestRegistry.start(); TestRegistry storage = TestRegistry.start()) {
+      AtomicInteger tokenCalls = new AtomicInteger();
+      AtomicInteger bearerCalls = new AtomicInteger();
+      List<String> storageAuthorizations = new ArrayList<>();
+      registry.server.createContext("/token", exchange -> {
+        tokenCalls.incrementAndGet();
+        byte[] body = "{\"token\":\"cached-remote-token\",\"expires_in\":3600}"
+            .getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().add("Content-Type", "application/json");
+        exchange.sendResponseHeaders(200, body.length);
+        exchange.getResponseBody().write(body);
+        exchange.close();
+      });
+      registry.server.createContext("/v2/library/alpine/manifests/latest", exchange -> {
+        String authorization = exchange.getRequestHeaders().getFirst("Authorization");
+        if (!"Bearer cached-remote-token".equals(authorization)) {
+          exchange.getResponseHeaders().add(
+              "WWW-Authenticate",
+              "Bearer realm=\"" + registry.baseUrl
+                  + "/token\",service=\"registry.local\",scope=\"repository:library/alpine:pull\"");
+          exchange.sendResponseHeaders(401, -1);
+        } else if (bearerCalls.incrementAndGet() == 1) {
+          byte[] body = "{}".getBytes(StandardCharsets.UTF_8);
+          exchange.getResponseHeaders().add("Content-Type", "application/json");
+          exchange.sendResponseHeaders(200, body.length);
+          exchange.getResponseBody().write(body);
+        } else {
+          exchange.getResponseHeaders().add("Location", storage.baseUrl + "/layers/abc");
+          exchange.sendResponseHeaders(307, -1);
+        }
+        exchange.close();
+      });
+      storage.server.createContext("/layers/abc", exchange -> {
+        storageAuthorizations.add(exchange.getRequestHeaders().getFirst("Authorization"));
+        exchange.getResponseHeaders().add(
+            "WWW-Authenticate",
+            "Bearer realm=\"" + storage.baseUrl + "/token\",service=\"storage.local\"");
+        exchange.sendResponseHeaders(401, -1);
+        exchange.close();
+      });
+      storage.server.createContext("/token", exchange -> {
+        tokenCalls.incrementAndGet();
+        byte[] body = "{\"token\":\"storage-token\"}".getBytes(StandardCharsets.UTF_8);
+        exchange.sendResponseHeaders(200, body.length);
+        exchange.getResponseBody().write(body);
+        exchange.close();
+      });
+      DockerRemoteRegistryClient client = new DockerRemoteRegistryClient(
+          null,
+          OutboundRequestPolicy.allowPrivateForTests(),
+          new InMemorySharedCache(),
+          true,
+          300);
+      RepositoryRuntime runtime = runtime(registry.baseUrl, "robot", "secret");
+
+      try (HttpRemoteFetcher.Result result = client.get(
+          runtime,
+          "library/alpine/manifests/latest",
+          "application/json")) {
+        assertEquals(200, result.status());
+      }
+      try (HttpRemoteFetcher.Result result = client.get(
+          runtime,
+          "library/alpine/manifests/latest",
+          "application/json")) {
+        assertEquals(401, result.status());
+      }
+
+      assertEquals(Collections.singletonList(null), storageAuthorizations);
+      assertEquals(1, tokenCalls.get(),
+          "a cached Registry token must not let storage refresh credentials cross-origin");
     }
   }
 
@@ -715,6 +935,78 @@ class DockerRemoteRegistryClientTest {
       HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
       server.start();
       return new TestRegistry(server);
+    }
+
+    @Override
+    public void close() {
+      server.stop(0);
+    }
+  }
+
+  private static final class TestTlsRegistry implements AutoCloseable {
+    private static final char[] KEY_PASSWORD = "test-password".toCharArray();
+
+    private final HttpsServer server;
+    private final SSLContext clientSslContext;
+
+    private TestTlsRegistry(HttpsServer server, SSLContext clientSslContext) {
+      this.server = server;
+      this.clientSslContext = clientSslContext;
+    }
+
+    static TestTlsRegistry start() throws Exception {
+      SecureRandom random = new SecureRandom();
+      KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance("RSA");
+      keyPairGenerator.initialize(2048, random);
+      KeyPair keyPair = keyPairGenerator.generateKeyPair();
+
+      Instant now = Instant.now();
+      X500Name subject = new X500Name("CN=localhost");
+      JcaX509v3CertificateBuilder certificateBuilder = new JcaX509v3CertificateBuilder(
+          subject,
+          new BigInteger(128, random).setBit(127),
+          Date.from(now.minusSeconds(60)),
+          Date.from(now.plusSeconds(86400)),
+          subject,
+          keyPair.getPublic());
+      certificateBuilder.addExtension(
+          Extension.subjectAlternativeName,
+          false,
+          new GeneralNames(new GeneralName(GeneralName.dNSName, "localhost")));
+      ContentSigner signer = new JcaContentSignerBuilder("SHA256withRSA")
+          .build(keyPair.getPrivate());
+      X509Certificate certificate = new JcaX509CertificateConverter()
+          .getCertificate(certificateBuilder.build(signer));
+      certificate.verify(keyPair.getPublic());
+
+      KeyStore keyStore = KeyStore.getInstance("PKCS12");
+      keyStore.load(null, KEY_PASSWORD);
+      keyStore.setKeyEntry(
+          "server",
+          keyPair.getPrivate(),
+          KEY_PASSWORD,
+          new Certificate[] {certificate});
+      KeyManagerFactory keyManagers = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+      keyManagers.init(keyStore, KEY_PASSWORD);
+
+      SSLContext serverContext = SSLContext.getInstance("TLS");
+      serverContext.init(keyManagers.getKeyManagers(), null, random);
+      HttpsServer server = HttpsServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+      server.setHttpsConfigurator(new HttpsConfigurator(serverContext));
+      server.start();
+
+      KeyStore trustStore = KeyStore.getInstance("PKCS12");
+      trustStore.load(null, null);
+      trustStore.setCertificateEntry("server", certificate);
+      TrustManagerFactory trustManagers = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+      trustManagers.init(trustStore);
+      SSLContext clientContext = SSLContext.getInstance("TLS");
+      clientContext.init(null, trustManagers.getTrustManagers(), random);
+      return new TestTlsRegistry(server, clientContext);
+    }
+
+    int port() {
+      return server.getAddress().getPort();
     }
 
     @Override
