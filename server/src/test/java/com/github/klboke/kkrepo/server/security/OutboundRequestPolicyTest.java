@@ -3,11 +3,13 @@ package com.github.klboke.kkrepo.server.security;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.URI;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
@@ -54,6 +56,72 @@ class OutboundRequestPolicyTest {
 
     assertThrows(SecurityValidationException.class,
         () -> policy.validateHttpUri("file:///etc/passwd", "proxy.remoteUrl"));
+  }
+
+  @Test
+  void rejectsMissingBlankAndMalformedRawUrls() {
+    OutboundRequestPolicy policy = OutboundRequestPolicy.allowPrivateForTests();
+
+    assertEquals(
+        "remote fetch URL is required",
+        assertThrows(
+            SecurityValidationException.class,
+            () -> policy.resolveHttpTarget((String) null, "remote fetch"))
+            .getMessage());
+    assertEquals(
+        "remote fetch URL is required",
+        assertThrows(
+            SecurityValidationException.class,
+            () -> policy.resolveHttpTarget("  ", "remote fetch"))
+            .getMessage());
+    SecurityValidationException malformed = assertThrows(
+        SecurityValidationException.class,
+        () -> policy.resolveHttpTarget("http://[", "remote fetch"));
+    assertTrue(malformed.getMessage().startsWith("remote fetch URL is not valid:"));
+  }
+
+  @Test
+  void rejectsResolverAnswersThatCannotIssueAConnectionCapability() {
+    OutboundRequestPolicy nullAnswer = new OutboundRequestPolicy(
+        false, "packages.example", host -> null);
+    OutboundRequestPolicy emptyAnswer = new OutboundRequestPolicy(
+        false, "packages.example", host -> new InetAddress[0]);
+    OutboundRequestPolicy nullAddress = new OutboundRequestPolicy(
+        false, "packages.example", host -> new InetAddress[] {null});
+
+    assertThrows(SecurityValidationException.class, () ->
+        nullAnswer.resolveHttpTarget("https://packages.example/artifact", "remote fetch"));
+    assertThrows(SecurityValidationException.class, () ->
+        emptyAnswer.resolveHttpTarget("https://packages.example/artifact", "remote fetch"));
+    assertThrows(SecurityValidationException.class, () ->
+        nullAddress.resolveHttpTarget("https://packages.example/artifact", "remote fetch"));
+  }
+
+  @Test
+  void rejectsInvalidUriComponentsBeforeDnsResolution() {
+    AtomicInteger lookups = new AtomicInteger();
+    OutboundRequestPolicy policy = new OutboundRequestPolicy(
+        true,
+        "",
+        host -> {
+          lookups.incrementAndGet();
+          return new InetAddress[] {InetAddress.getLoopbackAddress()};
+        });
+
+    assertThrows(SecurityValidationException.class, () ->
+        policy.resolveHttpTarget((URI) null, "remote fetch"));
+    assertThrows(SecurityValidationException.class, () ->
+        policy.resolveHttpTarget(URI.create("/relative/path"), "remote fetch"));
+    assertThrows(SecurityValidationException.class, () ->
+        policy.resolveHttpTarget(URI.create("http://user:secret@localhost/artifact"), "remote fetch"));
+    assertThrows(SecurityValidationException.class, () ->
+        policy.resolveHttpTarget(URI.create("http:///artifact"), "remote fetch"));
+    assertThrows(SecurityValidationException.class, () ->
+        policy.resolveHttpTarget(URI.create("http://localhost:0/artifact"), "remote fetch"));
+    assertThrows(SecurityValidationException.class, () ->
+        policy.resolveHttpTarget(URI.create("http://localhost:65536/artifact"), "remote fetch"));
+
+    assertEquals(0, lookups.get(), "invalid URI components must be rejected before DNS");
   }
 
   @Test

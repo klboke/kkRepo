@@ -12,9 +12,11 @@ import static org.junit.jupiter.api.Assertions.fail;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy.ResolvedHttpTarget;
 import com.github.klboke.kkrepo.server.support.FakeHttpProxyServer;
+import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
@@ -31,6 +33,45 @@ import org.apache.hc.core5.http.message.BasicClassicHttpRequest;
 import org.junit.jupiter.api.Test;
 
 class ProxiedHttpClientFactoryTest {
+
+  @Test
+  void executeRejectsMissingResolvedTargetCapability() throws Exception {
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      IllegalArgumentException error = assertThrows(
+          IllegalArgumentException.class,
+          () -> factory.execute("repo-a", null, "GET", null, Map.of(), 5000));
+
+      assertEquals("resolved outbound target is required", error.getMessage());
+    }
+  }
+
+  @Test
+  void disabledProxyUsesPinnedDirectClientAndNormalizesEmptyPath() throws Exception {
+    HttpServer upstream = HttpServer.create(
+        new InetSocketAddress(java.net.InetAddress.getByName("127.0.0.1"), 0), 0);
+    upstream.createContext("/", exchange -> {
+      byte[] body = exchange.getRequestURI().toString().getBytes(StandardCharsets.UTF_8);
+      exchange.sendResponseHeaders(200, body.length);
+      exchange.getResponseBody().write(body);
+      exchange.close();
+    });
+    upstream.start();
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      OutboundProxyConfig disabled =
+          new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "", 0, null, null);
+      ResolvedHttpTarget target = target(
+          "http://127.0.0.1:" + upstream.getAddress().getPort() + "?source=test");
+
+      try (ProxiedHttpClientFactory.ProxiedResponse response = factory.execute(
+          "repo-a", disabled, "GET", target, Map.of(), 5000)) {
+        assertEquals(200, response.status());
+        assertEquals("/?source=test",
+            new String(response.body().readAllBytes(), StandardCharsets.UTF_8));
+      }
+    } finally {
+      upstream.stop(0);
+    }
+  }
 
   @Test
   void clientForAcceptsUsernameOnlyHttpProxyWithoutPassword() throws Exception {
@@ -214,6 +255,21 @@ class ProxiedHttpClientFactoryTest {
       assertTrue(server.targetAddressTypes().stream().allMatch(type -> type != 0x03),
           "SOCKS CONNECT must use a policy-approved IP, not ask the proxy to resolve a domain: "
               + server.targetAddressTypes());
+    } finally {
+      server.stop();
+    }
+  }
+
+  @Test
+  void standaloneSocksSocketRetainsUnresolvedDomainCompatibility() throws Exception {
+    RecordingSocksServer server = RecordingSocksServer.acceptingAny();
+    server.start();
+    try (Socks5TunnelSocket socket = new Socks5TunnelSocket(
+        new InetSocketAddress("127.0.0.1", server.port()), null, null)) {
+      socket.connect(InetSocketAddress.createUnresolved("artifact.example", 8080), 5000);
+      assertTrue(server.awaitHandshake());
+      assertEquals(List.of(0x03), server.targetAddressTypes(),
+          "an explicitly unresolved target must use the SOCKS domain address type");
     } finally {
       server.stop();
     }
@@ -480,6 +536,23 @@ class ProxiedHttpClientFactoryTest {
       assertEquals(target.addresses().get(0),
           java.net.InetAddress.getByName(URI.create("http://" + connect.target()).getHost()));
       assertTrue(connect.target().endsWith(":8443"));
+    }
+  }
+
+  @Test
+  void httpsTargetsWithoutExplicitPortUsePinnedPort443() throws Exception {
+    try (FakeHttpProxyServer proxy = FakeHttpProxyServer.start(request ->
+            FakeHttpProxyServer.FakeResponse.status(500, Map.of()));
+        ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      OutboundProxyConfig config =
+          new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "127.0.0.1", proxy.port(), null, null);
+
+      assertThrows(IOException.class, () -> factory.execute(
+          "repo-a", config, "GET", target("https://127.0.0.1/path"), Map.of(), 5000));
+
+      FakeHttpProxyServer.RecordedRequest connect = proxy.requests().get(0);
+      assertEquals("CONNECT", connect.method());
+      assertEquals("127.0.0.1:443", connect.target());
     }
   }
 

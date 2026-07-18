@@ -42,6 +42,24 @@ class HttpRemoteFetcherTest {
     assertEquals(HttpClient.Version.HTTP_2, HttpRemoteFetcher.httpVersion("HTTP_2"));
     assertEquals(HttpClient.Version.HTTP_2, HttpRemoteFetcher.httpVersion("http2"));
     assertEquals(HttpClient.Version.HTTP_2, HttpRemoteFetcher.httpVersion("2"));
+
+    HttpRemoteFetcher fetcher = new HttpRemoteFetcher(
+        null, null, null, "HTTP_2", 11, 22, 33, 7, 1);
+    assertEquals(
+        Duration.ofSeconds(33),
+        fetcher.requestTimeout(HttpRemoteFetcher.Request.get("https://repo.example/artifact.jar")));
+  }
+
+  @Test
+  void convenienceConstructorCannotExecuteWithoutPinnedTransportFactory() {
+    HttpRemoteFetcher fetcher =
+        new HttpRemoteFetcher(OutboundRequestPolicy.allowPrivateForTests());
+
+    IllegalStateException error = assertThrows(
+        IllegalStateException.class,
+        () -> fetcher.fetch(HttpRemoteFetcher.Request.get("http://localhost/artifact.jar")));
+
+    assertEquals("Outbound HTTP client factory is required", error.getMessage());
   }
 
   @Test
