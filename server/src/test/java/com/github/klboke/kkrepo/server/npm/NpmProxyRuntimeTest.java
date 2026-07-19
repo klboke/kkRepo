@@ -202,6 +202,67 @@ class NpmProxyRuntimeTest {
   }
 
   @Test
+  void minimumReleaseAgeAllowsSharedTarballWhenAnyIndexedVersionIsEligible() throws Exception {
+    Instant now = Instant.parse("2026-07-19T12:00:00Z");
+    Fixture fixture = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    RepositoryRuntime runtime = runtime(60, 7L, 60);
+    CachedAssetMetadata packageSnapshot = snapshot(
+        "demo", now, "package-root", Map.of("npmFullMetadata", "true"));
+    CachedAssetMetadata tarballSnapshot = snapshot(TARBALL_PATH, now, "tarball", Map.of());
+    when(fixture.cache.find(eq(10L), anyString(), any())).thenAnswer(invocation ->
+        Optional.of("demo".equals(invocation.getArgument(1))
+            ? packageSnapshot
+            : tarballSnapshot));
+    NpmReleaseIndexDao.TarballPolicy indexed = new NpmReleaseIndexDao.TarballPolicy(
+        new NpmReleaseIndexDao.Status(1L, 2L, true, 2, now),
+        false,
+        List.of(
+            new NpmReleaseIndexDao.Release(
+                0, "1.0.0", Instant.parse("2026-07-19T10:00:00Z"), null, TARBALL),
+            new NpmReleaseIndexDao.Release(
+                1, "1.1.0", Instant.parse("2026-07-19T11:30:01Z"), null, TARBALL)));
+    when(fixture.releaseIndexDao.findTarballPolicy(1L, 2L, TARBALL, null, null))
+        .thenReturn(Optional.of(indexed));
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.hosted.getTarball(runtime, PACKAGE, TARBALL, false)).thenReturn(expected);
+
+    assertSame(expected, fixture.service.getTarball(runtime, PACKAGE, TARBALL, false));
+
+    verify(fixture.hosted, never()).packageRoot(any(CachedAssetMetadata.class));
+    verify(fixture.fetcher, never()).fetchWithBodyRetry(any(), anyString(), any());
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void minimumReleaseAgeAllowsSharedTarballOnPackumentFallback() throws Exception {
+    Instant now = Instant.parse("2026-07-19T12:00:00Z");
+    Fixture fixture = fixtureWithoutReleaseIndex(Clock.fixed(now, ZoneOffset.UTC));
+    RepositoryRuntime runtime = runtime(60, 7L, 60);
+    CachedAssetMetadata packageSnapshot = snapshot(
+        "demo", now, "package-root", Map.of("npmFullMetadata", "true"));
+    CachedAssetMetadata tarballSnapshot = snapshot(TARBALL_PATH, now, "tarball", Map.of());
+    when(fixture.cache.find(eq(10L), anyString(), any())).thenAnswer(invocation ->
+        Optional.of("demo".equals(invocation.getArgument(1))
+            ? packageSnapshot
+            : tarballSnapshot));
+    Map<String, Object> root = new ObjectMapper().readValue("""
+        {"name":"demo","dist-tags":{"latest":"1.1.0"},
+         "time":{"1.0.0":"2026-07-19T10:00:00Z","1.1.0":"2026-07-19T11:30:01Z"},
+         "versions":{
+           "1.0.0":{"name":"demo","version":"1.0.0","dist":{"tarball":"https://registry.npmjs.org/demo/-/demo-1.0.0.tgz"}},
+           "1.1.0":{"name":"demo","version":"1.1.0","dist":{"tarball":"https://registry.npmjs.org/demo/-/demo-1.0.0.tgz"}}
+         }}
+        """, Map.class);
+    when(fixture.hosted.packageRoot(packageSnapshot)).thenReturn(Optional.of(root));
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.hosted.getTarball(runtime, PACKAGE, TARBALL, false)).thenReturn(expected);
+
+    assertSame(expected, fixture.service.getTarball(runtime, PACKAGE, TARBALL, false));
+
+    verify(fixture.fetcher, never()).fetchWithBodyRetry(any(), anyString(), any());
+  }
+
+  @Test
   void minimumReleaseAgeUsesTargetedIndexWithoutLoadingPackumentBlob() throws Exception {
     Instant now = Instant.parse("2026-07-19T12:00:00Z");
     Instant lastVerified = Instant.parse("2026-07-19T11:59:00Z");
@@ -419,6 +480,14 @@ class NpmProxyRuntimeTest {
   }
 
   private static Fixture fixture(Clock clock) {
+    return fixture(clock, true);
+  }
+
+  private static Fixture fixtureWithoutReleaseIndex(Clock clock) {
+    return fixture(clock, false);
+  }
+
+  private static Fixture fixture(Clock clock, boolean releaseIndexEnabled) {
     AssetDao assetDao = mock(AssetDao.class);
     BlobStorageRegistry registry = mock(BlobStorageRegistry.class);
     NpmAssetWriter writer = mock(NpmAssetWriter.class);
@@ -427,7 +496,9 @@ class NpmProxyRuntimeTest {
     NpmHostedService hosted = mock(NpmHostedService.class);
     ProxyNegativeCache negativeCache = mock(ProxyNegativeCache.class);
     AssetMetadataCache cache = mock(AssetMetadataCache.class);
-    NpmReleaseIndexDao releaseIndexDao = mock(NpmReleaseIndexDao.class);
+    NpmReleaseIndexDao releaseIndexDao = releaseIndexEnabled
+        ? mock(NpmReleaseIndexDao.class)
+        : null;
     BlobStorage storage = mock(BlobStorage.class);
     return new Fixture(
         assetDao, registry, writer, proxyStateDao, fetcher, hosted, negativeCache, cache,

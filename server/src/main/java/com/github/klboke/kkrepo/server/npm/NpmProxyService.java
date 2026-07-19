@@ -475,24 +475,53 @@ public class NpmProxyService {
     }
     PolicyPackage resolved = resolvePolicyPackage(runtime, packageId, now);
     List<String> versions = resolved.analysis().versionsForTarball(tarballName);
+    enforceTarballVersions(
+        packageId,
+        tarballName,
+        resolved.analysis(),
+        resolved.evaluatedAt(),
+        versions);
+  }
+
+  private void enforceTarballVersions(
+      NpmPackageId packageId,
+      String tarballName,
+      NpmMinimumReleaseAge.Analysis analysis,
+      Instant evaluatedAt,
+      List<String> versions) {
     if (versions.isEmpty()) {
       throw new NpmExceptions.ReleaseAgeDenied(
           "Tarball '" + tarballName + "' is blocked by minimumReleaseAge because its version "
               + "cannot be verified from upstream package metadata");
     }
+    String blockedVersion = null;
+    NpmMinimumReleaseAge.Eligibility blocked = null;
     for (String version : versions) {
-      NpmMinimumReleaseAge.Eligibility eligibility = resolved.analysis().eligibility(
-          version, resolved.evaluatedAt());
+      NpmMinimumReleaseAge.Eligibility eligibility = analysis.eligibility(version, evaluatedAt);
       if (eligibility.eligible()) {
-        continue;
+        // The local tarball URL is exposed by this visible version. Other hidden versions may
+        // legally reuse the same filename, so they must not make the shared URL unavailable.
+        return;
       }
-      String available = eligibility.availableAt() == null
-          ? "unknown (missing or invalid publish time)"
-          : eligibility.availableAt().toString();
-      throw new NpmExceptions.ReleaseAgeDenied(
-          "Tarball '" + tarballName + "' for " + packageId.id() + "@" + version
-              + " is blocked by minimumReleaseAge until " + available);
+      if (blocked == null || earlierAvailability(eligibility, blocked)) {
+        blockedVersion = version;
+        blocked = eligibility;
+      }
     }
+    String available = blocked == null || blocked.availableAt() == null
+        ? "unknown (missing or invalid publish time)"
+        : blocked.availableAt().toString();
+    throw new NpmExceptions.ReleaseAgeDenied(
+        "Tarball '" + tarballName + "' for " + packageId.id() + "@" + blockedVersion
+            + " is blocked by minimumReleaseAge until " + available);
+  }
+
+  private static boolean earlierAvailability(
+      NpmMinimumReleaseAge.Eligibility candidate,
+      NpmMinimumReleaseAge.Eligibility current) {
+    return candidate.availableAt() != null
+        && (current.availableAt() == null
+            || candidate.availableAt().isBefore(current.availableAt()));
   }
 
   private boolean tryEnforceIndexedTarballReleaseAge(
@@ -578,19 +607,12 @@ public class NpmProxyService {
     }
     NpmMinimumReleaseAge.Analysis analysis = NpmMinimumReleaseAge.analyze(
         toReleaseIndex(rows), runtime.minimumReleaseAgeMinutesOrDefault());
-    for (NpmReleaseIndexDao.Release row : rows) {
-      NpmMinimumReleaseAge.Eligibility eligibility = analysis.eligibility(
-          row.version(), evaluatedAt);
-      if (eligibility.eligible()) {
-        continue;
-      }
-      String available = eligibility.availableAt() == null
-          ? "unknown (missing or invalid publish time)"
-          : eligibility.availableAt().toString();
-      throw new NpmExceptions.ReleaseAgeDenied(
-          "Tarball '" + tarballName + "' for " + packageId.id() + "@" + row.version()
-              + " is blocked by minimumReleaseAge until " + available);
-    }
+    enforceTarballVersions(
+        packageId,
+        tarballName,
+        analysis,
+        evaluatedAt,
+        rows.stream().map(NpmReleaseIndexDao.Release::version).toList());
   }
 
   Optional<Instant> nextPolicyTransition(
