@@ -266,7 +266,7 @@ public final class NpmMetadata {
   }
 
   @SuppressWarnings("unchecked")
-  private static boolean hasInstallScript(Object scriptsRaw) {
+  public static boolean hasInstallScript(Object scriptsRaw) {
     if (!(scriptsRaw instanceof Map<?, ?> rawScripts)) {
       return false;
     }
@@ -274,6 +274,14 @@ public final class NpmMetadata {
     return scripts.containsKey("preinstall")
         || scripts.containsKey("install")
         || scripts.containsKey("postinstall");
+  }
+
+  public static boolean isAbbreviatedRootField(String field) {
+    return ABBREVIATED_ROOT_FIELDS.contains(field);
+  }
+
+  public static boolean isAbbreviatedVersionField(String field) {
+    return ABBREVIATED_VERSION_FIELDS.contains(field);
   }
 
   @SuppressWarnings("unchecked")

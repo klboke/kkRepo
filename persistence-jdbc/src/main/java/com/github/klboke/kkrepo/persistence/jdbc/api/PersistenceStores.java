@@ -28,6 +28,8 @@ public interface PersistenceStores extends AutoCloseable {
 
   MigrationJobDao migrationJobs();
 
+  NpmReleaseIndexDao npmReleaseIndexes();
+
   ProxyStateDao proxyStates();
 
   PubUploadSessionDao pubUploadSessions();

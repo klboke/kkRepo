@@ -163,7 +163,7 @@ public class HttpRemoteFetcher {
       throws IOException {
     URI uri = target.uri();
     Map<String, String> headers = new LinkedHashMap<>();
-    headers.put("Accept", "*/*");
+    headers.put("Accept", req.accept() == null || req.accept().isBlank() ? "*/*" : req.accept());
     headers.put("User-Agent", "kkrepo/0.1");
     if (req.etag() != null && !req.etag().isBlank()) {
       headers.put("If-None-Match", "\"" + req.etag() + "\"");
@@ -205,7 +205,8 @@ public class HttpRemoteFetcher {
             redirectTrustedHost,
             redirectAuthorization,
             req.allowedUnsignedRedirectHosts(),
-            req.outboundProxy());
+            req.outboundProxy(),
+            req.accept());
         return fetchInternal(
             redirectedRequest,
             redirects + 1,
@@ -323,7 +324,26 @@ public class HttpRemoteFetcher {
       String trustedHost,
       String authorizationHeader,
       Set<String> allowedUnsignedRedirectHosts,
-      OutboundProxyConfig outboundProxy) {
+      OutboundProxyConfig outboundProxy,
+      String accept) {
+    /** Compatibility constructor for callers that do not need a custom Accept header. */
+    public Request(
+        String url,
+        String etag,
+        Instant lastModified,
+        Duration timeout,
+        TimeoutProfile timeoutProfile,
+        boolean headOnly,
+        String repository,
+        String format,
+        String trustedHost,
+        String authorizationHeader,
+        Set<String> allowedUnsignedRedirectHosts,
+        OutboundProxyConfig outboundProxy) {
+      this(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format,
+          trustedHost, authorizationHeader, allowedUnsignedRedirectHosts, outboundProxy, null);
+    }
+
     public Request(String url, String etag, Instant lastModified, Duration timeout, boolean headOnly) {
       this(url, etag, lastModified, timeout, TimeoutProfile.DEFAULT, headOnly, null, null, null, null, Set.of(), null);
     }
@@ -371,12 +391,17 @@ public class HttpRemoteFetcher {
 
     public Request withConditional(String etag, Instant lastModified) {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
-          repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts, outboundProxy);
+          repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts, outboundProxy, accept);
     }
 
     public Request withTimeoutProfile(TimeoutProfile timeoutProfile) {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
-          repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts, outboundProxy);
+          repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts, outboundProxy, accept);
+    }
+
+    public Request withAccept(String accept) {
+      return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
+          repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts, outboundProxy, accept);
     }
 
     public Request withRepository(RepositoryRuntime runtime) {
@@ -397,7 +422,8 @@ public class HttpRemoteFetcher {
           trusted,
           includeAuthorization && trusted != null ? remoteAuthorizationHeader(runtime) : null,
           Set.of(),
-          runtime == null ? null : runtime.outboundProxy());
+          runtime == null ? null : runtime.outboundProxy(),
+          accept);
     }
 
     public Request withRepositoryAllowingUnsignedRedirects(
@@ -423,7 +449,8 @@ public class HttpRemoteFetcher {
           trusted,
           includeAuthorization && trusted != null ? remoteAuthorizationHeader(runtime) : null,
           allowedUnsignedRedirectHosts,
-          runtime == null ? null : runtime.outboundProxy());
+          runtime == null ? null : runtime.outboundProxy(),
+          accept);
     }
 
     public String method() {

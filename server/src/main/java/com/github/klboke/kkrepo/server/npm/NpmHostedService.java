@@ -271,6 +271,24 @@ public class NpmHostedService {
     return loadPackageRootMap(runtime, packageId);
   }
 
+  /** Reads a package root from an already resolved hot-path metadata snapshot without more SQL. */
+  Optional<Map<String, Object>> packageRoot(CachedAssetMetadata metadata) {
+    if (metadata == null || metadata.blob() == null) {
+      return Optional.empty();
+    }
+    AssetBlobRecord blob = metadata.toBlobRecord();
+    BlobStorage storage = blobStorageRegistry.forBlobStoreId(blob.blobStoreId());
+    try (InputStream in = storage.get(BlobReferenceCodec.reference(
+        blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size())).orElse(null)) {
+      if (in == null) {
+        return Optional.empty();
+      }
+      return Optional.of(mapper.readValue(in, MAP_TYPE));
+    } catch (IOException e) {
+      throw new IllegalStateException("Failed to read npm package root " + metadata.path(), e);
+    }
+  }
+
   MavenResponse getPackage(RepositoryRuntime runtime, NpmPackageId packageId, String repositoryBaseUrl, boolean headOnly) {
     return getPackage(runtime, packageId, repositoryBaseUrl, headOnly, NpmPackumentVariant.FULL);
   }
@@ -283,12 +301,8 @@ public class NpmHostedService {
       NpmPackumentVariant variant) {
     Map<String, Object> packageRoot = loadPackageRootMap(runtime, packageId)
         .orElseThrow(() -> new NpmExceptions.NpmNotFoundException("Package '" + packageId.id() + "' not found"));
-    Map<String, Object> copy = NpmMetadata.deepCopy(packageRoot);
-    NpmMetadata.rewriteTarballUrls(copy, packageId, repositoryBaseUrl);
-    if (variant.abbreviated()) {
-      copy = NpmMetadata.abbreviatePackageRoot(copy);
-    }
-    byte[] bytes = NpmResponseSupport.write(mapper, copy);
+    byte[] bytes = NpmPackumentResponseWriter.write(
+        mapper, packageRoot, null, null, variant, packageId, repositoryBaseUrl);
     AssetRecord asset = assetDao.findAssetByPath(runtime.id(), packageId.id()).orElse(null);
     Instant lastModified = asset == null ? Instant.now() : asset.lastUpdatedAt();
     if (headOnly) {

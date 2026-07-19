@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.server.pub.PubExceptions;
 import com.github.klboke.kkrepo.server.pub.PubResponses;
 import com.github.klboke.kkrepo.protocol.pub.PubContentTypes;
 import java.util.Map;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -71,6 +72,15 @@ public class MavenErrorAdvice {
   @ExceptionHandler(NpmExceptions.WritePolicyDenied.class)
   public ResponseEntity<Map<String, Object>> npmWriteDenied(NpmExceptions.WritePolicyDenied e) {
     return npmBody(HttpStatus.BAD_REQUEST, e.getMessage());
+  }
+
+  @ExceptionHandler(NpmExceptions.ReleaseAgeDenied.class)
+  public ResponseEntity<Map<String, Object>> npmReleaseAgeDenied(NpmExceptions.ReleaseAgeDenied e) {
+    return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .header(HttpHeaders.CACHE_CONTROL, "no-store")
+        .body(Map.of(
+            "success", false,
+            "error", e.getMessage() == null ? HttpStatus.NOT_FOUND.getReasonPhrase() : e.getMessage()));
   }
 
   @ExceptionHandler(NpmExceptions.MethodNotAllowed.class)

@@ -57,7 +57,33 @@ public final class RepositoryCommands {
       Integer outboundProxyPort,
       String outboundProxyUsername,
       String outboundProxyPassword,
-      Boolean outboundProxyPasswordConfigured) {
+      Boolean outboundProxyPasswordConfigured,
+      Integer minimumReleaseAgeMinutes) {
+    /** Compatibility constructor for callers that predate npm release-age protection. */
+    public ProxySettings(
+        String remoteUrl,
+        Integer contentMaxAgeMinutes,
+        Integer metadataMaxAgeMinutes,
+        Boolean autoBlock,
+        String remoteUsername,
+        String remotePassword,
+        Boolean remotePasswordConfigured,
+        String remoteBearerToken,
+        Boolean remoteBearerTokenConfigured,
+        String outboundProxyType,
+        String outboundProxyHost,
+        Integer outboundProxyPort,
+        String outboundProxyUsername,
+        String outboundProxyPassword,
+        Boolean outboundProxyPasswordConfigured) {
+      this(remoteUrl, contentMaxAgeMinutes, metadataMaxAgeMinutes, autoBlock,
+          remoteUsername, remotePassword, remotePasswordConfigured,
+          remoteBearerToken, remoteBearerTokenConfigured,
+          outboundProxyType, outboundProxyHost, outboundProxyPort,
+          outboundProxyUsername, outboundProxyPassword, outboundProxyPasswordConfigured,
+          null);
+    }
+
     public ProxySettings(
         String remoteUrl,
         Integer contentMaxAgeMinutes,
@@ -93,6 +119,17 @@ public final class RepositoryCommands {
         Boolean autoBlock) {
       this(remoteUrl, contentMaxAgeMinutes, metadataMaxAgeMinutes, autoBlock,
           null, null, null, null, null, null, null, null, null, null, null);
+    }
+
+    public ProxySettings(
+        String remoteUrl,
+        Integer contentMaxAgeMinutes,
+        Integer metadataMaxAgeMinutes,
+        Boolean autoBlock,
+        Integer minimumReleaseAgeMinutes) {
+      this(remoteUrl, contentMaxAgeMinutes, metadataMaxAgeMinutes, autoBlock,
+          null, null, null, null, null, null, null, null, null, null, null,
+          minimumReleaseAgeMinutes);
     }
   }
 

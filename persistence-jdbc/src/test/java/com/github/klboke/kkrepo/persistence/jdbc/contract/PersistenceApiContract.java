@@ -81,6 +81,8 @@ public abstract class PersistenceApiContract {
         "migration_checkpoint",
         "migration_job",
         "migration_validation_result",
+        "npm_release_index_entry",
+        "npm_release_index_revision",
         "proxy_remote_state",
         "pub_upload_session",
         "repository",

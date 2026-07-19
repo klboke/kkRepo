@@ -178,6 +178,7 @@ public class RepositoryRuntimeRegistry {
 
     Integer contentMaxAge = null;
     Integer metadataMaxAge = null;
+    Integer minimumReleaseAge = null;
     Boolean autoBlock = null;
     String proxyRemoteUsername = null;
     String proxyRemotePassword = null;
@@ -186,6 +187,7 @@ public class RepositoryRuntimeRegistry {
     if (proxyRaw instanceof Map<?, ?> proxyMap) {
       contentMaxAge = asInt(proxyMap.get("contentMaxAgeMinutes"));
       metadataMaxAge = asInt(proxyMap.get("metadataMaxAgeMinutes"));
+      minimumReleaseAge = asInt(proxyMap.get("minimumReleaseAgeMinutes"));
       autoBlock = asBool(proxyMap.get("autoBlock"));
       Object username = proxyMap.get("remoteUsername");
       if (username != null && !username.toString().isBlank()) {
@@ -267,7 +269,8 @@ public class RepositoryRuntimeRegistry {
         dockerConnectorPublicUrl,
         cargoRequireAuthentication,
         members,
-        outboundProxy);
+        outboundProxy,
+        minimumReleaseAge);
   }
 
   private static com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig readOutboundProxy(Map<?, ?> proxyMap) {
