@@ -32,6 +32,9 @@ final class NpmPackumentResponseWriter {
     Map<String, Object> distTags = analysis == null
         ? new LinkedHashMap<>(NpmMetadata.distTags(packageRoot))
         : analysis.filteredDistTags(packageRoot, evaluatedAt, visibleVersions);
+    Map<String, Object> time = analysis == null
+        ? null
+        : analysis.filteredTime(packageRoot, visibleVersions);
 
     try (ByteArrayBuilder output = new ByteArrayBuilder();
          JsonGenerator generator = mapper.getFactory().createGenerator(output)) {
@@ -46,6 +49,8 @@ final class NpmPackumentResponseWriter {
               mapper, generator, versions, visibleVersions, variant, packageId, repositoryBaseUrl);
         } else if (NpmMetadata.DIST_TAGS.equals(field.getKey())) {
           mapper.writeValue(generator, distTags);
+        } else if (NpmMetadata.TIME.equals(field.getKey()) && time != null) {
+          mapper.writeValue(generator, time);
         } else {
           mapper.writeValue(generator, field.getValue());
         }

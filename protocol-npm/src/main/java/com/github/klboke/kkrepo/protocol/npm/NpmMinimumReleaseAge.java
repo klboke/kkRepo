@@ -9,11 +9,13 @@ import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.apache.maven.artifact.versioning.ComparableVersion;
@@ -323,6 +325,10 @@ public final class NpmMinimumReleaseAge {
       Map<String, Object> responseTags = NpmMetadata.distTags(preparedCopy);
       responseTags.clear();
       responseTags.putAll(tags);
+      Map<String, Object> time = filteredTime(preparedCopy, eligibleVersions);
+      if (time != null) {
+        preparedCopy.put(NpmMetadata.TIME, time);
+      }
       return preparedCopy;
     }
 
@@ -347,6 +353,28 @@ public final class NpmMinimumReleaseAge {
         }
       }
       return List.copyOf(eligibleVersions);
+    }
+
+    /**
+     * Removes timestamps for hidden versions while preserving package-level fields such as
+     * {@code created} and {@code modified}, plus any upstream extension fields.
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> filteredTime(
+        Map<String, Object> packageRoot,
+        List<String> visibleVersions) {
+      Object rawTime = packageRoot.get(NpmMetadata.TIME);
+      if (!(rawTime instanceof Map<?, ?> time)) {
+        return null;
+      }
+      Set<String> visible = new HashSet<>(visibleVersions);
+      Map<String, Object> filtered = new LinkedHashMap<>();
+      for (Map.Entry<String, Object> entry : ((Map<String, Object>) time).entrySet()) {
+        if (!releases.containsKey(entry.getKey()) || visible.contains(entry.getKey())) {
+          filtered.put(entry.getKey(), entry.getValue());
+        }
+      }
+      return filtered;
     }
 
     public Map<String, Object> filteredDistTags(

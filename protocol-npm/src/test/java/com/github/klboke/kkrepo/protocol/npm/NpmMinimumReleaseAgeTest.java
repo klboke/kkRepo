@@ -25,7 +25,11 @@ class NpmMinimumReleaseAgeTest {
     assertEquals(Map.of("latest", "1.0.0"), NpmMetadata.distTags(filtered));
     assertEquals(1, NpmMetadata.versions(filtered).size());
     assertTrue(NpmMetadata.versions(filtered).containsKey("1.0.0"));
+    assertEquals(
+        Map.of("1.0.0", "2026-07-17T12:00:00Z"),
+        filtered.get(NpmMetadata.TIME));
     assertTrue(NpmMetadata.versions(root).containsKey("1.1.0"), "raw upstream metadata must remain intact");
+    assertTrue(((Map<?, ?>) root.get(NpmMetadata.TIME)).containsKey("1.1.0"));
   }
 
   @Test
@@ -41,7 +45,32 @@ class NpmMinimumReleaseAgeTest {
     assertSame(prepared, filtered, "the isolated response projection should be filtered in place");
     assertEquals(Map.of("latest", "1.0.0"), NpmMetadata.distTags(filtered));
     assertEquals(List.of("1.0.0"), List.copyOf(NpmMetadata.versions(filtered).keySet()));
+    assertEquals(
+        Map.of("1.0.0", "2026-07-17T12:00:00Z"),
+        filtered.get(NpmMetadata.TIME));
     assertTrue(NpmMetadata.versions(root).containsKey("1.1.0"), "the raw packument must remain intact");
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void preservesPackageLevelTimeFieldsWhileRemovingHiddenVersionTimes() {
+    Map<String, Object> root = packument(
+        Map.of("1.0.0", "2026-07-17T12:00:00Z", "1.1.0", "2026-07-19T11:30:01Z"),
+        Map.of("latest", "1.1.0"));
+    Map<String, Object> time = (Map<String, Object>) root.get(NpmMetadata.TIME);
+    time.put("created", "2026-07-17T12:00:00Z");
+    time.put("modified", "2026-07-19T11:30:01Z");
+    time.put("registry-extension", "preserved");
+
+    Map<String, Object> filtered = NpmMinimumReleaseAge.filter(root, NOW, 60);
+
+    assertEquals(
+        Map.of(
+            "1.0.0", "2026-07-17T12:00:00Z",
+            "created", "2026-07-17T12:00:00Z",
+            "modified", "2026-07-19T11:30:01Z",
+            "registry-extension", "preserved"),
+        filtered.get(NpmMetadata.TIME));
   }
 
   @Test

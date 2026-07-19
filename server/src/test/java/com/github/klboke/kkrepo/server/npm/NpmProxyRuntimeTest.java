@@ -132,10 +132,13 @@ class NpmProxyRuntimeTest {
     Map<?, ?> body = new ObjectMapper().readValue(response.body(), Map.class);
     Map<?, ?> versions = (Map<?, ?>) body.get("versions");
     Map<?, ?> tags = (Map<?, ?>) body.get("dist-tags");
+    Map<?, ?> time = (Map<?, ?>) body.get("time");
 
     assertTrue(versions.containsKey("1.0.0"));
     assertFalse(versions.containsKey("1.1.0"));
     assertEquals("1.0.0", tags.get("latest"));
+    assertTrue(time.containsKey("1.0.0"));
+    assertFalse(time.containsKey("1.1.0"));
     ArgumentCaptor<HttpRemoteFetcher.Request> request =
         ArgumentCaptor.forClass(HttpRemoteFetcher.Request.class);
     verify(fixture.fetcher).fetchWithBodyRetry(request.capture(), eq("demo"), any());

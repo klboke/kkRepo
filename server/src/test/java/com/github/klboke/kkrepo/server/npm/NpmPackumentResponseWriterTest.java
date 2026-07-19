@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.npm;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -27,9 +28,12 @@ class NpmPackumentResponseWriterTest {
 
     byte[] bytes = NpmPackumentResponseWriter.write(
         mapper, root, analysis, NOW, NpmPackumentVariant.FULL, PACKAGE, BASE);
+    Map<?, ?> response = mapper.readValue(bytes, Map.class);
 
-    assertEquals(expected, mapper.readValue(bytes, Map.class));
+    assertEquals(expected, response);
+    assertFalse(((Map<?, ?>) response.get("time")).containsKey("1.1.0"));
     assertTrue(NpmMetadata.versions(root).containsKey("1.1.0"));
+    assertTrue(((Map<?, ?>) root.get("time")).containsKey("1.1.0"));
     assertEquals(
         "https://registry.npmjs.org/demo/-/demo-1.0.0.tgz",
         tarball(NpmMetadata.versions(root).get("1.0.0")));
