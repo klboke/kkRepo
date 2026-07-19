@@ -469,6 +469,353 @@ class NpmProxyRuntimeTest {
         () -> noStore.service.getPackage(runtime(1, null), PACKAGE, "base", false));
   }
 
+  @Test
+  void compatibilityConstructorsDefaultReleaseAgeCollaborators() {
+    Fixture fixture = fixture();
+    NpmProxyService withClock = new NpmProxyService(
+        fixture.assetDao, fixture.registry, fixture.writer, fixture.proxyStateDao,
+        fixture.fetcher, fixture.hosted, new ObjectMapper(), fixture.negativeCache,
+        fixture.cache, null, Clock.systemUTC());
+    NpmProxyService withReleaseAgeCache = new NpmProxyService(
+        fixture.assetDao, fixture.registry, fixture.writer, fixture.proxyStateDao,
+        fixture.fetcher, fixture.hosted, new ObjectMapper(), fixture.negativeCache,
+        fixture.cache, null, new NpmReleaseAgeCache(16, 1024, 1), Clock.systemUTC());
+    NpmProxyService withDefaults = new NpmProxyService(
+        fixture.assetDao, fixture.registry, fixture.writer, fixture.proxyStateDao,
+        fixture.fetcher, fixture.hosted, new ObjectMapper(), fixture.negativeCache,
+        fixture.cache, null, null, fixture.releaseIndexDao, null);
+
+    assertTrue(withClock != null);
+    assertTrue(withReleaseAgeCache != null);
+    assertTrue(withDefaults != null);
+  }
+
+  @Test
+  void dispatchesEverySupportedGetKindAndRejectsUnknownPaths() {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(60, 7L);
+    CachedAssetMetadata packageRoot = snapshot("demo", Instant.now(), "package-root", Map.of());
+    CachedAssetMetadata tarball = snapshot(TARBALL_PATH, Instant.now(), "tarball", Map.of());
+    when(fixture.cache.find(eq(10L), anyString(), any())).thenAnswer(invocation ->
+        Optional.of(TARBALL_PATH.equals(invocation.getArgument(1)) ? tarball : packageRoot));
+    MavenResponse packageResponse = MavenResponse.noBody(200);
+    MavenResponse tarballResponse = MavenResponse.noBody(200);
+    MavenResponse tagsResponse = MavenResponse.noBody(200);
+    when(fixture.hosted.getPackage(
+        runtime, PACKAGE, "base", false, NpmPackumentVariant.FULL)).thenReturn(packageResponse);
+    when(fixture.hosted.getPackage(
+        runtime, PACKAGE, runtime.name(), true, NpmPackumentVariant.FULL))
+        .thenReturn(packageResponse);
+    when(fixture.hosted.getTarball(runtime, PACKAGE, TARBALL, false)).thenReturn(tarballResponse);
+    when(fixture.hosted.getDistTags(runtime, PACKAGE, false)).thenReturn(tagsResponse);
+
+    assertSame(packageResponse, fixture.service.get(runtime,
+        path(NpmPath.Kind.PACKAGE_ROOT, null), "base", false));
+    assertSame(packageResponse, fixture.service.get(runtime,
+        path(NpmPath.Kind.PACKAGE_VERSION, null), "base", false));
+    assertSame(tarballResponse, fixture.service.get(runtime,
+        path(NpmPath.Kind.TARBALL, TARBALL), "base", false));
+    assertSame(tagsResponse, fixture.service.get(runtime,
+        path(NpmPath.Kind.DIST_TAGS, null), "base", false));
+    assertThrows(NpmExceptions.NpmNotFoundException.class, () -> fixture.service.get(
+        runtime, path(NpmPath.Kind.UNKNOWN, null), "base", false));
+  }
+
+  @Test
+  void searchReturnsEmptyResultOnRemoteFailureOrIoAndValidatesRuntime() throws Exception {
+    RepositoryRuntime runtime = runtime(60, 7L);
+    Fixture failed = fixture();
+    respond(failed.fetcher, new HttpRemoteFetcher.Result(
+        503, Map.of(), new ByteArrayInputStream(new byte[0])));
+
+    assertThrows(NpmExceptions.BadUpstreamException.class,
+        () -> failed.service.search(runtime, null, 0));
+    verify(failed.proxyStateDao).recordFailure(eq(10L), eq(30L), anyString(), any());
+
+    Fixture io = fixture();
+    failWithIo(io.fetcher, "search unavailable");
+    assertThrows(NpmExceptions.BadUpstreamException.class,
+        () -> io.service.search(runtime, "demo", 10));
+    verify(io.proxyStateDao).recordFailure(eq(10L), eq(30L), anyString(), any());
+
+    assertThrows(IllegalStateException.class,
+        () -> io.service.search(hostedRuntime(), "demo", 10));
+  }
+
+  @Test
+  void nonPolicyRequestsHonorNegativeCacheAndBlockedUpstreamFallbacks() throws Exception {
+    RepositoryRuntime runtime = runtime(60, 7L);
+
+    Fixture negative = fixture();
+    when(negative.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.empty());
+    when(negative.negativeCache.isNotFoundCached(runtime, "demo")).thenReturn(true);
+    assertThrows(NpmExceptions.NpmNotFoundException.class,
+        () -> negative.service.getPackage(runtime, PACKAGE, "base", false));
+
+    Fixture blockedMiss = fixture();
+    when(blockedMiss.cache.find(eq(10L), anyString(), any())).thenReturn(Optional.empty());
+    when(blockedMiss.proxyStateDao.isBlocked(eq(10L), any())).thenReturn(true);
+    assertThrows(NpmExceptions.BadUpstreamException.class,
+        () -> blockedMiss.service.getPackage(runtime, PACKAGE, "base", false));
+    assertThrows(NpmExceptions.BadUpstreamException.class,
+        () -> blockedMiss.service.getTarball(runtime, PACKAGE, TARBALL, false));
+
+    Fixture blockedCached = fixture();
+    CachedAssetMetadata stalePackage = snapshot("demo", Instant.EPOCH, "package-root", Map.of());
+    CachedAssetMetadata staleTarball = snapshot(TARBALL_PATH, Instant.EPOCH, "tarball", Map.of());
+    when(blockedCached.cache.find(eq(10L), anyString(), any())).thenAnswer(invocation ->
+        Optional.of(TARBALL_PATH.equals(invocation.getArgument(1)) ? staleTarball : stalePackage));
+    when(blockedCached.proxyStateDao.isBlocked(eq(10L), any())).thenReturn(true);
+    MavenResponse packageResponse = MavenResponse.noBody(200);
+    MavenResponse tarballResponse = MavenResponse.noBody(200);
+    when(blockedCached.hosted.getPackage(
+        runtime, PACKAGE, "base", false, NpmPackumentVariant.FULL)).thenReturn(packageResponse);
+    when(blockedCached.hosted.getTarball(runtime, PACKAGE, TARBALL, false))
+        .thenReturn(tarballResponse);
+
+    assertSame(packageResponse,
+        blockedCached.service.getPackage(runtime, PACKAGE, "base", false));
+    assertSame(tarballResponse,
+        blockedCached.service.getTarball(runtime, PACKAGE, TARBALL, false));
+  }
+
+  @Test
+  void policyHeadResponsesAndTransitionLookupUseCachedFullMetadata() throws Exception {
+    Instant now = Instant.parse("2026-07-19T12:00:00Z");
+    Fixture fixture = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    RepositoryRuntime policyRuntime = runtime(60, 7L, 60);
+    CachedAssetMetadata snapshot = snapshot(
+        "demo", now, "package-root", Map.of("npmFullMetadata", "true"));
+    when(fixture.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.of(snapshot));
+    when(fixture.hosted.packageRoot(snapshot)).thenReturn(Optional.of(packument(
+        "1.0.0", "2026-07-19T11:30:00Z")));
+
+    MavenResponse packageHead = fixture.service.getPackage(
+        policyRuntime, PACKAGE, "base", true);
+    MavenResponse tagsHead = fixture.service.getDistTags(policyRuntime, PACKAGE, true);
+
+    assertEquals(200, packageHead.status());
+    assertEquals(null, packageHead.body());
+    assertEquals(200, tagsHead.status());
+    assertEquals(
+        Instant.parse("2026-07-19T12:30:00Z"),
+        fixture.service.nextPolicyTransition(policyRuntime, PACKAGE, now).orElseThrow());
+    assertTrue(fixture.service.nextPolicyTransition(runtime(60, 7L), PACKAGE, now).isEmpty());
+  }
+
+  @Test
+  void policyResolutionHonorsNegativeCacheAndBothBlockedCacheStates() throws Exception {
+    Instant now = Instant.parse("2026-07-19T12:00:00Z");
+    RepositoryRuntime runtime = runtime(60, 7L, 60);
+
+    Fixture negative = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    when(negative.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.empty());
+    when(negative.negativeCache.isNotFoundCached(runtime, "demo")).thenReturn(true);
+    assertThrows(NpmExceptions.NpmNotFoundException.class,
+        () -> negative.service.getPackage(runtime, PACKAGE, "base", false));
+
+    Fixture blockedMiss = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    when(blockedMiss.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.empty());
+    when(blockedMiss.proxyStateDao.isBlocked(10L, now)).thenReturn(true);
+    assertThrows(NpmExceptions.BadUpstreamException.class,
+        () -> blockedMiss.service.getPackage(runtime, PACKAGE, "base", false));
+
+    Fixture blockedStale = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    CachedAssetMetadata stale = snapshot(
+        "demo", Instant.EPOCH, "package-root", Map.of("npmFullMetadata", "true"));
+    when(blockedStale.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.of(stale));
+    when(blockedStale.proxyStateDao.isBlocked(10L, now)).thenReturn(true);
+    when(blockedStale.hosted.packageRoot(stale)).thenReturn(Optional.of(packument(
+        "1.0.0", "2026-07-19T10:00:00Z")));
+    assertEquals(200, blockedStale.service.getPackage(runtime, PACKAGE, "base", false).status());
+
+    Fixture blockedLoaded = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    CachedAssetMetadata fresh = snapshot("demo", now, "package-root", Map.of());
+    Map<String, Object> incomplete = packument("1.0.0", "2026-07-19T10:00:00Z");
+    incomplete.remove("time");
+    when(blockedLoaded.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.of(fresh));
+    when(blockedLoaded.hosted.packageRoot(fresh)).thenReturn(Optional.of(incomplete));
+    when(blockedLoaded.proxyStateDao.isBlocked(10L, now)).thenReturn(true);
+    assertEquals(200, blockedLoaded.service.getPackage(runtime, PACKAGE, "base", false).status());
+  }
+
+  @Test
+  void policyRemoteNotModifiedAndErrorStatusesUseSafeFallbacks() throws Exception {
+    Instant now = Instant.parse("2026-07-19T12:00:00Z");
+    RepositoryRuntime runtime = runtime(1, 7L, 60);
+    CachedAssetMetadata stale = snapshot(
+        "demo", Instant.EPOCH, "package-root", Map.of("npmFullMetadata", "true"));
+
+    Fixture notModified = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    when(notModified.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.of(stale));
+    when(notModified.hosted.packageRoot(stale)).thenReturn(Optional.of(packument(
+        "1.0.0", "2026-07-19T10:00:00Z")));
+    respond(notModified.fetcher, new HttpRemoteFetcher.Result(
+        304, Map.of(), new ByteArrayInputStream(new byte[0])));
+    assertEquals(200, notModified.service.getPackage(runtime, PACKAGE, "base", false).status());
+    verify(notModified.assetDao).touchAssetLastUpdated(1L, now);
+
+    Fixture removedCached = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    when(removedCached.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.of(stale));
+    when(removedCached.hosted.packageRoot(stale)).thenReturn(Optional.of(packument(
+        "1.0.0", "2026-07-19T10:00:00Z")));
+    respond(removedCached.fetcher, new HttpRemoteFetcher.Result(
+        404, Map.of(), new ByteArrayInputStream(new byte[0])));
+    assertEquals(200, removedCached.service.getPackage(runtime, PACKAGE, "base", false).status());
+
+    Fixture gone = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    when(gone.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.empty());
+    respond(gone.fetcher, new HttpRemoteFetcher.Result(
+        410, Map.of(), new ByteArrayInputStream(new byte[0])));
+    assertThrows(NpmExceptions.NpmNotFoundException.class,
+        () -> gone.service.getPackage(runtime, PACKAGE, "base", false));
+
+    Fixture unavailable = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    when(unavailable.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.empty());
+    respond(unavailable.fetcher, new HttpRemoteFetcher.Result(
+        503, Map.of(), new ByteArrayInputStream(new byte[0])));
+    assertThrows(NpmExceptions.BadUpstreamException.class,
+        () -> unavailable.service.getPackage(runtime, PACKAGE, "base", false));
+  }
+
+  @Test
+  void policyRemoteIoFallsBackOnlyWhenCachedMetadataExists() throws Exception {
+    Instant now = Instant.parse("2026-07-19T12:00:00Z");
+    RepositoryRuntime runtime = runtime(1, 7L, 60);
+    CachedAssetMetadata stale = snapshot(
+        "demo", Instant.EPOCH, "package-root", Map.of("npmFullMetadata", "true"));
+
+    Fixture cached = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    when(cached.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.of(stale));
+    when(cached.hosted.packageRoot(stale)).thenReturn(Optional.of(packument(
+        "1.0.0", "2026-07-19T10:00:00Z")));
+    failWithIo(cached.fetcher, "metadata unavailable");
+    assertEquals(200, cached.service.getPackage(runtime, PACKAGE, "base", false).status());
+
+    Fixture miss = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    when(miss.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.empty());
+    failWithIo(miss.fetcher, "metadata unavailable");
+    assertThrows(NpmExceptions.BadUpstreamException.class,
+        () -> miss.service.getPackage(runtime, PACKAGE, "base", false));
+  }
+
+  @Test
+  void indexedTarballPolicyRejectsUnknownRowsAndFallsBackWhenIncomplete() {
+    Instant now = Instant.parse("2026-07-19T12:00:00Z");
+    RepositoryRuntime runtime = runtime(60, 7L, 60);
+
+    Fixture emptyRows = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    CachedAssetMetadata verified = snapshot(
+        "demo", now, "package-root", Map.of("npmFullMetadata", "true"));
+    when(emptyRows.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.of(verified));
+    when(emptyRows.releaseIndexDao.findTarballPolicy(1L, 2L, TARBALL, null, null))
+        .thenReturn(Optional.of(new NpmReleaseIndexDao.TarballPolicy(
+            new NpmReleaseIndexDao.Status(1L, 2L, true, 0, now), false, List.of())));
+    assertThrows(NpmExceptions.ReleaseAgeDenied.class,
+        () -> emptyRows.service.getTarball(runtime, PACKAGE, TARBALL, false));
+
+    Fixture incomplete = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    CachedAssetMetadata unverified = snapshot("demo", now, "package-root", Map.of());
+    when(incomplete.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.of(unverified));
+    when(incomplete.releaseIndexDao.findTarballPolicy(1L, 2L, TARBALL, null, null))
+        .thenReturn(Optional.of(new NpmReleaseIndexDao.TarballPolicy(
+            new NpmReleaseIndexDao.Status(1L, 2L, false, 0, now), false, List.of())));
+    when(incomplete.hosted.packageRoot(unverified)).thenReturn(Optional.of(new LinkedHashMap<>(Map.of(
+        "name", "demo", "versions", new LinkedHashMap<>()))));
+    when(incomplete.proxyStateDao.isBlocked(10L, now)).thenReturn(true);
+    assertThrows(NpmExceptions.ReleaseAgeDenied.class,
+        () -> incomplete.service.getTarball(runtime, PACKAGE, TARBALL, false));
+  }
+
+  @Test
+  void indexedSnapshotAvoidsRebuildingAnalysisButStillWritesPackumentBody() throws Exception {
+    Instant now = Instant.parse("2026-07-19T12:00:00Z");
+    Fixture fixture = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    RepositoryRuntime runtime = runtime(60, 7L, 60);
+    CachedAssetMetadata metadata = snapshot(
+        "demo", now, "package-root", Map.of("npmFullMetadata", "true"));
+    when(fixture.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.of(metadata));
+    when(fixture.releaseIndexDao.findSnapshot(1L, 2L)).thenReturn(Optional.of(
+        new NpmReleaseIndexDao.Snapshot(
+            new NpmReleaseIndexDao.Status(1L, 2L, true, 1, now),
+            List.of(new NpmReleaseIndexDao.Release(
+                0, "1.0.0", Instant.parse("2026-07-19T10:00:00Z"), null, TARBALL)))));
+    when(fixture.hosted.packageRoot(metadata)).thenReturn(Optional.of(packument(
+        "1.0.0", "2026-07-19T10:00:00Z")));
+
+    assertEquals(200, fixture.service.getPackage(runtime, PACKAGE, "base", false).status());
+    verify(fixture.releaseIndexDao, never()).replaceIfCurrent(
+        eq(1L), eq(2L), any(Boolean.class), any(), any());
+  }
+
+  @Test
+  void indexedTarballDenialReportsEarliestKnownAvailabilityOrUnknownTime() {
+    Instant now = Instant.parse("2026-07-19T12:00:00Z");
+    RepositoryRuntime runtime = runtime(60, 7L, 60);
+    CachedAssetMetadata metadata = snapshot(
+        "demo", now, "package-root", Map.of("npmFullMetadata", "true"));
+
+    Fixture ordered = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    when(ordered.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.of(metadata));
+    when(ordered.releaseIndexDao.findTarballPolicy(1L, 2L, TARBALL, null, null))
+        .thenReturn(Optional.of(new NpmReleaseIndexDao.TarballPolicy(
+            new NpmReleaseIndexDao.Status(1L, 2L, true, 3, now),
+            false,
+            List.of(
+                new NpmReleaseIndexDao.Release(
+                    0, "unknown", null, "missing-publish-time", TARBALL),
+                new NpmReleaseIndexDao.Release(
+                    1, "1.0.0", Instant.parse("2026-07-19T11:30:00Z"), null, TARBALL),
+                new NpmReleaseIndexDao.Release(
+                    2, "2.0.0", Instant.parse("2026-07-19T11:45:00Z"), null, TARBALL)))));
+
+    NpmExceptions.ReleaseAgeDenied known = assertThrows(
+        NpmExceptions.ReleaseAgeDenied.class,
+        () -> ordered.service.getTarball(runtime, PACKAGE, TARBALL, false));
+    assertTrue(known.getMessage().contains("until 2026-07-19T12:30:00Z"));
+
+    Fixture unknown = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    when(unknown.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.of(metadata));
+    when(unknown.releaseIndexDao.findTarballPolicy(1L, 2L, TARBALL, null, null))
+        .thenReturn(Optional.of(new NpmReleaseIndexDao.TarballPolicy(
+            new NpmReleaseIndexDao.Status(1L, 2L, true, 1, now),
+            false,
+            List.of(new NpmReleaseIndexDao.Release(
+                0, "unknown", null, "missing-publish-time", TARBALL)))));
+
+    NpmExceptions.ReleaseAgeDenied missing = assertThrows(
+        NpmExceptions.ReleaseAgeDenied.class,
+        () -> unknown.service.getTarball(runtime, PACKAGE, TARBALL, false));
+    assertTrue(missing.getMessage().contains("unknown (missing or invalid publish time)"));
+  }
+
+  @Test
+  void legacyIndexBackfillAndCachedAnalysisFailWhenPackageBlobIsMissing() {
+    Instant now = Instant.parse("2026-07-19T12:00:00Z");
+    RepositoryRuntime runtime = runtime(60, 7L, 60);
+    CachedAssetMetadata metadata = snapshot(
+        "demo", now, "package-root", Map.of("npmFullMetadata", "true"));
+
+    Fixture backfill = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    when(backfill.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.of(metadata));
+    when(backfill.releaseIndexDao.findTarballPolicy(1L, 2L, TARBALL, null, null))
+        .thenReturn(Optional.empty());
+    when(backfill.hosted.packageRoot(metadata)).thenReturn(Optional.empty());
+    IllegalStateException backfillError = assertThrows(
+        IllegalStateException.class,
+        () -> backfill.service.getTarball(runtime, PACKAGE, TARBALL, false));
+    assertTrue(backfillError.getMessage().contains("Cached npm package root blob is missing"));
+
+    Fixture analysis = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    when(analysis.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.of(metadata));
+    when(analysis.releaseIndexDao.findSnapshot(1L, 2L)).thenReturn(Optional.empty());
+    when(analysis.hosted.packageRoot(metadata)).thenReturn(Optional.empty());
+    IllegalStateException analysisError = assertThrows(
+        IllegalStateException.class,
+        () -> analysis.service.getPackage(runtime, PACKAGE, "base", false));
+    assertTrue(analysisError.getMessage().contains("Cached npm package root blob is missing"));
+  }
+
   private static void respond(HttpRemoteFetcher fetcher, HttpRemoteFetcher.Result result)
       throws IOException {
     doAnswer(invocation -> {
@@ -476,6 +823,16 @@ class NpmProxyRuntimeTest {
       HttpRemoteFetcher.ResultHandler<Object> handler = invocation.getArgument(2);
       return handler.handle(result);
     }).when(fetcher).fetchWithBodyRetry(any(), anyString(), any());
+  }
+
+  private static void failWithIo(HttpRemoteFetcher fetcher, String message) throws IOException {
+    doAnswer(invocation -> {
+      throw new IOException(message);
+    }).when(fetcher).fetchWithBodyRetry(any(), anyString(), any());
+  }
+
+  private static NpmPath path(NpmPath.Kind kind, String tarballName) {
+    return new NpmPath(kind, "demo", PACKAGE, null, tarballName, null, null);
   }
 
   private static Fixture fixture() {

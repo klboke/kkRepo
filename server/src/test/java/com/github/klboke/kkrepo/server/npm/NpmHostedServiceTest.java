@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -22,10 +23,13 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.protocol.npm.NpmPackageId;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
+import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;
@@ -258,11 +262,60 @@ class NpmHostedServiceTest {
     assertEquals(Map.of("stable", "1.0.0"), map(stored.get("dist-tags")));
   }
 
+  @Test
+  void readsPackageRootFromResolvedSnapshotAndRewritesServedTarballUrl() throws Exception {
+    Fixture fixture = fixture();
+    String json = """
+        {"name":"demo","dist-tags":{"latest":"1.0.0"},"versions":{
+          "1.0.0":{"name":"demo","version":"1.0.0",
+            "dist":{"tarball":"https://registry.npmjs.org/demo/-/demo-1.0.0.tgz"}}
+        }}
+        """;
+    CachedAssetMetadata snapshot = packageSnapshot(json);
+    when(fixture.storage.get(any())).thenReturn(Optional.of(
+        new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8))));
+
+    assertEquals("demo", fixture.service.packageRoot(snapshot).orElseThrow().get("name"));
+
+    stubPackageRoot(fixture, json);
+    String served = new String(fixture.service.getPackage(
+        runtime("ALLOW", 7L), PACKAGE, "https://packages.example/npm", false)
+        .body().readAllBytes(), StandardCharsets.UTF_8);
+    assertEquals(true, served.contains(
+        "https://packages.example/npm/demo/-/demo-1.0.0.tgz"));
+  }
+
+  @Test
+  void snapshotPackageRootHandlesMissingMetadataBlobAndBody() {
+    Fixture fixture = fixture();
+    CachedAssetMetadata withoutBlob = CachedAssetMetadata.of(
+        packageAsset(3L, 1L), null);
+
+    assertEquals(Optional.empty(), fixture.service.packageRoot((CachedAssetMetadata) null));
+    assertEquals(Optional.empty(), fixture.service.packageRoot(withoutBlob));
+
+    CachedAssetMetadata snapshot = packageSnapshot("{}");
+    when(fixture.storage.get(any())).thenReturn(Optional.empty());
+    assertEquals(Optional.empty(), fixture.service.packageRoot(snapshot));
+  }
+
+  @Test
+  void snapshotPackageRootWrapsBlobReadFailure() throws Exception {
+    Fixture fixture = fixture();
+    InputStream broken = mock(InputStream.class);
+    when(broken.read(any(byte[].class), anyInt(), anyInt()))
+        .thenThrow(new IOException("broken blob"));
+    when(fixture.storage.get(any())).thenReturn(Optional.of(broken));
+
+    IllegalStateException error = assertThrows(
+        IllegalStateException.class,
+        () -> fixture.service.packageRoot(packageSnapshot("{}")));
+
+    assertEquals(true, error.getMessage().contains("Failed to read npm package root demo"));
+  }
+
   private static void stubPackageRoot(Fixture fixture, String json) {
-    AssetRecord asset = new AssetRecord(
-        1L, 10L, 2L, 3L, RepositoryFormat.NPM, "demo", null,
-        "demo", "package-root", "application/json", (long) json.length(),
-        null, Instant.EPOCH, Map.of());
+    AssetRecord asset = packageAsset(3L, (long) json.length());
     AssetBlobRecord blob = new AssetBlobRecord(
         3L, 7L, "blob://bucket/demo", null, "demo", null,
         "sha1", "sha256", "md5", (long) json.length(), "application/json",
@@ -271,6 +324,21 @@ class NpmHostedServiceTest {
     when(fixture.assetDao.findBlobById(3L)).thenReturn(Optional.of(blob));
     when(fixture.storage.get(any())).thenAnswer(invocation -> Optional.of(
         new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8))));
+  }
+
+  private static CachedAssetMetadata packageSnapshot(String json) {
+    AssetBlobRecord blob = new AssetBlobRecord(
+        3L, 7L, "blob://bucket/demo", null, "demo", null,
+        "sha1", "sha256", "md5", (long) json.length(), "application/json",
+        "alice", null, Instant.EPOCH, Instant.EPOCH, Map.of());
+    return CachedAssetMetadata.of(packageAsset(3L, (long) json.length()), blob);
+  }
+
+  private static AssetRecord packageAsset(Long blobId, Long size) {
+    return new AssetRecord(
+        1L, 10L, 2L, blobId, RepositoryFormat.NPM, "demo", null,
+        "demo", "package-root", "application/json", size,
+        null, Instant.EPOCH, Map.of());
   }
 
   @SuppressWarnings("unchecked")

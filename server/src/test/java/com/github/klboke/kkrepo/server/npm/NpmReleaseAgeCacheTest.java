@@ -99,10 +99,13 @@ class NpmReleaseAgeCacheTest {
     byte[] afterTransition = cache.response(
         metadata, 60, analysis, Instant.parse("2026-07-19T12:30:00Z"),
         "package-FULL", "base", () -> bytes(builds));
+    byte[] normalizedNullKey = cache.response(
+        metadata, 60, analysis, NOW, null, null, () -> bytes(builds));
 
     assertSame(first, sameGeneration);
     assertNotSame(first, afterTransition);
-    assertEquals(2, builds.get());
+    assertNotSame(first, normalizedNullKey);
+    assertEquals(3, builds.get());
   }
 
   private static NpmMinimumReleaseAge.Analysis loaded(

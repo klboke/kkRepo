@@ -27,7 +27,17 @@ class NpmReleaseIndexDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport
     List<Release> firstRevision = List.of(
         new Release(0, "1.0.0", FIRST_PUBLISHED, null, "demo-1.0.0.tgz"),
         new Release(1, "2.0.0", SECOND_PUBLISHED, null, "demo-2.0.0.tgz"),
-        new Release(2, "broken", null, "missing-publish-time", "demo-broken.tgz"));
+        new Release(2, "broken", null, "missing-publish-time", "demo-2.0.0.tgz"));
+
+    assertTrue(dao.findSnapshot(assetId, firstBlobId).isEmpty());
+    assertTrue(dao.findTarballPolicy(
+        assetId, firstBlobId, "missing.tgz", null, null).isEmpty());
+    assertFalse(dao.hasMaturityBoundary(assetId, firstBlobId, null, SECOND_PUBLISHED));
+    assertFalse(dao.hasMaturityBoundary(
+        assetId, firstBlobId, SECOND_PUBLISHED, SECOND_PUBLISHED));
+    assertTrue(dao.findNextPublishedAfter(assetId, firstBlobId, null).isEmpty());
+    assertFalse(inTransaction(() -> dao.replaceIfCurrent(
+        Long.MAX_VALUE, firstBlobId, true, List.of(), null)));
 
     assertTrue(inTransaction(() -> dao.replaceIfCurrent(
         assetId, firstBlobId, false, firstRevision, INDEXED_AT)));
@@ -35,14 +45,14 @@ class NpmReleaseIndexDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport
     assertFalse(snapshot.status().completePublishTimes());
     assertEquals(firstRevision, snapshot.releases());
     assertEquals(
-        List.of(firstRevision.get(1)),
+        List.of(firstRevision.get(1), firstRevision.get(2)),
         dao.findByTarball(assetId, firstBlobId, "demo-2.0.0.tgz").orElseThrow());
     var tarballPolicy = dao.findTarballPolicy(
         assetId, firstBlobId, "demo-2.0.0.tgz", FIRST_PUBLISHED, SECOND_PUBLISHED)
         .orElseThrow();
     assertEquals(3, tarballPolicy.status().releaseCount());
     assertTrue(tarballPolicy.maturityBoundaryCrossed());
-    assertEquals(List.of(firstRevision.get(1)), tarballPolicy.releases());
+    assertEquals(List.of(firstRevision.get(1), firstRevision.get(2)), tarballPolicy.releases());
     assertTrue(dao.findByTarball(assetId, firstBlobId, "missing.tgz").orElseThrow().isEmpty());
     assertTrue(dao.hasMaturityBoundary(
         assetId, firstBlobId, FIRST_PUBLISHED, SECOND_PUBLISHED));
@@ -52,6 +62,14 @@ class NpmReleaseIndexDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport
         SECOND_PUBLISHED,
         dao.findNextPublishedAfter(assetId, firstBlobId, FIRST_PUBLISHED).orElseThrow());
 
+    jdbc().update(
+        "UPDATE npm_release_index_revision SET release_count = 99 WHERE package_root_asset_id = ?",
+        assetId);
+    assertTrue(dao.findSnapshot(assetId, firstBlobId).isEmpty());
+    jdbc().update(
+        "UPDATE npm_release_index_revision SET release_count = ? WHERE package_root_asset_id = ?",
+        firstRevision.size(), assetId);
+
     assertFalse(inTransaction(() -> dao.replaceIfCurrent(
         assetId, secondBlobId, true, List.of(), INDEXED_AT)));
     jdbc().update("UPDATE asset SET asset_blob_id = ? WHERE id = ?", secondBlobId, assetId);
@@ -59,12 +77,20 @@ class NpmReleaseIndexDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport
         assetId, firstBlobId, true, List.of(), INDEXED_AT)));
 
     List<Release> secondRevision = List.of(
-        new Release(0, "3.0.0", SECOND_PUBLISHED, null, "demo-3.0.0.tgz"));
+        new Release(0, "3.0.0", SECOND_PUBLISHED, null, null));
     assertTrue(inTransaction(() -> dao.replaceIfCurrent(
         assetId, secondBlobId, true, secondRevision, INDEXED_AT.plusSeconds(1))));
     assertTrue(dao.findStatus(assetId, firstBlobId).isEmpty());
     assertTrue(dao.findByTarball(assetId, firstBlobId, "demo-2.0.0.tgz").isEmpty());
     assertEquals(secondRevision, dao.findSnapshot(assetId, secondBlobId).orElseThrow().releases());
+
+    jdbc().update("UPDATE asset SET asset_blob_id = NULL WHERE id = ?", assetId);
+    assertFalse(inTransaction(() -> dao.replaceIfCurrent(
+        assetId, secondBlobId, true, List.of(), null)));
+    jdbc().update("UPDATE asset SET asset_blob_id = ? WHERE id = ?", secondBlobId, assetId);
+    assertTrue(inTransaction(() -> dao.replaceIfCurrent(
+        assetId, secondBlobId, true, null, null)));
+    assertTrue(dao.findSnapshot(assetId, secondBlobId).orElseThrow().releases().isEmpty());
   }
 
   private long insertBlob(long repositoryId, String objectKey) {

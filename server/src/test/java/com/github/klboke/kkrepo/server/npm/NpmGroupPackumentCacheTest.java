@@ -14,6 +14,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.npm.NpmPackageId;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
+import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.cache.NexusCacheType;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheInfo;
@@ -152,6 +153,27 @@ class NpmGroupPackumentCacheTest {
     assertTrue(fixture.cache.findFresh(group, PACKAGE_ID, NOW).isEmpty());
     assertEquals(Map.of("packageId", PACKAGE_ID.id()),
         fixture.assets.asset(group.id(), PACKAGE_ID.id()).attributes());
+  }
+
+  @Test
+  void minimumReleaseAgeValidityAttributeIsParsedDefensively() {
+    Fixture fixture = fixture(true);
+
+    assertEquals(null, fixture.cache.minimumReleaseAgeValidUntil(null));
+    assertEquals(null, fixture.cache.minimumReleaseAgeValidUntil(metadata(null)));
+    assertEquals(null, fixture.cache.minimumReleaseAgeValidUntil(metadata(Map.of())));
+    assertEquals(null, fixture.cache.minimumReleaseAgeValidUntil(metadata(Map.of(
+        "minimumReleaseAgeValidUntil", " "))));
+    assertEquals(null, fixture.cache.minimumReleaseAgeValidUntil(metadata(Map.of(
+        "minimumReleaseAgeValidUntil", "not-an-instant"))));
+    assertEquals(NOW.plusSeconds(30), fixture.cache.minimumReleaseAgeValidUntil(metadata(Map.of(
+        "minimumReleaseAgeValidUntil", NOW.plusSeconds(30).toString()))));
+  }
+
+  private static CachedAssetMetadata metadata(Map<String, Object> attributes) {
+    return new CachedAssetMetadata(
+        1L, 99L, null, null, RepositoryFormat.NPM, PACKAGE_ID.id(), PACKAGE_ID.id(),
+        "package-root", NpmResponseSupport.JSON, 1L, NOW, attributes, null);
   }
 
   private static Fixture fixture(boolean enabled) {
