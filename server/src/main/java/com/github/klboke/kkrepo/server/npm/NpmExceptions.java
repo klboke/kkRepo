@@ -26,6 +26,12 @@ public final class NpmExceptions {
     }
   }
 
+  public static class ReleaseAgeDenied extends RuntimeException {
+    public ReleaseAgeDenied(String message) {
+      super(message);
+    }
+  }
+
   public static class BadUpstreamException extends RuntimeException {
     public BadUpstreamException(String message) {
       super(message);

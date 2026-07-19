@@ -6,10 +6,12 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.NpmReleaseIndexDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
-import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
+import com.github.klboke.kkrepo.protocol.npm.NpmMinimumReleaseAge;
 import com.github.klboke.kkrepo.protocol.npm.NpmPackageId;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
@@ -34,6 +36,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -49,6 +52,7 @@ public class NpmAssetWriter {
   private final AssetMetadataCache assetMetadataCache;
   private final NpmGroupPackumentCache packumentCache;
   private final GroupMemberAssetCache groupMemberAssetCache;
+  private final NpmReleaseIndexDao releaseIndexDao;
 
   public NpmAssetWriter(
       AssetDao assetDao,
@@ -58,6 +62,20 @@ public class NpmAssetWriter {
       AssetMetadataCache assetMetadataCache,
       NpmGroupPackumentCache packumentCache,
       GroupMemberAssetCache groupMemberAssetCache) {
+    this(assetDao, componentDao, browseNodeDao, transactionRetry, assetMetadataCache,
+        packumentCache, groupMemberAssetCache, null);
+  }
+
+  @Autowired
+  public NpmAssetWriter(
+      AssetDao assetDao,
+      ComponentDao componentDao,
+      BrowseNodeDao browseNodeDao,
+      TransientTransactionRetry transactionRetry,
+      AssetMetadataCache assetMetadataCache,
+      NpmGroupPackumentCache packumentCache,
+      GroupMemberAssetCache groupMemberAssetCache,
+      NpmReleaseIndexDao releaseIndexDao) {
     this.assetDao = assetDao;
     this.componentDao = componentDao;
     this.browseNodeDao = browseNodeDao;
@@ -65,6 +83,7 @@ public class NpmAssetWriter {
     this.assetMetadataCache = assetMetadataCache;
     this.packumentCache = packumentCache;
     this.groupMemberAssetCache = groupMemberAssetCache;
+    this.releaseIndexDao = releaseIndexDao;
   }
 
   public record Stored(AssetRecord asset, AssetBlobRecord blob, Digests digests, boolean created, Path responseFile) {
@@ -101,7 +120,21 @@ public class NpmAssetWriter {
       String createdByIp,
       Map<String, String> extraBlobAttributes) {
     return writePackageRoot(runtime, storage, blobStoreId, packageId, json,
-        createdBy, createdByIp, extraBlobAttributes, Map.of(), true);
+        createdBy, createdByIp, extraBlobAttributes, Map.of(), true, null);
+  }
+
+  public Stored writePackageRoot(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      NpmPackageId packageId,
+      byte[] json,
+      String createdBy,
+      String createdByIp,
+      Map<String, String> extraBlobAttributes,
+      NpmMinimumReleaseAge.ReleaseIndex releaseIndex) {
+    return writePackageRoot(runtime, storage, blobStoreId, packageId, json,
+        createdBy, createdByIp, extraBlobAttributes, Map.of(), true, releaseIndex);
   }
 
   public Stored writePackageRoot(
@@ -115,10 +148,26 @@ public class NpmAssetWriter {
       Map<String, String> extraBlobAttributes,
       Map<String, Object> extraAssetAttributes,
       boolean notifyGroupCaches) {
+    return writePackageRoot(runtime, storage, blobStoreId, packageId, json, createdBy,
+        createdByIp, extraBlobAttributes, extraAssetAttributes, notifyGroupCaches, null);
+  }
+
+  private Stored writePackageRoot(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      NpmPackageId packageId,
+      byte[] json,
+      String createdBy,
+      String createdByIp,
+      Map<String, String> extraBlobAttributes,
+      Map<String, Object> extraAssetAttributes,
+      boolean notifyGroupCaches,
+      NpmMinimumReleaseAge.ReleaseIndex releaseIndex) {
     return write(runtime, storage, blobStoreId, packageId.id(), packageId, null,
         new ByteArrayInputStream(json), NpmResponseSupport.JSON, PACKAGE_ROOT,
         createdBy, createdByIp, extraBlobAttributes, extraAssetAttributes,
-        false, notifyGroupCaches, true);
+        false, notifyGroupCaches, true, releaseIndex);
   }
 
   public Stored writePackageRootCache(
@@ -136,7 +185,7 @@ public class NpmAssetWriter {
     return write(runtime, storage, blobStoreId, variant.cachePath(packageId), packageId, null,
         new ByteArrayInputStream(json), NpmResponseSupport.JSON, variant.assetKind(),
         createdBy, createdByIp, extraBlobAttributes, extraAssetAttributes,
-        false, notifyGroupCaches, variant == NpmPackumentVariant.FULL);
+        false, notifyGroupCaches, variant == NpmPackumentVariant.FULL, null);
   }
 
   public Stored writeTarball(
@@ -217,13 +266,36 @@ public class NpmAssetWriter {
       boolean keepResponseFile,
       boolean notifyGroupCaches,
       boolean indexBrowseNode) {
+    return write(runtime, storage, blobStoreId, path, packageId, version, body, contentType,
+        kind, createdBy, createdByIp, extraBlobAttributes, extraAssetAttributes,
+        keepResponseFile, notifyGroupCaches, indexBrowseNode, null);
+  }
+
+  private Stored write(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      String path,
+      NpmPackageId packageId,
+      String version,
+      InputStream body,
+      String contentType,
+      String kind,
+      String createdBy,
+      String createdByIp,
+      Map<String, String> extraBlobAttributes,
+      Map<String, Object> extraAssetAttributes,
+      boolean keepResponseFile,
+      boolean notifyGroupCaches,
+      boolean indexBrowseNode,
+      NpmMinimumReleaseAge.ReleaseIndex releaseIndex) {
     DigestedUpload upload = uploadWithDigests(runtime, storage, blobStoreId, path, body, extraBlobAttributes);
     try {
       Stored stored = executePersist(
           "Persist npm asset " + runtime.name() + "/" + path,
           () -> persist(runtime, blobStoreId, path, packageId, version, contentType, kind,
               createdBy, createdByIp, extraBlobAttributes, extraAssetAttributes, notifyGroupCaches,
-              upload, keepResponseFile ? upload.tempFile() : null, indexBrowseNode));
+              upload, keepResponseFile ? upload.tempFile() : null, indexBrowseNode, releaseIndex));
       cleanupUnusedUploadedBlob(storage, blobStoreId, upload, stored.blob());
       if (!keepResponseFile) {
         TempBlobFiles.deleteQuietly(upload.tempFile());
@@ -258,7 +330,8 @@ public class NpmAssetWriter {
       boolean notifyGroupCaches,
       DigestedUpload upload,
       Path responseFile,
-      boolean indexBrowseNode) {
+      boolean indexBrowseNode,
+      NpmMinimumReleaseAge.ReleaseIndex releaseIndex) {
     Instant now = Instant.now();
     BlobReference ref = upload.reference();
     Digests digests = upload.digests();
@@ -360,6 +433,20 @@ public class NpmAssetWriter {
     }
     if (indexBrowseNode) {
       browseNodeDao.upsertPathAncestors(runtime.id(), path, persistedAsset.id(), componentId);
+    }
+    if (releaseIndex != null && releaseIndexDao != null && PACKAGE_ROOT.equals(kind)) {
+      boolean indexed = releaseIndexDao.replaceIfCurrent(
+          persistedAsset.id(),
+          blobId,
+          releaseIndex.releases().stream()
+              .allMatch(release -> release.invalidReason() == null),
+          toReleaseRows(releaseIndex),
+          now);
+      if (!indexed) {
+        throw new IllegalStateException(
+            "npm release index revision no longer matches package root "
+                + runtime.name() + "/" + path);
+      }
     }
     assetMetadataCache.evictAfterCommit(runtime.id(), path);
     if (notifyGroupCaches && packumentCache != null) {
@@ -566,6 +653,21 @@ public class NpmAssetWriter {
     String path = asset.path();
     int tarballSegment = path == null ? -1 : path.indexOf("/-/");
     return tarballSegment <= 0 ? null : path.substring(0, tarballSegment);
+  }
+
+  private static java.util.List<NpmReleaseIndexDao.Release> toReleaseRows(
+      NpmMinimumReleaseAge.ReleaseIndex releaseIndex) {
+    java.util.List<NpmReleaseIndexDao.Release> rows = new java.util.ArrayList<>();
+    int ordinal = 0;
+    for (NpmMinimumReleaseAge.IndexedRelease release : releaseIndex.releases()) {
+      rows.add(new NpmReleaseIndexDao.Release(
+          ordinal++,
+          release.version(),
+          release.publishedAt(),
+          release.invalidReason(),
+          release.tarballName()));
+    }
+    return java.util.List.copyOf(rows);
   }
 
 }

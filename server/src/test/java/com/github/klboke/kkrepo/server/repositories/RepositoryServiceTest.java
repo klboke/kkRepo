@@ -275,6 +275,61 @@ class RepositoryServiceTest {
   }
 
   @Test
+  void npmProxyMinimumReleaseAgeRoundTripsAndDefaultsToZero() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "npm-proxy",
+        "npm-proxy",
+        true,
+        "default",
+        true,
+        null,
+        new ProxySettings("https://registry.npmjs.org/", 1440, 1440, true, 60),
+        null, null, null, null));
+
+    assertEquals(60, created.proxy().minimumReleaseAgeMinutes());
+    Map<?, ?> proxy = (Map<?, ?>) repositories.repository.attributes().get("proxy");
+    assertEquals(60, proxy.get("minimumReleaseAgeMinutes"));
+
+    StubRepositoryDao defaultRepositories = new StubRepositoryDao(repository(1L));
+    RepositoryView defaulted = service(defaultRepositories).create(new CreateCommand(
+        "npm-proxy-default",
+        "npm-proxy",
+        true,
+        "default",
+        true,
+        null,
+        new ProxySettings("https://registry.npmjs.org/", 1440, 1440, true),
+        null, null, null, null));
+    assertEquals(0, defaulted.proxy().minimumReleaseAgeMinutes());
+  }
+
+  @Test
+  void minimumReleaseAgeRejectsNegativeAndNonNpmValues() {
+    RepositoryService service = service(new StubRepositoryDao(repository(1L)));
+
+    RepositoryValidationException negative = assertThrows(
+        RepositoryValidationException.class,
+        () -> service.create(new CreateCommand(
+            "npm-proxy", "npm-proxy", true, "default", true, null,
+            new ProxySettings("https://registry.npmjs.org/", 1440, 1440, true, -1),
+            null, null, null, null)));
+    assertEquals("proxy.minimumReleaseAgeMinutes must be at least 0", negative.getMessage());
+
+    RepositoryValidationException wrongFormat = assertThrows(
+        RepositoryValidationException.class,
+        () -> service.create(new CreateCommand(
+            "maven-proxy", "maven2-proxy", true, "default", true, null,
+            new ProxySettings("https://repo.maven.apache.org/maven2/", 1440, 1440, true, 60),
+            null, null, null, null)));
+    assertEquals(
+        "proxy.minimumReleaseAgeMinutes is only supported for npm proxy repositories",
+        wrongFormat.getMessage());
+  }
+
+  @Test
   void proxyRemotePasswordIsStoredButMaskedInRepositoryView() {
     StubRepositoryDao repositories = new StubRepositoryDao(dockerProxyRepository());
     RepositoryService service = service(repositories);

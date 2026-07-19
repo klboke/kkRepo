@@ -1930,6 +1930,11 @@ function refreshRepositoryRecipeControls() {
     format !== "cargo";
   document.getElementById("repository-swift-proxy-note").hidden =
     !(format === "swift" && type === "PROXY");
+  const minimumReleaseAgeVisible = format === "npm" && type === "PROXY";
+  document.getElementById("repository-minimum-release-age-field").hidden =
+    !minimumReleaseAgeVisible;
+  document.getElementById("repository-minimum-release-age-note").hidden =
+    !minimumReleaseAgeVisible;
   refreshDockerConnectorControls();
   document.getElementById("repository-blobstore").closest("label").hidden = false;
   refreshRepositoryBlobStoreLock();
@@ -1992,10 +1997,14 @@ function repositoryFormPayload() {
   } else if (type === "PROXY") {
     const content = document.getElementById("repository-content-max-age").value;
     const metadata = document.getElementById("repository-metadata-max-age").value;
+    const minimumReleaseAge = document.getElementById("repository-minimum-release-age").value;
     payload.proxy = {
       remoteUrl: document.getElementById("repository-remote-url").value.trim(),
       contentMaxAgeMinutes: content === "" ? null : Number(content),
       metadataMaxAgeMinutes: metadata === "" ? null : Number(metadata),
+      minimumReleaseAgeMinutes: recipe.format === "npm"
+        ? (minimumReleaseAge === "" ? 0 : Number(minimumReleaseAge))
+        : null,
       autoBlock: document.getElementById("repository-auto-block").checked,
       remoteUsername: textInputValue("repository-remote-username"),
       remotePassword: textInputValue("repository-remote-password"),
@@ -2058,6 +2067,7 @@ function setRepositoryFormDefaults() {
   document.getElementById("repository-outbound-proxy-password-clear").checked = false;
   document.getElementById("repository-content-max-age").value = "1440";
   document.getElementById("repository-metadata-max-age").value = "1440";
+  document.getElementById("repository-minimum-release-age").value = "0";
   document.getElementById("repository-auto-block").checked = true;
   document.getElementById("repository-docker-connector-enabled").checked = false;
   document.getElementById("repository-docker-connector-port").value = "";
@@ -2153,6 +2163,8 @@ function showEditRepositoryForm(name) {
     document.getElementById("repository-outbound-proxy-password-clear").checked = false;
     document.getElementById("repository-content-max-age").value = repo.proxy.contentMaxAgeMinutes ?? "1440";
     document.getElementById("repository-metadata-max-age").value = repo.proxy.metadataMaxAgeMinutes ?? "1440";
+    document.getElementById("repository-minimum-release-age").value =
+      repo.proxy.minimumReleaseAgeMinutes ?? "0";
     document.getElementById("repository-auto-block").checked = repo.proxy.autoBlock !== false;
   }
   if (repo.type === "GROUP" && repo.group && Array.isArray(repo.group.memberNames)) {

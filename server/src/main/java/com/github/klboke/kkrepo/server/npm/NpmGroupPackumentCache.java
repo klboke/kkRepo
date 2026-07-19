@@ -41,6 +41,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 public class NpmGroupPackumentCache {
   private static final Logger log = LoggerFactory.getLogger(NpmGroupPackumentCache.class);
   private static final String VARIANT_ATTRIBUTE = "packumentVariant";
+  private static final String POLICY_VALID_UNTIL_ATTRIBUTE = "minimumReleaseAgeValidUntil";
   private static final Object PENDING_MEMBERS_KEY =
       NpmGroupPackumentCache.class.getName() + ".PENDING_MEMBERS";
   private static final Object PENDING_MEMBER_PACKAGES_KEY =
@@ -99,6 +100,11 @@ public class NpmGroupPackumentCache {
     if (!variant.assetKind().equals(snapshot.kind())) {
       return Optional.empty();
     }
+    Instant policyValidUntil = instantAttribute(
+        snapshot.attributes(), POLICY_VALID_UNTIL_ATTRIBUTE);
+    if (policyValidUntil != null && !now.isBefore(policyValidUntil)) {
+      return Optional.empty();
+    }
     NexusLikeCacheInfo cacheInfo = NexusLikeCacheInfo.fromAttributes(snapshot.attributes()).orElse(null);
     if (cacheController.isStale(
         group.id(),
@@ -119,14 +125,46 @@ public class NpmGroupPackumentCache {
       RepositoryRuntime group,
       Instant now,
       NpmPackumentVariant variant) {
+    return freshAttributes(group, now, variant, null);
+  }
+
+  public Map<String, Object> freshAttributes(
+      RepositoryRuntime group,
+      Instant now,
+      NpmPackumentVariant variant,
+      Instant minimumReleaseAgeValidUntil) {
     if (!enabled) {
       return Map.of();
     }
     Map<String, Object> base = new LinkedHashMap<>();
     base.put(VARIANT_ATTRIBUTE, variant.name());
+    if (minimumReleaseAgeValidUntil != null) {
+      base.put(POLICY_VALID_UNTIL_ATTRIBUTE, minimumReleaseAgeValidUntil.toString());
+    }
     return NexusLikeCacheInfo.applyToAttributes(
         base,
         cacheController.current(group.id(), NexusCacheType.METADATA, now));
+  }
+
+  public Instant minimumReleaseAgeValidUntil(CachedAssetMetadata metadata) {
+    return metadata == null
+        ? null
+        : instantAttribute(metadata.attributes(), POLICY_VALID_UNTIL_ATTRIBUTE);
+  }
+
+  private static Instant instantAttribute(Map<String, Object> attributes, String name) {
+    if (attributes == null) {
+      return null;
+    }
+    Object value = attributes.get(name);
+    if (value == null || value.toString().isBlank()) {
+      return null;
+    }
+    try {
+      return Instant.parse(value.toString());
+    } catch (RuntimeException ignored) {
+      return null;
+    }
   }
 
   /**

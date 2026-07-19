@@ -209,6 +209,16 @@
                 <span>Metadata max age (min)</span>
                 <input id="repository-metadata-max-age" type="number" min="-1" value="1440">
               </label>
+              <label id="repository-minimum-release-age-field" hidden>
+                <span>Minimum release age (min)</span>
+                <input id="repository-minimum-release-age" type="number" min="0" value="0">
+              </label>
+              <p class="form-note full-width" id="repository-minimum-release-age-note" hidden>
+                npm proxy only. A version is hidden from package metadata and its tarball is blocked
+                until this many minutes have passed since publication. Use 0 to disable this policy
+                and preserve existing behavior. This is independent of content and metadata cache
+                max age. Versions with a missing or invalid publish time are blocked while enabled.
+              </p>
               <label class="checkbox-field">
                 <input id="repository-auto-block" type="checkbox" checked>
                 <span>Auto-block remote</span>

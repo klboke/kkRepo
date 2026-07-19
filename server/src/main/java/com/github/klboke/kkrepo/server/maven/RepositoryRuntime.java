@@ -37,7 +37,43 @@ public record RepositoryRuntime(
     String dockerConnectorPublicUrl,
     Boolean cargoRequireAuthentication,
     List<RepositoryRuntime> members,
-    OutboundProxyConfig outboundProxy) {
+    OutboundProxyConfig outboundProxy,
+    Integer minimumReleaseAgeMinutes) {
+
+  /** Compatibility constructor for runtime snapshots created before npm release-age protection. */
+  public RepositoryRuntime(
+      long id,
+      String name,
+      RepositoryFormat format,
+      RepositoryType type,
+      String recipeName,
+      boolean online,
+      Long blobStoreId,
+      String writePolicy,
+      String versionPolicy,
+      String layoutPolicy,
+      boolean strictContentTypeValidation,
+      String proxyRemoteUrl,
+      Integer contentMaxAgeMinutes,
+      Integer metadataMaxAgeMinutes,
+      Boolean autoBlock,
+      String proxyRemoteUsername,
+      String proxyRemotePassword,
+      String proxyRemoteBearerToken,
+      String rawContentDisposition,
+      Boolean dockerConnectorEnabled,
+      Integer dockerConnectorPort,
+      String dockerConnectorPublicUrl,
+      Boolean cargoRequireAuthentication,
+      List<RepositoryRuntime> members,
+      OutboundProxyConfig outboundProxy) {
+    this(id, name, format, type, recipeName, online, blobStoreId, writePolicy,
+        versionPolicy, layoutPolicy, strictContentTypeValidation, proxyRemoteUrl,
+        contentMaxAgeMinutes, metadataMaxAgeMinutes, autoBlock, proxyRemoteUsername,
+        proxyRemotePassword, proxyRemoteBearerToken, rawContentDisposition,
+        dockerConnectorEnabled, dockerConnectorPort, dockerConnectorPublicUrl,
+        cargoRequireAuthentication, members, outboundProxy, null);
+  }
 
   public RepositoryRuntime(
       long id,
@@ -229,6 +265,54 @@ public record RepositoryRuntime(
         null);
   }
 
+  public RepositoryRuntime(
+      long id,
+      String name,
+      RepositoryFormat format,
+      RepositoryType type,
+      String recipeName,
+      boolean online,
+      Long blobStoreId,
+      String writePolicy,
+      String versionPolicy,
+      String layoutPolicy,
+      boolean strictContentTypeValidation,
+      String proxyRemoteUrl,
+      Integer contentMaxAgeMinutes,
+      Integer metadataMaxAgeMinutes,
+      Boolean autoBlock,
+      String rawContentDisposition,
+      List<RepositoryRuntime> members,
+      Integer minimumReleaseAgeMinutes) {
+    this(
+        id,
+        name,
+        format,
+        type,
+        recipeName,
+        online,
+        blobStoreId,
+        writePolicy,
+        versionPolicy,
+        layoutPolicy,
+        strictContentTypeValidation,
+        proxyRemoteUrl,
+        contentMaxAgeMinutes,
+        metadataMaxAgeMinutes,
+        autoBlock,
+        null,
+        null,
+        null,
+        rawContentDisposition,
+        null,
+        null,
+        null,
+        null,
+        members,
+        null,
+        minimumReleaseAgeMinutes);
+  }
+
   public boolean isHosted() {
     return type == RepositoryType.HOSTED;
   }
@@ -296,6 +380,16 @@ public record RepositoryRuntime(
 
   public boolean autoBlockOrDefault() {
     return autoBlock == null ? true : autoBlock;
+  }
+
+  public int minimumReleaseAgeMinutesOrDefault() {
+    return minimumReleaseAgeMinutes == null ? 0 : minimumReleaseAgeMinutes;
+  }
+
+  public boolean minimumReleaseAgeEnabled() {
+    return format == RepositoryFormat.NPM
+        && isProxy()
+        && minimumReleaseAgeMinutesOrDefault() > 0;
   }
 
   public String rawContentDispositionOrDefault() {

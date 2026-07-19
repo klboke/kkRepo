@@ -4,13 +4,28 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import com.github.klboke.kkrepo.server.cargo.CargoExceptions;
 import com.github.klboke.kkrepo.protocol.pub.PubContentTypes;
+import com.github.klboke.kkrepo.server.npm.NpmExceptions;
 import com.github.klboke.kkrepo.server.pub.PubExceptions;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
 class MavenErrorAdviceTest {
+
+  @Test
+  void npmMinimumReleaseAgeDenialIsNotFoundAndNotCacheable() {
+    MavenErrorAdvice advice = new MavenErrorAdvice();
+
+    ResponseEntity<Map<String, Object>> response = advice.npmReleaseAgeDenied(
+        new NpmExceptions.ReleaseAgeDenied("release is too new"));
+
+    assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
+    assertEquals("no-store", response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL));
+    assertEquals(false, response.getBody().get("success"));
+    assertEquals("release is too new", response.getBody().get("error"));
+  }
 
   @Test
   void notFoundBodyIncludesHttpStatus() {

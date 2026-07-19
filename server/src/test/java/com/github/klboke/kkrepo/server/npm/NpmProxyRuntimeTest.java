@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.npm;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -18,10 +19,12 @@ import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.NpmReleaseIndexDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.protocol.npm.NpmPackageId;
+import com.github.klboke.kkrepo.protocol.npm.NpmMinimumReleaseAge;
 import com.github.klboke.kkrepo.protocol.npm.NpmPath;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
@@ -33,11 +36,15 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 class NpmProxyRuntimeTest {
   private static final NpmPackageId PACKAGE = NpmPackageId.parse("demo");
@@ -95,6 +102,219 @@ class NpmProxyRuntimeTest {
     assertEquals("application/json", response.contentType());
     verify(fixture.proxyStateDao).recordSuccess(eq(10L), any());
     verify(fixture.negativeCache).invalidate(runtime, "demo");
+  }
+
+  @Test
+  void minimumReleaseAgeFiltersPackumentRewindsLatestAndRequestsFullMetadata() throws Exception {
+    Instant now = Instant.parse("2026-07-19T12:00:00Z");
+    Fixture fixture = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    RepositoryRuntime runtime = runtime(1, 7L, 60);
+    when(fixture.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.empty());
+    when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
+    respond(fixture.fetcher, new HttpRemoteFetcher.Result(
+        200, Map.of("Content-Type", "application/json"),
+        new ByteArrayInputStream("""
+            {"name":"demo","dist-tags":{"latest":"1.1.0"},
+             "time":{"1.0.0":"2026-07-18T12:00:00Z","1.1.0":"2026-07-19T11:30:01Z"},
+             "versions":{
+               "1.0.0":{"name":"demo","version":"1.0.0","dist":{"tarball":"https://registry.npmjs.org/demo/-/demo-1.0.0.tgz"}},
+               "1.1.0":{"name":"demo","version":"1.1.0","dist":{"tarball":"https://registry.npmjs.org/demo/-/demo-1.1.0.tgz"}}
+             }}
+            """.getBytes(StandardCharsets.UTF_8))));
+    when(fixture.writer.writePackageRoot(
+        eq(runtime), eq(fixture.storage), eq(7L), eq(PACKAGE), any(),
+        eq("proxy"), eq(runtime.proxyRemoteUrl()), any(),
+        any(NpmMinimumReleaseAge.ReleaseIndex.class)))
+        .thenAnswer(invocation -> stored(
+            "demo", "package-root", "application/json", invocation.getArgument(7)));
+
+    MavenResponse response = fixture.service.getPackage(runtime, PACKAGE, "base", false);
+    Map<?, ?> body = new ObjectMapper().readValue(response.body(), Map.class);
+    Map<?, ?> versions = (Map<?, ?>) body.get("versions");
+    Map<?, ?> tags = (Map<?, ?>) body.get("dist-tags");
+
+    assertTrue(versions.containsKey("1.0.0"));
+    assertFalse(versions.containsKey("1.1.0"));
+    assertEquals("1.0.0", tags.get("latest"));
+    ArgumentCaptor<HttpRemoteFetcher.Request> request =
+        ArgumentCaptor.forClass(HttpRemoteFetcher.Request.class);
+    verify(fixture.fetcher).fetchWithBodyRetry(request.capture(), eq("demo"), any());
+    assertEquals("application/json", request.getValue().accept());
+  }
+
+  @Test
+  void minimumReleaseAgeBlocksDirectCachedTarballRequests() {
+    Instant now = Instant.parse("2026-07-19T12:00:00Z");
+    Fixture fixture = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    RepositoryRuntime runtime = runtime(60, 7L, 60);
+    CachedAssetMetadata packageSnapshot = snapshot("demo", now, "package-root", Map.of());
+    when(fixture.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.of(packageSnapshot));
+    when(fixture.hosted.packageRoot(packageSnapshot)).thenReturn(Optional.of(packument(
+        "1.0.0", "2026-07-19T11:30:01Z")));
+    NpmReleaseIndexDao.TarballPolicy indexed = new NpmReleaseIndexDao.TarballPolicy(
+        new NpmReleaseIndexDao.Status(1L, 2L, true, 1, now),
+        false,
+        List.of(new NpmReleaseIndexDao.Release(
+            0, "1.0.0", Instant.parse("2026-07-19T11:30:01Z"), null, TARBALL)));
+    when(fixture.releaseIndexDao.findTarballPolicy(1L, 2L, TARBALL, null, null))
+        .thenReturn(Optional.empty(), Optional.of(indexed), Optional.of(indexed));
+
+    NpmExceptions.ReleaseAgeDenied denied = null;
+    for (int attempt = 0; attempt < 2; attempt++) {
+      denied = assertThrows(
+          NpmExceptions.ReleaseAgeDenied.class,
+          () -> fixture.service.getTarball(runtime, PACKAGE, TARBALL, false));
+    }
+
+    assertTrue(denied.getMessage().contains("until 2026-07-19T12:30:01Z"));
+    verify(fixture.hosted).packageRoot(packageSnapshot);
+    verify(fixture.hosted, never()).getTarball(runtime, PACKAGE, TARBALL, false);
+  }
+
+  @Test
+  void minimumReleaseAgeAllowsRepeatedCachedTarballWithoutReloadingPackument() throws Exception {
+    Instant now = Instant.parse("2026-07-19T12:00:00Z");
+    Fixture fixture = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    RepositoryRuntime runtime = runtime(60, 7L, 60);
+    CachedAssetMetadata packageSnapshot = snapshot("demo", now, "package-root", Map.of());
+    CachedAssetMetadata tarballSnapshot = snapshot(TARBALL_PATH, now, "tarball", Map.of());
+    when(fixture.cache.find(eq(10L), anyString(), any())).thenAnswer(invocation ->
+        Optional.of("demo".equals(invocation.getArgument(1))
+            ? packageSnapshot
+            : tarballSnapshot));
+    when(fixture.hosted.packageRoot(packageSnapshot)).thenReturn(Optional.of(packument(
+        "1.0.0", "2026-07-19T10:00:00Z")));
+    NpmReleaseIndexDao.TarballPolicy indexed = new NpmReleaseIndexDao.TarballPolicy(
+        new NpmReleaseIndexDao.Status(1L, 2L, true, 1, now),
+        false,
+        List.of(new NpmReleaseIndexDao.Release(
+            0, "1.0.0", Instant.parse("2026-07-19T10:00:00Z"), null, TARBALL)));
+    when(fixture.releaseIndexDao.findTarballPolicy(1L, 2L, TARBALL, null, null))
+        .thenReturn(Optional.empty(), Optional.of(indexed), Optional.of(indexed));
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.hosted.getTarball(runtime, PACKAGE, TARBALL, false)).thenReturn(expected);
+
+    assertSame(expected, fixture.service.getTarball(runtime, PACKAGE, TARBALL, false));
+    assertSame(expected, fixture.service.getTarball(runtime, PACKAGE, TARBALL, false));
+
+    verify(fixture.hosted).packageRoot(packageSnapshot);
+    verify(fixture.fetcher, never()).fetchWithBodyRetry(any(), anyString(), any());
+  }
+
+  @Test
+  void minimumReleaseAgeUsesTargetedIndexWithoutLoadingPackumentBlob() throws Exception {
+    Instant now = Instant.parse("2026-07-19T12:00:00Z");
+    Instant lastVerified = Instant.parse("2026-07-19T11:59:00Z");
+    Fixture fixture = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    RepositoryRuntime runtime = runtime(60, 7L, 60);
+    CachedAssetMetadata packageSnapshot = snapshot(
+        "demo", lastVerified, "package-root", Map.of("npmFullMetadata", "true"));
+    CachedAssetMetadata tarballSnapshot = snapshot(TARBALL_PATH, now, "tarball", Map.of());
+    when(fixture.cache.find(eq(10L), anyString(), any())).thenAnswer(invocation ->
+        Optional.of("demo".equals(invocation.getArgument(1))
+            ? packageSnapshot
+            : tarballSnapshot));
+    NpmReleaseIndexDao.Status status =
+        new NpmReleaseIndexDao.Status(1L, 2L, true, 1, lastVerified);
+    List<NpmReleaseIndexDao.Release> releases = List.of(new NpmReleaseIndexDao.Release(
+        0, "1.0.0", Instant.parse("2026-07-19T10:00:00Z"), null, TARBALL));
+    when(fixture.releaseIndexDao.findTarballPolicy(
+        1L, 2L, TARBALL,
+        Instant.parse("2026-07-19T10:59:00Z"),
+        Instant.parse("2026-07-19T11:00:00Z")))
+        .thenReturn(Optional.of(new NpmReleaseIndexDao.TarballPolicy(
+            status, false, releases)));
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.hosted.getTarball(runtime, PACKAGE, TARBALL, false)).thenReturn(expected);
+
+    assertSame(expected, fixture.service.getTarball(runtime, PACKAGE, TARBALL, false));
+
+    verify(fixture.releaseIndexDao).findTarballPolicy(
+        1L, 2L, TARBALL,
+        Instant.parse("2026-07-19T10:59:00Z"),
+        Instant.parse("2026-07-19T11:00:00Z"));
+    verify(fixture.releaseIndexDao, never()).findStatus(eq(1L), eq(2L));
+    verify(fixture.releaseIndexDao, never()).hasMaturityBoundary(
+        eq(1L), eq(2L), any(), any());
+    verify(fixture.releaseIndexDao, never()).findByTarball(eq(1L), eq(2L), anyString());
+    verify(fixture.releaseIndexDao, never()).findSnapshot(eq(1L), eq(2L));
+    verify(fixture.hosted, never()).packageRoot(any(CachedAssetMetadata.class));
+    verify(fixture.fetcher, never()).fetchWithBodyRetry(any(), anyString(), any());
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void minimumReleaseAgeAlsoFiltersDirectDistTagEndpoint() throws Exception {
+    Instant now = Instant.parse("2026-07-19T12:00:00Z");
+    Fixture fixture = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    RepositoryRuntime runtime = runtime(60, 7L, 60);
+    CachedAssetMetadata packageSnapshot = snapshot("demo", now, "package-root", Map.of());
+    Map<String, Object> raw = new ObjectMapper().readValue("""
+        {"name":"demo","dist-tags":{"latest":"2.0.0"},
+         "time":{"1.0.0":"2026-07-18T12:00:00Z","2.0.0":"2026-07-19T11:30:01Z"},
+         "versions":{
+           "1.0.0":{"name":"demo","version":"1.0.0","dist":{"tarball":"https://registry.npmjs.org/demo/-/demo-1.0.0.tgz"}},
+           "2.0.0":{"name":"demo","version":"2.0.0","dist":{"tarball":"https://registry.npmjs.org/demo/-/demo-2.0.0.tgz"}}
+         }}
+        """, Map.class);
+    when(fixture.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.of(packageSnapshot));
+    when(fixture.hosted.packageRoot(packageSnapshot)).thenReturn(Optional.of(raw));
+
+    MavenResponse response = fixture.service.getDistTags(runtime, PACKAGE, false);
+    Map<?, ?> tags = new ObjectMapper().readValue(response.body(), Map.class);
+    MavenResponse repeated = fixture.service.getDistTags(runtime, PACKAGE, false);
+
+    assertEquals("1.0.0", tags.get("latest"));
+    assertEquals(tags, new ObjectMapper().readValue(repeated.body(), Map.class));
+    verify(fixture.hosted).packageRoot(packageSnapshot);
+    verify(fixture.hosted, never()).getDistTags(runtime, PACKAGE, false);
+  }
+
+  @Test
+  void verifiedFullMetadataWithMissingTimesDoesNotForceRefetchOnEveryRequest() throws Exception {
+    Instant now = Instant.parse("2026-07-19T12:00:00Z");
+    Fixture fixture = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    RepositoryRuntime runtime = runtime(60, 7L, 60);
+    CachedAssetMetadata packageSnapshot = snapshot(
+        "demo", now, "package-root",
+        Map.of("npmFullMetadata", "true", "npmCompletePublishTimes", "false"));
+    Map<String, Object> raw = packument("1.0.0", "2026-07-19T10:00:00Z");
+    raw.remove("time");
+    when(fixture.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.of(packageSnapshot));
+    when(fixture.hosted.packageRoot(packageSnapshot)).thenReturn(Optional.of(raw));
+
+    MavenResponse first = fixture.service.getPackage(runtime, PACKAGE, "base", false);
+    MavenResponse second = fixture.service.getPackage(runtime, PACKAGE, "base", false);
+
+    assertTrue(((Map<?, ?>) new ObjectMapper().readValue(first.body(), Map.class)
+        .get("versions")).isEmpty());
+    assertTrue(((Map<?, ?>) new ObjectMapper().readValue(second.body(), Map.class)
+        .get("versions")).isEmpty());
+    verify(fixture.hosted).packageRoot(packageSnapshot);
+    verify(fixture.fetcher, never()).fetchWithBodyRetry(any(), anyString(), any());
+  }
+
+  @Test
+  void maturityBoundaryForcesRevalidationAndFailureDoesNotExposeVersion() throws Exception {
+    Instant now = Instant.parse("2026-07-19T12:01:00Z");
+    Instant lastVerified = Instant.parse("2026-07-19T11:59:00Z");
+    Fixture fixture = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    RepositoryRuntime runtime = runtime(-1, 7L, 60);
+    CachedAssetMetadata packageSnapshot = snapshot(
+        "demo", lastVerified, "package-root", Map.of("remoteEtag", "root"));
+    Map<String, Object> raw = packument("1.0.0", "2026-07-19T11:00:00Z");
+    when(fixture.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.of(packageSnapshot));
+    when(fixture.hosted.packageRoot(packageSnapshot)).thenReturn(Optional.of(raw));
+    respond(fixture.fetcher, new HttpRemoteFetcher.Result(
+        503, Map.of(), new ByteArrayInputStream(new byte[0])));
+
+    MavenResponse response = fixture.service.getPackage(runtime, PACKAGE, "base", false);
+    Map<?, ?> body = new ObjectMapper().readValue(response.body(), Map.class);
+
+    assertTrue(((Map<?, ?>) body.get("versions")).isEmpty(),
+        "a failed maturity-boundary revalidation must keep the release hidden");
+    verify(fixture.fetcher).fetchWithBodyRetry(any(), eq("demo"), any());
+    verify(fixture.proxyStateDao).recordFailure(eq(10L), eq(30L), anyString(), eq(now));
   }
 
   @Test
@@ -195,6 +415,10 @@ class NpmProxyRuntimeTest {
   }
 
   private static Fixture fixture() {
+    return fixture(Clock.systemUTC());
+  }
+
+  private static Fixture fixture(Clock clock) {
     AssetDao assetDao = mock(AssetDao.class);
     BlobStorageRegistry registry = mock(BlobStorageRegistry.class);
     NpmAssetWriter writer = mock(NpmAssetWriter.class);
@@ -203,19 +427,26 @@ class NpmProxyRuntimeTest {
     NpmHostedService hosted = mock(NpmHostedService.class);
     ProxyNegativeCache negativeCache = mock(ProxyNegativeCache.class);
     AssetMetadataCache cache = mock(AssetMetadataCache.class);
+    NpmReleaseIndexDao releaseIndexDao = mock(NpmReleaseIndexDao.class);
     BlobStorage storage = mock(BlobStorage.class);
     return new Fixture(
         assetDao, registry, writer, proxyStateDao, fetcher, hosted, negativeCache, cache,
-        storage, new NpmProxyService(
+        releaseIndexDao, storage, new NpmProxyService(
             assetDao, registry, writer, proxyStateDao, fetcher, hosted, new ObjectMapper(),
-            negativeCache, cache, null));
+            negativeCache, cache, null,
+            new NpmReleaseAgeCache(10000, 16L * 1024 * 1024, 30), releaseIndexDao, clock));
   }
 
   private static RepositoryRuntime runtime(int maxAgeMinutes, Long blobStoreId) {
+    return runtime(maxAgeMinutes, blobStoreId, 0);
+  }
+
+  private static RepositoryRuntime runtime(
+      int maxAgeMinutes, Long blobStoreId, int minimumReleaseAgeMinutes) {
     return new RepositoryRuntime(
         10L, "npm", RepositoryFormat.NPM, RepositoryType.PROXY, "npm", true, blobStoreId,
         null, null, null, true, "https://registry.npmjs.org/",
-        maxAgeMinutes, maxAgeMinutes, true, null, List.of());
+        maxAgeMinutes, maxAgeMinutes, true, null, List.of(), minimumReleaseAgeMinutes);
   }
 
   private static RepositoryRuntime hostedRuntime() {
@@ -235,12 +466,21 @@ class NpmProxyRuntimeTest {
   }
 
   private static NpmAssetWriter.Stored stored(String path, String kind, String contentType) {
+    return stored(path, kind, contentType, Map.of());
+  }
+
+  private static NpmAssetWriter.Stored stored(
+      String path,
+      String kind,
+      String contentType,
+      Map<String, Object> blobAttributes) {
     AssetRecord asset = new AssetRecord(
         1L, 10L, 3L, 2L, RepositoryFormat.NPM, path, null,
         path.substring(path.lastIndexOf('/') + 1), kind, contentType,
         7L, null, Instant.now(), Map.of());
     return new NpmAssetWriter.Stored(
-        asset, blob(Map.of()), new NpmAssetWriter.Digests("md5", "sha1", "sha256", "sha512", 7L),
+        asset, blob(blobAttributes),
+        new NpmAssetWriter.Digests("md5", "sha1", "sha256", "sha512", 7L),
         true, null);
   }
 
@@ -249,6 +489,21 @@ class NpmProxyRuntimeTest {
         2L, 7L, "blob://bucket/object", null, "object", null,
         "sha1", "sha256", "md5", 7L, "application/octet-stream",
         "proxy", "upstream", Instant.EPOCH, Instant.EPOCH, attributes);
+  }
+
+  private static Map<String, Object> packument(String version, String publishedAt) {
+    Map<String, Object> root = new LinkedHashMap<>();
+    root.put("name", "demo");
+    root.put("dist-tags", new LinkedHashMap<>(Map.of("latest", version)));
+    root.put("time", new LinkedHashMap<>(Map.of(version, publishedAt)));
+    root.put("versions", new LinkedHashMap<>(Map.of(
+        version,
+        new LinkedHashMap<>(Map.of(
+            "name", "demo",
+            "version", version,
+            "dist", new LinkedHashMap<>(Map.of(
+                "tarball", "https://registry.npmjs.org/demo/-/demo-" + version + ".tgz")))))));
+    return root;
   }
 
   private record Fixture(
@@ -260,6 +515,7 @@ class NpmProxyRuntimeTest {
       NpmHostedService hosted,
       ProxyNegativeCache negativeCache,
       AssetMetadataCache cache,
+      NpmReleaseIndexDao releaseIndexDao,
       BlobStorage storage,
       NpmProxyService service) {
   }

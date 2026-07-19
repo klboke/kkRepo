@@ -20,15 +20,24 @@ public final class MavenResponse {
   private final String etag;
   private final Instant lastModified;
   private final Map<String, String> headers;
+  private final Map<String, Object> internalAttributes;
 
   private MavenResponse(int status, InputStream body, long contentLength, String contentType,
       String etag, Instant lastModified, Map<String, String> headers) {
-    this(status, body, null, contentLength, contentType, etag, lastModified, headers);
+    this(status, body, null, contentLength, contentType, etag, lastModified, headers,
+        new HashMap<>());
   }
 
   private MavenResponse(int status, InputStream body, BodySupplier bodySupplier,
       long contentLength, String contentType, String etag, Instant lastModified,
       Map<String, String> headers) {
+    this(status, body, bodySupplier, contentLength, contentType, etag, lastModified, headers,
+        new HashMap<>());
+  }
+
+  private MavenResponse(int status, InputStream body, BodySupplier bodySupplier,
+      long contentLength, String contentType, String etag, Instant lastModified,
+      Map<String, String> headers, Map<String, Object> internalAttributes) {
     this.status = status;
     this.body = body;
     this.bodySupplier = bodySupplier;
@@ -37,6 +46,7 @@ public final class MavenResponse {
     this.etag = etag;
     this.lastModified = lastModified;
     this.headers = headers;
+    this.internalAttributes = internalAttributes;
   }
 
   public static MavenResponse ok(InputStream body, long contentLength, String contentType,
@@ -67,12 +77,28 @@ public final class MavenResponse {
   }
 
   public MavenResponse withStatus(int status) {
-    return new MavenResponse(status, body, bodySupplier, contentLength, contentType, etag, lastModified, headers);
+    return new MavenResponse(
+        status, body, bodySupplier, contentLength, contentType, etag, lastModified, headers,
+        internalAttributes);
   }
 
   public MavenResponse withHeader(String name, String value) {
     headers.put(name, value);
     return this;
+  }
+
+  /** Attaches service-internal context that controllers never expose as HTTP headers. */
+  public MavenResponse withInternalAttribute(String name, Object value) {
+    if (value == null) {
+      internalAttributes.remove(name);
+    } else {
+      internalAttributes.put(name, value);
+    }
+    return this;
+  }
+
+  public Object internalAttribute(String name) {
+    return internalAttributes.get(name);
   }
 
   void closeBodyIfOpen() {

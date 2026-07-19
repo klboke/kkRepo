@@ -15,6 +15,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.MaintenanceCursorDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MetadataRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MigrationCheckpointDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MigrationJobDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.NpmReleaseIndexDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceStoreFactory;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceStores;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
@@ -63,6 +64,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
         new JdbcMetadataRebuildDao(jdbc, dialect),
         new JdbcMigrationCheckpointDao(jdbc),
         new JdbcMigrationJobDao(jdbc, json),
+        new JdbcNpmReleaseIndexDao(jdbc),
         new JdbcProxyStateDao(jdbc, 30),
         new JdbcPubUploadSessionDao(jdbc, json),
         new JdbcRepositoryDao(jdbc, json),
@@ -89,6 +91,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
       MetadataRebuildDao metadataRebuild,
       MigrationCheckpointDao migrationCheckpoints,
       MigrationJobDao migrationJobs,
+      NpmReleaseIndexDao npmReleaseIndexes,
       ProxyStateDao proxyStates,
       PubUploadSessionDao pubUploadSessions,
       RepositoryDao repositories,

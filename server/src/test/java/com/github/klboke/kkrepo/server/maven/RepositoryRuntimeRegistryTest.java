@@ -89,6 +89,35 @@ class RepositoryRuntimeRegistryTest {
   }
 
   @Test
+  void resolveReadsNpmMinimumReleaseAge() {
+    FakeRepositoryDao dao = new FakeRepositoryDao();
+    dao.add(new RepositoryRecord(
+        10L,
+        "npm-proxy",
+        RepositoryFormat.NPM,
+        RepositoryType.PROXY,
+        "npm-proxy",
+        true,
+        1L,
+        null,
+        "https://registry.npmjs.org/",
+        null,
+        null,
+        "ALLOW",
+        true,
+        Map.of("proxy", Map.of(
+            "remoteUrl", "https://registry.npmjs.org/",
+            "minimumReleaseAgeMinutes", 120))), List.of());
+
+    RepositoryRuntime runtime = new RepositoryRuntimeRegistry(dao, 0)
+        .resolve("npm-proxy")
+        .orElseThrow();
+
+    assertEquals(120, runtime.minimumReleaseAgeMinutesOrDefault());
+    assertTrue(runtime.minimumReleaseAgeEnabled());
+  }
+
+  @Test
   void runtimeWithProxyBearerTokenIsNotWrittenToSharedCache() {
     FakeRepositoryDao dao = new FakeRepositoryDao();
     dao.add(cargoProxyRepo(6, "cargo-private-proxy", "upstream-token"), List.of());

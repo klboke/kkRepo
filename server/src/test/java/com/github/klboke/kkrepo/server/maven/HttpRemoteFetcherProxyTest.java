@@ -128,7 +128,8 @@ class HttpRemoteFetcherProxyTest {
           "localhost",
           "Basic cm9ib3Q6c2VjcmV0",
           Set.of(),
-          proxyConfig(proxy.port(), null, null));
+          proxyConfig(proxy.port(), null, null))
+          .withAccept("application/json");
 
       try (HttpRemoteFetcher.Result result = fetcher.fetch(request)) {
         assertEquals(200, result.status());
@@ -137,6 +138,8 @@ class HttpRemoteFetcherProxyTest {
       assertEquals(2, proxy.requests().size());
       assertPinnedLocalhostTarget(proxy.requests().get(1), "/moved/lib-1.0.jar");
       assertEquals("Basic cm9ib3Q6c2VjcmV0", proxy.requests().get(1).header("Authorization"));
+      assertEquals("application/json", proxy.requests().get(0).header("Accept"));
+      assertEquals("application/json", proxy.requests().get(1).header("Accept"));
     }
   }
 

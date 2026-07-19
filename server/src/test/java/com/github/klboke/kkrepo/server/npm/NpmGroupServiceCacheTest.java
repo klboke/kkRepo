@@ -111,10 +111,12 @@ class NpmGroupServiceCacheTest {
         group, path, "http://nexus/group", false, NpmPackumentVariant.INSTALL_V1));
     String installBodySecond = body(groupService.get(
         group, path, "http://nexus/group", false, NpmPackumentVariant.INSTALL_V1));
+    assertTrue(fixture.assets.findAssetByPath(group.id(), packageId.id()).isEmpty(),
+        "install-v1 should no longer build an intermediate full group packument");
     String fullBody = body(groupService.get(group, path, "http://nexus/group", false));
 
-    assertEquals(1, fixture.hosted.calls.get(),
-        "install-v1 and full reads should reuse the cached merged full packument");
+    assertEquals(2, fixture.hosted.calls.get(),
+        "install-v1 and full variants should each fan out once without an intermediate full build");
     assertEquals(2, fixture.storage.puts.get(),
         "first install-v1 read should store one full blob and one abbreviated blob");
     assertTrue(fixture.assets.findAssetByPath(group.id(), packageId.id()).isPresent());
@@ -168,6 +170,64 @@ class NpmGroupServiceCacheTest {
     assertEquals(packageId.tarballPath("forge-tokens-0.2.0.tgz"), error.getMessage());
   }
 
+  @Test
+  void groupPackumentCacheExpiresAtNextMinimumReleaseAgeTransition() {
+    Fixture fixture = fixture();
+    RecordingNpmProxyService proxyService = new RecordingNpmProxyService();
+    NpmGroupService groupService = fixture.groupServiceWithProxy(proxyService);
+    NpmPackageId packageId = NpmPackageId.parse("@example/demo");
+    NpmPath path = new NpmPath(
+        NpmPath.Kind.PACKAGE_ROOT, packageId.id(), packageId, null, null, null, null);
+    RepositoryRuntime proxy = runtime(
+        101L, "npm-proxy", RepositoryType.PROXY, List.of(), 60);
+    RepositoryRuntime group = runtime(
+        999L, "npm-group", RepositoryType.GROUP, List.of(proxy));
+
+    groupService.get(group, path, "http://nexus/group", false);
+    groupService.get(group, path, "http://nexus/group", false);
+
+    assertEquals(1, proxyService.calls.get(),
+        "the group cache may be reused before the member's next maturity transition");
+    assertEquals(1, fixture.storage.puts.get(),
+        "the filtered group packument should be persisted with an exact policy deadline");
+    assertTrue(fixture.packumentCache.findFresh(
+        group,
+        packageId,
+        NpmPackumentVariant.FULL,
+        proxyService.nextTransition.minusNanos(1)).isPresent());
+    assertTrue(fixture.packumentCache.findFresh(
+        group,
+        packageId,
+        NpmPackumentVariant.FULL,
+        proxyService.nextTransition).isEmpty(),
+        "the cached group packument must expire exactly when a version becomes mature");
+  }
+
+  @Test
+  void groupReturnsReleaseAgeDenialWhenNoMemberCanServeTarball() {
+    Fixture fixture = fixture();
+    NpmGroupService groupService = fixture.groupServiceWithProxy(new ReleaseAgeNpmProxyService());
+    NpmPackageId packageId = NpmPackageId.parse("@example/demo");
+    NpmPath path = new NpmPath(
+        NpmPath.Kind.TARBALL,
+        packageId.tarballPath("demo-2.0.0.tgz"),
+        packageId,
+        null,
+        "demo-2.0.0.tgz",
+        null,
+        null);
+    RepositoryRuntime proxy = runtime(
+        101L, "npm-proxy", RepositoryType.PROXY, List.of(), 60);
+    RepositoryRuntime group = runtime(
+        999L, "npm-group", RepositoryType.GROUP, List.of(proxy));
+
+    NpmExceptions.ReleaseAgeDenied denied = assertThrows(
+        NpmExceptions.ReleaseAgeDenied.class,
+        () -> groupService.get(group, path, "http://nexus/group", false));
+
+    assertEquals("release is too new", denied.getMessage());
+  }
+
   private static Fixture fixture() {
     ObjectMapper mapper = new ObjectMapper();
     StubRepositoryDao repositories = new StubRepositoryDao();
@@ -198,10 +258,19 @@ class NpmGroupServiceCacheTest {
 
   private static RepositoryRuntime runtime(
       long id, String name, RepositoryType type, List<RepositoryRuntime> members) {
+    return runtime(id, name, type, members, 0);
+  }
+
+  private static RepositoryRuntime runtime(
+      long id,
+      String name,
+      RepositoryType type,
+      List<RepositoryRuntime> members,
+      int minimumReleaseAgeMinutes) {
     return new RepositoryRuntime(
         id, name, RepositoryFormat.NPM, type, "npm-" + type.name().toLowerCase(),
         true, 1L, "ALLOW", null, null, true, null, null, 60,
-        null, null, members);
+        null, null, members, minimumReleaseAgeMinutes);
   }
 
   private static RepositoryRecord record(long id, String name) {
@@ -287,6 +356,49 @@ class NpmGroupServiceCacheTest {
     public MavenResponse get(
         RepositoryRuntime runtime, NpmPath path, String repositoryBaseUrl, boolean headOnly) {
       throw new NpmExceptions.BadUpstreamException("Upstream returned 502");
+    }
+  }
+
+  private static class RecordingNpmProxyService extends NpmProxyService {
+    final AtomicInteger calls = new AtomicInteger();
+    final Instant nextTransition = Instant.now().plusSeconds(600);
+
+    RecordingNpmProxyService() {
+      super(null, null, null, null, null, null, null, null, null, null);
+    }
+
+    @Override
+    public MavenResponse get(
+        RepositoryRuntime runtime,
+        NpmPath path,
+        String repositoryBaseUrl,
+        boolean headOnly) {
+      calls.incrementAndGet();
+      byte[] body = """
+          {"name":"@example/demo","dist-tags":{"latest":"1.0.0"},"versions":{
+            "1.0.0":{"name":"@example/demo","version":"1.0.0",
+              "dist":{"tarball":"https://upstream.example/demo-1.0.0.tgz"}}
+          }}
+          """.getBytes(StandardCharsets.UTF_8);
+      return MavenResponse.ok(new ByteArrayInputStream(body), body.length,
+          NpmResponseSupport.JSON, null, Instant.now())
+          .withInternalAttribute(
+              NpmProxyService.POLICY_VALID_UNTIL_CONTEXT, nextTransition);
+    }
+  }
+
+  private static class ReleaseAgeNpmProxyService extends NpmProxyService {
+    ReleaseAgeNpmProxyService() {
+      super(null, null, null, null, null, null, null, null, null, null);
+    }
+
+    @Override
+    public MavenResponse get(
+        RepositoryRuntime runtime,
+        NpmPath path,
+        String repositoryBaseUrl,
+        boolean headOnly) {
+      throw new NpmExceptions.ReleaseAgeDenied("release is too new");
     }
   }
 

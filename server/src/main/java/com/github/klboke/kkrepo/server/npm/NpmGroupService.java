@@ -86,7 +86,8 @@ public class NpmGroupService {
       NpmPackumentVariant variant) {
     PackageRootContent content = getOrBuildPackageRoot(group, packageId, repositoryBaseUrl, variant, Instant.now());
     return packageRootResponse(
-        packageId, repositoryBaseUrl, content.packageRoot(), content.lastModified(), headOnly, variant);
+        packageId, repositoryBaseUrl, content.packageRoot(), content.lastModified(), headOnly,
+        variant, content.minimumReleaseAgeValidUntil());
   }
 
   private PackageRootContent getOrBuildPackageRoot(
@@ -95,9 +96,6 @@ public class NpmGroupService {
       String repositoryBaseUrl,
       NpmPackumentVariant variant,
       Instant now) {
-    if (variant == NpmPackumentVariant.FULL) {
-      return getOrBuildFullPackageRoot(group, packageId, repositoryBaseUrl, now);
-    }
     if (packumentCache != null) {
       Optional<CachedAssetMetadata> cached = packumentCache.findFresh(group, packageId, variant, now);
       if (cached.isPresent()) {
@@ -108,42 +106,21 @@ public class NpmGroupService {
       }
     }
 
-    PackageRootContent full = getOrBuildFullPackageRoot(group, packageId, repositoryBaseUrl, now);
-    Map<String, Object> abbreviated = NpmMetadata.abbreviatePackageRoot(full.packageRoot());
+    MergedPackageRoot merged = mergePackageRoot(
+        group,
+        packageId,
+        repositoryBaseUrl,
+        containsMinimumReleaseAgeProxy(group),
+        variant);
     Instant lastModified = now;
     if (packumentCache != null && packumentCache.enabled()) {
       NpmAssetWriter.Stored stored = storePackageRoot(
-          group, packageId, variant, NpmResponseSupport.write(mapper, abbreviated), now);
+          group, packageId, variant, merged.bytes(), now,
+          merged.minimumReleaseAgeValidUntil());
       lastModified = stored.asset().lastUpdatedAt();
     }
-    return new PackageRootContent(abbreviated, lastModified);
-  }
-
-  private PackageRootContent getOrBuildFullPackageRoot(
-      RepositoryRuntime group,
-      NpmPackageId packageId,
-      String repositoryBaseUrl,
-      Instant now) {
-    if (packumentCache != null) {
-      Optional<CachedAssetMetadata> cached = packumentCache.findFresh(
-          group, packageId, NpmPackumentVariant.FULL, now);
-      if (cached.isPresent()) {
-        Optional<PackageRootContent> loaded = loadCachedPackageRoot(
-            group, packageId, NpmPackumentVariant.FULL, cached.get());
-        if (loaded.isPresent()) {
-          return loaded.get();
-        }
-      }
-    }
-
-    MergedPackageRoot merged = mergePackageRoot(group, packageId, repositoryBaseUrl);
-    Instant lastModified = now;
-    if (packumentCache != null && packumentCache.enabled()) {
-      NpmAssetWriter.Stored stored = storePackageRoot(
-          group, packageId, NpmPackumentVariant.FULL, merged.bytes(), now);
-      lastModified = stored.asset().lastUpdatedAt();
-    }
-    return new PackageRootContent(merged.packageRoot(), lastModified);
+    return new PackageRootContent(
+        merged.packageRoot(), lastModified, merged.minimumReleaseAgeValidUntil());
   }
 
   private Optional<PackageRootContent> loadCachedPackageRoot(
@@ -161,7 +138,10 @@ public class NpmGroupService {
       if (in == null) {
         return Optional.empty();
       }
-      return Optional.of(new PackageRootContent(mapper.readValue(in, MAP_TYPE), cached.lastUpdatedAt()));
+      return Optional.of(new PackageRootContent(
+          mapper.readValue(in, MAP_TYPE),
+          cached.lastUpdatedAt(),
+          packumentCache.minimumReleaseAgeValidUntil(cached)));
     } catch (IOException e) {
       throw new IllegalStateException(
           "Failed reading cached npm group package root "
@@ -174,7 +154,8 @@ public class NpmGroupService {
       NpmPackageId packageId,
       NpmPackumentVariant variant,
       byte[] bytes,
-      Instant now) {
+      Instant now,
+      Instant minimumReleaseAgeValidUntil) {
     long blobStoreId = requireBlobStore(group);
     BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);
     return writer.writePackageRootCache(
@@ -187,23 +168,38 @@ public class NpmGroupService {
         "group",
         group.name(),
         Map.of(),
-        packumentCache.freshAttributes(group, now, variant),
+        packumentCache.freshAttributes(group, now, variant, minimumReleaseAgeValidUntil),
         variant == NpmPackumentVariant.FULL);
   }
 
   private MergedPackageRoot mergePackageRoot(
       RepositoryRuntime group,
       NpmPackageId packageId,
-      String repositoryBaseUrl) {
+      String repositoryBaseUrl,
+      boolean policyAware,
+      NpmPackumentVariant variant) {
     List<Map<String, Object>> roots = new ArrayList<>();
+    Instant minimumReleaseAgeValidUntil = null;
     for (RepositoryRuntime member : group.members()) {
       try {
         MavenResponse response = dispatch(member,
             new NpmPath(NpmPath.Kind.PACKAGE_ROOT, packageId.id(), packageId, null, null, null, null),
-            repositoryBaseUrl, false);
+            repositoryBaseUrl, false, variant);
         try (InputStream body = response.body()) {
           if (body != null) {
             roots.add(mapper.readValue(body, MAP_TYPE));
+            if (policyAware) {
+              Object rawValidUntil = response.internalAttribute(
+                  NpmProxyService.POLICY_VALID_UNTIL_CONTEXT);
+              Instant memberValidUntil = rawValidUntil instanceof Instant instant
+                  ? instant
+                  : null;
+              if (memberValidUntil != null
+                  && (minimumReleaseAgeValidUntil == null
+                      || memberValidUntil.isBefore(minimumReleaseAgeValidUntil))) {
+                minimumReleaseAgeValidUntil = memberValidUntil;
+              }
+            }
           }
         }
       } catch (NpmExceptions.NpmNotFoundException | NpmExceptions.BadUpstreamException
@@ -217,7 +213,8 @@ public class NpmGroupService {
       throw new NpmExceptions.NpmNotFoundException("Package '" + packageId.id() + "' not found");
     }
     Map<String, Object> merged = roots.size() == 1 ? roots.get(0) : NpmMetadata.merge(roots);
-    return new MergedPackageRoot(merged, NpmResponseSupport.write(mapper, merged));
+    return new MergedPackageRoot(
+        merged, NpmResponseSupport.write(mapper, merged), minimumReleaseAgeValidUntil);
   }
 
   private MavenResponse packageRootResponse(
@@ -226,22 +223,21 @@ public class NpmGroupService {
       Map<String, Object> packageRoot,
       Instant lastModified,
       boolean headOnly,
-      NpmPackumentVariant variant) {
-    Map<String, Object> copy = NpmMetadata.deepCopy(packageRoot);
-    NpmMetadata.rewriteTarballUrls(copy, packageId, repositoryBaseUrl);
-    if (variant.abbreviated()) {
-      copy = NpmMetadata.abbreviatePackageRoot(copy);
-    }
-    byte[] bytes = NpmResponseSupport.write(mapper, copy);
-    if (headOnly) {
-      return MavenResponse.noBody(200, bytes.length, NpmResponseSupport.JSON, null, lastModified);
-    }
-    return MavenResponse.ok(new ByteArrayInputStream(bytes), bytes.length,
-        NpmResponseSupport.JSON, null, lastModified);
+      NpmPackumentVariant variant,
+      Instant minimumReleaseAgeValidUntil) {
+    byte[] bytes = NpmPackumentResponseWriter.write(
+        mapper, packageRoot, null, null, variant, packageId, repositoryBaseUrl);
+    MavenResponse response = headOnly
+        ? MavenResponse.noBody(200, bytes.length, NpmResponseSupport.JSON, null, lastModified)
+        : MavenResponse.ok(new ByteArrayInputStream(bytes), bytes.length,
+            NpmResponseSupport.JSON, null, lastModified);
+    return response.withInternalAttribute(
+        NpmProxyService.POLICY_VALID_UNTIL_CONTEXT, minimumReleaseAgeValidUntil);
   }
 
   private MavenResponse getMergedDistTags(RepositoryRuntime group, NpmPackageId packageId, boolean headOnly) {
-    PackageRootContent packageRoot = getOrBuildFullPackageRoot(group, packageId, group.name(), Instant.now());
+    PackageRootContent packageRoot = getOrBuildPackageRoot(
+        group, packageId, group.name(), NpmPackumentVariant.FULL, Instant.now());
     byte[] bytes = NpmResponseSupport.write(mapper, NpmMetadata.distTags(packageRoot.packageRoot()));
     if (headOnly) {
       return MavenResponse.noBody(200, bytes.length, NpmResponseSupport.JSON, null, packageRoot.lastModified());
@@ -255,6 +251,7 @@ public class NpmGroupService {
       NpmPath path,
       String repositoryBaseUrl,
       boolean headOnly) {
+    NpmExceptions.ReleaseAgeDenied releaseAgeDenied = null;
     NexusCacheType cacheType = NexusCacheType.CONTENT;
     String cachePath = groupMemberCachePath(path);
     Optional<Long> cachedMemberId = groupMemberAssetCache == null
@@ -268,6 +265,9 @@ public class NpmGroupService {
       if (cachedMember != null) {
         try {
           return dispatch(cachedMember, path, repositoryBaseUrl, headOnly);
+        } catch (NpmExceptions.ReleaseAgeDenied denied) {
+          releaseAgeDenied = denied;
+          groupMemberAssetCache.evict(group, cachePath, cacheType);
         } catch (NpmExceptions.NpmNotFoundException | NpmExceptions.BadUpstreamException
             | NpmExceptions.MethodNotAllowed ignored) {
           groupMemberAssetCache.evict(group, cachePath, cacheType);
@@ -281,13 +281,35 @@ public class NpmGroupService {
           groupMemberAssetCache.put(group, cachePath, cacheType, member.id());
         }
         return response;
+      } catch (NpmExceptions.ReleaseAgeDenied denied) {
+        if (releaseAgeDenied == null) {
+          releaseAgeDenied = denied;
+        }
       } catch (NpmExceptions.NpmNotFoundException ignored) {
       } catch (NpmExceptions.BadUpstreamException e) {
         // Nexus group repositories only return successful member responses; keep probing.
       } catch (NpmExceptions.MethodNotAllowed ignored) {
       }
     }
+    if (releaseAgeDenied != null) {
+      throw releaseAgeDenied;
+    }
     throw new NpmExceptions.NpmNotFoundException(path.rawPath());
+  }
+
+  private static boolean containsMinimumReleaseAgeProxy(RepositoryRuntime runtime) {
+    if (runtime == null) {
+      return false;
+    }
+    if (runtime.minimumReleaseAgeEnabled()) {
+      return true;
+    }
+    for (RepositoryRuntime member : runtime.members()) {
+      if (containsMinimumReleaseAgeProxy(member)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static String groupMemberCachePath(NpmPath path) {
@@ -302,10 +324,25 @@ public class NpmGroupService {
       NpmPath path,
       String repositoryBaseUrl,
       boolean headOnly) {
+    return dispatch(member, path, repositoryBaseUrl, headOnly, NpmPackumentVariant.FULL);
+  }
+
+  private MavenResponse dispatch(
+      RepositoryRuntime member,
+      NpmPath path,
+      String repositoryBaseUrl,
+      boolean headOnly,
+      NpmPackumentVariant variant) {
     return switch (member.type()) {
-      case HOSTED -> hosted.get(member, path, repositoryBaseUrl, headOnly);
-      case PROXY -> proxy.get(member, path, repositoryBaseUrl, headOnly);
-      case GROUP -> get(member, path, repositoryBaseUrl, headOnly);
+      case HOSTED -> variant == NpmPackumentVariant.FULL
+          ? hosted.get(member, path, repositoryBaseUrl, headOnly)
+          : hosted.get(member, path, repositoryBaseUrl, headOnly, variant);
+      case PROXY -> variant == NpmPackumentVariant.FULL
+          ? proxy.get(member, path, repositoryBaseUrl, headOnly)
+          : proxy.get(member, path, repositoryBaseUrl, headOnly, variant);
+      case GROUP -> variant == NpmPackumentVariant.FULL
+          ? get(member, path, repositoryBaseUrl, headOnly)
+          : get(member, path, repositoryBaseUrl, headOnly, variant);
     };
   }
 
@@ -316,7 +353,15 @@ public class NpmGroupService {
     return runtime.blobStoreId();
   }
 
-  private record MergedPackageRoot(Map<String, Object> packageRoot, byte[] bytes) {}
+  private record MergedPackageRoot(
+      Map<String, Object> packageRoot,
+      byte[] bytes,
+      Instant minimumReleaseAgeValidUntil) {
+  }
 
-  private record PackageRootContent(Map<String, Object> packageRoot, Instant lastModified) {}
+  private record PackageRootContent(
+      Map<String, Object> packageRoot,
+      Instant lastModified,
+      Instant minimumReleaseAgeValidUntil) {
+  }
 }

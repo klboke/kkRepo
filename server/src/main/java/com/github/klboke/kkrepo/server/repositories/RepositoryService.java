@@ -926,7 +926,8 @@ public class RepositoryService {
         settings.outboundProxyPort(),
         settings.outboundProxyUsername(),
         settings.outboundProxyPassword(),
-        settings.outboundProxyPasswordConfigured());
+        settings.outboundProxyPasswordConfigured(),
+        settings.minimumReleaseAgeMinutes());
   }
 
   private static String defaultRemoteUrl(RepositoryFormat format) {
@@ -960,7 +961,8 @@ public class RepositoryService {
         settings.outboundProxyPort(),
         settings.outboundProxyUsername(),
         settings.outboundProxyPassword(),
-        settings.outboundProxyPasswordConfigured());
+        settings.outboundProxyPasswordConfigured(),
+        settings.minimumReleaseAgeMinutes());
   }
 
   private void validateProxy(ProxySettings settings, RepositoryFormat format) {
@@ -977,6 +979,16 @@ public class RepositoryService {
       throw new RepositoryValidationException(e.getMessage());
     }
     validateOutboundProxy(settings);
+    int minimumReleaseAge = settings.minimumReleaseAgeMinutes() == null
+        ? 0
+        : settings.minimumReleaseAgeMinutes();
+    if (minimumReleaseAge < 0) {
+      throw new RepositoryValidationException("proxy.minimumReleaseAgeMinutes must be at least 0");
+    }
+    if (minimumReleaseAge > 0 && format != RepositoryFormat.NPM) {
+      throw new RepositoryValidationException(
+          "proxy.minimumReleaseAgeMinutes is only supported for npm proxy repositories");
+    }
     if (format == RepositoryFormat.SWIFT) {
       normalizeSwiftRemoteUrl(settings.remoteUrl());
     }
@@ -1089,7 +1101,10 @@ public class RepositoryService {
         mergedOutboundProxyPort,
         mergedOutboundProxyUsername,
         mergedOutboundProxyPassword,
-        null);
+        null,
+        incoming.minimumReleaseAgeMinutes() == null
+            ? base.minimumReleaseAgeMinutes()
+            : incoming.minimumReleaseAgeMinutes());
   }
 
   private static String mergedOutboundProxyPassword(ProxySettings base, ProxySettings incoming) {
@@ -1127,6 +1142,9 @@ public class RepositoryService {
     map.put("remoteUrl", proxy.remoteUrl());
     if (proxy.contentMaxAgeMinutes() != null) map.put("contentMaxAgeMinutes", proxy.contentMaxAgeMinutes());
     if (proxy.metadataMaxAgeMinutes() != null) map.put("metadataMaxAgeMinutes", proxy.metadataMaxAgeMinutes());
+    if (proxy.minimumReleaseAgeMinutes() != null) {
+      map.put("minimumReleaseAgeMinutes", proxy.minimumReleaseAgeMinutes());
+    }
     if (proxy.autoBlock() != null) map.put("autoBlock", proxy.autoBlock());
     if (proxy.remoteUsername() != null && !proxy.remoteUsername().isBlank()) {
       map.put("remoteUsername", proxy.remoteUsername());
@@ -1203,7 +1221,8 @@ public class RepositoryService {
         intValue(proxyMap.get("outboundProxyPort")),
         blankToNull(stringOrNull(proxyMap.get("outboundProxyUsername"))),
         blankToNull(stringOrNull(proxyMap.get("outboundProxyPassword"))),
-        null);
+        null,
+        intValue(proxyMap.get("minimumReleaseAgeMinutes")));
   }
 
   private static ProxySettings readProxyAttributesOrDefaults(RepositoryRecord record) {
@@ -1227,7 +1246,8 @@ public class RepositoryService {
         effective.outboundProxyPort(),
         effective.outboundProxyUsername(),
         null,
-        outboundPassword != null && !outboundPassword.isBlank());
+        outboundPassword != null && !outboundPassword.isBlank(),
+        effective.minimumReleaseAgeMinutes() == null ? 0 : effective.minimumReleaseAgeMinutes());
   }
 
   private static String stringOrNull(Object value) {
