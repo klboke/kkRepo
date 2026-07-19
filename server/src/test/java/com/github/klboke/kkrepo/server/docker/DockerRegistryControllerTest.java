@@ -29,6 +29,7 @@ import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
+import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -71,6 +72,32 @@ class DockerRegistryControllerTest {
     assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
     assertEquals(
         "http://repo.example.com:8081/v2/docker-hosted/library/alpine/blobs/uploads/upload-1",
+        response.getHeaders().getFirst(HttpHeaders.LOCATION));
+  }
+
+  @Test
+  void trustedForwardedHeadersDefinePublicUploadLocation() {
+    RepositoryRuntime runtime = hosted("docker-hosted", null);
+    DockerHostedService hosted = mock(DockerHostedService.class);
+    when(hosted.startUpload(eq(runtime), eq("library/alpine"), eq(null), eq(null), eq(null), anyString(), anyString()))
+        .thenReturn(new DockerUploadService.UploadStatus("upload-1", 0, 0, false, null));
+    DockerRegistryController controller = controllerWithForwardedHeaders(
+        runtime, hosted, new ForwardedHeaderPolicy("10.0.0.1"));
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("POST", "/v2/docker-hosted/library/alpine/blobs/uploads");
+    request.setScheme("http");
+    request.setServerName("kkrepo.internal");
+    request.setServerPort(8080);
+    request.setRemoteAddr("10.0.0.1");
+    request.addHeader("X-Forwarded-Proto", "https");
+    request.addHeader("X-Forwarded-Host", "registry.example.com");
+    request.addHeader("X-Forwarded-Port", "443");
+
+    ResponseEntity<?> response = controller.post(request, null, null);
+
+    assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
+    assertEquals(
+        "https://registry.example.com/v2/docker-hosted/library/alpine/blobs/uploads/upload-1",
         response.getHeaders().getFirst(HttpHeaders.LOCATION));
   }
 
@@ -495,6 +522,35 @@ class DockerRegistryControllerTest {
       DockerProxyService proxy,
       DockerGroupService group,
       AccessDecisionService accessDecisionService) {
+    return controller(
+        runtimes,
+        hosted,
+        proxy,
+        group,
+        accessDecisionService,
+        new ForwardedHeaderPolicy(""));
+  }
+
+  private static DockerRegistryController controllerWithForwardedHeaders(
+      RepositoryRuntime runtime,
+      DockerHostedService hosted,
+      ForwardedHeaderPolicy forwardedHeaderPolicy) {
+    return controller(
+        List.of(runtime),
+        hosted,
+        mock(DockerProxyService.class),
+        mock(DockerGroupService.class),
+        null,
+        forwardedHeaderPolicy);
+  }
+
+  private static DockerRegistryController controller(
+      List<RepositoryRuntime> runtimes,
+      DockerHostedService hosted,
+      DockerProxyService proxy,
+      DockerGroupService group,
+      AccessDecisionService accessDecisionService,
+      ForwardedHeaderPolicy forwardedHeaderPolicy) {
     RepositoryRuntimeRegistry registry = mock(RepositoryRuntimeRegistry.class);
     for (RepositoryRuntime runtime : runtimes) {
       when(registry.resolve(runtime.name())).thenReturn(Optional.of(runtime));
@@ -505,7 +561,8 @@ class DockerRegistryControllerTest {
         proxy,
         group,
         mock(DockerRangeSupport.class),
-        accessDecisionService);
+        accessDecisionService,
+        forwardedHeaderPolicy);
   }
 
   private static MockMvc dockerWriteMvc(RepositoryRuntime runtime) {

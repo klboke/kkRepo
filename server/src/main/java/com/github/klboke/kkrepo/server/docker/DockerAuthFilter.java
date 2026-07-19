@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
+import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -33,17 +34,20 @@ public class DockerAuthFilter extends OncePerRequestFilter {
   private final DockerAuthService authService;
   private final SecurityAuthenticationService authenticationService;
   private final AccessDecisionService accessDecisionService;
+  private final ForwardedHeaderPolicy forwardedHeaderPolicy;
   private final DockerPathParser parser = new DockerPathParser();
 
   public DockerAuthFilter(
       RepositoryRuntimeRegistry registry,
       DockerAuthService authService,
       SecurityAuthenticationService authenticationService,
-      AccessDecisionService accessDecisionService) {
+      AccessDecisionService accessDecisionService,
+      ForwardedHeaderPolicy forwardedHeaderPolicy) {
     this.registry = registry;
     this.authService = authService;
     this.authenticationService = authenticationService;
     this.accessDecisionService = accessDecisionService;
+    this.forwardedHeaderPolicy = forwardedHeaderPolicy;
   }
 
   @Override
@@ -247,20 +251,14 @@ public class DockerAuthFilter extends OncePerRequestFilter {
     return uri;
   }
 
-  private static String tokenRealm(HttpServletRequest request) {
-    return baseUrl(request) + "/service/rest/v1/docker/token";
+  private String tokenRealm(HttpServletRequest request) {
+    return forwardedHeaderPolicy.serverBaseUrl(request) + "/service/rest/v1/docker/token";
   }
 
-  private static String service(HttpServletRequest request) {
-    return request.getServerName() + ":" + request.getServerPort();
-  }
-
-  private static String baseUrl(HttpServletRequest request) {
-    String scheme = request.getScheme();
-    int port = request.getServerPort();
-    boolean defaultPort = ("http".equalsIgnoreCase(scheme) && port == 80)
-        || ("https".equalsIgnoreCase(scheme) && port == 443);
-    return scheme + "://" + request.getServerName() + (defaultPort ? "" : ":" + port);
+  private String service(HttpServletRequest request) {
+    String baseUrl = forwardedHeaderPolicy.serverBaseUrl(request);
+    int schemeSeparator = baseUrl.indexOf("://");
+    return schemeSeparator < 0 ? baseUrl : baseUrl.substring(schemeSeparator + 3);
   }
 
   private record DockerTarget(String repository, DockerPath path, boolean connectorRoute) {

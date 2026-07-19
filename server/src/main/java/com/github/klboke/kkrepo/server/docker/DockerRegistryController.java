@@ -13,6 +13,7 @@ import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
+import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.net.URLDecoder;
@@ -20,7 +21,6 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -46,6 +46,7 @@ public class DockerRegistryController {
   private final DockerGroupService group;
   private final DockerRangeSupport rangeSupport;
   private final AccessDecisionService accessDecisionService;
+  private final ForwardedHeaderPolicy forwardedHeaderPolicy;
   private final DockerPathParser parser = new DockerPathParser();
 
   public DockerRegistryController(
@@ -53,24 +54,16 @@ public class DockerRegistryController {
       DockerHostedService hosted,
       DockerProxyService proxy,
       DockerGroupService group,
-      DockerRangeSupport rangeSupport) {
-    this(registry, hosted, proxy, group, rangeSupport, null);
-  }
-
-  @Autowired
-  public DockerRegistryController(
-      RepositoryRuntimeRegistry registry,
-      DockerHostedService hosted,
-      DockerProxyService proxy,
-      DockerGroupService group,
       DockerRangeSupport rangeSupport,
-      AccessDecisionService accessDecisionService) {
+      AccessDecisionService accessDecisionService,
+      ForwardedHeaderPolicy forwardedHeaderPolicy) {
     this.registry = registry;
     this.hosted = hosted;
     this.proxy = proxy;
     this.group = group;
     this.rangeSupport = rangeSupport;
     this.accessDecisionService = accessDecisionService;
+    this.forwardedHeaderPolicy = forwardedHeaderPolicy;
   }
 
   public ResponseEntity<?> get(
@@ -470,12 +463,12 @@ public class DockerRegistryController {
     }
   }
 
-  private static String uploadLocation(
+  private String uploadLocation(
       HttpServletRequest request, RepositoryRuntime runtime, DockerTarget target, String imageName, String uuid) {
     return registryBaseUrl(request, runtime, target) + registryPath(target, imageName, "blobs/uploads/" + uuid);
   }
 
-  private static String blobLocation(
+  private String blobLocation(
       HttpServletRequest request,
       RepositoryRuntime runtime,
       DockerTarget target,
@@ -484,7 +477,7 @@ public class DockerRegistryController {
     return registryBaseUrl(request, runtime, target) + registryPath(target, imageName, "blobs/" + digest.value());
   }
 
-  private static String manifestLocation(
+  private String manifestLocation(
       HttpServletRequest request,
       RepositoryRuntime runtime,
       DockerTarget target,
@@ -498,22 +491,14 @@ public class DockerRegistryController {
     return prefix + imageName + "/" + suffix;
   }
 
-  private static String registryBaseUrl(
+  private String registryBaseUrl(
       HttpServletRequest request, RepositoryRuntime runtime, DockerTarget target) {
     if (target.connectorRoute()
         && runtime.dockerConnectorPublicUrl() != null
         && !runtime.dockerConnectorPublicUrl().isBlank()) {
       return trimTrailingSlash(runtime.dockerConnectorPublicUrl());
     }
-    return baseUrl(request);
-  }
-
-  private static String baseUrl(HttpServletRequest request) {
-    String scheme = request.getScheme();
-    int port = request.getServerPort();
-    boolean defaultPort = ("http".equalsIgnoreCase(scheme) && port == 80)
-        || ("https".equalsIgnoreCase(scheme) && port == 443);
-    return scheme + "://" + request.getServerName() + (defaultPort ? "" : ":" + port);
+    return forwardedHeaderPolicy.serverBaseUrl(request);
   }
 
   private static String stripContextPath(HttpServletRequest request) {
