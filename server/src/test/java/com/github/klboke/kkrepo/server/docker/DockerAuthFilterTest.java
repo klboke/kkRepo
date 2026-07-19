@@ -20,6 +20,7 @@ import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
+import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import java.util.List;
 import java.util.Map;
@@ -39,6 +40,7 @@ class DockerAuthFilterTest {
   private DockerAuthService authService;
   private RepositoryRuntimeRegistry registry;
   private AccessDecisionService accessDecisionService;
+  private ForwardedHeaderPolicy forwardedHeaderPolicy;
 
   @BeforeEach
   void setUp() {
@@ -53,6 +55,7 @@ class DockerAuthFilterTest {
     authService = mock(DockerAuthService.class);
     registry = mock(RepositoryRuntimeRegistry.class);
     accessDecisionService = mock(AccessDecisionService.class);
+    forwardedHeaderPolicy = new ForwardedHeaderPolicy("");
   }
 
   @Test
@@ -67,7 +70,8 @@ class DockerAuthFilterTest {
         registry,
         authService,
         authenticationService,
-        accessDecisionService);
+        accessDecisionService,
+        forwardedHeaderPolicy);
     MockHttpServletRequest request = new MockHttpServletRequest("GET", "/v2/");
     request.setScheme("http");
     request.setServerName("127.0.0.1");
@@ -86,13 +90,72 @@ class DockerAuthFilterTest {
   }
 
   @Test
+  void trustedForwardedHeadersDefinePublicBearerChallenge() throws Exception {
+    when(authService.challenge(
+        "https://registry.example.com/service/rest/v1/docker/token",
+        "registry.example.com"))
+        .thenReturn("public-challenge");
+    SecurityAuthenticationService authenticationService = mock(SecurityAuthenticationService.class);
+    DockerAuthFilter filter = new DockerAuthFilter(
+        registry,
+        authService,
+        authenticationService,
+        accessDecisionService,
+        new ForwardedHeaderPolicy("10.0.0.1"));
+    MockHttpServletRequest request = new MockHttpServletRequest("GET", "/v2/");
+    request.setScheme("http");
+    request.setServerName("kkrepo.internal");
+    request.setServerPort(8080);
+    request.setRemoteAddr("10.0.0.1");
+    request.addHeader("X-Forwarded-Proto", "https");
+    request.addHeader("X-Forwarded-Host", "registry.example.com");
+    request.addHeader("X-Forwarded-Port", "443");
+    MockHttpServletResponse response = new MockHttpServletResponse();
+
+    filter.doFilter(request, response, new MockFilterChain());
+
+    assertEquals(401, response.getStatus());
+    assertEquals("public-challenge", response.getHeader(HttpHeaders.WWW_AUTHENTICATE));
+  }
+
+  @Test
+  void untrustedForwardedHeadersCannotOverrideBearerChallenge() throws Exception {
+    when(authService.challenge(
+        "http://kkrepo.internal:8080/service/rest/v1/docker/token",
+        "kkrepo.internal:8080"))
+        .thenReturn("internal-challenge");
+    SecurityAuthenticationService authenticationService = mock(SecurityAuthenticationService.class);
+    DockerAuthFilter filter = new DockerAuthFilter(
+        registry,
+        authService,
+        authenticationService,
+        accessDecisionService,
+        new ForwardedHeaderPolicy("10.0.0.1"));
+    MockHttpServletRequest request = new MockHttpServletRequest("GET", "/v2/");
+    request.setScheme("http");
+    request.setServerName("kkrepo.internal");
+    request.setServerPort(8080);
+    request.setRemoteAddr("203.0.113.10");
+    request.addHeader("X-Forwarded-Proto", "https");
+    request.addHeader("X-Forwarded-Host", "attacker.example.com");
+    request.addHeader("X-Forwarded-Port", "443");
+    MockHttpServletResponse response = new MockHttpServletResponse();
+
+    filter.doFilter(request, response, new MockFilterChain());
+
+    assertEquals(401, response.getStatus());
+    assertEquals("internal-challenge", response.getHeader(HttpHeaders.WWW_AUTHENTICATE));
+  }
+
+  @Test
   void baseProbeAcceptsValidBearerTokenWithoutRepositoryScope() throws Exception {
     when(authService.authenticateBearer("base-token")).thenReturn(Optional.of(subject));
     DockerAuthFilter filter = new DockerAuthFilter(
         registry,
         authService,
         mock(SecurityAuthenticationService.class),
-        accessDecisionService);
+        accessDecisionService,
+        forwardedHeaderPolicy);
     MockHttpServletRequest request = new MockHttpServletRequest("GET", "/v2/");
     request.addHeader(HttpHeaders.AUTHORIZATION, "Bearer base-token");
     MockHttpServletResponse response = new MockHttpServletResponse();
@@ -120,7 +183,7 @@ class DockerAuthFilterTest {
             + "service=\"127.0.0.1:18090\",scope=\"repository:docker-live-proxy/library/alpine:pull\"");
     SecurityAuthenticationService authenticationService = mock(SecurityAuthenticationService.class);
     DockerAuthFilter filter = new DockerAuthFilter(
-        registry, authService, authenticationService, accessDecisionService);
+        registry, authService, authenticationService, accessDecisionService, forwardedHeaderPolicy);
     MockHttpServletRequest request =
         new MockHttpServletRequest("GET", "/v2/docker-live-proxy/library/alpine/manifests/latest");
     request.setScheme("http");
@@ -153,7 +216,8 @@ class DockerAuthFilterTest {
         .thenReturn("Bearer realm=\"http://127.0.0.1:18180/service/rest/v1/docker/token\","
             + "service=\"127.0.0.1:18180\",scope=\"repository:codex/alpine:pull\"");
     DockerAuthFilter filter = new DockerAuthFilter(
-        registry, authService, mock(SecurityAuthenticationService.class), accessDecisionService);
+        registry, authService, mock(SecurityAuthenticationService.class), accessDecisionService,
+        forwardedHeaderPolicy);
     MockHttpServletRequest request =
         new MockHttpServletRequest("GET", "/v2/codex/alpine/manifests/latest");
     request.setScheme("http");
@@ -181,7 +245,8 @@ class DockerAuthFilterTest {
     when(accessDecisionService.decide(org.mockito.ArgumentMatchers.eq(subject.permissionSubject()), org.mockito.ArgumentMatchers.any()))
         .thenReturn(AccessDecision.allow());
     DockerAuthFilter filter = new DockerAuthFilter(
-        registry, authService, mock(SecurityAuthenticationService.class), accessDecisionService);
+        registry, authService, mock(SecurityAuthenticationService.class), accessDecisionService,
+        forwardedHeaderPolicy);
     MockHttpServletRequest request =
         new MockHttpServletRequest("GET", "/v2/docker-live-proxy/library/alpine/manifests/latest");
     request.addHeader(HttpHeaders.AUTHORIZATION, "Bearer valid-token");
@@ -206,7 +271,8 @@ class DockerAuthFilterTest {
         org.mockito.ArgumentMatchers.any()))
         .thenReturn(AccessDecision.allow());
     DockerAuthFilter filter = new DockerAuthFilter(
-        registry, authService, mock(SecurityAuthenticationService.class), accessDecisionService);
+        registry, authService, mock(SecurityAuthenticationService.class), accessDecisionService,
+        forwardedHeaderPolicy);
     MockHttpServletRequest request =
         new MockHttpServletRequest("POST", "/v2/docker-live-proxy/library/alpine/blobs/uploads/");
     request.addHeader(HttpHeaders.AUTHORIZATION, "Bearer valid-token");
@@ -232,7 +298,8 @@ class DockerAuthFilterTest {
     when(accessDecisionService.decide(org.mockito.ArgumentMatchers.eq(permissionSubject), org.mockito.ArgumentMatchers.any()))
         .thenReturn(AccessDecision.allow());
     DockerAuthFilter filter = new DockerAuthFilter(
-        registry, authService, mock(SecurityAuthenticationService.class), accessDecisionService);
+        registry, authService, mock(SecurityAuthenticationService.class), accessDecisionService,
+        forwardedHeaderPolicy);
     MockHttpServletRequest request =
         new MockHttpServletRequest("POST", "/v2/docker-live-proxy/library/alpine/blobs/uploads/");
     request.addHeader(HttpHeaders.AUTHORIZATION, "Bearer valid-token");
@@ -255,7 +322,8 @@ class DockerAuthFilterTest {
     when(accessDecisionService.decide(org.mockito.ArgumentMatchers.eq(permissionSubject), org.mockito.ArgumentMatchers.any()))
         .thenReturn(AccessDecision.allow());
     DockerAuthFilter filter = new DockerAuthFilter(
-        registry, authService, mock(SecurityAuthenticationService.class), accessDecisionService);
+        registry, authService, mock(SecurityAuthenticationService.class), accessDecisionService,
+        forwardedHeaderPolicy);
     MockHttpServletRequest request =
         new MockHttpServletRequest("PUT", "/v2/docker-live-proxy/library/alpine/manifests/latest");
     request.addHeader(HttpHeaders.AUTHORIZATION, "Bearer valid-token");
@@ -278,7 +346,8 @@ class DockerAuthFilterTest {
     when(accessDecisionService.decide(org.mockito.ArgumentMatchers.eq(permissionSubject), org.mockito.ArgumentMatchers.any()))
         .thenReturn(AccessDecision.allow());
     DockerAuthFilter filter = new DockerAuthFilter(
-        registry, authService, mock(SecurityAuthenticationService.class), accessDecisionService);
+        registry, authService, mock(SecurityAuthenticationService.class), accessDecisionService,
+        forwardedHeaderPolicy);
     MockHttpServletRequest request =
         new MockHttpServletRequest("GET", "/v2/docker-live-proxy/_catalog");
     request.addHeader(HttpHeaders.AUTHORIZATION, "Bearer valid-token");
@@ -301,7 +370,8 @@ class DockerAuthFilterTest {
         .thenReturn("Bearer realm=\"http://127.0.0.1:18090/service/rest/v1/docker/token\","
             + "service=\"127.0.0.1:18090\",scope=\"registry:catalog:*\"");
     DockerAuthFilter filter = new DockerAuthFilter(
-        registry, authService, mock(SecurityAuthenticationService.class), accessDecisionService);
+        registry, authService, mock(SecurityAuthenticationService.class), accessDecisionService,
+        forwardedHeaderPolicy);
     MockHttpServletRequest request =
         new MockHttpServletRequest("GET", "/v2/docker-live-proxy/_catalog");
     request.setScheme("http");

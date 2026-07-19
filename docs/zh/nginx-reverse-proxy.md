@@ -4,7 +4,7 @@
 
 ## 为什么需要 Forwarded Header
 
-kkRepo 会基于当前请求生成部分客户端可见的绝对 URL。例如 npm package metadata 会重写 `dist.tarball`，Composer p2 metadata 会重写 `dist.url`；两者都必须使用客户端可访问的公网 scheme 和 host。
+kkRepo 会基于当前请求生成部分客户端可见的绝对 URL。例如 npm package metadata 会重写 `dist.tarball`，Composer p2 metadata 会重写 `dist.url`；Docker 会生成 token challenge 的 `realm`、`service` 以及上传响应的 `Location`。这些值都必须使用客户端可访问的公网 scheme、host 和 port。
 
 如果 Nginx 对外接收的是 `https://nexus.example.com`，但转发到 kkRepo 时变成后端 HTTP 请求，kkRepo 必须收到可信的 forwarded header。否则生成的 URL 可能会使用后端看到的请求信息，例如 `http://...` 或后端端口。
 
@@ -101,6 +101,14 @@ curl -u alice:"$KKREPO_PASSWORD" \
 ```
 
 其中 `dist.url` 应以 `https://nexus.example.com/repository/composer-group/` 开头。
+
+Docker 应先验证 registry challenge：
+
+```bash
+curl -sS -D - -o /dev/null https://nexus.example.com/v2/
+```
+
+`WWW-Authenticate` 中的 `realm` 应以 `https://nexus.example.com/` 开头，`service` 不应包含后端 host 或 `:8080`。随后使用相同公网地址执行 `docker login` 和 `docker push`；上传响应的 `Location` 也应保持公网 HTTPS 地址。
 
 如果返回值以 `http://` 开头、包含 `:8080`，或使用了内部 host，检查：
 

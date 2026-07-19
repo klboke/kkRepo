@@ -4,7 +4,7 @@ This note covers the common deployment shape where Nginx terminates HTTPS and fo
 
 ## Why Forwarded Headers Matter
 
-kkRepo generates some client-visible absolute URLs from the incoming request. For example, npm package metadata rewrites `dist.tarball`, and Composer p2 metadata rewrites `dist.url`; both must use the client-visible public scheme and host.
+kkRepo generates some client-visible absolute URLs from the incoming request. For example, npm package metadata rewrites `dist.tarball`, Composer p2 metadata rewrites `dist.url`, and Docker generates the token challenge `realm` and `service` plus upload response `Location` headers. These values must use the client-visible public scheme, host, and port.
 
 If Nginx receives `https://nexus.example.com` but forwards to kkRepo as plain HTTP, kkRepo must receive trusted forwarded headers. Otherwise generated URLs may use the backend view of the request, such as `http://...` or a backend port.
 
@@ -101,6 +101,14 @@ curl -u alice:"$KKREPO_PASSWORD" \
 ```
 
 The `dist.url` value should start with `https://nexus.example.com/repository/composer-group/`.
+
+For Docker, first inspect the registry challenge:
+
+```bash
+curl -sS -D - -o /dev/null https://nexus.example.com/v2/
+```
+
+The `realm` in `WWW-Authenticate` should start with `https://nexus.example.com/`, and `service` must not contain a backend host or `:8080`. Then run `docker login` and `docker push` against the same public address; upload response `Location` headers should also remain on the public HTTPS address.
 
 If it starts with `http://`, contains `:8080`, or uses an internal host name, check:
 
