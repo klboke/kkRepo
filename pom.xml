@@ -52,7 +52,7 @@
     <maven.artifact.version>3.9.16</maven.artifact.version>
     <aws.sdk.version>2.47.5</aws.sdk.version>
     <commons.compress.version>1.28.0</commons.compress.version>
-    <xz.version>1.10</xz.version>
+    <xz.version>1.12</xz.version>
     <commons.lang3.version>3.20.0</commons.lang3.version>
     <bouncycastle.version>1.84</bouncycastle.version>
     <jacoco.version>0.8.15</jacoco.version>
