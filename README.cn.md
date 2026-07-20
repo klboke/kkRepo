@@ -176,9 +176,10 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 5. ✅ Terraform Provider / Module Registry - hosted、proxy、group、Provider GPG 签名、Nexus 路径兼容、UI/API 上传、搜索、真实 Terraform CLI E2E、Nexus hosted 数据迁移和显式选择的 proxy cache 迁移已实现（[设计说明](docs/zh/dev/terraform-repository-design.md)）
 6. ✅ Swift Package Registry - hosted、GitHub-backed proxy、group、Registry v1、不可变签名发布、UI/API 上传、Browse/Search、多副本协同、真实 SwiftPM/Xcode E2E 和 shape-gated Nexus 3.92.x-3.94.x 迁移已实现（[设计说明](docs/zh/dev/swift-package-registry-design.md)）
 7. ohpm / HarmonyOS - 规划中，覆盖 hosted、proxy、group、导入和管理端能力（[设计说明](docs/zh/dev/ohpm-repository-design.md)）
-8. APT / Debian
-9. Conan
-10. Conda
+8. Ansible Galaxy
+9. APT / Debian
+10. Conan
+11. Conda
 
 用户和管理端 UI 已暴露的 token 类型包括协议专用 token（`NpmToken`、`CargoToken`、`PubToken`、`NuGetApiKey`、`RubyGemsApiKey`），以及面向 Terraform 服务 URL、CI、脚本和自定义 HTTP 客户端的 `GenericToken`；`GenericToken` 适用于能够发送已配置 API-key header 或 bearer token 的调用方。
 
