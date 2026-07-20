@@ -54,7 +54,7 @@
     <commons.compress.version>1.28.0</commons.compress.version>
     <xz.version>1.12</xz.version>
     <commons.lang3.version>3.20.0</commons.lang3.version>
-    <bouncycastle.version>1.84</bouncycastle.version>
+    <bouncycastle.version>1.85</bouncycastle.version>
     <jacoco.version>0.8.15</jacoco.version>
     <flatten.maven.plugin.version>1.7.3</flatten.maven.plugin.version>
     <maven.compiler.release>${java.version}</maven.compiler.release>
