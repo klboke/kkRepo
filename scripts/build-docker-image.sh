@@ -52,7 +52,9 @@ START_CLASS="com.github.klboke.kkrepo.server.KkRepoApplication"
 
 if [[ "$BUILD_MODE" == "native" ]]; then
   echo "[image] building Spring AOT/GraalVM native image $IMAGE_TAG..."
-  mvn -Pnative -pl server -am -Dmaven.test.skip=true \
+  # Keep test compilation enabled so reactor test-jars consumed by downstream
+  # persistence modules are still attached; only skip executing the tests.
+  mvn -Pnative -pl server -am -DskipTests \
     -DskipNativeBuild=true \
     -Dspring-boot.build-image.imageName="$IMAGE_TAG" \
     clean install spring-boot:build-image-no-fork
