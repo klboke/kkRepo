@@ -45,6 +45,7 @@
     <revision>0.5.1</revision>
     <java.version>25</java.version>
     <spring.boot.version>4.1.0</spring.boot.version>
+    <native-build-tools-plugin.version>1.1.1</native-build-tools-plugin.version>
     <apollo.client.version>2.5.0</apollo.client.version>
     <guava.version>33.6.0-jre</guava.version>
     <guice.version>7.0.0</guice.version>
@@ -59,6 +60,10 @@
     <flatten.maven.plugin.version>1.7.3</flatten.maven.plugin.version>
     <maven.compiler.release>${java.version}</maven.compiler.release>
     <kkrepo.dist.version>${project.version}</kkrepo.dist.version>
+    <kkrepo.dist.suffix></kkrepo.dist.suffix>
+    <kkrepo.dist.runtime.source>${project.build.directory}/${project.build.finalName}.jar</kkrepo.dist.runtime.source>
+    <kkrepo.dist.runtime.name>kkrepo.jar</kkrepo.dist.runtime.name>
+    <kkrepo.dist.runtime.mode>0644</kkrepo.dist.runtime.mode>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
   </properties>
@@ -290,6 +295,12 @@
             <skip>true</skip>
           </configuration>
         </plugin>
+        <plugin>
+          <groupId>org.graalvm.buildtools</groupId>
+          <artifactId>native-maven-plugin</artifactId>
+          <version>${native-build-tools-plugin.version}</version>
+          <extensions>true</extensions>
+        </plugin>
       </plugins>
     </pluginManagement>
     <plugins>
@@ -339,4 +350,66 @@
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <profile>
+      <id>native</id>
+      <build>
+        <pluginManagement>
+          <plugins>
+            <plugin>
+              <groupId>org.apache.maven.plugins</groupId>
+              <artifactId>maven-jar-plugin</artifactId>
+              <configuration>
+                <archive>
+                  <manifestEntries>
+                    <Spring-Boot-Native-Processed>true</Spring-Boot-Native-Processed>
+                  </manifestEntries>
+                </archive>
+              </configuration>
+            </plugin>
+            <plugin>
+              <groupId>org.springframework.boot</groupId>
+              <artifactId>spring-boot-maven-plugin</artifactId>
+              <executions>
+                <execution>
+                  <id>process-aot</id>
+                  <goals>
+                    <goal>process-aot</goal>
+                  </goals>
+                </execution>
+              </executions>
+            </plugin>
+            <plugin>
+              <groupId>org.graalvm.buildtools</groupId>
+              <artifactId>native-maven-plugin</artifactId>
+              <configuration>
+                <classesDirectory>${project.build.outputDirectory}</classesDirectory>
+                <exclusions>
+                  <exclusion>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-devtools</artifactId>
+                  </exclusion>
+                </exclusions>
+              </configuration>
+              <executions>
+                <execution>
+                  <id>add-reachability-metadata</id>
+                  <goals>
+                    <goal>add-reachability-metadata</goal>
+                  </goals>
+                </execution>
+                <execution>
+                  <id>build-native</id>
+                  <goals>
+                    <goal>compile-no-fork</goal>
+                  </goals>
+                </execution>
+              </executions>
+            </plugin>
+          </plugins>
+        </pluginManagement>
+      </build>
+    </profile>
+  </profiles>
 </project>

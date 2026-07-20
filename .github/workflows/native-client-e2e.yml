@@ -1,0 +1,28 @@
+name: Native Client E2E
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - labeled
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-client-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-client-e2e:
+    name: Native client E2E
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-native-client-e2e')
+    uses: ./.github/workflows/live-compat.yml
+    with:
+      suite: client-e2e
+      runtime: native

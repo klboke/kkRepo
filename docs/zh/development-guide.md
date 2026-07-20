@@ -172,6 +172,8 @@ scripts/ci/run-live-compat.sh client-e2e
 
 该 suite 会通过 Maven、npm、PyPI、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform 0.13/当前稳定版、SwiftPM/Xcode、NuGet、RubyGems、Yum、Docker/OCI 客户端发布/上传并下载/解析。Composer 额外覆盖 hosted 到 proxy 的传递依赖、错误 Basic 凭据和清空客户端缓存后的断上游 lock replay；Terraform 覆盖 group 中的 hosted 与 registry.terraform.io proxy module/provider，并验证 Provider checksum/signature metadata；Swift 5.7 覆盖 registry/proxy resolve/build，5.10/6.x 额外覆盖 HTTPS login、不可变发布、hosted/group、SCM replacement 和跨副本读取，独立 lane 覆盖 macOS Xcode 与 Windows proxy resolve；Go 通过 Go module proxy 做 resolve-only 验证。客户端诊断信息会写入 `artifacts/client-e2e/`，包含 credential 的 metadata 会在上传 artifact 前脱敏。
 
+Pull Request 上的 `run-client-e2e` 用于验证默认 JVM 候选镜像。Spring AOT、runtime hint 或 Native 打包变更应使用独立的 `run-native-client-e2e` 标签；该 workflow 会构建 Native 候选镜像，并分别针对 MySQL 和 PostgreSQL 运行 Linux 真实客户端矩阵。
+
 Swift 的生产加固证据拆分为独立 lane：定时 S3-compatible resilience job 使用双副本、PostgreSQL 和通过 AWS S3 adapter 访问的 MinIO，验证 lease takeover、429/5xx stale 行为、restart、大 package 和破坏式备份恢复；阿里云 OSS Native 仍是 adapter contract 覆盖，不声称真实 endpoint E2E。迁移 workflow 使用 Nexus 3.94 H2 源到 MySQL，以及 PostgreSQL 源到 MySQL/PostgreSQL 目标的 lane，并验证 source profile/proxy credential fail closed、restart/resume、checksum 和幂等性。
 
 ## 开发设计文档

@@ -144,7 +144,14 @@ jobs:
         run: |
           bash -n scripts/deploy/kkrepo-jar-deploy.sh
           bash -n scripts/ci/test-dev-jar-deploy.sh
+          bash -n scripts/build-dist.sh
+          bash -n scripts/build-docker-image.sh
+          bash -n scripts/ci/test-dist-launcher.sh
+          bash -n server/src/dist/bin/start.sh
+          bash -n server/src/dist/bin/status.sh
+          bash -n server/src/dist/bin/stop.sh
           scripts/ci/test-dev-jar-deploy.sh
+          scripts/ci/test-dist-launcher.sh
           test -f .github/deploy/dev/systemd/kkrepo.service
           POSTGRES_DB=kkrepo POSTGRES_USER=kkrepo POSTGRES_PASSWORD=kkrepo \
             docker compose -f .github/deploy/dev/docker-compose.yml config --quiet

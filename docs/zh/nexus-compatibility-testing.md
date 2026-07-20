@@ -78,7 +78,7 @@ scripts/ci/run-live-compat.sh client-e2e
 
 它会覆盖 Maven、npm、PyPI、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform 0.13/当前稳定版、SwiftPM/Xcode、NuGet、RubyGems、Yum、Docker/OCI 的发布/上传和下载/解析流程。Composer 覆盖 hosted archive、group、Packagist proxy、传递依赖、Basic 认证和服务端 cache lock replay；Terraform 覆盖 hosted module/provider 上传、registry.terraform.io proxy、group 解析、URL token 认证、checksum 和 signature；Swift 5.7 覆盖 registry/proxy resolve/build，5.10/6.x 额外覆盖 hosted publish、Basic/GenericToken login、group resolve/build、GitHub SCM replacement、checksum replay 和跨副本读取，macOS/Windows 分别提供 Xcode 和 proxy-only 专用 lane；Go 通过 Go module proxy 做 resolve-only 验证，因为 Go hosted 发布不是当前仓库模式。Docker image push/pull 会固定覆盖；如果运行环境里有 `oras`，还会额外 push/pull 一个通用 OCI artifact。
 
-当变更影响真实客户端会直接走到的仓库协议行为时，应运行这个 suite，例如认证 header 或 API key、发布/上传路径、生成的 metadata、包索引形态、checksum/download 行为、Docker connector port、group/proxy 解析等。在 GitHub Actions 中，可以手动选择 `Live Compatibility` workflow 的 `client-e2e` suite，或给 PR 加 `run-client-e2e` label。
+当变更影响真实客户端会直接走到的仓库协议行为时，应运行这个 suite，例如认证 header 或 API key、发布/上传路径、生成的 metadata、包索引形态、checksum/download 行为、Docker connector port、group/proxy 解析等。在 GitHub Actions 中，可以手动选择 `Live Compatibility` workflow 的 `client-e2e` suite，或给 PR 加 `run-client-e2e` label。Spring AOT、runtime hint 或 Native 打包变更应添加 `run-native-client-e2e`；独立 Native workflow 会复用 Linux 客户端 suite，分别覆盖 MySQL 和 PostgreSQL，同时不替代默认 JVM lane。
 
 客户端命令日志、下载到的 metadata、部分 inspect 输出和诊断信息会写入 `artifacts/client-e2e/`；可能包含 URL token 的 Terraform metadata 会在上传前脱敏。该 suite 依赖 [compat-test README](../../compat-test/README.md) 中列出的真实工具，本地机器可能需要先安装对应 SDK 或包管理器才能跑完整矩阵。
 
