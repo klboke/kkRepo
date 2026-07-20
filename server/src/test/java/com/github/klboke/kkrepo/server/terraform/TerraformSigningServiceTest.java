@@ -21,6 +21,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.openpgp.PGPObjectFactory;
 import org.bouncycastle.openpgp.PGPPublicKeyRingCollection;
 import org.bouncycastle.openpgp.PGPSignatureList;
@@ -61,8 +62,8 @@ class TerraformSigningServiceTest {
     var identities = primary.getSignaturesForID(primary.getUserIDs().next());
     var certification = identities.next();
     assertTrue(certification.getHashedSubPackets().getKeyFlags() != 0);
-    signature.init(new JcaPGPContentVerifierBuilderProvider().setProvider("BC"),
-        primary);
+    signature.init(
+        new JcaPGPContentVerifierBuilderProvider().setProvider(new BouncyCastleProvider()), primary);
     signature.update(contents);
     assertTrue(signature.verify());
 

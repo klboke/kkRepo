@@ -10,7 +10,6 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.security.KeyPairGenerator;
 import java.security.SecureRandom;
-import java.security.Security;
 import java.time.Instant;
 import java.util.Date;
 import java.util.Iterator;
@@ -18,7 +17,6 @@ import org.bouncycastle.bcpg.ArmoredOutputStream;
 import org.bouncycastle.bcpg.HashAlgorithmTags;
 import org.bouncycastle.bcpg.SymmetricKeyAlgorithmTags;
 import org.bouncycastle.bcpg.sig.KeyFlags;
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.openpgp.PGPKeyPair;
 import org.bouncycastle.openpgp.PGPKeyRingGenerator;
 import org.bouncycastle.openpgp.PGPPrivateKey;
@@ -43,12 +41,6 @@ import org.springframework.stereotype.Service;
 /** Generates repository-scoped OpenPGP keys and creates detached SHA256SUMS signatures. */
 @Service
 final class TerraformSigningService {
-  static {
-    if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
-      Security.addProvider(new BouncyCastleProvider());
-    }
-  }
-
   private final TerraformRegistryDao registry;
   private final TerraformPublishLeaseManager leases;
 
@@ -112,11 +104,10 @@ final class TerraformSigningService {
       }
       if (signing == null) throw new IllegalStateException("Terraform signing key cannot sign");
       PGPPrivateKey privateKey = signing.extractPrivateKey(
-          new JcePBESecretKeyDecryptorBuilder().setProvider(BouncyCastleProvider.PROVIDER_NAME)
-              .build(material.passphrase().toCharArray()));
+          new JcePBESecretKeyDecryptorBuilder().build(material.passphrase().toCharArray()));
       PGPSignatureGenerator generator = new PGPSignatureGenerator(
-          new JcaPGPContentSignerBuilder(signing.getPublicKey().getAlgorithm(), HashAlgorithmTags.SHA256)
-              .setProvider(BouncyCastleProvider.PROVIDER_NAME));
+          new JcaPGPContentSignerBuilder(
+              signing.getPublicKey().getAlgorithm(), HashAlgorithmTags.SHA256));
       generator.init(PGPSignature.BINARY_DOCUMENT, privateKey);
       generator.update(content);
       return generator.generate().getEncoded();
@@ -127,11 +118,11 @@ final class TerraformSigningService {
 
   private static Generated generate(String repositoryName) {
     try {
-      KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA", BouncyCastleProvider.PROVIDER_NAME);
+      KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
       generator.initialize(3072, new SecureRandom());
       PGPKeyPair pair = new JcaPGPKeyPair(PGPPublicKey.RSA_SIGN, generator.generateKeyPair(), new Date());
       PGPDigestCalculator sha1 = new JcaPGPDigestCalculatorProviderBuilder()
-          .setProvider(BouncyCastleProvider.PROVIDER_NAME).build().get(HashAlgorithmTags.SHA1);
+          .build().get(HashAlgorithmTags.SHA1);
       PGPSignatureSubpacketGenerator certification = new PGPSignatureSubpacketGenerator();
       certification.setKeyFlags(false, KeyFlags.CERTIFY_OTHER | KeyFlags.SIGN_DATA);
       PGPKeyRingGenerator rings = new PGPKeyRingGenerator(
@@ -141,10 +132,10 @@ final class TerraformSigningService {
           sha1,
           certification.generate(),
           null,
-          new JcaPGPContentSignerBuilder(pair.getPublicKey().getAlgorithm(), HashAlgorithmTags.SHA256)
-              .setProvider(BouncyCastleProvider.PROVIDER_NAME),
+          new JcaPGPContentSignerBuilder(
+              pair.getPublicKey().getAlgorithm(), HashAlgorithmTags.SHA256),
           new JcePBESecretKeyEncryptorBuilder(SymmetricKeyAlgorithmTags.AES_256, sha1)
-              .setProvider(BouncyCastleProvider.PROVIDER_NAME).build(new char[0]));
+              .build(new char[0]));
       ByteArrayOutputStream publicBytes = new ByteArrayOutputStream();
       try (ArmoredOutputStream armor = new ArmoredOutputStream(publicBytes)) {
         rings.generatePublicKeyRing().encode(armor);
