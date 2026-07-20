@@ -124,7 +124,7 @@ jobs:
 
       - name: Set up Node.js
         if: env.LIVE_COMPAT_SUITE == 'client-e2e'
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "24"
 
