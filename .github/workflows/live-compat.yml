@@ -503,7 +503,7 @@ jobs:
           java-version: "25"
 
       - name: Download executable server
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: swift-platform-server
           path: artifacts/swift-platform-server
@@ -596,7 +596,7 @@ jobs:
           cache: true
 
       - name: Download executable server
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: swift-platform-server
           path: artifacts/swift-platform-server
