@@ -437,11 +437,9 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
   public Optional<GroupBinding> findGroupBindingByArtifactFilename(
       long groupRepositoryId, String artifactFilename) {
     return jdbc.query("""
-        SELECT b.*
-        FROM ansible_group_binding b
-        JOIN ansible_collection_version v ON v.id = b.member_version_id
-        WHERE b.group_repository_id = ? AND v.artifact_filename = ? AND v.state = 'READY'
-        ORDER BY b.bound_at
+        SELECT * FROM ansible_group_binding
+        WHERE group_repository_id = ? AND artifact_filename = ?
+        ORDER BY bound_at
         LIMIT 1
         """, this::mapGroupBinding, groupRepositoryId, artifactFilename).stream().findFirst();
   }
@@ -455,7 +453,25 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
     Optional<GroupBinding> existing = findGroupBinding(
         binding.groupRepositoryId(), binding.namespaceLc(), binding.nameLc(),
         binding.versionNormalized());
-    if (existing.isPresent() && existing.get().groupConfigRevision() == binding.groupConfigRevision()) {
+    if (existing.isPresent()
+        && existing.get().groupConfigRevision() == binding.groupConfigRevision()
+        && currentRepositoryRevision(existing.get().memberRepositoryId())
+            == existing.get().memberRevision()) {
+      GroupBinding current = existing.get();
+      if (current.memberRepositoryId() == binding.memberRepositoryId()
+          && current.artifactSha256().equals(binding.artifactSha256())
+          && current.memberVersionId() == null && binding.memberVersionId() != null) {
+        jdbc.update("""
+            UPDATE ansible_group_binding
+            SET member_version_id = ?, artifact_filename = ?, member_revision = ?,
+                observed_count = observed_count + 1, updated_at = ?
+            WHERE group_repository_id = ? AND namespace_lc = ? AND name_lc = ?
+              AND version_normalized = ? AND group_config_revision = ?
+            """, binding.memberVersionId(), binding.artifactFilename(), binding.memberRevision(),
+            nullableTimestamp(Instant.now()), binding.groupRepositoryId(), binding.namespaceLc(),
+            binding.nameLc(), binding.versionNormalized(), binding.groupConfigRevision());
+        return true;
+      }
       jdbc.update("""
           UPDATE ansible_group_binding SET observed_count = observed_count + 1, updated_at = ?
           WHERE group_repository_id = ? AND namespace_lc = ? AND name_lc = ?
@@ -478,12 +494,14 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
       jdbc.update("""
           INSERT INTO ansible_group_binding
             (group_repository_id, namespace_lc, name_lc, version_normalized,
-             member_repository_id, member_version_id, member_revision, group_config_revision,
+             member_repository_id, member_version_id, artifact_filename, member_revision,
+             group_config_revision,
              artifact_sha256, observed_count, bound_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
           """, binding.groupRepositoryId(), binding.namespaceLc(), binding.nameLc(),
           binding.versionNormalized(), binding.memberRepositoryId(), binding.memberVersionId(),
-          binding.memberRevision(), binding.groupConfigRevision(), binding.artifactSha256(),
+          binding.artifactFilename(), binding.memberRevision(), binding.groupConfigRevision(),
+          binding.artifactSha256(),
           nullableTimestamp(boundAt), nullableTimestamp(updatedAt));
     } catch (DuplicateKeyException ignored) {
       // Another replica established the canonical first-member binding.
@@ -620,10 +638,12 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
 
   private GroupBinding mapGroupBinding(java.sql.ResultSet rs, int row)
       throws java.sql.SQLException {
+    long rawMemberVersionId = rs.getLong("member_version_id");
+    Long memberVersionId = rs.wasNull() ? null : rawMemberVersionId;
     return new GroupBinding(
         rs.getLong("group_repository_id"), rs.getString("namespace_lc"),
         rs.getString("name_lc"), rs.getString("version_normalized"),
-        rs.getLong("member_repository_id"), rs.getLong("member_version_id"),
+        rs.getLong("member_repository_id"), memberVersionId, rs.getString("artifact_filename"),
         rs.getLong("member_revision"), rs.getLong("group_config_revision"),
         rs.getString("artifact_sha256"), nullableInstant(rs, "bound_at"),
         nullableInstant(rs, "updated_at"));

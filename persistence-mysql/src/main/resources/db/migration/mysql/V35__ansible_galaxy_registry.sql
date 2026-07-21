@@ -117,7 +117,8 @@ CREATE TABLE ansible_group_binding (
   name_lc VARCHAR(64) NOT NULL,
   version_normalized VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   member_repository_id BIGINT UNSIGNED NOT NULL,
-  member_version_id BIGINT UNSIGNED NOT NULL,
+  member_version_id BIGINT UNSIGNED NULL,
+  artifact_filename VARCHAR(255) NOT NULL,
   member_revision BIGINT NOT NULL,
   group_config_revision BIGINT NOT NULL,
   artifact_sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -131,7 +132,8 @@ CREATE TABLE ansible_group_binding (
     FOREIGN KEY (member_repository_id) REFERENCES repository(id) ON DELETE CASCADE,
   CONSTRAINT fk_ansible_group_version
     FOREIGN KEY (member_version_id) REFERENCES ansible_collection_version(id) ON DELETE CASCADE,
-  INDEX idx_ansible_group_member (member_repository_id, member_revision)
+  INDEX idx_ansible_group_member (member_repository_id, member_revision),
+  INDEX idx_ansible_group_artifact (group_repository_id, artifact_filename)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE ansible_registry_lease (

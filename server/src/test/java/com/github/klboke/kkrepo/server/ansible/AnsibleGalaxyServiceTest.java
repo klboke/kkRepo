@@ -2,11 +2,13 @@ package com.github.klboke.kkrepo.server.ansible;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -137,7 +139,8 @@ class AnsibleGalaxyServiceTest {
     AnsibleGalaxyRegistryDao.GroupBinding offlineBinding =
         new AnsibleGalaxyRegistryDao.GroupBinding(
             group.id(), "acme", "tools", "1.2.3", offline.id(), offlineVersion.id(),
-            4L, 9L, offlineVersion.artifactSha256(), Instant.now(), Instant.now());
+            offlineVersion.artifactFilename(), 4L, 9L, offlineVersion.artifactSha256(),
+            Instant.now(), Instant.now());
     when(registry.currentRepositoryRevision(group.id())).thenReturn(9L);
     when(registry.currentRepositoryRevision(online.id())).thenReturn(5L);
     when(registry.listVersionNames(online.id(), "acme", "tools"))
@@ -408,6 +411,159 @@ class AnsibleGalaxyServiceTest {
   }
 
   @Test
+  void proxyVersionMetadataDoesNotMaterializeTheCollectionArchive() throws Exception {
+    RepositoryRuntime proxy = runtime(
+        45L, "ansible-proxy", RepositoryType.PROXY,
+        "https://galaxy.example/", List.of());
+    Instant now = Instant.now();
+    Map<String, Object> upstream = Map.of(
+        "namespace", Map.of("name", "acme"),
+        "collection", Map.of("name", "tools"),
+        "version", "1.2.3",
+        "href", "/api/v3/collections/acme/tools/versions/1.2.3/",
+        "download_url", "/api/v3/artifacts/acme-tools-1.2.3.tar.gz",
+        "requires_ansible", ">=2.15",
+        "artifact", Map.of(
+            "filename", "acme-tools-1.2.3.tar.gz", "sha256", SHA_A, "size", 123L),
+        "metadata", Map.of(
+            "description", "projected metadata",
+            "dependencies", Map.of("acme.base", ">=1.0.0")));
+    Map<String, Object> projected =
+        AnsibleGalaxyService.projectProxyDocument("1.2.3", upstream);
+    AnsibleGalaxyRegistryDao.ProxyVersionState exact =
+        new AnsibleGalaxyRegistryDao.ProxyVersionState(
+            proxy.id(), "acme", "tools", "1.2.3", "acme-tools-1.2.3.tar.gz",
+            "https://galaxy.example/api/v3/collections/acme/tools/versions/1.2.3/",
+            "https://galaxy.example/api/v3/artifacts/acme-tools-1.2.3.tar.gz",
+            SHA_A, null, null, now.plusSeconds(60), now, null, null,
+            projected, 4L, now);
+    when(registry.findVersion(proxy.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.empty());
+    when(registry.findProxyState(proxy.id(), "@upstream", "@discovery", "@v3-root"))
+        .thenReturn(Optional.of(proxyState(
+            proxy.id(), "@upstream", "@discovery", "@v3-root", null,
+            Map.of("available_versions", Map.of("v3", "api/v3/")), now.plusSeconds(60))));
+    when(registry.findProxyState(proxy.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.of(exact));
+    AnsibleGalaxyService metadataOnly = spy(service);
+
+    Map<String, Object> detail = json(metadataOnly.get(
+        proxy, "api/v3/collections/acme/tools/versions/1.2.3/",
+        null, BASE, false, "alice"));
+
+    assertEquals(SHA_A, map(detail.get("artifact")).get("sha256"));
+    assertEquals(123L, ((Number) map(detail.get("artifact")).get("size")).longValue());
+    assertEquals(">=1.0.0",
+        map(map(detail.get("metadata")).get("dependencies")).get("acme.base"));
+    assertEquals("projected metadata", map(detail.get("metadata")).get("description"));
+    verify(metadataOnly, never()).materializeProxy(proxy, exact);
+    verify(fetcher, never()).fetch(any());
+    verify(inspector, never()).inspect(any());
+    verify(assets, never()).storeCollection(any(), anyString(), any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void groupBindsProjectedProxyMetadataBeforeArtifactMaterialization() throws Exception {
+    RepositoryRuntime proxy = runtime(
+        46L, "ansible-proxy", RepositoryType.PROXY,
+        "https://galaxy.example/", List.of());
+    RepositoryRuntime group = runtime(
+        47L, "ansible-group", RepositoryType.GROUP, null, List.of(proxy));
+    Instant now = Instant.now();
+    Map<String, Object> projected = AnsibleGalaxyService.projectProxyDocument(
+        "1.2.3", Map.of(
+            "namespace", Map.of("name", "acme"),
+            "collection", Map.of("name", "tools"),
+            "version", "1.2.3",
+            "download_url", "/artifacts/acme-tools-1.2.3.tar.gz",
+            "artifact", Map.of("filename", "acme-tools-1.2.3.tar.gz", "sha256", SHA_A)));
+    AnsibleGalaxyRegistryDao.ProxyVersionState exact =
+        new AnsibleGalaxyRegistryDao.ProxyVersionState(
+            proxy.id(), "acme", "tools", "1.2.3", "acme-tools-1.2.3.tar.gz",
+            null, "https://galaxy.example/artifacts/acme-tools-1.2.3.tar.gz",
+            SHA_A, null, null, now.plusSeconds(60), now, null, null,
+            projected, 4L, now);
+    when(registry.currentRepositoryRevision(group.id())).thenReturn(7L);
+    when(registry.currentRepositoryRevision(proxy.id())).thenReturn(4L);
+    when(registry.findGroupBinding(group.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.empty());
+    when(registry.findVersion(proxy.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.empty());
+    when(registry.findProxyState(proxy.id(), "@upstream", "@discovery", "@v3-root"))
+        .thenReturn(Optional.of(proxyState(
+            proxy.id(), "@upstream", "@discovery", "@v3-root", null,
+            Map.of("available_versions", Map.of("v3", "api/v3/")), now.plusSeconds(60))));
+    when(registry.findProxyState(proxy.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.of(exact));
+    when(registry.bindGroupSourceIfCurrent(any())).thenReturn(true);
+    AnsibleGalaxyService metadataOnly = spy(service);
+
+    assertEquals(200, metadataOnly.get(
+        group, "api/v3/collections/acme/tools/versions/1.2.3/",
+        null, BASE, false, "alice").status());
+
+    ArgumentCaptor<AnsibleGalaxyRegistryDao.GroupBinding> binding =
+        ArgumentCaptor.forClass(AnsibleGalaxyRegistryDao.GroupBinding.class);
+    verify(registry).bindGroupSourceIfCurrent(binding.capture());
+    assertNull(binding.getValue().memberVersionId());
+    assertEquals("acme-tools-1.2.3.tar.gz", binding.getValue().artifactFilename());
+    assertEquals(SHA_A, binding.getValue().artifactSha256());
+    verify(metadataOnly, never()).materializeProxy(proxy, exact);
+  }
+
+  @Test
+  void groupArtifactMaterializesTheMetadataBoundProxyMember() throws Exception {
+    RepositoryRuntime proxy = runtime(
+        48L, "ansible-proxy", RepositoryType.PROXY,
+        "https://galaxy.example/", List.of());
+    RepositoryRuntime group = runtime(
+        49L, "ansible-group", RepositoryType.GROUP, null, List.of(proxy));
+    Instant now = Instant.now();
+    AnsibleGalaxyRegistryDao.ProxyVersionState exact =
+        new AnsibleGalaxyRegistryDao.ProxyVersionState(
+            proxy.id(), "acme", "tools", "1.2.3", "acme-tools-1.2.3.tar.gz",
+            null, "https://galaxy.example/artifacts/acme-tools-1.2.3.tar.gz",
+            SHA_A, null, null, now.plusSeconds(60), now, null, null,
+            Map.of("artifact", Map.of(
+                "filename", "acme-tools-1.2.3.tar.gz", "sha256", SHA_A)), 4L, now);
+    AnsibleGalaxyRegistryDao.GroupBinding projectedBinding =
+        new AnsibleGalaxyRegistryDao.GroupBinding(
+            group.id(), "acme", "tools", "1.2.3", proxy.id(), null,
+            "acme-tools-1.2.3.tar.gz", 4L, 7L, SHA_A, now, now);
+    AnsibleGalaxyRegistryDao.CollectionVersion stored = version(proxy.id(), 302L, 52L);
+    when(registry.currentRepositoryRevision(group.id())).thenReturn(7L);
+    when(registry.currentRepositoryRevision(proxy.id())).thenReturn(4L);
+    when(registry.findGroupBindingByArtifactFilename(
+        group.id(), "acme-tools-1.2.3.tar.gz")).thenReturn(Optional.of(projectedBinding));
+    when(registry.findVersionByArtifactFilename(proxy.id(), "acme-tools-1.2.3.tar.gz"))
+        .thenReturn(Optional.empty());
+    when(registry.findProxyStateByArtifactFilename(
+        proxy.id(), "acme-tools-1.2.3.tar.gz")).thenReturn(Optional.of(exact));
+    when(registry.bindGroupSourceIfCurrent(any())).thenReturn(true);
+    when(assets.serve(proxy.id(), stored.artifactAssetId(), false))
+        .thenReturn(MavenResponse.ok(
+            new ByteArrayInputStream(new byte[] {1}), 1L,
+            "application/octet-stream", stored.artifactSha256(), now));
+    AnsibleGalaxyService bound = spy(service);
+    doReturn(stored).when(bound).materializeProxy(proxy, exact);
+
+    MavenResponse response = bound.get(
+        group,
+        "api/v3/plugin/ansible/content/published/collections/artifacts/"
+            + "acme-tools-1.2.3.tar.gz",
+        null, BASE, false, "alice");
+
+    assertEquals(200, response.status());
+    verify(bound).materializeProxy(proxy, exact);
+    ArgumentCaptor<AnsibleGalaxyRegistryDao.GroupBinding> promoted =
+        ArgumentCaptor.forClass(AnsibleGalaxyRegistryDao.GroupBinding.class);
+    verify(registry).bindGroupSourceIfCurrent(promoted.capture());
+    assertEquals(stored.id(), promoted.getValue().memberVersionId());
+    assertEquals(proxy.id(), promoted.getValue().memberRepositoryId());
+    verify(assets).serve(proxy.id(), stored.artifactAssetId(), false);
+  }
+
+  @Test
   void proxyRejectsCyclicUpstreamPagination() throws Exception {
     RepositoryRuntime proxy = runtime(
         6L, "ansible-proxy", RepositoryType.PROXY,
@@ -460,14 +616,13 @@ class AnsibleGalaxyServiceTest {
             null,
             "https://galaxy.ansible.com/api/v3/artifacts/acme-tools-1.2.3.tar.gz",
             SHA_A, null, null, now.plusSeconds(60), now, null, null, detail, 1L, now);
+    when(registry.findVersionByArtifactFilename(proxy.id(), "acme-tools-1.2.3.tar.gz"))
+        .thenReturn(Optional.empty());
+    when(registry.findProxyStateByArtifactFilename(
+        proxy.id(), "acme-tools-1.2.3.tar.gz"))
+        .thenReturn(Optional.of(exact));
     when(registry.findVersion(proxy.id(), "acme", "tools", "1.2.3"))
         .thenReturn(Optional.empty());
-    when(registry.findProxyState(proxy.id(), "@upstream", "@discovery", "@v3-root"))
-        .thenReturn(Optional.of(proxyState(
-            proxy.id(), "@upstream", "@discovery", "@v3-root", null,
-            Map.of("available_versions", Map.of("v3", "api/v3/")), now.plusSeconds(60))));
-    when(registry.findProxyState(proxy.id(), "acme", "tools", "1.2.3"))
-        .thenReturn(Optional.of(exact));
     when(registry.tryAcquireLease(any(), any(), any())).thenReturn(Optional.of(
         new AnsibleGalaxyRegistryDao.Lease(
             "artifact-lease", "owner", 1L, now.plusSeconds(60), now)));
@@ -479,7 +634,8 @@ class AnsibleGalaxyServiceTest {
 
     assertThrows(AnsibleGalaxyExceptions.BadRequest.class, () -> service.get(
         proxy,
-        "api/v3/collections/acme/tools/versions/1.2.3/",
+        "api/v3/plugin/ansible/content/published/collections/artifacts/"
+            + "acme-tools-1.2.3.tar.gz",
         null,
         BASE,
         false,
@@ -505,7 +661,10 @@ class AnsibleGalaxyServiceTest {
             "filename", "community-general-1.2.3.tar.gz",
             "sha256", SHA_A,
             "size", 123L),
-        "metadata", Map.of("contents", List.of("x".repeat(512 * 1024))),
+        "metadata", Map.of(
+            "description", "bounded projection",
+            "dependencies", Map.of("acme.base", ">=1.0.0"),
+            "contents", List.of("x".repeat(512 * 1024))),
         "files", List.of("y".repeat(512 * 1024)),
         "signatures", List.of(Map.of("signature", "z".repeat(512 * 1024))));
 
@@ -513,7 +672,10 @@ class AnsibleGalaxyServiceTest {
         AnsibleGalaxyService.projectProxyDocument("1.2.3", upstream);
 
     assertEquals("1.2.3", projected.get("version"));
-    assertFalse(projected.containsKey("metadata"));
+    assertEquals("bounded projection", map(projected.get("metadata")).get("description"));
+    assertEquals(">=1.0.0",
+        map(map(projected.get("metadata")).get("dependencies")).get("acme.base"));
+    assertFalse(map(projected.get("metadata")).containsKey("contents"));
     assertFalse(projected.containsKey("files"));
     assertFalse(projected.containsKey("signatures"));
     assertTrue(mapper.writeValueAsBytes(projected).length < 2048);

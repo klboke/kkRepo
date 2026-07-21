@@ -121,7 +121,7 @@ erDiagram
 | `ansible_collection_signature` | Optional detached collection signatures bound to one immutable version and stored by blob/hash reference |
 | `ansible_import_task` | Durable Galaxy publish task with staging asset, requester, validation result, claim/lease, fencing token, attempts, and timestamps |
 | `ansible_proxy_version_state` | Upstream discovery/detail identity, validators, expected artifact checksum, cache/negative state, and integrity status |
-| `ansible_group_binding` | Group collection-version binding to one ordered source member/revision/checksum so metadata and artifact cannot diverge |
+| `ansible_group_binding` | Group collection-version binding to one ordered source member/revision/filename/checksum; the version reference is nullable until the bound proxy artifact is materialized, so metadata and artifact cannot diverge without forcing metadata reads to download blobs |
 | `ansible_registry_lease` | Shared expiring lease and fencing token for publication, proxy materialization, revalidation, and takeover across replicas |
 
 ### Permission Layer

@@ -106,7 +106,8 @@ CREATE TABLE ansible_group_binding (
   name_lc VARCHAR(64) NOT NULL,
   version_normalized VARCHAR(128) NOT NULL,
   member_repository_id BIGINT NOT NULL REFERENCES repository(id) ON DELETE CASCADE,
-  member_version_id BIGINT NOT NULL REFERENCES ansible_collection_version(id) ON DELETE CASCADE,
+  member_version_id BIGINT NULL REFERENCES ansible_collection_version(id) ON DELETE CASCADE,
+  artifact_filename VARCHAR(255) NOT NULL,
   member_revision BIGINT NOT NULL,
   group_config_revision BIGINT NOT NULL,
   artifact_sha256 CHAR(64) NOT NULL,
@@ -117,6 +118,8 @@ CREATE TABLE ansible_group_binding (
 );
 CREATE INDEX idx_ansible_group_member
   ON ansible_group_binding(member_repository_id, member_revision);
+CREATE INDEX idx_ansible_group_artifact
+  ON ansible_group_binding(group_repository_id, artifact_filename);
 
 CREATE TABLE ansible_registry_lease (
   lease_key VARCHAR(512) PRIMARY KEY,

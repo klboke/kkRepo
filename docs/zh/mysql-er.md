@@ -121,7 +121,7 @@ erDiagram
 | `ansible_collection_signature` | 绑定不可变 collection version 的可选 detached signature，按 blob/hash 引用保存 |
 | `ansible_import_task` | 持久化 Galaxy publish task，包含 staging asset、requester、校验结果、claim/lease、fencing token、attempt 和时间 |
 | `ansible_proxy_version_state` | 上游 discovery/detail identity、validator、预期 artifact checksum、cache/negative state 和完整性状态 |
-| `ansible_group_binding` | 将 group collection version 绑定到一个有序 source member/revision/checksum，防止 metadata 与 artifact 错配 |
+| `ansible_group_binding` | 将 group collection version 绑定到一个有序 source member/revision/filename/checksum；proxy artifact 落地前 version 引用可为空，避免 metadata 读取提前下载 blob，同时防止 metadata 与 artifact 错配 |
 | `ansible_registry_lease` | 跨副本 publish、proxy materialization/revalidation 和 takeover 使用的共享过期 lease/fencing token |
 
 ### 权限层

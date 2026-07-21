@@ -56,6 +56,10 @@ public class AnsibleGalaxyService {
   private static final String DISCOVERY_NAME = "@discovery";
   private static final int MAX_UPSTREAM_VERSION_PAGES = 100;
   private static final long MAX_METADATA_BYTES = 16L * 1024 * 1024;
+  private static final int MAX_VERSION_METADATA_JSON_BYTES = 64 * 1024;
+  private static final int MAX_DEPENDENCIES_JSON_BYTES = 192 * 1024;
+  private static final int MAX_PROXY_PROTOCOL_METADATA_JSON_BYTES = 256 * 1024;
+  private static final ObjectMapper PROJECTION_MAPPER = new ObjectMapper();
   private static final Duration LEASE_DURATION = Duration.ofMinutes(10);
   private static final Duration TASK_LEASE_DURATION = Duration.ofMinutes(5);
   private static final Duration LEASE_WAIT = Duration.ofSeconds(5);
@@ -264,7 +268,7 @@ public class AnsibleGalaxyService {
       throw new AnsibleGalaxyExceptions.NotFound("Collection not found");
     }
     String highest = AnsibleGalaxyVersions.sortDescending(versions).getFirst();
-    AnsibleGalaxyRegistryDao.CollectionVersion detail =
+    ResolvedVersionMetadata detail =
         resolveExact(runtime, namespace, name, highest, new HashSet<>());
     Map<String, Object> body = new LinkedHashMap<>();
     body.put("href", collectionUrl(baseUrl, namespace, name));
@@ -327,7 +331,7 @@ public class AnsibleGalaxyService {
       String version,
       String baseUrl,
       boolean headOnly) {
-    AnsibleGalaxyRegistryDao.CollectionVersion resolved =
+    ResolvedVersionMetadata resolved =
         resolveExact(runtime, namespace, name, version, new HashSet<>());
     return jsonResponse(versionDetail(resolved, baseUrl, namespace, name),
         200, headOnly, resolved.updatedAt());
@@ -404,7 +408,7 @@ public class AnsibleGalaxyService {
     }
   }
 
-  private AnsibleGalaxyRegistryDao.CollectionVersion resolveExact(
+  private ResolvedVersionMetadata resolveExact(
       RepositoryRuntime runtime,
       String namespace,
       String name,
@@ -416,13 +420,14 @@ public class AnsibleGalaxyService {
     try {
       if (runtime.isHosted()) {
         return registry.findVersion(runtime.id(), namespace, name, version)
+            .map(ResolvedVersionMetadata::materialized)
             .orElseThrow(() -> new AnsibleGalaxyExceptions.NotFound(
                 "Collection version was not found"));
       }
       if (runtime.isProxy()) {
         Optional<AnsibleGalaxyRegistryDao.CollectionVersion> cached =
             registry.findVersion(runtime.id(), namespace, name, version);
-        if (cached.isPresent()) return cached.get();
+        if (cached.isPresent()) return ResolvedVersionMetadata.materialized(cached.get());
         Map<String, Object> detail = fetchProxyDocument(
             runtime, namespace, name, version,
             proxyV3Url(runtime, "collections/" + encode(namespace) + "/" + encode(name)
@@ -432,26 +437,28 @@ public class AnsibleGalaxyService {
                 runtime.id(), namespace, name, version)
             .orElseThrow(() -> new AnsibleGalaxyExceptions.BadUpstream(
                 "Upstream collection state was not persisted"));
-        return materializeProxy(runtime, state);
+        return ResolvedVersionMetadata.projected(state);
       }
 
       long groupRevision = currentGroupRevision(runtime.id());
       Optional<AnsibleGalaxyRegistryDao.GroupBinding> existing = registry.findGroupBinding(
           runtime.id(), namespace, name, version);
-      Optional<AnsibleGalaxyRegistryDao.CollectionVersion> existingVersion = existing.flatMap(
-          binding -> currentGroupBindingVersion(runtime, binding, groupRevision));
+      Optional<ResolvedVersionMetadata> existingVersion = existing.flatMap(
+          binding -> currentGroupBindingMetadata(runtime, binding, groupRevision, visiting));
       if (existingVersion.isPresent()) return existingVersion.get();
       AnsibleGalaxyExceptions.BadUpstream upstreamFailure = null;
       for (RepositoryRuntime member : safeMembers(runtime)) {
         try {
-          AnsibleGalaxyRegistryDao.CollectionVersion candidate =
+          ResolvedVersionMetadata candidate =
               resolveExact(member, namespace, name, version, visiting);
           long memberRevision = registry.currentRepositoryRevision(member.id());
           registry.bindGroupSourceIfCurrent(new AnsibleGalaxyRegistryDao.GroupBinding(
-              runtime.id(), namespace, name, version, member.id(), candidate.id(), memberRevision,
+              runtime.id(), namespace, name, version, member.id(),
+              candidate.materializedVersionId(), candidate.artifactFilename(), memberRevision,
               groupRevision, candidate.artifactSha256(), Instant.now(), Instant.now()));
           return registry.findGroupBinding(runtime.id(), namespace, name, version)
-              .flatMap(binding -> currentGroupBindingVersion(runtime, binding, groupRevision))
+              .flatMap(binding -> currentGroupBindingMetadata(
+                  runtime, binding, groupRevision, visiting))
               .orElse(candidate);
         } catch (AnsibleGalaxyExceptions.NotFound ignored) {
         } catch (AnsibleGalaxyExceptions.BadUpstream e) {
@@ -493,6 +500,10 @@ public class AnsibleGalaxyService {
       Optional<AnsibleGalaxyRegistryDao.CollectionVersion> boundArtifact = binding.flatMap(
           current -> currentGroupBindingVersion(runtime, current, groupRevision));
       if (boundArtifact.isPresent()) return boundArtifact.get();
+      Optional<AnsibleGalaxyRegistryDao.CollectionVersion> projectedBoundArtifact = binding.flatMap(
+          current -> materializeBoundGroupArtifact(
+              runtime, current, groupRevision, filename, visiting));
+      if (projectedBoundArtifact.isPresent()) return projectedBoundArtifact.get();
       AnsibleGalaxyExceptions.BadUpstream upstreamFailure = null;
       for (RepositoryRuntime member : safeMembers(runtime)) {
         try {
@@ -501,7 +512,8 @@ public class AnsibleGalaxyService {
           registry.bindGroupSourceIfCurrent(new AnsibleGalaxyRegistryDao.GroupBinding(
               runtime.id(), candidate.namespaceLc(), candidate.nameLc(),
               candidate.versionNormalized(), member.id(), candidate.id(),
-              registry.currentRepositoryRevision(member.id()), groupRevision,
+              candidate.artifactFilename(), registry.currentRepositoryRevision(member.id()),
+              groupRevision,
               candidate.artifactSha256(), Instant.now(), Instant.now()));
           return registry.findGroupBinding(
                   runtime.id(), candidate.namespaceLc(), candidate.nameLc(),
@@ -1053,7 +1065,7 @@ public class AnsibleGalaxyService {
   }
 
   private Map<String, Object> versionDetail(
-      AnsibleGalaxyRegistryDao.CollectionVersion version,
+      ResolvedVersionMetadata version,
       String baseUrl,
       String exposedNamespace,
       String exposedName) {
@@ -1068,7 +1080,7 @@ public class AnsibleGalaxyService {
     body.put("download_url", artifactUrl(baseUrl, version.artifactFilename()));
     Map<String, Object> artifact = new LinkedHashMap<>();
     artifact.put("filename", version.artifactFilename());
-    artifact.put("size", version.artifactSize());
+    if (version.artifactSize() != null) artifact.put("size", version.artifactSize());
     artifact.put("sha256", version.artifactSha256());
     body.put("artifact", artifact);
     body.put("metadata", versionMetadata(version));
@@ -1079,6 +1091,10 @@ public class AnsibleGalaxyService {
 
   Map<String, Object> collectionMetadata(
       AnsibleGalaxyRegistryDao.CollectionVersion version) {
+    return collectionMetadata(ResolvedVersionMetadata.materialized(version));
+  }
+
+  private Map<String, Object> collectionMetadata(ResolvedVersionMetadata version) {
     Map<String, Object> metadata = new LinkedHashMap<>();
     copyMetadataValue(version.metadata(), metadata, "license");
     copyMetadataValue(version.metadata(), metadata, "description");
@@ -1089,6 +1105,10 @@ public class AnsibleGalaxyService {
 
   Map<String, Object> versionMetadata(
       AnsibleGalaxyRegistryDao.CollectionVersion version) {
+    return versionMetadata(ResolvedVersionMetadata.materialized(version));
+  }
+
+  private Map<String, Object> versionMetadata(ResolvedVersionMetadata version) {
     Map<String, Object> metadata = new LinkedHashMap<>(collectionMetadata(version));
     metadata.put("dependencies", version.dependencies());
     copyMetadataValue(version.metadata(), metadata, "repository");
@@ -1099,7 +1119,12 @@ public class AnsibleGalaxyService {
   }
 
   List<?> signatures(AnsibleGalaxyRegistryDao.CollectionVersion version) {
-    return registry.listSignatures(version.id()).stream()
+    return signatures(ResolvedVersionMetadata.materialized(version));
+  }
+
+  private List<?> signatures(ResolvedVersionMetadata version) {
+    if (version.materializedVersionId() == null) return List.of();
+    return registry.listSignatures(version.materializedVersionId()).stream()
         .map(signature -> Map.<String, Object>of(
             "sha256", signature.sha256(),
             "key_fingerprint", signature.keyFingerprint() == null
@@ -1117,7 +1142,9 @@ public class AnsibleGalaxyService {
     if (stateKey != null && stateKey.startsWith("@v3-")) {
       String v3 = boundedUpstreamText(
           map(document.get("available_versions")).get("v3"), 2048, "v3 discovery URL");
-      return v3 == null ? Map.of() : Map.of("available_versions", Map.of("v3", v3));
+      return boundedProxyProjection(
+          v3 == null ? Map.of() : Map.of("available_versions", Map.of("v3", v3)),
+          MAX_PROXY_PROTOCOL_METADATA_JSON_BYTES, "discovery metadata");
     }
     if (VERSIONS_SENTINEL.equals(stateKey)
         || (stateKey != null && stateKey.startsWith("@versions-"))) {
@@ -1135,7 +1162,8 @@ public class AnsibleGalaxyService {
       projected.put("data", List.copyOf(versions));
       String next = nextLink(document);
       if (next != null) projected.put("links", Map.of("next", next));
-      return immutableMap(projected);
+      return boundedProxyProjection(
+          projected, MAX_PROXY_PROTOCOL_METADATA_JSON_BYTES, "version page metadata");
     }
 
     Map<String, Object> projected = new LinkedHashMap<>();
@@ -1150,12 +1178,116 @@ public class AnsibleGalaxyService {
     copyBoundedUpstreamText(document, projected, "href", 4096);
     copyBoundedUpstreamText(document, projected, "download_url", 4096);
     copyBoundedUpstreamText(document, projected, "requires_ansible", 255);
+    copyBoundedUpstreamText(document, projected, "created_at", 64);
+    copyBoundedUpstreamText(document, projected, "updated_at", 64);
     Map<String, Object> artifact = map(document.get("artifact"));
     Map<String, Object> projectedArtifact = new LinkedHashMap<>();
     copyBoundedUpstreamText(artifact, projectedArtifact, "filename", 255);
     copyBoundedUpstreamText(artifact, projectedArtifact, "sha256", 64);
+    Long artifactSize = nonNegativeLong(artifact.get("size"));
+    if (artifactSize != null) projectedArtifact.put("size", artifactSize);
     if (!projectedArtifact.isEmpty()) projected.put("artifact", immutableMap(projectedArtifact));
+    Map<String, Object> metadata = projectProxyMetadata(document.get("metadata"));
+    if (!metadata.isEmpty()) projected.put("metadata", metadata);
+    return boundedProxyProjection(
+        projected, MAX_PROXY_PROTOCOL_METADATA_JSON_BYTES, "version metadata");
+  }
+
+  private static Map<String, Object> projectProxyMetadata(Object rawMetadata) {
+    if (rawMetadata == null) return Map.of();
+    if (!(rawMetadata instanceof Map<?, ?> raw)) {
+      throw new AnsibleGalaxyExceptions.BadUpstream(
+          "Upstream Galaxy metadata has an invalid type");
+    }
+    Map<String, Object> source = map(raw);
+    Map<String, Object> projected = new LinkedHashMap<>();
+    copyBoundedStringOrList(source, projected, "authors", 64, 512);
+    copyBoundedStringOrList(source, projected, "license", 64, 128);
+    copyBoundedStringOrList(source, projected, "tags", 256, 128);
+    copyBoundedUpstreamText(source, projected, "description", 16 * 1024);
+    copyBoundedUpstreamText(source, projected, "repository", 4096);
+    copyBoundedUpstreamText(source, projected, "documentation", 4096);
+    copyBoundedUpstreamText(source, projected, "homepage", 4096);
+    copyBoundedUpstreamText(source, projected, "issues", 4096);
+    boundedProxyProjection(
+        projected, MAX_VERSION_METADATA_JSON_BYTES, "collection metadata");
+    Map<String, Object> dependencies = projectProxyDependencies(source.get("dependencies"));
+    if (source.containsKey("dependencies")) projected.put("dependencies", dependencies);
     return immutableMap(projected);
+  }
+
+  private static Map<String, Object> projectProxyDependencies(Object rawDependencies) {
+    if (rawDependencies == null) return Map.of();
+    if (!(rawDependencies instanceof Map<?, ?> raw)) {
+      throw new AnsibleGalaxyExceptions.BadUpstream(
+          "Upstream Galaxy dependencies have an invalid type");
+    }
+    if (raw.size() > 2048) {
+      throw new AnsibleGalaxyExceptions.BadUpstream(
+          "Upstream Galaxy dependencies exceed the safe item limit");
+    }
+    Map<String, Object> dependencies = new LinkedHashMap<>();
+    for (Map.Entry<?, ?> entry : raw.entrySet()) {
+      String coordinate = boundedUpstreamText(
+          String.valueOf(entry.getKey()), 255, "dependency coordinate");
+      String constraint = boundedUpstreamText(
+          entry.getValue(), 1024, "dependency constraint");
+      dependencies.put(coordinate, constraint);
+    }
+    return boundedProxyProjection(
+        dependencies, MAX_DEPENDENCIES_JSON_BYTES, "dependency metadata");
+  }
+
+  private static void copyBoundedStringOrList(
+      Map<String, Object> source,
+      Map<String, Object> target,
+      String key,
+      int maxItems,
+      int maxLength) {
+    Object raw = source.get(key);
+    if (raw == null) return;
+    if (raw instanceof String) {
+      target.put(key, boundedUpstreamText(raw, maxLength, key));
+      return;
+    }
+    if (!(raw instanceof List<?> values) || values.size() > maxItems) {
+      throw new AnsibleGalaxyExceptions.BadUpstream(
+          "Upstream Galaxy " + key + " exceeds the safe item limit");
+    }
+    List<String> projected = new ArrayList<>(values.size());
+    for (Object value : values) {
+      projected.add(boundedUpstreamText(value, maxLength, key));
+    }
+    target.put(key, List.copyOf(projected));
+  }
+
+  private static Map<String, Object> boundedProxyProjection(
+      Map<String, Object> projection, int maxBytes, String label) {
+    Map<String, Object> immutable = immutableMap(projection);
+    try {
+      if (PROJECTION_MAPPER.writeValueAsBytes(immutable).length > maxBytes) {
+        throw new AnsibleGalaxyExceptions.BadUpstream(
+            "Upstream Galaxy " + label + " exceeds the safe storage limit");
+      }
+    } catch (IOException e) {
+      throw new AnsibleGalaxyExceptions.BadUpstream(
+          "Upstream Galaxy " + label + " cannot be projected", e);
+    }
+    return immutable;
+  }
+
+  private static Long nonNegativeLong(Object raw) {
+    if (raw == null) return null;
+    if (!(raw instanceof Number number)) {
+      throw new AnsibleGalaxyExceptions.BadUpstream(
+          "Upstream Galaxy artifact size has an invalid type");
+    }
+    long value = number.longValue();
+    if (value < 0 || number.doubleValue() != (double) value) {
+      throw new AnsibleGalaxyExceptions.BadUpstream(
+          "Upstream Galaxy artifact size is invalid");
+    }
+    return value;
   }
 
   private static void copyBoundedUpstreamText(
@@ -1308,15 +1440,75 @@ public class AnsibleGalaxyService {
       RepositoryRuntime group,
       AnsibleGalaxyRegistryDao.GroupBinding binding,
       long groupRevision) {
+    if (binding.memberVersionId() == null) return Optional.empty();
+    Optional<RepositoryRuntime> member = currentGroupBindingMember(group, binding, groupRevision);
+    if (member.isEmpty()) return Optional.empty();
+    return registry.findVersionById(binding.memberVersionId())
+        .filter(version -> version.repositoryId() == member.get().id())
+        .filter(version -> binding.artifactSha256().equals(version.artifactSha256()));
+  }
+
+  private Optional<ResolvedVersionMetadata> currentGroupBindingMetadata(
+      RepositoryRuntime group,
+      AnsibleGalaxyRegistryDao.GroupBinding binding,
+      long groupRevision,
+      Set<Long> visiting) {
+    Optional<AnsibleGalaxyRegistryDao.CollectionVersion> materialized =
+        currentGroupBindingVersion(group, binding, groupRevision);
+    if (materialized.isPresent()) {
+      return materialized.map(ResolvedVersionMetadata::materialized);
+    }
+    Optional<RepositoryRuntime> member = currentGroupBindingMember(group, binding, groupRevision);
+    if (member.isEmpty() || binding.memberVersionId() != null) return Optional.empty();
+    ResolvedVersionMetadata projected = resolveExact(
+        member.get(), binding.namespaceLc(), binding.nameLc(), binding.versionNormalized(), visiting);
+    if (registry.currentRepositoryRevision(member.get().id()) != binding.memberRevision()
+        || !binding.artifactSha256().equals(projected.artifactSha256())
+        || !binding.artifactFilename().equals(projected.artifactFilename())) {
+      return Optional.empty();
+    }
+    return Optional.of(projected);
+  }
+
+  private Optional<AnsibleGalaxyRegistryDao.CollectionVersion> materializeBoundGroupArtifact(
+      RepositoryRuntime group,
+      AnsibleGalaxyRegistryDao.GroupBinding binding,
+      long groupRevision,
+      String filename,
+      Set<Long> visiting) {
+    if (binding.memberVersionId() != null || !binding.artifactFilename().equals(filename)) {
+      return Optional.empty();
+    }
+    Optional<RepositoryRuntime> member = currentGroupBindingMember(group, binding, groupRevision);
+    if (member.isEmpty()) return Optional.empty();
+    AnsibleGalaxyRegistryDao.CollectionVersion candidate =
+        resolveArtifact(member.get(), filename, visiting);
+    if (!binding.namespaceLc().equals(candidate.namespaceLc())
+        || !binding.nameLc().equals(candidate.nameLc())
+        || !binding.versionNormalized().equals(candidate.versionNormalized())
+        || !binding.artifactSha256().equals(candidate.artifactSha256())) {
+      throw new AnsibleGalaxyExceptions.BadUpstream(
+          "Bound Ansible group artifact no longer matches its metadata");
+    }
+    long memberRevision = registry.currentRepositoryRevision(member.get().id());
+    registry.bindGroupSourceIfCurrent(new AnsibleGalaxyRegistryDao.GroupBinding(
+        group.id(), binding.namespaceLc(), binding.nameLc(), binding.versionNormalized(),
+        member.get().id(), candidate.id(), candidate.artifactFilename(), memberRevision,
+        groupRevision, candidate.artifactSha256(), binding.boundAt(), Instant.now()));
+    return Optional.of(candidate);
+  }
+
+  private Optional<RepositoryRuntime> currentGroupBindingMember(
+      RepositoryRuntime group,
+      AnsibleGalaxyRegistryDao.GroupBinding binding,
+      long groupRevision) {
     if (binding.groupConfigRevision() != groupRevision) return Optional.empty();
     Optional<RepositoryRuntime> member = directMember(group, binding.memberRepositoryId());
     if (member.isEmpty()
         || registry.currentRepositoryRevision(member.get().id()) != binding.memberRevision()) {
       return Optional.empty();
     }
-    return registry.findVersionById(binding.memberVersionId())
-        .filter(version -> version.repositoryId() == member.get().id())
-        .filter(version -> binding.artifactSha256().equals(version.artifactSha256()));
+    return member;
   }
 
   private long currentGroupRevision(long repositoryId) {
@@ -1477,5 +1669,54 @@ public class AnsibleGalaxyService {
 
   private record UpstreamArtifact(
       String filename, String href, String downloadUrl, String sha256) {
+  }
+
+  private record ResolvedVersionMetadata(
+      Long materializedVersionId,
+      long repositoryId,
+      String versionNormalized,
+      String artifactFilename,
+      String artifactSha256,
+      Long artifactSize,
+      Map<String, Object> metadata,
+      Map<String, Object> dependencies,
+      String requiresAnsible,
+      long revision,
+      Instant createdAt,
+      Instant updatedAt) {
+
+    private static ResolvedVersionMetadata materialized(
+        AnsibleGalaxyRegistryDao.CollectionVersion version) {
+      return new ResolvedVersionMetadata(
+          version.id(), version.repositoryId(), version.versionNormalized(),
+          version.artifactFilename(), version.artifactSha256(), version.artifactSize(),
+          version.metadata(), version.dependencies(), version.requiresAnsible(), version.revision(),
+          version.createdAt(), version.updatedAt());
+    }
+
+    private static ResolvedVersionMetadata projected(
+        AnsibleGalaxyRegistryDao.ProxyVersionState state) {
+      Map<String, Object> document = state.upstreamIdentity();
+      Map<String, Object> artifact = map(document.get("artifact"));
+      String filename = state.artifactFilename() == null
+          ? text(artifact.get("filename")) : state.artifactFilename();
+      String sha256 = state.artifactSha256() == null
+          ? text(artifact.get("sha256")) : state.artifactSha256();
+      if (filename == null || !validSha(sha256)) {
+        throw new AnsibleGalaxyExceptions.BadUpstream(
+            "Upstream collection state has no bounded artifact identity");
+      }
+      Long size = nonNegativeLong(artifact.get("size"));
+      Map<String, Object> metadata = map(document.get("metadata"));
+      Map<String, Object> dependencies = map(metadata.get("dependencies"));
+      Instant updatedAt = parseInstant(text(document.get("updated_at")));
+      if (updatedAt == null) updatedAt = state.updatedAt();
+      Instant createdAt = parseInstant(text(document.get("created_at")));
+      if (createdAt == null) createdAt = updatedAt;
+      return new ResolvedVersionMetadata(
+          null, state.repositoryId(), state.versionNormalized(), filename, sha256, size,
+          metadata, dependencies, text(document.get("requires_ansible")), state.revision(),
+          createdAt, updatedAt);
+    }
   }
 }

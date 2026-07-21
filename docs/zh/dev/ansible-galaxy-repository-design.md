@@ -267,7 +267,7 @@ V35 已增加以下 JDBC contract 和 MySQL/PostgreSQL migration：
 - `ansible_proxy_version_state`
   - 保存 upstream href/download URL、metadata validator、artifact SHA-256、cache_until、verified_at、negative state 和有上限的协议元数据投影；上游返回的完整 files/contents/signatures 列表不复制入库。
 - `ansible_group_binding`
-  - 以 group repository、namespace/name/version、member revision 为键，绑定 source repository、source version revision 和 artifact SHA-256。
+  - 以 group repository、namespace/name/version、member revision 为键，绑定 source repository、artifact filename 和 SHA-256。Proxy metadata 首次选源时允许 materialized version 引用为空；artifact `GET` 必须沿同一 binding 回源，并在 blob/asset/version 提交后原子回填 version 引用。
 - `ansible_registry_lease`
   - 以 repository/operation/coordinate 为键保存 owner、lease expiry 与 fencing token，用于跨副本 publish、proxy revalidation/download 和任务接管。
 

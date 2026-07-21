@@ -120,6 +120,8 @@ Before publication kkrepo verifies:
 
 Proxy artifacts are pinned to the upstream SHA-256. A checksum change for an existing upstream version fails closed instead of replacing cached content.
 
+Proxy collection and version metadata requests persist only the bounded query projection and artifact identity; they do not download the collection tarball. The first artifact `GET` downloads and verifies the archive under a shared lease, then stores it in the blob store. Group repositories persist the selected member, filename, and checksum before that download and promote the same binding to the materialized version afterward, so another replica cannot select a different member between metadata and artifact requests.
+
 ## Multi-Replica Behavior
 
 Import tasks, proxy state, source bindings, leases, fencing tokens, and repository revisions are shared in MySQL/PostgreSQL. Artifact and staging bytes are shared through OSS/S3. A publish or proxy miss can therefore be resumed or taken over by another replica; process-local caches and executor queues are rebuildable optimizations only.

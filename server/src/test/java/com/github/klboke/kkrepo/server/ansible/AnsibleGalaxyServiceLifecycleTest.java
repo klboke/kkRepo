@@ -512,8 +512,8 @@ class AnsibleGalaxyServiceLifecycleTest {
     RepositoryRuntime group = runtime(13L, RepositoryType.GROUP, null, List.of(member));
     AnsibleGalaxyRegistryDao.CollectionVersion version = version(member.id(), 70L, 71L);
     AnsibleGalaxyRegistryDao.GroupBinding binding = new AnsibleGalaxyRegistryDao.GroupBinding(
-        group.id(), "acme", "tools", "1.2.3", member.id(), version.id(), 5L, 7L,
-        SHA256, Instant.now(), Instant.now());
+        group.id(), "acme", "tools", "1.2.3", member.id(), version.id(),
+        version.artifactFilename(), 5L, 7L, SHA256, Instant.now(), Instant.now());
     when(registry.listVersionNames(member.id(), "acme", "tools")).thenReturn(List.of("1.2.3"));
     when(registry.currentRepositoryRevision(group.id())).thenReturn(7L);
     when(registry.currentRepositoryRevision(member.id())).thenReturn(5L);
@@ -549,8 +549,9 @@ class AnsibleGalaxyServiceLifecycleTest {
     AnsibleGalaxyRegistryDao.CollectionVersion winner = version(second.id(), 82L, 83L);
     AnsibleGalaxyRegistryDao.GroupBinding winningBinding =
         new AnsibleGalaxyRegistryDao.GroupBinding(
-            group.id(), "acme", "tools", "1.2.3", second.id(), winner.id(), 6L, 9L,
-            winner.artifactSha256(), Instant.now(), Instant.now());
+            group.id(), "acme", "tools", "1.2.3", second.id(), winner.id(),
+            winner.artifactFilename(), 6L, 9L, winner.artifactSha256(),
+            Instant.now(), Instant.now());
     when(registry.currentRepositoryRevision(group.id())).thenReturn(9L);
     when(registry.currentRepositoryRevision(first.id())).thenReturn(5L);
     when(registry.currentRepositoryRevision(second.id())).thenReturn(6L);

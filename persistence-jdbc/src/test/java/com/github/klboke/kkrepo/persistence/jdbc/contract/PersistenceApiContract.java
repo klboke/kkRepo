@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -257,8 +258,8 @@ public abstract class PersistenceApiContract {
     long groupRevision = registry.currentRepositoryRevision(groupRepositoryId);
     assertTrue(groupRevision > 0L);
     assertTrue(registry.bindGroupSourceIfCurrent(new AnsibleGalaxyRegistryDao.GroupBinding(
-        groupRepositoryId, "acme", "tools", "1.2.3", repositoryId, stored.id(), revision,
-        groupRevision, stored.artifactSha256(), now, now)));
+        groupRepositoryId, "acme", "tools", "1.2.3", repositoryId, stored.id(),
+        stored.artifactFilename(), revision, groupRevision, stored.artifactSha256(), now, now)));
     assertEquals(repositoryId, registry.findGroupBinding(
         groupRepositoryId, "acme", "tools", "1.2.3").orElseThrow().memberRepositoryId());
     assertEquals(stored.id(), registry.findGroupBindingByArtifactFilename(
@@ -295,6 +296,17 @@ public abstract class PersistenceApiContract {
 
     long proxyBlobStoreId = stores().repositories()
         .findById(proxyRepositoryId).orElseThrow().blobStoreId();
+    long metadataGroupRevision = registry.currentRepositoryRevision(groupRepositoryId);
+    long proxyMetadataRevision = registry.currentRepositoryRevision(proxyRepositoryId);
+    assertTrue(registry.bindGroupSourceIfCurrent(new AnsibleGalaxyRegistryDao.GroupBinding(
+        groupRepositoryId, "acme", "tools", "1.2.3", proxyRepositoryId, null,
+        "acme-tools-1.2.3.tar.gz", proxyMetadataRevision, metadataGroupRevision,
+        "a".repeat(64), now, now)));
+    AnsibleGalaxyRegistryDao.GroupBinding metadataBinding = registry.findGroupBindingByArtifactFilename(
+        groupRepositoryId, "acme-tools-1.2.3.tar.gz").orElseThrow();
+    assertNull(metadataBinding.memberVersionId());
+    assertEquals(proxyRepositoryId, metadataBinding.memberRepositoryId());
+
     long proxyComponentId = stores().components().upsertReturningId(component(
         proxyRepositoryId, RepositoryFormat.ANSIBLEGALAXY, "acme", "tools", "1.2.3",
         Map.of("kind", "ansible-collection"), now));
@@ -313,6 +325,12 @@ public abstract class PersistenceApiContract {
             "acme-tools-1.2.3.tar.gz", "a".repeat(64), 42L, Map.of(), Map.of(),
             ">=2.16", "PROXY", proxyRevision, AnsibleGalaxyRegistryDao.VERSION_READY,
             now, now, now)));
+    assertTrue(registry.bindGroupSourceIfCurrent(new AnsibleGalaxyRegistryDao.GroupBinding(
+        groupRepositoryId, "acme", "tools", "1.2.3", proxyRepositoryId, proxyVersion.id(),
+        proxyVersion.artifactFilename(), proxyRevision, metadataGroupRevision,
+        proxyVersion.artifactSha256(), now, now)));
+    assertEquals(proxyVersion.id(), registry.findGroupBindingByArtifactFilename(
+        groupRepositoryId, proxyVersion.artifactFilename()).orElseThrow().memberVersionId());
     assertTrue(inTransaction(() -> registry.deleteVersion(
         proxyRepositoryId, proxyVersion.id(), proxyAssetId)));
     assertTrue(registry.findProxyState(

@@ -120,6 +120,8 @@ Collection tarball、完整 `MANIFEST.json`、完整 `FILES.json`、大体积上
 
 Proxy artifact 按上游 SHA-256 固定。已存在版本的上游 checksum 发生变化时 fail closed，不会覆盖本地缓存内容。
 
+Proxy collection/version metadata 请求只持久化有界查询投影和 artifact identity，不会提前下载 collection tarball。第一次 artifact `GET` 才会在共享 lease 下下载并校验 archive，然后写入 blob store。Group 会在下载前持久化选定成员、filename 和 checksum，并在落地后把同一 binding 升级为 materialized version 引用，避免 metadata 与 artifact 请求落到不同成员或不同副本选择结果。
+
 ## 多副本语义
 
 Import task、proxy state、source binding、lease、fencing token 和 repository revision 共享存储在 MySQL/PostgreSQL，artifact/staging bytes 共享存储在 OSS/S3。因此 publish 或 proxy miss 可由另一副本恢复/接管；进程内 cache 和 executor queue 仅是可重建优化。
