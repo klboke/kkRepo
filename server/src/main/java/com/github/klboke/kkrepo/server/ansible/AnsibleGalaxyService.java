@@ -159,8 +159,9 @@ public class AnsibleGalaxyService {
               expectedSha256.toLowerCase(Locale.ROOT), inspected.sha256(), staged.id(), 0,
               null, null, 0L, now, null, null, now));
       processNewTask(runtime, task, inspected, actor, ip);
-      return jsonResponse(Map.of("task", taskId), 202, headOnly, now)
-          .withHeader("Location", "api/v3/imports/collections/" + taskId + "/");
+      String taskPath = "api/v3/imports/collections/" + taskId + "/";
+      return jsonResponse(Map.of("task", taskPath), 202, headOnly, now)
+          .withHeader("Location", taskPath);
     } finally {
       AnsibleCollectionArchiveInspector.delete(inspected.file());
     }

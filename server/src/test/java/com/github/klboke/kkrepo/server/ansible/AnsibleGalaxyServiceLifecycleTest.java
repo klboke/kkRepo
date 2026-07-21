@@ -28,6 +28,7 @@ import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import java.io.ByteArrayInputStream;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -98,8 +99,13 @@ class AnsibleGalaxyServiceLifecycleTest {
 
     assertEquals(202, response.status());
     Map<String, Object> body = json(response);
-    assertTrue(body.get("task").toString().matches("[0-9a-f-]{36}"));
-    assertTrue(response.headers().get("Location").toString().contains(body.get("task").toString()));
+    String taskPath = body.get("task").toString();
+    assertTrue(taskPath.matches(
+        "api/v3/imports/collections/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+            + "[0-9a-f]{4}-[0-9a-f]{12}/"));
+    assertEquals(taskPath, response.headers().get("Location"));
+    assertEquals(BASE + taskPath, URI.create(BASE).resolve(taskPath).toString());
+    assertTrue(taskPath.contains(waiting.get().taskId()));
     verify(registry).finishTask(
         anyString(), anyString(), anyLong(), eq(AnsibleGalaxyRegistryDao.TASK_COMPLETED),
         any(), eq(null), eq(null), eq("acme"), eq("tools"), eq("1.2.3"),

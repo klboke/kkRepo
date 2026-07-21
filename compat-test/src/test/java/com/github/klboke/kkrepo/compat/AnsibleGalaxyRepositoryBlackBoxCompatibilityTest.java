@@ -292,11 +292,15 @@ class AnsibleGalaxyRepositoryBlackBoxCompatibilityTest {
       String repository, String authorization, Exchange publish) throws Exception {
     String task = json(publish).path("task").asText();
     assertFalse(task.isBlank(), "publish task");
-    String taskId = List.of(task.split("/")).reversed().stream()
-        .filter(segment -> !segment.isBlank()).findFirst().orElseThrow();
+    URI taskUri = URI.create(task);
+    if (!taskUri.isAbsolute()) {
+      taskUri = URI.create(repository + "/").resolve(taskUri);
+    }
+    assertTrue(taskUri.getPath().contains("/api/v3/imports/collections/"),
+        "publish task must be a directly pollable Galaxy import URL: " + task);
     Exchange latest = null;
     for (int attempt = 0; attempt < 60; attempt++) {
-      latest = get(repository + "/api/v3/imports/collections/" + taskId + "/", authorization);
+      latest = get(taskUri.toString(), authorization);
       if (latest.status() == 200) {
         JsonNode state = json(latest);
         if (!state.path("finished_at").isMissingNode()
