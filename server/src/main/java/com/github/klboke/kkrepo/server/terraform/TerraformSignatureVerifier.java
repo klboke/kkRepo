@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.terraform;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.security.Provider;
 import java.util.Iterator;
 import java.util.List;
 import org.bouncycastle.openpgp.PGPCompressedData;
@@ -19,6 +20,10 @@ import org.springframework.stereotype.Component;
 /** Verifies upstream detached SHA256SUMS signatures before publishing proxy metadata. */
 @Component
 final class TerraformSignatureVerifier {
+  static {
+    TerraformCryptoProvider.current();
+  }
+
   void verify(byte[] shasums, byte[] signatureBytes, List<String> publicKeys) {
     try {
       PGPSignature signature = signature(signatureBytes);
@@ -28,7 +33,11 @@ final class TerraformSignatureVerifier {
             new JcaKeyFingerprintCalculator());
         PGPPublicKey key = rings.getPublicKey(signature.getKeyID());
         if (key == null) continue;
-        signature.init(new JcaPGPContentVerifierBuilderProvider(), key);
+        Provider provider = TerraformCryptoProvider.current();
+        JcaPGPContentVerifierBuilderProvider verifierBuilder =
+            new JcaPGPContentVerifierBuilderProvider();
+        if (provider != null) verifierBuilder.setProvider(provider);
+        signature.init(verifierBuilder, key);
         signature.update(shasums);
         if (signature.verify()) return;
       }

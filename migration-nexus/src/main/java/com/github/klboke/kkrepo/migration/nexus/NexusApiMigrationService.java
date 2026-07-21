@@ -34,6 +34,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.security.Provider;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -572,6 +573,7 @@ public class NexusApiMigrationService {
     }
     String passphrase = defaultString(string(signing.get("passphrase")), "");
     try {
+      Provider provider = NexusPgpCryptoProvider.current();
       PGPSecretKeyRingCollection rings = new PGPSecretKeyRingCollection(
           PGPUtil.getDecoderStream(new java.io.ByteArrayInputStream(
               privateArmor.getBytes(java.nio.charset.StandardCharsets.UTF_8))),
@@ -585,8 +587,10 @@ public class NexusApiMigrationService {
         while (keys.hasNext()) {
           PGPSecretKey candidate = keys.next();
           if (candidate.isSigningKey()) {
-            candidate.extractPrivateKey(new JcePBESecretKeyDecryptorBuilder()
-                .build(passphrase.toCharArray()));
+            JcePBESecretKeyDecryptorBuilder decryptorBuilder =
+                new JcePBESecretKeyDecryptorBuilder();
+            if (provider != null) decryptorBuilder.setProvider(provider);
+            candidate.extractPrivateKey(decryptorBuilder.build(passphrase.toCharArray()));
             selectedRing = candidateRing;
             signingKey = candidate;
             break;

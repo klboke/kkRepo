@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.security.KeyPairGenerator;
+import java.security.Provider;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.Date;
@@ -41,6 +42,10 @@ import org.springframework.stereotype.Service;
 /** Generates repository-scoped OpenPGP keys and creates detached SHA256SUMS signatures. */
 @Service
 final class TerraformSigningService {
+  static {
+    TerraformCryptoProvider.current();
+  }
+
   private final TerraformRegistryDao registry;
   private final TerraformPublishLeaseManager leases;
 
@@ -103,11 +108,15 @@ final class TerraformSigningService {
         }
       }
       if (signing == null) throw new IllegalStateException("Terraform signing key cannot sign");
+      Provider provider = TerraformCryptoProvider.current();
+      JcePBESecretKeyDecryptorBuilder decryptorBuilder = new JcePBESecretKeyDecryptorBuilder();
+      if (provider != null) decryptorBuilder.setProvider(provider);
       PGPPrivateKey privateKey = signing.extractPrivateKey(
-          new JcePBESecretKeyDecryptorBuilder().build(material.passphrase().toCharArray()));
-      PGPSignatureGenerator generator = new PGPSignatureGenerator(
-          new JcaPGPContentSignerBuilder(
-              signing.getPublicKey().getAlgorithm(), HashAlgorithmTags.SHA256));
+          decryptorBuilder.build(material.passphrase().toCharArray()));
+      JcaPGPContentSignerBuilder signerBuilder = new JcaPGPContentSignerBuilder(
+          signing.getPublicKey().getAlgorithm(), HashAlgorithmTags.SHA256);
+      if (provider != null) signerBuilder.setProvider(provider);
+      PGPSignatureGenerator generator = new PGPSignatureGenerator(signerBuilder);
       generator.init(PGPSignature.BINARY_DOCUMENT, privateKey);
       generator.update(content);
       return generator.generate().getEncoded();
@@ -118,13 +127,26 @@ final class TerraformSigningService {
 
   private static Generated generate(String repositoryName) {
     try {
-      KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
+      Provider provider = TerraformCryptoProvider.current();
+      KeyPairGenerator generator = provider == null
+          ? KeyPairGenerator.getInstance("RSA")
+          : KeyPairGenerator.getInstance("RSA", provider);
       generator.initialize(3072, new SecureRandom());
       PGPKeyPair pair = new JcaPGPKeyPair(PGPPublicKey.RSA_SIGN, generator.generateKeyPair(), new Date());
-      PGPDigestCalculator sha1 = new JcaPGPDigestCalculatorProviderBuilder()
-          .build().get(HashAlgorithmTags.SHA1);
+      JcaPGPDigestCalculatorProviderBuilder digestBuilder =
+          new JcaPGPDigestCalculatorProviderBuilder();
+      if (provider != null) digestBuilder.setProvider(provider);
+      PGPDigestCalculator sha1 = digestBuilder.build().get(HashAlgorithmTags.SHA1);
       PGPSignatureSubpacketGenerator certification = new PGPSignatureSubpacketGenerator();
       certification.setKeyFlags(false, KeyFlags.CERTIFY_OTHER | KeyFlags.SIGN_DATA);
+      JcaPGPContentSignerBuilder signerBuilder = new JcaPGPContentSignerBuilder(
+          pair.getPublicKey().getAlgorithm(), HashAlgorithmTags.SHA256);
+      JcePBESecretKeyEncryptorBuilder encryptorBuilder =
+          new JcePBESecretKeyEncryptorBuilder(SymmetricKeyAlgorithmTags.AES_256, sha1);
+      if (provider != null) {
+        signerBuilder.setProvider(provider);
+        encryptorBuilder.setProvider(provider);
+      }
       PGPKeyRingGenerator rings = new PGPKeyRingGenerator(
           PGPSignature.POSITIVE_CERTIFICATION,
           pair,
@@ -132,10 +154,8 @@ final class TerraformSigningService {
           sha1,
           certification.generate(),
           null,
-          new JcaPGPContentSignerBuilder(
-              pair.getPublicKey().getAlgorithm(), HashAlgorithmTags.SHA256),
-          new JcePBESecretKeyEncryptorBuilder(SymmetricKeyAlgorithmTags.AES_256, sha1)
-              .build(new char[0]));
+          signerBuilder,
+          encryptorBuilder.build(new char[0]));
       ByteArrayOutputStream publicBytes = new ByteArrayOutputStream();
       try (ArmoredOutputStream armor = new ArmoredOutputStream(publicBytes)) {
         rings.generatePublicKeyRing().encode(armor);
