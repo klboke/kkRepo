@@ -48,6 +48,10 @@ public interface AnsibleGalaxyRegistryDao {
 
   ImportTask createTask(ImportTask task);
 
+  /** Persists a new task already owned by the request replica, atomically hiding it from recovery. */
+  ImportTask createClaimedTask(
+      ImportTask task, String owner, Instant leaseExpiresAt, Instant now);
+
   Optional<ImportTask> findTask(String taskId);
 
   List<ImportTask> listClaimableTasks(Instant now, int limit);

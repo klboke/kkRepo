@@ -82,14 +82,10 @@ class AnsibleGalaxyServiceLifecycleTest {
         eq(hosted), anyString(), eq(FILENAME), eq(inspected.file()), eq("alice"), eq("127.0.0.1")))
         .thenReturn(staged);
     AtomicReference<AnsibleGalaxyRegistryDao.ImportTask> waiting = new AtomicReference<>();
-    when(registry.createTask(any())).thenAnswer(invocation -> {
-      AnsibleGalaxyRegistryDao.ImportTask task = invocation.getArgument(0);
+    when(registry.createClaimedTask(any(), anyString(), any(), any())).thenAnswer(invocation -> {
+      AnsibleGalaxyRegistryDao.ImportTask task = claimed(invocation.getArgument(0));
       waiting.set(task);
       return task;
-    });
-    when(registry.claimTask(anyString(), anyString(), any(), any())).thenAnswer(invocation -> {
-      AnsibleGalaxyRegistryDao.ImportTask task = waiting.get();
-      return Optional.of(claimed(task));
     });
     when(registry.finishTask(
         anyString(), anyString(), anyLong(), anyString(), any(), any(), any(),
@@ -118,6 +114,7 @@ class AnsibleGalaxyServiceLifecycleTest {
         any(), eq(null), eq(null), eq("acme"), eq("tools"), eq("1.2.3"),
         eq(FILENAME), eq(SHA256), any());
     verify(assets).delete(hosted, ".ansible/staging/" + waiting.get().taskId() + "/" + FILENAME);
+    verify(registry, never()).claimTask(anyString(), anyString(), any(), any());
     assertFalse(Files.exists(inspected.file()));
 
     ArgumentCaptor<AnsibleGalaxyRegistryDao.CollectionVersion> inserted =
@@ -137,7 +134,8 @@ class AnsibleGalaxyServiceLifecycleTest {
     when(assets.stageCollection(
         eq(hosted), anyString(), eq(FILENAME), eq(inspected.file()), eq("alice"), eq(null)))
         .thenReturn(staged);
-    when(registry.createTask(any())).thenThrow(new IllegalStateException("database unavailable"));
+    when(registry.createClaimedTask(any(), anyString(), any(), any()))
+        .thenThrow(new IllegalStateException("database unavailable"));
 
     assertThrows(IllegalStateException.class, () -> service.publish(
         hosted, "api/v3/artifacts/collections/", null, BASE,
@@ -146,7 +144,7 @@ class AnsibleGalaxyServiceLifecycleTest {
 
     ArgumentCaptor<AnsibleGalaxyRegistryDao.ImportTask> task =
         ArgumentCaptor.forClass(AnsibleGalaxyRegistryDao.ImportTask.class);
-    verify(registry).createTask(task.capture());
+    verify(registry).createClaimedTask(task.capture(), anyString(), any(), any());
     verify(assets).delete(
         hosted, ".ansible/staging/" + task.getValue().taskId() + "/" + FILENAME);
     verify(registry, never()).claimTask(anyString(), anyString(), any(), any());
@@ -165,13 +163,11 @@ class AnsibleGalaxyServiceLifecycleTest {
         eq(hosted), anyString(), eq(FILENAME), eq(inspected.file()), eq("alice"), eq(null)))
         .thenReturn(staged);
     AtomicReference<AnsibleGalaxyRegistryDao.ImportTask> waiting = new AtomicReference<>();
-    when(registry.createTask(any())).thenAnswer(invocation -> {
-      AnsibleGalaxyRegistryDao.ImportTask task = invocation.getArgument(0);
+    when(registry.createClaimedTask(any(), anyString(), any(), any())).thenAnswer(invocation -> {
+      AnsibleGalaxyRegistryDao.ImportTask task = claimed(invocation.getArgument(0));
       waiting.set(task);
       return task;
     });
-    when(registry.claimTask(anyString(), anyString(), any(), any())).thenAnswer(
-        invocation -> Optional.of(claimed(waiting.get())));
     when(registry.findVersion(hosted.id(), "acme", "tools", "1.2.3"))
         .thenReturn(Optional.empty(), Optional.of(winner));
     when(registry.finishTask(
@@ -208,13 +204,11 @@ class AnsibleGalaxyServiceLifecycleTest {
         eq(hosted), anyString(), eq(FILENAME), eq(inspected.file()), eq("alice"), eq(null)))
         .thenReturn(staged);
     AtomicReference<AnsibleGalaxyRegistryDao.ImportTask> waiting = new AtomicReference<>();
-    when(registry.createTask(any())).thenAnswer(invocation -> {
-      AnsibleGalaxyRegistryDao.ImportTask task = invocation.getArgument(0);
+    when(registry.createClaimedTask(any(), anyString(), any(), any())).thenAnswer(invocation -> {
+      AnsibleGalaxyRegistryDao.ImportTask task = claimed(invocation.getArgument(0));
       waiting.set(task);
       return task;
     });
-    when(registry.claimTask(anyString(), anyString(), any(), any())).thenAnswer(
-        invocation -> Optional.of(claimed(waiting.get())));
     when(registry.findVersion(hosted.id(), "acme", "tools", "1.2.3"))
         .thenReturn(Optional.empty(), Optional.of(winner));
     when(registry.finishTask(
@@ -249,13 +243,11 @@ class AnsibleGalaxyServiceLifecycleTest {
         eq(hosted), anyString(), eq(FILENAME), eq(inspected.file()), eq("alice"), eq(null)))
         .thenReturn(staged);
     AtomicReference<AnsibleGalaxyRegistryDao.ImportTask> waiting = new AtomicReference<>();
-    when(registry.createTask(any())).thenAnswer(invocation -> {
-      AnsibleGalaxyRegistryDao.ImportTask task = invocation.getArgument(0);
+    when(registry.createClaimedTask(any(), anyString(), any(), any())).thenAnswer(invocation -> {
+      AnsibleGalaxyRegistryDao.ImportTask task = claimed(invocation.getArgument(0));
       waiting.set(task);
       return task;
     });
-    when(registry.claimTask(anyString(), anyString(), any(), any())).thenAnswer(
-        invocation -> Optional.of(claimed(waiting.get())));
     when(registry.finishTask(
         anyString(), anyString(), anyLong(), anyString(), any(), any(), any(),
         any(), any(), any(), any(), any(), any())).thenReturn(false);

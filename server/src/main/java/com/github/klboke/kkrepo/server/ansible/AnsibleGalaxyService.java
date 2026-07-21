@@ -148,12 +148,13 @@ public class AnsibleGalaxyService {
       Instant now = Instant.now();
       AnsibleGalaxyRegistryDao.ImportTask task;
       try {
-        task = registry.createTask(
+        task = registry.createClaimedTask(
             new AnsibleGalaxyRegistryDao.ImportTask(
                 taskId, runtime.id(), actor, TASK_WAITING, List.of(), null, null,
                 inspected.namespace(), inspected.name(), inspected.version(), inspected.filename(),
                 expectedSha256.toLowerCase(Locale.ROOT), inspected.sha256(), staged.id(), 0,
-                null, null, 0L, now, null, null, now));
+                null, null, 0L, now, null, null, now),
+            nodeOwner, now.plus(TASK_LEASE_DURATION), now);
       } catch (RuntimeException e) {
         deleteStaging(runtime, taskId, inspected.filename());
         throw e;
@@ -882,15 +883,10 @@ public class AnsibleGalaxyService {
 
   private void processNewTask(
       RepositoryRuntime runtime,
-      AnsibleGalaxyRegistryDao.ImportTask waiting,
+      AnsibleGalaxyRegistryDao.ImportTask claimed,
       AnsibleCollectionArchiveInspector.InspectedCollection inspected,
       String actor,
       String ip) {
-    Instant now = Instant.now();
-    AnsibleGalaxyRegistryDao.ImportTask claimed = registry.claimTask(
-            waiting.taskId(), nodeOwner, now.plus(TASK_LEASE_DURATION), now)
-        .orElseThrow(() -> new AnsibleGalaxyExceptions.ServiceUnavailable(
-            "Unable to claim the collection import task"));
     boolean terminal = false;
     try {
       terminal = finishSuccessfulTask(runtime, claimed, inspected, actor, ip, false);

@@ -212,6 +212,31 @@ public abstract class PersistenceApiContract {
     assertEquals(AnsibleGalaxyRegistryDao.TASK_COMPLETED,
         registry.findTask(taskId).orElseThrow().state());
 
+    String requestTaskId = "22222222-3333-4444-5555-666666666666";
+    Instant requestClaimedAt = now.plusSeconds(10);
+    AnsibleGalaxyRegistryDao.ImportTask requestClaimed = registry.createClaimedTask(
+        new AnsibleGalaxyRegistryDao.ImportTask(
+            requestTaskId, repositoryId, "bob", AnsibleGalaxyRegistryDao.TASK_WAITING,
+            List.of(), null, null, "acme", "tools", "1.2.5",
+            "acme-tools-1.2.5.tar.gz", "d".repeat(64), null, assetId, 0,
+            null, null, 0L, requestClaimedAt, null, null, requestClaimedAt),
+        "request-replica", requestClaimedAt.plusSeconds(30), requestClaimedAt);
+    assertEquals(AnsibleGalaxyRegistryDao.TASK_RUNNING, requestClaimed.state());
+    assertEquals("request-replica", requestClaimed.leaseOwner());
+    assertEquals(1, requestClaimed.attemptCount());
+    assertEquals(1L, requestClaimed.fencingToken());
+    assertEquals(requestClaimedAt, requestClaimed.startedAt());
+    assertFalse(registry.listClaimableTasks(requestClaimedAt.plusSeconds(1), 10).stream()
+        .anyMatch(task -> requestTaskId.equals(task.taskId())));
+    assertTrue(registry.claimTask(
+        requestTaskId, "recovery-replica", requestClaimedAt.plusSeconds(40),
+        requestClaimedAt.plusSeconds(1)).isEmpty());
+    AnsibleGalaxyRegistryDao.ImportTask recovered = registry.claimTask(
+        requestTaskId, "recovery-replica", requestClaimedAt.plusSeconds(70),
+        requestClaimedAt.plusSeconds(31)).orElseThrow();
+    assertEquals(2, recovered.attemptCount());
+    assertEquals(2L, recovered.fencingToken());
+
     registry.upsertProxyState(new AnsibleGalaxyRegistryDao.ProxyVersionState(
         proxyRepositoryId, "acme", "tools", "1.2.3", "acme-tools-1.2.3.tar.gz",
         "https://galaxy.example/v3/collections/acme/tools/versions/1.2.3/",

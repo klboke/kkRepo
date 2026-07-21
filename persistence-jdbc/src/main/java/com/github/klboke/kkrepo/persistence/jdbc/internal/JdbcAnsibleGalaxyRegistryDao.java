@@ -234,6 +234,29 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
   @Override
   @Transactional
   public ImportTask createTask(ImportTask task) {
+    return insertTask(task);
+  }
+
+  @Override
+  @Transactional
+  public ImportTask createClaimedTask(
+      ImportTask task, String owner, Instant leaseExpiresAt, Instant now) {
+    if (task == null || owner == null || owner.isBlank()) {
+      throw new IllegalArgumentException("A task and lease owner are required");
+    }
+    if (leaseExpiresAt == null || now == null || !leaseExpiresAt.isAfter(now)) {
+      throw new IllegalArgumentException("Task lease expiry must be after claim time");
+    }
+    Instant createdAt = task.createdAt() == null ? now : task.createdAt();
+    return insertTask(new ImportTask(
+        task.taskId(), task.repositoryId(), task.requester(), TASK_RUNNING,
+        safeMessages(task.messages()), task.errorCode(), task.errorDetail(), task.namespaceLc(),
+        task.nameLc(), task.versionNormalized(), task.artifactFilename(), task.expectedSha256(),
+        task.actualSha256(), task.stagingAssetId(), 1, owner, leaseExpiresAt, 1L,
+        createdAt, now, null, now));
+  }
+
+  private ImportTask insertTask(ImportTask task) {
     Instant createdAt = task.createdAt() == null ? Instant.now() : task.createdAt();
     Instant updatedAt = task.updatedAt() == null ? createdAt : task.updatedAt();
     String state = task.state() == null ? TASK_WAITING : task.state();
