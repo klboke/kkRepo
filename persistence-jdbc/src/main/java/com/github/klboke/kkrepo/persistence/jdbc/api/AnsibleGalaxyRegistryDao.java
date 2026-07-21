@@ -27,6 +27,15 @@ public interface AnsibleGalaxyRegistryDao {
   Optional<CollectionVersion> findVersionByArtifactFilename(
       long repositoryId, String artifactFilename);
 
+  /**
+   * Removes one collection version before its archive asset is unlinked.
+   *
+   * <p>The implementation also clears coordinate-scoped proxy state, invalidates containing
+   * group bindings, and advances shared repository revisions. The repository, version, and asset
+   * identifiers must all describe the same ready version.
+   */
+  boolean deleteVersion(long repositoryId, long versionId, long artifactAssetId);
+
   List<CollectionVersion> listVersions(
       long repositoryId, String namespaceLc, String nameLc);
 

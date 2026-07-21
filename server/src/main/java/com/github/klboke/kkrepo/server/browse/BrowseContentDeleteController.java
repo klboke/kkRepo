@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.browse;
 import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
@@ -13,6 +14,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
 import com.github.klboke.kkrepo.protocol.swift.SwiftPath;
 import com.github.klboke.kkrepo.protocol.swift.SwiftPathParser;
 import com.github.klboke.kkrepo.protocol.swift.SwiftToolsVersions;
@@ -54,6 +56,7 @@ public class BrowseContentDeleteController {
   private final AssetDao assetDao;
   private final TerraformRegistryDao terraformRegistryDao;
   private final SwiftRegistryDao swiftRegistryDao;
+  private final AnsibleGalaxyRegistryDao ansibleRegistryDao;
   private final BrowseNodeDao browseNodeDao;
   private final ComponentDao componentDao;
   private final MetadataRebuildDao metadataRebuildDao;
@@ -71,6 +74,7 @@ public class BrowseContentDeleteController {
       AssetDao assetDao,
       TerraformRegistryDao terraformRegistryDao,
       SwiftRegistryDao swiftRegistryDao,
+      AnsibleGalaxyRegistryDao ansibleRegistryDao,
       BrowseNodeDao browseNodeDao,
       ComponentDao componentDao,
       MetadataRebuildDao metadataRebuildDao,
@@ -86,6 +90,7 @@ public class BrowseContentDeleteController {
     this.assetDao = assetDao;
     this.terraformRegistryDao = terraformRegistryDao;
     this.swiftRegistryDao = swiftRegistryDao;
+    this.ansibleRegistryDao = ansibleRegistryDao;
     this.browseNodeDao = browseNodeDao;
     this.componentDao = componentDao;
     this.metadataRebuildDao = metadataRebuildDao;
@@ -119,6 +124,14 @@ public class BrowseContentDeleteController {
     if (publicPath.isEmpty()) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "path is required");
     }
+    AnsibleCoordinate ansibleCoordinate = requested.format() == RepositoryFormat.ANSIBLEGALAXY
+        ? ansibleCoordinate(publicPath)
+        : null;
+    if (requested.format() == RepositoryFormat.ANSIBLEGALAXY && ansibleCoordinate == null) {
+      throw new ResponseStatusException(
+          HttpStatus.BAD_REQUEST,
+          "Ansible deletion requires a collection archive browse path");
+    }
     String storagePath = toStoragePath(requested.format(), publicPath);
     String resolvedSourceRepository = sourceRepository;
     if (requested.format() == RepositoryFormat.TERRAFORM) {
@@ -142,6 +155,26 @@ public class BrowseContentDeleteController {
     List<AssetRecord> assets = matchingAssets(target, storagePath);
     if (assets.isEmpty()) {
       throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Browse path not found: " + publicPath);
+    }
+
+    Long ansibleComponentId = null;
+    if (target.format() == RepositoryFormat.ANSIBLEGALAXY) {
+      AnsibleGalaxyRegistryDao.CollectionVersion version = requireMatchingAnsibleVersion(
+          target, ansibleCoordinate);
+      AssetRecord archive = assets.stream()
+          .filter(asset -> asset.id() == version.artifactAssetId())
+          .findFirst()
+          .orElseThrow(() -> new ResponseStatusException(
+              HttpStatus.CONFLICT,
+              "Ansible collection archive does not match registry state"));
+      if (version.id() == null || !ansibleRegistryDao.deleteVersion(
+          target.id(), version.id(), archive.id())) {
+        throw new ResponseStatusException(
+            HttpStatus.CONFLICT,
+            "Ansible collection state changed during deletion");
+      }
+      ansibleComponentId = version.componentId();
+      assets = List.of(archive);
     }
 
     Long swiftComponentId = null;
@@ -186,6 +219,9 @@ public class BrowseContentDeleteController {
         .collect(Collectors.toSet());
     if (swiftComponentId != null) {
       componentIds.add(swiftComponentId);
+    }
+    if (ansibleComponentId != null) {
+      componentIds.add(ansibleComponentId);
     }
     Set<String> npmPackageIds = assets.stream()
         .map(BrowseContentDeleteController::npmPackageIdForInvalidation)
@@ -244,9 +280,7 @@ public class BrowseContentDeleteController {
     if (requested.type() != RepositoryType.GROUP) {
       return requested;
     }
-    List<RepositoryRecord> members = requested.format() == RepositoryFormat.SWIFT
-        ? BrowseRepositorySources.swiftSources(requested, repositoryDao)
-        : repositoryDao.listMembers(requested.id());
+    List<RepositoryRecord> members = repositorySources(requested);
     return members.stream()
         .filter(member -> !matchingAssets(member, storagePath).isEmpty())
         .findFirst()
@@ -258,9 +292,7 @@ public class BrowseContentDeleteController {
     if (requested.type() != RepositoryType.GROUP) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "source must match repository");
     }
-    List<RepositoryRecord> members = requested.format() == RepositoryFormat.SWIFT
-        ? BrowseRepositorySources.swiftSources(requested, repositoryDao)
-        : repositoryDao.listMembers(requested.id());
+    List<RepositoryRecord> members = repositorySources(requested);
     boolean member = members.stream()
         .anyMatch(row -> row.id().equals(target.id()));
     if (!member) {
@@ -272,6 +304,33 @@ public class BrowseContentDeleteController {
   private RepositoryRecord repositoryByName(String name) {
     return repositoryDao.findByName(name)
         .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Repository not found: " + name));
+  }
+
+  private List<RepositoryRecord> repositorySources(RepositoryRecord repository) {
+    if (repository.format() == RepositoryFormat.SWIFT) {
+      return BrowseRepositorySources.swiftSources(repository, repositoryDao);
+    }
+    if (repository.format() == RepositoryFormat.ANSIBLEGALAXY) {
+      return BrowseRepositorySources.ansibleSources(repository, repositoryDao);
+    }
+    return repositoryDao.listMembers(repository.id());
+  }
+
+  private AnsibleGalaxyRegistryDao.CollectionVersion requireMatchingAnsibleVersion(
+      RepositoryRecord source,
+      AnsibleCoordinate coordinate) {
+    AnsibleGalaxyRegistryDao.CollectionVersion version = ansibleRegistryDao
+        .findVersionByArtifactFilename(source.id(), coordinate.filename())
+        .orElseThrow(() -> new ResponseStatusException(
+            HttpStatus.NOT_FOUND, "Ansible collection identity not found"));
+    if (!version.namespaceDisplay().equals(coordinate.namespace())
+        || !version.nameDisplay().equals(coordinate.name())
+        || !version.versionOriginal().equals(coordinate.version())
+        || !version.artifactFilename().equals(coordinate.filename())) {
+      throw new ResponseStatusException(
+          HttpStatus.NOT_FOUND, "Ansible collection path does not match artifact identity");
+    }
+    return version;
   }
 
   private List<AssetRecord> matchingAssets(RepositoryRecord repository, String storagePath) {
@@ -471,6 +530,12 @@ public class BrowseContentDeleteController {
   }
 
   private static String toStoragePath(RepositoryFormat format, String publicPath) {
+    if (format == RepositoryFormat.ANSIBLEGALAXY) {
+      AnsibleCoordinate coordinate = ansibleCoordinate(publicPath);
+      return coordinate == null
+          ? publicPath
+          : AnsibleGalaxyPathParser.ARTIFACT_BASE + coordinate.filename();
+    }
     if (format != RepositoryFormat.PYPI) {
       return publicPath;
     }
@@ -493,6 +558,21 @@ public class BrowseContentDeleteController {
   }
 
   private record MavenCoordinates(String groupId, String artifactId, String version) {}
+
+  private static AnsibleCoordinate ansibleCoordinate(String path) {
+    String[] segments = normalize(path).split("/", -1);
+    if (segments.length != 4
+        || segments[0].isBlank()
+        || segments[1].isBlank()
+        || segments[2].isBlank()
+        || !AnsibleGalaxyPathParser.isArtifactFilename(segments[3])) {
+      return null;
+    }
+    return new AnsibleCoordinate(segments[0], segments[1], segments[2], segments[3]);
+  }
+
+  private record AnsibleCoordinate(
+      String namespace, String name, String version, String filename) {}
 
   private record SwiftCoordinate(String scopeLc, String nameLc, String version) {
     String display() {

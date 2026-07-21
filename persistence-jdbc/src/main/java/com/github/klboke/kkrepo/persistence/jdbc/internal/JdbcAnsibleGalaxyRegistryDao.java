@@ -148,6 +148,34 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
   }
 
   @Override
+  @Transactional
+  public boolean deleteVersion(long repositoryId, long versionId, long artifactAssetId) {
+    Optional<CollectionVersion> existing = findVersionById(versionId)
+        .filter(version -> version.repositoryId() == repositoryId)
+        .filter(version -> version.artifactAssetId() == artifactAssetId);
+    if (existing.isEmpty()) {
+      return false;
+    }
+    CollectionVersion version = existing.orElseThrow();
+    int deleted = jdbc.update("""
+        DELETE FROM ansible_collection_version
+        WHERE id = ? AND repository_id = ? AND artifact_asset_id = ? AND state = 'READY'
+        """, versionId, repositoryId, artifactAssetId);
+    if (deleted == 0) {
+      return false;
+    }
+    jdbc.update("""
+        DELETE FROM ansible_proxy_version_state
+        WHERE repository_id = ? AND namespace_lc = ? AND name_lc = ?
+          AND version_normalized = ?
+        """, repositoryId, version.namespaceLc(), version.nameLc(),
+        version.versionNormalized());
+    nextRepositoryRevision(repositoryId);
+    invalidateContainingGroups(repositoryId);
+    return true;
+  }
+
+  @Override
   public List<CollectionVersion> listVersions(
       long repositoryId, String namespaceLc, String nameLc) {
     List<CollectionVersion> versions = new ArrayList<>(jdbc.query("""

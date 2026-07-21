@@ -252,6 +252,47 @@ public abstract class PersistenceApiContract {
     AnsibleGalaxyRegistryDao.Lease secondLease = registry.tryAcquireLease(
         firstLease.leaseKey(), "replica-b", Instant.now().plusSeconds(30)).orElseThrow();
     assertTrue(secondLease.fencingToken() > firstLease.fencingToken());
+
+    long repositoryRevisionBeforeDelete = registry.currentRepositoryRevision(repositoryId);
+    long groupRevisionBeforeDelete = registry.currentRepositoryRevision(groupRepositoryId);
+    assertFalse(inTransaction(() -> registry.deleteVersion(
+        repositoryId, stored.id(), assetId + 1)));
+    assertTrue(registry.findVersionById(stored.id()).isPresent());
+    assertTrue(inTransaction(() -> registry.deleteVersion(
+        repositoryId, stored.id(), assetId)));
+    assertTrue(registry.findVersionById(stored.id()).isEmpty());
+    assertTrue(registry.listSignatures(stored.id()).isEmpty());
+    assertTrue(registry.findGroupBinding(
+        groupRepositoryId, "acme", "tools", "1.2.3").isEmpty());
+    assertTrue(registry.currentRepositoryRevision(repositoryId) > repositoryRevisionBeforeDelete);
+    assertTrue(registry.currentRepositoryRevision(groupRepositoryId) > groupRevisionBeforeDelete);
+    assertEquals(1, stores().assets().deleteAssetById(assetId));
+
+    long proxyBlobStoreId = stores().repositories()
+        .findById(proxyRepositoryId).orElseThrow().blobStoreId();
+    long proxyComponentId = stores().components().upsertReturningId(component(
+        proxyRepositoryId, RepositoryFormat.ANSIBLEGALAXY, "acme", "tools", "1.2.3",
+        Map.of("kind", "ansible-collection"), now));
+    long proxyBlobId = stores().assets().insertBlob(
+        blob(proxyBlobStoreId, "ansible/proxy-acme-tools-1.2.3.tar.gz", "ansible-proxy-ref"));
+    long proxyAssetId = stores().assets().insertAsset(new AssetRecord(
+        null, proxyRepositoryId, proxyComponentId, proxyBlobId,
+        RepositoryFormat.ANSIBLEGALAXY, path, PersistenceHashes.pathHash(path),
+        "acme-tools-1.2.3.tar.gz", "collection-artifact", "application/octet-stream",
+        42L, null, now, Map.of()));
+    long proxyRevision = registry.nextRepositoryRevision(proxyRepositoryId);
+    AnsibleGalaxyRegistryDao.CollectionVersion proxyVersion = inTransaction(() ->
+        registry.insertVersion(new AnsibleGalaxyRegistryDao.CollectionVersion(
+            null, proxyRepositoryId, proxyComponentId, proxyAssetId,
+            "acme", "acme", "tools", "tools", "1.2.3", "1.2.3",
+            "acme-tools-1.2.3.tar.gz", "a".repeat(64), 42L, Map.of(), Map.of(),
+            ">=2.16", "PROXY", proxyRevision, AnsibleGalaxyRegistryDao.VERSION_READY,
+            now, now, now)));
+    assertTrue(inTransaction(() -> registry.deleteVersion(
+        proxyRepositoryId, proxyVersion.id(), proxyAssetId)));
+    assertTrue(registry.findProxyState(
+        proxyRepositoryId, "acme", "tools", "1.2.3").isEmpty());
+    assertEquals(1, stores().assets().deleteAssetById(proxyAssetId));
   }
 
   @Test
