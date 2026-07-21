@@ -66,7 +66,9 @@ class AnsibleGalaxyServiceLifecycleTest {
     inspector = mock(AnsibleCollectionArchiveInspector.class);
     fetcher = mock(HttpRemoteFetcher.class);
     runtimes = mock(RepositoryRuntimeRegistry.class);
-    service = new AnsibleGalaxyService(mapper, registry, assets, inspector, fetcher, runtimes);
+    service = new AnsibleGalaxyService(
+        mapper, registry, assets, inspector, fetcher, runtimes,
+        new AnsibleImportTaskLeaseManager(registry));
   }
 
   @Test

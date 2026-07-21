@@ -327,7 +327,8 @@ class AnsibleGalaxyServiceSupportTest {
         mock(AnsibleGalaxyAssetSupport.class),
         mock(AnsibleCollectionArchiveInspector.class),
         mock(HttpRemoteFetcher.class),
-        mock(RepositoryRuntimeRegistry.class));
+        mock(RepositoryRuntimeRegistry.class),
+        new AnsibleImportTaskLeaseManager(registry));
   }
 
   private static AnsibleGalaxyRegistryDao.CollectionVersion version(Map<String, Object> metadata) {

@@ -266,6 +266,21 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
   }
 
   @Override
+  public boolean renewTaskLease(
+      String taskId, String owner, long fencingToken, Instant leaseExpiresAt) {
+    Instant now = Instant.now();
+    if (leaseExpiresAt == null || !leaseExpiresAt.isAfter(now)) {
+      throw new IllegalArgumentException("Task lease expiry must be in the future");
+    }
+    return jdbc.update("""
+        UPDATE ansible_import_task SET lease_expires_at = ?, updated_at = ?
+        WHERE task_uuid = ? AND state = 'RUNNING' AND lease_owner = ? AND fencing_token = ?
+          AND lease_expires_at >= ?
+        """, nullableTimestamp(leaseExpiresAt), nullableTimestamp(now), taskId, owner,
+        fencingToken, nullableTimestamp(now)) > 0;
+  }
+
+  @Override
   public boolean finishTask(
       String taskId,
       String owner,

@@ -185,11 +185,19 @@ public abstract class PersistenceApiContract {
         taskId, repositoryId, "alice", AnsibleGalaxyRegistryDao.TASK_WAITING, List.of(),
         null, null, "acme", "tools", "1.2.4", "acme-tools-1.2.4.tar.gz",
         "c".repeat(64), null, assetId, 0, null, null, 0L, now, null, null, now));
+    Instant leaseNow = Instant.now();
     AnsibleGalaxyRegistryDao.ImportTask claimed = registry.claimTask(
-        taskId, "replica-a", now.plusSeconds(30), now).orElseThrow();
+        taskId, "replica-a", leaseNow.plusSeconds(30), leaseNow).orElseThrow();
     assertEquals(1, claimed.attemptCount());
     assertTrue(registry.claimTask(
-        taskId, "replica-b", now.plusSeconds(30), now).isEmpty());
+        taskId, "replica-b", leaseNow.plusSeconds(30), leaseNow).isEmpty());
+    assertThrows(IllegalArgumentException.class, () -> registry.renewTaskLease(
+        taskId, "replica-a", claimed.fencingToken(), Instant.EPOCH));
+    Instant renewedUntil = Instant.now().plusSeconds(60);
+    assertFalse(registry.renewTaskLease(
+        taskId, "replica-a", claimed.fencingToken() + 1, renewedUntil));
+    assertTrue(registry.renewTaskLease(
+        taskId, "replica-a", claimed.fencingToken(), renewedUntil));
     assertFalse(registry.finishTask(
         taskId, "replica-a", claimed.fencingToken() + 1,
         AnsibleGalaxyRegistryDao.TASK_COMPLETED, List.of(), null, null,

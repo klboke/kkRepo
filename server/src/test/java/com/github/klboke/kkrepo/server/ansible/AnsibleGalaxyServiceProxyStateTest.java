@@ -64,7 +64,8 @@ class AnsibleGalaxyServiceProxyStateTest {
     inspector = mock(AnsibleCollectionArchiveInspector.class);
     fetcher = mock(HttpRemoteFetcher.class);
     service = new AnsibleGalaxyService(
-        mapper, registry, assets, inspector, fetcher, mock(RepositoryRuntimeRegistry.class));
+        mapper, registry, assets, inspector, fetcher, mock(RepositoryRuntimeRegistry.class),
+        new AnsibleImportTaskLeaseManager(registry));
     proxy = runtime(20L, RepositoryType.PROXY, "https://galaxy.example/root/", List.of());
   }
 
@@ -119,6 +120,24 @@ class AnsibleGalaxyServiceProxyStateTest {
         proxy, "acme", "tools", "1.2.3", "api/v3/detail"));
 
     verify(fetcher, never()).fetch(any());
+  }
+
+  @Test
+  void waitsForFreshMetadataInsteadOfReturningTheStaleProjection() {
+    Instant now = Instant.now();
+    Map<String, Object> staleIdentity = detail(SHA_A);
+    Map<String, Object> freshIdentity = detail(SHA_B);
+    AnsibleGalaxyRegistryDao.ProxyVersionState stale =
+        state(staleIdentity, now.minusSeconds(1), null, null, SHA_A);
+    AnsibleGalaxyRegistryDao.ProxyVersionState fresh =
+        state(freshIdentity, now.plusSeconds(60), null, null, SHA_B);
+    when(registry.findProxyState(proxy.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.of(stale), Optional.of(fresh));
+
+    assertEquals(freshIdentity, service.awaitProxyDocument(
+        proxy, "acme", "tools", "1.2.3", now));
+
+    verify(registry, times(2)).findProxyState(proxy.id(), "acme", "tools", "1.2.3");
   }
 
   @Test
@@ -410,7 +429,8 @@ class AnsibleGalaxyServiceProxyStateTest {
       AnsibleGalaxyAssetSupport assetSupport,
       AnsibleCollectionArchiveInspector archiveInspector) {
     return new AnsibleGalaxyService(
-        mapper, dao, assetSupport, archiveInspector, remote, mock(RepositoryRuntimeRegistry.class));
+        mapper, dao, assetSupport, archiveInspector, remote, mock(RepositoryRuntimeRegistry.class),
+        new AnsibleImportTaskLeaseManager(dao));
   }
 
   private Map<String, Object> detail(String sha) {

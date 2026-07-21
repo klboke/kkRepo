@@ -46,6 +46,9 @@ public interface AnsibleGalaxyRegistryDao {
   Optional<ImportTask> claimTask(
       String taskId, String owner, Instant leaseExpiresAt, Instant now);
 
+  boolean renewTaskLease(
+      String taskId, String owner, long fencingToken, Instant leaseExpiresAt);
+
   boolean finishTask(
       String taskId,
       String owner,

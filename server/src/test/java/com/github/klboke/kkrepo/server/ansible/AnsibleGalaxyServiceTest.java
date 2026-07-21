@@ -53,7 +53,8 @@ class AnsibleGalaxyServiceTest {
         assets,
         inspector,
         fetcher,
-        mock(RepositoryRuntimeRegistry.class));
+        mock(RepositoryRuntimeRegistry.class),
+        new AnsibleImportTaskLeaseManager(registry));
   }
 
   @Test

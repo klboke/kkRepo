@@ -66,6 +66,7 @@ public class AnsibleGalaxyService {
   private final AnsibleCollectionArchiveInspector inspector;
   private final HttpRemoteFetcher remoteFetcher;
   private final RepositoryRuntimeRegistry runtimes;
+  private final AnsibleImportTaskLeaseManager taskLeases;
   private final AnsibleGalaxyPathParser pathParser = new AnsibleGalaxyPathParser();
   private final String nodeOwner = "ansible-" + UUID.randomUUID();
 
@@ -75,13 +76,15 @@ public class AnsibleGalaxyService {
       AnsibleGalaxyAssetSupport assets,
       AnsibleCollectionArchiveInspector inspector,
       HttpRemoteFetcher remoteFetcher,
-      RepositoryRuntimeRegistry runtimes) {
+      RepositoryRuntimeRegistry runtimes,
+      AnsibleImportTaskLeaseManager taskLeases) {
     this.objectMapper = objectMapper;
     this.registry = registry;
     this.assets = assets;
     this.inspector = inspector;
     this.remoteFetcher = remoteFetcher;
     this.runtimes = runtimes;
+    this.taskLeases = taskLeases;
   }
 
   public MavenResponse get(
@@ -767,12 +770,15 @@ public class AnsibleGalaxyService {
       Optional<AnsibleGalaxyRegistryDao.ProxyVersionState> refreshed = registry.findProxyState(
           runtime.id(), namespace, name, stateKey);
       if (refreshed.isPresent()) {
+        Instant observedAt = Instant.now();
         if (refreshed.get().negativeStatus() != null
             && refreshed.get().negativeExpiresAt() != null
-            && refreshed.get().negativeExpiresAt().isAfter(Instant.now())) {
+            && refreshed.get().negativeExpiresAt().isAfter(observedAt)) {
           throw new AnsibleGalaxyExceptions.NotFound("Upstream collection resource was not found");
         }
-        if (!refreshed.get().upstreamIdentity().isEmpty()) {
+        if (refreshed.get().cacheUntil() != null
+            && refreshed.get().cacheUntil().isAfter(observedAt)
+            && !refreshed.get().upstreamIdentity().isEmpty()) {
           return refreshed.get().upstreamIdentity();
         }
       }
@@ -915,17 +921,21 @@ public class AnsibleGalaxyService {
       String actor,
       String ip,
       boolean allowExistingSameArtifact) {
-    AnsibleGalaxyRegistryDao.CollectionVersion version = persistCollection(
-        runtime, inspected, "HOSTED", Map.of(), actor, ip, allowExistingSameArtifact);
-    Instant finished = Instant.now();
-    List<Map<String, Object>> messages = List.of(Map.of(
-        "level", "INFO",
-        "message", "Imported collection " + version.namespaceDisplay() + "."
-            + version.nameDisplay() + ":" + version.versionOriginal()));
-    return registry.finishTask(
-        task.taskId(), task.leaseOwner(), task.fencingToken(), TASK_COMPLETED, messages,
-        null, null, version.namespaceLc(), version.nameLc(), version.versionNormalized(),
-        version.artifactFilename(), version.artifactSha256(), finished);
+    try (AnsibleImportTaskLeaseManager.Lease lease =
+             taskLeases.monitor(task, TASK_LEASE_DURATION)) {
+      AnsibleGalaxyRegistryDao.CollectionVersion version = persistCollection(
+          runtime, inspected, "HOSTED", Map.of(), actor, ip, allowExistingSameArtifact);
+      lease.assertHeld();
+      Instant finished = Instant.now();
+      List<Map<String, Object>> messages = List.of(Map.of(
+          "level", "INFO",
+          "message", "Imported collection " + version.namespaceDisplay() + "."
+              + version.nameDisplay() + ":" + version.versionOriginal()));
+      return registry.finishTask(
+          task.taskId(), task.leaseOwner(), task.fencingToken(), TASK_COMPLETED, messages,
+          null, null, version.namespaceLc(), version.nameLc(), version.versionNormalized(),
+          version.artifactFilename(), version.artifactSha256(), finished);
+    }
   }
 
   private boolean finishFailed(
