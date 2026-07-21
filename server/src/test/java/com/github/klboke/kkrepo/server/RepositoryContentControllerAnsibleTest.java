@@ -110,7 +110,8 @@ class RepositoryContentControllerAnsibleTest {
     AnsibleGalaxyService ansible = mock(AnsibleGalaxyService.class);
     byte[] responseBody = "{\"task\":\"task-1\"}".getBytes(StandardCharsets.UTF_8);
     when(ansible.publish(
-        eq(runtime), eq("api/v3/artifacts/collections/"), eq(null), any(),
+        eq(runtime), eq("api/v3/artifacts/collections/"), eq(null),
+        eq("https://repo.example/repository/ansible"), any(),
         eq(FILENAME), eq(SHA256), eq("anonymous"), eq("192.0.2.20"), eq(false)))
         .thenReturn(MavenResponse.ok(
             new ByteArrayInputStream(responseBody), responseBody.length,
@@ -129,7 +130,8 @@ class RepositoryContentControllerAnsibleTest {
     assertEquals("{\"task\":\"task-1\"}",
         new String((byte[]) response.getBody(), StandardCharsets.UTF_8));
     verify(ansible).publish(
-        eq(runtime), eq("api/v3/artifacts/collections/"), eq(null), any(),
+        eq(runtime), eq("api/v3/artifacts/collections/"), eq(null),
+        eq("https://repo.example/repository/ansible"), any(),
         eq(FILENAME), eq(SHA256), eq("anonymous"), eq("192.0.2.20"), eq(false));
     verify(ansible).validatePublishRequest(
         runtime, "api/v3/artifacts/collections/", null);
@@ -154,7 +156,7 @@ class RepositoryContentControllerAnsibleTest {
         verify(reader, never()).read(any());
         verify(ansible, never()).validatePublishRequest(any(), any(), any());
         verify(ansible, never()).publish(
-            any(), any(), any(), any(), any(), any(), any(), any(), eq(false));
+            any(), any(), any(), any(), any(), any(), any(), any(), any(), eq(false));
       }
     }
   }
@@ -176,7 +178,7 @@ class RepositoryContentControllerAnsibleTest {
 
     verify(reader, never()).read(any());
     verify(ansible, never()).publish(
-        any(), any(), any(), any(), any(), any(), any(), any(), eq(false));
+        any(), any(), any(), any(), any(), any(), any(), any(), any(), eq(false));
   }
 
   @Test
@@ -191,7 +193,7 @@ class RepositoryContentControllerAnsibleTest {
     assertThrows(AnsibleGalaxyExceptions.UnsupportedMediaType.class,
         () -> controller.post("ansible", plain));
     verify(ansible, never()).publish(
-        any(), any(), any(), any(), any(), any(), any(), any(), eq(false));
+        any(), any(), any(), any(), any(), any(), any(), any(), any(), eq(false));
 
     MockHttpServletRequest multipart = request(
         "POST", "/repository/ansible/api/v3/artifacts/collections/");

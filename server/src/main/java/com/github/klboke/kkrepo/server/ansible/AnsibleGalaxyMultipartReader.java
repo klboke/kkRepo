@@ -137,7 +137,9 @@ public final class AnsibleGalaxyMultipartReader {
         }
         String name = disposition.getName();
         String filename = disposition.getFilename();
-        if ("file".equals(name) && filename != null && !filename.isBlank()) {
+        boolean filePart = filename != null && !filename.isBlank()
+            && ("file".equals(name) || "file".equals(type));
+        if (filePart) {
           if (file != null) {
             throw badRequest("Ansible publish requires exactly one file part");
           }

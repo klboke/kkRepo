@@ -96,7 +96,7 @@ class AnsibleGalaxyServiceLifecycleTest {
         any(), any(), any(), any(), any(), any())).thenReturn(true);
 
     MavenResponse response = service.publish(
-        hosted, "api/v3/artifacts/collections/", null,
+        hosted, "api/v3/artifacts/collections", null, BASE,
         new ByteArrayInputStream(new byte[] {1}), FILENAME, SHA256.toUpperCase(),
         "alice", "127.0.0.1", false);
 
@@ -109,10 +109,10 @@ class AnsibleGalaxyServiceLifecycleTest {
     assertEquals(BASE + taskPath, URI.create(BASE).resolve(taskPath).toString());
     assertTrue(taskPath.contains(waiting.get().taskId()));
     String location = response.headers().get("Location").toString();
-    assertEquals("../../imports/collections/" + waiting.get().taskId() + "/", location);
+    assertEquals(BASE + taskPath, location);
     assertEquals(
         BASE + taskPath,
-        URI.create(BASE + "api/v3/artifacts/collections/").resolve(location).toString());
+        URI.create(BASE + "api/v3/artifacts/collections").resolve(location).toString());
     verify(registry).finishTask(
         anyString(), anyString(), anyLong(), eq(AnsibleGalaxyRegistryDao.TASK_COMPLETED),
         any(), eq(null), eq(null), eq("acme"), eq("tools"), eq("1.2.3"),
@@ -140,7 +140,7 @@ class AnsibleGalaxyServiceLifecycleTest {
     when(registry.createTask(any())).thenThrow(new IllegalStateException("database unavailable"));
 
     assertThrows(IllegalStateException.class, () -> service.publish(
-        hosted, "api/v3/artifacts/collections/", null,
+        hosted, "api/v3/artifacts/collections/", null, BASE,
         new ByteArrayInputStream(new byte[] {1}), FILENAME, SHA256,
         "alice", null, false));
 
@@ -180,7 +180,7 @@ class AnsibleGalaxyServiceLifecycleTest {
 
     AnsibleGalaxyExceptions.Conflict conflict = assertThrows(
         AnsibleGalaxyExceptions.Conflict.class, () -> service.publish(
-            hosted, "api/v3/artifacts/collections/", null,
+            hosted, "api/v3/artifacts/collections/", null, BASE,
             new ByteArrayInputStream(new byte[] {1}), FILENAME, SHA256,
             "alice", null, false));
 
@@ -222,7 +222,7 @@ class AnsibleGalaxyServiceLifecycleTest {
         any(), any(), any(), any(), any(), any())).thenReturn(false);
 
     MavenResponse response = service.publish(
-        hosted, "api/v3/artifacts/collections/", null,
+        hosted, "api/v3/artifacts/collections/", null, BASE,
         new ByteArrayInputStream(new byte[] {1}), FILENAME, SHA256,
         "alice", null, false);
 
@@ -261,7 +261,7 @@ class AnsibleGalaxyServiceLifecycleTest {
         any(), any(), any(), any(), any(), any())).thenReturn(false);
 
     assertEquals(202, service.publish(
-        hosted, "api/v3/artifacts/collections/", null,
+        hosted, "api/v3/artifacts/collections/", null, BASE,
         new ByteArrayInputStream(new byte[] {1}), FILENAME, SHA256,
         "alice", null, false).status());
 
@@ -340,13 +340,13 @@ class AnsibleGalaxyServiceLifecycleTest {
   void validatesPublishAndPutInputsBeforeWriting() throws Exception {
     RepositoryRuntime hosted = runtime(4L, RepositoryType.HOSTED, null, List.of());
     assertThrows(AnsibleGalaxyExceptions.BadRequest.class, () -> service.publish(
-        hosted, "api/v3/artifacts/collections/", "unexpected=1",
+        hosted, "api/v3/artifacts/collections/", "unexpected=1", BASE,
         new ByteArrayInputStream(new byte[0]), FILENAME, SHA256, "alice", null, false));
     assertThrows(AnsibleGalaxyExceptions.MethodNotAllowed.class, () -> service.publish(
-        hosted, "api/v3/collections/acme/tools/", null,
+        hosted, "api/v3/collections/acme/tools/", null, BASE,
         new ByteArrayInputStream(new byte[0]), FILENAME, SHA256, "alice", null, false));
     assertThrows(AnsibleGalaxyExceptions.BadRequest.class, () -> service.publish(
-        hosted, "api/v3/artifacts/collections/", null,
+        hosted, "api/v3/artifacts/collections/", null, BASE,
         new ByteArrayInputStream(new byte[0]), FILENAME, "bad", "alice", null, false));
     assertThrows(AnsibleGalaxyExceptions.MethodNotAllowed.class, () -> service.putArtifact(
         hosted, "api/v3/collections/acme/tools/", new ByteArrayInputStream(new byte[0]),
@@ -355,7 +355,7 @@ class AnsibleGalaxyServiceLifecycleTest {
     AnsibleCollectionArchiveInspector.InspectedCollection inspected = inspected("bad-name");
     when(inspector.inspect(any())).thenReturn(inspected);
     assertThrows(AnsibleGalaxyExceptions.BadRequest.class, () -> service.publish(
-        hosted, "api/v3/artifacts/collections/", null,
+        hosted, "api/v3/artifacts/collections/", null, BASE,
         new ByteArrayInputStream(new byte[0]), "wrong.tar.gz", SHA256, "alice", null, false));
     assertFalse(Files.exists(inspected.file()));
 
@@ -364,7 +364,7 @@ class AnsibleGalaxyServiceLifecycleTest {
     when(registry.findVersion(hosted.id(), "acme", "tools", "1.2.3"))
         .thenReturn(Optional.of(version(hosted.id(), 33L, 23L)));
     assertThrows(AnsibleGalaxyExceptions.Conflict.class, () -> service.publish(
-        hosted, "api/v3/artifacts/collections/", null,
+        hosted, "api/v3/artifacts/collections/", null, BASE,
         new ByteArrayInputStream(new byte[0]), FILENAME, SHA256, "alice", null, false));
     assertFalse(Files.exists(duplicate.file()));
     verify(assets, never()).storeCollection(any(), any(), any(), any(), any(), any(), any());

@@ -629,6 +629,7 @@ public class RepositoryContentController {
             runtime,
             raw,
             request.getQueryString(),
+            repositoryBaseUrl(request, runtime.name()),
             body,
             upload.filename(),
             upload.sha256(),

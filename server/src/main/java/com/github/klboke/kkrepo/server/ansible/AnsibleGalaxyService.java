@@ -125,6 +125,7 @@ public class AnsibleGalaxyService {
       RepositoryRuntime runtime,
       String rawPath,
       String rawQuery,
+      String repositoryBaseUrl,
       InputStream artifact,
       String filename,
       String expectedSha256,
@@ -160,7 +161,7 @@ public class AnsibleGalaxyService {
       processNewTask(runtime, task, inspected, actor, ip);
       String taskPath = "api/v3/imports/collections/" + taskId + "/";
       return jsonResponse(Map.of("task", taskPath), 202, headOnly, now)
-          .withHeader("Location", "../../imports/collections/" + taskId + "/");
+          .withHeader("Location", normalizedBase(repositoryBaseUrl) + taskPath);
     } finally {
       AnsibleCollectionArchiveInspector.delete(inspected.file());
     }

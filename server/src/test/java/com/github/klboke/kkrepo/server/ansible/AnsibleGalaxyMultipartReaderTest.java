@@ -33,7 +33,7 @@ class AnsibleGalaxyMultipartReaderTest {
   void readsAnsible29LegacyFileDispositionAndBinaryBoundaryPrefix() throws Exception {
     byte[] artifact = ("archive\r\n--" + BOUNDARY + "-not-a-delimiter\nend")
         .getBytes(StandardCharsets.ISO_8859_1);
-    MockHttpServletRequest request = request(body("file", artifact, SHA256));
+    MockHttpServletRequest request = request(legacyBodyWithoutName(artifact, SHA256));
 
     AnsibleGalaxyMultipartReader reader = new AnsibleGalaxyMultipartReader(1024, 1024);
     AnsibleGalaxyMultipartReader.Upload upload = reader.read(request);
@@ -178,6 +178,19 @@ class AnsibleGalaxyMultipartReaderTest {
         + encoded + "\r\n"
         + "\r\n--" + BOUNDARY + "\r\n"
         + "Content-Type: text/plain\r\n"
+        + "Content-Disposition: form-data; name=\"sha256\"\r\n\r\n"
+        + sha256
+        + "\r\n--" + BOUNDARY + "--\r\n");
+    return body.toByteArray();
+  }
+
+  private static byte[] legacyBodyWithoutName(byte[] artifact, String sha256) {
+    ByteArrayOutputStream body = new ByteArrayOutputStream();
+    write(body, "--" + BOUNDARY + "\r\n"
+        + "Content-Disposition: file; filename=\"acme-tools-1.0.0.tar.gz\"\r\n"
+        + "Content-Type: application/octet-stream\r\n\r\n");
+    body.writeBytes(artifact);
+    write(body, "\r\n--" + BOUNDARY + "\r\n"
         + "Content-Disposition: form-data; name=\"sha256\"\r\n\r\n"
         + sha256
         + "\r\n--" + BOUNDARY + "--\r\n");
