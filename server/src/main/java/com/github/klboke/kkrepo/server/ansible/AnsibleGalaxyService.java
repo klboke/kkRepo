@@ -637,6 +637,9 @@ public class AnsibleGalaxyService {
         }
         Map<String, Object> document = projectProxyDocument(
             stateKey, readJsonBounded(result.body()));
+        if (!stateKey.startsWith("@")) {
+          validateUpstreamDetail(namespace, name, stateKey, document);
+        }
         UpstreamArtifact artifact = upstreamArtifact(runtime, url, stateKey, document);
         if (existing.isPresent() && !stateKey.startsWith("@")
             && existing.get().artifactSha256() != null && artifact.sha256() != null

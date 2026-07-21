@@ -192,6 +192,25 @@ class AnsibleGalaxyServiceProxyStateTest {
   }
 
   @Test
+  void rejectsMalformedProxyIdentityBeforeDerivingFallbackFilename() throws Exception {
+    when(registry.findProxyState(proxy.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.empty());
+    when(registry.tryAcquireLease(anyString(), anyString(), any()))
+        .thenReturn(Optional.of(lease("malformed-identity")));
+    when(fetcher.fetch(any())).thenReturn(jsonResult(200, Map.of(
+        "collection", Map.of("name", "tools"),
+        "version", "1.2.3",
+        "artifact", Map.of("sha256", SHA_A))));
+
+    assertThrows(AnsibleGalaxyExceptions.BadUpstream.class,
+        () -> service.fetchProxyDocument(
+            proxy, "acme", "tools", "1.2.3", "api/v3/detail"));
+
+    verify(registry, never()).upsertProxyState(any());
+    verify(registry).releaseLease("malformed-identity", "owner", 7L);
+  }
+
+  @Test
   void recordsNegativeResponsesAndRejectsOtherBadStatuses() throws Exception {
     when(registry.findProxyState(proxy.id(), "acme", "missing", "1.2.3"))
         .thenReturn(Optional.empty());
