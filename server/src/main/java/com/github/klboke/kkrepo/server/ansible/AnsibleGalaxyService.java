@@ -226,7 +226,7 @@ public class AnsibleGalaxyService {
     try (InputStream input = assets.open(runtime.id(), task.stagingAssetId())) {
       inspected = inspector.inspect(input);
       validateRecoveredTask(task, inspected);
-      finishSuccessfulTask(runtime, task, inspected, task.requester(), null);
+      finishSuccessfulTask(runtime, task, inspected, task.requester(), null, true);
     } catch (RuntimeException | IOException e) {
       finishFailed(task, errorCode(e), safeDetail(e));
     } finally {
@@ -883,7 +883,7 @@ public class AnsibleGalaxyService {
         .orElseThrow(() -> new AnsibleGalaxyExceptions.ServiceUnavailable(
             "Unable to claim the collection import task"));
     try {
-      finishSuccessfulTask(runtime, claimed, inspected, actor, ip);
+      finishSuccessfulTask(runtime, claimed, inspected, actor, ip, false);
     } catch (RuntimeException e) {
       finishFailed(claimed, errorCode(e), safeDetail(e));
     } finally {
@@ -896,9 +896,10 @@ public class AnsibleGalaxyService {
       AnsibleGalaxyRegistryDao.ImportTask task,
       AnsibleCollectionArchiveInspector.InspectedCollection inspected,
       String actor,
-      String ip) {
+      String ip,
+      boolean allowExistingSameArtifact) {
     AnsibleGalaxyRegistryDao.CollectionVersion version = persistCollection(
-        runtime, inspected, "HOSTED", Map.of(), actor, ip, true);
+        runtime, inspected, "HOSTED", Map.of(), actor, ip, allowExistingSameArtifact);
     Instant finished = Instant.now();
     List<Map<String, Object>> messages = List.of(Map.of(
         "level", "INFO",
@@ -1008,14 +1009,19 @@ public class AnsibleGalaxyService {
   String resolveUpstreamUrl(
       RepositoryRuntime runtime, String requestUrl, String candidate) {
     if (candidate == null || candidate.isBlank()) return null;
-    URI parsed = URI.create(candidate);
-    if (parsed.isAbsolute()) return parsed.toASCIIString();
-    URI request = URI.create(requestUrl);
-    if (candidate.startsWith("/")) {
-      return URI.create(request.getScheme() + "://" + request.getRawAuthority())
-          .resolve(candidate).toASCIIString();
+    try {
+      URI parsed = URI.create(candidate);
+      if (parsed.isAbsolute()) return parsed.toASCIIString();
+      URI request = URI.create(requestUrl);
+      if (candidate.startsWith("/")) {
+        return URI.create(request.getScheme() + "://" + request.getRawAuthority())
+            .resolve(candidate).toASCIIString();
+      }
+      return request.resolve(candidate).toASCIIString();
+    } catch (IllegalArgumentException e) {
+      throw new AnsibleGalaxyExceptions.BadUpstream(
+          "Upstream Galaxy metadata contains an invalid URL", e);
     }
-    return request.resolve(candidate).toASCIIString();
   }
 
   private Map<String, Object> versionDetail(

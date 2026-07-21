@@ -91,6 +91,13 @@ class AnsibleGalaxyServiceSupportTest {
         proxy, "https://galaxy.example/root/v3/", "/api/file"));
     assertEquals("https://galaxy.example/root/v3/file", service.resolveUpstreamUrl(
         proxy, "https://galaxy.example/root/v3/", "file"));
+    for (String invalid : List.of("http://[", "https://galaxy.example/%")) {
+      assertThrows(AnsibleGalaxyExceptions.BadUpstream.class,
+          () -> service.resolveUpstreamUrl(
+              proxy, "https://galaxy.example/root/v3/", invalid));
+    }
+    assertThrows(AnsibleGalaxyExceptions.BadUpstream.class,
+        () -> service.resolveUpstreamUrl(proxy, "http://[", "/api/file"));
   }
 
   @Test

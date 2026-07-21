@@ -125,8 +125,47 @@ class AnsibleGalaxyServiceLifecycleTest {
   }
 
   @Test
-  void supportsNexusStyleArtifactPutAndMigrationRestore() throws Exception {
+  void concurrentDuplicatePublishMarksTheLosingImportTaskFailed() throws Exception {
     RepositoryRuntime hosted = runtime(2L, RepositoryType.HOSTED, null, List.of());
+    AnsibleCollectionArchiveInspector.InspectedCollection inspected = inspected("loser");
+    AnsibleGalaxyRegistryDao.CollectionVersion winner = version(hosted.id(), 32L, 22L);
+    AssetRecord staged = asset(
+        41L, hosted.id(), null, 51L, ".ansible/staging/task/" + FILENAME);
+    when(inspector.inspect(any())).thenReturn(inspected);
+    when(assets.stageCollection(
+        eq(hosted), anyString(), eq(FILENAME), eq(inspected.file()), eq("alice"), eq(null)))
+        .thenReturn(staged);
+    AtomicReference<AnsibleGalaxyRegistryDao.ImportTask> waiting = new AtomicReference<>();
+    when(registry.createTask(any())).thenAnswer(invocation -> {
+      AnsibleGalaxyRegistryDao.ImportTask task = invocation.getArgument(0);
+      waiting.set(task);
+      return task;
+    });
+    when(registry.claimTask(anyString(), anyString(), any(), any())).thenAnswer(
+        invocation -> Optional.of(claimed(waiting.get())));
+    when(registry.findVersion(hosted.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.empty(), Optional.of(winner));
+
+    MavenResponse response = service.publish(
+        hosted, "api/v3/artifacts/collections/", null,
+        new ByteArrayInputStream(new byte[] {1}), FILENAME, SHA256,
+        "alice", null, false);
+
+    assertEquals(202, response.status());
+    verify(registry).finishTask(
+        eq(waiting.get().taskId()), eq("owner"), eq(3L),
+        eq(AnsibleGalaxyRegistryDao.TASK_FAILED), any(),
+        eq("conflict.collection_exists"), anyString(), eq("acme"), eq("tools"), eq("1.2.3"),
+        eq(FILENAME), eq(SHA256), any());
+    verify(assets, never()).storeCollection(any(), any(), any(), any(), any(), any(), any());
+    verify(assets).delete(
+        hosted, ".ansible/staging/" + waiting.get().taskId() + "/" + FILENAME);
+    assertFalse(Files.exists(inspected.file()));
+  }
+
+  @Test
+  void supportsNexusStyleArtifactPutAndMigrationRestore() throws Exception {
+    RepositoryRuntime hosted = runtime(3L, RepositoryType.HOSTED, null, List.of());
     AnsibleCollectionArchiveInspector.InspectedCollection inspected = inspected("put");
     AnsibleGalaxyRegistryDao.CollectionVersion stored = version(hosted.id(), 32L, 22L);
     stubPersistence(hosted, inspected, stored);
@@ -146,7 +185,7 @@ class AnsibleGalaxyServiceLifecycleTest {
         hosted, duplicate, Instant.EPOCH, "migration", "127.0.0.1"));
     AnsibleCollectionArchiveInspector.delete(duplicate.file());
 
-    RepositoryRuntime group = runtime(3L, RepositoryType.GROUP, null, List.of(hosted));
+    RepositoryRuntime group = runtime(4L, RepositoryType.GROUP, null, List.of(hosted));
     assertThrows(IllegalArgumentException.class, () -> service.restoreCollectionForMigration(
         group, inspected("group"), Instant.EPOCH, "migration", null));
   }
