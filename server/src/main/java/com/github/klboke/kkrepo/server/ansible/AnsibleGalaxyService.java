@@ -895,6 +895,9 @@ public class AnsibleGalaxyService {
       terminal = finishSuccessfulTask(runtime, claimed, inspected, actor, ip, false);
     } catch (RuntimeException e) {
       terminal = finishFailed(claimed, errorCode(e), safeDetail(e));
+      if (terminal) {
+        throw e;
+      }
     } finally {
       if (terminal) deleteStaging(runtime, claimed);
     }

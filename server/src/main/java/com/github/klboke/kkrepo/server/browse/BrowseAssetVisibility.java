@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.browse;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
 
 public final class BrowseAssetVisibility {
   private static final String COMPOSER_INTERNAL_PREFIX = "_composer";
@@ -20,7 +21,12 @@ public final class BrowseAssetVisibility {
             && (under(path, TERRAFORM_INTERNAL_PREFIX) || terraformProviderInternal(path)))
         || (format == RepositoryFormat.SWIFT && under(path, SWIFT_INTERNAL_PREFIX))
         || (format == RepositoryFormat.ANSIBLEGALAXY
-            && (under(path, ANSIBLE_INTERNAL_PREFIX) || under(path, "api")));
+            && (under(path, ANSIBLE_INTERNAL_PREFIX) || ansibleArtifactInternal(path)));
+  }
+
+  private static boolean ansibleArtifactInternal(String path) {
+    String prefix = AnsibleGalaxyPathParser.ARTIFACT_BASE;
+    return path.equals(prefix.substring(0, prefix.length() - 1)) || path.startsWith(prefix);
   }
 
   private static boolean terraformProviderInternal(String path) {
