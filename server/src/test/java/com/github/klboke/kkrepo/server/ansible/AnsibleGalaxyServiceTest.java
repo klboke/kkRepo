@@ -5,8 +5,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -172,6 +176,142 @@ class AnsibleGalaxyServiceTest {
         offline.id(), onlineVersion.artifactFilename());
     verify(registry, never()).findVersionById(offlineVersion.id());
     verify(assets).serve(online.id(), onlineVersion.artifactAssetId(), false);
+  }
+
+  @Test
+  void groupListsHostedVersionsWhenLaterProxyFails() throws Exception {
+    RepositoryRuntime hosted = runtime(
+        30L, "ansible-hosted", RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime proxy = runtime(
+        31L, "ansible-proxy", RepositoryType.PROXY,
+        "https://galaxy.example/", List.of());
+    RepositoryRuntime group = runtime(
+        32L, "ansible-group", RepositoryType.GROUP, null, List.of(hosted, proxy));
+    when(registry.listVersionNames(hosted.id(), "acme", "tools"))
+        .thenReturn(List.of("1.2.3"));
+    when(registry.listVersionNames(proxy.id(), "acme", "tools"))
+        .thenReturn(List.of());
+    AnsibleGalaxyService resilient = withFailingProxy(proxy);
+
+    Map<String, Object> versions = json(resilient.get(
+        group, "api/v3/collections/acme/tools/versions/", null, BASE, false, "alice"));
+
+    List<?> data = (List<?>) versions.get("data");
+    assertEquals(1, map(versions.get("meta")).get("count"));
+    assertEquals("1.2.3", map(data.getFirst()).get("version"));
+  }
+
+  @Test
+  void proxyAndGroupKeepCachedVersionsDuringUpstreamFailure() throws Exception {
+    RepositoryRuntime hosted = runtime(
+        33L, "ansible-hosted", RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime proxy = runtime(
+        34L, "ansible-proxy", RepositoryType.PROXY,
+        "https://galaxy.example/", List.of());
+    RepositoryRuntime group = runtime(
+        35L, "ansible-group", RepositoryType.GROUP, null, List.of(hosted, proxy));
+    when(registry.listVersionNames(hosted.id(), "acme", "tools"))
+        .thenReturn(List.of("1.2.3"));
+    when(registry.listVersionNames(proxy.id(), "acme", "tools"))
+        .thenReturn(List.of("1.0.0"));
+    AnsibleGalaxyService resilient = withFailingProxy(proxy);
+
+    Map<String, Object> versions = json(resilient.get(
+        group, "api/v3/collections/acme/tools/versions/", null, BASE, false, "alice"));
+
+    assertEquals(2, map(versions.get("meta")).get("count"));
+  }
+
+  @Test
+  void groupSurfacesProxyFailureWhenNoMemberProvidesVersions() {
+    RepositoryRuntime hosted = runtime(
+        36L, "ansible-hosted", RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime proxy = runtime(
+        37L, "ansible-proxy", RepositoryType.PROXY,
+        "https://galaxy.example/", List.of());
+    RepositoryRuntime group = runtime(
+        38L, "ansible-group", RepositoryType.GROUP, null, List.of(hosted, proxy));
+    when(registry.listVersionNames(hosted.id(), "acme", "tools"))
+        .thenReturn(List.of());
+    when(registry.listVersionNames(proxy.id(), "acme", "tools"))
+        .thenReturn(List.of());
+    AnsibleGalaxyService resilient = withFailingProxy(proxy);
+
+    AnsibleGalaxyExceptions.BadUpstream failure = assertThrows(
+        AnsibleGalaxyExceptions.BadUpstream.class,
+        () -> resilient.get(
+            group, "api/v3/collections/acme/tools/versions/",
+            null, BASE, false, "alice"));
+
+    assertEquals("Upstream Galaxy is unavailable", failure.getMessage());
+  }
+
+  @Test
+  void groupVersionDetailSkipsFailedProxyWhenLaterHostedMemberMatches() throws Exception {
+    RepositoryRuntime proxy = runtime(
+        39L, "ansible-proxy", RepositoryType.PROXY,
+        "https://galaxy.example/", List.of());
+    RepositoryRuntime hosted = runtime(
+        40L, "ansible-hosted", RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime group = runtime(
+        41L, "ansible-group", RepositoryType.GROUP, null, List.of(proxy, hosted));
+    AnsibleGalaxyRegistryDao.CollectionVersion hostedVersion =
+        version(hosted.id(), 300L, 50L);
+    when(registry.currentRepositoryRevision(group.id())).thenReturn(7L);
+    when(registry.currentRepositoryRevision(hosted.id())).thenReturn(11L);
+    when(registry.findGroupBinding(group.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.empty());
+    when(registry.findVersion(proxy.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.empty());
+    when(registry.findVersion(hosted.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.of(hostedVersion));
+    when(registry.bindGroupSourceIfCurrent(any())).thenReturn(true);
+    AnsibleGalaxyService resilient = withFailingProxy(proxy);
+
+    MavenResponse response = resilient.get(
+        group, "api/v3/collections/acme/tools/versions/1.2.3/",
+        null, BASE, false, "alice");
+
+    assertEquals(200, response.status());
+  }
+
+  @Test
+  void groupArtifactSkipsFailedProxyWhenLaterHostedMemberMatches() throws Exception {
+    RepositoryRuntime proxy = runtime(
+        42L, "ansible-proxy", RepositoryType.PROXY,
+        "https://galaxy.example/", List.of());
+    RepositoryRuntime hosted = runtime(
+        43L, "ansible-hosted", RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime group = runtime(
+        44L, "ansible-group", RepositoryType.GROUP, null, List.of(proxy, hosted));
+    AnsibleGalaxyRegistryDao.CollectionVersion hostedVersion =
+        version(hosted.id(), 301L, 51L);
+    when(registry.currentRepositoryRevision(group.id())).thenReturn(8L);
+    when(registry.currentRepositoryRevision(hosted.id())).thenReturn(12L);
+    when(registry.findGroupBindingByArtifactFilename(
+        group.id(), hostedVersion.artifactFilename())).thenReturn(Optional.empty());
+    when(registry.findVersionByArtifactFilename(
+        proxy.id(), hostedVersion.artifactFilename())).thenReturn(Optional.empty());
+    when(registry.findProxyStateByArtifactFilename(
+        proxy.id(), hostedVersion.artifactFilename())).thenReturn(Optional.of(proxyState(
+            proxy.id(), "acme", "tools", "1.2.3", null, Map.of(),
+            Instant.now().plusSeconds(60))));
+    when(registry.findVersionByArtifactFilename(
+        hosted.id(), hostedVersion.artifactFilename())).thenReturn(Optional.of(hostedVersion));
+    when(registry.bindGroupSourceIfCurrent(any())).thenReturn(true);
+    when(assets.serve(hosted.id(), hostedVersion.artifactAssetId(), false))
+        .thenReturn(MavenResponse.ok(
+            new ByteArrayInputStream(new byte[] {1}), 1L,
+            "application/octet-stream", hostedVersion.artifactSha256(), Instant.EPOCH));
+
+    MavenResponse response = service.get(
+        group,
+        "api/v3/plugin/ansible/content/published/collections/artifacts/"
+            + hostedVersion.artifactFilename(),
+        null, BASE, false, "alice");
+
+    assertEquals(200, response.status());
+    verify(assets).serve(hosted.id(), hostedVersion.artifactAssetId(), false);
   }
 
   @Test
@@ -396,6 +536,14 @@ class AnsibleGalaxyServiceTest {
         200,
         Map.of("Content-Type", "application/json"),
         new ByteArrayInputStream(bytes));
+  }
+
+  private AnsibleGalaxyService withFailingProxy(RepositoryRuntime proxy) {
+    AnsibleGalaxyService resilient = spy(service);
+    doThrow(new AnsibleGalaxyExceptions.BadUpstream("Upstream Galaxy is unavailable"))
+        .when(resilient)
+        .fetchProxyDocument(eq(proxy), anyString(), anyString(), anyString(), anyString());
+    return resilient;
   }
 
   private static AnsibleGalaxyRegistryDao.ProxyVersionState proxyState(

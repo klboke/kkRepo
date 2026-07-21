@@ -382,16 +382,22 @@ public class AnsibleGalaxyService {
           versions.addAll(fetchProxyVersionNames(runtime, namespace, name));
         } catch (AnsibleGalaxyExceptions.NotFound e) {
           // Preserve already materialized immutable proxy versions.
+        } catch (AnsibleGalaxyExceptions.BadUpstream e) {
+          if (versions.isEmpty()) throw e;
         }
         return List.copyOf(versions);
       }
       LinkedHashSet<String> versions = new LinkedHashSet<>();
+      AnsibleGalaxyExceptions.BadUpstream upstreamFailure = null;
       for (RepositoryRuntime member : safeMembers(runtime)) {
         try {
           listVersionNames(member, namespace, name, visiting).forEach(versions::add);
         } catch (AnsibleGalaxyExceptions.NotFound ignored) {
+        } catch (AnsibleGalaxyExceptions.BadUpstream e) {
+          if (upstreamFailure == null) upstreamFailure = e;
         }
       }
+      if (versions.isEmpty() && upstreamFailure != null) throw upstreamFailure;
       return List.copyOf(versions);
     } finally {
       visiting.remove(runtime.id());
@@ -435,6 +441,7 @@ public class AnsibleGalaxyService {
       Optional<AnsibleGalaxyRegistryDao.CollectionVersion> existingVersion = existing.flatMap(
           binding -> currentGroupBindingVersion(runtime, binding, groupRevision));
       if (existingVersion.isPresent()) return existingVersion.get();
+      AnsibleGalaxyExceptions.BadUpstream upstreamFailure = null;
       for (RepositoryRuntime member : safeMembers(runtime)) {
         try {
           AnsibleGalaxyRegistryDao.CollectionVersion candidate =
@@ -447,8 +454,11 @@ public class AnsibleGalaxyService {
               .flatMap(binding -> currentGroupBindingVersion(runtime, binding, groupRevision))
               .orElse(candidate);
         } catch (AnsibleGalaxyExceptions.NotFound ignored) {
+        } catch (AnsibleGalaxyExceptions.BadUpstream e) {
+          if (upstreamFailure == null) upstreamFailure = e;
         }
       }
+      if (upstreamFailure != null) throw upstreamFailure;
       throw new AnsibleGalaxyExceptions.NotFound(
           "Collection version was not found in group members");
     } finally {
@@ -483,6 +493,7 @@ public class AnsibleGalaxyService {
       Optional<AnsibleGalaxyRegistryDao.CollectionVersion> boundArtifact = binding.flatMap(
           current -> currentGroupBindingVersion(runtime, current, groupRevision));
       if (boundArtifact.isPresent()) return boundArtifact.get();
+      AnsibleGalaxyExceptions.BadUpstream upstreamFailure = null;
       for (RepositoryRuntime member : safeMembers(runtime)) {
         try {
           AnsibleGalaxyRegistryDao.CollectionVersion candidate =
@@ -498,8 +509,11 @@ public class AnsibleGalaxyService {
               .flatMap(current -> currentGroupBindingVersion(runtime, current, groupRevision))
               .orElse(candidate);
         } catch (AnsibleGalaxyExceptions.NotFound ignored) {
+        } catch (AnsibleGalaxyExceptions.BadUpstream e) {
+          if (upstreamFailure == null) upstreamFailure = e;
         }
       }
+      if (upstreamFailure != null) throw upstreamFailure;
       throw new AnsibleGalaxyExceptions.NotFound(
           "Collection artifact was not found in group members");
     } finally {
