@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -130,6 +131,49 @@ class RepositoryContentControllerAnsibleTest {
     verify(ansible).publish(
         eq(runtime), eq("api/v3/artifacts/collections/"), eq(null), any(),
         eq(FILENAME), eq(SHA256), eq("anonymous"), eq("192.0.2.20"), eq(false));
+    verify(ansible).validatePublishRequest(
+        runtime, "api/v3/artifacts/collections/", null);
+  }
+
+  @Test
+  void rejectsNonHostedPublicationBeforeReadingTheMultipartBody() throws Exception {
+    for (RepositoryType type : List.of(RepositoryType.PROXY, RepositoryType.GROUP)) {
+      RepositoryRuntime runtime = nonHosted(type);
+      AnsibleGalaxyService ansible = mock(AnsibleGalaxyService.class);
+      AnsibleGalaxyMultipartReader reader = mock(AnsibleGalaxyMultipartReader.class);
+      RepositoryContentController controller = controller(runtimes(runtime), ansible, reader);
+      MockHttpServletRequest request = request(
+          "POST", "/repository/ansible/api/v3/artifacts/collections/");
+      request.setContentType("multipart/form-data; boundary=x");
+
+      assertThrows(AnsibleGalaxyExceptions.NotFound.class,
+          () -> controller.post("ansible", request));
+
+      verify(reader, never()).read(any());
+      verify(ansible, never()).validatePublishRequest(any(), any(), any());
+      verify(ansible, never()).publish(
+          any(), any(), any(), any(), any(), any(), any(), any(), eq(false));
+    }
+  }
+
+  @Test
+  void validatesTheHostedPublishPathBeforeReadingTheMultipartBody() throws Exception {
+    RepositoryRuntime runtime = hosted();
+    AnsibleGalaxyService ansible = mock(AnsibleGalaxyService.class);
+    AnsibleGalaxyMultipartReader reader = mock(AnsibleGalaxyMultipartReader.class);
+    doThrow(new AnsibleGalaxyExceptions.MethodNotAllowed("unsupported"))
+        .when(ansible).validatePublishRequest(runtime, "api/v3/collections/acme/tools/", null);
+    RepositoryContentController controller = controller(runtimes(runtime), ansible, reader);
+    MockHttpServletRequest request = request(
+        "POST", "/repository/ansible/api/v3/collections/acme/tools/");
+    request.setContentType("multipart/form-data; boundary=x");
+
+    assertThrows(AnsibleGalaxyExceptions.MethodNotAllowed.class,
+        () -> controller.post("ansible", request));
+
+    verify(reader, never()).read(any());
+    verify(ansible, never()).publish(
+        any(), any(), any(), any(), any(), any(), any(), any(), eq(false));
   }
 
   @Test
@@ -213,6 +257,15 @@ class RepositoryContentControllerAnsibleTest {
         1L, "ansible", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.HOSTED,
         "ansiblegalaxy-hosted", true, 1L, "ALLOW_ONCE", null, null, true,
         null, 60, 60, List.of());
+  }
+
+  private static RepositoryRuntime nonHosted(RepositoryType type) {
+    return new RepositoryRuntime(
+        2L, "ansible", RepositoryFormat.ANSIBLEGALAXY, type,
+        "ansiblegalaxy-" + type.name().toLowerCase(), true, 1L, "ALLOW_ONCE",
+        null, null, true,
+        type == RepositoryType.PROXY ? "https://galaxy.example/" : null,
+        60, 60, List.of());
   }
 
   private static MockHttpServletRequest request(String method, String uri) {

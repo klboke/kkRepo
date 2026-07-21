@@ -131,17 +131,7 @@ public class AnsibleGalaxyService {
       String actor,
       String ip,
       boolean headOnly) {
-    requireHostedWritable(runtime);
-    AnsibleGalaxyRequestTarget target;
-    try {
-      target = pathParser.parse(rawPath, rawQuery);
-    } catch (IllegalArgumentException e) {
-      throw new AnsibleGalaxyExceptions.BadRequest(e.getMessage(), e);
-    }
-    if (target.path().kind() != AnsibleGalaxyPath.Kind.PUBLISH) {
-      throw new AnsibleGalaxyExceptions.MethodNotAllowed(
-          "Unsupported Ansible Galaxy POST path");
-    }
+    validatePublishRequest(runtime, rawPath, rawQuery);
     requireExpectedSha(expectedSha256);
     AnsibleCollectionArchiveInspector.InspectedCollection inspected = inspector.inspect(artifact);
     try {
@@ -173,6 +163,22 @@ public class AnsibleGalaxyService {
           .withHeader("Location", "../../imports/collections/" + taskId + "/");
     } finally {
       AnsibleCollectionArchiveInspector.delete(inspected.file());
+    }
+  }
+
+  /** Read-only validation that must run before a controller consumes a multipart body. */
+  public void validatePublishRequest(
+      RepositoryRuntime runtime, String rawPath, String rawQuery) {
+    requireHostedWritable(runtime);
+    AnsibleGalaxyRequestTarget target;
+    try {
+      target = pathParser.parse(rawPath, rawQuery);
+    } catch (IllegalArgumentException e) {
+      throw new AnsibleGalaxyExceptions.BadRequest(e.getMessage(), e);
+    }
+    if (target.path().kind() != AnsibleGalaxyPath.Kind.PUBLISH) {
+      throw new AnsibleGalaxyExceptions.MethodNotAllowed(
+          "Unsupported Ansible Galaxy POST path");
     }
   }
 

@@ -618,6 +618,11 @@ public class RepositoryContentController {
             "Ansible collection publish requires multipart/form-data");
       }
       String raw = extractRepositoryPath(name, request, true);
+      if (!runtime.isHosted()) {
+        throw new AnsibleGalaxyExceptions.NotFound(
+            "Ansible Galaxy resource was not found");
+      }
+      ansible().validatePublishRequest(runtime, raw, request.getQueryString());
       try (AnsibleGalaxyMultipartReader.Upload upload = ansibleMultipart().read(request);
            InputStream body = upload.openStream()) {
         MavenResponse response = ansible().publish(
