@@ -186,6 +186,7 @@ Detailed design and implementation plans for repository formats and migration wo
 - [Composer / PHP Repository Design Notes](../zh/dev/composer-php-repository-design.md) (Chinese)
 - [Terraform Provider / Module Registry Design Notes](../zh/dev/terraform-repository-design.md) (Chinese)
 - [Swift Package Registry Design Notes](../zh/dev/swift-package-registry-design.md) (Chinese)
+- [Ansible Galaxy Repository Design Notes](../zh/dev/ansible-galaxy-repository-design.md) (Chinese)
 - [Nexus Compatibility Migration Refactor Plan](dev/nexus-migration-compatibility-refactor-plan.md)
 
 ## Configuration Center
