@@ -112,6 +112,37 @@ class RawAssetWriterTest {
   }
 
   @Test
+  void immutableFileWriteNeverRebindsAConcurrentWinner(@TempDir Path tempDir) throws Exception {
+    Fixture fixture = fixture();
+    stubUploadedBlob(fixture);
+    AssetRecord winner = asset(12L, 44L);
+    AssetBlobRecord winnerBlob = blob(44L, "winner");
+    when(fixture.assetDao.findAssetByPath(1L, PATH))
+        .thenReturn(Optional.empty(), Optional.of(winner));
+    when(fixture.assetDao.findBlobById(44L)).thenReturn(Optional.of(winnerBlob));
+    when(fixture.componentDao.upsertReturningId(any())).thenReturn(22L);
+    when(fixture.assetDao.tryInsertAsset(any())).thenReturn(OptionalLong.empty());
+    Path file = Files.writeString(tempDir.resolve("collection.tar.gz"), "body");
+    ComponentRecord component = new ComponentRecord(
+        null, 1L, RepositoryFormat.RAW, "acme", "tools", "1.0.0", "logical",
+        new byte[32], Map.of(), Instant.now());
+
+    RawAssetWriter.Stored stored = fixture.writer.writeFileAtBrowsePathIfAbsent(
+        runtime(), fixture.storage, 1L, PATH, file, "application/octet-stream", Map.of(),
+        "ansible", "127.0.0.1", component,
+        "acme/tools/1.0.0/acme-tools-1.0.0.tar.gz");
+
+    assertFalse(stored.created());
+    assertEquals(winner, stored.asset());
+    assertEquals(winnerBlob, stored.blob());
+    verify(fixture.assetDao, never()).updateAssetBlobBindingAndMetadata(
+        anyLong(), any(), anyLong(), anyString(), anyString(), anyLong(), any(), any());
+    verify(fixture.assetDao).markBlobDeletedIfUnreferenced(
+        2L, "immutable asset insert lost");
+    verifyNoInteractions(fixture.browseNodeDao);
+  }
+
+  @Test
   void reusesLiveBlobAndRecoversDeletedBlobWithExtraAttributes() {
     Fixture reusable = fixture();
     AssetBlobRecord live = blob(5L, "shared");

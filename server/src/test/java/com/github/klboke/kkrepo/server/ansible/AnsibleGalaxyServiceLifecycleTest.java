@@ -40,6 +40,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
+import org.springframework.dao.DuplicateKeyException;
 
 class AnsibleGalaxyServiceLifecycleTest {
   private static final String BASE = "https://repo.example/repository/ansible/";
@@ -164,8 +165,40 @@ class AnsibleGalaxyServiceLifecycleTest {
   }
 
   @Test
-  void supportsNexusStyleArtifactPutAndMigrationRestore() throws Exception {
+  void stalePublisherReusesButNeverDeletesAConcurrentWinnerAsset() throws Exception {
     RepositoryRuntime hosted = runtime(3L, RepositoryType.HOSTED, null, List.of());
+    AnsibleCollectionArchiveInspector.InspectedCollection inspected = inspected("stale");
+    AssetRecord winnerAsset = asset(
+        42L, hosted.id(), 12L, 52L,
+        "api/v3/plugin/ansible/content/published/collections/artifacts/" + FILENAME);
+    AnsibleGalaxyRegistryDao.CollectionVersion winner = version(hosted.id(), 33L, winnerAsset.id());
+    when(inspector.inspect(any())).thenReturn(inspected);
+    when(registry.findVersion(hosted.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.empty(), Optional.empty(), Optional.of(winner));
+    when(registry.tryAcquireLease(anyString(), anyString(), any())).thenReturn(Optional.of(
+        new AnsibleGalaxyRegistryDao.Lease(
+            "lease", "owner", 4L, Instant.now().plusSeconds(60), Instant.now())));
+    when(assets.storeCollection(
+        eq(hosted), anyString(), eq(inspected.file()), any(), any(), any(), any()))
+        .thenReturn(new AnsibleGalaxyAssetSupport.StoredCollection(winnerAsset, false));
+    when(assets.requiredBlob(winnerAsset))
+        .thenReturn(blob(52L, inspected.size(), inspected.sha256()));
+    when(registry.nextRepositoryRevision(hosted.id())).thenReturn(5L);
+    when(registry.insertVersion(any())).thenThrow(new DuplicateKeyException("winner"));
+
+    assertThrows(AnsibleGalaxyExceptions.Conflict.class, () -> service.putArtifact(
+        hosted,
+        "api/v3/plugin/ansible/content/published/collections/artifacts/" + FILENAME,
+        new ByteArrayInputStream(new byte[] {1}), "alice", "127.0.0.1"));
+
+    verify(assets, never()).delete(
+        hosted, "api/v3/plugin/ansible/content/published/collections/artifacts/" + FILENAME);
+    assertFalse(Files.exists(inspected.file()));
+  }
+
+  @Test
+  void supportsNexusStyleArtifactPutAndMigrationRestore() throws Exception {
+    RepositoryRuntime hosted = runtime(4L, RepositoryType.HOSTED, null, List.of());
     AnsibleCollectionArchiveInspector.InspectedCollection inspected = inspected("put");
     AnsibleGalaxyRegistryDao.CollectionVersion stored = version(hosted.id(), 32L, 22L);
     stubPersistence(hosted, inspected, stored);
@@ -185,7 +218,7 @@ class AnsibleGalaxyServiceLifecycleTest {
         hosted, duplicate, Instant.EPOCH, "migration", "127.0.0.1"));
     AnsibleCollectionArchiveInspector.delete(duplicate.file());
 
-    RepositoryRuntime group = runtime(4L, RepositoryType.GROUP, null, List.of(hosted));
+    RepositoryRuntime group = runtime(5L, RepositoryType.GROUP, null, List.of(hosted));
     assertThrows(IllegalArgumentException.class, () -> service.restoreCollectionForMigration(
         group, inspected("group"), Instant.EPOCH, "migration", null));
   }
@@ -456,7 +489,7 @@ class AnsibleGalaxyServiceLifecycleTest {
         "api/v3/plugin/ansible/content/published/collections/artifacts/" + FILENAME);
     when(assets.storeCollection(
         eq(runtime), anyString(), eq(inspected.file()), any(), any(), any(), any()))
-        .thenReturn(asset);
+        .thenReturn(new AnsibleGalaxyAssetSupport.StoredCollection(asset, true));
     when(assets.requiredBlob(asset)).thenReturn(blob(22L, inspected.size(), inspected.sha256()));
     when(registry.nextRepositoryRevision(runtime.id())).thenReturn(4L);
     when(registry.insertVersion(any())).thenReturn(stored);

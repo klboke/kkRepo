@@ -279,7 +279,7 @@ class AnsibleGalaxyServiceProxyStateTest {
     when(inspector.inspect(any())).thenReturn(inspected);
     AssetRecord asset = asset(31L, 41L);
     when(assets.storeCollection(eq(proxy), anyString(), eq(file), any(), any(), any(), any()))
-        .thenReturn(asset);
+        .thenReturn(new AnsibleGalaxyAssetSupport.StoredCollection(asset, true));
     when(assets.requiredBlob(asset)).thenReturn(blob(41L, inspected.size(), SHA_A));
     when(registry.nextRepositoryRevision(proxy.id())).thenReturn(15L);
     AnsibleGalaxyRegistryDao.CollectionVersion stored = version(proxy.id(), 51L, asset.id());

@@ -805,7 +805,7 @@ public class AnsibleGalaxyService {
         inspected.name(), inspected.version());
     AnsibleGalaxyRegistryDao.Lease lease = acquireLease(coordinateLease);
     String artifactPath = AnsibleGalaxyPathParser.ARTIFACT_BASE + inspected.filename();
-    boolean stored = false;
+    boolean createdAsset = false;
     try {
       existing = registry.findVersion(
           runtime.id(), inspected.namespace(), inspected.name(), inspected.version());
@@ -831,9 +831,10 @@ public class AnsibleGalaxyService {
           PersistenceHashes.componentCoordinateHash(
               inspected.namespace(), inspected.name(), inspected.version()),
           immutableMap(componentAttributes), now);
-      AssetRecord asset = assets.storeCollection(
+      AnsibleGalaxyAssetSupport.StoredCollection storedCollection = assets.storeCollection(
           runtime, artifactPath, inspected.file(), Map.of(), actor, ip, component);
-      stored = true;
+      AssetRecord asset = storedCollection.asset();
+      createdAsset = storedCollection.created();
       AssetBlobRecord blob = assets.requiredBlob(asset);
       if (!inspected.sha256().equalsIgnoreCase(blob.sha256()) || inspected.size() != blob.size()) {
         throw new IllegalStateException("Persisted Ansible artifact digest changed");
@@ -864,7 +865,7 @@ public class AnsibleGalaxyService {
             inspected.filename() + " cannot be updated because the collection version exists");
       }
     } catch (RuntimeException e) {
-      if (stored && registry.findVersion(
+      if (createdAsset && registry.findVersion(
           runtime.id(), inspected.namespace(), inspected.name(), inspected.version()).isEmpty()) {
         assets.delete(runtime, artifactPath);
       }

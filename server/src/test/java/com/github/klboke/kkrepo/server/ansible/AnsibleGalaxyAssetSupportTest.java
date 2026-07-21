@@ -75,11 +75,17 @@ class AnsibleGalaxyAssetSupportTest {
         null, runtime.id(), RepositoryFormat.ANSIBLEGALAXY, "acme", "tools", "1.2.3",
         "ansible-collection", new byte[] {4}, Map.of(), Instant.now());
     when(assetDao.findAssetByPath(runtime.id(), asset.path())).thenReturn(Optional.of(asset));
+    when(hosted.putInternalWithComponentFileAtBrowsePathIfAbsent(
+        eq(runtime), eq(asset.path()), any(), eq("application/octet-stream"),
+        eq(Map.of("source", "test")), eq("alice"), eq("127.0.0.1"), eq(component),
+        eq("acme/tools/1.2.3/acme-tools-1.2.3.tar.gz"))).thenReturn(true);
 
-    assertSame(asset, support.storeCollection(
+    AnsibleGalaxyAssetSupport.StoredCollection stored = support.storeCollection(
         runtime, asset.path(), temp.resolve("collection.tar.gz"), Map.of("source", "test"),
-        "alice", "127.0.0.1", component));
-    verify(hosted).putInternalWithComponentFileAtBrowsePath(
+        "alice", "127.0.0.1", component);
+    assertSame(asset, stored.asset());
+    assertTrue(stored.created());
+    verify(hosted).putInternalWithComponentFileAtBrowsePathIfAbsent(
         eq(runtime), eq(asset.path()), any(), eq("application/octet-stream"),
         eq(Map.of("source", "test")), eq("alice"), eq("127.0.0.1"), eq(component),
         eq("acme/tools/1.2.3/acme-tools-1.2.3.tar.gz"));

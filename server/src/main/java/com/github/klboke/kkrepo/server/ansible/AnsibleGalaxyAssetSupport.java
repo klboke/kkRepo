@@ -32,7 +32,10 @@ final class AnsibleGalaxyAssetSupport {
     this.hosted = hosted;
   }
 
-  AssetRecord storeCollection(
+  record StoredCollection(AssetRecord asset, boolean created) {
+  }
+
+  StoredCollection storeCollection(
       RepositoryRuntime runtime,
       String path,
       Path file,
@@ -42,7 +45,7 @@ final class AnsibleGalaxyAssetSupport {
       ComponentRecord component) {
     String logicalPath = component.namespace() + "/" + component.name() + "/"
         + component.version() + "/" + Path.of(path).getFileName();
-    hosted.putInternalWithComponentFileAtBrowsePath(
+    boolean created = hosted.putInternalWithComponentFileAtBrowsePathIfAbsent(
         runtime,
         path,
         file,
@@ -55,7 +58,7 @@ final class AnsibleGalaxyAssetSupport {
     AssetRecord asset = assets.findAssetByPath(runtime.id(), path)
         .orElseThrow(() -> new IllegalStateException(
             "Ansible collection asset was not persisted: " + runtime.name() + "/" + path));
-    return asset;
+    return new StoredCollection(asset, created);
   }
 
   AssetRecord stageCollection(
