@@ -3,7 +3,7 @@
 kkRepo supports two runtime packaging modes:
 
 - **JVM**, the default and recommended production mode, runs the Spring Boot executable jar on Java 25.
-- **Native**, an opt-in experimental mode, applies Spring AOT processing and compiles kkRepo with GraalVM Native Image.
+- **Native**, an opt-in runtime mode, applies Spring AOT processing and compiles kkRepo with GraalVM Native Image.
 
 Native packaging is not enabled implicitly. Docker images and archive distributions remain JVM-based unless `--native` is passed explicitly.
 
@@ -60,16 +60,16 @@ The final end-to-end archive validation also exercised a Buildpacks tool-cache m
 Use the default JVM distribution when:
 
 - kkRepo is a long-running repository service and warmed throughput is the main priority.
-- The deployment uses external Apollo, OSS/S3 providers, uncommon protocol paths, or other integrations that have not yet passed Native client E2E.
+- The deployment relies on optional integrations outside the completed real-client E2E matrix, such as external Apollo or a specific OSS/S3 provider.
 - Operational maturity, diagnostics, profiling, or existing JVM tuning is more important than cold-start speed.
 
 Consider the opt-in Native distribution when:
 
 - Fast readiness is important for autoscaling, scale-to-zero, preview environments, or rapid replacement of failed replicas.
 - The deployment is memory-constrained or runs many small replicas.
-- The exact database, storage provider, authentication integrations, and client protocols have passed the Native client E2E workflow.
+- The deployment has validated its exact database, storage provider, authentication integrations, and client protocols with Native.
 
-For current production deployments, JVM remains the default recommendation. Native remains experimental until real-client, object-storage, external-configuration, upgrade, and representative artifact-transfer coverage is comparable to the JVM path.
+For current production deployments, JVM remains the default recommendation. Native has passed the full real-client E2E matrix on both MySQL and PostgreSQL. Before production adoption, validate any deployment-specific optional integrations that are not represented in that matrix.
 
 ## Build and CI Commands
 

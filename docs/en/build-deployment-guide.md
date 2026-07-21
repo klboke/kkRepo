@@ -160,7 +160,7 @@ Specify an image tag:
 
 Container deployments should still use an independent MySQL instance and OSS/S3 blob store. Do not use a container-local filesystem as long-term production blob storage.
 
-## GraalVM Native Image (Experimental)
+## GraalVM Native Image
 
 The `native` Maven profile runs Spring AOT processing and then compiles the server with GraalVM Native Image. To build a local executable, install a GraalVM JDK 25 distribution that includes the `native-image` tool, then run:
 
@@ -186,7 +186,7 @@ The Docker image helper exposes the same behavior through an explicit option:
 ./scripts/build-docker-image.sh --native kkrepo:native
 ```
 
-Without `--native`, the helper continues to build the JVM image. Native packaging is currently experimental. Before production adoption, validate the protocols and optional integrations used by your deployment, especially external Apollo configuration and OSS/S3 providers. See the [Native Image or JVM Selection Guide](native-vs-jvm-guide.md) for the measured tradeoffs and current recommendation.
+Without `--native`, the helper continues to build the JVM image. Native packaging has passed the full real-client E2E matrix on both MySQL and PostgreSQL. Before production adoption, validate the optional integrations used by your deployment, especially external Apollo configuration and OSS/S3 providers. See the [Native Image or JVM Selection Guide](native-vs-jvm-guide.md) for the measured tradeoffs and current recommendation.
 
 ## Archive Package Deployment
 
