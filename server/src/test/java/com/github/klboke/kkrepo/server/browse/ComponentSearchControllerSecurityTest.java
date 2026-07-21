@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.browse;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -193,6 +194,9 @@ class ComponentSearchControllerSecurityTest {
             "acme", "tools", "1.2.3", "ansible-collection",
             "acme/tools/1.2.3/acme-tools-1.2.3.tar.gz"),
         row(43L, "ansible-hosted", RepositoryFormat.ANSIBLEGALAXY,
+            "acme", "minimal", "1.0.0", "ansible-collection",
+            "acme/minimal/1.0.0/acme-minimal-1.0.0.tar.gz"),
+        row(44L, "ansible-hosted", RepositoryFormat.ANSIBLEGALAXY,
             "acme", "missing", "2.0.0", "ansible-collection",
             "acme/missing/2.0.0/acme-missing-2.0.0.tar.gz"));
     AnsibleGalaxyRegistryDao ansible = mock(AnsibleGalaxyRegistryDao.class);
@@ -204,9 +208,18 @@ class ComponentSearchControllerSecurityTest {
             "acme-tools-1.2.3.tar.gz", "a".repeat(64), 1024L, Map.of(),
             Map.of("acme.base", ">=1.0.0"), ">=2.15", "HOSTED", 7L,
             AnsibleGalaxyRegistryDao.VERSION_READY, now, now, now);
+    AnsibleGalaxyRegistryDao.CollectionVersion minimalVersion =
+        new AnsibleGalaxyRegistryDao.CollectionVersion(
+            51L, 43L, 43L, 61L,
+            "acme", "acme", "minimal", "minimal", "1.0.0", "1.0.0",
+            "acme-minimal-1.0.0.tar.gz", "b".repeat(64), 512L, Map.of(),
+            Map.of(), null, "HOSTED", 8L,
+            AnsibleGalaxyRegistryDao.VERSION_READY, now, now, now);
     when(ansible.findVersion(42L, "acme", "tools", "1.2.3"))
         .thenReturn(Optional.of(version));
-    when(ansible.findVersion(43L, "acme", "missing", "2.0.0"))
+    when(ansible.findVersion(43L, "acme", "minimal", "1.0.0"))
+        .thenReturn(Optional.of(minimalVersion));
+    when(ansible.findVersion(44L, "acme", "missing", "2.0.0"))
         .thenReturn(Optional.empty());
     when(ansible.listSignatures(version.id())).thenReturn(List.of(
         new AnsibleGalaxyRegistryDao.Signature(
@@ -228,7 +241,8 @@ class ComponentSearchControllerSecurityTest {
     assertEquals(1, details.get("signatureCount"));
     assertEquals("HOSTED", details.get("sourceKind"));
     assertEquals("ansible-hosted", details.get("sourceRepository"));
-    assertEquals(Map.of(), response.items().get(1).details());
+    assertFalse(response.items().get(1).details().containsKey("requiresAnsible"));
+    assertEquals(Map.of(), response.items().get(2).details());
   }
 
   @Test

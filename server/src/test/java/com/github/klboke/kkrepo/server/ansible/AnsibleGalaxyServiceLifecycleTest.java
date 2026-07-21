@@ -519,6 +519,7 @@ class AnsibleGalaxyServiceLifecycleTest {
             winner.artifactSha256(), Instant.now(), Instant.now());
     when(registry.currentRepositoryRevision(group.id())).thenReturn(9L);
     when(registry.currentRepositoryRevision(first.id())).thenReturn(5L);
+    when(registry.currentRepositoryRevision(second.id())).thenReturn(6L);
     when(registry.findGroupBindingByArtifactFilename(group.id(), FILENAME))
         .thenReturn(Optional.empty());
     when(registry.findVersionByArtifactFilename(first.id(), FILENAME))

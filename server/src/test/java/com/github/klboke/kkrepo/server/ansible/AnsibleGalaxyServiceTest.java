@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -117,6 +118,60 @@ class AnsibleGalaxyServiceTest {
 
     assertEquals(200, artifact.status());
     verify(assets).serve(first.id(), version.artifactAssetId(), false);
+  }
+
+  @Test
+  void groupSkipsOfflineMembersForListsDetailsBindingsAndArtifacts() throws Exception {
+    RepositoryRuntime offline = runtime(
+        20L, "ansible-offline", RepositoryType.HOSTED, null, List.of(), false);
+    RepositoryRuntime online = runtime(
+        21L, "ansible-online", RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime group = runtime(
+        22L, "ansible-group", RepositoryType.GROUP, null, List.of(offline, online));
+    AnsibleGalaxyRegistryDao.CollectionVersion offlineVersion = version(offline.id(), 200L, 30L);
+    AnsibleGalaxyRegistryDao.CollectionVersion onlineVersion = version(online.id(), 201L, 31L);
+    AnsibleGalaxyRegistryDao.GroupBinding offlineBinding =
+        new AnsibleGalaxyRegistryDao.GroupBinding(
+            group.id(), "acme", "tools", "1.2.3", offline.id(), offlineVersion.id(),
+            4L, 9L, offlineVersion.artifactSha256(), Instant.now(), Instant.now());
+    when(registry.currentRepositoryRevision(group.id())).thenReturn(9L);
+    when(registry.currentRepositoryRevision(online.id())).thenReturn(5L);
+    when(registry.listVersionNames(online.id(), "acme", "tools"))
+        .thenReturn(List.of("1.2.3"));
+    when(registry.findGroupBinding(group.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.of(offlineBinding));
+    when(registry.findGroupBindingByArtifactFilename(
+        group.id(), onlineVersion.artifactFilename()))
+        .thenReturn(Optional.of(offlineBinding));
+    when(registry.findVersion(online.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.of(onlineVersion));
+    when(registry.findVersionByArtifactFilename(
+        online.id(), onlineVersion.artifactFilename()))
+        .thenReturn(Optional.of(onlineVersion));
+    when(registry.bindGroupSourceIfCurrent(any())).thenReturn(true);
+    when(assets.serve(online.id(), onlineVersion.artifactAssetId(), false))
+        .thenReturn(MavenResponse.ok(
+            new ByteArrayInputStream(new byte[] {1}), 1L,
+            "application/octet-stream", onlineVersion.artifactSha256(), Instant.EPOCH));
+
+    Map<String, Object> versions = json(service.get(
+        group, "api/v3/collections/acme/tools/versions/", null, BASE, false, "alice"));
+    assertEquals(1, map(versions.get("meta")).get("count"));
+    assertEquals(200, service.get(
+        group, "api/v3/collections/acme/tools/versions/1.2.3/",
+        null, BASE, false, "alice").status());
+    assertEquals(200, service.get(
+        group,
+        "api/v3/plugin/ansible/content/published/collections/artifacts/"
+            + onlineVersion.artifactFilename(),
+        null, BASE, false, "alice").status());
+
+    verify(registry, never()).listVersionNames(offline.id(), "acme", "tools");
+    verify(registry, never()).findVersion(offline.id(), "acme", "tools", "1.2.3");
+    verify(registry, never()).findVersionByArtifactFilename(
+        offline.id(), onlineVersion.artifactFilename());
+    verify(registry, never()).findVersionById(offlineVersion.id());
+    verify(assets).serve(online.id(), onlineVersion.artifactAssetId(), false);
   }
 
   @Test
@@ -377,10 +432,20 @@ class AnsibleGalaxyServiceTest {
       RepositoryType type,
       String remote,
       List<RepositoryRuntime> members) {
+    return runtime(id, name, type, remote, members, true);
+  }
+
+  private static RepositoryRuntime runtime(
+      long id,
+      String name,
+      RepositoryType type,
+      String remote,
+      List<RepositoryRuntime> members,
+      boolean online) {
     return new RepositoryRuntime(
         id, name, RepositoryFormat.ANSIBLEGALAXY, type,
         "ansiblegalaxy-" + type.name().toLowerCase(),
-        true, 1L, "ALLOW_ONCE", null, null, true,
+        online, 1L, "ALLOW_ONCE", null, null, true,
         remote, 60, 60, members);
   }
 }

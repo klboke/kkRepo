@@ -424,18 +424,9 @@ public class AnsibleGalaxyService {
       long groupRevision = currentGroupRevision(runtime.id());
       Optional<AnsibleGalaxyRegistryDao.GroupBinding> existing = registry.findGroupBinding(
           runtime.id(), namespace, name, version);
-      if (existing.isPresent()) {
-        AnsibleGalaxyRegistryDao.GroupBinding binding = existing.get();
-        Optional<RepositoryRuntime> member = directMember(runtime, binding.memberRepositoryId());
-        if (binding.groupConfigRevision() == groupRevision && member.isPresent()
-            && registry.currentRepositoryRevision(member.get().id()) == binding.memberRevision()) {
-          Optional<AnsibleGalaxyRegistryDao.CollectionVersion> bound =
-              registry.findVersionById(binding.memberVersionId());
-          if (bound.isPresent() && binding.artifactSha256().equals(bound.get().artifactSha256())) {
-            return bound.get();
-          }
-        }
-      }
+      Optional<AnsibleGalaxyRegistryDao.CollectionVersion> existingVersion = existing.flatMap(
+          binding -> currentGroupBindingVersion(runtime, binding, groupRevision));
+      if (existingVersion.isPresent()) return existingVersion.get();
       for (RepositoryRuntime member : safeMembers(runtime)) {
         try {
           AnsibleGalaxyRegistryDao.CollectionVersion candidate =
@@ -445,8 +436,7 @@ public class AnsibleGalaxyService {
               runtime.id(), namespace, name, version, member.id(), candidate.id(), memberRevision,
               groupRevision, candidate.artifactSha256(), Instant.now(), Instant.now()));
           return registry.findGroupBinding(runtime.id(), namespace, name, version)
-              .filter(binding -> binding.groupConfigRevision() == groupRevision)
-              .flatMap(binding -> registry.findVersionById(binding.memberVersionId()))
+              .flatMap(binding -> currentGroupBindingVersion(runtime, binding, groupRevision))
               .orElse(candidate);
         } catch (AnsibleGalaxyExceptions.NotFound ignored) {
         }
@@ -482,18 +472,9 @@ public class AnsibleGalaxyService {
       long groupRevision = currentGroupRevision(runtime.id());
       Optional<AnsibleGalaxyRegistryDao.GroupBinding> binding =
           registry.findGroupBindingByArtifactFilename(runtime.id(), filename);
-      if (binding.isPresent() && binding.get().groupConfigRevision() == groupRevision) {
-        Optional<RepositoryRuntime> member = directMember(runtime, binding.get().memberRepositoryId());
-        if (member.isPresent()
-            && registry.currentRepositoryRevision(member.get().id()) == binding.get().memberRevision()) {
-          Optional<AnsibleGalaxyRegistryDao.CollectionVersion> version =
-              registry.findVersionById(binding.get().memberVersionId());
-          if (version.isPresent()
-              && binding.get().artifactSha256().equals(version.get().artifactSha256())) {
-            return version.get();
-          }
-        }
-      }
+      Optional<AnsibleGalaxyRegistryDao.CollectionVersion> boundArtifact = binding.flatMap(
+          current -> currentGroupBindingVersion(runtime, current, groupRevision));
+      if (boundArtifact.isPresent()) return boundArtifact.get();
       for (RepositoryRuntime member : safeMembers(runtime)) {
         try {
           AnsibleGalaxyRegistryDao.CollectionVersion candidate =
@@ -506,8 +487,7 @@ public class AnsibleGalaxyService {
           return registry.findGroupBinding(
                   runtime.id(), candidate.namespaceLc(), candidate.nameLc(),
                   candidate.versionNormalized())
-              .filter(current -> current.groupConfigRevision() == groupRevision)
-              .flatMap(current -> registry.findVersionById(current.memberVersionId()))
+              .flatMap(current -> currentGroupBindingVersion(runtime, current, groupRevision))
               .orElse(candidate);
         } catch (AnsibleGalaxyExceptions.NotFound ignored) {
         }
@@ -1292,12 +1272,31 @@ public class AnsibleGalaxyService {
   }
 
   static List<RepositoryRuntime> safeMembers(RepositoryRuntime runtime) {
-    return runtime.members() == null ? List.of() : runtime.members();
+    return runtime.members() == null
+        ? List.of()
+        : runtime.members().stream()
+            .filter(member -> member != null && member.online())
+            .toList();
   }
 
   static Optional<RepositoryRuntime> directMember(
       RepositoryRuntime group, long repositoryId) {
     return safeMembers(group).stream().filter(member -> member.id() == repositoryId).findFirst();
+  }
+
+  private Optional<AnsibleGalaxyRegistryDao.CollectionVersion> currentGroupBindingVersion(
+      RepositoryRuntime group,
+      AnsibleGalaxyRegistryDao.GroupBinding binding,
+      long groupRevision) {
+    if (binding.groupConfigRevision() != groupRevision) return Optional.empty();
+    Optional<RepositoryRuntime> member = directMember(group, binding.memberRepositoryId());
+    if (member.isEmpty()
+        || registry.currentRepositoryRevision(member.get().id()) != binding.memberRevision()) {
+      return Optional.empty();
+    }
+    return registry.findVersionById(binding.memberVersionId())
+        .filter(version -> version.repositoryId() == member.get().id())
+        .filter(version -> binding.artifactSha256().equals(version.artifactSha256()));
   }
 
   private long currentGroupRevision(long repositoryId) {

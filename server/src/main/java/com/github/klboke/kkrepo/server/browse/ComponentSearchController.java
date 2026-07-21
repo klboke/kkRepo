@@ -115,7 +115,9 @@ public class ComponentSearchController {
           details.put("artifactSha256", version.artifactSha256());
           details.put("artifactSize", version.artifactSize());
           details.put("dependencies", version.dependencies());
-          details.put("requiresAnsible", version.requiresAnsible());
+          if (version.requiresAnsible() != null) {
+            details.put("requiresAnsible", version.requiresAnsible());
+          }
           details.put("signatureCount", ansibleRegistry.listSignatures(version.id()).size());
           details.put("sourceKind", version.sourceKind());
           details.put("sourceRepository", row.repositoryName());
