@@ -29,6 +29,7 @@ import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
@@ -36,6 +37,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 
 class RawAssetWriterTest {
@@ -209,6 +211,29 @@ class RawAssetWriterTest {
     verify(fixture.assetDao).tryInsertAsset(inserted.capture());
     assertEquals(77L, inserted.getValue().componentId());
     verify(fixture.browseNodeDao).upsertPathAncestors(1L, PATH, 11L, 77L);
+  }
+
+  @Test
+  void writesFileAtAProtocolPathAndIndexesOnlyItsLogicalBrowsePath(@TempDir Path tempDir)
+      throws Exception {
+    Fixture fixture = fixture();
+    stubUploadedBlob(fixture);
+    when(fixture.assetDao.findAssetByPath(1L, PATH)).thenReturn(Optional.empty());
+    when(fixture.assetDao.tryInsertAsset(any())).thenReturn(OptionalLong.of(11L));
+    when(fixture.componentDao.upsertReturningId(any())).thenReturn(77L);
+    Path file = Files.writeString(tempDir.resolve("collection.tar.gz"), "body");
+    ComponentRecord component = new ComponentRecord(
+        null, 1L, RepositoryFormat.RAW, "acme", "tools", "1.0.0", "logical",
+        new byte[32], Map.of(), Instant.now());
+
+    RawAssetWriter.Stored stored = fixture.writer.writeFileAtBrowsePath(
+        runtime(), fixture.storage, 1L, PATH, file, "application/octet-stream", Map.of(),
+        "ansible", "127.0.0.1", component, "acme/tools/1.0.0/acme-tools-1.0.0.tar.gz");
+
+    assertEquals(PATH, stored.asset().path());
+    verify(fixture.browseNodeDao).upsertPathAncestors(
+        1L, "acme/tools/1.0.0/acme-tools-1.0.0.tar.gz", 11L, 77L);
+    verify(fixture.browseNodeDao, never()).upsertPathAncestors(1L, PATH, 11L, 77L);
   }
 
   @Test

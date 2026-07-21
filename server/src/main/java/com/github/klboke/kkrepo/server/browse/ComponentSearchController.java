@@ -6,6 +6,7 @@ import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.ComponentSearchRow;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
@@ -35,6 +36,7 @@ public class ComponentSearchController {
   private final SecurityAuthenticationService authenticationService;
   private final SecurityManagementService securityService;
   private final SwiftRegistryDao swiftRegistry;
+  private AnsibleGalaxyRegistryDao ansibleRegistry;
 
   @Autowired
   public ComponentSearchController(
@@ -46,6 +48,11 @@ public class ComponentSearchController {
     this.authenticationService = authenticationService;
     this.securityService = securityService;
     this.swiftRegistry = swiftRegistry;
+  }
+
+  @Autowired(required = false)
+  void setAnsibleGalaxyRegistry(AnsibleGalaxyRegistryDao ansibleRegistry) {
+    this.ansibleRegistry = ansibleRegistry;
   }
 
   public ComponentSearchController(
@@ -86,7 +93,35 @@ public class ComponentSearchController {
         row.kind(),
         row.lastUpdatedAt(),
         browsePath(row),
-        swiftDetails(row));
+        componentDetails(row));
+  }
+
+  private Map<String, Object> componentDetails(ComponentSearchRow row) {
+    if (row.format() == RepositoryFormat.ANSIBLEGALAXY) {
+      return ansibleDetails(row);
+    }
+    return swiftDetails(row);
+  }
+
+  private Map<String, Object> ansibleDetails(ComponentSearchRow row) {
+    if (ansibleRegistry == null || row.namespace() == null || row.name() == null
+        || row.version() == null) {
+      return Map.of();
+    }
+    return ansibleRegistry.findVersion(
+            row.repositoryId(), row.namespace(), row.name(), row.version())
+        .map(version -> {
+          LinkedHashMap<String, Object> details = new LinkedHashMap<>();
+          details.put("artifactSha256", version.artifactSha256());
+          details.put("artifactSize", version.artifactSize());
+          details.put("dependencies", version.dependencies());
+          details.put("requiresAnsible", version.requiresAnsible());
+          details.put("signatureCount", ansibleRegistry.listSignatures(version.id()).size());
+          details.put("sourceKind", version.sourceKind());
+          details.put("sourceRepository", row.repositoryName());
+          return Map.copyOf(details);
+        })
+        .orElseGet(Map::of);
   }
 
   private Map<String, Object> swiftDetails(ComponentSearchRow row) {
@@ -146,6 +181,7 @@ public class ComponentSearchController {
       case "composer" -> RepositoryFormat.COMPOSER;
       case "terraform" -> RepositoryFormat.TERRAFORM;
       case "swift" -> RepositoryFormat.SWIFT;
+      case "ansiblegalaxy", "ansible" -> RepositoryFormat.ANSIBLEGALAXY;
       case "raw" -> RepositoryFormat.RAW;
       default -> null;
     };

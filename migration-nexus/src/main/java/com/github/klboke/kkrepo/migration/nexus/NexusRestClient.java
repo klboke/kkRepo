@@ -406,7 +406,8 @@ public class NexusRestClient {
           raw: 'RAW',
           cargo: 'CARGO',
           terraform: 'TERRAFORM',
-          swift: 'SWIFT'
+          swift: 'SWIFT',
+          ansiblegalaxy: 'ANSIBLEGALAXY'
         ]
         return prefixes[format]
       }
@@ -815,7 +816,8 @@ public class NexusRestClient {
           raw: 'RAW',
           cargo: 'CARGO',
           terraform: 'TERRAFORM',
-          swift: 'SWIFT'
+          swift: 'SWIFT',
+          ansiblegalaxy: 'ANSIBLEGALAXY'
         ]
         def upperTables = []
         allTables.each { tableName ->
@@ -935,6 +937,98 @@ public class NexusRestClient {
           }
           return shape
         }
+        def inspectAnsibleGalaxyShape = { tableNames ->
+          def shape = [
+            collectionAssetPath: false,
+            collectionAttributes: false,
+            sha256Checksum: false,
+            inspectedAssetCount: 0
+          ]
+          def fingerprintText = { value ->
+            if (value == null) {
+              return ''
+            }
+            if (value instanceof byte[]) {
+              return new String(value, 'UTF-8').toLowerCase()
+            }
+            if (value.getClass().name == 'org.postgresql.util.PGobject'
+                && value.respondsTo('getValue')) {
+              return String.valueOf(value.getValue()).toLowerCase()
+            }
+            return String.valueOf(value).toLowerCase()
+          }
+          def sql = '''
+              select
+                a.path as asset_path,
+                a.kind as asset_kind,
+                a.attributes as asset_attributes,
+                b.checksums as blob_checksums,
+                c.namespace as component_namespace,
+                c.name as component_name,
+                c.version as component_version,
+                c.attributes as component_attributes
+              from ''' + tableNames.asset + ''' a
+              left join ''' + tableNames.assetBlob + ''' b on a.asset_blob_id = b.asset_blob_id
+              left join ''' + tableNames.component + ''' c on a.component_id = c.component_id
+              where lower(a.kind) = 'collection_package'
+              order by a.path
+              limit 512'''
+          try {
+            def statement = connection.prepareStatement(sql)
+            try {
+              def rows = statement.executeQuery()
+              try {
+                while (rows.next()) {
+                  shape.inspectedAssetCount++
+                  def path = fingerprintText(rows.getObject('asset_path')).replaceFirst('^/+', '')
+                  def kind = fingerprintText(rows.getObject('asset_kind'))
+                  def namespace = fingerprintText(rows.getObject('component_namespace'))
+                  def componentName = fingerprintText(rows.getObject('component_name'))
+                  def version = fingerprintText(rows.getObject('component_version'))
+                  def assetAttributes = fingerprintText(rows.getObject('asset_attributes'))
+                  def componentAttributes = fingerprintText(rows.getObject('component_attributes'))
+                  def attributes = assetAttributes + ' ' + componentAttributes
+                  def checksums = fingerprintText(rows.getObject('blob_checksums'))
+                  def pathParts = path.split('/')
+                  def collectionName = componentName.contains('.')
+                      ? componentName.substring(componentName.lastIndexOf('.') + 1)
+                      : componentName
+                  def expectedFilename = namespace + '-' + collectionName + '-' + version + '.tar.gz'
+                  if (pathParts.length == 4
+                      && pathParts[0] == namespace
+                      && pathParts[1] == collectionName
+                      && pathParts[2] == version
+                      && pathParts[3] == expectedFilename
+                      && kind == 'collection_package') {
+                    shape.collectionAssetPath = true
+                  }
+                  if (attributes.contains('"ansiblegalaxy"')
+                      && attributes.contains('"namespace"')
+                      && attributes.contains('"name"')
+                      && attributes.contains('"version"')
+                      && attributes.contains('"asset_kind"')
+                      && attributes.contains('collection_package')) {
+                    shape.collectionAttributes = true
+                  }
+                  if ((checksums.contains('"sha256"') || checksums.contains('"sha-256"'))
+                      && (checksums =~ /[0-9a-f]{64}/).find()) {
+                    shape.sha256Checksum = true
+                  }
+                }
+              } finally {
+                rows.close()
+              }
+            } finally {
+              statement.close()
+            }
+          } catch (e) {
+            shape.collectionAssetPath = false
+            shape.collectionAttributes = false
+            shape.sha256Checksum = false
+            out.warnings << 'Ansible Galaxy datastore content shape probe failed: ' + errorText(e)
+          }
+          return shape
+        }
         def contentModels = [:]
         datastoreFormats.each { format, prefix ->
           def tableNames = [
@@ -980,6 +1074,9 @@ public class NexusRestClient {
           ]
           if (format == 'swift' && requiredColumnsPresent) {
             contentModel.formatShape = inspectSwiftShape(tableNames)
+          }
+          if (format == 'ansiblegalaxy' && requiredColumnsPresent) {
+            contentModel.formatShape = inspectAnsibleGalaxyShape(tableNames)
           }
           contentModels[format] = contentModel
         }

@@ -5,6 +5,7 @@ import com.github.klboke.kkrepo.core.RepositoryRecipe;
 import com.github.klboke.kkrepo.core.RepositoryRecipes;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
@@ -75,6 +76,7 @@ public class RepositoryService {
   private final TerraformRegistryDao terraformRegistry;
   private final ProxiedHttpClientFactory proxiedHttpClientFactory;
   private final SwiftRegistryDao swiftRegistry;
+  private AnsibleGalaxyRegistryDao ansibleRegistry;
   private final String urlPrefix;
   private final int serverPort;
   private final int managementPort;
@@ -121,6 +123,11 @@ public class RepositoryService {
     this.urlPrefix = urlPrefix;
     this.serverPort = serverPort;
     this.managementPort = managementPort;
+  }
+
+  @Autowired(required = false)
+  void setAnsibleGalaxyRegistry(AnsibleGalaxyRegistryDao ansibleRegistry) {
+    this.ansibleRegistry = ansibleRegistry;
   }
 
   public RepositoryService(
@@ -351,12 +358,14 @@ public class RepositoryService {
       invalidateGroupMemberGroupAfterCommit(existing.format(), existing.id());
       invalidateTerraformGroupBindings(existing.format(), existing.id());
       invalidateSwiftGroupBindings(existing.format(), existing.id());
+      invalidateAnsibleGroupBindings(existing.format(), existing.id());
     } else if (recipe.type() != RepositoryType.GROUP) {
       invalidateNpmMemberAfterCommit(existing.format(), existing.id());
       invalidatePypiMemberAfterCommit(existing.format(), existing.id());
       invalidateGroupMemberMemberAfterCommit(existing.format(), existing.id());
       invalidateTerraformContainingGroupBindings(existing.format(), existing.id(), new HashSet<>());
       invalidateSwiftContainingGroupBindings(existing.format(), existing.id(), new HashSet<>());
+      invalidateAnsibleContainingGroupBindings(existing.format(), existing.id(), new HashSet<>());
     }
 
     invalidateRuntimeCache(existing.id(), name);
@@ -382,6 +391,9 @@ public class RepositoryService {
     }
     if (existing.type() == RepositoryType.GROUP) {
       repositoryDao.clearMembers(existing.id());
+    }
+    if (ansibleRegistry != null && existing.format() == RepositoryFormat.ANSIBLEGALAXY) {
+      ansibleRegistry.deleteRepositoryState(existing.id());
     }
     int removed = repositoryDao.deleteById(existing.id());
     if (removed == 0) {
@@ -410,6 +422,7 @@ public class RepositoryService {
     invalidateGroupMemberGroupAfterCommit(existing.format(), existing.id());
     invalidateTerraformGroupBindings(existing.format(), existing.id());
     invalidateSwiftGroupBindings(existing.format(), existing.id());
+    invalidateAnsibleGroupBindings(existing.format(), existing.id());
     runtimeRegistry.invalidate(name);
     invalidateRepositoryCacheTokensAfterCommit(existing.id());
     refreshRepositoryCatalogAfterCommit();
@@ -528,6 +541,31 @@ public class RepositoryService {
       swiftRegistry.nextRepositoryRevision(group.id());
       swiftRegistry.deleteGroupSourceBindings(group.id());
       invalidateSwiftContainingGroupBindings(format, group.id(), visited);
+    }
+  }
+
+  private void invalidateAnsibleGroupBindings(
+      RepositoryFormat format, long groupRepositoryId) {
+    if (format != RepositoryFormat.ANSIBLEGALAXY || ansibleRegistry == null) {
+      return;
+    }
+    ansibleRegistry.nextRepositoryRevision(groupRepositoryId);
+    ansibleRegistry.deleteGroupBindings(groupRepositoryId);
+    invalidateAnsibleContainingGroupBindings(format, groupRepositoryId, new HashSet<>());
+  }
+
+  private void invalidateAnsibleContainingGroupBindings(
+      RepositoryFormat format, long repositoryId, Set<Long> visited) {
+    if (format != RepositoryFormat.ANSIBLEGALAXY || ansibleRegistry == null) {
+      return;
+    }
+    for (RepositoryRecord group : repositoryDao.listGroupsContaining(repositoryId)) {
+      if (group.id() == null || !visited.add(group.id())) {
+        continue;
+      }
+      ansibleRegistry.nextRepositoryRevision(group.id());
+      ansibleRegistry.deleteGroupBindings(group.id());
+      invalidateAnsibleContainingGroupBindings(format, group.id(), visited);
     }
   }
 
@@ -891,6 +929,9 @@ public class RepositoryService {
     if (format == RepositoryFormat.SWIFT) {
       settings = withRemoteUrl(settings, normalizeSwiftRemoteUrl(settings.remoteUrl()));
     }
+    if (format == RepositoryFormat.ANSIBLEGALAXY) {
+      settings = withRemoteUrl(settings, normalizeAnsibleGalaxyRemoteUrl(settings.remoteUrl()));
+    }
     validateProxy(settings, format);
     return normalizeOutboundProxyType(settings);
   }
@@ -936,6 +977,7 @@ public class RepositoryService {
       case COMPOSER -> "https://repo.packagist.org/";
       case TERRAFORM -> "https://registry.terraform.io/";
       case SWIFT -> "https://github.com/";
+      case ANSIBLEGALAXY -> "https://galaxy.ansible.com/";
       default -> null;
     };
   }
@@ -1326,7 +1368,16 @@ public class RepositoryService {
 
   private static boolean supportsNestedGroups(RepositoryFormat format) {
     return format == RepositoryFormat.PUB || format == RepositoryFormat.COMPOSER
-        || format == RepositoryFormat.TERRAFORM || format == RepositoryFormat.SWIFT;
+        || format == RepositoryFormat.TERRAFORM || format == RepositoryFormat.SWIFT
+        || format == RepositoryFormat.ANSIBLEGALAXY;
+  }
+
+  private static String normalizeAnsibleGalaxyRemoteUrl(String remoteUrl) {
+    String normalized = remoteUrl == null ? null : remoteUrl.trim();
+    if (normalized == null || normalized.isEmpty() || normalized.endsWith("/")) {
+      return normalized;
+    }
+    return normalized + "/";
   }
 
   private static String stringValue(Object value, String fallback) {

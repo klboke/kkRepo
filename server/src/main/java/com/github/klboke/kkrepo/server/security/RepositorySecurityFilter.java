@@ -122,11 +122,16 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       filterChain.doFilter(request, response);
       return;
     }
+    if (isInvalidAnsiblePublishRoute(repository.get(), target)) {
+      filterChain.doFilter(request, response);
+      return;
+    }
     Optional<AuthenticatedSubject> authenticated = terraformUrlToken == null
         ? switch (repository.get().format()) {
       case CARGO -> authenticationService.authenticateCargo(request);
       case PUB -> authenticationService.authenticatePub(request);
       case RUBYGEMS -> authenticationService.authenticateRubygems(request);
+      case ANSIBLEGALAXY -> authenticationService.authenticateAnsibleGalaxy(request);
       default -> authenticationService.authenticate(request);
     }
         : authenticationService.authenticateTerraformUrlToken(terraformUrlToken);
@@ -151,6 +156,11 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     if (!decision.allowed()) {
       if (repository.get().format() == RepositoryFormat.SWIFT) {
         swiftProblem(response, HttpServletResponse.SC_FORBIDDEN, "Forbidden", decision.reason());
+        return;
+      }
+      if (repository.get().format() == RepositoryFormat.ANSIBLEGALAXY) {
+        galaxyError(response, HttpServletResponse.SC_FORBIDDEN, "forbidden", "Forbidden",
+            decision.reason());
         return;
       }
       response.sendError(HttpServletResponse.SC_FORBIDDEN, decision.reason());
@@ -321,6 +331,10 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     if (format == RepositoryFormat.SWIFT && "PUT".equalsIgnoreCase(method)) {
       return List.of(PermissionAction.ADD);
     }
+    if (format == RepositoryFormat.ANSIBLEGALAXY
+        && ("PUT".equalsIgnoreCase(method) || "POST".equalsIgnoreCase(method))) {
+      return List.of(PermissionAction.ADD);
+    }
     if (format == RepositoryFormat.SWIFT && "POST".equalsIgnoreCase(method)
         && "login".equals(path)) {
       return List.of(PermissionAction.READ);
@@ -365,6 +379,14 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
         && "PUT".equalsIgnoreCase(target.method());
   }
 
+  private static boolean isInvalidAnsiblePublishRoute(
+      RepositoryRecord repository, RepositoryRequest target) {
+    return repository.format() == RepositoryFormat.ANSIBLEGALAXY
+        && repository.type() != RepositoryType.HOSTED
+        && ("PUT".equalsIgnoreCase(target.method())
+            || "POST".equalsIgnoreCase(target.method()));
+  }
+
   private static boolean isCargoYankRoute(String method, String path) {
     if (!path.startsWith("api/v1/crates/")) {
       return false;
@@ -406,6 +428,10 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       response.setHeader(
           HttpHeaders.WWW_AUTHENTICATE,
           "Bearer realm=\"pub\", message=\"Authentication required\"");
+    } else if (repository.format() == RepositoryFormat.ANSIBLEGALAXY) {
+      response.setHeader(
+          HttpHeaders.WWW_AUTHENTICATE,
+          "Bearer realm=\"ansiblegalaxy\", Basic realm=\"kkrepo\"");
     } else {
       response.setHeader(HttpHeaders.WWW_AUTHENTICATE, "Basic realm=\"kkrepo\"");
     }
@@ -413,6 +439,15 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       swiftProblem(
           response,
           HttpServletResponse.SC_UNAUTHORIZED,
+          "Unauthorized",
+          "Authentication required");
+      return;
+    }
+    if (repository.format() == RepositoryFormat.ANSIBLEGALAXY) {
+      galaxyError(
+          response,
+          HttpServletResponse.SC_UNAUTHORIZED,
+          "authentication_required",
           "Unauthorized",
           "Authentication required");
       return;
@@ -437,6 +472,18 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     response.getWriter().write("{\"type\":\"about:blank\",\"title\":\""
         + json(title) + "\",\"status\":" + status + ",\"detail\":\""
         + json(detail == null ? title : detail) + "\"}");
+  }
+
+  private static void galaxyError(
+      HttpServletResponse response, int status, String code, String title, String detail)
+      throws IOException {
+    response.setStatus(status);
+    response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+    response.setContentType("application/json");
+    response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
+    response.getWriter().write("{\"errors\":[{\"status\":\"" + status
+        + "\",\"code\":\"" + json(code) + "\",\"title\":\"" + json(title)
+        + "\",\"detail\":\"" + json(detail == null ? title : detail) + "\"}]}");
   }
 
   private static String json(String value) {

@@ -170,7 +170,7 @@ Live black-box 测试默认跳过，需要显式提供 Nexus 参考实例和 kkr
 scripts/ci/run-live-compat.sh client-e2e
 ```
 
-该 suite 会通过 Maven、npm、PyPI、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform 0.13/当前稳定版、SwiftPM/Xcode、NuGet、RubyGems、Yum、Docker/OCI 客户端发布/上传并下载/解析。Composer 额外覆盖 hosted 到 proxy 的传递依赖、错误 Basic 凭据和清空客户端缓存后的断上游 lock replay；Terraform 覆盖 group 中的 hosted 与 registry.terraform.io proxy module/provider，并验证 Provider checksum/signature metadata；Swift 5.7 覆盖 registry/proxy resolve/build，5.10/6.x 额外覆盖 HTTPS login、不可变发布、hosted/group、SCM replacement 和跨副本读取，独立 lane 覆盖 macOS Xcode 与 Windows proxy resolve；Go 通过 Go module proxy 做 resolve-only 验证。客户端诊断信息会写入 `artifacts/client-e2e/`，包含 credential 的 metadata 会在上传 artifact 前脱敏。
+该 suite 会通过 Maven、npm、PyPI、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform 0.13/当前稳定版、SwiftPM/Xcode、Ansible Galaxy 2.9/当前版、NuGet、RubyGems、Yum、Docker/OCI 客户端发布/上传并下载/解析。Composer 额外覆盖 hosted 到 proxy 的传递依赖、错误 Basic 凭据和清空客户端缓存后的断上游 lock replay；Terraform 覆盖 group 中的 hosted 与 registry.terraform.io proxy module/provider，并验证 Provider checksum/signature metadata；Swift 5.7 覆盖 registry/proxy resolve/build，5.10/6.x 额外覆盖 HTTPS login、不可变发布、hosted/group、SCM replacement 和跨副本读取；Ansible 覆盖 Galaxy v3 discovery、持久化 publish task、不可变版本、range/transitive dependency、hosted/group 下载、public Galaxy proxy、Basic/GenericToken/Nexus bearer 认证和跨副本读取。Swift 独立 lane 覆盖 macOS Xcode 与 Windows proxy resolve；Go 通过 Go module proxy 做 resolve-only 验证。客户端诊断信息会写入 `artifacts/client-e2e/`，包含 credential 的 metadata 会在上传 artifact 前脱敏。
 
 Pull Request 上的 `run-client-e2e` 用于验证默认 JVM 候选镜像。Spring AOT、runtime hint 或 Native 打包变更应使用独立的 `run-native-client-e2e` 标签；该 workflow 会构建 Native 候选镜像，并分别针对 MySQL 和 PostgreSQL 运行 Linux 真实客户端矩阵。
 

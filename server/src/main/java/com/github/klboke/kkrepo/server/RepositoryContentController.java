@@ -18,6 +18,9 @@ import com.github.klboke.kkrepo.protocol.swift.SwiftMediaTypes;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPath;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPathParser;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
+import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyExceptions;
+import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyMultipartReader;
+import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyService;
 import com.github.klboke.kkrepo.server.cargo.CargoExceptions;
 import com.github.klboke.kkrepo.server.cargo.CargoGroupService;
 import com.github.klboke.kkrepo.server.cargo.CargoHostedService;
@@ -135,6 +138,8 @@ public class RepositoryContentController {
   private final ComposerGroupService composerGroup;
   private final TerraformService terraform;
   private SwiftService swift;
+  private AnsibleGalaxyService ansible;
+  private AnsibleGalaxyMultipartReader ansibleMultipart;
   private final NugetService nuget;
   private final RubygemsService rubygems;
   private final YumService yum;
@@ -155,6 +160,16 @@ public class RepositoryContentController {
   @Autowired(required = false)
   void setSwiftService(SwiftService swift) {
     this.swift = swift;
+  }
+
+  @Autowired(required = false)
+  void setAnsibleGalaxyService(AnsibleGalaxyService ansible) {
+    this.ansible = ansible;
+  }
+
+  @Autowired(required = false)
+  void setAnsibleGalaxyMultipartReader(AnsibleGalaxyMultipartReader ansibleMultipart) {
+    this.ansibleMultipart = ansibleMultipart;
   }
 
   @Autowired
@@ -324,6 +339,13 @@ public class RepositoryContentController {
           requestPermissionSubject(request));
       return toHeadResponse(response, request);
     }
+    if (runtime.format() == RepositoryFormat.ANSIBLEGALAXY) {
+      String raw = extractRepositoryPath(name, request, true);
+      MavenResponse response = ansible().get(
+          runtime, raw, request.getQueryString(), repositoryBaseUrl(request, runtime.name()),
+          true, requestUserId(request));
+      return toHeadResponse(response, request);
+    }
     if (runtime.format() == RepositoryFormat.PYPI) {
       String raw = extractRepositoryPath(name, request, true);
       PypiResponse resp = isDirectoryPath(raw)
@@ -426,6 +448,19 @@ public class RepositoryContentController {
             userId, request.getRemoteAddr());
       }
       return ResponseEntity.status(resp.status()).build();
+    }
+    if (runtime.format() == RepositoryFormat.ANSIBLEGALAXY) {
+      String raw = extractRepositoryPath(name, request, true);
+      if (request.getQueryString() != null && !request.getQueryString().isBlank()) {
+        throw new AnsibleGalaxyExceptions.BadRequest(
+            "Query parameters are not valid for Galaxy artifact upload");
+      }
+      MavenResponse response;
+      try (InputStream body = request.getInputStream()) {
+        response = ansible().putArtifact(
+            runtime, raw, body, userId, request.getRemoteAddr());
+      }
+      return ResponseEntity.status(response.status()).build();
     }
     if (runtime.format() == RepositoryFormat.SWIFT) {
       String rawPath = extractRepositoryPath(name, request, true);
@@ -542,6 +577,10 @@ public class RepositoryContentController {
       throw new SwiftExceptions.MethodNotAllowed(
           "Swift client repository paths do not support DELETE");
     }
+    if (runtime.format() == RepositoryFormat.ANSIBLEGALAXY) {
+      throw new AnsibleGalaxyExceptions.MethodNotAllowed(
+          "Ansible Galaxy client repository paths do not support DELETE");
+    }
     if (runtime.format() == RepositoryFormat.NUGET) {
       String raw = extractRepositoryPath(name, request, true);
       MavenResponse resp = nuget.deletePackage(runtime, raw);
@@ -573,6 +612,30 @@ public class RepositoryContentController {
   @PostMapping("/**")
   public ResponseEntity<?> post(@PathVariable("name") String name, HttpServletRequest request) {
     RepositoryRuntime runtime = resolveRuntime(name);
+    if (runtime.format() == RepositoryFormat.ANSIBLEGALAXY) {
+      if (!isMultipart(request.getContentType())) {
+        throw new AnsibleGalaxyExceptions.UnsupportedMediaType(
+            "Ansible collection publish requires multipart/form-data");
+      }
+      String raw = extractRepositoryPath(name, request, true);
+      try (AnsibleGalaxyMultipartReader.Upload upload = ansibleMultipart().read(request);
+           InputStream body = upload.openStream()) {
+        MavenResponse response = ansible().publish(
+            runtime,
+            raw,
+            request.getQueryString(),
+            body,
+            upload.filename(),
+            upload.sha256(),
+            requestUserId(request),
+            request.getRemoteAddr(),
+            false);
+        return toByteArrayResponse(response);
+      } catch (IOException e) {
+        throw new AnsibleGalaxyExceptions.BadRequest(
+            "Unable to read Ansible collection multipart artifact", e);
+      }
+    }
     if (runtime.format() == RepositoryFormat.SWIFT) {
       String raw = extractRepositoryPath(name, request, true);
       if (!"login".equals(raw) || (request.getQueryString() != null
@@ -725,6 +788,14 @@ public class RepositoryContentController {
       boolean archiveResponse = !headOnly
           && SwiftMediaTypes.ARCHIVE.equalsIgnoreCase(resp.contentType());
       return toStreamingResponse(resp, request, archiveResponse);
+    }
+    if (runtime.format() == RepositoryFormat.ANSIBLEGALAXY) {
+      String raw = extractRepositoryPath(name, request, true);
+      MavenResponse response = ansible().get(
+          runtime, raw, request.getQueryString(), repositoryBaseUrl(request, runtime.name()),
+          headOnly, requestUserId(request));
+      return toStreamingResponse(response, request, !headOnly
+          && "application/octet-stream".equalsIgnoreCase(response.contentType()));
     }
     if (runtime.format() == RepositoryFormat.PYPI) {
       String raw = extractRepositoryPath(name, request, true);
@@ -980,6 +1051,20 @@ public class RepositoryContentController {
       throw new IllegalStateException("Swift repository service is unavailable");
     }
     return swift;
+  }
+
+  private AnsibleGalaxyService ansible() {
+    if (ansible == null) {
+      throw new IllegalStateException("Ansible Galaxy repository service is unavailable");
+    }
+    return ansible;
+  }
+
+  private AnsibleGalaxyMultipartReader ansibleMultipart() {
+    if (ansibleMultipart == null) {
+      throw new IllegalStateException("Ansible Galaxy multipart reader is unavailable");
+    }
+    return ansibleMultipart;
   }
 
   private MavenResponse dispatchNpmGet(

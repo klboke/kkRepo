@@ -6,6 +6,7 @@ public final class BrowseAssetVisibility {
   private static final String COMPOSER_INTERNAL_PREFIX = "_composer";
   private static final String TERRAFORM_INTERNAL_PREFIX = ".terraform";
   private static final String SWIFT_INTERNAL_PREFIX = ".swift";
+  private static final String ANSIBLE_INTERNAL_PREFIX = ".ansible";
 
   private BrowseAssetVisibility() {
   }
@@ -17,7 +18,9 @@ public final class BrowseAssetVisibility {
     return (format == RepositoryFormat.COMPOSER && under(path, COMPOSER_INTERNAL_PREFIX))
         || (format == RepositoryFormat.TERRAFORM
             && (under(path, TERRAFORM_INTERNAL_PREFIX) || terraformProviderInternal(path)))
-        || (format == RepositoryFormat.SWIFT && under(path, SWIFT_INTERNAL_PREFIX));
+        || (format == RepositoryFormat.SWIFT && under(path, SWIFT_INTERNAL_PREFIX))
+        || (format == RepositoryFormat.ANSIBLEGALAXY
+            && (under(path, ANSIBLE_INTERNAL_PREFIX) || under(path, "api")));
   }
 
   private static boolean terraformProviderInternal(String path) {

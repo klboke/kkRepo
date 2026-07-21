@@ -26,6 +26,7 @@ on:
           - nexus
           - client-e2e
           - swift
+          - ansible
           - full
   schedule:
     - cron: "0 19 * * *"
@@ -108,10 +109,11 @@ jobs:
       COMPOSE_FILE: docker-compose.compat-postgres.yml
       COMPOSE_PROJECT_NAME: kkrepo-compat
       LIVE_COMPAT_SUITE: ${{ (inputs.runtime == 'native' && 'client-e2e') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e') && 'client-e2e') || inputs.suite }}
-      NEXUS_COMPAT_IMAGE: ${{ ((inputs.runtime == 'native') || (github.event_name == 'workflow_dispatch' && (inputs.suite == 'client-e2e' || inputs.suite == 'swift' || inputs.suite == 'full')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && 'sonatype/nexus3:3.94.0' || 'sonatype/nexus3:3.92.0' }}
+      NEXUS_COMPAT_IMAGE: ${{ ((inputs.runtime == 'native') || (github.event_name == 'workflow_dispatch' && (inputs.suite == 'client-e2e' || inputs.suite == 'swift' || inputs.suite == 'ansible' || inputs.suite == 'full')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && 'sonatype/nexus3:3.94.0' || 'sonatype/nexus3:3.92.0' }}
       PUB_COMPAT_ENABLED: "true"
       COMPOSER_COMPAT_ENABLED: "true"
       SWIFT_KKREPO_SECONDARY_BASE_URL: http://127.0.0.1:18094
+      ANSIBLE_KKREPO_SECONDARY_BASE_URL: http://127.0.0.1:18094
       SWIFT_COMPAT_PROXY_VERSION: "1.6.3"
       SWIFT_COMPAT_REQUIRE_PROXY_TAG_CASES: "true"
       SWIFT_COMPAT_PROXY_TAG_CASES: MaestriHub/shared-modules/v0.3.8/0.3.8,MaestriHub/shared-modules/V0.3.7/0.3.7
@@ -144,6 +146,14 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+
+      - name: Set up Python 3.9 for Ansible 2.9
+        id: ansible-python29
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e'
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.9"
+          update-environment: false
 
       - name: Set up PHP and Composer
         if: env.LIVE_COMPAT_SUITE == 'client-e2e'
@@ -372,6 +382,23 @@ jobs:
       - name: Install Python client build tools
         if: env.LIVE_COMPAT_SUITE == 'client-e2e'
         run: python -m pip install --upgrade build twine
+
+      - name: Set up Ansible Galaxy 2.9 and current clients
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e'
+        env:
+          ANSIBLE_PYTHON_29: ${{ steps.ansible-python29.outputs.python-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ansible"
+          "$ANSIBLE_PYTHON_29" -m venv "$RUNNER_TEMP/ansible/2.9"
+          python -m venv "$RUNNER_TEMP/ansible/current"
+          "$RUNNER_TEMP/ansible/2.9/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/ansible/2.9/bin/python" -m pip install \
+            'ansible==2.9.27' 'jinja2<3.1' 'MarkupSafe<2.1'
+          "$RUNNER_TEMP/ansible/current/bin/python" -m pip install --upgrade pip ansible-core
+          echo "ANSIBLE_GALAXY_BINS=2.9=$RUNNER_TEMP/ansible/2.9/bin/ansible-galaxy,current=$RUNNER_TEMP/ansible/current/bin/ansible-galaxy" >> "$GITHUB_ENV"
+          echo "ANSIBLE_E2E_REQUIRE_2_9_CURRENT=true" >> "$GITHUB_ENV"
 
       - name: Validate live compatibility compose file
         run: docker compose -f "$COMPOSE_FILE" config

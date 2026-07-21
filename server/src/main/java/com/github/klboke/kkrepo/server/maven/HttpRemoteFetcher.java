@@ -493,7 +493,9 @@ public class HttpRemoteFetcher {
 
     private void ensureUnsignedRedirectAllowed(URI redirected) {
       String host = normalizeHost(redirected == null ? null : redirected.getHost());
-      if (!host.isBlank() && allowedUnsignedRedirectHosts.contains(host)) {
+      if (!host.isBlank()
+          && (allowedUnsignedRedirectHosts.contains(host)
+              || allowedUnsignedRedirectHosts.contains("*"))) {
         return;
       }
       throw new SecurityValidationException("remote redirect URL host is not allowed: " + host);

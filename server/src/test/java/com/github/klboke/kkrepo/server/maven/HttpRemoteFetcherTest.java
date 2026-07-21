@@ -263,6 +263,23 @@ class HttpRemoteFetcherTest {
   }
 
   @Test
+  void integrityPinnedRepositoryDownloadsCanFollowAnyPolicyApprovedUnsignedOrigin() {
+    RepositoryRuntime runtime = runtime("robot", "secret", null);
+    HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request
+        .get("https://repo.example.com/artifacts/app.tar.gz")
+        .withRepositoryAllowingUnsignedRedirects(runtime, true, Set.of("*"));
+    URI current = URI.create("https://repo.example.com/artifacts/app.tar.gz");
+    URI signedObject = URI.create("https://objects.example.net/signed/app.tar.gz?signature=redacted");
+
+    assertNotNull(request.authorizationHeader());
+    assertNull(request.authorizationHeaderForRedirect(current, signedObject));
+    assertEquals(
+        "objects.example.net",
+        request.trustedHostForRedirect(current, signedObject),
+        "cross-origin redirect remains DNS pinned but carries no repository credential");
+  }
+
+  @Test
   void repositoryRequestsRejectUnsignedCrossOriginRedirectsOutsideAllowlist() {
     RepositoryRuntime runtime = runtime("robot", "secret", null);
     HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request

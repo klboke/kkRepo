@@ -137,6 +137,23 @@ class RawAssetWriter {
       String createdBy,
       String createdByIp,
       ComponentRecord component) {
+    return writeFileAtBrowsePath(
+        runtime, storage, blobStoreId, path, file, contentTypeHint, extraBlobAttributes,
+        createdBy, createdByIp, component, path);
+  }
+
+  Stored writeFileAtBrowsePath(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      String path,
+      Path file,
+      String contentTypeHint,
+      Map<String, ?> extraBlobAttributes,
+      String createdBy,
+      String createdByIp,
+      ComponentRecord component,
+      String browsePath) {
     DigestedUpload upload = uploadFileWithDigests(
         runtime, storage, blobStoreId, path, file, extraBlobAttributes);
     try {
@@ -145,7 +162,7 @@ class RawAssetWriter {
           () -> persist(runtime, storage, blobStoreId, path, upload, contentTypeHint,
               extraBlobAttributes, createdBy, createdByIp,
               component == null ? ComponentBinding.none() : ComponentBinding.explicit(component),
-              null));
+              null, browsePath));
       cleanupUnusedUploadedBlob(storage, blobStoreId, upload, stored.blob());
       return stored;
     } catch (RuntimeException e) {
@@ -172,7 +189,7 @@ class RawAssetWriter {
           "Persist raw asset " + runtime.name() + "/" + path,
           () -> persist(runtime, storage, blobStoreId, path, upload, contentTypeHint,
               extraBlobAttributes, createdBy, createdByIp, componentBinding,
-              keepResponseFile ? upload.tempFile() : null));
+              keepResponseFile ? upload.tempFile() : null, path));
       cleanupUnusedUploadedBlob(storage, blobStoreId, upload, stored.blob());
       if (!keepResponseFile) {
         TempBlobFiles.deleteQuietly(upload.tempFile());
@@ -218,7 +235,8 @@ class RawAssetWriter {
       String createdBy,
       String createdByIp,
       ComponentBinding componentBinding,
-      Path responseFile) {
+      Path responseFile,
+      String browsePath) {
     Instant now = Instant.now();
     String contentType = contentTypeHint == null || contentTypeHint.isBlank()
         ? MediaType.APPLICATION_OCTET_STREAM_VALUE
@@ -326,7 +344,10 @@ class RawAssetWriter {
     if (previousBlob != null && previousBlob.id() != null && previousBlob.id() != blobId) {
       assetDao.markBlobDeletedIfUnreferenced(previousBlob.id(), "asset replaced");
     }
-    browseNodeDao.upsertPathAncestors(runtime.id(), path, persistedAsset.id(), componentId);
+    if (browsePath != null && !browsePath.isBlank()) {
+      browseNodeDao.upsertPathAncestors(
+          runtime.id(), browsePath, persistedAsset.id(), componentId);
+    }
     if (previousComponentId != null && !previousComponentId.equals(componentId)) {
       componentDao.deleteIfNoAssets(previousComponentId);
     }

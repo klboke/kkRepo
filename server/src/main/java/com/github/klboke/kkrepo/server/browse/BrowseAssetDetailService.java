@@ -6,6 +6,7 @@ import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
@@ -20,6 +21,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerTagRecor
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPath;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPathParser;
+import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
 import com.github.klboke.kkrepo.protocol.npm.NpmMetadata;
 import com.github.klboke.kkrepo.protocol.npm.NpmPackageId;
 import com.github.klboke.kkrepo.protocol.swift.SwiftPath;
@@ -63,6 +65,7 @@ public class BrowseAssetDetailService {
   private final DockerRegistryDao dockerDao;
   private final TerraformRegistryDao terraformDao;
   private final SwiftRegistryDao swiftDao;
+  private AnsibleGalaxyRegistryDao ansibleDao;
   private final BlobStorageRegistry blobStorageRegistry;
   private final ObjectMapper objectMapper;
 
@@ -82,6 +85,11 @@ public class BrowseAssetDetailService {
     this.swiftDao = swiftDao;
     this.blobStorageRegistry = blobStorageRegistry;
     this.objectMapper = objectMapper;
+  }
+
+  @Autowired(required = false)
+  void setAnsibleGalaxyRegistryDao(AnsibleGalaxyRegistryDao ansibleDao) {
+    this.ansibleDao = ansibleDao;
   }
 
   public BrowseAssetDetailService(
@@ -174,6 +182,9 @@ public class BrowseAssetDetailService {
     Map<String, Object> swift = source.format() == RepositoryFormat.SWIFT
         ? swiftAttributes(source, asset)
         : Map.of();
+    Map<String, Object> ansible = source.format() == RepositoryFormat.ANSIBLEGALAXY
+        ? ansibleAttributes(source, asset)
+        : Map.of();
     String displayName = storagePath.equals(publicPath)
         ? asset.name()
         : publicPath.substring(publicPath.lastIndexOf('/') + 1);
@@ -200,7 +211,37 @@ public class BrowseAssetDetailService {
         pub,
         composer,
         swift,
+        ansible,
         provenance);
+  }
+
+  private Map<String, Object> ansibleAttributes(
+      RepositoryRecord source, AssetRecord asset) {
+    LinkedHashMap<String, Object> ansible = new LinkedHashMap<>();
+    putNonBlank(ansible, "asset_kind", asset.kind());
+    putNonBlank(ansible, "source_repository", source.name());
+    if (ansibleDao == null) return Map.copyOf(ansible);
+    ansibleDao.findVersionByArtifactFilename(source.id(), asset.name()).ifPresent(version -> {
+      putNonBlank(ansible, "namespace", version.namespaceDisplay());
+      putNonBlank(ansible, "name", version.nameDisplay());
+      putNonBlank(ansible, "version", version.versionOriginal());
+      putNonBlank(ansible, "artifact_filename", version.artifactFilename());
+      putNonBlank(ansible, "artifact_sha256", version.artifactSha256());
+      ansible.put("artifact_size", version.artifactSize());
+      putNonBlank(ansible, "requires_ansible", version.requiresAnsible());
+      putNonBlank(ansible, "source_kind", version.sourceKind());
+      if (version.dependencies() != null && !version.dependencies().isEmpty()) {
+        ansible.put("dependencies", version.dependencies());
+      }
+      for (String key : List.of("authors", "tags", "license", "description")) {
+        Object value = version.metadata().get(key);
+        if (value != null) ansible.put(key, value);
+      }
+      int signatures = ansibleDao.listSignatures(version.id()).size();
+      ansible.put("signature_count", signatures);
+      ansible.put("signature_status", signatures == 0 ? "unsigned" : "signed");
+    });
+    return Map.copyOf(ansible);
   }
 
   private Map<String, Object> swiftAttributes(RepositoryRecord source, AssetRecord asset) {
@@ -307,6 +348,7 @@ public class BrowseAssetDetailService {
           Map.of(),
           Map.of(),
           swiftReleaseAttributes(source, row),
+          Map.of(),
           Map.of("dynamic", true, "hashes_not_verified", false)));
     }
     return Optional.empty();
@@ -403,6 +445,7 @@ public class BrowseAssetDetailService {
           Map.of(),
           Map.of(),
           swiftManifestAttributes(source, row, manifestRow),
+          Map.of(),
           Map.of("dynamic", true, "hashes_not_verified", false)));
     }
     return Optional.empty();
@@ -543,6 +586,7 @@ public class BrowseAssetDetailService {
         Map.of(),
         Map.of(),
         Map.of(),
+        Map.of(),
         provenance);
   }
 
@@ -567,6 +611,7 @@ public class BrowseAssetDetailService {
         null,
         Map.of(),
         content,
+        Map.of(),
         Map.of(),
         Map.of(),
         Map.of(),
@@ -616,7 +661,9 @@ public class BrowseAssetDetailService {
     }
     List<RepositoryRecord> members = visibleRepository.format() == RepositoryFormat.SWIFT
         ? BrowseRepositorySources.swiftSources(visibleRepository, repositoryDao)
-        : repositoryDao.listMembers(visibleRepository.id());
+        : visibleRepository.format() == RepositoryFormat.ANSIBLEGALAXY
+            ? BrowseRepositorySources.ansibleSources(visibleRepository, repositoryDao)
+            : repositoryDao.listMembers(visibleRepository.id());
     if (sourceRepositoryName != null && !sourceRepositoryName.isBlank()) {
       RepositoryRecord source = members.stream()
           .filter(member -> member.name().equals(sourceRepositoryName))
@@ -697,6 +744,14 @@ public class BrowseAssetDetailService {
         && !normalized.startsWith("simple/")
         && !normalized.startsWith("packages/")) {
       return new ResolvedStoragePath("packages/" + normalized, sourceRepositoryName);
+    }
+    if (visibleRepository.format() == RepositoryFormat.ANSIBLEGALAXY) {
+      String[] segments = normalized.split("/", -1);
+      if (segments.length == 4
+          && AnsibleGalaxyPathParser.isArtifactFilename(segments[3])) {
+        return new ResolvedStoragePath(
+            AnsibleGalaxyPathParser.ARTIFACT_BASE + segments[3], sourceRepositoryName);
+      }
     }
     return new ResolvedStoragePath(normalized, sourceRepositoryName);
   }
@@ -1237,5 +1292,6 @@ public class BrowseAssetDetailService {
       Map<String, Object> pub,
       Map<String, Object> composer,
       Map<String, Object> swift,
+      Map<String, Object> ansible,
       Map<String, Object> provenance) {}
 }

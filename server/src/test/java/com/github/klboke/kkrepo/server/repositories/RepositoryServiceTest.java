@@ -774,6 +774,25 @@ class RepositoryServiceTest {
   }
 
   @Test
+  void createAnsibleGalaxyProxyDefaultsAndNormalizesRemoteUrl() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView defaulted = service.create(new CreateCommand(
+        "ansible-default", "ansiblegalaxy-proxy", true, "default", true,
+        null, null, null, null, null, null));
+    assertEquals("https://galaxy.ansible.com/", defaulted.proxy().remoteUrl());
+
+    StubRepositoryDao customRepositories = new StubRepositoryDao(repository(1L));
+    RepositoryView custom = service(customRepositories).create(new CreateCommand(
+        "ansible-custom", "ansiblegalaxy-proxy", true, "default", true,
+        null, new ProxySettings("https://galaxy.ansible.com/api", 60, 30, true),
+        null, null, null, null));
+    assertEquals("https://galaxy.ansible.com/api/", custom.proxy().remoteUrl());
+    assertEquals("https://galaxy.ansible.com/api/", customRepositories.repository.proxyRemoteUrl());
+  }
+
+  @Test
   void createComposerProxyWithBlankRemoteKeepsOutboundProxyWhenDefaultingRemoteUrl() {
     StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
     RepositoryService service = service(repositories);
@@ -1097,6 +1116,21 @@ class RepositoryServiceTest {
 
     assertEquals(List.of("swift-nested", "swift-hosted"), updated.group().memberNames());
     assertEquals(List.of(42L, 41L), repositories.membersByGroupId.get(40L));
+  }
+
+  @Test
+  void replaceMembersAllowsOrderedNestedAnsibleGalaxyGroups() {
+    StubRepositoryDao repositories = new StubRepositoryDao(
+        ansibleGroupRepository(50L, "ansible-root"),
+        ansibleHostedRepository(51L, "ansible-hosted"),
+        ansibleGroupRepository(52L, "ansible-nested"));
+    RepositoryService service = service(repositories);
+
+    RepositoryView updated = service.replaceMembers(
+        "ansible-root", List.of("ansible-nested", "ansible-hosted"));
+
+    assertEquals(List.of("ansible-nested", "ansible-hosted"), updated.group().memberNames());
+    assertEquals(List.of(52L, 51L), repositories.membersByGroupId.get(50L));
   }
 
   @Test
@@ -1492,6 +1526,25 @@ class RepositoryServiceTest {
         null,
         true,
         attributes);
+  }
+
+  private static RepositoryRecord ansibleHostedRepository(long id, String name) {
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", "ansiblegalaxy-hosted");
+    return new RepositoryRecord(
+        id, name, RepositoryFormat.ANSIBLEGALAXY, RepositoryType.HOSTED,
+        "ansiblegalaxy-hosted", true, 1L, null, null, null, null,
+        "ALLOW_ONCE", true, attributes);
+  }
+
+  private static RepositoryRecord ansibleGroupRepository(long id, String name) {
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", "ansiblegalaxy-group");
+    attributes.put("group", Map.of());
+    return new RepositoryRecord(
+        id, name, RepositoryFormat.ANSIBLEGALAXY, RepositoryType.GROUP,
+        "ansiblegalaxy-group", true, 1L, null, null, null, null,
+        null, true, attributes);
   }
 
   private static RepositoryRecord composerGroupRepository(long id, String name) {

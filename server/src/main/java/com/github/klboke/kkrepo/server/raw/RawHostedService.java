@@ -144,6 +144,29 @@ public class RawHostedService {
     return MavenResponse.created();
   }
 
+  /**
+   * Stores protocol content at its wire path while exposing a separate logical browse path.
+   * The asset has exactly one browse leaf, matching the browse schema's unique asset binding.
+   */
+  public MavenResponse putInternalWithComponentFileAtBrowsePath(
+      RepositoryRuntime runtime,
+      String rawPath,
+      Path file,
+      String contentType,
+      Map<String, ?> blobAttributes,
+      String createdBy,
+      String createdByIp,
+      ComponentRecord component,
+      String rawBrowsePath) {
+    String path = normalizeAssetPath(rawPath);
+    String browsePath = normalizeAssetPath(rawBrowsePath);
+    writer.writeFileAtBrowsePath(
+        runtime, blobStorage(runtime), requireBlobStore(runtime), path, file, contentType,
+        blobAttributes == null ? Map.of() : blobAttributes, createdBy, createdByIp,
+        component, browsePath);
+    return MavenResponse.created();
+  }
+
   /** Deletes protocol-generated content without applying Raw repository type checks. */
   public MavenResponse deleteInternal(RepositoryRuntime runtime, String rawPath) {
     String path = normalizeAssetPath(rawPath);
