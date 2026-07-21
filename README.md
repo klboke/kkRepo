@@ -14,7 +14,7 @@ kkRepo is a community-driven, fully open-source, self-hosted artifact repository
 ## Features
 
 - Support for 15+ mainstream repository formats across hosted, proxy, and group repository types.
-- Opt-in [Spring AOT / GraalVM Native Image distributions](docs/en/native-vs-jvm-guide.md) with about one-second container readiness and substantially lower memory usage; JVM remains the default.
+- Supports AOT compilation and runtime, with about one-second startup readiness and memory usage below 500 MB.
 - Per-repository outbound HTTP or SOCKS5 proxy configuration for proxy repositories, with optional proxy authentication and HTTPS upstream tunneling.
 - Compatibility with Sonatype Nexus APIs, user permission model, and the `/repository/<repo>/...` URL layout.
 - Use kkRepo as a drop-in replacement for Sonatype Nexus, with one-click migration of existing data while preserving repository domains and URLs, so client configurations and CI workflows continue unchanged.
