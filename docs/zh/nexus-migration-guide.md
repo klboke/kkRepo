@@ -4,17 +4,17 @@
 
 kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议行为和权限认证模型。迁移完成后，只需要把原 Nexus 域名指向 kkrepo，Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、NuGet、RubyGems、Yum 等已被迁移流程覆盖的非 Docker 客户端配置不需要修改。Docker / OCI 使用 Registry HTTP API V2 的 `/v2/...` 路由；切换 Docker 客户端时需要保持仓库名和 connector/path-based routing 入口一致。
 
-Cargo / Rust 在 kkrepo 中同样使用 `/repository/<repo>/...` sparse registry URL。对于 preflight 已确认 Cargo content model 指纹的 datastore 时代 Nexus H2/PostgreSQL 源端，hosted Cargo 仓库数据也走同一套迁移流程。
+## 仓库数据范围与格式边界
 
-Dart / Pub 在 kkrepo 中同样使用 `/repository/<repo>/...` hosted URL。对于 preflight 已确认 Pub content model 的 Nexus 3.92.0 源端，hosted Pub 仓库数据走同一套迁移流程；显式选择的 Pub proxy cache 只有在 plan 为 `FULL` 时才迁移。
-
-Composer / PHP 同样保留 `/repository/<repo>/...` Composer 2 URL。Nexus 原生 Composer 是 3.75.0+ Pro proxy-only 能力，因此迁移只接受 Nexus 原生 Composer proxy，并保持 proxy 语义；未在 `Optional proxy repositories` 中显式选择时只迁移配置，不迁移 cache。kkrepo 自有的 Composer hosted/group 不是 Nexus 源端迁移推断目标。
-
-Terraform 保持配置在 Terraform CLI `host.services` 中的 Nexus `/repository/<repo>/v1/modules/...` 与 `/v1/providers/...` 服务基址。元数据迁移识别原生 `terraform-hosted`、`terraform-proxy`、`terraform-group` recipe。仓库数据迁移会重建 hosted module/provider 状态、Provider platform、SHA256SUMS 和 kkrepo signing metadata，proxy/group 配置也会迁移。管理员显式选择 Nexus 原生 Terraform proxy 且 source profile 将其规划为 `FULL` 时，独立 cache writer 会按 Nexus 公开 path 恢复协议可识别的 module/provider archive。它不会创建 hosted publication 或 signing state。Module download discovery 可直接选择已恢复的本地 archive；Provider metadata 从已配置上游重建并校验 route、validator、checksum manifest 和 signature snapshot，再在该 metadata 有效期内固定对应缓存。
-
-Swift Package Registry 保持 Nexus `/repository/<repo>/` registry base。元数据迁移识别 `swift-hosted`、`swift-proxy`、`swift-group`，保留 proxy TTL 和有序成员。可恢复的源 proxy secret 会加密写入目标；被遮蔽或缺失的 secret 会生成 `NEEDS_MANUAL_ACTION`，目标 proxy 保持 offline 且不写入占位 credential，直到管理员显式补齐。Hosted 数据仅对 Nexus 3.92.x-3.94.x 且 datastore asset fingerprint 能证明预期 Swift content shape 的源，恢复不可变 source archive、checksum 和默认/版本化 manifest；可选 CMS 签名、原始 release metadata 和 repository URL mapping 仅在源导出属性实际包含这些字段时保留。原生 Nexus 3.94 会接受这些可选发布字段，但不会持久化或重新暴露，因此目标端不会伪造。版本超出范围、未知 profile 或 shape 漂移均 fail closed；proxy cache 不会作为 hosted publication 重放。
-
-Ansible Galaxy 保持 Nexus `/repository/<repo>/` Galaxy v3 server base。元数据迁移识别 `ansiblegalaxy-hosted`、`ansiblegalaxy-proxy`、`ansiblegalaxy-group`，保留 remote、TTL、online、write policy 和有序成员。Hosted collection data 和显式选择的 proxy cache 仅接受 Nexus 3.93.x-3.94.x 原生 source，且 datastore fingerprint 必须证明预期 collection identity 与完整性 shape。版本未知、fingerprint 不完整、checksum/manifest 缺失或 shape 漂移都会生成 `NEEDS_MANUAL_ACTION`。Proxy secret 被遮蔽或缺失时，目标 proxy 保持 offline 且不写入占位 credential。Collection tarball 与完整 `MANIFEST.json`/`FILES.json` 写入 blob storage；关系数据库只写入有上限的查询元数据、hash、引用、task 和 binding。
+- **默认范围：** 仓库数据迁移默认扫描 hosted 仓库。如需迁移源端作为历史备份或回源缓存使用的 proxy 仓库，必须在迁移页面的 `Optional proxy repositories` 中显式填写仓库名。
+- **可选 proxy cache：** Cargo / Rust、Dart / Pub、Nexus 原生 Composer、Terraform 和 Ansible Galaxy proxy cache 仅在显式选择且 source profile 接受为 `FULL` 时迁移。未知 schema、community plugin、不支持的产品能力和旧 OrientDB-only shape 均 fail closed。
+- **Cargo / Rust：** kkrepo 保留 `/repository/<repo>/...` sparse registry URL。仅当 preflight 能证明 Cargo content model fingerprint 时，才接受 datastore 时代 Nexus H2/PostgreSQL 源端的 hosted 数据。
+- **Dart / Pub：** kkrepo 保留 `/repository/<repo>/...` hosted URL。Nexus 3.92.0 Pub hosted 数据仅在 preflight 能证明 Pub content model 时接受；proxy cache 还要求显式选择且 plan 为 `FULL`。
+- **Composer / PHP：** Nexus 原生 Composer 是 3.75.0+ Pro proxy-only 能力。迁移保留 `/repository/<repo>/...` Composer 2 proxy 语义；未显式选择 proxy 时只迁移配置，不迁移 cache。不会根据 Nexus 源端推断 kkrepo 自有的 Composer hosted/group 仓库。
+- **Swift Package Registry：** 元数据迁移识别 `swift-hosted`、`swift-proxy`、`swift-group`，保留 proxy TTL 和有序成员。Hosted archive、checksum 和默认/版本化 manifest 仅对 Nexus 3.92.x-3.94.x 且 datastore fingerprint 能证明预期 Swift content shape 的源恢复。可选 CMS signature、原始 release metadata 和 repository URL mapping 仅在源导出实际包含时保留；原生 Nexus 3.94 虽接受这些发布字段，但不会持久化或重新暴露，因此迁移不会伪造。版本超出范围、未知 profile 或 shape 漂移都会生成 `NEEDS_MANUAL_ACTION`；proxy cache 不会作为 hosted publication 重放。
+- **Terraform：** 元数据迁移识别原生 `terraform-hosted`、`terraform-proxy`、`terraform-group` recipe，并保留 `/repository/<repo>/v1/modules/...` 与 `/v1/providers/...` 服务基址。独立 proxy-cache writer 按 Nexus 公开 path 恢复可识别的 module/provider archive，不创建 hosted publication 或 signing state。已恢复的 module 可在本地完成 download discovery；Provider metadata 从已配置上游重建并校验 route、validator、checksum manifest 和 signature snapshot，再在该 metadata 有效期内固定缓存。
+- **Ansible Galaxy：** 元数据迁移识别 `ansiblegalaxy-hosted`、`ansiblegalaxy-proxy`、`ansiblegalaxy-group`，保留 remote、TTL、online、write policy、有序成员和 `/repository/<repo>/` Galaxy v3 base。Hosted collection 与显式选择的 proxy cache 仅对 Nexus 3.93.x-3.94.x 原生源恢复，且 datastore fingerprint 必须证明预期 collection identity 与完整性 shape。版本未知、fingerprint 不完整、checksum/manifest 缺失或 shape 漂移都会生成 `NEEDS_MANUAL_ACTION`。完整 collection archive 及其 `MANIFEST.json`/`FILES.json` 保留在 blob storage；关系数据库只存有上限的 metadata 投影、hash、引用、task 和 binding。
+- **Proxy credential：** 可恢复的源端 secret 会加密写入目标。如果 Swift 或 Ansible proxy secret 被遮蔽或缺失，迁移会把目标 proxy 创建为 offline，不写入占位 credential，需管理员显式补齐。
 
 ## 迁移流程概览
 
@@ -54,7 +54,7 @@ Ansible Galaxy 保持 Nexus `/repository/<repo>/` Galaxy v3 server base。元数
 1. 先迁移仓库元数据：扫描源 Nexus hosted 仓库中的 component、asset、路径、大小、content-type、时间戳和 blob 引用等信息，在 kkrepo 已选择的共享关系数据库中生成迁移任务。
 2. 再迁移 blob 真实数据：按迁移任务下载源 Nexus asset 内容，并写入 kkrepo 的目标 blob store。
 
-对于 source profile 已确认支持 Cargo content model 的 Nexus 3.77.x+ datastore 时代 H2/PostgreSQL 源端，Cargo / Rust hosted 仓库数据通过此流程迁移。对于 source profile 已确认 Pub content model 的 Nexus 3.92.0+ datastore 源端，Dart / Pub hosted 仓库数据也通过此流程迁移；Pub proxy cache 仅在显式选择且计划为 `FULL` 时迁移。Nexus 原生 Composer、Terraform 和 Ansible Galaxy proxy cache 同样要求管理员显式选择，并由 source profile 证明原生 content model。Swift hosted 仅在 Nexus 3.92.x-3.94.x 且 Swift datastore fingerprint 已验证时可规划为 `FULL`，并通过协议感知 writer 恢复 release；版本超出范围、fingerprint 不完整或 shape 漂移均生成 manual action。Ansible hosted collection 仅在 Nexus 3.93.x-3.94.x 且 Galaxy datastore fingerprint 已验证时可规划为 `FULL`，并复用正常发布所使用的 archive inspector 恢复。Terraform 只导入协议可识别的 archive asset；module download discovery 可直接使用已恢复 path，Provider route/checksum/signature 状态由目标上游重建。缺少产品能力、未知 schema、community plugin、不支持的 repository type 或低于 `FULL` 的计划都会 fail closed。旧 OrientDB 源端不会启用 datastore-only 内容导出。
+各格式的迁移资格、proxy cache 选择、fail-closed 行为和存储边界见[仓库数据范围与格式边界](#仓库数据范围与格式边界)中的列表。
 
 ### 第一次迁移
 
