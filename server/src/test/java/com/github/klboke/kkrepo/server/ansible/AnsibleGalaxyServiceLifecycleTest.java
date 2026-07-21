@@ -103,9 +103,13 @@ class AnsibleGalaxyServiceLifecycleTest {
     assertTrue(taskPath.matches(
         "api/v3/imports/collections/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
             + "[0-9a-f]{4}-[0-9a-f]{12}/"));
-    assertEquals(taskPath, response.headers().get("Location"));
     assertEquals(BASE + taskPath, URI.create(BASE).resolve(taskPath).toString());
     assertTrue(taskPath.contains(waiting.get().taskId()));
+    String location = response.headers().get("Location").toString();
+    assertEquals("../../imports/collections/" + waiting.get().taskId() + "/", location);
+    assertEquals(
+        BASE + taskPath,
+        URI.create(BASE + "api/v3/artifacts/collections/").resolve(location).toString());
     verify(registry).finishTask(
         anyString(), anyString(), anyLong(), eq(AnsibleGalaxyRegistryDao.TASK_COMPLETED),
         any(), eq(null), eq(null), eq("acme"), eq("tools"), eq("1.2.3"),

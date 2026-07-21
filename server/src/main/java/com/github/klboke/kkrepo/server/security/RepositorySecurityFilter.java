@@ -210,7 +210,9 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
 
   private List<PermissionAction> actionsForDecision(
       RepositoryRecord repository, RepositoryRequest target) {
-    if (repository.format() == RepositoryFormat.SWIFT && target.componentUploadRoute()) {
+    if ((repository.format() == RepositoryFormat.SWIFT
+        || repository.format() == RepositoryFormat.ANSIBLEGALAXY)
+        && target.componentUploadRoute()) {
       return List.of(PermissionAction.ADD);
     }
     if (repository.format() != RepositoryFormat.TERRAFORM

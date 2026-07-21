@@ -161,7 +161,7 @@ public class AnsibleGalaxyService {
       processNewTask(runtime, task, inspected, actor, ip);
       String taskPath = "api/v3/imports/collections/" + taskId + "/";
       return jsonResponse(Map.of("task", taskPath), 202, headOnly, now)
-          .withHeader("Location", taskPath);
+          .withHeader("Location", "../../imports/collections/" + taskId + "/");
     } finally {
       AnsibleCollectionArchiveInspector.delete(inspected.file());
     }

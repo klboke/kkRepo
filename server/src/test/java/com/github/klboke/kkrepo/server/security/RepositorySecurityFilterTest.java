@@ -1094,8 +1094,16 @@ class RepositorySecurityFilterTest {
 
   @Test
   void restSwiftComponentUploadRequiresAddWithoutEditFallback() throws Exception {
-    assertSwiftComponentUploadRequiresAdd(
-        request("POST", "/service/rest/v1/components", Map.of("repository", "swift-hosted")));
+    assertComponentUploadRequiresAdd(
+        request("POST", "/service/rest/v1/components", Map.of("repository", "swift-hosted")),
+        "swift-hosted", RepositoryFormat.SWIFT);
+  }
+
+  @Test
+  void restAnsibleGalaxyComponentUploadRequiresAddWithoutEditFallback() throws Exception {
+    assertComponentUploadRequiresAdd(
+        request("POST", "/service/rest/v1/components", Map.of("repository", "ansible-hosted")),
+        "ansible-hosted", RepositoryFormat.ANSIBLEGALAXY);
   }
 
   @Test
@@ -1146,8 +1154,16 @@ class RepositorySecurityFilterTest {
 
   @Test
   void internalUiSwiftComponentUploadRequiresAddWithoutEditFallback() throws Exception {
-    assertSwiftComponentUploadRequiresAdd(
-        request("POST", "/service/rest/internal/ui/upload/swift-hosted"));
+    assertComponentUploadRequiresAdd(
+        request("POST", "/service/rest/internal/ui/upload/swift-hosted"),
+        "swift-hosted", RepositoryFormat.SWIFT);
+  }
+
+  @Test
+  void internalUiAnsibleGalaxyComponentUploadRequiresAddWithoutEditFallback() throws Exception {
+    assertComponentUploadRequiresAdd(
+        request("POST", "/service/rest/internal/ui/upload/ansible-hosted"),
+        "ansible-hosted", RepositoryFormat.ANSIBLEGALAXY);
   }
 
   @Test
@@ -1420,8 +1436,8 @@ class RepositorySecurityFilterTest {
     assertEquals(HttpServletResponse.SC_FORBIDDEN, response.status);
   }
 
-  private static void assertSwiftComponentUploadRequiresAdd(HttpServletRequest request)
-      throws Exception {
+  private static void assertComponentUploadRequiresAdd(
+      HttpServletRequest request, String repositoryName, RepositoryFormat format) throws Exception {
     StubAuthenticationService authentication =
         new StubAuthenticationService(Optional.of(subject("alice")));
     RecordingDecisionService decisions = new RecordingDecisionService(
@@ -1438,7 +1454,7 @@ class RepositorySecurityFilterTest {
         authentication,
         decisions,
         new FakeRepositoryDao(repository(
-            "swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED)),
+            repositoryName, format, RepositoryType.HOSTED)),
         false,
         true);
     MockHttpServletResponse response = new MockHttpServletResponse();
@@ -1449,7 +1465,7 @@ class RepositorySecurityFilterTest {
     assertEquals(0, chain.calls);
     assertEquals(1, decisions.decisions);
     assertEquals(PermissionAction.ADD, decisions.permission.action());
-    assertEquals("swift-hosted", decisions.permission.repository());
+    assertEquals(repositoryName, decisions.permission.repository());
     assertEquals(HttpServletResponse.SC_FORBIDDEN, response.getStatus());
   }
 
