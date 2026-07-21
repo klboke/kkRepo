@@ -324,6 +324,72 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
+  void ansibleGalaxyImportTaskPollingAcceptsAddOnlyPermission() throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("ci-publisher")));
+    RecordingDecisionService decisions = new RecordingDecisionService(
+        AccessDecision.deny("missing read")) {
+      @Override
+      public AccessDecision decide(PermissionSubject subject, RepositoryPermission permission) {
+        super.decide(subject, permission);
+        return permission.action() == PermissionAction.ADD
+            ? AccessDecision.allow()
+            : AccessDecision.deny("missing read");
+      }
+    };
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "ansible-hosted", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.HOSTED)),
+        false);
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/repository/ansible-hosted/api/v3/imports/collections/"
+            + "0dfd1f0d-fa14-4caa-b928-be3ec7c8650e/"),
+        new MockHttpServletResponse(),
+        chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(1, decisions.decisions);
+    assertEquals(PermissionAction.ADD, decisions.permission.action());
+  }
+
+  @Test
+  void ansibleGalaxyImportTaskPollingFallsBackToReadPermission() throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("reader")));
+    RecordingDecisionService decisions = new RecordingDecisionService(
+        AccessDecision.deny("missing add")) {
+      @Override
+      public AccessDecision decide(PermissionSubject subject, RepositoryPermission permission) {
+        super.decide(subject, permission);
+        return permission.action() == PermissionAction.READ
+            ? AccessDecision.allow()
+            : AccessDecision.deny("missing add");
+      }
+    };
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "ansible-hosted", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.HOSTED)),
+        false);
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/repository/ansible-hosted/api/v3/imports/collections/"
+            + "0dfd1f0d-fa14-4caa-b928-be3ec7c8650e/"),
+        new MockHttpServletResponse(),
+        chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(2, decisions.decisions);
+    assertEquals(PermissionAction.READ, decisions.permission.action());
+  }
+
+  @Test
   void ansibleGalaxyReadOnlyRepositoryPublishReachesProtocolServiceFor405() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
     RecordingDecisionService decisions =

@@ -10,6 +10,8 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPath;
+import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
 import com.github.klboke.kkrepo.protocol.pub.PubPath;
 import com.github.klboke.kkrepo.protocol.pub.PubPathParser;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPath;
@@ -41,6 +43,8 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       RepositorySecurityFilter.class.getName() + ".NORMALIZED_REPOSITORY_PATH";
   public static final String TERRAFORM_URL_TOKEN_SEGMENT_ATTRIBUTE =
       RepositorySecurityFilter.class.getName() + ".TERRAFORM_URL_TOKEN_SEGMENT";
+  private static final AnsibleGalaxyPathParser ANSIBLE_GALAXY_PATH_PARSER =
+      new AnsibleGalaxyPathParser();
   private static final PubPathParser PUB_PATH_PARSER = new PubPathParser();
   private static final TerraformPathParser TERRAFORM_PATH_PARSER = new TerraformPathParser();
   private final SecurityAuthenticationService authenticationService;
@@ -215,6 +219,10 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
         && target.componentUploadRoute()) {
       return List.of(PermissionAction.ADD);
     }
+    if (repository.format() == RepositoryFormat.ANSIBLEGALAXY
+        && isAnsibleImportTaskRoute(target.method(), target.path())) {
+      return List.of(PermissionAction.ADD, PermissionAction.READ);
+    }
     if (repository.format() != RepositoryFormat.TERRAFORM
         || !"PUT".equalsIgnoreCase(target.method())) {
       return target.actions(repository.format());
@@ -366,6 +374,12 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     }
     return "POST".equalsIgnoreCase(method)
         && parsed.kind() == PubPath.Kind.PUBLISH_UPLOAD;
+  }
+
+  private static boolean isAnsibleImportTaskRoute(String method, String path) {
+    return "GET".equalsIgnoreCase(method)
+        && ANSIBLE_GALAXY_PATH_PARSER.parse(path).kind()
+            == AnsibleGalaxyPath.Kind.IMPORT_TASK;
   }
 
   private static boolean isInvalidPubPublishRoute(RepositoryRecord repository, RepositoryRequest target) {
