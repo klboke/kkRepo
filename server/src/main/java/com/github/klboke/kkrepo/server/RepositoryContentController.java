@@ -613,15 +613,15 @@ public class RepositoryContentController {
   public ResponseEntity<?> post(@PathVariable("name") String name, HttpServletRequest request) {
     RepositoryRuntime runtime = resolveRuntime(name);
     if (runtime.format() == RepositoryFormat.ANSIBLEGALAXY) {
+      if (!runtime.isHosted()) {
+        throw new AnsibleGalaxyExceptions.NotFound(
+            "Ansible Galaxy resource was not found");
+      }
       if (!isMultipart(request.getContentType())) {
         throw new AnsibleGalaxyExceptions.UnsupportedMediaType(
             "Ansible collection publish requires multipart/form-data");
       }
       String raw = extractRepositoryPath(name, request, true);
-      if (!runtime.isHosted()) {
-        throw new AnsibleGalaxyExceptions.NotFound(
-            "Ansible Galaxy resource was not found");
-      }
       ansible().validatePublishRequest(runtime, raw, request.getQueryString());
       try (AnsibleGalaxyMultipartReader.Upload upload = ansibleMultipart().read(request);
            InputStream body = upload.openStream()) {

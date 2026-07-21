@@ -138,21 +138,24 @@ class RepositoryContentControllerAnsibleTest {
   @Test
   void rejectsNonHostedPublicationBeforeReadingTheMultipartBody() throws Exception {
     for (RepositoryType type : List.of(RepositoryType.PROXY, RepositoryType.GROUP)) {
-      RepositoryRuntime runtime = nonHosted(type);
-      AnsibleGalaxyService ansible = mock(AnsibleGalaxyService.class);
-      AnsibleGalaxyMultipartReader reader = mock(AnsibleGalaxyMultipartReader.class);
-      RepositoryContentController controller = controller(runtimes(runtime), ansible, reader);
-      MockHttpServletRequest request = request(
-          "POST", "/repository/ansible/api/v3/artifacts/collections/");
-      request.setContentType("multipart/form-data; boundary=x");
+      for (String contentType : List.of(
+          "multipart/form-data; boundary=x", "application/gzip")) {
+        RepositoryRuntime runtime = nonHosted(type);
+        AnsibleGalaxyService ansible = mock(AnsibleGalaxyService.class);
+        AnsibleGalaxyMultipartReader reader = mock(AnsibleGalaxyMultipartReader.class);
+        RepositoryContentController controller = controller(runtimes(runtime), ansible, reader);
+        MockHttpServletRequest request = request(
+            "POST", "/repository/ansible/api/v3/artifacts/collections/");
+        request.setContentType(contentType);
 
-      assertThrows(AnsibleGalaxyExceptions.NotFound.class,
-          () -> controller.post("ansible", request));
+        assertThrows(AnsibleGalaxyExceptions.NotFound.class,
+            () -> controller.post("ansible", request));
 
-      verify(reader, never()).read(any());
-      verify(ansible, never()).validatePublishRequest(any(), any(), any());
-      verify(ansible, never()).publish(
-          any(), any(), any(), any(), any(), any(), any(), any(), eq(false));
+        verify(reader, never()).read(any());
+        verify(ansible, never()).validatePublishRequest(any(), any(), any());
+        verify(ansible, never()).publish(
+            any(), any(), any(), any(), any(), any(), any(), any(), eq(false));
+      }
     }
   }
 

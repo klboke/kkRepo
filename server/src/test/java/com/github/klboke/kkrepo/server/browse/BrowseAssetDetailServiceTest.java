@@ -94,6 +94,74 @@ class BrowseAssetDetailServiceTest {
   }
 
   @Test
+  void ansibleCollectionDetailRejectsAPathWhoseCoordinatesDoNotMatchTheArtifact() {
+    RepositoryRecord repository = repository(
+        1L, "ansible-hosted", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.HOSTED);
+    String storagePath =
+        "api/v3/plugin/ansible/content/published/collections/artifacts/acme-tools-1.2.3.tar.gz";
+    AssetRecord archive = new AssetRecord(
+        10L, repository.id(), 20L, 100L, RepositoryFormat.ANSIBLEGALAXY,
+        storagePath, PersistenceHashes.pathHash(storagePath), "acme-tools-1.2.3.tar.gz",
+        "ansible-collection", "application/octet-stream", 512L, null,
+        Instant.parse("2026-07-21T00:00:00Z"), Map.of());
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(repository.id(), storagePath), archive), Map.of());
+    AnsibleGalaxyRegistryDao registry = mock(AnsibleGalaxyRegistryDao.class);
+    when(registry.findVersionByArtifactFilename(repository.id(), archive.name()))
+        .thenReturn(Optional.of(ansibleVersion(repository.id())));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(), assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+    service.setAnsibleGalaxyRegistryDao(registry);
+
+    ResponseStatusException error = assertThrows(ResponseStatusException.class,
+        () -> service.detail(
+            repository, "allowed/prefix/9.9.9/acme-tools-1.2.3.tar.gz", null));
+
+    assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode());
+    assertTrue(error.getReason().contains("does not match"));
+    verify(registry, never()).listSignatures(30L);
+    assertEquals(List.of(key(repository.id(), storagePath)), assets.pathLookups);
+  }
+
+  @Test
+  void ansibleCollectionDetailFailsClosedWhenTheRegistryIdentityIsUnavailable() {
+    RepositoryRecord repository = repository(
+        1L, "ansible-hosted", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.HOSTED);
+    String publicPath = "acme/tools/1.2.3/acme-tools-1.2.3.tar.gz";
+    String storagePath =
+        "api/v3/plugin/ansible/content/published/collections/artifacts/acme-tools-1.2.3.tar.gz";
+    AssetRecord archive = new AssetRecord(
+        10L, repository.id(), 20L, 100L, RepositoryFormat.ANSIBLEGALAXY,
+        storagePath, PersistenceHashes.pathHash(storagePath), "acme-tools-1.2.3.tar.gz",
+        "ansible-collection", "application/octet-stream", 512L, null,
+        Instant.parse("2026-07-21T00:00:00Z"), Map.of());
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(repository.id(), storagePath), archive), Map.of());
+    BrowseAssetDetailService missingRegistry = new BrowseAssetDetailService(
+        new StubRepositoryDao(), assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+
+    ResponseStatusException unavailable = assertThrows(ResponseStatusException.class,
+        () -> missingRegistry.detail(repository, publicPath, null));
+
+    assertEquals(HttpStatus.NOT_FOUND, unavailable.getStatusCode());
+    assertTrue(unavailable.getReason().contains("identity not found"));
+
+    AnsibleGalaxyRegistryDao emptyRegistry = mock(AnsibleGalaxyRegistryDao.class);
+    BrowseAssetDetailService missingIdentity = new BrowseAssetDetailService(
+        new StubRepositoryDao(), assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+    missingIdentity.setAnsibleGalaxyRegistryDao(emptyRegistry);
+
+    ResponseStatusException absent = assertThrows(ResponseStatusException.class,
+        () -> missingIdentity.detail(repository, publicPath, null));
+
+    assertEquals(HttpStatus.NOT_FOUND, absent.getStatusCode());
+    assertTrue(absent.getReason().contains("identity not found"));
+  }
+
+  @Test
   void ansibleGroupDetailTraversesNestedMembersAndKeepsSourceIdentity() {
     RepositoryRecord group = repository(
         10L, "ansible-group", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.GROUP);

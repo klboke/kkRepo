@@ -160,6 +160,8 @@ public class BrowseAssetDetailService {
     ResolvedAsset resolved = resolveSourceAsset(visibleRepository, sourceRepositoryName, storagePath);
     RepositoryRecord source = resolved.source();
     AssetRecord asset = resolved.asset();
+    AnsibleGalaxyRegistryDao.CollectionVersion ansibleVersion =
+        requireMatchingAnsiblePublicPath(visibleRepository, publicPath, source, asset);
     AssetBlobRecord blob = asset.assetBlobId() == null
         ? null
         : assetDao.findBlobById(asset.assetBlobId()).orElse(null);
@@ -183,7 +185,7 @@ public class BrowseAssetDetailService {
         ? swiftAttributes(source, asset)
         : Map.of();
     Map<String, Object> ansible = source.format() == RepositoryFormat.ANSIBLEGALAXY
-        ? ansibleAttributes(source, asset)
+        ? ansibleAttributes(source, asset, ansibleVersion)
         : Map.of();
     String displayName = storagePath.equals(publicPath)
         ? asset.name()
@@ -216,32 +218,56 @@ public class BrowseAssetDetailService {
   }
 
   private Map<String, Object> ansibleAttributes(
-      RepositoryRecord source, AssetRecord asset) {
+      RepositoryRecord source,
+      AssetRecord asset,
+      AnsibleGalaxyRegistryDao.CollectionVersion version) {
     LinkedHashMap<String, Object> ansible = new LinkedHashMap<>();
     putNonBlank(ansible, "asset_kind", asset.kind());
     putNonBlank(ansible, "source_repository", source.name());
-    if (ansibleDao == null) return Map.copyOf(ansible);
-    ansibleDao.findVersionByArtifactFilename(source.id(), asset.name()).ifPresent(version -> {
-      putNonBlank(ansible, "namespace", version.namespaceDisplay());
-      putNonBlank(ansible, "name", version.nameDisplay());
-      putNonBlank(ansible, "version", version.versionOriginal());
-      putNonBlank(ansible, "artifact_filename", version.artifactFilename());
-      putNonBlank(ansible, "artifact_sha256", version.artifactSha256());
-      ansible.put("artifact_size", version.artifactSize());
-      putNonBlank(ansible, "requires_ansible", version.requiresAnsible());
-      putNonBlank(ansible, "source_kind", version.sourceKind());
-      if (version.dependencies() != null && !version.dependencies().isEmpty()) {
-        ansible.put("dependencies", version.dependencies());
-      }
-      for (String key : List.of("authors", "tags", "license", "description")) {
-        Object value = version.metadata().get(key);
-        if (value != null) ansible.put(key, value);
-      }
-      int signatures = ansibleDao.listSignatures(version.id()).size();
-      ansible.put("signature_count", signatures);
-      ansible.put("signature_status", signatures == 0 ? "unsigned" : "signed");
-    });
+    putNonBlank(ansible, "namespace", version.namespaceDisplay());
+    putNonBlank(ansible, "name", version.nameDisplay());
+    putNonBlank(ansible, "version", version.versionOriginal());
+    putNonBlank(ansible, "artifact_filename", version.artifactFilename());
+    putNonBlank(ansible, "artifact_sha256", version.artifactSha256());
+    ansible.put("artifact_size", version.artifactSize());
+    putNonBlank(ansible, "requires_ansible", version.requiresAnsible());
+    putNonBlank(ansible, "source_kind", version.sourceKind());
+    if (version.dependencies() != null && !version.dependencies().isEmpty()) {
+      ansible.put("dependencies", version.dependencies());
+    }
+    for (String key : List.of("authors", "tags", "license", "description")) {
+      Object value = version.metadata().get(key);
+      if (value != null) ansible.put(key, value);
+    }
+    int signatures = ansibleDao.listSignatures(version.id()).size();
+    ansible.put("signature_count", signatures);
+    ansible.put("signature_status", signatures == 0 ? "unsigned" : "signed");
     return Map.copyOf(ansible);
+  }
+
+  private AnsibleGalaxyRegistryDao.CollectionVersion requireMatchingAnsiblePublicPath(
+      RepositoryRecord visibleRepository,
+      String publicPath,
+      RepositoryRecord source,
+      AssetRecord asset) {
+    if (visibleRepository.format() != RepositoryFormat.ANSIBLEGALAXY) {
+      return null;
+    }
+    if (ansibleDao == null) {
+      throw new ResponseStatusException(
+          HttpStatus.NOT_FOUND, "Ansible collection identity not found");
+    }
+    AnsibleGalaxyRegistryDao.CollectionVersion version = ansibleDao
+        .findVersionByArtifactFilename(source.id(), asset.name())
+        .orElseThrow(() -> new ResponseStatusException(
+            HttpStatus.NOT_FOUND, "Ansible collection identity not found"));
+    String expectedPath = version.namespaceDisplay() + "/" + version.nameDisplay() + "/"
+        + version.versionOriginal() + "/" + version.artifactFilename();
+    if (!expectedPath.equals(publicPath)) {
+      throw new ResponseStatusException(
+          HttpStatus.NOT_FOUND, "Ansible collection path does not match artifact identity");
+    }
+    return version;
   }
 
   private Map<String, Object> swiftAttributes(RepositoryRecord source, AssetRecord asset) {
