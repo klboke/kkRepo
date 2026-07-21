@@ -530,6 +530,7 @@ class AnsibleGalaxyServiceLifecycleTest {
         .thenReturn(Optional.empty());
     when(registry.findVersionByArtifactFilename(member.id(), FILENAME))
         .thenReturn(Optional.of(version));
+    when(registry.bindGroupSourceIfCurrent(any())).thenReturn(true);
     when(assets.serve(member.id(), version.artifactAssetId(), false)).thenReturn(MavenResponse.ok(
         new ByteArrayInputStream(new byte[] {1}), 1L,
         "application/octet-stream", SHA256, Instant.EPOCH));

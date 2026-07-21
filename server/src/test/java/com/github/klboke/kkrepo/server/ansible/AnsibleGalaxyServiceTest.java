@@ -127,6 +127,57 @@ class AnsibleGalaxyServiceTest {
   }
 
   @Test
+  void groupMetadataFailsClosedWhenTheFencedBindingLosesARevisionRace() {
+    RepositoryRuntime member = runtime(
+        50L, "ansible-hosted", RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime group = runtime(
+        51L, "ansible-group", RepositoryType.GROUP, null, List.of(member));
+    AnsibleGalaxyRegistryDao.CollectionVersion version = version(member.id(), 400L, 60L);
+    when(registry.currentRepositoryRevision(group.id())).thenReturn(7L);
+    when(registry.currentRepositoryRevision(member.id())).thenReturn(11L);
+    when(registry.findGroupBinding(group.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.empty());
+    when(registry.findVersion(member.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.of(version));
+    when(registry.bindGroupSourceIfCurrent(any())).thenReturn(false);
+
+    AnsibleGalaxyExceptions.ServiceUnavailable failure = assertThrows(
+        AnsibleGalaxyExceptions.ServiceUnavailable.class,
+        () -> service.get(
+            group, "api/v3/collections/acme/tools/versions/1.2.3/",
+            null, BASE, false, "alice"));
+
+    assertTrue(failure.getMessage().contains("retry"));
+  }
+
+  @Test
+  void groupArtifactFailsClosedWhenTheFencedBindingLosesARevisionRace() {
+    RepositoryRuntime member = runtime(
+        52L, "ansible-hosted", RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime group = runtime(
+        53L, "ansible-group", RepositoryType.GROUP, null, List.of(member));
+    AnsibleGalaxyRegistryDao.CollectionVersion version = version(member.id(), 401L, 61L);
+    when(registry.currentRepositoryRevision(group.id())).thenReturn(8L);
+    when(registry.currentRepositoryRevision(member.id())).thenReturn(12L);
+    when(registry.findGroupBindingByArtifactFilename(
+        group.id(), version.artifactFilename())).thenReturn(Optional.empty());
+    when(registry.findVersionByArtifactFilename(member.id(), version.artifactFilename()))
+        .thenReturn(Optional.of(version));
+    when(registry.bindGroupSourceIfCurrent(any())).thenReturn(false);
+
+    AnsibleGalaxyExceptions.ServiceUnavailable failure = assertThrows(
+        AnsibleGalaxyExceptions.ServiceUnavailable.class,
+        () -> service.get(
+            group,
+            "api/v3/plugin/ansible/content/published/collections/artifacts/"
+                + version.artifactFilename(),
+            null, BASE, false, "alice"));
+
+    assertTrue(failure.getMessage().contains("retry"));
+    verify(assets, never()).serve(member.id(), version.artifactAssetId(), false);
+  }
+
+  @Test
   void groupSkipsOfflineMembersForListsDetailsBindingsAndArtifacts() throws Exception {
     RepositoryRuntime offline = runtime(
         20L, "ansible-offline", RepositoryType.HOSTED, null, List.of(), false);

@@ -452,10 +452,12 @@ public class AnsibleGalaxyService {
           ResolvedVersionMetadata candidate =
               resolveExact(member, namespace, name, version, visiting);
           long memberRevision = registry.currentRepositoryRevision(member.id());
-          registry.bindGroupSourceIfCurrent(new AnsibleGalaxyRegistryDao.GroupBinding(
-              runtime.id(), namespace, name, version, member.id(),
-              candidate.materializedVersionId(), candidate.artifactFilename(), memberRevision,
-              groupRevision, candidate.artifactSha256(), Instant.now(), Instant.now()));
+          boolean bound = registry.bindGroupSourceIfCurrent(
+              new AnsibleGalaxyRegistryDao.GroupBinding(
+                  runtime.id(), namespace, name, version, member.id(),
+                  candidate.materializedVersionId(), candidate.artifactFilename(), memberRevision,
+                  groupRevision, candidate.artifactSha256(), Instant.now(), Instant.now()));
+          requireCurrentGroupBinding(bound);
           return registry.findGroupBinding(runtime.id(), namespace, name, version)
               .flatMap(binding -> currentGroupBindingMetadata(
                   runtime, binding, groupRevision, visiting))
@@ -509,12 +511,14 @@ public class AnsibleGalaxyService {
         try {
           AnsibleGalaxyRegistryDao.CollectionVersion candidate =
               resolveArtifact(member, filename, visiting);
-          registry.bindGroupSourceIfCurrent(new AnsibleGalaxyRegistryDao.GroupBinding(
-              runtime.id(), candidate.namespaceLc(), candidate.nameLc(),
-              candidate.versionNormalized(), member.id(), candidate.id(),
-              candidate.artifactFilename(), registry.currentRepositoryRevision(member.id()),
-              groupRevision,
-              candidate.artifactSha256(), Instant.now(), Instant.now()));
+          boolean bound = registry.bindGroupSourceIfCurrent(
+              new AnsibleGalaxyRegistryDao.GroupBinding(
+                  runtime.id(), candidate.namespaceLc(), candidate.nameLc(),
+                  candidate.versionNormalized(), member.id(), candidate.id(),
+                  candidate.artifactFilename(), registry.currentRepositoryRevision(member.id()),
+                  groupRevision,
+                  candidate.artifactSha256(), Instant.now(), Instant.now()));
+          requireCurrentGroupBinding(bound);
           return registry.findGroupBinding(
                   runtime.id(), candidate.namespaceLc(), candidate.nameLc(),
                   candidate.versionNormalized())
@@ -1491,11 +1495,19 @@ public class AnsibleGalaxyService {
           "Bound Ansible group artifact no longer matches its metadata");
     }
     long memberRevision = registry.currentRepositoryRevision(member.get().id());
-    registry.bindGroupSourceIfCurrent(new AnsibleGalaxyRegistryDao.GroupBinding(
+    boolean bound = registry.bindGroupSourceIfCurrent(new AnsibleGalaxyRegistryDao.GroupBinding(
         group.id(), binding.namespaceLc(), binding.nameLc(), binding.versionNormalized(),
         member.get().id(), candidate.id(), candidate.artifactFilename(), memberRevision,
         groupRevision, candidate.artifactSha256(), binding.boundAt(), Instant.now()));
+    requireCurrentGroupBinding(bound);
     return Optional.of(candidate);
+  }
+
+  private static void requireCurrentGroupBinding(boolean bound) {
+    if (!bound) {
+      throw new AnsibleGalaxyExceptions.ServiceUnavailable(
+          "Ansible group configuration changed while resolving the collection; retry the request");
+    }
   }
 
   private Optional<RepositoryRuntime> currentGroupBindingMember(
