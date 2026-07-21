@@ -152,12 +152,18 @@ public class AnsibleGalaxyService {
       AssetRecord staged = assets.stageCollection(
           runtime, taskId, inspected.filename(), inspected.file(), actor, ip);
       Instant now = Instant.now();
-      AnsibleGalaxyRegistryDao.ImportTask task = registry.createTask(
-          new AnsibleGalaxyRegistryDao.ImportTask(
-              taskId, runtime.id(), actor, TASK_WAITING, List.of(), null, null,
-              inspected.namespace(), inspected.name(), inspected.version(), inspected.filename(),
-              expectedSha256.toLowerCase(Locale.ROOT), inspected.sha256(), staged.id(), 0,
-              null, null, 0L, now, null, null, now));
+      AnsibleGalaxyRegistryDao.ImportTask task;
+      try {
+        task = registry.createTask(
+            new AnsibleGalaxyRegistryDao.ImportTask(
+                taskId, runtime.id(), actor, TASK_WAITING, List.of(), null, null,
+                inspected.namespace(), inspected.name(), inspected.version(), inspected.filename(),
+                expectedSha256.toLowerCase(Locale.ROOT), inspected.sha256(), staged.id(), 0,
+                null, null, 0L, now, null, null, now));
+      } catch (RuntimeException e) {
+        deleteStaging(runtime, taskId, inspected.filename());
+        throw e;
+      }
       processNewTask(runtime, task, inspected, actor, ip);
       String taskPath = "api/v3/imports/collections/" + taskId + "/";
       return jsonResponse(Map.of("task", taskPath), 202, headOnly, now)
@@ -934,9 +940,14 @@ public class AnsibleGalaxyService {
 
   private void deleteStaging(
       RepositoryRuntime runtime, AnsibleGalaxyRegistryDao.ImportTask task) {
-    if (task.artifactFilename() == null) return;
+    deleteStaging(runtime, task.taskId(), task.artifactFilename());
+  }
+
+  private void deleteStaging(
+      RepositoryRuntime runtime, String taskId, String artifactFilename) {
+    if (artifactFilename == null) return;
     try {
-      assets.delete(runtime, ".ansible/staging/" + task.taskId() + "/" + task.artifactFilename());
+      assets.delete(runtime, ".ansible/staging/" + taskId + "/" + artifactFilename);
     } catch (RuntimeException ignored) {
       // A periodic blob reconcile can reclaim an already-unlinked or concurrently cleaned staging row.
     }

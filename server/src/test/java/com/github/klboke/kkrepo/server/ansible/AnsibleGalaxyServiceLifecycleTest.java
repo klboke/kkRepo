@@ -126,6 +126,32 @@ class AnsibleGalaxyServiceLifecycleTest {
   }
 
   @Test
+  void taskCreationFailureDeletesTheUnreferencedStagingAsset() throws Exception {
+    RepositoryRuntime hosted = runtime(2L, RepositoryType.HOSTED, null, List.of());
+    AnsibleCollectionArchiveInspector.InspectedCollection inspected = inspected("task-failure");
+    AssetRecord staged = asset(
+        42L, hosted.id(), null, 52L, ".ansible/staging/task/" + FILENAME);
+    when(inspector.inspect(any())).thenReturn(inspected);
+    when(assets.stageCollection(
+        eq(hosted), anyString(), eq(FILENAME), eq(inspected.file()), eq("alice"), eq(null)))
+        .thenReturn(staged);
+    when(registry.createTask(any())).thenThrow(new IllegalStateException("database unavailable"));
+
+    assertThrows(IllegalStateException.class, () -> service.publish(
+        hosted, "api/v3/artifacts/collections/", null,
+        new ByteArrayInputStream(new byte[] {1}), FILENAME, SHA256,
+        "alice", null, false));
+
+    ArgumentCaptor<AnsibleGalaxyRegistryDao.ImportTask> task =
+        ArgumentCaptor.forClass(AnsibleGalaxyRegistryDao.ImportTask.class);
+    verify(registry).createTask(task.capture());
+    verify(assets).delete(
+        hosted, ".ansible/staging/" + task.getValue().taskId() + "/" + FILENAME);
+    verify(registry, never()).claimTask(anyString(), anyString(), any(), any());
+    assertFalse(Files.exists(inspected.file()));
+  }
+
+  @Test
   void concurrentDuplicatePublishMarksTheLosingImportTaskFailed() throws Exception {
     RepositoryRuntime hosted = runtime(2L, RepositoryType.HOSTED, null, List.of());
     AnsibleCollectionArchiveInspector.InspectedCollection inspected = inspected("loser");

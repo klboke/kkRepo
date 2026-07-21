@@ -204,6 +204,7 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
   }
 
   @Override
+  @Transactional
   public ImportTask createTask(ImportTask task) {
     Instant createdAt = task.createdAt() == null ? Instant.now() : task.createdAt();
     Instant updatedAt = task.updatedAt() == null ? createdAt : task.updatedAt();
