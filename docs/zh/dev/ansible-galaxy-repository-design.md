@@ -295,7 +295,7 @@ Nexus raw `PUT` 可以同步完成或返回异步结果，但必须调用同一 
 - task、lease、fencing token、attempt 和结果以数据库为真相；本地 executor queue 只是唤醒手段。
 - worker 在 lease 过期后可被另一副本接管；旧 worker 的 fencing token 不能提交 version 或覆盖新 task 结果。
 - 同一 coordinate 并发 publish 最多一个成功，其余返回/终止为 conflict；不得产生两个 artifact blob 引用。
-- staging blob cleanup 按数据库引用和保留期扫描，不能仅在原请求 `finally` 中删除。
+- staging blob cleanup 已按共享 asset 行、task 状态和保留期实现：所有副本用 `FOR UPDATE SKIP LOCKED` 有界领取 `.ansible/staging/`，保留 `WAITING`/`RUNNING` task，只清理 task 缺失或已终态的行；不能仅依赖原请求 `finally`。
 - task 查询在重启、滚动升级和副本切换后继续可用；过期 task 按保留策略清理，但已发布 version 不依赖 task 行读取。
 
 ## Proxy 缓存流程

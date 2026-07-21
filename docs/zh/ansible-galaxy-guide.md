@@ -126,6 +126,8 @@ Proxy collection/version metadata 请求只持久化有界查询投影和 artifa
 
 Import task、proxy state、source binding、lease、fencing token 和 repository revision 共享存储在 MySQL/PostgreSQL，artifact/staging bytes 共享存储在 OSS/S3。因此 publish 或 proxy miss 可由另一副本恢复/接管；进程内 cache 和 executor queue 仅是可重建优化。
 
+每个副本还会运行有界 staging cleanup。默认通过 `FOR UPDATE SKIP LOCKED` 领取超过 24 小时的 `.ansible/staging/` asset 行，保留仍属于 `WAITING`/`RUNNING` import task 的内容，只解除 task 缺失或已经终态的引用。只有最后一个 asset 引用消失后才把 blob 交给全局 GC，因此进程在 staging、task 创建、task 完成或请求清理之间崩溃都不会永久泄漏 collection bytes。运维可通过 `KKREPO_ANSIBLE_STAGING_CLEANUP_*` 环境变量调整 interval、initial delay、batch size 和 grace period；grace period 的安全下限为 5 分钟。
+
 ## Nexus 迁移
 
 Repository metadata migration 可识别 Nexus 3.93+ `ansiblegalaxy-hosted`、`ansiblegalaxy-proxy`、`ansiblegalaxy-group`。仅当 Nexus 3.93.x-3.94.x source profile 能证明预期原生 datastore shape 时，才导入 hosted collection data。版本未知、collection identity 不完整、完整性信息缺失或 shape 漂移时生成 manual action，不做猜测式导入。

@@ -126,6 +126,8 @@ Proxy collection and version metadata requests persist only the bounded query pr
 
 Import tasks, proxy state, source bindings, leases, fencing tokens, and repository revisions are shared in MySQL/PostgreSQL. Artifact and staging bytes are shared through OSS/S3. A publish or proxy miss can therefore be resumed or taken over by another replica; process-local caches and executor queues are rebuildable optimizations only.
 
+Every replica also runs a bounded staging cleanup. By default it claims `.ansible/staging/` asset rows older than 24 hours with `FOR UPDATE SKIP LOCKED`, preserves rows owned by waiting/running import tasks, and unlinks rows whose task is missing or terminal. The global blob GC receives the blob only after its last asset reference is gone, so a crash between staging, task creation, task completion, and request cleanup cannot permanently leak collection bytes. Operators can tune the interval, initial delay, batch size, and grace period through the `KKREPO_ANSIBLE_STAGING_CLEANUP_*` environment variables; the grace period has a five-minute safety floor.
+
 ## Nexus Migration
 
 Repository metadata migration recognizes Nexus 3.93+ `ansiblegalaxy-hosted`, `ansiblegalaxy-proxy`, and `ansiblegalaxy-group` definitions. Hosted collection data is imported only when a Nexus 3.93.x-3.94.x source profile proves the expected native datastore shape. Unknown versions, incomplete collection identity, missing integrity data, and shape drift produce a manual action rather than a guessed import.
