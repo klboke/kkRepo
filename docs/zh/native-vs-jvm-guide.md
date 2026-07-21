@@ -3,7 +3,7 @@
 kkRepo 支持两种运行时打包方式：
 
 - **JVM**：默认且推荐的生产模式，在 Java 25 上运行 Spring Boot 可执行 jar。
-- **Native**：显式开启的实验性模式，先执行 Spring AOT，再通过 GraalVM Native Image 编译 kkRepo。
+- **Native**：显式开启的运行模式，先执行 Spring AOT，再通过 GraalVM Native Image 编译 kkRepo。
 
 Native 打包不会被隐式开启。Docker 镜像和压缩发行包只有显式传入 `--native` 才会构建 Native 版本；默认始终构建 JVM 版本。
 
@@ -60,16 +60,16 @@ Health 端点会经过共享 MySQL 健康检查路径，两种模式都出现过
 以下情况使用默认 JVM 发行包：
 
 - kkRepo 作为长期运行的仓库服务，充分预热后的吞吐优先级更高。
-- 部署依赖外部 Apollo、OSS/S3 provider、低频协议路径，或其他尚未通过 Native client E2E 的集成。
+- 部署依赖完整真实客户端 E2E 矩阵之外的可选集成，例如外部 Apollo 或特定 OSS/S3 provider。
 - 更重视成熟运维、诊断、性能分析和已有 JVM 调优经验。
 
 以下情况可以考虑显式选择 Native 发行包：
 
 - 弹性扩缩、scale-to-zero、预览环境或故障副本快速替换对 readiness 时间敏感。
 - 节点内存紧张，或需要运行较多小规格副本。
-- 实际使用的数据库、存储 provider、认证集成和客户端协议已经通过 Native client E2E。
+- 已使用 Native 验证实际使用的数据库、存储 provider、认证集成和客户端协议。
 
-当前生产环境仍默认推荐 JVM。Native 在真实客户端、对象存储、外部配置、升级和代表性制品传输覆盖达到 JVM 路径之前保持实验性。
+当前生产环境仍默认推荐 JVM。Native 已在 MySQL 和 PostgreSQL 上通过完整真实客户端 E2E 矩阵。用于生产前，仍应验证该矩阵未覆盖的部署特定可选集成。
 
 ## 构建与 CI 命令
 

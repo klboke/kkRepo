@@ -160,7 +160,7 @@ docker pull ghcr.io/klboke/kkrepo:latest
 
 容器化部署仍建议使用独立 MySQL 和 OSS/S3 blob store，不建议把容器本地文件系统作为长期生产 blob 存储。
 
-## GraalVM Native Image（实验性）
+## GraalVM Native Image
 
 `native` Maven profile 会先执行 Spring AOT 处理，再使用 GraalVM Native Image 编译服务端。构建本地可执行文件前，需要安装包含 `native-image` 工具的 GraalVM JDK 25，然后执行：
 
@@ -186,7 +186,7 @@ Docker 镜像辅助脚本也提供相同的显式入口：
 ./scripts/build-docker-image.sh --native kkrepo:native
 ```
 
-不传 `--native` 时，脚本仍构建 JVM 镜像。原生打包目前仍为实验性能力。用于生产前，应针对实际使用的协议和可选集成做验证，尤其是外部 Apollo 配置中心及 OSS/S3 存储提供方。实测差异和当前建议见 [Native Image 与 JVM 选型指南](native-vs-jvm-guide.md)。
+不传 `--native` 时，脚本仍构建 JVM 镜像。Native 打包已在 MySQL 和 PostgreSQL 上通过完整真实客户端 E2E 矩阵。用于生产前，应验证实际部署使用的可选集成，尤其是外部 Apollo 配置中心及 OSS/S3 存储提供方。实测差异和当前建议见 [Native Image 与 JVM 选型指南](native-vs-jvm-guide.md)。
 
 ## 压缩包部署
 
