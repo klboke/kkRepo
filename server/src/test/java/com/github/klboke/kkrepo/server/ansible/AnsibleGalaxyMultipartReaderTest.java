@@ -70,6 +70,80 @@ class AnsibleGalaxyMultipartReaderTest {
         () -> reader.read(request(body("form-data", new byte[] {1}, "b".repeat(129)))));
   }
 
+  @Test
+  void rejectsDeclaredAndStreamedBodiesAboveTheirBounds() {
+    MockHttpServletRequest declared = request(new byte[32]);
+    assertThrows(AnsibleGalaxyExceptions.ContentTooLarge.class,
+        () -> new AnsibleGalaxyMultipartReader(1, 1).read(declared));
+
+    MockHttpServletRequest empty = request(new byte[0]);
+    assertThrows(AnsibleGalaxyExceptions.BadRequest.class,
+        () -> new AnsibleGalaxyMultipartReader(1024, 1024).read(empty));
+  }
+
+  @Test
+  void rejectsMalformedHeadersDispositionAndMultipartShape() {
+    AnsibleGalaxyMultipartReader reader = new AnsibleGalaxyMultipartReader(4096, 4096);
+    for (String payload : new String[] {
+        "not-the-opening-boundary",
+        "--" + BOUNDARY + "\r\nBad Header\r\n\r\nx\r\n--" + BOUNDARY + "--\r\n",
+        "--" + BOUNDARY + "\r\nContent-Type: text/plain\r\n\r\nx\r\n--" + BOUNDARY + "--\r\n",
+        "--" + BOUNDARY + "\r\nContent-Disposition: attachment; name=\"file\"; filename=\"x.tar.gz\"\r\n\r\nx\r\n--" + BOUNDARY + "--\r\n",
+        "--" + BOUNDARY + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"x.tar.gz\"\r\n"
+            + "Content-Disposition: form-data; name=\"file\"\r\n\r\nx\r\n--" + BOUNDARY + "--\r\n",
+        "--" + BOUNDARY + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"x.tar.gz\"\r\n"
+            + "Content-Transfer-Encoding: quoted-printable\r\n\r\nx\r\n--" + BOUNDARY + "--\r\n",
+        "--" + BOUNDARY + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"x.tar.gz\"\r\n\r\n"
+            + "\r\n--" + BOUNDARY + "--\r\n",
+        "--" + BOUNDARY + "\nContent-Disposition: form-data; name=\"file\"\n\nx",
+        "--" + BOUNDARY + "\r\nContent-Disposition: form-data; name=\"sha256\"\r\n\r\n" + SHA256
+            + "\r\n--" + BOUNDARY + "--\r\n"
+    }) {
+      assertThrows(AnsibleGalaxyExceptions.BadRequest.class,
+          () -> reader.read(request(payload.getBytes(StandardCharsets.ISO_8859_1))), payload);
+    }
+  }
+
+  @Test
+  void rejectsMalformedBase64AndDuplicateChecksumParts() {
+    AnsibleGalaxyMultipartReader reader = new AnsibleGalaxyMultipartReader(4096, 4096);
+    for (String encoded : new String[] {"abc", "!!!!", "YQ===", "YQ==A"}) {
+      assertThrows(AnsibleGalaxyExceptions.BadRequest.class,
+          () -> reader.read(request(base64TextBody(encoded, SHA256))), encoded);
+    }
+
+    ByteArrayOutputStream duplicateSha = new ByteArrayOutputStream();
+    write(duplicateSha, "--" + BOUNDARY + "\r\n"
+        + "Content-Disposition: form-data; name=\"file\"; filename=\"acme-tools-1.0.0.tar.gz\"\r\n\r\n"
+        + "archive\r\n");
+    for (int i = 0; i < 2; i++) {
+      write(duplicateSha, "--" + BOUNDARY + "\r\n"
+          + "Content-Disposition: form-data; name=\"sha256\"\r\n\r\n"
+          + SHA256 + "\r\n");
+    }
+    write(duplicateSha, "--" + BOUNDARY + "--\r\n");
+    assertThrows(AnsibleGalaxyExceptions.BadRequest.class,
+        () -> reader.read(request(duplicateSha.toByteArray())));
+  }
+
+  @Test
+  void rejectsUnsafeOrMalformedBoundaryParameters() {
+    AnsibleGalaxyMultipartReader reader = new AnsibleGalaxyMultipartReader(1024, 1024);
+    for (String contentType : new String[] {
+        "application/json",
+        "multipart/form-data; boundary=",
+        "multipart/form-data; boundary=" + "x".repeat(71),
+        "multipart/form-data; boundary=bad@boundary",
+        "multipart/form-data; boundary=\"unterminated\\\""
+    }) {
+      MockHttpServletRequest request = new MockHttpServletRequest();
+      request.setContentType(contentType);
+      request.setContent(new byte[] {1});
+      assertThrows(AnsibleGalaxyExceptions.BadRequest.class,
+          () -> reader.read(request), contentType);
+    }
+  }
+
   private static MockHttpServletRequest request(byte[] body) {
     MockHttpServletRequest request = new MockHttpServletRequest();
     request.setMethod("POST");
@@ -107,6 +181,18 @@ class AnsibleGalaxyMultipartReaderTest {
         + "Content-Disposition: form-data; name=\"sha256\"\r\n\r\n"
         + sha256
         + "\r\n--" + BOUNDARY + "--\r\n");
+    return body.toByteArray();
+  }
+
+  private static byte[] base64TextBody(String encoded, String sha256) {
+    ByteArrayOutputStream body = new ByteArrayOutputStream();
+    write(body, "--" + BOUNDARY + "\r\n"
+        + "Content-Transfer-Encoding: base64\r\n"
+        + "Content-Disposition: form-data; name=\"file\"; "
+        + "filename=\"acme-tools-1.0.0.tar.gz\"\r\n\r\n"
+        + encoded + "\r\n--" + BOUNDARY + "\r\n"
+        + "Content-Disposition: form-data; name=\"sha256\"\r\n\r\n"
+        + sha256 + "\r\n--" + BOUNDARY + "--\r\n");
     return body.toByteArray();
   }
 

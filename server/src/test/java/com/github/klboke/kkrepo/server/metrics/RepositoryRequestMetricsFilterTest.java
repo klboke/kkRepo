@@ -120,6 +120,47 @@ class RepositoryRequestMetricsFilterTest {
   }
 
   @Test
+  void recordsLowCardinalityAnsibleGalaxyOperations() throws Exception {
+    String[][] requests = {
+        {"GET", "/repository/ansible-group/api/", "ansible_discovery"},
+        {"POST", "/repository/ansible-hosted/api/v3/artifacts/collections/", "ansible_publish"},
+        {"GET", "/repository/ansible-hosted/api/v3/imports/collections/task-1/", "ansible_import_task"},
+        {"GET", "/repository/ansible-group/api/v3/plugin/ansible/content/published/collections/artifacts/"
+            + "acme-tools-1.2.3.tar.gz", "ansible_artifact_download"},
+        {"PUT", "/repository/ansible-hosted/api/v3/plugin/ansible/content/published/collections/artifacts/"
+            + "acme-tools-1.2.3.tar.gz", "ansible_artifact_upload"},
+        {"GET", "/repository/ansible-group/api/v3/collections/acme/tools/versions/", "ansible_version_list"},
+        {"GET", "/repository/ansible-group/api/v3/collections/acme/tools/versions/1.2.3/",
+            "ansible_version_detail"},
+        {"GET", "/repository/ansible-group/api/v3/collections/acme/tools/", "ansible_collection"},
+        {"GET", "/repository/ansible-group/api/v3/unknown/", "ansible_repository"},
+    };
+
+    for (String[] item : requests) {
+      SimpleMeterRegistry registry = new SimpleMeterRegistry();
+      RepositoryRequestMetricsFilter filter = new RepositoryRequestMetricsFilter(
+          new KkRepoMetrics(registry), true, "");
+      MockHttpServletRequest request = new MockHttpServletRequest(item[0], item[1]);
+      MockHttpServletResponse response = new MockHttpServletResponse();
+      RepositoryType type = item[1].contains("ansible-hosted")
+          ? RepositoryType.HOSTED
+          : RepositoryType.GROUP;
+      FilterChain chain = (req, resp) -> req.setAttribute(
+          RepositorySecurityFilter.REPOSITORY_RECORD_ATTRIBUTE,
+          repository(type == RepositoryType.HOSTED ? "ansible-hosted" : "ansible-group",
+              RepositoryFormat.ANSIBLEGALAXY, type));
+
+      filter.doFilter(request, response, chain);
+
+      var counter = registry.find("kkrepo_repository_requests_total")
+          .tags("operation", item[2], "status", "200")
+          .counter();
+      assertNotNull(counter, item[2]);
+      assertEquals(1.0, counter.count(), item[2]);
+    }
+  }
+
+  @Test
   void recordsSecurityFailuresWhenFilterChainStopsEarly() throws Exception {
     SimpleMeterRegistry registry = new SimpleMeterRegistry();
     RepositoryRequestMetricsFilter filter = new RepositoryRequestMetricsFilter(new KkRepoMetrics(registry), true, "");

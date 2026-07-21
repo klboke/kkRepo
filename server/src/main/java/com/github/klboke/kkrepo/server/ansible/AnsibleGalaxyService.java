@@ -293,7 +293,7 @@ public class AnsibleGalaxyService {
     return jsonResponse(body, 200, headOnly, null);
   }
 
-  private static String clientPaginationPath(String versionsUrl, int limit, int offset) {
+  static String clientPaginationPath(String versionsUrl, int limit, int offset) {
     String path = URI.create(versionsUrl).getRawPath();
     if (path == null || path.isBlank() || !path.startsWith("/")) {
       throw new IllegalArgumentException("Ansible Galaxy versions URL must contain an absolute path");
@@ -503,7 +503,7 @@ public class AnsibleGalaxyService {
     }
   }
 
-  private AnsibleGalaxyRegistryDao.CollectionVersion materializeProxy(
+  AnsibleGalaxyRegistryDao.CollectionVersion materializeProxy(
       RepositoryRuntime runtime, AnsibleGalaxyRegistryDao.ProxyVersionState state) {
     Optional<AnsibleGalaxyRegistryDao.CollectionVersion> existing = registry.findVersion(
         runtime.id(), state.namespaceLc(), state.nameLc(), state.versionNormalized());
@@ -563,7 +563,7 @@ public class AnsibleGalaxyService {
     }
   }
 
-  private Map<String, Object> fetchProxyDocument(
+  Map<String, Object> fetchProxyDocument(
       RepositoryRuntime runtime,
       String namespace,
       String name,
@@ -661,7 +661,7 @@ public class AnsibleGalaxyService {
     }
   }
 
-  private List<String> fetchProxyVersionNames(
+  List<String> fetchProxyVersionNames(
       RepositoryRuntime runtime, String namespace, String name) {
     LinkedHashSet<String> versions = new LinkedHashSet<>();
     Set<String> visitedPages = new HashSet<>();
@@ -693,7 +693,7 @@ public class AnsibleGalaxyService {
     return List.copyOf(versions);
   }
 
-  private String proxyV3Url(RepositoryRuntime runtime, String suffix) {
+  String proxyV3Url(RepositoryRuntime runtime, String suffix) {
     Map<String, Object> discovery = null;
     String discoveryUrl = remoteUrl(runtime, "");
     try {
@@ -734,7 +734,7 @@ public class AnsibleGalaxyService {
     return URI.create(ensureSlash(v3Base.toASCIIString())).resolve(suffix).toASCIIString();
   }
 
-  private Map<String, Object> awaitProxyDocument(
+  Map<String, Object> awaitProxyDocument(
       RepositoryRuntime runtime,
       String namespace,
       String name,
@@ -966,7 +966,7 @@ public class AnsibleGalaxyService {
     }
   }
 
-  private static void validateUpstreamDetail(
+  static void validateUpstreamDetail(
       String namespace, String name, String version, Map<String, Object> detail) {
     Map<String, Object> namespaceObject = map(detail.get("namespace"));
     Map<String, Object> collectionObject = map(detail.get("collection"));
@@ -1004,7 +1004,7 @@ public class AnsibleGalaxyService {
         sha);
   }
 
-  private String resolveUpstreamUrl(
+  String resolveUpstreamUrl(
       RepositoryRuntime runtime, String requestUrl, String candidate) {
     if (candidate == null || candidate.isBlank()) return null;
     URI parsed = URI.create(candidate);
@@ -1042,7 +1042,7 @@ public class AnsibleGalaxyService {
     return body;
   }
 
-  private Map<String, Object> collectionMetadata(
+  Map<String, Object> collectionMetadata(
       AnsibleGalaxyRegistryDao.CollectionVersion version) {
     Map<String, Object> metadata = new LinkedHashMap<>();
     copyMetadataValue(version.metadata(), metadata, "license");
@@ -1052,7 +1052,7 @@ public class AnsibleGalaxyService {
     return metadata;
   }
 
-  private Map<String, Object> versionMetadata(
+  Map<String, Object> versionMetadata(
       AnsibleGalaxyRegistryDao.CollectionVersion version) {
     Map<String, Object> metadata = new LinkedHashMap<>(collectionMetadata(version));
     metadata.put("dependencies", version.dependencies());
@@ -1063,7 +1063,7 @@ public class AnsibleGalaxyService {
     return metadata;
   }
 
-  private List<?> signatures(AnsibleGalaxyRegistryDao.CollectionVersion version) {
+  List<?> signatures(AnsibleGalaxyRegistryDao.CollectionVersion version) {
     return registry.listSignatures(version.id()).stream()
         .map(signature -> Map.<String, Object>of(
             "sha256", signature.sha256(),
@@ -1129,7 +1129,7 @@ public class AnsibleGalaxyService {
     if (value != null) target.put(key, value);
   }
 
-  private static String boundedUpstreamText(Object raw, int maxLength, String label) {
+  static String boundedUpstreamText(Object raw, int maxLength, String label) {
     if (raw == null) return null;
     if (!(raw instanceof String value)) {
       throw new AnsibleGalaxyExceptions.BadUpstream(
@@ -1143,7 +1143,7 @@ public class AnsibleGalaxyService {
     return value;
   }
 
-  private static void copyMetadataValue(
+  static void copyMetadataValue(
       Map<String, Object> source, Map<String, Object> target, String key) {
     Object value = source.get(key);
     if (value == null) return;
@@ -1154,7 +1154,7 @@ public class AnsibleGalaxyService {
     }
   }
 
-  private Map<String, Object> discovery() {
+  Map<String, Object> discovery() {
     Map<String, Object> body = new LinkedHashMap<>();
     body.put("available_versions", Map.of("v3", AnsibleGalaxyPathParser.V3_BASE));
     body.put("server_version", "kkrepo");
@@ -1162,7 +1162,7 @@ public class AnsibleGalaxyService {
     return body;
   }
 
-  private MavenResponse jsonResponse(
+  MavenResponse jsonResponse(
       Object value, int status, boolean headOnly, Instant lastModified) {
     byte[] bytes;
     try {
@@ -1179,7 +1179,7 @@ public class AnsibleGalaxyService {
         .withStatus(status);
   }
 
-  private Map<String, Object> readJsonBounded(InputStream input) throws IOException {
+  Map<String, Object> readJsonBounded(InputStream input) throws IOException {
     ByteArrayOutputStream output = new ByteArrayOutputStream();
     byte[] buffer = new byte[32 * 1024];
     long total = 0;
@@ -1194,13 +1194,13 @@ public class AnsibleGalaxyService {
     }
     try {
       return objectMapper.readValue(output.toByteArray(), JSON_OBJECT);
-    } catch (RuntimeException e) {
+    } catch (RuntimeException | IOException e) {
       throw new AnsibleGalaxyExceptions.BadUpstream(
           "Upstream Galaxy metadata is not a JSON object", e);
     }
   }
 
-  private static List<Map<String, Object>> resultItems(Map<String, Object> document) {
+  static List<Map<String, Object>> resultItems(Map<String, Object> document) {
     Object raw = document.containsKey("data") ? document.get("data") : document.get("results");
     if (!(raw instanceof List<?> values)) {
       throw new AnsibleGalaxyExceptions.BadUpstream(
@@ -1217,7 +1217,7 @@ public class AnsibleGalaxyService {
     return List.copyOf(results);
   }
 
-  private static String nextLink(Map<String, Object> document) {
+  static String nextLink(Map<String, Object> document) {
     Object value = map(document.get("links")).get("next");
     if (value == null) value = document.get("next");
     String next = text(value);
@@ -1229,12 +1229,12 @@ public class AnsibleGalaxyService {
     return next;
   }
 
-  private static String pageStateKey(String pageUrl) {
+  static String pageStateKey(String pageUrl) {
     return "@versions-" + HexFormat.of().formatHex(
         sha256().digest(pageUrl.getBytes(StandardCharsets.UTF_8)));
   }
 
-  private static String ensureSlash(String value) {
+  static String ensureSlash(String value) {
     return value.endsWith("/") ? value : value + "/";
   }
 
@@ -1256,11 +1256,11 @@ public class AnsibleGalaxyService {
         "Another replica is processing this collection coordinate");
   }
 
-  private static List<RepositoryRuntime> safeMembers(RepositoryRuntime runtime) {
+  static List<RepositoryRuntime> safeMembers(RepositoryRuntime runtime) {
     return runtime.members() == null ? List.of() : runtime.members();
   }
 
-  private static Optional<RepositoryRuntime> directMember(
+  static Optional<RepositoryRuntime> directMember(
       RepositoryRuntime group, long repositoryId) {
     return safeMembers(group).stream().filter(member -> member.id() == repositoryId).findFirst();
   }
@@ -1270,7 +1270,7 @@ public class AnsibleGalaxyService {
     return revision == 0 ? registry.nextRepositoryRevision(repositoryId) : revision;
   }
 
-  private static void requireRuntime(RepositoryRuntime runtime) {
+  static void requireRuntime(RepositoryRuntime runtime) {
     if (runtime.format() != RepositoryFormat.ANSIBLEGALAXY) {
       throw new AnsibleGalaxyExceptions.NotFound("Repository is not Ansible Galaxy format");
     }
@@ -1279,7 +1279,7 @@ public class AnsibleGalaxyService {
     }
   }
 
-  private static void requireHostedWritable(RepositoryRuntime runtime) {
+  static void requireHostedWritable(RepositoryRuntime runtime) {
     requireRuntime(runtime);
     if (!runtime.isHosted()) {
       // Nexus does not mount either Ansible upload route on proxy/group recipes, so these
@@ -1297,7 +1297,7 @@ public class AnsibleGalaxyService {
     }
   }
 
-  private static void requireProxyRemote(RepositoryRuntime runtime) {
+  static void requireProxyRemote(RepositoryRuntime runtime) {
     if (!runtime.isProxy() || runtime.proxyRemoteUrl() == null
         || runtime.proxyRemoteUrl().isBlank()) {
       throw new AnsibleGalaxyExceptions.BadUpstream(
@@ -1305,76 +1305,76 @@ public class AnsibleGalaxyService {
     }
   }
 
-  private static void requireExpectedSha(String sha256) {
+  static void requireExpectedSha(String sha256) {
     if (!validSha(sha256)) {
       throw new AnsibleGalaxyExceptions.BadRequest(
           "Multipart sha256 must contain 64 hexadecimal characters");
     }
   }
 
-  private static boolean validSha(String value) {
+  static boolean validSha(String value) {
     return value != null && value.matches("[0-9a-fA-F]{64}");
   }
 
-  private static String remoteUrl(RepositoryRuntime runtime, String relativePath) {
+  static String remoteUrl(RepositoryRuntime runtime, String relativePath) {
     String base = runtime.proxyRemoteUrl().trim();
     if (!base.endsWith("/")) base += "/";
     return URI.create(base).resolve(relativePath).toASCIIString();
   }
 
-  private static Duration metadataTtl(RepositoryRuntime runtime) {
+  static Duration metadataTtl(RepositoryRuntime runtime) {
     int minutes = runtime.metadataMaxAgeMinutes() == null
         ? 60 : Math.max(1, runtime.metadataMaxAgeMinutes());
     return Duration.ofMinutes(minutes);
   }
 
-  private static Duration negativeTtl(RepositoryRuntime runtime) {
+  static Duration negativeTtl(RepositoryRuntime runtime) {
     int minutes = runtime.metadataMaxAgeMinutes() == null
         ? 5 : Math.max(1, Math.min(15, runtime.metadataMaxAgeMinutes()));
     return Duration.ofMinutes(minutes);
   }
 
-  private static String leaseKey(
+  static String leaseKey(
       long repositoryId, String operation, String namespace, String name, String version) {
     return "ansible:" + repositoryId + ":" + operation + ":" + namespace + ":" + name
         + ":" + version;
   }
 
-  private static String collectionUrl(String baseUrl, String namespace, String name) {
+  static String collectionUrl(String baseUrl, String namespace, String name) {
     return normalizedBase(baseUrl) + "api/v3/collections/" + encode(namespace) + "/"
         + encode(name) + "/";
   }
 
-  private static String versionsUrl(String baseUrl, String namespace, String name) {
+  static String versionsUrl(String baseUrl, String namespace, String name) {
     return collectionUrl(baseUrl, namespace, name) + "versions/";
   }
 
-  private static String versionUrl(
+  static String versionUrl(
       String baseUrl, String namespace, String name, String version) {
     return versionsUrl(baseUrl, namespace, name) + encode(version) + "/";
   }
 
-  private static String artifactUrl(String baseUrl, String filename) {
+  static String artifactUrl(String baseUrl, String filename) {
     return normalizedBase(baseUrl) + AnsibleGalaxyPathParser.ARTIFACT_BASE + encode(filename);
   }
 
-  private static String normalizedBase(String baseUrl) {
+  static String normalizedBase(String baseUrl) {
     return baseUrl.endsWith("/") ? baseUrl : baseUrl + "/";
   }
 
-  private static String encode(String value) {
+  static String encode(String value) {
     return java.net.URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
   }
 
-  private static String iso(Instant value) {
+  static String iso(Instant value) {
     return value == null ? null : value.toString();
   }
 
-  private static String instantText(Instant value) {
+  static String instantText(Instant value) {
     return value == null ? null : value.toString();
   }
 
-  private static Instant parseInstant(String value) {
+  static Instant parseInstant(String value) {
     try {
       return value == null ? null : Instant.parse(value);
     } catch (RuntimeException ignored) {
@@ -1382,34 +1382,34 @@ public class AnsibleGalaxyService {
     }
   }
 
-  private static String errorCode(Throwable failure) {
+  static String errorCode(Throwable failure) {
     return failure instanceof AnsibleGalaxyExceptions.GalaxyException galaxy
         ? galaxy.code() : "import_failed";
   }
 
-  private static String safeDetail(Throwable failure) {
+  static String safeDetail(Throwable failure) {
     String message = failure.getMessage();
     if (message == null || message.isBlank()) return "Collection import failed";
     String sanitized = message.replace('\r', ' ').replace('\n', ' ').replace('\t', ' ');
     return sanitized.length() <= 2048 ? sanitized : sanitized.substring(0, 2048);
   }
 
-  private static String text(Object value) {
+  static String text(Object value) {
     return value instanceof String string ? string : value == null ? null : String.valueOf(value);
   }
 
-  private static Map<String, Object> map(Object value) {
+  static Map<String, Object> map(Object value) {
     if (!(value instanceof Map<?, ?> raw)) return Map.of();
     return map(raw);
   }
 
-  private static Map<String, Object> map(Map<?, ?> raw) {
+  static Map<String, Object> map(Map<?, ?> raw) {
     Map<String, Object> result = new LinkedHashMap<>();
     raw.forEach((key, value) -> result.put(String.valueOf(key), value));
     return result;
   }
 
-  private static Map<String, Object> immutableMap(Map<String, Object> map) {
+  static Map<String, Object> immutableMap(Map<String, Object> map) {
     return java.util.Collections.unmodifiableMap(new LinkedHashMap<>(map));
   }
 

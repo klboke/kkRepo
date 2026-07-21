@@ -15,6 +15,7 @@ import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
@@ -50,6 +51,86 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
 class BrowseAssetDetailServiceTest {
+
+  @Test
+  void ansibleCollectionDetailResolvesPublicPathAndShowsBoundedRegistryMetadata() {
+    RepositoryRecord repository = repository(
+        1L, "ansible-hosted", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.HOSTED);
+    String publicPath = "acme/tools/1.2.3/acme-tools-1.2.3.tar.gz";
+    String storagePath =
+        "api/v3/plugin/ansible/content/published/collections/artifacts/acme-tools-1.2.3.tar.gz";
+    AssetRecord archive = new AssetRecord(
+        10L, repository.id(), 20L, 100L, RepositoryFormat.ANSIBLEGALAXY,
+        storagePath, PersistenceHashes.pathHash(storagePath), "acme-tools-1.2.3.tar.gz",
+        "ansible-collection", "application/octet-stream", 512L, null,
+        Instant.parse("2026-07-21T00:00:00Z"), Map.of());
+    AssetBlobRecord blob = blob(100L, 512L);
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(repository.id(), storagePath), archive), Map.of(blob.id(), blob));
+    AnsibleGalaxyRegistryDao registry = mock(AnsibleGalaxyRegistryDao.class);
+    AnsibleGalaxyRegistryDao.CollectionVersion version = ansibleVersion(repository.id());
+    when(registry.findVersionByArtifactFilename(repository.id(), archive.name()))
+        .thenReturn(Optional.of(version));
+    when(registry.listSignatures(version.id())).thenReturn(List.of(
+        new AnsibleGalaxyRegistryDao.Signature(
+            1L, version.id(), null, "b".repeat(64), "ABCD", "HOSTED", Instant.now())));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(), assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+    service.setAnsibleGalaxyRegistryDao(registry);
+
+    BrowseAssetDetailService.BrowseAssetDetail detail =
+        service.detail(repository, publicPath, null);
+
+    assertEquals(publicPath, detail.path());
+    assertEquals("acme-tools-1.2.3.tar.gz", detail.name());
+    assertEquals("acme", detail.ansible().get("namespace"));
+    assertEquals("tools", detail.ansible().get("name"));
+    assertEquals("1.2.3", detail.ansible().get("version"));
+    assertEquals("signed", detail.ansible().get("signature_status"));
+    assertEquals(1, detail.ansible().get("signature_count"));
+    assertEquals(Map.of("acme.base", ">=1.0.0"), detail.ansible().get("dependencies"));
+    assertEquals(List.of(key(repository.id(), storagePath)), assets.pathLookups);
+  }
+
+  @Test
+  void ansibleGroupDetailTraversesNestedMembersAndKeepsSourceIdentity() {
+    RepositoryRecord group = repository(
+        10L, "ansible-group", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.GROUP);
+    RepositoryRecord nested = repository(
+        11L, "ansible-nested", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.GROUP);
+    RepositoryRecord hosted = repository(
+        12L, "ansible-hosted", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.HOSTED);
+    String publicPath = "acme/tools/1.2.3/acme-tools-1.2.3.tar.gz";
+    String storagePath =
+        "api/v3/plugin/ansible/content/published/collections/artifacts/acme-tools-1.2.3.tar.gz";
+    AssetRecord archive = new AssetRecord(
+        10L, hosted.id(), 20L, 100L, RepositoryFormat.ANSIBLEGALAXY,
+        storagePath, PersistenceHashes.pathHash(storagePath), "acme-tools-1.2.3.tar.gz",
+        "ansible-collection", "application/octet-stream", 512L, null,
+        Instant.parse("2026-07-21T00:00:00Z"), Map.of());
+    AssetBlobRecord blob = blob(100L, 512L);
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(hosted.id(), storagePath), archive), Map.of(blob.id(), blob));
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    when(repositories.listMembers(group.id())).thenReturn(List.of(nested));
+    when(repositories.listMembers(nested.id())).thenReturn(List.of(hosted, group));
+    AnsibleGalaxyRegistryDao registry = mock(AnsibleGalaxyRegistryDao.class);
+    when(registry.findVersionByArtifactFilename(hosted.id(), archive.name()))
+        .thenReturn(Optional.of(ansibleVersion(hosted.id())));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        repositories, assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+    service.setAnsibleGalaxyRegistryDao(registry);
+
+    BrowseAssetDetailService.BrowseAssetDetail detail =
+        service.detail(group, publicPath, hosted.name());
+
+    assertEquals(group.name(), detail.repository());
+    assertEquals(hosted.name(), detail.sourceRepository());
+    assertEquals(hosted.name(), detail.ansible().get("source_repository"));
+    assertEquals("unsigned", detail.ansible().get("signature_status"));
+  }
 
   @Test
   void composerInternalRouteDetailIsNotExposedAsDownloadableAsset() {
@@ -1026,6 +1107,21 @@ class BrowseAssetDetailServiceTest {
         (List<Map<String, Object>>) detail.docker().get("manifest_descriptors");
     assertEquals(3, manifestDescriptors.size());
     assertEquals(childDigest, manifestDescriptors.get(0).get("digest"));
+  }
+
+  private static AnsibleGalaxyRegistryDao.CollectionVersion ansibleVersion(long repositoryId) {
+    Instant now = Instant.parse("2026-07-21T00:00:00Z");
+    return new AnsibleGalaxyRegistryDao.CollectionVersion(
+        30L, repositoryId, 20L, 10L,
+        "acme", "acme", "tools", "tools", "1.2.3", "1.2.3",
+        "acme-tools-1.2.3.tar.gz", "a".repeat(64), 512L,
+        Map.of(
+            "authors", List.of("kkRepo"),
+            "tags", List.of("automation"),
+            "license", "Apache-2.0",
+            "description", "fixture"),
+        Map.of("acme.base", ">=1.0.0"), ">=2.15", "HOSTED", 1L,
+        AnsibleGalaxyRegistryDao.VERSION_READY, now, now, now);
   }
 
   private static RepositoryRecord repository(

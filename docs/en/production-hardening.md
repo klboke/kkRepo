@@ -176,6 +176,8 @@ KKREPO_UPLOAD_MAX_REQUEST_BYTES=1073741824
 
 Make sure proxy limits, application limits, and object-storage multipart settings are aligned.
 
+Ansible collection uploads also apply archive-specific compressed/expanded size, entry size/count, compression-ratio, inspection-time, and multipart-overhead limits. At minimum review `KKREPO_ANSIBLE_ARCHIVE_MAX_COMPRESSED_BYTES`, `KKREPO_ANSIBLE_ARCHIVE_MAX_EXPANDED_BYTES`, `KKREPO_ANSIBLE_ARCHIVE_MAX_ENTRIES`, and `KKREPO_ANSIBLE_MULTIPART_MAX_OVERHEAD_BYTES`. Raising an HTTP body limit does not bypass archive safety checks. Complete `MANIFEST.json`/`FILES.json` and oversized upstream JSON belong in blob storage; do not enlarge relational JSON columns to accommodate them.
+
 ## Caches
 
 Node-local caches are rebuildable. For correctness, do not rely on local memory as the only state.
@@ -225,6 +227,7 @@ Before upgrading:
 - Run representative client pulls and pushes.
 - For Composer / PHP, upload a hosted archive and run group `composer install --prefer-dist`, then verify `packages.json`, p2 metadata, dist downloads, HTTP Basic, and lock replay.
 - For Terraform, upload a hosted module/provider and run Terraform 0.13 plus the current stable `terraform init` through a group; verify the proxied provider, SHA256SUMS, detached signature, lock file, and URL-token redaction in diagnostics.
+- For Ansible, build and publish a collection with Ansible 2.9 and current ansible-core, then install its dependency through a group; verify duplicate-version rejection, proxy install, artifact SHA-256, import-task recovery, and reads through another replica.
 
 Recommended rollout:
 

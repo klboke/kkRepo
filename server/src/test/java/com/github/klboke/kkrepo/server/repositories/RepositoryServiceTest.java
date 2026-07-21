@@ -6,10 +6,13 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
@@ -1131,6 +1134,56 @@ class RepositoryServiceTest {
 
     assertEquals(List.of("ansible-nested", "ansible-hosted"), updated.group().memberNames());
     assertEquals(List.of(52L, 51L), repositories.membersByGroupId.get(50L));
+  }
+
+  @Test
+  void replacingAnsibleMembersInvalidatesDurableGroupBindings() {
+    StubRepositoryDao repositories = new StubRepositoryDao(
+        ansibleGroupRepository(50L, "ansible-root"),
+        ansibleHostedRepository(51L, "ansible-hosted"));
+    AnsibleGalaxyRegistryDao ansible = mock(AnsibleGalaxyRegistryDao.class);
+    RepositoryService service = service(repositories);
+    service.setAnsibleGalaxyRegistry(ansible);
+
+    service.replaceMembers("ansible-root", List.of("ansible-hosted"));
+
+    verify(ansible).nextRepositoryRevision(50L);
+    verify(ansible).deleteGroupBindings(50L);
+  }
+
+  @Test
+  void updatingAnsibleMemberInvalidatesEveryContainingGroupTransitively() {
+    StubRepositoryDao repositories = new StubRepositoryDao(
+        ansibleHostedRepository(51L, "ansible-hosted"),
+        ansibleGroupRepository(52L, "ansible-nested"),
+        ansibleGroupRepository(50L, "ansible-root"));
+    repositories.replaceMembers(52L, List.of(51L));
+    repositories.replaceMembers(50L, List.of(52L));
+    AnsibleGalaxyRegistryDao ansible = mock(AnsibleGalaxyRegistryDao.class);
+    RepositoryService service = service(repositories);
+    service.setAnsibleGalaxyRegistry(ansible);
+
+    service.update("ansible-hosted",
+        new UpdateCommand(false, null, null, null, null, null, null, null, null));
+
+    verify(ansible).nextRepositoryRevision(52L);
+    verify(ansible).deleteGroupBindings(52L);
+    verify(ansible).nextRepositoryRevision(50L);
+    verify(ansible).deleteGroupBindings(50L);
+  }
+
+  @Test
+  void deletingAnsibleRepositoryDeletesProtocolMetadataBeforeRepositoryRow() {
+    StubRepositoryDao repositories = new StubRepositoryDao(
+        ansibleHostedRepository(51L, "ansible-hosted"));
+    AnsibleGalaxyRegistryDao ansible = mock(AnsibleGalaxyRegistryDao.class);
+    RepositoryService service = service(repositories);
+    service.setAnsibleGalaxyRegistry(ansible);
+
+    service.delete("ansible-hosted");
+
+    verify(ansible).deleteRepositoryState(51L);
+    assertTrue(repositories.findByName("ansible-hosted").isEmpty());
   }
 
   @Test

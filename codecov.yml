@@ -8,3 +8,5 @@ coverage:
     patch:
       default:
         only_pulls: true
+        target: 90%
+        threshold: 0%

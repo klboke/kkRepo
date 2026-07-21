@@ -20,7 +20,7 @@ compat-test/
 - hosted write, delete, and repeated-upload behavior
 - client-visible proxy, group, browse/search behavior
 
-The current module includes compatibility test classes for Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift Package Registry, Docker/OCI, NuGet, RubyGems, Yum, Raw, component upload, security management APIs, and related areas.
+The current module includes compatibility test classes for Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift Package Registry, Ansible Galaxy, Docker/OCI, NuGet, RubyGems, Yum, Raw, component upload, security management APIs, and related areas.
 
 Regular test command:
 
@@ -66,6 +66,8 @@ Terraform compatibility uses a Nexus 3.90.0+ reference for hosted/proxy/group re
 
 Swift compatibility overrides the general 3.92.0 compose default with a Nexus 3.94.x reference for hosted/proxy/group recipes. `SwiftRepositoryBlackBoxCompatibilityTest` compares canonical Registry v1 JSON/`Link` output, negotiation, release/manifest/archive/identifier behavior, immutable multipart publication, signatures, `v`/`V` and renamed-GitHub-repository handling, group reorder/nesting, concurrent first access, unavailable problems, and cross-replica visibility. `POST /login` is optional in the Swift specification, so `501` is a valid reference branch for a server that omits it; kkrepo implements the endpoint and its expected results are `200`/`401`. The client workflows run SwiftPM 5.7/5.10/6.x on Linux, an Xcode registry fixture on macOS, and proxy resolve/build on Windows.
 
+Ansible Galaxy compatibility uses the opt-in `ansible` suite and a Nexus 3.94.x reference because native `ansiblegalaxy` repositories start with Nexus 3.93.0. `AnsibleGalaxyRepositoryBlackBoxCompatibilityTest` compares discovery, short/long Galaxy v3 paths, hosted multipart publication/import tasks, Nexus raw PUT, immutable versions, dependency metadata, artifact GET/HEAD/validators, group priority, proxy reads, pagination, authentication, and reference error status. Run `scripts/ci/run-live-compat.sh ansible`; the suite fails explicitly when the selected reference does not expose the required Ansible recipe. Real-client coverage uses Ansible 2.9 and a current ansible-core binary when `ANSIBLE_GALAXY_BINS` is configured.
+
 Evidence stays at the appropriate layer: the compatibility black box covers active/revoked/expired `GenericToken` behavior, while server/persistence tests cover moving-tag immutability, 1,200-tag pagination bounds, cleanup, and 429/5xx propagation. The scheduled Swift resilience lane uses two replicas and MinIO through the AWS S3-compatible adapter to exercise a multi-megabyte package, shared 429/5xx waterlines with stale fallback, lease takeover, restart, and destructive relational-database/object backup-restore. Alibaba OSS Native has adapter-contract coverage but no live endpoint E2E claim.
 
 ## Real Client E2E
@@ -76,7 +78,7 @@ The `client-e2e` suite validates the behavior of actual package clients against 
 scripts/ci/run-live-compat.sh client-e2e
 ```
 
-It runs publish/upload plus download/resolve flows for Maven, npm, PyPI, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform 0.13/current, SwiftPM/Xcode, NuGet, RubyGems, Yum, and Docker/OCI. Composer covers hosted archives, group resolution, Packagist proxying, a transitive dependency, Basic authentication, and lock replay from the server cache. Terraform covers hosted module/provider upload, registry.terraform.io proxying, group resolution, URL-token authentication, checksums, and signatures. Swift 5.7 covers registry/proxy resolve/build; 5.10/6.x additionally cover hosted publication, Basic/GenericToken login, group resolution/build, GitHub SCM replacement, checksum replay, and cross-replica reads. macOS and Windows have dedicated Xcode and proxy-only lanes. Go is resolve-only through the Go module proxy because hosted Go publishing is not a supported repository mode. Docker image push/pull is always covered, and ORAS pushes/pulls a generic OCI artifact when the `oras` client is available.
+It runs publish/upload plus download/resolve flows for Maven, npm, PyPI, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform 0.13/current, SwiftPM/Xcode, Ansible Galaxy 2.9/current, NuGet, RubyGems, Yum, and Docker/OCI. Composer covers hosted archives, group resolution, Packagist proxying, a transitive dependency, Basic authentication, and lock replay from the server cache. Terraform covers hosted module/provider upload, registry.terraform.io proxying, group resolution, URL-token authentication, checksums, and signatures. Swift 5.7 covers registry/proxy resolve/build; 5.10/6.x additionally cover hosted publication, Basic/GenericToken login, group resolution/build, GitHub SCM replacement, checksum replay, and cross-replica reads. Ansible builds dependent collections, publishes through hosted, rejects duplicate versions, installs/downloads through group, verifies GenericToken/Basic/anonymous behavior, exercises a public Galaxy proxy, and can read through a second replica. macOS and Windows have dedicated Xcode and proxy-only lanes. Go is resolve-only through the Go module proxy because hosted Go publishing is not a supported repository mode. Docker image push/pull is always covered, and ORAS pushes/pulls a generic OCI artifact when the `oras` client is available.
 
 Use this suite when a change affects repository protocol behavior that real clients exercise: authentication headers or API keys, publish/upload paths, generated metadata, package index shape, checksum/download behavior, Docker connector ports, or group/proxy resolution. In GitHub Actions, run it manually by selecting `client-e2e` in the `Live Compatibility` workflow, or add the `run-client-e2e` label to a PR. For Spring AOT, runtime-hint, or Native packaging changes, add `run-native-client-e2e`; the independent Native workflow reuses the Linux client suite against MySQL and PostgreSQL without replacing the default JVM lane.
 
@@ -84,7 +86,7 @@ Client command logs, downloaded metadata, selected inspect output, and other dia
 
 ## Migration E2E
 
-The `Migration E2E` workflow imports configuration, security metadata, and repository data from supported Nexus generations, including the historical 3.29.x embedded/OrientDB reference and datastore-era H2/PostgreSQL references. Swift hosted data is `FULL` only for verified Nexus 3.92.x-3.94.x datastore shapes; out-of-range versions or shape drift remain manual. The live Swift matrix uses Nexus 3.94 and covers H2 to MySQL plus PostgreSQL source to MySQL/PostgreSQL targets, restart/resume, exact-row-count idempotency, and fail-closed masked/missing proxy secrets. It also proves the native Nexus 3.94 persistence boundary: uploaded optional signatures, original metadata, and repository URLs are absent from the source export and are not fabricated in the target; separate writer contracts preserve them when an export actually contains them. Such a proxy stays offline without a placeholder credential until the target secret is supplied explicitly. Add the `run-migration-e2e` label to a PR when a change affects source detection, migration adapters, repository-data import, blob/checksum validation, permissions, or post-migration protocol behavior.
+The `Migration E2E` workflow imports configuration, security metadata, and repository data from supported Nexus generations, including the historical 3.29.x embedded/OrientDB reference and datastore-era H2/PostgreSQL references. Swift hosted data is `FULL` only for verified Nexus 3.92.x-3.94.x datastore shapes; out-of-range versions or shape drift remain manual. The live Swift matrix uses Nexus 3.94 and covers H2 to MySQL plus PostgreSQL source to MySQL/PostgreSQL targets, restart/resume, exact-row-count idempotency, and fail-closed masked/missing proxy secrets. It also proves the native Nexus 3.94 persistence boundary: uploaded optional signatures, original metadata, and repository URLs are absent from the source export and are not fabricated in the target; separate writer contracts preserve them when an export actually contains them. Ansible migration contracts enforce the Nexus 3.93.x-3.94.x version/shape gate, protocol-aware archive restoration, immutable idempotency, opt-in proxy cache, and fail-closed proxy secrets. Complete collection manifest/files JSON stays in blob storage rather than relational JSON columns. Such a proxy stays offline without a placeholder credential until the target secret is supplied explicitly. Add the `run-migration-e2e` label to a PR when a change affects source detection, migration adapters, repository-data import, blob/checksum validation, permissions, or post-migration protocol behavior.
 
 ## Traffic Mirroring Validation
 
@@ -92,7 +94,7 @@ In addition to in-project black-box compatibility tests and real client E2E chec
 
 This historical validation stage aims to:
 
-- Confirm that real Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Docker/OCI, Terraform, SwiftPM/Xcode, and similar client requests are recognized correctly by kkrepo.
+- Confirm that real Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Docker/OCI, Terraform, SwiftPM/Xcode, Ansible Galaxy, and similar client requests are recognized correctly by kkrepo.
 - Compare HTTP status, error types, and key response behavior between the Nexus main path and the kkrepo mirrored path.
 - Observe proxy upstream access, blob storage, permission/authentication, and metadata/index rebuild stability under real traffic.
 - Discover edge requests not covered by `compat-test`, such as special client headers, old client behavior, CI plugin probe requests, and occasional proxy requests.
@@ -107,7 +109,7 @@ Istio traffic mirroring only copies requests to kkrepo. Clients still receive re
 - Proxy upstream errors and latency
 - Blob storage read/write errors
 
-Nexus UI admin requests, ExtDirect polling, Script API requests, and other management-plane traffic are not the same as Maven/npm/PyPI/Go/Helm/Cargo/Pub/Composer/Docker/OCI/Terraform repository protocol traffic. When analyzing mirror anomalies, classify the request type first so management-plane requests are not mistaken for repository protocol compatibility issues.
+Nexus UI admin requests, ExtDirect polling, Script API requests, and other management-plane traffic are not the same as Maven/npm/PyPI/Go/Helm/Cargo/Pub/Composer/Docker/OCI/Terraform/Ansible repository protocol traffic. When analyzing mirror anomalies, classify the request type first so management-plane requests are not mistaken for repository protocol compatibility issues.
 
 ## Production-Scale Validation
 
@@ -132,7 +134,7 @@ Overall scale and observations:
 
 These numbers show kkrepo validation results under real business traffic and migration scale. They do not represent a fixed SLA. Actual throughput and latency are affected by MySQL sizing, OSS/S3 performance, network, proxy upstream quality, repository count, package size, and replica count.
 
-Cargo / Rust, Dart / Pub, Terraform, and Swift are not included in the historical production-scale validation numbers above. Validate Cargo with the Nexus 3.77.x+ compatibility suite and real Cargo clients, validate Pub with the Nexus 3.92.0+ compatibility suite plus real `dart pub` / `flutter pub` clients, validate Terraform with the Nexus 3.90.0+ reference plus Terraform 0.13/current `terraform init`, and validate Swift with the Nexus 3.94.x reference plus the cross-platform SwiftPM/Xcode matrix before production cutover.
+Cargo / Rust, Dart / Pub, Terraform, Swift, and Ansible Galaxy are not included in the historical production-scale validation numbers above. Validate Cargo with the Nexus 3.77.x+ compatibility suite and real Cargo clients, validate Pub with the Nexus 3.92.0+ compatibility suite plus real `dart pub` / `flutter pub` clients, validate Terraform with the Nexus 3.90.0+ reference plus Terraform 0.13/current `terraform init`, validate Swift with the Nexus 3.94.x reference plus the cross-platform SwiftPM/Xcode matrix, and validate Ansible with the Nexus 3.94.x `ansible` suite plus Ansible 2.9/current `ansible-galaxy` before production cutover.
 
 ## Compatibility Issue Handling Flow
 

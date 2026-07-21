@@ -187,6 +187,7 @@ Swift 的生产加固证据拆分为独立 lane：定时 S3-compatible resilienc
 - [Terraform Provider / Module Registry 开发设计说明](dev/terraform-repository-design.md)
 - [Swift Package Registry 开发设计说明](dev/swift-package-registry-design.md)
 - [Ansible Galaxy 仓库开发设计说明](dev/ansible-galaxy-repository-design.md)
+- [Ansible Galaxy 仓库使用指南](ansible-galaxy-guide.md)
 - [Nexus 兼容迁移重构开发计划](dev/nexus-migration-compatibility-refactor-plan.md)
 
 ## 配置中心

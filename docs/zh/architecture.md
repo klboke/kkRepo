@@ -8,7 +8,7 @@ kkrepo 是一个兼容 Nexus 的制品仓库，核心设计是 MySQL/PostgreSQL 
 
 ```text
 制品客户端
-  Maven / npm / PyPI / Go / Helm / Cargo/Rust / Dart/Pub / Composer/PHP / Terraform / Swift / Docker/OCI / NuGet / RubyGems / Yum / Raw
+  Maven / npm / PyPI / Go / Helm / Cargo/Rust / Dart/Pub / Composer/PHP / Terraform / Swift / Ansible Galaxy / Docker/OCI / NuGet / RubyGems / Yum / Raw
         |
         v
 负载均衡 / 反向代理
@@ -81,6 +81,7 @@ Admin UI 和 Browse UI 由 Spring Boot 服务提供静态资源：
 | `protocol-composer` | Composer 2 package name、metadata、dist path、URL rewrite 和错误模型辅助逻辑 |
 | `protocol-terraform` | Terraform Module/Provider Registry 路径、版本、平台、metadata、checksum 和 URL token 辅助逻辑 |
 | `protocol-swift` | Swift Package Registry v1 路径、media type、SemVer、identity、release model、Link 和 problem details |
+| `protocol-ansible` | Ansible Galaxy v3 路径、collection coordinate、SemVer、pagination、metadata model 和错误模型 |
 | `protocol-docker` | Docker Registry V2 / OCI 路径、digest、manifest、media type 和错误模型辅助逻辑 |
 | `protocol-nuget` | NuGet 路径辅助逻辑 |
 | `protocol-rubygems` | RubyGems metadata 辅助逻辑 |
@@ -107,6 +108,7 @@ Admin UI 和 Browse UI 由 Spring Boot 服务提供静态资源：
 - 迁移 job、迁移 asset、cursor、marker 和 checkpoint。
 - Terraform Provider platform/revision/signing state、group source binding 和 publish lease。
 - Swift 不可变 release/manifest、SCM URL mapping、GitHub source pin、group binding、repository revision、publish lease、tombstone 和 negative cache。
+- Ansible collection coordinate、有上限的 metadata/dependency projection、import task、proxy validator/negative cache、group source binding、按 blob 引用的 signature 和 fenced lease。
 - Cache version 水位和跨副本协调状态。
 
 Blob storage 存储：
@@ -114,8 +116,9 @@ Blob storage 存储：
 - 制品字节内容。
 - 缓存的上游制品。
 - 生成或迁移的 blob object。
+- Ansible collection tarball、完整 `MANIFEST.json`/`FILES.json`、超大上游 JSON 和 signature payload。
 
-数据库只保存 blob 引用，不保存大 blob 内容。
+数据库只保存 blob 引用，不保存大 blob 内容或无上限的协议 JSON。
 
 ## Blob 存储
 
