@@ -146,6 +146,9 @@ class AnsibleGalaxyServiceLifecycleTest {
         invocation -> Optional.of(claimed(waiting.get())));
     when(registry.findVersion(hosted.id(), "acme", "tools", "1.2.3"))
         .thenReturn(Optional.empty(), Optional.of(winner));
+    when(registry.finishTask(
+        anyString(), anyString(), anyLong(), anyString(), any(), any(), any(),
+        any(), any(), any(), any(), any(), any())).thenReturn(true);
 
     MavenResponse response = service.publish(
         hosted, "api/v3/artifacts/collections/", null,
@@ -165,8 +168,48 @@ class AnsibleGalaxyServiceLifecycleTest {
   }
 
   @Test
-  void stalePublisherReusesButNeverDeletesAConcurrentWinnerAsset() throws Exception {
+  void supersededTaskOwnerPreservesStagingForTheNewOwner() throws Exception {
     RepositoryRuntime hosted = runtime(3L, RepositoryType.HOSTED, null, List.of());
+    AnsibleCollectionArchiveInspector.InspectedCollection inspected = inspected("superseded");
+    AnsibleGalaxyRegistryDao.CollectionVersion stored = version(hosted.id(), 34L, 24L);
+    stubPersistence(hosted, inspected, stored);
+    AssetRecord staged = asset(
+        43L, hosted.id(), null, 53L, ".ansible/staging/task/" + FILENAME);
+    when(assets.stageCollection(
+        eq(hosted), anyString(), eq(FILENAME), eq(inspected.file()), eq("alice"), eq(null)))
+        .thenReturn(staged);
+    AtomicReference<AnsibleGalaxyRegistryDao.ImportTask> waiting = new AtomicReference<>();
+    when(registry.createTask(any())).thenAnswer(invocation -> {
+      AnsibleGalaxyRegistryDao.ImportTask task = invocation.getArgument(0);
+      waiting.set(task);
+      return task;
+    });
+    when(registry.claimTask(anyString(), anyString(), any(), any())).thenAnswer(
+        invocation -> Optional.of(claimed(waiting.get())));
+    when(registry.finishTask(
+        anyString(), anyString(), anyLong(), anyString(), any(), any(), any(),
+        any(), any(), any(), any(), any(), any())).thenReturn(false);
+
+    assertEquals(202, service.publish(
+        hosted, "api/v3/artifacts/collections/", null,
+        new ByteArrayInputStream(new byte[] {1}), FILENAME, SHA256,
+        "alice", null, false).status());
+
+    verify(registry).finishTask(
+        eq(waiting.get().taskId()), eq("owner"), eq(3L),
+        eq(AnsibleGalaxyRegistryDao.TASK_COMPLETED), any(), eq(null), eq(null),
+        eq("acme"), eq("tools"), eq("1.2.3"), eq(FILENAME), eq(SHA256), any());
+    verify(registry, never()).finishTask(
+        anyString(), anyString(), anyLong(), eq(AnsibleGalaxyRegistryDao.TASK_FAILED),
+        any(), any(), any(), any(), any(), any(), any(), any(), any());
+    verify(assets, never()).delete(
+        hosted, ".ansible/staging/" + waiting.get().taskId() + "/" + FILENAME);
+    assertFalse(Files.exists(inspected.file()));
+  }
+
+  @Test
+  void stalePublisherReusesButNeverDeletesAConcurrentWinnerAsset() throws Exception {
+    RepositoryRuntime hosted = runtime(4L, RepositoryType.HOSTED, null, List.of());
     AnsibleCollectionArchiveInspector.InspectedCollection inspected = inspected("stale");
     AssetRecord winnerAsset = asset(
         42L, hosted.id(), 12L, 52L,
@@ -198,7 +241,7 @@ class AnsibleGalaxyServiceLifecycleTest {
 
   @Test
   void supportsNexusStyleArtifactPutAndMigrationRestore() throws Exception {
-    RepositoryRuntime hosted = runtime(4L, RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime hosted = runtime(5L, RepositoryType.HOSTED, null, List.of());
     AnsibleCollectionArchiveInspector.InspectedCollection inspected = inspected("put");
     AnsibleGalaxyRegistryDao.CollectionVersion stored = version(hosted.id(), 32L, 22L);
     stubPersistence(hosted, inspected, stored);
@@ -218,7 +261,7 @@ class AnsibleGalaxyServiceLifecycleTest {
         hosted, duplicate, Instant.EPOCH, "migration", "127.0.0.1"));
     AnsibleCollectionArchiveInspector.delete(duplicate.file());
 
-    RepositoryRuntime group = runtime(5L, RepositoryType.GROUP, null, List.of(hosted));
+    RepositoryRuntime group = runtime(6L, RepositoryType.GROUP, null, List.of(hosted));
     assertThrows(IllegalArgumentException.class, () -> service.restoreCollectionForMigration(
         group, inspected("group"), Instant.EPOCH, "migration", null));
   }
@@ -362,6 +405,9 @@ class AnsibleGalaxyServiceLifecycleTest {
         .thenReturn(Optional.of(claimed));
     when(assets.open(hosted.id(), 99L)).thenReturn(new ByteArrayInputStream(new byte[] {1}));
     when(inspector.inspect(any())).thenReturn(inspected);
+    when(registry.finishTask(
+        anyString(), anyString(), anyLong(), anyString(), any(), any(), any(),
+        any(), any(), any(), any(), any(), any())).thenReturn(true);
 
     service.recoverTask(candidate);
 
@@ -430,6 +476,40 @@ class AnsibleGalaxyServiceLifecycleTest {
         "api/v3/plugin/ansible/content/published/collections/artifacts/" + FILENAME,
         null, BASE, false, "alice").status());
     verify(registry).bindGroupSourceIfCurrent(any());
+  }
+
+  @Test
+  void groupArtifactResolutionReturnsTheConcurrentBindingWinner() throws Exception {
+    RepositoryRuntime first = runtime(14L, RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime second = runtime(15L, RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime group = runtime(16L, RepositoryType.GROUP, null, List.of(first, second));
+    AnsibleGalaxyRegistryDao.CollectionVersion candidate = version(first.id(), 80L, 81L);
+    AnsibleGalaxyRegistryDao.CollectionVersion winner = version(second.id(), 82L, 83L);
+    AnsibleGalaxyRegistryDao.GroupBinding winningBinding =
+        new AnsibleGalaxyRegistryDao.GroupBinding(
+            group.id(), "acme", "tools", "1.2.3", second.id(), winner.id(), 6L, 9L,
+            winner.artifactSha256(), Instant.now(), Instant.now());
+    when(registry.currentRepositoryRevision(group.id())).thenReturn(9L);
+    when(registry.currentRepositoryRevision(first.id())).thenReturn(5L);
+    when(registry.findGroupBindingByArtifactFilename(group.id(), FILENAME))
+        .thenReturn(Optional.empty());
+    when(registry.findVersionByArtifactFilename(first.id(), FILENAME))
+        .thenReturn(Optional.of(candidate));
+    when(registry.bindGroupSourceIfCurrent(any())).thenReturn(true);
+    when(registry.findGroupBinding(group.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.of(winningBinding));
+    when(registry.findVersionById(winner.id())).thenReturn(Optional.of(winner));
+    when(assets.serve(second.id(), winner.artifactAssetId(), false)).thenReturn(MavenResponse.ok(
+        new ByteArrayInputStream(new byte[] {2}), 1L,
+        "application/octet-stream", winner.artifactSha256(), Instant.EPOCH));
+
+    assertEquals(200, service.get(
+        group,
+        "api/v3/plugin/ansible/content/published/collections/artifacts/" + FILENAME,
+        null, BASE, false, "alice").status());
+
+    verify(assets).serve(second.id(), winner.artifactAssetId(), false);
+    verify(assets, never()).serve(first.id(), candidate.artifactAssetId(), false);
   }
 
   @Test

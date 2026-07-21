@@ -223,15 +223,16 @@ public class AnsibleGalaxyService {
       return;
     }
     AnsibleCollectionArchiveInspector.InspectedCollection inspected = null;
+    boolean terminal = false;
     try (InputStream input = assets.open(runtime.id(), task.stagingAssetId())) {
       inspected = inspector.inspect(input);
       validateRecoveredTask(task, inspected);
-      finishSuccessfulTask(runtime, task, inspected, task.requester(), null, true);
+      terminal = finishSuccessfulTask(runtime, task, inspected, task.requester(), null, true);
     } catch (RuntimeException | IOException e) {
-      finishFailed(task, errorCode(e), safeDetail(e));
+      terminal = finishFailed(task, errorCode(e), safeDetail(e));
     } finally {
       if (inspected != null) AnsibleCollectionArchiveInspector.delete(inspected.file());
-      deleteStaging(runtime, task);
+      if (terminal) deleteStaging(runtime, task);
     }
   }
 
@@ -493,7 +494,12 @@ public class AnsibleGalaxyService {
               candidate.versionNormalized(), member.id(), candidate.id(),
               registry.currentRepositoryRevision(member.id()), groupRevision,
               candidate.artifactSha256(), Instant.now(), Instant.now()));
-          return candidate;
+          return registry.findGroupBinding(
+                  runtime.id(), candidate.namespaceLc(), candidate.nameLc(),
+                  candidate.versionNormalized())
+              .filter(current -> current.groupConfigRevision() == groupRevision)
+              .flatMap(current -> registry.findVersionById(current.memberVersionId()))
+              .orElse(candidate);
         } catch (AnsibleGalaxyExceptions.NotFound ignored) {
         }
       }
@@ -886,16 +892,17 @@ public class AnsibleGalaxyService {
             waiting.taskId(), nodeOwner, now.plus(TASK_LEASE_DURATION), now)
         .orElseThrow(() -> new AnsibleGalaxyExceptions.ServiceUnavailable(
             "Unable to claim the collection import task"));
+    boolean terminal = false;
     try {
-      finishSuccessfulTask(runtime, claimed, inspected, actor, ip, false);
+      terminal = finishSuccessfulTask(runtime, claimed, inspected, actor, ip, false);
     } catch (RuntimeException e) {
-      finishFailed(claimed, errorCode(e), safeDetail(e));
+      terminal = finishFailed(claimed, errorCode(e), safeDetail(e));
     } finally {
-      deleteStaging(runtime, claimed);
+      if (terminal) deleteStaging(runtime, claimed);
     }
   }
 
-  private void finishSuccessfulTask(
+  private boolean finishSuccessfulTask(
       RepositoryRuntime runtime,
       AnsibleGalaxyRegistryDao.ImportTask task,
       AnsibleCollectionArchiveInspector.InspectedCollection inspected,
@@ -909,20 +916,16 @@ public class AnsibleGalaxyService {
         "level", "INFO",
         "message", "Imported collection " + version.namespaceDisplay() + "."
             + version.nameDisplay() + ":" + version.versionOriginal()));
-    boolean updated = registry.finishTask(
+    return registry.finishTask(
         task.taskId(), task.leaseOwner(), task.fencingToken(), TASK_COMPLETED, messages,
         null, null, version.namespaceLc(), version.nameLc(), version.versionNormalized(),
         version.artifactFilename(), version.artifactSha256(), finished);
-    if (!updated) {
-      throw new AnsibleGalaxyExceptions.ServiceUnavailable(
-          "Collection import task fencing token was superseded");
-    }
   }
 
-  private void finishFailed(
+  private boolean finishFailed(
       AnsibleGalaxyRegistryDao.ImportTask task, String code, String detail) {
     Instant finished = Instant.now();
-    registry.finishTask(
+    return registry.finishTask(
         task.taskId(), task.leaseOwner(), task.fencingToken(), TASK_FAILED,
         List.of(Map.of("level", "ERROR", "message", detail)), code, detail,
         task.namespaceLc(), task.nameLc(), task.versionNormalized(), task.artifactFilename(),
