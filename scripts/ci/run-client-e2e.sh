@@ -927,9 +927,8 @@ test_nuget() {
   run_logged nuget-new dotnet new classlib -n "$package" -o "$dir/$package" --framework net8.0
   run_logged nuget-pack dotnet pack "$dir/$package/$package.csproj" \
     -p:PackageId="$package" -p:Version=1.0.0 -o "$dir/out"
-  run_logged nuget-push dotnet nuget push "$dir/out/$package.1.0.0.nupkg" \
+  run_logged_in nuget-push "$dir" dotnet nuget push "$dir/out/$package.1.0.0.nupkg" \
     --source kkrepoHosted \
-    --configfile "$dir/NuGet.Config" \
     --api-key "$token" \
     --timeout 120
   run_logged nuget-consumer-new dotnet new console -n Consumer -o "$restore_dir/Consumer" --framework net8.0

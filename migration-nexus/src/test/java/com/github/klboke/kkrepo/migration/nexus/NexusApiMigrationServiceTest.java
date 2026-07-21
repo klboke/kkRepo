@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.migration.nexus;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -33,6 +34,7 @@ import java.io.ByteArrayOutputStream;
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPairGenerator;
+import java.security.Provider;
 import java.security.Security;
 import java.util.ArrayList;
 import java.util.Date;
@@ -63,6 +65,19 @@ import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 
 class NexusApiMigrationServiceTest {
+
+  @Test
+  void nativeRuntimeDoesNotInstallBouncyCastleProvider() {
+    Provider previousProvider = Security.getProvider(BouncyCastleProvider.PROVIDER_NAME);
+    Security.removeProvider(BouncyCastleProvider.PROVIDER_NAME);
+    try {
+      assertNull(NexusPgpCryptoProvider.current(true));
+      assertNull(Security.getProvider(BouncyCastleProvider.PROVIDER_NAME));
+    } finally {
+      Security.removeProvider(BouncyCastleProvider.PROVIDER_NAME);
+      if (previousProvider != null) Security.addProvider(previousProvider);
+    }
+  }
 
   @Test
   void preflightIncludesMigrationPlanDetailsForResultPanel() {
@@ -833,6 +848,8 @@ class NexusApiMigrationServiceTest {
         terraformRegistry.asDao());
     String passphrase = "source-key-passphrase";
     String privateKey = signingKey(passphrase);
+    Provider previousProvider = Security.getProvider(BouncyCastleProvider.PROVIDER_NAME);
+    Security.removeProvider(BouncyCastleProvider.PROVIDER_NAME);
     NexusInventory inventory = new NexusInventory(
         List.of(Map.of("name", "default")),
         List.of(repository("terraform-hosted", "terraform", "hosted", Map.of(
@@ -841,25 +858,31 @@ class NexusApiMigrationServiceTest {
         NexusSecurityExport.empty(),
         List.of());
 
-    service.migrateConfig(inventory, request("https://old-nexus.example"));
-    RepositoryRecord repository = repositories.required("terraform-hosted");
-    TerraformRegistryDao.SigningKey imported = terraformRegistry.key;
-    assertNotNull(imported);
-    assertEquals(repository.id().longValue(), imported.repositoryId());
-    assertTrue(imported.publicKey().contains("BEGIN PGP PUBLIC KEY BLOCK"));
-    TerraformSigningKeyMaterial.Material keyMaterial = TerraformSigningKeyMaterial.decode(
-        new SecretCipher(EncryptionSecrets.credentialSecret()).decrypt(imported.encryptedPrivateKey()));
-    assertEquals(privateKey.strip(), keyMaterial.privateKeyArmor().strip());
-    assertEquals(passphrase, keyMaterial.passphrase());
-    @SuppressWarnings("unchecked")
-    Map<String, Object> source = (Map<String, Object>) repository.attributes().get("sourceRepository");
-    @SuppressWarnings("unchecked")
-    Map<String, Object> signing = (Map<String, Object>) source.get("terraformSigning");
-    assertEquals("<redacted>", signing.get("keypair"));
-    assertEquals("<redacted>", signing.get("passphrase"));
+    try {
+      service.migrateConfig(inventory, request("https://old-nexus.example"));
+      assertNotNull(Security.getProvider(BouncyCastleProvider.PROVIDER_NAME));
+      RepositoryRecord repository = repositories.required("terraform-hosted");
+      TerraformRegistryDao.SigningKey imported = terraformRegistry.key;
+      assertNotNull(imported);
+      assertEquals(repository.id().longValue(), imported.repositoryId());
+      assertTrue(imported.publicKey().contains("BEGIN PGP PUBLIC KEY BLOCK"));
+      TerraformSigningKeyMaterial.Material keyMaterial = TerraformSigningKeyMaterial.decode(
+          new SecretCipher(EncryptionSecrets.credentialSecret()).decrypt(imported.encryptedPrivateKey()));
+      assertEquals(privateKey.strip(), keyMaterial.privateKeyArmor().strip());
+      assertEquals(passphrase, keyMaterial.passphrase());
+      @SuppressWarnings("unchecked")
+      Map<String, Object> source = (Map<String, Object>) repository.attributes().get("sourceRepository");
+      @SuppressWarnings("unchecked")
+      Map<String, Object> signing = (Map<String, Object>) source.get("terraformSigning");
+      assertEquals("<redacted>", signing.get("keypair"));
+      assertEquals("<redacted>", signing.get("passphrase"));
 
-    service.migrateConfig(inventory, request("https://old-nexus.example"));
-    assertEquals(1, terraformRegistry.inserts);
+      service.migrateConfig(inventory, request("https://old-nexus.example"));
+      assertEquals(1, terraformRegistry.inserts);
+    } finally {
+      Security.removeProvider(BouncyCastleProvider.PROVIDER_NAME);
+      if (previousProvider != null) Security.addProvider(previousProvider);
+    }
   }
 
   private static NexusApiMigrationService service(
@@ -890,14 +913,12 @@ class NexusApiMigrationServiceTest {
   }
 
   private static String signingKey(String passphrase) throws Exception {
-    if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
-      Security.addProvider(new BouncyCastleProvider());
-    }
-    KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA", BouncyCastleProvider.PROVIDER_NAME);
+    Provider provider = new BouncyCastleProvider();
+    KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA", provider);
     generator.initialize(2048);
     PGPKeyPair pair = new JcaPGPKeyPair(PGPPublicKey.RSA_SIGN, generator.generateKeyPair(), new Date());
     PGPDigestCalculator sha1 = new JcaPGPDigestCalculatorProviderBuilder()
-        .setProvider(BouncyCastleProvider.PROVIDER_NAME).build().get(HashAlgorithmTags.SHA1);
+        .setProvider(provider).build().get(HashAlgorithmTags.SHA1);
     PGPSignatureSubpacketGenerator certification = new PGPSignatureSubpacketGenerator();
     certification.setKeyFlags(false, KeyFlags.CERTIFY_OTHER | KeyFlags.SIGN_DATA);
     PGPKeyRingGenerator rings = new PGPKeyRingGenerator(
@@ -908,9 +929,9 @@ class NexusApiMigrationServiceTest {
         certification.generate(),
         null,
         new JcaPGPContentSignerBuilder(pair.getPublicKey().getAlgorithm(), HashAlgorithmTags.SHA256)
-            .setProvider(BouncyCastleProvider.PROVIDER_NAME),
-        new JcePBESecretKeyEncryptorBuilder(SymmetricKeyAlgorithmTags.AES_256, sha1)
-            .setProvider(BouncyCastleProvider.PROVIDER_NAME).build(passphrase.toCharArray()));
+            .setProvider(provider),
+        new JcePBESecretKeyEncryptorBuilder(SymmetricKeyAlgorithmTags.CAST5, sha1)
+            .setProvider(provider).build(passphrase.toCharArray()));
     ByteArrayOutputStream armored = new ByteArrayOutputStream();
     try (ArmoredOutputStream output = new ArmoredOutputStream(armored)) {
       rings.generateSecretKeyRing().encode(output);

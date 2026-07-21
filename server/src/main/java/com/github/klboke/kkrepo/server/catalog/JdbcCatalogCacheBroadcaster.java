@@ -1,30 +1,54 @@
 package com.github.klboke.kkrepo.server.catalog;
 
 import com.github.klboke.kkrepo.server.cache.VersionWatermark;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ThreadLocalRandom;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
-import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.scheduling.annotation.SchedulingConfigurer;
+import org.springframework.scheduling.config.FixedDelayTask;
+import org.springframework.scheduling.config.ScheduledTaskRegistrar;
 import org.springframework.stereotype.Component;
 
 @Component
 @ConditionalOnExpression("'${kkrepo.catalog-cache.broadcast-backend:jdbc}' == 'jdbc' "
     + "|| '${kkrepo.catalog-cache.broadcast-backend:jdbc}' == 'mysql'")
-class JdbcCatalogCacheBroadcaster implements CatalogCacheBroadcaster {
+class JdbcCatalogCacheBroadcaster implements CatalogCacheBroadcaster, SchedulingConfigurer {
   private static final Logger log = LoggerFactory.getLogger(JdbcCatalogCacheBroadcaster.class);
   private static final String NAME_PREFIX = "catalog:";
 
   private final VersionWatermark watermark;
+  private final Duration pollDelay;
+  private final Duration initialDelay;
   private final Map<String, List<Runnable>> listeners = new ConcurrentHashMap<>();
   private final Map<String, Long> lastSeen = new ConcurrentHashMap<>();
 
-  JdbcCatalogCacheBroadcaster(VersionWatermark watermark) {
+  @Autowired
+  JdbcCatalogCacheBroadcaster(
+      VersionWatermark watermark,
+      @Value("${kkrepo.catalog-cache.jdbc.poll-delay-ms:500}") long pollDelayMs,
+      @Value("${kkrepo.catalog-cache.jdbc.initial-delay-ms:500}") long initialDelayMs,
+      @Value("${kkrepo.catalog-cache.jdbc.initial-jitter-ms:100}") long initialJitterMs) {
     this.watermark = watermark;
+    this.pollDelay = Duration.ofMillis(Math.max(1, pollDelayMs));
+    this.initialDelay = Duration.ofMillis(jitteredInitialDelay(initialDelayMs, initialJitterMs));
+  }
+
+  JdbcCatalogCacheBroadcaster(VersionWatermark watermark) {
+    this(watermark, 500, 500, 100);
+  }
+
+  @Override
+  public void configureTasks(ScheduledTaskRegistrar taskRegistrar) {
+    taskRegistrar.addFixedDelayTask(new FixedDelayTask(this::poll, pollDelay, initialDelay));
   }
 
   @Override
@@ -45,12 +69,6 @@ class JdbcCatalogCacheBroadcaster implements CatalogCacheBroadcaster {
     lastSeen.put(name, version);
   }
 
-  @Scheduled(
-      fixedDelayString = "${kkrepo.catalog-cache.jdbc.poll-delay-ms:500}",
-      initialDelayString =
-          "#{${kkrepo.catalog-cache.jdbc.initial-delay-ms:500} "
-              + "+ T(java.util.concurrent.ThreadLocalRandom).current().nextLong("
-              + "T(java.lang.Math).max(0, ${kkrepo.catalog-cache.jdbc.initial-jitter-ms:100}) + 1)}")
   public void poll() {
     if (listeners.isEmpty()) {
       return;
@@ -93,5 +111,13 @@ class JdbcCatalogCacheBroadcaster implements CatalogCacheBroadcaster {
       throw new IllegalArgumentException("Catalog name is required");
     }
     return NAME_PREFIX + catalogName.trim();
+  }
+
+  private static long jitteredInitialDelay(long initialDelayMs, long initialJitterMs) {
+    long base = Math.max(0, initialDelayMs);
+    long jitterLimit = Math.max(0, initialJitterMs);
+    long jitterBound = jitterLimit == Long.MAX_VALUE ? Long.MAX_VALUE : jitterLimit + 1;
+    long jitter = jitterBound > 1 ? ThreadLocalRandom.current().nextLong(jitterBound) : 0;
+    return base > Long.MAX_VALUE - jitter ? Long.MAX_VALUE : base + jitter;
   }
 }

@@ -9,6 +9,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.util.Map;
 import org.apache.catalina.connector.Connector;
+import org.apache.coyote.AbstractProtocol;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.boot.tomcat.servlet.TomcatServletWebServerFactory;
@@ -35,12 +36,22 @@ public class DockerConnectorConfiguration {
       for (Map.Entry<Integer, String> entry : snapshot.repositoriesByPort().entrySet()) {
         Connector connector = new Connector(TomcatServletWebServerFactory.DEFAULT_PROTOCOL);
         connector.setPort(entry.getKey());
-        connector.setProperty("connectionTimeout", Integer.toString(tuning.connectionTimeoutMillis()));
-        connector.setProperty("maxConnections", Integer.toString(tuning.maxConnections()));
-        connector.setProperty("acceptCount", Integer.toString(tuning.acceptCount()));
+        configureConnector(connector, tuning);
         factory.addAdditionalConnectors(connector);
       }
     };
+  }
+
+  static void configureConnector(
+      Connector connector, DockerConnectorManager.ConnectorTuning tuning) {
+    if (!(connector.getProtocolHandler() instanceof AbstractProtocol<?> protocol)) {
+      throw new IllegalStateException(
+          "Unsupported Docker connector protocol: "
+              + connector.getProtocolHandler().getClass().getName());
+    }
+    protocol.setConnectionTimeout(tuning.connectionTimeoutMillis());
+    protocol.setMaxConnections(tuning.maxConnections());
+    protocol.setAcceptCount(tuning.acceptCount());
   }
 
   @Bean

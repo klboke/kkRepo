@@ -160,9 +160,37 @@ Specify an image tag:
 
 Container deployments should still use an independent MySQL instance and OSS/S3 blob store. Do not use a container-local filesystem as long-term production blob storage.
 
+## GraalVM Native Image (Experimental)
+
+The `native` Maven profile runs Spring AOT processing and then compiles the server with GraalVM Native Image. To build a local executable, install a GraalVM JDK 25 distribution that includes the `native-image` tool, then run:
+
+```bash
+mvn -Pnative -pl server -am -DskipTests package
+./server/target/kkrepo
+```
+
+You can build the native executable inside a Cloud Native Buildpacks container instead of installing GraalVM locally:
+
+```bash
+mvn -Pnative -pl server -am -Dmaven.test.skip=true \
+  -DskipNativeBuild=true \
+  -Dspring-boot.build-image.imageName=kkrepo:native \
+  package spring-boot:build-image-no-fork
+```
+
+Use `build-image-no-fork` for this multi-module reactor. The resulting `kkrepo:native` image accepts the same database, secret, storage, and server configuration as the JVM image.
+
+The Docker image helper exposes the same behavior through an explicit option:
+
+```bash
+./scripts/build-docker-image.sh --native kkrepo:native
+```
+
+Without `--native`, the helper continues to build the JVM image. Native packaging is currently experimental. Before production adoption, validate the protocols and optional integrations used by your deployment, especially external Apollo configuration and OSS/S3 providers. See the [Native Image or JVM Selection Guide](native-vs-jvm-guide.md) for the measured tradeoffs and current recommendation.
+
 ## Archive Package Deployment
 
-The archive package contains the executable jar, start script, stop script, restart script, status script, and external configuration file. It is suitable for quick trials, traditional VM deployment, or environments that need systemd integration.
+The default archive package contains the executable jar, start script, stop script, restart script, status script, and external configuration file. It is suitable for quick trials, traditional VM deployment, or environments that need systemd integration.
 
 Run from the repository root:
 
@@ -176,6 +204,21 @@ The build generates:
 server/target/kkrepo-<release-version>.tar.gz
 server/target/kkrepo-<release-version>.zip
 ```
+
+Build platform-specific Native archives explicitly with Docker and Cloud Native Buildpacks:
+
+```bash
+./scripts/build-dist.sh --native
+```
+
+This opt-in build generates both archive formats with a platform suffix:
+
+```text
+server/target/kkrepo-<release-version>-native-linux-<architecture>.tar.gz
+server/target/kkrepo-<release-version>-native-linux-<architecture>.zip
+```
+
+The default remains JVM packaging. A JVM archive contains `lib/kkrepo.jar`; a Native archive contains the executable `lib/kkrepo`. The shared `bin/start.sh` selects the packaged runtime automatically, so the service commands and external configuration layout remain the same. Native archives do not require a Java runtime on the target host, but they must run on the matching operating system and CPU architecture.
 
 If a future development version uses the Maven `-SNAPSHOT` suffix, the build script automatically removes that suffix from the archive filename and extracted directory name.
 
@@ -191,7 +234,8 @@ kkrepo-<release-version>/
   conf/
     application.properties
   lib/
-    kkrepo.jar
+    kkrepo.jar        # JVM archive
+    # or kkrepo       # Native archive
   logs/
   data/
 ```
@@ -244,10 +288,13 @@ The startup script uses the extracted directory as `KKREPO_HOME` by default. Com
 | `KKREPO_CONF_DIR` | `$KKREPO_HOME/conf` | External configuration directory |
 | `KKREPO_LOG_DIR` | `$KKREPO_HOME/logs` | Log directory |
 | `KKREPO_PID_FILE` | `$KKREPO_LOG_DIR/kkrepo.pid` | PID file |
-| `KKREPO_JAR_FILE` | `$KKREPO_HOME/lib/kkrepo.jar` | Executable jar |
-| `JAVA_OPTS` | Empty | JVM options |
+| `KKREPO_RUNTIME` | `auto` | Select `native` when `lib/kkrepo` exists; otherwise select `jvm` |
+| `KKREPO_JAR_FILE` | `$KKREPO_HOME/lib/kkrepo.jar` | JVM executable jar |
+| `KKREPO_NATIVE_FILE` | `$KKREPO_HOME/lib/kkrepo` | Native executable |
+| `JAVA_OPTS` | Empty | JVM-only options |
+| `KKREPO_NATIVE_OPTS` | Empty | Native executable options |
 
-Example:
+JVM example:
 
 ```bash
 export JAVA_OPTS='-Xms2g -Xmx4g -XX:+UseG1GC'

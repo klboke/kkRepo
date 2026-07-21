@@ -59,6 +59,8 @@ If you prefer to inspect the script before running it, download `scripts/quickst
 
 Local quick start, Spring Boot executable jar, Docker image, archive package, production deployment architecture, resource sizing, and upgrade flow are documented in the [Build And Deployment Guide](docs/en/build-deployment-guide.md).
 
+For measured startup, memory, image-size, and warmed-throughput tradeoffs between the default JVM runtime and the opt-in Native Image runtime, see the [Native Image or JVM Selection Guide](docs/en/native-vs-jvm-guide.md).
+
 If kkRepo is deployed behind Nginx or another HTTPS reverse proxy, follow the [Nginx Reverse Proxy Notes](docs/en/nginx-reverse-proxy.md) so generated repository URLs, such as npm `dist.tarball`, keep the public `https://` scheme and host.
 
 Local hot-reload development and testing are documented in the [Development Guide](docs/en/development-guide.md).
@@ -205,6 +207,7 @@ kkRepo is open sourced under the [Apache License 2.0](LICENSE).
 
 - [Development Guide](docs/en/development-guide.md)
 - [Build And Deployment Guide](docs/en/build-deployment-guide.md)
+- [Native Image or JVM Selection Guide](docs/en/native-vs-jvm-guide.md)
 - [Nginx Reverse Proxy Notes](docs/en/nginx-reverse-proxy.md)
 - [Client Recipes](docs/en/client-recipes.md)
 - [Architecture](docs/en/architecture.md)

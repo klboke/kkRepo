@@ -59,6 +59,8 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 
 本地快速启动、Spring Boot 可执行 jar、Docker 镜像、压缩包、生产部署架构、资源规格和升级流程见 [构建部署指南](docs/zh/build-deployment-guide.md)。
 
+默认 JVM 与显式开启的 Native Image 在启动、内存、镜像体积和预热后吞吐方面的实测差异见 [Native Image 与 JVM 选型指南](docs/zh/native-vs-jvm-guide.md)。
+
 如果 kkRepo 部署在 Nginx 或其他 HTTPS 反向代理后面，请参考 [Nginx 反向代理配置注意事项](docs/zh/nginx-reverse-proxy.md)，确保 npm `dist.tarball` 等生成的仓库 URL 保持公网 `https://` scheme 和 host。
 
 本地开发热重载和测试说明见 [中文开发指南](docs/zh/development-guide.md)。
@@ -205,6 +207,7 @@ kkRepo 使用 [Apache License 2.0](LICENSE) 开源。
 
 - [中文开发指南](docs/zh/development-guide.md)
 - [构建部署指南](docs/zh/build-deployment-guide.md)
+- [Native Image 与 JVM 选型指南](docs/zh/native-vs-jvm-guide.md)
 - [Nginx 反向代理配置注意事项](docs/zh/nginx-reverse-proxy.md)
 - [客户端配置示例](docs/zh/client-recipes.md)
 - [架构说明](docs/zh/architecture.md)

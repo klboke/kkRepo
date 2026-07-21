@@ -160,9 +160,37 @@ docker pull ghcr.io/klboke/kkrepo:latest
 
 容器化部署仍建议使用独立 MySQL 和 OSS/S3 blob store，不建议把容器本地文件系统作为长期生产 blob 存储。
 
+## GraalVM Native Image（实验性）
+
+`native` Maven profile 会先执行 Spring AOT 处理，再使用 GraalVM Native Image 编译服务端。构建本地可执行文件前，需要安装包含 `native-image` 工具的 GraalVM JDK 25，然后执行：
+
+```bash
+mvn -Pnative -pl server -am -DskipTests package
+./server/target/kkrepo
+```
+
+如果不想在本机安装 GraalVM，也可以通过 Cloud Native Buildpacks 在容器中完成原生编译：
+
+```bash
+mvn -Pnative -pl server -am -Dmaven.test.skip=true \
+  -DskipNativeBuild=true \
+  -Dspring-boot.build-image.imageName=kkrepo:native \
+  package spring-boot:build-image-no-fork
+```
+
+本项目是多模块 Maven reactor，构建镜像时应使用 `build-image-no-fork`。生成的 `kkrepo:native` 镜像沿用 JVM 镜像的数据库、密钥、存储和服务端配置。
+
+Docker 镜像辅助脚本也提供相同的显式入口：
+
+```bash
+./scripts/build-docker-image.sh --native kkrepo:native
+```
+
+不传 `--native` 时，脚本仍构建 JVM 镜像。原生打包目前仍为实验性能力。用于生产前，应针对实际使用的协议和可选集成做验证，尤其是外部 Apollo 配置中心及 OSS/S3 存储提供方。实测差异和当前建议见 [Native Image 与 JVM 选型指南](native-vs-jvm-guide.md)。
+
 ## 压缩包部署
 
-压缩包中包含可执行 jar、启动脚本、停止脚本、重启脚本、状态检查脚本和外部配置文件，适合快速试用、传统 VM 部署或需要接入 systemd 的环境。
+默认压缩包中包含可执行 jar、启动脚本、停止脚本、重启脚本、状态检查脚本和外部配置文件，适合快速试用、传统 VM 部署或需要接入 systemd 的环境。
 
 在仓库根目录执行：
 
@@ -176,6 +204,21 @@ docker pull ghcr.io/klboke/kkrepo:latest
 server/target/kkrepo-<release-version>.tar.gz
 server/target/kkrepo-<release-version>.zip
 ```
+
+通过 Docker 和 Cloud Native Buildpacks 显式构建对应平台的 Native 压缩包：
+
+```bash
+./scripts/build-dist.sh --native
+```
+
+该可选构建会同时生成带平台后缀的两种压缩格式：
+
+```text
+server/target/kkrepo-<release-version>-native-linux-<architecture>.tar.gz
+server/target/kkrepo-<release-version>-native-linux-<architecture>.zip
+```
+
+默认仍是 JVM 打包。JVM 压缩包包含 `lib/kkrepo.jar`，Native 压缩包包含可执行文件 `lib/kkrepo`。共用的 `bin/start.sh` 会自动选择包内运行时，因此服务命令和外部配置目录保持一致。Native 压缩包的目标机器不需要 Java，但操作系统和 CPU 架构必须与包名一致。
 
 如果后续开发版本使用 Maven `-SNAPSHOT` 后缀，构建脚本会自动在压缩包文件名和解压目录中去掉该后缀。
 
@@ -191,7 +234,8 @@ kkrepo-<release-version>/
   conf/
     application.properties
   lib/
-    kkrepo.jar
+    kkrepo.jar        # JVM 压缩包
+    # 或 kkrepo       # Native 压缩包
   logs/
   data/
 ```
@@ -244,10 +288,13 @@ bin/stop.sh
 | `KKREPO_CONF_DIR` | `$KKREPO_HOME/conf` | 外部配置目录 |
 | `KKREPO_LOG_DIR` | `$KKREPO_HOME/logs` | 日志目录 |
 | `KKREPO_PID_FILE` | `$KKREPO_LOG_DIR/kkrepo.pid` | PID 文件 |
-| `KKREPO_JAR_FILE` | `$KKREPO_HOME/lib/kkrepo.jar` | 可执行 jar |
-| `JAVA_OPTS` | 空 | JVM 参数 |
+| `KKREPO_RUNTIME` | `auto` | 存在 `lib/kkrepo` 时选择 `native`，否则选择 `jvm` |
+| `KKREPO_JAR_FILE` | `$KKREPO_HOME/lib/kkrepo.jar` | JVM 可执行 jar |
+| `KKREPO_NATIVE_FILE` | `$KKREPO_HOME/lib/kkrepo` | Native 可执行文件 |
+| `JAVA_OPTS` | 空 | 仅用于 JVM 的参数 |
+| `KKREPO_NATIVE_OPTS` | 空 | Native 可执行文件参数 |
 
-示例：
+JVM 示例：
 
 ```bash
 export JAVA_OPTS='-Xms2g -Xmx4g -XX:+UseG1GC'

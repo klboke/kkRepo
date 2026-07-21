@@ -1,6 +1,17 @@
 name: Live Compatibility
 
 on:
+  workflow_call:
+    inputs:
+      suite:
+        description: Compatibility suite to run
+        required: true
+        type: string
+      runtime:
+        description: Candidate runtime packaging
+        required: false
+        default: jvm
+        type: string
   workflow_dispatch:
     inputs:
       suite:
@@ -35,7 +46,7 @@ env:
   SWIFT_GITHUB_TOKEN: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.token || '' }}
 
 concurrency:
-  group: live-compat-${{ github.workflow }}-${{ github.ref }}
+  group: live-compat-${{ github.workflow }}-${{ github.ref }}-${{ inputs.runtime || 'jvm' }}
   cancel-in-progress: true
 
 jobs:
@@ -43,7 +54,7 @@ jobs:
     name: Build Swift platform E2E server
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    if: (github.event_name == 'workflow_dispatch' && (inputs.suite == 'client-e2e' || inputs.suite == 'swift')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))
+    if: inputs.runtime != 'native' && ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'client-e2e' || inputs.suite == 'swift')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e')))
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -77,10 +88,10 @@ jobs:
           if-no-files-found: error
 
   live-compat:
-    name: ${{ ((github.event_name == 'workflow_dispatch' && inputs.suite == 'client-e2e') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && 'Client E2E compatibility' || 'Live compatibility' }} (${{ matrix.database }})
+    name: ${{ (inputs.runtime == 'native' && 'Native Client E2E compatibility') || (((github.event_name == 'workflow_dispatch' && inputs.suite == 'client-e2e') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && 'Client E2E compatibility') || 'Live compatibility' }} (${{ matrix.database }})
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    if: (github.event_name == 'workflow_dispatch' && inputs.suite != 'nexus') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))
+    if: (inputs.runtime == 'native' && inputs.suite == 'client-e2e') || (github.event_name == 'workflow_dispatch' && inputs.suite != 'nexus') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))
     strategy:
       fail-fast: false
       matrix:
@@ -96,8 +107,8 @@ jobs:
     env:
       COMPOSE_FILE: docker-compose.compat-postgres.yml
       COMPOSE_PROJECT_NAME: kkrepo-compat
-      LIVE_COMPAT_SUITE: ${{ (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e') && 'client-e2e') || inputs.suite }}
-      NEXUS_COMPAT_IMAGE: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'client-e2e' || inputs.suite == 'swift' || inputs.suite == 'full')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && 'sonatype/nexus3:3.94.0' || 'sonatype/nexus3:3.92.0' }}
+      LIVE_COMPAT_SUITE: ${{ (inputs.runtime == 'native' && 'client-e2e') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e') && 'client-e2e') || inputs.suite }}
+      NEXUS_COMPAT_IMAGE: ${{ ((inputs.runtime == 'native') || (github.event_name == 'workflow_dispatch' && (inputs.suite == 'client-e2e' || inputs.suite == 'swift' || inputs.suite == 'full')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && 'sonatype/nexus3:3.94.0' || 'sonatype/nexus3:3.92.0' }}
       PUB_COMPAT_ENABLED: "true"
       COMPOSER_COMPAT_ENABLED: "true"
       SWIFT_KKREPO_SECONDARY_BASE_URL: http://127.0.0.1:18094
@@ -365,8 +376,13 @@ jobs:
       - name: Validate live compatibility compose file
         run: docker compose -f "$COMPOSE_FILE" config
 
-      - name: Build candidate image
+      - name: Build JVM candidate image
+        if: inputs.runtime != 'native'
         run: scripts/build-docker-image.sh kkrepo:compat
+
+      - name: Build Native candidate image
+        if: inputs.runtime == 'native'
+        run: scripts/build-docker-image.sh --native kkrepo:compat
 
       - name: Start compatibility databases
         run: docker compose -f "$COMPOSE_FILE" up -d --wait ${{ matrix.database-service }} nexus-postgres
@@ -478,7 +494,7 @@ jobs:
     needs: swift-platform-server
     runs-on: macos-15
     timeout-minutes: 60
-    if: (github.event_name == 'workflow_dispatch' && (inputs.suite == 'client-e2e' || inputs.suite == 'swift')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))
+    if: inputs.runtime != 'native' && ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'client-e2e' || inputs.suite == 'swift')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e')))
     env:
       KKREPO_DATABASE_TYPE: postgresql
       SPRING_DATASOURCE_URL: jdbc:postgresql://127.0.0.1:5432/kkrepo
@@ -559,7 +575,7 @@ jobs:
     needs: swift-platform-server
     runs-on: windows-2022
     timeout-minutes: 60
-    if: (github.event_name == 'workflow_dispatch' && (inputs.suite == 'client-e2e' || inputs.suite == 'swift')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))
+    if: inputs.runtime != 'native' && ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'client-e2e' || inputs.suite == 'swift')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e')))
     env:
       KKREPO_DATABASE_TYPE: postgresql
       SPRING_DATASOURCE_URL: jdbc:postgresql://127.0.0.1:5432/kkrepo
@@ -640,7 +656,7 @@ jobs:
     name: Swift S3-compatible dual-replica resilience E2E
     runs-on: ubuntu-latest
     timeout-minutes: 150
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.suite == 'client-e2e' || inputs.suite == 'swift')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))
+    if: inputs.runtime != 'native' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.suite == 'client-e2e' || inputs.suite == 'swift')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e')))
     env:
       COMPOSE_FILE: docker-compose.swift-s3-e2e.yml
       COMPOSE_PROJECT_NAME: kkrepo-swift-s3-e2e
@@ -740,7 +756,7 @@ jobs:
     name: Nexus compatibility
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.suite == 'nexus') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-live-compat'))
+    if: inputs.runtime != 'native' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.suite == 'nexus') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-live-compat')))
     env:
       COMPOSE_FILE: docker-compose.compat-postgres.yml
       COMPOSE_PROJECT_NAME: kkrepo-nexus-compat

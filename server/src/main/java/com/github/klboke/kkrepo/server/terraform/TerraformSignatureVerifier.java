@@ -3,10 +3,9 @@ package com.github.klboke.kkrepo.server.terraform;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
-import java.security.Security;
+import java.security.Provider;
 import java.util.Iterator;
 import java.util.List;
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.openpgp.PGPCompressedData;
 import org.bouncycastle.openpgp.PGPObjectFactory;
 import org.bouncycastle.openpgp.PGPPublicKey;
@@ -22,9 +21,7 @@ import org.springframework.stereotype.Component;
 @Component
 final class TerraformSignatureVerifier {
   static {
-    if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
-      Security.addProvider(new BouncyCastleProvider());
-    }
+    TerraformCryptoProvider.current();
   }
 
   void verify(byte[] shasums, byte[] signatureBytes, List<String> publicKeys) {
@@ -36,8 +33,11 @@ final class TerraformSignatureVerifier {
             new JcaKeyFingerprintCalculator());
         PGPPublicKey key = rings.getPublicKey(signature.getKeyID());
         if (key == null) continue;
-        signature.init(new JcaPGPContentVerifierBuilderProvider()
-            .setProvider(BouncyCastleProvider.PROVIDER_NAME), key);
+        Provider provider = TerraformCryptoProvider.current();
+        JcaPGPContentVerifierBuilderProvider verifierBuilder =
+            new JcaPGPContentVerifierBuilderProvider();
+        if (provider != null) verifierBuilder.setProvider(provider);
+        signature.init(verifierBuilder, key);
         signature.update(shasums);
         if (signature.verify()) return;
       }
