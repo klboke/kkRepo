@@ -20,8 +20,7 @@ COPY --from=build --chown=kkrepo:kkrepo /tmp/kkrepo.jar /app/kkrepo.jar
 
 ENV JAVA_TOOL_OPTIONS="" \
     SPRING_PROFILES_ACTIVE=default \
-    SERVER_ADDRESS=0.0.0.0 \
-    MANAGEMENT_SERVER_ADDRESS=0.0.0.0
+    SERVER_ADDRESS=0.0.0.0
 
 EXPOSE 8080 8081
 
