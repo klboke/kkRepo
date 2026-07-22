@@ -67,6 +67,10 @@ public interface AnsibleGalaxyRegistryDao {
 
   List<Signature> listSignatures(long collectionVersionId);
 
+  /**
+   * Persists a task and atomically reserves its active collection coordinate. A competing active
+   * task for the same repository coordinate fails with a duplicate-key error.
+   */
   ImportTask createTask(ImportTask task);
 
   /** Persists a new task already owned by the request replica, atomically hiding it from recovery. */

@@ -192,6 +192,31 @@ class AnsibleGalaxyServiceLifecycleTest {
   }
 
   @Test
+  void concurrentMultipartPublishLosingTheCoordinateReservationReturnsConflict() {
+    RepositoryRuntime hosted = runtime(2L, RepositoryType.HOSTED, null, List.of());
+    AssetRecord staged = asset(
+        43L, hosted.id(), null, 53L, ".ansible/staging/task/" + FILENAME);
+    when(assets.stageCollection(
+        eq(hosted), anyString(), eq(FILENAME), any(java.io.InputStream.class),
+        eq("alice"), eq(null)))
+        .thenReturn(staged);
+    when(assets.requiredBlob(staged)).thenReturn(blob(53L, 1L, SHA256));
+    when(registry.createTask(any()))
+        .thenThrow(new DuplicateKeyException("active coordinate is reserved"));
+
+    AnsibleGalaxyExceptions.Conflict failure = assertThrows(
+        AnsibleGalaxyExceptions.Conflict.class, () -> service.publish(
+            hosted, "api/v3/artifacts/collections/", null, BASE,
+            new ByteArrayInputStream(new byte[] {1}), FILENAME, SHA256,
+            "alice", null, false));
+
+    assertEquals(400, failure.status());
+    verify(registry).createTask(any());
+    verify(assets).delete(eq(hosted), anyString());
+    verify(inspector, never()).inspect(any());
+  }
+
+  @Test
   void supersededWorkerLeavesStagingForTheNewTaskOwner() throws Exception {
     RepositoryRuntime hosted = runtime(2L, RepositoryType.HOSTED, null, List.of());
     AnsibleCollectionArchiveInspector.InspectedCollection inspected = inspected("superseded");

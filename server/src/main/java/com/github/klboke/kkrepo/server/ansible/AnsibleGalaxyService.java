@@ -181,12 +181,16 @@ public class AnsibleGalaxyService {
             "Multipart sha256 does not match the collection artifact");
       }
       Instant now = Instant.now();
-      registry.createTask(new AnsibleGalaxyRegistryDao.ImportTask(
-          taskId, runtime.id(), actor, TASK_WAITING, List.of(), null, null,
-          coordinate.namespace(), coordinate.name(), coordinate.version(), filename,
-          expectedSha256.toLowerCase(Locale.ROOT),
-          stagedBlob.sha256(), staged.id(), 0, null, null, 0L,
-          now, null, null, now));
+      try {
+        registry.createTask(new AnsibleGalaxyRegistryDao.ImportTask(
+            taskId, runtime.id(), actor, TASK_WAITING, List.of(), null, null,
+            coordinate.namespace(), coordinate.name(), coordinate.version(), filename,
+            expectedSha256.toLowerCase(Locale.ROOT),
+            stagedBlob.sha256(), staged.id(), 0, null, null, 0L,
+            now, null, null, now));
+      } catch (DuplicateKeyException concurrentPublish) {
+        throw collectionExists(filename);
+      }
       String taskPath = "api/v3/imports/collections/" + taskId + "/";
       return jsonResponse(Map.of("task", taskPath), 202, headOnly, now)
           .withHeader("Location", normalizedBase(repositoryBaseUrl) + taskPath);

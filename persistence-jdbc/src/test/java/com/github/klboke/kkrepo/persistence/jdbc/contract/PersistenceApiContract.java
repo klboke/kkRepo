@@ -49,6 +49,7 @@ import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DuplicateKeyException;
 
 /** Reusable black-box contract that every database backend must pass through the public API. */
 public abstract class PersistenceApiContract {
@@ -400,6 +401,43 @@ public abstract class PersistenceApiContract {
     registry.releaseLease(
         secondLease.leaseKey(), secondLease.owner(), secondLease.fencingToken());
     assertEquals(1, registry.deleteExpiredLeasesBefore(Instant.now().plusSeconds(1), 100));
+  }
+
+  @Test
+  void ansibleImportCoordinatesAreReservedAcrossConcurrentReplicas() throws Exception {
+    long repositoryId = createRepository(
+        "ansible-reservation-hosted", RepositoryFormat.ANSIBLEGALAXY);
+    AnsibleGalaxyRegistryDao registry = stores().ansibleGalaxyRegistry();
+    Instant now = Instant.parse("2026-07-22T03:00:00Z");
+    CyclicBarrier transactionsReady = new CyclicBarrier(2);
+    List<Callable<Boolean>> attempts = List.of(
+        () -> createAnsibleTaskReservation(
+            registry, ansibleImportTask(
+                "33333333-4444-5555-6666-777777777777", repositoryId, now),
+            transactionsReady),
+        () -> createAnsibleTaskReservation(
+            registry, ansibleImportTask(
+                "44444444-5555-6666-7777-888888888888", repositoryId, now),
+            transactionsReady));
+
+    List<Boolean> outcomes = invokeConcurrently(attempts, 2);
+
+    assertEquals(1L, outcomes.stream().filter(Boolean::booleanValue).count());
+    AnsibleGalaxyRegistryDao.ImportTask winner = registry.listClaimableTasks(
+            now.plusSeconds(1), 100).stream()
+        .filter(task -> task.repositoryId() == repositoryId)
+        .findFirst()
+        .orElseThrow();
+    AnsibleGalaxyRegistryDao.ImportTask claimed = registry.claimTask(
+        winner.taskId(), "reservation-worker", now.plusSeconds(31), now.plusSeconds(1))
+        .orElseThrow();
+    assertTrue(registry.finishTask(
+        claimed.taskId(), "reservation-worker", claimed.fencingToken(),
+        AnsibleGalaxyRegistryDao.TASK_FAILED, List.of(), "fixture.failure", "fixture failure",
+        claimed.namespaceLc(), claimed.nameLc(), claimed.versionNormalized(),
+        claimed.artifactFilename(), claimed.actualSha256(), now.plusSeconds(2)));
+    assertNotNull(registry.createTask(ansibleImportTask(
+        "55555555-6666-7777-8888-999999999999", repositoryId, now.plusSeconds(3))));
   }
 
   @Test
@@ -1553,6 +1591,28 @@ public abstract class PersistenceApiContract {
       }
       return results;
     }
+  }
+
+  private boolean createAnsibleTaskReservation(
+      AnsibleGalaxyRegistryDao registry,
+      AnsibleGalaxyRegistryDao.ImportTask task,
+      CyclicBarrier transactionsReady) {
+    await(transactionsReady);
+    try {
+      inTransaction(() -> registry.createTask(task));
+      return true;
+    } catch (DuplicateKeyException duplicateCoordinate) {
+      return false;
+    }
+  }
+
+  private static AnsibleGalaxyRegistryDao.ImportTask ansibleImportTask(
+      String taskId, long repositoryId, Instant now) {
+    return new AnsibleGalaxyRegistryDao.ImportTask(
+        taskId, repositoryId, "alice", AnsibleGalaxyRegistryDao.TASK_WAITING, List.of(),
+        null, null, "acme", "tools", "2.0.0", "acme-tools-2.0.0.tar.gz",
+        "e".repeat(64), "e".repeat(64), null, 0, null, null, 0L,
+        now, null, null, now);
   }
 
   private AssetInsertResult insertOrFindAssetInWriterTransaction(

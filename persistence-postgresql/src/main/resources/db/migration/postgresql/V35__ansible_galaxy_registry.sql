@@ -56,6 +56,7 @@ CREATE TABLE ansible_import_task (
   namespace_lc VARCHAR(64),
   name_lc VARCHAR(64),
   version_normalized VARCHAR(128),
+  active_coordinate_hash BYTEA,
   artifact_filename VARCHAR(255),
   expected_sha256 CHAR(64),
   actual_sha256 CHAR(64),
@@ -67,7 +68,9 @@ CREATE TABLE ansible_import_task (
   created_at TIMESTAMPTZ(3) NOT NULL,
   started_at TIMESTAMPTZ(3),
   finished_at TIMESTAMPTZ(3),
-  updated_at TIMESTAMPTZ(3) NOT NULL
+  updated_at TIMESTAMPTZ(3) NOT NULL,
+  CONSTRAINT uk_ansible_task_active_coordinate
+    UNIQUE (repository_id, active_coordinate_hash)
 );
 CREATE INDEX idx_ansible_task_claim
   ON ansible_import_task(state, lease_expires_at, created_at);

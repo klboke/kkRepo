@@ -8,6 +8,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.EnumColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcInserts;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcUpserts;
@@ -340,22 +341,34 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
     Instant createdAt = task.createdAt() == null ? Instant.now() : task.createdAt();
     Instant updatedAt = task.updatedAt() == null ? createdAt : task.updatedAt();
     String state = task.state() == null ? TASK_WAITING : task.state();
+    byte[] activeCoordinateHash = activeTaskCoordinateHash(task, state);
     jdbc.update("""
         INSERT INTO ansible_import_task
           (task_uuid, repository_id, requester, state, messages_json, error_code, error_detail,
-           namespace_lc, name_lc, version_normalized, artifact_filename, expected_sha256,
-           actual_sha256, staging_asset_id, attempt_count, lease_owner, lease_expires_at,
-           fencing_token, created_at, started_at, finished_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           namespace_lc, name_lc, version_normalized, active_coordinate_hash, artifact_filename,
+           expected_sha256, actual_sha256, staging_asset_id, attempt_count, lease_owner,
+           lease_expires_at, fencing_token, created_at, started_at, finished_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, task.taskId(), task.repositoryId(), task.requester(), state,
         json.serializedParameter(json.writeValue(safeMessages(task.messages()))),
         task.errorCode(), task.errorDetail(), task.namespaceLc(), task.nameLc(),
-        task.versionNormalized(), task.artifactFilename(), task.expectedSha256(),
-        task.actualSha256(), task.stagingAssetId(), task.attemptCount(), task.leaseOwner(),
-        nullableTimestamp(task.leaseExpiresAt()), task.fencingToken(), nullableTimestamp(createdAt),
-        nullableTimestamp(task.startedAt()), nullableTimestamp(task.finishedAt()),
-        nullableTimestamp(updatedAt));
+        task.versionNormalized(), activeCoordinateHash, task.artifactFilename(),
+        task.expectedSha256(), task.actualSha256(), task.stagingAssetId(), task.attemptCount(),
+        task.leaseOwner(), nullableTimestamp(task.leaseExpiresAt()), task.fencingToken(),
+        nullableTimestamp(createdAt), nullableTimestamp(task.startedAt()),
+        nullableTimestamp(task.finishedAt()), nullableTimestamp(updatedAt));
     return findTask(task.taskId()).orElseThrow();
+  }
+
+  private static byte[] activeTaskCoordinateHash(ImportTask task, String state) {
+    if (TASK_COMPLETED.equals(state) || TASK_FAILED.equals(state)) return null;
+    if (task.namespaceLc() == null || task.namespaceLc().isBlank()
+        || task.nameLc() == null || task.nameLc().isBlank()
+        || task.versionNormalized() == null || task.versionNormalized().isBlank()) {
+      throw new IllegalArgumentException("An active Ansible import task requires a coordinate");
+    }
+    return PersistenceHashes.componentCoordinateHash(
+        task.namespaceLc(), task.nameLc(), task.versionNormalized());
   }
 
   @Override
@@ -465,7 +478,7 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
         UPDATE ansible_import_task
         SET state = ?, messages_json = ?, error_code = ?, error_detail = ?, namespace_lc = ?,
             name_lc = ?, version_normalized = ?, artifact_filename = ?, actual_sha256 = ?,
-            lease_expires_at = ?, finished_at = ?, updated_at = ?
+            active_coordinate_hash = NULL, lease_expires_at = ?, finished_at = ?, updated_at = ?
         WHERE task_uuid = ? AND state = 'RUNNING' AND lease_owner = ? AND fencing_token = ?
         """, state, json.serializedParameter(json.writeValue(safeMessages(messages))), errorCode,
         errorDetail, namespaceLc, nameLc, versionNormalized, artifactFilename, actualSha256,

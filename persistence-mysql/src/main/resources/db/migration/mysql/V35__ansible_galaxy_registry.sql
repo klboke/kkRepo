@@ -65,6 +65,7 @@ CREATE TABLE ansible_import_task (
   namespace_lc VARCHAR(64) NULL,
   name_lc VARCHAR(64) NULL,
   version_normalized VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  active_coordinate_hash BINARY(32) NULL,
   artifact_filename VARCHAR(255) NULL,
   expected_sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
   actual_sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
@@ -82,6 +83,8 @@ CREATE TABLE ansible_import_task (
     FOREIGN KEY (repository_id) REFERENCES repository(id) ON DELETE CASCADE,
   CONSTRAINT fk_ansible_task_staging_asset
     FOREIGN KEY (staging_asset_id) REFERENCES asset(id) ON DELETE SET NULL,
+  CONSTRAINT uk_ansible_task_active_coordinate
+    UNIQUE (repository_id, active_coordinate_hash),
   INDEX idx_ansible_task_claim (state, lease_expires_at, created_at),
   INDEX idx_ansible_task_repository (repository_id, created_at),
   INDEX idx_ansible_task_terminal (state, finished_at)
