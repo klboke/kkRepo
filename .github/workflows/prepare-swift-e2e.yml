@@ -1,0 +1,51 @@
+name: Prepare Swift E2E Images
+
+on:
+  workflow_call:
+    inputs:
+      include_legacy:
+        description: Warm Swift 5.7 and 5.10 in addition to current Swift 6
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  legacy:
+    name: Cache Swift ${{ matrix.version }} E2E image
+    if: inputs.include_legacy
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        version:
+          - "5.7"
+          - "5.10"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build versioned Swift client image
+        uses: ./.github/actions/setup-swift-e2e
+        with:
+          versions: ${{ matrix.version }}
+          cache_write: "true"
+
+  current:
+    name: Cache Swift 6 E2E image
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build versioned Swift client image
+        uses: ./.github/actions/setup-swift-e2e
+        with:
+          versions: "6"
+          cache_write: "true"

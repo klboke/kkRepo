@@ -70,6 +70,8 @@ Ansible Galaxy 兼容性使用 opt-in `ansible` suite 和 Nexus 3.94.x reference
 
 验证证据保持在对应层级：compatibility black box 覆盖 active/revoked/expired `GenericToken`，server/persistence test 覆盖 moving tag 不可变性、1,200 tag 分页上界、cleanup 和 429/5xx 传播。定时 Swift resilience lane 使用双副本和通过 AWS S3-compatible adapter 访问的 MinIO，验证多 MiB package、共享 429/5xx 水位与 stale fallback、lease takeover、restart 和破坏式关系数据库/object 备份恢复。阿里云 OSS Native 引擎有 adapter contract 覆盖，但不声称已运行真实 endpoint E2E。
 
+当 Pull Request 需要覆盖全部 E2E 维度时，添加 `run-full-e2e` 标签。`Full E2E` 编排器会针对实际被测 commit 仅构建一份 JVM 候选镜像和一份 Native 候选镜像，在每个消费任务中校验共享镜像产物的 checksum 与 identity，预热固定版本的 Swift 客户端镜像缓存，然后并行展开到保持不变的 JVM/Native MySQL/PostgreSQL 客户端矩阵、Nexus 兼容性、迁移矩阵、OCI conformance，以及 Swift 平台/S3 lane。原有的 `run-client-e2e`、`run-native-client-e2e`、`run-live-compat`、`run-migration-e2e` 和 `run-docker-oci-conformance` 标签继续用于定向重跑。存在 `run-full-e2e` 标签时，普通 PR 更新只运行统一编排器；显式新增某个定向标签仍只触发对应工作流，不会重启整套矩阵。
+
 ## 真实客户端 E2E
 
 `client-e2e` suite 会用真实包管理器客户端验证一次性 kkrepo 候选实例的行为：

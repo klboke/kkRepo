@@ -70,6 +70,8 @@ Ansible Galaxy compatibility uses the opt-in `ansible` suite and a Nexus 3.94.x 
 
 Evidence stays at the appropriate layer: the compatibility black box covers active/revoked/expired `GenericToken` behavior, while server/persistence tests cover moving-tag immutability, 1,200-tag pagination bounds, cleanup, and 429/5xx propagation. The scheduled Swift resilience lane uses two replicas and MinIO through the AWS S3-compatible adapter to exercise a multi-megabyte package, shared 429/5xx waterlines with stale fallback, lease takeover, restart, and destructive relational-database/object backup-restore. Alibaba OSS Native has adapter-contract coverage but no live endpoint E2E claim.
 
+For a pull request that needs every E2E dimension, add the `run-full-e2e` label. The `Full E2E` orchestrator builds one JVM candidate and one Native candidate for the exact tested commit, verifies the shared image artifact checksum and identity in every consumer, warms the fixed-version Swift client image caches, and then fans out to the unchanged JVM/Native MySQL/PostgreSQL client matrices, Nexus compatibility, migration matrix, OCI conformance, and Swift platform/S3 lanes. The existing `run-client-e2e`, `run-native-client-e2e`, `run-live-compat`, `run-migration-e2e`, and `run-docker-oci-conformance` labels remain available for targeted reruns. While `run-full-e2e` is present, normal PR updates use only the unified orchestrator; explicitly adding a targeted label still runs that targeted workflow without restarting the full matrix.
+
 ## Real Client E2E
 
 The `client-e2e` suite validates the behavior of actual package clients against a disposable kkrepo candidate:

@@ -1,0 +1,46 @@
+name: Load verified E2E candidate image
+description: Download, verify, and load a candidate image produced in this workflow run
+
+inputs:
+  artifact_name:
+    description: Workflow artifact containing the compressed Docker image
+    required: true
+  runtime:
+    description: Expected candidate runtime (jvm or native)
+    required: true
+  source_sha:
+    description: Full source commit SHA embedded in the candidate artifact
+    required: true
+  source_tag:
+    description: Image tag stored in the candidate artifact
+    required: false
+    default: kkrepo:compat
+  target_tag:
+    description: Image tag required by the consuming compose file
+    required: false
+    default: kkrepo:compat
+
+runs:
+  using: composite
+  steps:
+    - name: Download candidate image
+      uses: actions/download-artifact@v8
+      with:
+        name: ${{ inputs.artifact_name }}
+        path: ${{ runner.temp }}/kkrepo-e2e-candidate-${{ inputs.runtime }}
+
+    - name: Verify and load candidate image
+      shell: bash
+      env:
+        CANDIDATE_ARTIFACT_DIR: ${{ runner.temp }}/kkrepo-e2e-candidate-${{ inputs.runtime }}
+        CANDIDATE_RUNTIME: ${{ inputs.runtime }}
+        CANDIDATE_SOURCE_SHA: ${{ inputs.source_sha }}
+        CANDIDATE_SOURCE_TAG: ${{ inputs.source_tag }}
+        CANDIDATE_TARGET_TAG: ${{ inputs.target_tag }}
+      run: >-
+        "$GITHUB_ACTION_PATH/../../../scripts/ci/load-e2e-candidate-image.sh"
+        "$CANDIDATE_ARTIFACT_DIR"
+        "$CANDIDATE_RUNTIME"
+        "$CANDIDATE_SOURCE_SHA"
+        "$CANDIDATE_SOURCE_TAG"
+        "$CANDIDATE_TARGET_TAG"

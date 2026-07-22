@@ -1,0 +1,146 @@
+name: Full E2E
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - labeled
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-jvm:
+    name: Build shared JVM candidate
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'pull_request' &&
+        contains(github.event.pull_request.labels.*.name, 'run-full-e2e') &&
+        (github.event.action != 'labeled' || github.event.label.name == 'run-full-e2e')
+      )
+    uses: ./.github/workflows/build-e2e-candidate.yml
+    with:
+      runtime: jvm
+      source_sha: ${{ github.sha }}
+      artifact_key: ${{ github.event.pull_request.head.sha || github.sha }}
+      include_server_artifact: true
+
+  build-native:
+    name: Build shared Native candidate
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'pull_request' &&
+        contains(github.event.pull_request.labels.*.name, 'run-full-e2e') &&
+        (github.event.action != 'labeled' || github.event.label.name == 'run-full-e2e')
+      )
+    uses: ./.github/workflows/build-e2e-candidate.yml
+    with:
+      runtime: native
+      source_sha: ${{ github.sha }}
+      artifact_key: ${{ github.event.pull_request.head.sha || github.sha }}
+
+  prepare-swift-images:
+    name: Warm shared versioned Swift E2E image caches
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'pull_request' &&
+        contains(github.event.pull_request.labels.*.name, 'run-full-e2e') &&
+        (github.event.action != 'labeled' || github.event.label.name == 'run-full-e2e')
+      )
+    uses: ./.github/workflows/prepare-swift-e2e.yml
+    with:
+      include_legacy: true
+
+  jvm-client-e2e:
+    name: JVM real-client E2E
+    needs:
+      - build-jvm
+      - prepare-swift-images
+    if: >-
+      always() &&
+      !cancelled() &&
+      needs.build-jvm.result == 'success' &&
+      needs.prepare-swift-images.result == 'success'
+    uses: ./.github/workflows/live-compat.yml
+    with:
+      suite: client-e2e
+      runtime: jvm
+      candidate_image_artifact: ${{ needs.build-jvm.outputs.image_artifact }}
+      candidate_server_artifact: ${{ needs.build-jvm.outputs.server_artifact }}
+      candidate_source_sha: ${{ github.sha }}
+      swift_images_prepared: true
+      artifact_prefix: full-jvm-client
+
+  native-client-e2e:
+    name: Native real-client E2E
+    needs:
+      - build-native
+      - prepare-swift-images
+    if: >-
+      always() &&
+      !cancelled() &&
+      needs.build-native.result == 'success' &&
+      needs.prepare-swift-images.result == 'success'
+    uses: ./.github/workflows/live-compat.yml
+    with:
+      suite: client-e2e
+      runtime: native
+      candidate_image_artifact: ${{ needs.build-native.outputs.image_artifact }}
+      candidate_source_sha: ${{ github.sha }}
+      swift_images_prepared: true
+      artifact_prefix: full-native-client
+
+  nexus-compatibility:
+    name: Nexus compatibility
+    needs: build-jvm
+    if: >-
+      always() &&
+      !cancelled() &&
+      needs.build-jvm.result == 'success'
+    uses: ./.github/workflows/live-compat.yml
+    with:
+      suite: nexus
+      runtime: jvm
+      candidate_image_artifact: ${{ needs.build-jvm.outputs.image_artifact }}
+      candidate_server_artifact: ${{ needs.build-jvm.outputs.server_artifact }}
+      candidate_source_sha: ${{ github.sha }}
+      artifact_prefix: full-jvm-nexus
+
+  migration-e2e:
+    name: Nexus migration matrix
+    needs: build-jvm
+    if: >-
+      always() &&
+      !cancelled() &&
+      needs.build-jvm.result == 'success'
+    uses: ./.github/workflows/migration-e2e.yml
+    with:
+      candidate_image_artifact: ${{ needs.build-jvm.outputs.image_artifact }}
+      candidate_source_sha: ${{ github.sha }}
+      artifact_prefix: full-migration
+
+  docker-oci-conformance:
+    name: OCI Distribution conformance
+    needs: build-jvm
+    if: >-
+      always() &&
+      !cancelled() &&
+      needs.build-jvm.result == 'success'
+    uses: ./.github/workflows/docker-oci-conformance.yml
+    with:
+      content_management: true
+      candidate_image_artifact: ${{ needs.build-jvm.outputs.image_artifact }}
+      candidate_source_sha: ${{ github.sha }}
+      artifact_prefix: full-docker-oci
