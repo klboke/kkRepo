@@ -16,11 +16,16 @@ WORK_DIR="${CLIENT_E2E_WORK_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-client-e2e.
 STAMP="${CLIENT_E2E_STAMP:-$(date +%Y%m%d%H%M%S)}"
 START_TIMEOUT_SECONDS="${LIVE_COMPAT_START_TIMEOUT_SECONDS:-240}"
 SWIFT_LOGIN_TIMEOUT_SECONDS="${SWIFT_E2E_LOGIN_TIMEOUT_SECONDS:-60}"
+ANSIBLE_IMPORT_TIMEOUT_SECONDS="${ANSIBLE_E2E_IMPORT_TIMEOUT_SECONDS:-120}"
 KKREPO_AUTH_URL=""
 REDACTION_VALUES=("$KKREPO_PASSWORD" "$KKREPO_AUTH")
 
 if [[ ! "$SWIFT_LOGIN_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   printf '[client-e2e] SWIFT_E2E_LOGIN_TIMEOUT_SECONDS must be a positive integer\n' >&2
+  exit 2
+fi
+if [[ ! "$ANSIBLE_IMPORT_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  printf '[client-e2e] ANSIBLE_E2E_IMPORT_TIMEOUT_SECONDS must be a positive integer\n' >&2
   exit 2
 fi
 
@@ -141,6 +146,89 @@ except subprocess.TimeoutExpired:
     raise SystemExit(124)
 raise SystemExit(completed.returncode)
 PY
+}
+
+wait_for_ansible_import_task() {
+  local label="$1"
+  local publish_log="$2"
+  local hosted_url="$3"
+  local task_ref task_url task_output curl_log
+  local deadline now remaining request_timeout http_status outcome
+
+  if ! task_ref="$(python3 - "$publish_log" <<'PY'
+import pathlib
+import re
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+matches = re.findall(r"api/v3/imports/collections/[A-Za-z0-9._-]+/", text)
+if not matches:
+    raise SystemExit("publish output did not contain an Ansible import task URL")
+print(matches[-1])
+PY
+)"; then
+    log "Ansible $label publish output did not expose a pollable import task"
+    return 1
+  fi
+
+  task_url="${hosted_url%/}/${task_ref#/}"
+  task_output="$ARTIFACT_DIR/ansible-$label-import-task.json"
+  curl_log="$ARTIFACT_DIR/ansible-$label-import-task.curl.log"
+  deadline=$(( $(date +%s) + ANSIBLE_IMPORT_TIMEOUT_SECONDS ))
+  http_status="not-requested"
+  outcome="pending"
+  log "waiting up to ${ANSIBLE_IMPORT_TIMEOUT_SECONDS}s for Ansible $label import task"
+
+  while true; do
+    now="$(date +%s)"
+    remaining=$((deadline - now))
+    if (( remaining <= 0 )); then
+      break
+    fi
+    request_timeout=5
+    if (( remaining < request_timeout )); then
+      request_timeout="$remaining"
+    fi
+    http_status="$(curl -m "$request_timeout" -sS -u "$KKREPO_AUTH" \
+      -o "$task_output" -w '%{http_code}' "$task_url" 2>"$curl_log" || true)"
+    if [[ "$http_status" == "200" ]]; then
+      outcome="$(python3 - "$task_output" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+state = str(payload.get("state") or "").strip().lower()
+finished = payload.get("finished_at")
+if state in {"failed", "error"} or (finished and state != "completed"):
+    print(f"failed:{state or 'unknown'}")
+elif finished and state == "completed":
+    print("completed")
+else:
+    print(f"pending:{state or 'unknown'}")
+PY
+      )" || outcome="invalid-response"
+      case "$outcome" in
+        completed)
+          log "Ansible $label import task completed"
+          return 0
+          ;;
+        failed:*)
+          log "Ansible $label import task finished with ${outcome#failed:} state"
+          return 1
+          ;;
+      esac
+    fi
+
+    now="$(date +%s)"
+    if (( now >= deadline )); then
+      break
+    fi
+    sleep 1
+  done
+
+  log "timed out after ${ANSIBLE_IMPORT_TIMEOUT_SECONDS}s waiting for Ansible $label import task (HTTP $http_status, $outcome)"
+  return 1
 }
 
 run_logged_output() {
@@ -2007,6 +2095,7 @@ test_ansible_binary() {
   local base_archive="$dir/dist/$namespace-$base_name-$version.tar.gz"
   local app_archive="$dir/dist/$namespace-$app_name-$version.tar.gz"
   local hosted_url="$KKREPO_URL/repository/ansible-hosted/"
+  local hosted_api_url="${hosted_url%/}/api/v3"
   local group_url="$KKREPO_URL/repository/ansible-group/"
   local bearer_token generic_token requirements install_dir download_dir token_option
 
@@ -2053,15 +2142,18 @@ PY
     return 1
   fi
 
+  wait_for_ansible_import_task "$label_slug" \
+    "$ARTIFACT_DIR/ansible-$label_slug-publish-app.log" "$hosted_url"
+
   run_logged "ansible-$label_slug-basic-read" curl -m 20 --fail-with-body -sS \
     -u "$KKREPO_AUTH" \
-    "$hosted_url/api/v3/collections/$namespace/$app_name/versions/$version/"
+    "$hosted_api_url/collections/$namespace/$app_name/versions/$version/"
   run_logged "ansible-$label_slug-anonymous-read" curl -m 20 --fail-with-body -sS \
-    "$hosted_url/api/v3/collections/$namespace/$app_name/versions/$version/"
+    "$hosted_api_url/collections/$namespace/$app_name/versions/$version/"
   local invalid_status
   invalid_status="$(curl -m 20 -sS -o "$ARTIFACT_DIR/ansible-$label_slug-invalid-auth.json" \
     -w '%{http_code}' -H 'Authorization: Bearer invalid-explicit-token' \
-    "$hosted_url/api/v3/collections/$namespace/$app_name/versions/$version/")"
+    "$hosted_api_url/collections/$namespace/$app_name/versions/$version/")"
   if [[ "$invalid_status" != "401" ]]; then
     log "Ansible $label invalid explicit credentials returned HTTP $invalid_status instead of 401"
     return 1
