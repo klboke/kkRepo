@@ -13,7 +13,7 @@ FROM registry.qunhequnhe.com/proxy/library/eclipse-temurin:25-jre-jammy
 
 WORKDIR /app
 
-RUN mkdir -p /var/log/kkrepo
+RUN mkdir -p /var/lib/jetty/logs
 
 COPY --from=build /tmp/kkrepo.jar /app/kkrepo.jar
 
