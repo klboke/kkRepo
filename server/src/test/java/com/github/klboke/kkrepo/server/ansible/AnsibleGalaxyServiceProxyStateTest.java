@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -32,6 +31,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -174,18 +174,40 @@ class AnsibleGalaxyServiceProxyStateTest {
         .thenReturn(Optional.of(expired));
     when(registry.tryAcquireLease(anyString(), anyString(), any()))
         .thenReturn(Optional.of(lease("metadata")));
-    when(registry.nextRepositoryRevision(proxy.id())).thenReturn(12L);
     when(fetcher.fetch(any())).thenReturn(result(304, Map.of("ETag", "\"etag\""), null));
 
     assertEquals(identity, service.fetchProxyDocument(
         proxy, "acme", "tools", "1.2.3", "api/v3/detail"));
 
-    ArgumentCaptor<AnsibleGalaxyRegistryDao.ProxyVersionState> persisted =
-        ArgumentCaptor.forClass(AnsibleGalaxyRegistryDao.ProxyVersionState.class);
-    verify(registry).upsertProxyState(persisted.capture());
-    assertEquals(12L, persisted.getValue().revision());
-    assertTrue(persisted.getValue().cacheUntil().isAfter(Instant.now()));
+    verify(registry).touchProxyState(
+        eq(proxy.id()), eq("acme"), eq("tools"), eq("1.2.3"),
+        eq("etag"), eq(null), any(Instant.class), any(Instant.class));
+    verify(registry, never()).upsertProxyState(any());
+    verify(registry, never()).nextRepositoryRevision(proxy.id());
     verify(registry).releaseLease("metadata", "owner", 7L);
+  }
+
+  @Test
+  void touchesUnchangedMetadataAfterAFullRevalidationWithoutBumpingContentRevision()
+      throws Exception {
+    Map<String, Object> identity = new LinkedHashMap<>(detail(SHA_A));
+    identity.remove("files");
+    AnsibleGalaxyRegistryDao.ProxyVersionState expired = state(
+        identity, Instant.now().minusSeconds(1), null, null, SHA_A);
+    when(registry.findProxyState(proxy.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.of(expired));
+    when(registry.tryAcquireLease(anyString(), anyString(), any()))
+        .thenReturn(Optional.of(lease("unchanged-metadata")));
+    when(fetcher.fetch(any())).thenReturn(jsonResult(200, identity));
+
+    assertEquals(identity, service.fetchProxyDocument(
+        proxy, "acme", "tools", "1.2.3", "api/v3/detail"));
+
+    verify(registry).touchProxyState(
+        eq(proxy.id()), eq("acme"), eq("tools"), eq("1.2.3"), eq("new"), eq(null),
+        any(Instant.class), any(Instant.class));
+    verify(registry, never()).upsertProxyState(any());
+    verify(registry).releaseLease("unchanged-metadata", "owner", 7L);
   }
 
   @Test
@@ -194,7 +216,6 @@ class AnsibleGalaxyServiceProxyStateTest {
         .thenReturn(Optional.empty());
     when(registry.tryAcquireLease(anyString(), anyString(), any()))
         .thenReturn(Optional.of(lease("metadata")));
-    when(registry.nextRepositoryRevision(proxy.id())).thenReturn(13L);
     when(fetcher.fetch(any())).thenReturn(jsonResult(200, detail(SHA_A)));
 
     Map<String, Object> projected = service.fetchProxyDocument(
@@ -208,6 +229,28 @@ class AnsibleGalaxyServiceProxyStateTest {
     assertEquals("https://galaxy.example/download/" + FILENAME,
         persisted.getValue().upstreamDownloadUrl());
     assertEquals(SHA_A, persisted.getValue().artifactSha256());
+  }
+
+  @Test
+  void derivesTheCanonicalArtifactFilenameWhenUpstreamOmitsIt() throws Exception {
+    when(registry.findProxyState(proxy.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.empty());
+    when(registry.tryAcquireLease(anyString(), anyString(), any()))
+        .thenReturn(Optional.of(lease("fallback-filename")));
+    when(fetcher.fetch(any())).thenReturn(jsonResult(200, Map.of(
+        "namespace", Map.of("name", "acme"),
+        "collection", Map.of("name", "tools"),
+        "version", "1.2.3",
+        "download_url", "/download/" + FILENAME,
+        "artifact", Map.of("sha256", SHA_A))));
+
+    service.fetchProxyDocument(proxy, "acme", "tools", "1.2.3", "api/v3/detail");
+
+    ArgumentCaptor<AnsibleGalaxyRegistryDao.ProxyVersionState> persisted =
+        ArgumentCaptor.forClass(AnsibleGalaxyRegistryDao.ProxyVersionState.class);
+    verify(registry).upsertProxyState(persisted.capture());
+    assertEquals(FILENAME, persisted.getValue().artifactFilename());
+    verify(registry).releaseLease("fallback-filename", "owner", 7L);
   }
 
   @Test
@@ -227,6 +270,27 @@ class AnsibleGalaxyServiceProxyStateTest {
 
     verify(registry, never()).upsertProxyState(any());
     verify(registry).releaseLease("malformed-identity", "owner", 7L);
+  }
+
+  @Test
+  void rejectsNonCanonicalArtifactFilenameFromUpstreamMetadata() throws Exception {
+    when(registry.findProxyState(proxy.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.empty());
+    when(registry.tryAcquireLease(anyString(), anyString(), any()))
+        .thenReturn(Optional.of(lease("non-canonical-filename")));
+    when(fetcher.fetch(any())).thenReturn(jsonResult(200, Map.of(
+        "namespace", Map.of("name", "acme"),
+        "collection", Map.of("name", "tools"),
+        "version", "1.2.3",
+        "download_url", "/download/renamed.tar.gz",
+        "artifact", Map.of("filename", "renamed.tar.gz", "sha256", SHA_A))));
+
+    assertThrows(AnsibleGalaxyExceptions.BadUpstream.class,
+        () -> service.fetchProxyDocument(
+            proxy, "acme", "tools", "1.2.3", "api/v3/detail"));
+
+    verify(registry, never()).upsertProxyState(any());
+    verify(registry).releaseLease("non-canonical-filename", "owner", 7L);
   }
 
   @Test
@@ -300,7 +364,6 @@ class AnsibleGalaxyServiceProxyStateTest {
     when(assets.storeCollection(eq(proxy), anyString(), eq(file), any(), any(), any(), any()))
         .thenReturn(new AnsibleGalaxyAssetSupport.StoredCollection(asset, true));
     when(assets.requiredBlob(asset)).thenReturn(blob(41L, inspected.size(), SHA_A));
-    when(registry.nextRepositoryRevision(proxy.id())).thenReturn(15L);
     AnsibleGalaxyRegistryDao.CollectionVersion stored = version(proxy.id(), 51L, asset.id());
     when(registry.insertVersion(any())).thenReturn(stored);
 
@@ -389,38 +452,73 @@ class AnsibleGalaxyServiceProxyStateTest {
   }
 
   @Test
-  void followsBoundedVersionPaginationAndRejectsInvalidVersions() {
+  void followsBoundedVersionPaginationAndRejectsInvalidVersions() throws Exception {
     AnsibleGalaxyService paged = spy(service);
     doReturn("https://galaxy.example/api/v3/versions?page=1")
         .when(paged).proxyV3Url(eq(proxy), anyString());
-    doAnswer(invocation -> {
-      String url = invocation.getArgument(4);
-      return url.endsWith("page=1")
-          ? Map.of("data", List.of(Map.of("version", "2.0.0")),
-              "links", Map.of("next", "?page=2"))
-          : Map.of("data", List.of(Map.of("version", "1.0.0")), "links", Map.of("next", ""));
-    }).when(paged).fetchProxyDocument(eq(proxy), eq("acme"), eq("tools"), anyString(), anyString());
+    when(registry.tryAcquireLease(anyString(), anyString(), any()))
+        .thenReturn(Optional.of(lease("inventory")));
+    when(fetcher.fetch(any()))
+        .thenReturn(jsonResult(200, Map.of(
+            "data", List.of(Map.of("version", "2.0.0")),
+            "links", Map.of("next", "?page=2"))))
+        .thenReturn(jsonResult(200, Map.of(
+            "data", List.of(Map.of("version", "1.0.0")), "links", Map.of("next", ""))));
     assertEquals(List.of("2.0.0", "1.0.0"),
         paged.fetchProxyVersionNames(proxy, "acme", "tools"));
 
-    AnsibleGalaxyService invalid = spy(service);
+    AnsibleGalaxyRegistryDao invalidRegistry = mock(AnsibleGalaxyRegistryDao.class);
+    HttpRemoteFetcher invalidFetcher = mock(HttpRemoteFetcher.class);
+    AnsibleGalaxyService invalid = spy(service(invalidRegistry, invalidFetcher, assets, inspector));
     doReturn("https://galaxy.example/api/v3/versions")
         .when(invalid).proxyV3Url(eq(proxy), anyString());
-    doReturn(Map.of("data", List.of(Map.of("version", "not-semver"))))
-        .when(invalid).fetchProxyDocument(eq(proxy), eq("acme"), eq("tools"), anyString(), anyString());
+    when(invalidRegistry.tryAcquireLease(anyString(), anyString(), any()))
+        .thenReturn(Optional.of(lease("invalid-inventory")));
+    when(invalidFetcher.fetch(any())).thenReturn(jsonResult(
+        200, Map.of("data", List.of(Map.of("version", "not-semver")))));
     assertThrows(AnsibleGalaxyExceptions.BadUpstream.class,
         () -> invalid.fetchProxyVersionNames(proxy, "acme", "tools"));
 
-    AnsibleGalaxyService unbounded = spy(service);
-    doReturn("https://galaxy.example/api/v3/versions")
-        .when(unbounded).proxyV3Url(eq(proxy), anyString());
-    doAnswer(invocation -> Map.of(
+    AnsibleGalaxyRegistryDao cyclicRegistry = mock(AnsibleGalaxyRegistryDao.class);
+    HttpRemoteFetcher cyclicFetcher = mock(HttpRemoteFetcher.class);
+    AnsibleGalaxyService unbounded = spy(service(cyclicRegistry, cyclicFetcher, assets, inspector));
+    String cycleUrl = "https://galaxy.example/api/v3/versions";
+    doReturn(cycleUrl).when(unbounded).proxyV3Url(eq(proxy), anyString());
+    when(cyclicRegistry.tryAcquireLease(anyString(), anyString(), any()))
+        .thenReturn(Optional.of(lease("cyclic-inventory")));
+    when(cyclicFetcher.fetch(any())).thenReturn(jsonResult(200, Map.of(
         "data", List.of(Map.of("version", "1.0.0")),
-        "links", Map.of("next", invocation.<String>getArgument(4) + "x")))
-        .when(unbounded).fetchProxyDocument(
-            eq(proxy), eq("acme"), eq("tools"), anyString(), anyString());
+        "links", Map.of("next", cycleUrl))));
     assertThrows(AnsibleGalaxyExceptions.BadUpstream.class,
         () -> unbounded.fetchProxyVersionNames(proxy, "acme", "tools"));
+  }
+
+  @Test
+  void repairsAnInventoryHeaderWhoseCountDoesNotMatchItsNormalizedRows() throws Exception {
+    AnsibleGalaxyService repairing = spy(service);
+    Instant now = Instant.now();
+    AnsibleGalaxyRegistryDao.ProxyInventory inconsistent =
+        new AnsibleGalaxyRegistryDao.ProxyInventory(
+            proxy.id(), "acme", "tools", now.minusSeconds(1), now.minusSeconds(2),
+            4L, 2, now.minusSeconds(2));
+    when(registry.findProxyInventory(proxy.id(), "acme", "tools"))
+        .thenReturn(Optional.of(inconsistent));
+    when(registry.listProxyInventoryVersionNames(proxy.id(), "acme", "tools"))
+        .thenReturn(List.of("1.0.0"));
+    when(registry.tryAcquireLease(anyString(), anyString(), any()))
+        .thenReturn(Optional.of(lease("repair-inventory")));
+    doReturn("https://galaxy.example/api/v3/versions")
+        .when(repairing).proxyV3Url(eq(proxy), anyString());
+    when(fetcher.fetch(any())).thenReturn(jsonResult(
+        200, Map.of("data", List.of(Map.of("version", "1.0.0")))));
+
+    assertEquals(List.of("1.0.0"),
+        repairing.fetchProxyVersionNames(proxy, "acme", "tools"));
+
+    verify(registry).replaceProxyInventory(any(), eq(List.of("1.0.0")));
+    verify(registry, never()).touchProxyInventory(
+        eq(proxy.id()), eq("acme"), eq("tools"), any(), any());
+    verify(registry).releaseLease("repair-inventory", "owner", 7L);
   }
 
   private AnsibleGalaxyService service(

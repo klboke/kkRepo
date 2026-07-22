@@ -72,6 +72,8 @@ CREATE INDEX idx_ansible_task_claim
   ON ansible_import_task(state, lease_expires_at, created_at);
 CREATE INDEX idx_ansible_task_repository
   ON ansible_import_task(repository_id, created_at);
+CREATE INDEX idx_ansible_task_terminal
+  ON ansible_import_task(state, finished_at);
 
 CREATE TABLE ansible_proxy_version_state (
   repository_id BIGINT NOT NULL REFERENCES repository(id) ON DELETE CASCADE,
@@ -99,6 +101,34 @@ CREATE INDEX idx_ansible_proxy_artifact
   ON ansible_proxy_version_state(repository_id, artifact_filename);
 CREATE INDEX idx_ansible_proxy_negative
   ON ansible_proxy_version_state(negative_expires_at);
+CREATE INDEX idx_ansible_proxy_updated
+  ON ansible_proxy_version_state(updated_at);
+
+CREATE TABLE ansible_proxy_inventory (
+  repository_id BIGINT NOT NULL REFERENCES repository(id) ON DELETE CASCADE,
+  namespace_lc VARCHAR(64) NOT NULL,
+  name_lc VARCHAR(64) NOT NULL,
+  cache_until TIMESTAMPTZ(3) NOT NULL,
+  checked_at TIMESTAMPTZ(3) NOT NULL,
+  revision BIGINT NOT NULL,
+  version_count INTEGER NOT NULL,
+  updated_at TIMESTAMPTZ(3) NOT NULL,
+  PRIMARY KEY (repository_id, namespace_lc, name_lc)
+);
+CREATE INDEX idx_ansible_inventory_expiry
+  ON ansible_proxy_inventory(cache_until, updated_at);
+
+CREATE TABLE ansible_proxy_inventory_version (
+  repository_id BIGINT NOT NULL,
+  namespace_lc VARCHAR(64) NOT NULL,
+  name_lc VARCHAR(64) NOT NULL,
+  version_normalized VARCHAR(128) NOT NULL,
+  PRIMARY KEY (repository_id, namespace_lc, name_lc, version_normalized),
+  CONSTRAINT fk_ansible_inventory_version
+    FOREIGN KEY (repository_id, namespace_lc, name_lc)
+    REFERENCES ansible_proxy_inventory(repository_id, namespace_lc, name_lc)
+    ON DELETE CASCADE
+);
 
 CREATE TABLE ansible_group_binding (
   group_repository_id BIGINT NOT NULL REFERENCES repository(id) ON DELETE CASCADE,

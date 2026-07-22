@@ -72,24 +72,20 @@ class AnsibleGalaxyServiceLifecycleTest {
   }
 
   @Test
-  void publishesAHostedCollectionThroughTheDurableTaskLifecycle() throws Exception {
+  void publishStagesTheBlobAndReturnsBeforeArchiveInspection() throws Exception {
     RepositoryRuntime hosted = runtime(1L, RepositoryType.HOSTED, null, List.of());
-    AnsibleCollectionArchiveInspector.InspectedCollection inspected = inspected("body");
-    AnsibleGalaxyRegistryDao.CollectionVersion stored = version(hosted.id(), 31L, 21L);
-    stubPersistence(hosted, inspected, stored);
     AssetRecord staged = asset(41L, hosted.id(), null, 51L, ".ansible/staging/task/" + FILENAME);
     when(assets.stageCollection(
-        eq(hosted), anyString(), eq(FILENAME), eq(inspected.file()), eq("alice"), eq("127.0.0.1")))
+        eq(hosted), anyString(), eq(FILENAME), any(java.io.InputStream.class),
+        eq("alice"), eq("127.0.0.1")))
         .thenReturn(staged);
+    when(assets.requiredBlob(staged)).thenReturn(blob(51L, 1L, SHA256));
     AtomicReference<AnsibleGalaxyRegistryDao.ImportTask> waiting = new AtomicReference<>();
-    when(registry.createClaimedTask(any(), anyString(), any(), any())).thenAnswer(invocation -> {
-      AnsibleGalaxyRegistryDao.ImportTask task = claimed(invocation.getArgument(0));
+    when(registry.createTask(any())).thenAnswer(invocation -> {
+      AnsibleGalaxyRegistryDao.ImportTask task = invocation.getArgument(0);
       waiting.set(task);
       return task;
     });
-    when(registry.finishTask(
-        anyString(), anyString(), anyLong(), anyString(), any(), any(), any(),
-        any(), any(), any(), any(), any(), any())).thenReturn(true);
 
     MavenResponse response = service.publish(
         hosted, "api/v3/artifacts/collections", null, BASE,
@@ -109,163 +105,120 @@ class AnsibleGalaxyServiceLifecycleTest {
     assertEquals(
         BASE + taskPath,
         URI.create(BASE + "api/v3/artifacts/collections").resolve(location).toString());
-    verify(registry).finishTask(
-        anyString(), anyString(), anyLong(), eq(AnsibleGalaxyRegistryDao.TASK_COMPLETED),
-        any(), eq(null), eq(null), eq("acme"), eq("tools"), eq("1.2.3"),
-        eq(FILENAME), eq(SHA256), any());
-    verify(assets).delete(hosted, ".ansible/staging/" + waiting.get().taskId() + "/" + FILENAME);
+    assertEquals(AnsibleGalaxyRegistryDao.TASK_WAITING, waiting.get().state());
+    assertEquals(staged.id(), waiting.get().stagingAssetId());
+    assertEquals(SHA256, waiting.get().actualSha256());
+    assertEquals(SHA256, waiting.get().expectedSha256());
+    assertEquals(null, waiting.get().namespaceLc());
+    verify(registry, never()).finishTask(
+        anyString(), anyString(), anyLong(), anyString(), any(), any(), any(),
+        any(), any(), any(), any(), any(), any());
     verify(registry, never()).claimTask(anyString(), anyString(), any(), any());
-    assertFalse(Files.exists(inspected.file()));
-
-    ArgumentCaptor<AnsibleGalaxyRegistryDao.CollectionVersion> inserted =
-        ArgumentCaptor.forClass(AnsibleGalaxyRegistryDao.CollectionVersion.class);
-    verify(registry).insertVersion(inserted.capture());
-    assertEquals("HOSTED", inserted.getValue().sourceKind());
-    assertEquals(Map.of("acme.base", ">=1.0.0"), inserted.getValue().dependencies());
+    verify(inspector, never()).inspect(any());
+    verify(assets, never()).delete(eq(hosted), anyString());
   }
 
   @Test
   void taskCreationFailureDeletesTheUnreferencedStagingAsset() throws Exception {
     RepositoryRuntime hosted = runtime(2L, RepositoryType.HOSTED, null, List.of());
-    AnsibleCollectionArchiveInspector.InspectedCollection inspected = inspected("task-failure");
     AssetRecord staged = asset(
         42L, hosted.id(), null, 52L, ".ansible/staging/task/" + FILENAME);
-    when(inspector.inspect(any())).thenReturn(inspected);
     when(assets.stageCollection(
-        eq(hosted), anyString(), eq(FILENAME), eq(inspected.file()), eq("alice"), eq(null)))
+        eq(hosted), anyString(), eq(FILENAME), any(java.io.InputStream.class),
+        eq("alice"), eq(null)))
         .thenReturn(staged);
-    when(registry.createClaimedTask(any(), anyString(), any(), any()))
-        .thenThrow(new IllegalStateException("database unavailable"));
+    when(assets.requiredBlob(staged)).thenReturn(blob(52L, 1L, SHA256));
+    AtomicReference<AnsibleGalaxyRegistryDao.ImportTask> waiting = new AtomicReference<>();
+    when(registry.createTask(any())).thenAnswer(invocation -> {
+      waiting.set(invocation.getArgument(0));
+      throw new IllegalStateException("database unavailable");
+    });
 
     assertThrows(IllegalStateException.class, () -> service.publish(
         hosted, "api/v3/artifacts/collections/", null, BASE,
         new ByteArrayInputStream(new byte[] {1}), FILENAME, SHA256,
         "alice", null, false));
 
-    ArgumentCaptor<AnsibleGalaxyRegistryDao.ImportTask> task =
-        ArgumentCaptor.forClass(AnsibleGalaxyRegistryDao.ImportTask.class);
-    verify(registry).createClaimedTask(task.capture(), anyString(), any(), any());
     verify(assets).delete(
-        hosted, ".ansible/staging/" + task.getValue().taskId() + "/" + FILENAME);
+        hosted, ".ansible/staging/" + waiting.get().taskId() + "/" + FILENAME);
     verify(registry, never()).claimTask(anyString(), anyString(), any(), any());
-    assertFalse(Files.exists(inspected.file()));
+    verify(inspector, never()).inspect(any());
   }
 
   @Test
-  void concurrentDuplicatePublishMarksTheLosingTaskFailedAndReturnsConflict() throws Exception {
+  void publishRejectsAStagedDigestMismatchBeforeCreatingTheTask() {
     RepositoryRuntime hosted = runtime(2L, RepositoryType.HOSTED, null, List.of());
-    AnsibleCollectionArchiveInspector.InspectedCollection inspected = inspected("loser");
-    AnsibleGalaxyRegistryDao.CollectionVersion winner = version(hosted.id(), 32L, 22L);
     AssetRecord staged = asset(
         41L, hosted.id(), null, 51L, ".ansible/staging/task/" + FILENAME);
-    when(inspector.inspect(any())).thenReturn(inspected);
     when(assets.stageCollection(
-        eq(hosted), anyString(), eq(FILENAME), eq(inspected.file()), eq("alice"), eq(null)))
+        eq(hosted), anyString(), eq(FILENAME), any(java.io.InputStream.class),
+        eq("alice"), eq(null)))
         .thenReturn(staged);
-    AtomicReference<AnsibleGalaxyRegistryDao.ImportTask> waiting = new AtomicReference<>();
-    when(registry.createClaimedTask(any(), anyString(), any(), any())).thenAnswer(invocation -> {
-      AnsibleGalaxyRegistryDao.ImportTask task = claimed(invocation.getArgument(0));
-      waiting.set(task);
-      return task;
-    });
-    when(registry.findVersion(hosted.id(), "acme", "tools", "1.2.3"))
-        .thenReturn(Optional.empty(), Optional.of(winner));
-    when(registry.finishTask(
-        anyString(), anyString(), anyLong(), anyString(), any(), any(), any(),
-        any(), any(), any(), any(), any(), any())).thenReturn(true);
+    when(assets.requiredBlob(staged)).thenReturn(blob(51L, 1L, "b".repeat(64)));
 
-    AnsibleGalaxyExceptions.Conflict conflict = assertThrows(
-        AnsibleGalaxyExceptions.Conflict.class, () -> service.publish(
+    AnsibleGalaxyExceptions.BadRequest failure = assertThrows(
+        AnsibleGalaxyExceptions.BadRequest.class, () -> service.publish(
             hosted, "api/v3/artifacts/collections/", null, BASE,
             new ByteArrayInputStream(new byte[] {1}), FILENAME, SHA256,
             "alice", null, false));
 
-    assertTrue(conflict.getMessage().contains("cannot be updated"));
-    verify(registry).finishTask(
-        eq(waiting.get().taskId()), eq("owner"), eq(3L),
-        eq(AnsibleGalaxyRegistryDao.TASK_FAILED), any(),
-        eq("conflict.collection_exists"), anyString(), eq("acme"), eq("tools"), eq("1.2.3"),
-        eq(FILENAME), eq(SHA256), any());
-    verify(assets, never()).storeCollection(any(), any(), any(), any(), any(), any(), any());
-    verify(assets).delete(
-        hosted, ".ansible/staging/" + waiting.get().taskId() + "/" + FILENAME);
-    assertFalse(Files.exists(inspected.file()));
+    assertTrue(failure.getMessage().contains("sha256"));
+    verify(registry, never()).createTask(any());
+    verify(assets).delete(eq(hosted), anyString());
+    verify(inspector, never()).inspect(any());
   }
 
   @Test
-  void supersededFailingPublisherLeavesTheDurableTaskForItsNewOwner() throws Exception {
+  void supersededWorkerLeavesStagingForTheNewTaskOwner() throws Exception {
     RepositoryRuntime hosted = runtime(2L, RepositoryType.HOSTED, null, List.of());
-    AnsibleCollectionArchiveInspector.InspectedCollection inspected = inspected("superseded-loser");
-    AnsibleGalaxyRegistryDao.CollectionVersion winner = version(hosted.id(), 32L, 22L);
-    AssetRecord staged = asset(
-        41L, hosted.id(), null, 51L, ".ansible/staging/task/" + FILENAME);
-    when(inspector.inspect(any())).thenReturn(inspected);
-    when(assets.stageCollection(
-        eq(hosted), anyString(), eq(FILENAME), eq(inspected.file()), eq("alice"), eq(null)))
-        .thenReturn(staged);
-    AtomicReference<AnsibleGalaxyRegistryDao.ImportTask> waiting = new AtomicReference<>();
-    when(registry.createClaimedTask(any(), anyString(), any(), any())).thenAnswer(invocation -> {
-      AnsibleGalaxyRegistryDao.ImportTask task = claimed(invocation.getArgument(0));
-      waiting.set(task);
-      return task;
-    });
-    when(registry.findVersion(hosted.id(), "acme", "tools", "1.2.3"))
-        .thenReturn(Optional.empty(), Optional.of(winner));
-    when(registry.finishTask(
-        anyString(), anyString(), anyLong(), anyString(), any(), any(), any(),
-        any(), any(), any(), any(), any(), any())).thenReturn(false);
-
-    MavenResponse response = service.publish(
-        hosted, "api/v3/artifacts/collections/", null, BASE,
-        new ByteArrayInputStream(new byte[] {1}), FILENAME, SHA256,
-        "alice", null, false);
-
-    assertEquals(202, response.status());
-    verify(registry).finishTask(
-        eq(waiting.get().taskId()), eq("owner"), eq(3L),
-        eq(AnsibleGalaxyRegistryDao.TASK_FAILED), any(),
-        eq("conflict.collection_exists"), anyString(), eq("acme"), eq("tools"), eq("1.2.3"),
-        eq(FILENAME), eq(SHA256), any());
-    verify(assets, never()).delete(
-        hosted, ".ansible/staging/" + waiting.get().taskId() + "/" + FILENAME);
-    assertFalse(Files.exists(inspected.file()));
-  }
-
-  @Test
-  void supersededTaskOwnerPreservesStagingForTheNewOwner() throws Exception {
-    RepositoryRuntime hosted = runtime(3L, RepositoryType.HOSTED, null, List.of());
     AnsibleCollectionArchiveInspector.InspectedCollection inspected = inspected("superseded");
-    AnsibleGalaxyRegistryDao.CollectionVersion stored = version(hosted.id(), 34L, 24L);
-    stubPersistence(hosted, inspected, stored);
-    AssetRecord staged = asset(
-        43L, hosted.id(), null, 53L, ".ansible/staging/task/" + FILENAME);
-    when(assets.stageCollection(
-        eq(hosted), anyString(), eq(FILENAME), eq(inspected.file()), eq("alice"), eq(null)))
-        .thenReturn(staged);
-    AtomicReference<AnsibleGalaxyRegistryDao.ImportTask> waiting = new AtomicReference<>();
-    when(registry.createClaimedTask(any(), anyString(), any(), any())).thenAnswer(invocation -> {
-      AnsibleGalaxyRegistryDao.ImportTask task = claimed(invocation.getArgument(0));
-      waiting.set(task);
-      return task;
-    });
+    AnsibleGalaxyRegistryDao.CollectionVersion winner = version(hosted.id(), 32L, 22L);
+    AnsibleGalaxyRegistryDao.ImportTask claimed = task(
+        "task-superseded", hosted.id(), AnsibleGalaxyRegistryDao.TASK_RUNNING,
+        "owner", 3L, 51L);
+    when(runtimes.resolveById(hosted.id())).thenReturn(Optional.of(hosted));
+    when(assets.open(hosted.id(), 51L)).thenReturn(new ByteArrayInputStream(new byte[] {1}));
+    when(inspector.inspect(any())).thenReturn(inspected);
+    when(registry.findVersion(hosted.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.of(winner));
     when(registry.finishTask(
         anyString(), anyString(), anyLong(), anyString(), any(), any(), any(),
         any(), any(), any(), any(), any(), any())).thenReturn(false);
 
-    assertEquals(202, service.publish(
-        hosted, "api/v3/artifacts/collections/", null, BASE,
-        new ByteArrayInputStream(new byte[] {1}), FILENAME, SHA256,
-        "alice", null, false).status());
+    service.processClaimedTask(claimed);
 
     verify(registry).finishTask(
-        eq(waiting.get().taskId()), eq("owner"), eq(3L),
+        eq(claimed.taskId()), eq("owner"), eq(3L),
         eq(AnsibleGalaxyRegistryDao.TASK_COMPLETED), any(), eq(null), eq(null),
         eq("acme"), eq("tools"), eq("1.2.3"), eq(FILENAME), eq(SHA256), any());
-    verify(registry, never()).finishTask(
-        anyString(), anyString(), anyLong(), eq(AnsibleGalaxyRegistryDao.TASK_FAILED),
-        any(), any(), any(), any(), any(), any(), any(), any(), any());
     verify(assets, never()).delete(
-        hosted, ".ansible/staging/" + waiting.get().taskId() + "/" + FILENAME);
+        hosted, ".ansible/staging/" + claimed.taskId() + "/" + FILENAME);
+    assertFalse(Files.exists(inspected.file()));
+  }
+
+  @Test
+  void claimedWorkerPromotesTheStagedBlobAndDeletesOnlyAfterDurableCompletion() throws Exception {
+    RepositoryRuntime hosted = runtime(3L, RepositoryType.HOSTED, null, List.of());
+    AnsibleCollectionArchiveInspector.InspectedCollection inspected = inspected("claimed");
+    AnsibleGalaxyRegistryDao.CollectionVersion stored = version(hosted.id(), 34L, 24L);
+    stubPersistence(hosted, inspected, stored);
+    AnsibleGalaxyRegistryDao.ImportTask claimed = task(
+        "task-complete", hosted.id(), AnsibleGalaxyRegistryDao.TASK_RUNNING,
+        "owner", 3L, 53L);
+    when(runtimes.resolveById(hosted.id())).thenReturn(Optional.of(hosted));
+    when(assets.open(hosted.id(), 53L)).thenReturn(new ByteArrayInputStream(new byte[] {1}));
+    when(registry.finishTask(
+        anyString(), anyString(), anyLong(), anyString(), any(), any(), any(),
+        any(), any(), any(), any(), any(), any())).thenReturn(true);
+
+    service.processClaimedTask(claimed);
+
+    verify(registry).finishTask(
+        eq(claimed.taskId()), eq("owner"), eq(3L),
+        eq(AnsibleGalaxyRegistryDao.TASK_COMPLETED), any(), eq(null), eq(null),
+        eq("acme"), eq("tools"), eq("1.2.3"), eq(FILENAME), eq(SHA256), any());
+    verify(assets).delete(
+        hosted, ".ansible/staging/" + claimed.taskId() + "/" + FILENAME);
     assertFalse(Files.exists(inspected.file()));
   }
 
@@ -288,7 +241,6 @@ class AnsibleGalaxyServiceLifecycleTest {
         .thenReturn(new AnsibleGalaxyAssetSupport.StoredCollection(winnerAsset, false));
     when(assets.requiredBlob(winnerAsset))
         .thenReturn(blob(52L, inspected.size(), inspected.sha256()));
-    when(registry.nextRepositoryRevision(hosted.id())).thenReturn(5L);
     when(registry.insertVersion(any())).thenThrow(new DuplicateKeyException("winner"));
 
     assertThrows(AnsibleGalaxyExceptions.Conflict.class, () -> service.putArtifact(
@@ -344,21 +296,11 @@ class AnsibleGalaxyServiceLifecycleTest {
         hosted, "api/v3/collections/acme/tools/", new ByteArrayInputStream(new byte[0]),
         "alice", null));
 
-    AnsibleCollectionArchiveInspector.InspectedCollection inspected = inspected("bad-name");
-    when(inspector.inspect(any())).thenReturn(inspected);
     assertThrows(AnsibleGalaxyExceptions.BadRequest.class, () -> service.publish(
         hosted, "api/v3/artifacts/collections/", null, BASE,
         new ByteArrayInputStream(new byte[0]), "wrong.tar.gz", SHA256, "alice", null, false));
-    assertFalse(Files.exists(inspected.file()));
-
-    AnsibleCollectionArchiveInspector.InspectedCollection duplicate = inspected("duplicate");
-    when(inspector.inspect(any())).thenReturn(duplicate);
-    when(registry.findVersion(hosted.id(), "acme", "tools", "1.2.3"))
-        .thenReturn(Optional.of(version(hosted.id(), 33L, 23L)));
-    assertThrows(AnsibleGalaxyExceptions.Conflict.class, () -> service.publish(
-        hosted, "api/v3/artifacts/collections/", null, BASE,
-        new ByteArrayInputStream(new byte[0]), FILENAME, SHA256, "alice", null, false));
-    assertFalse(Files.exists(duplicate.file()));
+    verify(assets, never()).stageCollection(
+        any(), anyString(), anyString(), any(java.io.InputStream.class), any(), any());
     verify(assets, never()).storeCollection(any(), any(), any(), any(), any(), any(), any());
   }
 
@@ -437,6 +379,11 @@ class AnsibleGalaxyServiceLifecycleTest {
     when(runtimes.resolveById(9L)).thenReturn(Optional.of(proxy));
     service.recoverTask(candidate);
     verify(registry, never()).claimTask(anyString(), anyString(), any(), any());
+    service.processClaimedTask(task(
+        "claimed-invalid", 9L, AnsibleGalaxyRegistryDao.TASK_RUNNING, "owner", 6L, 24L));
+    verify(registry).finishTask(
+        eq("claimed-invalid"), eq("owner"), eq(6L), eq(AnsibleGalaxyRegistryDao.TASK_FAILED),
+        any(), eq("repository_unavailable"), anyString(), any(), any(), any(), any(), any(), any());
 
     RepositoryRuntime hosted = runtime(9L, RepositoryType.HOSTED, null, List.of());
     when(runtimes.resolveById(9L)).thenReturn(Optional.of(hosted));
@@ -515,10 +462,12 @@ class AnsibleGalaxyServiceLifecycleTest {
         group.id(), "acme", "tools", "1.2.3", member.id(), version.id(),
         version.artifactFilename(), 5L, 7L, SHA256, Instant.now(), Instant.now());
     when(registry.listVersionNames(member.id(), "acme", "tools")).thenReturn(List.of("1.2.3"));
-    when(registry.currentRepositoryRevision(group.id())).thenReturn(7L);
+    when(registry.currentGroupConfigRevision(group.id())).thenReturn(7L);
     when(registry.currentRepositoryRevision(member.id())).thenReturn(5L);
     when(registry.findGroupBinding(group.id(), "acme", "tools", "1.2.3"))
         .thenReturn(Optional.of(binding));
+    when(registry.currentCoordinateSha256(member.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.of(SHA256));
     when(registry.findVersionById(version.id())).thenReturn(Optional.of(version));
     when(registry.listSignatures(version.id())).thenReturn(List.of());
 
@@ -553,7 +502,7 @@ class AnsibleGalaxyServiceLifecycleTest {
             group.id(), "acme", "tools", "1.2.3", second.id(), winner.id(),
             winner.artifactFilename(), 6L, 9L, winner.artifactSha256(),
             Instant.now(), Instant.now());
-    when(registry.currentRepositoryRevision(group.id())).thenReturn(9L);
+    when(registry.currentGroupConfigRevision(group.id())).thenReturn(9L);
     when(registry.currentRepositoryRevision(first.id())).thenReturn(5L);
     when(registry.currentRepositoryRevision(second.id())).thenReturn(6L);
     when(registry.findGroupBindingByArtifactFilename(group.id(), FILENAME))
@@ -563,6 +512,8 @@ class AnsibleGalaxyServiceLifecycleTest {
     when(registry.bindGroupSourceIfCurrent(any())).thenReturn(true);
     when(registry.findGroupBinding(group.id(), "acme", "tools", "1.2.3"))
         .thenReturn(Optional.of(winningBinding));
+    when(registry.currentCoordinateSha256(second.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.of(SHA256));
     when(registry.findVersionById(winner.id())).thenReturn(Optional.of(winner));
     when(assets.serve(second.id(), winner.artifactAssetId(), false)).thenReturn(MavenResponse.ok(
         new ByteArrayInputStream(new byte[] {2}), 1L,
@@ -635,8 +586,10 @@ class AnsibleGalaxyServiceLifecycleTest {
     when(assets.storeCollection(
         eq(runtime), anyString(), eq(inspected.file()), any(), any(), any(), any()))
         .thenReturn(new AnsibleGalaxyAssetSupport.StoredCollection(asset, true));
+    when(assets.promoteStagedCollection(
+        eq(runtime), anyLong(), anyString(), any(), any(), any()))
+        .thenReturn(new AnsibleGalaxyAssetSupport.StoredCollection(asset, true));
     when(assets.requiredBlob(asset)).thenReturn(blob(22L, inspected.size(), inspected.sha256()));
-    when(registry.nextRepositoryRevision(runtime.id())).thenReturn(4L);
     when(registry.insertVersion(any())).thenReturn(stored);
   }
 
@@ -667,7 +620,8 @@ class AnsibleGalaxyServiceLifecycleTest {
     return new AnsibleGalaxyRegistryDao.ImportTask(
         taskId, repositoryId, "alice", state, List.of(), null, null,
         "acme", "tools", "1.2.3", FILENAME, SHA256, SHA256, stagingAssetId, 1,
-        owner, owner == null ? null : now.plusSeconds(60), fencingToken == null ? 0L : fencingToken,
+        owner, owner == null ? null : Instant.now().plusSeconds(60),
+        fencingToken == null ? 0L : fencingToken,
         now, now, state.equals(AnsibleGalaxyRegistryDao.TASK_WAITING) ? null : now, now);
   }
 

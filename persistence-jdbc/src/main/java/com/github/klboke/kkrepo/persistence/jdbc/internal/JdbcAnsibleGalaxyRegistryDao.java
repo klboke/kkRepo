@@ -18,7 +18,9 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -32,6 +34,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Repository
 public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
   private static final String REVISION_PREFIX = "ansible:repository:";
+  private static final String GROUP_CONFIG_REVISION_PREFIX = "ansible:group-config:";
   private static final int MAX_VERSION_METADATA_JSON_BYTES = 64 * 1024;
   private static final int MAX_DEPENDENCIES_JSON_BYTES = 192 * 1024;
   private static final int MAX_PROXY_PROTOCOL_METADATA_JSON_BYTES = 256 * 1024;
@@ -66,6 +69,58 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
   }
 
   @Override
+  public Map<Long, Long> currentRepositoryRevisions(Collection<Long> repositoryIds) {
+    return currentRevisions(repositoryIds, REVISION_PREFIX);
+  }
+
+  @Override
+  public long nextGroupConfigRevision(long repositoryId) {
+    return coordination.bumpCacheVersion(jdbc, groupConfigRevisionKey(repositoryId));
+  }
+
+  @Override
+  public long currentGroupConfigRevision(long repositoryId) {
+    return currentRevision(groupConfigRevisionKey(repositoryId));
+  }
+
+  @Override
+  public Map<Long, Long> currentGroupConfigRevisions(Collection<Long> repositoryIds) {
+    return currentRevisions(repositoryIds, GROUP_CONFIG_REVISION_PREFIX);
+  }
+
+  @Override
+  @Transactional
+  public long nextCoordinateRevision(
+      long repositoryId, String namespaceLc, String nameLc, String versionNormalized) {
+    long revision = nextRepositoryRevision(repositoryId);
+    invalidateContainingGroups(repositoryId, namespaceLc, nameLc, versionNormalized);
+    return revision;
+  }
+
+  @Override
+  public Optional<String> currentCoordinateSha256(
+      long repositoryId, String namespaceLc, String nameLc, String versionNormalized) {
+    List<String> materialized = jdbc.queryForList("""
+        SELECT artifact_sha256 FROM ansible_collection_version
+        WHERE repository_id = ? AND namespace_lc = ? AND name_lc = ?
+          AND version_normalized = ? AND state = 'READY'
+        """, String.class, repositoryId, namespaceLc, nameLc, versionNormalized);
+    if (!materialized.isEmpty()) return Optional.ofNullable(materialized.getFirst());
+    List<String> projected = jdbc.queryForList("""
+        SELECT artifact_sha256 FROM ansible_proxy_version_state
+        WHERE repository_id = ? AND namespace_lc = ? AND name_lc = ?
+          AND version_normalized = ? AND artifact_sha256 IS NOT NULL
+        """, String.class, repositoryId, namespaceLc, nameLc, versionNormalized);
+    if (!projected.isEmpty()) return Optional.ofNullable(projected.getFirst());
+    return jdbc.queryForList("""
+            SELECT artifact_sha256 FROM ansible_group_binding
+            WHERE group_repository_id = ? AND namespace_lc = ? AND name_lc = ?
+              AND version_normalized = ?
+            """, String.class, repositoryId, namespaceLc, nameLc, versionNormalized)
+        .stream().findFirst();
+  }
+
+  @Override
   @Transactional
   public CollectionVersion insertVersion(CollectionVersion version) {
     Instant createdAt = version.createdAt() == null ? Instant.now() : version.createdAt();
@@ -76,6 +131,7 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
         safeMap(version.metadata()), MAX_VERSION_METADATA_JSON_BYTES, "version metadata");
     String dependenciesJson = boundedJson(
         safeMap(version.dependencies()), MAX_DEPENDENCIES_JSON_BYTES, "dependencies");
+    long revision = nextRepositoryRevision(version.repositoryId());
     long id = JdbcInserts.insert(jdbc, """
         INSERT INTO ansible_collection_version
           (repository_id, component_id, artifact_asset_id, namespace_lc, namespace_display,
@@ -101,20 +157,22 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
       json.bindSerialized(statement, 14, dependenciesJson);
       statement.setString(15, version.requiresAnsible());
       statement.setString(16, version.sourceKind());
-      statement.setLong(17, version.revision());
+      statement.setLong(17, revision);
       statement.setString(18, state);
       statement.setTimestamp(19, nullableTimestamp(publishedAt));
       statement.setTimestamp(20, nullableTimestamp(createdAt));
       statement.setTimestamp(21, nullableTimestamp(updatedAt));
     });
-    invalidateContainingGroups(version.repositoryId());
+    invalidateContainingGroups(
+        version.repositoryId(), version.namespaceLc(), version.nameLc(),
+        version.versionNormalized());
     return new CollectionVersion(
         id, version.repositoryId(), version.componentId(), version.artifactAssetId(),
         version.namespaceLc(), version.namespaceDisplay(), version.nameLc(), version.nameDisplay(),
         version.versionOriginal(), version.versionNormalized(), version.artifactFilename(),
         version.artifactSha256(), version.artifactSize(), safeMap(version.metadata()),
         safeMap(version.dependencies()),
-        version.requiresAnsible(), version.sourceKind(), version.revision(), state, publishedAt,
+        version.requiresAnsible(), version.sourceKind(), revision, state, publishedAt,
         createdAt, updatedAt);
   }
 
@@ -148,6 +206,27 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
   }
 
   @Override
+  public Optional<ArtifactRef> findArtifactByVersionId(long versionId) {
+    return jdbc.query("""
+        SELECT id, repository_id, artifact_asset_id, namespace_lc, name_lc,
+               version_normalized, artifact_filename, artifact_sha256, revision
+        FROM ansible_collection_version
+        WHERE id = ? AND state = 'READY'
+        """, this::mapArtifactRef, versionId).stream().findFirst();
+  }
+
+  @Override
+  public Optional<ArtifactRef> findArtifactByFilename(
+      long repositoryId, String artifactFilename) {
+    return jdbc.query("""
+        SELECT id, repository_id, artifact_asset_id, namespace_lc, name_lc,
+               version_normalized, artifact_filename, artifact_sha256, revision
+        FROM ansible_collection_version
+        WHERE repository_id = ? AND artifact_filename = ? AND state = 'READY'
+        """, this::mapArtifactRef, repositoryId, artifactFilename).stream().findFirst();
+  }
+
+  @Override
   @Transactional
   public boolean deleteVersion(long repositoryId, long versionId, long artifactAssetId) {
     Optional<CollectionVersion> existing = findVersionById(versionId)
@@ -170,8 +249,8 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
           AND version_normalized = ?
         """, repositoryId, version.namespaceLc(), version.nameLc(),
         version.versionNormalized());
-    nextRepositoryRevision(repositoryId);
-    invalidateContainingGroups(repositoryId);
+    nextCoordinateRevision(
+        repositoryId, version.namespaceLc(), version.nameLc(), version.versionNormalized());
     return true;
   }
 
@@ -298,6 +377,38 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
 
   @Override
   @Transactional
+  public List<ImportTask> claimTasks(
+      String owner, Instant leaseExpiresAt, Instant now, int limit) {
+    if (owner == null || owner.isBlank() || leaseExpiresAt == null || now == null
+        || !leaseExpiresAt.isAfter(now) || limit < 1 || limit > 1000) {
+      throw new IllegalArgumentException("Invalid Ansible task batch claim");
+    }
+    List<String> taskIds = jdbc.queryForList("""
+        SELECT task_uuid FROM ansible_import_task
+        WHERE state = 'WAITING' OR (state = 'RUNNING' AND lease_expires_at < ?)
+        ORDER BY created_at
+        LIMIT ?
+        FOR UPDATE SKIP LOCKED
+        """, String.class, nullableTimestamp(now), limit);
+    if (taskIds.isEmpty()) return List.of();
+    List<ImportTask> claimed = new ArrayList<>(taskIds.size());
+    for (String taskId : taskIds) {
+      int updated = jdbc.update("""
+          UPDATE ansible_import_task
+          SET state = 'RUNNING', attempt_count = attempt_count + 1, lease_owner = ?,
+              lease_expires_at = ?, fencing_token = fencing_token + 1,
+              started_at = COALESCE(started_at, ?), updated_at = ?
+          WHERE task_uuid = ?
+            AND (state = 'WAITING' OR (state = 'RUNNING' AND lease_expires_at < ?))
+          """, owner, nullableTimestamp(leaseExpiresAt), nullableTimestamp(now),
+          nullableTimestamp(now), taskId, nullableTimestamp(now));
+      if (updated > 0) findTask(taskId).ifPresent(claimed::add);
+    }
+    return List.copyOf(claimed);
+  }
+
+  @Override
+  @Transactional
   public Optional<ImportTask> claimTask(
       String taskId, String owner, Instant leaseExpiresAt, Instant now) {
     if (leaseExpiresAt == null || now == null || !leaseExpiresAt.isAfter(now)) {
@@ -362,11 +473,13 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
   }
 
   @Override
-  public void upsertProxyState(ProxyVersionState state) {
+  @Transactional
+  public long upsertProxyState(ProxyVersionState state) {
     Instant updatedAt = state.updatedAt() == null ? Instant.now() : state.updatedAt();
     Object identity = json.serializedParameter(boundedJson(
         safeMap(state.upstreamIdentity()), MAX_PROXY_PROTOCOL_METADATA_JSON_BYTES,
         "proxy protocol metadata"));
+    long revision = nextRepositoryRevision(state.repositoryId());
     JdbcUpserts.updateThenInsert(
         jdbc,
         """
@@ -381,7 +494,7 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
         new Object[]{state.artifactFilename(), state.upstreamHref(), state.upstreamDownloadUrl(), state.artifactSha256(),
             state.metadataEtag(), state.metadataLastModified(), nullableTimestamp(state.cacheUntil()),
             nullableTimestamp(state.verifiedAt()), state.negativeStatus(),
-            nullableTimestamp(state.negativeExpiresAt()), identity, state.revision(),
+            nullableTimestamp(state.negativeExpiresAt()), identity, revision,
             nullableTimestamp(updatedAt), state.repositoryId(), state.namespaceLc(), state.nameLc(),
             state.versionNormalized()},
         """
@@ -397,7 +510,34 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
             state.artifactSha256(), state.metadataEtag(), state.metadataLastModified(),
             nullableTimestamp(state.cacheUntil()), nullableTimestamp(state.verifiedAt()),
             state.negativeStatus(), nullableTimestamp(state.negativeExpiresAt()), identity,
-            state.revision(), nullableTimestamp(updatedAt)});
+            revision, nullableTimestamp(updatedAt)});
+    if (state.versionNormalized() != null && !state.versionNormalized().startsWith("@")) {
+      invalidateContainingGroups(
+          state.repositoryId(), state.namespaceLc(), state.nameLc(), state.versionNormalized());
+    }
+    return revision;
+  }
+
+  @Override
+  public boolean touchProxyState(
+      long repositoryId,
+      String namespaceLc,
+      String nameLc,
+      String versionNormalized,
+      String metadataEtag,
+      String metadataLastModified,
+      Instant cacheUntil,
+      Instant verifiedAt) {
+    return jdbc.update("""
+        UPDATE ansible_proxy_version_state
+        SET metadata_etag = COALESCE(?, metadata_etag),
+            metadata_last_modified = COALESCE(?, metadata_last_modified),
+            cache_until = ?, verified_at = ?, updated_at = ?
+        WHERE repository_id = ? AND namespace_lc = ? AND name_lc = ?
+          AND version_normalized = ?
+        """, metadataEtag, metadataLastModified, nullableTimestamp(cacheUntil),
+        nullableTimestamp(verifiedAt), nullableTimestamp(verifiedAt), repositoryId,
+        namespaceLc, nameLc, versionNormalized) > 0;
   }
 
   @Override
@@ -420,6 +560,84 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
         ORDER BY revision DESC
         LIMIT 1
         """, this::mapProxyState, repositoryId, artifactFilename).stream().findFirst();
+  }
+
+  @Override
+  public Optional<ProxyInventory> findProxyInventory(
+      long repositoryId, String namespaceLc, String nameLc) {
+    return jdbc.query("""
+        SELECT * FROM ansible_proxy_inventory
+        WHERE repository_id = ? AND namespace_lc = ? AND name_lc = ?
+        """, this::mapProxyInventory, repositoryId, namespaceLc, nameLc)
+        .stream().findFirst();
+  }
+
+  @Override
+  public List<String> listProxyInventoryVersionNames(
+      long repositoryId, String namespaceLc, String nameLc) {
+    return jdbc.queryForList("""
+        SELECT version_normalized FROM ansible_proxy_inventory_version
+        WHERE repository_id = ? AND namespace_lc = ? AND name_lc = ?
+        ORDER BY version_normalized
+        """, String.class, repositoryId, namespaceLc, nameLc);
+  }
+
+  @Override
+  @Transactional
+  public long replaceProxyInventory(ProxyInventory inventory, List<String> versions) {
+    if (inventory == null) throw new IllegalArgumentException("Proxy inventory is required");
+    List<String> normalized = versions == null
+        ? List.of() : versions.stream().distinct().toList();
+    long revision = nextRepositoryRevision(inventory.repositoryId());
+    JdbcUpserts.updateThenInsert(
+        jdbc,
+        """
+        UPDATE ansible_proxy_inventory
+        SET cache_until = ?, checked_at = ?, revision = ?, version_count = ?, updated_at = ?
+        WHERE repository_id = ? AND namespace_lc = ? AND name_lc = ?
+        """,
+        new Object[]{nullableTimestamp(inventory.cacheUntil()), nullableTimestamp(inventory.checkedAt()),
+            revision, normalized.size(), nullableTimestamp(inventory.updatedAt()),
+            inventory.repositoryId(), inventory.namespaceLc(), inventory.nameLc()},
+        """
+        INSERT INTO ansible_proxy_inventory
+          (repository_id, namespace_lc, name_lc, cache_until, checked_at, revision,
+           version_count, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        new Object[]{inventory.repositoryId(), inventory.namespaceLc(), inventory.nameLc(),
+            nullableTimestamp(inventory.cacheUntil()), nullableTimestamp(inventory.checkedAt()),
+            revision, normalized.size(), nullableTimestamp(inventory.updatedAt())});
+    jdbc.update("""
+        DELETE FROM ansible_proxy_inventory_version
+        WHERE repository_id = ? AND namespace_lc = ? AND name_lc = ?
+        """, inventory.repositoryId(), inventory.namespaceLc(), inventory.nameLc());
+    jdbc.batchUpdate("""
+        INSERT INTO ansible_proxy_inventory_version
+          (repository_id, namespace_lc, name_lc, version_normalized)
+        VALUES (?, ?, ?, ?)
+        """, normalized, 500, (statement, version) -> {
+          statement.setLong(1, inventory.repositoryId());
+          statement.setString(2, inventory.namespaceLc());
+          statement.setString(3, inventory.nameLc());
+          statement.setString(4, version);
+        });
+    return revision;
+  }
+
+  @Override
+  public boolean touchProxyInventory(
+      long repositoryId,
+      String namespaceLc,
+      String nameLc,
+      Instant cacheUntil,
+      Instant checkedAt) {
+    return jdbc.update("""
+        UPDATE ansible_proxy_inventory
+        SET cache_until = ?, checked_at = ?, updated_at = ?
+        WHERE repository_id = ? AND namespace_lc = ? AND name_lc = ?
+        """, nullableTimestamp(cacheUntil), nullableTimestamp(checkedAt),
+        nullableTimestamp(checkedAt), repositoryId, namespaceLc, nameLc) > 0;
   }
 
   @Override
@@ -447,7 +665,14 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
   @Override
   @Transactional
   public boolean bindGroupSourceIfCurrent(GroupBinding binding) {
-    if (currentRepositoryRevision(binding.groupRepositoryId()) != binding.groupConfigRevision()) {
+    if (currentGroupConfigRevision(binding.groupRepositoryId()) != binding.groupConfigRevision()) {
+      return false;
+    }
+    if (currentCoordinateSha256(
+            binding.memberRepositoryId(), binding.namespaceLc(), binding.nameLc(),
+            binding.versionNormalized())
+        .filter(binding.artifactSha256()::equalsIgnoreCase)
+        .isEmpty()) {
       return false;
     }
     Optional<GroupBinding> existing = findGroupBinding(
@@ -455,8 +680,11 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
         binding.versionNormalized());
     if (existing.isPresent()
         && existing.get().groupConfigRevision() == binding.groupConfigRevision()
-        && currentRepositoryRevision(existing.get().memberRepositoryId())
-            == existing.get().memberRevision()) {
+        && currentCoordinateSha256(
+                existing.get().memberRepositoryId(), existing.get().namespaceLc(),
+                existing.get().nameLc(), existing.get().versionNormalized())
+            .filter(existing.get().artifactSha256()::equalsIgnoreCase)
+            .isPresent()) {
       GroupBinding current = existing.get();
       if (current.memberRepositoryId() == binding.memberRepositoryId()
           && current.artifactSha256().equals(binding.artifactSha256())
@@ -506,7 +734,7 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
     } catch (DuplicateKeyException ignored) {
       // Another replica established the canonical first-member binding.
     }
-    if (currentRepositoryRevision(binding.groupRepositoryId()) != binding.groupConfigRevision()) {
+    if (currentGroupConfigRevision(binding.groupRepositoryId()) != binding.groupConfigRevision()) {
       jdbc.update("""
           DELETE FROM ansible_group_binding
           WHERE group_repository_id = ? AND namespace_lc = ? AND name_lc = ?
@@ -519,6 +747,11 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
             binding.groupRepositoryId(), binding.namespaceLc(), binding.nameLc(),
             binding.versionNormalized())
         .filter(value -> value.groupConfigRevision() == binding.groupConfigRevision())
+        .filter(value -> currentCoordinateSha256(
+                value.memberRepositoryId(), value.namespaceLc(), value.nameLc(),
+                value.versionNormalized())
+            .filter(value.artifactSha256()::equalsIgnoreCase)
+            .isPresent())
         .isPresent();
   }
 
@@ -543,6 +776,7 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
         nullableTimestamp(now));
     boolean acquired = updated > 0;
     if (updated == 0) {
+      if (findLease(leaseKey).isPresent()) return Optional.empty();
       try {
         acquired = jdbc.update("""
             INSERT INTO ansible_registry_lease
@@ -582,10 +816,101 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
 
   @Override
   @Transactional
+  public int deleteExpiredProxyCache(Instant now, Instant stalePageBefore, int limit) {
+    if (now == null || stalePageBefore == null || limit < 1 || limit > 1000) {
+      throw new IllegalArgumentException("Invalid Ansible proxy cleanup request");
+    }
+    List<ProxyCacheKey> keys = jdbc.query("""
+        SELECT repository_id, namespace_lc, name_lc, version_normalized
+        FROM ansible_proxy_version_state
+        WHERE (negative_expires_at IS NOT NULL AND negative_expires_at < ?)
+           OR (version_normalized LIKE '@versions-%' AND updated_at < ?)
+        ORDER BY updated_at
+        LIMIT ?
+        """, (rs, row) -> new ProxyCacheKey(
+        rs.getLong("repository_id"), rs.getString("namespace_lc"),
+        rs.getString("name_lc"), rs.getString("version_normalized")),
+        nullableTimestamp(now), nullableTimestamp(stalePageBefore), limit);
+    int deleted = 0;
+    for (ProxyCacheKey key : keys) {
+      deleted += jdbc.update("""
+          DELETE FROM ansible_proxy_version_state
+          WHERE repository_id = ? AND namespace_lc = ? AND name_lc = ?
+            AND version_normalized = ?
+          """, key.repositoryId(), key.namespaceLc(), key.nameLc(), key.versionNormalized());
+    }
+    int remaining = limit - deleted;
+    if (remaining <= 0) return deleted;
+    List<ProxyInventoryKey> inventories = jdbc.query("""
+        SELECT repository_id, namespace_lc, name_lc
+        FROM ansible_proxy_inventory
+        WHERE cache_until < ? AND updated_at < ?
+        ORDER BY updated_at
+        LIMIT ?
+        """, (rs, row) -> new ProxyInventoryKey(
+        rs.getLong("repository_id"), rs.getString("namespace_lc"), rs.getString("name_lc")),
+        nullableTimestamp(now), nullableTimestamp(stalePageBefore), remaining);
+    for (ProxyInventoryKey inventory : inventories) {
+      deleted += jdbc.update("""
+          DELETE FROM ansible_proxy_inventory
+          WHERE repository_id = ? AND namespace_lc = ? AND name_lc = ?
+            AND cache_until < ? AND updated_at < ?
+          """, inventory.repositoryId(), inventory.namespaceLc(), inventory.nameLc(),
+          nullableTimestamp(now), nullableTimestamp(stalePageBefore));
+    }
+    return deleted;
+  }
+
+  @Override
+  @Transactional
+  public int deleteTerminalTasksBefore(Instant finishedBefore, int limit) {
+    if (finishedBefore == null || limit < 1 || limit > 1000) {
+      throw new IllegalArgumentException("Invalid Ansible task cleanup request");
+    }
+    List<String> ids = jdbc.queryForList("""
+        SELECT task_uuid FROM ansible_import_task
+        WHERE state IN ('COMPLETED', 'FAILED') AND finished_at < ?
+        ORDER BY finished_at
+        LIMIT ?
+        """, String.class, nullableTimestamp(finishedBefore), limit);
+    int deleted = 0;
+    for (String id : ids) {
+      deleted += jdbc.update("""
+          DELETE FROM ansible_import_task
+          WHERE task_uuid = ? AND state IN ('COMPLETED', 'FAILED') AND finished_at < ?
+          """, id, nullableTimestamp(finishedBefore));
+    }
+    return deleted;
+  }
+
+  @Override
+  @Transactional
+  public int deleteExpiredLeasesBefore(Instant expiresBefore, int limit) {
+    if (expiresBefore == null || limit < 1 || limit > 1000) {
+      throw new IllegalArgumentException("Invalid Ansible lease cleanup request");
+    }
+    List<String> keys = jdbc.queryForList("""
+        SELECT lease_key FROM ansible_registry_lease
+        WHERE expires_at < ?
+        ORDER BY expires_at
+        LIMIT ?
+        """, String.class, nullableTimestamp(expiresBefore), limit);
+    int deleted = 0;
+    for (String key : keys) {
+      deleted += jdbc.update(
+          "DELETE FROM ansible_registry_lease WHERE lease_key = ? AND expires_at < ?",
+          key, nullableTimestamp(expiresBefore));
+    }
+    return deleted;
+  }
+
+  @Override
+  @Transactional
   public void deleteRepositoryState(long repositoryId) {
     jdbc.update(
         "DELETE FROM ansible_group_binding WHERE group_repository_id = ? OR member_repository_id = ?",
         repositoryId, repositoryId);
+    jdbc.update("DELETE FROM ansible_proxy_inventory WHERE repository_id = ?", repositoryId);
     jdbc.update("DELETE FROM ansible_proxy_version_state WHERE repository_id = ?", repositoryId);
     jdbc.update("DELETE FROM ansible_import_task WHERE repository_id = ?", repositoryId);
     jdbc.update("DELETE FROM ansible_collection_version WHERE repository_id = ?", repositoryId);
@@ -604,6 +929,14 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
         rs.getString("requires_ansible"), rs.getString("source_kind"), rs.getLong("revision"),
         rs.getString("state"), nullableInstant(rs, "published_at"),
         nullableInstant(rs, "created_at"), nullableInstant(rs, "updated_at"));
+  }
+
+  private ArtifactRef mapArtifactRef(java.sql.ResultSet rs, int row) throws java.sql.SQLException {
+    return new ArtifactRef(
+        rs.getLong("id"), rs.getLong("repository_id"), rs.getLong("artifact_asset_id"),
+        rs.getString("namespace_lc"), rs.getString("name_lc"),
+        rs.getString("version_normalized"), rs.getString("artifact_filename"),
+        rs.getString("artifact_sha256"), rs.getLong("revision"));
   }
 
   private ImportTask mapTask(java.sql.ResultSet rs, int row) throws java.sql.SQLException {
@@ -636,6 +969,14 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
         nullableInstant(rs, "updated_at"));
   }
 
+  private ProxyInventory mapProxyInventory(java.sql.ResultSet rs, int row)
+      throws java.sql.SQLException {
+    return new ProxyInventory(
+        rs.getLong("repository_id"), rs.getString("namespace_lc"), rs.getString("name_lc"),
+        nullableInstant(rs, "cache_until"), nullableInstant(rs, "checked_at"),
+        rs.getLong("revision"), rs.getInt("version_count"), nullableInstant(rs, "updated_at"));
+  }
+
   private GroupBinding mapGroupBinding(java.sql.ResultSet rs, int row)
       throws java.sql.SQLException {
     long rawMemberVersionId = rs.getLong("member_version_id");
@@ -658,7 +999,8 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
         .stream().findFirst();
   }
 
-  private void invalidateContainingGroups(long memberRepositoryId) {
+  private void invalidateContainingGroups(
+      long memberRepositoryId, String namespaceLc, String nameLc, String versionNormalized) {
     LinkedHashSet<Long> visited = new LinkedHashSet<>();
     visited.add(memberRepositoryId);
     ArrayDeque<Long> pending = new ArrayDeque<>();
@@ -676,14 +1018,58 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
       for (Long groupId : groupIds) {
         if (groupId == null || !visited.add(groupId)) continue;
         nextRepositoryRevision(groupId);
-        deleteGroupBindings(groupId);
+        jdbc.update("""
+            DELETE FROM ansible_group_binding
+            WHERE group_repository_id = ? AND namespace_lc = ? AND name_lc = ?
+              AND version_normalized = ?
+            """, groupId, namespaceLc, nameLc, versionNormalized);
         pending.addLast(groupId);
       }
     }
   }
 
+  private long currentRevision(String key) {
+    return jdbc.query(
+            "SELECT version FROM cache_version WHERE name = ?",
+            (rs, row) -> rs.getLong("version"), key)
+        .stream().findFirst().orElse(0L);
+  }
+
+  private Map<Long, Long> currentRevisions(
+      Collection<Long> repositoryIds, String prefix) {
+    LinkedHashSet<Long> ids = new LinkedHashSet<>();
+    if (repositoryIds != null) {
+      repositoryIds.stream().filter(java.util.Objects::nonNull).forEach(ids::add);
+    }
+    if (ids.isEmpty()) return Map.of();
+    LinkedHashMap<Long, Long> revisions = new LinkedHashMap<>();
+    ids.forEach(id -> revisions.put(id, 0L));
+    List<String> names = ids.stream().map(id -> prefix + id).toList();
+    String placeholders = String.join(",", java.util.Collections.nCopies(names.size(), "?"));
+    jdbc.query(
+        "SELECT name, version FROM cache_version WHERE name IN (" + placeholders + ")",
+        rs -> {
+          String name = rs.getString("name");
+          if (name != null && name.startsWith(prefix)) {
+            revisions.put(Long.parseLong(name.substring(prefix.length())), rs.getLong("version"));
+          }
+        }, names.toArray());
+    return Map.copyOf(revisions);
+  }
+
   private static String revisionKey(long repositoryId) {
     return REVISION_PREFIX + repositoryId;
+  }
+
+  private static String groupConfigRevisionKey(long repositoryId) {
+    return GROUP_CONFIG_REVISION_PREFIX + repositoryId;
+  }
+
+  private record ProxyCacheKey(
+      long repositoryId, String namespaceLc, String nameLc, String versionNormalized) {
+  }
+
+  private record ProxyInventoryKey(long repositoryId, String namespaceLc, String nameLc) {
   }
 
   private String boundedJson(Object value, int maxBytes, String label) {

@@ -549,7 +549,7 @@ public class RepositoryService {
     if (format != RepositoryFormat.ANSIBLEGALAXY || ansibleRegistry == null) {
       return;
     }
-    ansibleRegistry.nextRepositoryRevision(groupRepositoryId);
+    ansibleRegistry.nextGroupConfigRevision(groupRepositoryId);
     ansibleRegistry.deleteGroupBindings(groupRepositoryId);
     invalidateAnsibleContainingGroupBindings(format, groupRepositoryId, new HashSet<>());
   }
@@ -563,7 +563,7 @@ public class RepositoryService {
       if (group.id() == null || !visited.add(group.id())) {
         continue;
       }
-      ansibleRegistry.nextRepositoryRevision(group.id());
+      ansibleRegistry.nextGroupConfigRevision(group.id());
       ansibleRegistry.deleteGroupBindings(group.id());
       invalidateAnsibleContainingGroupBindings(format, group.id(), visited);
     }

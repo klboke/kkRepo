@@ -4,7 +4,8 @@ import static com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistr
 import static com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao.TASK_FAILED;
 import static com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao.TASK_WAITING;
 
-import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
@@ -22,7 +23,7 @@ import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
@@ -33,7 +34,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Comparator;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
@@ -41,16 +41,17 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
 /** Galaxy v3 hosted, proxy, and group behavior behind the unified repository controller. */
 @Service
 public class AnsibleGalaxyService {
-  private static final TypeReference<Map<String, Object>> JSON_OBJECT = new TypeReference<>() { };
   private static final String VERSIONS_SENTINEL = "@versions";
   private static final String DISCOVERY_NAMESPACE = "@upstream";
   private static final String DISCOVERY_NAME = "@discovery";
@@ -71,8 +72,35 @@ public class AnsibleGalaxyService {
   private final HttpRemoteFetcher remoteFetcher;
   private final RepositoryRuntimeRegistry runtimes;
   private final AnsibleImportTaskLeaseManager taskLeases;
+  private final AnsibleRegistryLeaseManager registryLeases;
+  private final AnsibleSingleFlight singleFlight;
+  private final AnsibleVersionListCache versionListCache;
   private final AnsibleGalaxyPathParser pathParser = new AnsibleGalaxyPathParser();
   private final String nodeOwner = "ansible-" + UUID.randomUUID();
+
+  @Autowired
+  public AnsibleGalaxyService(
+      ObjectMapper objectMapper,
+      AnsibleGalaxyRegistryDao registry,
+      AnsibleGalaxyAssetSupport assets,
+      AnsibleCollectionArchiveInspector inspector,
+      HttpRemoteFetcher remoteFetcher,
+      RepositoryRuntimeRegistry runtimes,
+      AnsibleImportTaskLeaseManager taskLeases,
+      AnsibleRegistryLeaseManager registryLeases,
+      AnsibleSingleFlight singleFlight,
+      AnsibleVersionListCache versionListCache) {
+    this.objectMapper = objectMapper;
+    this.registry = registry;
+    this.assets = assets;
+    this.inspector = inspector;
+    this.remoteFetcher = remoteFetcher;
+    this.runtimes = runtimes;
+    this.taskLeases = taskLeases;
+    this.registryLeases = registryLeases;
+    this.singleFlight = singleFlight;
+    this.versionListCache = versionListCache;
+  }
 
   public AnsibleGalaxyService(
       ObjectMapper objectMapper,
@@ -82,13 +110,9 @@ public class AnsibleGalaxyService {
       HttpRemoteFetcher remoteFetcher,
       RepositoryRuntimeRegistry runtimes,
       AnsibleImportTaskLeaseManager taskLeases) {
-    this.objectMapper = objectMapper;
-    this.registry = registry;
-    this.assets = assets;
-    this.inspector = inspector;
-    this.remoteFetcher = remoteFetcher;
-    this.runtimes = runtimes;
-    this.taskLeases = taskLeases;
+    this(
+        objectMapper, registry, assets, inspector, remoteFetcher, runtimes, taskLeases,
+        new AnsibleRegistryLeaseManager(registry), new AnsibleSingleFlight(), null);
   }
 
   public MavenResponse get(
@@ -138,37 +162,31 @@ public class AnsibleGalaxyService {
       boolean headOnly) {
     validatePublishRequest(runtime, rawPath, rawQuery);
     requireExpectedSha(expectedSha256);
-    AnsibleCollectionArchiveInspector.InspectedCollection inspected = inspector.inspect(artifact);
+    if (!AnsibleGalaxyPathParser.isArtifactFilename(filename)) {
+      throw new AnsibleGalaxyExceptions.BadRequest(
+          "Ansible publish requires a safe collection artifact filename");
+    }
+    String taskId = UUID.randomUUID().toString();
+    AssetRecord staged = assets.stageCollection(
+        runtime, taskId, filename, artifact, actor, ip);
+    AssetBlobRecord stagedBlob = assets.requiredBlob(staged);
     try {
-      validateUploadIdentity(inspected, filename, expectedSha256);
-      if (registry.findVersion(
-          runtime.id(), inspected.namespace(), inspected.name(), inspected.version()).isPresent()) {
-        throw new AnsibleGalaxyExceptions.Conflict(
-            inspected.filename() + " cannot be updated because the collection version exists");
+      if (!expectedSha256.equalsIgnoreCase(stagedBlob.sha256())) {
+        throw new AnsibleGalaxyExceptions.BadRequest(
+            "Multipart sha256 does not match the collection artifact");
       }
-      String taskId = UUID.randomUUID().toString();
-      AssetRecord staged = assets.stageCollection(
-          runtime, taskId, inspected.filename(), inspected.file(), actor, ip);
       Instant now = Instant.now();
-      AnsibleGalaxyRegistryDao.ImportTask task;
-      try {
-        task = registry.createClaimedTask(
-            new AnsibleGalaxyRegistryDao.ImportTask(
-                taskId, runtime.id(), actor, TASK_WAITING, List.of(), null, null,
-                inspected.namespace(), inspected.name(), inspected.version(), inspected.filename(),
-                expectedSha256.toLowerCase(Locale.ROOT), inspected.sha256(), staged.id(), 0,
-                null, null, 0L, now, null, null, now),
-            nodeOwner, now.plus(TASK_LEASE_DURATION), now);
-      } catch (RuntimeException e) {
-        deleteStaging(runtime, taskId, inspected.filename());
-        throw e;
-      }
-      processNewTask(runtime, task, inspected, actor, ip);
+      registry.createTask(new AnsibleGalaxyRegistryDao.ImportTask(
+          taskId, runtime.id(), actor, TASK_WAITING, List.of(), null, null,
+          null, null, null, filename, expectedSha256.toLowerCase(Locale.ROOT),
+          stagedBlob.sha256(), staged.id(), 0, null, null, 0L,
+          now, null, null, now));
       String taskPath = "api/v3/imports/collections/" + taskId + "/";
       return jsonResponse(Map.of("task", taskPath), 202, headOnly, now)
           .withHeader("Location", normalizedBase(repositoryBaseUrl) + taskPath);
-    } finally {
-      AnsibleCollectionArchiveInspector.delete(inspected.file());
+    } catch (RuntimeException error) {
+      deleteStaging(runtime, taskId, filename);
+      throw error;
     }
   }
 
@@ -225,30 +243,46 @@ public class AnsibleGalaxyService {
     }
     return persistCollection(
         runtime, inspected, runtime.isProxy() ? "MIGRATION_PROXY" : "MIGRATION_HOSTED",
-        Map.of(), actor, ip, true, publishedAt);
+        Map.of(), actor, ip, true, publishedAt, null);
   }
 
   /** Claims and resumes one durable task after a node crash or lease expiry. */
   void recoverTask(AnsibleGalaxyRegistryDao.ImportTask candidate) {
     RepositoryRuntime runtime = runtimes.resolveById(candidate.repositoryId()).orElse(null);
-    if (runtime == null || runtime.format() != RepositoryFormat.ANSIBLEGALAXY || !runtime.isHosted()) {
+    if (runtime == null || runtime.format() != RepositoryFormat.ANSIBLEGALAXY
+        || !runtime.isHosted()) {
       return;
     }
     Instant now = Instant.now();
     Optional<AnsibleGalaxyRegistryDao.ImportTask> claimed = registry.claimTask(
         candidate.taskId(), nodeOwner, now.plus(TASK_LEASE_DURATION), now);
     if (claimed.isEmpty()) return;
-    AnsibleGalaxyRegistryDao.ImportTask task = claimed.get();
+    processClaimedTask(claimed.get());
+  }
+
+  void processClaimedTask(AnsibleGalaxyRegistryDao.ImportTask task) {
+    RepositoryRuntime runtime = runtimes.resolveById(task.repositoryId()).orElse(null);
+    if (runtime == null || runtime.format() != RepositoryFormat.ANSIBLEGALAXY || !runtime.isHosted()) {
+      finishFailed(
+          task,
+          "repository_unavailable",
+          "The Ansible hosted repository for this import task is unavailable");
+      return;
+    }
     if (task.stagingAssetId() == null) {
       finishFailed(task, "missing_staging_artifact", "Staged collection artifact is missing");
       return;
     }
     AnsibleCollectionArchiveInspector.InspectedCollection inspected = null;
     boolean terminal = false;
-    try (InputStream input = assets.open(runtime.id(), task.stagingAssetId())) {
+    try (AnsibleImportTaskLeaseManager.Lease taskLease =
+             taskLeases.monitor(task, TASK_LEASE_DURATION);
+         InputStream input = assets.open(runtime.id(), task.stagingAssetId())) {
       inspected = inspector.inspect(input);
       validateRecoveredTask(task, inspected);
-      terminal = finishSuccessfulTask(runtime, task, inspected, task.requester(), null, true);
+      taskLease.assertHeld();
+      terminal = finishSuccessfulTask(
+          runtime, task, inspected, task.requester(), null, true, taskLease);
     } catch (RuntimeException | IOException e) {
       terminal = finishFailed(task, errorCode(e), safeDetail(e));
     } finally {
@@ -263,11 +297,11 @@ public class AnsibleGalaxyService {
       String name,
       String baseUrl,
       boolean headOnly) {
-    List<String> versions = listVersionNames(runtime, namespace, name, new HashSet<>());
+    List<String> versions = sortedVersionNames(runtime, namespace, name);
     if (versions.isEmpty()) {
       throw new AnsibleGalaxyExceptions.NotFound("Collection not found");
     }
-    String highest = AnsibleGalaxyVersions.sortDescending(versions).getFirst();
+    String highest = versions.getFirst();
     ResolvedVersionMetadata detail =
         resolveExact(runtime, namespace, name, highest, new HashSet<>());
     Map<String, Object> body = new LinkedHashMap<>();
@@ -292,8 +326,7 @@ public class AnsibleGalaxyService {
       int limit,
       int offset,
       boolean headOnly) {
-    List<String> all = AnsibleGalaxyVersions.sortDescending(
-        listVersionNames(runtime, namespace, name, new HashSet<>()));
+    List<String> all = sortedVersionNames(runtime, namespace, name);
     if (all.isEmpty()) {
       throw new AnsibleGalaxyExceptions.NotFound("Collection not found");
     }
@@ -363,9 +396,9 @@ public class AnsibleGalaxyService {
 
   private MavenResponse artifactResponse(
       RepositoryRuntime runtime, String filename, boolean headOnly) {
-    AnsibleGalaxyRegistryDao.CollectionVersion version =
+    AnsibleGalaxyRegistryDao.ArtifactRef artifact =
         resolveArtifact(runtime, filename, new HashSet<>());
-    return assets.serve(version.repositoryId(), version.artifactAssetId(), headOnly)
+    return assets.serve(artifact.repositoryId(), artifact.artifactAssetId(), headOnly)
         .withHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
   }
 
@@ -376,8 +409,7 @@ public class AnsibleGalaxyService {
     }
     try {
       if (runtime.isHosted()) {
-        return registry.listVersionNames(runtime.id(), namespace, name).stream()
-            .distinct().toList();
+        return registry.listVersionNames(runtime.id(), namespace, name);
       }
       if (runtime.isProxy()) {
         LinkedHashSet<String> versions = new LinkedHashSet<>();
@@ -403,6 +435,67 @@ public class AnsibleGalaxyService {
       }
       if (versions.isEmpty() && upstreamFailure != null) throw upstreamFailure;
       return List.copyOf(versions);
+    } finally {
+      visiting.remove(runtime.id());
+    }
+  }
+
+  private List<String> sortedVersionNames(
+      RepositoryRuntime runtime, String namespace, String name) {
+    String identity = runtime.id() + ":" + namespace + ":" + name;
+    String revisionState = versionListRevisionState(runtime);
+    if (versionListCache != null) {
+      Optional<List<String>> cached = versionListCache.find(identity, revisionState);
+      if (cached.isPresent()) return cached.get();
+    }
+    List<String> sorted = AnsibleGalaxyVersions.sortDescending(
+        listVersionNames(runtime, namespace, name, new HashSet<>()));
+    if (versionListCache != null) versionListCache.put(identity, revisionState, sorted);
+    return sorted;
+  }
+
+  private String versionListRevisionState(RepositoryRuntime runtime) {
+    LinkedHashSet<Long> repositoryIds = new LinkedHashSet<>();
+    collectRepositoryIds(runtime, repositoryIds, new HashSet<>());
+    Map<Long, Long> content = registry.currentRepositoryRevisions(repositoryIds);
+    Map<Long, Long> config = registry.currentGroupConfigRevisions(repositoryIds);
+    StringBuilder state = new StringBuilder(repositoryIds.size() * 24);
+    appendRevisionState(runtime, content, config, state, new HashSet<>());
+    return state.toString();
+  }
+
+  private static void collectRepositoryIds(
+      RepositoryRuntime runtime, Set<Long> repositoryIds, Set<Long> visiting) {
+    if (runtime == null || !visiting.add(runtime.id())) return;
+    try {
+      repositoryIds.add(runtime.id());
+      for (RepositoryRuntime member : safeMembers(runtime)) {
+        collectRepositoryIds(member, repositoryIds, visiting);
+      }
+    } finally {
+      visiting.remove(runtime.id());
+    }
+  }
+
+  private static void appendRevisionState(
+      RepositoryRuntime runtime,
+      Map<Long, Long> content,
+      Map<Long, Long> config,
+      StringBuilder state,
+      Set<Long> visiting) {
+    if (runtime == null || !visiting.add(runtime.id())) {
+      state.append("cycle");
+      return;
+    }
+    try {
+      state.append(runtime.id()).append(':')
+          .append(content.getOrDefault(runtime.id(), 0L)).append(':')
+          .append(config.getOrDefault(runtime.id(), 0L)).append('[');
+      for (RepositoryRuntime member : safeMembers(runtime)) {
+        appendRevisionState(member, content, config, state, visiting);
+        state.append(',');
+      }
+      state.append(']');
     } finally {
       visiting.remove(runtime.id());
     }
@@ -451,7 +544,7 @@ public class AnsibleGalaxyService {
         try {
           ResolvedVersionMetadata candidate =
               resolveExact(member, namespace, name, version, visiting);
-          long memberRevision = registry.currentRepositoryRevision(member.id());
+          long memberRevision = candidate.revision();
           boolean bound = registry.bindGroupSourceIfCurrent(
               new AnsibleGalaxyRegistryDao.GroupBinding(
                   runtime.id(), namespace, name, version, member.id(),
@@ -475,54 +568,54 @@ public class AnsibleGalaxyService {
     }
   }
 
-  private AnsibleGalaxyRegistryDao.CollectionVersion resolveArtifact(
+  private AnsibleGalaxyRegistryDao.ArtifactRef resolveArtifact(
       RepositoryRuntime runtime, String filename, Set<Long> visiting) {
     if (!visiting.add(runtime.id())) {
       throw new AnsibleGalaxyExceptions.BadRequest("Ansible group contains a cycle");
     }
     try {
       if (runtime.isHosted()) {
-        return registry.findVersionByArtifactFilename(runtime.id(), filename)
+        return findArtifactByFilename(runtime.id(), filename)
             .orElseThrow(() -> new AnsibleGalaxyExceptions.NotFound(
                 "Collection artifact was not found"));
       }
       if (runtime.isProxy()) {
-        Optional<AnsibleGalaxyRegistryDao.CollectionVersion> cached =
-            registry.findVersionByArtifactFilename(runtime.id(), filename);
+        Optional<AnsibleGalaxyRegistryDao.ArtifactRef> cached =
+            findArtifactByFilename(runtime.id(), filename);
         if (cached.isPresent()) return cached.get();
         AnsibleGalaxyRegistryDao.ProxyVersionState state =
             registry.findProxyStateByArtifactFilename(runtime.id(), filename)
                 .orElseThrow(() -> new AnsibleGalaxyExceptions.NotFound(
                     "Collection artifact metadata was not requested before download"));
-        return materializeProxy(runtime, state);
+        return artifactRef(materializeProxy(runtime, state));
       }
       long groupRevision = currentGroupRevision(runtime.id());
       Optional<AnsibleGalaxyRegistryDao.GroupBinding> binding =
           registry.findGroupBindingByArtifactFilename(runtime.id(), filename);
-      Optional<AnsibleGalaxyRegistryDao.CollectionVersion> boundArtifact = binding.flatMap(
-          current -> currentGroupBindingVersion(runtime, current, groupRevision));
+      Optional<AnsibleGalaxyRegistryDao.ArtifactRef> boundArtifact = binding.flatMap(
+          current -> currentGroupBindingArtifact(runtime, current, groupRevision));
       if (boundArtifact.isPresent()) return boundArtifact.get();
-      Optional<AnsibleGalaxyRegistryDao.CollectionVersion> projectedBoundArtifact = binding.flatMap(
+      Optional<AnsibleGalaxyRegistryDao.ArtifactRef> projectedBoundArtifact = binding.flatMap(
           current -> materializeBoundGroupArtifact(
               runtime, current, groupRevision, filename, visiting));
       if (projectedBoundArtifact.isPresent()) return projectedBoundArtifact.get();
       AnsibleGalaxyExceptions.BadUpstream upstreamFailure = null;
       for (RepositoryRuntime member : safeMembers(runtime)) {
         try {
-          AnsibleGalaxyRegistryDao.CollectionVersion candidate =
+          AnsibleGalaxyRegistryDao.ArtifactRef candidate =
               resolveArtifact(member, filename, visiting);
           boolean bound = registry.bindGroupSourceIfCurrent(
               new AnsibleGalaxyRegistryDao.GroupBinding(
                   runtime.id(), candidate.namespaceLc(), candidate.nameLc(),
-                  candidate.versionNormalized(), member.id(), candidate.id(),
-                  candidate.artifactFilename(), registry.currentRepositoryRevision(member.id()),
+                  candidate.versionNormalized(), member.id(), candidate.versionId(),
+                  candidate.artifactFilename(), candidate.revision(),
                   groupRevision,
                   candidate.artifactSha256(), Instant.now(), Instant.now()));
           requireCurrentGroupBinding(bound);
           return registry.findGroupBinding(
                   runtime.id(), candidate.namespaceLc(), candidate.nameLc(),
                   candidate.versionNormalized())
-              .flatMap(current -> currentGroupBindingVersion(runtime, current, groupRevision))
+              .flatMap(current -> currentGroupBindingArtifact(runtime, current, groupRevision))
               .orElse(candidate);
         } catch (AnsibleGalaxyExceptions.NotFound ignored) {
         } catch (AnsibleGalaxyExceptions.BadUpstream e) {
@@ -548,11 +641,13 @@ public class AnsibleGalaxyService {
     }
     String leaseKey = leaseKey(runtime.id(), "artifact", state.namespaceLc(), state.nameLc(),
         state.versionNormalized());
-    AnsibleGalaxyRegistryDao.Lease lease = acquireLease(leaseKey);
-    try {
-      existing = registry.findVersion(
+    return singleFlight.execute(leaseKey, () -> {
+      AnsibleGalaxyRegistryDao.Lease lease = acquireLease(leaseKey);
+      try (AnsibleRegistryLeaseManager.MonitoredLease monitored =
+               registryLeases.monitor(lease, LEASE_DURATION)) {
+      Optional<AnsibleGalaxyRegistryDao.CollectionVersion> cached = registry.findVersion(
           runtime.id(), state.namespaceLc(), state.nameLc(), state.versionNormalized());
-      if (existing.isPresent()) return existing.get();
+      if (cached.isPresent()) return cached.get();
       HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request.get(state.upstreamDownloadUrl())
           .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
           // galaxy.ansible.com returns 406 for a narrowed binary Accept value even though the
@@ -583,6 +678,7 @@ public class AnsibleGalaxyService {
             throw new AnsibleGalaxyExceptions.BadUpstream(
                 "Upstream artifact identity does not match version metadata");
           }
+          monitored.assertHeld();
           return persistCollection(
               runtime, inspected, "PROXY", state.upstreamIdentity(), "proxy", null, true);
         } finally {
@@ -592,9 +688,10 @@ public class AnsibleGalaxyService {
         throw new AnsibleGalaxyExceptions.BadUpstream(
             "Failed downloading upstream Ansible collection", e);
       }
-    } finally {
-      registry.releaseLease(lease.leaseKey(), lease.owner(), lease.fencingToken());
-    }
+      } finally {
+        registry.releaseLease(lease.leaseKey(), lease.owner(), lease.fencingToken());
+      }
+    });
   }
 
   Map<String, Object> fetchProxyDocument(
@@ -620,13 +717,31 @@ public class AnsibleGalaxyService {
     }
 
     String leaseKey = leaseKey(runtime.id(), "metadata", namespace, name, stateKey);
+    return singleFlight.execute(leaseKey, () -> revalidateProxyDocument(
+        runtime, namespace, name, stateKey, relativePath, leaseKey));
+  }
+
+  private Map<String, Object> revalidateProxyDocument(
+      RepositoryRuntime runtime,
+      String namespace,
+      String name,
+      String stateKey,
+      String relativePath,
+      String leaseKey) {
+    Instant now = Instant.now();
+    Optional<AnsibleGalaxyRegistryDao.ProxyVersionState> existing = registry.findProxyState(
+        runtime.id(), namespace, name, stateKey);
     Optional<AnsibleGalaxyRegistryDao.Lease> acquired = registry.tryAcquireLease(
         leaseKey, nodeOwner, now.plus(LEASE_DURATION));
     if (acquired.isEmpty()) {
+      if (existing.isPresent() && !existing.get().upstreamIdentity().isEmpty()) {
+        return existing.get().upstreamIdentity();
+      }
       return awaitProxyDocument(runtime, namespace, name, stateKey, now);
     }
     AnsibleGalaxyRegistryDao.Lease lease = acquired.get();
-    try {
+    try (AnsibleRegistryLeaseManager.MonitoredLease monitored =
+             registryLeases.monitor(lease, LEASE_DURATION)) {
       existing = registry.findProxyState(runtime.id(), namespace, name, stateKey);
       if (existing.isPresent() && existing.get().cacheUntil() != null
           && existing.get().cacheUntil().isAfter(Instant.now())
@@ -648,28 +763,27 @@ public class AnsibleGalaxyService {
         Instant cacheUntil = checkedAt.plus(metadataTtl(runtime));
         if (status == 304 && existing.isPresent() && !existing.get().upstreamIdentity().isEmpty()) {
           AnsibleGalaxyRegistryDao.ProxyVersionState cached = existing.get();
-          registry.upsertProxyState(new AnsibleGalaxyRegistryDao.ProxyVersionState(
-              cached.repositoryId(), cached.namespaceLc(), cached.nameLc(), cached.versionNormalized(),
-              cached.artifactFilename(), cached.upstreamHref(), cached.upstreamDownloadUrl(),
-              cached.artifactSha256(), cached.metadataEtag(), cached.metadataLastModified(),
-              cacheUntil, checkedAt, null, null, cached.upstreamIdentity(),
-              registry.nextRepositoryRevision(runtime.id()), checkedAt));
+          registry.touchProxyState(
+              cached.repositoryId(), cached.namespaceLc(), cached.nameLc(),
+              cached.versionNormalized(), result.etag(), instantText(result.lastModified()),
+              cacheUntil, checkedAt);
           return cached.upstreamIdentity();
         }
         if (status == 404 || status == 410) {
+          long revision = existing.map(AnsibleGalaxyRegistryDao.ProxyVersionState::revision)
+              .orElse(0L);
           registry.upsertProxyState(new AnsibleGalaxyRegistryDao.ProxyVersionState(
               runtime.id(), namespace, name, stateKey, null, null, null, null,
               result.etag(), instantText(result.lastModified()), null, checkedAt, status,
               checkedAt.plus(negativeTtl(runtime)), Map.of(),
-              registry.nextRepositoryRevision(runtime.id()), checkedAt));
+              revision, checkedAt));
           throw new AnsibleGalaxyExceptions.NotFound("Upstream collection resource was not found");
         }
         if (status < 200 || status >= 300 || result.body() == null) {
           throw new AnsibleGalaxyExceptions.BadUpstream(
               "Upstream Galaxy metadata request returned HTTP " + status);
         }
-        Map<String, Object> document = projectProxyDocument(
-            stateKey, readJsonBounded(result.body()));
+        Map<String, Object> document = readProjectedJsonBounded(result.body(), stateKey);
         if (!stateKey.startsWith("@")) {
           validateUpstreamDetail(namespace, name, stateKey, document);
         }
@@ -680,11 +794,22 @@ public class AnsibleGalaxyService {
           throw new AnsibleGalaxyExceptions.BadUpstream(
               "Upstream changed the SHA-256 of an immutable Ansible collection version");
         }
+        monitored.assertHeld();
+        if (existing.isPresent() && Objects.equals(existing.get().upstreamIdentity(), document)
+            && Objects.equals(existing.get().artifactFilename(), artifact.filename())
+            && Objects.equals(existing.get().artifactSha256(), artifact.sha256())) {
+          registry.touchProxyState(
+              runtime.id(), namespace, name, stateKey, result.etag(),
+              instantText(result.lastModified()), cacheUntil, checkedAt);
+          return existing.get().upstreamIdentity();
+        }
+        long revision = existing.map(AnsibleGalaxyRegistryDao.ProxyVersionState::revision)
+            .orElse(0L);
         registry.upsertProxyState(new AnsibleGalaxyRegistryDao.ProxyVersionState(
             runtime.id(), namespace, name, stateKey, artifact.filename(), artifact.href(),
             artifact.downloadUrl(), artifact.sha256(), result.etag(),
             instantText(result.lastModified()), cacheUntil, checkedAt, null, null, document,
-            registry.nextRepositoryRevision(runtime.id()), checkedAt));
+            revision, checkedAt));
         return document;
       } catch (IOException e) {
         if (existing.isPresent() && !existing.get().upstreamIdentity().isEmpty()) {
@@ -700,6 +825,87 @@ public class AnsibleGalaxyService {
 
   List<String> fetchProxyVersionNames(
       RepositoryRuntime runtime, String namespace, String name) {
+    Instant now = Instant.now();
+    Optional<AnsibleGalaxyRegistryDao.ProxyInventory> existing =
+        registry.findProxyInventory(runtime.id(), namespace, name);
+    if (existing.isPresent() && existing.get().cacheUntil().isAfter(now)) {
+      List<String> cached = registry.listProxyInventoryVersionNames(runtime.id(), namespace, name);
+      if (cached.size() == existing.get().versionCount()) return cached;
+    }
+    String leaseKey = leaseKey(runtime.id(), "inventory", namespace, name, "versions");
+    return singleFlight.execute(
+        leaseKey, () -> refreshProxyVersionInventory(runtime, namespace, name, leaseKey));
+  }
+
+  private List<String> refreshProxyVersionInventory(
+      RepositoryRuntime runtime, String namespace, String name, String leaseKey) {
+    Instant now = Instant.now();
+    Optional<AnsibleGalaxyRegistryDao.ProxyInventory> existing =
+        registry.findProxyInventory(runtime.id(), namespace, name);
+    List<String> stale = existing.isPresent()
+        ? registry.listProxyInventoryVersionNames(runtime.id(), namespace, name) : List.of();
+    if (existing.isPresent() && existing.get().cacheUntil().isAfter(now)
+        && stale.size() == existing.get().versionCount()) {
+      return stale;
+    }
+    Optional<AnsibleGalaxyRegistryDao.Lease> acquired = registry.tryAcquireLease(
+        leaseKey, nodeOwner, now.plus(LEASE_DURATION));
+    if (acquired.isEmpty()) {
+      if (existing.isPresent() && stale.size() == existing.get().versionCount()) return stale;
+      return awaitProxyInventory(runtime, namespace, name, now);
+    }
+    AnsibleGalaxyRegistryDao.Lease lease = acquired.get();
+    try (AnsibleRegistryLeaseManager.MonitoredLease monitored =
+             registryLeases.monitor(lease, LEASE_DURATION)) {
+      Optional<AnsibleGalaxyRegistryDao.ProxyInventory> refreshed =
+          registry.findProxyInventory(runtime.id(), namespace, name);
+      if (refreshed.isPresent() && refreshed.get().cacheUntil().isAfter(Instant.now())) {
+        List<String> cached = registry.listProxyInventoryVersionNames(
+            runtime.id(), namespace, name);
+        if (cached.size() == refreshed.get().versionCount()) return cached;
+      }
+      List<String> versions = fetchUpstreamVersionNames(runtime, namespace, name);
+      monitored.assertHeld();
+      Instant checkedAt = Instant.now();
+      Instant cacheUntil = checkedAt.plus(metadataTtl(runtime));
+      LinkedHashSet<String> priorSet = new LinkedHashSet<>(stale);
+      LinkedHashSet<String> currentSet = new LinkedHashSet<>(versions);
+      if (existing.isPresent() && stale.size() == existing.get().versionCount()
+          && priorSet.equals(currentSet)) {
+        registry.touchProxyInventory(
+            runtime.id(), namespace, name, cacheUntil, checkedAt);
+      } else {
+        registry.replaceProxyInventory(
+            new AnsibleGalaxyRegistryDao.ProxyInventory(
+                runtime.id(), namespace, name, cacheUntil, checkedAt, 0L,
+                versions.size(), checkedAt),
+            versions);
+      }
+      return versions;
+    } catch (AnsibleGalaxyExceptions.NotFound notFound) {
+      Instant checkedAt = Instant.now();
+      if (existing.isPresent() && stale.isEmpty() && existing.get().versionCount() == 0) {
+        registry.touchProxyInventory(
+            runtime.id(), namespace, name, checkedAt.plus(negativeTtl(runtime)), checkedAt);
+        return List.of();
+      }
+      if (!stale.isEmpty()) return stale;
+      registry.replaceProxyInventory(
+          new AnsibleGalaxyRegistryDao.ProxyInventory(
+              runtime.id(), namespace, name, checkedAt.plus(negativeTtl(runtime)), checkedAt,
+              0L, 0, checkedAt),
+          List.of());
+      return List.of();
+    } catch (AnsibleGalaxyExceptions.BadUpstream failure) {
+      if (!stale.isEmpty()) return stale;
+      throw failure;
+    } finally {
+      registry.releaseLease(lease.leaseKey(), lease.owner(), lease.fencingToken());
+    }
+  }
+
+  private List<String> fetchUpstreamVersionNames(
+      RepositoryRuntime runtime, String namespace, String name) {
     LinkedHashSet<String> versions = new LinkedHashSet<>();
     Set<String> visitedPages = new HashSet<>();
     String next = proxyV3Url(runtime, "collections/" + encode(namespace) + "/" + encode(name)
@@ -709,9 +915,7 @@ public class AnsibleGalaxyService {
         throw new AnsibleGalaxyExceptions.BadUpstream(
             "Upstream Galaxy version pagination contains a cycle");
       }
-      String stateKey = page == 0 ? VERSIONS_SENTINEL : pageStateKey(next);
-      Map<String, Object> document = fetchProxyDocument(
-          runtime, namespace, name, stateKey, next);
+      Map<String, Object> document = fetchProxyVersionPage(runtime, next);
       for (Map<String, Object> item : resultItems(document)) {
         String version = text(item.get("version"));
         if (!AnsibleGalaxyVersions.isValid(version)) {
@@ -728,6 +932,27 @@ public class AnsibleGalaxyService {
           "Upstream Galaxy version pagination exceeds the safety limit");
     }
     return List.copyOf(versions);
+  }
+
+  private Map<String, Object> fetchProxyVersionPage(
+      RepositoryRuntime runtime, String url) {
+    HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request.get(url)
+        .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.METADATA)
+        .withAccept("application/json")
+        .withRepository(runtime, true);
+    try (HttpRemoteFetcher.Result result = remoteFetcher.fetch(request)) {
+      if (result.status() == 404 || result.status() == 410) {
+        throw new AnsibleGalaxyExceptions.NotFound("Upstream collection was not found");
+      }
+      if (result.status() < 200 || result.status() >= 300 || result.body() == null) {
+        throw new AnsibleGalaxyExceptions.BadUpstream(
+            "Upstream Galaxy version list returned HTTP " + result.status());
+      }
+      return readProjectedJsonBounded(result.body(), VERSIONS_SENTINEL);
+    } catch (IOException error) {
+      throw new AnsibleGalaxyExceptions.BadUpstream(
+          "Failed fetching upstream Galaxy version list", error);
+    }
   }
 
   String proxyV3Url(RepositoryRuntime runtime, String suffix) {
@@ -777,14 +1002,10 @@ public class AnsibleGalaxyService {
       String name,
       String stateKey,
       Instant started) {
+    long backoffMillis = 50L;
     while (Duration.between(started, Instant.now()).compareTo(LEASE_WAIT) < 0) {
-      try {
-        Thread.sleep(50L);
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new AnsibleGalaxyExceptions.ServiceUnavailable(
-            "Interrupted while waiting for proxy metadata revalidation");
-      }
+      sleepForCoordination(backoffMillis, "proxy metadata revalidation");
+      backoffMillis = Math.min(500L, backoffMillis * 2L);
       Optional<AnsibleGalaxyRegistryDao.ProxyVersionState> refreshed = registry.findProxyState(
           runtime.id(), namespace, name, stateKey);
       if (refreshed.isPresent()) {
@@ -805,6 +1026,24 @@ public class AnsibleGalaxyService {
         "Another replica is revalidating this Galaxy resource");
   }
 
+  private List<String> awaitProxyInventory(
+      RepositoryRuntime runtime, String namespace, String name, Instant started) {
+    long backoffMillis = 50L;
+    while (Duration.between(started, Instant.now()).compareTo(LEASE_WAIT) < 0) {
+      sleepForCoordination(backoffMillis, "proxy version inventory refresh");
+      backoffMillis = Math.min(500L, backoffMillis * 2L);
+      Optional<AnsibleGalaxyRegistryDao.ProxyInventory> refreshed =
+          registry.findProxyInventory(runtime.id(), namespace, name);
+      if (refreshed.isPresent() && refreshed.get().cacheUntil().isAfter(Instant.now())) {
+        List<String> versions = registry.listProxyInventoryVersionNames(
+            runtime.id(), namespace, name);
+        if (versions.size() == refreshed.get().versionCount()) return versions;
+      }
+    }
+    throw new AnsibleGalaxyExceptions.ServiceUnavailable(
+        "Another replica is refreshing this Galaxy version inventory");
+  }
+
   private AnsibleGalaxyRegistryDao.CollectionVersion persistCollection(
       RepositoryRuntime runtime,
       AnsibleCollectionArchiveInspector.InspectedCollection inspected,
@@ -815,7 +1054,7 @@ public class AnsibleGalaxyService {
       boolean allowExistingSameArtifact) {
     return persistCollection(
         runtime, inspected, sourceKind, upstreamIdentity, actor, ip,
-        allowExistingSameArtifact, null);
+        allowExistingSameArtifact, null, null);
   }
 
   private AnsibleGalaxyRegistryDao.CollectionVersion persistCollection(
@@ -826,7 +1065,8 @@ public class AnsibleGalaxyService {
       String actor,
       String ip,
       boolean allowExistingSameArtifact,
-      Instant publishedAt) {
+      Instant publishedAt,
+      Long stagingAssetId) {
     Optional<AnsibleGalaxyRegistryDao.CollectionVersion> existing = registry.findVersion(
         runtime.id(), inspected.namespace(), inspected.name(), inspected.version());
     if (existing.isPresent()) {
@@ -842,7 +1082,8 @@ public class AnsibleGalaxyService {
     AnsibleGalaxyRegistryDao.Lease lease = acquireLease(coordinateLease);
     String artifactPath = AnsibleGalaxyPathParser.ARTIFACT_BASE + inspected.filename();
     boolean createdAsset = false;
-    try {
+    try (AnsibleRegistryLeaseManager.MonitoredLease monitored =
+             registryLeases.monitor(lease, LEASE_DURATION)) {
       existing = registry.findVersion(
           runtime.id(), inspected.namespace(), inspected.name(), inspected.version());
       if (existing.isPresent()) {
@@ -867,15 +1108,18 @@ public class AnsibleGalaxyService {
           PersistenceHashes.componentCoordinateHash(
               inspected.namespace(), inspected.name(), inspected.version()),
           immutableMap(componentAttributes), now);
-      AnsibleGalaxyAssetSupport.StoredCollection storedCollection = assets.storeCollection(
-          runtime, artifactPath, inspected.file(), Map.of(), actor, ip, component);
+      AnsibleGalaxyAssetSupport.StoredCollection storedCollection = stagingAssetId == null
+          ? assets.storeCollection(
+              runtime, artifactPath, inspected.file(), Map.of(), actor, ip, component)
+          : assets.promoteStagedCollection(
+              runtime, stagingAssetId, artifactPath, actor, ip, component);
       AssetRecord asset = storedCollection.asset();
       createdAsset = storedCollection.created();
       AssetBlobRecord blob = assets.requiredBlob(asset);
       if (!inspected.sha256().equalsIgnoreCase(blob.sha256()) || inspected.size() != blob.size()) {
         throw new IllegalStateException("Persisted Ansible artifact digest changed");
       }
-      long revision = registry.nextRepositoryRevision(runtime.id());
+      monitored.assertHeld();
       Map<String, Object> metadata = new LinkedHashMap<>(inspected.metadata());
       String requiresAnsible = inspected.requiresAnsible();
       if ((requiresAnsible == null || requiresAnsible.isBlank()) && upstreamIdentity != null) {
@@ -886,7 +1130,7 @@ public class AnsibleGalaxyService {
               null, runtime.id(), asset.componentId(), asset.id(), inspected.namespace(),
               inspected.namespace(), inspected.name(), inspected.name(), inspected.version(),
               inspected.version(), inspected.filename(), inspected.sha256(), inspected.size(),
-              immutableMap(metadata), inspected.dependencies(), requiresAnsible, sourceKind, revision,
+              immutableMap(metadata), inspected.dependencies(), requiresAnsible, sourceKind, 0L,
               AnsibleGalaxyRegistryDao.VERSION_READY, publicationTime, now, now);
       try {
         return registry.insertVersion(candidate);
@@ -911,47 +1155,27 @@ public class AnsibleGalaxyService {
     }
   }
 
-  private void processNewTask(
-      RepositoryRuntime runtime,
-      AnsibleGalaxyRegistryDao.ImportTask claimed,
-      AnsibleCollectionArchiveInspector.InspectedCollection inspected,
-      String actor,
-      String ip) {
-    boolean terminal = false;
-    try {
-      terminal = finishSuccessfulTask(runtime, claimed, inspected, actor, ip, false);
-    } catch (RuntimeException e) {
-      terminal = finishFailed(claimed, errorCode(e), safeDetail(e));
-      if (terminal) {
-        throw e;
-      }
-    } finally {
-      if (terminal) deleteStaging(runtime, claimed);
-    }
-  }
-
   private boolean finishSuccessfulTask(
       RepositoryRuntime runtime,
       AnsibleGalaxyRegistryDao.ImportTask task,
       AnsibleCollectionArchiveInspector.InspectedCollection inspected,
       String actor,
       String ip,
-      boolean allowExistingSameArtifact) {
-    try (AnsibleImportTaskLeaseManager.Lease lease =
-             taskLeases.monitor(task, TASK_LEASE_DURATION)) {
-      AnsibleGalaxyRegistryDao.CollectionVersion version = persistCollection(
-          runtime, inspected, "HOSTED", Map.of(), actor, ip, allowExistingSameArtifact);
-      lease.assertHeld();
-      Instant finished = Instant.now();
-      List<Map<String, Object>> messages = List.of(Map.of(
-          "level", "INFO",
-          "message", "Imported collection " + version.namespaceDisplay() + "."
-              + version.nameDisplay() + ":" + version.versionOriginal()));
-      return registry.finishTask(
-          task.taskId(), task.leaseOwner(), task.fencingToken(), TASK_COMPLETED, messages,
-          null, null, version.namespaceLc(), version.nameLc(), version.versionNormalized(),
-          version.artifactFilename(), version.artifactSha256(), finished);
-    }
+      boolean allowExistingSameArtifact,
+      AnsibleImportTaskLeaseManager.Lease taskLease) {
+    AnsibleGalaxyRegistryDao.CollectionVersion version = persistCollection(
+        runtime, inspected, "HOSTED", Map.of(), actor, ip, allowExistingSameArtifact,
+        null, task.stagingAssetId());
+    taskLease.assertHeld();
+    Instant finished = Instant.now();
+    List<Map<String, Object>> messages = List.of(Map.of(
+        "level", "INFO",
+        "message", "Imported collection " + version.namespaceDisplay() + "."
+            + version.nameDisplay() + ":" + version.versionOriginal()));
+    return registry.finishTask(
+        task.taskId(), task.leaseOwner(), task.fencingToken(), TASK_COMPLETED, messages,
+        null, null, version.namespaceLc(), version.nameLc(), version.versionNormalized(),
+        version.artifactFilename(), version.artifactSha256(), finished);
   }
 
   private boolean finishFailed(
@@ -1035,11 +1259,15 @@ public class AnsibleGalaxyService {
     Map<String, Object> artifact = map(document.get("artifact"));
     String sha = text(artifact.get("sha256"));
     String filename = text(artifact.get("filename"));
+    String canonicalFilename = AnsibleGalaxyPathParser.canonicalFilename(
+        text(map(document.get("namespace")).get("name")),
+        text(map(document.get("collection")).get("name")),
+        text(document.get("version")));
     if (filename == null) {
-      filename = AnsibleGalaxyPathParser.canonicalFilename(
-          text(map(document.get("namespace")).get("name")),
-          text(map(document.get("collection")).get("name")),
-          text(document.get("version")));
+      filename = canonicalFilename;
+    } else if (!filename.equals(canonicalFilename)) {
+      throw new AnsibleGalaxyExceptions.BadUpstream(
+          "Upstream Galaxy metadata returned a non-canonical collection filename");
     }
     String download = text(document.get("download_url"));
     String href = text(document.get("href"));
@@ -1350,24 +1578,248 @@ public class AnsibleGalaxyService {
         .withStatus(status);
   }
 
-  Map<String, Object> readJsonBounded(InputStream input) throws IOException {
-    ByteArrayOutputStream output = new ByteArrayOutputStream();
-    byte[] buffer = new byte[32 * 1024];
-    long total = 0;
-    for (int read; (read = input.read(buffer)) >= 0;) {
-      if (read == 0) continue;
-      total += read;
-      if (total > MAX_METADATA_BYTES) {
+  Map<String, Object> readProjectedJsonBounded(InputStream input, String stateKey)
+      throws IOException {
+    try (JsonParser parser = objectMapper.getFactory().createParser(
+        new MetadataBoundedInputStream(input, MAX_METADATA_BYTES))) {
+      if (parser.nextToken() != JsonToken.START_OBJECT) {
+        throw new AnsibleGalaxyExceptions.BadUpstream(
+            "Upstream Galaxy metadata is not a JSON object");
+      }
+      Map<String, Object> selected;
+      if (stateKey != null && stateKey.startsWith("@v3-")) {
+        selected = readDiscoveryDocument(parser);
+      } else if (VERSIONS_SENTINEL.equals(stateKey)
+          || stateKey != null && stateKey.startsWith("@versions-")) {
+        selected = readVersionPageDocument(parser);
+      } else {
+        selected = readVersionDetailDocument(parser);
+      }
+      if (parser.nextToken() != null) {
+        throw new AnsibleGalaxyExceptions.BadUpstream(
+            "Upstream Galaxy metadata contains trailing JSON content");
+      }
+      return projectProxyDocument(stateKey, selected);
+    } catch (AnsibleGalaxyExceptions.BadUpstream e) {
+      throw e;
+    } catch (RuntimeException | IOException e) {
+      throw new AnsibleGalaxyExceptions.BadUpstream(
+          "Upstream Galaxy metadata is not a valid JSON object", e);
+    }
+  }
+
+  private static Map<String, Object> readDiscoveryDocument(JsonParser parser)
+      throws IOException {
+    Map<String, Object> document = new LinkedHashMap<>();
+    while (parser.nextToken() != JsonToken.END_OBJECT) {
+      requireFieldName(parser);
+      String field = parser.currentName();
+      JsonToken value = parser.nextToken();
+      if ("available_versions".equals(field)) {
+        document.put(field, readSelectedObject(parser, value, Set.of("v3")));
+      } else {
+        parser.skipChildren();
+      }
+    }
+    return document;
+  }
+
+  private static Map<String, Object> readVersionPageDocument(JsonParser parser)
+      throws IOException {
+    Map<String, Object> document = new LinkedHashMap<>();
+    while (parser.nextToken() != JsonToken.END_OBJECT) {
+      requireFieldName(parser);
+      String field = parser.currentName();
+      JsonToken value = parser.nextToken();
+      if ("data".equals(field) || "results".equals(field)) {
+        document.put(field, readVersionItems(parser, value));
+      } else if ("links".equals(field)) {
+        document.put(field, readSelectedObject(parser, value, Set.of("next")));
+      } else if ("next".equals(field)) {
+        document.put(field, readScalar(parser, value));
+      } else {
+        parser.skipChildren();
+      }
+    }
+    return document;
+  }
+
+  private static Object readVersionItems(
+      JsonParser parser, JsonToken token) throws IOException {
+    if (token != JsonToken.START_ARRAY) {
+      parser.skipChildren();
+      return Map.of("invalid", true);
+    }
+    List<Map<String, Object>> versions = new ArrayList<>();
+    while (parser.nextToken() != JsonToken.END_ARRAY) {
+      if (versions.size() >= 1001) {
+        throw new AnsibleGalaxyExceptions.BadUpstream(
+            "Upstream Galaxy version page exceeds the safe item limit");
+      }
+      if (parser.currentToken() != JsonToken.START_OBJECT) {
+        parser.skipChildren();
+        versions.add(Map.of("invalid", true));
+        continue;
+      }
+      versions.add(readSelectedObjectBody(parser, Set.of("version")));
+    }
+    return List.copyOf(versions);
+  }
+
+  private static Map<String, Object> readVersionDetailDocument(JsonParser parser)
+      throws IOException {
+    Map<String, Object> document = new LinkedHashMap<>();
+    Set<String> scalarFields = Set.of(
+        "version", "href", "download_url", "requires_ansible", "created_at", "updated_at");
+    while (parser.nextToken() != JsonToken.END_OBJECT) {
+      requireFieldName(parser);
+      String field = parser.currentName();
+      JsonToken value = parser.nextToken();
+      if (scalarFields.contains(field)) {
+        document.put(field, readScalar(parser, value));
+      } else if ("namespace".equals(field) || "collection".equals(field)) {
+        document.put(field, readSelectedObject(parser, value, Set.of("name")));
+      } else if ("artifact".equals(field)) {
+        document.put(field, readSelectedObject(
+            parser, value, Set.of("filename", "sha256", "size")));
+      } else if ("metadata".equals(field)) {
+        document.put(field, readMetadataObject(parser, value));
+      } else {
+        parser.skipChildren();
+      }
+    }
+    return document;
+  }
+
+  private static Object readMetadataObject(JsonParser parser, JsonToken token)
+      throws IOException {
+    if (token != JsonToken.START_OBJECT) {
+      return readScalar(parser, token);
+    }
+    Set<String> textFields = Set.of(
+        "description", "repository", "documentation", "homepage", "issues");
+    Map<String, Object> metadata = new LinkedHashMap<>();
+    while (parser.nextToken() != JsonToken.END_OBJECT) {
+      requireFieldName(parser);
+      String field = parser.currentName();
+      JsonToken value = parser.nextToken();
+      if (textFields.contains(field)) {
+        metadata.put(field, readScalar(parser, value));
+      } else if ("authors".equals(field) || "license".equals(field)
+          || "tags".equals(field)) {
+        metadata.put(field, readStringOrArray(parser, value));
+      } else if ("dependencies".equals(field)) {
+        metadata.put(field, readDependencies(parser, value));
+      } else {
+        parser.skipChildren();
+      }
+    }
+    return metadata;
+  }
+
+  private static Object readStringOrArray(JsonParser parser, JsonToken token)
+      throws IOException {
+    if (token != JsonToken.START_ARRAY) return readScalar(parser, token);
+    List<Object> values = new ArrayList<>();
+    while (parser.nextToken() != JsonToken.END_ARRAY) {
+      if (values.size() >= 257) {
+        throw new AnsibleGalaxyExceptions.BadUpstream(
+            "Upstream Galaxy metadata exceeds the safe item limit");
+      }
+      values.add(readScalar(parser, parser.currentToken()));
+    }
+    return List.copyOf(values);
+  }
+
+  private static Object readDependencies(JsonParser parser, JsonToken token)
+      throws IOException {
+    if (token != JsonToken.START_OBJECT) return readScalar(parser, token);
+    Map<String, Object> dependencies = new LinkedHashMap<>();
+    while (parser.nextToken() != JsonToken.END_OBJECT) {
+      requireFieldName(parser);
+      if (dependencies.size() >= 2049) {
+        throw new AnsibleGalaxyExceptions.BadUpstream(
+            "Upstream Galaxy dependencies exceed the safe item limit");
+      }
+      String coordinate = parser.currentName();
+      dependencies.put(coordinate, readScalar(parser, parser.nextToken()));
+    }
+    return dependencies;
+  }
+
+  private static Map<String, Object> readSelectedObject(
+      JsonParser parser, JsonToken token, Set<String> selectedFields) throws IOException {
+    if (token != JsonToken.START_OBJECT) {
+      parser.skipChildren();
+      return Map.of("invalid", true);
+    }
+    return readSelectedObjectBody(parser, selectedFields);
+  }
+
+  private static Map<String, Object> readSelectedObjectBody(
+      JsonParser parser, Set<String> selectedFields) throws IOException {
+    Map<String, Object> selected = new LinkedHashMap<>();
+    while (parser.nextToken() != JsonToken.END_OBJECT) {
+      requireFieldName(parser);
+      String field = parser.currentName();
+      JsonToken value = parser.nextToken();
+      if (selectedFields.contains(field)) {
+        selected.put(field, readScalar(parser, value));
+      } else {
+        parser.skipChildren();
+      }
+    }
+    return selected;
+  }
+
+  private static Object readScalar(JsonParser parser, JsonToken token) throws IOException {
+    if (token == JsonToken.VALUE_STRING) return parser.getText();
+    if (token == JsonToken.VALUE_NUMBER_INT || token == JsonToken.VALUE_NUMBER_FLOAT) {
+      return parser.getNumberValue();
+    }
+    if (token == JsonToken.VALUE_TRUE) return true;
+    if (token == JsonToken.VALUE_FALSE) return false;
+    if (token == JsonToken.VALUE_NULL) return null;
+    parser.skipChildren();
+    return Map.of("invalid", true);
+  }
+
+  private static void requireFieldName(JsonParser parser) {
+    if (parser.currentToken() != JsonToken.FIELD_NAME) {
+      throw new AnsibleGalaxyExceptions.BadUpstream(
+          "Upstream Galaxy metadata contains an invalid object");
+    }
+  }
+
+  private static final class MetadataBoundedInputStream extends FilterInputStream {
+    private final long maximumBytes;
+    private long bytesRead;
+
+    private MetadataBoundedInputStream(InputStream input, long maximumBytes) {
+      super(input);
+      this.maximumBytes = maximumBytes;
+    }
+
+    @Override
+    public int read() throws IOException {
+      int value = super.read();
+      if (value >= 0) record(1);
+      return value;
+    }
+
+    @Override
+    public int read(byte[] buffer, int offset, int length) throws IOException {
+      int read = super.read(buffer, offset, length);
+      if (read > 0) record(read);
+      return read;
+    }
+
+    private void record(int count) {
+      bytesRead += count;
+      if (bytesRead > maximumBytes) {
         throw new AnsibleGalaxyExceptions.BadUpstream(
             "Upstream Galaxy metadata exceeds the safe limit");
       }
-      output.write(buffer, 0, read);
-    }
-    try {
-      return objectMapper.readValue(output.toByteArray(), JSON_OBJECT);
-    } catch (RuntimeException | IOException e) {
-      throw new AnsibleGalaxyExceptions.BadUpstream(
-          "Upstream Galaxy metadata is not a JSON object", e);
     }
   }
 
@@ -1411,20 +1863,26 @@ public class AnsibleGalaxyService {
 
   private AnsibleGalaxyRegistryDao.Lease acquireLease(String key) {
     Instant started = Instant.now();
+    long backoffMillis = 50L;
     while (Duration.between(started, Instant.now()).compareTo(LEASE_WAIT) < 0) {
       Optional<AnsibleGalaxyRegistryDao.Lease> lease = registry.tryAcquireLease(
           key, nodeOwner, Instant.now().plus(LEASE_DURATION));
       if (lease.isPresent()) return lease.get();
-      try {
-        Thread.sleep(50L);
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new AnsibleGalaxyExceptions.ServiceUnavailable(
-            "Interrupted while waiting for Ansible registry coordination");
-      }
+      sleepForCoordination(backoffMillis, "Ansible registry coordination");
+      backoffMillis = Math.min(500L, backoffMillis * 2L);
     }
     throw new AnsibleGalaxyExceptions.ServiceUnavailable(
         "Another replica is processing this collection coordinate");
+  }
+
+  private static void sleepForCoordination(long millis, String operation) {
+    try {
+      Thread.sleep(millis);
+    } catch (InterruptedException error) {
+      Thread.currentThread().interrupt();
+      throw new AnsibleGalaxyExceptions.ServiceUnavailable(
+          "Interrupted while waiting for " + operation);
+    }
   }
 
   static List<RepositoryRuntime> safeMembers(RepositoryRuntime runtime) {
@@ -1452,6 +1910,18 @@ public class AnsibleGalaxyService {
         .filter(version -> binding.artifactSha256().equals(version.artifactSha256()));
   }
 
+  private Optional<AnsibleGalaxyRegistryDao.ArtifactRef> currentGroupBindingArtifact(
+      RepositoryRuntime group,
+      AnsibleGalaxyRegistryDao.GroupBinding binding,
+      long groupRevision) {
+    if (binding.memberVersionId() == null) return Optional.empty();
+    Optional<RepositoryRuntime> member = currentGroupBindingMember(group, binding, groupRevision);
+    if (member.isEmpty()) return Optional.empty();
+    return findArtifactByVersionId(binding.memberVersionId())
+        .filter(artifact -> artifact.repositoryId() == member.get().id())
+        .filter(artifact -> binding.artifactSha256().equals(artifact.artifactSha256()));
+  }
+
   private Optional<ResolvedVersionMetadata> currentGroupBindingMetadata(
       RepositoryRuntime group,
       AnsibleGalaxyRegistryDao.GroupBinding binding,
@@ -1466,15 +1936,14 @@ public class AnsibleGalaxyService {
     if (member.isEmpty() || binding.memberVersionId() != null) return Optional.empty();
     ResolvedVersionMetadata projected = resolveExact(
         member.get(), binding.namespaceLc(), binding.nameLc(), binding.versionNormalized(), visiting);
-    if (registry.currentRepositoryRevision(member.get().id()) != binding.memberRevision()
-        || !binding.artifactSha256().equals(projected.artifactSha256())
+    if (!binding.artifactSha256().equals(projected.artifactSha256())
         || !binding.artifactFilename().equals(projected.artifactFilename())) {
       return Optional.empty();
     }
     return Optional.of(projected);
   }
 
-  private Optional<AnsibleGalaxyRegistryDao.CollectionVersion> materializeBoundGroupArtifact(
+  private Optional<AnsibleGalaxyRegistryDao.ArtifactRef> materializeBoundGroupArtifact(
       RepositoryRuntime group,
       AnsibleGalaxyRegistryDao.GroupBinding binding,
       long groupRevision,
@@ -1485,7 +1954,7 @@ public class AnsibleGalaxyService {
     }
     Optional<RepositoryRuntime> member = currentGroupBindingMember(group, binding, groupRevision);
     if (member.isEmpty()) return Optional.empty();
-    AnsibleGalaxyRegistryDao.CollectionVersion candidate =
+    AnsibleGalaxyRegistryDao.ArtifactRef candidate =
         resolveArtifact(member.get(), filename, visiting);
     if (!binding.namespaceLc().equals(candidate.namespaceLc())
         || !binding.nameLc().equals(candidate.nameLc())
@@ -1494,13 +1963,38 @@ public class AnsibleGalaxyService {
       throw new AnsibleGalaxyExceptions.BadUpstream(
           "Bound Ansible group artifact no longer matches its metadata");
     }
-    long memberRevision = registry.currentRepositoryRevision(member.get().id());
+    long memberRevision = candidate.revision();
     boolean bound = registry.bindGroupSourceIfCurrent(new AnsibleGalaxyRegistryDao.GroupBinding(
         group.id(), binding.namespaceLc(), binding.nameLc(), binding.versionNormalized(),
-        member.get().id(), candidate.id(), candidate.artifactFilename(), memberRevision,
+        member.get().id(), candidate.versionId(), candidate.artifactFilename(), memberRevision,
         groupRevision, candidate.artifactSha256(), binding.boundAt(), Instant.now()));
     requireCurrentGroupBinding(bound);
     return Optional.of(candidate);
+  }
+
+  private static AnsibleGalaxyRegistryDao.ArtifactRef artifactRef(
+      AnsibleGalaxyRegistryDao.CollectionVersion version) {
+    return new AnsibleGalaxyRegistryDao.ArtifactRef(
+        version.id(), version.repositoryId(), version.artifactAssetId(), version.namespaceLc(),
+        version.nameLc(), version.versionNormalized(), version.artifactFilename(),
+        version.artifactSha256(), version.revision());
+  }
+
+  private Optional<AnsibleGalaxyRegistryDao.ArtifactRef> findArtifactByFilename(
+      long repositoryId, String filename) {
+    Optional<AnsibleGalaxyRegistryDao.ArtifactRef> lightweight =
+        registry.findArtifactByFilename(repositoryId, filename);
+    if (lightweight.isPresent()) return lightweight;
+    // Retain compatibility with alternate DAO implementations while JDBC uses the narrow query.
+    return registry.findVersionByArtifactFilename(repositoryId, filename)
+        .map(AnsibleGalaxyService::artifactRef);
+  }
+
+  private Optional<AnsibleGalaxyRegistryDao.ArtifactRef> findArtifactByVersionId(long versionId) {
+    Optional<AnsibleGalaxyRegistryDao.ArtifactRef> lightweight =
+        registry.findArtifactByVersionId(versionId);
+    if (lightweight.isPresent()) return lightweight;
+    return registry.findVersionById(versionId).map(AnsibleGalaxyService::artifactRef);
   }
 
   private static void requireCurrentGroupBinding(boolean bound) {
@@ -1517,15 +2011,19 @@ public class AnsibleGalaxyService {
     if (binding.groupConfigRevision() != groupRevision) return Optional.empty();
     Optional<RepositoryRuntime> member = directMember(group, binding.memberRepositoryId());
     if (member.isEmpty()
-        || registry.currentRepositoryRevision(member.get().id()) != binding.memberRevision()) {
+        || registry.currentCoordinateSha256(
+                member.get().id(), binding.namespaceLc(), binding.nameLc(),
+                binding.versionNormalized())
+            .filter(binding.artifactSha256()::equalsIgnoreCase)
+            .isEmpty()) {
       return Optional.empty();
     }
     return member;
   }
 
   private long currentGroupRevision(long repositoryId) {
-    long revision = registry.currentRepositoryRevision(repositoryId);
-    return revision == 0 ? registry.nextRepositoryRevision(repositoryId) : revision;
+    long revision = registry.currentGroupConfigRevision(repositoryId);
+    return revision == 0 ? registry.nextGroupConfigRevision(repositoryId) : revision;
   }
 
   static void requireRuntime(RepositoryRuntime runtime) {

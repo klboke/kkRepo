@@ -190,6 +190,22 @@ public class RawHostedService {
         component, browsePath).created();
   }
 
+  public boolean linkInternalBlobWithComponentAtBrowsePathIfAbsent(
+      RepositoryRuntime runtime,
+      String rawPath,
+      com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord blob,
+      String contentType,
+      String createdBy,
+      String createdByIp,
+      ComponentRecord component,
+      String rawBrowsePath) {
+    String path = normalizeAssetPath(rawPath);
+    String browsePath = normalizeAssetPath(rawBrowsePath);
+    return writer.linkExistingBlobAtBrowsePathIfAbsent(
+        runtime, blobStorage(runtime), requireBlobStore(runtime), path, blob, contentType,
+        createdBy, createdByIp, component, browsePath).created();
+  }
+
   /** Deletes protocol-generated content without applying Raw repository type checks. */
   public MavenResponse deleteInternal(RepositoryRuntime runtime, String rawPath) {
     String path = normalizeAssetPath(rawPath);

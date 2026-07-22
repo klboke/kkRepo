@@ -9,10 +9,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.github.klboke.kkrepo.core.BlobObjectMetadata;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
@@ -24,7 +24,6 @@ import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
 import java.io.ByteArrayInputStream;
-import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -120,7 +119,6 @@ class AnsibleGalaxyAssetSupportTest {
     when(assetDao.findAssetWithBlobById(asset.id()))
         .thenReturn(Optional.of(new AssetDao.AssetWithBlob(asset, blob)));
     when(storages.forBlobStoreId(blob.blobStoreId())).thenReturn(storage);
-    when(storage.stat(any())).thenReturn(Optional.of(mock(BlobObjectMetadata.class)));
     when(storage.get(any())).thenReturn(Optional.of(new ByteArrayInputStream(new byte[] {1, 2, 3})));
 
     var head = support.serve(runtime.id(), asset.id(), true);
@@ -134,6 +132,7 @@ class AnsibleGalaxyAssetSupportTest {
     try (InputStream input = get.body()) {
       assertArrayEquals(new byte[] {1, 2, 3}, input.readAllBytes());
     }
+    verify(storage, never()).stat(any());
   }
 
   @Test
@@ -150,38 +149,21 @@ class AnsibleGalaxyAssetSupportTest {
     when(assetDao.findAssetWithBlobById(asset.id()))
         .thenReturn(Optional.of(new AssetDao.AssetWithBlob(asset, blob)));
     when(storages.forBlobStoreId(blob.blobStoreId())).thenReturn(storage);
-    when(storage.stat(any())).thenReturn(Optional.empty());
-    assertThrows(AnsibleGalaxyExceptions.NotFound.class,
-        () -> support.serve(runtime.id(), asset.id(), false));
-
-    when(storage.stat(any())).thenReturn(Optional.of(mock(BlobObjectMetadata.class)));
     when(storage.get(any())).thenReturn(Optional.empty());
     var response = support.serve(runtime.id(), asset.id(), false);
     assertThrows(AnsibleGalaxyExceptions.NotFound.class, response::body);
+    verify(storage, never()).stat(any());
   }
 
   @Test
-  void readsBytesAndOpenStreamsAndMapsIoFailures() throws Exception {
+  void opensStagedBlobAsAStreamWithoutHeapBuffering() throws Exception {
     when(assetDao.findAssetWithBlobById(asset.id()))
         .thenReturn(Optional.of(new AssetDao.AssetWithBlob(asset, blob)));
     when(storages.forBlobStoreId(blob.blobStoreId())).thenReturn(storage);
-    when(storage.get(any())).thenReturn(Optional.of(new ByteArrayInputStream(new byte[] {4, 5})));
-    assertArrayEquals(new byte[] {4, 5}, support.bytes(runtime.id(), asset.id()));
-
     when(storage.get(any())).thenReturn(Optional.of(new ByteArrayInputStream(new byte[] {6})));
     try (InputStream input = support.open(runtime.id(), asset.id())) {
       assertEquals(6, input.read());
     }
-
-    InputStream broken = new InputStream() {
-      @Override
-      public int read() throws IOException {
-        throw new IOException("broken");
-      }
-    };
-    when(storage.get(any())).thenReturn(Optional.of(broken));
-    assertThrows(AnsibleGalaxyExceptions.BadUpstream.class,
-        () -> support.bytes(runtime.id(), asset.id()));
   }
 
   @Test
@@ -193,14 +175,10 @@ class AnsibleGalaxyAssetSupportTest {
     when(assetDao.findAssetWithBlobById(asset.id()))
         .thenReturn(Optional.of(new AssetDao.AssetWithBlob(wrongRepository, blob)));
     assertThrows(AnsibleGalaxyExceptions.NotFound.class,
-        () -> support.bytes(runtime.id(), asset.id()));
-    assertThrows(AnsibleGalaxyExceptions.NotFound.class,
         () -> support.open(runtime.id(), asset.id()));
 
     when(assetDao.findAssetWithBlobById(asset.id()))
         .thenReturn(Optional.of(new AssetDao.AssetWithBlob(asset, null)));
-    assertThrows(AnsibleGalaxyExceptions.NotFound.class,
-        () -> support.bytes(runtime.id(), asset.id()));
     assertThrows(AnsibleGalaxyExceptions.NotFound.class,
         () -> support.open(runtime.id(), asset.id()));
 
@@ -209,9 +187,35 @@ class AnsibleGalaxyAssetSupportTest {
     when(storages.forBlobStoreId(blob.blobStoreId())).thenReturn(storage);
     when(storage.get(any())).thenReturn(Optional.empty());
     assertThrows(AnsibleGalaxyExceptions.NotFound.class,
-        () -> support.bytes(runtime.id(), asset.id()));
-    assertThrows(AnsibleGalaxyExceptions.NotFound.class,
         () -> support.open(runtime.id(), asset.id()));
+  }
+
+  @Test
+  void stagesStreamsAndPromotesTheExistingBlobReferenceWithoutCopyingIt() {
+    String staging = ".ansible/staging/task-2/acme-tools-1.2.3.tar.gz";
+    when(assetDao.findAssetByPath(runtime.id(), staging)).thenReturn(Optional.of(asset));
+    ByteArrayInputStream upload = new ByteArrayInputStream(new byte[] {1, 2, 3});
+
+    assertSame(asset, support.stageCollection(
+        runtime, "task-2", "acme-tools-1.2.3.tar.gz", upload, "alice", "127.0.0.1"));
+    verify(hosted).putInternalUnindexed(
+        runtime, staging, upload, "application/octet-stream", Map.of(), "alice", "127.0.0.1");
+
+    ComponentRecord component = new ComponentRecord(
+        null, runtime.id(), RepositoryFormat.ANSIBLEGALAXY, "acme", "tools", "1.2.3",
+        "ansible-collection", new byte[] {4}, Map.of(), Instant.now());
+    when(assetDao.findAssetWithBlobById(asset.id()))
+        .thenReturn(Optional.of(new AssetDao.AssetWithBlob(asset, blob)));
+    when(assetDao.findAssetByPath(runtime.id(), asset.path())).thenReturn(Optional.of(asset));
+    when(hosted.linkInternalBlobWithComponentAtBrowsePathIfAbsent(
+        runtime, asset.path(), blob, "application/octet-stream", "alice", "127.0.0.1",
+        component, "acme/tools/1.2.3/acme-tools-1.2.3.tar.gz")).thenReturn(true);
+
+    AnsibleGalaxyAssetSupport.StoredCollection promoted = support.promoteStagedCollection(
+        runtime, asset.id(), asset.path(), "alice", "127.0.0.1", component);
+
+    assertSame(asset, promoted.asset());
+    assertTrue(promoted.created());
   }
 
   @Test

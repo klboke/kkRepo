@@ -82,7 +82,8 @@ CREATE TABLE ansible_import_task (
   CONSTRAINT fk_ansible_task_staging_asset
     FOREIGN KEY (staging_asset_id) REFERENCES asset(id) ON DELETE SET NULL,
   INDEX idx_ansible_task_claim (state, lease_expires_at, created_at),
-  INDEX idx_ansible_task_repository (repository_id, created_at)
+  INDEX idx_ansible_task_repository (repository_id, created_at),
+  INDEX idx_ansible_task_terminal (state, finished_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE ansible_proxy_version_state (
@@ -108,7 +109,35 @@ CREATE TABLE ansible_proxy_version_state (
     FOREIGN KEY (repository_id) REFERENCES repository(id) ON DELETE CASCADE,
   INDEX idx_ansible_proxy_expiry (repository_id, cache_until),
   INDEX idx_ansible_proxy_artifact (repository_id, artifact_filename),
-  INDEX idx_ansible_proxy_negative (negative_expires_at)
+  INDEX idx_ansible_proxy_negative (negative_expires_at),
+  INDEX idx_ansible_proxy_updated (updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE ansible_proxy_inventory (
+  repository_id BIGINT UNSIGNED NOT NULL,
+  namespace_lc VARCHAR(64) NOT NULL,
+  name_lc VARCHAR(64) NOT NULL,
+  cache_until DATETIME(3) NOT NULL,
+  checked_at DATETIME(3) NOT NULL,
+  revision BIGINT NOT NULL,
+  version_count INT NOT NULL,
+  updated_at DATETIME(3) NOT NULL,
+  PRIMARY KEY (repository_id, namespace_lc, name_lc),
+  CONSTRAINT fk_ansible_inventory_repository
+    FOREIGN KEY (repository_id) REFERENCES repository(id) ON DELETE CASCADE,
+  INDEX idx_ansible_inventory_expiry (cache_until, updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE ansible_proxy_inventory_version (
+  repository_id BIGINT UNSIGNED NOT NULL,
+  namespace_lc VARCHAR(64) NOT NULL,
+  name_lc VARCHAR(64) NOT NULL,
+  version_normalized VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  PRIMARY KEY (repository_id, namespace_lc, name_lc, version_normalized),
+  CONSTRAINT fk_ansible_inventory_version
+    FOREIGN KEY (repository_id, namespace_lc, name_lc)
+    REFERENCES ansible_proxy_inventory(repository_id, namespace_lc, name_lc)
+    ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE ansible_group_binding (

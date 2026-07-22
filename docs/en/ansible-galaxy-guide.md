@@ -108,7 +108,7 @@ Group member order is authoritative when two members contain the same version. k
 
 The relational database stores only bounded metadata and coordination state: collection coordinates, checksums, sizes, query projections, dependency projections, import tasks, proxy validators/negative cache, group bindings, and fenced leases.
 
-Collection tarballs, complete `MANIFEST.json`, complete `FILES.json`, large upstream JSON documents, and signature payloads live in the configured blob store. The database keeps references, hashes, and bounded projections rather than large JSON payloads. Current hard limits include 64 KiB for version metadata, 192 KiB for dependency projections, and 256 KiB for proxy protocol projections; oversized upstream documents are reduced to the protocol fields that clients need or retained as blob content.
+Collection tarballs—and therefore their complete `MANIFEST.json` and `FILES.json`—and retained signature payloads live in the configured blob store. The database keeps references, hashes, and bounded projections rather than large JSON payloads. Current hard limits include 64 KiB for version metadata, 192 KiB for dependency projections, and 256 KiB for proxy protocol projections. Live upstream JSON is streamed and reduced to client-required fields; unused oversized fields are not retained. Any future workflow that must preserve a large raw JSON document must store it as a blob and keep only its hash/reference in the database.
 
 Before publication kkrepo verifies:
 
@@ -126,7 +126,25 @@ Proxy collection and version metadata requests persist only the bounded query pr
 
 Import tasks, proxy state, source bindings, leases, fencing tokens, and repository revisions are shared in MySQL/PostgreSQL. Artifact and staging bytes are shared through OSS/S3. A publish or proxy miss can therefore be resumed or taken over by another replica; process-local caches and executor queues are rebuildable optimizations only.
 
+Publication stores the request body once as a staging blob, persists a `WAITING` task, and returns `202` before archive inspection. A bounded worker claims several tasks atomically with `FOR UPDATE SKIP LOCKED`, validates them with a limited inspection pool, and promotes the existing staging blob reference without a second upload or hash pass during promotion. Slow inspection, proxy downloads, and persistence renew their fenced database lease; same-node misses are additionally collapsed with single-flight, while waiters use exponential backoff instead of fixed-rate database polling.
+
+Version-list reads validate one batched revision snapshot and use a revision-keyed local cache. A collection publish/delete invalidates its exact coordinate and only the affected group binding instead of scanning or rewriting every repository version. Proxy version inventories are stored as normalized bounded rows and refreshed across all upstream pages only after their TTL expires. Proxy JSON is parsed as a bounded stream and only discovery, version, artifact, dependency, and client-visible metadata fields are projected into relational JSON columns. Artifact reads use a lightweight asset/blob reference query and go directly to blob `GET`; they do not issue a separate object-store `stat` on the hot path.
+
 Every replica also runs a bounded staging cleanup. By default it claims `.ansible/staging/` asset rows older than 24 hours with `FOR UPDATE SKIP LOCKED`, preserves rows owned by waiting/running import tasks, and unlinks rows whose task is missing or terminal. The global blob GC receives the blob only after its last asset reference is gone, so a crash between staging, task creation, task completion, and request cleanup cannot permanently leak collection bytes. Operators can tune the interval, initial delay, batch size, and grace period through the `KKREPO_ANSIBLE_STAGING_CLEANUP_*` environment variables; the grace period has a five-minute safety floor.
+
+A second idempotent cleanup bounds expired negative/page cache rows, terminal tasks, and expired lease rows. It runs on every replica in small batches; defaults retain stale proxy pages for 24 hours, completed/failed tasks for 30 days, and expired lease fencing rows for 7 days.
+
+| Environment variable | Default | Purpose |
+| --- | ---: | --- |
+| `KKREPO_ANSIBLE_IMPORT_WORKER_CONCURRENCY` | `4` | Maximum collection imports processed concurrently per replica (clamped to 1-64) |
+| `KKREPO_ANSIBLE_ARCHIVE_MAX_CONCURRENT_INSPECTIONS` | `4` | Maximum archive inspections admitted concurrently per replica |
+| `KKREPO_ANSIBLE_ARCHIVE_INSPECTION_PERMIT_WAIT_MS` | `5000` | Wait before returning a retryable capacity error |
+| `KKREPO_CACHE_ANSIBLE_VERSION_LIST_ENABLED` | `true` | Enable the revision-validated, rebuildable version-list cache |
+| `KKREPO_ANSIBLE_CLEANUP_BATCH_SIZE` | `256` | Maximum shared-state rows removed per cleanup batch |
+| `KKREPO_ANSIBLE_CLEANUP_MAX_BATCHES` | `8` | Maximum batches removed by one cleanup cycle |
+| `KKREPO_ANSIBLE_PROXY_PAGE_RETENTION_HOURS` | `24` | Retention for expired pagination state |
+| `KKREPO_ANSIBLE_TERMINAL_TASK_RETENTION_DAYS` | `30` | Retention for completed and failed import tasks |
+| `KKREPO_ANSIBLE_EXPIRED_LEASE_RETENTION_DAYS` | `7` | Retention for expired fencing leases |
 
 ## Nexus Migration
 

@@ -211,17 +211,99 @@ class AnsibleGalaxyServiceSupportTest {
 
   @Test
   void boundsAndValidatesUpstreamJson() throws Exception {
-    assertEquals("value", service.readJsonBounded(
-        new ByteArrayInputStream("{\"key\":\"value\"}".getBytes(StandardCharsets.UTF_8))).get("key"));
+    assertEquals("1.0.0", service.readProjectedJsonBounded(
+        new ByteArrayInputStream("{\"version\":\"1.0.0\"}".getBytes(StandardCharsets.UTF_8)),
+        "1.0.0").get("version"));
     assertThrows(AnsibleGalaxyExceptions.BadUpstream.class,
-        () -> service.readJsonBounded(new ByteArrayInputStream("[]".getBytes(StandardCharsets.UTF_8))));
+        () -> service.readProjectedJsonBounded(
+            new ByteArrayInputStream("[]".getBytes(StandardCharsets.UTF_8)), "1.0.0"));
     assertThrows(AnsibleGalaxyExceptions.BadUpstream.class,
-        () -> service.readJsonBounded(new RepeatingInputStream(17 * 1024 * 1024)));
+        () -> service.readProjectedJsonBounded(
+            new RepeatingInputStream(17 * 1024 * 1024), "1.0.0"));
 
     ObjectMapper broken = mock(ObjectMapper.class);
     when(broken.writeValueAsBytes(any())).thenThrow(new JsonProcessingException("broken") { });
     assertThrows(IllegalStateException.class,
         () -> service(broken, registry).jsonResponse(Map.of(), 200, false, null));
+  }
+
+  @Test
+  void streamsOnlyProtocolFieldsFromLargeUpstreamDocuments() throws Exception {
+    String ignored = "x".repeat(2 * 1024 * 1024);
+    String discoveryJson = """
+        {"ignored":"%s","available_versions":{"v3":"v3/","v2":"v2/"}}
+        """.formatted(ignored);
+    Map<String, Object> discovery = service.readProjectedJsonBounded(
+        new ByteArrayInputStream(discoveryJson.getBytes(StandardCharsets.UTF_8)), "@v3-root");
+    assertEquals("v3/", map(discovery.get("available_versions")).get("v3"));
+    assertFalse(discovery.containsKey("ignored"));
+
+    String pageJson = """
+        {"data":[{"version":"2.0.0","files":"%s"},{"version":"1.0.0"}],
+         "links":{"next":"/next","previous":"/previous"},"count":2}
+        """.formatted(ignored);
+    Map<String, Object> page = service.readProjectedJsonBounded(
+        new ByteArrayInputStream(pageJson.getBytes(StandardCharsets.UTF_8)), "@versions");
+    assertEquals(2, ((List<?>) page.get("data")).size());
+    assertEquals("/next", map(page.get("links")).get("next"));
+
+    String detailJson = """
+        {"namespace":{"name":"acme","avatar":"%s"},
+         "collection":{"name":"tools"},"version":"1.2.3","href":"/href",
+         "download_url":"/download","requires_ansible":">=2.16",
+         "created_at":"2026-07-21T00:00:00Z","updated_at":null,
+         "artifact":{"filename":"acme-tools-1.2.3.tar.gz","sha256":"%s","size":42,
+                     "manifest":"%s"},
+         "metadata":{"authors":["Alice"],"license":"Apache-2.0","tags":["cloud"],
+                     "description":"tools","repository":"https://git.example/repo",
+                     "dependencies":{"acme.base":">=1.0.0"},"files":"%s"},
+         "files":"%s"}
+        """.formatted(ignored, SHA256, ignored, ignored, ignored);
+    Map<String, Object> detail = service.readProjectedJsonBounded(
+        new ByteArrayInputStream(detailJson.getBytes(StandardCharsets.UTF_8)), "1.2.3");
+
+    assertEquals("acme", map(detail.get("namespace")).get("name"));
+    assertEquals(42L, map(detail.get("artifact")).get("size"));
+    assertEquals(">=1.0.0",
+        map(map(detail.get("metadata")).get("dependencies")).get("acme.base"));
+    assertFalse(detail.containsKey("files"));
+  }
+
+  @Test
+  void rejectsInvalidOrUnboundedStreamingProjections() {
+    assertThrows(AnsibleGalaxyExceptions.BadUpstream.class,
+        () -> service.readProjectedJsonBounded(
+            new ByteArrayInputStream("[]".getBytes(StandardCharsets.UTF_8)), "@versions"));
+    assertThrows(AnsibleGalaxyExceptions.BadUpstream.class,
+        () -> service.readProjectedJsonBounded(
+            new ByteArrayInputStream("{} {}".getBytes(StandardCharsets.UTF_8)), "@v3-root"));
+    assertThrows(AnsibleGalaxyExceptions.BadUpstream.class,
+        () -> service.readProjectedJsonBounded(
+            new ByteArrayInputStream("{\"data\":{}}".getBytes(StandardCharsets.UTF_8)),
+            "@versions"));
+
+    StringBuilder tooMany = new StringBuilder("{\"data\":[");
+    for (int index = 0; index < 1002; index++) {
+      if (index > 0) tooMany.append(',');
+      tooMany.append("{\"version\":\"1.0.0\"}");
+    }
+    tooMany.append("]}");
+    assertThrows(AnsibleGalaxyExceptions.BadUpstream.class,
+        () -> service.readProjectedJsonBounded(
+            new ByteArrayInputStream(tooMany.toString().getBytes(StandardCharsets.UTF_8)),
+            "@versions"));
+
+    StringBuilder tooManyTags = new StringBuilder(
+        "{\"version\":\"1.0.0\",\"metadata\":{\"tags\":[");
+    for (int index = 0; index < 258; index++) {
+      if (index > 0) tooManyTags.append(',');
+      tooManyTags.append("\"tag\"");
+    }
+    tooManyTags.append("]}}");
+    assertThrows(AnsibleGalaxyExceptions.BadUpstream.class,
+        () -> service.readProjectedJsonBounded(
+            new ByteArrayInputStream(tooManyTags.toString().getBytes(StandardCharsets.UTF_8)),
+            "1.0.0"));
   }
 
   @Test

@@ -1147,7 +1147,7 @@ class RepositoryServiceTest {
 
     service.replaceMembers("ansible-root", List.of("ansible-hosted"));
 
-    verify(ansible).nextRepositoryRevision(50L);
+    verify(ansible).nextGroupConfigRevision(50L);
     verify(ansible).deleteGroupBindings(50L);
   }
 
@@ -1166,9 +1166,9 @@ class RepositoryServiceTest {
     service.update("ansible-hosted",
         new UpdateCommand(false, null, null, null, null, null, null, null, null));
 
-    verify(ansible).nextRepositoryRevision(52L);
+    verify(ansible).nextGroupConfigRevision(52L);
     verify(ansible).deleteGroupBindings(52L);
-    verify(ansible).nextRepositoryRevision(50L);
+    verify(ansible).nextGroupConfigRevision(50L);
     verify(ansible).deleteGroupBindings(50L);
   }
 

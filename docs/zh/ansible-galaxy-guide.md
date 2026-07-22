@@ -108,7 +108,7 @@ ansible-galaxy collection download acme.tools:1.0.0 \
 
 关系数据库只保存有上限的元数据和协调状态：collection coordinate、checksum、size、查询投影、依赖投影、import task、proxy validator/negative cache、group binding 和 fenced lease。
 
-Collection tarball、完整 `MANIFEST.json`、完整 `FILES.json`、大体积上游 JSON 和 signature payload 保存在配置的 blob store；数据库只保存引用、hash 和有界投影，不保存大 JSON。当前硬上限包括 version metadata 64 KiB、dependency projection 192 KiB、proxy protocol projection 256 KiB；超大的上游文档只投影客户端必需字段，或作为 blob 内容保留。
+Collection tarball（其中包含完整 `MANIFEST.json`/`FILES.json`）和需要保留的 signature payload 存在配置的 blob store；数据库只保存引用、hash 和有界投影，不保存大 JSON。当前硬上限包括 version metadata 64 KiB、dependency projection 192 KiB、proxy protocol projection 256 KiB。在线上游 JSON 会流式解析，只投影客户端必需字段，不保留无关的大字段；未来任何确实需要原样保留的大 JSON 都必须写入 blob，并在数据库中只保存 hash/引用。
 
 发布前会校验：
 
@@ -126,7 +126,25 @@ Proxy collection/version metadata 请求只持久化有界查询投影和 artifa
 
 Import task、proxy state、source binding、lease、fencing token 和 repository revision 共享存储在 MySQL/PostgreSQL，artifact/staging bytes 共享存储在 OSS/S3。因此 publish 或 proxy miss 可由另一副本恢复/接管；进程内 cache 和 executor queue 仅是可重建优化。
 
+发布请求只把正文流式写入一次 staging blob，持久化 `WAITING` task 后即返回 `202`，archive 检查不再占用请求线程。有界 worker 使用 `FOR UPDATE SKIP LOCKED` 原子批量领取 task，通过受限 inspection pool 校验 archive，并直接提升既有 staging blob 引用；promotion 阶段不再二次上传或重复执行 hash pass。慢速检查、proxy 下载和持久化期间会续租带 fencing token 的数据库 lease；同节点请求再通过 single-flight 合并，等待方使用指数退避，避免固定频率轮询数据库。
+
+Version-list 读取一次批量 revision snapshot，并使用按 revision 校验的本地 cache。Collection publish/delete 只递增精确 coordinate revision，并仅失效受影响的 group binding，不再扫描或重写仓库全部版本。Proxy version inventory 使用有上限的规范化行保存，只有 TTL 到期后才重新遍历上游全部分页。Proxy JSON 以有界流方式解析，只把 discovery、version、artifact、dependency 和客户端所需 metadata 投影到关系数据库 JSON 列。Artifact 热路径使用轻量 asset/blob 引用查询并直接执行 blob `GET`，不再先发一次对象存储 `stat`。
+
 每个副本还会运行有界 staging cleanup。默认通过 `FOR UPDATE SKIP LOCKED` 领取超过 24 小时的 `.ansible/staging/` asset 行，保留仍属于 `WAITING`/`RUNNING` import task 的内容，只解除 task 缺失或已经终态的引用。只有最后一个 asset 引用消失后才把 blob 交给全局 GC，因此进程在 staging、task 创建、task 完成或请求清理之间崩溃都不会永久泄漏 collection bytes。运维可通过 `KKREPO_ANSIBLE_STAGING_CLEANUP_*` 环境变量调整 interval、initial delay、batch size 和 grace period；grace period 的安全下限为 5 分钟。
+
+另一个幂等 cleanup 会限制过期 negative/page cache、终态 task 和过期 lease 行数量。它在每个副本上按小批次执行；默认保留过期 proxy page 24 小时、完成/失败 task 30 天、过期 fencing lease 7 天。
+
+| 环境变量 | 默认值 | 用途 |
+| --- | ---: | --- |
+| `KKREPO_ANSIBLE_IMPORT_WORKER_CONCURRENCY` | `4` | 每副本并发处理 collection import 的上限（强制限制为 1-64） |
+| `KKREPO_ANSIBLE_ARCHIVE_MAX_CONCURRENT_INSPECTIONS` | `4` | 每副本并发 archive 检查上限 |
+| `KKREPO_ANSIBLE_ARCHIVE_INSPECTION_PERMIT_WAIT_MS` | `5000` | 容量繁忙时返回可重试错误前的等待时间 |
+| `KKREPO_CACHE_ANSIBLE_VERSION_LIST_ENABLED` | `true` | 启用按 revision 校验、可重建的 version-list cache |
+| `KKREPO_ANSIBLE_CLEANUP_BATCH_SIZE` | `256` | 每批最多清理的共享状态行数 |
+| `KKREPO_ANSIBLE_CLEANUP_MAX_BATCHES` | `8` | 每轮 cleanup 最多执行的批次数 |
+| `KKREPO_ANSIBLE_PROXY_PAGE_RETENTION_HOURS` | `24` | 过期分页状态保留时间 |
+| `KKREPO_ANSIBLE_TERMINAL_TASK_RETENTION_DAYS` | `30` | 完成和失败 import task 保留天数 |
+| `KKREPO_ANSIBLE_EXPIRED_LEASE_RETENTION_DAYS` | `7` | 过期 fencing lease 保留天数 |
 
 ## Nexus 迁移
 

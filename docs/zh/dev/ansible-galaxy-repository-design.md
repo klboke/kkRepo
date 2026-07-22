@@ -266,6 +266,8 @@ V35 已增加以下 JDBC contract 和 MySQL/PostgreSQL migration：
   - 保存 task UUID、repository、发起主体、staging blob、expected/actual SHA-256、state、messages/error、attempt、lease owner/expiry、fencing token、created/started/finished 时间。
 - `ansible_proxy_version_state`
   - 保存 upstream href/download URL、metadata validator、artifact SHA-256、cache_until、verified_at、negative state 和有上限的协议元数据投影；上游返回的完整 files/contents/signatures 列表不复制入库。
+- `ansible_proxy_inventory` / `ansible_proxy_inventory_version`
+  - 按 `(repository, namespace, name)` 保存 inventory TTL/revision/count header，并把 version name 作为有上限的规范化行保存。TTL 有效时读取这些行，不重复遍历上游分页；不把整份 version inventory 写成大 JSON。
 - `ansible_group_binding`
   - 以 group repository、namespace/name/version、member revision 为键，绑定 source repository、artifact filename 和 SHA-256。Proxy metadata 首次选源时允许 materialized version 引用为空；artifact `GET` 必须沿同一 binding 回源，并在 blob/asset/version 提交后原子回填 version 引用。
 - `ansible_registry_lease`
@@ -361,11 +363,21 @@ Base64 Bearer/Token compatibility 只在 Ansible Galaxy route 启用，不能扩
 ## 多副本与缓存语义
 
 - repository 配置、collection/version 的有界协议元数据、dependency、signature 引用、task、lease、source binding、negative cache、remote validator、asset/blob 引用和 revision 都以数据库/OSS 为真相。
-- collection artifact、完整 `MANIFEST.json`/`FILES.json`、大体积上游 JSON 和 signature blob 只存 OSS/S3/File blob store；数据库只保存引用、hash、size 和协议状态。
+- collection artifact（包含完整 `MANIFEST.json`/`FILES.json`）和 signature blob 只存 OSS/S3/File blob store；线上游 JSON 只保留有界协议投影，任何必须原样保留的大 JSON 也必须写 blob，数据库只保存引用、hash、size 和协议状态。
 - 本地 cache 只保存可从共享真相重建的 discovery/metadata/binding 热数据，必须有 TTL 或 revision invalidation。
 - publish/import、proxy download 和 group revalidation 使用数据库 lease/fencing 或 marker queue；单 JVM lock 只能减少本副本重复工作。
 - hosted publish/delete、proxy metadata 更新、group member 变化都递增共享版本水位，使其它副本在 TTL 之前也能观察变化。
 - 跨副本并发测试必须验证：同 version publish 一次成功、同 artifact 只回源一次、task 可接管、group metadata 与下载 source 一致。
+
+### 性能与容量实现
+
+- Version publish/delete 递增 repository content revision，并按 `(repository, namespace, name, version)` 精确失效 group binding；revision 分配、metadata 写入和失效在同一事务提交。Group 成员顺序/配置使用独立 config revision，避免一次发布触发全仓库 version 扫描和全部 binding 删除。
+- Version-list 一次批量读取相关 repository revision，SemVer 排序时每个 version 只解析一次；按 `identity + revision snapshot` 使用可重建的本地 cache。正确性仍以数据库 revision 和 binding 为准。
+- Proxy version inventory 以 header + version 行规范化保存。TTL 命中直接读取本地 inventory；TTL 到期才串行拉取所有上游分页，并通过数据库 lease、fencing token、节点内 single-flight 合并并发 refresh。
+- Proxy JSON 使用 16 MiB 输入上限的 streaming parser，只提取协议字段，再执行 64/192/256 KiB 投影上限。完整 collection archive、`MANIFEST.json`、`FILES.json` 和大型 payload 始终在 blob storage；数据库没有无上限 JSON。
+- 标准 multipart publish 只流式写一次 staging blob，创建 durable task 后立即返回 `202`。Worker 原子批量 claim task，并直接 promote 同一 blob 引用；promotion 阶段不复制临时文件、不重复上传或再次执行 hash pass。
+- Archive inspection、import worker 和 migration 复用的 inspector 都有并发上限与 permit timeout。长操作续租 fenced lease；同副本等待者通过 single-flight 合并，跨副本等待使用 50-500 ms 指数退避。
+- Artifact hot path 使用只包含 asset/blob reference 的轻量查询并直接读取 blob，避免先 `stat` 再 `GET`。Proxy page/negative state、终态 task 和过期 lease 由每副本幂等、有界批次 cleanup；staging asset 继续由独立 `SKIP LOCKED` worker 清理。
 
 ## Nexus 迁移设计
 

@@ -44,6 +44,10 @@ public final class AnsibleGalaxyVersions {
   public static int compare(String left, String right) {
     Parsed a = Parsed.parse(left);
     Parsed b = Parsed.parse(right);
+    return compareParsed(a, b);
+  }
+
+  private static int compareParsed(Parsed a, Parsed b) {
     int core = a.major.compareTo(b.major);
     if (core == 0) core = a.minor.compareTo(b.minor);
     if (core == 0) core = a.patch.compareTo(b.patch);
@@ -52,7 +56,14 @@ public final class AnsibleGalaxyVersions {
 
   public static List<String> sortDescending(Collection<String> versions) {
     if (versions == null) throw new IllegalArgumentException("Ansible versions must not be null");
-    return versions.stream().map(AnsibleGalaxyVersions::require).sorted(DESCENDING).toList();
+    return versions.stream()
+        .map(value -> new ParsedVersion(value, Parsed.parse(value)))
+        .sorted((left, right) -> {
+          int result = compareParsed(right.parsed(), left.parsed());
+          return result == 0 ? left.value().compareTo(right.value()) : result;
+        })
+        .map(ParsedVersion::value)
+        .toList();
   }
 
   private static int comparePrerelease(String left, String right) {
@@ -78,7 +89,10 @@ public final class AnsibleGalaxyVersions {
 
   private record Parsed(BigInteger major, BigInteger minor, BigInteger patch, String prerelease) {
     private static Parsed parse(String value) {
-      Matcher matcher = SEMVER.matcher(require(value));
+      if (value == null) {
+        throw new IllegalArgumentException("Invalid Ansible collection version: null");
+      }
+      Matcher matcher = SEMVER.matcher(value);
       if (!matcher.matches()) {
         throw new IllegalArgumentException("Invalid Ansible collection version: " + value);
       }
@@ -88,5 +102,8 @@ public final class AnsibleGalaxyVersions {
           new BigInteger(matcher.group(3)),
           matcher.group(4));
     }
+  }
+
+  private record ParsedVersion(String value, Parsed parsed) {
   }
 }

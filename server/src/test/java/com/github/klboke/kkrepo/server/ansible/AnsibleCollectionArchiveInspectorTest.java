@@ -6,7 +6,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 import java.nio.file.Files;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class AnsibleCollectionArchiveInspectorTest {
@@ -70,5 +74,80 @@ class AnsibleCollectionArchiveInspectorTest {
         () -> inspector.inspect(new ByteArrayInputStream(
             AnsibleCollectionTestArchive.escapingSymbolicLink())));
     assertTrue(escape.getMessage().contains("escapes the archive"));
+  }
+
+  @Test
+  void boundsConcurrentArchiveInspectionInsteadOfQueuingUnboundedWork() throws Exception {
+    AnsibleCollectionArchiveInspector inspector = new AnsibleCollectionArchiveInspector(
+        new ObjectMapper(), 1024 * 1024, 1024 * 1024, 1024 * 1024, 100,
+        200, 120, 1, 20);
+    CountDownLatch entered = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    AtomicReference<Throwable> firstFailure = new AtomicReference<>();
+    Thread first = Thread.ofPlatform().start(() -> {
+      try {
+        inspector.inspect(new BlockingInputStream(entered, release));
+      } catch (Throwable failure) {
+        firstFailure.set(failure);
+      }
+    });
+    assertTrue(entered.await(1, TimeUnit.SECONDS));
+
+    assertThrows(
+        AnsibleGalaxyExceptions.ServiceUnavailable.class,
+        () -> inspector.inspect(new ByteArrayInputStream(new byte[] {1, 2, 3})));
+
+    release.countDown();
+    first.join(1000);
+    assertTrue(firstFailure.get() instanceof AnsibleGalaxyExceptions.BadRequest);
+  }
+
+  @Test
+  void preservesInterruptStatusWhileWaitingForInspectionCapacity() {
+    AnsibleCollectionArchiveInspector inspector = new AnsibleCollectionArchiveInspector(
+        new ObjectMapper(), 1024, 1024, 1024, 10, 200, 120, 1, 20);
+    Thread.currentThread().interrupt();
+
+    try {
+      assertThrows(
+          AnsibleGalaxyExceptions.ServiceUnavailable.class,
+          () -> inspector.inspect(new ByteArrayInputStream(new byte[] {1})));
+      assertTrue(Thread.currentThread().isInterrupted());
+    } finally {
+      Thread.interrupted();
+    }
+  }
+
+  private static final class BlockingInputStream extends InputStream {
+    private final CountDownLatch entered;
+    private final CountDownLatch release;
+
+    private BlockingInputStream(CountDownLatch entered, CountDownLatch release) {
+      this.entered = entered;
+      this.release = release;
+    }
+
+    @Override
+    public int read(byte[] buffer, int offset, int length) {
+      entered.countDown();
+      awaitRelease();
+      return -1;
+    }
+
+    @Override
+    public int read() {
+      entered.countDown();
+      awaitRelease();
+      return -1;
+    }
+
+    private void awaitRelease() {
+      try {
+        if (!release.await(1, TimeUnit.SECONDS)) throw new AssertionError("timed out");
+      } catch (InterruptedException error) {
+        Thread.currentThread().interrupt();
+        throw new AssertionError(error);
+      }
+    }
   }
 }

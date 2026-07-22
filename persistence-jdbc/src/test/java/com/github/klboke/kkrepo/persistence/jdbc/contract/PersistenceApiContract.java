@@ -66,6 +66,8 @@ public abstract class PersistenceApiContract {
         "ansible_collection_version",
         "ansible_group_binding",
         "ansible_import_task",
+        "ansible_proxy_inventory",
+        "ansible_proxy_inventory_version",
         "ansible_proxy_version_state",
         "ansible_registry_lease",
         "asset",
@@ -154,26 +156,37 @@ public abstract class PersistenceApiContract {
         "application/octet-stream", 42L, null, now, Map.of()));
 
     AnsibleGalaxyRegistryDao registry = stores().ansibleGalaxyRegistry();
-    long revision = registry.nextRepositoryRevision(repositoryId);
     AnsibleGalaxyRegistryDao.CollectionVersion fixture =
         new AnsibleGalaxyRegistryDao.CollectionVersion(
             null, repositoryId, componentId, assetId, "acme", "acme", "tools", "tools",
             "1.2.3", "1.2.3", "acme-tools-1.2.3.tar.gz", "a".repeat(64), 42L,
             Map.of("authors", List.of("kkrepo")),
             Map.of("community.general", ">=8.0.0,<9.0.0"), ">=2.16", "HOSTED",
-            revision, AnsibleGalaxyRegistryDao.VERSION_READY, now, now, now);
+            0L, AnsibleGalaxyRegistryDao.VERSION_READY, now, now, now);
     AnsibleGalaxyRegistryDao.CollectionVersion stored =
         inTransaction(() -> registry.insertVersion(fixture));
+    long revision = stored.revision();
 
     assertNotNull(stored.id());
+    assertTrue(revision > 0L);
     assertEquals("1.2.3", registry.findVersion(
         repositoryId, "acme", "tools", "1.2.3").orElseThrow().versionOriginal());
     assertEquals(List.of("1.2.3"), registry.listVersions(repositoryId, "acme", "tools")
         .stream().map(AnsibleGalaxyRegistryDao.CollectionVersion::versionNormalized).toList());
     assertEquals(
         List.of("1.2.3"), registry.listVersionNames(repositoryId, "acme", "tools"));
+    assertEquals(stored.artifactAssetId(),
+        registry.findArtifactByVersionId(stored.id()).orElseThrow().artifactAssetId());
+    assertEquals(stored.id(), registry.findArtifactByFilename(
+        repositoryId, stored.artifactFilename()).orElseThrow().versionId());
+    assertEquals(revision,
+        registry.currentRepositoryRevisions(List.of(repositoryId, proxyRepositoryId))
+            .get(repositoryId));
+    long revisionBeforeDuplicate = registry.currentRepositoryRevision(repositoryId);
     assertThrows(RuntimeException.class,
         () -> inTransaction(() -> registry.insertVersion(fixture)));
+    assertEquals(revisionBeforeDuplicate, registry.currentRepositoryRevision(repositoryId),
+        "a rejected immutable insert must roll back its speculative revision");
 
     AnsibleGalaxyRegistryDao.Signature signature = registry.insertSignature(
         new AnsibleGalaxyRegistryDao.Signature(
@@ -187,8 +200,8 @@ public abstract class PersistenceApiContract {
         null, null, "acme", "tools", "1.2.4", "acme-tools-1.2.4.tar.gz",
         "c".repeat(64), null, assetId, 0, null, null, 0L, now, null, null, now));
     Instant leaseNow = Instant.now();
-    AnsibleGalaxyRegistryDao.ImportTask claimed = registry.claimTask(
-        taskId, "replica-a", leaseNow.plusSeconds(30), leaseNow).orElseThrow();
+    AnsibleGalaxyRegistryDao.ImportTask claimed = registry.claimTasks(
+        "replica-a", leaseNow.plusSeconds(30), leaseNow, 10).getFirst();
     assertEquals(1, claimed.attemptCount());
     assertTrue(registry.claimTask(
         taskId, "replica-b", leaseNow.plusSeconds(30), leaseNow).isEmpty());
@@ -238,25 +251,52 @@ public abstract class PersistenceApiContract {
     assertEquals(2, recovered.attemptCount());
     assertEquals(2L, recovered.fencingToken());
 
-    registry.upsertProxyState(new AnsibleGalaxyRegistryDao.ProxyVersionState(
-        proxyRepositoryId, "acme", "tools", "1.2.3", "acme-tools-1.2.3.tar.gz",
-        "https://galaxy.example/v3/collections/acme/tools/versions/1.2.3/",
-        "https://cdn.example/acme-tools-1.2.3.tar.gz", "a".repeat(64), "etag-one",
-        now.toString(), now.plusSeconds(60), now, null, null,
-        Map.of("version", "1.2.3"), 1L, now));
-    registry.upsertProxyState(new AnsibleGalaxyRegistryDao.ProxyVersionState(
-        proxyRepositoryId, "acme", "tools", "1.2.3", "acme-tools-1.2.3.tar.gz",
-        "https://galaxy.example/v3/collections/acme/tools/versions/1.2.3/",
-        "https://cdn.example/acme-tools-1.2.3.tar.gz", "a".repeat(64), "etag-two",
-        now.toString(), now.plusSeconds(120), now.plusSeconds(1), null, null,
-        Map.of("version", "1.2.3", "signatures", List.of()), 2L, now.plusSeconds(1)));
+    long firstProxyStateRevision = registry.upsertProxyState(
+        new AnsibleGalaxyRegistryDao.ProxyVersionState(
+            proxyRepositoryId, "acme", "tools", "1.2.3", "acme-tools-1.2.3.tar.gz",
+            "https://galaxy.example/v3/collections/acme/tools/versions/1.2.3/",
+            "https://cdn.example/acme-tools-1.2.3.tar.gz", "a".repeat(64), "etag-one",
+            now.toString(), now.plusSeconds(60), now, null, null,
+            Map.of("version", "1.2.3"), 0L, now));
+    long secondProxyStateRevision = registry.upsertProxyState(
+        new AnsibleGalaxyRegistryDao.ProxyVersionState(
+            proxyRepositoryId, "acme", "tools", "1.2.3", "acme-tools-1.2.3.tar.gz",
+            "https://galaxy.example/v3/collections/acme/tools/versions/1.2.3/",
+            "https://cdn.example/acme-tools-1.2.3.tar.gz", "a".repeat(64), "etag-two",
+            now.toString(), now.plusSeconds(120), now.plusSeconds(1), null, null,
+            Map.of("version", "1.2.3", "signatures", List.of()), 0L, now.plusSeconds(1)));
+    assertTrue(secondProxyStateRevision > firstProxyStateRevision);
     assertEquals("etag-two", registry.findProxyState(
+        proxyRepositoryId, "acme", "tools", "1.2.3").orElseThrow().metadataEtag());
+    assertEquals(secondProxyStateRevision, registry.findProxyState(
+        proxyRepositoryId, "acme", "tools", "1.2.3").orElseThrow().revision());
+    Instant revalidatedAt = now.plusSeconds(2);
+    assertTrue(registry.touchProxyState(
+        proxyRepositoryId, "acme", "tools", "1.2.3", "etag-three", null,
+        now.plusSeconds(180), revalidatedAt));
+    assertEquals("etag-three", registry.findProxyState(
         proxyRepositoryId, "acme", "tools", "1.2.3").orElseThrow().metadataEtag());
     assertEquals("1.2.3", registry.findProxyStateByArtifactFilename(
         proxyRepositoryId, "acme-tools-1.2.3.tar.gz").orElseThrow().versionNormalized());
 
-    long groupRevision = registry.currentRepositoryRevision(groupRepositoryId);
+    long inventoryRevision = registry.replaceProxyInventory(
+        new AnsibleGalaxyRegistryDao.ProxyInventory(
+            proxyRepositoryId, "acme", "tools", now.plusSeconds(60), now, 0L, 2, now),
+        List.of("1.2.3", "2.0.0", "2.0.0"));
+    assertEquals(2, registry.findProxyInventory(
+        proxyRepositoryId, "acme", "tools").orElseThrow().versionCount());
+    assertEquals(inventoryRevision, registry.findProxyInventory(
+        proxyRepositoryId, "acme", "tools").orElseThrow().revision());
+    assertEquals(List.of("1.2.3", "2.0.0"), registry.listProxyInventoryVersionNames(
+        proxyRepositoryId, "acme", "tools"));
+    assertTrue(registry.touchProxyInventory(
+        proxyRepositoryId, "acme", "tools", now.plusSeconds(120), now.plusSeconds(1)));
+
+    long groupRevision = registry.nextGroupConfigRevision(groupRepositoryId);
     assertTrue(groupRevision > 0L);
+    assertEquals(groupRevision, registry.currentGroupConfigRevision(groupRepositoryId));
+    assertEquals(groupRevision,
+        registry.currentGroupConfigRevisions(List.of(groupRepositoryId)).get(groupRepositoryId));
     assertTrue(registry.bindGroupSourceIfCurrent(new AnsibleGalaxyRegistryDao.GroupBinding(
         groupRepositoryId, "acme", "tools", "1.2.3", repositoryId, stored.id(),
         stored.artifactFilename(), revision, groupRevision, stored.artifactSha256(), now, now)));
@@ -264,6 +304,8 @@ public abstract class PersistenceApiContract {
         groupRepositoryId, "acme", "tools", "1.2.3").orElseThrow().memberRepositoryId());
     assertEquals(stored.id(), registry.findGroupBindingByArtifactFilename(
         groupRepositoryId, stored.artifactFilename()).orElseThrow().memberVersionId());
+    assertEquals(stored.artifactSha256(), registry.currentCoordinateSha256(
+        groupRepositoryId, "acme", "tools", "1.2.3").orElseThrow());
 
     AnsibleGalaxyRegistryDao.Lease firstLease = registry.tryAcquireLease(
         "ansible:" + repositoryId + ":artifact:acme:tools:1.2.3",
@@ -296,7 +338,7 @@ public abstract class PersistenceApiContract {
 
     long proxyBlobStoreId = stores().repositories()
         .findById(proxyRepositoryId).orElseThrow().blobStoreId();
-    long metadataGroupRevision = registry.currentRepositoryRevision(groupRepositoryId);
+    long metadataGroupRevision = registry.currentGroupConfigRevision(groupRepositoryId);
     long proxyMetadataRevision = registry.currentRepositoryRevision(proxyRepositoryId);
     assertTrue(registry.bindGroupSourceIfCurrent(new AnsibleGalaxyRegistryDao.GroupBinding(
         groupRepositoryId, "acme", "tools", "1.2.3", proxyRepositoryId, null,
@@ -317,14 +359,14 @@ public abstract class PersistenceApiContract {
         RepositoryFormat.ANSIBLEGALAXY, path, PersistenceHashes.pathHash(path),
         "acme-tools-1.2.3.tar.gz", "collection-artifact", "application/octet-stream",
         42L, null, now, Map.of()));
-    long proxyRevision = registry.nextRepositoryRevision(proxyRepositoryId);
     AnsibleGalaxyRegistryDao.CollectionVersion proxyVersion = inTransaction(() ->
         registry.insertVersion(new AnsibleGalaxyRegistryDao.CollectionVersion(
             null, proxyRepositoryId, proxyComponentId, proxyAssetId,
             "acme", "acme", "tools", "tools", "1.2.3", "1.2.3",
             "acme-tools-1.2.3.tar.gz", "a".repeat(64), 42L, Map.of(), Map.of(),
-            ">=2.16", "PROXY", proxyRevision, AnsibleGalaxyRegistryDao.VERSION_READY,
+            ">=2.16", "PROXY", 0L, AnsibleGalaxyRegistryDao.VERSION_READY,
             now, now, now)));
+    long proxyRevision = proxyVersion.revision();
     assertTrue(registry.bindGroupSourceIfCurrent(new AnsibleGalaxyRegistryDao.GroupBinding(
         groupRepositoryId, "acme", "tools", "1.2.3", proxyRepositoryId, proxyVersion.id(),
         proxyVersion.artifactFilename(), proxyRevision, metadataGroupRevision,
@@ -336,6 +378,20 @@ public abstract class PersistenceApiContract {
     assertTrue(registry.findProxyState(
         proxyRepositoryId, "acme", "tools", "1.2.3").isEmpty());
     assertEquals(1, stores().assets().deleteAssetById(proxyAssetId));
+
+    registry.upsertProxyState(new AnsibleGalaxyRegistryDao.ProxyVersionState(
+        proxyRepositoryId, "acme", "missing", "9.9.9", null, null, null, null,
+        null, null, null, now, 404, now.plusSeconds(1), Map.of(), 1L, now));
+    registry.replaceProxyInventory(new AnsibleGalaxyRegistryDao.ProxyInventory(
+        proxyRepositoryId, "acme", "stale", now.minusSeconds(2), now.minusSeconds(2),
+        0L, 1, now.minusSeconds(2)), List.of("1.0.0"));
+    assertEquals(2, registry.deleteExpiredProxyCache(
+        now.plusSeconds(2), now.minusSeconds(1), 100));
+    assertTrue(registry.findProxyInventory(proxyRepositoryId, "acme", "stale").isEmpty());
+    assertEquals(1, registry.deleteTerminalTasksBefore(now.plusSeconds(3), 100));
+    registry.releaseLease(
+        secondLease.leaseKey(), secondLease.owner(), secondLease.fencingToken());
+    assertEquals(1, registry.deleteExpiredLeasesBefore(Instant.now().plusSeconds(1), 100));
   }
 
   @Test

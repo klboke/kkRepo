@@ -72,7 +72,7 @@ class AnsibleGalaxyServiceTest {
         3L, "ansible-group", RepositoryType.GROUP, null, List.of(first, second));
     AnsibleGalaxyRegistryDao.CollectionVersion version = version(first.id(), 100L, 20L);
 
-    when(registry.currentRepositoryRevision(group.id())).thenReturn(7L);
+    when(registry.currentGroupConfigRevision(group.id())).thenReturn(7L);
     when(registry.currentRepositoryRevision(first.id())).thenReturn(11L);
     when(registry.findGroupBinding(group.id(), "acme", "tools", "1.2.3"))
         .thenReturn(Optional.empty());
@@ -104,6 +104,8 @@ class AnsibleGalaxyServiceTest {
 
     when(registry.findGroupBindingByArtifactFilename(group.id(), version.artifactFilename()))
         .thenReturn(Optional.of(binding));
+    when(registry.currentCoordinateSha256(first.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.of(SHA_A));
     when(registry.findVersionById(version.id())).thenReturn(Optional.of(version));
     when(assets.serve(first.id(), version.artifactAssetId(), false))
         .thenReturn(MavenResponse.ok(
@@ -133,7 +135,7 @@ class AnsibleGalaxyServiceTest {
     RepositoryRuntime group = runtime(
         51L, "ansible-group", RepositoryType.GROUP, null, List.of(member));
     AnsibleGalaxyRegistryDao.CollectionVersion version = version(member.id(), 400L, 60L);
-    when(registry.currentRepositoryRevision(group.id())).thenReturn(7L);
+    when(registry.currentGroupConfigRevision(group.id())).thenReturn(7L);
     when(registry.currentRepositoryRevision(member.id())).thenReturn(11L);
     when(registry.findGroupBinding(group.id(), "acme", "tools", "1.2.3"))
         .thenReturn(Optional.empty());
@@ -157,7 +159,7 @@ class AnsibleGalaxyServiceTest {
     RepositoryRuntime group = runtime(
         53L, "ansible-group", RepositoryType.GROUP, null, List.of(member));
     AnsibleGalaxyRegistryDao.CollectionVersion version = version(member.id(), 401L, 61L);
-    when(registry.currentRepositoryRevision(group.id())).thenReturn(8L);
+    when(registry.currentGroupConfigRevision(group.id())).thenReturn(8L);
     when(registry.currentRepositoryRevision(member.id())).thenReturn(12L);
     when(registry.findGroupBindingByArtifactFilename(
         group.id(), version.artifactFilename())).thenReturn(Optional.empty());
@@ -192,7 +194,7 @@ class AnsibleGalaxyServiceTest {
             group.id(), "acme", "tools", "1.2.3", offline.id(), offlineVersion.id(),
             offlineVersion.artifactFilename(), 4L, 9L, offlineVersion.artifactSha256(),
             Instant.now(), Instant.now());
-    when(registry.currentRepositoryRevision(group.id())).thenReturn(9L);
+    when(registry.currentGroupConfigRevision(group.id())).thenReturn(9L);
     when(registry.currentRepositoryRevision(online.id())).thenReturn(5L);
     when(registry.listVersionNames(online.id(), "acme", "tools"))
         .thenReturn(List.of("1.2.3"));
@@ -311,7 +313,7 @@ class AnsibleGalaxyServiceTest {
         41L, "ansible-group", RepositoryType.GROUP, null, List.of(proxy, hosted));
     AnsibleGalaxyRegistryDao.CollectionVersion hostedVersion =
         version(hosted.id(), 300L, 50L);
-    when(registry.currentRepositoryRevision(group.id())).thenReturn(7L);
+    when(registry.currentGroupConfigRevision(group.id())).thenReturn(7L);
     when(registry.currentRepositoryRevision(hosted.id())).thenReturn(11L);
     when(registry.findGroupBinding(group.id(), "acme", "tools", "1.2.3"))
         .thenReturn(Optional.empty());
@@ -340,7 +342,7 @@ class AnsibleGalaxyServiceTest {
         44L, "ansible-group", RepositoryType.GROUP, null, List.of(proxy, hosted));
     AnsibleGalaxyRegistryDao.CollectionVersion hostedVersion =
         version(hosted.id(), 301L, 51L);
-    when(registry.currentRepositoryRevision(group.id())).thenReturn(8L);
+    when(registry.currentGroupConfigRevision(group.id())).thenReturn(8L);
     when(registry.currentRepositoryRevision(hosted.id())).thenReturn(12L);
     when(registry.findGroupBindingByArtifactFilename(
         group.id(), hostedVersion.artifactFilename())).thenReturn(Optional.empty());
@@ -534,7 +536,7 @@ class AnsibleGalaxyServiceTest {
             null, "https://galaxy.example/artifacts/acme-tools-1.2.3.tar.gz",
             SHA_A, null, null, now.plusSeconds(60), now, null, null,
             projected, 4L, now);
-    when(registry.currentRepositoryRevision(group.id())).thenReturn(7L);
+    when(registry.currentGroupConfigRevision(group.id())).thenReturn(7L);
     when(registry.currentRepositoryRevision(proxy.id())).thenReturn(4L);
     when(registry.findGroupBinding(group.id(), "acme", "tools", "1.2.3"))
         .thenReturn(Optional.empty());
@@ -582,10 +584,12 @@ class AnsibleGalaxyServiceTest {
             group.id(), "acme", "tools", "1.2.3", proxy.id(), null,
             "acme-tools-1.2.3.tar.gz", 4L, 7L, SHA_A, now, now);
     AnsibleGalaxyRegistryDao.CollectionVersion stored = version(proxy.id(), 302L, 52L);
-    when(registry.currentRepositoryRevision(group.id())).thenReturn(7L);
+    when(registry.currentGroupConfigRevision(group.id())).thenReturn(7L);
     when(registry.currentRepositoryRevision(proxy.id())).thenReturn(4L);
     when(registry.findGroupBindingByArtifactFilename(
         group.id(), "acme-tools-1.2.3.tar.gz")).thenReturn(Optional.of(projectedBinding));
+    when(registry.currentCoordinateSha256(proxy.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.of(SHA_A));
     when(registry.findVersionByArtifactFilename(proxy.id(), "acme-tools-1.2.3.tar.gz"))
         .thenReturn(Optional.empty());
     when(registry.findProxyStateByArtifactFilename(
@@ -753,6 +757,9 @@ class AnsibleGalaxyServiceTest {
 
   private AnsibleGalaxyService withFailingProxy(RepositoryRuntime proxy) {
     AnsibleGalaxyService resilient = spy(service);
+    doThrow(new AnsibleGalaxyExceptions.BadUpstream("Upstream Galaxy is unavailable"))
+        .when(resilient)
+        .fetchProxyVersionNames(eq(proxy), anyString(), anyString());
     doThrow(new AnsibleGalaxyExceptions.BadUpstream("Upstream Galaxy is unavailable"))
         .when(resilient)
         .fetchProxyDocument(eq(proxy), anyString(), anyString(), anyString(), anyString());

@@ -26,6 +26,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
@@ -53,6 +55,8 @@ final class AnsibleCollectionArchiveInspector {
   private final int maxEntries;
   private final long maxCompressionRatio;
   private final long maxInspectionNanos;
+  private final Semaphore inspectionPermits;
+  private final long permitWaitMillis;
 
   @Autowired
   AnsibleCollectionArchiveInspector(
@@ -62,7 +66,9 @@ final class AnsibleCollectionArchiveInspector {
       @Value("${kkrepo.ansible.archive.max-entry-bytes:1073741824}") long maxEntryBytes,
       @Value("${kkrepo.ansible.archive.max-entries:100000}") int maxEntries,
       @Value("${kkrepo.ansible.archive.max-compression-ratio:200}") long maxCompressionRatio,
-      @Value("${kkrepo.ansible.archive.max-inspection-seconds:120}") long maxInspectionSeconds) {
+      @Value("${kkrepo.ansible.archive.max-inspection-seconds:120}") long maxInspectionSeconds,
+      @Value("${kkrepo.ansible.archive.max-concurrent-inspections:4}") int maxConcurrentInspections,
+      @Value("${kkrepo.ansible.archive.inspection-permit-wait-ms:5000}") long permitWaitMillis) {
     this.objectMapper = objectMapper;
     this.maxCompressedBytes = Math.max(1L, maxCompressedBytes);
     this.maxExpandedBytes = Math.max(1L, maxExpandedBytes);
@@ -70,13 +76,16 @@ final class AnsibleCollectionArchiveInspector {
     this.maxEntries = Math.max(1, maxEntries);
     this.maxCompressionRatio = Math.max(1L, maxCompressionRatio);
     this.maxInspectionNanos = Duration.ofSeconds(Math.max(1L, maxInspectionSeconds)).toNanos();
+    this.inspectionPermits = new Semaphore(Math.max(1, maxConcurrentInspections), true);
+    this.permitWaitMillis = Math.max(1L, permitWaitMillis);
   }
 
   AnsibleCollectionArchiveInspector(ObjectMapper objectMapper, long compressed, long expanded, int entries) {
-    this(objectMapper, compressed, expanded, expanded, entries, 200, 120);
+    this(objectMapper, compressed, expanded, expanded, entries, 200, 120, 4, 5000);
   }
 
   InspectedCollection inspect(InputStream body) {
+    boolean permit = acquireInspectionPermit();
     Path buffered = null;
     try {
       buffered = Files.createTempFile("kkrepo-ansible-", ".tar.gz");
@@ -94,6 +103,20 @@ final class AnsibleCollectionArchiveInspector {
     } catch (IOException | RuntimeException e) {
       delete(buffered);
       throw new AnsibleGalaxyExceptions.BadRequest("Unable to inspect Ansible collection archive", e);
+    } finally {
+      if (permit) inspectionPermits.release();
+    }
+  }
+
+  private boolean acquireInspectionPermit() {
+    try {
+      if (inspectionPermits.tryAcquire(permitWaitMillis, TimeUnit.MILLISECONDS)) return true;
+      throw new AnsibleGalaxyExceptions.ServiceUnavailable(
+          "Ansible archive inspection capacity is busy; retry the request");
+    } catch (InterruptedException error) {
+      Thread.currentThread().interrupt();
+      throw new AnsibleGalaxyExceptions.ServiceUnavailable(
+          "Interrupted while waiting for Ansible archive inspection capacity");
     }
   }
 

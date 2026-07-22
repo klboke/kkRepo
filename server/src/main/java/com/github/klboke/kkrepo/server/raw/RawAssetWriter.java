@@ -181,6 +181,36 @@ class RawAssetWriter {
         createdBy, createdByIp, component, browsePath, false);
   }
 
+  Stored linkExistingBlobAtBrowsePathIfAbsent(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      String path,
+      AssetBlobRecord blob,
+      String contentTypeHint,
+      String createdBy,
+      String createdByIp,
+      ComponentRecord component,
+      String browsePath) {
+    if (blob == null || blob.id() == null || blob.blobStoreId() != blobStoreId) {
+      throw new IllegalArgumentException("An existing blob from the repository blob store is required");
+    }
+    String sha512 = blob.attributes() == null
+        ? "" : String.valueOf(blob.attributes().getOrDefault("sha512", ""));
+    Digests digests = new Digests(blob.md5(), blob.sha1(), blob.sha256(), sha512, blob.size());
+    DigestedUpload upload = new DigestedUpload(
+        BlobReferenceCodec.reference(
+            blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size()),
+        digests,
+        null,
+        false);
+    return executePersist(
+        "Link existing raw blob " + runtime.name() + "/" + path,
+        () -> persist(
+            runtime, storage, blobStoreId, path, upload, contentTypeHint, Map.of(),
+            createdBy, createdByIp, ComponentBinding.explicit(component), null, browsePath, false));
+  }
+
   private Stored writeFileAtBrowsePath(
       RepositoryRuntime runtime,
       BlobStorage storage,

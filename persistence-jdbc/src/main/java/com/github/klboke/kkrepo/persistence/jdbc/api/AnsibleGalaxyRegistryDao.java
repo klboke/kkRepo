@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.persistence.jdbc.api;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -17,6 +18,22 @@ public interface AnsibleGalaxyRegistryDao {
 
   long currentRepositoryRevision(long repositoryId);
 
+  Map<Long, Long> currentRepositoryRevisions(Collection<Long> repositoryIds);
+
+  long nextGroupConfigRevision(long repositoryId);
+
+  long currentGroupConfigRevision(long repositoryId);
+
+  Map<Long, Long> currentGroupConfigRevisions(Collection<Long> repositoryIds);
+
+  /** Advances content state and invalidates only this coordinate in containing groups. */
+  long nextCoordinateRevision(
+      long repositoryId, String namespaceLc, String nameLc, String versionNormalized);
+
+  Optional<String> currentCoordinateSha256(
+      long repositoryId, String namespaceLc, String nameLc, String versionNormalized);
+
+  /** Inserts a version and advances its coordinate revision atomically. */
   CollectionVersion insertVersion(CollectionVersion version);
 
   Optional<CollectionVersion> findVersion(
@@ -26,6 +43,10 @@ public interface AnsibleGalaxyRegistryDao {
 
   Optional<CollectionVersion> findVersionByArtifactFilename(
       long repositoryId, String artifactFilename);
+
+  Optional<ArtifactRef> findArtifactByVersionId(long versionId);
+
+  Optional<ArtifactRef> findArtifactByFilename(long repositoryId, String artifactFilename);
 
   /**
    * Removes one collection version before its archive asset is unlinked.
@@ -56,6 +77,10 @@ public interface AnsibleGalaxyRegistryDao {
 
   List<ImportTask> listClaimableTasks(Instant now, int limit);
 
+  /** Atomically claims a disjoint task batch with row locking and skip-locked semantics. */
+  List<ImportTask> claimTasks(
+      String owner, Instant leaseExpiresAt, Instant now, int limit);
+
   Optional<ImportTask> claimTask(
       String taskId, String owner, Instant leaseExpiresAt, Instant now);
 
@@ -77,13 +102,40 @@ public interface AnsibleGalaxyRegistryDao {
       String actualSha256,
       Instant finishedAt);
 
-  void upsertProxyState(ProxyVersionState state);
+  /** Persists changed proxy state and advances its content revision in one transaction. */
+  long upsertProxyState(ProxyVersionState state);
+
+  boolean touchProxyState(
+      long repositoryId,
+      String namespaceLc,
+      String nameLc,
+      String versionNormalized,
+      String metadataEtag,
+      String metadataLastModified,
+      Instant cacheUntil,
+      Instant verifiedAt);
 
   Optional<ProxyVersionState> findProxyState(
       long repositoryId, String namespaceLc, String nameLc, String versionNormalized);
 
   Optional<ProxyVersionState> findProxyStateByArtifactFilename(
       long repositoryId, String artifactFilename);
+
+  Optional<ProxyInventory> findProxyInventory(
+      long repositoryId, String namespaceLc, String nameLc);
+
+  List<String> listProxyInventoryVersionNames(
+      long repositoryId, String namespaceLc, String nameLc);
+
+  /** Replaces a normalized inventory and advances its repository revision atomically. */
+  long replaceProxyInventory(ProxyInventory inventory, List<String> versions);
+
+  boolean touchProxyInventory(
+      long repositoryId,
+      String namespaceLc,
+      String nameLc,
+      Instant cacheUntil,
+      Instant checkedAt);
 
   Optional<GroupBinding> findGroupBinding(
       long groupRepositoryId, String namespaceLc, String nameLc, String versionNormalized);
@@ -100,6 +152,12 @@ public interface AnsibleGalaxyRegistryDao {
   boolean renewLease(String leaseKey, String owner, long fencingToken, Instant expiresAt);
 
   void releaseLease(String leaseKey, String owner, long fencingToken);
+
+  int deleteExpiredProxyCache(Instant now, Instant stalePageBefore, int limit);
+
+  int deleteTerminalTasksBefore(Instant finishedBefore, int limit);
+
+  int deleteExpiredLeasesBefore(Instant expiresBefore, int limit);
 
   void deleteRepositoryState(long repositoryId);
 
@@ -126,6 +184,18 @@ public interface AnsibleGalaxyRegistryDao {
       Instant publishedAt,
       Instant createdAt,
       Instant updatedAt) {
+  }
+
+  record ArtifactRef(
+      long versionId,
+      long repositoryId,
+      long artifactAssetId,
+      String namespaceLc,
+      String nameLc,
+      String versionNormalized,
+      String artifactFilename,
+      String artifactSha256,
+      long revision) {
   }
 
   record Signature(
@@ -180,6 +250,17 @@ public interface AnsibleGalaxyRegistryDao {
       Instant negativeExpiresAt,
       Map<String, Object> upstreamIdentity,
       long revision,
+      Instant updatedAt) {
+  }
+
+  record ProxyInventory(
+      long repositoryId,
+      String namespaceLc,
+      String nameLc,
+      Instant cacheUntil,
+      Instant checkedAt,
+      long revision,
+      int versionCount,
       Instant updatedAt) {
   }
 
