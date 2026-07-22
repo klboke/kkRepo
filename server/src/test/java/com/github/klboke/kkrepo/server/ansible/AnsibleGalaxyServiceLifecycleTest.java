@@ -69,6 +69,12 @@ class AnsibleGalaxyServiceLifecycleTest {
     inspector = mock(AnsibleCollectionArchiveInspector.class);
     fetcher = mock(HttpRemoteFetcher.class);
     runtimes = mock(RepositoryRuntimeRegistry.class);
+    when(registry.tryAcquireLease(anyString(), anyString(), any())).thenAnswer(invocation -> {
+      Instant now = Instant.now();
+      return Optional.of(new AnsibleGalaxyRegistryDao.Lease(
+          invocation.getArgument(0), invocation.getArgument(1), 1L,
+          now.plusSeconds(60), now));
+    });
     service = new AnsibleGalaxyService(
         mapper, registry, assets, inspector, fetcher, runtimes,
         new AnsibleImportTaskLeaseManager(registry));
@@ -189,6 +195,48 @@ class AnsibleGalaxyServiceLifecycleTest {
     verify(assets, never()).stageCollection(
         any(), anyString(), anyString(), any(java.io.InputStream.class), any(), any());
     verify(registry, never()).createTask(any());
+  }
+
+  @Test
+  void activeMultipartCoordinateIsRejectedBeforeStaging() {
+    RepositoryRuntime hosted = runtime(2L, RepositoryType.HOSTED, null, List.of());
+    when(registry.findActiveTaskId(hosted.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.of("task-winner"));
+
+    AnsibleGalaxyExceptions.Conflict failure = assertThrows(
+        AnsibleGalaxyExceptions.Conflict.class, () -> service.publish(
+            hosted, "api/v3/artifacts/collections/", null, BASE,
+            new ByteArrayInputStream(new byte[] {1}), FILENAME, SHA256,
+            "alice", null, false));
+
+    assertEquals(400, failure.status());
+    verify(assets, never()).stageCollection(
+        any(), anyString(), anyString(), any(java.io.InputStream.class), any(), any());
+    verify(registry, never()).createTask(any());
+  }
+
+  @Test
+  void versionCommittedDuringStagingIsRejectedBeforeTaskCreation() {
+    RepositoryRuntime hosted = runtime(2L, RepositoryType.HOSTED, null, List.of());
+    AssetRecord staged = asset(
+        44L, hosted.id(), null, 54L, ".ansible/staging/task/" + FILENAME);
+    when(registry.findVersion(hosted.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.empty(), Optional.of(version(hosted.id(), 30L, 20L)));
+    when(assets.stageCollection(
+        eq(hosted), anyString(), eq(FILENAME), any(java.io.InputStream.class),
+        eq("alice"), eq(null)))
+        .thenReturn(staged);
+    when(assets.requiredBlob(staged)).thenReturn(blob(54L, 1L, SHA256));
+
+    AnsibleGalaxyExceptions.Conflict failure = assertThrows(
+        AnsibleGalaxyExceptions.Conflict.class, () -> service.publish(
+            hosted, "api/v3/artifacts/collections/", null, BASE,
+            new ByteArrayInputStream(new byte[] {1}), FILENAME, SHA256,
+            "alice", null, false));
+
+    assertEquals(400, failure.status());
+    verify(registry, never()).createTask(any());
+    verify(assets).delete(eq(hosted), anyString());
   }
 
   @Test
@@ -329,6 +377,23 @@ class AnsibleGalaxyServiceLifecycleTest {
 
     verify(assets, never()).delete(
         hosted, "api/v3/plugin/ansible/content/published/collections/artifacts/" + FILENAME);
+    assertFalse(Files.exists(inspected.file()));
+  }
+
+  @Test
+  void directPutCannotBypassAnActiveMultipartReservation() throws Exception {
+    RepositoryRuntime hosted = runtime(4L, RepositoryType.HOSTED, null, List.of());
+    AnsibleCollectionArchiveInspector.InspectedCollection inspected = inspected("reserved-put");
+    when(inspector.inspect(any())).thenReturn(inspected);
+    when(registry.findActiveTaskId(hosted.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.of("task-winner"));
+
+    assertThrows(AnsibleGalaxyExceptions.Conflict.class, () -> service.putArtifact(
+        hosted,
+        "api/v3/plugin/ansible/content/published/collections/artifacts/" + FILENAME,
+        new ByteArrayInputStream(new byte[] {1}), "alice", "127.0.0.1"));
+
+    verify(assets, never()).storeCollection(any(), any(), any(), any(), any(), any(), any());
     assertFalse(Files.exists(inspected.file()));
   }
 

@@ -168,7 +168,10 @@ public class AnsibleGalaxyService {
     }
     CollectionCoordinate coordinate = collectionCoordinate(filename);
     if (registry.findVersion(
-        runtime.id(), coordinate.namespace(), coordinate.name(), coordinate.version()).isPresent()) {
+            runtime.id(), coordinate.namespace(), coordinate.name(), coordinate.version()).isPresent()
+        || registry.findActiveTaskId(
+            runtime.id(), coordinate.namespace(), coordinate.name(), coordinate.version())
+            .isPresent()) {
       throw collectionExists(filename);
     }
     String taskId = UUID.randomUUID().toString();
@@ -181,16 +184,12 @@ public class AnsibleGalaxyService {
             "Multipart sha256 does not match the collection artifact");
       }
       Instant now = Instant.now();
-      try {
-        registry.createTask(new AnsibleGalaxyRegistryDao.ImportTask(
-            taskId, runtime.id(), actor, TASK_WAITING, List.of(), null, null,
-            coordinate.namespace(), coordinate.name(), coordinate.version(), filename,
-            expectedSha256.toLowerCase(Locale.ROOT),
-            stagedBlob.sha256(), staged.id(), 0, null, null, 0L,
-            now, null, null, now));
-      } catch (DuplicateKeyException concurrentPublish) {
-        throw collectionExists(filename);
-      }
+      createReservedTask(runtime, coordinate, new AnsibleGalaxyRegistryDao.ImportTask(
+          taskId, runtime.id(), actor, TASK_WAITING, List.of(), null, null,
+          coordinate.namespace(), coordinate.name(), coordinate.version(), filename,
+          expectedSha256.toLowerCase(Locale.ROOT),
+          stagedBlob.sha256(), staged.id(), 0, null, null, 0L,
+          now, null, null, now));
       String taskPath = "api/v3/imports/collections/" + taskId + "/";
       return jsonResponse(Map.of("task", taskPath), 202, headOnly, now)
           .withHeader("Location", normalizedBase(repositoryBaseUrl) + taskPath);
@@ -1115,6 +1114,9 @@ public class AnsibleGalaxyService {
       }
       throw collectionExists(inspected.filename());
     }
+    if (reservedByAnotherTask(runtime.id(), inspected, importTaskId)) {
+      throw collectionExists(inspected.filename());
+    }
     String coordinateLease = leaseKey(runtime.id(), "publish", inspected.namespace(),
         inspected.name(), inspected.version());
     AnsibleGalaxyRegistryDao.Lease lease = acquireLease(coordinateLease);
@@ -1129,6 +1131,9 @@ public class AnsibleGalaxyService {
             existing.get(), inspected, allowExistingSameArtifact, importTaskId)) {
           return existing.get();
         }
+        throw collectionExists(inspected.filename());
+      }
+      if (reservedByAnotherTask(runtime.id(), inspected, importTaskId)) {
         throw collectionExists(inspected.filename());
       }
       Instant now = Instant.now();
@@ -1301,6 +1306,49 @@ public class AnsibleGalaxyService {
     return allowExistingSameArtifact
         && existing.artifactSha256().equalsIgnoreCase(inspected.sha256())
         && (importTaskId == null || importTaskId.equals(existing.importTaskId()));
+  }
+
+  private void createReservedTask(
+      RepositoryRuntime runtime,
+      CollectionCoordinate coordinate,
+      AnsibleGalaxyRegistryDao.ImportTask task) {
+    if (registry.findVersion(
+            runtime.id(), coordinate.namespace(), coordinate.name(), coordinate.version()).isPresent()
+        || registry.findActiveTaskId(
+            runtime.id(), coordinate.namespace(), coordinate.name(), coordinate.version())
+            .isPresent()) {
+      throw collectionExists(task.artifactFilename());
+    }
+    String coordinateLease = leaseKey(runtime.id(), "publish", coordinate.namespace(),
+        coordinate.name(), coordinate.version());
+    AnsibleGalaxyRegistryDao.Lease lease = acquireLease(coordinateLease);
+    try {
+      if (registry.findVersion(
+              runtime.id(), coordinate.namespace(), coordinate.name(), coordinate.version())
+              .isPresent()
+          || registry.findActiveTaskId(
+              runtime.id(), coordinate.namespace(), coordinate.name(), coordinate.version())
+              .isPresent()) {
+        throw collectionExists(task.artifactFilename());
+      }
+      try {
+        registry.createTask(task);
+      } catch (DuplicateKeyException concurrentPublish) {
+        throw collectionExists(task.artifactFilename());
+      }
+    } finally {
+      registry.releaseLease(lease.leaseKey(), lease.owner(), lease.fencingToken());
+    }
+  }
+
+  private boolean reservedByAnotherTask(
+      long repositoryId,
+      AnsibleCollectionArchiveInspector.InspectedCollection inspected,
+      String importTaskId) {
+    return registry.findActiveTaskId(
+            repositoryId, inspected.namespace(), inspected.name(), inspected.version())
+        .filter(taskId -> !taskId.equals(importTaskId))
+        .isPresent();
   }
 
   private static AnsibleGalaxyExceptions.Conflict collectionExists(String filename) {

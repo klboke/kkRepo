@@ -428,6 +428,8 @@ public abstract class PersistenceApiContract {
         .filter(task -> task.repositoryId() == repositoryId)
         .findFirst()
         .orElseThrow();
+    assertEquals(winner.taskId(), registry.findActiveTaskId(
+        repositoryId, "acme", "tools", "2.0.0").orElseThrow());
     AnsibleGalaxyRegistryDao.ImportTask claimed = registry.claimTask(
         winner.taskId(), "reservation-worker", now.plusSeconds(31), now.plusSeconds(1))
         .orElseThrow();
@@ -436,8 +438,13 @@ public abstract class PersistenceApiContract {
         AnsibleGalaxyRegistryDao.TASK_FAILED, List.of(), "fixture.failure", "fixture failure",
         claimed.namespaceLc(), claimed.nameLc(), claimed.versionNormalized(),
         claimed.artifactFilename(), claimed.actualSha256(), now.plusSeconds(2)));
+    assertTrue(registry.findActiveTaskId(
+        repositoryId, "acme", "tools", "2.0.0").isEmpty());
+    String retryTaskId = "55555555-6666-7777-8888-999999999999";
     assertNotNull(registry.createTask(ansibleImportTask(
-        "55555555-6666-7777-8888-999999999999", repositoryId, now.plusSeconds(3))));
+        retryTaskId, repositoryId, now.plusSeconds(3))));
+    assertEquals(retryTaskId, registry.findActiveTaskId(
+        repositoryId, "acme", "tools", "2.0.0").orElseThrow());
   }
 
   @Test

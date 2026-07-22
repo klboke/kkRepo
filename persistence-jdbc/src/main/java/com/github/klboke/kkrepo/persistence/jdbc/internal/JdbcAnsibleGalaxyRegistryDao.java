@@ -379,6 +379,17 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
   }
 
   @Override
+  public Optional<String> findActiveTaskId(
+      long repositoryId, String namespaceLc, String nameLc, String versionNormalized) {
+    byte[] coordinateHash = PersistenceHashes.componentCoordinateHash(
+        namespaceLc, nameLc, versionNormalized);
+    return jdbc.queryForList("""
+        SELECT task_uuid FROM ansible_import_task
+        WHERE repository_id = ? AND active_coordinate_hash = ?
+        """, String.class, repositoryId, coordinateHash).stream().findFirst();
+  }
+
+  @Override
   public List<ImportTask> listClaimableTasks(Instant now, int limit) {
     if (limit < 1 || limit > 1000) throw new IllegalArgumentException("Invalid task claim limit");
     return jdbc.query("""

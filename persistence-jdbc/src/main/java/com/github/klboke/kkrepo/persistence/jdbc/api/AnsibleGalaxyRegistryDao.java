@@ -79,6 +79,9 @@ public interface AnsibleGalaxyRegistryDao {
 
   Optional<ImportTask> findTask(String taskId);
 
+  Optional<String> findActiveTaskId(
+      long repositoryId, String namespaceLc, String nameLc, String versionNormalized);
+
   List<ImportTask> listClaimableTasks(Instant now, int limit);
 
   /** Atomically claims a disjoint task batch with row locking and skip-locked semantics. */
