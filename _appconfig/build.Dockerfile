@@ -13,10 +13,9 @@ FROM registry.qunhequnhe.com/proxy/library/eclipse-temurin:25-jre-jammy
 
 WORKDIR /app
 
-RUN groupadd --system kkrepo \
-    && useradd --system --gid kkrepo --home-dir /app --shell /usr/sbin/nologin kkrepo
+RUN mkdir -p /var/log/kkrepo
 
-COPY --from=build --chown=kkrepo:kkrepo /tmp/kkrepo.jar /app/kkrepo.jar
+COPY --from=build /tmp/kkrepo.jar /app/kkrepo.jar
 
 ENV JAVA_TOOL_OPTIONS="" \
     SPRING_PROFILES_ACTIVE=default \
@@ -24,6 +23,6 @@ ENV JAVA_TOOL_OPTIONS="" \
 
 EXPOSE 8080 8081
 
-USER kkrepo
+USER root
 
 ENTRYPOINT ["java", "-jar", "/app/kkrepo.jar"]
