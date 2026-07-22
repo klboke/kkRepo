@@ -64,7 +64,7 @@ ansible-galaxy collection publish ../../dist/acme-tools-1.0.0.tar.gz \
 
 Some Ansible 2.9 installations expose `--api-key` instead of `--token`; pass the same token value with the flag supported by that client. `--no-wait` is supported when the caller wants to poll the returned durable import task separately.
 
-Each `(namespace, name, version)` is immutable. Re-publishing the same version fails even when the repository write policy otherwise allows updates. Build a new collection version instead.
+Each `(namespace, name, version)` is immutable. The multipart route derives the coordinate from the required canonical archive filename and rejects an already-published version before staging or queuing work. A task retains its publication provenance so crash recovery is idempotent while concurrent duplicate tasks cannot both complete. Re-publishing the same version fails even when the repository write policy otherwise allows updates. Build a new collection version instead.
 
 The Nexus-compatible direct upload path is also available for existing automation:
 

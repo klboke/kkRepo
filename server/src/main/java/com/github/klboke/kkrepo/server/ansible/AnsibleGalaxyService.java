@@ -166,6 +166,11 @@ public class AnsibleGalaxyService {
       throw new AnsibleGalaxyExceptions.BadRequest(
           "Ansible publish requires a safe collection artifact filename");
     }
+    CollectionCoordinate coordinate = collectionCoordinate(filename);
+    if (registry.findVersion(
+        runtime.id(), coordinate.namespace(), coordinate.name(), coordinate.version()).isPresent()) {
+      throw collectionExists(filename);
+    }
     String taskId = UUID.randomUUID().toString();
     AssetRecord staged = assets.stageCollection(
         runtime, taskId, filename, artifact, actor, ip);
@@ -178,7 +183,8 @@ public class AnsibleGalaxyService {
       Instant now = Instant.now();
       registry.createTask(new AnsibleGalaxyRegistryDao.ImportTask(
           taskId, runtime.id(), actor, TASK_WAITING, List.of(), null, null,
-          null, null, null, filename, expectedSha256.toLowerCase(Locale.ROOT),
+          coordinate.namespace(), coordinate.name(), coordinate.version(), filename,
+          expectedSha256.toLowerCase(Locale.ROOT),
           stagedBlob.sha256(), staged.id(), 0, null, null, 0L,
           now, null, null, now));
       String taskPath = "api/v3/imports/collections/" + taskId + "/";
@@ -243,7 +249,7 @@ public class AnsibleGalaxyService {
     }
     return persistCollection(
         runtime, inspected, runtime.isProxy() ? "MIGRATION_PROXY" : "MIGRATION_HOSTED",
-        Map.of(), actor, ip, true, publishedAt, null);
+        Map.of(), actor, ip, true, publishedAt, null, null);
   }
 
   /** Claims and resumes one durable task after a node crash or lease expiry. */
@@ -282,7 +288,7 @@ public class AnsibleGalaxyService {
       validateRecoveredTask(task, inspected);
       taskLease.assertHeld();
       terminal = finishSuccessfulTask(
-          runtime, task, inspected, task.requester(), null, true, taskLease);
+          runtime, task, inspected, task.requester(), null, taskLease);
     } catch (RuntimeException | IOException e) {
       terminal = finishFailed(task, errorCode(e), safeDetail(e));
     } finally {
@@ -1082,7 +1088,7 @@ public class AnsibleGalaxyService {
       boolean allowExistingSameArtifact) {
     return persistCollection(
         runtime, inspected, sourceKind, upstreamIdentity, actor, ip,
-        allowExistingSameArtifact, null, null);
+        allowExistingSameArtifact, null, null, null);
   }
 
   private AnsibleGalaxyRegistryDao.CollectionVersion persistCollection(
@@ -1094,16 +1100,16 @@ public class AnsibleGalaxyService {
       String ip,
       boolean allowExistingSameArtifact,
       Instant publishedAt,
-      Long stagingAssetId) {
+      Long stagingAssetId,
+      String importTaskId) {
     Optional<AnsibleGalaxyRegistryDao.CollectionVersion> existing = registry.findVersion(
         runtime.id(), inspected.namespace(), inspected.name(), inspected.version());
     if (existing.isPresent()) {
-      if (allowExistingSameArtifact
-          && existing.get().artifactSha256().equalsIgnoreCase(inspected.sha256())) {
+      if (reusableExistingVersion(
+          existing.get(), inspected, allowExistingSameArtifact, importTaskId)) {
         return existing.get();
       }
-      throw new AnsibleGalaxyExceptions.Conflict(
-          inspected.filename() + " cannot be updated because the collection version exists");
+      throw collectionExists(inspected.filename());
     }
     String coordinateLease = leaseKey(runtime.id(), "publish", inspected.namespace(),
         inspected.name(), inspected.version());
@@ -1115,12 +1121,11 @@ public class AnsibleGalaxyService {
       existing = registry.findVersion(
           runtime.id(), inspected.namespace(), inspected.name(), inspected.version());
       if (existing.isPresent()) {
-        if (allowExistingSameArtifact
-            && existing.get().artifactSha256().equalsIgnoreCase(inspected.sha256())) {
+        if (reusableExistingVersion(
+            existing.get(), inspected, allowExistingSameArtifact, importTaskId)) {
           return existing.get();
         }
-        throw new AnsibleGalaxyExceptions.Conflict(
-            inspected.filename() + " cannot be updated because the collection version exists");
+        throw collectionExists(inspected.filename());
       }
       Instant now = Instant.now();
       Instant publicationTime = publishedAt == null ? now : publishedAt;
@@ -1158,19 +1163,18 @@ public class AnsibleGalaxyService {
               null, runtime.id(), asset.componentId(), asset.id(), inspected.namespace(),
               inspected.namespace(), inspected.name(), inspected.name(), inspected.version(),
               inspected.version(), inspected.filename(), inspected.sha256(), inspected.size(),
-              immutableMap(metadata), inspected.dependencies(), requiresAnsible, sourceKind, 0L,
-              AnsibleGalaxyRegistryDao.VERSION_READY, publicationTime, now, now);
+              immutableMap(metadata), inspected.dependencies(), requiresAnsible, sourceKind,
+              importTaskId, 0L, AnsibleGalaxyRegistryDao.VERSION_READY, publicationTime, now, now);
       try {
         return registry.insertVersion(candidate);
       } catch (DuplicateKeyException e) {
         Optional<AnsibleGalaxyRegistryDao.CollectionVersion> winner = registry.findVersion(
             runtime.id(), inspected.namespace(), inspected.name(), inspected.version());
-        if (allowExistingSameArtifact && winner.isPresent()
-            && winner.get().artifactSha256().equalsIgnoreCase(inspected.sha256())) {
+        if (winner.isPresent() && reusableExistingVersion(
+            winner.get(), inspected, allowExistingSameArtifact, importTaskId)) {
           return winner.get();
         }
-        throw new AnsibleGalaxyExceptions.Conflict(
-            inspected.filename() + " cannot be updated because the collection version exists");
+        throw collectionExists(inspected.filename());
       }
     } catch (RuntimeException e) {
       if (createdAsset && registry.findVersion(
@@ -1189,11 +1193,10 @@ public class AnsibleGalaxyService {
       AnsibleCollectionArchiveInspector.InspectedCollection inspected,
       String actor,
       String ip,
-      boolean allowExistingSameArtifact,
       AnsibleImportTaskLeaseManager.Lease taskLease) {
     AnsibleGalaxyRegistryDao.CollectionVersion version = persistCollection(
-        runtime, inspected, "HOSTED", Map.of(), actor, ip, allowExistingSameArtifact,
-        null, task.stagingAssetId());
+        runtime, inspected, "HOSTED", Map.of(), actor, ip, true,
+        null, task.stagingAssetId(), task.taskId());
     taskLease.assertHeld();
     Instant finished = Instant.now();
     List<Map<String, Object>> messages = List.of(Map.of(
@@ -1262,6 +1265,43 @@ public class AnsibleGalaxyService {
       throw new AnsibleGalaxyExceptions.BadRequest(
           "Multipart sha256 does not match the collection artifact");
     }
+  }
+
+  private static CollectionCoordinate collectionCoordinate(String filename) {
+    String suffix = ".tar.gz";
+    int namespaceEnd = filename.indexOf('-');
+    int nameEnd = filename.indexOf('-', namespaceEnd + 1);
+    if (namespaceEnd <= 0 || nameEnd <= namespaceEnd + 1 || !filename.endsWith(suffix)) {
+      throw new AnsibleGalaxyExceptions.BadRequest(
+          "Ansible publish requires a canonical collection artifact filename");
+    }
+    String namespace = filename.substring(0, namespaceEnd);
+    String name = filename.substring(namespaceEnd + 1, nameEnd);
+    String version = filename.substring(nameEnd + 1, filename.length() - suffix.length());
+    try {
+      if (!filename.equals(AnsibleGalaxyPathParser.canonicalFilename(namespace, name, version))) {
+        throw new IllegalArgumentException("non-canonical filename");
+      }
+    } catch (IllegalArgumentException error) {
+      throw new AnsibleGalaxyExceptions.BadRequest(
+          "Ansible publish requires a canonical collection artifact filename", error);
+    }
+    return new CollectionCoordinate(namespace, name, version);
+  }
+
+  private static boolean reusableExistingVersion(
+      AnsibleGalaxyRegistryDao.CollectionVersion existing,
+      AnsibleCollectionArchiveInspector.InspectedCollection inspected,
+      boolean allowExistingSameArtifact,
+      String importTaskId) {
+    return allowExistingSameArtifact
+        && existing.artifactSha256().equalsIgnoreCase(inspected.sha256())
+        && (importTaskId == null || importTaskId.equals(existing.importTaskId()));
+  }
+
+  private static AnsibleGalaxyExceptions.Conflict collectionExists(String filename) {
+    return new AnsibleGalaxyExceptions.Conflict(
+        filename + " cannot be updated because the collection version exists");
   }
 
   static void validateUpstreamDetail(
@@ -2216,6 +2256,9 @@ public class AnsibleGalaxyService {
       return proxyInventoryValidUntil != null
           && !proxyInventoryValidUntil.isAfter(Instant.now());
     }
+  }
+
+  private record CollectionCoordinate(String namespace, String name, String version) {
   }
 
   private record ResolvedVersionMetadata(

@@ -137,9 +137,9 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
           (repository_id, component_id, artifact_asset_id, namespace_lc, namespace_display,
            name_lc, name_display, version_original, version_normalized, artifact_filename,
            artifact_sha256, artifact_size, metadata_json, dependencies_json, requires_ansible,
-           source_kind, revision, state, published_at,
+           source_kind, import_task_uuid, revision, state, published_at,
            created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, statement -> {
       statement.setLong(1, version.repositoryId());
       statement.setLong(2, version.componentId());
@@ -157,11 +157,12 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
       json.bindSerialized(statement, 14, dependenciesJson);
       statement.setString(15, version.requiresAnsible());
       statement.setString(16, version.sourceKind());
-      statement.setLong(17, revision);
-      statement.setString(18, state);
-      statement.setTimestamp(19, nullableTimestamp(publishedAt));
-      statement.setTimestamp(20, nullableTimestamp(createdAt));
-      statement.setTimestamp(21, nullableTimestamp(updatedAt));
+      statement.setString(17, version.importTaskId());
+      statement.setLong(18, revision);
+      statement.setString(19, state);
+      statement.setTimestamp(20, nullableTimestamp(publishedAt));
+      statement.setTimestamp(21, nullableTimestamp(createdAt));
+      statement.setTimestamp(22, nullableTimestamp(updatedAt));
     });
     invalidateContainingGroups(
         version.repositoryId(), version.namespaceLc(), version.nameLc(),
@@ -172,8 +173,8 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
         version.versionOriginal(), version.versionNormalized(), version.artifactFilename(),
         version.artifactSha256(), version.artifactSize(), safeMap(version.metadata()),
         safeMap(version.dependencies()),
-        version.requiresAnsible(), version.sourceKind(), revision, state, publishedAt,
-        createdAt, updatedAt);
+        version.requiresAnsible(), version.sourceKind(), version.importTaskId(), revision,
+        state, publishedAt, createdAt, updatedAt);
   }
 
   @Override
@@ -952,8 +953,9 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
         rs.getString("version_normalized"), rs.getString("artifact_filename"),
         rs.getString("artifact_sha256"), rs.getLong("artifact_size"),
         json.read(rs.getString("metadata_json")), json.read(rs.getString("dependencies_json")),
-        rs.getString("requires_ansible"), rs.getString("source_kind"), rs.getLong("revision"),
-        rs.getString("state"), nullableInstant(rs, "published_at"),
+        rs.getString("requires_ansible"), rs.getString("source_kind"),
+        rs.getString("import_task_uuid"), rs.getLong("revision"), rs.getString("state"),
+        nullableInstant(rs, "published_at"),
         nullableInstant(rs, "created_at"), nullableInstant(rs, "updated_at"));
   }
 

@@ -64,7 +64,7 @@ ansible-galaxy collection publish ../../dist/acme-tools-1.0.0.tar.gz \
 
 部分 Ansible 2.9 版本提供的是 `--api-key` 而不是 `--token`，此时把同一个 token 值传给客户端支持的选项。需要调用方自行轮询持久化 import task 时可以使用 `--no-wait`。
 
-每个 `(namespace, name, version)` 都不可变。即使仓库 write policy 允许更新，重复发布同一 version 也会失败；请在 `galaxy.yml` 中提升版本。
+每个 `(namespace, name, version)` 都不可变。Multipart 路径从强制 canonical archive filename 得到 coordinate，并在写 staging 或创建任务前拒绝已发布版本；task 保留发布来源标识，使崩溃恢复可幂等完成，而并发重复任务不能同时成功。即使仓库 write policy 允许更新，重复发布同一 version 也会失败；请在 `galaxy.yml` 中提升版本。
 
 既有 Nexus 自动化还可以使用兼容的直接上传路径：
 

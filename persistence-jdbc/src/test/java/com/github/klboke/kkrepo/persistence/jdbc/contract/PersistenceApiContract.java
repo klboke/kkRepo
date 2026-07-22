@@ -162,13 +162,15 @@ public abstract class PersistenceApiContract {
             "1.2.3", "1.2.3", "acme-tools-1.2.3.tar.gz", "a".repeat(64), 42L,
             Map.of("authors", List.of("kkrepo")),
             Map.of("community.general", ">=8.0.0,<9.0.0"), ">=2.16", "HOSTED",
-            0L, AnsibleGalaxyRegistryDao.VERSION_READY, now, now, now);
+            "11111111-1111-1111-1111-111111111111", 0L,
+            AnsibleGalaxyRegistryDao.VERSION_READY, now, now, now);
     AnsibleGalaxyRegistryDao.CollectionVersion stored =
         inTransaction(() -> registry.insertVersion(fixture));
     long revision = stored.revision();
 
     assertNotNull(stored.id());
     assertTrue(revision > 0L);
+    assertEquals("11111111-1111-1111-1111-111111111111", stored.importTaskId());
     assertEquals("1.2.3", registry.findVersion(
         repositoryId, "acme", "tools", "1.2.3").orElseThrow().versionOriginal());
     assertEquals(List.of("1.2.3"), registry.listVersions(repositoryId, "acme", "tools")

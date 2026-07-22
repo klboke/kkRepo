@@ -16,6 +16,7 @@ CREATE TABLE ansible_collection_version (
   dependencies_json JSONB NOT NULL,
   requires_ansible VARCHAR(255),
   source_kind VARCHAR(16) NOT NULL,
+  import_task_uuid VARCHAR(36),
   revision BIGINT NOT NULL,
   state VARCHAR(16) NOT NULL DEFAULT 'READY',
   published_at TIMESTAMPTZ(3) NOT NULL,

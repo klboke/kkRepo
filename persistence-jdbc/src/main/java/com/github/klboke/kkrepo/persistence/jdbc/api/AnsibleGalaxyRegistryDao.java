@@ -182,11 +182,42 @@ public interface AnsibleGalaxyRegistryDao {
       Map<String, Object> dependencies,
       String requiresAnsible,
       String sourceKind,
+      String importTaskId,
       long revision,
       String state,
       Instant publishedAt,
       Instant createdAt,
       Instant updatedAt) {
+
+    public CollectionVersion(
+        Long id,
+        long repositoryId,
+        long componentId,
+        long artifactAssetId,
+        String namespaceLc,
+        String namespaceDisplay,
+        String nameLc,
+        String nameDisplay,
+        String versionOriginal,
+        String versionNormalized,
+        String artifactFilename,
+        String artifactSha256,
+        long artifactSize,
+        Map<String, Object> metadata,
+        Map<String, Object> dependencies,
+        String requiresAnsible,
+        String sourceKind,
+        long revision,
+        String state,
+        Instant publishedAt,
+        Instant createdAt,
+        Instant updatedAt) {
+      this(
+          id, repositoryId, componentId, artifactAssetId, namespaceLc, namespaceDisplay,
+          nameLc, nameDisplay, versionOriginal, versionNormalized, artifactFilename,
+          artifactSha256, artifactSize, metadata, dependencies, requiresAnsible, sourceKind,
+          null, revision, state, publishedAt, createdAt, updatedAt);
+    }
   }
 
   record ArtifactRef(
