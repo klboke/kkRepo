@@ -32,12 +32,17 @@ final class AnsibleVersionListCache {
     this.enabled = enabled;
   }
 
-  Optional<List<String>> find(String identity, String revisionState) {
+  Optional<List<String>> find(
+      String identity, String revisionState, Instant proxyInventoryValidUntil) {
     if (!enabled || cache == null) return Optional.empty();
     try {
+      Instant now = Instant.now();
+      if (proxyInventoryValidUntil != null && !proxyInventoryValidUntil.isAfter(now)) {
+        return Optional.empty();
+      }
       return cache.getJson(NAMESPACE, key(identity), Snapshot.class)
           .filter(snapshot -> Objects.equals(snapshot.revisionState(), revisionState))
-          .filter(snapshot -> snapshot.cachedAt().plus(TTL).isAfter(Instant.now()))
+          .filter(snapshot -> snapshot.cachedAt().plus(TTL).isAfter(now))
           .map(Snapshot::versions);
     } catch (RuntimeException error) {
       log.warn("Failed reading Ansible version-list cache", error);
@@ -45,14 +50,25 @@ final class AnsibleVersionListCache {
     }
   }
 
-  void put(String identity, String revisionState, List<String> versions) {
+  void put(
+      String identity,
+      String revisionState,
+      Instant proxyInventoryValidUntil,
+      List<String> versions) {
     if (!enabled || cache == null) return;
     try {
+      Instant cachedAt = Instant.now();
+      Duration effectiveTtl = TTL;
+      if (proxyInventoryValidUntil != null) {
+        Duration remaining = Duration.between(cachedAt, proxyInventoryValidUntil);
+        if (remaining.isZero() || remaining.isNegative()) return;
+        if (remaining.compareTo(effectiveTtl) < 0) effectiveTtl = remaining;
+      }
       cache.putJson(
           NAMESPACE,
           key(identity),
-          new Snapshot(List.copyOf(versions), revisionState, Instant.now()),
-          TTL);
+          new Snapshot(List.copyOf(versions), revisionState, cachedAt),
+          effectiveTtl);
     } catch (RuntimeException error) {
       log.warn("Failed writing Ansible version-list cache", error);
     }

@@ -128,7 +128,7 @@ Import task、proxy state、source binding、lease、fencing token 和 repositor
 
 发布请求只把正文流式写入一次 staging blob，持久化 `WAITING` task 后即返回 `202`，archive 检查不再占用请求线程。有界 worker 使用 `FOR UPDATE SKIP LOCKED` 原子批量领取 task，通过受限 inspection pool 校验 archive，并直接提升既有 staging blob 引用；promotion 阶段不再二次上传或重复执行 hash pass。慢速检查、proxy 下载和持久化期间会续租带 fencing token 的数据库 lease；同节点请求再通过 single-flight 合并，等待方使用指数退避，避免固定频率轮询数据库。
 
-Version-list 读取一次批量 revision snapshot，并使用按 revision 校验的本地 cache。Collection publish/delete 只递增精确 coordinate revision，并仅失效受影响的 group binding，不再扫描或重写仓库全部版本。Proxy version inventory 使用有上限的规范化行保存，只有 TTL 到期后才重新遍历上游全部分页。Proxy JSON 以有界流方式解析，只把 discovery、version、artifact、dependency 和客户端所需 metadata 投影到关系数据库 JSON 列。Artifact 热路径使用轻量 asset/blob 引用查询并直接执行 blob `GET`，不再先发一次对象存储 `stat`。
+Version-list 读取一次批量 revision snapshot，并使用按 revision 校验的本地 cache；其有效期还受该 coordinate 所有 proxy inventory 中最早的 metadata 到期时间约束。Collection publish/delete 只递增精确 coordinate revision，并仅失效受影响的 group binding，不再扫描或重写仓库全部版本。Proxy version inventory 使用有上限的规范化行保存，只有 TTL 到期后才重新遍历上游全部分页。Proxy JSON 以有界流方式解析，只把 discovery、version、artifact、dependency 和客户端所需 metadata 投影到关系数据库 JSON 列。Artifact 热路径使用轻量 asset/blob 引用查询并直接执行 blob `GET`，不再先发一次对象存储 `stat`。
 
 每个副本还会运行有界 staging cleanup。默认通过 `FOR UPDATE SKIP LOCKED` 领取超过 24 小时的 `.ansible/staging/` asset 行，保留仍属于 `WAITING`/`RUNNING` import task 的内容，只解除 task 缺失或已经终态的引用。只有最后一个 asset 引用消失后才把 blob 交给全局 GC，因此进程在 staging、task 创建、task 完成或请求清理之间崩溃都不会永久泄漏 collection bytes。运维可通过 `KKREPO_ANSIBLE_STAGING_CLEANUP_*` 环境变量调整 interval、initial delay、batch size 和 grace period；grace period 的安全下限为 5 分钟。
 

@@ -442,35 +442,63 @@ public class AnsibleGalaxyService {
 
   private List<String> sortedVersionNames(
       RepositoryRuntime runtime, String namespace, String name) {
-    String identity = runtime.id() + ":" + namespace + ":" + name;
-    String revisionState = versionListRevisionState(runtime);
-    if (versionListCache != null) {
-      Optional<List<String>> cached = versionListCache.find(identity, revisionState);
-      if (cached.isPresent()) return cached.get();
+    if (versionListCache == null) {
+      return AnsibleGalaxyVersions.sortDescending(
+          listVersionNames(runtime, namespace, name, new HashSet<>()));
     }
+    String identity = runtime.id() + ":" + namespace + ":" + name;
+    VersionListState cacheState = versionListState(runtime, namespace, name);
+    Optional<List<String>> cached = versionListCache.find(
+        identity, cacheState.revisionState(), cacheState.proxyInventoryValidUntil());
+    if (cached.isPresent()) return cached.get();
     List<String> sorted = AnsibleGalaxyVersions.sortDescending(
         listVersionNames(runtime, namespace, name, new HashSet<>()));
-    if (versionListCache != null) versionListCache.put(identity, revisionState, sorted);
+    if (cacheState.proxyInventoryExpired()) {
+      cacheState = versionListState(runtime, namespace, name);
+    }
+    versionListCache.put(
+        identity, cacheState.revisionState(), cacheState.proxyInventoryValidUntil(), sorted);
     return sorted;
   }
 
-  private String versionListRevisionState(RepositoryRuntime runtime) {
+  private VersionListState versionListState(
+      RepositoryRuntime runtime, String namespace, String name) {
     LinkedHashSet<Long> repositoryIds = new LinkedHashSet<>();
-    collectRepositoryIds(runtime, repositoryIds, new HashSet<>());
+    LinkedHashSet<Long> proxyRepositoryIds = new LinkedHashSet<>();
+    collectRepositoryIds(runtime, repositoryIds, proxyRepositoryIds, new HashSet<>());
     Map<Long, Long> content = registry.currentRepositoryRevisions(repositoryIds);
     Map<Long, Long> config = registry.currentGroupConfigRevisions(repositoryIds);
     StringBuilder state = new StringBuilder(repositoryIds.size() * 24);
     appendRevisionState(runtime, content, config, state, new HashSet<>());
-    return state.toString();
+    Instant proxyInventoryValidUntil = null;
+    if (!proxyRepositoryIds.isEmpty()) {
+      Map<Long, Instant> expirations = registry.currentProxyInventoryCacheUntil(
+          proxyRepositoryIds, namespace, name);
+      for (Long repositoryId : proxyRepositoryIds) {
+        Instant expiration = expirations.get(repositoryId);
+        if (expiration == null) {
+          proxyInventoryValidUntil = Instant.EPOCH;
+          break;
+        }
+        if (proxyInventoryValidUntil == null || expiration.isBefore(proxyInventoryValidUntil)) {
+          proxyInventoryValidUntil = expiration;
+        }
+      }
+    }
+    return new VersionListState(state.toString(), proxyInventoryValidUntil);
   }
 
   private static void collectRepositoryIds(
-      RepositoryRuntime runtime, Set<Long> repositoryIds, Set<Long> visiting) {
+      RepositoryRuntime runtime,
+      Set<Long> repositoryIds,
+      Set<Long> proxyRepositoryIds,
+      Set<Long> visiting) {
     if (runtime == null || !visiting.add(runtime.id())) return;
     try {
       repositoryIds.add(runtime.id());
+      if (runtime.isProxy()) proxyRepositoryIds.add(runtime.id());
       for (RepositoryRuntime member : safeMembers(runtime)) {
-        collectRepositoryIds(member, repositoryIds, visiting);
+        collectRepositoryIds(member, repositoryIds, proxyRepositoryIds, visiting);
       }
     } finally {
       visiting.remove(runtime.id());
@@ -2179,6 +2207,15 @@ public class AnsibleGalaxyService {
 
   private record UpstreamArtifact(
       String filename, String href, String downloadUrl, String sha256) {
+  }
+
+  private record VersionListState(
+      String revisionState, Instant proxyInventoryValidUntil) {
+
+    private boolean proxyInventoryExpired() {
+      return proxyInventoryValidUntil != null
+          && !proxyInventoryValidUntil.isAfter(Instant.now());
+    }
   }
 
   private record ResolvedVersionMetadata(

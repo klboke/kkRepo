@@ -291,6 +291,12 @@ public abstract class PersistenceApiContract {
         proxyRepositoryId, "acme", "tools"));
     assertTrue(registry.touchProxyInventory(
         proxyRepositoryId, "acme", "tools", now.plusSeconds(120), now.plusSeconds(1)));
+    assertEquals(
+        Map.of(proxyRepositoryId, now.plusSeconds(120)),
+        registry.currentProxyInventoryCacheUntil(
+            List.of(repositoryId, proxyRepositoryId), "acme", "tools"));
+    assertTrue(registry.currentProxyInventoryCacheUntil(
+        List.of(), "acme", "tools").isEmpty());
 
     long groupRevision = registry.nextGroupConfigRevision(groupRepositoryId);
     assertTrue(groupRevision > 0L);

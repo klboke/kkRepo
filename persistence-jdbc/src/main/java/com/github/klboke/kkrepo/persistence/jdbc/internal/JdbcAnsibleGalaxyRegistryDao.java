@@ -573,6 +573,32 @@ public class JdbcAnsibleGalaxyRegistryDao implements AnsibleGalaxyRegistryDao {
   }
 
   @Override
+  public Map<Long, Instant> currentProxyInventoryCacheUntil(
+      Collection<Long> repositoryIds, String namespaceLc, String nameLc) {
+    LinkedHashSet<Long> ids = new LinkedHashSet<>();
+    if (repositoryIds != null) {
+      repositoryIds.stream().filter(java.util.Objects::nonNull).forEach(ids::add);
+    }
+    if (ids.isEmpty()) return Map.of();
+    String placeholders = String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
+    List<Object> arguments = new ArrayList<>(ids.size() + 2);
+    arguments.add(namespaceLc);
+    arguments.add(nameLc);
+    arguments.addAll(ids);
+    LinkedHashMap<Long, Instant> cacheUntil = new LinkedHashMap<>();
+    jdbc.query(
+        "SELECT repository_id, cache_until FROM ansible_proxy_inventory "
+            + "WHERE namespace_lc = ? AND name_lc = ? AND repository_id IN ("
+            + placeholders + ")",
+        rs -> {
+          Instant value = nullableInstant(rs, "cache_until");
+          if (value != null) cacheUntil.put(rs.getLong("repository_id"), value);
+        },
+        arguments.toArray());
+    return Map.copyOf(cacheUntil);
+  }
+
+  @Override
   public List<String> listProxyInventoryVersionNames(
       long repositoryId, String namespaceLc, String nameLc) {
     return jdbc.queryForList("""

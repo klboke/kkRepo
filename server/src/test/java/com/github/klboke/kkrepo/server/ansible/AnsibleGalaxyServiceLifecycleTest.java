@@ -9,10 +9,12 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -27,6 +29,7 @@ import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
+import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
 import java.io.ByteArrayInputStream;
 import java.net.URI;
 import java.nio.file.Files;
@@ -569,6 +572,45 @@ class AnsibleGalaxyServiceLifecycleTest {
         BASE, false, "alice"));
 
     assertEquals(1, map(page.get("meta")).get("count"));
+  }
+
+  @Test
+  void versionListCacheDoesNotOutliveProxyInventoryMetadataTtl() throws Exception {
+    RepositoryRuntime proxy = runtime(
+        18L, RepositoryType.PROXY, "https://galaxy.example/", List.of());
+    AnsibleVersionListCache cache = new AnsibleVersionListCache(
+        new InMemorySharedCache(), true);
+    AnsibleGalaxyService cachedService = spy(new AnsibleGalaxyService(
+        mapper, registry, assets, inspector, fetcher, runtimes,
+        new AnsibleImportTaskLeaseManager(registry),
+        new AnsibleRegistryLeaseManager(registry), new AnsibleSingleFlight(), cache));
+    when(registry.currentRepositoryRevisions(any()))
+        .thenReturn(Map.of(proxy.id(), 7L));
+    when(registry.currentGroupConfigRevisions(any()))
+        .thenReturn(Map.of(proxy.id(), 0L));
+    when(registry.currentProxyInventoryCacheUntil(any(), eq("acme"), eq("tools")))
+        .thenReturn(
+            Map.of(proxy.id(), Instant.now().plusSeconds(60)),
+            Map.of(proxy.id(), Instant.now().minusSeconds(1)),
+            Map.of(proxy.id(), Instant.now().plusSeconds(60)));
+    when(registry.listVersionNames(proxy.id(), "acme", "tools")).thenReturn(List.of());
+    doReturn(List.of("1.0.0"), List.of("2.0.0"))
+        .when(cachedService).fetchProxyVersionNames(proxy, "acme", "tools");
+
+    Map<String, Object> first = json(cachedService.get(
+        proxy, "api/v3/collections/acme/tools/versions/", null,
+        BASE, false, "alice"));
+    Map<String, Object> refreshed = json(cachedService.get(
+        proxy, "api/v3/collections/acme/tools/versions/", null,
+        BASE, false, "alice"));
+    Map<String, Object> cached = json(cachedService.get(
+        proxy, "api/v3/collections/acme/tools/versions/", null,
+        BASE, false, "alice"));
+
+    assertEquals("1.0.0", map(((List<?>) first.get("data")).getFirst()).get("version"));
+    assertEquals("2.0.0", map(((List<?>) refreshed.get("data")).getFirst()).get("version"));
+    assertEquals("2.0.0", map(((List<?>) cached.get("data")).getFirst()).get("version"));
+    verify(cachedService, times(2)).fetchProxyVersionNames(proxy, "acme", "tools");
   }
 
   private void stubPersistence(

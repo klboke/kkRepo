@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -29,13 +30,13 @@ class AnsibleVersionListCacheTest {
     AnsibleVersionListCache cache = new AnsibleVersionListCache(shared, true);
     List<String> versions = new ArrayList<>(List.of("2.0.0", "1.0.0"));
 
-    cache.put("repo:acme:tools", "revision-2", versions);
+    cache.put("repo:acme:tools", "revision-2", null, versions);
     versions.clear();
 
     assertEquals(
         List.of("2.0.0", "1.0.0"),
-        cache.find("repo:acme:tools", "revision-2").orElseThrow());
-    assertTrue(cache.find("repo:acme:tools", "revision-1").isEmpty());
+        cache.find("repo:acme:tools", "revision-2", null).orElseThrow());
+    assertTrue(cache.find("repo:acme:tools", "revision-1", null).isEmpty());
   }
 
   @Test
@@ -52,7 +53,7 @@ class AnsibleVersionListCacheTest {
             null, "revision-2", Instant.now().minus(Duration.ofMinutes(11))),
         Duration.ofMinutes(1));
 
-    assertTrue(cache.find(identity, "revision-2").isEmpty());
+    assertTrue(cache.find(identity, "revision-2", null).isEmpty());
     assertEquals(List.of(), new AnsibleVersionListCache.Snapshot(
         null, "revision", Instant.now()).versions());
   }
@@ -62,12 +63,12 @@ class AnsibleVersionListCacheTest {
     SharedCache shared = mock(SharedCache.class);
     AnsibleVersionListCache disabled = new AnsibleVersionListCache(shared, false);
 
-    disabled.put("identity", "revision", List.of("1.0.0"));
+    disabled.put("identity", "revision", null, List.of("1.0.0"));
 
-    assertTrue(disabled.find("identity", "revision").isEmpty());
+    assertTrue(disabled.find("identity", "revision", null).isEmpty());
     verifyNoInteractions(shared);
     assertTrue(new AnsibleVersionListCache(null, true)
-        .find("identity", "revision").isEmpty());
+        .find("identity", "revision", null).isEmpty());
   }
 
   @Test
@@ -79,7 +80,23 @@ class AnsibleVersionListCacheTest {
         .when(shared).putJson(anyString(), anyString(), any(), any(Duration.class));
     AnsibleVersionListCache cache = new AnsibleVersionListCache(shared, true);
 
-    assertEquals(Optional.empty(), cache.find("identity", "revision"));
-    cache.put("identity", "revision", List.of("1.0.0"));
+    assertEquals(Optional.empty(), cache.find("identity", "revision", null));
+    cache.put("identity", "revision", null, List.of("1.0.0"));
+  }
+
+  @Test
+  void proxyInventoryExpirationBoundsReadsAndSharedCacheTtl() {
+    SharedCache shared = mock(SharedCache.class);
+    AnsibleVersionListCache cache = new AnsibleVersionListCache(shared, true);
+    Instant validUntil = Instant.now().plusSeconds(30);
+
+    cache.put("identity", "revision", validUntil, List.of("1.0.0"));
+
+    var ttl = org.mockito.ArgumentCaptor.forClass(Duration.class);
+    verify(shared).putJson(anyString(), anyString(), any(), ttl.capture());
+    assertTrue(ttl.getValue().compareTo(Duration.ofSeconds(25)) > 0);
+    assertTrue(ttl.getValue().compareTo(Duration.ofSeconds(30)) <= 0);
+    assertTrue(cache.find(
+        "identity", "revision", Instant.now().minusSeconds(1)).isEmpty());
   }
 }

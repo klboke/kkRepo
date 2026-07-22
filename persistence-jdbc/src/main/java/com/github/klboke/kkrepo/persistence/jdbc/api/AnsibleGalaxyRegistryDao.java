@@ -124,6 +124,9 @@ public interface AnsibleGalaxyRegistryDao {
   Optional<ProxyInventory> findProxyInventory(
       long repositoryId, String namespaceLc, String nameLc);
 
+  Map<Long, Instant> currentProxyInventoryCacheUntil(
+      Collection<Long> repositoryIds, String namespaceLc, String nameLc);
+
   List<String> listProxyInventoryVersionNames(
       long repositoryId, String namespaceLc, String nameLc);
 

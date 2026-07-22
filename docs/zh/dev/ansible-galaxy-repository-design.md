@@ -364,7 +364,7 @@ Base64 Bearer/Token compatibility 只在 Ansible Galaxy route 启用，不能扩
 
 - repository 配置、collection/version 的有界协议元数据、dependency、signature 引用、task、lease、source binding、negative cache、remote validator、asset/blob 引用和 revision 都以数据库/OSS 为真相。
 - collection artifact（包含完整 `MANIFEST.json`/`FILES.json`）和 signature blob 只存 OSS/S3/File blob store；线上游 JSON 只保留有界协议投影，任何必须原样保留的大 JSON 也必须写 blob，数据库只保存引用、hash、size 和协议状态。
-- 本地 cache 只保存可从共享真相重建的 discovery/metadata/binding 热数据，必须有 TTL 或 revision invalidation。
+- 本地 cache 只保存可从共享真相重建的 discovery/metadata/binding 热数据，必须有 TTL 或 revision invalidation；version-list cache 的有效期不得晚于该 coordinate 所有 proxy inventory 中最早的 `cache_until`。
 - publish/import、proxy download 和 group revalidation 使用数据库 lease/fencing 或 marker queue；单 JVM lock 只能减少本副本重复工作。
 - hosted publish/delete、proxy metadata 更新、group member 变化都递增共享版本水位，使其它副本在 TTL 之前也能观察变化。
 - 跨副本并发测试必须验证：同 version publish 一次成功、同 artifact 只回源一次、task 可接管、group metadata 与下载 source 一致。
