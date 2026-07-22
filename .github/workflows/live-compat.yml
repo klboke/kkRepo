@@ -725,6 +725,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
       - name: Set up cached Swift 6 client wrapper
         uses: ./.github/actions/setup-swift-e2e
         with:
