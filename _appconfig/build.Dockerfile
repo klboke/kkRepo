@@ -17,7 +17,8 @@ RUN mkdir -p /var/lib/jetty/logs
 
 COPY --from=build /tmp/kkrepo.jar /app/kkrepo.jar
 
-ENV JAVA_TOOL_OPTIONS="" \
+ENV JAVA_TOOL_OPTIONS="-Duser.timezone=Asia/Shanghai" \
+    TZ=Asia/Shanghai \
     SPRING_PROFILES_ACTIVE=default \
     SERVER_ADDRESS=0.0.0.0
 
