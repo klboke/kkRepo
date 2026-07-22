@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.env.MockEnvironment;
 import org.springframework.web.server.ResponseStatusException;
@@ -155,6 +156,66 @@ class BlobStoresControllerTest {
   }
 
   @Test
+  void deletesBlobStoreByIdWithoutReadingEncryptedAttributes() {
+    DirectDeleteBlobStoreDao dao = new DirectDeleteBlobStoreDao(1);
+    BlobStoresController controller = new BlobStoresController(
+        dao,
+        null,
+        null,
+        null,
+        null,
+        new S3StorageProperties(),
+        null,
+        new MockEnvironment());
+
+    controller.delete(1);
+
+    assertEquals(1, dao.deletedId);
+  }
+
+  @Test
+  void deletingMissingBlobStoreReturnsNotFound() {
+    DirectDeleteBlobStoreDao dao = new DirectDeleteBlobStoreDao(0);
+    BlobStoresController controller = new BlobStoresController(
+        dao,
+        null,
+        null,
+        null,
+        null,
+        new S3StorageProperties(),
+        null,
+        new MockEnvironment());
+
+    ResponseStatusException error = assertThrows(ResponseStatusException.class, () -> controller.delete(7));
+
+    assertEquals(HttpStatus.NOT_FOUND.value(), error.getStatusCode().value());
+  }
+
+  @Test
+  void deletingReferencedBlobStoreReturnsConflict() {
+    BlobStoreDao dao = new BlobStoreDaoAdapter() {
+      @Override
+      public int deleteById(long id) {
+        throw new DataIntegrityViolationException("referenced");
+      }
+    };
+    BlobStoresController controller = new BlobStoresController(
+        dao,
+        null,
+        null,
+        null,
+        null,
+        new S3StorageProperties(),
+        null,
+        new MockEnvironment());
+
+    ResponseStatusException error = assertThrows(ResponseStatusException.class, () -> controller.delete(1));
+
+    assertEquals(HttpStatus.CONFLICT.value(), error.getStatusCode().value());
+    assertTrue(error.getReason().contains("referenced"));
+  }
+
+  @Test
   void productionFileBlobStoresRequireExplicitStrongConsistencySharedFilesystem() {
     InMemoryBlobStoreDao dao = new InMemoryBlobStoreDao();
     FileStorageProperties fileProperties = new FileStorageProperties();
@@ -275,6 +336,26 @@ class BlobStoresControllerTest {
       return records.values().stream()
           .sorted(Comparator.comparing(BlobStoreRecord::name))
           .toList();
+    }
+  }
+
+  private static final class DirectDeleteBlobStoreDao extends BlobStoreDaoAdapter {
+    private final int affectedRows;
+    private long deletedId;
+
+    private DirectDeleteBlobStoreDao(int affectedRows) {
+      this.affectedRows = affectedRows;
+    }
+
+    @Override
+    public int deleteById(long id) {
+      deletedId = id;
+      return affectedRows;
+    }
+
+    @Override
+    public Optional<BlobStoreRecord> findById(long id) {
+      throw new IllegalStateException("encrypted attributes must not be read before deletion");
     }
   }
 }
