@@ -18,7 +18,7 @@ Create these recipes from the administration UI or repository API:
 | Upstream cache | `ansiblegalaxy-proxy` | Remote Galaxy root, remote credentials, metadata/content/negative TTL |
 | Unified reads | `ansiblegalaxy-group` | Ordered Ansible Galaxy hosted/proxy/group members |
 
-For a public Galaxy proxy, configure `https://galaxy.ansible.com/` as the remote root. Keep the trailing slash. The proxy follows the upstream discovery document instead of assuming a fixed v3 path.
+For a public Galaxy proxy, configure `https://galaxy.ansible.com/` as the remote root. Keep the trailing slash. The proxy follows the upstream discovery document to locate the v3 base, then requests collection metadata through the Galaxy NG `plugin/ansible/content/published/collections/index/...` route. The shorter `/api/v3/collections/...` route remains a kkrepo/Nexus-compatible client alias; it is not used for upstream metadata fetches.
 
 ## Configure `ansible.cfg`
 
@@ -168,5 +168,6 @@ Proxy cache migration is opt-in through **Optional proxy repositories** and requ
 - [Ansible: Distributing collections](https://docs.ansible.com/projects/ansible/latest/dev_guide/developing_collections_distributing.html)
 - [Ansible: Installing collections](https://docs.ansible.com/projects/ansible-core/devel/collections_guide/collections_installing.html)
 - [Ansible: Collection metadata](https://docs.ansible.com/projects/ansible/latest/dev_guide/collections_galaxy_meta.html)
+- [Galaxy NG: API v3](https://docs.ansible.com/projects/galaxy-ng/en/latest/community/api_v3.html)
 - [Sonatype: Configure Ansible with Nexus](https://help.sonatype.com/en/configure-ansible-with-nexus.html)
 - [Ansible Galaxy design and compatibility notes](../zh/dev/ansible-galaxy-repository-design.md)

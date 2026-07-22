@@ -442,7 +442,8 @@ class AnsibleGalaxyServiceTest {
         "namespace", Map.of("name", "acme"),
         "collection", Map.of("name", "tools"),
         "version", "1.2.3",
-        "href", "/api/v3/collections/acme/tools/versions/1.2.3/",
+        "href", "/api/v3/plugin/ansible/content/published/collections/index/"
+            + "acme/tools/versions/1.2.3/",
         "download_url", "/api/v3/plugin/ansible/content/published/collections/artifacts/"
             + "acme-tools-1.2.3.tar.gz",
         "artifact", Map.of(
@@ -460,6 +461,13 @@ class AnsibleGalaxyServiceTest {
             "alice"));
 
     assertTrue(failure.getMessage().contains("immutable"));
+    ArgumentCaptor<HttpRemoteFetcher.Request> request =
+        ArgumentCaptor.forClass(HttpRemoteFetcher.Request.class);
+    verify(fetcher).fetch(request.capture());
+    assertEquals(
+        "https://galaxy.example/api/v3/plugin/ansible/content/published/collections/index/"
+            + "acme/tools/versions/1.2.3/",
+        request.getValue().url());
     verify(registry).releaseLease("lease", "owner", 1L);
   }
 

@@ -66,7 +66,7 @@
 
 2. Ansible Galaxy proxy
    - 新增 `ansiblegalaxy-proxy` recipe，remote URL 默认可配置为 `https://galaxy.ansible.com/`，保存时规范化尾部 `/`。
-   - 先读取上游 API discovery，再按上游返回的 v3 base 访问 collection/version endpoint；不能假定所有上游都使用同一个长路径。
+   - 先读取上游 API discovery 定位 v3 base，再按 Galaxy NG API v3 协议通过 `plugin/ansible/content/published/collections/index/...` 访问 collection/version endpoint；本地 Nexus 兼容短路径不能直接复用于上游请求。
    - 缓存 collection metadata、version list/detail、dependencies、signatures、artifact validator、artifact bytes 和 negative result。
    - 把 `href`、`download_url`、pagination links 和 signature URL 改写到当前 kkrepo proxy 入口，避免客户端绕过本地鉴权、审计和缓存。
    - artifact 首次回源后按上游 `artifact.sha256` 校验并固定。相同 version 后续出现不同 checksum 时 fail closed，不能静默替换已缓存字节。
@@ -153,7 +153,7 @@ collections:
     source: https://repo.example.com/repository/ansible-group/
 ```
 
-客户端不会把 v3 读取前缀写死。它先读取 `available_versions.v3`，再分别追加 `collections/...` 或 `artifacts/collections/`。因此以下表格用 `{v3-base}` 表示 discovery 返回的前缀；Galaxy NG 文档中的完整读取路径是 `api/v3/plugin/ansible/content/published/collections/index/...`，公开 Galaxy 同时提供 `api/v3/collections/...` 别名。kkrepo 最终返回哪个前缀以及是否同时保留长路径别名，必须由 Nexus 黑盒固定。
+客户端不会把 v3 读取前缀写死。它先读取 `available_versions.v3`，再访问 collection 或 publication endpoint。因此以下表格用 `{v3-base}` 表示 discovery 返回的前缀；上游 metadata 回源固定在该 base 后追加 Galaxy NG 协议定义的 `plugin/ansible/content/published/collections/index/...`，不能使用本地短别名。kkrepo 面向客户端同时保留 Nexus 黑盒确认的 `api/v3/collections/...` 短路径和长路径。
 
 推荐 route contract：
 

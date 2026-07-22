@@ -13,8 +13,9 @@ import java.util.regex.Pattern;
 /** Strict parser for Galaxy v3 paths below one Nexus-style repository base URL. */
 public final class AnsibleGalaxyPathParser {
   public static final String V3_BASE = "api/v3/";
-  public static final String LONG_INDEX =
-      "api/v3/plugin/ansible/content/published/collections/index/";
+  public static final String PUBLISHED_COLLECTION_INDEX =
+      "plugin/ansible/content/published/collections/index/";
+  public static final String LONG_INDEX = V3_BASE + PUBLISHED_COLLECTION_INDEX;
   public static final String ARTIFACT_BASE =
       "api/v3/plugin/ansible/content/published/collections/artifacts/";
   private static final Pattern ARTIFACT = Pattern.compile("[a-z][a-z0-9_]{0,63}-[a-z][a-z0-9_]{0,63}-.+\\.tar\\.gz");

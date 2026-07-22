@@ -466,6 +466,12 @@ class AnsibleGalaxyServiceProxyStateTest {
             "data", List.of(Map.of("version", "1.0.0")), "links", Map.of("next", ""))));
     assertEquals(List.of("2.0.0", "1.0.0"),
         paged.fetchProxyVersionNames(proxy, "acme", "tools"));
+    ArgumentCaptor<String> inventoryPath = ArgumentCaptor.forClass(String.class);
+    verify(paged).proxyV3Url(eq(proxy), inventoryPath.capture());
+    assertEquals(
+        "plugin/ansible/content/published/collections/index/"
+            + "acme/tools/versions/?limit=1000",
+        inventoryPath.getValue());
 
     AnsibleGalaxyRegistryDao invalidRegistry = mock(AnsibleGalaxyRegistryDao.class);
     HttpRemoteFetcher invalidFetcher = mock(HttpRemoteFetcher.class);

@@ -560,8 +560,7 @@ public class AnsibleGalaxyService {
         if (cached.isPresent()) return ResolvedVersionMetadata.materialized(cached.get());
         Map<String, Object> detail = fetchProxyDocument(
             runtime, namespace, name, version,
-            proxyV3Url(runtime, "collections/" + encode(namespace) + "/" + encode(name)
-                + "/versions/" + encode(version) + "/"));
+            proxyV3Url(runtime, upstreamVersionPath(namespace, name, version)));
         validateUpstreamDetail(namespace, name, version, detail);
         AnsibleGalaxyRegistryDao.ProxyVersionState state = registry.findProxyState(
                 runtime.id(), namespace, name, version)
@@ -945,8 +944,7 @@ public class AnsibleGalaxyService {
       RepositoryRuntime runtime, String namespace, String name) {
     LinkedHashSet<String> versions = new LinkedHashSet<>();
     Set<String> visitedPages = new HashSet<>();
-    String next = proxyV3Url(runtime, "collections/" + encode(namespace) + "/" + encode(name)
-        + "/versions/?limit=1000");
+    String next = proxyV3Url(runtime, upstreamVersionsPath(namespace, name) + "?limit=1000");
     for (int page = 0; next != null && page < MAX_UPSTREAM_VERSION_PAGES; page++) {
       if (!visitedPages.add(next)) {
         throw new AnsibleGalaxyExceptions.BadUpstream(
@@ -2196,6 +2194,15 @@ public class AnsibleGalaxyService {
     String base = runtime.proxyRemoteUrl().trim();
     if (!base.endsWith("/")) base += "/";
     return URI.create(base).resolve(relativePath).toASCIIString();
+  }
+
+  static String upstreamVersionsPath(String namespace, String name) {
+    return AnsibleGalaxyPathParser.PUBLISHED_COLLECTION_INDEX + encode(namespace) + "/"
+        + encode(name) + "/versions/";
+  }
+
+  static String upstreamVersionPath(String namespace, String name, String version) {
+    return upstreamVersionsPath(namespace, name) + encode(version) + "/";
   }
 
   static Duration metadataTtl(RepositoryRuntime runtime) {
