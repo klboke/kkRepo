@@ -68,6 +68,66 @@ class RepositoryDataMigrationDaoMySqlIntegrationTest extends MySqlIntegrationTes
   }
 
   @Test
+  void assetClaimUsesRequestedJobAndPrefersPendingBeforeStaleClaims() {
+    long firstRepositoryId = insertRepository("asset-target-one", "maven2");
+    long secondRepositoryId = insertRepository("asset-target-two", "maven2");
+    long firstJobId = insertMigrationJob(true);
+    long secondJobId = insertMigrationJob(true);
+    RepositoryDataMigrationDao dao = new JdbcRepositoryDataMigrationDao(
+        jdbc(), jsonColumns(), new com.github.klboke.kkrepo.persistence.mysql.MySqlDatabaseDialect());
+    long firstRepositoryJobId = dao.createRepositoryJob(
+        firstJobId, "asset-source-one", "asset-target-one", firstRepositoryId,
+        RepositoryFormat.MAVEN2, 50, Map.of());
+    long secondRepositoryJobId = dao.createRepositoryJob(
+        secondJobId, "asset-source-two", "asset-target-two", secondRepositoryId,
+        RepositoryFormat.MAVEN2, 50, Map.of());
+    String firstJobPath = "com/acme/first/1.0/first-1.0.jar";
+    String pendingPath = "com/acme/pending/1.0/pending-1.0.jar";
+    String stalePath = "com/acme/stale/1.0/stale-1.0.jar";
+    dao.upsertDiscoveredAssets(firstRepositoryJobId, List.of(asset(firstJobPath)), Map.of());
+    dao.finishDiscoveryPage(firstRepositoryJobId, null, true);
+    dao.upsertDiscoveredAssets(
+        secondRepositoryJobId, List.of(asset(pendingPath), asset(stalePath)), Map.of());
+    dao.finishDiscoveryPage(secondRepositoryJobId, null, true);
+    jdbc().update("""
+        UPDATE repository_data_migration_asset
+        SET status = ?, attempts = 1, claimed_at = CURRENT_TIMESTAMP - INTERVAL 10 MINUTE
+        WHERE repository_job_id = ? AND source_path = ?
+        """, JdbcRepositoryDataMigrationDao.ASSET_MIGRATING, secondRepositoryJobId, stalePath);
+
+    List<RepositoryDataMigrationDao.AssetClaim> pendingClaims = inTransaction(
+        () -> dao.claimAssetsForMigration(
+            secondJobId, 1, 5, Instant.now().minusSeconds(60)));
+
+    assertEquals(1, pendingClaims.size());
+    assertEquals(secondJobId, pendingClaims.getFirst().migrationJobId());
+    assertEquals(secondRepositoryJobId, pendingClaims.getFirst().asset().repositoryJobId());
+    assertEquals(pendingPath, pendingClaims.getFirst().asset().sourcePath());
+    assertEquals(JdbcRepositoryDataMigrationDao.ASSET_PENDING, jdbc().queryForObject("""
+        SELECT status
+        FROM repository_data_migration_asset
+        WHERE repository_job_id = ? AND source_path = ?
+        """, String.class, firstRepositoryJobId, firstJobPath));
+
+    dao.markAssetMigrated(
+        pendingClaims.getFirst().asset().id(), secondRepositoryJobId, null, null, null);
+    dao.refreshRepositoryProgress(secondRepositoryJobId);
+    List<RepositoryDataMigrationDao.AssetClaim> staleClaims = inTransaction(
+        () -> dao.claimAssetsForMigration(
+            secondJobId, 1, 5, Instant.now().minusSeconds(60)));
+
+    assertEquals(1, staleClaims.size());
+    assertEquals(secondJobId, staleClaims.getFirst().migrationJobId());
+    assertEquals(stalePath, staleClaims.getFirst().asset().sourcePath());
+    assertEquals(1, staleClaims.getFirst().asset().attempts());
+    assertEquals(2, jdbc().queryForObject("""
+        SELECT attempts
+        FROM repository_data_migration_asset
+        WHERE id = ?
+        """, Integer.class, staleClaims.getFirst().asset().id()));
+  }
+
+  @Test
   void discoveryClaimHonorsJobFilterAndRetryCutoff() {
     long firstRepositoryId = insertRepository("target-one", "maven2");
     long secondRepositoryId = insertRepository("target-two", "maven2");
@@ -102,7 +162,10 @@ class RepositoryDataMigrationDaoMySqlIntegrationTest extends MySqlIntegrationTes
   }
 
   private static RepositoryDataMigrationAssetRecord asset() {
-    String path = "com/acme/app/1.0/app-1.0.jar";
+    return asset("com/acme/app/1.0/app-1.0.jar");
+  }
+
+  private static RepositoryDataMigrationAssetRecord asset(String path) {
     Instant updated = Instant.parse("2026-01-01T00:00:00Z");
     return new RepositoryDataMigrationAssetRecord(
         null,

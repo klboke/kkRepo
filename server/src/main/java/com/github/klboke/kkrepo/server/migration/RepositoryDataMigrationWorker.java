@@ -104,6 +104,9 @@ class RepositoryDataMigrationWorker {
     triggerExecutor.submit(() -> {
       try {
         task.run();
+      } catch (RuntimeException | Error failure) {
+        log.error("repository data migration trigger failed: {}", key, failure);
+        throw failure;
       } finally {
         runningTriggers.remove(key);
       }
