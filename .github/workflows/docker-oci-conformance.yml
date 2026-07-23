@@ -102,6 +102,9 @@ jobs:
       OCI_TEST_PUSH: "1"
       OCI_TEST_CONTENT_DISCOVERY: "1"
       OCI_TEST_CONTENT_MANAGEMENT: ${{ github.event_name == 'pull_request' || inputs.content_management }}
+      # kkRepo supports source-scoped mounts with an explicit `from` image; validate
+      # that automatic cross-repository blob discovery remains disabled.
+      OCI_AUTOMATIC_CROSSMOUNT: "0"
       DOCKER_OCI_CONFORMANCE_USE_DOCKER: "1"
     steps:
       - name: Check out repository
@@ -133,6 +136,8 @@ jobs:
           docker compose -f docker-compose.compat.yml ps > artifacts/docker-oci-conformance-ps.txt || true
           docker compose -f docker-compose.compat.yml logs --no-color --timestamps > artifacts/docker-oci-conformance-compose.log || true
           cp -R target/oci-conformance artifacts/oci-conformance || true
+          test -s artifacts/oci-conformance/docker/junit.xml
+          test -s artifacts/oci-conformance/docker/report.html
 
       - name: Upload logs
         if: always()
@@ -140,7 +145,7 @@ jobs:
         with:
           name: ${{ inputs.artifact_prefix || 'docker-oci' }}-logs
           path: artifacts/
-          if-no-files-found: ignore
+          if-no-files-found: error
 
       - name: Stop services
         if: always()

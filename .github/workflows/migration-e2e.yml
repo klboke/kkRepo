@@ -81,6 +81,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # These lanes represent Nexus persistence eras/content shapes, not every release.
+        # Add a version only when its datastore or fingerprint changes; otherwise extend an
+        # existing representative lane with the new repository-format fixture.
         include:
           - nexus-version: 3.29.2
             project-suffix: nexus-3292
@@ -195,6 +198,7 @@ jobs:
             docker-port: 18195
             composer-migration-enabled: false
             swift-migration-enabled: true
+            ansible-migration-enabled: true
             secondary-port: 18110
             secondary-management-port: 18111
             wait-timeout-seconds: 420
@@ -223,6 +227,7 @@ jobs:
       COMPOSER_MIGRATION_ENABLED: ${{ matrix.composer-migration-enabled }}
       COMPOSER_NEXUS_REQUIRED: ${{ matrix.composer-migration-enabled }}
       SWIFT_MIGRATION_ENABLED: ${{ matrix.swift-migration-enabled }}
+      ANSIBLE_MIGRATION_ENABLED: ${{ matrix.ansible-migration-enabled || false }}
       KKREPO_MIGRATION_TARGET_DATABASE: ${{ matrix.target-database || 'mysql' }}
       KKREPO_MIGRATION_TARGET_DATABASE_SERVICE: ${{ matrix.target-database-service || 'mysql' }}
       KKREPO_SECONDARY_COMPAT_PORT: ${{ matrix.secondary-port }}
@@ -279,6 +284,15 @@ jobs:
           grep " ${archive}$" "terraform_${version}_SHA256SUMS" | sha256sum -c -
           unzip -q "$archive" -d "$RUNNER_TEMP/terraform/$version"
           echo "TERRAFORM_CURRENT_BIN=$RUNNER_TEMP/terraform/$version/terraform" >> "$GITHUB_ENV"
+
+      - name: Set up Ansible Galaxy client for migration acceptance
+        if: matrix.ansible-migration-enabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/ansible-migration"
+          "$RUNNER_TEMP/ansible-migration/bin/python" -m pip install --upgrade pip ansible-core
+          echo "ANSIBLE_GALAXY_BIN=$RUNNER_TEMP/ansible-migration/bin/ansible-galaxy" >> "$GITHUB_ENV"
 
       - name: Prepare Nexus Terraform migration fixture
         if: matrix.nexus-version == '3.92.0'

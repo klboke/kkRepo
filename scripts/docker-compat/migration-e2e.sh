@@ -11,6 +11,10 @@ TERRAFORM_PROXY_NEXUS_REPOSITORY="${TERRAFORM_PROXY_MIGRATION_NEXUS_REPOSITORY:-
 SWIFT_NEXUS_REPOSITORY="${SWIFT_MIGRATION_NEXUS_REPOSITORY:-swift-hosted}"
 SWIFT_PROXY_NEXUS_REPOSITORY="${SWIFT_PROXY_MIGRATION_NEXUS_REPOSITORY:-swift-proxy}"
 SWIFT_GROUP_NEXUS_REPOSITORY="${SWIFT_GROUP_MIGRATION_NEXUS_REPOSITORY:-swift-group}"
+ANSIBLE_NEXUS_REPOSITORY="${ANSIBLE_MIGRATION_NEXUS_REPOSITORY:-ansible-hosted}"
+ANSIBLE_PROXY_NEXUS_REPOSITORY="${ANSIBLE_PROXY_MIGRATION_NEXUS_REPOSITORY:-ansible-proxy}"
+ANSIBLE_GROUP_NEXUS_REPOSITORY="${ANSIBLE_GROUP_MIGRATION_NEXUS_REPOSITORY:-ansible-group}"
+ANSIBLE_SECRET_PROXY_NEXUS_REPOSITORY="${ANSIBLE_SECRET_PROXY_MIGRATION_NEXUS_REPOSITORY:-ansible-secret-proxy}"
 NEXUS_USER="${NEXUS_COMPAT_USERNAME:-admin}"
 NEXUS_PASSWORD="${NEXUS_COMPAT_PASSWORD:-Admin1234}"
 
@@ -26,6 +30,10 @@ TERRAFORM_PROXY_KKREPO_REPOSITORY="${TERRAFORM_PROXY_MIGRATION_KKREPO_REPOSITORY
 SWIFT_KKREPO_REPOSITORY="${SWIFT_MIGRATION_KKREPO_REPOSITORY:-swift-hosted}"
 SWIFT_PROXY_KKREPO_REPOSITORY="${SWIFT_PROXY_MIGRATION_KKREPO_REPOSITORY:-swift-proxy}"
 SWIFT_GROUP_KKREPO_REPOSITORY="${SWIFT_GROUP_MIGRATION_KKREPO_REPOSITORY:-swift-group}"
+ANSIBLE_KKREPO_REPOSITORY="${ANSIBLE_MIGRATION_KKREPO_REPOSITORY:-ansible-hosted}"
+ANSIBLE_PROXY_KKREPO_REPOSITORY="${ANSIBLE_PROXY_MIGRATION_KKREPO_REPOSITORY:-ansible-proxy}"
+ANSIBLE_GROUP_KKREPO_REPOSITORY="${ANSIBLE_GROUP_MIGRATION_KKREPO_REPOSITORY:-ansible-group}"
+ANSIBLE_SECRET_PROXY_KKREPO_REPOSITORY="${ANSIBLE_SECRET_PROXY_MIGRATION_KKREPO_REPOSITORY:-ansible-secret-proxy}"
 KKREPO_SECONDARY_URL="${KKREPO_MIGRATION_SECONDARY_URL:-}"
 KKREPO_TARGET_DATABASE="${KKREPO_MIGRATION_TARGET_DATABASE:-mysql}"
 KKREPO_TARGET_DATABASE_SERVICE="${KKREPO_MIGRATION_TARGET_DATABASE_SERVICE:-mysql}"
@@ -68,6 +76,22 @@ SWIFT_FIXTURE_VERSIONED_MANIFEST=""
 SWIFT_FIXTURE_SHA256=""
 SWIFT_FIXTURE_SIGNATURE_BASE64=""
 SWIFT_MIGRATED_PUBLISHED_AT=""
+ANSIBLE_MIGRATION_ENABLED="${ANSIBLE_MIGRATION_ENABLED:-false}"
+ANSIBLE_NAMESPACE="${ANSIBLE_MIGRATION_NAMESPACE:-kkrepo}"
+ANSIBLE_COLLECTION="${ANSIBLE_MIGRATION_COLLECTION:-migration_${TAG_SAFE_LC}}"
+ANSIBLE_COLLECTION="${ANSIBLE_COLLECTION:0:64}"
+ANSIBLE_VERSION="${ANSIBLE_MIGRATION_VERSION:-1.2.3}"
+ANSIBLE_PROXY_NAMESPACE="${ANSIBLE_PROXY_MIGRATION_NAMESPACE:-community}"
+ANSIBLE_PROXY_COLLECTION="${ANSIBLE_PROXY_MIGRATION_COLLECTION:-general}"
+ANSIBLE_PROXY_VERSION="${ANSIBLE_PROXY_MIGRATION_VERSION:-10.4.0}"
+ANSIBLE_SECRET_PROXY_USERNAME="${ANSIBLE_SECRET_PROXY_MIGRATION_USERNAME:-ansible-migration-user}"
+ANSIBLE_SECRET_PROXY_SECRET="${ANSIBLE_SECRET_PROXY_MIGRATION_SECRET:-ansible-migration-password-not-for-production}"
+ANSIBLE_FIXTURE_WORKDIR=""
+ANSIBLE_FIXTURE_ARCHIVE=""
+ANSIBLE_FIXTURE_SHA256=""
+ANSIBLE_FIXTURE_FILES_JSON_SIZE=""
+ANSIBLE_PROXY_FIXTURE_ARCHIVE=""
+ANSIBLE_PROXY_FIXTURE_SHA256=""
 TERRAFORM_PROXY_PROVIDER_NAMESPACE="${TERRAFORM_PROXY_PROVIDER_NAMESPACE:-hashicorp}"
 TERRAFORM_PROXY_PROVIDER_NAME="${TERRAFORM_PROXY_PROVIDER_NAME:-null}"
 TERRAFORM_PROXY_PROVIDER_VERSION="${TERRAFORM_PROXY_PROVIDER_VERSION:-3.2.4}"
@@ -209,6 +233,9 @@ header_value() {
 cleanup() {
   if [[ -n "$SWIFT_FIXTURE_WORKDIR" ]]; then
     rm -rf "$SWIFT_FIXTURE_WORKDIR"
+  fi
+  if [[ -n "$ANSIBLE_FIXTURE_WORKDIR" ]]; then
+    rm -rf "$ANSIBLE_FIXTURE_WORKDIR"
   fi
 }
 
@@ -365,6 +392,25 @@ swift_migration_enabled() {
   [[ "$SWIFT_MIGRATION_ENABLED" == "true" ]]
 }
 
+ansible_migration_enabled() {
+  [[ "$ANSIBLE_MIGRATION_ENABLED" == "true" ]]
+}
+
+source_ansible_available() {
+  local endpoint
+  for endpoint in \
+      "hosted/$ANSIBLE_NEXUS_REPOSITORY" \
+      "proxy/$ANSIBLE_PROXY_NEXUS_REPOSITORY" \
+      "group/$ANSIBLE_GROUP_NEXUS_REPOSITORY"; do
+    if ! curl -m 20 -fsS \
+        -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+        "$NEXUS_URL/service/rest/v1/repositories/ansiblegalaxy/$endpoint" \
+        >/dev/null 2>&1; then
+      return 1
+    fi
+  done
+}
+
 source_swift_available() {
   local endpoint
   for endpoint in \
@@ -378,6 +424,285 @@ source_swift_available() {
       return 1
     fi
   done
+}
+
+ensure_ansible_source_secret_proxy() {
+  local endpoint payload response status method
+  endpoint="$NEXUS_URL/service/rest/v1/repositories/ansiblegalaxy/proxy/$ANSIBLE_SECRET_PROXY_NEXUS_REPOSITORY"
+  method=POST
+  if curl -m 20 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" "$endpoint" >/dev/null 2>&1; then
+    method=PUT
+  fi
+  payload="{
+    \"name\":\"$(json_escape "$ANSIBLE_SECRET_PROXY_NEXUS_REPOSITORY")\",
+    \"online\":true,
+    \"storage\":{\"blobStoreName\":\"default\",\"strictContentTypeValidation\":true},
+    \"proxy\":{\"remoteUrl\":\"https://galaxy.ansible.com/\",\"contentMaxAge\":17,\"metadataMaxAge\":23},
+    \"negativeCache\":{\"enabled\":true,\"timeToLive\":60},
+    \"httpClient\":{
+      \"blocked\":false,
+      \"autoBlock\":false,
+      \"authentication\":{
+        \"type\":\"username\",
+        \"username\":\"$(json_escape "$ANSIBLE_SECRET_PROXY_USERNAME")\",
+        \"password\":\"$(json_escape "$ANSIBLE_SECRET_PROXY_SECRET")\"
+      }
+    }
+  }"
+  response="$(mktemp)"
+  if [[ "$method" == "POST" ]]; then
+    endpoint="$NEXUS_URL/service/rest/v1/repositories/ansiblegalaxy/proxy"
+  fi
+  status="$(curl -m 30 -sS \
+    -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    -X "$method" \
+    -H "Content-Type: application/json" \
+    --data "$payload" \
+    -o "$response" \
+    -w '%{http_code}' \
+    "$endpoint")"
+  if [[ "$status" != "200" && "$status" != "201" && "$status" != "204" ]]; then
+    log "configuring authenticated Nexus Ansible proxy returned HTTP $status"
+    cat "$response" >&2 || true
+    rm -f "$response"
+    exit 1
+  fi
+  rm -f "$response"
+  log "Nexus Ansible proxy authentication fixture configured (secret omitted)"
+}
+
+prepare_ansible_fixture() {
+  ANSIBLE_FIXTURE_WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-ansible-migration.XXXXXX")"
+  ANSIBLE_FIXTURE_ARCHIVE="$ANSIBLE_FIXTURE_WORKDIR/$ANSIBLE_NAMESPACE-$ANSIBLE_COLLECTION-$ANSIBLE_VERSION.tar.gz"
+  ANSIBLE_PROXY_FIXTURE_ARCHIVE="$ANSIBLE_FIXTURE_WORKDIR/$ANSIBLE_PROXY_NAMESPACE-$ANSIBLE_PROXY_COLLECTION-$ANSIBLE_PROXY_VERSION.tar.gz"
+  ANSIBLE_FIXTURE_FILES_JSON_SIZE="$(python3 - \
+    "$ANSIBLE_FIXTURE_ARCHIVE" "$ANSIBLE_FIXTURE_WORKDIR" \
+    "$ANSIBLE_NAMESPACE" "$ANSIBLE_COLLECTION" "$ANSIBLE_VERSION" <<'PY'
+import hashlib
+import io
+import json
+import pathlib
+import sys
+import tarfile
+
+archive_path, workdir, namespace, name, version = sys.argv[1:6]
+workdir_path = pathlib.Path(workdir)
+files = {
+    "README.md": f"# {namespace}.{name}\nNexus Ansible migration E2E fixture\n".encode(),
+    "meta/runtime.yml": b"requires_ansible: '>=2.15'\n",
+}
+for index in range(600):
+    path = f"payload/data-{index:04d}.json"
+    files[path] = json.dumps(
+        {"index": index, "marker": f"ansible-migration-files-json-{index:04d}"},
+        separators=(",", ":"),
+    ).encode()
+
+inventory = [
+    {"name": ".", "ftype": "dir"},
+    {"name": "meta", "ftype": "dir"},
+    {"name": "payload", "ftype": "dir"},
+]
+for path, content in files.items():
+    inventory.append({
+        "name": path,
+        "ftype": "file",
+        "chksum_type": "sha256",
+        "chksum_sha256": hashlib.sha256(content).hexdigest(),
+    })
+files_json = json.dumps(
+    {"files": inventory, "format": 1}, separators=(",", ":"), sort_keys=True
+).encode()
+manifest_json = json.dumps({
+    "collection_info": {
+        "namespace": namespace,
+        "name": name,
+        "version": version,
+        "authors": ["kkRepo Migration E2E"],
+        "description": "Ansible migration fixture with a large FILES.json kept in blob storage",
+        "license": ["Apache-2.0"],
+        "tags": ["migration", "e2e"],
+        "dependencies": {},
+    },
+    "file_manifest_file": {
+        "name": "FILES.json",
+        "ftype": "file",
+        "chksum_type": "sha256",
+        "chksum_sha256": hashlib.sha256(files_json).hexdigest(),
+    },
+    "format": 1,
+}, separators=(",", ":"), sort_keys=True).encode()
+
+workdir_path.joinpath("MANIFEST.json").write_bytes(manifest_json)
+workdir_path.joinpath("FILES.json").write_bytes(files_json)
+
+def add_file(output, path, content):
+    entry = tarfile.TarInfo(path)
+    entry.mode = 0o644
+    entry.mtime = 1738555506
+    entry.size = len(content)
+    output.addfile(entry, io.BytesIO(content))
+
+with tarfile.open(archive_path, "w:gz", format=tarfile.GNU_FORMAT) as output:
+    add_file(output, "MANIFEST.json", manifest_json)
+    add_file(output, "FILES.json", files_json)
+    for directory in ("meta", "payload"):
+        entry = tarfile.TarInfo(directory + "/")
+        entry.type = tarfile.DIRTYPE
+        entry.mode = 0o755
+        entry.mtime = 1738555506
+        output.addfile(entry)
+    for path, content in files.items():
+        add_file(output, path, content)
+
+print(len(files_json))
+PY
+)"
+  ANSIBLE_FIXTURE_SHA256="$(file_sha256 "$ANSIBLE_FIXTURE_ARCHIVE")"
+  if [[ "$ANSIBLE_FIXTURE_FILES_JSON_SIZE" -lt 65536 ]]; then
+    log "Ansible migration fixture FILES.json is unexpectedly small: $ANSIBLE_FIXTURE_FILES_JSON_SIZE"
+    exit 1
+  fi
+  log "prepared Ansible collection fixture: $ANSIBLE_NAMESPACE.$ANSIBLE_COLLECTION $ANSIBLE_VERSION archiveSha256=$ANSIBLE_FIXTURE_SHA256 filesJsonBytes=$ANSIBLE_FIXTURE_FILES_JSON_SIZE"
+}
+
+publish_ansible_fixture_to_source_nexus() {
+  local repository_base response status task_url task_file state finished
+  repository_base="$NEXUS_URL/repository/$ANSIBLE_NEXUS_REPOSITORY"
+  response="$(mktemp)"
+  status="$(curl -m 300 -sS \
+    -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    -F "sha256=$ANSIBLE_FIXTURE_SHA256" \
+    -F "file=@$ANSIBLE_FIXTURE_ARCHIVE;type=application/octet-stream" \
+    -o "$response" \
+    -w '%{http_code}' \
+    "$repository_base/api/v3/artifacts/collections/")"
+  if [[ "$status" != "202" ]]; then
+    log "publishing Ansible fixture to source Nexus returned HTTP $status"
+    cat "$response" >&2 || true
+    rm -f "$response"
+    exit 1
+  fi
+  task_url="$(python3 - "$response" "$repository_base/" <<'PY'
+import json
+import pathlib
+import sys
+from urllib.parse import urljoin
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+task = payload.get("task")
+if not isinstance(task, str) or not task:
+    raise SystemExit(f"Nexus Ansible publish response omitted task: {payload}")
+print(urljoin(sys.argv[2], task))
+PY
+)"
+  task_file="$(mktemp)"
+  for ((attempt = 1; attempt <= WAIT_TIMEOUT_SECONDS; attempt++)); do
+    curl -m 20 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" "$task_url" >"$task_file"
+    read -r state finished < <(python3 - "$task_file" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(payload.get("state") or "", "yes" if payload.get("finished_at") else "no")
+PY
+)
+    if [[ "$finished" == "yes" ]]; then
+      if [[ "$state" != "completed" ]]; then
+        log "source Nexus Ansible import finished in state $state"
+        cat "$task_file" >&2 || true
+        rm -f "$response" "$task_file"
+        exit 1
+      fi
+      rm -f "$response" "$task_file"
+      log "source Nexus Ansible import completed: $task_url"
+      return 0
+    fi
+    sleep 1
+  done
+  log "timed out waiting for source Nexus Ansible import task: $task_url"
+  cat "$task_file" >&2 || true
+  rm -f "$response" "$task_file"
+  exit 1
+}
+
+verify_source_ansible_fixture() {
+  local repository_base detail artifact actual_sha
+  repository_base="$NEXUS_URL/repository/$ANSIBLE_NEXUS_REPOSITORY"
+  detail="$(mktemp)"
+  artifact="$(mktemp)"
+  curl -m 30 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$repository_base/api/v3/collections/$ANSIBLE_NAMESPACE/$ANSIBLE_COLLECTION/versions/$ANSIBLE_VERSION/" \
+    >"$detail"
+  python3 - "$detail" "$ANSIBLE_FIXTURE_SHA256" "$ANSIBLE_NAMESPACE" "$ANSIBLE_COLLECTION" "$ANSIBLE_VERSION" <<'PY'
+import json
+import pathlib
+import sys
+
+path, expected_sha, namespace, name, version = sys.argv[1:6]
+payload = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+if (payload.get("namespace") or {}).get("name") != namespace:
+    raise SystemExit(f"source Nexus Ansible namespace changed: {payload}")
+if (payload.get("collection") or {}).get("name") != name or payload.get("version") != version:
+    raise SystemExit(f"source Nexus Ansible coordinate changed: {payload}")
+if (payload.get("artifact") or {}).get("sha256") != expected_sha:
+    raise SystemExit(f"source Nexus Ansible artifact SHA-256 changed: {payload}")
+PY
+  curl -m 300 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$repository_base/api/v3/plugin/ansible/content/published/collections/artifacts/$ANSIBLE_NAMESPACE-$ANSIBLE_COLLECTION-$ANSIBLE_VERSION.tar.gz" \
+    >"$artifact"
+  actual_sha="$(file_sha256 "$artifact")"
+  if [[ "$actual_sha" != "$ANSIBLE_FIXTURE_SHA256" ]]; then
+    log "source Nexus Ansible artifact SHA-256 mismatch: expected=$ANSIBLE_FIXTURE_SHA256 actual=$actual_sha"
+    rm -f "$detail" "$artifact"
+    exit 1
+  fi
+  cmp "$ANSIBLE_FIXTURE_WORKDIR/MANIFEST.json" <(tar -xOzf "$artifact" MANIFEST.json)
+  cmp "$ANSIBLE_FIXTURE_WORKDIR/FILES.json" <(tar -xOzf "$artifact" FILES.json)
+  rm -f "$detail" "$artifact"
+  log "source Nexus Ansible fixture verified: $ANSIBLE_NAMESPACE.$ANSIBLE_COLLECTION $ANSIBLE_VERSION"
+}
+
+warm_ansible_proxy_fixture() {
+  local repository_base detail expected_sha expected_filename actual_sha
+  repository_base="$NEXUS_URL/repository/$ANSIBLE_PROXY_NEXUS_REPOSITORY"
+  detail="$(mktemp)"
+  curl -m 180 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$repository_base/api/v3/collections/$ANSIBLE_PROXY_NAMESPACE/$ANSIBLE_PROXY_COLLECTION/versions/$ANSIBLE_PROXY_VERSION/" \
+    >"$detail"
+  read -r expected_sha expected_filename < <(python3 - "$detail" \
+    "$ANSIBLE_PROXY_NAMESPACE" "$ANSIBLE_PROXY_COLLECTION" "$ANSIBLE_PROXY_VERSION" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+namespace, name, version = sys.argv[2:5]
+artifact = payload.get("artifact") or {}
+expected_filename = f"{namespace}-{name}-{version}.tar.gz"
+if artifact.get("filename") not in (None, expected_filename):
+    raise SystemExit(f"Nexus Ansible proxy returned a noncanonical filename: {payload}")
+sha = artifact.get("sha256")
+if not isinstance(sha, str) or len(sha) != 64:
+    raise SystemExit(f"Nexus Ansible proxy omitted the artifact SHA-256: {payload}")
+print(sha, expected_filename)
+PY
+)
+  curl -m 300 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$repository_base/api/v3/plugin/ansible/content/published/collections/artifacts/$expected_filename" \
+    >"$ANSIBLE_PROXY_FIXTURE_ARCHIVE"
+  actual_sha="$(file_sha256 "$ANSIBLE_PROXY_FIXTURE_ARCHIVE")"
+  if [[ "$actual_sha" != "$expected_sha" ]]; then
+    log "warmed Nexus Ansible proxy SHA-256 mismatch: metadata=$expected_sha archive=$actual_sha"
+    rm -f "$detail"
+    exit 1
+  fi
+  tar -tzf "$ANSIBLE_PROXY_FIXTURE_ARCHIVE" | grep -qx 'MANIFEST.json'
+  tar -tzf "$ANSIBLE_PROXY_FIXTURE_ARCHIVE" | grep -qx 'FILES.json'
+  ANSIBLE_PROXY_FIXTURE_SHA256="$actual_sha"
+  rm -f "$detail"
+  log "warmed Nexus Ansible proxy fixture: $ANSIBLE_PROXY_NAMESPACE.$ANSIBLE_PROXY_COLLECTION $ANSIBLE_PROXY_VERSION sha256=$actual_sha"
 }
 
 configure_swift_source_proxy_authentication() {
@@ -1666,6 +1991,392 @@ configure_swift_target_proxy_credentials() {
   log "Swift proxy credential was explicitly completed through the admin API on $label"
 }
 
+verify_ansible_repository_definitions() {
+  local target_url="${1:-$KKREPO_URL}"
+  local label="${2:-primary}"
+  local workdir hosted proxy group secret_proxy
+  workdir="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-ansible-definition.XXXXXX")"
+  hosted="$workdir/hosted.json"
+  proxy="$workdir/proxy.json"
+  group="$workdir/group.json"
+  secret_proxy="$workdir/secret-proxy.json"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/internal/repositories/$ANSIBLE_KKREPO_REPOSITORY" >"$hosted"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/internal/repositories/$ANSIBLE_PROXY_KKREPO_REPOSITORY" >"$proxy"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/internal/repositories/$ANSIBLE_GROUP_KKREPO_REPOSITORY" >"$group"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/internal/repositories/$ANSIBLE_SECRET_PROXY_KKREPO_REPOSITORY" >"$secret_proxy"
+  python3 - \
+    "$hosted" "$proxy" "$group" "$secret_proxy" \
+    "$ANSIBLE_KKREPO_REPOSITORY" "$ANSIBLE_PROXY_KKREPO_REPOSITORY" \
+    "$ANSIBLE_SECRET_PROXY_USERNAME" "$ANSIBLE_SECRET_PROXY_SECRET" <<'PY'
+import json
+import pathlib
+import sys
+
+(
+    hosted_path,
+    proxy_path,
+    group_path,
+    secret_proxy_path,
+    expected_hosted,
+    expected_proxy,
+    expected_secret_username,
+    forbidden_secret,
+) = sys.argv[1:9]
+hosted = json.loads(pathlib.Path(hosted_path).read_text(encoding="utf-8"))
+proxy = json.loads(pathlib.Path(proxy_path).read_text(encoding="utf-8"))
+group = json.loads(pathlib.Path(group_path).read_text(encoding="utf-8"))
+secret_proxy = json.loads(pathlib.Path(secret_proxy_path).read_text(encoding="utf-8"))
+
+if hosted.get("recipe") != "ansiblegalaxy-hosted" or hosted.get("type") != "HOSTED":
+    raise SystemExit(f"migrated Ansible hosted definition is invalid: {hosted}")
+if (hosted.get("hosted") or {}).get("writePolicy") != "ALLOW_ONCE":
+    raise SystemExit(f"migrated Ansible hosted write policy changed: {hosted.get('hosted')}")
+if proxy.get("recipe") != "ansiblegalaxy-proxy" or proxy.get("type") != "PROXY":
+    raise SystemExit(f"migrated Ansible proxy definition is invalid: {proxy}")
+if proxy.get("online") is not True:
+    raise SystemExit(f"migrated unauthenticated Ansible proxy is offline: {proxy}")
+proxy_settings = proxy.get("proxy") or {}
+if proxy_settings.get("remoteUrl") != "https://galaxy.ansible.com/":
+    raise SystemExit(f"migrated Ansible proxy remote changed: {proxy_settings}")
+if group.get("recipe") != "ansiblegalaxy-group" or group.get("type") != "GROUP":
+    raise SystemExit(f"migrated Ansible group definition is invalid: {group}")
+if (group.get("group") or {}).get("memberNames") != [expected_hosted, expected_proxy]:
+    raise SystemExit(f"migrated Ansible group member order changed: {group.get('group')}")
+
+if secret_proxy.get("recipe") != "ansiblegalaxy-proxy" or secret_proxy.get("type") != "PROXY":
+    raise SystemExit(f"migrated credentialed Ansible proxy definition is invalid: {secret_proxy}")
+if secret_proxy.get("online") is not False:
+    raise SystemExit(f"Ansible proxy with an unavailable source secret did not migrate offline: {secret_proxy}")
+secret_settings = secret_proxy.get("proxy") or {}
+if secret_settings.get("remoteUrl") != "https://galaxy.ansible.com/":
+    raise SystemExit(f"migrated credentialed Ansible proxy remote changed: {secret_settings}")
+if secret_settings.get("contentMaxAgeMinutes") != 17 or secret_settings.get("metadataMaxAgeMinutes") != 23:
+    raise SystemExit(f"migrated credentialed Ansible proxy TTLs changed: {secret_settings}")
+if secret_settings.get("autoBlock") is not False:
+    raise SystemExit(f"migrated credentialed Ansible proxy autoBlock changed: {secret_settings}")
+if secret_settings.get("remoteUsername") not in (None, expected_secret_username):
+    raise SystemExit(f"migrated Ansible proxy username changed: {secret_settings}")
+if secret_settings.get("remotePassword") is not None or secret_settings.get("remoteBearerToken") is not None:
+    raise SystemExit("migrated Ansible proxy API exposed an upstream secret")
+if secret_settings.get("remotePasswordConfigured") is True:
+    raise SystemExit("migrated Ansible proxy wrote a placeholder credential")
+if forbidden_secret in pathlib.Path(secret_proxy_path).read_text(encoding="utf-8"):
+    raise SystemExit("migrated Ansible proxy API leaked the source password")
+PY
+  rm -rf "$workdir"
+  log "Ansible repository definitions verified through $label replica (credentialed proxy is fail-closed offline)"
+}
+
+verify_ansible_secret_proxy_storage() {
+  local attributes repository_name
+  attributes="$(mktemp)"
+  repository_name="$(sql_literal "$ANSIBLE_SECRET_PROXY_KKREPO_REPOSITORY")"
+  target_db_query \
+    "SELECT attributes_json FROM repository WHERE name = $repository_name" \
+    >"$attributes"
+  python3 - \
+    "$attributes" "$ANSIBLE_SECRET_PROXY_SECRET" "$ANSIBLE_SECRET_PROXY_USERNAME" <<'PY'
+import json
+import pathlib
+import sys
+
+path, forbidden, expected_username = sys.argv[1:4]
+raw = pathlib.Path(path).read_text(encoding="utf-8").strip()
+if not raw:
+    raise SystemExit("migrated Ansible credentialed proxy database row is missing")
+if forbidden in raw:
+    raise SystemExit("migrated Ansible proxy source password is plaintext in the database")
+payload = json.loads(raw)
+proxy = payload.get("proxy") or {}
+if proxy.get("remotePassword") is not None or proxy.get("remoteBearerToken") is not None:
+    raise SystemExit("fail-closed Ansible proxy retained an unavailable credential")
+
+source_repository = payload.get("sourceRepository")
+if not isinstance(source_repository, dict):
+    raise SystemExit("migrated Ansible proxy source snapshot is missing")
+
+def authentication(value):
+    if isinstance(value, dict):
+        candidate = value.get("authentication")
+        if isinstance(candidate, dict):
+            return candidate
+        for child in value.values():
+            found = authentication(child)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = authentication(child)
+            if found is not None:
+                return found
+    return None
+
+source_authentication = authentication(source_repository)
+if source_authentication is None:
+    raise SystemExit("migrated Ansible proxy source authentication snapshot is missing")
+if source_authentication.get("username") != expected_username:
+    raise SystemExit(f"migrated Ansible proxy source username changed: {source_authentication}")
+source_password = source_authentication.get("password")
+if source_password not in (None, "<redacted>"):
+    raise SystemExit(f"migrated Ansible proxy source password was not omitted or redacted: {source_authentication}")
+PY
+  rm -f "$attributes"
+  log "Ansible fail-closed proxy secret storage verified in $KKREPO_TARGET_DATABASE"
+}
+
+ansible_collection_database_snapshot() {
+  local repository namespace collection version
+  repository="$(sql_literal "$1")"
+  namespace="$(sql_literal "$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')")"
+  collection="$(sql_literal "$(printf '%s' "$3" | tr '[:upper:]' '[:lower:]')")"
+  version="$(sql_literal "$4")"
+  target_db_query "
+    SELECT acv.artifact_sha256, acv.artifact_size, acv.metadata_json,
+           acv.dependencies_json, ab.object_key, ab.size, ab.content_type, a.path
+      FROM ansible_collection_version acv
+      JOIN repository r ON r.id = acv.repository_id
+      JOIN asset a ON a.id = acv.artifact_asset_id
+      JOIN asset_blob ab ON ab.id = a.asset_blob_id
+     WHERE r.name = $repository AND acv.namespace_lc = $namespace
+       AND acv.name_lc = $collection AND acv.version_normalized = $version"
+}
+
+verify_ansible_database_and_blob() {
+  local repository="$1"
+  local namespace="$2"
+  local collection="$3"
+  local version="$4"
+  local expected_archive="$5"
+  local expected_sha="$6"
+  local label="$7"
+  local snapshot object_key blob_dir blob_copy actual_sha
+  snapshot="$(mktemp)"
+  ansible_collection_database_snapshot "$repository" "$namespace" "$collection" "$version" >"$snapshot"
+  object_key="$(python3 - \
+    "$snapshot" "$expected_sha" "$(file_size "$expected_archive")" "$label" <<'PY'
+import json
+import pathlib
+import sys
+
+path, expected_sha, expected_size, label = sys.argv[1:5]
+raw = pathlib.Path(path).read_text(encoding="utf-8").strip()
+rows = [line for line in raw.splitlines() if line.strip()]
+if len(rows) != 1:
+    raise SystemExit(f"expected one migrated Ansible database row for {label}, found {len(rows)}")
+parts = rows[0].split("\t", 7)
+if len(parts) != 8:
+    raise SystemExit(f"unexpected migrated Ansible database snapshot for {label}: {rows[0]!r}")
+sha, artifact_size, metadata_raw, dependencies_raw, object_key, blob_size, content_type, asset_path = parts
+if sha != expected_sha or artifact_size != expected_size or blob_size != expected_size:
+    raise SystemExit(
+        f"migrated Ansible checksum/size changed for {label}: "
+        f"sha={sha} artifact={artifact_size} blob={blob_size}"
+    )
+metadata = json.loads(metadata_raw)
+dependencies = json.loads(dependencies_raw)
+projected = json.dumps({"metadata": metadata, "dependencies": dependencies}, separators=(",", ":"))
+if len(projected.encode()) > 65536:
+    raise SystemExit(f"migrated Ansible database projection is unbounded for {label}: {len(projected.encode())}")
+allowed_metadata = {
+    "authors", "license", "tags", "description", "repository",
+    "documentation", "homepage", "issues",
+}
+unexpected_metadata = set(metadata) - allowed_metadata
+if unexpected_metadata:
+    raise SystemExit(
+        f"migrated Ansible database projection retained non-protocol metadata for {label}: "
+        f"{sorted(unexpected_metadata)}"
+    )
+for forbidden in ("file_manifest_file", "payload/data-0599.json", "ansible-migration-files-json-0599"):
+    if forbidden in projected:
+        raise SystemExit(f"migrated Ansible database projection retained blob-only content {forbidden!r}")
+if not object_key or not asset_path.endswith(".tar.gz"):
+    raise SystemExit(f"migrated Ansible blob reference is incomplete for {label}: {rows[0]!r}")
+if content_type not in {"application/octet-stream", "application/gzip"}:
+    raise SystemExit(f"migrated Ansible content type is unexpected for {label}: {content_type!r}")
+print(object_key)
+PY
+)"
+  blob_dir="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-ansible-blob.XXXXXX")"
+  blob_copy="$blob_dir/collection.tar.gz"
+  docker compose -f "${COMPOSE_FILE:-docker-compose.compat.yml}" exec -T \
+    "$KKREPO_PRIMARY_SERVICE" test -f "$KKREPO_BLOB_PATH/$object_key"
+  docker compose -f "${COMPOSE_FILE:-docker-compose.compat.yml}" cp \
+    "$KKREPO_PRIMARY_SERVICE:$KKREPO_BLOB_PATH/$object_key" "$blob_copy" >/dev/null
+  actual_sha="$(file_sha256 "$blob_copy")"
+  if [[ "$actual_sha" != "$expected_sha" ]]; then
+    log "migrated Ansible physical blob SHA-256 mismatch for $label: expected=$expected_sha actual=$actual_sha"
+    rm -f "$snapshot"
+    rm -rf "$blob_dir"
+    exit 1
+  fi
+  cmp "$expected_archive" "$blob_copy"
+  tar -tzf "$blob_copy" | grep -qx 'MANIFEST.json'
+  tar -tzf "$blob_copy" | grep -qx 'FILES.json'
+  rm -f "$snapshot"
+  rm -rf "$blob_dir"
+  log "Ansible $label database projection and physical blob boundary verified: objectKey=$object_key"
+}
+
+set_ansible_proxy_remote() {
+  local remote_url="$1"
+  local response status
+  response="$(mktemp)"
+  status="$(curl -m 30 -sS \
+    -u "$(auth)" \
+    -X PUT \
+    -H "Content-Type: application/json" \
+    --data "{
+      \"online\":true,
+      \"proxy\":{
+        \"remoteUrl\":\"$(json_escape "$remote_url")\",
+        \"contentMaxAgeMinutes\":1440,
+        \"metadataMaxAgeMinutes\":1440,
+        \"negativeCacheEnabled\":true,
+        \"negativeCacheTtlMinutes\":1,
+        \"autoBlock\":true
+      }
+    }" \
+    -o "$response" \
+    -w '%{http_code}' \
+    "$KKREPO_URL/internal/repositories/$ANSIBLE_PROXY_KKREPO_REPOSITORY")"
+  if [[ "$status" != "200" ]]; then
+    log "updating migrated Ansible proxy remote returned HTTP $status"
+    cat "$response" >&2 || true
+    rm -f "$response"
+    exit 1
+  fi
+  rm -f "$response"
+}
+
+install_migrated_ansible_collections() {
+  local workdir token
+  if [[ -z "${ANSIBLE_GALAXY_BIN:-}" || ! -x "$ANSIBLE_GALAXY_BIN" ]]; then
+    log "ANSIBLE_GALAXY_BIN must point to an executable client when Ansible migration E2E is enabled"
+    exit 1
+  fi
+  workdir="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-ansible-install.XXXXXX")"
+  token="$(python3 - "$(auth)" <<'PY'
+import base64
+import sys
+print(base64.b64encode(sys.argv[1].encode()).decode())
+PY
+)"
+  ANSIBLE_NOCOLOR=1 "$ANSIBLE_GALAXY_BIN" collection install \
+    "$ANSIBLE_NAMESPACE.$ANSIBLE_COLLECTION:$ANSIBLE_VERSION" \
+    --server "$KKREPO_URL/repository/$ANSIBLE_GROUP_KKREPO_REPOSITORY/" \
+    --token "$token" \
+    --collections-path "$workdir/hosted" --force --no-deps >/dev/null
+  test -f "$workdir/hosted/ansible_collections/$ANSIBLE_NAMESPACE/$ANSIBLE_COLLECTION/MANIFEST.json"
+
+  # Point the proxy at a closed local port so the client can only succeed from the
+  # explicitly migrated proxy-cache collection and its blob.
+  set_ansible_proxy_remote "http://127.0.0.1:9/"
+  ANSIBLE_NOCOLOR=1 "$ANSIBLE_GALAXY_BIN" collection install \
+    "$ANSIBLE_PROXY_NAMESPACE.$ANSIBLE_PROXY_COLLECTION:$ANSIBLE_PROXY_VERSION" \
+    --server "$KKREPO_URL/repository/$ANSIBLE_PROXY_KKREPO_REPOSITORY/" \
+    --token "$token" \
+    --collections-path "$workdir/proxy" --force --no-deps >/dev/null
+  test -f "$workdir/proxy/ansible_collections/$ANSIBLE_PROXY_NAMESPACE/$ANSIBLE_PROXY_COLLECTION/MANIFEST.json"
+  set_ansible_proxy_remote "https://galaxy.ansible.com/"
+  rm -rf "$workdir"
+  log "ansible-galaxy installed migrated hosted and explicit proxy-cache collections without proxy upstream access"
+}
+
+verify_migrated_ansible_fixture() {
+  local job_id="$1"
+  local target_url="${2:-$KKREPO_URL}"
+  local label="${3:-primary}"
+  local workdir job hosted_detail hosted_artifact group_detail proxy_detail proxy_artifact
+  workdir="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-ansible-migrated.XXXXXX")"
+  job="$workdir/job.json"
+  hosted_detail="$workdir/hosted-detail.json"
+  hosted_artifact="$workdir/hosted.tar.gz"
+  group_detail="$workdir/group-detail.json"
+  proxy_detail="$workdir/proxy-detail.json"
+  proxy_artifact="$workdir/proxy.tar.gz"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/internal/migration/nexus/repository-data/jobs/$job_id" >"$job"
+  python3 - \
+    "$job" "$ANSIBLE_NEXUS_REPOSITORY" "$ANSIBLE_PROXY_NEXUS_REPOSITORY" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+expected = set(sys.argv[2:4])
+capability = (((payload.get("sourceProfile") or {}).get("formatCapabilities") or {}).get("ansiblegalaxy") or {})
+if capability.get("contentMigration") is not True:
+    raise SystemExit(f"Ansible datastore content model was not proven for data migration: {capability}")
+items = {
+    item.get("name"): item
+    for item in ((payload.get("migrationPlan") or {}).get("items") or [])
+    if item.get("name") in expected
+}
+if set(items) != expected:
+    raise SystemExit(f"Ansible data migration plan omitted repositories: expected={expected} items={items}")
+for name, item in items.items():
+    if item.get("status") != "FULL" or item.get("readMode") != "script-datastore":
+        raise SystemExit(f"Ansible data migration plan is not FULL for {name}: {item}")
+jobs = {
+    item.get("sourceRepositoryName"): item
+    for item in payload.get("repositoryJobs") or []
+    if item.get("sourceRepositoryName") in expected
+}
+if set(jobs) != expected:
+    raise SystemExit(f"Ansible repository-data jobs are missing: expected={expected} jobs={jobs}")
+for name, item in jobs.items():
+    if item.get("status") != "finished" or item.get("failedAssets") != 0:
+        raise SystemExit(f"Ansible repository-data migration failed for {name}: {item}")
+    if item.get("migratedAssets", 0) < 1:
+        raise SystemExit(f"Ansible repository-data migration moved no collection archive for {name}: {item}")
+PY
+
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/repository/$ANSIBLE_KKREPO_REPOSITORY/api/v3/collections/$ANSIBLE_NAMESPACE/$ANSIBLE_COLLECTION/versions/$ANSIBLE_VERSION/" \
+    >"$hosted_detail"
+  curl -m 300 -fsS -u "$(auth)" \
+    "$target_url/repository/$ANSIBLE_KKREPO_REPOSITORY/api/v3/plugin/ansible/content/published/collections/artifacts/$ANSIBLE_NAMESPACE-$ANSIBLE_COLLECTION-$ANSIBLE_VERSION.tar.gz" \
+    >"$hosted_artifact"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/repository/$ANSIBLE_GROUP_KKREPO_REPOSITORY/api/v3/collections/$ANSIBLE_NAMESPACE/$ANSIBLE_COLLECTION/versions/$ANSIBLE_VERSION/" \
+    >"$group_detail"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/repository/$ANSIBLE_PROXY_KKREPO_REPOSITORY/api/v3/collections/$ANSIBLE_PROXY_NAMESPACE/$ANSIBLE_PROXY_COLLECTION/versions/$ANSIBLE_PROXY_VERSION/" \
+    >"$proxy_detail"
+  curl -m 300 -fsS -u "$(auth)" \
+    "$target_url/repository/$ANSIBLE_PROXY_KKREPO_REPOSITORY/api/v3/plugin/ansible/content/published/collections/artifacts/$ANSIBLE_PROXY_NAMESPACE-$ANSIBLE_PROXY_COLLECTION-$ANSIBLE_PROXY_VERSION.tar.gz" \
+    >"$proxy_artifact"
+  python3 - \
+    "$hosted_detail" "$group_detail" "$proxy_detail" \
+    "$ANSIBLE_FIXTURE_SHA256" "$ANSIBLE_PROXY_FIXTURE_SHA256" <<'PY'
+import json
+import pathlib
+import sys
+
+hosted = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+group = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+proxy = json.loads(pathlib.Path(sys.argv[3]).read_text(encoding="utf-8"))
+hosted_sha, proxy_sha = sys.argv[4:6]
+if (hosted.get("artifact") or {}).get("sha256") != hosted_sha:
+    raise SystemExit(f"migrated Ansible hosted metadata SHA-256 changed: {hosted}")
+if (group.get("artifact") or {}).get("sha256") != hosted_sha:
+    raise SystemExit(f"migrated Ansible group did not resolve the hosted collection: {group}")
+if (proxy.get("artifact") or {}).get("sha256") != proxy_sha:
+    raise SystemExit(f"migrated Ansible proxy metadata SHA-256 changed: {proxy}")
+PY
+  cmp "$ANSIBLE_FIXTURE_ARCHIVE" "$hosted_artifact"
+  cmp "$ANSIBLE_PROXY_FIXTURE_ARCHIVE" "$proxy_artifact"
+  cmp "$ANSIBLE_FIXTURE_WORKDIR/MANIFEST.json" <(tar -xOzf "$hosted_artifact" MANIFEST.json)
+  cmp "$ANSIBLE_FIXTURE_WORKDIR/FILES.json" <(tar -xOzf "$hosted_artifact" FILES.json)
+  rm -rf "$workdir"
+  log "Ansible hosted/group/proxy-cache migration verified through $label replica"
+}
+
 swift_fixture_row_counts() {
   local repository_name scope package version
   repository_name="$(sql_literal "$SWIFT_KKREPO_REPOSITORY")"
@@ -2199,7 +2910,11 @@ run_config_metadata_migration() {
     "$EXPECTED_CONNECTOR_PORT" \
     "$SWIFT_MIGRATION_ENABLED" \
     "$SWIFT_NEXUS_REPOSITORY" \
-    "$SWIFT_PROXY_NEXUS_REPOSITORY" <<'PY'
+    "$SWIFT_PROXY_NEXUS_REPOSITORY" \
+    "$ANSIBLE_MIGRATION_ENABLED" \
+    "$ANSIBLE_NEXUS_REPOSITORY" \
+    "$ANSIBLE_PROXY_NEXUS_REPOSITORY" \
+    "$ANSIBLE_SECRET_PROXY_NEXUS_REPOSITORY" <<'PY'
 import json
 import sys
 
@@ -2211,7 +2926,11 @@ import sys
     swift_enabled,
     swift_repository,
     swift_proxy_repository,
-) = sys.argv[1:8]
+    ansible_enabled,
+    ansible_repository,
+    ansible_proxy_repository,
+    ansible_secret_proxy_repository,
+) = sys.argv[1:12]
 with open(path, "r", encoding="utf-8") as source:
     payload = json.load(source)
 plan = payload.get("migrationPlan") or {}
@@ -2307,6 +3026,55 @@ if swift_enabled == "true":
         raise SystemExit(
             f"Swift proxy preflight did not report an unavailable credential: {proxy_risks}"
         )
+if ansible_enabled == "true":
+    capability = ((profile.get("formatCapabilities") or {}).get("ansiblegalaxy") or {})
+    if capability.get("contentMigration") is not True:
+        raise SystemExit(f"Ansible datastore content model was not proven: {capability}")
+    ansible = [
+        item
+        for item in items
+        if item.get("area") == "repository" and item.get("name") == ansible_repository
+    ]
+    if not ansible:
+        raise SystemExit(f"Ansible hosted plan item not found: {ansible_repository}")
+    if ansible[0].get("status") != "FULL" or ansible[0].get("readMode") != "script-datastore":
+        raise SystemExit(f"Ansible hosted migration is not fail-closed FULL: {ansible[0]}")
+    ansible_proxy = [
+        item
+        for item in items
+        if item.get("area") == "repository" and item.get("name") == ansible_proxy_repository
+    ]
+    if not ansible_proxy:
+        raise SystemExit(f"Ansible proxy plan item not found: {ansible_proxy_repository}")
+    ansible_secret_proxy = [
+        item
+        for item in items
+        if item.get("area") == "repository"
+        and item.get("name") == ansible_secret_proxy_repository
+    ]
+    if not ansible_secret_proxy or ansible_secret_proxy[0].get("status") != "NEEDS_MANUAL_ACTION":
+        raise SystemExit(
+            "Ansible proxy with an unrecoverable source credential did not fail closed: "
+            f"{ansible_secret_proxy}"
+        )
+    expected_action = "repository:" + ansible_secret_proxy_repository
+    if expected_action not in (plan.get("manualActions") or []):
+        raise SystemExit(
+            f"Ansible proxy preflight omitted manual action {expected_action}: "
+            f"{plan.get('manualActions')}"
+        )
+    proxy_risks = [
+        risk
+        for risk in payload.get("proxyRemoteRisks") or []
+        if risk.get("repository") == ansible_secret_proxy_repository
+    ]
+    if len(proxy_risks) != 1 or proxy_risks[0].get("status") not in {
+        "masked_proxy_credential_secret",
+        "missing_proxy_credential_secret",
+    }:
+        raise SystemExit(
+            f"Ansible proxy preflight did not report an unavailable credential: {proxy_risks}"
+        )
 print(
     "preflight adapter="
     + str(adapter)
@@ -2325,18 +3093,28 @@ PY
   curl_kkrepo_json "/internal/migration/nexus/run" "$payload" >"$run_file"
   python3 - \
     "$run_file" "$expected_adapter" "$NEXUS_REPOSITORY" \
-    "$SWIFT_MIGRATION_ENABLED" "$SWIFT_PROXY_NEXUS_REPOSITORY" <<'PY'
+    "$SWIFT_MIGRATION_ENABLED" "$SWIFT_PROXY_NEXUS_REPOSITORY" \
+    "$ANSIBLE_MIGRATION_ENABLED" "$ANSIBLE_SECRET_PROXY_NEXUS_REPOSITORY" <<'PY'
 import json
 import sys
 
-path, expected_adapter, repository, swift_enabled, swift_proxy_repository = sys.argv[1:6]
+(
+    path,
+    expected_adapter,
+    repository,
+    swift_enabled,
+    swift_proxy_repository,
+    ansible_enabled,
+    ansible_secret_proxy_repository,
+) = sys.argv[1:8]
 with open(path, "r", encoding="utf-8") as source:
     payload = json.load(source)
 status = payload.get("status")
-if swift_enabled == "true":
+has_unavailable_proxy = swift_enabled == "true" or ansible_enabled == "true"
+if has_unavailable_proxy:
     if status != "finished_with_manual_actions":
         raise SystemExit(
-            "metadata migration with an unavailable Swift proxy credential returned "
+            "metadata migration with an unavailable proxy credential returned "
             f"unexpected status: {status!r}"
         )
 elif status not in {"finished", "finished_with_password_resets_required"}:
@@ -2345,10 +3123,10 @@ validation = payload.get("validation") or {}
 if validation.get("failed"):
     raise SystemExit(f"metadata migration validation failed: {validation}")
 manual = validation.get("manualActions") or []
-if swift_enabled == "true":
+if has_unavailable_proxy:
     if "repository/proxy credentials" not in manual:
         raise SystemExit(
-            "metadata migration did not require manual Swift proxy credential completion: "
+            "metadata migration did not require manual proxy credential completion: "
             f"{manual}"
         )
 elif manual:
@@ -2367,7 +3145,7 @@ failed_checks = [check for check in checks if check.get("status") == "FAIL"]
 manual_checks = [check for check in checks if check.get("status") == "MANUAL"]
 if failed_checks:
     raise SystemExit(f"metadata migration had failed checks: {failed_checks}")
-if swift_enabled == "true":
+if has_unavailable_proxy:
     proxy_checks = [
         check
         for check in manual_checks
@@ -2376,14 +3154,19 @@ if swift_enabled == "true":
     other_manual_checks = [check for check in manual_checks if check not in proxy_checks]
     if len(proxy_checks) != 1 or other_manual_checks:
         raise SystemExit(
-            "metadata migration manual checks differ from the expected fail-closed Swift proxy "
+            "metadata migration manual checks differ from the expected fail-closed proxy "
             f"credential check: proxy={proxy_checks} other={other_manual_checks}"
         )
-    expected_action = "repository:" + swift_proxy_repository
     plan_manual = plan.get("manualActions") or []
-    if expected_action not in plan_manual:
+    expected_actions = []
+    if swift_enabled == "true":
+        expected_actions.append("repository:" + swift_proxy_repository)
+    if ansible_enabled == "true":
+        expected_actions.append("repository:" + ansible_secret_proxy_repository)
+    missing_actions = [action for action in expected_actions if action not in plan_manual]
+    if missing_actions:
         raise SystemExit(
-            f"metadata migration run omitted preflight action {expected_action}: {plan_manual}"
+            f"metadata migration run omitted preflight actions {missing_actions}: {plan_manual}"
         )
 elif manual_checks:
     raise SystemExit(f"metadata migration had manual checks: {manual_checks}")
@@ -2436,6 +3219,7 @@ need docker
 need shasum
 need gzip
 need dd
+need tar
 
 wait_for_http "Nexus status endpoint" "$NEXUS_URL/service/rest/v1/status" "$NEXUS_USER:$NEXUS_PASSWORD"
 wait_for_http "kkrepo health endpoint" "$KKREPO_HEALTH_URL"
@@ -2477,6 +3261,21 @@ if swift_migration_enabled; then
   publish_swift_fixture_to_source_nexus
   verify_source_swift_fixture
 fi
+if ansible_migration_enabled; then
+  need python3
+  need cmp
+  if ! source_ansible_available; then
+    log "required Ansible hosted/proxy/group repositories are not available on the Nexus 3.93/3.94 source"
+    exit 1
+  fi
+  # Seed both the hosted content fingerprint and a real, explicitly selected
+  # proxy-cache archive before the fail-closed source-profile probe.
+  prepare_ansible_fixture
+  publish_ansible_fixture_to_source_nexus
+  verify_source_ansible_fixture
+  warm_ansible_proxy_fixture
+  ensure_ansible_source_secret_proxy
+fi
 run_config_metadata_migration
 if composer_migration_enabled; then
   verify_composer_requires_explicit_proxy_selection
@@ -2485,6 +3284,10 @@ if swift_migration_enabled; then
   verify_swift_repository_definitions "$KKREPO_URL" "primary fail-closed migration" false missing
   verify_swift_proxy_secret_storage missing "primary fail-closed migration"
   configure_swift_target_proxy_credentials "$KKREPO_URL" "primary"
+fi
+if ansible_migration_enabled; then
+  verify_ansible_repository_definitions "$KKREPO_URL" "primary"
+  verify_ansible_secret_proxy_storage
 fi
 
 kkrepo_ref="${KKREPO_DOCKER_REGISTRY}/${IMAGE}:${TAG}"
@@ -2518,9 +3321,19 @@ fi
 if swift_migration_enabled; then
   migration_repositories_json="$migration_repositories_json,\"$(json_escape "$SWIFT_NEXUS_REPOSITORY")\""
 fi
+if ansible_migration_enabled; then
+  migration_repositories_json="$migration_repositories_json,\"$(json_escape "$ANSIBLE_NEXUS_REPOSITORY")\""
+  if [[ -n "$backup_proxy_repository_values" ]]; then
+    backup_proxy_repository_values="$backup_proxy_repository_values,"
+  fi
+  backup_proxy_repository_values="$backup_proxy_repository_values\"$(json_escape "$ANSIBLE_PROXY_NEXUS_REPOSITORY")\""
+fi
 if terraform_migration_enabled; then
   migration_repositories_json="$migration_repositories_json,\"$(json_escape "$TERRAFORM_NEXUS_REPOSITORY")\""
-  backup_proxy_repository_values="\"$(json_escape "$TERRAFORM_PROXY_NEXUS_REPOSITORY")\""
+  if [[ -n "$backup_proxy_repository_values" ]]; then
+    backup_proxy_repository_values="$backup_proxy_repository_values,"
+  fi
+  backup_proxy_repository_values="$backup_proxy_repository_values\"$(json_escape "$TERRAFORM_PROXY_NEXUS_REPOSITORY")\""
 fi
 if composer_migration_enabled; then
   if [[ -n "$backup_proxy_repository_values" ]]; then
@@ -2605,6 +3418,22 @@ if composer_migration_enabled; then
   verify_migrated_composer_fixture "$job_id"
 fi
 
+if ansible_migration_enabled; then
+  verify_migrated_ansible_fixture "$job_id" "$KKREPO_URL" "primary"
+  verify_ansible_database_and_blob \
+    "$ANSIBLE_KKREPO_REPOSITORY" "$ANSIBLE_NAMESPACE" "$ANSIBLE_COLLECTION" \
+    "$ANSIBLE_VERSION" "$ANSIBLE_FIXTURE_ARCHIVE" "$ANSIBLE_FIXTURE_SHA256" "hosted collection"
+  verify_ansible_database_and_blob \
+    "$ANSIBLE_PROXY_KKREPO_REPOSITORY" "$ANSIBLE_PROXY_NAMESPACE" "$ANSIBLE_PROXY_COLLECTION" \
+    "$ANSIBLE_PROXY_VERSION" "$ANSIBLE_PROXY_FIXTURE_ARCHIVE" "$ANSIBLE_PROXY_FIXTURE_SHA256" \
+    "explicit proxy-cache collection"
+  install_migrated_ansible_collections
+  if swift_migration_enabled && [[ -n "$KKREPO_SECONDARY_URL" ]]; then
+    verify_ansible_repository_definitions "$KKREPO_SECONDARY_URL" "secondary"
+    verify_migrated_ansible_fixture "$job_id" "$KKREPO_SECONDARY_URL" "secondary"
+  fi
+fi
+
 if swift_migration_enabled; then
   swift_counts_before=""
   swift_counts_after=""
@@ -2642,4 +3471,4 @@ if swift_migration_enabled; then
   fi
 fi
 
-log "Docker/Cargo/Pub/Composer/Terraform/Swift migration E2E completed: job=$job_id source=${NEXUS_URL%/}/repository/${NEXUS_REPOSITORY}/v2/${IMAGE}:${TAG} target=$kkrepo_ref"
+log "Docker/Cargo/Pub/Composer/Terraform/Swift/Ansible migration E2E completed: job=$job_id source=${NEXUS_URL%/}/repository/${NEXUS_REPOSITORY}/v2/${IMAGE}:${TAG} target=$kkrepo_ref"
