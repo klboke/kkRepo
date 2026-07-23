@@ -9,6 +9,7 @@ import java.util.regex.Pattern;
 
 /** SemVer 2.0 validation and precedence ordering used by Ansible collection versions. */
 public final class AnsibleGalaxyVersions {
+  public static final int MAX_LENGTH = 128;
   private static final String NUMERIC = "0|[1-9]\\d*";
   private static final String PRE = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)";
   private static final Pattern SEMVER = Pattern.compile(
@@ -26,9 +27,7 @@ public final class AnsibleGalaxyVersions {
   }
 
   public static String require(String value) {
-    if (value == null || !SEMVER.matcher(value).matches()) {
-      throw new IllegalArgumentException("Invalid Ansible collection version: " + value);
-    }
+    requireMatcher(value);
     return value;
   }
 
@@ -87,15 +86,20 @@ public final class AnsibleGalaxyVersions {
     return 0;
   }
 
+  private static Matcher requireMatcher(String value) {
+    if (value == null || value.length() > MAX_LENGTH) {
+      throw new IllegalArgumentException("Invalid Ansible collection version: " + value);
+    }
+    Matcher matcher = SEMVER.matcher(value);
+    if (!matcher.matches()) {
+      throw new IllegalArgumentException("Invalid Ansible collection version: " + value);
+    }
+    return matcher;
+  }
+
   private record Parsed(BigInteger major, BigInteger minor, BigInteger patch, String prerelease) {
     private static Parsed parse(String value) {
-      if (value == null) {
-        throw new IllegalArgumentException("Invalid Ansible collection version: null");
-      }
-      Matcher matcher = SEMVER.matcher(value);
-      if (!matcher.matches()) {
-        throw new IllegalArgumentException("Invalid Ansible collection version: " + value);
-      }
+      Matcher matcher = requireMatcher(value);
       return new Parsed(
           new BigInteger(matcher.group(1)),
           new BigInteger(matcher.group(2)),
