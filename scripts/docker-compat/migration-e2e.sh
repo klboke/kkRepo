@@ -698,8 +698,8 @@ PY
     rm -f "$detail"
     exit 1
   fi
-  tar -tzf "$ANSIBLE_PROXY_FIXTURE_ARCHIVE" | grep -qx 'MANIFEST.json'
-  tar -tzf "$ANSIBLE_PROXY_FIXTURE_ARCHIVE" | grep -qx 'FILES.json'
+  tar -tzf "$ANSIBLE_PROXY_FIXTURE_ARCHIVE" MANIFEST.json >/dev/null
+  tar -tzf "$ANSIBLE_PROXY_FIXTURE_ARCHIVE" FILES.json >/dev/null
   ANSIBLE_PROXY_FIXTURE_SHA256="$actual_sha"
   rm -f "$detail"
   log "warmed Nexus Ansible proxy fixture: $ANSIBLE_PROXY_NAMESPACE.$ANSIBLE_PROXY_COLLECTION $ANSIBLE_PROXY_VERSION sha256=$actual_sha"
@@ -2215,8 +2215,8 @@ PY
     exit 1
   fi
   cmp "$expected_archive" "$blob_copy"
-  tar -tzf "$blob_copy" | grep -qx 'MANIFEST.json'
-  tar -tzf "$blob_copy" | grep -qx 'FILES.json'
+  tar -tzf "$blob_copy" MANIFEST.json >/dev/null
+  tar -tzf "$blob_copy" FILES.json >/dev/null
   rm -f "$snapshot"
   rm -rf "$blob_dir"
   log "Ansible $label database projection and physical blob boundary verified: objectKey=$object_key"
