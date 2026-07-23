@@ -1,6 +1,23 @@
 name: Migration E2E
 
 on:
+  workflow_call:
+    inputs:
+      candidate_image_artifact:
+        description: Prebuilt JVM candidate image artifact from this workflow run
+        required: false
+        default: ""
+        type: string
+      candidate_source_sha:
+        description: Exact source SHA embedded in the candidate artifact
+        required: false
+        default: ""
+        type: string
+      artifact_prefix:
+        description: Prefix used to keep artifacts unique across reusable workflow calls
+        required: false
+        default: migration
+        type: string
   workflow_dispatch:
   pull_request:
     branches:
@@ -15,18 +32,58 @@ permissions:
   contents: read
 
 concurrency:
-  group: migration-e2e-${{ github.ref }}
+  group: migration-e2e-${{ github.workflow }}-${{ github.ref }}-${{ inputs.artifact_prefix || 'direct' }}
   cancel-in-progress: true
 
 jobs:
+  build-candidate:
+    name: Build JVM candidate once for direct Migration E2E runs
+    if: >-
+      inputs.candidate_image_artifact == '' &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'pull_request' &&
+          contains(github.event.pull_request.labels.*.name, 'run-migration-e2e') &&
+          (
+            !contains(github.event.pull_request.labels.*.name, 'run-full-e2e') ||
+            (github.event.action == 'labeled' && github.event.label.name == 'run-migration-e2e')
+          )
+        )
+      )
+    uses: ./.github/workflows/build-e2e-candidate.yml
+    with:
+      runtime: jvm
+      source_sha: ${{ github.sha }}
+      artifact_key: ${{ github.event.pull_request.head.sha || github.sha }}
+
   nexus-migration-e2e:
     name: Nexus ${{ matrix.nexus-version }} (${{ matrix.metadata-engine }}) to ${{ matrix.target-database || 'mysql' }} migration E2E
+    needs: build-candidate
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-migration-e2e'))
+    if: >-
+      always() &&
+      !cancelled() &&
+      (inputs.candidate_image_artifact != '' || needs.build-candidate.result == 'success') &&
+      (
+        inputs.candidate_image_artifact != '' ||
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'pull_request' &&
+          contains(github.event.pull_request.labels.*.name, 'run-migration-e2e') &&
+          (
+            !contains(github.event.pull_request.labels.*.name, 'run-full-e2e') ||
+            (github.event.action == 'labeled' && github.event.label.name == 'run-migration-e2e')
+          )
+        )
+      )
     strategy:
       fail-fast: false
       matrix:
+        # These lanes represent Nexus persistence eras/content shapes, not every release.
+        # Add a version only when its datastore or fingerprint changes; otherwise extend an
+        # existing representative lane with the new repository-format fixture.
         include:
           - nexus-version: 3.29.2
             project-suffix: nexus-3292
@@ -141,6 +198,7 @@ jobs:
             docker-port: 18195
             composer-migration-enabled: false
             swift-migration-enabled: true
+            ansible-migration-enabled: true
             secondary-port: 18110
             secondary-management-port: 18111
             wait-timeout-seconds: 420
@@ -169,6 +227,7 @@ jobs:
       COMPOSER_MIGRATION_ENABLED: ${{ matrix.composer-migration-enabled }}
       COMPOSER_NEXUS_REQUIRED: ${{ matrix.composer-migration-enabled }}
       SWIFT_MIGRATION_ENABLED: ${{ matrix.swift-migration-enabled }}
+      ANSIBLE_MIGRATION_ENABLED: ${{ matrix.ansible-migration-enabled || false }}
       KKREPO_MIGRATION_TARGET_DATABASE: ${{ matrix.target-database || 'mysql' }}
       KKREPO_MIGRATION_TARGET_DATABASE_SERVICE: ${{ matrix.target-database-service || 'mysql' }}
       KKREPO_SECONDARY_COMPAT_PORT: ${{ matrix.secondary-port }}
@@ -182,6 +241,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up JDK 25
+        if: matrix.nexus-version == '3.92.0'
         uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -191,8 +251,12 @@ jobs:
       - name: Validate migration compose file
         run: docker compose -f "$COMPOSE_FILE" config
 
-      - name: Build candidate image
-        run: scripts/build-docker-image.sh kkrepo:compat
+      - name: Load verified candidate image
+        uses: ./.github/actions/load-e2e-candidate
+        with:
+          artifact_name: ${{ inputs.candidate_image_artifact || needs.build-candidate.outputs.image_artifact }}
+          runtime: jvm
+          source_sha: ${{ inputs.candidate_source_sha || github.sha }}
 
       - name: Start databases
         run: docker compose -f "$COMPOSE_FILE" up -d --wait ${{ matrix.target-database-service || 'mysql' }} ${{ matrix.nexus-db-service }}
@@ -221,6 +285,15 @@ jobs:
           unzip -q "$archive" -d "$RUNNER_TEMP/terraform/$version"
           echo "TERRAFORM_CURRENT_BIN=$RUNNER_TEMP/terraform/$version/terraform" >> "$GITHUB_ENV"
 
+      - name: Set up Ansible Galaxy client for migration acceptance
+        if: matrix.ansible-migration-enabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/ansible-migration"
+          "$RUNNER_TEMP/ansible-migration/bin/python" -m pip install --upgrade pip ansible-core
+          echo "ANSIBLE_GALAXY_BIN=$RUNNER_TEMP/ansible-migration/bin/ansible-galaxy" >> "$GITHUB_ENV"
+
       - name: Prepare Nexus Terraform migration fixture
         if: matrix.nexus-version == '3.92.0'
         run: >-
@@ -242,7 +315,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: migration-e2e-${{ matrix.nexus-version }}-${{ matrix.metadata-engine }}-logs
+          name: ${{ inputs.artifact_prefix || 'migration' }}-${{ matrix.project-suffix }}-logs
           path: artifacts/
           if-no-files-found: ignore
 

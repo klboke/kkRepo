@@ -77,10 +77,11 @@ kkrepo 使用 Nexus 风格 privilege。仓库权限动作包括：
 通用 `PUT -> edit` 映射同样适用于目标路径尚不存在的情况。这符合
 Nexus 的客户端可见行为；如果改成先查询 asset 是否存在再决定权限，
 普通 Maven、Raw、Helm、Yum 等使用 PUT 的客户端就会产生兼容性差异。
-协议专用 publish 入口可以有不同动作。例如 Cargo、Pub、Swift 的发布
-流程使用 `add`；Terraform 会区分新的 module/provider coordinate 或
+协议专用 publish 入口可以有不同动作。例如 Cargo、Pub、Swift 和 Ansible
+Galaxy collection 的发布流程使用 `add`；Terraform 会区分新的 module/provider coordinate 或
 platform 与重新发布；Docker push 则可能对 blob 和 manifest/tag 使用
-不同的 `add`、`edit` 组合。
+不同的 `add`、`edit` 组合。Ansible collection version 无论调用方是否有
+`edit` 都保持不可变；持久化 import task 只允许发起者或仍有目标仓库访问权的管理员读取。
 
 仓库权限和 hosted write policy 是两层独立检查。拥有 `edit` 权限不代表
 可以绕过 `ALLOW_ONCE` 或 `DENY` 等 write policy；完成授权后，协议服务
@@ -116,7 +117,7 @@ kkrepo 将 API-key 兼容数据存储在共享数据库中。用户可见原始 
 X-Nexus-Plus-Token
 ```
 
-协议客户端应继续使用各自原生认证机制和匹配的 token domain。当前协议 token domain 包含 `NpmToken`、`CargoToken`、`PubToken`、`NuGetApiKey` 和 `RubyGemsApiKey`；对应客户端协议使用 token 或 API key 时按各自协议处理，其中 Cargo、Pub 和 RubyGems 客户端通过 `Authorization` header 发送 registry/API key token。Composer 私有仓库优先使用 `COMPOSER_AUTH`/`auth.json` 的 HTTP Basic；能够显式发送 bearer 或自定义 API-key header 的 Composer/CI 场景可以使用 `GenericToken`。Terraform CLI 可把 `GenericToken` 仅放在已配置的 `modules.v1`/`providers.v1` service URL 中；生成的 archive/checksum/signature URL 会保留 credential segment，但日志、指标和上传的 CI 诊断产物必须脱敏。`GenericToken` 不作为所有包管理客户端 token 格式的通用替代。
+协议客户端应继续使用各自原生认证机制和匹配的 token domain。当前协议 token domain 包含 `NpmToken`、`CargoToken`、`PubToken`、`NuGetApiKey` 和 `RubyGemsApiKey`；对应客户端协议使用 token 或 API key 时按各自协议处理，其中 Cargo、Pub 和 RubyGems 客户端通过 `Authorization` header 发送 registry/API key token。Composer 私有仓库优先使用 `COMPOSER_AUTH`/`auth.json` 的 HTTP Basic；能够显式发送 bearer 或自定义 API-key header 的 Composer/CI 场景可以使用 `GenericToken`。Terraform CLI 可把 `GenericToken` 仅放在已配置的 `modules.v1`/`providers.v1` service URL 中；生成的 archive/checksum/signature URL 会保留 credential segment，但日志、指标和上传的 CI 诊断产物必须脱敏。Ansible Galaxy 客户端可通过当前 ansible-core 的 Bearer scheme 或 Ansible 2.9 的 Token scheme 发送 `GenericToken`；仅在 Ansible route 内，kkrepo 还接受 Nexus 兼容的 Base64 `username:password`。后者只是密码传输而不是加密，不应写日志，也不应优先于 scoped token。显式错误 Ansible credential 必须返回 `401`，不能降级为 anonymous。`GenericToken` 不作为所有包管理客户端 token 格式的通用替代。
 
 ## 加密密钥
 

@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.upload;
 
+import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyExceptions;
 import com.github.klboke.kkrepo.server.cargo.CargoExceptions;
 import com.github.klboke.kkrepo.server.composer.ComposerExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
@@ -29,6 +30,12 @@ public class ComponentUploadErrorAdvice {
   @ExceptionHandler(SwiftExceptions.SwiftException.class)
   public ResponseEntity<Map<String, String>> swiftFailure(
       SwiftExceptions.SwiftException e) {
+    return body(HttpStatus.valueOf(e.status()), e.getMessage());
+  }
+
+  @ExceptionHandler(AnsibleGalaxyExceptions.GalaxyException.class)
+  public ResponseEntity<Map<String, String>> ansibleFailure(
+      AnsibleGalaxyExceptions.GalaxyException e) {
     return body(HttpStatus.valueOf(e.status()), e.getMessage());
   }
 

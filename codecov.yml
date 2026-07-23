@@ -1,3 +1,10 @@
+parsers:
+  jacoco:
+    # JaCoCo line coverage treats a line as hit when any instruction executes.
+    # Keep Codecov's patch status on that line-coverage definition instead of
+    # treating every partially covered branch as a fully missed line.
+    partials_as_hits: true
+
 coverage:
   status:
     # Coverage is uploaded on main to keep the baseline current, but status
@@ -8,3 +15,5 @@ coverage:
     patch:
       default:
         only_pulls: true
+        target: 90%
+        threshold: 0%

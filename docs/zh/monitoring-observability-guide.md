@@ -187,6 +187,22 @@ Terraform 通过 `format="terraform"` 暴露 repository、proxy 回源和 blob s
 
 监控时应把 Provider metadata、archive、SHA256SUMS 和 signature 视为同一个流程。Metadata 成功但 checksum/signature 失败，通常表示上游快照过期或不一致。Terraform URL token path segment 会在进入日志和 metric label 前脱敏；不要把包含 token 的原始 service URL 或 metadata 放入 dashboard/CI artifact。
 
+### Ansible Galaxy
+
+Ansible Galaxy 通过 `format="ansiblegalaxy"` 暴露 repository、proxy 回源和 blob storage 指标。Repository operation label 固定为以下有界集合：
+
+- `ansible_discovery`
+- `ansible_collection`
+- `ansible_version_list`
+- `ansible_version_detail`
+- `ansible_publish`
+- `ansible_import_task`
+- `ansible_artifact_upload`
+- `ansible_artifact_download`
+- `ansible_repository`
+
+应把 publish 与 import task outcome 联合监控：`ansible_publish` 成功后持续出现 task error，通常表示 archive/manifest/checksum 校验或 worker takeover 失败。孤儿清理通过 `worker="ansible_staging_cleanup"` 报告 batch outcome，并通过 `worker="ansible_cleanup", item="staging_asset", outcome="deleted"` 报告清理数量；持续增长通常表示副本在 staging 与持久清理之间反复终止。共享状态 cleanup 还会以 `worker="ansible_cleanup"` 和 `item="proxy_cache"`、`item="terminal_task"`、`item="expired_lease"` 报告删除量；持续增长通常表示 retention/cleanup 容量不足或上游反复抖动。排查 proxy/group 时，把 version-detail 延迟与 `kkrepo_proxy_remote_*` 关联，并把 artifact 读取与 blob-storage 指标关联。Namespace、collection name、version、task UUID 和 token material 不能成为 metric label；coordinate 级排查应使用受控 audit/task detail。完整 manifest/files 文档保留在 collection blob 内，线上游 JSON 只留下有上限投影，任何必须原样保留的大 JSON 也应写 blob。因此数据库增长应来自有上限的投影与 task/state 行，而不是 payload 大小。
+
 ### Blob 存储
 
 | 指标 | 类型 | 说明 |

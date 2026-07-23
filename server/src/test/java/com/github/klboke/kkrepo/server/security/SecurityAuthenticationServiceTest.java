@@ -115,6 +115,31 @@ class SecurityAuthenticationServiceTest {
   }
 
   @Test
+  void ansibleGalaxyAcceptsCurrentBearerAndAnsible29TokenCredentials() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.realm(new SecurityRealmRecord(
+        1L, "local", "LOCAL", "Local", true, 0, Map.of("source", "Local")));
+    dao.user(user(1L, "Local", "admin", NEXUS_SHIRO1_ADMIN123));
+    SecurityAuthenticationService service = service(dao);
+
+    String valid = Base64.getEncoder()
+        .encodeToString("admin:admin123".getBytes(StandardCharsets.UTF_8));
+    for (String scheme : List.of("Bearer ", "Token ")) {
+      Optional<AuthenticatedSubject> authenticated = service.authenticateAnsibleGalaxy(
+          request(Map.of("Authorization", scheme + valid)));
+      assertTrue(authenticated.isPresent(), scheme);
+      assertEquals("admin", authenticated.get().userId());
+    }
+    for (String decoded : List.of("admin:", ":admin123", "admin:\nadmin123", "admin\0:admin123")) {
+      String encoded = Base64.getEncoder().encodeToString(decoded.getBytes(StandardCharsets.UTF_8));
+      assertTrue(service.authenticateAnsibleGalaxy(
+          request(Map.of("Authorization", "Bearer " + encoded))).isEmpty(), decoded);
+    }
+    assertTrue(service.authenticateAnsibleGalaxy(
+        request(Map.of("Authorization", "Bearer not-base64***"))).isEmpty());
+  }
+
+  @Test
   void localBasicAuthenticationUsesRealmPriority() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.realm(new SecurityRealmRecord(1L, "secondary-local", "LOCAL", "Secondary local", true, 0, Map.of("source", "secondary")));
@@ -269,6 +294,12 @@ class SecurityAuthenticationServiceTest {
     assertEquals(20L, authenticated.get().apiKeyId());
     assertTrue(authenticated.get().permissionSubject().groupIds().contains("repo-ci"));
     assertEquals(20L, dao.lastUsedApiKeyId);
+
+    Optional<AuthenticatedSubject> ansible29 = service.authenticateAnsibleGalaxy(request(Map.of(
+        "Authorization", "Token GenericToken.generic-secret")));
+    assertTrue(ansible29.isPresent());
+    assertEquals("ci-bot", ansible29.get().userId());
+    assertEquals(20L, ansible29.get().apiKeyId());
   }
 
   @Test

@@ -11,11 +11,12 @@ import org.junit.jupiter.api.Test;
 
 class BrowseRepositoryFormatIconsContractTest {
   private static final List<String> FORMATS = List.of(
-      "maven2", "npm", "pypi", "cargo", "pub", "composer", "terraform", "swift", "go",
+      "maven2", "npm", "pypi", "cargo", "pub", "composer", "terraform", "swift",
+      "ansiblegalaxy", "go",
       "helm", "docker", "nuget", "rubygems", "yum", "raw");
   private static final List<String> SEARCH_FORMATS = List.of(
       "cargo", "go", "helm", "maven2", "nuget",
-      "pub", "pypi", "rubygems", "swift", "yum", "npm");
+      "pub", "pypi", "rubygems", "swift", "ansiblegalaxy", "yum", "npm");
 
   @Test
   void repositoryFormatColumnUsesSharedBrandIcons() throws IOException {

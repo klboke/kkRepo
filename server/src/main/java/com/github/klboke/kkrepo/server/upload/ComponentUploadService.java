@@ -2,8 +2,10 @@ package com.github.klboke.kkrepo.server.upload;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
+import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyService;
 import com.github.klboke.kkrepo.server.cargo.CargoHostedService;
 import com.github.klboke.kkrepo.server.composer.ComposerHostedService;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
@@ -96,6 +98,7 @@ public class ComponentUploadService {
               field("source-archive", "FILE", "Swift source archive", false, null),
               field("source-archive-signature", "FILE", "Optional source archive CMS signature", true, null),
               field("metadata-signature", "FILE", "Optional metadata signature", true, null))),
+      singleAsset("ansiblegalaxy"),
       rawLikeUpload("nuget"),
       rawLikeUpload("rubygems"),
       rawLikeUpload("yum"),
@@ -114,6 +117,7 @@ public class ComponentUploadService {
   private final YumService yumService;
   private final TerraformService terraformService;
   private final SwiftService swiftService;
+  private AnsibleGalaxyService ansibleGalaxyService;
   private final MavenPathParser mavenPathParser = new MavenPathParser();
   private final TerraformPathParser terraformPathParser = new TerraformPathParser();
 
@@ -193,6 +197,11 @@ public class ComponentUploadService {
     return DEFINITIONS;
   }
 
+  @Autowired(required = false)
+  void setAnsibleGalaxyService(AnsibleGalaxyService ansibleGalaxyService) {
+    this.ansibleGalaxyService = ansibleGalaxyService;
+  }
+
   public UploadDefinition definition(String format) {
     String normalized = normalizeFormat(format);
     return DEFINITIONS.stream()
@@ -235,6 +244,7 @@ public class ComponentUploadService {
       case COMPOSER -> uploadComposer(runtime, upload, createdBy, createdByIp);
       case TERRAFORM -> uploadTerraform(runtime, upload, createdBy, createdByIp);
       case SWIFT -> uploadSwift(runtime, upload, createdBy, createdByIp);
+      case ANSIBLEGALAXY -> uploadAnsible(runtime, upload, createdBy, createdByIp);
       case DOCKER -> throw new UploadValidationException("Docker hosted upload must use the Docker Registry V2 API");
       case NUGET -> uploadRaw(runtime, upload, createdBy, createdByIp);
       case RUBYGEMS -> uploadRaw(runtime, upload, createdBy, createdByIp);
@@ -311,6 +321,25 @@ public class ComponentUploadService {
           createdByIp);
     }
     return List.of(scope + "/" + name + "/" + version);
+  }
+
+  private List<String> uploadAnsible(
+      RepositoryRuntime runtime, NormalizedUpload upload, String createdBy, String createdByIp)
+      throws IOException {
+    if (ansibleGalaxyService == null) {
+      throw new UploadValidationException("Ansible upload service is unavailable");
+    }
+    AssetUpload asset = singleAsset(upload, "Ansible Galaxy");
+    String filename = originalFilename(asset.file());
+    if (!AnsibleGalaxyPathParser.isArtifactFilename(filename)) {
+      throw new UploadValidationException(
+          "Ansible Galaxy upload requires a canonical namespace-name-version.tar.gz archive");
+    }
+    String path = AnsibleGalaxyPathParser.ARTIFACT_BASE + filename;
+    try (InputStream body = asset.file().getInputStream()) {
+      ansibleGalaxyService.putArtifact(runtime, path, body, createdBy, createdByIp);
+    }
+    return List.of(path);
   }
 
   private List<String> uploadMaven(
@@ -585,6 +614,7 @@ public class ComponentUploadService {
       case YUM -> "yum";
       case TERRAFORM -> "terraform";
       case SWIFT -> "swift";
+      case ANSIBLEGALAXY -> "ansiblegalaxy";
       case RAW -> "raw";
     };
   }

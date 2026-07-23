@@ -2,7 +2,7 @@
 
 ## kkrepo 是什么？
 
-kkrepo 是一个兼容 Nexus 的自托管制品仓库，面向 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等常见包格式。
+kkrepo 是一个兼容 Nexus 的自托管制品仓库，面向 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等常见包格式。
 
 它保持 Nexus 风格客户端 URL、协议行为、权限和迁移目标，同时使用 MySQL 存储元数据，用 OSS/S3 兼容存储保存 blob。
 
@@ -31,6 +31,8 @@ kkrepo 面向需要 Nexus 兼容客户端路径、常见仓库格式、MySQL 元
 - Dart / Pub
 - Composer / PHP
 - Terraform Provider / Module Registry
+- Swift Package Registry
+- Ansible Galaxy
 - Docker / OCI
 - NuGet
 - RubyGems
@@ -45,7 +47,7 @@ kkrepo 面向需要 Nexus 兼容客户端路径、常见仓库格式、MySQL 元
 /repository/<repo>/<artifact-path>
 ```
 
-这有助于在对应格式已被迁移流程覆盖时保留 Maven、npm、pip、Helm、Cargo、Dart/Flutter Pub、Composer、Terraform、NuGet、RubyGems、Yum、Raw 和 CI 客户端配置。
+这有助于在对应格式已被迁移流程覆盖时保留 Maven、npm、pip、Helm、Cargo、Dart/Flutter Pub、Composer、Terraform、SwiftPM、Ansible Galaxy、NuGet、RubyGems、Yum、Raw 和 CI 客户端配置。
 
 Docker / OCI 使用 Registry HTTP API V2 的 `/v2/...` 路由，不走 `/repository/<repo>/...`：共享入口部署使用 `<host>/<repo>/<image>:<tag>`，配置仓库级 connector port 后可使用 `<host>:<repo-port>/<image>:<tag>`。
 
@@ -154,6 +156,12 @@ Composer 本身没有标准 publish 命令，因此 hosted 包通过 Components 
 已支持。Terraform hosted、proxy、group 仓库实现 Module Registry 与 Provider Registry 协议，使用 Nexus 兼容的 `/repository/<repo>/v1/modules/...` 和 `/v1/providers/...` 路径。kkRepo 支持 module/provider 上传、version/platform、registry.terraform.io proxy、group 解析、URL token 认证、Provider SHA256SUMS、hosted detached GPG 签名、Browse/Search/Usage，并使用 Terraform 0.13 与当前稳定版执行真实 `terraform init` 验证。
 
 Terraform CLI 需要通过 `host.services` 把 `modules.v1`、`providers.v1` 指向目标 group。根域 discovery 与 Provider Network Mirror Protocol 暂不在公开支持面。Nexus Terraform hosted 数据及 proxy/group 配置可迁移。显式选择 Nexus 原生 Terraform proxy 且 migration plan 为 `FULL` 时，kkrepo 还会通过 proxy 专用路径恢复 module/provider archive cache。已恢复的 module archive 无需请求上游即可被发现；目标端在提供 Provider 缓存前会重建并校验当前 route、checksum manifest 和 signature snapshot，并把缓存固定到该 metadata snapshot。
+
+## Ansible Galaxy 支持了吗？
+
+已支持。`ansiblegalaxy-hosted`、`ansiblegalaxy-proxy`、`ansiblegalaxy-group` 实现 Galaxy v3 collection discovery、不可变 publication/import task、version/dependency metadata、artifact download、public Galaxy proxy、group source binding、Browse/Search/Usage，以及 Ansible 2.9/当前版客户端流程。支持 `GenericToken`、HTTP Basic 和 route-scoped Nexus 兼容 Base64 credential；不支持 Galaxy v1 role 和 `ansible-galaxy role install`。
+
+Nexus 3.93.x-3.94.x 原生 Ansible repository definition 和 shape-gated hosted/proxy collection data 可迁移。Collection tarball、完整 `MANIFEST.json`/`FILES.json`、超大上游 JSON 与 signature payload 保存在 blob storage；MySQL/PostgreSQL 只存有上限的 metadata projection、hash、引用、task、lease 和 binding。详见 [Ansible Galaxy 仓库使用指南](ansible-galaxy-guide.md)。
 
 ## kkrepo 可以用于生产吗？
 

@@ -2,6 +2,8 @@ package com.github.klboke.kkrepo.persistence.jdbc.api;
 
 /** Complete set of persistence contracts available to standalone tools. */
 public interface PersistenceStores extends AutoCloseable {
+  AnsibleGalaxyRegistryDao ansibleGalaxyRegistry();
+
   AssetDao assets();
 
   AuthTicketDao authTickets();

@@ -34,6 +34,9 @@ class RepositoryRecipesTest {
     assertRecipe(recipes, "swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
     assertRecipe(recipes, "swift-proxy", RepositoryFormat.SWIFT, RepositoryType.PROXY);
     assertRecipe(recipes, "swift-group", RepositoryFormat.SWIFT, RepositoryType.GROUP);
+    assertRecipe(recipes, "ansiblegalaxy-hosted", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.HOSTED);
+    assertRecipe(recipes, "ansiblegalaxy-proxy", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.PROXY);
+    assertRecipe(recipes, "ansiblegalaxy-group", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.GROUP);
   }
 
   private static void assertRecipe(

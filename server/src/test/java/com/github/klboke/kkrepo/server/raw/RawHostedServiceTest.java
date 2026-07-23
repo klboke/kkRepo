@@ -16,7 +16,9 @@ import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
@@ -109,6 +111,33 @@ class RawHostedServiceTest {
 
     assertEquals(404, fixture.service.delete(runtime, "file").status());
     assertEquals(204, fixture.service.delete(runtime, "file").status());
+  }
+
+  @Test
+  void delegatesExistingBlobLinksWithNormalizedProtocolAndBrowsePaths() {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.HOSTED, 1L, "ALLOW");
+    BlobStorage storage = mock(BlobStorage.class);
+    AssetBlobRecord blob = new AssetBlobRecord(
+        2L, 1L, "blob://bucket/staging", null, "staging", null,
+        "sha1", "sha256", "md5", 4L, "application/octet-stream", "ansible", null,
+        Instant.EPOCH, Instant.EPOCH, Map.of());
+    ComponentRecord component = new ComponentRecord(
+        null, 1L, RepositoryFormat.RAW, "acme", "tools", "1.0.0", "logical",
+        new byte[32], Map.of(), Instant.EPOCH);
+    when(fixture.registry.forBlobStoreId(1L)).thenReturn(storage);
+    when(fixture.writer.linkExistingBlobAtBrowsePathIfAbsent(
+        runtime, storage, 1L, "file", blob, "application/octet-stream",
+        "user", "127.0.0.1", component, "acme/tools/1.0.0/file"))
+        .thenReturn(new RawAssetWriter.Stored(null, blob, null, true, null));
+
+    assertTrue(fixture.service.linkInternalBlobWithComponentAtBrowsePathIfAbsent(
+        runtime, "/file", blob, "application/octet-stream", "user", "127.0.0.1",
+        component, "/acme//tools/1.0.0/file"));
+
+    verify(fixture.writer).linkExistingBlobAtBrowsePathIfAbsent(
+        runtime, storage, 1L, "file", blob, "application/octet-stream",
+        "user", "127.0.0.1", component, "acme/tools/1.0.0/file");
   }
 
   private static Fixture fixture() {

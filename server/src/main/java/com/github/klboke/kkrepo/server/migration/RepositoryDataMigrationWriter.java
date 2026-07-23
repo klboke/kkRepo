@@ -32,6 +32,7 @@ import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.blob.BlobTransactionCleanup;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
+import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.docker.DockerManifestParser;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.pub.PubRepositoryDataMigrationWriter;
@@ -76,6 +77,7 @@ class RepositoryDataMigrationWriter {
   private final PubRepositoryDataMigrationWriter pubMigrationWriter;
   private final TerraformRepositoryDataMigrationWriter terraformMigrationWriter;
   private final SwiftRepositoryDataMigrationWriter swiftMigrationWriter;
+  private final AnsibleGalaxyRepositoryDataMigrationWriter ansibleMigrationWriter;
   private final TransientTransactionRetry transactionRetry;
   private final MavenPathParser mavenPathParser = new MavenPathParser();
 
@@ -100,6 +102,7 @@ class RepositoryDataMigrationWriter {
         dockerRegistryDao,
         dockerManifestParser,
         pubMigrationWriter,
+        null,
         null,
         null,
         transactionRetry);
@@ -129,6 +132,36 @@ class RepositoryDataMigrationWriter {
         pubMigrationWriter,
         terraformMigrationWriter,
         null,
+        null,
+        transactionRetry);
+  }
+
+  RepositoryDataMigrationWriter(
+      RepositoryDao repositoryDao,
+      ComponentDao componentDao,
+      AssetDao assetDao,
+      BrowseNodeDao browseNodeDao,
+      BlobStorageRegistry blobStorageRegistry,
+      RepositoryIndexRebuildDao indexRebuildDao,
+      DockerRegistryDao dockerRegistryDao,
+      DockerManifestParser dockerManifestParser,
+      PubRepositoryDataMigrationWriter pubMigrationWriter,
+      TerraformRepositoryDataMigrationWriter terraformMigrationWriter,
+      SwiftRepositoryDataMigrationWriter swiftMigrationWriter,
+      TransientTransactionRetry transactionRetry) {
+    this(
+        repositoryDao,
+        componentDao,
+        assetDao,
+        browseNodeDao,
+        blobStorageRegistry,
+        indexRebuildDao,
+        dockerRegistryDao,
+        dockerManifestParser,
+        pubMigrationWriter,
+        terraformMigrationWriter,
+        swiftMigrationWriter,
+        null,
         transactionRetry);
   }
 
@@ -145,6 +178,7 @@ class RepositoryDataMigrationWriter {
       PubRepositoryDataMigrationWriter pubMigrationWriter,
       TerraformRepositoryDataMigrationWriter terraformMigrationWriter,
       SwiftRepositoryDataMigrationWriter swiftMigrationWriter,
+      AnsibleGalaxyRepositoryDataMigrationWriter ansibleMigrationWriter,
       TransientTransactionRetry transactionRetry) {
     this.repositoryDao = repositoryDao;
     this.componentDao = componentDao;
@@ -157,6 +191,7 @@ class RepositoryDataMigrationWriter {
     this.pubMigrationWriter = pubMigrationWriter;
     this.terraformMigrationWriter = terraformMigrationWriter;
     this.swiftMigrationWriter = swiftMigrationWriter;
+    this.ansibleMigrationWriter = ansibleMigrationWriter;
     this.transactionRetry = transactionRetry;
   }
 
@@ -194,6 +229,16 @@ class RepositoryDataMigrationWriter {
           repository, source, body, validateSize);
       return new WriteResult(
           migrated.componentId(), migrated.assetId(), migrated.assetBlobId(), migrated.assetBlobObjectKey());
+    }
+    if (repository.format() == RepositoryFormat.ANSIBLEGALAXY) {
+      if (ansibleMigrationWriter == null) {
+        throw new IllegalStateException("Ansible Galaxy migration writer is not configured");
+      }
+      AnsibleGalaxyRepositoryDataMigrationWriter.MigratedAsset migrated =
+          ansibleMigrationWriter.write(repository, source, body, validateSize);
+      return new WriteResult(
+          migrated.componentId(), migrated.assetId(), migrated.assetBlobId(),
+          migrated.assetBlobObjectKey());
     }
     DigestedUpload upload = uploadWithDigests(repository, storage, source, body, validateSize);
     Map<MavenPath, ChecksumUpload> checksumUploads = new LinkedHashMap<>();
@@ -829,6 +874,8 @@ class RepositoryDataMigrationWriter {
               ? "composer-dist" : "composer-metadata";
       case TERRAFORM -> "terraform-asset";
       case SWIFT -> swiftAssetKind(source.sourcePath());
+      case ANSIBLEGALAXY -> source.sourcePath().endsWith(".tar.gz")
+          ? "ansible-collection" : "ansible-metadata";
       case RAW -> "asset";
     };
   }

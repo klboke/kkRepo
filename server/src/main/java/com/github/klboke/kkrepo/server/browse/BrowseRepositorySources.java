@@ -23,6 +23,12 @@ final class BrowseRepositorySources {
     return List.copyOf(sources);
   }
 
+  static List<RepositoryRecord> ansibleSources(
+      RepositoryRecord visibleRepository,
+      RepositoryDao repositoryDao) {
+    return swiftSources(visibleRepository, repositoryDao);
+  }
+
   private static void collect(
       RepositoryRecord repository,
       RepositoryDao repositoryDao,

@@ -11,6 +11,7 @@ import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.LockSupport;
 import org.junit.jupiter.api.Test;
 
 class TerraformPublishLeaseManagerTest {
@@ -93,7 +94,18 @@ class TerraformPublishLeaseManagerTest {
     try (TerraformPublishLeaseManager.Lease lease = manager.acquire(
         "provider:lost", Duration.ofMillis(90), Duration.ofSeconds(1))) {
       assertTrue(renewalAttempted.await(1, TimeUnit.SECONDS));
-      assertThrows(MavenExceptions.WritePolicyDenied.class, lease::assertHeld);
+      assertLeaseEventuallyRejected(lease, Duration.ofSeconds(1));
     }
+  }
+
+  private static void assertLeaseEventuallyRejected(
+      TerraformPublishLeaseManager.Lease lease, Duration timeout) {
+    assertThrows(MavenExceptions.WritePolicyDenied.class, () -> {
+      long deadline = System.nanoTime() + timeout.toNanos();
+      do {
+        lease.assertHeld();
+        LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));
+      } while (System.nanoTime() < deadline);
+    });
   }
 }

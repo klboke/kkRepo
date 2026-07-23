@@ -10,6 +10,8 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPath;
+import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
 import com.github.klboke.kkrepo.protocol.pub.PubPath;
 import com.github.klboke.kkrepo.protocol.pub.PubPathParser;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPath;
@@ -41,6 +43,8 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       RepositorySecurityFilter.class.getName() + ".NORMALIZED_REPOSITORY_PATH";
   public static final String TERRAFORM_URL_TOKEN_SEGMENT_ATTRIBUTE =
       RepositorySecurityFilter.class.getName() + ".TERRAFORM_URL_TOKEN_SEGMENT";
+  private static final AnsibleGalaxyPathParser ANSIBLE_GALAXY_PATH_PARSER =
+      new AnsibleGalaxyPathParser();
   private static final PubPathParser PUB_PATH_PARSER = new PubPathParser();
   private static final TerraformPathParser TERRAFORM_PATH_PARSER = new TerraformPathParser();
   private final SecurityAuthenticationService authenticationService;
@@ -122,11 +126,16 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       filterChain.doFilter(request, response);
       return;
     }
+    if (isInvalidAnsiblePublishRoute(repository.get(), target)) {
+      filterChain.doFilter(request, response);
+      return;
+    }
     Optional<AuthenticatedSubject> authenticated = terraformUrlToken == null
         ? switch (repository.get().format()) {
       case CARGO -> authenticationService.authenticateCargo(request);
       case PUB -> authenticationService.authenticatePub(request);
       case RUBYGEMS -> authenticationService.authenticateRubygems(request);
+      case ANSIBLEGALAXY -> authenticationService.authenticateAnsibleGalaxy(request);
       default -> authenticationService.authenticate(request);
     }
         : authenticationService.authenticateTerraformUrlToken(terraformUrlToken);
@@ -151,6 +160,11 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     if (!decision.allowed()) {
       if (repository.get().format() == RepositoryFormat.SWIFT) {
         swiftProblem(response, HttpServletResponse.SC_FORBIDDEN, "Forbidden", decision.reason());
+        return;
+      }
+      if (repository.get().format() == RepositoryFormat.ANSIBLEGALAXY) {
+        galaxyError(response, HttpServletResponse.SC_FORBIDDEN, "forbidden", "Forbidden",
+            decision.reason());
         return;
       }
       response.sendError(HttpServletResponse.SC_FORBIDDEN, decision.reason());
@@ -200,8 +214,14 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
 
   private List<PermissionAction> actionsForDecision(
       RepositoryRecord repository, RepositoryRequest target) {
-    if (repository.format() == RepositoryFormat.SWIFT && target.componentUploadRoute()) {
+    if ((repository.format() == RepositoryFormat.SWIFT
+        || repository.format() == RepositoryFormat.ANSIBLEGALAXY)
+        && target.componentUploadRoute()) {
       return List.of(PermissionAction.ADD);
+    }
+    if (repository.format() == RepositoryFormat.ANSIBLEGALAXY
+        && isAnsibleImportTaskRoute(target.method(), target.path())) {
+      return List.of(PermissionAction.ADD, PermissionAction.READ);
     }
     if (repository.format() != RepositoryFormat.TERRAFORM
         || !"PUT".equalsIgnoreCase(target.method())) {
@@ -321,6 +341,10 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     if (format == RepositoryFormat.SWIFT && "PUT".equalsIgnoreCase(method)) {
       return List.of(PermissionAction.ADD);
     }
+    if (format == RepositoryFormat.ANSIBLEGALAXY
+        && ("PUT".equalsIgnoreCase(method) || "POST".equalsIgnoreCase(method))) {
+      return List.of(PermissionAction.ADD);
+    }
     if (format == RepositoryFormat.SWIFT && "POST".equalsIgnoreCase(method)
         && "login".equals(path)) {
       return List.of(PermissionAction.READ);
@@ -352,6 +376,12 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
         && parsed.kind() == PubPath.Kind.PUBLISH_UPLOAD;
   }
 
+  private static boolean isAnsibleImportTaskRoute(String method, String path) {
+    return "GET".equalsIgnoreCase(method)
+        && ANSIBLE_GALAXY_PATH_PARSER.parse(path).kind()
+            == AnsibleGalaxyPath.Kind.IMPORT_TASK;
+  }
+
   private static boolean isInvalidPubPublishRoute(RepositoryRecord repository, RepositoryRequest target) {
     return repository.format() == RepositoryFormat.PUB
         && repository.type() != RepositoryType.HOSTED
@@ -363,6 +393,14 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     return repository.format() == RepositoryFormat.SWIFT
         && repository.type() != RepositoryType.HOSTED
         && "PUT".equalsIgnoreCase(target.method());
+  }
+
+  private static boolean isInvalidAnsiblePublishRoute(
+      RepositoryRecord repository, RepositoryRequest target) {
+    return repository.format() == RepositoryFormat.ANSIBLEGALAXY
+        && repository.type() != RepositoryType.HOSTED
+        && ("PUT".equalsIgnoreCase(target.method())
+            || "POST".equalsIgnoreCase(target.method()));
   }
 
   private static boolean isCargoYankRoute(String method, String path) {
@@ -406,6 +444,10 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       response.setHeader(
           HttpHeaders.WWW_AUTHENTICATE,
           "Bearer realm=\"pub\", message=\"Authentication required\"");
+    } else if (repository.format() == RepositoryFormat.ANSIBLEGALAXY) {
+      response.setHeader(
+          HttpHeaders.WWW_AUTHENTICATE,
+          "Bearer realm=\"ansiblegalaxy\", Basic realm=\"kkrepo\"");
     } else {
       response.setHeader(HttpHeaders.WWW_AUTHENTICATE, "Basic realm=\"kkrepo\"");
     }
@@ -413,6 +455,15 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       swiftProblem(
           response,
           HttpServletResponse.SC_UNAUTHORIZED,
+          "Unauthorized",
+          "Authentication required");
+      return;
+    }
+    if (repository.format() == RepositoryFormat.ANSIBLEGALAXY) {
+      galaxyError(
+          response,
+          HttpServletResponse.SC_UNAUTHORIZED,
+          "authentication_required",
           "Unauthorized",
           "Authentication required");
       return;
@@ -437,6 +488,18 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     response.getWriter().write("{\"type\":\"about:blank\",\"title\":\""
         + json(title) + "\",\"status\":" + status + ",\"detail\":\""
         + json(detail == null ? title : detail) + "\"}");
+  }
+
+  private static void galaxyError(
+      HttpServletResponse response, int status, String code, String title, String detail)
+      throws IOException {
+    response.setStatus(status);
+    response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+    response.setContentType("application/json");
+    response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
+    response.getWriter().write("{\"errors\":[{\"status\":\"" + status
+        + "\",\"code\":\"" + json(code) + "\",\"title\":\"" + json(title)
+        + "\",\"detail\":\"" + json(detail == null ? title : detail) + "\"}]}");
   }
 
   private static String json(String value) {

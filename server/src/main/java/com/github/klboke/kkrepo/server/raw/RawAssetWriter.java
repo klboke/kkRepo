@@ -137,6 +137,93 @@ class RawAssetWriter {
       String createdBy,
       String createdByIp,
       ComponentRecord component) {
+    return writeFileAtBrowsePath(
+        runtime, storage, blobStoreId, path, file, contentTypeHint, extraBlobAttributes,
+        createdBy, createdByIp, component, path);
+  }
+
+  Stored writeFileAtBrowsePath(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      String path,
+      Path file,
+      String contentTypeHint,
+      Map<String, ?> extraBlobAttributes,
+      String createdBy,
+      String createdByIp,
+      ComponentRecord component,
+      String browsePath) {
+    return writeFileAtBrowsePath(
+        runtime, storage, blobStoreId, path, file, contentTypeHint, extraBlobAttributes,
+        createdBy, createdByIp, component, browsePath, true);
+  }
+
+  /**
+   * Writes an immutable protocol asset without ever replacing a row that already owns the path.
+   * The database path uniqueness constraint decides concurrent races; the losing upload reuses the
+   * winning asset and its blob instead of rebinding that asset to newly uploaded bytes.
+   */
+  Stored writeFileAtBrowsePathIfAbsent(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      String path,
+      Path file,
+      String contentTypeHint,
+      Map<String, ?> extraBlobAttributes,
+      String createdBy,
+      String createdByIp,
+      ComponentRecord component,
+      String browsePath) {
+    return writeFileAtBrowsePath(
+        runtime, storage, blobStoreId, path, file, contentTypeHint, extraBlobAttributes,
+        createdBy, createdByIp, component, browsePath, false);
+  }
+
+  Stored linkExistingBlobAtBrowsePathIfAbsent(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      String path,
+      AssetBlobRecord blob,
+      String contentTypeHint,
+      String createdBy,
+      String createdByIp,
+      ComponentRecord component,
+      String browsePath) {
+    if (blob == null || blob.id() == null || blob.blobStoreId() != blobStoreId) {
+      throw new IllegalArgumentException("An existing blob from the repository blob store is required");
+    }
+    String sha512 = blob.attributes() == null
+        ? "" : String.valueOf(blob.attributes().getOrDefault("sha512", ""));
+    Digests digests = new Digests(blob.md5(), blob.sha1(), blob.sha256(), sha512, blob.size());
+    DigestedUpload upload = new DigestedUpload(
+        BlobReferenceCodec.reference(
+            blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size()),
+        digests,
+        null,
+        false);
+    return executePersist(
+        "Link existing raw blob " + runtime.name() + "/" + path,
+        () -> persist(
+            runtime, storage, blobStoreId, path, upload, contentTypeHint, Map.of(),
+            createdBy, createdByIp, ComponentBinding.explicit(component), null, browsePath, false));
+  }
+
+  private Stored writeFileAtBrowsePath(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      String path,
+      Path file,
+      String contentTypeHint,
+      Map<String, ?> extraBlobAttributes,
+      String createdBy,
+      String createdByIp,
+      ComponentRecord component,
+      String browsePath,
+      boolean replaceExisting) {
     DigestedUpload upload = uploadFileWithDigests(
         runtime, storage, blobStoreId, path, file, extraBlobAttributes);
     try {
@@ -145,7 +232,7 @@ class RawAssetWriter {
           () -> persist(runtime, storage, blobStoreId, path, upload, contentTypeHint,
               extraBlobAttributes, createdBy, createdByIp,
               component == null ? ComponentBinding.none() : ComponentBinding.explicit(component),
-              null));
+              null, browsePath, replaceExisting));
       cleanupUnusedUploadedBlob(storage, blobStoreId, upload, stored.blob());
       return stored;
     } catch (RuntimeException e) {
@@ -172,7 +259,7 @@ class RawAssetWriter {
           "Persist raw asset " + runtime.name() + "/" + path,
           () -> persist(runtime, storage, blobStoreId, path, upload, contentTypeHint,
               extraBlobAttributes, createdBy, createdByIp, componentBinding,
-              keepResponseFile ? upload.tempFile() : null));
+              keepResponseFile ? upload.tempFile() : null, path, true));
       cleanupUnusedUploadedBlob(storage, blobStoreId, upload, stored.blob());
       if (!keepResponseFile) {
         TempBlobFiles.deleteQuietly(upload.tempFile());
@@ -218,7 +305,9 @@ class RawAssetWriter {
       String createdBy,
       String createdByIp,
       ComponentBinding componentBinding,
-      Path responseFile) {
+      Path responseFile,
+      String browsePath,
+      boolean replaceExisting) {
     Instant now = Instant.now();
     String contentType = contentTypeHint == null || contentTypeHint.isBlank()
         ? MediaType.APPLICATION_OCTET_STREAM_VALUE
@@ -228,6 +317,9 @@ class RawAssetWriter {
     String blobRef = BlobReferenceCodec.format(ref);
 
     Optional<AssetRecord> existing = assetDao.findAssetByPath(runtime.id(), path);
+    if (!replaceExisting && existing.isPresent()) {
+      return existingAsset(existing.get(), upload.digests(), responseFile);
+    }
     Long previousComponentId = existing.map(AssetRecord::componentId).orElse(null);
     Long previousBlobId = existing.map(AssetRecord::assetBlobId).orElse(null);
     AssetBlobRecord previousBlob = previousBlobId == null
@@ -315,6 +407,13 @@ class RawAssetWriter {
         AssetRecord prior = assetDao.findAssetByPath(runtime.id(), path)
             .orElseThrow(() -> new IllegalStateException(
                 "Concurrent raw asset insert won but row is not visible for " + runtime.name() + "/" + path));
+        if (!replaceExisting) {
+          assetDao.markBlobDeletedIfUnreferenced(blobId, "immutable asset insert lost");
+          if (componentId != null && !componentId.equals(prior.componentId())) {
+            componentDao.deleteIfNoAssets(componentId);
+          }
+          return existingAsset(prior, digests, responseFile);
+        }
         previousComponentId = prior.componentId();
         previousBlob = prior.assetBlobId() == null ? null : assetDao.findBlobById(prior.assetBlobId()).orElse(null);
         persistedAsset = updateExistingAsset(prior, componentId, blobId, contentType,
@@ -326,12 +425,23 @@ class RawAssetWriter {
     if (previousBlob != null && previousBlob.id() != null && previousBlob.id() != blobId) {
       assetDao.markBlobDeletedIfUnreferenced(previousBlob.id(), "asset replaced");
     }
-    browseNodeDao.upsertPathAncestors(runtime.id(), path, persistedAsset.id(), componentId);
+    if (browsePath != null && !browsePath.isBlank()) {
+      browseNodeDao.upsertPathAncestors(
+          runtime.id(), browsePath, persistedAsset.id(), componentId);
+    }
     if (previousComponentId != null && !previousComponentId.equals(componentId)) {
       componentDao.deleteIfNoAssets(previousComponentId);
     }
     assetMetadataCache.evictAfterCommit(runtime.id(), path);
     return new Stored(persistedAsset, persistedBlob, digests, created, responseFile);
+  }
+
+  private Stored existingAsset(
+      AssetRecord asset, Digests digests, Path responseFile) {
+    AssetBlobRecord blob = asset.assetBlobId() == null
+        ? null
+        : assetDao.findBlobById(asset.assetBlobId()).orElse(null);
+    return new Stored(asset, blob, digests, false, responseFile);
   }
 
   private AssetRecord updateExistingAsset(

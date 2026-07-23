@@ -360,6 +360,28 @@ ensure_nexus_repositories() {
     "group":{"memberNames":["swift-hosted","swift-proxy"]}
   }'
 
+  nexus_try_create_repo "ansible-hosted" "$NEXUS_URL/service/rest/v1/repositories/ansiblegalaxy/hosted" '{
+    "name":"ansible-hosted",
+    "online":true,
+    "storage":{"blobStoreName":"default","strictContentTypeValidation":true,"writePolicy":"ALLOW_ONCE"}
+  }'
+
+  nexus_try_create_repo "ansible-proxy" "$NEXUS_URL/service/rest/v1/repositories/ansiblegalaxy/proxy" '{
+    "name":"ansible-proxy",
+    "online":true,
+    "storage":{"blobStoreName":"default","strictContentTypeValidation":true},
+    "proxy":{"remoteUrl":"https://galaxy.ansible.com/","contentMaxAge":1440,"metadataMaxAge":1440},
+    "negativeCache":{"enabled":true,"timeToLive":60},
+    "httpClient":{"blocked":false,"autoBlock":true}
+  }'
+
+  nexus_try_create_repo "ansible-group" "$NEXUS_URL/service/rest/v1/repositories/ansiblegalaxy/group" '{
+    "name":"ansible-group",
+    "online":true,
+    "storage":{"blobStoreName":"default","strictContentTypeValidation":true},
+    "group":{"memberNames":["ansible-hosted","ansible-proxy"]}
+  }'
+
   local composer_payload='{
     "name":"composer-proxy",
     "online":true,
@@ -799,6 +821,33 @@ PY
     "blobStoreName":"default",
     "strictContentTypeValidation":true,
     "group":{"memberNames":["swift-hosted","swift-proxy"]}
+  }'
+
+  kkrepo_create_repo "ansible-hosted" '{
+    "name":"ansible-hosted",
+    "recipe":"ansiblegalaxy-hosted",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "hosted":{"writePolicy":"ALLOW_ONCE"}
+  }'
+
+  kkrepo_create_repo "ansible-proxy" '{
+    "name":"ansible-proxy",
+    "recipe":"ansiblegalaxy-proxy",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "proxy":{"remoteUrl":"https://galaxy.ansible.com/","contentMaxAgeMinutes":1440,"metadataMaxAgeMinutes":1440,"negativeCacheEnabled":true,"negativeCacheTtlMinutes":1,"autoBlock":true}
+  }'
+
+  kkrepo_create_repo "ansible-group" '{
+    "name":"ansible-group",
+    "recipe":"ansiblegalaxy-group",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "group":{"memberNames":["ansible-hosted","ansible-proxy"]}
   }'
 
   kkrepo_create_repo "docker-hosted" "{

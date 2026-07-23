@@ -146,11 +146,19 @@ jobs:
           bash -n scripts/ci/test-dev-jar-deploy.sh
           bash -n scripts/build-dist.sh
           bash -n scripts/build-docker-image.sh
+          bash -n scripts/ci/package-e2e-candidate-image.sh
+          bash -n scripts/ci/load-e2e-candidate-image.sh
+          bash -n scripts/ci/prepare-swift-e2e-tls.sh
+          bash -n scripts/ci/setup-swift-e2e-wrappers.sh
+          bash -n scripts/ci/test-e2e-image-artifact.sh
+          bash -n scripts/ci/test-swift-e2e-wrappers.sh
           bash -n scripts/ci/test-dist-launcher.sh
           bash -n server/src/dist/bin/start.sh
           bash -n server/src/dist/bin/status.sh
           bash -n server/src/dist/bin/stop.sh
           scripts/ci/test-dev-jar-deploy.sh
+          scripts/ci/test-e2e-image-artifact.sh
+          scripts/ci/test-swift-e2e-wrappers.sh
           scripts/ci/test-dist-launcher.sh
           test -f .github/deploy/dev/systemd/kkrepo.service
           POSTGRES_DB=kkrepo POSTGRES_USER=kkrepo POSTGRES_PASSWORD=kkrepo \

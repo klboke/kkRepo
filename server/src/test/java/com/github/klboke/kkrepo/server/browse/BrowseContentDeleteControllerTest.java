@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -14,6 +15,7 @@ import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
@@ -38,6 +40,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.server.ResponseStatusException;
@@ -145,6 +148,151 @@ class BrowseContentDeleteControllerTest {
         1L, RepositoryIndexRebuildDao.PYPI_PROJECT, "demo-pkg");
     verify(fixture.pypiCache).invalidateMemberProjectAfterCommit(1L, "demo-pkg");
     verify(fixture.groupMemberAssetCache).invalidateMemberAfterCommit(1L);
+  }
+
+  @Test
+  void deletesAnsibleBrowseArchiveThroughNestedGroupAfterRegistryCleanup() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord hosted =
+        repository(1L, "ansible-hosted", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.HOSTED);
+    RepositoryRecord inner =
+        repository(2L, "ansible-inner", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.GROUP);
+    RepositoryRecord outer =
+        repository(3L, "ansible-group", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.GROUP);
+    String filename = "acme-tools-1.2.3.tar.gz";
+    String publicPath = "acme/tools/1.2.3/" + filename;
+    String storagePath =
+        "api/v3/plugin/ansible/content/published/collections/artifacts/" + filename;
+    AssetRecord archive = asset(
+        11L, 21L, 31L, RepositoryFormat.ANSIBLEGALAXY, storagePath,
+        "collection-artifact", Map.of());
+    AnsibleGalaxyRegistryDao.CollectionVersion version = ansibleVersion(41L, archive);
+    when(fixture.repositoryDao.findByName(outer.name())).thenReturn(Optional.of(outer));
+    when(fixture.repositoryDao.findByName(hosted.name())).thenReturn(Optional.of(hosted));
+    when(fixture.repositoryDao.listMembers(outer.id())).thenReturn(List.of(inner));
+    when(fixture.repositoryDao.listMembers(inner.id())).thenReturn(List.of(hosted));
+    when(fixture.assetDao.findAssetByPath(hosted.id(), storagePath))
+        .thenReturn(Optional.of(archive));
+    when(fixture.assetDao.listAssetsByPrefix(hosted.id(), storagePath + "/"))
+        .thenReturn(List.of());
+    when(fixture.ansibleRegistryDao.findVersionByArtifactFilename(hosted.id(), filename))
+        .thenReturn(Optional.of(version));
+    when(fixture.ansibleRegistryDao.deleteVersion(
+        hosted.id(), version.id(), archive.id())).thenReturn(true);
+
+    BrowseContentDeleteController.BrowseDeleteResult result = fixture.controller.delete(
+        outer.name(), publicPath, hosted.name(), new MockHttpServletRequest());
+
+    assertEquals(hosted.name(), result.sourceRepository());
+    assertEquals(publicPath, result.path());
+    assertEquals(1, result.deletedAssets());
+    InOrder deletion = inOrder(fixture.ansibleRegistryDao, fixture.assetDao);
+    deletion.verify(fixture.ansibleRegistryDao)
+        .deleteVersion(hosted.id(), version.id(), archive.id());
+    deletion.verify(fixture.assetDao).deleteAssetById(archive.id());
+    verify(fixture.componentDao).deleteIfNoAssets(version.componentId());
+  }
+
+  @Test
+  void rejectsAnsibleBrowsePathThatDoesNotMatchRegistryIdentity() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord hosted =
+        repository(1L, "ansible-hosted", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.HOSTED);
+    String filename = "acme-tools-1.2.3.tar.gz";
+    String storagePath =
+        "api/v3/plugin/ansible/content/published/collections/artifacts/" + filename;
+    AssetRecord archive = asset(
+        11L, 21L, 31L, RepositoryFormat.ANSIBLEGALAXY, storagePath,
+        "collection-artifact", Map.of());
+    AnsibleGalaxyRegistryDao.CollectionVersion version = ansibleVersion(41L, archive);
+    when(fixture.repositoryDao.findByName(hosted.name())).thenReturn(Optional.of(hosted));
+    when(fixture.assetDao.findAssetByPath(hosted.id(), storagePath))
+        .thenReturn(Optional.of(archive));
+    when(fixture.assetDao.listAssetsByPrefix(hosted.id(), storagePath + "/"))
+        .thenReturn(List.of());
+    when(fixture.ansibleRegistryDao.findVersionByArtifactFilename(hosted.id(), filename))
+        .thenReturn(Optional.of(version));
+
+    assertStatus(HttpStatus.NOT_FOUND, () -> fixture.controller.delete(
+        hosted.name(), "other/tools/1.2.3/" + filename, null,
+        new MockHttpServletRequest()));
+
+    verify(fixture.ansibleRegistryDao, never()).deleteVersion(anyLong(), anyLong(), anyLong());
+    verify(fixture.assetDao, never()).deleteAssetById(anyLong());
+  }
+
+  @Test
+  void rejectsAnsibleStoragePathAndMissingRegistryIdentity() {
+    Fixture hidden = fixture(true, AccessDecision.allow());
+    RepositoryRecord hosted =
+        repository(1L, "ansible-hosted", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.HOSTED);
+    when(hidden.repositoryDao.findByName(hosted.name())).thenReturn(Optional.of(hosted));
+    assertStatus(HttpStatus.BAD_REQUEST, () -> hidden.controller.delete(
+        hosted.name(),
+        "api/v3/plugin/ansible/content/published/collections/artifacts/"
+            + "acme-tools-1.2.3.tar.gz",
+        null,
+        new MockHttpServletRequest()));
+
+    Fixture missing = fixture(true, AccessDecision.allow());
+    String filename = "acme-tools-1.2.3.tar.gz";
+    String publicPath = "acme/tools/1.2.3/" + filename;
+    String storagePath =
+        "api/v3/plugin/ansible/content/published/collections/artifacts/" + filename;
+    AssetRecord archive = asset(
+        11L, 21L, 31L, RepositoryFormat.ANSIBLEGALAXY, storagePath,
+        "collection-artifact", Map.of());
+    when(missing.repositoryDao.findByName(hosted.name())).thenReturn(Optional.of(hosted));
+    when(missing.assetDao.findAssetByPath(hosted.id(), storagePath))
+        .thenReturn(Optional.of(archive));
+    when(missing.assetDao.listAssetsByPrefix(hosted.id(), storagePath + "/"))
+        .thenReturn(List.of());
+
+    assertStatus(HttpStatus.NOT_FOUND, () -> missing.controller.delete(
+        hosted.name(), publicPath, null, new MockHttpServletRequest()));
+    verify(missing.assetDao, never()).deleteAssetById(anyLong());
+  }
+
+  @Test
+  void abortsAnsibleDeleteWhenArchiveOrRegistryStateChanges() {
+    RepositoryRecord hosted =
+        repository(1L, "ansible-hosted", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.HOSTED);
+    String filename = "acme-tools-1.2.3.tar.gz";
+    String publicPath = "acme/tools/1.2.3/" + filename;
+    String storagePath =
+        "api/v3/plugin/ansible/content/published/collections/artifacts/" + filename;
+    AssetRecord archive = asset(
+        11L, 21L, 31L, RepositoryFormat.ANSIBLEGALAXY, storagePath,
+        "collection-artifact", Map.of());
+    AssetRecord replacedArchive = asset(
+        12L, 21L, 32L, RepositoryFormat.ANSIBLEGALAXY, storagePath,
+        "collection-artifact", Map.of());
+
+    Fixture mismatched = fixture(true, AccessDecision.allow());
+    when(mismatched.repositoryDao.findByName(hosted.name())).thenReturn(Optional.of(hosted));
+    when(mismatched.assetDao.findAssetByPath(hosted.id(), storagePath))
+        .thenReturn(Optional.of(archive));
+    when(mismatched.assetDao.listAssetsByPrefix(hosted.id(), storagePath + "/"))
+        .thenReturn(List.of());
+    when(mismatched.ansibleRegistryDao.findVersionByArtifactFilename(hosted.id(), filename))
+        .thenReturn(Optional.of(ansibleVersion(41L, replacedArchive)));
+    assertStatus(HttpStatus.CONFLICT, () -> mismatched.controller.delete(
+        hosted.name(), publicPath, null, new MockHttpServletRequest()));
+
+    Fixture changed = fixture(true, AccessDecision.allow());
+    AnsibleGalaxyRegistryDao.CollectionVersion version = ansibleVersion(41L, archive);
+    when(changed.repositoryDao.findByName(hosted.name())).thenReturn(Optional.of(hosted));
+    when(changed.assetDao.findAssetByPath(hosted.id(), storagePath))
+        .thenReturn(Optional.of(archive));
+    when(changed.assetDao.listAssetsByPrefix(hosted.id(), storagePath + "/"))
+        .thenReturn(List.of());
+    when(changed.ansibleRegistryDao.findVersionByArtifactFilename(hosted.id(), filename))
+        .thenReturn(Optional.of(version));
+    assertStatus(HttpStatus.CONFLICT, () -> changed.controller.delete(
+        hosted.name(), publicPath, null, new MockHttpServletRequest()));
+
+    verify(mismatched.assetDao, never()).deleteAssetById(anyLong());
+    verify(changed.assetDao, never()).deleteAssetById(anyLong());
   }
 
   @Test
@@ -355,6 +503,7 @@ class BrowseContentDeleteControllerTest {
     AssetDao assetDao = mock(AssetDao.class);
     TerraformRegistryDao terraformRegistryDao = mock(TerraformRegistryDao.class);
     SwiftRegistryDao swiftRegistryDao = mock(SwiftRegistryDao.class);
+    AnsibleGalaxyRegistryDao ansibleRegistryDao = mock(AnsibleGalaxyRegistryDao.class);
     BrowseNodeDao browseNodeDao = mock(BrowseNodeDao.class);
     ComponentDao componentDao = mock(ComponentDao.class);
     MetadataRebuildDao metadataRebuildDao = mock(MetadataRebuildDao.class);
@@ -373,12 +522,12 @@ class BrowseContentDeleteControllerTest {
         authenticated ? Optional.of(subject) : Optional.empty());
     when(security.decide(permissionSubject, "nexus:*")).thenReturn(decision);
     BrowseContentDeleteController controller = new BrowseContentDeleteController(
-        repositoryDao, assetDao, terraformRegistryDao, swiftRegistryDao,
+        repositoryDao, assetDao, terraformRegistryDao, swiftRegistryDao, ansibleRegistryDao,
         browseNodeDao, componentDao, metadataRebuildDao,
         indexRebuildDao, authentication, security, assetCache, npmCache, pypiCache,
         groupMemberAssetCache, cacheController);
     return new Fixture(
-        repositoryDao, assetDao, terraformRegistryDao, swiftRegistryDao,
+        repositoryDao, assetDao, terraformRegistryDao, swiftRegistryDao, ansibleRegistryDao,
         browseNodeDao, componentDao, metadataRebuildDao,
         indexRebuildDao, npmCache, pypiCache, groupMemberAssetCache, cacheController, controller);
   }
@@ -404,11 +553,21 @@ class BrowseContentDeleteControllerTest {
         4L, null, Instant.EPOCH, attributes);
   }
 
+  private static AnsibleGalaxyRegistryDao.CollectionVersion ansibleVersion(
+      long id, AssetRecord archive) {
+    return new AnsibleGalaxyRegistryDao.CollectionVersion(
+        id, archive.repositoryId(), archive.componentId(), archive.id(),
+        "acme", "acme", "tools", "tools", "1.2.3", "1.2.3", archive.name(),
+        "a".repeat(64), archive.size(), Map.of(), Map.of(), ">=2.16", "HOSTED", 1L,
+        AnsibleGalaxyRegistryDao.VERSION_READY, Instant.EPOCH, Instant.EPOCH, Instant.EPOCH);
+  }
+
   private record Fixture(
       RepositoryDao repositoryDao,
       AssetDao assetDao,
       TerraformRegistryDao terraformRegistryDao,
       SwiftRegistryDao swiftRegistryDao,
+      AnsibleGalaxyRegistryDao ansibleRegistryDao,
       BrowseNodeDao browseNodeDao,
       ComponentDao componentDao,
       MetadataRebuildDao metadataRebuildDao,

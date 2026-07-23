@@ -4,7 +4,7 @@
 
 ## 为什么需要 Forwarded Header
 
-kkRepo 会基于当前请求生成部分客户端可见的绝对 URL。例如 npm package metadata 会重写 `dist.tarball`，Composer p2 metadata 会重写 `dist.url`；Docker 会生成 token challenge 的 `realm`、`service` 以及上传响应的 `Location`。这些值都必须使用客户端可访问的公网 scheme、host 和 port。
+kkRepo 会基于当前请求生成部分客户端可见的绝对 URL。例如 npm package metadata 会重写 `dist.tarball`，Composer p2 metadata 会重写 `dist.url`，Ansible Galaxy 会生成 task/artifact link；Docker 会生成 token challenge 的 `realm`、`service` 以及上传响应的 `Location`。这些值都必须使用客户端可访问的公网 scheme、host 和 port。
 
 如果 Nginx 对外接收的是 `https://nexus.example.com`，但转发到 kkRepo 时变成后端 HTTP 请求，kkRepo 必须收到可信的 forwarded header。否则生成的 URL 可能会使用后端看到的请求信息，例如 `http://...` 或后端端口。
 
@@ -101,6 +101,15 @@ curl -u alice:"$KKREPO_PASSWORD" \
 ```
 
 其中 `dist.url` 应以 `https://nexus.example.com/repository/composer-group/` 开头。
+
+Ansible Galaxy 应通过公网 group URL 检查 version response：
+
+```bash
+curl -u alice:"$KKREPO_PASSWORD" \
+  https://nexus.example.com/repository/ansible-group/api/v3/collections/acme/tools/versions/1.0.0/
+```
+
+其中 `href` 和 `download_url` 必须使用公网 HTTPS host，并保持在 `/repository/ansible-group/` 下。发布还要求 Nginx 保留 `Authorization`、multipart body 和长时间 import-task polling；应让 `client_max_body_size`/timeout 与应用限制一致，但不能关闭 Ansible archive inspector。
 
 Docker 应先验证 registry challenge：
 

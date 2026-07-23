@@ -4,17 +4,19 @@
 
 ## 当前支持状态
 
-截至 2026-07-21，Ansible Galaxy 仓库能力处于路线图设计阶段。当前代码中尚未实现 `RepositoryFormat.ANSIBLEGALAXY`、`ansiblegalaxy-hosted`、`ansiblegalaxy-proxy`、`ansiblegalaxy-group` recipe 或独立 `protocol-ansible` 模块。
+截至 2026-07-21，本设计已在 `feat/ansible-repository-support` 落地。代码包含 `RepositoryFormat.ANSIBLEGALAXY`、`ansiblegalaxy-hosted`、`ansiblegalaxy-proxy`、`ansiblegalaxy-group`、独立 `protocol-ansible` 模块、Galaxy v3 服务、V35 双数据库 schema、Admin/Browse/Search/UI 上传、Nexus 迁移适配、黑盒兼容测试和真实客户端 E2E 入口。
 
-完整实现目标覆盖：
+已实现范围：
 
 - Galaxy v3 collection API discovery、collection/version metadata、artifact download、multipart publish 和 import task 查询。
 - 与 Nexus 一致的 `/repository/{repo}/...` 仓库入口、`ansiblegalaxy` format/recipe 命名和直接 artifact 上传路径。
-- Ansible Galaxy hosted、proxy、group 仓库，以及真实 `ansible-galaxy collection publish/install/download/verify` E2E。
-- `ansible.cfg`、`requirements.yml`、Basic、Bearer/GenericToken、Nexus Base64 `username:password` bearer token 和匿名读取。
+- Ansible Galaxy hosted、proxy、group 仓库，以及真实 `ansible-galaxy collection publish/install/download` E2E；server-provided signature 的 `verify` 分支在 Nexus 3.94 未提供可对照行为时明确保留为产品增强，不伪造签名。
+- `ansible.cfg`、`requirements.yml`、Basic、Bearer/GenericToken、Nexus Base64 `username:password` token 和匿名读取；兼容 Ansible 2.9 的 `Authorization: Token` 与当前 ansible-core 的 `Authorization: Bearer`。
 - collection tarball、`MANIFEST.json`、`FILES.json`、artifact SHA-256、依赖、`requires_ansible` 和可选 GPG detached signature。
 - UI/API 上传、Browse/Search、Nexus repository definition 与 hosted data 迁移，以及显式选择的 proxy cache 迁移。
 - MySQL/PostgreSQL 双数据库、多副本发布/回源去重、持久化 import task、group source binding 和可重建 TTL cache。
+
+实现验证以 Nexus 3.94.0 为当前 reference。黑盒已固定 discovery、短/长 v3 路径、multipart publish/task、raw PUT、不可变版本、hosted/group/proxy 读取、分页、artifact GET/HEAD/conditional response、group source priority 和 public Galaxy CDN redirect。Nexus 对 group/proxy publish route 返回 `404`，kkrepo 跟随该行为；它不是通用 REST 语义推导出的 `405`。
 
 第一阶段只支持 Ansible collections。旧 Galaxy v1 role API、GitHub role import、notification secret 和 `ansible-galaxy role install` 不属于 Nexus 3.93+ Ansible repository 的兼容主线，不能与 collection v3 API 混为同一格式能力。
 
@@ -42,7 +44,7 @@
 - Nexus 还公开 raw `PUT .../api/v3/plugin/ansible/content/published/collections/artifacts/{filename}`。它是 Nexus 兼容入口，不应替代标准 `ansible-galaxy collection publish` 主路径；两者必须复用同一校验和持久化服务。
 - version detail 中至少要稳定返回 `namespace.name`、`collection.name`、`version`、`artifact.sha256`、`metadata.dependencies`、`download_url`、`href`、`requires_ansible` 和 `signatures`。`download_url` 必须是 absolute URL 或以 `/` 开头的 root-relative URL；普通相对路径会被当前客户端拒绝。
 - `MANIFEST.json` 是 collection metadata 真相，且包含 `FILES.json` 的 SHA-256；`FILES.json` 再固定每个文件。服务端还必须独立校验上传参数的 artifact SHA-256，三层校验不能互相替代。
-- Nexus 文档中的 token 是 Base64 编码的 `username:password`，由 Ansible Galaxy Bearer Token Realm 接收；Ansible 客户端仍通过 `Authorization: Bearer ...` 发送。kkrepo 需要协议适配器兼容这种 bearer payload，同时继续支持安全得多的 GenericToken/API key。
+- Nexus 文档中的 token 是 Base64 编码的 `username:password`，由 Ansible Galaxy Bearer Token Realm 接收。当前 ansible-core 通过 `Authorization: Bearer ...` 发送，2.9 客户端使用历史 `Authorization: Token ...` scheme；kkrepo 在 Ansible route 内兼容两者，同时继续支持安全得多的 GenericToken/API key。
 - Nexus group 是单 URL 聚合。对于同一 `(namespace, name, version)`，metadata、artifact、SHA-256 和 signatures 必须来自同一优先成员；只合并版本号而不绑定来源会产生 checksum 与下载内容错配。
 - public Galaxy 当前文档中的上传大小限制不是私有仓库协议常量。kkrepo 应提供可配置上限，并以 Nexus 黑盒和本地资源策略确定默认值，不能把公开服务运营限制写死成协议。
 
@@ -64,7 +66,7 @@
 
 2. Ansible Galaxy proxy
    - 新增 `ansiblegalaxy-proxy` recipe，remote URL 默认可配置为 `https://galaxy.ansible.com/`，保存时规范化尾部 `/`。
-   - 先读取上游 API discovery，再按上游返回的 v3 base 访问 collection/version endpoint；不能假定所有上游都使用同一个长路径。
+   - 先读取上游 API discovery 定位 v3 base，再按 Galaxy NG API v3 协议通过 `plugin/ansible/content/published/collections/index/...` 访问 collection/version endpoint；本地 Nexus 兼容短路径不能直接复用于上游请求。
    - 缓存 collection metadata、version list/detail、dependencies、signatures、artifact validator、artifact bytes 和 negative result。
    - 把 `href`、`download_url`、pagination links 和 signature URL 改写到当前 kkrepo proxy 入口，避免客户端绕过本地鉴权、审计和缓存。
    - artifact 首次回源后按上游 `artifact.sha256` 校验并固定。相同 version 后续出现不同 checksum 时 fail closed，不能静默替换已缓存字节。
@@ -78,13 +80,13 @@
    - 对选中的 `(namespace, name, version)` 建立持久化 source binding；version detail、artifact、checksum、dependencies 和 signatures 必须来自同一成员。
    - 返回 group 自身的 `href`、`download_url` 和 pagination links，artifact 下载再通过 binding 路由到实际成员。
    - 依赖解析继续通过 group URL 完成，覆盖 exact/range dependency、transitive dependency 和成员优先级。
-   - Group 只读；multipart publish 和 Nexus raw `PUT` 返回与 Nexus 一致的 `405`/v3 error，不能自动选择某个 hosted 成员写入。
+   - Group 只读；multipart publish 和 Nexus raw `PUT` 返回 Nexus 3.94 实测的 `404`，不能自动选择某个 hosted 成员写入。
    - 成员顺序或内容 revision 变化时，通过共享版本水位失效 binding/materialized metadata；不能依赖单副本内存映射。
 
 4. 认证与权限
    - 支持 HTTP Basic，用于 Nexus 文档中的 curl upload/download 和显式 username/password 配置。
-   - 支持 `Authorization: Bearer GenericToken.<token>`、现有 API key/CI token 和未来可选的 `AnsibleGalaxyToken` domain。
-   - 支持 Nexus 兼容 bearer payload：严格 Base64 解码后只接受单个非空 username 与 password，并走现有 Basic 认证；设置长度、控制字符和失败次数限制。
+   - 支持 `Authorization: Bearer GenericToken.<token>`、Ansible 2.9 的 `Authorization: Token GenericToken.<token>`、现有 API key/CI token 和未来可选的 `AnsibleGalaxyToken` domain。
+   - 支持 Nexus 兼容 Base64 payload：严格解码后只接受单个非空 username 与 password，并走现有 Basic 认证；设置长度、控制字符和失败次数限制。
    - 不把 Base64 当加密。管理端和文档优先推荐 GenericToken/API key，不回显 bearer payload 或解码后的密码。
    - discovery、metadata、version、artifact、`HEAD` 映射 repository `READ`。
    - hosted 首次 publish 映射 `ADD`；重复 version 始终冲突，不因 `EDIT` 放宽。
@@ -123,7 +125,9 @@
 - 不实现 Galaxy v1 standalone role、GitHub role import、webhook/notification secret API。
 - 不把 `.tar.gz` 当 Raw asset 后只返回静态文件目录。
 - 不复制 Pulp/Galaxy NG 的 repository、distribution、approval 或 task 内部模型；只实现客户端和 Nexus 兼容所需语义。
-- 不在 MySQL/PostgreSQL 中存储 tarball 大字段或解压后的全部文件正文。
+- 不在 MySQL/PostgreSQL 中存储 tarball、完整 `MANIFEST.json`、完整 `FILES.json`
+  或解压后的文件正文。数据库只保存有明确大小上限、可用于协议查询的元数据投影；完整
+  JSON 始终随原始 collection artifact 保存在 blob store 中。
 - 不允许覆盖同一 collection version，也不通过删除后重发绕过不可变策略；删除后是否允许重发必须先由 Nexus 黑盒固定，默认 fail closed。
 - 不依赖单个 JVM 的本地 task queue、临时目录、锁或 metadata cache 作为正确性真相。
 
@@ -149,7 +153,7 @@ collections:
     source: https://repo.example.com/repository/ansible-group/
 ```
 
-客户端不会把 v3 读取前缀写死。它先读取 `available_versions.v3`，再分别追加 `collections/...` 或 `artifacts/collections/`。因此以下表格用 `{v3-base}` 表示 discovery 返回的前缀；Galaxy NG 文档中的完整读取路径是 `api/v3/plugin/ansible/content/published/collections/index/...`，公开 Galaxy 同时提供 `api/v3/collections/...` 别名。kkrepo 最终返回哪个前缀以及是否同时保留长路径别名，必须由 Nexus 黑盒固定。
+客户端不会把 v3 读取前缀写死。它先读取 `available_versions.v3`，再访问 collection 或 publication endpoint。因此以下表格用 `{v3-base}` 表示 discovery 返回的前缀；上游 metadata 回源固定在该 base 后追加 Galaxy NG 协议定义的 `plugin/ansible/content/published/collections/index/...`，不能使用本地短别名。kkrepo 面向客户端同时保留 Nexus 黑盒确认的 `api/v3/collections/...` 短路径和长路径。
 
 推荐 route contract：
 
@@ -222,7 +226,7 @@ version detail 至少包含真实客户端使用的字段：
 
 1. 校验请求 content length、全局/repository upload limit 和流式读取上限。
 2. 计算原始 artifact SHA-256，并与 multipart `sha256` 比较；raw `PUT` 没有该字段时仍计算并保存。
-3. 解析 gzip/tar，拒绝损坏流、trailing garbage、设备节点、FIFO、绝对路径、`..`、反斜线路径、重复 entry、symlink/hardlink 和过量 PAX metadata。
+3. 解析 gzip/tar，拒绝损坏流、trailing garbage、设备节点、FIFO、绝对路径、`..`、反斜线路径、重复 entry、hardlink 和过量 PAX metadata。symlink 只接受指向归档内普通文件的相对路径；越界、绝对、悬空、目录或循环 symlink 一律拒绝。
 4. 限制 entry 数、单 entry size、总展开 size、压缩比、路径长度和解析时间，防止 tar bomb/zip-slip 类资源攻击。
 5. 要求根目录存在合法 `MANIFEST.json` 和 `FILES.json`，且 JSON 大小、深度、字段长度受限。
 6. 校验 `MANIFEST.json.file_manifest_file` 指向 `FILES.json`，算法为 SHA-256，checksum 与原始 `FILES.json` 字节一致。
@@ -245,41 +249,47 @@ version detail 至少包含真实客户端使用的字段：
 - 每个 collection version 建立 component：`format=ANSIBLEGALAXY`、`namespace=<namespace>`、`name=<name>`、`version=<version>`、`kind=ansible-collection`。
 - `(repository_id, coordinate_hash)` 唯一约束保护 `(repository, namespace_lc, name_lc, normalized_version)`。
 - 原始 tarball 建立 artifact asset，关联 OSS/S3 blob，保存 SHA-256/SHA-512、size、media type、createdBy、createdByIp 和 canonical filename。
-- collection/version JSON 是从专用状态生成的 protocol metadata；可以 materialize 为 metadata asset，但 materialized JSON 不是第二份独立真相。
+- `MANIFEST.json`、`FILES.json` 和其完整文件清单只存在于原始 artifact blob 中；导入时流式校验后不复制进关系数据库。
+- collection/version JSON 是从有上限的专用状态生成的 protocol metadata；可以 materialize 为 metadata asset，但 materialized JSON 不是第二份独立真相。
 - Browse node 使用 `namespace/name/version/filename` 层级，避免把 v3 API 路径本身当作用户目录模型。
 
 ### Ansible 专用状态
 
-建议增加等价于以下语义的 JDBC contract 和 MySQL/PostgreSQL migration：
+V35 已增加以下 JDBC contract 和 MySQL/PostgreSQL migration：
 
 - `ansible_collection_version`
   - `repository_id`、`namespace_lc`、`name_lc`、`version_normalized` 唯一。
-  - 保存原始/normalized version、component/asset/blob id、artifact SHA-256/size、manifest/files/metadata JSON、dependencies、`requires_ansible`、state、revision 和时间。
+  - 保存原始/normalized version、component/asset id、artifact SHA-256/size、协议元数据投影、dependencies、`requires_ansible`、state、revision 和时间；不保存完整 manifest/files JSON。
 - `ansible_collection_signature`
   - 绑定 collection version、signature hash/blob、key fingerprint、source、created_at；signature 可追加但不能替换 artifact。
 - `ansible_import_task`
-  - 保存 task UUID、repository、发起主体、staging blob、expected/actual SHA-256、state、messages/error、attempt、lease owner/expiry、fencing token、created/started/finished 时间。
+  - 保存 task UUID、repository、发起主体、staging blob、expected/actual SHA-256、state、messages/error、attempt、lease owner/expiry、fencing token、created/started/finished 时间；非终态 task 还保存有唯一约束的 active coordinate hash，作为跨副本发布预留。
 - `ansible_proxy_version_state`
-  - 保存 upstream href/download URL、metadata validator、artifact SHA-256、cache_until、verified_at、negative state 和 upstream identity。
+  - 保存 upstream href/download URL、metadata validator、artifact SHA-256、cache_until、verified_at、negative state 和有上限的协议元数据投影；上游返回的完整 files/contents/signatures 列表不复制入库。
+- `ansible_proxy_inventory` / `ansible_proxy_inventory_version`
+  - 按 `(repository, namespace, name)` 保存 inventory TTL/revision/count header，并把 version name 作为有上限的规范化行保存。TTL 有效时读取这些行，不重复遍历上游分页；不把整份 version inventory 写成大 JSON。
 - `ansible_group_binding`
-  - 以 group repository、namespace/name/version、member revision 为键，绑定 source repository、source version revision 和 artifact SHA-256。
+  - 以 group repository、namespace/name/version、member revision 为键，绑定 source repository、artifact filename 和 SHA-256。Proxy metadata 首次选源时允许 materialized version 引用为空；artifact `GET` 必须沿同一 binding 回源，并在 blob/asset/version 提交后原子回填 version 引用。
+- `ansible_registry_lease`
+  - 以 repository/operation/coordinate 为键保存 owner、lease expiry 与 fencing token，用于跨副本 publish、proxy revalidation/download 和任务接管。
 
-所有 JSON/enum/hash 列必须通过 `persistence-jdbc` 公共 helper 和 dialect contract 写入。时间、唯一约束、lock/claim 和 upsert 语义需同时由 MySQL/PostgreSQL integration test 验证。
+所有 JSON/enum/hash 列必须通过 `persistence-jdbc` 公共 helper 和 dialect contract 写入。当前 version metadata 上限为 64 KiB、dependencies 为 192 KiB、proxy protocol metadata 为 256 KiB；超过上限必须裁剪为协议所需投影或转为 blob asset，不能扩大数据库字段绕过边界。时间、唯一约束、lock/claim 和 upsert 语义需同时由 MySQL/PostgreSQL integration test 验证。
 
 ## Hosted 发布与 import task
 
-Controller 只负责 HTTP、认证上下文和 repository/path 解析，再委托 `AnsibleGalaxyHostedService` 与 `AnsibleCollectionImporter`。
+Controller 只负责 HTTP、认证上下文和 repository/path 解析，再委托统一的 `AnsibleGalaxyService` 与 `AnsibleCollectionArchiveInspector`；Components API 和 raw PUT 复用同一 archive importer。
 
 标准 multipart publish 流程：
 
 1. 校验 repository online 且 recipe 为 `ansiblegalaxy-hosted`，主体具备 `ADD`。
-2. 流式写入 blob store 的 staging key，同时计算 SHA-256；失败请求清理未引用 staging blob。
-3. 校验 multipart `sha256`、filename 和请求级限制。
-4. 在数据库事务中创建 `WAITING` import task 和 marker/outbox，记录 staging blob 与调用者；返回 Nexus 对应的 `202` 和 `task` URL。
-5. worker 通过数据库 lease/fencing claim task，执行 tar/manifest/files/metadata 校验。
-6. 在事务中插入 collection version、component、asset、asset_blob、signature 和 browse node；coordinate 唯一约束裁决并发重复发布。
-7. 原子切换 staging blob 为正式引用，提交 version revision，并失效 collection/version/group metadata cache。
-8. task 标记 `COMPLETED`、写 `finished_at`；失败则保存稳定 error/message 并释放无引用 staging blob。
+2. 从强制 canonical archive filename 解析 coordinate；已存在的 immutable version 立即按 Nexus 行为返回 `400`，不写 staging、不创建 task。
+3. 流式写入 blob store 的 staging key，同时计算 SHA-256；失败请求清理未引用 staging blob。
+4. 校验 multipart `sha256`、filename 和请求级限制。
+5. Multipart 建任务、raw PUT 与 worker promotion 共用 fenced coordinate lease；在 lease 内同时复查 immutable version 和 active task。在数据库事务中创建 `WAITING` import task 和 marker/outbox，记录 coordinate、staging blob 与调用者；同一条 INSERT 通过 `(repository, active coordinate hash)` 唯一约束原子预留非终态 coordinate。预留失败按 Nexus 行为返回 `400` 并解除本请求 staging 引用，只有预留成功才返回对应的 `202` 和 `task` URL。
+6. worker 通过数据库 lease/fencing claim task，执行 tar/manifest/files/metadata 校验。
+7. 在事务中插入 collection version、component、asset、asset_blob、signature 和 browse node；coordinate 唯一约束裁决并发重复发布，version 上的 task provenance 只允许同一 task 在提交后崩溃时幂等恢复。
+8. 原子切换 staging blob 为正式引用，提交 version revision，并失效 collection/version/group metadata cache。
+9. task 标记 `COMPLETED`、写 `finished_at` 并在同一 fenced UPDATE 中释放 active coordinate 预留；失败也原子释放预留、保存稳定 error/message 并解除无引用 staging blob。成功路径此时已有 immutable version 唯一约束接管 coordinate。
 
 Nexus raw `PUT` 可以同步完成或返回异步结果，但必须调用同一 importer。若 reference 对 raw `PUT` 返回不同 status/body，compat adapter 只改变 transport response，不改变写入规则。
 
@@ -287,8 +297,8 @@ Nexus raw `PUT` 可以同步完成或返回异步结果，但必须调用同一 
 
 - task、lease、fencing token、attempt 和结果以数据库为真相；本地 executor queue 只是唤醒手段。
 - worker 在 lease 过期后可被另一副本接管；旧 worker 的 fencing token 不能提交 version 或覆盖新 task 结果。
-- 同一 coordinate 并发 publish 最多一个成功，其余返回/终止为 conflict；不得产生两个 artifact blob 引用。
-- staging blob cleanup 按数据库引用和保留期扫描，不能仅在原请求 `finally` 中删除。
+- 同一 coordinate 并发 multipart publish 最多一个请求得到 `202`；multipart、raw PUT 和 worker version commit 之间通过同一 lease 完成交接，其余请求返回 conflict，不得产生两个 artifact blob 引用。
+- staging blob cleanup 已按共享 asset 行、task 状态和保留期实现：所有副本用 `FOR UPDATE SKIP LOCKED` 有界领取 `.ansible/staging/`，保留 `WAITING`/`RUNNING` task，只清理 task 缺失或已终态的行；不能仅依赖原请求 `finally`。
 - task 查询在重启、滚动升级和副本切换后继续可用；过期 task 按保留策略清理，但已发布 version 不依赖 task 行读取。
 
 ## Proxy 缓存流程
@@ -346,19 +356,29 @@ Group 对客户端呈现一个完整 v3 server。
 
 1. 正常解析现有 API key/GenericToken bearer，保持 domain、scope、expiry、disabled 和 audit 语义。
 2. 正常解析 HTTP Basic。
-3. 对 Ansible Galaxy route 的未识别 Bearer token，尝试有上限的严格 Base64 `username:password` 兼容解析，再走现有 Basic auth cache/realm。
+3. 对 Ansible Galaxy route 的未识别 Bearer/Token credential，尝试有上限的严格 Base64 `username:password` 兼容解析，再走现有 Basic auth cache/realm。
 4. 任一显式 credential 无效即返回 `401` 和正确 `WWW-Authenticate`，不尝试 anonymous fallback。
 
-Base64 bearer compatibility 只在 Ansible Galaxy route 启用，不能扩散为全站通用 password transport。原始 token、Basic header、解码密码、remote token、task upload URL 和带签名 object URL 必须在 access log、audit detail、exception、trace、metrics 和 CI artifact 中脱敏。
+Base64 Bearer/Token compatibility 只在 Ansible Galaxy route 启用，不能扩散为全站通用 password transport。原始 token、Basic header、解码密码、remote token、task upload URL 和带签名 object URL 必须在 access log、audit detail、exception、trace、metrics 和 CI artifact 中脱敏。
 
 ## 多副本与缓存语义
 
-- repository 配置、collection/version、dependency、signature、task、lease、source binding、negative cache、remote validator、asset/blob 引用和 revision 都以数据库/OSS 为真相。
-- collection artifact 和 signature blob 只存 OSS/S3/File blob store；数据库只保存引用、hash、size 和协议状态。
-- 本地 cache 只保存可从共享真相重建的 discovery/metadata/binding 热数据，必须有 TTL 或 revision invalidation。
+- repository 配置、collection/version 的有界协议元数据、dependency、signature 引用、task、lease、source binding、negative cache、remote validator、asset/blob 引用和 revision 都以数据库/OSS 为真相。
+- collection artifact（包含完整 `MANIFEST.json`/`FILES.json`）和 signature blob 只存 OSS/S3/File blob store；线上游 JSON 只保留有界协议投影，任何必须原样保留的大 JSON 也必须写 blob，数据库只保存引用、hash、size 和协议状态。
+- 本地 cache 只保存可从共享真相重建的 discovery/metadata/binding 热数据，必须有 TTL 或 revision invalidation；version-list cache 的有效期不得晚于该 coordinate 所有 proxy inventory 中最早的 `cache_until`。
 - publish/import、proxy download 和 group revalidation 使用数据库 lease/fencing 或 marker queue；单 JVM lock 只能减少本副本重复工作。
 - hosted publish/delete、proxy metadata 更新、group member 变化都递增共享版本水位，使其它副本在 TTL 之前也能观察变化。
 - 跨副本并发测试必须验证：同 version publish 一次成功、同 artifact 只回源一次、task 可接管、group metadata 与下载 source 一致。
+
+### 性能与容量实现
+
+- Version publish/delete 递增 repository content revision，并按 `(repository, namespace, name, version)` 精确失效 group binding；revision 分配、metadata 写入和失效在同一事务提交。Group 成员顺序/配置使用独立 config revision，避免一次发布触发全仓库 version 扫描和全部 binding 删除。
+- Version-list 一次批量读取相关 repository revision，SemVer 排序时每个 version 只解析一次；按 `identity + revision snapshot` 使用可重建的本地 cache。正确性仍以数据库 revision 和 binding 为准。
+- Proxy version inventory 以 header + version 行规范化保存。TTL 命中直接读取本地 inventory；TTL 到期才串行拉取所有上游分页，并通过数据库 lease、fencing token、节点内 single-flight 合并并发 refresh。
+- Proxy JSON 使用 16 MiB 输入上限的 streaming parser，只提取协议字段，再执行 64/192/256 KiB 投影上限。完整 collection archive、`MANIFEST.json`、`FILES.json` 和大型 payload 始终在 blob storage；数据库没有无上限 JSON。
+- 标准 multipart publish 先用 canonical filename 对 immutable version/active reservation 做轻量预检；通过后只流式写一次 staging blob，并在共享 coordinate lease 内复查后通过 durable task INSERT 原子预留，只有胜出的请求返回 `202`。Raw PUT 和 worker commit 进入同一 lease，关闭 reservation 到 immutable version 的交接窗口。Worker 原子批量 claim task，并直接 promote 同一 blob 引用；promotion 阶段不复制临时文件、不重复上传或再次执行 hash pass。
+- Archive inspection、import worker 和 migration 复用的 inspector 都有并发上限与 permit timeout。长操作续租 fenced lease；同副本等待者通过 single-flight 合并，跨副本等待使用 50-500 ms 指数退避。
+- Artifact hot path 使用只包含 asset/blob reference 的轻量查询并直接读取 blob，避免先 `stat` 再 `GET`。Proxy page/negative state、终态 task 和过期 lease 由每副本幂等、有界批次 cleanup；staging asset 继续由独立 `SKIP LOCKED` worker 清理。
 
 ## Nexus 迁移设计
 
@@ -374,7 +394,7 @@ Ansible 是 Nexus 3.93.0 新增的原生格式，迁移必须 version/shape gate
 
 ## 安全与资源限制
 
-- tar parser 禁止路径穿越、绝对路径、symlink/hardlink、设备文件、重复 entry 和解压炸弹。
+- tar parser 禁止路径穿越、绝对路径、hardlink、设备文件、重复 entry 和解压炸弹；symlink 仅允许安全解析到同一归档内的普通文件，并纳入 `FILES.json` checksum 校验。
 - JSON/YAML parser 限制大小、深度、alias、string/list/map 数量；`meta/runtime.yml` 不允许任意类型实例化。
 - namespace/name/version、filename、dependency key/range、URL、authors/tags/license 都设置长度和数量上限。
 - Proxy remote、metadata link、download URL、redirect 和 signature URL 统一走 `OutboundRequestPolicy`，阻止 loopback、link-local、metadata service 和 DNS rebinding。
@@ -473,7 +493,7 @@ Browse/Search：
    - 用真实 `ansible-galaxy publish/install` 验证。
 
 7. 认证适配
-   - 实现 Basic、GenericToken 和 route-scoped Nexus Base64 bearer compatibility。
+   - 实现 Basic、GenericToken 和 route-scoped Nexus Base64 Bearer/Ansible 2.9 Token compatibility。
    - 验证错误 credential 不降级、日志脱敏和 rate limit。
 
 8. proxy
@@ -499,10 +519,10 @@ Browse/Search：
 - artifact 原始 SHA-256、`MANIFEST.json`、`FILES.json` 和逐文件 checksum 全部校验；恶意 tar 不落正式 blob 引用。
 - proxy 固定 artifact SHA-256，跨副本 miss 不重复写入，upstream drift/SSRF/credential redirect fail closed。
 - group 的 metadata、dependency、artifact 和 signature 使用同一 source binding；成员顺序变更可在共享 revision 后恢复。
-- MySQL/PostgreSQL contract/integration test 均通过；大 blob 只存 OSS/S3。
+- MySQL/PostgreSQL contract/integration test 均通过；完整 manifest/files 与其它大 JSON 和 blob 只存 OSS/S3，数据库 JSON 均有硬上限。
 - Nexus 3.93.1+/3.94.x compatibility test 固定 status/header/body/task/error，并覆盖 3.93.1 dependency/redeploy 回归。
 - Nexus hosted data 可 dry-run、resume、checksum、幂等迁移；显式选择的 proxy cache 可在断上游后由真实客户端使用。
-- README 中 Ansible Galaxy 保持未完成状态，只有完整能力和验收证据落地后才增加 `✅`。
+- README 中 Ansible Galaxy 已在协议、持久层、服务、UI、迁移、黑盒和真实客户端 E2E 入口落地后标记为 `✅`；签名验证等 Nexus reference 不提供的可选增强仍单独跟踪，不影响 Nexus 兼容完成度。
 
 ## 参考资料
 

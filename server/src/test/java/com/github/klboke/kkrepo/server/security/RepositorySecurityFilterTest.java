@@ -293,6 +293,155 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
+  void ansibleGalaxyReadsAndHostedPublishesUseReadAndAddPermissions() throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "ansible-hosted", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.HOSTED)),
+        false);
+
+    ChainState readChain = new ChainState();
+    filter.doFilter(
+        request("GET", "/repository/ansible-hosted/api/v3/collections/acme/tools/"),
+        new MockHttpServletResponse(),
+        readChain);
+    assertEquals(1, readChain.calls);
+    assertEquals(PermissionAction.READ, decisions.permission.action());
+    assertEquals("api/v3/collections/acme/tools/", decisions.permission.pathPattern());
+
+    ChainState publishChain = new ChainState();
+    filter.doFilter(
+        request("POST", "/repository/ansible-hosted/api/v3/artifacts/collections/"),
+        new MockHttpServletResponse(),
+        publishChain);
+    assertEquals(1, publishChain.calls);
+    assertEquals(PermissionAction.ADD, decisions.permission.action());
+    assertEquals("api/v3/artifacts/collections/", decisions.permission.pathPattern());
+  }
+
+  @Test
+  void ansibleGalaxyImportTaskPollingAcceptsAddOnlyPermission() throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("ci-publisher")));
+    RecordingDecisionService decisions = new RecordingDecisionService(
+        AccessDecision.deny("missing read")) {
+      @Override
+      public AccessDecision decide(PermissionSubject subject, RepositoryPermission permission) {
+        super.decide(subject, permission);
+        return permission.action() == PermissionAction.ADD
+            ? AccessDecision.allow()
+            : AccessDecision.deny("missing read");
+      }
+    };
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "ansible-hosted", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.HOSTED)),
+        false);
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/repository/ansible-hosted/api/v3/imports/collections/"
+            + "0dfd1f0d-fa14-4caa-b928-be3ec7c8650e/"),
+        new MockHttpServletResponse(),
+        chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(1, decisions.decisions);
+    assertEquals(PermissionAction.ADD, decisions.permission.action());
+  }
+
+  @Test
+  void ansibleGalaxyImportTaskPollingFallsBackToReadPermission() throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("reader")));
+    RecordingDecisionService decisions = new RecordingDecisionService(
+        AccessDecision.deny("missing add")) {
+      @Override
+      public AccessDecision decide(PermissionSubject subject, RepositoryPermission permission) {
+        super.decide(subject, permission);
+        return permission.action() == PermissionAction.READ
+            ? AccessDecision.allow()
+            : AccessDecision.deny("missing add");
+      }
+    };
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "ansible-hosted", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.HOSTED)),
+        false);
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/repository/ansible-hosted/api/v3/imports/collections/"
+            + "0dfd1f0d-fa14-4caa-b928-be3ec7c8650e/"),
+        new MockHttpServletResponse(),
+        chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(2, decisions.decisions);
+    assertEquals(PermissionAction.READ, decisions.permission.action());
+  }
+
+  @Test
+  void ansibleGalaxyReadOnlyRepositoryPublishReachesProtocolServiceFor405() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
+    RecordingDecisionService decisions =
+        new RecordingDecisionService(AccessDecision.deny("should not decide"));
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "ansible-group", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.GROUP)),
+        false);
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("POST", "/repository/ansible-group/api/v3/artifacts/collections/"),
+        new MockHttpServletResponse(),
+        chain);
+
+    assertEquals(0, authentication.calls);
+    assertEquals(0, decisions.decisions);
+    assertEquals(1, chain.calls);
+  }
+
+  @Test
+  void ansibleGalaxyChallengeUsesBearerAndBasicWithV3JsonError() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        new RecordingDecisionService(AccessDecision.allow()),
+        new FakeRepositoryDao(repository(
+            "ansible-hosted", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.HOSTED)),
+        false);
+    MockHttpServletResponse response = new MockHttpServletResponse();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/repository/ansible-hosted/api/v3/collections/acme/tools/"),
+        response,
+        chain);
+
+    assertEquals(0, chain.calls);
+    assertEquals(HttpServletResponse.SC_UNAUTHORIZED, response.getStatus());
+    assertEquals(
+        "Bearer realm=\"ansiblegalaxy\", Basic realm=\"kkrepo\"",
+        response.getHeader("WWW-Authenticate"));
+    assertTrue(response.getContentType().startsWith("application/json"));
+    var error = new ObjectMapper().readTree(response.getContentAsByteArray())
+        .path("errors").path(0);
+    assertEquals("401", error.path("status").asText());
+    assertEquals("authentication_required", error.path("code").asText());
+  }
+
+  @Test
   void swiftLoginNeverFallsBackToAnonymousAndReturnsProblemDetails() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(subject("anonymous"));
     RepositorySecurityFilter filter = filter(
@@ -1011,8 +1160,16 @@ class RepositorySecurityFilterTest {
 
   @Test
   void restSwiftComponentUploadRequiresAddWithoutEditFallback() throws Exception {
-    assertSwiftComponentUploadRequiresAdd(
-        request("POST", "/service/rest/v1/components", Map.of("repository", "swift-hosted")));
+    assertComponentUploadRequiresAdd(
+        request("POST", "/service/rest/v1/components", Map.of("repository", "swift-hosted")),
+        "swift-hosted", RepositoryFormat.SWIFT);
+  }
+
+  @Test
+  void restAnsibleGalaxyComponentUploadRequiresAddWithoutEditFallback() throws Exception {
+    assertComponentUploadRequiresAdd(
+        request("POST", "/service/rest/v1/components", Map.of("repository", "ansible-hosted")),
+        "ansible-hosted", RepositoryFormat.ANSIBLEGALAXY);
   }
 
   @Test
@@ -1063,8 +1220,16 @@ class RepositorySecurityFilterTest {
 
   @Test
   void internalUiSwiftComponentUploadRequiresAddWithoutEditFallback() throws Exception {
-    assertSwiftComponentUploadRequiresAdd(
-        request("POST", "/service/rest/internal/ui/upload/swift-hosted"));
+    assertComponentUploadRequiresAdd(
+        request("POST", "/service/rest/internal/ui/upload/swift-hosted"),
+        "swift-hosted", RepositoryFormat.SWIFT);
+  }
+
+  @Test
+  void internalUiAnsibleGalaxyComponentUploadRequiresAddWithoutEditFallback() throws Exception {
+    assertComponentUploadRequiresAdd(
+        request("POST", "/service/rest/internal/ui/upload/ansible-hosted"),
+        "ansible-hosted", RepositoryFormat.ANSIBLEGALAXY);
   }
 
   @Test
@@ -1337,8 +1502,8 @@ class RepositorySecurityFilterTest {
     assertEquals(HttpServletResponse.SC_FORBIDDEN, response.status);
   }
 
-  private static void assertSwiftComponentUploadRequiresAdd(HttpServletRequest request)
-      throws Exception {
+  private static void assertComponentUploadRequiresAdd(
+      HttpServletRequest request, String repositoryName, RepositoryFormat format) throws Exception {
     StubAuthenticationService authentication =
         new StubAuthenticationService(Optional.of(subject("alice")));
     RecordingDecisionService decisions = new RecordingDecisionService(
@@ -1355,7 +1520,7 @@ class RepositorySecurityFilterTest {
         authentication,
         decisions,
         new FakeRepositoryDao(repository(
-            "swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED)),
+            repositoryName, format, RepositoryType.HOSTED)),
         false,
         true);
     MockHttpServletResponse response = new MockHttpServletResponse();
@@ -1366,7 +1531,7 @@ class RepositorySecurityFilterTest {
     assertEquals(0, chain.calls);
     assertEquals(1, decisions.decisions);
     assertEquals(PermissionAction.ADD, decisions.permission.action());
-    assertEquals("swift-hosted", decisions.permission.repository());
+    assertEquals(repositoryName, decisions.permission.repository());
     assertEquals(HttpServletResponse.SC_FORBIDDEN, response.getStatus());
   }
 

@@ -191,6 +191,22 @@ Terraform emits repository, proxy-upstream, and blob-storage metrics with `forma
 
 Treat provider metadata, archive, SHA256SUMS, and signature as one observable flow. A metadata success followed by checksum/signature failures normally indicates a stale or inconsistent upstream snapshot. Terraform URL-token path segments are redacted before request paths reach logs or metric labels; never add raw service URLs or captured metadata containing tokens to dashboards or CI artifacts.
 
+### Ansible Galaxy
+
+Ansible Galaxy emits repository, proxy-upstream, and blob-storage metrics with `format="ansiblegalaxy"`. Repository operation labels are bounded to:
+
+- `ansible_discovery`
+- `ansible_collection`
+- `ansible_version_list`
+- `ansible_version_detail`
+- `ansible_publish`
+- `ansible_import_task`
+- `ansible_artifact_upload`
+- `ansible_artifact_download`
+- `ansible_repository`
+
+Monitor publish and import-task outcomes together: repeated `ansible_publish` success followed by import-task errors normally means archive/manifest/checksum validation or worker takeover is failing. The orphan cleanup reports `worker="ansible_staging_cleanup"` batch outcomes and `worker="ansible_cleanup", item="staging_asset", outcome="deleted"` item counts; sustained deletion growth indicates replicas are terminating between staging and durable cleanup. Shared-state cleanup reports `worker="ansible_cleanup"` with `item="proxy_cache"`, `item="terminal_task"`, or `item="expired_lease"`; sustained counts indicate undersized retention/cleanup capacity or persistent upstream churn. For proxy/group incidents, correlate version-detail latency with `kkrepo_proxy_remote_*` and artifact reads with blob-storage metrics. Namespace, collection name, version, task UUID, and token material must not become metric labels; use access-controlled audit/task detail for coordinate-level diagnosis. Complete manifest/files documents remain inside collection blobs, live upstream JSON is reduced to bounded fields, and any large raw JSON that must be retained belongs in blob storage. Database growth should therefore come from bounded projections and task/state rows rather than payload size.
+
 ### Blob Storage
 
 | Metric | Type | Description |

@@ -83,6 +83,11 @@
   --format-logo: url("/browse/assets/formats/swift.svg");
 }
 
+.format-logo-ansiblegalaxy {
+  --format-color: #111827;
+  --format-logo: url("/browse/assets/formats/ansiblegalaxy.svg");
+}
+
 .format-logo-raw {
   --format-color: #52625e;
   --format-logo: url("/browse/assets/formats/raw.svg");

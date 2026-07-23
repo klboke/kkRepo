@@ -423,6 +423,32 @@ swift package resolve --replace-scm-with-registry
 
 Use a `GenericToken` with `swift package-registry login --token <token>` for CI. The GitHub-backed proxy accepts GitHub HTTPS/SSH repository identities, pins the first observed tag commit and archive checksum, and never rewrites an already cached release after a tag moves.
 
+## Ansible Galaxy
+
+Create `ansiblegalaxy-hosted`, `ansiblegalaxy-proxy`, and `ansiblegalaxy-group` repositories. Publish to hosted and use the group for install/download:
+
+```ini
+# ansible.cfg
+[galaxy]
+server_list = kkrepo
+
+[galaxy_server.kkrepo]
+url = https://nexus.example.com/repository/ansible-group/
+token = GenericToken.REDACTED
+```
+
+```bash
+ansible-galaxy collection build --output-path dist
+ansible-galaxy collection publish dist/acme-tools-1.0.0.tar.gz \
+  --server https://nexus.example.com/repository/ansible-hosted/ \
+  --token "$KKREPO_ANSIBLE_TOKEN"
+ansible-galaxy collection install acme.tools:1.0.0 \
+  --server https://nexus.example.com/repository/ansible-group/ \
+  --token "$KKREPO_ANSIBLE_TOKEN"
+```
+
+Ansible 2.9 may name the token option `--api-key`. Collection versions are immutable, and dependency, checksum, signature, metadata, and artifact reads through a group remain bound to the same priority member. See the [Ansible Galaxy Repository Guide](ansible-galaxy-guide.md) for `requirements.yml`, Nexus-compatible credentials/PUT upload, proxy, migration, storage limits, and troubleshooting.
+
 ## NuGet
 
 Add a source:

@@ -300,8 +300,22 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
       case DOCKER -> dockerOperation(path, normalizedMethod);
       case TERRAFORM -> terraformOperation(path, normalizedMethod);
       case SWIFT -> swiftOperation(path, normalizedMethod);
+      case ANSIBLEGALAXY -> ansibleOperation(path, normalizedMethod);
       case RAW -> rawOperation(normalizedMethod);
     };
+  }
+
+  private static String ansibleOperation(String path, String method) {
+    if (path == null || path.isBlank() || "api/".equals(path)) return "ansible_discovery";
+    if (path.startsWith("api/v3/artifacts/collections")) return "ansible_publish";
+    if (path.startsWith("api/v3/imports/collections/")) return "ansible_import_task";
+    if (path.contains("/collections/artifacts/")) {
+      return "PUT".equals(method) ? "ansible_artifact_upload" : "ansible_artifact_download";
+    }
+    if (path.endsWith("/versions") || path.endsWith("/versions/")) return "ansible_version_list";
+    if (path.contains("/versions/")) return "ansible_version_detail";
+    if (path.contains("/collections/")) return "ansible_collection";
+    return "ansible_repository";
   }
 
   private static String swiftOperation(String path, String method) {

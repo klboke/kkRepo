@@ -29,6 +29,7 @@ import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
@@ -36,6 +37,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 
 class RawAssetWriterTest {
@@ -107,6 +109,37 @@ class RawAssetWriterTest {
     assertFalse(stored.created());
     assertEquals(12L, stored.asset().id());
     verify(fixture.assetDao).markBlobDeletedIfUnreferenced(44L, "asset replaced");
+  }
+
+  @Test
+  void immutableFileWriteNeverRebindsAConcurrentWinner(@TempDir Path tempDir) throws Exception {
+    Fixture fixture = fixture();
+    stubUploadedBlob(fixture);
+    AssetRecord winner = asset(12L, 44L);
+    AssetBlobRecord winnerBlob = blob(44L, "winner");
+    when(fixture.assetDao.findAssetByPath(1L, PATH))
+        .thenReturn(Optional.empty(), Optional.of(winner));
+    when(fixture.assetDao.findBlobById(44L)).thenReturn(Optional.of(winnerBlob));
+    when(fixture.componentDao.upsertReturningId(any())).thenReturn(22L);
+    when(fixture.assetDao.tryInsertAsset(any())).thenReturn(OptionalLong.empty());
+    Path file = Files.writeString(tempDir.resolve("collection.tar.gz"), "body");
+    ComponentRecord component = new ComponentRecord(
+        null, 1L, RepositoryFormat.RAW, "acme", "tools", "1.0.0", "logical",
+        new byte[32], Map.of(), Instant.now());
+
+    RawAssetWriter.Stored stored = fixture.writer.writeFileAtBrowsePathIfAbsent(
+        runtime(), fixture.storage, 1L, PATH, file, "application/octet-stream", Map.of(),
+        "ansible", "127.0.0.1", component,
+        "acme/tools/1.0.0/acme-tools-1.0.0.tar.gz");
+
+    assertFalse(stored.created());
+    assertEquals(winner, stored.asset());
+    assertEquals(winnerBlob, stored.blob());
+    verify(fixture.assetDao, never()).updateAssetBlobBindingAndMetadata(
+        anyLong(), any(), anyLong(), anyString(), anyString(), anyLong(), any(), any());
+    verify(fixture.assetDao).markBlobDeletedIfUnreferenced(
+        2L, "immutable asset insert lost");
+    verifyNoInteractions(fixture.browseNodeDao);
   }
 
   @Test
@@ -209,6 +242,73 @@ class RawAssetWriterTest {
     verify(fixture.assetDao).tryInsertAsset(inserted.capture());
     assertEquals(77L, inserted.getValue().componentId());
     verify(fixture.browseNodeDao).upsertPathAncestors(1L, PATH, 11L, 77L);
+  }
+
+  @Test
+  void writesFileAtAProtocolPathAndIndexesOnlyItsLogicalBrowsePath(@TempDir Path tempDir)
+      throws Exception {
+    Fixture fixture = fixture();
+    stubUploadedBlob(fixture);
+    when(fixture.assetDao.findAssetByPath(1L, PATH)).thenReturn(Optional.empty());
+    when(fixture.assetDao.tryInsertAsset(any())).thenReturn(OptionalLong.of(11L));
+    when(fixture.componentDao.upsertReturningId(any())).thenReturn(77L);
+    Path file = Files.writeString(tempDir.resolve("collection.tar.gz"), "body");
+    ComponentRecord component = new ComponentRecord(
+        null, 1L, RepositoryFormat.RAW, "acme", "tools", "1.0.0", "logical",
+        new byte[32], Map.of(), Instant.now());
+
+    RawAssetWriter.Stored stored = fixture.writer.writeFileAtBrowsePath(
+        runtime(), fixture.storage, 1L, PATH, file, "application/octet-stream", Map.of(),
+        "ansible", "127.0.0.1", component, "acme/tools/1.0.0/acme-tools-1.0.0.tar.gz");
+
+    assertEquals(PATH, stored.asset().path());
+    verify(fixture.browseNodeDao).upsertPathAncestors(
+        1L, "acme/tools/1.0.0/acme-tools-1.0.0.tar.gz", 11L, 77L);
+    verify(fixture.browseNodeDao, never()).upsertPathAncestors(1L, PATH, 11L, 77L);
+  }
+
+  @Test
+  void linksAnExistingRepositoryBlobWithoutUploadingOrHashingItAgain() {
+    Fixture fixture = fixture();
+    AssetBlobRecord existingBlob = blob(5L, "staging");
+    when(fixture.assetDao.findReusableBlobBySha256(1L, "sha256", 4L))
+        .thenReturn(Optional.of(existingBlob));
+    when(fixture.assetDao.findAssetByPath(1L, PATH)).thenReturn(Optional.empty());
+    when(fixture.componentDao.upsertReturningId(any())).thenReturn(77L);
+    when(fixture.assetDao.tryInsertAsset(any())).thenReturn(OptionalLong.of(11L));
+    ComponentRecord component = new ComponentRecord(
+        null, 1L, RepositoryFormat.RAW, "acme", "tools", "1.0.0", "logical",
+        new byte[32], Map.of(), Instant.now());
+
+    RawAssetWriter.Stored stored = fixture.writer.linkExistingBlobAtBrowsePathIfAbsent(
+        runtime(), fixture.storage, 1L, PATH, existingBlob, "application/octet-stream",
+        "ansible", "127.0.0.1", component,
+        "acme/tools/1.0.0/acme-tools-1.0.0.tar.gz");
+
+    assertTrue(stored.created());
+    assertEquals(existingBlob, stored.blob());
+    assertEquals("sha256", stored.digests().sha256());
+    verifyNoInteractions(fixture.storage);
+    verify(fixture.browseNodeDao).upsertPathAncestors(
+        1L, "acme/tools/1.0.0/acme-tools-1.0.0.tar.gz", 11L, 77L);
+  }
+
+  @Test
+  void rejectsLinkingABlobOutsideTheRepositoryBlobStore() {
+    Fixture fixture = fixture();
+
+    assertThrows(IllegalArgumentException.class,
+        () -> fixture.writer.linkExistingBlobAtBrowsePathIfAbsent(
+            runtime(), fixture.storage, 1L, PATH, null, "application/octet-stream",
+            "ansible", null, null, PATH));
+    assertThrows(IllegalArgumentException.class,
+        () -> fixture.writer.linkExistingBlobAtBrowsePathIfAbsent(
+            runtime(), fixture.storage, 1L, PATH,
+            new AssetBlobRecord(
+                5L, 2L, "blob://bucket/staging", null, "staging", null,
+                "sha1", "sha256", "md5", 4L, "application/octet-stream", "ansible", null,
+                Instant.EPOCH, Instant.EPOCH, Map.of()),
+            "application/octet-stream", "ansible", null, null, PATH));
   }
 
   @Test

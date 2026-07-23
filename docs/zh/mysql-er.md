@@ -1,8 +1,8 @@
 # kkrepo MySQL ER 设计
 
-历史 MySQL schema 以 `persistence-mysql/src/main/resources/db/migration/mysql/V1__init_schema.sql` 到 `V29__disable_anonymous_for_uninitialized_installations.sql` 为准，并由 Flyway 在服务启动时执行。MySQL 8 使用 InnoDB；PostgreSQL 提供逻辑等价的 V29 baseline。本文继续作为两种引擎的详细逻辑 ER 参考，另见[数据库 Schema](database-schema.md)。
+历史 MySQL schema 从 `persistence-mysql/src/main/resources/db/migration/mysql/V1__init_schema.sql` 开始；MySQL 与 PostgreSQL 之后通过成对 migration 演进，当前到 V35，并由 Flyway 在服务启动时执行。MySQL 8 使用 InnoDB；PostgreSQL 提供逻辑等价的 V29 baseline 和相同的 V30+ 变更。本文继续作为两种引擎的详细逻辑 ER 参考，另见[数据库 Schema](database-schema.md)。
 
-Schema 对共享 asset/blob 数据采用“统一内容表 + format 字段”的模型。Cargo / Rust、Dart / Pub、Composer / PHP 和 Terraform 使用这套共享模型，协议元数据保存在 component/asset attributes 中；Composer package/version/dist 不增加专用业务表，proxy route 也作为可重建内部 asset 保存。Pub 为官方多步骤 publish flow 增加 `pub_upload_session`。Terraform 的 signing key、Provider revision/platform、group source binding 和 publish lease 需要跨副本保持一致，因此使用协议专用旁表；Docker/OCI manifest、tag、upload session、auth token、referrers 等其它协议专有关系同样使用专用旁表。这样更适合从 Nexus 迁移和管理台统一查询；如果后续某个格式数据量明显过大，再通过分区或更多专用表优化。
+Schema 对共享 asset/blob 数据采用“统一内容表 + format 字段”的模型。Cargo / Rust、Dart / Pub、Composer / PHP、Terraform、Swift 和 Ansible 使用这套共享模型，协议元数据保存在 component/asset attributes 中；Composer package/version/dist 不增加专用业务表，proxy route 也作为可重建内部 asset 保存。Pub 为官方多步骤 publish flow 增加 `pub_upload_session`。Terraform 使用 signing key、Provider revision/platform、group source binding 和 publish lease 旁表；Ansible V35 增加 collection version/signature、持久化 import task、proxy state、group binding 和带 fencing 的 lease 表，以保证跨副本一致性。Docker/OCI manifest、tag、upload session、auth token、referrers 等其它协议专有关系同样使用专用旁表。这样更适合从 Nexus 迁移和管理台统一查询；如果后续某个格式数据量明显过大，再通过分区或更多专用表优化。
 
 ## 仓库与内容 ER
 
@@ -55,6 +55,12 @@ erDiagram
   REPOSITORY ||--o{ TERRAFORM_PROVIDER_SIGNING_STATE : provider_revision
   REPOSITORY ||--o{ TERRAFORM_PROVIDER_PLATFORM : provider_platform
   REPOSITORY ||--o{ TERRAFORM_SOURCE_BINDING : group_source
+  REPOSITORY ||--o{ ANSIBLE_COLLECTION_VERSION : collection_version
+  ANSIBLE_COLLECTION_VERSION ||--o{ ANSIBLE_COLLECTION_SIGNATURE : signature
+  REPOSITORY ||--o{ ANSIBLE_IMPORT_TASK : import_task
+  REPOSITORY ||--o{ ANSIBLE_PROXY_VERSION_STATE : proxy_state
+  REPOSITORY ||--o{ ANSIBLE_GROUP_BINDING : group_source
+  REPOSITORY ||--o{ ANSIBLE_REGISTRY_LEASE : fenced_lease
   SPRING_SESSION ||--o{ SPRING_SESSION_ATTRIBUTES : has
   MIGRATION_JOB ||--o{ MIGRATION_CHECKPOINT : records
   MIGRATION_JOB ||--o{ MIGRATION_VALIDATION_RESULT : validates
@@ -111,6 +117,12 @@ erDiagram
 | `terraform_provider_platform` | Provider platform identity 与 archive path/checksum；按 repository/namespace/type/version/os/arch 唯一 |
 | `terraform_source_binding` | 带过期时间的 group coordinate-to-member binding，保证 metadata 与 archive 读取命中同一 member/revision |
 | `terraform_publish_lease` | 数据库支持的过期 lease，用于跨副本串行化 module/provider 发布 |
+| `ansible_collection_version` | canonical collection coordinate、component/asset 引用、archive SHA-256、有上限的查询元数据/dependency、state、source 和 revision；完整 `MANIFEST.json`/`FILES.json` 仍只存在 artifact blob 中 |
+| `ansible_collection_signature` | 绑定不可变 collection version 的可选 detached signature，按 blob/hash 引用保存 |
+| `ansible_import_task` | 持久化 Galaxy publish task，包含 staging asset、requester、校验结果、claim/lease、fencing token、attempt 和时间 |
+| `ansible_proxy_version_state` | 上游 discovery/detail identity、validator、预期 artifact checksum、cache/negative state 和完整性状态 |
+| `ansible_group_binding` | 将 group collection version 绑定到一个有序 source member/revision/filename/checksum；proxy artifact 落地前 version 引用可为空，避免 metadata 读取提前下载 blob，同时防止 metadata 与 artifact 错配 |
+| `ansible_registry_lease` | 跨副本 publish、proxy materialization/revalidation 和 takeover 使用的共享过期 lease/fencing token |
 
 ### 权限层
 
@@ -158,3 +170,4 @@ erDiagram
 15. 迁移被视为可恢复产品功能：`migration_checkpoint` 负责配置/安全对象幂等导入，`repository_data_migration_*` 负责仓库 asset 数据迁移的 discover、claim、retry、resume 和进度统计。
 16. V24 将历史 `jindo` / `jindo-oss` blob store engine 归一化为 `oss-native`；大 blob 的真相仍在 OSS/S3/File blob store，MySQL 只保存元数据、状态、索引和引用。
 17. V28 增加 `pub_upload_session`，原因是 Pub publish 是多请求协议。Session 状态、临时 blob 引用、解析出的 metadata 和 finalize 状态必须能跨副本切换和重启恢复；archive 字节仍存放在 blob storage，不进入 MySQL。
+18. V35 增加 Ansible Galaxy 协议状态。显式唯一约束保护不可变 collection identity；task/lease 可在进程丢失后继续；group binding 保证 metadata/checksum/artifact 来自同一成员；archive/signature 字节仍只在 blob storage。

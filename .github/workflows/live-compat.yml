@@ -12,6 +12,31 @@ on:
         required: false
         default: jvm
         type: string
+      candidate_image_artifact:
+        description: Prebuilt candidate image artifact from this workflow run
+        required: false
+        default: ""
+        type: string
+      candidate_server_artifact:
+        description: Prebuilt executable JVM server artifact from this workflow run
+        required: false
+        default: ""
+        type: string
+      candidate_source_sha:
+        description: Exact source SHA embedded in the candidate artifacts
+        required: false
+        default: ""
+        type: string
+      swift_images_prepared:
+        description: Versioned Swift E2E image caches were warmed by the caller
+        required: false
+        default: false
+        type: boolean
+      artifact_prefix:
+        description: Prefix used to keep artifacts unique across reusable workflow calls
+        required: false
+        default: jvm
+        type: string
   workflow_dispatch:
     inputs:
       suite:
@@ -26,6 +51,7 @@ on:
           - nexus
           - client-e2e
           - swift
+          - ansible
           - full
   schedule:
     - cron: "0 19 * * *"
@@ -46,52 +72,96 @@ env:
   SWIFT_GITHUB_TOKEN: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.token || '' }}
 
 concurrency:
-  group: live-compat-${{ github.workflow }}-${{ github.ref }}-${{ inputs.runtime || 'jvm' }}
+  group: live-compat-${{ github.workflow }}-${{ github.ref }}-${{ inputs.runtime || 'jvm' }}-${{ inputs.suite || 'direct' }}
   cancel-in-progress: true
 
 jobs:
-  swift-platform-server:
-    name: Build Swift platform E2E server
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    if: inputs.runtime != 'native' && ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'client-e2e' || inputs.suite == 'swift')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e')))
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+  build-candidate:
+    name: Build candidate once for direct Live Compatibility runs
+    if: >-
+      inputs.candidate_image_artifact == '' &&
+      (
+        github.event_name == 'schedule' ||
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'pull_request' &&
+          (
+            (
+              contains(github.event.pull_request.labels.*.name, 'run-client-e2e') &&
+              (
+                !contains(github.event.pull_request.labels.*.name, 'run-full-e2e') ||
+                (github.event.action == 'labeled' && github.event.label.name == 'run-client-e2e')
+              )
+            ) ||
+            (
+              contains(github.event.pull_request.labels.*.name, 'run-live-compat') &&
+              (
+                !contains(github.event.pull_request.labels.*.name, 'run-full-e2e') ||
+                (github.event.action == 'labeled' && github.event.label.name == 'run-live-compat')
+              )
+            )
+          )
+        )
+      )
+    uses: ./.github/workflows/build-e2e-candidate.yml
+    with:
+      runtime: ${{ inputs.runtime || 'jvm' }}
+      source_sha: ${{ github.sha }}
+      artifact_key: ${{ github.event.pull_request.head.sha || github.sha }}
+      include_server_artifact: ${{ inputs.suite == 'client-e2e' || inputs.suite == 'swift' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e')) }}
 
-      - name: Set up JDK 25
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "25"
-          cache: maven
-
-      - name: Build executable server
-        run: mvn -B -ntp -pl server -am -DskipTests package spring-boot:repackage
-
-      - name: Stage executable server
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p artifacts/swift-platform-server
-          jar="$(find server/target -maxdepth 1 -name 'kkrepo-server-*.jar' -type f -print -quit)"
-          test -n "$jar"
-          cp "$jar" artifacts/swift-platform-server/kkrepo-server.jar
-
-      - name: Upload executable server
-        uses: actions/upload-artifact@v7
-        with:
-          name: swift-platform-server
-          path: artifacts/swift-platform-server/kkrepo-server.jar
-          if-no-files-found: error
+  prepare-swift-images:
+    name: Warm versioned Swift E2E image caches
+    if: >-
+      inputs.swift_images_prepared != true &&
+      (
+        github.event_name == 'schedule' ||
+        inputs.suite == 'client-e2e' ||
+        inputs.suite == 'swift' ||
+        (
+          github.event_name == 'pull_request' &&
+          contains(github.event.pull_request.labels.*.name, 'run-client-e2e') &&
+          (
+            !contains(github.event.pull_request.labels.*.name, 'run-full-e2e') ||
+            (github.event.action == 'labeled' && github.event.label.name == 'run-client-e2e')
+          )
+        )
+      )
+    uses: ./.github/workflows/prepare-swift-e2e.yml
+    with:
+      include_legacy: ${{ github.event_name != 'schedule' }}
 
   live-compat:
-    name: ${{ (inputs.runtime == 'native' && 'Native Client E2E compatibility') || (((github.event_name == 'workflow_dispatch' && inputs.suite == 'client-e2e') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && 'Client E2E compatibility') || 'Live compatibility' }} (${{ matrix.database }})
+    name: ${{ (inputs.runtime == 'native' && 'Native Client E2E compatibility') || ((inputs.suite == 'client-e2e' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && 'Client E2E compatibility') || 'Live compatibility' }} (${{ matrix.database }})
+    needs:
+      - build-candidate
+      - prepare-swift-images
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    if: (inputs.runtime == 'native' && inputs.suite == 'client-e2e') || (github.event_name == 'workflow_dispatch' && inputs.suite != 'nexus') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))
+    if: >-
+      always() &&
+      !cancelled() &&
+      (inputs.candidate_image_artifact != '' || needs.build-candidate.result == 'success') &&
+      (
+        !(
+          inputs.suite == 'client-e2e' ||
+          inputs.suite == 'swift' ||
+          (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))
+        ) ||
+        inputs.swift_images_prepared ||
+        needs.prepare-swift-images.result == 'success'
+      ) &&
+      (
+        (inputs.suite != '' && inputs.suite != 'nexus') ||
+        (
+          github.event_name == 'pull_request' &&
+          contains(github.event.pull_request.labels.*.name, 'run-client-e2e') &&
+          (
+            !contains(github.event.pull_request.labels.*.name, 'run-full-e2e') ||
+            (github.event.action == 'labeled' && github.event.label.name == 'run-client-e2e')
+          )
+        )
+      )
     strategy:
       fail-fast: false
       matrix:
@@ -107,11 +177,12 @@ jobs:
     env:
       COMPOSE_FILE: docker-compose.compat-postgres.yml
       COMPOSE_PROJECT_NAME: kkrepo-compat
-      LIVE_COMPAT_SUITE: ${{ (inputs.runtime == 'native' && 'client-e2e') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e') && 'client-e2e') || inputs.suite }}
-      NEXUS_COMPAT_IMAGE: ${{ ((inputs.runtime == 'native') || (github.event_name == 'workflow_dispatch' && (inputs.suite == 'client-e2e' || inputs.suite == 'swift' || inputs.suite == 'full')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && 'sonatype/nexus3:3.94.0' || 'sonatype/nexus3:3.92.0' }}
+      LIVE_COMPAT_SUITE: ${{ (inputs.runtime == 'native' && 'client-e2e') || inputs.suite || 'client-e2e' }}
+      NEXUS_COMPAT_IMAGE: ${{ ((inputs.runtime == 'native') || inputs.suite == 'client-e2e' || inputs.suite == 'swift' || inputs.suite == 'ansible' || inputs.suite == 'full' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && 'sonatype/nexus3:3.94.0' || 'sonatype/nexus3:3.92.0' }}
       PUB_COMPAT_ENABLED: "true"
       COMPOSER_COMPAT_ENABLED: "true"
       SWIFT_KKREPO_SECONDARY_BASE_URL: http://127.0.0.1:18094
+      ANSIBLE_KKREPO_SECONDARY_BASE_URL: http://127.0.0.1:18094
       SWIFT_COMPAT_PROXY_VERSION: "1.6.3"
       SWIFT_COMPAT_REQUIRE_PROXY_TAG_CASES: "true"
       SWIFT_COMPAT_PROXY_TAG_CASES: MaestriHub/shared-modules/v0.3.8/0.3.8,MaestriHub/shared-modules/V0.3.7/0.3.7
@@ -144,6 +215,14 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+
+      - name: Set up Python 3.9 for Ansible 2.9
+        id: ansible-python29
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e'
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.9"
+          update-environment: false
 
       - name: Set up PHP and Composer
         if: env.LIVE_COMPAT_SUITE == 'client-e2e'
@@ -224,116 +303,21 @@ jobs:
           docker system prune --all --force
           df -h /
 
-      - name: Set up SwiftPM 5.7, 5.9+, and current Swift 6
+      - name: Prepare run-specific Swift HTTPS fixtures
         if: env.LIVE_COMPAT_SUITE == 'client-e2e' || env.LIVE_COMPAT_SUITE == 'swift'
         shell: bash
         run: |
           set -euo pipefail
-          docker pull swift:5.7.3-jammy
-          docker pull swift:5.10.1-jammy
-          docker pull swift:6.3.3-jammy
-
           tls_dir="$RUNNER_TEMP/swift-e2e-tls"
-          scripts/ci/generate-swift-e2e-tls.sh "$tls_dir" localhost
-          cat > "$tls_dir/Dockerfile" <<'EOF'
-          ARG BASE_IMAGE
-          FROM ${BASE_IMAGE}
-          COPY ca.crt /usr/local/share/ca-certificates/kkrepo-swift-e2e.crt
-          RUN apt-get update \
-              && apt-get install -y --no-install-recommends zip \
-              && rm -rf /var/lib/apt/lists/* \
-              && update-ca-certificates
-          EOF
-          for spec in \
-            'swift:5.7.3-jammy kkrepo/swift:5.7.3-jammy-tls' \
-            'swift:5.10.1-jammy kkrepo/swift:5.10.1-jammy-tls' \
-            'swift:6.3.3-jammy kkrepo/swift:6.3.3-jammy-tls'; do
-            base_image="${spec%% *}"
-            trusted_image="${spec#* }"
-            docker build \
-              --build-arg "BASE_IMAGE=$base_image" \
-              --tag "$trusted_image" \
-              "$tls_dir"
-          done
+          scripts/ci/prepare-swift-e2e-tls.sh "$tls_dir"
 
-          cat > "$tls_dir/nginx.conf" <<'EOF'
-          events {}
-          http {
-            client_max_body_size 100m;
-            proxy_request_buffering off;
-
-            server {
-              listen 18443 ssl;
-              server_name localhost;
-              ssl_certificate /etc/nginx/tls/server.crt;
-              ssl_certificate_key /etc/nginx/tls/server.key;
-              ssl_protocols TLSv1.2 TLSv1.3;
-              location / {
-                proxy_pass http://127.0.0.1:18090;
-                proxy_http_version 1.1;
-                proxy_set_header Host $http_host;
-                proxy_set_header X-Forwarded-Host $http_host;
-                proxy_set_header X-Forwarded-Proto https;
-                proxy_set_header X-Forwarded-Port $server_port;
-              }
-            }
-
-            server {
-              listen 18444 ssl;
-              server_name localhost;
-              ssl_certificate /etc/nginx/tls/server.crt;
-              ssl_certificate_key /etc/nginx/tls/server.key;
-              ssl_protocols TLSv1.2 TLSv1.3;
-              location / {
-                proxy_pass http://127.0.0.1:18094;
-                proxy_http_version 1.1;
-                proxy_set_header Host $http_host;
-                proxy_set_header X-Forwarded-Host $http_host;
-                proxy_set_header X-Forwarded-Proto https;
-                proxy_set_header X-Forwarded-Port $server_port;
-              }
-            }
-          }
-          EOF
-
-          mkdir -p "$RUNNER_TEMP/swift-bin"
-          cat > "$RUNNER_TEMP/swift-bin/swift-matrix" <<'EOF'
-          #!/usr/bin/env bash
-          set -euo pipefail
-
-          case "$(basename "$0")" in
-            swift-5.7) image="kkrepo/swift:5.7.3-jammy-tls" ;;
-            swift-5.10) image="kkrepo/swift:5.10.1-jammy-tls" ;;
-            swift-6) image="kkrepo/swift:6.3.3-jammy-tls" ;;
-            *) echo "unknown Swift matrix wrapper: $0" >&2; exit 2 ;;
-          esac
-
-          args=(
-            --rm
-            --network host
-            --user "$(id -u):$(id -g)"
-            -e HOME
-            -e XDG_CONFIG_HOME
-            -v "$PWD:$PWD"
-            -w "$PWD"
-          )
-          if [[ -n "${CLIENT_E2E_WORK_DIR:-}" && -d "$CLIENT_E2E_WORK_DIR" ]]; then
-            args+=( -v "$CLIENT_E2E_WORK_DIR:$CLIENT_E2E_WORK_DIR" )
-          fi
-          if [[ -n "${HOME:-}" && "$HOME" != "$PWD" ]]; then
-            args+=( -v "$HOME:$HOME" )
-          fi
-          exec docker run "${args[@]}" "$image" swift "$@"
-          EOF
-          chmod 0755 "$RUNNER_TEMP/swift-bin/swift-matrix"
-          ln -s swift-matrix "$RUNNER_TEMP/swift-bin/swift-5.7"
-          ln -s swift-matrix "$RUNNER_TEMP/swift-bin/swift-5.10"
-          ln -s swift-matrix "$RUNNER_TEMP/swift-bin/swift-6"
-
-          {
-            echo "SWIFT_E2E_BINS=5.7=$RUNNER_TEMP/swift-bin/swift-5.7,5.9+=$RUNNER_TEMP/swift-bin/swift-5.10,6.x=$RUNNER_TEMP/swift-bin/swift-6"
-            echo "SWIFT_E2E_REQUIRE_5_7_5_9_6=true"
-          } >> "$GITHUB_ENV"
+      - name: Set up cached SwiftPM 5.7, 5.9+, and current Swift 6
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e' || env.LIVE_COMPAT_SUITE == 'swift'
+        uses: ./.github/actions/setup-swift-e2e
+        with:
+          versions: all
+          wrapper_mode: matrix
+          ca_certificate: ${{ runner.temp }}/swift-e2e-tls/ca.crt
 
       - name: Verify stable Swift v and V Git tag fixtures
         if: env.LIVE_COMPAT_SUITE == 'client-e2e' || env.LIVE_COMPAT_SUITE == 'swift'
@@ -373,16 +357,32 @@ jobs:
         if: env.LIVE_COMPAT_SUITE == 'client-e2e'
         run: python -m pip install --upgrade build twine
 
+      - name: Set up Ansible Galaxy 2.9 and current clients
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e'
+        env:
+          ANSIBLE_PYTHON_29: ${{ steps.ansible-python29.outputs.python-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ansible"
+          "$ANSIBLE_PYTHON_29" -m venv "$RUNNER_TEMP/ansible/2.9"
+          python -m venv "$RUNNER_TEMP/ansible/current"
+          "$RUNNER_TEMP/ansible/2.9/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/ansible/2.9/bin/python" -m pip install \
+            'ansible==2.9.27' 'jinja2<3.1' 'MarkupSafe<2.1'
+          "$RUNNER_TEMP/ansible/current/bin/python" -m pip install --upgrade pip ansible-core
+          echo "ANSIBLE_GALAXY_BINS=2.9=$RUNNER_TEMP/ansible/2.9/bin/ansible-galaxy,current=$RUNNER_TEMP/ansible/current/bin/ansible-galaxy" >> "$GITHUB_ENV"
+          echo "ANSIBLE_E2E_REQUIRE_2_9_CURRENT=true" >> "$GITHUB_ENV"
+
       - name: Validate live compatibility compose file
         run: docker compose -f "$COMPOSE_FILE" config
 
-      - name: Build JVM candidate image
-        if: inputs.runtime != 'native'
-        run: scripts/build-docker-image.sh kkrepo:compat
-
-      - name: Build Native candidate image
-        if: inputs.runtime == 'native'
-        run: scripts/build-docker-image.sh --native kkrepo:compat
+      - name: Load verified candidate image
+        uses: ./.github/actions/load-e2e-candidate
+        with:
+          artifact_name: ${{ inputs.candidate_image_artifact || needs.build-candidate.outputs.image_artifact }}
+          runtime: ${{ inputs.runtime || 'jvm' }}
+          source_sha: ${{ inputs.candidate_source_sha || github.sha }}
 
       - name: Start compatibility databases
         run: docker compose -f "$COMPOSE_FILE" up -d --wait ${{ matrix.database-service }} nexus-postgres
@@ -479,7 +479,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: live-compat-${{ matrix.database }}-logs
+          name: ${{ inputs.artifact_prefix || 'jvm' }}-live-compat-${{ matrix.database }}-logs
           path: artifacts/
           if-no-files-found: ignore
 
@@ -491,10 +491,26 @@ jobs:
 
   swift-xcode-e2e:
     name: Swift registry Xcode E2E (macOS)
-    needs: swift-platform-server
+    needs: build-candidate
     runs-on: macos-15
     timeout-minutes: 60
-    if: inputs.runtime != 'native' && ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'client-e2e' || inputs.suite == 'swift')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e')))
+    if: >-
+      always() &&
+      !cancelled() &&
+      inputs.runtime != 'native' &&
+      (inputs.candidate_server_artifact != '' || needs.build-candidate.result == 'success') &&
+      (
+        inputs.suite == 'client-e2e' ||
+        inputs.suite == 'swift' ||
+        (
+          github.event_name == 'pull_request' &&
+          contains(github.event.pull_request.labels.*.name, 'run-client-e2e') &&
+          (
+            !contains(github.event.pull_request.labels.*.name, 'run-full-e2e') ||
+            (github.event.action == 'labeled' && github.event.label.name == 'run-client-e2e')
+          )
+        )
+      )
     env:
       KKREPO_DATABASE_TYPE: postgresql
       SPRING_DATASOURCE_URL: jdbc:postgresql://127.0.0.1:5432/kkrepo
@@ -521,7 +537,7 @@ jobs:
       - name: Download executable server
         uses: actions/download-artifact@v8
         with:
-          name: swift-platform-server
+          name: ${{ inputs.candidate_server_artifact || needs.build-candidate.outputs.server_artifact }}
           path: artifacts/swift-platform-server
 
       - name: Select Xcode and Swift toolchain
@@ -566,16 +582,32 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: swift-xcode-e2e-logs
+          name: ${{ inputs.artifact_prefix || 'jvm' }}-swift-xcode-e2e-logs
           path: artifacts/swift-platform-e2e/
           if-no-files-found: ignore
 
   swift-windows-e2e:
     name: Swift proxy resolve/build E2E (Windows)
-    needs: swift-platform-server
+    needs: build-candidate
     runs-on: windows-2022
     timeout-minutes: 60
-    if: inputs.runtime != 'native' && ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'client-e2e' || inputs.suite == 'swift')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e')))
+    if: >-
+      always() &&
+      !cancelled() &&
+      inputs.runtime != 'native' &&
+      (inputs.candidate_server_artifact != '' || needs.build-candidate.result == 'success') &&
+      (
+        inputs.suite == 'client-e2e' ||
+        inputs.suite == 'swift' ||
+        (
+          github.event_name == 'pull_request' &&
+          contains(github.event.pull_request.labels.*.name, 'run-client-e2e') &&
+          (
+            !contains(github.event.pull_request.labels.*.name, 'run-full-e2e') ||
+            (github.event.action == 'labeled' && github.event.label.name == 'run-client-e2e')
+          )
+        )
+      )
     env:
       KKREPO_DATABASE_TYPE: postgresql
       SPRING_DATASOURCE_URL: jdbc:postgresql://127.0.0.1:5432/kkrepo
@@ -614,7 +646,7 @@ jobs:
       - name: Download executable server
         uses: actions/download-artifact@v8
         with:
-          name: swift-platform-server
+          name: ${{ inputs.candidate_server_artifact || needs.build-candidate.outputs.server_artifact }}
           path: artifacts/swift-platform-server
 
       - name: Start PostgreSQL and create kkrepo database
@@ -648,15 +680,36 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: swift-windows-e2e-logs
+          name: ${{ inputs.artifact_prefix || 'jvm' }}-swift-windows-e2e-logs
           path: artifacts/swift-platform-e2e/
           if-no-files-found: ignore
 
   swift-s3-resilience-e2e:
     name: Swift S3-compatible dual-replica resilience E2E
+    needs:
+      - build-candidate
+      - prepare-swift-images
     runs-on: ubuntu-latest
     timeout-minutes: 150
-    if: inputs.runtime != 'native' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.suite == 'client-e2e' || inputs.suite == 'swift')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e')))
+    if: >-
+      always() &&
+      !cancelled() &&
+      inputs.runtime != 'native' &&
+      (inputs.candidate_image_artifact != '' || needs.build-candidate.result == 'success') &&
+      (inputs.swift_images_prepared || needs.prepare-swift-images.result == 'success') &&
+      (
+        github.event_name == 'schedule' ||
+        inputs.suite == 'client-e2e' ||
+        inputs.suite == 'swift' ||
+        (
+          github.event_name == 'pull_request' &&
+          contains(github.event.pull_request.labels.*.name, 'run-client-e2e') &&
+          (
+            !contains(github.event.pull_request.labels.*.name, 'run-full-e2e') ||
+            (github.event.action == 'labeled' && github.event.label.name == 'run-client-e2e')
+          )
+        )
+      )
     env:
       COMPOSE_FILE: docker-compose.swift-s3-e2e.yml
       COMPOSE_PROJECT_NAME: kkrepo-swift-s3-e2e
@@ -679,49 +732,22 @@ jobs:
           java-version: "25"
           cache: maven
 
-      - name: Set up Swift 6 client wrapper
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker pull swift:6.3.3-jammy
-          mkdir -p "$RUNNER_TEMP/swift-s3-bin"
-          cat > "$RUNNER_TEMP/swift-s3-bin/Dockerfile" <<'EOF'
-          FROM swift:6.3.3-jammy
-          RUN apt-get update \
-              && apt-get install -y --no-install-recommends zip \
-              && rm -rf /var/lib/apt/lists/*
-          EOF
-          docker build \
-            --tag kkrepo/swift:6.3.3-jammy-e2e \
-            "$RUNNER_TEMP/swift-s3-bin"
-          cat > "$RUNNER_TEMP/swift-s3-bin/swift-6" <<'EOF'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          args=(
-            --rm
-            --network host
-            --user "$(id -u):$(id -g)"
-            -e HOME
-            -e XDG_CONFIG_HOME
-            -v "$PWD:$PWD"
-            -w "$PWD"
-          )
-          if [[ -n "${CLIENT_E2E_WORK_DIR:-}" && -d "$CLIENT_E2E_WORK_DIR" ]]; then
-            args+=( -v "$CLIENT_E2E_WORK_DIR:$CLIENT_E2E_WORK_DIR" )
-          fi
-          if [[ -n "${HOME:-}" && "$HOME" != "$PWD" ]]; then
-            args+=( -v "$HOME:$HOME" )
-          fi
-          exec docker run "${args[@]}" kkrepo/swift:6.3.3-jammy-e2e swift "$@"
-          EOF
-          chmod 0755 "$RUNNER_TEMP/swift-s3-bin/swift-6"
-          echo "SWIFT_S3_E2E_SWIFT_BIN=$RUNNER_TEMP/swift-s3-bin/swift-6" >> "$GITHUB_ENV"
+      - name: Set up cached Swift 6 client wrapper
+        uses: ./.github/actions/setup-swift-e2e
+        with:
+          versions: current
+          wrapper_mode: single
 
       - name: Validate Swift S3 resilience compose file
         run: docker compose -f "$COMPOSE_FILE" config --quiet
 
-      - name: Build candidate image
-        run: scripts/build-docker-image.sh "$KKREPO_SWIFT_S3_IMAGE"
+      - name: Load verified candidate image
+        uses: ./.github/actions/load-e2e-candidate
+        with:
+          artifact_name: ${{ inputs.candidate_image_artifact || needs.build-candidate.outputs.image_artifact }}
+          runtime: jvm
+          source_sha: ${{ inputs.candidate_source_sha || github.sha }}
+          target_tag: ${{ env.KKREPO_SWIFT_S3_IMAGE }}
 
       - name: Start PostgreSQL, MinIO, Nexus, and both replicas
         run: docker compose -f "$COMPOSE_FILE" up -d
@@ -744,7 +770,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: swift-s3-resilience-e2e-logs
+          name: ${{ inputs.artifact_prefix || 'jvm' }}-swift-s3-resilience-e2e-logs
           path: artifacts/swift-s3-resilience-e2e/
           if-no-files-found: ignore
 
@@ -754,9 +780,26 @@ jobs:
 
   nexus-compat:
     name: Nexus compatibility
+    needs: build-candidate
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    if: inputs.runtime != 'native' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.suite == 'nexus') || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-live-compat')))
+    if: >-
+      always() &&
+      !cancelled() &&
+      inputs.runtime != 'native' &&
+      (inputs.candidate_image_artifact != '' || needs.build-candidate.result == 'success') &&
+      (
+        github.event_name == 'schedule' ||
+        inputs.suite == 'nexus' ||
+        (
+          github.event_name == 'pull_request' &&
+          contains(github.event.pull_request.labels.*.name, 'run-live-compat') &&
+          (
+            !contains(github.event.pull_request.labels.*.name, 'run-full-e2e') ||
+            (github.event.action == 'labeled' && github.event.label.name == 'run-live-compat')
+          )
+        )
+      )
     env:
       COMPOSE_FILE: docker-compose.compat-postgres.yml
       COMPOSE_PROJECT_NAME: kkrepo-nexus-compat
@@ -797,8 +840,12 @@ jobs:
       - name: Validate Nexus compatibility compose file
         run: docker compose -f "$COMPOSE_FILE" config
 
-      - name: Build candidate image
-        run: scripts/build-docker-image.sh kkrepo:compat
+      - name: Load verified candidate image
+        uses: ./.github/actions/load-e2e-candidate
+        with:
+          artifact_name: ${{ inputs.candidate_image_artifact || needs.build-candidate.outputs.image_artifact }}
+          runtime: jvm
+          source_sha: ${{ inputs.candidate_source_sha || github.sha }}
 
       - name: Start Nexus compatibility databases
         run: docker compose -f "$COMPOSE_FILE" up -d --wait mysql nexus-postgres
@@ -823,7 +870,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: nexus-compat-logs
+          name: ${{ inputs.artifact_prefix || 'jvm' }}-nexus-compat-logs
           path: artifacts/
           if-no-files-found: ignore
 

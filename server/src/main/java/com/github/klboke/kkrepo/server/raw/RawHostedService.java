@@ -144,6 +144,68 @@ public class RawHostedService {
     return MavenResponse.created();
   }
 
+  /**
+   * Stores protocol content at its wire path while exposing a separate logical browse path.
+   * The asset has exactly one browse leaf, matching the browse schema's unique asset binding.
+   */
+  public MavenResponse putInternalWithComponentFileAtBrowsePath(
+      RepositoryRuntime runtime,
+      String rawPath,
+      Path file,
+      String contentType,
+      Map<String, ?> blobAttributes,
+      String createdBy,
+      String createdByIp,
+      ComponentRecord component,
+      String rawBrowsePath) {
+    String path = normalizeAssetPath(rawPath);
+    String browsePath = normalizeAssetPath(rawBrowsePath);
+    writer.writeFileAtBrowsePath(
+        runtime, blobStorage(runtime), requireBlobStore(runtime), path, file, contentType,
+        blobAttributes == null ? Map.of() : blobAttributes, createdBy, createdByIp,
+        component, browsePath);
+    return MavenResponse.created();
+  }
+
+  /**
+   * Stores an immutable protocol asset and returns whether this call created the path binding.
+   * If another replica already owns or concurrently wins the path, its asset/blob binding is
+   * returned unchanged by the writer and this method reports {@code false}.
+   */
+  public boolean putInternalWithComponentFileAtBrowsePathIfAbsent(
+      RepositoryRuntime runtime,
+      String rawPath,
+      Path file,
+      String contentType,
+      Map<String, ?> blobAttributes,
+      String createdBy,
+      String createdByIp,
+      ComponentRecord component,
+      String rawBrowsePath) {
+    String path = normalizeAssetPath(rawPath);
+    String browsePath = normalizeAssetPath(rawBrowsePath);
+    return writer.writeFileAtBrowsePathIfAbsent(
+        runtime, blobStorage(runtime), requireBlobStore(runtime), path, file, contentType,
+        blobAttributes == null ? Map.of() : blobAttributes, createdBy, createdByIp,
+        component, browsePath).created();
+  }
+
+  public boolean linkInternalBlobWithComponentAtBrowsePathIfAbsent(
+      RepositoryRuntime runtime,
+      String rawPath,
+      com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord blob,
+      String contentType,
+      String createdBy,
+      String createdByIp,
+      ComponentRecord component,
+      String rawBrowsePath) {
+    String path = normalizeAssetPath(rawPath);
+    String browsePath = normalizeAssetPath(rawBrowsePath);
+    return writer.linkExistingBlobAtBrowsePathIfAbsent(
+        runtime, blobStorage(runtime), requireBlobStore(runtime), path, blob, contentType,
+        createdBy, createdByIp, component, browsePath).created();
+  }
+
   /** Deletes protocol-generated content without applying Raw repository type checks. */
   public MavenResponse deleteInternal(RepositoryRuntime runtime, String rawPath) {
     String path = normalizeAssetPath(rawPath);

@@ -19,10 +19,55 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  build-native:
+    name: Build Native candidate once
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'pull_request' &&
+        contains(github.event.pull_request.labels.*.name, 'run-native-client-e2e') &&
+        (
+          !contains(github.event.pull_request.labels.*.name, 'run-full-e2e') ||
+          (github.event.action == 'labeled' && github.event.label.name == 'run-native-client-e2e')
+        )
+      )
+    uses: ./.github/workflows/build-e2e-candidate.yml
+    with:
+      runtime: native
+      source_sha: ${{ github.sha }}
+      artifact_key: ${{ github.event.pull_request.head.sha || github.sha }}
+
+  prepare-swift-images:
+    name: Warm versioned Swift E2E image caches
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'pull_request' &&
+        contains(github.event.pull_request.labels.*.name, 'run-native-client-e2e') &&
+        (
+          !contains(github.event.pull_request.labels.*.name, 'run-full-e2e') ||
+          (github.event.action == 'labeled' && github.event.label.name == 'run-native-client-e2e')
+        )
+      )
+    uses: ./.github/workflows/prepare-swift-e2e.yml
+    with:
+      include_legacy: true
+
   native-client-e2e:
     name: Native client E2E
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-native-client-e2e')
+    needs:
+      - build-native
+      - prepare-swift-images
+    if: >-
+      always() &&
+      !cancelled() &&
+      needs.build-native.result == 'success' &&
+      needs.prepare-swift-images.result == 'success'
     uses: ./.github/workflows/live-compat.yml
     with:
       suite: client-e2e
       runtime: native
+      candidate_image_artifact: ${{ needs.build-native.outputs.image_artifact }}
+      candidate_source_sha: ${{ github.sha }}
+      swift_images_prepared: true
+      artifact_prefix: native-client

@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.persistence.jdbc.internal;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AuthTicketDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
@@ -51,6 +52,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
   public static PersistenceStores createStores(JdbcTemplate jdbc, DatabaseDialect dialect) {
     JsonColumns json = new JsonColumns(new ObjectMapper(), dialect);
     return new DefaultPersistenceStores(
+        new JdbcAnsibleGalaxyRegistryDao(jdbc, json, dialect),
         new JdbcAssetDao(jdbc, json),
         new JdbcAuthTicketDao(jdbc),
         new JdbcBlobStoreDao(jdbc, json),
@@ -78,6 +80,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
   }
 
   private record DefaultPersistenceStores(
+      AnsibleGalaxyRegistryDao ansibleGalaxyRegistry,
       AssetDao assets,
       AuthTicketDao authTickets,
       BlobStoreDao blobStores,
