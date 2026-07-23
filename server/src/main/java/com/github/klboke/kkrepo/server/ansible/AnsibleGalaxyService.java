@@ -131,7 +131,7 @@ public class AnsibleGalaxyService {
     }
     AnsibleGalaxyPath path = target.path();
     return switch (path.kind()) {
-      case DISCOVERY -> jsonResponse(discovery(), 200, headOnly, null);
+      case DISCOVERY -> jsonResponse(discovery(path.rawPath()), 200, headOnly, null);
       case COLLECTION -> collectionResponse(
           runtime, path.namespace(), path.name(), repositoryBaseUrl, headOnly);
       case VERSION_LIST -> versionListResponse(
@@ -1672,8 +1672,18 @@ public class AnsibleGalaxyService {
   }
 
   Map<String, Object> discovery() {
+    return discovery("");
+  }
+
+  Map<String, Object> discovery(String rawPath) {
+    String normalizedPath = rawPath == null ? "" : rawPath;
+    while (normalizedPath.startsWith("/")) normalizedPath = normalizedPath.substring(1);
+    String v3Path =
+        normalizedPath.equals("api") || normalizedPath.equals("api/")
+            ? "v3/"
+            : AnsibleGalaxyPathParser.V3_BASE;
     Map<String, Object> body = new LinkedHashMap<>();
-    body.put("available_versions", Map.of("v3", AnsibleGalaxyPathParser.V3_BASE));
+    body.put("available_versions", Map.of("v3", v3Path));
     body.put("server_version", "kkrepo");
     body.put("description", "kkRepo Ansible Galaxy v3 repository");
     return body;

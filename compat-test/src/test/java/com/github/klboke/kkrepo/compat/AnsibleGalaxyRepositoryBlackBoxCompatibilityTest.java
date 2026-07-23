@@ -66,8 +66,8 @@ class AnsibleGalaxyRepositoryBlackBoxCompatibilityTest {
     String collection = uniqueCollection("hosted");
     Fixture fixture = Fixture.create("compat", collection, "1.2.3", "hosted");
 
-    assertDiscovery(config.nexusRepository(config.hosted()), config.nexusAuth());
-    assertDiscovery(config.candidateRepository(config.hosted()), config.candidateAuth());
+    assertDiscovery(config.nexusRepository(config.hosted()), config.nexusAuth(), "api/v3/");
+    assertDiscovery(config.candidateRepository(config.hosted()), config.candidateAuth(), "v3/");
 
     Exchange nexusPublish = publish(
         config.nexusRepository(config.hosted()), config.nexusAuth(), fixture);
@@ -185,11 +185,15 @@ class AnsibleGalaxyRepositoryBlackBoxCompatibilityTest {
         sha256(candidateArtifact.body()));
   }
 
-  private static void assertDiscovery(String repository, String authorization) throws Exception {
+  private static void assertDiscovery(
+      String repository, String authorization, String apiRelativeV3) throws Exception {
     JsonNode root = json(get(repository + "/", authorization));
     JsonNode fallback = json(get(repository + "/api/", authorization));
     assertEquals("api/v3/", root.path("available_versions").path("v3").asText());
-    assertEquals(root.path("available_versions"), fallback.path("available_versions"));
+    assertEquals(apiRelativeV3, fallback.path("available_versions").path("v3").asText());
+    if (apiRelativeV3.equals("v3/")) {
+      assertEquals(repository + "/api/v3/", resolve(repository + "/api", apiRelativeV3));
+    }
   }
 
   private static void assertCollectionReads(

@@ -20,6 +20,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -206,6 +207,29 @@ class AnsibleGalaxyServiceSupportTest {
     try (InputStream input = body.body()) {
       Map<String, Object> decoded = mapper.readValue(input, new TypeReference<>() { });
       assertEquals("kkrepo", decoded.get("server_version"));
+    }
+  }
+
+  @Test
+  void advertisesV3RelativeToTheSuccessfulDiscoveryRoot() throws Exception {
+    RepositoryRuntime hosted = runtime(
+        1L, RepositoryFormat.ANSIBLEGALAXY, RepositoryType.HOSTED, true, 3L,
+        "ALLOW_ONCE", null, null, List.of());
+    var rootResponse = service.get(hosted, "", null, "https://repo.example/repository/ansible/",
+        false, "alice");
+    var apiResponse = service.get(hosted, "api/", null,
+        "https://repo.example/repository/ansible/", false, "alice");
+
+    try (InputStream rootBody = rootResponse.body(); InputStream apiBody = apiResponse.body()) {
+      Map<String, Object> root = mapper.readValue(rootBody, new TypeReference<>() { });
+      Map<String, Object> api = mapper.readValue(apiBody, new TypeReference<>() { });
+      assertEquals("api/v3/", map(root.get("available_versions")).get("v3"));
+      String apiRelativeV3 = map(api.get("available_versions")).get("v3").toString();
+      assertEquals("v3/", apiRelativeV3);
+      assertEquals(
+          "https://repo.example/repository/ansible/api/v3/",
+          URI.create("https://repo.example/repository/ansible/api/")
+              .resolve(apiRelativeV3).toString());
     }
   }
 
