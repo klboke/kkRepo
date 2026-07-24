@@ -1,14 +1,4 @@
-:root {
-  --topbar: #202020;
-  --sidebar: #d9d9d9;
-  --sidebar-head: #4a4a4a;
-  --active: #2db671;
-  --text: #3a3a3a;
-  --line: #c4c4c4;
-  --row: #ffffff;
-  --row-alt: #f7f7f7;
-  --header: #f1f1f1;
-}
+/* Theme tokens live in the shared tokens.css (linked before this file). */
 
 * {
   box-sizing: border-box;
@@ -73,15 +63,15 @@ select {
 }
 
 .toast.ok {
-  border-color: #9fd3b5;
-  background: #f2fbf6;
-  color: #137546;
+  border-color: var(--success-line);
+  background: var(--success-bg);
+  color: var(--success);
 }
 
 .toast.error {
-  border-color: #efb2b0;
-  background: #fff5f5;
-  color: #a12622;
+  border-color: var(--danger-line);
+  background: var(--danger-bg);
+  color: var(--danger);
 }
 
 .migration-result {
@@ -151,7 +141,7 @@ select {
 }
 
 .ops-status.error {
-  color: #a12622;
+  color: var(--danger);
 }
 
 .migration-progress-panel {
@@ -196,7 +186,7 @@ select {
 .repo-progress-track i {
   display: block;
   height: 100%;
-  background: #26816f;
+  background: var(--brand);
 }
 
 .migration-progress-meta {
@@ -234,14 +224,14 @@ select {
 }
 
 .migration-error-panel {
-  border: 1px solid #efb2b0;
-  background: #fff5f5;
+  border: 1px solid var(--danger-line);
+  background: var(--danger-bg);
   padding: 10px;
 }
 
 .migration-error-panel .migration-list-title {
   margin-top: 0;
-  color: #a12622;
+  color: var(--danger);
 }
 
 .nx-table.compact th,
@@ -448,7 +438,7 @@ select {
   border: 1px solid #cfd8d4;
   border-radius: 8px;
   background: #ffffff;
-  box-shadow: 0 12px 28px rgba(12, 25, 21, 0.18);
+  box-shadow: var(--shadow-pop);
   padding: 6px;
 }
 
@@ -468,7 +458,7 @@ select {
   color: #22312e;
   cursor: pointer;
   font-size: 13px;
-  font-weight: 650;
+  font-weight: var(--fw-semibold);
   padding: 0 10px;
   text-align: left;
 }
@@ -1026,7 +1016,7 @@ body {
 }
 
 .member-list:focus-within {
-  border-color: #2db671;
+  border-color: var(--brand);
   outline: none;
 }
 
@@ -1057,7 +1047,7 @@ body {
 
 .member-row.is-selected {
   background: #d9efe2;
-  color: #11663f;
+  color: var(--success);
   font-weight: 600;
 }
 
@@ -1070,11 +1060,11 @@ body {
 }
 
 .member-row.drop-target-above {
-  box-shadow: inset 0 2px 0 0 #2db671;
+  box-shadow: inset 0 2px 0 0 var(--brand);
 }
 
 .member-row.drop-target-below {
-  box-shadow: inset 0 -2px 0 0 #2db671;
+  box-shadow: inset 0 -2px 0 0 var(--brand);
 }
 
 .member-handle {
@@ -1089,7 +1079,7 @@ body {
   height: 20px;
   place-items: center;
   border-radius: 3px;
-  background: #2db671;
+  background: var(--brand);
   color: #ffffff;
   font-size: 11px;
   font-weight: 700;
@@ -1138,8 +1128,8 @@ body {
 }
 
 .member-action:hover:not(:disabled) {
-  border-color: #2db671;
-  color: #11663f;
+  border-color: var(--brand);
+  color: var(--success);
 }
 
 .member-action:disabled {
@@ -1182,22 +1172,22 @@ body {
 
 .state-badge.ok {
   background: #dff6e9;
-  color: #137546;
+  color: var(--success);
 }
 
 .state-badge.warn {
-  background: #fff2cc;
+  background: var(--warning-bg);
   color: #8a5a00;
 }
 
 .state-badge.checking {
-  background: #e8eef7;
+  background: var(--info-bg);
   color: #355272;
 }
 
 .state-badge.bad {
-  background: #fde2e1;
-  color: #a12622;
+  background: var(--danger-bg);
+  color: var(--danger);
 }
 
 .health-detail {
@@ -1272,7 +1262,7 @@ code {
 .repo-sort-indicator {
   display: inline-block;
   width: 12px;
-  color: #737f7b;
+  color: var(--ink-4);
   opacity: 0.65;
 }
 
@@ -1451,37 +1441,14 @@ code {
   }
 }
 
-/* --- kkrepo visual refresh: CSS-only, non-Nexus treatment --- */
-
-:root {
-  --topbar: #000000;
-  --topbar-line: #1a1a1a;
-  --topbar-ink: #f5fbf8;
-  --topbar-muted: #c7d7d2;
-  --topbar-hover: rgba(255, 255, 255, 0.08);
-  --topbar-active: #36c6ae;
-  --sidebar: #ffffff;
-  --sidebar-head: #ffffff;
-  --active: #14756b;
-  --active-ink: #ffffff;
-  --accent: #b85f3d;
-  --accent-soft: #fff1eb;
-  --text: #22312e;
-  --muted: #65746f;
-  --line: #d9e1dc;
-  --row: #ffffff;
-  --row-alt: #f8faf8;
-  --header: #edf3ef;
-  --canvas: #ffffff;
-  --panel: #ffffff;
-  --focus: rgba(20, 117, 107, 0.18);
-  --shadow-soft: 0 10px 28px rgba(37, 52, 48, 0.08);
-}
+/* --- kkRepo visual system: consumes shared tokens.css --- */
 
 body {
   background: var(--canvas);
   color: var(--text);
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  line-height: var(--lh-base);
 }
 
 button,
@@ -1492,7 +1459,7 @@ textarea {
 }
 
 button {
-  transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;
+  transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease, box-shadow 0.14s ease, transform 0.1s ease;
 }
 
 button:focus-visible,
@@ -1535,7 +1502,7 @@ textarea:focus-visible {
     linear-gradient(135deg, var(--active), #1f9380 58%, var(--accent));
   color: #ffffff;
   font-size: 13px;
-  font-weight: 850;
+  font-weight: var(--fw-bold);
   letter-spacing: 0;
   line-height: 1;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.34);
@@ -1544,7 +1511,7 @@ textarea:focus-visible {
 .product-name {
   color: var(--topbar-ink);
   font-size: 15px;
-  font-weight: 750;
+  font-weight: var(--fw-bold);
   line-height: 1.12;
   white-space: nowrap;
 }
@@ -1553,7 +1520,7 @@ textarea:focus-visible {
   margin-left: 4px;
   color: var(--topbar-muted);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: var(--fw-semibold);
   white-space: nowrap;
 }
 
@@ -1570,7 +1537,7 @@ textarea:focus-visible {
   padding: 0 18px;
   color: var(--topbar-muted);
   font-size: 13px;
-  font-weight: 750;
+  font-weight: var(--fw-bold);
 }
 
 .workspace-tab:hover {
@@ -1636,7 +1603,7 @@ textarea:focus-visible {
 .user-pill,
 .signout {
   font-size: 13px;
-  font-weight: 650;
+  font-weight: var(--fw-semibold);
 }
 
 .user-pill {
@@ -1669,13 +1636,13 @@ textarea:focus-visible {
 .toast.ok {
   border-color: #b9dfcf;
   background: #f1faf5;
-  color: #116244;
+  color: var(--success);
 }
 
 .toast.error {
-  border-color: #e6b6ab;
-  background: #fff5f2;
-  color: #9d3e2d;
+  border-color: var(--danger-line);
+  background: var(--danger-bg);
+  color: var(--danger);
 }
 
 .nx-sidebar {
@@ -1715,7 +1682,7 @@ textarea:focus-visible {
   color: #70807a;
   cursor: pointer;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: var(--fw-bold);
   letter-spacing: 0;
   text-transform: uppercase;
 }
@@ -1733,7 +1700,7 @@ textarea:focus-visible {
 .side-group.is-current:not(.is-open) {
   background: var(--active);
   color: var(--active-ink);
-  box-shadow: 0 6px 16px rgba(20, 117, 107, 0.16);
+  box-shadow: var(--shadow-nav);
 }
 
 .side-group-caret {
@@ -1761,14 +1728,14 @@ textarea:focus-visible {
 .side-item {
   padding: 0 14px 0 34px;
   font-size: 14px;
-  font-weight: 650;
+  font-weight: var(--fw-semibold);
 }
 
 .side-item:hover,
 .side-item.is-active {
   background: var(--active);
   color: var(--active-ink);
-  box-shadow: 0 6px 16px rgba(20, 117, 107, 0.16);
+  box-shadow: var(--shadow-nav);
 }
 
 .nx-content {
@@ -1792,19 +1759,21 @@ textarea:focus-visible {
 
 .heading-icon {
   display: inline-grid;
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   place-items: center;
-  border-radius: 8px;
+  border-radius: var(--r-md);
   background: var(--accent-soft);
   color: var(--accent);
-  font-size: 19px;
+  font-size: 20px;
 }
 
 h1 {
-  color: #172420;
-  font-size: 22px;
-  font-weight: 760;
+  color: var(--ink-1);
+  font-size: var(--fs-3xl);
+  font-weight: var(--fw-bold);
+  letter-spacing: -0.01em;
+  line-height: var(--lh-tight);
 }
 
 .heading-copy {
@@ -1860,7 +1829,7 @@ h1 {
 .member-action,
 .analyze-button {
   border-radius: 8px;
-  font-weight: 750;
+  font-weight: var(--fw-bold);
 }
 
 .create-button {
@@ -1868,11 +1837,17 @@ h1 {
   border: 1px solid var(--active);
   background: var(--active);
   color: #ffffff;
-  box-shadow: 0 6px 16px rgba(20, 117, 107, 0.18);
+  box-shadow: var(--shadow-nav);
 }
 
 .create-button:hover {
-  background: #0f665e;
+  background: var(--brand-strong);
+  transform: translateY(-1px);
+}
+
+.create-button:active {
+  transform: translateY(0);
+  box-shadow: var(--shadow-press);
 }
 
 .create-button.secondary,
@@ -1890,7 +1865,16 @@ h1 {
 .member-action:hover:not(:disabled),
 .analyze-button:hover {
   border-color: var(--active);
+  background: var(--brand-tint);
   color: var(--active);
+}
+
+.create-button.secondary:active,
+.row-action:active,
+.member-action:active:not(:disabled),
+.analyze-button:active {
+  background: var(--brand-tint-strong);
+  box-shadow: var(--shadow-press);
 }
 
 .row-action.delete-repository-button {
@@ -1900,7 +1884,7 @@ h1 {
 
 .row-action.delete-repository-button:hover {
   border-color: #c97962;
-  background: #fff5f2;
+  background: var(--danger-bg);
 }
 
 .blobstore-form,
@@ -1949,9 +1933,9 @@ h1 {
   max-height: calc(100vh - 48px);
   overflow: auto;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--r-md);
   background: #ffffff;
-  box-shadow: 0 28px 80px rgba(17, 24, 39, 0.28);
+  box-shadow: var(--shadow-modal);
 }
 
 .form-modal-panel-narrow {
@@ -2013,7 +1997,7 @@ h1 {
 .form-title,
 .role-transfer-title,
 .migration-list-title {
-  color: #172420;
+  color: var(--ink-1);
 }
 
 .form-grid label,
@@ -2021,7 +2005,7 @@ h1 {
 .member-pane-head {
   color: #344641;
   font-size: 13px;
-  font-weight: 760;
+  font-weight: var(--fw-bold);
   letter-spacing: 0;
 }
 
@@ -2054,7 +2038,7 @@ h1 {
 }
 
 .recipe-combobox-trigger:focus-visible {
-  outline: 3px solid rgba(20, 117, 107, 0.18);
+  outline: 3px solid var(--focus);
   outline-offset: 1px;
 }
 
@@ -2094,7 +2078,7 @@ h1 {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #ffffff;
-  box-shadow: 0 18px 40px rgba(17, 36, 31, 0.2);
+  box-shadow: var(--shadow-pop);
   padding: 8px;
 }
 
@@ -2151,7 +2135,7 @@ h1 {
 
 .recipe-option-copy strong {
   overflow: hidden;
-  color: #172420;
+  color: var(--ink-1);
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2163,7 +2147,7 @@ h1 {
   background: #eef2f0;
   color: #53635e;
   font-size: 10px;
-  font-weight: 800;
+  font-weight: var(--fw-bold);
   padding: 4px 6px;
   text-transform: uppercase;
 }
@@ -2194,7 +2178,7 @@ h1 {
 }
 
 .form-grid fieldset legend {
-  color: #52615c;
+  color: var(--ink-3);
   letter-spacing: 0;
 }
 
@@ -2222,12 +2206,12 @@ h1 {
 }
 
 .member-row:hover {
-  background: #f1f7f4;
+  background: var(--row-hover);
 }
 
 .member-row.is-selected {
   background: #e1f1eb;
-  color: #0f665e;
+  color: var(--brand-strong);
 }
 
 .member-order {
@@ -2267,12 +2251,12 @@ code {
 }
 
 .summary-grid strong {
-  color: #172420;
+  color: var(--ink-1);
 }
 
 .migration-error-panel {
-  border-color: #e6b6ab;
-  background: #fff5f2;
+  border-color: var(--danger-line);
+  background: var(--danger-bg);
 }
 
 .code-panel,
@@ -2283,7 +2267,7 @@ code {
 .nx-table-frame {
   margin: 0 24px 24px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--r-md);
   background: var(--panel);
   box-shadow: var(--shadow-soft);
 }
@@ -2305,9 +2289,9 @@ code {
 .nx-table th {
   height: 42px;
   background: var(--header);
-  color: #52615c;
+  color: var(--table-head-ink);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: var(--fw-bold);
   letter-spacing: 0;
   text-transform: uppercase;
 }
@@ -2318,7 +2302,7 @@ code {
 }
 
 .nx-table tbody tr:hover {
-  background: #f1f7f4;
+  background: var(--row-hover);
 }
 
 .nx-table tbody tr:last-child td {
@@ -2348,22 +2332,22 @@ code {
 
 .state-badge.ok {
   background: #e1f1eb;
-  color: #116244;
+  color: var(--success);
 }
 
 .state-badge.warn {
-  background: #fff4d8;
+  background: var(--warning-bg);
   color: #805b16;
 }
 
 .state-badge.checking {
-  background: #e8eef7;
+  background: var(--info-bg);
   color: #40577d;
 }
 
 .state-badge.bad {
-  background: #fff0ed;
-  color: #9d3e2d;
+  background: var(--danger-bg);
+  color: var(--danger);
 }
 
 .health-score {
