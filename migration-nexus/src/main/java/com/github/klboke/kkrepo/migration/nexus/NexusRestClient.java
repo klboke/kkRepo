@@ -26,6 +26,8 @@ import java.util.Map;
 import java.util.UUID;
 
 public class NexusRestClient {
+  private static final Duration DEFAULT_REQUEST_TIMEOUT = Duration.ofSeconds(30);
+  private static final Duration REPOSITORY_DATA_SCRIPT_TIMEOUT = Duration.ofSeconds(120);
   private static final TypeReference<List<Map<String, Object>>> LIST_OF_MAPS =
       new TypeReference<>() {
       };
@@ -1486,7 +1488,13 @@ public class NexusRestClient {
   }
 
   private HttpTextResponse postText(String path, String body) throws IOException, InterruptedException {
+    return postText(path, body, DEFAULT_REQUEST_TIMEOUT);
+  }
+
+  private HttpTextResponse postText(String path, String body, Duration timeout)
+      throws IOException, InterruptedException {
     return send(path, baseUri -> requestBuilder(baseUri, path)
+        .timeout(timeout)
         .header("Content-Type", "text/plain")
         .POST(HttpRequest.BodyPublishers.ofString(body == null ? "" : body))
         .build());
@@ -1542,7 +1550,7 @@ public class NexusRestClient {
 
   private HttpRequest.Builder requestBuilder(URI baseUri, String path) {
     return HttpRequest.newBuilder(baseUri.resolve(path))
-        .timeout(Duration.ofSeconds(30))
+        .timeout(DEFAULT_REQUEST_TIMEOUT)
         .header("Accept", "application/json")
         .header("Authorization", authorization);
   }
@@ -1884,7 +1892,7 @@ public class NexusRestClient {
       }
       HttpTextResponse run = postText("/service/rest/v1/script/"
           + encodePathSegment(scriptName)
-          + "/run", objectMapper.writeValueAsString(request));
+          + "/run", objectMapper.writeValueAsString(request), REPOSITORY_DATA_SCRIPT_TIMEOUT);
       if (!run.success()) {
         throw new IOException("Source Nexus script API did not return repository data page for "
             + repositoryName + ": " + run.describe());

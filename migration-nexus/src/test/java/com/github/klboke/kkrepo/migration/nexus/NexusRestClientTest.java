@@ -15,6 +15,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpTimeoutException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -298,6 +299,7 @@ class NexusRestClientTest {
     Map<String, Object> request = OBJECT_MAPPER.readValue(nexus.lastRunBody, Map.class);
     assertEquals("maven2", request.get("repositoryFormat"));
     assertEquals("UNKNOWN", request.get("metadataEngine"));
+    assertEquals(Duration.ofSeconds(120), nexus.lastRunTimeout);
     assertTrue(nexus.scriptDeleted);
   }
 
@@ -485,6 +487,7 @@ class NexusRestClientTest {
   private static final class RepositoryDataFakeNexus {
     private boolean scriptDeleted;
     private String lastRunBody = "{}";
+    private Duration lastRunTimeout;
 
     private HttpTextResponse send(HttpRequest request) throws IOException {
       String method = request.method();
@@ -496,6 +499,7 @@ class NexusRestClientTest {
           && path.startsWith("/service/rest/v1/script/")
           && path.endsWith("/run")) {
         lastRunBody = bodyString(request).orElse("");
+        lastRunTimeout = request.timeout().orElse(null);
         LinkedHashMap<String, Object> asset = new LinkedHashMap<>();
         asset.put("repositoryName", "maven-releases");
         asset.put("assetId", "#45:1");
