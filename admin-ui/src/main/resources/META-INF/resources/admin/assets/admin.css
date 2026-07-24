@@ -1499,7 +1499,7 @@ textarea:focus-visible {
   border-radius: 8px;
   background:
     linear-gradient(135deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0) 45%),
-    linear-gradient(135deg, var(--active), #1f9380 58%, var(--accent));
+    linear-gradient(135deg, var(--active), var(--brand-bright) 58%, var(--accent));
   color: #ffffff;
   font-size: 13px;
   font-weight: var(--fw-bold);
