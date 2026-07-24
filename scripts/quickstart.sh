@@ -61,6 +61,7 @@ load_env_file_defaults() {
   [[ -f "$file" ]] || return 0
   for key in \
     KKREPO_DATABASE_TYPE \
+    KKREPO_RUNTIME \
     KKREPO_IMAGE_TAG \
     KKREPO_HTTP_PORT \
     KKREPO_MANAGEMENT_PORT \
@@ -89,6 +90,7 @@ create_env_file_if_missing() {
   export KKREPO_CREDENTIAL_SECRET KKREPO_API_KEY_PAYLOAD_SECRET
 
   cat >"$file" <<EOF
+KKREPO_RUNTIME=${KKREPO_RUNTIME}
 KKREPO_IMAGE_TAG=${KKREPO_IMAGE_TAG}
 KKREPO_HTTP_PORT=${KKREPO_HTTP_PORT}
 KKREPO_MANAGEMENT_PORT=${KKREPO_MANAGEMENT_PORT}
@@ -169,9 +171,35 @@ wait_for_health() {
 }
 
 WORKDIR="${KKREPO_DIR:-kkrepo-quickstart}"
+RUNTIME_WAS_EXPLICIT=false
+IMAGE_TAG_WAS_EXPLICIT=false
+if [[ -n "${KKREPO_RUNTIME+x}" ]]; then
+  RUNTIME_WAS_EXPLICIT=true
+fi
+if [[ -n "${KKREPO_IMAGE_TAG+x}" ]]; then
+  IMAGE_TAG_WAS_EXPLICIT=true
+fi
 if [[ -f "${WORKDIR}/.env" ]]; then
   load_env_file_defaults "${WORKDIR}/.env"
 fi
+
+KKREPO_RUNTIME="${KKREPO_RUNTIME:-jvm}"
+case "$KKREPO_RUNTIME" in
+  jvm)
+    DEFAULT_IMAGE_TAG="0.6.0"
+    ;;
+  native)
+    DEFAULT_IMAGE_TAG="0.6.0-native"
+    ;;
+  *)
+    fail "KKREPO_RUNTIME must be jvm or native, got: $KKREPO_RUNTIME"
+    ;;
+esac
+if [[ "$RUNTIME_WAS_EXPLICIT" == "true" && "$IMAGE_TAG_WAS_EXPLICIT" == "false" ]]; then
+  unset KKREPO_IMAGE_TAG
+fi
+: "${KKREPO_IMAGE_TAG:=$DEFAULT_IMAGE_TAG}"
+
 KKREPO_DATABASE_TYPE="${KKREPO_DATABASE_TYPE:-mysql}"
 case "$KKREPO_DATABASE_TYPE" in
   mysql)
@@ -211,11 +239,11 @@ if [[ -f .env ]]; then
   load_env_file_defaults .env
 fi
 
-: "${KKREPO_IMAGE_TAG:=0.5.1}"
 : "${KKREPO_HTTP_PORT:=19090}"
 : "${KKREPO_MANAGEMENT_PORT:=19091}"
 : "${KKREPO_PROJECT_NAME:=kkrepo-quickstart}"
 export \
+  KKREPO_RUNTIME \
   KKREPO_IMAGE_TAG \
   KKREPO_HTTP_PORT \
   KKREPO_MANAGEMENT_PORT \
@@ -231,6 +259,7 @@ download_compose_file "$COMPOSE_FILE"
 COMPOSE_READY=true
 log "Compose file: $(pwd)/$COMPOSE_FILE"
 log "Database backend: ${KKREPO_DATABASE_TYPE}"
+log "Runtime: ${KKREPO_RUNTIME}"
 log "Image tag: ghcr.io/klboke/kkrepo:${KKREPO_IMAGE_TAG}"
 log "HTTP port: ${KKREPO_HTTP_PORT}"
 log "Management port: ${KKREPO_MANAGEMENT_PORT}"

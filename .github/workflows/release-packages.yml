@@ -1,0 +1,279 @@
+name: Release Packages
+
+run-name: Release packages v${{ inputs.version }} from ${{ github.ref_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version without the v prefix
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: release-packages-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Require merged main
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Release packages must be built from the merged main branch, got $GITHUB_REF" >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Version must use the x.y.z form without a v prefix" >&2
+            exit 1
+          fi
+
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      - name: Match the project version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          project_version="$(mvn -q -N -DforceStdout help:evaluate -Dexpression=project.version)"
+          if [[ "$project_version" != "$RELEASE_VERSION" ]]; then
+            echo "Requested version $RELEASE_VERSION does not match project version $project_version" >&2
+            exit 1
+          fi
+
+  build:
+    name: Build ${{ matrix.label }}
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: jvm
+            label: JVM archives
+            runner: ubuntu-24.04
+            build-argument: --jvm
+            suffix: ""
+            image-suffix: ""
+            image-architecture: ""
+            keep-native-image: "false"
+          - id: native-linux-amd64
+            label: Native Linux amd64 archives
+            runner: ubuntu-24.04
+            build-argument: --native
+            suffix: -native-linux-amd64
+            image-suffix: -native-amd64
+            image-architecture: amd64
+            keep-native-image: "true"
+          - id: native-linux-arm64
+            label: Native Linux arm64 archives
+            runner: ubuntu-24.04-arm
+            build-argument: --native
+            suffix: -native-linux-arm64
+            image-suffix: -native-arm64
+            image-architecture: arm64
+            keep-native-image: "true"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      - name: Build distribution
+        env:
+          BUILD_ARGUMENT: ${{ matrix.build-argument }}
+          KKREPO_KEEP_NATIVE_IMAGE: ${{ matrix.keep-native-image }}
+          KKREPO_NATIVE_IMAGE: ghcr.io/klboke/kkrepo:${{ inputs.version }}${{ matrix.image-suffix }}
+          MAVEN_OPTS: -Xmx3g
+        run: scripts/build-dist.sh "$BUILD_ARGUMENT"
+
+      - name: Verify distribution
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_SUFFIX: ${{ matrix.suffix }}
+          RELEASE_VARIANT: ${{ matrix.id }}
+        run: |
+          archive_base="server/target/kkrepo-${RELEASE_VERSION}${RELEASE_SUFFIX}"
+          tar_archive="${archive_base}.tar.gz"
+          zip_archive="${archive_base}.zip"
+          test -s "$tar_archive"
+          test -s "$zip_archive"
+          unzip -tq "$zip_archive"
+
+          verify_dir="$(mktemp -d)"
+          trap 'rm -rf "$verify_dir"' EXIT
+          tar -xzf "$tar_archive" -C "$verify_dir"
+          distribution_root="$verify_dir/kkrepo-${RELEASE_VERSION}${RELEASE_SUFFIX}"
+          test -x "$distribution_root/bin/start.sh"
+
+          case "$RELEASE_VARIANT" in
+            jvm)
+              runtime="$distribution_root/lib/kkrepo.jar"
+              test -s "$runtime"
+              unzip -p "$runtime" META-INF/MANIFEST.MF \
+                | grep -q '^Main-Class: org.springframework.boot.loader.launch.JarLauncher'
+              ;;
+            native-linux-amd64)
+              runtime="$distribution_root/lib/kkrepo"
+              test -x "$runtime"
+              file "$runtime" | grep -Eq 'x86-64|x86_64'
+              ;;
+            native-linux-arm64)
+              runtime="$distribution_root/lib/kkrepo"
+              test -x "$runtime"
+              file "$runtime" | grep -Eq 'aarch64|ARM aarch64'
+              ;;
+            *)
+              echo "Unknown release variant: $RELEASE_VARIANT" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Log in to GitHub Container Registry
+        if: matrix.image-architecture != ''
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push architecture-specific Native image
+        if: matrix.image-architecture != ''
+        env:
+          EXPECTED_ARCHITECTURE: ${{ matrix.image-architecture }}
+          NATIVE_IMAGE: ghcr.io/klboke/kkrepo:${{ inputs.version }}${{ matrix.image-suffix }}
+        run: |
+          actual_platform="$(docker image inspect "$NATIVE_IMAGE" --format '{{.Os}}/{{.Architecture}}')"
+          expected_platform="linux/${EXPECTED_ARCHITECTURE}"
+          if [[ "$actual_platform" != "$expected_platform" ]]; then
+            echo "Expected $expected_platform Native image, got $actual_platform" >&2
+            exit 1
+          fi
+          docker push "$NATIVE_IMAGE"
+
+      - name: Upload package pair
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-package-${{ matrix.id }}
+          path: |
+            server/target/kkrepo-${{ inputs.version }}${{ matrix.suffix }}.tar.gz
+            server/target/kkrepo-${{ inputs.version }}${{ matrix.suffix }}.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  collect:
+    name: Collect release assets and checksums
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Download package matrix
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-package-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify matrix and write checksums
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          expected=(
+            "kkrepo-${RELEASE_VERSION}.tar.gz"
+            "kkrepo-${RELEASE_VERSION}.zip"
+            "kkrepo-${RELEASE_VERSION}-native-linux-amd64.tar.gz"
+            "kkrepo-${RELEASE_VERSION}-native-linux-amd64.zip"
+            "kkrepo-${RELEASE_VERSION}-native-linux-arm64.tar.gz"
+            "kkrepo-${RELEASE_VERSION}-native-linux-arm64.zip"
+          )
+
+          for asset in "${expected[@]}"; do
+            test -s "release-assets/$asset"
+          done
+
+          asset_count="$(find release-assets -maxdepth 1 -type f | wc -l | tr -d ' ')"
+          if [[ "$asset_count" != "${#expected[@]}" ]]; then
+            echo "Expected ${#expected[@]} package assets, found $asset_count" >&2
+            find release-assets -maxdepth 1 -type f -print >&2
+            exit 1
+          fi
+
+          (
+            cd release-assets
+            sha256sum "${expected[@]}" > "kkrepo-${RELEASE_VERSION}.sha256.txt"
+          )
+          cat "release-assets/kkrepo-${RELEASE_VERSION}.sha256.txt"
+
+      - name: Upload complete release asset set
+        uses: actions/upload-artifact@v7
+        with:
+          name: kkrepo-${{ inputs.version }}-release-assets
+          path: release-assets/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  publish-native-image:
+    name: Publish multi-architecture Native image
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Publish and verify Native image manifest
+        env:
+          IMAGE: ghcr.io/klboke/kkrepo
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${RELEASE_VERSION}-native" \
+            --tag "${IMAGE}:native-latest" \
+            "${IMAGE}:${RELEASE_VERSION}-native-amd64" \
+            "${IMAGE}:${RELEASE_VERSION}-native-arm64"
+
+          for tag in "${RELEASE_VERSION}-native" native-latest; do
+            manifest="$(docker buildx imagetools inspect "${IMAGE}:${tag}")"
+            grep -Eq 'Platform:[[:space:]]+linux/amd64' <<<"$manifest"
+            grep -Eq 'Platform:[[:space:]]+linux/arm64' <<<"$manifest"
+            printf '%s\n' "$manifest"
+          done
+
+          {
+            echo "### Native container image"
+            echo
+            echo "- \`${IMAGE}:${RELEASE_VERSION}-native\`"
+            echo "- \`${IMAGE}:native-latest\`"
+            echo "- Platforms: \`linux/amd64\`, \`linux/arm64\`"
+          } >> "$GITHUB_STEP_SUMMARY"

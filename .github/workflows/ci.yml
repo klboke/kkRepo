@@ -151,6 +151,7 @@ jobs:
           bash -n scripts/ci/prepare-swift-e2e-tls.sh
           bash -n scripts/ci/setup-swift-e2e-wrappers.sh
           bash -n scripts/ci/test-e2e-image-artifact.sh
+          bash -n scripts/ci/test-quickstart-runtime.sh
           bash -n scripts/ci/test-swift-e2e-wrappers.sh
           bash -n scripts/ci/test-dist-launcher.sh
           bash -n server/src/dist/bin/start.sh
@@ -158,6 +159,7 @@ jobs:
           bash -n server/src/dist/bin/stop.sh
           scripts/ci/test-dev-jar-deploy.sh
           scripts/ci/test-e2e-image-artifact.sh
+          scripts/ci/test-quickstart-runtime.sh
           scripts/ci/test-swift-e2e-wrappers.sh
           scripts/ci/test-dist-launcher.sh
           test -f .github/deploy/dev/systemd/kkrepo.service

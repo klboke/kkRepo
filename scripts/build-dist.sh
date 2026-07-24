@@ -12,6 +12,9 @@ Usage: scripts/build-dist.sh [--native]
 
 Builds JVM tar.gz and zip archives by default. Pass --native explicitly to
 build platform-specific Spring AOT/GraalVM native archives through Docker.
+
+Set KKREPO_NATIVE_IMAGE to choose the intermediate Native image tag. Set
+KKREPO_KEEP_NATIVE_IMAGE=true to retain that image after packaging.
 EOF
 }
 
@@ -47,16 +50,19 @@ echo "[dist] project version: $PROJECT_VERSION"
 echo "[dist] archive version: $DIST_VERSION"
 
 if [[ "$BUILD_MODE" == "native" ]]; then
-  NATIVE_IMAGE="kkrepo:native-dist-${DIST_VERSION//[^a-zA-Z0-9_.-]/-}-$$"
+  NATIVE_IMAGE="${KKREPO_NATIVE_IMAGE:-kkrepo:native-dist-${DIST_VERSION//[^a-zA-Z0-9_.-]/-}-$$}"
+  KEEP_NATIVE_IMAGE="${KKREPO_KEEP_NATIVE_IMAGE:-false}"
   NATIVE_CONTAINER="kkrepo-native-dist-extract-$$"
 
   cleanup_native_build() {
     docker rm -f "$NATIVE_CONTAINER" >/dev/null 2>&1 || true
-    docker image rm "$NATIVE_IMAGE" >/dev/null 2>&1 || true
+    if [[ "$KEEP_NATIVE_IMAGE" != "true" ]]; then
+      docker image rm "$NATIVE_IMAGE" >/dev/null 2>&1 || true
+    fi
   }
   trap cleanup_native_build EXIT
 
-  echo "[dist] building Spring AOT/GraalVM native image..."
+  echo "[dist] building Spring AOT/GraalVM native image $NATIVE_IMAGE..."
   scripts/build-docker-image.sh --native "$NATIVE_IMAGE"
 
   NATIVE_OS="$(docker image inspect "$NATIVE_IMAGE" --format '{{.Os}}')"

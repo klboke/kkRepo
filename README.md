@@ -46,6 +46,14 @@ To run the same image with the default PostgreSQL 16 quickstart instead (the run
 curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quickstart.sh | KKREPO_DATABASE_TYPE=postgresql bash
 ```
 
+To use the multi-architecture Native image instead of the default JVM image:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quickstart.sh | KKREPO_RUNTIME=native bash
+```
+
+`KKREPO_RUNTIME` and `KKREPO_DATABASE_TYPE` are independent and can be combined, for example with `KKREPO_RUNTIME=native KKREPO_DATABASE_TYPE=postgresql`.
+
 Open:
 
 - Admin console: `http://127.0.0.1:19090/admin/`
