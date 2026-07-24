@@ -46,6 +46,14 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quickstart.sh | KKREPO_DATABASE_TYPE=postgresql bash
 ```
 
+如需从默认 JVM 镜像切换到多架构 Native 镜像：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quickstart.sh | KKREPO_RUNTIME=native bash
+```
+
+`KKREPO_RUNTIME` 和 `KKREPO_DATABASE_TYPE` 可以独立选择，也可以组合使用，例如 `KKREPO_RUNTIME=native KKREPO_DATABASE_TYPE=postgresql`。
+
 启动后访问：
 
 - 管理控制台：`http://127.0.0.1:19090/admin/`

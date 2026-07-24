@@ -14,8 +14,9 @@ This project follows a pragmatic early-stage release process. Until a stable `1.
 
 ### Changed
 
-- Release packages now use a reproducible GitHub Actions matrix: platform-independent JVM archives plus Native Linux `amd64` and `arm64` archives, each in tar.gz and zip formats, with one combined SHA-256 manifest.
+- Release packages now use a reproducible GitHub Actions matrix: platform-independent JVM archives plus Native Linux `amd64` and `arm64` archives, each in tar.gz and zip formats, with one combined SHA-256 manifest. The Native builds are also published as the multi-architecture `0.6.0-native` and `native-latest` GHCR images.
 - Quickstart defaults, Dockerfile packaging, deployment documentation, and the Helm application version now use `0.6.0`.
+- Quickstart accepts `KKREPO_RUNTIME=jvm|native`, independently of `KKREPO_DATABASE_TYPE`, and selects the matching JVM or Native release image while preserving explicit image-tag overrides.
 - Native startup and memory guidance reflects the measured roughly one-second readiness and below-200-MiB idle memory baseline, while retaining the JVM recommendation for maximum warmed throughput. (#154, #155, #156)
 - Maven, Bouncy Castle, XZ, AWS SDK, and GitHub Actions dependencies were refreshed. (#143, #144, #145, #146, #147, #148, #149, #150)
 
@@ -33,7 +34,7 @@ This project follows a pragmatic early-stage release process. Until a stable `1.
 
 - Existing `0.5.1` MySQL and PostgreSQL deployments can upgrade in place through Flyway V34-V35. Back up the database and blob store together before upgrading, and do not run mixed application versions after the new migrations are applied.
 - V34 adds the rebuildable npm release-age index, and V35 adds Ansible Galaxy registry, import, cache, lease, and group-binding state. Large collection archives and package blobs remain in the configured blob store.
-- Native archives require Linux and the matching `amd64` or `arm64` architecture. Use the JVM archive or container image when portability and maximum warmed throughput matter more than startup time and memory.
+- Native archives require Linux and the matching `amd64` or `arm64` architecture. The `0.6.0-native` container tag is multi-architecture and lets Docker select the matching image automatically. Use the JVM archive or container image when maximum warmed throughput matters more than startup time and memory.
 
 ## 0.5.1 - 2026-07-18
 

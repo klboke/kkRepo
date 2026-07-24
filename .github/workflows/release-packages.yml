@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 concurrency:
   group: release-packages-${{ inputs.version }}
@@ -70,16 +71,25 @@ jobs:
             runner: ubuntu-24.04
             build-argument: --jvm
             suffix: ""
+            image-suffix: ""
+            image-architecture: ""
+            keep-native-image: "false"
           - id: native-linux-amd64
             label: Native Linux amd64 archives
             runner: ubuntu-24.04
             build-argument: --native
             suffix: -native-linux-amd64
+            image-suffix: -native-amd64
+            image-architecture: amd64
+            keep-native-image: "true"
           - id: native-linux-arm64
             label: Native Linux arm64 archives
             runner: ubuntu-24.04-arm
             build-argument: --native
             suffix: -native-linux-arm64
+            image-suffix: -native-arm64
+            image-architecture: arm64
+            keep-native-image: "true"
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -94,6 +104,8 @@ jobs:
       - name: Build distribution
         env:
           BUILD_ARGUMENT: ${{ matrix.build-argument }}
+          KKREPO_KEEP_NATIVE_IMAGE: ${{ matrix.keep-native-image }}
+          KKREPO_NATIVE_IMAGE: ghcr.io/klboke/kkrepo:${{ inputs.version }}${{ matrix.image-suffix }}
           MAVEN_OPTS: -Xmx3g
         run: scripts/build-dist.sh "$BUILD_ARGUMENT"
 
@@ -138,6 +150,28 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Log in to GitHub Container Registry
+        if: matrix.image-architecture != ''
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push architecture-specific Native image
+        if: matrix.image-architecture != ''
+        env:
+          EXPECTED_ARCHITECTURE: ${{ matrix.image-architecture }}
+          NATIVE_IMAGE: ghcr.io/klboke/kkrepo:${{ inputs.version }}${{ matrix.image-suffix }}
+        run: |
+          actual_platform="$(docker image inspect "$NATIVE_IMAGE" --format '{{.Os}}/{{.Architecture}}')"
+          expected_platform="linux/${EXPECTED_ARCHITECTURE}"
+          if [[ "$actual_platform" != "$expected_platform" ]]; then
+            echo "Expected $expected_platform Native image, got $actual_platform" >&2
+            exit 1
+          fi
+          docker push "$NATIVE_IMAGE"
 
       - name: Upload package pair
         uses: actions/upload-artifact@v7
@@ -201,3 +235,45 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
+
+  publish-native-image:
+    name: Publish multi-architecture Native image
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Publish and verify Native image manifest
+        env:
+          IMAGE: ghcr.io/klboke/kkrepo
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${RELEASE_VERSION}-native" \
+            --tag "${IMAGE}:native-latest" \
+            "${IMAGE}:${RELEASE_VERSION}-native-amd64" \
+            "${IMAGE}:${RELEASE_VERSION}-native-arm64"
+
+          for tag in "${RELEASE_VERSION}-native" native-latest; do
+            manifest="$(docker buildx imagetools inspect "${IMAGE}:${tag}")"
+            grep -Eq 'Platform:[[:space:]]+linux/amd64' <<<"$manifest"
+            grep -Eq 'Platform:[[:space:]]+linux/arm64' <<<"$manifest"
+            printf '%s\n' "$manifest"
+          done
+
+          {
+            echo "### Native container image"
+            echo
+            echo "- \`${IMAGE}:${RELEASE_VERSION}-native\`"
+            echo "- \`${IMAGE}:native-latest\`"
+            echo "- Platforms: \`linux/amd64\`, \`linux/arm64\`"
+          } >> "$GITHUB_STEP_SUMMARY"
