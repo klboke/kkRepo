@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -22,14 +23,25 @@ final class ComposerAssetSupport {
   private final AssetDao assetDao;
   private final BlobStorageRegistry blobStorageRegistry;
   private final RawHostedService rawHosted;
+  private final ArtifactDownloadPolicy downloadPolicy;
 
   ComposerAssetSupport(
       AssetDao assetDao,
       BlobStorageRegistry blobStorageRegistry,
       RawHostedService rawHosted) {
+    this(assetDao, blobStorageRegistry, rawHosted, null);
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  ComposerAssetSupport(
+      AssetDao assetDao,
+      BlobStorageRegistry blobStorageRegistry,
+      RawHostedService rawHosted,
+      ArtifactDownloadPolicy downloadPolicy) {
     this.assetDao = assetDao;
     this.blobStorageRegistry = blobStorageRegistry;
     this.rawHosted = rawHosted;
+    this.downloadPolicy = downloadPolicy;
   }
 
   void storeBytes(
@@ -87,6 +99,7 @@ final class ComposerAssetSupport {
   MavenResponse serve(RepositoryRuntime runtime, String path, boolean headOnly) {
     AssetRecord asset = find(runtime, path)
         .orElseThrow(() -> new MavenExceptions.MavenNotFoundException(path));
+    if (downloadPolicy != null) downloadPolicy.beforeRead(asset.id());
     AssetBlobRecord blob = blob(asset, path);
     var reference = BlobReferenceCodec.reference(blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size());
     var storage = blobStorageRegistry.forBlobStoreId(blob.blobStoreId());

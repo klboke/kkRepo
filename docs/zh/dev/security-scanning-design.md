@@ -10,19 +10,27 @@ Maven、npm、PyPI、Docker/OCI 等客户端可见行为必须保持不变；只
 
 ## 当前支持状态
 
-截至 2026-07-24，kkRepo 尚未实现原生 SBOM、漏洞扫描任务、漏洞结果存储或下载
-阻断能力，但已经具备以下落地基础：
+本文定义的制品漏洞扫描主链路已经在当前实现中落地，并保持默认关闭：
 
-- `asset` 与 `asset_blob` 保存仓库资产、Blob 引用、SHA-256、大小和内容类型。
-- hosted 上传、proxy 缓存和 Nexus 仓库数据迁移最终都会形成真实 asset/blob。
-- `BlobStorage` 支持流式读取，不要求把完整制品加载进 JVM heap。
-- MySQL 8 与 PostgreSQL 12+ 已有基于 `FOR UPDATE SKIP LOCKED` 的后台任务领取、
-  超时重领和失败重试模式。
-- Docker/OCI 已保存 manifest、index、digest、platform 和 layer 引用，可按不可变
-  manifest digest 建立扫描主体。
-- 管理端已有安全、审计、后台任务和 Prometheus 指标基础。
+- 新增 `security-scan` 领域模块和独立 `scanner-adapter`，通过 Syft 生成 CycloneDX
+  SBOM、通过 Grype 匹配已知漏洞；扫描器可替换且不进入 kkRepo JVM。
+- hosted、proxy、迁移资产统一通过事务性 candidate marker 进入数据库持久任务；
+  claim、lease、heartbeat、接管和 fencing 在 MySQL 8/PostgreSQL 12+ 使用相同语义。
+- SBOM、组件投影、scanner snapshot、不可变 run、finding、asset state、仓库入口策略
+  state、waiver 和 backfill job 均持久化；SBOM 与原始报告正文继续保存在 BlobStorage。
+- 普通制品使用流式输入；Docker/OCI 使用 manifest digest、平台集合和精确 image scope
+  的短期内部 token，不挂载 Docker socket。
+- 漏洞数据库更新复用已有 SBOM，只创建 `MATCH_ONLY`；policy、waiver 或 group 上下文
+  变化使用 `POLICY_ONLY` 复用现有 finding，并由数据库去重任务收敛所有副本。
+- Audit 和按仓库显式启用的 Enforce 均已接入实际下载路径；group 同时读取 member 与
+  入口仓库各自物化的策略结果并选择更严格决定。
+- Admin UI、受权限控制的管理 API、审计、Prometheus 指标、health、Compose 可选
+  profile 和 Helm 部署资源均已提供。
 
-本文件是后续实现的设计基线，不表示文中功能已经交付。
+功能仍由 `kkrepo.security-scanning.enabled=false` 默认关闭。生产启用前应按“发布与
+回滚”章节先部署固定版本 scanner、完成离线漏洞库与容量验证，再从小范围 Audit
+逐步放量到 Enforce。源码扫描、恶意软件、secret、license、misconfiguration、VEX
+和 OCI SBOM referrer 仍属于后续独立能力。
 
 ## 设计决策摘要
 
@@ -36,8 +44,8 @@ Maven、npm、PyPI、Docker/OCI 等客户端可见行为必须保持不变；只
 - hosted、proxy 和迁移写入通过 `JdbcAssetDao` 的内容变更 marker 进入同一条可靠链路。
 - 结果去重同时包含内容、引擎版本、漏洞数据库 revision 和配置 digest，不使用
   “checksum + 时间窗口”作为唯一新鲜度判断。
-- 第一阶段只做 vulnerability audit；secret、license、misconfiguration 和强制阻断
-  均按独立阶段交付。
+- 第一阶段只实现 vulnerability 类型；secret、license 和 misconfiguration
+  仍按独立 profile 交付。下载阻断是仓库级显式开关，默认保持 Audit。
 - 下载阻断由解析出具体 asset/manifest 后的 `ArtifactDownloadPolicy` 执行，不放进
   只能识别仓库请求的通用鉴权 Filter。
 
@@ -173,7 +181,7 @@ hosted / proxy / migration 写入
 
 ## 模块边界
 
-建议新增 `security-scan` Maven 模块，保持引擎无关的领域模型和 SPI：
+新增 `security-scan` Maven 模块，保持引擎无关的领域模型和 SPI：
 
 | 模块 | 新增职责 |
 | --- | --- |
@@ -445,7 +453,12 @@ marker 不是 scanner 队列。Candidate worker 领取 marker 后：
 - `created_at`
 - `updated_at`
 
-`stage` 是 `CATALOG_AND_MATCH` 或 `MATCH_ONLY`。
+`stage` 是：
+
+- `CATALOG_AND_MATCH`：读取制品并生成 SBOM，然后执行漏洞匹配。
+- `MATCH_ONLY`：复用 SBOM，只在 scanner/漏洞数据库变化后重新匹配。
+- `POLICY_ONLY`：复用 immutable run/finding，只重新计算 policy、waiver 和 group
+  入口上下文。
 
 对 candidate 自动任务建立以下语义的唯一键：
 
@@ -632,6 +645,33 @@ asset 当前 Blob、generation 或 profile 与 state 不一致时，读取逻辑
 该表的 `version` 用于节点本地短 TTL cache 失效。cache 丢失只增加数据库读取，不改变
 策略正确性。
 
+### `asset_security_policy_state`
+
+同一 member asset 可能同时从 member 仓库和多个 group 入口下载，各入口可以配置不同
+policy、结果年龄和 waiver。为避免一个入口覆盖另一个入口的决定，策略结果按
+`asset_id + profile_id + repository_id` 分别物化：
+
+- `asset_id`
+- `profile_id`
+- `repository_id`
+- `content_generation`
+- `latest_scan_run_id`
+- `policy_id`
+- `policy_revision`
+- `config_revision`
+- `policy_decision`
+- `policy_reason_code`
+- `waived_findings`
+- `stale_at`
+- `next_waiver_expiry`
+- `last_evaluated_at`
+- `version`
+
+下载热路径同时校验 candidate generation、最新 run、config/policy revision、结果年龄
+和下一次 waiver 到期时间。任一字段不一致时返回 pending，不在请求内查询 finding。
+后台 reconciler 使用有界、确定性去重的 `POLICY_ONLY` 任务重新物化；多副本同时运行
+不会产生不同的最终决定。
+
 ### `security_scan_policy` 与 `security_scan_waiver`
 
 策略使用版本化、可审计模型。第一阶段规则：
@@ -753,7 +793,7 @@ deployment 自身必须暴露容量和 backpressure；需要严格全局并发�
 
 kkRepo 定义小型、版本化的内部接口，不直接把第三方 CLI 输出暴露给业务层。
 
-建议端点：
+当前端点：
 
 ```text
 GET  /v1/capabilities
@@ -1055,6 +1095,7 @@ Browse UI 第一阶段只显示有权限用户可见的状态徽标和最后扫�
 | `kkrepo_security_scan_oldest_age_seconds` | gauge | 最老待处理任务年龄 |
 | `kkrepo_security_scan_running` | gauge | 当前有效 lease 数 |
 | `kkrepo_security_scan_failures` | gauge | 终态失败任务数 |
+| `kkrepo_security_scan_partial` | gauge | 当前 partial asset 数 |
 | `kkrepo_security_scan_findings` | gauge | 当前 asset state 的 finding 聚合 |
 | `kkrepo_security_scan_scanner_ready` | gauge | scanner readiness |
 | `kkrepo_security_scan_database_age_seconds` | gauge | 漏洞数据库年龄 |
@@ -1101,7 +1142,7 @@ object key 和 token 放入 metric label。按具体对象排查使用受权限�
 
 ## 配置与部署
 
-全局配置建议：
+全局配置及当前默认值：
 
 ```properties
 kkrepo.security-scanning.enabled=false
@@ -1111,11 +1152,12 @@ kkrepo.security-scanning.worker.lease-seconds=300
 kkrepo.security-scanning.worker.heartbeat-seconds=60
 kkrepo.security-scanning.worker.max-attempts=5
 kkrepo.security-scanning.worker.max-backoff-seconds=1800
+kkrepo.security-scanning.policy-reconcile-delay=60s
 kkrepo.security-scanning.input-mode=stream
 kkrepo.security-scanning.scanner-database-max-age=48h
 ```
 
-数值只是配置形态示例，最终默认值由基准测试确定。
+这些默认值可在生产启用前根据制品规模、扫描耗时和 scanner 容量测试结果调整。
 
 Docker Compose/quickstart：
 
@@ -1134,7 +1176,7 @@ Helm/Kubernetes：
 
 ## 保留、删除与 GC
 
-建议分别配置：
+保留策略按以下维度分别配置：
 
 - terminal task 保留期。
 - immutable scan run/finding 保留期。

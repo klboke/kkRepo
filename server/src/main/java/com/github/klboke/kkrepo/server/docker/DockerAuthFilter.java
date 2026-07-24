@@ -13,6 +13,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -73,6 +74,8 @@ public class DockerAuthFilter extends OncePerRequestFilter {
       filterChain.doFilter(request, response);
       return;
     }
+    request.setAttribute(
+        ArtifactDownloadPolicy.ENTRY_REPOSITORY_ID_ATTRIBUTE, runtime.get().id());
     String action = dockerAction(request.getMethod(), target.path());
     String[] challengeActions = challengeActions(action);
     Optional<AuthenticatedSubject> subject;
@@ -95,7 +98,9 @@ public class DockerAuthFilter extends OncePerRequestFilter {
       return;
     }
     PermissionAction permission = permissionFor(action, request.getMethod(), target.path());
-    if (permission != null && !accessDecisionService.decide(
+    boolean scannerToken =
+        DockerAuthService.SCANNER_SUBJECT_SOURCE.equals(subject.get().source());
+    if (!scannerToken && permission != null && !accessDecisionService.decide(
         subject.get().permissionSubject(),
         new RepositoryPermission(
             target.repository(), RepositoryFormat.DOCKER, target.path().imageName(), permission)).allowed()) {

@@ -16,6 +16,7 @@ import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -40,6 +41,7 @@ public class NpmHostedService {
   private final NpmAssetWriter writer;
   private final ObjectMapper mapper;
   private final AssetMetadataCache assetMetadataCache;
+  private final ArtifactDownloadPolicy downloadPolicy;
 
   private record PublishWritePlan(Optional<Map<String, Object>> existingPackageRoot, String effectiveRevision) {}
 
@@ -49,11 +51,23 @@ public class NpmHostedService {
       NpmAssetWriter writer,
       ObjectMapper mapper,
       AssetMetadataCache assetMetadataCache) {
+    this(assetDao, blobStorageRegistry, writer, mapper, assetMetadataCache, null);
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  public NpmHostedService(
+      AssetDao assetDao,
+      BlobStorageRegistry blobStorageRegistry,
+      NpmAssetWriter writer,
+      ObjectMapper mapper,
+      AssetMetadataCache assetMetadataCache,
+      ArtifactDownloadPolicy downloadPolicy) {
     this.assetDao = assetDao;
     this.blobStorageRegistry = blobStorageRegistry;
     this.writer = writer;
     this.mapper = mapper;
     this.assetMetadataCache = assetMetadataCache;
+    this.downloadPolicy = downloadPolicy;
   }
 
   public MavenResponse get(RepositoryRuntime runtime, NpmPath path, String repositoryBaseUrl, boolean headOnly) {
@@ -304,6 +318,7 @@ public class NpmHostedService {
     byte[] bytes = NpmPackumentResponseWriter.write(
         mapper, packageRoot, null, null, variant, packageId, repositoryBaseUrl);
     AssetRecord asset = assetDao.findAssetByPath(runtime.id(), packageId.id()).orElse(null);
+    if (asset != null && downloadPolicy != null) downloadPolicy.beforeRead(asset.id());
     Instant lastModified = asset == null ? Instant.now() : asset.lastUpdatedAt();
     if (headOnly) {
       return MavenResponse.noBody(200, bytes.length, NpmResponseSupport.JSON, null, lastModified);
@@ -340,6 +355,7 @@ public class NpmHostedService {
   }
 
   MavenResponse serveAsset(AssetRecord asset, boolean headOnly) {
+    beforeRead(asset.id());
     AssetBlobRecord blob = asset.assetBlobId() == null
         ? null
         : assetDao.findBlobById(asset.assetBlobId()).orElse(null);
@@ -358,6 +374,7 @@ public class NpmHostedService {
   }
 
   private MavenResponse serveSnapshot(CachedAssetMetadata snapshot, boolean headOnly) {
+    beforeRead(snapshot.assetId());
     AssetBlobRecord blob = snapshot.toBlobRecord();
     if (blob == null) {
       throw new NpmExceptions.NpmNotFoundException(snapshot.path());
@@ -371,6 +388,12 @@ public class NpmHostedService {
                 blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size()))
             .orElseThrow(() -> new NpmExceptions.NpmNotFoundException(snapshot.path())),
         blob.size(), contentType, blob.sha1(), snapshot.lastUpdatedAt());
+  }
+
+  void beforeRead(long assetId) {
+    if (downloadPolicy != null) {
+      downloadPolicy.beforeRead(assetId);
+    }
   }
 
   private static String responseContentType(AssetRecord asset) {

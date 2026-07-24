@@ -76,6 +76,10 @@
     </dependency>
     <dependency>
       <groupId>com.github.klboke</groupId>
+      <artifactId>kkrepo-security-scan</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.github.klboke</groupId>
       <artifactId>kkrepo-storage-s3</artifactId>
     </dependency>
     <dependency>

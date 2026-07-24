@@ -7,6 +7,7 @@ import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -16,13 +17,24 @@ import org.springframework.stereotype.Component;
 class CargoAssetReader {
   private final AssetDao assetDao;
   private final BlobStorageRegistry blobStorageRegistry;
+  private final ArtifactDownloadPolicy downloadPolicy;
 
   CargoAssetReader(AssetDao assetDao, BlobStorageRegistry blobStorageRegistry) {
+    this(assetDao, blobStorageRegistry, null);
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  CargoAssetReader(
+      AssetDao assetDao,
+      BlobStorageRegistry blobStorageRegistry,
+      ArtifactDownloadPolicy downloadPolicy) {
     this.assetDao = assetDao;
     this.blobStorageRegistry = blobStorageRegistry;
+    this.downloadPolicy = downloadPolicy;
   }
 
   MavenResponse serve(AssetRecord asset, boolean headOnly, String path) {
+    beforeRead(asset.id());
     AssetBlobRecord blob = asset.assetBlobId() == null
         ? null
         : assetDao.findBlobById(asset.assetBlobId()).orElse(null);
@@ -30,6 +42,7 @@ class CargoAssetReader {
   }
 
   MavenResponse serveSnapshot(CachedAssetMetadata snapshot, boolean headOnly, String path) {
+    beforeRead(snapshot.assetId());
     return serveBlob(snapshot.toBlobRecord(), snapshot.contentType(), snapshot.lastUpdatedAt(),
         headOnly, path);
   }
@@ -44,6 +57,7 @@ class CargoAssetReader {
   }
 
   String readText(CachedAssetMetadata snapshot, String path) {
+    beforeRead(snapshot.assetId());
     AssetBlobRecord blob = snapshot.toBlobRecord();
     if (blob == null) {
       throw new CargoExceptions.CargoNotFoundException(path);
@@ -76,5 +90,9 @@ class CargoAssetReader {
         () -> storage.get(reference)
             .orElseThrow(() -> new CargoExceptions.CargoNotFoundException(path)),
         blob.size(), contentType, etag, lastModified);
+  }
+
+  void beforeRead(long assetId) {
+    if (downloadPolicy != null) downloadPolicy.beforeRead(assetId);
   }
 }

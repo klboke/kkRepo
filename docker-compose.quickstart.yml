@@ -40,6 +40,10 @@ services:
       KKREPO_CREDENTIAL_SECRET: ${KKREPO_CREDENTIAL_SECRET:-quickstart-credential-secret-change-me-0123456789}
       KKREPO_API_KEY_PAYLOAD_SECRET: ${KKREPO_API_KEY_PAYLOAD_SECRET:-quickstart-api-key-payload-secret-change-me-0123456789}
       KKREPO_FILE_BASE_DIR: ${KKREPO_FILE_BASE_DIR:-/var/lib/kkrepo/blobs}
+      KKREPO_SECURITY_SCANNING_ENABLED: ${KKREPO_SECURITY_SCANNING_ENABLED:-false}
+      KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URL: http://scanner:8080
+      KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL: ${KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL:-quickstart-scanner-credential-change-me}
+      KKREPO_SECURITY_SCANNING_OCI_REGISTRY_URL: http://kkrepo:8080
     ports:
       - "${KKREPO_HTTP_PORT:-19090}:8080"
       - "${KKREPO_MANAGEMENT_PORT:-19091}:8081"
@@ -47,6 +51,32 @@ services:
       - kkrepo-data:/var/lib/kkrepo
     restart: unless-stopped
 
+  scanner:
+    image: ghcr.io/klboke/kkrepo-scanner:${KKREPO_SCANNER_IMAGE_TAG:-0.6.0}
+    profiles: ["security-scanning"]
+    environment:
+      KKREPO_SCANNER_SERVICE_CREDENTIAL: ${KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL:-quickstart-scanner-credential-change-me}
+      KKREPO_SCANNER_DB_AUTO_UPDATE: ${KKREPO_SCANNER_DB_AUTO_UPDATE:-true}
+      KKREPO_SCANNER_DB_DIRECTORY: /var/lib/kkrepo-scanner/grype
+    read_only: true
+    tmpfs:
+      - /tmp:size=${KKREPO_SCANNER_TMPFS_SIZE:-4g},uid=10001,gid=10001,mode=1770
+    volumes:
+      - scanner-db:/var/lib/kkrepo-scanner/grype
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/actuator/health/readiness >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
 volumes:
   mysql-data:
   kkrepo-data:
+  scanner-db:

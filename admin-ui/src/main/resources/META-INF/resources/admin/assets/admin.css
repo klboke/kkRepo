@@ -2535,3 +2535,54 @@ code {
   width: 15px;
   height: 15px;
 }
+.security-scan-summary {
+  margin-bottom: 18px;
+}
+
+.security-scan-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-subtle, #d8dee8);
+}
+
+.security-scan-tabs .row-action.is-active {
+  color: var(--accent-strong, #155eef);
+  border-color: currentColor;
+  background: var(--accent-soft, #eef4ff);
+}
+
+.security-scan-panel {
+  display: none;
+}
+
+.security-scan-panel.is-active {
+  display: block;
+}
+
+.security-scan-form {
+  margin-top: 16px;
+}
+
+.security-scan-two-column {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.security-scan-two-column .ops-panel {
+  min-width: 0;
+}
+
+.security-scan-two-column .nx-table-frame {
+  margin-top: 16px;
+}
+
+@media (max-width: 1100px) {
+  .security-scan-two-column {
+    grid-template-columns: 1fr;
+  }
+}

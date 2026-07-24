@@ -24,6 +24,7 @@ import com.github.klboke.kkrepo.server.blob.BlobTransactionCleanup;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -36,6 +37,7 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -49,6 +51,7 @@ public class DockerManifestStore {
   private final TransientTransactionRetry transactionRetry;
   private final GroupMemberAssetCache groupMemberAssetCache;
   private final DockerMetrics metrics;
+  private final ArtifactDownloadPolicy downloadPolicy;
 
   @Autowired
   public DockerManifestStore(
@@ -59,7 +62,36 @@ public class DockerManifestStore {
       AssetMetadataCache assetMetadataCache,
       TransientTransactionRetry transactionRetry,
       GroupMemberAssetCache groupMemberAssetCache,
+      DockerMetrics metrics,
+      ObjectProvider<ArtifactDownloadPolicy> downloadPolicyProvider) {
+    this(assetDao, dockerDao, blobStore, manifestParser, assetMetadataCache, transactionRetry,
+        groupMemberAssetCache, metrics,
+        downloadPolicyProvider == null ? null : downloadPolicyProvider.getIfAvailable());
+  }
+
+  public DockerManifestStore(
+      AssetDao assetDao,
+      DockerRegistryDao dockerDao,
+      DockerBlobStore blobStore,
+      DockerManifestParser manifestParser,
+      AssetMetadataCache assetMetadataCache,
+      TransientTransactionRetry transactionRetry,
+      GroupMemberAssetCache groupMemberAssetCache,
       DockerMetrics metrics) {
+    this(assetDao, dockerDao, blobStore, manifestParser, assetMetadataCache, transactionRetry,
+        groupMemberAssetCache, metrics, (ArtifactDownloadPolicy) null);
+  }
+
+  private DockerManifestStore(
+      AssetDao assetDao,
+      DockerRegistryDao dockerDao,
+      DockerBlobStore blobStore,
+      DockerManifestParser manifestParser,
+      AssetMetadataCache assetMetadataCache,
+      TransientTransactionRetry transactionRetry,
+      GroupMemberAssetCache groupMemberAssetCache,
+      DockerMetrics metrics,
+      ArtifactDownloadPolicy downloadPolicy) {
     this.assetDao = assetDao;
     this.dockerDao = dockerDao;
     this.blobStore = blobStore;
@@ -68,6 +100,7 @@ public class DockerManifestStore {
     this.transactionRetry = transactionRetry;
     this.groupMemberAssetCache = groupMemberAssetCache;
     this.metrics = metrics;
+    this.downloadPolicy = downloadPolicy;
   }
 
   public DockerManifestStore(
@@ -188,6 +221,7 @@ public class DockerManifestStore {
 
   public DockerResponse serveManifest(StoredManifest stored, boolean headOnly, List<String> acceptHeaders) {
     ensureAccepted(stored.manifest().mediaType(), acceptHeaders);
+    beforeRead(stored);
     DockerResponse response = headOnly
         ? DockerResponse.noBody(200, stored.blob().size(), stored.manifest().mediaType(), stored.manifest().updatedAt())
         : DockerResponse.body(
@@ -200,6 +234,12 @@ public class DockerManifestStore {
         .withContentType(stored.manifest().mediaType())
         .withHeader(DockerConstants.CONTENT_DIGEST_HEADER, stored.manifest().digest())
         .withHeader("ETag", "\"" + stored.manifest().digest() + "\"");
+  }
+
+  void beforeRead(StoredManifest stored) {
+    if (downloadPolicy != null) {
+      downloadPolicy.beforeRead(stored.asset().id());
+    }
   }
 
   private static void ensureAccepted(String mediaType, List<String> acceptHeaders) {

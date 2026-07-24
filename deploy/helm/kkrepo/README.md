@@ -17,3 +17,29 @@ helm upgrade --install kkrepo deploy/helm/kkrepo \
 ```
 
 For production, supply S3/OSS credentials through `extraEnvFrom`. File blob storage is disabled by default; with multiple replicas it requires a strong-consistency `ReadWriteMany` PVC.
+
+## Artifact security scanning
+
+Scanning is disabled by default. To deploy the isolated Syft/Grype adapter, create a service
+credential and enable the chart option:
+
+```bash
+kubectl create secret generic kkrepo-scanner \
+  --from-literal=service-credential="$(openssl rand -hex 32)"
+
+helm upgrade --install kkrepo deploy/helm/kkrepo \
+  --set database.type=postgresql \
+  --set database.url='jdbc:postgresql://postgresql.example:5432/kkrepo' \
+  --set database.username=kkrepo \
+  --set securityScanning.enabled=true
+```
+
+The adapter runs without a Docker socket, as uid/gid `10001`, with a read-only root filesystem.
+Its PVC contains only the rebuildable Grype vulnerability database; candidates, leases, SBOM
+references, findings, policies, and waivers remain in the shared relational database. The default
+NetworkPolicy accepts scanner API traffic only from kkRepo pods and permits scanner egress only to
+kkRepo, DNS, and public HTTPS for vulnerability database updates.
+
+For multiple adapter replicas, provide
+`securityScanning.scannerDatabase.persistence.existingClaim` backed by `ReadWriteMany`, or disable
+scanner database persistence so each pod uses an ephemeral cache.

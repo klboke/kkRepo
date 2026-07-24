@@ -1,0 +1,17 @@
+{{- if and .Values.securityScanning.enabled .Values.securityScanning.scannerDatabase.persistence.enabled (not .Values.securityScanning.scannerDatabase.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "kkrepo.fullname" . }}-scanner-db
+  labels:
+    {{- include "kkrepo.scannerLabels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.securityScanning.scannerDatabase.persistence.accessModes | nindent 4 }}
+  {{- with .Values.securityScanning.scannerDatabase.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.securityScanning.scannerDatabase.persistence.size }}
+{{- end }}

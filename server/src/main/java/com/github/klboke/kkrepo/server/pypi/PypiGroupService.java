@@ -153,6 +153,7 @@ public class PypiGroupService {
         return PypiResponse.noBody(200, stored.blob().size(), stored.asset().contentType(),
             stored.blob().sha1(), stored.asset().lastUpdatedAt());
       }
+      reader.beforeRead(stored.asset().id());
       return PypiResponse.ok(stored.openBody(), stored.blob().size(), stored.asset().contentType(),
           stored.blob().sha1(), stored.asset().lastUpdatedAt());
     } catch (RuntimeException e) {

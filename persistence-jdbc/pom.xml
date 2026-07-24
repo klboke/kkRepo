@@ -21,6 +21,10 @@
       <artifactId>kkrepo-core</artifactId>
     </dependency>
     <dependency>
+      <groupId>com.github.klboke</groupId>
+      <artifactId>kkrepo-security-scan</artifactId>
+    </dependency>
+    <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
     </dependency>

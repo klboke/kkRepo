@@ -8,6 +8,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import com.github.klboke.kkrepo.protocol.maven.path.Coordinates;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
@@ -43,6 +44,27 @@ public class MavenHostedService {
   private final MetadataRebuildDao metadataRebuildDao;
   private final AssetMetadataCache assetMetadataCache;
   private final boolean syncMetadataRebuild;
+  private final ArtifactDownloadPolicy downloadPolicy;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  public MavenHostedService(
+      AssetDao assetDao,
+      BlobStorageRegistry blobStorageRegistry,
+      MavenAssetWriter writer,
+      MavenMetadataService metadataService,
+      MetadataRebuildDao metadataRebuildDao,
+      AssetMetadataCache assetMetadataCache,
+      @Value("${kkrepo.maven.sync-metadata-rebuild:false}") boolean syncMetadataRebuild,
+      ArtifactDownloadPolicy downloadPolicy) {
+    this.assetDao = assetDao;
+    this.blobStorageRegistry = blobStorageRegistry;
+    this.writer = writer;
+    this.metadataService = metadataService;
+    this.metadataRebuildDao = metadataRebuildDao;
+    this.assetMetadataCache = assetMetadataCache;
+    this.syncMetadataRebuild = syncMetadataRebuild;
+    this.downloadPolicy = downloadPolicy;
+  }
 
   public MavenHostedService(
       AssetDao assetDao,
@@ -51,14 +73,16 @@ public class MavenHostedService {
       MavenMetadataService metadataService,
       MetadataRebuildDao metadataRebuildDao,
       AssetMetadataCache assetMetadataCache,
-      @Value("${kkrepo.maven.sync-metadata-rebuild:false}") boolean syncMetadataRebuild) {
-    this.assetDao = assetDao;
-    this.blobStorageRegistry = blobStorageRegistry;
-    this.writer = writer;
-    this.metadataService = metadataService;
-    this.metadataRebuildDao = metadataRebuildDao;
-    this.assetMetadataCache = assetMetadataCache;
-    this.syncMetadataRebuild = syncMetadataRebuild;
+      boolean syncMetadataRebuild) {
+    this(
+        assetDao,
+        blobStorageRegistry,
+        writer,
+        metadataService,
+        metadataRebuildDao,
+        assetMetadataCache,
+        syncMetadataRebuild,
+        null);
   }
 
   public MavenPathParser parser() {
@@ -76,6 +100,7 @@ public class MavenHostedService {
     if (blob == null) {
       throw new MavenExceptions.MavenNotFoundException(path.path());
     }
+    if (downloadPolicy != null) downloadPolicy.beforeRead(snapshot.assetId());
     BlobReference ref = BlobReferenceCodec.reference(
         blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size());
     String etag = blob.sha1();

@@ -70,6 +70,37 @@ spec:
                   key: {{ .Values.encryption.apiKeyPayloadSecretKey }}
             - name: KKREPO_FILE_ENABLED
               value: {{ .Values.blobStorage.file.enabled | quote }}
+            - name: KKREPO_SECURITY_SCANNING_ENABLED
+              value: {{ .Values.securityScanning.enabled | quote }}
+            {{- if .Values.securityScanning.enabled }}
+            - name: KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URL
+              value: {{ printf "http://%s-scanner:%v" (include "kkrepo.fullname" .) .Values.securityScanning.service.port | quote }}
+            - name: KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "securityScanning.serviceCredential.existingSecret is required when scanning is enabled" .Values.securityScanning.serviceCredential.existingSecret }}
+                  key: {{ required "securityScanning.serviceCredential.key is required when scanning is enabled" .Values.securityScanning.serviceCredential.key }}
+            - name: KKREPO_SECURITY_SCANNING_OCI_REGISTRY_URL
+              value: {{ printf "http://%s:%v" (include "kkrepo.fullname" .) .Values.service.httpPort | quote }}
+            - name: KKREPO_SECURITY_SCANNING_DATABASE_MAX_AGE
+              value: {{ .Values.securityScanning.scannerDatabase.maxAge | quote }}
+            - name: KKREPO_SECURITY_SCANNING_MAX_OUTPUT_BYTES
+              value: {{ .Values.securityScanning.limits.maxOutputBytes | quote }}
+            - name: KKREPO_SECURITY_SCANNING_WORKER_BATCH_SIZE
+              value: {{ .Values.securityScanning.worker.batchSize | quote }}
+            - name: KKREPO_SECURITY_SCANNING_WORKER_LEASE_SECONDS
+              value: {{ .Values.securityScanning.worker.leaseSeconds | quote }}
+            - name: KKREPO_SECURITY_SCANNING_WORKER_HEARTBEAT_SECONDS
+              value: {{ .Values.securityScanning.worker.heartbeatSeconds | quote }}
+            - name: KKREPO_SECURITY_SCANNING_WORKER_MAX_ATTEMPTS
+              value: {{ .Values.securityScanning.worker.maxAttempts | quote }}
+            - name: KKREPO_SECURITY_SCANNING_BACKFILL_BATCH_SIZE
+              value: {{ .Values.securityScanning.worker.backfillBatchSize | quote }}
+            - name: KKREPO_SECURITY_SCANNING_SNAPSHOT_REMATCH_BATCH_SIZE
+              value: {{ .Values.securityScanning.worker.snapshotRematchBatchSize | quote }}
+            - name: KKREPO_SECURITY_SCANNING_SNAPSHOT_REMATCH_MAX_BATCHES
+              value: {{ .Values.securityScanning.worker.snapshotRematchMaxBatches | quote }}
+            {{- end }}
             {{- if .Values.blobStorage.file.enabled }}
             - name: KKREPO_FILE_BASE_DIR
               value: {{ .Values.blobStorage.file.mountPath | quote }}

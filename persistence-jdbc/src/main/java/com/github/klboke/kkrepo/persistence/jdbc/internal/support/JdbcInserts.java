@@ -62,6 +62,36 @@ public final class JdbcInserts {
     });
   }
 
+  /**
+   * Attempts an insert/update that does not need a generated key. A duplicate is reported as
+   * {@code false} while preserving an enclosing PostgreSQL transaction for the winner lookup or
+   * conditional update that follows.
+   */
+  public static boolean tryUpdate(
+      JdbcTemplate jdbcTemplate, String sql, PreparedStatementSetter setter) {
+    return jdbcTemplate.execute((ConnectionCallback<Boolean>) connection -> {
+      Savepoint savepoint = JdbcDuplicateRecovery.createSavepointIfRequired(connection);
+      try (PreparedStatement statement = connection.prepareStatement(sql)) {
+        setter.setValues(statement);
+        return statement.executeUpdate() > 0;
+      } catch (SQLException updateFailure) {
+        if (savepoint != null) {
+          connection.rollback(savepoint);
+        }
+        DataAccessException translated = jdbcTemplate.getExceptionTranslator()
+            .translate("try update", sql, updateFailure);
+        if (translated instanceof DuplicateKeyException) {
+          return false;
+        }
+        throw updateFailure;
+      } finally {
+        if (savepoint != null) {
+          connection.releaseSavepoint(savepoint);
+        }
+      }
+    });
+  }
+
   private static long insert(
       Connection connection, String sql, PreparedStatementSetter setter) throws SQLException {
     try (PreparedStatement statement = connection.prepareStatement(sql, new String[]{"id"})) {

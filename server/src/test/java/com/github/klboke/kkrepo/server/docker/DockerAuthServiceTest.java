@@ -1,6 +1,8 @@
 package com.github.klboke.kkrepo.server.docker;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -13,6 +15,7 @@ import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao;
+import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import java.time.Instant;
@@ -106,5 +109,57 @@ class DockerAuthServiceTest {
         "repository", "docker-hosted",
         "imageName", "codex/alpine",
         "actions", List.of("pull", "push"))), scopes.getValue());
+  }
+
+  @Test
+  void scannerTokenIsShortLivedAndRestrictedToOneExactImage() {
+    DockerAuthTokenDao tokenDao = mock(DockerAuthTokenDao.class);
+    DockerAuthService service = new DockerAuthService(
+        tokenDao,
+        mock(SecurityAuthenticationService.class),
+        mock(AccessDecisionService.class),
+        900);
+
+    String token = service.grantScannerPull("docker-hosted", "team/app", 120);
+
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<Map<String, Object>>> scopes =
+        ArgumentCaptor.forClass((Class<List<Map<String, Object>>>) (Class<?>) List.class);
+    ArgumentCaptor<String> hash = ArgumentCaptor.forClass(String.class);
+    ArgumentCaptor<Instant> expiry = ArgumentCaptor.forClass(Instant.class);
+    verify(tokenDao).insert(
+        hash.capture(),
+        eq(DockerAuthService.SCANNER_SUBJECT_SOURCE),
+        eq("scanner"),
+        eq(null),
+        eq(null),
+        scopes.capture(),
+        expiry.capture());
+    assertEquals(List.of(Map.of(
+        "repository", "docker-hosted",
+        "imageName", "team/app",
+        "actions", List.of("pull"))), scopes.getValue());
+    assertTrue(expiry.getValue().isAfter(Instant.now().plusSeconds(100)));
+
+    DockerAuthTokenDao.TokenRecord stored = new DockerAuthTokenDao.TokenRecord(
+        hash.getValue(),
+        DockerAuthService.SCANNER_SUBJECT_SOURCE,
+        "scanner",
+        null,
+        null,
+        Map.of("scopes", scopes.getValue()),
+        expiry.getValue());
+    when(tokenDao.findValid(any(String.class), any(Instant.class)))
+        .thenReturn(Optional.of(stored));
+    assertEquals(
+        DockerAuthService.SCANNER_SUBJECT_SOURCE,
+        service.authenticateBearer(token, "docker-hosted", "team/app", "pull")
+            .orElseThrow().source());
+    assertThrows(
+        DockerProtocolException.class,
+        () -> service.authenticateBearer(token, "docker-hosted", "team/application", "pull"));
+    assertThrows(
+        DockerProtocolException.class,
+        () -> service.authenticateBearer(token, "docker-hosted", "team/app", "push"));
   }
 }

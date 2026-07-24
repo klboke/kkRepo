@@ -33,6 +33,8 @@
     <module>protocol-rubygems</module>
     <module>protocol-yum</module>
     <module>migration-nexus</module>
+    <module>security-scan</module>
+    <module>scanner-adapter</module>
     <module>persistence-jdbc</module>
     <module>persistence-mysql</module>
     <module>persistence-postgresql</module>
@@ -247,6 +249,16 @@
       <dependency>
         <groupId>com.github.klboke</groupId>
         <artifactId>kkrepo-migration-nexus</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.github.klboke</groupId>
+        <artifactId>kkrepo-security-scan</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.github.klboke</groupId>
+        <artifactId>kkrepo-scanner-adapter</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>

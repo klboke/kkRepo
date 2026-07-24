@@ -1,0 +1,102 @@
+{{- if .Values.securityScanning.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kkrepo.fullname" . }}-scanner
+  labels:
+    {{- include "kkrepo.scannerLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.securityScanning.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "kkrepo.scannerSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kkrepo.scannerSelectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "kkrepo.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.securityScanning.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: scanner
+          image: "{{ .Values.securityScanning.image.repository }}:{{ default .Chart.AppVersion .Values.securityScanning.image.tag }}"
+          imagePullPolicy: {{ .Values.securityScanning.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityScanning.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: KKREPO_SCANNER_SERVICE_CREDENTIAL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.securityScanning.serviceCredential.existingSecret }}
+                  key: {{ .Values.securityScanning.serviceCredential.key }}
+            - name: KKREPO_SCANNER_DB_AUTO_UPDATE
+              value: {{ .Values.securityScanning.scannerDatabase.autoUpdate | quote }}
+            - name: KKREPO_SCANNER_DB_DIRECTORY
+              value: /var/lib/kkrepo-scanner/grype
+            - name: KKREPO_SCANNER_MAX_INPUT_BYTES
+              value: {{ .Values.securityScanning.limits.maxInputBytes | quote }}
+            - name: KKREPO_SCANNER_MAX_OUTPUT_BYTES
+              value: {{ .Values.securityScanning.limits.maxOutputBytes | quote }}
+            - name: KKREPO_SCANNER_MAX_STDERR_BYTES
+              value: {{ .Values.securityScanning.limits.maxStderrBytes | quote }}
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            {{- toYaml .Values.securityScanning.startupProbe | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            {{- toYaml .Values.securityScanning.readinessProbe | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            {{- toYaml .Values.securityScanning.livenessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.securityScanning.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: scanner-db
+              mountPath: /var/lib/kkrepo-scanner/grype
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 4Gi
+        - name: scanner-db
+          {{- if .Values.securityScanning.scannerDatabase.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ default (printf "%s-scanner-db" (include "kkrepo.fullname" .)) .Values.securityScanning.scannerDatabase.persistence.existingClaim }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

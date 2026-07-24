@@ -1,0 +1,42 @@
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+  max-http-request-header-size: 32KB
+
+spring:
+  application:
+    name: kkrepo-scanner-adapter
+  servlet:
+    multipart:
+      enabled: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,scanner
+      status:
+        order: DOWN,OUT_OF_SERVICE,DEGRADED,UNKNOWN,UP
+        http-mapping:
+          degraded: 503
+
+kkrepo:
+  scanner:
+    service-credential: ${KKREPO_SCANNER_SERVICE_CREDENTIAL:}
+    work-directory: ${KKREPO_SCANNER_WORK_DIRECTORY:/tmp/kkrepo-scanner}
+    syft-executable: ${KKREPO_SCANNER_SYFT_EXECUTABLE:syft}
+    grype-executable: ${KKREPO_SCANNER_GRYPE_EXECUTABLE:grype}
+    vulnerability-database-directory: ${KKREPO_SCANNER_DB_DIRECTORY:/var/lib/kkrepo-scanner/grype}
+    vulnerability-database-auto-update: ${KKREPO_SCANNER_DB_AUTO_UPDATE:false}
+    vulnerability-database-update-interval: ${KKREPO_SCANNER_DB_UPDATE_INTERVAL:6h}
+    max-input-bytes: ${KKREPO_SCANNER_MAX_INPUT_BYTES:2147483648}
+    max-output-bytes: ${KKREPO_SCANNER_MAX_OUTPUT_BYTES:67108864}
+    max-stderr-bytes: ${KKREPO_SCANNER_MAX_STDERR_BYTES:262144}
+    readiness-cache: ${KKREPO_SCANNER_READINESS_CACHE:30s}

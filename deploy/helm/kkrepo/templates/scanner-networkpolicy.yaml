@@ -1,0 +1,56 @@
+{{- if and .Values.securityScanning.enabled .Values.securityScanning.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kkrepo.fullname" . }}-scanner
+  labels:
+    {{- include "kkrepo.scannerLabels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "kkrepo.scannerSelectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "kkrepo.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # Exact-digest OCI scans pull only from the in-cluster kkRepo service.
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "kkrepo.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+    # DNS is required for the vulnerability database CDN.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- if .Values.securityScanning.scannerDatabase.autoUpdate }}
+    # Permit public HTTPS for Grype database updates while excluding private and metadata ranges.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+    {{- end }}
+{{- end }}

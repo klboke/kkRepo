@@ -8,6 +8,7 @@ import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -25,11 +26,22 @@ final class SwiftAssetSupport {
   private final AssetDao assets;
   private final BlobStorageRegistry storages;
   private final RawHostedService hosted;
+  private final ArtifactDownloadPolicy downloadPolicy;
 
   SwiftAssetSupport(AssetDao assets, BlobStorageRegistry storages, RawHostedService hosted) {
+    this(assets, storages, hosted, null);
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  SwiftAssetSupport(
+      AssetDao assets,
+      BlobStorageRegistry storages,
+      RawHostedService hosted,
+      ArtifactDownloadPolicy downloadPolicy) {
     this.assets = assets;
     this.storages = storages;
     this.hosted = hosted;
+    this.downloadPolicy = downloadPolicy;
   }
 
   void storeFile(
@@ -130,6 +142,7 @@ final class SwiftAssetSupport {
         .filter(value -> value.asset().repositoryId() == repositoryId)
         .orElseThrow(() -> new SwiftExceptions.NotFound("Swift release asset is missing"));
     AssetRecord asset = stored.asset();
+    if (downloadPolicy != null) downloadPolicy.beforeRead(asset.id());
     AssetBlobRecord blob = stored.blob();
     if (blob == null) {
       throw new SwiftExceptions.NotFound("Swift release blob is missing");

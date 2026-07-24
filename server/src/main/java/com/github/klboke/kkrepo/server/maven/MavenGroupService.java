@@ -15,6 +15,7 @@ import com.github.klboke.kkrepo.server.cache.NexusCacheType;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheInfo;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -48,13 +49,16 @@ public class MavenGroupService {
   private final MavenAssetWriter writer;
   private final AssetMetadataCache assetMetadataCache;
   private final NexusLikeCacheController cacheController;
+  private final ArtifactDownloadPolicy downloadPolicy;
   private final MavenPathParser parser = new MavenPathParser();
   private final MavenMetadataMerger metadataMerger = new MavenMetadataMerger();
 
   @Autowired
   public MavenGroupService(MavenHostedService hosted, MavenProxyService proxy,
       AssetDao assetDao, BlobStorageRegistry blobStorageRegistry, MavenAssetWriter writer,
-      AssetMetadataCache assetMetadataCache, NexusLikeCacheController cacheController) {
+      AssetMetadataCache assetMetadataCache,
+      NexusLikeCacheController cacheController,
+      ArtifactDownloadPolicy downloadPolicy) {
     this.hosted = hosted;
     this.proxy = proxy;
     this.assetDao = assetDao;
@@ -62,12 +66,40 @@ public class MavenGroupService {
     this.writer = writer;
     this.assetMetadataCache = assetMetadataCache;
     this.cacheController = cacheController;
+    this.downloadPolicy = downloadPolicy;
+  }
+
+  public MavenGroupService(
+      MavenHostedService hosted,
+      MavenProxyService proxy,
+      AssetDao assetDao,
+      BlobStorageRegistry blobStorageRegistry,
+      MavenAssetWriter writer,
+      AssetMetadataCache assetMetadataCache,
+      NexusLikeCacheController cacheController) {
+    this(
+        hosted,
+        proxy,
+        assetDao,
+        blobStorageRegistry,
+        writer,
+        assetMetadataCache,
+        cacheController,
+        null);
   }
 
   public MavenGroupService(MavenHostedService hosted, MavenProxyService proxy,
       AssetDao assetDao, BlobStorageRegistry blobStorageRegistry, MavenAssetWriter writer,
       AssetMetadataCache assetMetadataCache) {
-    this(hosted, proxy, assetDao, blobStorageRegistry, writer, assetMetadataCache, null);
+    this(
+        hosted,
+        proxy,
+        assetDao,
+        blobStorageRegistry,
+        writer,
+        assetMetadataCache,
+        null,
+        null);
   }
 
   public MavenResponse get(RepositoryRuntime group, MavenPath path, boolean headOnly) {
@@ -206,6 +238,7 @@ public class MavenGroupService {
     MavenAssetWriter.Stored stored = writer.writeBytes(
         group, storage, blobStoreId, path, merged, MavenContentType.XML, "group", group.name());
     AssetRecord asset = stored.asset();
+    if (downloadPolicy != null) downloadPolicy.beforeRead(asset.id(), group.id());
     AssetBlobRecord blob = stored.blob();
     if (headOnly) {
       return MavenResponse.noBody(200, blob.size(), asset.contentType(), blob.sha1(), asset.lastUpdatedAt());
@@ -268,6 +301,7 @@ public class MavenGroupService {
   private MavenResponse serveCached(CachedAssetMetadata snapshot, boolean headOnly, MavenPath path) {
     AssetBlobRecord blob = snapshot.toBlobRecord();
     if (blob == null) throw new MavenExceptions.MavenNotFoundException(path.path());
+    if (downloadPolicy != null) downloadPolicy.beforeRead(snapshot.assetId());
     String etag = blob.sha1();
     Instant lastModified = snapshot.lastUpdatedAt();
     if (headOnly) {

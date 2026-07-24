@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.time.Instant;
 import org.springframework.stereotype.Component;
 
@@ -19,15 +20,27 @@ class HelmAssetReader {
   private final AssetDao assetDao;
   private final BlobStorageRegistry blobStorageRegistry;
   private final AssetMetadataCache assetMetadataCache;
+  private final ArtifactDownloadPolicy downloadPolicy;
 
   HelmAssetReader(AssetDao assetDao, BlobStorageRegistry blobStorageRegistry,
       AssetMetadataCache assetMetadataCache) {
+    this(assetDao, blobStorageRegistry, assetMetadataCache, null);
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  HelmAssetReader(
+      AssetDao assetDao,
+      BlobStorageRegistry blobStorageRegistry,
+      AssetMetadataCache assetMetadataCache,
+      ArtifactDownloadPolicy downloadPolicy) {
     this.assetDao = assetDao;
     this.blobStorageRegistry = blobStorageRegistry;
     this.assetMetadataCache = assetMetadataCache;
+    this.downloadPolicy = downloadPolicy;
   }
 
   MavenResponse serve(AssetRecord asset, boolean headOnly, String path) {
+    beforeRead(asset.id());
     AssetBlobRecord blob = asset.assetBlobId() == null
         ? null
         : assetDao.findBlobById(asset.assetBlobId()).orElse(null);
@@ -47,6 +60,7 @@ class HelmAssetReader {
   }
 
   MavenResponse serveSnapshot(CachedAssetMetadata snapshot, boolean headOnly, String path) {
+    beforeRead(snapshot.assetId());
     AssetBlobRecord blob = snapshot.toBlobRecord();
     if (blob == null) {
       throw new MavenExceptions.MavenNotFoundException(path);
@@ -61,6 +75,10 @@ class HelmAssetReader {
             BlobReferenceCodec.reference(blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size()))
             .orElseThrow(() -> new MavenExceptions.MavenNotFoundException(path)),
         blob.size(), snapshot.contentType(), etag, lastModified);
+  }
+
+  void beforeRead(long assetId) {
+    if (downloadPolicy != null) downloadPolicy.beforeRead(assetId);
   }
 
 }

@@ -30,6 +30,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class DockerAuthService {
   public static final String TOKEN_SUBJECT_ATTRIBUTE = DockerAuthService.class.getName() + ".TOKEN_SUBJECT";
+  public static final String SCANNER_SUBJECT_SOURCE = "security-scanner";
 
   private static final SecureRandom RANDOM = new SecureRandom();
 
@@ -88,6 +89,28 @@ public class DockerAuthService {
         .flatMap(this::restoreSubject);
   }
 
+  /**
+   * Issues a short-lived, exact-image pull token for the isolated scanner adapter. The clear token
+   * is returned once; only its hash and bounded scope are stored in the shared database.
+   */
+  @Transactional
+  public String grantScannerPull(String repository, String imageName, long requestedTtlSeconds) {
+    if (repository == null || repository.isBlank() || imageName == null || imageName.isBlank()) {
+      throw new IllegalArgumentException("Scanner repository and image name are required");
+    }
+    String token = randomToken();
+    long ttl = Math.max(60, Math.min(3600, requestedTtlSeconds));
+    tokenDao.insert(
+        sha256(token),
+        SCANNER_SUBJECT_SOURCE,
+        "scanner",
+        null,
+        null,
+        List.of(new Scope(repository, imageName, List.of("pull")).toMap()),
+        Instant.now().plusSeconds(ttl));
+    return token;
+  }
+
   @Transactional
   public Optional<AuthenticatedSubject> authenticateBearer(String token, String repository, String imageName, String action) {
     if (token == null || token.isBlank()) {
@@ -105,6 +128,12 @@ public class DockerAuthService {
   }
 
   private Optional<AuthenticatedSubject> restoreSubject(DockerAuthTokenDao.TokenRecord row) {
+    if (SCANNER_SUBJECT_SOURCE.equals(row.subjectSource())) {
+      PermissionSubject permissionSubject =
+          new PermissionSubject(SCANNER_SUBJECT_SOURCE, "scanner", Set.of(), row.tokenHash());
+      return Optional.of(new AuthenticatedSubject(
+          SCANNER_SUBJECT_SOURCE, "scanner", null, null, permissionSubject));
+    }
     return authenticationService.authenticateStoredSubject(
         row.subjectSource(), row.subjectUserId(), row.subjectRealmId(), row.subjectApiKeyId());
   }

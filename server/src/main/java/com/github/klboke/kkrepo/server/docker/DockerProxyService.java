@@ -129,6 +129,7 @@ public class DockerProxyService {
           false);
       recordCache(runtime, "manifest", "remote_store");
       ensureAccepted(stored.manifest().mediaType(), acceptHeaders);
+      manifestStore.beforeRead(stored);
       DockerResponse response = headOnly
           ? DockerResponse.noBody(
               200, body.length, stored.manifest().mediaType(), stored.manifest().updatedAt())

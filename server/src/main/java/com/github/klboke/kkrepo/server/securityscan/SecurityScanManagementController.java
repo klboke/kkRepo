@@ -1,0 +1,232 @@
+package com.github.klboke.kkrepo.server.securityscan;
+
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.RepositoryScanConfig;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanPolicy;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanWaiver;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.TaskStatus;
+import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.AssetDetail;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.ConfigCommand;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.FindingView;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.Overview;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.PolicyCommand;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.RepositoryView;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.RunView;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.TaskView;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.WaiverCommand;
+import jakarta.servlet.http.HttpServletRequest;
+import java.util.List;
+import java.util.Map;
+import org.springframework.core.io.InputStreamResource;
+import org.springframework.http.CacheControl;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
+
+@RestController
+@RequestMapping("/internal/security/scanning")
+public class SecurityScanManagementController {
+  private static final MediaType CYCLONEDX =
+      MediaType.parseMediaType("application/vnd.cyclonedx+json");
+
+  private final SecurityScanManagementService service;
+  private final SecurityScanAuditService audit;
+
+  public SecurityScanManagementController(
+      SecurityScanManagementService service, SecurityScanAuditService audit) {
+    this.service = service;
+    this.audit = audit;
+  }
+
+  @GetMapping("/summary")
+  public Overview summary(HttpServletRequest request) {
+    return service.overview(actor(request));
+  }
+
+  @GetMapping("/repositories")
+  public List<RepositoryView> repositories(HttpServletRequest request) {
+    return service.repositoryViews(actor(request));
+  }
+
+  @GetMapping("/tasks")
+  public List<TaskView> tasks(
+      @RequestParam(required = false) Long repositoryId,
+      @RequestParam(required = false) TaskStatus status,
+      @RequestParam(defaultValue = "0") long after,
+      @RequestParam(defaultValue = "50") int limit,
+      HttpServletRequest request) {
+    return service.tasks(actor(request), repositoryId, status, after, limit);
+  }
+
+  @GetMapping("/runs")
+  public List<RunView> runs(
+      @RequestParam(required = false) Long repositoryId,
+      @RequestParam(defaultValue = "0") long after,
+      @RequestParam(defaultValue = "50") int limit,
+      HttpServletRequest request) {
+    return service.runs(actor(request), repositoryId, after, limit);
+  }
+
+  @GetMapping("/findings")
+  public List<FindingView> findings(
+      @RequestParam(required = false) Long repositoryId,
+      @RequestParam(required = false) Long runId,
+      @RequestParam(required = false) Severity severity,
+      @RequestParam(defaultValue = "0") long after,
+      @RequestParam(defaultValue = "50") int limit,
+      HttpServletRequest request) {
+    return service.findings(actor(request), repositoryId, runId, severity, after, limit);
+  }
+
+  @GetMapping("/assets/{assetId}")
+  public AssetDetail asset(
+      @PathVariable long assetId, HttpServletRequest request) {
+    return service.asset(actor(request), assetId);
+  }
+
+  @PostMapping("/assets/{assetId}/rescan")
+  public Map<String, Long> rescan(
+      @PathVariable long assetId, HttpServletRequest request) {
+    AuthenticatedSubject actor = actor(request);
+    long taskId = service.rescan(actor, assetId);
+    audit.record(
+        request, actor, "RESCAN", null, Map.of("assetId", assetId, "taskId", taskId));
+    return Map.of("taskId", taskId);
+  }
+
+  @PostMapping("/tasks/{taskId}/retry")
+  public Map<String, Object> retry(
+      @PathVariable long taskId, HttpServletRequest request) {
+    AuthenticatedSubject actor = actor(request);
+    service.retry(actor, taskId);
+    audit.record(request, actor, "RETRY", null, Map.of("taskId", taskId));
+    return Map.of("taskId", taskId, "status", "PENDING");
+  }
+
+  @PostMapping("/tasks/{taskId}/cancel")
+  public Map<String, Object> cancel(
+      @PathVariable long taskId, HttpServletRequest request) {
+    AuthenticatedSubject actor = actor(request);
+    service.cancel(actor, taskId);
+    audit.record(request, actor, "CANCEL", null, Map.of("taskId", taskId));
+    return Map.of("taskId", taskId, "status", "CANCELLED");
+  }
+
+  @GetMapping("/repositories/{repositoryId}/config")
+  public RepositoryScanConfig repositoryConfig(
+      @PathVariable long repositoryId, HttpServletRequest request) {
+    return service.repositoryConfig(actor(request), repositoryId);
+  }
+
+  @PutMapping("/repositories/{repositoryId}/config")
+  public RepositoryScanConfig updateRepositoryConfig(
+      @PathVariable long repositoryId,
+      @RequestBody ConfigCommand command,
+      HttpServletRequest request) {
+    AuthenticatedSubject actor = actor(request);
+    RepositoryScanConfig result =
+        service.updateRepositoryConfig(actor, repositoryId, command);
+    audit.record(
+        request,
+        actor,
+        "REPOSITORY_CONFIG",
+        repositoryId,
+        Map.of(
+            "enabled", result.enabled(),
+            "profileId", result.profileId(),
+            "enforcementMode", result.enforcementMode().name(),
+            "configRevision", result.configRevision()));
+    return result;
+  }
+
+  @GetMapping("/policies")
+  public List<ScanPolicy> policies(HttpServletRequest request) {
+    return service.policies(actor(request));
+  }
+
+  @PostMapping("/policies")
+  public ScanPolicy createPolicy(
+      @RequestBody PolicyCommand command, HttpServletRequest request) {
+    AuthenticatedSubject actor = actor(request);
+    ScanPolicy policy = service.createPolicy(actor, command);
+    audit.record(
+        request,
+        actor,
+        "POLICY_CREATE",
+        null,
+        Map.of("policyId", policy.id(), "policyRevision", policy.revision()));
+    return policy;
+  }
+
+  @GetMapping("/waivers")
+  public List<ScanWaiver> waivers(
+      @RequestParam(required = false) Long repositoryId,
+      @RequestParam(defaultValue = "0") long after,
+      @RequestParam(defaultValue = "50") int limit,
+      HttpServletRequest request) {
+    return service.waivers(actor(request), repositoryId, after, limit);
+  }
+
+  @PostMapping("/waivers")
+  public ScanWaiver createWaiver(
+      @RequestBody WaiverCommand command, HttpServletRequest request) {
+    AuthenticatedSubject actor = actor(request);
+    ScanWaiver waiver = service.createWaiver(actor, command);
+    audit.record(
+        request,
+        actor,
+        "WAIVER_CREATE",
+        waiver.repositoryId(),
+        Map.of(
+            "waiverId", waiver.id(),
+            "scopeType", waiver.scopeType(),
+            "expiresAt", waiver.expiresAt() == null ? "none" : waiver.expiresAt().toString()));
+    return waiver;
+  }
+
+  @DeleteMapping("/waivers/{waiverId}")
+  public ResponseEntity<Void> deleteWaiver(
+      @PathVariable long waiverId, HttpServletRequest request) {
+    AuthenticatedSubject actor = actor(request);
+    ScanWaiver waiver = service.deleteWaiver(actor, waiverId);
+    audit.record(
+        request,
+        actor,
+        "WAIVER_DELETE",
+        waiver.repositoryId(),
+        Map.of("waiverId", waiverId));
+    return ResponseEntity.noContent().build();
+  }
+
+  @GetMapping("/sboms/{sbomId}")
+  public ResponseEntity<InputStreamResource> sbom(
+      @PathVariable long sbomId, HttpServletRequest request) {
+    var download = service.sbom(actor(request), sbomId);
+    return ResponseEntity.ok()
+        .contentType(CYCLONEDX)
+        .cacheControl(CacheControl.noStore())
+        .header(
+            HttpHeaders.CONTENT_DISPOSITION,
+            "attachment; filename=\"kkrepo-sbom-" + sbomId + ".cdx.json\"")
+        .header("X-Content-Type-Options", "nosniff")
+        .body(new InputStreamResource(download.input()));
+  }
+
+  private static AuthenticatedSubject actor(HttpServletRequest request) {
+    Object value = request.getAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE);
+    if (value instanceof AuthenticatedSubject actor) return actor;
+    throw new ResponseStatusException(
+        org.springframework.http.HttpStatus.UNAUTHORIZED, "Authentication required");
+  }
+}

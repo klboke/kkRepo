@@ -23,6 +23,19 @@ app.kubernetes.io/name: {{ include "kkrepo.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
+{{- define "kkrepo.scannerSelectorLabels" -}}
+app.kubernetes.io/name: {{ printf "%s-scanner" (include "kkrepo.name" .) | trunc 63 | trimSuffix "-" }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: security-scanner
+{{- end }}
+
+{{- define "kkrepo.scannerLabels" -}}
+helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | quote }}
+{{ include "kkrepo.scannerSelectorLabels" . }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
 {{- define "kkrepo.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
 {{- default (include "kkrepo.fullname" .) .Values.serviceAccount.name }}
@@ -43,5 +56,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 {{- if and (gt (int .Values.replicaCount) 1) .Values.blobStorage.file.enabled (not .Values.blobStorage.file.existingClaim) }}
 {{- fail "replicaCount > 1 with File storage requires blobStorage.file.existingClaim backed by ReadWriteMany storage" }}
+{{- end }}
+{{- if and .Values.securityScanning.enabled (not .Values.securityScanning.serviceCredential.existingSecret) }}
+{{- fail "securityScanning.serviceCredential.existingSecret is required when scanning is enabled" }}
+{{- end }}
+{{- if and .Values.securityScanning.enabled (gt (int .Values.securityScanning.replicaCount) 1) .Values.securityScanning.scannerDatabase.persistence.enabled (not .Values.securityScanning.scannerDatabase.persistence.existingClaim) }}
+{{- fail "multiple scanner replicas with persistence require scannerDatabase.persistence.existingClaim backed by ReadWriteMany storage" }}
 {{- end }}
 {{- end }}

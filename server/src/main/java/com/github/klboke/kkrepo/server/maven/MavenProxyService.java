@@ -14,6 +14,7 @@ import com.github.klboke.kkrepo.server.cache.NexusCacheType;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheInfo;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -57,6 +58,7 @@ public class MavenProxyService {
   private final ProxyNegativeCache negativeCache;
   private final AssetMetadataCache assetMetadataCache;
   private final NexusLikeCacheController cacheController;
+  private final ArtifactDownloadPolicy downloadPolicy;
   private final MavenPathParser parser = new MavenPathParser();
 
   @Autowired
@@ -68,7 +70,8 @@ public class MavenProxyService {
       HttpRemoteFetcher fetcher,
       ProxyNegativeCache negativeCache,
       AssetMetadataCache assetMetadataCache,
-      NexusLikeCacheController cacheController) {
+      NexusLikeCacheController cacheController,
+      ArtifactDownloadPolicy downloadPolicy) {
     this.assetDao = assetDao;
     this.blobStorageRegistry = blobStorageRegistry;
     this.writer = writer;
@@ -77,6 +80,28 @@ public class MavenProxyService {
     this.negativeCache = negativeCache;
     this.assetMetadataCache = assetMetadataCache;
     this.cacheController = cacheController;
+    this.downloadPolicy = downloadPolicy;
+  }
+
+  public MavenProxyService(
+      AssetDao assetDao,
+      BlobStorageRegistry blobStorageRegistry,
+      MavenAssetWriter writer,
+      ProxyStateDao proxyStateDao,
+      HttpRemoteFetcher fetcher,
+      ProxyNegativeCache negativeCache,
+      AssetMetadataCache assetMetadataCache,
+      NexusLikeCacheController cacheController) {
+    this(
+        assetDao,
+        blobStorageRegistry,
+        writer,
+        proxyStateDao,
+        fetcher,
+        negativeCache,
+        assetMetadataCache,
+        cacheController,
+        null);
   }
 
   public MavenProxyService(
@@ -87,7 +112,16 @@ public class MavenProxyService {
       HttpRemoteFetcher fetcher,
       ProxyNegativeCache negativeCache,
       AssetMetadataCache assetMetadataCache) {
-    this(assetDao, blobStorageRegistry, writer, proxyStateDao, fetcher, negativeCache, assetMetadataCache, null);
+    this(
+        assetDao,
+        blobStorageRegistry,
+        writer,
+        proxyStateDao,
+        fetcher,
+        negativeCache,
+        assetMetadataCache,
+        null,
+        null);
   }
 
   public MavenResponse get(RepositoryRuntime runtime, MavenPath path, boolean headOnly) {
@@ -202,6 +236,7 @@ public class MavenProxyService {
     try {
       proxyStateDao.recordSuccess(runtime.id(), now);
       AssetRecord asset = stored.asset();
+      if (downloadPolicy != null) downloadPolicy.beforeRead(asset.id());
       AssetBlobRecord blob = stored.blob();
       String etag = blob.sha1();
       Instant lastModified = asset.lastUpdatedAt();
@@ -230,6 +265,7 @@ public class MavenProxyService {
     if (blob == null) {
       throw new MavenExceptions.MavenNotFoundException(path.path());
     }
+    if (downloadPolicy != null) downloadPolicy.beforeRead(snapshot.assetId());
     String etag = blob.sha1();
     Instant lastModified = snapshot.lastUpdatedAt();
     if (headOnly) {

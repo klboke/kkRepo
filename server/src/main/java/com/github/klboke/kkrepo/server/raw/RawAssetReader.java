@@ -10,6 +10,7 @@ import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.time.Instant;
 import java.util.Locale;
 import org.springframework.stereotype.Component;
@@ -18,13 +19,24 @@ import org.springframework.stereotype.Component;
 class RawAssetReader {
   private final AssetDao assetDao;
   private final BlobStorageRegistry blobStorageRegistry;
+  private final ArtifactDownloadPolicy downloadPolicy;
 
   RawAssetReader(AssetDao assetDao, BlobStorageRegistry blobStorageRegistry) {
+    this(assetDao, blobStorageRegistry, null);
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  RawAssetReader(
+      AssetDao assetDao,
+      BlobStorageRegistry blobStorageRegistry,
+      ArtifactDownloadPolicy downloadPolicy) {
     this.assetDao = assetDao;
     this.blobStorageRegistry = blobStorageRegistry;
+    this.downloadPolicy = downloadPolicy;
   }
 
   MavenResponse serve(AssetRecord asset, boolean headOnly, String path, String contentDisposition) {
+    beforeRead(asset.id());
     AssetBlobRecord blob = asset.assetBlobId() == null
         ? null
         : assetDao.findBlobById(asset.assetBlobId()).orElse(null);
@@ -32,6 +44,7 @@ class RawAssetReader {
   }
 
   MavenResponse serveSnapshot(CachedAssetMetadata snapshot, boolean headOnly, String path, String contentDisposition) {
+    beforeRead(snapshot.assetId());
     return serveBlob(snapshot.toBlobRecord(), snapshot.contentType(), snapshot.lastUpdatedAt(),
         headOnly, path, contentDisposition);
   }
@@ -58,6 +71,10 @@ class RawAssetReader {
         ? "ATTACHMENT"
         : contentDisposition;
     return value.toLowerCase(Locale.ROOT);
+  }
+
+  void beforeRead(long assetId) {
+    if (downloadPolicy != null) downloadPolicy.beforeRead(assetId);
   }
 
 }

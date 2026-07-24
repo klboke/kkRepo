@@ -1,0 +1,552 @@
+package com.github.klboke.kkrepo.persistence.jdbc.api;
+
+import com.github.klboke.kkrepo.security.scan.ScanEnums.BackfillStatus;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.EnforcementMode;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.OciPlatformPolicy;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyAction;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyDecision;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.RequestReason;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanCompleteness;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanStage;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanState;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.SubjectKind;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.TaskStatus;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+/** Shared relational contract for durable, multi-replica security scan coordination. */
+public interface SecurityScanDao {
+  Optional<ScanProfile> findProfile(long profileId);
+
+  List<ScanProfile> listProfiles();
+
+  ScanProfile createProfile(ScanProfile profile);
+
+  Optional<RepositoryScanConfig> findRepositoryConfig(long repositoryId);
+
+  RepositoryScanConfig upsertRepositoryConfig(RepositoryScanConfig config);
+
+  int bumpAllRepositoryConfigRevisions(Instant updatedAt);
+
+  Optional<ScanCandidate> findCandidate(long assetId);
+
+  /**
+   * Locks a bounded candidate batch. Must be called in the transaction that enqueues tasks and
+   * advances {@link ScanCandidate#enqueuedGeneration()}.
+   */
+  List<ScanCandidate> claimCandidates(int maxItems);
+
+  boolean markCandidateEnqueued(long assetId, long expectedGeneration);
+
+  BackfillPage markRepositoryAssetsForBackfill(
+      long repositoryId, long afterAssetId, int maxItems);
+
+  long createTask(TaskDraft task);
+
+  Optional<ScanTask> findTask(long taskId);
+
+  List<ScanTask> listTasks(Long repositoryId, TaskStatus status, long afterId, int maxItems);
+
+  /** Claims tasks with row locks and assigns a distinct lease token to every task. */
+  List<ScanTask> claimTasks(
+      String workerId, Instant now, Instant leaseUntil, int maxItems);
+
+  boolean heartbeatTask(long taskId, String leaseToken, Instant leaseUntil, Instant heartbeatAt);
+
+  boolean completeTask(long taskId, String leaseToken, Instant completedAt);
+
+  boolean retryTask(
+      long taskId,
+      String leaseToken,
+      Instant nextAttemptAt,
+      String errorCode,
+      String errorSummary,
+      Instant updatedAt);
+
+  boolean failTask(
+      long taskId,
+      String leaseToken,
+      String errorCode,
+      String errorSummary,
+      Instant completedAt);
+
+  boolean cancelTask(long taskId, Instant cancelledAt);
+
+  boolean cancelClaimedTask(long taskId, String leaseToken, Instant cancelledAt);
+
+  boolean requeueTask(long taskId, Instant requestedAt, String requestedBy);
+
+  ScannerSnapshot insertSnapshotOrFindExisting(ScannerSnapshot snapshot);
+
+  Optional<ScannerSnapshot> findScannerSnapshot(long snapshotId);
+
+  Optional<ScannerSnapshot> latestScannerSnapshot();
+
+  Sbom insertSbomOrFindExisting(Sbom sbom);
+
+  Optional<Sbom> findSbom(long sbomId);
+
+  Optional<Sbom> findSbomByCatalogFingerprint(String catalogFingerprint);
+
+  Optional<Sbom> findReusableSbom(
+      SubjectKind subjectKind,
+      byte[] subjectIdentityHash,
+      String catalogEngine,
+      String catalogEngineVersion,
+      String catalogConfigurationDigest);
+
+  int insertSbomComponents(long sbomId, List<SbomComponent> components);
+
+  List<SbomComponent> listSbomComponents(long sbomId, long afterId, int maxItems);
+
+  ScanRun insertRunOrFindExisting(ScanRun run);
+
+  Optional<ScanRun> findRun(long runId);
+
+  Optional<ScanRun> findRunByMatchFingerprint(String matchFingerprint);
+
+  List<ScanRun> listRuns(Long repositoryId, long afterId, int maxItems);
+
+  void associateRun(
+      long scanRunId,
+      long repositoryId,
+      long assetId,
+      long profileId,
+      long contentGeneration,
+      Instant associatedAt);
+
+  List<Long> listRepositoryIdsForRun(long scanRunId);
+
+  List<Long> listRepositoryIdsForSbom(long sbomId);
+
+  int insertFindings(long scanRunId, List<ScanFinding> findings);
+
+  List<ScanFinding> listFindings(
+      Long repositoryId, Long scanRunId, Severity severity, long afterId, int maxItems);
+
+  Optional<AssetSecurityState> findAssetState(long assetId, long profileId);
+
+  List<AssetSecurityState> listAssetStates(long assetId);
+
+  List<AssetSecurityState> listAssetStatesNeedingSnapshot(
+      long profileId, long scannerSnapshotId, long afterAssetId, int maxItems);
+
+  AssetSecurityState upsertAssetStateIfCurrent(AssetSecurityState state);
+
+  Optional<AssetPolicyState> findAssetPolicyState(
+      long assetId, long profileId, long repositoryId);
+
+  AssetPolicyState upsertAssetPolicyStateIfCurrent(AssetPolicyState state);
+
+  List<PolicyEvaluationTarget> listPolicyEvaluationTargets(
+      long sourceRepositoryId,
+      long contextRepositoryId,
+      long profileId,
+      long configRevision,
+      Long policyId,
+      Long policyRevision,
+      long afterAssetId,
+      Instant evaluatedAt,
+      int maxItems);
+
+  boolean markAssetStateStale(
+      long assetId,
+      long profileId,
+      long expectedScanRunId,
+      Instant staleAt);
+
+  int markStatesStaleForSnapshot(
+      long profileId, Instant staleAt, int maxItems);
+
+  List<ScanPolicy> listPolicies();
+
+  Optional<ScanPolicy> findPolicy(long policyId);
+
+  ScanPolicy createPolicy(ScanPolicy policy);
+
+  ScanWaiver createWaiver(ScanWaiver waiver);
+
+  Optional<ScanWaiver> findWaiver(long waiverId);
+
+  List<ScanWaiver> listWaivers(Long repositoryId, long afterId, int maxItems);
+
+  List<ScanWaiver> listActiveWaivers(
+      long repositoryId, Long assetId, Instant evaluatedAt, int maxItems);
+
+  boolean deleteWaiver(long waiverId);
+
+  BackfillJob createBackfillJob(long repositoryId, String createdBy, Instant now);
+
+  List<BackfillJob> claimBackfillJobs(
+      String workerId, Instant now, Instant leaseUntil, int maxItems);
+
+  boolean updateBackfillProgress(
+      long jobId,
+      String leaseToken,
+      long cursorAssetId,
+      long scannedAssets,
+      long markedAssets,
+      BackfillStatus status,
+      String errorSummary,
+      Instant updatedAt);
+
+  ScanSummary summary();
+
+  ScanSummary summary(long repositoryId);
+
+  Optional<Instant> oldestPendingTaskCreatedAt();
+
+  record ScanProfile(
+      Long id,
+      String name,
+      boolean enabled,
+      String catalogEngine,
+      String matcherEngine,
+      List<String> scannerTypes,
+      Map<String, Object> targetRules,
+      long maxInputBytes,
+      int maxArchiveEntries,
+      long maxUncompressedBytes,
+      long maxSingleFileBytes,
+      int maxNestedDepth,
+      int timeoutSeconds,
+      OciPlatformPolicy ociPlatformPolicy,
+      List<String> requiredPlatforms,
+      String configurationDigest,
+      long revision,
+      Instant createdAt,
+      Instant updatedAt) {
+    public ScanProfile {
+      scannerTypes = scannerTypes == null ? List.of() : List.copyOf(scannerTypes);
+      targetRules = targetRules == null ? Map.of() : Map.copyOf(targetRules);
+      requiredPlatforms =
+          requiredPlatforms == null ? List.of() : List.copyOf(requiredPlatforms);
+    }
+  }
+
+  record RepositoryScanConfig(
+      long repositoryId,
+      boolean enabled,
+      long profileId,
+      boolean scanHostedContent,
+      boolean scanProxyContent,
+      EnforcementMode enforcementMode,
+      PolicyAction pendingAction,
+      PolicyAction failureAction,
+      PolicyAction partialAction,
+      Long maxResultAgeSeconds,
+      Long policyId,
+      long configRevision,
+      Instant createdAt,
+      Instant updatedAt) {}
+
+  record ScanCandidate(
+      long assetId,
+      Long assetBlobId,
+      long contentGeneration,
+      long enqueuedGeneration,
+      Instant changedAt,
+      Instant updatedAt) {}
+
+  record TaskDraft(
+      long repositoryId,
+      Long assetId,
+      SubjectKind subjectKind,
+      String subjectKey,
+      long contentGeneration,
+      long profileId,
+      long profileRevision,
+      Long requestedScannerSnapshotId,
+      ScanStage stage,
+      RequestReason requestReason,
+      int priority,
+      int maxAttempts,
+      String requestedBy,
+      String requestUuid,
+      String idempotencyKey,
+      Instant requestedAt) {}
+
+  record ScanTask(
+      long id,
+      long repositoryId,
+      Long assetId,
+      SubjectKind subjectKind,
+      String subjectKey,
+      byte[] subjectKeyHash,
+      long contentGeneration,
+      long profileId,
+      long profileRevision,
+      Long requestedScannerSnapshotId,
+      ScanStage stage,
+      RequestReason requestReason,
+      int priority,
+      TaskStatus status,
+      int attempts,
+      int maxAttempts,
+      Instant nextAttemptAt,
+      String claimedBy,
+      String leaseToken,
+      Instant leaseUntil,
+      Instant lastHeartbeatAt,
+      String lastErrorCode,
+      String lastErrorSummary,
+      String requestedBy,
+      String requestUuid,
+      Instant requestedAt,
+      Instant startedAt,
+      Instant finishedAt,
+      Instant createdAt,
+      Instant updatedAt) {
+    public ScanTask {
+      subjectKeyHash = subjectKeyHash == null ? null : subjectKeyHash.clone();
+    }
+  }
+
+  record ScannerSnapshot(
+      Long id,
+      String adapterName,
+      String adapterApiVersion,
+      String engineName,
+      String engineVersion,
+      String vulnerabilityDatabaseRevision,
+      Instant vulnerabilityDatabaseUpdatedAt,
+      String capabilityDigest,
+      String snapshotFingerprint,
+      Instant observedAt,
+      boolean ready,
+      Map<String, Object> details) {
+    public ScannerSnapshot {
+      details = details == null ? Map.of() : Map.copyOf(details);
+    }
+  }
+
+  record Sbom(
+      Long id,
+      SubjectKind subjectKind,
+      String subjectIdentity,
+      byte[] subjectIdentityHash,
+      String catalogEngine,
+      String catalogEngineVersion,
+      String catalogConfigurationDigest,
+      String catalogFingerprint,
+      long documentBlobId,
+      String documentSha256,
+      String specName,
+      String specVersion,
+      int componentCount,
+      int dependencyCount,
+      boolean inventoryComplete,
+      Instant createdAt) {
+    public Sbom {
+      subjectIdentityHash = subjectIdentityHash == null ? null : subjectIdentityHash.clone();
+    }
+  }
+
+  record SbomComponent(
+      Long id,
+      long sbomId,
+      String componentRef,
+      byte[] componentRefHash,
+      String packageUrl,
+      byte[] packageUrlHash,
+      String type,
+      String namespace,
+      String name,
+      String version,
+      String directness,
+      List<String> locations,
+      List<String> licenses,
+      Map<String, Object> properties) {
+    public SbomComponent {
+      componentRefHash = componentRefHash == null ? null : componentRefHash.clone();
+      packageUrlHash = packageUrlHash == null ? null : packageUrlHash.clone();
+      locations = locations == null ? List.of() : List.copyOf(locations);
+      licenses = licenses == null ? List.of() : List.copyOf(licenses);
+      properties = properties == null ? Map.of() : Map.copyOf(properties);
+    }
+  }
+
+  record ScanRun(
+      Long id,
+      Long taskId,
+      long sbomId,
+      long scannerSnapshotId,
+      String matchConfigurationDigest,
+      String matchFingerprint,
+      ScanState status,
+      ScanCompleteness scanCompleteness,
+      long rawReportBlobId,
+      String rawReportSha256,
+      int findingCount,
+      int fixableFindingCount,
+      int criticalCount,
+      int highCount,
+      int mediumCount,
+      int lowCount,
+      int unknownCount,
+      Severity maxSeverity,
+      Instant startedAt,
+      Instant completedAt,
+      Instant createdAt) {}
+
+  record ScanFinding(
+      Long id,
+      long scanRunId,
+      String findingKey,
+      byte[] findingKeyHash,
+      String advisoryId,
+      List<String> aliases,
+      String dataSource,
+      String packageUrl,
+      String packageName,
+      String installedVersion,
+      List<String> fixedVersions,
+      Severity severity,
+      String severitySource,
+      String cvssVector,
+      Double cvssScore,
+      String title,
+      String description,
+      String primaryUrl,
+      List<String> locations,
+      String sourceStatus,
+      Instant createdAt) {
+    public ScanFinding {
+      findingKeyHash = findingKeyHash == null ? null : findingKeyHash.clone();
+      aliases = aliases == null ? List.of() : List.copyOf(aliases);
+      fixedVersions = fixedVersions == null ? List.of() : List.copyOf(fixedVersions);
+      locations = locations == null ? List.of() : List.copyOf(locations);
+    }
+  }
+
+  record AssetSecurityState(
+      long assetId,
+      long profileId,
+      long contentGeneration,
+      byte[] subjectIdentityHash,
+      Long latestScanRunId,
+      ScanState scanState,
+      ScanCompleteness scanCompleteness,
+      boolean inventoryComplete,
+      Severity maxSeverity,
+      Map<String, Integer> findingCounts,
+      Long policyId,
+      Long policyRevision,
+      PolicyDecision policyDecision,
+      String policyReasonCode,
+      Instant staleAt,
+      Instant lastEvaluatedAt,
+      long version) {
+    public AssetSecurityState {
+      subjectIdentityHash = subjectIdentityHash == null ? null : subjectIdentityHash.clone();
+      findingCounts = findingCounts == null ? Map.of() : Map.copyOf(findingCounts);
+    }
+  }
+
+  record AssetPolicyState(
+      long assetId,
+      long profileId,
+      long repositoryId,
+      long contentGeneration,
+      Long latestScanRunId,
+      Long policyId,
+      Long policyRevision,
+      long configRevision,
+      PolicyDecision policyDecision,
+      String policyReasonCode,
+      int waivedFindings,
+      Instant staleAt,
+      Instant nextWaiverExpiry,
+      Instant lastEvaluatedAt,
+      long version) {}
+
+  record PolicyEvaluationTarget(
+      long assetId,
+      long sourceRepositoryId,
+      long contentGeneration,
+      Long stateContentGeneration,
+      Long latestScanRunId,
+      ScanState scanState,
+      long policyStateVersion,
+      Instant nextWaiverExpiry) {}
+
+  record ScanPolicy(
+      Long id,
+      String name,
+      boolean enabled,
+      Severity blockSeverity,
+      boolean onlyFixable,
+      boolean blockUnknownSeverity,
+      boolean requireCompleteInventory,
+      Long maxResultAgeSeconds,
+      List<String> requiredPlatforms,
+      long revision,
+      String createdBy,
+      Instant createdAt,
+      Instant updatedAt) {
+    public ScanPolicy {
+      requiredPlatforms =
+          requiredPlatforms == null ? List.of() : List.copyOf(requiredPlatforms);
+    }
+  }
+
+  record ScanWaiver(
+      Long id,
+      String scopeType,
+      Long repositoryId,
+      Long assetId,
+      Long findingId,
+      String advisorySelector,
+      String packageSelector,
+      Map<String, Object> selector,
+      String reason,
+      Long policyId,
+      Long policyRevision,
+      String createdBy,
+      String approvedBy,
+      Instant expiresAt,
+      Instant createdAt,
+      Instant updatedAt) {
+    public ScanWaiver {
+      selector = selector == null ? Map.of() : Map.copyOf(selector);
+    }
+  }
+
+  record BackfillJob(
+      Long id,
+      long repositoryId,
+      BackfillStatus status,
+      long cursorAssetId,
+      long scannedAssets,
+      long markedAssets,
+      int attempts,
+      String claimedBy,
+      String leaseToken,
+      Instant leaseUntil,
+      String lastErrorSummary,
+      String createdBy,
+      Instant createdAt,
+      Instant updatedAt,
+      Instant completedAt) {}
+
+  record BackfillPage(
+      int scannedAssets,
+      int markedAssets,
+      long nextAssetId,
+      boolean complete) {}
+
+  record ScanSummary(
+      long candidateBacklog,
+      long pendingTasks,
+      long runningTasks,
+      long failedTasks,
+      long completeAssets,
+      long partialAssets,
+      long staleAssets,
+      long blockedAssets,
+      long criticalFindings,
+      long highFindings) {}
+}
