@@ -25,13 +25,17 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletionService;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
+import java.util.function.IntFunction;
+import java.util.function.IntSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -87,11 +91,7 @@ class RepositoryDataMigrationWorker {
 
   void triggerPackages(long migrationJobId) {
     trigger("packages:" + migrationJobId, () -> {
-      while (migrateAssetBatch(migrationJobId)) {
-        if (Thread.currentThread().isInterrupted()) {
-          return;
-        }
-      }
+      migrateAssetsContinuously(migrationJobId);
       migrationService.refreshJobSummary(migrationJobId);
     });
   }
@@ -178,35 +178,27 @@ class RepositoryDataMigrationWorker {
     return complete;
   }
 
-  private boolean migrateAssetBatch(Long migrationJobId) {
+  private void migrateAssetsContinuously(Long migrationJobId) {
+    Map<Long, SourceAccess> sources = new ConcurrentHashMap<>();
+    drainContinuously(
+        () -> packageConcurrency(migrationJobId),
+        capacity -> claimAssets(migrationJobId, capacity),
+        executor,
+        claim -> {
+          SourceAccess source = sources.computeIfAbsent(claim.migrationJobId(), ignored -> sourceAccess(claim));
+          migrateOne(claim, source.client(), source.checksumValidation());
+        },
+        this::refreshProgress);
+  }
+
+  private List<AssetClaim> claimAssets(Long migrationJobId, int capacity) {
     Instant retryBefore = Instant.now().minusSeconds(CLAIM_RETRY_SECONDS);
-    int concurrency = packageConcurrency(migrationJobId);
     List<AssetClaim> claims = transactionTemplate.execute(status ->
-        migrationDao.claimAssetsForMigration(migrationJobId, concurrency, MAX_ATTEMPTS, retryBefore));
-    if (claims == null || claims.isEmpty()) {
-      return false;
-    }
-    Map<Long, NexusRestClient> clients = new ConcurrentHashMap<>();
-    List<Future<?>> futures = new ArrayList<>(claims.size());
-    for (AssetClaim claim : claims) {
-      futures.add(executor.submit(() -> {
-        SourceAccess source = sourceAccess(claim);
-        NexusRestClient client = clients.computeIfAbsent(claim.migrationJobId(), ignored -> source.client());
-        migrateOne(claim, client, source.checksumValidation());
-      }));
-    }
-    boolean interrupted = false;
-    for (Future<?> future : futures) {
-      try {
-        future.get();
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        interrupted = true;
-        break;
-      } catch (Exception e) {
-        log.warn("repository data migration task failed after marking row state", e);
-      }
-    }
+        migrationDao.claimAssetsForMigration(migrationJobId, capacity, MAX_ATTEMPTS, retryBefore));
+    return claims == null ? List.of() : claims;
+  }
+
+  private void refreshProgress(List<AssetClaim> claims) {
     BatchProgressTargets progressTargets = batchProgressTargets(claims);
     for (Long repositoryJobId : progressTargets.repositoryJobIds()) {
       migrationDao.refreshRepositoryProgress(repositoryJobId);
@@ -214,7 +206,71 @@ class RepositoryDataMigrationWorker {
     for (Long jobId : progressTargets.jobIds()) {
       migrationService.refreshJobSummary(jobId);
     }
-    return !interrupted;
+  }
+
+  static <T> boolean drainContinuously(
+      IntSupplier concurrencySupplier,
+      IntFunction<List<T>> claimer,
+      ExecutorService executor,
+      Consumer<T> worker,
+      Consumer<List<T>> progress) {
+    CompletionService<CompletedWork<T>> completions = new ExecutorCompletionService<>(executor);
+    List<T> completedSinceRefresh = new ArrayList<>();
+    int inFlight = 0;
+    while (true) {
+      if (Thread.currentThread().isInterrupted()) {
+        return false;
+      }
+
+      int concurrency = Math.max(1, concurrencySupplier.getAsInt());
+      boolean noWorkAvailable = false;
+      while (inFlight < concurrency && !noWorkAvailable) {
+        List<T> claimed = claimer.apply(concurrency - inFlight);
+        if (claimed == null || claimed.isEmpty()) {
+          noWorkAvailable = true;
+          continue;
+        }
+        for (T item : claimed) {
+          completions.submit(() -> {
+            Throwable failure = null;
+            try {
+              worker.accept(item);
+            } catch (Throwable taskFailure) {
+              failure = taskFailure;
+            }
+            return new CompletedWork<>(item, failure);
+          });
+          inFlight++;
+        }
+      }
+
+      if (inFlight == 0) {
+        if (!completedSinceRefresh.isEmpty()) {
+          progress.accept(List.copyOf(completedSinceRefresh));
+        }
+        return true;
+      }
+
+      try {
+        CompletedWork<T> completed = completions.take().get();
+        inFlight--;
+        completedSinceRefresh.add(completed.item());
+        if (completed.failure() != null) {
+          log.warn("repository data migration task failed after marking row state", completed.failure());
+        }
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return false;
+      } catch (Exception e) {
+        inFlight--;
+        log.warn("repository data migration task failed while collecting completion", e);
+      }
+
+      if (completedSinceRefresh.size() >= concurrency) {
+        progress.accept(List.copyOf(completedSinceRefresh));
+        completedSinceRefresh.clear();
+      }
+    }
   }
 
   static BatchProgressTargets batchProgressTargets(List<AssetClaim> claims) {
@@ -581,6 +637,9 @@ class RepositoryDataMigrationWorker {
   }
 
   private record SourceAccess(NexusRestClient client, String metadataEngine, boolean checksumValidation) {
+  }
+
+  private record CompletedWork<T>(T item, Throwable failure) {
   }
 
   record BatchProgressTargets(List<Long> repositoryJobIds, List<Long> jobIds) {

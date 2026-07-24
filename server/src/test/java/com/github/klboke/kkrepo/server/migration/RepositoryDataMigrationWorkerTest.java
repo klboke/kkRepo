@@ -30,9 +30,18 @@ import java.lang.reflect.Method;
 import java.net.http.HttpHeaders;
 import java.net.http.HttpResponse;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -50,6 +59,61 @@ class RepositoryDataMigrationWorkerTest {
 
     assertEquals(List.of(10L, 11L), targets.repositoryJobIds());
     assertEquals(List.of(100L), targets.jobIds());
+  }
+
+  @Test
+  void continuousDrainRefillsCompletedSlotBeforeSlowWorkFinishes() throws Exception {
+    ExecutorService migrationExecutor = Executors.newFixedThreadPool(2);
+    ExecutorService coordinator = Executors.newSingleThreadExecutor();
+    ConcurrentLinkedQueue<Integer> queued = new ConcurrentLinkedQueue<>(List.of(1, 2, 3));
+    CopyOnWriteArrayList<Integer> refreshed = new CopyOnWriteArrayList<>();
+    CountDownLatch slowStarted = new CountDownLatch(1);
+    CountDownLatch releaseSlow = new CountDownLatch(1);
+    CountDownLatch replacementStarted = new CountDownLatch(1);
+    try {
+      Future<Boolean> migration = coordinator.submit(() -> RepositoryDataMigrationWorker.drainContinuously(
+          () -> 2,
+          capacity -> {
+            List<Integer> claimed = new ArrayList<>(capacity);
+            while (claimed.size() < capacity) {
+              Integer item = queued.poll();
+              if (item == null) {
+                break;
+              }
+              claimed.add(item);
+            }
+            return claimed;
+          },
+          migrationExecutor,
+          item -> {
+            if (item == 1) {
+              slowStarted.countDown();
+              try {
+                if (!releaseSlow.await(5, TimeUnit.SECONDS)) {
+                  throw new IllegalStateException("slow task was not released");
+                }
+              } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(e);
+              }
+            } else if (item == 3) {
+              replacementStarted.countDown();
+            }
+          },
+          refreshed::addAll));
+
+      assertTrue(slowStarted.await(5, TimeUnit.SECONDS));
+      assertTrue(
+          replacementStarted.await(5, TimeUnit.SECONDS),
+          "a completed slot should be refilled while the slow task is still running");
+      releaseSlow.countDown();
+      assertTrue(migration.get(5, TimeUnit.SECONDS));
+      assertEquals(Set.of(1, 2, 3), Set.copyOf(refreshed));
+    } finally {
+      releaseSlow.countDown();
+      coordinator.shutdownNow();
+      migrationExecutor.shutdownNow();
+    }
   }
 
   @Test
