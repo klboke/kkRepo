@@ -176,6 +176,7 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 基础设施路线图：
 
 1. ✅ PostgreSQL 数据库后端支持 - 已实现。通过 `persistence-jdbc` 公共契约、语义化 dialect SPI、backend 自有 Flyway migration、双库 contract test 和多副本 server smoke test 隔离并验证差异；MySQL 继续作为默认后端（[数据库后端指南](docs/zh/database-backends.md)、[设计方案](docs/zh/dev/pluggable-database-access-layer-design.md)）。
+2. 制品安全扫描 - 规划中，覆盖 hosted、proxy 和迁移制品的 SBOM 与已知漏洞扫描、Docker/OCI 多平台扫描、数据库持久任务、多副本协同、策略评估和可选下载阻断（[设计说明](docs/zh/dev/security-scanning-design.md)）。
 
 仓库格式路线图：
 
