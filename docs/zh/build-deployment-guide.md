@@ -45,7 +45,7 @@ bash quickstart.sh
 
 默认会启动：
 
-- `ghcr.io/klboke/kkrepo:0.5.1`
+- `ghcr.io/klboke/kkrepo:0.6.0`
 - MySQL 8.0
 - 用于本地试用的持久化 MySQL volume 和 File blob storage volume
 
@@ -137,7 +137,7 @@ server/target/kkrepo-server-<version>.jar
 拉取最新公开发行镜像：
 
 ```bash
-docker pull ghcr.io/klboke/kkrepo:0.5.1
+docker pull ghcr.io/klboke/kkrepo:0.6.0
 ```
 
 也可以使用 `latest` 跟随最新公开发行版本：
@@ -217,6 +217,8 @@ server/target/kkrepo-<release-version>.zip
 server/target/kkrepo-<release-version>-native-linux-<architecture>.tar.gz
 server/target/kkrepo-<release-version>-native-linux-<architecture>.zip
 ```
+
+GitHub 的 `Release Packages` 工作流会从已合并的 `main` 构建公开发行矩阵：一组平台无关的 JVM 压缩包、Native Linux `amd64` 和 `arm64` 压缩包，以及一份合并的 SHA-256 清单。该工作流只生成经过校验的工作流产物；创建 GitHub Release 和上传这些资产仍是后续独立、显式的发行步骤。
 
 默认仍是 JVM 打包。JVM 压缩包包含 `lib/kkrepo.jar`，Native 压缩包包含可执行文件 `lib/kkrepo`。共用的 `bin/start.sh` 会自动选择包内运行时，因此服务命令和外部配置目录保持一致。Native 压缩包的目标机器不需要 Java，但操作系统和 CPU 架构必须与包名一致。
 
