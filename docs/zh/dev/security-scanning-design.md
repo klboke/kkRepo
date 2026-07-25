@@ -14,8 +14,9 @@ Maven、npm、PyPI、Docker/OCI 等客户端可见行为必须保持不变；只
 
 - 新增 `security-scan` 领域模块和独立 `scanner-adapter`，通过 Syft 生成 CycloneDX
   SBOM、通过 Grype 匹配已知漏洞；扫描器可替换且不进入 kkRepo JVM。
-- hosted、proxy、迁移资产统一通过事务性 candidate marker 进入数据库持久任务；
-  claim、lease、heartbeat、接管和 fencing 在 MySQL 8/PostgreSQL 12+ 使用相同语义。
+- hosted、proxy、迁移资产的核心写入事务只追加通用 `artifact_change_event`；启用后的
+  扫描 worker 使用独立数据库游标异步折叠成 candidate，再进入持久任务。claim、
+  lease、heartbeat、接管和 fencing 在 MySQL 8/PostgreSQL 12+ 使用相同语义。
 - SBOM、组件投影、scanner snapshot、不可变 run、finding、asset state、仓库入口策略
   state、waiver 和 backfill job 均持久化；SBOM 与原始报告正文继续保存在 BlobStorage。
 - 普通制品使用流式输入；Docker/OCI 使用 manifest digest、平台集合和精确 image scope
@@ -36,12 +37,13 @@ Maven、npm、PyPI、Docker/OCI 等客户端可见行为必须保持不变；只
 
 - 使用独立 scanner service 执行不可信输入分析，kkRepo JVM 不内嵌扫描器，也不执行
   制品代码。
-- 使用 MySQL/PostgreSQL candidate marker、task lease 和 fencing token 保证多副本
-  任务不丢失、可接管。
+- 使用 MySQL/PostgreSQL 通用内容变更 outbox、独立消费游标、candidate marker、
+  task lease 和 fencing token 保证多副本任务不丢失、可接管。
 - 以 CycloneDX SBOM 为长期 inventory，Catalog 与漏洞 Match 分离。
 - 普通制品按 asset/blob 内容扫描；Docker/OCI 按 manifest digest 和平台扫描；group
   复用实际 member 结果。
-- hosted、proxy 和迁移写入通过 `JdbcAssetDao` 的内容变更 marker 进入同一条可靠链路。
+- hosted、proxy 和迁移写入只产生与扫描无关的内容变更事件；扫描子系统异步消费并
+  维护自己的 candidate，上传代码不引用扫描表、扫描配置、扫描 client 或扫描状态。
 - 结果去重同时包含内容、引擎版本、漏洞数据库 revision 和配置 digest，不使用
   “checksum + 时间窗口”作为唯一新鲜度判断。
 - 第一阶段只实现 vulnerability 类型；secret、license 和 misconfiguration
@@ -52,7 +54,8 @@ Maven、npm、PyPI、Docker/OCI 等客户端可见行为必须保持不变；只
 ## 设计目标
 
 1. 对 hosted、proxy 和迁移进入 kkRepo 的可扫描制品生成软件包清单，并匹配已知漏洞。
-2. 使用数据库持久化候选标记、任务、租约、重试和结果，支持多个 kkRepo 副本共同工作。
+2. 使用数据库持久化通用内容变更事件、消费游标、候选标记、任务、租约、重试和结果，
+   支持多个 kkRepo 副本共同工作。
 3. 把软件清单生成和漏洞匹配分开；漏洞数据库更新时复用已有 SBOM，避免重复下载和解包。
 4. 使用内容身份、扫描器版本、漏洞数据库版本和扫描配置共同确定结果是否可复用。
 5. 支持普通制品归档与 Docker/OCI 镜像，但不把所有协议强行映射成同一种输入。
@@ -71,6 +74,8 @@ Maven、npm、PyPI、Docker/OCI 等客户端可见行为必须保持不变；只
 - 不把恶意软件沙箱、病毒特征扫描和已知漏洞扫描混成一个结果模型。
 - 不承诺所有 Raw 文件都可以自动识别；无法可靠识别的内容返回 `NOT_APPLICABLE`。
 - 不在上传 HTTP 请求内同步等待扫描完成。
+- 不在上传、proxy cache commit 或迁移写入代码中读取扫描配置、写扫描表、调用扫描器，
+  或根据扫描状态决定写入是否成功。
 - 不在 MySQL/PostgreSQL 中保存无上限的 SBOM、扫描器原始报告或解压文件正文。
 - 不把 scanner 本地目录、scanner 本地队列或某个 JVM 内存状态作为正确性真相。
 - 不默认把内部生成的 SBOM 发布为用户可见仓库资产或 OCI referrer。
@@ -81,6 +86,46 @@ Maven、npm、PyPI、Docker/OCI 等客户端可见行为必须保持不变；只
 策略框架，但应分别增加扫描类型和验收标准。
 
 ## 核心设计原则
+
+### 写入、分析与执行三平面分离
+
+安全扫描按三个平面拆分：
+
+1. **制品写入平面**：完成协议校验、Blob 持久化、asset 绑定，并在同一数据库事务中
+   追加通用 `artifact_change_event`。该事件是仓库核心的内容变更事实，不含 profile、
+   policy、severity、scanner 或 candidate 字段。
+2. **异步分析平面**：仅在全局扫描开关启用时，独立 worker 使用数据库游标消费通用
+   事件，折叠为 `security_scan_candidate`，再执行分类、SBOM 和漏洞匹配。scanner
+   不可用、超时或扫描表故障不得回滚已经提交的上传。
+3. **下载执行平面**：协议层解析出实际 asset/member/manifest 后，
+   `ArtifactDownloadPolicy` 根据物化结果决定 allow、pending 或 deny。上传成功不等于
+   严格仓库立即可下载。
+
+这里的事务性 outbox 是核心内容一致性的一部分，因此 outbox 写入失败可以让 asset
+事务失败；这是“内容事实没有可靠发布”的仓库故障，不是扫描故障。扫描子系统关闭时
+不启动消费 worker，事件保留并可在后续启用时追平。上线前已存在、或因运维原因需要
+核对的资产由数据库 backfill/reconciliation 补齐，正确性不依赖单个 JVM 的内存事件。
+
+### 行业边界与 Nexus 参考
+
+Nexus Repository 的公开代码在 content store 完成资产创建/更新后发布通用
+`AssetCreatedEvent`/`AssetUpdatedEvent`，并通过 post-commit event support 把内容写入
+与后续消费者解耦。这个模式说明仓库核心应发布内容事实，而不是在上传 handler 中调用
+某个安全产品。Sonatype Repository Firewall 则把 quarantine 和 policy 决定放在
+proxy/download 边界，不把外部分析工作放入上传事务。
+
+Harbor 的 scanner registration API 同样把扫描器作为可插拔外部 adapter；JFrog Xray
+的阻断能力也在下载执行点消费已经计算的策略结果。各产品内部队列和数据模型不同，
+但共同边界是：
+
+- 写入路径只产生稳定、通用的内容事实。
+- 分析服务异步、可替换、可停机追平。
+- quarantine/block 是读取或推广（promotion）策略，不是把 scanner RPC 变成上传事务。
+- 多副本正确性来自持久状态、幂等键、锁/lease 和 reconciliation，而不是进程内事件。
+
+kkRepo 采用数据库 outbox 而不是照搬 Nexus 的进程内实现，是因为本项目要求
+MySQL/PostgreSQL 多副本下事件不可丢失；Nexus 在这里是产品边界和行为参考，不是内部
+机制模板。
 
 ### 内容身份优先
 
@@ -112,7 +157,8 @@ Match fingerprint 由 SBOM SHA-256、matcher 版本、漏洞数据库 revision �
 
 kkRepo 负责：
 
-- 发现扫描候选。
+- 在核心资产事务中发布通用内容变更事实。
+- 在独立扫描 worker 中发现和折叠扫描候选。
 - 持久化任务和租约。
 - 读取 Blob。
 - 调用 scanner。
@@ -144,7 +190,11 @@ scanner 不负责保存 kkRepo 的长期任务状态，也不能要求请求始�
 ```text
 hosted / proxy / migration 写入
              |
-             | 同一数据库事务写入或推进 candidate generation
+             | 同一数据库事务只追加通用内容变更事实
+             v
+     artifact_change_event
+             |
+             | 独立 DB cursor + transaction
              v
  security_scan_candidate
              |
@@ -186,12 +236,12 @@ hosted / proxy / migration 写入
 | 模块 | 新增职责 |
 | --- | --- |
 | `security-scan` | 扫描主体、状态机、fingerprint、scanner SPI、规范化结果、策略输入输出 |
-| `core` | 仅在确有跨模块需要时增加通用 Blob 只读授权抽象，不放扫描器实现 |
-| `persistence-jdbc.api` | Scan DAO、record、分页与统计接口 |
-| `persistence-jdbc.internal` | 公共 JDBC 实现、claim、lease、finalize transaction |
+| `core` | 通用资产写入语义；不依赖扫描配置、扫描状态或 scanner |
+| `persistence-jdbc.api` | 通用 artifact change stream、Blob 引用、Scan DAO、record、分页与统计接口 |
+| `persistence-jdbc.internal` | 通用 outbox/Blob 引用、公共 JDBC 实现、claim、lease、finalize transaction |
 | `persistence-mysql` | MySQL migration、dialect 和 contract test |
 | `persistence-postgresql` | PostgreSQL migration、dialect 和 contract test |
-| `server` | 候选分类、worker、scanner client、管理 API、策略接入和调度 |
+| `server` | 独立事件消费、候选分类、worker、scanner client、管理 API、策略接入和调度 |
 | `scanner-adapter` | 独立部署的内部 HTTP adapter、固定版本 Syft/Grype、输入限制和进程隔离 |
 | `protocol-*` | 必要时提供格式专用 candidate classifier 或下载主体解析，不放扫描器调用 |
 | `admin-ui` | 扫描概览、任务、结果、仓库配置、策略和豁免 |
@@ -294,31 +344,60 @@ classifier 返回以下之一：
 - `DEFERRED`：还缺少必要关联，例如 OCI index 尚未解析完整。
 - `REJECTED_BY_LIMIT`：大小或类型不满足当前 profile，记录为显式 partial/failure。
 
-## 候选标记与触发模型
+## 通用内容变更流与扫描触发
+
+### 事务性 artifact change outbox
+
+`artifact_change_event` 属于仓库核心持久化模型，不属于安全扫描表。所有产生或替换
+asset Blob binding 的公共 DAO 路径，在提交 asset 的同一事务中追加一条事件：
+
+| 字段 | 语义 |
+| --- | --- |
+| `id` | 全局单调递增事件 ID，也是消费顺序 |
+| `repository_id` | 发生变化时的仓库 |
+| `asset_id` | 发生变化时的 asset |
+| `previous_asset_blob_id` | 替换前 Blob；首次绑定为空 |
+| `asset_blob_id` | 新 Blob |
+| `change_kind` | `CONTENT_CREATED` 或 `CONTENT_REPLACED` |
+| `occurred_at` | 数据库时间 |
+
+事件只描述内容事实，不含任何扫描字段。当前写入点为新建带 Blob 的 asset、
+`updateAssetBlobBinding`、`updateAssetBlobBindingAndMetadata`，Docker/OCI、hosted、
+proxy 和迁移最终都复用这些公共 DAO。仅更新下载时间、proxy validator、普通
+attributes 或 component 关系不产生内容事件。
+
+`JdbcAssetDao` 不允许引用 `security_scan_*`、扫描 profile/policy、scanner client 或
+feature flag。全局扫描关闭、scanner 不可用、扫描数据库投影处理失败时，asset 上传和
+proxy cache commit 仍按仓库核心语义完成。
+
+### 独立消费与 candidate projection
+
+扫描 worker 启用后，使用 `maintenance_cursor` 中独立的
+`security_scan_artifact_change` 游标消费事件。每批处理在一个短数据库事务内完成：
+
+1. 使用 `FOR UPDATE SKIP LOCKED` 尝试锁定共享游标；其它副本未取得锁时立即跳过。
+2. 按事件 ID 读取有界批次，并在批内按 asset 合并。
+3. 重新读取当前 asset/blob binding；延迟到达的旧事件不能把 candidate 恢复为旧 Blob。
+4. 插入或推进 `security_scan_candidate`。
+5. 在同一事务中推进游标；任一步失败则 candidate 与游标一起回滚并重试。
+
+事件流是 at-least-once 可恢复输入，candidate 是扫描域的可合并投影。扫描 worker
+不执行外部调用后再持有游标锁；外部 scanner 调用只发生在后续有 lease/fencing 的
+task worker。扫描关闭时游标不推进，重新启用后从数据库追平。事件清理必须晚于所有
+已注册消费者的水位，且保留全量 backfill 恢复路径；第一阶段不在消费时删除事件。
 
 ### 持久化 candidate marker
 
-新增 `security_scan_candidate`，以 `asset_id` 为主键，每个 asset 最多保留一行最新
-待处理变化：
+`security_scan_candidate` 以 `asset_id` 为主键，每个 asset 最多保留一行最新待处理变化：
 
 | 字段 | 语义 |
 | --- | --- |
 | `asset_id` | 当前 asset |
-| `asset_blob_id` | marker 创建时的 Blob；允许为空 |
-| `content_generation` | 每次新增或替换内容时单调递增 |
+| `asset_blob_id` | 消费时重新确认的当前 Blob；允许为空 |
+| `content_generation` | 当前内容与已投影内容不同时单调递增 |
 | `enqueued_generation` | 已经转换成 task 的最新 generation |
 | `changed_at` | 数据库时间 |
 | `updated_at` | marker 更新时间 |
-
-`JdbcAssetDao` 在以下内容绑定操作成功的同一事务内插入或推进 marker：
-
-- 新建带 Blob 的 asset。
-- `updateAssetBlobBinding`。
-- `updateAssetBlobBindingAndMetadata`。
-- Docker manifest/index 写入后完成最终 asset binding。
-
-仅更新下载时间、proxy validator、普通 attributes 或 component 关系不能推进
-content generation。
 
 marker 不是 scanner 队列。Candidate worker 领取 marker 后：
 
@@ -328,8 +407,8 @@ marker 不是 scanner 队列。Candidate worker 领取 marker 后：
 4. 幂等创建 `security_scan_task`。
 5. 推进 `enqueued_generation`。
 
-这种设计使 hosted、proxy、迁移写入共享同一可靠入口，不要求在每个协议 writer 中
-各自维护易遗漏的异步事件。
+这种设计使 hosted、proxy、迁移写入共享同一可靠入口，同时让扫描域可以独立部署、
+停用、追平和失败恢复。
 
 ### 仓库启用与历史回填
 
@@ -340,6 +419,10 @@ marker 不是 scanner 队列。Candidate worker 领取 marker 后：
 - 支持暂停、恢复、进度和失败重试。
 - 不一次性把全库 asset 装入内存。
 - 多副本通过数据库 claim 分片执行。
+
+backfill 既覆盖 outbox 上线前已有资产，也作为运维 reconciliation：它读取当前
+asset/blob binding，只有 candidate 缺失或指向不同 Blob 时才推进 generation，因此
+可以安全重复执行，并可修复极端情况下的事件/投影漂移。
 
 删除仓库或 asset 时，candidate 与 asset state 随外键清理；不可变 SBOM/scan run
 按保留策略处理，不能破坏仍由其它 asset 复用的结果。
@@ -509,8 +592,11 @@ Idempotency-Key 合并。
 - `inventory_complete`
 - `created_at`
 
-`document_blob_id` 引用 `asset_blob`，但不创建用户可见 `asset`。Blob GC 的引用计算必须
-把 SBOM 和 raw report 引用计入，不能把这些文档误判为孤儿 Blob。
+`document_blob_id` 引用 `asset_blob`，但不创建用户可见 `asset`。扫描 DAO 在持久化
+SBOM 或 raw report 时，同时登记通用 `blob_reference(owner_type, owner_id, blob_id)`。
+Blob GC 只依赖 `asset` 与 `blob_reference` 计算引用，不允许直接 JOIN
+`security_sbom`、`security_scan_run` 等功能表。这样扫描文档受保护，同时核心 GC
+不反向依赖扫描域。
 
 唯一键：
 
@@ -979,15 +1065,17 @@ redirect/download endpoint。
 
 ### Hosted 上传
 
-上传校验和仓库 write policy 仍在同步请求内完成。扫描异步进行：
+上传校验和仓库 write policy 仍在同步请求内完成。上传代码不读取扫描配置，也不判断
+仓库是否启用扫描。扫描异步进行：
 
-1. 上传成功并持久化 asset。
-2. 同事务推进 candidate marker。
-3. 严格仓库中的新 asset 处于 pending/quarantined-for-download。
-4. scan 与 policy 通过后允许下载。
+1. 上传成功并在一个事务内持久化 Blob/asset 与通用 `artifact_change_event`。
+2. 提交后由独立扫描 worker 消费事件并推进 candidate。
+3. 严格仓库中的新 asset 在下载策略视角处于 pending/quarantined-for-download。
+4. scan 与 policy 通过后，下载策略允许读取。
 
-扫描失败不回滚已经成功提交的 Blob；管理员可以修复 scanner 后重试、添加有期限
-waiver 或删除制品。
+scanner 超时、不可用、扫描投影事务失败或 worker 停止，都不回滚已经提交的 Blob 和
+asset；管理员可以修复 scanner 后重试、添加有期限 waiver 或删除制品。只有仓库核心
+写入本身失败（包括通用 outbox 无法与 asset 原子提交）才使上传失败。
 
 ### Proxy 首次回源
 
@@ -996,9 +1084,9 @@ Audit 模式保持当前边下载边缓存/响应语义。
 Enforce 且 pending 必须阻断的仓库不能把首次回源字节先流给客户端：
 
 1. 把完整上游响应写入 staging/Blob 并校验 checksum。
-2. 提交 proxy asset 和 candidate。
+2. 原子提交 proxy asset 与通用内容变更事件。
 3. 返回可重试的 pending 响应。
-4. 后台扫描通过后，客户端重试命中本地 Blob。
+4. 独立 worker 生成 candidate 并完成扫描后，客户端重试命中本地 Blob。
 
 这会增加严格 proxy 仓库第一次请求的延迟和一次失败重试，必须在管理端明确提示，
 并用 Maven/npm/PyPI/Docker 等真实客户端验证。
@@ -1189,9 +1277,11 @@ Helm/Kubernetes：
 1. 清理不再被 asset state、waiver、审计保留规则引用的 finding/run。
 2. 清理不再被 run 引用的 SBOM projection。
 3. 对 SBOM/raw report Blob 调用现有软删除与 GC 流程。
-4. Blob GC 在删除前再次检查 scan document 引用。
+4. 删除对应 `blob_reference` 后，Blob GC 再次检查所有通用引用。
 
 不能因为原始制品 asset 被删除，就立即删除仍被相同内容的其它 asset 复用的 SBOM。
+核心 Blob GC 不理解 SBOM 或扫描 run；任何新增功能要长期持有 Blob，都必须通过
+`blob_reference` 注册和释放引用。
 
 ## 双数据库实现约束
 
@@ -1199,24 +1289,27 @@ MySQL 与 PostgreSQL 必须保持：
 
 - 相同状态枚举和时间精度。
 - 相同唯一键、fingerprint 和幂等语义。
+- 相同 `artifact_change_event` 顺序、游标锁和“candidate + cursor”原子提交语义。
 - 相同 `SKIP LOCKED` claim、lease takeover 和 fencing 行为。
 - 相同 JSON DTO 语义，但核心 filter/order 字段使用普通列和索引。
 - 相同分页稳定顺序。
-- 相同删除/外键和 scan document Blob 引用语义。
+- 相同删除/外键和通用 Blob 引用语义。
 
 不使用 PostgreSQL advisory lock 作为公共正确性机制，也不依赖 MySQL 专属
 `GET_LOCK`。跨后端协调统一使用行锁、唯一约束、lease token 和 dialect 中性事务。
 
 MySQL/PostgreSQL 公共 contract 至少覆盖：
 
-1. 并发推进同一 asset candidate generation 不丢更新。
-2. 并发创建同一 fingerprint 只产生一个 immutable SBOM/run。
-3. 两个 worker 不领取同一 task。
-4. lease 过期后可接管，旧 fencing token 无法完成任务。
-5. finalize transaction 要么完整写入 finding/state/task，要么全部回滚。
-6. asset Blob 替换后旧 run 不能更新最新 state。
-7. Blob GC 不删除仍被 SBOM/raw report 引用的 object。
-8. backfill 可暂停、恢复并在重复执行时幂等。
+1. asset 新增/替换只产生通用事件，metadata-only 更新不产生事件，且上传 DAO 不访问扫描表。
+2. 两个副本不能同时推进同一消费游标，candidate 与游标要么一起提交、要么一起回滚。
+3. 延迟旧事件不能把 candidate 恢复为旧 Blob，重复 backfill 不增加未变化 generation。
+4. 并发创建同一 fingerprint 只产生一个 immutable SBOM/run。
+5. 两个 worker 不领取同一 task。
+6. lease 过期后可接管，旧 fencing token 无法完成任务。
+7. finalize transaction 要么完整写入 finding/state/task，要么全部回滚。
+8. asset Blob 替换后旧 run 不能更新最新 state。
+9. Blob GC 通过 `blob_reference` 保护 SBOM/raw report，不依赖扫描表结构。
+10. backfill 可暂停、恢复并在重复执行时幂等。
 
 ## 测试设计
 
@@ -1259,6 +1352,8 @@ CI 不能依赖实时漏洞源返回固定 finding；fixture 必须可复现。
 
 MySQL 和 PostgreSQL 分别运行真实集成测试：
 
+- 通用内容事件、独立游标、candidate projection 的提交/回滚与多副本竞争。
+- 扫描关闭或扫描表不参与时，hosted/proxy/迁移写入路径保持正常。
 - candidate/task/SBOM/run/finding/state 全链路。
 - 并发 claim 和 fingerprint insert。
 - worker 中途退出后接管。
@@ -1272,7 +1367,7 @@ MySQL 和 PostgreSQL 分别运行真实集成测试：
 Audit 模式：
 
 - 全部现有真实客户端 E2E 的 status/header/body 不变。
-- hosted、proxy、group 下载后产生正确候选和结果。
+- hosted、proxy、迁移写入产生通用事件，异步消费后产生正确候选和结果。
 - metadata、checksum、signature 不产生无意义任务。
 
 Enforce 模式：
@@ -1306,7 +1401,8 @@ Enforce 模式：
 
 - 新增 `security-scan` 模块。
 - 定义 subject、fingerprint、状态机、scanner SPI 和 policy decision。
-- 增加双数据库 migration、DAO API 与 contract test。
+- 增加通用 artifact change outbox、通用 Blob 引用、双数据库 migration、DAO API 与
+  contract test。
 - 实现 candidate/task/SBOM/run/finding/state 的基本 CRUD。
 - 不接真实 scanner，不改变下载行为。
 
@@ -1318,14 +1414,16 @@ Enforce 模式：
 
 ### PR 2：可靠候选与任务编排
 
-- `JdbcAssetDao` 内容变更时事务性推进 candidate。
-- Candidate worker、backfill job、task worker 和 retry/lease。
+- `JdbcAssetDao` 内容变更时只事务性追加通用 `artifact_change_event`。
+- 独立事件消费游标把当前 asset/blob binding 投影为 candidate。
+- Candidate worker、reconciliation/backfill job、task worker 和 retry/lease。
 - Fake scanner adapter contract。
 - task/queue 指标和审计。
 
 验收：
 
-- hosted、proxy、迁移写入都能产生候选。
+- hosted、proxy、迁移写入都能产生通用事件并异步收敛为候选。
+- 上传/缓存/迁移写入代码不引用扫描表或 scanner，扫描故障不回滚已提交内容。
 - asset 覆盖、并发写和 worker crash 不会丢失扫描需求。
 - 多副本不会重复拥有同一 task。
 
@@ -1418,7 +1516,7 @@ Enforce 模式：
 
 安全扫描能力只有在以下条件全部满足后才可声明生产可用：
 
-1. hosted、proxy、迁移资产不会丢失扫描候选。
+1. hosted、proxy、迁移写入只发布通用内容事件，扫描异步追平且不会丢失候选。
 2. MySQL/PostgreSQL 使用相同 claim、lease、fingerprint 和 finalize 语义。
 3. worker/scanner 任一副本退出后任务可恢复，旧 worker 不能覆盖新结果。
 4. SBOM、finding、scanner/version/database provenance 可追溯。
@@ -1429,7 +1527,8 @@ Enforce 模式：
 9. Enforce 覆盖所有实际下载入口，proxy 严格模式不会先返回未扫描字节。
 10. policy、waiver、重扫和阻断都有权限校验与审计。
 11. backlog、scanner readiness、数据库年龄、failure、partial 和 policy block 可监控告警。
-12. Blob GC、retention 和仓库删除不会破坏仍被引用的扫描文档或泄漏越权数据。
+12. Blob GC 只依赖通用引用契约，retention 和仓库删除不会破坏仍被引用的扫描文档或
+    泄漏越权数据。
 
 ## 参考资料
 
@@ -1443,6 +1542,11 @@ Enforce 模式：
 
 ### 外部规范与扫描器能力
 
+- [Nexus Repository `AssetStore` post-commit asset events](https://github.com/sonatype/nexus-public/blob/0a8a425daa4b37e924ca11e4637a41afce7b115c/public/common/components/nexus-repository-content/src/main/java/org/sonatype/nexus/repository/content/store/AssetStore.java#L297-L302)
+- [Nexus Repository `ContentStoreEventSupport`](https://github.com/sonatype/nexus-public/blob/0a8a425daa4b37e924ca11e4637a41afce7b115c/public/common/components/nexus-repository-content/src/main/java/org/sonatype/nexus/repository/content/store/ContentStoreEventSupport.java#L61-L75)
+- [Sonatype Repository Firewall quarantine](https://help.sonatype.com/en/firewall-quarantine.html)
+- [Harbor pluggable scanners](https://goharbor.io/docs/2.5.0/administration/vulnerability-scanning/pluggable-scanners/)
+- [JFrog Xray download blocking](https://jfrog.com/help/r/xray-how-to-work-with-jfrog-xray-block-download-artifacts-functionality/xray-how-to-work-with-jfrog-xray-block-download-artifacts-functionality/)
 - [Trivy Filesystem scanning](https://trivy.dev/docs/latest/target/filesystem/)
 - [Trivy filesystem CLI options](https://trivy.dev/docs/latest/references/configuration/cli/trivy_filesystem/)
 - [Syft supported scan targets](https://oss.anchore.com/docs/guides/sbom/scan-targets/)

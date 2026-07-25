@@ -5,6 +5,7 @@ import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRow
 import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRows.nullableTimestamp;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BlobReferenceDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.EnumColumns;
@@ -42,8 +43,11 @@ import org.springframework.transaction.annotation.Transactional;
 public class JdbcSecurityScanDao implements SecurityScanDao {
   private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() {};
   private static final TypeReference<Map<String, Integer>> INTEGER_MAP = new TypeReference<>() {};
+  private static final String SBOM_BLOB_OWNER = "security-sbom";
+  private static final String SCAN_REPORT_BLOB_OWNER = "security-scan-report";
 
   private final JdbcTemplate jdbc;
+  private final BlobReferenceDao blobReferences;
   // Row mappers are constructed before the constructor body and dereference this field only when
   // a query executes, after construction has completed.
   private JsonColumns json;
@@ -315,6 +319,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   public JdbcSecurityScanDao(JdbcTemplate jdbc, JsonColumns json) {
     this.jdbc = jdbc;
     this.json = json;
+    this.blobReferences = new JdbcBlobReferenceDao(jdbc);
   }
 
   @Override
@@ -445,6 +450,19 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
           config.maxResultAgeSeconds(), config.policyId(), nullableTimestamp(now),
           config.repositoryId());
     }
+  }
+
+  @Override
+  @Transactional
+  public int recordArtifactContentChange(long assetId) {
+    List<Long> blobIds = jdbc.query(
+        "SELECT asset_blob_id FROM asset WHERE id = ?",
+        (rs, rowNum) -> nullableLong(rs, "asset_blob_id"),
+        assetId);
+    if (blobIds.isEmpty() || blobIds.getFirst() == null) {
+      return 0;
+    }
+    return ensureCandidate(assetId, blobIds.getFirst());
   }
 
   @Override
@@ -879,8 +897,11 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       ps.setBoolean(14, sbom.inventoryComplete());
       ps.setTimestamp(15, nullableTimestamp(sbom.createdAt()));
     });
-    if (inserted.isPresent()) return findSbom(inserted.getAsLong()).orElseThrow();
-    return findSbomByCatalogFingerprint(sbom.catalogFingerprint()).orElseThrow();
+    Sbom stored = inserted.isPresent()
+        ? findSbom(inserted.getAsLong()).orElseThrow()
+        : findSbomByCatalogFingerprint(sbom.catalogFingerprint()).orElseThrow();
+    ensureBlobReference(SBOM_BLOB_OWNER, stored.id(), stored.documentBlobId());
+    return stored;
   }
 
   @Override
@@ -1001,8 +1022,15 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       ps.setTimestamp(19, nullableTimestamp(run.completedAt()));
       ps.setTimestamp(20, nullableTimestamp(run.createdAt()));
     });
-    if (inserted.isPresent()) return findRun(inserted.getAsLong()).orElseThrow();
-    return findRunByMatchFingerprint(run.matchFingerprint()).orElseThrow();
+    ScanRun stored = inserted.isPresent()
+        ? findRun(inserted.getAsLong()).orElseThrow()
+        : findRunByMatchFingerprint(run.matchFingerprint()).orElseThrow();
+    ensureBlobReference(SCAN_REPORT_BLOB_OWNER, stored.id(), stored.rawReportBlobId());
+    return stored;
+  }
+
+  private void ensureBlobReference(String ownerType, long ownerId, long blobId) {
+    blobReferences.retain(ownerType, ownerId, blobId);
   }
 
   @Override

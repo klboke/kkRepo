@@ -31,6 +31,12 @@ public interface SecurityScanDao {
 
   int bumpAllRepositoryConfigRevisions(Instant updatedAt);
 
+  /**
+   * Folds a generic artifact content-change event into the scan-specific candidate projection.
+   * The current asset/blob binding is re-read so a delayed event cannot restore stale content.
+   */
+  int recordArtifactContentChange(long assetId);
+
   Optional<ScanCandidate> findCandidate(long assetId);
 
   /**

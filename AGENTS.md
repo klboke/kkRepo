@@ -59,7 +59,9 @@
 - `protocol-yum`：Yum 仓库行为。
 - `security-scan`：安全扫描领域模型、指纹、状态机、扫描器契约和下载策略判定。
 - `scanner-adapter`：隔离运行 Syft/Grype 的无状态扫描适配器；不得挂载 Docker socket，也不持有任务真相。
-- `persistence-mysql`：MySQL DAO、模型、JSON/枚举/哈希列辅助逻辑，以及迁移和运行时共享的数据访问层。
+- `persistence-jdbc`：通用制品变更 outbox、通用 Blob 引用、共享 DAO 契约与双数据库 JDBC 实现；asset 写入路径不得依赖安全扫描表。
+- `persistence-mysql`：MySQL dialect、Flyway migration 和数据库 contract test。
+- `persistence-postgresql`：PostgreSQL dialect、Flyway migration 和数据库 contract test。
 - `migration-nexus`：Nexus 迁移和校验工具。
 - `admin-ui`：由 Spring Boot 服务提供的静态运维管理控制台。
 - `browse-ui`：由 Spring Boot 服务提供的用户侧仓库浏览器。

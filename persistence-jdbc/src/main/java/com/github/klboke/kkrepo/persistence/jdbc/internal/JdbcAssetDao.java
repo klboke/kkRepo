@@ -5,6 +5,9 @@ import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRow
 import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRows.nullableTimestamp;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ArtifactChangeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ArtifactChangeDao.ArtifactChange;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ArtifactChangeDao.ChangeKind;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao.BlobReconcileWindow;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao.HelmIndexRow;
@@ -40,12 +43,14 @@ import org.springframework.transaction.annotation.Transactional;
 public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao {
   private final JdbcTemplate jdbcTemplate;
   private final JsonColumns jsonColumns;
+  private final ArtifactChangeDao artifactChanges;
   private final RowMapper<AssetBlobRecord> blobRowMapper;
   private final RowMapper<AssetRecord> assetRowMapper;
 
   public JdbcAssetDao(JdbcTemplate jdbcTemplate, JsonColumns jsonColumns) {
     this.jdbcTemplate = jdbcTemplate;
     this.jsonColumns = jsonColumns;
+    this.artifactChanges = new JdbcArtifactChangeDao(jdbcTemplate);
     this.blobRowMapper = (rs, rowNum) -> new AssetBlobRecord(
         rs.getLong("id"),
         rs.getLong("blob_store_id"),
@@ -222,7 +227,14 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, ps -> setAssetInsertParameters(ps, record));
     if (inserted.isPresent() && record.assetBlobId() != null) {
-      advanceSecurityScanCandidate(inserted.getAsLong(), record.assetBlobId());
+      artifactChanges.append(new ArtifactChange(
+          null,
+          record.repositoryId(),
+          inserted.getAsLong(),
+          null,
+          record.assetBlobId(),
+          ChangeKind.CONTENT_CREATED,
+          null));
     }
     return inserted;
   }
@@ -521,10 +533,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
             delete_claimed_at = NULL
         WHERE b.id = ?
           AND NOT EXISTS (SELECT 1 FROM asset a WHERE a.asset_blob_id = b.id)
-          AND NOT EXISTS (SELECT 1 FROM security_sbom s WHERE s.document_blob_id = b.id)
-          AND NOT EXISTS (
-            SELECT 1 FROM security_scan_run r WHERE r.raw_report_blob_id = b.id
-          )
+          AND NOT EXISTS (SELECT 1 FROM blob_reference r WHERE r.blob_id = b.id)
         """, reason, assetBlobId);
   }
 
@@ -537,9 +546,8 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         DELETE FROM asset_blob
         WHERE id = ?
           AND deleted_at IS NOT NULL
-          AND NOT EXISTS (SELECT 1 FROM security_sbom s WHERE s.document_blob_id = asset_blob.id)
           AND NOT EXISTS (
-            SELECT 1 FROM security_scan_run r WHERE r.raw_report_blob_id = asset_blob.id
+            SELECT 1 FROM blob_reference r WHERE r.blob_id = asset_blob.id
           )
         """, assetBlobId);
   }
@@ -580,12 +588,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         FROM asset_blob
         WHERE deleted_at IS NOT NULL
           AND deleted_at < ?
-          AND NOT EXISTS (
-            SELECT 1 FROM security_sbom s WHERE s.document_blob_id = asset_blob.id
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM security_scan_run r WHERE r.raw_report_blob_id = asset_blob.id
-          )
+          AND NOT EXISTS (SELECT 1 FROM blob_reference r WHERE r.blob_id = asset_blob.id)
           AND (delete_claimed_at IS NULL""" + retryPredicate + """
         )
         ORDER BY deleted_at
@@ -643,14 +646,12 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         SELECT b.id
         FROM asset_blob b
         LEFT JOIN asset a ON a.asset_blob_id = b.id
-        LEFT JOIN security_sbom s ON s.document_blob_id = b.id
-        LEFT JOIN security_scan_run r ON r.raw_report_blob_id = b.id
+        LEFT JOIN blob_reference r ON r.blob_id = b.id
         WHERE b.id IN (""" + placeholders(scannedIds.size()) + """
           )
           AND b.deleted_at IS NULL
           AND a.id IS NULL
-          AND s.id IS NULL
-          AND r.id IS NULL
+          AND r.blob_id IS NULL
         ORDER BY b.id
         LIMIT ?
         """, Long.class, args.toArray());
@@ -670,10 +671,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
           )
           AND b.deleted_at IS NULL
           AND NOT EXISTS (SELECT 1 FROM asset a WHERE a.asset_blob_id = b.id)
-          AND NOT EXISTS (SELECT 1 FROM security_sbom s WHERE s.document_blob_id = b.id)
-          AND NOT EXISTS (
-            SELECT 1 FROM security_scan_run r WHERE r.raw_report_blob_id = b.id
-          )
+          AND NOT EXISTS (SELECT 1 FROM blob_reference r WHERE r.blob_id = b.id)
         """, args.toArray());
   }
 
@@ -682,10 +680,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         SELECT COUNT(*)
         FROM asset_blob b
         WHERE deleted_at IS NOT NULL
-          AND NOT EXISTS (SELECT 1 FROM security_sbom s WHERE s.document_blob_id = b.id)
-          AND NOT EXISTS (
-            SELECT 1 FROM security_scan_run r WHERE r.raw_report_blob_id = b.id
-          )
+          AND NOT EXISTS (SELECT 1 FROM blob_reference r WHERE r.blob_id = b.id)
         """, Long.class);
     return count == null ? 0 : count;
   }
@@ -696,10 +691,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         FROM asset_blob b
         WHERE b.deleted_at IS NULL
           AND NOT EXISTS (SELECT 1 FROM asset a WHERE a.asset_blob_id = b.id)
-          AND NOT EXISTS (SELECT 1 FROM security_sbom s WHERE s.document_blob_id = b.id)
-          AND NOT EXISTS (
-            SELECT 1 FROM security_scan_run r WHERE r.raw_report_blob_id = b.id
-          )
+          AND NOT EXISTS (SELECT 1 FROM blob_reference r WHERE r.blob_id = b.id)
         """, Long.class);
     return count == null ? 0 : count;
   }
@@ -707,7 +699,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
   @Transactional
   public int updateAssetBlobBinding(long assetId, long assetBlobId, String contentType,
       long size, Instant lastUpdatedAt) {
-    Long previousBlobId = lockAssetBlobBinding(assetId);
+    AssetContentBinding previous = lockAssetContentBinding(assetId).orElse(null);
     int updated = jdbcTemplate.update("""
         UPDATE asset
         SET asset_blob_id = ?, content_type = ?, size = ?, last_updated_at = ?
@@ -718,8 +710,17 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         size,
         nullableTimestamp(lastUpdatedAt),
         assetId);
-    if (updated == 1 && !Objects.equals(previousBlobId, assetBlobId)) {
-      advanceSecurityScanCandidate(assetId, assetBlobId);
+    if (updated == 1 && previous != null
+        && !Objects.equals(previous.assetBlobId(), assetBlobId)) {
+      artifactChanges.append(new ArtifactChange(
+          null,
+          previous.repositoryId(),
+          assetId,
+          previous.assetBlobId(),
+          assetBlobId,
+          previous.assetBlobId() == null
+              ? ChangeKind.CONTENT_CREATED : ChangeKind.CONTENT_REPLACED,
+          null));
     }
     return updated;
   }
@@ -728,7 +729,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
   public int updateAssetBlobBindingAndMetadata(long assetId, Long componentId, long assetBlobId,
       String kind, String contentType, long size, Instant lastUpdatedAt,
       java.util.Map<String, Object> attributes) {
-    Long previousBlobId = lockAssetBlobBinding(assetId);
+    AssetContentBinding previous = lockAssetContentBinding(assetId).orElse(null);
     int updated = jdbcTemplate.update("""
         UPDATE asset
         SET component_id = ?, asset_blob_id = ?, kind = ?, content_type = ?, size = ?,
@@ -743,45 +744,33 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         nullableTimestamp(lastUpdatedAt),
         jsonColumns.parameter(attributes),
         assetId);
-    if (updated == 1 && !Objects.equals(previousBlobId, assetBlobId)) {
-      advanceSecurityScanCandidate(assetId, assetBlobId);
+    if (updated == 1 && previous != null
+        && !Objects.equals(previous.assetBlobId(), assetBlobId)) {
+      artifactChanges.append(new ArtifactChange(
+          null,
+          previous.repositoryId(),
+          assetId,
+          previous.assetBlobId(),
+          assetBlobId,
+          previous.assetBlobId() == null
+              ? ChangeKind.CONTENT_CREATED : ChangeKind.CONTENT_REPLACED,
+          null));
     }
     return updated;
   }
 
-  private Long lockAssetBlobBinding(long assetId) {
+  private Optional<AssetContentBinding> lockAssetContentBinding(long assetId) {
     return jdbcTemplate.query("""
-        SELECT asset_blob_id FROM asset WHERE id = ? FOR UPDATE
-        """, rs -> rs.next() ? nullableLong(rs, "asset_blob_id") : null, assetId);
+        SELECT repository_id, asset_blob_id
+        FROM asset
+        WHERE id = ?
+        FOR UPDATE
+        """, (rs, rowNum) -> new AssetContentBinding(
+        rs.getLong("repository_id"),
+        nullableLong(rs, "asset_blob_id")), assetId).stream().findFirst();
   }
 
-  private void advanceSecurityScanCandidate(long assetId, long assetBlobId) {
-    int updated = jdbcTemplate.update("""
-        UPDATE security_scan_candidate
-        SET asset_blob_id = ?, content_generation = content_generation + 1,
-            changed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-        WHERE asset_id = ?
-        """, assetBlobId, assetId);
-    if (updated == 1) {
-      return;
-    }
-    boolean inserted = JdbcInserts.tryUpdate(jdbcTemplate, """
-        INSERT INTO security_scan_candidate
-          (asset_id, asset_blob_id, content_generation, enqueued_generation,
-           changed_at, updated_at)
-        VALUES (?, ?, 1, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        """, ps -> {
-      ps.setLong(1, assetId);
-      ps.setLong(2, assetBlobId);
-    });
-    if (!inserted) {
-      jdbcTemplate.update("""
-          UPDATE security_scan_candidate
-          SET asset_blob_id = ?, content_generation = content_generation + 1,
-              changed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-          WHERE asset_id = ?
-          """, assetBlobId, assetId);
-    }
+  private record AssetContentBinding(long repositoryId, Long assetBlobId) {
   }
 
   public int updateAssetComponentBinding(long assetId, Long componentId) {

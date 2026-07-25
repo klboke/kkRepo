@@ -11,6 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ArtifactChangeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceStores;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PubUploadSessionDao;
@@ -87,8 +88,10 @@ public abstract class PersistenceApiContract {
         "asset_blob",
         "asset_security_policy_state",
         "asset_security_state",
+        "artifact_change_event",
         "auth_ticket",
         "blob_store",
+        "blob_reference",
         "browse_node",
         "cache_version",
         "cleanup_policy",
@@ -175,10 +178,29 @@ public abstract class PersistenceApiContract {
         PersistenceHashes.pathHash(path), "app-1.0.jar", "ARTIFACT",
         "application/java-archive", 42L, null, now, Map.of()));
 
+    assertTrue(
+        scans.findCandidate(assetId).isEmpty(),
+        "the core asset write path must not update scan-specific tables");
+    List<ArtifactChangeDao.ArtifactChange> originalEvents = stores().artifactChanges()
+        .listAfter(0, 1000).stream()
+        .filter(event -> event.assetId() == assetId)
+        .toList();
+    assertEquals(1, originalEvents.size());
+    assertEquals(ArtifactChangeDao.ChangeKind.CONTENT_CREATED, originalEvents.getFirst().changeKind());
+
+    String artifactChangeCursor = "contract_security_scan_artifact_change";
+    assertEquals(1, foldArtifactChanges(artifactChangeCursor));
     SecurityScanDao.ScanCandidate originalCandidate = scans.findCandidate(assetId).orElseThrow();
     assertEquals(1, originalCandidate.contentGeneration());
     stores().assets().touchAssetLastUpdated(assetId, now.plusSeconds(1));
     stores().assets().updateAssetAttributes(assetId, Map.of("metadataOnly", true));
+    assertEquals(
+        1,
+        stores().artifactChanges().listAfter(0, 1000).stream()
+            .filter(event -> event.assetId() == assetId)
+            .count(),
+        "metadata-only changes must not emit content-change events");
+    assertEquals(0, foldArtifactChanges(artifactChangeCursor));
     assertEquals(
         originalCandidate.contentGeneration(),
         scans.findCandidate(assetId).orElseThrow().contentGeneration(),
@@ -346,6 +368,8 @@ public abstract class PersistenceApiContract {
         scans.oldestPendingTaskCreatedAt().isEmpty(),
         "completed tasks must leave the pending-age gauge");
 
+    assertTrue(stores().blobReferences().isReferenced(sbomBlobId));
+    assertTrue(stores().blobReferences().isReferenced(reportBlobId));
     assertEquals(
         0,
         stores().assets().markBlobDeletedIfUnreferenced(sbomBlobId, "contract"),
@@ -364,6 +388,21 @@ public abstract class PersistenceApiContract {
         replacement.blobCreatedAt(), replacement.blobUpdatedAt(), replacement.attributes()));
     stores().assets().updateAssetBlobBinding(
         assetId, replacementBlobId, "application/java-archive", 42, now.plusSeconds(4));
+    assertEquals(
+        1,
+        scans.findCandidate(assetId).orElseThrow().contentGeneration(),
+        "asset writes must not synchronously mutate scan candidates");
+    List<ArtifactChangeDao.ArtifactChange> replacementEvents = stores().artifactChanges()
+        .listAfter(originalEvents.getFirst().id(), 1000).stream()
+        .filter(event -> event.assetId() == assetId)
+        .toList();
+    assertEquals(1, replacementEvents.size());
+    assertEquals(
+        ArtifactChangeDao.ChangeKind.CONTENT_REPLACED,
+        replacementEvents.getFirst().changeKind());
+    assertEquals(artifactBlobId, replacementEvents.getFirst().previousAssetBlobId());
+    assertEquals(replacementBlobId, replacementEvents.getFirst().assetBlobId());
+    assertEquals(1, foldArtifactChanges(artifactChangeCursor));
     assertEquals(2, scans.findCandidate(assetId).orElseThrow().contentGeneration());
     SecurityScanDao.AssetSecurityState afterStaleFinalize = scans.upsertAssetStateIfCurrent(
         new SecurityScanDao.AssetSecurityState(
@@ -1850,6 +1889,30 @@ public abstract class PersistenceApiContract {
       }
       return results;
     }
+  }
+
+  private int foldArtifactChanges(String cursorName) {
+    return inTransaction(() -> {
+      stores().maintenanceCursors().ensureCursor(cursorName);
+      var cursor = stores().maintenanceCursors().tryLockLastSeenId(cursorName);
+      if (cursor.isEmpty()) {
+        return 0;
+      }
+      List<ArtifactChangeDao.ArtifactChange> events =
+          stores().artifactChanges().listAfter(cursor.getAsLong(), 1000);
+      if (events.isEmpty()) {
+        return 0;
+      }
+      events.stream()
+          .map(ArtifactChangeDao.ArtifactChange::assetId)
+          .distinct()
+          .forEach(stores().securityScanning()::recordArtifactContentChange);
+      assertEquals(
+          1,
+          stores().maintenanceCursors().updateLastSeenId(
+              cursorName, events.getLast().id()));
+      return events.size();
+    });
   }
 
   private boolean createAnsibleTaskReservation(

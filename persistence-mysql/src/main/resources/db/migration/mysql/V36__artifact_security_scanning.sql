@@ -1,3 +1,27 @@
+CREATE TABLE artifact_change_event (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  repository_id BIGINT UNSIGNED NOT NULL,
+  asset_id BIGINT UNSIGNED NOT NULL,
+  previous_asset_blob_id BIGINT UNSIGNED NULL,
+  asset_blob_id BIGINT UNSIGNED NOT NULL,
+  change_kind VARCHAR(32) NOT NULL,
+  occurred_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  INDEX idx_artifact_change_repository (repository_id, id),
+  INDEX idx_artifact_change_asset (asset_id, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE blob_reference (
+  owner_type VARCHAR(64) NOT NULL,
+  owner_id BIGINT UNSIGNED NOT NULL,
+  blob_id BIGINT UNSIGNED NOT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (owner_type, owner_id, blob_id),
+  CONSTRAINT fk_blob_reference_blob
+    FOREIGN KEY (blob_id) REFERENCES asset_blob(id) ON DELETE RESTRICT,
+  INDEX idx_blob_reference_blob (blob_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE security_scan_profile (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   name VARCHAR(128) NOT NULL,
@@ -427,3 +451,6 @@ INSERT INTO security_scan_policy
 VALUES
   (1, 'default-audit', TRUE, 'CRITICAL', FALSE, FALSE, FALSE, 604800,
    JSON_ARRAY('linux/amd64'), 1, 'system', CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3));
+
+INSERT INTO maintenance_cursor (task_name, last_seen_id)
+VALUES ('security_scan_artifact_change', 0);

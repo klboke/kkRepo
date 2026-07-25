@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.persistence.jdbc.internal;
 
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcInserts;
 import java.util.OptionalLong;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -14,6 +15,19 @@ public class JdbcMaintenanceCursorDao implements com.github.klboke.kkrepo.persis
 
   public JdbcMaintenanceCursorDao(JdbcTemplate jdbcTemplate) {
     this.jdbcTemplate = jdbcTemplate;
+  }
+
+  public boolean ensureCursor(String taskName) {
+    return JdbcInserts.tryUpdate(jdbcTemplate, """
+        INSERT INTO maintenance_cursor (task_name, last_seen_id, updated_at)
+        SELECT ?, 0, CURRENT_TIMESTAMP
+        WHERE NOT EXISTS (
+          SELECT 1 FROM maintenance_cursor WHERE task_name = ?
+        )
+        """, ps -> {
+      ps.setString(1, taskName);
+      ps.setString(2, taskName);
+    });
   }
 
   @Transactional(propagation = Propagation.MANDATORY)
