@@ -797,6 +797,11 @@ policy、结果年龄和 waiver。为避免一个入口覆盖另一个入口的�
 - 是否要求完整 inventory。
 - OCI 必须覆盖的平台集合。
 
+策略记录创建后不可原地覆盖。管理端“编辑策略”会创建同名的下一 revision，并在同一
+事务中把仍引用被编辑 revision 的仓库配置切换到新记录，同时增加
+`config_revision`，使后台重新物化策略决定。历史 scan state、审计记录和 waiver
+继续保留原 policy ID/revision，不随配置指针改写。
+
 waiver 字段至少包含：
 
 - scope：finding、component、asset 或 repository。
@@ -1159,6 +1164,7 @@ GET    /internal/security/scanning/repositories/{repositoryId}/config
 PUT    /internal/security/scanning/repositories/{repositoryId}/config
 GET    /internal/security/scanning/policies
 POST   /internal/security/scanning/policies
+PUT    /internal/security/scanning/policies/{policyId}
 POST   /internal/security/scanning/waivers
 DELETE /internal/security/scanning/waivers/{id}
 GET    /internal/security/scanning/sboms/{sbomId}
@@ -1215,6 +1221,8 @@ API 列表使用稳定分页和有界 filter。description、raw report 和 SBOM
      `BLOCK` 配置时自动展开，避免隐藏正在生效的阻断行为。
 5. **Policies and Waivers**
    - 版本、阈值、范围、到期时间、审批人和审计历史。
+   - 策略列表通过“Create policy”和行内“edit”进入同一弹窗表单，不在列表页面内
+     常驻新增表单；编辑弹窗明确提示将创建新 revision 以及受影响仓库的切换语义。
 
 Browse UI 第一阶段只显示有权限用户可见的状态徽标和最后扫描时间，不直接展示完整
 漏洞描述。finding 详情统一进入受权限控制的管理页面。

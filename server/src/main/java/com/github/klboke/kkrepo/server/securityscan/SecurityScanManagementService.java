@@ -297,14 +297,44 @@ public class SecurityScanManagementService {
   public ScanPolicy createPolicy(AuthenticatedSubject actor, PolicyCommand command) {
     requireGlobalWrite(actor);
     if (command == null || blank(command.name())) throw badRequest("Policy name is required");
+    String name = command.name().trim();
+    if (scans.listPolicies().stream()
+        .anyMatch(policy -> policy.name().equalsIgnoreCase(name))) {
+      throw conflict("Policy already exists; edit it to create a new revision");
+    }
+    return createPolicyRevision(actor, name, 1, command);
+  }
+
+  @Transactional
+  public ScanPolicy revisePolicy(
+      AuthenticatedSubject actor, long policyId, PolicyCommand command) {
+    requireGlobalWrite(actor);
+    ScanPolicy current =
+        scans.findPolicy(policyId).orElseThrow(() -> notFound("Policy not found"));
+    if (command == null) throw badRequest("Policy configuration is required");
+    if (!blank(command.name())
+        && !current.name().equalsIgnoreCase(command.name().trim())) {
+      throw badRequest("Policy name cannot be changed when creating a revision");
+    }
     long revision = scans.listPolicies().stream()
-        .filter(policy -> policy.name().equalsIgnoreCase(command.name().trim()))
+        .filter(policy -> policy.name().equalsIgnoreCase(current.name()))
         .mapToLong(ScanPolicy::revision)
         .max().orElse(0) + 1;
+    ScanPolicy replacement =
+        createPolicyRevision(actor, current.name(), revision, command);
+    scans.replaceRepositoryPolicy(current.id(), replacement.id(), Instant.now());
+    return replacement;
+  }
+
+  private ScanPolicy createPolicyRevision(
+      AuthenticatedSubject actor,
+      String name,
+      long revision,
+      PolicyCommand command) {
     Instant now = Instant.now();
     return scans.createPolicy(new ScanPolicy(
         null,
-        command.name().trim(),
+        name,
         command.enabled(),
         value(command.blockSeverity(), Severity.CRITICAL),
         command.onlyFixable(),
@@ -312,7 +342,7 @@ public class SecurityScanManagementService {
         command.requireCompleteInventory(),
         positive(command.maxResultAgeSeconds()),
         command.requiredPlatforms(),
-        revision,
+        Math.max(1, revision),
         actor.userId(),
         now,
         now));

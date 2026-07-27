@@ -24,6 +24,10 @@ let securityScanState = {
   policies: [],
   waivers: []
 };
+let securityScanPolicyFormMode = "create";
+let editingSecurityScanPolicyId = null;
+let editingSecurityScanPolicyEnabled = true;
+let editingSecurityScanPolicyPlatforms = ["linux/amd64"];
 const AUDIT_LOG_DEFAULT_PAGE_SIZE = 15;
 let auditLogPage = { total: 0, page: 0, size: AUDIT_LOG_DEFAULT_PAGE_SIZE, items: [] };
 let currentSession = null;
@@ -43,6 +47,9 @@ let securityPrivilegeMode = "create";
 let repositorySort = { key: "name", direction: "asc" };
 const BUILT_IN_READ_ONLY_ROLE_IDS = new Set(["nx-admin", "nx-anonymous"]);
 const formModalDismissHandlers = new Map();
+const securityScanPolicyRequiredFields = [
+  { id: "security-scan-policy-name", label: "Name" }
+];
 
 function installCsrfFetch() {
   if (window.__nexusPlusCsrfFetchInstalled) return;
@@ -4330,10 +4337,11 @@ function renderSecurityScanRepositories() {
 function renderSecurityScanPoliciesAndWaivers() {
   document.getElementById("security-scan-policy-table").innerHTML =
     securityScanState.policies.map((policy) => `
-      <tr><td>${escapeHtml(policy.id)}</td><td>${escapeHtml(policy.name)}</td>
+      <tr><td>${escapeHtml(policy.name)}</td>
       <td>${escapeHtml(policy.revision)}</td><td>${escapeHtml(policy.blockSeverity)}</td>
       <td>${policy.requireCompleteInventory ? "yes" : "no"}</td>
-      <td>${escapeHtml(policy.maxResultAgeSeconds ?? "-")}</td></tr>`).join("")
+      <td>${escapeHtml(formatSecurityScanValidity(policy.maxResultAgeSeconds) || "No expiry")}</td>
+      <td class="actions-column"><button class="row-action security-scan-policy-edit" data-id="${escapeHtml(policy.id)}" type="button">edit</button></td></tr>`).join("")
       || '<tr><td colspan="6" class="placeholder">No policies are visible.</td></tr>';
   document.getElementById("security-scan-waiver-table").innerHTML =
     securityScanState.waivers.map((waiver) => {
@@ -4410,8 +4418,8 @@ function formatSecurityScanValidity(seconds) {
   return `${value} seconds`;
 }
 
-function setSecurityScanResultValidity(seconds) {
-  const select = document.getElementById("security-scan-max-age");
+function setSecurityScanDurationSelect(selectId, seconds) {
+  const select = document.getElementById(selectId);
   select.querySelectorAll("option[data-current-value]").forEach((option) => option.remove());
   const value = seconds == null ? "" : String(seconds);
   if (value && !Array.from(select.options).some((option) => option.value === value)) {
@@ -4422,6 +4430,10 @@ function setSecurityScanResultValidity(seconds) {
     select.appendChild(option);
   }
   select.value = value;
+}
+
+function setSecurityScanResultValidity(seconds) {
+  setSecurityScanDurationSelect("security-scan-max-age", seconds);
 }
 
 function applySecurityScanRepositoryScope(repository, config) {
@@ -4516,31 +4528,105 @@ async function saveSecurityScanRepository(event) {
   }
 }
 
-async function createSecurityScanPolicy(event) {
+function showCreateSecurityScanPolicyForm() {
+  securityScanPolicyFormMode = "create";
+  editingSecurityScanPolicyId = null;
+  editingSecurityScanPolicyEnabled = true;
+  editingSecurityScanPolicyPlatforms = ["linux/amd64"];
+  const form = document.getElementById("security-scan-policy-form");
+  form.reset();
+  document.getElementById("security-scan-policy-source-id").value = "";
+  document.getElementById("security-scan-policy-name").disabled = false;
+  document.getElementById("security-scan-policy-form-title").textContent = "Create policy";
+  document.getElementById("security-scan-policy-form-note").textContent =
+    "Policies are versioned so past scan decisions remain traceable.";
+  document.getElementById("security-scan-save-policy-button").textContent = "Create policy";
+  setSecurityScanDurationSelect("security-scan-policy-max-age", null);
+  clearRequiredFieldErrors(securityScanPolicyRequiredFields);
+  openFormModal("security-scan-policy-form", "security-scan-policy-name");
+}
+
+function showEditSecurityScanPolicyForm(policyId) {
+  const policy = securityScanState.policies.find(
+    (item) => Number(item.id) === Number(policyId));
+  if (!policy) {
+    showToast("Policy no longer exists. Refresh and try again.", "error");
+    return;
+  }
+  securityScanPolicyFormMode = "edit";
+  editingSecurityScanPolicyId = policy.id;
+  editingSecurityScanPolicyEnabled = policy.enabled !== false;
+  editingSecurityScanPolicyPlatforms =
+    Array.isArray(policy.requiredPlatforms) ? [...policy.requiredPlatforms] : [];
+  const nextRevision = securityScanState.policies
+    .filter((item) => String(item.name).toLowerCase() === String(policy.name).toLowerCase())
+    .reduce((maximum, item) => Math.max(maximum, Number(item.revision) || 0), 0) + 1;
+  document.getElementById("security-scan-policy-source-id").value = policy.id;
+  document.getElementById("security-scan-policy-name").value = policy.name || "";
+  document.getElementById("security-scan-policy-name").disabled = true;
+  document.getElementById("security-scan-policy-severity").value =
+    policy.blockSeverity || "CRITICAL";
+  document.getElementById("security-scan-policy-fixable").checked =
+    Boolean(policy.onlyFixable);
+  document.getElementById("security-scan-policy-block-unknown").checked =
+    Boolean(policy.blockUnknownSeverity);
+  document.getElementById("security-scan-policy-complete").checked =
+    Boolean(policy.requireCompleteInventory);
+  setSecurityScanDurationSelect(
+    "security-scan-policy-max-age", policy.maxResultAgeSeconds);
+  document.getElementById("security-scan-policy-form-title").textContent =
+    `Edit policy: ${policy.name}`;
+  document.getElementById("security-scan-policy-form-note").textContent =
+    `Saving creates revision ${nextRevision}. Repositories using revision ${policy.revision} will move to it; historical decisions keep their original revision.`;
+  document.getElementById("security-scan-save-policy-button").textContent = "Save changes";
+  clearRequiredFieldErrors(securityScanPolicyRequiredFields);
+  openFormModal("security-scan-policy-form", "security-scan-policy-severity");
+}
+
+function hideSecurityScanPolicyForm() {
+  securityScanPolicyFormMode = "create";
+  editingSecurityScanPolicyId = null;
+  editingSecurityScanPolicyEnabled = true;
+  editingSecurityScanPolicyPlatforms = ["linux/amd64"];
+  document.getElementById("security-scan-policy-name").disabled = false;
+  clearRequiredFieldErrors(securityScanPolicyRequiredFields);
+  closeFormModal("security-scan-policy-form");
+}
+
+async function saveSecurityScanPolicy(event) {
   event.preventDefault();
+  if (!validateRequiredFields(
+      securityScanPolicyRequiredFields,
+      { prefix: "Policy fields missing" })) return;
+  const editing = securityScanPolicyFormMode === "edit";
   const payload = {
     name: document.getElementById("security-scan-policy-name").value.trim(),
-    enabled: true,
+    enabled: editingSecurityScanPolicyEnabled,
     blockSeverity: document.getElementById("security-scan-policy-severity").value,
     onlyFixable: document.getElementById("security-scan-policy-fixable").checked,
     blockUnknownSeverity: document.getElementById("security-scan-policy-block-unknown").checked,
     requireCompleteInventory: document.getElementById("security-scan-policy-complete").checked,
     maxResultAgeSeconds: optionalNumber("security-scan-policy-max-age"),
-    requiredPlatforms: ["linux/amd64"]
+    requiredPlatforms: editingSecurityScanPolicyPlatforms
   };
   try {
-    const response = await fetch("/internal/security/scanning/policies", {
-      method: "POST",
+    const path = editing
+      ? `/internal/security/scanning/policies/${editingSecurityScanPolicyId}`
+      : "/internal/security/scanning/policies";
+    const response = await fetch(path, {
+      method: editing ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
     if (!response.ok) throw new Error(await responseErrorMessage(response));
-    event.target.reset();
-    showToast("Security scan policy revision created.", "ok");
+    hideSecurityScanPolicyForm();
+    showToast(editing
+      ? "Security scan policy revision saved."
+      : "Security scan policy created.", "ok");
     await loadSecurityScanning();
     selectSecurityScanTab("policies");
   } catch (error) {
-    showToast(`Policy creation failed: ${error.message}`, "error");
+    showToast(`Policy save failed: ${error.message}`, "error");
   }
 }
 
@@ -4663,7 +4749,8 @@ initializeSideGroups();
   ["security-user-form", hideSecurityUserForm],
   ["security-role-form", hideSecurityRoleForm],
   ["security-privilege-form", hideSecurityPrivilegeForm],
-  ["security-api-key-form", hideSecurityApiKeyForm]
+  ["security-api-key-form", hideSecurityApiKeyForm],
+  ["security-scan-policy-form", hideSecurityScanPolicyForm]
 ].forEach(([formId, handler]) => bindFormModalDismiss(formId, handler));
 
 document.querySelectorAll(".side-item[data-view]").forEach((item) => {
@@ -4762,7 +4849,17 @@ document.getElementById("security-scan-repository-form").addEventListener("submi
 document.getElementById("security-scan-cancel-repository-button").addEventListener("click", () => {
   document.getElementById("security-scan-repository-form").hidden = true;
 });
-document.getElementById("security-scan-policy-form").addEventListener("submit", createSecurityScanPolicy);
+document.getElementById("security-scan-create-policy-button").addEventListener(
+  "click", showCreateSecurityScanPolicyForm);
+document.getElementById("security-scan-cancel-policy-button").addEventListener(
+  "click", hideSecurityScanPolicyForm);
+document.getElementById("security-scan-policy-form").addEventListener(
+  "submit", saveSecurityScanPolicy);
+bindRequiredFieldErrors(securityScanPolicyRequiredFields);
+document.getElementById("security-scan-policy-table").addEventListener("click", (event) => {
+  const editButton = event.target.closest(".security-scan-policy-edit");
+  if (editButton) showEditSecurityScanPolicyForm(editButton.dataset.id);
+});
 document.getElementById("security-scan-waiver-form").addEventListener("submit", createSecurityScanWaiver);
 document.getElementById("security-scan-task-table").addEventListener("click", (event) => {
   const retryButton = event.target.closest(".security-scan-task-retry");

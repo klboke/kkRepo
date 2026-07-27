@@ -58,6 +58,30 @@ class AdminSecurityScanningCapabilityContractTest {
     assertTrue(javascript.contains("repositoryType === \"HOSTED\""));
   }
 
+  @Test
+  void policyCreateAndEditReuseTheStandardModalForm() throws IOException {
+    String index = resource("/META-INF/resources/admin/index.html");
+    String javascript = resource("/META-INF/resources/admin/assets/admin.js");
+
+    assertTrue(index.contains(
+        "id=\"security-scan-policy-form-modal\" data-form-id=\"security-scan-policy-form\""));
+    assertTrue(index.contains(
+        "class=\"blobstore-form modal-form security-scan-form\" "
+            + "id=\"security-scan-policy-form\" hidden novalidate"));
+    assertTrue(index.contains("id=\"security-scan-create-policy-button\""));
+    assertTrue(index.contains("id=\"security-scan-cancel-policy-button\""));
+    assertTrue(index.contains("id=\"security-scan-save-policy-button\""));
+    assertTrue(index.contains("<option value=\"604800\">7 days</option>"));
+
+    assertTrue(javascript.contains("showCreateSecurityScanPolicyForm"));
+    assertTrue(javascript.contains("showEditSecurityScanPolicyForm"));
+    assertTrue(javascript.contains("openFormModal(\"security-scan-policy-form\""));
+    assertTrue(javascript.contains("closeFormModal(\"security-scan-policy-form\")"));
+    assertTrue(javascript.contains("security-scan-policy-edit"));
+    assertTrue(javascript.contains("method: editing ? \"PUT\" : \"POST\""));
+    assertTrue(javascript.contains("Repositories using revision"));
+  }
+
   private String resource(String path) throws IOException {
     try (InputStream stream = getClass().getResourceAsStream(path)) {
       return new String(Objects.requireNonNull(stream).readAllBytes(), StandardCharsets.UTF_8);

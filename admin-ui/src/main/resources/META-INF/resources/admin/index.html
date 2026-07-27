@@ -976,20 +976,43 @@
           <div class="security-scan-panel" data-scan-panel="policies" hidden>
             <div class="security-scan-two-column">
               <section class="ops-panel">
-                <div class="ops-panel-head">Policies</div>
-                <form class="blobstore-form security-scan-form" id="security-scan-policy-form">
-                  <div class="form-grid">
-                    <label><span>Name</span><input id="security-scan-policy-name" type="text" required></label>
-                    <label><span>Block severity</span><select id="security-scan-policy-severity"><option>CRITICAL</option><option>HIGH</option><option>MEDIUM</option><option>LOW</option><option>UNKNOWN</option></select></label>
-                    <label><span>Max result age (seconds)</span><input id="security-scan-policy-max-age" type="number" min="1"></label>
-                    <label class="checkbox-field"><input id="security-scan-policy-fixable" type="checkbox"><span>Only fixable</span></label>
-                    <label class="checkbox-field"><input id="security-scan-policy-block-unknown" type="checkbox"><span>Block unknown severity</span></label>
-                    <label class="checkbox-field"><input id="security-scan-policy-complete" type="checkbox"><span>Require complete inventory</span></label>
+                <div class="ops-panel-head security-scan-panel-head">
+                  <span>Policies</span>
+                  <button class="create-button security-scan-panel-create" id="security-scan-create-policy-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create policy</button>
+                </div>
+                <div class="form-modal" id="security-scan-policy-form-modal" data-form-id="security-scan-policy-form" role="dialog" aria-modal="true" aria-labelledby="security-scan-policy-form-title" hidden>
+                  <div class="form-modal-backdrop" data-modal-dismiss="security-scan-policy-form"></div>
+                  <div class="form-modal-panel form-modal-panel-narrow">
+                    <button class="form-modal-close" data-modal-dismiss="security-scan-policy-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
+                    <form class="blobstore-form modal-form security-scan-form" id="security-scan-policy-form" hidden novalidate>
+                      <div class="form-title" id="security-scan-policy-form-title">Create policy</div>
+                      <p class="form-note security-scan-policy-form-note" id="security-scan-policy-form-note">Policies are versioned so past scan decisions remain traceable.</p>
+                      <input id="security-scan-policy-source-id" type="hidden">
+                      <div class="form-grid security-scan-policy-grid">
+                        <label><span>Name <span class="required-mark">*</span></span><input id="security-scan-policy-name" type="text" required></label>
+                        <label><span>Block severity</span><select id="security-scan-policy-severity"><option>CRITICAL</option><option>HIGH</option><option>MEDIUM</option><option>LOW</option><option>UNKNOWN</option></select></label>
+                        <label>
+                          <span>Result validity</span>
+                          <select id="security-scan-policy-max-age">
+                            <option value="">No expiry</option>
+                            <option value="86400">1 day</option>
+                            <option value="604800">7 days</option>
+                            <option value="2592000">30 days</option>
+                          </select>
+                        </label>
+                        <label class="checkbox-field"><input id="security-scan-policy-fixable" type="checkbox"><span>Only block fixable findings</span></label>
+                        <label class="checkbox-field"><input id="security-scan-policy-block-unknown" type="checkbox"><span>Block unknown severity</span></label>
+                        <label class="checkbox-field"><input id="security-scan-policy-complete" type="checkbox"><span>Require complete inventory</span></label>
+                      </div>
+                      <div class="form-actions">
+                        <button class="create-button" id="security-scan-save-policy-button" type="submit">Create policy</button>
+                        <button class="create-button secondary" id="security-scan-cancel-policy-button" type="button">Cancel</button>
+                      </div>
+                    </form>
                   </div>
-                  <div class="form-actions"><button class="create-button" type="submit">Create policy revision</button></div>
-                </form>
+                </div>
                 <div class="nx-table-frame">
-                  <table class="nx-table"><thead><tr><th>ID</th><th>Name</th><th>Revision</th><th>Threshold</th><th>Complete</th><th>Max age</th></tr></thead><tbody id="security-scan-policy-table"></tbody></table>
+                  <table class="nx-table"><thead><tr><th>Name</th><th>Revision</th><th>Threshold</th><th>Complete</th><th>Result validity</th><th class="actions-column">Actions</th></tr></thead><tbody id="security-scan-policy-table"></tbody></table>
                 </div>
               </section>
               <section class="ops-panel">

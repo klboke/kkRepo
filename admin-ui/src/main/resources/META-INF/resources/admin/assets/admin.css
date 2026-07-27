@@ -2601,12 +2601,33 @@ code {
   margin-top: 16px;
 }
 
+.security-scan-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.security-scan-panel-create {
+  min-height: 30px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
 .security-scan-form-intro {
+  margin: -4px 0 16px;
+}
+
+.security-scan-policy-form-note {
   margin: -4px 0 16px;
 }
 
 .security-scan-config-grid {
   grid-template-columns: repeat(3, minmax(180px, 1fr));
+}
+
+.security-scan-policy-grid {
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
 }
 
 .security-scan-enabled-field {
@@ -2704,7 +2725,8 @@ code {
 
 @media (max-width: 720px) {
   .security-scan-config-grid,
-  .security-scan-advanced-grid {
+  .security-scan-advanced-grid,
+  .security-scan-policy-grid {
     grid-template-columns: 1fr;
   }
 

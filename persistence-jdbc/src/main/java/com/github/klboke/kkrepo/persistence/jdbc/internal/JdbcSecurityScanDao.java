@@ -1543,6 +1543,19 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   @Override
+  public int replaceRepositoryPolicy(
+      long currentPolicyId, long replacementPolicyId, Instant updatedAt) {
+    return jdbc.update("""
+        UPDATE repository_security_scan_config
+        SET policy_id = ?, config_revision = config_revision + 1, updated_at = ?
+        WHERE policy_id = ?
+        """,
+        replacementPolicyId,
+        nullableTimestamp(requiredNow(updatedAt)),
+        currentPolicyId);
+  }
+
+  @Override
   public ScanWaiver createWaiver(ScanWaiver waiver) {
     long id = JdbcInserts.insert(jdbc, """
         INSERT INTO security_scan_waiver

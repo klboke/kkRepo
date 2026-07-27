@@ -422,6 +422,23 @@ public abstract class PersistenceApiContract {
         PolicyDecision.BLOCK_VULNERABILITY,
         afterStalePolicy.policyDecision(),
         "an old generation cannot overwrite repository-context policy state");
+
+    SecurityScanDao.ScanPolicy replacementPolicy =
+        scans.createPolicy(new SecurityScanDao.ScanPolicy(
+            null, "contract-policy", true, Severity.CRITICAL, true, false, true,
+            7200L, List.of("linux/amd64"), 2, "contract", now.plusSeconds(6),
+            now.plusSeconds(6)));
+    assertEquals(
+        1,
+        scans.replaceRepositoryPolicy(
+            policyId, replacementPolicy.id(), now.plusSeconds(6)));
+    SecurityScanDao.RepositoryScanConfig reboundConfig =
+        scans.findRepositoryConfig(repositoryId).orElseThrow();
+    assertEquals(replacementPolicy.id(), reboundConfig.policyId());
+    assertEquals(
+        config.configRevision() + 1,
+        reboundConfig.configRevision(),
+        "switching policy revisions must invalidate materialized repository decisions");
   }
 
   @Test

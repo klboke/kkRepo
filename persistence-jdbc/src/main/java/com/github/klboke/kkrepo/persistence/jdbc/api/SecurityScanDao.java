@@ -173,6 +173,13 @@ public interface SecurityScanDao {
 
   ScanPolicy createPolicy(ScanPolicy policy);
 
+  /**
+   * Moves repository configurations pinned to one immutable policy revision to its replacement.
+   * Historical scan results and waivers keep their original policy identity.
+   */
+  int replaceRepositoryPolicy(
+      long currentPolicyId, long replacementPolicyId, Instant updatedAt);
+
   ScanWaiver createWaiver(ScanWaiver waiver);
 
   Optional<ScanWaiver> findWaiver(long waiverId);

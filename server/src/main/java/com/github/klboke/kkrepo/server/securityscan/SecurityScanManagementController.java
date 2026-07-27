@@ -169,6 +169,25 @@ public class SecurityScanManagementController {
     return policy;
   }
 
+  @PutMapping("/policies/{policyId}")
+  public ScanPolicy revisePolicy(
+      @PathVariable("policyId") long policyId,
+      @RequestBody PolicyCommand command,
+      HttpServletRequest request) {
+    AuthenticatedSubject actor = actor(request);
+    ScanPolicy policy = service.revisePolicy(actor, policyId, command);
+    audit.record(
+        request,
+        actor,
+        "POLICY_REVISE",
+        null,
+        Map.of(
+            "previousPolicyId", policyId,
+            "policyId", policy.id(),
+            "policyRevision", policy.revision()));
+    return policy;
+  }
+
   @GetMapping("/waivers")
   public List<ScanWaiver> waivers(
       @RequestParam(name = "repositoryId", required = false) Long repositoryId,
