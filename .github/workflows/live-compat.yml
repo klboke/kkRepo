@@ -212,14 +212,14 @@ jobs:
 
       - name: Set up Python
         if: env.LIVE_COMPAT_SUITE == 'client-e2e'
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
       - name: Set up Python 3.9 for Ansible 2.9
         id: ansible-python29
         if: env.LIVE_COMPAT_SUITE == 'client-e2e'
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.9"
           update-environment: false
@@ -632,7 +632,7 @@ jobs:
           java-version: "25"
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.10"
 
