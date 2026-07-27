@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -194,6 +195,38 @@ class SecurityScanManagementServiceWaiverTest {
     assertEquals("FINDING", waiver.getValue().scopeType());
     assertEquals("CVE-2026-0041", waiver.getValue().advisorySelector());
     assertEquals("pkg:maven/com.acme/demo@1.0", waiver.getValue().packageSelector());
+  }
+
+  @Test
+  void findingWaiverMayBeCreatedWithoutExpiration() {
+    when(repositories.findById(11L)).thenReturn(Optional.of(repository(11L, "maven-hosted")));
+    when(assets.findAssetById(23L))
+        .thenReturn(Optional.of(asset(23L, 11L, "com/acme/demo/1.0/demo-1.0.jar")));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.allow());
+    when(scans.findFinding(41L)).thenReturn(Optional.of(finding(41L, 7L)));
+    when(scans.listRunSubjects(7L))
+        .thenReturn(List.of(new ScanRunSubject(7L, 11L, 23L, 3L, 1L, Instant.now())));
+    when(scans.createWaiver(any())).thenAnswer(invocation -> invocation.getArgument(0));
+    WaiverCommand command = new WaiverCommand(
+        "FINDING",
+        11L,
+        23L,
+        41L,
+        null,
+        null,
+        Map.of(),
+        "Risk accepted until this waiver is revoked",
+        null,
+        null,
+        null);
+
+    service.createWaiver(actor, command);
+
+    ArgumentCaptor<SecurityScanDao.ScanWaiver> waiver =
+        ArgumentCaptor.forClass(SecurityScanDao.ScanWaiver.class);
+    verify(scans).createWaiver(waiver.capture());
+    assertNull(waiver.getValue().expiresAt());
   }
 
   @Test

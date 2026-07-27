@@ -4380,7 +4380,7 @@ function renderSecurityScanWaivers() {
         <td>${escapeHtml(waiver.repository || "Global")}</td>
         <td title="${escapeHtml(waiver.assetPath || "")}">${escapeHtml(waiver.assetPath || "All artifacts")}</td>
         <td>${escapeHtml(selector)}</td>
-        <td>${escapeHtml(waiver.expiresAt ? formatDateTime(waiver.expiresAt) : "No expiry")}</td>
+        <td>${escapeHtml(waiver.expiresAt ? formatDateTime(waiver.expiresAt) : "Never expires")}</td>
         <td>${escapeHtml(waiver.approvedBy || "-")}</td><td>${escapeHtml(waiver.reason)}</td>
         <td class="actions-column"><button class="row-action security-scan-waiver-delete" data-id="${waiver.id}" type="button">delete</button></td></tr>`;
     }).join("")
@@ -4701,7 +4701,7 @@ function renderSecurityScanWaiverDetail(detail) {
           <div><span>Policy</span><strong>${escapeHtml(securityScanWaiverPolicyLabel(waiver))}</strong></div>
           <div><span>Approved by</span><strong>${escapeHtml(waiver.approvedBy || "-")}</strong></div>
           <div><span>Created</span><strong>${escapeHtml(formatDateTime(waiver.createdAt))}</strong></div>
-          <div><span>Expires</span><strong>${escapeHtml(waiver.expiresAt ? formatDateTime(waiver.expiresAt) : "No expiry")}</strong></div>
+          <div><span>Expires</span><strong>${escapeHtml(waiver.expiresAt ? formatDateTime(waiver.expiresAt) : "Never expires")}</strong></div>
           <div class="security-scan-waiver-detail-selector"><span>Exception</span><strong>${escapeHtml(waiver.advisorySelector || waiver.packageSelector || "-")}</strong></div>
         </div>
         <div class="security-scan-waiver-detail-reason"><span>Reason</span><p>${escapeHtml(waiver.reason || "-")}</p></div>
@@ -4788,8 +4788,11 @@ async function createSecurityScanWaiver(event) {
       { prefix: "Waiver fields missing" })) return;
   const targetIndex = Number(document.getElementById("security-scan-waiver-target").value);
   const target = securityScanWaiverContext?.targets?.[targetIndex];
-  const durationSeconds = Number(document.getElementById("security-scan-waiver-duration").value);
-  if (!target || !Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+  const durationValue = document.getElementById("security-scan-waiver-duration").value;
+  const neverExpires = durationValue === "never";
+  const durationSeconds = neverExpires ? null : Number(durationValue);
+  if (!target
+      || (!neverExpires && (!Number.isFinite(durationSeconds) || durationSeconds <= 0))) {
     showToast("Waiver target or expiration is no longer available.", "error");
     return;
   }
@@ -4804,7 +4807,9 @@ async function createSecurityScanWaiver(event) {
     reason: document.getElementById("security-scan-waiver-reason").value.trim(),
     policyId: null,
     policyRevision: null,
-    expiresAt: new Date(Date.now() + durationSeconds * 1000).toISOString()
+    expiresAt: neverExpires
+      ? null
+      : new Date(Date.now() + durationSeconds * 1000).toISOString()
   };
   try {
     const response = await fetch("/internal/security/scanning/waivers", {

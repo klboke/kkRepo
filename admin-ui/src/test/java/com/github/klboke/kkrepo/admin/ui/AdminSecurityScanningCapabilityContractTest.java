@@ -121,6 +121,7 @@ class AdminSecurityScanningCapabilityContractTest {
     assertTrue(index.contains("id=\"security-scan-waiver-target\" required"));
     assertTrue(index.contains("id=\"security-scan-waiver-duration\" required"));
     assertTrue(index.contains("<option value=\"604800\" selected>7 days</option>"));
+    assertTrue(index.contains("<option value=\"never\">Never expires</option>"));
     assertTrue(index.contains(
         "id=\"security-scan-waiver-reason\" rows=\"2\" required"));
     assertFalse(index.contains("<span>Asset ID</span>"));
@@ -131,7 +132,11 @@ class AdminSecurityScanningCapabilityContractTest {
         "/internal/security/scanning/findings/${encodeURIComponent(findingId)}/waiver-context"));
     assertTrue(javascript.contains("security-scan-finding-waive"));
     assertTrue(javascript.contains("findingId: securityScanWaiverContext.findingId"));
-    assertTrue(javascript.contains("expiresAt: new Date(Date.now() + durationSeconds * 1000)"));
+    assertTrue(javascript.contains("const neverExpires = durationValue === \"never\""));
+    assertTrue(javascript.contains("expiresAt: neverExpires"));
+    assertTrue(javascript.contains("? null"));
+    assertTrue(javascript.contains(": new Date(Date.now() + durationSeconds * 1000).toISOString()"));
+    assertTrue(javascript.contains("\"Never expires\""));
     assertTrue(javascript.contains("closeFormModal(\"security-scan-waiver-form\")"));
     assertTrue(javascript.contains("securityScanWaiverRequiredFields"));
     assertTrue(javascript.contains("selectSecurityScanTab(\"findings\")"));

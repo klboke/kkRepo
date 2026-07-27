@@ -808,7 +808,7 @@ waiver 字段至少包含：
 - advisory/package/finding selector。
 - reason。
 - created by / approved by。
-- expires at。
+- expires at（可为空；空值表示无期限，直到管理员主动撤销）。
 - policy revision。
 - audit timestamps。
 
@@ -820,9 +820,10 @@ waiver 的 finding 数量写入 policy evaluation。
 “仓库名 + 制品路径”并提交精确的 `finding_id + repository_id + asset_id`。漏洞编号、
 包名和内部 ID 均为只读上下文，不能由用户手填。服务端从 finding 固化 advisory 与
 package selector，使豁免在同一漏洞的后续重扫中继续有效，但不能扩散到其它漏洞。
-有效期必须从 1、7、30、90 天中选择，reason 必填。广域 API 豁免必须至少提供
-advisory 或 package selector；拒绝无 finding、无 selector 的全局或整仓“全部漏洞
-豁免”，历史空 selector 记录也不能匹配 finding。
+有效期可从 1、7、30、90 天或“无期限”中选择，默认 7 天，reason 必填。“无期限”
+必须由用户显式选择，并始终保留撤销入口，避免用任意超长日期表达永久风险接受。
+广域 API 豁免必须至少提供 advisory 或 package selector；拒绝无 finding、无
+selector 的全局或整仓“全部漏洞豁免”，历史空 selector 记录也不能匹配 finding。
 
 ## 状态机
 
@@ -1250,7 +1251,8 @@ API 列表使用稳定分页和有界 filter。description、raw report 和 SBOM
    - 列表不提供无上下文的“Create waiver”。新建 waiver 从 Findings 行内“waive”
      发起，通过统一弹窗展示只读的漏洞和包信息。
    - 弹窗中的适用制品只能从后端返回的关联仓库制品中选择，不允许手填 repository、
-     asset、finding ID；有效期使用 1、7、30、90 天选项且 reason 必填。
+     asset、finding ID；有效期使用 1、7、30、90 天或“无期限”，默认 7 天且
+     reason 必填；无期限豁免在列表和详情中明确标记，并可随时撤销。
    - 从 Findings 打开的新建和详情弹窗挂在扫描页面公共层，不嵌套在任一隐藏 tab
      panel 内，避免“状态已打开但祖先仍 hidden”导致弹窗不可见。
 
