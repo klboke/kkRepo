@@ -23,17 +23,32 @@ public class SecurityScanCandidateClassifier {
     if (asset == null || blob == null) {
       return notApplicable("MISSING_CONTENT");
     }
-    if (blob.size() < 0 || blob.size() > profile.maxInputBytes()) {
+    return classify(
+        asset.format(),
+        asset.path(),
+        asset.kind(),
+        asset.contentType(),
+        blob.size(),
+        profile);
+  }
+
+  Classification classify(
+      RepositoryFormat format,
+      String assetPath,
+      String assetKind,
+      String assetContentType,
+      long blobSize,
+      ScanProfile profile) {
+    if (blobSize < 0 || blobSize > profile.maxInputBytes()) {
       return new Classification(
           CandidateDisposition.REJECTED_BY_LIMIT,
           null,
           null,
           "INPUT_SIZE_LIMIT");
     }
-    String path = normalizePath(asset.path());
-    String kind = lower(asset.kind());
-    String mediaType = lower(asset.contentType());
-    RepositoryFormat format = asset.format();
+    String path = normalizePath(assetPath);
+    String kind = lower(assetKind);
+    String mediaType = lower(assetContentType);
 
     if (format == RepositoryFormat.DOCKER) {
       if (isDockerManifest(kind, mediaType, path)) {

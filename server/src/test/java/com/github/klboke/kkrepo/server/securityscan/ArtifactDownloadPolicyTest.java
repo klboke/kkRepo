@@ -5,23 +5,20 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
-import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
-import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
-import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.AssetPolicyState;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.AssetSecurityState;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.DownloadPolicySnapshot;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.RepositoryScanConfig;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanCandidate;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanProfile;
-import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
-import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
-import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.EnforcementMode;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.OciPlatformPolicy;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyAction;
@@ -33,32 +30,74 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 class ArtifactDownloadPolicyTest {
   private final SecurityScanDao scans = mock(SecurityScanDao.class);
-  private final RepositoryDao repositories = mock(RepositoryDao.class);
-  private final AssetDao assets = mock(AssetDao.class);
   private final SecurityScanningProperties properties = new SecurityScanningProperties();
+  private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
   private ArtifactDownloadPolicy policy;
 
   @BeforeEach
   void setUp() {
     policy = new ArtifactDownloadPolicy(
         scans,
-        repositories,
-        assets,
         new SecurityScanCandidateClassifier(),
         properties,
-        new SecurityScanMetrics(new SimpleMeterRegistry(), scans));
+        new SecurityScanMetrics(registry, scans));
   }
 
   @Test
   void disabledFeatureNeverTouchesTheHotPathDatabase() {
     assertEquals(PolicyDecision.ALLOW, policy.beforeRead(10L, 1L).decision());
-    verifyNoInteractions(assets, repositories, scans);
+    verifyNoInteractions(scans);
+  }
+
+  @Test
+  void missingAssetOrConfigurationAllowsAfterOneSnapshotLookup() {
+    properties.setEnabled(true);
+    when(scans.findDownloadPolicySnapshots(10L, null)).thenReturn(List.of());
+
+    assertEquals(PolicyDecision.ALLOW, policy.beforeRead(10L, null).decision());
+
+    verify(scans).findDownloadPolicySnapshots(10L, null);
+    verifyNoMoreInteractions(scans);
+  }
+
+  @Test
+  void disabledRepositoryConfigurationAllowsAfterOneSnapshotLookup() {
+    properties.setEnabled(true);
+    when(scans.findDownloadPolicySnapshots(10L, 1L)).thenReturn(List.of(snapshot(
+        disabledConfig(1L),
+        profile(),
+        null,
+        null,
+        null,
+        "com/acme/demo/1/demo-1.jar",
+        "artifact",
+        "application/java-archive")));
+
+    assertEquals(PolicyDecision.ALLOW, policy.beforeRead(10L, 1L).decision());
+
+    assertSingleSnapshotLookup(1L);
+  }
+
+  @Test
+  void snapshotFailureIsPropagatedAndTimedAsAnError() {
+    properties.setEnabled(true);
+    when(scans.findDownloadPolicySnapshots(10L, 1L))
+        .thenThrow(new IllegalStateException("database unavailable"));
+
+    assertThrows(IllegalStateException.class, () -> policy.beforeRead(10L, 1L));
+
+    assertEquals(
+        1L,
+        registry.get("kkrepo_security_policy_evaluation_duration_seconds")
+            .tags("format", "unknown", "outcome", "error")
+            .timer()
+            .count());
+    assertSingleSnapshotLookup(1L);
   }
 
   @Test
@@ -70,6 +109,7 @@ class ArtifactDownloadPolicyTest {
     assertEquals(PolicyDecision.BLOCK_VULNERABILITY, decision.decision());
     assertFalse(decision.enforced());
     assertTrue(decision.shadowBlocked());
+    assertSingleSnapshotLookup(1L);
   }
 
   @Test
@@ -81,68 +121,104 @@ class ArtifactDownloadPolicyTest {
 
     assertEquals(PolicyDecision.BLOCK_VULNERABILITY, failure.decision());
     assertFalse(failure.pending());
+    assertSingleSnapshotLookup(1L);
   }
 
   @Test
   void generationMismatchUsesTheConfiguredPendingAction() {
     arrange(EnforcementMode.ENFORCE, PolicyAction.BLOCK, complete(PolicyDecision.ALLOW));
-    when(scans.findCandidate(10L)).thenReturn(Optional.of(
-        new ScanCandidate(10L, 100L, 2L, 2L, Instant.EPOCH, Instant.EPOCH)));
+    when(scans.findDownloadPolicySnapshots(10L, 1L)).thenReturn(List.of(snapshot(
+        config(1L, EnforcementMode.ENFORCE, PolicyAction.BLOCK),
+        profile(),
+        new ScanCandidate(10L, 100L, 2L, 2L, Instant.EPOCH, Instant.EPOCH),
+        complete(PolicyDecision.ALLOW),
+        policyState(1L, PolicyDecision.ALLOW),
+        "com/acme/demo/1/demo-1.jar",
+        "artifact",
+        "application/java-archive")));
 
     ArtifactPolicyException failure =
         assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 1L));
 
     assertEquals(PolicyDecision.BLOCK_PENDING, failure.decision());
     assertTrue(failure.pending());
+    assertSingleSnapshotLookup(1L);
   }
 
   @Test
   void entryGroupAndMemberPoliciesChooseTheStricterEnforcedDecision() {
     arrange(EnforcementMode.AUDIT, PolicyAction.ALLOW, complete(PolicyDecision.BLOCK_VULNERABILITY));
-    when(repositories.findById(2L)).thenReturn(Optional.of(repository(2L, RepositoryType.GROUP)));
-    when(scans.findRepositoryConfig(2L)).thenReturn(Optional.of(
-        config(2L, EnforcementMode.ENFORCE, PolicyAction.ALLOW)));
-    when(scans.findAssetPolicyState(10L, 1L, 2L)).thenReturn(Optional.of(
-        policyState(2L, PolicyDecision.BLOCK_VULNERABILITY)));
+    ScanCandidate candidate =
+        new ScanCandidate(10L, 100L, 1L, 1L, Instant.EPOCH, Instant.EPOCH);
+    AssetSecurityState state = complete(PolicyDecision.BLOCK_VULNERABILITY);
+    when(scans.findDownloadPolicySnapshots(10L, 2L)).thenReturn(List.of(
+        snapshot(
+            config(1L, EnforcementMode.AUDIT, PolicyAction.ALLOW),
+            profile(),
+            candidate,
+            state,
+            policyState(1L, PolicyDecision.BLOCK_VULNERABILITY),
+            "com/acme/demo/1/demo-1.jar",
+            "artifact",
+            "application/java-archive"),
+        snapshot(
+            config(2L, EnforcementMode.ENFORCE, PolicyAction.ALLOW),
+            profile(),
+            candidate,
+            state,
+            policyState(2L, PolicyDecision.BLOCK_VULNERABILITY),
+            "com/acme/demo/1/demo-1.jar",
+            "artifact",
+            "application/java-archive")));
 
     ArtifactPolicyException failure =
         assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 2L));
 
     assertEquals(PolicyDecision.BLOCK_VULNERABILITY, failure.decision());
+    assertSingleSnapshotLookup(2L);
   }
 
   @Test
   void protocolMetadataIsNotApplicableAndAlwaysAllowed() {
     properties.setEnabled(true);
-    AssetRecord metadata = new AssetRecord(
-        10L, 1L, null, 100L, RepositoryFormat.MAVEN2,
+    when(scans.findDownloadPolicySnapshots(10L, 1L)).thenReturn(List.of(snapshot(
+        config(1L, EnforcementMode.ENFORCE, PolicyAction.BLOCK),
+        profile(),
+        null,
+        null,
+        null,
         "com/acme/maven-metadata.xml",
-        PersistenceHashes.pathHash("com/acme/maven-metadata.xml"),
-        "maven-metadata.xml", "metadata", "application/xml", 42L, null,
-        Instant.EPOCH, Map.of());
-    when(assets.findAssetWithBlobById(10L))
-        .thenReturn(Optional.of(new AssetDao.AssetWithBlob(metadata, blob())));
-    when(repositories.findById(1L))
-        .thenReturn(Optional.of(repository(1L, RepositoryType.HOSTED)));
-    when(scans.findRepositoryConfig(1L)).thenReturn(Optional.of(
-        config(1L, EnforcementMode.ENFORCE, PolicyAction.BLOCK)));
-    when(scans.findProfile(1L)).thenReturn(Optional.of(profile()));
+        "metadata",
+        "application/xml")));
 
     ArtifactDownloadPolicy.Decision decision = policy.beforeRead(10L, 1L);
 
     assertEquals(PolicyDecision.ALLOW, decision.decision());
     assertTrue(decision.enforced());
+    assertSingleSnapshotLookup(1L);
   }
 
   @Test
   void lifecycleStatesUseTheirConfiguredFailureActions() {
     arrange(EnforcementMode.ENFORCE, PolicyAction.BLOCK, complete(PolicyDecision.ALLOW));
-    when(scans.findAssetState(10L, 1L))
+    RepositoryScanConfig config =
+        config(1L, EnforcementMode.ENFORCE, PolicyAction.BLOCK);
+    ScanCandidate candidate =
+        new ScanCandidate(10L, 100L, 1L, 1L, Instant.EPOCH, Instant.EPOCH);
+    when(scans.findDownloadPolicySnapshots(10L, 1L))
         .thenReturn(
-            Optional.of(state(ScanState.NOT_APPLICABLE)),
-            Optional.of(state(ScanState.PENDING)),
-            Optional.of(state(ScanState.FAILED)),
-            Optional.of(state(ScanState.PARTIAL)));
+            List.of(snapshot(
+                config, profile(), candidate, state(ScanState.NOT_APPLICABLE), null,
+                "com/acme/demo/1/demo-1.jar", "artifact", "application/java-archive")),
+            List.of(snapshot(
+                config, profile(), candidate, state(ScanState.PENDING), null,
+                "com/acme/demo/1/demo-1.jar", "artifact", "application/java-archive")),
+            List.of(snapshot(
+                config, profile(), candidate, state(ScanState.FAILED), null,
+                "com/acme/demo/1/demo-1.jar", "artifact", "application/java-archive")),
+            List.of(snapshot(
+                config, profile(), candidate, state(ScanState.PARTIAL), null,
+                "com/acme/demo/1/demo-1.jar", "artifact", "application/java-archive")));
 
     assertEquals(PolicyDecision.ALLOW, policy.beforeRead(10L, 1L).decision());
     assertEquals(
@@ -157,34 +233,72 @@ class ArtifactDownloadPolicyTest {
         PolicyDecision.BLOCK_PARTIAL,
         assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 1L))
             .decision());
+    verify(scans, times(4)).findDownloadPolicySnapshots(10L, 1L);
+    verifyNoMoreInteractions(scans);
   }
 
   @Test
   void missingEnabledProfileUsesTheFailureAction() {
     arrange(EnforcementMode.ENFORCE, PolicyAction.ALLOW, complete(PolicyDecision.ALLOW));
-    when(scans.findProfile(1L)).thenReturn(Optional.empty());
+    when(scans.findDownloadPolicySnapshots(10L, 1L)).thenReturn(List.of(snapshot(
+        config(1L, EnforcementMode.ENFORCE, PolicyAction.ALLOW),
+        null,
+        null,
+        null,
+        null,
+        "com/acme/demo/1/demo-1.jar",
+        "artifact",
+        "application/java-archive")));
 
     assertEquals(
         PolicyDecision.BLOCK_SCAN_FAILED,
         assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 1L))
             .decision());
+    assertSingleSnapshotLookup(1L);
   }
 
   private void arrange(
       EnforcementMode mode, PolicyAction pendingAction, AssetSecurityState state) {
     properties.setEnabled(true);
-    when(assets.findAssetWithBlobById(10L))
-        .thenReturn(Optional.of(new AssetDao.AssetWithBlob(asset(), blob())));
-    when(repositories.findById(1L))
-        .thenReturn(Optional.of(repository(1L, RepositoryType.HOSTED)));
-    when(scans.findRepositoryConfig(1L))
-        .thenReturn(Optional.of(config(1L, mode, pendingAction)));
-    when(scans.findProfile(1L)).thenReturn(Optional.of(profile()));
-    when(scans.findCandidate(10L)).thenReturn(Optional.of(
-        new ScanCandidate(10L, 100L, 1L, 1L, Instant.EPOCH, Instant.EPOCH)));
-    when(scans.findAssetState(10L, 1L)).thenReturn(Optional.of(state));
-    when(scans.findAssetPolicyState(10L, 1L, 1L)).thenReturn(Optional.of(
-        policyState(1L, state.policyDecision())));
+    when(scans.findDownloadPolicySnapshots(10L, 1L)).thenReturn(List.of(snapshot(
+        config(1L, mode, pendingAction),
+        profile(),
+        new ScanCandidate(10L, 100L, 1L, 1L, Instant.EPOCH, Instant.EPOCH),
+        state,
+        policyState(1L, state.policyDecision()),
+        "com/acme/demo/1/demo-1.jar",
+        "artifact",
+        "application/java-archive")));
+  }
+
+  private void assertSingleSnapshotLookup(long entryRepositoryId) {
+    verify(scans).findDownloadPolicySnapshots(10L, entryRepositoryId);
+    verifyNoMoreInteractions(scans);
+  }
+
+  private static DownloadPolicySnapshot snapshot(
+      RepositoryScanConfig config,
+      ScanProfile profile,
+      ScanCandidate candidate,
+      AssetSecurityState state,
+      AssetPolicyState policyState,
+      String path,
+      String kind,
+      String contentType) {
+    return new DownloadPolicySnapshot(
+        10L,
+        1L,
+        RepositoryFormat.MAVEN2,
+        path,
+        kind,
+        contentType,
+        42L,
+        config,
+        profile,
+        candidate,
+        state,
+        null,
+        policyState);
   }
 
   private static RepositoryScanConfig config(
@@ -193,6 +307,13 @@ class ArtifactDownloadPolicyTest {
         repositoryId, true, 1L, true, true, mode, pendingAction,
         PolicyAction.BLOCK, PolicyAction.BLOCK, 86400L, null, 1L,
         Instant.EPOCH, Instant.EPOCH);
+  }
+
+  private static RepositoryScanConfig disabledConfig(long repositoryId) {
+    return new RepositoryScanConfig(
+        repositoryId, false, 1L, true, true, EnforcementMode.AUDIT,
+        PolicyAction.ALLOW, PolicyAction.ALLOW, PolicyAction.ALLOW,
+        86400L, null, 1L, Instant.EPOCH, Instant.EPOCH);
   }
 
   private static AssetSecurityState complete(PolicyDecision decision) {
@@ -224,27 +345,5 @@ class ArtifactDownloadPolicyTest {
         1024L, 100, 4096L, 1024L, 2, 30,
         OciPlatformPolicy.REQUIRED_SET, List.of("linux/amd64"),
         "a".repeat(64), 1L, Instant.EPOCH, Instant.EPOCH);
-  }
-
-  private static AssetRecord asset() {
-    return new AssetRecord(
-        10L, 1L, null, 100L, RepositoryFormat.MAVEN2, "com/acme/demo/1/demo-1.jar",
-        PersistenceHashes.pathHash("com/acme/demo/1/demo-1.jar"), "demo-1.jar",
-        "artifact", "application/java-archive", 42L, null, Instant.EPOCH, Map.of());
-  }
-
-  private static AssetBlobRecord blob() {
-    return new AssetBlobRecord(
-        100L, 1L, "blob://test/object",
-        PersistenceHashes.blobRefHash("blob://test/object"), "object",
-        PersistenceHashes.objectKeyHash("object"), "1".repeat(40),
-        "a".repeat(64), "2".repeat(32), 42L, "application/java-archive",
-        "test", "127.0.0.1", Instant.EPOCH, Instant.EPOCH, Map.of());
-  }
-
-  private static RepositoryRecord repository(long id, RepositoryType type) {
-    return new RepositoryRecord(
-        id, "repo-" + id, RepositoryFormat.MAVEN2, type, "maven2-" + type.name().toLowerCase(),
-        true, 1L, null, null, null, null, "ALLOW", true, Map.of());
   }
 }

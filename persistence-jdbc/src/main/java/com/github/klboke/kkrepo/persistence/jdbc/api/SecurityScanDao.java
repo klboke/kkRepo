@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.persistence.jdbc.api;
 
+import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.BackfillStatus;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.EnforcementMode;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.OciPlatformPolicy;
@@ -30,6 +31,16 @@ public interface SecurityScanDao {
   RepositoryScanConfig upsertRepositoryConfig(RepositoryScanConfig config);
 
   int bumpAllRepositoryConfigRevisions(Instant updatedAt);
+
+  /**
+   * Loads every authoritative input needed by the download gate in one database round trip.
+   *
+   * <p>The result contains at most one row for the source repository and one for the entry/group
+   * repository. Missing or disabled configurations remain explicit rows, while assets without a
+   * blob or without either configuration produce an empty result.
+   */
+  List<DownloadPolicySnapshot> findDownloadPolicySnapshots(
+      long assetId, Long entryRepositoryId);
 
   /**
    * Folds a generic artifact content-change event into the scan-specific candidate projection.
@@ -290,6 +301,21 @@ public interface SecurityScanDao {
       long configRevision,
       Instant createdAt,
       Instant updatedAt) {}
+
+  record DownloadPolicySnapshot(
+      long assetId,
+      long sourceRepositoryId,
+      RepositoryFormat format,
+      String path,
+      String kind,
+      String contentType,
+      long blobSize,
+      RepositoryScanConfig config,
+      ScanProfile profile,
+      ScanCandidate candidate,
+      AssetSecurityState assetState,
+      ScanPolicy policy,
+      AssetPolicyState policyState) {}
 
   record ScanCandidate(
       long assetId,

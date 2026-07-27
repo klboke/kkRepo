@@ -95,6 +95,20 @@ public class SecurityScanMetrics {
         .increment();
   }
 
+  public void recordPolicyEvaluation(String format, String outcome, Timer.Sample sample) {
+    if (sample == null) return;
+    sample.stop(Timer.builder("kkrepo_security_policy_evaluation_duration_seconds")
+        .description("Artifact download security policy evaluation duration")
+        .tags("format", tag(format), "outcome", tag(outcome))
+        .serviceLevelObjectives(
+            Duration.ofMillis(1),
+            Duration.ofMillis(5),
+            Duration.ofMillis(10),
+            Duration.ofMillis(25),
+            Duration.ofMillis(50))
+        .register(registry));
+  }
+
   public void recordInputBytes(String format, long bytes) {
     if (bytes <= 0) return;
     Counter.builder("kkrepo_security_scan_input_bytes_total")

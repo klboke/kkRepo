@@ -5,6 +5,7 @@ import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRow
 import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRows.nullableTimestamp;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobReferenceDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
@@ -281,6 +282,125 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       nullableInstant(rs, "created_at"),
       nullableInstant(rs, "updated_at"));
 
+  private final RowMapper<DownloadPolicySnapshot> downloadPolicySnapshotMapper =
+      (rs, rowNum) -> {
+        RepositoryScanConfig config = new RepositoryScanConfig(
+            rs.getLong("dp_config_repository_id"),
+            rs.getBoolean("dp_config_enabled"),
+            rs.getLong("dp_config_profile_id"),
+            rs.getBoolean("dp_config_scan_hosted_content"),
+            rs.getBoolean("dp_config_scan_proxy_content"),
+            enumValue(EnforcementMode.class, rs.getString("dp_config_enforcement_mode")),
+            enumValue(PolicyAction.class, rs.getString("dp_config_pending_action")),
+            enumValue(PolicyAction.class, rs.getString("dp_config_failure_action")),
+            enumValue(PolicyAction.class, rs.getString("dp_config_partial_action")),
+            nullableLong(rs, "dp_config_max_result_age_seconds"),
+            nullableLong(rs, "dp_config_policy_id"),
+            rs.getLong("dp_config_revision"),
+            nullableInstant(rs, "dp_config_created_at"),
+            nullableInstant(rs, "dp_config_updated_at"));
+        ScanProfile profile = rs.getObject("dp_profile_id") == null ? null : new ScanProfile(
+            rs.getLong("dp_profile_id"),
+            rs.getString("dp_profile_name"),
+            rs.getBoolean("dp_profile_enabled"),
+            rs.getString("dp_profile_catalog_engine"),
+            rs.getString("dp_profile_matcher_engine"),
+            list(rs.getString("dp_profile_scanner_types_json")),
+            json.read(rs.getString("dp_profile_target_rules_json")),
+            rs.getLong("dp_profile_max_input_bytes"),
+            rs.getInt("dp_profile_max_archive_entries"),
+            rs.getLong("dp_profile_max_uncompressed_bytes"),
+            rs.getLong("dp_profile_max_single_file_bytes"),
+            rs.getInt("dp_profile_max_nested_depth"),
+            rs.getInt("dp_profile_timeout_seconds"),
+            enumValue(
+                OciPlatformPolicy.class,
+                rs.getString("dp_profile_oci_platform_policy")),
+            list(rs.getString("dp_profile_required_platforms_json")),
+            rs.getString("dp_profile_configuration_digest"),
+            rs.getLong("dp_profile_revision"),
+            nullableInstant(rs, "dp_profile_created_at"),
+            nullableInstant(rs, "dp_profile_updated_at"));
+        ScanCandidate candidate =
+            rs.getObject("dp_candidate_asset_id") == null ? null : new ScanCandidate(
+                rs.getLong("dp_candidate_asset_id"),
+                nullableLong(rs, "dp_candidate_asset_blob_id"),
+                rs.getLong("dp_candidate_content_generation"),
+                rs.getLong("dp_candidate_enqueued_generation"),
+                nullableInstant(rs, "dp_candidate_changed_at"),
+                nullableInstant(rs, "dp_candidate_updated_at"));
+        AssetSecurityState state =
+            rs.getObject("dp_state_asset_id") == null ? null : new AssetSecurityState(
+                rs.getLong("dp_state_asset_id"),
+                rs.getLong("dp_state_profile_id"),
+                rs.getLong("dp_state_content_generation"),
+                rs.getBytes("dp_state_subject_identity_hash"),
+                nullableLong(rs, "dp_state_latest_scan_run_id"),
+                enumValue(ScanState.class, rs.getString("dp_state_scan_state")),
+                enumValue(
+                    ScanCompleteness.class,
+                    rs.getString("dp_state_scan_completeness")),
+                rs.getBoolean("dp_state_inventory_complete"),
+                enumValue(Severity.class, rs.getString("dp_state_max_severity")),
+                integerMap(rs.getString("dp_state_finding_counts_json")),
+                nullableLong(rs, "dp_state_policy_id"),
+                nullableLong(rs, "dp_state_policy_revision"),
+                enumValue(
+                    PolicyDecision.class,
+                    rs.getString("dp_state_policy_decision")),
+                rs.getString("dp_state_policy_reason_code"),
+                nullableInstant(rs, "dp_state_stale_at"),
+                nullableInstant(rs, "dp_state_last_evaluated_at"),
+                rs.getLong("dp_state_version"));
+        ScanPolicy policy = rs.getObject("dp_policy_id") == null ? null : new ScanPolicy(
+            rs.getLong("dp_policy_id"),
+            rs.getString("dp_policy_name"),
+            rs.getBoolean("dp_policy_enabled"),
+            enumValue(Severity.class, rs.getString("dp_policy_block_severity")),
+            rs.getBoolean("dp_policy_only_fixable"),
+            rs.getBoolean("dp_policy_block_unknown_severity"),
+            rs.getBoolean("dp_policy_require_complete_inventory"),
+            nullableLong(rs, "dp_policy_max_result_age_seconds"),
+            list(rs.getString("dp_policy_required_platforms_json")),
+            rs.getLong("dp_policy_revision"),
+            rs.getString("dp_policy_created_by"),
+            nullableInstant(rs, "dp_policy_created_at"),
+            nullableInstant(rs, "dp_policy_updated_at"));
+        AssetPolicyState policyState =
+            rs.getObject("dp_policy_state_asset_id") == null ? null : new AssetPolicyState(
+                rs.getLong("dp_policy_state_asset_id"),
+                rs.getLong("dp_policy_state_profile_id"),
+                rs.getLong("dp_policy_state_repository_id"),
+                rs.getLong("dp_policy_state_content_generation"),
+                nullableLong(rs, "dp_policy_state_latest_scan_run_id"),
+                nullableLong(rs, "dp_policy_state_policy_id"),
+                nullableLong(rs, "dp_policy_state_policy_revision"),
+                rs.getLong("dp_policy_state_config_revision"),
+                enumValue(
+                    PolicyDecision.class,
+                    rs.getString("dp_policy_state_policy_decision")),
+                rs.getString("dp_policy_state_policy_reason_code"),
+                rs.getInt("dp_policy_state_waived_findings"),
+                nullableInstant(rs, "dp_policy_state_stale_at"),
+                nullableInstant(rs, "dp_policy_state_next_waiver_expiry"),
+                nullableInstant(rs, "dp_policy_state_last_evaluated_at"),
+                rs.getLong("dp_policy_state_version"));
+        return new DownloadPolicySnapshot(
+            rs.getLong("dp_asset_id"),
+            rs.getLong("dp_source_repository_id"),
+            enumValue(RepositoryFormat.class, rs.getString("dp_format")),
+            rs.getString("dp_path"),
+            rs.getString("dp_kind"),
+            rs.getString("dp_content_type"),
+            rs.getLong("dp_blob_size"),
+            config,
+            profile,
+            candidate,
+            state,
+            policy,
+            policyState);
+      };
+
   private final RowMapper<ScanWaiver> waiverMapper = (rs, rowNum) -> new ScanWaiver(
       rs.getLong("id"),
       rs.getString("scope_type"),
@@ -371,6 +491,120 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         "SELECT * FROM repository_security_scan_config WHERE repository_id = ?",
         configMapper,
         repositoryId).stream().findFirst();
+  }
+
+  @Override
+  public List<DownloadPolicySnapshot> findDownloadPolicySnapshots(
+      long assetId, Long entryRepositoryId) {
+    return jdbc.query("""
+        SELECT
+          a.id AS dp_asset_id,
+          a.repository_id AS dp_source_repository_id,
+          a.format AS dp_format,
+          a.path AS dp_path,
+          a.kind AS dp_kind,
+          a.content_type AS dp_content_type,
+          b.size AS dp_blob_size,
+          c.repository_id AS dp_config_repository_id,
+          c.enabled AS dp_config_enabled,
+          c.profile_id AS dp_config_profile_id,
+          c.scan_hosted_content AS dp_config_scan_hosted_content,
+          c.scan_proxy_content AS dp_config_scan_proxy_content,
+          c.enforcement_mode AS dp_config_enforcement_mode,
+          c.pending_action AS dp_config_pending_action,
+          c.failure_action AS dp_config_failure_action,
+          c.partial_action AS dp_config_partial_action,
+          c.max_result_age_seconds AS dp_config_max_result_age_seconds,
+          c.policy_id AS dp_config_policy_id,
+          c.config_revision AS dp_config_revision,
+          c.created_at AS dp_config_created_at,
+          c.updated_at AS dp_config_updated_at,
+          profile.id AS dp_profile_id,
+          profile.name AS dp_profile_name,
+          profile.enabled AS dp_profile_enabled,
+          profile.catalog_engine AS dp_profile_catalog_engine,
+          profile.matcher_engine AS dp_profile_matcher_engine,
+          profile.scanner_types_json AS dp_profile_scanner_types_json,
+          profile.target_rules_json AS dp_profile_target_rules_json,
+          profile.max_input_bytes AS dp_profile_max_input_bytes,
+          profile.max_archive_entries AS dp_profile_max_archive_entries,
+          profile.max_uncompressed_bytes AS dp_profile_max_uncompressed_bytes,
+          profile.max_single_file_bytes AS dp_profile_max_single_file_bytes,
+          profile.max_nested_depth AS dp_profile_max_nested_depth,
+          profile.timeout_seconds AS dp_profile_timeout_seconds,
+          profile.oci_platform_policy AS dp_profile_oci_platform_policy,
+          profile.required_platforms_json AS dp_profile_required_platforms_json,
+          profile.configuration_digest AS dp_profile_configuration_digest,
+          profile.revision AS dp_profile_revision,
+          profile.created_at AS dp_profile_created_at,
+          profile.updated_at AS dp_profile_updated_at,
+          candidate.asset_id AS dp_candidate_asset_id,
+          candidate.asset_blob_id AS dp_candidate_asset_blob_id,
+          candidate.content_generation AS dp_candidate_content_generation,
+          candidate.enqueued_generation AS dp_candidate_enqueued_generation,
+          candidate.changed_at AS dp_candidate_changed_at,
+          candidate.updated_at AS dp_candidate_updated_at,
+          state.asset_id AS dp_state_asset_id,
+          state.profile_id AS dp_state_profile_id,
+          state.content_generation AS dp_state_content_generation,
+          state.subject_identity_hash AS dp_state_subject_identity_hash,
+          state.latest_scan_run_id AS dp_state_latest_scan_run_id,
+          state.scan_state AS dp_state_scan_state,
+          state.scan_completeness AS dp_state_scan_completeness,
+          state.inventory_complete AS dp_state_inventory_complete,
+          state.max_severity AS dp_state_max_severity,
+          state.finding_counts_json AS dp_state_finding_counts_json,
+          state.policy_id AS dp_state_policy_id,
+          state.policy_revision AS dp_state_policy_revision,
+          state.policy_decision AS dp_state_policy_decision,
+          state.policy_reason_code AS dp_state_policy_reason_code,
+          state.stale_at AS dp_state_stale_at,
+          state.last_evaluated_at AS dp_state_last_evaluated_at,
+          state.version AS dp_state_version,
+          policy.id AS dp_policy_id,
+          policy.name AS dp_policy_name,
+          policy.enabled AS dp_policy_enabled,
+          policy.block_severity AS dp_policy_block_severity,
+          policy.only_fixable AS dp_policy_only_fixable,
+          policy.block_unknown_severity AS dp_policy_block_unknown_severity,
+          policy.require_complete_inventory AS dp_policy_require_complete_inventory,
+          policy.max_result_age_seconds AS dp_policy_max_result_age_seconds,
+          policy.required_platforms_json AS dp_policy_required_platforms_json,
+          policy.revision AS dp_policy_revision,
+          policy.created_by AS dp_policy_created_by,
+          policy.created_at AS dp_policy_created_at,
+          policy.updated_at AS dp_policy_updated_at,
+          policy_state.asset_id AS dp_policy_state_asset_id,
+          policy_state.profile_id AS dp_policy_state_profile_id,
+          policy_state.repository_id AS dp_policy_state_repository_id,
+          policy_state.content_generation AS dp_policy_state_content_generation,
+          policy_state.latest_scan_run_id AS dp_policy_state_latest_scan_run_id,
+          policy_state.policy_id AS dp_policy_state_policy_id,
+          policy_state.policy_revision AS dp_policy_state_policy_revision,
+          policy_state.config_revision AS dp_policy_state_config_revision,
+          policy_state.policy_decision AS dp_policy_state_policy_decision,
+          policy_state.policy_reason_code AS dp_policy_state_policy_reason_code,
+          policy_state.waived_findings AS dp_policy_state_waived_findings,
+          policy_state.stale_at AS dp_policy_state_stale_at,
+          policy_state.next_waiver_expiry AS dp_policy_state_next_waiver_expiry,
+          policy_state.last_evaluated_at AS dp_policy_state_last_evaluated_at,
+          policy_state.version AS dp_policy_state_version
+        FROM asset a
+        JOIN asset_blob b ON b.id = a.asset_blob_id
+        JOIN repository_security_scan_config c
+          ON c.repository_id = a.repository_id OR c.repository_id = ?
+        LEFT JOIN security_scan_profile profile ON profile.id = c.profile_id
+        LEFT JOIN security_scan_candidate candidate ON candidate.asset_id = a.id
+        LEFT JOIN asset_security_state state
+          ON state.asset_id = a.id AND state.profile_id = c.profile_id
+        LEFT JOIN security_scan_policy policy ON policy.id = c.policy_id
+        LEFT JOIN asset_security_policy_state policy_state
+          ON policy_state.asset_id = a.id
+         AND policy_state.profile_id = c.profile_id
+         AND policy_state.repository_id = c.repository_id
+        WHERE a.id = ?
+        ORDER BY c.repository_id
+        """, downloadPolicySnapshotMapper, entryRepositoryId, assetId);
   }
 
   @Override

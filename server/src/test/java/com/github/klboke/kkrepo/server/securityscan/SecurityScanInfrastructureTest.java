@@ -86,6 +86,8 @@ class SecurityScanInfrastructureTest {
         "MAVEN2", ScanStage.CATALOG_AND_MATCH, RequestReason.MANUAL, "success", taskTimer);
     metrics.recordPolicy("MAVEN2", PolicyDecision.BLOCK_VULNERABILITY, true);
     metrics.recordPolicy(null, null, false);
+    metrics.recordPolicyEvaluation("MAVEN2", "allow", metrics.start());
+    metrics.recordPolicyEvaluation("MAVEN2", "allow", null);
     metrics.recordInputBytes("MAVEN2", 1024);
     metrics.recordInputBytes("MAVEN2", 0);
     metrics.observeScanner(true, Instant.now().minusSeconds(60));
@@ -102,6 +104,13 @@ class SecurityScanInfrastructureTest {
         registry.get("kkrepo_security_scan_tasks_total")
             .tag("format", "maven2")
             .counter()
+            .count());
+    assertEquals(
+        1L,
+        registry.get("kkrepo_security_policy_evaluation_duration_seconds")
+            .tag("format", "maven2")
+            .tag("outcome", "allow")
+            .timer()
             .count());
   }
 

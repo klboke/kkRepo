@@ -756,8 +756,8 @@ title、description 和 URL 都来自外部数据，进入 UI 前必须转义并
 asset 当前 Blob、generation 或 profile 与 state 不一致时，读取逻辑必须返回 `STALE`，
 不能继续使用旧的 `ALLOW`。
 
-该表的 `version` 用于节点本地短 TTL cache 失效。cache 丢失只增加数据库读取，不改变
-策略正确性。
+该表的 `version` 单调标识状态更新，便于并发诊断和后续安全地引入可重建读缓存；当前
+下载阻断路径不使用节点本地 decision cache，始终以数据库聚合快照为准。
 
 ### `asset_security_policy_state`
 
@@ -781,10 +781,12 @@ policy、结果年龄和 waiver。为避免一个入口覆盖另一个入口的�
 - `last_evaluated_at`
 - `version`
 
-下载热路径同时校验 candidate generation、最新 run、config/policy revision、结果年龄
-和下一次 waiver 到期时间。任一字段不一致时返回 pending，不在请求内查询 finding。
-后台 reconciler 使用有界、确定性去重的 `POLICY_ONLY` 任务重新物化；多副本同时运行
-不会产生不同的最终决定。
+下载热路径通过一次聚合查询读取 asset/blob 分类字段、member 与 entry/group 配置、
+profile、candidate、最新 state、policy 和对应的 policy state，并同时校验 candidate
+generation、最新 run、config/policy revision、结果年龄和下一次 waiver 到期时间。
+任一字段不一致时返回 pending，不在请求内查询 finding，也不把节点本地 cache 作为
+阻断依据。后台 reconciler 使用有界、确定性去重的 `POLICY_ONLY` 任务重新物化；多副本
+同时运行不会产生不同的最终决定。
 
 ### `security_scan_policy` 与 `security_scan_waiver`
 
@@ -1303,6 +1305,7 @@ Browse UI 第一阶段只显示有权限用户可见的状态徽标和最后扫�
 | `kkrepo_security_scan_scanner_ready` | gauge | scanner readiness |
 | `kkrepo_security_scan_database_age_seconds` | gauge | 漏洞数据库年龄 |
 | `kkrepo_security_policy_decisions_total` | counter | allow/block/shadow decision |
+| `kkrepo_security_policy_evaluation_duration_seconds` | timer | 下载策略判定耗时，按 format/outcome 分类 |
 
 允许的低基数标签：
 
@@ -1521,7 +1524,7 @@ Enforce 模式：
 - 大型 SBOM 与 finding 投影。
 - 100 万 asset backfill 对数据库和线上请求的影响。
 - 多副本 claim 吞吐与 scanner backpressure。
-- 下载热路径 policy cache 命中/未命中延迟。
+- 下载热路径 direct 与 group 聚合快照查询的 p50/p95/p99、吞吐及数据库调用次数。
 - OCI 多平台镜像扫描和 layer 复用。
 
 ## 实施顺序

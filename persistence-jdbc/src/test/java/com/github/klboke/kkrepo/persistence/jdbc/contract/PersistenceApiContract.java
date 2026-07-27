@@ -394,6 +394,51 @@ public abstract class PersistenceApiContract {
         PolicyDecision.BLOCK_VULNERABILITY,
         scans.findAssetPolicyState(assetId, profileId, repositoryId)
             .orElseThrow().policyDecision());
+
+    List<SecurityScanDao.DownloadPolicySnapshot> directSnapshots =
+        scans.findDownloadPolicySnapshots(assetId, repositoryId);
+    assertEquals(1, directSnapshots.size());
+    SecurityScanDao.DownloadPolicySnapshot directSnapshot = directSnapshots.getFirst();
+    assertEquals(assetId, directSnapshot.assetId());
+    assertEquals(repositoryId, directSnapshot.sourceRepositoryId());
+    assertEquals(RepositoryFormat.MAVEN2, directSnapshot.format());
+    assertEquals(path, directSnapshot.path());
+    assertEquals("ARTIFACT", directSnapshot.kind());
+    assertEquals("application/java-archive", directSnapshot.contentType());
+    assertEquals(42L, directSnapshot.blobSize());
+    assertEquals(repositoryId, directSnapshot.config().repositoryId());
+    assertEquals(profileId, directSnapshot.profile().id());
+    assertEquals(artifactBlobId, directSnapshot.candidate().assetBlobId());
+    assertEquals(runId, directSnapshot.assetState().latestScanRunId());
+    assertEquals(policyId, directSnapshot.policy().id());
+    assertEquals(
+        PolicyDecision.BLOCK_VULNERABILITY,
+        directSnapshot.policyState().policyDecision());
+    assertEquals(1, scans.findDownloadPolicySnapshots(assetId, null).size());
+
+    SecurityScanDao.RepositoryScanConfig groupConfig = scans.upsertRepositoryConfig(
+        new SecurityScanDao.RepositoryScanConfig(
+            groupRepositoryId, true, profileId, true, true, EnforcementMode.ENFORCE,
+            PolicyAction.BLOCK, PolicyAction.BLOCK, PolicyAction.BLOCK,
+            3600L, null, 1, now, now));
+    List<SecurityScanDao.DownloadPolicySnapshot> groupSnapshots =
+        scans.findDownloadPolicySnapshots(assetId, groupRepositoryId);
+    assertEquals(2, groupSnapshots.size());
+    SecurityScanDao.DownloadPolicySnapshot sourceContext = groupSnapshots.stream()
+        .filter(row -> row.config().repositoryId() == repositoryId)
+        .findFirst()
+        .orElseThrow();
+    SecurityScanDao.DownloadPolicySnapshot groupContext = groupSnapshots.stream()
+        .filter(row -> row.config().repositoryId() == groupRepositoryId)
+        .findFirst()
+        .orElseThrow();
+    assertEquals(policyId, sourceContext.policy().id());
+    assertEquals(groupConfig.configRevision(), groupContext.config().configRevision());
+    assertEquals(profileId, groupContext.profile().id());
+    assertEquals(runId, groupContext.assetState().latestScanRunId());
+    assertNull(groupContext.policy());
+    assertNull(groupContext.policyState());
+
     assertTrue(scans.listPolicyEvaluationTargets(
         repositoryId, repositoryId, profileId, config.configRevision(),
         policyId, 1L, 0, now.plusSeconds(3), 10).isEmpty());

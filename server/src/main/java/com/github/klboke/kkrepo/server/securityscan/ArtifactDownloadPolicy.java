@@ -1,15 +1,13 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
-import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
-import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.AssetPolicyState;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.AssetSecurityState;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.DownloadPolicySnapshot;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.RepositoryScanConfig;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanCandidate;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanPolicy;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanProfile;
-import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.CandidateDisposition;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.EnforcementMode;
@@ -19,19 +17,19 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanState;
 import com.github.klboke.kkrepo.server.docker.DockerAuthService;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.RepositorySecurityFilter;
+import io.micrometer.core.instrument.Timer;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
 /**
  * Evaluates the concrete member asset after repository resolution and before any response body is
- * opened. Shared database state is always authoritative; no node-local cache is used for blocking.
+ * opened. All authoritative inputs are loaded in one database snapshot query; no node-local cache
+ * is used for blocking.
  */
 @Service
 public class ArtifactDownloadPolicy {
@@ -40,22 +38,16 @@ public class ArtifactDownloadPolicy {
   private static final int DEFAULT_RETRY_AFTER_SECONDS = 30;
 
   private final SecurityScanDao scans;
-  private final RepositoryDao repositories;
-  private final AssetDao assets;
   private final SecurityScanCandidateClassifier classifier;
   private final SecurityScanningProperties properties;
   private final SecurityScanMetrics metrics;
 
   public ArtifactDownloadPolicy(
       SecurityScanDao scans,
-      RepositoryDao repositories,
-      AssetDao assets,
       SecurityScanCandidateClassifier classifier,
       SecurityScanningProperties properties,
       SecurityScanMetrics metrics) {
     this.scans = scans;
-    this.repositories = repositories;
-    this.assets = assets;
     this.classifier = classifier;
     this.properties = properties;
     this.metrics = metrics;
@@ -67,48 +59,63 @@ public class ArtifactDownloadPolicy {
 
   public Decision beforeRead(long assetId, Long entryRepositoryId) {
     if (!properties.isEnabled() || internalScannerRequest()) return Decision.allow();
-    AssetDao.AssetWithBlob content = assets.findAssetWithBlobById(assetId).orElse(null);
-    if (content == null || content.blob() == null) return Decision.allow();
-    AssetRecord asset = content.asset();
-    RepositoryRecord source = repositories.findById(asset.repositoryId()).orElse(null);
-    if (source == null) return Decision.allow();
-    RepositoryRecord entry = entryRepositoryId == null
-        ? source : repositories.findById(entryRepositoryId).orElse(source);
-
-    List<RepositoryScanConfig> configs = effectiveConfigs(source.id(), entry.id());
-    List<Evaluation> evaluations = new ArrayList<>();
-    for (RepositoryScanConfig config : configs) {
-      if (!config.enabled()) continue;
-      ScanProfile profile = scans.findProfile(config.profileId()).filter(ScanProfile::enabled)
+    Timer.Sample sample = metrics.start();
+    String format = null;
+    String outcome = "allow";
+    try {
+      List<DownloadPolicySnapshot> snapshots =
+          scans.findDownloadPolicySnapshots(assetId, entryRepositoryId);
+      List<Evaluation> evaluations = new ArrayList<>(snapshots.size());
+      for (DownloadPolicySnapshot snapshot : snapshots) {
+        if (format == null && snapshot.format() != null) {
+          format = snapshot.format().name();
+        }
+        RepositoryScanConfig config = snapshot.config();
+        if (!config.enabled()) continue;
+        ScanProfile profile = snapshot.profile();
+        if (profile == null || !profile.enabled()) {
+          evaluations.add(action(
+              config, config.failureAction(), PolicyDecision.BLOCK_SCAN_FAILED));
+          continue;
+        }
+        var classification = classifier.classify(
+            snapshot.format(),
+            snapshot.path(),
+            snapshot.kind(),
+            snapshot.contentType(),
+            snapshot.blobSize(),
+            profile);
+        if (classification.disposition() != CandidateDisposition.SCANNABLE) {
+          evaluations.add(new Evaluation(config, PolicyDecision.ALLOW, false));
+          continue;
+        }
+        evaluations.add(evaluate(snapshot));
+      }
+      Evaluation strictest = evaluations.stream()
+          .max(Comparator.comparingInt(ArtifactDownloadPolicy::rank))
           .orElse(null);
-      if (profile == null) {
-        evaluations.add(action(config, config.failureAction(), PolicyDecision.BLOCK_SCAN_FAILED));
-        continue;
+      if (strictest == null) return Decision.allow();
+      boolean enforce = strictest.config().enforcementMode() == EnforcementMode.ENFORCE;
+      metrics.recordPolicy(format, strictest.decision(), enforce);
+      if (enforce && strictest.blocked()) {
+        outcome = "block";
+        throw new ArtifactPolicyException(
+            strictest.decision(), DEFAULT_RETRY_AFTER_SECONDS);
       }
-      var classification = classifier.classify(asset, content.blob(), profile);
-      if (classification.disposition() != CandidateDisposition.SCANNABLE) {
-        evaluations.add(new Evaluation(config, PolicyDecision.ALLOW, false));
-        continue;
-      }
-      evaluations.add(evaluate(config, profile, asset.id()));
+      outcome = !enforce && strictest.blocked() ? "shadow" : "allow";
+      return new Decision(strictest.decision(), enforce, !enforce && strictest.blocked());
+    } catch (RuntimeException e) {
+      if (!"block".equals(outcome)) outcome = "error";
+      throw e;
+    } finally {
+      metrics.recordPolicyEvaluation(format, outcome, sample);
     }
-    Evaluation strictest = evaluations.stream()
-        .max(Comparator.comparingInt(ArtifactDownloadPolicy::rank))
-        .orElse(null);
-    if (strictest == null) return Decision.allow();
-    boolean enforce = strictest.config().enforcementMode() == EnforcementMode.ENFORCE;
-    metrics.recordPolicy(asset.format().name(), strictest.decision(), enforce);
-    if (enforce && strictest.blocked()) {
-      throw new ArtifactPolicyException(
-          strictest.decision(), DEFAULT_RETRY_AFTER_SECONDS);
-    }
-    return new Decision(strictest.decision(), enforce, !enforce && strictest.blocked());
   }
 
-  private Evaluation evaluate(
-      RepositoryScanConfig config, ScanProfile profile, long assetId) {
-    ScanCandidate candidate = scans.findCandidate(assetId).orElse(null);
-    AssetSecurityState state = scans.findAssetState(assetId, profile.id()).orElse(null);
+  private Evaluation evaluate(DownloadPolicySnapshot snapshot) {
+    RepositoryScanConfig config = snapshot.config();
+    ScanCandidate candidate = snapshot.candidate();
+    AssetSecurityState state = snapshot.assetState();
     if (candidate == null || state == null
         || state.contentGeneration() != candidate.contentGeneration()) {
       return action(config, config.pendingAction(), PolicyDecision.BLOCK_PENDING);
@@ -123,21 +130,19 @@ public class ArtifactDownloadPolicy {
           action(config, config.failureAction(), PolicyDecision.BLOCK_SCAN_FAILED);
       case PARTIAL ->
           action(config, config.partialAction(), PolicyDecision.BLOCK_PARTIAL);
-      case COMPLETE -> evaluateComplete(config, profile, candidate, state);
+      case COMPLETE -> evaluateComplete(snapshot, candidate, state);
       case NOT_APPLICABLE -> new Evaluation(config, PolicyDecision.ALLOW, false);
     };
   }
 
   private Evaluation evaluateComplete(
-      RepositoryScanConfig config,
-      ScanProfile profile,
+      DownloadPolicySnapshot snapshot,
       ScanCandidate candidate,
       AssetSecurityState state) {
+    RepositoryScanConfig config = snapshot.config();
     Instant now = Instant.now();
-    ScanPolicy currentPolicy =
-        config.policyId() == null ? null : scans.findPolicy(config.policyId()).orElse(null);
-    AssetPolicyState policyState =
-        scans.findAssetPolicyState(state.assetId(), profile.id(), config.repositoryId()).orElse(null);
+    ScanPolicy currentPolicy = snapshot.policy();
+    AssetPolicyState policyState = snapshot.policyState();
     boolean policyMismatch = config.policyId() == null
         ? policyState != null
             && (policyState.policyId() != null || policyState.policyRevision() != null)
@@ -160,16 +165,6 @@ public class ArtifactDownloadPolicy {
     PolicyDecision decision = policyState.policyDecision() == null
         ? PolicyDecision.ALLOW : policyState.policyDecision();
     return new Evaluation(config, decision, decision.blocked());
-  }
-
-  private List<RepositoryScanConfig> effectiveConfigs(long sourceId, long entryId) {
-    Set<Long> repositoryIds = new LinkedHashSet<>();
-    repositoryIds.add(sourceId);
-    repositoryIds.add(entryId);
-    return repositoryIds.stream()
-        .map(scans::findRepositoryConfig)
-        .flatMap(java.util.Optional::stream)
-        .toList();
   }
 
   private static Evaluation action(
