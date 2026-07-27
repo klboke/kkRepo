@@ -33,4 +33,8 @@ KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL="$(openssl rand -hex 32)" \
 docker compose -f docker-compose.quickstart.yml up -d
 ```
 
+The Compose profile starts this adapter container, while
+`KKREPO_SECURITY_SCANNING_ENABLED=true` enables kkRepo's coordination workers. Neither setting
+activates a repository; select repositories later in **Admin > Security > Artifact Scanning**.
+
 Use `docker-compose.quickstart-postgresql.yml` in the same way for PostgreSQL.

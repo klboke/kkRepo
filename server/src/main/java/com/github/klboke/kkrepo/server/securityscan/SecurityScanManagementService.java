@@ -558,7 +558,7 @@ public class SecurityScanManagementService {
   }
 
   public record Overview(
-      boolean globallyEnabled,
+      boolean deploymentEnabled,
       SecurityScanDao.ScannerSnapshot scanner,
       ScanSummary summary,
       int visibleRepositories) {}

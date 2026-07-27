@@ -20,8 +20,8 @@ For production, supply S3/OSS credentials through `extraEnvFrom`. File blob stor
 
 ## Artifact security scanning
 
-Scanning is disabled by default. To deploy the isolated Syft/Grype adapter, create a service
-credential and enable the chart option:
+Scanning capability is disabled by default. To deploy the isolated Syft/Grype adapter and start
+kkRepo's scan coordination workers, create a service credential and enable the chart option:
 
 ```bash
 kubectl create secret generic kkrepo-scanner \
@@ -33,6 +33,11 @@ helm upgrade --install kkrepo deploy/helm/kkrepo \
   --set database.username=kkrepo \
   --set securityScanning.enabled=true
 ```
+
+This chart value is a deployment capability gate; it does not activate scanning for any
+repository. After the deployment is ready, a repository administrator selects repositories and
+their audit/enforcement policies in **Admin > Security > Artifact Scanning**. When the chart value
+is disabled, that page remains visible but all scanning controls are disabled.
 
 The adapter runs without a Docker socket, as uid/gid `10001`, with a read-only root filesystem.
 Its PVC contains only the rebuildable Grype vulnerability database; candidates, leases, SBOM

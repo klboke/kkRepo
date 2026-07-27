@@ -28,10 +28,11 @@ Maven、npm、PyPI、Docker/OCI 等客户端可见行为必须保持不变；只
 - Admin UI、受权限控制的管理 API、审计、Prometheus 指标、health、Compose 可选
   profile 和 Helm 部署资源均已提供。
 
-功能仍由 `kkrepo.security-scanning.enabled=false` 默认关闭。生产启用前应按“发布与
-回滚”章节先部署固定版本 scanner、完成离线漏洞库与容量验证，再从小范围 Audit
-逐步放量到 Enforce。源码扫描、恶意软件、secret、license、misconfiguration、VEX
-和 OCI SBOM referrer 仍属于后续独立能力。
+部署能力仍由 `kkrepo.security-scanning.enabled=false` 默认关闭。该配置只决定
+kkRepo 是否装载扫描协调 worker 与下载策略集成，不负责启动外部 scanner，也不代表
+任何仓库已经启用扫描。部署方先提供 scanner 进程与资源，使用方再在 Admin UI 中
+按仓库启用并从小范围 Audit 逐步放量到 Enforce。源码扫描、恶意软件、secret、
+license、misconfiguration、VEX 和 OCI SBOM referrer 仍属于后续独立能力。
 
 ## 设计决策摘要
 
@@ -50,6 +51,32 @@ Maven、npm、PyPI、Docker/OCI 等客户端可见行为必须保持不变；只
   仍按独立 profile 交付。下载阻断是仓库级显式开关，默认保持 Audit。
 - 下载阻断由解析出具体 asset/manifest 后的 `ArtifactDownloadPolicy` 执行，不放进
   只能识别仓库请求的通用鉴权 Filter。
+
+## 进程边界与简化原则
+
+扫描任务协调与扫描器执行使用不同的故障边界，但不拆成两套业务系统：
+
+- kkRepo 进程负责通用内容事件消费、candidate、任务领取、lease/heartbeat、重试、
+  结果持久化、策略判定、权限与管理 API。这里已有固定大小线程池，但线程池只控制
+  并发，不承担安全隔离。
+- scanner 进程是无状态执行适配器，只接收有界输入、校验 digest、运行 Syft/Grype、
+  返回标准化文档并维护可重建漏洞库；不连接 kkRepo 数据库，不拥有任务状态和策略。
+- 两者只使用一个有版本的内部 HTTP 契约。当前不增加消息队列、事件总线、scanner
+  自有数据库或按任务创建 Kubernetes Job。
+
+方案比较：
+
+| 方案 | 优点 | 主要问题 | 结论 |
+| --- | --- | --- | --- |
+| kkRepo JVM 内额外线程池 | 少一个 Java 进程和一次内部 HTTP 调用 | Syft/Grype 仍是子进程；CPU、内存、临时盘、文件描述符、漏洞库更新和 OOM 与仓库请求共享容器；主镜像必须携带扫描器，关闭功能也扩大攻击面 | 不作为生产模式 |
+| 每个 kkRepo Pod 的 sidecar | 保留容器级资源限制，网络路径短 | 扫描容量与 API 副本绑定，每个 Pod 重复漏洞库，扩容仓库服务会同步放大扫描资源 | 暂不采用 |
+| 独立无状态 adapter Deployment/Compose service | 可独立设置 CPU、内存、临时盘和安全上下文；扫描异常不重启仓库；漏洞库集中复用 | 多一个可选部署单元和内部 HTTP 健康检查 | 当前方案 |
+| 每个任务一个 Kubernetes Job | 单任务隔离最强 | 控制面对象、镜像启动、回收和排障成本高，非 Kubernetes 部署还需另一套实现 | 暂不采用 |
+
+因此这里坚持“独立进程，薄适配器，不独立业务”。将扫描执行并入 JVM 只能省去薄
+适配层，不能消除 Syft/Grype 子进程，反而让不可信归档解析和仓库在线流量共享故障
+半径。为了减少组合数量，本阶段也不提供可切换的 in-process 生产实现；本地、
+Compose 和 Kubernetes 使用同一 adapter 契约。
 
 ## 设计目标
 
@@ -94,7 +121,7 @@ Maven、npm、PyPI、Docker/OCI 等客户端可见行为必须保持不变；只
 1. **制品写入平面**：完成协议校验、Blob 持久化、asset 绑定，并在同一数据库事务中
    追加通用 `artifact_change_event`。该事件是仓库核心的内容变更事实，不含 profile、
    policy、severity、scanner 或 candidate 字段。
-2. **异步分析平面**：仅在全局扫描开关启用时，独立 worker 使用数据库游标消费通用
+2. **异步分析平面**：仅在部署能力 gate 启用时，独立 worker 使用数据库游标消费通用
    事件，折叠为 `security_scan_candidate`，再执行分类、SBOM 和漏洞匹配。scanner
    不可用、超时或扫描表故障不得回滚已经提交的上传。
 3. **下载执行平面**：协议层解析出实际 asset/member/manifest 后，
@@ -111,8 +138,9 @@ Maven、npm、PyPI、Docker/OCI 等客户端可见行为必须保持不变；只
 Nexus Repository 的公开代码在 content store 完成资产创建/更新后发布通用
 `AssetCreatedEvent`/`AssetUpdatedEvent`，并通过 post-commit event support 把内容写入
 与后续消费者解耦。这个模式说明仓库核心应发布内容事实，而不是在上传 handler 中调用
-某个安全产品。Sonatype Repository Firewall 则把 quarantine 和 policy 决定放在
-proxy/download 边界，不把外部分析工作放入上传事务。
+某个安全产品。Sonatype Repository Firewall 由独立 IQ Server 提供分析与策略能力，
+Nexus Repository 负责连接服务、选择受保护仓库并在 proxy/download 边界执行
+quarantine；外部分析工作不进入上传事务。
 
 Harbor 的 scanner registration API 同样把扫描器作为可插拔外部 adapter；JFrog Xray
 的阻断能力也在下载执行点消费已经计算的策略结果。各产品内部队列和数据模型不同，
@@ -1134,6 +1162,10 @@ DELETE /internal/security/scanning/waivers/{id}
 GET    /internal/security/scanning/sboms/{sbomId}
 ```
 
+`GET /summary` 的 `deploymentEnabled` 字段只表达当前 kkRepo 节点是否启用部署能力，
+不能命名为 `globallyEnabled`，也不能被前端解释成“全部仓库已启用”。仓库实际状态从
+repository config 的 `enabled` 字段读取。
+
 权限要求：
 
 - 所有查询必须按仓库权限过滤，不能通过 finding、SBOM 或 task ID 枚举其它仓库。
@@ -1148,6 +1180,14 @@ API 列表使用稳定分页和有界 filter。description、raw report 和 SBOM
 ## Admin UI
 
 新增 **Security > Artifact Scanning**：
+
+- 页面首先读取只读的部署能力状态。`kkrepo.security-scanning.enabled=false`、状态
+  尚未返回或状态读取失败时，页面保留可见以说明原因，但 Refresh、tab、表单、任务
+  操作、SBOM 下载等扫描 UI 全部置灰且不可点击；已有仓库配置保持不变。
+- 部署能力开启后页面解除禁用。实际扫描仍由 **Repositories** 中每个仓库的
+  **Enabled** 控件启用，部署能力开启不会自动启用任何仓库。
+- scanner 暂时 degraded 与部署能力关闭不同：前者保留管理操作，允许管理员查看
+  状态、调整 Audit 配置或重试；后者不允许从 UI 修改扫描配置。
 
 1. **Overview**
    - scanner readiness 和数据库更新时间。
@@ -1245,18 +1285,32 @@ kkrepo.security-scanning.input-mode=stream
 kkrepo.security-scanning.scanner-database-max-age=48h
 ```
 
-这些默认值可在生产启用前根据制品规模、扫描耗时和 scanner 容量测试结果调整。
+`kkrepo.security-scanning.enabled` 是 kkRepo 节点的部署能力 gate：
+
+- `false`：不创建 candidate/backfill/task/snapshot/policy-reconcile worker，下载策略
+  直接放行，Admin UI 扫描页面置灰；它不会删除仓库扫描配置、任务或历史结果。
+- `true`：装载上述协调 worker 与下载策略集成，但不会启动 scanner 进程，也不会
+  自动启用任何仓库。仓库管理员必须在 Admin UI 的 **Repositories** 中显式启用。
+- 所有 kkRepo 副本必须使用相同值。切换该值需要按部署配置变更并滚动重启，不能由
+  普通应用管理员在 UI 中修改。
+
+其余默认值可在生产启用前根据制品规模、扫描耗时和 scanner 容量测试结果调整。
 
 Docker Compose/quickstart：
 
 - scanner 是可选 profile，不默认增加基础 quickstart 资源占用。
+- `KKREPO_SECURITY_SCANNING_ENABLED=true` 只启用 kkRepo 集成；还必须使用
+  `--profile security-scanning` 启动 scanner，例如
+  `KKREPO_SECURITY_SCANNING_ENABLED=true docker compose --profile security-scanning up -d`。
+- 上述操作只提供部署能力，之后仍由仓库管理员在 Admin UI 按仓库启用。
 - scanner 使用独立 volume/cache 保存可重建漏洞数据库。
 - 不挂载 Docker socket。
 - readiness 未通过时 kkRepo audit 模式仍可启动，但 health details 显示 degraded。
 
 Helm/Kubernetes：
 
-- `securityScanning.enabled` 控制 adapter Deployment/Service 和 kkRepo 配置。
+- `securityScanning.enabled` 同时部署 adapter Deployment/Service 并设置 kkRepo 的
+  部署能力 gate；它仍不会自动启用任何仓库。
 - scanner pod 有 CPU、memory、ephemeral-storage request/limit。
 - 支持 NetworkPolicy、Pod Security Context、read-only root filesystem。
 - 多个 kkRepo pod 访问同一 scanner service；任务所有权仍在共享数据库。
@@ -1544,10 +1598,13 @@ Enforce 模式：
 
 - [Nexus Repository `AssetStore` post-commit asset events](https://github.com/sonatype/nexus-public/blob/0a8a425daa4b37e924ca11e4637a41afce7b115c/public/common/components/nexus-repository-content/src/main/java/org/sonatype/nexus/repository/content/store/AssetStore.java#L297-L302)
 - [Nexus Repository `ContentStoreEventSupport`](https://github.com/sonatype/nexus-public/blob/0a8a425daa4b37e924ca11e4637a41afce7b115c/public/common/components/nexus-repository-content/src/main/java/org/sonatype/nexus/repository/content/store/ContentStoreEventSupport.java#L61-L75)
+- [Sonatype Repository Firewall（由 IQ Server 提供能力）](https://help.sonatype.com/en/repository-firewall.html)
+- [Sonatype Repository Firewall 自托管接入流程](https://help.sonatype.com/en/repository-firewall-getting-started.html)
 - [Sonatype Repository Firewall quarantine](https://help.sonatype.com/en/firewall-quarantine.html)
 - [Harbor pluggable scanners](https://goharbor.io/docs/2.5.0/administration/vulnerability-scanning/pluggable-scanners/)
 - [JFrog Xray download blocking](https://jfrog.com/help/r/xray-how-to-work-with-jfrog-xray-block-download-artifacts-functionality/xray-how-to-work-with-jfrog-xray-block-download-artifacts-functionality/)
 - [Trivy Filesystem scanning](https://trivy.dev/docs/latest/target/filesystem/)
+- [Trivy client/server 模式](https://trivy.dev/docs/latest/guide/references/modes/client-server/)
 - [Trivy filesystem CLI options](https://trivy.dev/docs/latest/references/configuration/cli/trivy_filesystem/)
 - [Syft supported scan targets](https://oss.anchore.com/docs/guides/sbom/scan-targets/)
 - [Grype supported scan targets](https://oss.anchore.com/docs/guides/vulnerability/scan-targets/)

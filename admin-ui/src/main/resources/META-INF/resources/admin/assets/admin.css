@@ -2539,6 +2539,41 @@ code {
   margin-bottom: 18px;
 }
 
+.security-scan-capability-banner {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid #b8c4d6;
+  border-radius: 6px;
+  background: #f4f7fb;
+  color: #344054;
+}
+
+.security-scan-capability-banner.is-enabled {
+  border-color: #8fd1ad;
+  background: #effaf3;
+  color: #176b3a;
+}
+
+.security-scan-capability-banner.is-disabled {
+  border-color: #e3b341;
+  background: #fff8e5;
+  color: #7a4d00;
+}
+
+.security-scan-capability-banner span {
+  color: inherit;
+}
+
+#security-scanning-view.is-deployment-disabled .security-scan-capability-content,
+#security-scanning-view.is-deployment-pending .security-scan-capability-content {
+  opacity: 0.46;
+  filter: grayscale(0.55);
+  pointer-events: none;
+  cursor: not-allowed;
+}
+
 .security-scan-tabs {
   display: flex;
   flex-wrap: wrap;

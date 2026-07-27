@@ -4158,16 +4158,71 @@ function securityScanTone(status) {
   return "warn";
 }
 
+function applySecurityScanDeploymentState(enabled, options = {}) {
+  const view = document.getElementById("security-scanning-view");
+  const content = document.getElementById("security-scan-capability-content");
+  const banner = document.getElementById("security-scan-capability-banner");
+  const pending = Boolean(options.pending);
+  const unavailable = Boolean(options.unavailable);
+  const available = enabled === true && !pending;
+
+  view.classList.toggle("is-deployment-pending", pending);
+  view.classList.toggle("is-deployment-disabled", !available && !pending);
+  content.inert = !available;
+  content.setAttribute("aria-disabled", String(!available));
+
+  content.querySelectorAll("button, input, select, textarea").forEach((control) => {
+    if (!available && !control.disabled) {
+      control.dataset.securityScanDeploymentDisabled = "true";
+      control.disabled = true;
+      return;
+    }
+    if (available && control.dataset.securityScanDeploymentDisabled === "true") {
+      control.disabled = false;
+      delete control.dataset.securityScanDeploymentDisabled;
+    }
+  });
+  content.querySelectorAll("a[href]").forEach((link) => {
+    if (available) {
+      link.removeAttribute("aria-disabled");
+    } else {
+      link.setAttribute("aria-disabled", "true");
+    }
+  });
+
+  banner.classList.toggle("is-pending", pending);
+  banner.classList.toggle("is-enabled", available);
+  banner.classList.toggle("is-disabled", !available && !pending);
+  if (pending) {
+    banner.innerHTML = `
+      <strong>Checking deployment capability…</strong>
+      <span>Scanning controls remain unavailable until kkRepo confirms the deployment setting.</span>`;
+  } else if (unavailable) {
+    banner.innerHTML = `
+      <strong>Unable to verify the artifact scanning deployment capability.</strong>
+      <span>Scanning controls remain disabled. Check the kkRepo management API and reload this page.</span>`;
+  } else if (available) {
+    banner.innerHTML = `
+      <strong>Artifact scanning is available in this deployment.</strong>
+      <span>Repository administrators decide which repositories to scan from the Repositories tab.</span>`;
+  } else {
+    banner.innerHTML = `
+      <strong>Artifact scanning is unavailable in this deployment.</strong>
+      <span>A deployment operator must deploy the scanner adapter, set KKREPO_SECURITY_SCANNING_ENABLED=true, and restart kkRepo. Existing repository settings are preserved.</span>`;
+  }
+}
+
 function renderSecurityScanSummary() {
   const payload = securityScanState.summary;
   const target = document.getElementById("security-scan-summary");
   if (!payload) {
     target.innerHTML = '<div><span>Status</span><strong>Unavailable</strong></div>';
+    document.getElementById("security-scan-status").textContent = "Capability status unavailable";
     return;
   }
   const summary = payload.summary || {};
   const scanner = payload.scanner;
-  const scannerStatus = !payload.globallyEnabled
+  const scannerStatus = !payload.deploymentEnabled
     ? "Disabled"
     : scanner?.ready ? "Ready" : "Degraded";
   target.innerHTML = [
@@ -4302,9 +4357,13 @@ function renderSecurityScanning() {
   renderSecurityScanFindings();
   renderSecurityScanRepositories();
   renderSecurityScanPoliciesAndWaivers();
+  applySecurityScanDeploymentState(
+    securityScanState.summary?.deploymentEnabled === true,
+    { unavailable: securityScanState.summary == null });
 }
 
 async function loadSecurityScanning() {
+  applySecurityScanDeploymentState(false, { pending: true });
   document.getElementById("security-scan-status").textContent = "Loading…";
   const [summary, tasks, runs, findings, scanRepositories, policies, waivers] = await Promise.all([
     fetchJson("/internal/security/scanning/summary", null, "Failed to load scan summary"),

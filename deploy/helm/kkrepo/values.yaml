@@ -65,8 +65,11 @@ blobStorage:
     existingClaim: ""
     mountPath: /var/lib/kkrepo/blobs
 
-# Optional isolated Syft/Grype adapter. Task ownership and scan results stay in the shared
-# relational database; the adapter volume contains only a rebuildable vulnerability database.
+# Deployment capability for the optional isolated Syft/Grype adapter. Enabling this value deploys
+# the adapter and starts kkRepo scan coordination; it does not activate scanning for any repository.
+# Repository administrators select repositories in Admin > Security > Artifact Scanning.
+# Task ownership and scan results stay in the shared relational database; the adapter volume
+# contains only a rebuildable vulnerability database.
 securityScanning:
   enabled: false
   image:

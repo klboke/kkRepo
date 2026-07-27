@@ -853,12 +853,17 @@
           </div>
         </section>
 
-        <section class="view" id="security-scanning-view">
+        <section class="view is-deployment-pending" id="security-scanning-view">
           <div class="page-heading">
             <span class="heading-icon"><span class="lucide-icon icon-shield-check" aria-hidden="true"></span></span>
             <h1>Artifact Scanning</h1>
             <span class="heading-copy">SBOM inventory, known vulnerability matching, and download policy</span>
           </div>
+          <div class="security-scan-capability-banner is-pending" id="security-scan-capability-banner" role="status">
+            <strong>Checking deployment capability…</strong>
+            <span>Scanning controls remain unavailable until kkRepo confirms the deployment setting.</span>
+          </div>
+          <div class="security-scan-capability-content" id="security-scan-capability-content" aria-disabled="true" inert>
           <div class="action-bar">
             <button class="create-button" id="security-scan-refresh-button" type="button"><span class="lucide-icon icon-refresh-cw" aria-hidden="true"></span> Refresh</button>
             <span class="ops-status" id="security-scan-status" role="status"></span>
@@ -966,6 +971,7 @@
                 </div>
               </section>
             </div>
+          </div>
           </div>
         </section>
 
