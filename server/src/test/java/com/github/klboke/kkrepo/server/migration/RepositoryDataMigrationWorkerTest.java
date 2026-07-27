@@ -250,11 +250,23 @@ class RepositoryDataMigrationWorkerTest {
       HttpResponse<InputStream> response = mock(HttpResponse.class);
       when(response.statusCode()).thenReturn(200);
       when(response.headers()).thenReturn(HttpHeaders.of(
-          Map.of("Content-Type", List.of("application/java-archive")), (a, b) -> true));
+          Map.of(
+              "Content-Type", List.of("application/java-archive"),
+              "Content-Length", List.of("3"),
+              "ETag", List.of("\"{SHA1{66f041e16a60928b05a7e228a89c3799e5a769a9}}\"")),
+          (a, b) -> true));
       when(response.body()).thenReturn(
           new ByteArrayInputStream("jar".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
       when(client.getRepositoryAsset("source", "com/acme/app.jar")).thenReturn(response);
-      when(fixture.writer.write(eq(1L), eq(claim.asset()), any(), eq("application/java-archive"), eq(true)))
+      when(fixture.writer.write(
+          eq(1L),
+          eq(claim.asset()),
+          any(),
+          eq("application/java-archive"),
+          eq(true),
+          eq(new RepositoryDataMigrationWriter.DownloadEvidence(
+              3L,
+              "\"{SHA1{66f041e16a60928b05a7e228a89c3799e5a769a9}}\""))))
           .thenReturn(new RepositoryDataMigrationWriter.WriteResult(20L, 30L, 40L, "object"));
 
       invoke(

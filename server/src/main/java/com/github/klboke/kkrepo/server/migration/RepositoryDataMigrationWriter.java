@@ -57,6 +57,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.annotation.Autowired;
 
@@ -64,6 +66,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 class RepositoryDataMigrationWriter {
   private static final String CREATED_BY = "nexus-migration";
   private static final ComposerPathParser COMPOSER_PATHS = new ComposerPathParser();
+  private static final Pattern NEXUS_SHA1_ETAG =
+      Pattern.compile("(?i)SHA1\\{([0-9a-f]{40})\\}");
 
   private final RepositoryDao repositoryDao;
   private final ComponentDao componentDao;
@@ -162,6 +166,17 @@ class RepositoryDataMigrationWriter {
 
   WriteResult write(long targetRepositoryId, RepositoryDataMigrationAssetRecord source, InputStream body,
       String responseContentType, boolean validateSize) {
+    return write(
+        targetRepositoryId,
+        source,
+        body,
+        responseContentType,
+        validateSize,
+        DownloadEvidence.NONE);
+  }
+
+  WriteResult write(long targetRepositoryId, RepositoryDataMigrationAssetRecord source, InputStream body,
+      String responseContentType, boolean validateSize, DownloadEvidence downloadEvidence) {
     RepositoryRecord repository = repositoryDao.findById(targetRepositoryId)
         .orElseThrow(() -> new IllegalArgumentException("target repository not found: " + targetRepositoryId));
     if (repository.blobStoreId() == null) {
@@ -195,7 +210,13 @@ class RepositoryDataMigrationWriter {
       return new WriteResult(
           migrated.componentId(), migrated.assetId(), migrated.assetBlobId(), migrated.assetBlobObjectKey());
     }
-    DigestedUpload upload = uploadWithDigests(repository, storage, source, body, validateSize);
+    DigestedUpload upload = uploadWithDigests(
+        repository,
+        storage,
+        source,
+        body,
+        validateSize,
+        downloadEvidence == null ? DownloadEvidence.NONE : downloadEvidence);
     Map<MavenPath, ChecksumUpload> checksumUploads = new LinkedHashMap<>();
     Map<MavenPath, WriteResult> checksumResults = new LinkedHashMap<>();
     try {
@@ -250,7 +271,12 @@ class RepositoryDataMigrationWriter {
         RepositoryDataMigrationAssetRecord checksumSource =
             generatedChecksumSource(source, checksum.path().path(), checksum.payload().length);
         DigestedUpload checksumUpload = uploadWithDigests(
-            repository, storage, checksumSource, new ByteArrayInputStream(checksum.payload()), true);
+            repository,
+            storage,
+            checksumSource,
+            new ByteArrayInputStream(checksum.payload()),
+            true,
+            DownloadEvidence.NONE);
         uploads.put(checksum.path(), new ChecksumUpload(checksumSource, checksumUpload));
       }
       return uploads;
@@ -618,7 +644,8 @@ class RepositoryDataMigrationWriter {
       BlobStorage storage,
       RepositoryDataMigrationAssetRecord source,
       InputStream body,
-      boolean validateSize) {
+      boolean validateSize,
+      DownloadEvidence downloadEvidence) {
     Path tempFile = null;
     try (InputStream input = body) {
       tempFile = TempBlobFiles.createTempFile(storage, "kkrepo-repository-migration-", ".blob");
@@ -630,16 +657,13 @@ class RepositoryDataMigrationWriter {
       try (OutputStream out = Files.newOutputStream(tempFile)) {
         size = streamWithDigests(input, out, md5, sha1, sha256, sha512);
       }
-      if (validateSize && source.size() != null && source.size() != size) {
-        throw new IllegalStateException("Downloaded size mismatch for " + repository.name() + "/"
-            + source.sourcePath() + ": expected " + source.size() + ", actual " + size);
-      }
       Digests digests = new Digests(
           hex(md5.digest()),
           hex(sha1.digest()),
           hex(sha256.digest()),
           hex(sha512.digest()),
           size);
+      validateDownloadedSize(repository.name(), source, digests, validateSize, downloadEvidence);
       AssetBlobRecord reusable = assetDao.findReusableBlobBySha256(repository.blobStoreId(), digests.sha256(), size)
           .orElse(null);
       if (reusable != null) {
@@ -672,6 +696,27 @@ class RepositoryDataMigrationWriter {
       }
     }
     return size;
+  }
+
+  static void validateDownloadedSize(
+      String repositoryName,
+      RepositoryDataMigrationAssetRecord source,
+      Digests digests,
+      boolean validateSize,
+      DownloadEvidence downloadEvidence) {
+    if (!validateSize || source.size() == null || source.size() == digests.size()) {
+      return;
+    }
+    if (isMavenMetadata(source) && downloadEvidence.verifies(digests)) {
+      return;
+    }
+    throw new IllegalStateException("Downloaded size mismatch for " + repositoryName + "/"
+        + source.sourcePath() + ": expected " + source.size() + ", actual " + digests.size());
+  }
+
+  private static boolean isMavenMetadata(RepositoryDataMigrationAssetRecord source) {
+    return source.format() == RepositoryFormat.MAVEN2
+        && "maven-metadata.xml".equals(fileName(source.sourcePath()));
   }
 
   private static MessageDigest digest(String algorithm) {
@@ -1072,6 +1117,18 @@ class RepositoryDataMigrationWriter {
   }
 
   record Digests(String md5, String sha1, String sha256, String sha512, long size) {
+  }
+
+  record DownloadEvidence(Long contentLength, String etag) {
+    private static final DownloadEvidence NONE = new DownloadEvidence(null, null);
+
+    boolean verifies(Digests digests) {
+      if (contentLength == null || contentLength != digests.size() || etag == null) {
+        return false;
+      }
+      Matcher matcher = NEXUS_SHA1_ETAG.matcher(etag);
+      return matcher.find() && matcher.group(1).equalsIgnoreCase(digests.sha1());
+    }
   }
 
   record GeneratedMavenChecksum(MavenPath path, byte[] payload) {

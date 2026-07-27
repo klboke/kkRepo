@@ -1,9 +1,11 @@
 package com.github.klboke.kkrepo.server.migration;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -115,6 +117,71 @@ class RepositoryDataMigrationWriterTest {
     assertEquals("#12:1", attributes.get("sourceAssetId"));
     assertFalse(attributes.containsKey("sourceBlobRef"));
     assertFalse(attributes.containsKey("sourceMetadata"));
+  }
+
+  @Test
+  void matchingSourceSizeKeepsStrictValidationWithoutHttpEvidence() {
+    byte[] payload = "<metadata/>".getBytes(StandardCharsets.UTF_8);
+
+    assertDoesNotThrow(() -> RepositoryDataMigrationWriter.validateDownloadedSize(
+        "maven-snapshots",
+        mavenSource("com/acme/app/maven-metadata.xml", payload.length),
+        digests(payload),
+        true,
+        new RepositoryDataMigrationWriter.DownloadEvidence(null, null)));
+  }
+
+  @Test
+  void mavenMetadataSizeMismatchAcceptsVerifiedNexusHttpRepresentation() {
+    byte[] payload = "<metadata><versioning/></metadata>".getBytes(StandardCharsets.UTF_8);
+    RepositoryDataMigrationWriter.Digests digests = digests(payload);
+
+    assertDoesNotThrow(() -> RepositoryDataMigrationWriter.validateDownloadedSize(
+        "maven-snapshots",
+        mavenSource("com/acme/app/maven-metadata.xml", 2219),
+        digests,
+        true,
+        new RepositoryDataMigrationWriter.DownloadEvidence(
+            (long) payload.length,
+            "\"{SHA1{" + digests.sha1() + "}}\"")));
+  }
+
+  @Test
+  void mavenMetadataSizeMismatchRejectsIncompleteHttpEvidence() {
+    byte[] payload = "<metadata><versioning/></metadata>".getBytes(StandardCharsets.UTF_8);
+    RepositoryDataMigrationWriter.Digests digests = digests(payload);
+    RepositoryDataMigrationAssetRecord source =
+        mavenSource("com/acme/app/maven-metadata.xml", 2219);
+
+    assertThrows(IllegalStateException.class, () -> RepositoryDataMigrationWriter.validateDownloadedSize(
+        "maven-snapshots",
+        source,
+        digests,
+        true,
+        new RepositoryDataMigrationWriter.DownloadEvidence((long) payload.length, "\"missing-sha1\"")));
+    assertThrows(IllegalStateException.class, () -> RepositoryDataMigrationWriter.validateDownloadedSize(
+        "maven-snapshots",
+        source,
+        digests,
+        true,
+        new RepositoryDataMigrationWriter.DownloadEvidence(
+            (long) payload.length + 1,
+            "\"{SHA1{" + digests.sha1() + "}}\"")));
+  }
+
+  @Test
+  void immutableMavenAssetCannotUseMetadataHttpEvidenceFallback() {
+    byte[] payload = "jar-content".getBytes(StandardCharsets.UTF_8);
+    RepositoryDataMigrationWriter.Digests digests = digests(payload);
+
+    assertThrows(IllegalStateException.class, () -> RepositoryDataMigrationWriter.validateDownloadedSize(
+        "maven-snapshots",
+        mavenSource("com/acme/app/1.0/app-1.0.jar", 999),
+        digests,
+        true,
+        new RepositoryDataMigrationWriter.DownloadEvidence(
+            (long) payload.length,
+            "\"{SHA1{" + digests.sha1() + "}}\"")));
   }
 
   @Test
@@ -457,6 +524,41 @@ class RepositoryDataMigrationWriterTest {
         now.minusSeconds(180));
   }
 
+  private static RepositoryDataMigrationAssetRecord mavenSource(String path, int size) {
+    Instant now = Instant.now();
+    return new RepositoryDataMigrationAssetRecord(
+        1L,
+        2L,
+        "maven-asset-1",
+        null,
+        path,
+        PersistenceHashes.pathHash(path),
+        RepositoryFormat.MAVEN2,
+        "com.acme",
+        "app",
+        null,
+        "metadata",
+        "application/xml",
+        (long) size,
+        "source-blob-ref",
+        now.minusSeconds(60),
+        null,
+        now.minusSeconds(120),
+        now.minusSeconds(60),
+        "nexus-admin",
+        "127.0.0.1",
+        null,
+        0,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        Map.of(),
+        now.minusSeconds(180));
+  }
+
   private static RepositoryDataMigrationAssetRecord dockerSource(
       String path,
       String assetKind,
@@ -518,6 +620,19 @@ class RepositoryDataMigrationWriterTest {
       return sha256(body);
     } catch (NoSuchAlgorithmException e) {
       throw new AssertionError("Missing SHA-256", e);
+    }
+  }
+
+  private static RepositoryDataMigrationWriter.Digests digests(byte[] body) {
+    try {
+      return new RepositoryDataMigrationWriter.Digests(
+          "md5",
+          HexFormat.of().formatHex(MessageDigest.getInstance("SHA-1").digest(body)),
+          "sha256",
+          "sha512",
+          body.length);
+    } catch (NoSuchAlgorithmException e) {
+      throw new AssertionError("Missing SHA-1", e);
     }
   }
 

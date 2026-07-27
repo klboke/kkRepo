@@ -24,6 +24,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.CompletionService;
 import java.util.concurrent.ConcurrentHashMap;
@@ -308,7 +309,8 @@ class RepositoryDataMigrationWorker {
           claim.asset(),
           response.body(),
           contentType,
-          checksumValidation && shouldValidateDownloadedSize(claim));
+          checksumValidation && shouldValidateDownloadedSize(claim),
+          downloadEvidence(response));
       migrationDao.markAssetMigrated(
           claim.asset().id(),
           claim.asset().repositoryJobId(),
@@ -352,6 +354,14 @@ class RepositoryDataMigrationWorker {
       return false;
     }
     return true;
+  }
+
+  private static RepositoryDataMigrationWriter.DownloadEvidence downloadEvidence(
+      HttpResponse<?> response) {
+    OptionalLong contentLength = response.headers().firstValueAsLong("Content-Length");
+    return new RepositoryDataMigrationWriter.DownloadEvidence(
+        contentLength.isPresent() ? contentLength.getAsLong() : null,
+        response.headers().firstValue("ETag").orElse(null));
   }
 
   private static boolean isComposerRootMetadata(String path) {
