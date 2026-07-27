@@ -907,26 +907,65 @@
           <div class="security-scan-panel" data-scan-panel="repositories" hidden>
             <div class="nx-table-frame">
               <table class="nx-table">
-                <thead><tr><th>Repository</th><th>Format</th><th>Type</th><th>Enabled</th><th>Profile</th><th>Mode</th><th>Pending</th><th>Failure</th><th>Partial</th><th class="actions-column">Actions</th></tr></thead>
+                <thead><tr><th>Repository</th><th>Format</th><th>Type</th><th>Status</th><th>Profile</th><th>Policy</th><th>Mode</th><th class="actions-column">Actions</th></tr></thead>
                 <tbody id="security-scan-repository-table"></tbody>
               </table>
             </div>
             <form class="blobstore-form security-scan-form" id="security-scan-repository-form" hidden>
               <div class="form-title">Repository scanning configuration</div>
+              <p class="form-note security-scan-form-intro">Choose whether this repository is scanned and how results affect downloads. Scanner profiles and policies are managed centrally.</p>
               <input id="security-scan-repository-id" type="hidden">
-              <div class="form-grid">
+              <div class="form-grid security-scan-config-grid">
                 <label><span>Repository</span><input id="security-scan-repository-name" type="text" disabled></label>
-                <label><span>Profile ID</span><input id="security-scan-profile-id" type="number" min="1" required></label>
-                <label><span>Mode</span><select id="security-scan-enforcement-mode"><option value="AUDIT">AUDIT</option><option value="ENFORCE">ENFORCE</option></select></label>
-                <label><span>Pending action</span><select id="security-scan-pending-action"><option value="ALLOW">ALLOW</option><option value="BLOCK">BLOCK</option></select></label>
-                <label><span>Failure action</span><select id="security-scan-failure-action"><option value="ALLOW">ALLOW</option><option value="BLOCK">BLOCK</option></select></label>
-                <label><span>Partial action</span><select id="security-scan-partial-action"><option value="ALLOW">ALLOW</option><option value="BLOCK">BLOCK</option></select></label>
-                <label><span>Max result age (seconds)</span><input id="security-scan-max-age" type="number" min="1"></label>
-                <label><span>Policy ID</span><input id="security-scan-policy-id" type="number" min="1"></label>
-                <label class="checkbox-field"><input id="security-scan-enabled" type="checkbox"><span>Enabled</span></label>
-                <label class="checkbox-field"><input id="security-scan-hosted" type="checkbox"><span>Scan hosted content</span></label>
-                <label class="checkbox-field"><input id="security-scan-proxy" type="checkbox"><span>Scan proxy content</span></label>
+                <label>
+                  <span>Scan profile</span>
+                  <input id="security-scan-profile-name" type="text" disabled>
+                  <input id="security-scan-profile-id" type="hidden">
+                  <small class="form-note">Assigned by the scanner deployment.</small>
+                </label>
+                <label>
+                  <span>Vulnerability policy</span>
+                  <input id="security-scan-repository-policy-name" type="text" disabled>
+                  <input id="security-scan-policy-id" type="hidden">
+                  <small class="form-note">Resolved from the centrally managed policy.</small>
+                </label>
+                <label>
+                  <span>Mode</span>
+                  <select id="security-scan-enforcement-mode">
+                    <option value="AUDIT">Audit only</option>
+                    <option value="ENFORCE">Enforce policy</option>
+                  </select>
+                  <small class="form-note">Audit records decisions; enforce may block downloads.</small>
+                </label>
+                <label>
+                  <span>Result validity</span>
+                  <select id="security-scan-max-age">
+                    <option value="">Use policy default</option>
+                    <option value="86400">1 day</option>
+                    <option value="604800">7 days</option>
+                    <option value="2592000">30 days</option>
+                  </select>
+                  <small class="form-note">Results older than this are treated as stale.</small>
+                </label>
+                <label class="checkbox-field security-scan-enabled-field"><input id="security-scan-enabled" type="checkbox"><span>Enable scanning for this repository</span></label>
               </div>
+              <fieldset class="security-scan-scope">
+                <legend>Content scope</legend>
+                <div class="security-scan-scope-options">
+                  <label class="checkbox-field" id="security-scan-hosted-field"><input id="security-scan-hosted" type="checkbox"><span>Scan hosted content</span></label>
+                  <label class="checkbox-field" id="security-scan-proxy-field"><input id="security-scan-proxy" type="checkbox"><span>Scan proxy content</span></label>
+                </div>
+                <p class="form-note" id="security-scan-scope-note"></p>
+              </fieldset>
+              <details class="security-scan-advanced" id="security-scan-advanced">
+                <summary>Advanced exception handling</summary>
+                <p class="form-note">Choose what happens when no complete, current scan result is available. The safe audit default keeps downloads available.</p>
+                <div class="form-grid security-scan-advanced-grid">
+                  <label><span>Scan pending</span><select id="security-scan-pending-action"><option value="ALLOW">Allow download</option><option value="BLOCK">Block download</option></select></label>
+                  <label><span>Scan failed</span><select id="security-scan-failure-action"><option value="ALLOW">Allow download</option><option value="BLOCK">Block download</option></select></label>
+                  <label><span>Partial result</span><select id="security-scan-partial-action"><option value="ALLOW">Allow download</option><option value="BLOCK">Block download</option></select></label>
+                </div>
+              </details>
               <div class="form-actions">
                 <button class="create-button" id="security-scan-save-repository-button" type="submit">Save configuration</button>
                 <button class="create-button secondary" id="security-scan-cancel-repository-button" type="button">Cancel</button>

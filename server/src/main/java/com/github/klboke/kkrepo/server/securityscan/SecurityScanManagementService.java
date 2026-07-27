@@ -87,13 +87,28 @@ public class SecurityScanManagementService {
   }
 
   public List<RepositoryView> repositoryViews(AuthenticatedSubject actor) {
+    List<ScanProfile> profiles = scans.listProfiles();
+    Map<Long, String> profileNames = new LinkedHashMap<>();
+    for (ScanProfile profile : profiles) {
+      if (profile.id() != null) profileNames.put(profile.id(), profile.name());
+    }
+    Map<Long, String> policyNames = new LinkedHashMap<>();
+    for (ScanPolicy policy : scans.listPolicies()) {
+      if (policy.id() != null) policyNames.put(policy.id(), policy.name());
+    }
     return visibleRepositories(actor).stream()
-        .map(repository -> new RepositoryView(
-            repository.id(),
-            repository.name(),
-            repository.format().name(),
-            repository.type().name(),
-            scans.findRepositoryConfig(repository.id()).orElse(null)))
+        .map(repository -> {
+          RepositoryScanConfig config = scans.findRepositoryConfig(repository.id())
+              .orElseGet(() -> defaultConfig(repository.id(), profiles));
+          return new RepositoryView(
+              repository.id(),
+              repository.name(),
+              repository.format().name(),
+              repository.type().name(),
+              profileNames.get(config.profileId()),
+              config.policyId() == null ? null : policyNames.get(config.policyId()),
+              config);
+        })
         .toList();
   }
 
@@ -478,7 +493,12 @@ public class SecurityScanManagementService {
   }
 
   private RepositoryScanConfig defaultConfig(long repositoryId) {
-    ScanProfile profile = scans.listProfiles().stream()
+    return defaultConfig(repositoryId, scans.listProfiles());
+  }
+
+  private RepositoryScanConfig defaultConfig(
+      long repositoryId, List<ScanProfile> profiles) {
+    ScanProfile profile = profiles.stream()
         .filter(ScanProfile::enabled)
         .findFirst()
         .orElseThrow(() -> conflict("No enabled security scan profile exists"));
@@ -564,7 +584,13 @@ public class SecurityScanManagementService {
       int visibleRepositories) {}
 
   public record RepositoryView(
-      long id, String name, String format, String type, RepositoryScanConfig config) {}
+      long id,
+      String name,
+      String format,
+      String type,
+      String profileName,
+      String policyName,
+      RepositoryScanConfig config) {}
 
   public record TaskView(
       long id,

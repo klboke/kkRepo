@@ -1204,6 +1204,15 @@ API 列表使用稳定分页和有界 filter。description、raw report 和 SBOM
    - 原始来源和 scan snapshot。
 4. **Repositories**
    - profile、hosted/proxy trigger、audit/enforce、pending/failure/partial action。
+   - profile 和 policy 由后台统一管理；仓库表单只显示解析后的名称并置灰，不暴露或允许
+     编辑数据库 ID。保存仓库配置时由隐藏的绑定值原样提交，避免一次普通 UI 编辑意外
+     切换扫描器或策略。
+   - 结果有效期使用“使用策略默认值 / 1 天 / 7 天 / 30 天”等业务含义选项，不要求
+     用户换算秒数；兼容已有自定义值时只显示当前可读时长。
+   - hosted 仓库只展示 hosted 内容开关，proxy 仓库只展示 proxy 内容开关，group
+     仓库同时展示两者；不适用的范围不出现在表单中。
+   - pending、failed、partial 三类异常动作收进默认折叠的高级设置；已有任一
+     `BLOCK` 配置时自动展开，避免隐藏正在生效的阻断行为。
 5. **Policies and Waivers**
    - 版本、阈值、范围、到期时间、审批人和审计历史。
 

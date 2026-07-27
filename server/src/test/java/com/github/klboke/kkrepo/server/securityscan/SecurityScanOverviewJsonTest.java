@@ -17,4 +17,22 @@ class SecurityScanOverviewJsonTest {
     assertTrue(json.has("deploymentEnabled"));
     assertFalse(json.has("globallyEnabled"));
   }
+
+  @Test
+  void repositoryViewExposesResolvedNamesInsteadOfRequiringIdLookupInTheUi() {
+    JsonNode json = new ObjectMapper().valueToTree(
+        new SecurityScanManagementService.RepositoryView(
+            7,
+            "maven-proxy",
+            "MAVEN",
+            "PROXY",
+            "syft-grype-v1",
+            "default-audit",
+            null));
+
+    assertTrue(json.has("profileName"));
+    assertTrue(json.has("policyName"));
+    assertFalse(json.get("profileName").asText().matches("\\d+"));
+    assertFalse(json.get("policyName").asText().matches("\\d+"));
+  }
 }

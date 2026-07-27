@@ -4313,16 +4313,14 @@ function renderSecurityScanRepositories() {
           <td>${escapeHtml(repository.name)}</td>
           <td>${escapeHtml(repository.format)}</td>
           <td>${escapeHtml(repository.type)}</td>
-          <td>${config?.enabled ? "yes" : "no"}</td>
-          <td>${escapeHtml(config?.profileId ?? "-")}</td>
+          <td>${config?.enabled ? "Enabled" : "Disabled"}</td>
+          <td>${escapeHtml(repository.profileName || "Unavailable profile")}</td>
+          <td>${escapeHtml(repository.policyName || "Built-in critical baseline")}</td>
           <td>${escapeHtml(config?.enforcementMode || "AUDIT")}</td>
-          <td>${escapeHtml(config?.pendingAction || "ALLOW")}</td>
-          <td>${escapeHtml(config?.failureAction || "ALLOW")}</td>
-          <td>${escapeHtml(config?.partialAction || "ALLOW")}</td>
           <td class="actions-column"><button class="row-action security-scan-repository-edit" data-id="${repository.id}" type="button">configure</button></td>
         </tr>`;
     }).join("")
-      || '<tr><td colspan="10" class="placeholder">No repositories are visible.</td></tr>';
+      || '<tr><td colspan="8" class="placeholder">No repositories are visible.</td></tr>';
   const waiverRepository = document.getElementById("security-scan-waiver-repository");
   waiverRepository.innerHTML = '<option value="">Global</option>' + securityScanState.repositories
     .map((repository) => `<option value="${repository.id}">${escapeHtml(repository.name)}</option>`)
@@ -4398,24 +4396,85 @@ function selectSecurityScanTab(tab) {
   });
 }
 
+function formatSecurityScanValidity(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  if (value % 86400 === 0) {
+    const days = value / 86400;
+    return `${days} ${days === 1 ? "day" : "days"}`;
+  }
+  if (value % 3600 === 0) {
+    const hours = value / 3600;
+    return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  }
+  return `${value} seconds`;
+}
+
+function setSecurityScanResultValidity(seconds) {
+  const select = document.getElementById("security-scan-max-age");
+  select.querySelectorAll("option[data-current-value]").forEach((option) => option.remove());
+  const value = seconds == null ? "" : String(seconds);
+  if (value && !Array.from(select.options).some((option) => option.value === value)) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.dataset.currentValue = "true";
+    option.textContent = `Current setting (${formatSecurityScanValidity(seconds)})`;
+    select.appendChild(option);
+  }
+  select.value = value;
+}
+
+function applySecurityScanRepositoryScope(repository, config) {
+  const type = String(repository.type || "").toUpperCase();
+  const form = document.getElementById("security-scan-repository-form");
+  const hostedField = document.getElementById("security-scan-hosted-field");
+  const proxyField = document.getElementById("security-scan-proxy-field");
+  const hosted = document.getElementById("security-scan-hosted");
+  const proxy = document.getElementById("security-scan-proxy");
+  const showHosted = type !== "PROXY";
+  const showProxy = type !== "HOSTED";
+
+  form.dataset.repositoryType = type;
+  hostedField.hidden = !showHosted;
+  proxyField.hidden = !showProxy;
+  hosted.disabled = !showHosted;
+  proxy.disabled = !showProxy;
+  hosted.checked = showHosted && config.scanHostedContent !== false;
+  proxy.checked = showProxy && config.scanProxyContent !== false;
+
+  const scopeNote = document.getElementById("security-scan-scope-note");
+  if (type === "HOSTED") {
+    scopeNote.textContent = "Hosted repositories scan packages uploaded to kkRepo.";
+  } else if (type === "PROXY") {
+    scopeNote.textContent = "Proxy repositories scan packages cached from the remote repository.";
+  } else {
+    scopeNote.textContent = "Group repositories can scan content resolved from hosted and proxy members.";
+  }
+}
+
 function editSecurityScanRepository(repositoryId) {
   const repository = securityScanState.repositories.find((item) => Number(item.id) === Number(repositoryId));
   if (!repository) return;
   const config = repository.config || {};
   document.getElementById("security-scan-repository-id").value = repository.id;
   document.getElementById("security-scan-repository-name").value = repository.name;
-  document.getElementById("security-scan-profile-id").value = config.profileId || 1;
+  document.getElementById("security-scan-profile-name").value = repository.profileName || "Unavailable profile";
+  document.getElementById("security-scan-profile-id").value = config.profileId || "";
+  document.getElementById("security-scan-repository-policy-name").value =
+    repository.policyName || "Built-in critical baseline";
+  document.getElementById("security-scan-policy-id").value = config.policyId || "";
   document.getElementById("security-scan-enforcement-mode").value = config.enforcementMode || "AUDIT";
   document.getElementById("security-scan-pending-action").value = config.pendingAction || "ALLOW";
   document.getElementById("security-scan-failure-action").value = config.failureAction || "ALLOW";
   document.getElementById("security-scan-partial-action").value = config.partialAction || "ALLOW";
-  document.getElementById("security-scan-max-age").value = config.maxResultAgeSeconds || "";
-  document.getElementById("security-scan-policy-id").value = config.policyId || "";
+  setSecurityScanResultValidity(config.maxResultAgeSeconds);
   document.getElementById("security-scan-enabled").checked = Boolean(config.enabled);
-  document.getElementById("security-scan-hosted").checked = config.scanHostedContent !== false;
-  document.getElementById("security-scan-proxy").checked = config.scanProxyContent !== false;
-  document.getElementById("security-scan-repository-form").hidden = false;
-  document.getElementById("security-scan-repository-form").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  applySecurityScanRepositoryScope(repository, config);
+  document.getElementById("security-scan-advanced").open =
+    [config.pendingAction, config.failureAction, config.partialAction].includes("BLOCK");
+  const form = document.getElementById("security-scan-repository-form");
+  form.hidden = false;
+  form.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 function optionalNumber(id) {
@@ -4425,12 +4484,16 @@ function optionalNumber(id) {
 
 async function saveSecurityScanRepository(event) {
   event.preventDefault();
+  const form = document.getElementById("security-scan-repository-form");
   const repositoryId = Number(document.getElementById("security-scan-repository-id").value);
+  const repositoryType = form.dataset.repositoryType;
   const payload = {
     enabled: document.getElementById("security-scan-enabled").checked,
     profileId: Number(document.getElementById("security-scan-profile-id").value),
-    scanHostedContent: document.getElementById("security-scan-hosted").checked,
-    scanProxyContent: document.getElementById("security-scan-proxy").checked,
+    scanHostedContent: repositoryType === "PROXY"
+      ? false : document.getElementById("security-scan-hosted").checked,
+    scanProxyContent: repositoryType === "HOSTED"
+      ? false : document.getElementById("security-scan-proxy").checked,
     enforcementMode: document.getElementById("security-scan-enforcement-mode").value,
     pendingAction: document.getElementById("security-scan-pending-action").value,
     failureAction: document.getElementById("security-scan-failure-action").value,
@@ -4445,7 +4508,7 @@ async function saveSecurityScanRepository(event) {
       body: JSON.stringify(payload)
     });
     if (!response.ok) throw new Error(await responseErrorMessage(response));
-    document.getElementById("security-scan-repository-form").hidden = true;
+    form.hidden = true;
     showToast("Repository scanning configuration saved.", "ok");
     await loadSecurityScanning();
   } catch (error) {
