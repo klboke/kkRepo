@@ -2630,6 +2630,10 @@ code {
   grid-template-columns: repeat(2, minmax(180px, 1fr));
 }
 
+.security-scan-waiver-grid {
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+}
+
 .security-scan-enabled-field {
   align-self: start;
   min-height: 36px;
@@ -2726,7 +2730,8 @@ code {
 @media (max-width: 720px) {
   .security-scan-config-grid,
   .security-scan-advanced-grid,
-  .security-scan-policy-grid {
+  .security-scan-policy-grid,
+  .security-scan-waiver-grid {
     grid-template-columns: 1fr;
   }
 

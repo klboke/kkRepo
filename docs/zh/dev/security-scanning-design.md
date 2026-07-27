@@ -1210,6 +1210,7 @@ API 列表使用稳定分页和有界 filter。description、raw report 和 SBOM
    - 原始来源和 scan snapshot。
 4. **Repositories**
    - profile、hosted/proxy trigger、audit/enforce、pending/failure/partial action。
+   - 仓库列表通过行内“configure”打开统一弹窗，不在列表下方展开常驻配置表单。
    - profile 和 policy 由后台统一管理；仓库表单只显示解析后的名称并置灰，不暴露或允许
      编辑数据库 ID。保存仓库配置时由隐藏的绑定值原样提交，避免一次普通 UI 编辑意外
      切换扫描器或策略。
@@ -1223,6 +1224,8 @@ API 列表使用稳定分页和有界 filter。description、raw report 和 SBOM
    - 版本、阈值、范围、到期时间、审批人和审计历史。
    - 策略列表通过“Create policy”和行内“edit”进入同一弹窗表单，不在列表页面内
      常驻新增表单；编辑弹窗明确提示将创建新 revision 以及受影响仓库的切换语义。
+   - waiver 列表只保留“Create waiver”和删除操作；新建 waiver 通过统一弹窗完成，
+     列表页面不常驻新增表单。
 
 Browse UI 第一阶段只显示有权限用户可见的状态徽标和最后扫描时间，不直接展示完整
 漏洞描述。finding 详情统一进入受权限控制的管理页面。

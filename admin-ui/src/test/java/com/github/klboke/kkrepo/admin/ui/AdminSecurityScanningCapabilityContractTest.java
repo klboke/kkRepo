@@ -34,6 +34,12 @@ class AdminSecurityScanningCapabilityContractTest {
     String index = resource("/META-INF/resources/admin/index.html");
     String javascript = resource("/META-INF/resources/admin/assets/admin.js");
 
+    assertTrue(index.contains(
+        "id=\"security-scan-repository-form-modal\" "
+            + "data-form-id=\"security-scan-repository-form\""));
+    assertTrue(index.contains(
+        "class=\"blobstore-form modal-form security-scan-form\" "
+            + "id=\"security-scan-repository-form\" hidden"));
     assertTrue(index.contains("id=\"security-scan-profile-name\" type=\"text\" disabled"));
     assertTrue(index.contains("id=\"security-scan-profile-id\" type=\"hidden\""));
     assertTrue(index.contains(
@@ -56,6 +62,9 @@ class AdminSecurityScanningCapabilityContractTest {
     assertTrue(javascript.contains("proxyField.hidden = !showProxy"));
     assertTrue(javascript.contains("repositoryType === \"PROXY\""));
     assertTrue(javascript.contains("repositoryType === \"HOSTED\""));
+    assertTrue(javascript.contains(
+        "openFormModal(\"security-scan-repository-form\", \"security-scan-enabled\")"));
+    assertTrue(javascript.contains("closeFormModal(\"security-scan-repository-form\")"));
   }
 
   @Test
@@ -80,6 +89,31 @@ class AdminSecurityScanningCapabilityContractTest {
     assertTrue(javascript.contains("security-scan-policy-edit"));
     assertTrue(javascript.contains("method: editing ? \"PUT\" : \"POST\""));
     assertTrue(javascript.contains("Repositories using revision"));
+  }
+
+  @Test
+  void waiverCreationUsesTheStandardModalForm() throws IOException {
+    String index = resource("/META-INF/resources/admin/index.html");
+    String javascript = resource("/META-INF/resources/admin/assets/admin.js");
+
+    assertTrue(index.contains(
+        "id=\"security-scan-waiver-form-modal\" "
+            + "data-form-id=\"security-scan-waiver-form\""));
+    assertTrue(index.contains(
+        "class=\"blobstore-form modal-form security-scan-form\" "
+            + "id=\"security-scan-waiver-form\" hidden novalidate"));
+    assertTrue(index.contains("id=\"security-scan-create-waiver-button\""));
+    assertTrue(index.contains("id=\"security-scan-cancel-waiver-button\""));
+    assertTrue(index.contains("id=\"security-scan-save-waiver-button\""));
+    assertTrue(index.contains(
+        "id=\"security-scan-waiver-reason\" rows=\"2\" required"));
+
+    assertTrue(javascript.contains("showCreateSecurityScanWaiverForm"));
+    assertTrue(javascript.contains(
+        "openFormModal(\"security-scan-waiver-form\", "
+            + "\"security-scan-waiver-repository\")"));
+    assertTrue(javascript.contains("closeFormModal(\"security-scan-waiver-form\")"));
+    assertTrue(javascript.contains("securityScanWaiverRequiredFields"));
   }
 
   private String resource(String path) throws IOException {

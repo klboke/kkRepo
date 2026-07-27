@@ -50,6 +50,9 @@ const formModalDismissHandlers = new Map();
 const securityScanPolicyRequiredFields = [
   { id: "security-scan-policy-name", label: "Name" }
 ];
+const securityScanWaiverRequiredFields = [
+  { id: "security-scan-waiver-reason", label: "Reason" }
+];
 
 function installCsrfFetch() {
   if (window.__nexusPlusCsrfFetchInstalled) return;
@@ -4484,9 +4487,12 @@ function editSecurityScanRepository(repositoryId) {
   applySecurityScanRepositoryScope(repository, config);
   document.getElementById("security-scan-advanced").open =
     [config.pendingAction, config.failureAction, config.partialAction].includes("BLOCK");
-  const form = document.getElementById("security-scan-repository-form");
-  form.hidden = false;
-  form.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  openFormModal("security-scan-repository-form", "security-scan-enabled");
+}
+
+function hideSecurityScanRepositoryForm() {
+  document.getElementById("security-scan-repository-id").value = "";
+  closeFormModal("security-scan-repository-form");
 }
 
 function optionalNumber(id) {
@@ -4520,7 +4526,7 @@ async function saveSecurityScanRepository(event) {
       body: JSON.stringify(payload)
     });
     if (!response.ok) throw new Error(await responseErrorMessage(response));
-    form.hidden = true;
+    hideSecurityScanRepositoryForm();
     showToast("Repository scanning configuration saved.", "ok");
     await loadSecurityScanning();
   } catch (error) {
@@ -4630,8 +4636,23 @@ async function saveSecurityScanPolicy(event) {
   }
 }
 
+function showCreateSecurityScanWaiverForm() {
+  const form = document.getElementById("security-scan-waiver-form");
+  form.reset();
+  clearRequiredFieldErrors(securityScanWaiverRequiredFields);
+  openFormModal("security-scan-waiver-form", "security-scan-waiver-repository");
+}
+
+function hideSecurityScanWaiverForm() {
+  clearRequiredFieldErrors(securityScanWaiverRequiredFields);
+  closeFormModal("security-scan-waiver-form");
+}
+
 async function createSecurityScanWaiver(event) {
   event.preventDefault();
+  if (!validateRequiredFields(
+      securityScanWaiverRequiredFields,
+      { prefix: "Waiver fields missing" })) return;
   const repositoryId = optionalNumber("security-scan-waiver-repository");
   const assetId = optionalNumber("security-scan-waiver-asset");
   const expires = document.getElementById("security-scan-waiver-expires").value;
@@ -4655,7 +4676,7 @@ async function createSecurityScanWaiver(event) {
       body: JSON.stringify(payload)
     });
     if (!response.ok) throw new Error(await responseErrorMessage(response));
-    event.target.reset();
+    hideSecurityScanWaiverForm();
     showToast("Security scan waiver created.", "ok");
     await loadSecurityScanning();
     selectSecurityScanTab("policies");
@@ -4750,7 +4771,9 @@ initializeSideGroups();
   ["security-role-form", hideSecurityRoleForm],
   ["security-privilege-form", hideSecurityPrivilegeForm],
   ["security-api-key-form", hideSecurityApiKeyForm],
-  ["security-scan-policy-form", hideSecurityScanPolicyForm]
+  ["security-scan-repository-form", hideSecurityScanRepositoryForm],
+  ["security-scan-policy-form", hideSecurityScanPolicyForm],
+  ["security-scan-waiver-form", hideSecurityScanWaiverForm]
 ].forEach(([formId, handler]) => bindFormModalDismiss(formId, handler));
 
 document.querySelectorAll(".side-item[data-view]").forEach((item) => {
@@ -4846,9 +4869,8 @@ document.getElementById("security-scan-repository-table").addEventListener("clic
   if (editButton) editSecurityScanRepository(editButton.dataset.id);
 });
 document.getElementById("security-scan-repository-form").addEventListener("submit", saveSecurityScanRepository);
-document.getElementById("security-scan-cancel-repository-button").addEventListener("click", () => {
-  document.getElementById("security-scan-repository-form").hidden = true;
-});
+document.getElementById("security-scan-cancel-repository-button").addEventListener(
+  "click", hideSecurityScanRepositoryForm);
 document.getElementById("security-scan-create-policy-button").addEventListener(
   "click", showCreateSecurityScanPolicyForm);
 document.getElementById("security-scan-cancel-policy-button").addEventListener(
@@ -4860,7 +4882,12 @@ document.getElementById("security-scan-policy-table").addEventListener("click", 
   const editButton = event.target.closest(".security-scan-policy-edit");
   if (editButton) showEditSecurityScanPolicyForm(editButton.dataset.id);
 });
+document.getElementById("security-scan-create-waiver-button").addEventListener(
+  "click", showCreateSecurityScanWaiverForm);
+document.getElementById("security-scan-cancel-waiver-button").addEventListener(
+  "click", hideSecurityScanWaiverForm);
 document.getElementById("security-scan-waiver-form").addEventListener("submit", createSecurityScanWaiver);
+bindRequiredFieldErrors(securityScanWaiverRequiredFields);
 document.getElementById("security-scan-task-table").addEventListener("click", (event) => {
   const retryButton = event.target.closest(".security-scan-task-retry");
   if (retryButton) {
