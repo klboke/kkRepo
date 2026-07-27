@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.scanner;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.github.klboke.kkrepo.scanner.ScannerDocumentMapper.DatabaseProvenance;
 import com.github.klboke.kkrepo.scanner.ScannerDocumentMapper.PlatformSbom;
@@ -109,5 +110,147 @@ class ScannerDocumentMapperTest {
         .isInstanceOf(ScannerRequestException.class)
         .extracting(failure -> ((ScannerRequestException) failure).code())
         .isEqualTo("SYFT_SBOM_INVALID");
+  }
+
+  @Test
+  void mapsFallbackComponentFieldsPropertiesLicensesAndDuplicateReferences() {
+    byte[] sbom = """
+        {
+          "bomFormat":"CycloneDX","specVersion":"1.6",
+          "components":[
+            {
+              "scope":"required","group":"org.example","name":"","version":"1",
+              "properties":[
+                {"name":"source.location","value":"lib/demo.jar"},
+                {"name":"custom","value":"value"}
+              ],
+              "licenses":[{"expression":"MIT"}]
+            },
+            {
+              "group":"org.example","name":"","version":"1"
+            }
+          ],
+          "dependencies":[
+            {"ref":"root","dependsOn":["child","child",7]},
+            {"dependsOn":["ignored"]}
+          ]
+        }
+        """.getBytes(StandardCharsets.UTF_8);
+
+    var response = mapper.catalog(sbom, "a".repeat(64), "1", "cap", null);
+
+    assertThat(response.completeness())
+        .isEqualTo(com.github.klboke.kkrepo.security.scan.ScanEnums.ScanCompleteness.PARTIAL);
+    assertThat(response.components()).hasSize(1);
+    assertThat(response.components().getFirst().name()).isEqualTo("unknown");
+    assertThat(response.components().getFirst().directness()).isEqualTo("DIRECT_OR_REQUIRED");
+    assertThat(response.components().getFirst().locations()).contains("lib/demo.jar");
+    assertThat(response.components().getFirst().licenses()).containsExactly("MIT");
+    assertThat(response.dependencyCount()).isEqualTo(4);
+  }
+
+  @Test
+  void mapsSparseGrypeReportsAndRejectsMalformedScannerDocuments() {
+    byte[] sparse = """
+        {"matches":[{
+          "vulnerability":{"severity":"invented","fix":{"versions":[1]},"cvss":[]},
+          "artifact":{"name":"demo","locations":[{"realPath":"/demo"}]},
+          "relatedVulnerabilities":[{"id":""}]
+        }]}
+        """.getBytes(StandardCharsets.UTF_8);
+
+    var response = mapper.match(
+        sparse, "1", new DatabaseProvenance("db", Instant.EPOCH), "cap");
+
+    assertThat(response.findings().getFirst().advisoryId()).isEqualTo("UNKNOWN");
+    assertThat(response.findings().getFirst().severity()).isEqualTo(Severity.UNKNOWN);
+    assertThat(response.findings().getFirst().locations()).containsExactly("/demo");
+    assertThat(response.findings().getFirst().cvssScore()).isNull();
+
+    assertThatThrownBy(() -> mapper.catalog(
+            "{}".getBytes(StandardCharsets.UTF_8), "a".repeat(64), "1", "cap", null))
+        .isInstanceOf(ScannerRequestException.class)
+        .extracting(failure -> ((ScannerRequestException) failure).code())
+        .isEqualTo("SYFT_SBOM_INVALID");
+    assertThatThrownBy(() -> mapper.match(
+            "{".getBytes(StandardCharsets.UTF_8),
+            "1",
+            new DatabaseProvenance("db", Instant.EPOCH),
+            "cap"))
+        .isInstanceOf(ScannerRequestException.class)
+        .extracting(failure -> ((ScannerRequestException) failure).code())
+        .isEqualTo("GRYPE_REPORT_INVALID");
+  }
+
+  @Test
+  void mergesDependenciesAndRejectsMissingOrMalformedPlatformSboms() throws Exception {
+    byte[] first = """
+        {"bomFormat":"CycloneDX","components":[
+          {"type":"library","group":"acme","name":"demo","version":"1"},
+          "ignored"
+        ],"dependencies":[{"ref":"root","dependsOn":["a"]}]}
+        """.getBytes(StandardCharsets.UTF_8);
+    byte[] second = """
+        {"bomFormat":"CycloneDX","components":[
+          {"type":"library","group":"acme","name":"demo","version":"1"}
+        ],"dependencies":[{"ref":"root","dependsOn":["b"]}]}
+        """.getBytes(StandardCharsets.UTF_8);
+    byte[] merged = mapper.mergeCycloneDx(List.of(
+        new PlatformSbom("linux/amd64", first),
+        new PlatformSbom("linux/arm64", second)));
+    var root = JsonMapper.builder().build().readTree(merged);
+    JsonNode dependsOn = root.path("dependencies").get(0).path("dependsOn");
+    assertThat(dependsOn).hasSize(2);
+    assertThat(dependsOn.get(0).asText()).isEqualTo("a");
+    assertThat(dependsOn.get(1).asText()).isEqualTo("b");
+
+    assertThatThrownBy(() -> mapper.mergeCycloneDx(List.of()))
+        .isInstanceOf(ScannerRequestException.class)
+        .extracting(failure -> ((ScannerRequestException) failure).code())
+        .isEqualTo("OCI_NO_PLATFORM_SCANNED");
+    assertThatThrownBy(() -> mapper.mergeCycloneDx(List.of(
+            new PlatformSbom("linux/amd64", "[]".getBytes(StandardCharsets.UTF_8)))))
+        .isInstanceOf(ScannerRequestException.class)
+        .extracting(failure -> ((ScannerRequestException) failure).code())
+        .isEqualTo("OCI_SBOM_INVALID");
+    assertThatThrownBy(() -> mapper.mergeCycloneDx(List.of(
+            new PlatformSbom("linux/amd64", "{".getBytes(StandardCharsets.UTF_8)))))
+        .isInstanceOf(ScannerRequestException.class)
+        .extracting(failure -> ((ScannerRequestException) failure).code())
+        .isEqualTo("OCI_SBOM_MERGE_FAILED");
+  }
+
+  @Test
+  void readsVersionAndDatabaseProvenanceAcrossSupportedShapes() {
+    assertThat(mapper.engineVersion(
+            "{\"applicationVersion\":\"2.0\"}".getBytes(StandardCharsets.UTF_8), "syft"))
+        .isEqualTo(new ScannerDocumentMapper.EngineVersion("syft", "2.0"));
+    assertThat(mapper.engineVersion("{}".getBytes(StandardCharsets.UTF_8), "grype").version())
+        .isEqualTo("unknown");
+    assertThatThrownBy(() -> mapper.engineVersion(
+            "{".getBytes(StandardCharsets.UTF_8), "grype"))
+        .isInstanceOf(ScannerRequestException.class)
+        .extracting(failure -> ((ScannerRequestException) failure).code())
+        .isEqualTo("SCANNER_VERSION_INVALID");
+
+    var explicit = mapper.database(
+        "{\"nested\":{\"checksum\":\"abc\",\"updatedAt\":\"2026-07-27T00:00:00Z\"}}"
+            .getBytes(StandardCharsets.UTF_8));
+    assertThat(explicit.revision()).isEqualTo("abc");
+    assertThat(explicit.updatedAt()).isEqualTo(Instant.parse("2026-07-27T00:00:00Z"));
+    var fallback = mapper.database(
+        "{\"updatedAt\":\"not-an-instant\"}".getBytes(StandardCharsets.UTF_8));
+    assertThat(fallback.revision()).hasSize(64);
+    assertThat(fallback.updatedAt()).isEqualTo(Instant.EPOCH);
+    assertThatThrownBy(() -> mapper.database("{".getBytes(StandardCharsets.UTF_8)))
+        .isInstanceOf(ScannerRequestException.class)
+        .extracting(failure -> ((ScannerRequestException) failure).code())
+        .isEqualTo("GRYPE_DATABASE_STATUS_INVALID");
+
+    byte[] platformDocument = {1, 2};
+    PlatformSbom platform = new PlatformSbom("linux/amd64", platformDocument);
+    platformDocument[0] = 9;
+    assertThat(platform.document()).containsExactly(1, 2);
+    assertThat(new PlatformSbom("linux/arm64", null).document()).isEmpty();
   }
 }

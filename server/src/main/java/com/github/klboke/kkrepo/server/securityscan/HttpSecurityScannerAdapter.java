@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.securityscan;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.security.scan.ScanSubject;
+import com.github.klboke.kkrepo.security.scan.ScannerArtifactType;
 import com.github.klboke.kkrepo.security.scan.ScannerContract;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Adapter;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Capabilities;
@@ -77,10 +78,8 @@ public class HttpSecurityScannerAdapter implements Adapter {
                 Long.toString(request.limits().maxInputBytes()))
             .header("X-KKRepo-Timeout-Seconds",
                 Integer.toString(request.limits().timeoutSeconds()));
-    String artifactSuffix = artifactSuffix(request.subject());
-    if (!artifactSuffix.isEmpty()) {
-      builder.header("X-KKRepo-Artifact-Suffix", artifactSuffix);
-    }
+    ScannerArtifactType artifactType = artifactType(request.subject());
+    builder.header("X-KKRepo-Artifact-Type", artifactType.wireValue());
     HttpRequest httpRequest = builder.build();
     return send(httpRequest, CatalogResponse.class);
   }
@@ -114,34 +113,33 @@ public class HttpSecurityScannerAdapter implements Adapter {
   @Override
   public OciScanResponse scanOci(OciScanRequest request) throws IOException {
     byte[] body = objectMapper.writeValueAsBytes(request);
-    HttpRequest httpRequest = HttpRequest.newBuilder(resolve("/v1/oci/scan"))
+    HttpRequest.Builder builder = HttpRequest.newBuilder(resolve("/v1/oci/scan"))
         .timeout(Duration.ofSeconds(Math.max(1, request.limits().timeoutSeconds())))
         .header("Content-Type", "application/json")
         .header("X-KKRepo-API-Version", request.apiVersion())
         .header("X-KKRepo-Run-ID", request.runId())
         .header("Idempotency-Key", request.idempotencyKey())
-        .headers(serviceCredentialHeader())
-        .POST(HttpRequest.BodyPublishers.ofByteArray(body))
-        .build();
+        .POST(HttpRequest.BodyPublishers.ofByteArray(body));
+    withServiceCredential(builder);
+    HttpRequest httpRequest = builder.build();
     return send(httpRequest, OciScanResponse.class);
   }
 
   private <T> T get(String path, Class<T> type) {
-    HttpRequest request = HttpRequest.newBuilder(resolve(path))
+    HttpRequest.Builder builder = HttpRequest.newBuilder(resolve(path))
         .timeout(Duration.ofSeconds(15))
         .header("Accept", "application/json")
-        .headers(serviceCredentialHeader())
-        .GET()
-        .build();
+        .GET();
+    withServiceCredential(builder);
+    HttpRequest request = builder.build();
     return send(request, type);
   }
 
   private HttpRequest.Builder binaryRequest(
       String path, int timeoutSeconds, InputStreamSource source) {
-    return HttpRequest.newBuilder(resolve(path))
+    HttpRequest.Builder builder = HttpRequest.newBuilder(resolve(path))
         .timeout(Duration.ofSeconds(Math.max(1, timeoutSeconds)))
         .header("Accept", "application/json")
-        .headers(serviceCredentialHeader())
         .POST(HttpRequest.BodyPublishers.ofInputStream(() -> {
           try {
             return source.open();
@@ -149,6 +147,8 @@ public class HttpSecurityScannerAdapter implements Adapter {
             throw new java.io.UncheckedIOException(e);
           }
         }));
+    withServiceCredential(builder);
+    return builder;
   }
 
   private <T> T send(HttpRequest request, Class<T> type) {
@@ -216,31 +216,17 @@ public class HttpSecurityScannerAdapter implements Adapter {
     return value == null || value.isBlank() ? "application/octet-stream" : value;
   }
 
-  static String artifactSuffix(ScanSubject subject) {
+  static ScannerArtifactType artifactType(ScanSubject subject) {
     Object pathValue = subject == null || subject.attributes() == null
         ? null : subject.attributes().get("path");
-    if (!(pathValue instanceof String path) || path.isBlank()) {
-      return "";
-    }
-    String normalized = path.trim().toLowerCase(Locale.ROOT);
-    int separator = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'));
-    String filename = normalized.substring(separator + 1);
-    for (String compound : new String[] {".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst"}) {
-      if (filename.endsWith(compound)) {
-        return compound;
-      }
-    }
-    int dot = filename.lastIndexOf('.');
-    if (dot < 0) {
-      return "";
-    }
-    String suffix = filename.substring(dot);
-    return suffix.matches("\\.[a-z0-9][a-z0-9._-]{0,30}") ? suffix : "";
+    return pathValue instanceof String path
+        ? ScannerArtifactType.fromPath(path) : ScannerArtifactType.UNKNOWN;
   }
 
-  private String[] serviceCredentialHeader() {
+  private void withServiceCredential(HttpRequest.Builder builder) {
     String value = properties.getAdapter().getServiceCredential();
-    return value == null || value.isBlank()
-        ? new String[0] : new String[] {"X-KKRepo-Scanner-Credential", value};
+    if (value != null && !value.isBlank()) {
+      builder.header("X-KKRepo-Scanner-Credential", value);
+    }
   }
 }

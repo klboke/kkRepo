@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.scanner;
 
+import com.github.klboke.kkrepo.security.scan.ScannerArtifactType;
 import com.github.klboke.kkrepo.security.scan.ScannerContract;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Capabilities;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.CatalogResponse;
@@ -55,15 +56,19 @@ public class ScannerController {
       @RequestHeader("X-KKRepo-API-Version") String apiVersion,
       @RequestHeader("X-KKRepo-Expected-SHA256") String expectedSha256,
       @RequestHeader("X-KKRepo-Expected-Size") long expectedSize,
-      @RequestHeader(value = "X-KKRepo-Artifact-Suffix", required = false)
-          String artifactSuffix,
+      @RequestHeader(value = "X-KKRepo-Artifact-Type", required = false)
+          String artifactType,
       @RequestHeader(value = "X-KKRepo-Scanner-Credential", required = false)
           String credential)
       throws IOException {
     authorize(credential);
     requireApiVersion(apiVersion);
     return engine.catalog(
-        request.getInputStream(), expectedSha256, expectedSize, artifactSuffix, limits(request));
+        request.getInputStream(),
+        expectedSha256,
+        expectedSize,
+        ScannerArtifactType.fromWireValue(artifactType),
+        limits(request));
   }
 
   @PostMapping("/v1/match")

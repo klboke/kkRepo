@@ -1,0 +1,241 @@
+package com.github.klboke.kkrepo.scanner;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import com.github.klboke.kkrepo.scanner.ScannerDocumentMapper.DatabaseProvenance;
+import com.github.klboke.kkrepo.scanner.ScannerDocumentMapper.EngineVersion;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanCompleteness;
+import com.github.klboke.kkrepo.security.scan.ScannerArtifactType;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.CatalogResponse;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchResponse;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanRequest;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.ResourceLimits;
+import java.io.ByteArrayInputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.mockito.ArgumentCaptor;
+
+class ScannerEngineServiceBehaviorTest {
+  private static final String SHA256 = "a".repeat(64);
+  private static final Instant NOW = Instant.parse("2026-07-27T00:00:00Z");
+
+  @TempDir Path temporaryDirectory;
+
+  @Test
+  void reportsCapabilitiesCachesReadinessAndCatalogsWithSafeFilename() throws Exception {
+    Fixture fixture = new Fixture(temporaryDirectory);
+    when(fixture.scannerInput.copy(any(), any(), eq(SHA256), eq(8L), any()))
+        .thenAnswer(invocation -> {
+          Path path = invocation.getArgument(1);
+          Files.write(path, "artifact".getBytes());
+          return new ScannerInput.Verified(path, SHA256, 8);
+        });
+    when(fixture.archiveGuard.inspect(any(), any(), any()))
+        .thenReturn(new ArchiveGuard.Inspection(2, 8, 0));
+
+    var capabilities = fixture.engine.capabilities();
+    var first = fixture.engine.readiness();
+    var cached = fixture.engine.readiness();
+    CatalogResponse response = fixture.engine.catalog(
+        new ByteArrayInputStream("artifact".getBytes()),
+        SHA256,
+        8,
+        ScannerArtifactType.JAR,
+        limits());
+
+    assertEquals("syft-grype-v1", capabilities.adapterName());
+    assertTrue(first.ready());
+    assertEquals(first, cached);
+    assertEquals(ScanCompleteness.COMPLETE, response.completeness());
+    ArgumentCaptor<Path> target = ArgumentCaptor.forClass(Path.class);
+    verify(fixture.scannerInput).copy(
+        any(), target.capture(), eq(SHA256), eq(8L), any());
+    assertEquals("artifact.jar", target.getValue().getFileName().toString());
+  }
+
+  @Test
+  void matchesCycloneDxAndRejectsOversizedOrMissingLimits() throws Exception {
+    Fixture fixture = new Fixture(temporaryDirectory);
+    when(fixture.scannerInput.copy(any(), any(), eq(SHA256), eq(null), any()))
+        .thenAnswer(invocation -> {
+          Path path = invocation.getArgument(1);
+          Files.write(path, "{}".getBytes());
+          return new ScannerInput.Verified(path, SHA256, 2);
+        });
+
+    MatchResponse response = fixture.engine.match(
+        new ByteArrayInputStream("{}".getBytes()), SHA256, limits());
+
+    assertEquals("db-1", response.vulnerabilityDatabaseRevision());
+    assertCode(
+        "RESOURCE_LIMITS_REQUIRED",
+        () -> fixture.engine.match(new ByteArrayInputStream(new byte[0]), SHA256, null));
+
+    Fixture oversized = new Fixture(temporaryDirectory.resolve("large"));
+    when(oversized.scannerInput.copy(any(), any(), eq(SHA256), eq(null), any()))
+        .thenAnswer(invocation -> new ScannerInput.Verified(
+            invocation.getArgument(1), SHA256, 2048));
+    assertCode(
+        "SBOM_TOO_LARGE",
+        () -> oversized.engine.match(
+            new ByteArrayInputStream(new byte[0]), SHA256, limits()));
+  }
+
+  @Test
+  void scansOciPlatformsAndReturnsPartialWhenOnePlatformIsMissing() throws Exception {
+    Fixture fixture = new Fixture(temporaryDirectory);
+    fixture.failPlatform = "linux/arm64";
+    OciScanRequest request = ociRequest(
+        "http://registry:5000/prefix", List.of("linux/amd64", "linux/arm64"));
+
+    var response = fixture.engine.scanOci(request);
+
+    assertEquals(List.of("linux/amd64"), response.scannedPlatforms());
+    assertEquals(List.of("linux/arm64"), response.missingPlatforms());
+    assertEquals(ScanCompleteness.PARTIAL, response.catalog().completeness());
+    assertEquals(ScanCompleteness.PARTIAL, response.match().completeness());
+  }
+
+  @Test
+  void reportsDegradedReadinessAndFailsWhenNoOciPlatformCanBeScanned() throws Exception {
+    Fixture degraded = new Fixture(temporaryDirectory.resolve("degraded"));
+    when(degraded.documents.engineVersion(any(), eq("syft")))
+        .thenThrow(new ScannerRequestException("VERSION", "bad", 503, true));
+    assertFalse(degraded.engine.readiness().ready());
+    degraded.engine.invalidateReadiness();
+    assertCode(
+        "SCANNER_NOT_READY",
+        () -> degraded.engine.catalog(
+            new ByteArrayInputStream(new byte[0]), SHA256, 0,
+            ScannerArtifactType.UNKNOWN, limits()));
+
+    Fixture unavailable = new Fixture(temporaryDirectory.resolve("unavailable"));
+    unavailable.failPlatform = "*";
+    assertCode(
+        "OCI_SCAN_FAILED",
+        () -> unavailable.engine.scanOci(
+            ociRequest("https://registry.example.test", List.of("linux/amd64"))));
+  }
+
+  @Test
+  void validatesEveryOciBoundaryBeforeStartingAProcess() {
+    Fixture fixture = new Fixture(temporaryDirectory);
+    assertCode("OCI_REQUEST_INVALID", () -> fixture.engine.scanOci(null));
+    assertCode(
+        "OCI_REGISTRY_INVALID",
+        () -> fixture.engine.scanOci(ociRequest("http://[", List.of("linux/amd64"))));
+    assertCode(
+        "OCI_REQUEST_INVALID",
+        () -> fixture.engine.scanOci(ociRequest("file:///tmp/registry", List.of("linux/amd64"))));
+    assertCode(
+        "OCI_REQUEST_INVALID",
+        () -> fixture.engine.scanOci(ociRequest(
+            "https://user@example.test", List.of("linux/amd64"))));
+    assertCode(
+        "OCI_REQUEST_INVALID",
+        () -> fixture.engine.scanOci(ociRequest(
+            "https://registry.example.test?query=1", List.of("linux/amd64"))));
+    assertCode(
+        "OCI_REQUEST_INVALID",
+        () -> fixture.engine.scanOci(ociRequest(
+            "https://registry.example.test", List.of("../invalid"))));
+  }
+
+  private static ScannerRequestException assertCode(String code, Runnable invocation) {
+    ScannerRequestException exception =
+        assertThrows(ScannerRequestException.class, invocation::run);
+    assertEquals(code, exception.code());
+    return exception;
+  }
+
+  private static ResourceLimits limits() {
+    return new ResourceLimits(4096, 100, 8192, 4096, 2, 30);
+  }
+
+  private static OciScanRequest ociRequest(String registryUrl, List<String> platforms) {
+    return new OciScanRequest(
+        "v1", "run", "key", registryUrl, "repo/image",
+        "sha256:" + SHA256, platforms, "token", "config", limits());
+  }
+
+  private static CatalogResponse catalog() {
+    return new CatalogResponse(
+        "adapter", "1", "syft", "1.2", "cap", SHA256,
+        ScanCompleteness.COMPLETE, "CycloneDX", "1.5", 0, 0,
+        "{\"bomFormat\":\"CycloneDX\"}".getBytes(), List.of(), Map.of());
+  }
+
+  private static MatchResponse match() {
+    return new MatchResponse(
+        "adapter", "1", "grype", "2.3", "db-1", NOW, "cap",
+        ScanCompleteness.COMPLETE, "{}".getBytes(), List.of(), Map.of());
+  }
+
+  private static final class Fixture {
+    final ScannerAdapterProperties properties = new ScannerAdapterProperties();
+    final BoundedProcessRunner processes = mock(BoundedProcessRunner.class);
+    final ScannerInput scannerInput = mock(ScannerInput.class);
+    final ArchiveGuard archiveGuard = mock(ArchiveGuard.class);
+    final ScannerDocumentMapper documents = mock(ScannerDocumentMapper.class);
+    final ScannerEngineService engine;
+    String failPlatform;
+
+    Fixture(Path workDirectory) {
+      properties.setWorkDirectory(workDirectory);
+      properties.setMaxInputBytes(4096);
+      properties.setMaxOutputBytes(1024);
+      properties.setReadinessCache(Duration.ofMinutes(1));
+      when(processes.versionOutput(anyString(), anyList())).thenReturn("{}".getBytes());
+      when(documents.engineVersion(any(), eq("syft")))
+          .thenReturn(new EngineVersion("syft", "1.2"));
+      when(documents.engineVersion(any(), eq("grype")))
+          .thenReturn(new EngineVersion("grype", "2.3"));
+      when(documents.database(any())).thenReturn(new DatabaseProvenance("db-1", NOW));
+      when(documents.catalog(any(), anyString(), anyString(), anyString(), any()))
+          .thenReturn(catalog());
+      when(documents.match(any(), anyString(), any(), anyString())).thenReturn(match());
+      when(documents.mergeCycloneDx(any())).thenReturn(
+          "{\"bomFormat\":\"CycloneDX\"}".getBytes());
+      doAnswer(invocation -> {
+        @SuppressWarnings("unchecked")
+        List<String> command = invocation.getArgument(0);
+        Path stdout = invocation.getArgument(2);
+        if (command.contains("--platform")) {
+          String platform = command.get(command.indexOf("--platform") + 1);
+          if ("*".equals(failPlatform) || platform.equals(failPlatform)) {
+            throw new ScannerRequestException(
+                "SCANNER_PROCESS_FAILED", "missing platform", 422, false);
+          }
+        }
+        Path output = command.stream()
+            .filter(value -> value.startsWith("cyclonedx-json="))
+            .map(value -> Path.of(value.substring("cyclonedx-json=".length())))
+            .findFirst()
+            .orElse(stdout);
+        Files.createDirectories(output.getParent());
+        Files.write(output, command.getFirst().equals("grype")
+            ? "{}".getBytes() : "{\"bomFormat\":\"CycloneDX\"}".getBytes());
+        return new BoundedProcessRunner.Result(0, Files.size(output), new byte[0]);
+      }).when(processes).run(anyList(), any(), any(), any(), any());
+      engine = new ScannerEngineService(
+          properties, processes, scannerInput, archiveGuard, documents);
+    }
+  }
+}

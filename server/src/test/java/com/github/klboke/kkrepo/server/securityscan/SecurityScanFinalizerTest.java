@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -13,6 +14,7 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.AssetPolicyState;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.AssetSecurityState;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.RepositoryScanConfig;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanFinding;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanPolicy;
@@ -36,6 +38,79 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 class SecurityScanFinalizerTest {
+  @Test
+  void retriesRetryableFailuresAndFencesLeaseLoss() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    SecurityScanFinalizer finalizer = finalizer(scans);
+    ScanTask task = task(1, 3);
+    Instant nextAttemptAt = Instant.now().plusSeconds(30);
+    when(scans.retryTask(
+            eq(5L),
+            eq("lease"),
+            eq(nextAttemptAt),
+            eq("SCANNER_BUSY"),
+            eq("busy"),
+            any(Instant.class)))
+        .thenReturn(true, false);
+
+    finalizer.failCurrentTask(task, "SCANNER_BUSY", "busy", true, nextAttemptAt);
+    assertThrows(
+        SecurityScanFinalizer.LostSecurityScanLeaseException.class,
+        () -> finalizer.failCurrentTask(task, "SCANNER_BUSY", "busy", true, nextAttemptAt));
+  }
+
+  @Test
+  void terminalFailurePublishesBlockingAssetStateAndAuditTransition() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    SecurityScanAuditService audit = mock(SecurityScanAuditService.class);
+    SecurityScanFinalizer finalizer =
+        new SecurityScanFinalizer(scans, mock(RepositoryDao.class), audit);
+    ScanTask task = task(3, 3);
+    RepositoryScanConfig config = config(1L, 101L);
+    AssetSecurityState current = assetState(PolicyDecision.ALLOW);
+    when(scans.findRepositoryConfig(1L)).thenReturn(Optional.of(config));
+    when(scans.findAssetState(10L, 1L)).thenReturn(Optional.of(current));
+    when(scans.upsertAssetStateIfCurrent(any())).thenAnswer(invocation -> invocation.getArgument(0));
+    when(scans.failTask(eq(5L), eq("lease"), eq("ENGINE_FAILED"), eq("boom"), any(Instant.class)))
+        .thenReturn(true);
+
+    finalizer.failCurrentTask(task, "ENGINE_FAILED", "boom", false, Instant.now());
+
+    ArgumentCaptor<AssetSecurityState> state =
+        ArgumentCaptor.forClass(AssetSecurityState.class);
+    verify(scans).upsertAssetStateIfCurrent(state.capture());
+    assertEquals(ScanState.FAILED, state.getValue().scanState());
+    assertEquals(PolicyDecision.BLOCK_SCAN_FAILED, state.getValue().policyDecision());
+    assertEquals("ENGINE_FAILED", state.getValue().policyReasonCode());
+    verify(audit).recordSystem(eq("POLICY_STATE_CHANGED"), eq(1L), any(Map.class));
+  }
+
+  @Test
+  void terminalFailureAllowsWhenConfiguredAndReportsLostCompletionLease() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    SecurityScanFinalizer finalizer = finalizer(scans);
+    ScanTask task = task(3, 3);
+    RepositoryScanConfig config = new RepositoryScanConfig(
+        1L, true, 1L, true, true, EnforcementMode.AUDIT,
+        PolicyAction.BLOCK, PolicyAction.ALLOW, PolicyAction.BLOCK,
+        null, null, 1L, Instant.EPOCH, Instant.EPOCH);
+    when(scans.findRepositoryConfig(1L)).thenReturn(Optional.of(config));
+    when(scans.findAssetState(10L, 1L))
+        .thenReturn(Optional.of(assetState(PolicyDecision.BLOCK_VULNERABILITY)));
+    when(scans.upsertAssetStateIfCurrent(any())).thenAnswer(invocation -> invocation.getArgument(0));
+    when(scans.failTask(eq(5L), eq("lease"), eq("FAILED"), eq("boom"), any(Instant.class)))
+        .thenReturn(false);
+
+    assertThrows(
+        SecurityScanFinalizer.LostSecurityScanLeaseException.class,
+        () -> finalizer.failCurrentTask(task, "FAILED", "boom", false, Instant.now()));
+
+    ArgumentCaptor<AssetSecurityState> state =
+        ArgumentCaptor.forClass(AssetSecurityState.class);
+    verify(scans).upsertAssetStateIfCurrent(state.capture());
+    assertEquals(PolicyDecision.ALLOW, state.getValue().policyDecision());
+  }
+
   @Test
   void materializesIndependentMemberAndGroupPolicyContexts() {
     SecurityScanDao scans = mock(SecurityScanDao.class);
@@ -105,6 +180,45 @@ class SecurityScanFinalizerTest {
         1024 * 1024, 1000, 4 * 1024 * 1024, 1024 * 1024, 2, 60,
         OciPlatformPolicy.REQUIRED_SET, List.of("linux/amd64"),
         "a".repeat(64), 1L, now, now);
+  }
+
+  private static SecurityScanFinalizer finalizer(SecurityScanDao scans) {
+    return new SecurityScanFinalizer(
+        scans, mock(RepositoryDao.class), mock(SecurityScanAuditService.class));
+  }
+
+  private static ScanTask task(int attempts, int maxAttempts) {
+    ScanTask task = mock(ScanTask.class);
+    when(task.id()).thenReturn(5L);
+    when(task.repositoryId()).thenReturn(1L);
+    when(task.assetId()).thenReturn(10L);
+    when(task.contentGeneration()).thenReturn(1L);
+    when(task.profileId()).thenReturn(1L);
+    when(task.attempts()).thenReturn(attempts);
+    when(task.maxAttempts()).thenReturn(maxAttempts);
+    when(task.leaseToken()).thenReturn("lease");
+    return task;
+  }
+
+  private static AssetSecurityState assetState(PolicyDecision decision) {
+    return new AssetSecurityState(
+        10L,
+        1L,
+        1L,
+        new byte[] {1},
+        30L,
+        ScanState.COMPLETE,
+        ScanCompleteness.COMPLETE,
+        true,
+        Severity.HIGH,
+        Map.of("high", 1),
+        101L,
+        1L,
+        decision,
+        "VULNERABILITY",
+        Instant.now().plusSeconds(3600),
+        Instant.now(),
+        1L);
   }
 
   private static RepositoryScanConfig config(long repositoryId, long policyId) {

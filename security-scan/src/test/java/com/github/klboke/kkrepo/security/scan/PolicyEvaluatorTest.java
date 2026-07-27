@@ -42,4 +42,42 @@ class PolicyEvaluatorTest {
         ScanState.PARTIAL, ScanCompleteness.PARTIAL, false, false, List.of(), Instant.EPOCH))
         .decision());
   }
+
+  @Test
+  void evaluatesFailureAllowAndFixabilityBranches() {
+    assertEquals(PolicyDecision.BLOCK_SCAN_FAILED, PolicyEvaluator.evaluate(rule, new Input(
+        ScanState.FAILED, ScanCompleteness.UNKNOWN, false, false, List.of(), Instant.EPOCH))
+        .decision());
+
+    Rule fixableOnly = new Rule(
+        Severity.MEDIUM, true, false, false,
+        PolicyAction.ALLOW, PolicyAction.ALLOW, PolicyAction.ALLOW);
+    var allowed = PolicyEvaluator.evaluate(fixableOnly, new Input(
+        ScanState.COMPLETE, ScanCompleteness.COMPLETE, true, false,
+        List.of(
+            new FindingView("unknown", Severity.UNKNOWN, true, false),
+            new FindingView("not-fixable", Severity.HIGH, false, false)),
+        Instant.EPOCH));
+    assertEquals(PolicyDecision.ALLOW, allowed.decision());
+    assertEquals(2, allowed.evaluatedFindings());
+  }
+
+  @Test
+  void selectsTheStricterDecisionAcrossEveryRank() {
+    assertEquals(PolicyDecision.ALLOW, PolicyEvaluator.stricter(null, null));
+    assertEquals(
+        PolicyDecision.BLOCK_PENDING,
+        PolicyEvaluator.stricter(null, PolicyDecision.BLOCK_PENDING));
+    assertEquals(
+        PolicyDecision.BLOCK_PARTIAL,
+        PolicyEvaluator.stricter(PolicyDecision.BLOCK_PARTIAL, null));
+    assertEquals(
+        PolicyDecision.BLOCK_SCAN_FAILED,
+        PolicyEvaluator.stricter(
+            PolicyDecision.BLOCK_PENDING, PolicyDecision.BLOCK_SCAN_FAILED));
+    assertEquals(
+        PolicyDecision.BLOCK_VULNERABILITY,
+        PolicyEvaluator.stricter(
+            PolicyDecision.BLOCK_VULNERABILITY, PolicyDecision.BLOCK_PARTIAL));
+  }
 }

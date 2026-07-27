@@ -134,6 +134,42 @@ class ArtifactDownloadPolicyTest {
     assertTrue(decision.enforced());
   }
 
+  @Test
+  void lifecycleStatesUseTheirConfiguredFailureActions() {
+    arrange(EnforcementMode.ENFORCE, PolicyAction.BLOCK, complete(PolicyDecision.ALLOW));
+    when(scans.findAssetState(10L, 1L))
+        .thenReturn(
+            Optional.of(state(ScanState.NOT_APPLICABLE)),
+            Optional.of(state(ScanState.PENDING)),
+            Optional.of(state(ScanState.FAILED)),
+            Optional.of(state(ScanState.PARTIAL)));
+
+    assertEquals(PolicyDecision.ALLOW, policy.beforeRead(10L, 1L).decision());
+    assertEquals(
+        PolicyDecision.BLOCK_PENDING,
+        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 1L))
+            .decision());
+    assertEquals(
+        PolicyDecision.BLOCK_SCAN_FAILED,
+        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 1L))
+            .decision());
+    assertEquals(
+        PolicyDecision.BLOCK_PARTIAL,
+        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 1L))
+            .decision());
+  }
+
+  @Test
+  void missingEnabledProfileUsesTheFailureAction() {
+    arrange(EnforcementMode.ENFORCE, PolicyAction.ALLOW, complete(PolicyDecision.ALLOW));
+    when(scans.findProfile(1L)).thenReturn(Optional.empty());
+
+    assertEquals(
+        PolicyDecision.BLOCK_SCAN_FAILED,
+        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 1L))
+            .decision());
+  }
+
   private void arrange(
       EnforcementMode mode, PolicyAction pendingAction, AssetSecurityState state) {
     properties.setEnabled(true);
@@ -164,6 +200,14 @@ class ArtifactDownloadPolicyTest {
         10L, 1L, 1L, new byte[32], 20L, ScanState.COMPLETE,
         ScanCompleteness.COMPLETE, true, Severity.CRITICAL,
         Map.of("critical", 1), null, null, decision, decision.name(),
+        Instant.MAX, Instant.EPOCH, 1L);
+  }
+
+  private static AssetSecurityState state(ScanState state) {
+    return new AssetSecurityState(
+        10L, 1L, 1L, new byte[32], 20L, state,
+        state == ScanState.PARTIAL ? ScanCompleteness.PARTIAL : ScanCompleteness.UNKNOWN,
+        false, Severity.UNKNOWN, Map.of(), null, null, PolicyDecision.ALLOW, state.name(),
         Instant.MAX, Instant.EPOCH, 1L);
   }
 

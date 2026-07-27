@@ -4,9 +4,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.github.klboke.kkrepo.security.scan.ScannerContract.ResourceLimits;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
+import org.apache.commons.compress.archivers.tar.TarConstants;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import java.util.zip.GZIPOutputStream;
@@ -90,6 +94,65 @@ class ArchiveGuardTest {
         .isInstanceOf(ScannerRequestException.class);
     assertThatThrownBy(() -> ArchiveGuard.validatePath("safe\u2215..\u2215escape"))
         .isInstanceOf(ScannerRequestException.class);
+  }
+
+  @Test
+  void acceptsRawAndCompressedFilesAndRecursivelyInspectsNestedArchives()
+      throws IOException {
+    Path raw = temporary.resolve("plain.bin");
+    Files.writeString(raw, "plain");
+    assertThat(guard.inspect(raw, limits(10, 1024), temporary))
+        .isEqualTo(new ArchiveGuard.Inspection(0, 0, 0));
+
+    Path gzip = temporary.resolve("plain.gz");
+    try (GZIPOutputStream output = new GZIPOutputStream(Files.newOutputStream(gzip))) {
+      output.write("expanded".getBytes());
+    }
+    assertThat(guard.inspect(gzip, limits(10, 1024), temporary).expandedBytes())
+        .isEqualTo(8);
+
+    ByteArrayOutputStream nestedBytes = new ByteArrayOutputStream();
+    try (ZipOutputStream output = new ZipOutputStream(nestedBytes)) {
+      output.putNextEntry(new ZipEntry("inside.txt"));
+      output.write("nested".getBytes());
+      output.closeEntry();
+    }
+    Path nested = zip("outer.zip", "nested.jar", nestedBytes.toByteArray());
+    ArchiveGuard.Inspection inspection =
+        guard.inspect(nested, limits(10, 1024), temporary);
+    assertThat(inspection.entries()).isEqualTo(2);
+    assertThat(inspection.nestedArchives()).isEqualTo(1);
+    assertThatThrownBy(() -> guard.inspect(
+            nested,
+            new ResourceLimits(1024 * 1024, 10, 1024 * 1024, 1024, 0, 30),
+            temporary))
+        .isInstanceOf(ScannerRequestException.class)
+        .extracting(failure -> ((ScannerRequestException) failure).code())
+        .isEqualTo("ARCHIVE_NESTING_LIMIT");
+  }
+
+  @Test
+  void rejectsArchiveLinksAndInvalidNames() throws IOException {
+    Path tar = temporary.resolve("links.tar");
+    try (TarArchiveOutputStream output =
+        new TarArchiveOutputStream(Files.newOutputStream(tar))) {
+      TarArchiveEntry link = new TarArchiveEntry("link", TarConstants.LF_SYMLINK);
+      link.setLinkName("../../target");
+      output.putArchiveEntry(link);
+      output.closeArchiveEntry();
+    }
+    assertThatThrownBy(() -> guard.inspect(tar, limits(10, 1024), temporary))
+        .isInstanceOf(ScannerRequestException.class)
+        .extracting(failure -> ((ScannerRequestException) failure).code())
+        .isEqualTo("ARCHIVE_SPECIAL_FILE_REJECTED");
+
+    for (String name : new String[] {
+        "", "\0bad", "..", "safe/../escape", "safe\uff0f..\uff0fescape"
+    }) {
+      assertThatThrownBy(() -> ArchiveGuard.validatePath(name))
+          .isInstanceOf(ScannerRequestException.class);
+    }
+    ArchiveGuard.validatePath("safe/path/file.jar");
   }
 
   private Path zip(String fileName, String entryName, byte[] content) throws IOException {
