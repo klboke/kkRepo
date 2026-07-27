@@ -28,6 +28,7 @@ let securityScanPolicyFormMode = "create";
 let editingSecurityScanPolicyId = null;
 let editingSecurityScanPolicyEnabled = true;
 let editingSecurityScanPolicyPlatforms = ["linux/amd64"];
+let securityScanWaiverContext = null;
 const AUDIT_LOG_DEFAULT_PAGE_SIZE = 15;
 let auditLogPage = { total: 0, page: 0, size: AUDIT_LOG_DEFAULT_PAGE_SIZE, items: [] };
 let currentSession = null;
@@ -51,6 +52,8 @@ const securityScanPolicyRequiredFields = [
   { id: "security-scan-policy-name", label: "Name" }
 ];
 const securityScanWaiverRequiredFields = [
+  { id: "security-scan-waiver-target", label: "Repository artifact" },
+  { id: "security-scan-waiver-duration", label: "Expiration" },
   { id: "security-scan-waiver-reason", label: "Reason" }
 ];
 
@@ -4310,8 +4313,9 @@ function renderSecurityScanFindings() {
         <td>${escapeHtml(finding.dataSource || "-")}</td>
         <td>${escapeHtml(finding.scanRunId)}</td>
         <td>${escapeHtml(finding.title || "-")}</td>
+        <td class="actions-column"><button class="row-action security-scan-finding-waive" data-id="${finding.id}" type="button">waive</button></td>
       </tr>`).join("")
-      || '<tr><td colspan="8" class="placeholder">No known vulnerability findings are visible.</td></tr>';
+      || '<tr><td colspan="9" class="placeholder">No known vulnerability findings are visible.</td></tr>';
 }
 
 function renderSecurityScanRepositories() {
@@ -4331,10 +4335,6 @@ function renderSecurityScanRepositories() {
         </tr>`;
     }).join("")
       || '<tr><td colspan="8" class="placeholder">No repositories are visible.</td></tr>';
-  const waiverRepository = document.getElementById("security-scan-waiver-repository");
-  waiverRepository.innerHTML = '<option value="">Global</option>' + securityScanState.repositories
-    .map((repository) => `<option value="${repository.id}">${escapeHtml(repository.name)}</option>`)
-    .join("");
 }
 
 function renderSecurityScanPoliciesAndWaivers() {
@@ -4348,7 +4348,14 @@ function renderSecurityScanPoliciesAndWaivers() {
       || '<tr><td colspan="6" class="placeholder">No policies are visible.</td></tr>';
   document.getElementById("security-scan-waiver-table").innerHTML =
     securityScanState.waivers.map((waiver) => {
-      const selector = waiver.advisorySelector || waiver.packageSelector || "-";
+      const finding = waiver.findingId == null
+        ? null
+        : securityScanState.findings.find((item) => Number(item.id) === Number(waiver.findingId));
+      const selector = finding?.advisoryId
+        || (waiver.findingId ? `Finding #${waiver.findingId}` : null)
+        || waiver.advisorySelector
+        || waiver.packageSelector
+        || "-";
       return `
         <tr><td>${escapeHtml(waiver.id)}</td><td>${escapeHtml(waiver.scopeType)}</td>
         <td>${escapeHtml(waiver.repositoryId ? securityScanRepositoryName(waiver.repositoryId) : "Global")}</td>
@@ -4636,15 +4643,44 @@ async function saveSecurityScanPolicy(event) {
   }
 }
 
-function showCreateSecurityScanWaiverForm() {
+async function showCreateSecurityScanWaiverForm(findingId) {
   const form = document.getElementById("security-scan-waiver-form");
   form.reset();
   clearRequiredFieldErrors(securityScanWaiverRequiredFields);
-  openFormModal("security-scan-waiver-form", "security-scan-waiver-repository");
+  securityScanWaiverContext = null;
+  try {
+    const response = await fetch(
+      `/internal/security/scanning/findings/${encodeURIComponent(findingId)}/waiver-context`,
+      { cache: "no-store" });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    const context = await response.json();
+    if (!Array.isArray(context.targets) || context.targets.length === 0) {
+      throw new Error("No repository artifact is available for this finding.");
+    }
+    securityScanWaiverContext = context;
+    document.getElementById("security-scan-waiver-finding-id").value = context.findingId;
+    document.getElementById("security-scan-waiver-finding").value =
+      `${context.severity || "UNKNOWN"} · ${context.advisoryId || "Unknown advisory"}`;
+    document.getElementById("security-scan-waiver-package").value =
+      [context.packageName || context.packageUrl || "Unknown package", context.installedVersion]
+        .filter(Boolean)
+        .join(" @ ");
+    document.getElementById("security-scan-waiver-target").innerHTML =
+      context.targets.map((target, index) => `
+        <option value="${index}">${escapeHtml(target.repository)} — ${escapeHtml(target.assetPath)}</option>`)
+        .join("");
+    document.getElementById("security-scan-waiver-duration").value = "604800";
+    openFormModal(
+      "security-scan-waiver-form",
+      context.targets.length > 1 ? "security-scan-waiver-target" : "security-scan-waiver-reason");
+  } catch (error) {
+    showToast(`Unable to create waiver: ${error.message}`, "error");
+  }
 }
 
 function hideSecurityScanWaiverForm() {
   clearRequiredFieldErrors(securityScanWaiverRequiredFields);
+  securityScanWaiverContext = null;
   closeFormModal("security-scan-waiver-form");
 }
 
@@ -4653,21 +4689,25 @@ async function createSecurityScanWaiver(event) {
   if (!validateRequiredFields(
       securityScanWaiverRequiredFields,
       { prefix: "Waiver fields missing" })) return;
-  const repositoryId = optionalNumber("security-scan-waiver-repository");
-  const assetId = optionalNumber("security-scan-waiver-asset");
-  const expires = document.getElementById("security-scan-waiver-expires").value;
+  const targetIndex = Number(document.getElementById("security-scan-waiver-target").value);
+  const target = securityScanWaiverContext?.targets?.[targetIndex];
+  const durationSeconds = Number(document.getElementById("security-scan-waiver-duration").value);
+  if (!target || !Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    showToast("Waiver target or expiration is no longer available.", "error");
+    return;
+  }
   const payload = {
-    scopeType: assetId ? "ASSET" : repositoryId ? "REPOSITORY" : "GLOBAL",
-    repositoryId,
-    assetId,
-    findingId: null,
-    advisorySelector: document.getElementById("security-scan-waiver-advisory").value.trim() || null,
-    packageSelector: document.getElementById("security-scan-waiver-package").value.trim() || null,
+    scopeType: "FINDING",
+    repositoryId: target.repositoryId,
+    assetId: target.assetId,
+    findingId: securityScanWaiverContext.findingId,
+    advisorySelector: null,
+    packageSelector: null,
     selector: {},
     reason: document.getElementById("security-scan-waiver-reason").value.trim(),
     policyId: null,
     policyRevision: null,
-    expiresAt: expires ? new Date(expires).toISOString() : null
+    expiresAt: new Date(Date.now() + durationSeconds * 1000).toISOString()
   };
   try {
     const response = await fetch("/internal/security/scanning/waivers", {
@@ -4882,12 +4922,14 @@ document.getElementById("security-scan-policy-table").addEventListener("click", 
   const editButton = event.target.closest(".security-scan-policy-edit");
   if (editButton) showEditSecurityScanPolicyForm(editButton.dataset.id);
 });
-document.getElementById("security-scan-create-waiver-button").addEventListener(
-  "click", showCreateSecurityScanWaiverForm);
 document.getElementById("security-scan-cancel-waiver-button").addEventListener(
   "click", hideSecurityScanWaiverForm);
 document.getElementById("security-scan-waiver-form").addEventListener("submit", createSecurityScanWaiver);
 bindRequiredFieldErrors(securityScanWaiverRequiredFields);
+document.getElementById("security-scan-finding-table").addEventListener("click", (event) => {
+  const waiveButton = event.target.closest(".security-scan-finding-waive");
+  if (waiveButton) showCreateSecurityScanWaiverForm(waiveButton.dataset.id);
+});
 document.getElementById("security-scan-task-table").addEventListener("click", (event) => {
   const retryButton = event.target.closest(".security-scan-task-retry");
   if (retryButton) {

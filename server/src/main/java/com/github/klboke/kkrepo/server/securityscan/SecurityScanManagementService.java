@@ -12,6 +12,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanFinding
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanPolicy;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanProfile;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanRun;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanRunSubject;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanSummary;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanTask;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanWaiver;
@@ -155,6 +156,47 @@ public class SecurityScanManagementService {
             ScanFinding::id,
             limit(limit))
         .stream().map(FindingView::from).toList();
+  }
+
+  public FindingWaiverContext findingWaiverContext(
+      AuthenticatedSubject actor, long findingId) {
+    requireWaiverPermission(actor, "create");
+    ScanFinding finding = scans.findFinding(findingId)
+        .orElseThrow(() -> notFound("Security scan finding not found"));
+    List<WaiverTargetView> targets = new ArrayList<>();
+    Set<String> seen = new LinkedHashSet<>();
+    for (ScanRunSubject subject : scans.listRunSubjects(finding.scanRunId())) {
+      RepositoryRecord repository = repositories.findById(subject.repositoryId()).orElse(null);
+      AssetRecord asset = assets.findAssetById(subject.assetId()).orElse(null);
+      if (repository == null
+          || asset == null
+          || asset.repositoryId() != subject.repositoryId()
+          || !canAdministerRepository(actor, repository)) {
+        continue;
+      }
+      String key = subject.repositoryId() + ":" + subject.assetId();
+      if (seen.add(key)) {
+        targets.add(new WaiverTargetView(
+            subject.repositoryId(),
+            repository.name(),
+            subject.assetId(),
+            asset.path()));
+      }
+    }
+    targets.sort(Comparator.comparing(WaiverTargetView::repository)
+        .thenComparing(WaiverTargetView::assetPath)
+        .thenComparingLong(WaiverTargetView::assetId));
+    if (targets.isEmpty()) {
+      throw notFound("No administrable artifact is associated with this finding");
+    }
+    return new FindingWaiverContext(
+        finding.id(),
+        finding.advisoryId(),
+        finding.packageUrl(),
+        finding.packageName(),
+        finding.installedVersion(),
+        finding.severity().name(),
+        List.copyOf(targets));
   }
 
   public AssetDetail asset(AuthenticatedSubject actor, long assetId) {
@@ -366,6 +408,12 @@ public class SecurityScanManagementService {
   public ScanWaiver createWaiver(AuthenticatedSubject actor, WaiverCommand command) {
     requireWaiverPermission(actor, "create");
     if (command == null || blank(command.reason())) throw badRequest("Waiver reason is required");
+    if (command.findingId() == null
+        && blank(command.advisorySelector())
+        && blank(command.packageSelector())) {
+      throw badRequest("A finding, advisory, or package selector is required");
+    }
+    ScanFinding selectedFinding = null;
     if (command.repositoryId() != null) requireRepositoryAdmin(actor, command.repositoryId());
     if (command.assetId() != null) {
       AssetRecord asset = assets.findAssetById(command.assetId())
@@ -376,18 +424,45 @@ public class SecurityScanManagementService {
         throw badRequest("Waiver asset does not belong to the repository");
       }
     }
+    if (command.findingId() != null) {
+      if (command.repositoryId() == null || command.assetId() == null) {
+        throw badRequest("Finding waivers require a repository and artifact");
+      }
+      selectedFinding = scans.findFinding(command.findingId())
+          .orElseThrow(() -> badRequest("Unknown waiver finding"));
+      boolean associated = scans.listRunSubjects(selectedFinding.scanRunId()).stream()
+          .anyMatch(subject ->
+              subject.repositoryId() == command.repositoryId()
+                  && subject.assetId() == command.assetId());
+      if (!associated) {
+        throw badRequest("Waiver finding is not associated with the selected artifact");
+      }
+    }
     Instant now = Instant.now();
     if (command.expiresAt() != null && !command.expiresAt().isAfter(now)) {
       throw badRequest("Waiver expiration must be in the future");
     }
+    String scopeType = command.findingId() != null
+        ? "FINDING"
+        : command.assetId() != null
+            ? "ASSET"
+            : command.repositoryId() != null ? "REPOSITORY" : "GLOBAL";
+    String advisorySelector = selectedFinding == null
+        ? trim(command.advisorySelector())
+        : trim(selectedFinding.advisoryId());
+    String packageSelector = selectedFinding == null
+        ? trim(command.packageSelector())
+        : !blank(selectedFinding.packageUrl())
+            ? selectedFinding.packageUrl()
+            : trim(selectedFinding.packageName());
     ScanWaiver created = scans.createWaiver(new ScanWaiver(
         null,
-        blank(command.scopeType()) ? "REPOSITORY" : command.scopeType().trim().toUpperCase(),
+        scopeType,
         command.repositoryId(),
         command.assetId(),
         command.findingId(),
-        trim(command.advisorySelector()),
-        trim(command.packageSelector()),
+        advisorySelector,
+        packageSelector,
         command.selector(),
         command.reason().trim(),
         command.policyId(),
@@ -486,12 +561,17 @@ public class SecurityScanManagementService {
   private void requireRepositoryAdmin(AuthenticatedSubject actor, long repositoryId) {
     RepositoryRecord repository = repositories.findById(repositoryId)
         .orElseThrow(() -> notFound("Repository not found"));
-    if (!security.decide(
-        actor.permissionSubject(),
-        new RepositoryPermission(
-            repository.name(), repository.format(), "*", PermissionAction.ADMIN)).allowed()) {
+    if (!canAdministerRepository(actor, repository)) {
       throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Repository administration required");
     }
+  }
+
+  private boolean canAdministerRepository(
+      AuthenticatedSubject actor, RepositoryRecord repository) {
+    return security.decide(
+        actor.permissionSubject(),
+        new RepositoryPermission(
+            repository.name(), repository.format(), "*", PermissionAction.ADMIN)).allowed();
   }
 
   private boolean canBrowse(AuthenticatedSubject actor, RepositoryRecord repository) {
@@ -704,6 +784,25 @@ public class SecurityScanManagementService {
           finding.primaryUrl(), finding.locations(), finding.sourceStatus());
     }
   }
+
+  public record FindingWaiverContext(
+      long findingId,
+      String advisoryId,
+      String packageUrl,
+      String packageName,
+      String installedVersion,
+      String severity,
+      List<WaiverTargetView> targets) {
+    public FindingWaiverContext {
+      targets = targets == null ? List.of() : List.copyOf(targets);
+    }
+  }
+
+  public record WaiverTargetView(
+      long repositoryId,
+      String repository,
+      long assetId,
+      String assetPath) {}
 
   public record AssetDetail(
       long id,

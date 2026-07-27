@@ -815,6 +815,15 @@ waiver 字段至少包含：
 waiver 不能修改原始 finding。策略重新计算时把有效 waiver 作为独立输入，并把命中
 waiver 的 finding 数量写入 policy evaluation。
 
+管理 UI 不提供从空表单创建全局或整仓豁免的入口。普通交互必须从具体 finding 发起，
+后端根据 `security_scan_run_subject` 返回当前操作者可管理的仓库制品，UI 只展示
+“仓库名 + 制品路径”并提交精确的 `finding_id + repository_id + asset_id`。漏洞编号、
+包名和内部 ID 均为只读上下文，不能由用户手填。服务端从 finding 固化 advisory 与
+package selector，使豁免在同一漏洞的后续重扫中继续有效，但不能扩散到其它漏洞。
+有效期必须从 1、7、30、90 天中选择，reason 必填。广域 API 豁免必须至少提供
+advisory 或 package selector；拒绝无 finding、无 selector 的全局或整仓“全部漏洞
+豁免”，历史空 selector 记录也不能匹配 finding。
+
 ## 状态机
 
 ### Task 状态
@@ -1156,6 +1165,7 @@ GET    /internal/security/scanning/summary
 GET    /internal/security/scanning/tasks
 GET    /internal/security/scanning/runs
 GET    /internal/security/scanning/findings
+GET    /internal/security/scanning/findings/{findingId}/waiver-context
 GET    /internal/security/scanning/assets/{assetId}
 POST   /internal/security/scanning/assets/{assetId}/rescan
 POST   /internal/security/scanning/tasks/{taskId}/retry
@@ -1224,8 +1234,10 @@ API 列表使用稳定分页和有界 filter。description、raw report 和 SBOM
    - 版本、阈值、范围、到期时间、审批人和审计历史。
    - 策略列表通过“Create policy”和行内“edit”进入同一弹窗表单，不在列表页面内
      常驻新增表单；编辑弹窗明确提示将创建新 revision 以及受影响仓库的切换语义。
-   - waiver 列表只保留“Create waiver”和删除操作；新建 waiver 通过统一弹窗完成，
-     列表页面不常驻新增表单。
+   - waiver 列表只保留查看和删除操作，不提供无上下文的“Create waiver”。新建
+     waiver 从 Findings 行内“waive”发起，通过统一弹窗展示只读的漏洞和包信息。
+   - 弹窗中的适用制品只能从后端返回的关联仓库制品中选择，不允许手填 repository、
+     asset、finding ID；有效期使用 1、7、30、90 天选项且 reason 必填。
 
 Browse UI 第一阶段只显示有权限用户可见的状态徽标和最后扫描时间，不直接展示完整
 漏洞描述。finding 详情统一进入受权限控制的管理页面。

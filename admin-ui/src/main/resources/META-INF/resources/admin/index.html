@@ -898,7 +898,7 @@
           <div class="security-scan-panel" data-scan-panel="findings" hidden>
             <div class="nx-table-frame">
               <table class="nx-table">
-                <thead><tr><th>Severity</th><th>Advisory</th><th>Package</th><th>Installed</th><th>Fixed</th><th>Source</th><th>Run</th><th>Title</th></tr></thead>
+                <thead><tr><th>Severity</th><th>Advisory</th><th>Package</th><th>Installed</th><th>Fixed</th><th>Source</th><th>Run</th><th>Title</th><th class="actions-column">Actions</th></tr></thead>
                 <tbody id="security-scan-finding-table"></tbody>
               </table>
             </div>
@@ -1024,21 +1024,33 @@
               <section class="ops-panel">
                 <div class="ops-panel-head security-scan-panel-head">
                   <span>Waivers</span>
-                  <button class="create-button security-scan-panel-create" id="security-scan-create-waiver-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create waiver</button>
+                  <span class="ops-status">Create an exception from a finding.</span>
                 </div>
                 <div class="form-modal" id="security-scan-waiver-form-modal" data-form-id="security-scan-waiver-form" role="dialog" aria-modal="true" aria-labelledby="security-scan-waiver-form-title" hidden>
                   <div class="form-modal-backdrop" data-modal-dismiss="security-scan-waiver-form"></div>
                   <div class="form-modal-panel form-modal-panel-narrow">
                     <button class="form-modal-close" data-modal-dismiss="security-scan-waiver-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
                     <form class="blobstore-form modal-form security-scan-form" id="security-scan-waiver-form" hidden novalidate>
-                      <div class="form-title" id="security-scan-waiver-form-title">Create waiver</div>
-                      <p class="form-note security-scan-form-intro">Create a time-bounded exception without changing the underlying finding or policy history.</p>
+                      <div class="form-title" id="security-scan-waiver-form-title">Create finding waiver</div>
+                      <p class="form-note security-scan-form-intro">Accept this finding temporarily for one artifact. The finding and policy history remain unchanged.</p>
+                      <input id="security-scan-waiver-finding-id" type="hidden">
                       <div class="form-grid security-scan-waiver-grid">
-                        <label><span>Repository</span><select id="security-scan-waiver-repository"><option value="">Global</option></select></label>
-                        <label><span>Asset ID</span><input id="security-scan-waiver-asset" type="number" min="1"></label>
-                        <label><span>Advisory selector</span><input id="security-scan-waiver-advisory" type="text"></label>
-                        <label><span>Package selector</span><input id="security-scan-waiver-package" type="text"></label>
-                        <label><span>Expires at</span><input id="security-scan-waiver-expires" type="datetime-local"></label>
+                        <label><span>Vulnerability</span><input id="security-scan-waiver-finding" type="text" disabled></label>
+                        <label><span>Package</span><input id="security-scan-waiver-package" type="text" disabled></label>
+                        <label class="full-width">
+                          <span>Repository artifact <span class="required-mark">*</span></span>
+                          <select id="security-scan-waiver-target" required></select>
+                          <small class="form-note">Only artifacts associated with this finding are available.</small>
+                        </label>
+                        <label>
+                          <span>Expires in <span class="required-mark">*</span></span>
+                          <select id="security-scan-waiver-duration" required>
+                            <option value="86400">1 day</option>
+                            <option value="604800" selected>7 days</option>
+                            <option value="2592000">30 days</option>
+                            <option value="7776000">90 days</option>
+                          </select>
+                        </label>
                         <label class="full-width"><span>Reason <span class="required-mark">*</span></span><textarea id="security-scan-waiver-reason" rows="2" required></textarea></label>
                       </div>
                       <div class="form-actions">
@@ -1049,7 +1061,7 @@
                   </div>
                 </div>
                 <div class="nx-table-frame">
-                  <table class="nx-table"><thead><tr><th>ID</th><th>Scope</th><th>Repository</th><th>Asset</th><th>Selector</th><th>Expires</th><th>Reason</th><th class="actions-column">Actions</th></tr></thead><tbody id="security-scan-waiver-table"></tbody></table>
+                  <table class="nx-table"><thead><tr><th>ID</th><th>Scope</th><th>Repository</th><th>Asset</th><th>Exception</th><th>Expires</th><th>Reason</th><th class="actions-column">Actions</th></tr></thead><tbody id="security-scan-waiver-table"></tbody></table>
                 </div>
               </section>
             </div>

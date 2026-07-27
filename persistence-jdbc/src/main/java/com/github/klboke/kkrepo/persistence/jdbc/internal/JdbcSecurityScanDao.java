@@ -1102,6 +1102,24 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   @Override
+  public List<ScanRunSubject> listRunSubjects(long scanRunId) {
+    return jdbc.query("""
+        SELECT scan_run_id, repository_id, asset_id, profile_id, content_generation, associated_at
+        FROM security_scan_run_subject
+        WHERE scan_run_id = ?
+        ORDER BY repository_id, asset_id, profile_id, content_generation
+        """,
+        (rs, rowNum) -> new ScanRunSubject(
+            rs.getLong("scan_run_id"),
+            rs.getLong("repository_id"),
+            rs.getLong("asset_id"),
+            rs.getLong("profile_id"),
+            rs.getLong("content_generation"),
+            nullableInstant(rs, "associated_at")),
+        scanRunId);
+  }
+
+  @Override
   public List<Long> listRepositoryIdsForSbom(long sbomId) {
     return jdbc.queryForList("""
         SELECT DISTINCT s.repository_id
@@ -1155,6 +1173,14 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       if (row.isPresent()) inserted++;
     }
     return inserted;
+  }
+
+  @Override
+  public Optional<ScanFinding> findFinding(long findingId) {
+    return jdbc.query(
+        "SELECT * FROM security_scan_finding WHERE id = ?",
+        findingMapper,
+        findingId).stream().findFirst();
   }
 
   @Override

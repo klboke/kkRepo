@@ -270,11 +270,16 @@ public class SecurityScanFinalizer {
   private static boolean waived(ScanFinding finding, List<ScanWaiver> waivers) {
     for (ScanWaiver waiver : waivers) {
       if (waiver.findingId() != null && waiver.findingId().equals(finding.id())) return true;
-      boolean advisory = waiver.advisorySelector() == null
+      boolean hasAdvisory =
+          waiver.advisorySelector() != null && !waiver.advisorySelector().isBlank();
+      boolean hasPackage =
+          waiver.packageSelector() != null && !waiver.packageSelector().isBlank();
+      if (!hasAdvisory && !hasPackage) continue;
+      boolean advisory = !hasAdvisory
           || waiver.advisorySelector().equalsIgnoreCase(finding.advisoryId())
           || finding.aliases().stream()
               .anyMatch(alias -> waiver.advisorySelector().equalsIgnoreCase(alias));
-      boolean packageMatches = waiver.packageSelector() == null
+      boolean packageMatches = !hasPackage
           || waiver.packageSelector().equals(finding.packageUrl())
           || waiver.packageSelector().equals(finding.packageName());
       if (advisory && packageMatches) return true;

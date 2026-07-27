@@ -100,7 +100,7 @@ class AdminSecurityScanningCapabilityContractTest {
   }
 
   @Test
-  void waiverCreationUsesTheStandardModalForm() throws IOException {
+  void waiverCreationStartsFromAnExactFindingAndUsesTheStandardModalForm() throws IOException {
     String index = resource("/META-INF/resources/admin/index.html");
     String javascript = resource("/META-INF/resources/admin/assets/admin.js");
 
@@ -110,16 +110,26 @@ class AdminSecurityScanningCapabilityContractTest {
     assertTrue(index.contains(
         "class=\"blobstore-form modal-form security-scan-form\" "
             + "id=\"security-scan-waiver-form\" hidden novalidate"));
-    assertTrue(index.contains("id=\"security-scan-create-waiver-button\""));
+    assertFalse(index.contains("id=\"security-scan-create-waiver-button\""));
     assertTrue(index.contains("id=\"security-scan-cancel-waiver-button\""));
     assertTrue(index.contains("id=\"security-scan-save-waiver-button\""));
+    assertTrue(index.contains("id=\"security-scan-waiver-finding-id\" type=\"hidden\""));
+    assertTrue(index.contains("id=\"security-scan-waiver-finding\" type=\"text\" disabled"));
+    assertTrue(index.contains("id=\"security-scan-waiver-package\" type=\"text\" disabled"));
+    assertTrue(index.contains("id=\"security-scan-waiver-target\" required"));
+    assertTrue(index.contains("id=\"security-scan-waiver-duration\" required"));
+    assertTrue(index.contains("<option value=\"604800\" selected>7 days</option>"));
     assertTrue(index.contains(
         "id=\"security-scan-waiver-reason\" rows=\"2\" required"));
+    assertFalse(index.contains("<span>Asset ID</span>"));
+    assertFalse(index.contains("<span>Advisory selector</span>"));
 
     assertTrue(javascript.contains("showCreateSecurityScanWaiverForm"));
     assertTrue(javascript.contains(
-        "openFormModal(\"security-scan-waiver-form\", "
-            + "\"security-scan-waiver-repository\")"));
+        "/internal/security/scanning/findings/${encodeURIComponent(findingId)}/waiver-context"));
+    assertTrue(javascript.contains("security-scan-finding-waive"));
+    assertTrue(javascript.contains("findingId: securityScanWaiverContext.findingId"));
+    assertTrue(javascript.contains("expiresAt: new Date(Date.now() + durationSeconds * 1000)"));
     assertTrue(javascript.contains("closeFormModal(\"security-scan-waiver-form\")"));
     assertTrue(javascript.contains("securityScanWaiverRequiredFields"));
   }

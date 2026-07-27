@@ -19,6 +19,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanPolicy;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanProfile;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanRun;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanTask;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanWaiver;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.EnforcementMode;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.OciPlatformPolicy;
@@ -55,12 +56,17 @@ class SecurityScanFinalizerTest {
     ScanPolicy groupPolicy = policy(102L, Severity.CRITICAL, now);
     ScanRun run = run(now);
     ScanFinding finding = finding(now);
+    ScanFinding otherFinding = otherFinding(now);
+    ScanWaiver exactWaiver = new ScanWaiver(
+        70L, "FINDING", 1L, 10L, finding.id(), null, null, Map.of(),
+        "Temporary exception", null, null, "admin", "admin",
+        now.plusSeconds(3600), now, now);
 
     when(scans.insertRunOrFindExisting(run)).thenReturn(run);
     when(scans.listFindings(eq(null), eq(30L), eq(null), eq(0L), eq(1000)))
-        .thenReturn(List.of(finding));
+        .thenReturn(List.of(finding, otherFinding));
     when(scans.listActiveWaivers(anyLong(), eq(10L), any(Instant.class), eq(1000)))
-        .thenReturn(List.of());
+        .thenReturn(List.of(exactWaiver));
     when(scans.findPolicy(101L)).thenReturn(Optional.of(memberPolicy));
     when(scans.findPolicy(102L)).thenReturn(Optional.of(groupPolicy));
     when(scans.findRepositoryConfig(1L)).thenReturn(Optional.of(memberConfig));
@@ -86,6 +92,11 @@ class SecurityScanFinalizerTest {
             AssetPolicyState::repositoryId, AssetPolicyState::policyDecision));
     assertEquals(PolicyDecision.BLOCK_VULNERABILITY, decisions.get(1L));
     assertEquals(PolicyDecision.ALLOW, decisions.get(2L));
+    assertEquals(
+        Map.of(1L, 1, 2L, 1),
+        states.getAllValues().stream()
+            .collect(java.util.stream.Collectors.toMap(
+                AssetPolicyState::repositoryId, AssetPolicyState::waivedFindings)));
   }
 
   private static ScanProfile profile(Instant now) {
@@ -113,7 +124,7 @@ class SecurityScanFinalizerTest {
     return new ScanRun(
         30L, 5L, 20L, 40L, "b".repeat(64), "c".repeat(64),
         ScanState.COMPLETE, ScanCompleteness.COMPLETE, 50L, "d".repeat(64),
-        1, 1, 0, 1, 0, 0, 0, Severity.HIGH, now, now, now);
+        2, 2, 0, 2, 0, 0, 0, Severity.HIGH, now, now, now);
   }
 
   private static ScanFinding finding(Instant now) {
@@ -122,5 +133,13 @@ class SecurityScanFinalizerTest {
         "fixture", "pkg:maven/acme/demo@1", "demo", "1", List.of("2"),
         Severity.HIGH, "fixture", null, null, "title", "description",
         "https://example.invalid/CVE-2026-0001", List.of("demo.jar"), "active", now);
+  }
+
+  private static ScanFinding otherFinding(Instant now) {
+    return new ScanFinding(
+        61L, 30L, "other-finding", null, "CVE-2026-0002", List.of(),
+        "fixture", "pkg:maven/acme/other@1", "other", "1", List.of("2"),
+        Severity.HIGH, "fixture", null, null, "other title", "other description",
+        "https://example.invalid/CVE-2026-0002", List.of("other.jar"), "active", now);
   }
 }

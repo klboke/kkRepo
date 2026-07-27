@@ -126,9 +126,13 @@ public interface SecurityScanDao {
 
   List<Long> listRepositoryIdsForRun(long scanRunId);
 
+  List<ScanRunSubject> listRunSubjects(long scanRunId);
+
   List<Long> listRepositoryIdsForSbom(long sbomId);
 
   int insertFindings(long scanRunId, List<ScanFinding> findings);
+
+  Optional<ScanFinding> findFinding(long findingId);
 
   List<ScanFinding> listFindings(
       Long repositoryId, Long scanRunId, Severity severity, long afterId, int maxItems);
@@ -404,6 +408,14 @@ public interface SecurityScanDao {
       Instant startedAt,
       Instant completedAt,
       Instant createdAt) {}
+
+  record ScanRunSubject(
+      long scanRunId,
+      long repositoryId,
+      long assetId,
+      long profileId,
+      long contentGeneration,
+      Instant associatedAt) {}
 
   record ScanFinding(
       Long id,
