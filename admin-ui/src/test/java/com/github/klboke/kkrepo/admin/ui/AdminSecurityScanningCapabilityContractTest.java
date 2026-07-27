@@ -191,6 +191,8 @@ class AdminSecurityScanningCapabilityContractTest {
       assertTrue(index.contains("data-security-scan-query=\"" + list + "\""));
       assertTrue(index.contains("data-security-scan-pagination=\"" + list + "\""));
       assertTrue(index.contains("data-security-scan-page-size=\"" + list + "\""));
+      assertTrue(index.contains(
+          "class=\"create-button secondary\" data-security-scan-clear=\"" + list + "\""));
     }
     assertTrue(javascript.contains("params.set(\"after\""));
     assertTrue(javascript.contains("params.set(\"limit\""));
