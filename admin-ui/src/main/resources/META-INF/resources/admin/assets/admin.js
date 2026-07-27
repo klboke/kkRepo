@@ -24,6 +24,27 @@ let securityScanState = {
   policies: [],
   waivers: []
 };
+const SECURITY_SCAN_DEFAULT_PAGE_SIZE = 25;
+const securityScanListEndpoints = {
+  runs: "runs",
+  tasks: "tasks",
+  findings: "findings",
+  repositories: "repositories",
+  policies: "policies",
+  waivers: "waivers"
+};
+let securityScanPages = Object.fromEntries(
+  Object.keys(securityScanListEndpoints).map((key) => [
+    key,
+    {
+      after: 0,
+      cursors: [0],
+      page: 0,
+      size: SECURITY_SCAN_DEFAULT_PAGE_SIZE,
+      query: "",
+      nextAfter: null
+    }
+  ]));
 let securityScanPolicyFormMode = "create";
 let editingSecurityScanPolicyId = null;
 let editingSecurityScanPolicyEnabled = true;
@@ -4159,11 +4180,6 @@ function startRepositoryDataMigrationPolling(jobId) {
       3000);
 }
 
-function securityScanRepositoryName(repositoryId) {
-  const repository = securityScanState.repositories.find((item) => Number(item.id) === Number(repositoryId));
-  return repository?.name || `#${repositoryId}`;
-}
-
 function securityScanTone(status) {
   const value = String(status || "").toUpperCase();
   if (["COMPLETE", "SUCCEEDED", "ALLOW", "READY"].includes(value)) return "ok";
@@ -4287,7 +4303,7 @@ function renderSecurityScanTasks() {
       return `
         <tr>
           <td>${escapeHtml(task.id)}</td>
-          <td>${escapeHtml(securityScanRepositoryName(task.repositoryId))}</td>
+          <td>${escapeHtml(task.repository || `#${task.repositoryId}`)}</td>
           <td>${escapeHtml(task.assetId ?? "-")}</td>
           <td>${escapeHtml(task.stage)}</td>
           <td>${escapeHtml(task.reason)}</td>
@@ -4380,25 +4396,130 @@ function renderSecurityScanPolicies() {
 function renderSecurityScanWaivers() {
   document.getElementById("security-scan-waiver-table").innerHTML =
     securityScanState.waivers.map((waiver) => {
-      const finding = waiver.findingId == null
-        ? null
-        : securityScanState.findings.find((item) => Number(item.id) === Number(waiver.findingId));
-      const selector = finding?.advisoryId
-        || (waiver.findingId ? `Finding #${waiver.findingId}` : null)
-        || waiver.advisorySelector
-        || waiver.packageSelector
-        || "-";
       return `
         <tr><td><span class="state-badge compact ${waiver.active ? "ok" : "warn"}">${waiver.active ? "Active" : "Expired"}</span></td>
         <td>${escapeHtml(waiver.scopeType)}</td>
         <td>${escapeHtml(waiver.repository || "Global")}</td>
         <td title="${escapeHtml(waiver.assetPath || "")}">${escapeHtml(waiver.assetPath || "All artifacts")}</td>
-        <td>${escapeHtml(selector)}</td>
+        <td>${escapeHtml(waiver.exception || (waiver.findingId ? `Finding #${waiver.findingId}` : "-"))}</td>
         <td>${escapeHtml(waiver.expiresAt ? formatDateTime(waiver.expiresAt) : "Never expires")}</td>
         <td>${escapeHtml(waiver.approvedBy || "-")}</td><td>${escapeHtml(waiver.reason)}</td>
         <td class="actions-column"><button class="row-action security-scan-waiver-delete" data-id="${waiver.id}" type="button">delete</button></td></tr>`;
     }).join("")
       || '<tr><td colspan="9" class="placeholder">No waivers are visible.</td></tr>';
+}
+
+function securityScanPageParams(key) {
+  const page = securityScanPages[key];
+  const params = new URLSearchParams();
+  params.set("after", String(page.after || 0));
+  params.set("limit", String(page.size || SECURITY_SCAN_DEFAULT_PAGE_SIZE));
+  if (page.query) params.set("q", page.query);
+  return params;
+}
+
+async function fetchSecurityScanPage(key) {
+  const endpoint = securityScanListEndpoints[key];
+  return fetchJson(
+    `/internal/security/scanning/${endpoint}?${securityScanPageParams(key).toString()}`,
+    { items: [], nextAfter: null },
+    `Failed to load scan ${key}`);
+}
+
+function resetSecurityScanPage(key) {
+  const page = securityScanPages[key];
+  page.after = 0;
+  page.cursors = [0];
+  page.page = 0;
+  page.nextAfter = null;
+}
+
+function renderSecurityScanPagination(key) {
+  const page = securityScanPages[key];
+  const items = securityScanState[key] || [];
+  const summary = document.querySelector(`[data-security-scan-page-summary="${key}"]`);
+  const label = document.querySelector(`[data-security-scan-page-label="${key}"]`);
+  const previous = document.querySelector(
+    `[data-security-scan-page-action="prev"][data-security-scan-page-list="${key}"]`);
+  const next = document.querySelector(
+    `[data-security-scan-page-action="next"][data-security-scan-page-list="${key}"]`);
+  const size = document.querySelector(`[data-security-scan-page-size="${key}"]`);
+  const query = document.querySelector(`[data-security-scan-query="${key}"]`);
+  if (summary) {
+    summary.textContent = items.length === 1
+      ? "1 result on this page"
+      : `${items.length} results on this page`;
+  }
+  if (label) label.textContent = `Page ${page.page + 1}`;
+  if (previous) previous.disabled = page.page <= 0;
+  if (next) next.disabled = page.nextAfter == null;
+  if (size) size.value = String(page.size);
+  if (query && document.activeElement !== query) query.value = page.query;
+}
+
+function renderSecurityScanList(key) {
+  const renderers = {
+    runs: renderSecurityScanRuns,
+    tasks: renderSecurityScanTasks,
+    findings: renderSecurityScanFindings,
+    repositories: renderSecurityScanRepositories,
+    policies: renderSecurityScanPolicies,
+    waivers: renderSecurityScanWaivers
+  };
+  renderers[key]?.();
+  renderSecurityScanPagination(key);
+}
+
+async function loadSecurityScanList(key) {
+  const payload = await fetchSecurityScanPage(key);
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  const page = securityScanPages[key];
+  if (items.length === 0 && page.page > 0) {
+    page.cursors.pop();
+    page.page -= 1;
+    page.after = page.cursors.at(-1) || 0;
+    return loadSecurityScanList(key);
+  }
+  securityScanState[key] = items;
+  page.nextAfter = payload?.nextAfter ?? null;
+  renderSecurityScanList(key);
+}
+
+async function searchSecurityScanList(key) {
+  const input = document.querySelector(`[data-security-scan-query="${key}"]`);
+  securityScanPages[key].query = input?.value.trim() || "";
+  resetSecurityScanPage(key);
+  await loadSecurityScanList(key);
+}
+
+async function clearSecurityScanListSearch(key) {
+  securityScanPages[key].query = "";
+  const input = document.querySelector(`[data-security-scan-query="${key}"]`);
+  if (input) input.value = "";
+  resetSecurityScanPage(key);
+  await loadSecurityScanList(key);
+}
+
+async function moveSecurityScanPage(key, direction) {
+  const page = securityScanPages[key];
+  if (direction === "next") {
+    if (page.nextAfter == null) return;
+    page.after = page.nextAfter;
+    page.cursors.push(page.after);
+    page.page += 1;
+  } else {
+    if (page.page <= 0) return;
+    page.cursors.pop();
+    page.page -= 1;
+    page.after = page.cursors.at(-1) || 0;
+  }
+  await loadSecurityScanList(key);
+}
+
+async function resizeSecurityScanPage(key, size) {
+  securityScanPages[key].size = Number(size) || SECURITY_SCAN_DEFAULT_PAGE_SIZE;
+  resetSecurityScanPage(key);
+  await loadSecurityScanList(key);
 }
 
 function renderSecurityScanning() {
@@ -4409,33 +4530,39 @@ function renderSecurityScanning() {
   renderSecurityScanRepositories();
   renderSecurityScanPolicies();
   renderSecurityScanWaivers();
+  const deploymentEnabled = securityScanState.summary?.deploymentEnabled === true;
   applySecurityScanDeploymentState(
-    securityScanState.summary?.deploymentEnabled === true,
+    deploymentEnabled,
     { unavailable: securityScanState.summary == null });
+  if (deploymentEnabled) {
+    Object.keys(securityScanListEndpoints).forEach(renderSecurityScanPagination);
+  }
 }
 
 async function loadSecurityScanning() {
   applySecurityScanDeploymentState(false, { pending: true });
   document.getElementById("security-scan-status").textContent = "Loading…";
-  const [summary, tasks, runs, findings, scanRepositories, policies, waivers] = await Promise.all([
+  const keys = Object.keys(securityScanListEndpoints);
+  const [summary, ...pages] = await Promise.all([
     fetchJson("/internal/security/scanning/summary", null, "Failed to load scan summary"),
-    fetchJson("/internal/security/scanning/tasks?limit=100", [], "Failed to load scan tasks"),
-    fetchJson("/internal/security/scanning/runs?limit=100", [], "Failed to load scan runs"),
-    fetchJson("/internal/security/scanning/findings?limit=100", [], "Failed to load findings"),
-    fetchJson("/internal/security/scanning/repositories", [], "Failed to load repository scan settings"),
-    fetchJson("/internal/security/scanning/policies", [], "Failed to load scan policies"),
-    fetchJson("/internal/security/scanning/waivers?limit=100", [], "Failed to load scan waivers")
+    ...keys.map(fetchSecurityScanPage)
   ]);
-  securityScanState = {
-    summary,
-    tasks,
-    runs,
-    findings,
-    repositories: scanRepositories,
-    policies,
-    waivers
-  };
+  securityScanState.summary = summary;
+  keys.forEach((key, index) => {
+    const payload = pages[index];
+    securityScanState[key] = Array.isArray(payload?.items) ? payload.items : [];
+    securityScanPages[key].nextAfter = payload?.nextAfter ?? null;
+  });
   renderSecurityScanning();
+  const emptyLaterPages = keys.filter(
+    (key) => securityScanState[key].length === 0 && securityScanPages[key].page > 0);
+  await Promise.all(emptyLaterPages.map((key) => {
+    const page = securityScanPages[key];
+    page.cursors.pop();
+    page.page -= 1;
+    page.after = page.cursors.at(-1) || 0;
+    return loadSecurityScanList(key);
+  }));
 }
 
 function selectSecurityScanTab(tab) {
@@ -4607,9 +4734,6 @@ function showEditSecurityScanPolicyForm(policyId) {
   editingSecurityScanPolicyEnabled = policy.enabled !== false;
   editingSecurityScanPolicyPlatforms =
     Array.isArray(policy.requiredPlatforms) ? [...policy.requiredPlatforms] : [];
-  const nextRevision = securityScanState.policies
-    .filter((item) => String(item.name).toLowerCase() === String(policy.name).toLowerCase())
-    .reduce((maximum, item) => Math.max(maximum, Number(item.revision) || 0), 0) + 1;
   document.getElementById("security-scan-policy-source-id").value = policy.id;
   document.getElementById("security-scan-policy-name").value = policy.name || "";
   document.getElementById("security-scan-policy-name").disabled = true;
@@ -4626,7 +4750,7 @@ function showEditSecurityScanPolicyForm(policyId) {
   document.getElementById("security-scan-policy-form-title").textContent =
     `Edit policy: ${policy.name}`;
   document.getElementById("security-scan-policy-form-note").textContent =
-    `Saving creates revision ${nextRevision}. Repositories using revision ${policy.revision} will move to it; historical decisions keep their original revision.`;
+    `Saving creates a new revision. Repositories using revision ${policy.revision} will move to it; historical decisions keep their original revision.`;
   document.getElementById("security-scan-save-policy-button").textContent = "Save changes";
   clearRequiredFieldErrors(securityScanPolicyRequiredFields);
   openFormModal("security-scan-policy-form", "security-scan-policy-severity");
@@ -5026,6 +5150,29 @@ document.getElementById("docker-cache-clear-button").addEventListener("click", c
 document.getElementById("security-scan-refresh-button").addEventListener("click", loadSecurityScanning);
 document.querySelectorAll("[data-scan-tab]").forEach((button) => {
   button.addEventListener("click", () => selectSecurityScanTab(button.dataset.scanTab));
+});
+document.querySelectorAll("[data-security-scan-list-form]").forEach((form) => {
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    searchSecurityScanList(form.dataset.securityScanListForm);
+  });
+});
+document.querySelectorAll("[data-security-scan-clear]").forEach((button) => {
+  button.addEventListener(
+    "click",
+    () => clearSecurityScanListSearch(button.dataset.securityScanClear));
+});
+document.querySelectorAll("[data-security-scan-page-action]").forEach((button) => {
+  button.addEventListener(
+    "click",
+    () => moveSecurityScanPage(
+      button.dataset.securityScanPageList,
+      button.dataset.securityScanPageAction));
+});
+document.querySelectorAll("[data-security-scan-page-size]").forEach((select) => {
+  select.addEventListener(
+    "change",
+    () => resizeSecurityScanPage(select.dataset.securityScanPageSize, select.value));
 });
 document.getElementById("security-scan-repository-table").addEventListener("click", (event) => {
   const editButton = event.target.closest(".security-scan-repository-edit");

@@ -627,18 +627,57 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Override
   public List<ScanTask> listTasks(
       Long repositoryId, TaskStatus status, long afterId, int maxItems) {
+    return listTasks(repositoryId, status, null, afterId, maxItems);
+  }
+
+  @Override
+  public List<ScanTask> listTasks(
+      Long repositoryId,
+      TaskStatus status,
+      String query,
+      long afterId,
+      int maxItems) {
     List<Object> args = new ArrayList<>();
-    StringBuilder sql = new StringBuilder("SELECT * FROM security_scan_task WHERE id > ?");
+    StringBuilder sql = new StringBuilder("""
+        SELECT t.*
+        FROM security_scan_task t
+        JOIN repository r ON r.id = t.repository_id
+        LEFT JOIN asset a ON a.id = t.asset_id
+        WHERE t.id > ?
+        """);
     args.add(Math.max(0, afterId));
     if (repositoryId != null) {
-      sql.append(" AND repository_id = ?");
+      sql.append(" AND t.repository_id = ?");
       args.add(repositoryId);
     }
     if (status != null) {
-      sql.append(" AND status = ?");
+      sql.append(" AND t.status = ?");
       args.add(status.name());
     }
-    sql.append(" ORDER BY id LIMIT ?");
+    String pattern = searchPattern(query);
+    if (pattern != null) {
+      sql.append("""
+           AND (
+             LOWER(r.name) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(a.path, '')) LIKE ? ESCAPE '!'
+             OR LOWER(t.subject_key) LIKE ? ESCAPE '!'
+             OR LOWER(t.stage) LIKE ? ESCAPE '!'
+             OR LOWER(t.request_reason) LIKE ? ESCAPE '!'
+             OR LOWER(t.status) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(t.last_error_code, '')) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(t.last_error_summary, '')) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(t.requested_by, '')) LIKE ? ESCAPE '!'
+          """);
+      addRepeated(args, pattern, 9);
+      Long numeric = numericSearch(query);
+      if (numeric != null) {
+        sql.append(" OR t.id = ? OR t.asset_id = ?");
+        args.add(numeric);
+        args.add(numeric);
+      }
+      sql.append(")");
+    }
+    sql.append(" ORDER BY t.id LIMIT ?");
     args.add(safeLimit(maxItems));
     return jdbc.query(sql.toString(), taskMapper, args.toArray());
   }
@@ -1048,6 +1087,12 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
 
   @Override
   public List<ScanRun> listRuns(Long repositoryId, long afterId, int maxItems) {
+    return listRuns(repositoryId, null, afterId, maxItems);
+  }
+
+  @Override
+  public List<ScanRun> listRuns(
+      Long repositoryId, String query, long afterId, int maxItems) {
     StringBuilder sql = new StringBuilder("""
         SELECT sr.*
         FROM security_scan_run sr
@@ -1063,6 +1108,24 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
            )
           """);
       args.add(repositoryId);
+    }
+    String pattern = searchPattern(query);
+    if (pattern != null) {
+      sql.append("""
+           AND (
+             LOWER(sr.status) LIKE ? ESCAPE '!'
+             OR LOWER(sr.scan_completeness) LIKE ? ESCAPE '!'
+             OR LOWER(sr.max_severity) LIKE ? ESCAPE '!'
+          """);
+      addRepeated(args, pattern, 3);
+      Long numeric = numericSearch(query);
+      if (numeric != null) {
+        sql.append(" OR sr.id = ? OR sr.task_id = ? OR sr.sbom_id = ?");
+        args.add(numeric);
+        args.add(numeric);
+        args.add(numeric);
+      }
+      sql.append(")");
     }
     sql.append(" ORDER BY sr.id LIMIT ?");
     args.add(safeLimit(maxItems));
@@ -1194,6 +1257,17 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Override
   public List<ScanFinding> listFindings(
       Long repositoryId, Long scanRunId, Severity severity, long afterId, int maxItems) {
+    return listFindings(repositoryId, scanRunId, severity, null, afterId, maxItems);
+  }
+
+  @Override
+  public List<ScanFinding> listFindings(
+      Long repositoryId,
+      Long scanRunId,
+      Severity severity,
+      String query,
+      long afterId,
+      int maxItems) {
     StringBuilder sql = new StringBuilder("""
         SELECT f.*
         FROM security_scan_finding f
@@ -1217,6 +1291,28 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     if (severity != null) {
       sql.append(" AND f.severity = ?");
       args.add(severity.name());
+    }
+    String pattern = searchPattern(query);
+    if (pattern != null) {
+      sql.append("""
+           AND (
+             LOWER(f.advisory_id) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(f.package_url, '')) LIKE ? ESCAPE '!'
+             OR LOWER(f.package_name) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(f.installed_version, '')) LIKE ? ESCAPE '!'
+             OR LOWER(f.severity) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(f.data_source, '')) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(f.title, '')) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(f.source_status, '')) LIKE ? ESCAPE '!'
+          """);
+      addRepeated(args, pattern, 8);
+      Long numeric = numericSearch(query);
+      if (numeric != null) {
+        sql.append(" OR f.id = ? OR f.scan_run_id = ?");
+        args.add(numeric);
+        args.add(numeric);
+      }
+      sql.append(")");
     }
     sql.append(" ORDER BY f.id LIMIT ?");
     args.add(safeLimit(maxItems));
@@ -1544,6 +1640,34 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   @Override
+  public List<ScanPolicy> listPolicies(String query, long afterId, int maxItems) {
+    StringBuilder sql = new StringBuilder(
+        "SELECT * FROM security_scan_policy WHERE id > ?");
+    List<Object> args = new ArrayList<>();
+    args.add(Math.max(0, afterId));
+    String pattern = searchPattern(query);
+    if (pattern != null) {
+      sql.append("""
+           AND (
+             LOWER(name) LIKE ? ESCAPE '!'
+             OR LOWER(block_severity) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(created_by, '')) LIKE ? ESCAPE '!'
+          """);
+      addRepeated(args, pattern, 3);
+      Long numeric = numericSearch(query);
+      if (numeric != null) {
+        sql.append(" OR id = ? OR revision = ?");
+        args.add(numeric);
+        args.add(numeric);
+      }
+      sql.append(")");
+    }
+    sql.append(" ORDER BY id LIMIT ?");
+    args.add(safeLimit(maxItems));
+    return jdbc.query(sql.toString(), policyMapper, args.toArray());
+  }
+
+  @Override
   public Optional<ScanPolicy> findPolicy(long policyId) {
     return jdbc.query(
         "SELECT * FROM security_scan_policy WHERE id = ?",
@@ -1630,15 +1754,60 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
 
   @Override
   public List<ScanWaiver> listWaivers(Long repositoryId, long afterId, int maxItems) {
-    StringBuilder sql = new StringBuilder(
-        "SELECT * FROM security_scan_waiver WHERE id > ?");
+    return listWaivers(repositoryId, null, afterId, maxItems);
+  }
+
+  @Override
+  public List<ScanWaiver> listWaivers(
+      Long repositoryId, String query, long afterId, int maxItems) {
+    StringBuilder sql = new StringBuilder("""
+        SELECT w.*
+        FROM security_scan_waiver w
+        LEFT JOIN asset a ON a.id = w.asset_id
+        LEFT JOIN repository r ON r.id = COALESCE(w.repository_id, a.repository_id)
+        LEFT JOIN security_scan_finding f ON f.id = w.finding_id
+        WHERE w.id > ?
+        """);
     List<Object> args = new ArrayList<>();
     args.add(Math.max(0, afterId));
     if (repositoryId != null) {
-      sql.append(" AND (repository_id IS NULL OR repository_id = ?)");
+      sql.append("""
+           AND (
+             w.repository_id = ?
+             OR (w.repository_id IS NULL AND (w.asset_id IS NULL OR a.repository_id = ?))
+           )
+          """);
+      args.add(repositoryId);
       args.add(repositoryId);
     }
-    sql.append(" ORDER BY id LIMIT ?");
+    String pattern = searchPattern(query);
+    if (pattern != null) {
+      sql.append("""
+           AND (
+             LOWER(w.scope_type) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(r.name, '')) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(a.path, '')) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(f.advisory_id, '')) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(w.advisory_selector, '')) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(w.package_selector, '')) LIKE ? ESCAPE '!'
+             OR LOWER(w.reason) LIKE ? ESCAPE '!'
+             OR LOWER(w.created_by) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(w.approved_by, '')) LIKE ? ESCAPE '!'
+          """);
+      addRepeated(args, pattern, 9);
+      Long numeric = numericSearch(query);
+      if (numeric != null) {
+        sql.append("""
+             OR w.id = ?
+             OR w.repository_id = ?
+             OR w.asset_id = ?
+             OR w.finding_id = ?
+            """);
+        addRepeated(args, numeric, 4);
+      }
+      sql.append(")");
+    }
+    sql.append(" ORDER BY w.id LIMIT ?");
     args.add(safeLimit(maxItems));
     return jdbc.query(sql.toString(), waiverMapper, args.toArray());
   }
@@ -1873,6 +2042,34 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
 
   private static int safeLimit(int maxItems) {
     return Math.max(1, Math.min(maxItems, 1000));
+  }
+
+  private static String searchPattern(String query) {
+    if (blank(query)) return null;
+    String escaped = query.trim()
+        .toLowerCase(java.util.Locale.ROOT)
+        .replace("!", "!!")
+        .replace("%", "!%")
+        .replace("_", "!_");
+    return "%" + escaped + "%";
+  }
+
+  private static Long numericSearch(String query) {
+    if (blank(query)) return null;
+    String value = query.trim();
+    if (value.startsWith("#")) value = value.substring(1);
+    try {
+      long result = Long.parseLong(value);
+      return result >= 0 ? result : null;
+    } catch (NumberFormatException ignored) {
+      return null;
+    }
+  }
+
+  private static void addRepeated(List<Object> values, Object value, int count) {
+    for (int index = 0; index < count; index++) {
+      values.add(value);
+    }
   }
 
   private static Instant requiredNow(Instant value) {

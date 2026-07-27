@@ -931,29 +931,74 @@
           </div>
 
           <div class="security-scan-panel is-active" data-scan-panel="overview">
+            <form class="security-scan-list-toolbar" data-security-scan-list-form="runs">
+              <label class="filter-box">
+                <span class="filter-icon lucide-icon icon-search" aria-hidden="true"></span>
+                <input data-security-scan-query="runs" type="search" maxlength="200" placeholder="Search run, task, status, or completeness">
+              </label>
+              <button class="create-button secondary" type="submit">Search</button>
+              <button class="row-action" data-security-scan-clear="runs" type="button">Clear</button>
+            </form>
             <div class="nx-table-frame">
               <table class="nx-table">
                 <thead><tr><th>Run</th><th>Task</th><th>Status</th><th>Completeness</th><th>Findings</th><th>Critical</th><th>High</th><th>Completed</th><th>SBOM</th></tr></thead>
                 <tbody id="security-scan-run-table"></tbody>
               </table>
             </div>
+            <div class="pagination-bar security-scan-pagination" data-security-scan-pagination="runs">
+              <span class="pagination-summary" data-security-scan-page-summary="runs">0 results</span>
+              <button class="row-action" data-security-scan-page-action="prev" data-security-scan-page-list="runs" type="button" title="Previous page" aria-label="Previous page"><span class="lucide-icon icon-chevron-left" aria-hidden="true"></span></button>
+              <span class="pagination-page" data-security-scan-page-label="runs">Page 1</span>
+              <button class="row-action" data-security-scan-page-action="next" data-security-scan-page-list="runs" type="button" title="Next page" aria-label="Next page"><span class="lucide-icon icon-chevron-right" aria-hidden="true"></span></button>
+              <label class="select-filter pagination-size"><span>Rows</span><select data-security-scan-page-size="runs"><option value="15">15</option><option value="25" selected>25</option><option value="50">50</option><option value="100">100</option></select></label>
+            </div>
           </div>
 
           <div class="security-scan-panel" data-scan-panel="tasks" hidden>
+            <form class="security-scan-list-toolbar" data-security-scan-list-form="tasks">
+              <label class="filter-box">
+                <span class="filter-icon lucide-icon icon-search" aria-hidden="true"></span>
+                <input data-security-scan-query="tasks" type="search" maxlength="200" placeholder="Search task, repository, artifact, status, or error">
+              </label>
+              <button class="create-button secondary" type="submit">Search</button>
+              <button class="row-action" data-security-scan-clear="tasks" type="button">Clear</button>
+            </form>
             <div class="nx-table-frame">
               <table class="nx-table">
                 <thead><tr><th>ID</th><th>Repository</th><th>Asset</th><th>Stage</th><th>Reason</th><th>Status</th><th>Attempts</th><th>Lease until</th><th>Error</th><th class="actions-column">Actions</th></tr></thead>
                 <tbody id="security-scan-task-table"></tbody>
               </table>
             </div>
+            <div class="pagination-bar security-scan-pagination" data-security-scan-pagination="tasks">
+              <span class="pagination-summary" data-security-scan-page-summary="tasks">0 results</span>
+              <button class="row-action" data-security-scan-page-action="prev" data-security-scan-page-list="tasks" type="button" title="Previous page" aria-label="Previous page"><span class="lucide-icon icon-chevron-left" aria-hidden="true"></span></button>
+              <span class="pagination-page" data-security-scan-page-label="tasks">Page 1</span>
+              <button class="row-action" data-security-scan-page-action="next" data-security-scan-page-list="tasks" type="button" title="Next page" aria-label="Next page"><span class="lucide-icon icon-chevron-right" aria-hidden="true"></span></button>
+              <label class="select-filter pagination-size"><span>Rows</span><select data-security-scan-page-size="tasks"><option value="15">15</option><option value="25" selected>25</option><option value="50">50</option><option value="100">100</option></select></label>
+            </div>
           </div>
 
           <div class="security-scan-panel" data-scan-panel="findings" hidden>
+            <form class="security-scan-list-toolbar" data-security-scan-list-form="findings">
+              <label class="filter-box">
+                <span class="filter-icon lucide-icon icon-search" aria-hidden="true"></span>
+                <input data-security-scan-query="findings" type="search" maxlength="200" placeholder="Search advisory, package, version, source, or title">
+              </label>
+              <button class="create-button secondary" type="submit">Search</button>
+              <button class="row-action" data-security-scan-clear="findings" type="button">Clear</button>
+            </form>
             <div class="nx-table-frame">
               <table class="nx-table">
                 <thead><tr><th>Severity</th><th>Advisory</th><th>Package</th><th>Installed</th><th>Fixed</th><th>Source</th><th>Run</th><th>Title</th><th>Waiver</th><th class="actions-column">Actions</th></tr></thead>
                 <tbody id="security-scan-finding-table"></tbody>
               </table>
+            </div>
+            <div class="pagination-bar security-scan-pagination" data-security-scan-pagination="findings">
+              <span class="pagination-summary" data-security-scan-page-summary="findings">0 results</span>
+              <button class="row-action" data-security-scan-page-action="prev" data-security-scan-page-list="findings" type="button" title="Previous page" aria-label="Previous page"><span class="lucide-icon icon-chevron-left" aria-hidden="true"></span></button>
+              <span class="pagination-page" data-security-scan-page-label="findings">Page 1</span>
+              <button class="row-action" data-security-scan-page-action="next" data-security-scan-page-list="findings" type="button" title="Next page" aria-label="Next page"><span class="lucide-icon icon-chevron-right" aria-hidden="true"></span></button>
+              <label class="select-filter pagination-size"><span>Rows</span><select data-security-scan-page-size="findings"><option value="15">15</option><option value="25" selected>25</option><option value="50">50</option><option value="100">100</option></select></label>
             </div>
           </div>
 
@@ -1024,11 +1069,26 @@
                 </form>
               </div>
             </div>
+            <form class="security-scan-list-toolbar" data-security-scan-list-form="repositories">
+              <label class="filter-box">
+                <span class="filter-icon lucide-icon icon-search" aria-hidden="true"></span>
+                <input data-security-scan-query="repositories" type="search" maxlength="200" placeholder="Search repository, format, type, profile, or policy">
+              </label>
+              <button class="create-button secondary" type="submit">Search</button>
+              <button class="row-action" data-security-scan-clear="repositories" type="button">Clear</button>
+            </form>
             <div class="nx-table-frame">
               <table class="nx-table">
                 <thead><tr><th>Repository</th><th>Format</th><th>Type</th><th>Status</th><th>Profile</th><th>Policy</th><th>Mode</th><th class="actions-column">Actions</th></tr></thead>
                 <tbody id="security-scan-repository-table"></tbody>
               </table>
+            </div>
+            <div class="pagination-bar security-scan-pagination" data-security-scan-pagination="repositories">
+              <span class="pagination-summary" data-security-scan-page-summary="repositories">0 results</span>
+              <button class="row-action" data-security-scan-page-action="prev" data-security-scan-page-list="repositories" type="button" title="Previous page" aria-label="Previous page"><span class="lucide-icon icon-chevron-left" aria-hidden="true"></span></button>
+              <span class="pagination-page" data-security-scan-page-label="repositories">Page 1</span>
+              <button class="row-action" data-security-scan-page-action="next" data-security-scan-page-list="repositories" type="button" title="Next page" aria-label="Next page"><span class="lucide-icon icon-chevron-right" aria-hidden="true"></span></button>
+              <label class="select-filter pagination-size"><span>Rows</span><select data-security-scan-page-size="repositories"><option value="15">15</option><option value="25" selected>25</option><option value="50">50</option><option value="100">100</option></select></label>
             </div>
           </div>
 
@@ -1038,6 +1098,14 @@
                 <span>Policies</span>
                 <button class="create-button security-scan-panel-create" id="security-scan-create-policy-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create policy</button>
               </div>
+              <form class="security-scan-list-toolbar" data-security-scan-list-form="policies">
+                <label class="filter-box">
+                  <span class="filter-icon lucide-icon icon-search" aria-hidden="true"></span>
+                  <input data-security-scan-query="policies" type="search" maxlength="200" placeholder="Search policy, severity, revision, or creator">
+                </label>
+                <button class="create-button secondary" type="submit">Search</button>
+                <button class="row-action" data-security-scan-clear="policies" type="button">Clear</button>
+              </form>
               <div class="form-modal" id="security-scan-policy-form-modal" data-form-id="security-scan-policy-form" role="dialog" aria-modal="true" aria-labelledby="security-scan-policy-form-title" hidden>
                 <div class="form-modal-backdrop" data-modal-dismiss="security-scan-policy-form"></div>
                 <div class="form-modal-panel form-modal-panel-narrow">
@@ -1072,6 +1140,13 @@
               <div class="nx-table-frame">
                 <table class="nx-table"><thead><tr><th>Name</th><th>Revision</th><th>Threshold</th><th>Complete</th><th>Result validity</th><th class="actions-column">Actions</th></tr></thead><tbody id="security-scan-policy-table"></tbody></table>
               </div>
+              <div class="pagination-bar security-scan-pagination" data-security-scan-pagination="policies">
+                <span class="pagination-summary" data-security-scan-page-summary="policies">0 results</span>
+                <button class="row-action" data-security-scan-page-action="prev" data-security-scan-page-list="policies" type="button" title="Previous page" aria-label="Previous page"><span class="lucide-icon icon-chevron-left" aria-hidden="true"></span></button>
+                <span class="pagination-page" data-security-scan-page-label="policies">Page 1</span>
+                <button class="row-action" data-security-scan-page-action="next" data-security-scan-page-list="policies" type="button" title="Next page" aria-label="Next page"><span class="lucide-icon icon-chevron-right" aria-hidden="true"></span></button>
+                <label class="select-filter pagination-size"><span>Rows</span><select data-security-scan-page-size="policies"><option value="15">15</option><option value="25" selected>25</option><option value="50">50</option><option value="100">100</option></select></label>
+              </div>
             </section>
           </div>
 
@@ -1081,8 +1156,23 @@
                 <span>Waivers</span>
                 <span class="ops-status">Create an exception from a finding; review and revoke it here.</span>
               </div>
+              <form class="security-scan-list-toolbar" data-security-scan-list-form="waivers">
+                <label class="filter-box">
+                  <span class="filter-icon lucide-icon icon-search" aria-hidden="true"></span>
+                  <input data-security-scan-query="waivers" type="search" maxlength="200" placeholder="Search exception, repository, artifact, approver, or reason">
+                </label>
+                <button class="create-button secondary" type="submit">Search</button>
+                <button class="row-action" data-security-scan-clear="waivers" type="button">Clear</button>
+              </form>
               <div class="nx-table-frame">
                 <table class="nx-table"><thead><tr><th>Status</th><th>Scope</th><th>Repository</th><th>Artifact</th><th>Exception</th><th>Expires</th><th>Approved by</th><th>Reason</th><th class="actions-column">Actions</th></tr></thead><tbody id="security-scan-waiver-table"></tbody></table>
+              </div>
+              <div class="pagination-bar security-scan-pagination" data-security-scan-pagination="waivers">
+                <span class="pagination-summary" data-security-scan-page-summary="waivers">0 results</span>
+                <button class="row-action" data-security-scan-page-action="prev" data-security-scan-page-list="waivers" type="button" title="Previous page" aria-label="Previous page"><span class="lucide-icon icon-chevron-left" aria-hidden="true"></span></button>
+                <span class="pagination-page" data-security-scan-page-label="waivers">Page 1</span>
+                <button class="row-action" data-security-scan-page-action="next" data-security-scan-page-list="waivers" type="button" title="Next page" aria-label="Next page"><span class="lucide-icon icon-chevron-right" aria-hidden="true"></span></button>
+                <label class="select-filter pagination-size"><span>Rows</span><select data-security-scan-page-size="waivers"><option value="15">15</option><option value="25" selected>25</option><option value="50">50</option><option value="100">100</option></select></label>
               </div>
             </section>
           </div>

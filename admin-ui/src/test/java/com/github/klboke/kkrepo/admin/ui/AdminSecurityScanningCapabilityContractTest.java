@@ -179,6 +179,31 @@ class AdminSecurityScanningCapabilityContractTest {
     assertTrue(css.contains(".security-scan-waiver-detail-card"));
   }
 
+  @Test
+  void everyScanningListUsesSearchAndCursorPagination() throws IOException {
+    String index = resource("/META-INF/resources/admin/index.html");
+    String javascript = resource("/META-INF/resources/admin/assets/admin.js");
+    String css = resource("/META-INF/resources/admin/assets/admin.css");
+
+    for (String list :
+        new String[] {"runs", "tasks", "findings", "repositories", "policies", "waivers"}) {
+      assertTrue(index.contains("data-security-scan-list-form=\"" + list + "\""));
+      assertTrue(index.contains("data-security-scan-query=\"" + list + "\""));
+      assertTrue(index.contains("data-security-scan-pagination=\"" + list + "\""));
+      assertTrue(index.contains("data-security-scan-page-size=\"" + list + "\""));
+    }
+    assertTrue(javascript.contains("params.set(\"after\""));
+    assertTrue(javascript.contains("params.set(\"limit\""));
+    assertTrue(javascript.contains("params.set(\"q\", page.query)"));
+    assertTrue(javascript.contains("page.cursors.push(page.after)"));
+    assertTrue(javascript.contains("page.nextAfter == null"));
+    assertTrue(javascript.contains("payload?.nextAfter ?? null"));
+    assertFalse(javascript.contains("findings?limit=100"));
+    assertFalse(javascript.contains("waivers?limit=100"));
+    assertTrue(css.contains(".security-scan-list-toolbar"));
+    assertTrue(css.contains(".security-scan-pagination"));
+  }
+
   private String resource(String path) throws IOException {
     try (InputStream stream = getClass().getResourceAsStream(path)) {
       return new String(Objects.requireNonNull(stream).readAllBytes(), StandardCharsets.UTF_8);

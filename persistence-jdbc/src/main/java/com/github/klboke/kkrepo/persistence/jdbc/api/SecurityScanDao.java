@@ -56,6 +56,13 @@ public interface SecurityScanDao {
 
   List<ScanTask> listTasks(Long repositoryId, TaskStatus status, long afterId, int maxItems);
 
+  List<ScanTask> listTasks(
+      Long repositoryId,
+      TaskStatus status,
+      String query,
+      long afterId,
+      int maxItems);
+
   /** Claims tasks with row locks and assigns a distinct lease token to every task. */
   List<ScanTask> claimTasks(
       String workerId, Instant now, Instant leaseUntil, int maxItems);
@@ -116,6 +123,9 @@ public interface SecurityScanDao {
 
   List<ScanRun> listRuns(Long repositoryId, long afterId, int maxItems);
 
+  List<ScanRun> listRuns(
+      Long repositoryId, String query, long afterId, int maxItems);
+
   void associateRun(
       long scanRunId,
       long repositoryId,
@@ -144,6 +154,14 @@ public interface SecurityScanDao {
 
   List<ScanFinding> listFindings(
       Long repositoryId, Long scanRunId, Severity severity, long afterId, int maxItems);
+
+  List<ScanFinding> listFindings(
+      Long repositoryId,
+      Long scanRunId,
+      Severity severity,
+      String query,
+      long afterId,
+      int maxItems);
 
   Optional<AssetSecurityState> findAssetState(long assetId, long profileId);
 
@@ -181,6 +199,8 @@ public interface SecurityScanDao {
 
   List<ScanPolicy> listPolicies();
 
+  List<ScanPolicy> listPolicies(String query, long afterId, int maxItems);
+
   Optional<ScanPolicy> findPolicy(long policyId);
 
   ScanPolicy createPolicy(ScanPolicy policy);
@@ -197,6 +217,9 @@ public interface SecurityScanDao {
   Optional<ScanWaiver> findWaiver(long waiverId);
 
   List<ScanWaiver> listWaivers(Long repositoryId, long afterId, int maxItems);
+
+  List<ScanWaiver> listWaivers(
+      Long repositoryId, String query, long afterId, int maxItems);
 
   List<ScanWaiver> listActiveWaivers(
       long repositoryId, Long assetId, Instant evaluatedAt, int maxItems);

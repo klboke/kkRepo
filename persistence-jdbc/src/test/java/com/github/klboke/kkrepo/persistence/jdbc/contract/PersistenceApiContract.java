@@ -255,6 +255,11 @@ public abstract class PersistenceApiContract {
     long taskId = scans.createTask(draft);
     assertEquals(taskId, scans.createTask(draft), "automatic task creation must deduplicate");
     assertEquals(
+        taskId,
+        scans.listTasks(null, null, "scan-contract", 0, 10).getFirst().id(),
+        "task search must include repository names");
+    assertTrue(scans.listTasks(null, null, "missing-task", 0, 10).isEmpty());
+    assertEquals(
         Optional.of(now),
         scans.oldestPendingTaskCreatedAt(),
         "the oldest pending task timestamp must be observable");
@@ -326,6 +331,10 @@ public abstract class PersistenceApiContract {
     assertEquals(
         java.util.stream.Stream.of(repositoryId, groupRepositoryId).sorted().toList(),
         scans.listRepositoryIdsForRun(runId));
+    assertEquals(
+        runId,
+        scans.listRuns(repositoryId, "complete", 0, 10).getFirst().id(),
+        "run search must include status and completeness");
 
     SecurityScanDao.ScanFinding finding = new SecurityScanDao.ScanFinding(
         null, runId, "GHSA-fixture|pkg:maven/com.acme/app@1.0", null,
@@ -342,6 +351,31 @@ public abstract class PersistenceApiContract {
     assertEquals(
         storedFinding.id(),
         inTransaction(() -> scans.findFindingForUpdate(storedFinding.id()).orElseThrow()).id());
+    assertEquals(
+        storedFinding.id(),
+        scans.listFindings(repositoryId, null, null, "ghsa-fixture", 0, 10)
+            .getFirst().id(),
+        "finding search must include advisory identifiers");
+    assertEquals(
+        policyId,
+        scans.listPolicies("contract-policy", 0, 10).getFirst().id(),
+        "policy search must include policy names");
+    SecurityScanDao.ScanWaiver waiver = scans.createWaiver(new SecurityScanDao.ScanWaiver(
+        null, "FINDING", repositoryId, assetId, storedFinding.id(), null, null, Map.of(),
+        "Accepted until the scheduled upgrade", policyId, 1L, "contract", "contract",
+        now.plusSeconds(3600), now.plusSeconds(2), now.plusSeconds(2)));
+    assertEquals(
+        waiver.id(),
+        scans.listWaivers(null, "scheduled upgrade", 0, 10).getFirst().id(),
+        "waiver search must include reasons");
+    assertEquals(
+        waiver.id(),
+        scans.listWaivers(null, "com/acme/app", 0, 10).getFirst().id(),
+        "waiver search must include artifact paths");
+    assertEquals(
+        waiver.id(),
+        scans.listWaivers(null, "ghsa-fixture", 0, 10).getFirst().id(),
+        "waiver search must include exact-finding advisories");
 
     SecurityScanDao.AssetSecurityState storedState = scans.upsertAssetStateIfCurrent(
         new SecurityScanDao.AssetSecurityState(

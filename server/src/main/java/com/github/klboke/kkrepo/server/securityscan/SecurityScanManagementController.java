@@ -8,6 +8,7 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.TaskStatus;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.AssetDetail;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.ConfigCommand;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.CursorPage;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.FindingView;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.FindingWaiverContext;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.FindingWaiverDetail;
@@ -19,7 +20,6 @@ import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementServic
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.WaiverCommand;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.WaiverView;
 import jakarta.servlet.http.HttpServletRequest;
-import java.util.List;
 import java.util.Map;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.http.CacheControl;
@@ -58,38 +58,46 @@ public class SecurityScanManagementController {
   }
 
   @GetMapping("/repositories")
-  public List<RepositoryView> repositories(HttpServletRequest request) {
-    return service.repositoryViews(actor(request));
+  public CursorPage<RepositoryView> repositories(
+      @RequestParam(name = "q", required = false) String query,
+      @RequestParam(name = "after", defaultValue = "0") long after,
+      @RequestParam(name = "limit", defaultValue = "25") int limit,
+      HttpServletRequest request) {
+    return service.repositoryPage(actor(request), query, after, limit);
   }
 
   @GetMapping("/tasks")
-  public List<TaskView> tasks(
+  public CursorPage<TaskView> tasks(
       @RequestParam(name = "repositoryId", required = false) Long repositoryId,
       @RequestParam(name = "status", required = false) TaskStatus status,
+      @RequestParam(name = "q", required = false) String query,
       @RequestParam(name = "after", defaultValue = "0") long after,
-      @RequestParam(name = "limit", defaultValue = "50") int limit,
+      @RequestParam(name = "limit", defaultValue = "25") int limit,
       HttpServletRequest request) {
-    return service.tasks(actor(request), repositoryId, status, after, limit);
+    return service.taskPage(actor(request), repositoryId, status, query, after, limit);
   }
 
   @GetMapping("/runs")
-  public List<RunView> runs(
+  public CursorPage<RunView> runs(
       @RequestParam(name = "repositoryId", required = false) Long repositoryId,
+      @RequestParam(name = "q", required = false) String query,
       @RequestParam(name = "after", defaultValue = "0") long after,
-      @RequestParam(name = "limit", defaultValue = "50") int limit,
+      @RequestParam(name = "limit", defaultValue = "25") int limit,
       HttpServletRequest request) {
-    return service.runs(actor(request), repositoryId, after, limit);
+    return service.runPage(actor(request), repositoryId, query, after, limit);
   }
 
   @GetMapping("/findings")
-  public List<FindingView> findings(
+  public CursorPage<FindingView> findings(
       @RequestParam(name = "repositoryId", required = false) Long repositoryId,
       @RequestParam(name = "runId", required = false) Long runId,
       @RequestParam(name = "severity", required = false) Severity severity,
+      @RequestParam(name = "q", required = false) String query,
       @RequestParam(name = "after", defaultValue = "0") long after,
-      @RequestParam(name = "limit", defaultValue = "50") int limit,
+      @RequestParam(name = "limit", defaultValue = "25") int limit,
       HttpServletRequest request) {
-    return service.findings(actor(request), repositoryId, runId, severity, after, limit);
+    return service.findingPage(
+        actor(request), repositoryId, runId, severity, query, after, limit);
   }
 
   @GetMapping("/findings/{findingId}/waiver-context")
@@ -166,8 +174,12 @@ public class SecurityScanManagementController {
   }
 
   @GetMapping("/policies")
-  public List<ScanPolicy> policies(HttpServletRequest request) {
-    return service.policies(actor(request));
+  public CursorPage<ScanPolicy> policies(
+      @RequestParam(name = "q", required = false) String query,
+      @RequestParam(name = "after", defaultValue = "0") long after,
+      @RequestParam(name = "limit", defaultValue = "25") int limit,
+      HttpServletRequest request) {
+    return service.policyPage(actor(request), query, after, limit);
   }
 
   @PostMapping("/policies")
@@ -204,12 +216,13 @@ public class SecurityScanManagementController {
   }
 
   @GetMapping("/waivers")
-  public List<WaiverView> waivers(
+  public CursorPage<WaiverView> waivers(
       @RequestParam(name = "repositoryId", required = false) Long repositoryId,
+      @RequestParam(name = "q", required = false) String query,
       @RequestParam(name = "after", defaultValue = "0") long after,
-      @RequestParam(name = "limit", defaultValue = "50") int limit,
+      @RequestParam(name = "limit", defaultValue = "25") int limit,
       HttpServletRequest request) {
-    return service.waivers(actor(request), repositoryId, after, limit);
+    return service.waiverPage(actor(request), repositoryId, query, after, limit);
   }
 
   @PostMapping("/waivers")

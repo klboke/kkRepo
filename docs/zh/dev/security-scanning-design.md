@@ -1176,6 +1176,7 @@ GET    /internal/security/scanning/assets/{assetId}
 POST   /internal/security/scanning/assets/{assetId}/rescan
 POST   /internal/security/scanning/tasks/{taskId}/retry
 POST   /internal/security/scanning/tasks/{taskId}/cancel
+GET    /internal/security/scanning/repositories
 GET    /internal/security/scanning/repositories/{repositoryId}/config
 PUT    /internal/security/scanning/repositories/{repositoryId}/config
 GET    /internal/security/scanning/policies
@@ -1200,7 +1201,11 @@ repository config 的 `enabled` 字段读取。
 - 创建 waiver 需要单独的高权限动作，并写入审计日志。
 - SBOM/raw report 下载使用受鉴权 controller 或短期 URL，不直接暴露 object key。
 
-API 列表使用稳定分页和有界 filter。description、raw report 和 SBOM 不进入列表响应。
+API 列表使用稳定分页和有界 filter。Runs、Tasks、Findings、Repositories、Policies、
+Waivers 统一返回 `{items, nextAfter}`，按不可变主键升序使用 keyset cursor；服务端多取
+一条判断下一页，不使用扫描期间容易跳页或重复的 offset。`limit` 最大 200，关键字
+`q` 最大 200 个字符并在数据库查询中参数化、转义通配符。description、raw report 和
+SBOM 不进入列表响应。
 
 ## Admin UI
 
@@ -1213,6 +1218,14 @@ API 列表使用稳定分页和有界 filter。description、raw report 和 SBOM
   **Enabled** 控件启用，部署能力开启不会自动启用任何仓库。
 - scanner 暂时 degraded 与部署能力关闭不同：前者保留管理操作，允许管理员查看
   状态、调整 Audit 配置或重试；后者不允许从 UI 修改扫描配置。
+- Overview 的 Runs 以及其余五个 tab 的业务列表都提供独立搜索、15/25/50/100 行
+  page size 和前后翻页；搜索词、游标历史与 page size 按 tab 隔离，手动 Refresh 和
+  行内操作后保留当前条件。主列表不执行昂贵的全表 `COUNT(*)`，只根据 `nextAfter`
+  判断是否可进入下一页。
+- Tasks 搜索任务、仓库、制品、状态和错误；Findings 搜索 advisory、package/PURL、
+  version、source 和 title；Waivers 搜索 exception、仓库、制品、审批人和 reason。
+  Repositories、Policies 与 Runs 使用各自页面可见字段搜索，不在浏览器对已截断的
+  前 100 条做伪搜索。
 
 1. **Overview**
    - scanner readiness 和数据库更新时间。

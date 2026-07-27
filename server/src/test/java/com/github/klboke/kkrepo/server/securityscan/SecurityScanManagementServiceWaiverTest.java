@@ -119,6 +119,70 @@ class SecurityScanManagementServiceWaiverTest {
   }
 
   @Test
+  void findingSearchUsesOneExtraRowForStableCursorPagination() {
+    Instant now = Instant.now();
+    RepositoryRecord repository = repository(11L, "maven-hosted");
+    when(repositories.list()).thenReturn(List.of(repository));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.allow());
+    when(scans.listFindings(11L, null, null, "demo", 0L, 2))
+        .thenReturn(List.of(finding(41L, 7L), finding(42L, 8L)));
+    when(scans.listRunSubjects(7L))
+        .thenReturn(List.of(new ScanRunSubject(7L, 11L, 23L, 3L, 1L, now)));
+    when(scans.listWaivers(null, 0L, 1000)).thenReturn(List.of());
+
+    var page = service.findingPage(actor, null, null, null, "demo", 0L, 1);
+
+    assertEquals(1, page.items().size());
+    assertEquals(41L, page.items().getFirst().id());
+    assertEquals(41L, page.nextAfter());
+    verify(scans).listFindings(11L, null, null, "demo", 0L, 2);
+  }
+
+  @Test
+  void scanningSearchRejectsUnboundedQueries() {
+    ResponseStatusException exception = assertThrows(
+        ResponseStatusException.class,
+        () -> service.findingPage(actor, null, null, null, "x".repeat(201), 0L, 25));
+
+    assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
+  }
+
+  @Test
+  void waiverPaginationContinuesPastRowsHiddenByRepositoryPermissions() {
+    Instant now = Instant.now();
+    List<ScanWaiver> hidden = java.util.stream.LongStream.rangeClosed(1, 100)
+        .mapToObj(id -> waiver(
+            id, 12L, null, null, "CVE-HIDDEN", null, "Accepted hidden risk",
+            now.plusSeconds(3600), now))
+        .toList();
+    ScanWaiver firstVisible = waiver(
+        101L, 11L, null, null, "CVE-VISIBLE-1", null, "Accepted visible risk",
+        now.plusSeconds(3600), now);
+    ScanWaiver secondVisible = waiver(
+        102L, 11L, null, null, "CVE-VISIBLE-2", null, "Accepted visible risk",
+        now.plusSeconds(3600), now);
+    when(repositories.list()).thenReturn(List.of(repository(11L, "maven-hosted")));
+    when(repositories.findById(11L))
+        .thenReturn(Optional.of(repository(11L, "maven-hosted")));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.allow());
+    when(security.decide(
+        eq(actor.permissionSubject()), eq("nexus:security-scanning:read")))
+        .thenReturn(AccessDecision.allow());
+    when(scans.listWaivers(null, "accepted", 0L, 100)).thenReturn(hidden);
+    when(scans.listWaivers(null, "accepted", 100L, 100))
+        .thenReturn(List.of(firstVisible, secondVisible));
+
+    var page = service.waiverPage(actor, null, "accepted", 0L, 1);
+
+    assertEquals(1, page.items().size());
+    assertEquals(101L, page.items().getFirst().id());
+    assertEquals(101L, page.nextAfter());
+    verify(scans).listWaivers(null, "accepted", 100L, 100);
+  }
+
+  @Test
   void findingWaiverStatusAndDetailsUseTheActualArtifactScope() {
     Instant now = Instant.now();
     ScanFinding finding = finding(41L, 7L);
@@ -142,8 +206,8 @@ class SecurityScanManagementServiceWaiverTest {
     when(repositories.findById(12L)).thenReturn(Optional.of(secondRepository));
     when(assets.findAssetById(23L)).thenReturn(Optional.of(asset));
     when(assets.findAssetById(24L)).thenReturn(Optional.of(secondAsset));
-    when(scans.listFindings(11L, null, null, 0L, 50)).thenReturn(List.of(finding));
-    when(scans.listFindings(12L, null, null, 0L, 50)).thenReturn(List.of(finding));
+    when(scans.listFindings(11L, null, null, 0L, 51)).thenReturn(List.of(finding));
+    when(scans.listFindings(12L, null, null, 0L, 51)).thenReturn(List.of(finding));
     when(scans.findFinding(41L)).thenReturn(Optional.of(finding));
     when(scans.listRunSubjects(7L)).thenReturn(List.of(subject, secondSubject));
     when(scans.listWaivers(null, 0L, 1000))

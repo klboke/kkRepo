@@ -2600,6 +2600,37 @@ code {
   display: block;
 }
 
+.security-scan-list-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
+.security-scan-list-toolbar .filter-box {
+  flex: 1 1 360px;
+  width: auto;
+  max-width: 680px;
+  min-width: 220px;
+}
+
+.security-scan-list-toolbar .create-button,
+.security-scan-list-toolbar .row-action {
+  flex: 0 0 auto;
+}
+
+.security-scan-panel > .ops-panel > .security-scan-list-toolbar {
+  margin: 10px;
+}
+
+.security-scan-pagination {
+  margin: 8px 0 0;
+}
+
+.security-scan-panel > .ops-panel > .security-scan-pagination {
+  margin: 8px 10px 10px;
+}
+
 .security-scan-panel > .nx-table-frame {
   margin: 0;
 }
@@ -2825,6 +2856,15 @@ code {
   .security-scan-panel {
     margin-right: 16px;
     margin-left: 16px;
+  }
+
+  .security-scan-list-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .security-scan-list-toolbar .filter-box {
+    flex-basis: 100%;
+    max-width: none;
   }
 }
 
