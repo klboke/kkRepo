@@ -2536,13 +2536,15 @@ code {
   height: 15px;
 }
 .security-scan-summary {
+  margin-right: 24px;
   margin-bottom: 18px;
+  margin-left: 24px;
 }
 
 .security-scan-capability-banner {
   display: grid;
   gap: 4px;
-  margin: 0 0 16px;
+  margin: 0 24px 16px;
   padding: 12px 14px;
   border: 1px solid #b8c4d6;
   border-radius: 6px;
@@ -2578,7 +2580,7 @@ code {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin: 0 0 16px;
+  margin: 0 24px 16px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border-subtle, #d8dee8);
 }
@@ -2591,10 +2593,15 @@ code {
 
 .security-scan-panel {
   display: none;
+  margin: 0 24px 24px;
 }
 
 .security-scan-panel.is-active {
   display: block;
+}
+
+.security-scan-panel > .nx-table-frame {
+  margin: 0;
 }
 
 .security-scan-form {
@@ -2624,6 +2631,10 @@ code {
 
 .security-scan-config-grid {
   grid-template-columns: repeat(3, minmax(180px, 1fr));
+}
+
+.security-scan-config-grid > label:not(.checkbox-field) {
+  align-self: start;
 }
 
 .security-scan-policy-grid {
@@ -2724,6 +2735,16 @@ code {
 
   .security-scan-two-column {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 980px) {
+  .security-scan-summary,
+  .security-scan-capability-banner,
+  .security-scan-tabs,
+  .security-scan-panel {
+    margin-right: 16px;
+    margin-left: 16px;
   }
 }
 

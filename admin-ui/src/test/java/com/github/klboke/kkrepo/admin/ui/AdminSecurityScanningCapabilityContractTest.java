@@ -27,12 +27,16 @@ class AdminSecurityScanningCapabilityContractTest {
     assertTrue(javascript.contains("control.disabled = true"));
     assertTrue(javascript.contains("KKREPO_SECURITY_SCANNING_ENABLED=true"));
     assertTrue(css.contains(".is-deployment-disabled .security-scan-capability-content"));
+    assertTrue(css.contains("margin: 0 24px 16px"));
+    assertTrue(css.contains(".security-scan-panel > .nx-table-frame"));
+    assertTrue(css.contains("margin-right: 16px"));
   }
 
   @Test
   void repositoryFormShowsBusinessSettingsWithoutExposingInternalIds() throws IOException {
     String index = resource("/META-INF/resources/admin/index.html");
     String javascript = resource("/META-INF/resources/admin/assets/admin.js");
+    String css = resource("/META-INF/resources/admin/assets/admin.css");
 
     assertTrue(index.contains(
         "id=\"security-scan-repository-form-modal\" "
@@ -65,6 +69,10 @@ class AdminSecurityScanningCapabilityContractTest {
     assertTrue(javascript.contains(
         "openFormModal(\"security-scan-repository-form\", \"security-scan-enabled\")"));
     assertTrue(javascript.contains("closeFormModal(\"security-scan-repository-form\")"));
+    assertTrue(css.contains(
+        ".security-scan-config-grid > label:not(.checkbox-field) {\n"
+            + "  align-self: start;\n"
+            + "}"));
   }
 
   @Test
