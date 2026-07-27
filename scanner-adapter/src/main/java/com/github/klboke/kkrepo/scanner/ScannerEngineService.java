@@ -97,10 +97,11 @@ public class ScannerEngineService {
       InputStream input,
       String expectedSha256,
       long expectedSize,
+      String artifactSuffix,
       ResourceLimits limits) {
     Path workspace = workspace("catalog-");
     try {
-      Path artifact = workspace.resolve("artifact");
+      Path artifact = workspace.resolve("artifact" + normalizeArtifactSuffix(artifactSuffix));
       ScannerInput.Verified verified =
           scannerInput.copy(input, artifact, expectedSha256, expectedSize, effective(limits));
       ArchiveGuard.Inspection inspection = archiveGuard.inspect(
@@ -135,6 +136,18 @@ public class ScannerEngineService {
     } finally {
       TempDirectories.deleteRecursively(workspace);
     }
+  }
+
+  static String normalizeArtifactSuffix(String value) {
+    if (value == null || value.isBlank()) {
+      return "";
+    }
+    String normalized = value.trim().toLowerCase(java.util.Locale.ROOT);
+    if (!normalized.matches("\\.[a-z0-9][a-z0-9._-]{0,30}")) {
+      throw new ScannerRequestException(
+          "ARTIFACT_SUFFIX_INVALID", "Artifact suffix is invalid", 400, false);
+    }
+    return normalized;
   }
 
   public MatchResponse match(

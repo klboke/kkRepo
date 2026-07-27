@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.klboke.kkrepo.security.scan.ScanSubject;
 import com.github.klboke.kkrepo.security.scan.ScannerContract;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Adapter;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Capabilities;
@@ -54,28 +55,33 @@ public class HttpSecurityScannerAdapter implements Adapter {
   @Override
   public CatalogResponse catalog(CatalogRequest request, InputStreamSource input)
       throws IOException {
-    HttpRequest httpRequest = binaryRequest("/v1/catalog", request.limits().timeoutSeconds(), input)
-        .header("Content-Type", contentType(request.subject().mediaType()))
-        .header("X-KKRepo-API-Version", request.apiVersion())
-        .header("X-KKRepo-Run-ID", request.runId())
-        .header("Idempotency-Key", request.idempotencyKey())
-        .header("X-KKRepo-Target", request.subject().classification().name())
-        .header("X-KKRepo-Expected-SHA256", request.subject().sha256())
-        .header("X-KKRepo-Expected-Size", Long.toString(request.subject().size()))
-        .header("X-KKRepo-Profile-Digest", request.profileConfigurationDigest())
-        .header("X-KKRepo-Max-Archive-Entries",
-            Integer.toString(request.limits().maxArchiveEntries()))
-        .header("X-KKRepo-Max-Uncompressed-Bytes",
-            Long.toString(request.limits().maxUncompressedBytes()))
-        .header("X-KKRepo-Max-Single-File-Bytes",
-            Long.toString(request.limits().maxSingleFileBytes()))
-        .header("X-KKRepo-Max-Nested-Depth",
-            Integer.toString(request.limits().maxNestedDepth()))
-        .header("X-KKRepo-Max-Input-Bytes",
-            Long.toString(request.limits().maxInputBytes()))
-        .header("X-KKRepo-Timeout-Seconds",
-            Integer.toString(request.limits().timeoutSeconds()))
-        .build();
+    HttpRequest.Builder builder =
+        binaryRequest("/v1/catalog", request.limits().timeoutSeconds(), input)
+            .header("Content-Type", contentType(request.subject().mediaType()))
+            .header("X-KKRepo-API-Version", request.apiVersion())
+            .header("X-KKRepo-Run-ID", request.runId())
+            .header("Idempotency-Key", request.idempotencyKey())
+            .header("X-KKRepo-Target", request.subject().classification().name())
+            .header("X-KKRepo-Expected-SHA256", request.subject().sha256())
+            .header("X-KKRepo-Expected-Size", Long.toString(request.subject().size()))
+            .header("X-KKRepo-Profile-Digest", request.profileConfigurationDigest())
+            .header("X-KKRepo-Max-Archive-Entries",
+                Integer.toString(request.limits().maxArchiveEntries()))
+            .header("X-KKRepo-Max-Uncompressed-Bytes",
+                Long.toString(request.limits().maxUncompressedBytes()))
+            .header("X-KKRepo-Max-Single-File-Bytes",
+                Long.toString(request.limits().maxSingleFileBytes()))
+            .header("X-KKRepo-Max-Nested-Depth",
+                Integer.toString(request.limits().maxNestedDepth()))
+            .header("X-KKRepo-Max-Input-Bytes",
+                Long.toString(request.limits().maxInputBytes()))
+            .header("X-KKRepo-Timeout-Seconds",
+                Integer.toString(request.limits().timeoutSeconds()));
+    String artifactSuffix = artifactSuffix(request.subject());
+    if (!artifactSuffix.isEmpty()) {
+      builder.header("X-KKRepo-Artifact-Suffix", artifactSuffix);
+    }
+    HttpRequest httpRequest = builder.build();
     return send(httpRequest, CatalogResponse.class);
   }
 
@@ -208,6 +214,28 @@ public class HttpSecurityScannerAdapter implements Adapter {
 
   private static String contentType(String value) {
     return value == null || value.isBlank() ? "application/octet-stream" : value;
+  }
+
+  static String artifactSuffix(ScanSubject subject) {
+    Object pathValue = subject == null || subject.attributes() == null
+        ? null : subject.attributes().get("path");
+    if (!(pathValue instanceof String path) || path.isBlank()) {
+      return "";
+    }
+    String normalized = path.trim().toLowerCase(Locale.ROOT);
+    int separator = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'));
+    String filename = normalized.substring(separator + 1);
+    for (String compound : new String[] {".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst"}) {
+      if (filename.endsWith(compound)) {
+        return compound;
+      }
+    }
+    int dot = filename.lastIndexOf('.');
+    if (dot < 0) {
+      return "";
+    }
+    String suffix = filename.substring(dot);
+    return suffix.matches("\\.[a-z0-9][a-z0-9._-]{0,30}") ? suffix : "";
   }
 
   private String[] serviceCredentialHeader() {

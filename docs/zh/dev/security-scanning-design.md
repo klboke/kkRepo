@@ -923,6 +923,8 @@ POST /v1/oci/scan
 - kkRepo run ID 和 Idempotency-Key。
 - target classification。
 - 期望 SHA-256、size 和 media type。
+- 从规范 asset path 提取并严格白名单化的制品后缀；adapter 仅用它保留工具对
+  `.jar`、`.nupkg`、`.tar.gz` 等封装格式的识别能力，不能据此替代服务端 classifier。
 - profile configuration digest。
 - timeout 与资源上限。
 

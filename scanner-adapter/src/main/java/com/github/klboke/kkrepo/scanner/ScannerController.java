@@ -55,13 +55,15 @@ public class ScannerController {
       @RequestHeader("X-KKRepo-API-Version") String apiVersion,
       @RequestHeader("X-KKRepo-Expected-SHA256") String expectedSha256,
       @RequestHeader("X-KKRepo-Expected-Size") long expectedSize,
+      @RequestHeader(value = "X-KKRepo-Artifact-Suffix", required = false)
+          String artifactSuffix,
       @RequestHeader(value = "X-KKRepo-Scanner-Credential", required = false)
           String credential)
       throws IOException {
     authorize(credential);
     requireApiVersion(apiVersion);
     return engine.catalog(
-        request.getInputStream(), expectedSha256, expectedSize, limits(request));
+        request.getInputStream(), expectedSha256, expectedSize, artifactSuffix, limits(request));
   }
 
   @PostMapping("/v1/match")

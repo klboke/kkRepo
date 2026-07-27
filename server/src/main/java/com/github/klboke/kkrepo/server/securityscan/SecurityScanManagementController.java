@@ -61,43 +61,43 @@ public class SecurityScanManagementController {
 
   @GetMapping("/tasks")
   public List<TaskView> tasks(
-      @RequestParam(required = false) Long repositoryId,
-      @RequestParam(required = false) TaskStatus status,
-      @RequestParam(defaultValue = "0") long after,
-      @RequestParam(defaultValue = "50") int limit,
+      @RequestParam(name = "repositoryId", required = false) Long repositoryId,
+      @RequestParam(name = "status", required = false) TaskStatus status,
+      @RequestParam(name = "after", defaultValue = "0") long after,
+      @RequestParam(name = "limit", defaultValue = "50") int limit,
       HttpServletRequest request) {
     return service.tasks(actor(request), repositoryId, status, after, limit);
   }
 
   @GetMapping("/runs")
   public List<RunView> runs(
-      @RequestParam(required = false) Long repositoryId,
-      @RequestParam(defaultValue = "0") long after,
-      @RequestParam(defaultValue = "50") int limit,
+      @RequestParam(name = "repositoryId", required = false) Long repositoryId,
+      @RequestParam(name = "after", defaultValue = "0") long after,
+      @RequestParam(name = "limit", defaultValue = "50") int limit,
       HttpServletRequest request) {
     return service.runs(actor(request), repositoryId, after, limit);
   }
 
   @GetMapping("/findings")
   public List<FindingView> findings(
-      @RequestParam(required = false) Long repositoryId,
-      @RequestParam(required = false) Long runId,
-      @RequestParam(required = false) Severity severity,
-      @RequestParam(defaultValue = "0") long after,
-      @RequestParam(defaultValue = "50") int limit,
+      @RequestParam(name = "repositoryId", required = false) Long repositoryId,
+      @RequestParam(name = "runId", required = false) Long runId,
+      @RequestParam(name = "severity", required = false) Severity severity,
+      @RequestParam(name = "after", defaultValue = "0") long after,
+      @RequestParam(name = "limit", defaultValue = "50") int limit,
       HttpServletRequest request) {
     return service.findings(actor(request), repositoryId, runId, severity, after, limit);
   }
 
   @GetMapping("/assets/{assetId}")
   public AssetDetail asset(
-      @PathVariable long assetId, HttpServletRequest request) {
+      @PathVariable("assetId") long assetId, HttpServletRequest request) {
     return service.asset(actor(request), assetId);
   }
 
   @PostMapping("/assets/{assetId}/rescan")
   public Map<String, Long> rescan(
-      @PathVariable long assetId, HttpServletRequest request) {
+      @PathVariable("assetId") long assetId, HttpServletRequest request) {
     AuthenticatedSubject actor = actor(request);
     long taskId = service.rescan(actor, assetId);
     audit.record(
@@ -107,7 +107,7 @@ public class SecurityScanManagementController {
 
   @PostMapping("/tasks/{taskId}/retry")
   public Map<String, Object> retry(
-      @PathVariable long taskId, HttpServletRequest request) {
+      @PathVariable("taskId") long taskId, HttpServletRequest request) {
     AuthenticatedSubject actor = actor(request);
     service.retry(actor, taskId);
     audit.record(request, actor, "RETRY", null, Map.of("taskId", taskId));
@@ -116,7 +116,7 @@ public class SecurityScanManagementController {
 
   @PostMapping("/tasks/{taskId}/cancel")
   public Map<String, Object> cancel(
-      @PathVariable long taskId, HttpServletRequest request) {
+      @PathVariable("taskId") long taskId, HttpServletRequest request) {
     AuthenticatedSubject actor = actor(request);
     service.cancel(actor, taskId);
     audit.record(request, actor, "CANCEL", null, Map.of("taskId", taskId));
@@ -125,13 +125,13 @@ public class SecurityScanManagementController {
 
   @GetMapping("/repositories/{repositoryId}/config")
   public RepositoryScanConfig repositoryConfig(
-      @PathVariable long repositoryId, HttpServletRequest request) {
+      @PathVariable("repositoryId") long repositoryId, HttpServletRequest request) {
     return service.repositoryConfig(actor(request), repositoryId);
   }
 
   @PutMapping("/repositories/{repositoryId}/config")
   public RepositoryScanConfig updateRepositoryConfig(
-      @PathVariable long repositoryId,
+      @PathVariable("repositoryId") long repositoryId,
       @RequestBody ConfigCommand command,
       HttpServletRequest request) {
     AuthenticatedSubject actor = actor(request);
@@ -171,9 +171,9 @@ public class SecurityScanManagementController {
 
   @GetMapping("/waivers")
   public List<ScanWaiver> waivers(
-      @RequestParam(required = false) Long repositoryId,
-      @RequestParam(defaultValue = "0") long after,
-      @RequestParam(defaultValue = "50") int limit,
+      @RequestParam(name = "repositoryId", required = false) Long repositoryId,
+      @RequestParam(name = "after", defaultValue = "0") long after,
+      @RequestParam(name = "limit", defaultValue = "50") int limit,
       HttpServletRequest request) {
     return service.waivers(actor(request), repositoryId, after, limit);
   }
@@ -197,7 +197,7 @@ public class SecurityScanManagementController {
 
   @DeleteMapping("/waivers/{waiverId}")
   public ResponseEntity<Void> deleteWaiver(
-      @PathVariable long waiverId, HttpServletRequest request) {
+      @PathVariable("waiverId") long waiverId, HttpServletRequest request) {
     AuthenticatedSubject actor = actor(request);
     ScanWaiver waiver = service.deleteWaiver(actor, waiverId);
     audit.record(
@@ -211,7 +211,7 @@ public class SecurityScanManagementController {
 
   @GetMapping("/sboms/{sbomId}")
   public ResponseEntity<InputStreamResource> sbom(
-      @PathVariable long sbomId, HttpServletRequest request) {
+      @PathVariable("sbomId") long sbomId, HttpServletRequest request) {
     var download = service.sbom(actor(request), sbomId);
     return ResponseEntity.ok()
         .contentType(CYCLONEDX)
