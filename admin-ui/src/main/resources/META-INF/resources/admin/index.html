@@ -874,7 +874,59 @@
             <button class="row-action" data-scan-tab="tasks" type="button" role="tab">Tasks</button>
             <button class="row-action" data-scan-tab="findings" type="button" role="tab">Findings</button>
             <button class="row-action" data-scan-tab="repositories" type="button" role="tab">Repositories</button>
-            <button class="row-action" data-scan-tab="policies" type="button" role="tab">Policies &amp; Waivers</button>
+            <button class="row-action" data-scan-tab="policies" type="button" role="tab">Policies</button>
+            <button class="row-action" data-scan-tab="waivers" type="button" role="tab">Waivers</button>
+          </div>
+
+          <div class="form-modal" id="security-scan-waiver-form-modal" data-form-id="security-scan-waiver-form" role="dialog" aria-modal="true" aria-labelledby="security-scan-waiver-form-title" hidden>
+            <div class="form-modal-backdrop" data-modal-dismiss="security-scan-waiver-form"></div>
+            <div class="form-modal-panel form-modal-panel-narrow">
+              <button class="form-modal-close" data-modal-dismiss="security-scan-waiver-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
+              <form class="blobstore-form modal-form security-scan-form" id="security-scan-waiver-form" hidden novalidate>
+                <div class="form-title" id="security-scan-waiver-form-title">Create finding waiver</div>
+                <p class="form-note security-scan-form-intro">Accept this finding temporarily for one artifact. The finding and policy history remain unchanged.</p>
+                <input id="security-scan-waiver-finding-id" type="hidden">
+                <div class="form-grid security-scan-waiver-grid">
+                  <label><span>Vulnerability</span><input id="security-scan-waiver-finding" type="text" disabled></label>
+                  <label><span>Package</span><input id="security-scan-waiver-package" type="text" disabled></label>
+                  <label class="full-width">
+                    <span>Repository artifact <span class="required-mark">*</span></span>
+                    <select id="security-scan-waiver-target" required></select>
+                    <small class="form-note">Only artifacts associated with this finding are available.</small>
+                  </label>
+                  <label>
+                    <span>Expires in <span class="required-mark">*</span></span>
+                    <select id="security-scan-waiver-duration" required>
+                      <option value="86400">1 day</option>
+                      <option value="604800" selected>7 days</option>
+                      <option value="2592000">30 days</option>
+                      <option value="7776000">90 days</option>
+                    </select>
+                  </label>
+                  <label class="full-width"><span>Reason <span class="required-mark">*</span></span><textarea id="security-scan-waiver-reason" rows="2" required></textarea></label>
+                </div>
+                <div class="form-actions">
+                  <button class="create-button" id="security-scan-save-waiver-button" type="submit">Create waiver</button>
+                  <button class="create-button secondary" id="security-scan-cancel-waiver-button" type="button">Cancel</button>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <div class="form-modal" id="security-scan-waiver-detail-modal" data-form-id="security-scan-waiver-detail" role="dialog" aria-modal="true" aria-labelledby="security-scan-waiver-detail-title" hidden>
+            <div class="form-modal-backdrop" data-modal-dismiss="security-scan-waiver-detail"></div>
+            <div class="form-modal-panel">
+              <button class="form-modal-close" data-modal-dismiss="security-scan-waiver-detail" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
+              <div class="blobstore-form modal-form security-scan-form" id="security-scan-waiver-detail" hidden>
+                <div class="form-title" id="security-scan-waiver-detail-title">Finding waiver details</div>
+                <p class="form-note security-scan-form-intro" id="security-scan-waiver-detail-summary"></p>
+                <div class="security-scan-waiver-detail-list" id="security-scan-waiver-detail-list"></div>
+                <div class="form-actions">
+                  <button class="create-button secondary" id="security-scan-view-all-waivers-button" type="button">View all waivers</button>
+                  <button class="create-button secondary" id="security-scan-close-waiver-detail-button" type="button">Close</button>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div class="security-scan-panel is-active" data-scan-panel="overview">
@@ -898,7 +950,7 @@
           <div class="security-scan-panel" data-scan-panel="findings" hidden>
             <div class="nx-table-frame">
               <table class="nx-table">
-                <thead><tr><th>Severity</th><th>Advisory</th><th>Package</th><th>Installed</th><th>Fixed</th><th>Source</th><th>Run</th><th>Title</th><th class="actions-column">Actions</th></tr></thead>
+                <thead><tr><th>Severity</th><th>Advisory</th><th>Package</th><th>Installed</th><th>Fixed</th><th>Source</th><th>Run</th><th>Title</th><th>Waiver</th><th class="actions-column">Actions</th></tr></thead>
                 <tbody id="security-scan-finding-table"></tbody>
               </table>
             </div>
@@ -980,91 +1032,58 @@
           </div>
 
           <div class="security-scan-panel" data-scan-panel="policies" hidden>
-            <div class="security-scan-two-column">
-              <section class="ops-panel">
-                <div class="ops-panel-head security-scan-panel-head">
-                  <span>Policies</span>
-                  <button class="create-button security-scan-panel-create" id="security-scan-create-policy-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create policy</button>
+            <section class="ops-panel">
+              <div class="ops-panel-head security-scan-panel-head">
+                <span>Policies</span>
+                <button class="create-button security-scan-panel-create" id="security-scan-create-policy-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create policy</button>
+              </div>
+              <div class="form-modal" id="security-scan-policy-form-modal" data-form-id="security-scan-policy-form" role="dialog" aria-modal="true" aria-labelledby="security-scan-policy-form-title" hidden>
+                <div class="form-modal-backdrop" data-modal-dismiss="security-scan-policy-form"></div>
+                <div class="form-modal-panel form-modal-panel-narrow">
+                  <button class="form-modal-close" data-modal-dismiss="security-scan-policy-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
+                  <form class="blobstore-form modal-form security-scan-form" id="security-scan-policy-form" hidden novalidate>
+                    <div class="form-title" id="security-scan-policy-form-title">Create policy</div>
+                    <p class="form-note security-scan-policy-form-note" id="security-scan-policy-form-note">Policies are versioned so past scan decisions remain traceable.</p>
+                    <input id="security-scan-policy-source-id" type="hidden">
+                    <div class="form-grid security-scan-policy-grid">
+                      <label><span>Name <span class="required-mark">*</span></span><input id="security-scan-policy-name" type="text" required></label>
+                      <label><span>Block severity</span><select id="security-scan-policy-severity"><option>CRITICAL</option><option>HIGH</option><option>MEDIUM</option><option>LOW</option><option>UNKNOWN</option></select></label>
+                      <label>
+                        <span>Result validity</span>
+                        <select id="security-scan-policy-max-age">
+                          <option value="">No expiry</option>
+                          <option value="86400">1 day</option>
+                          <option value="604800">7 days</option>
+                          <option value="2592000">30 days</option>
+                        </select>
+                      </label>
+                      <label class="checkbox-field"><input id="security-scan-policy-fixable" type="checkbox"><span>Only block fixable findings</span></label>
+                      <label class="checkbox-field"><input id="security-scan-policy-block-unknown" type="checkbox"><span>Block unknown severity</span></label>
+                      <label class="checkbox-field"><input id="security-scan-policy-complete" type="checkbox"><span>Require complete inventory</span></label>
+                    </div>
+                    <div class="form-actions">
+                      <button class="create-button" id="security-scan-save-policy-button" type="submit">Create policy</button>
+                      <button class="create-button secondary" id="security-scan-cancel-policy-button" type="button">Cancel</button>
+                    </div>
+                  </form>
                 </div>
-                <div class="form-modal" id="security-scan-policy-form-modal" data-form-id="security-scan-policy-form" role="dialog" aria-modal="true" aria-labelledby="security-scan-policy-form-title" hidden>
-                  <div class="form-modal-backdrop" data-modal-dismiss="security-scan-policy-form"></div>
-                  <div class="form-modal-panel form-modal-panel-narrow">
-                    <button class="form-modal-close" data-modal-dismiss="security-scan-policy-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
-                    <form class="blobstore-form modal-form security-scan-form" id="security-scan-policy-form" hidden novalidate>
-                      <div class="form-title" id="security-scan-policy-form-title">Create policy</div>
-                      <p class="form-note security-scan-policy-form-note" id="security-scan-policy-form-note">Policies are versioned so past scan decisions remain traceable.</p>
-                      <input id="security-scan-policy-source-id" type="hidden">
-                      <div class="form-grid security-scan-policy-grid">
-                        <label><span>Name <span class="required-mark">*</span></span><input id="security-scan-policy-name" type="text" required></label>
-                        <label><span>Block severity</span><select id="security-scan-policy-severity"><option>CRITICAL</option><option>HIGH</option><option>MEDIUM</option><option>LOW</option><option>UNKNOWN</option></select></label>
-                        <label>
-                          <span>Result validity</span>
-                          <select id="security-scan-policy-max-age">
-                            <option value="">No expiry</option>
-                            <option value="86400">1 day</option>
-                            <option value="604800">7 days</option>
-                            <option value="2592000">30 days</option>
-                          </select>
-                        </label>
-                        <label class="checkbox-field"><input id="security-scan-policy-fixable" type="checkbox"><span>Only block fixable findings</span></label>
-                        <label class="checkbox-field"><input id="security-scan-policy-block-unknown" type="checkbox"><span>Block unknown severity</span></label>
-                        <label class="checkbox-field"><input id="security-scan-policy-complete" type="checkbox"><span>Require complete inventory</span></label>
-                      </div>
-                      <div class="form-actions">
-                        <button class="create-button" id="security-scan-save-policy-button" type="submit">Create policy</button>
-                        <button class="create-button secondary" id="security-scan-cancel-policy-button" type="button">Cancel</button>
-                      </div>
-                    </form>
-                  </div>
-                </div>
-                <div class="nx-table-frame">
-                  <table class="nx-table"><thead><tr><th>Name</th><th>Revision</th><th>Threshold</th><th>Complete</th><th>Result validity</th><th class="actions-column">Actions</th></tr></thead><tbody id="security-scan-policy-table"></tbody></table>
-                </div>
-              </section>
-              <section class="ops-panel">
-                <div class="ops-panel-head security-scan-panel-head">
-                  <span>Waivers</span>
-                  <span class="ops-status">Create an exception from a finding.</span>
-                </div>
-                <div class="form-modal" id="security-scan-waiver-form-modal" data-form-id="security-scan-waiver-form" role="dialog" aria-modal="true" aria-labelledby="security-scan-waiver-form-title" hidden>
-                  <div class="form-modal-backdrop" data-modal-dismiss="security-scan-waiver-form"></div>
-                  <div class="form-modal-panel form-modal-panel-narrow">
-                    <button class="form-modal-close" data-modal-dismiss="security-scan-waiver-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
-                    <form class="blobstore-form modal-form security-scan-form" id="security-scan-waiver-form" hidden novalidate>
-                      <div class="form-title" id="security-scan-waiver-form-title">Create finding waiver</div>
-                      <p class="form-note security-scan-form-intro">Accept this finding temporarily for one artifact. The finding and policy history remain unchanged.</p>
-                      <input id="security-scan-waiver-finding-id" type="hidden">
-                      <div class="form-grid security-scan-waiver-grid">
-                        <label><span>Vulnerability</span><input id="security-scan-waiver-finding" type="text" disabled></label>
-                        <label><span>Package</span><input id="security-scan-waiver-package" type="text" disabled></label>
-                        <label class="full-width">
-                          <span>Repository artifact <span class="required-mark">*</span></span>
-                          <select id="security-scan-waiver-target" required></select>
-                          <small class="form-note">Only artifacts associated with this finding are available.</small>
-                        </label>
-                        <label>
-                          <span>Expires in <span class="required-mark">*</span></span>
-                          <select id="security-scan-waiver-duration" required>
-                            <option value="86400">1 day</option>
-                            <option value="604800" selected>7 days</option>
-                            <option value="2592000">30 days</option>
-                            <option value="7776000">90 days</option>
-                          </select>
-                        </label>
-                        <label class="full-width"><span>Reason <span class="required-mark">*</span></span><textarea id="security-scan-waiver-reason" rows="2" required></textarea></label>
-                      </div>
-                      <div class="form-actions">
-                        <button class="create-button" id="security-scan-save-waiver-button" type="submit">Create waiver</button>
-                        <button class="create-button secondary" id="security-scan-cancel-waiver-button" type="button">Cancel</button>
-                      </div>
-                    </form>
-                  </div>
-                </div>
-                <div class="nx-table-frame">
-                  <table class="nx-table"><thead><tr><th>ID</th><th>Scope</th><th>Repository</th><th>Asset</th><th>Exception</th><th>Expires</th><th>Reason</th><th class="actions-column">Actions</th></tr></thead><tbody id="security-scan-waiver-table"></tbody></table>
-                </div>
-              </section>
-            </div>
+              </div>
+              <div class="nx-table-frame">
+                <table class="nx-table"><thead><tr><th>Name</th><th>Revision</th><th>Threshold</th><th>Complete</th><th>Result validity</th><th class="actions-column">Actions</th></tr></thead><tbody id="security-scan-policy-table"></tbody></table>
+              </div>
+            </section>
+          </div>
+
+          <div class="security-scan-panel" data-scan-panel="waivers" hidden>
+            <section class="ops-panel">
+              <div class="ops-panel-head security-scan-panel-head">
+                <span>Waivers</span>
+                <span class="ops-status">Create an exception from a finding; review and revoke it here.</span>
+              </div>
+              <div class="nx-table-frame">
+                <table class="nx-table"><thead><tr><th>Status</th><th>Scope</th><th>Repository</th><th>Artifact</th><th>Exception</th><th>Expires</th><th>Approved by</th><th>Reason</th><th class="actions-column">Actions</th></tr></thead><tbody id="security-scan-waiver-table"></tbody></table>
+              </div>
+            </section>
           </div>
           </div>
         </section>

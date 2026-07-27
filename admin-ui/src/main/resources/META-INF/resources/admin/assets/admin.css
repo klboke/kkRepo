@@ -2604,6 +2604,20 @@ code {
   margin: 0;
 }
 
+.security-scan-panel > .ops-panel {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-soft);
+}
+
+.security-scan-panel > .ops-panel > .nx-table-frame {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 .security-scan-form {
   margin-top: 16px;
 }
@@ -2613,6 +2627,12 @@ code {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.security-scan-panel-head .ops-status {
+  min-height: 0;
+  margin: 0;
+  font-weight: 400;
 }
 
 .security-scan-panel-create {
@@ -2643,6 +2663,81 @@ code {
 
 .security-scan-waiver-grid {
   grid-template-columns: repeat(2, minmax(180px, 1fr));
+}
+
+.security-scan-waiver-status-button {
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.security-scan-waiver-status-button:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.security-scan-waiver-detail-list {
+  display: grid;
+  gap: 12px;
+}
+
+.security-scan-waiver-detail-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfb;
+  padding: 14px;
+}
+
+.security-scan-waiver-detail-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+}
+
+.security-scan-waiver-detail-target {
+  min-width: 0;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+.security-scan-waiver-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.security-scan-waiver-detail-grid > div {
+  min-width: 0;
+}
+
+.security-scan-waiver-detail-grid span,
+.security-scan-waiver-detail-reason > span {
+  display: block;
+  color: var(--ink-4);
+  font-size: 12px;
+  font-weight: var(--fw-bold);
+  text-transform: uppercase;
+}
+
+.security-scan-waiver-detail-grid strong {
+  display: block;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.security-scan-waiver-detail-selector {
+  grid-column: span 2;
+}
+
+.security-scan-waiver-detail-reason {
+  margin-top: 14px;
+}
+
+.security-scan-waiver-detail-reason p {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
 }
 
 .security-scan-enabled-field {
@@ -2713,28 +2808,13 @@ code {
   padding: 12px 14px 14px;
 }
 
-.security-scan-two-column {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 18px;
-  align-items: start;
-}
-
-.security-scan-two-column .ops-panel {
-  min-width: 0;
-}
-
-.security-scan-two-column .nx-table-frame {
-  margin-top: 16px;
-}
-
 @media (max-width: 1100px) {
   .security-scan-config-grid {
     grid-template-columns: repeat(2, minmax(180px, 1fr));
   }
 
-  .security-scan-two-column {
-    grid-template-columns: 1fr;
+  .security-scan-waiver-detail-grid {
+    grid-template-columns: repeat(2, minmax(140px, 1fr));
   }
 }
 
@@ -2745,6 +2825,16 @@ code {
   .security-scan-panel {
     margin-right: 16px;
     margin-left: 16px;
+  }
+}
+
+@media (max-width: 700px) {
+  .security-scan-waiver-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .security-scan-waiver-detail-selector {
+    grid-column: auto;
   }
 }
 

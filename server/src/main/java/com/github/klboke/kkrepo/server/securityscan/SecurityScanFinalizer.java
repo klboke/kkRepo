@@ -268,27 +268,12 @@ public class SecurityScanFinalizer {
   }
 
   private static boolean waived(ScanFinding finding, List<ScanWaiver> waivers) {
-    for (ScanWaiver waiver : waivers) {
-      if (waiver.findingId() != null && waiver.findingId().equals(finding.id())) return true;
-      boolean hasAdvisory =
-          waiver.advisorySelector() != null && !waiver.advisorySelector().isBlank();
-      boolean hasPackage =
-          waiver.packageSelector() != null && !waiver.packageSelector().isBlank();
-      if (!hasAdvisory && !hasPackage) continue;
-      boolean advisory = !hasAdvisory
-          || waiver.advisorySelector().equalsIgnoreCase(finding.advisoryId())
-          || finding.aliases().stream()
-              .anyMatch(alias -> waiver.advisorySelector().equalsIgnoreCase(alias));
-      boolean packageMatches = !hasPackage
-          || waiver.packageSelector().equals(finding.packageUrl())
-          || waiver.packageSelector().equals(finding.packageName());
-      if (advisory && packageMatches) return true;
-    }
-    return false;
+    return waivers.stream()
+        .anyMatch(waiver -> SecurityScanWaiverMatcher.matchesFinding(waiver, finding));
   }
 
   private static boolean waiverAppliesToPolicy(ScanWaiver waiver, ScanPolicy policy) {
-    if (waiver.approvedBy() == null || waiver.approvedBy().isBlank()) return false;
+    if (!SecurityScanWaiverMatcher.isApproved(waiver)) return false;
     if (waiver.policyId() != null
         && (policy == null || !waiver.policyId().equals(policy.id()))) {
       return false;

@@ -1166,6 +1166,7 @@ GET    /internal/security/scanning/tasks
 GET    /internal/security/scanning/runs
 GET    /internal/security/scanning/findings
 GET    /internal/security/scanning/findings/{findingId}/waiver-context
+GET    /internal/security/scanning/findings/{findingId}/waivers
 GET    /internal/security/scanning/assets/{assetId}
 POST   /internal/security/scanning/assets/{assetId}/rescan
 POST   /internal/security/scanning/tasks/{taskId}/retry
@@ -1175,6 +1176,7 @@ PUT    /internal/security/scanning/repositories/{repositoryId}/config
 GET    /internal/security/scanning/policies
 POST   /internal/security/scanning/policies
 PUT    /internal/security/scanning/policies/{policyId}
+GET    /internal/security/scanning/waivers
 POST   /internal/security/scanning/waivers
 DELETE /internal/security/scanning/waivers/{id}
 GET    /internal/security/scanning/sboms/{sbomId}
@@ -1218,6 +1220,11 @@ API 列表使用稳定分页和有界 filter。description、raw report 和 SBOM
 3. **Findings**
    - repository、component、asset、package/PURL、advisory、severity、fixed version。
    - 原始来源和 scan snapshot。
+   - 每条 finding 显示后端按实际 run subject、repository、asset 和 selector 计算的
+     waiver 状态；不能只在浏览器按 advisory/package 猜测，否则同一漏洞出现在不同
+     仓库时会误标。
+   - 有效或已过期的状态徽标可点击查看适用制品、范围、策略、reason、审批人和到期
+     时间；新建 waiver 仍从 finding 行内发起，成功后留在 Findings 并立即刷新状态。
 4. **Repositories**
    - profile、hosted/proxy trigger、audit/enforce、pending/failure/partial action。
    - 仓库列表通过行内“configure”打开统一弹窗，不在列表下方展开常驻配置表单。
@@ -1230,14 +1237,22 @@ API 列表使用稳定分页和有界 filter。description、raw report 和 SBOM
      仓库同时展示两者；不适用的范围不出现在表单中。
    - pending、failed、partial 三类异常动作收进默认折叠的高级设置；已有任一
      `BLOCK` 配置时自动展开，避免隐藏正在生效的阻断行为。
-5. **Policies and Waivers**
-   - 版本、阈值、范围、到期时间、审批人和审计历史。
+5. **Policies**
+   - 展示版本、阈值、完整性和结果有效期。
    - 策略列表通过“Create policy”和行内“edit”进入同一弹窗表单，不在列表页面内
      常驻新增表单；编辑弹窗明确提示将创建新 revision 以及受影响仓库的切换语义。
-   - waiver 列表只保留查看和删除操作，不提供无上下文的“Create waiver”。新建
-     waiver 从 Findings 行内“waive”发起，通过统一弹窗展示只读的漏洞和包信息。
+6. **Waivers**
+   - 作为独立治理页签展示有效/过期状态、范围、适用仓库/制品、到期时间、审批人、
+     reason 和撤销入口。它不是发现漏洞的第二份列表，而是 exception 生命周期和审计
+     管理视图，因此不与 Findings 合并，也不与 Policies 挤在同一面板。
+   - 仓库和制品显示名称与路径，不把 repository/asset 等数据库 ID 暴露为需要用户
+     理解的业务信息。
+   - 列表不提供无上下文的“Create waiver”。新建 waiver 从 Findings 行内“waive”
+     发起，通过统一弹窗展示只读的漏洞和包信息。
    - 弹窗中的适用制品只能从后端返回的关联仓库制品中选择，不允许手填 repository、
      asset、finding ID；有效期使用 1、7、30、90 天选项且 reason 必填。
+   - 从 Findings 打开的新建和详情弹窗挂在扫描页面公共层，不嵌套在任一隐藏 tab
+     panel 内，避免“状态已打开但祖先仍 hidden”导致弹窗不可见。
 
 Browse UI 第一阶段只显示有权限用户可见的状态徽标和最后扫描时间，不直接展示完整
 漏洞描述。finding 详情统一进入受权限控制的管理页面。

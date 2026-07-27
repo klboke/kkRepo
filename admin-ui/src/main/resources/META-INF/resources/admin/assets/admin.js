@@ -4313,9 +4313,24 @@ function renderSecurityScanFindings() {
         <td>${escapeHtml(finding.dataSource || "-")}</td>
         <td>${escapeHtml(finding.scanRunId)}</td>
         <td>${escapeHtml(finding.title || "-")}</td>
+        <td>${renderSecurityScanFindingWaiverStatus(finding)}</td>
         <td class="actions-column"><button class="row-action security-scan-finding-waive" data-id="${finding.id}" type="button">waive</button></td>
       </tr>`).join("")
-      || '<tr><td colspan="9" class="placeholder">No known vulnerability findings are visible.</td></tr>';
+      || '<tr><td colspan="10" class="placeholder">No known vulnerability findings are visible.</td></tr>';
+}
+
+function renderSecurityScanFindingWaiverStatus(finding) {
+  const active = Number(finding.activeWaiverCount || 0);
+  const expired = Number(finding.expiredWaiverCount || 0);
+  if (active > 0) {
+    const label = active === 1 ? "Waived" : `Waived · ${active}`;
+    return `<button class="state-badge compact ok security-scan-waiver-status-button security-scan-finding-waiver-detail" data-id="${escapeHtml(finding.id)}" type="button" title="View applicable waiver details">${escapeHtml(label)}</button>`;
+  }
+  if (expired > 0) {
+    const label = expired === 1 ? "Expired" : `Expired · ${expired}`;
+    return `<button class="state-badge compact warn security-scan-waiver-status-button security-scan-finding-waiver-detail" data-id="${escapeHtml(finding.id)}" type="button" title="View expired waiver details">${escapeHtml(label)}</button>`;
+  }
+  return '<span class="state-badge compact">Not waived</span>';
 }
 
 function renderSecurityScanRepositories() {
@@ -4337,7 +4352,7 @@ function renderSecurityScanRepositories() {
       || '<tr><td colspan="8" class="placeholder">No repositories are visible.</td></tr>';
 }
 
-function renderSecurityScanPoliciesAndWaivers() {
+function renderSecurityScanPolicies() {
   document.getElementById("security-scan-policy-table").innerHTML =
     securityScanState.policies.map((policy) => `
       <tr><td>${escapeHtml(policy.name)}</td>
@@ -4346,6 +4361,9 @@ function renderSecurityScanPoliciesAndWaivers() {
       <td>${escapeHtml(formatSecurityScanValidity(policy.maxResultAgeSeconds) || "No expiry")}</td>
       <td class="actions-column"><button class="row-action security-scan-policy-edit" data-id="${escapeHtml(policy.id)}" type="button">edit</button></td></tr>`).join("")
       || '<tr><td colspan="6" class="placeholder">No policies are visible.</td></tr>';
+}
+
+function renderSecurityScanWaivers() {
   document.getElementById("security-scan-waiver-table").innerHTML =
     securityScanState.waivers.map((waiver) => {
       const finding = waiver.findingId == null
@@ -4357,13 +4375,16 @@ function renderSecurityScanPoliciesAndWaivers() {
         || waiver.packageSelector
         || "-";
       return `
-        <tr><td>${escapeHtml(waiver.id)}</td><td>${escapeHtml(waiver.scopeType)}</td>
-        <td>${escapeHtml(waiver.repositoryId ? securityScanRepositoryName(waiver.repositoryId) : "Global")}</td>
-        <td>${escapeHtml(waiver.assetId ?? "-")}</td><td>${escapeHtml(selector)}</td>
-        <td>${escapeHtml(formatDateTime(waiver.expiresAt))}</td><td>${escapeHtml(waiver.reason)}</td>
+        <tr><td><span class="state-badge compact ${waiver.active ? "ok" : "warn"}">${waiver.active ? "Active" : "Expired"}</span></td>
+        <td>${escapeHtml(waiver.scopeType)}</td>
+        <td>${escapeHtml(waiver.repository || "Global")}</td>
+        <td title="${escapeHtml(waiver.assetPath || "")}">${escapeHtml(waiver.assetPath || "All artifacts")}</td>
+        <td>${escapeHtml(selector)}</td>
+        <td>${escapeHtml(waiver.expiresAt ? formatDateTime(waiver.expiresAt) : "No expiry")}</td>
+        <td>${escapeHtml(waiver.approvedBy || "-")}</td><td>${escapeHtml(waiver.reason)}</td>
         <td class="actions-column"><button class="row-action security-scan-waiver-delete" data-id="${waiver.id}" type="button">delete</button></td></tr>`;
     }).join("")
-      || '<tr><td colspan="8" class="placeholder">No waivers are visible.</td></tr>';
+      || '<tr><td colspan="9" class="placeholder">No waivers are visible.</td></tr>';
 }
 
 function renderSecurityScanning() {
@@ -4372,7 +4393,8 @@ function renderSecurityScanning() {
   renderSecurityScanTasks();
   renderSecurityScanFindings();
   renderSecurityScanRepositories();
-  renderSecurityScanPoliciesAndWaivers();
+  renderSecurityScanPolicies();
+  renderSecurityScanWaivers();
   applySecurityScanDeploymentState(
     securityScanState.summary?.deploymentEnabled === true,
     { unavailable: securityScanState.summary == null });
@@ -4643,6 +4665,81 @@ async function saveSecurityScanPolicy(event) {
   }
 }
 
+function securityScanWaiverTargetLabel(waiver) {
+  if (waiver.repository && waiver.assetPath) {
+    return `${waiver.repository} — ${waiver.assetPath}`;
+  }
+  if (waiver.repository) return `${waiver.repository} — all artifacts`;
+  if (waiver.assetPath) return waiver.assetPath;
+  return "All repositories and artifacts";
+}
+
+function securityScanWaiverPolicyLabel(waiver) {
+  if (waiver.policyId == null) return "All policies";
+  return waiver.policyRevision == null
+    ? `Policy #${waiver.policyId}`
+    : `Policy #${waiver.policyId}, revision ${waiver.policyRevision}`;
+}
+
+function renderSecurityScanWaiverDetail(detail) {
+  const waivers = detail.waivers || [];
+  const summary = document.getElementById("security-scan-waiver-detail-summary");
+  summary.textContent =
+    `${detail.advisoryId || "Finding"} · ${detail.packageName || detail.packageUrl || "Unknown package"} · `
+    + `${detail.activeWaiverCount || 0} active, ${detail.expiredWaiverCount || 0} expired. `
+    + "Each entry applies only to the repository artifact and policy scope shown below.";
+  document.getElementById("security-scan-waiver-detail-list").innerHTML =
+    waivers.map((waiver) => `
+      <article class="security-scan-waiver-detail-card">
+        <div class="security-scan-waiver-detail-head">
+          <span class="state-badge compact ${waiver.active ? "ok" : "warn"}">${waiver.active ? "Active" : "Expired"}</span>
+          <strong>Waiver #${escapeHtml(waiver.id)}</strong>
+          <span class="security-scan-waiver-detail-target">${escapeHtml(securityScanWaiverTargetLabel(waiver))}</span>
+        </div>
+        <div class="security-scan-waiver-detail-grid">
+          <div><span>Scope</span><strong>${escapeHtml(waiver.scopeType || "-")}</strong></div>
+          <div><span>Policy</span><strong>${escapeHtml(securityScanWaiverPolicyLabel(waiver))}</strong></div>
+          <div><span>Approved by</span><strong>${escapeHtml(waiver.approvedBy || "-")}</strong></div>
+          <div><span>Created</span><strong>${escapeHtml(formatDateTime(waiver.createdAt))}</strong></div>
+          <div><span>Expires</span><strong>${escapeHtml(waiver.expiresAt ? formatDateTime(waiver.expiresAt) : "No expiry")}</strong></div>
+          <div class="security-scan-waiver-detail-selector"><span>Exception</span><strong>${escapeHtml(waiver.advisorySelector || waiver.packageSelector || "-")}</strong></div>
+        </div>
+        <div class="security-scan-waiver-detail-reason"><span>Reason</span><p>${escapeHtml(waiver.reason || "-")}</p></div>
+      </article>`).join("")
+      || '<div class="placeholder">No applicable waiver is currently visible.</div>';
+}
+
+async function showSecurityScanWaiverDetail(findingId) {
+  const finding = securityScanState.findings.find(
+    (item) => Number(item.id) === Number(findingId));
+  document.getElementById("security-scan-waiver-detail-title").textContent =
+    `Finding waiver details${finding?.advisoryId ? `: ${finding.advisoryId}` : ""}`;
+  document.getElementById("security-scan-waiver-detail-summary").textContent =
+    "Loading applicable waivers…";
+  document.getElementById("security-scan-waiver-detail-list").innerHTML = "";
+  openFormModal("security-scan-waiver-detail", "security-scan-close-waiver-detail-button");
+  try {
+    const response = await fetch(
+      `/internal/security/scanning/findings/${encodeURIComponent(findingId)}/waivers`,
+      { cache: "no-store" });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    renderSecurityScanWaiverDetail(await response.json());
+  } catch (error) {
+    document.getElementById("security-scan-waiver-detail-summary").textContent =
+      `Unable to load waiver details: ${error.message}`;
+    showToast(`Unable to load waiver details: ${error.message}`, "error");
+  }
+}
+
+function hideSecurityScanWaiverDetail() {
+  closeFormModal("security-scan-waiver-detail");
+}
+
+function viewAllSecurityScanWaivers() {
+  hideSecurityScanWaiverDetail();
+  selectSecurityScanTab("waivers");
+}
+
 async function showCreateSecurityScanWaiverForm(findingId) {
   const form = document.getElementById("security-scan-waiver-form");
   form.reset();
@@ -4719,7 +4816,7 @@ async function createSecurityScanWaiver(event) {
     hideSecurityScanWaiverForm();
     showToast("Security scan waiver created.", "ok");
     await loadSecurityScanning();
-    selectSecurityScanTab("policies");
+    selectSecurityScanTab("findings");
   } catch (error) {
     showToast(`Waiver creation failed: ${error.message}`, "error");
   }
@@ -4756,7 +4853,7 @@ async function deleteSecurityScanWaiver(waiverId) {
     if (!response.ok) throw new Error(await responseErrorMessage(response));
     showToast("Security scan waiver deleted.", "ok");
     await loadSecurityScanning();
-    selectSecurityScanTab("policies");
+    selectSecurityScanTab("waivers");
   } catch (error) {
     showToast(`Waiver deletion failed: ${error.message}`, "error");
   }
@@ -4813,7 +4910,8 @@ initializeSideGroups();
   ["security-api-key-form", hideSecurityApiKeyForm],
   ["security-scan-repository-form", hideSecurityScanRepositoryForm],
   ["security-scan-policy-form", hideSecurityScanPolicyForm],
-  ["security-scan-waiver-form", hideSecurityScanWaiverForm]
+  ["security-scan-waiver-form", hideSecurityScanWaiverForm],
+  ["security-scan-waiver-detail", hideSecurityScanWaiverDetail]
 ].forEach(([formId, handler]) => bindFormModalDismiss(formId, handler));
 
 document.querySelectorAll(".side-item[data-view]").forEach((item) => {
@@ -4925,8 +5023,17 @@ document.getElementById("security-scan-policy-table").addEventListener("click", 
 document.getElementById("security-scan-cancel-waiver-button").addEventListener(
   "click", hideSecurityScanWaiverForm);
 document.getElementById("security-scan-waiver-form").addEventListener("submit", createSecurityScanWaiver);
+document.getElementById("security-scan-close-waiver-detail-button").addEventListener(
+  "click", hideSecurityScanWaiverDetail);
+document.getElementById("security-scan-view-all-waivers-button").addEventListener(
+  "click", viewAllSecurityScanWaivers);
 bindRequiredFieldErrors(securityScanWaiverRequiredFields);
 document.getElementById("security-scan-finding-table").addEventListener("click", (event) => {
+  const detailButton = event.target.closest(".security-scan-finding-waiver-detail");
+  if (detailButton) {
+    showSecurityScanWaiverDetail(detailButton.dataset.id);
+    return;
+  }
   const waiveButton = event.target.closest(".security-scan-finding-waive");
   if (waiveButton) showCreateSecurityScanWaiverForm(waiveButton.dataset.id);
 });

@@ -19,6 +19,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanFinding;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanRunSubject;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanWaiver;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
@@ -87,6 +88,48 @@ class SecurityScanManagementServiceWaiverTest {
     assertEquals(1, context.targets().size());
     assertEquals("maven-hosted", context.targets().getFirst().repository());
     assertEquals("com/acme/demo/1.0/demo-1.0.jar", context.targets().getFirst().assetPath());
+  }
+
+  @Test
+  void findingWaiverStatusAndDetailsUseTheActualArtifactScope() {
+    Instant now = Instant.now();
+    ScanFinding finding = finding(41L, 7L);
+    RepositoryRecord repository = repository(11L, "maven-hosted");
+    AssetRecord asset = asset(23L, 11L, "com/acme/demo/1.0/demo-1.0.jar");
+    ScanRunSubject subject = new ScanRunSubject(7L, 11L, 23L, 3L, 1L, now);
+    ScanWaiver active = waiver(
+        51L, 11L, 23L, 41L, null, null, "Upgrade is scheduled", now.plusSeconds(3600), now);
+    ScanWaiver expired = waiver(
+        52L, 11L, 23L, null, "CVE-2026-0041", "pkg:maven/com.acme/demo@1.0",
+        "Previous acceptance", now.minusSeconds(1), now.minusSeconds(7200));
+    ScanWaiver otherArtifact = waiver(
+        53L, 11L, 99L, null, "CVE-2026-0041", "pkg:maven/com.acme/demo@1.0",
+        "Different artifact", now.plusSeconds(3600), now);
+    when(repositories.list()).thenReturn(List.of(repository));
+    when(repositories.findById(11L)).thenReturn(Optional.of(repository));
+    when(assets.findAssetById(23L)).thenReturn(Optional.of(asset));
+    when(scans.listFindings(11L, null, null, 0L, 50)).thenReturn(List.of(finding));
+    when(scans.findFinding(41L)).thenReturn(Optional.of(finding));
+    when(scans.listRunSubjects(7L)).thenReturn(List.of(subject));
+    when(scans.listWaivers(null, 0L, 1000))
+        .thenReturn(List.of(active, expired, otherArtifact));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.allow());
+    when(security.decide(
+        eq(actor.permissionSubject()), eq("nexus:security-scanning:read")))
+        .thenReturn(AccessDecision.allow());
+
+    var findingView = service.findings(actor, null, null, null, 0L, 50).getFirst();
+    var details = service.findingWaivers(actor, 41L);
+
+    assertEquals(1, findingView.activeWaiverCount());
+    assertEquals(1, findingView.expiredWaiverCount());
+    assertEquals(1, details.activeWaiverCount());
+    assertEquals(1, details.expiredWaiverCount());
+    assertEquals(2, details.waivers().size());
+    assertEquals("maven-hosted", details.waivers().getFirst().repository());
+    assertEquals("com/acme/demo/1.0/demo-1.0.jar", details.waivers().getFirst().assetPath());
+    assertEquals("security-admin", details.waivers().getFirst().approvedBy());
   }
 
   @Test
@@ -234,5 +277,34 @@ class SecurityScanManagementServiceWaiverTest {
         null,
         Instant.now(),
         Map.of());
+  }
+
+  private static ScanWaiver waiver(
+      long id,
+      Long repositoryId,
+      Long assetId,
+      Long findingId,
+      String advisorySelector,
+      String packageSelector,
+      String reason,
+      Instant expiresAt,
+      Instant createdAt) {
+    return new ScanWaiver(
+        id,
+        "FINDING",
+        repositoryId,
+        assetId,
+        findingId,
+        advisorySelector,
+        packageSelector,
+        Map.of(),
+        reason,
+        null,
+        null,
+        "security-admin",
+        "security-admin",
+        expiresAt,
+        createdAt,
+        createdAt);
   }
 }

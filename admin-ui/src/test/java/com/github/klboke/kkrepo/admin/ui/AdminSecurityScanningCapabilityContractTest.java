@@ -107,6 +107,8 @@ class AdminSecurityScanningCapabilityContractTest {
     assertTrue(index.contains(
         "id=\"security-scan-waiver-form-modal\" "
             + "data-form-id=\"security-scan-waiver-form\""));
+    assertTrue(index.indexOf("id=\"security-scan-waiver-form-modal\"")
+        < index.indexOf("data-scan-panel=\"findings\""));
     assertTrue(index.contains(
         "class=\"blobstore-form modal-form security-scan-form\" "
             + "id=\"security-scan-waiver-form\" hidden novalidate"));
@@ -132,6 +134,37 @@ class AdminSecurityScanningCapabilityContractTest {
     assertTrue(javascript.contains("expiresAt: new Date(Date.now() + durationSeconds * 1000)"));
     assertTrue(javascript.contains("closeFormModal(\"security-scan-waiver-form\")"));
     assertTrue(javascript.contains("securityScanWaiverRequiredFields"));
+    assertTrue(javascript.contains("selectSecurityScanTab(\"findings\")"));
+  }
+
+  @Test
+  void findingsExposeWaiverStatusAndWaiversRemainAnIndependentGovernanceTab()
+      throws IOException {
+    String index = resource("/META-INF/resources/admin/index.html");
+    String javascript = resource("/META-INF/resources/admin/assets/admin.js");
+    String css = resource("/META-INF/resources/admin/assets/admin.css");
+
+    assertTrue(index.contains("data-scan-tab=\"policies\" type=\"button\" role=\"tab\">Policies"));
+    assertTrue(index.contains("data-scan-tab=\"waivers\" type=\"button\" role=\"tab\">Waivers"));
+    assertTrue(index.contains("data-scan-panel=\"waivers\" hidden"));
+    assertFalse(index.contains("Policies &amp; Waivers"));
+    assertTrue(index.contains("<th>Waiver</th><th class=\"actions-column\">Actions</th>"));
+    assertTrue(index.contains("<th>Repository</th><th>Artifact</th><th>Exception</th>"));
+    assertTrue(index.contains(
+        "id=\"security-scan-waiver-detail-modal\" "
+            + "data-form-id=\"security-scan-waiver-detail\""));
+    assertTrue(index.indexOf("id=\"security-scan-waiver-detail-modal\"")
+        < index.indexOf("data-scan-panel=\"findings\""));
+
+    assertTrue(javascript.contains("activeWaiverCount"));
+    assertTrue(javascript.contains("expiredWaiverCount"));
+    assertTrue(javascript.contains("waiver.assetPath || \"All artifacts\""));
+    assertTrue(javascript.contains("security-scan-finding-waiver-detail"));
+    assertTrue(javascript.contains(
+        "/internal/security/scanning/findings/${encodeURIComponent(findingId)}/waivers"));
+    assertTrue(javascript.contains("selectSecurityScanTab(\"waivers\")"));
+    assertTrue(css.contains(".security-scan-waiver-status-button"));
+    assertTrue(css.contains(".security-scan-waiver-detail-card"));
   }
 
   private String resource(String path) throws IOException {

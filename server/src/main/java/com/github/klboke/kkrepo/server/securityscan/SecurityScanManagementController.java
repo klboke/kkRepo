@@ -10,12 +10,14 @@ import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementServic
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.ConfigCommand;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.FindingView;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.FindingWaiverContext;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.FindingWaiverDetail;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.Overview;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.PolicyCommand;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.RepositoryView;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.RunView;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.TaskView;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.WaiverCommand;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.WaiverView;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
 import java.util.Map;
@@ -94,6 +96,12 @@ public class SecurityScanManagementController {
   public FindingWaiverContext findingWaiverContext(
       @PathVariable("findingId") long findingId, HttpServletRequest request) {
     return service.findingWaiverContext(actor(request), findingId);
+  }
+
+  @GetMapping("/findings/{findingId}/waivers")
+  public FindingWaiverDetail findingWaivers(
+      @PathVariable("findingId") long findingId, HttpServletRequest request) {
+    return service.findingWaivers(actor(request), findingId);
   }
 
   @GetMapping("/assets/{assetId}")
@@ -196,7 +204,7 @@ public class SecurityScanManagementController {
   }
 
   @GetMapping("/waivers")
-  public List<ScanWaiver> waivers(
+  public List<WaiverView> waivers(
       @RequestParam(name = "repositoryId", required = false) Long repositoryId,
       @RequestParam(name = "after", defaultValue = "0") long after,
       @RequestParam(name = "limit", defaultValue = "50") int limit,

@@ -148,14 +148,30 @@ public class SecurityScanManagementService {
       long afterId,
       int limit) {
     if (runId != null) requireVisibleRun(actor, runId);
-    return collectByVisibleRepository(
-            actor,
-            repositoryId,
-            repository -> scans.listFindings(
-                repository.id(), runId, severity, afterId, limit(limit)),
-            ScanFinding::id,
-            limit(limit))
-        .stream().map(FindingView::from).toList();
+    List<ScanFinding> findings = collectByVisibleRepository(
+        actor,
+        repositoryId,
+        repository -> scans.listFindings(
+            repository.id(), runId, severity, afterId, limit(limit)),
+        ScanFinding::id,
+        limit(limit));
+    if (findings.isEmpty()) return List.of();
+    Set<Long> visibleRepositoryIds = visibleRepositoryIds(actor);
+    List<ScanWaiver> waivers = scans.listWaivers(null, 0, 1000);
+    Instant now = Instant.now();
+    Map<Long, List<ScanRunSubject>> subjectsByRun = new LinkedHashMap<>();
+    return findings.stream().map(finding -> {
+      List<ScanRunSubject> subjects = subjectsByRun.computeIfAbsent(
+          finding.scanRunId(),
+          id -> scans.listRunSubjects(id).stream()
+              .filter(subject -> visibleRepositoryIds.contains(subject.repositoryId()))
+              .toList());
+      List<ScanWaiver> matches = matchingWaivers(finding, subjects, waivers);
+      int active = (int) matches.stream()
+          .filter(waiver -> SecurityScanWaiverMatcher.isActive(waiver, now))
+          .count();
+      return FindingView.from(finding, active, matches.size() - active);
+    }).toList();
   }
 
   public FindingWaiverContext findingWaiverContext(
@@ -197,6 +213,74 @@ public class SecurityScanManagementService {
         finding.installedVersion(),
         finding.severity().name(),
         List.copyOf(targets));
+  }
+
+  public FindingWaiverDetail findingWaivers(
+      AuthenticatedSubject actor, long findingId) {
+    requireGlobalRead(actor);
+    ScanFinding finding = scans.findFinding(findingId)
+        .orElseThrow(() -> notFound("Security scan finding not found"));
+    Set<Long> visibleRepositoryIds = visibleRepositoryIds(actor);
+    List<ScanRunSubject> subjects = scans.listRunSubjects(finding.scanRunId()).stream()
+        .filter(subject -> visibleRepositoryIds.contains(subject.repositoryId()))
+        .toList();
+    if (subjects.isEmpty()) throw notFound("Security scan finding not found");
+    Instant now = Instant.now();
+    List<WaiverView> waivers =
+        matchingWaivers(finding, subjects, scans.listWaivers(null, 0, 1000)).stream()
+            .map(waiver -> waiverView(waiver, now))
+            .toList();
+    int active = (int) waivers.stream().filter(WaiverView::active).count();
+    return new FindingWaiverDetail(
+        finding.id(),
+        finding.advisoryId(),
+        finding.packageName(),
+        finding.packageUrl(),
+        active,
+        waivers.size() - active,
+        waivers);
+  }
+
+  private WaiverView waiverView(ScanWaiver waiver, Instant now) {
+    AssetRecord asset = waiver.assetId() == null
+        ? null
+        : assets.findAssetById(waiver.assetId()).orElse(null);
+    Long repositoryId = waiver.repositoryId() != null
+        ? waiver.repositoryId()
+        : (asset == null ? null : asset.repositoryId());
+    String repositoryName = repositoryId == null
+        ? null
+        : repositories.findById(repositoryId)
+            .map(RepositoryRecord::name)
+            .orElse(null);
+    return new WaiverView(
+        waiver.id(),
+        SecurityScanWaiverMatcher.isActive(waiver, now),
+        waiver.scopeType(),
+        waiver.repositoryId(),
+        repositoryName,
+        waiver.assetId(),
+        asset == null ? null : asset.path(),
+        waiver.advisorySelector(),
+        waiver.packageSelector(),
+        waiver.reason(),
+        waiver.policyId(),
+        waiver.policyRevision(),
+        waiver.createdBy(),
+        waiver.approvedBy(),
+        waiver.expiresAt(),
+        waiver.createdAt());
+  }
+
+  private static List<ScanWaiver> matchingWaivers(
+      ScanFinding finding,
+      List<ScanRunSubject> subjects,
+      List<ScanWaiver> waivers) {
+    return waivers.stream()
+        .filter(SecurityScanWaiverMatcher::isApproved)
+        .filter(waiver -> SecurityScanWaiverMatcher.matchesAnySubject(waiver, subjects))
+        .filter(waiver -> SecurityScanWaiverMatcher.matchesFinding(waiver, finding))
+        .toList();
   }
 
   public AssetDetail asset(AuthenticatedSubject actor, long assetId) {
@@ -390,18 +474,39 @@ public class SecurityScanManagementService {
         now));
   }
 
-  public List<ScanWaiver> waivers(
+  public List<WaiverView> waivers(
       AuthenticatedSubject actor, Long repositoryId, long afterId, int limit) {
+    List<ScanWaiver> waivers;
     if (repositoryId != null) {
       requireVisibleRepository(actor, repositoryId);
-      return scans.listWaivers(repositoryId, afterId, limit(limit));
+      waivers = scans.listWaivers(repositoryId, afterId, 1000).stream()
+          .filter(waiver -> {
+            Long effectiveRepositoryId = effectiveWaiverRepositoryId(waiver);
+            return effectiveRepositoryId == null || effectiveRepositoryId.equals(repositoryId);
+          })
+          .limit(limit(limit))
+          .toList();
+    } else {
+      requireGlobalRead(actor);
+      Set<Long> visible = visibleRepositoryIds(actor);
+      waivers = scans.listWaivers(null, afterId, 1000).stream()
+          .filter(waiver -> {
+            Long effectiveRepositoryId = effectiveWaiverRepositoryId(waiver);
+            return effectiveRepositoryId == null || visible.contains(effectiveRepositoryId);
+          })
+          .limit(limit(limit))
+          .toList();
     }
-    requireGlobalRead(actor);
-    Set<Long> visible = visibleRepositoryIds(actor);
-    return scans.listWaivers(null, afterId, 1000).stream()
-        .filter(waiver -> waiver.repositoryId() == null || visible.contains(waiver.repositoryId()))
-        .limit(limit(limit))
-        .toList();
+    Instant now = Instant.now();
+    return waivers.stream().map(waiver -> waiverView(waiver, now)).toList();
+  }
+
+  private Long effectiveWaiverRepositoryId(ScanWaiver waiver) {
+    if (waiver.repositoryId() != null) return waiver.repositoryId();
+    if (waiver.assetId() == null) return null;
+    return assets.findAssetById(waiver.assetId())
+        .map(AssetRecord::repositoryId)
+        .orElse(null);
   }
 
   @Transactional
@@ -774,16 +879,51 @@ public class SecurityScanManagementService {
       String title,
       String primaryUrl,
       List<String> locations,
-      String sourceStatus) {
-    static FindingView from(ScanFinding finding) {
+      String sourceStatus,
+      int activeWaiverCount,
+      int expiredWaiverCount) {
+    static FindingView from(
+        ScanFinding finding, int activeWaiverCount, int expiredWaiverCount) {
       return new FindingView(
           finding.id(), finding.scanRunId(), finding.advisoryId(), finding.aliases(),
           finding.dataSource(), finding.packageUrl(), finding.packageName(),
           finding.installedVersion(), finding.fixedVersions(), finding.severity().name(),
           finding.severitySource(), finding.cvssVector(), finding.cvssScore(), finding.title(),
-          finding.primaryUrl(), finding.locations(), finding.sourceStatus());
+          finding.primaryUrl(), finding.locations(), finding.sourceStatus(),
+          activeWaiverCount, expiredWaiverCount);
     }
   }
+
+  public record FindingWaiverDetail(
+      long findingId,
+      String advisoryId,
+      String packageName,
+      String packageUrl,
+      int activeWaiverCount,
+      int expiredWaiverCount,
+      List<WaiverView> waivers) {
+    public FindingWaiverDetail {
+      waivers = waivers == null ? List.of() : List.copyOf(waivers);
+    }
+  }
+
+  public record WaiverView(
+      Long id,
+      boolean active,
+      String scopeType,
+      Long repositoryId,
+      String repository,
+      Long assetId,
+      String assetPath,
+      String advisorySelector,
+      String packageSelector,
+      String reason,
+      Long policyId,
+      Long policyRevision,
+      String createdBy,
+      String approvedBy,
+      Instant expiresAt,
+      Instant createdAt) {}
 
   public record FindingWaiverContext(
       long findingId,
