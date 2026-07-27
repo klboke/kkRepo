@@ -200,6 +200,10 @@ class AdminSecurityScanningCapabilityContractTest {
     assertTrue(javascript.contains("payload?.nextAfter ?? null"));
     assertFalse(javascript.contains("findings?limit=100"));
     assertFalse(javascript.contains("waivers?limit=100"));
+    assertFalse(index.contains(
+        "data-scan-panel=\"policies\" hidden>\n            <section class=\"ops-panel\">"));
+    assertFalse(index.contains(
+        "data-scan-panel=\"waivers\" hidden>\n            <section class=\"ops-panel\">"));
     assertTrue(css.contains(".security-scan-list-toolbar"));
     assertTrue(css.contains(".security-scan-pagination"));
   }

@@ -1093,88 +1093,77 @@
           </div>
 
           <div class="security-scan-panel" data-scan-panel="policies" hidden>
-            <section class="ops-panel">
-              <div class="ops-panel-head security-scan-panel-head">
-                <span>Policies</span>
-                <button class="create-button security-scan-panel-create" id="security-scan-create-policy-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create policy</button>
+            <form class="security-scan-list-toolbar" data-security-scan-list-form="policies">
+              <label class="filter-box">
+                <span class="filter-icon lucide-icon icon-search" aria-hidden="true"></span>
+                <input data-security-scan-query="policies" type="search" maxlength="200" placeholder="Search policy, severity, revision, or creator">
+              </label>
+              <button class="create-button secondary" type="submit">Search</button>
+              <button class="row-action" data-security-scan-clear="policies" type="button">Clear</button>
+              <button class="create-button" id="security-scan-create-policy-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create policy</button>
+            </form>
+            <div class="form-modal" id="security-scan-policy-form-modal" data-form-id="security-scan-policy-form" role="dialog" aria-modal="true" aria-labelledby="security-scan-policy-form-title" hidden>
+              <div class="form-modal-backdrop" data-modal-dismiss="security-scan-policy-form"></div>
+              <div class="form-modal-panel form-modal-panel-narrow">
+                <button class="form-modal-close" data-modal-dismiss="security-scan-policy-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
+                <form class="blobstore-form modal-form security-scan-form" id="security-scan-policy-form" hidden novalidate>
+                  <div class="form-title" id="security-scan-policy-form-title">Create policy</div>
+                  <p class="form-note security-scan-policy-form-note" id="security-scan-policy-form-note">Policies are versioned so past scan decisions remain traceable.</p>
+                  <input id="security-scan-policy-source-id" type="hidden">
+                  <div class="form-grid security-scan-policy-grid">
+                    <label><span>Name <span class="required-mark">*</span></span><input id="security-scan-policy-name" type="text" required></label>
+                    <label><span>Block severity</span><select id="security-scan-policy-severity"><option>CRITICAL</option><option>HIGH</option><option>MEDIUM</option><option>LOW</option><option>UNKNOWN</option></select></label>
+                    <label>
+                      <span>Result validity</span>
+                      <select id="security-scan-policy-max-age">
+                        <option value="">No expiry</option>
+                        <option value="86400">1 day</option>
+                        <option value="604800">7 days</option>
+                        <option value="2592000">30 days</option>
+                      </select>
+                    </label>
+                    <label class="checkbox-field"><input id="security-scan-policy-fixable" type="checkbox"><span>Only block fixable findings</span></label>
+                    <label class="checkbox-field"><input id="security-scan-policy-block-unknown" type="checkbox"><span>Block unknown severity</span></label>
+                    <label class="checkbox-field"><input id="security-scan-policy-complete" type="checkbox"><span>Require complete inventory</span></label>
+                  </div>
+                  <div class="form-actions">
+                    <button class="create-button" id="security-scan-save-policy-button" type="submit">Create policy</button>
+                    <button class="create-button secondary" id="security-scan-cancel-policy-button" type="button">Cancel</button>
+                  </div>
+                </form>
               </div>
-              <form class="security-scan-list-toolbar" data-security-scan-list-form="policies">
-                <label class="filter-box">
-                  <span class="filter-icon lucide-icon icon-search" aria-hidden="true"></span>
-                  <input data-security-scan-query="policies" type="search" maxlength="200" placeholder="Search policy, severity, revision, or creator">
-                </label>
-                <button class="create-button secondary" type="submit">Search</button>
-                <button class="row-action" data-security-scan-clear="policies" type="button">Clear</button>
-              </form>
-              <div class="form-modal" id="security-scan-policy-form-modal" data-form-id="security-scan-policy-form" role="dialog" aria-modal="true" aria-labelledby="security-scan-policy-form-title" hidden>
-                <div class="form-modal-backdrop" data-modal-dismiss="security-scan-policy-form"></div>
-                <div class="form-modal-panel form-modal-panel-narrow">
-                  <button class="form-modal-close" data-modal-dismiss="security-scan-policy-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
-                  <form class="blobstore-form modal-form security-scan-form" id="security-scan-policy-form" hidden novalidate>
-                    <div class="form-title" id="security-scan-policy-form-title">Create policy</div>
-                    <p class="form-note security-scan-policy-form-note" id="security-scan-policy-form-note">Policies are versioned so past scan decisions remain traceable.</p>
-                    <input id="security-scan-policy-source-id" type="hidden">
-                    <div class="form-grid security-scan-policy-grid">
-                      <label><span>Name <span class="required-mark">*</span></span><input id="security-scan-policy-name" type="text" required></label>
-                      <label><span>Block severity</span><select id="security-scan-policy-severity"><option>CRITICAL</option><option>HIGH</option><option>MEDIUM</option><option>LOW</option><option>UNKNOWN</option></select></label>
-                      <label>
-                        <span>Result validity</span>
-                        <select id="security-scan-policy-max-age">
-                          <option value="">No expiry</option>
-                          <option value="86400">1 day</option>
-                          <option value="604800">7 days</option>
-                          <option value="2592000">30 days</option>
-                        </select>
-                      </label>
-                      <label class="checkbox-field"><input id="security-scan-policy-fixable" type="checkbox"><span>Only block fixable findings</span></label>
-                      <label class="checkbox-field"><input id="security-scan-policy-block-unknown" type="checkbox"><span>Block unknown severity</span></label>
-                      <label class="checkbox-field"><input id="security-scan-policy-complete" type="checkbox"><span>Require complete inventory</span></label>
-                    </div>
-                    <div class="form-actions">
-                      <button class="create-button" id="security-scan-save-policy-button" type="submit">Create policy</button>
-                      <button class="create-button secondary" id="security-scan-cancel-policy-button" type="button">Cancel</button>
-                    </div>
-                  </form>
-                </div>
-              </div>
-              <div class="nx-table-frame">
-                <table class="nx-table"><thead><tr><th>Name</th><th>Revision</th><th>Threshold</th><th>Complete</th><th>Result validity</th><th class="actions-column">Actions</th></tr></thead><tbody id="security-scan-policy-table"></tbody></table>
-              </div>
-              <div class="pagination-bar security-scan-pagination" data-security-scan-pagination="policies">
-                <span class="pagination-summary" data-security-scan-page-summary="policies">0 results</span>
-                <button class="row-action" data-security-scan-page-action="prev" data-security-scan-page-list="policies" type="button" title="Previous page" aria-label="Previous page"><span class="lucide-icon icon-chevron-left" aria-hidden="true"></span></button>
-                <span class="pagination-page" data-security-scan-page-label="policies">Page 1</span>
-                <button class="row-action" data-security-scan-page-action="next" data-security-scan-page-list="policies" type="button" title="Next page" aria-label="Next page"><span class="lucide-icon icon-chevron-right" aria-hidden="true"></span></button>
-                <label class="select-filter pagination-size"><span>Rows</span><select data-security-scan-page-size="policies"><option value="15">15</option><option value="25" selected>25</option><option value="50">50</option><option value="100">100</option></select></label>
-              </div>
-            </section>
+            </div>
+            <div class="nx-table-frame">
+              <table class="nx-table"><thead><tr><th>Name</th><th>Revision</th><th>Threshold</th><th>Complete</th><th>Result validity</th><th class="actions-column">Actions</th></tr></thead><tbody id="security-scan-policy-table"></tbody></table>
+            </div>
+            <div class="pagination-bar security-scan-pagination" data-security-scan-pagination="policies">
+              <span class="pagination-summary" data-security-scan-page-summary="policies">0 results</span>
+              <button class="row-action" data-security-scan-page-action="prev" data-security-scan-page-list="policies" type="button" title="Previous page" aria-label="Previous page"><span class="lucide-icon icon-chevron-left" aria-hidden="true"></span></button>
+              <span class="pagination-page" data-security-scan-page-label="policies">Page 1</span>
+              <button class="row-action" data-security-scan-page-action="next" data-security-scan-page-list="policies" type="button" title="Next page" aria-label="Next page"><span class="lucide-icon icon-chevron-right" aria-hidden="true"></span></button>
+              <label class="select-filter pagination-size"><span>Rows</span><select data-security-scan-page-size="policies"><option value="15">15</option><option value="25" selected>25</option><option value="50">50</option><option value="100">100</option></select></label>
+            </div>
           </div>
 
           <div class="security-scan-panel" data-scan-panel="waivers" hidden>
-            <section class="ops-panel">
-              <div class="ops-panel-head security-scan-panel-head">
-                <span>Waivers</span>
-                <span class="ops-status">Create an exception from a finding; review and revoke it here.</span>
-              </div>
-              <form class="security-scan-list-toolbar" data-security-scan-list-form="waivers">
-                <label class="filter-box">
-                  <span class="filter-icon lucide-icon icon-search" aria-hidden="true"></span>
-                  <input data-security-scan-query="waivers" type="search" maxlength="200" placeholder="Search exception, repository, artifact, approver, or reason">
-                </label>
-                <button class="create-button secondary" type="submit">Search</button>
-                <button class="row-action" data-security-scan-clear="waivers" type="button">Clear</button>
-              </form>
-              <div class="nx-table-frame">
-                <table class="nx-table"><thead><tr><th>Status</th><th>Scope</th><th>Repository</th><th>Artifact</th><th>Exception</th><th>Expires</th><th>Approved by</th><th>Reason</th><th class="actions-column">Actions</th></tr></thead><tbody id="security-scan-waiver-table"></tbody></table>
-              </div>
-              <div class="pagination-bar security-scan-pagination" data-security-scan-pagination="waivers">
-                <span class="pagination-summary" data-security-scan-page-summary="waivers">0 results</span>
-                <button class="row-action" data-security-scan-page-action="prev" data-security-scan-page-list="waivers" type="button" title="Previous page" aria-label="Previous page"><span class="lucide-icon icon-chevron-left" aria-hidden="true"></span></button>
-                <span class="pagination-page" data-security-scan-page-label="waivers">Page 1</span>
-                <button class="row-action" data-security-scan-page-action="next" data-security-scan-page-list="waivers" type="button" title="Next page" aria-label="Next page"><span class="lucide-icon icon-chevron-right" aria-hidden="true"></span></button>
-                <label class="select-filter pagination-size"><span>Rows</span><select data-security-scan-page-size="waivers"><option value="15">15</option><option value="25" selected>25</option><option value="50">50</option><option value="100">100</option></select></label>
-              </div>
-            </section>
+            <form class="security-scan-list-toolbar" data-security-scan-list-form="waivers">
+              <label class="filter-box">
+                <span class="filter-icon lucide-icon icon-search" aria-hidden="true"></span>
+                <input data-security-scan-query="waivers" type="search" maxlength="200" placeholder="Search exception, repository, artifact, approver, or reason">
+              </label>
+              <button class="create-button secondary" type="submit">Search</button>
+              <button class="row-action" data-security-scan-clear="waivers" type="button">Clear</button>
+            </form>
+            <div class="nx-table-frame">
+              <table class="nx-table"><thead><tr><th>Status</th><th>Scope</th><th>Repository</th><th>Artifact</th><th>Exception</th><th>Expires</th><th>Approved by</th><th>Reason</th><th class="actions-column">Actions</th></tr></thead><tbody id="security-scan-waiver-table"></tbody></table>
+            </div>
+            <div class="pagination-bar security-scan-pagination" data-security-scan-pagination="waivers">
+              <span class="pagination-summary" data-security-scan-page-summary="waivers">0 results</span>
+              <button class="row-action" data-security-scan-page-action="prev" data-security-scan-page-list="waivers" type="button" title="Previous page" aria-label="Previous page"><span class="lucide-icon icon-chevron-left" aria-hidden="true"></span></button>
+              <span class="pagination-page" data-security-scan-page-label="waivers">Page 1</span>
+              <button class="row-action" data-security-scan-page-action="next" data-security-scan-page-list="waivers" type="button" title="Next page" aria-label="Next page"><span class="lucide-icon icon-chevron-right" aria-hidden="true"></span></button>
+              <label class="select-filter pagination-size"><span>Rows</span><select data-security-scan-page-size="waivers"><option value="15">15</option><option value="25" selected>25</option><option value="50">50</option><option value="100">100</option></select></label>
+            </div>
           </div>
           </div>
         </section>

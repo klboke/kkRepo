@@ -2619,57 +2619,16 @@ code {
   flex: 0 0 auto;
 }
 
-.security-scan-panel > .ops-panel > .security-scan-list-toolbar {
-  margin: 10px;
-}
-
 .security-scan-pagination {
   margin: 8px 0 0;
-}
-
-.security-scan-panel > .ops-panel > .security-scan-pagination {
-  margin: 8px 10px 10px;
 }
 
 .security-scan-panel > .nx-table-frame {
   margin: 0;
 }
 
-.security-scan-panel > .ops-panel {
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-soft);
-}
-
-.security-scan-panel > .ops-panel > .nx-table-frame {
-  margin: 0;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-}
-
 .security-scan-form {
   margin-top: 16px;
-}
-
-.security-scan-panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.security-scan-panel-head .ops-status {
-  min-height: 0;
-  margin: 0;
-  font-weight: 400;
-}
-
-.security-scan-panel-create {
-  min-height: 30px;
-  padding: 5px 10px;
-  font-size: 12px;
 }
 
 .security-scan-form-intro {
