@@ -4314,16 +4314,19 @@ function renderSecurityScanFindings() {
         <td>${escapeHtml(finding.scanRunId)}</td>
         <td>${escapeHtml(finding.title || "-")}</td>
         <td>${renderSecurityScanFindingWaiverStatus(finding)}</td>
-        <td class="actions-column"><button class="row-action security-scan-finding-waive" data-id="${finding.id}" type="button">waive</button></td>
+        <td class="actions-column">${renderSecurityScanFindingWaiverAction(finding)}</td>
       </tr>`).join("")
       || '<tr><td colspan="10" class="placeholder">No known vulnerability findings are visible.</td></tr>';
 }
 
 function renderSecurityScanFindingWaiverStatus(finding) {
-  const active = Number(finding.activeWaiverCount || 0);
   const expired = Number(finding.expiredWaiverCount || 0);
-  if (active > 0) {
-    const label = active === 1 ? "Waived" : `Waived · ${active}`;
+  const targetCount = Number(finding.waiverTargetCount || 0);
+  const waivedTargetCount = Number(finding.waivedTargetCount || 0);
+  if (waivedTargetCount > 0) {
+    const label = waivedTargetCount < targetCount
+      ? `Partially waived · ${waivedTargetCount}/${targetCount}`
+      : "Waived";
     return `<button class="state-badge compact ok security-scan-waiver-status-button security-scan-finding-waiver-detail" data-id="${escapeHtml(finding.id)}" type="button" title="View applicable waiver details">${escapeHtml(label)}</button>`;
   }
   if (expired > 0) {
@@ -4331,6 +4334,17 @@ function renderSecurityScanFindingWaiverStatus(finding) {
     return `<button class="state-badge compact warn security-scan-waiver-status-button security-scan-finding-waiver-detail" data-id="${escapeHtml(finding.id)}" type="button" title="View expired waiver details">${escapeHtml(label)}</button>`;
   }
   return '<span class="state-badge compact">Not waived</span>';
+}
+
+function renderSecurityScanFindingWaiverAction(finding) {
+  const targetCount = Number(finding.waiverTargetCount || 0);
+  const waivedTargetCount = Number(finding.waivedTargetCount || 0);
+  const fullyWaived = targetCount > 0 && waivedTargetCount >= targetCount;
+  if (fullyWaived) {
+    return `<button class="row-action security-scan-finding-waive" data-id="${escapeHtml(finding.id)}" type="button" title="All associated repository artifacts are already waived" disabled>waived</button>`;
+  }
+  const label = waivedTargetCount > 0 ? "waive remaining" : "waive";
+  return `<button class="row-action security-scan-finding-waive" data-id="${escapeHtml(finding.id)}" type="button">${label}</button>`;
 }
 
 function renderSecurityScanRepositories() {
@@ -4752,6 +4766,12 @@ async function showCreateSecurityScanWaiverForm(findingId) {
     if (!response.ok) throw new Error(await responseErrorMessage(response));
     const context = await response.json();
     if (!Array.isArray(context.targets) || context.targets.length === 0) {
+      if (Number(context.targetCount || 0) > 0
+          && Number(context.waivedTargetCount || 0) >= Number(context.targetCount || 0)) {
+        await loadSecurityScanning();
+        showToast("This finding is already waived for all manageable repository artifacts.", "ok");
+        return;
+      }
       throw new Error("No repository artifact is available for this finding.");
     }
     securityScanWaiverContext = context;

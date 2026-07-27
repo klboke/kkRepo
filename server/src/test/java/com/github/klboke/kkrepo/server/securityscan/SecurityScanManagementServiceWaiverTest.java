@@ -87,8 +87,35 @@ class SecurityScanManagementServiceWaiverTest {
     assertEquals(41L, context.findingId());
     assertEquals("CVE-2026-0041", context.advisoryId());
     assertEquals(1, context.targets().size());
+    assertEquals(1, context.targetCount());
+    assertEquals(0, context.waivedTargetCount());
     assertEquals("maven-hosted", context.targets().getFirst().repository());
     assertEquals("com/acme/demo/1.0/demo-1.0.jar", context.targets().getFirst().assetPath());
+  }
+
+  @Test
+  void findingWaiverContextOnlyOffersTargetsThatAreNotAlreadyCovered() {
+    Instant now = Instant.now();
+    ScanFinding finding = finding(41L, 7L);
+    when(scans.findFinding(41L)).thenReturn(Optional.of(finding));
+    when(scans.listRunSubjects(7L))
+        .thenReturn(List.of(new ScanRunSubject(7L, 11L, 23L, 3L, 1L, now)));
+    when(repositories.findById(11L))
+        .thenReturn(Optional.of(repository(11L, "maven-hosted")));
+    when(assets.findAssetById(23L))
+        .thenReturn(Optional.of(asset(23L, 11L, "com/acme/demo/1.0/demo-1.0.jar")));
+    when(scans.listWaivers(null, 0L, 1000))
+        .thenReturn(List.of(waiver(
+            51L, 11L, 23L, 41L, null, null, "Already accepted",
+            now.plusSeconds(3600), now)));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.allow());
+
+    var context = service.findingWaiverContext(actor, 41L);
+
+    assertEquals(1, context.targetCount());
+    assertEquals(1, context.waivedTargetCount());
+    assertEquals(List.of(), context.targets());
   }
 
   @Test
@@ -96,24 +123,31 @@ class SecurityScanManagementServiceWaiverTest {
     Instant now = Instant.now();
     ScanFinding finding = finding(41L, 7L);
     RepositoryRecord repository = repository(11L, "maven-hosted");
+    RepositoryRecord secondRepository = repository(12L, "maven-secondary");
     AssetRecord asset = asset(23L, 11L, "com/acme/demo/1.0/demo-1.0.jar");
+    AssetRecord secondAsset =
+        asset(24L, 12L, "com/acme/demo/1.0/demo-1.0.jar");
     ScanRunSubject subject = new ScanRunSubject(7L, 11L, 23L, 3L, 1L, now);
+    ScanRunSubject secondSubject = new ScanRunSubject(7L, 12L, 24L, 3L, 1L, now);
     ScanWaiver active = waiver(
         51L, 11L, 23L, 41L, null, null, "Upgrade is scheduled", now.plusSeconds(3600), now);
+    ScanWaiver overlapping = waiver(
+        54L, 11L, 23L, null, "CVE-2026-0041", "pkg:maven/com.acme/demo@1.0",
+        "Overlapping legacy acceptance", now.plusSeconds(7200), now);
     ScanWaiver expired = waiver(
         52L, 11L, 23L, null, "CVE-2026-0041", "pkg:maven/com.acme/demo@1.0",
         "Previous acceptance", now.minusSeconds(1), now.minusSeconds(7200));
-    ScanWaiver otherArtifact = waiver(
-        53L, 11L, 99L, null, "CVE-2026-0041", "pkg:maven/com.acme/demo@1.0",
-        "Different artifact", now.plusSeconds(3600), now);
-    when(repositories.list()).thenReturn(List.of(repository));
+    when(repositories.list()).thenReturn(List.of(repository, secondRepository));
     when(repositories.findById(11L)).thenReturn(Optional.of(repository));
+    when(repositories.findById(12L)).thenReturn(Optional.of(secondRepository));
     when(assets.findAssetById(23L)).thenReturn(Optional.of(asset));
+    when(assets.findAssetById(24L)).thenReturn(Optional.of(secondAsset));
     when(scans.listFindings(11L, null, null, 0L, 50)).thenReturn(List.of(finding));
+    when(scans.listFindings(12L, null, null, 0L, 50)).thenReturn(List.of(finding));
     when(scans.findFinding(41L)).thenReturn(Optional.of(finding));
-    when(scans.listRunSubjects(7L)).thenReturn(List.of(subject));
+    when(scans.listRunSubjects(7L)).thenReturn(List.of(subject, secondSubject));
     when(scans.listWaivers(null, 0L, 1000))
-        .thenReturn(List.of(active, expired, otherArtifact));
+        .thenReturn(List.of(active, overlapping, expired));
     when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
         .thenReturn(AccessDecision.allow());
     when(security.decide(
@@ -123,11 +157,13 @@ class SecurityScanManagementServiceWaiverTest {
     var findingView = service.findings(actor, null, null, null, 0L, 50).getFirst();
     var details = service.findingWaivers(actor, 41L);
 
-    assertEquals(1, findingView.activeWaiverCount());
+    assertEquals(2, findingView.activeWaiverCount());
     assertEquals(1, findingView.expiredWaiverCount());
-    assertEquals(1, details.activeWaiverCount());
+    assertEquals(2, findingView.waiverTargetCount());
+    assertEquals(1, findingView.waivedTargetCount());
+    assertEquals(2, details.activeWaiverCount());
     assertEquals(1, details.expiredWaiverCount());
-    assertEquals(2, details.waivers().size());
+    assertEquals(3, details.waivers().size());
     assertEquals("maven-hosted", details.waivers().getFirst().repository());
     assertEquals("com/acme/demo/1.0/demo-1.0.jar", details.waivers().getFirst().assetPath());
     assertEquals("security-admin", details.waivers().getFirst().approvedBy());
@@ -140,7 +176,7 @@ class SecurityScanManagementServiceWaiverTest {
         .thenReturn(Optional.of(asset(23L, 11L, "com/acme/demo/1.0/demo-1.0.jar")));
     when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
         .thenReturn(AccessDecision.allow());
-    when(scans.findFinding(41L)).thenReturn(Optional.of(finding(41L, 7L)));
+    when(scans.findFindingForUpdate(41L)).thenReturn(Optional.of(finding(41L, 7L)));
     when(scans.listRunSubjects(7L))
         .thenReturn(List.of(new ScanRunSubject(7L, 11L, 99L, 3L, 1L, Instant.now())));
     WaiverCommand command = new WaiverCommand(
@@ -170,9 +206,11 @@ class SecurityScanManagementServiceWaiverTest {
         .thenReturn(Optional.of(asset(23L, 11L, "com/acme/demo/1.0/demo-1.0.jar")));
     when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
         .thenReturn(AccessDecision.allow());
-    when(scans.findFinding(41L)).thenReturn(Optional.of(finding(41L, 7L)));
+    when(scans.findFindingForUpdate(41L)).thenReturn(Optional.of(finding(41L, 7L)));
     when(scans.listRunSubjects(7L))
         .thenReturn(List.of(new ScanRunSubject(7L, 11L, 23L, 3L, 1L, Instant.now())));
+    when(scans.listActiveWaivers(eq(11L), eq(23L), any(Instant.class), eq(1000)))
+        .thenReturn(List.of());
     when(scans.createWaiver(any())).thenAnswer(invocation -> invocation.getArgument(0));
     WaiverCommand command = new WaiverCommand(
         "GLOBAL",
@@ -204,9 +242,11 @@ class SecurityScanManagementServiceWaiverTest {
         .thenReturn(Optional.of(asset(23L, 11L, "com/acme/demo/1.0/demo-1.0.jar")));
     when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
         .thenReturn(AccessDecision.allow());
-    when(scans.findFinding(41L)).thenReturn(Optional.of(finding(41L, 7L)));
+    when(scans.findFindingForUpdate(41L)).thenReturn(Optional.of(finding(41L, 7L)));
     when(scans.listRunSubjects(7L))
         .thenReturn(List.of(new ScanRunSubject(7L, 11L, 23L, 3L, 1L, Instant.now())));
+    when(scans.listActiveWaivers(eq(11L), eq(23L), any(Instant.class), eq(1000)))
+        .thenReturn(List.of());
     when(scans.createWaiver(any())).thenAnswer(invocation -> invocation.getArgument(0));
     WaiverCommand command = new WaiverCommand(
         "FINDING",
@@ -227,6 +267,46 @@ class SecurityScanManagementServiceWaiverTest {
         ArgumentCaptor.forClass(SecurityScanDao.ScanWaiver.class);
     verify(scans).createWaiver(waiver.capture());
     assertNull(waiver.getValue().expiresAt());
+  }
+
+  @Test
+  void findingWaiverRejectsAnAlreadyCoveredRepositoryArtifact() {
+    Instant now = Instant.now();
+    ScanFinding finding = finding(41L, 7L);
+    ScanRunSubject subject = new ScanRunSubject(7L, 11L, 23L, 3L, 1L, now);
+    when(repositories.findById(11L)).thenReturn(Optional.of(repository(11L, "maven-hosted")));
+    when(assets.findAssetById(23L))
+        .thenReturn(Optional.of(asset(23L, 11L, "com/acme/demo/1.0/demo-1.0.jar")));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.allow());
+    when(scans.findFindingForUpdate(41L)).thenReturn(Optional.of(finding));
+    when(scans.listRunSubjects(7L)).thenReturn(List.of(subject));
+    when(scans.listActiveWaivers(eq(11L), eq(23L), any(Instant.class), eq(1000)))
+        .thenReturn(List.of(waiver(
+            51L, 11L, 23L, 41L, null, null, "Already accepted",
+            now.plusSeconds(3600), now)));
+    WaiverCommand command = new WaiverCommand(
+        "FINDING",
+        11L,
+        23L,
+        41L,
+        null,
+        null,
+        Map.of(),
+        "Duplicate acceptance",
+        null,
+        null,
+        now.plusSeconds(7200));
+
+    ResponseStatusException exception =
+        assertThrows(ResponseStatusException.class, () -> service.createWaiver(actor, command));
+
+    assertEquals(HttpStatus.CONFLICT, exception.getStatusCode());
+    assertEquals(
+        "Finding is already waived for this repository artifact",
+        exception.getReason());
+    verify(scans).findFindingForUpdate(41L);
+    verify(scans, never()).createWaiver(any());
   }
 
   @Test

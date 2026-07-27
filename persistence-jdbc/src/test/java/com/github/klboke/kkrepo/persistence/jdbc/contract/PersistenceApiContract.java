@@ -339,6 +339,9 @@ public abstract class PersistenceApiContract {
     SecurityScanDao.ScanFinding storedFinding =
         scans.listFindings(repositoryId, runId, Severity.HIGH, 0, 10).getFirst();
     assertNull(storedFinding.primaryUrl(), "unsafe finding URLs must not reach the UI projection");
+    assertEquals(
+        storedFinding.id(),
+        inTransaction(() -> scans.findFindingForUpdate(storedFinding.id()).orElseThrow()).id());
 
     SecurityScanDao.AssetSecurityState storedState = scans.upsertAssetStateIfCurrent(
         new SecurityScanDao.AssetSecurityState(

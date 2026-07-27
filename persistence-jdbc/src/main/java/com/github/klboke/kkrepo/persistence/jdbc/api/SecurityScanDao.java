@@ -134,6 +134,14 @@ public interface SecurityScanDao {
 
   Optional<ScanFinding> findFinding(long findingId);
 
+  /**
+   * Loads and locks one finding until the surrounding transaction completes.
+   *
+   * <p>Finding-scoped waiver creation uses this lock to serialize duplicate checks across
+   * application replicas.
+   */
+  Optional<ScanFinding> findFindingForUpdate(long findingId);
+
   List<ScanFinding> listFindings(
       Long repositoryId, Long scanRunId, Severity severity, long afterId, int maxItems);
 

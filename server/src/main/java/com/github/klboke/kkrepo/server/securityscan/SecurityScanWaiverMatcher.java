@@ -28,11 +28,14 @@ final class SecurityScanWaiverMatcher {
   }
 
   static boolean matchesAnySubject(ScanWaiver waiver, List<ScanRunSubject> subjects) {
-    return subjects.stream().anyMatch(subject ->
-        (waiver.repositoryId() == null
-            || waiver.repositoryId().longValue() == subject.repositoryId())
-            && (waiver.assetId() == null
-                || waiver.assetId().longValue() == subject.assetId()));
+    return subjects.stream().anyMatch(subject -> matchesSubject(waiver, subject));
+  }
+
+  static boolean matchesSubject(ScanWaiver waiver, ScanRunSubject subject) {
+    return (waiver.repositoryId() == null
+        || waiver.repositoryId().longValue() == subject.repositoryId())
+        && (waiver.assetId() == null
+            || waiver.assetId().longValue() == subject.assetId());
   }
 
   static boolean isApproved(ScanWaiver waiver) {

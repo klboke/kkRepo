@@ -1184,6 +1184,14 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   @Override
+  public Optional<ScanFinding> findFindingForUpdate(long findingId) {
+    return jdbc.query(
+        "SELECT * FROM security_scan_finding WHERE id = ? FOR UPDATE",
+        findingMapper,
+        findingId).stream().findFirst();
+  }
+
+  @Override
   public List<ScanFinding> listFindings(
       Long repositoryId, Long scanRunId, Severity severity, long afterId, int maxItems) {
     StringBuilder sql = new StringBuilder("""

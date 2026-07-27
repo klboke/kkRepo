@@ -163,6 +163,13 @@ class AdminSecurityScanningCapabilityContractTest {
 
     assertTrue(javascript.contains("activeWaiverCount"));
     assertTrue(javascript.contains("expiredWaiverCount"));
+    assertTrue(javascript.contains("waiverTargetCount"));
+    assertTrue(javascript.contains("waivedTargetCount"));
+    assertTrue(javascript.contains("Partially waived · ${waivedTargetCount}/${targetCount}"));
+    assertTrue(javascript.contains("renderSecurityScanFindingWaiverAction"));
+    assertTrue(javascript.contains("waive remaining"));
+    assertTrue(javascript.contains("already waived\" disabled>waived"));
+    assertFalse(javascript.contains("`Waived · ${active}`"));
     assertTrue(javascript.contains("waiver.assetPath || \"All artifacts\""));
     assertTrue(javascript.contains("security-scan-finding-waiver-detail"));
     assertTrue(javascript.contains(

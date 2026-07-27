@@ -822,6 +822,10 @@ waiver 的 finding 数量写入 policy evaluation。
 package selector，使豁免在同一漏洞的后续重扫中继续有效，但不能扩散到其它漏洞。
 有效期可从 1、7、30、90 天或“无期限”中选择，默认 7 天，reason 必填。“无期限”
 必须由用户显式选择，并始终保留撤销入口，避免用任意超长日期表达永久风险接受。
+同一 `finding_id + repository_id + asset_id` 已被任一有效且已审批 waiver 覆盖时，
+不得再次创建 finding waiver。创建事务先对 finding 行执行 `SELECT ... FOR UPDATE`，
+再检查有效 waiver 并在重复时返回 `409 Conflict`，使多个 kkRepo 副本上的并发点击
+也串行到同一判断。已过期或已撤销的记录不阻止重新豁免。
 广域 API 豁免必须至少提供 advisory 或 package selector；拒绝无 finding、无
 selector 的全局或整仓“全部漏洞豁免”，历史空 selector 记录也不能匹配 finding。
 
@@ -1224,6 +1228,10 @@ API 列表使用稳定分页和有界 filter。description、raw report 和 SBOM
    - 每条 finding 显示后端按实际 run subject、repository、asset 和 selector 计算的
      waiver 状态；不能只在浏览器按 advisory/package 猜测，否则同一漏洞出现在不同
      仓库时会误标。
+   - 主列表展示制品目标覆盖率而不是 waiver 记录数：所有关联目标均被覆盖时显示
+     `Waived` 并禁用行内豁免按钮；部分覆盖时显示 `Partially waived · 已覆盖/总数`
+     并只允许对剩余目标执行 `waive remaining`。多个范围重叠的 waiver 仍保留在详情
+     和治理列表中，但不会把主状态显示成容易误解的 `Waived · 2`。
    - 有效或已过期的状态徽标可点击查看适用制品、范围、策略、reason、审批人和到期
      时间；新建 waiver 仍从 finding 行内发起，成功后留在 Findings 并立即刷新状态。
 4. **Repositories**
@@ -1253,6 +1261,9 @@ API 列表使用稳定分页和有界 filter。description、raw report 和 SBOM
    - 弹窗中的适用制品只能从后端返回的关联仓库制品中选择，不允许手填 repository、
      asset、finding ID；有效期使用 1、7、30、90 天或“无期限”，默认 7 天且
      reason 必填；无期限豁免在列表和详情中明确标记，并可随时撤销。
+   - waiver context 只返回尚未被有效 waiver 覆盖的关联制品；如果列表加载后发生
+     并发创建，最终 `POST /waivers` 仍由服务端重复检查拒绝，不能依赖按钮置灰保证
+     正确性。
    - 从 Findings 打开的新建和详情弹窗挂在扫描页面公共层，不嵌套在任一隐藏 tab
      panel 内，避免“状态已打开但祖先仍 hidden”导致弹窗不可见。
 
