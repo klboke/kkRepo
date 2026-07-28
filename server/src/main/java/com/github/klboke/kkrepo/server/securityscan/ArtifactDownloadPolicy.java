@@ -60,7 +60,8 @@ public class ArtifactDownloadPolicy {
   public Decision beforeRead(long assetId, Long entryRepositoryId) {
     if (!properties.isEnabled() || internalScannerRequest()) return Decision.allow();
     return evaluateSnapshots(
-        () -> scans.findDownloadPolicySnapshots(assetId, entryRepositoryId));
+        () -> scans.findDownloadPolicySnapshots(assetId, entryRepositoryId),
+        false);
   }
 
   /**
@@ -69,6 +70,16 @@ public class ArtifactDownloadPolicy {
    * <p>The DAO loads the batch in one statement; the strictest applicable manifest decision wins.
    */
   public Decision beforeReadAll(List<Long> assetIds) {
+    return beforeReadAll(assetIds, false);
+  }
+
+  /**
+   * Evaluates a bounded shared-blob reference set.
+   *
+   * <p>If {@code referencesTruncated} is true, an applicable enforcement configuration fails
+   * closed instead of issuing additional hot-path queries whose count depends on tag cardinality.
+   */
+  public Decision beforeReadAll(List<Long> assetIds, boolean referencesTruncated) {
     if (!properties.isEnabled() || internalScannerRequest()) return Decision.allow();
     List<Long> ids = assetIds == null
         ? List.of()
@@ -78,22 +89,43 @@ public class ArtifactDownloadPolicy {
             .distinct()
             .toList();
     if (ids.isEmpty()) return Decision.allow();
+    boolean truncated =
+        referencesTruncated || ids.size() > SecurityScanDao.MAX_DOWNLOAD_POLICY_BATCH;
+    if (ids.size() > SecurityScanDao.MAX_DOWNLOAD_POLICY_BATCH) {
+      ids = ids.subList(0, SecurityScanDao.MAX_DOWNLOAD_POLICY_BATCH);
+    }
+    List<Long> boundedIds = ids;
     return evaluateSnapshots(
-        () -> scans.findDownloadPolicySnapshots(ids, requestEntryRepositoryId()));
+        () -> scans.findDownloadPolicySnapshots(boundedIds, requestEntryRepositoryId()),
+        truncated);
   }
 
   private Decision evaluateSnapshots(
-      java.util.function.Supplier<List<DownloadPolicySnapshot>> snapshotLoader) {
+      java.util.function.Supplier<List<DownloadPolicySnapshot>> snapshotLoader,
+      boolean referencesTruncated) {
     Timer.Sample sample = metrics.start();
     String format = null;
     String outcome = "allow";
     try {
       List<DownloadPolicySnapshot> snapshots = snapshotLoader.get();
-      List<Evaluation> evaluations = new ArrayList<>(snapshots.size());
       for (DownloadPolicySnapshot snapshot : snapshots) {
         if (format == null && snapshot.format() != null) {
           format = snapshot.format().name();
         }
+      }
+      boolean enforcedOverflow = referencesTruncated
+          && snapshots.stream()
+              .map(DownloadPolicySnapshot::config)
+              .anyMatch(config ->
+                  config.enabled() && config.enforcementMode() == EnforcementMode.ENFORCE);
+      if (enforcedOverflow) {
+        metrics.recordPolicy(format, PolicyDecision.BLOCK_PENDING, true);
+        outcome = "block";
+        throw new ArtifactPolicyException(
+            PolicyDecision.BLOCK_PENDING, DEFAULT_RETRY_AFTER_SECONDS);
+      }
+      List<Evaluation> evaluations = new ArrayList<>(snapshots.size());
+      for (DownloadPolicySnapshot snapshot : snapshots) {
         RepositoryScanConfig config = snapshot.config();
         if (!config.enabled()) continue;
         ScanProfile profile = snapshot.profile();

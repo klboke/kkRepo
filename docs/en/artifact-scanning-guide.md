@@ -389,6 +389,7 @@ not depend on a disabled browser button.
 | `KKREPO_SECURITY_SCANNING_OCI_REGISTRY_URL` | `http://kkrepo:8080` | kkRepo URL used by the scanner for exact OCI digests |
 | `KKREPO_SECURITY_SCANNING_DATABASE_MAX_AGE` | `48h` | Maximum operational vulnerability-database age |
 | `KKREPO_SECURITY_SCANNING_OBSERVATION_MAX_AGE` | `2m` | Maximum scanner snapshot observation age |
+| `KKREPO_SECURITY_SCANNING_MAX_RESPONSE_BYTES` | `335544320` | Maximum adapter JSON response accepted by kkRepo, including raw-document Base64, JSON fields, and projections |
 | `KKREPO_SECURITY_SCANNING_WORKER_BATCH_SIZE` | `4` | Tasks claimed per worker cycle |
 | `KKREPO_SECURITY_SCANNING_WORKER_MAX_ATTEMPTS` | `5` | Automatic attempt limit |
 | `KKREPO_SECURITY_SCANNING_METRICS_COUNT_LIMIT` | `10000` | Gauge saturation limit that avoids unbounded counts |
@@ -412,11 +413,16 @@ and OCI registry URL.
 | `KKREPO_SCANNER_ADMISSION_TIMEOUT` | `1s` | Wait for scanner capacity |
 | `KKREPO_SCANNER_RETRY_AFTER_SECONDS` | `5` | Retry hint after capacity rejection |
 | `KKREPO_SCANNER_MAX_INPUT_BYTES` | `2147483648` | Adapter input hard limit |
-| `KKREPO_SCANNER_MAX_OUTPUT_BYTES` | `67108864` | Scanner output limit |
+| `KKREPO_SCANNER_MAX_OUTPUT_BYTES` | `67108864` | Per raw SBOM/report limit; OCI also applies it to aggregate platform inputs and the merged SBOM |
 
 See the
 [scanner adapter application.yml](../../scanner-adapter/src/main/resources/application.yml) for
 all low-level values.
+
+`MAX_RESPONSE_BYTES` bounds the transport JSON envelope and is intentionally separate from the
+scanner's raw-output limit. If `KKREPO_SCANNER_MAX_OUTPUT_BYTES` is increased, raise the former to
+account for Base64 expansion and projected fields; the 320 MiB default leaves explicit headroom
+for the default 64 MiB raw limit.
 
 ## Monitoring And Alerts
 

@@ -34,6 +34,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -52,6 +53,7 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class SecurityScanManagementService {
   private static final int MAX_QUERY_LENGTH = 200;
+  private static final int WAIVER_MATCH_PAGE_SIZE = 256;
 
   private final SecurityScanDao scans;
   private final RepositoryDao repositories;
@@ -239,7 +241,6 @@ public class SecurityScanManagementService {
     }
     Set<Long> visibleRepositoryIds = visibleRepositoryNames.keySet();
     Instant now = Instant.now();
-    List<ScanWaiver> waivers = loadWaiversForFindings(rawPage.items());
     Map<Long, List<ScanFinding>> findingsByRun = new LinkedHashMap<>();
     Map<Long, FindingAccumulator> accumulators = new LinkedHashMap<>();
     for (ScanFinding finding : rawPage.items()) {
@@ -254,10 +255,34 @@ public class SecurityScanManagementService {
           }
           String repositoryName = visibleRepositoryNames.get(subject.repositoryId());
           for (ScanFinding finding : runFindings) {
-            accumulators.get(finding.id()).accept(
-                subject, repositoryName, finding, waivers, now);
+            accumulators.get(finding.id()).acceptSubject(repositoryName);
           }
         }));
+    forEachWaiverPageForFindings(rawPage.items(), waiverPage -> {
+      Map<Long, PageWaiverMatches> pageMatches = new LinkedHashMap<>();
+      rawPage.items().forEach(
+          finding -> pageMatches.put(finding.id(), new PageWaiverMatches()));
+      findingsByRun.forEach((scanRunId, runFindings) -> {
+        int[] visibleSubjectIndex = {0};
+        forEachRunSubject(scanRunId, subject -> {
+          if (!visibleRepositoryIds.contains(subject.repositoryId())) {
+            return;
+          }
+          int subjectIndex = visibleSubjectIndex[0]++;
+          for (ScanFinding finding : runFindings) {
+            accumulators.get(finding.id()).acceptWaiverPage(
+                subjectIndex,
+                subject,
+                finding,
+                waiverPage,
+                now,
+                pageMatches.get(finding.id()));
+          }
+        });
+      });
+      pageMatches.forEach((findingId, matches) ->
+          accumulators.get(findingId).acceptWaiverCounts(matches));
+    });
     List<FindingView> views = rawPage.items().stream()
         .map(finding -> accumulators.get(finding.id()).view(finding))
         .toList();
@@ -269,12 +294,10 @@ public class SecurityScanManagementService {
     requireWaiverPermission(actor, "create");
     ScanFinding finding = scans.findFinding(findingId)
         .orElseThrow(() -> notFound("Security scan finding not found"));
-    List<ScanWaiver> waivers = loadWaiversForFindings(List.of(finding));
     Instant now = Instant.now();
-    List<WaiverTargetView> targets = new ArrayList<>();
+    List<ScanRunSubject> targetSubjects = new ArrayList<>();
+    List<WaiverTargetView> candidateTargets = new ArrayList<>();
     Set<String> seen = new LinkedHashSet<>();
-    int[] administrableTargetCount = {0};
-    int[] waivedTargetCount = {0};
     forEachRunSubject(finding.scanRunId(), subject -> {
       RepositoryRecord repository = repositories.findById(subject.repositoryId()).orElse(null);
       AssetRecord asset = assets.findAssetById(subject.assetId()).orElse(null);
@@ -286,22 +309,33 @@ public class SecurityScanManagementService {
       }
       String key = subject.repositoryId() + ":" + subject.assetId();
       if (seen.add(key)) {
-        administrableTargetCount[0]++;
-        if (isSubjectWaived(finding, subject, waivers, now)) {
-          waivedTargetCount[0]++;
-        } else {
-          targets.add(new WaiverTargetView(
-              subject.repositoryId(),
-              repository.name(),
-              subject.assetId(),
-              asset.path()));
+        targetSubjects.add(subject);
+        candidateTargets.add(new WaiverTargetView(
+            subject.repositoryId(),
+            repository.name(),
+            subject.assetId(),
+            asset.path()));
+      }
+    });
+    BitSet waivedTargets = new BitSet(targetSubjects.size());
+    forEachWaiverPageForFindings(List.of(finding), waiverPage -> {
+      for (int index = 0; index < targetSubjects.size(); index++) {
+        if (!waivedTargets.get(index)
+            && isSubjectWaived(finding, targetSubjects.get(index), waiverPage, now)) {
+          waivedTargets.set(index);
         }
       }
     });
+    List<WaiverTargetView> targets = new ArrayList<>();
+    for (int index = 0; index < candidateTargets.size(); index++) {
+      if (!waivedTargets.get(index)) {
+        targets.add(candidateTargets.get(index));
+      }
+    }
     targets.sort(Comparator.comparing(WaiverTargetView::repository)
         .thenComparing(WaiverTargetView::assetPath)
         .thenComparingLong(WaiverTargetView::assetId));
-    if (administrableTargetCount[0] == 0) {
+    if (targetSubjects.isEmpty()) {
       throw notFound("No administrable artifact is associated with this finding");
     }
     return new FindingWaiverContext(
@@ -311,8 +345,8 @@ public class SecurityScanManagementService {
         finding.packageName(),
         finding.installedVersion(),
         finding.severity().name(),
-        administrableTargetCount[0],
-        waivedTargetCount[0],
+        targetSubjects.size(),
+        waivedTargets.cardinality(),
         List.copyOf(targets));
   }
 
@@ -322,26 +356,33 @@ public class SecurityScanManagementService {
     ScanFinding finding = scans.findFinding(findingId)
         .orElseThrow(() -> notFound("Security scan finding not found"));
     Set<Long> visibleRepositoryIds = visibleRepositoryIds(actor);
-    List<ScanWaiver> candidates = loadWaiversForFindings(List.of(finding));
-    Set<Long> matchingWaiverIds = new LinkedHashSet<>();
     boolean[] visibleSubject = {false};
     forEachRunSubject(finding.scanRunId(), subject -> {
-      if (!visibleRepositoryIds.contains(subject.repositoryId())) {
-        return;
+      if (visibleRepositoryIds.contains(subject.repositoryId())) {
+        visibleSubject[0] = true;
       }
-      visibleSubject[0] = true;
-      candidates.stream()
-          .filter(waiver -> SecurityScanWaiverMatcher.matchesFinding(waiver, finding))
-          .filter(waiver -> SecurityScanWaiverMatcher.matchesSubject(waiver, subject))
-          .map(ScanWaiver::id)
-          .forEach(matchingWaiverIds::add);
     });
     if (!visibleSubject[0]) throw notFound("Security scan finding not found");
     Instant now = Instant.now();
-    List<WaiverView> waivers = candidates.stream()
-            .filter(waiver -> matchingWaiverIds.contains(waiver.id()))
-            .map(waiver -> waiverView(waiver, now))
-            .toList();
+    List<WaiverView> waivers = new ArrayList<>();
+    forEachWaiverPageForFindings(List.of(finding), waiverPage -> {
+      Set<Long> matchingPageIds = new LinkedHashSet<>();
+      forEachRunSubject(finding.scanRunId(), subject -> {
+        if (!visibleRepositoryIds.contains(subject.repositoryId())) {
+          return;
+        }
+        waiverPage.stream()
+            .filter(waiver -> SecurityScanWaiverMatcher.matchesFinding(waiver, finding))
+            .filter(waiver -> SecurityScanWaiverMatcher.matchesSubject(waiver, subject))
+            .map(ScanWaiver::id)
+            .filter(java.util.Objects::nonNull)
+            .forEach(matchingPageIds::add);
+      });
+      waiverPage.stream()
+          .filter(waiver -> matchingPageIds.contains(waiver.id()))
+          .map(waiver -> waiverView(waiver, now))
+          .forEach(waivers::add);
+    });
     int active = (int) waivers.stream().filter(WaiverView::active).count();
     return new FindingWaiverDetail(
         finding.id(),
@@ -350,7 +391,7 @@ public class SecurityScanManagementService {
         finding.packageUrl(),
         active,
         waivers.size() - active,
-        waivers);
+        List.copyOf(waivers));
   }
 
   private WaiverView waiverView(ScanWaiver waiver, Instant now) {
@@ -432,22 +473,25 @@ public class SecurityScanManagementService {
 
   private static final class FindingAccumulator {
     private final Set<String> repositoryNames = new LinkedHashSet<>();
-    private final Set<Long> activeWaiverIds = new LinkedHashSet<>();
-    private final Set<Long> expiredWaiverIds = new LinkedHashSet<>();
+    private final BitSet waivedTargets = new BitSet();
+    private int activeWaiverCount;
+    private int expiredWaiverCount;
     private int targetCount;
-    private int waivedTargetCount;
 
-    private void accept(
-        ScanRunSubject subject,
-        String repositoryName,
-        ScanFinding finding,
-        List<ScanWaiver> waivers,
-        Instant evaluatedAt) {
+    private void acceptSubject(String repositoryName) {
       targetCount++;
       if (repositoryName != null && !repositoryName.isBlank()) {
         repositoryNames.add(repositoryName);
       }
-      boolean waived = false;
+    }
+
+    private void acceptWaiverPage(
+        int subjectIndex,
+        ScanRunSubject subject,
+        ScanFinding finding,
+        List<ScanWaiver> waivers,
+        Instant evaluatedAt,
+        PageWaiverMatches matches) {
       for (ScanWaiver waiver : waivers) {
         if (!SecurityScanWaiverMatcher.isApproved(waiver)
             || !SecurityScanWaiverMatcher.matchesFinding(waiver, finding)
@@ -455,26 +499,33 @@ public class SecurityScanManagementService {
           continue;
         }
         if (SecurityScanWaiverMatcher.isActive(waiver, evaluatedAt)) {
-          if (waiver.id() != null) activeWaiverIds.add(waiver.id());
-          waived = true;
+          if (waiver.id() != null) matches.activeWaiverIds.add(waiver.id());
+          waivedTargets.set(subjectIndex);
         } else if (waiver.id() != null) {
-          expiredWaiverIds.add(waiver.id());
+          matches.expiredWaiverIds.add(waiver.id());
         }
       }
-      if (waived) {
-        waivedTargetCount++;
-      }
+    }
+
+    private void acceptWaiverCounts(PageWaiverMatches matches) {
+      activeWaiverCount += matches.activeWaiverIds.size();
+      expiredWaiverCount += matches.expiredWaiverIds.size();
     }
 
     private FindingView view(ScanFinding finding) {
       return FindingView.from(
           finding,
           repositoryNames.stream().sorted().toList(),
-          activeWaiverIds.size(),
-          expiredWaiverIds.size(),
+          activeWaiverCount,
+          expiredWaiverCount,
           targetCount,
-          waivedTargetCount);
+          waivedTargets.cardinality());
     }
+  }
+
+  private static final class PageWaiverMatches {
+    private final Set<Long> activeWaiverIds = new LinkedHashSet<>();
+    private final Set<Long> expiredWaiverIds = new LinkedHashSet<>();
   }
 
   public AssetDetail asset(AuthenticatedSubject actor, long assetId) {
@@ -743,9 +794,10 @@ public class SecurityScanManagementService {
     return List.copyOf(visibleWaivers);
   }
 
-  private List<ScanWaiver> loadWaiversForFindings(List<ScanFinding> findings) {
+  private void forEachWaiverPageForFindings(
+      List<ScanFinding> findings, Consumer<List<ScanWaiver>> consumer) {
     if (findings == null || findings.isEmpty()) {
-      return List.of();
+      return;
     }
     List<Long> findingIds = findings.stream()
         .map(ScanFinding::id)
@@ -765,11 +817,29 @@ public class SecurityScanManagementService {
         .filter(value -> value != null && !value.isBlank())
         .distinct()
         .toList();
-    return scans.listWaiversForFindings(
-        findingIds,
-        findings.stream().map(ScanFinding::scanRunId).distinct().toList(),
-        advisorySelectors,
-        packageSelectors);
+    List<Long> runIds =
+        findings.stream().map(ScanFinding::scanRunId).distinct().toList();
+    long cursor = 0;
+    while (true) {
+      List<ScanWaiver> page = scans.listWaiversForFindings(
+          findingIds,
+          runIds,
+          advisorySelectors,
+          packageSelectors,
+          cursor,
+          WAIVER_MATCH_PAGE_SIZE);
+      if (page.isEmpty()) {
+        return;
+      }
+      consumer.accept(page);
+      Long nextCursor = page.getLast().id();
+      if (page.size() < WAIVER_MATCH_PAGE_SIZE
+          || nextCursor == null
+          || nextCursor <= cursor) {
+        return;
+      }
+      cursor = nextCursor;
+    }
   }
 
   private List<ScanWaiver> loadActiveWaivers(

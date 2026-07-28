@@ -2,7 +2,7 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "kkrepo.fullname" . }}-scanner-db
+  name: {{ include "kkrepo.scannerDatabaseClaimName" . }}
   labels:
     {{- include "kkrepo.scannerLabels" . | nindent 4 }}
 spec:

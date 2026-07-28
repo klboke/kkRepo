@@ -2,7 +2,7 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "kkrepo.fullname" . }}-scanner
+  name: {{ include "kkrepo.scannerName" . }}
   labels:
     {{- include "kkrepo.scannerLabels" . | nindent 4 }}
 spec:

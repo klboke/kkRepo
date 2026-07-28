@@ -218,7 +218,12 @@ public class SecurityScanExecutor {
           "SCANNER_IO", "OCI scanner request failed", true, e);
     }
     validateCatalogResponse(subject, response.catalog());
-    Sbom sbom = persistSbom(subject, profile, response.catalog());
+    Sbom sbom = persistSbom(
+        subject,
+        profile,
+        response.catalog(),
+        response.scannedPlatforms(),
+        response.missingPlatforms());
     MatchResponse match = response.match();
     ScanCompleteness completeness = response.missingPlatforms().isEmpty()
         ? match.completeness() : ScanCompleteness.PARTIAL;
@@ -294,6 +299,15 @@ public class SecurityScanExecutor {
 
   private Sbom persistSbom(
       ScanSubject subject, ScanProfile profile, CatalogResponse response) {
+    return persistSbom(subject, profile, response, List.of(), List.of());
+  }
+
+  private Sbom persistSbom(
+      ScanSubject subject,
+      ScanProfile profile,
+      CatalogResponse response,
+      List<String> scannedPlatforms,
+      List<String> missingPlatforms) {
     validateJsonDocument(response.cyclonedxJson(), "SBOM_INVALID_JSON", true);
     var document = documents.store(
         subject.repositoryId(), "sbom", response.cyclonedxJson(), "application/vnd.cyclonedx+json");
@@ -301,7 +315,9 @@ public class SecurityScanExecutor {
         subject,
         response.engineName(),
         response.engineVersion(),
-        profile.configurationDigest());
+        profile.configurationDigest(),
+        scannedPlatforms,
+        missingPlatforms);
     int projectedCount = Math.min(response.components().size(), MAX_PROJECTED_COMPONENTS);
     boolean inventoryComplete = response.completeness() == ScanCompleteness.COMPLETE
         && response.componentCount() <= projectedCount;

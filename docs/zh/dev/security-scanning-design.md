@@ -333,7 +333,9 @@ referencedDigests
 
 第一阶段默认使用 `REQUIRED_SET`，默认平台可配置为 `linux/amd64`。只有
 `ALL` 完成，或策略明确声明只要求某个平台集合时，才能把聚合结果标记为对应范围内的
-`COMPLETE`。
+`COMPLETE`。单次 scanner 请求最多接受 16 个平台，且全部平台原始 SBOM 的总字节数
+和合并后的 SBOM 都受同一个 output budget 约束，避免平台 fanout 把堆和临时磁盘占用
+放大为无界工作。
 
 tag 更新到新 digest 时，tag 本身不复制扫描结果；读取路径解析到新 manifest 后使用
 新 digest 对应的状态。
@@ -673,8 +675,13 @@ catalog_fingerprint =
        target classification,
        catalog engine,
        catalog engine version,
-       catalog configuration digest)
+       catalog configuration digest,
+       actual scanned platforms,
+       actual missing platforms)
 ```
+
+平台集合排序并去重；普通制品使用两个空集合。这样两次 OCI catalog 即使配置相同，
+只要实际平台覆盖不同，也不会复用旧 SBOM 并把新 findings 错误关联到旧文档。
 
 ### `security_sbom_component`
 
@@ -882,10 +889,12 @@ waiver 不在管理 API 事务内执行全表 `DELETE`，而是 O(1) 推进
 reconciler 以有界批次重算，并把 current revision 放入 `POLICY_ONLY` 任务的确定性
 request UUID，避免新一轮重算复用旧终态任务。
 
-Findings 列表不会加载全部 waiver 历史。DAO 只按当前页的 finding ID、advisory/alias、
-package selector 及可见 run subject 的 repository/asset 集合查询候选 waiver，再由
-服务层执行精确组合匹配；分页响应的内存和查询工作量不再随安装生命周期内所有 waiver
-线性增长。
+Findings 列表不会一次加载全部 waiver 历史。DAO 只按当前页的 finding ID、
+advisory/alias、package selector 及可见 run subject 查询候选 waiver，并按
+`w.id > cursor ORDER BY w.id LIMIT 256` 做 keyset 分页；服务层逐页执行精确组合匹配，
+只保留当前页 waiver ID 集合和每个 finding 的 target bitset。为保持 active/expired
+精确计数，总耗时仍与实际匹配的候选 waiver 数量线性相关，但单条 SQL、参数数量和请求
+工作集有固定上限，不会把全部历史记录一次物化到堆中。
 
 管理 UI 不提供从空表单创建全局或整仓豁免的入口。普通交互必须从具体 finding 发起，
 后端根据 `security_scan_run_subject` 返回当前操作者可管理的仓库制品，UI 只展示
@@ -1143,7 +1152,10 @@ task 却被标记 COMPLETE 的状态。
 - 限制 CPU、内存、临时磁盘、进程数和 wall-clock timeout。
 - 不挂载宿主源码、Docker socket、kkRepo 配置目录或云凭据目录。
 - 默认禁止任意出站网络；漏洞数据库更新使用独立、允许列表控制的流程。
-- 对 scanner response 设置 body 大小、JSON nesting 和字段长度上限。
+- 分别限制 scanner 原始 SBOM/report 与 HTTP JSON response：原始文档限制还覆盖 OCI
+  各平台输入总和和合并结果；response 限制需要计入 Base64 膨胀、JSON 字段及投影，
+  不能与原始输出错误地共用同一个字节值。
+- 对 scanner response 设置 JSON nesting 和字段长度上限。
 
 scanner adapter 与 kkRepo 之间使用受保护的内部网络，并支持 mTLS 或轮换的 service
 credential。readiness 必须同时验证扫描器可执行、漏洞数据库可读且未超过允许运维
@@ -1256,12 +1268,16 @@ dependency resolution 兼容测试。
 策略主体仍是 manifest/index，不为每个 layer 单独生成 finding 或扫描状态。读取
 `/v2/<name>/blobs/<digest>` 时，服务端通过
 `repository_id + image_name + digest_hash` 的索引查询所有仍有效、引用该 digest 的
-manifest asset。结果按 asset ID keyset、每批最多 256 个读取；同一批的下载策略快照
-由一条 SQL 获取，避免共享 layer 产生 N+1 热路径查询。任一关联 manifest 被阻断时，
-同一 image namespace 下的直接 digest 下载也阻断，不能绕过 manifest 检查。
+manifest asset。热路径只读取最多 1025 个 ID：前 1024 个由一条聚合策略 SQL 判定，
+第 1025 个只作为 overflow 标记。存在 overflow 且任一适用配置为 `ENFORCE` 时，
+固定成本地按 pending fail-closed，不继续按 tag 数量分页；只有全部适用配置均为
+`AUDIT` 时才允许继续。任一关联 manifest 被阻断时，同一 image namespace 下的直接
+digest 下载也阻断，不能绕过 manifest 检查。
 
-未被任何有效 manifest 引用的上传中间 Blob 没有可判定的镜像策略主体，因此不套用
-manifest 漏洞规则；它仍受原有仓库 read 权限和 Docker 上传/清理生命周期约束。
+若请求的 image namespace 下没有任何仍有效的 manifest 引用该 digest，即使仓库全局
+存在相同内容 Blob，也返回 Registry V2 `BLOB_UNKNOWN`。上传中间 Blob 在 manifest
+提交前不可通过其它 image 名称读取，避免用可猜 digest 跨 image namespace 取得内容
+或绕过另一个镜像的策略。
 同一 layer 在不同 image namespace 的判定相互独立，避免一个镜像的策略直接污染其它
 镜像。
 

@@ -5,6 +5,7 @@ import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
@@ -243,22 +244,23 @@ public class DockerManifestStore {
   }
 
   void beforeBlobRead(RepositoryRuntime runtime, String imageName, DockerDigest digest) {
-    if (downloadPolicy == null) {
-      return;
+    List<Long> manifestAssetIds = dockerDao.listManifestAssetIdsReferencingDigest(
+        runtime.id(),
+        imageName,
+        digest.value(),
+        0,
+        SecurityScanDao.MAX_DOWNLOAD_POLICY_BATCH + 1);
+    if (manifestAssetIds.isEmpty()) {
+      throw new DockerProtocolException(DockerErrorCode.BLOB_UNKNOWN, digest.value());
     }
-    long afterAssetId = 0;
-    while (true) {
-      List<Long> manifestAssetIds = dockerDao.listManifestAssetIdsReferencingDigest(
-          runtime.id(), imageName, digest.value(), afterAssetId, 256);
-      if (manifestAssetIds.isEmpty()) {
-        return;
-      }
-      downloadPolicy.beforeReadAll(manifestAssetIds);
-      long nextAfter = manifestAssetIds.getLast();
-      if (nextAfter <= afterAssetId || manifestAssetIds.size() < 256) {
-        return;
-      }
-      afterAssetId = nextAfter;
+    boolean truncated =
+        manifestAssetIds.size() > SecurityScanDao.MAX_DOWNLOAD_POLICY_BATCH;
+    if (truncated) {
+      manifestAssetIds =
+          manifestAssetIds.subList(0, SecurityScanDao.MAX_DOWNLOAD_POLICY_BATCH);
+    }
+    if (downloadPolicy != null) {
+      downloadPolicy.beforeReadAll(manifestAssetIds, truncated);
     }
   }
 

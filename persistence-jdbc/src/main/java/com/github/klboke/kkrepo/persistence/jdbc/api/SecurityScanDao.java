@@ -20,6 +20,8 @@ import java.util.Optional;
 
 /** Shared relational contract for durable, multi-replica security scan coordination. */
 public interface SecurityScanDao {
+  int MAX_DOWNLOAD_POLICY_BATCH = 1024;
+
   Optional<ScanProfile> findProfile(long profileId);
 
   List<ScanProfile> listProfiles();
@@ -43,7 +45,8 @@ public interface SecurityScanDao {
   /**
    * Batch form of {@link #findDownloadPolicySnapshots(long, Long)} for shared Docker blobs.
    *
-   * <p>Callers must pass at most 256 distinct asset IDs. The bound keeps the hot-path statement
+   * <p>Callers must pass at most {@value #MAX_DOWNLOAD_POLICY_BATCH} distinct asset IDs. The bound
+   * keeps the hot-path statement
    * below database parameter limits while avoiding one policy query per referencing manifest.
    */
   List<DownloadPolicySnapshot> findDownloadPolicySnapshots(
@@ -279,7 +282,9 @@ public interface SecurityScanDao {
       List<Long> findingIds,
       List<Long> scanRunIds,
       List<String> advisorySelectors,
-      List<String> packageSelectors);
+      List<String> packageSelectors,
+      long afterId,
+      int maxItems);
 
   boolean deleteWaiver(long waiverId);
 

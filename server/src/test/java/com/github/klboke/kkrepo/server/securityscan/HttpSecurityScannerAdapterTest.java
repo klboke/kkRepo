@@ -208,7 +208,7 @@ class HttpSecurityScannerAdapterTest {
   @Test
   void classifiesHttpJsonTransportAndBoundedResponseFailures() throws Exception {
     ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
-    start(exchange -> respond(exchange, 503, "{}".getBytes()));
+    start(exchange -> respond(exchange, 503, new byte[8192]));
     ScannerAdapterException unavailable = assertThrows(
         ScannerAdapterException.class,
         () -> adapter(mapper, 4096).capabilities());
@@ -279,12 +279,12 @@ class HttpSecurityScannerAdapterTest {
     assertEquals("SCANNER_IO", connectionFailure.code());
   }
 
-  private HttpSecurityScannerAdapter adapter(ObjectMapper mapper, long maxOutputBytes) {
+  private HttpSecurityScannerAdapter adapter(ObjectMapper mapper, long maxResponseBytes) {
     SecurityScanningProperties properties = new SecurityScanningProperties();
     properties.getAdapter().setBaseUrl(
         "http://127.0.0.1:" + server.getAddress().getPort() + "/");
     properties.getAdapter().setServiceCredential("secret");
-    properties.setMaxOutputBytes(maxOutputBytes);
+    properties.setMaxResponseBytes(maxResponseBytes);
     return new HttpSecurityScannerAdapter(mapper, properties);
   }
 

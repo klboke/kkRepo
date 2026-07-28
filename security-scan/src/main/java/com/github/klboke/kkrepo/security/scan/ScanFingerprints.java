@@ -17,13 +17,31 @@ public final class ScanFingerprints {
       String catalogEngine,
       String catalogEngineVersion,
       String catalogConfigurationDigest) {
+    return catalog(
+        subject,
+        catalogEngine,
+        catalogEngineVersion,
+        catalogConfigurationDigest,
+        List.of(),
+        List.of());
+  }
+
+  public static String catalog(
+      ScanSubject subject,
+      String catalogEngine,
+      String catalogEngineVersion,
+      String catalogConfigurationDigest,
+      List<String> scannedPlatforms,
+      List<String> missingPlatforms) {
     return sha256(
         subject.kind().name(),
         subject.identity(),
         subject.classification().name(),
         catalogEngine,
         catalogEngineVersion,
-        catalogConfigurationDigest);
+        catalogConfigurationDigest,
+        canonicalPlatforms(scannedPlatforms),
+        canonicalPlatforms(missingPlatforms));
   }
 
   public static String match(

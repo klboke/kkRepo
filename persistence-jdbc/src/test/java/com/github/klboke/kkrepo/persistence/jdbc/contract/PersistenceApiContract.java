@@ -422,15 +422,26 @@ public abstract class PersistenceApiContract {
                 List.of(storedFinding.id()),
                 List.of(runId),
                 List.of(storedFinding.advisoryId(), "CVE-2026-0001"),
-                List.of(storedFinding.packageUrl(), storedFinding.packageName()))
+                List.of(storedFinding.packageUrl(), storedFinding.packageName()),
+                0,
+                10)
             .getFirst()
             .id(),
         "finding pages must query only waivers matching their finding and subject keys");
     assertTrue(scans.listWaiversForFindings(
         List.of(storedFinding.id()),
+        List.of(runId),
+        List.of(storedFinding.advisoryId()),
+        List.of(storedFinding.packageUrl()),
+        waiver.id(),
+        10).isEmpty(), "finding waiver keyset cursor must exclude earlier rows");
+    assertTrue(scans.listWaiversForFindings(
+        List.of(storedFinding.id()),
         List.of(runId + 1),
         List.of(storedFinding.advisoryId()),
-        List.of(storedFinding.packageUrl())).isEmpty());
+        List.of(storedFinding.packageUrl()),
+        0,
+        10).isEmpty());
     assertTrue(scans.runSubjectExists(runId, repositoryId, assetId));
     assertEquals(
         List.of(repositoryId, groupRepositoryId),

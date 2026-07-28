@@ -36,12 +36,28 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
+{{- define "kkrepo.scannerName" -}}
+{{- $base := include "kkrepo.fullname" . | trunc 51 | trimSuffix "-" -}}
+{{- printf "%s-scanner" $base | trunc 59 | trimSuffix "-" -}}
+{{- end }}
+
+{{- define "kkrepo.scannerHeadlessName" -}}
+{{- $base := include "kkrepo.fullname" . | trunc 46 | trimSuffix "-" -}}
+{{- printf "%s-scanner-headless" $base | trunc 63 | trimSuffix "-" -}}
+{{- end }}
+
+{{- define "kkrepo.scannerDatabaseClaimName" -}}
+{{- $base := include "kkrepo.fullname" . | trunc 52 | trimSuffix "-" -}}
+{{- printf "%s-scanner-db" $base | trunc 63 | trimSuffix "-" -}}
+{{- end }}
+
 {{- define "kkrepo.scannerBaseUrls" -}}
 {{- $root := . -}}
-{{- $fullname := include "kkrepo.fullname" . -}}
+{{- $scannerName := include "kkrepo.scannerName" . -}}
+{{- $headlessName := include "kkrepo.scannerHeadlessName" . -}}
 {{- range $index, $_ := until (int .Values.securityScanning.replicaCount) -}}
 {{- if gt $index 0 }},{{ end -}}
-http://{{ $fullname }}-scanner-{{ $index }}.{{ $fullname }}-scanner-headless:{{ $root.Values.securityScanning.service.port }}
+http://{{ $scannerName }}-{{ $index }}.{{ $headlessName }}:{{ $root.Values.securityScanning.service.port }}
 {{- end -}}
 {{- end }}
 
@@ -71,6 +87,9 @@ http://{{ $fullname }}-scanner-{{ $index }}.{{ $fullname }}-scanner-headless:{{ 
 {{- end }}
 {{- if and .Values.securityScanning.enabled (lt (int .Values.securityScanning.replicaCount) 1) }}
 {{- fail "securityScanning.replicaCount must be at least 1 when scanning is enabled" }}
+{{- end }}
+{{- if and .Values.securityScanning.enabled (gt (int .Values.securityScanning.replicaCount) 1000) }}
+{{- fail "securityScanning.replicaCount must not exceed 1000 so scanner pod DNS labels remain valid" }}
 {{- end }}
 {{- if and .Values.securityScanning.enabled (gt (int .Values.securityScanning.replicaCount) 1) .Values.securityScanning.scannerDatabase.persistence.enabled (not .Values.securityScanning.scannerDatabase.persistence.existingClaim) }}
 {{- fail "multiple scanner replicas with persistence require scannerDatabase.persistence.existingClaim backed by ReadWriteMany storage" }}

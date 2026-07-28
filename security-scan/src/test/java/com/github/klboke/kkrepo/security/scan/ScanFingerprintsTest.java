@@ -55,4 +55,28 @@ class ScanFingerprintsTest {
 
     assertNotEquals(complete, partial);
   }
+
+  @Test
+  void catalogFingerprintIncludesTheOciPlatformOutcome() {
+    ScanSubject subject = new ScanSubject(
+        SubjectKind.OCI_MANIFEST, 1, 2L, 3L, "sha256:" + "a".repeat(64), "a".repeat(64),
+        42, "DOCKER", "manifest", "application/vnd.oci.image.manifest.v1+json",
+        TargetClassification.OCI_IMAGE, List.of("linux/amd64", "linux/arm64"), Map.of());
+    String complete = ScanFingerprints.catalog(
+        subject,
+        "syft",
+        "1",
+        "config",
+        List.of("linux/amd64", "linux/arm64"),
+        List.of());
+    String partial = ScanFingerprints.catalog(
+        subject,
+        "syft",
+        "1",
+        "config",
+        List.of("linux/amd64"),
+        List.of("linux/arm64"));
+
+    assertNotEquals(complete, partial);
+  }
 }

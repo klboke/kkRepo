@@ -10,6 +10,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -152,6 +153,40 @@ class ScannerEngineServiceBehaviorTest {
   }
 
   @Test
+  void rejectsOciPlatformFanoutAndAggregateDocumentsBeforeMerging() {
+    Fixture tooMany = new Fixture(temporaryDirectory.resolve("too-many"));
+    List<String> platforms = java.util.stream.IntStream
+        .rangeClosed(0, ScannerEngineService.MAX_OCI_PLATFORMS)
+        .mapToObj(index -> "linux/variant" + index)
+        .toList();
+    assertCode(
+        "OCI_REQUEST_INVALID",
+        () -> tooMany.engine.scanOci(
+            ociRequest("https://registry.example.test", platforms)));
+    verify(tooMany.processes, never()).run(anyList(), any(), any(), any(), any());
+
+    Fixture aggregate = new Fixture(temporaryDirectory.resolve("aggregate"));
+    aggregate.syftOutput = new byte[600];
+    assertCode(
+        "SCANNER_OUTPUT_TOO_LARGE",
+        () -> aggregate.engine.scanOci(ociRequest(
+            "https://registry.example.test",
+            List.of("linux/amd64", "linux/arm64"))));
+    verify(aggregate.documents, never()).mergeCycloneDx(any());
+  }
+
+  @Test
+  void rejectsOversizedMergedOciDocument() {
+    Fixture fixture = new Fixture(temporaryDirectory.resolve("merged"));
+    when(fixture.documents.mergeCycloneDx(any())).thenReturn(new byte[1025]);
+
+    assertCode(
+        "SCANNER_OUTPUT_TOO_LARGE",
+        () -> fixture.engine.scanOci(
+            ociRequest("https://registry.example.test", List.of("linux/amd64"))));
+  }
+
+  @Test
   void validatesEveryOciBoundaryBeforeStartingAProcess() {
     Fixture fixture = new Fixture(temporaryDirectory);
     assertCode("OCI_REQUEST_INVALID", () -> fixture.engine.scanOci(null));
@@ -213,6 +248,7 @@ class ScannerEngineServiceBehaviorTest {
     final ScannerDocumentMapper documents = mock(ScannerDocumentMapper.class);
     final ScannerEngineService engine;
     String failPlatform;
+    byte[] syftOutput = "{\"bomFormat\":\"CycloneDX\"}".getBytes();
 
     Fixture(Path workDirectory) {
       properties.setWorkDirectory(workDirectory);
@@ -245,7 +281,7 @@ class ScannerEngineServiceBehaviorTest {
         Path output = stdout;
         Files.createDirectories(output.getParent());
         Files.write(output, command.getFirst().equals("grype")
-            ? "{}".getBytes() : "{\"bomFormat\":\"CycloneDX\"}".getBytes());
+            ? "{}".getBytes() : syftOutput);
         return new BoundedProcessRunner.Result(0, Files.size(output), new byte[0]);
       }).when(processes).run(anyList(), any(), any(), any(), any());
       engine = new ScannerEngineService(

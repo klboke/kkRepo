@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -55,7 +57,12 @@ class DockerManifestStoreTest {
     DockerDigest digest = DockerDigest.parse(
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     when(dockerDao.listManifestAssetIdsReferencingDigest(
-        runtime.id(), "team/app", digest.value(), 0L, 256))
+        runtime.id(),
+        "team/app",
+        digest.value(),
+        0L,
+        com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao
+            .MAX_DOWNLOAD_POLICY_BATCH + 1))
         .thenReturn(List.of(31L, 32L));
     DockerManifestStore store = new DockerManifestStore(
         assetDao,
@@ -70,7 +77,73 @@ class DockerManifestStoreTest {
 
     store.beforeBlobRead(runtime, "team/app", digest);
 
-    verify(policy).beforeReadAll(List.of(31L, 32L));
+    verify(policy).beforeReadAll(List.of(31L, 32L), false);
+  }
+
+  @Test
+  void rejectsBlobReadsOutsideTheReferencedImageNamespace() {
+    DockerRegistryDao dockerDao = mock(DockerRegistryDao.class);
+    ArtifactDownloadPolicy policy = mock(ArtifactDownloadPolicy.class);
+    RepositoryRuntime runtime = runtime("ALLOW");
+    DockerDigest digest = DockerDigest.parse(
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    when(dockerDao.listManifestAssetIdsReferencingDigest(
+        eq(runtime.id()), eq("team/other"), eq(digest.value()), eq(0L), anyInt()))
+        .thenReturn(List.of());
+    DockerManifestStore store = new DockerManifestStore(
+        mock(AssetDao.class),
+        dockerDao,
+        mock(DockerBlobStore.class),
+        mock(DockerManifestParser.class),
+        mock(AssetMetadataCache.class),
+        null,
+        null,
+        null,
+        policy);
+
+    DockerProtocolException failure = assertThrows(
+        DockerProtocolException.class,
+        () -> store.beforeBlobRead(runtime, "team/other", digest));
+
+    assertEquals(DockerErrorCode.BLOB_UNKNOWN, failure.code());
+    verify(policy, never()).beforeReadAll(any(), anyBoolean());
+  }
+
+  @Test
+  void boundsSharedBlobPolicyEvaluationAndMarksReferenceOverflow() {
+    DockerRegistryDao dockerDao = mock(DockerRegistryDao.class);
+    ArtifactDownloadPolicy policy = mock(ArtifactDownloadPolicy.class);
+    RepositoryRuntime runtime = runtime("ALLOW");
+    DockerDigest digest = DockerDigest.parse(
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    List<Long> manifestAssetIds = java.util.stream.LongStream.rangeClosed(
+            1,
+            com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao
+                .MAX_DOWNLOAD_POLICY_BATCH + 1L)
+        .boxed()
+        .toList();
+    when(dockerDao.listManifestAssetIdsReferencingDigest(
+        eq(runtime.id()), eq("team/app"), eq(digest.value()), eq(0L), anyInt()))
+        .thenReturn(manifestAssetIds);
+    DockerManifestStore store = new DockerManifestStore(
+        mock(AssetDao.class),
+        dockerDao,
+        mock(DockerBlobStore.class),
+        mock(DockerManifestParser.class),
+        mock(AssetMetadataCache.class),
+        null,
+        null,
+        null,
+        policy);
+
+    store.beforeBlobRead(runtime, "team/app", digest);
+
+    verify(policy).beforeReadAll(
+        manifestAssetIds.subList(
+            0,
+            com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao
+                .MAX_DOWNLOAD_POLICY_BATCH),
+        true);
   }
 
   @Test

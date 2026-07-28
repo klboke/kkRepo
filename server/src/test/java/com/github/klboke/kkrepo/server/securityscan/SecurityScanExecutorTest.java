@@ -42,6 +42,8 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanState;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.SubjectKind;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.TargetClassification;
+import com.github.klboke.kkrepo.security.scan.ScanFingerprints;
+import com.github.klboke.kkrepo.security.scan.ScanSubject;
 import com.github.klboke.kkrepo.security.scan.ScannerContract;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.CatalogResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Component;
@@ -57,6 +59,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 class SecurityScanExecutorTest {
   private static final String SHA256 = "a".repeat(64);
@@ -142,6 +145,33 @@ class SecurityScanExecutorTest {
 
     assertEquals(ScanState.PARTIAL, run.status());
     assertEquals(ScanCompleteness.PARTIAL, run.scanCompleteness());
+    assertEquals(List.of("linux/amd64"), run.scannedPlatforms());
+    assertEquals(List.of("linux/arm64"), run.missingPlatforms());
+    ArgumentCaptor<Sbom> sbom = ArgumentCaptor.forClass(Sbom.class);
+    verify(fixture.scans).insertSbomOrFindExisting(sbom.capture());
+    ScanSubject subject = new ScanSubject(
+        SubjectKind.OCI_MANIFEST,
+        1L,
+        10L,
+        11L,
+        "sha256:" + SHA256,
+        SHA256,
+        8L,
+        RepositoryFormat.MAVEN2.name(),
+        "manifest",
+        "application/octet-stream",
+        TargetClassification.OCI_IMAGE,
+        fixture.profile.requiredPlatforms(),
+        Map.of("path", "acme/demo.jar"));
+    assertEquals(
+        ScanFingerprints.catalog(
+            subject,
+            "syft",
+            "1.0",
+            fixture.profile.configurationDigest(),
+            List.of("linux/amd64"),
+            List.of("linux/arm64")),
+        sbom.getValue().catalogFingerprint());
     verify(fixture.adapter).scanOci(any());
   }
 

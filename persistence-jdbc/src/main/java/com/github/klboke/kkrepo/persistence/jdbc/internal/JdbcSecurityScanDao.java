@@ -512,8 +512,9 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     if (ids.isEmpty()) {
       return List.of();
     }
-    if (ids.size() > 256) {
-      throw new IllegalArgumentException("Download policy batch is limited to 256 assets");
+    if (ids.size() > MAX_DOWNLOAD_POLICY_BATCH) {
+      throw new IllegalArgumentException(
+          "Download policy batch is limited to " + MAX_DOWNLOAD_POLICY_BATCH + " assets");
     }
     String placeholders = String.join(", ", java.util.Collections.nCopies(ids.size(), "?"));
     List<Object> args = new ArrayList<>(ids.size() + 1);
@@ -2387,7 +2388,9 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       List<Long> findingIds,
       List<Long> scanRunIds,
       List<String> advisorySelectors,
-      List<String> packageSelectors) {
+      List<String> packageSelectors,
+      long afterId,
+      int maxItems) {
     List<Long> findings = distinctLongs(findingIds);
     List<Long> runs = distinctLongs(scanRunIds);
     if (findings.isEmpty() || runs.isEmpty()) return List.of();
@@ -2399,11 +2402,13 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         FROM security_scan_waiver w
         WHERE w.approved_by IS NOT NULL
           AND w.approved_by <> ''
+          AND w.id > ?
           AND EXISTS (
             SELECT 1
             FROM security_scan_run_subject s
             WHERE s.scan_run_id IN (
         """);
+    args.add(Math.max(0, afterId));
     appendIn(sql, args, runs);
     sql.append("""
             )
@@ -2444,7 +2449,9 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
             )
           )
         ORDER BY w.id
+        LIMIT ?
         """);
+    args.add(safeLimit(maxItems));
     return jdbc.query(sql.toString(), waiverMapper, args.toArray());
   }
 

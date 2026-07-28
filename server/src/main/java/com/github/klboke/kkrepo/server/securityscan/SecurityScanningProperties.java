@@ -14,7 +14,7 @@ public class SecurityScanningProperties {
   private final Adapter adapter = new Adapter();
   private final Worker worker = new Worker();
   private final Retention retention = new Retention();
-  private long maxOutputBytes = 64L * 1024 * 1024;
+  private long maxResponseBytes = 320L * 1024 * 1024;
   private int metricsCountLimit = 10_000;
   private Duration scannerDatabaseMaxAge = Duration.ofHours(48);
   private Duration scannerObservationMaxAge = Duration.ofMinutes(2);
@@ -40,12 +40,12 @@ public class SecurityScanningProperties {
     return retention;
   }
 
-  public long getMaxOutputBytes() {
-    return maxOutputBytes;
+  public long getMaxResponseBytes() {
+    return maxResponseBytes;
   }
 
-  public void setMaxOutputBytes(long maxOutputBytes) {
-    this.maxOutputBytes = Math.max(1024, maxOutputBytes);
+  public void setMaxResponseBytes(long maxResponseBytes) {
+    this.maxResponseBytes = Math.max(1024, maxResponseBytes);
   }
 
   public int getMetricsCountLimit() {

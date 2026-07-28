@@ -225,6 +225,49 @@ class ArtifactDownloadPolicyTest {
   }
 
   @Test
+  void sharedDockerBlobReferenceOverflowFailsClosedForEnforcement() {
+    properties.setEnabled(true);
+    List<Long> manifestAssetIds = List.of(10L, 11L);
+    when(scans.findDownloadPolicySnapshots(manifestAssetIds, null)).thenReturn(List.of(snapshot(
+        config(1L, EnforcementMode.ENFORCE, PolicyAction.ALLOW),
+        profile(),
+        new ScanCandidate(10L, 100L, 1L, 1L, Instant.EPOCH, Instant.EPOCH),
+        complete(PolicyDecision.ALLOW),
+        policyState(1L, PolicyDecision.ALLOW),
+        "manifest.json",
+        "manifest",
+        "application/vnd.oci.image.manifest.v1+json")));
+
+    ArtifactPolicyException failure = assertThrows(
+        ArtifactPolicyException.class,
+        () -> policy.beforeReadAll(manifestAssetIds, true));
+
+    assertEquals(PolicyDecision.BLOCK_PENDING, failure.decision());
+    verify(scans).findDownloadPolicySnapshots(manifestAssetIds, null);
+  }
+
+  @Test
+  void sharedDockerBlobReferenceOverflowDoesNotBlockAuditOnlyRepositories() {
+    properties.setEnabled(true);
+    List<Long> manifestAssetIds = List.of(10L, 11L);
+    when(scans.findDownloadPolicySnapshots(manifestAssetIds, null)).thenReturn(List.of(snapshot(
+        config(1L, EnforcementMode.AUDIT, PolicyAction.ALLOW),
+        profile(),
+        new ScanCandidate(10L, 100L, 1L, 1L, Instant.EPOCH, Instant.EPOCH),
+        complete(PolicyDecision.ALLOW),
+        policyState(1L, PolicyDecision.ALLOW),
+        "manifest.json",
+        "manifest",
+        "application/vnd.oci.image.manifest.v1+json")));
+
+    ArtifactDownloadPolicy.Decision decision =
+        policy.beforeReadAll(manifestAssetIds, true);
+
+    assertEquals(PolicyDecision.ALLOW, decision.decision());
+    assertFalse(decision.enforced());
+  }
+
+  @Test
   void protocolMetadataIsNotApplicableAndAlwaysAllowed() {
     properties.setEnabled(true);
     when(scans.findDownloadPolicySnapshots(10L, 1L)).thenReturn(List.of(snapshot(

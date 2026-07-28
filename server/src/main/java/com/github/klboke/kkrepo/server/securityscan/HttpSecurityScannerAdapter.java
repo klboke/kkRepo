@@ -224,7 +224,6 @@ public class HttpSecurityScannerAdapter implements Adapter {
           client.send(request, HttpResponse.BodyHandlers.ofInputStream());
       try (InputStream body = response.body()) {
         int status = response.statusCode();
-        byte[] bytes = readBounded(body, properties.getMaxOutputBytes());
         if (status < 200 || status >= 300) {
           boolean retryable = status == 429 || status == 502 || status == 503 || status == 504;
           throw new ScannerAdapterException(
@@ -232,6 +231,7 @@ public class HttpSecurityScannerAdapter implements Adapter {
               "Scanner adapter returned HTTP " + status,
               retryable);
         }
+        byte[] bytes = readBounded(body, properties.getMaxResponseBytes());
         try {
           return objectMapper.readValue(bytes, type);
         } catch (IOException e) {

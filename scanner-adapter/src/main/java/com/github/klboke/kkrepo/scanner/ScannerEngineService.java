@@ -31,6 +31,7 @@ import org.springframework.stereotype.Service;
 /** Stateless Syft catalog and Grype match adapter. Durable workflow ownership remains in kkRepo. */
 @Service
 public class ScannerEngineService {
+  static final int MAX_OCI_PLATFORMS = 16;
   private static final Pattern DIGEST = Pattern.compile("^sha256:[0-9a-f]{64}$");
   private static final Pattern PLATFORM =
       Pattern.compile("^[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)?$");
@@ -204,6 +205,7 @@ public class ScannerEngineService {
       List<PlatformSbom> platformSboms = new ArrayList<>();
       List<String> scanned = new ArrayList<>();
       List<String> missing = new ArrayList<>();
+      long aggregateDocumentBytes = 0;
       for (int index = 0; index < required.size(); index++) {
         String platform = required.get(index);
         Path output = workspace.resolve("platform-" + index + ".cdx.json");
@@ -223,6 +225,14 @@ public class ScannerEngineService {
               environment);
           byte[] value =
               BoundedProcessRunner.readBounded(output, properties.getMaxOutputBytes());
+          if (value.length > properties.getMaxOutputBytes() - aggregateDocumentBytes) {
+            throw new ScannerRequestException(
+                "SCANNER_OUTPUT_TOO_LARGE",
+                "Combined OCI platform inventories exceeded the configured output limit",
+                413,
+                false);
+          }
+          aggregateDocumentBytes += value.length;
           platformSboms.add(new PlatformSbom(platform, value));
           scanned.add(platform);
         } catch (ScannerRequestException e) {
@@ -238,6 +248,13 @@ public class ScannerEngineService {
             "OCI_SCAN_FAILED", "No requested OCI platform could be scanned", 422, false);
       }
       byte[] merged = documents.mergeCycloneDx(platformSboms);
+      if (merged.length > properties.getMaxOutputBytes()) {
+        throw new ScannerRequestException(
+            "SCANNER_OUTPUT_TOO_LARGE",
+            "Merged OCI inventory exceeded the configured output limit",
+            413,
+            false);
+      }
       deadline.remaining();
       Path mergedPath = workspace.resolve("merged.cdx.json");
       Files.write(mergedPath, merged);
@@ -437,6 +454,7 @@ public class ScannerEngineService {
         || registry.getFragment() != null
         || !REPOSITORY.matcher(request.repository()).matches()
         || !DIGEST.matcher(request.manifestDigest()).matches()
+        || request.requiredPlatforms().size() > MAX_OCI_PLATFORMS
         || request.requiredPlatforms().stream().anyMatch(
             platform -> platform == null || !PLATFORM.matcher(platform).matches())) {
       throw new ScannerRequestException(

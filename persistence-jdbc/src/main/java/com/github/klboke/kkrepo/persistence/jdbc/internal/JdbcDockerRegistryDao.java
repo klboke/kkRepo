@@ -10,6 +10,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao.CleanupMa
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao.CleanupPolicyRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao.CleanupTagCandidate;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao.DeletedManifest;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestReferenceRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerTagRecord;
@@ -460,7 +461,7 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
         imageName,
         hash(digest),
         Math.max(0, afterAssetId),
-        Math.max(1, Math.min(maxItems, 256)));
+        Math.max(1, Math.min(maxItems, SecurityScanDao.MAX_DOWNLOAD_POLICY_BATCH + 1)));
   }
 
   public OptionalLong findUnreferencedBlobAssetIdForCleanup(

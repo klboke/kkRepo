@@ -54,12 +54,13 @@ public interface DockerRegistryDao {
   boolean imageReferencesDigest(long repositoryId, String imageName, String digest);
 
   /**
-   * Returns one bounded keyset page of manifest assets that authorize access to a blob in one
-   * image namespace.
+   * Returns a bounded sample of manifest assets that authorize access to a blob in one image
+   * namespace.
    *
    * <p>A Docker blob can be shared by several manifests. Download policy must therefore evaluate
-   * every live manifest that references the digest instead of treating the blob as an unscoped
-   * object.
+   * the live manifests that reference the digest instead of treating the blob as an unscoped
+   * object. Callers request one row beyond their evaluation limit to detect overflow and fail
+   * closed without issuing an unbounded number of hot-path queries.
    */
   List<Long> listManifestAssetIdsReferencingDigest(
       long repositoryId, String imageName, String digest, long afterAssetId, int maxItems);

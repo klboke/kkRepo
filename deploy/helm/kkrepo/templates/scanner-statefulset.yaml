@@ -2,11 +2,11 @@
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ include "kkrepo.fullname" . }}-scanner
+  name: {{ include "kkrepo.scannerName" . }}
   labels:
     {{- include "kkrepo.scannerLabels" . | nindent 4 }}
 spec:
-  serviceName: {{ include "kkrepo.fullname" . }}-scanner-headless
+  serviceName: {{ include "kkrepo.scannerHeadlessName" . }}
   podManagementPolicy: Parallel
   replicas: {{ .Values.securityScanning.replicaCount }}
   updateStrategy:
@@ -96,7 +96,7 @@ spec:
         - name: scanner-db
           {{- if .Values.securityScanning.scannerDatabase.persistence.enabled }}
           persistentVolumeClaim:
-            claimName: {{ default (printf "%s-scanner-db" (include "kkrepo.fullname" .)) .Values.securityScanning.scannerDatabase.persistence.existingClaim }}
+            claimName: {{ default (include "kkrepo.scannerDatabaseClaimName" .) .Values.securityScanning.scannerDatabase.persistence.existingClaim }}
           {{- else }}
           emptyDir: {}
           {{- end }}
