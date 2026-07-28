@@ -318,6 +318,7 @@ public class MavenGroupService {
       GroupCacheSource source = groupCacheSource(snapshot);
       downloadPolicy.beforeGroupCacheRead(
           source.assetId(),
+          blob.id(),
           source.repositoryId(),
           snapshot.format(),
           source.path(),

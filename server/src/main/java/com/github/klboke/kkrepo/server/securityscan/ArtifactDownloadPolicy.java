@@ -76,6 +76,7 @@ public class ArtifactDownloadPolicy {
    */
   public Decision beforeGroupCacheRead(
       long sourceAssetId,
+      long sourceBlobId,
       long sourceRepositoryId,
       RepositoryFormat format,
       String path,
@@ -88,7 +89,19 @@ public class ArtifactDownloadPolicy {
         () -> {
           List<DownloadPolicySnapshot> snapshots =
               scans.findDownloadPolicySnapshots(sourceAssetId, entryRepositoryId);
-          if (!snapshots.isEmpty()) return snapshots;
+          if (!snapshots.isEmpty()) {
+            return snapshots.stream()
+                .map(snapshot -> bindGroupCacheSnapshot(
+                    snapshot,
+                    sourceBlobId,
+                    sourceRepositoryId,
+                    format,
+                    path,
+                    kind,
+                    contentType,
+                    contentLength))
+                .toList();
+          }
           return scans.findDownloadPolicyContexts(sourceRepositoryId, entryRepositoryId).stream()
               .map(context -> pendingSnapshot(
                   sourceRepositoryId,
@@ -101,6 +114,54 @@ public class ArtifactDownloadPolicy {
               .toList();
         },
         false);
+  }
+
+  /**
+   * Binds a group-cache policy decision to the blob whose bytes the cache row actually serves.
+   *
+   * <p>A Maven member overwrite keeps the asset ID stable. If candidate discovery has already
+   * advanced that asset to another blob, reusing its policy state for the old cached bytes would
+   * authorize the wrong content generation. Such rows deliberately follow the configured pending
+   * action. When discovery still points at the cached blob, its existing generation-specific scan
+   * state remains valid even if the member asset has concurrently moved on.
+   */
+  private static DownloadPolicySnapshot bindGroupCacheSnapshot(
+      DownloadPolicySnapshot snapshot,
+      long sourceBlobId,
+      long sourceRepositoryId,
+      RepositoryFormat format,
+      String path,
+      String kind,
+      String contentType,
+      long contentLength) {
+    ScanCandidate candidate = snapshot.candidate();
+    if (candidate == null
+        || candidate.assetBlobId() == null
+        || candidate.assetBlobId() != sourceBlobId) {
+      return pendingSnapshot(
+          sourceRepositoryId,
+          format,
+          path,
+          kind,
+          contentType,
+          contentLength,
+          new DownloadPolicyContext(snapshot.config(), snapshot.profile()));
+    }
+    return new DownloadPolicySnapshot(
+        snapshot.assetId(),
+        sourceRepositoryId,
+        format,
+        path,
+        kind,
+        contentType,
+        Math.max(0, contentLength),
+        snapshot.config(),
+        snapshot.profile(),
+        candidate,
+        snapshot.assetState(),
+        snapshot.policy(),
+        snapshot.policyState(),
+        snapshot.requiredWaiverRevision());
   }
 
   /**

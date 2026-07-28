@@ -169,6 +169,7 @@ class ArtifactDownloadPolicyTest {
         ArtifactPolicyException.class,
         () -> policy.beforeGroupCacheRead(
             101L,
+            900L,
             3L,
             RepositoryFormat.MAVEN2,
             "com/acme/demo/1/demo-1.jar",
@@ -186,18 +187,33 @@ class ArtifactDownloadPolicyTest {
   @Test
   void groupCacheWithConcreteSourceKeepsTheSingleSnapshotQueryHotPath() {
     properties.setEnabled(true);
-    when(scans.findDownloadPolicySnapshots(101L, 1L)).thenReturn(List.of(snapshot(
-        disabledConfig(1L),
-        profile(),
-        null,
-        null,
-        null,
-        "com/acme/demo/1/demo-1.jar",
-        "artifact",
-        "application/java-archive")));
+    when(scans.findDownloadPolicySnapshots(101L, 1L)).thenReturn(List.of(
+        new DownloadPolicySnapshot(
+            101L,
+            3L,
+            RepositoryFormat.MAVEN2,
+            "com/acme/demo/1/demo-1.jar",
+            "artifact",
+            "application/java-archive",
+            42L,
+            config(1L, EnforcementMode.ENFORCE, PolicyAction.BLOCK),
+            profile(),
+            new ScanCandidate(101L, 900L, 1L, 1L, Instant.EPOCH, Instant.EPOCH),
+            new AssetSecurityState(
+                101L, 1L, 1L, new byte[32], 20L, ScanState.COMPLETE,
+                ScanCompleteness.COMPLETE, true, Severity.UNKNOWN, Map.of(),
+                null, null, PolicyDecision.ALLOW, PolicyDecision.ALLOW.name(),
+                Instant.MAX, Instant.EPOCH, 1L),
+            null,
+            new AssetPolicyState(
+                101L, 1L, 1L, 1L, 20L, null, null, 1L,
+                PolicyDecision.ALLOW, PolicyDecision.ALLOW.name(), 0,
+                Instant.MAX, null, Instant.EPOCH, 1L, 0L),
+            0)));
 
     ArtifactDownloadPolicy.Decision decision = policy.beforeGroupCacheRead(
         101L,
+        900L,
         3L,
         RepositoryFormat.MAVEN2,
         "com/acme/demo/1/demo-1.jar",
@@ -207,6 +223,48 @@ class ArtifactDownloadPolicyTest {
         1L);
 
     assertEquals(PolicyDecision.ALLOW, decision.decision());
+    verify(scans).findDownloadPolicySnapshots(101L, 1L);
+    verifyNoMoreInteractions(scans);
+  }
+
+  @Test
+  void groupCacheDoesNotUsePolicyStateFromAReplacementBlob() {
+    properties.setEnabled(true);
+    RepositoryScanConfig config =
+        config(1L, EnforcementMode.ENFORCE, PolicyAction.BLOCK);
+    ScanCandidate replacement =
+        new ScanCandidate(101L, 901L, 1L, 1L, Instant.EPOCH, Instant.EPOCH);
+    when(scans.findDownloadPolicySnapshots(101L, 1L)).thenReturn(List.of(
+        new DownloadPolicySnapshot(
+            101L,
+            3L,
+            RepositoryFormat.MAVEN2,
+            "com/acme/demo/1/demo-1.jar",
+            "artifact",
+            "application/java-archive",
+            84L,
+            config,
+            profile(),
+            replacement,
+            complete(PolicyDecision.ALLOW),
+            null,
+            policyState(1L, PolicyDecision.ALLOW),
+            0)));
+
+    ArtifactPolicyException failure = assertThrows(
+        ArtifactPolicyException.class,
+        () -> policy.beforeGroupCacheRead(
+            101L,
+            900L,
+            3L,
+            RepositoryFormat.MAVEN2,
+            "com/acme/demo/1/demo-1.jar",
+            "artifact",
+            "application/java-archive",
+            42L,
+            1L));
+
+    assertEquals(PolicyDecision.BLOCK_PENDING, failure.decision());
     verify(scans).findDownloadPolicySnapshots(101L, 1L);
     verifyNoMoreInteractions(scans);
   }

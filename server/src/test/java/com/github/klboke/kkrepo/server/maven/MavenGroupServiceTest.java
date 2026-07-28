@@ -135,9 +135,11 @@ class MavenGroupServiceTest {
 
     assertEquals(200, response.status());
     assertEquals(101L, policy.assetId);
+    assertEquals(900L, policy.sourceBlobId);
     assertEquals(3L, policy.sourceRepositoryId);
     assertEquals(1L, policy.entryRepositoryId);
     assertEquals(true, sourceAttributes.get("mavenGroupCache"));
+    assertEquals(900L, sourceAttributes.get("sourceBlobId"));
   }
 
   @Test
@@ -174,6 +176,7 @@ class MavenGroupServiceTest {
 
     assertEquals(200, response.status());
     assertEquals(101L, policy.assetId);
+    assertEquals(900L, policy.sourceBlobId);
     assertEquals(3L, policy.sourceRepositoryId);
     assertEquals(10L, policy.entryRepositoryId);
   }
@@ -190,6 +193,7 @@ class MavenGroupServiceTest {
         Map.of(
             "mavenGroupCache", true,
             "sourceAssetId", 101L,
+            "sourceBlobId", 900L,
             "sourceRepositoryId", 3L,
             "sourcePath", path.path()));
 
@@ -197,6 +201,7 @@ class MavenGroupServiceTest {
         MavenAssetWriter.groupCacheSourceAttributes(nestedGroupAsset);
 
     assertEquals(101L, attributes.get("sourceAssetId"));
+    assertEquals(900L, attributes.get("sourceBlobId"));
     assertEquals(3L, attributes.get("sourceRepositoryId"));
     assertEquals(path.path(), attributes.get("sourcePath"));
   }
@@ -443,6 +448,7 @@ class MavenGroupServiceTest {
 
   private static class CapturingDownloadPolicy extends ArtifactDownloadPolicy {
     private long assetId;
+    private long sourceBlobId;
     private long sourceRepositoryId;
     private long entryRepositoryId;
 
@@ -453,6 +459,7 @@ class MavenGroupServiceTest {
     @Override
     public Decision beforeGroupCacheRead(
         long sourceAssetId,
+        long sourceBlobId,
         long sourceRepositoryId,
         RepositoryFormat format,
         String path,
@@ -461,6 +468,7 @@ class MavenGroupServiceTest {
         long contentLength,
         long entryRepositoryId) {
       this.assetId = sourceAssetId;
+      this.sourceBlobId = sourceBlobId;
       this.sourceRepositoryId = sourceRepositoryId;
       this.entryRepositoryId = entryRepositoryId;
       return null;

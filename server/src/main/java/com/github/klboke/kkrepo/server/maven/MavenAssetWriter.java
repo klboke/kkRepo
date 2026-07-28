@@ -357,10 +357,17 @@ public class MavenAssetWriter {
     Long inheritedAssetId = inheritedGroupSource
         ? positiveLong(sourceAttributes.get("sourceAssetId"))
         : null;
+    Long inheritedBlobId = inheritedGroupSource
+        ? positiveLong(sourceAttributes.get("sourceBlobId"))
+        : null;
     Map<String, Object> attributes = new LinkedHashMap<>();
     attributes.put("mavenGroupCache", true);
     attributes.put(
         "sourceAssetId", inheritedAssetId == null ? source.assetId() : inheritedAssetId);
+    Long sourceBlobId = inheritedBlobId == null ? source.blobId() : inheritedBlobId;
+    if (sourceBlobId != null) {
+      attributes.put("sourceBlobId", sourceBlobId);
+    }
     attributes.put(
         "sourceRepositoryId",
         !inheritedGroupSource || inheritedRepositoryId == null
