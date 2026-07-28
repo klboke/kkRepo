@@ -201,6 +201,16 @@ class AdminSecurityScanningCapabilityContractTest {
     assertTrue(css.contains(".security-scan-scanner-state.is-ready"));
     assertTrue(css.contains(".security-scan-scanner-state.is-degraded"));
     assertTrue(css.contains(".security-scan-scanner-state.is-disabled"));
+    assertTrue(index.contains(
+        "<thead><tr><th>Status</th><th>Repository</th><th>Format</th><th>Type</th>"));
+    assertTrue(javascript.contains("function renderSecurityScanRepositoryStatus(enabled)"));
+    assertTrue(javascript.contains(
+        "{ label: \"Enabled\", tone: \"ok\", icon: \"check\" }"));
+    assertTrue(javascript.contains(
+        "{ label: \"Disabled\", tone: \"is-disabled\", icon: \"circle-slash\" }"));
+    assertTrue(javascript.contains(
+        "<td>${renderSecurityScanRepositoryStatus(config?.enabled === true)}</td>"));
+    assertTrue(css.contains(".security-scan-repository-status.is-disabled"));
     assertTrue(css.contains(
         "grid-template-columns: repeat(10, minmax(136px, 1fr));"));
     assertTrue(css.contains(".security-scan-summary strong {\n  white-space: nowrap;"));

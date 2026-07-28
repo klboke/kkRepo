@@ -4383,16 +4383,27 @@ function renderSecurityScanFindingWaiverAction(finding) {
   return `<button class="row-action security-scan-finding-waive" data-id="${escapeHtml(finding.id)}" type="button">${label}</button>`;
 }
 
+function renderSecurityScanRepositoryStatus(enabled) {
+  const presentation = enabled
+    ? { label: "Enabled", tone: "ok", icon: "check" }
+    : { label: "Disabled", tone: "is-disabled", icon: "circle-slash" };
+  return `
+    <span class="state-badge compact security-scan-repository-status ${presentation.tone}">
+      <span class="lucide-icon icon-${presentation.icon}" aria-hidden="true"></span>
+      ${presentation.label}
+    </span>`;
+}
+
 function renderSecurityScanRepositories() {
   document.getElementById("security-scan-repository-table").innerHTML =
     securityScanState.repositories.map((repository) => {
       const config = repository.config;
       return `
         <tr>
+          <td>${renderSecurityScanRepositoryStatus(config?.enabled === true)}</td>
           <td>${escapeHtml(repository.name)}</td>
           <td>${escapeHtml(repository.format)}</td>
           <td>${escapeHtml(repository.type)}</td>
-          <td>${config?.enabled ? "Enabled" : "Disabled"}</td>
           <td>${escapeHtml(repository.profileName || "Unavailable profile")}</td>
           <td>${escapeHtml(repository.policyName || "Built-in critical baseline")}</td>
           <td>${escapeHtml(config?.enforcementMode || "AUDIT")}</td>

@@ -2583,6 +2583,22 @@ code {
   color: var(--muted, #667085);
 }
 
+.security-scan-repository-status {
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.security-scan-repository-status .lucide-icon {
+  width: 13px;
+  height: 13px;
+  color: inherit;
+}
+
+.security-scan-repository-status.is-disabled {
+  background: #edf1ef;
+  color: var(--muted, #667085);
+}
+
 .security-scan-capability-banner {
   display: grid;
   gap: 4px;
