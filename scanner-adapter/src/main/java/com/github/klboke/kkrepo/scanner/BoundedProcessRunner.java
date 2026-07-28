@@ -73,12 +73,7 @@ public class BoundedProcessRunner {
       waitForBounded(process, stdout, stderr, timeout);
       byte[] stderrBytes = readBounded(stderr, properties.getMaxStderrBytes());
       if (process.exitValue() != 0) {
-        throw new ScannerRequestException(
-            "SCANNER_PROCESS_FAILED",
-            "Scanner process failed (exit " + process.exitValue() + "): "
-                + sanitizeStderr(stderrBytes),
-            422,
-            false);
+        throw processFailure(command, process.exitValue(), stderrBytes);
       }
       long outputBytes = fileSize(stdout);
       return new Result(process.exitValue(), outputBytes, stderrBytes);
@@ -248,6 +243,44 @@ public class BoundedProcessRunner {
         .trim();
     if (value.length() > 1000) value = value.substring(0, 1000);
     return value;
+  }
+
+  static ScannerRequestException processFailure(
+      List<String> command, int exitCode, byte[] stderrBytes) {
+    String stderr = sanitizeStderr(stderrBytes);
+    String message = "Scanner process failed (exit " + exitCode + "): " + stderr;
+    if (isOciRegistryScan(command)) {
+      if (isConfirmedPlatformAbsence(stderr)) {
+        return new ScannerRequestException(
+            "SCANNER_PLATFORM_NOT_FOUND", message, 422, false);
+      }
+      // Syft uses the same non-zero exit for registry transport, authorization, token-service,
+      // and server failures. Those failures must retry rather than publishing a false PARTIAL.
+      return new ScannerRequestException(
+          "OCI_REGISTRY_SCAN_FAILED", message, 503, true);
+    }
+    return new ScannerRequestException(
+        "SCANNER_PROCESS_FAILED", message, 422, false);
+  }
+
+  private static boolean isOciRegistryScan(List<String> command) {
+    return command != null
+        && command.contains("--platform")
+        && command.stream().anyMatch(value -> value != null && value.startsWith("registry:"));
+  }
+
+  /**
+   * These phrases come from the platform-resolution errors emitted by Syft's stereoscope and
+   * go-containerregistry dependencies after an index or image has been resolved successfully.
+   * Do not broaden this allowlist: generic 404/auth/network text is not proof that a platform is
+   * absent.
+   */
+  private static boolean isConfirmedPlatformAbsence(String stderr) {
+    String normalized = stderr == null
+        ? "" : stderr.toLowerCase(java.util.Locale.ROOT);
+    return (normalized.contains("no child with platform ")
+            && normalized.contains(" in index "))
+        || normalized.contains("mismatched platform (expected ");
   }
 
   public record Result(int exitCode, long outputBytes, byte[] stderr) {

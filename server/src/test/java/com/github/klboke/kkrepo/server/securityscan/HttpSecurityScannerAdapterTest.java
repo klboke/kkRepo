@@ -114,7 +114,7 @@ class HttpSecurityScannerAdapterTest {
   }
 
   @Test
-  void broadcastsCancellationUntilTheOwningReplicaConfirmsIt() throws Exception {
+  void broadcastsCancellationToEveryConfiguredReplica() throws Exception {
     ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
     AtomicInteger firstCalls = new AtomicInteger();
     AtomicInteger secondCalls = new AtomicInteger();
@@ -123,7 +123,7 @@ class HttpSecurityScannerAdapterTest {
       respond(
           exchange,
           200,
-          mapper.writeValueAsBytes(new CancellationResponse("run", false)));
+          mapper.writeValueAsBytes(new CancellationResponse("run", true)));
     });
     HttpServer second = standaloneServer(exchange -> {
       secondCalls.incrementAndGet();
@@ -220,9 +220,18 @@ class HttpSecurityScannerAdapterTest {
   void failsEveryExecutionOperationOverFromItsHashedReplica() throws Exception {
     ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
     AtomicInteger primaryCalls = new AtomicInteger();
+    AtomicInteger primaryCancellationCalls = new AtomicInteger();
     AtomicInteger fallbackCalls = new AtomicInteger();
     AtomicInteger inputOpens = new AtomicInteger();
     HttpServer unavailable = standaloneServer(exchange -> {
+      if (exchange.getRequestURI().getPath().endsWith("/cancel")) {
+        primaryCancellationCalls.incrementAndGet();
+        respond(
+            exchange,
+            200,
+            mapper.writeValueAsBytes(new CancellationResponse("ignored", false)));
+        return;
+      }
       primaryCalls.incrementAndGet();
       exchange.getRequestBody().readAllBytes();
       respond(exchange, 503, "{}".getBytes());
@@ -287,11 +296,73 @@ class HttpSecurityScannerAdapterTest {
               limits)).scannedPlatforms());
 
       assertEquals(3, primaryCalls.get());
+      assertEquals(3, primaryCancellationCalls.get());
       assertEquals(3, fallbackCalls.get());
       assertEquals(4, inputOpens.get(), "binary request bodies must be reopened for failover");
     } finally {
       unavailable.stop(0);
       healthy.stop(0);
+    }
+  }
+
+  @Test
+  void cancelsADuplicateActiveRunBeforeFailingOver() throws Exception {
+    ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+    AtomicInteger primaryExecutionCalls = new AtomicInteger();
+    AtomicInteger primaryCancellationCalls = new AtomicInteger();
+    AtomicInteger fallbackCalls = new AtomicInteger();
+    HttpServer primary = standaloneServer(exchange -> {
+      String path = exchange.getRequestURI().getPath();
+      if (path.endsWith("/cancel")) {
+        primaryCancellationCalls.incrementAndGet();
+        respond(
+            exchange,
+            200,
+            mapper.writeValueAsBytes(new CancellationResponse("duplicate-run", true)));
+        return;
+      }
+      primaryExecutionCalls.incrementAndGet();
+      exchange.getRequestBody().readAllBytes();
+      respond(exchange, 409, mapper.writeValueAsBytes(Map.of(
+          "code", "SCANNER_RUN_ALREADY_ACTIVE",
+          "message", "Scanner run is already active on this adapter",
+          "retryable", true)));
+    });
+    HttpServer fallback = standaloneServer(exchange -> {
+      fallbackCalls.incrementAndGet();
+      assertEquals(
+          1,
+          primaryCancellationCalls.get(),
+          "the ambiguous primary execution must be cancelled before fallback starts");
+      exchange.getRequestBody().readAllBytes();
+      respond(exchange, 200, mapper.writeValueAsBytes(catalog()));
+    });
+    try {
+      SecurityScanningProperties properties = new SecurityScanningProperties();
+      properties.getAdapter().setBaseUrls(List.of(
+          "http://127.0.0.1:" + primary.getAddress().getPort(),
+          "http://127.0.0.1:" + fallback.getAddress().getPort()));
+      properties.getAdapter().setServiceCredential("secret");
+      HttpSecurityScannerAdapter adapter =
+          new HttpSecurityScannerAdapter(mapper, properties);
+      String runId = java.util.stream.IntStream.range(0, 100)
+          .mapToObj(value -> "duplicate-" + value)
+          .filter(value -> HttpSecurityScannerAdapter.routeIndex(value, 2) == 0)
+          .findFirst()
+          .orElseThrow();
+
+      CatalogResponse response = adapter.catalog(
+          new CatalogRequest(
+              "v1", runId, "catalog-key", subject(null), "config", limits()),
+          () -> new ByteArrayInputStream("artifact".getBytes()));
+
+      assertEquals("CycloneDX", response.specName());
+      assertEquals(1, primaryExecutionCalls.get());
+      assertEquals(1, primaryCancellationCalls.get());
+      assertEquals(1, fallbackCalls.get());
+    } finally {
+      primary.stop(0);
+      fallback.stop(0);
     }
   }
 

@@ -101,6 +101,35 @@ class BoundedProcessRunnerTest {
   }
 
   @Test
+  void distinguishesConfirmedMissingPlatformsFromRetryableRegistryFailures() {
+    List<String> ociCommand = List.of(
+        "syft",
+        "scan",
+        "registry:registry.example/repo@sha256:" + "a".repeat(64),
+        "--platform",
+        "linux/arm64",
+        "--output",
+        "cyclonedx-json");
+
+    ScannerRequestException missing = BoundedProcessRunner.processFailure(
+        ociCommand,
+        1,
+        ("failed to get image from registry: no child with platform "
+            + "{Architecture:arm64 OS:linux} in index registry.example/repo").getBytes());
+    ScannerRequestException transientFailure = BoundedProcessRunner.processFailure(
+        ociCommand,
+        1,
+        "failed to get image descriptor from registry: unexpected status code 503".getBytes());
+
+    assertEquals("SCANNER_PLATFORM_NOT_FOUND", missing.code());
+    assertEquals(422, missing.status());
+    assertFalse(missing.retryable());
+    assertEquals("OCI_REGISTRY_SCAN_FAILED", transientFailure.code());
+    assertEquals(503, transientFailure.status());
+    assertTrue(transientFailure.retryable());
+  }
+
+  @Test
   void handlesTimeoutInvalidCommandAndProcessIo() {
     ScannerAdapterProperties properties = new ScannerAdapterProperties();
     BoundedProcessRunner runner = new BoundedProcessRunner(properties);

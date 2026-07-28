@@ -159,8 +159,10 @@ For multiple scanner replicas:
 - Each run hash selects a preferred StatefulSet ordinal for load distribution. Retryable catalog,
   match, and OCI transport, capacity, or availability failures continue through the remaining
   configured ordinals. Binary inputs are reopened from immutable blob storage for each attempt.
-- Cancellation is broadcast across all configured ordinals because a timed-out primary request
-  may still be winding down while a fallback attempt is active.
+  Before fallback starts, kkRepo makes a best-effort cancellation request to the failed ordinal so
+  an accepted request with a lost response does not keep consuming scanner capacity.
+- Administrative and worker cancellation is broadcast across all configured ordinals because a
+  timed-out primary request may still be winding down while a fallback attempt is active.
 - Capability and readiness observation fails over across the configured ordinals and treats the
   deployment as ready when at least one adapter replica is ready.
 - If replicas share a persistent database cache, set
@@ -272,7 +274,9 @@ An artifact above the profile limit is marked failed rather than clean. The buil
 is `1 GiB`, while the adapter hard limit defaults to `2 GiB`; the stricter limit wins.
 
 The built-in OCI profile requires `linux/amd64` by default. A multi-platform image is complete only
-when required platforms are covered; a missing platform can produce a partial result.
+when required platforms are covered; a platform-resolution error that confirms absence can produce
+a partial result. Registry transport, authorization-service, and 5xx failures remain retryable and
+are never recorded as missing platforms.
 
 ## Scan Triggers
 

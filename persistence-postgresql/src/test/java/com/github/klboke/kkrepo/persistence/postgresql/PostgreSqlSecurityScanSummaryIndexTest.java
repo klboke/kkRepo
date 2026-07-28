@@ -16,6 +16,10 @@ class PostgreSqlSecurityScanSummaryIndexTest extends PostgreSqlIntegrationTestSu
   @Test
   void summaryFactsHaveSelectiveCoveringIndexes() {
     assertEquals(
+        "CREATE INDEX idx_asset_repository_id ON public.asset "
+            + "USING btree (repository_id, id)",
+        indexDefinition("idx_asset_repository_id"));
+    assertEquals(
         "CREATE INDEX idx_security_scan_candidate_queue ON public.security_scan_candidate "
             + "USING btree (pending, changed_at, asset_id)",
         indexDefinition("idx_security_scan_candidate_queue"));

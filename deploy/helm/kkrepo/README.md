@@ -50,9 +50,10 @@ kkRepo, DNS, and public HTTPS for vulnerability database updates.
 
 The scanner workload is a StatefulSet so every replica has a stable network identity. kkRepo uses
 the run hash to select a preferred ordinal, then fails retryable catalog, match, and OCI requests
-over to the remaining ordinals. Cancellation is broadcast across all configured ordinals because
-a timed-out primary request can still be winding down. Durable task ownership and result
-finalization remain in the shared kkRepo database, not in the StatefulSet. Capability and
+over to the remaining ordinals. Before fallback, kkRepo makes a best-effort targeted cancellation
+on the failed ordinal; administrative and worker cancellation is broadcast across all configured
+ordinals because a timed-out primary request can still be winding down. Durable task ownership and
+result finalization remain in the shared kkRepo database, not in the StatefulSet. Capability and
 readiness observations also fail over across ordinals, so a rollout or ordinal failure does not
 hide healthy replicas. For multiple adapter replicas, provide
 `securityScanning.scannerDatabase.persistence.existingClaim` backed by `ReadWriteMany`, or disable

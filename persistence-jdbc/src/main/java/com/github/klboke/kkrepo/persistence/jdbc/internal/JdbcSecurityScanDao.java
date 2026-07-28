@@ -826,7 +826,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
           AND asset_blob_id IS NOT NULL
         ORDER BY id
         LIMIT ?
-        FOR UPDATE SKIP LOCKED
+        FOR UPDATE
         """, repositoryId, Math.max(0, afterAssetId), limit);
     int marked = 0;
     long nextAssetId = Math.max(0, afterAssetId);

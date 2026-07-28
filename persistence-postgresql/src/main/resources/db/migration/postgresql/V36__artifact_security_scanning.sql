@@ -1,3 +1,6 @@
+CREATE INDEX idx_asset_repository_id
+  ON asset(repository_id, id);
+
 CREATE TABLE artifact_change_event (
   id BIGSERIAL PRIMARY KEY,
   repository_id BIGINT NOT NULL CHECK (repository_id >= 0),

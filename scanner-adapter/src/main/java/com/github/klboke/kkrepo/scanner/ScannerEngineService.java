@@ -236,7 +236,7 @@ public class ScannerEngineService {
           platformSboms.add(new PlatformSbom(platform, value));
           scanned.add(platform);
         } catch (ScannerRequestException e) {
-          if ("SCANNER_PROCESS_FAILED".equals(e.code())) {
+          if ("SCANNER_PLATFORM_NOT_FOUND".equals(e.code())) {
             missing.add(platform);
           } else {
             throw e;

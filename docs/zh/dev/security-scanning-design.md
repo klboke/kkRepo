@@ -682,6 +682,9 @@ catalog_fingerprint =
 
 平台集合排序并去重；普通制品使用两个空集合。这样两次 OCI catalog 即使配置相同，
 只要实际平台覆盖不同，也不会复用旧 SBOM 并把新 findings 错误关联到旧文档。
+`missing platforms` 只接受 Syft 依赖在成功解析 manifest/index 后返回的明确平台
+不匹配错误。registry 网络、token service、认证和 5xx 等非零退出统一保持可重试，
+不能发布为 `PARTIAL`。
 
 ### `security_sbom_component`
 
@@ -1544,9 +1547,13 @@ Helm/Kubernetes：
 - 每个 run 按 ID hash 选择稳定的首选 ordinal；catalog、match 和 OCI 操作遇到可重试
   的传输、容量或可用性错误时，按地址列表环形切换到其余 ordinal。二进制请求通过
   `InputStreamSource` 从不可变 blob 重新打开，OCI JSON 请求使用可重复发送的有界正文。
-- 用户取消、lease 丢失或 worker 中断时，取消请求广播到全部配置 ordinal。超时容灾
-  可能让首选副本与备用副本短暂并行，但扫描操作无状态且只读，持久任务 lease、
-  fencing 和数据库结果提交仍是唯一正确性边界。
+- 可重试失败可能发生在 adapter 已接受执行但响应丢失之后；切换到备用 ordinal 前，
+  kkRepo 会尽力定向取消失败 ordinal 上的同 run 执行。409
+  `SCANNER_RUN_ALREADY_ACTIVE` 保留 adapter 返回的可重试语义，旧执行被取消后在其它
+  ordinal 恢复。
+- 用户取消、lease 丢失或 worker 中断时，取消请求广播到全部配置 ordinal。无法访问
+  的旧执行最多运行到 profile timeout；持久任务 lease、fencing 和数据库结果提交仍是
+  唯一正确性边界。
 - capability/readiness 观测遍历全部配置 ordinal；任一副本 ready 即认为 adapter
   部署可用，避免滚动发布或 ordinal 0 故障把整个扫描集群误判为不可用。
 - StatefulSet 只提供稳定网络身份；任务所有权、lease、fencing 和结果仍在共享数据库。
@@ -1794,12 +1801,15 @@ Enforce 模式：
 发布顺序：
 
 1. 数据库 migration 和 domain/DAO，功能保持 disabled。
-2. 部署 scanner，验证 readiness、数据库更新和资源上限。
-3. 对测试仓库启用 audit。
-4. 执行小范围 backfill，观察 backlog、partial、失败率和 finding 质量。
-5. 扩大 audit 覆盖。
-6. 只对经过验证的仓库启用 shadow policy。
-7. 最后按仓库显式启用 enforce。
+2. `Release Packages` 工作流从同一 release source 构建并发布
+   `ghcr.io/klboke/kkrepo-scanner:<version>` 多架构镜像；Helm 和 quickstart 使用与
+   kkRepo 相同的版本 tag，不能依赖带外手工发布。
+3. 部署 scanner，验证 readiness、数据库更新和资源上限。
+4. 对测试仓库启用 audit。
+5. 执行小范围 backfill，观察 backlog、partial、失败率和 finding 质量。
+6. 扩大 audit 覆盖。
+7. 只对经过验证的仓库启用 shadow policy。
+8. 最后按仓库显式启用 enforce。
 
 回滚：
 

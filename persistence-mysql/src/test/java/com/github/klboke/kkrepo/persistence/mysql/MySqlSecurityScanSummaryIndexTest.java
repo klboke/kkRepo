@@ -18,6 +18,9 @@ class MySqlSecurityScanSummaryIndexTest extends MySqlIntegrationTestSupport {
   @Test
   void summaryFactsHaveSelectiveCoveringIndexes() {
     assertEquals(
+        List.of("repository_id", "id"),
+        indexColumns("asset", "idx_asset_repository_id"));
+    assertEquals(
         List.of("pending", "changed_at", "asset_id"),
         indexColumns("security_scan_candidate", "idx_security_scan_candidate_queue"));
     assertEquals(

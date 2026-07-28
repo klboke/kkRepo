@@ -25,12 +25,15 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
 
 /** Streaming HTTP implementation of the versioned scanner contract. */
 @Component
 public class HttpSecurityScannerAdapter implements Adapter {
   private static final long TRANSPORT_GRACE_SECONDS = 5;
+  private static final Pattern RUN_ID = Pattern.compile("[A-Za-z0-9._:-]{1,128}");
+  private static final Pattern ERROR_CODE = Pattern.compile("[A-Z0-9_]{1,128}");
   private final ObjectMapper objectMapper;
   private final SecurityScanningProperties properties;
   private final HttpClient client;
@@ -185,33 +188,24 @@ public class HttpSecurityScannerAdapter implements Adapter {
 
   @Override
   public CancellationResponse cancel(String runId) {
-    if (runId == null || !runId.matches("[A-Za-z0-9._:-]{1,128}")) {
-      throw new IllegalArgumentException("Invalid security scanner run ID");
-    }
+    requireRunId(runId);
     ScannerAdapterException firstFailure = null;
+    boolean cancelled = false;
     for (URI baseUri : baseUris) {
       try {
-        HttpRequest.Builder builder = HttpRequest.newBuilder(
-                resolve(baseUri, "/v1/runs/" + runId + "/cancel"))
-            .timeout(Duration.ofSeconds(5))
-            .header("Accept", "application/json")
-            .header("X-KKRepo-API-Version", ScannerContract.API_VERSION)
-            .POST(HttpRequest.BodyPublishers.noBody());
-        withServiceCredential(builder);
-        CancellationResponse response = send(builder.build(), CancellationResponse.class);
-        if (response.cancelled()) {
-          return response;
-        }
+        cancelled |= cancel(baseUri, runId).cancelled();
       } catch (ScannerAdapterException e) {
         if (firstFailure == null) {
           firstFailure = e;
+        } else {
+          firstFailure.addSuppressed(e);
         }
       }
     }
-    if (firstFailure != null) {
+    if (!cancelled && firstFailure != null) {
       throw firstFailure;
     }
-    return new CancellationResponse(runId, false);
+    return new CancellationResponse(runId, cancelled);
   }
 
   private <T> T get(URI baseUri, String path, Class<T> type) {
@@ -253,6 +247,7 @@ public class HttpSecurityScannerAdapter implements Adapter {
    * because a timed-out primary execution may still be winding down.
    */
   private <T> T executeWithFailover(String runId, EndpointCall<T> call) {
+    requireRunId(runId);
     int preferred = routeIndex(runId, baseUris.size());
     ScannerAdapterException primaryFailure = null;
     for (int offset = 0; offset < baseUris.size(); offset++) {
@@ -263,6 +258,7 @@ public class HttpSecurityScannerAdapter implements Adapter {
         if (!failure.retryable() || "SCANNER_INTERRUPTED".equals(failure.code())) {
           throw failure;
         }
+        cancelAfterAmbiguousFailure(baseUri, runId, failure);
         if (primaryFailure == null) {
           primaryFailure = failure;
         } else {
@@ -274,6 +270,32 @@ public class HttpSecurityScannerAdapter implements Adapter {
         ? new ScannerAdapterException(
             "SCANNER_UNAVAILABLE", "No security scanner adapter endpoint is available", true)
         : primaryFailure;
+  }
+
+  /**
+   * A retryable response can arrive after the remote scanner accepted the run but its response was
+   * lost. Stop that replica's process before consuming capacity on the next ordinal. Cancellation
+   * is best effort: the durable task lease and result fence remain authoritative if the endpoint
+   * is already unavailable.
+   */
+  private void cancelAfterAmbiguousFailure(
+      URI baseUri, String runId, ScannerAdapterException executionFailure) {
+    try {
+      cancel(baseUri, runId);
+    } catch (ScannerAdapterException cancellationFailure) {
+      executionFailure.addSuppressed(cancellationFailure);
+    }
+  }
+
+  private CancellationResponse cancel(URI baseUri, String runId) {
+    HttpRequest.Builder builder = HttpRequest.newBuilder(
+            resolve(baseUri, "/v1/runs/" + runId + "/cancel"))
+        .timeout(Duration.ofSeconds(5))
+        .header("Accept", "application/json")
+        .header("X-KKRepo-API-Version", ScannerContract.API_VERSION)
+        .POST(HttpRequest.BodyPublishers.noBody());
+    withServiceCredential(builder);
+    return send(builder.build(), CancellationResponse.class);
   }
 
   private HttpRequest.Builder binaryRequest(
@@ -304,9 +326,16 @@ public class HttpSecurityScannerAdapter implements Adapter {
       try (InputStream body = response.body()) {
         int status = response.statusCode();
         if (status < 200 || status >= 300) {
-          boolean retryable = status == 429 || status == 502 || status == 503 || status == 504;
+          ScannerErrorPayload payload = scannerError(readErrorBody(body));
+          String code = payload != null
+                  && payload.code() != null
+                  && ERROR_CODE.matcher(payload.code()).matches()
+              ? payload.code()
+              : "SCANNER_HTTP_" + status;
+          boolean retryable = status == 429 || status == 502 || status == 503 || status == 504
+              || (payload != null && payload.retryable());
           throw new ScannerAdapterException(
-              "SCANNER_HTTP_" + status,
+              code,
               "Scanner adapter returned HTTP " + status,
               retryable);
         }
@@ -328,6 +357,26 @@ public class HttpSecurityScannerAdapter implements Adapter {
     } catch (IOException e) {
       throw new ScannerAdapterException(
           "SCANNER_IO", "Scanner adapter is unavailable", true, e);
+    }
+  }
+
+  private byte[] readErrorBody(InputStream body) throws IOException {
+    try {
+      return readBounded(body, properties.getMaxResponseBytes());
+    } catch (ScannerAdapterException failure) {
+      if ("SCANNER_REPORT_TOO_LARGE".equals(failure.code())) {
+        return new byte[0];
+      }
+      throw failure;
+    }
+  }
+
+  private ScannerErrorPayload scannerError(byte[] body) {
+    if (body == null || body.length == 0) return null;
+    try {
+      return objectMapper.readValue(body, ScannerErrorPayload.class);
+    } catch (IOException ignored) {
+      return null;
     }
   }
 
@@ -353,6 +402,12 @@ public class HttpSecurityScannerAdapter implements Adapter {
       throw new IllegalArgumentException("At least one scanner endpoint is required");
     }
     return Math.floorMod(runId.hashCode(), endpointCount);
+  }
+
+  private static void requireRunId(String runId) {
+    if (runId == null || !RUN_ID.matcher(runId).matches()) {
+      throw new IllegalArgumentException("Invalid security scanner run ID");
+    }
   }
 
   private URI resolve(URI baseUri, String path) {
@@ -395,4 +450,6 @@ public class HttpSecurityScannerAdapter implements Adapter {
   private interface EndpointCall<T> {
     T execute(URI baseUri);
   }
+
+  private record ScannerErrorPayload(String code, String message, boolean retryable) {}
 }

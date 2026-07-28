@@ -148,9 +148,10 @@ kubectl logs statefulset/kkrepo-scanner
 
 - 每个 run 的 hash 会选择一个首选 StatefulSet ordinal 以分摊负载；catalog、match 和
   OCI 请求遇到可重试的传输、容量或可用性错误时，会依次切换到其余配置 ordinal。
-  二进制输入在每次尝试时都从不可变 blob storage 重新打开。
-- 取消请求会广播到配置的所有 ordinal，因为超时的首选请求可能仍在退出，同时备用
-  副本上已经存在新的执行。
+  二进制输入在每次尝试时都从不可变 blob storage 重新打开。开始备用执行前，kkRepo
+  会尽力定向取消失败 ordinal 上可能已经接受的执行，避免响应丢失后继续占用容量。
+- 管理员和 worker 的取消请求会广播到配置的所有 ordinal，因为超时的首选请求可能
+  仍在退出，同时备用副本上已经存在新的执行。
 - capability/readiness 观测会在所有配置的 ordinal 间容灾；只要至少一个 adapter
   副本 ready，部署能力就保持可用。
 - 使用多个 scanner 副本且需要共享持久缓存时，为
@@ -257,7 +258,8 @@ metadata 不会被送入扫描器。
 最大输入为 `1 GiB`；adapter 默认硬上限为 `2 GiB`，实际生效值取更严格的限制。
 
 内置 OCI profile 默认要求 `linux/amd64`。多平台镜像只有在要求的平台完成时才能得到
-完整结果；缺失平台可能形成 partial 结果。
+完整结果；只有明确的平台解析不存在错误才会形成 partial 结果。registry 传输、
+授权服务和 5xx 错误保持可重试，不能记录成缺失平台。
 
 ## 扫描何时发生
 

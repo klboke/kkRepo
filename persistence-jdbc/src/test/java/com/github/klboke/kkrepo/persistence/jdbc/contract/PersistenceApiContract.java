@@ -1114,6 +1114,66 @@ public abstract class PersistenceApiContract {
   }
 
   @Test
+  void securityBackfillWaitsForLockedAssetsInsteadOfSkippingTheirCursor() throws Exception {
+    long repositoryId = createRepository("scan-backfill-lock", RepositoryFormat.MAVEN2);
+    long blobStoreId = stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
+    Instant now = Instant.parse("2026-07-24T14:00:00Z");
+    long blobId = stores().assets().insertBlob(
+        blob(blobStoreId, "scan/locked-app.jar", "scan-locked-artifact"));
+    String path = "locked/app.jar";
+    long assetId = stores().assets().insertAsset(new AssetRecord(
+        null,
+        repositoryId,
+        null,
+        blobId,
+        RepositoryFormat.MAVEN2,
+        path,
+        PersistenceHashes.pathHash(path),
+        "app.jar",
+        "ARTIFACT",
+        "application/java-archive",
+        42L,
+        null,
+        now,
+        Map.of()));
+    CountDownLatch rowLocked = new CountDownLatch(1);
+    CountDownLatch releaseWriter = new CountDownLatch(1);
+
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var writer = executor.submit(() -> inTransaction(() -> {
+        assertEquals(
+            assetId,
+            stores().assets().claimStaleAssetsByPrefix(
+                repositoryId, "locked/", now.plusSeconds(1), 1).getFirst().id());
+        rowLocked.countDown();
+        await(releaseWriter);
+        return null;
+      }));
+      assertTrue(rowLocked.await(30, java.util.concurrent.TimeUnit.SECONDS));
+
+      var backfill = executor.submit(() -> inTransaction(() ->
+          stores().securityScanning().markRepositoryAssetsForBackfill(repositoryId, 0, 100)));
+
+      assertThrows(
+          java.util.concurrent.TimeoutException.class,
+          () -> backfill.get(250, java.util.concurrent.TimeUnit.MILLISECONDS),
+          "a cursor page must wait for a locked asset rather than skip and complete past it");
+      releaseWriter.countDown();
+      writer.get(30, java.util.concurrent.TimeUnit.SECONDS);
+      SecurityScanDao.BackfillPage page =
+          backfill.get(30, java.util.concurrent.TimeUnit.SECONDS);
+      assertEquals(1, page.scannedAssets());
+      assertEquals(assetId, page.nextAssetId());
+      assertTrue(page.complete());
+      assertEquals(
+          assetId,
+          stores().securityScanning().findCandidate(assetId).orElseThrow().assetId());
+    } finally {
+      releaseWriter.countDown();
+    }
+  }
+
+  @Test
   void ansibleGalaxyRegistryStateIsImmutableFencedAndSharedAcrossReplicas() {
     long repositoryId = createRepository("ansible-hosted", RepositoryFormat.ANSIBLEGALAXY);
     long proxyRepositoryId = createRepository(

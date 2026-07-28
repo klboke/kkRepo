@@ -133,6 +133,22 @@ class ScannerEngineServiceBehaviorTest {
   }
 
   @Test
+  void keepsTransientOciRegistryFailuresRetryableInsteadOfPublishingPartialResults() {
+    Fixture fixture = new Fixture(temporaryDirectory);
+    fixture.transientPlatform = "linux/arm64";
+
+    ScannerRequestException failure = assertCode(
+        "OCI_REGISTRY_SCAN_FAILED",
+        () -> fixture.engine.scanOci(ociRequest(
+            "https://registry.example.test",
+            List.of("linux/amd64", "linux/arm64"))));
+
+    assertEquals(503, failure.status());
+    assertTrue(failure.retryable());
+    verify(fixture.documents, never()).mergeCycloneDx(any(), anyLong());
+  }
+
+  @Test
   void reportsDegradedReadinessAndFailsWhenNoOciPlatformCanBeScanned() throws Exception {
     Fixture degraded = new Fixture(temporaryDirectory.resolve("degraded"));
     when(degraded.documents.engineVersion(any(), eq("syft")))
@@ -249,6 +265,7 @@ class ScannerEngineServiceBehaviorTest {
     final ScannerDocumentMapper documents = mock(ScannerDocumentMapper.class);
     final ScannerEngineService engine;
     String failPlatform;
+    String transientPlatform;
     byte[] syftOutput = "{\"bomFormat\":\"CycloneDX\"}".getBytes();
 
     Fixture(Path workDirectory) {
@@ -276,7 +293,11 @@ class ScannerEngineServiceBehaviorTest {
           String platform = command.get(command.indexOf("--platform") + 1);
           if ("*".equals(failPlatform) || platform.equals(failPlatform)) {
             throw new ScannerRequestException(
-                "SCANNER_PROCESS_FAILED", "missing platform", 422, false);
+                "SCANNER_PLATFORM_NOT_FOUND", "missing platform", 422, false);
+          }
+          if (platform.equals(transientPlatform)) {
+            throw new ScannerRequestException(
+                "OCI_REGISTRY_SCAN_FAILED", "registry unavailable", 503, true);
           }
         }
         Path output = stdout;

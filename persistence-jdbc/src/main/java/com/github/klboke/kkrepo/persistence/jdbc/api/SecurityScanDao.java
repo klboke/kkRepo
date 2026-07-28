@@ -74,6 +74,13 @@ public interface SecurityScanDao {
 
   boolean markCandidateEnqueued(long assetId, long expectedGeneration);
 
+  /**
+   * Locks and projects the next contiguous asset page for a repository.
+   *
+   * <p>The implementation must wait for concurrent asset writers rather than skip locked rows:
+   * the returned cursor is durable and advancing it past an omitted row would permanently lose
+   * that asset from the backfill.
+   */
   BackfillPage markRepositoryAssetsForBackfill(
       long repositoryId, long afterAssetId, int maxItems);
 
