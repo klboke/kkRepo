@@ -128,7 +128,8 @@ class SecurityScanManagementServiceWaiverTest {
     when(repositories.list()).thenReturn(List.of(repository));
     when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
         .thenReturn(AccessDecision.allow());
-    when(scans.listFindings(11L, null, null, "demo", 0L, 2))
+    when(scans.listFindingsByRepositories(
+        List.of(11L), null, null, "demo", 0L, 2))
         .thenReturn(List.of(finding(41L, 7L), finding(42L, 8L)));
     when(scans.listRunSubjects(eq(7L), anyLong(), anyLong(), anyInt()))
         .thenReturn(List.of(new ScanRunSubject(7L, 11L, 23L, 3L, 1L, now)));
@@ -142,7 +143,8 @@ class SecurityScanManagementServiceWaiverTest {
     assertEquals(41L, page.items().getFirst().id());
     assertEquals(List.of("maven-hosted"), page.items().getFirst().repositories());
     assertEquals(41L, page.nextAfter());
-    verify(scans).listFindings(11L, null, null, "demo", 0L, 2);
+    verify(scans).listFindingsByRepositories(
+        List.of(11L), null, null, "demo", 0L, 2);
   }
 
   @Test
@@ -152,7 +154,8 @@ class SecurityScanManagementServiceWaiverTest {
     when(repositories.list()).thenReturn(List.of(repository));
     when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
         .thenReturn(AccessDecision.allow());
-    when(scans.listFindings(11L, null, null, 0L, 2))
+    when(scans.listFindingsByRepositories(
+        List.of(11L), null, null, "maven-hosted", 0L, 2))
         .thenReturn(List.of(finding(41L, 7L)));
     when(scans.listRunSubjects(eq(7L), anyLong(), anyLong(), anyInt()))
         .thenReturn(List.of(new ScanRunSubject(7L, 11L, 23L, 3L, 1L, now)));
@@ -164,7 +167,8 @@ class SecurityScanManagementServiceWaiverTest {
         actor, null, null, null, "maven-hosted", 0L, 1);
 
     assertEquals(List.of("maven-hosted"), page.items().getFirst().repositories());
-    verify(scans).listFindings(11L, null, null, 0L, 2);
+    verify(scans).listFindingsByRepositories(
+        List.of(11L), null, null, "maven-hosted", 0L, 2);
   }
 
   @Test
@@ -175,7 +179,8 @@ class SecurityScanManagementServiceWaiverTest {
     when(repositories.list()).thenReturn(List.of(repository));
     when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
         .thenReturn(AccessDecision.allow());
-    when(scans.listFindings(11L, null, null, 0L, 2)).thenReturn(List.of(finding));
+    when(scans.listFindingsByRepositories(
+        List.of(11L), null, null, null, 0L, 2)).thenReturn(List.of(finding));
     when(scans.listRunSubjects(eq(7L), anyLong(), anyLong(), anyInt()))
         .thenReturn(List.of(new ScanRunSubject(7L, 11L, 23L, 3L, 1L, now)));
     List<ScanWaiver> firstPage = java.util.stream.LongStream.rangeClosed(1, 256)
@@ -282,8 +287,8 @@ class SecurityScanManagementServiceWaiverTest {
     when(repositories.findById(12L)).thenReturn(Optional.of(secondRepository));
     when(assets.findAssetById(23L)).thenReturn(Optional.of(asset));
     when(assets.findAssetById(24L)).thenReturn(Optional.of(secondAsset));
-    when(scans.listFindings(11L, null, null, 0L, 51)).thenReturn(List.of(finding));
-    when(scans.listFindings(12L, null, null, 0L, 51)).thenReturn(List.of(finding));
+    when(scans.listFindingsByRepositories(
+        List.of(11L, 12L), null, null, null, 0L, 51)).thenReturn(List.of(finding));
     when(scans.findFinding(41L)).thenReturn(Optional.of(finding));
     when(scans.listRunSubjects(eq(7L), anyLong(), anyLong(), anyInt()))
         .thenReturn(List.of(subject, secondSubject));
