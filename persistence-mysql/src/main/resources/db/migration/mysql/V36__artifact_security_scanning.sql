@@ -373,6 +373,7 @@ CREATE TABLE asset_security_policy_state (
   policy_id BIGINT UNSIGNED NULL,
   policy_revision BIGINT NULL,
   config_revision BIGINT NOT NULL,
+  waiver_revision BIGINT NOT NULL DEFAULT 0,
   policy_decision VARCHAR(32) NOT NULL,
   policy_reason_code VARCHAR(128) NOT NULL,
   waived_findings INT NOT NULL DEFAULT 0,
@@ -393,9 +394,22 @@ CREATE TABLE asset_security_policy_state (
     FOREIGN KEY (policy_id) REFERENCES security_scan_policy(id) ON DELETE SET NULL,
   INDEX idx_asset_security_policy_run (latest_scan_run_id),
   INDEX idx_asset_security_policy_context
-    (repository_id, profile_id, config_revision, asset_id),
+    (repository_id, profile_id, config_revision, waiver_revision, asset_id),
   INDEX idx_asset_security_policy_expiry (next_waiver_expiry, repository_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE security_scan_waiver_revision (
+  singleton_id TINYINT UNSIGNED NOT NULL,
+  current_revision BIGINT NOT NULL,
+  global_invalidation_revision BIGINT NOT NULL,
+  updated_at DATETIME(3) NOT NULL,
+  PRIMARY KEY (singleton_id),
+  CONSTRAINT ck_security_scan_waiver_revision_singleton CHECK (singleton_id = 1)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT INTO security_scan_waiver_revision
+  (singleton_id, current_revision, global_invalidation_revision, updated_at)
+VALUES (1, 0, 0, CURRENT_TIMESTAMP(3));
 
 CREATE TABLE security_scan_waiver (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -425,7 +439,8 @@ CREATE TABLE security_scan_waiver (
     FOREIGN KEY (policy_id) REFERENCES security_scan_policy(id) ON DELETE SET NULL,
   INDEX idx_security_scan_waiver_active (repository_id, asset_id, id, expires_at),
   INDEX idx_security_scan_waiver_finding (finding_id),
-  INDEX idx_security_scan_waiver_advisory (advisory_selector)
+  INDEX idx_security_scan_waiver_advisory (advisory_selector),
+  INDEX idx_security_scan_waiver_package (package_selector(255))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE security_scan_backfill_job (

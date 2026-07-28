@@ -30,6 +30,7 @@ public class ScannerExecutionRegistry {
     try {
       return action.get();
     } finally {
+      execution.complete();
       active.remove(runId, execution);
     }
   }
@@ -38,8 +39,7 @@ public class ScannerExecutionRegistry {
     requireRunId(runId);
     ActiveExecution execution = active.get(runId);
     if (execution == null) return false;
-    execution.thread().interrupt();
-    return true;
+    return execution.cancel();
   }
 
   private static void requireRunId(String runId) {
@@ -57,5 +57,22 @@ public class ScannerExecutionRegistry {
     T get() throws IOException;
   }
 
-  private record ActiveExecution(Thread thread) {}
+  static final class ActiveExecution {
+    private final Thread thread;
+    private boolean completed;
+
+    ActiveExecution(Thread thread) {
+      this.thread = thread;
+    }
+
+    synchronized boolean cancel() {
+      if (completed) return false;
+      thread.interrupt();
+      return true;
+    }
+
+    synchronized void complete() {
+      completed = true;
+    }
+  }
 }

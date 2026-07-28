@@ -6,12 +6,14 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -164,6 +166,51 @@ class BoundedProcessRunnerTest {
     ScannerRequestException interrupted =
         (ScannerRequestException) failure.get();
     assertEquals("SCANNER_INTERRUPTED", interrupted.code());
+    for (Long processId : processIds) {
+      assertFalse(ProcessHandle.of(processId).map(ProcessHandle::isAlive).orElse(false));
+    }
+  }
+
+  @Test
+  void postStartIoFailureTerminatesTheActiveScannerProcessTree() throws Exception {
+    ScannerAdapterProperties properties = new ScannerAdapterProperties();
+    Path pidFile = directory.resolve("io-failure.pid");
+    Path stdout = directory.resolve("io-failure.out");
+    AtomicBoolean injected = new AtomicBoolean();
+    BoundedProcessRunner runner = new BoundedProcessRunner(properties, path -> {
+      if (path.equals(stdout) && injected.compareAndSet(false, true)) {
+        try {
+          for (int attempt = 0; attempt < 200 && !Files.exists(pidFile); attempt++) {
+            Thread.sleep(5);
+          }
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          throw new IOException("test interrupted", e);
+        }
+        if (!Files.exists(pidFile)) throw new IOException("scanner process did not start");
+        throw new IOException("injected post-start file inspection failure");
+      }
+      return Files.exists(path) ? Files.size(path) : 0;
+    });
+
+    ScannerRequestException failure = assertThrows(
+        ScannerRequestException.class,
+        () -> runner.run(
+            List.of(
+                "/bin/sh",
+                "-c",
+                "sleep 30 & child=$!; printf '%s %s' $$ \"$child\" > '"
+                    + pidFile + "'; wait"),
+            directory,
+            stdout,
+            Duration.ofSeconds(30),
+            Map.of()));
+
+    assertEquals("SCANNER_PROCESS_IO", failure.code());
+    assertTrue(injected.get());
+    List<Long> processIds = java.util.Arrays.stream(Files.readString(pidFile).split(" "))
+        .map(Long::parseLong)
+        .toList();
     for (Long processId : processIds) {
       assertFalse(ProcessHandle.of(processId).map(ProcessHandle::isAlive).orElse(false));
     }

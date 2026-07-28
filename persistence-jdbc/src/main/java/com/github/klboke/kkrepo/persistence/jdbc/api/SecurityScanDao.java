@@ -235,11 +235,14 @@ public interface SecurityScanDao {
   Optional<ScanWaiver> findWaiver(long waiverId);
 
   /**
-   * Removes materialized policy contexts within the waiver's repository, asset, and policy scope.
-   * A selector-only global waiver intentionally invalidates every context. Missing rows are rebuilt
-   * by the bounded policy reconciler.
+   * Advances the durable waiver revision and invalidates materialized policy contexts within the
+   * waiver's repository, asset, and policy scope. Global waiver changes advance an O(1) watermark
+   * instead of deleting the complete policy-state table. Missing or stale rows are rebuilt by the
+   * bounded policy reconciler.
    */
   int invalidatePolicyStatesForWaiver(ScanWaiver waiver);
+
+  WaiverRevision waiverRevision();
 
   List<ScanWaiver> listWaivers(Long repositoryId, long afterId, int maxItems);
 
@@ -248,6 +251,18 @@ public interface SecurityScanDao {
 
   List<ScanWaiver> listActiveWaivers(
       long repositoryId, Long assetId, Instant evaluatedAt, long afterId, int maxItems);
+
+  /**
+   * Loads only approved waiver candidates that can match the supplied findings and run subjects.
+   * Exact subject/finding matching remains in the service so this query can stay portable across
+   * MySQL and PostgreSQL.
+   */
+  List<ScanWaiver> listWaiversForFindings(
+      List<Long> findingIds,
+      List<String> advisorySelectors,
+      List<String> packageSelectors,
+      List<Long> repositoryIds,
+      List<Long> assetIds);
 
   boolean deleteWaiver(long waiverId);
 
@@ -341,7 +356,39 @@ public interface SecurityScanDao {
       ScanCandidate candidate,
       AssetSecurityState assetState,
       ScanPolicy policy,
-      AssetPolicyState policyState) {}
+      AssetPolicyState policyState,
+      long requiredWaiverRevision) {
+    public DownloadPolicySnapshot(
+        long assetId,
+        long sourceRepositoryId,
+        RepositoryFormat format,
+        String path,
+        String kind,
+        String contentType,
+        long blobSize,
+        RepositoryScanConfig config,
+        ScanProfile profile,
+        ScanCandidate candidate,
+        AssetSecurityState assetState,
+        ScanPolicy policy,
+        AssetPolicyState policyState) {
+      this(
+          assetId,
+          sourceRepositoryId,
+          format,
+          path,
+          kind,
+          contentType,
+          blobSize,
+          config,
+          profile,
+          candidate,
+          assetState,
+          policy,
+          policyState,
+          0);
+    }
+  }
 
   record ScanCandidate(
       long assetId,
@@ -569,7 +616,43 @@ public interface SecurityScanDao {
       Instant staleAt,
       Instant nextWaiverExpiry,
       Instant lastEvaluatedAt,
-      long version) {}
+      long version,
+      long waiverRevision) {
+    public AssetPolicyState(
+        long assetId,
+        long profileId,
+        long repositoryId,
+        long contentGeneration,
+        Long latestScanRunId,
+        Long policyId,
+        Long policyRevision,
+        long configRevision,
+        PolicyDecision policyDecision,
+        String policyReasonCode,
+        int waivedFindings,
+        Instant staleAt,
+        Instant nextWaiverExpiry,
+        Instant lastEvaluatedAt,
+        long version) {
+      this(
+          assetId,
+          profileId,
+          repositoryId,
+          contentGeneration,
+          latestScanRunId,
+          policyId,
+          policyRevision,
+          configRevision,
+          policyDecision,
+          policyReasonCode,
+          waivedFindings,
+          staleAt,
+          nextWaiverExpiry,
+          lastEvaluatedAt,
+          version,
+          0);
+    }
+  }
 
   record PolicyEvaluationTarget(
       long assetId,
@@ -579,7 +662,29 @@ public interface SecurityScanDao {
       Long latestScanRunId,
       ScanState scanState,
       long policyStateVersion,
-      Instant nextWaiverExpiry) {}
+      Instant nextWaiverExpiry,
+      long waiverRevision) {
+    public PolicyEvaluationTarget(
+        long assetId,
+        long sourceRepositoryId,
+        long contentGeneration,
+        Long stateContentGeneration,
+        Long latestScanRunId,
+        ScanState scanState,
+        long policyStateVersion,
+        Instant nextWaiverExpiry) {
+      this(
+          assetId,
+          sourceRepositoryId,
+          contentGeneration,
+          stateContentGeneration,
+          latestScanRunId,
+          scanState,
+          policyStateVersion,
+          nextWaiverExpiry,
+          0);
+    }
+  }
 
   record ScanPolicy(
       Long id,
@@ -622,6 +727,8 @@ public interface SecurityScanDao {
       selector = selector == null ? Map.of() : Map.copyOf(selector);
     }
   }
+
+  record WaiverRevision(long currentRevision, long globalInvalidationRevision) {}
 
   record BackfillJob(
       Long id,

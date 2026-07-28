@@ -16,9 +16,16 @@ import org.springframework.stereotype.Component;
 @Component
 public class BoundedProcessRunner {
   private final ScannerAdapterProperties properties;
+  private final FileSizeReader fileSizeReader;
 
   public BoundedProcessRunner(ScannerAdapterProperties properties) {
+    this(properties, BoundedProcessRunner::defaultFileSize);
+  }
+
+  BoundedProcessRunner(
+      ScannerAdapterProperties properties, FileSizeReader fileSizeReader) {
     this.properties = properties;
+    this.fileSizeReader = fileSizeReader;
   }
 
   public Result run(
@@ -74,11 +81,12 @@ public class BoundedProcessRunner {
       long outputBytes = fileSize(stdout);
       return new Result(process.exitValue(), outputBytes, stderrBytes);
     } catch (InterruptedException e) {
-      terminateAfterInterrupt(process);
+      terminateAfterFailure(process);
       Thread.currentThread().interrupt();
       throw new ScannerRequestException(
           "SCANNER_INTERRUPTED", "Scanner process was interrupted", 503, true, e);
     } catch (IOException e) {
+      terminateAfterFailure(process);
       throw new ScannerRequestException(
           "SCANNER_PROCESS_IO", "Unable to start or inspect scanner process", 503, true, e);
     }
@@ -133,11 +141,15 @@ public class BoundedProcessRunner {
     }
   }
 
-  private static boolean exceeds(Path path, long maximum) throws IOException {
+  private boolean exceeds(Path path, long maximum) throws IOException {
     return fileSize(path) > maximum;
   }
 
-  private static long fileSize(Path path) throws IOException {
+  private long fileSize(Path path) throws IOException {
+    return fileSizeReader.size(path);
+  }
+
+  private static long defaultFileSize(Path path) throws IOException {
     return Files.exists(path) ? Files.size(path) : 0;
   }
 
@@ -153,24 +165,39 @@ public class BoundedProcessRunner {
     }
   }
 
-  private static void terminateAfterInterrupt(Process process) {
-    if (process == null || !process.isAlive()) return;
+  private static void terminateAfterFailure(Process process) {
+    if (process == null) return;
+    boolean interrupted = Thread.interrupted();
     List<ProcessHandle> descendants = process.descendants().toList();
-    descendants.forEach(ProcessHandle::destroy);
-    process.destroy();
     try {
-      boolean parentExited = process.waitFor(2, TimeUnit.SECONDS);
-      if (parentExited && descendants.stream().noneMatch(ProcessHandle::isAlive)) return;
-    } catch (InterruptedException ignored) {
-      // Preserve interruption below after forcibly terminating the complete process tree.
+      descendants.forEach(ProcessHandle::destroy);
+      if (process.isAlive()) process.destroy();
+      boolean cleanlyExited = false;
+      try {
+        boolean parentExited =
+            !process.isAlive() || process.waitFor(2, TimeUnit.SECONDS);
+        cleanlyExited =
+            parentExited && descendants.stream().noneMatch(ProcessHandle::isAlive);
+      } catch (InterruptedException ignored) {
+        interrupted = true;
+      }
+      if (!cleanlyExited) {
+        descendants.forEach(ProcessHandle::destroyForcibly);
+        if (process.isAlive()) process.destroyForcibly();
+        try {
+          if (process.isAlive()) process.waitFor(2, TimeUnit.SECONDS);
+        } catch (InterruptedException ignored) {
+          interrupted = true;
+        }
+      }
+    } finally {
+      if (interrupted) Thread.currentThread().interrupt();
     }
-    descendants.forEach(ProcessHandle::destroyForcibly);
-    if (process.isAlive()) process.destroyForcibly();
-    try {
-      process.waitFor(2, TimeUnit.SECONDS);
-    } catch (InterruptedException ignored) {
-      // The caller restores the interrupted flag after this cleanup finishes.
-    }
+  }
+
+  @FunctionalInterface
+  interface FileSizeReader {
+    long size(Path path) throws IOException;
   }
 
   public byte[] versionOutput(String executable, List<String> arguments) {

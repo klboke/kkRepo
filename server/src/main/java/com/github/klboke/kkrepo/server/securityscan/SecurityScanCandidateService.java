@@ -19,10 +19,12 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanCompleteness;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanStage;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanState;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -123,7 +125,7 @@ public class SecurityScanCandidateService {
           0,
           properties.getWorker().getMaxAttempts(),
           "system",
-          null,
+          requestUuid(candidate, profile),
           null,
           now));
       PolicyDecision pending = config.pendingAction() == PolicyAction.BLOCK
@@ -142,6 +144,20 @@ public class SecurityScanCandidateService {
           candidate, config, ScanState.NOT_APPLICABLE, ScanCompleteness.COMPLETE,
           PolicyDecision.ALLOW, classification.reasonCode(), "sha256:" + content.blob().sha256());
     }
+  }
+
+  private static String requestUuid(ScanCandidate candidate, ScanProfile profile) {
+    String marker = candidate.updatedAt() == null
+        ? candidate.changedAt() == null ? "" : candidate.changedAt().toString()
+        : candidate.updatedAt().toString();
+    return UUID.nameUUIDFromBytes(String.join(
+        "\0",
+        "candidate",
+        Long.toString(candidate.assetId()),
+        Long.toString(candidate.contentGeneration()),
+        Long.toString(profile.id()),
+        Long.toString(profile.revision()),
+        marker).getBytes(StandardCharsets.UTF_8)).toString();
   }
 
   private void materialize(

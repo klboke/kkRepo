@@ -196,6 +196,7 @@ public class SecurityScanFinalizer {
       ScanRun run,
       List<ScanFinding> findings,
       Instant now) {
+    long waiverRevision = scans.waiverRevision().currentRevision();
     ScanPolicy policy = config.policyId() == null
         ? null : scans.findPolicy(config.policyId()).orElse(null);
     List<ScanWaiver> waivers =
@@ -224,7 +225,11 @@ public class SecurityScanFinalizer {
         .min(Instant::compareTo)
         .orElse(null);
     return new ContextEvaluation(
-        policy, evaluation, staleAt(config, policy, run.completedAt()), nextWaiverExpiry);
+        policy,
+        evaluation,
+        staleAt(config, policy, run.completedAt()),
+        nextWaiverExpiry,
+        waiverRevision);
   }
 
   private void materializePolicyContexts(
@@ -267,7 +272,8 @@ public class SecurityScanFinalizer {
           result.staleAt(),
           result.nextWaiverExpiry(),
           now,
-          0));
+          0,
+          result.waiverRevision()));
       scans.associateRun(
           run.id(), repositoryId, assetId, profile.id(), contentGeneration, now);
       auditPolicyTransition(repositoryId, previous, updated);
@@ -314,6 +320,7 @@ public class SecurityScanFinalizer {
       long contentGeneration,
       String errorCode,
       Instant now) {
+    long waiverRevision = scans.waiverRevision().currentRevision();
     for (RepositoryScanConfig context : contexts) {
       PolicyDecision decision = context.failureAction() == PolicyAction.BLOCK
           ? PolicyDecision.BLOCK_SCAN_FAILED : PolicyDecision.ALLOW;
@@ -334,7 +341,8 @@ public class SecurityScanFinalizer {
           null,
           null,
           now,
-          previous == null ? 0 : previous.version()));
+          previous == null ? 0 : previous.version(),
+          waiverRevision));
       auditPolicyTransition(context.repositoryId(), previous, updated);
     }
   }
@@ -434,7 +442,8 @@ public class SecurityScanFinalizer {
       ScanPolicy policy,
       Evaluation evaluation,
       Instant staleAt,
-      Instant nextWaiverExpiry) {}
+      Instant nextWaiverExpiry,
+      long waiverRevision) {}
 
   public static final class LostSecurityScanLeaseException extends RuntimeException {
     LostSecurityScanLeaseException(long taskId) {

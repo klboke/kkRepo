@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -106,6 +107,47 @@ class SecurityScanSchedulingServicesTest {
     verify(scans).createTask(any(TaskDraft.class));
     verify(scans, org.mockito.Mockito.times(4))
         .upsertAssetStateIfCurrent(any(AssetSecurityState.class));
+  }
+
+  @Test
+  void unchangedCandidateBackfillCreatesFreshDeterministicWork() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    AssetDao assets = mock(AssetDao.class);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    SecurityScanCandidateClassifier classifier = mock(SecurityScanCandidateClassifier.class);
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.getWorker().setCandidateBatchSize(1);
+    SecurityScanRepositoryScope scope = mock(SecurityScanRepositoryScope.class);
+    SecurityScanCandidateService service = new SecurityScanCandidateService(
+        scans, assets, repositories, classifier, properties, scope);
+    Instant firstMarker = Instant.parse("2026-07-28T12:00:00Z");
+    Instant secondMarker = firstMarker.plusSeconds(1);
+    ScanCandidate first = new ScanCandidate(11, 21L, 1, 0, firstMarker, firstMarker);
+    ScanCandidate requeued = new ScanCandidate(11, 21L, 1, 0, firstMarker, secondMarker);
+    when(scans.claimCandidates(1))
+        .thenReturn(List.of(first))
+        .thenReturn(List.of(requeued));
+    AssetWithBlob content = content(11, 7, 21);
+    ScanProfile profile = profile(3L, true);
+    RepositoryRecord repository = repository(7, RepositoryType.HOSTED);
+    when(assets.findAssetWithBlobById(11L)).thenReturn(Optional.of(content));
+    when(repositories.findById(7L)).thenReturn(Optional.of(repository));
+    when(scope.effectiveConfigsForSource(7L)).thenReturn(List.of(config(7, 3)));
+    when(scans.findProfile(3L)).thenReturn(Optional.of(profile));
+    when(classifier.classify(any(), any(), eq(profile)))
+        .thenReturn(classification(CandidateDisposition.SCANNABLE));
+
+    assertEquals(1, service.processBatch());
+    assertEquals(1, service.processBatch());
+
+    ArgumentCaptor<TaskDraft> drafts = ArgumentCaptor.forClass(TaskDraft.class);
+    verify(scans, org.mockito.Mockito.times(2)).createTask(drafts.capture());
+    assertEquals(
+        drafts.getAllValues().getFirst().contentGeneration(),
+        drafts.getAllValues().getLast().contentGeneration());
+    assertNotEquals(
+        drafts.getAllValues().getFirst().requestUuid(),
+        drafts.getAllValues().getLast().requestUuid());
   }
 
   @Test
@@ -313,16 +355,25 @@ class SecurityScanSchedulingServicesTest {
     when(classifier.classify(any(), any(), eq(profile)))
         .thenReturn(classification(CandidateDisposition.SCANNABLE));
     PolicyEvaluationTarget fresh =
-        new PolicyEvaluationTarget(11, 7, 1, null, null, ScanState.PENDING, 2, null);
+        new PolicyEvaluationTarget(11, 7, 1, null, null, ScanState.PENDING, 2, null, 4);
     PolicyEvaluationTarget reusable =
-        new PolicyEvaluationTarget(11, 7, 1, 1L, 44L, ScanState.COMPLETE, 3, now.plusSeconds(30));
+        new PolicyEvaluationTarget(
+            11, 7, 1, 1L, 44L, ScanState.COMPLETE, 3, now.plusSeconds(30), 4);
+    PolicyEvaluationTarget reusableAfterWaiver =
+        new PolicyEvaluationTarget(
+            11, 7, 1, 1L, 44L, ScanState.COMPLETE, 3, now.plusSeconds(30), 5);
     reconciler.reconcile(context, profile, fresh, now);
     reconciler.reconcile(context, profile, reusable, now);
+    reconciler.reconcile(context, profile, reusableAfterWaiver, now);
 
     ArgumentCaptor<TaskDraft> drafts = ArgumentCaptor.forClass(TaskDraft.class);
-    verify(scans, org.mockito.Mockito.times(2)).createTask(drafts.capture());
+    verify(scans, org.mockito.Mockito.times(3)).createTask(drafts.capture());
     assertEquals(ScanStage.CATALOG_AND_MATCH, drafts.getAllValues().getFirst().stage());
+    assertEquals(ScanStage.POLICY_ONLY, drafts.getAllValues().get(1).stage());
     assertEquals(ScanStage.POLICY_ONLY, drafts.getAllValues().getLast().stage());
+    assertNotEquals(
+        drafts.getAllValues().get(1).requestUuid(),
+        drafts.getAllValues().getLast().requestUuid());
   }
 
   @Test

@@ -242,6 +242,7 @@ public class SecurityPolicyReconciler {
     parts.add(Long.toString(target.assetId()));
     parts.add(Long.toString(target.contentGeneration()));
     parts.add(Long.toString(target.policyStateVersion()));
+    parts.add(Long.toString(target.waiverRevision()));
     parts.add(target.nextWaiverExpiry() == null ? "" : target.nextWaiverExpiry().toString());
     parts.add(stage.name());
     return UUID.nameUUIDFromBytes(

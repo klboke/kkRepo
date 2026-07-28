@@ -104,7 +104,7 @@ class SecurityScanManagementServiceWaiverTest {
         .thenReturn(Optional.of(repository(11L, "maven-hosted")));
     when(assets.findAssetById(23L))
         .thenReturn(Optional.of(asset(23L, 11L, "com/acme/demo/1.0/demo-1.0.jar")));
-    when(scans.listWaivers(null, 0L, 1000))
+    when(scans.listWaiversForFindings(any(), any(), any(), any(), any()))
         .thenReturn(List.of(waiver(
             51L, 11L, 23L, 41L, null, null, "Already accepted",
             now.plusSeconds(3600), now)));
@@ -129,7 +129,8 @@ class SecurityScanManagementServiceWaiverTest {
         .thenReturn(List.of(finding(41L, 7L), finding(42L, 8L)));
     when(scans.listRunSubjects(7L))
         .thenReturn(List.of(new ScanRunSubject(7L, 11L, 23L, 3L, 1L, now)));
-    when(scans.listWaivers(null, 0L, 1000)).thenReturn(List.of());
+    when(scans.listWaiversForFindings(any(), any(), any(), any(), any()))
+        .thenReturn(List.of());
 
     var page = service.findingPage(actor, null, null, null, "demo", 0L, 1);
 
@@ -151,7 +152,8 @@ class SecurityScanManagementServiceWaiverTest {
         .thenReturn(List.of(finding(41L, 7L)));
     when(scans.listRunSubjects(7L))
         .thenReturn(List.of(new ScanRunSubject(7L, 11L, 23L, 3L, 1L, now)));
-    when(scans.listWaivers(null, 0L, 1000)).thenReturn(List.of());
+    when(scans.listWaiversForFindings(any(), any(), any(), any(), any()))
+        .thenReturn(List.of());
 
     var page = service.findingPage(
         actor, null, null, null, "maven-hosted", 0L, 1);
@@ -231,7 +233,7 @@ class SecurityScanManagementServiceWaiverTest {
     when(scans.listFindings(12L, null, null, 0L, 51)).thenReturn(List.of(finding));
     when(scans.findFinding(41L)).thenReturn(Optional.of(finding));
     when(scans.listRunSubjects(7L)).thenReturn(List.of(subject, secondSubject));
-    when(scans.listWaivers(null, 0L, 1000))
+    when(scans.listWaiversForFindings(any(), any(), any(), any(), any()))
         .thenReturn(List.of(active, overlapping, expired));
     when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
         .thenReturn(AccessDecision.allow());
@@ -254,6 +256,12 @@ class SecurityScanManagementServiceWaiverTest {
     assertEquals("maven-hosted", details.waivers().getFirst().repository());
     assertEquals("com/acme/demo/1.0/demo-1.0.jar", details.waivers().getFirst().assetPath());
     assertEquals("security-admin", details.waivers().getFirst().approvedBy());
+    verify(scans, org.mockito.Mockito.times(2)).listWaiversForFindings(
+        eq(List.of(41L)),
+        eq(List.of("CVE-2026-0041", "GHSA-demo")),
+        eq(List.of("pkg:maven/com.acme/demo@1.0", "demo")),
+        eq(List.of(11L, 12L)),
+        eq(List.of(23L, 24L)));
   }
 
   @Test

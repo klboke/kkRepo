@@ -22,6 +22,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanProfile
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanRun;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanTask;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanWaiver;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.WaiverRevision;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.EnforcementMode;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.OciPlatformPolicy;
@@ -62,6 +63,7 @@ class SecurityScanFinalizerTest {
   @Test
   void terminalFailurePublishesBlockingAssetStateAndAuditTransition() {
     SecurityScanDao scans = mock(SecurityScanDao.class);
+    stubWaiverRevision(scans);
     SecurityScanAuditService audit = mock(SecurityScanAuditService.class);
     RepositoryDao repositories = mock(RepositoryDao.class);
     when(repositories.findById(1L)).thenReturn(Optional.of(hostedRepository(1L)));
@@ -116,6 +118,7 @@ class SecurityScanFinalizerTest {
   @Test
   void materializesIndependentMemberAndGroupPolicyContexts() {
     SecurityScanDao scans = mock(SecurityScanDao.class);
+    stubWaiverRevision(scans);
     RepositoryDao repositories = mock(RepositoryDao.class);
     SecurityScanAuditService audit = mock(SecurityScanAuditService.class);
     SecurityScanFinalizer finalizer = new SecurityScanFinalizer(scans, repositories, audit);
@@ -176,11 +179,15 @@ class SecurityScanFinalizerTest {
         states.getAllValues().stream()
             .collect(java.util.stream.Collectors.toMap(
                 AssetPolicyState::repositoryId, AssetPolicyState::waivedFindings)));
+    assertEquals(
+        List.of(7L, 7L),
+        states.getAllValues().stream().map(AssetPolicyState::waiverRevision).toList());
   }
 
   @Test
   void evaluatesWaiversBeyondTheFirstThousandRows() {
     SecurityScanDao scans = mock(SecurityScanDao.class);
+    stubWaiverRevision(scans);
     RepositoryDao repositories = mock(RepositoryDao.class);
     SecurityScanFinalizer finalizer = new SecurityScanFinalizer(
         scans, repositories, mock(SecurityScanAuditService.class));
@@ -252,9 +259,14 @@ class SecurityScanFinalizerTest {
 
   private static SecurityScanFinalizer finalizer(SecurityScanDao scans) {
     RepositoryDao repositories = mock(RepositoryDao.class);
+    stubWaiverRevision(scans);
     when(repositories.findById(1L)).thenReturn(Optional.of(hostedRepository(1L)));
     return new SecurityScanFinalizer(
         scans, repositories, mock(SecurityScanAuditService.class));
+  }
+
+  private static void stubWaiverRevision(SecurityScanDao scans) {
+    when(scans.waiverRevision()).thenReturn(new WaiverRevision(7, 0));
   }
 
   private static RepositoryRecord hostedRepository(long id) {

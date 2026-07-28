@@ -266,7 +266,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
           nullableInstant(rs, "stale_at"),
           nullableInstant(rs, "next_waiver_expiry"),
           nullableInstant(rs, "last_evaluated_at"),
-          rs.getLong("version"));
+          rs.getLong("version"),
+          rs.getLong("waiver_revision"));
 
   private final RowMapper<ScanPolicy> policyMapper = (rs, rowNum) -> new ScanPolicy(
       rs.getLong("id"),
@@ -385,7 +386,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
                 nullableInstant(rs, "dp_policy_state_stale_at"),
                 nullableInstant(rs, "dp_policy_state_next_waiver_expiry"),
                 nullableInstant(rs, "dp_policy_state_last_evaluated_at"),
-                rs.getLong("dp_policy_state_version"));
+                rs.getLong("dp_policy_state_version"),
+                rs.getLong("dp_policy_state_waiver_revision"));
         return new DownloadPolicySnapshot(
             rs.getLong("dp_asset_id"),
             rs.getLong("dp_source_repository_id"),
@@ -399,7 +401,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
             candidate,
             state,
             policy,
-            policyState);
+            policyState,
+            rs.getLong("dp_required_waiver_revision"));
       };
 
   private final RowMapper<ScanWaiver> waiverMapper = (rs, rowNum) -> new ScanWaiver(
@@ -618,16 +621,20 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
           policy_state.policy_id AS dp_policy_state_policy_id,
           policy_state.policy_revision AS dp_policy_state_policy_revision,
           policy_state.config_revision AS dp_policy_state_config_revision,
+          policy_state.waiver_revision AS dp_policy_state_waiver_revision,
           policy_state.policy_decision AS dp_policy_state_policy_decision,
           policy_state.policy_reason_code AS dp_policy_state_policy_reason_code,
           policy_state.waived_findings AS dp_policy_state_waived_findings,
           policy_state.stale_at AS dp_policy_state_stale_at,
           policy_state.next_waiver_expiry AS dp_policy_state_next_waiver_expiry,
           policy_state.last_evaluated_at AS dp_policy_state_last_evaluated_at,
-          policy_state.version AS dp_policy_state_version
+          policy_state.version AS dp_policy_state_version,
+          waiver_revision.global_invalidation_revision AS dp_required_waiver_revision
         FROM target_asset a
         JOIN asset_blob b ON b.id = a.asset_blob_id
         JOIN repository source_repository ON source_repository.id = a.repository_id
+        JOIN security_scan_waiver_revision waiver_revision
+          ON waiver_revision.singleton_id = 1
         JOIN repository_security_scan_config c
           ON c.repository_id IN (SELECT repository_id FROM policy_contexts)
          AND (
@@ -1805,14 +1812,19 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Override
   @Transactional
   public AssetPolicyState upsertAssetPolicyStateIfCurrent(AssetPolicyState state) {
+    if (!lockWaiverRevision(state.waiverRevision())) {
+      throw new IllegalStateException(
+          "Waiver revision changed before policy evaluation was materialized");
+    }
     int updated = updateAssetPolicyState(state);
     if (updated == 0 && candidateGenerationMatches(state.assetId(), state.contentGeneration())) {
       boolean inserted = JdbcInserts.tryUpdate(jdbc, """
           INSERT INTO asset_security_policy_state
             (asset_id, profile_id, repository_id, content_generation, latest_scan_run_id,
-             policy_id, policy_revision, config_revision, policy_decision, policy_reason_code,
-             waived_findings, stale_at, next_waiver_expiry, last_evaluated_at, version)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+             policy_id, policy_revision, config_revision, waiver_revision, policy_decision,
+             policy_reason_code, waived_findings, stale_at, next_waiver_expiry,
+             last_evaluated_at, version)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
           """, ps -> {
         ps.setLong(1, state.assetId());
         ps.setLong(2, state.profileId());
@@ -1822,12 +1834,13 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         setNullableLong(ps, 6, state.policyId());
         setNullableLong(ps, 7, state.policyRevision());
         ps.setLong(8, state.configRevision());
-        ps.setString(9, state.policyDecision().name());
-        ps.setString(10, state.policyReasonCode());
-        ps.setInt(11, Math.max(0, state.waivedFindings()));
-        ps.setTimestamp(12, nullableTimestamp(state.staleAt()));
-        ps.setTimestamp(13, nullableTimestamp(state.nextWaiverExpiry()));
-        ps.setTimestamp(14, nullableTimestamp(state.lastEvaluatedAt()));
+        ps.setLong(9, state.waiverRevision());
+        ps.setString(10, state.policyDecision().name());
+        ps.setString(11, state.policyReasonCode());
+        ps.setInt(12, Math.max(0, state.waivedFindings()));
+        ps.setTimestamp(13, nullableTimestamp(state.staleAt()));
+        ps.setTimestamp(14, nullableTimestamp(state.nextWaiverExpiry()));
+        ps.setTimestamp(15, nullableTimestamp(state.lastEvaluatedAt()));
       });
       if (!inserted) updateAssetPolicyState(state);
     }
@@ -1840,9 +1853,10 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     return jdbc.update("""
         UPDATE asset_security_policy_state s
         SET content_generation = ?, latest_scan_run_id = ?, policy_id = ?,
-            policy_revision = ?, config_revision = ?, policy_decision = ?,
-            policy_reason_code = ?, waived_findings = ?, stale_at = ?,
-            next_waiver_expiry = ?, last_evaluated_at = ?, version = version + 1
+            policy_revision = ?, config_revision = ?, waiver_revision = ?,
+            policy_decision = ?, policy_reason_code = ?, waived_findings = ?,
+            stale_at = ?, next_waiver_expiry = ?, last_evaluated_at = ?,
+            version = version + 1
         WHERE s.asset_id = ? AND s.profile_id = ? AND s.repository_id = ?
           AND EXISTS (
             SELECT 1 FROM security_scan_candidate c
@@ -1854,6 +1868,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         state.policyId(),
         state.policyRevision(),
         state.configRevision(),
+        state.waiverRevision(),
         state.policyDecision().name(),
         state.policyReasonCode(),
         Math.max(0, state.waivedFindings()),
@@ -1864,6 +1879,17 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         state.profileId(),
         state.repositoryId(),
         state.contentGeneration());
+  }
+
+  private boolean lockWaiverRevision(long expectedRevision) {
+    ensureWaiverRevisionRow();
+    Long current = jdbc.queryForObject("""
+        SELECT current_revision
+        FROM security_scan_waiver_revision
+        WHERE singleton_id = 1
+        FOR SHARE
+        """, Long.class);
+    return current != null && current == expectedRevision;
   }
 
   @Override
@@ -1885,8 +1911,11 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
                s.latest_scan_run_id,
                s.scan_state,
                COALESCE(ps.version, 0) AS policy_state_version,
-               ps.next_waiver_expiry
+               ps.next_waiver_expiry,
+               waiver_revision.current_revision AS waiver_revision
         FROM asset a
+        JOIN security_scan_waiver_revision waiver_revision
+          ON waiver_revision.singleton_id = 1
         LEFT JOIN security_scan_candidate c ON c.asset_id = a.id
         LEFT JOIN asset_security_state s
           ON s.asset_id = a.id AND s.profile_id = ?
@@ -1908,6 +1937,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
                 OR ps.latest_scan_run_id IS NULL
                 OR ps.latest_scan_run_id <> s.latest_scan_run_id
                 OR ps.config_revision <> ?
+                OR ps.waiver_revision < waiver_revision.global_invalidation_revision
         """);
     List<Object> args = new ArrayList<>();
     args.add(profileId);
@@ -1950,7 +1980,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         rs.getString("scan_state") == null
             ? null : enumValue(ScanState.class, rs.getString("scan_state")),
         rs.getLong("policy_state_version"),
-        nullableInstant(rs, "next_waiver_expiry")), args.toArray());
+        nullableInstant(rs, "next_waiver_expiry"),
+        rs.getLong("waiver_revision")), args.toArray());
   }
 
   private boolean candidateGenerationMatches(long assetId, long generation) {
@@ -2114,7 +2145,20 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   @Override
+  @Transactional
   public int invalidatePolicyStatesForWaiver(ScanWaiver waiver) {
+    ensureWaiverRevisionRow();
+    boolean globalScope = waiver.repositoryId() == null && waiver.assetId() == null;
+    jdbc.update("""
+        UPDATE security_scan_waiver_revision
+        SET global_invalidation_revision =
+              CASE WHEN ? THEN current_revision + 1 ELSE global_invalidation_revision END,
+            current_revision = current_revision + 1,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE singleton_id = 1
+        """, globalScope);
+    if (globalScope) return 0;
+
     StringBuilder sql = new StringBuilder(
         "DELETE FROM asset_security_policy_state WHERE 1 = 1");
     List<Object> args = new ArrayList<>();
@@ -2135,6 +2179,26 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       args.add(waiver.policyRevision());
     }
     return jdbc.update(sql.toString(), args.toArray());
+  }
+
+  @Override
+  public WaiverRevision waiverRevision() {
+    ensureWaiverRevisionRow();
+    return jdbc.query("""
+        SELECT current_revision, global_invalidation_revision
+        FROM security_scan_waiver_revision
+        WHERE singleton_id = 1
+        """, (rs, rowNum) -> new WaiverRevision(
+            rs.getLong("current_revision"),
+            rs.getLong("global_invalidation_revision"))).stream().findFirst().orElseThrow();
+  }
+
+  private void ensureWaiverRevisionRow() {
+    JdbcInserts.tryUpdate(jdbc, """
+        INSERT INTO security_scan_waiver_revision
+          (singleton_id, current_revision, global_invalidation_revision, updated_at)
+        VALUES (1, 0, 0, CURRENT_TIMESTAMP)
+        """, statement -> {});
   }
 
   @Override
@@ -2262,6 +2326,72 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         nullableTimestamp(evaluatedAt),
         Math.max(0, afterId),
         safeLimit(maxItems));
+  }
+
+  @Override
+  public List<ScanWaiver> listWaiversForFindings(
+      List<Long> findingIds,
+      List<String> advisorySelectors,
+      List<String> packageSelectors,
+      List<Long> repositoryIds,
+      List<Long> assetIds) {
+    List<Long> findings = distinctLongs(findingIds);
+    List<Long> repositories = distinctLongs(repositoryIds);
+    List<Long> assets = distinctLongs(assetIds);
+    if (findings.isEmpty() || repositories.isEmpty() || assets.isEmpty()) return List.of();
+    List<String> advisories = distinctStrings(advisorySelectors, true);
+    List<String> packages = distinctStrings(packageSelectors, false);
+    List<Object> args = new ArrayList<>();
+    StringBuilder sql = new StringBuilder("""
+        SELECT *
+        FROM security_scan_waiver
+        WHERE approved_by IS NOT NULL
+          AND approved_by <> ''
+          AND (repository_id IS NULL OR repository_id IN (
+        """);
+    appendIn(sql, args, repositories);
+    sql.append("""
+          ))
+          AND (asset_id IS NULL OR asset_id IN (
+        """);
+    appendIn(sql, args, assets);
+    sql.append("""
+          ))
+          AND (
+            finding_id IN (
+        """);
+    appendIn(sql, args, findings);
+    sql.append("""
+            )
+            OR (
+              finding_id IS NULL
+              AND
+        """);
+    if (advisories.isEmpty()) {
+      sql.append(" NULLIF(advisory_selector, '') IS NULL");
+    } else {
+      sql.append(" (NULLIF(advisory_selector, '') IS NULL OR LOWER(advisory_selector) IN (");
+      appendIn(sql, args, advisories);
+      sql.append("))");
+    }
+    sql.append(" AND");
+    if (packages.isEmpty()) {
+      sql.append(" NULLIF(package_selector, '') IS NULL");
+    } else {
+      sql.append(" (NULLIF(package_selector, '') IS NULL OR package_selector IN (");
+      appendIn(sql, args, packages);
+      sql.append("))");
+    }
+    sql.append("""
+              AND (
+                NULLIF(advisory_selector, '') IS NOT NULL
+                OR NULLIF(package_selector, '') IS NOT NULL
+              )
+            )
+          )
+        ORDER BY id
+        """);
+    return jdbc.query(sql.toString(), waiverMapper, args.toArray());
   }
 
   @Override
@@ -2567,6 +2697,33 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
 
   private static long number(Map<String, Object> row, String column) {
     return ((Number) row.get(column)).longValue();
+  }
+
+  private static List<Long> distinctLongs(List<Long> values) {
+    return values == null
+        ? List.of()
+        : values.stream()
+            .filter(java.util.Objects::nonNull)
+            .distinct()
+            .toList();
+  }
+
+  private static List<String> distinctStrings(List<String> values, boolean lowercase) {
+    return values == null
+        ? List.of()
+        : values.stream()
+            .filter(java.util.Objects::nonNull)
+            .map(String::trim)
+            .filter(value -> !value.isEmpty())
+            .map(value -> lowercase ? value.toLowerCase(java.util.Locale.ROOT) : value)
+            .distinct()
+            .toList();
+  }
+
+  private static void appendIn(
+      StringBuilder sql, List<Object> arguments, List<?> values) {
+    sql.append(String.join(",", java.util.Collections.nCopies(values.size(), "?")));
+    arguments.addAll(values);
   }
 
   @Override

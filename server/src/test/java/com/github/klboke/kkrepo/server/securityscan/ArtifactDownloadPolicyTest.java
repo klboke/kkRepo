@@ -146,6 +146,29 @@ class ArtifactDownloadPolicyTest {
   }
 
   @Test
+  void globalWaiverWatermarkFencesAnOlderMaterializedDecision() {
+    properties.setEnabled(true);
+    RepositoryScanConfig config =
+        config(1L, EnforcementMode.ENFORCE, PolicyAction.BLOCK);
+    when(scans.findDownloadPolicySnapshots(10L, 1L)).thenReturn(List.of(snapshot(
+        config,
+        profile(),
+        new ScanCandidate(10L, 100L, 1L, 1L, Instant.EPOCH, Instant.EPOCH),
+        complete(PolicyDecision.ALLOW),
+        policyState(1L, PolicyDecision.ALLOW, 4),
+        "com/acme/demo/1/demo-1.jar",
+        "artifact",
+        "application/java-archive",
+        5)));
+
+    ArtifactPolicyException failure =
+        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 1L));
+
+    assertEquals(PolicyDecision.BLOCK_PENDING, failure.decision());
+    assertSingleSnapshotLookup(1L);
+  }
+
+  @Test
   void entryGroupAndMemberPoliciesChooseTheStricterEnforcedDecision() {
     arrange(EnforcementMode.AUDIT, PolicyAction.ALLOW, complete(PolicyDecision.BLOCK_VULNERABILITY));
     ScanCandidate candidate =
@@ -285,6 +308,28 @@ class ArtifactDownloadPolicyTest {
       String path,
       String kind,
       String contentType) {
+    return snapshot(
+        config,
+        profile,
+        candidate,
+        state,
+        policyState,
+        path,
+        kind,
+        contentType,
+        0);
+  }
+
+  private static DownloadPolicySnapshot snapshot(
+      RepositoryScanConfig config,
+      ScanProfile profile,
+      ScanCandidate candidate,
+      AssetSecurityState state,
+      AssetPolicyState policyState,
+      String path,
+      String kind,
+      String contentType,
+      long requiredWaiverRevision) {
     return new DownloadPolicySnapshot(
         10L,
         1L,
@@ -298,7 +343,8 @@ class ArtifactDownloadPolicyTest {
         candidate,
         state,
         null,
-        policyState);
+        policyState,
+        requiredWaiverRevision);
   }
 
   private static RepositoryScanConfig config(
@@ -334,9 +380,15 @@ class ArtifactDownloadPolicyTest {
 
   private static AssetPolicyState policyState(
       long repositoryId, PolicyDecision decision) {
+    return policyState(repositoryId, decision, 0);
+  }
+
+  private static AssetPolicyState policyState(
+      long repositoryId, PolicyDecision decision, long waiverRevision) {
     return new AssetPolicyState(
         10L, 1L, repositoryId, 1L, 20L, null, null, 1L,
-        decision, decision.name(), 0, Instant.MAX, null, Instant.EPOCH, 1L);
+        decision, decision.name(), 0, Instant.MAX, null, Instant.EPOCH, 1L,
+        waiverRevision);
   }
 
   private static ScanProfile profile() {

@@ -156,6 +156,7 @@ public class ArtifactDownloadPolicy {
         || policyState.contentGeneration() != candidate.contentGeneration()
         || !java.util.Objects.equals(policyState.latestScanRunId(), state.latestScanRunId())
         || policyState.configRevision() != config.configRevision()
+        || policyState.waiverRevision() < snapshot.requiredWaiverRevision()
         || policyMismatch
         || (policyState.staleAt() != null && !policyState.staleAt().isAfter(now))
         || (policyState.nextWaiverExpiry() != null

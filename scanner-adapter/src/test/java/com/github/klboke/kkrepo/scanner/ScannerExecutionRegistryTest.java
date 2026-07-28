@@ -60,4 +60,15 @@ class ScannerExecutionRegistryTest {
       assertEquals("SCANNER_RUN_ID_INVALID", failure.code());
     }
   }
+
+  @Test
+  void completedExecutionCannotInterruptAReusedThread() {
+    ScannerExecutionRegistry.ActiveExecution execution =
+        new ScannerExecutionRegistry.ActiveExecution(Thread.currentThread());
+
+    execution.complete();
+
+    assertFalse(execution.cancel());
+    assertFalse(Thread.currentThread().isInterrupted());
+  }
 }

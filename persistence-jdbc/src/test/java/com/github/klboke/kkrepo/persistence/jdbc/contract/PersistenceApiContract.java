@@ -141,6 +141,7 @@ public abstract class PersistenceApiContract {
         "security_scan_run_subject",
         "security_scan_task",
         "security_scan_waiver",
+        "security_scan_waiver_revision",
         "security_scanner_snapshot",
         "security_user",
         "security_user_role",
@@ -411,6 +412,23 @@ public abstract class PersistenceApiContract {
             .getFirst()
             .id(),
         "active waiver lookup must cover repository-and-asset scoped rows");
+    assertEquals(
+        waiver.id(),
+        scans.listWaiversForFindings(
+                List.of(storedFinding.id()),
+                List.of(storedFinding.advisoryId(), "CVE-2026-0001"),
+                List.of(storedFinding.packageUrl(), storedFinding.packageName()),
+                List.of(repositoryId),
+                List.of(assetId))
+            .getFirst()
+            .id(),
+        "finding pages must query only waivers matching their finding and subject keys");
+    assertTrue(scans.listWaiversForFindings(
+        List.of(storedFinding.id()),
+        List.of(storedFinding.advisoryId()),
+        List.of(storedFinding.packageUrl()),
+        List.of(groupRepositoryId),
+        List.of(assetId + 1)).isEmpty());
 
     SecurityScanDao.AssetSecurityState storedState = scans.upsertAssetStateIfCurrent(
         new SecurityScanDao.AssetSecurityState(
@@ -563,7 +581,29 @@ public abstract class PersistenceApiContract {
     assertEquals(1, scans.invalidatePolicyStatesForWaiver(waiver));
     assertTrue(scans.findAssetPolicyState(assetId, profileId, repositoryId).isEmpty());
     assertTrue(scans.findAssetPolicyState(assetId, profileId, groupRepositoryId).isPresent());
-    scans.upsertAssetPolicyStateIfCurrent(policyState);
+    assertThrows(
+        IllegalStateException.class,
+        () -> scans.upsertAssetPolicyStateIfCurrent(policyState),
+        "an evaluator that read waivers before their revision changed must be fenced");
+    long currentWaiverRevision = scans.waiverRevision().currentRevision();
+    SecurityScanDao.AssetPolicyState refreshedPolicyState =
+        scans.upsertAssetPolicyStateIfCurrent(new SecurityScanDao.AssetPolicyState(
+            policyState.assetId(),
+            policyState.profileId(),
+            policyState.repositoryId(),
+            policyState.contentGeneration(),
+            policyState.latestScanRunId(),
+            policyState.policyId(),
+            policyState.policyRevision(),
+            policyState.configRevision(),
+            policyState.policyDecision(),
+            policyState.policyReasonCode(),
+            policyState.waivedFindings(),
+            policyState.staleAt(),
+            policyState.nextWaiverExpiry(),
+            now.plusSeconds(3),
+            policyState.version(),
+            currentWaiverRevision));
     scans.upsertRepositoryConfig(new SecurityScanDao.RepositoryScanConfig(
         repositoryId,
         true,
@@ -663,7 +703,8 @@ public abstract class PersistenceApiContract {
         new SecurityScanDao.AssetPolicyState(
             assetId, profileId, repositoryId, 1, runId, policyId, 1L,
             config.configRevision(), PolicyDecision.ALLOW, "STALE_POLICY_WORKER", 0,
-            null, null, now.plusSeconds(5), policyState.version()));
+            null, null, now.plusSeconds(5), refreshedPolicyState.version(),
+            currentWaiverRevision));
     assertEquals(
         PolicyDecision.BLOCK_VULNERABILITY,
         afterStalePolicy.policyDecision(),
@@ -685,6 +726,39 @@ public abstract class PersistenceApiContract {
         restoredSourceConfig.configRevision() + 1,
         reboundConfig.configRevision(),
         "switching policy revisions must invalidate materialized repository decisions");
+
+    SecurityScanDao.ScanWaiver globalWaiver =
+        scans.createWaiver(new SecurityScanDao.ScanWaiver(
+            null,
+            "GLOBAL",
+            null,
+            null,
+            null,
+            "GHSA-fixture",
+            null,
+            Map.of(),
+            "Installation-wide advisory exception",
+            null,
+            null,
+            "contract",
+            "contract",
+            null,
+            now.plusSeconds(7),
+            now.plusSeconds(7)));
+    assertTrue(scans.findAssetPolicyState(assetId, profileId, repositoryId).isPresent());
+    assertEquals(
+        0,
+        scans.invalidatePolicyStatesForWaiver(globalWaiver),
+        "global waiver changes must advance a watermark instead of deleting the state table");
+    SecurityScanDao.WaiverRevision globalRevision = scans.waiverRevision();
+    assertEquals(currentWaiverRevision + 1, globalRevision.currentRevision());
+    assertEquals(globalRevision.currentRevision(), globalRevision.globalInvalidationRevision());
+    assertTrue(scans.findAssetPolicyState(assetId, profileId, repositoryId).isPresent());
+    assertEquals(
+        globalRevision.globalInvalidationRevision(),
+        scans.findDownloadPolicySnapshots(assetId, repositoryId)
+            .getFirst()
+            .requiredWaiverRevision());
   }
 
   @Test

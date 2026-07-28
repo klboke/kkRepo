@@ -495,7 +495,8 @@ asset/blob binding，只有 candidate 缺失或指向不同 Blob 时才推进 ge
 - run/SBOM 的 `last_accessed_at` retention 索引，以及 run 到 snapshot/SBOM 的索引；
 - asset state 的 `repository_id + scan_state + policy_decision` 覆盖索引，以及
   asset state、repository policy state 到 `latest_scan_run_id` 的反向索引；
-- waiver 的 repository/asset/id 活跃游标索引与 finding 反向索引；
+- waiver 的 repository/asset/id 活跃游标、finding/advisory/package selector 索引；
+- repository policy state 的 config/waiver revision 上下文索引；
 - finding、run subject、scanner snapshot 的 retention/关联索引。
 
 事件 backlog 指标只读取 `artifact_change_event` 主键最小/最大水位；周期性状态指标按
@@ -603,11 +604,17 @@ collation 的行为。
 - `POLICY_ONLY`：复用 immutable run/finding，只重新计算 policy、waiver 和 group
   入口上下文。
 
-对 candidate 自动任务建立以下语义的唯一键：
+candidate 自动任务使用由 candidate 当前入队 marker 派生的稳定 request UUID，并建立
+以下语义的唯一键：
 
 ```text
 asset + content generation + profile revision + stage + requested scanner snapshot
++ candidate enqueue request UUID
 ```
+
+同一 marker 被多个副本重复处理时 UUID 相同，因此仍会去重；仓库关闭后重新启用、
+profile 范围扩大等 backfill 会刷新 marker，从而得到新的 UUID，不能错误复用旧的
+`SUCCEEDED` 终态任务并把 asset 永久留在 `PENDING`。
 
 手动强制扫描增加 request UUID，因此可以有新的审计记录；普通重复点击应通过
 Idempotency-Key 合并。
@@ -806,6 +813,7 @@ policy、结果年龄和 waiver。为避免一个入口覆盖另一个入口的�
 - `policy_id`
 - `policy_revision`
 - `config_revision`
+- `waiver_revision`
 - `policy_decision`
 - `policy_reason_code`
 - `waived_findings`
@@ -816,7 +824,8 @@ policy、结果年龄和 waiver。为避免一个入口覆盖另一个入口的�
 
 下载热路径通过一次聚合查询读取 asset/blob 分类字段、member 与 entry/group 配置、
 profile、candidate、最新 state、policy 和对应的 policy state，并同时校验 candidate
-generation、最新 run、config/policy revision、结果年龄和下一次 waiver 到期时间。
+generation、最新 run、config/policy/waiver revision、全局 waiver 失效水位、结果年龄
+和下一次 waiver 到期时间。
 任一字段不一致时返回 pending，不在请求内查询 finding，也不把节点本地 cache 作为
 阻断依据。后台 reconciler 使用有界、确定性去重的 `POLICY_ONLY` 任务重新物化；多副本
 同时运行不会产生不同的最终决定。
@@ -849,6 +858,23 @@ waiver 字段至少包含：
 
 waiver 不能修改原始 finding。策略重新计算时把有效 waiver 作为独立输入，并把命中
 waiver 的 finding 数量写入 policy evaluation。
+
+`security_scan_waiver_revision` 保存单例的单调 `current_revision` 和
+`global_invalidation_revision`。每次创建或删除 waiver 都在同一数据库事务中推进
+`current_revision`；policy evaluator 在读取 waiver 前捕获 revision，写
+`asset_security_policy_state` 时对 singleton 行持共享锁并校验 revision 未变化。
+因此另一个副本不能在 waiver 删除后重新插入基于旧 waiver 集合计算的 `ALLOW`。
+
+repository/asset 范围的 waiver 仍只删除对应 policy state；无 repository/asset 的广域
+waiver 不在管理 API 事务内执行全表 `DELETE`，而是 O(1) 推进
+`global_invalidation_revision`。下载聚合快照将低于该水位的 state 视为 pending，
+reconciler 以有界批次重算，并把 current revision 放入 `POLICY_ONLY` 任务的确定性
+request UUID，避免新一轮重算复用旧终态任务。
+
+Findings 列表不会加载全部 waiver 历史。DAO 只按当前页的 finding ID、advisory/alias、
+package selector 及可见 run subject 的 repository/asset 集合查询候选 waiver，再由
+服务层执行精确组合匹配；分页响应的内存和查询工作量不再随安装生命周期内所有 waiver
+线性增长。
 
 管理 UI 不提供从空表单创建全局或整仓豁免的入口。普通交互必须从具体 finding 发起，
 后端根据 `security_scan_run_subject` 返回当前操作者可管理的仓库制品，UI 只展示

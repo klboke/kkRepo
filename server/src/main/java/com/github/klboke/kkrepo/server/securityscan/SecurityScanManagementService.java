@@ -237,15 +237,21 @@ public class SecurityScanManagementService {
       visibleRepositoryNames.put(repository.id(), repository.name());
     }
     Set<Long> visibleRepositoryIds = visibleRepositoryNames.keySet();
-    List<ScanWaiver> waivers = loadAllWaivers();
     Instant now = Instant.now();
     Map<Long, List<ScanRunSubject>> subjectsByRun = new LinkedHashMap<>();
-    List<FindingView> views = rawPage.items().stream().map(finding -> {
-      List<ScanRunSubject> subjects = subjectsByRun.computeIfAbsent(
+    for (ScanFinding finding : rawPage.items()) {
+      subjectsByRun.computeIfAbsent(
           finding.scanRunId(),
           id -> distinctSubjects(scans.listRunSubjects(id).stream()
               .filter(subject -> visibleRepositoryIds.contains(subject.repositoryId()))
               .toList()));
+    }
+    List<ScanRunSubject> pageSubjects = distinctSubjects(
+        subjectsByRun.values().stream().flatMap(List::stream).toList());
+    List<ScanWaiver> waivers = loadWaiversForFindings(rawPage.items(), pageSubjects);
+    List<FindingView> views = rawPage.items().stream().map(finding -> {
+      List<ScanRunSubject> subjects =
+          subjectsByRun.getOrDefault(finding.scanRunId(), List.of());
       List<ScanWaiver> matches = matchingWaivers(finding, subjects, waivers);
       List<ScanWaiver> activeMatches = matches.stream()
           .filter(waiver -> SecurityScanWaiverMatcher.isActive(waiver, now))
@@ -276,13 +282,14 @@ public class SecurityScanManagementService {
     requireWaiverPermission(actor, "create");
     ScanFinding finding = scans.findFinding(findingId)
         .orElseThrow(() -> notFound("Security scan finding not found"));
-    List<ScanWaiver> waivers = loadAllWaivers();
+    List<ScanRunSubject> runSubjects = scans.listRunSubjects(finding.scanRunId());
+    List<ScanWaiver> waivers = loadWaiversForFindings(List.of(finding), runSubjects);
     Instant now = Instant.now();
     List<WaiverTargetView> targets = new ArrayList<>();
     Set<String> seen = new LinkedHashSet<>();
     int administrableTargetCount = 0;
     int waivedTargetCount = 0;
-    for (ScanRunSubject subject : scans.listRunSubjects(finding.scanRunId())) {
+    for (ScanRunSubject subject : runSubjects) {
       RepositoryRecord repository = repositories.findById(subject.repositoryId()).orElse(null);
       AssetRecord asset = assets.findAssetById(subject.assetId()).orElse(null);
       if (repository == null
@@ -335,7 +342,10 @@ public class SecurityScanManagementService {
     if (subjects.isEmpty()) throw notFound("Security scan finding not found");
     Instant now = Instant.now();
     List<WaiverView> waivers =
-        matchingWaivers(finding, subjects, loadAllWaivers()).stream()
+        matchingWaivers(
+            finding,
+            subjects,
+            loadWaiversForFindings(List.of(finding), subjects)).stream()
             .map(waiver -> waiverView(waiver, now))
             .toList();
     int active = (int) waivers.stream().filter(WaiverView::active).count();
@@ -689,18 +699,35 @@ public class SecurityScanManagementService {
     return List.copyOf(visibleWaivers);
   }
 
-  private List<ScanWaiver> loadAllWaivers() {
-    List<ScanWaiver> waivers = new ArrayList<>();
-    long cursor = 0;
-    while (true) {
-      List<ScanWaiver> page = scans.listWaivers(null, cursor, 1000);
-      if (page.isEmpty()) break;
-      waivers.addAll(page);
-      long nextCursor = page.getLast().id();
-      if (page.size() < 1000 || nextCursor <= cursor) break;
-      cursor = nextCursor;
+  private List<ScanWaiver> loadWaiversForFindings(
+      List<ScanFinding> findings, List<ScanRunSubject> subjects) {
+    if (findings == null || findings.isEmpty() || subjects == null || subjects.isEmpty()) {
+      return List.of();
     }
-    return List.copyOf(waivers);
+    List<Long> findingIds = findings.stream()
+        .map(ScanFinding::id)
+        .filter(java.util.Objects::nonNull)
+        .distinct()
+        .toList();
+    List<String> advisorySelectors = findings.stream()
+        .flatMap(finding -> java.util.stream.Stream.concat(
+            java.util.stream.Stream.of(finding.advisoryId()),
+            finding.aliases().stream()))
+        .filter(value -> value != null && !value.isBlank())
+        .distinct()
+        .toList();
+    List<String> packageSelectors = findings.stream()
+        .flatMap(finding -> java.util.stream.Stream.of(
+            finding.packageUrl(), finding.packageName()))
+        .filter(value -> value != null && !value.isBlank())
+        .distinct()
+        .toList();
+    return scans.listWaiversForFindings(
+        findingIds,
+        advisorySelectors,
+        packageSelectors,
+        subjects.stream().map(ScanRunSubject::repositoryId).distinct().toList(),
+        subjects.stream().map(ScanRunSubject::assetId).distinct().toList());
   }
 
   private List<ScanWaiver> loadActiveWaivers(
