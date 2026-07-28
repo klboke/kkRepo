@@ -15,6 +15,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.AssetPolicyState;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.AssetSecurityState;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.DownloadPolicyContext;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.DownloadPolicySnapshot;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.RepositoryScanConfig;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanCandidate;
@@ -62,6 +63,50 @@ class ArtifactDownloadPolicyTest {
     assertEquals(PolicyDecision.ALLOW, policy.beforeRead(10L, null).decision());
 
     verify(scans).findDownloadPolicySnapshots(10L, null);
+    verifyNoMoreInteractions(scans);
+  }
+
+  @Test
+  void uncachedRemoteArtifactUsesRepositoryPendingPolicy() {
+    properties.setEnabled(true);
+    when(scans.findDownloadPolicyContexts(10L, null)).thenReturn(List.of(
+        new DownloadPolicyContext(
+            config(10L, EnforcementMode.ENFORCE, PolicyAction.BLOCK),
+            profile())));
+
+    ArtifactPolicyException failure = assertThrows(
+        ArtifactPolicyException.class,
+        () -> policy.beforeUncachedRead(
+            10L,
+            RepositoryFormat.MAVEN2,
+            "com/acme/demo/1/demo-1.jar",
+            "artifact",
+            "application/java-archive",
+            42L));
+
+    assertEquals(PolicyDecision.BLOCK_PENDING, failure.decision());
+    verify(scans).findDownloadPolicyContexts(10L, null);
+    verifyNoMoreInteractions(scans);
+  }
+
+  @Test
+  void uncachedRemoteMetadataRemainsNotApplicable() {
+    properties.setEnabled(true);
+    when(scans.findDownloadPolicyContexts(10L, null)).thenReturn(List.of(
+        new DownloadPolicyContext(
+            config(10L, EnforcementMode.ENFORCE, PolicyAction.BLOCK),
+            profile())));
+
+    ArtifactDownloadPolicy.Decision decision = policy.beforeUncachedRead(
+        10L,
+        RepositoryFormat.MAVEN2,
+        "com/acme/maven-metadata.xml",
+        "artifact",
+        "application/xml",
+        -1L);
+
+    assertEquals(PolicyDecision.ALLOW, decision.decision());
+    verify(scans).findDownloadPolicyContexts(10L, null);
     verifyNoMoreInteractions(scans);
   }
 

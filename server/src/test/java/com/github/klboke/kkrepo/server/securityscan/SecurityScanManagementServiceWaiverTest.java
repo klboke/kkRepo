@@ -560,6 +560,58 @@ class SecurityScanManagementServiceWaiverTest {
   }
 
   @Test
+  void globalWaiverRequiresGlobalSecurityAdministration() {
+    when(security.decide(
+        eq(actor.permissionSubject()), eq("nexus:security-scanning:update")))
+        .thenReturn(AccessDecision.deny("not a security administrator"));
+    WaiverCommand command = new WaiverCommand(
+        "GLOBAL",
+        null,
+        null,
+        null,
+        "CVE-2026-0041",
+        null,
+        Map.of(),
+        "Accepted globally",
+        null,
+        null,
+        Instant.now().plusSeconds(604800));
+
+    ResponseStatusException exception =
+        assertThrows(ResponseStatusException.class, () -> service.createWaiver(actor, command));
+
+    assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
+    verify(scans, never()).createWaiver(any());
+  }
+
+  @Test
+  void globalSecurityAdministratorMayCreateAGlobalWaiver() {
+    when(security.decide(
+        eq(actor.permissionSubject()), eq("nexus:security-scanning:update")))
+        .thenReturn(AccessDecision.allow());
+    when(scans.createWaiver(any())).thenAnswer(invocation -> invocation.getArgument(0));
+    WaiverCommand command = new WaiverCommand(
+        "GLOBAL",
+        null,
+        null,
+        null,
+        "CVE-2026-0041",
+        null,
+        Map.of(),
+        "Accepted globally",
+        null,
+        null,
+        Instant.now().plusSeconds(604800));
+
+    service.createWaiver(actor, command);
+
+    ArgumentCaptor<ScanWaiver> waiver = ArgumentCaptor.forClass(ScanWaiver.class);
+    verify(scans).createWaiver(waiver.capture());
+    assertEquals("GLOBAL", waiver.getValue().scopeType());
+    verify(scans).invalidatePolicyStatesForWaiver(waiver.getValue());
+  }
+
+  @Test
   void deletingAnAssetScopedWaiverRequiresAdministrationOfTheAssetRepository() {
     ScanWaiver waiver = waiver(
         51L, null, 23L, null, "CVE-2026-0041", null,
@@ -581,6 +633,47 @@ class SecurityScanManagementServiceWaiverTest {
     assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
     verify(scans, never()).deleteWaiver(51L);
     verify(scans, never()).invalidatePolicyStatesForWaiver(any());
+  }
+
+  @Test
+  void deletingAGlobalWaiverRequiresGlobalSecurityAdministration() {
+    ScanWaiver waiver = waiver(
+        51L, null, null, null, "CVE-2026-0041", null,
+        "Accepted globally", null, Instant.now());
+    when(security.decide(
+        eq(actor.permissionSubject()), eq("nexus:security-scanning-waivers:delete")))
+        .thenReturn(AccessDecision.allow());
+    when(security.decide(
+        eq(actor.permissionSubject()), eq("nexus:security-scanning:update")))
+        .thenReturn(AccessDecision.deny("not a security administrator"));
+    when(scans.findWaiver(51L)).thenReturn(Optional.of(waiver));
+
+    ResponseStatusException exception =
+        assertThrows(ResponseStatusException.class, () -> service.deleteWaiver(actor, 51L));
+
+    assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
+    verify(scans, never()).deleteWaiver(51L);
+    verify(scans, never()).invalidatePolicyStatesForWaiver(any());
+  }
+
+  @Test
+  void globalSecurityAdministratorMayDeleteAGlobalWaiver() {
+    ScanWaiver waiver = waiver(
+        51L, null, null, null, "CVE-2026-0041", null,
+        "Accepted globally", null, Instant.now());
+    when(security.decide(
+        eq(actor.permissionSubject()), eq("nexus:security-scanning-waivers:delete")))
+        .thenReturn(AccessDecision.allow());
+    when(security.decide(
+        eq(actor.permissionSubject()), eq("nexus:security-scanning:update")))
+        .thenReturn(AccessDecision.allow());
+    when(scans.findWaiver(51L)).thenReturn(Optional.of(waiver));
+    when(scans.deleteWaiver(51L)).thenReturn(true);
+
+    assertEquals(waiver, service.deleteWaiver(actor, 51L));
+
+    verify(scans).deleteWaiver(51L);
+    verify(scans).invalidatePolicyStatesForWaiver(waiver);
   }
 
   @Test

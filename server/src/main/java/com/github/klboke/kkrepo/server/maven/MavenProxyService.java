@@ -193,6 +193,15 @@ public class MavenProxyService {
           if (negativeCache != null) negativeCache.invalidate(runtime, path);
           if (headOnly) {
             proxyStateDao.recordSuccess(runtime.id(), now);
+            if (downloadPolicy != null) {
+              downloadPolicy.beforeUncachedRead(
+                  runtime.id(),
+                  runtime.format(),
+                  path.path(),
+                  "artifact",
+                  result.contentType(),
+                  contentLength(result.header("Content-Length")));
+            }
             return remoteHeadResponse(result);
           }
           return persistAndServe(runtime, path, result, headOnly, now);

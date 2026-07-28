@@ -28,6 +28,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanMetricS
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScannerSnapshot;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.protocol.docker.DockerConstants;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.BackfillStatus;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyDecision;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.RequestReason;
@@ -48,6 +49,7 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.boot.health.contributor.Status;
 import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 
 class SecurityScanInfrastructureTest {
   @Test
@@ -423,7 +425,14 @@ class SecurityScanInfrastructureTest {
 
     assertEquals(HttpStatus.SERVICE_UNAVAILABLE, pending.getStatusCode());
     assertEquals("12", pending.getHeaders().getFirst("Retry-After"));
+    assertEquals(
+        DockerConstants.API_VERSION,
+        pending.getHeaders().getFirst(DockerConstants.API_VERSION_HEADER));
+    assertEquals(MediaType.APPLICATION_JSON, pending.getHeaders().getContentType());
     assertNotNull(pending.getBody());
+    Map<?, ?> body = (Map<?, ?>) pending.getBody();
+    List<?> errors = (List<?>) body.get("errors");
+    assertEquals("DENIED", ((Map<?, ?>) errors.getFirst()).get("code"));
     assertEquals(HttpStatus.FORBIDDEN, denied.getStatusCode());
   }
 

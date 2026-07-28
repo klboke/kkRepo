@@ -1,8 +1,10 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
+import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.AssetPolicyState;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.AssetSecurityState;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.DownloadPolicyContext;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.DownloadPolicySnapshot;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.RepositoryScanConfig;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanCandidate;
@@ -61,6 +63,34 @@ public class ArtifactDownloadPolicy {
     if (!properties.isEnabled() || internalScannerRequest()) return Decision.allow();
     return evaluateSnapshots(
         () -> scans.findDownloadPolicySnapshots(assetId, entryRepositoryId),
+        false);
+  }
+
+  /**
+   * Applies repository policy to successful upstream metadata for content that is not available as
+   * a current local asset. Applicable content has no scan state yet, so it follows each
+   * configuration's pending action.
+   */
+  public Decision beforeUncachedRead(
+      long sourceRepositoryId,
+      RepositoryFormat format,
+      String path,
+      String kind,
+      String contentType,
+      long contentLength) {
+    if (!properties.isEnabled() || internalScannerRequest()) return Decision.allow();
+    Long entryRepositoryId = requestEntryRepositoryId();
+    return evaluateSnapshots(
+        () -> scans.findDownloadPolicyContexts(sourceRepositoryId, entryRepositoryId).stream()
+            .map(context -> pendingSnapshot(
+                sourceRepositoryId,
+                format,
+                path,
+                kind,
+                contentType,
+                contentLength,
+                context))
+            .toList(),
         false);
   }
 
@@ -194,6 +224,31 @@ public class ArtifactDownloadPolicy {
       case COMPLETE -> evaluateComplete(snapshot, candidate, state);
       case NOT_APPLICABLE -> new Evaluation(config, PolicyDecision.ALLOW, false);
     };
+  }
+
+  private static DownloadPolicySnapshot pendingSnapshot(
+      long sourceRepositoryId,
+      RepositoryFormat format,
+      String path,
+      String kind,
+      String contentType,
+      long contentLength,
+      DownloadPolicyContext context) {
+    return new DownloadPolicySnapshot(
+        0,
+        sourceRepositoryId,
+        format,
+        path,
+        kind,
+        contentType,
+        Math.max(0, contentLength),
+        context.config(),
+        context.profile(),
+        null,
+        null,
+        null,
+        null,
+        0);
   }
 
   private Evaluation evaluateComplete(

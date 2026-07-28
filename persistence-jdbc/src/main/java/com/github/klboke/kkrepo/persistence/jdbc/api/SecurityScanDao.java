@@ -52,11 +52,21 @@ public interface SecurityScanDao {
    * Batch form of {@link #findDownloadPolicySnapshots(long, Long)} for shared Docker blobs.
    *
    * <p>Callers must pass at most {@value #MAX_DOWNLOAD_POLICY_BATCH} distinct asset IDs. The bound
-   * keeps the hot-path statement
-   * below database parameter limits while avoiding one policy query per referencing manifest.
+   * keeps the hot-path statement below database parameter limits while avoiding one policy query
+   * per referencing manifest.
    */
   List<DownloadPolicySnapshot> findDownloadPolicySnapshots(
       List<Long> assetIds, Long entryRepositoryId);
+
+  /**
+   * Loads the source and entry-path repository configurations for content that has not been
+   * materialized locally yet.
+   *
+   * <p>This is used to apply the same fail-closed policy to successful remote HEAD responses
+   * without downloading or inventing an asset row.
+   */
+  List<DownloadPolicyContext> findDownloadPolicyContexts(
+      long sourceRepositoryId, Long entryRepositoryId);
 
   /**
    * Folds a generic artifact content-change event into the scan-specific candidate projection.
@@ -419,6 +429,10 @@ public interface SecurityScanDao {
       long configRevision,
       Instant createdAt,
       Instant updatedAt) {}
+
+  record DownloadPolicyContext(
+      RepositoryScanConfig config,
+      ScanProfile profile) {}
 
   record DownloadPolicySnapshot(
       long assetId,

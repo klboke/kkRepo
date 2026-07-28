@@ -525,16 +525,13 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         """, reason, assetBlobId);
   }
 
+  @Transactional
   public int markBlobDeletedIfUnreferenced(long assetBlobId, String reason) {
-    return jdbcTemplate.update("""
-        UPDATE asset_blob b
-        SET deleted_at = COALESCE(b.deleted_at, CURRENT_TIMESTAMP),
-            delete_reason = COALESCE(b.delete_reason, ?),
-            delete_claimed_at = NULL
-        WHERE b.id = ?
-          AND NOT EXISTS (SELECT 1 FROM asset a WHERE a.asset_blob_id = b.id)
-          AND NOT EXISTS (SELECT 1 FROM blob_reference r WHERE r.blob_id = b.id)
-        """, reason, assetBlobId);
+    if (!lockBlobIds(List.of(assetBlobId)).contains(assetBlobId)
+        || !findUnreferencedBlobIds(List.of(assetBlobId), 1).contains(assetBlobId)) {
+      return 0;
+    }
+    return markBlobIdsDeleted(List.of(assetBlobId), reason);
   }
 
   public int hardDeleteBlobById(long assetBlobId) {
@@ -630,12 +627,32 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
       return new BlobReconcileWindow(0, 0, 0, true);
     }
 
-    List<Long> orphanIds = findUnreferencedBlobIds(scannedIds, safeMarkBatchSize);
+    // Discover likely orphans without holding a broad scan-window lock, then lock only that bounded
+    // candidate set and recheck ownership in a fresh statement. PostgreSQL does not re-evaluate a
+    // NOT EXISTS subquery after an UPDATE waits on a row lock, so the explicit lock-then-recheck
+    // sequence is required to serialize this marker with asset and scanner-document publication.
+    List<Long> candidates = findUnreferencedBlobIds(scannedIds, safeMarkBatchSize);
+    List<Long> lockedCandidates = lockBlobIds(candidates);
+    List<Long> orphanIds =
+        findUnreferencedBlobIds(lockedCandidates, Math.max(1, lockedCandidates.size()));
     int marked = markBlobIdsDeleted(orphanIds, reason);
-    long nextLastSeenId = orphanIds.size() >= safeMarkBatchSize
-        ? orphanIds.get(orphanIds.size() - 1)
+    long nextLastSeenId = candidates.size() >= safeMarkBatchSize
+        ? candidates.get(candidates.size() - 1)
         : scannedIds.get(scannedIds.size() - 1);
     return new BlobReconcileWindow(marked, scannedIds.size(), nextLastSeenId, false);
+  }
+
+  private List<Long> lockBlobIds(List<Long> blobIds) {
+    if (blobIds.isEmpty()) return List.of();
+    return jdbcTemplate.queryForList("""
+        SELECT id
+        FROM asset_blob
+        WHERE id IN (""" + placeholders(blobIds.size()) + """
+          )
+          AND deleted_at IS NULL
+        ORDER BY id
+        FOR UPDATE SKIP LOCKED
+        """, Long.class, blobIds.toArray());
   }
 
   private List<Long> findUnreferencedBlobIds(List<Long> scannedIds, int maxItems) {
@@ -645,13 +662,11 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
     return jdbcTemplate.queryForList("""
         SELECT b.id
         FROM asset_blob b
-        LEFT JOIN asset a ON a.asset_blob_id = b.id
-        LEFT JOIN blob_reference r ON r.blob_id = b.id
         WHERE b.id IN (""" + placeholders(scannedIds.size()) + """
           )
           AND b.deleted_at IS NULL
-          AND a.id IS NULL
-          AND r.blob_id IS NULL
+          AND NOT EXISTS (SELECT 1 FROM asset a WHERE a.asset_blob_id = b.id)
+          AND NOT EXISTS (SELECT 1 FROM blob_reference r WHERE r.blob_id = b.id)
         ORDER BY b.id
         LIMIT ?
         """, Long.class, args.toArray());

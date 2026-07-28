@@ -18,14 +18,24 @@ public class JdbcBlobReferenceDao implements BlobReferenceDao {
   @Override
   @Transactional
   public boolean retain(String ownerType, long ownerId, long blobId) {
-    // Lock the blob row in the same statement that publishes ownership. GC takes the same row
-    // lock before its final reference check and object deletion, so a retain either wins first or
-    // observes that GC has already removed the row; it can never appear after physical deletion.
+    // Soft deletion is the committed, irreversible fence before GC touches external storage.
+    // Explicitly lock the active blob row before publishing ownership. The orphan marker and final
+    // GC take the same row lock, so this ordering is portable across MySQL and PostgreSQL: retain
+    // either commits first and defeats the marker, or observes the committed fence and is rejected.
+    boolean active = !jdbc.query("""
+        SELECT id
+        FROM asset_blob
+        WHERE id = ?
+          AND deleted_at IS NULL
+        FOR UPDATE
+        """, (rs, rowNum) -> rs.getLong(1), blobId).isEmpty();
+    if (!active) return false;
     return JdbcInserts.tryUpdate(jdbc, """
         INSERT INTO blob_reference (owner_type, owner_id, blob_id, created_at)
         SELECT ?, ?, ?, CURRENT_TIMESTAMP
           FROM asset_blob source_blob
          WHERE source_blob.id = ?
+           AND source_blob.deleted_at IS NULL
            AND NOT EXISTS (
           SELECT 1
           FROM blob_reference

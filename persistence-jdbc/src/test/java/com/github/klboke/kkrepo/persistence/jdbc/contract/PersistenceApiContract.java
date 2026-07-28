@@ -286,6 +286,40 @@ public abstract class PersistenceApiContract {
     long profileId = profile.id();
     long policyId = policy.id();
 
+    long concurrentConfigRepositoryId =
+        createRepository("scan-config-concurrent", RepositoryFormat.MAVEN2);
+    SecurityScanDao.RepositoryScanConfig firstConcurrentConfig =
+        new SecurityScanDao.RepositoryScanConfig(
+            concurrentConfigRepositoryId, true, profileId, true, false,
+            EnforcementMode.AUDIT, PolicyAction.ALLOW, PolicyAction.BLOCK,
+            PolicyAction.ALLOW, 3600L, null, 1, now, now);
+    SecurityScanDao.RepositoryScanConfig secondConcurrentConfig =
+        new SecurityScanDao.RepositoryScanConfig(
+            concurrentConfigRepositoryId, false, profileId, true, false,
+            EnforcementMode.ENFORCE, PolicyAction.BLOCK, PolicyAction.ALLOW,
+            PolicyAction.BLOCK, 7200L, null, 1, now.plusSeconds(1), now.plusSeconds(1));
+    CyclicBarrier concurrentConfigStart = new CyclicBarrier(2);
+    List<SecurityScanDao.RepositoryScanConfig> concurrentConfigs = invokeConcurrently(List.of(
+        () -> {
+          concurrentConfigStart.await();
+          return inTransaction(() -> scans.upsertRepositoryConfig(firstConcurrentConfig));
+        },
+        () -> {
+          concurrentConfigStart.await();
+          return inTransaction(() -> scans.upsertRepositoryConfig(secondConcurrentConfig));
+        }), 2);
+    assertTrue(concurrentConfigs.getFirst().enabled());
+    assertEquals(EnforcementMode.AUDIT, concurrentConfigs.getFirst().enforcementMode());
+    assertFalse(concurrentConfigs.getLast().enabled());
+    assertEquals(EnforcementMode.ENFORCE, concurrentConfigs.getLast().enforcementMode());
+    assertEquals(
+        List.of(1L, 2L),
+        concurrentConfigs.stream()
+            .map(SecurityScanDao.RepositoryScanConfig::configRevision)
+            .sorted()
+            .toList(),
+        "both concurrent first writes must be applied and receive distinct revisions");
+
     SecurityScanDao.RepositoryScanConfig config = scans.upsertRepositoryConfig(
         new SecurityScanDao.RepositoryScanConfig(
             repositoryId, true, profileId, true, true, EnforcementMode.AUDIT,
@@ -293,6 +327,24 @@ public abstract class PersistenceApiContract {
             3600L, policyId, 1, now, now));
     assertTrue(config.enabled());
     assertEquals(1, config.configRevision());
+    List<SecurityScanDao.DownloadPolicyContext> directPolicyContexts =
+        scans.findDownloadPolicyContexts(repositoryId, repositoryId);
+    assertEquals(1, directPolicyContexts.size());
+    assertEquals(repositoryId, directPolicyContexts.getFirst().config().repositoryId());
+    assertEquals(profileId, directPolicyContexts.getFirst().profile().id());
+    long proxyPolicyRepositoryId =
+        createRepository(
+            "scan-policy-proxy", RepositoryFormat.MAVEN2, RepositoryType.PROXY);
+    scans.upsertRepositoryConfig(new SecurityScanDao.RepositoryScanConfig(
+        proxyPolicyRepositoryId, true, profileId, false, true, EnforcementMode.ENFORCE,
+        PolicyAction.BLOCK, PolicyAction.BLOCK, PolicyAction.BLOCK,
+        3600L, null, 1, now, now));
+    assertEquals(
+        List.of(proxyPolicyRepositoryId),
+        scans.findDownloadPolicyContexts(proxyPolicyRepositoryId, null).stream()
+            .map(context -> context.config().repositoryId())
+            .toList(),
+        "uncached proxy policy lookup must honor the proxy-content toggle");
     assertEquals(
         List.of(repositoryId),
         scans.findRepositoryConfigs(List.of(repositoryId, repositoryId, Long.MAX_VALUE)).stream()
@@ -421,17 +473,90 @@ public abstract class PersistenceApiContract {
     assertEquals(snapshot.id(), observedAgain.id());
     assertEquals(now.plusSeconds(1), observedAgain.observedAt());
 
-    long sbomBlobId = stores().assets().insertBlob(
-        blob(blobStoreId, "security/sbom.json", "scan-sbom"));
+    long deletedDocumentBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "security/deleted-sbom.json", "scan-deleted-sbom"));
     assertEquals(
         1,
-        stores().assets().markBlobDeletedIfUnreferenced(sbomBlobId, "gc-race-fixture"));
+        stores().assets()
+            .markBlobDeletedIfUnreferenced(deletedDocumentBlobId, "gc-race-fixture"));
+    assertFalse(
+        inTransaction(() ->
+            stores()
+                .blobReferences()
+                .retain("security-scan-persisting", taskId, deletedDocumentBlobId)),
+        "a committed soft-delete fence must reject late ownership publication");
+    assertEquals(
+        1,
+        stores().assets().hardDeleteBlobByIdIfDeleted(deletedDocumentBlobId));
+    long sbomBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "security/sbom.json", "scan-sbom"));
     assertTrue(inTransaction(() ->
         stores().blobReferences().retain("security-scan-persisting", taskId, sbomBlobId)));
     assertEquals(
         0,
-        stores().assets().hardDeleteBlobByIdIfDeleted(sbomBlobId),
-        "a retain fenced on the blob row must defeat an earlier GC claim");
+        stores().assets().markBlobDeletedIfUnreferenced(sbomBlobId, "gc-race-fixture"),
+        "ownership published first must prevent the soft-delete fence");
+    long concurrentFenceBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "security/concurrent-sbom.json", "scan-concurrent-sbom"));
+    CyclicBarrier concurrentFenceStart = new CyclicBarrier(2);
+    List<Boolean> concurrentFenceOutcomes = invokeConcurrently(List.of(
+        () -> {
+          concurrentFenceStart.await();
+          return inTransaction(() -> stores().blobReferences().retain(
+              "security-scan-persisting", taskId, concurrentFenceBlobId));
+        },
+        () -> {
+          concurrentFenceStart.await();
+          return inTransaction(() -> stores().assets().markBlobDeletedIfUnreferenced(
+              concurrentFenceBlobId, "gc-concurrent-race-fixture") == 1);
+        }), 2);
+    assertEquals(
+        1,
+        concurrentFenceOutcomes.stream().filter(Boolean::booleanValue).count(),
+        "concurrent ownership publication and the GC fence must have exactly one winner");
+    if (concurrentFenceOutcomes.getFirst()) {
+      assertEquals(
+          1,
+          stores().blobReferences().release(
+              "security-scan-persisting", taskId, concurrentFenceBlobId));
+      assertEquals(
+          1,
+          stores().assets().markBlobDeletedIfUnreferenced(
+              concurrentFenceBlobId, "gc-concurrent-cleanup"));
+    }
+    assertEquals(1, stores().assets().hardDeleteBlobByIdIfDeleted(concurrentFenceBlobId));
+    long concurrentReconcileBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "security/reconcile-sbom.json", "scan-reconcile-sbom"));
+    CyclicBarrier concurrentReconcileStart = new CyclicBarrier(2);
+    List<Boolean> concurrentReconcileOutcomes = invokeConcurrently(List.of(
+        () -> {
+          concurrentReconcileStart.await();
+          return inTransaction(() -> stores().blobReferences().retain(
+              "security-scan-persisting", taskId, concurrentReconcileBlobId));
+        },
+        () -> {
+          concurrentReconcileStart.await();
+          return inTransaction(() -> stores().assets().markUnreferencedBlobsDeletedAfter(
+              concurrentReconcileBlobId - 1,
+              1,
+              1,
+              "gc-concurrent-reconcile-fixture").marked() == 1);
+        }), 2);
+    assertEquals(
+        1,
+        concurrentReconcileOutcomes.stream().filter(Boolean::booleanValue).count(),
+        "concurrent ownership publication and orphan reconciliation must have one winner");
+    if (concurrentReconcileOutcomes.getFirst()) {
+      assertEquals(
+          1,
+          stores().blobReferences().release(
+              "security-scan-persisting", taskId, concurrentReconcileBlobId));
+      assertEquals(
+          1,
+          stores().assets().markBlobDeletedIfUnreferenced(
+              concurrentReconcileBlobId, "gc-concurrent-reconcile-cleanup"));
+    }
+    assertEquals(1, stores().assets().hardDeleteBlobByIdIfDeleted(concurrentReconcileBlobId));
     SecurityScanDao.Sbom sbomDraft = new SecurityScanDao.Sbom(
         null, SubjectKind.ASSET_BLOB, "sha256:" + "2".repeat(64), null,
         "syft", "1.0.0", "c".repeat(64), "d".repeat(64), sbomBlobId,
@@ -673,6 +798,12 @@ public abstract class PersistenceApiContract {
     List<SecurityScanDao.DownloadPolicySnapshot> groupSnapshots =
         scans.findDownloadPolicySnapshots(assetId, groupRepositoryId);
     assertEquals(2, groupSnapshots.size());
+    assertEquals(
+        List.of(repositoryId, groupRepositoryId),
+        scans.findDownloadPolicyContexts(repositoryId, groupRepositoryId).stream()
+            .map(context -> context.config().repositoryId())
+            .toList(),
+        "uncached policy lookup must include only configurations on the entry-to-source path");
     SecurityScanDao.DownloadPolicySnapshot sourceContext = groupSnapshots.stream()
         .filter(row -> row.config().repositoryId() == repositoryId)
         .findFirst()

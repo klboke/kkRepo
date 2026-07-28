@@ -915,6 +915,11 @@ public class SecurityScanManagementService {
         && blank(command.packageSelector())) {
       throw badRequest("A finding, advisory, or package selector is required");
     }
+    if (command.findingId() == null
+        && command.repositoryId() == null
+        && command.assetId() == null) {
+      requireGlobalWrite(actor);
+    }
     ScanFinding selectedFinding = null;
     ScanRunSubject selectedSubject = null;
     RepositoryRecord scopedRepository = command.repositoryId() == null
@@ -1003,7 +1008,11 @@ public class SecurityScanManagementService {
     ScanWaiver waiver = scans.findWaiver(waiverId)
         .orElseThrow(() -> notFound("Waiver not found"));
     Long effectiveRepositoryId = effectiveWaiverRepositoryId(waiver);
-    if (effectiveRepositoryId != null) requireRepositoryAdmin(actor, effectiveRepositoryId);
+    if (effectiveRepositoryId == null) {
+      requireGlobalWrite(actor);
+    } else {
+      requireRepositoryAdmin(actor, effectiveRepositoryId);
+    }
     if (!scans.deleteWaiver(waiverId)) throw notFound("Waiver not found");
     scans.invalidatePolicyStatesForWaiver(waiver);
     return waiver;

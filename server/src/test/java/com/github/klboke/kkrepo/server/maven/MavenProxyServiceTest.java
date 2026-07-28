@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 import com.github.klboke.kkrepo.core.BlobObjectMetadata;
 import com.github.klboke.kkrepo.core.BlobReference;
@@ -20,6 +22,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
 import com.github.klboke.kkrepo.server.support.dao.AssetDaoAdapter;
 import com.github.klboke.kkrepo.server.support.dao.ProxyStateDaoAdapter;
@@ -74,11 +77,15 @@ class MavenProxyServiceTest {
             "Last-Modified", "Mon, 25 May 2026 07:24:48 GMT"),
         InputStream.nullInputStream()));
     RecordingProxyStateDao proxyState = new RecordingProxyStateDao();
-    MavenProxyService service = service(fetcher, proxyState);
+    ArtifactDownloadPolicy downloadPolicy = mock(ArtifactDownloadPolicy.class);
+    MavenProxyService service = service(fetcher, proxyState, downloadPolicy);
+    MavenPath requestedPath = path(
+        "org/gradle/kotlin/gradle-kotlin-dsl-plugins/4.2.1/"
+            + "gradle-kotlin-dsl-plugins-4.2.1.jar");
 
     MavenResponse response = service.get(
         runtime(),
-        path("org/gradle/kotlin/gradle-kotlin-dsl-plugins/4.2.1/gradle-kotlin-dsl-plugins-4.2.1.jar"),
+        requestedPath,
         true);
 
     assertNotNull(fetcher.request);
@@ -91,6 +98,13 @@ class MavenProxyServiceTest {
     assertEquals(Instant.parse("2026-05-25T07:24:48Z"), response.lastModified());
     assertEquals(1, proxyState.successCount);
     assertEquals(0, proxyState.failureCount);
+    verify(downloadPolicy).beforeUncachedRead(
+        runtime().id(),
+        RepositoryFormat.MAVEN2,
+        requestedPath.path(),
+        "artifact",
+        "binary/octet-stream",
+        47706L);
   }
 
   @Test
@@ -272,6 +286,13 @@ class MavenProxyServiceTest {
   }
 
   private static MavenProxyService service(CapturingFetcher fetcher, RecordingProxyStateDao proxyState) {
+    return service(fetcher, proxyState, null);
+  }
+
+  private static MavenProxyService service(
+      CapturingFetcher fetcher,
+      RecordingProxyStateDao proxyState,
+      ArtifactDownloadPolicy downloadPolicy) {
     return new MavenProxyService(
         new EmptyAssetDao(),
         null,
@@ -279,7 +300,9 @@ class MavenProxyServiceTest {
         proxyState,
         fetcher,
         null,
-        new AssetMetadataCache(new InMemorySharedCache(), false, 0, 0));
+        new AssetMetadataCache(new InMemorySharedCache(), false, 0, 0),
+        null,
+        downloadPolicy);
   }
 
   private static RepositoryRuntime runtime() {

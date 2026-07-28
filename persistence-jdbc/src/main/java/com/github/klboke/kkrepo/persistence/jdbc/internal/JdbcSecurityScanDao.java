@@ -27,6 +27,7 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.SubjectKind;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.TaskStatus;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -291,43 +292,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
 
   private final RowMapper<DownloadPolicySnapshot> downloadPolicySnapshotMapper =
       (rs, rowNum) -> {
-        RepositoryScanConfig config = new RepositoryScanConfig(
-            rs.getLong("dp_config_repository_id"),
-            rs.getBoolean("dp_config_enabled"),
-            rs.getLong("dp_config_profile_id"),
-            rs.getBoolean("dp_config_scan_hosted_content"),
-            rs.getBoolean("dp_config_scan_proxy_content"),
-            enumValue(EnforcementMode.class, rs.getString("dp_config_enforcement_mode")),
-            enumValue(PolicyAction.class, rs.getString("dp_config_pending_action")),
-            enumValue(PolicyAction.class, rs.getString("dp_config_failure_action")),
-            enumValue(PolicyAction.class, rs.getString("dp_config_partial_action")),
-            nullableLong(rs, "dp_config_max_result_age_seconds"),
-            nullableLong(rs, "dp_config_policy_id"),
-            rs.getLong("dp_config_revision"),
-            nullableInstant(rs, "dp_config_created_at"),
-            nullableInstant(rs, "dp_config_updated_at"));
-        ScanProfile profile = rs.getObject("dp_profile_id") == null ? null : new ScanProfile(
-            rs.getLong("dp_profile_id"),
-            rs.getString("dp_profile_name"),
-            rs.getBoolean("dp_profile_enabled"),
-            rs.getString("dp_profile_catalog_engine"),
-            rs.getString("dp_profile_matcher_engine"),
-            list(rs.getString("dp_profile_scanner_types_json")),
-            json.read(rs.getString("dp_profile_target_rules_json")),
-            rs.getLong("dp_profile_max_input_bytes"),
-            rs.getInt("dp_profile_max_archive_entries"),
-            rs.getLong("dp_profile_max_uncompressed_bytes"),
-            rs.getLong("dp_profile_max_single_file_bytes"),
-            rs.getInt("dp_profile_max_nested_depth"),
-            rs.getInt("dp_profile_timeout_seconds"),
-            enumValue(
-                OciPlatformPolicy.class,
-                rs.getString("dp_profile_oci_platform_policy")),
-            list(rs.getString("dp_profile_required_platforms_json")),
-            rs.getString("dp_profile_configuration_digest"),
-            rs.getLong("dp_profile_revision"),
-            nullableInstant(rs, "dp_profile_created_at"),
-            nullableInstant(rs, "dp_profile_updated_at"));
+        RepositoryScanConfig config = downloadPolicyConfig(rs);
+        ScanProfile profile = downloadPolicyProfile(rs);
         ScanCandidate candidate =
             rs.getObject("dp_candidate_asset_id") == null ? null : new ScanCandidate(
                 rs.getLong("dp_candidate_asset_id"),
@@ -409,6 +375,54 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
             policyState,
             rs.getLong("dp_required_waiver_revision"));
       };
+
+  private final RowMapper<DownloadPolicyContext> downloadPolicyContextMapper =
+      (rs, rowNum) ->
+          new DownloadPolicyContext(downloadPolicyConfig(rs), downloadPolicyProfile(rs));
+
+  private RepositoryScanConfig downloadPolicyConfig(ResultSet rs) throws SQLException {
+    return new RepositoryScanConfig(
+        rs.getLong("dp_config_repository_id"),
+        rs.getBoolean("dp_config_enabled"),
+        rs.getLong("dp_config_profile_id"),
+        rs.getBoolean("dp_config_scan_hosted_content"),
+        rs.getBoolean("dp_config_scan_proxy_content"),
+        enumValue(EnforcementMode.class, rs.getString("dp_config_enforcement_mode")),
+        enumValue(PolicyAction.class, rs.getString("dp_config_pending_action")),
+        enumValue(PolicyAction.class, rs.getString("dp_config_failure_action")),
+        enumValue(PolicyAction.class, rs.getString("dp_config_partial_action")),
+        nullableLong(rs, "dp_config_max_result_age_seconds"),
+        nullableLong(rs, "dp_config_policy_id"),
+        rs.getLong("dp_config_revision"),
+        nullableInstant(rs, "dp_config_created_at"),
+        nullableInstant(rs, "dp_config_updated_at"));
+  }
+
+  private ScanProfile downloadPolicyProfile(ResultSet rs) throws SQLException {
+    if (rs.getObject("dp_profile_id") == null) return null;
+    return new ScanProfile(
+        rs.getLong("dp_profile_id"),
+        rs.getString("dp_profile_name"),
+        rs.getBoolean("dp_profile_enabled"),
+        rs.getString("dp_profile_catalog_engine"),
+        rs.getString("dp_profile_matcher_engine"),
+        list(rs.getString("dp_profile_scanner_types_json")),
+        json.read(rs.getString("dp_profile_target_rules_json")),
+        rs.getLong("dp_profile_max_input_bytes"),
+        rs.getInt("dp_profile_max_archive_entries"),
+        rs.getLong("dp_profile_max_uncompressed_bytes"),
+        rs.getLong("dp_profile_max_single_file_bytes"),
+        rs.getInt("dp_profile_max_nested_depth"),
+        rs.getInt("dp_profile_timeout_seconds"),
+        enumValue(
+            OciPlatformPolicy.class,
+            rs.getString("dp_profile_oci_platform_policy")),
+        list(rs.getString("dp_profile_required_platforms_json")),
+        rs.getString("dp_profile_configuration_digest"),
+        rs.getLong("dp_profile_revision"),
+        nullableInstant(rs, "dp_profile_created_at"),
+        nullableInstant(rs, "dp_profile_updated_at"));
+  }
 
   private final RowMapper<ScanWaiver> waiverMapper = (rs, rowNum) -> new ScanWaiver(
       rs.getLong("id"),
@@ -519,6 +533,94 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         """,
         configMapper,
         repositoryScopeParameter(ids));
+  }
+
+  @Override
+  public List<DownloadPolicyContext> findDownloadPolicyContexts(
+      long sourceRepositoryId, Long entryRepositoryId) {
+    if (sourceRepositoryId <= 0) return List.of();
+    return jdbc.query("""
+        WITH RECURSIVE
+        source_ancestors(repository_id) AS (
+          SELECT id
+          FROM repository
+          WHERE id = ?
+          UNION
+          SELECT rm.repository_id
+          FROM repository_member rm
+          JOIN source_ancestors ancestor
+            ON ancestor.repository_id = rm.member_repository_id
+        ),
+        entry_descendants(repository_id) AS (
+          SELECT id
+          FROM repository
+          WHERE id = ?
+          UNION
+          SELECT rm.member_repository_id
+          FROM repository_member rm
+          JOIN entry_descendants descendant
+            ON descendant.repository_id = rm.repository_id
+        ),
+        policy_contexts(repository_id) AS (
+          SELECT ancestor.repository_id
+          FROM source_ancestors ancestor
+          WHERE ancestor.repository_id = ?
+             OR ancestor.repository_id IN (
+               SELECT repository_id FROM entry_descendants
+             )
+        )
+        SELECT
+          c.repository_id AS dp_config_repository_id,
+          c.enabled AS dp_config_enabled,
+          c.profile_id AS dp_config_profile_id,
+          c.scan_hosted_content AS dp_config_scan_hosted_content,
+          c.scan_proxy_content AS dp_config_scan_proxy_content,
+          c.enforcement_mode AS dp_config_enforcement_mode,
+          c.pending_action AS dp_config_pending_action,
+          c.failure_action AS dp_config_failure_action,
+          c.partial_action AS dp_config_partial_action,
+          c.max_result_age_seconds AS dp_config_max_result_age_seconds,
+          c.policy_id AS dp_config_policy_id,
+          c.config_revision AS dp_config_revision,
+          c.created_at AS dp_config_created_at,
+          c.updated_at AS dp_config_updated_at,
+          profile.id AS dp_profile_id,
+          profile.name AS dp_profile_name,
+          profile.enabled AS dp_profile_enabled,
+          profile.catalog_engine AS dp_profile_catalog_engine,
+          profile.matcher_engine AS dp_profile_matcher_engine,
+          profile.scanner_types_json AS dp_profile_scanner_types_json,
+          profile.target_rules_json AS dp_profile_target_rules_json,
+          profile.max_input_bytes AS dp_profile_max_input_bytes,
+          profile.max_archive_entries AS dp_profile_max_archive_entries,
+          profile.max_uncompressed_bytes AS dp_profile_max_uncompressed_bytes,
+          profile.max_single_file_bytes AS dp_profile_max_single_file_bytes,
+          profile.max_nested_depth AS dp_profile_max_nested_depth,
+          profile.timeout_seconds AS dp_profile_timeout_seconds,
+          profile.oci_platform_policy AS dp_profile_oci_platform_policy,
+          profile.required_platforms_json AS dp_profile_required_platforms_json,
+          profile.configuration_digest AS dp_profile_configuration_digest,
+          profile.revision AS dp_profile_revision,
+          profile.created_at AS dp_profile_created_at,
+          profile.updated_at AS dp_profile_updated_at
+        FROM repository source_repository
+        JOIN repository_security_scan_config c
+          ON c.repository_id IN (
+            SELECT repository_id FROM policy_contexts
+          )
+         AND (
+           (source_repository.type = 'hosted' AND c.scan_hosted_content = TRUE)
+           OR (source_repository.type = 'proxy' AND c.scan_proxy_content = TRUE)
+         )
+        LEFT JOIN security_scan_profile profile ON profile.id = c.profile_id
+        WHERE source_repository.id = ?
+        ORDER BY c.repository_id
+        """,
+        downloadPolicyContextMapper,
+        sourceRepositoryId,
+        entryRepositoryId,
+        sourceRepositoryId,
+        sourceRepositoryId);
   }
 
   @Override
@@ -702,7 +804,18 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Transactional
   public RepositoryScanConfig upsertRepositoryConfig(RepositoryScanConfig config) {
     Instant now = requiredNow(config.updatedAt());
-    int updated = jdbc.update("""
+    if (!insertRepositoryConfig(config, now)) {
+      int updated = updateRepositoryConfig(config, now);
+      if (updated != 1) {
+        throw new IllegalStateException(
+            "Concurrent repository scan configuration could not be applied");
+      }
+    }
+    return findRepositoryConfig(config.repositoryId()).orElseThrow();
+  }
+
+  private int updateRepositoryConfig(RepositoryScanConfig config, Instant now) {
+    return jdbc.update("""
         UPDATE repository_security_scan_config
         SET enabled = ?, profile_id = ?, scan_hosted_content = ?, scan_proxy_content = ?,
             enforcement_mode = ?, pending_action = ?, failure_action = ?, partial_action = ?,
@@ -722,14 +835,10 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         config.policyId(),
         nullableTimestamp(now),
         config.repositoryId());
-    if (updated == 0) {
-      insertRepositoryConfig(config, now);
-    }
-    return findRepositoryConfig(config.repositoryId()).orElseThrow();
   }
 
-  private void insertRepositoryConfig(RepositoryScanConfig config, Instant now) {
-    boolean inserted = JdbcInserts.tryUpdate(jdbc, """
+  private boolean insertRepositoryConfig(RepositoryScanConfig config, Instant now) {
+    return JdbcInserts.tryUpdate(jdbc, """
         INSERT INTO repository_security_scan_config
           (repository_id, enabled, profile_id, scan_hosted_content, scan_proxy_content,
            enforcement_mode, pending_action, failure_action, partial_action,
@@ -751,21 +860,6 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       ps.setTimestamp(13, nullableTimestamp(now));
       ps.setTimestamp(14, nullableTimestamp(now));
     });
-    if (!inserted) {
-      jdbc.update("""
-          UPDATE repository_security_scan_config
-          SET enabled = ?, profile_id = ?, scan_hosted_content = ?, scan_proxy_content = ?,
-              enforcement_mode = ?, pending_action = ?, failure_action = ?, partial_action = ?,
-              max_result_age_seconds = ?, policy_id = ?, config_revision = config_revision + 1,
-              updated_at = ?
-          WHERE repository_id = ?
-          """,
-          config.enabled(), config.profileId(), config.scanHostedContent(), config.scanProxyContent(),
-          config.enforcementMode().name(), config.pendingAction().name(),
-          config.failureAction().name(), config.partialAction().name(),
-          config.maxResultAgeSeconds(), config.policyId(), nullableTimestamp(now),
-          config.repositoryId());
-    }
   }
 
   @Override
