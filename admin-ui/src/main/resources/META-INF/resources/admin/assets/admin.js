@@ -109,6 +109,12 @@ function csrfToken() {
     ?.substring("KKREPO_CSRF=".length) || "";
 }
 
+const SECURITY_SCAN_ROUTE_BASE = "#admin/security/artifact-scanning";
+const SECURITY_SCAN_ROUTE_ALIASES =
+  [SECURITY_SCAN_ROUTE_BASE, "#admin/security/scanning"];
+const SECURITY_SCAN_TABS =
+  new Set(["overview", "tasks", "findings", "repositories", "policies", "waivers"]);
+
 const viewHashRoutes = {
   repositories: "#admin/repository/repositories",
   blobstores: "#admin/repository/blobstores",
@@ -121,7 +127,7 @@ const viewHashRoutes = {
   "security-oidc": "#admin/security/oidc",
   "security-anonymous": "#admin/security/anonymous",
   "security-api-keys": "#admin/security/api-keys",
-  "security-scanning": "#admin/security/artifact-scanning",
+  "security-scanning": SECURITY_SCAN_ROUTE_BASE,
   "security-audit-log": "#admin/security/audit-log",
   "ui-settings": "#admin/system/ui-settings",
   "nexus-migration": "#admin/migration/nexus",
@@ -525,8 +531,21 @@ function normalizeAdminHash(hash) {
   return path.replace(/\/+$/, "").toLowerCase();
 }
 
+function securityScanTabFromHash(hash = window.location.hash) {
+  const path = normalizeAdminHash(hash);
+  for (const base of SECURITY_SCAN_ROUTE_ALIASES) {
+    if (path === base) return "overview";
+    if (!path.startsWith(`${base}/`)) continue;
+    const tab = path.substring(base.length + 1);
+    return SECURITY_SCAN_TABS.has(tab) ? tab : "overview";
+  }
+  return null;
+}
+
 function viewFromHash(hash = window.location.hash) {
-  return hashViewRoutes[normalizeAdminHash(hash)] || null;
+  const path = normalizeAdminHash(hash);
+  if (securityScanTabFromHash(path) != null) return "security-scanning";
+  return hashViewRoutes[path] || null;
 }
 
 function readSideGroupState() {
@@ -605,6 +624,19 @@ function initializeSideGroups() {
 function updateHashForView(view, replace = false) {
   const hash = viewHashRoutes[view];
   if (!hash || window.location.hash === hash) return;
+  if (replace) {
+    window.history.replaceState(null, "", hash);
+  } else {
+    window.history.pushState(null, "", hash);
+  }
+}
+
+function updateHashForSecurityScanTab(tab, replace = false) {
+  const selected = SECURITY_SCAN_TABS.has(tab) ? tab : "overview";
+  const hash = selected === "overview"
+    ? SECURITY_SCAN_ROUTE_BASE
+    : `${SECURITY_SCAN_ROUTE_BASE}/${selected}`;
+  if (window.location.hash === hash) return;
   if (replace) {
     window.history.replaceState(null, "", hash);
   } else {
@@ -4669,15 +4701,19 @@ async function loadSecurityScanning() {
   }));
 }
 
-function selectSecurityScanTab(tab) {
+function selectSecurityScanTab(tab, options = {}) {
+  const selected = SECURITY_SCAN_TABS.has(tab) ? tab : "overview";
+  if (options.updateHash !== false) {
+    updateHashForSecurityScanTab(selected, Boolean(options.replaceHash));
+  }
   document.querySelectorAll("[data-scan-tab]").forEach((button) => {
-    const active = button.dataset.scanTab === tab;
+    const active = button.dataset.scanTab === selected;
     button.classList.toggle("is-active", active);
     button.setAttribute("aria-selected", String(active));
     button.tabIndex = active ? 0 : -1;
   });
   document.querySelectorAll("[data-scan-panel]").forEach((panel) => {
-    const active = panel.dataset.scanPanel === tab;
+    const active = panel.dataset.scanPanel === selected;
     panel.classList.toggle("is-active", active);
     panel.hidden = !active;
   });
@@ -5235,7 +5271,12 @@ function switchView(view, options = {}) {
   if (view === "security-oidc") loadSecurityOidc();
   if (view === "security-anonymous") loadSecurityAnonymous();
   if (view === "security-api-keys") loadSecurityApiKeys();
-  if (view === "security-scanning") loadSecurityScanning();
+  if (view === "security-scanning") {
+    selectSecurityScanTab(
+        securityScanTabFromHash() || "overview",
+        { updateHash: false });
+    loadSecurityScanning();
+  }
   if (view === "security-audit-log") loadAuditLogs(0);
   if (view === "ui-settings") loadUiSettings();
   if (view === "repository-data-migration") loadRepositoryDataMigrationJobs();
@@ -5245,6 +5286,13 @@ function switchView(view, options = {}) {
 function applyHashRoute() {
   const view = viewFromHash();
   if (!view) return false;
+  if (view === "security-scanning"
+      && document.getElementById("security-scanning-view").classList.contains("is-active")) {
+    selectSecurityScanTab(
+        securityScanTabFromHash() || "overview",
+        { updateHash: false });
+    return true;
+  }
   return switchView(view, { updateHash: false });
 }
 

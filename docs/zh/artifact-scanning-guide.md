@@ -268,6 +268,11 @@ metadata 不会被送入扫描器。
 
 所有列表支持搜索、前后翻页和 10/15/25/50/100 行 page size。默认每页 10 行。
 
+每个页签都有可分享的 hash 路由。Overview 使用
+`/#admin/security/artifact-scanning`，其余页签在后面追加 `/tasks`、`/findings`、
+`/repositories`、`/policies` 或 `/waivers`。直接打开链接、刷新页面以及浏览器
+前进/后退都会恢复对应页签。
+
 ### Overview
 
 顶部展示：

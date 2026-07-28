@@ -287,6 +287,11 @@ when required platforms are covered; a missing platform can produce a partial re
 Every list supports search, previous/next navigation, and page sizes of 10/15/25/50/100. The
 default is 10 rows.
 
+Every tab has a shareable hash route. Overview uses
+`/#admin/security/artifact-scanning`; the other tabs append `/tasks`, `/findings`,
+`/repositories`, `/policies`, or `/waivers`. Opening a link directly, refreshing, or using browser
+back/forward restores the selected tab.
+
 ### Overview
 
 The summary shows:

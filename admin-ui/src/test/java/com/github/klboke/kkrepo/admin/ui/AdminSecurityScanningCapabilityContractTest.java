@@ -314,6 +314,21 @@ class AdminSecurityScanningCapabilityContractTest {
     assertTrue(javascript.contains("event.key === \"End\""));
     assertTrue(javascript.contains(
         "button.addEventListener(\"keydown\", handleSecurityScanTabKeydown)"));
+    assertTrue(javascript.contains(
+        "const SECURITY_SCAN_ROUTE_BASE = \"#admin/security/artifact-scanning\""));
+    assertTrue(javascript.contains(
+        "new Set([\"overview\", \"tasks\", \"findings\", \"repositories\", "
+            + "\"policies\", \"waivers\"])"));
+    assertTrue(javascript.contains("function securityScanTabFromHash("));
+    assertTrue(javascript.contains("function updateHashForSecurityScanTab("));
+    assertTrue(javascript.contains(
+        "`${SECURITY_SCAN_ROUTE_BASE}/${selected}`"));
+    assertTrue(javascript.contains(
+        "window.history.pushState(null, \"\", hash)"));
+    assertTrue(javascript.contains(
+        "securityScanTabFromHash() || \"overview\""));
+    assertTrue(javascript.contains(
+        "{ updateHash: false }"));
     assertTrue(css.contains(".security-scan-tab.is-active"));
     assertFalse(index.contains("row-action is-active\" data-scan-tab"));
   }
