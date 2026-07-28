@@ -46,6 +46,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.boot.health.contributor.Status;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.http.HttpStatus;
 
 class SecurityScanInfrastructureTest {
@@ -203,6 +204,43 @@ class SecurityScanInfrastructureTest {
         eq(6L),
         eq(BackfillStatus.FAILED),
         org.mockito.ArgumentMatchers.argThat(message -> message.length() == 512),
+        eq(null),
+        any(Instant.class));
+  }
+
+  @Test
+  void backfillWorkerRequeuesTransientFailuresUntilTheAttemptLimit() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    SecurityScanBackfillCoordinator coordinator = mock(SecurityScanBackfillCoordinator.class);
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.getWorker().setMaxAttempts(2);
+    BackfillJob retryable = backfill(1L, "lease-1", 1);
+    BackfillJob exhausted = backfill(2L, "lease-2", 2);
+    when(coordinator.claim(any())).thenReturn(List.of(retryable, exhausted));
+    when(scans.markRepositoryAssetsForBackfill(7L, 4L, 500))
+        .thenThrow(new CannotAcquireLockException("deadlock"))
+        .thenThrow(new CannotAcquireLockException("deadlock"));
+    Instant before = Instant.now();
+
+    new SecurityScanBackfillWorker(scans, coordinator, properties).runOnce();
+
+    verify(scans).requeueBackfill(
+        eq(1L),
+        eq("lease-1"),
+        eq(4L),
+        eq(5L),
+        eq(6L),
+        eq("deadlock"),
+        org.mockito.ArgumentMatchers.argThat(retryAt -> retryAt.isAfter(before)),
+        any(Instant.class));
+    verify(scans).updateBackfillProgress(
+        eq(2L),
+        eq("lease-2"),
+        eq(4L),
+        eq(5L),
+        eq(6L),
+        eq(BackfillStatus.FAILED),
+        eq("deadlock"),
         eq(null),
         any(Instant.class));
   }
@@ -390,6 +428,10 @@ class SecurityScanInfrastructureTest {
   }
 
   private static BackfillJob backfill(long id, String lease) {
+    return backfill(id, lease, 1);
+  }
+
+  private static BackfillJob backfill(long id, String lease, int attempts) {
     return new BackfillJob(
         id,
         7L,
@@ -397,10 +439,11 @@ class SecurityScanInfrastructureTest {
         4L,
         5L,
         6L,
-        1,
+        attempts,
         "worker",
         lease,
         Instant.now().plusSeconds(60),
+        null,
         null,
         "admin",
         Instant.now(),

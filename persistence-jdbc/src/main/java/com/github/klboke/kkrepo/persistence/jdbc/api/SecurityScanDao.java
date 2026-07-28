@@ -334,6 +334,16 @@ public interface SecurityScanDao {
       Instant leaseUntil,
       Instant updatedAt);
 
+  boolean requeueBackfill(
+      long jobId,
+      String leaseToken,
+      long cursorAssetId,
+      long scannedAssets,
+      long markedAssets,
+      String errorSummary,
+      Instant nextAttemptAt,
+      Instant updatedAt);
+
   ScanSummary summary();
 
   ScanSummary summary(long repositoryId);
@@ -875,6 +885,7 @@ public interface SecurityScanDao {
       String claimedBy,
       String leaseToken,
       Instant leaseUntil,
+      Instant nextAttemptAt,
       String lastErrorSummary,
       String createdBy,
       Instant createdAt,

@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.securityscan;
 
 import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
+import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
@@ -331,7 +332,7 @@ public class SecurityScanManagementService {
       AssetRecord asset = assets.findAssetById(subject.assetId()).orElse(null);
       if (repository == null
           || asset == null
-          || asset.repositoryId() != subject.repositoryId()
+          || !isAssetInRepositoryContext(repository, asset)
           || !canAdministerRepository(actor, repository)) {
         return;
       }
@@ -909,18 +910,15 @@ public class SecurityScanManagementService {
     }
     ScanFinding selectedFinding = null;
     ScanRunSubject selectedSubject = null;
-    if (command.repositoryId() != null) requireRepositoryAdmin(actor, command.repositoryId());
-    if (command.assetId() != null) {
-      AssetRecord asset = assets.findAssetById(command.assetId())
-          .orElseThrow(() -> badRequest("Unknown waiver asset"));
-      requireRepositoryAdmin(actor, asset.repositoryId());
-      if (command.repositoryId() != null
-          && command.repositoryId() != asset.repositoryId()) {
-        throw badRequest("Waiver asset does not belong to the repository");
-      }
-    }
+    RepositoryRecord scopedRepository = command.repositoryId() == null
+        ? null
+        : requireRepositoryAdmin(actor, command.repositoryId());
+    AssetRecord scopedAsset = command.assetId() == null
+        ? null
+        : assets.findAssetById(command.assetId())
+            .orElseThrow(() -> badRequest("Unknown waiver asset"));
     if (command.findingId() != null) {
-      if (command.repositoryId() == null || command.assetId() == null) {
+      if (scopedRepository == null || scopedAsset == null) {
         throw badRequest("Finding waivers require a repository and artifact");
       }
       selectedFinding = scans.findFindingForUpdate(command.findingId())
@@ -929,6 +927,9 @@ public class SecurityScanManagementService {
           selectedFinding.scanRunId(), command.repositoryId(), command.assetId())) {
         throw badRequest("Waiver finding is not associated with the selected artifact");
       }
+      if (!isAssetInRepositoryContext(scopedRepository, scopedAsset)) {
+        throw badRequest("Waiver asset does not belong to the repository context");
+      }
       selectedSubject = new ScanRunSubject(
           selectedFinding.scanRunId(),
           command.repositoryId(),
@@ -936,6 +937,12 @@ public class SecurityScanManagementService {
           0,
           0,
           null);
+    } else if (scopedAsset != null) {
+      requireRepositoryAdmin(actor, scopedAsset.repositoryId());
+      if (scopedRepository != null
+          && scopedRepository.id() != scopedAsset.repositoryId()) {
+        throw badRequest("Waiver asset does not belong to the repository");
+      }
     }
     Instant now = Instant.now();
     if (command.expiresAt() != null && !command.expiresAt().isAfter(now)) {
@@ -1044,12 +1051,22 @@ public class SecurityScanManagementService {
     return repository;
   }
 
-  private void requireRepositoryAdmin(AuthenticatedSubject actor, long repositoryId) {
+  private RepositoryRecord requireRepositoryAdmin(
+      AuthenticatedSubject actor, long repositoryId) {
     RepositoryRecord repository = repositories.findById(repositoryId)
         .orElseThrow(() -> notFound("Repository not found"));
     if (!canAdministerRepository(actor, repository)) {
       throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Repository administration required");
     }
+    return repository;
+  }
+
+  private boolean isAssetInRepositoryContext(
+      RepositoryRecord repository, AssetRecord asset) {
+    if (repository.id() == null) return false;
+    if (repository.id() == asset.repositoryId()) return true;
+    return repository.type() == RepositoryType.GROUP
+        && repositoryScope.sourceRepositoryIds(repository.id()).contains(asset.repositoryId());
   }
 
   private boolean canAdministerRepository(

@@ -96,6 +96,29 @@ class SecurityScanManagementServiceWaiverTest {
   }
 
   @Test
+  void findingWaiverContextExposesGroupPolicyContextForMemberArtifacts() {
+    ScanFinding finding = finding(41L, 7L);
+    RepositoryRecord group = repository(12L, "maven-public", RepositoryType.GROUP);
+    AssetRecord memberAsset =
+        asset(23L, 11L, "com/acme/demo/1.0/demo-1.0.jar");
+    when(scans.findFinding(41L)).thenReturn(Optional.of(finding));
+    when(scans.listRunSubjects(eq(7L), anyLong(), anyLong(), anyInt()))
+        .thenReturn(List.of(new ScanRunSubject(7L, 12L, 23L, 3L, 1L, Instant.now())));
+    when(repositories.findById(12L)).thenReturn(Optional.of(group));
+    when(assets.findAssetById(23L)).thenReturn(Optional.of(memberAsset));
+    when(repositoryScope.sourceRepositoryIds(12L)).thenReturn(List.of(11L));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.allow());
+
+    var context = service.findingWaiverContext(actor, 41L);
+
+    assertEquals(1, context.targetCount());
+    assertEquals("maven-public", context.targets().getFirst().repository());
+    assertEquals(23L, context.targets().getFirst().assetId());
+    verify(repositories, never()).findById(11L);
+  }
+
+  @Test
   void findingWaiverContextOnlyOffersTargetsThatAreNotAlreadyCovered() {
     Instant now = Instant.now();
     ScanFinding finding = finding(41L, 7L);
@@ -392,6 +415,77 @@ class SecurityScanManagementServiceWaiverTest {
   }
 
   @Test
+  void findingWaiverAcceptsAGroupPolicyContextWithItsMemberArtifact() {
+    RepositoryRecord group = repository(12L, "maven-public", RepositoryType.GROUP);
+    when(repositories.findById(12L)).thenReturn(Optional.of(group));
+    when(assets.findAssetById(23L))
+        .thenReturn(Optional.of(asset(23L, 11L, "com/acme/demo/1.0/demo-1.0.jar")));
+    when(repositoryScope.sourceRepositoryIds(12L)).thenReturn(List.of(11L));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.allow());
+    when(scans.findFindingForUpdate(41L)).thenReturn(Optional.of(finding(41L, 7L)));
+    when(scans.runSubjectExists(7L, 12L, 23L)).thenReturn(true);
+    when(scans.listActiveWaivers(
+        eq(12L), eq(23L), any(Instant.class), eq(0L), eq(1000)))
+        .thenReturn(List.of());
+    when(scans.createWaiver(any())).thenAnswer(invocation -> invocation.getArgument(0));
+    WaiverCommand command = new WaiverCommand(
+        "FINDING",
+        12L,
+        23L,
+        41L,
+        null,
+        null,
+        Map.of(),
+        "Accepted for the group policy context",
+        null,
+        null,
+        Instant.now().plusSeconds(604800));
+
+    service.createWaiver(actor, command);
+
+    ArgumentCaptor<ScanWaiver> waiver = ArgumentCaptor.forClass(ScanWaiver.class);
+    verify(scans).createWaiver(waiver.capture());
+    assertEquals(12L, waiver.getValue().repositoryId());
+    assertEquals(23L, waiver.getValue().assetId());
+    verify(repositories, never()).findById(11L);
+  }
+
+  @Test
+  void findingWaiverRejectsAStaleGroupSubjectForANonMemberArtifact() {
+    RepositoryRecord group = repository(12L, "maven-public", RepositoryType.GROUP);
+    when(repositories.findById(12L)).thenReturn(Optional.of(group));
+    when(assets.findAssetById(23L))
+        .thenReturn(Optional.of(asset(23L, 11L, "com/acme/demo/1.0/demo-1.0.jar")));
+    when(repositoryScope.sourceRepositoryIds(12L)).thenReturn(List.of());
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.allow());
+    when(scans.findFindingForUpdate(41L)).thenReturn(Optional.of(finding(41L, 7L)));
+    when(scans.runSubjectExists(7L, 12L, 23L)).thenReturn(true);
+    WaiverCommand command = new WaiverCommand(
+        "FINDING",
+        12L,
+        23L,
+        41L,
+        null,
+        null,
+        Map.of(),
+        "Accepted for a stale group association",
+        null,
+        null,
+        Instant.now().plusSeconds(604800));
+
+    ResponseStatusException exception =
+        assertThrows(ResponseStatusException.class, () -> service.createWaiver(actor, command));
+
+    assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
+    assertEquals(
+        "Waiver asset does not belong to the repository context",
+        exception.getReason());
+    verify(scans, never()).createWaiver(any());
+  }
+
+  @Test
   void findingWaiverMayBeCreatedWithoutExpiration() {
     when(repositories.findById(11L)).thenReturn(Optional.of(repository(11L, "maven-hosted")));
     when(assets.findAssetById(23L))
@@ -560,12 +654,17 @@ class SecurityScanManagementServiceWaiverTest {
   }
 
   private static RepositoryRecord repository(long id, String name) {
+    return repository(id, name, RepositoryType.HOSTED);
+  }
+
+  private static RepositoryRecord repository(
+      long id, String name, RepositoryType type) {
     return new RepositoryRecord(
         id,
         name,
         RepositoryFormat.MAVEN2,
-        RepositoryType.HOSTED,
-        "maven2-hosted",
+        type,
+        type == RepositoryType.GROUP ? "maven2-group" : "maven2-hosted",
         true,
         1L,
         null,

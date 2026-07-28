@@ -413,13 +413,16 @@ CREATE TABLE security_scan_backfill_job (
   claimed_by VARCHAR(128),
   lease_token CHAR(36),
   lease_until TIMESTAMPTZ(3),
+  next_attempt_at TIMESTAMPTZ(3),
   last_error_summary VARCHAR(2048),
   created_by VARCHAR(255),
   created_at TIMESTAMPTZ(3) NOT NULL,
   updated_at TIMESTAMPTZ(3) NOT NULL,
   completed_at TIMESTAMPTZ(3)
 );
-CREATE INDEX idx_security_scan_backfill_claim
+CREATE INDEX idx_security_scan_backfill_claim_pending
+  ON security_scan_backfill_job(status, next_attempt_at, created_at, id);
+CREATE INDEX idx_security_scan_backfill_claim_running
   ON security_scan_backfill_job(status, lease_until, created_at, id);
 CREATE INDEX idx_security_scan_backfill_repository
   ON security_scan_backfill_job(repository_id, created_at, id);

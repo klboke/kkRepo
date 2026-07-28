@@ -439,6 +439,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       rs.getString("claimed_by"),
       rs.getString("lease_token"),
       nullableInstant(rs, "lease_until"),
+      nullableInstant(rs, "next_attempt_at"),
       rs.getString("last_error_summary"),
       rs.getString("created_by"),
       nullableInstant(rs, "created_at"),
@@ -2705,19 +2706,23 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     List<Long> ids = jdbc.queryForList("""
         SELECT id
         FROM security_scan_backfill_job
-        WHERE status IN ('PENDING', 'RUNNING')
-          AND (status = 'PENDING' OR lease_until < ?)
+        WHERE (status = 'PENDING' AND (next_attempt_at IS NULL OR next_attempt_at <= ?))
+           OR (status = 'RUNNING' AND lease_until < ?)
         ORDER BY created_at, id
         LIMIT ?
         FOR UPDATE SKIP LOCKED
-        """, Long.class, nullableTimestamp(now), safeLimit(maxItems));
+        """,
+        Long.class,
+        nullableTimestamp(now),
+        nullableTimestamp(now),
+        safeLimit(maxItems));
     List<BackfillJob> jobs = new ArrayList<>();
     for (Long id : ids) {
       String token = UUID.randomUUID().toString();
       jdbc.update("""
           UPDATE security_scan_backfill_job
           SET status = 'RUNNING', attempts = attempts + 1, claimed_by = ?, lease_token = ?,
-              lease_until = ?, updated_at = ?
+              lease_until = ?, next_attempt_at = NULL, updated_at = ?
           WHERE id = ?
           """, workerId, token, nullableTimestamp(leaseUntil), nullableTimestamp(now), id);
       jobs.add(findBackfill(id).orElseThrow());
@@ -2754,7 +2759,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       return jdbc.update("""
           UPDATE security_scan_backfill_job
           SET cursor_asset_id = ?, scanned_assets = ?, marked_assets = ?, status = ?,
-              last_error_summary = ?, lease_until = ?, completed_at = NULL, updated_at = ?
+              last_error_summary = ?, lease_until = ?, next_attempt_at = NULL,
+              completed_at = NULL, updated_at = ?
           WHERE id = ? AND status = 'RUNNING' AND lease_token = ?
           """,
           cursorAssetId,
@@ -2771,7 +2777,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         UPDATE security_scan_backfill_job
         SET cursor_asset_id = ?, scanned_assets = ?, marked_assets = ?, status = ?,
             last_error_summary = ?, claimed_by = NULL, lease_token = NULL, lease_until = NULL,
-            completed_at = ?, updated_at = ?
+            next_attempt_at = NULL, completed_at = ?, updated_at = ?
         WHERE id = ? AND status = 'RUNNING' AND lease_token = ?
         """,
         cursorAssetId,
@@ -2780,6 +2786,36 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         status.name(),
         truncate(errorSummary, 2048),
         terminal ? nullableTimestamp(updatedAt) : null,
+        nullableTimestamp(updatedAt),
+        jobId,
+        leaseToken) == 1;
+  }
+
+  @Override
+  public boolean requeueBackfill(
+      long jobId,
+      String leaseToken,
+      long cursorAssetId,
+      long scannedAssets,
+      long markedAssets,
+      String errorSummary,
+      Instant nextAttemptAt,
+      Instant updatedAt) {
+    if (nextAttemptAt == null || !nextAttemptAt.isAfter(updatedAt)) {
+      throw new IllegalArgumentException("nextAttemptAt must be after updatedAt");
+    }
+    return jdbc.update("""
+        UPDATE security_scan_backfill_job
+        SET cursor_asset_id = ?, scanned_assets = ?, marked_assets = ?, status = 'PENDING',
+            last_error_summary = ?, claimed_by = NULL, lease_token = NULL, lease_until = NULL,
+            next_attempt_at = ?, completed_at = NULL, updated_at = ?
+        WHERE id = ? AND status = 'RUNNING' AND lease_token = ?
+        """,
+        cursorAssetId,
+        scannedAssets,
+        markedAssets,
+        truncate(errorSummary, 2048),
+        nullableTimestamp(nextAttemptAt),
         nullableTimestamp(updatedAt),
         jobId,
         leaseToken) == 1;

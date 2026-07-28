@@ -983,16 +983,42 @@ public abstract class PersistenceApiContract {
                 1)
             .getFirst());
     assertEquals(backfill.id(), claimedBackfill.id());
-    assertTrue(scans.updateBackfillProgress(
+    assertEquals(1, claimedBackfill.attempts());
+    assertTrue(scans.requeueBackfill(
         claimedBackfill.id(),
         claimedBackfill.leaseToken(),
+        assetId,
+        1,
+        1,
+        "deadlock",
+        fixtureTime.plusSeconds(10),
+        fixtureTime.plusSeconds(1)));
+    assertTrue(inTransaction(
+            () -> scans.claimBackfillJobs(
+                "replica-b",
+                fixtureTime.plusSeconds(9),
+                fixtureTime.plusSeconds(39),
+                1))
+        .isEmpty());
+    SecurityScanDao.BackfillJob retriedBackfill = inTransaction(
+        () -> scans.claimBackfillJobs(
+                "replica-b",
+                fixtureTime.plusSeconds(10),
+                fixtureTime.plusSeconds(40),
+                1)
+            .getFirst());
+    assertEquals(2, retriedBackfill.attempts());
+    assertEquals(assetId, retriedBackfill.cursorAssetId());
+    assertTrue(scans.updateBackfillProgress(
+        retriedBackfill.id(),
+        retriedBackfill.leaseToken(),
         assetId,
         1,
         1,
         com.github.klboke.kkrepo.security.scan.ScanEnums.BackfillStatus.SUCCEEDED,
         null,
         null,
-        fixtureTime.plusSeconds(1)));
+        fixtureTime.plusSeconds(11)));
 
     long sbomBlobId = stores().assets().insertBlob(
         blob(blobStoreId, "security/lifecycle-sbom.json", "lifecycle-sbom"));

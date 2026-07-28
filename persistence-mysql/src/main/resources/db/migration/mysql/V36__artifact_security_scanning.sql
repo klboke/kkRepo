@@ -459,6 +459,7 @@ CREATE TABLE security_scan_backfill_job (
   claimed_by VARCHAR(128) NULL,
   lease_token CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,
   lease_until DATETIME(3) NULL,
+  next_attempt_at DATETIME(3) NULL,
   last_error_summary VARCHAR(2048) NULL,
   created_by VARCHAR(255) NULL,
   created_at DATETIME(3) NOT NULL,
@@ -467,7 +468,10 @@ CREATE TABLE security_scan_backfill_job (
   PRIMARY KEY (id),
   CONSTRAINT fk_security_scan_backfill_repository
     FOREIGN KEY (repository_id) REFERENCES repository(id) ON DELETE CASCADE,
-  INDEX idx_security_scan_backfill_claim (status, lease_until, created_at, id),
+  INDEX idx_security_scan_backfill_claim_pending
+    (status, next_attempt_at, created_at, id),
+  INDEX idx_security_scan_backfill_claim_running
+    (status, lease_until, created_at, id),
   INDEX idx_security_scan_backfill_repository (repository_id, created_at, id),
   INDEX idx_security_scan_backfill_retention (status, completed_at, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
