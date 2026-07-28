@@ -4346,13 +4346,10 @@ function renderSecurityScanFindings() {
         <td title="${escapeHtml(finding.packageUrl || "")}">${escapeHtml(finding.packageName)}</td>
         <td>${escapeHtml(finding.installedVersion || "-")}</td>
         <td>${escapeHtml((finding.fixedVersions || []).join(", ") || "-")}</td>
-        <td>${escapeHtml(finding.dataSource || "-")}</td>
-        <td>${escapeHtml(finding.scanRunId)}</td>
-        <td>${escapeHtml(finding.title || "-")}</td>
         <td>${renderSecurityScanFindingWaiverStatus(finding)}</td>
-        <td class="actions-column">${renderSecurityScanFindingWaiverAction(finding)}</td>
+        <td class="actions-column security-scan-finding-actions">${renderSecurityScanFindingActions(finding)}</td>
       </tr>`).join("")
-      || '<tr><td colspan="10" class="placeholder">No known vulnerability findings are visible.</td></tr>';
+      || '<tr><td colspan="7" class="placeholder">No known vulnerability findings are visible.</td></tr>';
 }
 
 function renderSecurityScanFindingWaiverStatus(finding) {
@@ -4381,6 +4378,11 @@ function renderSecurityScanFindingWaiverAction(finding) {
   }
   const label = waivedTargetCount > 0 ? "waive remaining" : "waive";
   return `<button class="row-action security-scan-finding-waive" data-id="${escapeHtml(finding.id)}" type="button">${label}</button>`;
+}
+
+function renderSecurityScanFindingActions(finding) {
+  const view = `<button class="row-action security-scan-finding-view" data-id="${escapeHtml(finding.id)}" type="button" title="View finding details">view</button>`;
+  return `${view}${renderSecurityScanFindingWaiverAction(finding)}`;
 }
 
 function renderSecurityScanRepositoryStatus(enabled) {
@@ -4933,6 +4935,60 @@ function viewAllSecurityScanWaivers() {
   selectSecurityScanTab("waivers");
 }
 
+function securityScanFindingDetailValue(value) {
+  if (Array.isArray(value)) return value.filter(Boolean).join(", ") || "-";
+  return value == null || value === "" ? "-" : String(value);
+}
+
+function showSecurityScanFindingDetail(findingId) {
+  const finding = securityScanState.findings.find(
+    (item) => Number(item.id) === Number(findingId));
+  if (!finding) {
+    showToast("Finding details are no longer available. Refresh and try again.", "error");
+    return;
+  }
+  const waiverCoverage = Number(finding.waiverTargetCount || 0) > 0
+    ? `${Number(finding.waivedTargetCount || 0)} of ${Number(finding.waiverTargetCount)} artifacts waived`
+    : `${Number(finding.activeWaiverCount || 0)} active, ${Number(finding.expiredWaiverCount || 0)} expired`;
+  const fields = [
+    ["Title", finding.title, true],
+    ["Source", finding.dataSource],
+    ["Run", finding.scanRunId],
+    ["Finding ID", finding.id],
+    ["Severity", finding.severity],
+    ["Advisory", finding.advisoryId],
+    ["Aliases", finding.aliases],
+    ["Package", finding.packageName],
+    ["Installed version", finding.installedVersion],
+    ["Fixed versions", finding.fixedVersions],
+    ["Package URL", finding.packageUrl, true],
+    ["Severity source", finding.severitySource],
+    ["CVSS score", finding.cvssScore],
+    ["CVSS vector", finding.cvssVector, true],
+    ["Primary URL", finding.primaryUrl, true],
+    ["Locations", finding.locations, true],
+    ["Source status", finding.sourceStatus],
+    ["Waiver coverage", waiverCoverage]
+  ];
+  document.getElementById("security-scan-finding-detail-title").textContent =
+    `Finding details: ${finding.advisoryId || `#${finding.id}`}`;
+  document.getElementById("security-scan-finding-detail-summary").textContent =
+    [finding.packageName || finding.packageUrl || "Unknown package", finding.installedVersion]
+      .filter(Boolean)
+      .join(" @ ");
+  document.getElementById("security-scan-finding-detail-grid").innerHTML =
+    fields.map(([label, value, wide]) => `
+      <div${wide ? ' class="is-wide"' : ""}>
+        <dt>${escapeHtml(label)}</dt>
+        <dd>${escapeHtml(securityScanFindingDetailValue(value))}</dd>
+      </div>`).join("");
+  openFormModal("security-scan-finding-detail", "security-scan-close-finding-detail-button");
+}
+
+function hideSecurityScanFindingDetail() {
+  closeFormModal("security-scan-finding-detail");
+}
+
 async function showCreateSecurityScanWaiverForm(findingId) {
   const form = document.getElementById("security-scan-waiver-form");
   form.reset();
@@ -5115,7 +5171,8 @@ initializeSideGroups();
   ["security-scan-repository-form", hideSecurityScanRepositoryForm],
   ["security-scan-policy-form", hideSecurityScanPolicyForm],
   ["security-scan-waiver-form", hideSecurityScanWaiverForm],
-  ["security-scan-waiver-detail", hideSecurityScanWaiverDetail]
+  ["security-scan-waiver-detail", hideSecurityScanWaiverDetail],
+  ["security-scan-finding-detail", hideSecurityScanFindingDetail]
 ].forEach(([formId, handler]) => bindFormModalDismiss(formId, handler));
 
 document.querySelectorAll(".side-item[data-view]").forEach((item) => {
@@ -5255,8 +5312,15 @@ document.getElementById("security-scan-close-waiver-detail-button").addEventList
   "click", hideSecurityScanWaiverDetail);
 document.getElementById("security-scan-view-all-waivers-button").addEventListener(
   "click", viewAllSecurityScanWaivers);
+document.getElementById("security-scan-close-finding-detail-button").addEventListener(
+  "click", hideSecurityScanFindingDetail);
 bindRequiredFieldErrors(securityScanWaiverRequiredFields);
 document.getElementById("security-scan-finding-table").addEventListener("click", (event) => {
+  const viewButton = event.target.closest(".security-scan-finding-view");
+  if (viewButton) {
+    showSecurityScanFindingDetail(viewButton.dataset.id);
+    return;
+  }
   const detailButton = event.target.closest(".security-scan-finding-waiver-detail");
   if (detailButton) {
     showSecurityScanWaiverDetail(detailButton.dataset.id);

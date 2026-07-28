@@ -2822,6 +2822,47 @@ code {
   white-space: pre-wrap;
 }
 
+.security-scan-finding-actions {
+  width: 190px;
+  min-width: 190px;
+  max-width: 190px;
+  white-space: nowrap;
+}
+
+.security-scan-finding-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.security-scan-finding-detail-grid > div {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfb;
+  padding: 12px;
+}
+
+.security-scan-finding-detail-grid > .is-wide {
+  grid-column: 1 / -1;
+}
+
+.security-scan-finding-detail-grid dt {
+  color: var(--ink-4);
+  font-size: 12px;
+  font-weight: var(--fw-bold);
+  text-transform: uppercase;
+}
+
+.security-scan-finding-detail-grid dd {
+  margin: 5px 0 0;
+  color: var(--ink);
+  font-weight: var(--fw-semibold);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .security-scan-enabled-field {
   align-self: start;
   min-height: 36px;
@@ -2898,6 +2939,10 @@ code {
   .security-scan-waiver-detail-grid {
     grid-template-columns: repeat(2, minmax(140px, 1fr));
   }
+
+  .security-scan-finding-detail-grid {
+    grid-template-columns: repeat(2, minmax(160px, 1fr));
+  }
 }
 
 @media (max-width: 980px) {
@@ -2926,6 +2971,10 @@ code {
 
   .security-scan-waiver-detail-selector {
     grid-column: auto;
+  }
+
+  .security-scan-finding-detail-grid {
+    grid-template-columns: 1fr;
   }
 }
 
