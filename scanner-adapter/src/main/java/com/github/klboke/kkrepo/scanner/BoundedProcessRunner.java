@@ -10,6 +10,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /** Runs scanner binaries directly, without a shell, with bounded output and wall-clock timeout. */
@@ -18,6 +19,7 @@ public class BoundedProcessRunner {
   private final ScannerAdapterProperties properties;
   private final FileSizeReader fileSizeReader;
 
+  @Autowired
   public BoundedProcessRunner(ScannerAdapterProperties properties) {
     this(properties, BoundedProcessRunner::defaultFileSize);
   }
