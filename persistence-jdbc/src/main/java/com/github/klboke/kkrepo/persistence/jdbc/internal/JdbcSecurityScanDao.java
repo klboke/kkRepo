@@ -13,7 +13,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.internal.support.EnumColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcInserts;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
-import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseType;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.JsonPersistenceDialect;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.BackfillStatus;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.EnforcementMode;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.OciPlatformPolicy;
@@ -52,7 +52,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
 
   private final JdbcTemplate jdbc;
   private final BlobReferenceDao blobReferences;
-  private final DatabaseType databaseType;
+  private final JsonPersistenceDialect jsonDialect;
   // Row mappers are constructed before the constructor body and dereference this field only when
   // a query executes, after construction has completed.
   private JsonColumns json;
@@ -450,7 +450,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     this.jdbc = jdbc;
     this.json = json;
     this.blobReferences = new JdbcBlobReferenceDao(jdbc);
-    this.databaseType = databaseDialect.type();
+    this.jsonDialect = databaseDialect.json();
   }
 
   @Override
@@ -2996,21 +2996,11 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
    * both one query per repository and database parameter-limit failures for large installations.
    */
   private String repositoryScopeCte() {
-    return databaseType == DatabaseType.POSTGRESQL
-        ? """
-          WITH visible_repository AS (
-            SELECT CAST(value AS BIGINT) AS repository_id
-            FROM jsonb_array_elements_text(CAST(? AS jsonb)) AS scope(value)
-          )
-          """
-        : """
-          WITH visible_repository AS (
-            SELECT repository_id
-            FROM JSON_TABLE(
-              ?, '$[*]' COLUMNS (repository_id BIGINT PATH '$')
-            ) AS scope
-          )
-          """;
+    return """
+        WITH visible_repository AS (
+        %s
+        )
+        """.formatted(jsonDialect.selectLongsFromArray("repository_id"));
   }
 
   private Object repositoryScopeParameter(List<Long> repositoryIds) {
