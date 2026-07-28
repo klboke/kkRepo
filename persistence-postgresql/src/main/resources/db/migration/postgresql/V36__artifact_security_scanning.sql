@@ -359,6 +359,9 @@ CREATE TABLE asset_security_policy_state (
 CREATE INDEX idx_asset_security_policy_context
   ON asset_security_policy_state(
     repository_id, profile_id, config_revision, waiver_revision, asset_id);
+CREATE INDEX idx_asset_security_policy_summary
+  ON asset_security_policy_state(
+    repository_id, policy_decision, asset_id, profile_id);
 CREATE INDEX idx_asset_security_policy_expiry
   ON asset_security_policy_state(next_waiver_expiry, repository_id);
 CREATE INDEX idx_asset_security_policy_run

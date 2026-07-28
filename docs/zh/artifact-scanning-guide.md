@@ -148,6 +148,8 @@ kubectl logs statefulset/kkrepo-scanner
 
 - 每个 run 会固定路由到一个 StatefulSet ordinal；取消请求会广播到配置的所有
   ordinal，确保命中持有进程内执行记录的 Pod。
+- capability/readiness 观测会在所有配置的 ordinal 间容灾；只要至少一个 adapter
+  副本 ready，部署能力就保持可用。实际 run 的固定路由不变。
 - 使用多个 scanner 副本且需要共享持久缓存时，为
   `securityScanning.scannerDatabase.persistence.existingClaim` 提供支持
   `ReadWriteMany` 的 PVC。
@@ -264,6 +266,8 @@ metadata 不会被送入扫描器。
   不需要再次读取和 catalog 未变化的制品。
 - policy revision、结果有效期或 waiver 变化会触发 policy-only 重算；不需要重新扫描
   制品字节。
+- 漏洞库重匹配与策略重算使用数据库行锁保护的共享游标；有界批次会越过仍在处理的
+  早期任务，并在多副本下公平轮转仓库策略上下文。
 - 所有任务、租约和重试状态都在共享数据库中，多 kkRepo 副本可以安全接管。
 
 ## 页面使用说明

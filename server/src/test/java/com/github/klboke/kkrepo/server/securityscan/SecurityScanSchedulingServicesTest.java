@@ -15,6 +15,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao.AssetWithBlob;
+import com.github.klboke.kkrepo.persistence.jdbc.api.MaintenanceCursorDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.AssetSecurityState;
@@ -44,9 +45,12 @@ import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Readiness;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -283,13 +287,12 @@ class SecurityScanSchedulingServicesTest {
   @Test
   void snapshotWatcherSchedulesOnlyCurrentAssetsAndAuditsAChangedSnapshot() {
     SecurityScanDao scans = mock(SecurityScanDao.class);
-    AssetDao assets = mock(AssetDao.class);
     SecurityScannerSnapshotService snapshots = mock(SecurityScannerSnapshotService.class);
-    SecurityScanningProperties properties = new SecurityScanningProperties();
-    properties.getWorker().setSnapshotRematchBatchSize(10);
+    SecurityScannerSnapshotRematchService rematches =
+        mock(SecurityScannerSnapshotRematchService.class);
     SecurityScanAuditService audit = mock(SecurityScanAuditService.class);
     SecurityScannerSnapshotWatcher watcher =
-        new SecurityScannerSnapshotWatcher(scans, assets, snapshots, properties, audit);
+        new SecurityScannerSnapshotWatcher(scans, snapshots, rematches, audit);
     ScannerSnapshot previous =
         snapshot(1L, true, "db-1", Instant.now(), "old");
     ScannerSnapshot current =
@@ -298,29 +301,11 @@ class SecurityScanSchedulingServicesTest {
     when(snapshots.readySnapshot()).thenReturn(current);
     ScanProfile profile = profile(3L, true);
     when(scans.listProfiles()).thenReturn(List.of(profile, profile(4L, false)));
-    AssetSecurityState valid = state(11L, 3L, 1L, 5L);
-    AssetSecurityState noRun = state(12L, 3L, 1L, null);
-    AssetSecurityState sameDigest = state(13L, 3L, 1L, 6L);
-    when(scans.listAssetStatesNeedingSnapshot(3L, 2L, 0L, 10))
-        .thenReturn(List.of(valid, noRun, sameDigest));
-    AssetWithBlob currentContent = content(11, 7, 21);
-    AssetWithBlob sameDigestContent = content(13, 7, 23);
-    when(assets.findAssetWithBlobById(11L)).thenReturn(Optional.of(currentContent));
-    when(assets.findAssetWithBlobById(13L)).thenReturn(Optional.of(sameDigestContent));
-    when(scans.findCandidate(11L))
-        .thenReturn(Optional.of(new ScanCandidate(11, 21L, 1, 0, Instant.now(), Instant.now())));
-    when(scans.findCandidate(13L))
-        .thenReturn(Optional.of(new ScanCandidate(13, 23L, 1, 0, Instant.now(), Instant.now())));
+    when(rematches.reconcileProfile(profile, current)).thenReturn(2);
 
     watcher.reconcile();
 
-    verify(scans).markAssetStateStale(eq(11L), eq(3L), eq(5L), any());
-    ArgumentCaptor<TaskDraft> snapshotDrafts = ArgumentCaptor.forClass(TaskDraft.class);
-    verify(scans, org.mockito.Mockito.times(2)).createTask(snapshotDrafts.capture());
-    assertNotEquals(
-        snapshotDrafts.getAllValues().getFirst().requestUuid(),
-        snapshotDrafts.getAllValues().getLast().requestUuid(),
-        "same-digest assets must retain distinct durable rematch identities");
+    verify(rematches).reconcileProfile(profile, current);
     verify(audit).recordSystem(
         eq("SCANNER_SNAPSHOT_CHANGED"), eq(null), any());
 
@@ -332,6 +317,59 @@ class SecurityScanSchedulingServicesTest {
   }
 
   @Test
+  void snapshotRematchPersistsProgressPastStillEligibleEarlyAssets() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    AssetDao assets = mock(AssetDao.class);
+    MaintenanceCursorDao cursors = mock(MaintenanceCursorDao.class);
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.getWorker().setSnapshotRematchBatchSize(1);
+    properties.getWorker().setSnapshotRematchMaxBatches(2);
+    SecurityScannerSnapshotRematchService rematches =
+        new SecurityScannerSnapshotRematchService(scans, assets, cursors, properties);
+    ScanProfile profile = profile(3L, true);
+    ScannerSnapshot snapshot = snapshot(2L, true, "db-2", Instant.now(), "new");
+    String cursorName = SecurityScannerSnapshotRematchService.cursorName(3L, 2L);
+    AtomicLong durableCursor = new AtomicLong();
+    when(cursors.tryLockLastSeenId(cursorName))
+        .thenAnswer(invocation -> OptionalLong.of(durableCursor.get()));
+    when(cursors.updateLastSeenId(eq(cursorName), anyLong())).thenAnswer(invocation -> {
+      durableCursor.set(invocation.getArgument(1));
+      return 1;
+    });
+    when(scans.listAssetStatesNeedingSnapshot(eq(3L), eq(2L), anyLong(), eq(1)))
+        .thenAnswer(invocation -> {
+          long after = invocation.getArgument(2);
+          if (after >= 14) {
+            return List.of();
+          }
+          long assetId = after == 0 ? 11 : after + 1;
+          return List.of(state(assetId, 3L, 1L, 100L + assetId));
+        });
+    for (long assetId = 11; assetId <= 14; assetId++) {
+      long blobId = 200 + assetId;
+      AssetWithBlob currentContent = content(assetId, 7, blobId);
+      when(assets.findAssetWithBlobById(assetId))
+          .thenReturn(Optional.of(currentContent));
+      when(scans.findCandidate(assetId))
+          .thenReturn(Optional.of(
+              new ScanCandidate(assetId, blobId, 1, 0, Instant.now(), Instant.now())));
+    }
+
+    assertEquals(2, rematches.reconcileProfile(profile, snapshot));
+    assertEquals(12, durableCursor.get());
+    assertEquals(2, rematches.reconcileProfile(profile, snapshot));
+    assertEquals(14, durableCursor.get());
+
+    ArgumentCaptor<TaskDraft> drafts = ArgumentCaptor.forClass(TaskDraft.class);
+    verify(scans, org.mockito.Mockito.times(4)).createTask(drafts.capture());
+    assertEquals(4, drafts.getAllValues().stream()
+        .map(TaskDraft::requestUuid)
+        .distinct()
+        .count());
+    verify(scans).listAssetStatesNeedingSnapshot(3L, 2L, 12L, 1);
+  }
+
+  @Test
   void policyReconcilerSchedulesFreshAndPolicyOnlyWorkAndMaterializesTerminalAssets() {
     SecurityScanDao scans = mock(SecurityScanDao.class);
     RepositoryDao repositories = mock(RepositoryDao.class);
@@ -339,7 +377,8 @@ class SecurityScanSchedulingServicesTest {
     SecurityScanCandidateClassifier classifier = mock(SecurityScanCandidateClassifier.class);
     SecurityScanningProperties properties = new SecurityScanningProperties();
     SecurityPolicyReconciler reconciler =
-        new SecurityPolicyReconciler(scans, repositories, assets, classifier, properties);
+        new SecurityPolicyReconciler(
+            scans, repositories, assets, classifier, properties, mock(MaintenanceCursorDao.class));
     ScanProfile profile = profile(3L, true);
     RepositoryScanConfig context = config(7L, 3L);
     Instant now = Instant.now();
@@ -405,22 +444,32 @@ class SecurityScanSchedulingServicesTest {
   }
 
   @Test
-  void policyReconcilerTraversesGroupSourcesAndContainsBatchFailures() {
+  void policyReconcilerTraversesGroupSourcesAndPropagatesBatchFailuresForRollback() {
     SecurityScanDao scans = mock(SecurityScanDao.class);
     RepositoryDao repositories = mock(RepositoryDao.class);
     AssetDao assets = mock(AssetDao.class);
     SecurityScanCandidateClassifier classifier = mock(SecurityScanCandidateClassifier.class);
     SecurityScanningProperties properties = new SecurityScanningProperties();
+    MaintenanceCursorDao cursors = mock(MaintenanceCursorDao.class);
     SecurityPolicyReconciler reconciler =
-        new SecurityPolicyReconciler(scans, repositories, assets, classifier, properties);
+        new SecurityPolicyReconciler(
+            scans, repositories, assets, classifier, properties, cursors);
     RepositoryRecord group = repository(100, RepositoryType.GROUP);
     RepositoryRecord member = repository(101, RepositoryType.HOSTED);
     RepositoryScanConfig config = config(100, 3);
     ScanProfile profile = profile(3L, true);
-    when(repositories.list()).thenReturn(List.of(group));
-    when(repositories.listMembers(100L)).thenReturn(List.of(member));
-    when(scans.findRepositoryConfig(100L)).thenReturn(Optional.of(config));
-    when(scans.findProfile(3L)).thenReturn(Optional.of(profile));
+    when(repositories.list()).thenReturn(List.of(group, member));
+    when(repositories.listAllGroupMembers())
+        .thenReturn(Map.of(100L, List.of("repository-101")));
+    when(scans.findRepositoryConfigs(List.of(100L, 101L))).thenReturn(List.of(config));
+    when(scans.listProfiles()).thenReturn(List.of(profile));
+    when(scans.listPolicies()).thenReturn(List.of());
+    when(cursors.tryLockLastSeenId(SecurityPolicyReconciler.WORK_CURSOR))
+        .thenReturn(OptionalLong.of(0));
+    when(cursors.tryLockLastSeenId(
+        SecurityPolicyReconciler.assetCursorName(100L, 101L)))
+        .thenReturn(OptionalLong.of(0));
+    when(cursors.updateLastSeenId(any(), anyLong())).thenReturn(1);
     when(scans.listPolicyEvaluationTargets(
         eq(101L), eq(100L), eq(3L), anyLong(), eq(null), eq(null), eq(0L), any(), anyInt()))
         .thenReturn(List.of());
@@ -430,7 +479,71 @@ class SecurityScanSchedulingServicesTest {
     verify(scans).listPolicyEvaluationTargets(
         eq(101L), eq(100L), eq(3L), anyLong(), eq(null), eq(null), eq(0L), any(), anyInt());
     when(repositories.list()).thenThrow(new IllegalStateException("temporary"));
+    assertThrows(IllegalStateException.class, reconciler::runOnce);
+  }
+
+  @Test
+  void policyReconcilerRotatesAOneItemBudgetAcrossRepositoryContexts() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    AssetDao assets = mock(AssetDao.class);
+    SecurityScanCandidateClassifier classifier = mock(SecurityScanCandidateClassifier.class);
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.getWorker().setSnapshotRematchBatchSize(1);
+    properties.getWorker().setSnapshotRematchMaxBatches(1);
+    MaintenanceCursorDao cursors = mock(MaintenanceCursorDao.class);
+    SecurityPolicyReconciler reconciler =
+        new SecurityPolicyReconciler(
+            scans, repositories, assets, classifier, properties, cursors);
+    RepositoryRecord first = repository(10, RepositoryType.HOSTED);
+    RepositoryRecord second = repository(20, RepositoryType.HOSTED);
+    RepositoryScanConfig firstConfig = config(10, 3);
+    RepositoryScanConfig secondConfig = config(20, 3);
+    ScanProfile profile = profile(3L, true);
+    when(repositories.list()).thenReturn(List.of(first, second));
+    when(repositories.listAllGroupMembers()).thenReturn(Map.of());
+    when(scans.findRepositoryConfigs(List.of(10L, 20L)))
+        .thenReturn(List.of(firstConfig, secondConfig));
+    when(scans.listProfiles()).thenReturn(List.of(profile));
+    when(scans.listPolicies()).thenReturn(List.of());
+    Map<String, Long> durableCursors = new HashMap<>();
+    when(cursors.tryLockLastSeenId(any())).thenAnswer(invocation ->
+        OptionalLong.of(durableCursors.getOrDefault(invocation.getArgument(0), 0L)));
+    when(cursors.updateLastSeenId(any(), anyLong())).thenAnswer(invocation -> {
+      durableCursors.put(invocation.getArgument(0), invocation.getArgument(1));
+      return 1;
+    });
+    Instant now = Instant.now();
+    PolicyEvaluationTarget firstTarget =
+        new PolicyEvaluationTarget(101, 10, 1, null, null, ScanState.PENDING, 0, null);
+    PolicyEvaluationTarget secondTarget =
+        new PolicyEvaluationTarget(201, 20, 1, null, null, ScanState.PENDING, 0, null);
+    when(scans.listPolicyEvaluationTargets(
+        eq(10L), eq(10L), eq(3L), anyLong(), eq(null), eq(null), eq(0L), any(), eq(1)))
+        .thenReturn(List.of(firstTarget));
+    when(scans.listPolicyEvaluationTargets(
+        eq(20L), eq(20L), eq(3L), anyLong(), eq(null), eq(null), eq(0L), any(), eq(1)))
+        .thenReturn(List.of(secondTarget));
+    AssetWithBlob firstContent = content(101, 10, 301);
+    AssetWithBlob secondContent = content(201, 20, 401);
+    when(assets.findAssetWithBlobById(101L)).thenReturn(Optional.of(firstContent));
+    when(assets.findAssetWithBlobById(201L)).thenReturn(Optional.of(secondContent));
+    when(scans.findCandidate(101L))
+        .thenReturn(Optional.of(new ScanCandidate(101, 301L, 1, 0, now, now)));
+    when(scans.findCandidate(201L))
+        .thenReturn(Optional.of(new ScanCandidate(201, 401L, 1, 0, now, now)));
+    when(classifier.classify(any(), any(), eq(profile)))
+        .thenReturn(classification(CandidateDisposition.SCANNABLE));
+
     reconciler.runOnce();
+    reconciler.runOnce();
+
+    verify(scans).listPolicyEvaluationTargets(
+        eq(10L), eq(10L), eq(3L), anyLong(), eq(null), eq(null), eq(0L), any(), eq(1));
+    verify(scans).listPolicyEvaluationTargets(
+        eq(20L), eq(20L), eq(3L), anyLong(), eq(null), eq(null), eq(0L), any(), eq(1));
+    verify(scans, org.mockito.Mockito.times(2)).createTask(any());
+    assertEquals(2, durableCursors.get(SecurityPolicyReconciler.WORK_CURSOR));
   }
 
   private static SecurityScanCandidateClassifier.Classification classification(
@@ -483,6 +596,7 @@ class SecurityScanSchedulingServicesTest {
   private static RepositoryRecord repository(long id, RepositoryType type) {
     RepositoryRecord repository = mock(RepositoryRecord.class);
     when(repository.id()).thenReturn(id);
+    when(repository.name()).thenReturn("repository-" + id);
     when(repository.type()).thenReturn(type);
     return repository;
   }

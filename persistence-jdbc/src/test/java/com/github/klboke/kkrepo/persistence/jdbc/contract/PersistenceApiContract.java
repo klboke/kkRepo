@@ -586,19 +586,46 @@ public abstract class PersistenceApiContract {
         new SecurityScanDao.AssetPolicyState(
             assetId,
             profileId,
+            repositoryId,
+            1,
+            runId,
+            policyId,
+            1L,
+            config.configRevision(),
+            PolicyDecision.ALLOW,
+            "SOURCE_ALLOW",
+            0,
+            now.plusSeconds(3600),
+            null,
+            now.plusSeconds(2),
+            policyState.version()));
+    scans.upsertAssetPolicyStateIfCurrent(
+        new SecurityScanDao.AssetPolicyState(
+            assetId,
+            profileId,
             groupRepositoryId,
             1,
             runId,
             null,
             null,
             groupConfig.configRevision(),
-            PolicyDecision.ALLOW,
-            "GROUP_ALLOW",
+            PolicyDecision.BLOCK_VULNERABILITY,
+            "GROUP_BLOCK",
             0,
             now.plusSeconds(3600),
             null,
             now.plusSeconds(2),
             0));
+    SecurityScanDao.ScanSummary sourceOnlySummary = scans.summary(List.of(repositoryId));
+    assertEquals(1, sourceOnlySummary.completeAssets());
+    assertEquals(0, sourceOnlySummary.blockedAssets());
+    SecurityScanDao.ScanSummary groupOnlySummary = scans.summary(List.of(groupRepositoryId));
+    assertEquals(1, groupOnlySummary.completeAssets());
+    assertEquals(1, groupOnlySummary.blockedAssets());
+    assertEquals(
+        1,
+        groupOnlySummary.highFindings(),
+        "group-only visibility must include findings associated with the group policy context");
     long outerGroupRepositoryId =
         createRepository("scan-contract-outer", RepositoryFormat.MAVEN2, RepositoryType.GROUP);
     stores().repositories().addMember(outerGroupRepositoryId, groupRepositoryId, 0);

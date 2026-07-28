@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.securityscan;
 
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.MaintenanceCursorDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
@@ -22,104 +23,193 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Converges per-entry repository policy state after config, policy, group or waiver changes.
- * Duplicate schedulers are harmless because every task uses a deterministic database dedupe key.
+ * A shared row-locked work cursor rotates the bounded budget across repository contexts; per-work
+ * cursors continue through assets. Deterministic task keys remain a second idempotency boundary.
  */
 @Component
 @ConditionalOnProperty(
     prefix = "kkrepo.security-scanning", name = "enabled", havingValue = "true")
 public class SecurityPolicyReconciler {
-  private static final Logger log = LoggerFactory.getLogger(SecurityPolicyReconciler.class);
+  static final String WORK_CURSOR = "security_scan_policy_work";
+  static final String ASSET_CURSOR_PREFIX = "security_scan_policy_assets:";
 
   private final SecurityScanDao scans;
   private final RepositoryDao repositories;
   private final AssetDao assets;
   private final SecurityScanCandidateClassifier classifier;
   private final SecurityScanningProperties properties;
+  private final MaintenanceCursorDao cursors;
 
   public SecurityPolicyReconciler(
       SecurityScanDao scans,
       RepositoryDao repositories,
       AssetDao assets,
       SecurityScanCandidateClassifier classifier,
-      SecurityScanningProperties properties) {
+      SecurityScanningProperties properties,
+      MaintenanceCursorDao cursors) {
     this.scans = scans;
     this.repositories = repositories;
     this.assets = assets;
     this.classifier = classifier;
     this.properties = properties;
+    this.cursors = cursors;
   }
 
   @Scheduled(
       fixedDelayString = "${kkrepo.security-scanning.policy-reconcile-delay:60s}",
       initialDelayString = "${kkrepo.security-scanning.policy-reconcile-initial-delay:20s}")
+  @Transactional
   public void runOnce() {
     int batchSize = properties.getWorker().getSnapshotRematchBatchSize();
     int remaining =
         batchSize * properties.getWorker().getSnapshotRematchMaxBatches();
     Instant now = Instant.now();
-    try {
-      for (RepositoryRecord contextRepository : repositories.list()) {
-        if (remaining <= 0 || contextRepository.id() == null) break;
-        RepositoryScanConfig config = scans.findRepositoryConfig(contextRepository.id())
-            .filter(RepositoryScanConfig::enabled)
-            .orElse(null);
-        if (config == null) continue;
-        ScanProfile profile = scans.findProfile(config.profileId())
-            .filter(ScanProfile::enabled)
-            .orElse(null);
-        if (profile == null) continue;
-        ScanPolicy policy = config.policyId() == null
-            ? null : scans.findPolicy(config.policyId()).orElse(null);
-        if (config.policyId() != null && policy == null) continue;
-        for (RepositoryRecord sourceRepository : sourceRepositories(contextRepository)) {
-          if (sourceRepository.id() == null
-              || !SecurityScanRepositoryScope.appliesToSource(
-                  config, sourceRepository.type())) {
-            continue;
-          }
-          long sourceRepositoryId = sourceRepository.id();
-          long cursor = 0;
-          while (remaining > 0) {
-            int limit = Math.min(batchSize, remaining);
-            List<PolicyEvaluationTarget> targets = scans.listPolicyEvaluationTargets(
-                sourceRepositoryId,
-                contextRepository.id(),
-                profile.id(),
-                config.configRevision(),
-                policy == null ? null : policy.id(),
-                policy == null ? null : policy.revision(),
-                cursor,
-                now,
-                limit);
-            if (targets.isEmpty()) break;
-            for (PolicyEvaluationTarget target : targets) {
-              cursor = target.assetId();
-              reconcile(config, profile, target, now);
-              remaining--;
-              if (remaining <= 0) break;
-            }
-            if (targets.size() < limit) break;
-          }
-          if (remaining <= 0) break;
+    cursors.ensureCursor(WORK_CURSOR);
+    OptionalLong lockedWorkCursor = cursors.tryLockLastSeenId(WORK_CURSOR);
+    if (lockedWorkCursor.isEmpty()) {
+      return;
+    }
+
+    List<PolicyWork> work = policyWork();
+    if (work.isEmpty()) {
+      updateCursor(WORK_CURSOR, 0);
+      return;
+    }
+    long sequence = lockedWorkCursor.getAsLong();
+    int start = (int) Math.floorMod(sequence, (long) work.size());
+    int visited = 0;
+    while (visited < work.size() && remaining > 0) {
+      PolicyWork current = work.get((start + visited) % work.size());
+      remaining -= reconcileWork(current, now, Math.min(batchSize, remaining));
+      visited++;
+    }
+    long nextSequence = sequence > Long.MAX_VALUE - visited ? 0 : sequence + visited;
+    updateCursor(WORK_CURSOR, nextSequence);
+  }
+
+  private List<PolicyWork> policyWork() {
+    List<RepositoryRecord> repositoryRows = repositories.list();
+    Map<Long, RepositoryRecord> repositoriesById = new java.util.LinkedHashMap<>();
+    Map<String, RepositoryRecord> repositoriesByName = new java.util.LinkedHashMap<>();
+    for (RepositoryRecord repository : repositoryRows) {
+      if (repository.id() != null) {
+        repositoriesById.put(repository.id(), repository);
+      }
+      if (repository.name() != null) {
+        repositoriesByName.put(repository.name(), repository);
+      }
+    }
+    Map<Long, RepositoryScanConfig> configs = new java.util.LinkedHashMap<>();
+    if (!repositoriesById.isEmpty()) {
+      for (RepositoryScanConfig config :
+          scans.findRepositoryConfigs(List.copyOf(repositoriesById.keySet()))) {
+        configs.put(config.repositoryId(), config);
+      }
+    }
+    Map<Long, ScanProfile> profiles = new java.util.LinkedHashMap<>();
+    for (ScanProfile profile : scans.listProfiles()) {
+      if (profile.id() != null) {
+        profiles.put(profile.id(), profile);
+      }
+    }
+    Map<Long, ScanPolicy> policies = new java.util.LinkedHashMap<>();
+    for (ScanPolicy policy : scans.listPolicies()) {
+      if (policy.id() != null) {
+        policies.put(policy.id(), policy);
+      }
+    }
+    Map<Long, List<String>> groupMembers = repositories.listAllGroupMembers();
+    List<PolicyWork> work = new ArrayList<>();
+    for (RepositoryRecord contextRepository : repositoryRows) {
+      if (contextRepository.id() == null) {
+        continue;
+      }
+      RepositoryScanConfig config = configs.get(contextRepository.id());
+      if (config == null || !config.enabled()) {
+        continue;
+      }
+      ScanProfile profile = profiles.get(config.profileId());
+      if (profile == null || !profile.enabled()) {
+        continue;
+      }
+      ScanPolicy policy = config.policyId() == null
+          ? null
+          : policies.get(config.policyId());
+      if (config.policyId() != null && policy == null) {
+        continue;
+      }
+      for (RepositoryRecord sourceRepository :
+          sourceRepositories(contextRepository, repositoriesByName, groupMembers)) {
+        if (sourceRepository.id() != null
+            && SecurityScanRepositoryScope.appliesToSource(
+                config, sourceRepository.type())) {
+          work.add(new PolicyWork(
+              contextRepository, sourceRepository, config, profile, policy));
         }
       }
-    } catch (RuntimeException e) {
-      log.warn("Security policy reconciliation failed", e);
     }
+    work.sort(Comparator
+        .comparingLong((PolicyWork item) -> item.context().id())
+        .thenComparingLong(item -> item.source().id()));
+    return List.copyOf(work);
+  }
+
+  private int reconcileWork(PolicyWork work, Instant now, int limit) {
+    String cursorName = assetCursorName(work.context().id(), work.source().id());
+    cursors.ensureCursor(cursorName);
+    OptionalLong locked = cursors.tryLockLastSeenId(cursorName);
+    if (locked.isEmpty()) {
+      return 0;
+    }
+    long cursor = locked.getAsLong();
+    ScanPolicy policy = work.policy();
+    List<PolicyEvaluationTarget> targets = scans.listPolicyEvaluationTargets(
+        work.source().id(),
+        work.context().id(),
+        work.profile().id(),
+        work.config().configRevision(),
+        policy == null ? null : policy.id(),
+        policy == null ? null : policy.revision(),
+        cursor,
+        now,
+        limit);
+    if (targets.isEmpty()) {
+      // Wrap only for the next visit so pending work before this cursor cannot consume the same
+      // repository's entire share repeatedly.
+      updateCursor(cursorName, 0);
+      return 0;
+    }
+    for (PolicyEvaluationTarget target : targets) {
+      reconcile(work.config(), work.profile(), target, now);
+      cursor = target.assetId();
+    }
+    updateCursor(cursorName, cursor);
+    return targets.size();
+  }
+
+  private void updateCursor(String cursorName, long value) {
+    if (cursors.updateLastSeenId(cursorName, value) != 1) {
+      throw new IllegalStateException("Security policy reconciliation cursor disappeared while locked");
+    }
+  }
+
+  static String assetCursorName(long contextRepositoryId, long sourceRepositoryId) {
+    return ASSET_CURSOR_PREFIX + contextRepositoryId + ":" + sourceRepositoryId;
   }
 
   void reconcile(
@@ -211,14 +301,20 @@ public class SecurityPolicyReconciler {
         0));
   }
 
-  private List<RepositoryRecord> sourceRepositories(RepositoryRecord context) {
+  private List<RepositoryRecord> sourceRepositories(
+      RepositoryRecord context,
+      Map<String, RepositoryRecord> repositoriesByName,
+      Map<Long, List<String>> groupMembers) {
     Map<Long, RepositoryRecord> sources = new java.util.LinkedHashMap<>();
-    collectSources(context, sources, new LinkedHashSet<>());
+    collectSources(
+        context, repositoriesByName, groupMembers, sources, new LinkedHashSet<>());
     return List.copyOf(sources.values());
   }
 
   private void collectSources(
       RepositoryRecord repository,
+      Map<String, RepositoryRecord> repositoriesByName,
+      Map<Long, List<String>> groupMembers,
       Map<Long, RepositoryRecord> sources,
       Set<Long> visited) {
     if (repository == null || repository.id() == null || !visited.add(repository.id())) return;
@@ -226,8 +322,13 @@ public class SecurityPolicyReconciler {
       sources.put(repository.id(), repository);
       return;
     }
-    for (RepositoryRecord member : repositories.listMembers(repository.id())) {
-      collectSources(member, sources, visited);
+    for (String memberName : groupMembers.getOrDefault(repository.id(), List.of())) {
+      collectSources(
+          repositoriesByName.get(memberName),
+          repositoriesByName,
+          groupMembers,
+          sources,
+          visited);
     }
   }
 
@@ -253,4 +354,11 @@ public class SecurityPolicyReconciler {
     return UUID.nameUUIDFromBytes(
         String.join("\0", parts).getBytes(StandardCharsets.UTF_8)).toString();
   }
+
+  private record PolicyWork(
+      RepositoryRecord context,
+      RepositoryRecord source,
+      RepositoryScanConfig config,
+      ScanProfile profile,
+      ScanPolicy policy) {}
 }

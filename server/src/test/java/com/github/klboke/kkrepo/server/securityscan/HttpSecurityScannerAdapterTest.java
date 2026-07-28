@@ -151,6 +151,72 @@ class HttpSecurityScannerAdapterTest {
   }
 
   @Test
+  void observesCapabilitiesAndReadinessFromAnotherHealthyReplica() throws Exception {
+    ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+    HttpServer unavailable = standaloneServer(exchange ->
+        respond(exchange, 503, "{}".getBytes()));
+    AtomicInteger capabilitiesCalls = new AtomicInteger();
+    AtomicInteger readinessCalls = new AtomicInteger();
+    HttpServer healthy = standaloneServer(exchange -> {
+      String path = exchange.getRequestURI().getPath();
+      if ("/v1/capabilities".equals(path)) {
+        capabilitiesCalls.incrementAndGet();
+        respond(exchange, 200, mapper.writeValueAsBytes(new Capabilities(
+            "v1", "adapter", "1", List.of("CATALOG"), List.of("PACKAGE"),
+            4096, 4096, "cap")));
+      } else {
+        readinessCalls.incrementAndGet();
+        respond(exchange, 200, mapper.writeValueAsBytes(new Readiness(
+            true, "READY", "grype", "1", "db", Instant.EPOCH, Instant.EPOCH, Map.of())));
+      }
+    });
+    try {
+      SecurityScanningProperties properties = new SecurityScanningProperties();
+      properties.getAdapter().setBaseUrls(List.of(
+          "http://127.0.0.1:" + unavailable.getAddress().getPort(),
+          "http://127.0.0.1:" + healthy.getAddress().getPort()));
+      properties.getAdapter().setServiceCredential("secret");
+      HttpSecurityScannerAdapter adapter =
+          new HttpSecurityScannerAdapter(mapper, properties);
+
+      assertEquals("adapter", adapter.capabilities().adapterName());
+      assertTrue(adapter.readiness().ready());
+      assertEquals(1, capabilitiesCalls.get());
+      assertEquals(1, readinessCalls.get());
+    } finally {
+      unavailable.stop(0);
+      healthy.stop(0);
+    }
+  }
+
+  @Test
+  void skipsAReachableButNotReadyReplica() throws Exception {
+    ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+    AtomicInteger firstReadinessCalls = new AtomicInteger();
+    HttpServer rolling = standaloneServer(exchange -> {
+      firstReadinessCalls.incrementAndGet();
+      respond(exchange, 200, mapper.writeValueAsBytes(new Readiness(
+          false, "STARTING", "grype", "1", null, null, Instant.EPOCH, Map.of())));
+    });
+    HttpServer ready = standaloneServer(exchange ->
+        respond(exchange, 200, mapper.writeValueAsBytes(new Readiness(
+            true, "READY", "grype", "1", "db", Instant.EPOCH, Instant.EPOCH, Map.of()))));
+    try {
+      SecurityScanningProperties properties = new SecurityScanningProperties();
+      properties.getAdapter().setBaseUrls(List.of(
+          "http://127.0.0.1:" + rolling.getAddress().getPort(),
+          "http://127.0.0.1:" + ready.getAddress().getPort()));
+      properties.getAdapter().setServiceCredential("secret");
+
+      assertTrue(new HttpSecurityScannerAdapter(mapper, properties).readiness().ready());
+      assertEquals(1, firstReadinessCalls.get());
+    } finally {
+      rolling.stop(0);
+      ready.stop(0);
+    }
+  }
+
+  @Test
   void streamsEveryContractOperationAndSendsOnlyBoundedHeaders() throws Exception {
     ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
     Map<String, Capture> captures = new LinkedHashMap<>();

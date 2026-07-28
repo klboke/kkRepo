@@ -158,6 +158,8 @@ For multiple scanner replicas:
 
 - Each run is assigned to a stable StatefulSet ordinal, and cancellation is broadcast across the
   configured ordinals so it reaches the Pod that owns the process-local execution.
+- Capability and readiness observation fails over across the configured ordinals and treats the
+  deployment as ready when at least one adapter replica is ready. Run routing remains stable.
 - If replicas share a persistent database cache, set
   `securityScanning.scannerDatabase.persistence.existingClaim` to a `ReadWriteMany` PVC.
 - If shared storage is unavailable, disable scanner database persistence and let each Pod use its
@@ -281,6 +283,9 @@ when required platforms are covered; a missing platform can produce a partial re
   without cataloging unchanged artifact bytes again.
 - A policy revision, result-validity change, or waiver change causes policy-only reconciliation;
   it does not rescan artifact bytes.
+- Vulnerability-database rematching and policy reconciliation keep row-locked shared cursors in
+  the database. Bounded passes therefore continue beyond slow early tasks and remain fair across
+  repository contexts on multi-replica deployments.
 - Tasks, leases, and retry state live in the shared database, so another kkRepo replica can take
   over safely.
 

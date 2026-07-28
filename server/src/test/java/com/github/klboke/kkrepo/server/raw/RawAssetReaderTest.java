@@ -20,6 +20,7 @@ import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -81,6 +82,46 @@ class RawAssetReaderTest {
     when(storage.get(any(BlobReference.class))).thenReturn(Optional.empty());
     MavenResponse response = reader.serve(asset(), false, "docs/readme.txt", null);
     assertThrows(MavenExceptions.MavenNotFoundException.class, response::body);
+  }
+
+  @Test
+  void enforcesDownloadPolicyBeforeServingProtocolPackageBodies() {
+    AssetDao assetDao = mock(AssetDao.class);
+    BlobStorageRegistry registry = mock(BlobStorageRegistry.class);
+    ArtifactDownloadPolicy policy = mock(ArtifactDownloadPolicy.class);
+    RawAssetReader reader = new RawAssetReader(assetDao, registry, policy);
+
+    for (RepositoryFormat format :
+        java.util.List.of(RepositoryFormat.NUGET, RepositoryFormat.RUBYGEMS, RepositoryFormat.YUM)) {
+      AssetRecord packageAsset = new AssetRecord(
+          format.ordinal() + 10L,
+          10L,
+          null,
+          2L,
+          format,
+          switch (format) {
+            case NUGET -> "flat/demo.1.0.nupkg";
+            case RUBYGEMS -> "gems/demo-1.0.gem";
+            case YUM -> "Packages/demo-1.0.rpm";
+            default -> throw new IllegalStateException();
+          },
+          null,
+          "package",
+          "artifact",
+          "application/octet-stream",
+          4L,
+          null,
+          Instant.EPOCH,
+          Map.of());
+
+      reader.serveSnapshot(
+          CachedAssetMetadata.of(packageAsset, blob()),
+          true,
+          packageAsset.path(),
+          "ATTACHMENT");
+      verify(policy).beforeRead(packageAsset.id());
+    }
+    verify(registry, never()).forBlobStoreId(any(Long.class));
   }
 
   private static AssetRecord asset() {

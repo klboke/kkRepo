@@ -3117,16 +3117,24 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         """, repositoryScope);
     Map<String, Object> states = jdbc.queryForMap(repositoryScopeCte() + """
         SELECT
-          COALESCE(SUM(CASE WHEN state.scan_state = 'COMPLETE' THEN 1 ELSE 0 END), 0)
+          COUNT(DISTINCT CASE
+            WHEN state.scan_state = 'COMPLETE' THEN state.asset_id END)
             AS complete_assets,
-          COALESCE(SUM(CASE WHEN state.scan_state = 'PARTIAL' THEN 1 ELSE 0 END), 0)
+          COUNT(DISTINCT CASE
+            WHEN state.scan_state = 'PARTIAL' THEN state.asset_id END)
             AS partial_assets,
-          COALESCE(SUM(CASE WHEN state.scan_state = 'STALE' THEN 1 ELSE 0 END), 0)
+          COUNT(DISTINCT CASE
+            WHEN state.scan_state = 'STALE' THEN state.asset_id END)
             AS stale_assets,
-          COALESCE(SUM(CASE WHEN state.policy_decision <> 'ALLOW' THEN 1 ELSE 0 END), 0)
+          COUNT(DISTINCT CASE
+            WHEN policy_state.policy_decision <> 'ALLOW' THEN policy_state.asset_id END)
             AS blocked_assets
-        FROM asset_security_state state
-        JOIN visible_repository visible ON visible.repository_id = state.repository_id
+        FROM asset_security_policy_state policy_state
+        JOIN visible_repository visible
+          ON visible.repository_id = policy_state.repository_id
+        JOIN asset_security_state state
+          ON state.asset_id = policy_state.asset_id
+         AND state.profile_id = policy_state.profile_id
         """, repositoryScope);
     Map<String, Object> findings = jdbc.queryForMap(repositoryScopeCte() + """
         SELECT

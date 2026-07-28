@@ -51,7 +51,8 @@ kkRepo, DNS, and public HTTPS for vulnerability database updates.
 The scanner workload is a StatefulSet so every replica has a stable network identity. kkRepo
 deterministically routes each run to one ordinal and broadcasts cancellation across the configured
 ordinals; durable task ownership still remains in the shared kkRepo database, not in the
-StatefulSet. For multiple adapter replicas, provide
+StatefulSet. Capability and readiness observations fail over across ordinals, so a rollout or
+failure of ordinal 0 does not hide healthy replicas. For multiple adapter replicas, provide
 `securityScanning.scannerDatabase.persistence.existingClaim` backed by `ReadWriteMany`, or disable
 scanner database persistence so each pod uses an ephemeral cache. Shared-database replicas use
 cross-process read/update locks and a shared update marker; database update eligibility is checked

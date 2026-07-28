@@ -400,6 +400,8 @@ CREATE TABLE asset_security_policy_state (
   INDEX idx_asset_security_policy_run (latest_scan_run_id),
   INDEX idx_asset_security_policy_context
     (repository_id, profile_id, config_revision, waiver_revision, asset_id),
+  INDEX idx_asset_security_policy_summary
+    (repository_id, policy_decision, asset_id, profile_id),
   INDEX idx_asset_security_policy_expiry (next_waiver_expiry, repository_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

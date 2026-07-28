@@ -67,12 +67,35 @@ public class HttpSecurityScannerAdapter implements Adapter {
 
   @Override
   public Capabilities capabilities() {
-    return get(baseUris.getFirst(), "/v1/capabilities", Capabilities.class);
+    return getWithFailover("/v1/capabilities", Capabilities.class);
   }
 
   @Override
   public Readiness readiness() {
-    return get(baseUris.getFirst(), "/v1/readiness", Readiness.class);
+    ScannerAdapterException firstFailure = null;
+    Readiness firstNotReady = null;
+    for (URI baseUri : baseUris) {
+      try {
+        Readiness readiness = get(baseUri, "/v1/readiness", Readiness.class);
+        if (readiness.ready()) {
+          return readiness;
+        }
+        if (firstNotReady == null) {
+          firstNotReady = readiness;
+        }
+      } catch (ScannerAdapterException failure) {
+        if (firstFailure == null) {
+          firstFailure = failure;
+        }
+      }
+    }
+    if (firstNotReady != null) {
+      return firstNotReady;
+    }
+    throw firstFailure == null
+        ? new ScannerAdapterException(
+            "SCANNER_UNAVAILABLE", "No security scanner adapter endpoint is available", true)
+        : firstFailure;
   }
 
   @Override
@@ -195,6 +218,28 @@ public class HttpSecurityScannerAdapter implements Adapter {
     withServiceCredential(builder);
     HttpRequest request = builder.build();
     return send(request, type);
+  }
+
+  /**
+   * Readiness and capability observations describe the shared scanner deployment rather than one
+   * run owner. A StatefulSet ordinal can be unavailable during a rollout, so accept the first
+   * healthy replica instead of making scanner-0 a cluster-wide availability authority.
+   */
+  private <T> T getWithFailover(String path, Class<T> type) {
+    ScannerAdapterException firstFailure = null;
+    for (URI baseUri : baseUris) {
+      try {
+        return get(baseUri, path, type);
+      } catch (ScannerAdapterException failure) {
+        if (firstFailure == null) {
+          firstFailure = failure;
+        }
+      }
+    }
+    throw firstFailure == null
+        ? new ScannerAdapterException(
+            "SCANNER_UNAVAILABLE", "No security scanner adapter endpoint is available", true)
+        : firstFailure;
   }
 
   private HttpRequest.Builder binaryRequest(

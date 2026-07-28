@@ -1543,6 +1543,8 @@ Helm/Kubernetes：
 - 支持 NetworkPolicy、Pod Security Context、read-only root filesystem。
 - 每个 run 按 ID 固定路由到稳定 ordinal，catalog、match 和 OCI 操作命中同一 adapter；
   取消请求广播到全部配置 ordinal，避免进程内执行记录位于另一副本时无法释放资源。
+- capability/readiness 观测遍历全部配置 ordinal；任一副本 ready 即认为 adapter
+  部署可用，避免滚动发布或 ordinal 0 故障把整个扫描集群误判为不可用。
 - StatefulSet 只提供稳定网络身份；任务所有权、lease、fencing 和结果仍在共享数据库。
 - 所有 kkRepo 副本必须使用相同顺序的 adapter 地址列表。调整 scanner 副本数时先停止
   新任务并等待或取消正在运行的扫描，再滚动更新 kkRepo，避免改变活动 run 的路由。
