@@ -111,6 +111,61 @@ class ArtifactDownloadPolicyTest {
   }
 
   @Test
+  void groupCacheFallsBackToPendingPolicyWhenConcreteSourceDisappeared() {
+    properties.setEnabled(true);
+    when(scans.findDownloadPolicySnapshots(101L, 1L)).thenReturn(List.of());
+    when(scans.findDownloadPolicyContexts(3L, 1L)).thenReturn(List.of(
+        new DownloadPolicyContext(
+            config(1L, EnforcementMode.ENFORCE, PolicyAction.BLOCK),
+            profile())));
+
+    ArtifactPolicyException failure = assertThrows(
+        ArtifactPolicyException.class,
+        () -> policy.beforeGroupCacheRead(
+            101L,
+            3L,
+            RepositoryFormat.MAVEN2,
+            "com/acme/demo/1/demo-1.jar",
+            "artifact",
+            "application/java-archive",
+            42L,
+            1L));
+
+    assertEquals(PolicyDecision.BLOCK_PENDING, failure.decision());
+    verify(scans).findDownloadPolicySnapshots(101L, 1L);
+    verify(scans).findDownloadPolicyContexts(3L, 1L);
+    verifyNoMoreInteractions(scans);
+  }
+
+  @Test
+  void groupCacheWithConcreteSourceKeepsTheSingleSnapshotQueryHotPath() {
+    properties.setEnabled(true);
+    when(scans.findDownloadPolicySnapshots(101L, 1L)).thenReturn(List.of(snapshot(
+        disabledConfig(1L),
+        profile(),
+        null,
+        null,
+        null,
+        "com/acme/demo/1/demo-1.jar",
+        "artifact",
+        "application/java-archive")));
+
+    ArtifactDownloadPolicy.Decision decision = policy.beforeGroupCacheRead(
+        101L,
+        3L,
+        RepositoryFormat.MAVEN2,
+        "com/acme/demo/1/demo-1.jar",
+        "artifact",
+        "application/java-archive",
+        42L,
+        1L);
+
+    assertEquals(PolicyDecision.ALLOW, decision.decision());
+    verify(scans).findDownloadPolicySnapshots(101L, 1L);
+    verifyNoMoreInteractions(scans);
+  }
+
+  @Test
   void disabledRepositoryConfigurationAllowsAfterOneSnapshotLookup() {
     properties.setEnabled(true);
     when(scans.findDownloadPolicySnapshots(10L, 1L)).thenReturn(List.of(snapshot(

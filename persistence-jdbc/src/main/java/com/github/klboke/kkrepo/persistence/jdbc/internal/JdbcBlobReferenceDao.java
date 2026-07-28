@@ -30,7 +30,7 @@ public class JdbcBlobReferenceDao implements BlobReferenceDao {
         FOR UPDATE
         """, (rs, rowNum) -> rs.getLong(1), blobId).isEmpty();
     if (!active) return false;
-    return JdbcInserts.tryUpdate(jdbc, """
+    boolean inserted = JdbcInserts.tryUpdate(jdbc, """
         INSERT INTO blob_reference (owner_type, owner_id, blob_id, created_at)
         SELECT ?, ?, ?, CURRENT_TIMESTAMP
           FROM asset_blob source_blob
@@ -51,6 +51,13 @@ public class JdbcBlobReferenceDao implements BlobReferenceDao {
       ps.setLong(6, ownerId);
       ps.setLong(7, blobId);
     });
+    if (inserted) return true;
+    return !jdbc.queryForList("""
+        SELECT blob_id
+        FROM blob_reference
+        WHERE owner_type = ? AND owner_id = ? AND blob_id = ?
+        LIMIT 1
+        """, Long.class, ownerType, ownerId, blobId).isEmpty();
   }
 
   @Override

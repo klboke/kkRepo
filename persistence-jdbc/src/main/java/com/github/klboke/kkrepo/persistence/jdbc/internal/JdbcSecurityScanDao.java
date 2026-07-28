@@ -1748,7 +1748,10 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   private void ensureBlobReference(String ownerType, long ownerId, long blobId) {
-    blobReferences.retain(ownerType, ownerId, blobId);
+    if (!blobReferences.retain(ownerType, ownerId, blobId)) {
+      throw new IllegalStateException(
+          "Security scan document blob is unavailable for publication: " + blobId);
+    }
   }
 
   @Override

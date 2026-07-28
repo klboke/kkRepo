@@ -485,6 +485,30 @@ public abstract class PersistenceApiContract {
                 .blobReferences()
                 .retain("security-scan-persisting", taskId, deletedDocumentBlobId)),
         "a committed soft-delete fence must reject late ownership publication");
+    SecurityScanDao.Sbom rejectedSbom = new SecurityScanDao.Sbom(
+        null,
+        SubjectKind.ASSET_BLOB,
+        "sha256:" + "7".repeat(64),
+        null,
+        "syft",
+        "1.0.0",
+        "7".repeat(64),
+        "8".repeat(64),
+        deletedDocumentBlobId,
+        "9".repeat(64),
+        "CycloneDX",
+        "1.6",
+        1,
+        0,
+        true,
+        now);
+    assertThrows(
+        IllegalStateException.class,
+        () -> inTransaction(() -> scans.insertSbomOrFindExisting(rejectedSbom)),
+        "metadata publication must abort when GC committed the document deletion fence");
+    assertTrue(
+        scans.findSbomByCatalogFingerprint(rejectedSbom.catalogFingerprint()).isEmpty(),
+        "a rejected document must not leave committed metadata pointing at deleted content");
     assertEquals(
         1,
         stores().assets().hardDeleteBlobByIdIfDeleted(deletedDocumentBlobId));
@@ -575,6 +599,47 @@ public abstract class PersistenceApiContract {
         "direct", List.of("app.jar"), List.of("Apache-2.0"), Map.of());
     assertEquals(1, inTransaction(() -> scans.insertSbomComponents(sbomId, List.of(component))));
     assertEquals(0, inTransaction(() -> scans.insertSbomComponents(sbomId, List.of(component))));
+
+    long deletedReportBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "security/deleted-report.json", "scan-deleted-report"));
+    assertEquals(
+        1,
+        stores().assets()
+            .markBlobDeletedIfUnreferenced(deletedReportBlobId, "gc-report-race-fixture"));
+    SecurityScanDao.ScanRun rejectedRun = new SecurityScanDao.ScanRun(
+        null,
+        taskId,
+        sbomId,
+        snapshot.id(),
+        "6".repeat(64),
+        "7".repeat(64),
+        ScanState.COMPLETE,
+        ScanCompleteness.COMPLETE,
+        deletedReportBlobId,
+        "8".repeat(64),
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        Severity.UNKNOWN,
+        List.of(),
+        List.of(),
+        now,
+        now.plusSeconds(2),
+        now.plusSeconds(2));
+    assertThrows(
+        IllegalStateException.class,
+        () -> inTransaction(() -> scans.insertRunOrFindExisting(rejectedRun)),
+        "run publication must abort when GC committed the report deletion fence");
+    assertTrue(
+        scans.findRunByMatchFingerprint(rejectedRun.matchFingerprint()).isEmpty(),
+        "a rejected report must not leave committed run metadata");
+    assertEquals(
+        1,
+        stores().assets().hardDeleteBlobByIdIfDeleted(deletedReportBlobId));
 
     long reportBlobId = stores().assets().insertBlob(
         blob(blobStoreId, "security/report.json", "scan-report"));

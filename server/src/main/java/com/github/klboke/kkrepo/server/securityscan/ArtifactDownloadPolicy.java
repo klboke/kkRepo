@@ -67,6 +67,43 @@ public class ArtifactDownloadPolicy {
   }
 
   /**
+   * Enforces a Maven group cache hit against its concrete hosted/proxy source.
+   *
+   * <p>The persisted source identity keeps ordinary cache hits on the same single snapshot query
+   * as direct reads. If the source asset disappeared while the group cache is still fresh, policy
+   * contexts are evaluated as pending instead of silently allowing an empty synthetic-group
+   * result.
+   */
+  public Decision beforeGroupCacheRead(
+      long sourceAssetId,
+      long sourceRepositoryId,
+      RepositoryFormat format,
+      String path,
+      String kind,
+      String contentType,
+      long contentLength,
+      long entryRepositoryId) {
+    if (!properties.isEnabled() || internalScannerRequest()) return Decision.allow();
+    return evaluateSnapshots(
+        () -> {
+          List<DownloadPolicySnapshot> snapshots =
+              scans.findDownloadPolicySnapshots(sourceAssetId, entryRepositoryId);
+          if (!snapshots.isEmpty()) return snapshots;
+          return scans.findDownloadPolicyContexts(sourceRepositoryId, entryRepositoryId).stream()
+              .map(context -> pendingSnapshot(
+                  sourceRepositoryId,
+                  format,
+                  path,
+                  kind,
+                  contentType,
+                  contentLength,
+                  context))
+              .toList();
+        },
+        false);
+  }
+
+  /**
    * Applies repository policy to successful upstream metadata for content that is not available as
    * a current local asset. Applicable content has no scan state yet, so it follows each
    * configuration's pending action.
