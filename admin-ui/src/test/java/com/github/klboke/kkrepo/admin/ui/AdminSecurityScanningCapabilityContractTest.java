@@ -197,8 +197,8 @@ class AdminSecurityScanningCapabilityContractTest {
     String css = resource("/META-INF/resources/admin/assets/admin.css");
 
     assertTrue(index.contains(
-        "<thead><tr><th>Severity</th><th>Advisory</th><th>Package</th>"
-            + "<th>Installed</th><th>Fixed</th><th>Waiver</th>"
+        "<thead><tr><th>Severity</th><th>Advisory</th><th>Repositories</th>"
+            + "<th>Package</th><th>Installed</th><th>Fixed</th><th>Waiver</th>"
             + "<th class=\"actions-column security-scan-finding-actions\">Actions</th></tr></thead>"));
     assertFalse(index.contains(
         "<th>Fixed</th><th>Source</th><th>Run</th><th>Title</th><th>Waiver</th>"));
@@ -209,15 +209,20 @@ class AdminSecurityScanningCapabilityContractTest {
         < index.indexOf("data-scan-panel=\"findings\""));
 
     assertTrue(javascript.contains("function renderSecurityScanFindingActions(finding)"));
+    assertTrue(javascript.contains("function renderSecurityScanFindingRepositories(finding)"));
+    assertTrue(javascript.contains("finding.repositories.filter(Boolean)"));
     assertTrue(javascript.contains("security-scan-finding-view"));
     assertTrue(javascript.contains("function showSecurityScanFindingDetail(findingId)"));
-    assertTrue(javascript.contains("[\"Title\", finding.title, true]"));
     assertTrue(javascript.contains("[\"Source\", finding.dataSource]"));
-    assertTrue(javascript.contains("[\"Run\", finding.scanRunId]"));
+    assertTrue(javascript.contains("[\"Scan run\", finding.scanRunId]"));
+    assertTrue(javascript.contains("security-scan-finding-detail-highlights"));
+    assertTrue(javascript.contains("security-scan-finding-detail-sections"));
     assertTrue(javascript.contains("openFormModal(\"security-scan-finding-detail\""));
     assertTrue(javascript.contains("closeFormModal(\"security-scan-finding-detail\")"));
-    assertTrue(javascript.contains("colspan=\"7\""));
-    assertTrue(css.contains(".security-scan-finding-detail-grid"));
+    assertTrue(javascript.contains("colspan=\"8\""));
+    assertFalse(css.contains(".security-scan-finding-detail-grid"));
+    assertTrue(css.contains(".security-scan-finding-detail-hero"));
+    assertTrue(css.contains(".security-scan-finding-detail-section dl > div"));
     assertTrue(css.contains(".security-scan-finding-actions"));
   }
 

@@ -215,6 +215,7 @@ public class SecurityScanManagementService {
         actor,
         repositoryId,
         repository -> normalizedQuery == null
+                || containsQuery(normalizedQuery, repository.name())
             ? scans.listFindings(
                 repository.id(), runId, severity, afterId, safeLimit + 1)
             : scans.listFindings(
@@ -231,7 +232,11 @@ public class SecurityScanManagementService {
     if (rawPage.items().isEmpty()) {
       return new CursorPage<>(List.of(), rawPage.nextAfter());
     }
-    Set<Long> visibleRepositoryIds = visibleRepositoryIds(actor);
+    Map<Long, String> visibleRepositoryNames = new LinkedHashMap<>();
+    for (RepositoryRecord repository : visibleRepositories(actor)) {
+      visibleRepositoryNames.put(repository.id(), repository.name());
+    }
+    Set<Long> visibleRepositoryIds = visibleRepositoryNames.keySet();
     List<ScanWaiver> waivers = loadAllWaivers();
     Instant now = Instant.now();
     Map<Long, List<ScanRunSubject>> subjectsByRun = new LinkedHashMap<>();
@@ -249,8 +254,15 @@ public class SecurityScanManagementService {
           .filter(subject -> activeMatches.stream()
               .anyMatch(waiver -> SecurityScanWaiverMatcher.matchesSubject(waiver, subject)))
           .count();
+      List<String> repositoryNames = subjects.stream()
+          .map(subject -> visibleRepositoryNames.get(subject.repositoryId()))
+          .filter(name -> name != null && !name.isBlank())
+          .distinct()
+          .sorted()
+          .toList();
       return FindingView.from(
           finding,
+          repositoryNames,
           activeMatches.size(),
           matches.size() - activeMatches.size(),
           subjects.size(),
@@ -1117,6 +1129,7 @@ public class SecurityScanManagementService {
   public record FindingView(
       long id,
       long scanRunId,
+      List<String> repositories,
       String advisoryId,
       List<String> aliases,
       String dataSource,
@@ -1136,14 +1149,19 @@ public class SecurityScanManagementService {
       int expiredWaiverCount,
       int waiverTargetCount,
       int waivedTargetCount) {
+    public FindingView {
+      repositories = repositories == null ? List.of() : List.copyOf(repositories);
+    }
+
     static FindingView from(
         ScanFinding finding,
+        List<String> repositories,
         int activeWaiverCount,
         int expiredWaiverCount,
         int waiverTargetCount,
         int waivedTargetCount) {
       return new FindingView(
-          finding.id(), finding.scanRunId(), finding.advisoryId(), finding.aliases(),
+          finding.id(), finding.scanRunId(), repositories, finding.advisoryId(), finding.aliases(),
           finding.dataSource(), finding.packageUrl(), finding.packageName(),
           finding.installedVersion(), finding.fixedVersions(), finding.severity().name(),
           finding.severitySource(), finding.cvssVector(), finding.cvssScore(), finding.title(),

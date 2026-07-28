@@ -4337,19 +4337,32 @@ function renderSecurityScanTasks() {
       || '<tr><td colspan="10" class="placeholder">No scan tasks are visible.</td></tr>';
 }
 
+function renderSecurityScanFindingRepositories(finding) {
+  const repositories = Array.isArray(finding.repositories)
+    ? finding.repositories.filter(Boolean)
+    : [];
+  if (repositories.length === 0) return "-";
+  const fullLabel = repositories.join(", ");
+  const visibleLabel = repositories.length > 1
+    ? `${repositories[0]} +${repositories.length - 1}`
+    : repositories[0];
+  return `<span class="security-scan-finding-repositories" title="${escapeHtml(fullLabel)}">${escapeHtml(visibleLabel)}</span>`;
+}
+
 function renderSecurityScanFindings() {
   document.getElementById("security-scan-finding-table").innerHTML =
     securityScanState.findings.map((finding) => `
       <tr>
         <td><span class="state-badge compact ${securityScanTone(finding.severity === "CRITICAL" ? "FAILED" : finding.severity)}">${escapeHtml(finding.severity)}</span></td>
         <td><code>${escapeHtml(finding.advisoryId)}</code></td>
+        <td>${renderSecurityScanFindingRepositories(finding)}</td>
         <td title="${escapeHtml(finding.packageUrl || "")}">${escapeHtml(finding.packageName)}</td>
         <td>${escapeHtml(finding.installedVersion || "-")}</td>
         <td>${escapeHtml((finding.fixedVersions || []).join(", ") || "-")}</td>
         <td>${renderSecurityScanFindingWaiverStatus(finding)}</td>
         <td class="actions-column security-scan-finding-actions">${renderSecurityScanFindingActions(finding)}</td>
       </tr>`).join("")
-      || '<tr><td colspan="7" class="placeholder">No known vulnerability findings are visible.</td></tr>';
+      || '<tr><td colspan="8" class="placeholder">No known vulnerability findings are visible.</td></tr>';
 }
 
 function renderSecurityScanFindingWaiverStatus(finding) {
@@ -4940,6 +4953,20 @@ function securityScanFindingDetailValue(value) {
   return value == null || value === "" ? "-" : String(value);
 }
 
+function renderSecurityScanFindingDetailSection(title, fields) {
+  return `
+    <section class="security-scan-finding-detail-section">
+      <h3>${escapeHtml(title)}</h3>
+      <dl>
+        ${fields.map(([label, value]) => `
+          <div>
+            <dt>${escapeHtml(label)}</dt>
+            <dd>${escapeHtml(securityScanFindingDetailValue(value))}</dd>
+          </div>`).join("")}
+      </dl>
+    </section>`;
+}
+
 function showSecurityScanFindingDetail(findingId) {
   const finding = securityScanState.findings.find(
     (item) => Number(item.id) === Number(findingId));
@@ -4950,38 +4977,42 @@ function showSecurityScanFindingDetail(findingId) {
   const waiverCoverage = Number(finding.waiverTargetCount || 0) > 0
     ? `${Number(finding.waivedTargetCount || 0)} of ${Number(finding.waiverTargetCount)} artifacts waived`
     : `${Number(finding.activeWaiverCount || 0)} active, ${Number(finding.expiredWaiverCount || 0)} expired`;
-  const fields = [
-    ["Title", finding.title, true],
-    ["Source", finding.dataSource],
-    ["Run", finding.scanRunId],
-    ["Finding ID", finding.id],
-    ["Severity", finding.severity],
-    ["Advisory", finding.advisoryId],
-    ["Aliases", finding.aliases],
-    ["Package", finding.packageName],
-    ["Installed version", finding.installedVersion],
-    ["Fixed versions", finding.fixedVersions],
-    ["Package URL", finding.packageUrl, true],
-    ["Severity source", finding.severitySource],
-    ["CVSS score", finding.cvssScore],
-    ["CVSS vector", finding.cvssVector, true],
-    ["Primary URL", finding.primaryUrl, true],
-    ["Locations", finding.locations, true],
-    ["Source status", finding.sourceStatus],
-    ["Waiver coverage", waiverCoverage]
-  ];
-  document.getElementById("security-scan-finding-detail-title").textContent =
-    `Finding details: ${finding.advisoryId || `#${finding.id}`}`;
-  document.getElementById("security-scan-finding-detail-summary").textContent =
+  const packageLabel =
     [finding.packageName || finding.packageUrl || "Unknown package", finding.installedVersion]
       .filter(Boolean)
       .join(" @ ");
-  document.getElementById("security-scan-finding-detail-grid").innerHTML =
-    fields.map(([label, value, wide]) => `
-      <div${wide ? ' class="is-wide"' : ""}>
-        <dt>${escapeHtml(label)}</dt>
-        <dd>${escapeHtml(securityScanFindingDetailValue(value))}</dd>
-      </div>`).join("");
+  document.getElementById("security-scan-finding-detail-title").textContent = "Finding details";
+  document.getElementById("security-scan-finding-detail-content").innerHTML = `
+    <div class="security-scan-finding-detail-hero">
+      <div class="security-scan-finding-detail-kicker">
+        <span class="state-badge compact ${securityScanTone(finding.severity === "CRITICAL" ? "FAILED" : finding.severity)}">${escapeHtml(finding.severity || "UNKNOWN")}</span>
+        <code>${escapeHtml(finding.advisoryId || `#${finding.id}`)}</code>
+      </div>
+      <h3>${escapeHtml(finding.title || "Known vulnerability finding")}</h3>
+      <p>${escapeHtml(packageLabel)}</p>
+    </div>
+    <div class="security-scan-finding-detail-highlights">
+      <div><span>Repositories</span><strong>${escapeHtml(securityScanFindingDetailValue(finding.repositories))}</strong></div>
+      <div><span>Fixed versions</span><strong>${escapeHtml(securityScanFindingDetailValue(finding.fixedVersions))}</strong></div>
+      <div><span>Waiver coverage</span><strong>${escapeHtml(waiverCoverage)}</strong></div>
+    </div>
+    <div class="security-scan-finding-detail-sections">
+      ${renderSecurityScanFindingDetailSection("Vulnerability", [
+        ["Aliases", finding.aliases],
+        ["CVSS score", finding.cvssScore],
+        ["CVSS vector", finding.cvssVector],
+        ["Severity source", finding.severitySource],
+        ["Source", finding.dataSource],
+        ["Source status", finding.sourceStatus]
+      ])}
+      ${renderSecurityScanFindingDetailSection("Traceability", [
+        ["Scan run", finding.scanRunId],
+        ["Finding ID", finding.id],
+        ["Package URL", finding.packageUrl],
+        ["Locations", finding.locations],
+        ["Primary URL", finding.primaryUrl]
+      ])}
+    </div>`;
   openFormModal("security-scan-finding-detail", "security-scan-close-finding-detail-button");
 }
 

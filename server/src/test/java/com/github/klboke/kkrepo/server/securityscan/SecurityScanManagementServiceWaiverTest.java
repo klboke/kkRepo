@@ -135,8 +135,29 @@ class SecurityScanManagementServiceWaiverTest {
 
     assertEquals(1, page.items().size());
     assertEquals(41L, page.items().getFirst().id());
+    assertEquals(List.of("maven-hosted"), page.items().getFirst().repositories());
     assertEquals(41L, page.nextAfter());
     verify(scans).listFindings(11L, null, null, "demo", 0L, 2);
+  }
+
+  @Test
+  void findingSearchMatchesRepositoryNameWithoutPerFindingRepositoryLookup() {
+    Instant now = Instant.now();
+    RepositoryRecord repository = repository(11L, "maven-hosted");
+    when(repositories.list()).thenReturn(List.of(repository));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.allow());
+    when(scans.listFindings(11L, null, null, 0L, 2))
+        .thenReturn(List.of(finding(41L, 7L)));
+    when(scans.listRunSubjects(7L))
+        .thenReturn(List.of(new ScanRunSubject(7L, 11L, 23L, 3L, 1L, now)));
+    when(scans.listWaivers(null, 0L, 1000)).thenReturn(List.of());
+
+    var page = service.findingPage(
+        actor, null, null, null, "maven-hosted", 0L, 1);
+
+    assertEquals(List.of("maven-hosted"), page.items().getFirst().repositories());
+    verify(scans).listFindings(11L, null, null, 0L, 2);
   }
 
   @Test
@@ -225,6 +246,8 @@ class SecurityScanManagementServiceWaiverTest {
     assertEquals(1, findingView.expiredWaiverCount());
     assertEquals(2, findingView.waiverTargetCount());
     assertEquals(1, findingView.waivedTargetCount());
+    assertEquals(
+        List.of("maven-hosted", "maven-secondary"), findingView.repositories());
     assertEquals(2, details.activeWaiverCount());
     assertEquals(1, details.expiredWaiverCount());
     assertEquals(3, details.waivers().size());
