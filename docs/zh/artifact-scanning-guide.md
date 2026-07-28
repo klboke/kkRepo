@@ -360,7 +360,7 @@ Waivers 页签用于查看 Active/Expired、scope、仓库、制品、exception�
 | --- | ---: | --- |
 | `KKREPO_SECURITY_SCANNING_ENABLED` | `false` | 部署能力 gate |
 | `KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URL` | `http://scanner:8080` | adapter 内部地址 |
-| `KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL` | 空 | kkRepo 调用 adapter 的共享凭据 |
+| `KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL` | 启用扫描时必填 | kkRepo 调用 adapter 的共享凭据；启用扫描后为空会拒绝启动 |
 | `KKREPO_SECURITY_SCANNING_OCI_REGISTRY_URL` | `http://kkrepo:8080` | scanner 拉取精确 OCI digest 时访问的 kkRepo 地址 |
 | `KKREPO_SECURITY_SCANNING_DATABASE_MAX_AGE` | `48h` | 漏洞数据库最大允许运维年龄 |
 | `KKREPO_SECURITY_SCANNING_OBSERVATION_MAX_AGE` | `2m` | scanner snapshot 最大观测年龄 |
@@ -377,7 +377,7 @@ registry URL。
 
 | 环境变量 | 应用默认值 | 用途 |
 | --- | ---: | --- |
-| `KKREPO_SCANNER_SERVICE_CREDENTIAL` | 空 | 必须与 kkRepo credential 相同 |
+| `KKREPO_SCANNER_SERVICE_CREDENTIAL` | 必填 | 必须与 kkRepo credential 相同；为空时 adapter 拒绝启动 |
 | `KKREPO_SCANNER_DB_AUTO_UPDATE` | `false` | 自动更新漏洞数据库；Compose/Helm 模板默认设为 `true` |
 | `KKREPO_SCANNER_DB_DIRECTORY` | `/var/lib/kkrepo-scanner/grype` | Grype 数据库目录 |
 | `KKREPO_SCANNER_DB_UPDATE_INTERVAL` | `6h` | 目标更新间隔 |

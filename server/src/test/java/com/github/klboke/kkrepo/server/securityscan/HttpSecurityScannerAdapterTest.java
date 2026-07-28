@@ -14,6 +14,7 @@ import com.github.klboke.kkrepo.security.scan.ScannerArtifactType;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Capabilities;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.CatalogRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.CatalogResponse;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.CancellationResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanRequest;
@@ -25,6 +26,7 @@ import com.sun.net.httpserver.HttpServer;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -70,6 +72,27 @@ class HttpSecurityScannerAdapterTest {
   }
 
   @Test
+  void leavesOnlyBoundedTransportGraceAroundTheScannerDeadline() {
+    assertEquals(Duration.ofSeconds(35), HttpSecurityScannerAdapter.requestTimeout(30));
+    assertEquals(Duration.ofSeconds(6), HttpSecurityScannerAdapter.requestTimeout(0));
+  }
+
+  @Test
+  void requiresTheSharedCredentialWheneverScanningIsEnabled() {
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.setEnabled(true);
+    HttpSecurityScannerAdapter adapter =
+        new HttpSecurityScannerAdapter(new ObjectMapper(), properties);
+
+    IllegalStateException failure =
+        assertThrows(IllegalStateException.class, adapter::validateConfiguration);
+
+    assertTrue(failure.getMessage().contains("service-credential"));
+    properties.setEnabled(false);
+    adapter.validateConfiguration();
+  }
+
+  @Test
   void streamsEveryContractOperationAndSendsOnlyBoundedHeaders() throws Exception {
     ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
     Map<String, Capture> captures = new LinkedHashMap<>();
@@ -86,7 +109,9 @@ class HttpSecurityScannerAdapterTest {
         "/v1/match",
         match(),
         "/v1/oci/scan",
-        new OciScanResponse(catalog(), match(), List.of("linux/amd64"), List.of()));
+        new OciScanResponse(catalog(), match(), List.of("linux/amd64"), List.of()),
+        "/v1/runs/run/cancel",
+        new CancellationResponse("run", true));
     start(exchange -> {
       captures.put(exchange.getRequestURI().getPath(), new Capture(
           exchange.getRequestHeaders().getFirst("X-KKRepo-Artifact-Type"),
@@ -114,6 +139,7 @@ class HttpSecurityScannerAdapterTest {
     assertEquals("CycloneDX", catalog.specName());
     assertEquals("db", match.vulnerabilityDatabaseRevision());
     assertEquals(List.of("linux/amd64"), adapter.scanOci(ociRequest).scannedPlatforms());
+    assertTrue(adapter.cancel("run").cancelled());
     assertEquals("JAR", captures.get("/v1/catalog").artifactType());
     assertEquals("secret", captures.get("/v1/catalog").credential());
     assertEquals("artifact", new String(captures.get("/v1/catalog").body()));

@@ -10,6 +10,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -111,6 +112,12 @@ class ScannerEngineServiceBehaviorTest {
     assertEquals(List.of("linux/arm64"), response.missingPlatforms());
     assertEquals(ScanCompleteness.PARTIAL, response.catalog().completeness());
     assertEquals(ScanCompleteness.PARTIAL, response.match().completeness());
+    ArgumentCaptor<Duration> timeouts = ArgumentCaptor.forClass(Duration.class);
+    verify(fixture.processes, times(3))
+        .run(anyList(), any(), any(), timeouts.capture(), any());
+    assertTrue(
+        timeouts.getAllValues().getLast().compareTo(timeouts.getAllValues().getFirst()) < 0,
+        "OCI stages must consume one shared end-to-end deadline");
   }
 
   @Test

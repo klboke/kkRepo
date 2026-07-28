@@ -13,7 +13,9 @@ import org.springframework.boot.health.actuate.endpoint.StatusAggregator;
 import org.springframework.boot.health.contributor.Status;
 import org.springframework.boot.health.registry.HealthContributorRegistry;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
+@SpringBootTest(
+    webEnvironment = SpringBootTest.WebEnvironment.NONE,
+    properties = "kkrepo.scanner.service-credential=test-secret")
 class ScannerAdapterApplicationTest {
   @Autowired
   private ScannerEngineService engine;

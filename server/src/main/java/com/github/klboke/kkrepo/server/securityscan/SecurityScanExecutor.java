@@ -354,6 +354,7 @@ public class SecurityScanExecutor {
       ScannerSnapshot snapshot) {
     String expectedFingerprint = ScanFingerprints.match(
         sbom.documentSha256(),
+        sbom.inventoryComplete(),
         profile.matcherEngine(),
         snapshot.engineVersion(),
         snapshot.vulnerabilityDatabaseRevision(),
@@ -397,6 +398,7 @@ public class SecurityScanExecutor {
     ScannerSnapshot actualSnapshot = snapshots.snapshotFor(response);
     String fingerprint = ScanFingerprints.match(
         sbom.documentSha256(),
+        sbom.inventoryComplete(),
         response.engineName(),
         response.engineVersion(),
         response.vulnerabilityDatabaseRevision(),
@@ -414,8 +416,8 @@ public class SecurityScanExecutor {
         .limit(MAX_PROJECTED_FINDINGS)
         .toList();
     boolean truncated = response.findings().size() > normalizedFindings.size();
-    ScanCompleteness completeness = truncated
-        ? ScanCompleteness.PARTIAL : response.completeness();
+    ScanCompleteness completeness =
+        combinedCompleteness(response.completeness(), sbom.inventoryComplete(), truncated);
     ScanState status = completeness == ScanCompleteness.COMPLETE
         ? ScanState.COMPLETE : ScanState.PARTIAL;
     Map<Severity, Integer> counts = severityCounts(normalizedFindings);
@@ -450,6 +452,21 @@ public class SecurityScanExecutor {
         .toList();
     return finalizer.finalizeRun(
         task, profile, config, subject.identity(), proposed, findings);
+  }
+
+  private static ScanCompleteness combinedCompleteness(
+      ScanCompleteness matcherCompleteness,
+      boolean inventoryComplete,
+      boolean findingsTruncated) {
+    if (matcherCompleteness == null || matcherCompleteness == ScanCompleteness.UNKNOWN) {
+      return ScanCompleteness.UNKNOWN;
+    }
+    if (!inventoryComplete
+        || findingsTruncated
+        || matcherCompleteness == ScanCompleteness.PARTIAL) {
+      return ScanCompleteness.PARTIAL;
+    }
+    return ScanCompleteness.COMPLETE;
   }
 
   private InputStream openOriginal(AssetBlobRecord blob) throws IOException {

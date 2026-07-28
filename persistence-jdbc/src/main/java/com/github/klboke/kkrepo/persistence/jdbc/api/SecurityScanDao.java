@@ -30,14 +30,12 @@ public interface SecurityScanDao {
 
   RepositoryScanConfig upsertRepositoryConfig(RepositoryScanConfig config);
 
-  int bumpAllRepositoryConfigRevisions(Instant updatedAt);
-
   /**
    * Loads every authoritative input needed by the download gate in one database round trip.
    *
-   * <p>The result contains at most one row for the source repository and one for the entry/group
-   * repository. Missing or disabled configurations remain explicit rows, while assets without a
-   * blob or without either configuration produce an empty result.
+   * <p>The result contains the source repository plus every configured group on an actual path
+   * from the entry repository to that source. Unrelated groups are excluded. Assets without a
+   * blob or without an applicable configuration produce an empty result.
    */
   List<DownloadPolicySnapshot> findDownloadPolicySnapshots(
       long assetId, Long entryRepositoryId);
@@ -235,6 +233,13 @@ public interface SecurityScanDao {
   ScanWaiver createWaiver(ScanWaiver waiver);
 
   Optional<ScanWaiver> findWaiver(long waiverId);
+
+  /**
+   * Removes materialized policy contexts within the waiver's repository, asset, and policy scope.
+   * A selector-only global waiver intentionally invalidates every context. Missing rows are rebuilt
+   * by the bounded policy reconciler.
+   */
+  int invalidatePolicyStatesForWaiver(ScanWaiver waiver);
 
   List<ScanWaiver> listWaivers(Long repositoryId, long afterId, int maxItems);
 

@@ -318,6 +318,7 @@ class SecurityScanManagementServiceWaiverTest {
     ArgumentCaptor<SecurityScanDao.ScanWaiver> waiver =
         ArgumentCaptor.forClass(SecurityScanDao.ScanWaiver.class);
     verify(scans).createWaiver(waiver.capture());
+    verify(scans).invalidatePolicyStatesForWaiver(waiver.getValue());
     assertEquals("FINDING", waiver.getValue().scopeType());
     assertEquals("CVE-2026-0041", waiver.getValue().advisorySelector());
     assertEquals("pkg:maven/com.acme/demo@1.0", waiver.getValue().packageSelector());
@@ -397,6 +398,53 @@ class SecurityScanManagementServiceWaiverTest {
         exception.getReason());
     verify(scans).findFindingForUpdate(41L);
     verify(scans, never()).createWaiver(any());
+  }
+
+  @Test
+  void deletingAnAssetScopedWaiverRequiresAdministrationOfTheAssetRepository() {
+    ScanWaiver waiver = waiver(
+        51L, null, 23L, null, "CVE-2026-0041", null,
+        "Accepted risk", null, Instant.now());
+    when(security.decide(
+        eq(actor.permissionSubject()), eq("nexus:security-scanning-waivers:delete")))
+        .thenReturn(AccessDecision.allow());
+    when(scans.findWaiver(51L)).thenReturn(Optional.of(waiver));
+    when(assets.findAssetById(23L))
+        .thenReturn(Optional.of(asset(23L, 11L, "com/acme/demo/1.0/demo-1.0.jar")));
+    when(repositories.findById(11L))
+        .thenReturn(Optional.of(repository(11L, "maven-hosted")));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.deny("not an administrator"));
+
+    ResponseStatusException exception =
+        assertThrows(ResponseStatusException.class, () -> service.deleteWaiver(actor, 51L));
+
+    assertEquals(HttpStatus.FORBIDDEN, exception.getStatusCode());
+    verify(scans, never()).deleteWaiver(51L);
+    verify(scans, never()).invalidatePolicyStatesForWaiver(any());
+  }
+
+  @Test
+  void deletingAnAssetScopedWaiverInvalidatesOnlyItsMatchingPolicyContexts() {
+    ScanWaiver waiver = waiver(
+        51L, null, 23L, null, "CVE-2026-0041", null,
+        "Accepted risk", null, Instant.now());
+    when(security.decide(
+        eq(actor.permissionSubject()), eq("nexus:security-scanning-waivers:delete")))
+        .thenReturn(AccessDecision.allow());
+    when(scans.findWaiver(51L)).thenReturn(Optional.of(waiver));
+    when(scans.deleteWaiver(51L)).thenReturn(true);
+    when(assets.findAssetById(23L))
+        .thenReturn(Optional.of(asset(23L, 11L, "com/acme/demo/1.0/demo-1.0.jar")));
+    when(repositories.findById(11L))
+        .thenReturn(Optional.of(repository(11L, "maven-hosted")));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.allow());
+
+    assertEquals(waiver, service.deleteWaiver(actor, 51L));
+
+    verify(scans).deleteWaiver(51L);
+    verify(scans).invalidatePolicyStatesForWaiver(waiver);
   }
 
   @Test

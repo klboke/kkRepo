@@ -32,15 +32,19 @@ class ScannerControllerTest {
   private ScannerAdapterProperties properties;
   private ScannerController controller;
   private HttpServletRequest request;
+  private ScannerExecutionRegistry executions;
 
   @BeforeEach
   void setUp() throws Exception {
     engine = mock(ScannerEngineService.class);
     properties = new ScannerAdapterProperties();
+    properties.setServiceCredential("secret");
+    executions = new ScannerExecutionRegistry();
     controller = new ScannerController(
         engine,
         properties,
-        new ScannerCapacityLimiter(properties, new SimpleMeterRegistry()));
+        new ScannerCapacityLimiter(properties, new SimpleMeterRegistry()),
+        executions);
     request = mock(HttpServletRequest.class);
     when(request.getInputStream()).thenReturn(new TestServletInputStream("body".getBytes()));
   }
@@ -61,7 +65,7 @@ class ScannerControllerTest {
     when(engine.catalog(any(), eq("a".repeat(64)), eq(4L), eq(ScannerArtifactType.JAR), any()))
         .thenReturn(catalog);
     assertEquals(catalog, controller.catalog(
-        request, "v1", "a".repeat(64), 4, "jar", "secret"));
+        request, "v1", "run-catalog", "a".repeat(64), 4, "jar", "secret"));
     ArgumentCaptor<ResourceLimits> catalogLimits =
         ArgumentCaptor.forClass(ResourceLimits.class);
     verify(engine).catalog(
@@ -71,20 +75,24 @@ class ScannerControllerTest {
 
     MatchResponse match = match();
     when(engine.match(any(), eq("b".repeat(64)), any())).thenReturn(match);
-    assertEquals(match, controller.match(request, "v1", "b".repeat(64), "secret"));
+    assertEquals(
+        match,
+        controller.match(request, "v1", "run-match", "b".repeat(64), "secret"));
 
     OciScanRequest ociRequest = mock(OciScanRequest.class);
+    when(ociRequest.runId()).thenReturn("run-oci");
     OciScanResponse ociResponse =
         new OciScanResponse(catalog, match, List.of(), List.of());
     when(engine.scanOci(ociRequest)).thenReturn(ociResponse);
     assertEquals(ociResponse, controller.oci(ociRequest, "secret"));
+    assertFalse(controller.cancel("idle-run", "v1", "secret").cancelled());
   }
 
   @Test
   void appliesFallbackLimitsAndRejectsInvalidHeadersApiAndCredential() throws Exception {
     properties.setMaxInputBytes(8192);
     when(engine.match(any(), eq("b".repeat(64)), any())).thenReturn(match());
-    controller.match(request, "v1", "b".repeat(64), null);
+    controller.match(request, "v1", "run-defaults", "b".repeat(64), "secret");
     ArgumentCaptor<ResourceLimits> limits = ArgumentCaptor.forClass(ResourceLimits.class);
     verify(engine).match(any(), eq("b".repeat(64)), limits.capture());
     assertEquals(8192, limits.getValue().maxInputBytes());
@@ -92,20 +100,36 @@ class ScannerControllerTest {
 
     assertCode(
         "SCANNER_API_UNSUPPORTED",
-        () -> controller.match(request, "v2", "b".repeat(64), null));
+        () -> controller.match(
+            request, "v2", "run-api", "b".repeat(64), "secret"));
     when(request.getHeader("X-KKRepo-Max-Archive-Entries")).thenReturn("not-a-number");
     assertCode(
         "SCANNER_HEADER_INVALID",
-        () -> controller.match(request, "v1", "b".repeat(64), null));
+        () -> controller.match(
+            request, "v1", "run-invalid-number", "b".repeat(64), "secret"));
     when(request.getHeader("X-KKRepo-Max-Archive-Entries"))
         .thenReturn(Long.toString((long) Integer.MAX_VALUE + 1));
     assertCode(
         "SCANNER_HEADER_INVALID",
-        () -> controller.match(request, "v1", "b".repeat(64), null));
+        () -> controller.match(
+            request, "v1", "run-overflow", "b".repeat(64), "secret"));
 
-    properties.setServiceCredential("secret");
     assertCode("SCANNER_UNAUTHORIZED", () -> controller.capabilities(null));
     assertCode("SCANNER_UNAUTHORIZED", () -> controller.readiness("wrong"));
+  }
+
+  @Test
+  void rejectsMissingServiceCredentialAtStartupAndAtTheRequestBoundary() {
+    properties.setServiceCredential("");
+
+    IllegalStateException startupFailure =
+        assertThrows(IllegalStateException.class, controller::requireConfiguredCredential);
+    assertEquals(
+        "kkrepo.scanner.service-credential must be configured",
+        startupFailure.getMessage());
+    assertCode(
+        "SCANNER_CREDENTIAL_NOT_CONFIGURED",
+        () -> controller.capabilities(null));
   }
 
   @Test

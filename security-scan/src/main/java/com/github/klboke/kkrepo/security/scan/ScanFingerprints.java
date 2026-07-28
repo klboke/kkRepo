@@ -27,12 +27,14 @@ public final class ScanFingerprints {
 
   public static String match(
       String sbomSha256,
+      boolean inventoryComplete,
       String matcherEngine,
       String matcherEngineVersion,
       String vulnerabilityDatabaseRevision,
       String matchConfigurationDigest) {
     return sha256(
         sbomSha256,
+        Boolean.toString(inventoryComplete),
         matcherEngine,
         matcherEngineVersion,
         vulnerabilityDatabaseRevision,

@@ -30,6 +30,7 @@ public class BoundedProcessRunner {
     if (command == null || command.isEmpty()) {
       throw new IllegalArgumentException("Scanner command must not be empty");
     }
+    Process process = null;
     try {
       Files.createDirectories(workingDirectory);
       Path stderr = workingDirectory.resolve("stderr.log");
@@ -59,7 +60,7 @@ public class BoundedProcessRunner {
           }
         });
       }
-      Process process = builder.start();
+      process = builder.start();
       waitForBounded(process, stdout, stderr, timeout);
       byte[] stderrBytes = readBounded(stderr, properties.getMaxStderrBytes());
       if (process.exitValue() != 0) {
@@ -73,6 +74,7 @@ public class BoundedProcessRunner {
       long outputBytes = fileSize(stdout);
       return new Result(process.exitValue(), outputBytes, stderrBytes);
     } catch (InterruptedException e) {
+      terminateAfterInterrupt(process);
       Thread.currentThread().interrupt();
       throw new ScannerRequestException(
           "SCANNER_INTERRUPTED", "Scanner process was interrupted", 503, true, e);
@@ -140,12 +142,35 @@ public class BoundedProcessRunner {
   }
 
   private static void terminate(Process process) throws InterruptedException {
-    process.descendants().forEach(ProcessHandle::destroy);
+    List<ProcessHandle> descendants = process.descendants().toList();
+    descendants.forEach(ProcessHandle::destroy);
     process.destroy();
-    if (process.waitFor(2, TimeUnit.SECONDS)) return;
-    process.descendants().forEach(ProcessHandle::destroyForcibly);
-    process.destroyForcibly();
-    process.waitFor(2, TimeUnit.SECONDS);
+    boolean parentExited = process.waitFor(2, TimeUnit.SECONDS);
+    if (!parentExited || descendants.stream().anyMatch(ProcessHandle::isAlive)) {
+      descendants.forEach(ProcessHandle::destroyForcibly);
+      if (process.isAlive()) process.destroyForcibly();
+      process.waitFor(2, TimeUnit.SECONDS);
+    }
+  }
+
+  private static void terminateAfterInterrupt(Process process) {
+    if (process == null || !process.isAlive()) return;
+    List<ProcessHandle> descendants = process.descendants().toList();
+    descendants.forEach(ProcessHandle::destroy);
+    process.destroy();
+    try {
+      boolean parentExited = process.waitFor(2, TimeUnit.SECONDS);
+      if (parentExited && descendants.stream().noneMatch(ProcessHandle::isAlive)) return;
+    } catch (InterruptedException ignored) {
+      // Preserve interruption below after forcibly terminating the complete process tree.
+    }
+    descendants.forEach(ProcessHandle::destroyForcibly);
+    if (process.isAlive()) process.destroyForcibly();
+    try {
+      process.waitFor(2, TimeUnit.SECONDS);
+    } catch (InterruptedException ignored) {
+      // The caller restores the interrupted flag after this cleanup finishes.
+    }
   }
 
   public byte[] versionOutput(String executable, List<String> arguments) {

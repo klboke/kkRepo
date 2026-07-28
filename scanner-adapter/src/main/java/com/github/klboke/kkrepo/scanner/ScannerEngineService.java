@@ -67,12 +67,12 @@ public class ScannerEngineService {
         "syft-grype-v1",
         Long.toString(properties.getMaxInputBytes()),
         Long.toString(properties.getMaxOutputBytes()),
-        "catalog", "match", "oci-scan"));
+        "catalog", "match", "oci-scan", "cancel"));
     return new Capabilities(
         ScannerContract.API_VERSION,
         "syft-grype-v1",
         "1",
-        List.of("CATALOG", "MATCH", "OCI_SCAN"),
+        List.of("CATALOG", "MATCH", "OCI_SCAN", "CANCEL"),
         List.of("ARCHIVE", "PACKAGE", "MANIFEST", "RAW_FILE", "OCI_IMAGE"),
         properties.getMaxInputBytes(),
         properties.getMaxOutputBytes(),
@@ -179,9 +179,12 @@ public class ScannerEngineService {
 
   public OciScanResponse scanOci(OciScanRequest request) {
     validateOci(request);
+    ResourceLimits limits = effective(request.limits());
+    ScanDeadline deadline = new ScanDeadline(limits.timeoutSeconds());
     Path workspace = workspace("oci-");
     try {
       Readiness ready = requireReady();
+      deadline.remaining();
       URI registry = URI.create(request.registryUrl());
       String authority = registry.getRawAuthority();
       String prefix = registry.getPath() == null ? "" : registry.getPath();
@@ -216,7 +219,7 @@ public class ScannerEngineService {
                   "cyclonedx-json=" + output),
               workspace,
               workspace.resolve("syft-" + index + ".stdout"),
-              Duration.ofSeconds(effective(request.limits()).timeoutSeconds()),
+              deadline.remaining(),
               environment);
           byte[] value =
               BoundedProcessRunner.readBounded(output, properties.getMaxOutputBytes());
@@ -235,6 +238,7 @@ public class ScannerEngineService {
             "OCI_SCAN_FAILED", "No requested OCI platform could be scanned", 422, false);
       }
       byte[] merged = documents.mergeCycloneDx(platformSboms);
+      deadline.remaining();
       Path mergedPath = workspace.resolve("merged.cdx.json");
       Files.write(mergedPath, merged);
       CatalogResponse catalog = documents.catalog(
@@ -260,7 +264,7 @@ public class ScannerEngineService {
             catalog.components(),
             catalog.summary());
       }
-      MatchResponse match = matchFile(mergedPath, effective(request.limits()), workspace);
+      MatchResponse match = matchFile(mergedPath, workspace, deadline);
       if (!missing.isEmpty()) {
         match = new MatchResponse(
             match.adapterName(),
@@ -285,10 +289,16 @@ public class ScannerEngineService {
   }
 
   private MatchResponse matchFile(Path sbom, ResourceLimits limits, Path workspace) {
-    return database.withRead(() -> matchFileLocked(sbom, limits, workspace));
+    return matchFile(sbom, workspace, new ScanDeadline(limits.timeoutSeconds()));
   }
 
-  private MatchResponse matchFileLocked(Path sbom, ResourceLimits limits, Path workspace) {
+  private MatchResponse matchFile(
+      Path sbom, Path workspace, ScanDeadline deadline) {
+    return database.withRead(() -> matchFileLocked(sbom, workspace, deadline));
+  }
+
+  private MatchResponse matchFileLocked(
+      Path sbom, Path workspace, ScanDeadline deadline) {
     try {
       Readiness ready = inspectReadiness(Instant.now());
       requireReady(ready);
@@ -301,7 +311,7 @@ public class ScannerEngineService {
               "json"),
           workspace,
           report,
-          Duration.ofSeconds(limits.timeoutSeconds()),
+          deadline.remaining(),
           Map.of());
       byte[] reportJson =
           BoundedProcessRunner.readBounded(report, properties.getMaxOutputBytes());
@@ -450,4 +460,25 @@ public class ScannerEngineService {
 
   private record CachedReadiness(
       Readiness value, Instant expiresAt, long databaseGeneration) {}
+
+  private static final class ScanDeadline {
+    private final long deadlineNanos;
+
+    private ScanDeadline(int timeoutSeconds) {
+      deadlineNanos =
+          System.nanoTime() + Duration.ofSeconds(Math.max(1, timeoutSeconds)).toNanos();
+    }
+
+    private Duration remaining() {
+      long remaining = deadlineNanos - System.nanoTime();
+      if (remaining <= 0) {
+        throw new ScannerRequestException(
+            "SCANNER_TIMEOUT",
+            "Scanner request exceeded its end-to-end time limit",
+            504,
+            true);
+      }
+      return Duration.ofNanos(remaining);
+    }
+  }
 }

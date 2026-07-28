@@ -4,11 +4,13 @@ import com.github.klboke.kkrepo.security.scan.ScannerArtifactType;
 import com.github.klboke.kkrepo.security.scan.ScannerContract;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Capabilities;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.CatalogResponse;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.CancellationResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Readiness;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.ResourceLimits;
+import jakarta.annotation.PostConstruct;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -18,6 +20,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -28,14 +31,26 @@ public class ScannerController {
   private final ScannerEngineService engine;
   private final ScannerAdapterProperties properties;
   private final ScannerCapacityLimiter capacity;
+  private final ScannerExecutionRegistry executions;
 
   public ScannerController(
       ScannerEngineService engine,
       ScannerAdapterProperties properties,
-      ScannerCapacityLimiter capacity) {
+      ScannerCapacityLimiter capacity,
+      ScannerExecutionRegistry executions) {
     this.engine = engine;
     this.properties = properties;
     this.capacity = capacity;
+    this.executions = executions;
+  }
+
+  @PostConstruct
+  void requireConfiguredCredential() {
+    if (properties.getServiceCredential() == null
+        || properties.getServiceCredential().isBlank()) {
+      throw new IllegalStateException(
+          "kkrepo.scanner.service-credential must be configured");
+    }
   }
 
   @GetMapping("/v1/capabilities")
@@ -58,6 +73,7 @@ public class ScannerController {
   public CatalogResponse catalog(
       HttpServletRequest request,
       @RequestHeader("X-KKRepo-API-Version") String apiVersion,
+      @RequestHeader("X-KKRepo-Run-ID") String runId,
       @RequestHeader("X-KKRepo-Expected-SHA256") String expectedSha256,
       @RequestHeader("X-KKRepo-Expected-Size") long expectedSize,
       @RequestHeader(value = "X-KKRepo-Artifact-Type", required = false)
@@ -67,26 +83,29 @@ public class ScannerController {
       throws IOException {
     authorize(credential);
     requireApiVersion(apiVersion);
-    return capacity.execute(() -> engine.catalog(
-        request.getInputStream(),
-        expectedSha256,
-        expectedSize,
-        ScannerArtifactType.fromWireValue(artifactType),
-        limits(request)));
+    return executions.execute(runId, () -> capacity.execute(() -> engine.catalog(
+            request.getInputStream(),
+            expectedSha256,
+            expectedSize,
+            ScannerArtifactType.fromWireValue(artifactType),
+            limits(request))));
   }
 
   @PostMapping("/v1/match")
   public MatchResponse match(
       HttpServletRequest request,
       @RequestHeader("X-KKRepo-API-Version") String apiVersion,
+      @RequestHeader("X-KKRepo-Run-ID") String runId,
       @RequestHeader("X-KKRepo-SBOM-SHA256") String expectedSha256,
       @RequestHeader(value = "X-KKRepo-Scanner-Credential", required = false)
           String credential)
       throws IOException {
     authorize(credential);
     requireApiVersion(apiVersion);
-    return capacity.execute(
-        () -> engine.match(request.getInputStream(), expectedSha256, limits(request)));
+    return executions.execute(
+        runId,
+        () -> capacity.execute(
+            () -> engine.match(request.getInputStream(), expectedSha256, limits(request))));
   }
 
   @PostMapping("/v1/oci/scan")
@@ -95,7 +114,20 @@ public class ScannerController {
       @RequestHeader(value = "X-KKRepo-Scanner-Credential", required = false)
           String credential) throws IOException {
     authorize(credential);
-    return capacity.execute(() -> engine.scanOci(request));
+    return executions.execute(
+        request == null ? null : request.runId(),
+        () -> capacity.execute(() -> engine.scanOci(request)));
+  }
+
+  @PostMapping("/v1/runs/{runId}/cancel")
+  public CancellationResponse cancel(
+      @PathVariable("runId") String runId,
+      @RequestHeader("X-KKRepo-API-Version") String apiVersion,
+      @RequestHeader(value = "X-KKRepo-Scanner-Credential", required = false)
+          String credential) {
+    authorize(credential);
+    requireApiVersion(apiVersion);
+    return new CancellationResponse(runId, executions.cancel(runId));
   }
 
   @ExceptionHandler(ScannerRequestException.class)
@@ -151,7 +183,13 @@ public class ScannerController {
 
   private void authorize(String actual) {
     String expected = properties.getServiceCredential();
-    if (expected == null || expected.isBlank()) return;
+    if (expected == null || expected.isBlank()) {
+      throw new ScannerRequestException(
+          "SCANNER_CREDENTIAL_NOT_CONFIGURED",
+          "Scanner service credential is not configured",
+          503,
+          false);
+    }
     byte[] left = expected.getBytes(StandardCharsets.UTF_8);
     byte[] right = actual == null ? new byte[0] : actual.getBytes(StandardCharsets.UTF_8);
     if (!MessageDigest.isEqual(left, right)) {

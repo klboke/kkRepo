@@ -8,12 +8,14 @@ import com.github.klboke.kkrepo.security.scan.ScannerContract.Adapter;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Capabilities;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.CatalogRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.CatalogResponse;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.CancellationResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.InputStreamSource;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Readiness;
+import jakarta.annotation.PostConstruct;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
@@ -27,6 +29,7 @@ import org.springframework.stereotype.Component;
 /** Streaming HTTP implementation of the versioned scanner contract. */
 @Component
 public class HttpSecurityScannerAdapter implements Adapter {
+  private static final long TRANSPORT_GRACE_SECONDS = 5;
   private final ObjectMapper objectMapper;
   private final SecurityScanningProperties properties;
   private final HttpClient client;
@@ -41,6 +44,17 @@ public class HttpSecurityScannerAdapter implements Adapter {
         .connectTimeout(properties.getAdapter().getConnectTimeout())
         .followRedirects(HttpClient.Redirect.NEVER)
         .build();
+  }
+
+  @PostConstruct
+  void validateConfiguration() {
+    if (properties.isEnabled()
+        && (properties.getAdapter().getServiceCredential() == null
+            || properties.getAdapter().getServiceCredential().isBlank())) {
+      throw new IllegalStateException(
+          "kkrepo.security-scanning.adapter.service-credential must be configured "
+              + "when security scanning is enabled");
+    }
   }
 
   @Override
@@ -114,7 +128,7 @@ public class HttpSecurityScannerAdapter implements Adapter {
   public OciScanResponse scanOci(OciScanRequest request) throws IOException {
     byte[] body = objectMapper.writeValueAsBytes(request);
     HttpRequest.Builder builder = HttpRequest.newBuilder(resolve("/v1/oci/scan"))
-        .timeout(Duration.ofSeconds(Math.max(1, request.limits().timeoutSeconds())))
+        .timeout(requestTimeout(request.limits().timeoutSeconds()))
         .header("Content-Type", "application/json")
         .header("X-KKRepo-API-Version", request.apiVersion())
         .header("X-KKRepo-Run-ID", request.runId())
@@ -123,6 +137,20 @@ public class HttpSecurityScannerAdapter implements Adapter {
     withServiceCredential(builder);
     HttpRequest httpRequest = builder.build();
     return send(httpRequest, OciScanResponse.class);
+  }
+
+  @Override
+  public CancellationResponse cancel(String runId) {
+    if (runId == null || !runId.matches("[A-Za-z0-9._:-]{1,128}")) {
+      throw new IllegalArgumentException("Invalid security scanner run ID");
+    }
+    HttpRequest.Builder builder = HttpRequest.newBuilder(resolve("/v1/runs/" + runId + "/cancel"))
+        .timeout(Duration.ofSeconds(5))
+        .header("Accept", "application/json")
+        .header("X-KKRepo-API-Version", ScannerContract.API_VERSION)
+        .POST(HttpRequest.BodyPublishers.noBody());
+    withServiceCredential(builder);
+    return send(builder.build(), CancellationResponse.class);
   }
 
   private <T> T get(String path, Class<T> type) {
@@ -138,7 +166,7 @@ public class HttpSecurityScannerAdapter implements Adapter {
   private HttpRequest.Builder binaryRequest(
       String path, int timeoutSeconds, InputStreamSource source) {
     HttpRequest.Builder builder = HttpRequest.newBuilder(resolve(path))
-        .timeout(Duration.ofSeconds(Math.max(1, timeoutSeconds)))
+        .timeout(requestTimeout(timeoutSeconds))
         .header("Accept", "application/json")
         .POST(HttpRequest.BodyPublishers.ofInputStream(() -> {
           try {
@@ -149,6 +177,11 @@ public class HttpSecurityScannerAdapter implements Adapter {
         }));
     withServiceCredential(builder);
     return builder;
+  }
+
+  static Duration requestTimeout(int scannerTimeoutSeconds) {
+    long bounded = Math.max(1L, scannerTimeoutSeconds);
+    return Duration.ofSeconds(bounded + TRANSPORT_GRACE_SECONDS);
   }
 
   private <T> T send(HttpRequest request, Class<T> type) {

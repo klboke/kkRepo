@@ -146,6 +146,34 @@ class SecurityScanExecutorTest {
   }
 
   @Test
+  void carriesCatalogProjectionIncompletenessIntoTheFinalRun() throws Exception {
+    Fixture fixture = new Fixture(ScanStage.CATALOG_AND_MATCH, SubjectKind.ASSET_BLOB);
+    CatalogResponse completeDocumentWithTruncatedProjection = new CatalogResponse(
+        "adapter",
+        "1",
+        "syft",
+        "1.0",
+        "cap",
+        SHA256,
+        ScanCompleteness.COMPLETE,
+        "CycloneDX",
+        "1.5",
+        100_001,
+        0,
+        "{\"bomFormat\":\"CycloneDX\"}".getBytes(),
+        catalogResponse().components(),
+        Map.of());
+    when(fixture.adapter.catalog(any(), any()))
+        .thenReturn(completeDocumentWithTruncatedProjection);
+    when(fixture.adapter.match(any(), any())).thenReturn(matchResponse());
+
+    ScanRun run = fixture.executor.execute(fixture.task);
+
+    assertEquals(ScanState.PARTIAL, run.status());
+    assertEquals(ScanCompleteness.PARTIAL, run.scanCompleteness());
+  }
+
+  @Test
   void rejectsStaleMissingAndUnscannableSubjectsWithStableCodes() {
     Fixture missingLease = new Fixture(ScanStage.CATALOG_AND_MATCH, SubjectKind.ASSET_BLOB);
     when(missingLease.task.leaseToken()).thenReturn(null);

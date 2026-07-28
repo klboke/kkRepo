@@ -806,7 +806,7 @@ public class SecurityScanManagementService {
         command.expiresAt(),
         now,
         now));
-    scans.bumpAllRepositoryConfigRevisions(now);
+    scans.invalidatePolicyStatesForWaiver(created);
     return created;
   }
 
@@ -815,9 +815,10 @@ public class SecurityScanManagementService {
     requireWaiverPermission(actor, "delete");
     ScanWaiver waiver = scans.findWaiver(waiverId)
         .orElseThrow(() -> notFound("Waiver not found"));
-    if (waiver.repositoryId() != null) requireRepositoryAdmin(actor, waiver.repositoryId());
+    Long effectiveRepositoryId = effectiveWaiverRepositoryId(waiver);
+    if (effectiveRepositoryId != null) requireRepositoryAdmin(actor, effectiveRepositoryId);
     if (!scans.deleteWaiver(waiverId)) throw notFound("Waiver not found");
-    scans.bumpAllRepositoryConfigRevisions(Instant.now());
+    scans.invalidatePolicyStatesForWaiver(waiver);
     return waiver;
   }
 

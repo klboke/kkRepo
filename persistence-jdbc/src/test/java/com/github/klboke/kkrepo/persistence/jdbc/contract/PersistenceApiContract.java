@@ -224,6 +224,21 @@ public abstract class PersistenceApiContract {
     assertTrue(
         inTransaction(() -> scans.claimCandidates(10)).isEmpty(),
         "the generated pending projection must hide the acknowledged generation");
+    SecurityScanDao.BackfillPage enabledRepositoryBackfill = inTransaction(
+        () -> scans.markRepositoryAssetsForBackfill(repositoryId, 0, 100));
+    SecurityScanDao.BackfillPage repeatedEnabledRepositoryBackfill = inTransaction(
+        () -> scans.markRepositoryAssetsForBackfill(repositoryId, 0, 100));
+    assertEquals(1, enabledRepositoryBackfill.markedAssets());
+    assertEquals(0, repeatedEnabledRepositoryBackfill.markedAssets());
+    assertEquals(
+        1,
+        scans.findCandidate(assetId).orElseThrow().contentGeneration(),
+        "enabling a profile must requeue an unchanged candidate without inventing new content");
+    assertEquals(
+        assetId,
+        inTransaction(() -> scans.claimCandidates(10)).getFirst().assetId(),
+        "a repository backfill must expose an acknowledged unchanged candidate again");
+    assertTrue(scans.markCandidateEnqueued(assetId, 1));
 
     SecurityScanDao.ScanProfile profile = scans.createProfile(new SecurityScanDao.ScanProfile(
         null, "contract-profile", true, "syft", "grype", List.of("vuln"), Map.of(),
@@ -331,6 +346,7 @@ public abstract class PersistenceApiContract {
     long runId = runIds.getFirst();
     long groupRepositoryId =
         createRepository("scan-contract-group", RepositoryFormat.MAVEN2, RepositoryType.GROUP);
+    stores().repositories().addMember(groupRepositoryId, repositoryId, 0);
     inTransaction(() -> {
       scans.associateRun(
           runId, repositoryId, assetId, profileId, 1, now.plusSeconds(2));
@@ -494,6 +510,60 @@ public abstract class PersistenceApiContract {
             null,
             now.plusSeconds(2),
             0));
+    long outerGroupRepositoryId =
+        createRepository("scan-contract-outer", RepositoryFormat.MAVEN2, RepositoryType.GROUP);
+    stores().repositories().addMember(outerGroupRepositoryId, groupRepositoryId, 0);
+    scans.upsertRepositoryConfig(new SecurityScanDao.RepositoryScanConfig(
+        outerGroupRepositoryId,
+        true,
+        profileId,
+        true,
+        true,
+        EnforcementMode.ENFORCE,
+        PolicyAction.BLOCK,
+        PolicyAction.BLOCK,
+        PolicyAction.BLOCK,
+        3600L,
+        null,
+        1,
+        now,
+        now));
+    assertEquals(
+        java.util.stream.Stream.of(repositoryId, groupRepositoryId, outerGroupRepositoryId)
+            .sorted()
+            .toList(),
+        scans.findDownloadPolicySnapshots(assetId, outerGroupRepositoryId).stream()
+            .map(snapshotRow -> snapshotRow.config().repositoryId())
+            .sorted()
+            .toList(),
+        "nested downloads must enforce every configured group on the actual source-to-entry path");
+    long unrelatedGroupRepositoryId =
+        createRepository("scan-contract-unrelated", RepositoryFormat.MAVEN2, RepositoryType.GROUP);
+    scans.upsertRepositoryConfig(new SecurityScanDao.RepositoryScanConfig(
+        unrelatedGroupRepositoryId,
+        true,
+        profileId,
+        true,
+        true,
+        EnforcementMode.ENFORCE,
+        PolicyAction.BLOCK,
+        PolicyAction.BLOCK,
+        PolicyAction.BLOCK,
+        3600L,
+        null,
+        1,
+        now,
+        now));
+    assertEquals(
+        List.of(repositoryId),
+        scans.findDownloadPolicySnapshots(assetId, unrelatedGroupRepositoryId).stream()
+            .map(snapshotRow -> snapshotRow.config().repositoryId())
+            .toList(),
+        "an unrelated entry repository must not inject its policy into the download path");
+    assertEquals(1, scans.invalidatePolicyStatesForWaiver(waiver));
+    assertTrue(scans.findAssetPolicyState(assetId, profileId, repositoryId).isEmpty());
+    assertTrue(scans.findAssetPolicyState(assetId, profileId, groupRepositoryId).isPresent());
+    scans.upsertAssetPolicyStateIfCurrent(policyState);
     scans.upsertRepositoryConfig(new SecurityScanDao.RepositoryScanConfig(
         repositoryId,
         true,

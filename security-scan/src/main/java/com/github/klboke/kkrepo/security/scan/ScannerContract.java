@@ -148,6 +148,8 @@ public final class ScannerContract {
     }
   }
 
+  public record CancellationResponse(String runId, boolean cancelled) {}
+
   public record Component(
       String componentRef,
       String packageUrl,
@@ -206,5 +208,7 @@ public final class ScannerContract {
     MatchResponse match(MatchRequest request, InputStreamSource sbom) throws IOException;
 
     OciScanResponse scanOci(OciScanRequest request) throws IOException;
+
+    CancellationResponse cancel(String runId);
   }
 }

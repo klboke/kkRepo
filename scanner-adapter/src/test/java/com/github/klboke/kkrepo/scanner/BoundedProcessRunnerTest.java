@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.scanner;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -11,6 +12,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -123,6 +125,48 @@ class BoundedProcessRunnerTest {
             Duration.ofSeconds(1),
             Map.of()));
     assertEquals("SCANNER_PROCESS_IO", io.code());
+  }
+
+  @Test
+  void interruptionTerminatesTheActiveScannerProcessTree() throws Exception {
+    ScannerAdapterProperties properties = new ScannerAdapterProperties();
+    BoundedProcessRunner runner = new BoundedProcessRunner(properties);
+    Path pidFile = directory.resolve("scanner.pid");
+    AtomicReference<Throwable> failure = new AtomicReference<>();
+    Thread scanThread = Thread.ofPlatform().start(() -> {
+      try {
+        runner.run(
+            List.of(
+                "/bin/sh",
+                "-c",
+                "sleep 30 & child=$!; printf '%s %s' $$ \"$child\" > '"
+                    + pidFile + "'; wait"),
+            directory,
+            directory.resolve("interrupted.out"),
+            Duration.ofSeconds(30),
+            Map.of());
+      } catch (Throwable error) {
+        failure.set(error);
+      }
+    });
+    for (int attempt = 0; attempt < 100 && !Files.exists(pidFile); attempt++) {
+      Thread.sleep(10);
+    }
+    assertTrue(Files.exists(pidFile));
+    List<Long> processIds = java.util.Arrays.stream(Files.readString(pidFile).split(" "))
+        .map(Long::parseLong)
+        .toList();
+
+    scanThread.interrupt();
+    scanThread.join(5000);
+
+    assertFalse(scanThread.isAlive());
+    ScannerRequestException interrupted =
+        (ScannerRequestException) failure.get();
+    assertEquals("SCANNER_INTERRUPTED", interrupted.code());
+    for (Long processId : processIds) {
+      assertFalse(ProcessHandle.of(processId).map(ProcessHandle::isAlive).orElse(false));
+    }
   }
 
   @Test

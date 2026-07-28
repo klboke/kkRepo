@@ -1,11 +1,13 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -17,11 +19,13 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanTask;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.RequestReason;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanStage;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.Adapter;
 import java.lang.reflect.Method;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 
 class SecurityScanTaskWorkerTest {
@@ -148,11 +152,16 @@ class SecurityScanTaskWorkerTest {
     try {
       when(fixture.scans.heartbeatTask(eq(5L), eq("lease"), any(), any()))
           .thenReturn(false);
+      Thread activeThread = new Thread();
       Method heartbeat =
-          SecurityScanTaskWorker.class.getDeclaredMethod("heartbeat", ScanTask.class);
+          SecurityScanTaskWorker.class.getDeclaredMethod(
+              "heartbeat", ScanTask.class, Thread.class, AtomicBoolean.class);
       heartbeat.setAccessible(true);
-      heartbeat.invoke(fixture.worker, fixture.task);
+      heartbeat.invoke(
+          fixture.worker, fixture.task, activeThread, new AtomicBoolean(false));
       verify(fixture.scans).heartbeatTask(eq(5L), eq("lease"), any(), any());
+      verify(fixture.adapter).cancel("5");
+      assertTrue(activeThread.isInterrupted());
     } finally {
       fixture.worker.shutdown();
     }
@@ -164,15 +173,20 @@ class SecurityScanTaskWorkerTest {
     try {
       when(fixture.scans.heartbeatTask(eq(5L), eq("lease"), any(), any()))
           .thenThrow(new IllegalStateException("temporary"));
+      Thread activeThread = new Thread();
       Method heartbeat =
-          SecurityScanTaskWorker.class.getDeclaredMethod("heartbeat", ScanTask.class);
+          SecurityScanTaskWorker.class.getDeclaredMethod(
+              "heartbeat", ScanTask.class, Thread.class, AtomicBoolean.class);
       heartbeat.setAccessible(true);
 
-      heartbeat.invoke(fixture.worker, fixture.task);
-      heartbeat.invoke(fixture.worker, fixture.task);
+      heartbeat.invoke(
+          fixture.worker, fixture.task, activeThread, new AtomicBoolean(false));
+      heartbeat.invoke(
+          fixture.worker, fixture.task, activeThread, new AtomicBoolean(false));
 
       verify(fixture.scans, times(2))
           .heartbeatTask(eq(5L), eq("lease"), any(), any());
+      assertFalse(activeThread.isInterrupted());
     } finally {
       fixture.worker.shutdown();
     }
@@ -208,6 +222,7 @@ class SecurityScanTaskWorkerTest {
     final SecurityScanningProperties properties = new SecurityScanningProperties();
     final AssetDao assets = mock(AssetDao.class);
     final SecurityScanMetrics metrics = mock(SecurityScanMetrics.class);
+    final Adapter adapter = mock(Adapter.class);
     final ScanTask task = mock(ScanTask.class);
     final SecurityScanTaskWorker worker;
 
@@ -229,7 +244,7 @@ class SecurityScanTaskWorkerTest {
           "demo.jar", "artifact", "application/java-archive", 8L,
           null, Instant.EPOCH, Map.of())));
       worker = new SecurityScanTaskWorker(
-          scans, coordinator, executor, finalizer, properties, assets, metrics);
+          scans, coordinator, executor, finalizer, properties, assets, metrics, adapter);
     }
   }
 }

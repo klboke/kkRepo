@@ -382,7 +382,7 @@ not depend on a disabled browser button.
 | --- | ---: | --- |
 | `KKREPO_SECURITY_SCANNING_ENABLED` | `false` | Deployment capability gate |
 | `KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URL` | `http://scanner:8080` | Internal adapter URL |
-| `KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL` | Empty | Shared credential used by kkRepo |
+| `KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL` | Required when scanning is enabled | Shared credential used by kkRepo; kkRepo refuses to start with scanning enabled when this is empty |
 | `KKREPO_SECURITY_SCANNING_OCI_REGISTRY_URL` | `http://kkrepo:8080` | kkRepo URL used by the scanner for exact OCI digests |
 | `KKREPO_SECURITY_SCANNING_DATABASE_MAX_AGE` | `48h` | Maximum operational vulnerability-database age |
 | `KKREPO_SECURITY_SCANNING_OBSERVATION_MAX_AGE` | `2m` | Maximum scanner snapshot observation age |
@@ -399,7 +399,7 @@ registry URL values.
 
 | Environment variable | Application default | Purpose |
 | --- | ---: | --- |
-| `KKREPO_SCANNER_SERVICE_CREDENTIAL` | Empty | Must match the kkRepo credential |
+| `KKREPO_SCANNER_SERVICE_CREDENTIAL` | Required | Must match the kkRepo credential; the adapter refuses to start when it is empty |
 | `KKREPO_SCANNER_DB_AUTO_UPDATE` | `false` | Automatic database update; Compose/Helm templates set `true` |
 | `KKREPO_SCANNER_DB_DIRECTORY` | `/var/lib/kkrepo-scanner/grype` | Grype database directory |
 | `KKREPO_SCANNER_DB_UPDATE_INTERVAL` | `6h` | Target update interval |

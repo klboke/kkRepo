@@ -44,7 +44,7 @@ services:
       # administrators still activate scanning per repository in the Admin UI.
       KKREPO_SECURITY_SCANNING_ENABLED: ${KKREPO_SECURITY_SCANNING_ENABLED:-false}
       KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URL: http://scanner:8080
-      KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL: ${KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL:-quickstart-scanner-credential-change-me}
+      KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL: ${KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL:-}
       KKREPO_SECURITY_SCANNING_OCI_REGISTRY_URL: http://kkrepo:8080
     ports:
       - "${KKREPO_HTTP_PORT:-19090}:8080"
@@ -57,7 +57,7 @@ services:
     image: ghcr.io/klboke/kkrepo-scanner:${KKREPO_SCANNER_IMAGE_TAG:-0.6.0}
     profiles: ["security-scanning"]
     environment:
-      KKREPO_SCANNER_SERVICE_CREDENTIAL: ${KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL:-quickstart-scanner-credential-change-me}
+      KKREPO_SCANNER_SERVICE_CREDENTIAL: ${KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL:-}
       KKREPO_SCANNER_DB_AUTO_UPDATE: ${KKREPO_SCANNER_DB_AUTO_UPDATE:-true}
       KKREPO_SCANNER_DB_DIRECTORY: /var/lib/kkrepo-scanner/grype
     read_only: true

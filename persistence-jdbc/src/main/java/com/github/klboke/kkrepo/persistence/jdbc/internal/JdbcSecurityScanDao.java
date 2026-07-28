@@ -498,6 +498,41 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   public List<DownloadPolicySnapshot> findDownloadPolicySnapshots(
       long assetId, Long entryRepositoryId) {
     return jdbc.query("""
+        WITH RECURSIVE
+        target_asset AS (
+          SELECT *
+          FROM asset
+          WHERE id = ?
+        ),
+        source_ancestors(repository_id) AS (
+          SELECT repository_id
+          FROM target_asset
+          UNION
+          SELECT rm.repository_id
+          FROM repository_member rm
+          JOIN source_ancestors ancestor
+            ON ancestor.repository_id = rm.member_repository_id
+        ),
+        entry_descendants(repository_id) AS (
+          SELECT id
+          FROM repository
+          WHERE id = ?
+          UNION
+          SELECT rm.member_repository_id
+          FROM repository_member rm
+          JOIN entry_descendants descendant
+            ON descendant.repository_id = rm.repository_id
+        ),
+        policy_contexts(repository_id) AS (
+          SELECT ancestor.repository_id
+          FROM source_ancestors ancestor
+          WHERE ancestor.repository_id IN (
+            SELECT repository_id FROM target_asset
+          )
+          OR ancestor.repository_id IN (
+            SELECT repository_id FROM entry_descendants
+          )
+        )
         SELECT
           a.id AS dp_asset_id,
           a.repository_id AS dp_source_repository_id,
@@ -590,11 +625,11 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
           policy_state.next_waiver_expiry AS dp_policy_state_next_waiver_expiry,
           policy_state.last_evaluated_at AS dp_policy_state_last_evaluated_at,
           policy_state.version AS dp_policy_state_version
-        FROM asset a
+        FROM target_asset a
         JOIN asset_blob b ON b.id = a.asset_blob_id
         JOIN repository source_repository ON source_repository.id = a.repository_id
         JOIN repository_security_scan_config c
-          ON (c.repository_id = a.repository_id OR c.repository_id = ?)
+          ON c.repository_id IN (SELECT repository_id FROM policy_contexts)
          AND (
            (source_repository.type = 'hosted' AND c.scan_hosted_content = TRUE)
            OR (source_repository.type = 'proxy' AND c.scan_proxy_content = TRUE)
@@ -608,9 +643,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
           ON policy_state.asset_id = a.id
          AND policy_state.profile_id = c.profile_id
          AND policy_state.repository_id = c.repository_id
-        WHERE a.id = ?
         ORDER BY c.repository_id
-        """, downloadPolicySnapshotMapper, entryRepositoryId, assetId);
+        """, downloadPolicySnapshotMapper, assetId, entryRepositoryId);
   }
 
   @Override
@@ -641,15 +675,6 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       insertRepositoryConfig(config, now);
     }
     return findRepositoryConfig(config.repositoryId()).orElseThrow();
-  }
-
-  @Override
-  public int bumpAllRepositoryConfigRevisions(Instant updatedAt) {
-    return jdbc.update("""
-        UPDATE repository_security_scan_config
-        SET config_revision = config_revision + 1, updated_at = ?
-        WHERE enabled = TRUE
-        """, nullableTimestamp(requiredNow(updatedAt)));
   }
 
   private void insertRepositoryConfig(RepositoryScanConfig config, Instant now) {
@@ -757,7 +782,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     for (Map<String, Object> row : rows) {
       long assetId = ((Number) row.get("id")).longValue();
       long blobId = ((Number) row.get("asset_blob_id")).longValue();
-      marked += ensureCandidate(assetId, blobId);
+      int changed = ensureCandidate(assetId, blobId);
+      marked += changed == 1 ? 1 : markUnchangedCandidatePending(assetId, blobId);
       nextAssetId = assetId;
     }
     return new BackfillPage(rows.size(), marked, nextAssetId, rows.size() < limit);
@@ -788,6 +814,19 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         WHERE asset_id = ?
           AND (asset_blob_id IS NULL OR asset_blob_id <> ?)
         """, assetBlobId, assetId, assetBlobId);
+  }
+
+  private int markUnchangedCandidatePending(long assetId, long assetBlobId) {
+    return jdbc.update("""
+        UPDATE security_scan_candidate
+        SET enqueued_generation = content_generation - 1,
+            changed_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE asset_id = ?
+          AND asset_blob_id = ?
+          AND content_generation > 0
+          AND enqueued_generation >= content_generation
+        """, assetId, assetBlobId);
   }
 
   @Override
@@ -2072,6 +2111,30 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         "SELECT * FROM security_scan_waiver WHERE id = ?",
         waiverMapper,
         waiverId).stream().findFirst();
+  }
+
+  @Override
+  public int invalidatePolicyStatesForWaiver(ScanWaiver waiver) {
+    StringBuilder sql = new StringBuilder(
+        "DELETE FROM asset_security_policy_state WHERE 1 = 1");
+    List<Object> args = new ArrayList<>();
+    if (waiver.assetId() != null) {
+      sql.append(" AND asset_id = ?");
+      args.add(waiver.assetId());
+    }
+    if (waiver.repositoryId() != null) {
+      sql.append(" AND repository_id = ?");
+      args.add(waiver.repositoryId());
+    }
+    if (waiver.policyId() != null) {
+      sql.append(" AND policy_id = ?");
+      args.add(waiver.policyId());
+    }
+    if (waiver.policyRevision() != null) {
+      sql.append(" AND policy_revision = ?");
+      args.add(waiver.policyRevision());
+    }
+    return jdbc.update(sql.toString(), args.toArray());
   }
 
   @Override

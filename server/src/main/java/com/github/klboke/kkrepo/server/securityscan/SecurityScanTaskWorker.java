@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.securityscan;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanTask;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.Adapter;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanExecutor.SupersededSecurityScanTaskException;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanFinalizer.LostSecurityScanLeaseException;
 import jakarta.annotation.PreDestroy;
@@ -17,6 +18,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,6 +40,7 @@ public class SecurityScanTaskWorker {
   private final SecurityScanningProperties properties;
   private final AssetDao assets;
   private final SecurityScanMetrics metrics;
+  private final Adapter adapter;
   private final String workerId;
   private final ExecutorService taskExecutor;
   private final ScheduledExecutorService heartbeatExecutor;
@@ -49,7 +52,8 @@ public class SecurityScanTaskWorker {
       SecurityScanFinalizer finalizer,
       SecurityScanningProperties properties,
       AssetDao assets,
-      SecurityScanMetrics metrics) {
+      SecurityScanMetrics metrics,
+      Adapter adapter) {
     this.scans = scans;
     this.coordinator = coordinator;
     this.executor = executor;
@@ -57,6 +61,7 @@ public class SecurityScanTaskWorker {
     this.properties = properties;
     this.assets = assets;
     this.metrics = metrics;
+    this.adapter = adapter;
     this.workerId = hostName() + "-" + UUID.randomUUID();
     this.taskExecutor =
         Executors.newFixedThreadPool(properties.getWorker().getBatchSize(), Thread.ofVirtual().factory());
@@ -128,8 +133,10 @@ public class SecurityScanTaskWorker {
     int heartbeatSeconds = Math.min(
         properties.getWorker().getHeartbeatSeconds(),
         Math.max(5, properties.getWorker().getLeaseSeconds() / 3));
+    Thread activeThread = Thread.currentThread();
+    AtomicBoolean finished = new AtomicBoolean();
     ScheduledFuture<?> heartbeat = heartbeatExecutor.scheduleAtFixedRate(
-        () -> heartbeat(task),
+        () -> heartbeat(task, activeThread, finished),
         heartbeatSeconds,
         heartbeatSeconds,
         TimeUnit.SECONDS);
@@ -144,20 +151,29 @@ public class SecurityScanTaskWorker {
       outcome = "lease_lost";
       log.debug("Security scan task {} was taken over by another worker", task.id());
     } catch (ScannerAdapterException e) {
-      outcome = e.retryable() && task.attempts() < task.maxAttempts() ? "retry" : "failed";
-      fail(task, e.code(), e.getMessage(), e.retryable());
+      if (Thread.currentThread().isInterrupted()) {
+        outcome = "cancelled";
+      } else {
+        outcome = e.retryable() && task.attempts() < task.maxAttempts() ? "retry" : "failed";
+        fail(task, e.code(), e.getMessage(), e.retryable());
+      }
     } catch (RuntimeException e) {
-      outcome = task.attempts() < task.maxAttempts() ? "retry" : "failed";
-      log.warn("Unexpected security scan task failure: {}", task.id(), e);
-      fail(task, "SCAN_INTERNAL_ERROR", safeMessage(e), true);
+      if (Thread.currentThread().isInterrupted()) {
+        outcome = "cancelled";
+      } else {
+        outcome = task.attempts() < task.maxAttempts() ? "retry" : "failed";
+        log.warn("Unexpected security scan task failure: {}", task.id(), e);
+        fail(task, "SCAN_INTERNAL_ERROR", safeMessage(e), true);
+      }
     } finally {
+      finished.set(true);
       heartbeat.cancel(false);
       metrics.recordTask(
           format, task.stage(), task.requestReason(), outcome, timer);
     }
   }
 
-  private void heartbeat(ScanTask task) {
+  private void heartbeat(ScanTask task, Thread activeThread, AtomicBoolean finished) {
     try {
       Instant now = Instant.now();
       boolean renewed = scans.heartbeatTask(
@@ -167,11 +183,25 @@ public class SecurityScanTaskWorker {
           now);
       if (!renewed) {
         log.debug("Security scan heartbeat lost lease for task {}", task.id());
+        if (!finished.get()) {
+          activeThread.interrupt();
+          cancelAdapterRun(task.id());
+        }
       }
     } catch (RuntimeException e) {
       // A periodic executor suppresses all later executions after an exception. Keep retrying
       // until the task completes or its fenced final write observes that another worker owns it.
       log.warn("Security scan heartbeat failed for task {}; retrying", task.id(), e);
+    }
+  }
+
+  private void cancelAdapterRun(long taskId) {
+    try {
+      adapter.cancel(Long.toString(taskId));
+    } catch (RuntimeException e) {
+      // The durable cancelled/taken-over task row already fences publication. A cancellation
+      // request may reach another adapter replica, so resource release remains best effort.
+      log.debug("Unable to cancel active adapter work for task {}", taskId, e);
     }
   }
 
