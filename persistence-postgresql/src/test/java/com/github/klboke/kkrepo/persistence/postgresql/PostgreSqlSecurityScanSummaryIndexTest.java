@@ -28,6 +28,10 @@ class PostgreSqlSecurityScanSummaryIndexTest extends PostgreSqlIntegrationTestSu
             + "USING btree (repository_id, status, id)",
         indexDefinition("idx_security_scan_task_repository_status"));
     assertEquals(
+        "CREATE INDEX idx_security_scan_task_repository_profile ON public.security_scan_task "
+            + "USING btree (repository_id, profile_id, id)",
+        indexDefinition("idx_security_scan_task_repository_profile"));
+    assertEquals(
         "CREATE INDEX idx_asset_security_state_repository_summary "
             + "ON public.asset_security_state "
             + "USING btree (repository_id, scan_state, policy_decision)",

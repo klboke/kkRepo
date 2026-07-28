@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -172,6 +173,42 @@ class SecurityScanManagementServiceCoreTest {
             .map(RepositoryRecord::id)
             .collect(java.util.stream.Collectors.toSet()),
         Set.copyOf(taskScope.getValue()));
+  }
+
+  @Test
+  void groupContextListsAndAdministersTasksStoredAgainstItsMemberSource() {
+    RepositoryRecord group = repository(2L, "maven-group", RepositoryType.GROUP);
+    when(repositories.list()).thenReturn(List.of(repository, group));
+    when(repositories.findById(2L)).thenReturn(Optional.of(group));
+    when(security.decide(
+            eq(actor.permissionSubject()),
+            argThat((RepositoryPermission permission) ->
+                permission.repository().equals(repository.name()))))
+        .thenReturn(AccessDecision.deny("source is reachable only through the group"));
+
+    ScanTask task = mock(ScanTask.class);
+    when(task.id()).thenReturn(77L);
+    when(task.repositoryId()).thenReturn(1L);
+    when(task.profileId()).thenReturn(1L);
+    when(task.subjectKind()).thenReturn(SubjectKind.ASSET_BLOB);
+    when(task.stage()).thenReturn(ScanStage.CATALOG_AND_MATCH);
+    when(task.requestReason()).thenReturn(RequestReason.CONTENT_CHANGED);
+    when(task.status()).thenReturn(TaskStatus.FAILED);
+    when(task.maxAttempts()).thenReturn(5);
+    when(scans.listTasksByRepositories(List.of(2L), null, null, 0, 11))
+        .thenReturn(List.of(task));
+    when(scans.findTask(77L)).thenReturn(Optional.of(task));
+    when(scope.effectiveConfigsForSource(1L))
+        .thenReturn(List.of(config(2L, true, 1L, null)));
+    when(scans.requeueTask(eq(77L), any(), eq("admin"))).thenReturn(true);
+
+    var page = service.taskPage(actor, null, null, null, 0, 10);
+    assertEquals(1, page.items().size());
+    assertEquals("maven-hosted", page.items().getFirst().repository());
+    service.retry(actor, 77L);
+
+    verify(scans).listTasksByRepositories(List.of(2L), null, null, 0, 11);
+    verify(scans).requeueTask(eq(77L), any(), eq("admin"));
   }
 
   @Test

@@ -41,6 +41,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -181,13 +182,23 @@ public class SecurityScanManagementService {
           afterId,
           safeLimit + 1);
     } else {
-      requireVisibleRepository(actor, repositoryId);
-      rows = scans.listTasks(
-          repositoryId, status, normalizedQuery, afterId, safeLimit + 1);
+      RepositoryRecord context = requireVisibleRepository(actor, repositoryId);
+      rows = context.type() == RepositoryType.GROUP
+          ? scans.listTasksByRepositories(
+              List.of(repositoryId), status, normalizedQuery, afterId, safeLimit + 1)
+          : scans.listTasks(
+              repositoryId, status, normalizedQuery, afterId, safeLimit + 1);
     }
     Map<Long, String> repositoryNames = new LinkedHashMap<>();
     for (RepositoryRecord repository : visible) {
       repositoryNames.put(repository.id(), repository.name());
+    }
+    for (ScanTask task : rows) {
+      if (!repositoryNames.containsKey(task.repositoryId())) {
+        repositories.findById(task.repositoryId())
+            .map(RepositoryRecord::name)
+            .ifPresent(name -> repositoryNames.put(task.repositoryId(), name));
+      }
     }
     List<TaskView> views = rows.stream()
         .map(task -> TaskView.from(task, repositoryNames.get(task.repositoryId())))
@@ -621,7 +632,7 @@ public class SecurityScanManagementService {
   @Transactional
   public void retry(AuthenticatedSubject actor, long taskId) {
     ScanTask task = scans.findTask(taskId).orElseThrow(() -> notFound("Task not found"));
-    requireRepositoryAdmin(actor, task.repositoryId());
+    requireTaskAdmin(actor, task);
     if (!scans.requeueTask(taskId, Instant.now(), actor.userId())) {
       throw conflict("Only failed or cancelled tasks can be retried");
     }
@@ -630,7 +641,7 @@ public class SecurityScanManagementService {
   @Transactional
   public void cancel(AuthenticatedSubject actor, long taskId) {
     ScanTask task = scans.findTask(taskId).orElseThrow(() -> notFound("Task not found"));
-    requireRepositoryAdmin(actor, task.repositoryId());
+    requireTaskAdmin(actor, task);
     if (!scans.cancelTask(taskId, Instant.now())) {
       throw conflict("Task is already terminal");
     }
@@ -1059,6 +1070,22 @@ public class SecurityScanManagementService {
       throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Repository administration required");
     }
     return repository;
+  }
+
+  private void requireTaskAdmin(AuthenticatedSubject actor, ScanTask task) {
+    RepositoryRecord source = repositories.findById(task.repositoryId())
+        .orElseThrow(() -> notFound("Repository not found"));
+    if (canAdministerRepository(actor, source)) return;
+    boolean contextAdmin = repositoryScope.effectiveConfigsForSource(task.repositoryId()).stream()
+        .filter(config -> config.profileId() == task.profileId())
+        .map(RepositoryScanConfig::repositoryId)
+        .map(repositories::findById)
+        .flatMap(Optional::stream)
+        .anyMatch(context -> canAdministerRepository(actor, context));
+    if (!contextAdmin) {
+      throw new ResponseStatusException(
+          HttpStatus.FORBIDDEN, "Repository administration required");
+    }
   }
 
   private boolean isAssetInRepositoryContext(

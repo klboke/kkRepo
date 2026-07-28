@@ -27,6 +27,9 @@ class MySqlSecurityScanSummaryIndexTest extends MySqlIntegrationTestSupport {
         List.of("repository_id", "status", "id"),
         indexColumns("security_scan_task", "idx_security_scan_task_repository_status"));
     assertEquals(
+        List.of("repository_id", "profile_id", "id"),
+        indexColumns("security_scan_task", "idx_security_scan_task_repository_profile"));
+    assertEquals(
         List.of("repository_id", "scan_state", "policy_decision"),
         indexColumns(
             "asset_security_state", "idx_asset_security_state_repository_summary"));

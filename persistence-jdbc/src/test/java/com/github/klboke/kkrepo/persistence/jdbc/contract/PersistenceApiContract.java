@@ -264,7 +264,7 @@ public abstract class PersistenceApiContract {
     SecurityScanDao.RepositoryScanConfig config = scans.upsertRepositoryConfig(
         new SecurityScanDao.RepositoryScanConfig(
             repositoryId, true, profileId, true, true, EnforcementMode.AUDIT,
-            PolicyAction.ALLOW, PolicyAction.ALLOW, PolicyAction.ALLOW,
+            PolicyAction.ALLOW, PolicyAction.BLOCK, PolicyAction.ALLOW,
             3600L, policyId, 1, now, now));
     assertTrue(config.enabled());
     assertEquals(1, config.configRevision());
@@ -317,8 +317,63 @@ public abstract class PersistenceApiContract {
         scans.metricSummary(100).pendingTasks(),
         "periodic task metrics must use a bounded status projection");
 
+    scans.upsertAssetStateIfCurrent(new SecurityScanDao.AssetSecurityState(
+        assetId,
+        profileId,
+        1,
+        PersistenceHashes.sha256("sha256:" + "2".repeat(64)),
+        null,
+        ScanState.PENDING,
+        ScanCompleteness.UNKNOWN,
+        false,
+        Severity.UNKNOWN,
+        Map.of(),
+        policyId,
+        1L,
+        PolicyDecision.ALLOW,
+        "SCAN_PENDING",
+        null,
+        now,
+        0));
+    scans.upsertAssetPolicyStateIfCurrent(new SecurityScanDao.AssetPolicyState(
+        assetId,
+        profileId,
+        repositoryId,
+        1,
+        null,
+        policyId,
+        1L,
+        config.configRevision(),
+        PolicyDecision.ALLOW,
+        "SCAN_PENDING",
+        0,
+        null,
+        null,
+        now,
+        0));
+    assertTrue(scans.cancelTask(taskId, now.plusSeconds(1)));
+    SecurityScanDao.AssetSecurityState cancelledState =
+        scans.findAssetState(assetId, profileId).orElseThrow();
+    assertEquals(ScanState.CANCELLED, cancelledState.scanState());
+    assertEquals(PolicyDecision.BLOCK_SCAN_FAILED, cancelledState.policyDecision());
+    assertEquals("TASK_CANCELLED", cancelledState.policyReasonCode());
+    SecurityScanDao.AssetPolicyState cancelledPolicyState =
+        scans.findAssetPolicyState(assetId, profileId, repositoryId).orElseThrow();
+    assertEquals(PolicyDecision.BLOCK_SCAN_FAILED, cancelledPolicyState.policyDecision());
+    assertEquals("TASK_CANCELLED", cancelledPolicyState.policyReasonCode());
+    assertTrue(scans.requeueTask(taskId, now.plusSeconds(2), "contract"));
+    assertEquals(
+        ScanState.PENDING,
+        scans.findAssetState(assetId, profileId).orElseThrow().scanState(),
+        "retrying a cancelled task must restore pending-action semantics");
+    assertEquals(
+        PolicyDecision.ALLOW,
+        scans.findAssetPolicyState(assetId, profileId, repositoryId)
+            .orElseThrow()
+            .policyDecision());
+
     SecurityScanDao.ScanTask firstLease = inTransaction(() -> scans.claimTasks(
-        "replica-a", now, now.plusSeconds(30), 1).getFirst());
+        "replica-a", now.plusSeconds(2), now.plusSeconds(30), 1).getFirst());
     assertTrue(inTransaction(() -> scans.claimTasks(
         "replica-b", now.plusSeconds(29), now.plusSeconds(59), 1)).isEmpty());
     SecurityScanDao.ScanTask takeover = inTransaction(() -> scans.claimTasks(
@@ -560,11 +615,24 @@ public abstract class PersistenceApiContract {
         1,
         scans.findDownloadPolicySnapshots(assetId, groupRepositoryId).size(),
         "a group hosted-content toggle must exclude hosted member assets");
+    assertTrue(
+        scans.listTasksByRepositories(List.of(groupRepositoryId), null, null, 0, 10).isEmpty(),
+        "a group task scope must honor the hosted-content toggle");
     SecurityScanDao.RepositoryScanConfig groupConfig = scans.upsertRepositoryConfig(
         new SecurityScanDao.RepositoryScanConfig(
             groupRepositoryId, true, profileId, true, true, EnforcementMode.ENFORCE,
             PolicyAction.BLOCK, PolicyAction.BLOCK, PolicyAction.BLOCK,
             3600L, null, 1, now, now));
+    assertEquals(
+        taskId,
+        scans.listTasksByRepositories(List.of(groupRepositoryId), null, null, 0, 10)
+            .getFirst()
+            .id(),
+        "group-visible task pages must include work stored against the concrete member source");
+    assertEquals(
+        1,
+        scans.summary(List.of(groupRepositoryId)).runningTasks(),
+        "group-only overview metrics must use the same member task scope as task pages");
     List<SecurityScanDao.DownloadPolicySnapshot> groupSnapshots =
         scans.findDownloadPolicySnapshots(assetId, groupRepositoryId);
     assertEquals(2, groupSnapshots.size());

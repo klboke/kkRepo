@@ -992,7 +992,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     List<Object> args = new ArrayList<>();
     StringBuilder sql = new StringBuilder();
     if (repositoryIds != null) {
-      sql.append(repositoryScopeCte());
+      sql.append(taskRepositoryScopeCte());
       args.add(repositoryScopeParameter(repositoryIds));
     }
     sql.append("""
@@ -1010,8 +1010,26 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       sql.append("""
            AND EXISTS (
              SELECT 1
-             FROM visible_repository visible
-             WHERE visible.repository_id = t.repository_id
+             FROM task_repository_scope scope
+             JOIN repository source_repository
+               ON source_repository.id = scope.source_repository_id
+             WHERE scope.source_repository_id = t.repository_id
+               AND (
+                 scope.directly_visible = TRUE
+                 OR (
+                   scope.profile_id = t.profile_id
+                   AND (
+                     (
+                       source_repository.type = 'hosted'
+                       AND scope.scan_hosted_content = TRUE
+                     )
+                     OR (
+                       source_repository.type = 'proxy'
+                       AND scope.scan_proxy_content = TRUE
+                     )
+                   )
+                 )
+               )
            )
           """);
     }
@@ -1210,13 +1228,83 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   @Override
+  @Transactional
   public boolean cancelTask(long taskId, Instant cancelledAt) {
+    transitionCurrentTaskProjectionToCancelled(taskId, cancelledAt);
     return jdbc.update("""
         UPDATE security_scan_task
         SET status = 'CANCELLED', claimed_by = NULL, lease_token = NULL, lease_until = NULL,
             last_heartbeat_at = NULL, finished_at = ?, updated_at = ?
         WHERE id = ? AND status IN ('PENDING', 'RUNNING', 'RETRY_WAIT')
         """, nullableTimestamp(cancelledAt), nullableTimestamp(cancelledAt), taskId) == 1;
+  }
+
+  private void transitionCurrentTaskProjectionToCancelled(long taskId, Instant cancelledAt) {
+    jdbc.update("""
+        UPDATE asset_security_state state
+        SET scan_state = 'CANCELLED',
+            inventory_complete = FALSE,
+            policy_decision = CASE
+              WHEN EXISTS (
+                SELECT 1
+                FROM repository_security_scan_config config
+                WHERE config.repository_id = state.repository_id
+                  AND config.profile_id = state.profile_id
+                  AND config.enabled = TRUE
+                  AND config.failure_action = 'BLOCK'
+              )
+              THEN 'BLOCK_SCAN_FAILED'
+              ELSE 'ALLOW'
+            END,
+            policy_reason_code = 'TASK_CANCELLED',
+            last_evaluated_at = ?,
+            version = version + 1
+        WHERE EXISTS (
+          SELECT 1
+          FROM security_scan_task task
+          JOIN security_scan_candidate candidate
+            ON candidate.asset_id = task.asset_id
+           AND candidate.content_generation = task.content_generation
+          WHERE task.id = ?
+            AND task.status IN ('PENDING', 'RUNNING', 'RETRY_WAIT')
+            AND task.asset_id = state.asset_id
+            AND task.profile_id = state.profile_id
+            AND task.content_generation = state.content_generation
+        )
+        """, nullableTimestamp(cancelledAt), taskId);
+    jdbc.update("""
+        UPDATE asset_security_policy_state state
+        SET policy_decision = CASE
+              WHEN EXISTS (
+                SELECT 1
+                FROM repository_security_scan_config config
+                WHERE config.repository_id = state.repository_id
+                  AND config.profile_id = state.profile_id
+                  AND config.enabled = TRUE
+                  AND config.failure_action = 'BLOCK'
+              )
+              THEN 'BLOCK_SCAN_FAILED'
+              ELSE 'ALLOW'
+            END,
+            policy_reason_code = 'TASK_CANCELLED',
+            waived_findings = 0,
+            stale_at = NULL,
+            next_waiver_expiry = NULL,
+            last_evaluated_at = ?,
+            version = version + 1
+        WHERE EXISTS (
+          SELECT 1
+          FROM security_scan_task task
+          JOIN security_scan_candidate candidate
+            ON candidate.asset_id = task.asset_id
+           AND candidate.content_generation = task.content_generation
+          WHERE task.id = ?
+            AND task.status IN ('PENDING', 'RUNNING', 'RETRY_WAIT')
+            AND task.asset_id = state.asset_id
+            AND task.profile_id = state.profile_id
+            AND task.content_generation = state.content_generation
+        )
+        """, nullableTimestamp(cancelledAt), taskId);
   }
 
   @Override
@@ -1234,7 +1322,9 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   @Override
+  @Transactional
   public boolean requeueTask(long taskId, Instant requestedAt, String requestedBy) {
+    transitionCurrentTaskProjectionToPending(taskId, requestedAt);
     return jdbc.update("""
         UPDATE security_scan_task
         SET status = 'PENDING', attempts = 0, next_attempt_at = ?, claimed_by = NULL,
@@ -1248,6 +1338,75 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         nullableTimestamp(requestedAt),
         nullableTimestamp(requestedAt),
         taskId) == 1;
+  }
+
+  private void transitionCurrentTaskProjectionToPending(long taskId, Instant requestedAt) {
+    jdbc.update("""
+        UPDATE asset_security_state state
+        SET scan_state = 'PENDING',
+            inventory_complete = FALSE,
+            policy_decision = CASE
+              WHEN EXISTS (
+                SELECT 1
+                FROM repository_security_scan_config config
+                WHERE config.repository_id = state.repository_id
+                  AND config.profile_id = state.profile_id
+                  AND config.enabled = TRUE
+                  AND config.pending_action = 'BLOCK'
+              )
+              THEN 'BLOCK_PENDING'
+              ELSE 'ALLOW'
+            END,
+            policy_reason_code = 'SCAN_PENDING',
+            stale_at = NULL,
+            last_evaluated_at = ?,
+            version = version + 1
+        WHERE EXISTS (
+          SELECT 1
+          FROM security_scan_task task
+          JOIN security_scan_candidate candidate
+            ON candidate.asset_id = task.asset_id
+           AND candidate.content_generation = task.content_generation
+          WHERE task.id = ?
+            AND task.status IN ('FAILED', 'CANCELLED')
+            AND task.asset_id = state.asset_id
+            AND task.profile_id = state.profile_id
+            AND task.content_generation = state.content_generation
+        )
+        """, nullableTimestamp(requestedAt), taskId);
+    jdbc.update("""
+        UPDATE asset_security_policy_state state
+        SET policy_decision = CASE
+              WHEN EXISTS (
+                SELECT 1
+                FROM repository_security_scan_config config
+                WHERE config.repository_id = state.repository_id
+                  AND config.profile_id = state.profile_id
+                  AND config.enabled = TRUE
+                  AND config.pending_action = 'BLOCK'
+              )
+              THEN 'BLOCK_PENDING'
+              ELSE 'ALLOW'
+            END,
+            policy_reason_code = 'SCAN_PENDING',
+            waived_findings = 0,
+            stale_at = NULL,
+            next_waiver_expiry = NULL,
+            last_evaluated_at = ?,
+            version = version + 1
+        WHERE EXISTS (
+          SELECT 1
+          FROM security_scan_task task
+          JOIN security_scan_candidate candidate
+            ON candidate.asset_id = task.asset_id
+           AND candidate.content_generation = task.content_generation
+          WHERE task.id = ?
+            AND task.status IN ('FAILED', 'CANCELLED')
+            AND task.asset_id = state.asset_id
+            AND task.profile_id = state.profile_id
+            AND task.content_generation = state.content_generation
+        )
+        """, nullableTimestamp(requestedAt), taskId);
   }
 
   @Override
@@ -3047,6 +3206,63 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         """.formatted(jsonDialect.selectLongsFromArray("repository_id"));
   }
 
+  /**
+   * Expands visible group policy contexts to their concrete source repositories while retaining
+   * direct repository visibility as an unrestricted task scope.
+   */
+  private String taskRepositoryScopeCte() {
+    return recursiveRepositoryScopeCte() + """
+        ,
+        task_policy_source(
+          context_repository_id,
+          source_repository_id,
+          profile_id,
+          scan_hosted_content,
+          scan_proxy_content
+        ) AS (
+          SELECT
+            config.repository_id,
+            config.repository_id,
+            config.profile_id,
+            config.scan_hosted_content,
+            config.scan_proxy_content
+          FROM repository_security_scan_config config
+          JOIN visible_repository visible
+            ON visible.repository_id = config.repository_id
+          WHERE config.enabled = TRUE
+          UNION
+          SELECT
+            context.context_repository_id,
+            member.member_repository_id,
+            context.profile_id,
+            context.scan_hosted_content,
+            context.scan_proxy_content
+          FROM task_policy_source context
+          JOIN repository_member member
+            ON member.repository_id = context.source_repository_id
+        ),
+        task_repository_scope(
+          source_repository_id,
+          profile_id,
+          scan_hosted_content,
+          scan_proxy_content,
+          directly_visible
+        ) AS (
+          SELECT repository_id, NULL, FALSE, FALSE, TRUE
+          FROM visible_repository
+          UNION
+          SELECT
+            source_repository_id,
+            profile_id,
+            scan_hosted_content,
+            scan_proxy_content,
+            FALSE
+          FROM task_policy_source
+          WHERE context_repository_id <> source_repository_id
+        )
+        """;
+  }
+
   private Object repositoryScopeParameter(List<Long> repositoryIds) {
     return json.serializedParameter(json.writeValue(distinctLongs(repositoryIds)));
   }
@@ -3091,24 +3307,68 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       return new ScanSummary(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     }
     Object repositoryScope = repositoryScopeParameter(ids);
-    long candidates = count(repositoryScopeCte() + """
+    long candidates = count(taskRepositoryScopeCte() + """
         SELECT COUNT(*)
         FROM security_scan_candidate candidate
         JOIN asset asset ON asset.id = candidate.asset_id
-        JOIN visible_repository visible ON visible.repository_id = asset.repository_id
         WHERE candidate.pending = TRUE
+          AND EXISTS (
+            SELECT 1
+            FROM task_repository_scope scope
+            JOIN repository source_repository
+              ON source_repository.id = scope.source_repository_id
+            WHERE scope.source_repository_id = asset.repository_id
+              AND (
+                scope.directly_visible = TRUE
+                OR (
+                  (
+                    source_repository.type = 'hosted'
+                    AND scope.scan_hosted_content = TRUE
+                  )
+                  OR (
+                    source_repository.type = 'proxy'
+                    AND scope.scan_proxy_content = TRUE
+                  )
+                )
+              )
+          )
         """, repositoryScope);
-    Map<String, Object> tasks = jdbc.queryForMap(repositoryScopeCte() + """
+    Map<String, Object> tasks = jdbc.queryForMap(taskRepositoryScopeCte() + """
         SELECT
-          COALESCE(SUM(CASE WHEN status IN ('PENDING', 'RETRY_WAIT') THEN 1 ELSE 0 END), 0)
+          COALESCE(SUM(CASE
+            WHEN task.status IN ('PENDING', 'RETRY_WAIT') THEN 1 ELSE 0 END), 0)
             AS pending_tasks,
-          COALESCE(SUM(CASE WHEN status = 'RUNNING' THEN 1 ELSE 0 END), 0)
+          COALESCE(SUM(CASE
+            WHEN task.status = 'RUNNING' THEN 1 ELSE 0 END), 0)
             AS running_tasks,
-          COALESCE(SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END), 0)
+          COALESCE(SUM(CASE
+            WHEN task.status = 'FAILED' THEN 1 ELSE 0 END), 0)
             AS failed_tasks
         FROM security_scan_task task
-        JOIN visible_repository visible ON visible.repository_id = task.repository_id
-        WHERE status IN ('PENDING', 'RETRY_WAIT', 'RUNNING', 'FAILED')
+        WHERE task.status IN ('PENDING', 'RETRY_WAIT', 'RUNNING', 'FAILED')
+          AND EXISTS (
+            SELECT 1
+            FROM task_repository_scope scope
+            JOIN repository source_repository
+              ON source_repository.id = scope.source_repository_id
+            WHERE scope.source_repository_id = task.repository_id
+              AND (
+                scope.directly_visible = TRUE
+                OR (
+                  scope.profile_id = task.profile_id
+                  AND (
+                    (
+                      source_repository.type = 'hosted'
+                      AND scope.scan_hosted_content = TRUE
+                    )
+                    OR (
+                      source_repository.type = 'proxy'
+                      AND scope.scan_proxy_content = TRUE
+                    )
+                  )
+                )
+              )
+          )
         """, repositoryScope);
     Instant summaryAt = Instant.now();
     Map<String, Object> states = jdbc.queryForMap(

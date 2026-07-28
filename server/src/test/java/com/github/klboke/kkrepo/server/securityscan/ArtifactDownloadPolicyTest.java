@@ -327,6 +327,9 @@ class ArtifactDownloadPolicyTest {
                 config, profile(), candidate, state(ScanState.FAILED), null,
                 "com/acme/demo/1/demo-1.jar", "artifact", "application/java-archive")),
             List.of(snapshot(
+                config, profile(), candidate, state(ScanState.CANCELLED), null,
+                "com/acme/demo/1/demo-1.jar", "artifact", "application/java-archive")),
+            List.of(snapshot(
                 config, profile(), candidate, state(ScanState.PARTIAL), null,
                 "com/acme/demo/1/demo-1.jar", "artifact", "application/java-archive")));
 
@@ -340,10 +343,14 @@ class ArtifactDownloadPolicyTest {
         assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 1L))
             .decision());
     assertEquals(
+        PolicyDecision.BLOCK_SCAN_FAILED,
+        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 1L))
+            .decision());
+    assertEquals(
         PolicyDecision.BLOCK_PARTIAL,
         assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 1L))
             .decision());
-    verify(scans, times(4)).findDownloadPolicySnapshots(10L, 1L);
+    verify(scans, times(5)).findDownloadPolicySnapshots(10L, 1L);
     verifyNoMoreInteractions(scans);
   }
 
