@@ -82,7 +82,7 @@ public class DockerManifestStore {
         groupMemberAssetCache, metrics, (ArtifactDownloadPolicy) null);
   }
 
-  private DockerManifestStore(
+  DockerManifestStore(
       AssetDao assetDao,
       DockerRegistryDao dockerDao,
       DockerBlobStore blobStore,
@@ -239,6 +239,26 @@ public class DockerManifestStore {
   void beforeRead(StoredManifest stored) {
     if (downloadPolicy != null) {
       downloadPolicy.beforeRead(stored.asset().id());
+    }
+  }
+
+  void beforeBlobRead(RepositoryRuntime runtime, String imageName, DockerDigest digest) {
+    if (downloadPolicy == null) {
+      return;
+    }
+    long afterAssetId = 0;
+    while (true) {
+      List<Long> manifestAssetIds = dockerDao.listManifestAssetIdsReferencingDigest(
+          runtime.id(), imageName, digest.value(), afterAssetId, 256);
+      if (manifestAssetIds.isEmpty()) {
+        return;
+      }
+      downloadPolicy.beforeReadAll(manifestAssetIds);
+      long nextAfter = manifestAssetIds.getLast();
+      if (nextAfter <= afterAssetId || manifestAssetIds.size() < 256) {
+        return;
+      }
+      afterAssetId = nextAfter;
     }
   }
 

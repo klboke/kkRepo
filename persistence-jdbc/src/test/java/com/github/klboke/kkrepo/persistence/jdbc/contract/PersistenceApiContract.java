@@ -339,12 +339,16 @@ public abstract class PersistenceApiContract {
     SecurityScanDao.ScanRun runDraft = new SecurityScanDao.ScanRun(
         null, taskId, sbomId, snapshot.id(), "f".repeat(64), "0".repeat(64),
         ScanState.COMPLETE, ScanCompleteness.COMPLETE, reportBlobId, "1".repeat(64),
-        1, 1, 0, 1, 0, 0, 0, Severity.HIGH, now, now.plusSeconds(2), now.plusSeconds(2));
+        1, 1, 0, 1, 0, 0, 0, Severity.HIGH,
+        List.of("linux/amd64"), List.of("linux/arm64"),
+        now, now.plusSeconds(2), now.plusSeconds(2));
     List<Long> runIds = invokeConcurrently(List.of(
         () -> inTransaction(() -> scans.insertRunOrFindExisting(runDraft).id()),
         () -> inTransaction(() -> scans.insertRunOrFindExisting(runDraft).id())), 2);
     assertEquals(1, new HashSet<>(runIds).size());
     long runId = runIds.getFirst();
+    assertEquals(List.of("linux/amd64"), scans.findRun(runId).orElseThrow().scannedPlatforms());
+    assertEquals(List.of("linux/arm64"), scans.findRun(runId).orElseThrow().missingPlatforms());
     long groupRepositoryId =
         createRepository("scan-contract-group", RepositoryFormat.MAVEN2, RepositoryType.GROUP);
     stores().repositories().addMember(groupRepositoryId, repositoryId, 0);
@@ -416,19 +420,23 @@ public abstract class PersistenceApiContract {
         waiver.id(),
         scans.listWaiversForFindings(
                 List.of(storedFinding.id()),
+                List.of(runId),
                 List.of(storedFinding.advisoryId(), "CVE-2026-0001"),
-                List.of(storedFinding.packageUrl(), storedFinding.packageName()),
-                List.of(repositoryId),
-                List.of(assetId))
+                List.of(storedFinding.packageUrl(), storedFinding.packageName()))
             .getFirst()
             .id(),
         "finding pages must query only waivers matching their finding and subject keys");
     assertTrue(scans.listWaiversForFindings(
         List.of(storedFinding.id()),
+        List.of(runId + 1),
         List.of(storedFinding.advisoryId()),
-        List.of(storedFinding.packageUrl()),
-        List.of(groupRepositoryId),
-        List.of(assetId + 1)).isEmpty());
+        List.of(storedFinding.packageUrl())).isEmpty());
+    assertTrue(scans.runSubjectExists(runId, repositoryId, assetId));
+    assertEquals(
+        List.of(repositoryId, groupRepositoryId),
+        scans.listRunSubjects(runId, 0, 0, 10).stream()
+            .map(SecurityScanDao.ScanRunSubject::repositoryId)
+            .toList());
 
     SecurityScanDao.AssetSecurityState storedState = scans.upsertAssetStateIfCurrent(
         new SecurityScanDao.AssetSecurityState(
@@ -467,6 +475,14 @@ public abstract class PersistenceApiContract {
     assertEquals(
         PolicyDecision.BLOCK_VULNERABILITY,
         directSnapshot.policyState().policyDecision());
+    assertEquals(
+        List.of(assetId),
+        scans.findDownloadPolicySnapshots(
+                List.of(assetId, assetId), repositoryId).stream()
+            .map(SecurityScanDao.DownloadPolicySnapshot::assetId)
+            .distinct()
+            .toList(),
+        "batch policy lookup must deduplicate asset IDs and preserve snapshot semantics");
     assertEquals(1, scans.findDownloadPolicySnapshots(assetId, null).size());
     SecurityScanDao.ScanSummary visibleSummary = scans.summary(List.of(repositoryId));
     assertEquals(1, visibleSummary.completeAssets());

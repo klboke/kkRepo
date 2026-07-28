@@ -73,7 +73,7 @@ license、misconfiguration、VEX 和 OCI SBOM referrer 仍属于后续独立能�
 | --- | --- | --- | --- |
 | kkRepo JVM 内额外线程池 | 少一个 Java 进程和一次内部 HTTP 调用 | Syft/Grype 仍是子进程；CPU、内存、临时盘、文件描述符、漏洞库更新和 OOM 与仓库请求共享容器；主镜像必须携带扫描器，关闭功能也扩大攻击面 | 不作为生产模式 |
 | 每个 kkRepo Pod 的 sidecar | 保留容器级资源限制，网络路径短 | 扫描容量与 API 副本绑定，每个 Pod 重复漏洞库，扩容仓库服务会同步放大扫描资源 | 暂不采用 |
-| 独立无状态 adapter Deployment/Compose service | 可独立设置 CPU、内存、临时盘和安全上下文；扫描异常不重启仓库；漏洞库集中复用 | 多一个可选部署单元和内部 HTTP 健康检查 | 当前方案 |
+| 独立无状态 adapter StatefulSet/Compose service | 可独立设置 CPU、内存、临时盘和安全上下文；扫描异常不重启仓库；漏洞库集中复用；Kubernetes ordinal 提供稳定取消路由 | 多一个可选部署单元和内部 HTTP 健康检查 | 当前方案 |
 | 每个任务一个 Kubernetes Job | 单任务隔离最强 | 控制面对象、镜像启动、回收和排障成本高，非 Kubernetes 部署还需另一套实现 | 暂不采用 |
 
 因此这里坚持“独立进程，薄适配器，不独立业务”。将扫描执行并入 JVM 只能省去薄
@@ -721,6 +721,8 @@ SBOM 的有上限查询投影：
 - `low_count`
 - `unknown_count`
 - `max_severity`
+- `scanned_platforms_json`
+- `missing_platforms_json`
 - `started_at`
 - `completed_at`
 - `created_at`
@@ -730,13 +732,18 @@ SBOM 的有上限查询投影：
 ```text
 match_fingerprint =
   hash(SBOM SHA-256,
+       inventory complete,
        matcher engine,
        matcher engine version,
        vulnerability database revision,
-       match configuration digest)
+       match configuration digest,
+       scanned platforms,
+       missing platforms)
 ```
 
-相同 fingerprint 直接引用已有 immutable run，不复制 findings 或 component projection。
+平台集合排序并去重后参与 fingerprint。这样相同 fingerprint 才能直接引用已有
+immutable run，不会把平台覆盖范围不同的 OCI 结果误复用，也不复制 findings 或
+component projection。
 
 ### `security_scan_finding`
 
@@ -840,6 +847,10 @@ generation、最新 run、config/policy/waiver revision、全局 waiver 失效�
 - 最大结果年龄。
 - 是否要求完整 inventory。
 - OCI 必须覆盖的平台集合。
+
+策略禁用后不再应用 severity、inventory、结果年龄或 OCI 平台规则；仓库级
+pending/failure/partial action 仍用于表达扫描流水线本身的状态。OCI 策略要求的平台
+必须包含在 run 的 `scanned_platforms_json` 中，否则按 partial action 判定。
 
 策略记录创建后不可原地覆盖。管理端“编辑策略”会创建同名的下一 revision，并在同一
 事务中把仍引用被编辑 revision 的仓库配置切换到新记录，同时增加
@@ -1240,14 +1251,19 @@ group 不复制扫描结果。最终决定使用：
 member 后执行策略。若未来支持“隐藏被阻断版本”，必须作为独立行为并补客户端
 dependency resolution 兼容测试。
 
-### Docker 限制
+### Docker Blob 下载
 
-第一阶段在 manifest/index 读取处阻断正常 `docker pull`。单个 layer 可能被多个
-manifest 共享，直接按 layer finding 阻断会误伤其它镜像。
+策略主体仍是 manifest/index，不为每个 layer 单独生成 finding 或扫描状态。读取
+`/v2/<name>/blobs/<digest>` 时，服务端通过
+`repository_id + image_name + digest_hash` 的索引查询所有仍有效、引用该 digest 的
+manifest asset。结果按 asset ID keyset、每批最多 256 个读取；同一批的下载策略快照
+由一条 SQL 获取，避免共享 layer 产生 N+1 热路径查询。任一关联 manifest 被阻断时，
+同一 image namespace 下的直接 digest 下载也阻断，不能绕过 manifest 检查。
 
-因此第一阶段保证的是“正常 manifest 驱动的 pull 被策略阻断”，不是把 layer Blob
-变成绝对不可读取的机密对象。如果产品要求禁止具备仓库 read 权限的用户直接请求共享
-layer digest，需要增加绑定 manifest 的短期下载授权上下文，另行设计。
+未被任何有效 manifest 引用的上传中间 Blob 没有可判定的镜像策略主体，因此不套用
+manifest 漏洞规则；它仍受原有仓库 read 权限和 Docker 上传/清理生命周期约束。
+同一 layer 在不同 image namespace 的判定相互独立，避免一个镜像的策略直接污染其它
+镜像。
 
 ## 管理 API 与权限
 
@@ -1446,6 +1462,8 @@ object key 和 token 放入 metric label。按具体对象排查使用受权限�
 ```properties
 kkrepo.security-scanning.enabled=false
 kkrepo.security-scanning.adapter.base-url=http://scanner:8080
+# 多副本 Kubernetes 使用有序稳定地址；非空时覆盖 base-url
+kkrepo.security-scanning.adapter.base-urls=
 kkrepo.security-scanning.metrics-count-limit=10000
 kkrepo.security-scanning.worker.batch-size=4
 kkrepo.security-scanning.worker.lease-seconds=300
@@ -1503,11 +1521,15 @@ Docker Compose/quickstart：
 
 Helm/Kubernetes：
 
-- `securityScanning.enabled` 同时部署 adapter Deployment/Service 并设置 kkRepo 的
+- `securityScanning.enabled` 同时部署 adapter StatefulSet/Service 并设置 kkRepo 的
   部署能力 gate；它仍不会自动启用任何仓库。
 - scanner pod 有 CPU、memory、ephemeral-storage request/limit。
 - 支持 NetworkPolicy、Pod Security Context、read-only root filesystem。
-- 多个 kkRepo pod 访问同一 scanner service；任务所有权仍在共享数据库。
+- 每个 run 按 ID 固定路由到稳定 ordinal，catalog、match 和 OCI 操作命中同一 adapter；
+  取消请求广播到全部配置 ordinal，避免进程内执行记录位于另一副本时无法释放资源。
+- StatefulSet 只提供稳定网络身份；任务所有权、lease、fencing 和结果仍在共享数据库。
+- 所有 kkRepo 副本必须使用相同顺序的 adapter 地址列表。调整 scanner 副本数时先停止
+  新任务并等待或取消正在运行的扫描，再滚动更新 kkRepo，避免改变活动 run 的路由。
 - adapter rolling update 期间 run 记录真实 engine/database snapshot。
 
 ## 保留、删除与 GC

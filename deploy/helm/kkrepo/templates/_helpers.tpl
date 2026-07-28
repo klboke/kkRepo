@@ -36,6 +36,15 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
+{{- define "kkrepo.scannerBaseUrls" -}}
+{{- $root := . -}}
+{{- $fullname := include "kkrepo.fullname" . -}}
+{{- range $index, $_ := until (int .Values.securityScanning.replicaCount) -}}
+{{- if gt $index 0 }},{{ end -}}
+http://{{ $fullname }}-scanner-{{ $index }}.{{ $fullname }}-scanner-headless:{{ $root.Values.securityScanning.service.port }}
+{{- end -}}
+{{- end }}
+
 {{- define "kkrepo.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
 {{- default (include "kkrepo.fullname" .) .Values.serviceAccount.name }}
@@ -59,6 +68,9 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 {{- if and .Values.securityScanning.enabled (not .Values.securityScanning.serviceCredential.existingSecret) }}
 {{- fail "securityScanning.serviceCredential.existingSecret is required when scanning is enabled" }}
+{{- end }}
+{{- if and .Values.securityScanning.enabled (lt (int .Values.securityScanning.replicaCount) 1) }}
+{{- fail "securityScanning.replicaCount must be at least 1 when scanning is enabled" }}
 {{- end }}
 {{- if and .Values.securityScanning.enabled (gt (int .Values.securityScanning.replicaCount) 1) .Values.securityScanning.scannerDatabase.persistence.enabled (not .Values.securityScanning.scannerDatabase.persistence.existingClaim) }}
 {{- fail "multiple scanner replicas with persistence require scannerDatabase.persistence.existingClaim backed by ReadWriteMany storage" }}

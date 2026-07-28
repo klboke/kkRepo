@@ -1,6 +1,8 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
@@ -82,6 +84,7 @@ public class SecurityScanningProperties {
 
   public static final class Adapter {
     private String baseUrl = "http://scanner:8080";
+    private List<String> baseUrls = new ArrayList<>();
     private String serviceCredential = "";
     private Duration connectTimeout = Duration.ofSeconds(10);
 
@@ -91,6 +94,22 @@ public class SecurityScanningProperties {
 
     public void setBaseUrl(String baseUrl) {
       this.baseUrl = baseUrl;
+    }
+
+    public List<String> getBaseUrls() {
+      return baseUrls;
+    }
+
+    public void setBaseUrls(List<String> baseUrls) {
+      this.baseUrls = baseUrls == null ? new ArrayList<>() : new ArrayList<>(baseUrls);
+    }
+
+    public List<String> configuredBaseUrls() {
+      if (baseUrls != null
+          && baseUrls.stream().anyMatch(value -> value != null && !value.isBlank())) {
+        return baseUrls;
+      }
+      return List.of(baseUrl);
     }
 
     public String getServiceCredential() {

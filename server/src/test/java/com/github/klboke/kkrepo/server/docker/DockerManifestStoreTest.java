@@ -33,6 +33,7 @@ import com.github.klboke.kkrepo.protocol.docker.DockerManifestMetadata;
 import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.InputStream;
 import java.util.List;
 import java.util.Map;
@@ -43,6 +44,35 @@ import org.junit.jupiter.api.Test;
 import org.springframework.transaction.annotation.Transactional;
 
 class DockerManifestStoreTest {
+  @Test
+  void enforcesEveryReferencingManifestBeforeServingAnImageBlob() {
+    AssetDao assetDao = mock(AssetDao.class);
+    DockerRegistryDao dockerDao = mock(DockerRegistryDao.class);
+    DockerBlobStore blobStore = mock(DockerBlobStore.class);
+    DockerManifestParser parser = mock(DockerManifestParser.class);
+    ArtifactDownloadPolicy policy = mock(ArtifactDownloadPolicy.class);
+    RepositoryRuntime runtime = runtime("ALLOW");
+    DockerDigest digest = DockerDigest.parse(
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    when(dockerDao.listManifestAssetIdsReferencingDigest(
+        runtime.id(), "team/app", digest.value(), 0L, 256))
+        .thenReturn(List.of(31L, 32L));
+    DockerManifestStore store = new DockerManifestStore(
+        assetDao,
+        dockerDao,
+        blobStore,
+        parser,
+        mock(AssetMetadataCache.class),
+        null,
+        null,
+        null,
+        policy);
+
+    store.beforeBlobRead(runtime, "team/app", digest);
+
+    verify(policy).beforeReadAll(List.of(31L, 32L));
+  }
+
   @Test
   void persistsManifestIdentityHashesAcrossBlobAssetManifestTagAndReferences() {
     AssetDao assetDao = mock(AssetDao.class);

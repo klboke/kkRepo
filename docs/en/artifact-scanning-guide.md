@@ -143,19 +143,21 @@ helm upgrade --install kkrepo deploy/helm/kkrepo \
 
 `securityScanning.enabled=true` does both of the following:
 
-- Deploys the scanner adapter Deployment, Service, probes, and optional NetworkPolicy.
+- Deploys the scanner adapter StatefulSet, Services, probes, and optional NetworkPolicy.
 - Enables the kkRepo deployment capability gate.
 
 It still does not activate a repository. After deployment, check:
 
 ```bash
 kubectl get pods
-kubectl get deployment
-kubectl logs deployment/kkrepo-scanner
+kubectl get statefulset
+kubectl logs statefulset/kkrepo-scanner
 ```
 
 For multiple scanner replicas:
 
+- Each run is assigned to a stable StatefulSet ordinal, and cancellation is broadcast across the
+  configured ordinals so it reaches the Pod that owns the process-local execution.
 - If replicas share a persistent database cache, set
   `securityScanning.scannerDatabase.persistence.existingClaim` to a `ReadWriteMany` PVC.
 - If shared storage is unavailable, disable scanner database persistence and let each Pod use its
@@ -381,7 +383,8 @@ not depend on a disabled browser button.
 | Environment variable | Default | Purpose |
 | --- | ---: | --- |
 | `KKREPO_SECURITY_SCANNING_ENABLED` | `false` | Deployment capability gate |
-| `KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URL` | `http://scanner:8080` | Internal adapter URL |
+| `KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URL` | `http://scanner:8080` | Single internal adapter URL, used by Compose and as the fallback |
+| `KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URLS` | Empty | Comma-separated stable adapter URLs; when present, overrides the single URL and enables deterministic per-run routing plus cancellation broadcast |
 | `KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL` | Required when scanning is enabled | Shared credential used by kkRepo; kkRepo refuses to start with scanning enabled when this is empty |
 | `KKREPO_SECURITY_SCANNING_OCI_REGISTRY_URL` | `http://kkrepo:8080` | kkRepo URL used by the scanner for exact OCI digests |
 | `KKREPO_SECURITY_SCANNING_DATABASE_MAX_AGE` | `48h` | Maximum operational vulnerability-database age |
@@ -392,8 +395,8 @@ not depend on a disabled browser button.
 | `KKREPO_SECURITY_SCANNING_TERMINAL_TASK_RETENTION_DAYS` | `30` | Terminal-task retention |
 | `KKREPO_SECURITY_SCANNING_RESULT_RETENTION_DAYS` | `90` | Unreferenced historical-result retention |
 
-Every kkRepo replica must use consistent enabled, adapter URL, service credential, and OCI
-registry URL values.
+Every kkRepo replica must use the same enabled value, ordered adapter URL list, service credential,
+and OCI registry URL.
 
 ### Scanner Adapter
 

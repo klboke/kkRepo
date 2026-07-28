@@ -440,6 +440,29 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
     return manifestCount != null && manifestCount > 0;
   }
 
+  @Override
+  public List<Long> listManifestAssetIdsReferencingDigest(
+      long repositoryId, String imageName, String digest, long afterAssetId, int maxItems) {
+    return jdbcTemplate.queryForList("""
+        SELECT DISTINCT m.asset_id
+        FROM docker_manifest_reference r
+        JOIN docker_manifest m ON m.id = r.manifest_id
+        WHERE r.repository_id = ?
+          AND r.image_name = ?
+          AND r.digest_hash = ?
+          AND m.deleted_at IS NULL
+          AND m.asset_id > ?
+        ORDER BY m.asset_id
+        LIMIT ?
+        """,
+        Long.class,
+        repositoryId,
+        imageName,
+        hash(digest),
+        Math.max(0, afterAssetId),
+        Math.max(1, Math.min(maxItems, 256)));
+  }
+
   public OptionalLong findUnreferencedBlobAssetIdForCleanup(
       long repositoryId, long afterAssetId, int maxCandidates, Instant updatedBefore) {
     List<Object> args = new ArrayList<>();

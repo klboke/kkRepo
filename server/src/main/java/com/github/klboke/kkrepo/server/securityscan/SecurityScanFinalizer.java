@@ -67,7 +67,12 @@ public class SecurityScanFinalizer {
         Instant.now());
     List<ScanFinding> findings = loadAllFindings(run);
     Instant now = Instant.now();
-    ContextEvaluation primary = evaluate(config, task.assetId(), run, findings, now);
+    boolean ociSubject = scans.findSbom(run.sbomId())
+        .map(sbom -> sbom.subjectKind()
+            == com.github.klboke.kkrepo.security.scan.ScanEnums.SubjectKind.OCI_MANIFEST)
+        .orElse(false);
+    ContextEvaluation primary =
+        evaluate(config, task.assetId(), run, findings, now, ociSubject);
     ScanPolicy policy = primary.policy();
     Evaluation evaluation = primary.evaluation();
     Map<String, Integer> counts = new LinkedHashMap<>();
@@ -110,7 +115,8 @@ public class SecurityScanFinalizer {
         findings,
         config,
         primary,
-        now);
+        now,
+        ociSubject);
     if (!scans.completeTask(task.id(), task.leaseToken(), now)) {
       throw new LostSecurityScanLeaseException(task.id());
     }
@@ -187,7 +193,9 @@ public class SecurityScanFinalizer {
         policy != null && policy.requireCompleteInventory(),
         config.pendingAction(),
         config.failureAction(),
-        config.partialAction());
+        config.partialAction(),
+        policy == null || policy.enabled(),
+        policy == null ? List.of() : policy.requiredPlatforms());
   }
 
   private ContextEvaluation evaluate(
@@ -195,7 +203,8 @@ public class SecurityScanFinalizer {
       long assetId,
       ScanRun run,
       List<ScanFinding> findings,
-      Instant now) {
+      Instant now,
+      boolean ociSubject) {
     long waiverRevision = scans.waiverRevision().currentRevision();
     ScanPolicy policy = config.policyId() == null
         ? null : scans.findPolicy(config.policyId()).orElse(null);
@@ -218,7 +227,9 @@ public class SecurityScanFinalizer {
             == com.github.klboke.kkrepo.security.scan.ScanEnums.ScanCompleteness.COMPLETE,
         false,
         policyFindings,
-        now));
+        now,
+        ociSubject,
+        run.scannedPlatforms()));
     Instant nextWaiverExpiry = waivers.stream()
         .map(ScanWaiver::expiresAt)
         .filter(java.util.Objects::nonNull)
@@ -241,7 +252,8 @@ public class SecurityScanFinalizer {
       List<ScanFinding> findings,
       RepositoryScanConfig primaryConfig,
       ContextEvaluation primaryEvaluation,
-      Instant now) {
+      Instant now,
+      boolean ociSubject) {
     for (Long repositoryId : policyContextRepositoryIds(sourceRepositoryId)) {
       RepositoryScanConfig context = scans.findRepositoryConfig(repositoryId)
           .filter(RepositoryScanConfig::enabled)
@@ -253,7 +265,7 @@ public class SecurityScanFinalizer {
           context.repositoryId() == primaryConfig.repositoryId()
                   && context.configRevision() == primaryConfig.configRevision()
               ? primaryEvaluation
-              : evaluate(context, assetId, run, findings, now);
+              : evaluate(context, assetId, run, findings, now, ociSubject);
       ScanPolicy policy = result.policy();
       AssetPolicyState previous =
           scans.findAssetPolicyState(assetId, profile.id(), repositoryId).orElse(null);
@@ -386,7 +398,8 @@ public class SecurityScanFinalizer {
   private static Instant staleAt(
       RepositoryScanConfig config, ScanPolicy policy, Instant completedAt) {
     Long configAge = config.maxResultAgeSeconds();
-    Long policyAge = policy == null ? null : policy.maxResultAgeSeconds();
+    Long policyAge =
+        policy == null || !policy.enabled() ? null : policy.maxResultAgeSeconds();
     Long age = configAge == null ? policyAge
         : policyAge == null ? configAge : Math.min(configAge, policyAge);
     return age == null || completedAt == null ? null : completedAt.plusSeconds(Math.max(1, age));

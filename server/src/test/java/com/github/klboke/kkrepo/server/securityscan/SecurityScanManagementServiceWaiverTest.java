@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -75,7 +77,7 @@ class SecurityScanManagementServiceWaiverTest {
     RepositoryRecord repository = repository(11L, "maven-hosted");
     AssetRecord asset = asset(23L, 11L, "com/acme/demo/1.0/demo-1.0.jar");
     when(scans.findFinding(41L)).thenReturn(Optional.of(finding));
-    when(scans.listRunSubjects(7L))
+    when(scans.listRunSubjects(eq(7L), anyLong(), anyLong(), anyInt()))
         .thenReturn(List.of(new ScanRunSubject(7L, 11L, 23L, 3L, 1L, Instant.now())));
     when(repositories.findById(11L)).thenReturn(Optional.of(repository));
     when(assets.findAssetById(23L)).thenReturn(Optional.of(asset));
@@ -98,13 +100,13 @@ class SecurityScanManagementServiceWaiverTest {
     Instant now = Instant.now();
     ScanFinding finding = finding(41L, 7L);
     when(scans.findFinding(41L)).thenReturn(Optional.of(finding));
-    when(scans.listRunSubjects(7L))
+    when(scans.listRunSubjects(eq(7L), anyLong(), anyLong(), anyInt()))
         .thenReturn(List.of(new ScanRunSubject(7L, 11L, 23L, 3L, 1L, now)));
     when(repositories.findById(11L))
         .thenReturn(Optional.of(repository(11L, "maven-hosted")));
     when(assets.findAssetById(23L))
         .thenReturn(Optional.of(asset(23L, 11L, "com/acme/demo/1.0/demo-1.0.jar")));
-    when(scans.listWaiversForFindings(any(), any(), any(), any(), any()))
+    when(scans.listWaiversForFindings(any(), any(), any(), any()))
         .thenReturn(List.of(waiver(
             51L, 11L, 23L, 41L, null, null, "Already accepted",
             now.plusSeconds(3600), now)));
@@ -127,9 +129,9 @@ class SecurityScanManagementServiceWaiverTest {
         .thenReturn(AccessDecision.allow());
     when(scans.listFindings(11L, null, null, "demo", 0L, 2))
         .thenReturn(List.of(finding(41L, 7L), finding(42L, 8L)));
-    when(scans.listRunSubjects(7L))
+    when(scans.listRunSubjects(eq(7L), anyLong(), anyLong(), anyInt()))
         .thenReturn(List.of(new ScanRunSubject(7L, 11L, 23L, 3L, 1L, now)));
-    when(scans.listWaiversForFindings(any(), any(), any(), any(), any()))
+    when(scans.listWaiversForFindings(any(), any(), any(), any()))
         .thenReturn(List.of());
 
     var page = service.findingPage(actor, null, null, null, "demo", 0L, 1);
@@ -150,9 +152,9 @@ class SecurityScanManagementServiceWaiverTest {
         .thenReturn(AccessDecision.allow());
     when(scans.listFindings(11L, null, null, 0L, 2))
         .thenReturn(List.of(finding(41L, 7L)));
-    when(scans.listRunSubjects(7L))
+    when(scans.listRunSubjects(eq(7L), anyLong(), anyLong(), anyInt()))
         .thenReturn(List.of(new ScanRunSubject(7L, 11L, 23L, 3L, 1L, now)));
-    when(scans.listWaiversForFindings(any(), any(), any(), any(), any()))
+    when(scans.listWaiversForFindings(any(), any(), any(), any()))
         .thenReturn(List.of());
 
     var page = service.findingPage(
@@ -232,8 +234,9 @@ class SecurityScanManagementServiceWaiverTest {
     when(scans.listFindings(11L, null, null, 0L, 51)).thenReturn(List.of(finding));
     when(scans.listFindings(12L, null, null, 0L, 51)).thenReturn(List.of(finding));
     when(scans.findFinding(41L)).thenReturn(Optional.of(finding));
-    when(scans.listRunSubjects(7L)).thenReturn(List.of(subject, secondSubject));
-    when(scans.listWaiversForFindings(any(), any(), any(), any(), any()))
+    when(scans.listRunSubjects(eq(7L), anyLong(), anyLong(), anyInt()))
+        .thenReturn(List.of(subject, secondSubject));
+    when(scans.listWaiversForFindings(any(), any(), any(), any()))
         .thenReturn(List.of(active, overlapping, expired));
     when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
         .thenReturn(AccessDecision.allow());
@@ -258,10 +261,9 @@ class SecurityScanManagementServiceWaiverTest {
     assertEquals("security-admin", details.waivers().getFirst().approvedBy());
     verify(scans, org.mockito.Mockito.times(2)).listWaiversForFindings(
         eq(List.of(41L)),
+        eq(List.of(7L)),
         eq(List.of("CVE-2026-0041", "GHSA-demo")),
-        eq(List.of("pkg:maven/com.acme/demo@1.0", "demo")),
-        eq(List.of(11L, 12L)),
-        eq(List.of(23L, 24L)));
+        eq(List.of("pkg:maven/com.acme/demo@1.0", "demo")));
   }
 
   @Test
@@ -272,8 +274,7 @@ class SecurityScanManagementServiceWaiverTest {
     when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
         .thenReturn(AccessDecision.allow());
     when(scans.findFindingForUpdate(41L)).thenReturn(Optional.of(finding(41L, 7L)));
-    when(scans.listRunSubjects(7L))
-        .thenReturn(List.of(new ScanRunSubject(7L, 11L, 99L, 3L, 1L, Instant.now())));
+    when(scans.runSubjectExists(7L, 11L, 23L)).thenReturn(false);
     WaiverCommand command = new WaiverCommand(
         "FINDING",
         11L,
@@ -302,8 +303,7 @@ class SecurityScanManagementServiceWaiverTest {
     when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
         .thenReturn(AccessDecision.allow());
     when(scans.findFindingForUpdate(41L)).thenReturn(Optional.of(finding(41L, 7L)));
-    when(scans.listRunSubjects(7L))
-        .thenReturn(List.of(new ScanRunSubject(7L, 11L, 23L, 3L, 1L, Instant.now())));
+    when(scans.runSubjectExists(7L, 11L, 23L)).thenReturn(true);
     when(scans.listActiveWaivers(
         eq(11L), eq(23L), any(Instant.class), eq(0L), eq(1000)))
         .thenReturn(List.of());
@@ -340,8 +340,7 @@ class SecurityScanManagementServiceWaiverTest {
     when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
         .thenReturn(AccessDecision.allow());
     when(scans.findFindingForUpdate(41L)).thenReturn(Optional.of(finding(41L, 7L)));
-    when(scans.listRunSubjects(7L))
-        .thenReturn(List.of(new ScanRunSubject(7L, 11L, 23L, 3L, 1L, Instant.now())));
+    when(scans.runSubjectExists(7L, 11L, 23L)).thenReturn(true);
     when(scans.listActiveWaivers(
         eq(11L), eq(23L), any(Instant.class), eq(0L), eq(1000)))
         .thenReturn(List.of());
@@ -371,14 +370,13 @@ class SecurityScanManagementServiceWaiverTest {
   void findingWaiverRejectsAnAlreadyCoveredRepositoryArtifact() {
     Instant now = Instant.now();
     ScanFinding finding = finding(41L, 7L);
-    ScanRunSubject subject = new ScanRunSubject(7L, 11L, 23L, 3L, 1L, now);
     when(repositories.findById(11L)).thenReturn(Optional.of(repository(11L, "maven-hosted")));
     when(assets.findAssetById(23L))
         .thenReturn(Optional.of(asset(23L, 11L, "com/acme/demo/1.0/demo-1.0.jar")));
     when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
         .thenReturn(AccessDecision.allow());
     when(scans.findFindingForUpdate(41L)).thenReturn(Optional.of(finding));
-    when(scans.listRunSubjects(7L)).thenReturn(List.of(subject));
+    when(scans.runSubjectExists(7L, 11L, 23L)).thenReturn(true);
     when(scans.listActiveWaivers(
         eq(11L), eq(23L), any(Instant.class), eq(0L), eq(1000)))
         .thenReturn(List.of(waiver(

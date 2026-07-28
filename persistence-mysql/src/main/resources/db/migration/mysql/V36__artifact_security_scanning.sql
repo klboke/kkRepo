@@ -22,6 +22,9 @@ CREATE TABLE blob_reference (
   INDEX idx_blob_reference_blob (blob_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE INDEX idx_docker_reference_policy_lookup
+  ON docker_manifest_reference(repository_id, digest_hash, image_name, manifest_id);
+
 CREATE TABLE security_scan_profile (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   name VARCHAR(128) NOT NULL,
@@ -252,6 +255,8 @@ CREATE TABLE security_scan_run (
   low_count INT NOT NULL,
   unknown_count INT NOT NULL,
   max_severity VARCHAR(16) NOT NULL,
+  scanned_platforms_json JSON NOT NULL,
+  missing_platforms_json JSON NOT NULL,
   started_at DATETIME(3) NOT NULL,
   completed_at DATETIME(3) NOT NULL,
   created_at DATETIME(3) NOT NULL,

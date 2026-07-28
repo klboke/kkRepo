@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.List;
 
 /** Stable, length-delimited SHA-256 fingerprints used for immutable result reuse. */
 public final class ScanFingerprints {
@@ -32,13 +33,43 @@ public final class ScanFingerprints {
       String matcherEngineVersion,
       String vulnerabilityDatabaseRevision,
       String matchConfigurationDigest) {
+    return match(
+        sbomSha256,
+        inventoryComplete,
+        matcherEngine,
+        matcherEngineVersion,
+        vulnerabilityDatabaseRevision,
+        matchConfigurationDigest,
+        List.of(),
+        List.of());
+  }
+
+  public static String match(
+      String sbomSha256,
+      boolean inventoryComplete,
+      String matcherEngine,
+      String matcherEngineVersion,
+      String vulnerabilityDatabaseRevision,
+      String matchConfigurationDigest,
+      List<String> scannedPlatforms,
+      List<String> missingPlatforms) {
     return sha256(
         sbomSha256,
         Boolean.toString(inventoryComplete),
         matcherEngine,
         matcherEngineVersion,
         vulnerabilityDatabaseRevision,
-        matchConfigurationDigest);
+        matchConfigurationDigest,
+        canonicalPlatforms(scannedPlatforms),
+        canonicalPlatforms(missingPlatforms));
+  }
+
+  private static String canonicalPlatforms(List<String> values) {
+    if (values == null || values.isEmpty()) {
+      return "";
+    }
+    return values.stream().filter(java.util.Objects::nonNull).distinct().sorted()
+        .collect(java.util.stream.Collectors.joining("\n"));
   }
 
   public static String finding(

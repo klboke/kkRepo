@@ -19,12 +19,36 @@ public final class PolicyEvaluator {
       boolean requireCompleteInventory,
       PolicyAction pendingAction,
       PolicyAction failureAction,
-      PolicyAction partialAction) {
+      PolicyAction partialAction,
+      boolean enabled,
+      List<String> requiredPlatforms) {
     public Rule {
       blockAtOrAbove = blockAtOrAbove == null ? Severity.CRITICAL : blockAtOrAbove;
       pendingAction = pendingAction == null ? PolicyAction.ALLOW : pendingAction;
       failureAction = failureAction == null ? PolicyAction.ALLOW : failureAction;
       partialAction = partialAction == null ? PolicyAction.ALLOW : partialAction;
+      requiredPlatforms =
+          requiredPlatforms == null ? List.of() : List.copyOf(requiredPlatforms);
+    }
+
+    public Rule(
+        Severity blockAtOrAbove,
+        boolean onlyFixable,
+        boolean blockUnknownSeverity,
+        boolean requireCompleteInventory,
+        PolicyAction pendingAction,
+        PolicyAction failureAction,
+        PolicyAction partialAction) {
+      this(
+          blockAtOrAbove,
+          onlyFixable,
+          blockUnknownSeverity,
+          requireCompleteInventory,
+          pendingAction,
+          failureAction,
+          partialAction,
+          true,
+          List.of());
     }
   }
 
@@ -40,12 +64,34 @@ public final class PolicyEvaluator {
       boolean inventoryComplete,
       boolean stale,
       List<FindingView> findings,
-      Instant evaluatedAt) {
+      Instant evaluatedAt,
+      boolean ociSubject,
+      List<String> scannedPlatforms) {
     public Input {
       state = state == null ? ScanState.PENDING : state;
       completeness = completeness == null ? ScanCompleteness.UNKNOWN : completeness;
       findings = findings == null ? List.of() : List.copyOf(findings);
       evaluatedAt = evaluatedAt == null ? Instant.now() : evaluatedAt;
+      scannedPlatforms =
+          scannedPlatforms == null ? List.of() : List.copyOf(scannedPlatforms);
+    }
+
+    public Input(
+        ScanState state,
+        ScanCompleteness completeness,
+        boolean inventoryComplete,
+        boolean stale,
+        List<FindingView> findings,
+        Instant evaluatedAt) {
+      this(
+          state,
+          completeness,
+          inventoryComplete,
+          stale,
+          findings,
+          evaluatedAt,
+          false,
+          List.of());
     }
   }
 
@@ -65,10 +111,26 @@ public final class PolicyEvaluator {
     if (input.state() == ScanState.FAILED || input.state() == ScanState.CANCELLED) {
       return decision(rule.failureAction(), PolicyDecision.BLOCK_SCAN_FAILED, "SCAN_FAILED");
     }
+    if (!rule.enabled()) {
+      return new Evaluation(
+          PolicyDecision.ALLOW,
+          "POLICY_DISABLED",
+          0,
+          0,
+          0,
+          Severity.UNKNOWN);
+    }
+    boolean requiredPlatformMissing = input.ociSubject()
+        && rule.requiredPlatforms().stream()
+            .anyMatch(platform -> !input.scannedPlatforms().contains(platform));
     if (input.state() == ScanState.PARTIAL
         || input.completeness() != ScanCompleteness.COMPLETE
-        || (rule.requireCompleteInventory() && !input.inventoryComplete())) {
-      Evaluation partial = decision(rule.partialAction(), PolicyDecision.BLOCK_PARTIAL, "SCAN_PARTIAL");
+        || (rule.requireCompleteInventory() && !input.inventoryComplete())
+        || requiredPlatformMissing) {
+      Evaluation partial = decision(
+          rule.partialAction(),
+          PolicyDecision.BLOCK_PARTIAL,
+          requiredPlatformMissing ? "REQUIRED_PLATFORMS_MISSING" : "SCAN_PARTIAL");
       if (partial.decision().blocked()) {
         return partial;
       }

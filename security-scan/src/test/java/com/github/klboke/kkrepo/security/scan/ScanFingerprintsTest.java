@@ -31,4 +31,28 @@ class ScanFingerprintsTest {
         ScanFingerprints.sha256("ab", "c"),
         ScanFingerprints.sha256("a", "bc"));
   }
+
+  @Test
+  void matchFingerprintIncludesTheOciPlatformOutcome() {
+    String complete = ScanFingerprints.match(
+        "a".repeat(64),
+        true,
+        "grype",
+        "1",
+        "db",
+        "config",
+        List.of("linux/amd64", "linux/arm64"),
+        List.of());
+    String partial = ScanFingerprints.match(
+        "a".repeat(64),
+        true,
+        "grype",
+        "1",
+        "db",
+        "config",
+        List.of("linux/amd64"),
+        List.of("linux/arm64"));
+
+    assertNotEquals(complete, partial);
+  }
 }

@@ -149,6 +149,7 @@ public class DockerProxyService {
 
   public DockerResponse getBlob(RepositoryRuntime runtime, String imageName, DockerDigest digest, boolean headOnly) {
     ensureProxy(runtime);
+    manifestStore.beforeBlobRead(runtime, imageName, digest);
     try {
       DockerResponse response = blobStore.getBlob(runtime, digest, headOnly);
       recordCache(runtime, "blob", "hit");

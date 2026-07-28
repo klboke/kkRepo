@@ -69,6 +69,16 @@ class ScannerEngineServiceBehaviorTest {
     verify(fixture.scannerInput).copy(
         any(), target.capture(), eq(SHA256), eq(8L), any());
     assertEquals("artifact.jar", target.getValue().getFileName().toString());
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<String>> command =
+        (ArgumentCaptor<List<String>>) (ArgumentCaptor<?>) ArgumentCaptor.forClass(List.class);
+    ArgumentCaptor<Path> scannerOutput = ArgumentCaptor.forClass(Path.class);
+    verify(fixture.processes).run(
+        command.capture(), any(), scannerOutput.capture(), any(), any());
+    assertTrue(command.getValue().contains("cyclonedx-json"));
+    assertFalse(command.getValue().stream()
+        .anyMatch(value -> value.startsWith("cyclonedx-json=")));
+    assertEquals("sbom.cdx.json", scannerOutput.getValue().getFileName().toString());
   }
 
   @Test
@@ -232,11 +242,7 @@ class ScannerEngineServiceBehaviorTest {
                 "SCANNER_PROCESS_FAILED", "missing platform", 422, false);
           }
         }
-        Path output = command.stream()
-            .filter(value -> value.startsWith("cyclonedx-json="))
-            .map(value -> Path.of(value.substring("cyclonedx-json=".length())))
-            .findFirst()
-            .orElse(stdout);
+        Path output = stdout;
         Files.createDirectories(output.getParent());
         Files.write(output, command.getFirst().equals("grype")
             ? "{}".getBytes() : "{\"bomFormat\":\"CycloneDX\"}".getBytes());

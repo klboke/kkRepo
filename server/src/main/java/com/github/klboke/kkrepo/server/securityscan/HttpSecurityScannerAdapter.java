@@ -23,6 +23,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.List;
 import java.util.Locale;
 import org.springframework.stereotype.Component;
 
@@ -33,13 +34,20 @@ public class HttpSecurityScannerAdapter implements Adapter {
   private final ObjectMapper objectMapper;
   private final SecurityScanningProperties properties;
   private final HttpClient client;
-  private final URI baseUri;
+  private final List<URI> baseUris;
 
   public HttpSecurityScannerAdapter(
       ObjectMapper objectMapper, SecurityScanningProperties properties) {
     this.objectMapper = objectMapper;
     this.properties = properties;
-    this.baseUri = validateBaseUri(properties.getAdapter().getBaseUrl());
+    this.baseUris = properties.getAdapter().configuredBaseUrls().stream()
+        .filter(value -> value != null && !value.isBlank())
+        .map(HttpSecurityScannerAdapter::validateBaseUri)
+        .distinct()
+        .toList();
+    if (baseUris.isEmpty()) {
+      throw new IllegalArgumentException("At least one security scanner adapter URL is required");
+    }
     this.client = HttpClient.newBuilder()
         .connectTimeout(properties.getAdapter().getConnectTimeout())
         .followRedirects(HttpClient.Redirect.NEVER)
@@ -59,19 +67,23 @@ public class HttpSecurityScannerAdapter implements Adapter {
 
   @Override
   public Capabilities capabilities() {
-    return get("/v1/capabilities", Capabilities.class);
+    return get(baseUris.getFirst(), "/v1/capabilities", Capabilities.class);
   }
 
   @Override
   public Readiness readiness() {
-    return get("/v1/readiness", Readiness.class);
+    return get(baseUris.getFirst(), "/v1/readiness", Readiness.class);
   }
 
   @Override
   public CatalogResponse catalog(CatalogRequest request, InputStreamSource input)
       throws IOException {
     HttpRequest.Builder builder =
-        binaryRequest("/v1/catalog", request.limits().timeoutSeconds(), input)
+        binaryRequest(
+                baseUriForRun(request.runId()),
+                "/v1/catalog",
+                request.limits().timeoutSeconds(),
+                input)
             .header("Content-Type", contentType(request.subject().mediaType()))
             .header("X-KKRepo-API-Version", request.apiVersion())
             .header("X-KKRepo-Run-ID", request.runId())
@@ -101,7 +113,11 @@ public class HttpSecurityScannerAdapter implements Adapter {
   @Override
   public MatchResponse match(MatchRequest request, InputStreamSource sbom)
       throws IOException {
-    HttpRequest httpRequest = binaryRequest("/v1/match", request.limits().timeoutSeconds(), sbom)
+    HttpRequest httpRequest = binaryRequest(
+            baseUriForRun(request.runId()),
+            "/v1/match",
+            request.limits().timeoutSeconds(),
+            sbom)
         .header("Content-Type", "application/vnd.cyclonedx+json")
         .header("X-KKRepo-API-Version", request.apiVersion())
         .header("X-KKRepo-Run-ID", request.runId())
@@ -127,7 +143,8 @@ public class HttpSecurityScannerAdapter implements Adapter {
   @Override
   public OciScanResponse scanOci(OciScanRequest request) throws IOException {
     byte[] body = objectMapper.writeValueAsBytes(request);
-    HttpRequest.Builder builder = HttpRequest.newBuilder(resolve("/v1/oci/scan"))
+    HttpRequest.Builder builder =
+        HttpRequest.newBuilder(resolve(baseUriForRun(request.runId()), "/v1/oci/scan"))
         .timeout(requestTimeout(request.limits().timeoutSeconds()))
         .header("Content-Type", "application/json")
         .header("X-KKRepo-API-Version", request.apiVersion())
@@ -144,17 +161,34 @@ public class HttpSecurityScannerAdapter implements Adapter {
     if (runId == null || !runId.matches("[A-Za-z0-9._:-]{1,128}")) {
       throw new IllegalArgumentException("Invalid security scanner run ID");
     }
-    HttpRequest.Builder builder = HttpRequest.newBuilder(resolve("/v1/runs/" + runId + "/cancel"))
-        .timeout(Duration.ofSeconds(5))
-        .header("Accept", "application/json")
-        .header("X-KKRepo-API-Version", ScannerContract.API_VERSION)
-        .POST(HttpRequest.BodyPublishers.noBody());
-    withServiceCredential(builder);
-    return send(builder.build(), CancellationResponse.class);
+    ScannerAdapterException firstFailure = null;
+    for (URI baseUri : baseUris) {
+      try {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(
+                resolve(baseUri, "/v1/runs/" + runId + "/cancel"))
+            .timeout(Duration.ofSeconds(5))
+            .header("Accept", "application/json")
+            .header("X-KKRepo-API-Version", ScannerContract.API_VERSION)
+            .POST(HttpRequest.BodyPublishers.noBody());
+        withServiceCredential(builder);
+        CancellationResponse response = send(builder.build(), CancellationResponse.class);
+        if (response.cancelled()) {
+          return response;
+        }
+      } catch (ScannerAdapterException e) {
+        if (firstFailure == null) {
+          firstFailure = e;
+        }
+      }
+    }
+    if (firstFailure != null) {
+      throw firstFailure;
+    }
+    return new CancellationResponse(runId, false);
   }
 
-  private <T> T get(String path, Class<T> type) {
-    HttpRequest.Builder builder = HttpRequest.newBuilder(resolve(path))
+  private <T> T get(URI baseUri, String path, Class<T> type) {
+    HttpRequest.Builder builder = HttpRequest.newBuilder(resolve(baseUri, path))
         .timeout(Duration.ofSeconds(15))
         .header("Accept", "application/json")
         .GET();
@@ -164,8 +198,8 @@ public class HttpSecurityScannerAdapter implements Adapter {
   }
 
   private HttpRequest.Builder binaryRequest(
-      String path, int timeoutSeconds, InputStreamSource source) {
-    HttpRequest.Builder builder = HttpRequest.newBuilder(resolve(path))
+      URI baseUri, String path, int timeoutSeconds, InputStreamSource source) {
+    HttpRequest.Builder builder = HttpRequest.newBuilder(resolve(baseUri, path))
         .timeout(requestTimeout(timeoutSeconds))
         .header("Accept", "application/json")
         .POST(HttpRequest.BodyPublishers.ofInputStream(() -> {
@@ -228,12 +262,27 @@ public class HttpSecurityScannerAdapter implements Adapter {
     return bytes;
   }
 
-  private URI resolve(String path) {
+  URI baseUriForRun(String runId) {
+    return baseUris.get(routeIndex(runId, baseUris.size()));
+  }
+
+  static int routeIndex(String runId, int endpointCount) {
+    if (runId == null || runId.isBlank()) {
+      throw new IllegalArgumentException("Security scanner run ID is required");
+    }
+    if (endpointCount < 1) {
+      throw new IllegalArgumentException("At least one scanner endpoint is required");
+    }
+    return Math.floorMod(runId.hashCode(), endpointCount);
+  }
+
+  private URI resolve(URI baseUri, String path) {
     return baseUri.resolve(path.startsWith("/") ? path.substring(1) : path);
   }
 
   private static URI validateBaseUri(String raw) {
-    URI uri = URI.create(raw.endsWith("/") ? raw : raw + "/");
+    String value = raw == null ? "" : raw.trim();
+    URI uri = URI.create(value.endsWith("/") ? value : value + "/");
     String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
     if (!("http".equals(scheme) || "https".equals(scheme))
         || uri.getHost() == null

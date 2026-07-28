@@ -59,6 +59,10 @@ class DockerRegistryDaoPostgreSqlIntegrationTest extends PostgreSqlIntegrationTe
     assertEquals(List.of(REFERENCE_DIGEST), dao.listReferences(manifest.id()).stream()
         .map(DockerManifestReferenceRecord::digest)
         .toList());
+    assertEquals(
+        List.of(assetId),
+        dao.listManifestAssetIdsReferencingDigest(
+            repositoryId, IMAGE_NAME, REFERENCE_DIGEST, 0, 10));
   }
 
   private Callable<Long> writer(

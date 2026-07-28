@@ -134,9 +134,9 @@ public class ScannerEngineService {
               "scan",
               artifact.toString(),
               "--output",
-              "cyclonedx-json=" + sbom),
+              "cyclonedx-json"),
           workspace,
-          workspace.resolve("syft.stdout"),
+          sbom,
           Duration.ofSeconds(effective(limits).timeoutSeconds()),
           Map.of("SYFT_LOG_QUIET", "true"));
       byte[] cyclonedx = BoundedProcessRunner.readBounded(sbom, properties.getMaxOutputBytes());
@@ -216,9 +216,9 @@ public class ScannerEngineService {
                   "--platform",
                   platform,
                   "--output",
-                  "cyclonedx-json=" + output),
+                  "cyclonedx-json"),
               workspace,
-              workspace.resolve("syft-" + index + ".stdout"),
+              output,
               deadline.remaining(),
               environment);
           byte[] value =

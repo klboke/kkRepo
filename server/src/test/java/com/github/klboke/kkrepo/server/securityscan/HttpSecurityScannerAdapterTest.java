@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.securityscan;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -26,11 +27,13 @@ import com.sun.net.httpserver.HttpServer;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -90,6 +93,61 @@ class HttpSecurityScannerAdapterTest {
     assertTrue(failure.getMessage().contains("service-credential"));
     properties.setEnabled(false);
     adapter.validateConfiguration();
+  }
+
+  @Test
+  void routesEveryOperationForOneRunToTheSameStableReplica() {
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.getAdapter().setBaseUrls(List.of(
+        "http://scanner-0.scanner-headless:8080",
+        "http://scanner-1.scanner-headless:8080"));
+    HttpSecurityScannerAdapter adapter =
+        new HttpSecurityScannerAdapter(new ObjectMapper(), properties);
+
+    URI first = adapter.baseUriForRun("run-a");
+
+    assertEquals(first, adapter.baseUriForRun("run-a"));
+    assertNotEquals(first, adapter.baseUriForRun("run-b"));
+    assertNotEquals(
+        HttpSecurityScannerAdapter.routeIndex("run-a", 2),
+        HttpSecurityScannerAdapter.routeIndex("run-b", 2));
+  }
+
+  @Test
+  void broadcastsCancellationUntilTheOwningReplicaConfirmsIt() throws Exception {
+    ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+    AtomicInteger firstCalls = new AtomicInteger();
+    AtomicInteger secondCalls = new AtomicInteger();
+    HttpServer first = standaloneServer(exchange -> {
+      firstCalls.incrementAndGet();
+      respond(
+          exchange,
+          200,
+          mapper.writeValueAsBytes(new CancellationResponse("run", false)));
+    });
+    HttpServer second = standaloneServer(exchange -> {
+      secondCalls.incrementAndGet();
+      respond(
+          exchange,
+          200,
+          mapper.writeValueAsBytes(new CancellationResponse("run", true)));
+    });
+    try {
+      SecurityScanningProperties properties = new SecurityScanningProperties();
+      properties.getAdapter().setBaseUrls(List.of(
+          "http://127.0.0.1:" + first.getAddress().getPort(),
+          "http://127.0.0.1:" + second.getAddress().getPort()));
+      properties.getAdapter().setServiceCredential("secret");
+      HttpSecurityScannerAdapter adapter =
+          new HttpSecurityScannerAdapter(mapper, properties);
+
+      assertTrue(adapter.cancel("run").cancelled());
+      assertEquals(1, firstCalls.get());
+      assertEquals(1, secondCalls.get());
+    } finally {
+      first.stop(0);
+      second.stop(0);
+    }
   }
 
   @Test
@@ -240,6 +298,19 @@ class HttpSecurityScannerAdapterTest {
       }
     });
     server.start();
+  }
+
+  private static HttpServer standaloneServer(Handler handler) throws IOException {
+    HttpServer value = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    value.createContext("/", exchange -> {
+      try {
+        handler.handle(exchange);
+      } finally {
+        exchange.close();
+      }
+    });
+    value.start();
+    return value;
   }
 
   private static void respond(HttpExchange exchange, int status, byte[] body)

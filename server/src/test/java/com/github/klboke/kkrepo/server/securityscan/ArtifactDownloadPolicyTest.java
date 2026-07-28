@@ -202,6 +202,29 @@ class ArtifactDownloadPolicyTest {
   }
 
   @Test
+  void sharedDockerBlobUsesOneBatchQueryAndTheStrictestManifestDecision() {
+    properties.setEnabled(true);
+    List<Long> manifestAssetIds = List.of(10L, 11L);
+    when(scans.findDownloadPolicySnapshots(manifestAssetIds, null)).thenReturn(List.of(snapshot(
+        config(1L, EnforcementMode.ENFORCE, PolicyAction.ALLOW),
+        profile(),
+        new ScanCandidate(10L, 100L, 1L, 1L, Instant.EPOCH, Instant.EPOCH),
+        complete(PolicyDecision.BLOCK_VULNERABILITY),
+        policyState(1L, PolicyDecision.BLOCK_VULNERABILITY),
+        "com/acme/demo/1/demo-1.jar",
+        "artifact",
+        "application/java-archive")));
+
+    ArtifactPolicyException failure = assertThrows(
+        ArtifactPolicyException.class,
+        () -> policy.beforeReadAll(manifestAssetIds));
+
+    assertEquals(PolicyDecision.BLOCK_VULNERABILITY, failure.decision());
+    verify(scans).findDownloadPolicySnapshots(manifestAssetIds, null);
+    verifyNoMoreInteractions(scans);
+  }
+
+  @Test
   void protocolMetadataIsNotApplicableAndAlwaysAllowed() {
     properties.setEnabled(true);
     when(scans.findDownloadPolicySnapshots(10L, 1L)).thenReturn(List.of(snapshot(

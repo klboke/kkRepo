@@ -49,6 +49,10 @@ class DockerRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
         repositoryId, "acme/app", "latest").orElseThrow().id());
     assertEquals(1, dao.listReferences(updated.id()).size());
     assertTrue(dao.imageReferencesDigest(repositoryId, "acme/app", referenceDigest()));
+    assertEquals(
+        List.of(assetId),
+        dao.listManifestAssetIdsReferencingDigest(
+            repositoryId, "acme/app", referenceDigest(), 0, 10));
     assertEquals(List.of("acme/app"), dao.listCatalog(repositoryId, null, 10));
 
     DockerRegistryDao.DeletedManifest deleted = inTransaction(

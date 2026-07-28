@@ -93,8 +93,10 @@ spec:
             - name: KKREPO_SECURITY_SCANNING_RETENTION_INITIAL_DELAY
               value: {{ .Values.securityScanning.retention.initialDelay | quote }}
             {{- if .Values.securityScanning.enabled }}
-            - name: KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URL
-              value: {{ printf "http://%s-scanner:%v" (include "kkrepo.fullname" .) .Values.securityScanning.service.port | quote }}
+            # Every run is routed to a stable scanner ordinal. Its cancel request therefore
+            # reaches the same process-local execution registry even with multiple replicas.
+            - name: KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URLS
+              value: {{ include "kkrepo.scannerBaseUrls" . | quote }}
             - name: KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL
               valueFrom:
                 secretKeyRef:

@@ -396,13 +396,17 @@ public class SecurityScanExecutor {
       MatchResponse response) {
     validateMatchResponse(response);
     ScannerSnapshot actualSnapshot = snapshots.snapshotFor(response);
+    List<String> scannedPlatforms = stringList(response.summary().get("scannedPlatforms"));
+    List<String> missingPlatforms = stringList(response.summary().get("missingPlatforms"));
     String fingerprint = ScanFingerprints.match(
         sbom.documentSha256(),
         sbom.inventoryComplete(),
         response.engineName(),
         response.engineVersion(),
         response.vulnerabilityDatabaseRevision(),
-        profile.configurationDigest());
+        profile.configurationDigest(),
+        scannedPlatforms,
+        missingPlatforms);
     ScanRun reusable = scans.findRunByMatchFingerprint(fingerprint).orElse(null);
     if (reusable != null) {
       return finalizer.finalizeRun(
@@ -444,6 +448,8 @@ public class SecurityScanExecutor {
         counts.get(Severity.LOW) + counts.get(Severity.NEGLIGIBLE),
         counts.get(Severity.UNKNOWN),
         maxSeverity,
+        scannedPlatforms,
+        missingPlatforms,
         task.startedAt() == null ? now : task.startedAt(),
         now,
         now);
@@ -452,6 +458,18 @@ public class SecurityScanExecutor {
         .toList();
     return finalizer.finalizeRun(
         task, profile, config, subject.identity(), proposed, findings);
+  }
+
+  private static List<String> stringList(Object value) {
+    if (!(value instanceof List<?> values)) {
+      return List.of();
+    }
+    return values.stream()
+        .filter(String.class::isInstance)
+        .map(String.class::cast)
+        .filter(item -> !item.isBlank())
+        .distinct()
+        .toList();
   }
 
   private static ScanCompleteness combinedCompleteness(

@@ -59,12 +59,36 @@ public class ArtifactDownloadPolicy {
 
   public Decision beforeRead(long assetId, Long entryRepositoryId) {
     if (!properties.isEnabled() || internalScannerRequest()) return Decision.allow();
+    return evaluateSnapshots(
+        () -> scans.findDownloadPolicySnapshots(assetId, entryRepositoryId));
+  }
+
+  /**
+   * Evaluates a bounded set of manifest assets that authorize one shared Docker blob.
+   *
+   * <p>The DAO loads the batch in one statement; the strictest applicable manifest decision wins.
+   */
+  public Decision beforeReadAll(List<Long> assetIds) {
+    if (!properties.isEnabled() || internalScannerRequest()) return Decision.allow();
+    List<Long> ids = assetIds == null
+        ? List.of()
+        : assetIds.stream()
+            .filter(java.util.Objects::nonNull)
+            .filter(id -> id > 0)
+            .distinct()
+            .toList();
+    if (ids.isEmpty()) return Decision.allow();
+    return evaluateSnapshots(
+        () -> scans.findDownloadPolicySnapshots(ids, requestEntryRepositoryId()));
+  }
+
+  private Decision evaluateSnapshots(
+      java.util.function.Supplier<List<DownloadPolicySnapshot>> snapshotLoader) {
     Timer.Sample sample = metrics.start();
     String format = null;
     String outcome = "allow";
     try {
-      List<DownloadPolicySnapshot> snapshots =
-          scans.findDownloadPolicySnapshots(assetId, entryRepositoryId);
+      List<DownloadPolicySnapshot> snapshots = snapshotLoader.get();
       List<Evaluation> evaluations = new ArrayList<>(snapshots.size());
       for (DownloadPolicySnapshot snapshot : snapshots) {
         if (format == null && snapshot.format() != null) {

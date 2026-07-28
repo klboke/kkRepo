@@ -200,7 +200,7 @@ public class SecurityScanTaskWorker {
       adapter.cancel(Long.toString(taskId));
     } catch (RuntimeException e) {
       // The durable cancelled/taken-over task row already fences publication. A cancellation
-      // request may reach another adapter replica, so resource release remains best effort.
+      // broadcast can still fail if the owning adapter is unavailable, so release is best effort.
       log.debug("Unable to cancel active adapter work for task {}", taskId, e);
     }
   }

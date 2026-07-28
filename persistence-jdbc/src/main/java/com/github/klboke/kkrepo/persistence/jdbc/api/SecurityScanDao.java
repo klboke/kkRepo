@@ -41,6 +41,15 @@ public interface SecurityScanDao {
       long assetId, Long entryRepositoryId);
 
   /**
+   * Batch form of {@link #findDownloadPolicySnapshots(long, Long)} for shared Docker blobs.
+   *
+   * <p>Callers must pass at most 256 distinct asset IDs. The bound keeps the hot-path statement
+   * below database parameter limits while avoiding one policy query per referencing manifest.
+   */
+  List<DownloadPolicySnapshot> findDownloadPolicySnapshots(
+      List<Long> assetIds, Long entryRepositoryId);
+
+  /**
    * Folds a generic artifact content-change event into the scan-specific candidate projection.
    * The current asset/blob binding is re-read so a delayed event cannot restore stale content.
    */
@@ -154,7 +163,16 @@ public interface SecurityScanDao {
 
   List<Long> listRepositoryIdsForRun(long scanRunId);
 
-  List<ScanRunSubject> listRunSubjects(long scanRunId);
+  /**
+   * Lists distinct repository/asset associations with a bounded keyset cursor.
+   *
+   * <p>The same reusable run can be associated with many profiles or generations, while waiver
+   * scope only depends on repository and asset identity.
+   */
+  List<ScanRunSubject> listRunSubjects(
+      long scanRunId, long afterRepositoryId, long afterAssetId, int maxItems);
+
+  boolean runSubjectExists(long scanRunId, long repositoryId, long assetId);
 
   List<Long> listRepositoryIdsForSbom(long sbomId);
 
@@ -259,10 +277,9 @@ public interface SecurityScanDao {
    */
   List<ScanWaiver> listWaiversForFindings(
       List<Long> findingIds,
+      List<Long> scanRunIds,
       List<String> advisorySelectors,
-      List<String> packageSelectors,
-      List<Long> repositoryIds,
-      List<Long> assetIds);
+      List<String> packageSelectors);
 
   boolean deleteWaiver(long waiverId);
 
@@ -535,9 +552,66 @@ public interface SecurityScanDao {
       int lowCount,
       int unknownCount,
       Severity maxSeverity,
+      List<String> scannedPlatforms,
+      List<String> missingPlatforms,
       Instant startedAt,
       Instant completedAt,
-      Instant createdAt) {}
+      Instant createdAt) {
+    public ScanRun {
+      scannedPlatforms =
+          scannedPlatforms == null ? List.of() : List.copyOf(scannedPlatforms);
+      missingPlatforms =
+          missingPlatforms == null ? List.of() : List.copyOf(missingPlatforms);
+    }
+
+    public ScanRun(
+        Long id,
+        Long taskId,
+        long sbomId,
+        long scannerSnapshotId,
+        String matchConfigurationDigest,
+        String matchFingerprint,
+        ScanState status,
+        ScanCompleteness scanCompleteness,
+        long rawReportBlobId,
+        String rawReportSha256,
+        int findingCount,
+        int fixableFindingCount,
+        int criticalCount,
+        int highCount,
+        int mediumCount,
+        int lowCount,
+        int unknownCount,
+        Severity maxSeverity,
+        Instant startedAt,
+        Instant completedAt,
+        Instant createdAt) {
+      this(
+          id,
+          taskId,
+          sbomId,
+          scannerSnapshotId,
+          matchConfigurationDigest,
+          matchFingerprint,
+          status,
+          scanCompleteness,
+          rawReportBlobId,
+          rawReportSha256,
+          findingCount,
+          fixableFindingCount,
+          criticalCount,
+          highCount,
+          mediumCount,
+          lowCount,
+          unknownCount,
+          maxSeverity,
+          List.of(),
+          List.of(),
+          startedAt,
+          completedAt,
+          createdAt);
+    }
+  }
 
   record ScanRunSubject(
       long scanRunId,

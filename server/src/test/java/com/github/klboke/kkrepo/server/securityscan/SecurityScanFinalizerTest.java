@@ -22,6 +22,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanProfile
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanRun;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanTask;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanWaiver;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.Sbom;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.WaiverRevision;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.EnforcementMode;
@@ -31,6 +32,7 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyDecision;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanCompleteness;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanState;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.SubjectKind;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -247,6 +249,109 @@ class SecurityScanFinalizerTest {
     verify(scans).upsertAssetPolicyStateIfCurrent(state.capture());
     assertEquals(PolicyDecision.ALLOW, state.getValue().policyDecision());
     verify(scans).listActiveWaivers(eq(1L), eq(10L), any(), eq(1000L), eq(1000));
+  }
+
+  @Test
+  void materializesMissingPolicyPlatformAsPartialForOciSubjects() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    stubWaiverRevision(scans);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    SecurityScanFinalizer finalizer = new SecurityScanFinalizer(
+        scans, repositories, mock(SecurityScanAuditService.class));
+    Instant now = Instant.now();
+    ScanTask task = task(1, 3);
+    ScanProfile profile = profile(now);
+    RepositoryScanConfig config = config(1L, 101L);
+    ScanPolicy policy = new ScanPolicy(
+        101L,
+        "arm64-required",
+        true,
+        Severity.CRITICAL,
+        false,
+        false,
+        false,
+        null,
+        List.of("linux/arm64"),
+        1L,
+        "test",
+        now,
+        now);
+    ScanRun run = new ScanRun(
+        30L,
+        5L,
+        20L,
+        40L,
+        "b".repeat(64),
+        "c".repeat(64),
+        ScanState.COMPLETE,
+        ScanCompleteness.COMPLETE,
+        50L,
+        "d".repeat(64),
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        Severity.UNKNOWN,
+        List.of("linux/amd64"),
+        List.of(),
+        now,
+        now,
+        now);
+    Sbom sbom = new Sbom(
+        20L,
+        SubjectKind.OCI_MANIFEST,
+        "sha256:" + "a".repeat(64),
+        new byte[] {1},
+        "syft",
+        "1",
+        "config",
+        "fingerprint",
+        60L,
+        "e".repeat(64),
+        "CycloneDX",
+        "1.5",
+        0,
+        0,
+        true,
+        now);
+
+    when(scans.insertRunOrFindExisting(run)).thenReturn(run);
+    when(scans.findSbom(20L)).thenReturn(Optional.of(sbom));
+    when(scans.findPolicy(101L)).thenReturn(Optional.of(policy));
+    when(scans.findRepositoryConfig(1L)).thenReturn(Optional.of(config));
+    when(scans.upsertAssetStateIfCurrent(any()))
+        .thenAnswer(invocation -> invocation.getArgument(0));
+    when(scans.upsertAssetPolicyStateIfCurrent(any()))
+        .thenAnswer(invocation -> invocation.getArgument(0));
+    when(scans.completeTask(eq(5L), eq("lease"), any())).thenReturn(true);
+    when(repositories.findById(1L)).thenReturn(Optional.of(new RepositoryRecord(
+        1L,
+        "docker-hosted",
+        RepositoryFormat.DOCKER,
+        RepositoryType.HOSTED,
+        "docker-hosted",
+        true,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        true,
+        Map.of())));
+    when(repositories.listGroupsContaining(1L)).thenReturn(List.of());
+
+    finalizer.finalizeRun(
+        task, profile, config, "sha256:" + "a".repeat(64), run, List.of());
+
+    ArgumentCaptor<AssetPolicyState> state =
+        ArgumentCaptor.forClass(AssetPolicyState.class);
+    verify(scans).upsertAssetPolicyStateIfCurrent(state.capture());
+    assertEquals(PolicyDecision.BLOCK_PARTIAL, state.getValue().policyDecision());
+    assertEquals("REQUIRED_PLATFORMS_MISSING", state.getValue().policyReasonCode());
   }
 
   private static ScanProfile profile(Instant now) {

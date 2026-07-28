@@ -63,6 +63,60 @@ class PolicyEvaluatorTest {
   }
 
   @Test
+  void disabledPolicySkipsItsInventoryAndVulnerabilityRules() {
+    Rule disabled = new Rule(
+        Severity.LOW,
+        false,
+        true,
+        true,
+        PolicyAction.BLOCK,
+        PolicyAction.BLOCK,
+        PolicyAction.BLOCK,
+        false,
+        List.of("linux/arm64"));
+
+    var result = PolicyEvaluator.evaluate(disabled, new Input(
+        ScanState.COMPLETE,
+        ScanCompleteness.COMPLETE,
+        false,
+        false,
+        List.of(new FindingView("critical", Severity.CRITICAL, true, false)),
+        Instant.EPOCH,
+        true,
+        List.of("linux/amd64")));
+
+    assertEquals(PolicyDecision.ALLOW, result.decision());
+    assertEquals("POLICY_DISABLED", result.reasonCode());
+  }
+
+  @Test
+  void appliesPartialActionWhenAnOciPolicyPlatformWasNotScanned() {
+    Rule platformRule = new Rule(
+        Severity.CRITICAL,
+        false,
+        false,
+        false,
+        PolicyAction.ALLOW,
+        PolicyAction.ALLOW,
+        PolicyAction.BLOCK,
+        true,
+        List.of("linux/amd64", "linux/arm64"));
+
+    var result = PolicyEvaluator.evaluate(platformRule, new Input(
+        ScanState.COMPLETE,
+        ScanCompleteness.COMPLETE,
+        true,
+        false,
+        List.of(),
+        Instant.EPOCH,
+        true,
+        List.of("linux/amd64")));
+
+    assertEquals(PolicyDecision.BLOCK_PARTIAL, result.decision());
+    assertEquals("REQUIRED_PLATFORMS_MISSING", result.reasonCode());
+  }
+
+  @Test
   void selectsTheStricterDecisionAcrossEveryRank() {
     assertEquals(PolicyDecision.ALLOW, PolicyEvaluator.stricter(null, null));
     assertEquals(

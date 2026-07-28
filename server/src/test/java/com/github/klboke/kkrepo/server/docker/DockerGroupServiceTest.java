@@ -55,14 +55,14 @@ class DockerGroupServiceTest {
         .thenReturn(manifestResponse);
     when(manifestStore.getManifest(hostedTwo, "library/alpine", "latest"))
         .thenReturn(storedManifest(hostedTwo, "library/alpine", digestValue));
-    when(hosted.getBlob(hostedTwo, digest, true)).thenReturn(blobResponse);
+    when(hosted.getBlob(hostedTwo, "library/alpine", digest, true)).thenReturn(blobResponse);
 
     service.getManifest(group, "library/alpine", "latest", true);
     DockerResponse response = service.getBlob(group, "library/alpine", digest, true);
 
     assertEquals(digestValue, response.headers().get(DockerConstants.CONTENT_DIGEST_HEADER));
-    verify(hosted).getBlob(hostedTwo, digest, true);
-    verify(hosted, never()).getBlob(hostedOne, digest, true);
+    verify(hosted).getBlob(hostedTwo, "library/alpine", digest, true);
+    verify(hosted, never()).getBlob(hostedOne, "library/alpine", digest, true);
   }
 
   @Test

@@ -200,6 +200,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       rs.getInt("low_count"),
       rs.getInt("unknown_count"),
       enumValue(Severity.class, rs.getString("max_severity")),
+      list(rs.getString("scanned_platforms_json")),
+      list(rs.getString("missing_platforms_json")),
       nullableInstant(rs, "started_at"),
       nullableInstant(rs, "completed_at"),
       nullableInstant(rs, "created_at"));
@@ -500,12 +502,31 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Override
   public List<DownloadPolicySnapshot> findDownloadPolicySnapshots(
       long assetId, Long entryRepositoryId) {
+    return findDownloadPolicySnapshots(List.of(assetId), entryRepositoryId);
+  }
+
+  @Override
+  public List<DownloadPolicySnapshot> findDownloadPolicySnapshots(
+      List<Long> assetIds, Long entryRepositoryId) {
+    List<Long> ids = distinctLongs(assetIds).stream().filter(id -> id > 0).toList();
+    if (ids.isEmpty()) {
+      return List.of();
+    }
+    if (ids.size() > 256) {
+      throw new IllegalArgumentException("Download policy batch is limited to 256 assets");
+    }
+    String placeholders = String.join(", ", java.util.Collections.nCopies(ids.size(), "?"));
+    List<Object> args = new ArrayList<>(ids.size() + 1);
+    args.addAll(ids);
+    args.add(entryRepositoryId);
     return jdbc.query("""
         WITH RECURSIVE
         target_asset AS (
           SELECT *
           FROM asset
-          WHERE id = ?
+          WHERE id IN (
+        """ + placeholders + """
+          )
         ),
         source_ancestors(repository_id) AS (
           SELECT repository_id
@@ -650,8 +671,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
           ON policy_state.asset_id = a.id
          AND policy_state.profile_id = c.profile_id
          AND policy_state.repository_id = c.repository_id
-        ORDER BY c.repository_id
-        """, downloadPolicySnapshotMapper, assetId, entryRepositoryId);
+        ORDER BY a.id, c.repository_id
+        """, downloadPolicySnapshotMapper, args.toArray());
   }
 
   @Override
@@ -1380,8 +1401,9 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
            match_fingerprint, status, scan_completeness, raw_report_blob_id,
            raw_report_sha256, finding_count, fixable_finding_count, critical_count,
            high_count, medium_count, low_count, unknown_count, max_severity,
-           started_at, completed_at, created_at, last_accessed_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           scanned_platforms_json, missing_platforms_json, started_at, completed_at,
+           created_at, last_accessed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, ps -> {
       setNullableLong(ps, 1, run.taskId());
       ps.setLong(2, run.sbomId());
@@ -1400,10 +1422,12 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       ps.setInt(15, run.lowCount());
       ps.setInt(16, run.unknownCount());
       ps.setString(17, run.maxSeverity().name());
-      ps.setTimestamp(18, nullableTimestamp(run.startedAt()));
-      ps.setTimestamp(19, nullableTimestamp(run.completedAt()));
-      ps.setTimestamp(20, nullableTimestamp(run.createdAt()));
-      ps.setTimestamp(21, nullableTimestamp(run.createdAt()));
+      json.bindSerialized(ps, 18, json.writeValue(run.scannedPlatforms()));
+      json.bindSerialized(ps, 19, json.writeValue(run.missingPlatforms()));
+      ps.setTimestamp(20, nullableTimestamp(run.startedAt()));
+      ps.setTimestamp(21, nullableTimestamp(run.completedAt()));
+      ps.setTimestamp(22, nullableTimestamp(run.createdAt()));
+      ps.setTimestamp(23, nullableTimestamp(run.createdAt()));
     });
     ScanRun stored = inserted.isPresent()
         ? findRun(inserted.getAsLong()).orElseThrow()
@@ -1519,12 +1543,25 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   @Override
-  public List<ScanRunSubject> listRunSubjects(long scanRunId) {
+  public List<ScanRunSubject> listRunSubjects(
+      long scanRunId, long afterRepositoryId, long afterAssetId, int maxItems) {
     return jdbc.query("""
-        SELECT scan_run_id, repository_id, asset_id, profile_id, content_generation, associated_at
+        SELECT
+          scan_run_id,
+          repository_id,
+          asset_id,
+          MIN(profile_id) AS profile_id,
+          MIN(content_generation) AS content_generation,
+          MIN(associated_at) AS associated_at
         FROM security_scan_run_subject
         WHERE scan_run_id = ?
-        ORDER BY repository_id, asset_id, profile_id, content_generation
+          AND (
+            repository_id > ?
+            OR (repository_id = ? AND asset_id > ?)
+          )
+        GROUP BY scan_run_id, repository_id, asset_id
+        ORDER BY repository_id, asset_id
+        LIMIT ?
         """,
         (rs, rowNum) -> new ScanRunSubject(
             rs.getLong("scan_run_id"),
@@ -1533,7 +1570,24 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
             rs.getLong("profile_id"),
             rs.getLong("content_generation"),
             nullableInstant(rs, "associated_at")),
-        scanRunId);
+        scanRunId,
+        Math.max(0, afterRepositoryId),
+        Math.max(0, afterRepositoryId),
+        Math.max(0, afterAssetId),
+        safeLimit(maxItems));
+  }
+
+  @Override
+  public boolean runSubjectExists(long scanRunId, long repositoryId, long assetId) {
+    List<Integer> matches = jdbc.query("""
+        SELECT 1
+        FROM security_scan_run_subject
+        WHERE scan_run_id = ?
+          AND repository_id = ?
+          AND asset_id = ?
+        LIMIT 1
+        """, (rs, rowNum) -> rs.getInt(1), scanRunId, repositoryId, assetId);
+    return !matches.isEmpty();
   }
 
   @Override
@@ -2331,65 +2385,65 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Override
   public List<ScanWaiver> listWaiversForFindings(
       List<Long> findingIds,
+      List<Long> scanRunIds,
       List<String> advisorySelectors,
-      List<String> packageSelectors,
-      List<Long> repositoryIds,
-      List<Long> assetIds) {
+      List<String> packageSelectors) {
     List<Long> findings = distinctLongs(findingIds);
-    List<Long> repositories = distinctLongs(repositoryIds);
-    List<Long> assets = distinctLongs(assetIds);
-    if (findings.isEmpty() || repositories.isEmpty() || assets.isEmpty()) return List.of();
+    List<Long> runs = distinctLongs(scanRunIds);
+    if (findings.isEmpty() || runs.isEmpty()) return List.of();
     List<String> advisories = distinctStrings(advisorySelectors, true);
     List<String> packages = distinctStrings(packageSelectors, false);
     List<Object> args = new ArrayList<>();
     StringBuilder sql = new StringBuilder("""
-        SELECT *
-        FROM security_scan_waiver
-        WHERE approved_by IS NOT NULL
-          AND approved_by <> ''
-          AND (repository_id IS NULL OR repository_id IN (
+        SELECT w.*
+        FROM security_scan_waiver w
+        WHERE w.approved_by IS NOT NULL
+          AND w.approved_by <> ''
+          AND EXISTS (
+            SELECT 1
+            FROM security_scan_run_subject s
+            WHERE s.scan_run_id IN (
         """);
-    appendIn(sql, args, repositories);
+    appendIn(sql, args, runs);
     sql.append("""
-          ))
-          AND (asset_id IS NULL OR asset_id IN (
-        """);
-    appendIn(sql, args, assets);
-    sql.append("""
-          ))
+            )
+              AND (w.repository_id IS NULL OR w.repository_id = s.repository_id)
+              AND (w.asset_id IS NULL OR w.asset_id = s.asset_id)
+          )
           AND (
-            finding_id IN (
+            w.finding_id IN (
         """);
     appendIn(sql, args, findings);
     sql.append("""
             )
             OR (
-              finding_id IS NULL
+              w.finding_id IS NULL
               AND
         """);
     if (advisories.isEmpty()) {
-      sql.append(" NULLIF(advisory_selector, '') IS NULL");
+      sql.append(" NULLIF(w.advisory_selector, '') IS NULL");
     } else {
-      sql.append(" (NULLIF(advisory_selector, '') IS NULL OR LOWER(advisory_selector) IN (");
+      sql.append(
+          " (NULLIF(w.advisory_selector, '') IS NULL OR LOWER(w.advisory_selector) IN (");
       appendIn(sql, args, advisories);
       sql.append("))");
     }
     sql.append(" AND");
     if (packages.isEmpty()) {
-      sql.append(" NULLIF(package_selector, '') IS NULL");
+      sql.append(" NULLIF(w.package_selector, '') IS NULL");
     } else {
-      sql.append(" (NULLIF(package_selector, '') IS NULL OR package_selector IN (");
+      sql.append(" (NULLIF(w.package_selector, '') IS NULL OR w.package_selector IN (");
       appendIn(sql, args, packages);
       sql.append("))");
     }
     sql.append("""
               AND (
-                NULLIF(advisory_selector, '') IS NOT NULL
-                OR NULLIF(package_selector, '') IS NOT NULL
+                NULLIF(w.advisory_selector, '') IS NOT NULL
+                OR NULLIF(w.package_selector, '') IS NOT NULL
               )
             )
           )
-        ORDER BY id
+        ORDER BY w.id
         """);
     return jdbc.query(sql.toString(), waiverMapper, args.toArray());
   }

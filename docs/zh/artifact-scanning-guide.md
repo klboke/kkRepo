@@ -133,19 +133,21 @@ helm upgrade --install kkrepo deploy/helm/kkrepo \
 
 `securityScanning.enabled=true` 会同时：
 
-- 部署 scanner adapter Deployment、Service、探针和可选 NetworkPolicy。
+- 部署 scanner adapter StatefulSet、Service、探针和可选 NetworkPolicy。
 - 把 kkRepo 的部署能力 gate 设置为 enabled。
 
 它仍不会启用任何仓库。部署后检查：
 
 ```bash
 kubectl get pods
-kubectl get deployment
-kubectl logs deployment/kkrepo-scanner
+kubectl get statefulset
+kubectl logs statefulset/kkrepo-scanner
 ```
 
 多 scanner 副本需要注意漏洞数据库卷：
 
+- 每个 run 会固定路由到一个 StatefulSet ordinal；取消请求会广播到配置的所有
+  ordinal，确保命中持有进程内执行记录的 Pod。
 - 使用多个 scanner 副本且需要共享持久缓存时，为
   `securityScanning.scannerDatabase.persistence.existingClaim` 提供支持
   `ReadWriteMany` 的 PVC。
@@ -359,7 +361,8 @@ Waivers 页签用于查看 Active/Expired、scope、仓库、制品、exception�
 | 环境变量 | 默认值 | 用途 |
 | --- | ---: | --- |
 | `KKREPO_SECURITY_SCANNING_ENABLED` | `false` | 部署能力 gate |
-| `KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URL` | `http://scanner:8080` | adapter 内部地址 |
+| `KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URL` | `http://scanner:8080` | 单 adapter 内部地址，Compose 使用，也是列表为空时的回退值 |
+| `KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URLS` | 空 | 逗号分隔的稳定 adapter 地址；配置后覆盖单地址，并启用按 run 固定路由和取消广播 |
 | `KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL` | 启用扫描时必填 | kkRepo 调用 adapter 的共享凭据；启用扫描后为空会拒绝启动 |
 | `KKREPO_SECURITY_SCANNING_OCI_REGISTRY_URL` | `http://kkrepo:8080` | scanner 拉取精确 OCI digest 时访问的 kkRepo 地址 |
 | `KKREPO_SECURITY_SCANNING_DATABASE_MAX_AGE` | `48h` | 漏洞数据库最大允许运维年龄 |
@@ -370,8 +373,8 @@ Waivers 页签用于查看 Active/Expired、scope、仓库、制品、exception�
 | `KKREPO_SECURITY_SCANNING_TERMINAL_TASK_RETENTION_DAYS` | `30` | 终态 task 保留天数 |
 | `KKREPO_SECURITY_SCANNING_RESULT_RETENTION_DAYS` | `90` | 无引用历史结果保留天数 |
 
-所有 kkRepo 副本必须使用一致的 enabled、adapter URL、service credential 和 OCI
-registry URL。
+所有 kkRepo 副本必须使用一致的 enabled、有序 adapter URL 列表、service credential
+和 OCI registry URL。
 
 ### Scanner adapter
 
