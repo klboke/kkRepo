@@ -17,7 +17,7 @@ class BrowseLucideIconsContractTest {
       "boxes", "cloud-download", "package", "folder", "archive", "file-code",
       "files", "file", "file-archive", "file-java-archive", "file-box", "file-json", "file-text",
       "file-key", "file-check", "binary", "arrow-up-down", "copy", "check", "download", "x",
-      "octagon-alert", "triangle-alert", "circle-alert", "circle-help");
+      "octagon-alert", "triangle-alert", "circle-alert", "circle-help", "external-link");
   private static final List<String> LEGACY_GLYPHS = List.of(
       "⌂", "⌕", "▣", "▤", "▥", "⇧", "ⓘ", "📋", "📄", "⚙", "▰", "⊘");
 

@@ -4369,12 +4369,46 @@ function renderSecurityScanFindingRepositories(finding) {
   return `<span class="security-scan-finding-repositories" title="${escapeHtml(fullLabel)}">${escapeHtml(visibleLabel)}</span>`;
 }
 
+function securityScanExternalHttpUrl(value) {
+  if (!value) return "";
+  try {
+    const url = new URL(String(value));
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return "";
+    return url.href;
+  } catch {
+    return "";
+  }
+}
+
+function securityScanFindingAdvisoryUrl(finding) {
+  return [finding.primaryUrl, finding.dataSource]
+    .map(securityScanExternalHttpUrl)
+    .find(Boolean) || "";
+}
+
+function renderSecurityScanFindingAdvisory(finding) {
+  const label = finding.advisoryId || `#${finding.id}`;
+  const href = securityScanFindingAdvisoryUrl(finding);
+  const content = `<code>${escapeHtml(label)}</code>`;
+  if (!href) return content;
+  return `
+    <a class="security-scan-advisory-link"
+       href="${escapeHtml(href)}"
+       target="_blank"
+       rel="noopener noreferrer"
+       title="Open vulnerability advisory"
+       aria-label="${escapeHtml(`Open advisory ${label} in a new tab`)}">
+      ${content}
+      ${lucideIcon("external-link")}
+    </a>`;
+}
+
 function renderSecurityScanFindings() {
   document.getElementById("security-scan-finding-table").innerHTML =
     securityScanState.findings.map((finding) => `
       <tr>
         <td>${renderSecurityScanSeverity(finding.severity)}</td>
-        <td><code>${escapeHtml(finding.advisoryId)}</code></td>
+        <td>${renderSecurityScanFindingAdvisory(finding)}</td>
         <td>${renderSecurityScanFindingRepositories(finding)}</td>
         <td title="${escapeHtml(finding.packageUrl || "")}">${escapeHtml(finding.packageName)}</td>
         <td>${escapeHtml(finding.installedVersion || "-")}</td>
@@ -5006,7 +5040,7 @@ function showSecurityScanFindingDetail(findingId) {
     <div class="security-scan-finding-detail-hero">
       <div class="security-scan-finding-detail-kicker">
         ${renderSecurityScanSeverity(finding.severity)}
-        <code>${escapeHtml(finding.advisoryId || `#${finding.id}`)}</code>
+        ${renderSecurityScanFindingAdvisory(finding)}
       </div>
       <h3>${escapeHtml(finding.title || "Known vulnerability finding")}</h3>
       <p>${escapeHtml(packageLabel)}</p>

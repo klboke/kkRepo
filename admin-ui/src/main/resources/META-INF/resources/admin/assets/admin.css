@@ -2637,6 +2637,38 @@ code {
   color: #596963;
 }
 
+.security-scan-advisory-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--info);
+  font-weight: var(--fw-bold);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.security-scan-advisory-link code {
+  color: inherit;
+}
+
+.security-scan-advisory-link .lucide-icon {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  color: inherit;
+}
+
+.security-scan-advisory-link:hover {
+  color: var(--brand-strong);
+}
+
+.security-scan-advisory-link:focus-visible {
+  border-radius: 3px;
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
 .security-scan-capability-banner {
   display: grid;
   gap: 4px;
@@ -2892,6 +2924,10 @@ code {
   color: var(--ink-3);
   font-size: 13px;
   font-weight: var(--fw-bold);
+}
+
+.security-scan-finding-detail-kicker .security-scan-advisory-link code {
+  color: inherit;
 }
 
 .security-scan-finding-detail-hero h3 {
