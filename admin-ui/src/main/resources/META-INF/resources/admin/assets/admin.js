@@ -4293,7 +4293,7 @@ function renderSecurityScanSummary() {
     : escapeHtml(databaseRevision);
   const databaseRevisionCard = `
     <div>
-      <span>Database revision</span>
+      <span title="Version of the vulnerability database used to match findings">Vulnerability DB version</span>
       <strong class="security-scan-database-revision">${databaseRevisionMarkup}</strong>
     </div>`;
   target.innerHTML = scannerCard + databaseRevisionCard + [
