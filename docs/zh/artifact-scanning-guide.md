@@ -146,10 +146,13 @@ kubectl logs statefulset/kkrepo-scanner
 
 多 scanner 副本需要注意漏洞数据库卷：
 
-- 每个 run 会固定路由到一个 StatefulSet ordinal；取消请求会广播到配置的所有
-  ordinal，确保命中持有进程内执行记录的 Pod。
+- 每个 run 的 hash 会选择一个首选 StatefulSet ordinal 以分摊负载；catalog、match 和
+  OCI 请求遇到可重试的传输、容量或可用性错误时，会依次切换到其余配置 ordinal。
+  二进制输入在每次尝试时都从不可变 blob storage 重新打开。
+- 取消请求会广播到配置的所有 ordinal，因为超时的首选请求可能仍在退出，同时备用
+  副本上已经存在新的执行。
 - capability/readiness 观测会在所有配置的 ordinal 间容灾；只要至少一个 adapter
-  副本 ready，部署能力就保持可用。实际 run 的固定路由不变。
+  副本 ready，部署能力就保持可用。
 - 使用多个 scanner 副本且需要共享持久缓存时，为
   `securityScanning.scannerDatabase.persistence.existingClaim` 提供支持
   `ReadWriteMany` 的 PVC。
@@ -366,7 +369,7 @@ Waivers 页签用于查看 Active/Expired、scope、仓库、制品、exception�
 | --- | ---: | --- |
 | `KKREPO_SECURITY_SCANNING_ENABLED` | `false` | 部署能力 gate |
 | `KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URL` | `http://scanner:8080` | 单 adapter 内部地址，Compose 使用，也是列表为空时的回退值 |
-| `KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URLS` | 空 | 逗号分隔的稳定 adapter 地址；配置后覆盖单地址，并启用按 run 固定路由和取消广播 |
+| `KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URLS` | 空 | 逗号分隔的稳定 adapter 地址；配置后覆盖单地址，并启用按 run 选择首选副本、可重试执行容灾和取消广播 |
 | `KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL` | 启用扫描时必填 | kkRepo 调用 adapter 的共享凭据；启用扫描后为空会拒绝启动 |
 | `KKREPO_SECURITY_SCANNING_OCI_REGISTRY_URL` | `http://kkrepo:8080` | scanner 拉取精确 OCI digest 时访问的 kkRepo 地址 |
 | `KKREPO_SECURITY_SCANNING_DATABASE_MAX_AGE` | `48h` | 漏洞数据库最大允许运维年龄 |

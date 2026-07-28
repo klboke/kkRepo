@@ -73,7 +73,7 @@ license、misconfiguration、VEX 和 OCI SBOM referrer 仍属于后续独立能�
 | --- | --- | --- | --- |
 | kkRepo JVM 内额外线程池 | 少一个 Java 进程和一次内部 HTTP 调用 | Syft/Grype 仍是子进程；CPU、内存、临时盘、文件描述符、漏洞库更新和 OOM 与仓库请求共享容器；主镜像必须携带扫描器，关闭功能也扩大攻击面 | 不作为生产模式 |
 | 每个 kkRepo Pod 的 sidecar | 保留容器级资源限制，网络路径短 | 扫描容量与 API 副本绑定，每个 Pod 重复漏洞库，扩容仓库服务会同步放大扫描资源 | 暂不采用 |
-| 独立无状态 adapter StatefulSet/Compose service | 可独立设置 CPU、内存、临时盘和安全上下文；扫描异常不重启仓库；漏洞库集中复用；Kubernetes ordinal 提供稳定取消路由 | 多一个可选部署单元和内部 HTTP 健康检查 | 当前方案 |
+| 独立无状态 adapter StatefulSet/Compose service | 可独立设置 CPU、内存、临时盘和安全上下文；扫描异常不重启仓库；漏洞库集中复用；Kubernetes ordinal 提供稳定的负载首选地址和容灾目标 | 多一个可选部署单元和内部 HTTP 健康检查 | 当前方案 |
 | 每个任务一个 Kubernetes Job | 单任务隔离最强 | 控制面对象、镜像启动、回收和排障成本高，非 Kubernetes 部署还需另一套实现 | 暂不采用 |
 
 因此这里坚持“独立进程，薄适配器，不独立业务”。将扫描执行并入 JVM 只能省去薄
@@ -1541,13 +1541,17 @@ Helm/Kubernetes：
   部署能力 gate；它仍不会自动启用任何仓库。
 - scanner pod 有 CPU、memory、ephemeral-storage request/limit。
 - 支持 NetworkPolicy、Pod Security Context、read-only root filesystem。
-- 每个 run 按 ID 固定路由到稳定 ordinal，catalog、match 和 OCI 操作命中同一 adapter；
-  取消请求广播到全部配置 ordinal，避免进程内执行记录位于另一副本时无法释放资源。
+- 每个 run 按 ID hash 选择稳定的首选 ordinal；catalog、match 和 OCI 操作遇到可重试
+  的传输、容量或可用性错误时，按地址列表环形切换到其余 ordinal。二进制请求通过
+  `InputStreamSource` 从不可变 blob 重新打开，OCI JSON 请求使用可重复发送的有界正文。
+- 用户取消、lease 丢失或 worker 中断时，取消请求广播到全部配置 ordinal。超时容灾
+  可能让首选副本与备用副本短暂并行，但扫描操作无状态且只读，持久任务 lease、
+  fencing 和数据库结果提交仍是唯一正确性边界。
 - capability/readiness 观测遍历全部配置 ordinal；任一副本 ready 即认为 adapter
   部署可用，避免滚动发布或 ordinal 0 故障把整个扫描集群误判为不可用。
 - StatefulSet 只提供稳定网络身份；任务所有权、lease、fencing 和结果仍在共享数据库。
-- 所有 kkRepo 副本必须使用相同顺序的 adapter 地址列表。调整 scanner 副本数时先停止
-  新任务并等待或取消正在运行的扫描，再滚动更新 kkRepo，避免改变活动 run 的路由。
+- 所有 kkRepo 副本应使用相同顺序的 adapter 地址列表，以保持负载首选分布可预测；
+  副本数变化不会改变任务和结果的数据库正确性。
 - adapter rolling update 期间 run 记录真实 engine/database snapshot。
 
 ## 保留、删除与 GC

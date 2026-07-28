@@ -156,10 +156,13 @@ kubectl logs statefulset/kkrepo-scanner
 
 For multiple scanner replicas:
 
-- Each run is assigned to a stable StatefulSet ordinal, and cancellation is broadcast across the
-  configured ordinals so it reaches the Pod that owns the process-local execution.
+- Each run hash selects a preferred StatefulSet ordinal for load distribution. Retryable catalog,
+  match, and OCI transport, capacity, or availability failures continue through the remaining
+  configured ordinals. Binary inputs are reopened from immutable blob storage for each attempt.
+- Cancellation is broadcast across all configured ordinals because a timed-out primary request
+  may still be winding down while a fallback attempt is active.
 - Capability and readiness observation fails over across the configured ordinals and treats the
-  deployment as ready when at least one adapter replica is ready. Run routing remains stable.
+  deployment as ready when at least one adapter replica is ready.
 - If replicas share a persistent database cache, set
   `securityScanning.scannerDatabase.persistence.existingClaim` to a `ReadWriteMany` PVC.
 - If shared storage is unavailable, disable scanner database persistence and let each Pod use its
@@ -389,7 +392,7 @@ not depend on a disabled browser button.
 | --- | ---: | --- |
 | `KKREPO_SECURITY_SCANNING_ENABLED` | `false` | Deployment capability gate |
 | `KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URL` | `http://scanner:8080` | Single internal adapter URL, used by Compose and as the fallback |
-| `KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URLS` | Empty | Comma-separated stable adapter URLs; when present, overrides the single URL and enables deterministic per-run routing plus cancellation broadcast |
+| `KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URLS` | Empty | Comma-separated stable adapter URLs; when present, overrides the single URL and enables a deterministic per-run preference, retryable execution failover, and cancellation broadcast |
 | `KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL` | Required when scanning is enabled | Shared credential used by kkRepo; kkRepo refuses to start with scanning enabled when this is empty |
 | `KKREPO_SECURITY_SCANNING_OCI_REGISTRY_URL` | `http://kkrepo:8080` | kkRepo URL used by the scanner for exact OCI digests |
 | `KKREPO_SECURITY_SCANNING_DATABASE_MAX_AGE` | `48h` | Maximum operational vulnerability-database age |

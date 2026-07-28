@@ -93,8 +93,8 @@ spec:
             - name: KKREPO_SECURITY_SCANNING_RETENTION_INITIAL_DELAY
               value: {{ .Values.securityScanning.retention.initialDelay | quote }}
             {{- if .Values.securityScanning.enabled }}
-            # Every run is routed to a stable scanner ordinal. Its cancel request therefore
-            # reaches the same process-local execution registry even with multiple replicas.
+            # A run hash selects the preferred scanner ordinal; retryable execution failures
+            # fail over, and cancellation broadcasts to every process-local execution registry.
             - name: KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URLS
               value: {{ include "kkrepo.scannerBaseUrls" . | quote }}
             - name: KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL

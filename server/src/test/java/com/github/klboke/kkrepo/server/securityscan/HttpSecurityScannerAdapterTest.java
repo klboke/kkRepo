@@ -96,7 +96,7 @@ class HttpSecurityScannerAdapterTest {
   }
 
   @Test
-  void routesEveryOperationForOneRunToTheSameStableReplica() {
+  void usesAStablePreferredReplicaForEachRun() {
     SecurityScanningProperties properties = new SecurityScanningProperties();
     properties.getAdapter().setBaseUrls(List.of(
         "http://scanner-0.scanner-headless:8080",
@@ -213,6 +213,126 @@ class HttpSecurityScannerAdapterTest {
     } finally {
       rolling.stop(0);
       ready.stop(0);
+    }
+  }
+
+  @Test
+  void failsEveryExecutionOperationOverFromItsHashedReplica() throws Exception {
+    ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+    AtomicInteger primaryCalls = new AtomicInteger();
+    AtomicInteger fallbackCalls = new AtomicInteger();
+    AtomicInteger inputOpens = new AtomicInteger();
+    HttpServer unavailable = standaloneServer(exchange -> {
+      primaryCalls.incrementAndGet();
+      exchange.getRequestBody().readAllBytes();
+      respond(exchange, 503, "{}".getBytes());
+    });
+    HttpServer healthy = standaloneServer(exchange -> {
+      fallbackCalls.incrementAndGet();
+      exchange.getRequestBody().readAllBytes();
+      Object response = switch (exchange.getRequestURI().getPath()) {
+        case "/v1/catalog" -> catalog();
+        case "/v1/match" -> match();
+        case "/v1/oci/scan" ->
+            new OciScanResponse(catalog(), match(), List.of("linux/amd64"), List.of());
+        default -> throw new IllegalStateException("Unexpected scanner path");
+      };
+      respond(exchange, 200, mapper.writeValueAsBytes(response));
+    });
+    try {
+      SecurityScanningProperties properties = new SecurityScanningProperties();
+      properties.getAdapter().setBaseUrls(List.of(
+          "http://127.0.0.1:" + unavailable.getAddress().getPort(),
+          "http://127.0.0.1:" + healthy.getAddress().getPort()));
+      properties.getAdapter().setServiceCredential("secret");
+      HttpSecurityScannerAdapter adapter =
+          new HttpSecurityScannerAdapter(mapper, properties);
+      String runId = java.util.stream.IntStream.range(0, 100)
+          .mapToObj(value -> "failover-" + value)
+          .filter(value -> HttpSecurityScannerAdapter.routeIndex(value, 2) == 0)
+          .findFirst()
+          .orElseThrow();
+      ResourceLimits limits = limits();
+
+      assertEquals(
+          "CycloneDX",
+          adapter.catalog(
+              new CatalogRequest(
+                  "v1", runId, "catalog-key", subject(null), "config", limits),
+              () -> {
+                inputOpens.incrementAndGet();
+                return new ByteArrayInputStream("artifact".getBytes());
+              }).specName());
+      assertEquals(
+          "db",
+          adapter.match(
+              new MatchRequest(
+                  "v1", runId, "match-key", "b".repeat(64), "config", limits),
+              () -> {
+                inputOpens.incrementAndGet();
+                return new ByteArrayInputStream("{}".getBytes());
+              }).vulnerabilityDatabaseRevision());
+      assertEquals(
+          List.of("linux/amd64"),
+          adapter.scanOci(new OciScanRequest(
+              "v1",
+              runId,
+              "oci-key",
+              "https://registry",
+              "repo/image",
+              "sha256:" + "a".repeat(64),
+              List.of("linux/amd64"),
+              "token",
+              "config",
+              limits)).scannedPlatforms());
+
+      assertEquals(3, primaryCalls.get());
+      assertEquals(3, fallbackCalls.get());
+      assertEquals(4, inputOpens.get(), "binary request bodies must be reopened for failover");
+    } finally {
+      unavailable.stop(0);
+      healthy.stop(0);
+    }
+  }
+
+  @Test
+  void doesNotFailExecutionOverAfterANonRetryableRejection() throws Exception {
+    ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+    AtomicInteger fallbackCalls = new AtomicInteger();
+    HttpServer rejected = standaloneServer(exchange -> {
+      exchange.getRequestBody().readAllBytes();
+      respond(exchange, 400, "{}".getBytes());
+    });
+    HttpServer healthy = standaloneServer(exchange -> {
+      fallbackCalls.incrementAndGet();
+      respond(exchange, 200, mapper.writeValueAsBytes(catalog()));
+    });
+    try {
+      SecurityScanningProperties properties = new SecurityScanningProperties();
+      properties.getAdapter().setBaseUrls(List.of(
+          "http://127.0.0.1:" + rejected.getAddress().getPort(),
+          "http://127.0.0.1:" + healthy.getAddress().getPort()));
+      properties.getAdapter().setServiceCredential("secret");
+      HttpSecurityScannerAdapter adapter =
+          new HttpSecurityScannerAdapter(mapper, properties);
+      String runId = java.util.stream.IntStream.range(0, 100)
+          .mapToObj(value -> "rejected-" + value)
+          .filter(value -> HttpSecurityScannerAdapter.routeIndex(value, 2) == 0)
+          .findFirst()
+          .orElseThrow();
+
+      ScannerAdapterException failure = assertThrows(
+          ScannerAdapterException.class,
+          () -> adapter.catalog(
+              new CatalogRequest(
+                  "v1", runId, "catalog-key", subject(null), "config", limits()),
+              () -> new ByteArrayInputStream("artifact".getBytes())));
+
+      assertEquals("SCANNER_HTTP_400", failure.code());
+      assertEquals(0, fallbackCalls.get());
+    } finally {
+      rejected.stop(0);
+      healthy.stop(0);
     }
   }
 

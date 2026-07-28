@@ -101,82 +101,86 @@ public class HttpSecurityScannerAdapter implements Adapter {
   @Override
   public CatalogResponse catalog(CatalogRequest request, InputStreamSource input)
       throws IOException {
-    HttpRequest.Builder builder =
-        binaryRequest(
-                baseUriForRun(request.runId()),
-                "/v1/catalog",
-                request.limits().timeoutSeconds(),
-                input)
-            .header("Content-Type", contentType(request.subject().mediaType()))
-            .header("X-KKRepo-API-Version", request.apiVersion())
-            .header("X-KKRepo-Run-ID", request.runId())
-            .header("Idempotency-Key", request.idempotencyKey())
-            .header("X-KKRepo-Target", request.subject().classification().name())
-            .header("X-KKRepo-Expected-SHA256", request.subject().sha256())
-            .header("X-KKRepo-Expected-Size", Long.toString(request.subject().size()))
-            .header("X-KKRepo-Profile-Digest", request.profileConfigurationDigest())
-            .header("X-KKRepo-Max-Archive-Entries",
-                Integer.toString(request.limits().maxArchiveEntries()))
-            .header("X-KKRepo-Max-Uncompressed-Bytes",
-                Long.toString(request.limits().maxUncompressedBytes()))
-            .header("X-KKRepo-Max-Single-File-Bytes",
-                Long.toString(request.limits().maxSingleFileBytes()))
-            .header("X-KKRepo-Max-Nested-Depth",
-                Integer.toString(request.limits().maxNestedDepth()))
-            .header("X-KKRepo-Max-Input-Bytes",
-                Long.toString(request.limits().maxInputBytes()))
-            .header("X-KKRepo-Timeout-Seconds",
-                Integer.toString(request.limits().timeoutSeconds()));
-    ScannerArtifactType artifactType = artifactType(request.subject());
-    builder.header("X-KKRepo-Artifact-Type", artifactType.wireValue());
-    HttpRequest httpRequest = builder.build();
-    return send(httpRequest, CatalogResponse.class);
+    return executeWithFailover(request.runId(), baseUri -> {
+      HttpRequest.Builder builder =
+          binaryRequest(
+                  baseUri,
+                  "/v1/catalog",
+                  request.limits().timeoutSeconds(),
+                  input)
+              .header("Content-Type", contentType(request.subject().mediaType()))
+              .header("X-KKRepo-API-Version", request.apiVersion())
+              .header("X-KKRepo-Run-ID", request.runId())
+              .header("Idempotency-Key", request.idempotencyKey())
+              .header("X-KKRepo-Target", request.subject().classification().name())
+              .header("X-KKRepo-Expected-SHA256", request.subject().sha256())
+              .header("X-KKRepo-Expected-Size", Long.toString(request.subject().size()))
+              .header("X-KKRepo-Profile-Digest", request.profileConfigurationDigest())
+              .header("X-KKRepo-Max-Archive-Entries",
+                  Integer.toString(request.limits().maxArchiveEntries()))
+              .header("X-KKRepo-Max-Uncompressed-Bytes",
+                  Long.toString(request.limits().maxUncompressedBytes()))
+              .header("X-KKRepo-Max-Single-File-Bytes",
+                  Long.toString(request.limits().maxSingleFileBytes()))
+              .header("X-KKRepo-Max-Nested-Depth",
+                  Integer.toString(request.limits().maxNestedDepth()))
+              .header("X-KKRepo-Max-Input-Bytes",
+                  Long.toString(request.limits().maxInputBytes()))
+              .header("X-KKRepo-Timeout-Seconds",
+                  Integer.toString(request.limits().timeoutSeconds()));
+      ScannerArtifactType artifactType = artifactType(request.subject());
+      builder.header("X-KKRepo-Artifact-Type", artifactType.wireValue());
+      return send(builder.build(), CatalogResponse.class);
+    });
   }
 
   @Override
   public MatchResponse match(MatchRequest request, InputStreamSource sbom)
       throws IOException {
-    HttpRequest httpRequest = binaryRequest(
-            baseUriForRun(request.runId()),
-            "/v1/match",
-            request.limits().timeoutSeconds(),
-            sbom)
-        .header("Content-Type", "application/vnd.cyclonedx+json")
-        .header("X-KKRepo-API-Version", request.apiVersion())
-        .header("X-KKRepo-Run-ID", request.runId())
-        .header("Idempotency-Key", request.idempotencyKey())
-        .header("X-KKRepo-SBOM-SHA256", request.sbomSha256())
-        .header("X-KKRepo-Profile-Digest", request.profileConfigurationDigest())
-        .header("X-KKRepo-Max-Input-Bytes",
-            Long.toString(request.limits().maxInputBytes()))
-        .header("X-KKRepo-Max-Archive-Entries",
-            Integer.toString(request.limits().maxArchiveEntries()))
-        .header("X-KKRepo-Max-Uncompressed-Bytes",
-            Long.toString(request.limits().maxUncompressedBytes()))
-        .header("X-KKRepo-Max-Single-File-Bytes",
-            Long.toString(request.limits().maxSingleFileBytes()))
-        .header("X-KKRepo-Max-Nested-Depth",
-            Integer.toString(request.limits().maxNestedDepth()))
-        .header("X-KKRepo-Timeout-Seconds",
-            Integer.toString(request.limits().timeoutSeconds()))
-        .build();
-    return send(httpRequest, MatchResponse.class);
+    return executeWithFailover(request.runId(), baseUri -> {
+      HttpRequest httpRequest = binaryRequest(
+              baseUri,
+              "/v1/match",
+              request.limits().timeoutSeconds(),
+              sbom)
+          .header("Content-Type", "application/vnd.cyclonedx+json")
+          .header("X-KKRepo-API-Version", request.apiVersion())
+          .header("X-KKRepo-Run-ID", request.runId())
+          .header("Idempotency-Key", request.idempotencyKey())
+          .header("X-KKRepo-SBOM-SHA256", request.sbomSha256())
+          .header("X-KKRepo-Profile-Digest", request.profileConfigurationDigest())
+          .header("X-KKRepo-Max-Input-Bytes",
+              Long.toString(request.limits().maxInputBytes()))
+          .header("X-KKRepo-Max-Archive-Entries",
+              Integer.toString(request.limits().maxArchiveEntries()))
+          .header("X-KKRepo-Max-Uncompressed-Bytes",
+              Long.toString(request.limits().maxUncompressedBytes()))
+          .header("X-KKRepo-Max-Single-File-Bytes",
+              Long.toString(request.limits().maxSingleFileBytes()))
+          .header("X-KKRepo-Max-Nested-Depth",
+              Integer.toString(request.limits().maxNestedDepth()))
+          .header("X-KKRepo-Timeout-Seconds",
+              Integer.toString(request.limits().timeoutSeconds()))
+          .build();
+      return send(httpRequest, MatchResponse.class);
+    });
   }
 
   @Override
   public OciScanResponse scanOci(OciScanRequest request) throws IOException {
     byte[] body = objectMapper.writeValueAsBytes(request);
-    HttpRequest.Builder builder =
-        HttpRequest.newBuilder(resolve(baseUriForRun(request.runId()), "/v1/oci/scan"))
-        .timeout(requestTimeout(request.limits().timeoutSeconds()))
-        .header("Content-Type", "application/json")
-        .header("X-KKRepo-API-Version", request.apiVersion())
-        .header("X-KKRepo-Run-ID", request.runId())
-        .header("Idempotency-Key", request.idempotencyKey())
-        .POST(HttpRequest.BodyPublishers.ofByteArray(body));
-    withServiceCredential(builder);
-    HttpRequest httpRequest = builder.build();
-    return send(httpRequest, OciScanResponse.class);
+    return executeWithFailover(request.runId(), baseUri -> {
+      HttpRequest.Builder builder =
+          HttpRequest.newBuilder(resolve(baseUri, "/v1/oci/scan"))
+              .timeout(requestTimeout(request.limits().timeoutSeconds()))
+              .header("Content-Type", "application/json")
+              .header("X-KKRepo-API-Version", request.apiVersion())
+              .header("X-KKRepo-Run-ID", request.runId())
+              .header("Idempotency-Key", request.idempotencyKey())
+              .POST(HttpRequest.BodyPublishers.ofByteArray(body));
+      withServiceCredential(builder);
+      return send(builder.build(), OciScanResponse.class);
+    });
   }
 
   @Override
@@ -240,6 +244,36 @@ public class HttpSecurityScannerAdapter implements Adapter {
         ? new ScannerAdapterException(
             "SCANNER_UNAVAILABLE", "No security scanner adapter endpoint is available", true)
         : firstFailure;
+  }
+
+  /**
+   * Uses the run hash as a load-distributing preference, then walks every other configured
+   * endpoint on retryable transport, capacity, or availability failures. Scanner operations are
+   * self-contained and carry stable idempotency/run identities, while cancellation is broadcast
+   * because a timed-out primary execution may still be winding down.
+   */
+  private <T> T executeWithFailover(String runId, EndpointCall<T> call) {
+    int preferred = routeIndex(runId, baseUris.size());
+    ScannerAdapterException primaryFailure = null;
+    for (int offset = 0; offset < baseUris.size(); offset++) {
+      URI baseUri = baseUris.get((preferred + offset) % baseUris.size());
+      try {
+        return call.execute(baseUri);
+      } catch (ScannerAdapterException failure) {
+        if (!failure.retryable() || "SCANNER_INTERRUPTED".equals(failure.code())) {
+          throw failure;
+        }
+        if (primaryFailure == null) {
+          primaryFailure = failure;
+        } else {
+          primaryFailure.addSuppressed(failure);
+        }
+      }
+    }
+    throw primaryFailure == null
+        ? new ScannerAdapterException(
+            "SCANNER_UNAVAILABLE", "No security scanner adapter endpoint is available", true)
+        : primaryFailure;
   }
 
   private HttpRequest.Builder binaryRequest(
@@ -355,5 +389,10 @@ public class HttpSecurityScannerAdapter implements Adapter {
     if (value != null && !value.isBlank()) {
       builder.header("X-KKRepo-Scanner-Credential", value);
     }
+  }
+
+  @FunctionalInterface
+  private interface EndpointCall<T> {
+    T execute(URI baseUri);
   }
 }
