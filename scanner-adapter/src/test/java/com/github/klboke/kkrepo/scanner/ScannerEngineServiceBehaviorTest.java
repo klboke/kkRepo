@@ -199,6 +199,7 @@ class ScannerEngineServiceBehaviorTest {
 
     Fixture(Path workDirectory) {
       properties.setWorkDirectory(workDirectory);
+      properties.setVulnerabilityDatabaseDirectory(workDirectory.resolve("database"));
       properties.setMaxInputBytes(4096);
       properties.setMaxOutputBytes(1024);
       properties.setReadinessCache(Duration.ofMinutes(1));
@@ -235,7 +236,12 @@ class ScannerEngineServiceBehaviorTest {
         return new BoundedProcessRunner.Result(0, Files.size(output), new byte[0]);
       }).when(processes).run(anyList(), any(), any(), any(), any());
       engine = new ScannerEngineService(
-          properties, processes, scannerInput, archiveGuard, documents);
+          properties,
+          processes,
+          scannerInput,
+          archiveGuard,
+          documents,
+          new ScannerDatabaseCoordinator(properties));
     }
   }
 }

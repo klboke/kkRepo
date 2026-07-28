@@ -35,6 +35,15 @@ public class SecurityScannerHealthIndicator implements HealthIndicator {
       return degraded(
           "SCANNER_NOT_READY", snapshot.id(), snapshot.vulnerabilityDatabaseUpdatedAt());
     }
+    Duration observationMaxAge = properties.getScannerObservationMaxAge();
+    if (snapshot.observedAt() == null
+        || (observationMaxAge != null
+            && !observationMaxAge.isZero()
+            && !observationMaxAge.isNegative()
+            && snapshot.observedAt().plus(observationMaxAge).isBefore(Instant.now()))) {
+      return degraded(
+          "SCANNER_OBSERVATION_STALE", snapshot.id(), snapshot.vulnerabilityDatabaseUpdatedAt());
+    }
     Instant databaseUpdatedAt = snapshot.vulnerabilityDatabaseUpdatedAt();
     Duration maxAge = properties.getScannerDatabaseMaxAge();
     if (databaseUpdatedAt == null) {

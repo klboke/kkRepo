@@ -1,7 +1,7 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
-import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanSummary;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanMetricSummary;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyDecision;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.RequestReason;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanStage;
@@ -21,6 +21,7 @@ import org.springframework.stereotype.Component;
 public class SecurityScanMetrics {
   private final MeterRegistry registry;
   private final SecurityScanDao scans;
+  private final SecurityScanningProperties properties;
   private final AtomicLong backlog = new AtomicLong();
   private final AtomicLong running = new AtomicLong();
   private final AtomicLong failures = new AtomicLong();
@@ -30,9 +31,13 @@ public class SecurityScanMetrics {
   private final AtomicLong scannerReady = new AtomicLong();
   private final AtomicLong databaseAgeSeconds = new AtomicLong(-1);
 
-  public SecurityScanMetrics(MeterRegistry registry, SecurityScanDao scans) {
+  public SecurityScanMetrics(
+      MeterRegistry registry,
+      SecurityScanDao scans,
+      SecurityScanningProperties properties) {
     this.registry = registry;
     this.scans = scans;
+    this.properties = properties;
     gauge("kkrepo_security_scan_backlog", "Security scan tasks ready or waiting", backlog);
     gauge("kkrepo_security_scan_running", "Security scan tasks with active leases", running);
     gauge("kkrepo_security_scan_failures", "Terminal security scan failures", failures);
@@ -133,14 +138,32 @@ public class SecurityScanMetrics {
         .register(registry));
   }
 
+  public void recordRetention(SecurityScanDao.RetentionResult result) {
+    recordRetention("task", result.taskCount());
+    recordRetention("backfill_job", result.backfillJobCount());
+    recordRetention("run_subject", result.runSubjectCount());
+    recordRetention("run", result.runCount());
+    recordRetention("sbom", result.sbomCount());
+    recordRetention("scanner_snapshot", result.scannerSnapshotCount());
+  }
+
+  private void recordRetention(String objectType, int count) {
+    if (count <= 0) return;
+    Counter.builder("kkrepo_security_scan_retention_deleted_total")
+        .description("Security scan records deleted by lifecycle retention")
+        .tag("object", objectType)
+        .register(registry)
+        .increment(count);
+  }
+
   @Scheduled(fixedDelayString = "${kkrepo.security-scanning.metrics-refresh:15s}")
   public void refresh() {
-    ScanSummary summary = scans.summary();
+    ScanMetricSummary summary = scans.metricSummary(properties.getMetricsCountLimit());
     backlog.set(summary.pendingTasks());
     running.set(summary.runningTasks());
     failures.set(summary.failedTasks());
     partial.set(summary.partialAssets());
-    findings.set(summary.criticalFindings() + summary.highFindings());
+    findings.set(summary.highRiskFindings());
     java.time.Instant now = java.time.Instant.now();
     oldestAgeSeconds.set(scans.oldestPendingTaskCreatedAt()
         .map(createdAt -> Math.max(0, java.time.Duration.between(createdAt, now).toSeconds()))

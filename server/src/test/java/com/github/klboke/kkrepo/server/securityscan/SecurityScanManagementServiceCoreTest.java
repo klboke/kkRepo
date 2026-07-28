@@ -107,8 +107,8 @@ class SecurityScanManagementServiceCoreTest {
     when(scans.findRepositoryConfig(1L)).thenReturn(Optional.of(config));
     ScanPolicy policy = policy(10L, "critical", 1L);
     when(scans.listPolicies()).thenReturn(List.of(policy));
-    when(scans.summary(1L)).thenReturn(new ScanSummary(1, 2, 3, 4, 5, 6, 7, 8, 9, 10));
-    when(scans.summary(2L)).thenReturn(new ScanSummary(10, 9, 8, 7, 6, 5, 4, 3, 2, 1));
+    when(scans.summary(List.of(1L, 2L)))
+        .thenReturn(new ScanSummary(11, 11, 11, 11, 11, 11, 11, 11, 11, 11));
 
     var overview = service.overview(actor);
     var repositoriesPage = service.repositoryPage(actor, "maven", 0, 1);
@@ -207,6 +207,7 @@ class SecurityScanManagementServiceCoreTest {
     when(scans.findRepositoryConfig(1L)).thenReturn(Optional.of(previous));
     when(scans.upsertRepositoryConfig(any())).thenAnswer(invocation -> invocation.getArgument(0));
     when(scope.sourceRepositoryIds(1L)).thenReturn(List.of(1L, 2L));
+    when(scope.appliesToSource(any(), anyLong())).thenReturn(true);
     ConfigCommand command = new ConfigCommand(
         true, 1L, true, true, null, null, PolicyAction.BLOCK, null, 0L, 10L);
 

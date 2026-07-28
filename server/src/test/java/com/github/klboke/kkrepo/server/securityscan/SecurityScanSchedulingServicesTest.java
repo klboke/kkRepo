@@ -56,7 +56,7 @@ class SecurityScanSchedulingServicesTest {
     RepositoryDao repositories = mock(RepositoryDao.class);
     SecurityScanCandidateClassifier classifier = mock(SecurityScanCandidateClassifier.class);
     SecurityScanningProperties properties = new SecurityScanningProperties();
-    properties.getWorker().setBatchSize(20);
+    properties.getWorker().setCandidateBatchSize(20);
     SecurityScanRepositoryScope scope = mock(SecurityScanRepositoryScope.class);
     SecurityScanCandidateService service = new SecurityScanCandidateService(
         scans, assets, repositories, classifier, properties, scope);
@@ -136,6 +136,24 @@ class SecurityScanSchedulingServicesTest {
         "SCANNER_DATABASE_UNKNOWN",
         assertThrows(ScannerAdapterException.class, service::readySnapshot).code());
 
+    ScannerSnapshot unknownAge = new ScannerSnapshot(
+        31L,
+        "adapter",
+        ScannerContract.API_VERSION,
+        "grype",
+        "2",
+        "db-1",
+        null,
+        "cap",
+        "fingerprint-31",
+        Instant.now(),
+        true,
+        Map.of());
+    when(scans.latestScannerSnapshot()).thenReturn(Optional.of(unknownAge));
+    assertEquals(
+        "SCANNER_DATABASE_AGE_UNKNOWN",
+        assertThrows(ScannerAdapterException.class, service::readySnapshot).code());
+
     properties.setScannerDatabaseMaxAge(Duration.ofHours(1));
     ScannerSnapshot stale =
         snapshot(4L, true, "db-1", Instant.now().minusSeconds(7200), "fingerprint-4");
@@ -203,6 +221,20 @@ class SecurityScanSchedulingServicesTest {
     assertEquals(
         "SCANNER_API_UNSUPPORTED",
         assertThrows(ScannerAdapterException.class, service::readySnapshot).code());
+
+    when(adapter.capabilities())
+        .thenThrow(new ScannerAdapterException("ADAPTER_DOWN", "down", true));
+    assertEquals(
+        "ADAPTER_DOWN",
+        assertThrows(ScannerAdapterException.class, service::readySnapshot).code());
+    ArgumentCaptor<ScannerSnapshot> snapshots =
+        ArgumentCaptor.forClass(ScannerSnapshot.class);
+    verify(scans, org.mockito.Mockito.atLeast(3))
+        .insertSnapshotOrFindExisting(snapshots.capture());
+    assertEquals(false, snapshots.getAllValues().getLast().ready());
+    assertEquals(
+        "ADAPTER_DOWN",
+        snapshots.getAllValues().getLast().details().get("reasonCode"));
   }
 
   @Test

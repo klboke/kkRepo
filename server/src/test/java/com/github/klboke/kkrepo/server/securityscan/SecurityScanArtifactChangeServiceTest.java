@@ -40,7 +40,7 @@ class SecurityScanArtifactChangeServiceTest {
     MaintenanceCursorDao cursors = mock(MaintenanceCursorDao.class);
     SecurityScanDao scans = mock(SecurityScanDao.class);
     SecurityScanningProperties properties = new SecurityScanningProperties();
-    properties.getWorker().setBatchSize(7);
+    properties.getWorker().setArtifactChangeBatchSize(7);
     Instant now = Instant.parse("2026-07-25T01:00:00Z");
     List<ArtifactChange> events = List.of(
         new ArtifactChange(11L, 1L, 101L, null, 201L, ChangeKind.CONTENT_CREATED, now),
@@ -51,6 +51,8 @@ class SecurityScanArtifactChangeServiceTest {
     when(changes.listAfter(10L, 7)).thenReturn(events);
     when(cursors.updateLastSeenId(SecurityScanArtifactChangeService.CURSOR_NAME, 13L))
         .thenReturn(1);
+    when(cursors.minimumLastSeenId(SecurityScanArtifactChangeService.CURSOR_PREFIX))
+        .thenReturn(OptionalLong.of(13L));
 
     SecurityScanArtifactChangeService service =
         new SecurityScanArtifactChangeService(changes, cursors, scans, properties);
@@ -59,6 +61,7 @@ class SecurityScanArtifactChangeServiceTest {
     verify(scans).recordArtifactContentChange(101L);
     verify(scans).recordArtifactContentChange(102L);
     verify(cursors).updateLastSeenId(SecurityScanArtifactChangeService.CURSOR_NAME, 13L);
+    verify(changes).deleteThrough(13L, 5000);
   }
 
   @Test
@@ -66,6 +69,8 @@ class SecurityScanArtifactChangeServiceTest {
     ArtifactChangeDao changes = mock(ArtifactChangeDao.class);
     MaintenanceCursorDao cursors = mock(MaintenanceCursorDao.class);
     SecurityScanDao scans = mock(SecurityScanDao.class);
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.getWorker().setArtifactChangeBatchSize(4);
     ArtifactChange event = new ArtifactChange(
         11L, 1L, 101L, null, 201L, ChangeKind.CONTENT_CREATED, Instant.EPOCH);
     when(cursors.tryLockLastSeenId(SecurityScanArtifactChangeService.CURSOR_NAME))
@@ -76,7 +81,7 @@ class SecurityScanArtifactChangeServiceTest {
 
     SecurityScanArtifactChangeService service =
         new SecurityScanArtifactChangeService(
-            changes, cursors, scans, new SecurityScanningProperties());
+            changes, cursors, scans, properties);
 
     assertThrows(IllegalStateException.class, service::processBatch);
   }

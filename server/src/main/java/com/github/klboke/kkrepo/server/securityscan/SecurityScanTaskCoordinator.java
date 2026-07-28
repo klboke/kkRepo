@@ -28,4 +28,14 @@ public class SecurityScanTaskCoordinator {
         now.plusSeconds(properties.getWorker().getLeaseSeconds()),
         properties.getWorker().getBatchSize());
   }
+
+  @Transactional
+  public List<ScanTask> claimExpiredExhausted(String workerId) {
+    Instant now = Instant.now();
+    return scans.claimExpiredExhaustedTasks(
+        workerId,
+        now,
+        now.plusSeconds(properties.getWorker().getLeaseSeconds()),
+        properties.getWorker().getBatchSize());
+  }
 }

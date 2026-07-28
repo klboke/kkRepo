@@ -45,14 +45,25 @@ public class SecurityScannerSnapshotService {
       return recent.get();
     }
 
-    var capabilities = adapter.capabilities();
+    final ScannerContract.Capabilities capabilities;
+    final ScannerContract.Readiness readiness;
+    try {
+      capabilities = adapter.capabilities();
+      readiness = adapter.readiness();
+    } catch (ScannerAdapterException e) {
+      observeFailure(e.code(), now);
+      throw e;
+    } catch (RuntimeException e) {
+      observeFailure("SCANNER_OBSERVATION_FAILED", now);
+      throw e;
+    }
     if (!ScannerContract.API_VERSION.equals(capabilities.apiVersion())) {
+      observeFailure("SCANNER_API_UNSUPPORTED", now);
       throw new ScannerAdapterException(
           "SCANNER_API_UNSUPPORTED",
           "Scanner adapter API version is not supported",
           false);
     }
-    var readiness = adapter.readiness();
     Map<String, Object> details = new LinkedHashMap<>(readiness.details());
     details.put("adapterVersion", capabilities.adapterVersion());
     details.put("operations", capabilities.operations());
@@ -97,7 +108,7 @@ public class SecurityScannerSnapshotService {
         response.vulnerabilityDatabaseRevision(),
         response.capabilityDigest(),
         "true");
-    return scans.insertSnapshotOrFindExisting(new ScannerSnapshot(
+    ScannerSnapshot snapshot = scans.insertSnapshotOrFindExisting(new ScannerSnapshot(
         null,
         response.adapterName(),
         ScannerContract.API_VERSION,
@@ -110,6 +121,8 @@ public class SecurityScannerSnapshotService {
         now,
         true,
         Map.of("adapterVersion", response.adapterVersion())));
+    requireReady(snapshot, now);
+    return snapshot;
   }
 
   private void requireReady(ScannerSnapshot snapshot, Instant now) {
@@ -124,14 +137,37 @@ public class SecurityScannerSnapshotService {
           "Scanner vulnerability database revision is unavailable",
           true);
     }
+    if (snapshot.vulnerabilityDatabaseUpdatedAt() == null) {
+      throw new ScannerAdapterException(
+          "SCANNER_DATABASE_AGE_UNKNOWN",
+          "Scanner vulnerability database update time is unavailable",
+          true);
+    }
     Duration maxAge = properties.getScannerDatabaseMaxAge();
     if (maxAge != null && !maxAge.isZero() && !maxAge.isNegative()
-        && snapshot.vulnerabilityDatabaseUpdatedAt() != null
         && snapshot.vulnerabilityDatabaseUpdatedAt().plus(maxAge).isBefore(now)) {
       throw new ScannerAdapterException(
           "SCANNER_DATABASE_STALE",
           "Scanner vulnerability database is older than the configured maximum",
           true);
     }
+  }
+
+  private void observeFailure(String reasonCode, Instant observedAt) {
+    String digest = ScanFingerprints.sha256("scanner-observation-failure", reasonCode);
+    scans.insertSnapshotOrFindExisting(new ScannerSnapshot(
+        null,
+        "configured-adapter",
+        ScannerContract.API_VERSION,
+        "unavailable",
+        "unavailable",
+        null,
+        null,
+        digest,
+        digest,
+        observedAt,
+        false,
+        Map.of("reasonCode", reasonCode)));
+    metrics.observeScanner(false, null);
   }
 }

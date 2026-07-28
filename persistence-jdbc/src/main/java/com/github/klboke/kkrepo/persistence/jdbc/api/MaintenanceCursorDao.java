@@ -12,4 +12,6 @@ public interface MaintenanceCursorDao {
   int updateLastSeenId(String taskName, long lastSeenId);
 
   long lastSeenId(String taskName);
+
+  OptionalLong minimumLastSeenId(String taskNamePrefix);
 }

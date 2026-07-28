@@ -24,6 +24,7 @@ import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.springframework.http.HttpStatus;
 
 class ScannerControllerTest {
@@ -36,7 +37,10 @@ class ScannerControllerTest {
   void setUp() throws Exception {
     engine = mock(ScannerEngineService.class);
     properties = new ScannerAdapterProperties();
-    controller = new ScannerController(engine, properties);
+    controller = new ScannerController(
+        engine,
+        properties,
+        new ScannerCapacityLimiter(properties, new SimpleMeterRegistry()));
     request = mock(HttpServletRequest.class);
     when(request.getInputStream()).thenReturn(new TestServletInputStream("body".getBytes()));
   }
@@ -111,6 +115,12 @@ class ScannerControllerTest {
     assertEquals(HttpStatus.SERVICE_UNAVAILABLE, classified.getStatusCode());
     assertEquals("DOWN", classified.getBody().get("code"));
     assertEquals(true, classified.getBody().get("retryable"));
+
+    properties.setRetryAfterSeconds(17);
+    var capacity = controller.scannerError(new ScannerRequestException(
+        "SCANNER_CAPACITY_EXHAUSTED", "busy", 429, true));
+    assertEquals(HttpStatus.TOO_MANY_REQUESTS, capacity.getStatusCode());
+    assertEquals("17", capacity.getHeaders().getFirst("Retry-After"));
 
     var generic = controller.badRequest(new IllegalArgumentException("secret detail"));
     assertEquals(HttpStatus.BAD_REQUEST, generic.getStatusCode());

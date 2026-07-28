@@ -63,8 +63,10 @@ class SecurityScanFinalizerTest {
   void terminalFailurePublishesBlockingAssetStateAndAuditTransition() {
     SecurityScanDao scans = mock(SecurityScanDao.class);
     SecurityScanAuditService audit = mock(SecurityScanAuditService.class);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    when(repositories.findById(1L)).thenReturn(Optional.of(hostedRepository(1L)));
     SecurityScanFinalizer finalizer =
-        new SecurityScanFinalizer(scans, mock(RepositoryDao.class), audit);
+        new SecurityScanFinalizer(scans, repositories, audit);
     ScanTask task = task(3, 3);
     RepositoryScanConfig config = config(1L, 101L);
     AssetSecurityState current = assetState(PolicyDecision.ALLOW);
@@ -140,7 +142,8 @@ class SecurityScanFinalizerTest {
     when(scans.insertRunOrFindExisting(run)).thenReturn(run);
     when(scans.listFindings(eq(null), eq(30L), eq(null), eq(0L), eq(1000)))
         .thenReturn(List.of(finding, otherFinding));
-    when(scans.listActiveWaivers(anyLong(), eq(10L), any(Instant.class), eq(1000)))
+    when(scans.listActiveWaivers(
+        anyLong(), eq(10L), any(Instant.class), eq(0L), eq(1000)))
         .thenReturn(List.of(exactWaiver));
     when(scans.findPolicy(101L)).thenReturn(Optional.of(memberPolicy));
     when(scans.findPolicy(102L)).thenReturn(Optional.of(groupPolicy));
@@ -155,6 +158,7 @@ class SecurityScanFinalizerTest {
         "maven2-group", true, null, null, null, null, null, null, true, Map.of());
     when(repositories.listGroupsContaining(1L)).thenReturn(List.of(group));
     when(repositories.listGroupsContaining(2L)).thenReturn(List.of());
+    when(repositories.findById(1L)).thenReturn(Optional.of(hostedRepository(1L)));
 
     finalizer.finalizeRun(
         task, profile, memberConfig, "sha256:" + "a".repeat(64), run, List.of(finding));
@@ -174,6 +178,70 @@ class SecurityScanFinalizerTest {
                 AssetPolicyState::repositoryId, AssetPolicyState::waivedFindings)));
   }
 
+  @Test
+  void evaluatesWaiversBeyondTheFirstThousandRows() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    SecurityScanFinalizer finalizer = new SecurityScanFinalizer(
+        scans, repositories, mock(SecurityScanAuditService.class));
+    Instant now = Instant.now();
+    ScanTask task = task(1, 3);
+    ScanProfile profile = profile(now);
+    RepositoryScanConfig config = config(1L, 101L);
+    ScanPolicy policy = policy(101L, Severity.HIGH, now);
+    ScanRun run = run(now);
+    ScanFinding finding = finding(now);
+    List<ScanWaiver> firstPage = java.util.stream.LongStream.rangeClosed(1, 1000)
+        .mapToObj(id -> new ScanWaiver(
+            id,
+            "ADVISORY",
+            null,
+            null,
+            null,
+            "CVE-NOT-" + id,
+            null,
+            Map.of(),
+            "unrelated",
+            null,
+            null,
+            "admin",
+            "admin",
+            null,
+            now,
+            now))
+        .toList();
+    ScanWaiver matching = new ScanWaiver(
+        1001L, "FINDING", 1L, 10L, finding.id(), null, null, Map.of(),
+        "approved", null, null, "admin", "admin", null, now, now);
+
+    when(repositories.findById(1L)).thenReturn(Optional.of(hostedRepository(1L)));
+    when(scans.insertRunOrFindExisting(run)).thenReturn(run);
+    when(scans.listFindings(eq(null), eq(30L), eq(null), eq(0L), eq(1000)))
+        .thenReturn(List.of(finding));
+    when(scans.listFindings(eq(null), eq(30L), eq(null), eq(60L), eq(1000)))
+        .thenReturn(List.of());
+    when(scans.listActiveWaivers(eq(1L), eq(10L), any(), eq(0L), eq(1000)))
+        .thenReturn(firstPage);
+    when(scans.listActiveWaivers(eq(1L), eq(10L), any(), eq(1000L), eq(1000)))
+        .thenReturn(List.of(matching));
+    when(scans.findPolicy(101L)).thenReturn(Optional.of(policy));
+    when(scans.findRepositoryConfig(1L)).thenReturn(Optional.of(config));
+    when(scans.upsertAssetStateIfCurrent(any()))
+        .thenAnswer(invocation -> invocation.getArgument(0));
+    when(scans.upsertAssetPolicyStateIfCurrent(any()))
+        .thenAnswer(invocation -> invocation.getArgument(0));
+    when(scans.completeTask(eq(5L), eq("lease"), any())).thenReturn(true);
+
+    finalizer.finalizeRun(
+        task, profile, config, "sha256:" + "a".repeat(64), run, List.of(finding));
+
+    ArgumentCaptor<AssetPolicyState> state =
+        ArgumentCaptor.forClass(AssetPolicyState.class);
+    verify(scans).upsertAssetPolicyStateIfCurrent(state.capture());
+    assertEquals(PolicyDecision.ALLOW, state.getValue().policyDecision());
+    verify(scans).listActiveWaivers(eq(1L), eq(10L), any(), eq(1000L), eq(1000));
+  }
+
   private static ScanProfile profile(Instant now) {
     return new ScanProfile(
         1L, "default", true, "syft", "grype", List.of("vuln"), Map.of(),
@@ -183,8 +251,28 @@ class SecurityScanFinalizerTest {
   }
 
   private static SecurityScanFinalizer finalizer(SecurityScanDao scans) {
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    when(repositories.findById(1L)).thenReturn(Optional.of(hostedRepository(1L)));
     return new SecurityScanFinalizer(
-        scans, mock(RepositoryDao.class), mock(SecurityScanAuditService.class));
+        scans, repositories, mock(SecurityScanAuditService.class));
+  }
+
+  private static RepositoryRecord hostedRepository(long id) {
+    return new RepositoryRecord(
+        id,
+        "hosted-" + id,
+        RepositoryFormat.MAVEN2,
+        RepositoryType.HOSTED,
+        "maven2-hosted",
+        true,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        true,
+        Map.of());
   }
 
   private static ScanTask task(int attempts, int maxAttempts) {

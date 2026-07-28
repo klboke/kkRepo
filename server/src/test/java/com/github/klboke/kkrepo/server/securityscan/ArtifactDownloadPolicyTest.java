@@ -45,7 +45,7 @@ class ArtifactDownloadPolicyTest {
         scans,
         new SecurityScanCandidateClassifier(),
         properties,
-        new SecurityScanMetrics(registry, scans));
+        new SecurityScanMetrics(registry, scans, properties));
   }
 
   @Test

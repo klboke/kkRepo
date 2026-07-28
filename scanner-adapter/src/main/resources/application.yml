@@ -36,7 +36,13 @@ kkrepo:
     vulnerability-database-directory: ${KKREPO_SCANNER_DB_DIRECTORY:/var/lib/kkrepo-scanner/grype}
     vulnerability-database-auto-update: ${KKREPO_SCANNER_DB_AUTO_UPDATE:false}
     vulnerability-database-update-interval: ${KKREPO_SCANNER_DB_UPDATE_INTERVAL:6h}
+    vulnerability-database-update-check-interval: ${KKREPO_SCANNER_DB_UPDATE_CHECK_INTERVAL:1m}
     max-input-bytes: ${KKREPO_SCANNER_MAX_INPUT_BYTES:2147483648}
     max-output-bytes: ${KKREPO_SCANNER_MAX_OUTPUT_BYTES:67108864}
     max-stderr-bytes: ${KKREPO_SCANNER_MAX_STDERR_BYTES:262144}
     readiness-cache: ${KKREPO_SCANNER_READINESS_CACHE:30s}
+    max-concurrent-scans: ${KKREPO_SCANNER_MAX_CONCURRENT_SCANS:2}
+    max-queued-scans: ${KKREPO_SCANNER_MAX_QUEUED_SCANS:4}
+    admission-timeout: ${KKREPO_SCANNER_ADMISSION_TIMEOUT:1s}
+    retry-after-seconds: ${KKREPO_SCANNER_RETRY_AFTER_SECONDS:5}
+    database-lock-timeout: ${KKREPO_SCANNER_DATABASE_LOCK_TIMEOUT:2s}

@@ -54,7 +54,8 @@ public class SecurityScanCandidateService {
   @Transactional
   public int processBatch() {
     int processed = 0;
-    for (ScanCandidate candidate : scans.claimCandidates(properties.getWorker().getBatchSize())) {
+    for (ScanCandidate candidate :
+        scans.claimCandidates(properties.getWorker().getCandidateBatchSize())) {
       process(candidate);
       processed++;
     }

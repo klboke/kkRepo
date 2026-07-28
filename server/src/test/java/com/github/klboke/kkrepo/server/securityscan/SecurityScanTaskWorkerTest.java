@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -152,6 +153,48 @@ class SecurityScanTaskWorkerTest {
       heartbeat.setAccessible(true);
       heartbeat.invoke(fixture.worker, fixture.task);
       verify(fixture.scans).heartbeatTask(eq(5L), eq("lease"), any(), any());
+    } finally {
+      fixture.worker.shutdown();
+    }
+  }
+
+  @Test
+  void containsHeartbeatDatabaseFailuresSoThePeriodicCallbackCanRetry() throws Exception {
+    Fixture fixture = new Fixture();
+    try {
+      when(fixture.scans.heartbeatTask(eq(5L), eq("lease"), any(), any()))
+          .thenThrow(new IllegalStateException("temporary"));
+      Method heartbeat =
+          SecurityScanTaskWorker.class.getDeclaredMethod("heartbeat", ScanTask.class);
+      heartbeat.setAccessible(true);
+
+      heartbeat.invoke(fixture.worker, fixture.task);
+      heartbeat.invoke(fixture.worker, fixture.task);
+
+      verify(fixture.scans, times(2))
+          .heartbeatTask(eq(5L), eq("lease"), any(), any());
+    } finally {
+      fixture.worker.shutdown();
+    }
+  }
+
+  @Test
+  void terminalizesAnExpiredFinalAttemptWithoutExecutingItAgain() {
+    Fixture fixture = new Fixture();
+    try {
+      when(fixture.coordinator.claimExpiredExhausted(anyString()))
+          .thenReturn(List.of(fixture.task));
+      when(fixture.coordinator.claim(anyString())).thenReturn(List.of());
+
+      fixture.worker.runOnce();
+
+      verify(fixture.finalizer).failCurrentTask(
+          eq(fixture.task),
+          eq("SCAN_ATTEMPTS_EXHAUSTED"),
+          eq("The worker lease expired after the final permitted scan attempt"),
+          eq(false),
+          any());
+      verify(fixture.executor, never()).execute(any());
     } finally {
       fixture.worker.shutdown();
     }

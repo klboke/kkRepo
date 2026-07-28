@@ -480,6 +480,7 @@ public class SecurityScanExecutor {
   private void validateMatchResponse(MatchResponse response) {
     if (response == null || blank(response.engineVersion())
         || blank(response.vulnerabilityDatabaseRevision())
+        || response.vulnerabilityDatabaseUpdatedAt() == null
         || response.reportJson().length == 0) {
       throw new ScannerAdapterException(
           "SCANNER_PROVENANCE_MISSING",

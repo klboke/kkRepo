@@ -174,9 +174,11 @@ CREATE TABLE security_scan_task (
   CONSTRAINT uk_security_scan_task_idempotency UNIQUE (repository_id, idempotency_key_hash),
   INDEX idx_security_scan_task_claim
     (status, next_attempt_at, lease_until, priority, requested_at, id),
+  INDEX idx_security_scan_task_requested_snapshot (requested_scanner_snapshot_id),
   INDEX idx_security_scan_task_asset (asset_id, created_at, id),
   INDEX idx_security_scan_task_repository (repository_id, created_at, id),
-  INDEX idx_security_scan_task_terminal (status, finished_at)
+  INDEX idx_security_scan_task_terminal (status, finished_at),
+  INDEX idx_security_scan_task_pending_age (status, created_at, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE security_sbom (
@@ -196,11 +198,13 @@ CREATE TABLE security_sbom (
   dependency_count INT NOT NULL,
   inventory_complete BOOLEAN NOT NULL,
   created_at DATETIME(3) NOT NULL,
+  last_accessed_at DATETIME(3) NOT NULL,
   PRIMARY KEY (id),
   CONSTRAINT fk_security_sbom_document_blob
     FOREIGN KEY (document_blob_id) REFERENCES asset_blob(id) ON DELETE RESTRICT,
   CONSTRAINT uk_security_sbom_catalog_fingerprint UNIQUE (catalog_fingerprint),
   INDEX idx_security_sbom_subject (subject_identity_hash, created_at, id),
+  INDEX idx_security_sbom_retention (last_accessed_at, id),
   INDEX idx_security_sbom_document_blob (document_blob_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -249,6 +253,7 @@ CREATE TABLE security_scan_run (
   started_at DATETIME(3) NOT NULL,
   completed_at DATETIME(3) NOT NULL,
   created_at DATETIME(3) NOT NULL,
+  last_accessed_at DATETIME(3) NOT NULL,
   PRIMARY KEY (id),
   CONSTRAINT fk_security_scan_run_task
     FOREIGN KEY (task_id) REFERENCES security_scan_task(id) ON DELETE SET NULL,
@@ -261,8 +266,10 @@ CREATE TABLE security_scan_run (
   CONSTRAINT uk_security_scan_run_match_fingerprint UNIQUE (match_fingerprint),
   INDEX idx_security_scan_run_sbom (sbom_id, created_at, id),
   INDEX idx_security_scan_run_task (task_id),
+  INDEX idx_security_scan_run_snapshot (scanner_snapshot_id),
   INDEX idx_security_scan_run_report_blob (raw_report_blob_id),
-  INDEX idx_security_scan_run_status (status, completed_at)
+  INDEX idx_security_scan_run_status (status, completed_at),
+  INDEX idx_security_scan_run_retention (last_accessed_at, completed_at, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE security_scan_run_subject (
@@ -282,7 +289,8 @@ CREATE TABLE security_scan_run_subject (
   CONSTRAINT fk_security_scan_run_subject_profile
     FOREIGN KEY (profile_id) REFERENCES security_scan_profile(id) ON DELETE RESTRICT,
   INDEX idx_security_scan_run_subject_repository (repository_id, scan_run_id),
-  INDEX idx_security_scan_run_subject_asset (asset_id, profile_id, associated_at)
+  INDEX idx_security_scan_run_subject_asset (asset_id, profile_id, associated_at),
+  INDEX idx_security_scan_run_subject_retention (associated_at, scan_run_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE security_scan_finding (
@@ -343,8 +351,10 @@ CREATE TABLE asset_security_state (
     FOREIGN KEY (latest_scan_run_id) REFERENCES security_scan_run(id) ON DELETE SET NULL,
   CONSTRAINT fk_asset_security_state_policy
     FOREIGN KEY (policy_id) REFERENCES security_scan_policy(id) ON DELETE SET NULL,
+  INDEX idx_asset_security_state_run (latest_scan_run_id),
   INDEX idx_asset_security_state_decision (policy_decision, scan_state, asset_id),
-  INDEX idx_asset_security_state_stale (stale_at, scan_state)
+  INDEX idx_asset_security_state_stale (stale_at, scan_state),
+  INDEX idx_asset_security_state_scan (scan_state, asset_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE asset_security_policy_state (
@@ -374,6 +384,7 @@ CREATE TABLE asset_security_policy_state (
     FOREIGN KEY (latest_scan_run_id) REFERENCES security_scan_run(id) ON DELETE SET NULL,
   CONSTRAINT fk_asset_security_policy_state_policy
     FOREIGN KEY (policy_id) REFERENCES security_scan_policy(id) ON DELETE SET NULL,
+  INDEX idx_asset_security_policy_run (latest_scan_run_id),
   INDEX idx_asset_security_policy_context
     (repository_id, profile_id, config_revision, asset_id),
   INDEX idx_asset_security_policy_expiry (next_waiver_expiry, repository_id)
@@ -405,7 +416,8 @@ CREATE TABLE security_scan_waiver (
     FOREIGN KEY (finding_id) REFERENCES security_scan_finding(id) ON DELETE CASCADE,
   CONSTRAINT fk_security_scan_waiver_policy
     FOREIGN KEY (policy_id) REFERENCES security_scan_policy(id) ON DELETE SET NULL,
-  INDEX idx_security_scan_waiver_active (expires_at, repository_id, asset_id),
+  INDEX idx_security_scan_waiver_active (repository_id, asset_id, id, expires_at),
+  INDEX idx_security_scan_waiver_finding (finding_id),
   INDEX idx_security_scan_waiver_advisory (advisory_selector)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -429,7 +441,8 @@ CREATE TABLE security_scan_backfill_job (
   CONSTRAINT fk_security_scan_backfill_repository
     FOREIGN KEY (repository_id) REFERENCES repository(id) ON DELETE CASCADE,
   INDEX idx_security_scan_backfill_claim (status, lease_until, created_at, id),
-  INDEX idx_security_scan_backfill_repository (repository_id, created_at, id)
+  INDEX idx_security_scan_backfill_repository (repository_id, created_at, id),
+  INDEX idx_security_scan_backfill_retention (status, completed_at, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 INSERT INTO security_scan_profile
@@ -453,4 +466,4 @@ VALUES
    JSON_ARRAY('linux/amd64'), 1, 'system', CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3));
 
 INSERT INTO maintenance_cursor (task_name, last_seen_id)
-VALUES ('security_scan_artifact_change', 0);
+VALUES ('artifact_change:security_scan', 0);

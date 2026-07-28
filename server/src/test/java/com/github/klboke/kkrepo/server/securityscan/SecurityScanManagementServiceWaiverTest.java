@@ -273,7 +273,8 @@ class SecurityScanManagementServiceWaiverTest {
     when(scans.findFindingForUpdate(41L)).thenReturn(Optional.of(finding(41L, 7L)));
     when(scans.listRunSubjects(7L))
         .thenReturn(List.of(new ScanRunSubject(7L, 11L, 23L, 3L, 1L, Instant.now())));
-    when(scans.listActiveWaivers(eq(11L), eq(23L), any(Instant.class), eq(1000)))
+    when(scans.listActiveWaivers(
+        eq(11L), eq(23L), any(Instant.class), eq(0L), eq(1000)))
         .thenReturn(List.of());
     when(scans.createWaiver(any())).thenAnswer(invocation -> invocation.getArgument(0));
     WaiverCommand command = new WaiverCommand(
@@ -309,7 +310,8 @@ class SecurityScanManagementServiceWaiverTest {
     when(scans.findFindingForUpdate(41L)).thenReturn(Optional.of(finding(41L, 7L)));
     when(scans.listRunSubjects(7L))
         .thenReturn(List.of(new ScanRunSubject(7L, 11L, 23L, 3L, 1L, Instant.now())));
-    when(scans.listActiveWaivers(eq(11L), eq(23L), any(Instant.class), eq(1000)))
+    when(scans.listActiveWaivers(
+        eq(11L), eq(23L), any(Instant.class), eq(0L), eq(1000)))
         .thenReturn(List.of());
     when(scans.createWaiver(any())).thenAnswer(invocation -> invocation.getArgument(0));
     WaiverCommand command = new WaiverCommand(
@@ -345,7 +347,8 @@ class SecurityScanManagementServiceWaiverTest {
         .thenReturn(AccessDecision.allow());
     when(scans.findFindingForUpdate(41L)).thenReturn(Optional.of(finding));
     when(scans.listRunSubjects(7L)).thenReturn(List.of(subject));
-    when(scans.listActiveWaivers(eq(11L), eq(23L), any(Instant.class), eq(1000)))
+    when(scans.listActiveWaivers(
+        eq(11L), eq(23L), any(Instant.class), eq(0L), eq(1000)))
         .thenReturn(List.of(waiver(
             51L, 11L, 23L, 41L, null, null, "Already accepted",
             now.plusSeconds(3600), now)));

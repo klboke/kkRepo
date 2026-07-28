@@ -27,11 +27,15 @@ import org.springframework.web.bind.annotation.RestController;
 public class ScannerController {
   private final ScannerEngineService engine;
   private final ScannerAdapterProperties properties;
+  private final ScannerCapacityLimiter capacity;
 
   public ScannerController(
-      ScannerEngineService engine, ScannerAdapterProperties properties) {
+      ScannerEngineService engine,
+      ScannerAdapterProperties properties,
+      ScannerCapacityLimiter capacity) {
     this.engine = engine;
     this.properties = properties;
+    this.capacity = capacity;
   }
 
   @GetMapping("/v1/capabilities")
@@ -63,12 +67,12 @@ public class ScannerController {
       throws IOException {
     authorize(credential);
     requireApiVersion(apiVersion);
-    return engine.catalog(
+    return capacity.execute(() -> engine.catalog(
         request.getInputStream(),
         expectedSha256,
         expectedSize,
         ScannerArtifactType.fromWireValue(artifactType),
-        limits(request));
+        limits(request)));
   }
 
   @PostMapping("/v1/match")
@@ -81,21 +85,26 @@ public class ScannerController {
       throws IOException {
     authorize(credential);
     requireApiVersion(apiVersion);
-    return engine.match(request.getInputStream(), expectedSha256, limits(request));
+    return capacity.execute(
+        () -> engine.match(request.getInputStream(), expectedSha256, limits(request)));
   }
 
   @PostMapping("/v1/oci/scan")
   public OciScanResponse oci(
       @RequestBody OciScanRequest request,
       @RequestHeader(value = "X-KKRepo-Scanner-Credential", required = false)
-          String credential) {
+          String credential) throws IOException {
     authorize(credential);
-    return engine.scanOci(request);
+    return capacity.execute(() -> engine.scanOci(request));
   }
 
   @ExceptionHandler(ScannerRequestException.class)
   public ResponseEntity<Map<String, Object>> scannerError(ScannerRequestException failure) {
-    return ResponseEntity.status(failure.status()).body(Map.of(
+    ResponseEntity.BodyBuilder response = ResponseEntity.status(failure.status());
+    if (failure.status() == 429) {
+      response.header("Retry-After", Integer.toString(properties.getRetryAfterSeconds()));
+    }
+    return response.body(Map.of(
         "code", failure.code(),
         "message", failure.getMessage(),
         "retryable", failure.retryable()));

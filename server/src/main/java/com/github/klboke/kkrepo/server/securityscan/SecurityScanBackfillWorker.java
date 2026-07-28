@@ -42,33 +42,52 @@ public class SecurityScanBackfillWorker {
   }
 
   private void process(BackfillJob job) {
+    long cursor = job.cursorAssetId();
+    long scannedAssets = job.scannedAssets();
+    long markedAssets = job.markedAssets();
     try {
-      var page = scans.markRepositoryAssetsForBackfill(
-          job.repositoryId(),
-          job.cursorAssetId(),
-          properties.getWorker().getBackfillBatchSize());
-      BackfillStatus status =
-          page.complete() ? BackfillStatus.SUCCEEDED : BackfillStatus.RUNNING;
-      if (!scans.updateBackfillProgress(
-          job.id(),
-          job.leaseToken(),
-          page.nextAssetId(),
-          job.scannedAssets() + page.scannedAssets(),
-          job.markedAssets() + page.markedAssets(),
-          status,
-          null,
-          Instant.now())) {
-        log.debug("Security scan backfill lease was lost: {}", job.id());
+      int maxPages = properties.getWorker().getBackfillMaxPagesPerRun();
+      for (int pageNumber = 0; pageNumber < maxPages; pageNumber++) {
+        var page = scans.markRepositoryAssetsForBackfill(
+            job.repositoryId(),
+            cursor,
+            properties.getWorker().getBackfillBatchSize());
+        cursor = page.nextAssetId();
+        scannedAssets += page.scannedAssets();
+        markedAssets += page.markedAssets();
+        boolean release = !page.complete() && pageNumber + 1 == maxPages;
+        BackfillStatus status = page.complete()
+            ? BackfillStatus.SUCCEEDED
+            : release ? BackfillStatus.PENDING : BackfillStatus.RUNNING;
+        Instant now = Instant.now();
+        if (!scans.updateBackfillProgress(
+            job.id(),
+            job.leaseToken(),
+            cursor,
+            scannedAssets,
+            markedAssets,
+            status,
+            null,
+            status == BackfillStatus.RUNNING
+                ? now.plusSeconds(properties.getWorker().getLeaseSeconds()) : null,
+            now)) {
+          log.debug("Security scan backfill lease was lost: {}", job.id());
+          return;
+        }
+        if (status != BackfillStatus.RUNNING) {
+          return;
+        }
       }
     } catch (RuntimeException e) {
       scans.updateBackfillProgress(
           job.id(),
           job.leaseToken(),
-          job.cursorAssetId(),
-          job.scannedAssets(),
-          job.markedAssets(),
+          cursor,
+          scannedAssets,
+          markedAssets,
           BackfillStatus.FAILED,
           safeMessage(e),
+          null,
           Instant.now());
       log.warn("Security scan backfill failed: {}", job.id(), e);
     }

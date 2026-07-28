@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -56,6 +57,21 @@ class SecurityScanRepositoryScopeTest {
     when(scans.findRepositoryConfig(2L)).thenReturn(Optional.of(config(2L, false)));
 
     assertTrue(scope.effectiveConfigsForSource(1L).isEmpty());
+  }
+
+  @Test
+  void appliesHostedAndProxyFlagsOnlyToMatchingConcreteSources() {
+    RepositoryScanConfig hostedOnly = new RepositoryScanConfig(
+        2L, true, 1L, true, false, EnforcementMode.AUDIT,
+        PolicyAction.ALLOW, PolicyAction.ALLOW, PolicyAction.ALLOW,
+        3600L, 1L, 1L, Instant.EPOCH, Instant.EPOCH);
+
+    assertTrue(SecurityScanRepositoryScope.appliesToSource(
+        hostedOnly, RepositoryType.HOSTED));
+    assertFalse(SecurityScanRepositoryScope.appliesToSource(
+        hostedOnly, RepositoryType.PROXY));
+    assertFalse(SecurityScanRepositoryScope.appliesToSource(
+        hostedOnly, RepositoryType.GROUP));
   }
 
   private static RepositoryRecord repository(

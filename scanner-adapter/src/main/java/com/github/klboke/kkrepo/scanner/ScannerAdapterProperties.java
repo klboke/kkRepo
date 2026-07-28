@@ -14,10 +14,16 @@ public class ScannerAdapterProperties {
       Path.of(System.getProperty("java.io.tmpdir"), "kkrepo-scanner-db");
   private boolean vulnerabilityDatabaseAutoUpdate;
   private Duration vulnerabilityDatabaseUpdateInterval = Duration.ofHours(6);
+  private Duration vulnerabilityDatabaseUpdateCheckInterval = Duration.ofMinutes(1);
   private long maxInputBytes = 2L * 1024 * 1024 * 1024;
   private long maxOutputBytes = 64L * 1024 * 1024;
   private long maxStderrBytes = 256L * 1024;
   private Duration readinessCache = Duration.ofSeconds(30);
+  private int maxConcurrentScans = 2;
+  private int maxQueuedScans = 4;
+  private Duration admissionTimeout = Duration.ofSeconds(1);
+  private int retryAfterSeconds = 5;
+  private Duration databaseLockTimeout = Duration.ofSeconds(2);
 
   public String getServiceCredential() {
     return serviceCredential;
@@ -77,6 +83,17 @@ public class ScannerAdapterProperties {
         ? Duration.ofHours(6) : vulnerabilityDatabaseUpdateInterval;
   }
 
+  public Duration getVulnerabilityDatabaseUpdateCheckInterval() {
+    return vulnerabilityDatabaseUpdateCheckInterval;
+  }
+
+  public void setVulnerabilityDatabaseUpdateCheckInterval(
+      Duration vulnerabilityDatabaseUpdateCheckInterval) {
+    this.vulnerabilityDatabaseUpdateCheckInterval =
+        vulnerabilityDatabaseUpdateCheckInterval == null
+            ? Duration.ofMinutes(1) : vulnerabilityDatabaseUpdateCheckInterval;
+  }
+
   public long getMaxInputBytes() {
     return maxInputBytes;
   }
@@ -107,5 +124,47 @@ public class ScannerAdapterProperties {
 
   public void setReadinessCache(Duration readinessCache) {
     this.readinessCache = readinessCache == null ? Duration.ofSeconds(30) : readinessCache;
+  }
+
+  public int getMaxConcurrentScans() {
+    return maxConcurrentScans;
+  }
+
+  public void setMaxConcurrentScans(int maxConcurrentScans) {
+    this.maxConcurrentScans = Math.max(1, Math.min(64, maxConcurrentScans));
+  }
+
+  public int getMaxQueuedScans() {
+    return maxQueuedScans;
+  }
+
+  public void setMaxQueuedScans(int maxQueuedScans) {
+    this.maxQueuedScans = Math.max(0, Math.min(1024, maxQueuedScans));
+  }
+
+  public Duration getAdmissionTimeout() {
+    return admissionTimeout;
+  }
+
+  public void setAdmissionTimeout(Duration admissionTimeout) {
+    this.admissionTimeout =
+        admissionTimeout == null ? Duration.ofSeconds(1) : admissionTimeout;
+  }
+
+  public int getRetryAfterSeconds() {
+    return retryAfterSeconds;
+  }
+
+  public void setRetryAfterSeconds(int retryAfterSeconds) {
+    this.retryAfterSeconds = Math.max(1, Math.min(3600, retryAfterSeconds));
+  }
+
+  public Duration getDatabaseLockTimeout() {
+    return databaseLockTimeout;
+  }
+
+  public void setDatabaseLockTimeout(Duration databaseLockTimeout) {
+    this.databaseLockTimeout =
+        databaseLockTimeout == null ? Duration.ofSeconds(2) : databaseLockTimeout;
   }
 }

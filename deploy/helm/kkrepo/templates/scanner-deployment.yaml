@@ -46,6 +46,10 @@ spec:
                   key: {{ .Values.securityScanning.serviceCredential.key }}
             - name: KKREPO_SCANNER_DB_AUTO_UPDATE
               value: {{ .Values.securityScanning.scannerDatabase.autoUpdate | quote }}
+            - name: KKREPO_SCANNER_DB_UPDATE_INTERVAL
+              value: {{ .Values.securityScanning.scannerDatabase.updateInterval | quote }}
+            - name: KKREPO_SCANNER_DB_UPDATE_CHECK_INTERVAL
+              value: {{ .Values.securityScanning.scannerDatabase.updateCheckInterval | quote }}
             - name: KKREPO_SCANNER_DB_DIRECTORY
               value: /var/lib/kkrepo-scanner/grype
             - name: KKREPO_SCANNER_MAX_INPUT_BYTES
@@ -54,6 +58,16 @@ spec:
               value: {{ .Values.securityScanning.limits.maxOutputBytes | quote }}
             - name: KKREPO_SCANNER_MAX_STDERR_BYTES
               value: {{ .Values.securityScanning.limits.maxStderrBytes | quote }}
+            - name: KKREPO_SCANNER_MAX_CONCURRENT_SCANS
+              value: {{ .Values.securityScanning.limits.maxConcurrentScans | quote }}
+            - name: KKREPO_SCANNER_MAX_QUEUED_SCANS
+              value: {{ .Values.securityScanning.limits.maxQueuedScans | quote }}
+            - name: KKREPO_SCANNER_ADMISSION_TIMEOUT
+              value: {{ .Values.securityScanning.limits.admissionTimeout | quote }}
+            - name: KKREPO_SCANNER_RETRY_AFTER_SECONDS
+              value: {{ .Values.securityScanning.limits.retryAfterSeconds | quote }}
+            - name: KKREPO_SCANNER_DATABASE_LOCK_TIMEOUT
+              value: {{ .Values.securityScanning.limits.databaseLockTimeout | quote }}
           startupProbe:
             httpGet:
               path: /actuator/health/liveness

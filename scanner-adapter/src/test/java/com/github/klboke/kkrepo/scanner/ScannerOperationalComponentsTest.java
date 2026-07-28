@@ -9,10 +9,12 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Readiness;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -25,13 +27,38 @@ class ScannerOperationalComponentsTest {
   @TempDir Path temporaryDirectory;
 
   @Test
-  void databaseUpdaterIsOptInInvalidatesReadinessAndContainsFailures() {
+  void databaseUpdateMetricsUseBoundedOutcomeLabels() {
+    SimpleMeterRegistry registry = new SimpleMeterRegistry();
+    ScannerAdapterMetrics metrics = new ScannerAdapterMetrics(registry);
+
+    metrics.recordDatabaseUpdate("updated");
+    metrics.recordDatabaseUpdate("updated");
+    metrics.recordDatabaseUpdate("failed");
+
+    assertEquals(
+        2.0,
+        registry.counter(
+            "kkrepo_scanner_database_updates_total", "outcome", "updated").count());
+    assertEquals(
+        1.0,
+        registry.counter(
+            "kkrepo_scanner_database_updates_total", "outcome", "failed").count());
+  }
+
+  @Test
+  void databaseUpdaterIsOptInInvalidatesReadinessAndContainsFailures() throws Exception {
     ScannerAdapterProperties properties = new ScannerAdapterProperties();
     properties.setWorkDirectory(temporaryDirectory.resolve("work"));
     properties.setVulnerabilityDatabaseDirectory(temporaryDirectory.resolve("db"));
     BoundedProcessRunner processes = mock(BoundedProcessRunner.class);
     ScannerEngineService engine = mock(ScannerEngineService.class);
-    ScannerDatabaseUpdater updater = new ScannerDatabaseUpdater(properties, processes, engine);
+    ScannerAdapterMetrics metrics = mock(ScannerAdapterMetrics.class);
+    ScannerDatabaseUpdater updater = new ScannerDatabaseUpdater(
+        properties,
+        processes,
+        engine,
+        new ScannerDatabaseCoordinator(properties),
+        metrics);
 
     updater.update();
     verify(processes, never()).run(anyList(), any(), any(), any(), any());
@@ -41,9 +68,17 @@ class ScannerOperationalComponentsTest {
     verify(processes).run(anyList(), any(), any(), any(), any());
     verify(engine).invalidateReadiness();
 
+    properties.setVulnerabilityDatabaseUpdateInterval(Duration.ZERO);
     doThrow(new ScannerRequestException("DOWN", "down", 503, true))
         .when(processes).run(anyList(), any(), any(), any(), any());
     updater.update();
+    verify(metrics).recordDatabaseUpdate("failed");
+
+    Path invalidWorkDirectory = temporaryDirectory.resolve("work-file");
+    Files.writeString(invalidWorkDirectory, "not a directory");
+    properties.setWorkDirectory(invalidWorkDirectory);
+    updater.update();
+    verify(metrics, times(2)).recordDatabaseUpdate("failed");
   }
 
   @Test
@@ -86,6 +121,7 @@ class ScannerOperationalComponentsTest {
     properties.setMaxStderrBytes(1);
     properties.setReadinessCache(null);
     properties.setVulnerabilityDatabaseUpdateInterval(null);
+    properties.setVulnerabilityDatabaseUpdateCheckInterval(null);
     assertEquals("", properties.getServiceCredential());
     assertEquals("safe-syft", properties.getSyftExecutable());
     assertEquals("safe-grype", properties.getGrypeExecutable());
@@ -94,6 +130,7 @@ class ScannerOperationalComponentsTest {
     assertEquals(1024, properties.getMaxStderrBytes());
     assertEquals(Duration.ofSeconds(30), properties.getReadinessCache());
     assertEquals(Duration.ofHours(6), properties.getVulnerabilityDatabaseUpdateInterval());
+    assertEquals(Duration.ofMinutes(1), properties.getVulnerabilityDatabaseUpdateCheckInterval());
 
     ScannerRequestException error =
         new ScannerRequestException("CODE", "message", 422, false, new Exception("cause"));

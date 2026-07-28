@@ -72,6 +72,26 @@ spec:
               value: {{ .Values.blobStorage.file.enabled | quote }}
             - name: KKREPO_SECURITY_SCANNING_ENABLED
               value: {{ .Values.securityScanning.enabled | quote }}
+            - name: KKREPO_SECURITY_SCANNING_METRICS_COUNT_LIMIT
+              value: {{ .Values.securityScanning.metricsCountLimit | quote }}
+            # The generic artifact-event projection and bounded retention remain active while
+            # execution is disabled, so enabling later neither loses uploads nor grows the outbox.
+            - name: KKREPO_SECURITY_SCANNING_ARTIFACT_CHANGE_BATCH_SIZE
+              value: {{ .Values.securityScanning.worker.artifactChangeBatchSize | quote }}
+            - name: KKREPO_SECURITY_SCANNING_ARTIFACT_CHANGE_CLEANUP_BATCH_SIZE
+              value: {{ .Values.securityScanning.worker.artifactChangeCleanupBatchSize | quote }}
+            - name: KKREPO_SECURITY_SCANNING_RETENTION_ENABLED
+              value: {{ .Values.securityScanning.retention.enabled | quote }}
+            - name: KKREPO_SECURITY_SCANNING_TERMINAL_TASK_RETENTION_DAYS
+              value: {{ .Values.securityScanning.retention.terminalTaskDays | quote }}
+            - name: KKREPO_SECURITY_SCANNING_RESULT_RETENTION_DAYS
+              value: {{ .Values.securityScanning.retention.resultDays | quote }}
+            - name: KKREPO_SECURITY_SCANNING_RETENTION_BATCH_SIZE
+              value: {{ .Values.securityScanning.retention.batchSize | quote }}
+            - name: KKREPO_SECURITY_SCANNING_RETENTION_DELAY
+              value: {{ .Values.securityScanning.retention.delay | quote }}
+            - name: KKREPO_SECURITY_SCANNING_RETENTION_INITIAL_DELAY
+              value: {{ .Values.securityScanning.retention.initialDelay | quote }}
             {{- if .Values.securityScanning.enabled }}
             - name: KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URL
               value: {{ printf "http://%s-scanner:%v" (include "kkrepo.fullname" .) .Values.securityScanning.service.port | quote }}
@@ -84,6 +104,8 @@ spec:
               value: {{ printf "http://%s:%v" (include "kkrepo.fullname" .) .Values.service.httpPort | quote }}
             - name: KKREPO_SECURITY_SCANNING_DATABASE_MAX_AGE
               value: {{ .Values.securityScanning.scannerDatabase.maxAge | quote }}
+            - name: KKREPO_SECURITY_SCANNING_OBSERVATION_MAX_AGE
+              value: {{ .Values.securityScanning.scannerDatabase.observationMaxAge | quote }}
             - name: KKREPO_SECURITY_SCANNING_MAX_OUTPUT_BYTES
               value: {{ .Values.securityScanning.limits.maxOutputBytes | quote }}
             - name: KKREPO_SECURITY_SCANNING_WORKER_BATCH_SIZE
@@ -94,8 +116,14 @@ spec:
               value: {{ .Values.securityScanning.worker.heartbeatSeconds | quote }}
             - name: KKREPO_SECURITY_SCANNING_WORKER_MAX_ATTEMPTS
               value: {{ .Values.securityScanning.worker.maxAttempts | quote }}
+            - name: KKREPO_SECURITY_SCANNING_WORKER_MAX_BACKOFF_SECONDS
+              value: {{ .Values.securityScanning.worker.maxBackoffSeconds | quote }}
+            - name: KKREPO_SECURITY_SCANNING_CANDIDATE_BATCH_SIZE
+              value: {{ .Values.securityScanning.worker.candidateBatchSize | quote }}
             - name: KKREPO_SECURITY_SCANNING_BACKFILL_BATCH_SIZE
               value: {{ .Values.securityScanning.worker.backfillBatchSize | quote }}
+            - name: KKREPO_SECURITY_SCANNING_BACKFILL_MAX_PAGES_PER_RUN
+              value: {{ .Values.securityScanning.worker.backfillMaxPagesPerRun | quote }}
             - name: KKREPO_SECURITY_SCANNING_SNAPSHOT_REMATCH_BATCH_SIZE
               value: {{ .Values.securityScanning.worker.snapshotRematchBatchSize | quote }}
             - name: KKREPO_SECURITY_SCANNING_SNAPSHOT_REMATCH_MAX_BATCHES

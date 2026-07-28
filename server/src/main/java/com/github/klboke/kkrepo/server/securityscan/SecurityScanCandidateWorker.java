@@ -13,13 +13,9 @@ import org.springframework.stereotype.Component;
 public class SecurityScanCandidateWorker {
   private static final Logger log = LoggerFactory.getLogger(SecurityScanCandidateWorker.class);
 
-  private final SecurityScanArtifactChangeService artifactChanges;
   private final SecurityScanCandidateService service;
 
-  public SecurityScanCandidateWorker(
-      SecurityScanArtifactChangeService artifactChanges,
-      SecurityScanCandidateService service) {
-    this.artifactChanges = artifactChanges;
+  public SecurityScanCandidateWorker(SecurityScanCandidateService service) {
     this.service = service;
   }
 
@@ -27,11 +23,6 @@ public class SecurityScanCandidateWorker {
       fixedDelayString = "${kkrepo.security-scanning.candidate-delay-ms:1000}",
       initialDelayString = "${kkrepo.security-scanning.initial-delay-ms:5000}")
   public void runOnce() {
-    try {
-      artifactChanges.processBatch();
-    } catch (RuntimeException e) {
-      log.warn("Security scan artifact-change batch failed; cursor remains durable for retry", e);
-    }
     try {
       service.processBatch();
     } catch (RuntimeException e) {

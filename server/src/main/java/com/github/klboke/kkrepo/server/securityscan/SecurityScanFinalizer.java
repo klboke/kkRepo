@@ -18,6 +18,7 @@ import com.github.klboke.kkrepo.security.scan.PolicyEvaluator.FindingView;
 import com.github.klboke.kkrepo.security.scan.PolicyEvaluator.Input;
 import com.github.klboke.kkrepo.security.scan.PolicyEvaluator.Rule;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyAction;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyDecision;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanState;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
 import java.time.Instant;
@@ -101,7 +102,15 @@ public class SecurityScanFinalizer {
         0));
     auditPolicyTransition(task.repositoryId(), previous, updated);
     materializePolicyContexts(
-        task.repositoryId(), task.assetId(), task.contentGeneration(), profile, run, findings, now);
+        task.repositoryId(),
+        task.assetId(),
+        task.contentGeneration(),
+        profile,
+        run,
+        findings,
+        config,
+        primary,
+        now);
     if (!scans.completeTask(task.id(), task.leaseToken(), now)) {
       throw new LostSecurityScanLeaseException(task.id());
     }
@@ -118,13 +127,17 @@ public class SecurityScanFinalizer {
       }
       return;
     }
-    RepositoryScanConfig config = scans.findRepositoryConfig(task.repositoryId()).orElse(null);
-    if (task.assetId() != null && config != null) {
+    if (task.assetId() != null) {
+      List<RepositoryScanConfig> contexts =
+          applicablePolicyContexts(task.repositoryId(), task.profileId());
       var current = scans.findAssetState(task.assetId(), task.profileId()).orElse(null);
-      if (current != null && current.contentGeneration() == task.contentGeneration()) {
-        var decision = config.failureAction() == PolicyAction.BLOCK
-            ? com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyDecision.BLOCK_SCAN_FAILED
-            : com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyDecision.ALLOW;
+      if (current != null
+          && current.contentGeneration() == task.contentGeneration()
+          && !contexts.isEmpty()) {
+        RepositoryScanConfig primary = contexts.getFirst();
+        PolicyDecision decision = primary.failureAction() == PolicyAction.BLOCK
+            ? PolicyDecision.BLOCK_SCAN_FAILED : PolicyDecision.ALLOW;
+        Instant now = Instant.now();
         AssetSecurityState updated = scans.upsertAssetStateIfCurrent(new AssetSecurityState(
             current.assetId(),
             current.profileId(),
@@ -136,14 +149,16 @@ public class SecurityScanFinalizer {
             false,
             current.maxSeverity(),
             current.findingCounts(),
-            current.policyId(),
-            current.policyRevision(),
+            primary.policyId(),
+            policyRevision(primary),
             decision,
             errorCode,
             current.staleAt(),
-            Instant.now(),
+            now,
             current.version()));
         auditPolicyTransition(task.repositoryId(), current, updated);
+        materializeFailedPolicyContexts(
+            contexts, current, task.contentGeneration(), errorCode, now);
       }
     }
     if (!scans.failTask(
@@ -184,7 +199,7 @@ public class SecurityScanFinalizer {
     ScanPolicy policy = config.policyId() == null
         ? null : scans.findPolicy(config.policyId()).orElse(null);
     List<ScanWaiver> waivers =
-        scans.listActiveWaivers(config.repositoryId(), assetId, now, 1000).stream()
+        loadActiveWaivers(config.repositoryId(), assetId, now).stream()
             .filter(waiver -> waiverAppliesToPolicy(waiver, policy))
             .toList();
     Rule rule = rule(config, policy);
@@ -219,14 +234,21 @@ public class SecurityScanFinalizer {
       ScanProfile profile,
       ScanRun run,
       List<ScanFinding> findings,
+      RepositoryScanConfig primaryConfig,
+      ContextEvaluation primaryEvaluation,
       Instant now) {
     for (Long repositoryId : policyContextRepositoryIds(sourceRepositoryId)) {
       RepositoryScanConfig context = scans.findRepositoryConfig(repositoryId)
           .filter(RepositoryScanConfig::enabled)
           .filter(config -> config.profileId() == profile.id())
+          .filter(config -> appliesToSource(config, sourceRepositoryId))
           .orElse(null);
       if (context == null) continue;
-      ContextEvaluation result = evaluate(context, assetId, run, findings, now);
+      ContextEvaluation result =
+          context.repositoryId() == primaryConfig.repositoryId()
+                  && context.configRevision() == primaryConfig.configRevision()
+              ? primaryEvaluation
+              : evaluate(context, assetId, run, findings, now);
       ScanPolicy policy = result.policy();
       AssetPolicyState previous =
           scans.findAssetPolicyState(assetId, profile.id(), repositoryId).orElse(null);
@@ -267,6 +289,61 @@ public class SecurityScanFinalizer {
     return contexts;
   }
 
+  private List<RepositoryScanConfig> applicablePolicyContexts(
+      long sourceRepositoryId, long profileId) {
+    return policyContextRepositoryIds(sourceRepositoryId).stream()
+        .map(scans::findRepositoryConfig)
+        .flatMap(java.util.Optional::stream)
+        .filter(RepositoryScanConfig::enabled)
+        .filter(config -> config.profileId() == profileId)
+        .filter(config -> appliesToSource(config, sourceRepositoryId))
+        .toList();
+  }
+
+  private boolean appliesToSource(
+      RepositoryScanConfig config, long sourceRepositoryId) {
+    return repositories.findById(sourceRepositoryId)
+        .map(repository ->
+            SecurityScanRepositoryScope.appliesToSource(config, repository.type()))
+        .orElse(false);
+  }
+
+  private void materializeFailedPolicyContexts(
+      List<RepositoryScanConfig> contexts,
+      AssetSecurityState current,
+      long contentGeneration,
+      String errorCode,
+      Instant now) {
+    for (RepositoryScanConfig context : contexts) {
+      PolicyDecision decision = context.failureAction() == PolicyAction.BLOCK
+          ? PolicyDecision.BLOCK_SCAN_FAILED : PolicyDecision.ALLOW;
+      AssetPolicyState previous = scans.findAssetPolicyState(
+          current.assetId(), current.profileId(), context.repositoryId()).orElse(null);
+      AssetPolicyState updated = scans.upsertAssetPolicyStateIfCurrent(new AssetPolicyState(
+          current.assetId(),
+          current.profileId(),
+          context.repositoryId(),
+          contentGeneration,
+          current.latestScanRunId(),
+          context.policyId(),
+          policyRevision(context),
+          context.configRevision(),
+          decision,
+          errorCode,
+          0,
+          null,
+          null,
+          now,
+          previous == null ? 0 : previous.version()));
+      auditPolicyTransition(context.repositoryId(), previous, updated);
+    }
+  }
+
+  private Long policyRevision(RepositoryScanConfig config) {
+    return config.policyId() == null
+        ? null : scans.findPolicy(config.policyId()).map(ScanPolicy::revision).orElse(null);
+  }
+
   private static boolean waived(ScanFinding finding, List<ScanWaiver> waivers) {
     return waivers.stream()
         .anyMatch(waiver -> SecurityScanWaiverMatcher.matchesFinding(waiver, finding));
@@ -280,6 +357,22 @@ public class SecurityScanFinalizer {
     }
     return waiver.policyRevision() == null
         || (policy != null && waiver.policyRevision().equals(policy.revision()));
+  }
+
+  private List<ScanWaiver> loadActiveWaivers(
+      long repositoryId, long assetId, Instant evaluatedAt) {
+    List<ScanWaiver> waivers = new ArrayList<>();
+    long cursor = 0;
+    while (true) {
+      List<ScanWaiver> page =
+          scans.listActiveWaivers(repositoryId, assetId, evaluatedAt, cursor, 1000);
+      if (page.isEmpty()) break;
+      waivers.addAll(page);
+      long nextCursor = page.getLast().id();
+      if (page.size() < 1000 || nextCursor <= cursor) break;
+      cursor = nextCursor;
+    }
+    return List.copyOf(waivers);
   }
 
   private static Instant staleAt(

@@ -85,7 +85,13 @@ public class SecurityPolicyReconciler {
         ScanPolicy policy = config.policyId() == null
             ? null : scans.findPolicy(config.policyId()).orElse(null);
         if (config.policyId() != null && policy == null) continue;
-        for (long sourceRepositoryId : sourceRepositoryIds(contextRepository)) {
+        for (RepositoryRecord sourceRepository : sourceRepositories(contextRepository)) {
+          if (sourceRepository.id() == null
+              || !SecurityScanRepositoryScope.appliesToSource(
+                  config, sourceRepository.type())) {
+            continue;
+          }
+          long sourceRepositoryId = sourceRepository.id();
           long cursor = 0;
           while (remaining > 0) {
             int limit = Math.min(batchSize, remaining);
@@ -201,17 +207,19 @@ public class SecurityPolicyReconciler {
         0));
   }
 
-  private List<Long> sourceRepositoryIds(RepositoryRecord context) {
-    Set<Long> sources = new LinkedHashSet<>();
+  private List<RepositoryRecord> sourceRepositories(RepositoryRecord context) {
+    Map<Long, RepositoryRecord> sources = new java.util.LinkedHashMap<>();
     collectSources(context, sources, new LinkedHashSet<>());
-    return List.copyOf(sources);
+    return List.copyOf(sources.values());
   }
 
   private void collectSources(
-      RepositoryRecord repository, Set<Long> sources, Set<Long> visited) {
+      RepositoryRecord repository,
+      Map<Long, RepositoryRecord> sources,
+      Set<Long> visited) {
     if (repository == null || repository.id() == null || !visited.add(repository.id())) return;
     if (repository.type() != RepositoryType.GROUP) {
-      sources.add(repository.id());
+      sources.put(repository.id(), repository);
       return;
     }
     for (RepositoryRecord member : repositories.listMembers(repository.id())) {

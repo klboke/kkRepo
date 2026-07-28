@@ -42,6 +42,7 @@ public class ScannerEngineService {
   private final ScannerInput scannerInput;
   private final ArchiveGuard archiveGuard;
   private final ScannerDocumentMapper documents;
+  private final ScannerDatabaseCoordinator database;
 
   private volatile CachedReadiness cachedReadiness;
 
@@ -50,12 +51,14 @@ public class ScannerEngineService {
       BoundedProcessRunner processes,
       ScannerInput scannerInput,
       ArchiveGuard archiveGuard,
-      ScannerDocumentMapper documents) {
+      ScannerDocumentMapper documents,
+      ScannerDatabaseCoordinator database) {
     this.properties = properties;
     this.processes = processes;
     this.scannerInput = scannerInput;
     this.archiveGuard = archiveGuard;
     this.documents = documents;
+    this.database = database;
   }
 
   public Capabilities capabilities() {
@@ -78,14 +81,28 @@ public class ScannerEngineService {
 
   public Readiness readiness() {
     Instant now = Instant.now();
+    long databaseGeneration = database.generation();
     CachedReadiness cached = cachedReadiness;
-    if (cached != null && cached.expiresAt().isAfter(now)) return cached.value();
+    if (cached != null
+        && cached.databaseGeneration() == databaseGeneration
+        && cached.expiresAt().isAfter(now)) {
+      return cached.value();
+    }
     synchronized (this) {
       cached = cachedReadiness;
-      if (cached != null && cached.expiresAt().isAfter(now)) return cached.value();
-      Readiness value = inspectReadiness(now);
+      if (cached != null
+          && cached.databaseGeneration() == databaseGeneration
+          && cached.expiresAt().isAfter(now)) {
+        return cached.value();
+      }
+      Readiness value;
+      try {
+        value = database.withRead(() -> inspectReadiness(now));
+      } catch (ScannerRequestException e) {
+        value = degradedReadiness(now, e.code());
+      }
       cachedReadiness = new CachedReadiness(
-          value, now.plus(properties.getReadinessCache()));
+          value, now.plus(properties.getReadinessCache()), databaseGeneration);
       return value;
     }
   }
@@ -268,8 +285,13 @@ public class ScannerEngineService {
   }
 
   private MatchResponse matchFile(Path sbom, ResourceLimits limits, Path workspace) {
+    return database.withRead(() -> matchFileLocked(sbom, limits, workspace));
+  }
+
+  private MatchResponse matchFileLocked(Path sbom, ResourceLimits limits, Path workspace) {
     try {
-      Readiness ready = requireReady();
+      Readiness ready = inspectReadiness(Instant.now());
+      requireReady(ready);
       Path report = workspace.resolve("grype-report.json");
       processes.run(
           List.of(
@@ -326,25 +348,42 @@ public class ScannerEngineService {
           observedAt,
           details);
     } catch (ScannerRequestException e) {
-      return new Readiness(
-          false,
-          "DEGRADED",
-          "syft-grype",
-          "unavailable",
-          "unavailable",
-          Instant.EPOCH,
-          observedAt,
-          Map.of("reasonCode", e.code()));
+      return degradedReadiness(observedAt, e.code());
     }
   }
 
   private Readiness requireReady() {
     Readiness readiness = readiness();
+    requireReady(readiness);
+    return readiness;
+  }
+
+  private static void requireReady(Readiness readiness) {
     if (!readiness.ready()) {
       throw new ScannerRequestException(
           "SCANNER_NOT_READY", "Scanner engine or vulnerability database is unavailable", 503, true);
     }
-    return readiness;
+    if (readiness.vulnerabilityDatabaseRevision() == null
+        || readiness.vulnerabilityDatabaseRevision().isBlank()
+        || readiness.vulnerabilityDatabaseUpdatedAt() == null) {
+      throw new ScannerRequestException(
+          "SCANNER_DATABASE_PROVENANCE_MISSING",
+          "Scanner vulnerability database provenance is unavailable",
+          503,
+          true);
+    }
+  }
+
+  private static Readiness degradedReadiness(Instant observedAt, String reasonCode) {
+    return new Readiness(
+        false,
+        "DEGRADED",
+        "syft-grype",
+        "unavailable",
+        "unavailable",
+        Instant.EPOCH,
+        observedAt,
+        Map.of("reasonCode", reasonCode));
   }
 
   private ResourceLimits effective(ResourceLimits requested) {
@@ -409,5 +448,6 @@ public class ScannerEngineService {
     return value == null || value.toString().isBlank() ? fallback : value.toString();
   }
 
-  private record CachedReadiness(Readiness value, Instant expiresAt) {}
+  private record CachedReadiness(
+      Readiness value, Instant expiresAt, long databaseGeneration) {}
 }

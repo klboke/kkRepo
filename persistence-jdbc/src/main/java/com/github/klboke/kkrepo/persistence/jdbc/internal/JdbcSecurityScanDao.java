@@ -46,6 +46,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   private static final TypeReference<Map<String, Integer>> INTEGER_MAP = new TypeReference<>() {};
   private static final String SBOM_BLOB_OWNER = "security-sbom";
   private static final String SCAN_REPORT_BLOB_OWNER = "security-scan-report";
+  private static final long RESULT_ACCESS_TOUCH_INTERVAL_SECONDS = 3_600;
 
   private final JdbcTemplate jdbc;
   private final BlobReferenceDao blobReferences;
@@ -591,8 +592,13 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
           policy_state.version AS dp_policy_state_version
         FROM asset a
         JOIN asset_blob b ON b.id = a.asset_blob_id
+        JOIN repository source_repository ON source_repository.id = a.repository_id
         JOIN repository_security_scan_config c
-          ON c.repository_id = a.repository_id OR c.repository_id = ?
+          ON (c.repository_id = a.repository_id OR c.repository_id = ?)
+         AND (
+           (source_repository.type = 'hosted' AND c.scan_hosted_content = TRUE)
+           OR (source_repository.type = 'proxy' AND c.scan_proxy_content = TRUE)
+         )
         LEFT JOIN security_scan_profile profile ON profile.id = c.profile_id
         LEFT JOIN security_scan_candidate candidate ON candidate.asset_id = a.id
         LEFT JOIN asset_security_state state
@@ -961,6 +967,46 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public List<ScanTask> claimExpiredExhaustedTasks(
+      String workerId, Instant now, Instant leaseUntil, int maxItems) {
+    if (blank(workerId)) throw new IllegalArgumentException("workerId is required");
+    if (leaseUntil == null || now == null || !leaseUntil.isAfter(now)) {
+      throw new IllegalArgumentException("leaseUntil must be after now");
+    }
+    List<Long> ids = jdbc.queryForList("""
+        SELECT id
+        FROM security_scan_task
+        WHERE status = 'RUNNING'
+          AND attempts >= max_attempts
+          AND lease_until < ?
+        ORDER BY lease_until, id
+        LIMIT ?
+        FOR UPDATE SKIP LOCKED
+        """, Long.class, nullableTimestamp(now), safeLimit(maxItems));
+    List<ScanTask> claimed = new ArrayList<>(ids.size());
+    for (Long id : ids) {
+      String token = UUID.randomUUID().toString();
+      int updated = jdbc.update("""
+          UPDATE security_scan_task
+          SET claimed_by = ?, lease_token = ?, lease_until = ?, last_heartbeat_at = ?,
+              updated_at = ?
+          WHERE id = ? AND status = 'RUNNING' AND attempts >= max_attempts
+          """,
+          workerId,
+          token,
+          nullableTimestamp(leaseUntil),
+          nullableTimestamp(now),
+          nullableTimestamp(now),
+          id);
+      if (updated == 1) {
+        claimed.add(findTask(id).orElseThrow());
+      }
+    }
+    return List.copyOf(claimed);
+  }
+
+  @Override
   public boolean heartbeatTask(
       long taskId, String leaseToken, Instant leaseUntil, Instant heartbeatAt) {
     return jdbc.update("""
@@ -1151,8 +1197,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
           (subject_kind, subject_identity, subject_identity_hash, catalog_engine,
            catalog_engine_version, catalog_configuration_digest, catalog_fingerprint,
            document_blob_id, document_sha256, spec_name, spec_version, component_count,
-           dependency_count, inventory_complete, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           dependency_count, inventory_complete, created_at, last_accessed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, ps -> {
       ps.setString(1, sbom.subjectKind().name());
       ps.setString(2, sbom.subjectIdentity());
@@ -1169,6 +1215,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       ps.setInt(13, sbom.dependencyCount());
       ps.setBoolean(14, sbom.inventoryComplete());
       ps.setTimestamp(15, nullableTimestamp(sbom.createdAt()));
+      ps.setTimestamp(16, nullableTimestamp(sbom.createdAt()));
     });
     Sbom stored = inserted.isPresent()
         ? findSbom(inserted.getAsLong()).orElseThrow()
@@ -1179,12 +1226,26 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
 
   @Override
   public Optional<Sbom> findSbom(long sbomId) {
+    jdbc.update("""
+        UPDATE security_sbom
+        SET last_accessed_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND last_accessed_at < ?
+        """, sbomId, nullableTimestamp(resultAccessTouchCutoff()));
+    return findStoredSbom(sbomId);
+  }
+
+  private Optional<Sbom> findStoredSbom(long sbomId) {
     return jdbc.query("SELECT * FROM security_sbom WHERE id = ?", sbomMapper, sbomId)
         .stream().findFirst();
   }
 
   @Override
   public Optional<Sbom> findSbomByCatalogFingerprint(String catalogFingerprint) {
+    jdbc.update("""
+        UPDATE security_sbom
+        SET last_accessed_at = CURRENT_TIMESTAMP
+        WHERE catalog_fingerprint = ? AND last_accessed_at < ?
+        """, catalogFingerprint, nullableTimestamp(resultAccessTouchCutoff()));
     return jdbc.query("""
         SELECT * FROM security_sbom WHERE catalog_fingerprint = ?
         """, sbomMapper, catalogFingerprint).stream().findFirst();
@@ -1197,7 +1258,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       String catalogEngine,
       String catalogEngineVersion,
       String catalogConfigurationDigest) {
-    return jdbc.query("""
+    Optional<Sbom> candidate = jdbc.query("""
         SELECT *
         FROM security_sbom
         WHERE subject_kind = ?
@@ -1214,6 +1275,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         catalogEngine,
         catalogEngineVersion,
         catalogConfigurationDigest).stream().findFirst();
+    if (candidate.isEmpty()) return Optional.empty();
+    return findSbom(candidate.get().id());
   }
 
   @Override
@@ -1271,8 +1334,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
            match_fingerprint, status, scan_completeness, raw_report_blob_id,
            raw_report_sha256, finding_count, fixable_finding_count, critical_count,
            high_count, medium_count, low_count, unknown_count, max_severity,
-           started_at, completed_at, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           started_at, completed_at, created_at, last_accessed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, ps -> {
       setNullableLong(ps, 1, run.taskId());
       ps.setLong(2, run.sbomId());
@@ -1294,6 +1357,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       ps.setTimestamp(18, nullableTimestamp(run.startedAt()));
       ps.setTimestamp(19, nullableTimestamp(run.completedAt()));
       ps.setTimestamp(20, nullableTimestamp(run.createdAt()));
+      ps.setTimestamp(21, nullableTimestamp(run.createdAt()));
     });
     ScanRun stored = inserted.isPresent()
         ? findRun(inserted.getAsLong()).orElseThrow()
@@ -1308,12 +1372,22 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
 
   @Override
   public Optional<ScanRun> findRun(long runId) {
+    jdbc.update("""
+        UPDATE security_scan_run
+        SET last_accessed_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND last_accessed_at < ?
+        """, runId, nullableTimestamp(resultAccessTouchCutoff()));
     return jdbc.query("SELECT * FROM security_scan_run WHERE id = ?", runMapper, runId)
         .stream().findFirst();
   }
 
   @Override
   public Optional<ScanRun> findRunByMatchFingerprint(String matchFingerprint) {
+    jdbc.update("""
+        UPDATE security_scan_run
+        SET last_accessed_at = CURRENT_TIMESTAMP
+        WHERE match_fingerprint = ? AND last_accessed_at < ?
+        """, matchFingerprint, nullableTimestamp(resultAccessTouchCutoff()));
     return jdbc.query("""
         SELECT * FROM security_scan_run WHERE match_fingerprint = ?
         """, runMapper, matchFingerprint).stream().findFirst();
@@ -1576,10 +1650,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         SELECT s.*
         FROM asset_security_state s
         JOIN asset a ON a.id = s.asset_id
-        JOIN repository_security_scan_config c
-          ON c.repository_id = a.repository_id
-         AND c.profile_id = s.profile_id
-         AND c.enabled = TRUE
+        JOIN repository source_repository ON source_repository.id = a.repository_id
         JOIN security_scan_candidate candidate
           ON candidate.asset_id = s.asset_id
          AND candidate.content_generation = s.content_generation
@@ -1588,6 +1659,20 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
           AND s.asset_id > ?
           AND s.latest_scan_run_id IS NOT NULL
           AND (run.scanner_snapshot_id IS NULL OR run.scanner_snapshot_id <> ?)
+          AND EXISTS (
+            SELECT 1
+            FROM asset_security_policy_state policy_state
+            JOIN repository_security_scan_config config
+              ON config.repository_id = policy_state.repository_id
+             AND config.profile_id = policy_state.profile_id
+             AND config.enabled = TRUE
+            WHERE policy_state.asset_id = s.asset_id
+              AND policy_state.profile_id = s.profile_id
+              AND (
+                (source_repository.type = 'hosted' AND config.scan_hosted_content = TRUE)
+                OR (source_repository.type = 'proxy' AND config.scan_proxy_content = TRUE)
+              )
+          )
         ORDER BY s.asset_id
         LIMIT ?
         """, stateMapper, profileId, Math.max(0, afterAssetId), scannerSnapshotId,
@@ -2048,13 +2133,60 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
 
   @Override
   public List<ScanWaiver> listActiveWaivers(
-      long repositoryId, Long assetId, Instant evaluatedAt, int maxItems) {
+      long repositoryId,
+      Long assetId,
+      Instant evaluatedAt,
+      long afterId,
+      int maxItems) {
+    if (assetId != null) {
+      return jdbc.query("""
+          SELECT applicable.*
+          FROM (
+            SELECT *
+            FROM security_scan_waiver
+            WHERE repository_id IS NULL AND asset_id IS NULL
+              AND (expires_at IS NULL OR expires_at > ?) AND id > ?
+            UNION ALL
+            SELECT *
+            FROM security_scan_waiver
+            WHERE repository_id = ? AND asset_id IS NULL
+              AND (expires_at IS NULL OR expires_at > ?) AND id > ?
+            UNION ALL
+            SELECT *
+            FROM security_scan_waiver
+            WHERE repository_id IS NULL AND asset_id = ?
+              AND (expires_at IS NULL OR expires_at > ?) AND id > ?
+            UNION ALL
+            SELECT *
+            FROM security_scan_waiver
+            WHERE repository_id = ? AND asset_id = ?
+              AND (expires_at IS NULL OR expires_at > ?) AND id > ?
+          ) applicable
+          ORDER BY id
+          LIMIT ?
+          """,
+          waiverMapper,
+          nullableTimestamp(evaluatedAt),
+          Math.max(0, afterId),
+          repositoryId,
+          nullableTimestamp(evaluatedAt),
+          Math.max(0, afterId),
+          assetId,
+          nullableTimestamp(evaluatedAt),
+          Math.max(0, afterId),
+          repositoryId,
+          assetId,
+          nullableTimestamp(evaluatedAt),
+          Math.max(0, afterId),
+          safeLimit(maxItems));
+    }
     return jdbc.query("""
         SELECT *
         FROM security_scan_waiver
         WHERE (repository_id IS NULL OR repository_id = ?)
           AND (asset_id IS NULL OR asset_id = ?)
           AND (expires_at IS NULL OR expires_at > ?)
+          AND id > ?
         ORDER BY id
         LIMIT ?
         """,
@@ -2062,6 +2194,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         repositoryId,
         assetId,
         nullableTimestamp(evaluatedAt),
+        Math.max(0, afterId),
         safeLimit(maxItems));
   }
 
@@ -2129,14 +2262,36 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       long markedAssets,
       BackfillStatus status,
       String errorSummary,
+      Instant leaseUntil,
       Instant updatedAt) {
     boolean terminal = status == BackfillStatus.SUCCEEDED
         || status == BackfillStatus.FAILED
         || status == BackfillStatus.CANCELLED;
+    boolean retainLease = status == BackfillStatus.RUNNING;
+    if (retainLease && (leaseUntil == null || !leaseUntil.isAfter(updatedAt))) {
+      throw new IllegalArgumentException("leaseUntil must be after updatedAt while running");
+    }
+    if (retainLease) {
+      return jdbc.update("""
+          UPDATE security_scan_backfill_job
+          SET cursor_asset_id = ?, scanned_assets = ?, marked_assets = ?, status = ?,
+              last_error_summary = ?, lease_until = ?, completed_at = NULL, updated_at = ?
+          WHERE id = ? AND status = 'RUNNING' AND lease_token = ?
+          """,
+          cursorAssetId,
+          scannedAssets,
+          markedAssets,
+          status.name(),
+          truncate(errorSummary, 2048),
+          nullableTimestamp(leaseUntil),
+          nullableTimestamp(updatedAt),
+          jobId,
+          leaseToken) == 1;
+    }
     return jdbc.update("""
         UPDATE security_scan_backfill_job
         SET cursor_asset_id = ?, scanned_assets = ?, marked_assets = ?, status = ?,
-            last_error_summary = ?, claimed_by = ?, lease_token = ?, lease_until = ?,
+            last_error_summary = ?, claimed_by = NULL, lease_token = NULL, lease_until = NULL,
             completed_at = ?, updated_at = ?
         WHERE id = ? AND status = 'RUNNING' AND lease_token = ?
         """,
@@ -2145,13 +2300,207 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         markedAssets,
         status.name(),
         truncate(errorSummary, 2048),
-        terminal ? null : findBackfill(jobId).map(BackfillJob::claimedBy).orElse(null),
-        terminal ? null : leaseToken,
-        terminal ? null : nullableTimestamp(updatedAt.plusSeconds(300)),
         terminal ? nullableTimestamp(updatedAt) : null,
         nullableTimestamp(updatedAt),
         jobId,
         leaseToken) == 1;
+  }
+
+  @Override
+  @Transactional
+  public RetentionResult cleanupRetainedData(
+      Instant terminalTaskCutoff, Instant resultCutoff, int maxItems) {
+    int limit = safeLimit(maxItems);
+    int tasks = deleteTerminalTasks(terminalTaskCutoff, limit);
+    int backfills = deleteTerminalBackfills(terminalTaskCutoff, limit);
+    int subjects = deleteHistoricalRunSubjects(resultCutoff, limit);
+    int runs = deleteUnreferencedRuns(resultCutoff, limit);
+    int sboms = deleteUnreferencedSboms(resultCutoff, limit);
+    int snapshots = deleteUnreferencedSnapshots(resultCutoff, limit);
+    return new RetentionResult(tasks, backfills, subjects, runs, sboms, snapshots);
+  }
+
+  private int deleteTerminalTasks(Instant cutoff, int limit) {
+    List<Long> ids = jdbc.queryForList("""
+        SELECT id
+        FROM security_scan_task
+        WHERE status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
+          AND finished_at < ?
+        ORDER BY finished_at, id
+        LIMIT ?
+        FOR UPDATE SKIP LOCKED
+        """, Long.class, nullableTimestamp(cutoff), limit);
+    int deleted = 0;
+    for (Long id : ids) {
+      deleted += jdbc.update("""
+          DELETE FROM security_scan_task
+          WHERE id = ?
+            AND status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
+            AND finished_at < ?
+          """, id, nullableTimestamp(cutoff));
+    }
+    return deleted;
+  }
+
+  private int deleteTerminalBackfills(Instant cutoff, int limit) {
+    List<Long> ids = jdbc.queryForList("""
+        SELECT id
+        FROM security_scan_backfill_job
+        WHERE status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
+          AND completed_at < ?
+        ORDER BY completed_at, id
+        LIMIT ?
+        FOR UPDATE SKIP LOCKED
+        """, Long.class, nullableTimestamp(cutoff), limit);
+    int deleted = 0;
+    for (Long id : ids) {
+      deleted += jdbc.update("""
+          DELETE FROM security_scan_backfill_job
+          WHERE id = ?
+            AND status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
+            AND completed_at < ?
+          """, id, nullableTimestamp(cutoff));
+    }
+    return deleted;
+  }
+
+  private int deleteHistoricalRunSubjects(Instant cutoff, int limit) {
+    List<Map<String, Object>> rows = jdbc.queryForList("""
+        SELECT subject.scan_run_id, subject.repository_id, subject.asset_id,
+               subject.profile_id, subject.content_generation
+        FROM security_scan_run_subject subject
+        JOIN security_scan_run run ON run.id = subject.scan_run_id
+        WHERE subject.associated_at < ?
+          AND run.last_accessed_at < ?
+          AND NOT EXISTS (
+            SELECT 1
+            FROM asset_security_state asset_state
+            WHERE asset_state.latest_scan_run_id = subject.scan_run_id
+              AND asset_state.asset_id = subject.asset_id
+              AND asset_state.profile_id = subject.profile_id
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM asset_security_policy_state policy_state
+            WHERE policy_state.latest_scan_run_id = subject.scan_run_id
+              AND policy_state.asset_id = subject.asset_id
+              AND policy_state.profile_id = subject.profile_id
+              AND policy_state.repository_id = subject.repository_id
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM security_scan_waiver waiver
+            JOIN security_scan_finding finding ON finding.id = waiver.finding_id
+            WHERE finding.scan_run_id = subject.scan_run_id
+          )
+        ORDER BY subject.associated_at, subject.scan_run_id
+        LIMIT ?
+        FOR UPDATE SKIP LOCKED
+        """, nullableTimestamp(cutoff), nullableTimestamp(cutoff), limit);
+    int deleted = 0;
+    for (Map<String, Object> row : rows) {
+      deleted += jdbc.update("""
+          DELETE FROM security_scan_run_subject
+          WHERE scan_run_id = ? AND repository_id = ? AND asset_id = ?
+            AND profile_id = ? AND content_generation = ?
+          """,
+          number(row, "scan_run_id"),
+          number(row, "repository_id"),
+          number(row, "asset_id"),
+          number(row, "profile_id"),
+          number(row, "content_generation"));
+    }
+    return deleted;
+  }
+
+  private int deleteUnreferencedRuns(Instant cutoff, int limit) {
+    List<Map<String, Object>> rows = jdbc.queryForList("""
+        SELECT run.id, run.raw_report_blob_id
+        FROM security_scan_run run
+        WHERE run.completed_at < ?
+          AND run.last_accessed_at < ?
+          AND NOT EXISTS (
+            SELECT 1 FROM security_scan_run_subject subject
+            WHERE subject.scan_run_id = run.id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM asset_security_state asset_state
+            WHERE asset_state.latest_scan_run_id = run.id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM asset_security_policy_state policy_state
+            WHERE policy_state.latest_scan_run_id = run.id
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM security_scan_waiver waiver
+            JOIN security_scan_finding finding ON finding.id = waiver.finding_id
+            WHERE finding.scan_run_id = run.id
+          )
+        ORDER BY run.last_accessed_at, run.id
+        LIMIT ?
+        FOR UPDATE SKIP LOCKED
+        """, nullableTimestamp(cutoff), nullableTimestamp(cutoff), limit);
+    int deleted = 0;
+    for (Map<String, Object> row : rows) {
+      long runId = number(row, "id");
+      long blobId = number(row, "raw_report_blob_id");
+      blobReferences.release(SCAN_REPORT_BLOB_OWNER, runId, blobId);
+      deleted += jdbc.update("DELETE FROM security_scan_run WHERE id = ?", runId);
+    }
+    return deleted;
+  }
+
+  private int deleteUnreferencedSboms(Instant cutoff, int limit) {
+    List<Map<String, Object>> rows = jdbc.queryForList("""
+        SELECT sbom.id, sbom.document_blob_id
+        FROM security_sbom sbom
+        WHERE sbom.created_at < ?
+          AND sbom.last_accessed_at < ?
+          AND NOT EXISTS (
+            SELECT 1 FROM security_scan_run run WHERE run.sbom_id = sbom.id
+          )
+        ORDER BY sbom.last_accessed_at, sbom.id
+        LIMIT ?
+        FOR UPDATE SKIP LOCKED
+        """, nullableTimestamp(cutoff), nullableTimestamp(cutoff), limit);
+    int deleted = 0;
+    for (Map<String, Object> row : rows) {
+      long sbomId = number(row, "id");
+      long blobId = number(row, "document_blob_id");
+      blobReferences.release(SBOM_BLOB_OWNER, sbomId, blobId);
+      deleted += jdbc.update("DELETE FROM security_sbom WHERE id = ?", sbomId);
+    }
+    return deleted;
+  }
+
+  private int deleteUnreferencedSnapshots(Instant cutoff, int limit) {
+    List<Long> ids = jdbc.queryForList("""
+        SELECT snapshot.id
+        FROM security_scanner_snapshot snapshot
+        WHERE snapshot.observed_at < ?
+          AND NOT EXISTS (
+            SELECT 1 FROM security_scan_run run
+            WHERE run.scanner_snapshot_id = snapshot.id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM security_scan_task task
+            WHERE task.requested_scanner_snapshot_id = snapshot.id
+          )
+        ORDER BY snapshot.observed_at, snapshot.id
+        LIMIT ?
+        FOR UPDATE SKIP LOCKED
+        """, Long.class, nullableTimestamp(cutoff), limit);
+    int deleted = 0;
+    for (Long id : ids) {
+      deleted += jdbc.update(
+          "DELETE FROM security_scanner_snapshot WHERE id = ?", id);
+    }
+    return deleted;
+  }
+
+  private static long number(Map<String, Object> row, String column) {
+    return ((Number) row.get(column)).longValue();
   }
 
   @Override
@@ -2174,49 +2523,112 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
 
   @Override
   public ScanSummary summary(long repositoryId) {
+    return summary(List.of(repositoryId));
+  }
+
+  @Override
+  public ScanSummary summary(List<Long> repositoryIds) {
+    List<Long> ids = repositoryIds == null
+        ? List.of()
+        : repositoryIds.stream()
+            .filter(java.util.Objects::nonNull)
+            .distinct()
+            .toList();
+    if (ids.isEmpty()) {
+      return new ScanSummary(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    }
+    String placeholders = String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
+    Object[] repositoryArgs = ids.toArray();
+    long candidates = count("""
+        SELECT COUNT(*)
+        FROM security_scan_candidate candidate
+        JOIN asset asset ON asset.id = candidate.asset_id
+        WHERE asset.repository_id IN (%s)
+          AND candidate.content_generation > candidate.enqueued_generation
+        """.formatted(placeholders), repositoryArgs);
+    Map<String, Object> tasks = jdbc.queryForMap("""
+        SELECT
+          COALESCE(SUM(CASE WHEN status IN ('PENDING', 'RETRY_WAIT') THEN 1 ELSE 0 END), 0)
+            AS pending_tasks,
+          COALESCE(SUM(CASE WHEN status = 'RUNNING' THEN 1 ELSE 0 END), 0)
+            AS running_tasks,
+          COALESCE(SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END), 0)
+            AS failed_tasks
+        FROM security_scan_task
+        WHERE repository_id IN (%s)
+        """.formatted(placeholders), repositoryArgs);
+    Map<String, Object> states = jdbc.queryForMap("""
+        SELECT
+          COALESCE(SUM(CASE WHEN state.scan_state = 'COMPLETE' THEN 1 ELSE 0 END), 0)
+            AS complete_assets,
+          COALESCE(SUM(CASE WHEN state.scan_state = 'PARTIAL' THEN 1 ELSE 0 END), 0)
+            AS partial_assets,
+          COALESCE(SUM(CASE WHEN state.scan_state = 'STALE' THEN 1 ELSE 0 END), 0)
+            AS stale_assets,
+          COALESCE(SUM(CASE WHEN state.policy_decision <> 'ALLOW' THEN 1 ELSE 0 END), 0)
+            AS blocked_assets
+        FROM asset_security_state state
+        JOIN asset asset ON asset.id = state.asset_id
+        WHERE asset.repository_id IN (%s)
+        """.formatted(placeholders), repositoryArgs);
+    Map<String, Object> findings = jdbc.queryForMap("""
+        SELECT
+          COUNT(DISTINCT CASE WHEN finding.severity = 'CRITICAL' THEN finding.id END)
+            AS critical_findings,
+          COUNT(DISTINCT CASE WHEN finding.severity = 'HIGH' THEN finding.id END)
+            AS high_findings
+        FROM security_scan_finding finding
+        JOIN security_scan_run_subject subject
+          ON subject.scan_run_id = finding.scan_run_id
+        WHERE subject.repository_id IN (%s)
+        """.formatted(placeholders), repositoryArgs);
     return new ScanSummary(
-        count("""
-            SELECT COUNT(*)
-            FROM security_scan_candidate c
-            JOIN asset a ON a.id = c.asset_id
-            WHERE a.repository_id = ? AND c.content_generation > c.enqueued_generation
-            """, repositoryId),
-        count("""
-            SELECT COUNT(*) FROM security_scan_task
-            WHERE repository_id = ? AND status IN ('PENDING','RETRY_WAIT')
-            """, repositoryId),
-        count("""
-            SELECT COUNT(*) FROM security_scan_task
-            WHERE repository_id = ? AND status = 'RUNNING'
-            """, repositoryId),
-        count("""
-            SELECT COUNT(*) FROM security_scan_task
-            WHERE repository_id = ? AND status = 'FAILED'
-            """, repositoryId),
-        countState(repositoryId, "COMPLETE", null),
-        countState(repositoryId, "PARTIAL", null),
-        countState(repositoryId, "STALE", null),
-        countState(repositoryId, null, "ALLOW"),
-        count("""
-            SELECT COUNT(DISTINCT f.id)
-            FROM security_scan_finding f
-            JOIN security_scan_run_subject s ON s.scan_run_id = f.scan_run_id
-            WHERE s.repository_id = ? AND f.severity = 'CRITICAL'
-            """, repositoryId),
-        count("""
-            SELECT COUNT(DISTINCT f.id)
-            FROM security_scan_finding f
-            JOIN security_scan_run_subject s ON s.scan_run_id = f.scan_run_id
-            WHERE s.repository_id = ? AND f.severity = 'HIGH'
-            """, repositoryId));
+        candidates,
+        number(tasks, "pending_tasks"),
+        number(tasks, "running_tasks"),
+        number(tasks, "failed_tasks"),
+        number(states, "complete_assets"),
+        number(states, "partial_assets"),
+        number(states, "stale_assets"),
+        number(states, "blocked_assets"),
+        number(findings, "critical_findings"),
+        number(findings, "high_findings"));
+  }
+
+  @Override
+  public ScanMetricSummary metricSummary(int maxCount) {
+    int limit = Math.max(1, Math.min(1_000_000, maxCount));
+    return new ScanMetricSummary(
+        boundedCount("""
+            SELECT id FROM security_scan_task
+            WHERE status IN ('PENDING', 'RETRY_WAIT')
+            """, limit),
+        boundedCount("""
+            SELECT id FROM security_scan_task
+            WHERE status = 'RUNNING'
+            """, limit),
+        boundedCount("""
+            SELECT id FROM security_scan_task
+            WHERE status = 'FAILED'
+            """, limit),
+        boundedCount("""
+            SELECT asset_id FROM asset_security_state
+            WHERE scan_state = 'PARTIAL'
+            """, limit),
+        boundedCount("""
+            SELECT id FROM security_scan_finding
+            WHERE severity IN ('CRITICAL', 'HIGH')
+            """, limit));
   }
 
   @Override
   public Optional<Instant> oldestPendingTaskCreatedAt() {
     List<Instant> values = jdbc.query("""
-        SELECT MIN(created_at) AS oldest_created_at
+        SELECT created_at AS oldest_created_at
         FROM security_scan_task
         WHERE status IN ('PENDING','RETRY_WAIT')
+        ORDER BY created_at, id
+        LIMIT 1
         """, (rs, rowNum) -> nullableInstant(rs, "oldest_created_at"));
     return values.isEmpty() ? Optional.empty() : Optional.ofNullable(values.getFirst());
   }
@@ -2249,6 +2661,12 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   private long count(String sql, Object... args) {
     Long value = jdbc.queryForObject(sql, Long.class, args);
     return value == null ? 0 : value;
+  }
+
+  private long boundedCount(String selectionSql, int limit) {
+    return count(
+        "SELECT COUNT(*) FROM (" + selectionSql + " LIMIT ?) bounded_count",
+        limit);
   }
 
   private List<String> list(String value) {
@@ -2308,6 +2726,10 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
 
   private static Instant requiredNow(Instant value) {
     return value == null ? Instant.now() : value;
+  }
+
+  private static Instant resultAccessTouchCutoff() {
+    return Instant.now().minusSeconds(RESULT_ACCESS_TOUCH_INTERVAL_SECONDS);
   }
 
   private static boolean blank(String value) {

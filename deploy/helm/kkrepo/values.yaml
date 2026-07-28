@@ -72,6 +72,7 @@ blobStorage:
 # contains only a rebuildable vulnerability database.
 securityScanning:
   enabled: false
+  metricsCountLimit: 10000
   image:
     repository: ghcr.io/klboke/kkrepo-scanner
     pullPolicy: IfNotPresent
@@ -84,7 +85,10 @@ securityScanning:
     key: service-credential
   scannerDatabase:
     autoUpdate: true
+    updateInterval: 6h
+    updateCheckInterval: 1m
     maxAge: 48h
+    observationMaxAge: 2m
     persistence:
       enabled: true
       existingClaim: ""
@@ -96,13 +100,30 @@ securityScanning:
     leaseSeconds: 300
     heartbeatSeconds: 60
     maxAttempts: 5
+    maxBackoffSeconds: 1800
+    artifactChangeBatchSize: 1000
+    artifactChangeCleanupBatchSize: 5000
+    candidateBatchSize: 500
     backfillBatchSize: 500
+    backfillMaxPagesPerRun: 20
     snapshotRematchBatchSize: 200
     snapshotRematchMaxBatches: 10
+  retention:
+    enabled: true
+    terminalTaskDays: 30
+    resultDays: 90
+    batchSize: 200
+    delay: 1h
+    initialDelay: 5m
   limits:
     maxInputBytes: 2147483648
     maxOutputBytes: 67108864
     maxStderrBytes: 262144
+    maxConcurrentScans: 2
+    maxQueuedScans: 4
+    admissionTimeout: 1s
+    retryAfterSeconds: 5
+    databaseLockTimeout: 2s
   podSecurityContext:
     runAsNonRoot: true
     runAsUser: 10001

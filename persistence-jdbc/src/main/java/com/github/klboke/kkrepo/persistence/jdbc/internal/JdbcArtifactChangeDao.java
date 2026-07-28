@@ -7,6 +7,7 @@ import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRow
 import com.github.klboke.kkrepo.persistence.jdbc.api.ArtifactChangeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcInserts;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -59,5 +60,45 @@ public class JdbcArtifactChangeDao implements ArtifactChangeDao {
         nullableInstant(rs, "occurred_at")),
         Math.max(0, lastSeenId),
         Math.max(1, maxItems));
+  }
+
+  @Override
+  public int deleteThrough(long consumedThroughId, int maxItems) {
+    List<Long> ids = jdbc.queryForList("""
+        SELECT id
+        FROM artifact_change_event
+        WHERE id <= ?
+        ORDER BY id
+        LIMIT ?
+        """, Long.class, Math.max(0, consumedThroughId), Math.max(1, maxItems));
+    if (ids.isEmpty()) return 0;
+    String placeholders = String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
+    return jdbc.update(
+        "DELETE FROM artifact_change_event WHERE id IN (" + placeholders + ")",
+        ids.toArray());
+  }
+
+  @Override
+  public Optional<EventRange> retainedRange() {
+    return jdbc.query("""
+        SELECT oldest.id AS oldest_id,
+               newest.id AS newest_id,
+               oldest.occurred_at AS oldest_occurred_at
+        FROM (
+          SELECT id, occurred_at
+          FROM artifact_change_event
+          ORDER BY id
+          LIMIT 1
+        ) oldest
+        CROSS JOIN (
+          SELECT id
+          FROM artifact_change_event
+          ORDER BY id DESC
+          LIMIT 1
+        ) newest
+        """, (rs, rowNum) -> new EventRange(
+        rs.getLong("oldest_id"),
+        rs.getLong("newest_id"),
+        nullableInstant(rs, "oldest_occurred_at"))).stream().findFirst();
   }
 }

@@ -53,6 +53,14 @@ public class SecurityScanRepositoryScope {
         .findFirst();
   }
 
+  public boolean appliesToSource(
+      RepositoryScanConfig config, long sourceRepositoryId) {
+    return repositories.findById(sourceRepositoryId)
+        .map(RepositoryRecord::type)
+        .map(type -> appliesToSource(config, type))
+        .orElse(false);
+  }
+
   public List<Long> sourceRepositoryIds(long contextRepositoryId) {
     RepositoryRecord context = repositories.findById(contextRepositoryId).orElse(null);
     if (context == null) return List.of();
@@ -73,7 +81,7 @@ public class SecurityScanRepositoryScope {
     }
   }
 
-  private static boolean appliesToSource(
+  static boolean appliesToSource(
       RepositoryScanConfig config, RepositoryType sourceType) {
     return switch (sourceType) {
       case HOSTED -> config.scanHostedContent();

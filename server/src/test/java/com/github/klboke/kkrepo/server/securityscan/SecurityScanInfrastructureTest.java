@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -16,13 +17,14 @@ import static org.mockito.Mockito.when;
 import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ArtifactChangeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao.AuditLogRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.BackfillJob;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.BackfillPage;
-import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanSummary;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanMetricSummary;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScannerSnapshot;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
@@ -76,8 +78,10 @@ class SecurityScanInfrastructureTest {
   void publishesBoundedMetricsAndRefreshesSharedState() {
     SecurityScanDao scans = mock(SecurityScanDao.class);
     SimpleMeterRegistry registry = new SimpleMeterRegistry();
-    SecurityScanMetrics metrics = new SecurityScanMetrics(registry, scans);
-    when(scans.summary()).thenReturn(new ScanSummary(1, 2, 3, 4, 5, 6, 7, 8, 9, 10));
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.setMetricsCountLimit(123);
+    SecurityScanMetrics metrics = new SecurityScanMetrics(registry, scans, properties);
+    when(scans.metricSummary(123)).thenReturn(new ScanMetricSummary(2, 3, 4, 6, 19));
     when(scans.oldestPendingTaskCreatedAt())
         .thenReturn(Optional.of(Instant.now().minusSeconds(30)));
 
@@ -93,12 +97,15 @@ class SecurityScanInfrastructureTest {
     metrics.observeScanner(true, Instant.now().minusSeconds(60));
     metrics.recordStage("MAVEN2", "catalog", "success", metrics.start());
     metrics.recordStage("MAVEN2", "match", "skipped", null);
+    metrics.recordRetention(new SecurityScanDao.RetentionResult(1, 2, 3, 4, 5, 6));
+    metrics.recordRetention(new SecurityScanDao.RetentionResult(0, 0, 0, 0, 0, 0));
     metrics.refresh();
 
     assertEquals(
         2.0, registry.get("kkrepo_security_scan_backlog").gauge().value());
     assertEquals(
         3.0, registry.get("kkrepo_security_scan_running").gauge().value());
+    verify(scans).metricSummary(123);
     assertEquals(
         1.0,
         registry.get("kkrepo_security_scan_tasks_total")
@@ -111,6 +118,12 @@ class SecurityScanInfrastructureTest {
             .tag("format", "maven2")
             .tag("outcome", "allow")
             .timer()
+            .count());
+    assertEquals(
+        4.0,
+        registry.get("kkrepo_security_scan_retention_deleted_total")
+            .tag("object", "run")
+            .counter()
             .count());
   }
 
@@ -130,6 +143,7 @@ class SecurityScanInfrastructureTest {
     when(scans.latestScannerSnapshot()).thenReturn(Optional.of(snapshot));
     assertEquals("SCANNER_NOT_READY", health.health().getDetails().get("reasonCode"));
     when(snapshot.ready()).thenReturn(true);
+    when(snapshot.observedAt()).thenReturn(Instant.now());
     assertEquals("DATABASE_AGE_UNKNOWN", health.health().getDetails().get("reasonCode"));
     when(snapshot.vulnerabilityDatabaseUpdatedAt())
         .thenReturn(Instant.now().minus(Duration.ofDays(3)));
@@ -143,19 +157,17 @@ class SecurityScanInfrastructureTest {
   void candidateWorkerContinuesWhenEitherDurableBatchFails() {
     SecurityScanArtifactChangeService changes = mock(SecurityScanArtifactChangeService.class);
     SecurityScanCandidateService candidates = mock(SecurityScanCandidateService.class);
-    SecurityScanCandidateWorker worker = new SecurityScanCandidateWorker(changes, candidates);
+    SecurityScanArtifactChangeWorker changeWorker = new SecurityScanArtifactChangeWorker(changes);
     doThrow(new IllegalStateException("changes")).when(changes).processBatch();
 
-    worker.runOnce();
+    changeWorker.runOnce();
+    new SecurityScanCandidateWorker(candidates).runOnce();
 
     verify(candidates).processBatch();
 
-    SecurityScanArtifactChangeService secondChanges =
-        mock(SecurityScanArtifactChangeService.class);
     SecurityScanCandidateService secondCandidates = mock(SecurityScanCandidateService.class);
     doThrow(new IllegalStateException("candidates")).when(secondCandidates).processBatch();
-    new SecurityScanCandidateWorker(secondChanges, secondCandidates).runOnce();
-    verify(secondChanges).processBatch();
+    new SecurityScanCandidateWorker(secondCandidates).runOnce();
   }
 
   @Test
@@ -177,6 +189,7 @@ class SecurityScanInfrastructureTest {
         eq(8L),
         eq(BackfillStatus.SUCCEEDED),
         eq(null),
+        eq(null),
         any(Instant.class)))
         .thenReturn(false);
 
@@ -190,7 +203,110 @@ class SecurityScanInfrastructureTest {
         eq(6L),
         eq(BackfillStatus.FAILED),
         org.mockito.ArgumentMatchers.argThat(message -> message.length() == 512),
+        eq(null),
         any(Instant.class));
+  }
+
+  @Test
+  void backfillWorkerProcessesMultiplePagesAndReleasesLongJobsFairly() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    SecurityScanBackfillCoordinator coordinator = mock(SecurityScanBackfillCoordinator.class);
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.getWorker().setBackfillBatchSize(10);
+    properties.getWorker().setBackfillMaxPagesPerRun(2);
+    properties.getWorker().setLeaseSeconds(30);
+    BackfillJob job = backfill(1L, "lease-1");
+    when(coordinator.claim(any())).thenReturn(List.of(job));
+    when(scans.markRepositoryAssetsForBackfill(7L, 4L, 10))
+        .thenReturn(new BackfillPage(10, 6, 14, false));
+    when(scans.markRepositoryAssetsForBackfill(7L, 14L, 10))
+        .thenReturn(new BackfillPage(10, 4, 24, false));
+    when(scans.updateBackfillProgress(
+            eq(1L),
+            eq("lease-1"),
+            eq(14L),
+            eq(15L),
+            eq(12L),
+            eq(BackfillStatus.RUNNING),
+            eq(null),
+            any(Instant.class),
+            any(Instant.class)))
+        .thenReturn(true);
+    when(scans.updateBackfillProgress(
+            eq(1L),
+            eq("lease-1"),
+            eq(24L),
+            eq(25L),
+            eq(16L),
+            eq(BackfillStatus.PENDING),
+            eq(null),
+            eq(null),
+            any(Instant.class)))
+        .thenReturn(true);
+
+    new SecurityScanBackfillWorker(scans, coordinator, properties).runOnce();
+
+    verify(scans).markRepositoryAssetsForBackfill(7L, 14L, 10);
+    verify(scans).updateBackfillProgress(
+        eq(1L),
+        eq("lease-1"),
+        eq(24L),
+        eq(25L),
+        eq(16L),
+        eq(BackfillStatus.PENDING),
+        eq(null),
+        eq(null),
+        any(Instant.class));
+  }
+
+  @Test
+  void refreshesArtifactEventMetricsAndRunsBoundedRetention() {
+    ArtifactChangeDao changes = mock(ArtifactChangeDao.class);
+    SimpleMeterRegistry registry = new SimpleMeterRegistry();
+    when(changes.retainedRange())
+        .thenReturn(Optional.of(
+            new ArtifactChangeDao.EventRange(10L, 21L, Instant.now().minusSeconds(30))));
+    SecurityScanArtifactChangeMetrics eventMetrics =
+        new SecurityScanArtifactChangeMetrics(changes, registry);
+
+    eventMetrics.refresh();
+
+    assertEquals(
+        12.0,
+        registry.get("kkrepo_security_scan_artifact_event_backlog").gauge().value());
+    assertTrue(
+        registry
+                .get("kkrepo_security_scan_artifact_event_oldest_age_seconds")
+                .gauge()
+                .value()
+            >= 29);
+    when(changes.retainedRange()).thenReturn(Optional.empty());
+    eventMetrics.refresh();
+    assertEquals(
+        0.0,
+        registry.get("kkrepo_security_scan_artifact_event_backlog").gauge().value());
+    assertEquals(
+        0.0,
+        registry
+            .get("kkrepo_security_scan_artifact_event_oldest_age_seconds")
+            .gauge()
+            .value());
+
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    SecurityScanMetrics metrics = mock(SecurityScanMetrics.class);
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.getRetention().setTerminalTaskDays(7);
+    properties.getRetention().setResultDays(30);
+    properties.getRetention().setBatchSize(50);
+    SecurityScanDao.RetentionResult result =
+        new SecurityScanDao.RetentionResult(1, 2, 3, 4, 5, 6);
+    when(scans.cleanupRetainedData(any(), any(), eq(50))).thenReturn(result);
+
+    new SecurityScanRetentionWorker(scans, properties, metrics).runOnce();
+
+    verify(scans).cleanupRetainedData(any(), any(), eq(50));
+    verify(metrics).recordRetention(result);
+    assertEquals(21, result.total());
   }
 
   @Test
@@ -202,9 +318,12 @@ class SecurityScanInfrastructureTest {
     SecurityScanBackfillCoordinator backfills =
         new SecurityScanBackfillCoordinator(scans, properties);
     when(scans.claimTasks(eq("worker"), any(), any(), eq(6))).thenReturn(List.of());
+    when(scans.claimExpiredExhaustedTasks(eq("worker"), any(), any(), eq(6)))
+        .thenReturn(List.of());
     when(scans.claimBackfillJobs(eq("worker"), any(), any(), eq(1))).thenReturn(List.of());
 
     assertEquals(List.of(), tasks.claim("worker"));
+    assertEquals(List.of(), tasks.claimExpiredExhausted("worker"));
     assertEquals(List.of(), backfills.claim("worker"));
   }
 

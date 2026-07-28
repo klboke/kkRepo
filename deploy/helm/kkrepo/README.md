@@ -47,4 +47,13 @@ kkRepo, DNS, and public HTTPS for vulnerability database updates.
 
 For multiple adapter replicas, provide
 `securityScanning.scannerDatabase.persistence.existingClaim` backed by `ReadWriteMany`, or disable
-scanner database persistence so each pod uses an ephemeral cache.
+scanner database persistence so each pod uses an ephemeral cache. Shared-database replicas use
+cross-process read/update locks and a shared update marker; database update eligibility is checked
+every minute so a busy scan only postpones the update instead of skipping it for the full update
+interval. Each adapter also admits at most two active and four queued scans by default, returning a
+retryable HTTP 429 with `Retry-After` when capacity is exhausted.
+
+`securityScanning.metricsCountLimit` bounds each periodic status gauge query (default `10000`).
+Gauge values saturate at this limit so a large task or finding history cannot turn the 15-second
+metrics refresh into an unbounded table count. Management overview queries are separately
+aggregated once across all repositories visible to the current operator.

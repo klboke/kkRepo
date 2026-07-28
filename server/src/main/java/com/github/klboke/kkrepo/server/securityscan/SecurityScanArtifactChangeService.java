@@ -18,7 +18,8 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class SecurityScanArtifactChangeService {
-  static final String CURSOR_NAME = "security_scan_artifact_change";
+  static final String CURSOR_PREFIX = "artifact_change:";
+  static final String CURSOR_NAME = CURSOR_PREFIX + "security_scan";
 
   private final ArtifactChangeDao artifactChanges;
   private final MaintenanceCursorDao cursors;
@@ -44,8 +45,9 @@ public class SecurityScanArtifactChangeService {
       return 0;
     }
     List<ArtifactChangeDao.ArtifactChange> events = artifactChanges.listAfter(
-        lastSeen.getAsLong(), properties.getWorker().getBatchSize());
+        lastSeen.getAsLong(), properties.getWorker().getArtifactChangeBatchSize());
     if (events.isEmpty()) {
+      cleanupConsumedEvents();
       return 0;
     }
 
@@ -61,6 +63,13 @@ public class SecurityScanArtifactChangeService {
     if (cursors.updateLastSeenId(CURSOR_NAME, consumedThrough) != 1) {
       throw new IllegalStateException("Artifact change cursor disappeared while it was locked");
     }
+    cleanupConsumedEvents();
     return events.size();
+  }
+
+  private void cleanupConsumedEvents() {
+    cursors.minimumLastSeenId(CURSOR_PREFIX).ifPresent(watermark ->
+        artifactChanges.deleteThrough(
+            watermark, properties.getWorker().getArtifactChangeCleanupBatchSize()));
   }
 }

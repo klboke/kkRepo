@@ -78,6 +78,15 @@ public interface SecurityScanDao {
   List<ScanTask> claimTasks(
       String workerId, Instant now, Instant leaseUntil, int maxItems);
 
+  /**
+   * Fences expired tasks whose final permitted attempt was lost with the worker process.
+   *
+   * <p>The returned tasks receive a fresh lease token without incrementing {@code attempts}. The
+   * caller must materialize terminal failure state and finish the task with that token.
+   */
+  List<ScanTask> claimExpiredExhaustedTasks(
+      String workerId, Instant now, Instant leaseUntil, int maxItems);
+
   boolean heartbeatTask(long taskId, String leaseToken, Instant leaseUntil, Instant heartbeatAt);
 
   boolean completeTask(long taskId, String leaseToken, Instant completedAt);
@@ -233,7 +242,7 @@ public interface SecurityScanDao {
       Long repositoryId, String query, long afterId, int maxItems);
 
   List<ScanWaiver> listActiveWaivers(
-      long repositoryId, Long assetId, Instant evaluatedAt, int maxItems);
+      long repositoryId, Long assetId, Instant evaluatedAt, long afterId, int maxItems);
 
   boolean deleteWaiver(long waiverId);
 
@@ -250,13 +259,25 @@ public interface SecurityScanDao {
       long markedAssets,
       BackfillStatus status,
       String errorSummary,
+      Instant leaseUntil,
       Instant updatedAt);
 
   ScanSummary summary();
 
   ScanSummary summary(long repositoryId);
 
+  ScanSummary summary(List<Long> repositoryIds);
+
+  /**
+   * Returns bounded operational gauges. Counts saturate at {@code maxCount} so periodic metrics
+   * collection never turns into an unbounded table scan.
+   */
+  ScanMetricSummary metricSummary(int maxCount);
+
   Optional<Instant> oldestPendingTaskCreatedAt();
+
+  RetentionResult cleanupRetainedData(
+      Instant terminalTaskCutoff, Instant resultCutoff, int maxItems);
 
   record ScanProfile(
       Long id,
@@ -631,4 +652,28 @@ public interface SecurityScanDao {
       long blockedAssets,
       long criticalFindings,
       long highFindings) {}
+
+  record ScanMetricSummary(
+      long pendingTasks,
+      long runningTasks,
+      long failedTasks,
+      long partialAssets,
+      long highRiskFindings) {}
+
+  record RetentionResult(
+      int taskCount,
+      int backfillJobCount,
+      int runSubjectCount,
+      int runCount,
+      int sbomCount,
+      int scannerSnapshotCount) {
+    public int total() {
+      return taskCount
+          + backfillJobCount
+          + runSubjectCount
+          + runCount
+          + sbomCount
+          + scannerSnapshotCount;
+    }
+  }
 }

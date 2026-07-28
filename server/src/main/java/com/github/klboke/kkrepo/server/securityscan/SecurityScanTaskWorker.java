@@ -69,6 +69,7 @@ public class SecurityScanTaskWorker {
       fixedDelayString = "${kkrepo.security-scanning.task-delay-ms:1000}",
       initialDelayString = "${kkrepo.security-scanning.initial-delay-ms:5000}")
   public void runOnce() {
+    reapExpiredExhaustedTasks();
     List<ScanTask> tasks;
     try {
       tasks = coordinator.claim(workerId);
@@ -88,6 +89,30 @@ public class SecurityScanTaskWorker {
         return;
       } catch (java.util.concurrent.ExecutionException e) {
         log.warn("Security scan worker execution escaped its task boundary", e.getCause());
+      }
+    }
+  }
+
+  private void reapExpiredExhaustedTasks() {
+    List<ScanTask> exhausted;
+    try {
+      exhausted = coordinator.claimExpiredExhausted(workerId);
+    } catch (RuntimeException e) {
+      log.warn("Failed claiming exhausted security scan tasks", e);
+      return;
+    }
+    for (ScanTask task : exhausted) {
+      try {
+        finalizer.failCurrentTask(
+            task,
+            "SCAN_ATTEMPTS_EXHAUSTED",
+            "The worker lease expired after the final permitted scan attempt",
+            false,
+            Instant.now());
+      } catch (LostSecurityScanLeaseException e) {
+        log.debug("Did not reap exhausted scan task after lease loss: {}", task.id());
+      } catch (RuntimeException e) {
+        log.warn("Failed terminalizing exhausted security scan task: {}", task.id(), e);
       }
     }
   }
@@ -122,7 +147,7 @@ public class SecurityScanTaskWorker {
       outcome = e.retryable() && task.attempts() < task.maxAttempts() ? "retry" : "failed";
       fail(task, e.code(), e.getMessage(), e.retryable());
     } catch (RuntimeException e) {
-      outcome = "retry";
+      outcome = task.attempts() < task.maxAttempts() ? "retry" : "failed";
       log.warn("Unexpected security scan task failure: {}", task.id(), e);
       fail(task, "SCAN_INTERNAL_ERROR", safeMessage(e), true);
     } finally {
@@ -133,14 +158,20 @@ public class SecurityScanTaskWorker {
   }
 
   private void heartbeat(ScanTask task) {
-    Instant now = Instant.now();
-    boolean renewed = scans.heartbeatTask(
-        task.id(),
-        task.leaseToken(),
-        now.plusSeconds(properties.getWorker().getLeaseSeconds()),
-        now);
-    if (!renewed) {
-      log.debug("Security scan heartbeat lost lease for task {}", task.id());
+    try {
+      Instant now = Instant.now();
+      boolean renewed = scans.heartbeatTask(
+          task.id(),
+          task.leaseToken(),
+          now.plusSeconds(properties.getWorker().getLeaseSeconds()),
+          now);
+      if (!renewed) {
+        log.debug("Security scan heartbeat lost lease for task {}", task.id());
+      }
+    } catch (RuntimeException e) {
+      // A periodic executor suppresses all later executions after an exception. Keep retrying
+      // until the task completes or its fenced final write observes that another worker owns it.
+      log.warn("Security scan heartbeat failed for task {}; retrying", task.id(), e);
     }
   }
 

@@ -57,4 +57,14 @@ public class JdbcMaintenanceCursorDao implements com.github.klboke.kkrepo.persis
         """, Long.class, taskName);
     return value == null ? 0 : value;
   }
+
+  @Override
+  public OptionalLong minimumLastSeenId(String taskNamePrefix) {
+    Long value = jdbcTemplate.queryForObject("""
+        SELECT MIN(last_seen_id)
+        FROM maintenance_cursor
+        WHERE task_name LIKE ?
+        """, Long.class, taskNamePrefix + "%");
+    return value == null ? OptionalLong.empty() : OptionalLong.of(value);
+  }
 }

@@ -121,17 +121,20 @@ Compose 和 Kubernetes 使用同一 adapter 契约。
 1. **制品写入平面**：完成协议校验、Blob 持久化、asset 绑定，并在同一数据库事务中
    追加通用 `artifact_change_event`。该事件是仓库核心的内容变更事实，不含 profile、
    policy、severity、scanner 或 candidate 字段。
-2. **异步分析平面**：仅在部署能力 gate 启用时，独立 worker 使用数据库游标消费通用
-   事件，折叠为 `security_scan_candidate`，再执行分类、SBOM 和漏洞匹配。scanner
-   不可用、超时或扫描表故障不得回滚已经提交的上传。
+2. **异步分析平面**：轻量投影 worker 始终使用数据库游标消费通用事件，折叠为每个
+   asset 一行的 `security_scan_candidate`；只有部署能力 gate 启用后，后续 worker
+   才执行分类、创建任务、生成 SBOM 和漏洞匹配。scanner 不可用、超时或扫描表故障
+   不得回滚已经提交的上传。
 3. **下载执行平面**：协议层解析出实际 asset/member/manifest 后，
    `ArtifactDownloadPolicy` 根据物化结果决定 allow、pending 或 deny。上传成功不等于
    严格仓库立即可下载。
 
 这里的事务性 outbox 是核心内容一致性的一部分，因此 outbox 写入失败可以让 asset
-事务失败；这是“内容事实没有可靠发布”的仓库故障，不是扫描故障。扫描子系统关闭时
-不启动消费 worker，事件保留并可在后续启用时追平。上线前已存在、或因运维原因需要
-核对的资产由数据库 backfill/reconciliation 补齐，正确性不依赖单个 JVM 的内存事件。
+事务失败；这是“内容事实没有可靠发布”的仓库故障，不是扫描故障。扫描执行关闭时，
+轻量投影仍推进共享游标并合并 candidate，但不创建或领取扫描任务，也不调用 adapter；
+这样事件表可以按消费者低水位有界清理，后续启用时直接从 candidate generation 追平。
+上线前已存在、或因运维原因需要核对的资产由数据库 backfill/reconciliation 补齐，
+正确性不依赖单个 JVM 的内存事件。
 
 ### 行业边界与 Nexus 参考
 
@@ -400,8 +403,8 @@ proxy cache commit 仍按仓库核心语义完成。
 
 ### 独立消费与 candidate projection
 
-扫描 worker 启用后，使用 `maintenance_cursor` 中独立的
-`security_scan_artifact_change` 游标消费事件。每批处理在一个短数据库事务内完成：
+轻量投影 worker 使用 `maintenance_cursor` 中独立的
+`artifact_change:security_scan` 游标消费事件。每批处理在一个短数据库事务内完成：
 
 1. 使用 `FOR UPDATE SKIP LOCKED` 尝试锁定共享游标；其它副本未取得锁时立即跳过。
 2. 按事件 ID 读取有界批次，并在批内按 asset 合并。
@@ -409,10 +412,13 @@ proxy cache commit 仍按仓库核心语义完成。
 4. 插入或推进 `security_scan_candidate`。
 5. 在同一事务中推进游标；任一步失败则 candidate 与游标一起回滚并重试。
 
-事件流是 at-least-once 可恢复输入，candidate 是扫描域的可合并投影。扫描 worker
+事件流是 at-least-once 可恢复输入，candidate 是扫描域的可合并投影。投影 worker
 不执行外部调用后再持有游标锁；外部 scanner 调用只发生在后续有 lease/fencing 的
-task worker。扫描关闭时游标不推进，重新启用后从数据库追平。事件清理必须晚于所有
-已注册消费者的水位，且保留全量 backfill 恢复路径；第一阶段不在消费时删除事件。
+task worker。默认每次读取 1000 条事件并按 asset 合并；推进游标后，读取所有
+`artifact_change:` 已注册消费者的最小水位，每次最多删除 5000 条已被全部消费者消费的
+事件。新增消费者必须先注册初始游标再发布对应版本，不能在运行中先读低水位、后补
+游标。即使部署能力关闭，投影仍推进，重新启用后从 candidate generation 追平；全量
+backfill 继续作为上线前资产和灾难恢复路径。
 
 ### 持久化 candidate marker
 
@@ -447,6 +453,8 @@ marker 不是 scanner 队列。Candidate worker 领取 marker 后：
 - 支持暂停、恢复、进度和失败重试。
 - 不一次性把全库 asset 装入内存。
 - 多副本通过数据库 claim 分片执行。
+- 单次调度默认连续处理最多 20 页、每页 500 个 asset；每页都持久化游标并续租，
+  达到预算后把未完成 job 释放回 `PENDING`，让其它仓库和其它副本公平取得执行机会。
 
 backfill 既覆盖 outbox 上线前已有资产，也作为运维 reconciliation：它读取当前
 asset/blob binding，只有 candidate 缺失或指向不同 Blob 时才推进 generation，因此
@@ -474,6 +482,21 @@ asset/blob binding，只有 candidate 缺失或指向不同 Blob 时才推进 ge
 ## 数据模型
 
 下列表名是逻辑设计；MySQL 与 PostgreSQL migration 使用各自类型和索引实现相同语义。
+
+大表查询必须从游标、状态或外键前缀进入索引。V36 直接包含以下关键索引：
+
+- task/backfill 的 claim、terminal retention 与 scanner snapshot 外键索引；
+- run/SBOM 的 `last_accessed_at` retention 索引，以及 run 到 snapshot/SBOM 的索引；
+- asset state、repository policy state 到 `latest_scan_run_id` 的反向索引；
+- waiver 的 repository/asset/id 活跃游标索引与 finding 反向索引；
+- finding、run subject、scanner snapshot 的 retention/关联索引。
+
+事件 backlog 指标只读取 `artifact_change_event` 主键最小/最大水位；周期性状态指标按
+索引最多读取 `metrics-count-limit` 行并在上限处饱和，不执行无界全表 `COUNT(*)`。
+Overview 对操作者可见的全部仓库一次聚合，每张事实表只扫描一次，不按仓库执行 N 组
+计数。列表使用 keyset cursor，retention 使用有界批次和 `SKIP LOCKED`。MySQL 与
+PostgreSQL 契约测试必须同时覆盖这些查询的语义，避免依赖 MySQL 默认大小写或
+collation 的行为。
 
 ### `security_scan_profile`
 
@@ -907,6 +930,12 @@ WHERE id = ? AND status = 'RUNNING' AND lease_token = ?
 
 旧 worker 在 lease 失效后返回，不得覆盖接管 worker 的结果。
 
+若 worker 在最后一次允许的 attempt 内崩溃，普通 claim 不能再次增加 attempts 并执行
+第 `max_attempts + 1` 次。独立终态回收查询会领取
+`RUNNING AND attempts >= max_attempts AND lease_until < now`，只生成新的 fencing token，
+不增加 attempts、不再次调用 scanner，并以 `SCAN_ATTEMPTS_EXHAUSTED` 物化失败策略和
+终态。这样最后一次进程崩溃不会留下永久 `RUNNING` 任务。
+
 退避使用带 jitter 的指数策略。以下错误默认可重试：
 
 - scanner `429`、`502`、`503`、`504`。
@@ -920,9 +949,11 @@ WHERE id = ? AND status = 'RUNNING' AND lease_token = ?
 - 归档路径穿越、设备文件或资源上限违规。
 - scanner 返回无效 JSON、过大报告或 provenance 缺失。
 
-进程内 executor/semaphore 可以保护单个 JVM，但不能决定集群总任务所有权。scanner
-deployment 自身必须暴露容量和 backpressure；需要严格全局并发上限时，增加数据库
-`security_scanner_slot` lease，而不是依赖每个副本各自计数。
+进程内 executor/semaphore 可以保护单个 JVM，但不能决定集群总任务所有权。当前
+adapter 每个实例默认最多执行 2 个扫描、排队 4 个请求，排队超过 1 秒或队列已满时
+返回可重试 HTTP `429` 和 `Retry-After: 5`；active、queued 和 rejected 均暴露指标。
+kkRepo 任务的指数退避负责削峰。需要严格集群总并发上限时，再增加数据库
+`security_scanner_slot` lease，而不是把每个副本的 semaphore 误当成全局限制。
 
 ## Scanner Adapter 契约
 
@@ -962,6 +993,17 @@ POST /v1/oci/scan
 adapter API 使用同步、可安全重试的调用。scanner 可以在请求期间使用本地临时目录，
 但请求结束后不需要保留任务状态。kkRepo 超时后用相同 Idempotency-Key 重试时，结果
 必须保持内容幂等。
+
+Grype 数据库读取与更新使用同一协调器：
+
+- 同一进程使用公平读写锁；扫描持有读锁，更新持有写锁。
+- 多个 adapter 共享同一数据库卷时，再使用卷内 POSIX 文件锁，避免一个 Pod 更新时
+  另一个 Pod 读取半更新目录；共享卷必须支持文件锁并使用 `ReadWriteMany`。
+- 更新成功后原子写共享 marker。每分钟检查一次是否到达默认 6 小时更新间隔；扫描
+  繁忙只会推迟本次检查，不会跳过完整的 6 小时周期。
+- 每 Pod 使用独立临时数据库卷时，各 Pod 独立更新，不共享 marker。
+- readiness 和 Match 响应都必须带非空数据库 revision 与更新时间；未知、过期或更新
+  中均返回可重试失败，不能用“ready=true 但 provenance 为空”的结果生成 run。
 
 第一版只交付一个 `syft-grype-v1` 参考 profile：
 
@@ -1304,8 +1346,15 @@ Browse UI 第一阶段只显示有权限用户可见的状态徽标和最后扫�
 | `kkrepo_security_scan_findings` | gauge | 当前 asset state 的 finding 聚合 |
 | `kkrepo_security_scan_scanner_ready` | gauge | scanner readiness |
 | `kkrepo_security_scan_database_age_seconds` | gauge | 漏洞数据库年龄 |
+| `kkrepo_security_scan_artifact_event_backlog` | gauge | 尚未回收内容事件数的保守估算；按主键首尾水位计算，不对大表执行 `COUNT(*)` |
+| `kkrepo_security_scan_artifact_event_oldest_age_seconds` | gauge | 最老未回收内容事件年龄 |
+| `kkrepo_security_scan_retention_deleted_total` | counter | 按有界对象类型统计保留清理数量 |
 | `kkrepo_security_policy_decisions_total` | counter | allow/block/shadow decision |
 | `kkrepo_security_policy_evaluation_duration_seconds` | timer | 下载策略判定耗时，按 format/outcome 分类 |
+| `kkrepo_scanner_active` | gauge | 单个 adapter 当前执行的扫描数 |
+| `kkrepo_scanner_queued` | gauge | 单个 adapter 等待执行容量的请求数 |
+| `kkrepo_scanner_admission_rejected_total` | counter | adapter 容量拒绝次数 |
+| `kkrepo_scanner_database_updates_total` | counter | 数据库 updated/not_due/busy/failed 结果 |
 
 允许的低基数标签：
 
@@ -1353,20 +1402,43 @@ object key 和 token 放入 metric label。按具体对象排查使用受权限�
 ```properties
 kkrepo.security-scanning.enabled=false
 kkrepo.security-scanning.adapter.base-url=http://scanner:8080
+kkrepo.security-scanning.metrics-count-limit=10000
 kkrepo.security-scanning.worker.batch-size=4
 kkrepo.security-scanning.worker.lease-seconds=300
 kkrepo.security-scanning.worker.heartbeat-seconds=60
 kkrepo.security-scanning.worker.max-attempts=5
 kkrepo.security-scanning.worker.max-backoff-seconds=1800
+kkrepo.security-scanning.worker.artifact-change-batch-size=1000
+kkrepo.security-scanning.worker.artifact-change-cleanup-batch-size=5000
+kkrepo.security-scanning.worker.candidate-batch-size=500
+kkrepo.security-scanning.worker.backfill-batch-size=500
+kkrepo.security-scanning.worker.backfill-max-pages-per-run=20
+kkrepo.security-scanning.worker.snapshot-rematch-batch-size=200
+kkrepo.security-scanning.worker.snapshot-rematch-max-batches=10
 kkrepo.security-scanning.policy-reconcile-delay=60s
-kkrepo.security-scanning.input-mode=stream
 kkrepo.security-scanning.scanner-database-max-age=48h
+kkrepo.security-scanning.scanner-observation-max-age=2m
+kkrepo.security-scanning.retention.enabled=true
+kkrepo.security-scanning.retention.terminal-task-days=30
+kkrepo.security-scanning.retention.result-days=90
+kkrepo.security-scanning.retention.batch-size=200
+kkrepo.security-scanning.retention.delay=1h
+
+kkrepo.scanner.max-concurrent-scans=2
+kkrepo.scanner.max-queued-scans=4
+kkrepo.scanner.admission-timeout=1s
+kkrepo.scanner.retry-after-seconds=5
+kkrepo.scanner.database-lock-timeout=2s
+kkrepo.scanner.vulnerability-database-update-interval=6h
+kkrepo.scanner.vulnerability-database-update-check-interval=1m
 ```
 
 `kkrepo.security-scanning.enabled` 是 kkRepo 节点的部署能力 gate：
 
-- `false`：不创建 candidate/backfill/task/snapshot/policy-reconcile worker，下载策略
-  直接放行，Admin UI 扫描页面置灰；它不会删除仓库扫描配置、任务或历史结果。
+- `false`：不运行 candidate 调度、backfill、task、snapshot 或 policy-reconcile
+  worker，下载策略直接放行，Admin UI 扫描页面置灰；通用事件到 candidate 的轻量投影
+  和有界保留清理仍运行，但不会创建扫描任务或调用 adapter。已有仓库配置和历史结果
+  不会被开关直接删除。
 - `true`：装载上述协调 worker 与下载策略集成，但不会启动 scanner 进程，也不会
   自动启用任何仓库。仓库管理员必须在 Admin UI 的 **Repositories** 中显式启用。
 - 所有 kkRepo 副本必须使用相同值。切换该值需要按部署配置变更并滚动重启，不能由
@@ -1396,20 +1468,24 @@ Helm/Kubernetes：
 
 ## 保留、删除与 GC
 
-保留策略按以下维度分别配置：
+默认每小时执行一次有界清理，每类数据每批最多 200 行：
 
-- terminal task 保留期。
-- immutable scan run/finding 保留期。
-- 被当前 asset state 引用的最新 SBOM/run 最低保留期。
-- 已删除 asset 的审计结果保留期。
-- raw report 和 SBOM Blob 保留期。
+- `SUCCEEDED/FAILED/CANCELLED` task 和 terminal backfill job 默认保留 30 天。
+- 不再被当前 asset/policy state、run subject 或 finding waiver 引用的 immutable
+  run/finding、SBOM 和 scanner snapshot 默认保留 90 天。
+- run/SBOM 被管理 API、复用查询或下载读取时更新 `last_accessed_at`；同一对象最多每
+  小时触碰一次，避免高频详情/SBOM 下载把读流量放大为等量写流量。读取与清理使用
+  同一数据库事务/行锁语义，避免刚被复用的结果被并发删除。
+- 当前 asset state、repository policy state、有效或历史 waiver 引用的 finding/run
+  不按普通孤儿结果清理；审计日志仍按独立审计保留策略管理。
 
 删除顺序：
 
-1. 清理不再被 asset state、waiver、审计保留规则引用的 finding/run。
-2. 清理不再被 run 引用的 SBOM projection。
-3. 对 SBOM/raw report Blob 调用现有软删除与 GC 流程。
-4. 删除对应 `blob_reference` 后，Blob GC 再次检查所有通用引用。
+1. 清理不再作为当前决定、且已超过保留期的历史 run subject。
+2. 清理不再被 state、subject 或 waiver 引用的 finding/run。
+3. 清理不再被 run 引用的 SBOM projection 和无引用 scanner snapshot。
+4. 在同一清理事务中释放 SBOM/raw report 的 `blob_reference`；Blob GC 之后再次检查
+   所有通用引用，再决定是否软删除物理 Blob。
 
 不能因为原始制品 asset 被删除，就立即删除仍被相同内容的其它 asset 复用的 SBOM。
 核心 Blob GC 不理解 SBOM 或扫描 run；任何新增功能要长期持有 Blob，都必须通过
@@ -1639,7 +1715,8 @@ Enforce 模式：
 
 回滚：
 
-- 全局关闭 worker 停止新任务领取，但保留数据库状态。
+- 全局关闭执行能力会停止新任务调度与领取并保留数据库状态；通用事件投影和保留清理
+  继续运行，不调用 scanner。
 - 仓库从 enforce 切回 audit 立即停止下载阻断。
 - scanner adapter 回滚不修改已有 immutable run；新任务记录回滚后的真实版本。
 - migration 回滚遵循 kkRepo 现有数据库策略，不通过手工删表恢复旧应用。
