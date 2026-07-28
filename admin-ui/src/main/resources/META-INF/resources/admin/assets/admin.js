@@ -24,7 +24,7 @@ let securityScanState = {
   policies: [],
   waivers: []
 };
-const SECURITY_SCAN_DEFAULT_PAGE_SIZE = 5;
+const SECURITY_SCAN_DEFAULT_PAGE_SIZE = 10;
 const securityScanListEndpoints = {
   runs: "runs",
   tasks: "tasks",
@@ -4265,8 +4265,18 @@ function renderSecurityScanSummary() {
         ${escapeHtml(scannerStatus)}
       </strong>
     </div>`;
-  target.innerHTML = scannerCard + [
-    ["Database revision", scanner?.vulnerabilityDatabaseRevision || "-"],
+  const databaseRevision = String(scanner?.vulnerabilityDatabaseRevision || "-");
+  const databaseRevisionMatch =
+    databaseRevision.match(/^(\d{4}-\d{2}-\d{2})T(.+)$/);
+  const databaseRevisionMarkup = databaseRevisionMatch
+    ? `${escapeHtml(databaseRevisionMatch[1])}<br>${escapeHtml(databaseRevisionMatch[2])}`
+    : escapeHtml(databaseRevision);
+  const databaseRevisionCard = `
+    <div>
+      <span>Database revision</span>
+      <strong class="security-scan-database-revision">${databaseRevisionMarkup}</strong>
+    </div>`;
+  target.innerHTML = scannerCard + databaseRevisionCard + [
     ["Candidate backlog", summary.candidateBacklog ?? 0],
     ["Pending tasks", summary.pendingTasks ?? 0],
     ["Running", summary.runningTasks ?? 0],

@@ -202,11 +202,13 @@ class AdminSecurityScanningCapabilityContractTest {
     assertTrue(css.contains(".security-scan-scanner-state.is-degraded"));
     assertTrue(css.contains(".security-scan-scanner-state.is-disabled"));
     assertTrue(css.contains(
-        "grid-template-columns:\n"
-            + "    minmax(132px, 1fr)\n"
-            + "    minmax(210px, 1.35fr)\n"
-            + "    repeat(8, minmax(118px, 1fr));"));
+        "grid-template-columns: repeat(10, minmax(136px, 1fr));"));
     assertTrue(css.contains(".security-scan-summary strong {\n  white-space: nowrap;"));
+    assertTrue(css.contains(".security-scan-database-revision"));
+    assertTrue(javascript.contains(
+        "databaseRevision.match(/^(\\d{4}-\\d{2}-\\d{2})T(.+)$/)"));
+    assertTrue(javascript.contains(
+        "class=\"security-scan-database-revision\">${databaseRevisionMarkup}"));
     assertTrue(css.contains("overflow-x: auto;"));
 
     for (String tab :
@@ -245,12 +247,13 @@ class AdminSecurityScanningCapabilityContractTest {
       int sizeSelectStart = index.indexOf("data-security-scan-page-size=\"" + list + "\"");
       int sizeSelectEnd = index.indexOf("</select>", sizeSelectStart);
       String sizeSelect = index.substring(sizeSelectStart, sizeSelectEnd);
-      assertTrue(sizeSelect.contains("<option value=\"5\" selected>5</option>"));
+      assertTrue(sizeSelect.contains("<option value=\"10\" selected>10</option>"));
+      assertFalse(sizeSelect.contains("<option value=\"5\""));
       assertFalse(sizeSelect.contains("<option value=\"25\" selected>"));
       assertTrue(index.contains(
           "class=\"create-button secondary\" data-security-scan-clear=\"" + list + "\""));
     }
-    assertTrue(javascript.contains("const SECURITY_SCAN_DEFAULT_PAGE_SIZE = 5;"));
+    assertTrue(javascript.contains("const SECURITY_SCAN_DEFAULT_PAGE_SIZE = 10;"));
     assertTrue(javascript.contains("params.set(\"after\""));
     assertTrue(javascript.contains("params.set(\"limit\""));
     assertTrue(javascript.contains("params.set(\"q\", page.query)"));
