@@ -9,7 +9,7 @@ COPY . .
 RUN mvn -B -ntp -pl server -am -DskipTests package spring-boot:repackage \
     && cp server/target/kkrepo-server-*.jar /tmp/kkrepo.jar
 
-FROM registry.qunhequnhe.com/proxy/library/eclipse-temurin:25-jre-jammy
+FROM registry.qunhequnhe.com/infra/tencentos4-jdk25:20251010
 
 WORKDIR /app
 
