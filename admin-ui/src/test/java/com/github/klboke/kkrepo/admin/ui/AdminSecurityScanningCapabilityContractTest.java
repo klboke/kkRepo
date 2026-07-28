@@ -211,6 +211,17 @@ class AdminSecurityScanningCapabilityContractTest {
     assertTrue(javascript.contains("function renderSecurityScanFindingActions(finding)"));
     assertTrue(javascript.contains("function renderSecurityScanFindingRepositories(finding)"));
     assertTrue(javascript.contains("finding.repositories.filter(Boolean)"));
+    assertTrue(javascript.contains(
+        "CRITICAL: { tone: \"is-critical\", icon: \"octagon-alert\" }"));
+    assertTrue(javascript.contains(
+        "HIGH: { tone: \"is-high\", icon: \"triangle-alert\" }"));
+    assertTrue(javascript.contains(
+        "MEDIUM: { tone: \"is-medium\", icon: \"circle-alert\" }"));
+    assertTrue(javascript.contains("LOW: { tone: \"is-low\", icon: \"info\" }"));
+    assertTrue(javascript.contains(
+        "UNKNOWN: { tone: \"is-unknown\", icon: \"circle-help\" }"));
+    assertTrue(javascript.indexOf("renderSecurityScanSeverity(finding.severity)")
+        != javascript.lastIndexOf("renderSecurityScanSeverity(finding.severity)"));
     assertTrue(javascript.contains("security-scan-finding-view"));
     assertTrue(javascript.contains("function showSecurityScanFindingDetail(findingId)"));
     assertTrue(javascript.contains("[\"Source\", finding.dataSource]"));
@@ -224,6 +235,11 @@ class AdminSecurityScanningCapabilityContractTest {
     assertTrue(css.contains(".security-scan-finding-detail-hero"));
     assertTrue(css.contains(".security-scan-finding-detail-section dl > div"));
     assertTrue(css.contains(".security-scan-finding-actions"));
+    assertTrue(css.contains(".security-scan-severity.is-critical"));
+    assertTrue(css.contains(".security-scan-severity.is-high"));
+    assertTrue(css.contains(".security-scan-severity.is-medium"));
+    assertTrue(css.contains(".security-scan-severity.is-low"));
+    assertTrue(css.contains(".security-scan-severity.is-unknown"));
   }
 
   @Test

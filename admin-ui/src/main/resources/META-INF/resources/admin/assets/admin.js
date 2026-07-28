@@ -4187,6 +4187,26 @@ function securityScanTone(status) {
   return "warn";
 }
 
+const SECURITY_SCAN_SEVERITY_PRESENTATION = Object.freeze({
+  CRITICAL: { tone: "is-critical", icon: "octagon-alert" },
+  HIGH: { tone: "is-high", icon: "triangle-alert" },
+  MEDIUM: { tone: "is-medium", icon: "circle-alert" },
+  LOW: { tone: "is-low", icon: "info" },
+  UNKNOWN: { tone: "is-unknown", icon: "circle-help" }
+});
+
+function renderSecurityScanSeverity(severity) {
+  const value = String(severity || "UNKNOWN").toUpperCase();
+  const presentation =
+    SECURITY_SCAN_SEVERITY_PRESENTATION[value]
+      || SECURITY_SCAN_SEVERITY_PRESENTATION.UNKNOWN;
+  return `
+    <span class="state-badge compact security-scan-severity ${presentation.tone}">
+      <span class="lucide-icon icon-${presentation.icon}" aria-hidden="true"></span>
+      ${escapeHtml(value)}
+    </span>`;
+}
+
 function applySecurityScanDeploymentState(enabled, options = {}) {
   const view = document.getElementById("security-scanning-view");
   const content = document.getElementById("security-scan-capability-content");
@@ -4353,7 +4373,7 @@ function renderSecurityScanFindings() {
   document.getElementById("security-scan-finding-table").innerHTML =
     securityScanState.findings.map((finding) => `
       <tr>
-        <td><span class="state-badge compact ${securityScanTone(finding.severity === "CRITICAL" ? "FAILED" : finding.severity)}">${escapeHtml(finding.severity)}</span></td>
+        <td>${renderSecurityScanSeverity(finding.severity)}</td>
         <td><code>${escapeHtml(finding.advisoryId)}</code></td>
         <td>${renderSecurityScanFindingRepositories(finding)}</td>
         <td title="${escapeHtml(finding.packageUrl || "")}">${escapeHtml(finding.packageName)}</td>
@@ -4985,7 +5005,7 @@ function showSecurityScanFindingDetail(findingId) {
   document.getElementById("security-scan-finding-detail-content").innerHTML = `
     <div class="security-scan-finding-detail-hero">
       <div class="security-scan-finding-detail-kicker">
-        <span class="state-badge compact ${securityScanTone(finding.severity === "CRITICAL" ? "FAILED" : finding.severity)}">${escapeHtml(finding.severity || "UNKNOWN")}</span>
+        ${renderSecurityScanSeverity(finding.severity)}
         <code>${escapeHtml(finding.advisoryId || `#${finding.id}`)}</code>
       </div>
       <h3>${escapeHtml(finding.title || "Known vulnerability finding")}</h3>

@@ -2599,6 +2599,44 @@ code {
   color: var(--muted, #667085);
 }
 
+.security-scan-severity {
+  min-width: 100px;
+  justify-content: flex-start;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.security-scan-severity .lucide-icon {
+  width: 13px;
+  height: 13px;
+  color: inherit;
+}
+
+.security-scan-severity.is-critical {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.security-scan-severity.is-high {
+  background: #fff0df;
+  color: #994b00;
+}
+
+.security-scan-severity.is-medium {
+  background: var(--warning-bg);
+  color: #755900;
+}
+
+.security-scan-severity.is-low {
+  background: var(--info-bg);
+  color: var(--info);
+}
+
+.security-scan-severity.is-unknown {
+  background: #edf1ef;
+  color: #596963;
+}
+
 .security-scan-capability-banner {
   display: grid;
   gap: 4px;
