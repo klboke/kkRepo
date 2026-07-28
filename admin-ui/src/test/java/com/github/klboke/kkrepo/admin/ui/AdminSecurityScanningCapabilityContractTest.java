@@ -147,6 +147,9 @@ class AdminSecurityScanningCapabilityContractTest {
     assertTrue(javascript.contains("closeFormModal(\"security-scan-waiver-form\")"));
     assertTrue(javascript.contains("securityScanWaiverRequiredFields"));
     assertTrue(javascript.contains("selectSecurityScanTab(\"findings\")"));
+    assertTrue(javascript.contains("if (response.status === 409)"));
+    assertTrue(javascript.contains(
+        "Waiver state changed while this form was open. Findings and remaining targets were refreshed."));
   }
 
   @Test

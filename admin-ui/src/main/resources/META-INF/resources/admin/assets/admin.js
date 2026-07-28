@@ -5197,6 +5197,15 @@ async function createSecurityScanWaiver(event) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
+    if (response.status === 409) {
+      hideSecurityScanWaiverForm();
+      await loadSecurityScanning();
+      selectSecurityScanTab("findings");
+      showToast(
+        "Waiver state changed while this form was open. Findings and remaining targets were refreshed.",
+        "ok");
+      return;
+    }
     if (!response.ok) throw new Error(await responseErrorMessage(response));
     hideSecurityScanWaiverForm();
     showToast("Security scan waiver created.", "ok");

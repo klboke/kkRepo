@@ -626,6 +626,44 @@ public abstract class PersistenceApiContract {
         1,
         groupOnlySummary.highFindings(),
         "group-only visibility must include findings associated with the group policy context");
+    scans.upsertRepositoryConfig(new SecurityScanDao.RepositoryScanConfig(
+        groupRepositoryId,
+        true,
+        profileId,
+        true,
+        true,
+        EnforcementMode.ENFORCE,
+        PolicyAction.ALLOW,
+        PolicyAction.BLOCK,
+        PolicyAction.BLOCK,
+        3600L,
+        null,
+        groupConfig.configRevision(),
+        now,
+        now.plusSeconds(3)));
+    assertEquals(
+        0,
+        scans.summary(List.of(groupRepositoryId)).blockedAssets(),
+        "a stale materialized block must not be counted when the current pending action allows");
+    scans.upsertRepositoryConfig(new SecurityScanDao.RepositoryScanConfig(
+        groupRepositoryId,
+        true,
+        profileId,
+        true,
+        true,
+        EnforcementMode.ENFORCE,
+        PolicyAction.BLOCK,
+        PolicyAction.BLOCK,
+        PolicyAction.BLOCK,
+        3600L,
+        null,
+        groupConfig.configRevision() + 1,
+        now,
+        now.plusSeconds(4)));
+    assertEquals(
+        1,
+        scans.summary(List.of(groupRepositoryId)).blockedAssets(),
+        "a current blocking pending action must count before a policy row is rematerialized");
     long outerGroupRepositoryId =
         createRepository("scan-contract-outer", RepositoryFormat.MAVEN2, RepositoryType.GROUP);
     stores().repositories().addMember(outerGroupRepositoryId, groupRepositoryId, 0);

@@ -141,8 +141,13 @@ public class ArtifactDownloadPolicy {
             snapshot.contentType(),
             snapshot.blobSize(),
             profile);
-        if (classification.disposition() != CandidateDisposition.SCANNABLE) {
+        if (classification.disposition() == CandidateDisposition.NOT_APPLICABLE) {
           evaluations.add(new Evaluation(config, PolicyDecision.ALLOW, false));
+          continue;
+        }
+        if (classification.disposition() == CandidateDisposition.REJECTED_BY_LIMIT) {
+          evaluations.add(action(
+              config, config.failureAction(), PolicyDecision.BLOCK_SCAN_FAILED));
           continue;
         }
         evaluations.add(evaluate(snapshot));

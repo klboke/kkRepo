@@ -483,6 +483,44 @@ class SecurityScanSchedulingServicesTest {
   }
 
   @Test
+  void policyReconcilerChargesEmptyContextsAgainstTheVisitBudget() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.getWorker().setSnapshotRematchBatchSize(10);
+    properties.getWorker().setSnapshotRematchMaxBatches(2);
+    MaintenanceCursorDao cursors = mock(MaintenanceCursorDao.class);
+    SecurityPolicyReconciler reconciler = new SecurityPolicyReconciler(
+        scans,
+        repositories,
+        mock(AssetDao.class),
+        mock(SecurityScanCandidateClassifier.class),
+        properties,
+        cursors);
+    RepositoryRecord first = repository(10, RepositoryType.HOSTED);
+    RepositoryRecord second = repository(20, RepositoryType.HOSTED);
+    RepositoryRecord third = repository(30, RepositoryType.HOSTED);
+    when(repositories.list()).thenReturn(List.of(first, second, third));
+    when(repositories.listAllGroupMembers()).thenReturn(Map.of());
+    when(scans.findRepositoryConfigs(List.of(10L, 20L, 30L))).thenReturn(List.of(
+        config(10, 3), config(20, 3), config(30, 3)));
+    when(scans.listProfiles()).thenReturn(List.of(profile(3L, true)));
+    when(scans.listPolicies()).thenReturn(List.of());
+    when(cursors.tryLockLastSeenId(any())).thenReturn(OptionalLong.of(0));
+    when(cursors.updateLastSeenId(any(), anyLong())).thenReturn(1);
+
+    reconciler.runOnce();
+
+    verify(scans).listPolicyEvaluationTargets(
+        eq(10L), eq(10L), eq(3L), anyLong(), eq(null), eq(null), eq(0L), any(), eq(10));
+    verify(scans).listPolicyEvaluationTargets(
+        eq(20L), eq(20L), eq(3L), anyLong(), eq(null), eq(null), eq(0L), any(), eq(10));
+    verify(scans, org.mockito.Mockito.never()).listPolicyEvaluationTargets(
+        eq(30L), eq(30L), eq(3L), anyLong(), eq(null), eq(null), eq(0L), any(), anyInt());
+    verify(cursors).updateLastSeenId(SecurityPolicyReconciler.WORK_CURSOR, 2L);
+  }
+
+  @Test
   void policyReconcilerRotatesAOneItemBudgetAcrossRepositoryContexts() {
     SecurityScanDao scans = mock(SecurityScanDao.class);
     RepositoryDao repositories = mock(RepositoryDao.class);

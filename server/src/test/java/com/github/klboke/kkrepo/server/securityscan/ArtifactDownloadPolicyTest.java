@@ -288,6 +288,27 @@ class ArtifactDownloadPolicyTest {
   }
 
   @Test
+  void sizeRejectedArtifactsUseTheConfiguredFailureAction() {
+    properties.setEnabled(true);
+    RepositoryScanConfig blocking = config(1L, EnforcementMode.ENFORCE, PolicyAction.ALLOW);
+    RepositoryScanConfig allowing = new RepositoryScanConfig(
+        1L, true, 1L, true, true, EnforcementMode.ENFORCE,
+        PolicyAction.ALLOW, PolicyAction.ALLOW, PolicyAction.BLOCK,
+        86400L, null, 1L, Instant.EPOCH, Instant.EPOCH);
+    when(scans.findDownloadPolicySnapshots(10L, 1L))
+        .thenReturn(List.of(snapshotWithBlobSize(blocking, 2048L)))
+        .thenReturn(List.of(snapshotWithBlobSize(allowing, 2048L)));
+
+    assertEquals(
+        PolicyDecision.BLOCK_SCAN_FAILED,
+        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 1L))
+            .decision());
+    assertEquals(PolicyDecision.ALLOW, policy.beforeRead(10L, 1L).decision());
+    verify(scans, times(2)).findDownloadPolicySnapshots(10L, 1L);
+    verifyNoMoreInteractions(scans);
+  }
+
+  @Test
   void lifecycleStatesUseTheirConfiguredFailureActions() {
     arrange(EnforcementMode.ENFORCE, PolicyAction.BLOCK, complete(PolicyDecision.ALLOW));
     RepositoryScanConfig config =
@@ -411,6 +432,25 @@ class ArtifactDownloadPolicyTest {
         null,
         policyState,
         requiredWaiverRevision);
+  }
+
+  private static DownloadPolicySnapshot snapshotWithBlobSize(
+      RepositoryScanConfig config, long blobSize) {
+    return new DownloadPolicySnapshot(
+        10L,
+        1L,
+        RepositoryFormat.MAVEN2,
+        "com/acme/demo/1/demo-1.jar",
+        "artifact",
+        "application/java-archive",
+        blobSize,
+        config,
+        profile(),
+        null,
+        null,
+        null,
+        null,
+        0);
   }
 
   private static RepositoryScanConfig config(

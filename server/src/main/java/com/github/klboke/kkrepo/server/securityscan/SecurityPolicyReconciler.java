@@ -76,8 +76,9 @@ public class SecurityPolicyReconciler {
   @Transactional
   public void runOnce() {
     int batchSize = properties.getWorker().getSnapshotRematchBatchSize();
-    int remaining =
-        batchSize * properties.getWorker().getSnapshotRematchMaxBatches();
+    int maxBatches = properties.getWorker().getSnapshotRematchMaxBatches();
+    int remaining = batchSize * maxBatches;
+    int remainingVisits = maxBatches;
     Instant now = Instant.now();
     cursors.ensureCursor(WORK_CURSOR);
     OptionalLong lockedWorkCursor = cursors.tryLockLastSeenId(WORK_CURSOR);
@@ -93,10 +94,11 @@ public class SecurityPolicyReconciler {
     long sequence = lockedWorkCursor.getAsLong();
     int start = (int) Math.floorMod(sequence, (long) work.size());
     int visited = 0;
-    while (visited < work.size() && remaining > 0) {
+    while (visited < work.size() && remaining > 0 && remainingVisits > 0) {
       PolicyWork current = work.get((start + visited) % work.size());
       remaining -= reconcileWork(current, now, Math.min(batchSize, remaining));
       visited++;
+      remainingVisits--;
     }
     long nextSequence = sequence > Long.MAX_VALUE - visited ? 0 : sequence + visited;
     updateCursor(WORK_CURSOR, nextSequence);

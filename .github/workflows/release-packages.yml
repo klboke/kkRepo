@@ -225,9 +225,7 @@ jobs:
           file: scanner-adapter/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/klboke/kkrepo-scanner:${{ inputs.version }}
-            ghcr.io/klboke/kkrepo-scanner:latest
+          tags: ghcr.io/klboke/kkrepo-scanner:${{ inputs.version }}
           cache-from: type=gha,scope=scanner-release
           cache-to: type=gha,mode=max,scope=scanner-release
 
@@ -236,18 +234,15 @@ jobs:
           IMAGE: ghcr.io/klboke/kkrepo-scanner
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          for tag in "$RELEASE_VERSION" latest; do
-            manifest="$(docker buildx imagetools inspect "${IMAGE}:${tag}")"
-            grep -Eq 'Platform:[[:space:]]+linux/amd64' <<<"$manifest"
-            grep -Eq 'Platform:[[:space:]]+linux/arm64' <<<"$manifest"
-            printf '%s\n' "$manifest"
-          done
+          manifest="$(docker buildx imagetools inspect "${IMAGE}:${RELEASE_VERSION}")"
+          grep -Eq 'Platform:[[:space:]]+linux/amd64' <<<"$manifest"
+          grep -Eq 'Platform:[[:space:]]+linux/arm64' <<<"$manifest"
+          printf '%s\n' "$manifest"
 
           {
             echo "### Scanner adapter image"
             echo
             echo "- \`${IMAGE}:${RELEASE_VERSION}\`"
-            echo "- \`${IMAGE}:latest\`"
             echo "- Platforms: \`linux/amd64\`, \`linux/arm64\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
