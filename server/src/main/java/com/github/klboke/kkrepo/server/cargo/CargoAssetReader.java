@@ -34,17 +34,21 @@ class CargoAssetReader {
   }
 
   MavenResponse serve(AssetRecord asset, boolean headOnly, String path) {
-    beforeRead(asset.id());
     AssetBlobRecord blob = asset.assetBlobId() == null
         ? null
         : assetDao.findBlobById(asset.assetBlobId()).orElse(null);
-    return serveBlob(blob, asset.contentType(), asset.lastUpdatedAt(), headOnly, path);
+    return serveBlob(
+        asset.id(), blob, asset.contentType(), asset.lastUpdatedAt(), headOnly, path);
   }
 
   MavenResponse serveSnapshot(CachedAssetMetadata snapshot, boolean headOnly, String path) {
-    beforeRead(snapshot.assetId());
-    return serveBlob(snapshot.toBlobRecord(), snapshot.contentType(), snapshot.lastUpdatedAt(),
-        headOnly, path);
+    return serveBlob(
+        snapshot.assetId(),
+        snapshot.toBlobRecord(),
+        snapshot.contentType(),
+        snapshot.lastUpdatedAt(),
+        headOnly,
+        path);
   }
 
   boolean exists(CachedAssetMetadata snapshot) {
@@ -57,11 +61,11 @@ class CargoAssetReader {
   }
 
   String readText(CachedAssetMetadata snapshot, String path) {
-    beforeRead(snapshot.assetId());
     AssetBlobRecord blob = snapshot.toBlobRecord();
     if (blob == null) {
       throw new CargoExceptions.CargoNotFoundException(path);
     }
+    beforeRead(snapshot.assetId(), blob.id());
     try (var in = blobStorageRegistry.forBlobStoreId(blob.blobStoreId()).get(
         BlobReferenceCodec.reference(blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size()))
         .orElseThrow(() -> new CargoExceptions.CargoNotFoundException(path))) {
@@ -71,11 +75,17 @@ class CargoAssetReader {
     }
   }
 
-  private MavenResponse serveBlob(AssetBlobRecord blob, String contentType, Instant lastModified,
-      boolean headOnly, String path) {
+  private MavenResponse serveBlob(
+      long assetId,
+      AssetBlobRecord blob,
+      String contentType,
+      Instant lastModified,
+      boolean headOnly,
+      String path) {
     if (blob == null) {
       throw new CargoExceptions.CargoNotFoundException(path);
     }
+    beforeRead(assetId, blob.id());
     var storage = blobStorageRegistry.forBlobStoreId(blob.blobStoreId());
     var reference = BlobReferenceCodec.reference(
         blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size());
@@ -92,7 +102,7 @@ class CargoAssetReader {
         blob.size(), contentType, etag, lastModified);
   }
 
-  void beforeRead(long assetId) {
-    if (downloadPolicy != null) downloadPolicy.beforeRead(assetId);
+  void beforeRead(long assetId, long blobId) {
+    if (downloadPolicy != null) downloadPolicy.beforeRead(assetId, blobId);
   }
 }

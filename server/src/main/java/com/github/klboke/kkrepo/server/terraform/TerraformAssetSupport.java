@@ -130,9 +130,9 @@ final class TerraformAssetSupport {
 
   MavenResponse serve(RepositoryRuntime runtime, String path, boolean headOnly) {
     AssetRecord asset = find(runtime, path).orElseThrow(() -> notFound(path));
-    if (downloadPolicy != null) downloadPolicy.beforeRead(asset.id());
     AssetBlobRecord blob = blob(asset);
     if (blob == null) throw notFound(path);
+    if (downloadPolicy != null) downloadPolicy.beforeRead(asset.id(), blob.id());
     var ref = BlobReferenceCodec.reference(blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size());
     var storage = storages.forBlobStoreId(blob.blobStoreId());
     if (storage.stat(ref).isEmpty()) throw notFound(path);

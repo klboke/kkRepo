@@ -26,6 +26,7 @@ import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -278,11 +279,14 @@ class NpmHostedServiceTest {
     assertEquals("demo", fixture.service.packageRoot(snapshot).orElseThrow().get("name"));
 
     stubPackageRoot(fixture, json);
+    when(fixture.cache.find(eq(10L), eq("demo"), any()))
+        .thenReturn(Optional.of(snapshot));
     String served = new String(fixture.service.getPackage(
         runtime("ALLOW", 7L), PACKAGE, "https://packages.example/npm", false)
         .body().readAllBytes(), StandardCharsets.UTF_8);
     assertEquals(true, served.contains(
         "https://packages.example/npm/demo/-/demo-1.0.0.tgz"));
+    verify(fixture.downloadPolicy).beforeRead(snapshot.assetId(), snapshot.blob().id());
   }
 
   @Test
@@ -365,11 +369,13 @@ class NpmHostedServiceTest {
     BlobStorageRegistry registry = mock(BlobStorageRegistry.class);
     NpmAssetWriter writer = mock(NpmAssetWriter.class);
     BlobStorage storage = mock(BlobStorage.class);
+    AssetMetadataCache cache = mock(AssetMetadataCache.class);
+    ArtifactDownloadPolicy downloadPolicy = mock(ArtifactDownloadPolicy.class);
     ObjectMapper mapper = new ObjectMapper();
     when(registry.forBlobStoreId(7L)).thenReturn(storage);
     return new Fixture(
-        assetDao, registry, writer, storage, mapper,
-        new NpmHostedService(assetDao, registry, writer, mapper, mock(AssetMetadataCache.class)));
+        assetDao, registry, writer, storage, cache, downloadPolicy, mapper,
+        new NpmHostedService(assetDao, registry, writer, mapper, cache, downloadPolicy));
   }
 
   private static RepositoryRuntime runtime(String writePolicy, Long blobStoreId) {
@@ -390,6 +396,8 @@ class NpmHostedServiceTest {
       BlobStorageRegistry registry,
       NpmAssetWriter writer,
       BlobStorage storage,
+      AssetMetadataCache cache,
+      ArtifactDownloadPolicy downloadPolicy,
       ObjectMapper mapper,
       NpmHostedService service) {
   }

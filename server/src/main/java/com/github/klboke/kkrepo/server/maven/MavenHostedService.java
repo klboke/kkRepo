@@ -100,7 +100,7 @@ public class MavenHostedService {
     if (blob == null) {
       throw new MavenExceptions.MavenNotFoundException(path.path());
     }
-    if (downloadPolicy != null) downloadPolicy.beforeRead(snapshot.assetId());
+    if (downloadPolicy != null) downloadPolicy.beforeRead(snapshot.assetId(), blob.id());
     BlobReference ref = BlobReferenceCodec.reference(
         blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size());
     String etag = blob.sha1();

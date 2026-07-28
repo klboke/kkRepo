@@ -493,7 +493,7 @@ public class CargoProxyService {
         stored.discardBody();
         return reader.serve(stored.asset(), true, stored.asset().path());
       }
-      reader.beforeRead(stored.asset().id());
+      reader.beforeRead(stored.asset().id(), stored.blob().id());
       return MavenResponse.ok(stored.openBody(), stored.blob().size(), stored.asset().contentType(),
           stored.blob().sha1(), stored.asset().lastUpdatedAt());
     } catch (RuntimeException e) {

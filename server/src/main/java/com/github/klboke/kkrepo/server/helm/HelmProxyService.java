@@ -263,12 +263,12 @@ public class HelmProxyService {
 
   private MavenResponse responseFromStored(HelmAssetWriter.Stored stored, boolean headOnly) {
     try {
+      reader.beforeRead(stored.asset().id(), stored.blob().id());
       if (headOnly) {
         stored.discardBody();
         return MavenResponse.noBody(200, stored.blob().size(), stored.asset().contentType(),
             stored.blob().sha1(), stored.asset().lastUpdatedAt());
       }
-      reader.beforeRead(stored.asset().id());
       return MavenResponse.ok(stored.openBody(), stored.blob().size(), stored.asset().contentType(),
           stored.blob().sha1(), stored.asset().lastUpdatedAt());
     } catch (RuntimeException e) {

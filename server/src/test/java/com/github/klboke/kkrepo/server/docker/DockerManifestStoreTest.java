@@ -81,7 +81,7 @@ class DockerManifestStoreTest {
   }
 
   @Test
-  void rejectsBlobReadsOutsideTheReferencedImageNamespace() {
+  void allowsRepositoryScopedBlobBeforeAManifestReferencesIt() {
     DockerRegistryDao dockerDao = mock(DockerRegistryDao.class);
     ArtifactDownloadPolicy policy = mock(ArtifactDownloadPolicy.class);
     RepositoryRuntime runtime = runtime("ALLOW");
@@ -101,11 +101,8 @@ class DockerManifestStoreTest {
         null,
         policy);
 
-    DockerProtocolException failure = assertThrows(
-        DockerProtocolException.class,
-        () -> store.beforeBlobRead(runtime, "team/other", digest));
+    store.beforeBlobRead(runtime, "team/other", digest);
 
-    assertEquals(DockerErrorCode.BLOB_UNKNOWN, failure.code());
     verify(policy, never()).beforeReadAll(any(), anyBoolean());
   }
 

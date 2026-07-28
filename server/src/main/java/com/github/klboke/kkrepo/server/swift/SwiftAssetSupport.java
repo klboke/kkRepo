@@ -142,11 +142,11 @@ final class SwiftAssetSupport {
         .filter(value -> value.asset().repositoryId() == repositoryId)
         .orElseThrow(() -> new SwiftExceptions.NotFound("Swift release asset is missing"));
     AssetRecord asset = stored.asset();
-    if (downloadPolicy != null) downloadPolicy.beforeRead(asset.id());
     AssetBlobRecord blob = stored.blob();
     if (blob == null) {
       throw new SwiftExceptions.NotFound("Swift release blob is missing");
     }
+    if (downloadPolicy != null) downloadPolicy.beforeRead(asset.id(), blob.id());
     var storage = storages.forBlobStoreId(blob.blobStoreId());
     var reference = BlobReferenceCodec.reference(
         blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size());

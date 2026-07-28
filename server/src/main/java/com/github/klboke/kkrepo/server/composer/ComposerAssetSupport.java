@@ -99,8 +99,8 @@ final class ComposerAssetSupport {
   MavenResponse serve(RepositoryRuntime runtime, String path, boolean headOnly) {
     AssetRecord asset = find(runtime, path)
         .orElseThrow(() -> new MavenExceptions.MavenNotFoundException(path));
-    if (downloadPolicy != null) downloadPolicy.beforeRead(asset.id());
     AssetBlobRecord blob = blob(asset, path);
+    if (downloadPolicy != null) downloadPolicy.beforeRead(asset.id(), blob.id());
     var reference = BlobReferenceCodec.reference(blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size());
     var storage = blobStorageRegistry.forBlobStoreId(blob.blobStoreId());
     if (storage.stat(reference).isEmpty()) throw new MavenExceptions.MavenNotFoundException(path);

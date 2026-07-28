@@ -245,8 +245,8 @@ public class MavenProxyService {
     try {
       proxyStateDao.recordSuccess(runtime.id(), now);
       AssetRecord asset = stored.asset();
-      if (downloadPolicy != null) downloadPolicy.beforeRead(asset.id());
       AssetBlobRecord blob = stored.blob();
+      if (downloadPolicy != null) downloadPolicy.beforeRead(asset.id(), blob.id());
       String etag = blob.sha1();
       Instant lastModified = asset.lastUpdatedAt();
       if (headOnly) {
@@ -274,7 +274,7 @@ public class MavenProxyService {
     if (blob == null) {
       throw new MavenExceptions.MavenNotFoundException(path.path());
     }
-    if (downloadPolicy != null) downloadPolicy.beforeRead(snapshot.assetId());
+    if (downloadPolicy != null) downloadPolicy.beforeRead(snapshot.assetId(), blob.id());
     String etag = blob.sha1();
     Instant lastModified = snapshot.lastUpdatedAt();
     if (headOnly) {

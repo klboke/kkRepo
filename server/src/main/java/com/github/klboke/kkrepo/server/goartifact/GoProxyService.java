@@ -178,7 +178,9 @@ public class GoProxyService {
     GoAssetWriter.Stored stored = writer.write(
         runtime, storage, blobStoreId, path, result.body(), extras, !headOnly);
     try {
-      if (downloadPolicy != null) downloadPolicy.beforeRead(stored.asset().id());
+      if (downloadPolicy != null) {
+        downloadPolicy.beforeRead(stored.asset().id(), stored.blob().id());
+      }
       proxyStateDao.recordSuccess(runtime.id(), now);
       if (headOnly) {
         stored.discardBody();
@@ -199,7 +201,7 @@ public class GoProxyService {
     if (blob == null) {
       throw new MavenExceptions.MavenNotFoundException(path.path());
     }
-    if (downloadPolicy != null) downloadPolicy.beforeRead(snapshot.assetId());
+    if (downloadPolicy != null) downloadPolicy.beforeRead(snapshot.assetId(), blob.id());
     BlobStorage storage = blobStorageRegistry.forBlobStoreId(blob.blobStoreId());
     return toResponse(storage, snapshot.lastUpdatedAt(), blob, headOnly, path);
   }

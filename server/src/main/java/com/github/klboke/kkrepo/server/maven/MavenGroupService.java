@@ -240,8 +240,8 @@ public class MavenGroupService {
     MavenAssetWriter.Stored stored = writer.writeBytes(
         group, storage, blobStoreId, path, merged, MavenContentType.XML, "group", group.name());
     AssetRecord asset = stored.asset();
-    if (downloadPolicy != null) downloadPolicy.beforeRead(asset.id(), group.id());
     AssetBlobRecord blob = stored.blob();
+    if (downloadPolicy != null) downloadPolicy.beforeRead(asset.id(), blob.id(), group.id());
     if (headOnly) {
       return MavenResponse.noBody(200, blob.size(), asset.contentType(), blob.sha1(), asset.lastUpdatedAt());
     }
@@ -303,7 +303,7 @@ public class MavenGroupService {
   private MavenResponse serveCached(CachedAssetMetadata snapshot, boolean headOnly, MavenPath path) {
     AssetBlobRecord blob = snapshot.toBlobRecord();
     if (blob == null) throw new MavenExceptions.MavenNotFoundException(path.path());
-    if (downloadPolicy != null) downloadPolicy.beforeRead(snapshot.assetId());
+    if (downloadPolicy != null) downloadPolicy.beforeRead(snapshot.assetId(), blob.id());
     return cachedResponse(snapshot, blob, headOnly, path);
   }
 

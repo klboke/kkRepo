@@ -33,24 +33,34 @@ class PypiAssetReader {
   }
 
   PypiResponse serve(AssetRecord asset, boolean headOnly, String path) {
-    beforeRead(asset.id());
     AssetBlobRecord blob = asset.assetBlobId() == null
         ? null
         : assetDao.findBlobById(asset.assetBlobId()).orElse(null);
-    return serveBlob(blob, asset.contentType(), asset.lastUpdatedAt(), headOnly, path);
+    return serveBlob(
+        asset.id(), blob, asset.contentType(), asset.lastUpdatedAt(), headOnly, path);
   }
 
   PypiResponse serveSnapshot(CachedAssetMetadata snapshot, boolean headOnly, String path) {
-    beforeRead(snapshot.assetId());
-    return serveBlob(snapshot.toBlobRecord(), snapshot.contentType(), snapshot.lastUpdatedAt(),
-        headOnly, path);
+    return serveBlob(
+        snapshot.assetId(),
+        snapshot.toBlobRecord(),
+        snapshot.contentType(),
+        snapshot.lastUpdatedAt(),
+        headOnly,
+        path);
   }
 
-  private PypiResponse serveBlob(AssetBlobRecord blob, String contentType, Instant lastModified,
-      boolean headOnly, String path) {
+  private PypiResponse serveBlob(
+      long assetId,
+      AssetBlobRecord blob,
+      String contentType,
+      Instant lastModified,
+      boolean headOnly,
+      String path) {
     if (blob == null) {
       throw new PypiExceptions.PypiNotFoundException(path);
     }
+    beforeRead(assetId, blob.id());
     String etag = blob.sha1();
     if (headOnly) {
       return PypiResponse.noBody(200, blob.size(), contentType, etag, lastModified);
@@ -62,8 +72,8 @@ class PypiAssetReader {
         blob.size(), contentType, etag, lastModified);
   }
 
-  void beforeRead(long assetId) {
-    if (downloadPolicy != null) downloadPolicy.beforeRead(assetId);
+  void beforeRead(long assetId, long blobId) {
+    if (downloadPolicy != null) downloadPolicy.beforeRead(assetId, blobId);
   }
 
 }

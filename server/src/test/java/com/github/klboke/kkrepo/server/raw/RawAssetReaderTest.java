@@ -119,7 +119,7 @@ class RawAssetReaderTest {
           true,
           packageAsset.path(),
           "ATTACHMENT");
-      verify(policy).beforeRead(packageAsset.id());
+      verify(policy).beforeRead(packageAsset.id(), blob().id());
     }
     verify(registry, never()).forBlobStoreId(any(Long.class));
   }

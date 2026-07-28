@@ -36,24 +36,42 @@ class RawAssetReader {
   }
 
   MavenResponse serve(AssetRecord asset, boolean headOnly, String path, String contentDisposition) {
-    beforeRead(asset.id());
     AssetBlobRecord blob = asset.assetBlobId() == null
         ? null
         : assetDao.findBlobById(asset.assetBlobId()).orElse(null);
-    return serveBlob(blob, asset.contentType(), asset.lastUpdatedAt(), headOnly, path, contentDisposition);
+    return serveBlob(
+        asset.id(),
+        blob,
+        asset.contentType(),
+        asset.lastUpdatedAt(),
+        headOnly,
+        path,
+        contentDisposition);
   }
 
   MavenResponse serveSnapshot(CachedAssetMetadata snapshot, boolean headOnly, String path, String contentDisposition) {
-    beforeRead(snapshot.assetId());
-    return serveBlob(snapshot.toBlobRecord(), snapshot.contentType(), snapshot.lastUpdatedAt(),
-        headOnly, path, contentDisposition);
+    return serveBlob(
+        snapshot.assetId(),
+        snapshot.toBlobRecord(),
+        snapshot.contentType(),
+        snapshot.lastUpdatedAt(),
+        headOnly,
+        path,
+        contentDisposition);
   }
 
-  private MavenResponse serveBlob(AssetBlobRecord blob, String contentType, Instant lastModified,
-      boolean headOnly, String path, String contentDisposition) {
+  private MavenResponse serveBlob(
+      long assetId,
+      AssetBlobRecord blob,
+      String contentType,
+      Instant lastModified,
+      boolean headOnly,
+      String path,
+      String contentDisposition) {
     if (blob == null) {
       throw new MavenExceptions.MavenNotFoundException(path);
     }
+    beforeRead(assetId, blob.id());
     String etag = blob.sha1();
     if (headOnly) {
       return MavenResponse.noBody(200, blob.size(), contentType, etag, lastModified);
@@ -73,8 +91,8 @@ class RawAssetReader {
     return value.toLowerCase(Locale.ROOT);
   }
 
-  void beforeRead(long assetId) {
-    if (downloadPolicy != null) downloadPolicy.beforeRead(assetId);
+  void beforeRead(long assetId, long blobId) {
+    if (downloadPolicy != null) downloadPolicy.beforeRead(assetId, blobId);
   }
 
 }

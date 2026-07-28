@@ -55,15 +55,39 @@ public class ArtifactDownloadPolicy {
     this.metrics = metrics;
   }
 
-  public Decision beforeRead(long assetId) {
-    return beforeRead(assetId, requestEntryRepositoryId());
+  public Decision beforeRead(long assetId, long servedBlobId) {
+    return beforeRead(assetId, servedBlobId, requestEntryRepositoryId());
   }
 
-  public Decision beforeRead(long assetId, Long entryRepositoryId) {
+  public Decision beforeRead(long assetId, long servedBlobId, Long entryRepositoryId) {
     if (!properties.isEnabled() || internalScannerRequest()) return Decision.allow();
     return evaluateSnapshots(
-        () -> scans.findDownloadPolicySnapshots(assetId, entryRepositoryId),
+        () -> scans.findDownloadPolicySnapshots(assetId, entryRepositoryId).stream()
+            .map(snapshot -> bindServedBlobSnapshot(snapshot, servedBlobId))
+            .toList(),
         false);
+  }
+
+  /**
+   * Prevents a cached or just-written asset row from borrowing policy state from another blob
+   * generation with the same stable asset ID.
+   */
+  private static DownloadPolicySnapshot bindServedBlobSnapshot(
+      DownloadPolicySnapshot snapshot, long servedBlobId) {
+    ScanCandidate candidate = snapshot.candidate();
+    if (candidate == null
+        || candidate.assetBlobId() == null
+        || candidate.assetBlobId() != servedBlobId) {
+      return pendingSnapshot(
+          snapshot.sourceRepositoryId(),
+          snapshot.format(),
+          snapshot.path(),
+          snapshot.kind(),
+          snapshot.contentType(),
+          snapshot.blobSize(),
+          new DownloadPolicyContext(snapshot.config(), snapshot.profile()));
+    }
+    return snapshot;
   }
 
   /**

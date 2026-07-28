@@ -313,13 +313,20 @@ public class NpmHostedService {
       String repositoryBaseUrl,
       boolean headOnly,
       NpmPackumentVariant variant) {
-    Map<String, Object> packageRoot = loadPackageRootMap(runtime, packageId)
+    CachedAssetMetadata metadata = assetMetadataCache.find(
+        runtime.id(),
+        packageId.id(),
+        () -> AssetMetadataCache.Loaded.from(
+            assetDao.findAssetByPath(runtime.id(), packageId.id()), assetDao))
+        .orElseThrow(() -> new NpmExceptions.NpmNotFoundException(
+            "Package '" + packageId.id() + "' not found"));
+    Map<String, Object> packageRoot = packageRoot(metadata)
         .orElseThrow(() -> new NpmExceptions.NpmNotFoundException("Package '" + packageId.id() + "' not found"));
     byte[] bytes = NpmPackumentResponseWriter.write(
         mapper, packageRoot, null, null, variant, packageId, repositoryBaseUrl);
-    AssetRecord asset = assetDao.findAssetByPath(runtime.id(), packageId.id()).orElse(null);
-    if (asset != null && downloadPolicy != null) downloadPolicy.beforeRead(asset.id());
-    Instant lastModified = asset == null ? Instant.now() : asset.lastUpdatedAt();
+    AssetBlobRecord blob = metadata.toBlobRecord();
+    if (downloadPolicy != null) downloadPolicy.beforeRead(metadata.assetId(), blob.id());
+    Instant lastModified = metadata.lastUpdatedAt();
     if (headOnly) {
       return MavenResponse.noBody(200, bytes.length, NpmResponseSupport.JSON, null, lastModified);
     }
@@ -355,13 +362,13 @@ public class NpmHostedService {
   }
 
   MavenResponse serveAsset(AssetRecord asset, boolean headOnly) {
-    beforeRead(asset.id());
     AssetBlobRecord blob = asset.assetBlobId() == null
         ? null
         : assetDao.findBlobById(asset.assetBlobId()).orElse(null);
     if (blob == null) {
       throw new NpmExceptions.NpmNotFoundException(asset.path());
     }
+    beforeRead(asset.id(), blob.id());
     String contentType = responseContentType(asset);
     if (headOnly) {
       return MavenResponse.noBody(200, blob.size(), contentType, blob.sha1(), asset.lastUpdatedAt());
@@ -374,11 +381,11 @@ public class NpmHostedService {
   }
 
   private MavenResponse serveSnapshot(CachedAssetMetadata snapshot, boolean headOnly) {
-    beforeRead(snapshot.assetId());
     AssetBlobRecord blob = snapshot.toBlobRecord();
     if (blob == null) {
       throw new NpmExceptions.NpmNotFoundException(snapshot.path());
     }
+    beforeRead(snapshot.assetId(), blob.id());
     String contentType = responseContentType(snapshot.kind(), snapshot.path(), snapshot.contentType());
     if (headOnly) {
       return MavenResponse.noBody(200, blob.size(), contentType, blob.sha1(), snapshot.lastUpdatedAt());
@@ -390,9 +397,9 @@ public class NpmHostedService {
         blob.size(), contentType, blob.sha1(), snapshot.lastUpdatedAt());
   }
 
-  void beforeRead(long assetId) {
+  void beforeRead(long assetId, long blobId) {
     if (downloadPolicy != null) {
-      downloadPolicy.beforeRead(assetId);
+      downloadPolicy.beforeRead(assetId, blobId);
     }
   }
 

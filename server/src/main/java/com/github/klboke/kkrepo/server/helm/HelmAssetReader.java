@@ -40,13 +40,13 @@ class HelmAssetReader {
   }
 
   MavenResponse serve(AssetRecord asset, boolean headOnly, String path) {
-    beforeRead(asset.id());
     AssetBlobRecord blob = asset.assetBlobId() == null
         ? null
         : assetDao.findBlobById(asset.assetBlobId()).orElse(null);
     if (blob == null) {
       throw new MavenExceptions.MavenNotFoundException(path);
     }
+    beforeRead(asset.id(), blob.id());
     String etag = blob.sha1();
     Instant lastModified = asset.lastUpdatedAt();
     if (headOnly) {
@@ -60,11 +60,11 @@ class HelmAssetReader {
   }
 
   MavenResponse serveSnapshot(CachedAssetMetadata snapshot, boolean headOnly, String path) {
-    beforeRead(snapshot.assetId());
     AssetBlobRecord blob = snapshot.toBlobRecord();
     if (blob == null) {
       throw new MavenExceptions.MavenNotFoundException(path);
     }
+    beforeRead(snapshot.assetId(), blob.id());
     String etag = blob.sha1();
     Instant lastModified = snapshot.lastUpdatedAt();
     if (headOnly) {
@@ -77,8 +77,8 @@ class HelmAssetReader {
         blob.size(), snapshot.contentType(), etag, lastModified);
   }
 
-  void beforeRead(long assetId) {
-    if (downloadPolicy != null) downloadPolicy.beforeRead(assetId);
+  void beforeRead(long assetId, long blobId) {
+    if (downloadPolicy != null) downloadPolicy.beforeRead(assetId, blobId);
   }
 
 }

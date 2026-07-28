@@ -239,7 +239,7 @@ public class DockerManifestStore {
 
   void beforeRead(StoredManifest stored) {
     if (downloadPolicy != null) {
-      downloadPolicy.beforeRead(stored.asset().id());
+      downloadPolicy.beforeRead(stored.asset().id(), stored.blob().id());
     }
   }
 
@@ -251,7 +251,10 @@ public class DockerManifestStore {
         0,
         SecurityScanDao.MAX_DOWNLOAD_POLICY_BATCH + 1);
     if (manifestAssetIds.isEmpty()) {
-      throw new DockerProtocolException(DockerErrorCode.BLOB_UNKNOWN, digest.value());
+      // Uploaded and cross-mounted blobs are valid before a manifest references them. With no
+      // manifest context there is no artifact policy to evaluate; DockerBlobStore remains
+      // authoritative for repository-scoped existence.
+      return;
     }
     boolean truncated =
         manifestAssetIds.size() > SecurityScanDao.MAX_DOWNLOAD_POLICY_BATCH;

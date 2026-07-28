@@ -56,7 +56,7 @@ class ArtifactDownloadPolicyTest {
 
   @Test
   void disabledFeatureNeverTouchesTheHotPathDatabase() {
-    assertEquals(PolicyDecision.ALLOW, policy.beforeRead(10L, 1L).decision());
+    assertEquals(PolicyDecision.ALLOW, policy.beforeRead(10L, 100L, 1L).decision());
     verifyNoInteractions(scans);
   }
 
@@ -77,7 +77,7 @@ class ArtifactDownloadPolicyTest {
             null));
     RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
     try {
-      assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 1L));
+      assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 100L, 1L));
     } finally {
       RequestContextHolder.resetRequestAttributes();
     }
@@ -93,7 +93,7 @@ class ArtifactDownloadPolicyTest {
         ArtifactDownloadPolicy.INTERNAL_SCANNER_REQUEST_ATTRIBUTE, true);
     RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
     try {
-      assertEquals(PolicyDecision.ALLOW, policy.beforeRead(10L, 1L).decision());
+      assertEquals(PolicyDecision.ALLOW, policy.beforeRead(10L, 100L, 1L).decision());
     } finally {
       RequestContextHolder.resetRequestAttributes();
     }
@@ -106,7 +106,7 @@ class ArtifactDownloadPolicyTest {
     properties.setEnabled(true);
     when(scans.findDownloadPolicySnapshots(10L, null)).thenReturn(List.of());
 
-    assertEquals(PolicyDecision.ALLOW, policy.beforeRead(10L, null).decision());
+    assertEquals(PolicyDecision.ALLOW, policy.beforeRead(10L, 100L, null).decision());
 
     verify(scans).findDownloadPolicySnapshots(10L, null);
     verifyNoMoreInteractions(scans);
@@ -282,7 +282,7 @@ class ArtifactDownloadPolicyTest {
         "artifact",
         "application/java-archive")));
 
-    assertEquals(PolicyDecision.ALLOW, policy.beforeRead(10L, 1L).decision());
+    assertEquals(PolicyDecision.ALLOW, policy.beforeRead(10L, 100L, 1L).decision());
 
     assertSingleSnapshotLookup(1L);
   }
@@ -293,7 +293,7 @@ class ArtifactDownloadPolicyTest {
     when(scans.findDownloadPolicySnapshots(10L, 1L))
         .thenThrow(new IllegalStateException("database unavailable"));
 
-    assertThrows(IllegalStateException.class, () -> policy.beforeRead(10L, 1L));
+    assertThrows(IllegalStateException.class, () -> policy.beforeRead(10L, 100L, 1L));
 
     assertEquals(
         1L,
@@ -308,7 +308,7 @@ class ArtifactDownloadPolicyTest {
   void auditModeRecordsShadowBlockWithoutChangingTheResponse() {
     arrange(EnforcementMode.AUDIT, PolicyAction.ALLOW, complete(PolicyDecision.BLOCK_VULNERABILITY));
 
-    ArtifactDownloadPolicy.Decision decision = policy.beforeRead(10L, 1L);
+    ArtifactDownloadPolicy.Decision decision = policy.beforeRead(10L, 100L, 1L);
 
     assertEquals(PolicyDecision.BLOCK_VULNERABILITY, decision.decision());
     assertFalse(decision.enforced());
@@ -321,7 +321,7 @@ class ArtifactDownloadPolicyTest {
     arrange(EnforcementMode.ENFORCE, PolicyAction.ALLOW, complete(PolicyDecision.BLOCK_VULNERABILITY));
 
     ArtifactPolicyException failure =
-        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 1L));
+        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 100L, 1L));
 
     assertEquals(PolicyDecision.BLOCK_VULNERABILITY, failure.decision());
     assertFalse(failure.pending());
@@ -342,7 +342,19 @@ class ArtifactDownloadPolicyTest {
         "application/java-archive")));
 
     ArtifactPolicyException failure =
-        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 1L));
+        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 100L, 1L));
+
+    assertEquals(PolicyDecision.BLOCK_PENDING, failure.decision());
+    assertTrue(failure.pending());
+    assertSingleSnapshotLookup(1L);
+  }
+
+  @Test
+  void servedBlobMismatchUsesTheConfiguredPendingAction() {
+    arrange(EnforcementMode.ENFORCE, PolicyAction.BLOCK, complete(PolicyDecision.ALLOW));
+
+    ArtifactPolicyException failure =
+        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 101L, 1L));
 
     assertEquals(PolicyDecision.BLOCK_PENDING, failure.decision());
     assertTrue(failure.pending());
@@ -366,7 +378,7 @@ class ArtifactDownloadPolicyTest {
         5)));
 
     ArtifactPolicyException failure =
-        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 1L));
+        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 100L, 1L));
 
     assertEquals(PolicyDecision.BLOCK_PENDING, failure.decision());
     assertSingleSnapshotLookup(1L);
@@ -399,7 +411,7 @@ class ArtifactDownloadPolicyTest {
             "application/java-archive")));
 
     ArtifactPolicyException failure =
-        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 2L));
+        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 100L, 2L));
 
     assertEquals(PolicyDecision.BLOCK_VULNERABILITY, failure.decision());
     assertSingleSnapshotLookup(2L);
@@ -484,7 +496,7 @@ class ArtifactDownloadPolicyTest {
         "metadata",
         "application/xml")));
 
-    ArtifactDownloadPolicy.Decision decision = policy.beforeRead(10L, 1L);
+    ArtifactDownloadPolicy.Decision decision = policy.beforeRead(10L, 100L, 1L);
 
     assertEquals(PolicyDecision.ALLOW, decision.decision());
     assertTrue(decision.enforced());
@@ -505,9 +517,9 @@ class ArtifactDownloadPolicyTest {
 
     assertEquals(
         PolicyDecision.BLOCK_SCAN_FAILED,
-        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 1L))
+        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 100L, 1L))
             .decision());
-    assertEquals(PolicyDecision.ALLOW, policy.beforeRead(10L, 1L).decision());
+    assertEquals(PolicyDecision.ALLOW, policy.beforeRead(10L, 100L, 1L).decision());
     verify(scans, times(2)).findDownloadPolicySnapshots(10L, 1L);
     verifyNoMoreInteractions(scans);
   }
@@ -537,22 +549,22 @@ class ArtifactDownloadPolicyTest {
                 config, profile(), candidate, state(ScanState.PARTIAL), null,
                 "com/acme/demo/1/demo-1.jar", "artifact", "application/java-archive")));
 
-    assertEquals(PolicyDecision.ALLOW, policy.beforeRead(10L, 1L).decision());
+    assertEquals(PolicyDecision.ALLOW, policy.beforeRead(10L, 100L, 1L).decision());
     assertEquals(
         PolicyDecision.BLOCK_PENDING,
-        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 1L))
+        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 100L, 1L))
             .decision());
     assertEquals(
         PolicyDecision.BLOCK_SCAN_FAILED,
-        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 1L))
+        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 100L, 1L))
             .decision());
     assertEquals(
         PolicyDecision.BLOCK_SCAN_FAILED,
-        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 1L))
+        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 100L, 1L))
             .decision());
     assertEquals(
         PolicyDecision.BLOCK_PARTIAL,
-        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 1L))
+        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 100L, 1L))
             .decision());
     verify(scans, times(5)).findDownloadPolicySnapshots(10L, 1L);
     verifyNoMoreInteractions(scans);
@@ -573,7 +585,7 @@ class ArtifactDownloadPolicyTest {
 
     assertEquals(
         PolicyDecision.BLOCK_SCAN_FAILED,
-        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 1L))
+        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 100L, 1L))
             .decision());
     assertSingleSnapshotLookup(1L);
   }
