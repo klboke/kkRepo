@@ -35,7 +35,7 @@ Use this rollout order in production:
 
 1. Deploy the scanner adapter and enable kkRepo deployment capability without activating a
    repository.
-2. Confirm that the page reports **Scanner Ready** and that the vulnerability DB version and
+2. Confirm that the page reports **Scanner Ready** and that the Vulnerability DB value and
    observation time continue to update.
 3. Select a small pilot set of repositories with `AUDIT` mode and all exceptional states set to
    `ALLOW`.
@@ -292,12 +292,12 @@ default is 10 rows.
 The summary shows:
 
 - Scanner: `Ready`, `Degraded`, or `Disabled`.
-- Vulnerability DB version: current database version used for vulnerability matching.
+- Vulnerability DB: current database version used for vulnerability matching.
 - Candidate backlog, Pending, Running, and Failed.
 - Complete assets, Partial/stale, and Policy blocks.
 - Critical/high finding counts.
 
-The scanner adapter obtains Vulnerability DB version from
+The scanner adapter obtains the Vulnerability DB value from
 `grype db status --output json`. It prefers a checksum, digest, or revision and falls back to the
 built timestamp or schema version, so the UI may show an ISO timestamp. This is not the
 schema/Flyway version of the kkRepo relational database.
@@ -453,7 +453,7 @@ At minimum, alert on:
 | Download returns `503` | Pending/failed/partial is configured to `BLOCK`; wait for completion or temporarily restore `ALLOW` |
 | Download returns `403` | A complete result matches an unwaived policy; upgrade, revise policy, or approve a waiver |
 | OCI scan fails | Ensure `KKREPO_SECURITY_SCANNING_OCI_REGISTRY_URL` is reachable from the scanner, credentials match, and required platforms exist |
-| Vulnerability DB version is stale | Check automatic updates, scanner HTTPS egress, volume permissions, and free space |
+| Vulnerability DB is stale | Check automatic updates, scanner HTTPS egress, volume permissions, and free space |
 | SBOM download fails | Check browse/read permission, SBOM blob references, and the backing blob store |
 
 Do not log service credentials, temporary registry tokens, signed artifact URLs, or complete

@@ -4289,12 +4289,16 @@ function renderSecurityScanSummary() {
   const databaseRevisionMatch =
     databaseRevision.match(/^(\d{4}-\d{2}-\d{2})T(.+)$/);
   const databaseRevisionMarkup = databaseRevisionMatch
-    ? `${escapeHtml(databaseRevisionMatch[1])}<br>${escapeHtml(databaseRevisionMatch[2])}`
-    : escapeHtml(databaseRevision);
+    ? `<span class="security-scan-database-revision-date">${escapeHtml(databaseRevisionMatch[1])}</span>
+       <span class="security-scan-database-revision-time">${escapeHtml(databaseRevisionMatch[2])}</span>`
+    : escapeHtml(shortText(databaseRevision, 18));
   const databaseRevisionCard = `
     <div>
-      <span title="Version of the vulnerability database used to match findings">Vulnerability DB version</span>
-      <strong class="security-scan-database-revision">${databaseRevisionMarkup}</strong>
+      <span class="security-scan-database-label"
+        aria-label="Vulnerability DB version"
+        title="Version of the vulnerability database used to match findings">Vulnerability DB</span>
+      <strong class="security-scan-database-revision"
+        title="${escapeHtml(databaseRevision)}">${databaseRevisionMarkup}</strong>
     </div>`;
   target.innerHTML = scannerCard + databaseRevisionCard + [
     ["Candidate backlog", summary.candidateBacklog ?? 0],

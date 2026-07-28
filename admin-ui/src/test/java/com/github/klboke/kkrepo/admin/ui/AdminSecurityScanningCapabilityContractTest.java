@@ -280,13 +280,21 @@ class AdminSecurityScanningCapabilityContractTest {
     assertTrue(css.contains(".security-scan-summary strong {\n  white-space: nowrap;"));
     assertTrue(css.contains(".security-scan-database-revision"));
     assertTrue(javascript.contains(
-        ">Vulnerability DB version</span>"));
+        "aria-label=\"Vulnerability DB version\""));
+    assertTrue(javascript.contains(
+        ">Vulnerability DB</span>"));
     assertFalse(javascript.contains(
         ">Database revision</span>"));
     assertTrue(javascript.contains(
         "databaseRevision.match(/^(\\d{4}-\\d{2}-\\d{2})T(.+)$/)"));
     assertTrue(javascript.contains(
-        "class=\"security-scan-database-revision\">${databaseRevisionMarkup}"));
+        "class=\"security-scan-database-revision-date\""));
+    assertTrue(javascript.contains(
+        "class=\"security-scan-database-revision-time\""));
+    assertTrue(javascript.contains(
+        "shortText(databaseRevision, 18)"));
+    assertTrue(css.contains(
+        ".security-scan-summary .security-scan-database-revision-time"));
     assertTrue(css.contains("overflow-x: auto;"));
 
     for (String tab :

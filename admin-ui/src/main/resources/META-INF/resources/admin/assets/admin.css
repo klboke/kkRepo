@@ -2553,8 +2553,30 @@ code {
 }
 
 .security-scan-summary .security-scan-database-revision {
-  line-height: 1.25;
-  white-space: normal;
+  overflow: hidden;
+  font-size: 16px;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.security-scan-summary .security-scan-database-label,
+.security-scan-summary .security-scan-database-revision-date,
+.security-scan-summary .security-scan-database-revision-time {
+  white-space: nowrap;
+}
+
+.security-scan-summary .security-scan-database-revision-date,
+.security-scan-summary .security-scan-database-revision-time {
+  display: block;
+  color: inherit;
+  font-size: inherit;
+}
+
+.security-scan-summary .security-scan-database-revision-time {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .security-scan-scanner-state {

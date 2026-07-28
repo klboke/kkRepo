@@ -273,12 +273,12 @@ metadata 不会被送入扫描器。
 顶部展示：
 
 - Scanner：`Ready`、`Degraded` 或 `Disabled`。
-- Vulnerability DB version：当前用于漏洞匹配的数据库版本。
+- Vulnerability DB：当前用于漏洞匹配的数据库版本。
 - Candidate backlog、Pending、Running、Failed。
 - Complete assets、Partial/stale、Policy blocks。
 - Critical/high finding 数量。
 
-Vulnerability DB version 由 scanner adapter 执行
+Vulnerability DB 的版本值由 scanner adapter 执行
 `grype db status --output json` 获取。adapter 优先使用 checksum、digest 或 revision；
 没有这些字段时使用 built 时间或 schema version，因此当前界面可能显示 ISO 时间。
 它不是 kkRepo 关系数据库的 schema/Flyway 版本。
@@ -430,7 +430,7 @@ scanner adapter 自身还暴露 active、queued、admission rejected 和数据�
 | 下载返回 `503` | pending/failed/partial 被配置为 `BLOCK`；等待任务完成或先恢复为 `ALLOW` |
 | 下载返回 `403` | 完整结果命中未豁免漏洞策略；升级制品、调整策略或按审批流程创建 waiver |
 | OCI 扫描失败 | 确认 `KKREPO_SECURITY_SCANNING_OCI_REGISTRY_URL` 可从 scanner 访问，credential 一致，要求的平台存在 |
-| Vulnerability DB version 过旧 | 检查自动更新、scanner HTTPS 出站、数据库卷权限和可用空间 |
+| Vulnerability DB 过旧 | 检查自动更新、scanner HTTPS 出站、数据库卷权限和可用空间 |
 | SBOM 下载失败 | 检查用户 browse/read 权限、SBOM blob 引用和底层 blob store |
 
 查看日志时不要记录 service credential、临时 registry token、制品签名 URL 或完整敏感
