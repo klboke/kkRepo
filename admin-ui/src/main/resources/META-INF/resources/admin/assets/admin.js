@@ -24,7 +24,7 @@ let securityScanState = {
   policies: [],
   waivers: []
 };
-const SECURITY_SCAN_DEFAULT_PAGE_SIZE = 25;
+const SECURITY_SCAN_DEFAULT_PAGE_SIZE = 5;
 const securityScanListEndpoints = {
   runs: "runs",
   tasks: "tasks",
@@ -4219,8 +4219,8 @@ function applySecurityScanDeploymentState(enabled, options = {}) {
     }
   });
 
+  banner.hidden = available;
   banner.classList.toggle("is-pending", pending);
-  banner.classList.toggle("is-enabled", available);
   banner.classList.toggle("is-disabled", !available && !pending);
   if (pending) {
     banner.innerHTML = `
@@ -4231,9 +4231,7 @@ function applySecurityScanDeploymentState(enabled, options = {}) {
       <strong>Unable to verify the artifact scanning deployment capability.</strong>
       <span>Scanning controls remain disabled. Check the kkRepo management API and reload this page.</span>`;
   } else if (available) {
-    banner.innerHTML = `
-      <strong>Artifact scanning is available in this deployment.</strong>
-      <span>Repository administrators decide which repositories to scan from the Repositories tab.</span>`;
+    banner.replaceChildren();
   } else {
     banner.innerHTML = `
       <strong>Artifact scanning is unavailable in this deployment.</strong>
@@ -4254,8 +4252,20 @@ function renderSecurityScanSummary() {
   const scannerStatus = !payload.deploymentEnabled
     ? "Disabled"
     : scanner?.ready ? "Ready" : "Degraded";
-  target.innerHTML = [
-    ["Scanner", scannerStatus],
+  const scannerPresentation = scannerStatus === "Ready"
+    ? { tone: "is-ready", icon: "check" }
+    : scannerStatus === "Degraded"
+      ? { tone: "is-degraded", icon: "info" }
+      : { tone: "is-disabled", icon: "circle-slash" };
+  const scannerCard = `
+    <div>
+      <span>Scanner</span>
+      <strong class="security-scan-scanner-state ${scannerPresentation.tone}">
+        <span class="lucide-icon icon-${scannerPresentation.icon}" aria-hidden="true"></span>
+        ${escapeHtml(scannerStatus)}
+      </strong>
+    </div>`;
+  target.innerHTML = scannerCard + [
     ["Database revision", scanner?.vulnerabilityDatabaseRevision || "-"],
     ["Candidate backlog", summary.candidateBacklog ?? 0],
     ["Pending tasks", summary.pendingTasks ?? 0],
@@ -4567,14 +4577,38 @@ async function loadSecurityScanning() {
 
 function selectSecurityScanTab(tab) {
   document.querySelectorAll("[data-scan-tab]").forEach((button) => {
-    button.classList.toggle("is-active", button.dataset.scanTab === tab);
-    button.setAttribute("aria-selected", button.dataset.scanTab === tab ? "true" : "false");
+    const active = button.dataset.scanTab === tab;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
   });
   document.querySelectorAll("[data-scan-panel]").forEach((panel) => {
     const active = panel.dataset.scanPanel === tab;
     panel.classList.toggle("is-active", active);
     panel.hidden = !active;
   });
+}
+
+function handleSecurityScanTabKeydown(event) {
+  const tabs = Array.from(document.querySelectorAll("[data-scan-tab]"));
+  const currentIndex = tabs.indexOf(event.currentTarget);
+  if (currentIndex < 0) return;
+  let nextIndex;
+  if (event.key === "ArrowRight") {
+    nextIndex = (currentIndex + 1) % tabs.length;
+  } else if (event.key === "ArrowLeft") {
+    nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+  } else if (event.key === "Home") {
+    nextIndex = 0;
+  } else if (event.key === "End") {
+    nextIndex = tabs.length - 1;
+  } else {
+    return;
+  }
+  event.preventDefault();
+  const nextTab = tabs[nextIndex];
+  selectSecurityScanTab(nextTab.dataset.scanTab);
+  nextTab.focus();
 }
 
 function formatSecurityScanValidity(seconds) {
@@ -5150,6 +5184,7 @@ document.getElementById("docker-cache-clear-button").addEventListener("click", c
 document.getElementById("security-scan-refresh-button").addEventListener("click", loadSecurityScanning);
 document.querySelectorAll("[data-scan-tab]").forEach((button) => {
   button.addEventListener("click", () => selectSecurityScanTab(button.dataset.scanTab));
+  button.addEventListener("keydown", handleSecurityScanTabKeydown);
 });
 document.querySelectorAll("[data-security-scan-list-form]").forEach((form) => {
   form.addEventListener("submit", (event) => {

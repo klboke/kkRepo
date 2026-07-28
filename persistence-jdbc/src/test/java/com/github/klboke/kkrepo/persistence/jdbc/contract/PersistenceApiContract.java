@@ -216,6 +216,14 @@ public abstract class PersistenceApiContract {
         1,
         scans.findCandidate(assetId).orElseThrow().contentGeneration(),
         "backfill must be idempotent for an unchanged blob binding");
+    assertEquals(
+        assetId,
+        inTransaction(() -> scans.claimCandidates(10)).getFirst().assetId(),
+        "the generated pending projection must expose unqueued content");
+    assertTrue(scans.markCandidateEnqueued(assetId, 1));
+    assertTrue(
+        inTransaction(() -> scans.claimCandidates(10)).isEmpty(),
+        "the generated pending projection must hide the acknowledged generation");
 
     SecurityScanDao.ScanProfile profile = scans.createProfile(new SecurityScanDao.ScanProfile(
         null, "contract-profile", true, "syft", "grype", List.of("vuln"), Map.of(),
@@ -429,6 +437,10 @@ public abstract class PersistenceApiContract {
     SecurityScanDao.ScanSummary visibleSummary = scans.summary(List.of(repositoryId));
     assertEquals(1, visibleSummary.completeAssets());
     assertEquals(1, visibleSummary.highFindings());
+    assertEquals(
+        1,
+        scans.summary(List.of(repositoryId, groupRepositoryId)).highFindings(),
+        "a finding associated with multiple visible repositories must be counted once");
     assertEquals(
         new SecurityScanDao.ScanSummary(0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
         scans.summary(List.of()),

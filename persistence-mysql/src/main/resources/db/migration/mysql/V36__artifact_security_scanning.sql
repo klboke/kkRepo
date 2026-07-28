@@ -97,6 +97,7 @@ CREATE TABLE security_scan_candidate (
   asset_blob_id BIGINT UNSIGNED NULL,
   content_generation BIGINT NOT NULL,
   enqueued_generation BIGINT NOT NULL DEFAULT 0,
+  pending BOOLEAN GENERATED ALWAYS AS (content_generation > enqueued_generation) STORED,
   changed_at DATETIME(3) NOT NULL,
   updated_at DATETIME(3) NOT NULL,
   PRIMARY KEY (asset_id),
@@ -105,7 +106,7 @@ CREATE TABLE security_scan_candidate (
   CONSTRAINT fk_security_scan_candidate_blob
     FOREIGN KEY (asset_blob_id) REFERENCES asset_blob(id) ON DELETE SET NULL,
   INDEX idx_security_scan_candidate_queue
-    (enqueued_generation, content_generation, changed_at, asset_id)
+    (pending, changed_at, asset_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE security_scanner_snapshot (
@@ -177,6 +178,7 @@ CREATE TABLE security_scan_task (
   INDEX idx_security_scan_task_requested_snapshot (requested_scanner_snapshot_id),
   INDEX idx_security_scan_task_asset (asset_id, created_at, id),
   INDEX idx_security_scan_task_repository (repository_id, created_at, id),
+  INDEX idx_security_scan_task_repository_status (repository_id, status, id),
   INDEX idx_security_scan_task_terminal (status, finished_at),
   INDEX idx_security_scan_task_pending_age (status, created_at, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -321,12 +323,13 @@ CREATE TABLE security_scan_finding (
   CONSTRAINT uk_security_scan_finding_key UNIQUE (scan_run_id, finding_key_hash),
   INDEX idx_security_scan_finding_advisory (advisory_id, severity),
   INDEX idx_security_scan_finding_package (package_name(191), installed_version(191)),
-  INDEX idx_security_scan_finding_severity (severity, scan_run_id)
+  INDEX idx_security_scan_finding_severity (severity, scan_run_id, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE asset_security_state (
   asset_id BIGINT UNSIGNED NOT NULL,
   profile_id BIGINT UNSIGNED NOT NULL,
+  repository_id BIGINT UNSIGNED NOT NULL,
   content_generation BIGINT NOT NULL,
   subject_identity_hash BINARY(32) NOT NULL,
   latest_scan_run_id BIGINT UNSIGNED NULL,
@@ -347,6 +350,8 @@ CREATE TABLE asset_security_state (
     FOREIGN KEY (asset_id) REFERENCES asset(id) ON DELETE CASCADE,
   CONSTRAINT fk_asset_security_state_profile
     FOREIGN KEY (profile_id) REFERENCES security_scan_profile(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_asset_security_state_repository
+    FOREIGN KEY (repository_id) REFERENCES repository(id) ON DELETE CASCADE,
   CONSTRAINT fk_asset_security_state_run
     FOREIGN KEY (latest_scan_run_id) REFERENCES security_scan_run(id) ON DELETE SET NULL,
   CONSTRAINT fk_asset_security_state_policy
@@ -354,7 +359,9 @@ CREATE TABLE asset_security_state (
   INDEX idx_asset_security_state_run (latest_scan_run_id),
   INDEX idx_asset_security_state_decision (policy_decision, scan_state, asset_id),
   INDEX idx_asset_security_state_stale (stale_at, scan_state),
-  INDEX idx_asset_security_state_scan (scan_state, asset_id)
+  INDEX idx_asset_security_state_scan (scan_state, asset_id),
+  INDEX idx_asset_security_state_repository_summary
+    (repository_id, scan_state, policy_decision)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE asset_security_policy_state (

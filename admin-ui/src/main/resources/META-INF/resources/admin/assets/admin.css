@@ -2536,9 +2536,49 @@ code {
   height: 15px;
 }
 .security-scan-summary {
+  grid-template-columns:
+    minmax(132px, 1fr)
+    minmax(210px, 1.35fr)
+    repeat(8, minmax(118px, 1fr));
   margin-right: 24px;
   margin-bottom: 18px;
   margin-left: 24px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.security-scan-summary > div {
+  min-width: 0;
+}
+
+.security-scan-summary strong {
+  white-space: nowrap;
+}
+
+.security-scan-scanner-state {
+  display: flex !important;
+  align-items: center;
+  gap: 6px;
+}
+
+.security-scan-scanner-state .lucide-icon {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  color: inherit;
+  font-size: inherit;
+}
+
+.security-scan-scanner-state.is-ready {
+  color: var(--success, #147a43);
+}
+
+.security-scan-scanner-state.is-degraded {
+  color: #a15c00;
+}
+
+.security-scan-scanner-state.is-disabled {
+  color: var(--muted, #667085);
 }
 
 .security-scan-capability-banner {
@@ -2552,10 +2592,8 @@ code {
   color: #344054;
 }
 
-.security-scan-capability-banner.is-enabled {
-  border-color: #8fd1ad;
-  background: #effaf3;
-  color: #176b3a;
+.security-scan-capability-banner[hidden] {
+  display: none;
 }
 
 .security-scan-capability-banner.is-disabled {
@@ -2578,17 +2616,53 @@ code {
 
 .security-scan-tabs {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-wrap: nowrap;
+  gap: 0;
+  overflow-x: auto;
   margin: 0 24px 16px;
-  padding-bottom: 10px;
+  padding: 0;
   border-bottom: 1px solid var(--border-subtle, #d8dee8);
 }
 
-.security-scan-tabs .row-action.is-active {
-  color: var(--accent-strong, #155eef);
-  border-color: currentColor;
-  background: var(--accent-soft, #eef4ff);
+.security-scan-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  margin: 0 0 -1px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: var(--muted, #667085);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 650;
+  padding: 0 16px;
+  white-space: nowrap;
+}
+
+.security-scan-tab:hover {
+  background: #f5f8f7;
+  color: var(--ink-1, #17211e);
+}
+
+.security-scan-tab:focus-visible {
+  z-index: 1;
+  border-radius: 4px 4px 0 0;
+  outline: 3px solid var(--focus, rgba(22, 128, 113, 0.22));
+  outline-offset: -3px;
+}
+
+.security-scan-tab.is-active {
+  color: var(--active, #0f7c6f);
+  border-bottom-color: currentColor;
+  background: transparent;
+}
+
+.security-scan-tab:disabled {
+  cursor: not-allowed;
 }
 
 .security-scan-panel {

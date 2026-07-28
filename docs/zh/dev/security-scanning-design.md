@@ -430,6 +430,7 @@ backfill 继续作为上线前资产和灾难恢复路径。
 | `asset_blob_id` | 消费时重新确认的当前 Blob；允许为空 |
 | `content_generation` | 当前内容与已投影内容不同时单调递增 |
 | `enqueued_generation` | 已经转换成 task 的最新 generation |
+| `pending` | 由 `content_generation > enqueued_generation` 生成的持久列，用作待处理队列索引前缀 |
 | `changed_at` | 数据库时间 |
 | `updated_at` | marker 更新时间 |
 
@@ -486,15 +487,20 @@ asset/blob binding，只有 candidate 缺失或指向不同 Blob 时才推进 ge
 大表查询必须从游标、状态或外键前缀进入索引。V36 直接包含以下关键索引：
 
 - task/backfill 的 claim、terminal retention 与 scanner snapshot 外键索引；
+- candidate 的 `pending + changed_at` 队列索引，以及 task 的
+  `repository_id + status` 汇总索引；
 - run/SBOM 的 `last_accessed_at` retention 索引，以及 run 到 snapshot/SBOM 的索引；
-- asset state、repository policy state 到 `latest_scan_run_id` 的反向索引；
+- asset state 的 `repository_id + scan_state + policy_decision` 覆盖索引，以及
+  asset state、repository policy state 到 `latest_scan_run_id` 的反向索引；
 - waiver 的 repository/asset/id 活跃游标索引与 finding 反向索引；
 - finding、run subject、scanner snapshot 的 retention/关联索引。
 
 事件 backlog 指标只读取 `artifact_change_event` 主键最小/最大水位；周期性状态指标按
 索引最多读取 `metrics-count-limit` 行并在上限处饱和，不执行无界全表 `COUNT(*)`。
 Overview 对操作者可见的全部仓库一次聚合，每张事实表只扫描一次，不按仓库执行 N 组
-计数。列表使用 keyset cursor，retention 使用有界批次和 `SKIP LOCKED`。MySQL 与
+计数。聚合查询先以 pending、repository、status 或 severity 缩小扫描范围；精确总数
+的成本仍与匹配索引项数量线性相关，但不会回表扫描无关的历史任务、低等级 finding
+或其它仓库状态。列表使用 keyset cursor，retention 使用有界批次和 `SKIP LOCKED`。MySQL 与
 PostgreSQL 契约测试必须同时覆盖这些查询的语义，避免依赖 MySQL 默认大小写或
 collation 的行为。
 
@@ -760,6 +766,7 @@ title、description 和 URL 都来自外部数据，进入 UI 前必须转义并
 
 - `asset_id`
 - `profile_id`
+- `repository_id`（来源仓库的冗余键，只用于权限范围汇总与索引，不代表 group 下载入口）
 - `content_generation`
 - `subject_identity_hash`
 - `latest_scan_run_id`

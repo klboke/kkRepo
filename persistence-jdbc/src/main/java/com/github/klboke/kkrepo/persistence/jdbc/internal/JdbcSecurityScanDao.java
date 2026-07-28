@@ -719,7 +719,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     return jdbc.query("""
         SELECT *
         FROM security_scan_candidate
-        WHERE content_generation > enqueued_generation
+        WHERE pending = TRUE
         ORDER BY changed_at, asset_id
         LIMIT ?
         FOR UPDATE SKIP LOCKED
@@ -1686,11 +1686,13 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     if (updated == 0 && candidateGenerationMatches(state.assetId(), state.contentGeneration())) {
       boolean inserted = JdbcInserts.tryUpdate(jdbc, """
           INSERT INTO asset_security_state
-            (asset_id, profile_id, content_generation, subject_identity_hash,
+            (asset_id, profile_id, repository_id, content_generation, subject_identity_hash,
              latest_scan_run_id, scan_state, scan_completeness, inventory_complete,
              max_severity, finding_counts_json, policy_id, policy_revision,
              policy_decision, policy_reason_code, stale_at, last_evaluated_at, version)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+          SELECT ?, ?, asset.repository_id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1
+          FROM asset
+          WHERE asset.id = ?
           """, ps -> {
         ps.setLong(1, state.assetId());
         ps.setLong(2, state.profileId());
@@ -1708,6 +1710,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         ps.setString(14, state.policyReasonCode());
         ps.setTimestamp(15, nullableTimestamp(state.staleAt()));
         ps.setTimestamp(16, nullableTimestamp(state.lastEvaluatedAt()));
+        ps.setLong(17, state.assetId());
       });
       if (!inserted) {
         updateAssetState(state);
@@ -2508,7 +2511,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     return new ScanSummary(
         count("""
             SELECT COUNT(*) FROM security_scan_candidate
-            WHERE content_generation > enqueued_generation
+            WHERE pending = TRUE
             """),
         count("SELECT COUNT(*) FROM security_scan_task WHERE status IN ('PENDING','RETRY_WAIT')"),
         count("SELECT COUNT(*) FROM security_scan_task WHERE status = 'RUNNING'"),
@@ -2544,7 +2547,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         FROM security_scan_candidate candidate
         JOIN asset asset ON asset.id = candidate.asset_id
         WHERE asset.repository_id IN (%s)
-          AND candidate.content_generation > candidate.enqueued_generation
+          AND candidate.pending = TRUE
         """.formatted(placeholders), repositoryArgs);
     Map<String, Object> tasks = jdbc.queryForMap("""
         SELECT
@@ -2556,6 +2559,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
             AS failed_tasks
         FROM security_scan_task
         WHERE repository_id IN (%s)
+          AND status IN ('PENDING', 'RETRY_WAIT', 'RUNNING', 'FAILED')
         """.formatted(placeholders), repositoryArgs);
     Map<String, Object> states = jdbc.queryForMap("""
         SELECT
@@ -2568,19 +2572,22 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
           COALESCE(SUM(CASE WHEN state.policy_decision <> 'ALLOW' THEN 1 ELSE 0 END), 0)
             AS blocked_assets
         FROM asset_security_state state
-        JOIN asset asset ON asset.id = state.asset_id
-        WHERE asset.repository_id IN (%s)
+        WHERE state.repository_id IN (%s)
         """.formatted(placeholders), repositoryArgs);
     Map<String, Object> findings = jdbc.queryForMap("""
         SELECT
-          COUNT(DISTINCT CASE WHEN finding.severity = 'CRITICAL' THEN finding.id END)
+          COALESCE(SUM(CASE WHEN finding.severity = 'CRITICAL' THEN 1 ELSE 0 END), 0)
             AS critical_findings,
-          COUNT(DISTINCT CASE WHEN finding.severity = 'HIGH' THEN finding.id END)
+          COALESCE(SUM(CASE WHEN finding.severity = 'HIGH' THEN 1 ELSE 0 END), 0)
             AS high_findings
         FROM security_scan_finding finding
-        JOIN security_scan_run_subject subject
-          ON subject.scan_run_id = finding.scan_run_id
-        WHERE subject.repository_id IN (%s)
+        WHERE finding.severity IN ('CRITICAL', 'HIGH')
+          AND EXISTS (
+            SELECT 1
+            FROM security_scan_run_subject subject
+            WHERE subject.scan_run_id = finding.scan_run_id
+              AND subject.repository_id IN (%s)
+          )
         """.formatted(placeholders), repositoryArgs);
     return new ScanSummary(
         candidates,
@@ -2631,26 +2638,6 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         LIMIT 1
         """, (rs, rowNum) -> nullableInstant(rs, "oldest_created_at"));
     return values.isEmpty() ? Optional.empty() : Optional.ofNullable(values.getFirst());
-  }
-
-  private long countState(long repositoryId, String state, String excludedDecision) {
-    StringBuilder sql = new StringBuilder("""
-        SELECT COUNT(*)
-        FROM asset_security_state s
-        JOIN asset a ON a.id = s.asset_id
-        WHERE a.repository_id = ?
-        """);
-    List<Object> args = new ArrayList<>();
-    args.add(repositoryId);
-    if (state != null) {
-      sql.append(" AND s.scan_state = ?");
-      args.add(state);
-    }
-    if (excludedDecision != null) {
-      sql.append(" AND s.policy_decision <> ?");
-      args.add(excludedDecision);
-    }
-    return count(sql.toString(), args.toArray());
   }
 
   private long count(String sql) {

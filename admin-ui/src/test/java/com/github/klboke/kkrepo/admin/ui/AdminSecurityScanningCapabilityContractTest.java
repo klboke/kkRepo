@@ -25,7 +25,14 @@ class AdminSecurityScanningCapabilityContractTest {
     assertTrue(javascript.contains("securityScanState.summary?.deploymentEnabled === true"));
     assertTrue(javascript.contains("content.inert = !available"));
     assertTrue(javascript.contains("control.disabled = true"));
+    assertTrue(javascript.contains("banner.hidden = available"));
+    assertTrue(javascript.contains("banner.replaceChildren()"));
+    assertFalse(javascript.contains(
+        "Artifact scanning is available in this deployment."));
+    assertFalse(javascript.contains(
+        "Repository administrators decide which repositories to scan"));
     assertTrue(javascript.contains("KKREPO_SECURITY_SCANNING_ENABLED=true"));
+    assertTrue(css.contains(".security-scan-capability-banner[hidden]"));
     assertTrue(css.contains(".is-deployment-disabled .security-scan-capability-content"));
     assertTrue(css.contains("margin: 0 24px 16px"));
     assertTrue(css.contains(".security-scan-panel > .nx-table-frame"));
@@ -149,9 +156,11 @@ class AdminSecurityScanningCapabilityContractTest {
     String javascript = resource("/META-INF/resources/admin/assets/admin.js");
     String css = resource("/META-INF/resources/admin/assets/admin.css");
 
-    assertTrue(index.contains("data-scan-tab=\"policies\" type=\"button\" role=\"tab\">Policies"));
-    assertTrue(index.contains("data-scan-tab=\"waivers\" type=\"button\" role=\"tab\">Waivers"));
-    assertTrue(index.contains("data-scan-panel=\"waivers\" hidden"));
+    assertTrue(index.contains("data-scan-tab=\"policies\""));
+    assertTrue(index.contains("data-scan-tab=\"waivers\""));
+    assertTrue(index.contains(
+        "id=\"security-scan-panel-waivers\" data-scan-panel=\"waivers\" "
+            + "role=\"tabpanel\" aria-labelledby=\"security-scan-tab-waivers\" hidden"));
     assertFalse(index.contains("Policies &amp; Waivers"));
     assertTrue(index.contains("<th>Waiver</th><th class=\"actions-column\">Actions</th>"));
     assertTrue(index.contains("<th>Repository</th><th>Artifact</th><th>Exception</th>"));
@@ -180,6 +189,48 @@ class AdminSecurityScanningCapabilityContractTest {
   }
 
   @Test
+  void scannerStatusAndSectionNavigationUseVisualAndAccessibleState() throws IOException {
+    String index = resource("/META-INF/resources/admin/index.html");
+    String javascript = resource("/META-INF/resources/admin/assets/admin.js");
+    String css = resource("/META-INF/resources/admin/assets/admin.css");
+
+    assertTrue(javascript.contains("{ tone: \"is-ready\", icon: \"check\" }"));
+    assertTrue(javascript.contains("{ tone: \"is-degraded\", icon: \"info\" }"));
+    assertTrue(javascript.contains("{ tone: \"is-disabled\", icon: \"circle-slash\" }"));
+    assertTrue(javascript.contains("security-scan-scanner-state ${scannerPresentation.tone}"));
+    assertTrue(css.contains(".security-scan-scanner-state.is-ready"));
+    assertTrue(css.contains(".security-scan-scanner-state.is-degraded"));
+    assertTrue(css.contains(".security-scan-scanner-state.is-disabled"));
+    assertTrue(css.contains(
+        "grid-template-columns:\n"
+            + "    minmax(132px, 1fr)\n"
+            + "    minmax(210px, 1.35fr)\n"
+            + "    repeat(8, minmax(118px, 1fr));"));
+    assertTrue(css.contains(".security-scan-summary strong {\n  white-space: nowrap;"));
+    assertTrue(css.contains("overflow-x: auto;"));
+
+    for (String tab :
+        new String[] {"overview", "tasks", "findings", "repositories", "policies", "waivers"}) {
+      assertTrue(index.contains(
+          "class=\"security-scan-tab"
+              + ("overview".equals(tab) ? " is-active" : "")
+              + "\" id=\"security-scan-tab-" + tab + "\" data-scan-tab=\"" + tab + "\""));
+      assertTrue(index.contains(
+          "id=\"security-scan-panel-" + tab + "\" data-scan-panel=\"" + tab
+              + "\" role=\"tabpanel\" aria-labelledby=\"security-scan-tab-" + tab + "\""));
+    }
+    assertTrue(javascript.contains("button.tabIndex = active ? 0 : -1"));
+    assertTrue(javascript.contains("event.key === \"ArrowRight\""));
+    assertTrue(javascript.contains("event.key === \"ArrowLeft\""));
+    assertTrue(javascript.contains("event.key === \"Home\""));
+    assertTrue(javascript.contains("event.key === \"End\""));
+    assertTrue(javascript.contains(
+        "button.addEventListener(\"keydown\", handleSecurityScanTabKeydown)"));
+    assertTrue(css.contains(".security-scan-tab.is-active"));
+    assertFalse(index.contains("row-action is-active\" data-scan-tab"));
+  }
+
+  @Test
   void everyScanningListUsesSearchAndCursorPagination() throws IOException {
     String index = resource("/META-INF/resources/admin/index.html");
     String javascript = resource("/META-INF/resources/admin/assets/admin.js");
@@ -191,9 +242,15 @@ class AdminSecurityScanningCapabilityContractTest {
       assertTrue(index.contains("data-security-scan-query=\"" + list + "\""));
       assertTrue(index.contains("data-security-scan-pagination=\"" + list + "\""));
       assertTrue(index.contains("data-security-scan-page-size=\"" + list + "\""));
+      int sizeSelectStart = index.indexOf("data-security-scan-page-size=\"" + list + "\"");
+      int sizeSelectEnd = index.indexOf("</select>", sizeSelectStart);
+      String sizeSelect = index.substring(sizeSelectStart, sizeSelectEnd);
+      assertTrue(sizeSelect.contains("<option value=\"5\" selected>5</option>"));
+      assertFalse(sizeSelect.contains("<option value=\"25\" selected>"));
       assertTrue(index.contains(
           "class=\"create-button secondary\" data-security-scan-clear=\"" + list + "\""));
     }
+    assertTrue(javascript.contains("const SECURITY_SCAN_DEFAULT_PAGE_SIZE = 5;"));
     assertTrue(javascript.contains("params.set(\"after\""));
     assertTrue(javascript.contains("params.set(\"limit\""));
     assertTrue(javascript.contains("params.set(\"q\", page.query)"));
