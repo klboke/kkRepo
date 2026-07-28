@@ -39,6 +39,9 @@ repository. After the deployment is ready, a repository administrator selects re
 their audit/enforcement policies in **Admin > Security > Artifact Scanning**. When the chart value
 is disabled, that page remains visible but all scanning controls are disabled.
 
+See the [Artifact Scanning Guide](../../../docs/en/artifact-scanning-guide.md) for repository
+activation, policy, waiver, monitoring, and troubleshooting instructions.
+
 The adapter runs without a Docker socket, as uid/gid `10001`, with a read-only root filesystem.
 Its PVC contains only the rebuildable Grype vulnerability database; candidates, leases, SBOM
 references, findings, policies, and waivers remain in the shared relational database. The default

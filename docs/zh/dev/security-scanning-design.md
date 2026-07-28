@@ -8,6 +8,9 @@ OSS/S3-first Blob 存储、Nexus 兼容协议和多副本运行模型上，增�
 Maven、npm、PyPI、Docker/OCI 等客户端可见行为必须保持不变；只有管理员明确为
 仓库启用强制策略后，安全判定才参与下载路径。
 
+部署、启用、策略、豁免、监控和排障操作见
+[Artifact Scanning 使用指南](../artifact-scanning-guide.md)。
+
 ## 当前支持状态
 
 本文定义的制品漏洞扫描主链路已经在当前实现中落地，并保持默认关闭：
@@ -1269,10 +1272,10 @@ SBOM 不进入列表响应。
   **Enabled** 控件启用，部署能力开启不会自动启用任何仓库。
 - scanner 暂时 degraded 与部署能力关闭不同：前者保留管理操作，允许管理员查看
   状态、调整 Audit 配置或重试；后者不允许从 UI 修改扫描配置。
-- Overview 的 Runs 以及其余五个 tab 的业务列表都提供独立搜索、15/25/50/100 行
-  page size 和前后翻页；搜索词、游标历史与 page size 按 tab 隔离，手动 Refresh 和
-  行内操作后保留当前条件。主列表不执行昂贵的全表 `COUNT(*)`，只根据 `nextAfter`
-  判断是否可进入下一页。
+- Overview 的 Runs 以及其余五个 tab 的业务列表都提供独立搜索、10/15/25/50/100 行
+  page size（默认 10 行）和前后翻页；搜索词、游标历史与 page size 按 tab 隔离，
+  手动 Refresh 和行内操作后保留当前条件。主列表不执行昂贵的全表 `COUNT(*)`，
+  只根据 `nextAfter` 判断是否可进入下一页。
 - Tasks 搜索任务、仓库、制品、状态和错误；Findings 搜索 advisory、package/PURL、
   version、source 和 title；Waivers 搜索 exception、仓库、制品、审批人和 reason。
   Repositories、Policies 与 Runs 使用各自页面可见字段搜索，不在浏览器对已截断的

@@ -38,3 +38,6 @@ The Compose profile starts this adapter container, while
 activates a repository; select repositories later in **Admin > Security > Artifact Scanning**.
 
 Use `docker-compose.quickstart-postgresql.yml` in the same way for PostgreSQL.
+
+For end-to-end deployment, repository activation, policy, waiver, monitoring, and troubleshooting
+instructions, see the [Artifact Scanning Guide](../docs/en/artifact-scanning-guide.md).

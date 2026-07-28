@@ -176,7 +176,7 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 基础设施路线图：
 
 1. ✅ PostgreSQL 数据库后端支持 - 已实现。通过 `persistence-jdbc` 公共契约、语义化 dialect SPI、backend 自有 Flyway migration、双库 contract test 和多副本 server smoke test 隔离并验证差异；MySQL 继续作为默认后端（[数据库后端指南](docs/zh/database-backends.md)、[设计方案](docs/zh/dev/pluggable-database-access-layer-design.md)）。
-2. ✅ 制品安全扫描 - 已实现，部署能力默认关闭，实际启用由管理员在 Admin UI 按仓库控制。上传事务只写通用制品变更 outbox，SBOM 与已知漏洞分析完全异步；同时覆盖 Docker/OCI 多平台、数据库持久任务、多副本协同、policy/waiver 评估和可选下载阻断（[设计说明](docs/zh/dev/security-scanning-design.md)）。
+2. ✅ 制品安全扫描 - 已实现，部署能力默认关闭，实际启用由管理员在 Admin UI 按仓库控制。上传事务只写通用制品变更 outbox，SBOM 与已知漏洞分析完全异步；同时覆盖 Docker/OCI 多平台、数据库持久任务、多副本协同、policy/waiver 评估和可选下载阻断（[使用指南](docs/zh/artifact-scanning-guide.md)、[设计说明](docs/zh/dev/security-scanning-design.md)）。
 
 仓库格式路线图：
 
@@ -216,6 +216,7 @@ kkRepo 使用 [Apache License 2.0](LICENSE) 开源。
 
 - [中文开发指南](docs/zh/development-guide.md)
 - [构建部署指南](docs/zh/build-deployment-guide.md)
+- [Artifact Scanning 使用指南](docs/zh/artifact-scanning-guide.md)
 - [Native Image 与 JVM 选型指南](docs/zh/native-vs-jvm-guide.md)
 - [Nginx 反向代理配置注意事项](docs/zh/nginx-reverse-proxy.md)
 - [客户端配置示例](docs/zh/client-recipes.md)
