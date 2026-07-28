@@ -12,6 +12,8 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ArtifactChangeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.TokenKind;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceStores;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PubUploadSessionDao;
@@ -2560,6 +2562,49 @@ public abstract class PersistenceApiContract {
             1));
 
     assertEquals(List.of(oldPath), claimed.stream().map(AssetRecord::path).toList());
+  }
+
+  @Test
+  void dockerAuthTokenKindsRoundTripWithoutTrustingTheSubjectSource() {
+    DockerAuthTokenDao tokens = stores().dockerAuthTokens();
+    Instant expiresAt = Instant.parse("2036-07-13T11:00:00Z");
+    List<Map<String, Object>> scopes = List.of(Map.of(
+        "repository", "docker-hosted",
+        "imageName", "acme/app",
+        "actions", List.of("pull")));
+    String userHash = "a".repeat(64);
+    String scannerHash = "b".repeat(64);
+
+    inTransaction(() -> {
+      tokens.insert(
+          userHash,
+          "security-scanner",
+          "alice",
+          "realm-1",
+          null,
+          TokenKind.USER,
+          scopes,
+          expiresAt);
+      tokens.insert(
+          scannerHash,
+          "security-scanner",
+          "scanner",
+          null,
+          null,
+          TokenKind.SECURITY_SCANNER,
+          scopes,
+          expiresAt);
+      return null;
+    });
+
+    DockerAuthTokenDao.TokenRecord user =
+        inTransaction(() -> tokens.findValid(userHash, Instant.now()).orElseThrow());
+    DockerAuthTokenDao.TokenRecord scanner =
+        inTransaction(() -> tokens.findValid(scannerHash, Instant.now()).orElseThrow());
+    assertEquals(TokenKind.USER, user.tokenKind());
+    assertEquals(TokenKind.SECURITY_SCANNER, scanner.tokenKind());
+    assertEquals(scopes, user.scopes().get("scopes"));
+    assertEquals(scopes, scanner.scopes().get("scopes"));
   }
 
   @Test

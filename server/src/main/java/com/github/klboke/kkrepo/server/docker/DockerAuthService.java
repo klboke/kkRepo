@@ -6,6 +6,7 @@ import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.TokenKind;
 import com.github.klboke.kkrepo.protocol.docker.DockerErrorCode;
 import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
@@ -75,6 +76,7 @@ public class DockerAuthService {
         subject.userId(),
         subject.realmId(),
         subject.apiKeyId(),
+        TokenKind.USER,
         granted.stream().map(Scope::toMap).toList(),
         expiresAt);
     return new TokenView(token, token, tokenTtlSeconds, issuedAt(expiresAt));
@@ -106,13 +108,15 @@ public class DockerAuthService {
         "scanner",
         null,
         null,
+        TokenKind.SECURITY_SCANNER,
         List.of(new Scope(repository, imageName, List.of("pull")).toMap()),
         Instant.now().plusSeconds(ttl));
     return token;
   }
 
   @Transactional
-  public Optional<AuthenticatedSubject> authenticateBearer(String token, String repository, String imageName, String action) {
+  public Optional<BearerAuthentication> authenticateBearer(
+      String token, String repository, String imageName, String action) {
     if (token == null || token.isBlank()) {
       return Optional.empty();
     }
@@ -124,15 +128,21 @@ public class DockerAuthService {
     if (!scopeAllows(row.scopes(), repository, imageName, action)) {
       throw new DockerProtocolException(DockerErrorCode.DENIED, "token scope does not allow " + action, 403);
     }
-    return restoreSubject(row);
+    return restoreSubject(row)
+        .map(subject -> new BearerAuthentication(
+            subject, row.tokenKind() == TokenKind.SECURITY_SCANNER));
   }
 
   private Optional<AuthenticatedSubject> restoreSubject(DockerAuthTokenDao.TokenRecord row) {
-    if (SCANNER_SUBJECT_SOURCE.equals(row.subjectSource())) {
+    if (row.tokenKind() == TokenKind.SECURITY_SCANNER) {
       PermissionSubject permissionSubject =
           new PermissionSubject(SCANNER_SUBJECT_SOURCE, "scanner", Set.of(), row.tokenHash());
       return Optional.of(new AuthenticatedSubject(
-          SCANNER_SUBJECT_SOURCE, "scanner", null, null, permissionSubject));
+          SCANNER_SUBJECT_SOURCE,
+          "scanner",
+          null,
+          null,
+          permissionSubject));
     }
     return authenticationService.authenticateStoredSubject(
         row.subjectSource(), row.subjectUserId(), row.subjectRealmId(), row.subjectApiKeyId());
@@ -305,6 +315,11 @@ public class DockerAuthService {
   }
 
   public record TokenView(String token, String access_token, long expires_in, String issued_at) {
+  }
+
+  public record BearerAuthentication(
+      AuthenticatedSubject subject,
+      boolean internalScanner) {
   }
 
   public record Scope(String repository, String imageName, List<String> actions) {

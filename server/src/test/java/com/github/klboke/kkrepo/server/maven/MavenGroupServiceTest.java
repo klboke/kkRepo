@@ -141,6 +141,44 @@ class MavenGroupServiceTest {
   }
 
   @Test
+  void nestedGroupCachePreservesTheOuterEntryRepositoryForPolicy() {
+    InMemorySharedCache shared = new InMemorySharedCache();
+    AssetMetadataCache cache = new AssetMetadataCache(shared, true, 120, 5);
+    MavenPath path = markerJar();
+    CachedAssetMetadata concrete = snapshot(101L, 3L, path.path(), blob(900L));
+    warmCache(
+        cache,
+        11L,
+        path.path(),
+        snapshot(
+            201L,
+            11L,
+            path.path(),
+            blob(900L),
+            Instant.now(),
+            MavenAssetWriter.groupCacheSourceAttributes(concrete)));
+    RepositoryRuntime nested = group(11L, "nested", List.of(proxy()));
+    RepositoryRuntime outer = group(10L, "outer", List.of(nested));
+    CapturingDownloadPolicy policy = new CapturingDownloadPolicy();
+    MavenGroupService service = new MavenGroupService(
+        new MissingHostedService(),
+        new FailingProxyService(),
+        new EmptyAssetDao(),
+        new FixedBlobStorageRegistry(new BytesBlobStorage("cached-nested-group")),
+        null,
+        cache,
+        null,
+        policy);
+
+    MavenResponse response = service.get(outer, path, true);
+
+    assertEquals(200, response.status());
+    assertEquals(101L, policy.assetId);
+    assertEquals(3L, policy.sourceRepositoryId);
+    assertEquals(10L, policy.entryRepositoryId);
+  }
+
+  @Test
   void nestedGroupCacheFlattensTheConcreteMemberIdentity() {
     MavenPath path = markerJar();
     CachedAssetMetadata nestedGroupAsset = snapshot(

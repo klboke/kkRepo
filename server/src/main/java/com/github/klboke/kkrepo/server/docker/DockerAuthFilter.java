@@ -78,15 +78,17 @@ public class DockerAuthFilter extends OncePerRequestFilter {
         ArtifactDownloadPolicy.ENTRY_REPOSITORY_ID_ATTRIBUTE, runtime.get().id());
     String action = dockerAction(request.getMethod(), target.path());
     String[] challengeActions = challengeActions(action);
-    Optional<AuthenticatedSubject> subject;
+    Optional<DockerAuthService.BearerAuthentication> bearerAuthentication;
     try {
-      subject = bearer(request)
+      bearerAuthentication = bearer(request)
           .flatMap(token -> authService.authenticateBearer(
               token, target.repository(), target.path().imageName(), action));
     } catch (DockerProtocolException e) {
       challenge(response, request, target, challengeActions);
       return;
     }
+    Optional<AuthenticatedSubject> subject =
+        bearerAuthentication.map(DockerAuthService.BearerAuthentication::subject);
     if (subject.isEmpty()) {
       subject = authenticationService.authenticate(request);
     }
@@ -99,7 +101,9 @@ public class DockerAuthFilter extends OncePerRequestFilter {
     }
     PermissionAction permission = permissionFor(action, request.getMethod(), target.path());
     boolean scannerToken =
-        DockerAuthService.SCANNER_SUBJECT_SOURCE.equals(subject.get().source());
+        bearerAuthentication
+            .map(DockerAuthService.BearerAuthentication::internalScanner)
+            .orElse(false);
     if (!scannerToken && permission != null && !accessDecisionService.decide(
         subject.get().permissionSubject(),
         new RepositoryPermission(
@@ -108,6 +112,9 @@ public class DockerAuthFilter extends OncePerRequestFilter {
       return;
     }
     request.setAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE, subject.get());
+    if (scannerToken) {
+      request.setAttribute(ArtifactDownloadPolicy.INTERNAL_SCANNER_REQUEST_ATTRIBUTE, true);
+    }
     filterChain.doFilter(request, response);
   }
 

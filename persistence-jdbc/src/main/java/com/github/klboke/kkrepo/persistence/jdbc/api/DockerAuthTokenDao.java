@@ -12,6 +12,7 @@ public interface DockerAuthTokenDao {
       String userId,
       String realmId,
       Long apiKeyId,
+      TokenKind tokenKind,
       List<Map<String, Object>> scopes,
       Instant expiresAt);
 
@@ -25,7 +26,13 @@ public interface DockerAuthTokenDao {
       String subjectUserId,
       String subjectRealmId,
       Long subjectApiKeyId,
+      TokenKind tokenKind,
       Map<String, Object> scopes,
       Instant expiresAt) {
+  }
+
+  enum TokenKind {
+    USER,
+    SECURITY_SCANNER
   }
 }

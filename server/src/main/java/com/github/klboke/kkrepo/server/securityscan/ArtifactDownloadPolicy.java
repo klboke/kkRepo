@@ -16,8 +16,6 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.EnforcementMode;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyAction;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyDecision;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanState;
-import com.github.klboke.kkrepo.server.docker.DockerAuthService;
-import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.RepositorySecurityFilter;
 import io.micrometer.core.instrument.Timer;
 import java.time.Instant;
@@ -37,6 +35,8 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 public class ArtifactDownloadPolicy {
   public static final String ENTRY_REPOSITORY_ID_ATTRIBUTE =
       ArtifactDownloadPolicy.class.getName() + ".ENTRY_REPOSITORY_ID";
+  public static final String INTERNAL_SCANNER_REQUEST_ATTRIBUTE =
+      ArtifactDownloadPolicy.class.getName() + ".INTERNAL_SCANNER_REQUEST";
   private static final int DEFAULT_RETRY_AFTER_SECONDS = 30;
 
   private final SecurityScanDao scans;
@@ -358,9 +358,8 @@ public class ArtifactDownloadPolicy {
     if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attrs)) {
       return false;
     }
-    Object value = attrs.getRequest().getAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE);
-    return value instanceof AuthenticatedSubject subject
-        && DockerAuthService.SCANNER_SUBJECT_SOURCE.equals(subject.source());
+    return Boolean.TRUE.equals(
+        attrs.getRequest().getAttribute(INTERNAL_SCANNER_REQUEST_ATTRIBUTE));
   }
 
   private record Evaluation(

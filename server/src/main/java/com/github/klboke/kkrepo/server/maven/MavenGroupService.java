@@ -104,7 +104,7 @@ public class MavenGroupService {
   }
 
   public MavenResponse get(RepositoryRuntime group, MavenPath path, boolean headOnly) {
-    return get(group, path, headOnly, new DispatchedRepositories());
+    return get(group, path, headOnly, new DispatchedRepositories(group.id()));
   }
 
   private MavenResponse get(
@@ -125,7 +125,8 @@ public class MavenGroupService {
       RepositoryRuntime group, MavenPath path, boolean headOnly, DispatchedRepositories dispatched) {
     Optional<CachedAssetMetadata> groupCached = cachedGroupContent(group, path, Instant.now());
     if (groupCached.isPresent()) {
-      return serveGroupCached(group, groupCached.get(), headOnly, path);
+      return serveGroupCached(
+          dispatched.entryRepositoryId(), groupCached.get(), headOnly, path);
     }
     for (RepositoryRuntime member : group.members()) {
       if (dispatched.contains(member)) {
@@ -307,7 +308,7 @@ public class MavenGroupService {
   }
 
   private MavenResponse serveGroupCached(
-      RepositoryRuntime group,
+      long entryRepositoryId,
       CachedAssetMetadata snapshot,
       boolean headOnly,
       MavenPath path) {
@@ -323,7 +324,7 @@ public class MavenGroupService {
           snapshot.kind(),
           snapshot.contentType(),
           blob.size(),
-          group.id());
+          entryRepositoryId);
     }
     return cachedResponse(snapshot, blob, headOnly, path);
   }
@@ -417,7 +418,16 @@ public class MavenGroupService {
   }
 
   private static final class DispatchedRepositories {
+    private final long entryRepositoryId;
     private final Set<Long> repositoryIds = new HashSet<>();
+
+    private DispatchedRepositories(long entryRepositoryId) {
+      this.entryRepositoryId = entryRepositoryId;
+    }
+
+    long entryRepositoryId() {
+      return entryRepositoryId;
+    }
 
     boolean contains(RepositoryRuntime runtime) {
       return repositoryIds.contains(runtime.id());

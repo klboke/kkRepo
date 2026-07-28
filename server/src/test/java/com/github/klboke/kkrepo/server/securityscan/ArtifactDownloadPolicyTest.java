@@ -27,12 +27,17 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyDecision;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanCompleteness;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanState;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
+import com.github.klboke.kkrepo.server.docker.DockerAuthService;
+import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 class ArtifactDownloadPolicyTest {
   private final SecurityScanDao scans = mock(SecurityScanDao.class);
@@ -52,6 +57,47 @@ class ArtifactDownloadPolicyTest {
   @Test
   void disabledFeatureNeverTouchesTheHotPathDatabase() {
     assertEquals(PolicyDecision.ALLOW, policy.beforeRead(10L, 1L).decision());
+    verifyNoInteractions(scans);
+  }
+
+  @Test
+  void scannerNamedUserSourceDoesNotBypassDownloadPolicy() {
+    arrange(
+        EnforcementMode.ENFORCE,
+        PolicyAction.ALLOW,
+        complete(PolicyDecision.BLOCK_VULNERABILITY));
+    MockHttpServletRequest request = new MockHttpServletRequest();
+    request.setAttribute(
+        AuthenticatedSubject.REQUEST_ATTRIBUTE,
+        new AuthenticatedSubject(
+            DockerAuthService.SCANNER_SUBJECT_SOURCE,
+            "alice",
+            "realm-1",
+            null,
+            null));
+    RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+    try {
+      assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 1L));
+    } finally {
+      RequestContextHolder.resetRequestAttributes();
+    }
+
+    assertSingleSnapshotLookup(1L);
+  }
+
+  @Test
+  void trustedInternalScannerBypassesDownloadPolicyWithoutDatabaseAccess() {
+    properties.setEnabled(true);
+    MockHttpServletRequest request = new MockHttpServletRequest();
+    request.setAttribute(
+        ArtifactDownloadPolicy.INTERNAL_SCANNER_REQUEST_ATTRIBUTE, true);
+    RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+    try {
+      assertEquals(PolicyDecision.ALLOW, policy.beforeRead(10L, 1L).decision());
+    } finally {
+      RequestContextHolder.resetRequestAttributes();
+    }
+
     verifyNoInteractions(scans);
   }
 

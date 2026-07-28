@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.docker;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -15,6 +16,7 @@ import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.TokenKind;
 import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
@@ -52,7 +54,15 @@ class DockerAuthServiceTest {
     @SuppressWarnings("unchecked")
     ArgumentCaptor<List<Map<String, Object>>> scopes =
         ArgumentCaptor.forClass((Class<List<Map<String, Object>>>) (Class<?>) List.class);
-    verify(tokenDao).insert(any(), eq("Local"), eq("alice"), eq("local"), eq(null), scopes.capture(), any(Instant.class));
+    verify(tokenDao).insert(
+        any(),
+        eq("Local"),
+        eq("alice"),
+        eq("local"),
+        eq(null),
+        eq(TokenKind.USER),
+        scopes.capture(),
+        any(Instant.class));
     assertEquals(List.of(Map.of(
         "repository", "docker-hosted",
         "imageName", "team/app",
@@ -77,7 +87,15 @@ class DockerAuthServiceTest {
     @SuppressWarnings("unchecked")
     ArgumentCaptor<List<Map<String, Object>>> scopes =
         ArgumentCaptor.forClass((Class<List<Map<String, Object>>>) (Class<?>) List.class);
-    verify(tokenDao).insert(any(), eq("Local"), eq("alice"), eq("local"), eq(null), scopes.capture(), any(Instant.class));
+    verify(tokenDao).insert(
+        any(),
+        eq("Local"),
+        eq("alice"),
+        eq("local"),
+        eq(null),
+        eq(TokenKind.USER),
+        scopes.capture(),
+        any(Instant.class));
     assertEquals(List.of(Map.of(
         "repository", "",
         "imageName", "",
@@ -104,7 +122,15 @@ class DockerAuthServiceTest {
     @SuppressWarnings("unchecked")
     ArgumentCaptor<List<Map<String, Object>>> scopes =
         ArgumentCaptor.forClass((Class<List<Map<String, Object>>>) (Class<?>) List.class);
-    verify(tokenDao).insert(any(), eq("Local"), eq("alice"), eq("local"), eq(null), scopes.capture(), any(Instant.class));
+    verify(tokenDao).insert(
+        any(),
+        eq("Local"),
+        eq("alice"),
+        eq("local"),
+        eq(null),
+        eq(TokenKind.USER),
+        scopes.capture(),
+        any(Instant.class));
     assertEquals(List.of(Map.of(
         "repository", "docker-hosted",
         "imageName", "codex/alpine",
@@ -133,6 +159,7 @@ class DockerAuthServiceTest {
         eq("scanner"),
         eq(null),
         eq(null),
+        eq(TokenKind.SECURITY_SCANNER),
         scopes.capture(),
         expiry.capture());
     assertEquals(List.of(Map.of(
@@ -147,19 +174,66 @@ class DockerAuthServiceTest {
         "scanner",
         null,
         null,
+        TokenKind.SECURITY_SCANNER,
         Map.of("scopes", scopes.getValue()),
         expiry.getValue());
     when(tokenDao.findValid(any(String.class), any(Instant.class)))
         .thenReturn(Optional.of(stored));
+    DockerAuthService.BearerAuthentication scannerAuthentication =
+        service.authenticateBearer(token, "docker-hosted", "team/app", "pull")
+            .orElseThrow();
     assertEquals(
         DockerAuthService.SCANNER_SUBJECT_SOURCE,
-        service.authenticateBearer(token, "docker-hosted", "team/app", "pull")
-            .orElseThrow().source());
+        scannerAuthentication.subject().source());
+    assertTrue(scannerAuthentication.internalScanner());
     assertThrows(
         DockerProtocolException.class,
         () -> service.authenticateBearer(token, "docker-hosted", "team/application", "pull"));
     assertThrows(
         DockerProtocolException.class,
         () -> service.authenticateBearer(token, "docker-hosted", "team/app", "push"));
+  }
+
+  @Test
+  void userTokenFromScannerNamedRealmDoesNotBecomeInternalScanner() {
+    DockerAuthTokenDao tokenDao = mock(DockerAuthTokenDao.class);
+    SecurityAuthenticationService authentication = mock(SecurityAuthenticationService.class);
+    DockerAuthService service = new DockerAuthService(
+        tokenDao,
+        authentication,
+        mock(AccessDecisionService.class),
+        900);
+    PermissionSubject permissions =
+        new PermissionSubject(DockerAuthService.SCANNER_SUBJECT_SOURCE, "alice", Set.of(), null);
+    AuthenticatedSubject ordinary = new AuthenticatedSubject(
+        DockerAuthService.SCANNER_SUBJECT_SOURCE,
+        "alice",
+        "realm-1",
+        null,
+        permissions);
+    DockerAuthTokenDao.TokenRecord stored = new DockerAuthTokenDao.TokenRecord(
+        "a".repeat(64),
+        DockerAuthService.SCANNER_SUBJECT_SOURCE,
+        "alice",
+        "realm-1",
+        null,
+        TokenKind.USER,
+        Map.of("scopes", List.of(Map.of(
+            "repository", "docker-hosted",
+            "imageName", "team/app",
+            "actions", List.of("pull")))),
+        Instant.now().plusSeconds(120));
+    when(tokenDao.findValid(any(String.class), any(Instant.class)))
+        .thenReturn(Optional.of(stored));
+    when(authentication.authenticateStoredSubject(
+        DockerAuthService.SCANNER_SUBJECT_SOURCE, "alice", "realm-1", null))
+        .thenReturn(Optional.of(ordinary));
+
+    DockerAuthService.BearerAuthentication restored =
+        service.authenticateBearer("token", "docker-hosted", "team/app", "pull")
+            .orElseThrow();
+
+    assertEquals(DockerAuthService.SCANNER_SUBJECT_SOURCE, restored.subject().source());
+    assertFalse(restored.internalScanner());
   }
 }
