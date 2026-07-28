@@ -73,6 +73,78 @@ class ScannerDocumentMapperTest {
   }
 
   @Test
+  void boundsScannerProjectionFieldsToPortablePersistenceColumns() throws Exception {
+    JsonMapper json = JsonMapper.builder().build();
+    var bom = json.createObjectNode();
+    bom.put("bomFormat", "CycloneDX");
+    bom.put("specVersion", "s".repeat(100));
+    var component = bom.putArray("components").addObject();
+    component.put("bom-ref", "r".repeat(2_000));
+    component.put("purl", "p".repeat(3_000));
+    component.put("type", "t".repeat(100));
+    component.put("group", "g".repeat(700));
+    component.put("name", "😀".repeat(600));
+    component.put("version", "v".repeat(700));
+
+    var catalog =
+        mapper.catalog(json.writeValueAsBytes(bom), "a".repeat(64), "1", "cap", Map.of());
+    var storedComponent = catalog.components().getFirst();
+    assertThat(catalog.specVersion()).hasSize(32);
+    assertThat(storedComponent.componentRef()).hasSize(1_024);
+    assertThat(storedComponent.packageUrl()).hasSize(2_048);
+    assertThat(storedComponent.type()).hasSize(64);
+    assertThat(storedComponent.namespace()).hasSize(512);
+    assertThat(storedComponent.name().codePointCount(0, storedComponent.name().length()))
+        .isEqualTo(512);
+    assertThat(storedComponent.version()).hasSize(512);
+
+    var report = json.createObjectNode();
+    var match = report.putArray("matches").addObject();
+    var vulnerability = match.putObject("vulnerability");
+    vulnerability.put("id", "a".repeat(400));
+    vulnerability.put("severity", "high");
+    vulnerability.put("dataSource", "d".repeat(3_000));
+    vulnerability.put("description", "😀".repeat(20_000));
+    vulnerability.putArray("urls").add("u".repeat(3_000));
+    vulnerability.putObject("fix").put("state", "f".repeat(100));
+    vulnerability.putArray("cvss").addObject().put("vector", "c".repeat(400));
+    var artifact = match.putObject("artifact");
+    artifact.put("name", "n".repeat(700));
+    artifact.put("version", "i".repeat(700));
+    artifact.put("purl", "p".repeat(3_000));
+
+    var finding = mapper.match(
+            json.writeValueAsBytes(report),
+            "1",
+            new DatabaseProvenance("db", Instant.EPOCH),
+            "cap")
+        .findings()
+        .getFirst();
+    assertThat(finding.advisoryId()).hasSize(255);
+    assertThat(finding.dataSource()).hasSize(2_048);
+    assertThat(finding.packageUrl()).hasSize(2_048);
+    assertThat(finding.packageName()).hasSize(512);
+    assertThat(finding.installedVersion()).hasSize(512);
+    assertThat(finding.cvssVector()).hasSize(255);
+    assertThat(finding.title().codePointCount(0, finding.title().length())).isEqualTo(1_024);
+    assertThat(finding.description().getBytes(StandardCharsets.UTF_8).length)
+        .isLessThanOrEqualTo(65_535);
+    assertThat(finding.description()).doesNotEndWith("\uFFFD");
+    assertThat(finding.primaryUrl()).hasSize(2_048);
+    assertThat(finding.sourceStatus()).hasSize(64);
+
+    assertThat(mapper.engineVersion(
+            ("{\"version\":\"" + "v".repeat(200) + "\"}")
+                .getBytes(StandardCharsets.UTF_8),
+            "grype").version())
+        .hasSize(128);
+    assertThat(mapper.database(
+            ("{\"revision\":\"" + "d".repeat(400) + "\"}")
+                .getBytes(StandardCharsets.UTF_8)).revision())
+        .hasSize(255);
+  }
+
+  @Test
   void mergesPlatformSbomsWithoutDuplicatingComponents() throws Exception {
     byte[] amd64 = """
         {"bomFormat":"CycloneDX","specVersion":"1.6","serialNumber":"urn:uuid:old",

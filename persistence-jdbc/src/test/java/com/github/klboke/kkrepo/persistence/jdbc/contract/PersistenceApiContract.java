@@ -248,6 +248,16 @@ public abstract class PersistenceApiContract {
     SecurityScanDao.ScanPolicy policy = scans.createPolicy(new SecurityScanDao.ScanPolicy(
         null, "contract-policy", true, Severity.HIGH, false, false, true,
         3600L, List.of("linux/amd64"), 1, "contract", now, now));
+    SecurityScanDao.ScanPolicy revisionDraft = new SecurityScanDao.ScanPolicy(
+        null, "contract-policy", true, Severity.HIGH, false, false, true,
+        3600L, List.of("linux/amd64"), 1, "contract", now, now);
+    List<Long> allocatedRevisions = invokeConcurrently(List.of(
+        () -> inTransaction(() -> scans.createNextPolicyRevision(revisionDraft).revision()),
+        () -> inTransaction(() -> scans.createNextPolicyRevision(revisionDraft).revision())), 2);
+    assertEquals(
+        List.of(2L, 3L),
+        allocatedRevisions.stream().sorted().toList(),
+        "policy revision allocation must serialize across replicas");
     long profileId = profile.id();
     long policyId = policy.id();
 
@@ -258,6 +268,12 @@ public abstract class PersistenceApiContract {
             3600L, policyId, 1, now, now));
     assertTrue(config.enabled());
     assertEquals(1, config.configRevision());
+    assertEquals(
+        List.of(repositoryId),
+        scans.findRepositoryConfigs(List.of(repositoryId, repositoryId, Long.MAX_VALUE)).stream()
+            .map(SecurityScanDao.RepositoryScanConfig::repositoryId)
+            .toList(),
+        "repository configuration scope must be deduplicated and relation-backed");
 
     SecurityScanDao.TaskDraft draft = new SecurityScanDao.TaskDraft(
         repositoryId,
@@ -282,6 +298,15 @@ public abstract class PersistenceApiContract {
         taskId,
         scans.listTasks(null, null, "scan-contract", 0, 10).getFirst().id(),
         "task search must include repository names");
+    assertEquals(
+        taskId,
+        scans.listTasksByRepositories(
+                List.of(repositoryId), null, "scan-contract", 0, 10)
+            .getFirst()
+            .id(),
+        "global task pages must filter a visible repository relation in one query");
+    assertTrue(scans.listTasksByRepositories(
+        List.of(Long.MAX_VALUE), null, null, 0, 10).isEmpty());
     assertTrue(scans.listTasks(null, null, "missing-task", 0, 10).isEmpty());
     assertEquals(
         Optional.of(now),
@@ -368,6 +393,13 @@ public abstract class PersistenceApiContract {
         runId,
         scans.listRuns(repositoryId, "complete", 0, 10).getFirst().id(),
         "run search must include status and completeness");
+    assertEquals(
+        runId,
+        scans.listRunsByRepositories(
+                List.of(repositoryId, groupRepositoryId), "scan-contract-group", 0, 10)
+            .getFirst()
+            .id(),
+        "global run pages must search names inside the visible repository relation");
 
     SecurityScanDao.ScanFinding finding = new SecurityScanDao.ScanFinding(
         null, runId, "GHSA-fixture|pkg:maven/com.acme/app@1.0", null,
@@ -389,6 +421,18 @@ public abstract class PersistenceApiContract {
         scans.listFindings(repositoryId, null, null, "ghsa-fixture", 0, 10)
             .getFirst().id(),
         "finding search must include advisory identifiers");
+    assertEquals(
+        storedFinding.id(),
+        scans.listFindingsByRepositories(
+                List.of(repositoryId, groupRepositoryId),
+                null,
+                null,
+                "scan-contract-group",
+                0,
+                10)
+            .getFirst()
+            .id(),
+        "global finding pages must search names inside the visible repository relation");
     assertEquals(
         policyId,
         scans.listPolicies("contract-policy", 0, 10).getFirst().id(),
@@ -673,6 +717,19 @@ public abstract class PersistenceApiContract {
     assertTrue(scans.listPolicyEvaluationTargets(
         repositoryId, repositoryId, profileId, config.configRevision(),
         policyId, 1L, 0, now.plusSeconds(3), 10).isEmpty());
+    SecurityScanDao.PolicyEvaluationTarget ageExpired =
+        scans.listPolicyEvaluationTargets(
+                repositoryId,
+                repositoryId,
+                profileId,
+                config.configRevision(),
+                policyId,
+                1L,
+                0,
+                now.plusSeconds(3601),
+                10)
+            .getFirst();
+    assertEquals(now.plusSeconds(3600), ageExpired.staleAt());
     assertEquals(1, scans.listPolicyEvaluationTargets(
         repositoryId, repositoryId, profileId, config.configRevision() + 1,
         policyId, 1L, 0, now.plusSeconds(3), 10).size());
@@ -738,10 +795,10 @@ public abstract class PersistenceApiContract {
         "an old generation cannot overwrite repository-context policy state");
 
     SecurityScanDao.ScanPolicy replacementPolicy =
-        scans.createPolicy(new SecurityScanDao.ScanPolicy(
+        inTransaction(() -> scans.createNextPolicyRevision(new SecurityScanDao.ScanPolicy(
             null, "contract-policy", true, Severity.CRITICAL, true, false, true,
-            7200L, List.of("linux/amd64"), 2, "contract", now.plusSeconds(6),
-            now.plusSeconds(6)));
+            7200L, List.of("linux/amd64"), 1, "contract", now.plusSeconds(6),
+            now.plusSeconds(6))));
     assertEquals(
         1,
         scans.replaceRepositoryPolicy(

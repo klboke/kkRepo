@@ -53,6 +53,7 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class SecurityScanManagementService {
   private static final int MAX_QUERY_LENGTH = 200;
+  private static final int REPOSITORY_SEARCH_BATCH_SIZE = 256;
   private static final int WAIVER_MATCH_PAGE_SIZE = 256;
 
   private final SecurityScanDao scans;
@@ -92,6 +93,10 @@ public class SecurityScanManagementService {
   }
 
   public List<RepositoryView> repositoryViews(AuthenticatedSubject actor) {
+    return repositoryViews(visibleRepositories(actor));
+  }
+
+  private List<RepositoryView> repositoryViews(List<RepositoryRecord> repositoryRows) {
     List<ScanProfile> profiles = scans.listProfiles();
     Map<Long, String> profileNames = new LinkedHashMap<>();
     for (ScanProfile profile : profiles) {
@@ -101,10 +106,15 @@ public class SecurityScanManagementService {
     for (ScanPolicy policy : scans.listPolicies()) {
       if (policy.id() != null) policyNames.put(policy.id(), policy.name());
     }
-    return visibleRepositories(actor).stream()
+    Map<Long, RepositoryScanConfig> configurations = new LinkedHashMap<>();
+    for (RepositoryScanConfig config : scans.findRepositoryConfigs(
+        repositoryRows.stream().map(RepositoryRecord::id).toList())) {
+      configurations.put(config.repositoryId(), config);
+    }
+    return repositoryRows.stream()
         .map(repository -> {
-          RepositoryScanConfig config = scans.findRepositoryConfig(repository.id())
-              .orElseGet(() -> defaultConfig(repository.id(), profiles));
+          RepositoryScanConfig config = configurations.get(repository.id());
+          if (config == null) config = defaultConfig(repository.id(), profiles);
           return new RepositoryView(
               repository.id(),
               repository.name(),
@@ -121,13 +131,25 @@ public class SecurityScanManagementService {
       AuthenticatedSubject actor, String query, long afterId, int requestedLimit) {
     String normalizedQuery = normalizedQuery(query);
     int safeLimit = limit(requestedLimit);
-    List<RepositoryView> candidates = repositoryViews(actor).stream()
+    List<RepositoryRecord> candidates = visibleRepositories(actor).stream()
         .filter(repository -> repository.id() > Math.max(0, afterId))
-        .filter(repository -> matchesRepositoryQuery(repository, normalizedQuery))
-        .sorted(Comparator.comparingLong(RepositoryView::id))
-        .limit(safeLimit + 1L)
+        .sorted(Comparator.comparingLong(RepositoryRecord::id))
         .toList();
-    return cursorPage(candidates, safeLimit, RepositoryView::id);
+    List<RepositoryView> matches = new ArrayList<>(safeLimit + 1);
+    int batchSize = normalizedQuery == null
+        ? safeLimit + 1 : REPOSITORY_SEARCH_BATCH_SIZE;
+    for (int offset = 0; offset < candidates.size() && matches.size() <= safeLimit;
+        offset += batchSize) {
+      List<RepositoryRecord> batch = candidates.subList(
+          offset, Math.min(candidates.size(), offset + batchSize));
+      for (RepositoryView view : repositoryViews(batch)) {
+        if (matchesRepositoryQuery(view, normalizedQuery)) {
+          matches.add(view);
+          if (matches.size() > safeLimit) break;
+        }
+      }
+    }
+    return cursorPage(matches, safeLimit, RepositoryView::id);
   }
 
   public List<TaskView> tasks(
@@ -148,17 +170,22 @@ public class SecurityScanManagementService {
       int requestedLimit) {
     String normalizedQuery = normalizedQuery(query);
     int safeLimit = limit(requestedLimit);
-    List<ScanTask> rows = collectByVisibleRepository(
-        actor,
-        repositoryId,
-        repository -> normalizedQuery == null
-            ? scans.listTasks(repository.id(), status, afterId, safeLimit + 1)
-            : scans.listTasks(
-                repository.id(), status, normalizedQuery, afterId, safeLimit + 1),
-        ScanTask::id,
-        safeLimit + 1);
+    List<RepositoryRecord> visible = visibleRepositories(actor);
+    List<ScanTask> rows;
+    if (repositoryId == null) {
+      rows = scans.listTasksByRepositories(
+          visible.stream().map(RepositoryRecord::id).toList(),
+          status,
+          normalizedQuery,
+          afterId,
+          safeLimit + 1);
+    } else {
+      requireVisibleRepository(actor, repositoryId);
+      rows = scans.listTasks(
+          repositoryId, status, normalizedQuery, afterId, safeLimit + 1);
+    }
     Map<Long, String> repositoryNames = new LinkedHashMap<>();
-    for (RepositoryRecord repository : visibleRepositories(actor)) {
+    for (RepositoryRecord repository : visible) {
       repositoryNames.put(repository.id(), repository.name());
     }
     List<TaskView> views = rows.stream()
@@ -180,15 +207,18 @@ public class SecurityScanManagementService {
       int requestedLimit) {
     String normalizedQuery = normalizedQuery(query);
     int safeLimit = limit(requestedLimit);
-    List<RunView> views = collectByVisibleRepository(
-        actor,
-        repositoryId,
-        repository -> normalizedQuery == null
-            ? scans.listRuns(repository.id(), afterId, safeLimit + 1)
-            : scans.listRuns(repository.id(), normalizedQuery, afterId, safeLimit + 1),
-        ScanRun::id,
-        safeLimit + 1)
-        .stream().map(RunView::from).toList();
+    List<ScanRun> rows;
+    if (repositoryId == null) {
+      rows = scans.listRunsByRepositories(
+          visibleRepositoryIds(actor).stream().toList(),
+          normalizedQuery,
+          afterId,
+          safeLimit + 1);
+    } else {
+      requireVisibleRepository(actor, repositoryId);
+      rows = scans.listRuns(repositoryId, normalizedQuery, afterId, safeLimit + 1);
+    }
+    List<RunView> views = rows.stream().map(RunView::from).toList();
     return cursorPage(views, safeLimit, RunView::id);
   }
 
@@ -214,22 +244,20 @@ public class SecurityScanManagementService {
     if (runId != null) requireVisibleRun(actor, runId);
     String normalizedQuery = normalizedQuery(query);
     int safeLimit = limit(requestedLimit);
-    List<ScanFinding> candidates = collectByVisibleRepository(
-        actor,
-        repositoryId,
-        repository -> normalizedQuery == null
-                || containsQuery(normalizedQuery, repository.name())
-            ? scans.listFindings(
-                repository.id(), runId, severity, afterId, safeLimit + 1)
-            : scans.listFindings(
-                repository.id(),
-                runId,
-                severity,
-                normalizedQuery,
-                afterId,
-                safeLimit + 1),
-        ScanFinding::id,
-        safeLimit + 1);
+    List<ScanFinding> candidates;
+    if (repositoryId == null) {
+      candidates = scans.listFindingsByRepositories(
+          visibleRepositoryIds(actor).stream().toList(),
+          runId,
+          severity,
+          normalizedQuery,
+          afterId,
+          safeLimit + 1);
+    } else {
+      requireVisibleRepository(actor, repositoryId);
+      candidates = scans.listFindings(
+          repositoryId, runId, severity, normalizedQuery, afterId, safeLimit + 1);
+    }
     CursorPage<ScanFinding> rawPage =
         cursorPage(candidates, safeLimit, ScanFinding::id);
     if (rawPage.items().isEmpty()) {
@@ -699,12 +727,8 @@ public class SecurityScanManagementService {
         && !current.name().equalsIgnoreCase(command.name().trim())) {
       throw badRequest("Policy name cannot be changed when creating a revision");
     }
-    long revision = scans.listPolicies().stream()
-        .filter(policy -> policy.name().equalsIgnoreCase(current.name()))
-        .mapToLong(ScanPolicy::revision)
-        .max().orElse(0) + 1;
-    ScanPolicy replacement =
-        createPolicyRevision(actor, current.name(), revision, command);
+    ScanPolicy replacement = scans.createNextPolicyRevision(
+        policyDraft(actor, current.name(), 1, command));
     scans.replaceRepositoryPolicy(current.id(), replacement.id(), Instant.now());
     return replacement;
   }
@@ -714,8 +738,16 @@ public class SecurityScanManagementService {
       String name,
       long revision,
       PolicyCommand command) {
+    return scans.createPolicy(policyDraft(actor, name, revision, command));
+  }
+
+  private ScanPolicy policyDraft(
+      AuthenticatedSubject actor,
+      String name,
+      long revision,
+      PolicyCommand command) {
     Instant now = Instant.now();
-    return scans.createPolicy(new ScanPolicy(
+    return new ScanPolicy(
         null,
         name,
         command.enabled(),
@@ -728,7 +760,7 @@ public class SecurityScanManagementService {
         Math.max(1, revision),
         actor.userId(),
         now,
-        now));
+        now);
   }
 
   public List<WaiverView> waivers(
@@ -989,28 +1021,6 @@ public class SecurityScanManagementService {
       }
     });
     if (!visible) throw notFound("Security scan object not found");
-  }
-
-  private <T> List<T> collectByVisibleRepository(
-      AuthenticatedSubject actor,
-      Long repositoryId,
-      Function<RepositoryRecord, List<T>> loader,
-      Function<T, Long> id,
-      int limit) {
-    List<RepositoryRecord> scope;
-    if (repositoryId == null) {
-      scope = visibleRepositories(actor);
-    } else {
-      scope = List.of(requireVisibleRepository(actor, repositoryId));
-    }
-    Map<Long, T> merged = new LinkedHashMap<>();
-    for (RepositoryRecord repository : scope) {
-      for (T value : loader.apply(repository)) merged.putIfAbsent(id.apply(value), value);
-    }
-    return merged.values().stream()
-        .sorted(Comparator.comparing(id))
-        .limit(limit)
-        .toList();
   }
 
   private List<RepositoryRecord> visibleRepositories(AuthenticatedSubject actor) {

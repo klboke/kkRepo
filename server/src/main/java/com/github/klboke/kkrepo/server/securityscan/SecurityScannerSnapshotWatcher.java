@@ -10,9 +10,11 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.TaskDraft;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.RequestReason;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanStage;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.SubjectKind;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -115,6 +117,7 @@ public class SecurityScannerSnapshotWatcher {
     Instant now = Instant.now();
     scans.markAssetStateStale(
         state.assetId(), state.profileId(), state.latestScanRunId(), now);
+    String requestUuid = snapshotRequestUuid(state, profile, snapshot);
     scans.createTask(new TaskDraft(
         content.asset().repositoryId(),
         state.assetId(),
@@ -129,10 +132,23 @@ public class SecurityScannerSnapshotWatcher {
         25,
         properties.getWorker().getMaxAttempts(),
         "security-scan-worker",
-        null,
-        null,
+        requestUuid,
+        "snapshot:" + requestUuid,
         now));
     return true;
+  }
+
+  private static String snapshotRequestUuid(
+      AssetSecurityState state, ScanProfile profile, ScannerSnapshot snapshot) {
+    String identity = String.join(
+        "\0",
+        "snapshot",
+        Long.toString(state.assetId()),
+        Long.toString(state.contentGeneration()),
+        Long.toString(profile.id()),
+        Long.toString(profile.revision()),
+        Long.toString(snapshot.id()));
+    return UUID.nameUUIDFromBytes(identity.getBytes(StandardCharsets.UTF_8)).toString();
   }
 
   private static boolean matches(ScanProfile profile, ScannerSnapshot snapshot) {

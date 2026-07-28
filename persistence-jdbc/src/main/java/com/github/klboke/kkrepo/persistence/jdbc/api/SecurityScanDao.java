@@ -30,6 +30,12 @@ public interface SecurityScanDao {
 
   Optional<RepositoryScanConfig> findRepositoryConfig(long repositoryId);
 
+  /**
+   * Loads configurations for an authorization-filtered repository scope with one bounded
+   * parameter. Implementations must not expand the IDs into an unbounded JDBC placeholder list.
+   */
+  List<RepositoryScanConfig> findRepositoryConfigs(List<Long> repositoryIds);
+
   RepositoryScanConfig upsertRepositoryConfig(RepositoryScanConfig config);
 
   /**
@@ -79,6 +85,13 @@ public interface SecurityScanDao {
 
   List<ScanTask> listTasks(
       Long repositoryId,
+      TaskStatus status,
+      String query,
+      long afterId,
+      int maxItems);
+
+  List<ScanTask> listTasksByRepositories(
+      List<Long> repositoryIds,
       TaskStatus status,
       String query,
       long afterId,
@@ -156,6 +169,9 @@ public interface SecurityScanDao {
   List<ScanRun> listRuns(
       Long repositoryId, String query, long afterId, int maxItems);
 
+  List<ScanRun> listRunsByRepositories(
+      List<Long> repositoryIds, String query, long afterId, int maxItems);
+
   void associateRun(
       long scanRunId,
       long repositoryId,
@@ -196,6 +212,14 @@ public interface SecurityScanDao {
 
   List<ScanFinding> listFindings(
       Long repositoryId,
+      Long scanRunId,
+      Severity severity,
+      String query,
+      long afterId,
+      int maxItems);
+
+  List<ScanFinding> listFindingsByRepositories(
+      List<Long> repositoryIds,
       Long scanRunId,
       Severity severity,
       String query,
@@ -243,6 +267,12 @@ public interface SecurityScanDao {
   Optional<ScanPolicy> findPolicy(long policyId);
 
   ScanPolicy createPolicy(ScanPolicy policy);
+
+  /**
+   * Locks the durable head for {@link ScanPolicy#name()} and creates its next immutable revision.
+   * The caller-supplied revision is ignored.
+   */
+  ScanPolicy createNextPolicyRevision(ScanPolicy policy);
 
   /**
    * Moves repository configurations pinned to one immutable policy revision to its replacement.
@@ -741,6 +771,7 @@ public interface SecurityScanDao {
       Long latestScanRunId,
       ScanState scanState,
       long policyStateVersion,
+      Instant staleAt,
       Instant nextWaiverExpiry,
       long waiverRevision) {
     public PolicyEvaluationTarget(
@@ -760,8 +791,32 @@ public interface SecurityScanDao {
           latestScanRunId,
           scanState,
           policyStateVersion,
+          null,
           nextWaiverExpiry,
           0);
+    }
+
+    public PolicyEvaluationTarget(
+        long assetId,
+        long sourceRepositoryId,
+        long contentGeneration,
+        Long stateContentGeneration,
+        Long latestScanRunId,
+        ScanState scanState,
+        long policyStateVersion,
+        Instant nextWaiverExpiry,
+        long waiverRevision) {
+      this(
+          assetId,
+          sourceRepositoryId,
+          contentGeneration,
+          stateContentGeneration,
+          latestScanRunId,
+          scanState,
+          policyStateVersion,
+          null,
+          nextWaiverExpiry,
+          waiverRevision);
     }
   }
 

@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -95,6 +96,7 @@ class SecurityScanManagementServiceCoreTest {
     when(repositories.findById(1L)).thenReturn(Optional.of(repository));
     when(repositories.list()).thenReturn(List.of(repository));
     when(scans.listProfiles()).thenReturn(List.of(profile));
+    when(scans.findRepositoryConfigs(any())).thenReturn(List.of());
     service = new SecurityScanManagementService(
         scans, repositories, assets, security, documents, properties, scope);
   }
@@ -105,6 +107,7 @@ class SecurityScanManagementServiceCoreTest {
     when(repositories.list()).thenReturn(List.of(proxy, repository));
     RepositoryScanConfig config = config(1L, true, 1L, 10L);
     when(scans.findRepositoryConfig(1L)).thenReturn(Optional.of(config));
+    when(scans.findRepositoryConfigs(any())).thenReturn(List.of(config));
     ScanPolicy policy = policy(10L, "critical", 1L);
     when(scans.listPolicies()).thenReturn(List.of(policy));
     when(scans.summary(List.of(1L, 2L)))
@@ -138,6 +141,37 @@ class SecurityScanManagementServiceCoreTest {
     when(scans.listRuns(1L, "demo", 0, 2)).thenReturn(List.of(run));
     var runPage = service.runPage(actor, 1L, "demo", 0, 1);
     assertEquals("COMPLETE", runPage.items().getFirst().status());
+  }
+
+  @Test
+  void repositoryAndGlobalPagesUseBoundedVisibleRepositoryRelations() {
+    List<RepositoryRecord> manyRepositories = java.util.stream.LongStream.rangeClosed(1, 300)
+        .mapToObj(id -> repository(id, "repository-" + id, RepositoryType.HOSTED))
+        .toList();
+    when(repositories.list()).thenReturn(manyRepositories);
+
+    var page = service.repositoryPage(actor, null, 0, 10);
+
+    assertEquals(10, page.items().size());
+    ArgumentCaptor<List<Long>> configScope = ArgumentCaptor.forClass(List.class);
+    verify(scans).findRepositoryConfigs(configScope.capture());
+    assertEquals(11, configScope.getValue().size());
+    verify(scans, never()).findRepositoryConfig(anyLong());
+
+    service.taskPage(actor, null, null, null, 0, 10);
+    ArgumentCaptor<List<Long>> taskScope = ArgumentCaptor.forClass(List.class);
+    verify(scans).listTasksByRepositories(
+        taskScope.capture(),
+        eq(null),
+        eq(null),
+        eq(0L),
+        eq(11));
+    assertEquals(300, taskScope.getValue().size());
+    assertEquals(
+        manyRepositories.stream()
+            .map(RepositoryRecord::id)
+            .collect(java.util.stream.Collectors.toSet()),
+        Set.copyOf(taskScope.getValue()));
   }
 
   @Test
@@ -226,6 +260,14 @@ class SecurityScanManagementServiceCoreTest {
           value.revision() + 10, value.name(), value.enabled(), value.blockSeverity(),
           value.onlyFixable(), value.blockUnknownSeverity(), value.requireCompleteInventory(),
           value.maxResultAgeSeconds(), value.requiredPlatforms(), value.revision(),
+          value.createdBy(), value.createdAt(), value.updatedAt());
+    });
+    when(scans.createNextPolicyRevision(any())).thenAnswer(invocation -> {
+      ScanPolicy value = invocation.getArgument(0);
+      return new ScanPolicy(
+          12L, value.name(), value.enabled(), value.blockSeverity(),
+          value.onlyFixable(), value.blockUnknownSeverity(), value.requireCompleteInventory(),
+          value.maxResultAgeSeconds(), value.requiredPlatforms(), 2,
           value.createdBy(), value.createdAt(), value.updatedAt());
     });
     PolicyCommand create = new PolicyCommand(

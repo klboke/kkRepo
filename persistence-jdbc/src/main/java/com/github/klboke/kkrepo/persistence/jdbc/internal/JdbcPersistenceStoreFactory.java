@@ -79,7 +79,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
         new JdbcRepositoryIndexRebuildDao(jdbc, dialect),
         new JdbcSecurityAuditDao(jdbc, json),
         new JdbcSecurityDao(jdbc, json, dialect),
-        new JdbcSecurityScanDao(jdbc, json),
+        new JdbcSecurityScanDao(jdbc, json, dialect),
         new JdbcSwiftRegistryDao(jdbc, json, dialect),
         new JdbcTerraformRegistryDao(jdbc),
         new JdbcUiSettingsDao(jdbc));

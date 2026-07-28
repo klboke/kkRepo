@@ -21,6 +21,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.RequestReason;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanCompleteness;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanStage;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanState;
@@ -375,7 +376,8 @@ public class SecurityScanExecutor {
         snapshot.engineVersion(),
         snapshot.vulnerabilityDatabaseRevision(),
         profile.configurationDigest());
-    ScanRun reusable = scans.findRunByMatchFingerprint(expectedFingerprint).orElse(null);
+    String reusableFingerprint = matchFingerprint(task, expectedFingerprint);
+    ScanRun reusable = scans.findRunByMatchFingerprint(reusableFingerprint).orElse(null);
     if (reusable != null) {
       return finalizer.finalizeRun(
           task, profile, config, subject.identity(), reusable, List.of());
@@ -414,7 +416,7 @@ public class SecurityScanExecutor {
     ScannerSnapshot actualSnapshot = snapshots.snapshotFor(response);
     List<String> scannedPlatforms = stringList(response.summary().get("scannedPlatforms"));
     List<String> missingPlatforms = stringList(response.summary().get("missingPlatforms"));
-    String fingerprint = ScanFingerprints.match(
+    String fingerprint = matchFingerprint(task, ScanFingerprints.match(
         sbom.documentSha256(),
         sbom.inventoryComplete(),
         response.engineName(),
@@ -422,7 +424,7 @@ public class SecurityScanExecutor {
         response.vulnerabilityDatabaseRevision(),
         profile.configurationDigest(),
         scannedPlatforms,
-        missingPlatforms);
+        missingPlatforms));
     ScanRun reusable = scans.findRunByMatchFingerprint(fingerprint).orElse(null);
     if (reusable != null) {
       return finalizer.finalizeRun(
@@ -474,6 +476,14 @@ public class SecurityScanExecutor {
         .toList();
     return finalizer.finalizeRun(
         task, profile, config, subject.identity(), proposed, findings);
+  }
+
+  private static String matchFingerprint(ScanTask task, String baseFingerprint) {
+    if (task.requestReason() != RequestReason.MAX_AGE_EXPIRED) {
+      return baseFingerprint;
+    }
+    return ScanFingerprints.sha256(
+        "max-age-refresh", baseFingerprint, Long.toString(task.id()));
   }
 
   private static List<String> stringList(Object value) {

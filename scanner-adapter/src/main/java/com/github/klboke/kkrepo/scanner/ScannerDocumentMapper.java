@@ -30,7 +30,24 @@ import java.util.Set;
 /** Maps third-party JSON into the bounded, engine-neutral kkRepo contract. */
 @org.springframework.stereotype.Component
 public class ScannerDocumentMapper {
-  private static final int MAX_FIELD = 16_384;
+  private static final int MAX_JSON_FIELD = 16_384;
+  private static final int MAX_ENGINE_VERSION = 128;
+  private static final int MAX_DATABASE_REVISION = 255;
+  private static final int MAX_SPEC_VERSION = 32;
+  private static final int MAX_COMPONENT_REF = 1_024;
+  private static final int MAX_PACKAGE_URL = 2_048;
+  private static final int MAX_COMPONENT_TYPE = 64;
+  private static final int MAX_COMPONENT_NAMESPACE = 512;
+  private static final int MAX_COMPONENT_NAME = 512;
+  private static final int MAX_COMPONENT_VERSION = 512;
+  private static final int MAX_ADVISORY_ID = 255;
+  private static final int MAX_DATA_SOURCE = 2_048;
+  private static final int MAX_PACKAGE_NAME = 512;
+  private static final int MAX_INSTALLED_VERSION = 512;
+  private static final int MAX_CVSS_VECTOR = 255;
+  private static final int MAX_TITLE = 1_024;
+  private static final int MAX_SOURCE_STATUS = 64;
+  private static final int MAX_DESCRIPTION_UTF8_BYTES = 65_535;
   private static final int MAX_LIST_ITEMS = 100_000;
 
   private final ObjectMapper mapper;
@@ -92,7 +109,7 @@ public class ScannerDocumentMapper {
           nodes.size() > components.size()
               ? ScanCompleteness.PARTIAL : ScanCompleteness.COMPLETE,
           "CycloneDX",
-          bounded(text(root, "specVersion")),
+          bounded(text(root, "specVersion"), MAX_SPEC_VERSION),
           nodes.isArray() ? nodes.size() : 0,
           dependencyCount,
           cyclonedx,
@@ -222,7 +239,9 @@ public class ScannerDocumentMapper {
     try {
       JsonNode root = mapper.readTree(json);
       String version = firstText(root, "version", "Version", "applicationVersion");
-      return new EngineVersion(fallbackName, version == null ? "unknown" : bounded(version));
+      return new EngineVersion(
+          fallbackName,
+          version == null ? "unknown" : bounded(version, MAX_ENGINE_VERSION));
     } catch (IOException e) {
       throw invalid("SCANNER_VERSION_INVALID", "Scanner version output was invalid", e);
     }
@@ -239,7 +258,8 @@ public class ScannerDocumentMapper {
       Instant updatedAt = firstInstant(
           root, "built", "updatedAt", "updated", "createdAt", "lastUpdate");
       if (updatedAt == null) updatedAt = Instant.EPOCH;
-      return new DatabaseProvenance(bounded(revision), updatedAt);
+      return new DatabaseProvenance(
+          bounded(revision, MAX_DATABASE_REVISION), updatedAt);
     } catch (IOException e) {
       throw invalid("GRYPE_DATABASE_STATUS_INVALID", "Grype database status was invalid", e);
     }
@@ -247,7 +267,7 @@ public class ScannerDocumentMapper {
 
   private Component component(JsonNode node) {
     String ref = componentRef(node);
-    String name = bounded(text(node, "name"));
+    String name = bounded(text(node, "name"), MAX_COMPONENT_NAME);
     if (name == null || name.isBlank()) name = "unknown";
     List<String> locations = new ArrayList<>();
     JsonNode occurrences = node.path("evidence").path("occurrences");
@@ -274,11 +294,11 @@ public class ScannerDocumentMapper {
     }
     return new Component(
         ref,
-        bounded(text(node, "purl")),
-        bounded(text(node, "type")),
-        bounded(text(node, "group")),
+        bounded(text(node, "purl"), MAX_PACKAGE_URL),
+        bounded(text(node, "type"), MAX_COMPONENT_TYPE),
+        bounded(text(node, "group"), MAX_COMPONENT_NAMESPACE),
         name,
-        bounded(text(node, "version")),
+        bounded(text(node, "version"), MAX_COMPONENT_VERSION),
         directness(node),
         locations,
         licenses,
@@ -288,10 +308,12 @@ public class ScannerDocumentMapper {
   private Finding finding(JsonNode match) {
     JsonNode vulnerability = match.path("vulnerability");
     JsonNode artifact = match.path("artifact");
-    String advisory = bounded(text(vulnerability, "id"));
-    String purl = bounded(text(artifact, "purl"));
-    String packageName = bounded(text(artifact, "name"));
-    String installedVersion = bounded(text(artifact, "version"));
+    String advisory = bounded(text(vulnerability, "id"), MAX_ADVISORY_ID);
+    String purl = bounded(text(artifact, "purl"), MAX_PACKAGE_URL);
+    String packageName = bounded(text(artifact, "name"), MAX_PACKAGE_NAME);
+    if (packageName == null || packageName.isBlank()) packageName = "unknown";
+    String installedVersion =
+        bounded(text(artifact, "version"), MAX_INSTALLED_VERSION);
     List<String> aliases = new ArrayList<>();
     for (JsonNode related : match.path("relatedVulnerabilities")) {
       addBounded(aliases, text(related, "id"));
@@ -315,20 +337,29 @@ public class ScannerDocumentMapper {
         findingKey,
         advisory == null ? "UNKNOWN" : advisory,
         aliases,
-        bounded(firstText(vulnerability, "dataSource", "namespace")),
+        bounded(
+            firstText(vulnerability, "dataSource", "namespace"),
+            MAX_DATA_SOURCE),
         purl,
         packageName,
         installedVersion,
         fixed,
         Severity.normalize(text(vulnerability, "severity")),
         "grype",
-        cvss.vector(),
+        bounded(cvss.vector(), MAX_CVSS_VECTOR),
         cvss.score(),
-        bounded(firstText(vulnerability, "description", "id")),
-        bounded(text(vulnerability, "description")),
-        urls.isEmpty() ? null : urls.getFirst(),
+        bounded(
+            firstText(vulnerability, "description", "id"),
+            MAX_TITLE),
+        boundedUtf8(
+            text(vulnerability, "description"),
+            MAX_DESCRIPTION_UTF8_BYTES),
+        urls.isEmpty()
+            ? null : bounded(urls.getFirst(), MAX_PACKAGE_URL),
         locations,
-        bounded(text(vulnerability.path("fix"), "state")));
+        bounded(
+            text(vulnerability.path("fix"), "state"),
+            MAX_SOURCE_STATUS));
   }
 
   private static Cvss bestCvss(JsonNode values) {
@@ -352,7 +383,7 @@ public class ScannerDocumentMapper {
   }
 
   private static String componentRef(JsonNode node) {
-    String ref = bounded(text(node, "bom-ref"));
+    String ref = bounded(text(node, "bom-ref"), MAX_COMPONENT_REF);
     if (ref != null && !ref.isBlank()) return ref;
     return "urn:kkrepo:component:" + sha256(String.join("\0",
         value(text(node, "purl")),
@@ -419,9 +450,31 @@ public class ScannerDocumentMapper {
   }
 
   private static String bounded(String value) {
+    return bounded(value, MAX_JSON_FIELD);
+  }
+
+  private static String bounded(String value, int maxCodePoints) {
     if (value == null) return null;
     String sanitized = value.replace("\0", "");
-    return sanitized.length() <= MAX_FIELD ? sanitized : sanitized.substring(0, MAX_FIELD);
+    int codePoints = sanitized.codePointCount(0, sanitized.length());
+    if (codePoints <= maxCodePoints) return sanitized;
+    return sanitized.substring(0, sanitized.offsetByCodePoints(0, maxCodePoints));
+  }
+
+  private static String boundedUtf8(String value, int maxBytes) {
+    if (value == null) return null;
+    String sanitized = value.replace("\0", "");
+    int bytes = 0;
+    int end = 0;
+    while (end < sanitized.length()) {
+      int codePoint = sanitized.codePointAt(end);
+      int codePointBytes = codePoint <= 0x7f
+          ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+      if (bytes + codePointBytes > maxBytes) break;
+      bytes += codePointBytes;
+      end += Character.charCount(codePoint);
+    }
+    return end == sanitized.length() ? sanitized : sanitized.substring(0, end);
   }
 
   private static String value(String value) {

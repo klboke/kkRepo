@@ -12,6 +12,8 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.EnumColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcInserts;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseType;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.BackfillStatus;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.EnforcementMode;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.OciPlatformPolicy;
@@ -50,6 +52,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
 
   private final JdbcTemplate jdbc;
   private final BlobReferenceDao blobReferences;
+  private final DatabaseType databaseType;
   // Row mappers are constructed before the constructor body and dereference this field only when
   // a query executes, after construction has completed.
   private JsonColumns json;
@@ -442,10 +445,12 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       nullableInstant(rs, "updated_at"),
       nullableInstant(rs, "completed_at"));
 
-  public JdbcSecurityScanDao(JdbcTemplate jdbc, JsonColumns json) {
+  public JdbcSecurityScanDao(
+      JdbcTemplate jdbc, JsonColumns json, DatabaseDialect databaseDialect) {
     this.jdbc = jdbc;
     this.json = json;
     this.blobReferences = new JdbcBlobReferenceDao(jdbc);
+    this.databaseType = databaseDialect.type();
   }
 
   @Override
@@ -497,6 +502,22 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         "SELECT * FROM repository_security_scan_config WHERE repository_id = ?",
         configMapper,
         repositoryId).stream().findFirst();
+  }
+
+  @Override
+  public List<RepositoryScanConfig> findRepositoryConfigs(List<Long> repositoryIds) {
+    List<Long> ids = distinctLongs(repositoryIds);
+    if (ids.isEmpty()) return List.of();
+    return jdbc.query(
+        repositoryScopeCte() + """
+        SELECT config.*
+        FROM repository_security_scan_config config
+        JOIN visible_repository visible
+          ON visible.repository_id = config.repository_id
+        ORDER BY config.repository_id
+        """,
+        configMapper,
+        repositoryScopeParameter(ids));
   }
 
   @Override
@@ -945,8 +966,35 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       String query,
       long afterId,
       int maxItems) {
+    return listTasks(repositoryId, null, status, query, afterId, maxItems);
+  }
+
+  @Override
+  public List<ScanTask> listTasksByRepositories(
+      List<Long> repositoryIds,
+      TaskStatus status,
+      String query,
+      long afterId,
+      int maxItems) {
+    List<Long> ids = distinctLongs(repositoryIds);
+    if (ids.isEmpty()) return List.of();
+    return listTasks(null, ids, status, query, afterId, maxItems);
+  }
+
+  private List<ScanTask> listTasks(
+      Long repositoryId,
+      List<Long> repositoryIds,
+      TaskStatus status,
+      String query,
+      long afterId,
+      int maxItems) {
     List<Object> args = new ArrayList<>();
-    StringBuilder sql = new StringBuilder("""
+    StringBuilder sql = new StringBuilder();
+    if (repositoryIds != null) {
+      sql.append(repositoryScopeCte());
+      args.add(repositoryScopeParameter(repositoryIds));
+    }
+    sql.append("""
         SELECT t.*
         FROM security_scan_task t
         JOIN repository r ON r.id = t.repository_id
@@ -957,6 +1005,14 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     if (repositoryId != null) {
       sql.append(" AND t.repository_id = ?");
       args.add(repositoryId);
+    } else if (repositoryIds != null) {
+      sql.append("""
+           AND EXISTS (
+             SELECT 1
+             FROM visible_repository visible
+             WHERE visible.repository_id = t.repository_id
+           )
+          """);
     }
     if (status != null) {
       sql.append(" AND t.status = ?");
@@ -1472,12 +1528,34 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Override
   public List<ScanRun> listRuns(
       Long repositoryId, String query, long afterId, int maxItems) {
-    StringBuilder sql = new StringBuilder("""
+    return listRuns(repositoryId, null, query, afterId, maxItems);
+  }
+
+  @Override
+  public List<ScanRun> listRunsByRepositories(
+      List<Long> repositoryIds, String query, long afterId, int maxItems) {
+    List<Long> ids = distinctLongs(repositoryIds);
+    if (ids.isEmpty()) return List.of();
+    return listRuns(null, ids, query, afterId, maxItems);
+  }
+
+  private List<ScanRun> listRuns(
+      Long repositoryId,
+      List<Long> repositoryIds,
+      String query,
+      long afterId,
+      int maxItems) {
+    StringBuilder sql = new StringBuilder();
+    List<Object> args = new ArrayList<>();
+    if (repositoryIds != null) {
+      sql.append(repositoryScopeCte());
+      args.add(repositoryScopeParameter(repositoryIds));
+    }
+    sql.append("""
         SELECT sr.*
         FROM security_scan_run sr
         WHERE sr.id > ?
         """);
-    List<Object> args = new ArrayList<>();
     args.add(Math.max(0, afterId));
     if (repositoryId != null) {
       sql.append("""
@@ -1487,6 +1565,16 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
            )
           """);
       args.add(repositoryId);
+    } else if (repositoryIds != null) {
+      sql.append("""
+           AND EXISTS (
+             SELECT 1
+             FROM security_scan_run_subject s
+             JOIN visible_repository visible
+               ON visible.repository_id = s.repository_id
+             WHERE s.scan_run_id = sr.id
+           )
+          """);
     }
     String pattern = searchPattern(query);
     if (pattern != null) {
@@ -1497,6 +1585,29 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
              OR LOWER(sr.max_severity) LIKE ? ESCAPE '!'
           """);
       addRepeated(args, pattern, 3);
+      sql.append("""
+             OR EXISTS (
+               SELECT 1
+               FROM security_scan_run_subject search_subject
+               JOIN repository search_repository
+                 ON search_repository.id = search_subject.repository_id
+          """);
+      if (repositoryIds != null) {
+        sql.append("""
+               JOIN visible_repository search_visible
+                 ON search_visible.repository_id = search_subject.repository_id
+          """);
+      }
+      sql.append("""
+               WHERE search_subject.scan_run_id = sr.id
+                 AND LOWER(search_repository.name) LIKE ? ESCAPE '!'
+          """);
+      args.add(pattern);
+      if (repositoryId != null) {
+        sql.append(" AND search_subject.repository_id = ?");
+        args.add(repositoryId);
+      }
+      sql.append(")");
       Long numeric = numericSearch(query);
       if (numeric != null) {
         sql.append(" OR sr.id = ? OR sr.task_id = ? OR sr.sbom_id = ?");
@@ -1677,12 +1788,42 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       String query,
       long afterId,
       int maxItems) {
-    StringBuilder sql = new StringBuilder("""
+    return listFindings(
+        repositoryId, null, scanRunId, severity, query, afterId, maxItems);
+  }
+
+  @Override
+  public List<ScanFinding> listFindingsByRepositories(
+      List<Long> repositoryIds,
+      Long scanRunId,
+      Severity severity,
+      String query,
+      long afterId,
+      int maxItems) {
+    List<Long> ids = distinctLongs(repositoryIds);
+    if (ids.isEmpty()) return List.of();
+    return listFindings(null, ids, scanRunId, severity, query, afterId, maxItems);
+  }
+
+  private List<ScanFinding> listFindings(
+      Long repositoryId,
+      List<Long> repositoryIds,
+      Long scanRunId,
+      Severity severity,
+      String query,
+      long afterId,
+      int maxItems) {
+    StringBuilder sql = new StringBuilder();
+    List<Object> args = new ArrayList<>();
+    if (repositoryIds != null) {
+      sql.append(repositoryScopeCte());
+      args.add(repositoryScopeParameter(repositoryIds));
+    }
+    sql.append("""
         SELECT f.*
         FROM security_scan_finding f
         WHERE f.id > ?
         """);
-    List<Object> args = new ArrayList<>();
     args.add(Math.max(0, afterId));
     if (repositoryId != null) {
       sql.append("""
@@ -1692,6 +1833,16 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
            )
           """);
       args.add(repositoryId);
+    } else if (repositoryIds != null) {
+      sql.append("""
+           AND EXISTS (
+             SELECT 1
+             FROM security_scan_run_subject s
+             JOIN visible_repository visible
+               ON visible.repository_id = s.repository_id
+             WHERE s.scan_run_id = f.scan_run_id
+           )
+          """);
     }
     if (scanRunId != null) {
       sql.append(" AND f.scan_run_id = ?");
@@ -1715,6 +1866,29 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
              OR LOWER(COALESCE(f.source_status, '')) LIKE ? ESCAPE '!'
           """);
       addRepeated(args, pattern, 8);
+      sql.append("""
+             OR EXISTS (
+               SELECT 1
+               FROM security_scan_run_subject search_subject
+               JOIN repository search_repository
+                 ON search_repository.id = search_subject.repository_id
+          """);
+      if (repositoryIds != null) {
+        sql.append("""
+               JOIN visible_repository search_visible
+                 ON search_visible.repository_id = search_subject.repository_id
+          """);
+      }
+      sql.append("""
+               WHERE search_subject.scan_run_id = f.scan_run_id
+                 AND LOWER(search_repository.name) LIKE ? ESCAPE '!'
+          """);
+      args.add(pattern);
+      if (repositoryId != null) {
+        sql.append(" AND search_subject.repository_id = ?");
+        args.add(repositoryId);
+      }
+      sql.append(")");
       Long numeric = numericSearch(query);
       if (numeric != null) {
         sql.append(" OR f.id = ? OR f.scan_run_id = ?");
@@ -1966,6 +2140,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
                s.latest_scan_run_id,
                s.scan_state,
                COALESCE(ps.version, 0) AS policy_state_version,
+               ps.stale_at,
                ps.next_waiver_expiry,
                waiver_revision.current_revision AS waiver_revision
         FROM asset a
@@ -1993,6 +2168,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
                 OR ps.latest_scan_run_id <> s.latest_scan_run_id
                 OR ps.config_revision <> ?
                 OR ps.waiver_revision < waiver_revision.global_invalidation_revision
+                OR (ps.stale_at IS NOT NULL AND ps.stale_at <= ?)
         """);
     List<Object> args = new ArrayList<>();
     args.add(profileId);
@@ -2001,6 +2177,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     args.add(sourceRepositoryId);
     args.add(Math.max(0, afterAssetId));
     args.add(configRevision);
+    args.add(nullableTimestamp(requiredNow(evaluatedAt)));
     if (policyId == null) {
       sql.append("""
                 OR ps.policy_id IS NOT NULL
@@ -2035,6 +2212,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         rs.getString("scan_state") == null
             ? null : enumValue(ScanState.class, rs.getString("scan_state")),
         rs.getLong("policy_state_version"),
+        nullableInstant(rs, "stale_at"),
         nullableInstant(rs, "next_waiver_expiry"),
         rs.getLong("waiver_revision")), args.toArray());
   }
@@ -2145,6 +2323,50 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       ps.setTimestamp(12, nullableTimestamp(policy.updatedAt()));
     });
     return findPolicy(id).orElseThrow();
+  }
+
+  @Override
+  @Transactional
+  public ScanPolicy createNextPolicyRevision(ScanPolicy policy) {
+    jdbc.query("""
+        SELECT id
+        FROM security_scan_policy
+        WHERE name = ?
+        ORDER BY id
+        LIMIT 1
+        FOR UPDATE
+        """, (rs, rowNum) -> rs.getLong("id"), policy.name())
+        .stream()
+        .findFirst()
+        .orElseThrow(() ->
+            new IllegalStateException("Security scan policy root no longer exists"));
+    Long currentRevision = jdbc.query("""
+        SELECT revision
+        FROM security_scan_policy
+        WHERE name = ?
+        ORDER BY revision DESC, id DESC
+        LIMIT 1
+        FOR UPDATE
+        """, (rs, rowNum) -> rs.getLong("revision"), policy.name())
+        .stream()
+        .findFirst()
+        .orElseThrow(() ->
+            new IllegalStateException("Security scan policy head no longer exists"));
+    long revision = Math.addExact(currentRevision, 1);
+    return createPolicy(new ScanPolicy(
+        null,
+        policy.name(),
+        policy.enabled(),
+        policy.blockSeverity(),
+        policy.onlyFixable(),
+        policy.blockUnknownSeverity(),
+        policy.requireCompleteInventory(),
+        policy.maxResultAgeSeconds(),
+        policy.requiredPlatforms(),
+        revision,
+        policy.createdBy(),
+        policy.createdAt(),
+        policy.updatedAt()));
   }
 
   @Override
@@ -2769,6 +2991,32 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
             .toList();
   }
 
+  /**
+   * Materializes an authorization-filtered repository scope from one JSON bind value. This avoids
+   * both one query per repository and database parameter-limit failures for large installations.
+   */
+  private String repositoryScopeCte() {
+    return databaseType == DatabaseType.POSTGRESQL
+        ? """
+          WITH visible_repository AS (
+            SELECT CAST(value AS BIGINT) AS repository_id
+            FROM jsonb_array_elements_text(CAST(? AS jsonb)) AS scope(value)
+          )
+          """
+        : """
+          WITH visible_repository AS (
+            SELECT repository_id
+            FROM JSON_TABLE(
+              ?, '$[*]' COLUMNS (repository_id BIGINT PATH '$')
+            ) AS scope
+          )
+          """;
+  }
+
+  private Object repositoryScopeParameter(List<Long> repositoryIds) {
+    return json.serializedParameter(json.writeValue(distinctLongs(repositoryIds)));
+  }
+
   private static List<String> distinctStrings(List<String> values, boolean lowercase) {
     return values == null
         ? List.of()
@@ -2821,16 +3069,15 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     if (ids.isEmpty()) {
       return new ScanSummary(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     }
-    String placeholders = String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
-    Object[] repositoryArgs = ids.toArray();
-    long candidates = count("""
+    Object repositoryScope = repositoryScopeParameter(ids);
+    long candidates = count(repositoryScopeCte() + """
         SELECT COUNT(*)
         FROM security_scan_candidate candidate
         JOIN asset asset ON asset.id = candidate.asset_id
-        WHERE asset.repository_id IN (%s)
-          AND candidate.pending = TRUE
-        """.formatted(placeholders), repositoryArgs);
-    Map<String, Object> tasks = jdbc.queryForMap("""
+        JOIN visible_repository visible ON visible.repository_id = asset.repository_id
+        WHERE candidate.pending = TRUE
+        """, repositoryScope);
+    Map<String, Object> tasks = jdbc.queryForMap(repositoryScopeCte() + """
         SELECT
           COALESCE(SUM(CASE WHEN status IN ('PENDING', 'RETRY_WAIT') THEN 1 ELSE 0 END), 0)
             AS pending_tasks,
@@ -2838,11 +3085,11 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
             AS running_tasks,
           COALESCE(SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END), 0)
             AS failed_tasks
-        FROM security_scan_task
-        WHERE repository_id IN (%s)
-          AND status IN ('PENDING', 'RETRY_WAIT', 'RUNNING', 'FAILED')
-        """.formatted(placeholders), repositoryArgs);
-    Map<String, Object> states = jdbc.queryForMap("""
+        FROM security_scan_task task
+        JOIN visible_repository visible ON visible.repository_id = task.repository_id
+        WHERE status IN ('PENDING', 'RETRY_WAIT', 'RUNNING', 'FAILED')
+        """, repositoryScope);
+    Map<String, Object> states = jdbc.queryForMap(repositoryScopeCte() + """
         SELECT
           COALESCE(SUM(CASE WHEN state.scan_state = 'COMPLETE' THEN 1 ELSE 0 END), 0)
             AS complete_assets,
@@ -2853,9 +3100,9 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
           COALESCE(SUM(CASE WHEN state.policy_decision <> 'ALLOW' THEN 1 ELSE 0 END), 0)
             AS blocked_assets
         FROM asset_security_state state
-        WHERE state.repository_id IN (%s)
-        """.formatted(placeholders), repositoryArgs);
-    Map<String, Object> findings = jdbc.queryForMap("""
+        JOIN visible_repository visible ON visible.repository_id = state.repository_id
+        """, repositoryScope);
+    Map<String, Object> findings = jdbc.queryForMap(repositoryScopeCte() + """
         SELECT
           COALESCE(SUM(CASE WHEN finding.severity = 'CRITICAL' THEN 1 ELSE 0 END), 0)
             AS critical_findings,
@@ -2866,10 +3113,11 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
           AND EXISTS (
             SELECT 1
             FROM security_scan_run_subject subject
+            JOIN visible_repository visible
+              ON visible.repository_id = subject.repository_id
             WHERE subject.scan_run_id = finding.scan_run_id
-              AND subject.repository_id IN (%s)
           )
-        """.formatted(placeholders), repositoryArgs);
+        """, repositoryScope);
     return new ScanSummary(
         candidates,
         number(tasks, "pending_tasks"),

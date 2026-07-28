@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -36,6 +37,7 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.CandidateDisposition;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.EnforcementMode;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.OciPlatformPolicy;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyAction;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.RequestReason;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanCompleteness;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanStage;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanState;
@@ -110,6 +112,38 @@ class SecurityScanExecutorTest {
             "sha256:" + SHA256,
             prior,
             List.of());
+  }
+
+  @Test
+  void refreshesExpiredMatchResultsInsteadOfReusingTheirCompletionTime() throws Exception {
+    Fixture fixture = new Fixture(ScanStage.MATCH_ONLY, SubjectKind.ASSET_BLOB);
+    Sbom sbom = storedSbom();
+    ScanRun prior = storedRun(88L, sbom.id());
+    AssetSecurityState state = mock(AssetSecurityState.class);
+    when(state.latestScanRunId()).thenReturn(prior.id());
+    when(fixture.task.requestReason()).thenReturn(RequestReason.MAX_AGE_EXPIRED);
+    when(fixture.scans.findAssetState(10L, 1L)).thenReturn(Optional.of(state));
+    when(fixture.scans.findRun(prior.id())).thenReturn(Optional.of(prior));
+    when(fixture.scans.findSbom(sbom.id())).thenReturn(Optional.of(sbom));
+    when(fixture.adapter.match(any(), any())).thenReturn(matchResponse());
+
+    String baseFingerprint = ScanFingerprints.match(
+        sbom.documentSha256(),
+        sbom.inventoryComplete(),
+        fixture.profile.matcherEngine(),
+        fixture.snapshot.engineVersion(),
+        fixture.snapshot.vulnerabilityDatabaseRevision(),
+        fixture.profile.configurationDigest());
+    String refreshFingerprint =
+        ScanFingerprints.sha256("max-age-refresh", baseFingerprint, "5");
+    when(fixture.scans.findRunByMatchFingerprint(baseFingerprint))
+        .thenReturn(Optional.of(prior));
+
+    ScanRun refreshed = fixture.executor.execute(fixture.task);
+
+    assertEquals(refreshFingerprint, refreshed.matchFingerprint());
+    verify(fixture.adapter).match(any(), any());
+    verify(fixture.scans, times(2)).findRunByMatchFingerprint(refreshFingerprint);
   }
 
   @Test

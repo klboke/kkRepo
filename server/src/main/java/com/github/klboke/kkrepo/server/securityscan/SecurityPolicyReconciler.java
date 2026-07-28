@@ -154,7 +154,11 @@ public class SecurityPolicyReconciler {
         && target.latestScanRunId() != null
         && target.stateContentGeneration() != null
         && target.stateContentGeneration() == target.contentGeneration();
-    ScanStage stage = reusableRun ? ScanStage.POLICY_ONLY : ScanStage.CATALOG_AND_MATCH;
+    boolean resultAgeExpired =
+        target.staleAt() != null && !target.staleAt().isAfter(now);
+    ScanStage stage = resultAgeExpired
+        ? ScanStage.MATCH_ONLY
+        : reusableRun ? ScanStage.POLICY_ONLY : ScanStage.CATALOG_AND_MATCH;
     String requestUuid = requestUuid(context, profile, target, stage);
     String subjectKey = "sha256:" + content.blob().sha256();
     scans.createTask(new TaskDraft(
@@ -168,7 +172,7 @@ public class SecurityPolicyReconciler {
         stage == ScanStage.POLICY_ONLY
             ? null : scans.latestScannerSnapshot().map(SecurityScanDao.ScannerSnapshot::id).orElse(null),
         stage,
-        RequestReason.POLICY_CHANGED,
+        resultAgeExpired ? RequestReason.MAX_AGE_EXPIRED : RequestReason.POLICY_CHANGED,
         20,
         properties.getWorker().getMaxAttempts(),
         "security-policy-reconciler",
@@ -243,6 +247,7 @@ public class SecurityPolicyReconciler {
     parts.add(Long.toString(target.contentGeneration()));
     parts.add(Long.toString(target.policyStateVersion()));
     parts.add(Long.toString(target.waiverRevision()));
+    parts.add(target.staleAt() == null ? "" : target.staleAt().toString());
     parts.add(target.nextWaiverExpiry() == null ? "" : target.nextWaiverExpiry().toString());
     parts.add(stage.name());
     return UUID.nameUUIDFromBytes(

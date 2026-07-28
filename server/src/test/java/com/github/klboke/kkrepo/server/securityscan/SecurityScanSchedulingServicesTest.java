@@ -31,6 +31,7 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.CandidateDisposition;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.EnforcementMode;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.OciPlatformPolicy;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyAction;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.RequestReason;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanCompleteness;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanStage;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanState;
@@ -299,17 +300,27 @@ class SecurityScanSchedulingServicesTest {
     when(scans.listProfiles()).thenReturn(List.of(profile, profile(4L, false)));
     AssetSecurityState valid = state(11L, 3L, 1L, 5L);
     AssetSecurityState noRun = state(12L, 3L, 1L, null);
+    AssetSecurityState sameDigest = state(13L, 3L, 1L, 6L);
     when(scans.listAssetStatesNeedingSnapshot(3L, 2L, 0L, 10))
-        .thenReturn(List.of(valid, noRun));
+        .thenReturn(List.of(valid, noRun, sameDigest));
     AssetWithBlob currentContent = content(11, 7, 21);
+    AssetWithBlob sameDigestContent = content(13, 7, 23);
     when(assets.findAssetWithBlobById(11L)).thenReturn(Optional.of(currentContent));
+    when(assets.findAssetWithBlobById(13L)).thenReturn(Optional.of(sameDigestContent));
     when(scans.findCandidate(11L))
         .thenReturn(Optional.of(new ScanCandidate(11, 21L, 1, 0, Instant.now(), Instant.now())));
+    when(scans.findCandidate(13L))
+        .thenReturn(Optional.of(new ScanCandidate(13, 23L, 1, 0, Instant.now(), Instant.now())));
 
     watcher.reconcile();
 
     verify(scans).markAssetStateStale(eq(11L), eq(3L), eq(5L), any());
-    verify(scans).createTask(any(TaskDraft.class));
+    ArgumentCaptor<TaskDraft> snapshotDrafts = ArgumentCaptor.forClass(TaskDraft.class);
+    verify(scans, org.mockito.Mockito.times(2)).createTask(snapshotDrafts.capture());
+    assertNotEquals(
+        snapshotDrafts.getAllValues().getFirst().requestUuid(),
+        snapshotDrafts.getAllValues().getLast().requestUuid(),
+        "same-digest assets must retain distinct durable rematch identities");
     verify(audit).recordSystem(
         eq("SCANNER_SNAPSHOT_CHANGED"), eq(null), any());
 
@@ -362,18 +373,35 @@ class SecurityScanSchedulingServicesTest {
     PolicyEvaluationTarget reusableAfterWaiver =
         new PolicyEvaluationTarget(
             11, 7, 1, 1L, 44L, ScanState.COMPLETE, 3, now.plusSeconds(30), 5);
+    PolicyEvaluationTarget ageExpired =
+        new PolicyEvaluationTarget(
+            11,
+            7,
+            1,
+            1L,
+            44L,
+            ScanState.COMPLETE,
+            3,
+            now.minusSeconds(1),
+            null,
+            5);
     reconciler.reconcile(context, profile, fresh, now);
     reconciler.reconcile(context, profile, reusable, now);
     reconciler.reconcile(context, profile, reusableAfterWaiver, now);
+    reconciler.reconcile(context, profile, ageExpired, now);
 
     ArgumentCaptor<TaskDraft> drafts = ArgumentCaptor.forClass(TaskDraft.class);
-    verify(scans, org.mockito.Mockito.times(3)).createTask(drafts.capture());
+    verify(scans, org.mockito.Mockito.times(4)).createTask(drafts.capture());
     assertEquals(ScanStage.CATALOG_AND_MATCH, drafts.getAllValues().getFirst().stage());
     assertEquals(ScanStage.POLICY_ONLY, drafts.getAllValues().get(1).stage());
-    assertEquals(ScanStage.POLICY_ONLY, drafts.getAllValues().getLast().stage());
+    assertEquals(ScanStage.POLICY_ONLY, drafts.getAllValues().get(2).stage());
+    assertEquals(ScanStage.MATCH_ONLY, drafts.getAllValues().getLast().stage());
+    assertEquals(
+        RequestReason.MAX_AGE_EXPIRED,
+        drafts.getAllValues().getLast().requestReason());
     assertNotEquals(
         drafts.getAllValues().get(1).requestUuid(),
-        drafts.getAllValues().getLast().requestUuid());
+        drafts.getAllValues().get(2).requestUuid());
   }
 
   @Test
