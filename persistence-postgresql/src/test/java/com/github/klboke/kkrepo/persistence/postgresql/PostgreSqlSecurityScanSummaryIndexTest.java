@@ -41,6 +41,11 @@ class PostgreSqlSecurityScanSummaryIndexTest extends PostgreSqlIntegrationTestSu
             + "USING btree (severity, scan_run_id, id)",
         indexDefinition("idx_security_scan_finding_severity"));
     assertEquals(
+        "CREATE UNIQUE INDEX uk_security_scan_policy_name_revision "
+            + "ON public.security_scan_policy "
+            + "USING btree (name_normalized, revision)",
+        indexDefinition("uk_security_scan_policy_name_revision"));
+    assertEquals(
         "ALWAYS",
         jdbc().queryForObject("""
             SELECT is_generated

@@ -276,10 +276,18 @@ public interface SecurityScanDao {
   ScanPolicy createPolicy(ScanPolicy policy);
 
   /**
-   * Locks the durable head for {@link ScanPolicy#name()} and creates its next immutable revision.
-   * The caller-supplied revision is ignored.
+   * Atomically creates the first revision for a normalized policy name. Returns empty when another
+   * replica already created the same logical policy name.
    */
-  ScanPolicy createNextPolicyRevision(ScanPolicy policy);
+  Optional<ScanPolicy> createPolicyIfAbsent(ScanPolicy policy);
+
+  /**
+   * Locks the durable head for {@link ScanPolicy#name()} and creates its next immutable revision
+   * only when {@code expectedHeadPolicyId} is still current. The caller-supplied revision is
+   * ignored; empty means the client attempted to revise a stale head.
+   */
+  Optional<ScanPolicy> createNextPolicyRevision(
+      long expectedHeadPolicyId, ScanPolicy policy);
 
   /**
    * Moves repository configurations pinned to one immutable policy revision to its replacement.

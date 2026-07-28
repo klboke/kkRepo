@@ -56,6 +56,7 @@ CREATE TABLE security_scan_profile (
 CREATE TABLE security_scan_policy (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   name VARCHAR(128) NOT NULL,
+  name_normalized VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   block_severity VARCHAR(16) NOT NULL,
   only_fixable BOOLEAN NOT NULL DEFAULT FALSE,
@@ -68,7 +69,7 @@ CREATE TABLE security_scan_policy (
   created_at DATETIME(3) NOT NULL,
   updated_at DATETIME(3) NOT NULL,
   PRIMARY KEY (id),
-  CONSTRAINT uk_security_scan_policy_name_revision UNIQUE (name, revision),
+  CONSTRAINT uk_security_scan_policy_name_revision UNIQUE (name_normalized, revision),
   INDEX idx_security_scan_policy_active (enabled, name, revision)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -495,11 +496,12 @@ VALUES
    1, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3));
 
 INSERT INTO security_scan_policy
-  (id, name, enabled, block_severity, only_fixable, block_unknown_severity,
+  (id, name, name_normalized, enabled, block_severity, only_fixable,
+   block_unknown_severity,
    require_complete_inventory, max_result_age_seconds, required_platforms_json,
    revision, created_by, created_at, updated_at)
 VALUES
-  (1, 'default-audit', TRUE, 'CRITICAL', FALSE, FALSE, FALSE, 604800,
+  (1, 'default-audit', 'default-audit', TRUE, 'CRITICAL', FALSE, FALSE, FALSE, 604800,
    JSON_ARRAY('linux/amd64'), 1, 'system', CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3));
 
 INSERT INTO maintenance_cursor (task_name, last_seen_id)

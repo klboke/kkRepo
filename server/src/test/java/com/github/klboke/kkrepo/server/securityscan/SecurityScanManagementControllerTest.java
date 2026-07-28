@@ -2,8 +2,6 @@ package com.github.klboke.kkrepo.server.securityscan;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -31,9 +29,9 @@ class SecurityScanManagementControllerTest {
   @Test
   void delegatesEveryManagementEndpointAndBuildsMutationResponses() {
     SecurityScanManagementService service = mock(SecurityScanManagementService.class);
-    SecurityScanAuditService audit = mock(SecurityScanAuditService.class);
+    SecurityScanMutationService mutations = mock(SecurityScanMutationService.class);
     SecurityScanManagementController controller =
-        new SecurityScanManagementController(service, audit);
+        new SecurityScanManagementController(service, mutations);
     HttpServletRequest request = mock(HttpServletRequest.class);
     AuthenticatedSubject actor = mock(AuthenticatedSubject.class);
     when(request.getAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE)).thenReturn(actor);
@@ -50,7 +48,7 @@ class SecurityScanManagementControllerTest {
         .thenReturn(new CursorPage<>(List.of(), null));
     when(service.waiverPage(actor, 15L, "waiver", 16L, 17))
         .thenReturn(new CursorPage<>(List.of(), null));
-    when(service.rescan(actor, 18L)).thenReturn(180L);
+    when(mutations.rescan(request, actor, 18L)).thenReturn(180L);
 
     RepositoryScanConfig config = mock(RepositoryScanConfig.class);
     when(config.enabled()).thenReturn(true);
@@ -58,21 +56,22 @@ class SecurityScanManagementControllerTest {
     when(config.enforcementMode()).thenReturn(EnforcementMode.AUDIT);
     when(config.configRevision()).thenReturn(2L);
     ConfigCommand configCommand = mock(ConfigCommand.class);
-    when(service.updateRepositoryConfig(actor, 19L, configCommand)).thenReturn(config);
+    when(mutations.updateRepositoryConfig(request, actor, 19L, configCommand))
+        .thenReturn(config);
 
     ScanPolicy policy = mock(ScanPolicy.class);
     when(policy.id()).thenReturn(20L);
     when(policy.revision()).thenReturn(3L);
     PolicyCommand policyCommand = mock(PolicyCommand.class);
-    when(service.createPolicy(actor, policyCommand)).thenReturn(policy);
-    when(service.revisePolicy(actor, 21L, policyCommand)).thenReturn(policy);
+    when(mutations.createPolicy(request, actor, policyCommand)).thenReturn(policy);
+    when(mutations.revisePolicy(request, actor, 21L, policyCommand)).thenReturn(policy);
 
     ScanWaiver waiver = mock(ScanWaiver.class);
     when(waiver.id()).thenReturn(22L);
     when(waiver.scopeType()).thenReturn("FINDING");
     WaiverCommand waiverCommand = mock(WaiverCommand.class);
-    when(service.createWaiver(actor, waiverCommand)).thenReturn(waiver);
-    when(service.deleteWaiver(actor, 22L)).thenReturn(waiver);
+    when(mutations.createWaiver(request, actor, waiverCommand)).thenReturn(waiver);
+    when(mutations.deleteWaiver(request, actor, 22L)).thenReturn(waiver);
 
     SbomDownload download = mock(SbomDownload.class);
     when(download.input()).thenReturn(new ByteArrayInputStream("{}".getBytes()));
@@ -105,16 +104,14 @@ class SecurityScanManagementControllerTest {
         "application/vnd.cyclonedx+json",
         controller.sbom(23L, request).getHeaders().getContentType().toString());
 
-    verify(service).retry(actor, 26L);
-    verify(service).cancel(actor, 27L);
-    verify(audit, org.mockito.Mockito.atLeast(7))
-        .record(eq(request), eq(actor), any(), any(), any());
+    verify(mutations).retry(request, actor, 26L);
+    verify(mutations).cancel(request, actor, 27L);
   }
 
   @Test
   void rejectsRequestsWithoutAnAuthenticatedSubject() {
     SecurityScanManagementController controller = new SecurityScanManagementController(
-        mock(SecurityScanManagementService.class), mock(SecurityScanAuditService.class));
+        mock(SecurityScanManagementService.class), mock(SecurityScanMutationService.class));
     HttpServletRequest request = mock(HttpServletRequest.class);
 
     ResponseStatusException failure =

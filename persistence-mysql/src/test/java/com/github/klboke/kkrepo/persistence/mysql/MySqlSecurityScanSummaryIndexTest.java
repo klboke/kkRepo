@@ -36,6 +36,19 @@ class MySqlSecurityScanSummaryIndexTest extends MySqlIntegrationTestSupport {
     assertEquals(
         List.of("severity", "scan_run_id", "id"),
         indexColumns("security_scan_finding", "idx_security_scan_finding_severity"));
+    assertEquals(
+        List.of("name_normalized", "revision"),
+        indexColumns(
+            "security_scan_policy", "uk_security_scan_policy_name_revision"));
+    assertEquals(
+        0,
+        jdbc().queryForObject("""
+            SELECT MIN(non_unique)
+            FROM information_schema.statistics
+            WHERE table_schema = DATABASE()
+              AND table_name = 'security_scan_policy'
+              AND index_name = 'uk_security_scan_policy_name_revision'
+            """, Integer.class));
 
     String generated = jdbc().queryForObject("""
         SELECT extra

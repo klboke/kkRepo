@@ -44,12 +44,12 @@ public class SecurityScanManagementController {
       MediaType.parseMediaType("application/vnd.cyclonedx+json");
 
   private final SecurityScanManagementService service;
-  private final SecurityScanAuditService audit;
+  private final SecurityScanMutationService mutations;
 
   public SecurityScanManagementController(
-      SecurityScanManagementService service, SecurityScanAuditService audit) {
+      SecurityScanManagementService service, SecurityScanMutationService mutations) {
     this.service = service;
-    this.audit = audit;
+    this.mutations = mutations;
   }
 
   @GetMapping("/summary")
@@ -122,9 +122,7 @@ public class SecurityScanManagementController {
   public Map<String, Long> rescan(
       @PathVariable("assetId") long assetId, HttpServletRequest request) {
     AuthenticatedSubject actor = actor(request);
-    long taskId = service.rescan(actor, assetId);
-    audit.record(
-        request, actor, "RESCAN", null, Map.of("assetId", assetId, "taskId", taskId));
+    long taskId = mutations.rescan(request, actor, assetId);
     return Map.of("taskId", taskId);
   }
 
@@ -132,8 +130,7 @@ public class SecurityScanManagementController {
   public Map<String, Object> retry(
       @PathVariable("taskId") long taskId, HttpServletRequest request) {
     AuthenticatedSubject actor = actor(request);
-    service.retry(actor, taskId);
-    audit.record(request, actor, "RETRY", null, Map.of("taskId", taskId));
+    mutations.retry(request, actor, taskId);
     return Map.of("taskId", taskId, "status", "PENDING");
   }
 
@@ -141,8 +138,7 @@ public class SecurityScanManagementController {
   public Map<String, Object> cancel(
       @PathVariable("taskId") long taskId, HttpServletRequest request) {
     AuthenticatedSubject actor = actor(request);
-    service.cancel(actor, taskId);
-    audit.record(request, actor, "CANCEL", null, Map.of("taskId", taskId));
+    mutations.cancel(request, actor, taskId);
     return Map.of("taskId", taskId, "status", "CANCELLED");
   }
 
@@ -158,19 +154,8 @@ public class SecurityScanManagementController {
       @RequestBody ConfigCommand command,
       HttpServletRequest request) {
     AuthenticatedSubject actor = actor(request);
-    RepositoryScanConfig result =
-        service.updateRepositoryConfig(actor, repositoryId, command);
-    audit.record(
-        request,
-        actor,
-        "REPOSITORY_CONFIG",
-        repositoryId,
-        Map.of(
-            "enabled", result.enabled(),
-            "profileId", result.profileId(),
-            "enforcementMode", result.enforcementMode().name(),
-            "configRevision", result.configRevision()));
-    return result;
+    return mutations.updateRepositoryConfig(
+        request, actor, repositoryId, command);
   }
 
   @GetMapping("/policies")
@@ -186,14 +171,7 @@ public class SecurityScanManagementController {
   public ScanPolicy createPolicy(
       @RequestBody PolicyCommand command, HttpServletRequest request) {
     AuthenticatedSubject actor = actor(request);
-    ScanPolicy policy = service.createPolicy(actor, command);
-    audit.record(
-        request,
-        actor,
-        "POLICY_CREATE",
-        null,
-        Map.of("policyId", policy.id(), "policyRevision", policy.revision()));
-    return policy;
+    return mutations.createPolicy(request, actor, command);
   }
 
   @PutMapping("/policies/{policyId}")
@@ -202,17 +180,7 @@ public class SecurityScanManagementController {
       @RequestBody PolicyCommand command,
       HttpServletRequest request) {
     AuthenticatedSubject actor = actor(request);
-    ScanPolicy policy = service.revisePolicy(actor, policyId, command);
-    audit.record(
-        request,
-        actor,
-        "POLICY_REVISE",
-        null,
-        Map.of(
-            "previousPolicyId", policyId,
-            "policyId", policy.id(),
-            "policyRevision", policy.revision()));
-    return policy;
+    return mutations.revisePolicy(request, actor, policyId, command);
   }
 
   @GetMapping("/waivers")
@@ -229,30 +197,14 @@ public class SecurityScanManagementController {
   public ScanWaiver createWaiver(
       @RequestBody WaiverCommand command, HttpServletRequest request) {
     AuthenticatedSubject actor = actor(request);
-    ScanWaiver waiver = service.createWaiver(actor, command);
-    audit.record(
-        request,
-        actor,
-        "WAIVER_CREATE",
-        waiver.repositoryId(),
-        Map.of(
-            "waiverId", waiver.id(),
-            "scopeType", waiver.scopeType(),
-            "expiresAt", waiver.expiresAt() == null ? "none" : waiver.expiresAt().toString()));
-    return waiver;
+    return mutations.createWaiver(request, actor, command);
   }
 
   @DeleteMapping("/waivers/{waiverId}")
   public ResponseEntity<Void> deleteWaiver(
       @PathVariable("waiverId") long waiverId, HttpServletRequest request) {
     AuthenticatedSubject actor = actor(request);
-    ScanWaiver waiver = service.deleteWaiver(actor, waiverId);
-    audit.record(
-        request,
-        actor,
-        "WAIVER_DELETE",
-        waiver.repositoryId(),
-        Map.of("waiverId", waiverId));
+    mutations.deleteWaiver(request, actor, waiverId);
     return ResponseEntity.noContent().build();
   }
 

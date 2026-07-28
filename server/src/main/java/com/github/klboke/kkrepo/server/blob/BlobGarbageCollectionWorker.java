@@ -4,6 +4,7 @@ import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao.BlobReconcileWindow;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BlobReferenceDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MaintenanceCursorDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
@@ -25,6 +26,7 @@ class BlobGarbageCollectionWorker {
   private static final Logger log = LoggerFactory.getLogger(BlobGarbageCollectionWorker.class);
 
   private final AssetDao assetDao;
+  private final BlobReferenceDao blobReferences;
   private final MaintenanceCursorDao maintenanceCursorDao;
   private final BlobStorageRegistry blobStorageRegistry;
   private final TransactionTemplate transactionTemplate;
@@ -38,6 +40,7 @@ class BlobGarbageCollectionWorker {
 
   BlobGarbageCollectionWorker(
       AssetDao assetDao,
+      BlobReferenceDao blobReferences,
       MaintenanceCursorDao maintenanceCursorDao,
       BlobStorageRegistry blobStorageRegistry,
       PlatformTransactionManager transactionManager,
@@ -50,6 +53,7 @@ class BlobGarbageCollectionWorker {
       @Value("${kkrepo.blob-gc.claim-retry-seconds:600}") long claimRetrySeconds,
       KkRepoMetrics metrics) {
     this.assetDao = assetDao;
+    this.blobReferences = blobReferences;
     this.maintenanceCursorDao = maintenanceCursorDao;
     this.blobStorageRegistry = blobStorageRegistry;
     this.transactionTemplate = new TransactionTemplate(transactionManager);
@@ -126,6 +130,12 @@ class BlobGarbageCollectionWorker {
       long[] deletedBytes = {0};
       transactionTemplate.executeWithoutResult(status -> {
         assetDao.lockDeletedBlobById(blob.id()).ifPresent(locked -> {
+          // BlobReferenceDao.retain takes this same row lock. Recheck ownership only after
+          // acquiring it so a scan result cannot publish a reference behind physical deletion.
+          if (blobReferences.isReferenced(locked.id())) {
+            assetDao.releaseBlobGcClaim(locked.id());
+            return;
+          }
           if (!assetDao.hasLiveBlobForObjectKeyHash(locked.blobStoreId(), locked.objectKeyHash())) {
             storage.delete(BlobReferenceCodec.reference(
                 locked.blobRef(), locked.objectKey(), locked.sha256(), locked.size()));

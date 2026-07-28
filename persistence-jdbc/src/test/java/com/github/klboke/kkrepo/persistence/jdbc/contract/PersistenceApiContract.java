@@ -248,16 +248,41 @@ public abstract class PersistenceApiContract {
     SecurityScanDao.ScanPolicy policy = scans.createPolicy(new SecurityScanDao.ScanPolicy(
         null, "contract-policy", true, Severity.HIGH, false, false, true,
         3600L, List.of("linux/amd64"), 1, "contract", now, now));
+    assertTrue(scans.createPolicyIfAbsent(new SecurityScanDao.ScanPolicy(
+        null, "CONTRACT-POLICY", true, Severity.HIGH, false, false, true,
+        3600L, List.of("linux/amd64"), 1, "contract", now, now)).isEmpty(),
+        "logical policy names must be unique independent of case");
+    List<Boolean> policyCreateResults = invokeConcurrently(List.of(
+        () -> inTransaction(() -> scans.createPolicyIfAbsent(new SecurityScanDao.ScanPolicy(
+            null, "Concurrent-Create", true, Severity.HIGH, false, false, true,
+            3600L, List.of(), 1, "contract", now, now)).isPresent()),
+        () -> inTransaction(() -> scans.createPolicyIfAbsent(new SecurityScanDao.ScanPolicy(
+            null, "concurrent-create", true, Severity.HIGH, false, false, true,
+            3600L, List.of(), 1, "contract", now, now)).isPresent())), 2);
+    assertEquals(
+        1,
+        policyCreateResults.stream().filter(Boolean::booleanValue).count(),
+        "concurrent case variants must atomically create one logical policy");
+    SecurityScanDao.ScanPolicy concurrentPolicy = scans.createPolicy(
+        new SecurityScanDao.ScanPolicy(
+            null, "concurrent-policy", true, Severity.HIGH, false, false, true,
+            3600L, List.of("linux/amd64"), 1, "contract", now, now));
     SecurityScanDao.ScanPolicy revisionDraft = new SecurityScanDao.ScanPolicy(
-        null, "contract-policy", true, Severity.HIGH, false, false, true,
+        null, "CONCURRENT-POLICY", true, Severity.HIGH, false, false, true,
         3600L, List.of("linux/amd64"), 1, "contract", now, now);
     List<Long> allocatedRevisions = invokeConcurrently(List.of(
-        () -> inTransaction(() -> scans.createNextPolicyRevision(revisionDraft).revision()),
-        () -> inTransaction(() -> scans.createNextPolicyRevision(revisionDraft).revision())), 2);
+        () -> inTransaction(() -> scans.createNextPolicyRevision(
+                concurrentPolicy.id(), revisionDraft)
+            .map(SecurityScanDao.ScanPolicy::revision)
+            .orElse(0L)),
+        () -> inTransaction(() -> scans.createNextPolicyRevision(
+                concurrentPolicy.id(), revisionDraft)
+            .map(SecurityScanDao.ScanPolicy::revision)
+            .orElse(0L))), 2);
     assertEquals(
-        List.of(2L, 3L),
+        List.of(0L, 2L),
         allocatedRevisions.stream().sorted().toList(),
-        "policy revision allocation must serialize across replicas");
+        "only one replica may revise the expected immutable policy head");
     long profileId = profile.id();
     long policyId = policy.id();
 
@@ -398,6 +423,15 @@ public abstract class PersistenceApiContract {
 
     long sbomBlobId = stores().assets().insertBlob(
         blob(blobStoreId, "security/sbom.json", "scan-sbom"));
+    assertEquals(
+        1,
+        stores().assets().markBlobDeletedIfUnreferenced(sbomBlobId, "gc-race-fixture"));
+    assertTrue(inTransaction(() ->
+        stores().blobReferences().retain("security-scan-persisting", taskId, sbomBlobId)));
+    assertEquals(
+        0,
+        stores().assets().hardDeleteBlobByIdIfDeleted(sbomBlobId),
+        "a retain fenced on the blob row must defeat an earlier GC claim");
     SecurityScanDao.Sbom sbomDraft = new SecurityScanDao.Sbom(
         null, SubjectKind.ASSET_BLOB, "sha256:" + "2".repeat(64), null,
         "syft", "1.0.0", "c".repeat(64), "d".repeat(64), sbomBlobId,
@@ -407,6 +441,9 @@ public abstract class PersistenceApiContract {
         () -> inTransaction(() -> scans.insertSbomOrFindExisting(sbomDraft).id())), 2);
     assertEquals(1, new HashSet<>(sbomIds).size());
     long sbomId = sbomIds.getFirst();
+    assertEquals(
+        1,
+        stores().blobReferences().release("security-scan-persisting", taskId, sbomBlobId));
     SecurityScanDao.SbomComponent component = new SecurityScanDao.SbomComponent(
         null, sbomId, "pkg:maven/com.acme/app@1.0", null,
         "pkg:maven/com.acme/app@1.0", null, "library", "com.acme", "app", "1.0",
@@ -928,10 +965,12 @@ public abstract class PersistenceApiContract {
         "an old generation cannot overwrite repository-context policy state");
 
     SecurityScanDao.ScanPolicy replacementPolicy =
-        inTransaction(() -> scans.createNextPolicyRevision(new SecurityScanDao.ScanPolicy(
-            null, "contract-policy", true, Severity.CRITICAL, true, false, true,
-            7200L, List.of("linux/amd64"), 1, "contract", now.plusSeconds(6),
-            now.plusSeconds(6))));
+        inTransaction(() -> scans.createNextPolicyRevision(
+            policyId,
+            new SecurityScanDao.ScanPolicy(
+                null, "contract-policy", true, Severity.CRITICAL, true, false, true,
+                7200L, List.of("linux/amd64"), 1, "contract", now.plusSeconds(6),
+                now.plusSeconds(6))).orElseThrow());
     assertEquals(
         1,
         scans.replaceRepositoryPolicy(
@@ -943,6 +982,14 @@ public abstract class PersistenceApiContract {
         restoredSourceConfig.configRevision() + 1,
         reboundConfig.configRevision(),
         "switching policy revisions must invalidate materialized repository decisions");
+    assertTrue(
+        inTransaction(() -> scans.createNextPolicyRevision(
+            policyId,
+            new SecurityScanDao.ScanPolicy(
+                null, "contract-policy", true, Severity.CRITICAL, true, false, true,
+                7200L, List.of("linux/amd64"), 1, "contract", now.plusSeconds(7),
+                now.plusSeconds(7)))).isEmpty(),
+        "a stale policy revision must not publish another immutable head");
 
     SecurityScanDao.ScanWaiver globalWaiver =
         scans.createWaiver(new SecurityScanDao.ScanWaiver(

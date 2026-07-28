@@ -2462,58 +2462,87 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
 
   @Override
   public ScanPolicy createPolicy(ScanPolicy policy) {
-    long id = JdbcInserts.insert(jdbc, """
+    return findPolicy(insertPolicy(policy)).orElseThrow();
+  }
+
+  @Override
+  public Optional<ScanPolicy> createPolicyIfAbsent(ScanPolicy policy) {
+    OptionalLong inserted = tryInsertPolicy(policy);
+    return inserted.isPresent()
+        ? findPolicy(inserted.getAsLong())
+        : Optional.empty();
+  }
+
+  private long insertPolicy(ScanPolicy policy) {
+    return JdbcInserts.insert(jdbc, policyInsertSql(), ps -> bindPolicy(ps, policy));
+  }
+
+  private OptionalLong tryInsertPolicy(ScanPolicy policy) {
+    return JdbcInserts.tryInsert(jdbc, policyInsertSql(), ps -> bindPolicy(ps, policy));
+  }
+
+  private static String policyInsertSql() {
+    return """
         INSERT INTO security_scan_policy
-          (name, enabled, block_severity, only_fixable, block_unknown_severity,
+          (name, name_normalized, enabled, block_severity, only_fixable,
+           block_unknown_severity,
            require_complete_inventory, max_result_age_seconds, required_platforms_json,
            revision, created_by, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, ps -> {
-      ps.setString(1, policy.name());
-      ps.setBoolean(2, policy.enabled());
-      ps.setString(3, policy.blockSeverity().name());
-      ps.setBoolean(4, policy.onlyFixable());
-      ps.setBoolean(5, policy.blockUnknownSeverity());
-      ps.setBoolean(6, policy.requireCompleteInventory());
-      setNullableLong(ps, 7, policy.maxResultAgeSeconds());
-      json.bindSerialized(ps, 8, json.writeValue(policy.requiredPlatforms()));
-      ps.setLong(9, Math.max(1, policy.revision()));
-      ps.setString(10, policy.createdBy());
-      ps.setTimestamp(11, nullableTimestamp(policy.createdAt()));
-      ps.setTimestamp(12, nullableTimestamp(policy.updatedAt()));
-    });
-    return findPolicy(id).orElseThrow();
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """;
+  }
+
+  private void bindPolicy(PreparedStatement ps, ScanPolicy policy) throws SQLException {
+    ps.setString(1, policy.name());
+    ps.setString(2, normalizedPolicyName(policy.name()));
+    ps.setBoolean(3, policy.enabled());
+    ps.setString(4, policy.blockSeverity().name());
+    ps.setBoolean(5, policy.onlyFixable());
+    ps.setBoolean(6, policy.blockUnknownSeverity());
+    ps.setBoolean(7, policy.requireCompleteInventory());
+    setNullableLong(ps, 8, policy.maxResultAgeSeconds());
+    json.bindSerialized(ps, 9, json.writeValue(policy.requiredPlatforms()));
+    ps.setLong(10, Math.max(1, policy.revision()));
+    ps.setString(11, policy.createdBy());
+    ps.setTimestamp(12, nullableTimestamp(policy.createdAt()));
+    ps.setTimestamp(13, nullableTimestamp(policy.updatedAt()));
   }
 
   @Override
   @Transactional
-  public ScanPolicy createNextPolicyRevision(ScanPolicy policy) {
+  public Optional<ScanPolicy> createNextPolicyRevision(
+      long expectedHeadPolicyId, ScanPolicy policy) {
+    String normalizedName = normalizedPolicyName(policy.name());
     jdbc.query("""
         SELECT id
         FROM security_scan_policy
-        WHERE name = ?
+        WHERE name_normalized = ?
         ORDER BY id
         LIMIT 1
         FOR UPDATE
-        """, (rs, rowNum) -> rs.getLong("id"), policy.name())
+        """, (rs, rowNum) -> rs.getLong("id"), normalizedName)
         .stream()
         .findFirst()
         .orElseThrow(() ->
             new IllegalStateException("Security scan policy root no longer exists"));
-    Long currentRevision = jdbc.query("""
-        SELECT revision
+    PolicyHead head = jdbc.query("""
+        SELECT id, revision
         FROM security_scan_policy
-        WHERE name = ?
+        WHERE name_normalized = ?
         ORDER BY revision DESC, id DESC
         LIMIT 1
         FOR UPDATE
-        """, (rs, rowNum) -> rs.getLong("revision"), policy.name())
+        """, (rs, rowNum) -> new PolicyHead(
+            rs.getLong("id"), rs.getLong("revision")), normalizedName)
         .stream()
         .findFirst()
         .orElseThrow(() ->
             new IllegalStateException("Security scan policy head no longer exists"));
-    long revision = Math.addExact(currentRevision, 1);
-    return createPolicy(new ScanPolicy(
+    if (head.id() != expectedHeadPolicyId) {
+      return Optional.empty();
+    }
+    long revision = Math.addExact(head.revision(), 1);
+    return Optional.of(createPolicy(new ScanPolicy(
         null,
         policy.name(),
         policy.enabled(),
@@ -2526,8 +2555,17 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         revision,
         policy.createdBy(),
         policy.createdAt(),
-        policy.updatedAt()));
+        policy.updatedAt())));
   }
+
+  private static String normalizedPolicyName(String name) {
+    if (name == null || name.isBlank()) {
+      throw new IllegalArgumentException("Security scan policy name is required");
+    }
+    return name.trim().toLowerCase(java.util.Locale.ROOT);
+  }
+
+  private record PolicyHead(long id, long revision) {}
 
   @Override
   public int replaceRepositoryPolicy(

@@ -55,6 +55,7 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class SecurityScanManagementService {
   private static final int MAX_QUERY_LENGTH = 200;
+  private static final int MAX_POLICY_NAME_LENGTH = 128;
   private static final int REPOSITORY_SEARCH_BATCH_SIZE = 256;
   private static final int WAIVER_MATCH_PAGE_SIZE = 256;
 
@@ -721,11 +722,12 @@ public class SecurityScanManagementService {
     requireGlobalWrite(actor);
     if (command == null || blank(command.name())) throw badRequest("Policy name is required");
     String name = command.name().trim();
-    if (scans.listPolicies().stream()
-        .anyMatch(policy -> policy.name().equalsIgnoreCase(name))) {
-      throw conflict("Policy already exists; edit it to create a new revision");
+    if (name.length() > MAX_POLICY_NAME_LENGTH) {
+      throw badRequest("Policy name must be at most 128 characters");
     }
-    return createPolicyRevision(actor, name, 1, command);
+    return scans.createPolicyIfAbsent(policyDraft(actor, name, 1, command))
+        .orElseThrow(() ->
+            conflict("Policy already exists; edit it to create a new revision"));
   }
 
   @Transactional
@@ -740,17 +742,11 @@ public class SecurityScanManagementService {
       throw badRequest("Policy name cannot be changed when creating a revision");
     }
     ScanPolicy replacement = scans.createNextPolicyRevision(
-        policyDraft(actor, current.name(), 1, command));
+            current.id(), policyDraft(actor, current.name(), 1, command))
+        .orElseThrow(() ->
+            conflict("Policy has changed; refresh and revise the current version"));
     scans.replaceRepositoryPolicy(current.id(), replacement.id(), Instant.now());
     return replacement;
-  }
-
-  private ScanPolicy createPolicyRevision(
-      AuthenticatedSubject actor,
-      String name,
-      long revision,
-      PolicyCommand command) {
-    return scans.createPolicy(policyDraft(actor, name, revision, command));
   }
 
   private ScanPolicy policyDraft(

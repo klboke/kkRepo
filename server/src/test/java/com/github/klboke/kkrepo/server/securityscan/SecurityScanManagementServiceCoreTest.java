@@ -291,21 +291,21 @@ class SecurityScanManagementServiceCoreTest {
 
     ScanPolicy current = policy(10L, "critical", 1L);
     when(scans.listPolicies()).thenReturn(List.of(current));
-    when(scans.createPolicy(any())).thenAnswer(invocation -> {
+    when(scans.createPolicyIfAbsent(any())).thenAnswer(invocation -> {
       ScanPolicy value = invocation.getArgument(0);
-      return new ScanPolicy(
+      return Optional.of(new ScanPolicy(
           value.revision() + 10, value.name(), value.enabled(), value.blockSeverity(),
           value.onlyFixable(), value.blockUnknownSeverity(), value.requireCompleteInventory(),
           value.maxResultAgeSeconds(), value.requiredPlatforms(), value.revision(),
-          value.createdBy(), value.createdAt(), value.updatedAt());
+          value.createdBy(), value.createdAt(), value.updatedAt()));
     });
-    when(scans.createNextPolicyRevision(any())).thenAnswer(invocation -> {
-      ScanPolicy value = invocation.getArgument(0);
-      return new ScanPolicy(
+    when(scans.createNextPolicyRevision(eq(10L), any())).thenAnswer(invocation -> {
+      ScanPolicy value = invocation.getArgument(1);
+      return Optional.of(new ScanPolicy(
           12L, value.name(), value.enabled(), value.blockSeverity(),
           value.onlyFixable(), value.blockUnknownSeverity(), value.requireCompleteInventory(),
           value.maxResultAgeSeconds(), value.requiredPlatforms(), 2,
-          value.createdBy(), value.createdAt(), value.updatedAt());
+          value.createdBy(), value.createdAt(), value.updatedAt()));
     });
     PolicyCommand create = new PolicyCommand(
         "audit", true, null, false, false, false, 0L, null);
@@ -334,8 +334,7 @@ class SecurityScanManagementServiceCoreTest {
     assertStatus(HttpStatus.BAD_REQUEST, () -> service.createPolicy(
         actor, new PolicyCommand(" ", true, null, false, false, false, null, null)));
 
-    ScanPolicy duplicate = policy(10L, "duplicate", 1L);
-    when(scans.listPolicies()).thenReturn(List.of(duplicate));
+    when(scans.createPolicyIfAbsent(any())).thenReturn(Optional.empty());
     assertStatus(HttpStatus.CONFLICT, () -> service.createPolicy(
         actor,
         new PolicyCommand("Duplicate", true, null, false, false, false, null, null)));
@@ -407,6 +406,23 @@ class SecurityScanManagementServiceCoreTest {
             10L,
             new PolicyCommand(
                 "renamed", true, Severity.HIGH, false, false, false, null, null)));
+
+    when(scans.createNextPolicyRevision(eq(10L), any())).thenReturn(Optional.empty());
+    assertStatus(
+        HttpStatus.CONFLICT,
+        () -> service.revisePolicy(
+            actor,
+            10L,
+            new PolicyCommand(
+                "critical", true, Severity.HIGH, false, false, false, null, null)));
+    verify(scans, never()).replaceRepositoryPolicy(anyLong(), anyLong(), any());
+
+    assertStatus(
+        HttpStatus.BAD_REQUEST,
+        () -> service.createPolicy(
+            actor,
+            new PolicyCommand(
+                "p".repeat(129), true, null, false, false, false, null, null)));
 
     assertStatus(
         HttpStatus.BAD_REQUEST,

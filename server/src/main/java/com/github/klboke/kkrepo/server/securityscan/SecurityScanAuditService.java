@@ -8,6 +8,8 @@ import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class SecurityScanAuditService {
@@ -17,6 +19,7 @@ public class SecurityScanAuditService {
     this.audit = audit;
   }
 
+  @Transactional(propagation = Propagation.MANDATORY)
   public void record(
       HttpServletRequest request,
       AuthenticatedSubject actor,
