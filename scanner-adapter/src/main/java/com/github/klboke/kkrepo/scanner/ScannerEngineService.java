@@ -247,7 +247,8 @@ public class ScannerEngineService {
         throw new ScannerRequestException(
             "OCI_SCAN_FAILED", "No requested OCI platform could be scanned", 422, false);
       }
-      byte[] merged = documents.mergeCycloneDx(platformSboms);
+      byte[] merged =
+          documents.mergeCycloneDx(platformSboms, properties.getMaxOutputBytes());
       if (merged.length > properties.getMaxOutputBytes()) {
         throw new ScannerRequestException(
             "SCANNER_OUTPUT_TOO_LARGE",

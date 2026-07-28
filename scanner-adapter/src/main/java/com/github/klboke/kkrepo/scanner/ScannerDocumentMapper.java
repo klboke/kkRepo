@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.security.scan.ScannerContract.CatalogResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Component;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Finding;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchResponse;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -145,6 +146,10 @@ public class ScannerDocumentMapper {
   }
 
   public byte[] mergeCycloneDx(List<PlatformSbom> documents) {
+    return mergeCycloneDx(documents, Integer.MAX_VALUE - 1L);
+  }
+
+  public byte[] mergeCycloneDx(List<PlatformSbom> documents, long maxOutputBytes) {
     if (documents.isEmpty()) {
       throw invalid("OCI_NO_PLATFORM_SCANNED", "No requested OCI platform could be scanned");
     }
@@ -197,7 +202,17 @@ public class ScannerDocumentMapper {
       result.set("components", componentArray);
       result.set("dependencies", dependencyArray);
       result.put("serialNumber", "urn:uuid:" + deterministicUuid(documents));
-      return mapper.writeValueAsBytes(result);
+      BoundedByteArrayOutputStream output =
+          new BoundedByteArrayOutputStream(maxOutputBytes);
+      mapper.writeValue(output, result);
+      return output.toByteArray();
+    } catch (OutputLimitExceededException e) {
+      throw new ScannerRequestException(
+          "SCANNER_OUTPUT_TOO_LARGE",
+          "Merged OCI inventory exceeded the configured output limit",
+          413,
+          false,
+          e);
     } catch (IOException e) {
       throw invalid("OCI_SBOM_MERGE_FAILED", "Unable to aggregate OCI platform SBOMs", e);
     }
@@ -432,6 +447,35 @@ public class ScannerDocumentMapper {
   private static ScannerRequestException invalid(String code, String message, Throwable cause) {
     return new ScannerRequestException(code, message, 422, false, cause);
   }
+
+  private static final class BoundedByteArrayOutputStream extends ByteArrayOutputStream {
+    private final int limit;
+
+    private BoundedByteArrayOutputStream(long maxOutputBytes) {
+      limit = (int) Math.min(Integer.MAX_VALUE - 1L, Math.max(1L, maxOutputBytes));
+    }
+
+    @Override
+    public synchronized void write(int value) {
+      ensureRemaining(1);
+      super.write(value);
+    }
+
+    @Override
+    public synchronized void write(byte[] values, int offset, int length) {
+      java.util.Objects.checkFromIndexSize(offset, length, values.length);
+      ensureRemaining(length);
+      super.write(values, offset, length);
+    }
+
+    private void ensureRemaining(int length) {
+      if (length > limit - count) {
+        throw new OutputLimitExceededException();
+      }
+    }
+  }
+
+  private static final class OutputLimitExceededException extends RuntimeException {}
 
   public record EngineVersion(String name, String version) {}
 

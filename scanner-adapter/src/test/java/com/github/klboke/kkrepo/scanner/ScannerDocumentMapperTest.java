@@ -92,6 +92,22 @@ class ScannerDocumentMapperTest {
   }
 
   @Test
+  void rejectsMergedPlatformSbomDuringBoundedSerialization() {
+    byte[] sbom = """
+        {"bomFormat":"CycloneDX","components":[
+          {"bom-ref":"same","type":"library","name":"demo","version":"1"}
+        ],"dependencies":[]}
+        """.getBytes(StandardCharsets.UTF_8);
+
+    assertThatThrownBy(() -> mapper.mergeCycloneDx(
+            List.of(new PlatformSbom("linux/amd64", sbom)),
+            32))
+        .isInstanceOf(ScannerRequestException.class)
+        .extracting(failure -> ((ScannerRequestException) failure).code())
+        .isEqualTo("SCANNER_OUTPUT_TOO_LARGE");
+  }
+
+  @Test
   void rejectsExcessiveJsonNestingAndFieldLength() {
     byte[] deeplyNested = ("{\"bomFormat\":\"CycloneDX\",\"components\":"
         + "[".repeat(300) + "]".repeat(300) + "}")

@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -172,13 +173,13 @@ class ScannerEngineServiceBehaviorTest {
         () -> aggregate.engine.scanOci(ociRequest(
             "https://registry.example.test",
             List.of("linux/amd64", "linux/arm64"))));
-    verify(aggregate.documents, never()).mergeCycloneDx(any());
+    verify(aggregate.documents, never()).mergeCycloneDx(any(), anyLong());
   }
 
   @Test
   void rejectsOversizedMergedOciDocument() {
     Fixture fixture = new Fixture(temporaryDirectory.resolve("merged"));
-    when(fixture.documents.mergeCycloneDx(any())).thenReturn(new byte[1025]);
+    when(fixture.documents.mergeCycloneDx(any(), anyLong())).thenReturn(new byte[1025]);
 
     assertCode(
         "SCANNER_OUTPUT_TOO_LARGE",
@@ -265,7 +266,7 @@ class ScannerEngineServiceBehaviorTest {
       when(documents.catalog(any(), anyString(), anyString(), anyString(), any()))
           .thenReturn(catalog());
       when(documents.match(any(), anyString(), any(), anyString())).thenReturn(match());
-      when(documents.mergeCycloneDx(any())).thenReturn(
+      when(documents.mergeCycloneDx(any(), anyLong())).thenReturn(
           "{\"bomFormat\":\"CycloneDX\"}".getBytes());
       doAnswer(invocation -> {
         @SuppressWarnings("unchecked")
