@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class SecurityScanCandidateClassifierTest {
   private final SecurityScanCandidateClassifier classifier = new SecurityScanCandidateClassifier();
@@ -47,6 +48,22 @@ class SecurityScanCandidateClassifierTest {
         Arguments.of(RepositoryFormat.RUBYGEMS, "gems/demo-1.0.0.gem", "gem"),
         Arguments.of(RepositoryFormat.YUM, "packages/demo-1.0.0.x86_64.rpm", "package"),
         Arguments.of(RepositoryFormat.RAW, "release/demo.zip", "file"));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "modules/acme/vpc/1.0.0.tar.xz",
+      "modules/acme/vpc/1.0.0.txz",
+      "modules/acme/vpc/1.0.0.xz",
+      "modules/acme/vpc/1.0.0.tar.bz2",
+      "modules/acme/vpc/1.0.0.tbz2"
+  })
+  void classifiesEverySupportedTerraformArchive(String path) {
+    assertEquals(
+        CandidateDisposition.SCANNABLE,
+        classifier.classify(
+            asset(RepositoryFormat.TERRAFORM, path, "module"), blob(42), profile(1024))
+            .disposition());
   }
 
   @ParameterizedTest

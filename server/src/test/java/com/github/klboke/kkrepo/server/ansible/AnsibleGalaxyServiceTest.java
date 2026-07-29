@@ -10,6 +10,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
@@ -21,6 +22,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
+import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
@@ -33,7 +35,11 @@ import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 
 class AnsibleGalaxyServiceTest {
   private static final String BASE = "https://repo.example/repository/ansible-group/";
@@ -659,8 +665,11 @@ class AnsibleGalaxyServiceTest {
     assertTrue(failure.getMessage().contains("cycle"));
   }
 
-  @Test
-  void proxyArtifactUsesWildcardAcceptForGalaxySignedDownloadNegotiation() throws Exception {
+  @ParameterizedTest
+  @NullSource
+  @ValueSource(strings = "acme-tools-1.2.3.tar.gz")
+  void proxyArtifactUsesWildcardAcceptForGalaxySignedDownloadNegotiation(
+      String upstreamArtifactFilename) throws Exception {
     RepositoryRuntime proxy = runtime(
         7L, "ansible-proxy", RepositoryType.PROXY,
         "https://galaxy.ansible.com/", List.of());
@@ -675,7 +684,7 @@ class AnsibleGalaxyServiceTest {
             "sha256", SHA_A));
     AnsibleGalaxyRegistryDao.ProxyVersionState exact =
         new AnsibleGalaxyRegistryDao.ProxyVersionState(
-            proxy.id(), "acme", "tools", "1.2.3", "acme-tools-1.2.3.tar.gz",
+            proxy.id(), "acme", "tools", "1.2.3", upstreamArtifactFilename,
             null,
             "https://galaxy.ansible.com/api/v3/artifacts/acme-tools-1.2.3.tar.gz",
             SHA_A, null, null, now.plusSeconds(60), now, null, null, detail, 1L, now);
@@ -690,7 +699,7 @@ class AnsibleGalaxyServiceTest {
         new AnsibleGalaxyRegistryDao.Lease(
             "artifact-lease", "owner", 1L, now.plusSeconds(60), now)));
     when(fetcher.fetch(any())).thenReturn(new HttpRemoteFetcher.Result(
-        200, Map.of("Content-Type", "application/gzip"),
+        200, Map.of("Content-Type", "application/gzip", "Content-Length", "2"),
         new ByteArrayInputStream(new byte[] {0x1f, (byte) 0x8b})));
     when(inspector.inspect(any())).thenThrow(
         new AnsibleGalaxyExceptions.BadRequest("inspection sentinel"));
@@ -709,6 +718,14 @@ class AnsibleGalaxyServiceTest {
     verify(fetcher).fetch(request.capture());
     assertEquals("*/*", request.getValue().accept());
     assertTrue(request.getValue().allowedUnsignedRedirectHosts().contains("*"));
+    InOrder preflightOrder = inOrder(assets, inspector);
+    preflightOrder.verify(assets).beforeUncachedRead(
+        proxy,
+        AnsibleGalaxyPathParser.ARTIFACT_BASE + "acme-tools-1.2.3.tar.gz",
+        "collection-artifact",
+        "application/gzip",
+        2L);
+    preflightOrder.verify(inspector).inspect(any());
     verify(registry).releaseLease("artifact-lease", "owner", 1L);
   }
 

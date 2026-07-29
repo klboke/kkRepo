@@ -1223,7 +1223,13 @@ public class SwiftService {
       throwIfNegativeCached(runtime.id(), archiveCacheKey);
       SwiftArchiveInspector.InspectedArchive archive;
       try {
-        archive = github.archive(runtime, coordinates, pinned.commitSha());
+        String archivePath = scopeLc + "/" + nameLc + "/" + version + ".zip";
+        archive = github.archive(
+            runtime,
+            coordinates,
+            pinned.commitSha(),
+            (contentType, contentLength) -> assets.beforeUncachedRead(
+                runtime, archivePath, "source-archive", contentType, contentLength));
       } catch (SwiftExceptions.UpstreamRateLimited e) {
         rememberRateLimit(runtime.id(), archiveCacheKey, e.retryAfter());
         throw e;

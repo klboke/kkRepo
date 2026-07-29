@@ -700,6 +700,16 @@ public class AnsibleGalaxyService {
           throw new AnsibleGalaxyExceptions.BadUpstream(
               "Upstream artifact request returned HTTP " + result.status());
         }
+        String artifactFilename = state.artifactFilename() == null
+            ? state.namespaceLc() + "-" + state.nameLc() + "-"
+                + state.versionNormalized() + ".tar.gz"
+            : state.artifactFilename();
+        assets.beforeUncachedRead(
+            runtime,
+            AnsibleGalaxyPathParser.ARTIFACT_BASE + artifactFilename,
+            "collection-artifact",
+            result.contentType(),
+            result.contentLength());
         AnsibleCollectionArchiveInspector.InspectedCollection inspected = inspector.inspect(result.body());
         try {
           if (!state.artifactSha256().equalsIgnoreCase(inspected.sha256())) {

@@ -15,8 +15,8 @@ import org.springframework.stereotype.Component;
 @Component
 public class SecurityScanCandidateClassifier {
   private static final Set<String> ARCHIVE_SUFFIXES = Set.of(
-      ".zip", ".tar", ".tar.gz", ".tgz", ".jar", ".war", ".ear", ".whl",
-      ".crate", ".gem", ".nupkg", ".rpm");
+      ".zip", ".tar", ".tar.gz", ".tgz", ".tar.xz", ".txz", ".xz", ".tar.bz2", ".tbz2",
+      ".jar", ".war", ".ear", ".whl", ".crate", ".gem", ".nupkg", ".rpm");
 
   public Classification classify(
       AssetRecord asset, AssetBlobRecord blob, ScanProfile profile) {

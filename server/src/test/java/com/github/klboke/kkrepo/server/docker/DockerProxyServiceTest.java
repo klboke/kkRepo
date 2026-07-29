@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -154,6 +155,49 @@ class DockerProxyServiceTest {
 
     assertEquals(DockerErrorCode.MANIFEST_UNKNOWN, thrown.code());
     assertEquals(404, thrown.status());
+  }
+
+  @Test
+  void blockedRemoteManifestIsRejectedBeforeItsBodyIsConsumedOrStored() throws Exception {
+    DockerManifestStore manifestStore = mock(DockerManifestStore.class);
+    DockerRemoteRegistryClient remoteClient = mock(DockerRemoteRegistryClient.class);
+    DockerProxyService service = new DockerProxyService(
+        mock(DockerBlobStore.class), manifestStore, remoteClient);
+    RepositoryRuntime runtime = proxyRuntime(1);
+    AtomicBoolean bodyRead = new AtomicBoolean();
+    InputStream body = new InputStream() {
+      @Override
+      public int read() {
+        bodyRead.set(true);
+        return -1;
+      }
+    };
+    when(manifestStore.getManifest(runtime, "library/alpine", "latest"))
+        .thenThrow(new DockerProtocolException(DockerErrorCode.MANIFEST_UNKNOWN, "missing"));
+    when(remoteClient.get(eq(runtime), eq("library/alpine/manifests/latest"), any()))
+        .thenReturn(new HttpRemoteFetcher.Result(
+            200,
+            Map.of(
+                "Content-Type", DockerConstants.MEDIA_TYPE_SCHEMA2_MANIFEST,
+                "Content-Length", "1048576"),
+            body));
+    DockerProtocolException blocked =
+        new DockerProtocolException(DockerErrorCode.DENIED, "blocked", 403);
+    doThrow(blocked).when(manifestStore).beforeUncachedManifestRead(
+        runtime,
+        "library/alpine",
+        "latest",
+        DockerConstants.MEDIA_TYPE_SCHEMA2_MANIFEST,
+        1048576L);
+
+    DockerProtocolException actual = assertThrows(
+        DockerProtocolException.class,
+        () -> service.getManifest(runtime, "library/alpine", "latest", false));
+
+    assertEquals(blocked, actual);
+    assertFalse(bodyRead.get());
+    verify(manifestStore, never()).putManifest(
+        any(), any(), any(), any(), any(), any(), any(), anyBoolean());
   }
 
   @Test

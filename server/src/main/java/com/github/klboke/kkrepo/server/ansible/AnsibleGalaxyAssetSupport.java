@@ -157,6 +157,17 @@ final class AnsibleGalaxyAssetSupport {
         asset.lastUpdatedAt());
   }
 
+  void beforeUncachedRead(
+      RepositoryRuntime runtime,
+      String path,
+      String kind,
+      String contentType,
+      long contentLength) {
+    if (downloadPolicy != null) {
+      downloadPolicy.beforeUncachedRead(runtime, path, kind, contentType, contentLength);
+    }
+  }
+
   InputStream open(long repositoryId, long assetId) {
     AssetDao.AssetWithBlob stored = assets.findAssetWithBlobById(assetId)
         .filter(value -> value.asset().repositoryId() == repositoryId)
