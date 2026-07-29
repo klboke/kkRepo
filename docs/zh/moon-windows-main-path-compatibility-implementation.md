@@ -13,8 +13,8 @@
 | 黑盒测试编译 | `PASS` | `MoonWindowsManagementBlackBoxCompatibilityTest` 已通过 reactor `test-compile` |
 | MySQL Testcontainers | `BLOCKED` | 本机无可用 Docker daemon，新增 DAO 集成用例未执行 |
 | Nexus/kkRepo 双端实测 | `PASS` | 新 SIT `172.28.227.60:8080` 与 Nexus `10.1.11.19:8081` 完成 3 项黑盒用例，0 failures、0 errors、0 skipped |
-| 已同步 Windows 资产只读验证 | `阶段性 PASS` | `windows-artifacts` 38/38 路径与 SHA-1 对齐；`windows-components` 在 98 条交集快照上 SHA-1 全部对齐，并完成分页、HEAD 和代表性完整下载验证 |
-| 生产切换 | `NO-GO` | `windows-components` 仍在同步，且历史 Nexus opaque asset ID 映射、多副本和 MySQL 集成验证尚未完成 |
+| 已同步 Windows 资产只读验证 | `阶段性 PASS` | `windows-artifacts` 迁移任务 38/38、0 失败且路径与 SHA-1 对齐；`windows-components` 在 98 条交集快照上 SHA-1 全部对齐，并完成分页、HEAD 和代表性完整下载验证 |
+| 生产切换 | `NO-GO` | `windows-components` 仍在同步，当前迁移发现数与来源端唯一 path 观察值仍有 6 条差额；历史 Nexus opaque asset ID 映射、多副本和 MySQL 集成验证也尚未完成 |
 
 这里的 `双端实测 PASS` 仅说明本次覆盖的 API 行为通过；`阶段性 PASS` 只适用于测试时已经同步且实际核验的资产，不等于全量迁移验收通过。在 Windows 历史资产数据、历史 ID 迁移和多副本验证完成前，不应把 Nexus DNS 直接切换到 kkRepo。
 
@@ -251,6 +251,17 @@ COMPAT_MOON_ALLOW_PRODUCTION_REPOSITORY=true
 `11:11:19 +08:00` 再次核验时，`windows-artifacts` 已达到双方 38/38，38 条路径与 SHA-1 全部一致，无双端独有路径。`windows-components` 仍持续增长，不使用运行中的跨时点计数作为最终验收依据。
 
 Nexus 的 `windows-components` 全量分页在一次快照中返回 1624 项、1623 个唯一 path；重复项的 path、ID、checksum 和 download URL 完全相同。这是来源端分页响应中的重复项，计数对账应以唯一 path 和逐 path 精确查询为准。
+
+`11:15:57 +08:00` 的迁移任务状态：
+
+| Job | 仓库 | 状态 | 已发现 | 已迁移 | 失败 | 待处理 |
+| ---: | --- | --- | ---: | ---: | ---: | ---: |
+| 5 | `windows-artifacts` | `finished` | 38 | 38 | 0 | 0 |
+| 4 | `windows-components` | `running` | 1617 | 176 | 0 | 1441 |
+
+`windows-components` 的 job 4 已发现 1617 条，比本次来源端全量分页观察到的 1623 个唯一 path 少 6 条。迁移完成后必须使用冻结清单找出并补齐差集，不能仅凭 job 4 进入 `finished` 就判定全量完成。
+
+额外 REST 流式同步 `windows-artifacts` 的结果为 5 条上传、32 条 checksum 已一致跳过、1 条传输中断。中断路径 `com/qunhe/maxservice/maxservice-86b25896-20260714011530795.zip` 已由并行迁移写入目标端；随后精确复核两端均为 1 条、SHA-1 均为 `7c5e70c0ddb9c4ae6bde22be724549b3f5e5c346`、HEAD 均为 `200`、长度均为 594567974 字节。因此该记录是冗余传输尝试失败，不是目标资产缺失；原始失败计数仍在本文保留。
 
 #### 6.5.2 HEAD、有效 ID 与完整内容校验
 
