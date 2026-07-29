@@ -117,8 +117,9 @@ securityScanning:
     initialDelay: 5m
   limits:
     maxInputBytes: 2147483648
-    maxOutputBytes: 67108864
-    maxResponseBytes: 335544320
+    maxOutputBytes: 33554432
+    maxResponseBytes: 134217728
+    responseMemoryBudgetBytes: 268435456
     maxStderrBytes: 262144
     maxConcurrentScans: 2
     maxQueuedScans: 4

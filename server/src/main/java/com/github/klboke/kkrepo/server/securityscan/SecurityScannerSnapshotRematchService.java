@@ -108,7 +108,7 @@ public class SecurityScannerSnapshotRematchService {
     scans.markAssetStateStale(
         state.assetId(), state.profileId(), state.latestScanRunId(), now);
     String requestUuid = snapshotRequestUuid(state, profile, snapshot);
-    scans.createTask(new TaskDraft(
+    long taskId = scans.createTask(new TaskDraft(
         content.asset().repositoryId(),
         state.assetId(),
         subjectKind(content.asset().format(), content.asset().kind()),
@@ -125,6 +125,11 @@ public class SecurityScannerSnapshotRematchService {
         requestUuid,
         "snapshot:" + requestUuid,
         now));
+    // A task can have terminalized while no matching scanner replica was available, or an older
+    // build can have succeeded it with another revision. The deterministic dedupe key must not
+    // make that terminal row a permanent barrier when this snapshot is still required.
+    scans.reactivateSnapshotTask(
+        taskId, snapshot.id(), now, "security-scan-worker");
     return true;
   }
 

@@ -474,6 +474,43 @@ public abstract class PersistenceApiContract {
             Map.of("catalogEngineVersion", "1.0.0")));
     assertEquals(snapshot.id(), observedAgain.id());
     assertEquals(now.plusSeconds(1), observedAgain.observedAt());
+    long snapshotTaskId = scans.createTask(new SecurityScanDao.TaskDraft(
+        repositoryId,
+        assetId,
+        SubjectKind.ASSET_BLOB,
+        "sha256:" + "2".repeat(64),
+        1,
+        profileId,
+        1,
+        snapshot.id(),
+        ScanStage.MATCH_ONLY,
+        RequestReason.VULNERABILITY_DB_CHANGED,
+        25,
+        1,
+        "contract",
+        "snapshot-reactivation",
+        "snapshot-reactivation",
+        now.plusSeconds(2)));
+    SecurityScanDao.ScanTask snapshotLease = inTransaction(() -> scans.claimTasks(
+        "snapshot-replica", now.plusSeconds(2), now.plusSeconds(32), 1).getFirst());
+    assertEquals(snapshotTaskId, snapshotLease.id());
+    assertTrue(scans.completeTask(
+        snapshotTaskId, snapshotLease.leaseToken(), now.plusSeconds(3)));
+    assertTrue(scans.reactivateSnapshotTask(
+        snapshotTaskId, snapshot.id(), now.plusSeconds(4), "snapshot-reconciler"));
+    SecurityScanDao.ScanTask reactivatedSnapshotTask =
+        scans.findTask(snapshotTaskId).orElseThrow();
+    assertEquals(
+        com.github.klboke.kkrepo.security.scan.ScanEnums.TaskStatus.PENDING,
+        reactivatedSnapshotTask.status());
+    assertEquals(0, reactivatedSnapshotTask.attempts());
+    assertFalse(scans.reactivateSnapshotTask(
+        snapshotTaskId, snapshot.id() + 1, now.plusSeconds(5), "snapshot-reconciler"));
+    SecurityScanDao.ScanTask reactivatedSnapshotLease = inTransaction(() -> scans.claimTasks(
+        "snapshot-replica-2", now.plusSeconds(5), now.plusSeconds(35), 1).getFirst());
+    assertEquals(snapshotTaskId, reactivatedSnapshotLease.id());
+    assertTrue(scans.completeTask(
+        snapshotTaskId, reactivatedSnapshotLease.leaseToken(), now.plusSeconds(6)));
 
     long deletedDocumentBlobId = stores().assets().insertBlob(
         blob(blobStoreId, "security/deleted-sbom.json", "scan-deleted-sbom"));
@@ -632,6 +669,26 @@ public abstract class PersistenceApiContract {
         "direct", List.of("app.jar"), List.of("Apache-2.0"), Map.of());
     assertEquals(1, inTransaction(() -> scans.insertSbomComponents(sbomId, List.of(component))));
     assertEquals(0, inTransaction(() -> scans.insertSbomComponents(sbomId, List.of(component))));
+    long atomicSbomBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "security/atomic-sbom.json", "scan-atomic-sbom"));
+    SecurityScanDao.Sbom atomicSbom = new SecurityScanDao.Sbom(
+        null, SubjectKind.ASSET_BLOB, "sha256:" + "4".repeat(64), null,
+        "syft", "1.0.0", "f".repeat(64), "atomic-" + "f".repeat(57), atomicSbomBlobId,
+        "a".repeat(64), "CycloneDX", "1.6", 1, 0, true, now);
+    SecurityScanDao.SbomComponent invalidComponent = new SecurityScanDao.SbomComponent(
+        null, 0, "pkg:maven/com.acme/invalid@1.0", null,
+        "pkg:maven/com.acme/invalid@1.0", null, "library", "com.acme", null, "1.0",
+        "direct", List.of(), List.of(), Map.of());
+    assertThrows(
+        RuntimeException.class,
+        () -> inTransaction(() -> scans.publishSbom(atomicSbom, List.of(invalidComponent))),
+        "SBOM metadata and its component projection must roll back together");
+    assertTrue(scans.findSbomByCatalogFingerprint(atomicSbom.catalogFingerprint()).isEmpty());
+    assertEquals(
+        1,
+        stores().assets().markBlobDeletedIfUnreferenced(
+            atomicSbomBlobId, "atomic-sbom-rollback"));
+    assertEquals(1, stores().assets().hardDeleteBlobByIdIfDeleted(atomicSbomBlobId));
 
     long deletedReportBlobId = stores().assets().insertBlob(
         blob(blobStoreId, "security/deleted-report.json", "scan-deleted-report"));

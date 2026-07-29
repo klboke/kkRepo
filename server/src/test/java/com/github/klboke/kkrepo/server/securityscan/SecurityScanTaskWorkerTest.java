@@ -220,6 +220,7 @@ class SecurityScanTaskWorkerTest {
     final SecurityScanExecutor executor = mock(SecurityScanExecutor.class);
     final SecurityScanFinalizer finalizer = mock(SecurityScanFinalizer.class);
     final SecurityScanningProperties properties = new SecurityScanningProperties();
+    final SecurityScanResponseMemoryBudget responseMemoryBudget;
     final AssetDao assets = mock(AssetDao.class);
     final SecurityScanMetrics metrics = mock(SecurityScanMetrics.class);
     final Adapter adapter = mock(Adapter.class);
@@ -231,6 +232,7 @@ class SecurityScanTaskWorkerTest {
       properties.getWorker().setLeaseSeconds(30);
       properties.getWorker().setHeartbeatSeconds(5);
       properties.getWorker().setMaxBackoffSeconds(30);
+      responseMemoryBudget = new SecurityScanResponseMemoryBudget(properties);
       when(task.id()).thenReturn(5L);
       when(task.assetId()).thenReturn(10L);
       when(task.leaseToken()).thenReturn("lease");
@@ -244,7 +246,15 @@ class SecurityScanTaskWorkerTest {
           "demo.jar", "artifact", "application/java-archive", 8L,
           null, Instant.EPOCH, Map.of())));
       worker = new SecurityScanTaskWorker(
-          scans, coordinator, executor, finalizer, properties, assets, metrics, adapter);
+          scans,
+          coordinator,
+          executor,
+          finalizer,
+          properties,
+          responseMemoryBudget,
+          assets,
+          metrics,
+          adapter);
     }
   }
 }

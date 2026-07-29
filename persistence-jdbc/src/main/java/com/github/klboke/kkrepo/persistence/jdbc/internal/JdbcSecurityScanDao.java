@@ -1434,6 +1434,31 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         taskId) == 1;
   }
 
+  @Override
+  @Transactional
+  public boolean reactivateSnapshotTask(
+      long taskId,
+      long requestedScannerSnapshotId,
+      Instant requestedAt,
+      String requestedBy) {
+    return jdbc.update("""
+        UPDATE security_scan_task
+        SET status = 'PENDING', attempts = 0, next_attempt_at = ?, claimed_by = NULL,
+            lease_token = NULL, lease_until = NULL, last_heartbeat_at = NULL,
+            last_error_code = NULL, last_error_summary = NULL, requested_by = ?,
+            requested_at = ?, started_at = NULL, finished_at = NULL, updated_at = ?
+        WHERE id = ?
+          AND requested_scanner_snapshot_id = ?
+          AND status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
+        """,
+        nullableTimestamp(requestedAt),
+        requestedBy,
+        nullableTimestamp(requestedAt),
+        nullableTimestamp(requestedAt),
+        taskId,
+        requestedScannerSnapshotId) == 1;
+  }
+
   private void transitionCurrentTaskProjectionToPending(long taskId, Instant requestedAt) {
     jdbc.update("""
         UPDATE asset_security_state state
@@ -1599,6 +1624,14 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         ? findSbom(inserted.getAsLong()).orElseThrow()
         : findSbomByCatalogFingerprint(sbom.catalogFingerprint()).orElseThrow();
     ensureBlobReference(SBOM_BLOB_OWNER, stored.id(), stored.documentBlobId());
+    return stored;
+  }
+
+  @Override
+  @Transactional
+  public Sbom publishSbom(Sbom sbom, List<SbomComponent> components) {
+    Sbom stored = insertSbomOrFindExisting(sbom);
+    insertSbomComponents(stored.id(), components);
     return stored;
   }
 

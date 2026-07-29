@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
+import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.security.scan.ScanSubject;
 import com.github.klboke.kkrepo.security.scan.ScannerArtifactType;
@@ -15,7 +16,9 @@ import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Readiness;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.SnapshotExpectation;
 import jakarta.annotation.PostConstruct;
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
@@ -25,6 +28,7 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
 
@@ -32,6 +36,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class HttpSecurityScannerAdapter implements Adapter {
   private static final long TRANSPORT_GRACE_SECONDS = 5;
+  private static final long MAX_ERROR_RESPONSE_BYTES = 64L * 1024;
   private static final Pattern RUN_ID = Pattern.compile("[A-Za-z0-9._:-]{1,128}");
   private static final Pattern ERROR_CODE = Pattern.compile("[A-Z0-9_]{1,128}");
   private final ObjectMapper objectMapper;
@@ -165,7 +170,9 @@ public class HttpSecurityScannerAdapter implements Adapter {
           .header("X-KKRepo-Timeout-Seconds",
               Integer.toString(request.limits().timeoutSeconds()))
           .build();
-      return send(httpRequest, MatchResponse.class);
+      MatchResponse response = send(httpRequest, MatchResponse.class);
+      requireExpectedSnapshot(request.expectedSnapshot(), response);
+      return response;
     });
   }
 
@@ -182,7 +189,9 @@ public class HttpSecurityScannerAdapter implements Adapter {
               .header("Idempotency-Key", request.idempotencyKey())
               .POST(HttpRequest.BodyPublishers.ofByteArray(body));
       withServiceCredential(builder);
-      return send(builder.build(), OciScanResponse.class);
+      OciScanResponse response = send(builder.build(), OciScanResponse.class);
+      requireExpectedSnapshot(request.expectedSnapshot(), response.match());
+      return response;
     });
   }
 
@@ -339,13 +348,12 @@ public class HttpSecurityScannerAdapter implements Adapter {
               "Scanner adapter returned HTTP " + status,
               retryable);
         }
-        byte[] bytes = readBounded(body, properties.getMaxResponseBytes());
-        try {
-          return objectMapper.readValue(bytes, type);
-        } catch (IOException e) {
-          throw new ScannerAdapterException(
-              "SCANNER_INVALID_JSON", "Scanner adapter returned invalid JSON", false, e);
+        long maxBytes = properties.getMaxResponseBytes();
+        long contentLength = response.headers().firstValueAsLong("Content-Length").orElse(-1L);
+        if (contentLength > maxBytes) {
+          throw responseTooLarge();
         }
+        return readJsonBounded(body, maxBytes, type);
       }
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
@@ -362,7 +370,8 @@ public class HttpSecurityScannerAdapter implements Adapter {
 
   private byte[] readErrorBody(InputStream body) throws IOException {
     try {
-      return readBounded(body, properties.getMaxResponseBytes());
+      return readBounded(
+          body, Math.min(properties.getMaxResponseBytes(), MAX_ERROR_RESPONSE_BYTES));
     } catch (ScannerAdapterException failure) {
       if ("SCANNER_REPORT_TOO_LARGE".equals(failure.code())) {
         return new byte[0];
@@ -388,6 +397,60 @@ public class HttpSecurityScannerAdapter implements Adapter {
           "SCANNER_REPORT_TOO_LARGE", "Scanner response exceeded configured limit", false);
     }
     return bytes;
+  }
+
+  private <T> T readJsonBounded(InputStream body, long maxBytes, Class<T> type) {
+    try (BoundedResponseInputStream bounded =
+            new BoundedResponseInputStream(body, maxBytes);
+        JsonParser parser = objectMapper.getFactory().createParser(bounded)) {
+      parser.disable(JsonParser.Feature.AUTO_CLOSE_SOURCE);
+      T value = objectMapper.readValue(parser, type);
+      bounded.drain();
+      return value;
+    } catch (IOException e) {
+      if (causedByResponseLimit(e)) {
+        throw responseTooLarge();
+      }
+      throw new ScannerAdapterException(
+          "SCANNER_INVALID_JSON", "Scanner adapter returned invalid JSON", false, e);
+    }
+  }
+
+  private static boolean causedByResponseLimit(Throwable failure) {
+    Throwable current = failure;
+    while (current != null) {
+      if (current instanceof ResponseTooLargeIOException) {
+        return true;
+      }
+      current = current.getCause();
+    }
+    return false;
+  }
+
+  private static ScannerAdapterException responseTooLarge() {
+    return new ScannerAdapterException(
+        "SCANNER_REPORT_TOO_LARGE", "Scanner response exceeded configured limit", false);
+  }
+
+  private static void requireExpectedSnapshot(
+      SnapshotExpectation expected, MatchResponse response) {
+    if (expected == null) {
+      return;
+    }
+    if (response != null
+        && Objects.equals(expected.adapterName(), response.adapterName())
+        && Objects.equals(expected.engineName(), response.engineName())
+        && Objects.equals(expected.engineVersion(), response.engineVersion())
+        && Objects.equals(
+            expected.vulnerabilityDatabaseRevision(),
+            response.vulnerabilityDatabaseRevision())
+        && Objects.equals(expected.capabilityDigest(), response.capabilityDigest())) {
+      return;
+    }
+    throw new ScannerAdapterException(
+        "SCANNER_SNAPSHOT_MISMATCH",
+        "Scanner replica does not expose the task's requested vulnerability snapshot",
+        true);
   }
 
   URI baseUriForRun(String runId) {
@@ -450,6 +513,76 @@ public class HttpSecurityScannerAdapter implements Adapter {
   private interface EndpointCall<T> {
     T execute(URI baseUri);
   }
+
+  private static final class BoundedResponseInputStream extends FilterInputStream {
+    private final long limit;
+    private long count;
+
+    private BoundedResponseInputStream(InputStream delegate, long limit) {
+      super(delegate);
+      this.limit = Math.max(1L, limit);
+    }
+
+    @Override
+    public int read() throws IOException {
+      if (count >= limit) {
+        int extra = super.read();
+        if (extra < 0) return -1;
+        throw new ResponseTooLargeIOException();
+      }
+      int value = super.read();
+      if (value >= 0) count++;
+      return value;
+    }
+
+    @Override
+    public int read(byte[] bytes, int offset, int length) throws IOException {
+      Objects.checkFromIndexSize(offset, length, bytes.length);
+      if (length == 0) return 0;
+      if (count >= limit) {
+        return read() < 0 ? -1 : 1;
+      }
+      int allowed = (int) Math.min((long) length, limit - count);
+      int read = super.read(bytes, offset, allowed);
+      if (read > 0) count += read;
+      return read;
+    }
+
+    @Override
+    public long skip(long length) throws IOException {
+      if (length <= 0) return 0;
+      if (count >= limit) {
+        return read() < 0 ? 0 : 1;
+      }
+      long skipped = super.skip(Math.min(length, limit - count));
+      count += skipped;
+      return skipped;
+    }
+
+    @Override
+    public boolean markSupported() {
+      return false;
+    }
+
+    @Override
+    public synchronized void mark(int readLimit) {
+      // Resetting would make the byte accounting ambiguous.
+    }
+
+    @Override
+    public synchronized void reset() throws IOException {
+      throw new IOException("mark/reset is not supported");
+    }
+
+    private void drain() throws IOException {
+      byte[] buffer = new byte[8192];
+      while (read(buffer) >= 0) {
+        // Enforce the byte limit even if Jackson stops at the first complete JSON value.
+      }
+    }
+  }
+
+  private static final class ResponseTooLargeIOException extends IOException {}
 
   private record ScannerErrorPayload(String code, String message, boolean retryable) {}
 }

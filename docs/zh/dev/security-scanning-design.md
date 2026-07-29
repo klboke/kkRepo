@@ -1484,6 +1484,8 @@ kkrepo.security-scanning.adapter.base-url=http://scanner:8080
 # 多副本 Kubernetes 使用有序稳定地址；非空时覆盖 base-url
 kkrepo.security-scanning.adapter.base-urls=
 kkrepo.security-scanning.metrics-count-limit=10000
+kkrepo.security-scanning.max-response-bytes=134217728
+kkrepo.security-scanning.response-memory-budget-bytes=268435456
 kkrepo.security-scanning.worker.batch-size=4
 kkrepo.security-scanning.worker.lease-seconds=300
 kkrepo.security-scanning.worker.heartbeat-seconds=60
@@ -1510,9 +1512,17 @@ kkrepo.scanner.max-queued-scans=4
 kkrepo.scanner.admission-timeout=1s
 kkrepo.scanner.retry-after-seconds=5
 kkrepo.scanner.database-lock-timeout=2s
+kkrepo.scanner.max-output-bytes=33554432
 kkrepo.scanner.vulnerability-database-update-interval=6h
 kkrepo.scanner.vulnerability-database-update-check-interval=1m
 ```
+
+scanner 成功响应从有界流直接反序列化，不在 kkRepo 内额外保留完整 transport
+`byte[]`。每个执行中的扫描任务按 `2 * max-response-bytes` 占用节点内共享准入预算，
+预算租约覆盖解析、校验和持久化全过程。节点实际并发取
+`min(worker.batch-size, response-memory-budget-bytes / (2 * max-response-bytes))`；
+配置无法容纳一个响应，或预算超过 JVM 最大堆一半时，启用扫描的节点拒绝启动。该预算
+仅保护节点本地堆，任务所有权和重试正确性仍由 MySQL 租约负责。
 
 `kkrepo.security-scanning.enabled` 是 kkRepo 节点的部署能力 gate：
 

@@ -110,6 +110,8 @@ spec:
               value: {{ .Values.securityScanning.scannerDatabase.observationMaxAge | quote }}
             - name: KKREPO_SECURITY_SCANNING_MAX_RESPONSE_BYTES
               value: {{ .Values.securityScanning.limits.maxResponseBytes | quote }}
+            - name: KKREPO_SECURITY_SCANNING_RESPONSE_MEMORY_BUDGET_BYTES
+              value: {{ .Values.securityScanning.limits.responseMemoryBudgetBytes | quote }}
             - name: KKREPO_SECURITY_SCANNING_WORKER_BATCH_SIZE
               value: {{ .Values.securityScanning.worker.batchSize | quote }}
             - name: KKREPO_SECURITY_SCANNING_WORKER_LEASE_SECONDS

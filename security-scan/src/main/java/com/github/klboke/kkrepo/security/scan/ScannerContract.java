@@ -100,7 +100,25 @@ public final class ScannerContract {
       String idempotencyKey,
       String sbomSha256,
       String profileConfigurationDigest,
-      ResourceLimits limits) {}
+      ResourceLimits limits,
+      SnapshotExpectation expectedSnapshot) {
+    public MatchRequest(
+        String apiVersion,
+        String runId,
+        String idempotencyKey,
+        String sbomSha256,
+        String profileConfigurationDigest,
+        ResourceLimits limits) {
+      this(
+          apiVersion,
+          runId,
+          idempotencyKey,
+          sbomSha256,
+          profileConfigurationDigest,
+          limits,
+          null);
+    }
+  }
 
   public record MatchResponse(
       String adapterName,
@@ -131,11 +149,52 @@ public final class ScannerContract {
       List<String> requiredPlatforms,
       String scopedBearerToken,
       String profileConfigurationDigest,
-      ResourceLimits limits) {
+      ResourceLimits limits,
+      SnapshotExpectation expectedSnapshot) {
+    public OciScanRequest(
+        String apiVersion,
+        String runId,
+        String idempotencyKey,
+        String registryUrl,
+        String repository,
+        String manifestDigest,
+        List<String> requiredPlatforms,
+        String scopedBearerToken,
+        String profileConfigurationDigest,
+        ResourceLimits limits) {
+      this(
+          apiVersion,
+          runId,
+          idempotencyKey,
+          registryUrl,
+          repository,
+          manifestDigest,
+          requiredPlatforms,
+          scopedBearerToken,
+          profileConfigurationDigest,
+          limits,
+          null);
+    }
+
     public OciScanRequest {
       requiredPlatforms = requiredPlatforms == null ? List.of() : List.copyOf(requiredPlatforms);
     }
   }
+
+  /**
+   * Deployment-independent identity of the vulnerability matcher state required by a task.
+   *
+   * <p>The database snapshot ID belongs to one kkRepo installation and therefore is not sent to
+   * scanner replicas. These fields are sufficient to reject a response produced by a different
+   * rolling-update/database revision while allowing the HTTP client to fail over to a matching
+   * replica.
+   */
+  public record SnapshotExpectation(
+      String adapterName,
+      String engineName,
+      String engineVersion,
+      String vulnerabilityDatabaseRevision,
+      String capabilityDigest) {}
 
   public record OciScanResponse(
       CatalogResponse catalog,

@@ -38,6 +38,7 @@ public class SecurityScanTaskWorker {
   private final SecurityScanExecutor executor;
   private final SecurityScanFinalizer finalizer;
   private final SecurityScanningProperties properties;
+  private final SecurityScanResponseMemoryBudget responseMemoryBudget;
   private final AssetDao assets;
   private final SecurityScanMetrics metrics;
   private final Adapter adapter;
@@ -51,6 +52,7 @@ public class SecurityScanTaskWorker {
       SecurityScanExecutor executor,
       SecurityScanFinalizer finalizer,
       SecurityScanningProperties properties,
+      SecurityScanResponseMemoryBudget responseMemoryBudget,
       AssetDao assets,
       SecurityScanMetrics metrics,
       Adapter adapter) {
@@ -59,6 +61,7 @@ public class SecurityScanTaskWorker {
     this.executor = executor;
     this.finalizer = finalizer;
     this.properties = properties;
+    this.responseMemoryBudget = responseMemoryBudget;
     this.assets = assets;
     this.metrics = metrics;
     this.adapter = adapter;
@@ -141,7 +144,12 @@ public class SecurityScanTaskWorker {
         heartbeatSeconds,
         TimeUnit.SECONDS);
     try {
-      executor.execute(task);
+      try (var ignored = responseMemoryBudget.acquire()) {
+        executor.execute(task);
+      }
+    } catch (InterruptedException e) {
+      outcome = "cancelled";
+      Thread.currentThread().interrupt();
     } catch (SupersededSecurityScanTaskException e) {
       outcome = "superseded";
       if (!finalizer.cancelCurrentTask(task, Instant.now())) {

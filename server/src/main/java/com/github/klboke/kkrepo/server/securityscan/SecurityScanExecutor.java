@@ -37,6 +37,7 @@ import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.ResourceLimits;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.SnapshotExpectation;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.docker.DockerAuthService;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
@@ -155,7 +156,7 @@ public class SecurityScanExecutor {
           task, profile, config, task.subjectKey(), existing, List.of());
     }
 
-    ScannerSnapshot observedSnapshot = snapshots.readySnapshot();
+    ScannerSnapshot executionSnapshot = executionSnapshot(task);
     ScanSubject subject = new ScanSubject(
         classification.subjectKind(),
         task.repositoryId(),
@@ -175,11 +176,11 @@ public class SecurityScanExecutor {
     if (classification.subjectKind()
         == com.github.klboke.kkrepo.security.scan.ScanEnums.SubjectKind.OCI_MANIFEST) {
       return executeOci(
-          task, repository, asset, blob, profile, config, subject, limits, observedSnapshot);
+          task, repository, asset, blob, profile, config, subject, limits, executionSnapshot);
     }
     Sbom sbom = resolveSbom(
-        task, asset, blob, profile, subject, limits, observedSnapshot);
-    return matchAndFinalize(task, profile, config, subject, sbom, limits, observedSnapshot);
+        task, asset, blob, profile, subject, limits, executionSnapshot);
+    return matchAndFinalize(task, profile, config, subject, sbom, limits, executionSnapshot);
   }
 
   private ScanRun executeOci(
@@ -210,7 +211,8 @@ public class SecurityScanExecutor {
         profile.requiredPlatforms(),
         token,
         profile.configurationDigest(),
-        limits);
+        limits,
+        expectation(observedSnapshot));
     OciScanResponse response;
     try {
       response = adapter.scanOci(request);
@@ -335,7 +337,7 @@ public class SecurityScanExecutor {
       int projectedCount = Math.min(response.components().size(), MAX_PROJECTED_COMPONENTS);
       boolean inventoryComplete = response.completeness() == ScanCompleteness.COMPLETE
           && response.componentCount() <= projectedCount;
-      Sbom sbom = scans.insertSbomOrFindExisting(new Sbom(
+      Sbom proposed = new Sbom(
           null,
           subject.kind(),
           subject.identity(),
@@ -351,13 +353,12 @@ public class SecurityScanExecutor {
           response.componentCount(),
           response.dependencyCount(),
           inventoryComplete,
-          Instant.now()));
-      published = true;
+          Instant.now());
       List<SbomComponent> components = response.components().stream()
           .limit(projectedCount)
           .map(component -> new SbomComponent(
               null,
-              sbom.id(),
+              0,
               required(component.componentRef(), "componentRef"),
               null,
               component.packageUrl(),
@@ -371,7 +372,8 @@ public class SecurityScanExecutor {
               component.licenses(),
               component.properties()))
           .toList();
-      scans.insertSbomComponents(sbom.id(), components);
+      Sbom sbom = scans.publishSbom(proposed, components);
+      published = true;
       return sbom;
     } finally {
       if (published) {
@@ -407,7 +409,8 @@ public class SecurityScanExecutor {
         task.id() + ":match:" + snapshot.snapshotFingerprint(),
         sbom.documentSha256(),
         profile.configurationDigest(),
-        limits);
+        limits,
+        expectation(snapshot));
     MatchResponse response;
     Timer.Sample matchTimer = metrics.start();
     try {
@@ -435,6 +438,7 @@ public class SecurityScanExecutor {
       ScannerSnapshot readinessSnapshot) {
     validateMatchResponse(response);
     ScannerSnapshot actualSnapshot = snapshots.snapshotFor(response, readinessSnapshot);
+    requireRequestedSnapshot(task, actualSnapshot);
     List<String> scannedPlatforms = stringList(response.summary().get("scannedPlatforms"));
     List<String> missingPlatforms = stringList(response.summary().get("missingPlatforms"));
     String fingerprint = matchFingerprint(task, ScanFingerprints.match(
@@ -509,6 +513,41 @@ public class SecurityScanExecutor {
     }
     return ScanFingerprints.sha256(
         "max-age-refresh", baseFingerprint, Long.toString(task.id()));
+  }
+
+  private ScannerSnapshot executionSnapshot(ScanTask task) {
+    if (task.requestedScannerSnapshotId() == null) {
+      return snapshots.readySnapshot();
+    }
+    return scans.findScannerSnapshot(task.requestedScannerSnapshotId())
+        .filter(ScannerSnapshot::ready)
+        .orElseThrow(() -> new ScannerAdapterException(
+            "SCANNER_SNAPSHOT_UNAVAILABLE",
+            "Requested scanner snapshot is unavailable: "
+                + task.requestedScannerSnapshotId(),
+            false));
+  }
+
+  private static SnapshotExpectation expectation(ScannerSnapshot snapshot) {
+    return new SnapshotExpectation(
+        snapshot.adapterName(),
+        snapshot.engineName(),
+        snapshot.engineVersion(),
+        snapshot.vulnerabilityDatabaseRevision(),
+        snapshot.capabilityDigest());
+  }
+
+  private static void requireRequestedSnapshot(
+      ScanTask task, ScannerSnapshot actualSnapshot) {
+    Long requestedId = task.requestedScannerSnapshotId();
+    if (requestedId == null || requestedId.equals(actualSnapshot.id())) {
+      return;
+    }
+    throw new ScannerAdapterException(
+        "SCANNER_SNAPSHOT_MISMATCH",
+        "Scanner returned snapshot " + actualSnapshot.id()
+            + " while task requested snapshot " + requestedId,
+        true);
   }
 
   private static List<String> stringList(Object value) {

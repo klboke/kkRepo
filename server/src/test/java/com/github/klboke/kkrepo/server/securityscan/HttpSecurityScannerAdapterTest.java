@@ -22,6 +22,7 @@ import com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Readiness;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.ResourceLimits;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.SnapshotExpectation;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.ByteArrayInputStream;
@@ -302,6 +303,79 @@ class HttpSecurityScannerAdapterTest {
     } finally {
       unavailable.stop(0);
       healthy.stop(0);
+    }
+  }
+
+  @Test
+  void failsMatchAndOciOverUntilAReplicaHasTheRequestedSnapshot() throws Exception {
+    ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+    AtomicInteger mismatchedCalls = new AtomicInteger();
+    AtomicInteger cancellationCalls = new AtomicInteger();
+    AtomicInteger matchingCalls = new AtomicInteger();
+    HttpServer mismatched = standaloneServer(exchange -> {
+      String path = exchange.getRequestURI().getPath();
+      if (path.endsWith("/cancel")) {
+        cancellationCalls.incrementAndGet();
+        respond(exchange, 200, mapper.writeValueAsBytes(
+            new CancellationResponse("snapshot-run", true)));
+        return;
+      }
+      mismatchedCalls.incrementAndGet();
+      exchange.getRequestBody().readAllBytes();
+      Object response = "/v1/oci/scan".equals(path)
+          ? new OciScanResponse(catalog(), match("db-other"), List.of(), List.of())
+          : match("db-other");
+      respond(exchange, 200, mapper.writeValueAsBytes(response));
+    });
+    HttpServer matching = standaloneServer(exchange -> {
+      matchingCalls.incrementAndGet();
+      exchange.getRequestBody().readAllBytes();
+      Object response = "/v1/oci/scan".equals(exchange.getRequestURI().getPath())
+          ? new OciScanResponse(catalog(), match("db"), List.of(), List.of())
+          : match("db");
+      respond(exchange, 200, mapper.writeValueAsBytes(response));
+    });
+    try {
+      SecurityScanningProperties properties = new SecurityScanningProperties();
+      properties.getAdapter().setBaseUrls(List.of(
+          "http://127.0.0.1:" + mismatched.getAddress().getPort(),
+          "http://127.0.0.1:" + matching.getAddress().getPort()));
+      properties.getAdapter().setServiceCredential("secret");
+      HttpSecurityScannerAdapter adapter =
+          new HttpSecurityScannerAdapter(mapper, properties);
+      String runId = java.util.stream.IntStream.range(0, 100)
+          .mapToObj(value -> "snapshot-" + value)
+          .filter(value -> HttpSecurityScannerAdapter.routeIndex(value, 2) == 0)
+          .findFirst()
+          .orElseThrow();
+      SnapshotExpectation expected =
+          new SnapshotExpectation("adapter", "grype", "1", "db", "cap");
+
+      MatchResponse match = adapter.match(
+          new MatchRequest(
+              "v1", runId, "match-key", "b".repeat(64), "config", limits(), expected),
+          () -> new ByteArrayInputStream("{}".getBytes()));
+      OciScanResponse oci = adapter.scanOci(new OciScanRequest(
+          "v1",
+          runId,
+          "oci-key",
+          "https://registry",
+          "repo/image",
+          "sha256:" + "a".repeat(64),
+          List.of("linux/amd64"),
+          "token",
+          "config",
+          limits(),
+          expected));
+
+      assertEquals("db", match.vulnerabilityDatabaseRevision());
+      assertEquals("db", oci.match().vulnerabilityDatabaseRevision());
+      assertEquals(2, mismatchedCalls.get());
+      assertEquals(2, cancellationCalls.get());
+      assertEquals(2, matchingCalls.get());
+    } finally {
+      mismatched.stop(0);
+      matching.stop(0);
     }
   }
 
@@ -597,8 +671,12 @@ class HttpSecurityScannerAdapterTest {
   }
 
   private static MatchResponse match() {
+    return match("db");
+  }
+
+  private static MatchResponse match(String databaseRevision) {
     return new MatchResponse(
-        "adapter", "1", "grype", "1", "db", Instant.EPOCH, "cap",
+        "adapter", "1", "grype", "1", databaseRevision, Instant.EPOCH, "cap",
         ScanCompleteness.COMPLETE, "{}".getBytes(), List.of(), Map.of());
   }
 

@@ -368,6 +368,8 @@ class SecurityScanSchedulingServicesTest {
         .map(TaskDraft::requestUuid)
         .distinct()
         .count());
+    verify(scans, org.mockito.Mockito.times(4))
+        .reactivateSnapshotTask(eq(0L), eq(2L), any(), eq("security-scan-worker"));
     verify(scans).listAssetStatesNeedingSnapshot(3L, 2L, 12L, 1);
   }
 

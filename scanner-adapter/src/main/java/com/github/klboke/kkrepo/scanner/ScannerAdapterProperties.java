@@ -16,7 +16,7 @@ public class ScannerAdapterProperties {
   private Duration vulnerabilityDatabaseUpdateInterval = Duration.ofHours(6);
   private Duration vulnerabilityDatabaseUpdateCheckInterval = Duration.ofMinutes(1);
   private long maxInputBytes = 2L * 1024 * 1024 * 1024;
-  private long maxOutputBytes = 64L * 1024 * 1024;
+  private long maxOutputBytes = 32L * 1024 * 1024;
   private long maxStderrBytes = 256L * 1024;
   private Duration readinessCache = Duration.ofSeconds(30);
   private int maxConcurrentScans = 2;

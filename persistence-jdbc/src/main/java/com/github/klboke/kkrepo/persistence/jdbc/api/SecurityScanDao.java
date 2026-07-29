@@ -152,6 +152,9 @@ public interface SecurityScanDao {
 
   boolean requeueTask(long taskId, Instant requestedAt, String requestedBy);
 
+  boolean reactivateSnapshotTask(
+      long taskId, long requestedScannerSnapshotId, Instant requestedAt, String requestedBy);
+
   ScannerSnapshot insertSnapshotOrFindExisting(ScannerSnapshot snapshot);
 
   Optional<ScannerSnapshot> findScannerSnapshot(long snapshotId);
@@ -159,6 +162,8 @@ public interface SecurityScanDao {
   Optional<ScannerSnapshot> latestScannerSnapshot();
 
   Sbom insertSbomOrFindExisting(Sbom sbom);
+
+  Sbom publishSbom(Sbom sbom, List<SbomComponent> components);
 
   Optional<Sbom> findSbom(long sbomId);
 

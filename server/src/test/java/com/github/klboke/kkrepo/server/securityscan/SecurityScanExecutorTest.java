@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -50,6 +51,7 @@ import com.github.klboke.kkrepo.security.scan.ScannerContract;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.CatalogResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Component;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Finding;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanResponse;
 import com.github.klboke.kkrepo.server.docker.DockerAuthService;
@@ -87,7 +89,7 @@ class SecurityScanExecutorTest {
     assertEquals(2, run.findingCount());
     assertEquals(1, run.fixableFindingCount());
     assertEquals(Severity.HIGH, run.maxSeverity());
-    verify(fixture.scans).insertSbomComponents(anyLong(), anyList());
+    verify(fixture.scans).publishSbom(any(), anyList());
     verify(fixture.metrics).recordInputBytes("MAVEN2", 8);
     verify(fixture.documents).release(anyLong(), any());
   }
@@ -148,6 +150,31 @@ class SecurityScanExecutorTest {
   }
 
   @Test
+  void rejectsAResultFromAnotherReplicaSnapshotRequestedByTheTask() throws Exception {
+    Fixture fixture = new Fixture(ScanStage.CATALOG_AND_MATCH, SubjectKind.ASSET_BLOB);
+    when(fixture.task.requestedScannerSnapshotId()).thenReturn(fixture.snapshot.id());
+    when(fixture.scans.findScannerSnapshot(fixture.snapshot.id()))
+        .thenReturn(Optional.of(fixture.snapshot));
+    when(fixture.adapter.catalog(any(), any())).thenReturn(catalogResponse());
+    when(fixture.adapter.match(any(), any())).thenReturn(matchResponse());
+    ScannerSnapshot other = new ScannerSnapshot(
+        41L, "adapter", "v1", "grype", "2.0", "db-2", NOW, "cap",
+        "other-snapshot", NOW, true, Map.of("catalogEngineVersion", "1.0"));
+    when(fixture.snapshots.snapshotFor(any(), any())).thenReturn(other);
+
+    ScannerAdapterException failure = assertCode(
+        "SCANNER_SNAPSHOT_MISMATCH",
+        () -> fixture.executor.execute(fixture.task));
+
+    assertTrue(failure.retryable());
+    ArgumentCaptor<MatchRequest> request = ArgumentCaptor.forClass(MatchRequest.class);
+    verify(fixture.adapter).match(request.capture(), any());
+    assertEquals("db-1", request.getValue().expectedSnapshot().vulnerabilityDatabaseRevision());
+    verify(fixture.finalizer, never()).finalizeRun(
+        any(), any(), any(), anyString(), any(), anyList());
+  }
+
+  @Test
   void policyOnlyUsesTheCurrentGenerationRun() {
     Fixture fixture = new Fixture(ScanStage.POLICY_ONLY, SubjectKind.ASSET_BLOB);
     ScanRun prior = storedRun(88L, 20L);
@@ -183,7 +210,7 @@ class SecurityScanExecutorTest {
     assertEquals(List.of("linux/amd64"), run.scannedPlatforms());
     assertEquals(List.of("linux/arm64"), run.missingPlatforms());
     ArgumentCaptor<Sbom> sbom = ArgumentCaptor.forClass(Sbom.class);
-    verify(fixture.scans).insertSbomOrFindExisting(sbom.capture());
+    verify(fixture.scans).publishSbom(sbom.capture(), anyList());
     ScanSubject subject = new ScanSubject(
         SubjectKind.OCI_MANIFEST,
         1L,
@@ -438,6 +465,7 @@ class SecurityScanExecutorTest {
       when(task.subjectKey()).thenReturn("sha256:" + SHA256);
       when(task.contentGeneration()).thenReturn(2L);
       when(task.profileId()).thenReturn(1L);
+      when(task.requestedScannerSnapshotId()).thenReturn(null);
       when(task.stage()).thenReturn(stage);
       when(task.leaseToken()).thenReturn("lease");
       when(task.startedAt()).thenReturn(NOW);
@@ -477,7 +505,7 @@ class SecurityScanExecutorTest {
                 kindName.equals("sbom") ? "d".repeat(64) : "e".repeat(64),
                 ((byte[]) invocation.getArgument(3)).length);
           });
-      when(scans.insertSbomOrFindExisting(any())).thenAnswer(invocation -> {
+      when(scans.publishSbom(any(), anyList())).thenAnswer(invocation -> {
         Sbom value = invocation.getArgument(0);
         return new Sbom(
             20L, value.subjectKind(), value.subjectIdentity(), value.subjectIdentityHash(),
