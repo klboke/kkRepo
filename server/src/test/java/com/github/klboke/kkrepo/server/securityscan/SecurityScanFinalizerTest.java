@@ -266,6 +266,54 @@ class SecurityScanFinalizerTest {
   }
 
   @Test
+  void skipsPolicyPublicationWhenANewerScannerSnapshotAlreadyWon() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    stubWaiverRevision(scans);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    SecurityScanAuditService audit = mock(SecurityScanAuditService.class);
+    SecurityScanDocumentPersistence documents = mock(SecurityScanDocumentPersistence.class);
+    SecurityScanFinalizer finalizer =
+        new SecurityScanFinalizer(scans, repositories, audit, documents);
+    Instant now = Instant.now();
+    ScanTask task = task(1, 3);
+    ScanProfile profile = profile(now);
+    RepositoryScanConfig config = config(1L, 101L);
+    ScanRun olderRun = run(now);
+    AssetSecurityState newerState = new AssetSecurityState(
+        10L,
+        1L,
+        1L,
+        new byte[] {1},
+        31L,
+        ScanState.COMPLETE,
+        ScanCompleteness.COMPLETE,
+        true,
+        Severity.CRITICAL,
+        Map.of("critical", 1),
+        101L,
+        1L,
+        PolicyDecision.BLOCK_VULNERABILITY,
+        "NEWER_SNAPSHOT",
+        now.plusSeconds(3600),
+        now,
+        2L);
+
+    when(scans.insertRunOrFindExisting(olderRun)).thenReturn(olderRun);
+    when(scans.findAssetState(10L, 1L)).thenReturn(Optional.of(newerState));
+    when(scans.upsertAssetStateIfCurrent(any())).thenReturn(newerState);
+    when(scans.completeTask(eq(5L), eq("lease"), any())).thenReturn(true);
+
+    finalizer.finalizeRun(
+        task, profile, config, "sha256:" + "a".repeat(64), olderRun, List.of());
+
+    verify(scans, never()).upsertAssetPolicyStateIfCurrent(any());
+    verify(repositories, never()).listGroupsContaining(anyLong());
+    verify(audit, never()).recordSystem(eq("POLICY_STATE_CHANGED"), anyLong(), any(Map.class));
+    verify(scans).completeTask(eq(5L), eq("lease"), any());
+    verify(documents).releaseOwner(5L);
+  }
+
+  @Test
   void materializesMissingPolicyPlatformAsPartialForOciSubjects() {
     SecurityScanDao scans = mock(SecurityScanDao.class);
     stubWaiverRevision(scans);

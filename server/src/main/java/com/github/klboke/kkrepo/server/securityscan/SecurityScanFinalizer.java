@@ -28,6 +28,7 @@ import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -110,18 +111,21 @@ public class SecurityScanFinalizer {
         staleAt,
         now,
         0));
-    auditPolicyTransition(task.repositoryId(), previous, updated);
-    materializePolicyContexts(
-        task.repositoryId(),
-        task.assetId(),
-        task.contentGeneration(),
-        profile,
-        run,
-        findings,
-        config,
-        primary,
-        now,
-        ociSubject);
+    if (updated.contentGeneration() == task.contentGeneration()
+        && Objects.equals(updated.latestScanRunId(), run.id())) {
+      auditPolicyTransition(task.repositoryId(), previous, updated);
+      materializePolicyContexts(
+          task.repositoryId(),
+          task.assetId(),
+          task.contentGeneration(),
+          profile,
+          run,
+          findings,
+          config,
+          primary,
+          now,
+          ociSubject);
+    }
     if (!scans.completeTask(task.id(), task.leaseToken(), now)) {
       throw new LostSecurityScanLeaseException(task.id());
     }

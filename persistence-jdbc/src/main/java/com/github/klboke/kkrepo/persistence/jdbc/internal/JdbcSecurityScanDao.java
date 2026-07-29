@@ -2304,6 +2304,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Override
   @Transactional
   public AssetSecurityState upsertAssetStateIfCurrent(AssetSecurityState state) {
+    lockScanCandidate(state.assetId());
     int updated = updateAssetState(state);
     if (updated == 0 && candidateGenerationMatches(state.assetId(), state.contentGeneration())) {
       boolean inserted = JdbcInserts.tryUpdate(jdbc, """
@@ -2355,6 +2356,13 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
             SELECT 1 FROM security_scan_candidate c
             WHERE c.asset_id = s.asset_id AND c.content_generation = ?
           )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM security_scan_run current_run
+            JOIN security_scan_run proposed_run ON proposed_run.id = ?
+            WHERE current_run.id = s.latest_scan_run_id
+              AND current_run.scanner_snapshot_id > proposed_run.scanner_snapshot_id
+          )
         """,
         state.contentGeneration(),
         state.subjectIdentityHash(),
@@ -2373,7 +2381,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         state.assetId(),
         state.profileId(),
         state.contentGeneration(),
-        state.contentGeneration());
+        state.contentGeneration(),
+        state.latestScanRunId());
   }
 
   @Override
@@ -2438,6 +2447,13 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
             SELECT 1 FROM security_scan_candidate c
             WHERE c.asset_id = s.asset_id AND c.content_generation = ?
           )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM security_scan_run current_run
+            JOIN security_scan_run proposed_run ON proposed_run.id = ?
+            WHERE current_run.id = s.latest_scan_run_id
+              AND current_run.scanner_snapshot_id > proposed_run.scanner_snapshot_id
+          )
         """,
         state.contentGeneration(),
         state.latestScanRunId(),
@@ -2454,7 +2470,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         state.assetId(),
         state.profileId(),
         state.repositoryId(),
-        state.contentGeneration());
+        state.contentGeneration(),
+        state.latestScanRunId());
   }
 
   private boolean lockWaiverRevision(long expectedRevision) {
@@ -2570,6 +2587,23 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         WHERE asset_id = ? AND content_generation = ?
         """, Long.class, assetId, generation);
     return count != null && count == 1;
+  }
+
+  /**
+   * Serializes final publication for one asset across replicas.
+   *
+   * <p>The candidate is the durable content-generation authority and exists before any scan state.
+   * Taking its row lock also makes the subsequent scanner-snapshot fence observe the winner of a
+   * concurrent publication on PostgreSQL, whose statement snapshot alone is not sufficient after
+   * waiting for another updater.
+   */
+  private void lockScanCandidate(long assetId) {
+    jdbc.queryForList("""
+        SELECT asset_id
+        FROM security_scan_candidate
+        WHERE asset_id = ?
+        FOR UPDATE
+        """, Long.class, assetId);
   }
 
   @Override

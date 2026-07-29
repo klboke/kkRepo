@@ -1486,6 +1486,251 @@ public abstract class PersistenceApiContract {
   }
 
   @Test
+  void securityScanningKeepsNewestScannerSnapshotWhenRematchesCompleteOutOfOrder()
+      throws Exception {
+    SecurityScanDao scans = stores().securityScanning();
+    long repositoryId =
+        createRepository("scan-snapshot-publication-fence", RepositoryFormat.MAVEN2);
+    long blobStoreId =
+        stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
+    Instant now = Instant.parse("2026-07-24T12:00:00Z");
+    long artifactBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "scan/snapshot-fence.jar", "scan-snapshot-fence-artifact"));
+    String path = "com/acme/snapshot-fence/1.0/snapshot-fence-1.0.jar";
+    long assetId = stores().assets().insertAsset(new AssetRecord(
+        null,
+        repositoryId,
+        null,
+        artifactBlobId,
+        RepositoryFormat.MAVEN2,
+        path,
+        PersistenceHashes.pathHash(path),
+        "snapshot-fence-1.0.jar",
+        "ARTIFACT",
+        "application/java-archive",
+        42L,
+        null,
+        now,
+        Map.of()));
+    assertEquals(1, scans.recordArtifactContentChange(assetId));
+
+    SecurityScanDao.ScanProfile profile = scans.createProfile(new SecurityScanDao.ScanProfile(
+        null,
+        "snapshot-publication-fence-profile",
+        true,
+        "syft",
+        "grype",
+        List.of("vuln"),
+        Map.of(),
+        1024 * 1024,
+        1000,
+        10 * 1024 * 1024,
+        1024 * 1024,
+        2,
+        60,
+        OciPlatformPolicy.REQUIRED_SET,
+        List.of(),
+        "1".repeat(64),
+        1,
+        now,
+        now));
+    SecurityScanDao.ScannerSnapshot olderSnapshot =
+        scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+            null,
+            "contract-adapter",
+            "v1",
+            "grype",
+            "0.1.0",
+            "older-db",
+            now.minusSeconds(120),
+            "2".repeat(64),
+            "3".repeat(64),
+            now,
+            true,
+            Map.of()));
+    SecurityScanDao.ScannerSnapshot newerSnapshot =
+        scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+            null,
+            "contract-adapter",
+            "v1",
+            "grype",
+            "0.1.0",
+            "newer-db",
+            now.minusSeconds(60),
+            "2".repeat(64),
+            "4".repeat(64),
+            now.plusSeconds(1),
+            true,
+            Map.of()));
+    assertTrue(newerSnapshot.id() > olderSnapshot.id());
+
+    long sbomBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "security/snapshot-fence-sbom.json", "snapshot-fence-sbom"));
+    SecurityScanDao.Sbom sbom = scans.insertSbomOrFindExisting(new SecurityScanDao.Sbom(
+        null,
+        SubjectKind.ASSET_BLOB,
+        "sha256:" + "5".repeat(64),
+        null,
+        "syft",
+        "1.0.0",
+        "6".repeat(64),
+        "7".repeat(64),
+        sbomBlobId,
+        "8".repeat(64),
+        "CycloneDX",
+        "1.6",
+        1,
+        0,
+        true,
+        now));
+    long reportBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "security/snapshot-fence-report.json", "snapshot-fence-report"));
+    SecurityScanDao.ScanRun olderRun =
+        scans.insertRunOrFindExisting(new SecurityScanDao.ScanRun(
+            null,
+            null,
+            sbom.id(),
+            olderSnapshot.id(),
+            "9".repeat(64),
+            "a".repeat(64),
+            ScanState.COMPLETE,
+            ScanCompleteness.COMPLETE,
+            reportBlobId,
+            "b".repeat(64),
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            Severity.UNKNOWN,
+            now,
+            now.plusSeconds(2),
+            now.plusSeconds(2)));
+    SecurityScanDao.ScanRun newerRun =
+        scans.insertRunOrFindExisting(new SecurityScanDao.ScanRun(
+            null,
+            null,
+            sbom.id(),
+            newerSnapshot.id(),
+            "9".repeat(64),
+            "c".repeat(64),
+            ScanState.COMPLETE,
+            ScanCompleteness.COMPLETE,
+            reportBlobId,
+            "b".repeat(64),
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            Severity.CRITICAL,
+            now.plusSeconds(1),
+            now.plusSeconds(3),
+            now.plusSeconds(3)));
+
+    SecurityScanDao.AssetSecurityState olderState =
+        new SecurityScanDao.AssetSecurityState(
+            assetId,
+            profile.id(),
+            1,
+            PersistenceHashes.sha256("sha256:" + "5".repeat(64)),
+            olderRun.id(),
+            ScanState.COMPLETE,
+            ScanCompleteness.COMPLETE,
+            true,
+            Severity.UNKNOWN,
+            Map.of(),
+            null,
+            null,
+            PolicyDecision.ALLOW,
+            "OLDER_SNAPSHOT",
+            null,
+            now.plusSeconds(2),
+            0);
+    SecurityScanDao.AssetSecurityState newerState =
+        new SecurityScanDao.AssetSecurityState(
+            assetId,
+            profile.id(),
+            1,
+            PersistenceHashes.sha256("sha256:" + "5".repeat(64)),
+            newerRun.id(),
+            ScanState.COMPLETE,
+            ScanCompleteness.COMPLETE,
+            true,
+            Severity.CRITICAL,
+            Map.of("critical", 1),
+            null,
+            null,
+            PolicyDecision.BLOCK_VULNERABILITY,
+            "NEWER_SNAPSHOT",
+            null,
+            now.plusSeconds(3),
+            0);
+    scans.upsertAssetStateIfCurrent(olderState);
+    CyclicBarrier publicationStart = new CyclicBarrier(2);
+    invokeConcurrently(List.of(
+        () -> {
+          publicationStart.await();
+          return inTransaction(() -> scans.upsertAssetStateIfCurrent(olderState));
+        },
+        () -> {
+          publicationStart.await();
+          return inTransaction(() -> scans.upsertAssetStateIfCurrent(newerState));
+        }), 2);
+    SecurityScanDao.AssetSecurityState published =
+        scans.findAssetState(assetId, profile.id()).orElseThrow();
+    assertEquals(
+        newerRun.id(),
+        published.latestScanRunId(),
+        "an older vulnerability snapshot must not replace a newer rematch result");
+    assertEquals(PolicyDecision.BLOCK_VULNERABILITY, published.policyDecision());
+
+    long waiverRevision = scans.waiverRevision().currentRevision();
+    SecurityScanDao.AssetPolicyState newerPolicyState =
+        scans.upsertAssetPolicyStateIfCurrent(new SecurityScanDao.AssetPolicyState(
+            assetId,
+            profile.id(),
+            repositoryId,
+            1,
+            newerRun.id(),
+            null,
+            null,
+            1,
+            PolicyDecision.BLOCK_VULNERABILITY,
+            "NEWER_SNAPSHOT",
+            0,
+            null,
+            null,
+            now.plusSeconds(3),
+            0,
+            waiverRevision));
+    SecurityScanDao.AssetPolicyState afterOlderPolicy =
+        scans.upsertAssetPolicyStateIfCurrent(new SecurityScanDao.AssetPolicyState(
+            assetId,
+            profile.id(),
+            repositoryId,
+            1,
+            olderRun.id(),
+            null,
+            null,
+            1,
+            PolicyDecision.ALLOW,
+            "OLDER_SNAPSHOT",
+            0,
+            null,
+            null,
+            now.plusSeconds(4),
+            newerPolicyState.version(),
+            waiverRevision));
+    assertEquals(newerRun.id(), afterOlderPolicy.latestScanRunId());
+    assertEquals(PolicyDecision.BLOCK_VULNERABILITY, afterOlderPolicy.policyDecision());
+  }
+
+  @Test
   void securityScanningRequeuesAFirstObservationFailureExactlyOnce() {
     SecurityScanDao scans = stores().securityScanning();
     long repositoryId =
