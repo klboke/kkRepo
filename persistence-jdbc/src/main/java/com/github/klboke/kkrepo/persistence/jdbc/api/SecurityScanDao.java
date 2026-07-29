@@ -21,6 +21,9 @@ import java.util.Optional;
 /** Shared relational contract for durable, multi-replica security scan coordination. */
 public interface SecurityScanDao {
   int MAX_DOWNLOAD_POLICY_BATCH = 1024;
+  int MAX_WAIVER_ADVISORY_SELECTOR_LENGTH = 255;
+  int MAX_WAIVER_PACKAGE_SELECTOR_LENGTH = 2_048;
+  int MAX_WAIVER_REASON_LENGTH = 2_048;
 
   Optional<ScanProfile> findProfile(long profileId);
 

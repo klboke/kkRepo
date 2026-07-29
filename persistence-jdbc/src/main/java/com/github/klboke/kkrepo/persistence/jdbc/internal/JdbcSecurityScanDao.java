@@ -2766,10 +2766,23 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       setNullableLong(ps, 2, waiver.repositoryId());
       setNullableLong(ps, 3, waiver.assetId());
       setNullableLong(ps, 4, waiver.findingId());
-      ps.setString(5, waiver.advisorySelector());
-      ps.setString(6, waiver.packageSelector());
+      ps.setString(
+          5,
+          requireMaxLength(
+              waiver.advisorySelector(),
+              SecurityScanDao.MAX_WAIVER_ADVISORY_SELECTOR_LENGTH,
+              "advisory selector"));
+      ps.setString(
+          6,
+          requireMaxLength(
+              waiver.packageSelector(),
+              SecurityScanDao.MAX_WAIVER_PACKAGE_SELECTOR_LENGTH,
+              "package selector"));
       json.bind(ps, 7, waiver.selector());
-      ps.setString(8, truncate(waiver.reason(), 2048));
+      ps.setString(
+          8,
+          requireMaxLength(
+              waiver.reason(), SecurityScanDao.MAX_WAIVER_REASON_LENGTH, "waiver reason"));
       setNullableLong(ps, 9, waiver.policyId());
       setNullableLong(ps, 10, waiver.policyRevision());
       ps.setString(11, waiver.createdBy());
@@ -3883,6 +3896,14 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   private static String truncate(String value, int maxLength) {
     if (value == null || value.length() <= maxLength) return value;
     return value.substring(0, maxLength);
+  }
+
+  private static String requireMaxLength(String value, int maxLength, String field) {
+    if (value != null && value.length() > maxLength) {
+      throw new IllegalArgumentException(
+          field + " exceeds its maximum length of " + maxLength);
+    }
+    return value;
   }
 
   private static String safeUrl(String value) {

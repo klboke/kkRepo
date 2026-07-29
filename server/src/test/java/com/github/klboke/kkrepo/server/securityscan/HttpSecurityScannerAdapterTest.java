@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.securityscan;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -38,6 +39,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -82,6 +84,29 @@ class HttpSecurityScannerAdapterTest {
   void leavesOnlyBoundedTransportGraceAroundTheScannerDeadline() {
     assertEquals(Duration.ofSeconds(35), HttpSecurityScannerAdapter.requestTimeout(30));
     assertEquals(Duration.ofSeconds(6), HttpSecurityScannerAdapter.requestTimeout(0));
+  }
+
+  @Test
+  void failoverDeadlineDerivesEveryAttemptFromOneMonotonicBudget() {
+    AtomicLong clock = new AtomicLong();
+    HttpSecurityScannerAdapter.FailoverDeadline deadline =
+        new HttpSecurityScannerAdapter.FailoverDeadline(3, clock::get);
+
+    HttpSecurityScannerAdapter.AttemptBudget initial = deadline.nextAttempt();
+    assertEquals(Duration.ofSeconds(8), initial.transportTimeout());
+    assertEquals(3, initial.scannerTimeoutSeconds());
+    assertEquals(Duration.ofSeconds(5), deadline.remainingCancellationTimeout());
+
+    clock.set(Duration.ofMillis(1_200).toNanos());
+    HttpSecurityScannerAdapter.AttemptBudget fallback = deadline.nextAttempt();
+    assertEquals(Duration.ofMillis(6_800), fallback.transportTimeout());
+    assertEquals(2, fallback.scannerTimeoutSeconds());
+
+    clock.set(Duration.ofSeconds(8).toNanos());
+    ScannerAdapterException failure =
+        assertThrows(ScannerAdapterException.class, deadline::nextAttempt);
+    assertEquals("SCANNER_TIMEOUT", failure.code());
+    assertNull(deadline.remainingCancellationTimeout());
   }
 
   @Test
@@ -351,6 +376,60 @@ class HttpSecurityScannerAdapterTest {
     } finally {
       unavailable.stop(0);
       healthy.stop(0);
+    }
+  }
+
+  @Test
+  void sharesOneScannerDeadlineAcrossFailoverAttempts() throws Exception {
+    ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+    AtomicInteger fallbackTimeoutSeconds = new AtomicInteger();
+    HttpServer slowPrimary = standaloneServer(exchange -> {
+      if (exchange.getRequestURI().getPath().endsWith("/cancel")) {
+        respond(
+            exchange,
+            200,
+            mapper.writeValueAsBytes(new CancellationResponse("deadline-run", true)));
+        return;
+      }
+      exchange.getRequestBody().readAllBytes();
+      java.util.concurrent.locks.LockSupport.parkNanos(Duration.ofMillis(1_200).toNanos());
+      respond(exchange, 503, "{}".getBytes());
+    });
+    HttpServer fallback = standaloneServer(exchange -> {
+      fallbackTimeoutSeconds.set(Integer.parseInt(
+          exchange.getRequestHeaders().getFirst("X-KKRepo-Timeout-Seconds")));
+      exchange.getRequestBody().readAllBytes();
+      respond(exchange, 200, mapper.writeValueAsBytes(catalog()));
+    });
+    try {
+      SecurityScanningProperties properties = new SecurityScanningProperties();
+      properties.getAdapter().setBaseUrls(List.of(
+          "http://127.0.0.1:" + slowPrimary.getAddress().getPort(),
+          "http://127.0.0.1:" + fallback.getAddress().getPort()));
+      properties.getAdapter().setServiceCredential("secret");
+      HttpSecurityScannerAdapter adapter =
+          new HttpSecurityScannerAdapter(mapper, properties);
+      String runId = java.util.stream.IntStream.range(0, 100)
+          .mapToObj(value -> "deadline-" + value)
+          .filter(value -> HttpSecurityScannerAdapter.routeIndex(value, 2) == 0)
+          .findFirst()
+          .orElseThrow();
+      ResourceLimits limits = new ResourceLimits(4096, 100, 8192, 4096, 2, 3);
+
+      assertEquals(
+          "CycloneDX",
+          adapter.catalog(
+              new CatalogRequest(
+                  "v1", runId, "catalog-key", subject(null), "config", limits),
+              () -> new ByteArrayInputStream("artifact".getBytes())).specName());
+
+      assertTrue(fallbackTimeoutSeconds.get() > 0);
+      assertTrue(
+          fallbackTimeoutSeconds.get() < limits.timeoutSeconds(),
+          "the fallback must receive only the scanner time left by the primary");
+    } finally {
+      slowPrimary.stop(0);
+      fallback.stop(0);
     }
   }
 

@@ -1001,12 +1001,13 @@ WHERE id = ? AND status = 'RUNNING' AND lease_token = ?
 旧 worker 在 lease 失效后返回，不得覆盖接管 worker 的结果。
 
 管理员取消 `RUNNING` 任务时，数据库状态和 lease fencing 仍是集群正确性的唯一真相。
-worker 的下一次 heartbeat 发现 lease 已失效后，会立即中断当前 scanner HTTP 请求，并
-使用 task id 作为 run id 向 adapter 发送带 service credential 的取消请求。adapter
-只在本实例维护短生命周期的 active-run 映射，用于中断对应请求线程和终止
-Syft/Grype 进程树；该映射不是持久任务状态，也不参与多副本正确性。取消请求经过
-负载均衡时可能落到其他 adapter 副本，因此资源释放是 best effort，scanner
-端到端超时仍是最终上界，任何迟到结果都会被 lease token 拒绝。
+管理事务先原子提交 `CANCELLED` 状态、blob owner 释放和审计记录，提交成功后立即使用
+task id 作为 run id，向全部配置 adapter ordinal 广播带 service credential 的取消
+请求；事务回滚时不得发送取消。worker 的下一次 heartbeat 发现 lease 已失效后仍会
+中断当前 scanner HTTP 请求并重复广播，作为管理节点提交后崩溃或网络故障的兜底。
+adapter 只在本实例维护短生命周期的 active-run 映射，用于中断对应请求线程和终止
+Syft/Grype 进程树；该映射不是持久任务状态，也不参与多副本正确性。资源释放是 best
+effort，scanner 端到端超时仍是最终上界，任何迟到结果都会被 lease token 拒绝。
 
 若 worker 在最后一次允许的 attempt 内崩溃，普通 claim 不能再次增加 attempts 并执行
 第 `max_attempts + 1` 次。独立终态回收查询会领取
@@ -1582,8 +1583,11 @@ Helm/Kubernetes：
 - scanner pod 有 CPU、memory、ephemeral-storage request/limit。
 - 支持 NetworkPolicy、Pod Security Context、read-only root filesystem。
 - 每个 run 按 ID hash 选择稳定的首选 ordinal；catalog、match 和 OCI 操作遇到可重试
-  的传输、容量或可用性错误时，按地址列表环形切换到其余 ordinal。二进制请求通过
-  `InputStreamSource` 从不可变 blob 重新打开，OCI JSON 请求使用可重复发送的有界正文。
+  的传输、容量或可用性错误时，在一个单调时钟总 deadline 内按地址列表环形切换到
+  其余 ordinal；每个备用请求的 HTTP timeout、scanner timeout header 和 OCI
+  `ResourceLimits` 都缩减为剩余预算，不能把总耗时放大为 `ordinal 数 × profile
+  timeout`。二进制请求通过 `InputStreamSource` 从不可变 blob 重新打开，OCI JSON
+  请求使用按剩余预算重新生成的有界正文。
 - 可重试失败可能发生在 adapter 已接受执行但响应丢失之后；切换到备用 ordinal 前，
   kkRepo 会尽力定向取消失败 ordinal 上的同 run 执行。409
   `SCANNER_RUN_ALREADY_ACTIVE` 保留 adapter 返回的可重试语义，旧执行被取消后在其它

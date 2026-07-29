@@ -12,6 +12,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
+import com.github.klboke.kkrepo.server.security.RepositorySecurityFilter;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import jakarta.servlet.FilterChain;
@@ -75,7 +76,7 @@ public class DockerAuthFilter extends OncePerRequestFilter {
       return;
     }
     request.setAttribute(
-        ArtifactDownloadPolicy.ENTRY_REPOSITORY_ID_ATTRIBUTE, runtime.get().id());
+        RepositorySecurityFilter.ENTRY_REPOSITORY_ID_ATTRIBUTE, runtime.get().id());
     String action = dockerAction(request.getMethod(), target.path());
     String[] challengeActions = challengeActions(action);
     Optional<DockerAuthService.BearerAuthentication> bearerAuthentication;

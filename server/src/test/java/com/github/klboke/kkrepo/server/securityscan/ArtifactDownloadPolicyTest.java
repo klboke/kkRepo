@@ -29,6 +29,7 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanState;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
 import com.github.klboke.kkrepo.server.docker.DockerAuthService;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
+import com.github.klboke.kkrepo.server.security.RepositorySecurityFilter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Instant;
 import java.util.List;
@@ -99,6 +100,35 @@ class ArtifactDownloadPolicyTest {
     }
 
     verifyNoInteractions(scans);
+  }
+
+  @Test
+  void commonEntryRepositoryAttributeAppliesGroupPolicyToMemberRead() {
+    properties.setEnabled(true);
+    ScanCandidate candidate =
+        new ScanCandidate(10L, 100L, 1L, 1L, Instant.EPOCH, Instant.EPOCH);
+    when(scans.findDownloadPolicySnapshots(10L, 2L)).thenReturn(List.of(snapshot(
+        config(2L, EnforcementMode.ENFORCE, PolicyAction.ALLOW),
+        profile(),
+        candidate,
+        complete(PolicyDecision.BLOCK_VULNERABILITY),
+        policyState(2L, PolicyDecision.BLOCK_VULNERABILITY),
+        "com/acme/demo/1/demo-1.jar",
+        "artifact",
+        "application/java-archive")));
+    MockHttpServletRequest request = new MockHttpServletRequest();
+    request.setAttribute(
+        RepositorySecurityFilter.ENTRY_REPOSITORY_ID_ATTRIBUTE, 2L);
+    RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+    try {
+      ArtifactPolicyException failure =
+          assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 100L));
+      assertEquals(PolicyDecision.BLOCK_VULNERABILITY, failure.decision());
+    } finally {
+      RequestContextHolder.resetRequestAttributes();
+    }
+
+    assertSingleSnapshotLookup(2L);
   }
 
   @Test

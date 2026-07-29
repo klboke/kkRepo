@@ -33,8 +33,6 @@ import org.springframework.web.context.request.ServletRequestAttributes;
  */
 @Service
 public class ArtifactDownloadPolicy {
-  public static final String ENTRY_REPOSITORY_ID_ATTRIBUTE =
-      ArtifactDownloadPolicy.class.getName() + ".ENTRY_REPOSITORY_ID";
   public static final String INTERNAL_SCANNER_REQUEST_ATTRIBUTE =
       ArtifactDownloadPolicy.class.getName() + ".INTERNAL_SCANNER_REQUEST";
   private static final int DEFAULT_RETRY_AFTER_SECONDS = 30;
@@ -430,7 +428,8 @@ public class ArtifactDownloadPolicy {
     if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attrs)) {
       return null;
     }
-    Object repositoryId = attrs.getRequest().getAttribute(ENTRY_REPOSITORY_ID_ATTRIBUTE);
+    Object repositoryId = attrs.getRequest().getAttribute(
+        RepositorySecurityFilter.ENTRY_REPOSITORY_ID_ATTRIBUTE);
     if (repositoryId instanceof Number number) {
       return number.longValue();
     }

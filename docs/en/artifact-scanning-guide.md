@@ -158,11 +158,15 @@ For multiple scanner replicas:
 
 - Each run hash selects a preferred StatefulSet ordinal for load distribution. Retryable catalog,
   match, and OCI transport, capacity, or availability failures continue through the remaining
-  configured ordinals. Binary inputs are reopened from immutable blob storage for each attempt.
-  Before fallback starts, kkRepo makes a best-effort cancellation request to the failed ordinal so
-  an accepted request with a lost response does not keep consuming scanner capacity.
-- Administrative and worker cancellation is broadcast across all configured ordinals because a
-  timed-out primary request may still be winding down while a fallback attempt is active.
+  configured ordinals within one monotonic operation deadline; every fallback receives only the
+  remaining scanner and HTTP budget. Binary inputs are reopened from immutable blob storage for
+  each attempt. Before fallback starts, kkRepo makes a best-effort cancellation request to the
+  failed ordinal so an accepted request with a lost response does not keep consuming scanner
+  capacity.
+- Administrative cancellation commits the durable task state and audit record before immediately
+  broadcasting cancellation across all configured ordinals. Worker lease loss uses the same
+  broadcast as a fallback because a timed-out primary request may still be winding down while a
+  fallback attempt is active.
 - Capability and readiness observation fails over across the configured ordinals and treats the
   deployment as ready when at least one adapter replica is ready.
 - If replicas share a persistent database cache, set

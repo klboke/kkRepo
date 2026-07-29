@@ -20,6 +20,7 @@ import com.github.klboke.kkrepo.security.scan.ScannerContract.Observation;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Readiness;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.ResourceLimits;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.SnapshotExpectation;
 import jakarta.annotation.PostConstruct;
 import java.io.FilterInputStream;
@@ -33,6 +34,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.function.LongSupplier;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
 
@@ -168,12 +170,13 @@ public class HttpSecurityScannerAdapter implements Adapter {
   @Override
   public CatalogResponse catalog(CatalogRequest request, InputStreamSource input)
       throws IOException {
-    return executeWithFailover(request.runId(), baseUri -> {
+    return executeWithFailover(
+        request.runId(), request.limits().timeoutSeconds(), (baseUri, budget) -> {
       HttpRequest.Builder builder =
           binaryRequest(
                   baseUri,
                   "/v1/catalog",
-                  request.limits().timeoutSeconds(),
+                  budget.transportTimeout(),
                   input)
               .header("Content-Type", contentType(request.subject().mediaType()))
               .header("X-KKRepo-API-Version", request.apiVersion())
@@ -194,7 +197,7 @@ public class HttpSecurityScannerAdapter implements Adapter {
               .header("X-KKRepo-Max-Input-Bytes",
                   Long.toString(request.limits().maxInputBytes()))
               .header("X-KKRepo-Timeout-Seconds",
-                  Integer.toString(request.limits().timeoutSeconds()));
+                  Integer.toString(budget.scannerTimeoutSeconds()));
       ScannerArtifactType artifactType = artifactType(request.subject());
       builder.header("X-KKRepo-Artifact-Type", artifactType.wireValue());
       return send(builder.build(), CatalogResponse.class);
@@ -204,11 +207,12 @@ public class HttpSecurityScannerAdapter implements Adapter {
   @Override
   public MatchResponse match(MatchRequest request, InputStreamSource sbom)
       throws IOException {
-    return executeWithFailover(request.runId(), baseUri -> {
+    return executeWithFailover(
+        request.runId(), request.limits().timeoutSeconds(), (baseUri, budget) -> {
       HttpRequest httpRequest = binaryRequest(
               baseUri,
               "/v1/match",
-              request.limits().timeoutSeconds(),
+              budget.transportTimeout(),
               sbom)
           .header("Content-Type", "application/vnd.cyclonedx+json")
           .header("X-KKRepo-API-Version", request.apiVersion())
@@ -227,7 +231,7 @@ public class HttpSecurityScannerAdapter implements Adapter {
           .header("X-KKRepo-Max-Nested-Depth",
               Integer.toString(request.limits().maxNestedDepth()))
           .header("X-KKRepo-Timeout-Seconds",
-              Integer.toString(request.limits().timeoutSeconds()))
+              Integer.toString(budget.scannerTimeoutSeconds()))
           .build();
       MatchResponse response = send(httpRequest, MatchResponse.class);
       requireExpectedSnapshot(request.expectedSnapshot(), response);
@@ -237,11 +241,13 @@ public class HttpSecurityScannerAdapter implements Adapter {
 
   @Override
   public OciScanResponse scanOci(OciScanRequest request) throws IOException {
-    byte[] body = objectMapper.writeValueAsBytes(request);
-    return executeWithFailover(request.runId(), baseUri -> {
+    return executeWithFailover(
+        request.runId(), request.limits().timeoutSeconds(), (baseUri, budget) -> {
+      byte[] body = objectMapper.writeValueAsBytes(
+          withTimeout(request, budget.scannerTimeoutSeconds()));
       HttpRequest.Builder builder =
           HttpRequest.newBuilder(resolve(baseUri, "/v1/oci/scan"))
-              .timeout(requestTimeout(request.limits().timeoutSeconds()))
+              .timeout(budget.transportTimeout())
               .header("Content-Type", "application/json")
               .header("X-KKRepo-API-Version", request.apiVersion())
               .header("X-KKRepo-Run-ID", request.runId())
@@ -314,19 +320,28 @@ public class HttpSecurityScannerAdapter implements Adapter {
    * self-contained and carry stable idempotency/run identities, while cancellation is broadcast
    * because a timed-out primary execution may still be winding down.
    */
-  private <T> T executeWithFailover(String runId, EndpointCall<T> call) {
+  private <T> T executeWithFailover(
+      String runId, int timeoutSeconds, EndpointCall<T> call) throws IOException {
     requireRunId(runId);
+    FailoverDeadline deadline = new FailoverDeadline(timeoutSeconds);
     int preferred = routeIndex(runId, baseUris.size());
     ScannerAdapterException primaryFailure = null;
     for (int offset = 0; offset < baseUris.size(); offset++) {
       URI baseUri = baseUris.get((preferred + offset) % baseUris.size());
+      AttemptBudget budget;
       try {
-        return call.execute(baseUri);
+        budget = deadline.nextAttempt();
+      } catch (ScannerAdapterException timeout) {
+        if (primaryFailure != null) timeout.addSuppressed(primaryFailure);
+        throw timeout;
+      }
+      try {
+        return call.execute(baseUri, budget);
       } catch (ScannerAdapterException failure) {
         if (!failure.retryable() || "SCANNER_INTERRUPTED".equals(failure.code())) {
           throw failure;
         }
-        cancelAfterAmbiguousFailure(baseUri, runId, failure);
+        cancelAfterAmbiguousFailure(baseUri, runId, failure, deadline);
         if (primaryFailure == null) {
           primaryFailure = failure;
         } else {
@@ -347,18 +362,27 @@ public class HttpSecurityScannerAdapter implements Adapter {
    * is already unavailable.
    */
   private void cancelAfterAmbiguousFailure(
-      URI baseUri, String runId, ScannerAdapterException executionFailure) {
+      URI baseUri,
+      String runId,
+      ScannerAdapterException executionFailure,
+      FailoverDeadline deadline) {
+    Duration timeout = deadline.remainingCancellationTimeout();
+    if (timeout == null) return;
     try {
-      cancel(baseUri, runId);
+      cancel(baseUri, runId, timeout);
     } catch (ScannerAdapterException cancellationFailure) {
       executionFailure.addSuppressed(cancellationFailure);
     }
   }
 
   private CancellationResponse cancel(URI baseUri, String runId) {
+    return cancel(baseUri, runId, Duration.ofSeconds(5));
+  }
+
+  private CancellationResponse cancel(URI baseUri, String runId, Duration timeout) {
     HttpRequest.Builder builder = HttpRequest.newBuilder(
             resolve(baseUri, "/v1/runs/" + runId + "/cancel"))
-        .timeout(Duration.ofSeconds(5))
+        .timeout(timeout)
         .header("Accept", "application/json")
         .header("X-KKRepo-API-Version", ScannerContract.API_VERSION)
         .POST(HttpRequest.BodyPublishers.noBody());
@@ -367,9 +391,9 @@ public class HttpSecurityScannerAdapter implements Adapter {
   }
 
   private HttpRequest.Builder binaryRequest(
-      URI baseUri, String path, int timeoutSeconds, InputStreamSource source) {
+      URI baseUri, String path, Duration timeout, InputStreamSource source) {
     HttpRequest.Builder builder = HttpRequest.newBuilder(resolve(baseUri, path))
-        .timeout(requestTimeout(timeoutSeconds))
+        .timeout(timeout)
         .header("Accept", "application/json")
         .POST(HttpRequest.BodyPublishers.ofInputStream(() -> {
           try {
@@ -385,6 +409,29 @@ public class HttpSecurityScannerAdapter implements Adapter {
   static Duration requestTimeout(int scannerTimeoutSeconds) {
     long bounded = Math.max(1L, scannerTimeoutSeconds);
     return Duration.ofSeconds(bounded + TRANSPORT_GRACE_SECONDS);
+  }
+
+  private static OciScanRequest withTimeout(OciScanRequest request, int timeoutSeconds) {
+    ResourceLimits limits = request.limits();
+    ResourceLimits boundedLimits = new ResourceLimits(
+        limits.maxInputBytes(),
+        limits.maxArchiveEntries(),
+        limits.maxUncompressedBytes(),
+        limits.maxSingleFileBytes(),
+        limits.maxNestedDepth(),
+        timeoutSeconds);
+    return new OciScanRequest(
+        request.apiVersion(),
+        request.runId(),
+        request.idempotencyKey(),
+        request.registryUrl(),
+        request.repository(),
+        request.manifestDigest(),
+        request.requiredPlatforms(),
+        request.scopedBearerToken(),
+        request.profileConfigurationDigest(),
+        boundedLimits,
+        request.expectedSnapshot());
   }
 
   private <T> T send(HttpRequest request, Class<T> type) {
@@ -668,7 +715,65 @@ public class HttpSecurityScannerAdapter implements Adapter {
 
   @FunctionalInterface
   private interface EndpointCall<T> {
-    T execute(URI baseUri);
+    T execute(URI baseUri, AttemptBudget budget) throws IOException;
+  }
+
+  record AttemptBudget(Duration transportTimeout, int scannerTimeoutSeconds) {}
+
+  /**
+   * One monotonic budget shared by all adapter replicas for a single operation.
+   *
+   * <p>The HTTP envelope retains one transport grace period, while every fallback receives only
+   * the scanner time and transport time still remaining from the original request.
+   */
+  static final class FailoverDeadline {
+    private static final long NANOS_PER_SECOND = Duration.ofSeconds(1).toNanos();
+    private static final long MAX_CANCELLATION_NANOS = Duration.ofSeconds(5).toNanos();
+    private final int requestedScannerTimeoutSeconds;
+    private final long timeoutNanos;
+    private final LongSupplier nanoTime;
+    private final long startedNanos;
+
+    private FailoverDeadline(int timeoutSeconds) {
+      this(timeoutSeconds, System::nanoTime);
+    }
+
+    FailoverDeadline(int timeoutSeconds, LongSupplier nanoTime) {
+      this.requestedScannerTimeoutSeconds = Math.max(1, timeoutSeconds);
+      this.timeoutNanos = requestTimeout(timeoutSeconds).toNanos();
+      this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
+      this.startedNanos = nanoTime.getAsLong();
+    }
+
+    AttemptBudget nextAttempt() {
+      long remainingNanos = remainingNanos();
+      if (remainingNanos <= 0) throw timeout();
+      long scannerNanos = Math.max(
+          1L,
+          remainingNanos - Duration.ofSeconds(TRANSPORT_GRACE_SECONDS).toNanos());
+      long roundedSeconds = 1L + ((scannerNanos - 1L) / NANOS_PER_SECOND);
+      int scannerSeconds = (int) Math.max(
+          1L, Math.min((long) requestedScannerTimeoutSeconds, roundedSeconds));
+      return new AttemptBudget(Duration.ofNanos(remainingNanos), scannerSeconds);
+    }
+
+    Duration remainingCancellationTimeout() {
+      long remainingNanos = remainingNanos();
+      return remainingNanos <= 0
+          ? null
+          : Duration.ofNanos(Math.min(remainingNanos, MAX_CANCELLATION_NANOS));
+    }
+
+    private long remainingNanos() {
+      return timeoutNanos - (nanoTime.getAsLong() - startedNanos);
+    }
+
+    private static ScannerAdapterException timeout() {
+      return new ScannerAdapterException(
+          "SCANNER_TIMEOUT",
+          "Scanner request exhausted its end-to-end failover deadline",
+          true);
+    }
   }
 
   private static final class BoundedResponseInputStream extends FilterInputStream {

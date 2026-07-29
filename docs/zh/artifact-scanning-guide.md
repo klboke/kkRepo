@@ -147,11 +147,13 @@ kubectl logs statefulset/kkrepo-scanner
 多 scanner 副本需要注意漏洞数据库卷：
 
 - 每个 run 的 hash 会选择一个首选 StatefulSet ordinal 以分摊负载；catalog、match 和
-  OCI 请求遇到可重试的传输、容量或可用性错误时，会依次切换到其余配置 ordinal。
+  OCI 请求遇到可重试的传输、容量或可用性错误时，会在同一个单调时钟总 deadline
+  内依次切换到其余配置 ordinal；每次备用执行只能获得剩余 scanner 和 HTTP 预算。
   二进制输入在每次尝试时都从不可变 blob storage 重新打开。开始备用执行前，kkRepo
   会尽力定向取消失败 ordinal 上可能已经接受的执行，避免响应丢失后继续占用容量。
-- 管理员和 worker 的取消请求会广播到配置的所有 ordinal，因为超时的首选请求可能
-  仍在退出，同时备用副本上已经存在新的执行。
+- 管理员取消会先提交持久任务状态和审计记录，再立即向所有配置 ordinal 广播取消；
+  worker 丢失 lease 时使用同一广播作为兜底，因为超时的首选请求可能仍在退出，同时
+  备用副本上已经存在新的执行。
 - capability/readiness 观测会在所有配置的 ordinal 间容灾；只要至少一个 adapter
   副本 ready，部署能力就保持可用。
 - 使用多个 scanner 副本且需要共享持久缓存时，为

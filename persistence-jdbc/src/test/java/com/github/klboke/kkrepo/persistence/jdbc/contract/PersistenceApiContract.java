@@ -826,6 +826,26 @@ public abstract class PersistenceApiContract {
         null, "FINDING", repositoryId, assetId, storedFinding.id(), null, null, Map.of(),
         "Accepted until the scheduled upgrade", policyId, 1L, "contract", "contract",
         now.plusSeconds(3600), now.plusSeconds(2), now.plusSeconds(2)));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> scans.createWaiver(new SecurityScanDao.ScanWaiver(
+            null,
+            "FINDING",
+            repositoryId,
+            assetId,
+            storedFinding.id(),
+            null,
+            null,
+            Map.of(),
+            "r".repeat(SecurityScanDao.MAX_WAIVER_REASON_LENGTH + 1),
+            policyId,
+            1L,
+            "contract",
+            "contract",
+            now.plusSeconds(3600),
+            now.plusSeconds(2),
+            now.plusSeconds(2))),
+        "persistence must never silently truncate an audit justification");
     assertEquals(
         waiver.id(),
         scans.listWaivers(null, "scheduled upgrade", 0, 10).getFirst().id(),

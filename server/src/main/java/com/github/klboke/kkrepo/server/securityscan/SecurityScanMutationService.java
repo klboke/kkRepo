@@ -3,26 +3,37 @@ package com.github.klboke.kkrepo.server.securityscan;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.RepositoryScanConfig;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanPolicy;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanWaiver;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.Adapter;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.ConfigCommand;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.PolicyCommand;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.WaiverCommand;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /** Commits each administrative mutation and its operation-specific audit record atomically. */
 @Service
 @Transactional
 public class SecurityScanMutationService {
+  private static final Logger log =
+      LoggerFactory.getLogger(SecurityScanMutationService.class);
   private final SecurityScanManagementService management;
   private final SecurityScanAuditService audit;
+  private final Adapter adapter;
 
   public SecurityScanMutationService(
-      SecurityScanManagementService management, SecurityScanAuditService audit) {
+      SecurityScanManagementService management,
+      SecurityScanAuditService audit,
+      Adapter adapter) {
     this.management = management;
     this.audit = audit;
+    this.adapter = adapter;
   }
 
   public long rescan(
@@ -43,6 +54,31 @@ public class SecurityScanMutationService {
       HttpServletRequest request, AuthenticatedSubject actor, long taskId) {
     management.cancel(actor, taskId);
     audit.record(request, actor, "CANCEL", null, Map.of("taskId", taskId));
+    cancelAdapterAfterCommit(taskId);
+  }
+
+  private void cancelAdapterAfterCommit(long taskId) {
+    if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+      broadcastCancellation(taskId);
+      return;
+    }
+    TransactionSynchronizationManager.registerSynchronization(
+        new TransactionSynchronization() {
+          @Override
+          public void afterCommit() {
+            broadcastCancellation(taskId);
+          }
+        });
+  }
+
+  private void broadcastCancellation(long taskId) {
+    try {
+      adapter.cancel(Long.toString(taskId));
+    } catch (RuntimeException failure) {
+      // The committed task row remains the publication fence and the owner heartbeat provides a
+      // retry-independent fallback. Immediate adapter cancellation is deliberately best effort.
+      log.warn("Unable to broadcast cancellation for security scan task {}", taskId, failure);
+    }
   }
 
   public RepositoryScanConfig updateRepositoryConfig(

@@ -919,9 +919,22 @@ public class SecurityScanManagementService {
   public ScanWaiver createWaiver(AuthenticatedSubject actor, WaiverCommand command) {
     requireWaiverPermission(actor, "create");
     if (command == null || blank(command.reason())) throw badRequest("Waiver reason is required");
+    String reason = command.reason().trim();
+    requireWaiverFieldLength(
+        reason, "Waiver reason", SecurityScanDao.MAX_WAIVER_REASON_LENGTH);
+    String requestedAdvisorySelector = trim(command.advisorySelector());
+    String requestedPackageSelector = trim(command.packageSelector());
+    requireWaiverFieldLength(
+        requestedAdvisorySelector,
+        "Advisory selector",
+        SecurityScanDao.MAX_WAIVER_ADVISORY_SELECTOR_LENGTH);
+    requireWaiverFieldLength(
+        requestedPackageSelector,
+        "Package selector",
+        SecurityScanDao.MAX_WAIVER_PACKAGE_SELECTOR_LENGTH);
     if (command.findingId() == null
-        && blank(command.advisorySelector())
-        && blank(command.packageSelector())) {
+        && requestedAdvisorySelector == null
+        && requestedPackageSelector == null) {
       throw badRequest("A finding, advisory, or package selector is required");
     }
     if (command.assetId() != null && command.repositoryId() == null) {
@@ -985,13 +998,21 @@ public class SecurityScanManagementService {
             ? "ASSET"
             : command.repositoryId() != null ? "REPOSITORY" : "GLOBAL";
     String advisorySelector = selectedFinding == null
-        ? trim(command.advisorySelector())
+        ? requestedAdvisorySelector
         : trim(selectedFinding.advisoryId());
     String packageSelector = selectedFinding == null
-        ? trim(command.packageSelector())
+        ? requestedPackageSelector
         : !blank(selectedFinding.packageUrl())
-            ? selectedFinding.packageUrl()
+            ? trim(selectedFinding.packageUrl())
             : trim(selectedFinding.packageName());
+    requireWaiverFieldLength(
+        advisorySelector,
+        "Advisory selector",
+        SecurityScanDao.MAX_WAIVER_ADVISORY_SELECTOR_LENGTH);
+    requireWaiverFieldLength(
+        packageSelector,
+        "Package selector",
+        SecurityScanDao.MAX_WAIVER_PACKAGE_SELECTOR_LENGTH);
     ScanWaiver created = scans.createWaiver(new ScanWaiver(
         null,
         scopeType,
@@ -1001,7 +1022,7 @@ public class SecurityScanManagementService {
         advisorySelector,
         packageSelector,
         command.selector(),
-        command.reason().trim(),
+        reason,
         command.policyId(),
         command.policyRevision(),
         actor.userId(),
@@ -1247,6 +1268,13 @@ public class SecurityScanManagementService {
 
   private static String trim(String value) {
     return blank(value) ? null : value.trim();
+  }
+
+  private static void requireWaiverFieldLength(
+      String value, String field, int maxLength) {
+    if (value != null && value.length() > maxLength) {
+      throw badRequest(field + " must be at most " + maxLength + " characters");
+    }
   }
 
   private static ResponseStatusException badRequest(String message) {

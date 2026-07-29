@@ -260,6 +260,70 @@ class SecurityScanManagementServiceWaiverTest {
   }
 
   @Test
+  void rejectsWaiverTextThatExceedsThePersistedSchemaBounds() {
+    WaiverCommand oversizedReason = new WaiverCommand(
+        "GLOBAL",
+        null,
+        null,
+        null,
+        "CVE-2026-0041",
+        null,
+        Map.of(),
+        "r".repeat(SecurityScanDao.MAX_WAIVER_REASON_LENGTH + 1),
+        null,
+        null,
+        null);
+    WaiverCommand oversizedAdvisory = new WaiverCommand(
+        "GLOBAL",
+        null,
+        null,
+        null,
+        "a".repeat(SecurityScanDao.MAX_WAIVER_ADVISORY_SELECTOR_LENGTH + 1),
+        null,
+        Map.of(),
+        "Accepted risk",
+        null,
+        null,
+        null);
+    WaiverCommand oversizedPackage = new WaiverCommand(
+        "GLOBAL",
+        null,
+        null,
+        null,
+        null,
+        "p".repeat(SecurityScanDao.MAX_WAIVER_PACKAGE_SELECTOR_LENGTH + 1),
+        Map.of(),
+        "Accepted risk",
+        null,
+        null,
+        null);
+
+    ResponseStatusException reasonFailure = assertThrows(
+        ResponseStatusException.class,
+        () -> service.createWaiver(actor, oversizedReason));
+    ResponseStatusException advisoryFailure = assertThrows(
+        ResponseStatusException.class,
+        () -> service.createWaiver(actor, oversizedAdvisory));
+    ResponseStatusException packageFailure = assertThrows(
+        ResponseStatusException.class,
+        () -> service.createWaiver(actor, oversizedPackage));
+
+    assertEquals(HttpStatus.BAD_REQUEST, reasonFailure.getStatusCode());
+    assertEquals(HttpStatus.BAD_REQUEST, advisoryFailure.getStatusCode());
+    assertEquals(HttpStatus.BAD_REQUEST, packageFailure.getStatusCode());
+    assertEquals(
+        "Waiver reason must be at most 2048 characters",
+        reasonFailure.getReason());
+    assertEquals(
+        "Advisory selector must be at most 255 characters",
+        advisoryFailure.getReason());
+    assertEquals(
+        "Package selector must be at most 2048 characters",
+        packageFailure.getReason());
+    verify(scans, never()).createWaiver(any());
+  }
+
+  @Test
   void waiverPaginationContinuesPastRowsHiddenByRepositoryPermissions() {
     Instant now = Instant.now();
     List<ScanWaiver> hidden = java.util.stream.LongStream.rangeClosed(1, 100)

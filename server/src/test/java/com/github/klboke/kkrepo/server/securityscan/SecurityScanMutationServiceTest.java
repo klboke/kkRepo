@@ -1,15 +1,19 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.RepositoryScanConfig;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanPolicy;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanWaiver;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.EnforcementMode;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.Adapter;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.ConfigCommand;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.PolicyCommand;
@@ -19,6 +23,7 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 class SecurityScanMutationServiceTest {
   @Test
@@ -42,8 +47,9 @@ class SecurityScanMutationServiceTest {
 
     SecurityScanManagementService management = mock(SecurityScanManagementService.class);
     SecurityScanAuditService audit = mock(SecurityScanAuditService.class);
+    Adapter adapter = mock(Adapter.class);
     SecurityScanMutationService mutations =
-        new SecurityScanMutationService(management, audit);
+        new SecurityScanMutationService(management, audit, adapter);
     HttpServletRequest request = mock(HttpServletRequest.class);
     AuthenticatedSubject actor = mock(AuthenticatedSubject.class);
     ConfigCommand configCommand = mock(ConfigCommand.class);
@@ -89,6 +95,7 @@ class SecurityScanMutationServiceTest {
         request, actor, "RETRY", null, Map.of("taskId", 9L));
     verify(audit).record(
         request, actor, "CANCEL", null, Map.of("taskId", 10L));
+    verify(adapter).cancel("10");
     verify(audit).record(
         request,
         actor,
@@ -122,5 +129,48 @@ class SecurityScanMutationServiceTest {
             "expiresAt", "none"));
     verify(audit).record(
         request, actor, "WAIVER_DELETE", 8L, Map.of("waiverId", 7L));
+  }
+
+  @Test
+  void broadcastsRunningWorkCancellationOnlyAfterTheDurableCommit() {
+    SecurityScanManagementService management = mock(SecurityScanManagementService.class);
+    SecurityScanAuditService audit = mock(SecurityScanAuditService.class);
+    Adapter adapter = mock(Adapter.class);
+    SecurityScanMutationService mutations =
+        new SecurityScanMutationService(management, audit, adapter);
+    HttpServletRequest request = mock(HttpServletRequest.class);
+    AuthenticatedSubject actor = mock(AuthenticatedSubject.class);
+
+    TransactionSynchronizationManager.initSynchronization();
+    try {
+      mutations.cancel(request, actor, 10L);
+
+      verifyNoInteractions(adapter);
+      assertEquals(1, TransactionSynchronizationManager.getSynchronizations().size());
+      TransactionSynchronizationManager.getSynchronizations().getFirst().afterCommit();
+      verify(adapter).cancel("10");
+    } finally {
+      TransactionSynchronizationManager.clearSynchronization();
+    }
+  }
+
+  @Test
+  void keepsDurableCancellationSuccessfulWhenTheAdapterIsUnavailable() {
+    SecurityScanManagementService management = mock(SecurityScanManagementService.class);
+    SecurityScanAuditService audit = mock(SecurityScanAuditService.class);
+    Adapter adapter = mock(Adapter.class);
+    SecurityScanMutationService mutations =
+        new SecurityScanMutationService(management, audit, adapter);
+    HttpServletRequest request = mock(HttpServletRequest.class);
+    AuthenticatedSubject actor = mock(AuthenticatedSubject.class);
+    doThrow(new ScannerAdapterException("SCANNER_IO", "unavailable", true))
+        .when(adapter)
+        .cancel("10");
+
+    assertDoesNotThrow(() -> mutations.cancel(request, actor, 10L));
+
+    verify(management).cancel(actor, 10L);
+    verify(audit).record(request, actor, "CANCEL", null, Map.of("taskId", 10L));
+    verify(adapter).cancel("10");
   }
 }

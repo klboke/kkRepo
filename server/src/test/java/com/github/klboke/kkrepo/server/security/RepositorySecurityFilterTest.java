@@ -57,14 +57,19 @@ class RepositorySecurityFilterTest {
         true);
     ResponseState response = new ResponseState();
     ChainState chain = new ChainState();
+    HttpServletRequest request =
+        request("GET", "/repository/maven-public/junit/junit/4.13.2/junit-4.13.2.pom");
 
     filter.doFilter(
-        request("GET", "/repository/maven-public/junit/junit/4.13.2/junit-4.13.2.pom"),
+        request,
         response.proxy(),
         chain);
 
     assertEquals(1, authentication.anonymousCalls);
     assertEquals(1, chain.calls);
+    assertEquals(
+        1L,
+        request.getAttribute(RepositorySecurityFilter.ENTRY_REPOSITORY_ID_ATTRIBUTE));
     assertEquals("anonymous", decisions.subject.userId());
     assertEquals("maven-public", decisions.permission.repository());
     assertEquals(PermissionAction.READ, decisions.permission.action());
