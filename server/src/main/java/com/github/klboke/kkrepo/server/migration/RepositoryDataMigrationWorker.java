@@ -6,7 +6,6 @@ import com.github.klboke.kkrepo.core.security.EncryptionSecrets;
 import com.github.klboke.kkrepo.core.security.SecretCipher;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.NexusPublicAsset;
-import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.NexusPublicAssetPage;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.RepositoryAssetMetadata;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.RepositoryAssetPage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MigrationJobDao;
@@ -134,14 +133,19 @@ class RepositoryDataMigrationWorker {
     Instant metadataSince = metadataSince(repositoryJob);
     int pages = 0;
     try {
-      if (source.publicIdBackfillOnly()) {
-        NexusPublicAssetPage page = source.client().listPublicAssetsPage(
-            repositoryJob.sourceRepositoryName(), repositoryJob.cursorPath());
-        processPublicIdBackfillPage(repositoryJob, page, source);
-        migrationService.refreshJobSummary(repositoryJob.migrationJobId());
-        return true;
-      }
       try (NexusRestClient.RepositoryDataScriptSession script = source.client().openRepositoryDataScript()) {
+        if (source.publicIdBackfillOnly()) {
+          RepositoryAssetPage page = script.readPage(
+              repositoryJob.sourceRepositoryName(),
+              repositoryJob.format().id(),
+              source.metadataEngine(),
+              cursor,
+              repositoryJob.pageSize(),
+              null);
+          processPublicIdBackfillPage(repositoryJob, page, source);
+          migrationService.refreshJobSummary(repositoryJob.migrationJobId());
+          return true;
+        }
         boolean complete;
         do {
           RepositoryAssetPage page = script.readPage(
@@ -169,9 +173,12 @@ class RepositoryDataMigrationWorker {
 
   private boolean processPublicIdBackfillPage(
       RepositoryDataMigrationRepositoryRecord repositoryJob,
-      NexusPublicAssetPage page,
+      RepositoryAssetPage page,
       SourceAccess source) {
-    List<RepositoryDataMigrationAssetRecord> records = page.assets().stream()
+    List<NexusPublicAsset> publicAssets = page.assets().stream()
+        .map(RepositoryDataMigrationWorker::publicAsset)
+        .toList();
+    List<RepositoryDataMigrationAssetRecord> records = publicAssets.stream()
         .map(asset -> publicIdAssetRecord(repositoryJob, asset))
         .toList();
     Map<ByteBuffer, RepositoryDataMigrationDao.TargetAssetRef> existingTargets =
@@ -189,7 +196,7 @@ class RepositoryDataMigrationWorker {
         existingTargets == null ? Map.of() : existingTargets;
     for (int index = 0; index < records.size(); index++) {
       RepositoryDataMigrationAssetRecord migrationAsset = records.get(index);
-      NexusPublicAsset nexus = page.assets().get(index);
+      NexusPublicAsset nexus = publicAssets.get(index);
       RepositoryDataMigrationDao.TargetAssetRef target = targetRefs.get(
           ByteBuffer.wrap(migrationAsset.sourcePathHash()));
       if (target == null) {
@@ -206,7 +213,7 @@ class RepositoryDataMigrationWorker {
       }
     }
     transactionTemplate.executeWithoutResult(status -> migrationDao.finishDiscoveryPage(
-        repositoryJob.id(), page.nextContinuationToken(), page.complete()));
+        repositoryJob.id(), page.nextAfterPath(), page.complete()));
     return page.complete();
   }
 
@@ -690,6 +697,15 @@ class RepositoryDataMigrationWorker {
         null);
   }
 
+  private static NexusPublicAsset publicAsset(RepositoryAssetMetadata source) {
+    return new NexusPublicAsset(
+        source.nexusPublicAssetId(),
+        source.repositoryName(),
+        source.path(),
+        source.nexusSha1(),
+        null);
+  }
+
   private static Map<String, Object> metadata(
       RepositoryDataMigrationRepositoryRecord repositoryJob,
       RepositoryAssetMetadata source) {
@@ -699,6 +715,8 @@ class RepositoryDataMigrationWorker {
     putIfPresent(metadata, "migrationMode", optionString(repositoryJob, "migrationMode"));
     putIfPresent(metadata, "sourceRepositoryType", optionString(repositoryJob, "sourceType"));
     putIfPresent(metadata, "targetRepositoryType", optionString(repositoryJob, "targetType"));
+    putIfPresent(metadata, "nexusPublicAssetId", source.nexusPublicAssetId());
+    putIfPresent(metadata, "nexusSha1", source.nexusSha1());
     putIfPresent(metadata, "attributes", source.attributes());
     putIfPresent(metadata, "componentAttributes", source.componentAttributes());
     return Map.copyOf(metadata);

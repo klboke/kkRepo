@@ -46,6 +46,21 @@ class NexusPublicAssetIdCaptureServiceTest {
   }
 
   @Test
+  void exportedPublicAssetRegistersWithoutSearchRequest() throws Exception {
+    RepositoryDataMigrationAssetRecord source = source(
+        "gems/demo.gem",
+        Map.of("nexusPublicAssetId", "public-id", "nexusSha1", "ABC123"));
+    when(assetDao.findAssetWithBlobById(12L)).thenReturn(Optional.of(target(source, "abc123")));
+
+    service.capture(
+        client, "http://nexus.example/", 99L, "windows-components", 7L, source, 12L);
+
+    verifyNoInteractions(client);
+    verify(publicIdService).registerNexusAlias(
+        "public-id", "windows-components", 7L, 12L, "http://nexus.example/", 99L);
+  }
+
+  @Test
   void checksumMismatchFailsBeforeRegistration() throws Exception {
     RepositoryDataMigrationAssetRecord source = source("tools/setup.exe");
     when(assetDao.findAssetWithBlobById(12L)).thenReturn(Optional.of(target(source, "abc123")));
@@ -87,11 +102,17 @@ class NexusPublicAssetIdCaptureServiceTest {
   }
 
   private static RepositoryDataMigrationAssetRecord source(String path) {
+    return source(path, Map.of());
+  }
+
+  private static RepositoryDataMigrationAssetRecord source(
+      String path,
+      Map<String, Object> metadata) {
     return new RepositoryDataMigrationAssetRecord(
         1L, 2L, "#1:2", null, path, new byte[32], RepositoryFormat.RAW,
         null, "setup.exe", null, "asset", "application/octet-stream", 4L,
         null, null, null, null, null, null, null,
-        "migrated", 0, null, null, null, 12L, 112L, null, Map.of(), Instant.EPOCH);
+        "migrated", 0, null, null, null, 12L, 112L, null, metadata, Instant.EPOCH);
   }
 
   private static AssetWithBlob target(RepositoryDataMigrationAssetRecord source, String sha1) {

@@ -20,7 +20,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.NexusPublicAsset;
-import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.NexusPublicAssetPage;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.RepositoryAssetMetadata;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.RepositoryAssetPage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MigrationJobDao;
@@ -277,8 +276,10 @@ class RepositoryDataMigrationWorkerTest {
           "invalid-id", "source", "gems/invalid.gem", "invalid-sha1", null);
       NexusPublicAsset missing = new NexusPublicAsset(
           "missing-id", "source", "gems/missing.gem", "missing-sha1", null);
-      NexusPublicAssetPage page = new NexusPublicAssetPage(
-          "source", null, "next-token", List.of(good, invalid, missing));
+      RepositoryAssetPage page = new RepositoryAssetPage(
+          "source", null, "next-path", false,
+          List.of(publicMetadata(good), publicMetadata(invalid), publicMetadata(missing)),
+          List.of());
       when(fixture.migrationDao.findTargetAssetsByPathHash(eq(9L), any()))
           .thenAnswer(invocation -> {
             List<?> hashes = invocation.getArgument(1);
@@ -296,7 +297,7 @@ class RepositoryDataMigrationWorkerTest {
           fixture.worker, "processPublicIdBackfillPage",
           new Class<?>[] {
               RepositoryDataMigrationRepositoryRecord.class,
-              NexusPublicAssetPage.class,
+              RepositoryAssetPage.class,
               RepositoryDataMigrationWorker.SourceAccess.class
           },
           repository, page, sourceAccess(null, true, true)),
@@ -308,7 +309,7 @@ class RepositoryDataMigrationWorkerTest {
           eq(7L), any(byte[].class), eq(new TargetAssetRef(null, 30L, 40L)));
       verify(fixture.migrationDao, times(2)).markDiscoveredAssetFailed(
           eq(7L), any(byte[].class), any());
-      verify(fixture.migrationDao).finishDiscoveryPage(7L, "next-token", false);
+      verify(fixture.migrationDao).finishDiscoveryPage(7L, "next-path", false);
     } finally {
       fixture.worker.shutdown();
     }
@@ -322,8 +323,8 @@ class RepositoryDataMigrationWorkerTest {
           RepositoryFormat.NPM, Map.of());
       NexusPublicAsset asset = new NexusPublicAsset(
           "public-id", "source", "@scope/package/-/package-1.0.0.tgz", "sha1", null);
-      NexusPublicAssetPage page = new NexusPublicAssetPage(
-          "source", null, "next-token", List.of(asset));
+      RepositoryAssetPage page = new RepositoryAssetPage(
+          "source", null, "next-path", false, List.of(publicMetadata(asset)), List.of());
       when(fixture.migrationDao.findTargetAssetsByPathHash(eq(9L), any()))
           .thenAnswer(invocation -> {
             List<?> hashes = invocation.getArgument(1);
@@ -343,7 +344,7 @@ class RepositoryDataMigrationWorkerTest {
               fixture.worker, "processPublicIdBackfillPage",
               new Class<?>[] {
                   RepositoryDataMigrationRepositoryRecord.class,
-                  NexusPublicAssetPage.class,
+                  RepositoryAssetPage.class,
                   RepositoryDataMigrationWorker.SourceAccess.class
               },
               repository, page, sourceAccess(null, true, true)));
@@ -533,9 +534,35 @@ class RepositoryDataMigrationWorkerTest {
 
   private static RepositoryAssetMetadata metadata(String path, String updatedAt) {
     return new RepositoryAssetMetadata(
-        "source", "asset-" + path, null, path, "cargo", null,
+        "source", "asset-" + path, null, null, null, path, "cargo", null,
         "demo", "1.0.0", "asset", "application/octet-stream", 1L,
         null, updatedAt, null, null, updatedAt, "admin", null, Map.of(), Map.of());
+  }
+
+  private static RepositoryAssetMetadata publicMetadata(NexusPublicAsset asset) {
+    return new RepositoryAssetMetadata(
+        asset.repository(),
+        "source-" + asset.path(),
+        asset.id(),
+        asset.sha1(),
+        null,
+        asset.path(),
+        "raw",
+        null,
+        null,
+        null,
+        "asset",
+        "application/octet-stream",
+        1L,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        Map.of(),
+        Map.of());
   }
 
   private static Object invoke(

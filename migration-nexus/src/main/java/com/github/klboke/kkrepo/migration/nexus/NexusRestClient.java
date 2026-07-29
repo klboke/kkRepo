@@ -393,6 +393,24 @@ public class NexusRestClient {
         def s = String.valueOf(value)
         return s.isEmpty() ? null : s
       }
+      def publicAssetId = { value ->
+        if (value == null) {
+          return null
+        }
+        def payload = repositoryName + ':' + String.valueOf(value)
+        return jdkClass('java.util.Base64').getUrlEncoder().withoutPadding()
+            .encodeToString(payload.getBytes('UTF-8'))
+      }
+      def checksumValue = { checksums, algorithm ->
+        def values = normalize(checksums)
+        if (!(values instanceof Map)) {
+          return null
+        }
+        def match = values.find { key, ignored ->
+          String.valueOf(key).replace('-', '').equalsIgnoreCase(algorithm)
+        }
+        return match == null ? null : text(match.value)
+      }
       def datastorePrefix = { format ->
         def prefixes = [
           maven2: 'MAVEN2',
@@ -480,6 +498,8 @@ public class NexusRestClient {
 
       def exportOrientDb = { ->
         def databaseClass = this.class.classLoader.loadClass('org.sonatype.nexus.orient.DatabaseInstance')
+        def assetEntityAdapter = container.lookup(
+            jdkClass('org.sonatype.nexus.repository.storage.AssetEntityAdapter'))
         def componentDatabase
         try {
           def namesClass = this.class.classLoader.loadClass('org.sonatype.nexus.orient.DatabaseInstanceNames')
@@ -517,9 +537,13 @@ public class NexusRestClient {
           }
           def componentAttributes = component == null ? [:] : normalize(component.field('attributes') ?: [:])
           def assetAttributes = normalize(asset.field('attributes') ?: [:])
+          def sourceAsset = assetEntityAdapter.readEntity(asset)
+          def externalAssetId = sourceAsset.getEntityMetadata().getId().getValue()
           assets << [
             repositoryName: repositoryName,
             assetId: String.valueOf(asset.getIdentity()),
+            nexusPublicAssetId: publicAssetId(externalAssetId),
+            nexusSha1: checksumValue(assetAttributes['checksum'], 'sha1'),
             componentId: component == null ? null : String.valueOf(component.getIdentity()),
             path: text(asset.field('name')),
             format: text(asset.field('format')),
@@ -560,6 +584,8 @@ public class NexusRestClient {
         if (prefix == null) {
           return emptyPage(['datastore repository content exporter does not support format: ' + repositoryFormat])
         }
+        def internalIdsClass = jdkClass('org.sonatype.nexus.repository.content.store.InternalIds')
+        def toExternalAssetId = internalIdsClass.getMethod('toExternalId', Integer.TYPE)
         def datastoreManager = container.lookup('org.sonatype.nexus.datastore.api.DataStoreManager')
         def selected = datastoreManager.get('nexus')
         def datastore = selected == null ? null : selected.orElse(null)
@@ -663,9 +689,14 @@ public class NexusRestClient {
                   continue
                 }
                 def checksums = normalize(rows.getObject('checksums'))
+                def sourceAssetId = rows.getObject('asset_id')
+                def externalAssetId = toExternalAssetId.invoke(
+                    null, ((Number) sourceAssetId).intValue()).getValue()
                 assets << [
                   repositoryName: repositoryName,
-                  assetId: String.valueOf(rows.getObject('asset_id')),
+                  assetId: String.valueOf(sourceAssetId),
+                  nexusPublicAssetId: publicAssetId(externalAssetId),
+                  nexusSha1: checksumValue(checksums, 'sha1'),
                   componentId: rows.getObject('component_id') == null ? null : String.valueOf(rows.getObject('component_id')),
                   path: path,
                   format: repositoryFormat,
@@ -1353,46 +1384,6 @@ public class NexusRestClient {
       }
     }
     return findPublicAssets(repositoryName, path);
-  }
-
-  /**
-   * Reads one page from Nexus' format-independent asset listing endpoint.
-   *
-   * <p>The continuation token is intentionally supplied and returned by the caller so migration
-   * workers can persist it in shared storage between pages.</p>
-   */
-  public NexusPublicAssetPage listPublicAssetsPage(
-      String repositoryName, String continuationToken) throws IOException, InterruptedException {
-    if (repositoryName == null || repositoryName.isBlank()) {
-      throw new IllegalArgumentException("Repository is required");
-    }
-    String requestPath = "/service/rest/v1/assets?repository=" + encodePathSegment(repositoryName);
-    if (continuationToken != null && !continuationToken.isBlank()) {
-      requestPath += "&continuationToken=" + encodePathSegment(continuationToken);
-    }
-    Map<String, Object> page = getMap(requestPath);
-    List<Map<String, Object>> items = objectMaps(page.get("items"));
-    List<NexusPublicAsset> assets = new ArrayList<>(items.size());
-    for (Map<String, Object> item : items) {
-      String path = firstString(item, "path");
-      if (path == null || path.isBlank()) {
-        throw new IOException("Nexus asset listing returned an item without a path for repository "
-            + repositoryName);
-      }
-      Map<String, Object> checksum = objectValue(item.get("checksum"));
-      assets.add(new NexusPublicAsset(
-          firstString(item, "id"),
-          firstString(item, "repository"),
-          path,
-          firstString(checksum, "sha1"),
-          firstString(item, "downloadUrl")));
-    }
-    String nextToken = string(page.get("continuationToken"));
-    if (nextToken != null && nextToken.equals(continuationToken)) {
-      throw new IOException("Nexus asset listing repeated continuation token for repository "
-          + repositoryName);
-    }
-    return new NexusPublicAssetPage(repositoryName, continuationToken, nextToken, assets);
   }
 
   private static boolean hasExactMavenCoordinates(
@@ -2120,6 +2111,8 @@ public class NexusRestClient {
     return new RepositoryAssetMetadata(
         firstString(source, "repositoryName"),
         firstString(source, "assetId"),
+        firstString(source, "nexusPublicAssetId"),
+        firstString(source, "nexusSha1"),
         firstString(source, "componentId"),
         firstString(source, "path"),
         firstString(source, "format"),
@@ -2185,6 +2178,8 @@ public class NexusRestClient {
   public record RepositoryAssetMetadata(
       String repositoryName,
       String assetId,
+      String nexusPublicAssetId,
+      String nexusSha1,
       String componentId,
       String path,
       String format,
@@ -2216,21 +2211,6 @@ public class NexusRestClient {
       String path,
       String sha1,
       String downloadUrl) {
-  }
-
-  public record NexusPublicAssetPage(
-      String repositoryName,
-      String continuationToken,
-      String nextContinuationToken,
-      List<NexusPublicAsset> assets) {
-
-    public NexusPublicAssetPage {
-      assets = assets == null ? List.of() : List.copyOf(assets);
-    }
-
-    public boolean complete() {
-      return nextContinuationToken == null;
-    }
   }
 
   private record SecurityExportResult(

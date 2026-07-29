@@ -246,6 +246,16 @@ class NexusRestClientTest {
     assertTrue(script.contains("_ASSET_BLOB"));
     assertTrue(script.contains("def sourcePathCursor = { value ->"));
     assertTrue(script.contains("def repositoryRelativePath = { value ->"));
+    assertTrue(script.contains("def publicAssetId = { value ->"),
+        "the export script should encode Nexus-compatible public asset IDs");
+    assertTrue(script.contains("AssetEntityAdapter"),
+        "OrientDB export should resolve the persisted asset entity metadata");
+    assertTrue(script.contains("getEntityMetadata().getId().getValue()"),
+        "OrientDB export should use the asset entity's external ID");
+    assertTrue(script.contains("InternalIds"),
+        "datastore export should use Nexus' internal-to-external ID converter");
+    assertTrue(script.contains("getMethod('toExternalId', Integer.TYPE)"),
+        "datastore export should invoke the Nexus integer asset ID conversion contract");
     assertTrue(script.contains("def datastoreAfterPath = sourcePathCursor(afterPath)"));
     assertTrue(script.contains("path: path,"));
     assertTrue(script.contains("nextAfterPath: repositoryRelativePath(lastPath)"));
@@ -296,6 +306,10 @@ class NexusRestClientTest {
     assertEquals("com.acme", page.assets().get(0).namespace());
     assertEquals("demo", page.assets().get(0).name());
     assertEquals("1.0", page.assets().get(0).version());
+    assertEquals("nexus-public-id", page.assets().get(0).nexusPublicAssetId(),
+        "script pages should expose the Nexus public asset ID");
+    assertEquals("abc123", page.assets().get(0).nexusSha1(),
+        "script pages should expose the Nexus SHA-1 used to verify aliases");
     Map<String, Object> request = OBJECT_MAPPER.readValue(nexus.lastRunBody, Map.class);
     assertEquals("maven2", request.get("repositoryFormat"));
     assertEquals("UNKNOWN", request.get("metadataEngine"));
@@ -346,41 +360,6 @@ class NexusRestClientTest {
 
     assertEquals(1, assets.size(), "coordinate search should return the exact Maven asset");
     assertEquals("maven-public-id", assets.getFirst().id(), "public ID should come from Nexus");
-  }
-
-  @Test
-  void publicAssetListingUsesRepositoryPaginationWithoutFormatSpecificSearch() throws Exception {
-    NexusRestClient client = client(new FakeNexus(true));
-
-    NexusRestClient.NexusPublicAssetPage first =
-        client.listPublicAssetsPage("paged-repo", null);
-    NexusRestClient.NexusPublicAssetPage second =
-        client.listPublicAssetsPage("paged-repo", first.nextContinuationToken());
-
-    assertEquals("next page", first.nextContinuationToken(),
-        "the first page should expose Nexus' continuation token");
-    assertFalse(first.complete(), "a page with a continuation token is not complete");
-    assertEquals(List.of("packages/demo.whl"),
-        first.assets().stream().map(NexusRestClient.NexusPublicAsset::path).toList(),
-        "the first listing page should retain the exact Nexus asset path");
-    assertEquals("public-page-1", first.assets().getFirst().id(),
-        "the public ID must come from the listing response");
-    assertEquals("abc123", first.assets().getFirst().sha1(),
-        "the SHA-1 must come from the listing response");
-    assertTrue(second.complete(), "a page without a continuation token is complete");
-    assertEquals(List.of("gems/demo.gem"),
-        second.assets().stream().map(NexusRestClient.NexusPublicAsset::path).toList(),
-        "the second listing page should use the supplied continuation token");
-  }
-
-  @Test
-  void publicAssetListingRejectsRepeatedContinuationToken() {
-    IOException failure = assertThrows(IOException.class,
-        () -> client(new FakeNexus(true)).listPublicAssetsPage("repeated-token", "same"),
-        "a repeated token must be rejected");
-
-    assertTrue(failure.getMessage().contains("repeated continuation token"),
-        "a repeated token must fail before the worker can loop forever");
   }
 
   private static NexusRestClient client(FakeNexus nexus) {
@@ -478,29 +457,6 @@ class NexusRestClientTest {
                 "repository", "maven-3rd-releases",
                 "path", "com/acme/demo/1.0/demo-1.0.pom",
                 "checksum", Map.of("sha1", "other")))));
-      }
-      if ("GET".equals(method) && path.equals(
-          "/service/rest/v1/assets?repository=paged-repo")) {
-        return json(200, Map.of(
-            "items", List.of(Map.of(
-                "id", "public-page-1",
-                "repository", "paged-repo",
-                "path", "packages/demo.whl",
-                "checksum", Map.of("sha1", "abc123"))),
-            "continuationToken", "next page"));
-      }
-      if ("GET".equals(method) && path.equals(
-          "/service/rest/v1/assets?repository=paged-repo&continuationToken=next%20page")) {
-        return json(200, Map.of(
-            "items", List.of(Map.of(
-                "id", "public-page-2",
-                "repository", "paged-repo",
-                "path", "gems/demo.gem",
-                "checksum", Map.of("sha1", "def456")))));
-      }
-      if ("GET".equals(method) && path.equals(
-          "/service/rest/v1/assets?repository=repeated-token&continuationToken=same")) {
-        return json(200, Map.of("items", List.of(), "continuationToken", "same"));
       }
       if ("GET".equals(method) && "/service/rest/v1/security/users?source=default".equals(path)) {
         usersPath = path;
@@ -650,6 +606,8 @@ class NexusRestClientTest {
         LinkedHashMap<String, Object> asset = new LinkedHashMap<>();
         asset.put("repositoryName", "maven-releases");
         asset.put("assetId", "#45:1");
+        asset.put("nexusPublicAssetId", "nexus-public-id");
+        asset.put("nexusSha1", "abc123");
         asset.put("componentId", "#44:1");
         asset.put("path", "com/acme/demo/1.0/demo-1.0.jar");
         asset.put("format", "maven2");

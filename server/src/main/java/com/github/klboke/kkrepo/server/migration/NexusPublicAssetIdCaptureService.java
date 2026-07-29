@@ -29,6 +29,18 @@ class NexusPublicAssetIdCaptureService {
       long targetRepositoryId,
       RepositoryDataMigrationAssetRecord source,
       long targetAssetId) throws IOException, InterruptedException {
+    NexusPublicAsset prefetched = prefetchedPublicAsset(sourceRepositoryName, source);
+    if (prefetched != null) {
+      capture(
+          sourceInstance,
+          migrationJobId,
+          sourceRepositoryName,
+          targetRepositoryId,
+          source.sourcePath(),
+          prefetched,
+          targetAssetId);
+      return;
+    }
     List<NexusPublicAsset> matches = client.findPublicAssets(
         sourceRepositoryName,
         source.sourcePath(),
@@ -96,5 +108,31 @@ class NexusPublicAssetIdCaptureService {
         targetAssetId,
         sourceInstance,
         migrationJobId);
+  }
+
+  private static NexusPublicAsset prefetchedPublicAsset(
+      String sourceRepositoryName,
+      RepositoryDataMigrationAssetRecord source) {
+    if (source.metadata() == null) {
+      return null;
+    }
+    String id = string(source.metadata().get("nexusPublicAssetId"));
+    if (id == null) {
+      return null;
+    }
+    return new NexusPublicAsset(
+        id,
+        sourceRepositoryName,
+        source.sourcePath(),
+        string(source.metadata().get("nexusSha1")),
+        null);
+  }
+
+  private static String string(Object value) {
+    if (value == null) {
+      return null;
+    }
+    String text = String.valueOf(value).trim();
+    return text.isEmpty() ? null : text;
   }
 }
