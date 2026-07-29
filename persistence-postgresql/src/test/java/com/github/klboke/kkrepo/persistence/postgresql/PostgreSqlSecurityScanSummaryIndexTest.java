@@ -30,17 +30,17 @@ class PostgreSqlSecurityScanSummaryIndexTest extends PostgreSqlIntegrationTestSu
         indexDefinition("idx_security_scan_candidate_queue"));
     assertEquals(
         "CREATE INDEX idx_security_scan_task_claim_ready ON public.security_scan_task "
-            + "USING btree (status, priority DESC, requested_at, id, next_attempt_at, "
-            + "attempts, max_attempts)",
+            + "USING btree (status, attempts_remaining, priority DESC, next_attempt_at, "
+            + "requested_at, id)",
         indexDefinition("idx_security_scan_task_claim_ready"));
     assertEquals(
         "CREATE INDEX idx_security_scan_task_claim_running ON public.security_scan_task "
-            + "USING btree (status, priority DESC, requested_at, id, lease_until, "
-            + "attempts, max_attempts)",
+            + "USING btree (status, attempts_remaining, priority DESC, lease_until, "
+            + "requested_at, id)",
         indexDefinition("idx_security_scan_task_claim_running"));
     assertEquals(
         "CREATE INDEX idx_security_scan_task_claim_exhausted ON public.security_scan_task "
-            + "USING btree (status, lease_until, id, attempts, max_attempts)",
+            + "USING btree (status, attempts_remaining, lease_until, id)",
         indexDefinition("idx_security_scan_task_claim_exhausted"));
     assertEquals(
         "CREATE INDEX idx_security_scan_task_repository_status ON public.security_scan_task "
@@ -86,6 +86,15 @@ class PostgreSqlSecurityScanSummaryIndexTest extends PostgreSqlIntegrationTestSu
             WHERE table_schema = current_schema()
               AND table_name = 'security_scan_candidate'
               AND column_name = 'pending'
+            """, String.class));
+    assertEquals(
+        "ALWAYS",
+        jdbc().queryForObject("""
+            SELECT is_generated
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'security_scan_task'
+              AND column_name = 'attempts_remaining'
             """, String.class));
   }
 

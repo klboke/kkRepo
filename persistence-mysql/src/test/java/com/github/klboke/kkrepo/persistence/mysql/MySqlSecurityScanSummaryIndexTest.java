@@ -30,25 +30,23 @@ class MySqlSecurityScanSummaryIndexTest extends MySqlIntegrationTestSupport {
     assertEquals(
         List.of(
             "status",
+            "attempts_remaining",
             "priority",
-            "requested_at",
-            "id",
             "next_attempt_at",
-            "attempts",
-            "max_attempts"),
+            "requested_at",
+            "id"),
         indexColumns("security_scan_task", "idx_security_scan_task_claim_ready"));
     assertEquals(
         List.of(
             "status",
+            "attempts_remaining",
             "priority",
-            "requested_at",
-            "id",
             "lease_until",
-            "attempts",
-            "max_attempts"),
+            "requested_at",
+            "id"),
         indexColumns("security_scan_task", "idx_security_scan_task_claim_running"));
     assertEquals(
-        List.of("status", "lease_until", "id", "attempts", "max_attempts"),
+        List.of("status", "attempts_remaining", "lease_until", "id"),
         indexColumns("security_scan_task", "idx_security_scan_task_claim_exhausted"));
     assertEquals(
         "D",
@@ -102,6 +100,15 @@ class MySqlSecurityScanSummaryIndexTest extends MySqlIntegrationTestSupport {
           AND column_name = 'pending'
         """, String.class);
     assertTrue(generated != null && generated.contains("STORED GENERATED"));
+    String attemptsRemaining = jdbc().queryForObject("""
+        SELECT extra
+        FROM information_schema.columns
+        WHERE table_schema = DATABASE()
+          AND table_name = 'security_scan_task'
+          AND column_name = 'attempts_remaining'
+        """, String.class);
+    assertTrue(
+        attemptsRemaining != null && attemptsRemaining.contains("STORED GENERATED"));
   }
 
   private List<String> indexColumns(String table, String index) {

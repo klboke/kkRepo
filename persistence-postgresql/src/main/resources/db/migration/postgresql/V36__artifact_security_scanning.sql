@@ -143,6 +143,7 @@ CREATE TABLE security_scan_task (
   status VARCHAR(24) NOT NULL,
   attempts INTEGER NOT NULL DEFAULT 0,
   max_attempts INTEGER NOT NULL,
+  attempts_remaining BOOLEAN GENERATED ALWAYS AS (attempts < max_attempts) STORED,
   next_attempt_at TIMESTAMPTZ(3) NOT NULL,
   claimed_by VARCHAR(128),
   lease_token CHAR(36),
@@ -160,16 +161,17 @@ CREATE TABLE security_scan_task (
   updated_at TIMESTAMPTZ(3) NOT NULL,
   dedupe_key BYTEA NOT NULL,
   CONSTRAINT uk_security_scan_task_dedupe UNIQUE (dedupe_key),
-  CONSTRAINT uk_security_scan_task_idempotency UNIQUE (repository_id, idempotency_key_hash)
+  CONSTRAINT uk_security_scan_task_idempotency UNIQUE (repository_id, idempotency_key_hash),
+  CONSTRAINT chk_security_scan_task_priority CHECK (priority IN (0, 20, 25, 100))
 );
 CREATE INDEX idx_security_scan_task_claim_ready
   ON security_scan_task(
-    status, priority DESC, requested_at, id, next_attempt_at, attempts, max_attempts);
+    status, attempts_remaining, priority DESC, next_attempt_at, requested_at, id);
 CREATE INDEX idx_security_scan_task_claim_running
   ON security_scan_task(
-    status, priority DESC, requested_at, id, lease_until, attempts, max_attempts);
+    status, attempts_remaining, priority DESC, lease_until, requested_at, id);
 CREATE INDEX idx_security_scan_task_claim_exhausted
-  ON security_scan_task(status, lease_until, id, attempts, max_attempts);
+  ON security_scan_task(status, attempts_remaining, lease_until, id);
 CREATE INDEX idx_security_scan_task_requested_snapshot
   ON security_scan_task(requested_scanner_snapshot_id);
 CREATE INDEX idx_security_scan_task_asset

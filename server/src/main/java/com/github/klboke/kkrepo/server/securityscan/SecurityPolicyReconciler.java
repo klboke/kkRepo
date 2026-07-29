@@ -20,6 +20,7 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanCompleteness;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanStage;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanState;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
+import com.github.klboke.kkrepo.security.scan.ScanTaskPriorities;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -264,7 +265,7 @@ public class SecurityPolicyReconciler {
         null, // only vulnerability-DB rematch tasks are pinned to a requested snapshot
         stage,
         resultAgeExpired ? RequestReason.MAX_AGE_EXPIRED : RequestReason.POLICY_CHANGED,
-        20,
+        ScanTaskPriorities.POLICY,
         properties.getWorker().getMaxAttempts(),
         "security-policy-reconciler",
         requestUuid,

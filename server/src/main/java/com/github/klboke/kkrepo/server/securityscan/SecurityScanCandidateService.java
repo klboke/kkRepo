@@ -19,6 +19,7 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanCompleteness;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanStage;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanState;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
+import com.github.klboke.kkrepo.security.scan.ScanTaskPriorities;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -122,7 +123,7 @@ public class SecurityScanCandidateService {
           null, // ordinary work acquires a verified ready snapshot when execution begins
           ScanStage.CATALOG_AND_MATCH,
           RequestReason.CONTENT_CHANGED,
-          0,
+          ScanTaskPriorities.CONTENT,
           properties.getWorker().getMaxAttempts(),
           "system",
           requestUuid(candidate, profile),

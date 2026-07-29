@@ -144,7 +144,6 @@ public class OciRegistryStager {
 
       List<Path> layerPaths = layers.stream()
           .map(layer -> blobPath(blobs, layer.digest()))
-          .distinct()
           .toList();
       ArchiveGuard.Inspection inspection =
           archiveGuard.inspectOciLayers(layerPaths, limits, workspace, deadline);

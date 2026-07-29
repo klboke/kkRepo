@@ -164,6 +164,50 @@ class OciRegistryStagerTest {
   }
 
   @Test
+  void chargesRepeatedLayerDescriptorsAgainstTheExpandedByteBudget() throws Exception {
+    byte[] config = config("linux", "amd64", null);
+    byte[] layer = gzipTar("large.bin", new byte[4096]);
+    byte[] manifest = ("""
+        {"schemaVersion":2,"mediaType":"%s",
+         "config":{"mediaType":"%s","digest":"%s","size":%d},
+         "layers":[
+           {"mediaType":"%s","digest":"%s","size":%d},
+           {"mediaType":"%s","digest":"%s","size":%d}
+         ]}
+        """).formatted(
+            MANIFEST_TYPE,
+            CONFIG_TYPE,
+            digest(config),
+            config.length,
+            LAYER_TYPE,
+            digest(layer),
+            layer.length,
+            LAYER_TYPE,
+            digest(layer),
+            layer.length)
+        .getBytes(StandardCharsets.UTF_8);
+    registry = new Registry(Map.of(
+        manifestPath(digest(manifest)), manifest,
+        blobPath(digest(config)), config,
+        blobPath(digest(layer)), layer));
+    OciRegistryStager stager =
+        new OciRegistryStager(new ObjectMapper(), new ArchiveGuard());
+
+    ScannerRequestException failure = assertThrows(
+        ScannerRequestException.class,
+        () -> stager.stage(
+            request(registry.url(), digest(manifest), List.of("linux/amd64")),
+            limits(1024 * 1024, 6000, 8192),
+            temporary,
+            new ScanDeadline(10)));
+
+    assertEquals("ARCHIVE_EXPANDED_LIMIT", failure.code());
+    assertEquals(1, registry.paths().stream()
+        .filter(blobPath(digest(layer))::equals)
+        .count());
+  }
+
+  @Test
   void stagesOnlyRequestedIndexPlatformsAndReportsMissingOnes() throws Exception {
     byte[] config = config("linux", "amd64", null);
     byte[] layer = gzipTar("package.txt", "ok".getBytes(StandardCharsets.UTF_8));

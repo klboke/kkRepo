@@ -48,6 +48,7 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanState;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.SubjectKind;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.TaskStatus;
+import com.github.klboke.kkrepo.security.scan.ScanTaskPriorities;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -476,6 +477,47 @@ public abstract class PersistenceApiContract {
         }), 2);
     assertEquals(List.of(true, true), lockFenceOutcomes);
 
+    CountDownLatch projectionCandidateLockHeld = new CountDownLatch(1);
+    CountDownLatch releaseProjectionCandidateLock = new CountDownLatch(1);
+    CountDownLatch administrativeLookupStarted = new CountDownLatch(1);
+    CountDownLatch administrativeLookupReturned = new CountDownLatch(1);
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var projection = executor.submit(() -> inTransaction(() -> {
+        scans.taskProjectionIsSuperseded(taskId);
+        projectionCandidateLockHeld.countDown();
+        try {
+          assertTrue(releaseProjectionCandidateLock.await(
+              30, java.util.concurrent.TimeUnit.SECONDS));
+        } catch (InterruptedException stopped) {
+          Thread.currentThread().interrupt();
+          throw new IllegalStateException(stopped);
+        }
+        return true;
+      }));
+      assertTrue(projectionCandidateLockHeld.await(
+          30, java.util.concurrent.TimeUnit.SECONDS));
+      var administration = executor.submit(() -> {
+        administrativeLookupStarted.countDown();
+        try {
+          return inTransaction(() -> scans.findTaskForUpdate(taskId).isPresent());
+        } finally {
+          administrativeLookupReturned.countDown();
+        }
+      });
+      assertTrue(administrativeLookupStarted.await(
+          30, java.util.concurrent.TimeUnit.SECONDS));
+      try {
+        assertFalse(
+            administrativeLookupReturned.await(
+                500, java.util.concurrent.TimeUnit.MILLISECONDS),
+            "administrative lookup must wait for the candidate before locking the task");
+      } finally {
+        releaseProjectionCandidateLock.countDown();
+      }
+      assertTrue(projection.get(30, java.util.concurrent.TimeUnit.SECONDS));
+      assertTrue(administration.get(30, java.util.concurrent.TimeUnit.SECONDS));
+    }
+
     SecurityScanDao.ScanTask firstLease = inTransaction(() -> scans.claimTasks(
         "replica-a", now.plusSeconds(2), now.plusSeconds(30), 1).getFirst());
     assertTrue(inTransaction(() -> scans.claimTasks(
@@ -505,7 +547,7 @@ public abstract class PersistenceApiContract {
         null,
         ScanStage.CATALOG_AND_MATCH,
         RequestReason.MANUAL,
-        50,
+        ScanTaskPriorities.MANUAL,
         2,
         "contract",
         cancellationKey,

@@ -29,6 +29,7 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanStage;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.SubjectKind;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.TaskStatus;
+import com.github.klboke.kkrepo.security.scan.ScanTaskPriorities;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
 import java.io.IOException;
@@ -638,7 +639,7 @@ public class SecurityScanManagementService {
         null, // manual work acquires a verified ready snapshot when execution begins
         ScanStage.CATALOG_AND_MATCH,
         RequestReason.MANUAL,
-        100,
+        ScanTaskPriorities.MANUAL,
         properties.getWorker().getMaxAttempts(),
         actor.userId(),
         requestUuid,

@@ -53,6 +53,7 @@ class DockerManifestStoreTest {
     DockerBlobStore blobStore = mock(DockerBlobStore.class);
     DockerManifestParser parser = mock(DockerManifestParser.class);
     ArtifactDownloadPolicy policy = mock(ArtifactDownloadPolicy.class);
+    when(policy.shouldEvaluateCurrentRequest()).thenReturn(true);
     RepositoryRuntime runtime = runtime("ALLOW");
     DockerDigest digest = DockerDigest.parse(
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
@@ -83,6 +84,7 @@ class DockerManifestStoreTest {
   void allowsRepositoryScopedBlobBeforeAManifestReferencesIt() {
     DockerRegistryDao dockerDao = mock(DockerRegistryDao.class);
     ArtifactDownloadPolicy policy = mock(ArtifactDownloadPolicy.class);
+    when(policy.shouldEvaluateCurrentRequest()).thenReturn(true);
     RepositoryRuntime runtime = runtime("ALLOW");
     DockerDigest digest = DockerDigest.parse(
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
@@ -110,6 +112,7 @@ class DockerManifestStoreTest {
   void appliesPendingPolicyToAProxyBlobBeforeItsManifestIsCached() {
     DockerRegistryDao dockerDao = mock(DockerRegistryDao.class);
     ArtifactDownloadPolicy policy = mock(ArtifactDownloadPolicy.class);
+    when(policy.shouldEvaluateCurrentRequest()).thenReturn(true);
     RepositoryRuntime runtime = runtime("ALLOW", RepositoryType.PROXY);
     DockerDigest digest = DockerDigest.parse(
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
@@ -136,6 +139,7 @@ class DockerManifestStoreTest {
   void boundsSharedBlobPolicyEvaluationAndMarksReferenceOverflow() {
     DockerRegistryDao dockerDao = mock(DockerRegistryDao.class);
     ArtifactDownloadPolicy policy = mock(ArtifactDownloadPolicy.class);
+    when(policy.shouldEvaluateCurrentRequest()).thenReturn(true);
     RepositoryRuntime runtime = runtime("ALLOW");
     DockerDigest digest = DockerDigest.parse(
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
@@ -167,6 +171,32 @@ class DockerManifestStoreTest {
             com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao
                 .MAX_DOWNLOAD_POLICY_BATCH),
         true);
+  }
+
+  @Test
+  void bypassesManifestReferenceLookupWhenDownloadEnforcementIsInactive() {
+    DockerRegistryDao dockerDao = mock(DockerRegistryDao.class);
+    ArtifactDownloadPolicy policy = mock(ArtifactDownloadPolicy.class);
+    RepositoryRuntime runtime = runtime("ALLOW");
+    DockerDigest digest = DockerDigest.parse(
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    DockerManifestStore store = new DockerManifestStore(
+        mock(AssetDao.class),
+        dockerDao,
+        mock(DockerBlobStore.class),
+        mock(DockerManifestParser.class),
+        mock(AssetMetadataCache.class),
+        null,
+        null,
+        null,
+        policy);
+
+    store.beforeBlobRead(runtime, "team/app", digest);
+
+    verify(dockerDao, never()).listManifestAssetIdsReferencingDigest(
+        anyLong(), anyString(), anyLong(), anyInt());
+    verify(policy, never()).beforeReadAll(any(), anyBoolean());
+    verify(policy, never()).beforePendingOciImageRead(anyLong(), anyString());
   }
 
   @Test

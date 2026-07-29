@@ -981,30 +981,52 @@ BLOCK_VULNERABILITY
 
 ## 数据库任务领取与多副本语义
 
-worker 先按精确 status 分别读取每类任务的有序候选集：
+任务优先级不是任意整数，而是四个固定档位：
+
+| 档位 | 值 | 来源 |
+|---|---:|---|
+| `MANUAL` | 100 | 管理员手工 rescan |
+| `VULNERABILITY_DATABASE` | 25 | 漏洞库更新后的 rematch |
+| `POLICY` | 20 | 策略或结果有效期变更 |
+| `CONTENT` | 0 | 新增、替换制品或 backfill |
+
+固定档位由应用层校验和数据库 `CHECK` 约束共同保证。worker 对一个精确 status 使用
+`UNION ALL` 分别读取四个优先级的可执行时间范围，每个分支最多读取一个 batch：
 
 ```sql
-SELECT id, priority, requested_at
-FROM security_scan_task
-WHERE status = ?
-  AND attempts < max_attempts
-  AND next_attempt_at <= CURRENT_TIMESTAMP
-ORDER BY priority DESC, requested_at, id
+SELECT id, priority, requested_at, eligible_at
+FROM (
+  (SELECT id, priority, requested_at, next_attempt_at AS eligible_at
+   FROM security_scan_task
+   WHERE status = ?
+     AND attempts_remaining = TRUE
+     AND priority = 100
+     AND next_attempt_at <= CURRENT_TIMESTAMP
+   ORDER BY next_attempt_at, requested_at, id
+   LIMIT ?)
+  UNION ALL
+  -- priority 25、20、0 使用相同的有界分支
+) claimable
+ORDER BY priority DESC, eligible_at, requested_at, id
 LIMIT ?;
 ```
 
 `PENDING`、`RETRY_WAIT` 分别执行上述查询；过期 `RUNNING` 候选使用
-`lease_until < CURRENT_TIMESTAMP`。三个最多为 batch size 的候选集在 JVM 中按同一
-顺序归并，随后只对准备领取的 id 用主键重新校验条件并执行
+`lease_until < CURRENT_TIMESTAMP`。每个 status 的外层排序最多处理四倍 batch size，
+不会随数据库中的未来任务或已耗尽任务数量增长。三个最多为 batch size 的候选集在 JVM
+中按 `priority DESC, eligible_at, requested_at, id` 归并，随后只对准备领取的 id
+用主键重新校验条件并执行
 `FOR UPDATE SKIP LOCKED`，直到拿满 batch。这样不会为了跨 status 排序而锁住最终不
 领取的行，多个副本选择到同一候选时也只有一个能持有行锁。
 
-V36 直接提供与查询顺序一致的
-`idx_security_scan_task_claim_ready(status, priority DESC, requested_at, id, ...)` 和
-`idx_security_scan_task_claim_running(status, priority DESC, requested_at, id, ...)`
-覆盖索引；最终尝试已耗尽的 lease 回收另用
-`idx_security_scan_task_claim_exhausted(status, lease_until, id, ...)`。不再把
-`next_attempt_at`、`lease_until` 两种互斥谓词塞入一个无法服务实际排序的复合索引。
+`attempts_remaining` 是 `attempts < max_attempts` 的 stored generated column。V36
+提供 `idx_security_scan_task_claim_ready(status, attempts_remaining, priority DESC,
+next_attempt_at, requested_at, id)` 和
+`idx_security_scan_task_claim_running(status, attempts_remaining, priority DESC,
+lease_until, requested_at, id)`。因为每个分支已固定前三列，MySQL 与 PostgreSQL 都能
+直接对 `next_attempt_at` 或 `lease_until` 做索引 range scan。最终尝试已耗尽的 lease
+回收另用 `idx_security_scan_task_claim_exhausted(status, attempts_remaining,
+lease_until, id)`。普通领取和耗尽回收因此不会扫描彼此的任务。
 
 领取事务同时：
 
@@ -1022,8 +1044,11 @@ WHERE id = ? AND status = 'RUNNING' AND lease_token = ?
 旧 worker 在 lease 失效后返回，不得覆盖接管 worker 的结果。
 
 管理员取消 `RUNNING` 任务时，数据库状态和 lease fencing 仍是集群正确性的唯一真相。
-管理事务先用 `SELECT ... FOR UPDATE` 锁定 task 行，从同一份锁定投影捕获当前 lease，
-再原子提交 `CANCELLED` 状态、blob owner 释放和审计记录。claim/takeover 使用
+对 asset 任务，管理事务先用轻量主键查询取得不可变的 `asset_id`，再按全局
+`candidate row -> task row` 顺序加锁；终态发布也遵循相同顺序，禁止形成
+`candidate -> task` 与 `task -> candidate` 的反向等待。任务行锁定后才从同一份投影
+捕获当前 lease，再原子提交 `CANCELLED` 状态、blob owner 释放和审计记录。
+非 asset 任务直接锁 task。claim/takeover 使用
 `SKIP LOCKED`，因此不能在 lease 捕获与取消更新之间替换 owner。提交成功后立即使用
 `task id + 本次随机 lease token` 作为 run id，向全部配置 adapter ordinal 广播带
 service credential 的取消请求；不能只使用 attempts，因为管理员 retry 会把 attempts

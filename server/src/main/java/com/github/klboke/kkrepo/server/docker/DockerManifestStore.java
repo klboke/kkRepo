@@ -245,6 +245,9 @@ public class DockerManifestStore {
   }
 
   void beforeBlobRead(RepositoryRuntime runtime, String imageName, DockerDigest digest) {
+    if (downloadPolicy == null || !downloadPolicy.shouldEvaluateCurrentRequest()) {
+      return;
+    }
     List<Long> manifestAssetIds = dockerDao.listManifestAssetIdsReferencingDigest(
         runtime.id(),
         digest.value(),
@@ -255,7 +258,7 @@ public class DockerManifestStore {
       // are remote download content, however, and must follow the pending action until a manifest
       // provides the OCI scan subject. The repository-wide query above also prevents an alias
       // image name from hiding an existing manifest reference to this repository-scoped digest.
-      if (downloadPolicy != null && runtime.type() == RepositoryType.PROXY) {
+      if (runtime.type() == RepositoryType.PROXY) {
         downloadPolicy.beforePendingOciImageRead(runtime.id(), imageName);
       }
       return;
@@ -266,9 +269,7 @@ public class DockerManifestStore {
       manifestAssetIds =
           manifestAssetIds.subList(0, SecurityScanDao.MAX_DOWNLOAD_POLICY_BATCH);
     }
-    if (downloadPolicy != null) {
-      downloadPolicy.beforeReadAll(manifestAssetIds, truncated);
-    }
+    downloadPolicy.beforeReadAll(manifestAssetIds, truncated);
   }
 
   private static void ensureAccepted(String mediaType, List<String> acceptHeaders) {

@@ -153,6 +153,7 @@ CREATE TABLE security_scan_task (
   status VARCHAR(24) NOT NULL,
   attempts INT NOT NULL DEFAULT 0,
   max_attempts INT NOT NULL,
+  attempts_remaining BOOLEAN GENERATED ALWAYS AS (attempts < max_attempts) STORED,
   next_attempt_at DATETIME(3) NOT NULL,
   claimed_by VARCHAR(128) NULL,
   lease_token CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,
@@ -181,12 +182,13 @@ CREATE TABLE security_scan_task (
     ON DELETE SET NULL,
   CONSTRAINT uk_security_scan_task_dedupe UNIQUE (dedupe_key),
   CONSTRAINT uk_security_scan_task_idempotency UNIQUE (repository_id, idempotency_key_hash),
+  CONSTRAINT chk_security_scan_task_priority CHECK (priority IN (0, 20, 25, 100)),
   INDEX idx_security_scan_task_claim_ready
-    (status, priority DESC, requested_at, id, next_attempt_at, attempts, max_attempts),
+    (status, attempts_remaining, priority DESC, next_attempt_at, requested_at, id),
   INDEX idx_security_scan_task_claim_running
-    (status, priority DESC, requested_at, id, lease_until, attempts, max_attempts),
+    (status, attempts_remaining, priority DESC, lease_until, requested_at, id),
   INDEX idx_security_scan_task_claim_exhausted
-    (status, lease_until, id, attempts, max_attempts),
+    (status, attempts_remaining, lease_until, id),
   INDEX idx_security_scan_task_requested_snapshot (requested_scanner_snapshot_id),
   INDEX idx_security_scan_task_asset (asset_id, created_at, id),
   INDEX idx_security_scan_task_projection

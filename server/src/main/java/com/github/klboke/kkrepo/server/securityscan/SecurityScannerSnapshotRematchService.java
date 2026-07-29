@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.TaskDraft;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.RequestReason;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanStage;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.SubjectKind;
+import com.github.klboke.kkrepo.security.scan.ScanTaskPriorities;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
@@ -121,7 +122,7 @@ public class SecurityScannerSnapshotRematchService {
         snapshot.id(),
         ScanStage.MATCH_ONLY,
         RequestReason.VULNERABILITY_DB_CHANGED,
-        25,
+        ScanTaskPriorities.VULNERABILITY_DATABASE,
         properties.getWorker().getMaxAttempts(),
         "security-scan-worker",
         requestUuid,

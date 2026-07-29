@@ -27,6 +27,7 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanState;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.SubjectKind;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.TaskStatus;
+import com.github.klboke.kkrepo.security.scan.ScanTaskPriorities;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -52,9 +53,30 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   private static final String SBOM_BLOB_OWNER = "security-sbom";
   private static final String SCAN_REPORT_BLOB_OWNER = "security-scan-report";
   private static final long RESULT_ACCESS_TOUCH_INTERVAL_SECONDS = 3_600;
+  private static final String READY_CLAIM_BRANCH = """
+      (SELECT id, priority, requested_at, next_attempt_at AS eligible_at
+       FROM security_scan_task
+       WHERE status = ?
+         AND attempts_remaining = TRUE
+         AND priority = ?
+         AND next_attempt_at <= ?
+       ORDER BY next_attempt_at, requested_at, id
+       LIMIT ?)
+      """;
+  private static final String EXPIRED_CLAIM_BRANCH = """
+      (SELECT id, priority, requested_at, lease_until AS eligible_at
+       FROM security_scan_task
+       WHERE status = ?
+         AND attempts_remaining = TRUE
+         AND priority = ?
+         AND lease_until < ?
+       ORDER BY lease_until, requested_at, id
+       LIMIT ?)
+      """;
   private static final Comparator<ClaimCandidate> CLAIM_ORDER =
       Comparator.comparingInt(ClaimCandidate::priority)
           .reversed()
+          .thenComparing(ClaimCandidate::eligibleAt)
           .thenComparing(ClaimCandidate::requestedAt)
           .thenComparingLong(ClaimCandidate::id);
 
@@ -984,6 +1006,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Override
   @Transactional
   public long createTask(TaskDraft task) {
+    int priority = ScanTaskPriorities.requireSupported(task.priority());
     if (task.assetId() != null) {
       // Task creation and terminal projection share one durable per-asset authority. Once a newer
       // task exists, an older replica cannot publish a transient or terminal state over it.
@@ -1026,7 +1049,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       setNullableLong(ps, index++, task.requestedScannerSnapshotId());
       ps.setString(index++, task.stage().name());
       ps.setString(index++, task.requestReason().name());
-      ps.setInt(index++, task.priority());
+      ps.setInt(index++, priority);
       ps.setString(index++, TaskStatus.PENDING.name());
       ps.setInt(index++, Math.max(1, task.maxAttempts()));
       ps.setTimestamp(index++, nullableTimestamp(requestedAt));
@@ -1120,6 +1143,16 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Override
   @Transactional(propagation = Propagation.MANDATORY)
   public Optional<ScanTask> findTaskForUpdate(long taskId) {
+    List<Long> assetIds = jdbc.queryForList(
+        "SELECT asset_id FROM security_scan_task WHERE id = ? AND asset_id IS NOT NULL",
+        Long.class,
+        taskId);
+    if (!assetIds.isEmpty()) {
+      // Terminal publication takes the candidate row before it updates the task. Administrative
+      // cancellation must use the same global order to avoid a candidate -> task / task ->
+      // candidate deadlock across replicas.
+      lockScanCandidate(assetIds.getFirst());
+    }
     return jdbc.query(
             "SELECT * FROM security_scan_task WHERE id = ? FOR UPDATE",
             taskMapper,
@@ -1297,42 +1330,47 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
 
   private List<ClaimCandidate> readyClaimCandidates(
       TaskStatus status, Instant now, int limit) {
-    return jdbc.query("""
-        SELECT id, priority, requested_at
-        FROM security_scan_task
-        WHERE status = ?
-          AND attempts < max_attempts
-          AND next_attempt_at <= ?
-        ORDER BY priority DESC, requested_at, id
-        LIMIT ?
-        """,
+    return eligibleClaimCandidates(status, false, now, limit);
+  }
+
+  private List<ClaimCandidate> expiredClaimCandidates(Instant now, int limit) {
+    return eligibleClaimCandidates(TaskStatus.RUNNING, true, now, limit);
+  }
+
+  /**
+   * Reads at most {@code limit} rows from each fixed priority range, then merges that bounded set.
+   *
+   * <p>Every UNION branch fixes status, remaining-attempt state and priority before applying the
+   * eligibility timestamp range. The claim indexes can therefore seek directly to ready rows even
+   * when a higher-priority class contains a large future backlog.
+   */
+  private List<ClaimCandidate> eligibleClaimCandidates(
+      TaskStatus status, boolean expired, Instant now, int limit) {
+    StringBuilder sql = new StringBuilder(
+        "SELECT id, priority, requested_at, eligible_at FROM (");
+    List<Object> args = new ArrayList<>();
+    boolean first = true;
+    for (int priority : ScanTaskPriorities.descending()) {
+      if (!first) sql.append(" UNION ALL ");
+      first = false;
+      sql.append(expired ? EXPIRED_CLAIM_BRANCH : READY_CLAIM_BRANCH);
+      args.add(status.name());
+      args.add(priority);
+      args.add(nullableTimestamp(now));
+      args.add(limit);
+    }
+    sql.append(
+        ") claimable ORDER BY priority DESC, eligible_at, requested_at, id LIMIT ?");
+    args.add(limit);
+    return jdbc.query(
+        sql.toString(),
         (rs, rowNum) -> new ClaimCandidate(
             rs.getLong("id"),
             status,
             rs.getInt("priority"),
+            java.util.Objects.requireNonNull(nullableInstant(rs, "eligible_at")),
             java.util.Objects.requireNonNull(nullableInstant(rs, "requested_at"))),
-        status.name(),
-        nullableTimestamp(now),
-        limit);
-  }
-
-  private List<ClaimCandidate> expiredClaimCandidates(Instant now, int limit) {
-    return jdbc.query("""
-        SELECT id, priority, requested_at
-        FROM security_scan_task
-        WHERE status = 'RUNNING'
-          AND attempts < max_attempts
-          AND lease_until < ?
-        ORDER BY priority DESC, requested_at, id
-        LIMIT ?
-        """,
-        (rs, rowNum) -> new ClaimCandidate(
-            rs.getLong("id"),
-            TaskStatus.RUNNING,
-            rs.getInt("priority"),
-            java.util.Objects.requireNonNull(nullableInstant(rs, "requested_at"))),
-        nullableTimestamp(now),
-        limit);
+        args.toArray());
   }
 
   private boolean lockEligibleClaimCandidate(ClaimCandidate candidate, Instant now) {
@@ -1377,7 +1415,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         SELECT id
         FROM security_scan_task
         WHERE status = 'RUNNING'
-          AND attempts >= max_attempts
+          AND attempts_remaining = FALSE
           AND lease_until < ?
         ORDER BY lease_until, id
         LIMIT ?
@@ -1390,7 +1428,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
           UPDATE security_scan_task
           SET claimed_by = ?, lease_token = ?, lease_until = ?, last_heartbeat_at = ?,
               updated_at = ?
-          WHERE id = ? AND status = 'RUNNING' AND attempts >= max_attempts
+          WHERE id = ? AND status = 'RUNNING' AND attempts_remaining = FALSE
           """,
           workerId,
           token,
@@ -4198,7 +4236,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   private record ClaimCandidate(
-      long id, TaskStatus status, int priority, Instant requestedAt) {}
+      long id, TaskStatus status, int priority, Instant eligibleAt, Instant requestedAt) {}
 
   private static String searchPattern(String query) {
     if (blank(query)) return null;

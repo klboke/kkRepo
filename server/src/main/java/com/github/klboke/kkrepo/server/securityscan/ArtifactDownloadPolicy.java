@@ -58,7 +58,7 @@ public class ArtifactDownloadPolicy {
   }
 
   public Decision beforeRead(long assetId, long servedBlobId, Long entryRepositoryId) {
-    if (!properties.isEnabled() || internalScannerRequest()) return Decision.allow();
+    if (!shouldEvaluateCurrentRequest()) return Decision.allow();
     return evaluateSnapshots(
         () -> scans.findDownloadPolicySnapshots(assetId, entryRepositoryId).stream()
             .map(snapshot -> bindServedBlobSnapshot(snapshot, servedBlobId))
@@ -106,7 +106,7 @@ public class ArtifactDownloadPolicy {
       String contentType,
       long contentLength,
       long entryRepositoryId) {
-    if (!properties.isEnabled() || internalScannerRequest()) return Decision.allow();
+    if (!shouldEvaluateCurrentRequest()) return Decision.allow();
     return evaluateSnapshots(
         () -> {
           List<DownloadPolicySnapshot> snapshots =
@@ -198,7 +198,7 @@ public class ArtifactDownloadPolicy {
       String kind,
       String contentType,
       long contentLength) {
-    if (!properties.isEnabled() || internalScannerRequest()) return Decision.allow();
+    if (!shouldEvaluateCurrentRequest()) return Decision.allow();
     Long entryRepositoryId = requestEntryRepositoryId();
     return evaluateSnapshots(
         () -> scans.findDownloadPolicyContexts(sourceRepositoryId, entryRepositoryId).stream()
@@ -248,7 +248,7 @@ public class ArtifactDownloadPolicy {
    * closed instead of issuing additional hot-path queries whose count depends on tag cardinality.
    */
   public Decision beforeReadAll(List<Long> assetIds, boolean referencesTruncated) {
-    if (!properties.isEnabled() || internalScannerRequest()) return Decision.allow();
+    if (!shouldEvaluateCurrentRequest()) return Decision.allow();
     List<Long> ids = assetIds == null
         ? List.of()
         : assetIds.stream()
@@ -452,6 +452,16 @@ public class ArtifactDownloadPolicy {
     Object value = attrs.getRequest().getAttribute(
         RepositorySecurityFilter.REPOSITORY_RECORD_ATTRIBUTE);
     return value instanceof RepositoryRecord repository ? repository.id() : null;
+  }
+
+  /**
+   * Returns whether download enforcement can affect the current request.
+   *
+   * <p>Protocol adapters use this cheap check before issuing any security-scanning lookup. It also
+   * keeps the scanner's own artifact stream outside the enforcement path.
+   */
+  public boolean shouldEvaluateCurrentRequest() {
+    return properties.isEnabled() && !internalScannerRequest();
   }
 
   private boolean internalScannerRequest() {
