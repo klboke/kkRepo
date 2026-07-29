@@ -388,6 +388,10 @@ After deletion or expiry, kkRepo recalculates the associated policy state.
 The service rejects a duplicate active waiver for the same repository artifact; correctness does
 not depend on a disabled browser button.
 
+API clients must pair every artifact-scoped waiver with an explicit repository context. A group
+context requires administration of that group and the artifact must come from one of its current
+source repositories; repository-less artifact waivers are rejected.
+
 ## Common Configuration
 
 ### kkRepo

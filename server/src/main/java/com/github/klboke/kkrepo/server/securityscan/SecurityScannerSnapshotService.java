@@ -48,13 +48,18 @@ public class SecurityScannerSnapshotService {
 
     final Observation observation;
     try {
-      observation = adapter.observation();
+      observation =
+          java.util.Objects.requireNonNull(adapter.observation(), "scanner observation");
     } catch (ScannerAdapterException e) {
       observeFailure(e.code(), now);
       throw e;
     } catch (RuntimeException e) {
       observeFailure("SCANNER_OBSERVATION_FAILED", now);
-      throw e;
+      throw new ScannerAdapterException(
+          "SCANNER_OBSERVATION_FAILED",
+          "Scanner adapter observation failed",
+          true,
+          e);
     }
     ScannerContract.Capabilities capabilities = observation.capabilities();
     ScannerContract.Readiness readiness = observation.readiness();

@@ -919,6 +919,10 @@ package selector，使豁免在同一漏洞的后续重扫中继续有效，但�
 也串行到同一判断。已过期或已撤销的记录不阻止重新豁免。
 广域 API 豁免必须至少提供 advisory 或 package selector；拒绝无 finding、无
 selector 的全局或整仓“全部漏洞豁免”，历史空 selector 记录也不能匹配 finding。
+任何包含 `asset_id` 的 API 豁免都必须同时提供明确的 `repository_id`，授权和生效
+范围均以该仓库策略上下文为准；group 上下文只允许 group 管理员创建，并校验制品
+来源仍属于该 group。禁止用 `repository_id = NULL` 的 asset 豁免跨越调用者无权
+管理的 group 策略上下文。
 
 ## 状态机
 

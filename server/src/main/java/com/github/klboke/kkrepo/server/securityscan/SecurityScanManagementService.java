@@ -919,6 +919,9 @@ public class SecurityScanManagementService {
         && blank(command.packageSelector())) {
       throw badRequest("A finding, advisory, or package selector is required");
     }
+    if (command.assetId() != null && command.repositoryId() == null) {
+      throw badRequest("Asset waivers require a repository context");
+    }
     if (command.findingId() == null
         && command.repositoryId() == null
         && command.assetId() == null) {
@@ -954,10 +957,9 @@ public class SecurityScanManagementService {
           0,
           null);
     } else if (scopedAsset != null) {
-      requireRepositoryAdmin(actor, scopedAsset.repositoryId());
-      if (scopedRepository != null
-          && scopedRepository.id() != scopedAsset.repositoryId()) {
-        throw badRequest("Waiver asset does not belong to the repository");
+      if (scopedRepository == null
+          || !isAssetInRepositoryContext(scopedRepository, scopedAsset)) {
+        throw badRequest("Waiver asset does not belong to the repository context");
       }
     }
     Instant now = Instant.now();

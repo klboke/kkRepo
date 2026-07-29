@@ -527,6 +527,62 @@ class SecurityScanManagementServiceWaiverTest {
   }
 
   @Test
+  void assetSelectorWaiverRequiresAnExplicitRepositoryContext() {
+    WaiverCommand command = new WaiverCommand(
+        "ASSET",
+        null,
+        23L,
+        null,
+        "CVE-2026-0041",
+        null,
+        Map.of(),
+        "Accepted for one artifact",
+        null,
+        null,
+        Instant.now().plusSeconds(604800));
+
+    ResponseStatusException exception =
+        assertThrows(ResponseStatusException.class, () -> service.createWaiver(actor, command));
+
+    assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
+    assertEquals("Asset waivers require a repository context", exception.getReason());
+    verify(scans, never()).createWaiver(any());
+  }
+
+  @Test
+  void assetSelectorWaiverAcceptsAnExplicitGroupPolicyContext() {
+    RepositoryRecord group = repository(12L, "maven-public", RepositoryType.GROUP);
+    when(repositories.findById(12L)).thenReturn(Optional.of(group));
+    when(assets.findAssetById(23L))
+        .thenReturn(Optional.of(asset(23L, 11L, "com/acme/demo/1.0/demo-1.0.jar")));
+    when(repositoryScope.sourceRepositoryIds(12L)).thenReturn(List.of(11L));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.allow());
+    when(scans.createWaiver(any())).thenAnswer(invocation -> invocation.getArgument(0));
+    WaiverCommand command = new WaiverCommand(
+        "ASSET",
+        12L,
+        23L,
+        null,
+        "CVE-2026-0041",
+        null,
+        Map.of(),
+        "Accepted in the group policy context",
+        null,
+        null,
+        Instant.now().plusSeconds(604800));
+
+    service.createWaiver(actor, command);
+
+    ArgumentCaptor<ScanWaiver> waiver = ArgumentCaptor.forClass(ScanWaiver.class);
+    verify(scans).createWaiver(waiver.capture());
+    assertEquals("ASSET", waiver.getValue().scopeType());
+    assertEquals(12L, waiver.getValue().repositoryId());
+    assertEquals(23L, waiver.getValue().assetId());
+    verify(repositories, never()).findById(11L);
+  }
+
+  @Test
   void findingWaiverRejectsAnAlreadyCoveredRepositoryArtifact() {
     Instant now = Instant.now();
     ScanFinding finding = finding(41L, 7L);

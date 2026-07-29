@@ -450,6 +450,8 @@ CREATE TABLE security_scan_waiver (
     FOREIGN KEY (finding_id) REFERENCES security_scan_finding(id) ON DELETE CASCADE,
   CONSTRAINT fk_security_scan_waiver_policy
     FOREIGN KEY (policy_id) REFERENCES security_scan_policy(id) ON DELETE SET NULL,
+  CONSTRAINT ck_security_scan_waiver_asset_repository
+    CHECK (asset_id IS NULL OR repository_id IS NOT NULL),
   INDEX idx_security_scan_waiver_active (repository_id, asset_id, id, expires_at),
   INDEX idx_security_scan_waiver_finding (finding_id),
   INDEX idx_security_scan_waiver_advisory (advisory_selector),

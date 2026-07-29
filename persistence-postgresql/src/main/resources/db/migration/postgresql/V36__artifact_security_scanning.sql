@@ -402,7 +402,9 @@ CREATE TABLE security_scan_waiver (
   approved_by VARCHAR(255),
   expires_at TIMESTAMPTZ(3),
   created_at TIMESTAMPTZ(3) NOT NULL,
-  updated_at TIMESTAMPTZ(3) NOT NULL
+  updated_at TIMESTAMPTZ(3) NOT NULL,
+  CONSTRAINT ck_security_scan_waiver_asset_repository
+    CHECK (asset_id IS NULL OR repository_id IS NOT NULL)
 );
 CREATE INDEX idx_security_scan_waiver_active
   ON security_scan_waiver(repository_id, asset_id, id, expires_at);

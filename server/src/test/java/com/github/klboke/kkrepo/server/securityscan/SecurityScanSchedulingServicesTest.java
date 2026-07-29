@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -288,13 +289,19 @@ class SecurityScanSchedulingServicesTest {
     assertEquals(
         "ADAPTER_DOWN",
         assertThrows(ScannerAdapterException.class, service::readySnapshot).code());
+    org.mockito.Mockito.doReturn(null).when(adapter).observation();
+    ScannerAdapterException observationFailure =
+        assertThrows(ScannerAdapterException.class, service::readySnapshot);
+    assertEquals("SCANNER_OBSERVATION_FAILED", observationFailure.code());
+    assertTrue(observationFailure.retryable());
+    assertTrue(observationFailure.getCause() instanceof NullPointerException);
     ArgumentCaptor<ScannerSnapshot> snapshots =
         ArgumentCaptor.forClass(ScannerSnapshot.class);
-    verify(scans, org.mockito.Mockito.atLeast(3))
+    verify(scans, org.mockito.Mockito.atLeast(4))
         .insertSnapshotOrFindExisting(snapshots.capture());
     assertEquals(false, snapshots.getAllValues().getLast().ready());
     assertEquals(
-        "ADAPTER_DOWN",
+        "SCANNER_OBSERVATION_FAILED",
         snapshots.getAllValues().getLast().details().get("reasonCode"));
   }
 
