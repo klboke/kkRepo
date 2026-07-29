@@ -32,6 +32,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -51,6 +52,11 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   private static final String SBOM_BLOB_OWNER = "security-sbom";
   private static final String SCAN_REPORT_BLOB_OWNER = "security-scan-report";
   private static final long RESULT_ACCESS_TOUCH_INTERVAL_SECONDS = 3_600;
+  private static final Comparator<ClaimCandidate> CLAIM_ORDER =
+      Comparator.comparingInt(ClaimCandidate::priority)
+          .reversed()
+          .thenComparing(ClaimCandidate::requestedAt)
+          .thenComparingLong(ClaimCandidate::id);
 
   private final JdbcTemplate jdbc;
   private final BlobReferenceDao blobReferences;
@@ -1113,6 +1119,17 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
 
   @Override
   @Transactional(propagation = Propagation.MANDATORY)
+  public Optional<ScanTask> findTaskForUpdate(long taskId) {
+    return jdbc.query(
+            "SELECT * FROM security_scan_task WHERE id = ? FOR UPDATE",
+            taskMapper,
+            taskId)
+        .stream()
+        .findFirst();
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
   public boolean lockCurrentTaskLease(long taskId, String leaseToken) {
     if (blank(leaseToken)) return false;
     return !jdbc.query("""
@@ -1244,27 +1261,24 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     if (leaseUntil == null || now == null || !leaseUntil.isAfter(now)) {
       throw new IllegalArgumentException("leaseUntil must be after now");
     }
-    List<Long> ids = jdbc.queryForList("""
-        SELECT id
-        FROM security_scan_task
-        WHERE attempts < max_attempts
-          AND (
-            (status IN ('PENDING', 'RETRY_WAIT') AND next_attempt_at <= ?)
-            OR (status = 'RUNNING' AND lease_until < ?)
-          )
-        ORDER BY priority DESC, requested_at, id
-        LIMIT ?
-        FOR UPDATE SKIP LOCKED
-        """, Long.class, nullableTimestamp(now), nullableTimestamp(now), safeLimit(maxItems));
-    List<ScanTask> claimed = new ArrayList<>(ids.size());
-    for (Long id : ids) {
+    int limit = safeLimit(maxItems);
+    List<ClaimCandidate> candidates = new ArrayList<>(limit * 3);
+    candidates.addAll(readyClaimCandidates(TaskStatus.PENDING, now, limit));
+    candidates.addAll(readyClaimCandidates(TaskStatus.RETRY_WAIT, now, limit));
+    candidates.addAll(expiredClaimCandidates(now, limit));
+    candidates.sort(CLAIM_ORDER);
+
+    List<ScanTask> claimed = new ArrayList<>(limit);
+    for (ClaimCandidate candidate : candidates) {
+      if (claimed.size() >= limit) break;
+      if (!lockEligibleClaimCandidate(candidate, now)) continue;
       String token = UUID.randomUUID().toString();
       int updated = jdbc.update("""
           UPDATE security_scan_task
           SET status = 'RUNNING', attempts = attempts + 1, claimed_by = ?, lease_token = ?,
               lease_until = ?, last_heartbeat_at = ?, started_at = COALESCE(started_at, ?),
               updated_at = ?
-          WHERE id = ?
+          WHERE id = ? AND status = ? AND attempts < max_attempts
           """,
           workerId,
           token,
@@ -1272,12 +1286,83 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
           nullableTimestamp(now),
           nullableTimestamp(now),
           nullableTimestamp(now),
-          id);
+          candidate.id(),
+          candidate.status().name());
       if (updated == 1) {
-        claimed.add(findTask(id).orElseThrow());
+        claimed.add(findTask(candidate.id()).orElseThrow());
       }
     }
     return List.copyOf(claimed);
+  }
+
+  private List<ClaimCandidate> readyClaimCandidates(
+      TaskStatus status, Instant now, int limit) {
+    return jdbc.query("""
+        SELECT id, priority, requested_at
+        FROM security_scan_task
+        WHERE status = ?
+          AND attempts < max_attempts
+          AND next_attempt_at <= ?
+        ORDER BY priority DESC, requested_at, id
+        LIMIT ?
+        """,
+        (rs, rowNum) -> new ClaimCandidate(
+            rs.getLong("id"),
+            status,
+            rs.getInt("priority"),
+            java.util.Objects.requireNonNull(nullableInstant(rs, "requested_at"))),
+        status.name(),
+        nullableTimestamp(now),
+        limit);
+  }
+
+  private List<ClaimCandidate> expiredClaimCandidates(Instant now, int limit) {
+    return jdbc.query("""
+        SELECT id, priority, requested_at
+        FROM security_scan_task
+        WHERE status = 'RUNNING'
+          AND attempts < max_attempts
+          AND lease_until < ?
+        ORDER BY priority DESC, requested_at, id
+        LIMIT ?
+        """,
+        (rs, rowNum) -> new ClaimCandidate(
+            rs.getLong("id"),
+            TaskStatus.RUNNING,
+            rs.getInt("priority"),
+            java.util.Objects.requireNonNull(nullableInstant(rs, "requested_at"))),
+        nullableTimestamp(now),
+        limit);
+  }
+
+  private boolean lockEligibleClaimCandidate(ClaimCandidate candidate, Instant now) {
+    if (candidate.status() == TaskStatus.RUNNING) {
+      return !jdbc.queryForList("""
+          SELECT id
+          FROM security_scan_task
+          WHERE id = ?
+            AND status = 'RUNNING'
+            AND attempts < max_attempts
+            AND lease_until < ?
+          FOR UPDATE SKIP LOCKED
+          """,
+          Long.class,
+          candidate.id(),
+          nullableTimestamp(now)).isEmpty();
+    }
+    return !jdbc.queryForList("""
+        SELECT id
+        FROM security_scan_task
+        WHERE id = ?
+          AND status = ?
+          AND attempts < max_attempts
+          AND next_attempt_at <= ?
+        FOR UPDATE SKIP LOCKED
+        """,
+        Long.class,
+        candidate.id(),
+        candidate.status().name(),
+        nullableTimestamp(now)).isEmpty();
   }
 
   @Override
@@ -4111,6 +4196,9 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   private static int safeLimit(int maxItems) {
     return Math.max(1, Math.min(maxItems, 1000));
   }
+
+  private record ClaimCandidate(
+      long id, TaskStatus status, int priority, Instant requestedAt) {}
 
   private static String searchPattern(String query) {
     if (blank(query)) return null;

@@ -39,6 +39,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.AfterEach;
@@ -48,9 +50,11 @@ import org.junit.jupiter.params.provider.CsvSource;
 
 class HttpSecurityScannerAdapterTest {
   private HttpServer server;
+  private CountDownLatch stalledResponseRelease;
 
   @AfterEach
   void stopServer() {
+    if (stalledResponseRelease != null) stalledResponseRelease.countDown();
     if (server != null) server.stop(0);
   }
 
@@ -127,6 +131,39 @@ class HttpSecurityScannerAdapterTest {
         ScannerAdapterException.class, deadline::nextRequestTimeout);
     assertEquals("SCANNER_TIMEOUT", failure.code());
     assertTrue(deadline.expired());
+  }
+
+  @Test
+  void closesAResponseBodyThatStallsAfterSuccessfulHeaders() throws Exception {
+    stalledResponseRelease = new CountDownLatch(1);
+    server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext("/", exchange -> {
+      exchange.getResponseHeaders().set("Content-Type", "application/json");
+      exchange.sendResponseHeaders(200, 128);
+      exchange.getResponseBody().write('{');
+      exchange.getResponseBody().flush();
+      try {
+        stalledResponseRelease.await(5, TimeUnit.SECONDS);
+      } catch (InterruptedException stopped) {
+        Thread.currentThread().interrupt();
+      }
+      exchange.close();
+    });
+    server.start();
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.getAdapter().setBaseUrl(
+        "http://127.0.0.1:" + server.getAddress().getPort());
+    HttpSecurityScannerAdapter adapter =
+        new HttpSecurityScannerAdapter(new ObjectMapper(), properties);
+
+    ScannerAdapterException failure = org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(
+        Duration.ofSeconds(2),
+        () -> assertThrows(
+            ScannerAdapterException.class,
+            () -> adapter.observation(Duration.ofMillis(100))));
+
+    assertEquals("SCANNER_TIMEOUT", failure.code());
+    assertTrue(failure.retryable());
   }
 
   @Test

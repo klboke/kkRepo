@@ -29,6 +29,20 @@ class PostgreSqlSecurityScanSummaryIndexTest extends PostgreSqlIntegrationTestSu
             + "USING btree (pending, changed_at, asset_id)",
         indexDefinition("idx_security_scan_candidate_queue"));
     assertEquals(
+        "CREATE INDEX idx_security_scan_task_claim_ready ON public.security_scan_task "
+            + "USING btree (status, priority DESC, requested_at, id, next_attempt_at, "
+            + "attempts, max_attempts)",
+        indexDefinition("idx_security_scan_task_claim_ready"));
+    assertEquals(
+        "CREATE INDEX idx_security_scan_task_claim_running ON public.security_scan_task "
+            + "USING btree (status, priority DESC, requested_at, id, lease_until, "
+            + "attempts, max_attempts)",
+        indexDefinition("idx_security_scan_task_claim_running"));
+    assertEquals(
+        "CREATE INDEX idx_security_scan_task_claim_exhausted ON public.security_scan_task "
+            + "USING btree (status, lease_until, id, attempts, max_attempts)",
+        indexDefinition("idx_security_scan_task_claim_exhausted"));
+    assertEquals(
         "CREATE INDEX idx_security_scan_task_repository_status ON public.security_scan_task "
             + "USING btree (repository_id, status, id)",
         indexDefinition("idx_security_scan_task_repository_status"));

@@ -94,63 +94,23 @@ public class OciRegistryStager {
           : List.copyOf(new LinkedHashSet<>(request.requiredPlatforms()));
       List<String> available = new ArrayList<>();
       List<String> missing = new ArrayList<>();
-      List<ManifestSelection> candidates = selectManifests(
-          target, root, required, blobs, budget, deadline, missing);
-      if (candidates.isEmpty()) {
-        throw rejected(
-            "OCI_SCAN_FAILED", "No requested OCI platform could be staged", 422, false);
-      }
-
-      int descriptorCount = 0;
-      LinkedHashMap<String, Descriptor> configs = new LinkedHashMap<>();
-      for (ManifestSelection selection : candidates) {
-        JsonNode manifest = selection.manifest().document();
-        Descriptor config = descriptor(manifest.get("config"), "config");
-        if (config.size() > MAX_CONFIG_BYTES) {
-          throw rejected(
-              "OCI_CONFIG_TOO_LARGE",
-              "OCI image configuration exceeds the bounded JSON limit",
-              413,
-              false);
-        }
-        putConsistent(configs, config);
-        descriptorCount++;
-        if (descriptorCount > Math.min(MAX_OCI_DESCRIPTORS, limits.maxArchiveEntries())) {
-          throw rejected(
-              "OCI_DESCRIPTOR_LIMIT", "OCI image has too many descriptors", 413, false);
-        }
-      }
-      List<Descriptor> outstandingConfigs = configs.values().stream()
-          .filter(descriptor -> !Files.exists(blobPath(blobs, descriptor.digest())))
-          .toList();
-      budget.preflight(outstandingConfigs);
-      for (Descriptor config : outstandingConfigs) {
-        fetchBlob(target, config, blobs, budget, deadline);
-      }
-
-      Map<String, String> configPlatforms = new LinkedHashMap<>();
-      List<ManifestSelection> selections = new ArrayList<>();
-      for (ManifestSelection candidate : candidates) {
-        Descriptor config =
-            descriptor(candidate.manifest().document().get("config"), "config");
-        String actualPlatform = configPlatforms.computeIfAbsent(
-            config.digest(),
-            ignored -> readConfigPlatform(config, blobs));
-        if (!platformMatches(candidate.requestedPlatform(), actualPlatform)) {
-          addDistinct(missing, candidate.requestedPlatform());
-          continue;
-        }
-        available.add(candidate.requestedPlatform());
-        selections.add(new ManifestSelection(
-            candidate.manifest(),
-            descriptorWithPlatform(candidate.indexDescriptor(), actualPlatform),
-            candidate.requestedPlatform()));
-      }
+      SelectionResult selected = selectManifests(
+          target,
+          root,
+          required,
+          blobs,
+          budget,
+          deadline,
+          available,
+          missing,
+          Math.min(MAX_OCI_DESCRIPTORS, limits.maxArchiveEntries()));
+      List<ManifestSelection> selections = selected.selections();
       if (selections.isEmpty()) {
         throw rejected(
             "OCI_SCAN_FAILED", "No requested OCI platform could be staged", 422, false);
       }
 
+      int descriptorCount = selected.descriptorCount();
       LinkedHashMap<String, Descriptor> content = new LinkedHashMap<>();
       List<Descriptor> layers = new ArrayList<>();
       for (ManifestSelection selection : selections) {
@@ -206,44 +166,119 @@ public class OciRegistryStager {
     }
   }
 
-  private List<ManifestSelection> selectManifests(
+  private SelectionResult selectManifests(
       RegistryTarget target,
       FetchedManifest root,
       List<String> required,
       Path blobs,
       TransferBudget budget,
       ScanDeadline deadline,
-      List<String> missing)
+      List<String> available,
+      List<String> missing,
+      int descriptorLimit)
       throws IOException {
     JsonNode manifests = root.document().get("manifests");
-    List<ManifestSelection> selections = new ArrayList<>();
+    LinkedHashMap<String, ManifestSelection> selections = new LinkedHashMap<>();
+    LinkedHashMap<String, Descriptor> manifestDescriptors = new LinkedHashMap<>();
+    LinkedHashMap<String, FetchedManifest> fetchedManifests = new LinkedHashMap<>();
+    LinkedHashMap<String, Descriptor> configs = new LinkedHashMap<>();
+    LinkedHashMap<String, String> configPlatforms = new LinkedHashMap<>();
+    int descriptorCount = 0;
     if (manifests == null || !manifests.isArray()) {
+      Descriptor config = descriptor(root.document().get("config"), "config");
+      descriptorCount = 1;
+      requireDescriptorCapacity(descriptorCount, descriptorLimit);
+      putConsistent(configs, config);
+      String actualPlatform = loadConfigPlatform(
+          target, config, blobs, budget, deadline, configPlatforms);
       for (String platform : required) {
-        selections.add(new ManifestSelection(
-            root,
-            root.descriptor(),
-            platform));
+        if (!platformMatches(platform, actualPlatform)) {
+          addDistinct(missing, platform);
+          continue;
+        }
+        available.add(platform);
+        Descriptor verified = descriptorWithPlatform(root.descriptor(), actualPlatform);
+        selections.putIfAbsent(
+            verified.digest() + "\0" + actualPlatform,
+            new ManifestSelection(root, verified, platform));
       }
-      return List.copyOf(selections);
+      return new SelectionResult(List.copyOf(selections.values()), descriptorCount);
     }
 
+    descriptorCount = manifests.size();
+    requireDescriptorCapacity(descriptorCount, descriptorLimit);
     for (String platform : required) {
-      Descriptor selected = null;
+      boolean matched = false;
       for (JsonNode candidate : manifests) {
-        if (platformMatches(platform, candidate.get("platform"))) {
-          selected = descriptor(candidate, "platform manifest");
-          break;
+        if (!platformMatches(platform, candidate.get("platform"))) continue;
+        Descriptor candidateDescriptor = descriptor(candidate, "platform manifest");
+        putConsistent(manifestDescriptors, candidateDescriptor);
+        FetchedManifest manifest = fetchedManifests.get(candidateDescriptor.digest());
+        if (manifest == null) {
+          manifest = fetchManifest(
+              target,
+              candidateDescriptor.digest(),
+              candidateDescriptor,
+              blobs,
+              budget,
+              deadline);
+          fetchedManifests.put(candidateDescriptor.digest(), manifest);
         }
+        Descriptor config = descriptor(manifest.document().get("config"), "config");
+        boolean newConfig = !configs.containsKey(config.digest());
+        putConsistent(configs, config);
+        if (newConfig) {
+          descriptorCount++;
+          requireDescriptorCapacity(descriptorCount, descriptorLimit);
+        }
+        String actualPlatform = loadConfigPlatform(
+            target, config, blobs, budget, deadline, configPlatforms);
+        if (!platformMatches(platform, actualPlatform)) continue;
+
+        available.add(platform);
+        Descriptor verified = descriptorWithPlatform(candidateDescriptor, actualPlatform);
+        selections.putIfAbsent(
+            verified.digest() + "\0" + actualPlatform,
+            new ManifestSelection(manifest, verified, platform));
+        matched = true;
+        break;
       }
-      if (selected == null) {
-        addDistinct(missing, platform);
-        continue;
-      }
-      FetchedManifest manifest =
-          fetchManifest(target, selected.digest(), selected, blobs, budget, deadline);
-      selections.add(new ManifestSelection(manifest, selected, platform));
+      if (!matched) addDistinct(missing, platform);
     }
-    return List.copyOf(selections);
+    return new SelectionResult(List.copyOf(selections.values()), descriptorCount);
+  }
+
+  private String loadConfigPlatform(
+      RegistryTarget target,
+      Descriptor config,
+      Path blobs,
+      TransferBudget budget,
+      ScanDeadline deadline,
+      Map<String, String> configPlatforms)
+      throws IOException {
+    String cached = configPlatforms.get(config.digest());
+    if (cached != null) return cached;
+    if (config.size() > MAX_CONFIG_BYTES) {
+      throw rejected(
+          "OCI_CONFIG_TOO_LARGE",
+          "OCI image configuration exceeds the bounded JSON limit",
+          413,
+          false);
+    }
+    if (!Files.exists(blobPath(blobs, config.digest()))) {
+      budget.preflight(List.of(config));
+      fetchBlob(target, config, blobs, budget, deadline);
+    }
+    String actual = readConfigPlatform(config, blobs);
+    configPlatforms.put(config.digest(), actual);
+    return actual;
+  }
+
+  private static void requireDescriptorCapacity(int count, int limit) {
+    if (count > limit) {
+      throw rejected(
+          "OCI_DESCRIPTOR_LIMIT", "OCI image has too many descriptors", 413, false);
+    }
   }
 
   private FetchedManifest fetchManifest(
@@ -834,6 +869,9 @@ public class OciRegistryStager {
 
   private record ManifestSelection(
       FetchedManifest manifest, Descriptor indexDescriptor, String requestedPlatform) {}
+
+  private record SelectionResult(
+      List<ManifestSelection> selections, int descriptorCount) {}
 
   public record StagedImage(
       Path layout,

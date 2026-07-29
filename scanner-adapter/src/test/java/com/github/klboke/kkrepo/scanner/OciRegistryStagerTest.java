@@ -275,6 +275,56 @@ class OciRegistryStagerTest {
   }
 
   @Test
+  void continuesToALaterDescriptorWhenTheFirstPlatformClaimIsFalse() throws Exception {
+    byte[] falseConfig = config("linux", "arm64", null);
+    byte[] falseLayer = gzipTar("false.txt", "false".getBytes(StandardCharsets.UTF_8));
+    byte[] falseChild = manifest(falseConfig, falseLayer);
+    byte[] validConfig = config("linux", "amd64", null);
+    byte[] validLayer = gzipTar("valid.txt", "valid".getBytes(StandardCharsets.UTF_8));
+    byte[] validChild = manifest(validConfig, validLayer);
+    byte[] index = ("""
+        {"schemaVersion":2,"mediaType":"%s","manifests":[
+          {"mediaType":"%s","digest":"%s","size":%d,
+           "platform":{"os":"linux","architecture":"amd64"}},
+          {"mediaType":"%s","digest":"%s","size":%d,
+           "platform":{"os":"linux","architecture":"amd64"}}
+        ]}
+        """).formatted(
+            INDEX_TYPE,
+            MANIFEST_TYPE,
+            digest(falseChild),
+            falseChild.length,
+            MANIFEST_TYPE,
+            digest(validChild),
+            validChild.length)
+        .getBytes(StandardCharsets.UTF_8);
+    registry = new Registry(Map.of(
+        manifestPath(digest(index)), index,
+        manifestPath(digest(falseChild)), falseChild,
+        manifestPath(digest(validChild)), validChild,
+        blobPath(digest(falseConfig)), falseConfig,
+        blobPath(digest(validConfig)), validConfig,
+        blobPath(digest(falseLayer)), falseLayer,
+        blobPath(digest(validLayer)), validLayer));
+    OciRegistryStager stager =
+        new OciRegistryStager(new ObjectMapper(), new ArchiveGuard());
+
+    OciRegistryStager.StagedImage staged = stager.stage(
+        request(registry.url(), digest(index), List.of("linux/amd64")),
+        limits(1024 * 1024, 1024 * 1024, 1024 * 1024),
+        temporary,
+        new ScanDeadline(10));
+
+    assertEquals(List.of("linux/amd64"), staged.availablePlatforms());
+    assertTrue(registry.paths().contains(manifestPath(digest(falseChild))));
+    assertTrue(registry.paths().contains(manifestPath(digest(validChild))));
+    assertTrue(registry.paths().contains(blobPath(digest(falseConfig))));
+    assertTrue(registry.paths().contains(blobPath(digest(validConfig))));
+    assertFalse(registry.paths().contains(blobPath(digest(falseLayer))));
+    assertTrue(registry.paths().contains(blobPath(digest(validLayer))));
+  }
+
+  @Test
   void closesARegistryBodyThatStallsPastTheAbsoluteDeadline() throws Exception {
     byte[] config = config("linux", "amd64", null);
     byte[] layer = gzipTar("package.txt", "ok".getBytes(StandardCharsets.UTF_8));

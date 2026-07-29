@@ -47,6 +47,7 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanStage;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanState;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.SubjectKind;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.TaskStatus;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -443,6 +444,37 @@ public abstract class PersistenceApiContract {
         scans.findAssetPolicyState(assetId, profileId, repositoryId)
             .orElseThrow()
             .policyDecision());
+
+    CountDownLatch administrativeLockHeld = new CountDownLatch(1);
+    CountDownLatch claimAttemptFinished = new CountDownLatch(1);
+    List<Boolean> lockFenceOutcomes = invokeConcurrently(List.of(
+        () -> inTransaction(() -> {
+          SecurityScanDao.ScanTask locked =
+              scans.findTaskForUpdate(taskId).orElseThrow();
+          administrativeLockHeld.countDown();
+          try {
+            assertTrue(claimAttemptFinished.await(
+                30, java.util.concurrent.TimeUnit.SECONDS));
+          } catch (InterruptedException stopped) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(stopped);
+          }
+          return locked.status() == TaskStatus.PENDING;
+        }),
+        () -> {
+          assertTrue(administrativeLockHeld.await(
+              30, java.util.concurrent.TimeUnit.SECONDS));
+          try {
+            return inTransaction(() -> scans.claimTasks(
+                "replica-while-admin-locked",
+                now.plusSeconds(2),
+                now.plusSeconds(30),
+                1).isEmpty());
+          } finally {
+            claimAttemptFinished.countDown();
+          }
+        }), 2);
+    assertEquals(List.of(true, true), lockFenceOutcomes);
 
     SecurityScanDao.ScanTask firstLease = inTransaction(() -> scans.claimTasks(
         "replica-a", now.plusSeconds(2), now.plusSeconds(30), 1).getFirst());

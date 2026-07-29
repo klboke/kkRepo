@@ -40,6 +40,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.LongSupplier;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
@@ -530,10 +531,13 @@ public class HttpSecurityScannerAdapter implements Adapter {
   }
 
   private <T> T send(HttpRequest request, Class<T> type) {
+    ResponseReadDeadline responseDeadline = new ResponseReadDeadline(
+        request.timeout().orElseThrow(
+            () -> new IllegalArgumentException("Scanner HTTP request timeout is required")));
     try {
       HttpResponse<InputStream> response =
           client.send(request, HttpResponse.BodyHandlers.ofInputStream());
-      try (InputStream body = response.body()) {
+      try (InputStream body = responseDeadline.watch(response.body())) {
         int status = response.statusCode();
         if (status < 200 || status >= 300) {
           ScannerErrorPayload payload = scannerError(readErrorBody(body));
@@ -917,6 +921,120 @@ public class HttpSecurityScannerAdapter implements Adapter {
           "Scanner request exhausted its end-to-end failover deadline",
           true);
     }
+  }
+
+  /**
+   * Keeps response-body reads inside the same absolute timeout that started before the request.
+   *
+   * <p>{@link HttpResponse.BodyHandlers#ofInputStream()} completes when headers arrive. The JDK
+   * request timeout therefore cannot by itself stop a peer that stalls during a later body read.
+   */
+  private static final class ResponseReadDeadline {
+    private final long expiresAtNanos;
+
+    private ResponseReadDeadline(Duration timeout) {
+      long now = System.nanoTime();
+      long timeoutNanos;
+      try {
+        timeoutNanos = Math.max(1L, timeout.toNanos());
+      } catch (ArithmeticException overflow) {
+        timeoutNanos = Long.MAX_VALUE;
+      }
+      this.expiresAtNanos = timeoutNanos > Long.MAX_VALUE - now
+          ? Long.MAX_VALUE
+          : now + timeoutNanos;
+    }
+
+    private InputStream watch(InputStream body) {
+      long remaining = expiresAtNanos - System.nanoTime();
+      if (remaining <= 0) {
+        try {
+          body.close();
+        } catch (IOException ignored) {
+          // The absolute timeout remains authoritative.
+        }
+        throw timeout(null);
+      }
+      return new DeadlineInputStream(body, Duration.ofNanos(remaining));
+    }
+  }
+
+  private static final class DeadlineInputStream extends InputStream {
+    private final InputStream delegate;
+    private final AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicBoolean expired = new AtomicBoolean();
+    private final Thread deadlineWatcher;
+
+    private DeadlineInputStream(InputStream delegate, Duration remaining) {
+      this.delegate = Objects.requireNonNull(delegate, "delegate");
+      this.deadlineWatcher = Thread.ofVirtual()
+          .name("security-scan-response-deadline")
+          .start(() -> expireAfter(remaining));
+    }
+
+    @Override
+    public int read() throws IOException {
+      try {
+        int value = delegate.read();
+        requireWithinDeadline();
+        return value;
+      } catch (IOException failure) {
+        throw translate(failure);
+      }
+    }
+
+    @Override
+    public int read(byte[] bytes, int offset, int length) throws IOException {
+      try {
+        int count = delegate.read(bytes, offset, length);
+        requireWithinDeadline();
+        return count;
+      } catch (IOException failure) {
+        throw translate(failure);
+      }
+    }
+
+    @Override
+    public void close() throws IOException {
+      deadlineWatcher.interrupt();
+      if (closed.compareAndSet(false, true)) delegate.close();
+    }
+
+    private void expireAfter(Duration remaining) {
+      try {
+        Thread.sleep(remaining);
+      } catch (InterruptedException stopped) {
+        return;
+      }
+      expired.set(true);
+      if (closed.compareAndSet(false, true)) {
+        try {
+          delegate.close();
+        } catch (IOException ignored) {
+          // The blocked reader translates the absolute timeout.
+        }
+      }
+    }
+
+    private void requireWithinDeadline() {
+      if (expired.get()) throw timeout(null);
+    }
+
+    private RuntimeException translate(IOException failure) throws IOException {
+      if (expired.get()) return timeout(failure);
+      throw failure;
+    }
+  }
+
+  private static ScannerAdapterException timeout(Throwable cause) {
+    return cause == null
+        ? new ScannerAdapterException(
+            "SCANNER_TIMEOUT", "Scanner response body exceeded its absolute deadline", true)
+        : new ScannerAdapterException(
+            "SCANNER_TIMEOUT",
+            "Scanner response body exceeded its absolute deadline",
+            true,
+            cause);
   }
 
   private static final class BoundedResponseInputStream extends FilterInputStream {

@@ -28,6 +28,37 @@ class MySqlSecurityScanSummaryIndexTest extends MySqlIntegrationTestSupport {
         List.of("pending", "changed_at", "asset_id"),
         indexColumns("security_scan_candidate", "idx_security_scan_candidate_queue"));
     assertEquals(
+        List.of(
+            "status",
+            "priority",
+            "requested_at",
+            "id",
+            "next_attempt_at",
+            "attempts",
+            "max_attempts"),
+        indexColumns("security_scan_task", "idx_security_scan_task_claim_ready"));
+    assertEquals(
+        List.of(
+            "status",
+            "priority",
+            "requested_at",
+            "id",
+            "lease_until",
+            "attempts",
+            "max_attempts"),
+        indexColumns("security_scan_task", "idx_security_scan_task_claim_running"));
+    assertEquals(
+        List.of("status", "lease_until", "id", "attempts", "max_attempts"),
+        indexColumns("security_scan_task", "idx_security_scan_task_claim_exhausted"));
+    assertEquals(
+        "D",
+        indexDirection(
+            "security_scan_task", "idx_security_scan_task_claim_ready", "priority"));
+    assertEquals(
+        "D",
+        indexDirection(
+            "security_scan_task", "idx_security_scan_task_claim_running", "priority"));
+    assertEquals(
         List.of("repository_id", "status", "id"),
         indexColumns("security_scan_task", "idx_security_scan_task_repository_status"));
     assertEquals(
@@ -82,5 +113,16 @@ class MySqlSecurityScanSummaryIndexTest extends MySqlIntegrationTestSupport {
           AND index_name = ?
         ORDER BY seq_in_index
         """, String.class, table, index);
+  }
+
+  private String indexDirection(String table, String index, String column) {
+    return jdbc().queryForObject("""
+        SELECT collation
+        FROM information_schema.statistics
+        WHERE table_schema = DATABASE()
+          AND table_name = ?
+          AND index_name = ?
+          AND column_name = ?
+        """, String.class, table, index, column);
   }
 }

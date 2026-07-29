@@ -181,8 +181,12 @@ CREATE TABLE security_scan_task (
     ON DELETE SET NULL,
   CONSTRAINT uk_security_scan_task_dedupe UNIQUE (dedupe_key),
   CONSTRAINT uk_security_scan_task_idempotency UNIQUE (repository_id, idempotency_key_hash),
-  INDEX idx_security_scan_task_claim
-    (status, next_attempt_at, lease_until, priority, requested_at, id),
+  INDEX idx_security_scan_task_claim_ready
+    (status, priority DESC, requested_at, id, next_attempt_at, attempts, max_attempts),
+  INDEX idx_security_scan_task_claim_running
+    (status, priority DESC, requested_at, id, lease_until, attempts, max_attempts),
+  INDEX idx_security_scan_task_claim_exhausted
+    (status, lease_until, id, attempts, max_attempts),
   INDEX idx_security_scan_task_requested_snapshot (requested_scanner_snapshot_id),
   INDEX idx_security_scan_task_asset (asset_id, created_at, id),
   INDEX idx_security_scan_task_projection

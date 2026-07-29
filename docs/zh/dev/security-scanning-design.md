@@ -981,21 +981,30 @@ BLOCK_VULNERABILITY
 
 ## 数据库任务领取与多副本语义
 
-worker 使用 MySQL 8/PostgreSQL 共同支持的模式：
+worker 先按精确 status 分别读取每类任务的有序候选集：
 
 ```sql
-SELECT ...
+SELECT id, priority, requested_at
 FROM security_scan_task
-WHERE status IN ('PENDING', 'RETRY_WAIT', 'RUNNING')
+WHERE status = ?
+  AND attempts < max_attempts
   AND next_attempt_at <= CURRENT_TIMESTAMP
-  AND (
-    status <> 'RUNNING'
-    OR lease_until < CURRENT_TIMESTAMP
-  )
 ORDER BY priority DESC, requested_at, id
-LIMIT ?
-FOR UPDATE SKIP LOCKED
+LIMIT ?;
 ```
+
+`PENDING`、`RETRY_WAIT` 分别执行上述查询；过期 `RUNNING` 候选使用
+`lease_until < CURRENT_TIMESTAMP`。三个最多为 batch size 的候选集在 JVM 中按同一
+顺序归并，随后只对准备领取的 id 用主键重新校验条件并执行
+`FOR UPDATE SKIP LOCKED`，直到拿满 batch。这样不会为了跨 status 排序而锁住最终不
+领取的行，多个副本选择到同一候选时也只有一个能持有行锁。
+
+V36 直接提供与查询顺序一致的
+`idx_security_scan_task_claim_ready(status, priority DESC, requested_at, id, ...)` 和
+`idx_security_scan_task_claim_running(status, priority DESC, requested_at, id, ...)`
+覆盖索引；最终尝试已耗尽的 lease 回收另用
+`idx_security_scan_task_claim_exhausted(status, lease_until, id, ...)`。不再把
+`next_attempt_at`、`lease_until` 两种互斥谓词塞入一个无法服务实际排序的复合索引。
 
 领取事务同时：
 
@@ -1013,7 +1022,9 @@ WHERE id = ? AND status = 'RUNNING' AND lease_token = ?
 旧 worker 在 lease 失效后返回，不得覆盖接管 worker 的结果。
 
 管理员取消 `RUNNING` 任务时，数据库状态和 lease fencing 仍是集群正确性的唯一真相。
-管理事务先原子提交 `CANCELLED` 状态、blob owner 释放和审计记录，提交成功后立即使用
+管理事务先用 `SELECT ... FOR UPDATE` 锁定 task 行，从同一份锁定投影捕获当前 lease，
+再原子提交 `CANCELLED` 状态、blob owner 释放和审计记录。claim/takeover 使用
+`SKIP LOCKED`，因此不能在 lease 捕获与取消更新之间替换 owner。提交成功后立即使用
 `task id + 本次随机 lease token` 作为 run id，向全部配置 adapter ordinal 广播带
 service credential 的取消请求；不能只使用 attempts，因为管理员 retry 会把 attempts
 重置为 0。事务回滚时不得发送取消。worker 的下一次 heartbeat 发现 lease 已失效后仍会
@@ -1651,6 +1662,9 @@ Helm/Kubernetes：
   `ResourceLimits` 都缩减为剩余预算，不能把总耗时放大为 `ordinal 数 × profile
   timeout`。二进制请求通过 `InputStreamSource` 从不可变 blob 重新打开，OCI JSON
   请求使用按剩余预算重新生成的有界正文。
+- JDK HTTP request timeout 只覆盖收到 response headers 之前的等待；kkRepo 读取
+  scanner response body 时继续使用同一个绝对单调 deadline。peer 在 headers 后停滞
+  时由 watcher 主动关闭流并返回可重试 `SCANNER_TIMEOUT`，不能无限占用 worker。
 - 可重试失败可能发生在 adapter 已接受执行但响应丢失之后；切换到备用 ordinal 前，
   kkRepo 会尽力定向取消失败 ordinal 上的同 run 执行。409
   `SCANNER_RUN_ALREADY_ACTIVE` 保留 adapter 返回的可重试语义，旧执行被取消后在其它

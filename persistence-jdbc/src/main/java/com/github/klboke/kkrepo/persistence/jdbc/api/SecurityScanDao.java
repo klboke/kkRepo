@@ -102,6 +102,15 @@ public interface SecurityScanDao {
   Optional<ScanTask> findTask(long taskId);
 
   /**
+   * Returns the task while holding its row lock until the caller transaction completes.
+   *
+   * <p>Administrative transitions use the locked projection when they must act on the exact
+   * currently claimed lease. Claim and takeover queries use {@code SKIP LOCKED}, so they cannot
+   * replace that lease between this read and the terminal update.
+   */
+  Optional<ScanTask> findTaskForUpdate(long taskId);
+
+  /**
    * Locks the task row and verifies that the supplied lease still owns a running attempt.
    *
    * <p>The caller must keep this check and any attempt-scoped publication in the same
