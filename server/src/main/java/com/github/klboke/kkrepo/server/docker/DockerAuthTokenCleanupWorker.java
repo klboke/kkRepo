@@ -23,14 +23,18 @@ class DockerAuthTokenCleanupWorker {
   private final DockerAuthTokenDao authTokenDao;
   private final TransactionTemplate transactionTemplate;
   private final int batchSize;
+  private final int maxItemsPerRun;
 
   DockerAuthTokenCleanupWorker(
       DockerAuthTokenDao authTokenDao,
       PlatformTransactionManager transactionManager,
-      @Value("${kkrepo.docker.auth-token-cleanup.batch-size:256}") int batchSize) {
+      @Value("${kkrepo.docker.auth-token-cleanup.batch-size:256}") int batchSize,
+      @Value("${kkrepo.docker.auth-token-cleanup.max-items-per-run:4096}")
+          int maxItemsPerRun) {
     this.authTokenDao = authTokenDao;
     this.transactionTemplate = new TransactionTemplate(transactionManager);
     this.batchSize = Math.max(1, Math.min(10_000, batchSize));
+    this.maxItemsPerRun = Math.max(1, Math.min(1_000_000, maxItemsPerRun));
   }
 
   @Scheduled(
@@ -38,8 +42,20 @@ class DockerAuthTokenCleanupWorker {
       initialDelayString = "${kkrepo.docker.auth-token-cleanup.initial-delay-ms:60000}")
   public void cleanup() {
     try {
-      transactionTemplate.executeWithoutResult(
-          status -> authTokenDao.deleteExpired(Instant.now(), batchSize));
+      Instant cutoff = Instant.now();
+      int remaining = maxItemsPerRun;
+      while (remaining > 0) {
+        int requested = Math.min(batchSize, remaining);
+        int deleted = transactionTemplate.execute(
+            status -> authTokenDao.deleteExpired(cutoff, requested));
+        if (deleted <= 0) {
+          return;
+        }
+        remaining -= Math.min(deleted, requested);
+        if (deleted < requested) {
+          return;
+        }
+      }
     } catch (RuntimeException e) {
       log.warn("Docker auth token cleanup failed; will retry next cycle", e);
     }
