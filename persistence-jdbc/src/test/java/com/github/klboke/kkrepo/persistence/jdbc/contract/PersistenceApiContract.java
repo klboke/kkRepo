@@ -475,6 +475,18 @@ public abstract class PersistenceApiContract {
             Map.of("catalogEngineVersion", "1.0.0")));
     assertEquals(snapshot.id(), observedAgain.id());
     assertEquals(now.plusSeconds(1), observedAgain.observedAt());
+    SecurityScanDao.ScannerSnapshot staleObservation = scans.insertSnapshotOrFindExisting(
+        new SecurityScanDao.ScannerSnapshot(
+            null, "contract-adapter", "v1", "grype", "0.1.0", "fixture-db",
+            now.minusSeconds(90), "a".repeat(64), "b".repeat(64), now.minusSeconds(1), true,
+            Map.of("catalogEngineVersion", "stale")));
+    assertEquals(snapshot.id(), staleObservation.id());
+    assertEquals(
+        now.plusSeconds(1),
+        staleObservation.observedAt(),
+        "an older replica observation must not move the shared snapshot timestamp backwards");
+    assertEquals(now.minusSeconds(30), staleObservation.vulnerabilityDatabaseUpdatedAt());
+    assertEquals("1.0.0", staleObservation.details().get("catalogEngineVersion"));
     long snapshotTaskId = scans.createTask(new SecurityScanDao.TaskDraft(
         repositoryId,
         assetId,

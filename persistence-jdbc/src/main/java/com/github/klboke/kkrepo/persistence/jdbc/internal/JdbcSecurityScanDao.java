@@ -1558,12 +1558,14 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         UPDATE security_scanner_snapshot
         SET observed_at = ?, vulnerability_database_updated_at = ?, ready = ?, details_json = ?
         WHERE snapshot_fingerprint = ?
+          AND observed_at < ?
         """,
         nullableTimestamp(snapshot.observedAt()),
         nullableTimestamp(snapshot.vulnerabilityDatabaseUpdatedAt()),
         snapshot.ready(),
         json.serializedParameter(json.writeValue(snapshot.details())),
-        snapshot.snapshotFingerprint());
+        snapshot.snapshotFingerprint(),
+        nullableTimestamp(snapshot.observedAt()));
     return jdbc.query("""
         SELECT * FROM security_scanner_snapshot WHERE snapshot_fingerprint = ?
         """, snapshotMapper, snapshot.snapshotFingerprint()).stream().findFirst().orElseThrow();
