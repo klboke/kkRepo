@@ -285,6 +285,9 @@ Docker blobs are repository-scoped and reusable by digest, so a layer download u
 decision among every referencing manifest in that repository; changing the image name in the URL
 cannot bypass it. A proxy layer whose manifest is not cached yet follows the pending action, while
 an unreferenced hosted blob remains available to complete an upload.
+After the remote registry confirms that a proxy blob exists, kkRepo applies this decision before
+reading the complete response body. A blocked request therefore does not first spool a potentially
+large layer to temporary or object storage.
 
 An artifact above the profile limit is marked failed rather than clean. The built-in profile limit
 is `1 GiB`, while the adapter hard limit defaults to `2 GiB`; the stricter limit wins.
@@ -293,6 +296,11 @@ The built-in OCI profile requires `linux/amd64` by default. A multi-platform ima
 when required platforms are covered; a platform-resolution error that confirms absence can produce
 a partial result. Registry transport, authorization-service, and 5xx failures remain retryable and
 are never recorded as missing platforms.
+For Docker/OCI scans, the adapter uses the short-lived read token to fetch and verify manifests,
+configuration blobs, and required layers into a request-local OCI layout, then asks Syft to scan
+that local layout. The token is not passed to Syft. All platforms share compressed-input, archive
+entry, single-file, expanded-byte, nesting, and expansion-ratio budgets, including gzip, xz, and
+zstd layers, and those bounds are checked before Syft starts.
 
 ## Scan Triggers
 

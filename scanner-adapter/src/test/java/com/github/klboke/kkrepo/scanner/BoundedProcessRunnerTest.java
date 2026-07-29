@@ -17,6 +17,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 
 class BoundedProcessRunnerTest {
   @TempDir
@@ -196,12 +198,13 @@ class BoundedProcessRunnerTest {
         (ScannerRequestException) failure.get();
     assertEquals("SCANNER_INTERRUPTED", interrupted.code());
     for (Long processId : processIds) {
-      assertFalse(ProcessHandle.of(processId).map(ProcessHandle::isAlive).orElse(false));
+      assertFalse(canExecute(processId));
     }
   }
 
   @Test
-  void terminationDiscoversDescendantsForkedByASignalHandler() throws Exception {
+  @EnabledOnOs(OS.LINUX)
+  void processGroupTerminationKillsAChildForkedAsItsParentExits() throws Exception {
     ScannerAdapterProperties properties = new ScannerAdapterProperties();
     BoundedProcessRunner runner = new BoundedProcessRunner(properties);
     Path spawnedPidFile = directory.resolve("spawned-during-termination.pid");
@@ -214,7 +217,7 @@ class BoundedProcessRunnerTest {
                 "-c",
                 "trap 'sleep 30 & child=$!; printf \"%s\" \"$child\" > \""
                     + spawnedPidFile
-                    + "\"; sleep 1' TERM; while :; do sleep 1; done"),
+                    + "\"; exit 0' TERM; while :; do sleep 1; done"),
             directory,
             directory.resolve("fork-during-termination.out"),
             Duration.ofMillis(100),
@@ -223,7 +226,7 @@ class BoundedProcessRunnerTest {
     assertEquals("SCANNER_TIMEOUT", failure.code());
     assertTrue(Files.exists(spawnedPidFile));
     long spawnedPid = Long.parseLong(Files.readString(spawnedPidFile));
-    assertFalse(ProcessHandle.of(spawnedPid).map(ProcessHandle::isAlive).orElse(false));
+    assertFalse(canExecute(spawnedPid));
   }
 
   @Test
@@ -267,7 +270,7 @@ class BoundedProcessRunnerTest {
         .map(Long::parseLong)
         .toList();
     for (Long processId : processIds) {
-      assertFalse(ProcessHandle.of(processId).map(ProcessHandle::isAlive).orElse(false));
+      assertFalse(canExecute(processId));
     }
   }
 
@@ -306,5 +309,26 @@ class BoundedProcessRunnerTest {
   private static void assertFalseControlCharacters(String value) {
     assertTrue(value.chars().noneMatch(character ->
         character == '\n' || character == '\r' || character == '\t'));
+  }
+
+  private static boolean canExecute(long processId) {
+    boolean alive = ProcessHandle.of(processId).map(ProcessHandle::isAlive).orElse(false);
+    if (!alive) return false;
+    if (!System.getProperty("os.name", "")
+        .toLowerCase(java.util.Locale.ROOT)
+        .contains("linux")) {
+      return true;
+    }
+    try {
+      String stat = Files.readString(Path.of("/proc", Long.toString(processId), "stat"));
+      int commandEnd = stat.lastIndexOf(')');
+      if (commandEnd >= 0 && commandEnd + 2 < stat.length()) {
+        String[] fields = stat.substring(commandEnd + 2).split(" ", 2);
+        return fields.length == 0 || !"Z".equals(fields[0]);
+      }
+    } catch (IOException ignored) {
+      return ProcessHandle.of(processId).map(ProcessHandle::isAlive).orElse(false);
+    }
+    return true;
   }
 }

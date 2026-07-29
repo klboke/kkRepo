@@ -1,10 +1,13 @@
 package com.github.klboke.kkrepo.server.docker;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -24,10 +27,12 @@ import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
 import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 
 class DockerProxyServiceTest {
@@ -255,6 +260,43 @@ class DockerProxyServiceTest {
     assertEquals("application/vnd.oci.image.layer.v1.tar", response.contentType());
     assertEquals(digest.value(), response.headers().get(DockerConstants.CONTENT_DIGEST_HEADER));
     verify(manifestStore).beforeBlobRead(runtime, "alpine", digest);
+  }
+
+  @Test
+  void blockedRemoteBlobIsRejectedBeforeItsBodyIsConsumedOrStored() throws Exception {
+    DockerBlobStore blobStore = mock(DockerBlobStore.class);
+    DockerManifestStore manifestStore = mock(DockerManifestStore.class);
+    DockerRemoteRegistryClient remoteClient = mock(DockerRemoteRegistryClient.class);
+    DockerProxyService service = new DockerProxyService(blobStore, manifestStore, remoteClient);
+    RepositoryRuntime runtime = proxyRuntime(1);
+    DockerDigest digest =
+        DockerDigest.parse("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    AtomicBoolean bodyRead = new AtomicBoolean();
+    InputStream body = new InputStream() {
+      @Override
+      public int read() {
+        bodyRead.set(true);
+        return -1;
+      }
+    };
+    when(blobStore.getBlob(runtime, digest, false))
+        .thenThrow(new DockerProtocolException(DockerErrorCode.BLOB_UNKNOWN, digest.value()));
+    when(remoteClient.get(
+            eq(runtime),
+            eq("library/alpine/blobs/" + digest.value()),
+            eq("application/octet-stream")))
+        .thenReturn(new HttpRemoteFetcher.Result(200, Map.of(), body));
+    DockerProtocolException blocked =
+        new DockerProtocolException(DockerErrorCode.DENIED, "blocked", 403);
+    doThrow(blocked).when(manifestStore).beforeBlobRead(runtime, "alpine", digest);
+
+    DockerProtocolException thrown = assertThrows(
+        DockerProtocolException.class,
+        () -> service.getBlob(runtime, "alpine", digest, false));
+
+    assertEquals(blocked, thrown);
+    assertFalse(bodyRead.get());
+    verify(blobStore, never()).putBlob(any(), any(), any(), anyLong(), any(), any(), any());
   }
 
   @Test

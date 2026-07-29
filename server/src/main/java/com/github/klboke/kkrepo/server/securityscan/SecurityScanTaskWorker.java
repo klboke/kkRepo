@@ -139,8 +139,9 @@ public class SecurityScanTaskWorker {
         Math.max(5, properties.getWorker().getLeaseSeconds() / 3));
     Thread activeThread = Thread.currentThread();
     AtomicBoolean finished = new AtomicBoolean();
+    Object heartbeatGate = new Object();
     ScheduledFuture<?> heartbeat = heartbeatExecutor.scheduleAtFixedRate(
-        () -> heartbeat(task, activeThread, finished),
+        () -> heartbeat(task, activeThread, finished, heartbeatGate),
         heartbeatSeconds,
         heartbeatSeconds,
         TimeUnit.SECONDS);
@@ -150,7 +151,7 @@ public class SecurityScanTaskWorker {
       }
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
-      outcome = retryInterruptedTask(task, finished, heartbeat);
+      outcome = retryInterruptedTask(task, finished, heartbeat, heartbeatGate);
     } catch (SupersededSecurityScanTaskException e) {
       outcome = "superseded";
       if (!finalizer.cancelCurrentTask(task, Instant.now())) {
@@ -161,22 +162,21 @@ public class SecurityScanTaskWorker {
       log.debug("Security scan task {} was taken over by another worker", task.id());
     } catch (ScannerAdapterException e) {
       if (Thread.currentThread().isInterrupted()) {
-        outcome = retryInterruptedTask(task, finished, heartbeat);
+        outcome = retryInterruptedTask(task, finished, heartbeat, heartbeatGate);
       } else {
         outcome = e.retryable() && task.attempts() < task.maxAttempts() ? "retry" : "failed";
         fail(task, e.code(), e.getMessage(), e.retryable());
       }
     } catch (RuntimeException e) {
       if (Thread.currentThread().isInterrupted()) {
-        outcome = retryInterruptedTask(task, finished, heartbeat);
+        outcome = retryInterruptedTask(task, finished, heartbeat, heartbeatGate);
       } else {
         outcome = task.attempts() < task.maxAttempts() ? "retry" : "failed";
         log.warn("Unexpected security scan task failure: {}", task.id(), e);
         fail(task, "SCAN_INTERNAL_ERROR", safeMessage(e), true);
       }
     } finally {
-      finished.set(true);
-      heartbeat.cancel(false);
+      stopHeartbeat(finished, heartbeat, heartbeatGate);
       metrics.recordTask(
           format, task.stage(), task.requestReason(), outcome, timer);
     }
@@ -194,10 +194,12 @@ public class SecurityScanTaskWorker {
    * restored before it returns to the executor.
    */
   private String retryInterruptedTask(
-      ScanTask task, AtomicBoolean finished, ScheduledFuture<?> heartbeat) {
-    finished.set(true);
-    heartbeat.cancel(false);
-    boolean restoreInterrupt = Thread.interrupted();
+      ScanTask task,
+      AtomicBoolean finished,
+      ScheduledFuture<?> heartbeat,
+      Object heartbeatGate) {
+    boolean restoreInterrupt;
+    restoreInterrupt = stopHeartbeatAndClearInterrupt(finished, heartbeat, heartbeatGate);
     boolean retryable = task.attempts() < task.maxAttempts();
     String outcome = retryable ? "retry" : "failed";
     try {
@@ -225,7 +227,8 @@ public class SecurityScanTaskWorker {
     return outcome;
   }
 
-  private void heartbeat(ScanTask task, Thread activeThread, AtomicBoolean finished) {
+  private void heartbeat(
+      ScanTask task, Thread activeThread, AtomicBoolean finished, Object heartbeatGate) {
     try {
       Instant now = Instant.now();
       boolean renewed = scans.heartbeatTask(
@@ -235,8 +238,14 @@ public class SecurityScanTaskWorker {
           now);
       if (!renewed) {
         log.debug("Security scan heartbeat lost lease for task {}", task.id());
-        if (!finished.get()) {
-          activeThread.interrupt();
+        boolean cancel = false;
+        synchronized (heartbeatGate) {
+          if (!finished.get()) {
+            activeThread.interrupt();
+            cancel = true;
+          }
+        }
+        if (cancel) {
           cancelAdapterRun(task.id());
         }
       }
@@ -244,6 +253,25 @@ public class SecurityScanTaskWorker {
       // A periodic executor suppresses all later executions after an exception. Keep retrying
       // until the task completes or its fenced final write observes that another worker owns it.
       log.warn("Security scan heartbeat failed for task {}; retrying", task.id(), e);
+    }
+  }
+
+  private static void stopHeartbeat(
+      AtomicBoolean finished, ScheduledFuture<?> heartbeat, Object heartbeatGate) {
+    synchronized (heartbeatGate) {
+      finished.set(true);
+      heartbeat.cancel(false);
+    }
+  }
+
+  private static boolean stopHeartbeatAndClearInterrupt(
+      AtomicBoolean finished, ScheduledFuture<?> heartbeat, Object heartbeatGate) {
+    synchronized (heartbeatGate) {
+      finished.set(true);
+      heartbeat.cancel(false);
+      // A lease-loss callback that acquired the same gate first has already delivered its
+      // interrupt. Once this flag is cleared, no later callback can pass the finished check.
+      return Thread.interrupted();
     }
   }
 

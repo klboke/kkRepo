@@ -130,11 +130,22 @@ class ScannerEngineServiceBehaviorTest {
     assertEquals(ScanCompleteness.PARTIAL, response.catalog().completeness());
     assertEquals(ScanCompleteness.PARTIAL, response.match().completeness());
     ArgumentCaptor<Duration> timeouts = ArgumentCaptor.forClass(Duration.class);
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<String>> commands = ArgumentCaptor.forClass(List.class);
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<Map<String, String>> environments = ArgumentCaptor.forClass(Map.class);
     verify(fixture.processes, times(3))
-        .run(anyList(), any(), any(), timeouts.capture(), any());
+        .run(commands.capture(), any(), any(), timeouts.capture(), environments.capture());
     assertTrue(
         timeouts.getAllValues().getLast().compareTo(timeouts.getAllValues().getFirst()) < 0,
         "OCI stages must consume one shared end-to-end deadline");
+    assertTrue(commands.getAllValues().getFirst().stream()
+        .anyMatch(value -> value.startsWith("oci-dir:")));
+    assertFalse(environments.getAllValues().getFirst().keySet().stream()
+        .anyMatch(value -> value.startsWith("SYFT_REGISTRY_AUTH_")));
+    assertEquals(
+        "4096B",
+        environments.getAllValues().getFirst().get("SYFT_SOURCE_IMAGE_MAX_LAYER_SIZE"));
   }
 
   @Test
@@ -267,6 +278,7 @@ class ScannerEngineServiceBehaviorTest {
     final BoundedProcessRunner processes = mock(BoundedProcessRunner.class);
     final ScannerInput scannerInput = mock(ScannerInput.class);
     final ArchiveGuard archiveGuard = mock(ArchiveGuard.class);
+    final OciRegistryStager ociRegistryStager = mock(OciRegistryStager.class);
     final ScannerDocumentMapper documents = mock(ScannerDocumentMapper.class);
     final ScannerEngineService engine;
     String failPlatform;
@@ -292,6 +304,13 @@ class ScannerEngineServiceBehaviorTest {
       when(documents.match(any(), anyString(), any(), anyString())).thenReturn(match());
       when(documents.mergeCycloneDx(any(), anyLong())).thenReturn(
           "{\"bomFormat\":\"CycloneDX\"}".getBytes());
+      when(ociRegistryStager.stage(any(), any(), any(), any())).thenAnswer(invocation -> {
+        OciScanRequest request = invocation.getArgument(0);
+        List<String> platforms = request.requiredPlatforms().isEmpty()
+            ? List.of("linux/amd64") : request.requiredPlatforms();
+        return new OciRegistryStager.StagedImage(
+            workDirectory.resolve("layout"), platforms, List.of(), 64, 2, 32, 0);
+      });
       doAnswer(invocation -> {
         @SuppressWarnings("unchecked")
         List<String> command = invocation.getArgument(0);
@@ -318,6 +337,7 @@ class ScannerEngineServiceBehaviorTest {
           processes,
           scannerInput,
           archiveGuard,
+          ociRegistryStager,
           documents,
           new ScannerDatabaseCoordinator(properties));
     }

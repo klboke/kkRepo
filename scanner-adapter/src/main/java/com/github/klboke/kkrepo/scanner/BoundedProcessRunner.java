@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.scanner;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -13,7 +14,14 @@ import java.util.concurrent.TimeUnit;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-/** Runs scanner binaries directly, without a shell, with bounded output and wall-clock timeout. */
+/**
+ * Runs scanner binaries without a shell, with bounded output and wall-clock timeout.
+ *
+ * <p>On Linux every command starts in a dedicated session/process group. Group membership remains
+ * addressable even when an intermediate scanner process exits and its descendants are reparented,
+ * so timeout and cancellation can terminate the complete execution rather than a one-time process
+ * tree snapshot. Non-Linux development hosts retain the ProcessHandle fallback.
+ */
 @Component
 public class BoundedProcessRunner {
   private static final Duration VERSION_COMMAND_TIMEOUT = Duration.ofSeconds(15);
@@ -22,16 +30,28 @@ public class BoundedProcessRunner {
 
   private final ScannerAdapterProperties properties;
   private final FileSizeReader fileSizeReader;
+  private final ProcessGroupSupport processGroups;
 
   @Autowired
   public BoundedProcessRunner(ScannerAdapterProperties properties) {
-    this(properties, BoundedProcessRunner::defaultFileSize);
+    this(
+        properties,
+        BoundedProcessRunner::defaultFileSize,
+        ProcessGroupSupport.detect());
   }
 
   BoundedProcessRunner(
       ScannerAdapterProperties properties, FileSizeReader fileSizeReader) {
+    this(properties, fileSizeReader, ProcessGroupSupport.detect());
+  }
+
+  BoundedProcessRunner(
+      ScannerAdapterProperties properties,
+      FileSizeReader fileSizeReader,
+      ProcessGroupSupport processGroups) {
     this.properties = properties;
     this.fileSizeReader = fileSizeReader;
+    this.processGroups = processGroups;
   }
 
   public Result run(
@@ -43,16 +63,17 @@ public class BoundedProcessRunner {
     if (command == null || command.isEmpty()) {
       throw new IllegalArgumentException("Scanner command must not be empty");
     }
-    Process process = null;
+    ManagedProcess managed = null;
     try {
       Files.createDirectories(workingDirectory);
       Path stderr = workingDirectory.resolve("stderr.log");
-      ProcessBuilder builder = new ProcessBuilder(new ArrayList<>(command))
+      ProcessBuilder builder = new ProcessBuilder(processGroups.wrap(command))
           .directory(workingDirectory.toFile())
           .redirectOutput(stdout.toFile())
           .redirectError(stderr.toFile());
       Map<String, String> environment = builder.environment();
       String path = environment.getOrDefault("PATH", "/usr/local/bin:/usr/bin:/bin");
+      requireExecutable(command.getFirst(), workingDirectory, path);
       String sslCertFile = environment.get("SSL_CERT_FILE");
       String sslCertDir = environment.get("SSL_CERT_DIR");
       environment.clear();
@@ -73,8 +94,15 @@ public class BoundedProcessRunner {
           }
         });
       }
-      process = builder.start();
-      waitForBounded(process, stdout, stderr, timeout);
+      Process process = builder.start();
+      managed = new ManagedProcess(
+          process, processGroups.isolated() ? process.pid() : null, processGroups);
+      waitForBounded(managed, stdout, stderr, timeout);
+      if (managed.groupId() != null) {
+        // A scanner must not daemonize work past the observed command exit.
+        processGroups.terminateResidualGroup(
+            managed.groupId(), PROCESS_TERMINATION_TIMEOUT);
+      }
       byte[] stderrBytes = readBounded(stderr, properties.getMaxStderrBytes());
       if (process.exitValue() != 0) {
         throw processFailure(command, process.exitValue(), stderrBytes);
@@ -82,20 +110,21 @@ public class BoundedProcessRunner {
       long outputBytes = fileSize(stdout);
       return new Result(process.exitValue(), outputBytes, stderrBytes);
     } catch (InterruptedException e) {
-      terminateAfterFailure(process);
+      terminateAfterFailure(managed);
       Thread.currentThread().interrupt();
       throw new ScannerRequestException(
           "SCANNER_INTERRUPTED", "Scanner process was interrupted", 503, true, e);
     } catch (IOException e) {
-      terminateAfterFailure(process);
+      terminateAfterFailure(managed);
       throw new ScannerRequestException(
           "SCANNER_PROCESS_IO", "Unable to start or inspect scanner process", 503, true, e);
     }
   }
 
   private void waitForBounded(
-      Process process, Path stdout, Path stderr, Duration timeout)
+      ManagedProcess managed, Path stdout, Path stderr, Duration timeout)
       throws InterruptedException, IOException {
+    Process process = managed.process();
     long timeoutNanos;
     try {
       timeoutNanos = Math.max(1, timeout.toNanos());
@@ -105,18 +134,18 @@ public class BoundedProcessRunner {
     long started = System.nanoTime();
     while (true) {
       if (exceeds(stdout, properties.getMaxOutputBytes())) {
-        terminate(process);
+        terminate(managed);
         throw new ScannerRequestException(
             "SCANNER_OUTPUT_TOO_LARGE", "Scanner output exceeded its configured limit", 413, false);
       }
       if (exceeds(stderr, properties.getMaxStderrBytes())) {
-        terminate(process);
+        terminate(managed);
         throw new ScannerRequestException(
             "SCANNER_STDERR_TOO_LARGE", "Scanner stderr exceeded its configured limit", 413, false);
       }
       long elapsed = System.nanoTime() - started;
       if (elapsed >= timeoutNanos) {
-        terminate(process);
+        terminate(managed);
         throw new ScannerRequestException(
             "SCANNER_TIMEOUT", "Scanner process exceeded its time limit", 504, true);
       }
@@ -154,16 +183,61 @@ public class BoundedProcessRunner {
     return Files.exists(path) ? Files.size(path) : 0;
   }
 
-  private static void terminate(Process process) throws InterruptedException {
+  /**
+   * Process-group wrappers otherwise turn an exec failure into the wrapper's exit code. Resolve
+   * the original command first so deployment mistakes retain the same retryable I/O semantics as
+   * a direct ProcessBuilder launch.
+   */
+  private static void requireExecutable(
+      String executable, Path workingDirectory, String searchPath) throws IOException {
+    if (executable == null || executable.isBlank()) {
+      throw new IOException("Scanner executable is blank");
+    }
+    if (executable.contains("/") || executable.contains("\\")) {
+      Path candidate = Path.of(executable);
+      if (!candidate.isAbsolute()) candidate = workingDirectory.resolve(candidate);
+      if (Files.isRegularFile(candidate) && Files.isExecutable(candidate)) return;
+      throw new IOException("Scanner executable is unavailable");
+    }
+    for (String directory : searchPath.split(
+        java.util.regex.Pattern.quote(java.io.File.pathSeparator), -1)) {
+      Path base = directory.isBlank() ? workingDirectory : Path.of(directory);
+      if (!base.isAbsolute()) base = workingDirectory.resolve(base);
+      Path candidate = base.resolve(executable);
+      if (Files.isRegularFile(candidate) && Files.isExecutable(candidate)) return;
+    }
+    throw new IOException("Scanner executable is unavailable");
+  }
+
+  private static void terminate(ManagedProcess managed)
+      throws InterruptedException, IOException {
+    if (managed.groupId() != null) {
+      managed.processGroups().terminateGroup(managed.groupId(), PROCESS_TERMINATION_TIMEOUT);
+      return;
+    }
+    Process process = managed.process();
     Map<Long, ProcessHandle> observed = new LinkedHashMap<>();
     if (!terminateTree(process, observed, false, PROCESS_TERMINATION_TIMEOUT)) {
       terminateTree(process, observed, true, PROCESS_TERMINATION_TIMEOUT);
     }
   }
 
-  private static void terminateAfterFailure(Process process) {
-    if (process == null) return;
+  private static void terminateAfterFailure(ManagedProcess managed) {
+    if (managed == null) return;
     boolean interrupted = Thread.interrupted();
+    if (managed.groupId() != null) {
+      try {
+        managed.processGroups().terminateGroup(
+            managed.groupId(), PROCESS_TERMINATION_TIMEOUT);
+        if (interrupted) Thread.currentThread().interrupt();
+        return;
+      } catch (InterruptedException e) {
+        interrupted = true;
+      } catch (IOException ignored) {
+        // Fall through to the ProcessHandle best-effort path if the signal utility itself failed.
+      }
+    }
+    Process process = managed.process();
     Map<Long, ProcessHandle> observed = new LinkedHashMap<>();
     try {
       boolean cleanlyExited = false;
@@ -252,6 +326,181 @@ public class BoundedProcessRunner {
     }
   }
 
+  static final class ProcessGroupSupport {
+    private static final Duration SIGNAL_COMMAND_TIMEOUT = Duration.ofSeconds(1);
+
+    private final boolean linux;
+    private final List<String> launchPrefix;
+    private final List<String> signalPrefix;
+
+    private ProcessGroupSupport(
+        boolean linux, List<String> launchPrefix, List<String> signalPrefix) {
+      this.linux = linux;
+      this.launchPrefix = launchPrefix;
+      this.signalPrefix = signalPrefix;
+    }
+
+    static ProcessGroupSupport detect() {
+      boolean linux = System.getProperty("os.name", "")
+          .toLowerCase(java.util.Locale.ROOT)
+          .contains("linux");
+      if (!linux) {
+        return new ProcessGroupSupport(false, List.of(), List.of());
+      }
+      Path setsid = firstExecutable("/usr/bin/setsid", "/bin/setsid");
+      Path kill = firstExecutable("/usr/bin/kill", "/bin/kill");
+      if (setsid != null && kill != null) {
+        return new ProcessGroupSupport(
+            true, List.of(setsid.toString()), List.of(kill.toString()));
+      }
+      Path busybox = firstExecutable("/bin/busybox", "/usr/bin/busybox");
+      if (busybox != null) {
+        return new ProcessGroupSupport(
+            true,
+            List.of(busybox.toString(), "setsid"),
+            List.of(busybox.toString(), "kill"));
+      }
+      return new ProcessGroupSupport(true, List.of(), List.of());
+    }
+
+    boolean isolated() {
+      return linux && !launchPrefix.isEmpty() && !signalPrefix.isEmpty();
+    }
+
+    List<String> wrap(List<String> command) {
+      if (!linux) return new ArrayList<>(command);
+      if (!isolated()) {
+        throw new ScannerRequestException(
+            "SCANNER_PROCESS_ISOLATION_UNAVAILABLE",
+            "Linux scanner process-group isolation is unavailable",
+            503,
+            false);
+      }
+      List<String> wrapped = new ArrayList<>(launchPrefix.size() + command.size());
+      wrapped.addAll(launchPrefix);
+      wrapped.addAll(command);
+      return wrapped;
+    }
+
+    void terminateResidualGroup(long groupId, Duration timeout)
+        throws IOException, InterruptedException {
+      if (groupAlive(groupId)) terminateGroup(groupId, timeout);
+    }
+
+    void terminateGroup(long groupId, Duration timeout)
+        throws IOException, InterruptedException {
+      signal(groupId, "TERM");
+      if (waitForGroupExit(groupId, timeout)) return;
+      signal(groupId, "KILL");
+      if (!waitForGroupExit(groupId, timeout)) {
+        throw new IOException("Scanner process group " + groupId + " did not terminate");
+      }
+    }
+
+    private boolean waitForGroupExit(long groupId, Duration timeout)
+        throws IOException, InterruptedException {
+      long deadline = System.nanoTime() + timeout.toNanos();
+      while (groupAlive(groupId)) {
+        long remaining = deadline - System.nanoTime();
+        if (remaining <= 0) return false;
+        Thread.sleep(Math.max(
+            1,
+            Math.min(
+                PROCESS_TERMINATION_POLL_MILLIS,
+                TimeUnit.NANOSECONDS.toMillis(remaining))));
+      }
+      return true;
+    }
+
+    private boolean groupAlive(long groupId) throws IOException, InterruptedException {
+      int exit = runSignalCommand("-0", groupId);
+      boolean live = hasNonZombieGroupMember(groupId);
+      if (exit != 0 && live) {
+        throw new IOException("Unable to inspect scanner process group " + groupId);
+      }
+      return live;
+    }
+
+    /**
+     * Linux keeps an unreaped process visible to {@code kill -0} after it has become a zombie.
+     * That is especially common when the adapter is PID 1 in a container and adopts an orphaned
+     * scanner grandchild. Zombies cannot execute work and cannot be killed, so they must not make
+     * bounded cleanup fail after the complete process group has already stopped.
+     */
+    private static boolean hasNonZombieGroupMember(long groupId) throws IOException {
+      Path proc = Path.of("/proc");
+      try (var entries = Files.newDirectoryStream(
+          proc, entry -> entry.getFileName().toString().chars().allMatch(Character::isDigit))) {
+        for (Path entry : entries) {
+          String stat;
+          try {
+            stat = Files.readString(entry.resolve("stat"));
+          } catch (NoSuchFileException e) {
+            continue;
+          } catch (IOException e) {
+            // A process can disappear between the directory listing and the stat read. For other
+            // failures, fail closed because an uninspectable live group must not escape cleanup.
+            if (!Files.exists(entry)) continue;
+            return true;
+          }
+          int commandEnd = stat.lastIndexOf(')');
+          if (commandEnd < 0 || commandEnd + 2 >= stat.length()) continue;
+          String[] fields = stat.substring(commandEnd + 2).split(" ", 4);
+          if (fields.length < 3) continue;
+          try {
+            if (Long.parseLong(fields[2]) == groupId && !"Z".equals(fields[0])) {
+              return true;
+            }
+          } catch (NumberFormatException ignored) {
+            // A concurrently exiting process may expose an incomplete stat record.
+          }
+        }
+      }
+      return false;
+    }
+
+    private void signal(long groupId, String signal)
+        throws IOException, InterruptedException {
+      int exit = runSignalCommand("-" + signal, groupId);
+      if (exit != 0 && hasNonZombieGroupMember(groupId)) {
+        throw new IOException(
+            "Unable to signal scanner process group " + groupId + " with " + signal);
+      }
+    }
+
+    private int runSignalCommand(String signal, long groupId)
+        throws IOException, InterruptedException {
+      List<String> command = new ArrayList<>(signalPrefix.size() + 2);
+      command.addAll(signalPrefix);
+      command.add(signal);
+      // BusyBox kill (used by the Alpine production image) does not accept a "--" separator.
+      // Once the signal option is consumed, a negative numeric operand unambiguously targets the
+      // process group for both BusyBox and util-linux kill.
+      command.add("-" + groupId);
+      Process utility = new ProcessBuilder(command)
+          .redirectInput(ProcessBuilder.Redirect.from(new java.io.File("/dev/null")))
+          .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+          .redirectError(ProcessBuilder.Redirect.DISCARD)
+          .start();
+      if (!utility.waitFor(SIGNAL_COMMAND_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+        utility.destroyForcibly();
+        throw new IOException("Scanner process-group signal command timed out");
+      }
+      return utility.exitValue();
+    }
+
+    private static Path firstExecutable(String... candidates) {
+      for (String candidate : candidates) {
+        Path path = Path.of(candidate);
+        if (Files.isRegularFile(path) && Files.isExecutable(path)) return path;
+      }
+      return null;
+    }
+  }
+
+  private record ManagedProcess(
+      Process process, Long groupId, ProcessGroupSupport processGroups) {}
+
   @FunctionalInterface
   interface FileSizeReader {
     long size(Path path) throws IOException;
@@ -299,6 +548,7 @@ public class BoundedProcessRunner {
   private static boolean allowedEnvironmentKey(String key) {
     return key.startsWith("SYFT_REGISTRY_")
         || key.equals("SYFT_LOG_QUIET")
+        || key.equals("SYFT_SOURCE_IMAGE_MAX_LAYER_SIZE")
         || key.equals("GRYPE_DB_CACHE_DIR")
         || key.equals("GRYPE_DB_AUTO_UPDATE");
   }
@@ -333,7 +583,10 @@ public class BoundedProcessRunner {
   private static boolean isOciRegistryScan(List<String> command) {
     return command != null
         && command.contains("--platform")
-        && command.stream().anyMatch(value -> value != null && value.startsWith("registry:"));
+        && command.stream().anyMatch(
+            value ->
+                value != null
+                    && (value.startsWith("registry:") || value.startsWith("oci-dir:")));
   }
 
   /**

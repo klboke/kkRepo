@@ -7,6 +7,7 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.text.Normalizer;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -39,7 +40,7 @@ public class ArchiveGuard {
     try {
       deadline.check();
       Budget budget = new Budget(limits, Files.size(input), deadline);
-      inspectPath(input, "", 0, budget, workspace);
+      inspectPath(input, "", 0, budget, workspace, false);
       deadline.check();
       return new Inspection(budget.entries, budget.expandedBytes, budget.nestedArchives);
     } catch (IOException e) {
@@ -48,11 +49,52 @@ public class ArchiveGuard {
     }
   }
 
-  private void inspectPath(
-      Path input, String hint, int depth, Budget budget, Path workspace) {
+  /**
+   * Inspects all OCI layers against one request-wide archive/decompression budget.
+   *
+   * <p>Layer links and whiteout special entries are valid image filesystem metadata and are not
+   * extracted by this guard, so they are accepted while paths, entry counts, per-file bytes,
+   * aggregate expanded bytes, nesting, and expansion ratio remain bounded.
+   */
+  public Inspection inspectOciLayers(
+      List<Path> layers, ResourceLimits limits, Path workspace, ScanDeadline deadline) {
     try {
-      if (inspectAsArchive(input, depth, budget, workspace)) return;
-      inspectAsCompressed(input, hint, depth, budget, workspace);
+      deadline.check();
+      long compressedBytes = 0;
+      for (Path layer : layers) {
+        long size = Files.size(layer);
+        if (size > Long.MAX_VALUE - compressedBytes) {
+          throw rejected("OCI_INPUT_TOO_LARGE", "OCI layer bytes exceed the input limit");
+        }
+        compressedBytes += size;
+      }
+      if (compressedBytes > limits.maxInputBytes()) {
+        throw rejected("OCI_INPUT_TOO_LARGE", "OCI layer bytes exceed the input limit");
+      }
+      Budget budget = new Budget(limits, compressedBytes, deadline);
+      for (Path layer : layers) {
+        inspectPath(layer, "", 0, budget, workspace, true);
+      }
+      deadline.check();
+      return new Inspection(budget.entries, budget.expandedBytes, budget.nestedArchives);
+    } catch (IOException e) {
+      throw new ScannerRequestException(
+          "OCI_LAYER_INVALID", "OCI layer is malformed or unsupported", 422, false, e);
+    }
+  }
+
+  private void inspectPath(
+      Path input,
+      String hint,
+      int depth,
+      Budget budget,
+      Path workspace,
+      boolean allowImageFilesystemMetadata) {
+    try {
+      if (inspectAsArchive(
+          input, depth, budget, workspace, allowImageFilesystemMetadata)) return;
+      inspectAsCompressed(
+          input, hint, depth, budget, workspace, allowImageFilesystemMetadata);
     } catch (ScannerRequestException e) {
       throw e;
     } catch (IOException e) {
@@ -62,7 +104,11 @@ public class ArchiveGuard {
   }
 
   private boolean inspectAsArchive(
-      Path input, int depth, Budget budget, Path workspace)
+      Path input,
+      int depth,
+      Budget budget,
+      Path workspace,
+      boolean allowImageFilesystemMetadata)
       throws IOException, ArchiveException {
     budget.check();
     try (BufferedInputStream raw = new BufferedInputStream(Files.newInputStream(input))) {
@@ -75,14 +121,20 @@ public class ArchiveGuard {
       }
       try (ArchiveInputStream<?> archive =
           ArchiveStreamFactory.DEFAULT.createArchiveInputStream(type, raw)) {
-        inspectEntries(archive, depth, budget, workspace);
+        inspectEntries(
+            archive, depth, budget, workspace, allowImageFilesystemMetadata);
       }
       return true;
     }
   }
 
   private void inspectAsCompressed(
-      Path input, String hint, int depth, Budget budget, Path workspace)
+      Path input,
+      String hint,
+      int depth,
+      Budget budget,
+      Path workspace,
+      boolean allowImageFilesystemMetadata)
       throws IOException, CompressorException, ArchiveException {
     budget.check();
     try (BufferedInputStream raw = new BufferedInputStream(Files.newInputStream(input))) {
@@ -101,7 +153,8 @@ public class ArchiveGuard {
           String type = ArchiveStreamFactory.detect(expanded);
           try (ArchiveInputStream<?> archive =
               ArchiveStreamFactory.DEFAULT.createArchiveInputStream(type, expanded)) {
-            inspectEntries(archive, depth, budget, workspace);
+            inspectEntries(
+                archive, depth, budget, workspace, allowImageFilesystemMetadata);
           }
         } catch (ArchiveException singleCompressedFile) {
           drain(expanded, budget, budget.limits.maxSingleFileBytes());
@@ -111,7 +164,11 @@ public class ArchiveGuard {
   }
 
   private void inspectEntries(
-      ArchiveInputStream<?> archive, int depth, Budget budget, Path workspace)
+      ArchiveInputStream<?> archive,
+      int depth,
+      Budget budget,
+      Path workspace,
+      boolean allowImageFilesystemMetadata)
       throws IOException {
     while (true) {
       budget.check();
@@ -120,7 +177,7 @@ public class ArchiveGuard {
       if (entry == null) break;
       budget.addEntry();
       validatePath(entry.getName());
-      validateType(entry);
+      if (!allowImageFilesystemMetadata) validateType(entry);
       long declaredSize = entry.getSize();
       if (declaredSize > budget.limits.maxSingleFileBytes()) {
         throw rejected("ARCHIVE_ENTRY_TOO_LARGE", "Archive entry exceeds the single-file limit");
@@ -144,7 +201,13 @@ public class ArchiveGuard {
         Path nested = Files.createTempFile(workspace, "nested-", ".archive");
         try {
           copyEntry(archive, nested, budget, budget.limits.maxSingleFileBytes());
-          inspectPath(nested, entry.getName(), depth + 1, budget, workspace);
+          inspectPath(
+              nested,
+              entry.getName(),
+              depth + 1,
+              budget,
+              workspace,
+              allowImageFilesystemMetadata);
         } finally {
           Files.deleteIfExists(nested);
         }

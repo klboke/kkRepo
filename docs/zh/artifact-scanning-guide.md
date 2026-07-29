@@ -264,6 +264,8 @@ metadata 不会被送入扫描器。
 Docker Blob 实际按仓库和 digest 复用，因此 layer 下载会取仓库内所有引用 manifest
 的最严格决定，不能通过替换 URL 中的 image name 绕过。Proxy layer 在 manifest 尚未
 缓存时按 pending action 处理；Hosted 上传中的未引用 Blob 仍可用于完成 push。
+代理远端已经确认 Blob 存在后，会在读取完整响应体之前执行这项决定；被阻断的请求
+不会先把可能很大的 layer 写入临时盘或对象存储。
 
 超过 profile 输入限制的制品会标记为失败，而不是显示为 clean。内置 profile 默认
 最大输入为 `1 GiB`；adapter 默认硬上限为 `2 GiB`，实际生效值取更严格的限制。
@@ -271,6 +273,10 @@ Docker Blob 实际按仓库和 digest 复用，因此 layer 下载会取仓库�
 内置 OCI profile 默认要求 `linux/amd64`。多平台镜像只有在要求的平台完成时才能得到
 完整结果；只有明确的平台解析不存在错误才会形成 partial 结果。registry 传输、
 授权服务和 5xx 错误保持可重试，不能记录成缺失平台。
+扫描 Docker/OCI 时，adapter 使用短期只读 token 获取并校验 manifest、config 和所需
+layer，在请求临时目录生成本地 OCI layout，再让 Syft 扫描该本地 layout。token 不会
+传给 Syft。所有平台共享压缩输入、归档条目、单文件、解压总量、嵌套和膨胀率限制，
+gzip/xz/zstd 等 layer 都在 Syft 启动前完成边界检查。
 
 ## 扫描何时发生
 

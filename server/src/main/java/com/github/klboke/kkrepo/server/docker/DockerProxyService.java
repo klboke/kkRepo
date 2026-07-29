@@ -176,6 +176,10 @@ public class DockerProxyService {
       if (result.status() < 200 || result.status() >= 300) {
         throw new DockerProtocolException(DockerErrorCode.NAME_UNKNOWN, "remote returned " + result.status(), 502);
       }
+      // The upstream response has established that the blob exists. Apply pending/referenced
+      // download policy before consuming a potentially multi-gigabyte body or writing it to
+      // object storage; the 404 path above must retain BLOB_UNKNOWN precedence.
+      manifestStore.beforeBlobRead(runtime, imageName, digest);
       remoteBlob = spoolAndDigest(runtime, result.body());
       if (!digest.isSha256() || !digest.hex().equals(remoteBlob.sha256())) {
         recordDigest(runtime, "proxy_blob", "failure");
@@ -207,7 +211,6 @@ public class DockerProxyService {
               stored.blob().size(),
               blobContentType(stored.blob().contentType()),
               stored.asset().lastUpdatedAt());
-      manifestStore.beforeBlobRead(runtime, imageName, digest);
       return response
           .withContentType(blobContentType(stored.blob().contentType()))
           .withHeader(DockerConstants.CONTENT_DIGEST_HEADER, digest.value())

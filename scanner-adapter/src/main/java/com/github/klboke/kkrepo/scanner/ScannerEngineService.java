@@ -41,6 +41,7 @@ public class ScannerEngineService {
   private final BoundedProcessRunner processes;
   private final ScannerInput scannerInput;
   private final ArchiveGuard archiveGuard;
+  private final OciRegistryStager ociRegistryStager;
   private final ScannerDocumentMapper documents;
   private final ScannerDatabaseCoordinator database;
 
@@ -51,12 +52,14 @@ public class ScannerEngineService {
       BoundedProcessRunner processes,
       ScannerInput scannerInput,
       ArchiveGuard archiveGuard,
+      OciRegistryStager ociRegistryStager,
       ScannerDocumentMapper documents,
       ScannerDatabaseCoordinator database) {
     this.properties = properties;
     this.processes = processes;
     this.scannerInput = scannerInput;
     this.archiveGuard = archiveGuard;
+    this.ociRegistryStager = ociRegistryStager;
     this.documents = documents;
     this.database = database;
   }
@@ -209,35 +212,27 @@ public class ScannerEngineService {
     try {
       Readiness ready = requireReady(deadline);
       deadline.check();
-      URI registry = URI.create(request.registryUrl());
-      String authority = registry.getRawAuthority();
-      String prefix = registry.getPath() == null ? "" : registry.getPath();
-      if (!prefix.isBlank() && !prefix.endsWith("/")) prefix += "/";
-      String image = authority + "/" + prefix.replaceFirst("^/", "")
-          + request.repository() + "@" + request.manifestDigest();
+      OciRegistryStager.StagedImage staged =
+          ociRegistryStager.stage(request, limits, workspace, deadline);
       Map<String, String> environment = new LinkedHashMap<>();
       environment.put("SYFT_LOG_QUIET", "true");
-      environment.put("SYFT_REGISTRY_AUTH_AUTHORITY", authority);
-      environment.put("SYFT_REGISTRY_AUTH_TOKEN", request.scopedBearerToken());
-      if ("http".equalsIgnoreCase(registry.getScheme())) {
-        environment.put("SYFT_REGISTRY_INSECURE_USE_HTTP", "true");
-      }
+      environment.put(
+          "SYFT_SOURCE_IMAGE_MAX_LAYER_SIZE",
+          limits.maxSingleFileBytes() + "B");
 
-      List<String> required = request.requiredPlatforms().isEmpty()
-          ? List.of("linux/amd64") : request.requiredPlatforms();
       List<PlatformSbom> platformSboms = new ArrayList<>();
       List<String> scanned = new ArrayList<>();
-      List<String> missing = new ArrayList<>();
+      List<String> missing = new ArrayList<>(staged.missingPlatforms());
       long aggregateDocumentBytes = 0;
-      for (int index = 0; index < required.size(); index++) {
-        String platform = required.get(index);
+      for (int index = 0; index < staged.availablePlatforms().size(); index++) {
+        String platform = staged.availablePlatforms().get(index);
         Path output = workspace.resolve("platform-" + index + ".cdx.json");
         try {
           processes.run(
               List.of(
                   properties.getSyftExecutable(),
                   "scan",
-                  "registry:" + image,
+                  "oci-dir:" + staged.layout(),
                   "--platform",
                   platform,
                   "--output",
@@ -261,7 +256,7 @@ public class ScannerEngineService {
           scanned.add(platform);
         } catch (ScannerRequestException e) {
           if ("SCANNER_PLATFORM_NOT_FOUND".equals(e.code())) {
-            missing.add(platform);
+            if (!missing.contains(platform)) missing.add(platform);
           } else {
             throw e;
           }
@@ -290,7 +285,13 @@ public class ScannerEngineService {
           request.manifestDigest().substring("sha256:".length()),
           string(ready.details().get("catalogEngineVersion"), ready.engineVersion()),
           capabilities().capabilityDigest(),
-          Map.of("scannedPlatforms", scanned, "missingPlatforms", missing));
+          Map.of(
+              "scannedPlatforms", scanned,
+              "missingPlatforms", missing,
+              "inputBytes", staged.transferredBytes(),
+              "archiveEntries", staged.archiveEntries(),
+              "expandedBytes", staged.expandedBytes(),
+              "nestedArchives", staged.nestedArchives()));
       deadline.check();
       if (!missing.isEmpty()) {
         catalog = new CatalogResponse(

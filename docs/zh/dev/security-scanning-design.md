@@ -1028,6 +1028,10 @@ SBOM/report 的临时 `blob_reference` 发布也必须在同一事务中锁定 t
 adapter 只在本实例维护短生命周期的 active-run 映射，用于中断对应请求线程和终止
 Syft/Grype 进程树；该映射不是持久任务状态，也不参与多副本正确性。资源释放是 best
 effort，scanner 端到端超时仍是最终上界，任何迟到结果都会被 lease token 拒绝。
+heartbeat 的 lease-loss 判定、中断执行线程与任务完成后的 heartbeat 停止/interrupt
+清理使用同一个进程内 gate 串行化。这样已经进入数据库调用但尚未返回的 heartbeat，
+在完成清理设置 `finished` 后不能再迟到地中断已复用的 worker 线程；该 gate 只解决
+单次执行的线程生命周期竞态，任务所有权仍完全由数据库 lease token 决定。
 
 若 worker 在最后一次允许的 attempt 内崩溃，普通 claim 不能再次增加 attempts 并执行
 第 `max_attempts + 1` 次。独立终态回收查询会领取
@@ -1151,6 +1155,14 @@ OCI scanner 按 digest 从 kkRepo 内部 registry 地址拉取：
 - scanner 必须按 digest 而不是可变化 tag 拉取。
 - index 根据 platform policy 解析并记录实际扫描的平台。
 - scanner 不挂载宿主 Docker socket。
+- adapter 自己使用有界 HTTP 客户端获取 manifest、config 与所需 layer，逐项校验
+  descriptor size 和 SHA-256，并在请求独立临时目录生成本地 OCI layout；短期 token
+  只用于这一阶段，不传给 Syft 子进程或写入子进程环境。
+- manifest/config/layer 的压缩字节共享 `maxInputBytes`，descriptor 数量受
+  `maxArchiveEntries` 约束；所有唯一 layer 在 Syft 启动前共享检查归档条目数、单文件
+  大小、解压总量、嵌套深度和膨胀率。普通 tar、gzip、xz 与 zstd layer 使用同一预算。
+- Syft 只扫描 `oci-dir:<local-layout>`，并额外设置单 layer 文件读取上限作为纵深防御；
+  这项 Syft 限制不能替代 adapter 的请求级总量校验。
 
 后续也可以把 OCI layout 通过对象存储提供给 scanner，但不能要求 kkRepo 主进程在本地
 拼装完整镜像。
@@ -1187,9 +1199,12 @@ task 却被标记 COMPLETE 的状态。
 - 规范化每个归档路径并拒绝绝对路径、`..` 和 Unicode/分隔符绕过。
 - 限制压缩层级、归档条目数、单文件大小、解压总量和压缩膨胀率。
 - 限制 CPU、内存、临时磁盘、进程数和 wall-clock timeout。
-- timeout、请求中断或 I/O 失败时先终止 scanner 进程树；在优雅和强制终止阶段都持续
-  重新发现仍存活进程新创建的后代，跟踪所有已观测 PID，直到进程树连续静默，不能只
-  使用终止开始时的一次 descendants 快照。
+- Linux 上每个 Syft/Grype 命令必须通过 `setsid` 建立独立 session/process group；
+  timeout、请求中断、I/O 失败以及父进程正常退出后仍有残留进程时，对整个 group 先
+  `TERM`、再有界等待并 `KILL`。因此中间父进程退出后被重新挂到 PID 1 的后代仍在可
+  寻址范围内；只剩无法执行的 zombie 时不把清理误判为失败。生产 Linux 镜像缺少
+  `setsid` 或 `kill` 必须 fail closed。非 Linux 开发环境才使用持续重新发现后代并
+  跟踪已观测 PID 的 `ProcessHandle` fallback。
 - 不挂载宿主源码、Docker socket、kkRepo 配置目录或云凭据目录。
 - 默认禁止任意出站网络；漏洞数据库更新使用独立、允许列表控制的流程。
 - 分别限制 scanner 原始 SBOM/report 与 HTTP JSON response：原始文档限制还覆盖 OCI
@@ -1290,6 +1305,13 @@ Enforce 且 pending 必须阻断的仓库不能把首次回源字节先流给客
 
 这会增加严格 proxy 仓库第一次请求的延迟和一次失败重试，必须在管理端明确提示，
 并用 Maven/npm/PyPI/Docker 等真实客户端验证。
+
+Docker/OCI layer 是 manifest 扫描主体的组成部分，不是独立扫描主体。代理回源已经
+获得 2xx、确认 Blob 存在后，必须在读取上游 body 之前按该仓库中所有引用 manifest
+执行 pending/failed/partial/vulnerability 决策；若被阻断，立即关闭上游 body，不把
+可能为多 GiB 的 layer 写入临时盘或对象存储。404 仍优先返回 `BLOB_UNKNOWN`。scanner
+持有的 digest-scoped token 走内部扫描读取语义，可为 manifest 扫描获取所需 layer，
+不会与客户端阻断形成循环依赖。
 
 ### Group 策略
 

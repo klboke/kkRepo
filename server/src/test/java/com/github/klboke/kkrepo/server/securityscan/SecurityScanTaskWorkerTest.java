@@ -26,7 +26,11 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class SecurityScanTaskWorkerTest {
@@ -195,10 +199,10 @@ class SecurityScanTaskWorkerTest {
       Thread activeThread = new Thread();
       Method heartbeat =
           SecurityScanTaskWorker.class.getDeclaredMethod(
-              "heartbeat", ScanTask.class, Thread.class, AtomicBoolean.class);
+              "heartbeat", ScanTask.class, Thread.class, AtomicBoolean.class, Object.class);
       heartbeat.setAccessible(true);
       heartbeat.invoke(
-          fixture.worker, fixture.task, activeThread, new AtomicBoolean(false));
+          fixture.worker, fixture.task, activeThread, new AtomicBoolean(false), new Object());
       verify(fixture.scans).heartbeatTask(eq(5L), eq("lease"), any(), any());
       verify(fixture.adapter).cancel("5");
       assertTrue(activeThread.isInterrupted());
@@ -216,17 +220,75 @@ class SecurityScanTaskWorkerTest {
       Thread activeThread = new Thread();
       Method heartbeat =
           SecurityScanTaskWorker.class.getDeclaredMethod(
-              "heartbeat", ScanTask.class, Thread.class, AtomicBoolean.class);
+              "heartbeat", ScanTask.class, Thread.class, AtomicBoolean.class, Object.class);
       heartbeat.setAccessible(true);
 
       heartbeat.invoke(
-          fixture.worker, fixture.task, activeThread, new AtomicBoolean(false));
+          fixture.worker, fixture.task, activeThread, new AtomicBoolean(false), new Object());
       heartbeat.invoke(
-          fixture.worker, fixture.task, activeThread, new AtomicBoolean(false));
+          fixture.worker, fixture.task, activeThread, new AtomicBoolean(false), new Object());
 
       verify(fixture.scans, times(2))
           .heartbeatTask(eq(5L), eq("lease"), any(), any());
       assertFalse(activeThread.isInterrupted());
+    } finally {
+      fixture.worker.shutdown();
+    }
+  }
+
+  @Test
+  void completedCleanupFencesAHeartbeatThatWasAlreadyInFlight() throws Exception {
+    Fixture fixture = new Fixture();
+    try {
+      CountDownLatch databaseCallStarted = new CountDownLatch(1);
+      CountDownLatch releaseDatabaseCall = new CountDownLatch(1);
+      when(fixture.scans.heartbeatTask(eq(5L), eq("lease"), any(), any()))
+          .thenAnswer(invocation -> {
+            databaseCallStarted.countDown();
+            assertTrue(releaseDatabaseCall.await(5, TimeUnit.SECONDS));
+            return false;
+          });
+      AtomicBoolean finished = new AtomicBoolean();
+      Object heartbeatGate = new Object();
+      ScheduledFuture<?> heartbeatFuture = mock(ScheduledFuture.class);
+      Thread activeThread = Thread.currentThread();
+      Method heartbeat =
+          SecurityScanTaskWorker.class.getDeclaredMethod(
+              "heartbeat",
+              ScanTask.class,
+              Thread.class,
+              AtomicBoolean.class,
+              Object.class);
+      heartbeat.setAccessible(true);
+      AtomicReference<Throwable> callbackFailure = new AtomicReference<>();
+      Thread callback = Thread.ofVirtual().start(() -> {
+        try {
+          heartbeat.invoke(
+              fixture.worker,
+              fixture.task,
+              activeThread,
+              finished,
+              heartbeatGate);
+        } catch (Throwable failure) {
+          callbackFailure.set(failure);
+        }
+      });
+      assertTrue(databaseCallStarted.await(5, TimeUnit.SECONDS));
+
+      Method stop =
+          SecurityScanTaskWorker.class.getDeclaredMethod(
+              "stopHeartbeatAndClearInterrupt",
+              AtomicBoolean.class,
+              ScheduledFuture.class,
+              Object.class);
+      stop.setAccessible(true);
+      assertFalse((boolean) stop.invoke(null, finished, heartbeatFuture, heartbeatGate));
+      releaseDatabaseCall.countDown();
+      callback.join();
+
+      assertFalse(activeThread.isInterrupted());
+      assertTrue(callbackFailure.get() == null);
+      verify(fixture.adapter, never()).cancel("5");
     } finally {
       fixture.worker.shutdown();
     }
