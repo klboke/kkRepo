@@ -209,6 +209,9 @@ class RepositoryDataMigrationServiceTest {
             1,
             false,
             true,
+            true,
+            2,
+            true,
             false,
             plan.adapter(),
             plan.profileHash(),
@@ -226,6 +229,9 @@ class RepositoryDataMigrationServiceTest {
     assertEquals(plan.planHash(), summary.get("planHash"));
     assertEquals(profile, summary.get("sourceProfile"));
     assertEquals(plan, summary.get("migrationPlan"));
+    assertEquals(true, summary.get("captureNexusPublicAssetIds"), "capture mode should be visible");
+    assertEquals(true, summary.get("publicIdBackfillOnly"), "backfill-only mode should be visible");
+    assertEquals(2L, summary.get("nexusPublicIdMappedAssets"), "mapped asset count should be visible");
     assertEquals(false, summary.containsKey("sourcePassword"));
   }
 

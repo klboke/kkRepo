@@ -70,6 +70,8 @@ public interface RepositoryDataMigrationDao {
 
   MigrationJobProgress jobProgress(long migrationJobId);
 
+  Map<Long, Long> nexusPublicIdMappedAssets(long migrationJobId);
+
   void updateMigrationJobSummary(long migrationJobId, String status, Map<String, Object> summary);
 
   void setPackageMigrationEnabled(long migrationJobId, boolean enabled);

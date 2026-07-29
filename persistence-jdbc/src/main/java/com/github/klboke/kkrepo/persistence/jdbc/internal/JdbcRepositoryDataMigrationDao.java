@@ -576,6 +576,27 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
     return new MigrationJobProgress(repositories.size(), discovered, total, migrated, failed, pending, active, failedRepos);
   }
 
+  public Map<Long, Long> nexusPublicIdMappedAssets(long migrationJobId) {
+    List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
+        SELECT a.repository_job_id, COUNT(DISTINCT a.id) AS mapped_assets
+        FROM repository_data_migration_asset a
+        JOIN repository_data_migration_repository r ON r.id = a.repository_job_id
+        JOIN asset_public_identifier p
+          ON p.repository_id = r.target_repository_id
+         AND p.asset_id = a.target_asset_id
+         AND p.identifier_type = 'NEXUS_ALIAS'
+        WHERE r.migration_job_id = ?
+        GROUP BY a.repository_job_id
+        """, migrationJobId);
+    LinkedHashMap<Long, Long> counts = new LinkedHashMap<>();
+    for (Map<String, Object> row : rows) {
+      counts.put(
+          ((Number) row.get("repository_job_id")).longValue(),
+          ((Number) row.get("mapped_assets")).longValue());
+    }
+    return Map.copyOf(counts);
+  }
+
   public void updateMigrationJobSummary(long migrationJobId, String status, Map<String, Object> summary) {
     jdbcTemplate.update("""
         UPDATE migration_job

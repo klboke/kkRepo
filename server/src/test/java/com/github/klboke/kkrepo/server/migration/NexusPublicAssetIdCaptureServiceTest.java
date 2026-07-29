@@ -33,7 +33,8 @@ class NexusPublicAssetIdCaptureServiceTest {
   void verifiedExactAssetRegistersNexusAlias() throws Exception {
     RepositoryDataMigrationAssetRecord source = source("tools/setup.exe");
     when(assetDao.findAssetWithBlobById(12L)).thenReturn(Optional.of(target(source, "abc123")));
-    when(client.findPublicAssets("windows-components", source.sourcePath())).thenReturn(List.of(
+    when(client.findPublicAssets(
+        "windows-components", source.sourcePath(), "raw", null, "setup.exe", null)).thenReturn(List.of(
         new NexusPublicAsset(
             "public-id", "windows-components", source.sourcePath(), "ABC123", "http://download")));
 
@@ -48,7 +49,8 @@ class NexusPublicAssetIdCaptureServiceTest {
   void checksumMismatchFailsBeforeRegistration() throws Exception {
     RepositoryDataMigrationAssetRecord source = source("tools/setup.exe");
     when(assetDao.findAssetWithBlobById(12L)).thenReturn(Optional.of(target(source, "abc123")));
-    when(client.findPublicAssets("windows-components", source.sourcePath())).thenReturn(List.of(
+    when(client.findPublicAssets(
+        "windows-components", source.sourcePath(), "raw", null, "setup.exe", null)).thenReturn(List.of(
         new NexusPublicAsset(
             "public-id", "windows-components", source.sourcePath(), "different", null)));
 

@@ -323,6 +323,31 @@ class NexusRestClientTest {
     assertEquals("abc123", assets.getFirst().sha1());
   }
 
+  @Test
+  void exactPublicAssetSearchFallsBackToQueryWhenNameDoesNotMatchPath() throws Exception {
+    List<NexusRestClient.NexusPublicAsset> assets = client(new FakeNexus(true))
+        .findPublicAssets("maven-3rd-releases", "com/acme/demo/1.0/demo-1.0.jar");
+
+    assertEquals(1, assets.size(), "path fallback should return the exact Maven asset");
+    assertEquals("maven-public-id", assets.getFirst().id(), "public ID should come from Nexus");
+    assertEquals("def456", assets.getFirst().sha1(), "SHA-1 should come from the exact asset");
+  }
+
+  @Test
+  void exactMavenPublicAssetSearchUsesCoordinatesBeforePathFallbacks() throws Exception {
+    List<NexusRestClient.NexusPublicAsset> assets = client(new FakeNexus(true))
+        .findPublicAssets(
+            "maven-3rd-releases",
+            "com/acme/demo/1.0/demo-1.0.jar",
+            "maven2",
+            "com.acme",
+            "demo",
+            "1.0");
+
+    assertEquals(1, assets.size(), "coordinate search should return the exact Maven asset");
+    assertEquals("maven-public-id", assets.getFirst().id(), "public ID should come from Nexus");
+  }
+
   private static NexusRestClient client(FakeNexus nexus) {
     return new NexusRestClient(
         "http://source.example/",
@@ -383,6 +408,41 @@ class NexusRestClientTest {
                     "repository", "windows-components",
                     "path", "tools/other.exe",
                     "checksum", Map.of("sha1", "other")))));
+      }
+      if ("GET".equals(method) && path.equals(
+          "/service/rest/v1/search/assets?repository=maven-3rd-releases"
+              + "&name=com%2Facme%2Fdemo%2F1.0%2Fdemo-1.0.jar")) {
+        return json(200, Map.of("items", List.of()));
+      }
+      if ("GET".equals(method) && path.equals(
+          "/service/rest/v1/search/assets?repository=maven-3rd-releases"
+              + "&q=com%2Facme%2Fdemo%2F1.0%2Fdemo-1.0.jar")) {
+        return json(200, Map.of("items", List.of(
+            Map.of(
+                "id", "maven-public-id",
+                "repository", "maven-3rd-releases",
+                "path", "com/acme/demo/1.0/demo-1.0.jar",
+                "checksum", Map.of("sha1", "def456")),
+            Map.of(
+                "id", "unrelated-id",
+                "repository", "maven-3rd-releases",
+                "path", "com/acme/demo/1.0/demo-1.0.pom",
+                "checksum", Map.of("sha1", "other")))));
+      }
+      if ("GET".equals(method) && path.equals(
+          "/service/rest/v1/search/assets?repository=maven-3rd-releases"
+              + "&maven.groupId=com.acme&maven.artifactId=demo&maven.baseVersion=1.0")) {
+        return json(200, Map.of("items", List.of(
+            Map.of(
+                "id", "maven-public-id",
+                "repository", "maven-3rd-releases",
+                "path", "com/acme/demo/1.0/demo-1.0.jar",
+                "checksum", Map.of("sha1", "def456")),
+            Map.of(
+                "id", "maven-pom-id",
+                "repository", "maven-3rd-releases",
+                "path", "com/acme/demo/1.0/demo-1.0.pom",
+                "checksum", Map.of("sha1", "other")))));
       }
       if ("GET".equals(method) && "/service/rest/v1/security/users?source=default".equals(path)) {
         usersPath = path;

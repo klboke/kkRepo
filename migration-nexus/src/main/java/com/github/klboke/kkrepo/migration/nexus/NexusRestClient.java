@@ -1323,48 +1323,119 @@ public class NexusRestClient {
     if (repositoryName == null || repositoryName.isBlank() || path == null || path.isBlank()) {
       throw new IllegalArgumentException("Repository and asset path are required");
     }
+    List<NexusPublicAsset> matches = findPublicAssets(
+        repositoryName, path, "name=" + encodePathSegment(path), "name");
+    if (!matches.isEmpty()) {
+      return matches;
+    }
+    // Nexus interprets name by format. Maven's name is the artifact name rather than the asset path.
+    return findPublicAssets(repositoryName, path, "q=" + encodePathSegment(path), "q");
+  }
+
+  public List<NexusPublicAsset> findPublicAssets(
+      String repositoryName,
+      String path,
+      String repositoryFormat,
+      String namespace,
+      String name,
+      String version) throws IOException, InterruptedException {
+    if (repositoryName == null || repositoryName.isBlank() || path == null || path.isBlank()) {
+      throw new IllegalArgumentException("Repository and asset path are required");
+    }
+    if (hasExactMavenCoordinates(repositoryFormat, namespace, name, version)) {
+      String coordinateQuery = "maven.groupId=" + encodePathSegment(namespace)
+          + "&maven.artifactId=" + encodePathSegment(name)
+          + "&maven.baseVersion=" + encodePathSegment(version);
+      List<NexusPublicAsset> matches = findPublicAssets(
+          repositoryName, path, coordinateQuery, "maven coordinates");
+      if (!matches.isEmpty()) {
+        return matches;
+      }
+    }
+    return findPublicAssets(repositoryName, path);
+  }
+
+  private static boolean hasExactMavenCoordinates(
+      String repositoryFormat, String namespace, String name, String version) {
+    if (!"maven2".equalsIgnoreCase(repositoryFormat)) {
+      return false;
+    }
+    return isNotBlank(namespace) && isNotBlank(name) && isNotBlank(version);
+  }
+
+  private static boolean isNotBlank(String value) {
+    return value != null && !value.isBlank();
+  }
+
+  private List<NexusPublicAsset> findPublicAssets(
+      String repositoryName, String path, String searchQuery, String queryDescription)
+      throws IOException, InterruptedException {
     String continuationToken = null;
     Set<String> seenTokens = new java.util.HashSet<>();
     LinkedHashMap<String, NexusPublicAsset> byId = new LinkedHashMap<>();
     do {
-      String requestPath = "/service/rest/v1/search/assets?repository="
-          + encodePathSegment(repositoryName)
-          + "&name="
-          + encodePathSegment(path)
-          + (continuationToken == null
-              ? ""
-              : "&continuationToken=" + encodePathSegment(continuationToken));
-      Map<String, Object> page = getMap(requestPath);
-      for (Map<String, Object> item : objectMaps(page.get("items"))) {
-        String itemRepository = firstString(item, "repository");
-        String itemPath = firstString(item, "path");
-        if (!repositoryName.equals(itemRepository) || !path.equals(itemPath)) {
-          continue;
-        }
-        String id = firstString(item, "id");
-        if (id == null || id.isBlank()) {
-          throw new IOException("Nexus exact asset search returned an item without a public ID for "
-              + repositoryName + "/" + path);
-        }
-        Map<String, Object> checksum = objectValue(item.get("checksum"));
-        NexusPublicAsset candidate = new NexusPublicAsset(
-            id,
-            itemRepository,
-            itemPath,
-            firstString(checksum, "sha1"),
-            firstString(item, "downloadUrl"));
-        NexusPublicAsset previous = byId.putIfAbsent(id, candidate);
-        if (previous != null && !previous.equals(candidate)) {
-          throw new IOException("Nexus exact asset search returned conflicting entries for public ID " + id);
-        }
-      }
-      continuationToken = string(page.get("continuationToken"));
-      if (continuationToken != null && !seenTokens.add(continuationToken)) {
-        throw new IOException("Nexus exact asset search repeated a continuation token for "
-            + repositoryName + "/" + path);
-      }
+      Map<String, Object> page = getMap(publicAssetSearchPath(
+          repositoryName, searchQuery, continuationToken));
+      mergeExactPublicAssets(repositoryName, path, page, byId);
+      continuationToken = nextContinuationToken(
+          repositoryName, path, queryDescription, page, seenTokens);
     } while (continuationToken != null);
     return List.copyOf(byId.values());
+  }
+
+  private static String publicAssetSearchPath(
+      String repositoryName, String searchQuery, String continuationToken) {
+    String requestPath = "/service/rest/v1/search/assets?repository="
+        + encodePathSegment(repositoryName) + "&" + searchQuery;
+    if (continuationToken == null) {
+      return requestPath;
+    }
+    return requestPath + "&continuationToken=" + encodePathSegment(continuationToken);
+  }
+
+  private static void mergeExactPublicAssets(
+      String repositoryName,
+      String path,
+      Map<String, Object> page,
+      Map<String, NexusPublicAsset> byId) throws IOException {
+    for (Map<String, Object> item : objectMaps(page.get("items"))) {
+      String itemRepository = firstString(item, "repository");
+      String itemPath = firstString(item, "path");
+      if (!repositoryName.equals(itemRepository) || !path.equals(itemPath)) {
+        continue;
+      }
+      String id = firstString(item, "id");
+      if (id == null || id.isBlank()) {
+        throw new IOException("Nexus exact asset search returned an item without a public ID for "
+            + repositoryName + "/" + path);
+      }
+      Map<String, Object> checksum = objectValue(item.get("checksum"));
+      NexusPublicAsset candidate = new NexusPublicAsset(
+          id,
+          itemRepository,
+          itemPath,
+          firstString(checksum, "sha1"),
+          firstString(item, "downloadUrl"));
+      NexusPublicAsset previous = byId.putIfAbsent(id, candidate);
+      if (previous != null && !previous.equals(candidate)) {
+        throw new IOException(
+            "Nexus exact asset search returned conflicting entries for public ID " + id);
+      }
+    }
+  }
+
+  private static String nextContinuationToken(
+      String repositoryName,
+      String path,
+      String queryDescription,
+      Map<String, Object> page,
+      Set<String> seenTokens) throws IOException {
+    String continuationToken = string(page.get("continuationToken"));
+    if (continuationToken != null && !seenTokens.add(continuationToken)) {
+      throw new IOException("Nexus exact asset search repeated a continuation token for "
+          + repositoryName + "/" + path + " using " + queryDescription);
+    }
+    return continuationToken;
   }
 
   static String repositoryAssetAccept(String path) {

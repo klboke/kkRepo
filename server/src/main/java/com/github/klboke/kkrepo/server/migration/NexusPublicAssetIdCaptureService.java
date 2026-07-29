@@ -43,7 +43,12 @@ class NexusPublicAssetIdCaptureService {
     }
 
     List<NexusPublicAsset> matches = client.findPublicAssets(
-        sourceRepositoryName, source.sourcePath());
+        sourceRepositoryName,
+        source.sourcePath(),
+        source.format().id(),
+        source.namespace(),
+        source.name(),
+        source.version());
     if (matches.isEmpty()) {
       throw new IOException("Nexus exact asset search returned no public ID for "
           + sourceRepositoryName + "/" + source.sourcePath());

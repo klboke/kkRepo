@@ -3853,6 +3853,9 @@ function renderRepositoryDataMigrationStatus(payload, title = "Repository data m
   const phase = repositoryDataMigrationPhase(payload, jobs, totalAssets, completedAssets);
   const sourceProfile = payload.sourceProfile || null;
   const migrationPlan = payload.migrationPlan || null;
+  const publicIdMode = payload.publicIdBackfillOnly
+    ? "Backfill only"
+    : payload.captureNexusPublicAssetIds ? "Capture during migration" : "Disabled";
   result.hidden = false;
   result.innerHTML = `
     <div class="form-title">${escapeHtml(title)}</div>
@@ -3868,6 +3871,8 @@ function renderRepositoryDataMigrationStatus(payload, title = "Repository data m
       <div><span>Migrated</span><strong>${escapeHtml(compactNumber(migratedAssets))}</strong></div>
       <div><span>Pending</span><strong>${escapeHtml(compactNumber(pendingAssets))}</strong></div>
       <div><span>Failed</span><strong>${escapeHtml(compactNumber(failedAssets))}</strong></div>
+      <div><span>Public ID mode</span><strong>${escapeHtml(publicIdMode)}</strong></div>
+      <div><span>Nexus ID mapped assets</span><strong>${escapeHtml(compactNumber(payload.nexusPublicIdMappedAssets))}</strong></div>
       <div><span>Package progress</span><strong>${escapeHtml(formatPercent(packagePercent))}</strong></div>
     </div>
     <div class="migration-progress-panel">
@@ -3889,7 +3894,7 @@ function renderRepositoryDataMigrationStatus(payload, title = "Repository data m
     ${renderMigrationList("Plan warnings", migrationPlan?.warnings || [])}
     ${jobs.length ? `
       <div class="migration-list-title">Repository jobs</div>
-      <table class="nx-table compact"><thead><tr><th>Repository</th><th>Format</th><th>Status</th><th>Total</th><th>Migrated</th><th>Pending</th><th>Failed</th><th>Progress</th><th>Cursor</th><th>Error</th></tr></thead><tbody>
+      <table class="nx-table compact"><thead><tr><th>Repository</th><th>Format</th><th>Status</th><th>Total</th><th>Migrated</th><th>Nexus IDs</th><th>Pending</th><th>Failed</th><th>Progress</th><th>Cursor</th><th>Error</th></tr></thead><tbody>
         ${jobs.map((job) => `
           <tr>
             <td>${escapeHtml(job.sourceRepositoryName)}</td>
@@ -3897,6 +3902,7 @@ function renderRepositoryDataMigrationStatus(payload, title = "Repository data m
             <td>${repositoryDataStatusBadge(job.status)}</td>
             <td>${escapeHtml(compactNumber(repositoryJobTotal(job)))}</td>
             <td>${escapeHtml(compactNumber(job.migratedAssets))}</td>
+            <td>${escapeHtml(compactNumber(job.nexusPublicIdMappedAssets))}</td>
             <td>${escapeHtml(compactNumber(repositoryJobPending(job)))}</td>
             <td>${escapeHtml(compactNumber(job.failedAssets))}</td>
             <td class="repo-progress-cell">${renderCompactProgressBar(repositoryJobProcessed(job), repositoryJobTotal(job))}</td>

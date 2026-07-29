@@ -153,6 +153,10 @@ class RepositoryDataMigrationService {
         .orElseThrow(() -> new IllegalArgumentException("migration job not found: " + jobId));
     List<RepositoryDataMigrationRepositoryRecord> repositories = migrationDao.listRepositories(jobId);
     MigrationJobProgress progress = migrationDao.jobProgress(jobId);
+    Map<Long, Long> nexusPublicIdMappedAssets = migrationDao.nexusPublicIdMappedAssets(jobId);
+    Map<String, Object> options = jobOptions(job);
+    boolean captureNexusPublicAssetIds = optionBoolean(options, "captureNexusPublicAssetIds");
+    boolean publicIdBackfillOnly = optionBoolean(options, "publicIdBackfillOnly");
     return new RepositoryDataMigrationStatus(
         job.id(),
         job.status(),
@@ -166,15 +170,19 @@ class RepositoryDataMigrationService {
         progress.failedAssets(),
         progress.pendingAssets(),
         packageMigrationEnabled(job),
+        captureNexusPublicAssetIds,
+        publicIdBackfillOnly,
+        nexusPublicIdMappedAssets.values().stream().mapToLong(Long::longValue).sum(),
         progress.active(),
         progress.failedRepositories(),
-        string(job.options() == null ? null : job.options().get("sourceAdapter")),
-        string(job.options() == null ? null : job.options().get("profileHash")),
-        string(job.options() == null ? null : job.options().get("planHash")),
-        job.options() == null ? null : job.options().get("sourceProfile"),
-        job.options() == null ? null : job.options().get("migrationPlan"),
+        string(options.get("sourceAdapter")),
+        string(options.get("profileHash")),
+        string(options.get("planHash")),
+        options.get("sourceProfile"),
+        options.get("migrationPlan"),
         repositories.stream()
-            .map(RepositoryDataMigrationService::repositoryStatus)
+            .map(repository -> repositoryStatus(
+                repository, nexusPublicIdMappedAssets.getOrDefault(repository.id(), 0L)))
             .toList());
   }
 
@@ -384,7 +392,7 @@ class RepositoryDataMigrationService {
   }
 
   private static RepositoryDataMigrationRepositoryStatus repositoryStatus(
-      RepositoryDataMigrationRepositoryRecord repository) {
+      RepositoryDataMigrationRepositoryRecord repository, long nexusPublicIdMappedAssets) {
     return new RepositoryDataMigrationRepositoryStatus(
         repository.id(),
         repository.sourceRepositoryName(),
@@ -397,6 +405,7 @@ class RepositoryDataMigrationService {
         repository.migratedAssets(),
         repository.failedAssets(),
         Math.max(0, repository.totalAssets() - repository.migratedAssets() - repository.failedAssets()),
+        nexusPublicIdMappedAssets,
         repository.lastError());
   }
 
@@ -462,7 +471,15 @@ class RepositoryDataMigrationService {
   }
 
   private static boolean packageMigrationEnabled(MigrationJobRecord job) {
-    Object value = job.options() == null ? null : job.options().get("packageMigrationEnabled");
+    return optionBoolean(jobOptions(job), "packageMigrationEnabled");
+  }
+
+  private static Map<String, Object> jobOptions(MigrationJobRecord job) {
+    return job.options() == null ? Map.of() : job.options();
+  }
+
+  private static boolean optionBoolean(Map<String, Object> options, String name) {
+    Object value = options.get(name);
     return Boolean.TRUE.equals(value) || "true".equalsIgnoreCase(String.valueOf(value));
   }
 
@@ -494,6 +511,9 @@ class RepositoryDataMigrationService {
       long failedAssets,
       long pendingAssets,
       boolean packageMigrationEnabled,
+      boolean captureNexusPublicAssetIds,
+      boolean publicIdBackfillOnly,
+      long nexusPublicIdMappedAssets,
       boolean active,
       boolean failedRepositories,
       String sourceAdapter,
@@ -517,6 +537,9 @@ class RepositoryDataMigrationService {
       summary.put("failedAssets", failedAssets);
       summary.put("pendingAssets", pendingAssets);
       summary.put("packageMigrationEnabled", packageMigrationEnabled);
+      summary.put("captureNexusPublicAssetIds", captureNexusPublicAssetIds);
+      summary.put("publicIdBackfillOnly", publicIdBackfillOnly);
+      summary.put("nexusPublicIdMappedAssets", nexusPublicIdMappedAssets);
       summary.put("active", active);
       summary.put("failedRepositories", failedRepositories);
       putIfNotNull(summary, "sourceAdapter", sourceAdapter);
@@ -540,6 +563,7 @@ class RepositoryDataMigrationService {
       long migratedAssets,
       long failedAssets,
       long pendingAssets,
+      long nexusPublicIdMappedAssets,
       String lastError) {
   }
 

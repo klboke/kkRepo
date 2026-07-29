@@ -26,6 +26,23 @@ import org.springframework.jdbc.core.ParameterizedPreparedStatementSetter;
 
 class RepositoryDataMigrationDaoTest {
   @Test
+  void nexusPublicIdMappedAssetsCountsDistinctAssetsByRepositoryJob() {
+    RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
+    jdbcTemplate.queryRows = List.of(
+        Map.of("repository_job_id", 101L, "mapped_assets", 8L),
+        Map.of("repository_job_id", 102L, "mapped_assets", 3L));
+    RepositoryDataMigrationDao dao = new JdbcRepositoryDataMigrationDao(
+        jdbcTemplate,
+        new JsonColumns(new ObjectMapper(), new MySqlDatabaseDialect()),
+        new MySqlDatabaseDialect());
+
+    assertEquals(
+        Map.of(101L, 8L, 102L, 3L),
+        dao.nexusPublicIdMappedAssets(77L),
+        "mapped asset counts should be grouped by repository job");
+  }
+
+  @Test
   void discoveredAssetAlreadyPresentInTargetIsMarkedMigrated() throws Exception {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
     RepositoryDataMigrationDao dao = new JdbcRepositoryDataMigrationDao(
@@ -125,6 +142,13 @@ class RepositoryDataMigrationDaoTest {
   private static final class RecordingJdbcTemplate extends JdbcTemplate {
     private String sql;
     private final Map<Integer, Object> parameters = new LinkedHashMap<>();
+    private List<Map<String, Object>> queryRows = List.of();
+
+    @Override
+    public List<Map<String, Object>> queryForList(String sql, Object... args) {
+      this.sql = sql;
+      return queryRows;
+    }
 
     @Override
     public <T> int[][] batchUpdate(

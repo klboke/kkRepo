@@ -10,13 +10,13 @@
 | --- | --- | --- |
 | 代码实现 | `COMPLETE` | Moon 当前源码实际使用的 `search/assets`、asset GET/DELETE、Maven group GET 已实现 |
 | 聚焦单元测试 | `PASS` | 55 tests，0 failures，0 errors，0 skipped |
-| 历史 Nexus public asset ID 改造 | `COMPLETE` | 已实现统一 ID 注册表、冲突隔离、删除 tombstone、迁移采集与只回填模式；代码尚未部署 SIT |
-| 历史 ID 聚焦测试 | `PASS` | server 聚焦测试与 Nexus REST 客户端测试均为 0 failures、0 errors、0 skipped；详见 6.6 |
+| 历史 Nexus public asset ID 改造 | `整改中` | 初版已部署 prodtest；现场发现 Maven 完整路径使用 `name` 查询不到 Nexus asset，修复已完成但尚未重新部署 |
+| 历史 ID 聚焦测试 | `PASS` | 修复后 Nexus REST 客户端 17、DAO 4、server 54 个聚焦测试全部通过；详见 6.6、6.7 |
 | 黑盒测试编译 | `PASS` | `MoonWindowsManagementBlackBoxCompatibilityTest` 已通过 reactor `test-compile` |
 | MySQL/PostgreSQL Testcontainers | `BLOCKED` | 测试源码已编译，但本机 Testcontainers 在容器启动前因 Docker 探测配置异常退出，V36 未在真实数据库执行 |
 | Nexus/kkRepo 双端实测 | `PASS` | 新 SIT `172.28.227.60:8080` 与 Nexus `10.1.11.19:8081` 完成 3 项黑盒用例，0 failures、0 errors、0 skipped |
 | 已同步 Windows 资产只读验证 | `阶段性 PASS` | `windows-artifacts` 迁移任务 38/38、0 失败且路径与 SHA-1 对齐；`windows-components` 在 98 条交集快照上 SHA-1 全部对齐，并完成分页、HEAD 和代表性完整下载验证 |
-| 生产切换 | `NO-GO` | 历史 ID 代码尚未部署和回填；`windows-components` 全量对账、多副本验证和真实 MySQL 8 的 V36 验证也尚未完成 |
+| 生产切换 | `NO-GO` | Maven 历史 ID 回填现场验收失败，修复尚未部署；Windows 全量回填、`windows-components` 全量对账、多副本验证和真实 MySQL 8 的 V36 验证也尚未完成 |
 
 这里的 `双端实测 PASS` 是历史 ID 改造前部署版本的既有 API 证据，不代表新注册表和历史 ID 回填已经在 SIT 通过。`阶段性 PASS` 只适用于测试时已经同步且实际核验的资产，不等于全量迁移验收通过。在 Windows 历史资产 ID 回填、全量资产对账和多副本验证完成前，不应把 Nexus DNS 直接切换到 kkRepo。
 
@@ -328,7 +328,56 @@ Tests run: 15, Failures: 0, Errors: 0, Skipped: 0
 BUILD SUCCESS
 ```
 
-以上仅证明代码级行为。V36 数据库集成测试仍为 `BLOCKED`，新代码尚未部署到 SIT，也尚未执行历史 Nexus ID 的双端 GET/DELETE，不能记为环境 PASS。
+以上仅证明代码级行为。V36 数据库集成测试仍为 `BLOCKED`；初版随后部署到 prodtest，但 6.7 的现场验证证明 Maven 历史 ID 回填未成功，不能记为环境 PASS。
+
+### 6.7 已执行：prodtest Maven 历史 ID 回填验收与整改
+
+验证日期：`2026-07-29`。
+
+验证端点：
+
+- Nexus 参考端：`http://10.1.11.19:8081`
+- kkRepo prodtest：`http://kkrepo-prodtest.k8s-xiasha.qunhequnhe.com`
+- 仓库：`maven-3rd-releases`
+
+用户在管理页面勾选 `Public ID backfill only` 并点击 `Sync metadata`。这是正确操作，不把问题归因于操作遗漏。现场只读验证从两端首批响应中取得 18 条 path 与 SHA-1 完全一致的资产，并分别使用 kkRepo 原生 ID 和 Nexus 历史 ID请求 kkRepo：
+
+| 验证项 | 结果 | 结论 |
+| --- | ---: | --- |
+| kkRepo 原生 ID 请求 `GET /service/rest/v1/assets/{id}` | 18/18 返回 `200` | 目标资产存在且权限可读 |
+| Nexus 历史 ID 请求同一 kkRepo endpoint | 18/18 返回 `404` | 对应 alias 未建立，现场回填验收失败 |
+
+代表样本为 `backkix/jdk15on/1.60/jdk15on-1.60.jar`，双方 SHA-1 均为 `8eef6824113185b96f4183e5b0912fa855c11fe0`。因此失败不能归因于目标资产不存在或内容不一致。
+
+任务页面中 `maven-3rd-releases` 曾显示 `finished`、`Migrated=8977`、`Failed=0`。该数字只表示迁移任务按 path 找到了已有目标资产，不等于建立了 8977 条 Nexus alias。旧页面没有展示任务实际保存的回填模式，也没有展示 alias 覆盖数，不能据此验收历史 ID。
+
+对 Nexus 3.27.0-03 的实际查询结果：
+
+| 查询 | 返回结果 |
+| --- | --- |
+| `search/assets?repository=maven-3rd-releases&name=<完整 Maven path>` | 0 条 |
+| `search/assets?repository=maven-3rd-releases&q=<完整 Maven path>` | 能返回目标项；必须继续按 repository/path 严格过滤 |
+
+根因是 Nexus 的 `name` 语义随仓库格式变化：Raw 可使用完整路径命中，而 Maven 的 name 是制品名，不是完整 asset path。初版 `findPublicAssets` 对所有格式固定使用 `name=<path>`，不符合 Nexus Maven 的实际行为。
+
+本次整改：
+
+1. Maven 资产优先使用 `maven.groupId + maven.artifactId + maven.baseVersion` 查询，再按完整 path 严格过滤；避免对约 9000 个资产逐条执行高基数模糊查询。
+2. Raw 等格式保留 `name=<path>`；Maven 坐标缺失或坐标查询没有精确结果时才使用 `q=<path>` 兜底。
+3. 所有查询均分页，并按 repository 与完整 path 严格过滤；不把坐标或模糊命中的其它文件直接登记为 alias。
+4. 迁移状态 API 和管理页面展示 `Public ID mode`，直接反映任务持久化的 `captureNexusPublicAssetIds`、`publicIdBackfillOnly`。
+5. 新增 `Nexus ID mapped assets`，按迁移任务资产与 live `NEXUS_ALIAS` 的实际数据库关联计数，不再用 `Migrated` 代替 alias 数。
+
+整改后的静态验证：
+
+```text
+NexusRestClientTest: 17/17 PASS
+RepositoryDataMigrationDaoTest: 4/4 PASS
+server 历史 ID、迁移 worker、controller 与管理 API 聚焦测试: 54/54 PASS
+admin.js / ui-i18n.js: node --check PASS
+```
+
+这些结果只证明修复代码通过本地验证。修复尚未重新部署 prodtest；现有任务不会自动重跑已经 `finished` 的仓库。部署后必须创建新的 `Public ID backfill only` 任务，并同时满足：页面模式为 `Backfill only`、仓库 `Nexus IDs` 数达到预期覆盖、Nexus 历史 ID 抽样 GET 返回 `200` 且 repository/path/SHA-1 一致，才能记为环境 PASS。
 
 ## 7. 后续验收步骤
 
@@ -349,7 +398,7 @@ BUILD SUCCESS
 
 这是当前最重要的阻断项。
 
-Moon 会把 Nexus `AssetXO.id` 保存到自身数据库。历史 ID 兼容代码已经实现，但尚未部署、执行 V36 和回填，因此生产阻断项还没有关闭。
+Moon 会把 Nexus `AssetXO.id` 保存到自身数据库。历史 ID 初版已经部署 prodtest，但 Maven 回填现场验收失败；本次修复尚未重新部署，Windows 仓库也尚未完成全量回填，因此生产阻断项还没有关闭。
 
 已实现方案不是修改 `asset.id`，也不是按新旧 ID 顺序猜测，而是统一注册表：
 
