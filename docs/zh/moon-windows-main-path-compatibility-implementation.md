@@ -2,7 +2,7 @@
 
 ## 1. 结论
 
-记录日期：`2026-07-28`
+记录日期：`2026-07-28`；SIT 双端验证更新：`2026-07-29`
 
 本次已完成 kkRepo 侧 Moon Windows 主链路所需的 Nexus 管理 API 最小兼容实现，并补齐 Raw 资产按 ID 删除、权限、审计、稳定分页、数据库索引和跨副本缓存失效。当前结论如下：
 
@@ -12,10 +12,11 @@
 | 聚焦单元测试 | `PASS` | 55 tests，0 failures，0 errors，0 skipped |
 | 黑盒测试编译 | `PASS` | `MoonWindowsManagementBlackBoxCompatibilityTest` 已通过 reactor `test-compile` |
 | MySQL Testcontainers | `BLOCKED` | 本机无可用 Docker daemon，新增 DAO 集成用例未执行 |
-| Nexus/kkRepo 双端实测 | `BLOCKED` | SIT 尚未部署本次代码，且写入/删除需要双端专用仓库和凭据 |
-| 生产切换 | `NO-GO` | 历史 Nexus opaque asset ID 映射、双端写入闭环和多副本实测尚未完成 |
+| Nexus/kkRepo 双端实测 | `PASS` | 新 SIT `172.28.227.60:8080` 与 Nexus `10.1.11.19:8081` 完成 3 项黑盒用例，0 failures、0 errors、0 skipped |
+| 已同步 Windows 资产只读验证 | `阶段性 PASS` | `windows-artifacts` 38/38 路径与 SHA-1 对齐；`windows-components` 在 98 条交集快照上 SHA-1 全部对齐，并完成分页、HEAD 和代表性完整下载验证 |
+| 生产切换 | `NO-GO` | `windows-components` 仍在同步，且历史 Nexus opaque asset ID 映射、多副本和 MySQL 集成验证尚未完成 |
 
-这里的 `代码实现完成` 不等于 `生产验收通过`。在双端 live 测试、历史 ID 迁移和多副本验证完成前，不应把 Nexus DNS 直接切换到 kkRepo。
+这里的 `双端实测 PASS` 仅说明本次覆盖的 API 行为通过；`阶段性 PASS` 只适用于测试时已经同步且实际核验的资产，不等于全量迁移验收通过。在 Windows 历史资产数据、历史 ID 迁移和多副本验证完成前，不应把 Nexus DNS 直接切换到 kkRepo。
 
 ## 2. Moon 实际调用链
 
@@ -58,12 +59,12 @@ flowchart LR
 
 | API/行为 | 本次处理 | 当前状态 |
 | --- | --- | --- |
-| `GET /service/rest/v1/search/assets` | 支持 `repository`、`name`、`continuationToken`；50 条 keyset 分页 | 代码完成，单测 PASS，双端 live BLOCKED |
-| `GET /service/rest/v1/assets/{id}` | 返回 Nexus AssetXO 所需字段并执行 READ 鉴权 | 代码完成，单测 PASS，双端 live BLOCKED |
-| `DELETE /service/rest/v1/assets/{id}` | Raw hosted 按数据库 ID 精确删除，补齐审计和缓存失效 | 代码完成，单测 PASS，双端 live BLOCKED |
-| `GET /service/rest/v1/repositories/maven/group/{repositoryName}` | 返回 Nexus 3.27 实测字段集合 | 代码完成，单测 PASS，认证双端 live BLOCKED |
-| `POST /service/rest/v1/components` | 复用已有 Raw component upload；新增公司 multipart 形状的闭环黑盒场景 | 非本次新实现，live 写入 BLOCKED |
-| `GET/HEAD /repository/{repo}/{path}` | 复用现有 Raw 内容服务；闭环黑盒场景覆盖下载、checksum 和 HEAD | 非本次新实现，live 双端 BLOCKED |
+| `GET /service/rest/v1/search/assets` | 支持 `repository`、`name`、`continuationToken`；50 条 keyset 分页 | 双端 exact/空页 PASS；`bolero` 和已迁移的 `windows-components` 前两页均为 50+50，token 连续且页间无重复 ID |
+| `GET /service/rest/v1/assets/{id}` | 返回 Nexus AssetXO 所需字段并执行 READ 鉴权 | 双端有效 ID 与非法 ID 场景 PASS |
+| `DELETE /service/rest/v1/assets/{id}` | Raw hosted 按数据库 ID 精确删除，补齐审计和缓存失效 | 双端有效 ID 删除及删除后 GET/search 场景 PASS |
+| `GET /service/rest/v1/repositories/maven/group/{repositoryName}` | 返回 Nexus 3.27 实测字段集合 | `maven-public` DTO/成员顺序及 `200/403/401` 认证语义双端 PASS |
+| `POST /service/rest/v1/components` | 复用已有 Raw component upload；新增公司 multipart 形状的闭环黑盒场景 | 双端 Raw multipart 上传 `204` PASS |
+| `GET/HEAD /repository/{repo}/{path}` | 复用现有 Raw 内容服务；闭环黑盒场景覆盖下载、checksum 和 HEAD | 双端下载内容、checksum 与 HEAD `200` PASS |
 
 明确不在本次范围内：
 
@@ -74,7 +75,7 @@ flowchart LR
 
 ## 4. Nexus 参考行为
 
-参考端为 `http://10.1.11.19:8081`，已确认版本为 Nexus Repository OSS `3.27.0-03`。本次仅对参考生产 Nexus 执行只读请求，没有上传或删除生产资产。
+参考端为 `http://10.1.11.19:8081`，已确认版本为 Nexus Repository OSS `3.27.0-03`。`2026-07-29` 的写入验证仅使用双方已有的 Raw hosted 测试仓库 `zhuyang-test` 和唯一测试路径，未写入 `windows-artifacts`、`windows-components` 等业务仓库；测试资产已通过 API 删除并完成残留扫描。
 
 | 场景 | Nexus 参考结果 | kkRepo 实现 |
 | --- | --- | --- |
@@ -83,7 +84,7 @@ flowchart LR
 | AssetXO 字段 | `downloadUrl`、`path`、`id`、`repository`、`format`、`checksum` | 同字段集合 |
 | 常见 checksum | `sha1`、`md5`，部分历史资产还有 `sha256` | 按数据库已有值返回这三类 checksum |
 | Maven group GET | `name`、`online`、`storage`、`group`；3.27 响应没有 `maven` 字段 | 同字段集合，不臆造 `maven` |
-| Maven group 匿名请求 | `403` | kkRepo 使用现有权限模型；认证成功路径仍需双端实测 |
+| Maven group 认证语义 | 管理员 `200`、匿名 `403`、错误凭据 `401` | 三种状态与 Nexus 完全一致 |
 
 Nexus 实际 asset ID 的 Base64 URL-safe 解码结构已确认是：
 
@@ -192,7 +193,7 @@ failed to connect to npipe:////./pipe/docker_engine
 
 本机没有可用 Docker daemon，也未发现可启动的 Docker Desktop/Windows 服务，因此 Testcontainers 没有运行。该测试不得记录为 PASS。
 
-### 6.4 未执行：双端 live 闭环
+### 6.4 已执行：双端 live 闭环
 
 黑盒类：
 
@@ -201,14 +202,29 @@ compat-test/src/test/java/com/github/klboke/kkrepo/compat/
 MoonWindowsManagementBlackBoxCompatibilityTest.java
 ```
 
-已定义以下双端场景：
+测试端点：
+
+- Nexus 参考端：`http://10.1.11.19:8081`
+- kkRepo SIT：`http://172.28.227.60:8080`
+
+凭据仅在执行进程中通过环境变量注入，未写入代码、Git 或本文档。
+
+第一次执行时 Nexus 被设置为只读，结果为 3 tests / 1 failure；唯一失败是 Nexus Raw 上传返回 `503`。管理员解除只读后重新执行，正式结果为：
+
+```text
+Tests run: 3, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+```
+
+通过场景：
 
 1. 不存在仓库 search 返回 Nexus 同形空页。
 2. 非法 asset ID 双端返回 `422`。
 3. 使用公司真实 Raw multipart 字段上传：`raw.directory`、`raw.asset1`、`raw.asset1.filename`。
 4. 双端 upload -> exact search -> asset GET -> download -> checksum -> HEAD -> DELETE -> 删除后 GET/search。
 5. Maven group DTO 与成员顺序对比。
-6. finally 尝试清理 fixture。
+6. 管理员、匿名和错误凭据的 Maven group 状态分别为 `200`、`403`、`401`，与 Nexus 一致。
+7. 测试资产通过 finally 清理，双端测试命名空间残留扫描均为 0。
 
 写测试默认拒绝 `windows-artifacts`，仅允许专用 `moon-windows-compat`。只有同时显式设置以下开关才允许写生产同名仓库：
 
@@ -217,20 +233,56 @@ COMPAT_WRITE_ENABLED=true
 COMPAT_MOON_ALLOW_PRODUCTION_REPOSITORY=true
 ```
 
-当前 `http://172.28.199.226:8080` 仍是未部署本次代码的 SIT。此前对旧部署的 FAIL 结果不能当作本次实现结果，本次双端状态保持 `BLOCKED`。
+写入闭环只使用双方已有的 Raw hosted 测试仓库 `zhuyang-test` 和唯一测试路径，没有向 `windows-artifacts` 或 `windows-components` 写入或删除数据。首次 Nexus 只读造成的 `503` 是无效环境轮次，不计为 kkRepo 兼容失败。
 
-## 7. SIT 验收步骤
+### 6.5 已执行：已同步 Windows 资产阶段性只读验证
 
-1. 构建 Spring Boot 可执行 jar：`mvn -pl server -am -DskipTests package spring-boot:repackage`。
-2. 在 SIT 部署本次构建并确认 V35 Flyway migration 成功。
-3. 在 Nexus 参考端和 kkRepo SIT 创建同名专用 Raw hosted 仓库 `moon-windows-compat`。
-4. 为双端测试账号授予该专用仓库的 browse/read/add/edit/delete 权限；不要复用日常生产账号。
-5. 配置 `NEXUS_COMPAT_BASE_URL=http://10.1.11.19:8081` 和 `KKREPO_COMPAT_BASE_URL=http://172.28.199.226:8080`，凭据仅放环境变量。
-6. 设置 `COMPAT_WRITE_ENABLED=true`，运行 `MoonWindowsManagementBlackBoxCompatibilityTest`。
-7. 验收 JUnit XML：三个用例必须 `0 failures / 0 errors / 0 skipped`；skip 不算 PASS。
-8. 检查双端专用 fixture 均已清理；若清理失败，按测试输出的 path 手工处理。
-9. 使用至少两个 kkRepo 副本执行跨节点 upload/search/delete/HEAD，确认版本水位和删除可见性。
-10. 最后用 Moon SIT 执行一次真实 Windows 发布、版本读取、版本删除和孤儿清理回归。
+验证日期：`2026-07-29`。测试期间同步任务仍在运行，因此组件数量是带时间戳的过程快照，不是最终迁移数量。对业务仓库仅执行 GET、HEAD 和 search，没有上传、覆盖或删除。
+
+#### 6.5.1 路径集合与元数据校验
+
+`11:00:38 +08:00` 至 `11:00:45 +08:00` 的稳定快照：
+
+| 仓库 | Nexus 响应项 | kkRepo 响应项 | 双端同路径 | SHA-1 一致 | SHA-1 不一致 | kkRepo 独有路径 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `windows-artifacts` | 38 | 20 | 20 | 20 | 0 | 0 |
+| `windows-components` | 1624 | 98 | 98 | 98 | 0 | 0 |
+
+`11:11:19 +08:00` 再次核验时，`windows-artifacts` 已达到双方 38/38，38 条路径与 SHA-1 全部一致，无双端独有路径。`windows-components` 仍持续增长，不使用运行中的跨时点计数作为最终验收依据。
+
+Nexus 的 `windows-components` 全量分页在一次快照中返回 1624 项、1623 个唯一 path；重复项的 path、ID、checksum 和 download URL 完全相同。这是来源端分页响应中的重复项，计数对账应以唯一 path 和逐 path 精确查询为准。
+
+#### 6.5.2 HEAD、有效 ID 与完整内容校验
+
+- 从两仓库各取 20 条交集资产，共 40 条执行双端 HEAD；40/40 的状态均为 `200`，`Content-Length` 和 `Content-Type` 全部一致。
+- 两个代表性制品执行双端完整流式下载，不落本地磁盘；响应体 SHA-1 与双方 search 元数据 SHA-1 均一致。
+- 两个样本在双方使用各自有效 asset ID 执行 `GET /service/rest/v1/assets/{id}`，均返回 `200`。
+
+| 仓库 / 路径 | 字节数 | Content-Type | SHA-1 | 结论 |
+| --- | ---: | --- | --- | --- |
+| `windows-artifacts/com/qunhe/dcsmesh-occ/dcsmesh-occ-68a98268-20260529082346277.zip` | 205991281 | `application/zip` | `70d02c5850d25dc8cb16e90c612404cf887e853e` | 双端响应体与元数据一致 |
+| `windows-components/fxaa/fxaa-1.3.5.exe` | 11596800 | `application/x-executable` | `66c5cfd95d0d5174806a42b3a636bb8f94fad3d4` | 双端响应体与元数据一致 |
+
+#### 6.5.3 真实业务仓库分页
+
+`windows-components` 在两端的前两页均返回 50+50 项，两端第一页和第二页均提供 continuation token，页间重复 ID 均为 0。`windows-artifacts` 达到 38 条后单页返回 38 项且 token 为 null。
+
+#### 6.5.4 已确认的限制
+
+- 将上述两个制品的 Nexus 历史 asset ID 直接请求 kkRepo，均返回 `422`；内容和 checksum 迁移成功并未解决历史 ID 映射，生产阻断项仍成立。
+- 一次试图对迁移中的全部已发现组件逐项执行 HEAD 的扩展扫描，在第 60 秒遇到单请求超时并中止；该轮不计为 PASS。本文只把已完整结束且有明确计数的 40 条 HEAD 和 2 条完整下载列为有效证据。
+- 迁移任务与额外 REST 流式同步同时运行时，任务内部计数可能暂时小于仓库实际资产数；最终验收必须在同步停止后重新冻结快照并按唯一 path 全量核验。
+
+## 7. 后续验收步骤
+
+1. 等待 `windows-components` 同步完成并停止迁移写入，冻结 Nexus 与 kkRepo 的资产清单快照。
+2. 以唯一 repository/path 为键执行全量集合对账，并对每条资产比较 SHA-1；单独报告来源端重复项、缺失项和目标端独有项。
+3. 对全量迁移结果分层抽样执行 exact search、有效 asset GET、HEAD 和完整下载摘要校验；任何超时或未执行项不得计为 PASS。
+4. 完成 Nexus REST public asset ID 到 kkRepo asset ID 的迁移映射，或完成 Moon 历史 ID 批量回填，并输出数量、遗漏和回滚报告。
+5. 在真实 MySQL 8 上执行新增 DAO 集成测试并核验 V35 Flyway migration。
+6. 使用至少两个 kkRepo 副本执行跨节点 upload/search/delete/HEAD，确认版本水位和删除可见性。
+7. 核验删除审计和异步 blob GC，确认共享 blob 不会被误删。
+8. 最后用 Moon SIT 执行一次真实 Windows 发布、版本读取、版本删除和孤儿清理回归。
 
 ## 8. 生产放行阻断项
 
@@ -249,10 +301,8 @@ Moon 会把 Nexus `AssetXO.id` 保存到自身数据库。切换后，新上传�
 
 ### 8.2 其它必须完成项
 
+- 完成 `windows-components` 全量同步，并在停止迁移写入后执行唯一 path 与 SHA-1 全量对账。
 - 在真实 MySQL 8 上执行新增 DAO 集成测试和 V35 migration 验证。
-- 双端执行有效 ID 的 GET/DELETE，不只测试非法 ID。
-- 双端验证超过 50 条资产的 continuation token 分页；当前只有单元测试覆盖分页。
-- 使用认证账号验证 Maven group 成功 DTO、无权限 `403` 和错误凭据 `401`。
 - 在双副本或多副本 SIT 验证删除后的 search、GET 和 HEAD 可见性。
 - 验证审计日志包含操作者、repository、permission、path、状态和请求关联信息。
 - 验证异步 blob GC 能处理已软删除且无引用的对象，不误删共享 blob。

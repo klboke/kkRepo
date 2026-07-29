@@ -24,6 +24,8 @@ import org.junit.jupiter.api.Test;
 /** Nexus 3 management contracts used by Moon's Windows publication and cleanup flow. */
 class MoonWindowsManagementBlackBoxCompatibilityTest {
   private static final ObjectMapper MAPPER = new ObjectMapper();
+  private static final Duration SEARCH_VISIBILITY_TIMEOUT = Duration.ofSeconds(30);
+  private static final Duration SEARCH_POLL_INTERVAL = Duration.ofMillis(250);
   private static final HttpClient HTTP = HttpClient.newBuilder()
       .connectTimeout(Duration.ofSeconds(20))
       .followRedirects(HttpClient.Redirect.NORMAL)
@@ -81,8 +83,8 @@ class MoonWindowsManagementBlackBoxCompatibilityTest {
       assertEquals(204, upload(candidate, repository, directory, filename, payload).status(),
           "candidate Raw multipart upload");
 
-      JsonNode referenceAsset = oneAsset(search(reference, repository, path));
-      JsonNode candidateAsset = oneAsset(search(candidate, repository, path));
+      JsonNode referenceAsset = awaitOneAsset(reference, repository, path);
+      JsonNode candidateAsset = awaitOneAsset(candidate, repository, path);
       referenceId = requiredText(referenceAsset, "id");
       candidateId = requiredText(candidateAsset, "id");
       assertAsset(referenceAsset, repository, path, payload);
@@ -115,8 +117,8 @@ class MoonWindowsManagementBlackBoxCompatibilityTest {
       assertEquals(404, send(candidate.request(
           "/service/rest/v1/assets/" + encodeSegment(requiredText(candidateAsset, "id")))
           .GET()).status(), "candidate GET after delete");
-      assertEmptyPage(search(reference, repository, path));
-      assertEmptyPage(search(candidate, repository, path));
+      awaitEmptyPage(reference, repository, path);
+      awaitEmptyPage(candidate, repository, path);
     } finally {
       deleteQuietly(reference, referenceId);
       deleteQuietly(candidate, candidateId);
@@ -204,6 +206,38 @@ class MoonWindowsManagementBlackBoxCompatibilityTest {
     assertEquals(1, page.path("items").size(), "exact path search must return one asset");
     assertTrue(page.path("continuationToken").isNull(), "exact path search has no next page");
     return page.path("items").get(0);
+  }
+
+  private static JsonNode awaitOneAsset(
+      Endpoint endpoint, String repository, String path) throws Exception {
+    long deadline = System.nanoTime() + SEARCH_VISIBILITY_TIMEOUT.toNanos();
+    byte[] lastPage;
+    do {
+      lastPage = search(endpoint, repository, path);
+      JsonNode page = json(lastPage);
+      if (page.path("items").isArray() && page.path("items").size() == 1) {
+        return oneAsset(lastPage);
+      }
+      Thread.sleep(SEARCH_POLL_INTERVAL.toMillis());
+    } while (System.nanoTime() < deadline);
+    return oneAsset(lastPage);
+  }
+
+  private static void awaitEmptyPage(
+      Endpoint endpoint, String repository, String path) throws Exception {
+    long deadline = System.nanoTime() + SEARCH_VISIBILITY_TIMEOUT.toNanos();
+    byte[] lastPage;
+    do {
+      lastPage = search(endpoint, repository, path);
+      JsonNode page = json(lastPage);
+      if (page.path("items").isArray()
+          && page.path("items").isEmpty()
+          && page.path("continuationToken").isNull()) {
+        return;
+      }
+      Thread.sleep(SEARCH_POLL_INTERVAL.toMillis());
+    } while (System.nanoTime() < deadline);
+    assertEmptyPage(lastPage);
   }
 
   private static void assertAsset(
