@@ -49,6 +49,7 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.TargetClassification;
 import com.github.klboke.kkrepo.security.scan.ScanFingerprints;
 import com.github.klboke.kkrepo.security.scan.ScanSubject;
 import com.github.klboke.kkrepo.security.scan.ScannerContract;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.CatalogRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.CatalogResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Component;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Finding;
@@ -93,6 +94,12 @@ class SecurityScanExecutorTest {
     verify(fixture.scans).publishSbom(any(), anyList());
     verify(fixture.metrics).recordInputBytes("MAVEN2", 8);
     verify(fixture.documents).release(anyLong(), any());
+    ArgumentCaptor<CatalogRequest> catalog = ArgumentCaptor.forClass(CatalogRequest.class);
+    ArgumentCaptor<MatchRequest> match = ArgumentCaptor.forClass(MatchRequest.class);
+    verify(fixture.adapter).catalog(catalog.capture(), any());
+    verify(fixture.adapter).match(match.capture(), any());
+    assertEquals("5:lease", catalog.getValue().runId());
+    assertEquals("5:lease", match.getValue().runId());
   }
 
   @Test
@@ -291,7 +298,11 @@ class SecurityScanExecutorTest {
             List.of("linux/amd64"),
             List.of("linux/arm64")),
         sbom.getValue().catalogFingerprint());
-    verify(fixture.adapter).scanOci(any());
+    ArgumentCaptor<com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanRequest> request =
+        ArgumentCaptor.forClass(
+            com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanRequest.class);
+    verify(fixture.adapter).scanOci(request.capture());
+    assertEquals("5:lease", request.getValue().runId());
   }
 
   @Test
@@ -567,6 +578,7 @@ class SecurityScanExecutorTest {
           "snapshot", NOW, true, Map.of("catalogEngineVersion", "1.0"));
 
       when(task.id()).thenReturn(5L);
+      when(task.attempts()).thenReturn(1);
       when(task.repositoryId()).thenReturn(1L);
       when(task.assetId()).thenReturn(10L);
       when(task.subjectKey()).thenReturn("sha256:" + SHA256);

@@ -1014,8 +1014,9 @@ WHERE id = ? AND status = 'RUNNING' AND lease_token = ?
 
 管理员取消 `RUNNING` 任务时，数据库状态和 lease fencing 仍是集群正确性的唯一真相。
 管理事务先原子提交 `CANCELLED` 状态、blob owner 释放和审计记录，提交成功后立即使用
-task id 作为 run id，向全部配置 adapter ordinal 广播带 service credential 的取消
-请求；事务回滚时不得发送取消。worker 的下一次 heartbeat 发现 lease 已失效后仍会
+`task id + 本次随机 lease token` 作为 run id，向全部配置 adapter ordinal 广播带
+service credential 的取消请求；不能只使用 attempts，因为管理员 retry 会把 attempts
+重置为 0。事务回滚时不得发送取消。worker 的下一次 heartbeat 发现 lease 已失效后仍会
 中断当前 scanner HTTP 请求并重复广播，作为管理节点提交后崩溃或网络故障的兜底。
 滚动关闭等原因直接中断执行线程时，worker 也必须先临时清除 interrupt flag，在可执行
 HTTP/数据库清理的上下文中把当前任务释放为 `RETRY_WAIT` 并广播远端取消，再恢复
@@ -1154,10 +1155,16 @@ OCI scanner 按 digest 从 kkRepo 内部 registry 地址拉取：
   每个副本使用 `FOR UPDATE SKIP LOCKED` 协作，不依赖进程内状态。
 - scanner 必须按 digest 而不是可变化 tag 拉取。
 - index 根据 platform policy 解析并记录实际扫描的平台。
+- index descriptor 只用于筛选候选 manifest；adapter 还必须读取并校验每个 child
+  config 的 `os`、`architecture` 和可选 `variant`。单 manifest 也只能满足其 config
+  声明的平台，不能把同一 manifest 重新标记成所有 required platform。
 - scanner 不挂载宿主 Docker socket。
 - adapter 自己使用有界 HTTP 客户端获取 manifest、config 与所需 layer，逐项校验
   descriptor size 和 SHA-256，并在请求独立临时目录生成本地 OCI layout；短期 token
   只用于这一阶段，不传给 Syft 子进程或写入子进程环境。
+- registry 请求 header timeout 不能替代正文 deadline：每个 response body 都由绝对
+  单调 deadline watcher 管理，peer 在 headers 后停滞时主动关闭流并返回可重试
+  `SCANNER_TIMEOUT`，不能无限占用 scanner 容量并继续 heartbeat。
 - manifest/config/layer 的压缩字节共享 `maxInputBytes`，descriptor 数量受
   `maxArchiveEntries` 约束；所有唯一 layer 在 Syft 启动前共享检查归档条目数、单文件
   大小、解压总量、嵌套深度和膨胀率。普通 tar、gzip、xz 与 zstd layer 使用同一预算。
@@ -1194,6 +1201,14 @@ task 却被标记 COMPLETE 的状态。
 
 - 使用非 root 用户和只读 root filesystem。
 - 每个请求使用独立临时目录，结束后清理。
+- scanner 在进程内同时执行“并发槽位”和“共享 scratch 字节预算”准入。单请求预留按
+  `min(maxInput, adapterInputLimit) + min(maxUncompressed, maxSingleFile * maxNestedDepth)
+  + 3 * maxOutput + maxStderr` 保守估算，并向 MiB 上取整；前两项覆盖根输入/OCI layout
+  与递归检查时同时保留的父级嵌套归档，后两项覆盖 Syft、Grype 和合并结果的受限输出。
+  单请求超过进程预算返回不可重试 `413`，并发预算在 admission timeout 内拿不到则
+  返回可重试 `429`。默认共享预算 `7 GiB`，Helm/Compose scratch volume 为 `8 GiB`，
+  Helm ephemeral-storage limit 为 `9 GiB`；预算必须始终小于实际 volume，二者调整时
+  必须同步压测。
 - 禁止执行归档中的二进制、脚本和 package lifecycle hook。
 - 禁止设备文件、FIFO、socket、hard link 和逃逸工作区的 symlink。
 - 规范化每个归档路径并拒绝绝对路径、`..` 和 Unicode/分隔符绕过。
@@ -1573,6 +1588,7 @@ kkrepo.scanner.max-queued-scans=4
 kkrepo.scanner.admission-timeout=1s
 kkrepo.scanner.retry-after-seconds=5
 kkrepo.scanner.database-lock-timeout=2s
+kkrepo.scanner.max-scratch-bytes=7516192768
 kkrepo.scanner.max-output-bytes=16777216
 kkrepo.scanner.vulnerability-database-update-interval=6h
 kkrepo.scanner.vulnerability-database-update-check-interval=1m

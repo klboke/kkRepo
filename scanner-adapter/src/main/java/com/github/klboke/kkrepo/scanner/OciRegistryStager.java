@@ -27,6 +27,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -42,6 +43,7 @@ import org.springframework.stereotype.Component;
 public class OciRegistryStager {
   private static final Pattern DIGEST = Pattern.compile("^sha256:[0-9a-f]{64}$");
   private static final long MAX_MANIFEST_BYTES = 4L * 1024 * 1024;
+  private static final long MAX_CONFIG_BYTES = 16L * 1024 * 1024;
   private static final int MAX_OCI_DESCRIPTORS = 100_000;
   private static final String ACCEPT_MANIFESTS = String.join(
       ", ",
@@ -92,8 +94,58 @@ public class OciRegistryStager {
           : List.copyOf(new LinkedHashSet<>(request.requiredPlatforms()));
       List<String> available = new ArrayList<>();
       List<String> missing = new ArrayList<>();
-      List<ManifestSelection> selections = selectManifests(
-          target, root, required, blobs, budget, deadline, available, missing);
+      List<ManifestSelection> candidates = selectManifests(
+          target, root, required, blobs, budget, deadline, missing);
+      if (candidates.isEmpty()) {
+        throw rejected(
+            "OCI_SCAN_FAILED", "No requested OCI platform could be staged", 422, false);
+      }
+
+      int descriptorCount = 0;
+      LinkedHashMap<String, Descriptor> configs = new LinkedHashMap<>();
+      for (ManifestSelection selection : candidates) {
+        JsonNode manifest = selection.manifest().document();
+        Descriptor config = descriptor(manifest.get("config"), "config");
+        if (config.size() > MAX_CONFIG_BYTES) {
+          throw rejected(
+              "OCI_CONFIG_TOO_LARGE",
+              "OCI image configuration exceeds the bounded JSON limit",
+              413,
+              false);
+        }
+        putConsistent(configs, config);
+        descriptorCount++;
+        if (descriptorCount > Math.min(MAX_OCI_DESCRIPTORS, limits.maxArchiveEntries())) {
+          throw rejected(
+              "OCI_DESCRIPTOR_LIMIT", "OCI image has too many descriptors", 413, false);
+        }
+      }
+      List<Descriptor> outstandingConfigs = configs.values().stream()
+          .filter(descriptor -> !Files.exists(blobPath(blobs, descriptor.digest())))
+          .toList();
+      budget.preflight(outstandingConfigs);
+      for (Descriptor config : outstandingConfigs) {
+        fetchBlob(target, config, blobs, budget, deadline);
+      }
+
+      Map<String, String> configPlatforms = new LinkedHashMap<>();
+      List<ManifestSelection> selections = new ArrayList<>();
+      for (ManifestSelection candidate : candidates) {
+        Descriptor config =
+            descriptor(candidate.manifest().document().get("config"), "config");
+        String actualPlatform = configPlatforms.computeIfAbsent(
+            config.digest(),
+            ignored -> readConfigPlatform(config, blobs));
+        if (!platformMatches(candidate.requestedPlatform(), actualPlatform)) {
+          addDistinct(missing, candidate.requestedPlatform());
+          continue;
+        }
+        available.add(candidate.requestedPlatform());
+        selections.add(new ManifestSelection(
+            candidate.manifest(),
+            descriptorWithPlatform(candidate.indexDescriptor(), actualPlatform),
+            candidate.requestedPlatform()));
+      }
       if (selections.isEmpty()) {
         throw rejected(
             "OCI_SCAN_FAILED", "No requested OCI platform could be staged", 422, false);
@@ -101,16 +153,10 @@ public class OciRegistryStager {
 
       LinkedHashMap<String, Descriptor> content = new LinkedHashMap<>();
       List<Descriptor> layers = new ArrayList<>();
-      int descriptorCount = 0;
       for (ManifestSelection selection : selections) {
         JsonNode manifest = selection.manifest().document();
         Descriptor config = descriptor(manifest.get("config"), "config");
         putConsistent(content, config);
-        descriptorCount++;
-        if (descriptorCount > Math.min(MAX_OCI_DESCRIPTORS, limits.maxArchiveEntries())) {
-          throw rejected(
-              "OCI_DESCRIPTOR_LIMIT", "OCI image has too many descriptors", 413, false);
-        }
         JsonNode rawLayers = manifest.get("layers");
         if (rawLayers == null || !rawLayers.isArray()) {
           throw rejected(
@@ -167,19 +213,18 @@ public class OciRegistryStager {
       Path blobs,
       TransferBudget budget,
       ScanDeadline deadline,
-      List<String> available,
       List<String> missing)
       throws IOException {
     JsonNode manifests = root.document().get("manifests");
     List<ManifestSelection> selections = new ArrayList<>();
     if (manifests == null || !manifests.isArray()) {
       for (String platform : required) {
-        available.add(platform);
         selections.add(new ManifestSelection(
             root,
-            descriptorWithPlatform(root.descriptor(), platform)));
+            root.descriptor(),
+            platform));
       }
-      return deduplicateSelections(selections);
+      return List.copyOf(selections);
     }
 
     for (String platform : required) {
@@ -191,26 +236,14 @@ public class OciRegistryStager {
         }
       }
       if (selected == null) {
-        missing.add(platform);
+        addDistinct(missing, platform);
         continue;
       }
       FetchedManifest manifest =
           fetchManifest(target, selected.digest(), selected, blobs, budget, deadline);
-      available.add(platform);
-      selections.add(new ManifestSelection(manifest, selected));
+      selections.add(new ManifestSelection(manifest, selected, platform));
     }
-    return deduplicateSelections(selections);
-  }
-
-  private static List<ManifestSelection> deduplicateSelections(
-      List<ManifestSelection> selections) {
-    LinkedHashMap<String, ManifestSelection> unique = new LinkedHashMap<>();
-    for (ManifestSelection selection : selections) {
-      unique.putIfAbsent(
-          selection.indexDescriptor().digest() + "\0" + selection.indexDescriptor().platform(),
-          selection);
-    }
-    return List.copyOf(unique.values());
+    return List.copyOf(selections);
   }
 
   private FetchedManifest fetchManifest(
@@ -274,43 +307,46 @@ public class OciRegistryStager {
         "application/octet-stream",
         deadline);
     requireSuccess(response, "blob");
-    validateContentLength(response, descriptor.size(), budget.remainingBytes(), "blob");
-    Path destination = blobPath(blobs, descriptor.digest());
-    Path temporary = Files.createTempFile(blobs, "download-", ".tmp");
-    MessageDigest digest = sha256();
-    long count = 0;
-    try (InputStream raw = response.body();
-        DigestInputStream input = new DigestInputStream(raw, digest);
-        var output = Files.newOutputStream(temporary)) {
-      byte[] buffer = new byte[64 * 1024];
-      while (true) {
-        deadline.check();
-        int read = input.read(buffer);
-        deadline.check();
-        if (read < 0) break;
-        if (read == 0) continue;
-        count += read;
-        budget.consume(read);
-        if (count > descriptor.size()) {
-          throw rejected(
-              "OCI_BLOB_SIZE_MISMATCH", "OCI blob exceeds its descriptor size", 422, false);
+    Path temporary = null;
+    boolean published = false;
+    try (InputStream raw = new DeadlineInputStream(response.body(), deadline)) {
+      validateContentLength(response, descriptor.size(), budget.remainingBytes(), "blob");
+      Path destination = blobPath(blobs, descriptor.digest());
+      temporary = Files.createTempFile(blobs, "download-", ".tmp");
+      MessageDigest digest = sha256();
+      long count = 0;
+      try (DigestInputStream input = new DigestInputStream(raw, digest);
+          var output = Files.newOutputStream(temporary)) {
+        byte[] buffer = new byte[64 * 1024];
+        while (true) {
+          deadline.check();
+          int read = input.read(buffer);
+          deadline.check();
+          if (read < 0) break;
+          if (read == 0) continue;
+          count += read;
+          budget.consume(read);
+          if (count > descriptor.size()) {
+            throw rejected(
+                "OCI_BLOB_SIZE_MISMATCH", "OCI blob exceeds its descriptor size", 422, false);
+          }
+          output.write(buffer, 0, read);
         }
-        output.write(buffer, 0, read);
       }
+      if (count != descriptor.size()) {
+        throw rejected(
+            "OCI_BLOB_SIZE_MISMATCH", "OCI blob size does not match its descriptor", 422, false);
+      }
+      String actual = HexFormat.of().formatHex(digest.digest());
+      if (!descriptor.digest().substring("sha256:".length()).equals(actual)) {
+        throw rejected(
+            "OCI_BLOB_DIGEST_MISMATCH", "OCI blob digest verification failed", 422, false);
+      }
+      Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING);
+      published = true;
     } finally {
-      if (count != descriptor.size()) Files.deleteIfExists(temporary);
+      if (!published && temporary != null) Files.deleteIfExists(temporary);
     }
-    if (count != descriptor.size()) {
-      throw rejected(
-          "OCI_BLOB_SIZE_MISMATCH", "OCI blob size does not match its descriptor", 422, false);
-    }
-    String actual = HexFormat.of().formatHex(digest.digest());
-    if (!descriptor.digest().substring("sha256:".length()).equals(actual)) {
-      Files.deleteIfExists(temporary);
-      throw rejected(
-          "OCI_BLOB_DIGEST_MISMATCH", "OCI blob digest verification failed", 422, false);
-    }
-    Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING);
   }
 
   private byte[] getBytes(
@@ -327,10 +363,10 @@ public class OciRegistryStager {
     }
     HttpResponse<InputStream> response = send(uri, token, accept, deadline);
     requireSuccess(response, kind);
-    validateContentLength(response, null, maximum, kind);
-    ByteArrayOutputStream output =
-        new ByteArrayOutputStream((int) Math.min(maximum, 64 * 1024));
-    try (InputStream input = response.body()) {
+    try (InputStream input = new DeadlineInputStream(response.body(), deadline)) {
+      validateContentLength(response, null, maximum, kind);
+      ByteArrayOutputStream output =
+          new ByteArrayOutputStream((int) Math.min(maximum, 64 * 1024));
       byte[] buffer = new byte[32 * 1024];
       while (true) {
         deadline.check();
@@ -345,8 +381,8 @@ public class OciRegistryStager {
         budget.consume(read);
         output.write(buffer, 0, read);
       }
+      return output.toByteArray();
     }
-    return output.toByteArray();
   }
 
   private HttpResponse<InputStream> send(
@@ -525,9 +561,14 @@ public class OciRegistryStager {
   private static boolean platformMatches(String requested, JsonNode rawPlatform) {
     if (rawPlatform == null || !rawPlatform.isObject()) return false;
     String actual = platform(rawPlatform);
-    if (actual == null) return false;
+    return platformMatches(requested, actual);
+  }
+
+  private static boolean platformMatches(String requested, String actual) {
+    if (requested == null || actual == null) return false;
     String[] wanted = requested.split("/", 3);
     String[] found = actual.split("/", 3);
+    if (wanted.length < 2 || found.length < 2) return false;
     if (!wanted[0].equals(found[0]) || !wanted[1].equals(found[1])) return false;
     return wanted.length < 3 || (found.length == 3 && wanted[2].equals(found[2]));
   }
@@ -544,6 +585,41 @@ public class OciRegistryStager {
     JsonNode value = node == null ? null : node.get(field);
     if (value == null || !value.isTextual() || value.textValue().isBlank()) return null;
     return value.textValue();
+  }
+
+  private String readConfigPlatform(Descriptor descriptor, Path blobs) {
+    Path config = blobPath(blobs, descriptor.digest());
+    try {
+      if (Files.size(config) != descriptor.size()) {
+        throw rejected(
+            "OCI_BLOB_SIZE_MISMATCH",
+            "OCI image configuration size does not match its descriptor",
+            422,
+            false);
+      }
+      JsonNode document;
+      try (InputStream input = Files.newInputStream(config)) {
+        document = mapper.readTree(input);
+      }
+      String value = document == null || !document.isObject() ? null : platform(document);
+      if (value == null) {
+        throw rejected(
+            "OCI_CONFIG_INVALID",
+            "OCI image configuration does not declare a valid platform",
+            422,
+            false);
+      }
+      return value;
+    } catch (ScannerRequestException e) {
+      throw e;
+    } catch (IOException e) {
+      throw new ScannerRequestException(
+          "OCI_STAGE_IO", "Unable to inspect the OCI image configuration", 503, true, e);
+    }
+  }
+
+  private static void addDistinct(List<String> values, String value) {
+    if (!values.contains(value)) values.add(value);
   }
 
   private static void writeBlob(Path blobs, String digest, byte[] body)
@@ -635,6 +711,96 @@ public class OciRegistryStager {
     }
   }
 
+  /**
+   * Closes a registry response body at the absolute scanner deadline.
+   *
+   * <p>Java HttpClient completes an {@code ofInputStream} response when headers arrive, so the
+   * request timeout alone cannot bound a peer that stalls during a later body read. Closing the
+   * body from a lightweight deadline watcher unblocks that read without relying on polling.
+   */
+  private static final class DeadlineInputStream extends InputStream {
+    private final InputStream delegate;
+    private final AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicBoolean expired = new AtomicBoolean();
+    private final Thread deadlineWatcher;
+
+    private DeadlineInputStream(InputStream delegate, ScanDeadline deadline) {
+      this.delegate = delegate;
+      Duration remaining = deadline.remaining();
+      this.deadlineWatcher = Thread.ofVirtual()
+          .name("kkrepo-scanner-registry-deadline")
+          .start(() -> expireAfter(remaining));
+    }
+
+    @Override
+    public int read() throws IOException {
+      try {
+        int value = delegate.read();
+        requireWithinDeadline();
+        return value;
+      } catch (IOException e) {
+        throw translate(e);
+      }
+    }
+
+    @Override
+    public int read(byte[] value, int offset, int length) throws IOException {
+      try {
+        int count = delegate.read(value, offset, length);
+        requireWithinDeadline();
+        return count;
+      } catch (IOException e) {
+        throw translate(e);
+      }
+    }
+
+    @Override
+    public void close() throws IOException {
+      deadlineWatcher.interrupt();
+      if (closed.compareAndSet(false, true)) delegate.close();
+    }
+
+    private void expireAfter(Duration remaining) {
+      try {
+        Thread.sleep(remaining);
+      } catch (InterruptedException stopped) {
+        return;
+      }
+      expired.set(true);
+      if (closed.compareAndSet(false, true)) {
+        try {
+          delegate.close();
+        } catch (IOException ignored) {
+          // The blocked reader translates the deadline once close returns or fails.
+        }
+      }
+    }
+
+    private void requireWithinDeadline() {
+      if (expired.get()) throw timeout(null);
+    }
+
+    private RuntimeException translate(IOException failure) throws IOException {
+      if (expired.get()) return timeout(failure);
+      throw failure;
+    }
+
+    private static ScannerRequestException timeout(Throwable cause) {
+      return cause == null
+          ? new ScannerRequestException(
+              "SCANNER_TIMEOUT",
+              "Scanner request exceeded its end-to-end time limit",
+              504,
+              true)
+          : new ScannerRequestException(
+              "SCANNER_TIMEOUT",
+              "Scanner request exceeded its end-to-end time limit",
+              504,
+              true,
+              cause);
+    }
+  }
+
   private record RegistryTarget(
       String scheme, String authority, String repository, String token) {
     private static RegistryTarget from(OciScanRequest request) {
@@ -644,7 +810,10 @@ public class OciRegistryStager {
       String repository = prefix.isEmpty()
           ? request.repository() : prefix + "/" + request.repository();
       return new RegistryTarget(
-          registry.getScheme(), registry.getRawAuthority(), repository, request.scopedBearerToken());
+          registry.getScheme(),
+          registry.getRawAuthority(),
+          repository,
+          request.scopedBearerToken());
     }
 
     private URI manifestUri(String reference) {
@@ -664,7 +833,7 @@ public class OciRegistryStager {
   private record FetchedManifest(Descriptor descriptor, JsonNode document) {}
 
   private record ManifestSelection(
-      FetchedManifest manifest, Descriptor indexDescriptor) {}
+      FetchedManifest manifest, Descriptor indexDescriptor, String requestedPlatform) {}
 
   public record StagedImage(
       Path layout,

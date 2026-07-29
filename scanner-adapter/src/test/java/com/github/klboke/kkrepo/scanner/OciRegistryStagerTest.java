@@ -17,6 +17,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -53,7 +54,7 @@ class OciRegistryStagerTest {
 
   @Test
   void stagesAndInspectsARegistryImageBeforeSyftRuns() throws Exception {
-    byte[] config = "{}".getBytes(StandardCharsets.UTF_8);
+    byte[] config = config("linux", "amd64", null);
     byte[] layer = gzipTar("usr/lib/package.txt", "hello".getBytes(StandardCharsets.UTF_8));
     byte[] manifest = manifest(config, layer);
     registry = new Registry(Map.of(
@@ -83,7 +84,7 @@ class OciRegistryStagerTest {
 
   @Test
   void inspectsZstdCompressedOciLayersWithinTheSameResourceBudget() throws Exception {
-    byte[] config = "{}".getBytes(StandardCharsets.UTF_8);
+    byte[] config = config("linux", "amd64", null);
     byte[] layer = zstdTar("usr/lib/package.txt", "zstd".getBytes(StandardCharsets.UTF_8));
     byte[] manifest = manifest(config, layer, ZSTD_LAYER_TYPE);
     registry = new Registry(Map.of(
@@ -105,7 +106,7 @@ class OciRegistryStagerTest {
 
   @Test
   void rejectsAggregateDescriptorBytesBeforeDownloadingAnyLayer() throws Exception {
-    byte[] config = "{}".getBytes(StandardCharsets.UTF_8);
+    byte[] config = config("linux", "amd64", null);
     String hugeLayerDigest = "sha256:" + "a".repeat(64);
     byte[] manifest = ("""
         {"schemaVersion":2,"mediaType":"%s",
@@ -119,7 +120,9 @@ class OciRegistryStagerTest {
             LAYER_TYPE,
             hugeLayerDigest)
         .getBytes(StandardCharsets.UTF_8);
-    registry = new Registry(Map.of(manifestPath(digest(manifest)), manifest));
+    registry = new Registry(Map.of(
+        manifestPath(digest(manifest)), manifest,
+        blobPath(digest(config)), config));
     OciRegistryStager stager =
         new OciRegistryStager(new ObjectMapper(), new ArchiveGuard());
 
@@ -132,12 +135,14 @@ class OciRegistryStagerTest {
             new ScanDeadline(10)));
 
     assertEquals("OCI_INPUT_TOO_LARGE", failure.code());
-    assertEquals(List.of(manifestPath(digest(manifest))), registry.paths());
+    assertEquals(
+        List.of(manifestPath(digest(manifest)), blobPath(digest(config))),
+        registry.paths());
   }
 
   @Test
   void appliesOneExpandedByteBudgetAcrossOciLayers() throws Exception {
-    byte[] config = "{}".getBytes(StandardCharsets.UTF_8);
+    byte[] config = config("linux", "amd64", null);
     byte[] layer = gzipTar("large.bin", new byte[4096]);
     byte[] manifest = manifest(config, layer);
     registry = new Registry(Map.of(
@@ -160,7 +165,7 @@ class OciRegistryStagerTest {
 
   @Test
   void stagesOnlyRequestedIndexPlatformsAndReportsMissingOnes() throws Exception {
-    byte[] config = "{}".getBytes(StandardCharsets.UTF_8);
+    byte[] config = config("linux", "amd64", null);
     byte[] layer = gzipTar("package.txt", "ok".getBytes(StandardCharsets.UTF_8));
     byte[] child = manifest(config, layer);
     byte[] index = ("""
@@ -210,6 +215,89 @@ class OciRegistryStagerTest {
     assertEquals("OCI_BLOB_DIGEST_MISMATCH", failure.code());
   }
 
+  @Test
+  void verifiesSingleManifestPlatformsFromTheImageConfiguration() throws Exception {
+    byte[] config = config("linux", "amd64", null);
+    byte[] layer = gzipTar("package.txt", "ok".getBytes(StandardCharsets.UTF_8));
+    byte[] manifest = manifest(config, layer);
+    registry = new Registry(Map.of(
+        manifestPath(digest(manifest)), manifest,
+        blobPath(digest(config)), config,
+        blobPath(digest(layer)), layer));
+    OciRegistryStager stager =
+        new OciRegistryStager(new ObjectMapper(), new ArchiveGuard());
+
+    OciRegistryStager.StagedImage staged = stager.stage(
+        request(
+            registry.url(),
+            digest(manifest),
+            List.of("linux/amd64", "linux/arm64")),
+        limits(1024 * 1024, 1024 * 1024, 1024 * 1024),
+        temporary,
+        new ScanDeadline(10));
+
+    assertEquals(List.of("linux/amd64"), staged.availablePlatforms());
+    assertEquals(List.of("linux/arm64"), staged.missingPlatforms());
+    String index = Files.readString(staged.layout().resolve("index.json"));
+    assertTrue(index.contains("\"architecture\":\"amd64\""));
+    assertFalse(index.contains("\"architecture\":\"arm64\""));
+  }
+
+  @Test
+  void rejectsAnIndexPlatformWhoseManifestConfigurationDisagrees() throws Exception {
+    byte[] config = config("linux", "arm64", null);
+    byte[] layer = gzipTar("package.txt", "ok".getBytes(StandardCharsets.UTF_8));
+    byte[] child = manifest(config, layer);
+    byte[] index = ("""
+        {"schemaVersion":2,"mediaType":"%s","manifests":[{
+          "mediaType":"%s","digest":"%s","size":%d,
+          "platform":{"os":"linux","architecture":"amd64"}}]}
+        """).formatted(INDEX_TYPE, MANIFEST_TYPE, digest(child), child.length)
+        .getBytes(StandardCharsets.UTF_8);
+    registry = new Registry(Map.of(
+        manifestPath(digest(index)), index,
+        manifestPath(digest(child)), child,
+        blobPath(digest(config)), config,
+        blobPath(digest(layer)), layer));
+    OciRegistryStager stager =
+        new OciRegistryStager(new ObjectMapper(), new ArchiveGuard());
+
+    ScannerRequestException failure = assertThrows(
+        ScannerRequestException.class,
+        () -> stager.stage(
+            request(registry.url(), digest(index), List.of("linux/amd64")),
+            limits(1024 * 1024, 1024 * 1024, 1024 * 1024),
+            temporary,
+            new ScanDeadline(10)));
+
+    assertEquals("OCI_SCAN_FAILED", failure.code());
+    assertFalse(registry.paths().contains(blobPath(digest(layer))));
+  }
+
+  @Test
+  void closesARegistryBodyThatStallsPastTheAbsoluteDeadline() throws Exception {
+    byte[] config = config("linux", "amd64", null);
+    byte[] layer = gzipTar("package.txt", "ok".getBytes(StandardCharsets.UTF_8));
+    byte[] manifest = manifest(config, layer);
+    registry = new Registry(
+        Map.of(manifestPath(digest(manifest)), manifest),
+        manifestPath(digest(manifest)));
+    OciRegistryStager stager =
+        new OciRegistryStager(new ObjectMapper(), new ArchiveGuard());
+
+    ScannerRequestException failure = org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(
+        Duration.ofSeconds(2),
+        () -> assertThrows(
+            ScannerRequestException.class,
+            () -> stager.stage(
+                request(registry.url(), digest(manifest), List.of("linux/amd64")),
+                limits(1024 * 1024, 1024 * 1024, 1024 * 1024),
+                temporary,
+                new ScanDeadline(Duration.ofMillis(100), System::nanoTime))));
+
+    assertEquals("SCANNER_TIMEOUT", failure.code());
+  }
+
   private static ResourceLimits limits(
       long maxInput, long maxExpanded, long maxSingleFile) {
     return new ResourceLimits(maxInput, 100, maxExpanded, maxSingleFile, 2, 30);
@@ -247,6 +335,12 @@ class OciRegistryStagerTest {
             layerType,
             digest(layer),
             layer.length)
+        .getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static byte[] config(String os, String architecture, String variant) {
+    String suffix = variant == null ? "" : ",\"variant\":\"" + variant + "\"";
+    return ("{\"os\":\"" + os + "\",\"architecture\":\"" + architecture + "\"" + suffix + "}")
         .getBytes(StandardCharsets.UTF_8);
   }
 
@@ -291,11 +385,19 @@ class OciRegistryStagerTest {
   private static final class Registry implements AutoCloseable {
     private final HttpServer server;
     private final Map<String, byte[]> content;
+    private final String stalledPath;
+    private final java.util.concurrent.CountDownLatch releaseStall =
+        new java.util.concurrent.CountDownLatch(1);
     private final List<String> paths = new CopyOnWriteArrayList<>();
     private final List<String> authorizations = new CopyOnWriteArrayList<>();
 
     private Registry(Map<String, byte[]> content) throws IOException {
+      this(content, null);
+    }
+
+    private Registry(Map<String, byte[]> content, String stalledPath) throws IOException {
       this.content = new LinkedHashMap<>(content);
+      this.stalledPath = stalledPath;
       server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
       server.createContext("/", this::serve);
       server.start();
@@ -323,13 +425,24 @@ class OciRegistryStagerTest {
       } else {
         exchange.getResponseHeaders().set("Content-Length", Long.toString(body.length));
         exchange.sendResponseHeaders(200, body.length);
-        exchange.getResponseBody().write(body);
+        if (path.equals(stalledPath)) {
+          exchange.getResponseBody().write(body, 0, 1);
+          exchange.getResponseBody().flush();
+          try {
+            releaseStall.await(5, java.util.concurrent.TimeUnit.SECONDS);
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+          }
+        } else {
+          exchange.getResponseBody().write(body);
+        }
       }
       exchange.close();
     }
 
     @Override
     public void close() {
+      releaseStall.countDown();
       server.stop(0);
     }
   }

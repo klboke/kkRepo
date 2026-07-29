@@ -223,7 +223,7 @@ public class SecurityScanExecutor {
         scannerTimeoutSeconds + DockerAuthService.SCANNER_PULL_TOKEN_GRACE_SECONDS);
     OciScanRequest request = new OciScanRequest(
         ScannerContract.API_VERSION,
-        Long.toString(task.id()),
+        SecurityScanExecutionId.from(task),
         task.id() + ":oci:" + task.contentGeneration(),
         properties.getOciRegistryUrl(),
         repository.name() + "/" + manifest.imageName(),
@@ -295,7 +295,7 @@ public class SecurityScanExecutor {
 
     CatalogRequest request = new CatalogRequest(
         ScannerContract.API_VERSION,
-        Long.toString(task.id()),
+        SecurityScanExecutionId.from(task),
         task.id() + ":catalog:" + task.contentGeneration(),
         subject,
         profile.configurationDigest(),
@@ -426,7 +426,7 @@ public class SecurityScanExecutor {
     }
     MatchRequest request = new MatchRequest(
         ScannerContract.API_VERSION,
-        Long.toString(task.id()),
+        SecurityScanExecutionId.from(task),
         task.id() + ":match:" + snapshot.snapshotFingerprint(),
         sbom.documentSha256(),
         profile.configurationDigest(),

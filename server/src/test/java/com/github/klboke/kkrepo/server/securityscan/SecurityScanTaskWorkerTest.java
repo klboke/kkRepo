@@ -132,7 +132,7 @@ class SecurityScanTaskWorkerTest {
         throw new ScannerAdapterException(
             "SCANNER_INTERRUPTED", "scanner request interrupted", true);
       });
-      when(fixture.adapter.cancel("5")).thenAnswer(invocation -> {
+      when(fixture.adapter.cancel("5:lease")).thenAnswer(invocation -> {
         cancellationSawInterrupt.set(Thread.currentThread().isInterrupted());
         return null;
       });
@@ -145,7 +145,7 @@ class SecurityScanTaskWorkerTest {
       fixture.worker.runOnce();
 
       var cleanupOrder = org.mockito.Mockito.inOrder(fixture.adapter, fixture.finalizer);
-      cleanupOrder.verify(fixture.adapter).cancel("5");
+      cleanupOrder.verify(fixture.adapter).cancel("5:lease");
       cleanupOrder.verify(fixture.finalizer).failCurrentTask(
           eq(fixture.task),
           eq("SCAN_INTERRUPTED"),
@@ -204,7 +204,7 @@ class SecurityScanTaskWorkerTest {
       heartbeat.invoke(
           fixture.worker, fixture.task, activeThread, new AtomicBoolean(false), new Object());
       verify(fixture.scans).heartbeatTask(eq(5L), eq("lease"), any(), any());
-      verify(fixture.adapter).cancel("5");
+      verify(fixture.adapter).cancel("5:lease");
       assertTrue(activeThread.isInterrupted());
     } finally {
       fixture.worker.shutdown();
@@ -288,7 +288,7 @@ class SecurityScanTaskWorkerTest {
 
       assertFalse(activeThread.isInterrupted());
       assertTrue(callbackFailure.get() == null);
-      verify(fixture.adapter, never()).cancel("5");
+      verify(fixture.adapter, never()).cancel("5:lease");
     } finally {
       fixture.worker.shutdown();
     }

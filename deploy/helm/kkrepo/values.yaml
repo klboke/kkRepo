@@ -122,6 +122,9 @@ securityScanning:
     maxResponseTokens: 262144
     responseMemoryBudgetBytes: 268435456
     maxStderrBytes: 262144
+    # Shared admission budget across concurrent scans. Keep this below scratchVolumeSize.
+    maxScratchBytes: 7516192768
+    scratchVolumeSize: 8Gi
     maxConcurrentScans: 2
     maxQueuedScans: 4
     admissionTimeout: 1s
@@ -145,7 +148,7 @@ securityScanning:
     limits:
       cpu: "2"
       memory: 4Gi
-      ephemeral-storage: 5Gi
+      ephemeral-storage: 9Gi
   startupProbe:
     failureThreshold: 60
     periodSeconds: 5

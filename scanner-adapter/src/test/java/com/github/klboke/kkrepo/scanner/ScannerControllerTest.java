@@ -81,6 +81,8 @@ class ScannerControllerTest {
 
     OciScanRequest ociRequest = mock(OciScanRequest.class);
     when(ociRequest.runId()).thenReturn("run-oci");
+    when(ociRequest.limits()).thenReturn(new ResourceLimits(
+        2048, 200, 4096, 1024, 3, 30));
     OciScanResponse ociResponse =
         new OciScanResponse(catalog, match, List.of(), List.of());
     when(engine.scanOci(ociRequest)).thenReturn(ociResponse);

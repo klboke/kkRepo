@@ -281,12 +281,16 @@ class SecurityScanManagementServiceCoreTest {
     assertEquals("sha256:" + "a".repeat(64), draft.getValue().subjectKey());
 
     ScanTask task = mock(ScanTask.class);
+    when(task.id()).thenReturn(77L);
     when(task.repositoryId()).thenReturn(1L);
+    when(task.status()).thenReturn(TaskStatus.RUNNING);
+    when(task.attempts()).thenReturn(3);
+    when(task.leaseToken()).thenReturn("lease");
     when(scans.findTask(77L)).thenReturn(Optional.of(task));
     when(scans.requeueTask(eq(77L), any(), eq("admin"))).thenReturn(true);
     when(scans.cancelTask(eq(77L), any())).thenReturn(true);
     service.retry(actor, 77L);
-    service.cancel(actor, 77L);
+    assertEquals("77:lease", service.cancel(actor, 77L));
     verify(scans).requeueTask(eq(77L), any(), eq("admin"));
     verify(scans).cancelTask(eq(77L), any());
     verify(documentPersistence).releaseOwner(77L);

@@ -83,12 +83,17 @@ public class ScannerController {
       throws IOException {
     authorize(credential);
     requireApiVersion(apiVersion);
-    return executions.execute(runId, () -> capacity.execute(() -> engine.catalog(
-            request.getInputStream(),
-            expectedSha256,
-            expectedSize,
-            ScannerArtifactType.fromWireValue(artifactType),
-            limits(request))));
+    ResourceLimits resourceLimits = limits(request);
+    return executions.execute(
+        runId,
+        () -> capacity.execute(
+            resourceLimits,
+            () -> engine.catalog(
+                request.getInputStream(),
+                expectedSha256,
+                expectedSize,
+                ScannerArtifactType.fromWireValue(artifactType),
+                resourceLimits)));
   }
 
   @PostMapping("/v1/match")
@@ -102,10 +107,12 @@ public class ScannerController {
       throws IOException {
     authorize(credential);
     requireApiVersion(apiVersion);
+    ResourceLimits resourceLimits = limits(request);
     return executions.execute(
         runId,
         () -> capacity.execute(
-            () -> engine.match(request.getInputStream(), expectedSha256, limits(request))));
+            resourceLimits,
+            () -> engine.match(request.getInputStream(), expectedSha256, resourceLimits)));
   }
 
   @PostMapping("/v1/oci/scan")
@@ -114,9 +121,10 @@ public class ScannerController {
       @RequestHeader(value = "X-KKRepo-Scanner-Credential", required = false)
           String credential) throws IOException {
     authorize(credential);
+    ResourceLimits resourceLimits = request == null ? null : request.limits();
     return executions.execute(
         request == null ? null : request.runId(),
-        () -> capacity.execute(() -> engine.scanOci(request)));
+        () -> capacity.execute(resourceLimits, () -> engine.scanOci(request)));
   }
 
   @PostMapping("/v1/runs/{runId}/cancel")

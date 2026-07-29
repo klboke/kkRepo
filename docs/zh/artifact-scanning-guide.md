@@ -51,9 +51,12 @@ Artifact Scanning 使用 Syft 生成 CycloneDX SBOM，并使用 Grype 匹配已�
 - kkRepo 与 scanner adapter 必须配置同一份高强度 service credential。
 
 默认 Helm 资源为 scanner adapter 请求 `500m CPU / 1 GiB`，限制
-`2 CPU / 4 GiB`，并提供 `5 GiB` ephemeral-storage 上限和 `10 GiB` 漏洞数据库 PVC。
-Compose 默认提供 `4 GiB` `/tmp` tmpfs。实际容量应根据最大制品、并发数和扫描耗时
-压测后调整。
+`2 CPU / 4 GiB`，并提供 `9 GiB` ephemeral-storage 上限和 `10 GiB` 漏洞数据库 PVC。
+Helm 与 Compose 默认提供 `8 GiB` scratch volume，并设置 `7 GiB` 的进程级共享准入
+预算。scanner adapter 会按照暂存输入、递归检查时保留的嵌套归档和受限进程输出估算
+每个请求的空间；单个请求无法放入预算时返回 `413`，并发竞争则短暂等待后返回可重试
+的 `429`，避免磁盘被过量承诺。准入预算应小于实际 scratch volume，再根据最大制品
+和扫描耗时压测结果同步调整两者。
 
 ## Docker Compose 部署
 
@@ -430,6 +433,7 @@ Waivers 页签用于查看 Active/Expired、scope、仓库、制品、exception�
 | `KKREPO_SCANNER_RETRY_AFTER_SECONDS` | `5` | 容量拒绝时的重试提示 |
 | `KKREPO_SCANNER_MAX_INPUT_BYTES` | `2147483648` | adapter 输入硬上限 |
 | `KKREPO_SCANNER_MAX_OUTPUT_BYTES` | `16777216` | 单份原始 SBOM/report 上限；OCI 同时用作平台原始文档总量和合并 SBOM 上限 |
+| `KKREPO_SCANNER_MAX_SCRATCH_BYTES` | `7516192768` | 单进程共享 scratch 准入预算；必须小于实际 scratch volume |
 
 每个 profile 的扫描超时最长为 3600 秒，并覆盖完整 adapter 请求：输入流复制、归档检查、
 所有 Syft/Grype 进程和结果映射共用同一个单调时钟 deadline。OCI 临时拉取令牌在该有效

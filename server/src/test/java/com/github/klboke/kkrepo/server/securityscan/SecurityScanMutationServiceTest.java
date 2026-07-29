@@ -70,6 +70,7 @@ class SecurityScanMutationServiceTest {
     when(waiver.scopeType()).thenReturn("FINDING");
 
     when(management.rescan(actor, 1L)).thenReturn(2L);
+    when(management.cancel(actor, 10L)).thenReturn("10:lease");
     when(management.updateRepositoryConfig(actor, 8L, configCommand)).thenReturn(config);
     when(management.createPolicy(actor, policyCommand)).thenReturn(policy);
     when(management.revisePolicy(actor, 4L, policyCommand)).thenReturn(policy);
@@ -95,7 +96,7 @@ class SecurityScanMutationServiceTest {
         request, actor, "RETRY", null, Map.of("taskId", 9L));
     verify(audit).record(
         request, actor, "CANCEL", null, Map.of("taskId", 10L));
-    verify(adapter).cancel("10");
+    verify(adapter).cancel("10:lease");
     verify(audit).record(
         request,
         actor,
@@ -140,6 +141,7 @@ class SecurityScanMutationServiceTest {
         new SecurityScanMutationService(management, audit, adapter);
     HttpServletRequest request = mock(HttpServletRequest.class);
     AuthenticatedSubject actor = mock(AuthenticatedSubject.class);
+    when(management.cancel(actor, 10L)).thenReturn("10:lease");
 
     TransactionSynchronizationManager.initSynchronization();
     try {
@@ -148,7 +150,7 @@ class SecurityScanMutationServiceTest {
       verifyNoInteractions(adapter);
       assertEquals(1, TransactionSynchronizationManager.getSynchronizations().size());
       TransactionSynchronizationManager.getSynchronizations().getFirst().afterCommit();
-      verify(adapter).cancel("10");
+      verify(adapter).cancel("10:lease");
     } finally {
       TransactionSynchronizationManager.clearSynchronization();
     }
@@ -163,14 +165,31 @@ class SecurityScanMutationServiceTest {
         new SecurityScanMutationService(management, audit, adapter);
     HttpServletRequest request = mock(HttpServletRequest.class);
     AuthenticatedSubject actor = mock(AuthenticatedSubject.class);
+    when(management.cancel(actor, 10L)).thenReturn("10:lease");
     doThrow(new ScannerAdapterException("SCANNER_IO", "unavailable", true))
         .when(adapter)
-        .cancel("10");
+        .cancel("10:lease");
 
     assertDoesNotThrow(() -> mutations.cancel(request, actor, 10L));
 
     verify(management).cancel(actor, 10L);
     verify(audit).record(request, actor, "CANCEL", null, Map.of("taskId", 10L));
-    verify(adapter).cancel("10");
+    verify(adapter).cancel("10:lease");
+  }
+
+  @Test
+  void doesNotBroadcastForWorkThatWasNotRunning() {
+    SecurityScanManagementService management = mock(SecurityScanManagementService.class);
+    SecurityScanAuditService audit = mock(SecurityScanAuditService.class);
+    Adapter adapter = mock(Adapter.class);
+    SecurityScanMutationService mutations =
+        new SecurityScanMutationService(management, audit, adapter);
+    HttpServletRequest request = mock(HttpServletRequest.class);
+    AuthenticatedSubject actor = mock(AuthenticatedSubject.class);
+
+    mutations.cancel(request, actor, 10L);
+
+    verify(management).cancel(actor, 10L);
+    verifyNoInteractions(adapter);
   }
 }

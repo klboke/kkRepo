@@ -52,28 +52,29 @@ public class SecurityScanMutationService {
 
   public void cancel(
       HttpServletRequest request, AuthenticatedSubject actor, long taskId) {
-    management.cancel(actor, taskId);
+    String executionId = management.cancel(actor, taskId);
     audit.record(request, actor, "CANCEL", null, Map.of("taskId", taskId));
-    cancelAdapterAfterCommit(taskId);
+    cancelAdapterAfterCommit(taskId, executionId);
   }
 
-  private void cancelAdapterAfterCommit(long taskId) {
+  private void cancelAdapterAfterCommit(long taskId, String executionId) {
+    if (executionId == null) return;
     if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-      broadcastCancellation(taskId);
+      broadcastCancellation(taskId, executionId);
       return;
     }
     TransactionSynchronizationManager.registerSynchronization(
         new TransactionSynchronization() {
           @Override
           public void afterCommit() {
-            broadcastCancellation(taskId);
+            broadcastCancellation(taskId, executionId);
           }
         });
   }
 
-  private void broadcastCancellation(long taskId) {
+  private void broadcastCancellation(long taskId, String executionId) {
     try {
-      adapter.cancel(Long.toString(taskId));
+      adapter.cancel(executionId);
     } catch (RuntimeException failure) {
       // The committed task row remains the publication fence and the owner heartbeat provides a
       // retry-independent fallback. Immediate adapter cancellation is deliberately best effort.

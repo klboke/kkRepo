@@ -57,6 +57,8 @@ spec:
               value: {{ .Values.securityScanning.limits.maxOutputBytes | quote }}
             - name: KKREPO_SCANNER_MAX_STDERR_BYTES
               value: {{ .Values.securityScanning.limits.maxStderrBytes | quote }}
+            - name: KKREPO_SCANNER_MAX_SCRATCH_BYTES
+              value: {{ .Values.securityScanning.limits.maxScratchBytes | quote }}
             - name: KKREPO_SCANNER_MAX_CONCURRENT_SCANS
               value: {{ .Values.securityScanning.limits.maxConcurrentScans | quote }}
             - name: KKREPO_SCANNER_MAX_QUEUED_SCANS
@@ -92,7 +94,7 @@ spec:
       volumes:
         - name: tmp
           emptyDir:
-            sizeLimit: 4Gi
+            sizeLimit: {{ .Values.securityScanning.limits.scratchVolumeSize }}
         - name: scanner-db
           {{- if .Values.securityScanning.scannerDatabase.persistence.enabled }}
           persistentVolumeClaim:

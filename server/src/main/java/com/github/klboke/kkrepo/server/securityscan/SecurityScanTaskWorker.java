@@ -205,7 +205,7 @@ public class SecurityScanTaskWorker {
     try {
       // Keep the fenced RUNNING lease while broadcasting cancellation so another replica cannot
       // claim the same task and then receive this old execution's cancellation request.
-      cancelAdapterRun(task.id());
+      cancelAdapterRun(task);
       try {
         finalizer.failCurrentTask(
             task,
@@ -246,7 +246,7 @@ public class SecurityScanTaskWorker {
           }
         }
         if (cancel) {
-          cancelAdapterRun(task.id());
+          cancelAdapterRun(task);
         }
       }
     } catch (RuntimeException e) {
@@ -275,13 +275,17 @@ public class SecurityScanTaskWorker {
     }
   }
 
-  private void cancelAdapterRun(long taskId) {
+  private void cancelAdapterRun(ScanTask task) {
     try {
-      adapter.cancel(Long.toString(taskId));
+      adapter.cancel(SecurityScanExecutionId.from(task));
     } catch (RuntimeException e) {
       // The durable cancelled/taken-over task row already fences publication. A cancellation
       // broadcast can still fail if the owning adapter is unavailable, so release is best effort.
-      log.debug("Unable to cancel active adapter work for task {}", taskId, e);
+      log.debug(
+          "Unable to cancel active adapter work for task {} attempt {}",
+          task.id(),
+          task.attempts(),
+          e);
     }
   }
 

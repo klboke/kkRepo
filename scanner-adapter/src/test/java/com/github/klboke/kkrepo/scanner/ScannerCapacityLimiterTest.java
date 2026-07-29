@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.github.klboke.kkrepo.security.scan.ScannerContract.ResourceLimits;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
@@ -106,6 +107,65 @@ class ScannerCapacityLimiterTest {
       }
       executor.shutdownNow();
     }
+  }
+
+  @Test
+  void reservesNestedScratchAcrossConcurrentScansAndRejectsImpossibleRequests()
+      throws Exception {
+    long mib = 1024L * 1024;
+    ScannerAdapterProperties properties = new ScannerAdapterProperties();
+    properties.setMaxConcurrentScans(2);
+    properties.setMaxQueuedScans(1);
+    properties.setAdmissionTimeout(Duration.ofMillis(20));
+    properties.setMaxInputBytes(64 * mib);
+    properties.setMaxOutputBytes(mib);
+    properties.setMaxStderrBytes(mib);
+    properties.setMaxScratchBytes(32 * mib);
+    SimpleMeterRegistry registry = new SimpleMeterRegistry();
+    ScannerCapacityLimiter limiter = new ScannerCapacityLimiter(properties, registry);
+    ResourceLimits nested = new ResourceLimits(
+        16 * mib, 100, 16 * mib, 8 * mib, 1, 30);
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    CountDownLatch entered = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    Future<Void> active = executor.submit(() -> limiter.execute(nested, () -> {
+      entered.countDown();
+      try {
+        assertTrue(release.await(5, TimeUnit.SECONDS));
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new AssertionError(e);
+      }
+      return null;
+    }));
+    try {
+      assertTrue(entered.await(1, TimeUnit.SECONDS));
+      assertEquals(
+          28 * (double) mib,
+          registry.get("kkrepo_scanner_scratch_reserved_bytes").gauge().value());
+
+      ScannerRequestException concurrent = assertThrows(
+          ScannerRequestException.class,
+          () -> limiter.execute(nested, () -> null));
+      assertEquals("SCANNER_CAPACITY_EXHAUSTED", concurrent.code());
+      assertEquals(429, concurrent.status());
+
+      ResourceLimits impossible = new ResourceLimits(
+          32 * mib, 100, 32 * mib, 16 * mib, 2, 30);
+      ScannerRequestException tooLarge = assertThrows(
+          ScannerRequestException.class,
+          () -> limiter.execute(impossible, () -> null));
+      assertEquals("SCANNER_SCRATCH_REQUEST_TOO_LARGE", tooLarge.code());
+      assertEquals(413, tooLarge.status());
+      assertTrue(!tooLarge.retryable());
+    } finally {
+      release.countDown();
+      active.get(2, TimeUnit.SECONDS);
+      executor.shutdownNow();
+    }
+    assertEquals(
+        0.0,
+        registry.get("kkrepo_scanner_scratch_reserved_bytes").gauge().value());
   }
 
   private static void awaitGauge(

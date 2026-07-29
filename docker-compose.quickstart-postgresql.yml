@@ -60,9 +60,10 @@ services:
       KKREPO_SCANNER_SERVICE_CREDENTIAL: ${KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL:-}
       KKREPO_SCANNER_DB_AUTO_UPDATE: ${KKREPO_SCANNER_DB_AUTO_UPDATE:-true}
       KKREPO_SCANNER_DB_DIRECTORY: /var/lib/kkrepo-scanner/grype
+      KKREPO_SCANNER_MAX_SCRATCH_BYTES: ${KKREPO_SCANNER_MAX_SCRATCH_BYTES:-7516192768}
     read_only: true
     tmpfs:
-      - /tmp:size=${KKREPO_SCANNER_TMPFS_SIZE:-4g},uid=10001,gid=10001,mode=1770
+      - /tmp:size=${KKREPO_SCANNER_TMPFS_SIZE:-8g},uid=10001,gid=10001,mode=1770
     volumes:
       - scanner-db:/var/lib/kkrepo-scanner/grype
     security_opt:

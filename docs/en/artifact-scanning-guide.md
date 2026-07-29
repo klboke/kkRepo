@@ -60,9 +60,12 @@ pending state.
 - Configure the same high-entropy service credential in kkRepo and the scanner adapter.
 
 The default Helm scanner resources request `500m CPU / 1 GiB`, limit `2 CPU / 4 GiB`, provide a
-`5 GiB` ephemeral-storage limit, and use a `10 GiB` vulnerability-database PVC. Compose provides a
-`4 GiB` `/tmp` tmpfs by default. Size these values from the largest artifacts, configured
-concurrency, and observed scan duration.
+`9 GiB` ephemeral-storage limit, and use a `10 GiB` vulnerability-database PVC. Helm and Compose
+provide an `8 GiB` scratch volume with a `7 GiB` shared admission budget. The scanner estimates
+each request from its staged input, retained nested archives, and bounded process output. Requests
+that cannot fit the configured budget fail with `413`; concurrent requests wait briefly and then
+return retryable `429` instead of overcommitting the volume. Size the admission budget below the
+physical scratch volume, then tune both from the largest artifacts and observed scan duration.
 
 ## Docker Compose Deployment
 
@@ -468,6 +471,7 @@ and OCI registry URL.
 | `KKREPO_SCANNER_RETRY_AFTER_SECONDS` | `5` | Retry hint after capacity rejection |
 | `KKREPO_SCANNER_MAX_INPUT_BYTES` | `2147483648` | Adapter input hard limit |
 | `KKREPO_SCANNER_MAX_OUTPUT_BYTES` | `16777216` | Per raw SBOM/report limit; OCI also applies it to aggregate platform inputs and the merged SBOM |
+| `KKREPO_SCANNER_MAX_SCRATCH_BYTES` | `7516192768` | Shared per-process scratch admission budget; keep below the actual scratch volume |
 
 Each profile's scan timeout is capped at 3,600 seconds and applies to the complete adapter request:
 input streaming, archive inspection, every Syft/Grype process, and result mapping share one monotonic

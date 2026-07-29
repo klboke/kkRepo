@@ -63,7 +63,12 @@ scanner database persistence so each pod uses an ephemeral cache. Shared-databas
 cross-process read/update locks and a shared update marker; database update eligibility is checked
 every minute so a busy scan only postpones the update instead of skipping it for the full update
 interval. Each adapter also admits at most two active and four queued scans by default, returning a
-retryable HTTP 429 with `Retry-After` when capacity is exhausted.
+retryable HTTP 429 with `Retry-After` when capacity is exhausted. Scratch admission is separately
+weighted by each request's input, nested-archive, and output bounds: the default `7 GiB` shared
+budget protects the `8 GiB` emptyDir from concurrent overcommit. Keep
+`securityScanning.limits.maxScratchBytes` below
+`securityScanning.limits.scratchVolumeSize` and leave additional room in the Pod
+ephemeral-storage limit when tuning either value.
 
 `securityScanning.metricsCountLimit` bounds each periodic status gauge query (default `10000`).
 Gauge values saturate at this limit so a large task or finding history cannot turn the 15-second

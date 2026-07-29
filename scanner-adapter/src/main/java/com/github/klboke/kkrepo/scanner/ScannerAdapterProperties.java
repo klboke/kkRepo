@@ -18,6 +18,7 @@ public class ScannerAdapterProperties {
   private long maxInputBytes = 2L * 1024 * 1024 * 1024;
   private long maxOutputBytes = 16L * 1024 * 1024;
   private long maxStderrBytes = 256L * 1024;
+  private long maxScratchBytes = 7L * 1024 * 1024 * 1024;
   private Duration readinessCache = Duration.ofSeconds(30);
   private int maxConcurrentScans = 2;
   private int maxQueuedScans = 4;
@@ -116,6 +117,14 @@ public class ScannerAdapterProperties {
 
   public void setMaxStderrBytes(long maxStderrBytes) {
     this.maxStderrBytes = Math.max(1024, maxStderrBytes);
+  }
+
+  public long getMaxScratchBytes() {
+    return maxScratchBytes;
+  }
+
+  public void setMaxScratchBytes(long maxScratchBytes) {
+    this.maxScratchBytes = Math.max(1024L * 1024, maxScratchBytes);
   }
 
   public Duration getReadinessCache() {

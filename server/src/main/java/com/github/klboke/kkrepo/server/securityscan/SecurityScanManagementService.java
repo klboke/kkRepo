@@ -656,13 +656,18 @@ public class SecurityScanManagementService {
   }
 
   @Transactional
-  public void cancel(AuthenticatedSubject actor, long taskId) {
+  public String cancel(AuthenticatedSubject actor, long taskId) {
     ScanTask task = scans.findTask(taskId).orElseThrow(() -> notFound("Task not found"));
     requireTaskAdmin(actor, task);
+    String executionId =
+        task.status() == TaskStatus.RUNNING && task.leaseToken() != null
+            ? SecurityScanExecutionId.from(task)
+            : null;
     if (!scans.cancelTask(taskId, Instant.now())) {
       throw conflict("Task is already terminal");
     }
     documentPersistence.releaseOwner(taskId);
+    return executionId;
   }
 
   public RepositoryScanConfig repositoryConfig(

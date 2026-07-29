@@ -40,6 +40,7 @@ kkrepo:
     max-input-bytes: ${KKREPO_SCANNER_MAX_INPUT_BYTES:2147483648}
     max-output-bytes: ${KKREPO_SCANNER_MAX_OUTPUT_BYTES:16777216}
     max-stderr-bytes: ${KKREPO_SCANNER_MAX_STDERR_BYTES:262144}
+    max-scratch-bytes: ${KKREPO_SCANNER_MAX_SCRATCH_BYTES:7516192768}
     readiness-cache: ${KKREPO_SCANNER_READINESS_CACHE:30s}
     max-concurrent-scans: ${KKREPO_SCANNER_MAX_CONCURRENT_SCANS:2}
     max-queued-scans: ${KKREPO_SCANNER_MAX_QUEUED_SCANS:4}
