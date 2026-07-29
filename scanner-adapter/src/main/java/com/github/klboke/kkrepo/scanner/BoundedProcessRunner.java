@@ -17,6 +17,8 @@ import org.springframework.stereotype.Component;
 @Component
 public class BoundedProcessRunner {
   private static final Duration VERSION_COMMAND_TIMEOUT = Duration.ofSeconds(15);
+  private static final Duration PROCESS_TERMINATION_TIMEOUT = Duration.ofSeconds(2);
+  private static final long PROCESS_TERMINATION_POLL_MILLIS = 10;
 
   private final ScannerAdapterProperties properties;
   private final FileSizeReader fileSizeReader;
@@ -156,11 +158,10 @@ public class BoundedProcessRunner {
     List<ProcessHandle> descendants = process.descendants().toList();
     descendants.forEach(ProcessHandle::destroy);
     process.destroy();
-    boolean parentExited = process.waitFor(2, TimeUnit.SECONDS);
-    if (!parentExited || descendants.stream().anyMatch(ProcessHandle::isAlive)) {
+    if (!waitForTreeExit(process, descendants, PROCESS_TERMINATION_TIMEOUT)) {
       descendants.forEach(ProcessHandle::destroyForcibly);
       if (process.isAlive()) process.destroyForcibly();
-      process.waitFor(2, TimeUnit.SECONDS);
+      waitForTreeExit(process, descendants, PROCESS_TERMINATION_TIMEOUT);
     }
   }
 
@@ -173,10 +174,8 @@ public class BoundedProcessRunner {
       if (process.isAlive()) process.destroy();
       boolean cleanlyExited = false;
       try {
-        boolean parentExited =
-            !process.isAlive() || process.waitFor(2, TimeUnit.SECONDS);
         cleanlyExited =
-            parentExited && descendants.stream().noneMatch(ProcessHandle::isAlive);
+            waitForTreeExit(process, descendants, PROCESS_TERMINATION_TIMEOUT);
       } catch (InterruptedException ignored) {
         interrupted = true;
       }
@@ -184,7 +183,7 @@ public class BoundedProcessRunner {
         descendants.forEach(ProcessHandle::destroyForcibly);
         if (process.isAlive()) process.destroyForcibly();
         try {
-          if (process.isAlive()) process.waitFor(2, TimeUnit.SECONDS);
+          waitForTreeExit(process, descendants, PROCESS_TERMINATION_TIMEOUT);
         } catch (InterruptedException ignored) {
           interrupted = true;
         }
@@ -192,6 +191,28 @@ public class BoundedProcessRunner {
     } finally {
       if (interrupted) Thread.currentThread().interrupt();
     }
+  }
+
+  private static boolean waitForTreeExit(
+      Process process, List<ProcessHandle> descendants, Duration timeout)
+      throws InterruptedException {
+    long deadline = System.nanoTime() + timeout.toNanos();
+    while (process.isAlive()
+        || descendants.stream().anyMatch(ProcessHandle::isAlive)) {
+      long remainingNanos = deadline - System.nanoTime();
+      if (remainingNanos <= 0) return false;
+      long waitMillis = Math.max(
+          1,
+          Math.min(
+              PROCESS_TERMINATION_POLL_MILLIS,
+              TimeUnit.NANOSECONDS.toMillis(remainingNanos)));
+      if (process.isAlive()) {
+        process.waitFor(waitMillis, TimeUnit.MILLISECONDS);
+      } else {
+        Thread.sleep(waitMillis);
+      }
+    }
+    return true;
   }
 
   @FunctionalInterface

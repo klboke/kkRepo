@@ -133,7 +133,7 @@ CREATE TABLE security_scanner_snapshot (
   CONSTRAINT uk_security_scanner_snapshot UNIQUE (snapshot_fingerprint),
   INDEX idx_security_scanner_snapshot_observed (observed_at, id),
   INDEX idx_security_scanner_snapshot_ready
-    (ready, vulnerability_database_updated_at, observed_at, id)
+    (ready, vulnerability_database_updated_at, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE security_scan_task (

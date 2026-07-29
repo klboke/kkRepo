@@ -307,7 +307,8 @@ Vulnerability DB 的版本值由 scanner adapter 执行
 它不是 kkRepo 关系数据库的 schema/Flyway 版本。
 
 Scanner 健康状态以最近一次 adapter 观测为准；界面展示的 Vulnerability DB 则以已接受
-的最新漏洞库构建时间为准，因此落后副本不能让实际匹配版本倒退。
+的最新漏洞库构建时间为准；构建时间相同时使用不可变 snapshot ID 确定顺序，健康观测
+时间不参与版本排序，因此落后副本不能让实际匹配版本倒退。
 
 下方 Runs 表展示完成的扫描 run、完整性、finding 数量和完成时间。点击 **download**
 下载受鉴权保护的 CycloneDX JSON SBOM。

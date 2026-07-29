@@ -333,8 +333,9 @@ built timestamp or schema version, so the UI may show an ISO timestamp. This is 
 schema/Flyway version of the kkRepo relational database.
 
 Scanner health follows the most recent adapter observation. The displayed Vulnerability DB value
-follows the newest accepted database build timestamp, so a lagging replica cannot roll the
-effective matching version backward.
+follows the newest accepted database build timestamp; equal build times use the immutable snapshot
+ID as the tie-breaker. Health observation time never participates in version ordering, so a lagging
+replica cannot roll the effective matching version backward.
 
 The Runs table shows completed scan runs, completeness, finding counts, and completion time. Click
 **download** to retrieve the access-controlled CycloneDX JSON SBOM.

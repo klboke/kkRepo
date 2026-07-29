@@ -38,7 +38,7 @@ class PostgreSqlSecurityScanSummaryIndexTest extends PostgreSqlIntegrationTestSu
     assertEquals(
         "CREATE INDEX idx_security_scanner_snapshot_ready "
             + "ON public.security_scanner_snapshot "
-            + "USING btree (ready, vulnerability_database_updated_at, observed_at, id)",
+            + "USING btree (ready, vulnerability_database_updated_at, id)",
         indexDefinition("idx_security_scanner_snapshot_ready"));
     assertEquals(
         "CREATE INDEX idx_asset_security_state_repository_summary "

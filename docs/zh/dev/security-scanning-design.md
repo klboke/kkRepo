@@ -652,11 +652,12 @@ Idempotency-Key 合并。
 
 `observed_at` 只表示 adapter 健康观测时间，不能作为漏洞库新旧顺序。调度和状态投影按
 `vulnerability_database_updated_at` 选择最新、且未超出允许时钟偏差的 ready snapshot；
-`id` 仅在构建时间和观测时间相同时作为确定性排序项。snapshot fingerprint 必须包含漏洞
-库构建时间，避免 schema/revision 未变化的数据库更新被错误合并。来自落后副本的较晚
-观测可以保留用于健康诊断，但不能回滚已生效的匹配版本。构建时间在 HTTP 校验、
-fingerprint 和持久化边界统一规范到数据库支持的毫秒精度，避免同一构建因 wire
-timestamp 的更细精度被误判为不同 snapshot。
+同一漏洞库构建时间下，使用不可变的 snapshot `id` 作为唯一确定性排序项。`observed_at`
+不会参与权威版本排序，因此对已有 snapshot 的健康观测更新不能改变匹配版本的先后关系。
+snapshot fingerprint 必须包含漏洞库构建时间，避免 schema/revision 未变化的数据库更新
+被错误合并。来自落后副本的较晚观测可以保留用于健康诊断，但不能回滚已生效的匹配版本。
+构建时间在 HTTP 校验、fingerprint 和持久化边界统一规范到数据库支持的毫秒精度，避免
+同一构建因 wire timestamp 的更细精度被误判为不同 snapshot。
 
 ### `security_sbom`
 

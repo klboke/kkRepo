@@ -1033,6 +1033,9 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       ps.setBytes(index, dedupeKey);
     });
     if (inserted.isPresent()) {
+      if (task.assetId() != null) {
+        materializePendingTaskProjection(task, subjectHash, requestedAt);
+      }
       return inserted.getAsLong();
     }
     if (idempotencyHash != null) {
@@ -1046,6 +1049,60 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         "SELECT id FROM security_scan_task WHERE dedupe_key = ?",
         Long.class,
         dedupeKey);
+  }
+
+  /**
+   * The first task for an asset/profile owns a durable pending projection in the same transaction.
+   *
+   * <p>This is intentionally below the individual schedulers: manual scans, policy reconciliation,
+   * content discovery, and snapshot rematches must all expose failure/cancellation semantics even
+   * when no earlier asset state exists. Existing projections remain authoritative while refresh
+   * work runs; content-change scheduling updates them explicitly for the new generation.
+   */
+  private void materializePendingTaskProjection(
+      TaskDraft task, byte[] subjectIdentityHash, Instant requestedAt) {
+    AssetSecurityState current =
+        findAssetState(task.assetId(), task.profileId()).orElse(null);
+    if (current != null) {
+      return;
+    }
+    ScanCandidate scanCandidate = findCandidate(task.assetId()).orElse(null);
+    if (scanCandidate == null
+        || scanCandidate.contentGeneration() != task.contentGeneration()) {
+      return;
+    }
+    RepositoryScanConfig config = findRepositoryConfig(task.repositoryId())
+        .filter(RepositoryScanConfig::enabled)
+        .filter(candidate -> candidate.profileId() == task.profileId())
+        .orElse(null);
+    Long policyId = config == null
+        ? null
+        : config.policyId();
+    Long policyRevision = policyId == null
+        ? null
+        : findPolicy(policyId).map(ScanPolicy::revision).orElse(null);
+    PolicyDecision pendingDecision =
+        config != null && config.pendingAction() == PolicyAction.BLOCK
+            ? PolicyDecision.BLOCK_PENDING
+            : PolicyDecision.ALLOW;
+    upsertAssetStateIfCurrent(new AssetSecurityState(
+        task.assetId(),
+        task.profileId(),
+        task.contentGeneration(),
+        subjectIdentityHash,
+        null,
+        ScanState.PENDING,
+        ScanCompleteness.UNKNOWN,
+        false,
+        Severity.UNKNOWN,
+        Map.of(),
+        policyId,
+        policyRevision,
+        pendingDecision,
+        "SCAN_PENDING",
+        null,
+        requestedAt,
+        0));
   }
 
   @Override
@@ -1581,8 +1638,15 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
               (current_run.task_id IS NOT NULL AND current_run.task_id > task.id)
               OR (
                 task.requested_scanner_snapshot_id IS NOT NULL
-                AND current_snapshot.vulnerability_database_updated_at
-                    > requested_snapshot.vulnerability_database_updated_at
+                AND (
+                  current_snapshot.vulnerability_database_updated_at
+                      > requested_snapshot.vulnerability_database_updated_at
+                  OR (
+                    current_snapshot.vulnerability_database_updated_at
+                        = requested_snapshot.vulnerability_database_updated_at
+                    AND current_snapshot.id > requested_snapshot.id
+                  )
+                )
               )
               OR EXISTS (
                 SELECT 1
@@ -1684,7 +1748,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         WHERE ready = TRUE
           AND vulnerability_database_updated_at IS NOT NULL
           AND vulnerability_database_updated_at <= ?
-        ORDER BY vulnerability_database_updated_at DESC, observed_at DESC, id DESC
+        ORDER BY vulnerability_database_updated_at DESC, id DESC
         LIMIT 1
         """, snapshotMapper, nullableTimestamp(maximumDatabaseUpdatedAt))
         .stream()
@@ -2461,8 +2525,15 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
             JOIN security_scanner_snapshot proposed_snapshot
               ON proposed_snapshot.id = proposed_run.scanner_snapshot_id
             WHERE current_run.id = s.latest_scan_run_id
-              AND current_snapshot.vulnerability_database_updated_at
-                  > proposed_snapshot.vulnerability_database_updated_at
+              AND (
+                current_snapshot.vulnerability_database_updated_at
+                    > proposed_snapshot.vulnerability_database_updated_at
+                OR (
+                  current_snapshot.vulnerability_database_updated_at
+                      = proposed_snapshot.vulnerability_database_updated_at
+                  AND current_snapshot.id > proposed_snapshot.id
+                )
+              )
           )
         """,
         state.contentGeneration(),
@@ -2557,8 +2628,15 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
             JOIN security_scanner_snapshot proposed_snapshot
               ON proposed_snapshot.id = proposed_run.scanner_snapshot_id
             WHERE current_run.id = s.latest_scan_run_id
-              AND current_snapshot.vulnerability_database_updated_at
-                  > proposed_snapshot.vulnerability_database_updated_at
+              AND (
+                current_snapshot.vulnerability_database_updated_at
+                    > proposed_snapshot.vulnerability_database_updated_at
+                OR (
+                  current_snapshot.vulnerability_database_updated_at
+                      = proposed_snapshot.vulnerability_database_updated_at
+                  AND current_snapshot.id > proposed_snapshot.id
+                )
+              )
           )
         """,
         state.contentGeneration(),

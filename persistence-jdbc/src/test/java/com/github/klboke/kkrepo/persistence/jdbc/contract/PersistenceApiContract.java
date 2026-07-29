@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.persistence.jdbc.contract;
 
 import static com.github.klboke.kkrepo.security.scan.ScanEnums.SCANNER_OBSERVATION_UNAVAILABLE;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -374,6 +375,15 @@ public abstract class PersistenceApiContract {
         now);
     long taskId = scans.createTask(draft);
     assertEquals(taskId, scans.createTask(draft), "automatic task creation must deduplicate");
+    SecurityScanDao.AssetSecurityState initialPendingState =
+        scans.findAssetState(assetId, profileId).orElseThrow();
+    assertEquals(ScanState.PENDING, initialPendingState.scanState());
+    assertEquals(PolicyDecision.ALLOW, initialPendingState.policyDecision());
+    assertEquals("SCAN_PENDING", initialPendingState.policyReasonCode());
+    assertArrayEquals(
+        PersistenceHashes.sha256("sha256:" + "2".repeat(64)),
+        initialPendingState.subjectIdentityHash(),
+        "task creation must atomically materialize the pending projection");
     assertEquals(
         taskId,
         scans.listTasks(null, null, "scan-contract", 0, 10).getFirst().id(),
@@ -397,24 +407,6 @@ public abstract class PersistenceApiContract {
         scans.metricSummary(100).pendingTasks(),
         "periodic task metrics must use a bounded status projection");
 
-    scans.upsertAssetStateIfCurrent(new SecurityScanDao.AssetSecurityState(
-        assetId,
-        profileId,
-        1,
-        PersistenceHashes.sha256("sha256:" + "2".repeat(64)),
-        null,
-        ScanState.PENDING,
-        ScanCompleteness.UNKNOWN,
-        false,
-        Severity.UNKNOWN,
-        Map.of(),
-        policyId,
-        1L,
-        PolicyDecision.ALLOW,
-        "SCAN_PENDING",
-        null,
-        now,
-        0));
     scans.upsertAssetPolicyStateIfCurrent(new SecurityScanDao.AssetPolicyState(
         assetId,
         profileId,
@@ -577,6 +569,30 @@ public abstract class PersistenceApiContract {
         newestDatabase.id(),
         scans.latestReadyScannerSnapshot(now.plusSeconds(5)).orElseThrow().id(),
         "a later observation from a lagging replica must not regress the authoritative DB epoch");
+    Instant equalDatabaseEpoch = now.minusSeconds(5);
+    SecurityScanDao.ScannerSnapshot equalEpochFirst =
+        scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+            null, "contract-adapter", "v1", "grype", "0.1.0", "equal-db-first",
+            equalDatabaseEpoch, "a".repeat(64), "e".repeat(64), now.plusSeconds(4), true,
+            Map.of()));
+    SecurityScanDao.ScannerSnapshot equalEpochSecond =
+        scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+            null, "contract-adapter", "v1", "grype", "0.2.0", "equal-db-second",
+            equalDatabaseEpoch, "a".repeat(64), "f".repeat(64), now.plusSeconds(5), true,
+            Map.of()));
+    assertTrue(equalEpochSecond.id() > equalEpochFirst.id());
+    scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+        null, "contract-adapter", "v1", "grype", "0.1.0", "equal-db-first",
+        equalDatabaseEpoch, "a".repeat(64), "e".repeat(64), now.plusSeconds(6), true,
+        Map.of()));
+    assertEquals(
+        equalEpochFirst.id(),
+        scans.latestScannerSnapshot().orElseThrow().id(),
+        "mutable observation time remains the scanner-health signal");
+    assertEquals(
+        equalEpochSecond.id(),
+        scans.latestReadyScannerSnapshot(now.plusSeconds(7)).orElseThrow().id(),
+        "equal database epochs must use the immutable snapshot ID tie-breaker");
     long snapshotTaskId = scans.createTask(new SecurityScanDao.TaskDraft(
         repositoryId,
         assetId,
@@ -1863,6 +1879,228 @@ public abstract class PersistenceApiContract {
         scans.findAssetPolicyState(assetId, profile.id(), repositoryId)
             .orElseThrow()
             .policyDecision());
+
+    Instant equalDatabaseEpoch = now.minusSeconds(30);
+    SecurityScanDao.ScannerSnapshot equalEpochLower =
+        scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+            null,
+            "contract-adapter",
+            "v1",
+            "grype",
+            "0.2.0",
+            "equal-epoch-lower",
+            equalDatabaseEpoch,
+            "2".repeat(64),
+            "5".repeat(64),
+            now.plusSeconds(7),
+            true,
+            Map.of()));
+    SecurityScanDao.ScannerSnapshot equalEpochHigher =
+        scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+            null,
+            "contract-adapter",
+            "v1",
+            "grype",
+            "0.3.0",
+            "equal-epoch-higher",
+            equalDatabaseEpoch,
+            "2".repeat(64),
+            "6".repeat(64),
+            now.plusSeconds(8),
+            true,
+            Map.of()));
+    assertTrue(equalEpochHigher.id() > equalEpochLower.id());
+    scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+        null,
+        "contract-adapter",
+        "v1",
+        "grype",
+        "0.2.0",
+        "equal-epoch-lower",
+        equalDatabaseEpoch,
+        "2".repeat(64),
+        "5".repeat(64),
+        now.plusSeconds(9),
+        true,
+        Map.of()));
+    assertEquals(
+        equalEpochHigher.id(),
+        scans.latestReadyScannerSnapshot(now.plusSeconds(10)).orElseThrow().id(),
+        "a refreshed observation must not change equal-epoch authority");
+
+    long equalEpochHigherTaskId = scans.createTask(new SecurityScanDao.TaskDraft(
+        repositoryId,
+        assetId,
+        SubjectKind.ASSET_BLOB,
+        "sha256:" + "5".repeat(64),
+        1,
+        profile.id(),
+        profile.revision(),
+        equalEpochHigher.id(),
+        ScanStage.MATCH_ONLY,
+        RequestReason.VULNERABILITY_DB_CHANGED,
+        25,
+        3,
+        "contract",
+        "equal-epoch-higher-task",
+        "equal-epoch-higher-task",
+        now.plusSeconds(10)));
+    long equalEpochLowerTaskId = scans.createTask(new SecurityScanDao.TaskDraft(
+        repositoryId,
+        assetId,
+        SubjectKind.ASSET_BLOB,
+        "sha256:" + "5".repeat(64),
+        1,
+        profile.id(),
+        profile.revision(),
+        equalEpochLower.id(),
+        ScanStage.MATCH_ONLY,
+        RequestReason.VULNERABILITY_DB_CHANGED,
+        25,
+        3,
+        "contract",
+        "equal-epoch-lower-task",
+        "equal-epoch-lower-task",
+        now.plusSeconds(11)));
+    assertTrue(
+        equalEpochLowerTaskId > equalEpochHigherTaskId,
+        "task chronology intentionally opposes the immutable snapshot tie-breaker");
+
+    SecurityScanDao.ScanRun equalEpochHigherRun =
+        scans.insertRunOrFindExisting(new SecurityScanDao.ScanRun(
+            null,
+            equalEpochHigherTaskId,
+            sbom.id(),
+            equalEpochHigher.id(),
+            "9".repeat(64),
+            "d".repeat(64),
+            ScanState.COMPLETE,
+            ScanCompleteness.COMPLETE,
+            reportBlobId,
+            "b".repeat(64),
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            Severity.CRITICAL,
+            now.plusSeconds(10),
+            now.plusSeconds(12),
+            now.plusSeconds(12)));
+    SecurityScanDao.ScanRun equalEpochLowerRun =
+        scans.insertRunOrFindExisting(new SecurityScanDao.ScanRun(
+            null,
+            equalEpochLowerTaskId,
+            sbom.id(),
+            equalEpochLower.id(),
+            "9".repeat(64),
+            "e".repeat(64),
+            ScanState.COMPLETE,
+            ScanCompleteness.COMPLETE,
+            reportBlobId,
+            "b".repeat(64),
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            Severity.UNKNOWN,
+            now.plusSeconds(11),
+            now.plusSeconds(13),
+            now.plusSeconds(13)));
+
+    SecurityScanDao.AssetSecurityState equalEpochHigherState =
+        scans.upsertAssetStateIfCurrent(new SecurityScanDao.AssetSecurityState(
+            assetId,
+            profile.id(),
+            1,
+            PersistenceHashes.sha256("sha256:" + "5".repeat(64)),
+            equalEpochHigherRun.id(),
+            ScanState.COMPLETE,
+            ScanCompleteness.COMPLETE,
+            true,
+            Severity.CRITICAL,
+            Map.of("critical", 1),
+            null,
+            null,
+            PolicyDecision.BLOCK_VULNERABILITY,
+            "EQUAL_EPOCH_HIGHER",
+            null,
+            now.plusSeconds(12),
+            afterHistoricalRetry.version()));
+    assertTrue(
+        inTransaction(() -> scans.taskProjectionIsSuperseded(equalEpochLowerTaskId)),
+        "the immutable snapshot order must supersede a later task for the lower snapshot");
+    SecurityScanDao.AssetSecurityState afterEqualEpochLower =
+        scans.upsertAssetStateIfCurrent(new SecurityScanDao.AssetSecurityState(
+            assetId,
+            profile.id(),
+            1,
+            PersistenceHashes.sha256("sha256:" + "5".repeat(64)),
+            equalEpochLowerRun.id(),
+            ScanState.COMPLETE,
+            ScanCompleteness.COMPLETE,
+            true,
+            Severity.UNKNOWN,
+            Map.of(),
+            null,
+            null,
+            PolicyDecision.ALLOW,
+            "EQUAL_EPOCH_LOWER",
+            null,
+            now.plusSeconds(13),
+            equalEpochHigherState.version()));
+    assertEquals(equalEpochHigherRun.id(), afterEqualEpochLower.latestScanRunId());
+    assertEquals(
+        PolicyDecision.BLOCK_VULNERABILITY,
+        afterEqualEpochLower.policyDecision());
+
+    SecurityScanDao.AssetPolicyState equalEpochHigherPolicy =
+        scans.upsertAssetPolicyStateIfCurrent(new SecurityScanDao.AssetPolicyState(
+            assetId,
+            profile.id(),
+            repositoryId,
+            1,
+            equalEpochHigherRun.id(),
+            null,
+            null,
+            1,
+            PolicyDecision.BLOCK_VULNERABILITY,
+            "EQUAL_EPOCH_HIGHER",
+            0,
+            null,
+            null,
+            now.plusSeconds(12),
+            afterOlderPolicy.version(),
+            waiverRevision));
+    SecurityScanDao.AssetPolicyState afterEqualEpochLowerPolicy =
+        scans.upsertAssetPolicyStateIfCurrent(new SecurityScanDao.AssetPolicyState(
+            assetId,
+            profile.id(),
+            repositoryId,
+            1,
+            equalEpochLowerRun.id(),
+            null,
+            null,
+            1,
+            PolicyDecision.ALLOW,
+            "EQUAL_EPOCH_LOWER",
+            0,
+            null,
+            null,
+            now.plusSeconds(13),
+            equalEpochHigherPolicy.version(),
+            waiverRevision));
+    assertEquals(
+        equalEpochHigherRun.id(),
+        afterEqualEpochLowerPolicy.latestScanRunId());
+    assertEquals(
+        PolicyDecision.BLOCK_VULNERABILITY,
+        afterEqualEpochLowerPolicy.policyDecision());
   }
 
   @Test
