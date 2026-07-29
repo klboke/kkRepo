@@ -1,4 +1,6 @@
 {{- if and .Values.securityScanning.enabled .Values.securityScanning.networkPolicy.enabled }}
+{{- $dnsNamespaceSelector := required "securityScanning.networkPolicy.dns.namespaceSelector must select the DNS namespace" .Values.securityScanning.networkPolicy.dns.namespaceSelector }}
+{{- $dnsPodSelector := required "securityScanning.networkPolicy.dns.podSelector must select the DNS pods" .Values.securityScanning.networkPolicy.dns.podSelector }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -31,7 +33,12 @@ spec:
           port: 8080
     # DNS is required to resolve the in-cluster kkRepo service.
     - to:
-        - namespaceSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $dnsNamespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $dnsPodSelector | nindent 14 }}
       ports:
         - protocol: UDP
           port: 53
@@ -55,7 +62,12 @@ spec:
   ingress: []
   egress:
     - to:
-        - namespaceSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $dnsNamespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $dnsPodSelector | nindent 14 }}
       ports:
         - protocol: UDP
           port: 53

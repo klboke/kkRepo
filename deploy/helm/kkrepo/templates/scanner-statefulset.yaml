@@ -50,6 +50,8 @@ spec:
               value: {{ .Values.securityScanning.scannerDatabase.updateInterval | quote }}
             - name: KKREPO_SCANNER_DB_DIRECTORY
               value: /var/lib/kkrepo-scanner/grype
+            - name: KKREPO_SCANNER_MAX_OCI_REQUEST_BYTES
+              value: {{ .Values.securityScanning.limits.maxOciRequestBytes | quote }}
             - name: KKREPO_SCANNER_MAX_INPUT_BYTES
               value: {{ .Values.securityScanning.limits.maxInputBytes | quote }}
             - name: KKREPO_SCANNER_MAX_OUTPUT_BYTES

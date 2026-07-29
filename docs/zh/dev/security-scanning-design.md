@@ -1406,6 +1406,11 @@ Enforce 且 pending 必须阻断的仓库不能把首次回源字节先流给客
 3. 返回可重试的 pending 响应。
 4. 独立 worker 生成 candidate 并完成扫描后，客户端重试命中本地 Blob。
 
+普通 proxy 包和 manifest 必须在步骤 2 完成后，使用刚提交的具体 asset/blob 快照执行
+pending 判定；禁止在读取上游 body 前做通用 pending 阻断，否则内容事件永远不会产生，
+客户端重试也无法推进扫描。没有响应体的未缓存 HEAD 不创建扫描主体，实际 GET 仍按上述
+流程持久化后判定。
+
 这会增加严格 proxy 仓库第一次请求的延迟和一次失败重试，必须在管理端明确提示，
 并用 Maven/npm/PyPI/Docker 等真实客户端验证。
 

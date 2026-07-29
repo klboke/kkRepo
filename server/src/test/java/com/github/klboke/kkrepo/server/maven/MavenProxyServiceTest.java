@@ -11,6 +11,7 @@ import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.github.klboke.kkrepo.core.BlobObjectMetadata;
 import com.github.klboke.kkrepo.core.BlobReference;
@@ -99,37 +100,45 @@ class MavenProxyServiceTest {
     assertEquals(Instant.parse("2026-05-25T07:24:48Z"), response.lastModified());
     assertEquals(1, proxyState.successCount);
     assertEquals(0, proxyState.failureCount);
-    verify(downloadPolicy).beforeUncachedRead(
-        runtime, requestedPath.path(), "artifact", "binary/octet-stream", 47706L);
+    verifyNoInteractions(downloadPolicy);
   }
 
   @Test
-  void getMissEvaluatesPendingPolicyBeforePersistingBody() {
+  void getMissPersistsBeforePendingPolicyBlocksTheResponse() {
+    byte[] upstreamBytes = "artifact-bytes".getBytes(StandardCharsets.UTF_8);
     HttpRemoteFetcher.Result upstream = new HttpRemoteFetcher.Result(
         200,
         Map.of(
-            "Content-Length", "1048576",
             "Content-Type", "application/java-archive"),
-        InputStream.nullInputStream());
+        new java.io.ByteArrayInputStream(upstreamBytes));
     CapturingFetcher fetcher = new CapturingFetcher(upstream);
     RecordingProxyStateDao proxyState = new RecordingProxyStateDao();
+    CountingBlobStorage storage = new CountingBlobStorage();
+    TempFileWriter writer = new TempFileWriter();
     ArtifactDownloadPolicy downloadPolicy = mock(ArtifactDownloadPolicy.class);
     RepositoryRuntime runtime = runtime();
     MavenPath requestedPath = path("com/acme/demo/1.0.0/demo-1.0.0.jar");
-    RuntimeException blocked = new RuntimeException("blocked before persistence");
-    doThrow(blocked).when(downloadPolicy)
-        .beforeUncachedRead(
-            runtime, requestedPath.path(), "artifact", "application/java-archive", 1048576L);
+    RuntimeException blocked = new RuntimeException("blocked after persistence");
+    doThrow(blocked).when(downloadPolicy).beforeRead(88L, 99L);
+    MavenProxyService service = new MavenProxyService(
+        new EmptyAssetDao(),
+        new FixedBlobStorageRegistry(storage),
+        writer,
+        proxyState,
+        fetcher,
+        null,
+        new AssetMetadataCache(new InMemorySharedCache(), false, 0, 0),
+        null,
+        downloadPolicy);
 
     RuntimeException actual = assertThrows(
         RuntimeException.class,
-        () -> service(fetcher, proxyState, downloadPolicy)
-            .get(runtime, requestedPath, false));
+        () -> service.get(runtime, requestedPath, false));
 
     assertSame(blocked, actual);
-    verify(downloadPolicy)
-        .beforeUncachedRead(
-            runtime, requestedPath.path(), "artifact", "application/java-archive", 1048576L);
+    assertTrue(writer.keepResponseFile);
+    assertEquals(1, proxyState.successCount);
+    verify(downloadPolicy).beforeRead(88L, 99L);
   }
 
   @Test

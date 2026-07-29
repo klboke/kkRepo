@@ -244,22 +244,6 @@ public class DockerManifestStore {
     }
   }
 
-  void beforeUncachedManifestRead(
-      RepositoryRuntime runtime,
-      String imageName,
-      String reference,
-      String contentType,
-      long contentLength) {
-    if (downloadPolicy != null) {
-      downloadPolicy.beforeUncachedRead(
-          runtime,
-          imageName + "/manifests/" + reference,
-          "MANIFEST",
-          contentType,
-          contentLength);
-    }
-  }
-
   void beforeBlobRead(RepositoryRuntime runtime, String imageName, DockerDigest digest) {
     if (downloadPolicy == null || !downloadPolicy.shouldEvaluateCurrentRequest()) {
       return;

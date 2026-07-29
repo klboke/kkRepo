@@ -502,6 +502,7 @@ and OCI registry URL.
 | `KKREPO_SCANNER_MAX_QUEUED_SCANS` | `4` | Waiting requests per Pod |
 | `KKREPO_SCANNER_ADMISSION_TIMEOUT` | `1s` | Wait for scanner capacity |
 | `KKREPO_SCANNER_RETRY_AFTER_SECONDS` | `5` | Retry hint after capacity rejection |
+| `KKREPO_SCANNER_MAX_OCI_REQUEST_BYTES` | `65536` | Hard limit for OCI JSON control requests, enforced after authentication and before deserialization |
 | `KKREPO_SCANNER_MAX_INPUT_BYTES` | `2147483648` | Adapter input hard limit |
 | `KKREPO_SCANNER_MAX_OUTPUT_BYTES` | `16777216` | Per raw SBOM/report limit; OCI also applies it to aggregate platform inputs and the merged SBOM |
 | `KKREPO_SCANNER_MAX_SCRATCH_BYTES` | `7516192768` | Shared per-process scratch admission budget; keep below the actual scratch volume |

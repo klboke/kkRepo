@@ -461,6 +461,7 @@ Waivers 页签用于查看 Active/Expired、scope、仓库、制品、exception�
 | `KKREPO_SCANNER_MAX_QUEUED_SCANS` | `4` | 单 Pod 等待队列上限 |
 | `KKREPO_SCANNER_ADMISSION_TIMEOUT` | `1s` | 等待容量的时间 |
 | `KKREPO_SCANNER_RETRY_AFTER_SECONDS` | `5` | 容量拒绝时的重试提示 |
+| `KKREPO_SCANNER_MAX_OCI_REQUEST_BYTES` | `65536` | OCI JSON 控制请求硬上限；在鉴权后、反序列化前执行 |
 | `KKREPO_SCANNER_MAX_INPUT_BYTES` | `2147483648` | adapter 输入硬上限 |
 | `KKREPO_SCANNER_MAX_OUTPUT_BYTES` | `16777216` | 单份原始 SBOM/report 上限；OCI 同时用作平台原始文档总量和合并 SBOM 上限 |
 | `KKREPO_SCANNER_MAX_SCRATCH_BYTES` | `7516192768` | 单进程共享 scratch 准入预算；必须小于实际 scratch volume |

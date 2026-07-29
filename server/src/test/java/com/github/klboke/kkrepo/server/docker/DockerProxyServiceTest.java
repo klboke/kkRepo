@@ -158,46 +158,54 @@ class DockerProxyServiceTest {
   }
 
   @Test
-  void blockedRemoteManifestIsRejectedBeforeItsBodyIsConsumedOrStored() throws Exception {
+  void blockedRemoteManifestIsPersistedBeforeItsResponseIsRejected() throws Exception {
     DockerManifestStore manifestStore = mock(DockerManifestStore.class);
     DockerRemoteRegistryClient remoteClient = mock(DockerRemoteRegistryClient.class);
     DockerProxyService service = new DockerProxyService(
         mock(DockerBlobStore.class), manifestStore, remoteClient);
     RepositoryRuntime runtime = proxyRuntime(1);
-    AtomicBoolean bodyRead = new AtomicBoolean();
-    InputStream body = new InputStream() {
-      @Override
-      public int read() {
-        bodyRead.set(true);
-        return -1;
-      }
-    };
+    byte[] body = "{}".getBytes(StandardCharsets.UTF_8);
+    DockerManifestStore.StoredManifest stored = storedManifest(
+        runtime,
+        "library/alpine",
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        Instant.now());
     when(manifestStore.getManifest(runtime, "library/alpine", "latest"))
         .thenThrow(new DockerProtocolException(DockerErrorCode.MANIFEST_UNKNOWN, "missing"));
     when(remoteClient.get(eq(runtime), eq("library/alpine/manifests/latest"), any()))
         .thenReturn(new HttpRemoteFetcher.Result(
             200,
-            Map.of(
-                "Content-Type", DockerConstants.MEDIA_TYPE_SCHEMA2_MANIFEST,
-                "Content-Length", "1048576"),
-            body));
+            Map.of("Content-Type", DockerConstants.MEDIA_TYPE_SCHEMA2_MANIFEST),
+            new ByteArrayInputStream(body)));
+    when(manifestStore.putManifest(
+        eq(runtime),
+        eq("library/alpine"),
+        eq("latest"),
+        eq(body),
+        eq(DockerConstants.MEDIA_TYPE_SCHEMA2_MANIFEST),
+        eq("proxy"),
+        eq(runtime.proxyRemoteUrl()),
+        eq(false)))
+        .thenReturn(stored);
     DockerProtocolException blocked =
         new DockerProtocolException(DockerErrorCode.DENIED, "blocked", 403);
-    doThrow(blocked).when(manifestStore).beforeUncachedManifestRead(
-        runtime,
-        "library/alpine",
-        "latest",
-        DockerConstants.MEDIA_TYPE_SCHEMA2_MANIFEST,
-        1048576L);
+    doThrow(blocked).when(manifestStore).beforeRead(stored);
 
     DockerProtocolException actual = assertThrows(
         DockerProtocolException.class,
         () -> service.getManifest(runtime, "library/alpine", "latest", false));
 
     assertEquals(blocked, actual);
-    assertFalse(bodyRead.get());
-    verify(manifestStore, never()).putManifest(
-        any(), any(), any(), any(), any(), any(), any(), anyBoolean());
+    verify(manifestStore).putManifest(
+        runtime,
+        "library/alpine",
+        "latest",
+        body,
+        DockerConstants.MEDIA_TYPE_SCHEMA2_MANIFEST,
+        "proxy",
+        runtime.proxyRemoteUrl(),
+        false);
+    verify(manifestStore).beforeRead(stored);
   }
 
   @Test

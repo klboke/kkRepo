@@ -16,6 +16,10 @@ class ScannerEngineServiceTest {
         ScannerArtifactType.TAR_GZ,
         ScannerArtifactType.fromPath("packages/demo-1.tar.gz"));
     assertEquals(
+        ScannerArtifactType.XZ,
+        ScannerArtifactType.fromPath("modules/acme/vpc/1.0.0.xz"));
+    assertEquals("artifact.tar.xz", ScannerArtifactType.XZ.safeFilename());
+    assertEquals(
         ScannerArtifactType.NUPKG,
         ScannerArtifactType.fromWireValue("nupkg"));
     assertEquals(ScannerArtifactType.UNKNOWN, ScannerArtifactType.fromPath(null));

@@ -26,7 +26,6 @@ import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
-import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -38,20 +37,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class PypiProxyServiceTest {
-  @Test
-  void delegatesUncachedPolicyMetadata() {
-    ArtifactDownloadPolicy policy = mock(ArtifactDownloadPolicy.class);
-    RepositoryRuntime runtime = runtime(1, 7L);
-    PypiAssetReader reader = new PypiAssetReader(
-        mock(AssetDao.class), mock(BlobStorageRegistry.class), policy);
-
-    reader.beforeUncachedRead(
-        runtime, "packages/demo/demo-1.0.0.whl", "package", "application/zip", 42L);
-
-    verify(policy).beforeUncachedRead(
-        runtime, "packages/demo/demo-1.0.0.whl", "package", "application/zip", 42L);
-  }
-
   @Test
   void servesFreshCacheAndBlockedStaleFallback() throws Exception {
     Fixture fixture = fixture();

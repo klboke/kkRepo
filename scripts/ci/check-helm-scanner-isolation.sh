@@ -61,6 +61,14 @@ if grep -Fq "cidr: 0.0.0.0/0" <<<"$scanner_policy"; then
   echo "scan-serving pods must not receive public HTTPS egress" >&2
   exit 1
 fi
+if grep -Fq "namespaceSelector: {}" "$rendered"; then
+  echo "scanner DNS egress must not target every namespace" >&2
+  exit 1
+fi
+for policy in "$scanner_policy" "$updater_policy"; do
+  grep -Fq "kubernetes.io/metadata.name: kube-system" <<<"$policy"
+  grep -Fq "k8s-app: kube-dns" <<<"$policy"
+done
 grep -Fq "cidr: 0.0.0.0/0" <<<"$updater_policy"
 
 if helm template security-check "$repository_root/deploy/helm/kkrepo" \

@@ -136,6 +136,7 @@ securityScanning:
     delay: 1h
     initialDelay: 5m
   limits:
+    maxOciRequestBytes: 65536
     maxInputBytes: 2147483648
     maxOutputBytes: 16777216
     maxResponseBytes: 67108864
@@ -179,6 +180,13 @@ securityScanning:
     timeoutSeconds: 3
   networkPolicy:
     enabled: true
+    # Restrict port 53 to the cluster DNS workload. Override both selectors when the cluster uses
+    # different DNS labels; empty selectors are rejected instead of widening egress.
+    dns:
+      namespaceSelector:
+        kubernetes.io/metadata.name: kube-system
+      podSelector:
+        k8s-app: kube-dns
 
 resources:
   requests:

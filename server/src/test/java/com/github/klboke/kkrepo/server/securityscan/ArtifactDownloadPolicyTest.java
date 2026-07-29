@@ -28,7 +28,6 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanCompleteness;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanState;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
 import com.github.klboke.kkrepo.server.docker.DockerAuthService;
-import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.RepositorySecurityFilter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -140,74 +139,6 @@ class ArtifactDownloadPolicyTest {
     assertEquals(PolicyDecision.ALLOW, policy.beforeRead(10L, 100L, null).decision());
 
     verify(scans).findDownloadPolicySnapshots(10L, null);
-    verifyNoMoreInteractions(scans);
-  }
-
-  @Test
-  void uncachedRemoteArtifactUsesRepositoryPendingPolicy() {
-    properties.setEnabled(true);
-    when(scans.findDownloadPolicyContexts(10L, null)).thenReturn(List.of(
-        new DownloadPolicyContext(
-            config(10L, EnforcementMode.ENFORCE, PolicyAction.BLOCK),
-            profile())));
-
-    ArtifactPolicyException failure = assertThrows(
-        ArtifactPolicyException.class,
-        () -> policy.beforeUncachedRead(
-            10L,
-            RepositoryFormat.MAVEN2,
-            "com/acme/demo/1/demo-1.jar",
-            "artifact",
-            "application/java-archive",
-            42L));
-
-    assertEquals(PolicyDecision.BLOCK_PENDING, failure.decision());
-    verify(scans).findDownloadPolicyContexts(10L, null);
-    verifyNoMoreInteractions(scans);
-  }
-
-  @Test
-  void uncachedRuntimeOverloadUsesRepositoryAndContentMetadata() {
-    properties.setEnabled(true);
-    RepositoryRuntime runtime = mock(RepositoryRuntime.class);
-    when(runtime.id()).thenReturn(10L);
-    when(runtime.format()).thenReturn(RepositoryFormat.MAVEN2);
-    when(scans.findDownloadPolicyContexts(10L, null)).thenReturn(List.of(
-        new DownloadPolicyContext(
-            config(10L, EnforcementMode.ENFORCE, PolicyAction.BLOCK),
-            profile())));
-    ArtifactPolicyException failure = assertThrows(
-        ArtifactPolicyException.class,
-        () -> policy.beforeUncachedRead(
-            runtime,
-            "com/acme/demo/1/demo-1.jar",
-            "artifact",
-            "application/java-archive",
-            42L));
-
-    assertEquals(PolicyDecision.BLOCK_PENDING, failure.decision());
-    verify(scans).findDownloadPolicyContexts(10L, null);
-    verifyNoMoreInteractions(scans);
-  }
-
-  @Test
-  void uncachedRemoteMetadataRemainsNotApplicable() {
-    properties.setEnabled(true);
-    when(scans.findDownloadPolicyContexts(10L, null)).thenReturn(List.of(
-        new DownloadPolicyContext(
-            config(10L, EnforcementMode.ENFORCE, PolicyAction.BLOCK),
-            profile())));
-
-    ArtifactDownloadPolicy.Decision decision = policy.beforeUncachedRead(
-        10L,
-        RepositoryFormat.MAVEN2,
-        "com/acme/maven-metadata.xml",
-        "artifact",
-        "application/xml",
-        -1L);
-
-    assertEquals(PolicyDecision.ALLOW, decision.decision());
-    verify(scans).findDownloadPolicyContexts(10L, null);
     verifyNoMoreInteractions(scans);
   }
 

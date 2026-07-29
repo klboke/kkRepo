@@ -69,6 +69,7 @@ services:
       # Serving scanners process untrusted artifacts and never receive public update egress.
       KKREPO_SCANNER_DB_AUTO_UPDATE: "false"
       KKREPO_SCANNER_DB_DIRECTORY: /var/lib/kkrepo-scanner/grype
+      KKREPO_SCANNER_MAX_OCI_REQUEST_BYTES: ${KKREPO_SCANNER_MAX_OCI_REQUEST_BYTES:-65536}
       KKREPO_SCANNER_MAX_SCRATCH_BYTES: ${KKREPO_SCANNER_MAX_SCRATCH_BYTES:-7516192768}
     read_only: true
     tmpfs:

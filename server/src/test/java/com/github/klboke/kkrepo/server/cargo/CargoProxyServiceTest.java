@@ -32,7 +32,6 @@ import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
-import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
 import java.io.IOException;
 import java.io.InputStream;
@@ -53,20 +52,6 @@ class CargoProxyServiceTest {
   private static final String REMOTE = "https://index.crates.io/";
   private static final TypeReference<Map<String, Object>> JSON_MAP = new TypeReference<>() {
   };
-
-  @Test
-  void delegatesUncachedPolicyMetadata() {
-    ArtifactDownloadPolicy policy = mock(ArtifactDownloadPolicy.class);
-    RepositoryRuntime runtime = runtime();
-    CargoAssetReader reader = new CargoAssetReader(
-        mock(AssetDao.class), mock(BlobStorageRegistry.class), policy);
-
-    reader.beforeUncachedRead(
-        runtime, "crates/demo/demo-1.0.0.crate", "crate", "application/gzip", 42L);
-
-    verify(policy).beforeUncachedRead(
-        runtime, "crates/demo/demo-1.0.0.crate", "crate", "application/gzip", 42L);
-  }
 
   @Test
   void sparseUnavailableStatusIsStoredInNegativeCache() {

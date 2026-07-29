@@ -22,6 +22,7 @@ import org.apache.commons.compress.archivers.cpio.CpioConstants;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.apache.commons.compress.archivers.tar.TarConstants;
+import org.apache.commons.compress.compressors.xz.XZCompressorOutputStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -148,6 +149,7 @@ class ArchiveGuardTest {
   @Test
   void recognizesEveryScannerSupportedNestedArchiveSuffix() throws IOException {
     byte[] tarZstd = zstdTar("inside-zstd.txt", "zstd".getBytes());
+    byte[] tarXz = xzTar("inside-xz.txt", "xz".getBytes());
     byte[] gem = tar("inside-gem.txt", "gem".getBytes());
     Path outer = temporary.resolve("supported-nested.zip");
     try (ZipOutputStream output = new ZipOutputStream(Files.newOutputStream(outer))) {
@@ -157,13 +159,16 @@ class ArchiveGuardTest {
       output.putNextEntry(new ZipEntry("packages/dependency.gem"));
       output.write(gem);
       output.closeEntry();
+      output.putNextEntry(new ZipEntry("packages/dependency.xz"));
+      output.write(tarXz);
+      output.closeEntry();
     }
 
     ArchiveGuard.Inspection inspection =
         guard.inspect(outer, limits(10, 16 * 1024), temporary, deadline());
 
-    assertThat(inspection.entries()).isEqualTo(4);
-    assertThat(inspection.nestedArchives()).isEqualTo(2);
+    assertThat(inspection.entries()).isEqualTo(6);
+    assertThat(inspection.nestedArchives()).isEqualTo(3);
   }
 
   @Test
@@ -255,6 +260,15 @@ class ArchiveGuardTest {
     ByteArrayOutputStream bytes = new ByteArrayOutputStream();
     try (ZstdOutputStream zstd = new ZstdOutputStream(bytes);
         TarArchiveOutputStream output = new TarArchiveOutputStream(zstd)) {
+      writeTarEntry(output, entryName, content);
+    }
+    return bytes.toByteArray();
+  }
+
+  private static byte[] xzTar(String entryName, byte[] content) throws IOException {
+    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+    try (XZCompressorOutputStream xz = new XZCompressorOutputStream(bytes);
+        TarArchiveOutputStream output = new TarArchiveOutputStream(xz)) {
       writeTarEntry(output, entryName, content);
     }
     return bytes.toByteArray();

@@ -27,7 +27,6 @@ import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
-import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -41,20 +40,6 @@ class PubProxyServiceTest {
   private static final ObjectMapper MAPPER = new ObjectMapper();
   private static final TypeReference<Map<String, Object>> JSON_MAP = new TypeReference<>() {
   };
-
-  @Test
-  void delegatesUncachedPolicyMetadata() {
-    ArtifactDownloadPolicy policy = mock(ArtifactDownloadPolicy.class);
-    RepositoryRuntime runtime = runtime();
-    PubAssetReader reader = new PubAssetReader(
-        mock(AssetDao.class), mock(BlobStorageRegistry.class), policy);
-
-    reader.beforeUncachedRead(
-        runtime, "api/archives/demo-1.0.0.tar.gz", "archive", "application/gzip", 42L);
-
-    verify(policy).beforeUncachedRead(
-        runtime, "api/archives/demo-1.0.0.tar.gz", "archive", "application/gzip", 42L);
-  }
 
   @Test
   void metadataResponseRewritesUpstreamArchiveUrlsToProxyRepositoryUrls() throws Exception {

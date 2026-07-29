@@ -117,8 +117,6 @@ public class DockerProxyService {
         }
         throw new DockerProtocolException(DockerErrorCode.NAME_UNKNOWN, "remote returned " + result.status(), 502);
       }
-      manifestStore.beforeUncachedManifestRead(
-          runtime, imageName, reference, result.contentType(), result.contentLength());
       byte[] body = result.body().readAllBytes();
       var stored = manifestStore.putManifest(
           runtime,

@@ -193,10 +193,9 @@ public class MavenProxyService {
           if (negativeCache != null) negativeCache.invalidate(runtime, path);
           if (headOnly) {
             proxyStateDao.recordSuccess(runtime.id(), now);
-            if (downloadPolicy != null) {
-              downloadPolicy.beforeUncachedRead(
-                  runtime, path.path(), "artifact", result.contentType(), result.contentLength());
-            }
+            // An uncached HEAD has no bytes from which to create a scan subject. The first GET
+            // persists the complete asset and applies policy to that concrete content generation
+            // before opening its response body.
             return remoteHeadResponse(result);
           }
           return persistAndServe(runtime, path, result, headOnly, now);
@@ -227,10 +226,6 @@ public class MavenProxyService {
     // Real Maven content is never text/html; metadata XML files have content-type application/xml.
     if (contentType != null && contentType.toLowerCase(Locale.ROOT).startsWith("text/html")) {
       throw new MavenExceptions.MavenNotFoundException(path.path());
-    }
-    if (downloadPolicy != null) {
-      downloadPolicy.beforeUncachedRead(
-          runtime, path.path(), "artifact", result.contentType(), result.contentLength());
     }
     long blobStoreId = requireBlobStore(runtime);
     BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);

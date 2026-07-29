@@ -209,16 +209,14 @@ final class SwiftGitHubClient {
   SwiftArchiveInspector.InspectedArchive archive(
       RepositoryRuntime runtime,
       Coordinates coordinates,
-      String commitSha,
-      ArchivePreflight preflight) {
+      String commitSha) {
     requireGitHubProxy(runtime);
     if (commitSha == null || !SHA.matcher(commitSha).matches()) {
       throw new SwiftExceptions.BadUpstream("GitHub returned an invalid commit SHA");
     }
-    Objects.requireNonNull(preflight, "preflight");
     SwiftExceptions.BadUpstream apiFailure;
     try {
-      return archiveFromApi(runtime, coordinates, commitSha, preflight);
+      return archiveFromApi(runtime, coordinates, commitSha);
     } catch (SwiftExceptions.BadUpstream failure) {
       if (!fallbackEligible(failure)) {
         throw failure;
@@ -236,7 +234,7 @@ final class SwiftGitHubClient {
         coordinates.identity(),
         commitSha);
     try {
-      return archiveFromWeb(runtime, coordinates, commitSha, preflight);
+      return archiveFromWeb(runtime, coordinates, commitSha);
     } catch (SwiftExceptions.SwiftException | IOException fallbackFailure) {
       apiFailure.addSuppressed(fallbackFailure);
       throw apiFailure;
@@ -246,30 +244,28 @@ final class SwiftGitHubClient {
   private SwiftArchiveInspector.InspectedArchive archiveFromApi(
       RepositoryRuntime runtime,
       Coordinates coordinates,
-      String commitSha,
-      ArchivePreflight preflight) throws IOException {
+      String commitSha) throws IOException {
     String url = API + coordinates.owner() + "/" + coordinates.repository()
         + "/zipball/" + commitSha;
     return fetchWithTransientStatusRetry(
         apiRequest(runtime, url, true),
         coordinates.identity() + "/" + commitSha,
-        result -> inspectArchiveResponse(result, preflight));
+        this::inspectArchiveResponse);
   }
 
   private SwiftArchiveInspector.InspectedArchive archiveFromWeb(
       RepositoryRuntime runtime,
       Coordinates coordinates,
-      String commitSha,
-      ArchivePreflight preflight) throws IOException {
+      String commitSha) throws IOException {
     String url = coordinates.repositoryUrl() + "/archive/" + commitSha + ".zip";
     return fetcher.fetchWithBodyRetry(
         githubWebRequest(runtime, url, true),
         coordinates.identity() + "/" + commitSha + "-github-web-fallback",
-        result -> inspectArchiveResponse(result, preflight));
+        this::inspectArchiveResponse);
   }
 
   private SwiftArchiveInspector.InspectedArchive inspectArchiveResponse(
-      HttpRemoteFetcher.Result result, ArchivePreflight preflight) throws IOException {
+      HttpRemoteFetcher.Result result) throws IOException {
     if (result.status() == 404 || result.status() == 410) {
       throw new SwiftExceptions.NotFound("GitHub release source was not found");
     }
@@ -280,7 +276,6 @@ final class SwiftGitHubClient {
       throw new SwiftExceptions.BadUpstream(
           "GitHub archive request returned HTTP " + result.status());
     }
-    preflight.beforeRead(result.contentType(), result.contentLength());
     return inspector.inspect(UpstreamBodyReadException.wrap(result.body()));
   }
 
@@ -799,11 +794,6 @@ final class SwiftGitHubClient {
   @FunctionalInterface
   interface RetrySleeper {
     void sleep(Duration delay) throws InterruptedException;
-  }
-
-  @FunctionalInterface
-  interface ArchivePreflight {
-    void beforeRead(String contentType, long contentLength);
   }
 
   private static final class TransientGitHubStatus extends RuntimeException {

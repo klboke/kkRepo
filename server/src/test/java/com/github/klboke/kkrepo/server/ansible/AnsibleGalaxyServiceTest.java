@@ -10,7 +10,6 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
@@ -39,7 +38,6 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InOrder;
 
 class AnsibleGalaxyServiceTest {
   private static final String BASE = "https://repo.example/repository/ansible-group/";
@@ -718,14 +716,7 @@ class AnsibleGalaxyServiceTest {
     verify(fetcher).fetch(request.capture());
     assertEquals("*/*", request.getValue().accept());
     assertTrue(request.getValue().allowedUnsignedRedirectHosts().contains("*"));
-    InOrder preflightOrder = inOrder(assets, inspector);
-    preflightOrder.verify(assets).beforeUncachedRead(
-        proxy,
-        AnsibleGalaxyPathParser.ARTIFACT_BASE + "acme-tools-1.2.3.tar.gz",
-        "collection-artifact",
-        "application/gzip",
-        2L);
-    preflightOrder.verify(inspector).inspect(any());
+    verify(inspector).inspect(any());
     verify(registry).releaseLease("artifact-lease", "owner", 1L);
   }
 

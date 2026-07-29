@@ -160,17 +160,6 @@ final class SwiftAssetSupport {
         blob.size(), asset.contentType(), blob.sha256(), asset.lastUpdatedAt());
   }
 
-  void beforeUncachedRead(
-      RepositoryRuntime runtime,
-      String path,
-      String kind,
-      String contentType,
-      long contentLength) {
-    if (downloadPolicy != null) {
-      downloadPolicy.beforeUncachedRead(runtime, path, kind, contentType, contentLength);
-    }
-  }
-
   void delete(RepositoryRuntime runtime, String path) {
     hosted.deleteInternal(runtime, path);
   }

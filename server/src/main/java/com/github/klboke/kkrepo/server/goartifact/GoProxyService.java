@@ -170,14 +170,6 @@ public class GoProxyService {
       HttpRemoteFetcher.Result result,
       boolean headOnly,
       Instant now) {
-    if (downloadPolicy != null) {
-      downloadPolicy.beforeUncachedRead(
-          runtime,
-          path.path(),
-          path.kind().name(),
-          result.contentType(),
-          result.contentLength());
-    }
     long blobStoreId = requireBlobStore(runtime);
     BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);
     Map<String, String> extras = new HashMap<>();

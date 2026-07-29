@@ -121,33 +121,6 @@ class GoProxyServiceTest {
   }
 
   @Test
-  void evaluatesPendingPolicyBeforePersistingUpstreamBody() throws Exception {
-    ArtifactDownloadPolicy downloadPolicy = mock(ArtifactDownloadPolicy.class);
-    Fixture fixture = fixture(downloadPolicy);
-    RepositoryRuntime runtime = runtime(1, 7L);
-    when(fixture.cache.find(eq(10L), eq(ZIP_PATH), any())).thenReturn(Optional.empty());
-    HttpRemoteFetcher.Result upstream = new HttpRemoteFetcher.Result(
-        200,
-        Map.of(
-            "Content-Type", "application/zip",
-            "Content-Length", "1048576"),
-        new ByteArrayInputStream("zip bytes".getBytes(StandardCharsets.UTF_8)));
-    respond(fixture.fetcher, upstream);
-    RuntimeException blocked = new RuntimeException("blocked before persistence");
-    doThrow(blocked).when(downloadPolicy)
-        .beforeUncachedRead(runtime, ZIP_PATH, "PACKAGE", "application/zip", 1048576L);
-
-    RuntimeException actual = assertThrows(
-        RuntimeException.class,
-        () -> fixture.service.get(runtime, ZIP_PATH, false));
-
-    assertSame(blocked, actual);
-    verify(downloadPolicy)
-        .beforeUncachedRead(runtime, ZIP_PATH, "PACKAGE", "application/zip", 1048576L);
-    verifyNoInteractions(fixture.writer);
-  }
-
-  @Test
   void handlesNotModifiedAndRemoteMisses() throws Exception {
     Fixture fixture = fixture();
     RepositoryRuntime runtime = runtime(1, 7L);

@@ -14,6 +14,7 @@ public enum ScannerArtifactType {
   TAR_BZ2(".tar.bz2", "artifact.tar.bz2"),
   TAR_XZ(".tar.xz", "artifact.tar.xz"),
   TAR_ZST(".tar.zst", "artifact.tar.zst"),
+  XZ(".xz", "artifact.tar.xz"),
   ZIP(".zip", "artifact.zip"),
   TAR(".tar", "artifact.tar"),
   TGZ(".tgz", "artifact.tgz"),
@@ -79,6 +80,7 @@ public enum ScannerArtifactType {
       case "TAR_BZ2" -> TAR_BZ2;
       case "TAR_XZ" -> TAR_XZ;
       case "TAR_ZST" -> TAR_ZST;
+      case "XZ" -> XZ;
       case "ZIP" -> ZIP;
       case "TAR" -> TAR;
       case "TGZ" -> TGZ;

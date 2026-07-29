@@ -34,6 +34,11 @@ helm upgrade --install kkrepo deploy/helm/kkrepo \
   --set securityScanning.enabled=true
 ```
 
+The scanner NetworkPolicy permits DNS only to pods selected by
+`securityScanning.networkPolicy.dns`. Its defaults target `kube-dns` in `kube-system`; override
+both selectors for clusters that label the DNS workload differently. Empty selectors are rejected
+so enabling the scanner cannot silently widen port 53 egress to arbitrary workloads.
+
 This chart value is a deployment capability gate; it does not activate scanning for any
 repository. After the deployment is ready, a repository administrator selects repositories and
 their audit/enforcement policies in **Admin > Security > Artifact Scanning**. When the chart value

@@ -213,12 +213,6 @@ public class HelmProxyService {
         }
         if (status >= 200 && status < 300) {
           negativeCache.invalidate(runtime, path);
-          reader.beforeUncachedRead(
-              runtime,
-              path,
-              HelmAssetKind.PACKAGE.name(),
-              result.contentType(),
-              result.contentLength());
           Map<String, Object> attrs = new LinkedHashMap<>();
           attrs.put("remoteUrl", remoteUrl);
           HelmAssetWriter.Stored stored = writer.write(

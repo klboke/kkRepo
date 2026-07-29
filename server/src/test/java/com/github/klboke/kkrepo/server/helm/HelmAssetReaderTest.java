@@ -21,8 +21,6 @@ import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
-import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
-import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -31,23 +29,6 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 class HelmAssetReaderTest {
-  @Test
-  void delegatesUncachedPolicyMetadata() {
-    ArtifactDownloadPolicy policy = mock(ArtifactDownloadPolicy.class);
-    RepositoryRuntime runtime = mock(RepositoryRuntime.class);
-    HelmAssetReader reader = new HelmAssetReader(
-        mock(AssetDao.class),
-        mock(BlobStorageRegistry.class),
-        mock(AssetMetadataCache.class),
-        policy);
-
-    reader.beforeUncachedRead(
-        runtime, "demo-1.0.0.tgz", "PACKAGE", "application/gzip", 42L);
-
-    verify(policy).beforeUncachedRead(
-        runtime, "demo-1.0.0.tgz", "PACKAGE", "application/gzip", 42L);
-  }
-
   @Test
   void servesHeadWithoutOpeningStorage() {
     AssetDao assetDao = mock(AssetDao.class);

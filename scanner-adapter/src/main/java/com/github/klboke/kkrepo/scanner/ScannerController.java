@@ -10,11 +10,8 @@ import com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Readiness;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.ResourceLimits;
-import jakarta.annotation.PostConstruct;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.Map;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
@@ -50,28 +47,13 @@ public class ScannerController {
     this.executions = executions;
   }
 
-  @PostConstruct
-  void requireConfiguredCredential() {
-    if (properties.getServiceCredential() == null
-        || properties.getServiceCredential().isBlank()) {
-      throw new IllegalStateException(
-          "kkrepo.scanner.service-credential must be configured");
-    }
-  }
-
   @GetMapping("/v1/capabilities")
-  public Capabilities capabilities(
-      @RequestHeader(value = "X-KKRepo-Scanner-Credential", required = false)
-          String credential) {
-    authorize(credential);
+  public Capabilities capabilities() {
     return engine.capabilities();
   }
 
   @GetMapping("/v1/readiness")
-  public Readiness readiness(
-      @RequestHeader(value = "X-KKRepo-Scanner-Credential", required = false)
-          String credential) {
-    authorize(credential);
+  public Readiness readiness() {
     return engine.readiness();
   }
 
@@ -83,11 +65,8 @@ public class ScannerController {
       @RequestHeader("X-KKRepo-Expected-SHA256") String expectedSha256,
       @RequestHeader("X-KKRepo-Expected-Size") long expectedSize,
       @RequestHeader(value = "X-KKRepo-Artifact-Type", required = false)
-          String artifactType,
-      @RequestHeader(value = "X-KKRepo-Scanner-Credential", required = false)
-          String credential)
+          String artifactType)
       throws IOException {
-    authorize(credential);
     requireApiVersion(apiVersion);
     ResourceLimits resourceLimits = limits(request);
     return executions.execute(
@@ -107,11 +86,8 @@ public class ScannerController {
       HttpServletRequest request,
       @RequestHeader("X-KKRepo-API-Version") String apiVersion,
       @RequestHeader("X-KKRepo-Run-ID") String runId,
-      @RequestHeader("X-KKRepo-SBOM-SHA256") String expectedSha256,
-      @RequestHeader(value = "X-KKRepo-Scanner-Credential", required = false)
-          String credential)
+      @RequestHeader("X-KKRepo-SBOM-SHA256") String expectedSha256)
       throws IOException {
-    authorize(credential);
     requireApiVersion(apiVersion);
     ResourceLimits resourceLimits = limits(request);
     return executions.execute(
@@ -122,11 +98,7 @@ public class ScannerController {
   }
 
   @PostMapping("/v1/oci/scan")
-  public OciScanResponse oci(
-      @RequestBody OciScanRequest request,
-      @RequestHeader(value = "X-KKRepo-Scanner-Credential", required = false)
-          String credential) throws IOException {
-    authorize(credential);
+  public OciScanResponse oci(@RequestBody OciScanRequest request) throws IOException {
     ResourceLimits resourceLimits = request == null ? null : request.limits();
     return executions.execute(
         request == null ? null : request.runId(),
@@ -136,10 +108,7 @@ public class ScannerController {
   @PostMapping("/v1/runs/{runId}/cancel")
   public CancellationResponse cancel(
       @PathVariable("runId") String runId,
-      @RequestHeader("X-KKRepo-API-Version") String apiVersion,
-      @RequestHeader(value = "X-KKRepo-Scanner-Credential", required = false)
-          String credential) {
-    authorize(credential);
+      @RequestHeader("X-KKRepo-API-Version") String apiVersion) {
     requireApiVersion(apiVersion);
     return new CancellationResponse(runId, executions.cancel(runId));
   }
@@ -193,23 +162,6 @@ public class ScannerController {
           "SCANNER_HEADER_INVALID", "Scanner limit header is invalid", 400, false);
     }
     return (int) value;
-  }
-
-  private void authorize(String actual) {
-    String expected = properties.getServiceCredential();
-    if (expected == null || expected.isBlank()) {
-      throw new ScannerRequestException(
-          "SCANNER_CREDENTIAL_NOT_CONFIGURED",
-          "Scanner service credential is not configured",
-          503,
-          false);
-    }
-    byte[] left = expected.getBytes(StandardCharsets.UTF_8);
-    byte[] right = actual == null ? new byte[0] : actual.getBytes(StandardCharsets.UTF_8);
-    if (!MessageDigest.isEqual(left, right)) {
-      throw new ScannerRequestException(
-          "SCANNER_UNAUTHORIZED", "Scanner service credential is invalid", 401, false);
-    }
   }
 
   private static void requireApiVersion(String version) {

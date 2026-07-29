@@ -115,9 +115,13 @@ class ScannerOperationalComponentsTest {
         .withBean(ScannerAdapterProperties.class, ScannerAdapterProperties::new)
         .withBean(ScannerCapacityLimiter.class, () -> mock(ScannerCapacityLimiter.class))
         .withBean(ScannerExecutionRegistry.class, () -> mock(ScannerExecutionRegistry.class))
-        .withUserConfiguration(ScannerController.class)
+        .withUserConfiguration(
+            ScannerController.class, ScannerRequestSecurityFilter.class)
         .withPropertyValues("kkrepo.scanner.database-update-only=true")
-        .run(context -> assertFalse(context.containsBean("scannerController")));
+        .run(context -> {
+          assertFalse(context.containsBean("scannerController"));
+          assertFalse(context.containsBean("scannerRequestSecurityFilter"));
+        });
   }
 
   @Test

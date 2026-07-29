@@ -1005,7 +1005,7 @@ class SwiftServiceTest {
 
     assertEquals(200, tombstonedList.status());
     assertTrue(responseBody(tombstonedList).contains("\"status\":410"));
-    verify(fixture.github, never()).archive(any(), any(), anyString(), any());
+    verify(fixture.github, never()).archive(any(), any(), anyString());
     verify(fixture.registry).replaceProxySources(
         proxy.id(), "acme", "demo", List.of());
   }
@@ -1211,7 +1211,7 @@ class SwiftServiceTest {
         eq("acme"),
         eq("demo"),
         argThat(candidates -> candidates.size() == 2));
-    verify(fixture.github, never()).archive(any(), any(), anyString(), any());
+    verify(fixture.github, never()).archive(any(), any(), anyString());
   }
 
   @Test
@@ -1226,7 +1226,7 @@ class SwiftServiceTest {
         .thenReturn(Optional.of(source));
     SwiftPublishLeaseManager.Lease lease = mock(SwiftPublishLeaseManager.Lease.class);
     when(fixture.leases.acquireForCoalescedRead(anyString())).thenReturn(lease);
-    when(fixture.github.archive(eq(proxy), any(), eq("a".repeat(40)), any()))
+    when(fixture.github.archive(eq(proxy), any(), eq("a".repeat(40))))
         .thenThrow(new SwiftExceptions.NotFound("gone"));
 
     assertThrows(SwiftExceptions.NotFound.class, () -> fixture.service.get(
@@ -1253,13 +1253,8 @@ class SwiftServiceTest {
         "https://repo.example/repository/swift-proxy/",
         SwiftMediaTypes.VENDOR_JSON,
         false));
-    ArgumentCaptor<SwiftGitHubClient.ArchivePreflight> preflight =
-        ArgumentCaptor.forClass(SwiftGitHubClient.ArchivePreflight.class);
     verify(fixture.github, times(1)).archive(
-        eq(proxy), any(), eq("a".repeat(40)), preflight.capture());
-    preflight.getValue().beforeRead("application/zip", 42L);
-    verify(fixture.assets).beforeUncachedRead(
-        proxy, "acme/demo/1.2.3.zip", "source-archive", "application/zip", 42L);
+        eq(proxy), any(), eq("a".repeat(40)));
   }
 
   @Test

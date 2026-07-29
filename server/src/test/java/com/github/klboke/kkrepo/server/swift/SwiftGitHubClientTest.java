@@ -3,14 +3,12 @@ package com.github.klboke.kkrepo.server.swift;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
@@ -32,7 +30,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -315,8 +312,7 @@ class SwiftGitHubClientTest {
     SwiftArchiveInspector.InspectedArchive inspected = client.archive(
         proxy("https://github.com/"),
         SwiftGitHubClient.coordinates("apple", "swift-log"),
-        "a".repeat(40),
-        (contentType, contentLength) -> {});
+        "a".repeat(40));
 
     try {
       assertEquals(archive.length, inspected.size());
@@ -333,43 +329,6 @@ class SwiftGitHubClientTest {
     } finally {
       Files.deleteIfExists(inspected.file());
     }
-  }
-
-  @Test
-  void appliesArchivePreflightBeforeInspectingTheBody() {
-    AtomicBoolean bodyRead = new AtomicBoolean();
-    InputStream body = new InputStream() {
-      @Override
-      public int read() {
-        bodyRead.set(true);
-        return -1;
-      }
-    };
-    SequencedFetcher fetcher = new SequencedFetcher(new HttpRemoteFetcher.Result(
-        200,
-        Map.of("Content-Type", "application/zip", "Content-Length", "1048576"),
-        body));
-    SwiftArchiveInspector inspector = mock(SwiftArchiveInspector.class);
-    SwiftGitHubClient client = new SwiftGitHubClient(
-        fetcher, new ObjectMapper(), inspector);
-    RuntimeException blocked = new RuntimeException("blocked before inspection");
-
-    RuntimeException actual = assertThrows(
-        RuntimeException.class,
-        () -> client.archive(
-            proxy("https://github.com/"),
-            SwiftGitHubClient.coordinates("apple", "swift-log"),
-            "a".repeat(40),
-            (contentType, contentLength) -> {
-              assertEquals("application/zip", contentType);
-              assertEquals(1048576L, contentLength);
-              assertFalse(bodyRead.get());
-              throw blocked;
-            }));
-
-    assertSame(blocked, actual);
-    assertFalse(bodyRead.get());
-    verifyNoInteractions(inspector);
   }
 
   @Test
@@ -541,8 +500,7 @@ class SwiftGitHubClientTest {
     SwiftArchiveInspector.InspectedArchive inspected = client.archive(
         proxy("https://github.com/"),
         SwiftGitHubClient.coordinates("apple", "swift-syntax"),
-        "a".repeat(40),
-        (contentType, contentLength) -> {});
+        "a".repeat(40));
 
     try {
       assertEquals(archive.length, inspected.size());

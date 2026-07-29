@@ -270,8 +270,6 @@ public class RawProxyService {
         }
         if (status >= 200 && status < 300) {
           negativeCache.invalidate(runtime, path);
-          reader.beforeUncachedRead(
-              runtime, path, "asset", result.contentType(), result.contentLength());
           RawAssetWriter.Stored stored = persist(runtime, path, result, componentBinding);
           try {
             proxyStateDao.recordSuccess(runtime.id(), now);

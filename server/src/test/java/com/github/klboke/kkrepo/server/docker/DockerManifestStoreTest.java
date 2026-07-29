@@ -47,36 +47,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 class DockerManifestStoreTest {
   @Test
-  void delegatesUncachedManifestMetadataToTheDownloadPolicy() {
-    ArtifactDownloadPolicy policy = mock(ArtifactDownloadPolicy.class);
-    RepositoryRuntime runtime = runtime("ALLOW", RepositoryType.PROXY);
-    DockerManifestStore store = new DockerManifestStore(
-        mock(AssetDao.class),
-        mock(DockerRegistryDao.class),
-        mock(DockerBlobStore.class),
-        mock(DockerManifestParser.class),
-        mock(AssetMetadataCache.class),
-        null,
-        null,
-        null,
-        policy);
-
-    store.beforeUncachedManifestRead(
-        runtime,
-        "team/app",
-        "latest",
-        "application/vnd.oci.image.manifest.v1+json",
-        42L);
-
-    verify(policy).beforeUncachedRead(
-        runtime,
-        "team/app/manifests/latest",
-        "MANIFEST",
-        "application/vnd.oci.image.manifest.v1+json",
-        42L);
-  }
-
-  @Test
   void enforcesEveryRepositoryManifestBeforeServingABlobThroughAnAliasImage() {
     AssetDao assetDao = mock(AssetDao.class);
     DockerRegistryDao dockerDao = mock(DockerRegistryDao.class);

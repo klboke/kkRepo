@@ -15,6 +15,7 @@ public class ScannerAdapterProperties {
   private boolean vulnerabilityDatabaseAutoUpdate;
   private Duration vulnerabilityDatabaseUpdateInterval = Duration.ofHours(6);
   private Duration vulnerabilityDatabaseUpdateCheckInterval = Duration.ofMinutes(1);
+  private int maxOciRequestBytes = 64 * 1024;
   private long maxInputBytes = 2L * 1024 * 1024 * 1024;
   private long maxOutputBytes = 16L * 1024 * 1024;
   private long maxStderrBytes = 256L * 1024;
@@ -97,6 +98,14 @@ public class ScannerAdapterProperties {
 
   public long getMaxInputBytes() {
     return maxInputBytes;
+  }
+
+  public int getMaxOciRequestBytes() {
+    return maxOciRequestBytes;
+  }
+
+  public void setMaxOciRequestBytes(int maxOciRequestBytes) {
+    this.maxOciRequestBytes = Math.max(1024, Math.min(1024 * 1024, maxOciRequestBytes));
   }
 
   public void setMaxInputBytes(long maxInputBytes) {

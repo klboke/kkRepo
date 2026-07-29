@@ -159,8 +159,6 @@ public class PubProxyService {
       return fetcher.fetchWithBodyRetry(req, path, result -> {
         int status = result.status();
         if (status >= 200 && status < 300) {
-          reader.beforeUncachedRead(
-              runtime, path, "archive", result.contentType(), result.contentLength());
           PubAssetWriter.Stored stored = writer.writeArchive(
               runtime,
               blobStorageRegistry.forBlobStoreId(requireBlobStore(runtime)),

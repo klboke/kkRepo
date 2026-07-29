@@ -87,15 +87,4 @@ class PubAssetReader {
   void beforeRead(long assetId, long blobId) {
     if (downloadPolicy != null) downloadPolicy.beforeRead(assetId, blobId);
   }
-
-  void beforeUncachedRead(
-      RepositoryRuntime runtime,
-      String path,
-      String kind,
-      String contentType,
-      long contentLength) {
-    if (downloadPolicy != null) {
-      downloadPolicy.beforeUncachedRead(runtime, path, kind, contentType, contentLength);
-    }
-  }
 }
