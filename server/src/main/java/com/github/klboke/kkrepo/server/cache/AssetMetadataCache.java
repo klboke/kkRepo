@@ -3,6 +3,8 @@ package com.github.klboke.kkrepo.server.cache;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.klboke.kkrepo.cache.SharedCache;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
@@ -26,8 +28,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * HEAD in every format. Both are point queries on indexed columns, but at high QPS they dominate
  * MySQL load. This cache stores a {@link CachedAssetMetadata} snapshot under a per-repository,
  * per-storage-path key so a single cache lookup replaces both. The entry is a recoverable
- * performance cache; writers evict the local copy after commit and sibling replicas converge via
- * TTL or durable repository cache-token checks.
+ * performance cache; writers evict the local copy after commit and bump a MySQL-backed repository
+ * watermark so sibling replicas discard stale entries. The TTL remains a safety net.
  *
  * <p>Negative hits (path that doesn't exist) are cached with a much shorter TTL to absorb
  * tight-loop misses (e.g. clients probing siblings) without inviting long-lived staleness.
@@ -39,12 +41,15 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 public class AssetMetadataCache {
   private static final Logger log = LoggerFactory.getLogger(AssetMetadataCache.class);
   private static final String NAMESPACE = "asset-metadata";
+  private static final String VERSION_PREFIX = "asset-metadata:repo:";
   private static final String MISSING_MARKER = "\"__missing__\"";
   private static final Object SYNC_RESOURCE_KEY =
       AssetMetadataCache.class.getName() + ".PENDING_EVICTS";
 
   private final SharedCache sharedCache;
   private final ObjectMapper objectMapper;
+  private final VersionWatermark watermark;
+  private final Cache<Long, Long> observedVersions;
   private final boolean enabled;
   private final Duration positiveTtl;
   private final Duration missingTtl;
@@ -53,11 +58,14 @@ public class AssetMetadataCache {
   public AssetMetadataCache(
       SharedCache sharedCache,
       ObjectMapper objectMapper,
+      VersionWatermark watermark,
       @Value("${kkrepo.cache.asset-metadata.enabled:true}") boolean enabled,
       @Value("${kkrepo.cache.asset-metadata.ttl-seconds:60}") long ttlSeconds,
       @Value("${kkrepo.cache.asset-metadata.missing-ttl-seconds:5}") long missingTtlSeconds) {
     this.sharedCache = sharedCache;
     this.objectMapper = objectMapper;
+    this.watermark = watermark;
+    this.observedVersions = Caffeine.newBuilder().maximumSize(100_000).build();
     this.enabled = enabled;
     this.positiveTtl = ttlSeconds <= 0 ? Duration.ZERO : Duration.ofSeconds(ttlSeconds);
     this.missingTtl = missingTtlSeconds <= 0 ? Duration.ZERO : Duration.ofSeconds(missingTtlSeconds);
@@ -68,7 +76,17 @@ public class AssetMetadataCache {
       boolean enabled,
       long ttlSeconds,
       long missingTtlSeconds) {
-    this(sharedCache, new ObjectMapper().registerModule(new JavaTimeModule()),
+    this(sharedCache, new ObjectMapper().registerModule(new JavaTimeModule()), null,
+        enabled, ttlSeconds, missingTtlSeconds);
+  }
+
+  AssetMetadataCache(
+      SharedCache sharedCache,
+      VersionWatermark watermark,
+      boolean enabled,
+      long ttlSeconds,
+      long missingTtlSeconds) {
+    this(sharedCache, new ObjectMapper().registerModule(new JavaTimeModule()), watermark,
         enabled, ttlSeconds, missingTtlSeconds);
   }
 
@@ -82,6 +100,9 @@ public class AssetMetadataCache {
       String storagePath,
       Supplier<Optional<Loaded>> loader) {
     if (!enabled) {
+      return loader.get().map(loaded -> CachedAssetMetadata.of(loaded.asset(), loaded.blob()));
+    }
+    if (!synchronizeRepositoryVersion(repositoryId)) {
       return loader.get().map(loaded -> CachedAssetMetadata.of(loaded.asset(), loaded.blob()));
     }
     String key = key(repositoryId, storagePath);
@@ -132,6 +153,9 @@ public class AssetMetadataCache {
     if (!enabled || verifiedAt == null || positiveTtl.isZero()) {
       return;
     }
+    if (!synchronizeRepositoryVersion(repositoryId)) {
+      return;
+    }
     String key = key(repositoryId, storagePath);
     try {
       Optional<CachedAssetMetadata> existing = sharedCache.getJson(NAMESPACE, key, CachedAssetMetadata.class);
@@ -149,6 +173,11 @@ public class AssetMetadataCache {
     if (!enabled) {
       return;
     }
+    invalidateRepositoryVersion(repositoryId);
+    evictLocal(repositoryId, storagePath);
+  }
+
+  private void evictLocal(long repositoryId, String storagePath) {
     try {
       sharedCache.evict(NAMESPACE, key(repositoryId, storagePath));
     } catch (RuntimeException e) {
@@ -167,7 +196,8 @@ public class AssetMetadataCache {
       return;
     }
     if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-      evict(repositoryId, storagePath);
+      invalidateRepositoryVersion(repositoryId);
+      evictLocal(repositoryId, storagePath);
       return;
     }
     @SuppressWarnings("unchecked")
@@ -180,6 +210,7 @@ public class AssetMetadataCache {
       TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
         @Override
         public void afterCommit() {
+          java.util.Set<Long> invalidatedRepositories = new java.util.HashSet<>();
           for (String key : snapshot) {
             int slash = key.indexOf(':');
             if (slash <= 0) continue;
@@ -190,7 +221,10 @@ public class AssetMetadataCache {
               continue;
             }
             String path = key.substring(slash + 1);
-            evict(repoId, path);
+            if (invalidatedRepositories.add(repoId)) {
+              invalidateRepositoryVersion(repoId);
+            }
+            evictLocal(repoId, path);
           }
         }
 
@@ -208,11 +242,51 @@ public class AssetMetadataCache {
     if (!enabled) {
       return;
     }
+    invalidateRepositoryVersion(repositoryId);
+    evictRepositoryLocal(repositoryId);
+  }
+
+  private void evictRepositoryLocal(long repositoryId) {
     try {
       sharedCache.evictByPrefix(NAMESPACE, repositoryId + ":");
     } catch (RuntimeException e) {
       log.warn("Failed bulk-evicting asset metadata cache for repo {}", repositoryId, e);
     }
+  }
+
+  private boolean synchronizeRepositoryVersion(long repositoryId) {
+    if (watermark == null) {
+      return true;
+    }
+    try {
+      long current = watermark.current(versionName(repositoryId));
+      Long observed = observedVersions.getIfPresent(repositoryId);
+      if (observed != null && observed.longValue() != current) {
+        evictRepositoryLocal(repositoryId);
+      }
+      observedVersions.put(repositoryId, current);
+      return true;
+    } catch (RuntimeException e) {
+      log.warn("Failed reading asset metadata cache version for repo {}, bypassing cache",
+          repositoryId, e);
+      return false;
+    }
+  }
+
+  private void invalidateRepositoryVersion(long repositoryId) {
+    if (watermark == null) {
+      return;
+    }
+    try {
+      observedVersions.put(repositoryId, watermark.bump(versionName(repositoryId)));
+    } catch (RuntimeException e) {
+      observedVersions.invalidate(repositoryId);
+      log.warn("Failed invalidating asset metadata cache version for repo {}", repositoryId, e);
+    }
+  }
+
+  private static String versionName(long repositoryId) {
+    return VERSION_PREFIX + repositoryId;
   }
 
   private Optional<CachedAssetMetadata> readSnapshot(String key, String raw) {

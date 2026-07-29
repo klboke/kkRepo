@@ -71,6 +71,36 @@ class AssetDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
   }
 
   @Test
+  void managementAssetPageUsesStableIdCursorAndJoinsBlobMetadata() {
+    long repositoryId = insertRepository("windows-artifacts", "raw");
+    long blobStoreId = jdbc().queryForObject(
+        "SELECT blob_store_id FROM repository WHERE id = ?", Long.class, repositoryId);
+    AssetDao dao = new JdbcAssetDao(jdbc(), jsonColumns());
+    long firstBlobId = dao.insertBlob(blob(
+        blobStoreId, "windows/first.zip", "a".repeat(64), 11));
+    long secondBlobId = dao.insertBlob(blob(
+        blobStoreId, "windows/second.zip", "b".repeat(64), 12));
+    long firstId = dao.insertAsset(assetWithBlob(
+        repositoryId, firstBlobId, RepositoryFormat.RAW, "windows/first.zip"));
+    long secondId = dao.insertAsset(assetWithBlob(
+        repositoryId, secondBlobId, RepositoryFormat.RAW, "windows/second.zip"));
+    long thirdId = dao.insertAsset(assetWithBlob(
+        repositoryId, null, RepositoryFormat.RAW, "windows/no-blob.zip"));
+
+    List<AssetDao.AssetWithBlob> firstPage =
+        dao.listAssetWithBlobPage(repositoryId, 0, 2);
+    List<AssetDao.AssetWithBlob> secondPage =
+        dao.listAssetWithBlobPage(repositoryId, firstId, 2);
+
+    assertEquals(List.of(firstId, secondId),
+        firstPage.stream().map(row -> row.asset().id()).toList());
+    assertEquals("a".repeat(64), firstPage.getFirst().blob().sha256());
+    assertEquals(List.of(secondId, thirdId),
+        secondPage.stream().map(row -> row.asset().id()).toList());
+    assertEquals(null, secondPage.get(1).blob());
+  }
+
+  @Test
   void reconciliationAndGcClaimOnlyUnreferencedDeletedBlobs() {
     long repositoryId = insertRepository("raw-hosted", "raw");
     long blobStoreId = jdbc().queryForObject(
@@ -144,6 +174,25 @@ class AssetDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
         path.substring(path.lastIndexOf('/') + 1),
         "ARTIFACT",
         "application/octet-stream",
+        10L,
+        null,
+        Instant.parse("2026-01-01T00:00:00Z"),
+        Map.of("tested", true));
+  }
+
+  private static AssetRecord assetWithBlob(
+      long repositoryId, Long blobId, RepositoryFormat format, String path) {
+    return new AssetRecord(
+        null,
+        repositoryId,
+        null,
+        blobId,
+        format,
+        path,
+        HashColumns.pathHash(path),
+        path.substring(path.lastIndexOf('/') + 1),
+        "ARTIFACT",
+        "application/zip",
         10L,
         null,
         Instant.parse("2026-01-01T00:00:00Z"),

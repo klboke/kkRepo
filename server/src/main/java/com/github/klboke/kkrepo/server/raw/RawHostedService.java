@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.raw;
 
 import com.github.klboke.kkrepo.core.BlobStorage;
+import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.protocol.maven.policy.WritePolicy;
@@ -178,6 +179,17 @@ public class RawHostedService {
     String path = normalizeAssetPath(rawPath);
     BlobStorage storage = blobStorage(runtime);
     int deleted = writer.deleteAsset(runtime, storage, path);
+    return deleted == 0 ? MavenResponse.noBody(404) : MavenResponse.noBody(204);
+  }
+
+  /** Deletes the exact Raw asset selected by the Nexus management API opaque asset ID. */
+  public MavenResponse deleteById(RepositoryRuntime runtime, long assetId) {
+    ensureHosted(runtime);
+    if (runtime.format() != RepositoryFormat.RAW) {
+      throw new MavenExceptions.MethodNotAllowed(
+          "Asset management deletion is currently supported only for Raw repositories");
+    }
+    int deleted = writer.deleteAssetById(runtime, assetId);
     return deleted == 0 ? MavenResponse.noBody(404) : MavenResponse.noBody(204);
   }
 

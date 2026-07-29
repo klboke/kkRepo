@@ -93,6 +93,7 @@ public class ManagementAuditFilter extends OncePerRequestFilter {
     String uri = stripContextPath(request);
     return uri.startsWith("/internal/")
         || uri.startsWith("/service/rest/v1/security/")
+        || uri.startsWith("/service/rest/v1/assets/")
         || legacyUi.auditedMutationPath(uri);
   }
 

@@ -75,6 +75,29 @@ class ManagementAuditFilterTest {
   }
 
   @Test
+  void nexusAssetDeleteIsAudited() throws Exception {
+    SecurityAuditDao auditDao = mock(SecurityAuditDao.class);
+    ManagementAuditFilter filter = filter(auditDao, "", false);
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("DELETE", "/service/rest/v1/assets/opaque-id");
+    request.setAttribute(
+        SecurityManagementFilter.REQUESTED_PERMISSION_ATTRIBUTE,
+        "nexus:repository-view:raw:windows-artifacts:delete");
+
+    filter.doFilter(
+        request,
+        new MockHttpServletResponse(),
+        (req, resp) -> ((HttpServletResponse) resp).setStatus(204));
+
+    ArgumentCaptor<AuditLogRecord> record = ArgumentCaptor.forClass(AuditLogRecord.class);
+    verify(auditDao).insert(record.capture());
+    assertEquals("DELETE", record.getValue().method());
+    assertEquals("/service/rest/v1/assets/opaque-id", record.getValue().path());
+    assertEquals("nexus:repository-view:raw:windows-artifacts:delete", record.getValue().permission());
+    assertEquals(204, record.getValue().status());
+  }
+
+  @Test
   void swiftRegistryPublishRecordsCoordinateAndOutcome() throws Exception {
     SecurityAuditDao auditDao = mock(SecurityAuditDao.class);
     ManagementAuditFilter filter = filter(auditDao, "", false);
