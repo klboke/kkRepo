@@ -59,6 +59,33 @@ class NexusPublicAssetIdCaptureServiceTest {
     verifyNoInteractions(publicIdService);
   }
 
+  @Test
+  void prefetchedPublicAssetRegistersWithoutAnotherNexusSearch() throws Exception {
+    RepositoryDataMigrationAssetRecord source = source("packages/demo.whl");
+    NexusPublicAsset nexus = new NexusPublicAsset(
+        "public-id", "pypi-qunhe", source.sourcePath(), "ABC123", null);
+    when(assetDao.findAssetWithBlobById(12L)).thenReturn(Optional.of(target(source, "abc123")));
+
+    service.capture(
+        "http://nexus.example/", 99L, "pypi-qunhe", 7L, source.sourcePath(), nexus, 12L);
+
+    verifyNoInteractions(client);
+    verify(publicIdService).registerNexusAlias(
+        "public-id", "pypi-qunhe", 7L, 12L, "http://nexus.example/", 99L);
+  }
+
+  @Test
+  void prefetchedPublicAssetMustBelongToExpectedRepositoryAndPath() {
+    RepositoryDataMigrationAssetRecord source = source("gems/demo.gem");
+    NexusPublicAsset nexus = new NexusPublicAsset(
+        "public-id", "other-repository", source.sourcePath(), "abc123", null);
+
+    assertThrows(IOException.class, () -> service.capture(
+        "http://nexus.example/", 99L, "gem-qunhe", 7L, source.sourcePath(), nexus, 12L),
+        "a Nexus asset from another repository must not be registered");
+    verifyNoInteractions(assetDao, publicIdService, client);
+  }
+
   private static RepositoryDataMigrationAssetRecord source(String path) {
     return new RepositoryDataMigrationAssetRecord(
         1L, 2L, "#1:2", null, path, new byte[32], RepositoryFormat.RAW,

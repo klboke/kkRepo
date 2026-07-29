@@ -55,6 +55,13 @@ public interface RepositoryDataMigrationDao {
 
   void markDiscoveryFailure(long repositoryJobId, String error);
 
+  /** Records a single discovery item failure without failing the repository page. */
+  void markDiscoveredAssetFailed(long repositoryJobId, byte[] sourcePathHash, String error);
+
+  /** Records a verified target mapping and clears any error left by an earlier attempt. */
+  void markDiscoveredAssetMapped(
+      long repositoryJobId, byte[] sourcePathHash, TargetAssetRef target);
+
   List<AssetClaim> claimAssetsForMigration(int limit, int maxAttempts, Instant retryBefore);
 
   List<AssetClaim> claimAssetsForMigration(Long migrationJobId, int limit, int maxAttempts, Instant retryBefore);

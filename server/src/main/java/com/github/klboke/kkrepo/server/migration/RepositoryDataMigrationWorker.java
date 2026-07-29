@@ -5,6 +5,8 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.security.EncryptionSecrets;
 import com.github.klboke.kkrepo.core.security.SecretCipher;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient;
+import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.NexusPublicAsset;
+import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.NexusPublicAssetPage;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.RepositoryAssetMetadata;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.RepositoryAssetPage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MigrationJobDao;
@@ -131,20 +133,29 @@ class RepositoryDataMigrationWorker {
     String cursor = repositoryJob.cursorPath();
     Instant metadataSince = metadataSince(repositoryJob);
     int pages = 0;
-    try (NexusRestClient.RepositoryDataScriptSession script = source.client().openRepositoryDataScript()) {
-      boolean complete;
-      do {
-        RepositoryAssetPage page = script.readPage(
-            repositoryJob.sourceRepositoryName(),
-            repositoryJob.format().id(),
-            source.metadataEngine(),
-            cursor,
-            repositoryJob.pageSize(),
-            metadataSince);
-        complete = processDiscoveryPage(repositoryJob, page, metadataSince, source);
-        cursor = page.nextAfterPath();
-        pages++;
-      } while (!complete && pages < DISCOVERY_PAGES_PER_RUN);
+    try {
+      if (source.publicIdBackfillOnly()) {
+        NexusPublicAssetPage page = source.client().listPublicAssetsPage(
+            repositoryJob.sourceRepositoryName(), repositoryJob.cursorPath());
+        processPublicIdBackfillPage(repositoryJob, page, source);
+        migrationService.refreshJobSummary(repositoryJob.migrationJobId());
+        return true;
+      }
+      try (NexusRestClient.RepositoryDataScriptSession script = source.client().openRepositoryDataScript()) {
+        boolean complete;
+        do {
+          RepositoryAssetPage page = script.readPage(
+              repositoryJob.sourceRepositoryName(),
+              repositoryJob.format().id(),
+              source.metadataEngine(),
+              cursor,
+              repositoryJob.pageSize(),
+              metadataSince);
+          complete = processDiscoveryPage(repositoryJob, page, metadataSince, source);
+          cursor = page.nextAfterPath();
+          pages++;
+        } while (!complete && pages < DISCOVERY_PAGES_PER_RUN);
+      }
       migrationService.refreshJobSummary(repositoryJob.migrationJobId());
       return true;
     } catch (Exception e) {
@@ -154,6 +165,81 @@ class RepositoryDataMigrationWorker {
       migrationService.refreshJobSummary(repositoryJob.migrationJobId());
       return true;
     }
+  }
+
+  private boolean processPublicIdBackfillPage(
+      RepositoryDataMigrationRepositoryRecord repositoryJob,
+      NexusPublicAssetPage page,
+      SourceAccess source) {
+    List<RepositoryDataMigrationAssetRecord> records = page.assets().stream()
+        .map(asset -> publicIdAssetRecord(repositoryJob, asset))
+        .toList();
+    Map<ByteBuffer, RepositoryDataMigrationDao.TargetAssetRef> existingTargets =
+        transactionTemplate.execute(status -> {
+          Map<ByteBuffer, RepositoryDataMigrationDao.TargetAssetRef> discoveredTargets =
+              migrationDao.findTargetAssetsByPathHash(
+                  repositoryJob.targetRepositoryId(),
+                  records.stream()
+                      .map(RepositoryDataMigrationAssetRecord::sourcePathHash)
+                      .toList());
+          migrationDao.upsertDiscoveredAssets(repositoryJob.id(), records, discoveredTargets);
+          return discoveredTargets;
+        });
+    Map<ByteBuffer, RepositoryDataMigrationDao.TargetAssetRef> targetRefs =
+        existingTargets == null ? Map.of() : existingTargets;
+    for (int index = 0; index < records.size(); index++) {
+      RepositoryDataMigrationAssetRecord migrationAsset = records.get(index);
+      NexusPublicAsset nexus = page.assets().get(index);
+      RepositoryDataMigrationDao.TargetAssetRef target = targetRefs.get(
+          ByteBuffer.wrap(migrationAsset.sourcePathHash()));
+      if (target == null) {
+        recordPublicIdBackfillFailure(
+            repositoryJob,
+            migrationAsset,
+            new IOException("Target asset is missing during Nexus public ID backfill: "
+                + repositoryJob.sourceRepositoryName() + "/" + migrationAsset.sourcePath()));
+        continue;
+      }
+      if (capturePublicId(repositoryJob, source, migrationAsset, nexus, target)) {
+        migrationDao.markDiscoveredAssetMapped(
+            repositoryJob.id(), migrationAsset.sourcePathHash(), target);
+      }
+    }
+    transactionTemplate.executeWithoutResult(status -> migrationDao.finishDiscoveryPage(
+        repositoryJob.id(), page.nextContinuationToken(), page.complete()));
+    return page.complete();
+  }
+
+  private boolean capturePublicId(
+      RepositoryDataMigrationRepositoryRecord repositoryJob,
+      SourceAccess source,
+      RepositoryDataMigrationAssetRecord migrationAsset,
+      NexusPublicAsset nexus,
+      RepositoryDataMigrationDao.TargetAssetRef target) {
+    try {
+      publicIdCaptureService.capture(
+          source.sourceInstance(),
+          repositoryJob.migrationJobId(),
+          repositoryJob.sourceRepositoryName(),
+          repositoryJob.targetRepositoryId(),
+          migrationAsset.sourcePath(),
+          nexus,
+          target.assetId());
+      return true;
+    } catch (IOException | RuntimeException failure) {
+      recordPublicIdBackfillFailure(repositoryJob, migrationAsset, failure);
+      return false;
+    }
+  }
+
+  private void recordPublicIdBackfillFailure(
+      RepositoryDataMigrationRepositoryRecord repositoryJob,
+      RepositoryDataMigrationAssetRecord migrationAsset,
+      Exception failure) {
+    log.warn("Nexus public ID backfill failed for repo={} path={}",
+        repositoryJob.sourceRepositoryName(), migrationAsset.sourcePath(), failure);
+    migrationDao.markDiscoveredAssetFailed(
+        repositoryJob.id(), migrationAsset.sourcePathHash(), errorSummary(failure));
   }
 
   private boolean processDiscoveryPage(
@@ -559,6 +645,48 @@ class RepositoryDataMigrationWorker {
         null,
         null,
         metadata,
+        null);
+  }
+
+  private static RepositoryDataMigrationAssetRecord publicIdAssetRecord(
+      RepositoryDataMigrationRepositoryRecord repositoryJob,
+      NexusPublicAsset source) {
+    LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+    metadata.put("publicIdBackfillOnly", true);
+    putIfPresent(metadata, "repositoryName", source.repository());
+    putIfPresent(metadata, "nexusPublicAssetId", source.id());
+    putIfPresent(metadata, "nexusSha1", source.sha1());
+    putIfPresent(metadata, "nexusDownloadUrl", source.downloadUrl());
+    return new RepositoryDataMigrationAssetRecord(
+        null,
+        repositoryJob.id(),
+        source.id(),
+        null,
+        source.path(),
+        PersistenceHashes.pathHash(source.path()),
+        repositoryJob.format(),
+        null,
+        null,
+        null,
+        "asset",
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        RepositoryDataMigrationDao.ASSET_PENDING,
+        0,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        Map.copyOf(metadata),
         null);
   }
 

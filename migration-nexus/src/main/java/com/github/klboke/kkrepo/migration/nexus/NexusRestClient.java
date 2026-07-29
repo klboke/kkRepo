@@ -1355,6 +1355,46 @@ public class NexusRestClient {
     return findPublicAssets(repositoryName, path);
   }
 
+  /**
+   * Reads one page from Nexus' format-independent asset listing endpoint.
+   *
+   * <p>The continuation token is intentionally supplied and returned by the caller so migration
+   * workers can persist it in shared storage between pages.</p>
+   */
+  public NexusPublicAssetPage listPublicAssetsPage(
+      String repositoryName, String continuationToken) throws IOException, InterruptedException {
+    if (repositoryName == null || repositoryName.isBlank()) {
+      throw new IllegalArgumentException("Repository is required");
+    }
+    String requestPath = "/service/rest/v1/assets?repository=" + encodePathSegment(repositoryName);
+    if (continuationToken != null && !continuationToken.isBlank()) {
+      requestPath += "&continuationToken=" + encodePathSegment(continuationToken);
+    }
+    Map<String, Object> page = getMap(requestPath);
+    List<Map<String, Object>> items = objectMaps(page.get("items"));
+    List<NexusPublicAsset> assets = new ArrayList<>(items.size());
+    for (Map<String, Object> item : items) {
+      String path = firstString(item, "path");
+      if (path == null || path.isBlank()) {
+        throw new IOException("Nexus asset listing returned an item without a path for repository "
+            + repositoryName);
+      }
+      Map<String, Object> checksum = objectValue(item.get("checksum"));
+      assets.add(new NexusPublicAsset(
+          firstString(item, "id"),
+          firstString(item, "repository"),
+          path,
+          firstString(checksum, "sha1"),
+          firstString(item, "downloadUrl")));
+    }
+    String nextToken = string(page.get("continuationToken"));
+    if (nextToken != null && nextToken.equals(continuationToken)) {
+      throw new IOException("Nexus asset listing repeated continuation token for repository "
+          + repositoryName);
+    }
+    return new NexusPublicAssetPage(repositoryName, continuationToken, nextToken, assets);
+  }
+
   private static boolean hasExactMavenCoordinates(
       String repositoryFormat, String namespace, String name, String version) {
     if (!"maven2".equalsIgnoreCase(repositoryFormat)) {
@@ -2176,6 +2216,21 @@ public class NexusRestClient {
       String path,
       String sha1,
       String downloadUrl) {
+  }
+
+  public record NexusPublicAssetPage(
+      String repositoryName,
+      String continuationToken,
+      String nextContinuationToken,
+      List<NexusPublicAsset> assets) {
+
+    public NexusPublicAssetPage {
+      assets = assets == null ? List.of() : List.copyOf(assets);
+    }
+
+    public boolean complete() {
+      return nextContinuationToken == null;
+    }
   }
 
   private record SecurityExportResult(

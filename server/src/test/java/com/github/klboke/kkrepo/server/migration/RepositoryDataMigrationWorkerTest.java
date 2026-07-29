@@ -8,14 +8,18 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient;
+import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.NexusPublicAsset;
+import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.NexusPublicAssetPage;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.RepositoryAssetMetadata;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.RepositoryAssetPage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MigrationJobDao;
@@ -26,6 +30,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.MigrationJobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryDataMigrationAssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryDataMigrationRepositoryRecord;
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -254,6 +259,55 @@ class RepositoryDataMigrationWorkerTest {
       verify(fixture.publicIdCaptureService).capture(
           eq(client), eq("http://nexus.example"), eq(100L), eq("source"), eq(9L), any(), eq(30L));
       verify(fixture.migrationDao).finishDiscoveryPage(7L, "tools/setup.exe", true);
+    } finally {
+      fixture.worker.shutdown();
+    }
+  }
+
+  @Test
+  void publicIdBackfillPageAdvancesAfterIsolatingAssetFailures() throws Exception {
+    Fixture fixture = fixture();
+    try {
+      RepositoryDataMigrationRepositoryRecord repository = repositoryJob(
+          RepositoryFormat.RUBYGEMS, Map.of());
+      NexusPublicAsset good = new NexusPublicAsset(
+          "good-id", "source", "gems/good.gem", "good-sha1", null);
+      NexusPublicAsset invalid = new NexusPublicAsset(
+          "invalid-id", "source", "gems/invalid.gem", "invalid-sha1", null);
+      NexusPublicAsset missing = new NexusPublicAsset(
+          "missing-id", "source", "gems/missing.gem", "missing-sha1", null);
+      NexusPublicAssetPage page = new NexusPublicAssetPage(
+          "source", null, "next-token", List.of(good, invalid, missing));
+      when(fixture.migrationDao.findTargetAssetsByPathHash(eq(9L), any()))
+          .thenAnswer(invocation -> {
+            List<?> hashes = invocation.getArgument(1);
+            return Map.of(
+                java.nio.ByteBuffer.wrap((byte[]) hashes.get(0)), new TargetAssetRef(null, 30L, 40L),
+                java.nio.ByteBuffer.wrap((byte[]) hashes.get(1)), new TargetAssetRef(null, 31L, 41L));
+          });
+      doThrow(new IOException("invalid public ID"))
+          .when(fixture.publicIdCaptureService)
+          .capture(
+              "http://nexus.example", 100L, "source", 9L,
+              "gems/invalid.gem", invalid, 31L);
+
+      assertFalse((Boolean) invoke(
+          fixture.worker, "processPublicIdBackfillPage",
+          new Class<?>[] {
+              RepositoryDataMigrationRepositoryRecord.class,
+              NexusPublicAssetPage.class,
+              RepositoryDataMigrationWorker.SourceAccess.class
+          },
+          repository, page, sourceAccess(null, true, true)),
+          "a page with a continuation token must remain resumable");
+
+      verify(fixture.publicIdCaptureService).capture(
+          "http://nexus.example", 100L, "source", 9L, "gems/good.gem", good, 30L);
+      verify(fixture.migrationDao).markDiscoveredAssetMapped(
+          eq(7L), any(byte[].class), eq(new TargetAssetRef(null, 30L, 40L)));
+      verify(fixture.migrationDao, times(2)).markDiscoveredAssetFailed(
+          eq(7L), any(byte[].class), any());
+      verify(fixture.migrationDao).finishDiscoveryPage(7L, "next-token", false);
     } finally {
       fixture.worker.shutdown();
     }

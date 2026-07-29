@@ -150,6 +150,34 @@ class RepositoryDataMigrationDaoMySqlIntegrationTest extends MySqlIntegrationTes
         firstJobId, Instant.now())).orElseThrow().id());
   }
 
+  @Test
+  void discoveryAssetFailureIsCountedWithoutBlockingRepositoryCompletion() {
+    long repositoryId = insertRepository("public-id-target", "raw");
+    long migrationJobId = insertMigrationJob(false);
+    RepositoryDataMigrationDao dao = new JdbcRepositoryDataMigrationDao(
+        jdbc(), jsonColumns(), new com.github.klboke.kkrepo.persistence.mysql.MySqlDatabaseDialect());
+    long repositoryJobId = dao.createRepositoryJob(
+        migrationJobId, "public-id-source", "public-id-target", repositoryId,
+        RepositoryFormat.RAW, 50, Map.of());
+    RepositoryDataMigrationAssetRecord asset = asset("tools/missing.zip");
+    dao.upsertDiscoveredAssets(repositoryJobId, List.of(asset), Map.of());
+
+    dao.markDiscoveredAssetFailed(
+        repositoryJobId, asset.sourcePathHash(), "target asset missing");
+    dao.finishDiscoveryPage(repositoryJobId, null, true);
+
+    var repository = dao.findRepositoryJob(repositoryJobId).orElseThrow();
+    assertEquals(RepositoryDataMigrationDao.REPOSITORY_FINISHED_WITH_FAILURES, repository.status(),
+        "one asset failure should complete the repository with failures");
+    assertEquals(1, repository.totalAssets(), "the failed asset remains part of the final total");
+    assertEquals(1, repository.failedAssets(), "the repository should expose the asset failure");
+    assertEquals("failed", jdbc().queryForObject("""
+        SELECT status FROM repository_data_migration_asset
+        WHERE repository_job_id = ? AND source_path_hash = ?
+        """, String.class, repositoryJobId, asset.sourcePathHash()),
+        "the individual asset should retain its failure state");
+  }
+
   private long insertMigrationJob(boolean packageMigrationEnabled) {
     jdbc().update("""
         INSERT INTO migration_job

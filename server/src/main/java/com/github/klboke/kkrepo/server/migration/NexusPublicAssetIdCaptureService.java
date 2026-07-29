@@ -29,19 +29,6 @@ class NexusPublicAssetIdCaptureService {
       long targetRepositoryId,
       RepositoryDataMigrationAssetRecord source,
       long targetAssetId) throws IOException, InterruptedException {
-    AssetWithBlob target = assetDao.findAssetWithBlobById(targetAssetId)
-        .orElseThrow(() -> new IOException("Target asset is missing while registering Nexus public ID: "
-            + targetAssetId));
-    if (target.asset().repositoryId() != targetRepositoryId
-        || !source.sourcePath().equals(target.asset().path())) {
-      throw new IOException("Target asset identity does not match Nexus public ID source path: "
-          + sourceRepositoryName + "/" + source.sourcePath());
-    }
-    if (target.blob() == null || target.blob().sha1() == null || target.blob().sha1().isBlank()) {
-      throw new IOException("Target asset has no SHA-1 for Nexus public ID verification: "
-          + sourceRepositoryName + "/" + source.sourcePath());
-    }
-
     List<NexusPublicAsset> matches = client.findPublicAssets(
         sourceRepositoryName,
         source.sourcePath(),
@@ -57,14 +44,49 @@ class NexusPublicAssetIdCaptureService {
       throw new IOException("Nexus exact asset search returned " + matches.size()
           + " distinct public IDs for " + sourceRepositoryName + "/" + source.sourcePath());
     }
-    NexusPublicAsset nexus = matches.getFirst();
+    capture(
+        sourceInstance,
+        migrationJobId,
+        sourceRepositoryName,
+        targetRepositoryId,
+        source.sourcePath(),
+        matches.get(0),
+        targetAssetId);
+  }
+
+  void capture(
+      String sourceInstance,
+      long migrationJobId,
+      String sourceRepositoryName,
+      long targetRepositoryId,
+      String sourcePath,
+      NexusPublicAsset nexus,
+      long targetAssetId) throws IOException {
+    if (nexus == null
+        || !sourceRepositoryName.equals(nexus.repository())
+        || !sourcePath.equals(nexus.path())) {
+      throw new IOException("Nexus public asset identity does not match expected source path: "
+          + sourceRepositoryName + "/" + sourcePath);
+    }
+    AssetWithBlob target = assetDao.findAssetWithBlobById(targetAssetId)
+        .orElseThrow(() -> new IOException("Target asset is missing while registering Nexus public ID: "
+            + targetAssetId));
+    if (target.asset().repositoryId() != targetRepositoryId
+        || !sourcePath.equals(target.asset().path())) {
+      throw new IOException("Target asset identity does not match Nexus public ID source path: "
+          + sourceRepositoryName + "/" + sourcePath);
+    }
+    if (target.blob() == null || target.blob().sha1() == null || target.blob().sha1().isBlank()) {
+      throw new IOException("Target asset has no SHA-1 for Nexus public ID verification: "
+          + sourceRepositoryName + "/" + sourcePath);
+    }
     if (nexus.sha1() == null || nexus.sha1().isBlank()) {
-      throw new IOException("Nexus exact asset search returned no SHA-1 for "
-          + sourceRepositoryName + "/" + source.sourcePath());
+      throw new IOException("Nexus public asset listing returned no SHA-1 for "
+          + sourceRepositoryName + "/" + sourcePath);
     }
     if (!target.blob().sha1().equalsIgnoreCase(nexus.sha1())) {
       throw new IOException("Nexus/kkRepo SHA-1 mismatch while registering public ID for "
-          + sourceRepositoryName + "/" + source.sourcePath()
+          + sourceRepositoryName + "/" + sourcePath
           + ": nexus=" + nexus.sha1() + ", kkrepo=" + target.blob().sha1());
     }
     publicIdService.registerNexusAlias(

@@ -348,6 +348,41 @@ class NexusRestClientTest {
     assertEquals("maven-public-id", assets.getFirst().id(), "public ID should come from Nexus");
   }
 
+  @Test
+  void publicAssetListingUsesRepositoryPaginationWithoutFormatSpecificSearch() throws Exception {
+    NexusRestClient client = client(new FakeNexus(true));
+
+    NexusRestClient.NexusPublicAssetPage first =
+        client.listPublicAssetsPage("paged-repo", null);
+    NexusRestClient.NexusPublicAssetPage second =
+        client.listPublicAssetsPage("paged-repo", first.nextContinuationToken());
+
+    assertEquals("next page", first.nextContinuationToken(),
+        "the first page should expose Nexus' continuation token");
+    assertFalse(first.complete(), "a page with a continuation token is not complete");
+    assertEquals(List.of("packages/demo.whl"),
+        first.assets().stream().map(NexusRestClient.NexusPublicAsset::path).toList(),
+        "the first listing page should retain the exact Nexus asset path");
+    assertEquals("public-page-1", first.assets().getFirst().id(),
+        "the public ID must come from the listing response");
+    assertEquals("abc123", first.assets().getFirst().sha1(),
+        "the SHA-1 must come from the listing response");
+    assertTrue(second.complete(), "a page without a continuation token is complete");
+    assertEquals(List.of("gems/demo.gem"),
+        second.assets().stream().map(NexusRestClient.NexusPublicAsset::path).toList(),
+        "the second listing page should use the supplied continuation token");
+  }
+
+  @Test
+  void publicAssetListingRejectsRepeatedContinuationToken() {
+    IOException failure = assertThrows(IOException.class,
+        () -> client(new FakeNexus(true)).listPublicAssetsPage("repeated-token", "same"),
+        "a repeated token must be rejected");
+
+    assertTrue(failure.getMessage().contains("repeated continuation token"),
+        "a repeated token must fail before the worker can loop forever");
+  }
+
   private static NexusRestClient client(FakeNexus nexus) {
     return new NexusRestClient(
         "http://source.example/",
@@ -443,6 +478,29 @@ class NexusRestClientTest {
                 "repository", "maven-3rd-releases",
                 "path", "com/acme/demo/1.0/demo-1.0.pom",
                 "checksum", Map.of("sha1", "other")))));
+      }
+      if ("GET".equals(method) && path.equals(
+          "/service/rest/v1/assets?repository=paged-repo")) {
+        return json(200, Map.of(
+            "items", List.of(Map.of(
+                "id", "public-page-1",
+                "repository", "paged-repo",
+                "path", "packages/demo.whl",
+                "checksum", Map.of("sha1", "abc123"))),
+            "continuationToken", "next page"));
+      }
+      if ("GET".equals(method) && path.equals(
+          "/service/rest/v1/assets?repository=paged-repo&continuationToken=next%20page")) {
+        return json(200, Map.of(
+            "items", List.of(Map.of(
+                "id", "public-page-2",
+                "repository", "paged-repo",
+                "path", "gems/demo.gem",
+                "checksum", Map.of("sha1", "def456")))));
+      }
+      if ("GET".equals(method) && path.equals(
+          "/service/rest/v1/assets?repository=repeated-token&continuationToken=same")) {
+        return json(200, Map.of("items", List.of(), "continuationToken", "same"));
       }
       if ("GET".equals(method) && "/service/rest/v1/security/users?source=default".equals(path)) {
         usersPath = path;

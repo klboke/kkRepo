@@ -326,6 +326,32 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
         """, truncate(error), repositoryJobId);
   }
 
+  public void markDiscoveredAssetFailed(
+      long repositoryJobId, byte[] sourcePathHash, String error) {
+    jdbcTemplate.update("""
+        UPDATE repository_data_migration_asset
+        SET status = ?, attempts = attempts + 1, claimed_at = NULL, last_error = ?
+        WHERE repository_job_id = ? AND source_path_hash = ?
+        """, ASSET_FAILED, truncate(error), repositoryJobId, sourcePathHash);
+  }
+
+  public void markDiscoveredAssetMapped(
+      long repositoryJobId, byte[] sourcePathHash, TargetAssetRef target) {
+    jdbcTemplate.update("""
+        UPDATE repository_data_migration_asset
+        SET status = ?, claimed_at = NULL, migrated_at = CURRENT_TIMESTAMP,
+            target_component_id = ?, target_asset_id = ?, target_asset_blob_id = ?,
+            last_error = NULL
+        WHERE repository_job_id = ? AND source_path_hash = ?
+        """,
+        ASSET_MIGRATED,
+        target.componentId(),
+        target.assetId(),
+        target.assetBlobId(),
+        repositoryJobId,
+        sourcePathHash);
+  }
+
   @Transactional(propagation = Propagation.MANDATORY)
   public List<AssetClaim> claimAssetsForMigration(int limit, int maxAttempts, Instant retryBefore) {
     return claimAssetsForMigration(null, limit, maxAttempts, retryBefore);
