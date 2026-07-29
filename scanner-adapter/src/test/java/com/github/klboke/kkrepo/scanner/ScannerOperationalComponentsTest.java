@@ -22,6 +22,8 @@ import java.time.Instant;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.boot.DefaultApplicationArguments;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 class ScannerOperationalComponentsTest {
   @TempDir Path temporaryDirectory;
@@ -79,6 +81,28 @@ class ScannerOperationalComponentsTest {
     properties.setWorkDirectory(invalidWorkDirectory);
     updater.update();
     verify(metrics, times(2)).recordDatabaseUpdate("failed");
+  }
+
+  @Test
+  void updateOnlyRunnerUsesTheCoordinatedUpdaterWithoutEnablingTheServingScheduler() {
+    ScannerDatabaseUpdater updater = mock(ScannerDatabaseUpdater.class);
+
+    new ScannerDatabaseUpdateOnlyRunner(updater)
+        .run(new DefaultApplicationArguments(new String[0]));
+
+    verify(updater).updateOnce();
+  }
+
+  @Test
+  void updateOnlyContextDoesNotCreateCredentialProtectedHttpController() {
+    new ApplicationContextRunner()
+        .withBean(ScannerEngineService.class, () -> mock(ScannerEngineService.class))
+        .withBean(ScannerAdapterProperties.class, ScannerAdapterProperties::new)
+        .withBean(ScannerCapacityLimiter.class, () -> mock(ScannerCapacityLimiter.class))
+        .withBean(ScannerExecutionRegistry.class, () -> mock(ScannerExecutionRegistry.class))
+        .withUserConfiguration(ScannerController.class)
+        .withPropertyValues("kkrepo.scanner.database-update-only=true")
+        .run(context -> assertFalse(context.containsBean("scannerController")));
   }
 
   @Test

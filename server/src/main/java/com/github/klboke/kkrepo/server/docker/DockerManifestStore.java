@@ -251,7 +251,6 @@ public class DockerManifestStore {
     List<Long> manifestAssetIds = dockerDao.listManifestAssetIdsReferencingDigest(
         runtime.id(),
         digest.value(),
-        0,
         SecurityScanDao.MAX_DOWNLOAD_POLICY_BATCH + 1);
     if (manifestAssetIds.isEmpty()) {
       // Hosted uploads and cross-mounts are valid before a manifest references them. Proxy blobs

@@ -7,7 +7,12 @@ import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.TokenKind;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestReferenceRecord;
+import com.github.klboke.kkrepo.protocol.docker.DockerDigest;
 import com.github.klboke.kkrepo.protocol.docker.DockerErrorCode;
+import com.github.klboke.kkrepo.protocol.docker.DockerPath;
 import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
 import com.github.klboke.kkrepo.security.scan.ScannerContract;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
@@ -16,9 +21,13 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Deque;
 import java.util.HexFormat;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -36,20 +45,27 @@ public class DockerAuthService {
   public static final long SCANNER_PULL_TOKEN_GRACE_SECONDS = 120L;
   static final long MAX_SCANNER_PULL_TOKEN_TTL_SECONDS =
       ScannerContract.MAX_REQUEST_TIMEOUT_SECONDS + SCANNER_PULL_TOKEN_GRACE_SECONDS;
+  static final int MAX_SCANNER_MANIFEST_GRAPH_NODES = 1024;
+  static final int MAX_SCANNER_MANIFEST_GRAPH_REFERENCES = 100_000;
+  private static final String SCANNER_ROOT_DIGEST = "rootManifestDigest";
+  private static final String SCANNER_REPOSITORY_ID = "repositoryId";
 
   private static final SecureRandom RANDOM = new SecureRandom();
 
   private final DockerAuthTokenDao tokenDao;
+  private final DockerRegistryDao dockerRegistryDao;
   private final SecurityAuthenticationService authenticationService;
   private final AccessDecisionService accessDecisionService;
   private final long tokenTtlSeconds;
 
   public DockerAuthService(
       DockerAuthTokenDao tokenDao,
+      DockerRegistryDao dockerRegistryDao,
       SecurityAuthenticationService authenticationService,
       AccessDecisionService accessDecisionService,
       @Value("${kkrepo.docker.token-ttl-seconds:900}") long tokenTtlSeconds) {
     this.tokenDao = tokenDao;
+    this.dockerRegistryDao = dockerRegistryDao;
     this.authenticationService = authenticationService;
     this.accessDecisionService = accessDecisionService;
     this.tokenTtlSeconds = Math.max(60, tokenTtlSeconds);
@@ -96,14 +112,29 @@ public class DockerAuthService {
   }
 
   /**
-   * Issues a short-lived, exact-image pull token for the isolated scanner adapter. The clear token
-   * is returned once; only its hash and bounded scope are stored in the shared database.
+   * Issues a short-lived pull token for one immutable OCI manifest graph. The clear token is
+   * returned once; only its hash, exact repository/image, and root digest are stored in the shared
+   * database.
    */
   @Transactional
-  public String grantScannerPull(String repository, String imageName, long requestedTtlSeconds) {
-    if (repository == null || repository.isBlank() || imageName == null || imageName.isBlank()) {
-      throw new IllegalArgumentException("Scanner repository and image name are required");
+  public String grantScannerPull(
+      long repositoryId,
+      String repository,
+      String imageName,
+      String rootManifestDigest,
+      long requestedTtlSeconds) {
+    if (repositoryId <= 0
+        || repository == null
+        || repository.isBlank()
+        || imageName == null
+        || imageName.isBlank()) {
+      throw new IllegalArgumentException("Scanner repository identity and image name are required");
     }
+    String normalizedRootDigest = DockerDigest.parse(rootManifestDigest).value();
+    Map<String, Object> scannerScope =
+        new LinkedHashMap<>(new Scope(repository, imageName, List.of("pull")).toMap());
+    scannerScope.put(SCANNER_REPOSITORY_ID, repositoryId);
+    scannerScope.put(SCANNER_ROOT_DIGEST, normalizedRootDigest);
     String token = randomToken();
     long ttl = scannerPullTokenTtlSeconds(requestedTtlSeconds);
     tokenDao.insert(
@@ -113,7 +144,7 @@ public class DockerAuthService {
         null,
         null,
         TokenKind.SECURITY_SCANNER,
-        List.of(new Scope(repository, imageName, List.of("pull")).toMap()),
+        List.of(Map.copyOf(scannerScope)),
         Instant.now().plusSeconds(ttl));
     return token;
   }
@@ -126,7 +157,12 @@ public class DockerAuthService {
 
   @Transactional
   public Optional<BearerAuthentication> authenticateBearer(
-      String token, String repository, String imageName, String action) {
+      String token,
+      long repositoryId,
+      String repository,
+      String imageName,
+      String action,
+      DockerPath path) {
     if (token == null || token.isBlank()) {
       return Optional.empty();
     }
@@ -138,9 +174,128 @@ public class DockerAuthService {
     if (!scopeAllows(row.scopes(), repository, imageName, action)) {
       throw new DockerProtocolException(DockerErrorCode.DENIED, "token scope does not allow " + action, 403);
     }
+    if (row.tokenKind() == TokenKind.SECURITY_SCANNER
+        && !scannerManifestGraphAllows(
+            row.scopes(), repositoryId, repository, imageName, action, path)) {
+      throw new DockerProtocolException(
+          DockerErrorCode.DENIED,
+          "scanner token does not allow the requested manifest graph resource",
+          403);
+    }
     return restoreSubject(row)
         .map(subject -> new BearerAuthentication(
             subject, row.tokenKind() == TokenKind.SECURITY_SCANNER));
+  }
+
+  private boolean scannerManifestGraphAllows(
+      Map<String, Object> storedScopes,
+      long repositoryId,
+      String repository,
+      String imageName,
+      String action,
+      DockerPath path) {
+    Map<?, ?> scannerScope =
+        matchingScope(storedScopes, repository, imageName, action).orElse(null);
+    if (scannerScope == null
+        || repositoryId <= 0
+        || path == null
+        || path.digest() == null
+        || (path.kind() != DockerPath.Kind.MANIFEST && path.kind() != DockerPath.Kind.BLOB)) {
+      return false;
+    }
+    Object rawRepositoryId = scannerScope.get(SCANNER_REPOSITORY_ID);
+    if (!(rawRepositoryId instanceof Number number)
+        || number.longValue() != repositoryId) {
+      return false;
+    }
+    Object rawRootDigest = scannerScope.get(SCANNER_ROOT_DIGEST);
+    if (rawRootDigest == null) {
+      return false;
+    }
+    String rootDigest;
+    try {
+      rootDigest = DockerDigest.parse(rawRootDigest.toString()).value();
+    } catch (RuntimeException invalidScope) {
+      return false;
+    }
+    DockerManifestRecord root = dockerRegistryDao
+        .findManifestByDigest(repositoryId, imageName, rootDigest)
+        .orElse(null);
+    if (root == null) {
+      return false;
+    }
+    String requestedDigest = path.digest().value();
+    if (rootDigest.equals(requestedDigest)) {
+      return path.kind() == DockerPath.Kind.MANIFEST;
+    }
+
+    Deque<DockerManifestRecord> pending = new ArrayDeque<>();
+    Set<String> visited = new HashSet<>();
+    pending.add(root);
+    visited.add(root.digest());
+    int observedReferences = 0;
+    while (!pending.isEmpty()) {
+      DockerManifestRecord manifest = pending.removeFirst();
+      for (DockerManifestReferenceRecord reference :
+          dockerRegistryDao.listReferences(manifest.id())) {
+        observedReferences++;
+        if (observedReferences > MAX_SCANNER_MANIFEST_GRAPH_REFERENCES) {
+          return false;
+        }
+        if (requestedDigest.equals(reference.digest())
+            && descriptorAllows(path.kind(), reference.referenceKind())) {
+          return true;
+        }
+        if (!"MANIFEST".equalsIgnoreCase(reference.referenceKind())
+            || visited.contains(reference.digest())) {
+          continue;
+        }
+        if (visited.size() >= MAX_SCANNER_MANIFEST_GRAPH_NODES) {
+          return false;
+        }
+        visited.add(reference.digest());
+        dockerRegistryDao
+            .findManifestByDigest(repositoryId, imageName, reference.digest())
+            .ifPresent(pending::addLast);
+      }
+    }
+    return false;
+  }
+
+  private static boolean descriptorAllows(DockerPath.Kind requestedKind, String referenceKind) {
+    if (requestedKind == DockerPath.Kind.MANIFEST) {
+      return "MANIFEST".equalsIgnoreCase(referenceKind);
+    }
+    return requestedKind == DockerPath.Kind.BLOB
+        && ("CONFIG".equalsIgnoreCase(referenceKind)
+            || "LAYER".equalsIgnoreCase(referenceKind));
+  }
+
+  private static Optional<Map<?, ?>> matchingScope(
+      Map<String, Object> stored,
+      String repository,
+      String imageName,
+      String action) {
+    Object scopes = stored.get("scopes");
+    if (!(scopes instanceof List<?> list)) {
+      return Optional.empty();
+    }
+    for (Object item : list) {
+      if (!(item instanceof Map<?, ?> map)
+          || !repository.equals(map.get("repository"))) {
+        continue;
+      }
+      String tokenImage = map.get("imageName") == null ? "" : map.get("imageName").toString();
+      if (!tokenImage.equals(imageName == null ? "" : imageName)) {
+        continue;
+      }
+      Object rawActions = map.get("actions");
+      if (rawActions instanceof List<?> actions
+          && actions.stream().anyMatch(value -> action.equals(value.toString()))) {
+        return Optional.of(map);
+      }
+    }
+    return Optional.empty();
   }
 
   private Optional<AuthenticatedSubject> restoreSubject(DockerAuthTokenDao.TokenRecord row) {

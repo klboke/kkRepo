@@ -443,22 +443,24 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
 
   @Override
   public List<Long> listManifestAssetIdsReferencingDigest(
-      long repositoryId, String digest, long afterAssetId, int maxItems) {
+      long repositoryId, String digest, int maxItems) {
     return jdbcTemplate.queryForList("""
-        SELECT DISTINCT m.asset_id
-        FROM docker_manifest_reference r
-        JOIN docker_manifest m ON m.id = r.manifest_id
-        WHERE r.repository_id = ?
-          AND r.digest_hash = ?
-          AND m.deleted_at IS NULL
-          AND m.asset_id > ?
-        ORDER BY m.asset_id
-        LIMIT ?
+        SELECT m.asset_id
+        FROM (
+          SELECT DISTINCT r.manifest_id
+          FROM docker_manifest_reference r
+          WHERE r.repository_id = ?
+            AND r.digest_hash = ?
+          ORDER BY r.manifest_id
+          LIMIT ?
+        ) bounded_reference
+        JOIN docker_manifest m ON m.id = bounded_reference.manifest_id
+        WHERE m.deleted_at IS NULL
+        ORDER BY bounded_reference.manifest_id
         """,
         Long.class,
         repositoryId,
         hash(digest),
-        Math.max(0, afterAssetId),
         Math.max(1, Math.min(maxItems, SecurityScanDao.MAX_DOWNLOAD_POLICY_BATCH + 1)));
   }
 

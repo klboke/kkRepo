@@ -532,6 +532,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
             delete_reason = COALESCE(delete_reason, ?),
             delete_claimed_at = NULL
         WHERE id = ?
+          AND external_reference_count = 0
         """, reason, assetBlobId);
   }
 

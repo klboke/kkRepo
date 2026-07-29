@@ -36,9 +36,27 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
+{{- define "kkrepo.scannerUpdaterSelectorLabels" -}}
+app.kubernetes.io/name: {{ printf "%s-scanner-db-updater" (include "kkrepo.name" .) | trunc 63 | trimSuffix "-" }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: security-scanner-db-updater
+{{- end }}
+
+{{- define "kkrepo.scannerUpdaterLabels" -}}
+helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | quote }}
+{{ include "kkrepo.scannerUpdaterSelectorLabels" . }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
 {{- define "kkrepo.scannerName" -}}
 {{- $base := include "kkrepo.fullname" . | trunc 51 | trimSuffix "-" -}}
 {{- printf "%s-scanner" $base | trunc 59 | trimSuffix "-" -}}
+{{- end }}
+
+{{- define "kkrepo.scannerUpdaterName" -}}
+{{- $base := include "kkrepo.fullname" . | trunc 42 | trimSuffix "-" -}}
+{{- printf "%s-scanner-db-updater" $base | trunc 63 | trimSuffix "-" -}}
 {{- end }}
 
 {{- define "kkrepo.scannerHeadlessName" -}}
@@ -90,6 +108,9 @@ http://{{ $scannerName }}-{{ $index }}.{{ $headlessName }}:{{ $root.Values.secur
 {{- end }}
 {{- if and .Values.securityScanning.enabled (gt (int .Values.securityScanning.replicaCount) 1000) }}
 {{- fail "securityScanning.replicaCount must not exceed 1000 so scanner pod DNS labels remain valid" }}
+{{- end }}
+{{- if and .Values.securityScanning.enabled (not .Values.securityScanning.scannerDatabase.persistence.enabled) }}
+{{- fail "security scanning requires scannerDatabase.persistence so the egress-isolated updater can publish the Grype database" }}
 {{- end }}
 {{- if and .Values.securityScanning.enabled (gt (int .Values.securityScanning.replicaCount) 1) .Values.securityScanning.scannerDatabase.persistence.enabled (not .Values.securityScanning.scannerDatabase.persistence.existingClaim) }}
 {{- fail "multiple scanner replicas with persistence require scannerDatabase.persistence.existingClaim backed by ReadWriteMany storage" }}

@@ -47,15 +47,28 @@ public class ScannerDatabaseUpdater {
       return;
     }
     try {
+      updateOnce();
+    } catch (RuntimeException e) {
+      log.warn("Scanner vulnerability database update failed: {}", safeCode(e));
+    }
+  }
+
+  /**
+   * Performs one coordinated due-check and update attempt. The Helm updater CronJob uses this
+   * entry point even though scan-serving pods keep in-process auto-update disabled.
+   */
+  public ScannerDatabaseCoordinator.UpdateResult updateOnce() {
+    try {
       ScannerDatabaseCoordinator.UpdateResult result = database.updateIfDue(
           properties.getVulnerabilityDatabaseUpdateInterval(), this::runUpdate);
       metrics.recordDatabaseUpdate(result.name().toLowerCase(java.util.Locale.ROOT));
       if (result == ScannerDatabaseCoordinator.UpdateResult.UPDATED) {
         engine.invalidateReadiness();
       }
+      return result;
     } catch (RuntimeException e) {
       metrics.recordDatabaseUpdate("failed");
-      log.warn("Scanner vulnerability database update failed: {}", safeCode(e));
+      throw e;
     }
   }
 

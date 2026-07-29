@@ -35,6 +35,7 @@ kkrepo:
     grype-executable: ${KKREPO_SCANNER_GRYPE_EXECUTABLE:grype}
     vulnerability-database-directory: ${KKREPO_SCANNER_DB_DIRECTORY:/var/lib/kkrepo-scanner/grype}
     vulnerability-database-auto-update: ${KKREPO_SCANNER_DB_AUTO_UPDATE:false}
+    database-update-only: ${KKREPO_SCANNER_DATABASE_UPDATE_ONLY:false}
     vulnerability-database-update-interval: ${KKREPO_SCANNER_DB_UPDATE_INTERVAL:6h}
     vulnerability-database-update-check-interval: ${KKREPO_SCANNER_DB_UPDATE_CHECK_INTERVAL:1m}
     max-input-bytes: ${KKREPO_SCANNER_MAX_INPUT_BYTES:2147483648}

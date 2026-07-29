@@ -83,7 +83,12 @@ public class DockerAuthFilter extends OncePerRequestFilter {
     try {
       bearerAuthentication = bearer(request)
           .flatMap(token -> authService.authenticateBearer(
-              token, target.repository(), target.path().imageName(), action));
+              token,
+              runtime.get().id(),
+              target.repository(),
+              target.path().imageName(),
+              action,
+              target.path()));
     } catch (DockerProtocolException e) {
       challenge(response, request, target, challengeActions);
       return;

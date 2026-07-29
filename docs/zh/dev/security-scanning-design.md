@@ -495,7 +495,9 @@ PostgreSQL 使用非事务 migration 的 `CREATE INDEX CONCURRENTLY`，MySQL 显
 `ALGORITHM=INPLACE, LOCK=NONE`。该拆分是在线 DDL 的事务边界，不是功能发布后的修复
 migration；PostgreSQL 部署同时把 Flyway advisory lock 切为 session lock，避免
 transactional lock 自身阻塞 concurrent index build。滚动升级期间旧副本可以继续处理
-制品写入与下载水位更新。
+制品写入与下载水位更新。MySQL DDL 会逐条隐式提交，因此每条 `ALTER` 前都查询
+`information_schema.statistics`，再通过动态语句执行缺失索引；若进程在第一条提交后
+退出，Flyway repair 后重跑会跳过已有索引并继续第二条，不会因重复索引再次中断。
 
 - task/backfill 的 claim、terminal retention 与 scanner snapshot 外键索引；
 - candidate 的 `pending + changed_at` 队列索引，以及 task 的
@@ -691,6 +693,14 @@ SBOM 或 raw report 时，同时登记通用 `blob_reference(owner_type, owner_i
 Blob GC 只依赖 `asset` 与 `blob_reference` 计算引用，不允许直接 JOIN
 `security_sbom`、`security_scan_run` 等功能表。这样扫描文档受保护，同时核心 GC
 不反向依赖扫描域。
+
+V36 同时给 `asset_blob` 增加 `external_reference_count` 和约束：
+`external_reference_count > 0` 时 `deleted_at` 必须为空。引用 DAO 先按主键锁定活动
+Blob，在同一事务内插入 `blob_reference` 并递增计数；释放时按相同锁顺序删除引用并
+递减/重算计数。这个数据库约束是滚动升级 fence：不了解 `blob_reference` 的旧副本
+即使继续执行原有 GC 软删除 SQL，也会被约束拒绝，不能先提交 `deleted_at` 再删除
+对象存储内容。若旧 GC 先提交删除，新引用发布会在行锁后看到删除 fence 并失败。该
+方案不依赖 MySQL trigger，因此开启 binlog 的普通应用账号不需要 `SUPER` 权限。
 
 唯一键：
 
@@ -1145,9 +1155,17 @@ Grype 数据库读取与更新使用同一协调器：
 - 同一进程使用公平读写锁；扫描持有读锁，更新持有写锁。
 - 多个 adapter 共享同一数据库卷时，再使用卷内 POSIX 文件锁，避免一个 Pod 更新时
   另一个 Pod 读取半更新目录；共享卷必须支持文件锁并使用 `ReadWriteMany`。
-- 更新成功后原子写共享 marker。每分钟检查一次是否到达默认 6 小时更新间隔；扫描
-  繁忙只会推迟本次检查，不会跳过完整的 6 小时周期。
-- 每 Pod 使用独立临时数据库卷时，各 Pod 独立更新，不共享 marker。
+- Docker Compose 可以由 scanner 进程每分钟检查一次是否达到默认 6 小时更新间隔。
+  Helm 中提供扫描服务的 Pod 永远关闭进程内更新，也没有公网 HTTPS 出站；独立
+  `database-update-only` CronJob 默认每 5 分钟启动一次，挂载相同 PVC，只执行一次
+  协调后的到期检查/更新并退出。成功后原子写共享 marker，因此调度频率不会缩短
+  6 小时最小成功更新间隔。
+- Helm updater 不创建 credential-protected HTTP controller、不接收 scanner service
+  credential，也不处理制品；NetworkPolicy 只给 updater 的 443 公网出站，服务 Pod
+  只允许访问 kkRepo 与 DNS。
+- Helm 必须使用持久数据库卷。单副本默认 `ReadWriteOnce` 时，required pod affinity
+  把 updater 调度到 scanner 所在节点；多 scanner 副本必须提供支持文件锁的
+  `ReadWriteMany` existing claim。
 - readiness 和 Match 响应都必须带非空数据库 revision 与更新时间；未知、过期或更新
   中均返回可重试失败，不能用“ready=true 但 provenance 为空”的结果生成 run。
 
@@ -1191,7 +1209,10 @@ run，不在第一阶段自动合并、投票或覆盖。
 
 OCI scanner 按 digest 从 kkRepo 内部 registry 地址拉取：
 
-- kkRepo 签发只读、仓库范围、digest/manifest 范围、短 TTL token。
+- kkRepo 签发只读、仓库 ID、image name 与根 manifest digest 范围的短 TTL token。
+  授权时从该根 digest 遍历数据库中持久化的 descriptor 图，只允许读取可达的 child
+  manifest、config 和 layer；tag、无关 digest、其它 image/repository 与任何 push
+  action 都拒绝。遍历最多 1024 个 manifest 节点、100000 条引用，越界 fail closed。
 - token 不继承触发扫描用户的长期 credential。
 - 过期 token 由独立于 Docker upload cleanup 开关的 worker 按索引分批领取并删除；
   每个副本使用 `FOR UPDATE SKIP LOCKED` 协作，不依赖进程内状态。
@@ -1255,6 +1276,10 @@ task 却被标记 COMPLETE 的状态。
 - 禁止设备文件、FIFO、socket、hard link 和逃逸工作区的 symlink。
 - 规范化每个归档路径并拒绝绝对路径、`..` 和 Unicode/分隔符绕过。
 - 限制压缩层级、归档条目数、单文件大小、解压总量和压缩膨胀率。
+- `.rpm` 先有界解析 lead、signature/main header 和对齐，再识别其压缩方式并把内部
+  CPIO payload 纳入同一条目数、单文件、累计解压量、嵌套深度、路径与 deadline
+  预算；拒绝 CPIO device/FIFO/socket 等特殊文件。不能把 RPM 外壳当成不透明单文件
+  直接交给 Syft。
 - 限制 CPU、内存、临时磁盘、进程数和 wall-clock timeout。
 - Linux 上每个 Syft/Grype 命令必须通过 `setsid` 建立独立 session/process group；
   timeout、请求中断、I/O 失败以及父进程正常退出后仍有残留进程时，对整个 group 先
@@ -1388,7 +1413,10 @@ dependency resolution 兼容测试。
 `/v2/<name>/blobs/<digest>` 时，服务端通过
 `repository_id + digest_hash` 的索引查询仓库内所有仍有效、引用该 digest 的
 manifest asset；`<name>` 不能缩小这个集合，因为实际 Blob 读取本身只按仓库和 digest
-解析。热路径只读取最多 1025 个 ID：前 1024 个由一条聚合策略 SQL 判定，
+解析。DAO 先沿 `(repository_id, digest_hash, manifest_id)` 覆盖索引在
+`docker_manifest_reference` 内完成 `DISTINCT + ORDER BY + LIMIT 1025`，再把这一固定
+集合关联到仍有效 manifest；不会先 JOIN/排序该 digest 的全部历史引用。热路径只读取
+最多 1025 个 ID：前 1024 个由一条聚合策略 SQL 判定，
 第 1025 个只作为 overflow 标记。存在 overflow 且任一适用配置为 `ENFORCE` 时，
 固定成本地按 pending fail-closed，不继续按 tag 数量分页；只有全部适用配置均为
 `AUDIT` 时才允许继续。任一关联 manifest 被阻断时，同一仓库内通过别名 image name
@@ -1634,6 +1662,7 @@ kkrepo.scanner.max-scratch-bytes=7516192768
 kkrepo.scanner.max-output-bytes=16777216
 kkrepo.scanner.vulnerability-database-update-interval=6h
 kkrepo.scanner.vulnerability-database-update-check-interval=1m
+kkrepo.scanner.database-update-only=false
 ```
 
 scanner 成功响应从有界流直接反序列化，不在 kkRepo 内额外保留完整 transport
@@ -1684,9 +1713,14 @@ Docker Compose/quickstart：
 Helm/Kubernetes：
 
 - `securityScanning.enabled` 同时部署 adapter StatefulSet/Service 并设置 kkRepo 的
-  部署能力 gate；它仍不会自动启用任何仓库。
+  部署能力 gate；开启自动更新时还部署独立、非服务型 updater CronJob。它仍不会
+  自动启用任何仓库。
 - scanner pod 有 CPU、memory、ephemeral-storage request/limit。
 - 支持 NetworkPolicy、Pod Security Context、read-only root filesystem。
+- scanner 服务 Pod 的自动更新固定关闭，NetworkPolicy 不允许公网；updater 默认每
+  5 分钟只做一次 due-check/update，独占公网 443 出站且不注入 service credential。
+  chart 要求 scanner database persistence；单副本 RWO 通过 pod affinity 同节点挂载，
+  多副本使用 RWX existing claim。
 - 每个 run 按 ID hash 选择稳定的首选 ordinal；catalog、match 和 OCI 操作遇到可重试
   的传输、容量或可用性错误时，在一个单调时钟总 deadline 内按地址列表环形切换到
   其余 ordinal；每个备用请求的 HTTP timeout、scanner timeout header 和 OCI
@@ -1799,10 +1833,12 @@ CI 不能依赖实时漏洞源返回固定 finding；fixture 必须可复现。
 - `../`、绝对路径、混合分隔符和 Unicode 路径逃逸。
 - symlink/hard link/device/FIFO/socket。
 - zip/tar bomb、超多条目、深层嵌套、超大单文件。
+- RPM header/payload 截断、异常长度、CPIO 路径逃逸、特殊文件和嵌套 RPM。
 - checksum/size 不匹配。
 - 恶意 package metadata、HTML/Markdown 和 URL。
 - scanner 报告的 JSON nesting/field/body 上限。
-- scoped token 越权、过期和日志脱敏。
+- scoped token 对 tag、无关 manifest/config/layer、其它 image/repository、push 的
+  越权，图遍历上限、过期和日志脱敏。
 - signed URL 重放与越权 object。
 
 ### Persistence 与多副本

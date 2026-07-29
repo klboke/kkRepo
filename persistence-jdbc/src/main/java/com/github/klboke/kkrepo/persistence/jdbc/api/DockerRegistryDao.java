@@ -60,10 +60,11 @@ public interface DockerRegistryDao {
    * request URL. Download policy must therefore evaluate every live manifest that references the
    * digest instead of allowing an alias image name to narrow the authorization set. Callers
    * request one row beyond their evaluation limit to detect overflow and fail closed without
-   * issuing an unbounded number of hot-path queries.
+   * issuing an unbounded number of hot-path queries. The implementation must apply that bound
+   * while scanning the repository/digest index, before joining or sorting manifest rows.
    */
   List<Long> listManifestAssetIdsReferencingDigest(
-      long repositoryId, String digest, long afterAssetId, int maxItems);
+      long repositoryId, String digest, int maxItems);
 
   OptionalLong findUnreferencedBlobAssetIdForCleanup(
       long repositoryId, long afterAssetId, int maxCandidates, Instant updatedBefore);

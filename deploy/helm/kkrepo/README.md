@@ -45,8 +45,11 @@ activation, policy, waiver, monitoring, and troubleshooting instructions.
 The adapter runs without a Docker socket, as uid/gid `10001`, with a read-only root filesystem.
 Its PVC contains only the rebuildable Grype vulnerability database; candidates, leases, SBOM
 references, findings, policies, and waivers remain in the shared relational database. The default
-NetworkPolicy accepts scanner API traffic only from kkRepo pods and permits scanner egress only to
-kkRepo, DNS, and public HTTPS for vulnerability database updates.
+NetworkPolicy accepts scanner API traffic only from kkRepo pods and permits the serving scanner
+egress only to kkRepo and DNS. When automatic vulnerability-database updates are enabled, a
+separate non-serving CronJob mounts the same database volume and is the only scanner workload
+allowed public HTTPS egress. The updater does not receive the scanner service credential and
+cannot serve or process artifact requests.
 
 The scanner workload is a StatefulSet so every replica has a stable network identity. kkRepo uses
 the run hash to select a preferred ordinal, then fails retryable catalog, match, and OCI requests
@@ -60,12 +63,14 @@ hide healthy replicas or multiply outage delays by the replica count. For multip
 replicas, provide
 `securityScanning.scannerDatabase.persistence.existingClaim` backed by `ReadWriteMany`, or disable
 scanner database persistence so each pod uses an ephemeral cache. Shared-database replicas use
-cross-process read/update locks and a shared update marker; database update eligibility is checked
-every minute so a busy scan only postpones the update instead of skipping it for the full update
-interval. Each adapter also admits at most two active and four queued scans by default, returning a
-retryable HTTP 429 with `Retry-After` when capacity is exhausted. Scratch admission is separately
-weighted by each request's input, nested-archive, and output bounds: the default `7 GiB` shared
-budget protects the `8 GiB` emptyDir from concurrent overcommit. Keep
+cross-process read/update locks and a shared update marker. The updater CronJob runs every five
+minutes by default, while the marker enforces at least six hours between successful updates. With
+the default single-replica `ReadWriteOnce` claim, required pod affinity schedules the updater on
+the scanner node; multi-replica deployments still require `ReadWriteMany`. Each adapter also
+admits at most two active and four queued scans by default, returning a retryable HTTP 429 with
+`Retry-After` when capacity is exhausted. Scratch admission is separately weighted by each
+request's input, nested-archive, and output bounds: the default `7 GiB` shared budget protects the
+`8 GiB` emptyDir from concurrent overcommit. Keep
 `securityScanning.limits.maxScratchBytes` below
 `securityScanning.limits.scratchVolumeSize` and leave additional room in the Pod
 ephemeral-storage limit when tuning either value.

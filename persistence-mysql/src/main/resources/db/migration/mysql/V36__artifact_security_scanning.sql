@@ -22,6 +22,15 @@ CREATE TABLE blob_reference (
   INDEX idx_blob_reference_blob (blob_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- The counter and CHECK constraint are deliberately visible to pre-V36 application replicas
+-- during a rolling upgrade. Their blob GC does not know about blob_reference, so reject a legacy
+-- soft-delete UPDATE while a new document owner exists. A constraint is used instead of a trigger
+-- so standard MySQL deployments with binary logging do not require SUPER privileges.
+ALTER TABLE asset_blob
+  ADD COLUMN external_reference_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  ADD CONSTRAINT ck_asset_blob_external_reference_live
+    CHECK (external_reference_count = 0 OR deleted_at IS NULL);
+
 CREATE TABLE security_scan_profile (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   name VARCHAR(128) NOT NULL,

@@ -7,6 +7,8 @@ import com.github.klboke.kkrepo.security.scan.ScannerContract.ResourceLimits;
 import com.github.luben.zstd.ZstdOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -14,6 +16,9 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.zip.GZIPOutputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
+import org.apache.commons.compress.archivers.cpio.CpioArchiveEntry;
+import org.apache.commons.compress.archivers.cpio.CpioArchiveOutputStream;
+import org.apache.commons.compress.archivers.cpio.CpioConstants;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.apache.commons.compress.archivers.tar.TarConstants;
@@ -162,6 +167,33 @@ class ArchiveGuardTest {
   }
 
   @Test
+  void unwrapsRpmPayloadBeforeApplyingArchiveLimits() throws IOException {
+    Path safe = temporary.resolve("safe.rpm");
+    Files.write(safe, rpm("usr/share/doc/readme.txt", "safe".getBytes()));
+
+    ArchiveGuard.Inspection inspection =
+        guard.inspect(safe, limits(10, 1024), temporary, deadline());
+
+    assertThat(inspection.entries()).isEqualTo(1);
+    assertThat(inspection.expandedBytes()).isEqualTo(4);
+
+    Path oversized = temporary.resolve("oversized.rpm");
+    Files.write(oversized, rpm("usr/lib/large.bin", new byte[65]));
+    assertThatThrownBy(
+            () -> guard.inspect(oversized, limits(10, 64), temporary, deadline()))
+        .isInstanceOf(ScannerRequestException.class)
+        .extracting(failure -> ((ScannerRequestException) failure).code())
+        .isEqualTo("ARCHIVE_ENTRY_TOO_LARGE");
+
+    Path nested = zip("nested-rpm.zip", "packages/unsafe.rpm", rpm("../escape", new byte[] {1}));
+    assertThatThrownBy(
+            () -> guard.inspect(nested, limits(10, 16 * 1024), temporary, deadline()))
+        .isInstanceOf(ScannerRequestException.class)
+        .extracting(failure -> ((ScannerRequestException) failure).code())
+        .isEqualTo("ARCHIVE_PATH_ESCAPE");
+  }
+
+  @Test
   void rejectsArchiveLinksAndInvalidNames() throws IOException {
     Path tar = temporary.resolve("links.tar");
     try (TarArchiveOutputStream output =
@@ -226,6 +258,41 @@ class ArchiveGuardTest {
       writeTarEntry(output, entryName, content);
     }
     return bytes.toByteArray();
+  }
+
+  private static byte[] rpm(String entryName, byte[] content) throws IOException {
+    ByteArrayOutputStream compressedPayload = new ByteArrayOutputStream();
+    try (GZIPOutputStream gzip = new GZIPOutputStream(compressedPayload);
+        CpioArchiveOutputStream cpio =
+            new CpioArchiveOutputStream(gzip, CpioConstants.FORMAT_NEW)) {
+      CpioArchiveEntry entry =
+          new CpioArchiveEntry(CpioConstants.FORMAT_NEW, entryName, content.length);
+      entry.setMode(CpioConstants.C_ISREG | 0644);
+      cpio.putArchiveEntry(entry);
+      cpio.write(content);
+      cpio.closeArchiveEntry();
+    }
+
+    ByteArrayOutputStream rpm = new ByteArrayOutputStream();
+    byte[] lead = new byte[96];
+    lead[0] = (byte) 0xed;
+    lead[1] = (byte) 0xab;
+    lead[2] = (byte) 0xee;
+    lead[3] = (byte) 0xdb;
+    rpm.write(lead);
+    rpm.write(emptyRpmHeader());
+    rpm.write(emptyRpmHeader());
+    rpm.write(compressedPayload.toByteArray());
+    return rpm.toByteArray();
+  }
+
+  private static byte[] emptyRpmHeader() {
+    ByteBuffer header = ByteBuffer.allocate(16).order(ByteOrder.BIG_ENDIAN);
+    header.put(new byte[] {(byte) 0x8e, (byte) 0xad, (byte) 0xe8, 0x01});
+    header.putInt(0);
+    header.putInt(0);
+    header.putInt(0);
+    return header.array();
   }
 
   private static void writeTarEntry(

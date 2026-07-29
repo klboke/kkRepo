@@ -133,7 +133,13 @@ jobs:
           docker compose -f docker-compose.quickstart-postgresql.yml config
           docker compose -f docker-compose.compat-postgres.yml --profile kkrepo-postgresql config
       - uses: azure/setup-helm@v5
-      - run: helm lint deploy/helm/kkrepo
+      - name: Verify Helm rendering and scanner egress isolation
+        run: |
+          helm lint deploy/helm/kkrepo
+          helm lint deploy/helm/kkrepo \
+            --set securityScanning.enabled=true \
+            --set securityScanning.serviceCredential.existingSecret=kkrepo-scanner
+          scripts/ci/check-helm-scanner-isolation.sh
 
   dev-jar-deploy-contract:
     name: dev-jar-deploy-contract

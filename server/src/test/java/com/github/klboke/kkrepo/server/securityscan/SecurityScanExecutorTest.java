@@ -259,7 +259,8 @@ class SecurityScanExecutorTest {
     when(manifest.digest()).thenReturn("sha256:" + "b".repeat(64));
     when(fixture.docker.findManifestsByAssetIds(List.of(10L)))
         .thenReturn(Map.of(10L, manifest));
-    when(fixture.dockerAuth.grantScannerPull("repo", "acme/demo", 180L))
+    when(fixture.dockerAuth.grantScannerPull(
+        1L, "repo", "acme/demo", "sha256:" + "b".repeat(64), 180L))
         .thenReturn("scanner-token");
     when(fixture.adapter.scanOci(any())).thenReturn(new OciScanResponse(
         catalogResponse(),
@@ -325,8 +326,10 @@ class SecurityScanExecutorTest {
     fixture.executor.execute(fixture.task);
 
     verify(fixture.dockerAuth).grantScannerPull(
+        1L,
         "repo",
         "acme/demo",
+        "sha256:" + "b".repeat(64),
         ScannerContract.MAX_REQUEST_TIMEOUT_SECONDS
             + DockerAuthService.SCANNER_PULL_TOKEN_GRACE_SECONDS);
   }

@@ -55,8 +55,8 @@ pending state.
 - Production kkRepo should use a shared OSS/S3 blob store. The scanner does not connect to the
   kkRepo database or blob store; it receives inputs only through the protected internal API.
 - The scanner needs a writable temporary directory and Grype database directory.
-- When automatic database updates are enabled, the scanner must be able to reach the Grype
-  database source.
+- When automatic database updates are enabled, the dedicated database-updater workload must be
+  able to reach the Grype database source. Scan-serving Pods do not need public egress.
 - Configure the same high-entropy service credential in kkRepo and the scanner adapter.
 
 The default Helm scanner resources request `500m CPU / 1 GiB`, limit `2 CPU / 4 GiB`, provide a
@@ -146,7 +146,8 @@ helm upgrade --install kkrepo deploy/helm/kkrepo \
 
 `securityScanning.enabled=true` does both of the following:
 
-- Deploys the scanner adapter StatefulSet, Services, probes, and optional NetworkPolicy.
+- Deploys the scanner adapter StatefulSet, Services, probes, optional NetworkPolicy, and—when
+  `scannerDatabase.autoUpdate=true`—a non-serving database-updater CronJob.
 - Enables the kkRepo deployment capability gate.
 
 It still does not activate a repository. After deployment, check:
@@ -154,6 +155,7 @@ It still does not activate a repository. After deployment, check:
 ```bash
 kubectl get pods
 kubectl get statefulset
+kubectl get cronjob
 kubectl logs statefulset/kkrepo-scanner
 ```
 
@@ -178,10 +180,15 @@ For multiple scanner replicas:
   deployment as ready when at least one adapter replica is ready. One 15-second end-to-end budget
   covers both endpoints and every ordinal, so an outage cannot multiply the worker delay by the
   replica count.
+- Scan-serving Pods have automatic updates disabled and no public HTTPS egress. The updater
+  CronJob runs every five minutes by default, performs only a coordinated due-check/update, and
+  exits. A shared marker preserves the minimum six-hour interval between successful updates. The
+  updater receives neither the scanner service credential nor artifact traffic.
+- Scanner database persistence is required by the chart. With the default single-replica
+  `ReadWriteOnce` claim, required pod affinity co-locates the updater with the scanner. The file
+  lock makes scans fail retryably rather than read a partially updated database.
 - If replicas share a persistent database cache, set
   `securityScanning.scannerDatabase.persistence.existingClaim` to a `ReadWriteMany` PVC.
-- If shared storage is unavailable, disable scanner database persistence and let each Pod use its
-  own ephemeral cache.
 - Do not attempt to mount one cross-node `ReadWriteOnce` volume into several Pods.
 
 See the [Helm chart README](../../deploy/helm/kkrepo/README.md) for all chart values.
@@ -461,7 +468,8 @@ and OCI registry URL.
 | Environment variable | Application default | Purpose |
 | --- | ---: | --- |
 | `KKREPO_SCANNER_SERVICE_CREDENTIAL` | Required | Must match the kkRepo credential; the adapter refuses to start when it is empty |
-| `KKREPO_SCANNER_DB_AUTO_UPDATE` | `false` | Automatic database update; Compose/Helm templates set `true` |
+| `KKREPO_SCANNER_DB_AUTO_UPDATE` | `false` | In-process automatic update; Compose enables it, while Helm serving Pods keep it disabled |
+| `KKREPO_SCANNER_DATABASE_UPDATE_ONLY` | `false` | Run one coordinated update and exit without creating the credential-protected HTTP controller; used by the Helm updater CronJob |
 | `KKREPO_SCANNER_DB_DIRECTORY` | `/var/lib/kkrepo-scanner/grype` | Grype database directory |
 | `KKREPO_SCANNER_DB_UPDATE_INTERVAL` | `6h` | Target update interval |
 | `KKREPO_SCANNER_DB_UPDATE_CHECK_INTERVAL` | `1m` | Update-eligibility check interval |
@@ -545,7 +553,7 @@ At minimum, alert on:
 | Download returns `503` | Pending/failed/partial is configured to `BLOCK`; wait for completion or temporarily restore `ALLOW` |
 | Download returns `403` | A complete result matches an unwaived policy; upgrade, revise policy, or approve a waiver |
 | OCI scan fails | Ensure `KKREPO_SECURITY_SCANNING_OCI_REGISTRY_URL` is reachable from the scanner, credentials match, and required platforms exist |
-| Vulnerability DB is stale | Check automatic updates, scanner HTTPS egress, volume permissions, and free space |
+| Vulnerability DB is stale | On Helm, inspect the updater CronJob/Jobs, updater HTTPS egress, shared-volume permissions, and free space; on Compose, inspect scanner automatic updates |
 | SBOM download fails | Check browse/read permission, SBOM blob references, and the backing blob store |
 
 Do not log service credentials, temporary registry tokens, signed artifact URLs, or complete
@@ -571,8 +579,8 @@ sensitive paths while troubleshooting.
   repository, or log.
 - Do not mount the Docker socket or grant additional Linux capabilities.
 - Keep a read-only root filesystem, non-root user, bounded temporary storage, and resource limits.
-- Allow only the HTTPS egress required for database updates; remove unnecessary egress when updates
-  are disabled.
+- Give public HTTPS egress only to the dedicated database updater. Scan-serving workloads should
+  reach only kkRepo and DNS.
 - Start with Audit, then enable Enforce per repository. Review non-expiring waivers regularly.
 - Back up the kkRepo relational database and blob store. The scanner database volume is a
   rebuildable cache, not a business backup.

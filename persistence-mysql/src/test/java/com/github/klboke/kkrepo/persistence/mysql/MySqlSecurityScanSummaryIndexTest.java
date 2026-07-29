@@ -9,6 +9,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.io.support.EncodedResource;
+import org.springframework.jdbc.datasource.init.ScriptUtils;
 
 class MySqlSecurityScanSummaryIndexTest extends MySqlIntegrationTestSupport {
 
@@ -120,6 +123,32 @@ class MySqlSecurityScanSummaryIndexTest extends MySqlIntegrationTestSupport {
 
     assertEquals(2, occurrences(migration, "ALGORITHM=INPLACE"));
     assertEquals(2, occurrences(migration, "LOCK=NONE"));
+    assertEquals(2, occurrences(migration, "information_schema.statistics"));
+    assertEquals(4, occurrences(migration, "PREPARE kkrepo_"));
+  }
+
+  @Test
+  void onlineIndexMigrationResumesWhenOnlyTheFirstDdlWasCommitted() {
+    jdbc().execute(
+        "ALTER TABLE docker_manifest_reference DROP INDEX idx_docker_reference_policy_lookup");
+
+    jdbc().execute((org.springframework.jdbc.core.ConnectionCallback<Void>) connection -> {
+      ScriptUtils.executeSqlScript(
+          connection,
+          new EncodedResource(
+              new ClassPathResource(
+                  "db/migration/mysql/V37__artifact_security_scanning_online_indexes.sql"),
+              StandardCharsets.UTF_8));
+      return null;
+    });
+
+    assertEquals(
+        List.of("repository_id", "id"),
+        indexColumns("asset", "idx_asset_repository_id"));
+    assertEquals(
+        List.of("repository_id", "digest_hash", "manifest_id"),
+        indexColumns(
+            "docker_manifest_reference", "idx_docker_reference_policy_lookup"));
   }
 
   private static String resource(String name) throws IOException {

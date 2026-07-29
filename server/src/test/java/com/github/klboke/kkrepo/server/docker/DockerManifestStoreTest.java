@@ -60,7 +60,6 @@ class DockerManifestStoreTest {
     when(dockerDao.listManifestAssetIdsReferencingDigest(
         runtime.id(),
         digest.value(),
-        0L,
         com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao
             .MAX_DOWNLOAD_POLICY_BATCH + 1))
         .thenReturn(List.of(31L, 32L));
@@ -89,7 +88,7 @@ class DockerManifestStoreTest {
     DockerDigest digest = DockerDigest.parse(
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     when(dockerDao.listManifestAssetIdsReferencingDigest(
-        eq(runtime.id()), eq(digest.value()), eq(0L), anyInt()))
+        eq(runtime.id()), eq(digest.value()), anyInt()))
         .thenReturn(List.of());
     DockerManifestStore store = new DockerManifestStore(
         mock(AssetDao.class),
@@ -117,7 +116,7 @@ class DockerManifestStoreTest {
     DockerDigest digest = DockerDigest.parse(
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     when(dockerDao.listManifestAssetIdsReferencingDigest(
-        eq(runtime.id()), eq(digest.value()), eq(0L), anyInt()))
+        eq(runtime.id()), eq(digest.value()), anyInt()))
         .thenReturn(List.of());
     DockerManifestStore store = new DockerManifestStore(
         mock(AssetDao.class),
@@ -150,7 +149,7 @@ class DockerManifestStoreTest {
         .boxed()
         .toList();
     when(dockerDao.listManifestAssetIdsReferencingDigest(
-        eq(runtime.id()), eq(digest.value()), eq(0L), anyInt()))
+        eq(runtime.id()), eq(digest.value()), anyInt()))
         .thenReturn(manifestAssetIds);
     DockerManifestStore store = new DockerManifestStore(
         mock(AssetDao.class),
@@ -194,7 +193,7 @@ class DockerManifestStoreTest {
     store.beforeBlobRead(runtime, "team/app", digest);
 
     verify(dockerDao, never()).listManifestAssetIdsReferencingDigest(
-        anyLong(), anyString(), anyLong(), anyInt());
+        anyLong(), anyString(), anyInt());
     verify(policy, never()).beforeReadAll(any(), anyBoolean());
     verify(policy, never()).beforePendingOciImageRead(anyLong(), anyString());
   }

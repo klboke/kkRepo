@@ -5,8 +5,12 @@ import com.github.klboke.kkrepo.security.scan.ScannerContract.ResourceLimits;
 import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.channels.SeekableByteChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.text.Normalizer;
 import java.util.Arrays;
 import java.util.List;
@@ -18,6 +22,7 @@ import org.apache.commons.compress.archivers.ArchiveEntry;
 import org.apache.commons.compress.archivers.ArchiveException;
 import org.apache.commons.compress.archivers.ArchiveInputStream;
 import org.apache.commons.compress.archivers.ArchiveStreamFactory;
+import org.apache.commons.compress.archivers.cpio.CpioArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
 import org.apache.commons.compress.compressors.CompressorException;
@@ -39,6 +44,13 @@ public class ArchiveGuard {
           .collect(Collectors.toUnmodifiableSet());
   private static final long MAX_EXPANSION_RATIO = 1000;
   private static final long MIN_RATIO_BUDGET_BYTES = 1024L * 1024;
+  private static final byte[] RPM_LEAD_MAGIC =
+      new byte[] {(byte) 0xed, (byte) 0xab, (byte) 0xee, (byte) 0xdb};
+  private static final byte[] RPM_HEADER_MAGIC =
+      new byte[] {(byte) 0x8e, (byte) 0xad, (byte) 0xe8, 0x01};
+  private static final long RPM_LEAD_BYTES = 96;
+  private static final int RPM_HEADER_FIXED_BYTES = 16;
+  private static final int RPM_INDEX_ENTRY_BYTES = 16;
 
   public Inspection inspect(
       Path input, ResourceLimits limits, Path workspace, ScanDeadline deadline) {
@@ -96,6 +108,8 @@ public class ArchiveGuard {
       Path workspace,
       boolean allowImageFilesystemMetadata) {
     try {
+      if (inspectAsRpm(
+          input, depth, budget, workspace, allowImageFilesystemMetadata)) return;
       if (inspectAsArchive(
           input, depth, budget, workspace, allowImageFilesystemMetadata)) return;
       inspectAsCompressed(
@@ -105,6 +119,134 @@ public class ArchiveGuard {
     } catch (IOException e) {
       throw new ScannerRequestException(
           "ARCHIVE_INVALID", "Input archive is malformed or unsupported", 422, false, e);
+    }
+  }
+
+  /**
+   * Removes the RPM lead and header envelope before applying the ordinary compressed-archive
+   * limits to its CPIO payload. Commons Compress does not recognize the RPM envelope itself.
+   */
+  private boolean inspectAsRpm(
+      Path input,
+      int depth,
+      Budget budget,
+      Path workspace,
+      boolean allowImageFilesystemMetadata)
+      throws IOException, ArchiveException, CompressorException {
+    if (!startsWith(input, RPM_LEAD_MAGIC)) {
+      return false;
+    }
+    budget.check();
+    long payloadOffset = rpmPayloadOffset(input);
+    try (InputStream file = Files.newInputStream(input)) {
+      file.skipNBytes(payloadOffset);
+      try (BufferedInputStream rawPayload = new BufferedInputStream(file)) {
+        InputStream decodedPayload = rawPayload;
+        try {
+          String compressor = CompressorStreamFactory.detect(rawPayload);
+          decodedPayload = CompressorStreamFactory.getSingleton()
+              .createCompressorInputStream(compressor, rawPayload, false);
+        } catch (CompressorException uncompressedPayload) {
+          // Legacy RPM payloads may contain a plain CPIO stream.
+        }
+        try (BufferedInputStream expanded = new BufferedInputStream(decodedPayload)) {
+          String archiveType;
+          try {
+            archiveType = ArchiveStreamFactory.detect(expanded);
+          } catch (ArchiveException malformedPayload) {
+            throw rejected(
+                "RPM_PAYLOAD_INVALID", "RPM payload is not a supported CPIO archive");
+          }
+          if (!ArchiveStreamFactory.CPIO.equals(archiveType)) {
+            throw rejected(
+                "RPM_PAYLOAD_INVALID", "RPM payload is not a supported CPIO archive");
+          }
+          try (ArchiveInputStream<?> archive =
+              ArchiveStreamFactory.DEFAULT.createArchiveInputStream(archiveType, expanded)) {
+            inspectEntries(
+                archive, depth, budget, workspace, allowImageFilesystemMetadata);
+          }
+        }
+      }
+    }
+    return true;
+  }
+
+  private static long rpmPayloadOffset(Path input) throws IOException {
+    long fileSize = Files.size(input);
+    if (fileSize < RPM_LEAD_BYTES + RPM_HEADER_FIXED_BYTES * 2L) {
+      throw rejected("RPM_INVALID", "RPM wrapper is truncated");
+    }
+    try (SeekableByteChannel channel =
+        Files.newByteChannel(input, StandardOpenOption.READ)) {
+      long signatureEnd = rpmHeaderEnd(channel, RPM_LEAD_BYTES, fileSize);
+      long mainHeaderStart = alignToEight(signatureEnd);
+      long payloadStart = rpmHeaderEnd(channel, mainHeaderStart, fileSize);
+      if (payloadStart >= fileSize) {
+        throw rejected("RPM_PAYLOAD_INVALID", "RPM payload is missing");
+      }
+      return payloadStart;
+    }
+  }
+
+  private static long rpmHeaderEnd(
+      SeekableByteChannel channel, long start, long fileSize) throws IOException {
+    ByteBuffer fixed = readExactly(channel, start, RPM_HEADER_FIXED_BYTES);
+    for (int i = 0; i < RPM_HEADER_MAGIC.length; i++) {
+      if (fixed.get(i) != RPM_HEADER_MAGIC[i]) {
+        throw rejected("RPM_INVALID", "RPM header magic is invalid");
+      }
+    }
+    fixed.order(ByteOrder.BIG_ENDIAN);
+    long indexCount = Integer.toUnsignedLong(fixed.getInt(8));
+    long dataBytes = Integer.toUnsignedLong(fixed.getInt(12));
+    long indexBytes;
+    long end;
+    try {
+      indexBytes = Math.multiplyExact(indexCount, RPM_INDEX_ENTRY_BYTES);
+      end = Math.addExact(
+          start,
+          Math.addExact(
+              RPM_HEADER_FIXED_BYTES,
+              Math.addExact(indexBytes, dataBytes)));
+    } catch (ArithmeticException overflow) {
+      throw rejected("RPM_INVALID", "RPM header length is invalid");
+    }
+    if (end > fileSize) {
+      throw rejected("RPM_INVALID", "RPM header exceeds the input size");
+    }
+    return end;
+  }
+
+  private static long alignToEight(long value) {
+    long padding = (8 - (value & 7)) & 7;
+    try {
+      return Math.addExact(value, padding);
+    } catch (ArithmeticException overflow) {
+      throw rejected("RPM_INVALID", "RPM header alignment is invalid");
+    }
+  }
+
+  private static ByteBuffer readExactly(
+      SeekableByteChannel channel, long position, int length) throws IOException {
+    ByteBuffer buffer = ByteBuffer.allocate(length);
+    channel.position(position);
+    while (buffer.hasRemaining()) {
+      if (channel.read(buffer) < 0) {
+        throw rejected("RPM_INVALID", "RPM wrapper is truncated");
+      }
+    }
+    buffer.flip();
+    return buffer;
+  }
+
+  private static boolean startsWith(Path input, byte[] expected) throws IOException {
+    if (Files.size(input) < expected.length) {
+      return false;
+    }
+    try (InputStream stream = Files.newInputStream(input)) {
+      byte[] actual = stream.readNBytes(expected.length);
+      return Arrays.equals(actual, expected);
     }
   }
 
@@ -260,6 +402,11 @@ public class ArchiveGuard {
             || tar.isCharacterDevice()
             || tar.isBlockDevice()
             || tar.isFIFO())) {
+      throw rejected("ARCHIVE_SPECIAL_FILE_REJECTED", "Archive special files are not permitted");
+    }
+    if (entry instanceof CpioArchiveEntry cpio
+        && !cpio.isRegularFile()
+        && !cpio.isDirectory()) {
       throw rejected("ARCHIVE_SPECIAL_FILE_REJECTED", "Archive special files are not permitted");
     }
   }

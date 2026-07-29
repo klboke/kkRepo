@@ -86,7 +86,21 @@ securityScanning:
   scannerDatabase:
     autoUpdate: true
     updateInterval: 6h
-    updateCheckInterval: 1m
+    # A separate non-serving CronJob checks the shared database on this schedule. The interval
+    # above remains the minimum age between successful Grype updates.
+    updateSchedule: "*/5 * * * *"
+    updater:
+      backoffLimit: 2
+      successfulJobsHistoryLimit: 1
+      failedJobsHistoryLimit: 3
+      scratchVolumeSize: 1Gi
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
     maxAge: 48h
     observationMaxAge: 2m
     persistence:

@@ -218,8 +218,10 @@ public class SecurityScanExecutor {
         profile.timeoutSeconds(),
         ScannerContract.MAX_REQUEST_TIMEOUT_SECONDS);
     String token = dockerAuth.grantScannerPull(
+        repository.id(),
         repository.name(),
         manifest.imageName(),
+        manifest.digest(),
         scannerTimeoutSeconds + DockerAuthService.SCANNER_PULL_TOKEN_GRACE_SECONDS);
     OciScanRequest request = new OciScanRequest(
         ScannerContract.API_VERSION,

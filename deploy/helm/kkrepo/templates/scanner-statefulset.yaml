@@ -44,11 +44,10 @@ spec:
                   name: {{ .Values.securityScanning.serviceCredential.existingSecret }}
                   key: {{ .Values.securityScanning.serviceCredential.key }}
             - name: KKREPO_SCANNER_DB_AUTO_UPDATE
-              value: {{ .Values.securityScanning.scannerDatabase.autoUpdate | quote }}
+              # Public update egress belongs only to the dedicated updater CronJob.
+              value: "false"
             - name: KKREPO_SCANNER_DB_UPDATE_INTERVAL
               value: {{ .Values.securityScanning.scannerDatabase.updateInterval | quote }}
-            - name: KKREPO_SCANNER_DB_UPDATE_CHECK_INTERVAL
-              value: {{ .Values.securityScanning.scannerDatabase.updateCheckInterval | quote }}
             - name: KKREPO_SCANNER_DB_DIRECTORY
               value: /var/lib/kkrepo-scanner/grype
             - name: KKREPO_SCANNER_MAX_INPUT_BYTES

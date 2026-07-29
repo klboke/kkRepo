@@ -29,7 +29,7 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
-    # DNS is required for the vulnerability database CDN.
+    # DNS is required to resolve the in-cluster kkRepo service.
     - to:
         - namespaceSelector: {}
       ports:
@@ -37,8 +37,31 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    {{- if .Values.securityScanning.scannerDatabase.autoUpdate }}
-    # Permit public HTTPS for Grype database updates while excluding private and metadata ranges.
+---
+{{- if .Values.securityScanning.scannerDatabase.autoUpdate }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kkrepo.scannerUpdaterName" . }}
+  labels:
+    {{- include "kkrepo.scannerUpdaterLabels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "kkrepo.scannerUpdaterSelectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # This pod never serves or processes artifacts. Its only public capability is Grype DB HTTPS.
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
@@ -52,5 +75,5 @@ spec:
       ports:
         - protocol: TCP
           port: 443
-    {{- end }}
+{{- end }}
 {{- end }}
