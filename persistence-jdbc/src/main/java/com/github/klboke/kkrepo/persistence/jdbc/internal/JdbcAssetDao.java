@@ -184,6 +184,16 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         });
   }
 
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public Optional<AssetBlobRecord> restoreDeletedBlobById(long assetBlobId) {
+    return lockDeletedBlobById(assetBlobId)
+        .map(blob -> {
+          restoreBlobIfDeleted(blob.id());
+          return findBlobById(blob.id()).orElse(blob);
+        });
+  }
+
   private Optional<Long> findReusableBlobIdBySha256(
       long blobStoreId, String sha256, long size, boolean deletedOnly) {
     return jdbcTemplate.queryForList(reusableBlobIdSql(deletedOnly),

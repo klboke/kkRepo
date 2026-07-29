@@ -514,6 +514,37 @@ public abstract class PersistenceApiContract {
     assertEquals(
         1,
         stores().assets().hardDeleteBlobByIdIfDeleted(deletedDocumentBlobId));
+    long recoveredDocumentBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "security/recovered-sbom.json", "scan-recovered-sbom"));
+    assertEquals(
+        1,
+        stores().assets()
+            .markBlobDeletedIfUnreferenced(
+                recoveredDocumentBlobId, "gc-recovery-fixture"));
+    inTransaction(() -> {
+      assertTrue(
+          stores().assets().restoreDeletedBlobById(recoveredDocumentBlobId).isPresent());
+      assertTrue(
+          stores().blobReferences().retain(
+              "security-scan-persisting", taskId, recoveredDocumentBlobId));
+      return null;
+    });
+    assertEquals(
+        0,
+        stores().assets()
+            .markBlobDeletedIfUnreferenced(
+                recoveredDocumentBlobId, "gc-recovery-referenced-fixture"));
+    assertEquals(
+        1,
+        stores().blobReferences().releaseOwner("security-scan-persisting", taskId));
+    assertEquals(
+        1,
+        stores().assets()
+            .markBlobDeletedIfUnreferenced(
+                recoveredDocumentBlobId, "gc-recovery-cleanup"));
+    assertEquals(
+        1,
+        stores().assets().hardDeleteBlobByIdIfDeleted(recoveredDocumentBlobId));
     long sbomBlobId = stores().assets().insertBlob(
         blob(blobStoreId, "security/sbom.json", "scan-sbom"));
     assertTrue(inTransaction(() ->

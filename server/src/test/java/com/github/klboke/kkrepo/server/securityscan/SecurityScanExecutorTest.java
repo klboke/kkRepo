@@ -89,6 +89,7 @@ class SecurityScanExecutorTest {
     assertEquals(Severity.HIGH, run.maxSeverity());
     verify(fixture.scans).insertSbomComponents(anyLong(), anyList());
     verify(fixture.metrics).recordInputBytes("MAVEN2", 8);
+    verify(fixture.documents).release(anyLong(), any());
   }
 
   @Test
@@ -458,7 +459,7 @@ class SecurityScanExecutorTest {
                   ? TargetClassification.OCI_IMAGE : TargetClassification.ARCHIVE,
               "SCANNABLE"));
       when(snapshots.readySnapshot()).thenReturn(snapshot);
-      when(snapshots.snapshotFor(any())).thenReturn(snapshot);
+      when(snapshots.snapshotFor(any(), any())).thenReturn(snapshot);
       BlobStorage storage = mock(BlobStorage.class);
       when(storages.forBlobStoreId(2L)).thenReturn(storage);
       when(storage.get(any())).thenReturn(Optional.of(
@@ -468,13 +469,13 @@ class SecurityScanExecutorTest {
       } catch (IOException e) {
         throw new AssertionError(e);
       }
-      when(documents.store(anyLong(), anyString(), any(), anyString()))
+      when(documents.store(anyLong(), anyLong(), anyString(), any(), anyString()))
           .thenAnswer(invocation -> {
-            String kindName = invocation.getArgument(1);
+            String kindName = invocation.getArgument(2);
             return new SecurityScanDocumentStore.StoredDocument(
                 kindName.equals("sbom") ? 30L : 31L,
                 kindName.equals("sbom") ? "d".repeat(64) : "e".repeat(64),
-                ((byte[]) invocation.getArgument(2)).length);
+                ((byte[]) invocation.getArgument(3)).length);
           });
       when(scans.insertSbomOrFindExisting(any())).thenAnswer(invocation -> {
         Sbom value = invocation.getArgument(0);

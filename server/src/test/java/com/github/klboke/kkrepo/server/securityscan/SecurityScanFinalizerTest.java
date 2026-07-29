@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -67,10 +68,12 @@ class SecurityScanFinalizerTest {
     SecurityScanDao scans = mock(SecurityScanDao.class);
     stubWaiverRevision(scans);
     SecurityScanAuditService audit = mock(SecurityScanAuditService.class);
+    SecurityScanDocumentPersistence documents = mock(SecurityScanDocumentPersistence.class);
     RepositoryDao repositories = mock(RepositoryDao.class);
     when(repositories.findById(1L)).thenReturn(Optional.of(hostedRepository(1L)));
     SecurityScanFinalizer finalizer =
-        new SecurityScanFinalizer(scans, repositories, audit);
+        new SecurityScanFinalizer(
+            scans, repositories, audit, documents);
     ScanTask task = task(3, 3);
     RepositoryScanConfig config = config(1L, 101L);
     AssetSecurityState current = assetState(PolicyDecision.ALLOW);
@@ -89,12 +92,18 @@ class SecurityScanFinalizerTest {
     assertEquals(PolicyDecision.BLOCK_SCAN_FAILED, state.getValue().policyDecision());
     assertEquals("ENGINE_FAILED", state.getValue().policyReasonCode());
     verify(audit).recordSystem(eq("POLICY_STATE_CHANGED"), eq(1L), any(Map.class));
+    verify(documents).releaseOwner(5L);
   }
 
   @Test
   void terminalFailureAllowsWhenConfiguredAndReportsLostCompletionLease() {
     SecurityScanDao scans = mock(SecurityScanDao.class);
-    SecurityScanFinalizer finalizer = finalizer(scans);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    SecurityScanDocumentPersistence documents = mock(SecurityScanDocumentPersistence.class);
+    stubWaiverRevision(scans);
+    when(repositories.findById(1L)).thenReturn(Optional.of(hostedRepository(1L)));
+    SecurityScanFinalizer finalizer = new SecurityScanFinalizer(
+        scans, repositories, mock(SecurityScanAuditService.class), documents);
     ScanTask task = task(3, 3);
     RepositoryScanConfig config = new RepositoryScanConfig(
         1L, true, 1L, true, true, EnforcementMode.AUDIT,
@@ -115,6 +124,7 @@ class SecurityScanFinalizerTest {
         ArgumentCaptor.forClass(AssetSecurityState.class);
     verify(scans).upsertAssetStateIfCurrent(state.capture());
     assertEquals(PolicyDecision.ALLOW, state.getValue().policyDecision());
+    verify(documents, never()).releaseOwner(anyLong());
   }
 
   @Test
@@ -123,7 +133,8 @@ class SecurityScanFinalizerTest {
     stubWaiverRevision(scans);
     RepositoryDao repositories = mock(RepositoryDao.class);
     SecurityScanAuditService audit = mock(SecurityScanAuditService.class);
-    SecurityScanFinalizer finalizer = new SecurityScanFinalizer(scans, repositories, audit);
+    SecurityScanFinalizer finalizer = new SecurityScanFinalizer(
+        scans, repositories, audit, mock(SecurityScanDocumentPersistence.class));
     Instant now = Instant.now();
     ScanTask task = mock(ScanTask.class);
     when(task.id()).thenReturn(5L);
@@ -192,7 +203,10 @@ class SecurityScanFinalizerTest {
     stubWaiverRevision(scans);
     RepositoryDao repositories = mock(RepositoryDao.class);
     SecurityScanFinalizer finalizer = new SecurityScanFinalizer(
-        scans, repositories, mock(SecurityScanAuditService.class));
+        scans,
+        repositories,
+        mock(SecurityScanAuditService.class),
+        mock(SecurityScanDocumentPersistence.class));
     Instant now = Instant.now();
     ScanTask task = task(1, 3);
     ScanProfile profile = profile(now);
@@ -257,7 +271,10 @@ class SecurityScanFinalizerTest {
     stubWaiverRevision(scans);
     RepositoryDao repositories = mock(RepositoryDao.class);
     SecurityScanFinalizer finalizer = new SecurityScanFinalizer(
-        scans, repositories, mock(SecurityScanAuditService.class));
+        scans,
+        repositories,
+        mock(SecurityScanAuditService.class),
+        mock(SecurityScanDocumentPersistence.class));
     Instant now = Instant.now();
     ScanTask task = task(1, 3);
     ScanProfile profile = profile(now);
@@ -367,7 +384,10 @@ class SecurityScanFinalizerTest {
     stubWaiverRevision(scans);
     when(repositories.findById(1L)).thenReturn(Optional.of(hostedRepository(1L)));
     return new SecurityScanFinalizer(
-        scans, repositories, mock(SecurityScanAuditService.class));
+        scans,
+        repositories,
+        mock(SecurityScanAuditService.class),
+        mock(SecurityScanDocumentPersistence.class));
   }
 
   private static void stubWaiverRevision(SecurityScanDao scans) {

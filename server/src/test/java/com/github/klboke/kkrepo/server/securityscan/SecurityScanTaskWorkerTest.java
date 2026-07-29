@@ -59,10 +59,10 @@ class SecurityScanTaskWorkerTest {
     try {
       when(superseded.executor.execute(superseded.task))
           .thenThrow(new SecurityScanExecutor.SupersededSecurityScanTaskException(5L));
-      when(superseded.scans.cancelClaimedTask(eq(5L), eq("lease"), any()))
+      when(superseded.finalizer.cancelCurrentTask(eq(superseded.task), any()))
           .thenReturn(false);
       superseded.worker.runOnce();
-      verify(superseded.scans).cancelClaimedTask(eq(5L), eq("lease"), any());
+      verify(superseded.finalizer).cancelCurrentTask(eq(superseded.task), any());
       verify(superseded.metrics).recordTask(
           eq("MAVEN2"), any(), any(), eq("superseded"), any());
     } finally {

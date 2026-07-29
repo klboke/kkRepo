@@ -97,7 +97,8 @@ public class SecurityScannerSnapshotService {
     return snapshot;
   }
 
-  public ScannerSnapshot snapshotFor(MatchResponse response) {
+  public ScannerSnapshot snapshotFor(
+      MatchResponse response, ScannerSnapshot readinessSnapshot) {
     Instant now = Instant.now();
     String fingerprint = ScanFingerprints.sha256(
         response.adapterName(),
@@ -108,6 +109,12 @@ public class SecurityScannerSnapshotService {
         response.vulnerabilityDatabaseRevision(),
         response.capabilityDigest(),
         "true");
+    Map<String, Object> details = new LinkedHashMap<>();
+    if (readinessSnapshot != null
+        && fingerprint.equals(readinessSnapshot.snapshotFingerprint())) {
+      details.putAll(readinessSnapshot.details());
+    }
+    details.put("adapterVersion", response.adapterVersion());
     ScannerSnapshot snapshot = scans.insertSnapshotOrFindExisting(new ScannerSnapshot(
         null,
         response.adapterName(),
@@ -120,7 +127,7 @@ public class SecurityScannerSnapshotService {
         fingerprint,
         now,
         true,
-        Map.of("adapterVersion", response.adapterVersion())));
+        details));
     requireReady(snapshot, now);
     return snapshot;
   }

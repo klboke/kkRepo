@@ -28,16 +28,25 @@ public class SecurityScanDocumentStore {
   private final AssetDao assets;
   private final RepositoryDao repositories;
   private final BlobStorageRegistry storages;
+  private final SecurityScanDocumentPersistence persistence;
 
   public SecurityScanDocumentStore(
-      AssetDao assets, RepositoryDao repositories, BlobStorageRegistry storages) {
+      AssetDao assets,
+      RepositoryDao repositories,
+      BlobStorageRegistry storages,
+      SecurityScanDocumentPersistence persistence) {
     this.assets = assets;
     this.repositories = repositories;
     this.storages = storages;
+    this.persistence = persistence;
   }
 
   public StoredDocument store(
-      long repositoryId, String documentKind, byte[] bytes, String contentType) {
+      long repositoryId,
+      long provisionalOwnerId,
+      String documentKind,
+      byte[] bytes,
+      String contentType) {
     if (bytes == null) throw new IllegalArgumentException("document bytes are required");
     RepositoryRecord repository = repositories.findById(repositoryId)
         .orElseThrow(() -> new IllegalArgumentException("Repository not found: " + repositoryId));
@@ -45,8 +54,8 @@ public class SecurityScanDocumentStore {
       throw new IllegalStateException("Repository has no blob store: " + repositoryId);
     }
     String sha256 = digest("SHA-256", bytes);
-    var reusable = assets.findReusableBlobBySha256(
-        repository.blobStoreId(), sha256, bytes.length);
+    var reusable = persistence.findReusableAndRetain(
+        provisionalOwnerId, repository.blobStoreId(), sha256, bytes.length);
     if (reusable.isPresent()) {
       return new StoredDocument(reusable.get().id(), sha256, bytes.length);
     }
@@ -64,25 +73,32 @@ public class SecurityScanDocumentStore {
     try {
       Instant now = Instant.now();
       String blobRef = BlobReferenceCodec.format(reference);
-      AssetBlobRecord stored = assets.insertBlobOrFindExisting(new AssetBlobRecord(
-          null,
-          repository.blobStoreId(),
-          blobRef,
-          PersistenceHashes.blobRefHash(blobRef),
-          reference.objectKey(),
-          PersistenceHashes.objectKeyHash(reference.objectKey()),
-          digest("SHA-1", bytes),
-          sha256,
-          digest("MD5", bytes),
-          bytes.length,
-          contentType,
-          "security-scanner",
-          null,
-          now,
-          now,
-          Map.of("securityScanDocument", true, "documentKind", safeKind)));
+      AssetBlobRecord stored = persistence.insertOrRecoverAndRetain(
+          provisionalOwnerId,
+          new AssetBlobRecord(
+              null,
+              repository.blobStoreId(),
+              blobRef,
+              PersistenceHashes.blobRefHash(blobRef),
+              reference.objectKey(),
+              PersistenceHashes.objectKeyHash(reference.objectKey()),
+              digest("SHA-1", bytes),
+              sha256,
+              digest("MD5", bytes),
+              bytes.length,
+              contentType,
+              "security-scanner",
+              null,
+              now,
+              now,
+              Map.of("securityScanDocument", true, "documentKind", safeKind)));
+      restoreObjectIfGcWonRace(
+          storage, repository.name(), logicalPath, reference, bytes, sha256);
       return new StoredDocument(stored.id(), sha256, bytes.length);
     } catch (RuntimeException e) {
+      // Once retained, task-scoped ownership survives this attempt. The lease-fenced task
+      // transition releases it, so a stale worker cannot expose a replacement worker's identical
+      // document to GC while both attempts overlap.
       BlobTransactionCleanup.deleteIfUnreferenced(
           assets,
           storage,
@@ -90,6 +106,12 @@ public class SecurityScanDocumentStore {
           reference,
           "security scan document persist failure");
       throw e;
+    }
+  }
+
+  public void release(long provisionalOwnerId, StoredDocument document) {
+    if (document != null) {
+      persistence.release(provisionalOwnerId, document.blobId());
     }
   }
 
@@ -108,6 +130,26 @@ public class SecurityScanDocumentStore {
       return HEX.formatHex(MessageDigest.getInstance(algorithm).digest(bytes));
     } catch (NoSuchAlgorithmException e) {
       throw new IllegalStateException(algorithm + " is unavailable", e);
+    }
+  }
+
+  private static void restoreObjectIfGcWonRace(
+      BlobStorage storage,
+      String repositoryName,
+      String logicalPath,
+      BlobReference expected,
+      byte[] bytes,
+      String sha256) {
+    if (storage.exists(expected)) return;
+    BlobReference restored = storage.put(
+        repositoryName,
+        logicalPath,
+        new ByteArrayInputStream(bytes),
+        bytes.length,
+        sha256);
+    if (!expected.equals(restored)) {
+      throw new IllegalStateException(
+          "Security scan document object identity changed while repairing a GC race");
     }
   }
 

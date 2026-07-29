@@ -64,6 +64,7 @@ public class SecurityScanManagementService {
   private final AssetDao assets;
   private final SecurityManagementService security;
   private final SecurityScanDocumentStore documents;
+  private final SecurityScanDocumentPersistence documentPersistence;
   private final SecurityScanningProperties properties;
   private final SecurityScanRepositoryScope repositoryScope;
 
@@ -73,6 +74,7 @@ public class SecurityScanManagementService {
       AssetDao assets,
       SecurityManagementService security,
       SecurityScanDocumentStore documents,
+      SecurityScanDocumentPersistence documentPersistence,
       SecurityScanningProperties properties,
       SecurityScanRepositoryScope repositoryScope) {
     this.scans = scans;
@@ -80,6 +82,7 @@ public class SecurityScanManagementService {
     this.assets = assets;
     this.security = security;
     this.documents = documents;
+    this.documentPersistence = documentPersistence;
     this.properties = properties;
     this.repositoryScope = repositoryScope;
   }
@@ -646,6 +649,7 @@ public class SecurityScanManagementService {
     if (!scans.cancelTask(taskId, Instant.now())) {
       throw conflict("Task is already terminal");
     }
+    documentPersistence.releaseOwner(taskId);
   }
 
   public RepositoryScanConfig repositoryConfig(

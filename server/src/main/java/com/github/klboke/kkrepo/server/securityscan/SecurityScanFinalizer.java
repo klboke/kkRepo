@@ -38,12 +38,17 @@ public class SecurityScanFinalizer {
   private final SecurityScanDao scans;
   private final RepositoryDao repositories;
   private final SecurityScanAuditService audit;
+  private final SecurityScanDocumentPersistence documents;
 
   public SecurityScanFinalizer(
-      SecurityScanDao scans, RepositoryDao repositories, SecurityScanAuditService audit) {
+      SecurityScanDao scans,
+      RepositoryDao repositories,
+      SecurityScanAuditService audit,
+      SecurityScanDocumentPersistence documents) {
     this.scans = scans;
     this.repositories = repositories;
     this.audit = audit;
+    this.documents = documents;
   }
 
   @Transactional
@@ -120,6 +125,7 @@ public class SecurityScanFinalizer {
     if (!scans.completeTask(task.id(), task.leaseToken(), now)) {
       throw new LostSecurityScanLeaseException(task.id());
     }
+    documents.releaseOwner(task.id());
     return run;
   }
 
@@ -131,6 +137,7 @@ public class SecurityScanFinalizer {
           task.id(), task.leaseToken(), nextAttemptAt, errorCode, errorSummary, Instant.now())) {
         throw new LostSecurityScanLeaseException(task.id());
       }
+      documents.releaseOwner(task.id());
       return;
     }
     if (task.assetId() != null) {
@@ -171,6 +178,17 @@ public class SecurityScanFinalizer {
         task.id(), task.leaseToken(), errorCode, errorSummary, Instant.now())) {
       throw new LostSecurityScanLeaseException(task.id());
     }
+    documents.releaseOwner(task.id());
+  }
+
+  @Transactional
+  public boolean cancelCurrentTask(ScanTask task, Instant cancelledAt) {
+    boolean cancelled =
+        scans.cancelClaimedTask(task.id(), task.leaseToken(), cancelledAt);
+    if (cancelled) {
+      documents.releaseOwner(task.id());
+    }
+    return cancelled;
   }
 
   private List<ScanFinding> loadAllFindings(ScanRun run) {

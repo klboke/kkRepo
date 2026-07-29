@@ -220,6 +220,7 @@ public class SecurityScanExecutor {
     }
     validateCatalogResponse(subject, response.catalog());
     Sbom sbom = persistSbom(
+        task.id(),
         subject,
         profile,
         response.catalog(),
@@ -242,7 +243,8 @@ public class SecurityScanExecutor {
         mergeSummary(match.summary(), Map.of(
             "scannedPlatforms", response.scannedPlatforms(),
             "missingPlatforms", response.missingPlatforms())));
-    return persistAndFinalizeMatch(task, profile, config, subject, sbom, normalized);
+    return persistAndFinalizeMatch(
+        task, profile, config, subject, sbom, normalized, observedSnapshot);
   }
 
   private Sbom resolveSbom(
@@ -295,15 +297,20 @@ public class SecurityScanExecutor {
       throw e;
     }
     validateCatalogResponse(subject, response);
-    return persistSbom(subject, profile, response);
+    return persistSbom(task.id(), subject, profile, response);
   }
 
   private Sbom persistSbom(
-      ScanSubject subject, ScanProfile profile, CatalogResponse response) {
-    return persistSbom(subject, profile, response, List.of(), List.of());
+      long provisionalOwnerId,
+      ScanSubject subject,
+      ScanProfile profile,
+      CatalogResponse response) {
+    return persistSbom(
+        provisionalOwnerId, subject, profile, response, List.of(), List.of());
   }
 
   private Sbom persistSbom(
+      long provisionalOwnerId,
       ScanSubject subject,
       ScanProfile profile,
       CatalogResponse response,
@@ -311,54 +318,66 @@ public class SecurityScanExecutor {
       List<String> missingPlatforms) {
     validateJsonDocument(response.cyclonedxJson(), "SBOM_INVALID_JSON", true);
     var document = documents.store(
-        subject.repositoryId(), "sbom", response.cyclonedxJson(), "application/vnd.cyclonedx+json");
-    String fingerprint = ScanFingerprints.catalog(
-        subject,
-        response.engineName(),
-        response.engineVersion(),
-        profile.configurationDigest(),
-        scannedPlatforms,
-        missingPlatforms);
-    int projectedCount = Math.min(response.components().size(), MAX_PROJECTED_COMPONENTS);
-    boolean inventoryComplete = response.completeness() == ScanCompleteness.COMPLETE
-        && response.componentCount() <= projectedCount;
-    Sbom sbom = scans.insertSbomOrFindExisting(new Sbom(
-        null,
-        subject.kind(),
-        subject.identity(),
-        PersistenceHashes.sha256(subject.identity()),
-        response.engineName(),
-        response.engineVersion(),
-        profile.configurationDigest(),
-        fingerprint,
-        document.blobId(),
-        document.sha256(),
-        response.specName(),
-        response.specVersion(),
-        response.componentCount(),
-        response.dependencyCount(),
-        inventoryComplete,
-        Instant.now()));
-    List<SbomComponent> components = response.components().stream()
-        .limit(projectedCount)
-        .map(component -> new SbomComponent(
-            null,
-            sbom.id(),
-            required(component.componentRef(), "componentRef"),
-            null,
-            component.packageUrl(),
-            null,
-            component.type(),
-            component.namespace(),
-            required(component.name(), "component name"),
-            component.version(),
-            component.directness(),
-            component.locations(),
-            component.licenses(),
-            component.properties()))
-        .toList();
-    scans.insertSbomComponents(sbom.id(), components);
-    return sbom;
+        subject.repositoryId(),
+        provisionalOwnerId,
+        "sbom",
+        response.cyclonedxJson(),
+        "application/vnd.cyclonedx+json");
+    boolean published = false;
+    try {
+      String fingerprint = ScanFingerprints.catalog(
+          subject,
+          response.engineName(),
+          response.engineVersion(),
+          profile.configurationDigest(),
+          scannedPlatforms,
+          missingPlatforms);
+      int projectedCount = Math.min(response.components().size(), MAX_PROJECTED_COMPONENTS);
+      boolean inventoryComplete = response.completeness() == ScanCompleteness.COMPLETE
+          && response.componentCount() <= projectedCount;
+      Sbom sbom = scans.insertSbomOrFindExisting(new Sbom(
+          null,
+          subject.kind(),
+          subject.identity(),
+          PersistenceHashes.sha256(subject.identity()),
+          response.engineName(),
+          response.engineVersion(),
+          profile.configurationDigest(),
+          fingerprint,
+          document.blobId(),
+          document.sha256(),
+          response.specName(),
+          response.specVersion(),
+          response.componentCount(),
+          response.dependencyCount(),
+          inventoryComplete,
+          Instant.now()));
+      published = true;
+      List<SbomComponent> components = response.components().stream()
+          .limit(projectedCount)
+          .map(component -> new SbomComponent(
+              null,
+              sbom.id(),
+              required(component.componentRef(), "componentRef"),
+              null,
+              component.packageUrl(),
+              null,
+              component.type(),
+              component.namespace(),
+              required(component.name(), "component name"),
+              component.version(),
+              component.directness(),
+              component.locations(),
+              component.licenses(),
+              component.properties()))
+          .toList();
+      scans.insertSbomComponents(sbom.id(), components);
+      return sbom;
+    } finally {
+      if (published) {
+        documents.release(provisionalOwnerId, document);
+      }
+    }
   }
 
   private ScanRun matchAndFinalize(
@@ -402,7 +421,8 @@ public class SecurityScanExecutor {
       metrics.recordStage(subject.format(), "match", "failure", matchTimer);
       throw e;
     }
-    return persistAndFinalizeMatch(task, profile, config, subject, sbom, response);
+    return persistAndFinalizeMatch(
+        task, profile, config, subject, sbom, response, snapshot);
   }
 
   private ScanRun persistAndFinalizeMatch(
@@ -411,9 +431,10 @@ public class SecurityScanExecutor {
       RepositoryScanConfig config,
       ScanSubject subject,
       Sbom sbom,
-      MatchResponse response) {
+      MatchResponse response,
+      ScannerSnapshot readinessSnapshot) {
     validateMatchResponse(response);
-    ScannerSnapshot actualSnapshot = snapshots.snapshotFor(response);
+    ScannerSnapshot actualSnapshot = snapshots.snapshotFor(response, readinessSnapshot);
     List<String> scannedPlatforms = stringList(response.summary().get("scannedPlatforms"));
     List<String> missingPlatforms = stringList(response.summary().get("missingPlatforms"));
     String fingerprint = matchFingerprint(task, ScanFingerprints.match(
@@ -433,7 +454,11 @@ public class SecurityScanExecutor {
 
     validateJsonDocument(response.reportJson(), "SCANNER_REPORT_INVALID_JSON", false);
     var report = documents.store(
-        task.repositoryId(), "vulnerability-report", response.reportJson(), "application/json");
+        task.repositoryId(),
+        task.id(),
+        "vulnerability-report",
+        response.reportJson(),
+        "application/json");
     List<ScannerContract.Finding> normalizedFindings = response.findings().stream()
         .limit(MAX_PROJECTED_FINDINGS)
         .toList();

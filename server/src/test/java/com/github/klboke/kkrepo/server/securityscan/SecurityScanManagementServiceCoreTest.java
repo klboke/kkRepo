@@ -69,6 +69,7 @@ class SecurityScanManagementServiceCoreTest {
   private AssetDao assets;
   private SecurityManagementService security;
   private SecurityScanDocumentStore documents;
+  private SecurityScanDocumentPersistence documentPersistence;
   private SecurityScanningProperties properties;
   private SecurityScanRepositoryScope scope;
   private SecurityScanManagementService service;
@@ -83,6 +84,7 @@ class SecurityScanManagementServiceCoreTest {
     assets = mock(AssetDao.class);
     security = mock(SecurityManagementService.class);
     documents = mock(SecurityScanDocumentStore.class);
+    documentPersistence = mock(SecurityScanDocumentPersistence.class);
     properties = new SecurityScanningProperties();
     properties.setEnabled(true);
     scope = mock(SecurityScanRepositoryScope.class);
@@ -99,7 +101,14 @@ class SecurityScanManagementServiceCoreTest {
     when(scans.listProfiles()).thenReturn(List.of(profile));
     when(scans.findRepositoryConfigs(any())).thenReturn(List.of());
     service = new SecurityScanManagementService(
-        scans, repositories, assets, security, documents, properties, scope);
+        scans,
+        repositories,
+        assets,
+        security,
+        documents,
+        documentPersistence,
+        properties,
+        scope);
   }
 
   @Test
@@ -240,6 +249,7 @@ class SecurityScanManagementServiceCoreTest {
     service.cancel(actor, 77L);
     verify(scans).requeueTask(eq(77L), any(), eq("admin"));
     verify(scans).cancelTask(eq(77L), any());
+    verify(documentPersistence).releaseOwner(77L);
   }
 
   @Test

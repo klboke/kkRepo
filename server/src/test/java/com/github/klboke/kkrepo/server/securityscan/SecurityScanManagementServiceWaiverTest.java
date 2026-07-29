@@ -62,7 +62,14 @@ class SecurityScanManagementServiceWaiverTest {
     properties = mock(SecurityScanningProperties.class);
     repositoryScope = mock(SecurityScanRepositoryScope.class);
     service = new SecurityScanManagementService(
-        scans, repositories, assets, security, documents, properties, repositoryScope);
+        scans,
+        repositories,
+        assets,
+        security,
+        documents,
+        mock(SecurityScanDocumentPersistence.class),
+        properties,
+        repositoryScope);
     PermissionSubject permissions =
         new PermissionSubject("test", "security-admin", Set.of("nx-admin"), null);
     actor = new AuthenticatedSubject("test", "security-admin", "local", null, permissions);

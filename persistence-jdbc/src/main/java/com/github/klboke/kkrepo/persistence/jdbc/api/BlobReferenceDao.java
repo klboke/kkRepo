@@ -13,5 +13,7 @@ public interface BlobReferenceDao {
 
   int release(String ownerType, long ownerId, long blobId);
 
+  int releaseOwner(String ownerType, long ownerId);
+
   boolean isReferenced(long blobId);
 }

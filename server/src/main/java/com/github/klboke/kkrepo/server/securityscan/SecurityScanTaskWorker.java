@@ -144,7 +144,7 @@ public class SecurityScanTaskWorker {
       executor.execute(task);
     } catch (SupersededSecurityScanTaskException e) {
       outcome = "superseded";
-      if (!scans.cancelClaimedTask(task.id(), task.leaseToken(), Instant.now())) {
+      if (!finalizer.cancelCurrentTask(task, Instant.now())) {
         log.debug("Ignored superseded scan task after lease loss: {}", task.id());
       }
     } catch (LostSecurityScanLeaseException e) {

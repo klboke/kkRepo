@@ -258,10 +258,12 @@ class SecurityScanSchedulingServicesTest {
         });
 
     ScannerSnapshot observed = service.readySnapshot();
-    ScannerSnapshot matched = service.snapshotFor(matchResponse());
+    ScannerSnapshot matched = service.snapshotFor(matchResponse(), observed);
 
     assertEquals(8L, observed.id());
     assertEquals("grype", matched.engineName());
+    assertEquals("1", matched.details().get("catalogEngineVersion"));
+    assertEquals(List.of("CATALOG", "MATCH"), matched.details().get("operations"));
 
     when(adapter.capabilities()).thenReturn(new Capabilities(
         "v2", "adapter", "1", List.of(), List.of(), 1, 1, "cap"));
@@ -699,7 +701,7 @@ class SecurityScanSchedulingServicesTest {
         "2",
         "db-2",
         Instant.now(),
-        "cap",
+        "capability",
         ScanCompleteness.COMPLETE,
         "{}".getBytes(),
         List.of(),

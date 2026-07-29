@@ -69,6 +69,14 @@ public class JdbcBlobReferenceDao implements BlobReferenceDao {
   }
 
   @Override
+  public int releaseOwner(String ownerType, long ownerId) {
+    return jdbc.update("""
+        DELETE FROM blob_reference
+        WHERE owner_type = ? AND owner_id = ?
+        """, ownerType, ownerId);
+  }
+
+  @Override
   public boolean isReferenced(long blobId) {
     return !jdbc.queryForList("""
         SELECT blob_id
