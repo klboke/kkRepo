@@ -192,6 +192,10 @@ class DockerAuthServiceTest {
     assertThrows(
         DockerProtocolException.class,
         () -> service.authenticateBearer(token, "docker-hosted", "team/app", "push"));
+    assertEquals(60, DockerAuthService.scannerPullTokenTtlSeconds(0));
+    assertEquals(
+        DockerAuthService.MAX_SCANNER_PULL_TOKEN_TTL_SECONDS,
+        DockerAuthService.scannerPullTokenTtlSeconds(Long.MAX_VALUE));
   }
 
   @Test

@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.TokenKind;
 import com.github.klboke.kkrepo.protocol.docker.DockerErrorCode;
 import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
+import com.github.klboke.kkrepo.security.scan.ScannerContract;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -32,6 +33,9 @@ import org.springframework.transaction.annotation.Transactional;
 public class DockerAuthService {
   public static final String TOKEN_SUBJECT_ATTRIBUTE = DockerAuthService.class.getName() + ".TOKEN_SUBJECT";
   public static final String SCANNER_SUBJECT_SOURCE = "security-scanner";
+  public static final long SCANNER_PULL_TOKEN_GRACE_SECONDS = 120L;
+  static final long MAX_SCANNER_PULL_TOKEN_TTL_SECONDS =
+      ScannerContract.MAX_REQUEST_TIMEOUT_SECONDS + SCANNER_PULL_TOKEN_GRACE_SECONDS;
 
   private static final SecureRandom RANDOM = new SecureRandom();
 
@@ -101,7 +105,7 @@ public class DockerAuthService {
       throw new IllegalArgumentException("Scanner repository and image name are required");
     }
     String token = randomToken();
-    long ttl = Math.max(60, Math.min(3600, requestedTtlSeconds));
+    long ttl = scannerPullTokenTtlSeconds(requestedTtlSeconds);
     tokenDao.insert(
         sha256(token),
         SCANNER_SUBJECT_SOURCE,
@@ -112,6 +116,12 @@ public class DockerAuthService {
         List.of(new Scope(repository, imageName, List.of("pull")).toMap()),
         Instant.now().plusSeconds(ttl));
     return token;
+  }
+
+  static long scannerPullTokenTtlSeconds(long requestedTtlSeconds) {
+    return Math.max(
+        60,
+        Math.min(MAX_SCANNER_PULL_TOKEN_TTL_SECONDS, requestedTtlSeconds));
   }
 
   @Transactional

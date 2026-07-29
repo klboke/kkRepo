@@ -18,7 +18,6 @@ import java.io.InputStream;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -81,29 +80,39 @@ public class ScannerEngineService {
   }
 
   public Readiness readiness() {
+    return readiness(null);
+  }
+
+  private Readiness readiness(ScanDeadline deadline) {
+    check(deadline);
     Instant now = Instant.now();
     long databaseGeneration = database.generation();
     CachedReadiness cached = cachedReadiness;
     if (cached != null
         && cached.databaseGeneration() == databaseGeneration
         && cached.expiresAt().isAfter(now)) {
+      check(deadline);
       return cached.value();
     }
     synchronized (this) {
+      check(deadline);
       cached = cachedReadiness;
       if (cached != null
           && cached.databaseGeneration() == databaseGeneration
           && cached.expiresAt().isAfter(now)) {
+        check(deadline);
         return cached.value();
       }
       Readiness value;
       try {
-        value = database.withRead(() -> inspectReadiness(now));
+        value = database.withRead(() -> inspectReadiness(now, deadline));
       } catch (ScannerRequestException e) {
+        check(deadline);
         value = degradedReadiness(now, e.code());
       }
       cachedReadiness = new CachedReadiness(
           value, now.plus(properties.getReadinessCache()), databaseGeneration);
+      check(deadline);
       return value;
     }
   }
@@ -118,16 +127,22 @@ public class ScannerEngineService {
       long expectedSize,
       ScannerArtifactType artifactType,
       ResourceLimits limits) {
+    ResourceLimits effectiveLimits = effective(limits);
+    ScanDeadline deadline = new ScanDeadline(effectiveLimits.timeoutSeconds());
     Path workspace = workspace("catalog-");
     try {
+      deadline.check();
       ScannerArtifactType safeType =
           artifactType == null ? ScannerArtifactType.UNKNOWN : artifactType;
       Path artifact = workspace.resolve(safeType.safeFilename());
       ScannerInput.Verified verified =
-          scannerInput.copy(input, artifact, expectedSha256, expectedSize, effective(limits));
+          scannerInput.copy(
+              input, artifact, expectedSha256, expectedSize, effectiveLimits, deadline);
       ArchiveGuard.Inspection inspection = archiveGuard.inspect(
-          artifact, effective(limits), workspace);
-      Readiness ready = requireReady();
+          artifact, effectiveLimits, workspace, deadline);
+      deadline.check();
+      Readiness ready = requireReady(deadline);
+      deadline.check();
       Path sbom = workspace.resolve("sbom.cdx.json");
       processes.run(
           List.of(
@@ -138,10 +153,12 @@ public class ScannerEngineService {
               "cyclonedx-json"),
           workspace,
           sbom,
-          Duration.ofSeconds(effective(limits).timeoutSeconds()),
+          deadline.remaining(),
           Map.of("SYFT_LOG_QUIET", "true"));
+      deadline.check();
       byte[] cyclonedx = BoundedProcessRunner.readBounded(sbom, properties.getMaxOutputBytes());
-      return documents.catalog(
+      deadline.check();
+      CatalogResponse response = documents.catalog(
           cyclonedx,
           verified.sha256(),
           string(ready.details().get("catalogEngineVersion"), ready.engineVersion()),
@@ -151,6 +168,8 @@ public class ScannerEngineService {
               "archiveEntries", inspection.entries(),
               "expandedBytes", inspection.expandedBytes(),
               "nestedArchives", inspection.nestedArchives()));
+      deadline.check();
+      return response;
     } catch (IOException e) {
       throw new ScannerRequestException(
           "CATALOG_IO", "Unable to read scanner output", 503, true, e);
@@ -163,16 +182,20 @@ public class ScannerEngineService {
       InputStream input,
       String expectedSha256,
       ResourceLimits limits) {
+    ResourceLimits effectiveLimits = effective(limits);
+    ScanDeadline deadline = new ScanDeadline(effectiveLimits.timeoutSeconds());
     Path workspace = workspace("match-");
     try {
+      deadline.check();
       Path sbom = workspace.resolve("sbom.cdx.json");
       ScannerInput.Verified verified = scannerInput.copy(
-          input, sbom, expectedSha256, null, effective(limits));
+          input, sbom, expectedSha256, null, effectiveLimits, deadline);
       if (verified.size() > properties.getMaxOutputBytes()) {
         throw new ScannerRequestException(
             "SBOM_TOO_LARGE", "CycloneDX input exceeded the output limit", 413, false);
       }
-      return matchFile(sbom, effective(limits), workspace);
+      deadline.check();
+      return matchFile(sbom, workspace, deadline);
     } finally {
       TempDirectories.deleteRecursively(workspace);
     }
@@ -184,8 +207,8 @@ public class ScannerEngineService {
     ScanDeadline deadline = new ScanDeadline(limits.timeoutSeconds());
     Path workspace = workspace("oci-");
     try {
-      Readiness ready = requireReady();
-      deadline.remaining();
+      Readiness ready = requireReady(deadline);
+      deadline.check();
       URI registry = URI.create(request.registryUrl());
       String authority = registry.getRawAuthority();
       String prefix = registry.getPath() == null ? "" : registry.getPath();
@@ -225,6 +248,7 @@ public class ScannerEngineService {
               environment);
           byte[] value =
               BoundedProcessRunner.readBounded(output, properties.getMaxOutputBytes());
+          deadline.check();
           if (value.length > properties.getMaxOutputBytes() - aggregateDocumentBytes) {
             throw new ScannerRequestException(
                 "SCANNER_OUTPUT_TOO_LARGE",
@@ -249,6 +273,7 @@ public class ScannerEngineService {
       }
       byte[] merged =
           documents.mergeCycloneDx(platformSboms, properties.getMaxOutputBytes());
+      deadline.check();
       if (merged.length > properties.getMaxOutputBytes()) {
         throw new ScannerRequestException(
             "SCANNER_OUTPUT_TOO_LARGE",
@@ -256,15 +281,17 @@ public class ScannerEngineService {
             413,
             false);
       }
-      deadline.remaining();
+      deadline.check();
       Path mergedPath = workspace.resolve("merged.cdx.json");
       Files.write(mergedPath, merged);
+      deadline.check();
       CatalogResponse catalog = documents.catalog(
           merged,
           request.manifestDigest().substring("sha256:".length()),
           string(ready.details().get("catalogEngineVersion"), ready.engineVersion()),
           capabilities().capabilityDigest(),
           Map.of("scannedPlatforms", scanned, "missingPlatforms", missing));
+      deadline.check();
       if (!missing.isEmpty()) {
         catalog = new CatalogResponse(
             catalog.adapterName(),
@@ -306,20 +333,22 @@ public class ScannerEngineService {
     }
   }
 
-  private MatchResponse matchFile(Path sbom, ResourceLimits limits, Path workspace) {
-    return matchFile(sbom, workspace, new ScanDeadline(limits.timeoutSeconds()));
-  }
-
   private MatchResponse matchFile(
       Path sbom, Path workspace, ScanDeadline deadline) {
-    return database.withRead(() -> matchFileLocked(sbom, workspace, deadline));
+    deadline.check();
+    MatchResponse response =
+        database.withRead(() -> matchFileLocked(sbom, workspace, deadline));
+    deadline.check();
+    return response;
   }
 
   private MatchResponse matchFileLocked(
       Path sbom, Path workspace, ScanDeadline deadline) {
     try {
-      Readiness ready = inspectReadiness(Instant.now());
+      deadline.check();
+      Readiness ready = inspectReadiness(Instant.now(), deadline);
       requireReady(ready);
+      deadline.check();
       Path report = workspace.resolve("grype-report.json");
       processes.run(
           List.of(
@@ -331,35 +360,45 @@ public class ScannerEngineService {
           report,
           deadline.remaining(),
           Map.of());
+      deadline.check();
       byte[] reportJson =
           BoundedProcessRunner.readBounded(report, properties.getMaxOutputBytes());
+      deadline.check();
       DatabaseProvenance database = new DatabaseProvenance(
           ready.vulnerabilityDatabaseRevision(),
           ready.vulnerabilityDatabaseUpdatedAt());
-      return documents.match(
+      MatchResponse response = documents.match(
           reportJson,
           string(ready.details().get("matcherEngineVersion"), ready.engineVersion()),
           database,
           capabilities().capabilityDigest());
+      deadline.check();
+      return response;
     } catch (IOException e) {
       throw new ScannerRequestException(
           "MATCH_IO", "Unable to read matcher output", 503, true, e);
     }
   }
 
-  private Readiness inspectReadiness(Instant observedAt) {
+  private Readiness inspectReadiness(Instant observedAt, ScanDeadline deadline) {
     try {
       EngineVersion syft = documents.engineVersion(
-          processes.versionOutput(
-              properties.getSyftExecutable(), List.of("version", "--output", "json")),
+          versionOutput(
+              properties.getSyftExecutable(),
+              List.of("version", "--output", "json"),
+              deadline),
           "syft");
       EngineVersion grype = documents.engineVersion(
-          processes.versionOutput(
-              properties.getGrypeExecutable(), List.of("version", "--output", "json")),
+          versionOutput(
+              properties.getGrypeExecutable(),
+              List.of("version", "--output", "json"),
+              deadline),
           "grype");
       DatabaseProvenance database = documents.database(
-          processes.versionOutput(
-              properties.getGrypeExecutable(), List.of("db", "status", "--output", "json")));
+          versionOutput(
+              properties.getGrypeExecutable(),
+              List.of("db", "status", "--output", "json"),
+              deadline));
       Map<String, Object> details = new LinkedHashMap<>();
       details.put("catalogEngine", syft.name());
       details.put("catalogEngineVersion", syft.version());
@@ -376,12 +415,20 @@ public class ScannerEngineService {
           observedAt,
           details);
     } catch (ScannerRequestException e) {
+      check(deadline);
       return degradedReadiness(observedAt, e.code());
     }
   }
 
-  private Readiness requireReady() {
-    Readiness readiness = readiness();
+  private byte[] versionOutput(
+      String executable, List<String> arguments, ScanDeadline deadline) {
+    return deadline == null
+        ? processes.versionOutput(executable, arguments)
+        : processes.versionOutput(executable, arguments, deadline.remaining());
+  }
+
+  private Readiness requireReady(ScanDeadline deadline) {
+    Readiness readiness = readiness(deadline);
     requireReady(readiness);
     return readiness;
   }
@@ -425,7 +472,9 @@ public class ScannerEngineService {
         Math.min(requested.maxUncompressedBytes(), properties.getMaxInputBytes() * 4),
         Math.min(requested.maxSingleFileBytes(), properties.getMaxInputBytes()),
         Math.min(requested.maxNestedDepth(), 10),
-        Math.min(requested.timeoutSeconds(), 3600));
+        Math.min(
+            requested.timeoutSeconds(),
+            ScannerContract.MAX_REQUEST_TIMEOUT_SECONDS));
   }
 
   private void validateOci(OciScanRequest request) {
@@ -477,27 +526,11 @@ public class ScannerEngineService {
     return value == null || value.toString().isBlank() ? fallback : value.toString();
   }
 
+  private static void check(ScanDeadline deadline) {
+    if (deadline != null) deadline.check();
+  }
+
   private record CachedReadiness(
       Readiness value, Instant expiresAt, long databaseGeneration) {}
 
-  private static final class ScanDeadline {
-    private final long deadlineNanos;
-
-    private ScanDeadline(int timeoutSeconds) {
-      deadlineNanos =
-          System.nanoTime() + Duration.ofSeconds(Math.max(1, timeoutSeconds)).toNanos();
-    }
-
-    private Duration remaining() {
-      long remaining = deadlineNanos - System.nanoTime();
-      if (remaining <= 0) {
-        throw new ScannerRequestException(
-            "SCANNER_TIMEOUT",
-            "Scanner request exceeded its end-to-end time limit",
-            504,
-            true);
-      }
-      return Duration.ofNanos(remaining);
-    }
-  }
 }

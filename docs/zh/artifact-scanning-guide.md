@@ -407,6 +407,10 @@ Waivers 页签用于查看 Active/Expired、scope、仓库、制品、exception�
 | `KKREPO_SCANNER_MAX_INPUT_BYTES` | `2147483648` | adapter 输入硬上限 |
 | `KKREPO_SCANNER_MAX_OUTPUT_BYTES` | `16777216` | 单份原始 SBOM/report 上限；OCI 同时用作平台原始文档总量和合并 SBOM 上限 |
 
+每个 profile 的扫描超时最长为 3600 秒，并覆盖完整 adapter 请求：输入流复制、归档检查、
+所有 Syft/Grype 进程和结果映射共用同一个单调时钟 deadline。OCI 临时拉取令牌在该有效
+deadline 之外额外保留 120 秒，用于传输和进程退出。
+
 完整低级参数见
 [scanner adapter application.yml](../../scanner-adapter/src/main/resources/application.yml)。
 

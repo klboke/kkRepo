@@ -44,13 +44,13 @@ class ScannerEngineServiceBehaviorTest {
   @Test
   void reportsCapabilitiesCachesReadinessAndCatalogsWithSafeFilename() throws Exception {
     Fixture fixture = new Fixture(temporaryDirectory);
-    when(fixture.scannerInput.copy(any(), any(), eq(SHA256), eq(8L), any()))
+    when(fixture.scannerInput.copy(any(), any(), eq(SHA256), eq(8L), any(), any()))
         .thenAnswer(invocation -> {
           Path path = invocation.getArgument(1);
           Files.write(path, "artifact".getBytes());
           return new ScannerInput.Verified(path, SHA256, 8);
         });
-    when(fixture.archiveGuard.inspect(any(), any(), any()))
+    when(fixture.archiveGuard.inspect(any(), any(), any(), any()))
         .thenReturn(new ArchiveGuard.Inspection(2, 8, 0));
 
     var capabilities = fixture.engine.capabilities();
@@ -69,7 +69,7 @@ class ScannerEngineServiceBehaviorTest {
     assertEquals(ScanCompleteness.COMPLETE, response.completeness());
     ArgumentCaptor<Path> target = ArgumentCaptor.forClass(Path.class);
     verify(fixture.scannerInput).copy(
-        any(), target.capture(), eq(SHA256), eq(8L), any());
+        any(), target.capture(), eq(SHA256), eq(8L), any(), any());
     assertEquals("artifact.jar", target.getValue().getFileName().toString());
     @SuppressWarnings("unchecked")
     ArgumentCaptor<List<String>> command =
@@ -86,7 +86,7 @@ class ScannerEngineServiceBehaviorTest {
   @Test
   void matchesCycloneDxAndRejectsOversizedOrMissingLimits() throws Exception {
     Fixture fixture = new Fixture(temporaryDirectory);
-    when(fixture.scannerInput.copy(any(), any(), eq(SHA256), eq(null), any()))
+    when(fixture.scannerInput.copy(any(), any(), eq(SHA256), eq(null), any(), any()))
         .thenAnswer(invocation -> {
           Path path = invocation.getArgument(1);
           Files.write(path, "{}".getBytes());
@@ -97,12 +97,17 @@ class ScannerEngineServiceBehaviorTest {
         new ByteArrayInputStream("{}".getBytes()), SHA256, limits());
 
     assertEquals("db-1", response.vulnerabilityDatabaseRevision());
+    ArgumentCaptor<Duration> readinessTimeouts = ArgumentCaptor.forClass(Duration.class);
+    verify(fixture.processes, times(3))
+        .versionOutput(anyString(), anyList(), readinessTimeouts.capture());
+    assertTrue(readinessTimeouts.getAllValues().stream()
+        .allMatch(timeout -> timeout.compareTo(Duration.ofSeconds(30)) < 0));
     assertCode(
         "RESOURCE_LIMITS_REQUIRED",
         () -> fixture.engine.match(new ByteArrayInputStream(new byte[0]), SHA256, null));
 
     Fixture oversized = new Fixture(temporaryDirectory.resolve("large"));
-    when(oversized.scannerInput.copy(any(), any(), eq(SHA256), eq(null), any()))
+    when(oversized.scannerInput.copy(any(), any(), eq(SHA256), eq(null), any(), any()))
         .thenAnswer(invocation -> new ScannerInput.Verified(
             invocation.getArgument(1), SHA256, 2048));
     assertCode(
@@ -275,6 +280,8 @@ class ScannerEngineServiceBehaviorTest {
       properties.setMaxOutputBytes(1024);
       properties.setReadinessCache(Duration.ofMinutes(1));
       when(processes.versionOutput(anyString(), anyList())).thenReturn("{}".getBytes());
+      when(processes.versionOutput(anyString(), anyList(), any()))
+          .thenReturn("{}".getBytes());
       when(documents.engineVersion(any(), eq("syft")))
           .thenReturn(new EngineVersion("syft", "1.2"));
       when(documents.engineVersion(any(), eq("grype")))

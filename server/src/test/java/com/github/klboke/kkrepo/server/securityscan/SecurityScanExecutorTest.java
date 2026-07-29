@@ -293,6 +293,32 @@ class SecurityScanExecutorTest {
   }
 
   @Test
+  void keepsTheScannerPullTokenAliveThroughTheMaximumAdapterDeadline() throws Exception {
+    Fixture fixture = new Fixture(
+        ScanStage.CATALOG_AND_MATCH,
+        SubjectKind.OCI_MANIFEST,
+        ScannerContract.MAX_REQUEST_TIMEOUT_SECONDS);
+    DockerManifestRecord manifest = mock(DockerManifestRecord.class);
+    when(manifest.imageName()).thenReturn("acme/demo");
+    when(manifest.digest()).thenReturn("sha256:" + "b".repeat(64));
+    when(fixture.docker.findManifestsByAssetIds(List.of(10L)))
+        .thenReturn(Map.of(10L, manifest));
+    when(fixture.adapter.scanOci(any())).thenReturn(new OciScanResponse(
+        catalogResponse(),
+        matchResponse(),
+        List.of("linux/amd64"),
+        List.of()));
+
+    fixture.executor.execute(fixture.task);
+
+    verify(fixture.dockerAuth).grantScannerPull(
+        "repo",
+        "acme/demo",
+        ScannerContract.MAX_REQUEST_TIMEOUT_SECONDS
+            + DockerAuthService.SCANNER_PULL_TOKEN_GRACE_SECONDS);
+  }
+
+  @Test
   void carriesCatalogProjectionIncompletenessIntoTheFinalRun() throws Exception {
     Fixture fixture = new Fixture(ScanStage.CATALOG_AND_MATCH, SubjectKind.ASSET_BLOB);
     CatalogResponse completeDocumentWithTruncatedProjection = new CatalogResponse(
@@ -512,6 +538,10 @@ class SecurityScanExecutorTest {
     final SecurityScanExecutor executor;
 
     Fixture(ScanStage stage, SubjectKind kind) {
+      this(stage, kind, 60);
+    }
+
+    Fixture(ScanStage stage, SubjectKind kind, int timeoutSeconds) {
       asset = new AssetRecord(
           10L, 1L, null, 11L, RepositoryFormat.MAVEN2, "acme/demo.jar",
           PersistenceHashes.pathHash("acme/demo.jar"), "demo.jar",
@@ -524,7 +554,7 @@ class SecurityScanExecutorTest {
           NOW, NOW, Map.of());
       profile = new ScanProfile(
           1L, "default", true, "syft", "grype", List.of("vuln"), Map.of(),
-          1024, 100, 4096, 1024, 2, 60, OciPlatformPolicy.REQUIRED_SET,
+          1024, 100, 4096, 1024, 2, timeoutSeconds, OciPlatformPolicy.REQUIRED_SET,
           List.of("linux/amd64", "linux/arm64"), "c".repeat(64), 1, NOW, NOW);
       config = new RepositoryScanConfig(
           1L, true, 1L, true, true, EnforcementMode.AUDIT,

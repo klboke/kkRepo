@@ -214,8 +214,13 @@ public class SecurityScanExecutor {
       throw new ScannerAdapterException(
           "OCI_MANIFEST_NOT_FOUND", "OCI manifest metadata is unavailable", true);
     }
+    long scannerTimeoutSeconds = Math.min(
+        profile.timeoutSeconds(),
+        ScannerContract.MAX_REQUEST_TIMEOUT_SECONDS);
     String token = dockerAuth.grantScannerPull(
-        repository.name(), manifest.imageName(), profile.timeoutSeconds() + 120L);
+        repository.name(),
+        manifest.imageName(),
+        scannerTimeoutSeconds + DockerAuthService.SCANNER_PULL_TOKEN_GRACE_SECONDS);
     OciScanRequest request = new OciScanRequest(
         ScannerContract.API_VERSION,
         Long.toString(task.id()),

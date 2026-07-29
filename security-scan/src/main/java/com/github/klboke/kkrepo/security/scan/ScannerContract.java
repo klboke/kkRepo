@@ -15,6 +15,8 @@ public final class ScannerContract {
   public static final int MAX_COMPONENT_PROJECTION_COUNT = 4_096;
   /** Maximum finding projection carried beside the immutable vulnerability report. */
   public static final int MAX_FINDING_PROJECTION_COUNT = 2_048;
+  /** Maximum end-to-end execution time accepted by the scanner adapter. */
+  public static final int MAX_REQUEST_TIMEOUT_SECONDS = 3_600;
 
   private ScannerContract() {}
 

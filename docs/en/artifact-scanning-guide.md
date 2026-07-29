@@ -436,6 +436,11 @@ and OCI registry URL.
 | `KKREPO_SCANNER_MAX_INPUT_BYTES` | `2147483648` | Adapter input hard limit |
 | `KKREPO_SCANNER_MAX_OUTPUT_BYTES` | `16777216` | Per raw SBOM/report limit; OCI also applies it to aggregate platform inputs and the merged SBOM |
 
+Each profile's scan timeout is capped at 3,600 seconds and applies to the complete adapter request:
+input streaming, archive inspection, every Syft/Grype process, and result mapping share one monotonic
+deadline. OCI pull tokens remain valid for that effective deadline plus a 120-second transport and
+shutdown grace period.
+
 See the
 [scanner adapter application.yml](../../scanner-adapter/src/main/resources/application.yml) for
 all low-level values.

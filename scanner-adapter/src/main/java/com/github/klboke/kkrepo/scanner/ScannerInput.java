@@ -19,7 +19,9 @@ public class ScannerInput {
       Path target,
       String expectedSha256,
       Long expectedSize,
-      ResourceLimits limits) {
+      ResourceLimits limits,
+      ScanDeadline deadline) {
+    deadline.check();
     if (expectedSha256 == null
         || !expectedSha256.toLowerCase(java.util.Locale.ROOT).matches("[0-9a-f]{64}")) {
       throw new ScannerRequestException(
@@ -37,7 +39,11 @@ public class ScannerInput {
       try (DigestInputStream source = new DigestInputStream(input, digest);
           var output = Files.newOutputStream(target)) {
         int count;
-        while ((count = source.read(buffer)) >= 0) {
+        while (true) {
+          deadline.check();
+          count = source.read(buffer);
+          deadline.check();
+          if (count < 0) break;
           if (count == 0) continue;
           size += count;
           if (size > maximum) {
@@ -45,8 +51,10 @@ public class ScannerInput {
                 "INPUT_TOO_LARGE", "Input exceeded the configured limit", 413, false);
           }
           output.write(buffer, 0, count);
+          deadline.check();
         }
       }
+      deadline.check();
       String actual = HexFormat.of().formatHex(digest.digest());
       if (!MessageDigest.isEqual(
           actual.getBytes(java.nio.charset.StandardCharsets.US_ASCII),

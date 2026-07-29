@@ -34,10 +34,13 @@ public class ArchiveGuard {
   private static final long MAX_EXPANSION_RATIO = 1000;
   private static final long MIN_RATIO_BUDGET_BYTES = 1024L * 1024;
 
-  public Inspection inspect(Path input, ResourceLimits limits, Path workspace) {
+  public Inspection inspect(
+      Path input, ResourceLimits limits, Path workspace, ScanDeadline deadline) {
     try {
-      Budget budget = new Budget(limits, Files.size(input));
+      deadline.check();
+      Budget budget = new Budget(limits, Files.size(input), deadline);
       inspectPath(input, "", 0, budget, workspace);
+      deadline.check();
       return new Inspection(budget.entries, budget.expandedBytes, budget.nestedArchives);
     } catch (IOException e) {
       throw new ScannerRequestException(
@@ -61,10 +64,12 @@ public class ArchiveGuard {
   private boolean inspectAsArchive(
       Path input, int depth, Budget budget, Path workspace)
       throws IOException, ArchiveException {
+    budget.check();
     try (BufferedInputStream raw = new BufferedInputStream(Files.newInputStream(input))) {
       String type;
       try {
         type = ArchiveStreamFactory.detect(raw);
+        budget.check();
       } catch (ArchiveException notArchive) {
         return false;
       }
@@ -79,10 +84,12 @@ public class ArchiveGuard {
   private void inspectAsCompressed(
       Path input, String hint, int depth, Budget budget, Path workspace)
       throws IOException, CompressorException, ArchiveException {
+    budget.check();
     try (BufferedInputStream raw = new BufferedInputStream(Files.newInputStream(input))) {
       String compressor;
       try {
         compressor = CompressorStreamFactory.detect(raw);
+        budget.check();
       } catch (CompressorException notCompressed) {
         return;
       }
@@ -106,8 +113,11 @@ public class ArchiveGuard {
   private void inspectEntries(
       ArchiveInputStream<?> archive, int depth, Budget budget, Path workspace)
       throws IOException {
-    ArchiveEntry entry;
-    while ((entry = archive.getNextEntry()) != null) {
+    while (true) {
+      budget.check();
+      ArchiveEntry entry = archive.getNextEntry();
+      budget.check();
+      if (entry == null) break;
       budget.addEntry();
       validatePath(entry.getName());
       validateType(entry);
@@ -197,7 +207,11 @@ public class ArchiveGuard {
     byte[] buffer = new byte[32 * 1024];
     try (var target = Files.newOutputStream(output)) {
       int read;
-      while ((read = input.read(buffer)) >= 0) {
+      while (true) {
+        budget.check();
+        read = input.read(buffer);
+        budget.check();
+        if (read < 0) break;
         if (read == 0) continue;
         count += read;
         budget.addBytes(read);
@@ -205,6 +219,7 @@ public class ArchiveGuard {
           throw rejected("ARCHIVE_ENTRY_TOO_LARGE", "Archive entry exceeds the single-file limit");
         }
         target.write(buffer, 0, read);
+        budget.check();
       }
     }
   }
@@ -212,8 +227,11 @@ public class ArchiveGuard {
   private static void drain(InputStream input, Budget budget, long maximum) throws IOException {
     long count = 0;
     byte[] buffer = new byte[32 * 1024];
-    int read;
-    while ((read = input.read(buffer)) >= 0) {
+    while (true) {
+      budget.check();
+      int read = input.read(buffer);
+      budget.check();
+      if (read < 0) break;
       if (read == 0) continue;
       count += read;
       budget.addBytes(read);
@@ -230,18 +248,21 @@ public class ArchiveGuard {
   private static final class Budget {
     private final ResourceLimits limits;
     private final long ratioBudgetBytes;
+    private final ScanDeadline deadline;
     private int entries;
     private long expandedBytes;
     private int nestedArchives;
 
-    private Budget(ResourceLimits limits, long compressedBytes) {
+    private Budget(ResourceLimits limits, long compressedBytes, ScanDeadline deadline) {
       this.limits = limits;
+      this.deadline = deadline;
       long scaled = compressedBytes > Long.MAX_VALUE / MAX_EXPANSION_RATIO
           ? Long.MAX_VALUE : compressedBytes * MAX_EXPANSION_RATIO;
       this.ratioBudgetBytes = Math.max(MIN_RATIO_BUDGET_BYTES, scaled);
     }
 
     private void addEntry() {
+      check();
       entries++;
       if (entries > limits.maxArchiveEntries()) {
         throw rejected("ARCHIVE_ENTRY_LIMIT", "Archive contains too many entries");
@@ -249,6 +270,7 @@ public class ArchiveGuard {
     }
 
     private void addBytes(long count) {
+      check();
       expandedBytes += count;
       if (expandedBytes > limits.maxUncompressedBytes()) {
         throw rejected("ARCHIVE_EXPANDED_LIMIT", "Archive expanded size exceeds the limit");
@@ -256,6 +278,10 @@ public class ArchiveGuard {
       if (expandedBytes > ratioBudgetBytes) {
         throw rejected("ARCHIVE_EXPANSION_RATIO", "Archive expansion ratio is unsafe");
       }
+    }
+
+    private void check() {
+      deadline.check();
     }
   }
 

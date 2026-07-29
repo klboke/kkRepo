@@ -8,6 +8,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.util.concurrent.atomic.AtomicLong;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.apache.commons.compress.archivers.tar.TarConstants;
@@ -27,7 +29,7 @@ class ArchiveGuardTest {
     Path archive = zip("safe.zip", "lib/package.json", "{}".getBytes());
 
     ArchiveGuard.Inspection inspection =
-        guard.inspect(archive, limits(10, 1024), temporary);
+        guard.inspect(archive, limits(10, 1024), temporary, deadline());
 
     assertThat(inspection.entries()).isEqualTo(1);
     assertThat(inspection.expandedBytes()).isEqualTo(2);
@@ -38,11 +40,13 @@ class ArchiveGuardTest {
     Path traversal = zip("traversal.zip", "../escape", new byte[] {1});
     Path mixed = zip("mixed.zip", "safe\\..\\escape", new byte[] {1});
 
-    assertThatThrownBy(() -> guard.inspect(traversal, limits(10, 1024), temporary))
+    assertThatThrownBy(
+            () -> guard.inspect(traversal, limits(10, 1024), temporary, deadline()))
         .isInstanceOf(ScannerRequestException.class)
         .extracting(failure -> ((ScannerRequestException) failure).code())
         .isEqualTo("ARCHIVE_PATH_ESCAPE");
-    assertThatThrownBy(() -> guard.inspect(mixed, limits(10, 1024), temporary))
+    assertThatThrownBy(
+            () -> guard.inspect(mixed, limits(10, 1024), temporary, deadline()))
         .isInstanceOf(ScannerRequestException.class)
         .extracting(failure -> ((ScannerRequestException) failure).code())
         .isEqualTo("ARCHIVE_PATH_ESCAPE");
@@ -61,11 +65,13 @@ class ArchiveGuardTest {
     }
     Path tooLarge = zip("large.zip", "large.bin", new byte[65]);
 
-    assertThatThrownBy(() -> guard.inspect(tooMany, limits(1, 1024), temporary))
+    assertThatThrownBy(
+            () -> guard.inspect(tooMany, limits(1, 1024), temporary, deadline()))
         .isInstanceOf(ScannerRequestException.class)
         .extracting(failure -> ((ScannerRequestException) failure).code())
         .isEqualTo("ARCHIVE_ENTRY_LIMIT");
-    assertThatThrownBy(() -> guard.inspect(tooLarge, limits(10, 64), temporary))
+    assertThatThrownBy(
+            () -> guard.inspect(tooLarge, limits(10, 64), temporary, deadline()))
         .isInstanceOf(ScannerRequestException.class)
         .extracting(failure -> ((ScannerRequestException) failure).code())
         .isEqualTo("ARCHIVE_ENTRY_TOO_LARGE");
@@ -80,7 +86,7 @@ class ArchiveGuardTest {
     ResourceLimits limits =
         new ResourceLimits(4 * 1024 * 1024, 10, 4 * 1024 * 1024, 4 * 1024 * 1024, 1, 30);
 
-    assertThatThrownBy(() -> guard.inspect(compressed, limits, temporary))
+    assertThatThrownBy(() -> guard.inspect(compressed, limits, temporary, deadline()))
         .isInstanceOf(ScannerRequestException.class)
         .extracting(failure -> ((ScannerRequestException) failure).code())
         .isEqualTo("ARCHIVE_EXPANSION_RATIO");
@@ -101,14 +107,15 @@ class ArchiveGuardTest {
       throws IOException {
     Path raw = temporary.resolve("plain.bin");
     Files.writeString(raw, "plain");
-    assertThat(guard.inspect(raw, limits(10, 1024), temporary))
+    assertThat(guard.inspect(raw, limits(10, 1024), temporary, deadline()))
         .isEqualTo(new ArchiveGuard.Inspection(0, 0, 0));
 
     Path gzip = temporary.resolve("plain.gz");
     try (GZIPOutputStream output = new GZIPOutputStream(Files.newOutputStream(gzip))) {
       output.write("expanded".getBytes());
     }
-    assertThat(guard.inspect(gzip, limits(10, 1024), temporary).expandedBytes())
+    assertThat(
+            guard.inspect(gzip, limits(10, 1024), temporary, deadline()).expandedBytes())
         .isEqualTo(8);
 
     ByteArrayOutputStream nestedBytes = new ByteArrayOutputStream();
@@ -119,13 +126,14 @@ class ArchiveGuardTest {
     }
     Path nested = zip("outer.zip", "nested.jar", nestedBytes.toByteArray());
     ArchiveGuard.Inspection inspection =
-        guard.inspect(nested, limits(10, 1024), temporary);
+        guard.inspect(nested, limits(10, 1024), temporary, deadline());
     assertThat(inspection.entries()).isEqualTo(2);
     assertThat(inspection.nestedArchives()).isEqualTo(1);
     assertThatThrownBy(() -> guard.inspect(
             nested,
             new ResourceLimits(1024 * 1024, 10, 1024 * 1024, 1024, 0, 30),
-            temporary))
+            temporary,
+            deadline()))
         .isInstanceOf(ScannerRequestException.class)
         .extracting(failure -> ((ScannerRequestException) failure).code())
         .isEqualTo("ARCHIVE_NESTING_LIMIT");
@@ -141,7 +149,8 @@ class ArchiveGuardTest {
       output.putArchiveEntry(link);
       output.closeArchiveEntry();
     }
-    assertThatThrownBy(() -> guard.inspect(tar, limits(10, 1024), temporary))
+    assertThatThrownBy(
+            () -> guard.inspect(tar, limits(10, 1024), temporary, deadline()))
         .isInstanceOf(ScannerRequestException.class)
         .extracting(failure -> ((ScannerRequestException) failure).code())
         .isEqualTo("ARCHIVE_SPECIAL_FILE_REJECTED");
@@ -153,6 +162,21 @@ class ArchiveGuardTest {
           .isInstanceOf(ScannerRequestException.class);
     }
     ArchiveGuard.validatePath("safe/path/file.jar");
+  }
+
+  @Test
+  void stopsArchiveTraversalWhenTheSharedDeadlineExpires() throws IOException {
+    Path archive = zip("deadline.zip", "entry.txt", "content".getBytes());
+    AtomicLong clock = new AtomicLong();
+
+    assertThatThrownBy(() -> guard.inspect(
+            archive,
+            limits(10, 1024),
+            temporary,
+            new ScanDeadline(Duration.ofNanos(5), clock::getAndIncrement)))
+        .isInstanceOf(ScannerRequestException.class)
+        .extracting(failure -> ((ScannerRequestException) failure).code())
+        .isEqualTo("SCANNER_TIMEOUT");
   }
 
   private Path zip(String fileName, String entryName, byte[] content) throws IOException {
@@ -173,5 +197,9 @@ class ArchiveGuardTest {
         singleFile,
         1,
         30);
+  }
+
+  private static ScanDeadline deadline() {
+    return new ScanDeadline(30);
   }
 }

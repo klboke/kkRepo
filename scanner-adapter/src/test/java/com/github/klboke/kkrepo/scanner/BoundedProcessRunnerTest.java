@@ -255,6 +255,10 @@ class BoundedProcessRunnerTest {
         "{\"version\":\"1\"}\n",
         new String(runner.versionOutput(
             "/bin/echo", List.of("{\"version\":\"1\"}"))));
+    assertEquals(
+        "{\"version\":\"2\"}\n",
+        new String(runner.versionOutput(
+            "/bin/echo", List.of("{\"version\":\"2\"}"), Duration.ofSeconds(1))));
     assertArrayEquals(
         new byte[0],
         BoundedProcessRunner.readBounded(directory.resolve("absent"), 10));

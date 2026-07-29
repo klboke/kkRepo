@@ -16,6 +16,8 @@ import org.springframework.stereotype.Component;
 /** Runs scanner binaries directly, without a shell, with bounded output and wall-clock timeout. */
 @Component
 public class BoundedProcessRunner {
+  private static final Duration VERSION_COMMAND_TIMEOUT = Duration.ofSeconds(15);
+
   private final ScannerAdapterProperties properties;
   private final FileSizeReader fileSizeReader;
 
@@ -198,6 +200,11 @@ public class BoundedProcessRunner {
   }
 
   public byte[] versionOutput(String executable, List<String> arguments) {
+    return versionOutput(executable, arguments, VERSION_COMMAND_TIMEOUT);
+  }
+
+  byte[] versionOutput(
+      String executable, List<String> arguments, Duration remainingRequestTime) {
     Path directory = null;
     try {
       Files.createDirectories(properties.getWorkDirectory());
@@ -206,7 +213,9 @@ public class BoundedProcessRunner {
       List<String> command = new ArrayList<>();
       command.add(executable);
       command.addAll(arguments);
-      run(command, directory, stdout, Duration.ofSeconds(15), Map.of());
+      Duration timeout = remainingRequestTime.compareTo(VERSION_COMMAND_TIMEOUT) < 0
+          ? remainingRequestTime : VERSION_COMMAND_TIMEOUT;
+      run(command, directory, stdout, timeout, Map.of());
       return readBounded(stdout, properties.getMaxOutputBytes());
     } catch (IOException e) {
       throw new ScannerRequestException(
