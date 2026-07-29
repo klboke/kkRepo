@@ -489,7 +489,13 @@ asset/blob binding，只有 candidate 缺失或指向不同 Blob 时才推进 ge
 
 下列表名是逻辑设计；MySQL 与 PostgreSQL migration 使用各自类型和索引实现相同语义。
 
-大表查询必须从游标、状态或外键前缀进入索引。V36 直接包含以下关键索引：
+大表查询必须从游标、状态或外键前缀进入索引。V36 创建扫描域表及其关键索引；需要
+加到既有 `asset`、`docker_manifest_reference` 大表上的两个索引单独放在 V37：
+PostgreSQL 使用非事务 migration 的 `CREATE INDEX CONCURRENTLY`，MySQL 显式使用
+`ALGORITHM=INPLACE, LOCK=NONE`。该拆分是在线 DDL 的事务边界，不是功能发布后的修复
+migration；PostgreSQL 部署同时把 Flyway advisory lock 切为 session lock，避免
+transactional lock 自身阻塞 concurrent index build。滚动升级期间旧副本可以继续处理
+制品写入与下载水位更新。
 
 - task/backfill 的 claim、terminal retention 与 scanner snapshot 外键索引；
 - candidate 的 `pending + changed_at` 队列索引，以及 task 的

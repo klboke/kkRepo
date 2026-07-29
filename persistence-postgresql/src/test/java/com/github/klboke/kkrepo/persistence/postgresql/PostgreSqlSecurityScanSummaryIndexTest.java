@@ -1,8 +1,11 @@
 package com.github.klboke.kkrepo.persistence.postgresql;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.persistence.postgresql.support.PostgreSqlIntegrationTestSupport;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -96,6 +99,35 @@ class PostgreSqlSecurityScanSummaryIndexTest extends PostgreSqlIntegrationTestSu
               AND table_name = 'security_scan_task'
               AND column_name = 'attempts_remaining'
             """, String.class));
+  }
+
+  @Test
+  void existingTableIndexesUseANonTransactionalConcurrentMigration() throws IOException {
+    String migration =
+        resource("db/migration/postgresql/V37__artifact_security_scanning_online_indexes.sql");
+    String configuration =
+        resource("db/migration/postgresql/"
+            + "V37__artifact_security_scanning_online_indexes.sql.conf");
+
+    assertEquals(2, occurrences(migration, "CREATE INDEX CONCURRENTLY"));
+    assertEquals(2, occurrences(migration, "DROP INDEX CONCURRENTLY IF EXISTS"));
+    assertTrue(migration.contains("ON asset(repository_id, id)"));
+    assertTrue(migration.contains(
+        "ON docker_manifest_reference(repository_id, digest_hash, manifest_id)"));
+    assertEquals("executeInTransaction=false", configuration.strip());
+  }
+
+  private static String resource(String name) throws IOException {
+    try (var input = PostgreSqlSecurityScanSummaryIndexTest.class
+        .getClassLoader()
+        .getResourceAsStream(name)) {
+      if (input == null) throw new IOException("Missing test resource: " + name);
+      return new String(input.readAllBytes(), StandardCharsets.UTF_8);
+    }
+  }
+
+  private static int occurrences(String value, String needle) {
+    return (value.length() - value.replace(needle, "").length()) / needle.length();
   }
 
   private String indexDefinition(String index) {

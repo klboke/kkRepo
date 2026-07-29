@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.scanner;
 
+import com.github.klboke.kkrepo.security.scan.ScannerArtifactType;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.ResourceLimits;
 import java.io.BufferedInputStream;
 import java.io.IOException;
@@ -7,9 +8,11 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.text.Normalizer;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.regex.Pattern;
 import org.apache.commons.compress.archivers.ArchiveEntry;
 import org.apache.commons.compress.archivers.ArchiveException;
@@ -29,9 +32,11 @@ import org.springframework.stereotype.Component;
 @Component
 public class ArchiveGuard {
   private static final Pattern WINDOWS_ABSOLUTE = Pattern.compile("^[A-Za-z]:[/\\\\].*");
-  private static final Set<String> NESTED_SUFFIXES = Set.of(
-      ".zip", ".jar", ".war", ".ear", ".whl", ".nupkg", ".crate", ".tar",
-      ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz");
+  private static final Set<String> NESTED_SUFFIXES =
+      Arrays.stream(ScannerArtifactType.values())
+          .map(ScannerArtifactType::suffix)
+          .filter(suffix -> !suffix.isEmpty())
+          .collect(Collectors.toUnmodifiableSet());
   private static final long MAX_EXPANSION_RATIO = 1000;
   private static final long MIN_RATIO_BUDGET_BYTES = 1024L * 1024;
 

@@ -1,6 +1,3 @@
-CREATE INDEX idx_asset_repository_id
-  ON asset(repository_id, id);
-
 CREATE TABLE artifact_change_event (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   repository_id BIGINT UNSIGNED NOT NULL,
@@ -24,9 +21,6 @@ CREATE TABLE blob_reference (
     FOREIGN KEY (blob_id) REFERENCES asset_blob(id) ON DELETE RESTRICT,
   INDEX idx_blob_reference_blob (blob_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE INDEX idx_docker_reference_policy_lookup
-  ON docker_manifest_reference(repository_id, digest_hash, manifest_id);
 
 CREATE TABLE security_scan_profile (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.Supplier;
 import org.flywaydb.core.Flyway;
+import org.flywaydb.database.postgresql.PostgreSQLConfigurationExtension;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.jdbc.core.ConnectionCallback;
@@ -48,11 +49,14 @@ public abstract class PostgreSqlIntegrationTestSupport {
       dialect = new PostgreSqlDatabaseDialect();
       jsonColumns = new JsonColumns(new ObjectMapper(), dialect);
       transactionTemplate = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
-      flyway = Flyway.configure()
+      var configuration = Flyway.configure()
           .dataSource(dataSource)
           .locations("classpath:db/migration/postgresql")
-          .failOnMissingLocations(true)
-          .load();
+          .failOnMissingLocations(true);
+      configuration
+          .getConfigurationExtension(PostgreSQLConfigurationExtension.class)
+          .setTransactionalLock(false);
+      flyway = configuration.load();
       flyway.migrate();
       stores = JdbcPersistenceStoreFactory.createStores(jdbcTemplate, dialect);
     }

@@ -4,18 +4,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.github.klboke.kkrepo.security.scan.ScannerContract.ResourceLimits;
+import com.github.luben.zstd.ZstdOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.zip.GZIPOutputStream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.apache.commons.compress.archivers.tar.TarConstants;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipOutputStream;
-import java.util.zip.GZIPOutputStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -140,6 +141,27 @@ class ArchiveGuardTest {
   }
 
   @Test
+  void recognizesEveryScannerSupportedNestedArchiveSuffix() throws IOException {
+    byte[] tarZstd = zstdTar("inside-zstd.txt", "zstd".getBytes());
+    byte[] gem = tar("inside-gem.txt", "gem".getBytes());
+    Path outer = temporary.resolve("supported-nested.zip");
+    try (ZipOutputStream output = new ZipOutputStream(Files.newOutputStream(outer))) {
+      output.putNextEntry(new ZipEntry("packages/dependency.tar.zst"));
+      output.write(tarZstd);
+      output.closeEntry();
+      output.putNextEntry(new ZipEntry("packages/dependency.gem"));
+      output.write(gem);
+      output.closeEntry();
+    }
+
+    ArchiveGuard.Inspection inspection =
+        guard.inspect(outer, limits(10, 16 * 1024), temporary, deadline());
+
+    assertThat(inspection.entries()).isEqualTo(4);
+    assertThat(inspection.nestedArchives()).isEqualTo(2);
+  }
+
+  @Test
   void rejectsArchiveLinksAndInvalidNames() throws IOException {
     Path tar = temporary.resolve("links.tar");
     try (TarArchiveOutputStream output =
@@ -187,6 +209,32 @@ class ArchiveGuardTest {
       output.closeEntry();
     }
     return archive;
+  }
+
+  private static byte[] tar(String entryName, byte[] content) throws IOException {
+    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+    try (TarArchiveOutputStream output = new TarArchiveOutputStream(bytes)) {
+      writeTarEntry(output, entryName, content);
+    }
+    return bytes.toByteArray();
+  }
+
+  private static byte[] zstdTar(String entryName, byte[] content) throws IOException {
+    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+    try (ZstdOutputStream zstd = new ZstdOutputStream(bytes);
+        TarArchiveOutputStream output = new TarArchiveOutputStream(zstd)) {
+      writeTarEntry(output, entryName, content);
+    }
+    return bytes.toByteArray();
+  }
+
+  private static void writeTarEntry(
+      TarArchiveOutputStream output, String entryName, byte[] content) throws IOException {
+    TarArchiveEntry entry = new TarArchiveEntry(entryName);
+    entry.setSize(content.length);
+    output.putArchiveEntry(entry);
+    output.write(content);
+    output.closeArchiveEntry();
   }
 
   private static ResourceLimits limits(int entries, long singleFile) {

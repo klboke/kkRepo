@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.persistence.mysql.support.MySqlIntegrationTestSupport;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -109,6 +111,28 @@ class MySqlSecurityScanSummaryIndexTest extends MySqlIntegrationTestSupport {
         """, String.class);
     assertTrue(
         attemptsRemaining != null && attemptsRemaining.contains("STORED GENERATED"));
+  }
+
+  @Test
+  void existingTableIndexesUseExplicitOnlineDdl() throws IOException {
+    String migration =
+        resource("db/migration/mysql/V37__artifact_security_scanning_online_indexes.sql");
+
+    assertEquals(2, occurrences(migration, "ALGORITHM=INPLACE"));
+    assertEquals(2, occurrences(migration, "LOCK=NONE"));
+  }
+
+  private static String resource(String name) throws IOException {
+    try (var input = MySqlSecurityScanSummaryIndexTest.class
+        .getClassLoader()
+        .getResourceAsStream(name)) {
+      if (input == null) throw new IOException("Missing test resource: " + name);
+      return new String(input.readAllBytes(), StandardCharsets.UTF_8);
+    }
+  }
+
+  private static int occurrences(String value, String needle) {
+    return (value.length() - value.replace(needle, "").length()) / needle.length();
   }
 
   private List<String> indexColumns(String table, String index) {
