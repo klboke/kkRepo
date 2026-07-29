@@ -226,7 +226,7 @@ class RepositoryDataMigrationWorker {
           nexus,
           target.assetId());
       return true;
-    } catch (IOException | RuntimeException failure) {
+    } catch (IOException failure) {
       recordPublicIdBackfillFailure(repositoryJob, migrationAsset, failure);
       return false;
     }

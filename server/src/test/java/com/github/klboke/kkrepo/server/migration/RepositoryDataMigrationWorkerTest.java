@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.migration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -308,6 +309,51 @@ class RepositoryDataMigrationWorkerTest {
       verify(fixture.migrationDao, times(2)).markDiscoveredAssetFailed(
           eq(7L), any(byte[].class), any());
       verify(fixture.migrationDao).finishDiscoveryPage(7L, "next-token", false);
+    } finally {
+      fixture.worker.shutdown();
+    }
+  }
+
+  @Test
+  void publicIdBackfillPageDoesNotAdvanceAfterInfrastructureFailure() throws Exception {
+    Fixture fixture = fixture();
+    try {
+      RepositoryDataMigrationRepositoryRecord repository = repositoryJob(
+          RepositoryFormat.NPM, Map.of());
+      NexusPublicAsset asset = new NexusPublicAsset(
+          "public-id", "source", "@scope/package/-/package-1.0.0.tgz", "sha1", null);
+      NexusPublicAssetPage page = new NexusPublicAssetPage(
+          "source", null, "next-token", List.of(asset));
+      when(fixture.migrationDao.findTargetAssetsByPathHash(eq(9L), any()))
+          .thenAnswer(invocation -> {
+            List<?> hashes = invocation.getArgument(1);
+            return Map.of(
+                java.nio.ByteBuffer.wrap((byte[]) hashes.get(0)),
+                new TargetAssetRef(null, 30L, 40L));
+          });
+      doThrow(new IllegalStateException("database unavailable"))
+          .when(fixture.publicIdCaptureService)
+          .capture(
+              "http://nexus.example", 100L, "source", 9L,
+              "@scope/package/-/package-1.0.0.tgz", asset, 30L);
+
+      IllegalStateException failure = assertThrows(
+          IllegalStateException.class,
+          () -> invoke(
+              fixture.worker, "processPublicIdBackfillPage",
+              new Class<?>[] {
+                  RepositoryDataMigrationRepositoryRecord.class,
+                  NexusPublicAssetPage.class,
+                  RepositoryDataMigrationWorker.SourceAccess.class
+              },
+              repository, page, sourceAccess(null, true, true)));
+
+      assertEquals("database unavailable", failure.getMessage());
+      verify(fixture.migrationDao, never()).markDiscoveredAssetMapped(
+          anyLong(), any(byte[].class), any());
+      verify(fixture.migrationDao, never()).markDiscoveredAssetFailed(
+          anyLong(), any(byte[].class), any());
+      verify(fixture.migrationDao, never()).finishDiscoveryPage(anyLong(), any(), anyBoolean());
     } finally {
       fixture.worker.shutdown();
     }
