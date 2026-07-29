@@ -332,12 +332,17 @@ public class BoundedProcessRunner {
     private final boolean linux;
     private final List<String> launchPrefix;
     private final List<String> signalPrefix;
+    private final boolean signalNeedsOperandSeparator;
 
     private ProcessGroupSupport(
-        boolean linux, List<String> launchPrefix, List<String> signalPrefix) {
+        boolean linux,
+        List<String> launchPrefix,
+        List<String> signalPrefix,
+        boolean signalNeedsOperandSeparator) {
       this.linux = linux;
       this.launchPrefix = launchPrefix;
       this.signalPrefix = signalPrefix;
+      this.signalNeedsOperandSeparator = signalNeedsOperandSeparator;
     }
 
     static ProcessGroupSupport detect() {
@@ -345,22 +350,26 @@ public class BoundedProcessRunner {
           .toLowerCase(java.util.Locale.ROOT)
           .contains("linux");
       if (!linux) {
-        return new ProcessGroupSupport(false, List.of(), List.of());
+        return new ProcessGroupSupport(false, List.of(), List.of(), false);
       }
       Path setsid = firstExecutable("/usr/bin/setsid", "/bin/setsid");
       Path kill = firstExecutable("/usr/bin/kill", "/bin/kill");
+      Path busybox = firstExecutable("/bin/busybox", "/usr/bin/busybox");
       if (setsid != null && kill != null) {
         return new ProcessGroupSupport(
-            true, List.of(setsid.toString()), List.of(kill.toString()));
+            true,
+            List.of(setsid.toString()),
+            List.of(kill.toString()),
+            !sameExecutable(kill, busybox));
       }
-      Path busybox = firstExecutable("/bin/busybox", "/usr/bin/busybox");
       if (busybox != null) {
         return new ProcessGroupSupport(
             true,
             List.of(busybox.toString(), "setsid"),
-            List.of(busybox.toString(), "kill"));
+            List.of(busybox.toString(), "kill"),
+            false);
       }
-      return new ProcessGroupSupport(true, List.of(), List.of());
+      return new ProcessGroupSupport(true, List.of(), List.of(), false);
     }
 
     boolean isolated() {
@@ -473,9 +482,9 @@ public class BoundedProcessRunner {
       List<String> command = new ArrayList<>(signalPrefix.size() + 2);
       command.addAll(signalPrefix);
       command.add(signal);
-      // BusyBox kill (used by the Alpine production image) does not accept a "--" separator.
-      // Once the signal option is consumed, a negative numeric operand unambiguously targets the
-      // process group for both BusyBox and util-linux kill.
+      // procps/util-linux kill needs "--" before a negative process-group operand, while BusyBox
+      // kill (used by the Alpine production image) rejects that separator.
+      if (signalNeedsOperandSeparator) command.add("--");
       command.add("-" + groupId);
       Process utility = new ProcessBuilder(command)
           .redirectInput(ProcessBuilder.Redirect.from(new java.io.File("/dev/null")))
@@ -495,6 +504,15 @@ public class BoundedProcessRunner {
         if (Files.isRegularFile(path) && Files.isExecutable(path)) return path;
       }
       return null;
+    }
+
+    private static boolean sameExecutable(Path first, Path second) {
+      if (first == null || second == null) return false;
+      try {
+        return Files.isSameFile(first, second);
+      } catch (IOException e) {
+        return false;
+      }
     }
   }
 
