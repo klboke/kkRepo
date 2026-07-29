@@ -84,6 +84,8 @@ securityScanning:
     existingSecret: kkrepo-scanner
     key: service-credential
   scannerDatabase:
+    # Disabling the updater requires persistence.existingClaim to point at a pre-populated
+    # immutable generation layout containing .kkrepo-db-current and generations/generation-*.
     autoUpdate: true
     updateInterval: 6h
     # A separate non-serving CronJob checks the shared database on this schedule. The interval

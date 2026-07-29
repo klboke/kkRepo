@@ -403,6 +403,17 @@ public class NpmHostedService {
     }
   }
 
+  void beforeUncachedRead(
+      RepositoryRuntime runtime,
+      String path,
+      String kind,
+      String contentType,
+      long contentLength) {
+    if (downloadPolicy != null) {
+      downloadPolicy.beforeUncachedRead(runtime, path, kind, contentType, contentLength);
+    }
+  }
+
   private static String responseContentType(AssetRecord asset) {
     return responseContentType(asset.kind(), asset.path(), asset.contentType());
   }

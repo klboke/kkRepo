@@ -20,6 +20,7 @@ import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
@@ -29,6 +30,20 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 class RawAssetReaderTest {
+  @Test
+  void delegatesUncachedPolicyMetadata() {
+    ArtifactDownloadPolicy policy = mock(ArtifactDownloadPolicy.class);
+    RepositoryRuntime runtime = mock(RepositoryRuntime.class);
+    RawAssetReader reader = new RawAssetReader(
+        mock(AssetDao.class), mock(BlobStorageRegistry.class), policy);
+
+    reader.beforeUncachedRead(
+        runtime, "packages/demo-1.0.0.rpm", "asset", "application/x-rpm", 42L);
+
+    verify(policy).beforeUncachedRead(
+        runtime, "packages/demo-1.0.0.rpm", "asset", "application/x-rpm", 42L);
+  }
+
   @Test
   void servesHeadWithoutOpeningBlobStorage() {
     AssetDao assetDao = mock(AssetDao.class);

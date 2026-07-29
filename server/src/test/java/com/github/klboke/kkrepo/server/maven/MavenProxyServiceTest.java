@@ -4,9 +4,11 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
@@ -68,14 +70,15 @@ class MavenProxyServiceTest {
 
   @Test
   void headHitReturnsRemoteHeadersWithoutWritingBlob() {
-    CapturingFetcher fetcher = new CapturingFetcher(new HttpRemoteFetcher.Result(
+    HttpRemoteFetcher.Result upstream = new HttpRemoteFetcher.Result(
         200,
         Map.of(
             "Content-Length", "47706",
             "Content-Type", "binary/octet-stream",
             "ETag", "\"fb9532624e7bf327a6c6249c59b64d377e0a2866\"",
             "Last-Modified", "Mon, 25 May 2026 07:24:48 GMT"),
-        InputStream.nullInputStream()));
+        InputStream.nullInputStream());
+    CapturingFetcher fetcher = new CapturingFetcher(upstream);
     RecordingProxyStateDao proxyState = new RecordingProxyStateDao();
     ArtifactDownloadPolicy downloadPolicy = mock(ArtifactDownloadPolicy.class);
     MavenProxyService service = service(fetcher, proxyState, downloadPolicy);
@@ -83,10 +86,8 @@ class MavenProxyServiceTest {
         "org/gradle/kotlin/gradle-kotlin-dsl-plugins/4.2.1/"
             + "gradle-kotlin-dsl-plugins-4.2.1.jar");
 
-    MavenResponse response = service.get(
-        runtime(),
-        requestedPath,
-        true);
+    RepositoryRuntime runtime = runtime();
+    MavenResponse response = service.get(runtime, requestedPath, true);
 
     assertNotNull(fetcher.request);
     assertTrue(fetcher.request.headOnly());
@@ -99,12 +100,36 @@ class MavenProxyServiceTest {
     assertEquals(1, proxyState.successCount);
     assertEquals(0, proxyState.failureCount);
     verify(downloadPolicy).beforeUncachedRead(
-        runtime().id(),
-        RepositoryFormat.MAVEN2,
-        requestedPath.path(),
-        "artifact",
-        "binary/octet-stream",
-        47706L);
+        runtime, requestedPath.path(), "artifact", "binary/octet-stream", 47706L);
+  }
+
+  @Test
+  void getMissEvaluatesPendingPolicyBeforePersistingBody() {
+    HttpRemoteFetcher.Result upstream = new HttpRemoteFetcher.Result(
+        200,
+        Map.of(
+            "Content-Length", "1048576",
+            "Content-Type", "application/java-archive"),
+        InputStream.nullInputStream());
+    CapturingFetcher fetcher = new CapturingFetcher(upstream);
+    RecordingProxyStateDao proxyState = new RecordingProxyStateDao();
+    ArtifactDownloadPolicy downloadPolicy = mock(ArtifactDownloadPolicy.class);
+    RepositoryRuntime runtime = runtime();
+    MavenPath requestedPath = path("com/acme/demo/1.0.0/demo-1.0.0.jar");
+    RuntimeException blocked = new RuntimeException("blocked before persistence");
+    doThrow(blocked).when(downloadPolicy)
+        .beforeUncachedRead(
+            runtime, requestedPath.path(), "artifact", "application/java-archive", 1048576L);
+
+    RuntimeException actual = assertThrows(
+        RuntimeException.class,
+        () -> service(fetcher, proxyState, downloadPolicy)
+            .get(runtime, requestedPath, false));
+
+    assertSame(blocked, actual);
+    verify(downloadPolicy)
+        .beforeUncachedRead(
+            runtime, requestedPath.path(), "artifact", "application/java-archive", 1048576L);
   }
 
   @Test

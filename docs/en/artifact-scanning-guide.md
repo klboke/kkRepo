@@ -200,6 +200,11 @@ For multiple scanner replicas:
 - If replicas share a persistent database cache, set
   `securityScanning.scannerDatabase.persistence.existingClaim` to a `ReadWriteMany` PVC whose
   filesystem provides atomic rename visibility for the generation pointer.
+- If `scannerDatabase.autoUpdate=false`, an `existingClaim` is mandatory even for one replica.
+  Pre-populate it with the updater's immutable layout: `.kkrepo-db-current` must name an existing
+  `generations/generation-*` directory. The chart creates no initializer in this mode, and a
+  legacy Grype database placed directly at the volume root is intentionally rejected. Seed or
+  refresh the claim through a separately controlled, egress-enabled one-shot updater.
 - Do not attempt to mount one cross-node `ReadWriteOnce` volume into several Pods.
 
 See the [Helm chart README](../../deploy/helm/kkrepo/README.md) for all chart values.

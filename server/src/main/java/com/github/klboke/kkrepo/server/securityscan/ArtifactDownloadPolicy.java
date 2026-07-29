@@ -16,6 +16,7 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.EnforcementMode;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyAction;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyDecision;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanState;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.security.RepositorySecurityFilter;
 import io.micrometer.core.instrument.Timer;
 import java.time.Instant;
@@ -191,6 +192,21 @@ public class ArtifactDownloadPolicy {
    * a current local asset. Applicable content has no scan state yet, so it follows each
    * configuration's pending action.
    */
+  public Decision beforeUncachedRead(
+      RepositoryRuntime runtime,
+      String path,
+      String kind,
+      String contentType,
+      long contentLength) {
+    return beforeUncachedRead(
+        runtime.id(),
+        runtime.format(),
+        path,
+        kind,
+        contentType,
+        contentLength);
+  }
+
   public Decision beforeUncachedRead(
       long sourceRepositoryId,
       RepositoryFormat format,

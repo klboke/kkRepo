@@ -30,6 +30,29 @@ import org.junit.jupiter.api.Test;
 class HttpRemoteFetcherTest {
 
   @Test
+  void resultParsesContentLengthDefensively() {
+    assertEquals(
+        42L,
+        new HttpRemoteFetcher.Result(
+            200, Map.of("content-length", " 42 "), InputStream.nullInputStream())
+            .contentLength());
+    assertEquals(
+        0L,
+        new HttpRemoteFetcher.Result(
+            200, Map.of("Content-Length", "-1"), InputStream.nullInputStream())
+            .contentLength());
+    assertEquals(
+        0L,
+        new HttpRemoteFetcher.Result(
+            200, Map.of("Content-Length", "invalid"), InputStream.nullInputStream())
+            .contentLength());
+    assertEquals(
+        0L,
+        new HttpRemoteFetcher.Result(200, Map.of(), InputStream.nullInputStream())
+            .contentLength());
+  }
+
+  @Test
   void httpVersionDefaultsToHttp11() {
     assertEquals(HttpClient.Version.HTTP_1_1, HttpRemoteFetcher.httpVersion(null));
     assertEquals(HttpClient.Version.HTTP_1_1, HttpRemoteFetcher.httpVersion(""));

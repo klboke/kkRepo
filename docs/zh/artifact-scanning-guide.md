@@ -183,6 +183,12 @@ kubectl logs statefulset/kkrepo-scanner
 - 使用多个 scanner 副本且需要共享持久缓存时，为
   `securityScanning.scannerDatabase.persistence.existingClaim` 提供支持
   `ReadWriteMany` 且能保证 generation pointer 原子改名可见性的 PVC。
+- 当 `scannerDatabase.autoUpdate=false` 时，即使只有一个副本也必须配置
+  `existingClaim`。该 PVC 必须预先包含 updater 生成的不可变布局：
+  `.kkrepo-db-current` 指向已存在的 `generations/generation-*` 目录。此模式下 chart
+  不会创建 initializer，直接把旧版 Grype 数据库放在卷根目录也会被明确拒绝；请在
+  安装或重启提供扫描服务的 StatefulSet 前，通过独立受控、允许出站的一次性 updater
+  初始化或刷新该 PVC。
 - 不要让多个 Pod 以 `ReadWriteOnce` 卷跨节点共享同一挂载。
 
 完整 chart 参数见 [Helm chart README](../../deploy/helm/kkrepo/README.md)。

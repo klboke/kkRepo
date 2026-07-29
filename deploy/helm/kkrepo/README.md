@@ -82,6 +82,14 @@ request's input, nested-archive, and output bounds: the default `7 GiB` shared b
 `securityScanning.limits.scratchVolumeSize` and leave additional room in the Pod
 ephemeral-storage limit when tuning either value.
 
+If `securityScanning.scannerDatabase.autoUpdate=false`, the chart deliberately does not create an
+initializer or any other writable scanner workload. In that mode
+`securityScanning.scannerDatabase.persistence.existingClaim` is required and must already contain
+the immutable layout produced by the scanner updater: `.kkrepo-db-current` must point to an
+existing `generations/generation-*` directory. A legacy Grype database copied directly into the
+claim root is not accepted. Seed or update that claim with a separately controlled, egress-enabled
+one-shot updater before installing or restarting the scan-serving StatefulSet.
+
 `securityScanning.metricsCountLimit` bounds each periodic status gauge query (default `10000`).
 Gauge values saturate at this limit so a large task or finding history cannot turn the 15-second
 metrics refresh into an unbounded table count. Management overview queries are separately

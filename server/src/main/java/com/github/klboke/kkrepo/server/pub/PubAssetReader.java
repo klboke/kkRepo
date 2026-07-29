@@ -6,6 +6,7 @@ import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -85,5 +86,16 @@ class PubAssetReader {
 
   void beforeRead(long assetId, long blobId) {
     if (downloadPolicy != null) downloadPolicy.beforeRead(assetId, blobId);
+  }
+
+  void beforeUncachedRead(
+      RepositoryRuntime runtime,
+      String path,
+      String kind,
+      String contentType,
+      long contentLength) {
+    if (downloadPolicy != null) {
+      downloadPolicy.beforeUncachedRead(runtime, path, kind, contentType, contentLength);
+    }
   }
 }

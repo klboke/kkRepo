@@ -112,6 +112,9 @@ http://{{ $scannerName }}-{{ $index }}.{{ $headlessName }}:{{ $root.Values.secur
 {{- if and .Values.securityScanning.enabled (not .Values.securityScanning.scannerDatabase.persistence.enabled) }}
 {{- fail "security scanning requires scannerDatabase.persistence so the egress-isolated updater can publish the Grype database" }}
 {{- end }}
+{{- if and .Values.securityScanning.enabled (not .Values.securityScanning.scannerDatabase.autoUpdate) (not .Values.securityScanning.scannerDatabase.persistence.existingClaim) }}
+{{- fail "securityScanning.scannerDatabase.autoUpdate=false requires scannerDatabase.persistence.existingClaim pre-populated with an immutable generation layout" }}
+{{- end }}
 {{- if and .Values.securityScanning.enabled (gt (int .Values.securityScanning.replicaCount) 1) .Values.securityScanning.scannerDatabase.persistence.enabled (not .Values.securityScanning.scannerDatabase.persistence.existingClaim) }}
 {{- fail "multiple scanner replicas with persistence require scannerDatabase.persistence.existingClaim backed by ReadWriteMany storage" }}
 {{- end }}

@@ -340,6 +340,8 @@ public class CargoProxyService {
         }
         if (status >= 200 && status < 300) {
           negativeCache.invalidate(runtime, path);
+          reader.beforeUncachedRead(
+              runtime, path, "crate", result.contentType(), result.contentLength());
           CargoPackageMetadata metadata = metadataFromIndex(indexEntry);
           String expectedSha256 = expectedChecksum(indexEntry, path);
           CargoAssetWriter.Stored stored = writer.writeProxyCrate(

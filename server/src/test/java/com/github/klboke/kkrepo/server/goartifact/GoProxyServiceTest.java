@@ -7,9 +7,11 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.core.BlobStorage;
@@ -27,6 +29,7 @@ import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -39,6 +42,7 @@ import org.junit.jupiter.api.Test;
 
 class GoProxyServiceTest {
   private static final String PATH = "example.com/acme/demo/@v/v1.2.3.mod";
+  private static final String ZIP_PATH = "example.com/acme/demo/@v/v1.2.3.zip";
 
   @Test
   void servesFreshCachedBodyAndMissingPhysicalBlob() throws Exception {
@@ -117,6 +121,33 @@ class GoProxyServiceTest {
   }
 
   @Test
+  void evaluatesPendingPolicyBeforePersistingUpstreamBody() throws Exception {
+    ArtifactDownloadPolicy downloadPolicy = mock(ArtifactDownloadPolicy.class);
+    Fixture fixture = fixture(downloadPolicy);
+    RepositoryRuntime runtime = runtime(1, 7L);
+    when(fixture.cache.find(eq(10L), eq(ZIP_PATH), any())).thenReturn(Optional.empty());
+    HttpRemoteFetcher.Result upstream = new HttpRemoteFetcher.Result(
+        200,
+        Map.of(
+            "Content-Type", "application/zip",
+            "Content-Length", "1048576"),
+        new ByteArrayInputStream("zip bytes".getBytes(StandardCharsets.UTF_8)));
+    respond(fixture.fetcher, upstream);
+    RuntimeException blocked = new RuntimeException("blocked before persistence");
+    doThrow(blocked).when(downloadPolicy)
+        .beforeUncachedRead(runtime, ZIP_PATH, "PACKAGE", "application/zip", 1048576L);
+
+    RuntimeException actual = assertThrows(
+        RuntimeException.class,
+        () -> fixture.service.get(runtime, ZIP_PATH, false));
+
+    assertSame(blocked, actual);
+    verify(downloadPolicy)
+        .beforeUncachedRead(runtime, ZIP_PATH, "PACKAGE", "application/zip", 1048576L);
+    verifyNoInteractions(fixture.writer);
+  }
+
+  @Test
   void handlesNotModifiedAndRemoteMisses() throws Exception {
     Fixture fixture = fixture();
     RepositoryRuntime runtime = runtime(1, 7L);
@@ -178,6 +209,10 @@ class GoProxyServiceTest {
   }
 
   private static Fixture fixture() {
+    return fixture(null);
+  }
+
+  private static Fixture fixture(ArtifactDownloadPolicy downloadPolicy) {
     AssetDao assetDao = mock(AssetDao.class);
     BlobStorageRegistry registry = mock(BlobStorageRegistry.class);
     GoAssetWriter writer = mock(GoAssetWriter.class);
@@ -189,7 +224,8 @@ class GoProxyServiceTest {
     return new Fixture(
         assetDao, registry, writer, proxyStateDao, fetcher, negativeCache, cache, storage,
         new GoProxyService(
-            assetDao, registry, writer, proxyStateDao, fetcher, negativeCache, cache));
+            assetDao, registry, writer, proxyStateDao, fetcher, negativeCache, cache,
+            downloadPolicy));
   }
 
   private static RepositoryRuntime runtime(int maxAgeMinutes, Long blobStoreId) {

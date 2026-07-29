@@ -945,6 +945,12 @@ public class NpmProxyService {
       throw new NpmExceptions.NpmNotFoundException(
           "Tarball '" + tarballName + "' in package '" + packageId.id() + "' not found");
     }
+    hosted.beforeUncachedRead(
+        runtime,
+        packageId.tarballPath(tarballName),
+        "tarball",
+        result.contentType(),
+        result.contentLength());
     long blobStoreId = requireBlobStore(runtime);
     BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);
     NpmAssetWriter.Stored stored = writer.writeTarball(runtime, storage, blobStoreId, packageId,

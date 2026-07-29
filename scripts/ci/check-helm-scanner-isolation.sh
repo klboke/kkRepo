@@ -3,7 +3,9 @@ set -euo pipefail
 
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 rendered="$(mktemp)"
-trap 'rm -f "$rendered"' EXIT
+disabled_error="$(mktemp)"
+preloaded="$(mktemp)"
+trap 'rm -f "$rendered" "$disabled_error" "$preloaded"' EXIT
 
 helm template security-check "$repository_root/deploy/helm/kkrepo" \
   --set securityScanning.enabled=true \
@@ -60,3 +62,30 @@ if grep -Fq "cidr: 0.0.0.0/0" <<<"$scanner_policy"; then
   exit 1
 fi
 grep -Fq "cidr: 0.0.0.0/0" <<<"$updater_policy"
+
+if helm template security-check "$repository_root/deploy/helm/kkrepo" \
+  --set securityScanning.enabled=true \
+  --set securityScanning.serviceCredential.existingSecret=kkrepo-scanner \
+  --set securityScanning.scannerDatabase.autoUpdate=false \
+  >/dev/null 2>"$disabled_error"; then
+  echo "disabling automatic database updates without a pre-populated claim must fail" >&2
+  exit 1
+fi
+grep -Fq \
+  "autoUpdate=false requires scannerDatabase.persistence.existingClaim pre-populated" \
+  "$disabled_error"
+
+helm template security-check "$repository_root/deploy/helm/kkrepo" \
+  --set securityScanning.enabled=true \
+  --set securityScanning.serviceCredential.existingSecret=kkrepo-scanner \
+  --set securityScanning.scannerDatabase.autoUpdate=false \
+  --set securityScanning.scannerDatabase.persistence.existingClaim=preloaded-scanner-db \
+  >"$preloaded"
+
+if grep -Fq "kind: CronJob" "$preloaded"; then
+  echo "automatic database updater must not render when autoUpdate=false" >&2
+  exit 1
+fi
+grep -A2 -F "claimName: preloaded-scanner-db" "$preloaded" >/dev/null
+grep -A2 -F "mountPath: /var/lib/kkrepo-scanner/grype" "$preloaded" \
+  | grep -Fq "readOnly: true"

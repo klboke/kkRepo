@@ -195,12 +195,7 @@ public class MavenProxyService {
             proxyStateDao.recordSuccess(runtime.id(), now);
             if (downloadPolicy != null) {
               downloadPolicy.beforeUncachedRead(
-                  runtime.id(),
-                  runtime.format(),
-                  path.path(),
-                  "artifact",
-                  result.contentType(),
-                  contentLength(result.header("Content-Length")));
+                  runtime, path.path(), "artifact", result.contentType(), result.contentLength());
             }
             return remoteHeadResponse(result);
           }
@@ -233,6 +228,10 @@ public class MavenProxyService {
     if (contentType != null && contentType.toLowerCase(Locale.ROOT).startsWith("text/html")) {
       throw new MavenExceptions.MavenNotFoundException(path.path());
     }
+    if (downloadPolicy != null) {
+      downloadPolicy.beforeUncachedRead(
+          runtime, path.path(), "artifact", result.contentType(), result.contentLength());
+    }
     long blobStoreId = requireBlobStore(runtime);
     BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);
     Map<String, String> extras = new HashMap<>();
@@ -263,7 +262,7 @@ public class MavenProxyService {
   private MavenResponse remoteHeadResponse(HttpRemoteFetcher.Result result) {
     return MavenResponse.noBody(
         result.status(),
-        contentLength(result.header("Content-Length")),
+        result.contentLength(),
         result.contentType(),
         result.etag(),
         result.lastModified());
@@ -363,17 +362,6 @@ public class MavenProxyService {
     if (attrs == null) return null;
     Object v = attrs.get(key);
     return v == null ? null : v.toString();
-  }
-
-  private static long contentLength(String raw) {
-    if (raw == null || raw.isBlank()) {
-      return 0;
-    }
-    try {
-      return Math.max(0, Long.parseLong(raw.trim()));
-    } catch (NumberFormatException ignored) {
-      return 0;
-    }
   }
 
 }

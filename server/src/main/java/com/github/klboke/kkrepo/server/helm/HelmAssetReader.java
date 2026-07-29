@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.time.Instant;
 import org.springframework.stereotype.Component;
@@ -79,6 +80,17 @@ class HelmAssetReader {
 
   void beforeRead(long assetId, long blobId) {
     if (downloadPolicy != null) downloadPolicy.beforeRead(assetId, blobId);
+  }
+
+  void beforeUncachedRead(
+      RepositoryRuntime runtime,
+      String path,
+      String kind,
+      String contentType,
+      long contentLength) {
+    if (downloadPolicy != null) {
+      downloadPolicy.beforeUncachedRead(runtime, path, kind, contentType, contentLength);
+    }
   }
 
 }

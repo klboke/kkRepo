@@ -603,6 +603,18 @@ public class HttpRemoteFetcher {
       return header("Content-Type");
     }
 
+    public long contentLength() {
+      String raw = header("Content-Length");
+      if (raw == null || raw.isBlank()) {
+        return 0;
+      }
+      try {
+        return Math.max(0, Long.parseLong(raw.trim()));
+      } catch (NumberFormatException ignored) {
+        return 0;
+      }
+    }
+
     @Override
     public void close() {
       if (body != null) {

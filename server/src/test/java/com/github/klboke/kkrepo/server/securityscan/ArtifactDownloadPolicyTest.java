@@ -28,6 +28,7 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanCompleteness;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanState;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
 import com.github.klboke.kkrepo.server.docker.DockerAuthService;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.RepositorySecurityFilter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -155,6 +156,30 @@ class ArtifactDownloadPolicyTest {
         () -> policy.beforeUncachedRead(
             10L,
             RepositoryFormat.MAVEN2,
+            "com/acme/demo/1/demo-1.jar",
+            "artifact",
+            "application/java-archive",
+            42L));
+
+    assertEquals(PolicyDecision.BLOCK_PENDING, failure.decision());
+    verify(scans).findDownloadPolicyContexts(10L, null);
+    verifyNoMoreInteractions(scans);
+  }
+
+  @Test
+  void uncachedRuntimeOverloadUsesRepositoryAndContentMetadata() {
+    properties.setEnabled(true);
+    RepositoryRuntime runtime = mock(RepositoryRuntime.class);
+    when(runtime.id()).thenReturn(10L);
+    when(runtime.format()).thenReturn(RepositoryFormat.MAVEN2);
+    when(scans.findDownloadPolicyContexts(10L, null)).thenReturn(List.of(
+        new DownloadPolicyContext(
+            config(10L, EnforcementMode.ENFORCE, PolicyAction.BLOCK),
+            profile())));
+    ArtifactPolicyException failure = assertThrows(
+        ArtifactPolicyException.class,
+        () -> policy.beforeUncachedRead(
+            runtime,
             "com/acme/demo/1/demo-1.jar",
             "artifact",
             "application/java-archive",

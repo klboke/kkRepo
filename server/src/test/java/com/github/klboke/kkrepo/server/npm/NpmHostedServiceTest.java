@@ -50,6 +50,18 @@ class NpmHostedServiceTest {
   private static final NpmPackageId PACKAGE = NpmPackageId.parse("demo");
 
   @Test
+  void delegatesUncachedPolicyMetadata() {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = proxyRuntime();
+
+    fixture.service.beforeUncachedRead(
+        runtime, "demo/-/demo-1.0.0.tgz", "tarball", "application/gzip", 42L);
+
+    verify(fixture.downloadPolicy).beforeUncachedRead(
+        runtime, "demo/-/demo-1.0.0.tgz", "tarball", "application/gzip", 42L);
+  }
+
+  @Test
   void publishesPackageRootAndAttachmentWithGeneratedRevision() throws Exception {
     Fixture fixture = fixture();
     when(fixture.assetDao.findAssetByPath(10L, "demo")).thenReturn(Optional.empty());
