@@ -2,7 +2,9 @@ package com.github.klboke.kkrepo.server.securityscan;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobReferenceDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanFinalizer.LostSecurityScanLeaseException;
 import java.util.Optional;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -15,15 +17,19 @@ public class SecurityScanDocumentPersistence {
 
   private final AssetDao assets;
   private final BlobReferenceDao blobReferences;
+  private final SecurityScanDao scans;
 
-  public SecurityScanDocumentPersistence(AssetDao assets, BlobReferenceDao blobReferences) {
+  public SecurityScanDocumentPersistence(
+      AssetDao assets, BlobReferenceDao blobReferences, SecurityScanDao scans) {
     this.assets = assets;
     this.blobReferences = blobReferences;
+    this.scans = scans;
   }
 
   @Transactional
   public Optional<AssetBlobRecord> findReusableAndRetain(
-      long ownerId, long blobStoreId, String sha256, long size) {
+      long ownerId, String leaseToken, long blobStoreId, String sha256, long size) {
+    requireCurrentLease(ownerId, leaseToken);
     Optional<AssetBlobRecord> reusable =
         assets.findReusableBlobBySha256(blobStoreId, sha256, size);
     reusable.ifPresent(blob -> retainOrThrow(ownerId, blob.id()));
@@ -31,7 +37,9 @@ public class SecurityScanDocumentPersistence {
   }
 
   @Transactional
-  public AssetBlobRecord insertOrRecoverAndRetain(long ownerId, AssetBlobRecord proposed) {
+  public AssetBlobRecord insertOrRecoverAndRetain(
+      long ownerId, String leaseToken, AssetBlobRecord proposed) {
+    requireCurrentLease(ownerId, leaseToken);
     AssetBlobRecord stored = assets.insertBlobOrFindExisting(proposed);
     if (blobReferences.retain(PERSISTING_OWNER, ownerId, stored.id())) {
       return stored;
@@ -50,6 +58,12 @@ public class SecurityScanDocumentPersistence {
   @Transactional(propagation = Propagation.MANDATORY)
   public void releaseOwner(long ownerId) {
     blobReferences.releaseOwner(PERSISTING_OWNER, ownerId);
+  }
+
+  private void requireCurrentLease(long ownerId, String leaseToken) {
+    if (!scans.lockCurrentTaskLease(ownerId, leaseToken)) {
+      throw new LostSecurityScanLeaseException(ownerId);
+    }
   }
 
   private void retainOrThrow(long ownerId, long blobId) {

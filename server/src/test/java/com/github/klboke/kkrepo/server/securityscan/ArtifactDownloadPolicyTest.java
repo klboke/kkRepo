@@ -576,7 +576,8 @@ class ArtifactDownloadPolicyTest {
                 config, profile(), candidate, state(ScanState.CANCELLED), null,
                 "com/acme/demo/1/demo-1.jar", "artifact", "application/java-archive")),
             List.of(snapshot(
-                config, profile(), candidate, state(ScanState.PARTIAL), null,
+                config, profile(), candidate, state(ScanState.PARTIAL),
+                policyState(1L, PolicyDecision.BLOCK_PARTIAL),
                 "com/acme/demo/1/demo-1.jar", "artifact", "application/java-archive")));
 
     assertEquals(PolicyDecision.ALLOW, policy.beforeRead(10L, 100L, 1L).decision());
@@ -598,6 +599,32 @@ class ArtifactDownloadPolicyTest {
             .decision());
     verify(scans, times(5)).findDownloadPolicySnapshots(10L, 1L);
     verifyNoMoreInteractions(scans);
+  }
+
+  @Test
+  void partialInventoryStillHonorsAMaterializedVulnerabilityBlockWhenPartialIsAllowed() {
+    properties.setEnabled(true);
+    RepositoryScanConfig config = new RepositoryScanConfig(
+        1L, true, 1L, true, true, EnforcementMode.ENFORCE,
+        PolicyAction.ALLOW, PolicyAction.BLOCK, PolicyAction.ALLOW,
+        86400L, null, 1L, Instant.EPOCH, Instant.EPOCH);
+    ScanCandidate candidate =
+        new ScanCandidate(10L, 100L, 1L, 1L, Instant.EPOCH, Instant.EPOCH);
+    when(scans.findDownloadPolicySnapshots(10L, 1L)).thenReturn(List.of(snapshot(
+        config,
+        profile(),
+        candidate,
+        state(ScanState.PARTIAL),
+        policyState(1L, PolicyDecision.BLOCK_VULNERABILITY),
+        "com/acme/demo/1/demo-1.jar",
+        "artifact",
+        "application/java-archive")));
+
+    ArtifactPolicyException failure =
+        assertThrows(ArtifactPolicyException.class, () -> policy.beforeRead(10L, 100L, 1L));
+
+    assertEquals(PolicyDecision.BLOCK_VULNERABILITY, failure.decision());
+    assertSingleSnapshotLookup(1L);
   }
 
   @Test

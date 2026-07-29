@@ -12,6 +12,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.core.BlobReference;
@@ -395,20 +396,22 @@ class SecurityScanInfrastructureTest {
     AssetBlobRecord reusable = mock(AssetBlobRecord.class);
     when(reusable.id()).thenReturn(10L);
     SecurityScanDocumentPersistence persistence = mock(SecurityScanDocumentPersistence.class);
-    when(persistence.findReusableAndRetain(eq(41L), eq(4L), any(), eq(2L)))
+    when(persistence.findReusableAndRetain(eq(41L), eq("lease"), eq(4L), any(), eq(2L)))
         .thenReturn(Optional.empty())
         .thenReturn(Optional.of(reusable));
-    when(persistence.insertOrRecoverAndRetain(eq(41L), any())).thenReturn(stored);
+    when(persistence.insertOrRecoverAndRetain(eq(41L), eq("lease"), any()))
+        .thenReturn(stored);
     SecurityScanDocumentStore documents =
         new SecurityScanDocumentStore(assets, repositories, storages, persistence);
 
-    var created = documents.store(7L, 41L, "../report", bytes, "application/json");
+    var created =
+        documents.store(7L, 41L, "lease", "../report", bytes, "application/json");
 
     assertEquals(9L, created.blobId());
     assertEquals(64, created.sha256().length());
     assertEquals(
         10L,
-        documents.store(7L, 41L, null, bytes, "application/json").blobId());
+        documents.store(7L, 41L, "lease", null, bytes, "application/json").blobId());
     documents.release(41L, created);
     verify(persistence).release(41L, 9L);
 
@@ -423,15 +426,17 @@ class SecurityScanInfrastructureTest {
     assertThrows(IOException.class, () -> documents.open(11L));
     assertThrows(
         IllegalArgumentException.class,
-        () -> documents.store(7L, 41L, "report", null, "application/json"));
+        () -> documents.store(7L, 41L, "lease", "report", null, "application/json"));
   }
 
   @Test
   void scannerDocumentPublicationRecoversADeletedDuplicateBeforeRetainingIt() {
     AssetDao assets = mock(AssetDao.class);
     BlobReferenceDao blobReferences = mock(BlobReferenceDao.class);
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    when(scans.lockCurrentTaskLease(51L, "lease")).thenReturn(true);
     SecurityScanDocumentPersistence persistence =
-        new SecurityScanDocumentPersistence(assets, blobReferences);
+        new SecurityScanDocumentPersistence(assets, blobReferences, scans);
     AssetBlobRecord proposed = mock(AssetBlobRecord.class);
     AssetBlobRecord deleted = mock(AssetBlobRecord.class);
     AssetBlobRecord restored = mock(AssetBlobRecord.class);
@@ -444,7 +449,7 @@ class SecurityScanInfrastructureTest {
         .thenReturn(true);
     when(assets.restoreDeletedBlobById(17L)).thenReturn(Optional.of(restored));
 
-    assertEquals(restored, persistence.insertOrRecoverAndRetain(51L, proposed));
+    assertEquals(restored, persistence.insertOrRecoverAndRetain(51L, "lease", proposed));
 
     verify(assets).restoreDeletedBlobById(17L);
   }
@@ -453,8 +458,10 @@ class SecurityScanInfrastructureTest {
   void scannerDocumentPublicationRetainsReusableRowsAndReleasesTaskOwnership() {
     AssetDao assets = mock(AssetDao.class);
     BlobReferenceDao blobReferences = mock(BlobReferenceDao.class);
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    when(scans.lockCurrentTaskLease(52L, "lease")).thenReturn(true);
     SecurityScanDocumentPersistence persistence =
-        new SecurityScanDocumentPersistence(assets, blobReferences);
+        new SecurityScanDocumentPersistence(assets, blobReferences, scans);
     AssetBlobRecord reusable = mock(AssetBlobRecord.class);
     when(reusable.id()).thenReturn(18L);
     when(assets.findReusableBlobBySha256(4L, "a".repeat(64), 12L))
@@ -465,7 +472,7 @@ class SecurityScanInfrastructureTest {
 
     assertEquals(
         Optional.of(reusable),
-        persistence.findReusableAndRetain(52L, 4L, "a".repeat(64), 12L));
+        persistence.findReusableAndRetain(52L, "lease", 4L, "a".repeat(64), 12L));
     persistence.release(52L, 18L);
     persistence.releaseOwner(52L);
 
@@ -473,6 +480,23 @@ class SecurityScanInfrastructureTest {
         SecurityScanDocumentPersistence.PERSISTING_OWNER, 52L, 18L);
     verify(blobReferences).releaseOwner(
         SecurityScanDocumentPersistence.PERSISTING_OWNER, 52L);
+  }
+
+  @Test
+  void scannerDocumentPublicationRejectsAStaleTaskLeaseBeforeRetainingAnything() {
+    AssetDao assets = mock(AssetDao.class);
+    BlobReferenceDao blobReferences = mock(BlobReferenceDao.class);
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    SecurityScanDocumentPersistence persistence =
+        new SecurityScanDocumentPersistence(assets, blobReferences, scans);
+
+    assertThrows(
+        SecurityScanFinalizer.LostSecurityScanLeaseException.class,
+        () -> persistence.findReusableAndRetain(
+            53L, "cancelled-lease", 4L, "a".repeat(64), 12L));
+
+    verify(scans).lockCurrentTaskLease(53L, "cancelled-lease");
+    verifyNoInteractions(assets, blobReferences);
   }
 
   @Test

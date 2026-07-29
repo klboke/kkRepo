@@ -1050,6 +1050,20 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public boolean lockCurrentTaskLease(long taskId, String leaseToken) {
+    if (blank(leaseToken)) return false;
+    return !jdbc.query("""
+        SELECT id
+        FROM security_scan_task
+        WHERE id = ?
+          AND status = 'RUNNING'
+          AND lease_token = ?
+        FOR UPDATE
+        """, (rs, rowNum) -> rs.getLong(1), taskId, leaseToken).isEmpty();
+  }
+
+  @Override
   public List<ScanTask> listTasks(
       Long repositoryId, TaskStatus status, long afterId, int maxItems) {
     return listTasks(repositoryId, status, null, afterId, maxItems);

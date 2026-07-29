@@ -243,6 +243,7 @@ public class SecurityScanExecutor {
     validateCatalogResponse(subject, response.catalog());
     Sbom sbom = persistSbom(
         task.id(),
+        task.leaseToken(),
         subject,
         profile,
         response.catalog(),
@@ -314,20 +315,22 @@ public class SecurityScanExecutor {
       throw e;
     }
     validateCatalogResponse(subject, response);
-    return persistSbom(task.id(), subject, profile, response);
+    return persistSbom(task.id(), task.leaseToken(), subject, profile, response);
   }
 
   private Sbom persistSbom(
       long provisionalOwnerId,
+      String leaseToken,
       ScanSubject subject,
       ScanProfile profile,
       CatalogResponse response) {
     return persistSbom(
-        provisionalOwnerId, subject, profile, response, List.of(), List.of());
+        provisionalOwnerId, leaseToken, subject, profile, response, List.of(), List.of());
   }
 
   private Sbom persistSbom(
       long provisionalOwnerId,
+      String leaseToken,
       ScanSubject subject,
       ScanProfile profile,
       CatalogResponse response,
@@ -337,6 +340,7 @@ public class SecurityScanExecutor {
     var document = documents.store(
         subject.repositoryId(),
         provisionalOwnerId,
+        leaseToken,
         "sbom",
         response.cyclonedxJson(),
         "application/vnd.cyclonedx+json");
@@ -498,6 +502,7 @@ public class SecurityScanExecutor {
     var report = documents.store(
         task.repositoryId(),
         task.id(),
+        task.leaseToken(),
         "vulnerability-report",
         response.reportJson(),
         "application/json");

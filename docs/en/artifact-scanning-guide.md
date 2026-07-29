@@ -242,11 +242,12 @@ Advanced exception handling decides what to do when there is no complete, curren
 | PENDING, RUNNING, STALE, or no materialized result | Scan pending | HTTP `503` with `Retry-After: 30` |
 | FAILED, CANCELLED, or unavailable profile | Scan failed | HTTP `503` with `Retry-After: 30` |
 | PARTIAL or incomplete inventory | Partial result | HTTP `503` with `Retry-After: 30` |
-| Complete result matches an unwaived policy violation | Vulnerability policy | HTTP `403` |
+| Current complete or partial result matches an unwaived policy violation | Vulnerability policy | HTTP `403` |
 
 These settings affect downloads only in `ENFORCE`. In `AUDIT`, kkRepo records a shadow decision
 and still serves the artifact. Docker/OCI paths return Registry-shaped `UNAVAILABLE` or `DENIED`
-errors.
+errors. Allowing a partial result bypasses only the inventory-completeness failure; it never
+bypasses vulnerability findings that already match the policy.
 
 When both repository and policy validity are configured, kkRepo uses the shorter period. Without
 a result-age limit, time alone does not make the result stale; a vulnerability-database change can

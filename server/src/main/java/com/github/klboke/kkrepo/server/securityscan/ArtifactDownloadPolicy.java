@@ -339,9 +339,7 @@ public class ArtifactDownloadPolicy {
           action(config, config.pendingAction(), PolicyDecision.BLOCK_PENDING);
       case FAILED, CANCELLED ->
           action(config, config.failureAction(), PolicyDecision.BLOCK_SCAN_FAILED);
-      case PARTIAL ->
-          action(config, config.partialAction(), PolicyDecision.BLOCK_PARTIAL);
-      case COMPLETE -> evaluateComplete(snapshot, candidate, state);
+      case PARTIAL, COMPLETE -> evaluateMaterializedPolicy(snapshot, candidate, state);
       case NOT_APPLICABLE -> new Evaluation(config, PolicyDecision.ALLOW, false);
     };
   }
@@ -371,7 +369,7 @@ public class ArtifactDownloadPolicy {
         0);
   }
 
-  private Evaluation evaluateComplete(
+  private Evaluation evaluateMaterializedPolicy(
       DownloadPolicySnapshot snapshot,
       ScanCandidate candidate,
       AssetSecurityState state) {

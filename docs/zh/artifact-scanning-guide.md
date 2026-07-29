@@ -224,11 +224,12 @@ Advanced exception handling 决定“尚无完整、当前结果”时的行为�
 | PENDING、RUNNING、STALE，或尚未物化结果 | Scan pending | HTTP `503`，带 `Retry-After: 30` |
 | FAILED、CANCELLED 或 profile 不可用 | Scan failed | HTTP `503`，带 `Retry-After: 30` |
 | PARTIAL 或 inventory 不完整 | Partial result | HTTP `503`，带 `Retry-After: 30` |
-| 完整结果命中未豁免漏洞策略 | Vulnerability policy | HTTP `403` |
+| 当前完整或部分结果命中未豁免漏洞策略 | Vulnerability policy | HTTP `403` |
 
 这些设置只在 `ENFORCE` 下影响下载。在 `AUDIT` 下仍会记录 shadow decision，但客户端
 继续收到制品。Docker/OCI 路径返回符合 Registry 错误结构的 `UNAVAILABLE` 或
-`DENIED`。
+`DENIED`。允许 partial 结果只会放过 inventory 不完整本身；已经命中策略的漏洞
+finding 仍然按漏洞策略阻断。
 
 仓库和 policy 都设置有效期时，系统采用更短的有效期。无有效结果到期时间时，结果
 不会仅因为时间流逝变为 stale；漏洞数据库变化仍可能触发重新匹配。

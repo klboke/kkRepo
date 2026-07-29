@@ -101,6 +101,15 @@ public interface SecurityScanDao {
 
   Optional<ScanTask> findTask(long taskId);
 
+  /**
+   * Locks the task row and verifies that the supplied lease still owns a running attempt.
+   *
+   * <p>The caller must keep this check and any attempt-scoped publication in the same
+   * transaction. Terminal transitions take the same row lock, so either publication commits
+   * before the transition and is cleaned by it, or it observes the lost lease and is rejected.
+   */
+  boolean lockCurrentTaskLease(long taskId, String leaseToken);
+
   List<ScanTask> listTasks(Long repositoryId, TaskStatus status, long afterId, int maxItems);
 
   List<ScanTask> listTasks(

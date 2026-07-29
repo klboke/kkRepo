@@ -602,13 +602,14 @@ class SecurityScanExecutorTest {
       } catch (IOException e) {
         throw new AssertionError(e);
       }
-      when(documents.store(anyLong(), anyLong(), anyString(), any(), anyString()))
+      when(documents.store(
+              anyLong(), anyLong(), anyString(), anyString(), any(), anyString()))
           .thenAnswer(invocation -> {
-            String kindName = invocation.getArgument(2);
+            String kindName = invocation.getArgument(3);
             return new SecurityScanDocumentStore.StoredDocument(
                 kindName.equals("sbom") ? 30L : 31L,
                 kindName.equals("sbom") ? "d".repeat(64) : "e".repeat(64),
-                ((byte[]) invocation.getArgument(3)).length);
+                ((byte[]) invocation.getArgument(4)).length);
           });
       when(scans.publishSbom(any(), anyList())).thenAnswer(invocation -> {
         Sbom value = invocation.getArgument(0);

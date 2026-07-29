@@ -44,6 +44,7 @@ public class SecurityScanDocumentStore {
   public StoredDocument store(
       long repositoryId,
       long provisionalOwnerId,
+      String leaseToken,
       String documentKind,
       byte[] bytes,
       String contentType) {
@@ -55,7 +56,7 @@ public class SecurityScanDocumentStore {
     }
     String sha256 = digest("SHA-256", bytes);
     var reusable = persistence.findReusableAndRetain(
-        provisionalOwnerId, repository.blobStoreId(), sha256, bytes.length);
+        provisionalOwnerId, leaseToken, repository.blobStoreId(), sha256, bytes.length);
     if (reusable.isPresent()) {
       return new StoredDocument(reusable.get().id(), sha256, bytes.length);
     }
@@ -75,6 +76,7 @@ public class SecurityScanDocumentStore {
       String blobRef = BlobReferenceCodec.format(reference);
       AssetBlobRecord stored = persistence.insertOrRecoverAndRetain(
           provisionalOwnerId,
+          leaseToken,
           new AssetBlobRecord(
               null,
               repository.blobStoreId(),

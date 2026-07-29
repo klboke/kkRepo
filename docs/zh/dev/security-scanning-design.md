@@ -1005,6 +1005,9 @@ WHERE id = ? AND status = 'RUNNING' AND lease_token = ?
 task id 作为 run id，向全部配置 adapter ordinal 广播带 service credential 的取消
 请求；事务回滚时不得发送取消。worker 的下一次 heartbeat 发现 lease 已失效后仍会
 中断当前 scanner HTTP 请求并重复广播，作为管理节点提交后崩溃或网络故障的兜底。
+SBOM/report 的临时 `blob_reference` 发布也必须在同一事务中锁定 task 行并校验当前
+`lease_token`；因此它要么先提交并由随后的取消/重试/完成事务释放，要么在终态提交后
+观察到 lease 已失效而拒绝发布，不能在 owner 已清理后由旧 worker 重新留下孤儿引用。
 adapter 只在本实例维护短生命周期的 active-run 映射，用于中断对应请求线程和终止
 Syft/Grype 进程树；该映射不是持久任务状态，也不参与多副本正确性。资源释放是 best
 effort，scanner 端到端超时仍是最终上界，任何迟到结果都会被 lease token 拒绝。
@@ -1538,7 +1541,8 @@ component/finding 投影数量、嵌套列表和 component property 数量；不
 返回的任意 `summary` graph。内嵌原始 SBOM/report 使用流式 token 校验完整 JSON 和
 根 schema，不再调用 `readTree` 构造第二份文档对象树。component/finding 投影硬上限
 分别为 4096/2048；超出时保留原始不可变文档，但结果降级为 `PARTIAL`，由仓库
-`partial_action` 决定下载语义。
+`partial_action` 决定是否因 inventory 不完整而阻断；已经投影并命中策略的 finding
+仍按 `BLOCK_VULNERABILITY` 判定，不能被 `partial_action=ALLOW` 绕过。
 
 每个执行中任务的节点内共享准入预留按下式从上述硬上限推导：
 

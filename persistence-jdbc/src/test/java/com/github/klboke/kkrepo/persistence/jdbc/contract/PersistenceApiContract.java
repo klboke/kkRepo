@@ -462,6 +462,75 @@ public abstract class PersistenceApiContract {
     assertFalse(scans.heartbeatTask(
         taskId, firstLease.leaseToken(), now.plusSeconds(90), now.plusSeconds(32)));
     assertFalse(scans.completeTask(taskId, firstLease.leaseToken(), now.plusSeconds(32)));
+    assertFalse(inTransaction(
+        () -> scans.lockCurrentTaskLease(taskId, firstLease.leaseToken())));
+    assertTrue(inTransaction(
+        () -> scans.lockCurrentTaskLease(taskId, takeover.leaseToken())));
+
+    long cancellationFenceBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "security/cancellation-fence.json", "scan-cancellation-fence"));
+    String cancellationKey = "cancel-publication-fence";
+    long cancellationTaskId = scans.createTask(new SecurityScanDao.TaskDraft(
+        repositoryId,
+        assetId,
+        SubjectKind.ASSET_BLOB,
+        "sha256:" + "2".repeat(64),
+        1,
+        profileId,
+        1,
+        null,
+        ScanStage.CATALOG_AND_MATCH,
+        RequestReason.MANUAL,
+        50,
+        2,
+        "contract",
+        cancellationKey,
+        cancellationKey,
+        now.plusSeconds(2)));
+    SecurityScanDao.ScanTask cancellationLease = inTransaction(() ->
+        scans.claimTasks(
+                "cancellation-fence-replica",
+                now.plusSeconds(2),
+                now.plusSeconds(62),
+                10)
+            .stream()
+            .filter(task -> task.id() == cancellationTaskId)
+            .findFirst()
+            .orElseThrow());
+    CyclicBarrier cancellationFenceStart = new CyclicBarrier(2);
+    List<Boolean> cancellationFenceOutcomes = invokeConcurrently(List.of(
+        () -> {
+          cancellationFenceStart.await();
+          return inTransaction(() -> {
+            if (!scans.lockCurrentTaskLease(
+                cancellationTaskId, cancellationLease.leaseToken())) {
+              return false;
+            }
+            return stores().blobReferences().retain(
+                "security-scan-persisting", cancellationTaskId, cancellationFenceBlobId);
+          });
+        },
+        () -> {
+          cancellationFenceStart.await();
+          return inTransaction(() -> {
+            boolean cancelled =
+                scans.cancelTask(cancellationTaskId, now.plusSeconds(3));
+            stores().blobReferences().releaseOwner(
+                "security-scan-persisting", cancellationTaskId);
+            return cancelled;
+          });
+        }), 2);
+    assertTrue(cancellationFenceOutcomes.getLast());
+    assertFalse(
+        stores().blobReferences().isReferenced(cancellationFenceBlobId),
+        "cancellation must either reject a late report owner or remove an earlier publication");
+    assertEquals(
+        1,
+        stores().assets().markBlobDeletedIfUnreferenced(
+            cancellationFenceBlobId, "scan-cancellation-fence-cleanup"));
+    assertEquals(
+        1,
+        stores().assets().hardDeleteBlobByIdIfDeleted(cancellationFenceBlobId));
 
     SecurityScanDao.ScannerSnapshot snapshot = scans.insertSnapshotOrFindExisting(
         new SecurityScanDao.ScannerSnapshot(
