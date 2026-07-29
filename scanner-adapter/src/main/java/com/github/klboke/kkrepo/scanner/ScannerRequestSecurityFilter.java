@@ -19,6 +19,7 @@ import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
+import org.springframework.web.util.UrlPathHelper;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
@@ -105,12 +106,10 @@ final class ScannerRequestSecurityFilter extends OncePerRequestFilter {
   }
 
   private static String requestPath(HttpServletRequest request) {
-    String uri = request.getRequestURI();
-    String context = request.getContextPath();
-    if (context != null && !context.isEmpty() && uri.startsWith(context)) {
-      return uri.substring(context.length());
-    }
-    return uri;
+    // Match Spring MVC's lookup-path normalization, including removal of matrix parameters.
+    // Security decisions must not use the raw request URI while the dispatcher uses a cleaned
+    // path, otherwise /v1;x=1/... can reach a protected controller without the same checks.
+    return UrlPathHelper.defaultInstance.getPathWithinApplication(request);
   }
 
   private static void writeTooLarge(HttpServletResponse response) throws IOException {

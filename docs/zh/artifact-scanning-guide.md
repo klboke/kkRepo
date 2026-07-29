@@ -284,7 +284,7 @@ metadata 不会被送入扫描器。
 | NuGet | `.nupkg`，不扫描 `.snupkg` |
 | RubyGems | `.gem` |
 | Yum | `.rpm`，不扫描 `repodata` |
-| Raw | `.zip`、`.tar`、`.tar.gz`、`.tgz`、`.jar`、`.war`、`.ear`、`.whl`、`.crate`、`.gem`、`.nupkg`、`.rpm` |
+| Raw | `.zip`、`.tar`、`.tar.gz`、`.tgz`、`.tar.xz`、`.txz`、`.xz`、`.tar.bz2`、`.tbz2`、`.jar`、`.war`、`.ear`、`.whl`、`.crate`、`.gem`、`.nupkg`、`.rpm` |
 
 Docker Blob 实际按仓库和 digest 复用，因此 layer 下载会取仓库内所有引用 manifest
 的最严格决定，不能通过替换 URL 中的 image name 绕过。Proxy layer 在 manifest 尚未

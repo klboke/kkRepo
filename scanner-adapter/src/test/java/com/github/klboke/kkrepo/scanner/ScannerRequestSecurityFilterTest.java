@@ -45,6 +45,32 @@ class ScannerRequestSecurityFilterTest {
   }
 
   @Test
+  void normalizesMatrixParametersBeforeAuthenticationAndOciBodyLimiting()
+      throws Exception {
+    MockHttpServletResponse unauthorizedResponse = new MockHttpServletResponse();
+    FilterChain unauthorizedChain = mock(FilterChain.class);
+
+    filter.doFilter(
+        request("/v1;x=1/oci/scan", new byte[1025]),
+        unauthorizedResponse,
+        unauthorizedChain);
+
+    assertEquals(401, unauthorizedResponse.getStatus());
+    verify(unauthorizedChain, never()).doFilter(any(), any());
+
+    MockHttpServletResponse oversizedResponse = new MockHttpServletResponse();
+    FilterChain oversizedChain = mock(FilterChain.class);
+
+    filter.doFilter(
+        authorized(request("/v1/oci/scan;x=1", new byte[1025])),
+        oversizedResponse,
+        oversizedChain);
+
+    assertEquals(413, oversizedResponse.getStatus());
+    verify(oversizedChain, never()).doFilter(any(), any());
+  }
+
+  @Test
   void rejectsKnownAndChunkedOversizedOciJsonBeforeMvc() throws Exception {
     FilterChain knownChain = mock(FilterChain.class);
     MockHttpServletResponse knownResponse = new MockHttpServletResponse();

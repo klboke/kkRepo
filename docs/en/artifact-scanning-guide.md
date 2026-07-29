@@ -305,7 +305,7 @@ signatures, indexes, and ordinary protocol metadata are excluded.
 | NuGet | `.nupkg`; excludes `.snupkg` |
 | RubyGems | `.gem` |
 | Yum | `.rpm`; excludes `repodata` |
-| Raw | `.zip`, `.tar`, `.tar.gz`, `.tgz`, `.jar`, `.war`, `.ear`, `.whl`, `.crate`, `.gem`, `.nupkg`, `.rpm` |
+| Raw | `.zip`, `.tar`, `.tar.gz`, `.tgz`, `.tar.xz`, `.txz`, `.xz`, `.tar.bz2`, `.tbz2`, `.jar`, `.war`, `.ear`, `.whl`, `.crate`, `.gem`, `.nupkg`, `.rpm` |
 
 Docker blobs are repository-scoped and reusable by digest, so a layer download uses the strictest
 decision among every referencing manifest in that repository; changing the image name in the URL
