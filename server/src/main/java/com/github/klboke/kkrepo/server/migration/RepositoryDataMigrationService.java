@@ -153,10 +153,12 @@ class RepositoryDataMigrationService {
         .orElseThrow(() -> new IllegalArgumentException("migration job not found: " + jobId));
     List<RepositoryDataMigrationRepositoryRecord> repositories = migrationDao.listRepositories(jobId);
     MigrationJobProgress progress = migrationDao.jobProgress(jobId);
-    Map<Long, Long> nexusPublicIdMappedAssets = migrationDao.nexusPublicIdMappedAssets(jobId);
     Map<String, Object> options = jobOptions(job);
     boolean captureNexusPublicAssetIds = optionBoolean(options, "captureNexusPublicAssetIds");
     boolean publicIdBackfillOnly = optionBoolean(options, "publicIdBackfillOnly");
+    Map<Long, Long> nexusPublicIdMappedAssets = captureNexusPublicAssetIds
+        ? migrationDao.nexusPublicIdMappedAssets(jobId)
+        : Map.of();
     return new RepositoryDataMigrationStatus(
         job.id(),
         job.status(),

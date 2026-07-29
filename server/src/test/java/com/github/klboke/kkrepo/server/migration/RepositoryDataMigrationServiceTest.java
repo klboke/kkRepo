@@ -3,6 +3,9 @@ package com.github.klboke.kkrepo.server.migration;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.migration.nexus.MigrationPlanBuilder;
 import com.github.klboke.kkrepo.migration.nexus.MigrationPlanBuilder.MigrationScope;
@@ -12,11 +15,17 @@ import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.RepositoryDocume
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.SourceProbe;
 import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityExport;
 import com.github.klboke.kkrepo.migration.nexus.NexusSourceProfile;
+import com.github.klboke.kkrepo.persistence.jdbc.api.MigrationJobDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDataMigrationDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDataMigrationDao.MigrationJobProgress;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.MigrationJobRecord;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.PlatformTransactionManager;
 
@@ -233,6 +242,64 @@ class RepositoryDataMigrationServiceTest {
     assertEquals(true, summary.get("publicIdBackfillOnly"), "backfill-only mode should be visible");
     assertEquals(2L, summary.get("nexusPublicIdMappedAssets"), "mapped asset count should be visible");
     assertEquals(false, summary.containsKey("sourcePassword"));
+  }
+
+  @Test
+  void statusSkipsPublicIdCountForJobsThatDidNotCaptureAliases() {
+    MigrationJobDao jobDao = mock(MigrationJobDao.class);
+    RepositoryDataMigrationDao migrationDao = mock(RepositoryDataMigrationDao.class);
+    RepositoryDataMigrationService service = service(jobDao, migrationDao);
+    when(jobDao.findById(7L)).thenReturn(Optional.of(job(7L, Map.of())));
+    when(migrationDao.listRepositories(7L)).thenReturn(List.of());
+    when(migrationDao.jobProgress(7L)).thenReturn(progress());
+
+    RepositoryDataMigrationService.RepositoryDataMigrationStatus status = service.status(7L);
+
+    assertEquals(0L, status.nexusPublicIdMappedAssets(), "non-capture jobs should report zero aliases");
+    verify(migrationDao, never()).nexusPublicIdMappedAssets(7L);
+  }
+
+  @Test
+  void statusCountsPublicIdsForCaptureJobs() {
+    MigrationJobDao jobDao = mock(MigrationJobDao.class);
+    RepositoryDataMigrationDao migrationDao = mock(RepositoryDataMigrationDao.class);
+    RepositoryDataMigrationService service = service(jobDao, migrationDao);
+    when(jobDao.findById(8L)).thenReturn(Optional.of(job(
+        8L, Map.of("captureNexusPublicAssetIds", true, "publicIdBackfillOnly", true))));
+    when(migrationDao.listRepositories(8L)).thenReturn(List.of());
+    when(migrationDao.jobProgress(8L)).thenReturn(progress());
+    when(migrationDao.nexusPublicIdMappedAssets(8L)).thenReturn(Map.of(81L, 3L, 82L, 4L));
+
+    RepositoryDataMigrationService.RepositoryDataMigrationStatus status = service.status(8L);
+
+    assertEquals(7L, status.nexusPublicIdMappedAssets(), "capture jobs should report live alias counts");
+    verify(migrationDao).nexusPublicIdMappedAssets(8L);
+  }
+
+  private static RepositoryDataMigrationService service(
+      MigrationJobDao jobDao, RepositoryDataMigrationDao migrationDao) {
+    return new RepositoryDataMigrationService(
+        null,
+        jobDao,
+        migrationDao,
+        mock(RepositoryDao.class),
+        mock(PlatformTransactionManager.class));
+  }
+
+  private static MigrationJobRecord job(long id, Map<String, Object> options) {
+    return new MigrationJobRecord(
+        id,
+        "3.27.0-03",
+        "http://source.example",
+        "running",
+        options,
+        Map.of(),
+        Instant.parse("2026-07-29T00:00:00Z"),
+        null);
+  }
+
+  private static MigrationJobProgress progress() {
+    return new MigrationJobProgress(0, 0, 0, 0, 0, 0, false, false);
   }
 
   private static List<?> sourceRepositories(
