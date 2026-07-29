@@ -164,11 +164,13 @@ For multiple scanner replicas:
   failed ordinal so an accepted request with a lost response does not keep consuming scanner
   capacity.
 - Administrative cancellation commits the durable task state and audit record before immediately
-  broadcasting cancellation across all configured ordinals. Worker lease loss uses the same
-  broadcast as a fallback because a timed-out primary request may still be winding down while a
-  fallback attempt is active.
+  broadcasting cancellation in parallel across all configured ordinals under one five-second
+  overall deadline. Worker lease loss uses the same bounded broadcast as a fallback because a
+  timed-out primary request may still be winding down while a fallback attempt is active.
 - Capability and readiness observation fails over across the configured ordinals and treats the
-  deployment as ready when at least one adapter replica is ready.
+  deployment as ready when at least one adapter replica is ready. One 15-second end-to-end budget
+  covers both endpoints and every ordinal, so an outage cannot multiply the worker delay by the
+  replica count.
 - If replicas share a persistent database cache, set
   `securityScanning.scannerDatabase.persistence.existingClaim` to a `ReadWriteMany` PVC.
 - If shared storage is unavailable, disable scanner database persistence and let each Pod use its

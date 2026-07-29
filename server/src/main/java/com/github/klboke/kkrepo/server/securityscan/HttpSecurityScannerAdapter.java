@@ -34,6 +34,12 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.function.LongSupplier;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
@@ -42,6 +48,8 @@ import org.springframework.stereotype.Component;
 @Component
 public class HttpSecurityScannerAdapter implements Adapter {
   private static final long TRANSPORT_GRACE_SECONDS = 5;
+  private static final Duration OBSERVATION_TIMEOUT = Duration.ofSeconds(15);
+  private static final Duration CANCELLATION_BROADCAST_TIMEOUT = Duration.ofSeconds(5);
   private static final long MAX_ERROR_RESPONSE_BYTES = 64L * 1024;
   private static final int MAX_RESPONSE_NESTING_DEPTH = 64;
   private static final int MAX_RESPONSE_NUMBER_LENGTH = 128;
@@ -50,6 +58,9 @@ public class HttpSecurityScannerAdapter implements Adapter {
   private static final int MAX_COMPONENT_PROPERTIES = 128;
   private static final Pattern RUN_ID = Pattern.compile("[A-Za-z0-9._:-]{1,128}");
   private static final Pattern ERROR_CODE = Pattern.compile("[A-Z0-9_]{1,128}");
+  private static final ExecutorService CANCELLATION_EXECUTOR =
+      Executors.newThreadPerTaskExecutor(
+          Thread.ofVirtual().name("security-scan-cancel-", 0).factory());
   private final ObjectMapper objectMapper;
   private final ObjectMapper responseObjectMapper;
   private final SecurityScanningProperties properties;
@@ -104,13 +115,26 @@ public class HttpSecurityScannerAdapter implements Adapter {
 
   @Override
   public Observation observation() {
+    return observation(OBSERVATION_TIMEOUT);
+  }
+
+  Observation observation(Duration totalTimeout) {
+    TransportDeadline deadline = new TransportDeadline(totalTimeout);
     ScannerAdapterException firstFailure = null;
     Observation firstNotReady = null;
     for (URI baseUri : baseUris) {
       try {
         Observation observation = new Observation(
-            get(baseUri, "/v1/capabilities", Capabilities.class),
-            get(baseUri, "/v1/readiness", Readiness.class));
+            get(
+                baseUri,
+                "/v1/capabilities",
+                Capabilities.class,
+                deadline.nextRequestTimeout()),
+            get(
+                baseUri,
+                "/v1/readiness",
+                Readiness.class,
+                deadline.nextRequestTimeout()));
         if (observation.readiness().ready()) {
           return observation;
         }
@@ -124,9 +148,13 @@ public class HttpSecurityScannerAdapter implements Adapter {
           firstFailure.addSuppressed(failure);
         }
       }
+      if (deadline.expired()) break;
     }
     if (firstNotReady != null) {
       return firstNotReady;
+    }
+    if (deadline.expired()) {
+      throw deadline.timeout(firstFailure);
     }
     throw firstFailure == null
         ? new ScannerAdapterException(
@@ -136,16 +164,22 @@ public class HttpSecurityScannerAdapter implements Adapter {
 
   @Override
   public Capabilities capabilities() {
-    return getWithFailover("/v1/capabilities", Capabilities.class);
+    return getWithFailover(
+        "/v1/capabilities", Capabilities.class, new TransportDeadline(OBSERVATION_TIMEOUT));
   }
 
   @Override
   public Readiness readiness() {
+    TransportDeadline deadline = new TransportDeadline(OBSERVATION_TIMEOUT);
     ScannerAdapterException firstFailure = null;
     Readiness firstNotReady = null;
     for (URI baseUri : baseUris) {
       try {
-        Readiness readiness = get(baseUri, "/v1/readiness", Readiness.class);
+        Readiness readiness = get(
+            baseUri,
+            "/v1/readiness",
+            Readiness.class,
+            deadline.nextRequestTimeout());
         if (readiness.ready()) {
           return readiness;
         }
@@ -155,11 +189,17 @@ public class HttpSecurityScannerAdapter implements Adapter {
       } catch (ScannerAdapterException failure) {
         if (firstFailure == null) {
           firstFailure = failure;
+        } else {
+          firstFailure.addSuppressed(failure);
         }
       }
+      if (deadline.expired()) break;
     }
     if (firstNotReady != null) {
       return firstNotReady;
+    }
+    if (deadline.expired()) {
+      throw deadline.timeout(firstFailure);
     }
     throw firstFailure == null
         ? new ScannerAdapterException(
@@ -262,29 +302,81 @@ public class HttpSecurityScannerAdapter implements Adapter {
 
   @Override
   public CancellationResponse cancel(String runId) {
+    return cancel(runId, CANCELLATION_BROADCAST_TIMEOUT);
+  }
+
+  CancellationResponse cancel(String runId, Duration totalTimeout) {
     requireRunId(runId);
+    if (totalTimeout == null || totalTimeout.isZero() || totalTimeout.isNegative()) {
+      throw new IllegalArgumentException("Scanner cancellation deadline must be positive");
+    }
+    List<Callable<CancellationResponse>> calls = baseUris.stream()
+        .<Callable<CancellationResponse>>map(baseUri ->
+            () -> cancel(baseUri, runId, totalTimeout))
+        .toList();
+    List<Future<CancellationResponse>> attempts;
+    try {
+      attempts = CANCELLATION_EXECUTOR.invokeAll(
+          calls,
+          totalTimeout.toNanos(),
+          TimeUnit.NANOSECONDS);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new ScannerAdapterException(
+          "SCANNER_INTERRUPTED", "Scanner cancellation was interrupted", true, e);
+    }
+
     ScannerAdapterException firstFailure = null;
     boolean cancelled = false;
-    for (URI baseUri : baseUris) {
+    boolean timedOut = false;
+    for (Future<CancellationResponse> attempt : attempts) {
+      if (attempt.isCancelled()) {
+        timedOut = true;
+        continue;
+      }
       try {
-        cancelled |= cancel(baseUri, runId).cancelled();
-      } catch (ScannerAdapterException e) {
+        cancelled |= attempt.get().cancelled();
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new ScannerAdapterException(
+            "SCANNER_INTERRUPTED", "Scanner cancellation was interrupted", true, e);
+      } catch (ExecutionException e) {
+        ScannerAdapterException failure = cancellationFailure(e.getCause());
         if (firstFailure == null) {
-          firstFailure = e;
+          firstFailure = failure;
         } else {
-          firstFailure.addSuppressed(e);
+          firstFailure.addSuppressed(failure);
         }
       }
     }
-    if (!cancelled && firstFailure != null) {
+    if (cancelled) {
+      return new CancellationResponse(runId, true);
+    }
+    if (timedOut) {
+      ScannerAdapterException timeout = new ScannerAdapterException(
+          "SCANNER_TIMEOUT",
+          "Scanner cancellation exhausted its end-to-end broadcast deadline",
+          true);
+      if (firstFailure != null) timeout.addSuppressed(firstFailure);
+      throw timeout;
+    }
+    if (firstFailure != null) {
       throw firstFailure;
     }
-    return new CancellationResponse(runId, cancelled);
+    return new CancellationResponse(runId, false);
   }
 
-  private <T> T get(URI baseUri, String path, Class<T> type) {
+  private static ScannerAdapterException cancellationFailure(Throwable failure) {
+    if (failure instanceof ScannerAdapterException scannerFailure) {
+      return scannerFailure;
+    }
+    return new ScannerAdapterException(
+        "SCANNER_IO", "Scanner cancellation failed", true, failure);
+  }
+
+  private <T> T get(URI baseUri, String path, Class<T> type, Duration timeout) {
     HttpRequest.Builder builder = HttpRequest.newBuilder(resolve(baseUri, path))
-        .timeout(Duration.ofSeconds(15))
+        .timeout(timeout)
         .header("Accept", "application/json")
         .GET();
     withServiceCredential(builder);
@@ -297,16 +389,23 @@ public class HttpSecurityScannerAdapter implements Adapter {
    * run owner. A StatefulSet ordinal can be unavailable during a rollout, so accept the first
    * healthy replica instead of making scanner-0 a cluster-wide availability authority.
    */
-  private <T> T getWithFailover(String path, Class<T> type) {
+  private <T> T getWithFailover(
+      String path, Class<T> type, TransportDeadline deadline) {
     ScannerAdapterException firstFailure = null;
     for (URI baseUri : baseUris) {
       try {
-        return get(baseUri, path, type);
+        return get(baseUri, path, type, deadline.nextRequestTimeout());
       } catch (ScannerAdapterException failure) {
         if (firstFailure == null) {
           firstFailure = failure;
+        } else {
+          firstFailure.addSuppressed(failure);
         }
       }
+      if (deadline.expired()) break;
+    }
+    if (deadline.expired()) {
+      throw deadline.timeout(firstFailure);
     }
     throw firstFailure == null
         ? new ScannerAdapterException(
@@ -373,10 +472,6 @@ public class HttpSecurityScannerAdapter implements Adapter {
     } catch (ScannerAdapterException cancellationFailure) {
       executionFailure.addSuppressed(cancellationFailure);
     }
-  }
-
-  private CancellationResponse cancel(URI baseUri, String runId) {
-    return cancel(baseUri, runId, Duration.ofSeconds(5));
   }
 
   private CancellationResponse cancel(URI baseUri, String runId, Duration timeout) {
@@ -719,6 +814,49 @@ public class HttpSecurityScannerAdapter implements Adapter {
   }
 
   record AttemptBudget(Duration transportTimeout, int scannerTimeoutSeconds) {}
+
+  /** One monotonic transport budget shared by every endpoint in an observation operation. */
+  static final class TransportDeadline {
+    private final long timeoutNanos;
+    private final LongSupplier nanoTime;
+    private final long startedNanos;
+
+    private TransportDeadline(Duration timeout) {
+      this(timeout, System::nanoTime);
+    }
+
+    TransportDeadline(Duration timeout, LongSupplier nanoTime) {
+      if (timeout == null || timeout.isZero() || timeout.isNegative()) {
+        throw new IllegalArgumentException("Scanner transport deadline must be positive");
+      }
+      this.timeoutNanos = timeout.toNanos();
+      this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
+      this.startedNanos = nanoTime.getAsLong();
+    }
+
+    Duration nextRequestTimeout() {
+      long remainingNanos = remainingNanos();
+      if (remainingNanos <= 0) throw timeout(null);
+      return Duration.ofNanos(remainingNanos);
+    }
+
+    boolean expired() {
+      return remainingNanos() <= 0;
+    }
+
+    ScannerAdapterException timeout(ScannerAdapterException earlierFailure) {
+      ScannerAdapterException timeout = new ScannerAdapterException(
+          "SCANNER_TIMEOUT",
+          "Scanner observation exhausted its end-to-end failover deadline",
+          true);
+      if (earlierFailure != null) timeout.addSuppressed(earlierFailure);
+      return timeout;
+    }
+
+    private long remainingNanos() {
+      return timeoutNanos - (nanoTime.getAsLong() - startedNanos);
+    }
+  }
 
   /**
    * One monotonic budget shared by all adapter replicas for a single operation.

@@ -52,10 +52,12 @@ The scanner workload is a StatefulSet so every replica has a stable network iden
 the run hash to select a preferred ordinal, then fails retryable catalog, match, and OCI requests
 over to the remaining ordinals. Before fallback, kkRepo makes a best-effort targeted cancellation
 on the failed ordinal; administrative and worker cancellation is broadcast across all configured
-ordinals because a timed-out primary request can still be winding down. Durable task ownership and
-result finalization remain in the shared kkRepo database, not in the StatefulSet. Capability and
-readiness observations also fail over across ordinals, so a rollout or ordinal failure does not
-hide healthy replicas. For multiple adapter replicas, provide
+ordinals in parallel under one five-second overall deadline because a timed-out primary request
+can still be winding down. Durable task ownership and result finalization remain in the shared
+kkRepo database, not in the StatefulSet. Capability and readiness observations also fail over
+across ordinals under one 15-second end-to-end deadline, so a rollout or ordinal failure does not
+hide healthy replicas or multiply outage delays by the replica count. For multiple adapter
+replicas, provide
 `securityScanning.scannerDatabase.persistence.existingClaim` backed by `ReadWriteMany`, or disable
 scanner database persistence so each pod uses an ephemeral cache. Shared-database replicas use
 cross-process read/update locks and a shared update marker; database update eligibility is checked

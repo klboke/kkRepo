@@ -21,6 +21,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanFinding;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanPolicy;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanRunSubject;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanWaiver;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
@@ -321,6 +322,53 @@ class SecurityScanManagementServiceWaiverTest {
         "Package selector must be at most 2048 characters",
         packageFailure.getReason());
     verify(scans, never()).createWaiver(any());
+  }
+
+  @Test
+  void rejectsRevisionOnlyUnknownAndMismatchedWaiverPolicies() {
+    when(security.decide(
+        eq(actor.permissionSubject()), eq("nexus:security-scanning:update")))
+        .thenReturn(AccessDecision.allow());
+    when(scans.findPolicy(71L)).thenReturn(Optional.empty());
+    when(scans.findPolicy(72L)).thenReturn(Optional.of(policy(72L, 4L)));
+
+    ResponseStatusException revisionOnly = assertThrows(
+        ResponseStatusException.class,
+        () -> service.createWaiver(actor, globalWaiver(null, 3L)));
+    ResponseStatusException unknown = assertThrows(
+        ResponseStatusException.class,
+        () -> service.createWaiver(actor, globalWaiver(71L, null)));
+    ResponseStatusException mismatched = assertThrows(
+        ResponseStatusException.class,
+        () -> service.createWaiver(actor, globalWaiver(72L, 3L)));
+
+    assertEquals(HttpStatus.BAD_REQUEST, revisionOnly.getStatusCode());
+    assertEquals(
+        "Waiver policy revision requires a policy ID",
+        revisionOnly.getReason());
+    assertEquals(HttpStatus.BAD_REQUEST, unknown.getStatusCode());
+    assertEquals("Unknown waiver policy", unknown.getReason());
+    assertEquals(HttpStatus.BAD_REQUEST, mismatched.getStatusCode());
+    assertEquals(
+        "Waiver policy revision does not belong to the selected policy",
+        mismatched.getReason());
+    verify(scans, never()).createWaiver(any());
+  }
+
+  @Test
+  void persistsAValidatedWaiverPolicyIdentity() {
+    when(security.decide(
+        eq(actor.permissionSubject()), eq("nexus:security-scanning:update")))
+        .thenReturn(AccessDecision.allow());
+    when(scans.findPolicy(72L)).thenReturn(Optional.of(policy(72L, 4L)));
+    when(scans.createWaiver(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+    service.createWaiver(actor, globalWaiver(72L, 4L));
+
+    ArgumentCaptor<ScanWaiver> waiver = ArgumentCaptor.forClass(ScanWaiver.class);
+    verify(scans).createWaiver(waiver.capture());
+    assertEquals(72L, waiver.getValue().policyId());
+    assertEquals(4L, waiver.getValue().policyRevision());
   }
 
   @Test
@@ -871,6 +919,39 @@ class SecurityScanManagementServiceWaiverTest {
         List.of(),
         "active",
         Instant.now());
+  }
+
+  private static WaiverCommand globalWaiver(Long policyId, Long policyRevision) {
+    return new WaiverCommand(
+        "GLOBAL",
+        null,
+        null,
+        null,
+        "CVE-2026-0041",
+        null,
+        Map.of(),
+        "Accepted globally",
+        policyId,
+        policyRevision,
+        Instant.now().plusSeconds(604800));
+  }
+
+  private static ScanPolicy policy(long id, long revision) {
+    Instant now = Instant.now();
+    return new ScanPolicy(
+        id,
+        "policy-" + id,
+        true,
+        Severity.CRITICAL,
+        false,
+        false,
+        false,
+        null,
+        List.of(),
+        revision,
+        "security-admin",
+        now,
+        now);
   }
 
   private static RepositoryRecord repository(long id, String name) {

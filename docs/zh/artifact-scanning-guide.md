@@ -152,10 +152,11 @@ kubectl logs statefulset/kkrepo-scanner
   二进制输入在每次尝试时都从不可变 blob storage 重新打开。开始备用执行前，kkRepo
   会尽力定向取消失败 ordinal 上可能已经接受的执行，避免响应丢失后继续占用容量。
 - 管理员取消会先提交持久任务状态和审计记录，再立即向所有配置 ordinal 广播取消；
-  worker 丢失 lease 时使用同一广播作为兜底，因为超时的首选请求可能仍在退出，同时
-  备用副本上已经存在新的执行。
+  所有请求并行执行并共享 5 秒总 deadline。worker 丢失 lease 时使用同一有界广播
+  作为兜底，因为超时的首选请求可能仍在退出，同时备用副本上已经存在新的执行。
 - capability/readiness 观测会在所有配置的 ordinal 间容灾；只要至少一个 adapter
-  副本 ready，部署能力就保持可用。
+  副本 ready，部署能力就保持可用。两个端点和全部 ordinal 共享 15 秒总 deadline，
+  scanner 整体故障时等待时间不会按副本数线性放大。
 - 使用多个 scanner 副本且需要共享持久缓存时，为
   `securityScanning.scannerDatabase.persistence.existingClaim` 提供支持
   `ReadWriteMany` 的 PVC。

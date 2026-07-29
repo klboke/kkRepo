@@ -980,6 +980,7 @@ public class SecurityScanManagementService {
         throw badRequest("Waiver asset does not belong to the repository context");
       }
     }
+    requireValidWaiverPolicy(command);
     Instant now = Instant.now();
     if (command.expiresAt() != null && !command.expiresAt().isAfter(now)) {
       throw badRequest("Waiver expiration must be in the future");
@@ -1032,6 +1033,21 @@ public class SecurityScanManagementService {
         now));
     scans.invalidatePolicyStatesForWaiver(created);
     return created;
+  }
+
+  private void requireValidWaiverPolicy(WaiverCommand command) {
+    if (command.policyRevision() != null && command.policyId() == null) {
+      throw badRequest("Waiver policy revision requires a policy ID");
+    }
+    if (command.policyId() == null) {
+      return;
+    }
+    ScanPolicy policy = scans.findPolicy(command.policyId())
+        .orElseThrow(() -> badRequest("Unknown waiver policy"));
+    if (command.policyRevision() != null
+        && command.policyRevision().longValue() != policy.revision()) {
+      throw badRequest("Waiver policy revision does not belong to the selected policy");
+    }
   }
 
   @Transactional

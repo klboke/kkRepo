@@ -1593,10 +1593,13 @@ Helm/Kubernetes：
   `SCANNER_RUN_ALREADY_ACTIVE` 保留 adapter 返回的可重试语义，旧执行被取消后在其它
   ordinal 恢复。
 - 用户取消、lease 丢失或 worker 中断时，取消请求广播到全部配置 ordinal。无法访问
-  的旧执行最多运行到 profile timeout；持久任务 lease、fencing 和数据库结果提交仍是
-  唯一正确性边界。
+  的 ordinal 不能把调用方阻塞时间放大为 `5 秒 × 副本数`：各请求并行执行并共享
+  5 秒总 deadline。无法访问的旧执行最多运行到 profile timeout；持久任务 lease、
+  fencing 和数据库结果提交仍是唯一正确性边界。
 - capability/readiness 观测遍历全部配置 ordinal；任一副本 ready 即认为 adapter
-  部署可用，避免滚动发布或 ordinal 0 故障把整个扫描集群误判为不可用。
+  部署可用，避免滚动发布或 ordinal 0 故障把整个扫描集群误判为不可用。一次观测的
+  capability、readiness 和全部 ordinal 共享 15 秒单调时钟总 deadline，不能占用
+  worker 达到 `15 秒 × 端点数 × 副本数`。
 - StatefulSet 只提供稳定网络身份；任务所有权、lease、fencing 和结果仍在共享数据库。
 - 所有 kkRepo 副本应使用相同顺序的 adapter 地址列表，以保持负载首选分布可预测；
   副本数变化不会改变任务和结果的数据库正确性。

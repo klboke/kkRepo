@@ -35,6 +35,7 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -110,6 +111,25 @@ class HttpSecurityScannerAdapterTest {
   }
 
   @Test
+  void transportDeadlineDerivesEveryRequestFromOneMonotonicBudget() {
+    AtomicLong clock = new AtomicLong();
+    HttpSecurityScannerAdapter.TransportDeadline deadline =
+        new HttpSecurityScannerAdapter.TransportDeadline(
+            Duration.ofSeconds(3), clock::get);
+
+    assertEquals(Duration.ofSeconds(3), deadline.nextRequestTimeout());
+    clock.set(Duration.ofMillis(1_200).toNanos());
+    assertEquals(Duration.ofMillis(1_800), deadline.nextRequestTimeout());
+    assertFalse(deadline.expired());
+
+    clock.set(Duration.ofSeconds(3).toNanos());
+    ScannerAdapterException failure = assertThrows(
+        ScannerAdapterException.class, deadline::nextRequestTimeout);
+    assertEquals("SCANNER_TIMEOUT", failure.code());
+    assertTrue(deadline.expired());
+  }
+
+  @Test
   void requiresTheSharedCredentialWheneverScanningIsEnabled() {
     SecurityScanningProperties properties = new SecurityScanningProperties();
     properties.setEnabled(true);
@@ -180,6 +200,84 @@ class HttpSecurityScannerAdapterTest {
   }
 
   @Test
+  void broadcastsCancellationInParallelWithinOneOverallDeadline() throws Exception {
+    ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+    AtomicInteger calls = new AtomicInteger();
+    List<HttpServer> replicas = new ArrayList<>();
+    try {
+      for (int index = 0; index < 3; index++) {
+        replicas.add(standaloneServer(exchange -> {
+          calls.incrementAndGet();
+          java.util.concurrent.locks.LockSupport.parkNanos(
+              Duration.ofMillis(800).toNanos());
+          respond(
+              exchange,
+              200,
+              mapper.writeValueAsBytes(new CancellationResponse("run", true)));
+        }));
+      }
+      SecurityScanningProperties properties = new SecurityScanningProperties();
+      properties.getAdapter().setBaseUrls(replicas.stream()
+          .map(replica -> "http://127.0.0.1:" + replica.getAddress().getPort())
+          .toList());
+      properties.getAdapter().setServiceCredential("secret");
+      HttpSecurityScannerAdapter adapter =
+          new HttpSecurityScannerAdapter(mapper, properties);
+
+      long startedNanos = System.nanoTime();
+      assertTrue(adapter.cancel("run").cancelled());
+      long elapsedMillis = Duration.ofNanos(System.nanoTime() - startedNanos).toMillis();
+
+      assertEquals(3, calls.get());
+      assertTrue(
+          elapsedMillis < 1_800,
+          "cancellation took " + elapsedMillis
+              + " ms, which indicates serial per-replica waiting");
+    } finally {
+      replicas.forEach(replica -> replica.stop(0));
+    }
+  }
+
+  @Test
+  void cancellationTimesOutOnceForTheWholeBroadcast() throws Exception {
+    ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+    List<HttpServer> replicas = new ArrayList<>();
+    try {
+      for (int index = 0; index < 3; index++) {
+        replicas.add(standaloneServer(exchange -> {
+          java.util.concurrent.locks.LockSupport.parkNanos(
+              Duration.ofSeconds(1).toNanos());
+          respond(
+              exchange,
+              200,
+              mapper.writeValueAsBytes(new CancellationResponse("run", true)));
+        }));
+      }
+      SecurityScanningProperties properties = new SecurityScanningProperties();
+      properties.getAdapter().setBaseUrls(replicas.stream()
+          .map(replica -> "http://127.0.0.1:" + replica.getAddress().getPort())
+          .toList());
+      properties.getAdapter().setServiceCredential("secret");
+      HttpSecurityScannerAdapter adapter =
+          new HttpSecurityScannerAdapter(mapper, properties);
+
+      long startedNanos = System.nanoTime();
+      ScannerAdapterException failure = assertThrows(
+          ScannerAdapterException.class,
+          () -> adapter.cancel("run", Duration.ofMillis(250)));
+      long elapsedMillis = Duration.ofNanos(System.nanoTime() - startedNanos).toMillis();
+
+      assertEquals("SCANNER_TIMEOUT", failure.code());
+      assertTrue(
+          elapsedMillis < 1_000,
+          "cancellation took " + elapsedMillis
+              + " ms instead of respecting its shared 250 ms deadline");
+    } finally {
+      replicas.forEach(replica -> replica.stop(0));
+    }
+  }
+
+  @Test
   void observesCapabilitiesAndReadinessFromAnotherHealthyReplica() throws Exception {
     ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
     HttpServer unavailable = standaloneServer(exchange ->
@@ -215,6 +313,45 @@ class HttpSecurityScannerAdapterTest {
     } finally {
       unavailable.stop(0);
       healthy.stop(0);
+    }
+  }
+
+  @Test
+  void observationSharesOneDeadlineAcrossEveryReplicaAndEndpoint() throws Exception {
+    ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+    AtomicInteger calls = new AtomicInteger();
+    List<HttpServer> replicas = new ArrayList<>();
+    try {
+      for (int index = 0; index < 3; index++) {
+        replicas.add(standaloneServer(exchange -> {
+          calls.incrementAndGet();
+          java.util.concurrent.locks.LockSupport.parkNanos(
+              Duration.ofMillis(750).toNanos());
+          respond(exchange, 503, "{}".getBytes());
+        }));
+      }
+      SecurityScanningProperties properties = new SecurityScanningProperties();
+      properties.getAdapter().setBaseUrls(replicas.stream()
+          .map(replica -> "http://127.0.0.1:" + replica.getAddress().getPort())
+          .toList());
+      properties.getAdapter().setServiceCredential("secret");
+      HttpSecurityScannerAdapter adapter =
+          new HttpSecurityScannerAdapter(mapper, properties);
+
+      long startedNanos = System.nanoTime();
+      ScannerAdapterException failure = assertThrows(
+          ScannerAdapterException.class,
+          () -> adapter.observation(Duration.ofSeconds(1)));
+      long elapsedMillis = Duration.ofNanos(System.nanoTime() - startedNanos).toMillis();
+
+      assertEquals("SCANNER_TIMEOUT", failure.code());
+      assertTrue(calls.get() >= 2, "observation should try a fallback within its remaining budget");
+      assertTrue(
+          elapsedMillis < 1_800,
+          "observation took " + elapsedMillis
+              + " ms instead of respecting its shared one-second deadline");
+    } finally {
+      replicas.forEach(replica -> replica.stop(0));
     }
   }
 
