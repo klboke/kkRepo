@@ -622,7 +622,7 @@ public class SecurityScanManagementService {
         candidate.contentGeneration(),
         profile.id(),
         profile.revision(),
-        scans.latestScannerSnapshot().map(SecurityScanDao.ScannerSnapshot::id).orElse(null),
+        null, // manual work acquires a verified ready snapshot when execution begins
         ScanStage.CATALOG_AND_MATCH,
         RequestReason.MANUAL,
         100,

@@ -1,6 +1,9 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.StreamReadConstraints;
+import com.fasterxml.jackson.core.exc.StreamConstraintsException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.security.scan.ScanSubject;
 import com.github.klboke.kkrepo.security.scan.ScannerArtifactType;
@@ -37,9 +40,15 @@ import org.springframework.stereotype.Component;
 public class HttpSecurityScannerAdapter implements Adapter {
   private static final long TRANSPORT_GRACE_SECONDS = 5;
   private static final long MAX_ERROR_RESPONSE_BYTES = 64L * 1024;
+  private static final int MAX_RESPONSE_NESTING_DEPTH = 64;
+  private static final int MAX_RESPONSE_NUMBER_LENGTH = 128;
+  private static final int MAX_RESPONSE_NAME_LENGTH = 1_024;
+  private static final int MAX_NESTED_LIST_VALUES = 256;
+  private static final int MAX_COMPONENT_PROPERTIES = 128;
   private static final Pattern RUN_ID = Pattern.compile("[A-Za-z0-9._:-]{1,128}");
   private static final Pattern ERROR_CODE = Pattern.compile("[A-Z0-9_]{1,128}");
   private final ObjectMapper objectMapper;
+  private final ObjectMapper responseObjectMapper;
   private final SecurityScanningProperties properties;
   private final HttpClient client;
   private final List<URI> baseUris;
@@ -48,6 +57,23 @@ public class HttpSecurityScannerAdapter implements Adapter {
       ObjectMapper objectMapper, SecurityScanningProperties properties) {
     this.objectMapper = objectMapper;
     this.properties = properties;
+    this.responseObjectMapper = objectMapper.copy();
+    this.responseObjectMapper.getFactory().setStreamReadConstraints(
+        StreamReadConstraints.builder()
+            .maxDocumentLength(properties.getMaxResponseBytes())
+            .maxTokenCount(properties.getMaxResponseTokens())
+            .maxNestingDepth(MAX_RESPONSE_NESTING_DEPTH)
+            .maxNumberLength(MAX_RESPONSE_NUMBER_LENGTH)
+            // The two raw documents are Base64 string values, so their string limit is the
+            // independently bounded response envelope rather than a small metadata-field limit.
+            .maxStringLength(responseStringLimit(properties.getMaxResponseBytes()))
+            .maxNameLength(MAX_RESPONSE_NAME_LENGTH)
+            .build());
+    // Summary is advisory adapter telemetry. Runtime decisions use typed response fields (and the
+    // OCI platform lists), so do not materialize an arbitrary nested object graph supplied by an
+    // adapter replica.
+    this.responseObjectMapper.addMixIn(CatalogResponse.class, IgnoreSummaryMixin.class);
+    this.responseObjectMapper.addMixIn(MatchResponse.class, IgnoreSummaryMixin.class);
     this.baseUris = properties.getAdapter().configuredBaseUrls().stream()
         .filter(value -> value != null && !value.isBlank())
         .map(HttpSecurityScannerAdapter::validateBaseUri)
@@ -402,14 +428,27 @@ public class HttpSecurityScannerAdapter implements Adapter {
   private <T> T readJsonBounded(InputStream body, long maxBytes, Class<T> type) {
     try (BoundedResponseInputStream bounded =
             new BoundedResponseInputStream(body, maxBytes);
-        JsonParser parser = objectMapper.getFactory().createParser(bounded)) {
+        JsonParser parser = responseObjectMapper.getFactory().createParser(bounded)) {
       parser.disable(JsonParser.Feature.AUTO_CLOSE_SOURCE);
-      T value = objectMapper.readValue(parser, type);
+      T value = responseObjectMapper.readValue(parser, type);
+      if (parser.nextToken() != null) {
+        throw new ScannerAdapterException(
+            "SCANNER_INVALID_JSON",
+            "Scanner adapter returned more than one JSON document",
+            false);
+      }
       bounded.drain();
-      return value;
+      return validateDecodedProjection(value);
     } catch (IOException e) {
       if (causedByResponseLimit(e)) {
         throw responseTooLarge();
+      }
+      if (causedByComplexityLimit(e)) {
+        throw new ScannerAdapterException(
+            "SCANNER_RESPONSE_COMPLEXITY_LIMIT",
+            "Scanner response exceeded configured JSON complexity limits",
+            false,
+            e);
       }
       throw new ScannerAdapterException(
           "SCANNER_INVALID_JSON", "Scanner adapter returned invalid JSON", false, e);
@@ -425,6 +464,91 @@ public class HttpSecurityScannerAdapter implements Adapter {
       current = current.getCause();
     }
     return false;
+  }
+
+  private static boolean causedByComplexityLimit(Throwable failure) {
+    Throwable current = failure;
+    while (current != null) {
+      if (current instanceof StreamConstraintsException) {
+        return true;
+      }
+      current = current.getCause();
+    }
+    return false;
+  }
+
+  private static <T> T validateDecodedProjection(T value) {
+    if (value instanceof CatalogResponse catalog) {
+      validateCatalogProjection(catalog);
+    } else if (value instanceof MatchResponse match) {
+      validateMatchProjection(match);
+    } else if (value instanceof OciScanResponse oci) {
+      validateCatalogProjection(oci.catalog());
+      validateMatchProjection(oci.match());
+      requireListLimit(oci.scannedPlatforms(), MAX_NESTED_LIST_VALUES, "scanned platforms");
+      requireListLimit(oci.missingPlatforms(), MAX_NESTED_LIST_VALUES, "missing platforms");
+    } else if (value instanceof Capabilities capabilities) {
+      requireListLimit(capabilities.operations(), MAX_NESTED_LIST_VALUES, "operations");
+      requireListLimit(
+          capabilities.targetClassifications(),
+          MAX_NESTED_LIST_VALUES,
+          "target classifications");
+    }
+    return value;
+  }
+
+  private static void validateCatalogProjection(CatalogResponse response) {
+    if (response == null) {
+      return;
+    }
+    requireListLimit(
+        response.components(),
+        ScannerContract.MAX_COMPONENT_PROJECTION_COUNT,
+        "component projection");
+    for (ScannerContract.Component component : response.components()) {
+      requireListLimit(component.locations(), MAX_NESTED_LIST_VALUES, "component locations");
+      requireListLimit(component.licenses(), MAX_NESTED_LIST_VALUES, "component licenses");
+      if (component.properties().size() > MAX_COMPONENT_PROPERTIES
+          || component.properties().values().stream().anyMatch(
+              property -> property != null
+                  && !(property instanceof String)
+                  && !(property instanceof Number)
+                  && !(property instanceof Boolean))) {
+        throw projectionLimit("component properties");
+      }
+    }
+  }
+
+  private static void validateMatchProjection(MatchResponse response) {
+    if (response == null) {
+      return;
+    }
+    requireListLimit(
+        response.findings(),
+        ScannerContract.MAX_FINDING_PROJECTION_COUNT,
+        "finding projection");
+    for (ScannerContract.Finding finding : response.findings()) {
+      requireListLimit(finding.aliases(), MAX_NESTED_LIST_VALUES, "finding aliases");
+      requireListLimit(finding.fixedVersions(), MAX_NESTED_LIST_VALUES, "fixed versions");
+      requireListLimit(finding.locations(), MAX_NESTED_LIST_VALUES, "finding locations");
+    }
+  }
+
+  private static void requireListLimit(List<?> values, int limit, String field) {
+    if (values != null && values.size() > limit) {
+      throw projectionLimit(field);
+    }
+  }
+
+  private static ScannerAdapterException projectionLimit(String field) {
+    return new ScannerAdapterException(
+        "SCANNER_RESPONSE_PROJECTION_LIMIT",
+        "Scanner response exceeded the " + field + " limit",
+        false);
+  }
+
+  private static int responseStringLimit(long maxResponseBytes) {
+    return (int) Math.min(Integer.MAX_VALUE - 1L, Math.max(1L, maxResponseBytes));
   }
 
   private static ScannerAdapterException responseTooLarge() {
@@ -583,6 +707,9 @@ public class HttpSecurityScannerAdapter implements Adapter {
   }
 
   private static final class ResponseTooLargeIOException extends IOException {}
+
+  @JsonIgnoreProperties("summary")
+  private abstract static class IgnoreSummaryMixin {}
 
   private record ScannerErrorPayload(String code, String message, boolean retryable) {}
 }

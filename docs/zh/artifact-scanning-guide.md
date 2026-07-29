@@ -376,8 +376,9 @@ Waivers 页签用于查看 Active/Expired、scope、仓库、制品、exception�
 | `KKREPO_SECURITY_SCANNING_OCI_REGISTRY_URL` | `http://kkrepo:8080` | scanner 拉取精确 OCI digest 时访问的 kkRepo 地址 |
 | `KKREPO_SECURITY_SCANNING_DATABASE_MAX_AGE` | `48h` | 漏洞数据库最大允许运维年龄 |
 | `KKREPO_SECURITY_SCANNING_OBSERVATION_MAX_AGE` | `2m` | scanner snapshot 最大观测年龄 |
-| `KKREPO_SECURITY_SCANNING_MAX_RESPONSE_BYTES` | `134217728` | kkRepo 接收 adapter JSON 响应的上限，包含原始文档 Base64、JSON 字段和投影 |
-| `KKREPO_SECURITY_SCANNING_RESPONSE_MEMORY_BUDGET_BYTES` | `268435456` | 解码后 scanner 响应的进程内准入预算；至少为响应上限的两倍，且不得超过 JVM 最大堆的一半 |
+| `KKREPO_SECURITY_SCANNING_MAX_RESPONSE_BYTES` | `67108864` | kkRepo 接收 adapter JSON 响应的上限，包含原始文档 Base64、JSON 字段和投影 |
+| `KKREPO_SECURITY_SCANNING_MAX_RESPONSE_TOKENS` | `262144` | 解码单个 adapter 响应时强制执行的 JSON token 总量上限 |
+| `KKREPO_SECURITY_SCANNING_RESPONSE_MEMORY_BUDGET_BYTES` | `268435456` | 根据 byte/token 上限推导的进程内准入预算；必须至少容纳一个有界响应，且不得超过 JVM 最大堆的一半 |
 | `KKREPO_SECURITY_SCANNING_WORKER_BATCH_SIZE` | `4` | 每轮任务领取上限 |
 | `KKREPO_SECURITY_SCANNING_WORKER_MAX_ATTEMPTS` | `5` | 自动尝试上限 |
 | `KKREPO_SECURITY_SCANNING_METRICS_COUNT_LIMIT` | `10000` | 指标聚合饱和值，避免无界 count |
@@ -401,17 +402,25 @@ Waivers 页签用于查看 Active/Expired、scope、仓库、制品、exception�
 | `KKREPO_SCANNER_ADMISSION_TIMEOUT` | `1s` | 等待容量的时间 |
 | `KKREPO_SCANNER_RETRY_AFTER_SECONDS` | `5` | 容量拒绝时的重试提示 |
 | `KKREPO_SCANNER_MAX_INPUT_BYTES` | `2147483648` | adapter 输入硬上限 |
-| `KKREPO_SCANNER_MAX_OUTPUT_BYTES` | `33554432` | 单份原始 SBOM/report 上限；OCI 同时用作平台原始文档总量和合并 SBOM 上限 |
+| `KKREPO_SCANNER_MAX_OUTPUT_BYTES` | `16777216` | 单份原始 SBOM/report 上限；OCI 同时用作平台原始文档总量和合并 SBOM 上限 |
 
 完整低级参数见
 [scanner adapter application.yml](../../scanner-adapter/src/main/resources/application.yml)。
 
 `MAX_RESPONSE_BYTES` 是传输 JSON envelope 上限，不等同于 scanner 原始输出上限。
-kkRepo 直接从有界流解析 envelope，不再额外保留一份完整响应字节数组。共享响应内存预算
-按每个存活任务两倍 envelope 预留内存，并据此计算节点内并发；预算租约会一直持有到校验
-与持久化结束。若提高 `KKREPO_SCANNER_MAX_OUTPUT_BYTES`，必须同步为 Base64 膨胀和投影
-提高 envelope，并一起提高内存预算和 JVM 堆。内存预算必须至少为 envelope 的两倍，且
-不得超过 JVM 最大堆的一半。
+kkRepo 直接从有界流解析 envelope，不再额外保留一份完整响应字节数组；解析过程中还会
+强制执行 token、嵌套深度、字段名、字符串、component/finding 投影、嵌套列表和属性数量
+上限。adapter 返回的任意 `summary` 对象不会被物化，内嵌原始 SBOM/report 也改用 token
+流校验 schema，不再构造第二份 JSON tree。component 与 finding 投影分别最多 4096 和
+2048 条；engine 原始结果超过上限时仍保留不可变原始文档，但策略计算会明确标记为
+partial。
+
+共享响应内存预算按受约束的 envelope 推导单任务预留：
+`3 * MAX_RESPONSE_BYTES + 256 * MAX_RESPONSE_TOKENS`。byte 项覆盖 UTF-8/Base64 临时缓冲
+和文档防御性复制，token 项覆盖解码后的 record、集合、引用和标量；预算租约一直持有到
+校验与持久化结束。若提高 `KKREPO_SCANNER_MAX_OUTPUT_BYTES`，必须同步为 Base64 膨胀和
+投影提高 envelope，并一起提高内存预算和 JVM 堆。预算必须至少容纳一个推导后的预留，
+且不得超过 JVM 最大堆的一半。
 
 ## 监控与告警
 

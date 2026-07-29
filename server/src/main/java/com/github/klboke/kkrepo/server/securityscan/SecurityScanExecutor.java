@@ -1,6 +1,8 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.core.StreamReadConstraints;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
@@ -55,8 +57,10 @@ import org.springframework.stereotype.Service;
 /** Catalog -> immutable CycloneDX -> Match pipeline for ordinary and OCI subjects. */
 @Service
 public class SecurityScanExecutor {
-  private static final int MAX_PROJECTED_COMPONENTS = 100_000;
-  private static final int MAX_PROJECTED_FINDINGS = 100_000;
+  private static final int MAX_DOCUMENT_TOKENS = 2_000_000;
+  private static final int MAX_DOCUMENT_NESTING_DEPTH = 256;
+  private static final int MAX_DOCUMENT_STRING_LENGTH = 64 * 1024;
+  private static final int MAX_DOCUMENT_NAME_LENGTH = 4 * 1024;
 
   private final SecurityScanDao scans;
   private final AssetDao assets;
@@ -70,7 +74,7 @@ public class SecurityScanExecutor {
   private final SecurityScanFinalizer finalizer;
   private final DockerAuthService dockerAuth;
   private final SecurityScanningProperties properties;
-  private final ObjectMapper objectMapper;
+  private final ObjectMapper documentObjectMapper;
   private final SecurityScanMetrics metrics;
   private final SecurityScanRepositoryScope repositoryScope;
 
@@ -102,7 +106,16 @@ public class SecurityScanExecutor {
     this.finalizer = finalizer;
     this.dockerAuth = dockerAuth;
     this.properties = properties;
-    this.objectMapper = objectMapper;
+    this.documentObjectMapper = objectMapper.copy();
+    this.documentObjectMapper.getFactory().setStreamReadConstraints(
+        StreamReadConstraints.builder()
+            .maxDocumentLength(properties.getMaxResponseBytes())
+            .maxTokenCount(MAX_DOCUMENT_TOKENS)
+            .maxNestingDepth(MAX_DOCUMENT_NESTING_DEPTH)
+            .maxNumberLength(1_000)
+            .maxStringLength(MAX_DOCUMENT_STRING_LENGTH)
+            .maxNameLength(MAX_DOCUMENT_NAME_LENGTH)
+            .build());
     this.metrics = metrics;
     this.repositoryScope = repositoryScope;
   }
@@ -231,22 +244,17 @@ public class SecurityScanExecutor {
     MatchResponse match = response.match();
     ScanCompleteness completeness = response.missingPlatforms().isEmpty()
         ? match.completeness() : ScanCompleteness.PARTIAL;
-    MatchResponse normalized = new MatchResponse(
-        match.adapterName(),
-        match.adapterVersion(),
-        match.engineName(),
-        match.engineVersion(),
-        match.vulnerabilityDatabaseRevision(),
-        match.vulnerabilityDatabaseUpdatedAt(),
-        match.capabilityDigest(),
-        completeness,
-        match.reportJson(),
-        match.findings(),
-        mergeSummary(match.summary(), Map.of(
-            "scannedPlatforms", response.scannedPlatforms(),
-            "missingPlatforms", response.missingPlatforms())));
     return persistAndFinalizeMatch(
-        task, profile, config, subject, sbom, normalized, observedSnapshot);
+        task,
+        profile,
+        config,
+        subject,
+        sbom,
+        match,
+        observedSnapshot,
+        response.scannedPlatforms(),
+        response.missingPlatforms(),
+        completeness);
   }
 
   private Sbom resolveSbom(
@@ -334,7 +342,8 @@ public class SecurityScanExecutor {
           profile.configurationDigest(),
           scannedPlatforms,
           missingPlatforms);
-      int projectedCount = Math.min(response.components().size(), MAX_PROJECTED_COMPONENTS);
+      int projectedCount = Math.min(
+          response.components().size(), ScannerContract.MAX_COMPONENT_PROJECTION_COUNT);
       boolean inventoryComplete = response.completeness() == ScanCompleteness.COMPLETE
           && response.componentCount() <= projectedCount;
       Sbom proposed = new Sbom(
@@ -436,11 +445,33 @@ public class SecurityScanExecutor {
       Sbom sbom,
       MatchResponse response,
       ScannerSnapshot readinessSnapshot) {
+    return persistAndFinalizeMatch(
+        task,
+        profile,
+        config,
+        subject,
+        sbom,
+        response,
+        readinessSnapshot,
+        stringList(response.summary().get("scannedPlatforms")),
+        stringList(response.summary().get("missingPlatforms")),
+        response.completeness());
+  }
+
+  private ScanRun persistAndFinalizeMatch(
+      ScanTask task,
+      ScanProfile profile,
+      RepositoryScanConfig config,
+      ScanSubject subject,
+      Sbom sbom,
+      MatchResponse response,
+      ScannerSnapshot readinessSnapshot,
+      List<String> scannedPlatforms,
+      List<String> missingPlatforms,
+      ScanCompleteness responseCompleteness) {
     validateMatchResponse(response);
     ScannerSnapshot actualSnapshot = snapshots.snapshotFor(response, readinessSnapshot);
     requireRequestedSnapshot(task, actualSnapshot);
-    List<String> scannedPlatforms = stringList(response.summary().get("scannedPlatforms"));
-    List<String> missingPlatforms = stringList(response.summary().get("missingPlatforms"));
     String fingerprint = matchFingerprint(task, ScanFingerprints.match(
         sbom.documentSha256(),
         sbom.inventoryComplete(),
@@ -464,11 +495,11 @@ public class SecurityScanExecutor {
         response.reportJson(),
         "application/json");
     List<ScannerContract.Finding> normalizedFindings = response.findings().stream()
-        .limit(MAX_PROJECTED_FINDINGS)
+        .limit(ScannerContract.MAX_FINDING_PROJECTION_COUNT)
         .toList();
     boolean truncated = response.findings().size() > normalizedFindings.size();
     ScanCompleteness completeness =
-        combinedCompleteness(response.completeness(), sbom.inventoryComplete(), truncated);
+        combinedCompleteness(responseCompleteness, sbom.inventoryComplete(), truncated);
     ScanState status = completeness == ScanCompleteness.COMPLETE
         ? ScanState.COMPLETE : ScanState.PARTIAL;
     Map<Severity, Integer> counts = severityCounts(normalizedFindings);
@@ -615,15 +646,40 @@ public class SecurityScanExecutor {
   }
 
   private void validateJsonDocument(byte[] bytes, String code, boolean cyclonedx) {
-    try {
-      JsonNode root = objectMapper.readTree(bytes);
-      if (root == null || !root.isObject()
-          || (cyclonedx && !"CycloneDX".equalsIgnoreCase(root.path("bomFormat").asText()))) {
-        throw new ScannerAdapterException(code, "Scanner document schema is invalid", false);
+    try (JsonParser parser = documentObjectMapper.getFactory().createParser(bytes)) {
+      if (parser.nextToken() != JsonToken.START_OBJECT) {
+        throw invalidDocumentSchema(code);
+      }
+      boolean recognizedCycloneDx = !cyclonedx;
+      JsonToken token;
+      while ((token = parser.nextToken()) != JsonToken.END_OBJECT) {
+        if (token != JsonToken.FIELD_NAME) {
+          throw invalidDocumentSchema(code);
+        }
+        String field = parser.currentName();
+        JsonToken value = parser.nextToken();
+        if (value == null) {
+          throw invalidDocumentSchema(code);
+        }
+        if (cyclonedx
+            && "bomFormat".equals(field)
+            && value == JsonToken.VALUE_STRING
+            && "CycloneDX".equalsIgnoreCase(parser.getValueAsString())) {
+          recognizedCycloneDx = true;
+        }
+        // Validate every nested token without materializing a second document tree.
+        parser.skipChildren();
+      }
+      if (!recognizedCycloneDx || parser.nextToken() != null) {
+        throw invalidDocumentSchema(code);
       }
     } catch (IOException e) {
       throw new ScannerAdapterException(code, "Scanner document is invalid JSON", false, e);
     }
+  }
+
+  private static ScannerAdapterException invalidDocumentSchema(String code) {
+    return new ScannerAdapterException(code, "Scanner document schema is invalid", false);
   }
 
   private static ScanFinding toFinding(ScannerContract.Finding finding, Instant now) {
@@ -694,14 +750,6 @@ public class SecurityScanExecutor {
         profile.maxSingleFileBytes(),
         profile.maxNestedDepth(),
         profile.timeoutSeconds());
-  }
-
-  private static Map<String, Object> mergeSummary(
-      Map<String, Object> original, Map<String, Object> additional) {
-    Map<String, Object> merged = new java.util.LinkedHashMap<>();
-    if (original != null) merged.putAll(original);
-    merged.putAll(additional);
-    return Map.copyOf(merged);
   }
 
   private static String stringDetail(

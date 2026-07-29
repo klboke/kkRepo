@@ -350,6 +350,26 @@ class SecurityScanExecutorTest {
         "adapter", "1", "grype", "", "", null, "cap",
         ScanCompleteness.COMPLETE, new byte[0], List.of(), Map.of()));
     assertCode("SCANNER_PROVENANCE_MISSING", () -> invalidMatch.executor.execute(invalidMatch.task));
+
+    Fixture trailingReport = new Fixture(ScanStage.CATALOG_AND_MATCH, SubjectKind.ASSET_BLOB);
+    when(trailingReport.scans.findReusableSbom(any(), any(), anyString(), anyString(), anyString()))
+        .thenReturn(Optional.of(storedSbom()));
+    MatchResponse valid = matchResponse();
+    when(trailingReport.adapter.match(any(), any())).thenReturn(new MatchResponse(
+        valid.adapterName(),
+        valid.adapterVersion(),
+        valid.engineName(),
+        valid.engineVersion(),
+        valid.vulnerabilityDatabaseRevision(),
+        valid.vulnerabilityDatabaseUpdatedAt(),
+        valid.capabilityDigest(),
+        valid.completeness(),
+        "{} {}".getBytes(),
+        valid.findings(),
+        valid.summary()));
+    assertCode(
+        "SCANNER_REPORT_INVALID_JSON",
+        () -> trailingReport.executor.execute(trailingReport.task));
   }
 
   private static ScannerAdapterException assertCode(String code, Runnable invocation) {

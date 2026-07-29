@@ -401,8 +401,9 @@ not depend on a disabled browser button.
 | `KKREPO_SECURITY_SCANNING_OCI_REGISTRY_URL` | `http://kkrepo:8080` | kkRepo URL used by the scanner for exact OCI digests |
 | `KKREPO_SECURITY_SCANNING_DATABASE_MAX_AGE` | `48h` | Maximum operational vulnerability-database age |
 | `KKREPO_SECURITY_SCANNING_OBSERVATION_MAX_AGE` | `2m` | Maximum scanner snapshot observation age |
-| `KKREPO_SECURITY_SCANNING_MAX_RESPONSE_BYTES` | `134217728` | Maximum adapter JSON response accepted by kkRepo, including raw-document Base64, JSON fields, and projections |
-| `KKREPO_SECURITY_SCANNING_RESPONSE_MEMORY_BUDGET_BYTES` | `268435456` | Process-local admission budget for decoded scanner responses; must be at least twice the response limit and no more than half the JVM max heap |
+| `KKREPO_SECURITY_SCANNING_MAX_RESPONSE_BYTES` | `67108864` | Maximum adapter JSON response accepted by kkRepo, including raw-document Base64, JSON fields, and projections |
+| `KKREPO_SECURITY_SCANNING_MAX_RESPONSE_TOKENS` | `262144` | Aggregate JSON-token ceiling enforced while decoding one adapter response |
+| `KKREPO_SECURITY_SCANNING_RESPONSE_MEMORY_BUDGET_BYTES` | `268435456` | Process-local admission budget derived from the byte and token ceilings; it must admit one bounded response and remain no more than half the JVM max heap |
 | `KKREPO_SECURITY_SCANNING_WORKER_BATCH_SIZE` | `4` | Tasks claimed per worker cycle |
 | `KKREPO_SECURITY_SCANNING_WORKER_MAX_ATTEMPTS` | `5` | Automatic attempt limit |
 | `KKREPO_SECURITY_SCANNING_METRICS_COUNT_LIMIT` | `10000` | Gauge saturation limit that avoids unbounded counts |
@@ -426,7 +427,7 @@ and OCI registry URL.
 | `KKREPO_SCANNER_ADMISSION_TIMEOUT` | `1s` | Wait for scanner capacity |
 | `KKREPO_SCANNER_RETRY_AFTER_SECONDS` | `5` | Retry hint after capacity rejection |
 | `KKREPO_SCANNER_MAX_INPUT_BYTES` | `2147483648` | Adapter input hard limit |
-| `KKREPO_SCANNER_MAX_OUTPUT_BYTES` | `33554432` | Per raw SBOM/report limit; OCI also applies it to aggregate platform inputs and the merged SBOM |
+| `KKREPO_SCANNER_MAX_OUTPUT_BYTES` | `16777216` | Per raw SBOM/report limit; OCI also applies it to aggregate platform inputs and the merged SBOM |
 
 See the
 [scanner adapter application.yml](../../scanner-adapter/src/main/resources/application.yml) for
@@ -434,12 +435,20 @@ all low-level values.
 
 `MAX_RESPONSE_BYTES` bounds the transport JSON envelope and is intentionally separate from the
 scanner's raw-output limit. kkRepo parses the envelope directly from a bounded stream instead of
-first retaining another complete response byte array. The shared response-memory budget reserves
-twice the envelope for each live task and derives its local concurrency from that reservation; the
-lease remains held until validation and persistence complete. If `KKREPO_SCANNER_MAX_OUTPUT_BYTES`
-is increased, raise the envelope for Base64 expansion and projections, then raise the memory budget
-and JVM heap together. The budget must remain at least twice the envelope and no more than half the
-JVM max heap.
+first retaining another complete response byte array. Parsing also enforces token, nesting, field
+name, string, component/finding projection, nested-list, and property-count limits before a result
+is accepted. Arbitrary adapter `summary` graphs are not materialized, and the embedded raw SBOM and
+report are schema-checked by streaming tokens instead of constructing a second JSON tree. Component
+and finding projections are capped at 4,096 and 2,048 entries respectively; a larger engine result
+is retained as the immutable raw document but is explicitly marked partial for policy evaluation.
+
+The shared response-memory budget derives a per-task reservation from the enforced envelope:
+`3 * MAX_RESPONSE_BYTES + 256 * MAX_RESPONSE_TOKENS`. The byte term covers transient UTF-8/Base64
+buffers and defensive document copies; the token term covers decoded records, collections,
+references, and scalars. The lease remains held until validation and persistence complete. If
+`KKREPO_SCANNER_MAX_OUTPUT_BYTES` is increased, raise the response envelope for Base64 expansion
+and projections, then raise the memory budget and JVM heap together. The budget must admit at least
+one derived reservation and remain no more than half the JVM max heap.
 
 ## Monitoring And Alerts
 

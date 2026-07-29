@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.securityscan;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -97,6 +98,8 @@ class SecurityScanSchedulingServicesTest {
     when(scans.findProfile(70L)).thenReturn(Optional.of(scannable));
     when(scans.findProfile(80L)).thenReturn(Optional.of(rejected));
     when(scans.findProfile(90L)).thenReturn(Optional.of(notApplicable));
+    when(scans.latestScannerSnapshot()).thenReturn(Optional.of(
+        snapshot(99L, false, "db-failed", Instant.now(), "failed-snapshot")));
     when(classifier.classify(any(), any(), eq(scannable)))
         .thenReturn(classification(CandidateDisposition.SCANNABLE));
     when(classifier.classify(any(), any(), eq(rejected)))
@@ -109,7 +112,11 @@ class SecurityScanSchedulingServicesTest {
     assertEquals(9, service.processBatch());
 
     verify(scans, org.mockito.Mockito.times(9)).markCandidateEnqueued(anyLong(), eq(2L));
-    verify(scans).createTask(any(TaskDraft.class));
+    ArgumentCaptor<TaskDraft> draft = ArgumentCaptor.forClass(TaskDraft.class);
+    verify(scans).createTask(draft.capture());
+    assertNull(
+        draft.getValue().requestedScannerSnapshotId(),
+        "a failed observation must leave new work unpinned for recovery");
     verify(scans, org.mockito.Mockito.times(4))
         .upsertAssetStateIfCurrent(any(AssetSecurityState.class));
   }
@@ -153,6 +160,8 @@ class SecurityScanSchedulingServicesTest {
     assertNotEquals(
         drafts.getAllValues().getFirst().requestUuid(),
         drafts.getAllValues().getLast().requestUuid());
+    assertNull(drafts.getAllValues().getFirst().requestedScannerSnapshotId());
+    assertNull(drafts.getAllValues().getLast().requestedScannerSnapshotId());
   }
 
   @Test

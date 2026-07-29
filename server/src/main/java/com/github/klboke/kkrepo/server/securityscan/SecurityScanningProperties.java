@@ -14,7 +14,8 @@ public class SecurityScanningProperties {
   private final Adapter adapter = new Adapter();
   private final Worker worker = new Worker();
   private final Retention retention = new Retention();
-  private long maxResponseBytes = 128L * 1024 * 1024;
+  private long maxResponseBytes = 64L * 1024 * 1024;
+  private int maxResponseTokens = 262_144;
   private long responseMemoryBudgetBytes = 256L * 1024 * 1024;
   private int metricsCountLimit = 10_000;
   private Duration scannerDatabaseMaxAge = Duration.ofHours(48);
@@ -47,6 +48,14 @@ public class SecurityScanningProperties {
 
   public void setMaxResponseBytes(long maxResponseBytes) {
     this.maxResponseBytes = Math.max(1024, maxResponseBytes);
+  }
+
+  public int getMaxResponseTokens() {
+    return maxResponseTokens;
+  }
+
+  public void setMaxResponseTokens(int maxResponseTokens) {
+    this.maxResponseTokens = Math.max(1024, maxResponseTokens);
   }
 
   public long getResponseMemoryBudgetBytes() {

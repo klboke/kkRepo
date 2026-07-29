@@ -618,6 +618,13 @@ asset + content generation + profile revision + stage + requested scanner snapsh
 profile 范围扩大等 backfill 会刷新 marker，从而得到新的 UUID，不能错误复用旧的
 `SUCCEEDED` 终态任务并把 asset 永久留在 `PENDING`。
 
+普通 content-change、manual 和 policy/max-age 任务不在调度时绑定最近一次 scanner
+观测；worker 真正开始执行时才获取并验证 ready snapshot，因此短暂不可用期间写入的
+任务会按可重试语义等待恢复，不会被 `ready=false` 的失败观测永久钉死。只有由漏洞库
+变更 watcher 创建的 `MATCH_ONLY` rematch task 显式携带
+`requested_scanner_snapshot_id`，并在 HTTP 请求、响应 provenance 和最终数据库
+snapshot ID 三处校验该指定快照。
+
 手动强制扫描增加 request UUID，因此可以有新的审计记录；普通重复点击应通过
 Idempotency-Key 合并。
 
@@ -1484,7 +1491,8 @@ kkrepo.security-scanning.adapter.base-url=http://scanner:8080
 # 多副本 Kubernetes 使用有序稳定地址；非空时覆盖 base-url
 kkrepo.security-scanning.adapter.base-urls=
 kkrepo.security-scanning.metrics-count-limit=10000
-kkrepo.security-scanning.max-response-bytes=134217728
+kkrepo.security-scanning.max-response-bytes=67108864
+kkrepo.security-scanning.max-response-tokens=262144
 kkrepo.security-scanning.response-memory-budget-bytes=268435456
 kkrepo.security-scanning.worker.batch-size=4
 kkrepo.security-scanning.worker.lease-seconds=300
@@ -1512,17 +1520,30 @@ kkrepo.scanner.max-queued-scans=4
 kkrepo.scanner.admission-timeout=1s
 kkrepo.scanner.retry-after-seconds=5
 kkrepo.scanner.database-lock-timeout=2s
-kkrepo.scanner.max-output-bytes=33554432
+kkrepo.scanner.max-output-bytes=16777216
 kkrepo.scanner.vulnerability-database-update-interval=6h
 kkrepo.scanner.vulnerability-database-update-check-interval=1m
 ```
 
 scanner 成功响应从有界流直接反序列化，不在 kkRepo 内额外保留完整 transport
-`byte[]`。每个执行中的扫描任务按 `2 * max-response-bytes` 占用节点内共享准入预算，
-预算租约覆盖解析、校验和持久化全过程。节点实际并发取
-`min(worker.batch-size, response-memory-budget-bytes / (2 * max-response-bytes))`；
-配置无法容纳一个响应，或预算超过 JVM 最大堆一半时，启用扫描的节点拒绝启动。该预算
-仅保护节点本地堆，任务所有权和重试正确性仍由 MySQL 租约负责。
+`byte[]`。解析器同时约束 response byte、token 总量、嵌套深度、字段名、字符串、
+component/finding 投影数量、嵌套列表和 component property 数量；不物化 adapter
+返回的任意 `summary` graph。内嵌原始 SBOM/report 使用流式 token 校验完整 JSON 和
+根 schema，不再调用 `readTree` 构造第二份文档对象树。component/finding 投影硬上限
+分别为 4096/2048；超出时保留原始不可变文档，但结果降级为 `PARTIAL`，由仓库
+`partial_action` 决定下载语义。
+
+每个执行中任务的节点内共享准入预留按下式从上述硬上限推导：
+
+```text
+reservation = 3 * max-response-bytes + 256 * max-response-tokens
+concurrency = min(worker.batch-size, response-memory-budget-bytes / reservation)
+```
+
+其中 byte 项覆盖 UTF-8/Base64 临时缓冲和 record 对文档 `byte[]` 的防御性复制，token
+项覆盖 record、集合、引用和标量对象开销。预算租约覆盖解析、校验和持久化全过程。
+配置无法容纳一个推导后的 reservation，或预算超过 JVM 最大堆一半时，启用扫描的节点
+拒绝启动。该预算仅保护节点本地堆，任务所有权和重试正确性仍由 MySQL 租约负责。
 
 `kkrepo.security-scanning.enabled` 是 kkRepo 节点的部署能力 gate：
 

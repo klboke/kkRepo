@@ -261,8 +261,7 @@ public class SecurityPolicyReconciler {
         target.contentGeneration(),
         profile.id(),
         profile.revision(),
-        stage == ScanStage.POLICY_ONLY
-            ? null : scans.latestScannerSnapshot().map(SecurityScanDao.ScannerSnapshot::id).orElse(null),
+        null, // only vulnerability-DB rematch tasks are pinned to a requested snapshot
         stage,
         resultAgeExpired ? RequestReason.MAX_AGE_EXPIRED : RequestReason.POLICY_CHANGED,
         20,

@@ -12,10 +12,12 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanCompleteness;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.TargetClassification;
 import com.github.klboke.kkrepo.security.scan.ScanSubject;
 import com.github.klboke.kkrepo.security.scan.ScannerArtifactType;
+import com.github.klboke.kkrepo.security.scan.ScannerContract;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Capabilities;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.CatalogRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.CatalogResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.CancellationResponse;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.Component;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanRequest;
@@ -573,6 +575,89 @@ class HttpSecurityScannerAdapterTest {
   }
 
   @Test
+  void boundsDecodedJsonComplexityAndIgnoresAdvisorySummaryGraphs() throws Exception {
+    ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+    String manyOperations = java.util.stream.IntStream.range(0, 1_100)
+        .mapToObj(ignored -> "\"operation\"")
+        .collect(java.util.stream.Collectors.joining(","));
+    byte[] excessiveTokens = ("""
+        {"apiVersion":"v1","adapterName":"adapter","adapterVersion":"1",
+         "operations":[%s],"targetClassifications":[],"maxInputBytes":1,
+         "maxOutputBytes":1,"capabilityDigest":"digest"}
+        """.formatted(manyOperations)).getBytes();
+    start(exchange -> respond(exchange, 200, excessiveTokens));
+
+    ScannerAdapterException complexity = assertThrows(
+        ScannerAdapterException.class,
+        () -> adapter(mapper, 64 * 1024, 1_024).capabilities());
+    assertEquals("SCANNER_RESPONSE_COMPLEXITY_LIMIT", complexity.code());
+    stopServer();
+    server = null;
+
+    MatchResponse base = match();
+    MatchResponse withAdvisorySummary = new MatchResponse(
+        base.adapterName(),
+        base.adapterVersion(),
+        base.engineName(),
+        base.engineVersion(),
+        base.vulnerabilityDatabaseRevision(),
+        base.vulnerabilityDatabaseUpdatedAt(),
+        base.capabilityDigest(),
+        base.completeness(),
+        base.reportJson(),
+        base.findings(),
+        Map.of("arbitrary", Map.of("nested", List.of("not", "materialized"))));
+    start(exchange -> respond(exchange, 200, mapper.writeValueAsBytes(withAdvisorySummary)));
+
+    MatchResponse decoded = adapter(mapper, 64 * 1024, 4_096).match(
+        new MatchRequest("v1", "run", "key", "b".repeat(64), "config", limits()),
+        () -> new ByteArrayInputStream("{}".getBytes()));
+    assertTrue(decoded.summary().isEmpty());
+  }
+
+  @Test
+  void rejectsAReplicaProjectionBeyondTheSharedContractLimit() throws Exception {
+    ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+    List<Component> excessiveComponents = java.util.stream.IntStream.rangeClosed(
+            0, ScannerContract.MAX_COMPONENT_PROJECTION_COUNT)
+        .mapToObj(index -> new Component(
+            "component-" + index,
+            null,
+            "library",
+            null,
+            "component-" + index,
+            null,
+            null,
+            List.of(),
+            List.of(),
+            Map.of()))
+        .toList();
+    CatalogResponse excessive = new CatalogResponse(
+        "adapter",
+        "1",
+        "syft",
+        "1",
+        "cap",
+        "a".repeat(64),
+        ScanCompleteness.PARTIAL,
+        "CycloneDX",
+        "1.6",
+        excessiveComponents.size(),
+        0,
+        "{\"bomFormat\":\"CycloneDX\"}".getBytes(),
+        excessiveComponents,
+        Map.of());
+    start(exchange -> respond(exchange, 200, mapper.writeValueAsBytes(excessive)));
+
+    ScannerAdapterException projection = assertThrows(
+        ScannerAdapterException.class,
+        () -> adapter(mapper, 4 * 1024 * 1024, 500_000).catalog(
+            new CatalogRequest("v1", "run", "key", subject(null), "config", limits()),
+            () -> new ByteArrayInputStream("artifact".getBytes())));
+    assertEquals("SCANNER_RESPONSE_PROJECTION_LIMIT", projection.code());
+  }
+
+  @Test
   void validatesBaseUrlsAndTranslatesInputAndConnectionFailures() throws Exception {
     ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
     for (String invalid : List.of(
@@ -611,11 +696,17 @@ class HttpSecurityScannerAdapterTest {
   }
 
   private HttpSecurityScannerAdapter adapter(ObjectMapper mapper, long maxResponseBytes) {
+    return adapter(mapper, maxResponseBytes, 262_144);
+  }
+
+  private HttpSecurityScannerAdapter adapter(
+      ObjectMapper mapper, long maxResponseBytes, int maxResponseTokens) {
     SecurityScanningProperties properties = new SecurityScanningProperties();
     properties.getAdapter().setBaseUrl(
         "http://127.0.0.1:" + server.getAddress().getPort() + "/");
     properties.getAdapter().setServiceCredential("secret");
     properties.setMaxResponseBytes(maxResponseBytes);
+    properties.setMaxResponseTokens(maxResponseTokens);
     return new HttpSecurityScannerAdapter(mapper, properties);
   }
 

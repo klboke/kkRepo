@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanCompleteness;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
+import com.github.klboke.kkrepo.security.scan.ScannerContract;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.CatalogResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Component;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Finding;
@@ -48,7 +49,7 @@ public class ScannerDocumentMapper {
   private static final int MAX_TITLE = 1_024;
   private static final int MAX_SOURCE_STATUS = 64;
   private static final int MAX_DESCRIPTION_UTF8_BYTES = 65_535;
-  private static final int MAX_LIST_ITEMS = 100_000;
+  private static final int MAX_DEPENDENCY_PROJECTION_COUNT = 100_000;
 
   private final ObjectMapper mapper;
 
@@ -80,7 +81,7 @@ public class ScannerDocumentMapper {
       JsonNode nodes = root.path("components");
       if (nodes.isArray()) {
         for (JsonNode node : nodes) {
-          if (components.size() >= MAX_LIST_ITEMS) break;
+          if (components.size() >= ScannerContract.MAX_COMPONENT_PROJECTION_COUNT) break;
           Component component = component(node);
           components.putIfAbsent(component.componentRef(), component);
         }
@@ -90,9 +91,9 @@ public class ScannerDocumentMapper {
       if (dependencies.isArray()) {
         for (JsonNode dependency : dependencies) {
           dependencyCount += Math.min(
-              MAX_LIST_ITEMS - dependencyCount,
+              MAX_DEPENDENCY_PROJECTION_COUNT - dependencyCount,
               dependency.path("dependsOn").isArray() ? dependency.path("dependsOn").size() : 0);
-          if (dependencyCount >= MAX_LIST_ITEMS) break;
+          if (dependencyCount >= MAX_DEPENDENCY_PROJECTION_COUNT) break;
         }
       }
       Map<String, Object> summary = new LinkedHashMap<>();
@@ -131,7 +132,7 @@ public class ScannerDocumentMapper {
       JsonNode matches = root.path("matches");
       if (matches.isArray()) {
         for (JsonNode match : matches) {
-          if (findings.size() >= MAX_LIST_ITEMS) break;
+          if (findings.size() >= ScannerContract.MAX_FINDING_PROJECTION_COUNT) break;
           findings.add(finding(match));
         }
       }

@@ -7,7 +7,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.github.klboke.kkrepo.scanner.ScannerDocumentMapper.DatabaseProvenance;
 import com.github.klboke.kkrepo.scanner.ScannerDocumentMapper.PlatformSbom;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanCompleteness;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
+import com.github.klboke.kkrepo.security.scan.ScannerContract;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
@@ -70,6 +72,44 @@ class ScannerDocumentMapperTest {
     assertThat(response.findings().getFirst().severity()).isEqualTo(Severity.HIGH);
     assertThat(response.findings().getFirst().fixedVersions()).containsExactly("1.1");
     assertThat(response.findings().getFirst().findingKey()).hasSize(64);
+  }
+
+  @Test
+  void truncatesLargeEngineProjectionsBeforeSerializingTheAdapterResponse() throws Exception {
+    JsonMapper json = JsonMapper.builder().build();
+    var bom = json.createObjectNode();
+    bom.put("bomFormat", "CycloneDX");
+    var components = bom.putArray("components");
+    for (int index = 0;
+        index < ScannerContract.MAX_COMPONENT_PROJECTION_COUNT + 1;
+        index++) {
+      components.addObject()
+          .put("bom-ref", "component-" + index)
+          .put("name", "component-" + index);
+    }
+    var catalog =
+        mapper.catalog(json.writeValueAsBytes(bom), "a".repeat(64), "1", "cap", Map.of());
+    assertThat(catalog.components())
+        .hasSize(ScannerContract.MAX_COMPONENT_PROJECTION_COUNT);
+    assertThat(catalog.completeness()).isEqualTo(ScanCompleteness.PARTIAL);
+
+    var report = json.createObjectNode();
+    var matches = report.putArray("matches");
+    for (int index = 0;
+        index < ScannerContract.MAX_FINDING_PROJECTION_COUNT + 1;
+        index++) {
+      var match = matches.addObject();
+      match.putObject("vulnerability").put("id", "CVE-" + index);
+      match.putObject("artifact").put("name", "component-" + index);
+    }
+    var findings = mapper.match(
+        json.writeValueAsBytes(report),
+        "1",
+        new DatabaseProvenance("db", Instant.EPOCH),
+        "cap");
+    assertThat(findings.findings())
+        .hasSize(ScannerContract.MAX_FINDING_PROJECTION_COUNT);
+    assertThat(findings.completeness()).isEqualTo(ScanCompleteness.PARTIAL);
   }
 
   @Test
