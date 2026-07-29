@@ -23,6 +23,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 public class NexusRestClient {
@@ -1313,6 +1314,59 @@ public class NexusRestClient {
     throw new IOException("Nexus repository asset " + requestPath + " did not return a response");
   }
 
+  /**
+   * Reads the public IDs exposed by Nexus for one exact repository path. Duplicate page entries
+   * are collapsed only when their ID and verification fields are identical.
+   */
+  public List<NexusPublicAsset> findPublicAssets(String repositoryName, String path)
+      throws IOException, InterruptedException {
+    if (repositoryName == null || repositoryName.isBlank() || path == null || path.isBlank()) {
+      throw new IllegalArgumentException("Repository and asset path are required");
+    }
+    String continuationToken = null;
+    Set<String> seenTokens = new java.util.HashSet<>();
+    LinkedHashMap<String, NexusPublicAsset> byId = new LinkedHashMap<>();
+    do {
+      String requestPath = "/service/rest/v1/search/assets?repository="
+          + encodePathSegment(repositoryName)
+          + "&name="
+          + encodePathSegment(path)
+          + (continuationToken == null
+              ? ""
+              : "&continuationToken=" + encodePathSegment(continuationToken));
+      Map<String, Object> page = getMap(requestPath);
+      for (Map<String, Object> item : objectMaps(page.get("items"))) {
+        String itemRepository = firstString(item, "repository");
+        String itemPath = firstString(item, "path");
+        if (!repositoryName.equals(itemRepository) || !path.equals(itemPath)) {
+          continue;
+        }
+        String id = firstString(item, "id");
+        if (id == null || id.isBlank()) {
+          throw new IOException("Nexus exact asset search returned an item without a public ID for "
+              + repositoryName + "/" + path);
+        }
+        Map<String, Object> checksum = objectValue(item.get("checksum"));
+        NexusPublicAsset candidate = new NexusPublicAsset(
+            id,
+            itemRepository,
+            itemPath,
+            firstString(checksum, "sha1"),
+            firstString(item, "downloadUrl"));
+        NexusPublicAsset previous = byId.putIfAbsent(id, candidate);
+        if (previous != null && !previous.equals(candidate)) {
+          throw new IOException("Nexus exact asset search returned conflicting entries for public ID " + id);
+        }
+      }
+      continuationToken = string(page.get("continuationToken"));
+      if (continuationToken != null && !seenTokens.add(continuationToken)) {
+        throw new IOException("Nexus exact asset search repeated a continuation token for "
+            + repositoryName + "/" + path);
+      }
+    } while (continuationToken != null);
+    return List.copyOf(byId.values());
+  }
+
   static String repositoryAssetAccept(String path) {
     if (path == null) {
       return "*/*";
@@ -2043,6 +2097,14 @@ public class NexusRestClient {
       attributes = safeMap(attributes);
       componentAttributes = safeMap(componentAttributes);
     }
+  }
+
+  public record NexusPublicAsset(
+      String id,
+      String repository,
+      String path,
+      String sha1,
+      String downloadUrl) {
   }
 
   private record SecurityExportResult(

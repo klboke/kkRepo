@@ -37,6 +37,7 @@ public class NexusAssetManagementService {
   private final RawHostedService rawHostedService;
   private final NexusRepositoryManagementAuthorizer authorizer;
   private final NexusAssetIdCodec idCodec;
+  private final AssetPublicIdService publicIdService;
   private final ForwardedHeaderPolicy forwardedHeaderPolicy;
 
   public NexusAssetManagementService(
@@ -46,6 +47,7 @@ public class NexusAssetManagementService {
       RawHostedService rawHostedService,
       NexusRepositoryManagementAuthorizer authorizer,
       NexusAssetIdCodec idCodec,
+      AssetPublicIdService publicIdService,
       ForwardedHeaderPolicy forwardedHeaderPolicy) {
     this.repositoryDao = repositoryDao;
     this.assetDao = assetDao;
@@ -53,10 +55,11 @@ public class NexusAssetManagementService {
     this.rawHostedService = rawHostedService;
     this.authorizer = authorizer;
     this.idCodec = idCodec;
+    this.publicIdService = publicIdService;
     this.forwardedHeaderPolicy = forwardedHeaderPolicy;
   }
 
-  @Transactional(readOnly = true)
+  @Transactional
   public AssetPage search(
       String repositoryName,
       String name,
@@ -107,12 +110,16 @@ public class NexusAssetManagementService {
     return new AssetPage(List.copyOf(items), next);
   }
 
-  @Transactional(readOnly = true)
+  @Transactional
   public AssetView get(String encodedId, HttpServletRequest request) {
     DecodedAssetId decoded = idCodec.decodeAssetId(encodedId);
     RepositoryRecord repository = repositoryDao.findByName(decoded.repositoryName())
         .orElseThrow(AssetNotFoundException::new);
-    AssetWithBlob stored = assetDao.findAssetWithBlobById(decoded.assetId())
+    Long assetId = publicIdService.resolveAssetId(repository.id(), decoded.opaqueId());
+    if (assetId == null) {
+      throw new AssetNotFoundException();
+    }
+    AssetWithBlob stored = assetDao.findAssetWithBlobById(assetId)
         .filter(candidate -> belongsTo(candidate.asset(), repository))
         .orElseThrow(AssetNotFoundException::new);
     authorizer.requireRepositoryAction(
@@ -124,7 +131,11 @@ public class NexusAssetManagementService {
     DecodedAssetId decoded = idCodec.decodeAssetId(encodedId);
     RepositoryRecord repository = repositoryDao.findByName(decoded.repositoryName())
         .orElseThrow(AssetNotFoundException::new);
-    AssetRecord asset = assetDao.findAssetById(decoded.assetId())
+    Long assetId = publicIdService.resolveAssetId(repository.id(), decoded.opaqueId());
+    if (assetId == null) {
+      throw new AssetNotFoundException();
+    }
+    AssetRecord asset = assetDao.findAssetById(assetId)
         .filter(candidate -> belongsTo(candidate, repository))
         .orElseThrow(AssetNotFoundException::new);
     authorizer.requireRepositoryAction(request, repository, asset.path(), PermissionAction.DELETE);
@@ -144,7 +155,7 @@ public class NexusAssetManagementService {
     return new AssetView(
         downloadUrl(repository.name(), asset.path(), request),
         asset.path(),
-        idCodec.encodeAssetId(repository.name(), asset.id()),
+        publicIdService.nativePublicId(repository.name(), repository.id(), asset.id()),
         repository.name(),
         repository.format().id(),
         checksums(stored.blob()));

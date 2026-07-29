@@ -1,9 +1,12 @@
 package com.github.klboke.kkrepo.server.management;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -26,6 +29,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
 import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
+import java.lang.reflect.Method;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -34,6 +38,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.transaction.annotation.Transactional;
 
 class NexusAssetManagementServiceTest {
   private RepositoryDao repositoryDao;
@@ -42,6 +47,7 @@ class NexusAssetManagementServiceTest {
   private RawHostedService rawHostedService;
   private NexusRepositoryManagementAuthorizer authorizer;
   private NexusAssetIdCodec codec;
+  private AssetPublicIdService publicIdService;
   private NexusAssetManagementService service;
   private MockHttpServletRequest request;
 
@@ -53,10 +59,20 @@ class NexusAssetManagementServiceTest {
     rawHostedService = mock(RawHostedService.class);
     authorizer = mock(NexusRepositoryManagementAuthorizer.class);
     codec = new NexusAssetIdCodec();
+    publicIdService = mock(AssetPublicIdService.class);
+    when(publicIdService.nativePublicId(anyString(), anyLong(), anyLong()))
+        .thenAnswer(invocation -> codec.encodeAssetId(
+            invocation.getArgument(0), (Long) invocation.getArgument(2)));
+    when(publicIdService.resolveAssetId(anyLong(), anyString()))
+        .thenAnswer(invocation -> {
+          java.math.BigInteger value = new java.math.BigInteger(
+              (String) invocation.getArgument(1), 16);
+          return value.bitLength() <= 63 ? value.longValue() : null;
+        });
     ForwardedHeaderPolicy forwarded = mock(ForwardedHeaderPolicy.class);
     service = new NexusAssetManagementService(
         repositoryDao, assetDao, runtimeRegistry, rawHostedService,
-        authorizer, codec, forwarded);
+        authorizer, codec, publicIdService, forwarded);
     request = new MockHttpServletRequest("GET", "/service/rest/v1/search/assets");
     request.setContextPath("/kkrepo");
     when(forwarded.serverBaseUrl(request)).thenReturn("https://packages.example.test");
@@ -169,6 +185,33 @@ class NexusAssetManagementServiceTest {
 
     assertThrows(AssetNotFoundException.class,
         () -> service.get(codec.encodeAssetId(repository.name(), 77L), request));
+  }
+
+  @Test
+  void nexusHistoricalAliasCanResolveButUnknownValidIdReturnsNotFound() {
+    RepositoryRecord repository = repository(RepositoryFormat.RAW, RepositoryType.HOSTED);
+    AssetWithBlob stored = stored(12L, repository, "tool.zip");
+    String historicalOpaque = "fedcba98765432100123456789abcdef";
+    String historicalId = codec.encodeAssetId(repository.name(), historicalOpaque);
+    when(repositoryDao.findByName(repository.name())).thenReturn(Optional.of(repository));
+    when(publicIdService.resolveAssetId(repository.id(), historicalOpaque)).thenReturn(12L);
+    when(assetDao.findAssetWithBlobById(12L)).thenReturn(Optional.of(stored));
+
+    assertEquals(12L, new java.math.BigInteger(
+        codec.decodeAssetId(service.get(historicalId, request).id()).opaqueId(), 16).longValueExact());
+
+    String unknownOpaque = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    when(publicIdService.resolveAssetId(repository.id(), unknownOpaque)).thenReturn(null);
+    assertThrows(AssetNotFoundException.class,
+        () -> service.get(codec.encodeAssetId(repository.name(), unknownOpaque), request));
+  }
+
+  @Test
+  void getAllowsNativePublicIdBackfillWithinItsTransaction() throws Exception {
+    Method method = NexusAssetManagementService.class.getMethod(
+        "get", String.class, jakarta.servlet.http.HttpServletRequest.class);
+
+    assertFalse(method.getAnnotation(Transactional.class).readOnly());
   }
 
   private static RepositoryRecord repository(RepositoryFormat format, RepositoryType type) {

@@ -312,6 +312,17 @@ class NexusRestClientTest {
     assertEquals("*/*", NexusRestClient.repositoryAssetAccept("v2/team/app/blobs/sha256:abc"));
   }
 
+  @Test
+  void exactPublicAssetSearchFiltersUnrelatedItemsAndCollapsesIdenticalDuplicates()
+      throws Exception {
+    List<NexusRestClient.NexusPublicAsset> assets = client(new FakeNexus(true))
+        .findPublicAssets("windows-components", "tools/setup 1.exe");
+
+    assertEquals(1, assets.size());
+    assertEquals("nexus-public-id", assets.getFirst().id());
+    assertEquals("abc123", assets.getFirst().sha1());
+  }
+
   private static NexusRestClient client(FakeNexus nexus) {
     return new NexusRestClient(
         "http://source.example/",
@@ -354,6 +365,24 @@ class NexusRestClientTest {
       }
       if ("GET".equals(method) && "/service/rest/v1/blobstores".equals(path)) {
         return json(200, List.of());
+      }
+      if ("GET".equals(method) && path.equals(
+          "/service/rest/v1/search/assets?repository=windows-components&name=tools%2Fsetup%201.exe")) {
+        Map<String, Object> match = Map.of(
+            "id", "nexus-public-id",
+            "repository", "windows-components",
+            "path", "tools/setup 1.exe",
+            "checksum", Map.of("sha1", "abc123"),
+            "downloadUrl", "http://source.example/repository/windows-components/tools/setup%201.exe");
+        return json(200, Map.of(
+            "items", List.of(
+                match,
+                match,
+                Map.of(
+                    "id", "other-id",
+                    "repository", "windows-components",
+                    "path", "tools/other.exe",
+                    "checksum", Map.of("sha1", "other")))));
       }
       if ("GET".equals(method) && "/service/rest/v1/security/users?source=default".equals(path)) {
         usersPath = path;

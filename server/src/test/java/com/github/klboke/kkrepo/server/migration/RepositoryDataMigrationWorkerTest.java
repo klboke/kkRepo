@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -20,6 +21,7 @@ import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.RepositoryAssetP
 import com.github.klboke.kkrepo.persistence.jdbc.api.MigrationJobDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDataMigrationDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDataMigrationDao.AssetClaim;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDataMigrationDao.TargetAssetRef;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.MigrationJobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryDataMigrationAssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryDataMigrationRepositoryRecord;
@@ -200,9 +202,13 @@ class RepositoryDataMigrationWorkerTest {
           new Class<?>[] {
               RepositoryDataMigrationRepositoryRecord.class,
               RepositoryAssetPage.class,
-              Instant.class
+              Instant.class,
+              RepositoryDataMigrationWorker.SourceAccess.class
           },
-          repository, page, Instant.parse("2026-01-02T00:00:00Z")));
+          repository,
+          page,
+          Instant.parse("2026-01-02T00:00:00Z"),
+          sourceAccess(null, false, false)));
 
       @SuppressWarnings("unchecked")
       ArgumentCaptor<List<RepositoryDataMigrationAssetRecord>> records =
@@ -211,6 +217,43 @@ class RepositoryDataMigrationWorkerTest {
       assertEquals(List.of("de/mo/demo"),
           records.getValue().stream().map(RepositoryDataMigrationAssetRecord::sourcePath).toList());
       verify(fixture.migrationDao).finishDiscoveryPage(7L, "de/mo/demo", true);
+    } finally {
+      fixture.worker.shutdown();
+    }
+  }
+
+  @Test
+  void discoveryCapturesPublicIdForAnExistingTargetBeforeAdvancingCursor() throws Exception {
+    Fixture fixture = fixture();
+    try {
+      RepositoryDataMigrationRepositoryRecord repository = repositoryJob(
+          RepositoryFormat.RAW, Map.of());
+      RepositoryAssetPage page = new RepositoryAssetPage(
+          "raw", null, "tools/setup.exe", true,
+          List.of(metadata("tools/setup.exe", "2026-01-03T00:00:00Z")), List.of());
+      when(fixture.migrationDao.findTargetAssetsByPathHash(eq(9L), any()))
+          .thenAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            List<byte[]> hashes = invocation.getArgument(1);
+            return Map.of(
+                java.nio.ByteBuffer.wrap(hashes.getFirst()),
+                new TargetAssetRef(null, 30L, 40L));
+          });
+      NexusRestClient client = mock(NexusRestClient.class);
+
+      assertTrue((Boolean) invoke(
+          fixture.worker, "processDiscoveryPage",
+          new Class<?>[] {
+              RepositoryDataMigrationRepositoryRecord.class,
+              RepositoryAssetPage.class,
+              Instant.class,
+              RepositoryDataMigrationWorker.SourceAccess.class
+          },
+          repository, page, null, sourceAccess(client, true, true)));
+
+      verify(fixture.publicIdCaptureService).capture(
+          eq(client), eq("http://nexus.example"), eq(100L), eq("source"), eq(9L), any(), eq(30L));
+      verify(fixture.migrationDao).finishDiscoveryPage(7L, "tools/setup.exe", true);
     } finally {
       fixture.worker.shutdown();
     }
@@ -271,9 +314,11 @@ class RepositoryDataMigrationWorkerTest {
 
       invoke(
           fixture.worker, "migrateOne",
-          new Class<?>[] {AssetClaim.class, NexusRestClient.class, boolean.class},
-          claim, client, true);
+          new Class<?>[] {AssetClaim.class, RepositoryDataMigrationWorker.SourceAccess.class},
+          claim, sourceAccess(client, true, false));
 
+      verify(fixture.publicIdCaptureService).capture(
+          client, "http://nexus.example", 100L, "source", 1L, claim.asset(), 30L);
       verify(fixture.migrationDao).markAssetMigrated(
           claim.asset().id(), claim.asset().repositoryJobId(), 20L, 30L, 40L);
       verify(fixture.migrationDao, never()).markAssetFailed(anyLong(), anyLong(), anyInt(), any());
@@ -297,8 +342,8 @@ class RepositoryDataMigrationWorkerTest {
 
       invoke(
           fixture.worker, "migrateOne",
-          new Class<?>[] {AssetClaim.class, NexusRestClient.class, boolean.class},
-          failed, client, true);
+          new Class<?>[] {AssetClaim.class, RepositoryDataMigrationWorker.SourceAccess.class},
+          failed, sourceAccess(client, false, false));
 
       verify(body).close();
       verify(fixture.migrationDao).markAssetFailed(
@@ -308,11 +353,33 @@ class RepositoryDataMigrationWorkerTest {
       AssetClaim skipped = claim(11L, 100L, RepositoryFormat.CARGO, "/config.json");
       invoke(
           fixture.worker, "migrateOne",
-          new Class<?>[] {AssetClaim.class, NexusRestClient.class, boolean.class},
-          skipped, client, true);
+          new Class<?>[] {AssetClaim.class, RepositoryDataMigrationWorker.SourceAccess.class},
+          skipped, sourceAccess(client, false, false));
       verify(fixture.migrationDao).markAssetMigrated(
           skipped.asset().id(), skipped.asset().repositoryJobId(), null, null, null);
       verify(client, never()).getRepositoryAsset("source", "/config.json");
+    } finally {
+      fixture.worker.shutdown();
+    }
+  }
+
+  @Test
+  void publicIdBackfillOnlyFailsMissingTargetBeforeSourceDownload() throws Exception {
+    Fixture fixture = fixture();
+    try {
+      AssetClaim claim = claim(10L, 100L, RepositoryFormat.RAW, "tools/missing.exe");
+      NexusRestClient client = mock(NexusRestClient.class);
+
+      invoke(
+          fixture.worker, "migrateOne",
+          new Class<?>[] {AssetClaim.class, RepositoryDataMigrationWorker.SourceAccess.class},
+          claim, sourceAccess(client, true, true));
+
+      verify(client, never()).getRepositoryAsset(any(), any());
+      verify(fixture.writer, never()).write(anyLong(), any(), any(), any(), anyBoolean(), any());
+      verify(fixture.migrationDao).markAssetFailed(
+          eq(claim.asset().id()), eq(claim.asset().repositoryJobId()), eq(5),
+          org.mockito.ArgumentMatchers.contains("publicIdBackfillOnly"));
     } finally {
       fixture.worker.shutdown();
     }
@@ -341,6 +408,8 @@ class RepositoryDataMigrationWorkerTest {
     RepositoryDataMigrationDao migrationDao = mock(RepositoryDataMigrationDao.class);
     RepositoryDataMigrationService migrationService = mock(RepositoryDataMigrationService.class);
     RepositoryDataMigrationWriter writer = mock(RepositoryDataMigrationWriter.class);
+    NexusPublicAssetIdCaptureService publicIdCaptureService =
+        mock(NexusPublicAssetIdCaptureService.class);
     PlatformTransactionManager transactions = mock(PlatformTransactionManager.class);
     when(transactions.getTransaction(any(TransactionDefinition.class)))
         .thenReturn(mock(TransactionStatus.class));
@@ -348,8 +417,10 @@ class RepositoryDataMigrationWorkerTest {
         migrationJobDao,
         migrationDao,
         writer,
+        publicIdCaptureService,
         new RepositoryDataMigrationWorker(
-            new ObjectMapper(), migrationJobDao, migrationDao, migrationService, writer, transactions));
+            new ObjectMapper(), migrationJobDao, migrationDao, migrationService, writer,
+            publicIdCaptureService, transactions));
   }
 
   private static RepositoryDataMigrationRepositoryRecord repositoryJob(
@@ -403,7 +474,19 @@ class RepositoryDataMigrationWorkerTest {
       MigrationJobDao migrationJobDao,
       RepositoryDataMigrationDao migrationDao,
       RepositoryDataMigrationWriter writer,
+      NexusPublicAssetIdCaptureService publicIdCaptureService,
       RepositoryDataMigrationWorker worker) {
+  }
+
+  private static RepositoryDataMigrationWorker.SourceAccess sourceAccess(
+      NexusRestClient client, boolean capturePublicIds, boolean backfillOnly) {
+    return new RepositoryDataMigrationWorker.SourceAccess(
+        client,
+        "UNKNOWN",
+        true,
+        capturePublicIds,
+        backfillOnly,
+        "http://nexus.example");
   }
 
   private static AssetClaim claim(long repositoryJobId, long migrationJobId, String path) {

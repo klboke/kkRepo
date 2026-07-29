@@ -182,6 +182,8 @@ public class NexusMigrationController {
         command.pageSize(),
         command.concurrency(),
         command.checksumValidation(),
+        command.captureNexusPublicAssetIds(),
+        command.publicIdBackfillOnly(),
         parseInstant(command.metadataSince(), "metadataSince"),
         repositoryNames(command.repositories(), command.repositoryNames()),
         repositoryNames(command.backupProxyRepositories(), command.backupProxyRepositoryNames())));
@@ -407,6 +409,8 @@ public class NexusMigrationController {
       Integer pageSize,
       Integer concurrency,
       Boolean checksumValidation,
+      Boolean captureNexusPublicAssetIds,
+      Boolean publicIdBackfillOnly,
       String metadataSince) {
 
     private String sourceUsernameOrAlias() {

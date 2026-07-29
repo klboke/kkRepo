@@ -66,6 +66,9 @@ class RepositoryDataMigrationService {
     boolean checksumValidation = request.checksumValidation() == null
         ? DEFAULT_CHECKSUM_VALIDATION
         : request.checksumValidation();
+    boolean publicIdBackfillOnly = Boolean.TRUE.equals(request.publicIdBackfillOnly());
+    boolean captureNexusPublicAssetIds = publicIdBackfillOnly
+        || Boolean.TRUE.equals(request.captureNexusPublicAssetIds());
     NexusInventory inventory = new NexusRestClient(
         request.sourceBaseUrl(),
         request.sourceUsername(),
@@ -99,7 +102,16 @@ class RepositoryDataMigrationService {
       long createdJobId = migrationJobDao.create(
           resolvedSourceNexusVersion(sourceProfile, request),
           request.sourceBaseUrl(),
-          jobOptions(request, pageSize, concurrency, checksumValidation, sourceRepositories, sourceProfile, migrationPlan));
+          jobOptions(
+              request,
+              pageSize,
+              concurrency,
+              checksumValidation,
+              captureNexusPublicAssetIds,
+              publicIdBackfillOnly,
+              sourceRepositories,
+              sourceProfile,
+              migrationPlan));
       for (SourceRepository source : sourceRepositories) {
         RepositoryRecord target = targets.get(source.name());
         migrationDao.createRepositoryJob(
@@ -340,6 +352,8 @@ class RepositoryDataMigrationService {
       int pageSize,
       int concurrency,
       boolean checksumValidation,
+      boolean captureNexusPublicAssetIds,
+      boolean publicIdBackfillOnly,
       List<SourceRepository> repositories,
       NexusSourceProfile sourceProfile,
       NexusMigrationPlan migrationPlan) {
@@ -352,6 +366,8 @@ class RepositoryDataMigrationService {
     options.put("pageSize", pageSize);
     options.put("concurrency", concurrency);
     options.put("checksumValidation", checksumValidation);
+    options.put("captureNexusPublicAssetIds", captureNexusPublicAssetIds);
+    options.put("publicIdBackfillOnly", publicIdBackfillOnly);
     options.put("packageMigrationEnabled", false);
     options.put("repositories", repositories.stream().map(SourceRepository::name).toList());
     options.put("requestedRepositories", normalizeNames(request.repositories()));
@@ -458,6 +474,8 @@ class RepositoryDataMigrationService {
       Integer pageSize,
       Integer concurrency,
       Boolean checksumValidation,
+      Boolean captureNexusPublicAssetIds,
+      Boolean publicIdBackfillOnly,
       Instant metadataSince,
       List<String> repositories,
       List<String> backupProxyRepositories) {

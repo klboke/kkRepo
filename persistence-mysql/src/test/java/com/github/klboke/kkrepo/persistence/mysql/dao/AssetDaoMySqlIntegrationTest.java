@@ -8,6 +8,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.github.klboke.kkrepo.persistence.jdbc.api.*;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetPublicIdentifierRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetPublicIdentifierRecord.IdentifierType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.HashColumns;
 import com.github.klboke.kkrepo.persistence.mysql.support.MySqlIntegrationTestSupport;
@@ -101,6 +103,34 @@ class AssetDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
   }
 
   @Test
+  void publicIdentifiersEnforceCollisionRulesAndRemainAsDeletionTombstones() {
+    long repositoryId = insertRepository("windows-components", "raw");
+    AssetDao dao = new JdbcAssetDao(jdbc(), jsonColumns());
+    long assetId = dao.insertAsset(assetWithBlob(
+        repositoryId, null, RepositoryFormat.RAW, "tools/setup.exe"));
+    String nativeOpaque = String.format("%032x", assetId);
+    String nexusOpaque = "fedcba98765432100123456789abcdef";
+
+    assertTrue(dao.tryInsertPublicIdentifier(publicIdentifier(
+        repositoryId, nativeOpaque, assetId, assetId, IdentifierType.KKREPO_NATIVE)));
+    assertTrue(dao.tryInsertPublicIdentifier(publicIdentifier(
+        repositoryId, nexusOpaque, assetId, null, IdentifierType.NEXUS_ALIAS)));
+    assertFalse(dao.tryInsertPublicIdentifier(publicIdentifier(
+        repositoryId, nexusOpaque, assetId, null, IdentifierType.NEXUS_ALIAS)));
+    assertEquals(assetId, dao.findNativePublicIdentifier(assetId).orElseThrow().assetId());
+    assertEquals(assetId, dao.lockPublicIdentifier(repositoryId, nexusOpaque).orElseThrow().assetId());
+    assertEquals(assetId, dao.lockNativePublicIdentifier(assetId).orElseThrow().assetId());
+
+    assertEquals(1, dao.deleteAssetById(assetId));
+
+    assertTrue(dao.findNativePublicIdentifier(assetId).isEmpty());
+    assertEquals(null, dao.findPublicIdentifier(repositoryId, nativeOpaque).orElseThrow().assetId());
+    assertEquals(null, dao.findPublicIdentifier(repositoryId, nexusOpaque).orElseThrow().assetId());
+    assertFalse(dao.tryInsertPublicIdentifier(publicIdentifier(
+        repositoryId, nexusOpaque, null, null, IdentifierType.NEXUS_ALIAS)));
+  }
+
+  @Test
   void reconciliationAndGcClaimOnlyUnreferencedDeletedBlobs() {
     long repositoryId = insertRepository("raw-hosted", "raw");
     long blobStoreId = jdbc().queryForObject(
@@ -178,6 +208,17 @@ class AssetDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
         null,
         Instant.parse("2026-01-01T00:00:00Z"),
         Map.of("tested", true));
+  }
+
+  private static AssetPublicIdentifierRecord publicIdentifier(
+      long repositoryId,
+      String opaqueId,
+      Long assetId,
+      Long nativeAssetId,
+      IdentifierType type) {
+    return new AssetPublicIdentifierRecord(
+        null, repositoryId, opaqueId, assetId, nativeAssetId, type,
+        "http://nexus.example/", 99L, Instant.EPOCH);
   }
 
   private static AssetRecord assetWithBlob(

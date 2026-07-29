@@ -210,6 +210,8 @@ class NexusMigrationControllerTest {
             100,
             1,
             true,
+            null,
+            null,
             null);
 
     IllegalArgumentException thrown = assertThrows(
@@ -236,6 +238,8 @@ class NexusMigrationControllerTest {
             100,
             1,
             true,
+            true,
+            false,
             null);
 
     Method method = NexusMigrationController.class.getDeclaredMethod(

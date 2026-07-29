@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.persistence.jdbc.api;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetPublicIdentifierRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import java.time.Instant;
 import java.util.Collection;
@@ -37,6 +38,39 @@ public interface AssetDao {
   Optional<AssetRecord> findAssetByPath(long repositoryId, String path);
 
   Optional<AssetRecord> findAssetById(long assetId);
+
+  /** Finds an identifier by the exact externally encoded repository/opaque key. */
+  default Optional<AssetPublicIdentifierRecord> findPublicIdentifier(
+      long repositoryId, String opaqueId) {
+    return Optional.empty();
+  }
+
+  /**
+   * Loads an identifier with current-read locking for registration conflict arbitration.
+   * Implementations without transaction support may delegate to the ordinary lookup.
+   */
+  default Optional<AssetPublicIdentifierRecord> lockPublicIdentifier(
+      long repositoryId, String opaqueId) {
+    return findPublicIdentifier(repositoryId, opaqueId);
+  }
+
+  /** Finds the single kkRepo-native identifier assigned to an asset. */
+  default Optional<AssetPublicIdentifierRecord> findNativePublicIdentifier(long assetId) {
+    return Optional.empty();
+  }
+
+  /** Loads the native registration using current-read locking. */
+  default Optional<AssetPublicIdentifierRecord> lockNativePublicIdentifier(long assetId) {
+    return findNativePublicIdentifier(assetId);
+  }
+
+  /**
+   * Attempts to register an identifier, returning false on either uniqueness conflict.
+   * Implementations must leave the surrounding transaction usable after a conflict.
+   */
+  default boolean tryInsertPublicIdentifier(AssetPublicIdentifierRecord record) {
+    throw new UnsupportedOperationException("Public asset identifiers are not supported");
+  }
 
   /**
    * Loads an asset and its live blob metadata in one database round trip when supported.

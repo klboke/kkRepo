@@ -10,6 +10,8 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao.BlobReconcileWindo
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao.HelmIndexRow;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao.PypiProjectIndexRow;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetPublicIdentifierRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetPublicIdentifierRecord.IdentifierType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.EnumColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.HashColumns;
@@ -41,6 +43,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
   private final JsonColumns jsonColumns;
   private final RowMapper<AssetBlobRecord> blobRowMapper;
   private final RowMapper<AssetRecord> assetRowMapper;
+  private final RowMapper<AssetPublicIdentifierRecord> publicIdentifierRowMapper;
 
   public JdbcAssetDao(JdbcTemplate jdbcTemplate, JsonColumns jsonColumns) {
     this.jdbcTemplate = jdbcTemplate;
@@ -77,6 +80,16 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         nullableInstant(rs, "last_downloaded_at"),
         nullableInstant(rs, "last_updated_at"),
         jsonColumns.read(rs.getString("attributes_json")));
+    this.publicIdentifierRowMapper = (rs, rowNum) -> new AssetPublicIdentifierRecord(
+        rs.getLong("id"),
+        rs.getLong("repository_id"),
+        rs.getString("opaque_id"),
+        nullableLong(rs, "asset_id"),
+        nullableLong(rs, "native_asset_id"),
+        IdentifierType.valueOf(rs.getString("identifier_type")),
+        rs.getString("source_instance"),
+        nullableLong(rs, "migration_job_id"),
+        nullableInstant(rs, "created_at"));
   }
 
   public long insertBlob(AssetBlobRecord record) {
@@ -235,6 +248,64 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
     return jdbcTemplate.query("SELECT * FROM asset WHERE id = ?", assetRowMapper, assetId)
         .stream()
         .findFirst();
+  }
+
+  @Override
+  public Optional<AssetPublicIdentifierRecord> findPublicIdentifier(
+      long repositoryId, String opaqueId) {
+    return jdbcTemplate.query("""
+        SELECT *
+        FROM asset_public_identifier
+        WHERE repository_id = ? AND opaque_id = ?
+        """, publicIdentifierRowMapper, repositoryId, opaqueId).stream().findFirst();
+  }
+
+  @Override
+  public Optional<AssetPublicIdentifierRecord> lockPublicIdentifier(
+      long repositoryId, String opaqueId) {
+    return jdbcTemplate.query("""
+        SELECT *
+        FROM asset_public_identifier
+        WHERE repository_id = ? AND opaque_id = ?
+        FOR UPDATE
+        """, publicIdentifierRowMapper, repositoryId, opaqueId).stream().findFirst();
+  }
+
+  @Override
+  public Optional<AssetPublicIdentifierRecord> findNativePublicIdentifier(long assetId) {
+    return jdbcTemplate.query("""
+        SELECT *
+        FROM asset_public_identifier
+        WHERE native_asset_id = ?
+        """, publicIdentifierRowMapper, assetId).stream().findFirst();
+  }
+
+  @Override
+  public Optional<AssetPublicIdentifierRecord> lockNativePublicIdentifier(long assetId) {
+    return jdbcTemplate.query("""
+        SELECT *
+        FROM asset_public_identifier
+        WHERE native_asset_id = ?
+        FOR UPDATE
+        """, publicIdentifierRowMapper, assetId).stream().findFirst();
+  }
+
+  @Override
+  public boolean tryInsertPublicIdentifier(AssetPublicIdentifierRecord record) {
+    return JdbcInserts.tryInsert(jdbcTemplate, """
+        INSERT INTO asset_public_identifier
+          (repository_id, opaque_id, asset_id, native_asset_id, identifier_type,
+           source_instance, migration_job_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, ps -> {
+      ps.setLong(1, record.repositoryId());
+      ps.setString(2, record.opaqueId());
+      ps.setObject(3, record.assetId());
+      ps.setObject(4, record.nativeAssetId());
+      ps.setString(5, record.identifierType().name());
+      ps.setString(6, record.sourceInstance());
+      ps.setObject(7, record.migrationJobId());
+    }).isPresent();
   }
 
   @Override

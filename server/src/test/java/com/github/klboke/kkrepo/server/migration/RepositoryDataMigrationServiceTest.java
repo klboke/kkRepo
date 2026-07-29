@@ -142,17 +142,22 @@ class RepositoryDataMigrationServiceTest {
             100,
             1,
             true,
+            true,
+            false,
             Instant.parse("2026-06-30T00:00:00Z"),
             List.of("docker-hosted"),
             List.of());
 
-    Map<?, ?> options = jobOptions(request, 100, 1, true, List.of(sourceRepository), profile, plan);
+    Map<?, ?> options = jobOptions(
+        request, 100, 1, true, true, false, List.of(sourceRepository), profile, plan);
 
     assertEquals("OrientDbNexusAdapter", options.get("sourceAdapter"));
     assertEquals(plan.profileHash(), options.get("profileHash"));
     assertEquals(plan.planHash(), options.get("planHash"));
     assertEquals("repository-data", options.get("scope"));
     assertEquals(List.of("docker-hosted"), options.get("repositories"));
+    assertEquals(true, options.get("captureNexusPublicAssetIds"));
+    assertEquals(false, options.get("publicIdBackfillOnly"));
   }
 
   @Test
@@ -170,6 +175,8 @@ class RepositoryDataMigrationServiceTest {
             100,
             1,
             true,
+            null,
+            null,
             null,
             List.of("docker-hosted"),
             List.of());
@@ -266,6 +273,8 @@ class RepositoryDataMigrationServiceTest {
       int pageSize,
       int concurrency,
       boolean checksumValidation,
+      boolean captureNexusPublicAssetIds,
+      boolean publicIdBackfillOnly,
       List<?> repositories,
       NexusSourceProfile profile,
       NexusMigrationPlan plan) throws Exception {
@@ -277,6 +286,8 @@ class RepositoryDataMigrationServiceTest {
         int.class,
         int.class,
         boolean.class,
+        boolean.class,
+        boolean.class,
         List.class,
         NexusSourceProfile.class,
         NexusMigrationPlan.class);
@@ -287,6 +298,8 @@ class RepositoryDataMigrationServiceTest {
         pageSize,
         concurrency,
         checksumValidation,
+        captureNexusPublicAssetIds,
+        publicIdBackfillOnly,
         repositories,
         profile,
         plan);

@@ -3812,6 +3812,8 @@ function repositoryDataMigrationPayload() {
     pageSize: numberValue("repository-data-migration-page-size"),
     concurrency: numberValue("repository-data-migration-concurrency"),
     checksumValidation: document.getElementById("repository-data-migration-checksum-validation").checked,
+    captureNexusPublicAssetIds: document.getElementById("repository-data-migration-capture-public-ids").checked,
+    publicIdBackfillOnly: document.getElementById("repository-data-migration-public-id-backfill-only").checked,
     metadataSince: dateTimeInstantValue("repository-data-migration-metadata-since"),
     backupProxyRepositories: nameListValue("repository-data-migration-backup-proxies")
   };

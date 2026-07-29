@@ -1,6 +1,5 @@
 package com.github.klboke.kkrepo.server.management;
 
-import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.regex.Matcher;
@@ -23,7 +22,17 @@ public class NexusAssetIdCodec {
     if (repositoryName == null || !REPOSITORY_NAME.matcher(repositoryName).matches() || assetId <= 0) {
       throw new IllegalArgumentException("Repository name and a positive asset ID are required");
     }
-    return encode(repositoryName + ":" + String.format("%032x", assetId));
+    return encodeAssetId(repositoryName, String.format("%032x", assetId));
+  }
+
+  public String encodeAssetId(String repositoryName, String opaqueId) {
+    if (repositoryName == null
+        || !REPOSITORY_NAME.matcher(repositoryName).matches()
+        || opaqueId == null
+        || !opaqueId.matches("[0-9a-f]{32}")) {
+      throw new IllegalArgumentException("Repository name and a 32-character opaque ID are required");
+    }
+    return encode(repositoryName + ":" + opaqueId);
   }
 
   public DecodedAssetId decodeAssetId(String encoded) {
@@ -32,7 +41,7 @@ public class NexusAssetIdCodec {
       if (!matcher.matches()) {
         throw new IllegalArgumentException("Invalid payload");
       }
-      return new DecodedAssetId(matcher.group(1), positiveLong(matcher.group(2)));
+      return new DecodedAssetId(matcher.group(1), matcher.group(2));
     } catch (IllegalArgumentException e) {
       throw new InvalidAssetIdException("Invalid Nexus asset ID", e);
     }
@@ -77,7 +86,7 @@ public class NexusAssetIdCodec {
 
   private static long positiveLong(String hex) {
     try {
-      long value = new BigInteger(hex, 16).longValueExact();
+      long value = Long.parseUnsignedLong(hex, 16);
       if (value <= 0) {
         throw new ArithmeticException("not positive");
       }
@@ -87,7 +96,7 @@ public class NexusAssetIdCodec {
     }
   }
 
-  public record DecodedAssetId(String repositoryName, long assetId) {}
+  public record DecodedAssetId(String repositoryName, String opaqueId) {}
 
   public record DecodedContinuation(long repositoryId, long lastAssetId) {}
 

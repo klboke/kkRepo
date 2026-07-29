@@ -17,8 +17,18 @@ class NexusAssetIdCodecTest {
     String encoded = codec.encodeAssetId("windows-artifacts", 42L);
 
     assertEquals(
-        new NexusAssetIdCodec.DecodedAssetId("windows-artifacts", 42L),
+        new NexusAssetIdCodec.DecodedAssetId(
+            "windows-artifacts", "0000000000000000000000000000002a"),
         new NexusAssetIdCodec().decodeAssetId(encoded));
+  }
+
+  @Test
+  void fullWidthNexusOpaqueIdIsPreservedWithoutLongConversion() {
+    String opaqueId = "ffffffffffffffffffffffffffffffff";
+
+    assertEquals(
+        new NexusAssetIdCodec.DecodedAssetId("repo", opaqueId),
+        codec.decodeAssetId(codec.encodeAssetId("repo", opaqueId)));
   }
 
   @Test
@@ -26,7 +36,7 @@ class NexusAssetIdCodecTest {
     assertThrows(InvalidAssetIdException.class, () -> codec.decodeAssetId("not-an-id"));
     assertThrows(InvalidAssetIdException.class, () -> codec.decodeAssetId(base64("repo:2a")));
     assertThrows(InvalidAssetIdException.class,
-        () -> codec.decodeAssetId(base64("repo:ffffffffffffffffffffffffffffffff")));
+        () -> codec.decodeAssetId(base64("repo:FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF")));
     assertThrows(InvalidAssetIdException.class,
         () -> codec.decodeAssetId(codec.encodeAssetId("repo", 1L) + "="));
   }

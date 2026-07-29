@@ -18,6 +18,7 @@ import jakarta.annotation.PreDestroy;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.http.HttpResponse;
+import java.nio.ByteBuffer;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -57,6 +58,7 @@ class RepositoryDataMigrationWorker {
   private final RepositoryDataMigrationDao migrationDao;
   private final RepositoryDataMigrationService migrationService;
   private final RepositoryDataMigrationWriter writer;
+  private final NexusPublicAssetIdCaptureService publicIdCaptureService;
   private final TransactionTemplate transactionTemplate;
   private final ExecutorService executor;
   private final ExecutorService triggerExecutor;
@@ -68,12 +70,14 @@ class RepositoryDataMigrationWorker {
       RepositoryDataMigrationDao migrationDao,
       RepositoryDataMigrationService migrationService,
       RepositoryDataMigrationWriter writer,
+      NexusPublicAssetIdCaptureService publicIdCaptureService,
       PlatformTransactionManager transactionManager) {
     this.objectMapper = objectMapper;
     this.migrationJobDao = migrationJobDao;
     this.migrationDao = migrationDao;
     this.migrationService = migrationService;
     this.writer = writer;
+    this.publicIdCaptureService = publicIdCaptureService;
     this.transactionTemplate = new TransactionTemplate(transactionManager);
     this.executor = Executors.newFixedThreadPool(MAX_CONCURRENCY, threadFactory("repository-data-migration-"));
     this.triggerExecutor = Executors.newCachedThreadPool(threadFactory("repository-data-migration-trigger-"));
@@ -137,7 +141,7 @@ class RepositoryDataMigrationWorker {
             cursor,
             repositoryJob.pageSize(),
             metadataSince);
-        complete = processDiscoveryPage(repositoryJob, page, metadataSince);
+        complete = processDiscoveryPage(repositoryJob, page, metadataSince, source);
         cursor = page.nextAfterPath();
         pages++;
       } while (!complete && pages < DISCOVERY_PAGES_PER_RUN);
@@ -155,7 +159,8 @@ class RepositoryDataMigrationWorker {
   private boolean processDiscoveryPage(
       RepositoryDataMigrationRepositoryRecord repositoryJob,
       RepositoryAssetPage page,
-      Instant metadataSince) {
+      Instant metadataSince,
+      SourceAccess source) throws IOException, InterruptedException {
     List<RepositoryDataMigrationAssetRecord> records = page.assets().stream()
         .filter(asset -> changedSince(asset, metadataSince))
         .filter(asset -> RepositoryDataMigrationPaths.shouldDiscoverAsset(repositoryJob.format(), asset.path()))
@@ -164,14 +169,37 @@ class RepositoryDataMigrationWorker {
         .toList();
     boolean complete = page.complete();
     String nextCursor = page.nextAfterPath();
-    transactionTemplate.executeWithoutResult(status -> {
-      Map<java.nio.ByteBuffer, RepositoryDataMigrationDao.TargetAssetRef> existingTargets =
-          migrationDao.findTargetAssetsByPathHash(
+    Map<ByteBuffer, RepositoryDataMigrationDao.TargetAssetRef> existingTargets =
+        transactionTemplate.execute(status -> {
+          Map<ByteBuffer, RepositoryDataMigrationDao.TargetAssetRef> discoveredTargets =
+              migrationDao.findTargetAssetsByPathHash(
+                  repositoryJob.targetRepositoryId(),
+                  records.stream()
+                      .map(RepositoryDataMigrationAssetRecord::sourcePathHash)
+                      .toList());
+          migrationDao.upsertDiscoveredAssets(repositoryJob.id(), records, discoveredTargets);
+          return discoveredTargets;
+        });
+    Map<ByteBuffer, RepositoryDataMigrationDao.TargetAssetRef> targetRefs =
+        existingTargets == null ? Map.of() : existingTargets;
+    if (source.captureNexusPublicAssetIds()) {
+      for (RepositoryDataMigrationAssetRecord record : records) {
+        RepositoryDataMigrationDao.TargetAssetRef target = targetRefs.get(
+            ByteBuffer.wrap(record.sourcePathHash()));
+        if (target != null) {
+          publicIdCaptureService.capture(
+              source.client(),
+              source.sourceInstance(),
+              repositoryJob.migrationJobId(),
+              repositoryJob.sourceRepositoryName(),
               repositoryJob.targetRepositoryId(),
-              records.stream().map(RepositoryDataMigrationAssetRecord::sourcePathHash).toList());
-      migrationDao.upsertDiscoveredAssets(repositoryJob.id(), records, existingTargets);
-      migrationDao.finishDiscoveryPage(repositoryJob.id(), nextCursor, complete);
-    });
+              record,
+              target.assetId());
+        }
+      }
+    }
+    transactionTemplate.executeWithoutResult(status ->
+        migrationDao.finishDiscoveryPage(repositoryJob.id(), nextCursor, complete));
     if (!page.warnings().isEmpty()) {
       log.warn("repository data discovery warnings for repo={}: {}",
           repositoryJob.sourceRepositoryName(), page.warnings());
@@ -187,7 +215,7 @@ class RepositoryDataMigrationWorker {
         executor,
         claim -> {
           SourceAccess source = sources.computeIfAbsent(claim.migrationJobId(), ignored -> sourceAccess(claim));
-          migrateOne(claim, source.client(), source.checksumValidation());
+          migrateOne(claim, source);
         },
         this::refreshProgress);
   }
@@ -284,7 +312,7 @@ class RepositoryDataMigrationWorker {
     return new BatchProgressTargets(List.copyOf(repositoryJobIds), List.copyOf(jobIds));
   }
 
-  private void migrateOne(AssetClaim claim, NexusRestClient client, boolean checksumValidation) {
+  private void migrateOne(AssetClaim claim, SourceAccess source) {
     try {
       if (!shouldMigrateSourceAsset(claim.repositoryFormat(), claim.asset().sourcePath())) {
         migrationDao.markAssetMigrated(
@@ -295,7 +323,12 @@ class RepositoryDataMigrationWorker {
             null);
         return;
       }
-      HttpResponse<InputStream> response = client.getRepositoryAsset(
+      if (source.publicIdBackfillOnly()) {
+        throw new IllegalStateException(
+            "publicIdBackfillOnly does not download a missing target asset: "
+                + claim.sourceRepositoryName() + "/" + claim.asset().sourcePath());
+      }
+      HttpResponse<InputStream> response = source.client().getRepositoryAsset(
           claim.sourceRepositoryName(),
           claim.asset().sourcePath());
       if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -309,8 +342,18 @@ class RepositoryDataMigrationWorker {
           claim.asset(),
           response.body(),
           contentType,
-          checksumValidation && shouldValidateDownloadedSize(claim),
+          source.checksumValidation() && shouldValidateDownloadedSize(claim),
           downloadEvidence(response));
+      if (source.captureNexusPublicAssetIds()) {
+        publicIdCaptureService.capture(
+            source.client(),
+            source.sourceInstance(),
+            claim.migrationJobId(),
+            claim.sourceRepositoryName(),
+            claim.targetRepositoryId(),
+            claim.asset(),
+            result.assetId());
+      }
       migrationDao.markAssetMigrated(
           claim.asset().id(),
           claim.asset().repositoryJobId(),
@@ -441,10 +484,15 @@ class RepositoryDataMigrationWorker {
     String encryptedPassword = string(options.get("sourcePassword"));
     String sourcePassword = new SecretCipher(EncryptionSecrets.credentialSecret()).decrypt(encryptedPassword);
     boolean checksumValidation = bool(options.get("checksumValidation"), true);
+    boolean captureNexusPublicAssetIds = bool(options.get("captureNexusPublicAssetIds"), false);
+    boolean publicIdBackfillOnly = bool(options.get("publicIdBackfillOnly"), false);
     return new SourceAccess(
         new NexusRestClient(sourceBaseUrl, sourceUsername, sourcePassword, objectMapper),
         metadataEngine(options),
-        checksumValidation);
+        checksumValidation,
+        captureNexusPublicAssetIds || publicIdBackfillOnly,
+        publicIdBackfillOnly,
+        sourceBaseUrl);
   }
 
   private static String metadataEngine(Map<String, Object> options) {
@@ -646,7 +694,13 @@ class RepositoryDataMigrationWorker {
     return error.getClass().getSimpleName() + (message == null || message.isBlank() ? "" : ": " + message);
   }
 
-  private record SourceAccess(NexusRestClient client, String metadataEngine, boolean checksumValidation) {
+  record SourceAccess(
+      NexusRestClient client,
+      String metadataEngine,
+      boolean checksumValidation,
+      boolean captureNexusPublicAssetIds,
+      boolean publicIdBackfillOnly,
+      String sourceInstance) {
   }
 
   private record CompletedWork<T>(T item, Throwable failure) {
