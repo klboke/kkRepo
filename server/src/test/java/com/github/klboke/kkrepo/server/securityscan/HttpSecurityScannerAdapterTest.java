@@ -20,6 +20,7 @@ import com.github.klboke.kkrepo.security.scan.ScannerContract.CancellationRespon
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Component;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchResponse;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.Observation;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Readiness;
@@ -189,6 +190,51 @@ class HttpSecurityScannerAdapterTest {
     } finally {
       unavailable.stop(0);
       healthy.stop(0);
+    }
+  }
+
+  @Test
+  void observesCapabilitiesAndReadinessFromTheSameReadyReplica() throws Exception {
+    ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+    HttpServer rolling = standaloneServer(exchange -> {
+      if ("/v1/capabilities".equals(exchange.getRequestURI().getPath())) {
+        respond(exchange, 200, mapper.writeValueAsBytes(new Capabilities(
+            "v1", "rolling-adapter", "1", List.of("CATALOG"), List.of("PACKAGE"),
+            4096, 4096, "rolling-capability")));
+      } else {
+        respond(exchange, 200, mapper.writeValueAsBytes(new Readiness(
+            false, "STARTING", "grype", "1", "old-db",
+            Instant.EPOCH, Instant.EPOCH, Map.of())));
+      }
+    });
+    HttpServer ready = standaloneServer(exchange -> {
+      if ("/v1/capabilities".equals(exchange.getRequestURI().getPath())) {
+        respond(exchange, 200, mapper.writeValueAsBytes(new Capabilities(
+            "v1", "ready-adapter", "2", List.of("CATALOG", "MATCH"),
+            List.of("PACKAGE"), 8192, 8192, "ready-capability")));
+      } else {
+        respond(exchange, 200, mapper.writeValueAsBytes(new Readiness(
+            true, "READY", "grype", "2", "ready-db",
+            Instant.EPOCH, Instant.EPOCH, Map.of())));
+      }
+    });
+    try {
+      SecurityScanningProperties properties = new SecurityScanningProperties();
+      properties.getAdapter().setBaseUrls(List.of(
+          "http://127.0.0.1:" + rolling.getAddress().getPort(),
+          "http://127.0.0.1:" + ready.getAddress().getPort()));
+      properties.getAdapter().setServiceCredential("secret");
+
+      Observation observation =
+          new HttpSecurityScannerAdapter(mapper, properties).observation();
+
+      assertEquals("ready-adapter", observation.capabilities().adapterName());
+      assertEquals("ready-capability", observation.capabilities().capabilityDigest());
+      assertEquals("ready-db", observation.readiness().vulnerabilityDatabaseRevision());
+      assertTrue(observation.readiness().ready());
+    } finally {
+      rolling.stop(0);
+      ready.stop(0);
     }
   }
 

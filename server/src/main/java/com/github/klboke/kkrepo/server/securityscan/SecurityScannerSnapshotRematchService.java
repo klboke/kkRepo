@@ -20,7 +20,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Schedules bounded vulnerability-database rematches behind a shared database cursor.
+ * Schedules bounded vulnerability-database rematches and first-scan recovery behind a shared
+ * database cursor.
  *
  * <p>The cursor identity includes both profile and scanner snapshot. A new database snapshot
  * starts at the beginning, while repeated passes over one snapshot continue after the last asset
@@ -92,7 +93,8 @@ public class SecurityScannerSnapshotRematchService {
   private boolean schedule(
       AssetSecurityState state, ScanProfile profile, ScannerSnapshot snapshot) {
     if (state.latestScanRunId() == null) {
-      return false;
+      return scans.requeueCandidateAfterObservationFailure(
+          state.assetId(), state.profileId(), state.contentGeneration(), Instant.now());
     }
     AssetDao.AssetWithBlob content = assets.findAssetWithBlobById(state.assetId()).orElse(null);
     if (content == null || content.blob() == null || content.blob().sha256() == null) {

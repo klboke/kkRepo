@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.persistence.jdbc.internal;
 import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRows.nullableInstant;
 import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRows.nullableLong;
 import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRows.nullableTimestamp;
+import static com.github.klboke.kkrepo.security.scan.ScanEnums.SCANNER_OBSERVATION_UNAVAILABLE;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
@@ -2222,8 +2223,17 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         LEFT JOIN security_scan_run run ON run.id = s.latest_scan_run_id
         WHERE s.profile_id = ?
           AND s.asset_id > ?
-          AND s.latest_scan_run_id IS NOT NULL
-          AND (run.scanner_snapshot_id IS NULL OR run.scanner_snapshot_id <> ?)
+          AND (
+            (
+              s.latest_scan_run_id IS NOT NULL
+              AND (run.scanner_snapshot_id IS NULL OR run.scanner_snapshot_id <> ?)
+            )
+            OR (
+              s.latest_scan_run_id IS NULL
+              AND s.scan_state = 'FAILED'
+              AND s.policy_reason_code = ?
+            )
+          )
           AND EXISTS (
             SELECT 1
             FROM asset_security_policy_state policy_state
@@ -2241,7 +2251,38 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         ORDER BY s.asset_id
         LIMIT ?
         """, stateMapper, profileId, Math.max(0, afterAssetId), scannerSnapshotId,
-        safeLimit(maxItems));
+        SCANNER_OBSERVATION_UNAVAILABLE, safeLimit(maxItems));
+  }
+
+  @Override
+  public boolean requeueCandidateAfterObservationFailure(
+      long assetId, long profileId, long expectedContentGeneration, Instant changedAt) {
+    Instant now = requiredNow(changedAt);
+    return jdbc.update("""
+        UPDATE security_scan_candidate
+        SET enqueued_generation = content_generation - 1,
+            changed_at = ?,
+            updated_at = ?
+        WHERE asset_id = ?
+          AND content_generation = ?
+          AND enqueued_generation >= content_generation
+          AND EXISTS (
+            SELECT 1
+            FROM asset_security_state state
+            WHERE state.asset_id = security_scan_candidate.asset_id
+              AND state.profile_id = ?
+              AND state.content_generation = security_scan_candidate.content_generation
+              AND state.latest_scan_run_id IS NULL
+              AND state.scan_state = 'FAILED'
+              AND state.policy_reason_code = ?
+          )
+        """,
+        nullableTimestamp(now),
+        nullableTimestamp(now),
+        assetId,
+        expectedContentGeneration,
+        profileId,
+        SCANNER_OBSERVATION_UNAVAILABLE) == 1;
   }
 
   @Override

@@ -338,6 +338,8 @@ CREATE INDEX idx_asset_security_state_stale
   ON asset_security_state(stale_at, scan_state);
 CREATE INDEX idx_asset_security_state_run
   ON asset_security_state(latest_scan_run_id);
+CREATE INDEX idx_asset_security_state_profile_asset
+  ON asset_security_state(profile_id, asset_id);
 CREATE INDEX idx_asset_security_state_scan
   ON asset_security_state(scan_state, asset_id);
 CREATE INDEX idx_asset_security_state_repository_summary

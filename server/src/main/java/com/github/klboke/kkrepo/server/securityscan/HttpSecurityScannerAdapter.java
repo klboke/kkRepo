@@ -16,6 +16,7 @@ import com.github.klboke.kkrepo.security.scan.ScannerContract.CancellationRespon
 import com.github.klboke.kkrepo.security.scan.ScannerContract.InputStreamSource;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchResponse;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.Observation;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Readiness;
@@ -97,6 +98,38 @@ public class HttpSecurityScannerAdapter implements Adapter {
           "kkrepo.security-scanning.adapter.service-credential must be configured "
               + "when security scanning is enabled");
     }
+  }
+
+  @Override
+  public Observation observation() {
+    ScannerAdapterException firstFailure = null;
+    Observation firstNotReady = null;
+    for (URI baseUri : baseUris) {
+      try {
+        Observation observation = new Observation(
+            get(baseUri, "/v1/capabilities", Capabilities.class),
+            get(baseUri, "/v1/readiness", Readiness.class));
+        if (observation.readiness().ready()) {
+          return observation;
+        }
+        if (firstNotReady == null) {
+          firstNotReady = observation;
+        }
+      } catch (ScannerAdapterException failure) {
+        if (firstFailure == null) {
+          firstFailure = failure;
+        } else {
+          firstFailure.addSuppressed(failure);
+        }
+      }
+    }
+    if (firstNotReady != null) {
+      return firstNotReady;
+    }
+    throw firstFailure == null
+        ? new ScannerAdapterException(
+            "SCANNER_UNAVAILABLE", "No security scanner adapter endpoint is available", true)
+        : firstFailure;
   }
 
   @Override

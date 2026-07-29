@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.persistence.jdbc.contract;
 
+import static com.github.klboke.kkrepo.security.scan.ScanEnums.SCANNER_OBSERVATION_UNAVAILABLE;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -1309,6 +1310,121 @@ public abstract class PersistenceApiContract {
         scans.findDownloadPolicySnapshots(assetId, repositoryId)
             .getFirst()
             .requiredWaiverRevision());
+  }
+
+  @Test
+  void securityScanningRequeuesAFirstObservationFailureExactlyOnce() {
+    SecurityScanDao scans = stores().securityScanning();
+    long repositoryId =
+        createRepository("scan-observation-recovery", RepositoryFormat.MAVEN2);
+    long blobStoreId =
+        stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
+    Instant now = Instant.parse("2026-07-24T12:00:00Z");
+    long artifactBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "scan/observation-recovery.jar", "scan-observation-recovery"));
+    String path = "com/acme/recovery/1.0/recovery-1.0.jar";
+    long assetId = stores().assets().insertAsset(new AssetRecord(
+        null,
+        repositoryId,
+        null,
+        artifactBlobId,
+        RepositoryFormat.MAVEN2,
+        path,
+        PersistenceHashes.pathHash(path),
+        "recovery-1.0.jar",
+        "ARTIFACT",
+        "application/java-archive",
+        42L,
+        null,
+        now,
+        Map.of()));
+    assertEquals(1, scans.recordArtifactContentChange(assetId));
+    assertTrue(scans.markCandidateEnqueued(assetId, 1));
+
+    SecurityScanDao.ScanProfile profile = scans.createProfile(new SecurityScanDao.ScanProfile(
+        null,
+        "observation-recovery-profile",
+        true,
+        "syft",
+        "grype",
+        List.of("vuln"),
+        Map.of(),
+        1024 * 1024,
+        1000,
+        10 * 1024 * 1024,
+        1024 * 1024,
+        2,
+        60,
+        OciPlatformPolicy.REQUIRED_SET,
+        List.of(),
+        "8".repeat(64),
+        1,
+        now,
+        now));
+    SecurityScanDao.RepositoryScanConfig config =
+        scans.upsertRepositoryConfig(new SecurityScanDao.RepositoryScanConfig(
+            repositoryId,
+            true,
+            profile.id(),
+            true,
+            true,
+            EnforcementMode.AUDIT,
+            PolicyAction.ALLOW,
+            PolicyAction.ALLOW,
+            PolicyAction.ALLOW,
+            null,
+            null,
+            1,
+            now,
+            now));
+    scans.upsertAssetStateIfCurrent(new SecurityScanDao.AssetSecurityState(
+        assetId,
+        profile.id(),
+        1,
+        PersistenceHashes.sha256("sha256:" + "a".repeat(64)),
+        null,
+        ScanState.FAILED,
+        ScanCompleteness.UNKNOWN,
+        false,
+        Severity.UNKNOWN,
+        Map.of(),
+        null,
+        null,
+        PolicyDecision.ALLOW,
+        SCANNER_OBSERVATION_UNAVAILABLE,
+        null,
+        now,
+        0));
+    scans.upsertAssetPolicyStateIfCurrent(new SecurityScanDao.AssetPolicyState(
+        assetId,
+        profile.id(),
+        repositoryId,
+        1,
+        null,
+        null,
+        null,
+        config.configRevision(),
+        PolicyDecision.ALLOW,
+        SCANNER_OBSERVATION_UNAVAILABLE,
+        0,
+        null,
+        null,
+        now,
+        0,
+        scans.waiverRevision().currentRevision()));
+
+    assertEquals(
+        assetId,
+        scans.listAssetStatesNeedingSnapshot(profile.id(), 99L, 0, 10)
+            .getFirst()
+            .assetId());
+    assertTrue(scans.requeueCandidateAfterObservationFailure(
+        assetId, profile.id(), 1, now.plusSeconds(1)));
+    assertEquals(
+        assetId,
+        inTransaction(() -> scans.claimCandidates(10)).getFirst().assetId());
+    assertFalse(scans.requeueCandidateAfterObservationFailure(
+        assetId, profile.id(), 1, now.plusSeconds(2)));
   }
 
   @Test

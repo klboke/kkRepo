@@ -78,6 +78,7 @@ class ScannerContractAndEnumsTest {
         "v1", "adapter", "1", null, null, 1, 2, "digest");
     var readiness = new ScannerContract.Readiness(
         true, "READY", "grype", "1", "db", Instant.EPOCH, Instant.EPOCH, null);
+    var observation = new ScannerContract.Observation(capabilities, readiness);
     var limits = new ScannerContract.ResourceLimits(1, 1, 1, 1, 0, 1);
     byte[] sbom = "{}".getBytes();
     var catalog = new ScannerContract.CatalogResponse(
@@ -106,6 +107,7 @@ class ScannerContractAndEnumsTest {
     sbom[0] = 'x';
     assertEquals(List.of(), capabilities.operations());
     assertEquals(Map.of(), readiness.details());
+    assertEquals(capabilities, observation.capabilities());
     assertEquals('{', catalog.cyclonedxJson()[0]);
     assertEquals(0, match.reportJson().length);
     assertEquals(Map.of(), component.properties());
@@ -123,6 +125,9 @@ class ScannerContractAndEnumsTest {
     assertThrows(
         IllegalArgumentException.class,
         () -> new ScannerContract.ResourceLimits(0, 1, 1, 1, 0, 1));
+    assertThrows(
+        NullPointerException.class,
+        () -> new ScannerContract.Observation(null, readiness));
   }
 
   @Test

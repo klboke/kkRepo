@@ -53,6 +53,19 @@ public final class ScannerContract {
     }
   }
 
+  /**
+   * Capabilities and readiness observed from one scanner replica.
+   *
+   * <p>Keeping the two documents in one value prevents a rolling deployment from producing a
+   * synthetic snapshot assembled from different adapter replicas.
+   */
+  public record Observation(Capabilities capabilities, Readiness readiness) {
+    public Observation {
+      java.util.Objects.requireNonNull(capabilities, "capabilities");
+      java.util.Objects.requireNonNull(readiness, "readiness");
+    }
+  }
+
   public record ResourceLimits(
       long maxInputBytes,
       int maxArchiveEntries,
@@ -262,6 +275,8 @@ public final class ScannerContract {
   }
 
   public interface Adapter {
+    Observation observation();
+
     Capabilities capabilities();
 
     Readiness readiness();

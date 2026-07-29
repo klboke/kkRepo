@@ -252,8 +252,20 @@ public interface SecurityScanDao {
 
   List<AssetSecurityState> listAssetStates(long assetId);
 
+  /**
+   * Lists current assets that need a database rematch or a first-scan observation recovery.
+   */
   List<AssetSecurityState> listAssetStatesNeedingSnapshot(
       long profileId, long scannerSnapshotId, long afterAssetId, int maxItems);
+
+  /**
+   * Makes a terminal first-time scan pending again after scanner observation has recovered.
+   *
+   * <p>The state and candidate marker are fenced in one statement so concurrent completion,
+   * content replacement, or another replica's recovery pass cannot enqueue duplicate work.
+   */
+  boolean requeueCandidateAfterObservationFailure(
+      long assetId, long profileId, long expectedContentGeneration, Instant changedAt);
 
   AssetSecurityState upsertAssetStateIfCurrent(AssetSecurityState state);
 

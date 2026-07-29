@@ -4,6 +4,10 @@ import java.util.Locale;
 
 /** Bounded values persisted by the security scanning subsystem. */
 public final class ScanEnums {
+  /** Durable failure reason used to requeue first-time scans after scanner observation recovers. */
+  public static final String SCANNER_OBSERVATION_UNAVAILABLE =
+      "SCANNER_OBSERVATION_UNAVAILABLE";
+
   private ScanEnums() {}
 
   public enum SubjectKind {

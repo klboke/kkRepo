@@ -367,6 +367,7 @@ CREATE TABLE asset_security_state (
   CONSTRAINT fk_asset_security_state_policy
     FOREIGN KEY (policy_id) REFERENCES security_scan_policy(id) ON DELETE SET NULL,
   INDEX idx_asset_security_state_run (latest_scan_run_id),
+  INDEX idx_asset_security_state_profile_asset (profile_id, asset_id),
   INDEX idx_asset_security_state_decision (policy_decision, scan_state, asset_id),
   INDEX idx_asset_security_state_stale (stale_at, scan_state),
   INDEX idx_asset_security_state_scan (scan_state, asset_id),

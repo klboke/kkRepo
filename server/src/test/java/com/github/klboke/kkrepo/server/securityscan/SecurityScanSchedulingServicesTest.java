@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
+import static com.github.klboke.kkrepo.security.scan.ScanEnums.SCANNER_OBSERVATION_UNAVAILABLE;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -43,6 +44,7 @@ import com.github.klboke.kkrepo.security.scan.ScannerContract;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Adapter;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Capabilities;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchResponse;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.Observation;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Readiness;
 import java.time.Duration;
 import java.time.Instant;
@@ -246,8 +248,7 @@ class SecurityScanSchedulingServicesTest {
         Instant.now(),
         null,
         Map.of("catalogEngineVersion", "1"));
-    when(adapter.capabilities()).thenReturn(capabilities);
-    when(adapter.readiness()).thenReturn(readiness);
+    when(adapter.observation()).thenReturn(new Observation(capabilities, readiness));
     when(scans.insertSnapshotOrFindExisting(any()))
         .thenAnswer(invocation -> {
           ScannerSnapshot proposed = invocation.getArgument(0);
@@ -274,13 +275,15 @@ class SecurityScanSchedulingServicesTest {
     assertEquals("1", matched.details().get("catalogEngineVersion"));
     assertEquals(List.of("CATALOG", "MATCH"), matched.details().get("operations"));
 
-    when(adapter.capabilities()).thenReturn(new Capabilities(
-        "v2", "adapter", "1", List.of(), List.of(), 1, 1, "cap"));
+    when(adapter.observation()).thenReturn(new Observation(
+        new Capabilities(
+            "v2", "adapter", "1", List.of(), List.of(), 1, 1, "cap"),
+        readiness));
     assertEquals(
         "SCANNER_API_UNSUPPORTED",
         assertThrows(ScannerAdapterException.class, service::readySnapshot).code());
 
-    when(adapter.capabilities())
+    when(adapter.observation())
         .thenThrow(new ScannerAdapterException("ADAPTER_DOWN", "down", true));
     assertEquals(
         "ADAPTER_DOWN",
@@ -380,6 +383,51 @@ class SecurityScanSchedulingServicesTest {
     verify(scans, org.mockito.Mockito.times(4))
         .reactivateSnapshotTask(eq(0L), eq(2L), any(), eq("security-scan-worker"));
     verify(scans).listAssetStatesNeedingSnapshot(3L, 2L, 12L, 1);
+  }
+
+  @Test
+  void snapshotRematchRequeuesAFirstScanAfterObservationRecovers() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    MaintenanceCursorDao cursors = mock(MaintenanceCursorDao.class);
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.getWorker().setSnapshotRematchBatchSize(10);
+    properties.getWorker().setSnapshotRematchMaxBatches(1);
+    SecurityScannerSnapshotRematchService rematches =
+        new SecurityScannerSnapshotRematchService(
+            scans, mock(AssetDao.class), cursors, properties);
+    ScanProfile profile = profile(3L, true);
+    ScannerSnapshot snapshot = snapshot(2L, true, "db-2", Instant.now(), "new");
+    AssetSecurityState failed = new AssetSecurityState(
+        11L,
+        3L,
+        1L,
+        new byte[32],
+        null,
+        ScanState.FAILED,
+        ScanCompleteness.UNKNOWN,
+        false,
+        com.github.klboke.kkrepo.security.scan.ScanEnums.Severity.UNKNOWN,
+        Map.of(),
+        null,
+        null,
+        com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyDecision.ALLOW,
+        SCANNER_OBSERVATION_UNAVAILABLE,
+        null,
+        Instant.now(),
+        1L);
+    String cursorName = SecurityScannerSnapshotRematchService.cursorName(3L, 2L);
+    when(cursors.tryLockLastSeenId(cursorName)).thenReturn(OptionalLong.of(0));
+    when(cursors.updateLastSeenId(cursorName, 11L)).thenReturn(1);
+    when(scans.listAssetStatesNeedingSnapshot(3L, 2L, 0, 10))
+        .thenReturn(List.of(failed));
+    when(scans.requeueCandidateAfterObservationFailure(eq(11L), eq(3L), eq(1L), any()))
+        .thenReturn(true);
+
+    assertEquals(1, rematches.reconcileProfile(profile, snapshot));
+
+    verify(scans)
+        .requeueCandidateAfterObservationFailure(eq(11L), eq(3L), eq(1L), any());
+    verify(cursors).updateLastSeenId(cursorName, 11L);
   }
 
   @Test

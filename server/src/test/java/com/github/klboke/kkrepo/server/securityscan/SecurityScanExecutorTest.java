@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
+import static com.github.klboke.kkrepo.security.scan.ScanEnums.SCANNER_OBSERVATION_UNAVAILABLE;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -118,6 +119,46 @@ class SecurityScanExecutorTest {
   }
 
   @Test
+  void doesNotReuseAMatchRunFromAnotherRequestedSnapshot() throws Exception {
+    Fixture fixture = new Fixture(ScanStage.MATCH_ONLY, SubjectKind.ASSET_BLOB);
+    Sbom sbom = storedSbom();
+    ScanRun prior = storedRun(88L, sbom.id());
+    AssetSecurityState state = mock(AssetSecurityState.class);
+    when(state.latestScanRunId()).thenReturn(prior.id());
+    when(fixture.task.requestedScannerSnapshotId()).thenReturn(fixture.snapshot.id());
+    when(fixture.scans.findScannerSnapshot(fixture.snapshot.id()))
+        .thenReturn(Optional.of(fixture.snapshot));
+    when(fixture.scans.findAssetState(10L, 1L)).thenReturn(Optional.of(state));
+    when(fixture.scans.findRun(prior.id())).thenReturn(Optional.of(prior));
+    when(fixture.scans.findSbom(sbom.id())).thenReturn(Optional.of(sbom));
+    when(fixture.adapter.match(any(), any())).thenReturn(matchResponse());
+
+    String baseFingerprint = ScanFingerprints.match(
+        sbom.documentSha256(),
+        sbom.inventoryComplete(),
+        fixture.profile.matcherEngine(),
+        fixture.snapshot.engineVersion(),
+        fixture.snapshot.vulnerabilityDatabaseRevision(),
+        fixture.profile.configurationDigest());
+    String snapshotFingerprint = ScanFingerprints.sha256(
+        "scanner-snapshot", baseFingerprint, fixture.snapshot.id().toString());
+    when(fixture.scans.findRunByMatchFingerprint(baseFingerprint))
+        .thenReturn(Optional.of(prior));
+    ScanRun wrongSnapshot = mock(ScanRun.class);
+    when(wrongSnapshot.scannerSnapshotId()).thenReturn(fixture.snapshot.id() - 1);
+    when(fixture.scans.findRunByMatchFingerprint(snapshotFingerprint))
+        .thenReturn(Optional.of(wrongSnapshot))
+        .thenReturn(Optional.empty());
+
+    ScanRun rematched = fixture.executor.execute(fixture.task);
+
+    assertEquals(snapshotFingerprint, rematched.matchFingerprint());
+    verify(fixture.adapter).match(any(), any());
+    verify(fixture.scans, never()).findRunByMatchFingerprint(baseFingerprint);
+    verify(fixture.scans, times(2)).findRunByMatchFingerprint(snapshotFingerprint);
+  }
+
+  @Test
   void refreshesExpiredMatchResultsInsteadOfReusingTheirCompletionTime() throws Exception {
     Fixture fixture = new Fixture(ScanStage.MATCH_ONLY, SubjectKind.ASSET_BLOB);
     Sbom sbom = storedSbom();
@@ -147,6 +188,20 @@ class SecurityScanExecutorTest {
     assertEquals(refreshFingerprint, refreshed.matchFingerprint());
     verify(fixture.adapter).match(any(), any());
     verify(fixture.scans, times(2)).findRunByMatchFingerprint(refreshFingerprint);
+  }
+
+  @Test
+  void marksRetryableSnapshotObservationFailuresForRecovery() {
+    Fixture fixture = new Fixture(ScanStage.CATALOG_AND_MATCH, SubjectKind.ASSET_BLOB);
+    when(fixture.snapshots.readySnapshot()).thenThrow(
+        new ScannerAdapterException("SCANNER_NOT_READY", "not ready", true));
+
+    ScannerAdapterException failure = assertCode(
+        SCANNER_OBSERVATION_UNAVAILABLE,
+        () -> fixture.executor.execute(fixture.task));
+
+    assertTrue(failure.retryable());
+    assertEquals("SCANNER_NOT_READY", ((ScannerAdapterException) failure.getCause()).code());
   }
 
   @Test

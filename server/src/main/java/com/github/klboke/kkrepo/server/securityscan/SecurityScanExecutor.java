@@ -1,5 +1,7 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
+import static com.github.klboke.kkrepo.security.scan.ScanEnums.SCANNER_OBSERVATION_UNAVAILABLE;
+
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.core.StreamReadConstraints;
@@ -407,7 +409,7 @@ public class SecurityScanExecutor {
         snapshot.vulnerabilityDatabaseRevision(),
         profile.configurationDigest());
     String reusableFingerprint = matchFingerprint(task, expectedFingerprint);
-    ScanRun reusable = scans.findRunByMatchFingerprint(reusableFingerprint).orElse(null);
+    ScanRun reusable = reusableRun(task, reusableFingerprint);
     if (reusable != null) {
       return finalizer.finalizeRun(
           task, profile, config, subject.identity(), reusable, List.of());
@@ -481,7 +483,7 @@ public class SecurityScanExecutor {
         profile.configurationDigest(),
         scannedPlatforms,
         missingPlatforms));
-    ScanRun reusable = scans.findRunByMatchFingerprint(fingerprint).orElse(null);
+    ScanRun reusable = reusableRun(task, fingerprint);
     if (reusable != null) {
       return finalizer.finalizeRun(
           task, profile, config, subject.identity(), reusable, List.of());
@@ -539,16 +541,41 @@ public class SecurityScanExecutor {
   }
 
   private static String matchFingerprint(ScanTask task, String baseFingerprint) {
-    if (task.requestReason() != RequestReason.MAX_AGE_EXPIRED) {
-      return baseFingerprint;
+    String fingerprint = baseFingerprint;
+    if (task.requestedScannerSnapshotId() != null) {
+      fingerprint = ScanFingerprints.sha256(
+          "scanner-snapshot",
+          fingerprint,
+          Long.toString(task.requestedScannerSnapshotId()));
     }
-    return ScanFingerprints.sha256(
-        "max-age-refresh", baseFingerprint, Long.toString(task.id()));
+    if (task.requestReason() == RequestReason.MAX_AGE_EXPIRED) {
+      fingerprint = ScanFingerprints.sha256(
+          "max-age-refresh", fingerprint, Long.toString(task.id()));
+    }
+    return fingerprint;
+  }
+
+  private ScanRun reusableRun(ScanTask task, String fingerprint) {
+    return scans.findRunByMatchFingerprint(fingerprint)
+        .filter(run -> task.requestedScannerSnapshotId() == null
+            || task.requestedScannerSnapshotId().equals(run.scannerSnapshotId()))
+        .orElse(null);
   }
 
   private ScannerSnapshot executionSnapshot(ScanTask task) {
     if (task.requestedScannerSnapshotId() == null) {
-      return snapshots.readySnapshot();
+      try {
+        return snapshots.readySnapshot();
+      } catch (ScannerAdapterException failure) {
+        if (!failure.retryable()) {
+          throw failure;
+        }
+        throw new ScannerAdapterException(
+            SCANNER_OBSERVATION_UNAVAILABLE,
+            "Scanner observation is unavailable: " + failure.code(),
+            true,
+            failure);
+      }
     }
     return scans.findScannerSnapshot(task.requestedScannerSnapshotId())
         .filter(ScannerSnapshot::ready)

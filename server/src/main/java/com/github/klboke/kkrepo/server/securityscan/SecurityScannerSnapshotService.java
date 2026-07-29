@@ -6,6 +6,7 @@ import com.github.klboke.kkrepo.security.scan.ScanFingerprints;
 import com.github.klboke.kkrepo.security.scan.ScannerContract;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Adapter;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchResponse;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.Observation;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -45,11 +46,9 @@ public class SecurityScannerSnapshotService {
       return recent.get();
     }
 
-    final ScannerContract.Capabilities capabilities;
-    final ScannerContract.Readiness readiness;
+    final Observation observation;
     try {
-      capabilities = adapter.capabilities();
-      readiness = adapter.readiness();
+      observation = adapter.observation();
     } catch (ScannerAdapterException e) {
       observeFailure(e.code(), now);
       throw e;
@@ -57,6 +56,8 @@ public class SecurityScannerSnapshotService {
       observeFailure("SCANNER_OBSERVATION_FAILED", now);
       throw e;
     }
+    ScannerContract.Capabilities capabilities = observation.capabilities();
+    ScannerContract.Readiness readiness = observation.readiness();
     if (!ScannerContract.API_VERSION.equals(capabilities.apiVersion())) {
       observeFailure("SCANNER_API_UNSUPPORTED", now);
       throw new ScannerAdapterException(
