@@ -173,6 +173,16 @@ public interface SecurityScanDao {
 
   Optional<ScannerSnapshot> latestScannerSnapshot();
 
+  /**
+   * Returns the newest ready vulnerability-database build that is not beyond the supplied clock
+   * bound.
+   *
+   * <p>Database update time, rather than the auto-increment snapshot ID or observation time, is
+   * the durable monotonic epoch. This prevents a later observation from a lagging scanner replica
+   * from rolling shared scan state back to an older database.
+   */
+  Optional<ScannerSnapshot> latestReadyScannerSnapshot(Instant maximumDatabaseUpdatedAt);
+
   Sbom insertSbomOrFindExisting(Sbom sbom);
 
   Sbom publishSbom(Sbom sbom, List<SbomComponent> components);

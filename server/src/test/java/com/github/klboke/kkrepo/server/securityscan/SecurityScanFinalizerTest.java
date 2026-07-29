@@ -177,6 +177,39 @@ class SecurityScanFinalizerTest {
   }
 
   @Test
+  void newerPendingTaskPreventsOlderSuccessfulProjection() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    SecurityScanAuditService audit = mock(SecurityScanAuditService.class);
+    SecurityScanDocumentPersistence documents = mock(SecurityScanDocumentPersistence.class);
+    stubWaiverRevision(scans);
+    SecurityScanFinalizer finalizer =
+        new SecurityScanFinalizer(scans, repositories, audit, documents);
+    Instant now = Instant.now();
+    ScanTask task = task(1, 3);
+    ScanProfile profile = profile(now);
+    RepositoryScanConfig config = config(1L, 101L);
+    ScanRun run = run(now);
+    Sbom sbom = mock(Sbom.class);
+    when(sbom.subjectKind()).thenReturn(SubjectKind.ASSET_BLOB);
+    when(scans.insertRunOrFindExisting(run)).thenReturn(run);
+    when(scans.findSbom(run.sbomId())).thenReturn(Optional.of(sbom));
+    when(scans.findPolicy(101L)).thenReturn(Optional.of(policy(101L, Severity.HIGH, now)));
+    when(scans.taskProjectionIsSuperseded(5L)).thenReturn(true);
+    when(scans.completeTask(eq(5L), eq("lease"), any())).thenReturn(true);
+
+    ScanRun completed = finalizer.finalizeRun(
+        task, profile, config, "sha256:" + "a".repeat(64), run, List.of());
+
+    assertEquals(run, completed);
+    verify(scans, never()).upsertAssetStateIfCurrent(any());
+    verify(scans, never()).upsertAssetPolicyStateIfCurrent(any());
+    verify(audit, never()).recordSystem(eq("POLICY_STATE_CHANGED"), anyLong(), any(Map.class));
+    verify(scans).completeTask(eq(5L), eq("lease"), any());
+    verify(documents).releaseOwner(5L);
+  }
+
+  @Test
   void materializesIndependentMemberAndGroupPolicyContexts() {
     SecurityScanDao scans = mock(SecurityScanDao.class);
     stubWaiverRevision(scans);

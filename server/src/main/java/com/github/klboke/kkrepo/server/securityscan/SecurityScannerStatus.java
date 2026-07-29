@@ -12,7 +12,7 @@ import java.time.Instant;
  * database ages past the configured limit.
  */
 public record SecurityScannerStatus(boolean ready, String reasonCode) {
-  private static final Duration MAX_OBSERVATION_CLOCK_SKEW = Duration.ofSeconds(5);
+  private static final Duration MAX_PROVENANCE_CLOCK_SKEW = Duration.ofSeconds(5);
   static final String READY = "READY";
   static final String DEPLOYMENT_DISABLED = "DEPLOYMENT_DISABLED";
   static final String SNAPSHOT_UNAVAILABLE = "SNAPSHOT_UNAVAILABLE";
@@ -43,14 +43,23 @@ public record SecurityScannerStatus(boolean ready, String reasonCode) {
     if (databaseUpdatedAt == null) {
       return new SecurityScannerStatus(false, DATABASE_AGE_UNKNOWN);
     }
-    if (expired(databaseUpdatedAt, properties.getScannerDatabaseMaxAge(), now)) {
+    if (databaseTooFarInFuture(databaseUpdatedAt, now)
+        || expired(databaseUpdatedAt, properties.getScannerDatabaseMaxAge(), now)) {
       return new SecurityScannerStatus(false, DATABASE_STALE);
     }
     return new SecurityScannerStatus(true, READY);
   }
 
   static boolean observedTooFarInFuture(Instant observedAt, Instant now) {
-    return observedAt.isAfter(now.plus(MAX_OBSERVATION_CLOCK_SKEW));
+    return observedAt.isAfter(maximumProvenanceTimestamp(now));
+  }
+
+  static boolean databaseTooFarInFuture(Instant databaseUpdatedAt, Instant now) {
+    return databaseUpdatedAt.isAfter(maximumProvenanceTimestamp(now));
+  }
+
+  static Instant maximumProvenanceTimestamp(Instant now) {
+    return now.plus(MAX_PROVENANCE_CLOCK_SKEW);
   }
 
   private static boolean expired(Instant timestamp, Duration maxAge, Instant now) {

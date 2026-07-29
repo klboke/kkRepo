@@ -3,7 +3,9 @@ package com.github.klboke.kkrepo.server.securityscan;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -168,6 +170,27 @@ class SecurityScanManagementServiceCoreTest {
 
     assertFalse(overview.scannerStatus().ready());
     assertEquals("SCANNER_OBSERVATION_STALE", overview.scannerStatus().reasonCode());
+  }
+
+  @Test
+  void overviewSeparatesLatestHealthObservationFromAuthoritativeMatchingDatabase() {
+    Instant now = Instant.now();
+    SecurityScanDao.ScannerSnapshot laggingObservation =
+        mock(SecurityScanDao.ScannerSnapshot.class);
+    when(laggingObservation.ready()).thenReturn(true);
+    when(laggingObservation.observedAt()).thenReturn(now);
+    when(laggingObservation.vulnerabilityDatabaseUpdatedAt())
+        .thenReturn(now.minusSeconds(120));
+    SecurityScanDao.ScannerSnapshot authoritative = mock(SecurityScanDao.ScannerSnapshot.class);
+    when(authoritative.vulnerabilityDatabaseUpdatedAt()).thenReturn(now.minusSeconds(60));
+    when(scans.latestScannerSnapshot()).thenReturn(Optional.of(laggingObservation));
+    when(scans.latestReadyScannerSnapshot(any())).thenReturn(Optional.of(authoritative));
+
+    var overview = service.overview(actor);
+
+    assertSame(laggingObservation, overview.scanner());
+    assertSame(authoritative, overview.matchingScanner());
+    assertTrue(overview.scannerStatus().ready());
   }
 
   @Test

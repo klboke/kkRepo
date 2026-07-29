@@ -978,6 +978,11 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Override
   @Transactional
   public long createTask(TaskDraft task) {
+    if (task.assetId() != null) {
+      // Task creation and terminal projection share one durable per-asset authority. Once a newer
+      // task exists, an older replica cannot publish a transient or terminal state over it.
+      lockScanCandidate(task.assetId());
+    }
     Instant requestedAt = requiredNow(task.requestedAt());
     byte[] subjectHash = PersistenceHashes.sha256(task.subjectKey());
     String snapshot = task.requestedScannerSnapshotId() == null
@@ -1562,17 +1567,22 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         SELECT CASE WHEN EXISTS (
           SELECT 1
           FROM security_scan_task task
-          JOIN asset_security_state state
+          LEFT JOIN asset_security_state state
             ON state.asset_id = task.asset_id
            AND state.profile_id = task.profile_id
            AND state.content_generation = task.content_generation
           LEFT JOIN security_scan_run current_run ON current_run.id = state.latest_scan_run_id
+          LEFT JOIN security_scanner_snapshot current_snapshot
+            ON current_snapshot.id = current_run.scanner_snapshot_id
+          LEFT JOIN security_scanner_snapshot requested_snapshot
+            ON requested_snapshot.id = task.requested_scanner_snapshot_id
           WHERE task.id = ?
             AND (
               (current_run.task_id IS NOT NULL AND current_run.task_id > task.id)
               OR (
                 task.requested_scanner_snapshot_id IS NOT NULL
-                AND current_run.scanner_snapshot_id > task.requested_scanner_snapshot_id
+                AND current_snapshot.vulnerability_database_updated_at
+                    > requested_snapshot.vulnerability_database_updated_at
               )
               OR EXISTS (
                 SELECT 1
@@ -1581,7 +1591,6 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
                   AND newer_task.profile_id = task.profile_id
                   AND newer_task.content_generation = task.content_generation
                   AND newer_task.id > task.id
-                  AND newer_task.status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
               )
             )
         ) THEN 1 ELSE 0 END
@@ -1630,12 +1639,11 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     }
     jdbc.update("""
         UPDATE security_scanner_snapshot
-        SET observed_at = ?, vulnerability_database_updated_at = ?, ready = ?, details_json = ?
+        SET observed_at = ?, ready = ?, details_json = ?
         WHERE snapshot_fingerprint = ?
           AND observed_at < ?
         """,
         nullableTimestamp(snapshot.observedAt()),
-        nullableTimestamp(snapshot.vulnerabilityDatabaseUpdatedAt()),
         snapshot.ready(),
         json.serializedParameter(json.writeValue(snapshot.details())),
         snapshot.snapshotFingerprint(),
@@ -1665,6 +1673,22 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     return jdbc.query("""
         SELECT * FROM security_scanner_snapshot ORDER BY observed_at DESC, id DESC LIMIT 1
         """, snapshotMapper).stream().findFirst();
+  }
+
+  @Override
+  public Optional<ScannerSnapshot> latestReadyScannerSnapshot(
+      Instant maximumDatabaseUpdatedAt) {
+    return jdbc.query("""
+        SELECT *
+        FROM security_scanner_snapshot
+        WHERE ready = TRUE
+          AND vulnerability_database_updated_at IS NOT NULL
+          AND vulnerability_database_updated_at <= ?
+        ORDER BY vulnerability_database_updated_at DESC, observed_at DESC, id DESC
+        LIMIT 1
+        """, snapshotMapper, nullableTimestamp(maximumDatabaseUpdatedAt))
+        .stream()
+        .findFirst();
   }
 
   @Override
@@ -2432,8 +2456,13 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
             SELECT 1
             FROM security_scan_run current_run
             JOIN security_scan_run proposed_run ON proposed_run.id = ?
+            JOIN security_scanner_snapshot current_snapshot
+              ON current_snapshot.id = current_run.scanner_snapshot_id
+            JOIN security_scanner_snapshot proposed_snapshot
+              ON proposed_snapshot.id = proposed_run.scanner_snapshot_id
             WHERE current_run.id = s.latest_scan_run_id
-              AND current_run.scanner_snapshot_id > proposed_run.scanner_snapshot_id
+              AND current_snapshot.vulnerability_database_updated_at
+                  > proposed_snapshot.vulnerability_database_updated_at
           )
         """,
         state.contentGeneration(),
@@ -2523,8 +2552,13 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
             SELECT 1
             FROM security_scan_run current_run
             JOIN security_scan_run proposed_run ON proposed_run.id = ?
+            JOIN security_scanner_snapshot current_snapshot
+              ON current_snapshot.id = current_run.scanner_snapshot_id
+            JOIN security_scanner_snapshot proposed_snapshot
+              ON proposed_snapshot.id = proposed_run.scanner_snapshot_id
             WHERE current_run.id = s.latest_scan_run_id
-              AND current_run.scanner_snapshot_id > proposed_run.scanner_snapshot_id
+              AND current_snapshot.vulnerability_database_updated_at
+                  > proposed_snapshot.vulnerability_database_updated_at
           )
         """,
         state.contentGeneration(),
@@ -3825,13 +3859,19 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         )
         SELECT
           COUNT(DISTINCT CASE
-            WHEN scan_state = 'COMPLETE' THEN asset_id END)
+            WHEN scan_state = 'COMPLETE'
+             AND state_content_generation = candidate_content_generation
+              THEN asset_id END)
             AS complete_assets,
           COUNT(DISTINCT CASE
-            WHEN scan_state = 'PARTIAL' THEN asset_id END)
+            WHEN scan_state = 'PARTIAL'
+             AND state_content_generation = candidate_content_generation
+              THEN asset_id END)
             AS partial_assets,
           COUNT(DISTINCT CASE
-            WHEN scan_state = 'STALE' THEN asset_id END)
+            WHEN scan_state = 'STALE'
+             AND state_content_generation = candidate_content_generation
+              THEN asset_id END)
             AS stale_assets,
           COUNT(DISTINCT CASE
             WHEN profile_id IS NULL OR profile_enabled = FALSE
@@ -3861,20 +3901,30 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         nullableTimestamp(summaryAt),
         nullableTimestamp(summaryAt));
     Map<String, Object> findings = jdbc.queryForMap(repositoryScopeCte() + """
+        , current_run AS (
+          SELECT DISTINCT state.latest_scan_run_id AS scan_run_id
+          FROM asset_security_state state
+          JOIN security_scan_candidate candidate
+            ON candidate.asset_id = state.asset_id
+           AND candidate.content_generation = state.content_generation
+          JOIN security_scan_run_subject subject
+            ON subject.scan_run_id = state.latest_scan_run_id
+           AND subject.asset_id = state.asset_id
+           AND subject.profile_id = state.profile_id
+           AND subject.content_generation = state.content_generation
+          JOIN visible_repository visible
+            ON visible.repository_id = subject.repository_id
+          WHERE state.latest_scan_run_id IS NOT NULL
+        )
         SELECT
           COALESCE(SUM(CASE WHEN finding.severity = 'CRITICAL' THEN 1 ELSE 0 END), 0)
             AS critical_findings,
           COALESCE(SUM(CASE WHEN finding.severity = 'HIGH' THEN 1 ELSE 0 END), 0)
             AS high_findings
-        FROM security_scan_finding finding
+        FROM current_run
+        JOIN security_scan_finding finding
+          ON finding.scan_run_id = current_run.scan_run_id
         WHERE finding.severity IN ('CRITICAL', 'HIGH')
-          AND EXISTS (
-            SELECT 1
-            FROM security_scan_run_subject subject
-            JOIN visible_repository visible
-              ON visible.repository_id = subject.repository_id
-            WHERE subject.scan_run_id = finding.scan_run_id
-          )
         """, repositoryScope);
     return new ScanSummary(
         candidates,
@@ -3906,12 +3956,26 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
             WHERE status = 'FAILED'
             """, limit),
         boundedCount("""
-            SELECT asset_id FROM asset_security_state
-            WHERE scan_state = 'PARTIAL'
+            SELECT state.asset_id
+            FROM asset_security_state state
+            JOIN security_scan_candidate candidate
+              ON candidate.asset_id = state.asset_id
+             AND candidate.content_generation = state.content_generation
+            WHERE state.scan_state = 'PARTIAL'
             """, limit),
         boundedCount("""
-            SELECT id FROM security_scan_finding
-            WHERE severity IN ('CRITICAL', 'HIGH')
+            SELECT finding.id
+            FROM (
+              SELECT DISTINCT state.latest_scan_run_id AS scan_run_id
+              FROM asset_security_state state
+              JOIN security_scan_candidate candidate
+                ON candidate.asset_id = state.asset_id
+               AND candidate.content_generation = state.content_generation
+              WHERE state.latest_scan_run_id IS NOT NULL
+            ) current_run
+            JOIN security_scan_finding finding
+              ON finding.scan_run_id = current_run.scan_run_id
+             AND finding.severity IN ('CRITICAL', 'HIGH')
             """, limit));
   }
 

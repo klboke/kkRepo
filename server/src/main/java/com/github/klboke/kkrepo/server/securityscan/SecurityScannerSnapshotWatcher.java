@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.securityscan;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanProfile;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScannerSnapshot;
+import java.time.Instant;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,7 +42,8 @@ public class SecurityScannerSnapshotWatcher {
       fixedDelayString = "${kkrepo.security-scanning.snapshot-watch-delay:60s}",
       initialDelayString = "${kkrepo.security-scanning.snapshot-watch-initial-delay:15s}")
   public void reconcile() {
-    ScannerSnapshot previous = scans.latestScannerSnapshot().orElse(null);
+    ScannerSnapshot previous = scans.latestReadyScannerSnapshot(
+        SecurityScannerStatus.maximumProvenanceTimestamp(Instant.now())).orElse(null);
     ScannerSnapshot current;
     try {
       current = snapshots.readySnapshot();

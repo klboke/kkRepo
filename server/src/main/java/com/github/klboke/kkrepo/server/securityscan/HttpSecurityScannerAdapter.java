@@ -743,6 +743,11 @@ public class HttpSecurityScannerAdapter implements Adapter {
         && Objects.equals(
             expected.vulnerabilityDatabaseRevision(),
             response.vulnerabilityDatabaseRevision())
+        && Objects.equals(
+            ScannerContract.canonicalDatabaseTimestamp(
+                expected.vulnerabilityDatabaseUpdatedAt()),
+            ScannerContract.canonicalDatabaseTimestamp(
+                response.vulnerabilityDatabaseUpdatedAt()))
         && Objects.equals(expected.capabilityDigest(), response.capabilityDigest())) {
       return;
     }

@@ -323,10 +323,18 @@ The summary shows:
 - Complete assets, Partial/stale, and Policy blocks.
 - Critical/high finding counts.
 
+Asset and finding counters include only the authoritative scan state for each asset's current
+content generation. Historical runs remain available for audit but do not inflate the overview or
+operational metrics.
+
 The scanner adapter obtains the Vulnerability DB value from
 `grype db status --output json`. It prefers a checksum, digest, or revision and falls back to the
 built timestamp or schema version, so the UI may show an ISO timestamp. This is not the
 schema/Flyway version of the kkRepo relational database.
+
+Scanner health follows the most recent adapter observation. The displayed Vulnerability DB value
+follows the newest accepted database build timestamp, so a lagging replica cannot roll the
+effective matching version backward.
 
 The Runs table shows completed scan runs, completeness, finding counts, and completion time. Click
 **download** to retrieve the access-controlled CycloneDX JSON SBOM.

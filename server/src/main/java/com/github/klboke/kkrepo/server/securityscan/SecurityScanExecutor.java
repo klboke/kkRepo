@@ -416,6 +416,7 @@ public class SecurityScanExecutor {
         profile.matcherEngine(),
         snapshot.engineVersion(),
         snapshot.vulnerabilityDatabaseRevision(),
+        snapshot.vulnerabilityDatabaseUpdatedAt(),
         profile.configurationDigest());
     String reusableFingerprint = matchFingerprint(task, expectedFingerprint);
     ScanRun reusable = reusableRun(task, reusableFingerprint);
@@ -486,9 +487,10 @@ public class SecurityScanExecutor {
     String fingerprint = matchFingerprint(task, ScanFingerprints.match(
         sbom.documentSha256(),
         sbom.inventoryComplete(),
-        response.engineName(),
-        response.engineVersion(),
-        response.vulnerabilityDatabaseRevision(),
+        actualSnapshot.engineName(),
+        actualSnapshot.engineVersion(),
+        actualSnapshot.vulnerabilityDatabaseRevision(),
+        actualSnapshot.vulnerabilityDatabaseUpdatedAt(),
         profile.configurationDigest(),
         scannedPlatforms,
         missingPlatforms));
@@ -602,6 +604,7 @@ public class SecurityScanExecutor {
         snapshot.engineName(),
         snapshot.engineVersion(),
         snapshot.vulnerabilityDatabaseRevision(),
+        snapshot.vulnerabilityDatabaseUpdatedAt(),
         snapshot.capabilityDigest());
   }
 

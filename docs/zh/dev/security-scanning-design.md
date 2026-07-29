@@ -500,6 +500,9 @@ asset/blob binding，只有 candidate 缺失或指向不同 Blob 时才推进 ge
 - waiver 的 repository/asset/id 活跃游标、finding/advisory/package selector 索引；
 - repository policy state 的 config/waiver revision 上下文索引；
 - finding、run subject、scanner snapshot 的 retention/关联索引。
+- Overview 与指标先收敛到当前内容代际的去重 run 集合，再通过
+  `(scan_run_id, severity, id)` 覆盖索引读取高风险 finding；历史 run 数量不会线性
+  放大每次统计的 finding 扫描范围。
 
 事件 backlog 指标只读取 `artifact_change_event` 主键最小/最大水位；周期性状态指标按
 索引最多读取 `metrics-count-limit` 行并在上限处饱和，不执行无界全表 `COUNT(*)`。
@@ -646,6 +649,14 @@ Idempotency-Key 合并。
 
 `details_json` 必须有大小上限且不能保存 credential。后台 watcher 把 scanner metadata
 写入共享数据库，所有副本使用同一观察结果安排重扫。
+
+`observed_at` 只表示 adapter 健康观测时间，不能作为漏洞库新旧顺序。调度和状态投影按
+`vulnerability_database_updated_at` 选择最新、且未超出允许时钟偏差的 ready snapshot；
+`id` 仅在构建时间和观测时间相同时作为确定性排序项。snapshot fingerprint 必须包含漏洞
+库构建时间，避免 schema/revision 未变化的数据库更新被错误合并。来自落后副本的较晚
+观测可以保留用于健康诊断，但不能回滚已生效的匹配版本。构建时间在 HTTP 校验、
+fingerprint 和持久化边界统一规范到数据库支持的毫秒精度，避免同一构建因 wire
+timestamp 的更细精度被误判为不同 snapshot。
 
 ### `security_sbom`
 

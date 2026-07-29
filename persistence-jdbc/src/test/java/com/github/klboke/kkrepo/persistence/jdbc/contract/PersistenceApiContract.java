@@ -554,8 +554,29 @@ public abstract class PersistenceApiContract {
         now.plusSeconds(1),
         staleObservation.observedAt(),
         "an older replica observation must not move the shared snapshot timestamp backwards");
-    assertEquals(now.minusSeconds(30), staleObservation.vulnerabilityDatabaseUpdatedAt());
+    assertEquals(
+        now.minusSeconds(60),
+        staleObservation.vulnerabilityDatabaseUpdatedAt(),
+        "database build provenance is immutable for one snapshot fingerprint");
     assertEquals("1.0.0", staleObservation.details().get("catalogEngineVersion"));
+    SecurityScanDao.ScannerSnapshot newestDatabase =
+        scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+            null, "contract-adapter", "v1", "grype", "0.1.0", "newest-db",
+            now.minusSeconds(10), "a".repeat(64), "c".repeat(64), now.plusSeconds(2), true,
+            Map.of()));
+    SecurityScanDao.ScannerSnapshot laggingReplica =
+        scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+            null, "contract-adapter", "v1", "grype", "0.1.0", "lagging-db",
+            now.minusSeconds(300), "a".repeat(64), "d".repeat(64), now.plusSeconds(3), true,
+            Map.of()));
+    assertEquals(
+        laggingReplica.id(),
+        scans.latestScannerSnapshot().orElseThrow().id(),
+        "latest observation still represents scanner health");
+    assertEquals(
+        newestDatabase.id(),
+        scans.latestReadyScannerSnapshot(now.plusSeconds(5)).orElseThrow().id(),
+        "a later observation from a lagging replica must not regress the authoritative DB epoch");
     long snapshotTaskId = scans.createTask(new SecurityScanDao.TaskDraft(
         repositoryId,
         assetId,
@@ -1018,6 +1039,10 @@ public abstract class PersistenceApiContract {
     assertEquals(1, visibleSummary.highFindings());
     assertEquals(
         1,
+        scans.metricSummary(100).highRiskFindings(),
+        "operational finding counters must include the current authoritative run");
+    assertEquals(
+        1,
         scans.summary(List.of(repositoryId, groupRepositoryId)).highFindings(),
         "a finding associated with multiple visible repositories must be counted once");
     assertEquals(
@@ -1404,6 +1429,23 @@ public abstract class PersistenceApiContract {
     assertEquals(replacementBlobId, replacementEvents.getFirst().assetBlobId());
     assertEquals(1, foldArtifactChanges(artifactChangeCursor));
     assertEquals(2, scans.findCandidate(assetId).orElseThrow().contentGeneration());
+    SecurityScanDao.ScanSummary obsoleteGenerationSummary =
+        scans.summary(List.of(repositoryId));
+    assertEquals(0, obsoleteGenerationSummary.completeAssets());
+    assertEquals(0, obsoleteGenerationSummary.partialAssets());
+    assertEquals(0, obsoleteGenerationSummary.staleAssets());
+    assertEquals(
+        0,
+        obsoleteGenerationSummary.highFindings(),
+        "overview finding counters must exclude obsolete content generations");
+    assertEquals(
+        0,
+        scans.metricSummary(100).partialAssets(),
+        "operational state counters must exclude obsolete content generations");
+    assertEquals(
+        0,
+        scans.metricSummary(100).highRiskFindings(),
+        "operational finding counters must exclude obsolete content generations");
     SecurityScanDao.AssetSecurityState afterStaleFinalize = scans.upsertAssetStateIfCurrent(
         new SecurityScanDao.AssetSecurityState(
             assetId, profileId, 1, PersistenceHashes.sha256("stale"), runId, ScanState.COMPLETE,
@@ -1534,20 +1576,6 @@ public abstract class PersistenceApiContract {
         1,
         now,
         now));
-    SecurityScanDao.ScannerSnapshot olderSnapshot =
-        scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
-            null,
-            "contract-adapter",
-            "v1",
-            "grype",
-            "0.1.0",
-            "older-db",
-            now.minusSeconds(120),
-            "2".repeat(64),
-            "3".repeat(64),
-            now,
-            true,
-            Map.of()));
     SecurityScanDao.ScannerSnapshot newerSnapshot =
         scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
             null,
@@ -1559,10 +1587,29 @@ public abstract class PersistenceApiContract {
             now.minusSeconds(60),
             "2".repeat(64),
             "4".repeat(64),
+            now,
+            true,
+            Map.of()));
+    SecurityScanDao.ScannerSnapshot olderSnapshot =
+        scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+            null,
+            "contract-adapter",
+            "v1",
+            "grype",
+            "0.1.0",
+            "older-db",
+            now.minusSeconds(120),
+            "2".repeat(64),
+            "3".repeat(64),
             now.plusSeconds(1),
             true,
             Map.of()));
-    assertTrue(newerSnapshot.id() > olderSnapshot.id());
+    assertTrue(
+        olderSnapshot.id() > newerSnapshot.id(),
+        "snapshot IDs intentionally run opposite to vulnerability database chronology");
+    assertEquals(
+        newerSnapshot.id(),
+        scans.latestReadyScannerSnapshot(now.plusSeconds(5)).orElseThrow().id());
     long olderTaskId = scans.createTask(new SecurityScanDao.TaskDraft(
         repositoryId,
         assetId,
@@ -1598,6 +1645,35 @@ public abstract class PersistenceApiContract {
         "newer-snapshot-task",
         now.plusSeconds(1)));
     assertTrue(newerTaskId > olderTaskId);
+
+    scans.upsertAssetStateIfCurrent(new SecurityScanDao.AssetSecurityState(
+        assetId,
+        profile.id(),
+        1,
+        PersistenceHashes.sha256("sha256:" + "5".repeat(64)),
+        null,
+        ScanState.PENDING,
+        ScanCompleteness.PARTIAL,
+        false,
+        Severity.UNKNOWN,
+        Map.of(),
+        null,
+        null,
+        PolicyDecision.BLOCK_PENDING,
+        "NEWER_TASK_PENDING",
+        null,
+        now.plusSeconds(1),
+        0));
+    assertTrue(scans.cancelTask(olderTaskId, now.plusSeconds(1)));
+    SecurityScanDao.AssetSecurityState afterOlderPendingCancel =
+        scans.findAssetState(assetId, profile.id()).orElseThrow();
+    assertEquals(ScanState.PENDING, afterOlderPendingCancel.scanState());
+    assertEquals(PolicyDecision.BLOCK_PENDING, afterOlderPendingCancel.policyDecision());
+    assertTrue(scans.requeueTask(olderTaskId, now.plusSeconds(1), "contract"));
+    SecurityScanDao.AssetSecurityState afterOlderPendingRetry =
+        scans.findAssetState(assetId, profile.id()).orElseThrow();
+    assertEquals(ScanState.PENDING, afterOlderPendingRetry.scanState());
+    assertEquals(PolicyDecision.BLOCK_PENDING, afterOlderPendingRetry.policyDecision());
 
     long sbomBlobId = stores().assets().insertBlob(
         blob(blobStoreId, "security/snapshot-fence-sbom.json", "snapshot-fence-sbom"));

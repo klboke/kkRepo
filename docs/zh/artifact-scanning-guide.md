@@ -298,10 +298,16 @@ metadata 不会被送入扫描器。
 - Complete assets、Partial/stale、Policy blocks。
 - Critical/high finding 数量。
 
+制品与 finding 统计只包含每个制品当前内容代际对应的权威扫描状态。历史 run 仍可用于
+审计，但不会累加到 Overview 或运行指标中。
+
 Vulnerability DB 的版本值由 scanner adapter 执行
 `grype db status --output json` 获取。adapter 优先使用 checksum、digest 或 revision；
 没有这些字段时使用 built 时间或 schema version，因此当前界面可能显示 ISO 时间。
 它不是 kkRepo 关系数据库的 schema/Flyway 版本。
+
+Scanner 健康状态以最近一次 adapter 观测为准；界面展示的 Vulnerability DB 则以已接受
+的最新漏洞库构建时间为准，因此落后副本不能让实际匹配版本倒退。
 
 下方 Runs 表展示完成的扫描 run、完整性、finding 数量和完成时间。点击 **download**
 下载受鉴权保护的 CycloneDX JSON SBOM。

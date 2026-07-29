@@ -132,7 +132,8 @@ CREATE TABLE security_scanner_snapshot (
   PRIMARY KEY (id),
   CONSTRAINT uk_security_scanner_snapshot UNIQUE (snapshot_fingerprint),
   INDEX idx_security_scanner_snapshot_observed (observed_at, id),
-  INDEX idx_security_scanner_snapshot_ready (ready, observed_at)
+  INDEX idx_security_scanner_snapshot_ready
+    (ready, vulnerability_database_updated_at, observed_at, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE security_scan_task (
@@ -185,7 +186,7 @@ CREATE TABLE security_scan_task (
   INDEX idx_security_scan_task_requested_snapshot (requested_scanner_snapshot_id),
   INDEX idx_security_scan_task_asset (asset_id, created_at, id),
   INDEX idx_security_scan_task_projection
-    (asset_id, profile_id, content_generation, id, status),
+    (asset_id, profile_id, content_generation, id),
   INDEX idx_security_scan_task_repository (repository_id, created_at, id),
   INDEX idx_security_scan_task_repository_profile (repository_id, profile_id, id),
   INDEX idx_security_scan_task_repository_status (repository_id, status, id),
@@ -335,7 +336,8 @@ CREATE TABLE security_scan_finding (
   CONSTRAINT uk_security_scan_finding_key UNIQUE (scan_run_id, finding_key_hash),
   INDEX idx_security_scan_finding_advisory (advisory_id, severity),
   INDEX idx_security_scan_finding_package (package_name(191), installed_version(191)),
-  INDEX idx_security_scan_finding_severity (severity, scan_run_id, id)
+  INDEX idx_security_scan_finding_severity (severity, scan_run_id, id),
+  INDEX idx_security_scan_finding_run_severity (scan_run_id, severity, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE asset_security_state (

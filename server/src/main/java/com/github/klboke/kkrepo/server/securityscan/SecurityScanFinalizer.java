@@ -91,40 +91,42 @@ public class SecurityScanFinalizer {
     counts.put("waived", evaluation.waivedFindings());
     Instant staleAt = primary.staleAt();
 
-    AssetSecurityState previous = scans.findAssetState(task.assetId(), profile.id()).orElse(null);
-    AssetSecurityState updated = scans.upsertAssetStateIfCurrent(new AssetSecurityState(
-        task.assetId(),
-        profile.id(),
-        task.contentGeneration(),
-        PersistenceHashes.sha256(subjectIdentity),
-        run.id(),
-        run.status(),
-        run.scanCompleteness(),
-        run.scanCompleteness()
-            == com.github.klboke.kkrepo.security.scan.ScanEnums.ScanCompleteness.COMPLETE,
-        run.maxSeverity(),
-        counts,
-        policy == null ? null : policy.id(),
-        policy == null ? null : policy.revision(),
-        evaluation.decision(),
-        evaluation.reasonCode(),
-        staleAt,
-        now,
-        0));
-    if (updated.contentGeneration() == task.contentGeneration()
-        && Objects.equals(updated.latestScanRunId(), run.id())) {
-      auditPolicyTransition(task.repositoryId(), previous, updated);
-      materializePolicyContexts(
-          task.repositoryId(),
+    if (!scans.taskProjectionIsSuperseded(task.id())) {
+      AssetSecurityState previous = scans.findAssetState(task.assetId(), profile.id()).orElse(null);
+      AssetSecurityState updated = scans.upsertAssetStateIfCurrent(new AssetSecurityState(
           task.assetId(),
+          profile.id(),
           task.contentGeneration(),
-          profile,
-          run,
-          findings,
-          config,
-          primary,
+          PersistenceHashes.sha256(subjectIdentity),
+          run.id(),
+          run.status(),
+          run.scanCompleteness(),
+          run.scanCompleteness()
+              == com.github.klboke.kkrepo.security.scan.ScanEnums.ScanCompleteness.COMPLETE,
+          run.maxSeverity(),
+          counts,
+          policy == null ? null : policy.id(),
+          policy == null ? null : policy.revision(),
+          evaluation.decision(),
+          evaluation.reasonCode(),
+          staleAt,
           now,
-          ociSubject);
+          0));
+      if (updated.contentGeneration() == task.contentGeneration()
+          && Objects.equals(updated.latestScanRunId(), run.id())) {
+        auditPolicyTransition(task.repositoryId(), previous, updated);
+        materializePolicyContexts(
+            task.repositoryId(),
+            task.assetId(),
+            task.contentGeneration(),
+            profile,
+            run,
+            findings,
+            config,
+            primary,
+            now,
+            ociSubject);
+      }
     }
     if (!scans.completeTask(task.id(), task.leaseToken(), now)) {
       throw new LostSecurityScanLeaseException(task.id());

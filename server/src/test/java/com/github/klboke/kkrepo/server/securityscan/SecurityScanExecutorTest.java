@@ -139,6 +139,7 @@ class SecurityScanExecutorTest {
         fixture.profile.matcherEngine(),
         fixture.snapshot.engineVersion(),
         fixture.snapshot.vulnerabilityDatabaseRevision(),
+        fixture.snapshot.vulnerabilityDatabaseUpdatedAt(),
         fixture.profile.configurationDigest());
     String snapshotFingerprint = ScanFingerprints.sha256(
         "scanner-snapshot", baseFingerprint, fixture.snapshot.id().toString());
@@ -177,6 +178,7 @@ class SecurityScanExecutorTest {
         fixture.profile.matcherEngine(),
         fixture.snapshot.engineVersion(),
         fixture.snapshot.vulnerabilityDatabaseRevision(),
+        fixture.snapshot.vulnerabilityDatabaseUpdatedAt(),
         fixture.profile.configurationDigest());
     String refreshFingerprint =
         ScanFingerprints.sha256("max-age-refresh", baseFingerprint, "5");

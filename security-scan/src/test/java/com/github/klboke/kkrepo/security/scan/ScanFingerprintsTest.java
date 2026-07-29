@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 import com.github.klboke.kkrepo.security.scan.ScanEnums.SubjectKind;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.TargetClassification;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -40,6 +41,7 @@ class ScanFingerprintsTest {
         "grype",
         "1",
         "db",
+        Instant.parse("2026-07-29T00:00:00Z"),
         "config",
         List.of("linux/amd64", "linux/arm64"),
         List.of());
@@ -49,11 +51,56 @@ class ScanFingerprintsTest {
         "grype",
         "1",
         "db",
+        Instant.parse("2026-07-29T00:00:00Z"),
         "config",
         List.of("linux/amd64"),
         List.of("linux/arm64"));
 
     assertNotEquals(complete, partial);
+  }
+
+  @Test
+  void matchFingerprintIncludesTheVulnerabilityDatabaseBuildTime() {
+    String older = ScanFingerprints.match(
+        "a".repeat(64),
+        true,
+        "grype",
+        "1",
+        "schema-v6",
+        Instant.parse("2026-07-28T00:00:00Z"),
+        "config");
+    String newer = ScanFingerprints.match(
+        "a".repeat(64),
+        true,
+        "grype",
+        "1",
+        "schema-v6",
+        Instant.parse("2026-07-29T00:00:00Z"),
+        "config");
+
+    assertNotEquals(older, newer);
+  }
+
+  @Test
+  void matchFingerprintUsesThePersistedDatabaseTimestampPrecision() {
+    String persisted = ScanFingerprints.match(
+        "a".repeat(64),
+        true,
+        "grype",
+        "1",
+        "schema-v6",
+        Instant.parse("2026-07-29T00:00:00.123Z"),
+        "config");
+    String wire = ScanFingerprints.match(
+        "a".repeat(64),
+        true,
+        "grype",
+        "1",
+        "schema-v6",
+        Instant.parse("2026-07-29T00:00:00.123456789Z"),
+        "config");
+
+    assertEquals(persisted, wire);
   }
 
   @Test

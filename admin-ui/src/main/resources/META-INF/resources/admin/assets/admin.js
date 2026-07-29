@@ -4301,6 +4301,7 @@ function renderSecurityScanSummary() {
   }
   const summary = payload.summary || {};
   const scanner = payload.scanner;
+  const matchingScanner = payload.matchingScanner || scanner;
   const scannerHealth = payload.scannerStatus;
   const scannerStatus = !payload.deploymentEnabled
     ? "Disabled"
@@ -4326,7 +4327,8 @@ function renderSecurityScanSummary() {
         ${escapeHtml(scannerStatus)}
       </strong>
     </div>`;
-  const databaseRevision = String(scanner?.vulnerabilityDatabaseRevision || "-");
+  const databaseRevision =
+    String(matchingScanner?.vulnerabilityDatabaseRevision || "-");
   const databaseRevisionMatch =
     databaseRevision.match(/^(\d{4}-\d{2}-\d{2})T(.+)$/);
   const databaseRevisionMarkup = databaseRevisionMatch

@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.security.scan;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
 
@@ -50,6 +51,7 @@ public final class ScanFingerprints {
       String matcherEngine,
       String matcherEngineVersion,
       String vulnerabilityDatabaseRevision,
+      Instant vulnerabilityDatabaseUpdatedAt,
       String matchConfigurationDigest) {
     return match(
         sbomSha256,
@@ -57,6 +59,7 @@ public final class ScanFingerprints {
         matcherEngine,
         matcherEngineVersion,
         vulnerabilityDatabaseRevision,
+        vulnerabilityDatabaseUpdatedAt,
         matchConfigurationDigest,
         List.of(),
         List.of());
@@ -68,6 +71,7 @@ public final class ScanFingerprints {
       String matcherEngine,
       String matcherEngineVersion,
       String vulnerabilityDatabaseRevision,
+      Instant vulnerabilityDatabaseUpdatedAt,
       String matchConfigurationDigest,
       List<String> scannedPlatforms,
       List<String> missingPlatforms) {
@@ -77,6 +81,7 @@ public final class ScanFingerprints {
         matcherEngine,
         matcherEngineVersion,
         vulnerabilityDatabaseRevision,
+        canonicalDatabaseTimestamp(vulnerabilityDatabaseUpdatedAt),
         matchConfigurationDigest,
         canonicalPlatforms(scannedPlatforms),
         canonicalPlatforms(missingPlatforms));
@@ -88,6 +93,11 @@ public final class ScanFingerprints {
     }
     return values.stream().filter(java.util.Objects::nonNull).distinct().sorted()
         .collect(java.util.stream.Collectors.joining("\n"));
+  }
+
+  private static String canonicalDatabaseTimestamp(Instant value) {
+    Instant canonical = ScannerContract.canonicalDatabaseTimestamp(value);
+    return canonical == null ? "" : canonical.toString();
   }
 
   public static String finding(

@@ -11,6 +11,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -176,10 +177,14 @@ class SecurityScanSchedulingServicesTest {
     SecurityScannerSnapshotService service =
         new SecurityScannerSnapshotService(adapter, scans, properties, metrics);
     ScannerSnapshot fresh = snapshot(1L, true, "db-1", Instant.now(), "fingerprint-1");
+    ScannerSnapshot authoritative =
+        snapshot(9L, true, "db-2", Instant.now(), "authoritative-fingerprint");
     when(scans.latestScannerSnapshot()).thenReturn(Optional.of(fresh));
+    when(scans.latestReadyScannerSnapshot(any()))
+        .thenReturn(Optional.of(authoritative));
 
-    assertEquals(fresh, service.readySnapshot());
-    verify(metrics).observeScanner(true, fresh.vulnerabilityDatabaseUpdatedAt());
+    assertEquals(authoritative, service.readySnapshot());
+    verify(metrics).observeScanner(true, authoritative.vulnerabilityDatabaseUpdatedAt());
 
     ScannerSnapshot notReady =
         snapshot(2L, false, "db-1", Instant.now(), "fingerprint-2");
@@ -220,6 +225,13 @@ class SecurityScanSchedulingServicesTest {
     assertEquals(
         "SCANNER_DATABASE_STALE",
         assertThrows(ScannerAdapterException.class, service::readySnapshot).code());
+
+    ScannerSnapshot futureDatabase =
+        snapshot(5L, true, "db-1", Instant.now().plus(Duration.ofHours(1)), "fingerprint-5");
+    when(scans.latestScannerSnapshot()).thenReturn(Optional.of(futureDatabase));
+    assertEquals(
+        "SCANNER_DATABASE_STALE",
+        assertThrows(ScannerAdapterException.class, service::readySnapshot).code());
   }
 
   @Test
@@ -255,13 +267,16 @@ class SecurityScanSchedulingServicesTest {
         2048,
         "capability");
     Instant adapterObservedAt = Instant.now().plus(Duration.ofDays(1));
+    Instant databaseUpdatedAt =
+        Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
+            .plusNanos(123_456_789);
     Readiness readiness = new Readiness(
         true,
         "READY",
         "grype",
         "2",
         "db-2",
-        Instant.now(),
+        databaseUpdatedAt,
         adapterObservedAt,
         Map.of("catalogEngineVersion", "1"));
     when(adapter.observation()).thenReturn(new Observation(capabilities, readiness));
@@ -284,10 +299,16 @@ class SecurityScanSchedulingServicesTest {
         });
 
     ScannerSnapshot observed = service.readySnapshot();
-    ScannerSnapshot matched = service.snapshotFor(matchResponse(), observed);
+    ScannerSnapshot matched = service.snapshotFor(matchResponse(databaseUpdatedAt), observed);
 
     assertEquals(8L, observed.id());
     assertEquals("grype", matched.engineName());
+    assertEquals(
+        databaseUpdatedAt.truncatedTo(java.time.temporal.ChronoUnit.MILLIS),
+        observed.vulnerabilityDatabaseUpdatedAt());
+    assertEquals(
+        databaseUpdatedAt.truncatedTo(java.time.temporal.ChronoUnit.MILLIS),
+        matched.vulnerabilityDatabaseUpdatedAt());
     assertEquals("1", matched.details().get("catalogEngineVersion"));
     assertEquals(List.of("CATALOG", "MATCH"), matched.details().get("operations"));
 
@@ -328,6 +349,41 @@ class SecurityScanSchedulingServicesTest {
   }
 
   @Test
+  void snapshotServiceRejectsFutureDatabaseBuildsBeforePersistence() {
+    Adapter adapter = mock(Adapter.class);
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    SecurityScanMetrics metrics = mock(SecurityScanMetrics.class);
+    SecurityScannerSnapshotService service =
+        new SecurityScannerSnapshotService(adapter, scans, properties, metrics);
+    Capabilities capabilities = new Capabilities(
+        ScannerContract.API_VERSION,
+        "adapter",
+        "1",
+        List.of("MATCH"),
+        List.of("PACKAGE"),
+        1024,
+        2048,
+        "capability");
+    Readiness readiness = new Readiness(
+        true,
+        "READY",
+        "grype",
+        "2",
+        "db-future",
+        Instant.now().plus(Duration.ofDays(1)),
+        Instant.now(),
+        Map.of());
+    when(scans.latestScannerSnapshot()).thenReturn(Optional.empty());
+    when(adapter.observation()).thenReturn(new Observation(capabilities, readiness));
+
+    assertEquals(
+        "SCANNER_DATABASE_STALE",
+        assertThrows(ScannerAdapterException.class, service::readySnapshot).code());
+    verify(scans, never()).insertSnapshotOrFindExisting(any());
+  }
+
+  @Test
   void snapshotWatcherSchedulesOnlyCurrentAssetsAndAuditsAChangedSnapshot() {
     SecurityScanDao scans = mock(SecurityScanDao.class);
     SecurityScannerSnapshotService snapshots = mock(SecurityScannerSnapshotService.class);
@@ -340,7 +396,7 @@ class SecurityScanSchedulingServicesTest {
         snapshot(1L, true, "db-1", Instant.now(), "old");
     ScannerSnapshot current =
         snapshot(2L, true, "db-2", Instant.now(), "new");
-    when(scans.latestScannerSnapshot()).thenReturn(Optional.of(previous));
+    when(scans.latestReadyScannerSnapshot(any())).thenReturn(Optional.of(previous));
     when(snapshots.readySnapshot()).thenReturn(current);
     ScanProfile profile = profile(3L, true);
     when(scans.listProfiles()).thenReturn(List.of(profile, profile(4L, false)));
@@ -781,14 +837,14 @@ class SecurityScanSchedulingServicesTest {
         1);
   }
 
-  private static MatchResponse matchResponse() {
+  private static MatchResponse matchResponse(Instant databaseUpdatedAt) {
     return new MatchResponse(
         "adapter",
         "1",
         "grype",
         "2",
         "db-2",
-        Instant.now(),
+        databaseUpdatedAt,
         "capability",
         ScanCompleteness.COMPLETE,
         "{}".getBytes(),

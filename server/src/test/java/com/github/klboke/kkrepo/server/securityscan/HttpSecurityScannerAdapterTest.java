@@ -595,8 +595,12 @@ class HttpSecurityScannerAdapterTest {
       matchingCalls.incrementAndGet();
       exchange.getRequestBody().readAllBytes();
       Object response = "/v1/oci/scan".equals(exchange.getRequestURI().getPath())
-          ? new OciScanResponse(catalog(), match("db"), List.of(), List.of())
-          : match("db");
+          ? new OciScanResponse(
+              catalog(),
+              match("db", Instant.ofEpochSecond(0, 999_999)),
+              List.of(),
+              List.of())
+          : match("db", Instant.ofEpochSecond(0, 999_999));
       respond(exchange, 200, mapper.writeValueAsBytes(response));
     });
     try {
@@ -613,7 +617,8 @@ class HttpSecurityScannerAdapterTest {
           .findFirst()
           .orElseThrow();
       SnapshotExpectation expected =
-          new SnapshotExpectation("adapter", "grype", "1", "db", "cap");
+          new SnapshotExpectation(
+              "adapter", "grype", "1", "db", Instant.EPOCH, "cap");
 
       MatchResponse match = adapter.match(
           new MatchRequest(
@@ -1028,8 +1033,12 @@ class HttpSecurityScannerAdapterTest {
   }
 
   private static MatchResponse match(String databaseRevision) {
+    return match(databaseRevision, Instant.EPOCH);
+  }
+
+  private static MatchResponse match(String databaseRevision, Instant databaseUpdatedAt) {
     return new MatchResponse(
-        "adapter", "1", "grype", "1", databaseRevision, Instant.EPOCH, "cap",
+        "adapter", "1", "grype", "1", databaseRevision, databaseUpdatedAt, "cap",
         ScanCompleteness.COMPLETE, "{}".getBytes(), List.of(), Map.of());
   }
 

@@ -74,10 +74,12 @@ class ScannerContractAndEnumsTest {
 
   @Test
   void contractRecordsDefensivelyNormalizeCollectionsAndBytes() {
+    Instant subMillisecondDatabaseTime = Instant.ofEpochSecond(0, 999_999);
     var capabilities = new ScannerContract.Capabilities(
         "v1", "adapter", "1", null, null, 1, 2, "digest");
     var readiness = new ScannerContract.Readiness(
-        true, "READY", "grype", "1", "db", Instant.EPOCH, Instant.EPOCH, null);
+        true, "READY", "grype", "1", "db",
+        subMillisecondDatabaseTime, Instant.EPOCH, null);
     var observation = new ScannerContract.Observation(capabilities, readiness);
     var limits = new ScannerContract.ResourceLimits(1, 1, 1, 1, 0, 1);
     byte[] sbom = "{}".getBytes();
@@ -85,8 +87,10 @@ class ScannerContractAndEnumsTest {
         "adapter", "1", "syft", "1", "cap", "a".repeat(64),
         ScanCompleteness.COMPLETE, "CycloneDX", "1.5", 0, 0, sbom, null, null);
     var match = new ScannerContract.MatchResponse(
-        "adapter", "1", "grype", "1", "db", Instant.EPOCH, "cap",
+        "adapter", "1", "grype", "1", "db", subMillisecondDatabaseTime, "cap",
         ScanCompleteness.COMPLETE, null, null, null);
+    var expectation = new ScannerContract.SnapshotExpectation(
+        "adapter", "grype", "1", "db", subMillisecondDatabaseTime, "cap");
     var component = new ScannerContract.Component(
         "ref", null, "library", null, "name", "1", null, null, null, null);
     var finding = new ScannerContract.Finding(
@@ -107,9 +111,12 @@ class ScannerContractAndEnumsTest {
     sbom[0] = 'x';
     assertEquals(List.of(), capabilities.operations());
     assertEquals(Map.of(), readiness.details());
+    assertEquals(Instant.EPOCH, readiness.vulnerabilityDatabaseUpdatedAt());
     assertEquals(capabilities, observation.capabilities());
     assertEquals('{', catalog.cyclonedxJson()[0]);
     assertEquals(0, match.reportJson().length);
+    assertEquals(Instant.EPOCH, match.vulnerabilityDatabaseUpdatedAt());
+    assertEquals(Instant.EPOCH, expectation.vulnerabilityDatabaseUpdatedAt());
     assertEquals(Map.of(), component.properties());
     assertEquals(Severity.UNKNOWN, finding.severity());
     assertFalse(finding.fixable());

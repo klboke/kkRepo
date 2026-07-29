@@ -5,6 +5,7 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
 import java.io.IOException;
 import java.io.InputStream;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 
@@ -19,6 +20,11 @@ public final class ScannerContract {
   public static final int MAX_REQUEST_TIMEOUT_SECONDS = 3_600;
 
   private ScannerContract() {}
+
+  /** Canonical precision shared by the HTTP contract and TIMESTAMP(3) persistence columns. */
+  public static Instant canonicalDatabaseTimestamp(Instant value) {
+    return value == null ? null : value.truncatedTo(ChronoUnit.MILLIS);
+  }
 
   @FunctionalInterface
   public interface InputStreamSource {
@@ -51,6 +57,8 @@ public final class ScannerContract {
       Instant observedAt,
       Map<String, Object> details) {
     public Readiness {
+      vulnerabilityDatabaseUpdatedAt =
+          canonicalDatabaseTimestamp(vulnerabilityDatabaseUpdatedAt);
       details = details == null ? Map.of() : Map.copyOf(details);
     }
   }
@@ -152,6 +160,8 @@ public final class ScannerContract {
       List<Finding> findings,
       Map<String, Object> summary) {
     public MatchResponse {
+      vulnerabilityDatabaseUpdatedAt =
+          canonicalDatabaseTimestamp(vulnerabilityDatabaseUpdatedAt);
       reportJson = reportJson == null ? new byte[0] : reportJson.clone();
       findings = findings == null ? List.of() : List.copyOf(findings);
       summary = summary == null ? Map.of() : Map.copyOf(summary);
@@ -205,15 +215,22 @@ public final class ScannerContract {
    *
    * <p>The database snapshot ID belongs to one kkRepo installation and therefore is not sent to
    * scanner replicas. These fields are sufficient to reject a response produced by a different
-   * rolling-update/database revision while allowing the HTTP client to fail over to a matching
-   * replica.
+   * rolling-update/database build while allowing the HTTP client to fail over to a matching
+   * replica. The database update time is part of the build identity because schema revisions can
+   * remain unchanged across vulnerability-data updates.
    */
   public record SnapshotExpectation(
       String adapterName,
       String engineName,
       String engineVersion,
       String vulnerabilityDatabaseRevision,
-      String capabilityDigest) {}
+      Instant vulnerabilityDatabaseUpdatedAt,
+      String capabilityDigest) {
+    public SnapshotExpectation {
+      vulnerabilityDatabaseUpdatedAt =
+          canonicalDatabaseTimestamp(vulnerabilityDatabaseUpdatedAt);
+    }
+  }
 
   public record OciScanResponse(
       CatalogResponse catalog,

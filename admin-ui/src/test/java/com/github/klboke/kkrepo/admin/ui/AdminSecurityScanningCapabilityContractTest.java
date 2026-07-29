@@ -265,6 +265,9 @@ class AdminSecurityScanningCapabilityContractTest {
     assertTrue(javascript.contains("{ tone: \"is-degraded\", icon: \"info\" }"));
     assertTrue(javascript.contains("{ tone: \"is-disabled\", icon: \"circle-slash\" }"));
     assertTrue(javascript.contains("scannerHealth?.ready ? \"Ready\" : \"Degraded\""));
+    assertTrue(javascript.contains("const matchingScanner = payload.matchingScanner || scanner"));
+    assertTrue(javascript.contains(
+        "String(matchingScanner?.vulnerabilityDatabaseRevision || \"-\")"));
     assertTrue(javascript.contains("securityScannerReasonLabel(scannerHealth?.reasonCode)"));
     assertTrue(javascript.contains(
         "SCANNER_OBSERVATION_STALE: \"Scanner status observation is stale\""));

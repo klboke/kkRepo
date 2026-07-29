@@ -41,10 +41,11 @@ public class SecurityScannerSnapshotService {
             && !SecurityScannerStatus.observedTooFarInFuture(snapshot.observedAt(), now)
             && snapshot.observedAt().plus(OBSERVATION_TTL).isAfter(now));
     if (recent.isPresent()) {
-      metrics.observeScanner(
-          recent.get().ready(), recent.get().vulnerabilityDatabaseUpdatedAt());
       requireReady(recent.get(), now);
-      return recent.get();
+      ScannerSnapshot authoritative = authoritativeSnapshot(recent.get(), now);
+      metrics.observeScanner(
+          authoritative.ready(), authoritative.vulnerabilityDatabaseUpdatedAt());
+      return authoritative;
     }
 
     final Observation observation;
@@ -80,6 +81,8 @@ public class SecurityScannerSnapshotService {
     details.put("targetClassifications", capabilities.targetClassifications());
     details.put("maxInputBytes", capabilities.maxInputBytes());
     details.put("maxOutputBytes", capabilities.maxOutputBytes());
+    Instant databaseUpdatedAt =
+        ScannerContract.canonicalDatabaseTimestamp(readiness.vulnerabilityDatabaseUpdatedAt());
     String fingerprint = ScanFingerprints.sha256(
         capabilities.adapterName(),
         capabilities.adapterVersion(),
@@ -87,29 +90,36 @@ public class SecurityScannerSnapshotService {
         readiness.engineName(),
         readiness.engineVersion(),
         readiness.vulnerabilityDatabaseRevision(),
+        databaseTimestamp(databaseUpdatedAt),
         capabilities.capabilityDigest(),
         Boolean.toString(readiness.ready()));
-    ScannerSnapshot snapshot = scans.insertSnapshotOrFindExisting(new ScannerSnapshot(
+    ScannerSnapshot proposed = new ScannerSnapshot(
         null,
         capabilities.adapterName(),
         capabilities.apiVersion(),
         readiness.engineName(),
         readiness.engineVersion(),
         readiness.vulnerabilityDatabaseRevision(),
-        readiness.vulnerabilityDatabaseUpdatedAt(),
+        databaseUpdatedAt,
         capabilities.capabilityDigest(),
         fingerprint,
         now,
         readiness.ready(),
-        details));
-    metrics.observeScanner(snapshot.ready(), snapshot.vulnerabilityDatabaseUpdatedAt());
-    requireReady(snapshot, now);
-    return snapshot;
+        details);
+    rejectFutureDatabaseTimestamp(proposed, now);
+    ScannerSnapshot observed = scans.insertSnapshotOrFindExisting(proposed);
+    requireReady(observed, now);
+    ScannerSnapshot authoritative = authoritativeSnapshot(observed, now);
+    metrics.observeScanner(
+        authoritative.ready(), authoritative.vulnerabilityDatabaseUpdatedAt());
+    return authoritative;
   }
 
   public ScannerSnapshot snapshotFor(
       MatchResponse response, ScannerSnapshot readinessSnapshot) {
     Instant now = Instant.now();
+    Instant databaseUpdatedAt =
+        ScannerContract.canonicalDatabaseTimestamp(response.vulnerabilityDatabaseUpdatedAt());
     String fingerprint = ScanFingerprints.sha256(
         response.adapterName(),
         response.adapterVersion(),
@@ -117,6 +127,7 @@ public class SecurityScannerSnapshotService {
         response.engineName(),
         response.engineVersion(),
         response.vulnerabilityDatabaseRevision(),
+        databaseTimestamp(databaseUpdatedAt),
         response.capabilityDigest(),
         "true");
     Map<String, Object> details = new LinkedHashMap<>();
@@ -125,21 +136,40 @@ public class SecurityScannerSnapshotService {
       details.putAll(readinessSnapshot.details());
     }
     details.put("adapterVersion", response.adapterVersion());
-    ScannerSnapshot snapshot = scans.insertSnapshotOrFindExisting(new ScannerSnapshot(
+    ScannerSnapshot proposed = new ScannerSnapshot(
         null,
         response.adapterName(),
         ScannerContract.API_VERSION,
         response.engineName(),
         response.engineVersion(),
         response.vulnerabilityDatabaseRevision(),
-        response.vulnerabilityDatabaseUpdatedAt(),
+        databaseUpdatedAt,
         response.capabilityDigest(),
         fingerprint,
         now,
         true,
-        details));
+        details);
+    rejectFutureDatabaseTimestamp(proposed, now);
+    ScannerSnapshot snapshot = scans.insertSnapshotOrFindExisting(proposed);
     requireReady(snapshot, now);
     return snapshot;
+  }
+
+  private ScannerSnapshot authoritativeSnapshot(ScannerSnapshot fallback, Instant now) {
+    return scans.latestReadyScannerSnapshot(
+            SecurityScannerStatus.maximumProvenanceTimestamp(now))
+        .orElse(fallback);
+  }
+
+  private static void rejectFutureDatabaseTimestamp(ScannerSnapshot snapshot, Instant now) {
+    if (snapshot.vulnerabilityDatabaseUpdatedAt() != null
+        && SecurityScannerStatus.databaseTooFarInFuture(
+            snapshot.vulnerabilityDatabaseUpdatedAt(), now)) {
+      throw new ScannerAdapterException(
+          "SCANNER_DATABASE_STALE",
+          "Scanner vulnerability database update time is in the future",
+          true);
+    }
   }
 
   private void requireReady(ScannerSnapshot snapshot, Instant now) {
@@ -160,6 +190,7 @@ public class SecurityScannerSnapshotService {
           "Scanner vulnerability database update time is unavailable",
           true);
     }
+    rejectFutureDatabaseTimestamp(snapshot, now);
     Duration maxAge = properties.getScannerDatabaseMaxAge();
     if (maxAge != null && !maxAge.isZero() && !maxAge.isNegative()
         && snapshot.vulnerabilityDatabaseUpdatedAt().plus(maxAge).isBefore(now)) {
@@ -186,5 +217,9 @@ public class SecurityScannerSnapshotService {
         false,
         Map.of("reasonCode", reasonCode)));
     metrics.observeScanner(false, null);
+  }
+
+  private static String databaseTimestamp(Instant value) {
+    return value == null ? "" : value.toString();
   }
 }

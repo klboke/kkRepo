@@ -32,6 +32,15 @@ class PostgreSqlSecurityScanSummaryIndexTest extends PostgreSqlIntegrationTestSu
             + "USING btree (repository_id, profile_id, id)",
         indexDefinition("idx_security_scan_task_repository_profile"));
     assertEquals(
+        "CREATE INDEX idx_security_scan_task_projection ON public.security_scan_task "
+            + "USING btree (asset_id, profile_id, content_generation, id)",
+        indexDefinition("idx_security_scan_task_projection"));
+    assertEquals(
+        "CREATE INDEX idx_security_scanner_snapshot_ready "
+            + "ON public.security_scanner_snapshot "
+            + "USING btree (ready, vulnerability_database_updated_at, observed_at, id)",
+        indexDefinition("idx_security_scanner_snapshot_ready"));
+    assertEquals(
         "CREATE INDEX idx_asset_security_state_repository_summary "
             + "ON public.asset_security_state "
             + "USING btree (repository_id, scan_state, policy_decision)",
@@ -40,6 +49,11 @@ class PostgreSqlSecurityScanSummaryIndexTest extends PostgreSqlIntegrationTestSu
         "CREATE INDEX idx_security_scan_finding_severity ON public.security_scan_finding "
             + "USING btree (severity, scan_run_id, id)",
         indexDefinition("idx_security_scan_finding_severity"));
+    assertEquals(
+        "CREATE INDEX idx_security_scan_finding_run_severity "
+            + "ON public.security_scan_finding "
+            + "USING btree (scan_run_id, severity, id)",
+        indexDefinition("idx_security_scan_finding_run_severity"));
     assertEquals(
         "CREATE UNIQUE INDEX uk_security_scan_policy_name_revision "
             + "ON public.security_scan_policy "

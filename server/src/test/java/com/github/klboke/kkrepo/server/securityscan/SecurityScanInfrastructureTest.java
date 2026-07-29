@@ -167,6 +167,10 @@ class SecurityScanInfrastructureTest {
     assertEquals(
         "SCANNER_OBSERVATION_STALE", health.health().getDetails().get("reasonCode"));
     when(snapshot.observedAt()).thenReturn(Instant.now());
+    when(snapshot.vulnerabilityDatabaseUpdatedAt())
+        .thenReturn(Instant.now().plus(Duration.ofHours(1)));
+    assertEquals("DATABASE_STALE", health.health().getDetails().get("reasonCode"));
+    when(snapshot.vulnerabilityDatabaseUpdatedAt()).thenReturn(Instant.now());
     assertEquals(Status.UP, health.health().getStatus());
   }
 
