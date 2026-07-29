@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
@@ -128,6 +129,8 @@ class SecurityScanManagementServiceCoreTest {
 
     assertEquals(2, overview.visibleRepositories());
     assertEquals(11, overview.summary().candidateBacklog());
+    assertFalse(overview.scannerStatus().ready());
+    assertEquals("SNAPSHOT_UNAVAILABLE", overview.scannerStatus().reasonCode());
     assertEquals(1, repositoriesPage.items().size());
     assertNotNull(repositoriesPage.nextAfter());
     assertEquals("critical", service.repositoryViews(actor).stream()
@@ -151,6 +154,20 @@ class SecurityScanManagementServiceCoreTest {
     when(scans.listRuns(1L, "demo", 0, 2)).thenReturn(List.of(run));
     var runPage = service.runPage(actor, 1L, "demo", 0, 1);
     assertEquals("COMPLETE", runPage.items().getFirst().status());
+  }
+
+  @Test
+  void overviewDegradesAReadyScannerWhenItsSharedObservationIsStale() {
+    SecurityScanDao.ScannerSnapshot snapshot = mock(SecurityScanDao.ScannerSnapshot.class);
+    when(snapshot.ready()).thenReturn(true);
+    when(snapshot.observedAt()).thenReturn(Instant.now().minusSeconds(600));
+    when(snapshot.vulnerabilityDatabaseUpdatedAt()).thenReturn(Instant.now());
+    when(scans.latestScannerSnapshot()).thenReturn(Optional.of(snapshot));
+
+    var overview = service.overview(actor);
+
+    assertFalse(overview.scannerStatus().ready());
+    assertEquals("SCANNER_OBSERVATION_STALE", overview.scannerStatus().reasonCode());
   }
 
   @Test

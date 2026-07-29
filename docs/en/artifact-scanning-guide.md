@@ -403,6 +403,8 @@ source repositories; repository-less artifact waivers are rejected.
 | `KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URLS` | Empty | Comma-separated stable adapter URLs; when present, overrides the single URL and enables a deterministic per-run preference, retryable execution failover, and cancellation broadcast |
 | `KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL` | Required when scanning is enabled | Shared credential used by kkRepo; kkRepo refuses to start with scanning enabled when this is empty |
 | `KKREPO_SECURITY_SCANNING_OCI_REGISTRY_URL` | `http://kkrepo:8080` | kkRepo URL used by the scanner for exact OCI digests |
+| `KKREPO_DOCKER_AUTH_TOKEN_CLEANUP_INTERVAL_MS` | `60000` | Interval for expired Docker/scanner bearer-token cleanup; this runs independently of upload cleanup |
+| `KKREPO_DOCKER_AUTH_TOKEN_CLEANUP_BATCH_SIZE` | `256` | Maximum expired bearer tokens claimed per replica and cleanup cycle |
 | `KKREPO_SECURITY_SCANNING_DATABASE_MAX_AGE` | `48h` | Maximum operational vulnerability-database age |
 | `KKREPO_SECURITY_SCANNING_OBSERVATION_MAX_AGE` | `2m` | Maximum scanner snapshot observation age |
 | `KKREPO_SECURITY_SCANNING_MAX_RESPONSE_BYTES` | `67108864` | Maximum adapter JSON response accepted by kkRepo, including raw-document Base64, JSON fields, and projections |

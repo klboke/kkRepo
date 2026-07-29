@@ -2824,6 +2824,41 @@ public abstract class PersistenceApiContract {
   }
 
   @Test
+  void dockerAuthTokenCleanupIsBoundedAndPreservesUnexpiredTokens() {
+    DockerAuthTokenDao tokens = stores().dockerAuthTokens();
+    Instant cleanupAt = Instant.parse("2026-07-13T11:00:00Z");
+    inTransaction(() -> {
+      for (String tokenHash : List.of("c".repeat(64), "d".repeat(64), "e".repeat(64))) {
+        tokens.insert(
+            tokenHash,
+            "security-scanner",
+            "scanner",
+            null,
+            null,
+            TokenKind.SECURITY_SCANNER,
+            List.of(),
+            cleanupAt.minusSeconds(1));
+      }
+      tokens.insert(
+          "f".repeat(64),
+          "security-scanner",
+          "scanner",
+          null,
+          null,
+          TokenKind.SECURITY_SCANNER,
+          List.of(),
+          cleanupAt.plusSeconds(60));
+      return null;
+    });
+
+    assertEquals(0, inTransaction(() -> tokens.deleteExpired(cleanupAt, 0)));
+    assertEquals(2, inTransaction(() -> tokens.deleteExpired(cleanupAt, 2)));
+    assertEquals(1, inTransaction(() -> tokens.deleteExpired(cleanupAt, 2)));
+    assertEquals(0, inTransaction(() -> tokens.deleteExpired(cleanupAt, 2)));
+    assertTrue(inTransaction(() -> tokens.findValid("f".repeat(64), cleanupAt)).isPresent());
+  }
+
+  @Test
   void dockerUnreferencedBlobCleanupSqlIsPortable() {
     long dockerRepositoryId = createRepository("docker-cleanup", RepositoryFormat.DOCKER);
     long dockerBlobStoreId = stores().repositories().findById(dockerRepositoryId)

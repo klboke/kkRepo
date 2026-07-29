@@ -4301,18 +4301,27 @@ function renderSecurityScanSummary() {
   }
   const summary = payload.summary || {};
   const scanner = payload.scanner;
+  const scannerHealth = payload.scannerStatus;
   const scannerStatus = !payload.deploymentEnabled
     ? "Disabled"
-    : scanner?.ready ? "Ready" : "Degraded";
+    : scannerHealth?.ready ? "Ready" : "Degraded";
   const scannerPresentation = scannerStatus === "Ready"
     ? { tone: "is-ready", icon: "check" }
     : scannerStatus === "Degraded"
       ? { tone: "is-degraded", icon: "info" }
       : { tone: "is-disabled", icon: "circle-slash" };
+  const scannerReason = securityScannerReasonLabel(scannerHealth?.reasonCode);
+  const scannerDescription = scannerStatus === "Disabled"
+    ? "Scanner deployment capability is disabled"
+    : scannerStatus === "Ready"
+      ? "Scanner is ready"
+      : scannerReason;
   const scannerCard = `
     <div>
       <span>Scanner</span>
-      <strong class="security-scan-scanner-state ${scannerPresentation.tone}">
+      <strong class="security-scan-scanner-state ${scannerPresentation.tone}"
+        aria-label="${escapeHtml(scannerDescription)}"
+        title="${escapeHtml(scannerDescription)}">
         <span class="lucide-icon icon-${scannerPresentation.icon}" aria-hidden="true"></span>
         ${escapeHtml(scannerStatus)}
       </strong>
@@ -4345,6 +4354,17 @@ function renderSecurityScanSummary() {
     `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
   document.getElementById("security-scan-status").textContent =
     scanner?.observedAt ? `Scanner observed ${formatDateTime(scanner.observedAt)}` : "";
+}
+
+function securityScannerReasonLabel(reasonCode) {
+  const labels = {
+    SNAPSHOT_UNAVAILABLE: "Scanner status has not been observed",
+    SCANNER_NOT_READY: "Scanner reported that it is not ready",
+    SCANNER_OBSERVATION_STALE: "Scanner status observation is stale",
+    DATABASE_AGE_UNKNOWN: "Vulnerability database age is unavailable",
+    DATABASE_STALE: "Vulnerability database is stale"
+  };
+  return labels[reasonCode] || "Scanner readiness is degraded";
 }
 
 function renderSecurityScanRuns() {

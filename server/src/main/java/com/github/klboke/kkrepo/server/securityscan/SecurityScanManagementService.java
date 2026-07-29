@@ -91,9 +91,14 @@ public class SecurityScanManagementService {
     List<RepositoryRecord> visible = visibleRepositories(actor);
     ScanSummary aggregate =
         scans.summary(visible.stream().map(RepositoryRecord::id).sorted().toList());
+    SecurityScanDao.ScannerSnapshot scanner = scans.latestScannerSnapshot().orElse(null);
+    SecurityScannerStatus scannerStatus = properties.isEnabled()
+        ? SecurityScannerStatus.evaluate(scanner, properties, Instant.now())
+        : SecurityScannerStatus.disabled();
     return new Overview(
         properties.isEnabled(),
-        scans.latestScannerSnapshot().orElse(null),
+        scanner,
+        scannerStatus,
         aggregate,
         visible.size());
   }
@@ -1265,6 +1270,7 @@ public class SecurityScanManagementService {
   public record Overview(
       boolean deploymentEnabled,
       SecurityScanDao.ScannerSnapshot scanner,
+      SecurityScannerStatus scannerStatus,
       ScanSummary summary,
       int visibleRepositories) {}
 

@@ -74,8 +74,27 @@ public class JdbcDockerAuthTokenDao implements com.github.klboke.kkrepo.persiste
         Timestamp.from(now)).stream().findFirst();
   }
 
-  public int deleteExpired(Instant now) {
-    return jdbcTemplate.update("DELETE FROM docker_auth_token WHERE expires_at <= ?", Timestamp.from(now));
+  @Transactional(propagation = Propagation.MANDATORY)
+  public int deleteExpired(Instant now, int maxItems) {
+    if (maxItems <= 0) {
+      return 0;
+    }
+    List<String> tokenHashes = jdbcTemplate.queryForList("""
+        SELECT token_hash
+        FROM docker_auth_token
+        WHERE expires_at <= ?
+        ORDER BY expires_at
+        LIMIT ?
+        FOR UPDATE SKIP LOCKED
+        """, String.class, Timestamp.from(now), maxItems);
+    if (tokenHashes.isEmpty()) {
+      return 0;
+    }
+    String placeholders =
+        String.join(",", java.util.Collections.nCopies(tokenHashes.size(), "?"));
+    return jdbcTemplate.update(
+        "DELETE FROM docker_auth_token WHERE token_hash IN (" + placeholders + ")",
+        tokenHashes.toArray());
   }
 
   private static String normalize(String tokenHash) {

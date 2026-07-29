@@ -374,6 +374,8 @@ Waivers 页签用于查看 Active/Expired、scope、仓库、制品、exception�
 | `KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URLS` | 空 | 逗号分隔的稳定 adapter 地址；配置后覆盖单地址，并启用按 run 选择首选副本、可重试执行容灾和取消广播 |
 | `KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL` | 启用扫描时必填 | kkRepo 调用 adapter 的共享凭据；启用扫描后为空会拒绝启动 |
 | `KKREPO_SECURITY_SCANNING_OCI_REGISTRY_URL` | `http://kkrepo:8080` | scanner 拉取精确 OCI digest 时访问的 kkRepo 地址 |
+| `KKREPO_DOCKER_AUTH_TOKEN_CLEANUP_INTERVAL_MS` | `60000` | 过期 Docker/scanner bearer token 的清理间隔；不受 upload cleanup 开关影响 |
+| `KKREPO_DOCKER_AUTH_TOKEN_CLEANUP_BATCH_SIZE` | `256` | 每个副本每轮最多领取并删除的过期 bearer token 数量 |
 | `KKREPO_SECURITY_SCANNING_DATABASE_MAX_AGE` | `48h` | 漏洞数据库最大允许运维年龄 |
 | `KKREPO_SECURITY_SCANNING_OBSERVATION_MAX_AGE` | `2m` | scanner snapshot 最大观测年龄 |
 | `KKREPO_SECURITY_SCANNING_MAX_RESPONSE_BYTES` | `67108864` | kkRepo 接收 adapter JSON 响应的上限，包含原始文档 Base64、JSON 字段和投影 |

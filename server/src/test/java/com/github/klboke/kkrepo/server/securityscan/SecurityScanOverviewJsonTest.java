@@ -12,9 +12,12 @@ class SecurityScanOverviewJsonTest {
   @Test
   void namesTheDeploymentCapabilityWithoutImplyingRepositoriesAreGloballyEnabled() {
     JsonNode json = new ObjectMapper().valueToTree(
-        new SecurityScanManagementService.Overview(false, null, null, 0));
+        new SecurityScanManagementService.Overview(
+            false, null, SecurityScannerStatus.disabled(), null, 0));
 
     assertTrue(json.has("deploymentEnabled"));
+    assertTrue(json.has("scannerStatus"));
+    assertFalse(json.get("scannerStatus").get("ready").asBoolean());
     assertFalse(json.has("globallyEnabled"));
   }
 

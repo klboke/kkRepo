@@ -1,7 +1,6 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
-import java.time.Duration;
 import java.time.Instant;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
@@ -28,37 +27,18 @@ public class SecurityScannerHealthIndicator implements HealthIndicator {
       return Health.up().withDetail("enabled", false).build();
     }
     var snapshot = scans.latestScannerSnapshot().orElse(null);
-    if (snapshot == null) {
-      return degraded("SNAPSHOT_UNAVAILABLE", null, null);
-    }
-    if (!snapshot.ready()) {
+    SecurityScannerStatus status =
+        SecurityScannerStatus.evaluate(snapshot, properties, Instant.now());
+    if (!status.ready()) {
       return degraded(
-          "SCANNER_NOT_READY", snapshot.id(), snapshot.vulnerabilityDatabaseUpdatedAt());
-    }
-    Duration observationMaxAge = properties.getScannerObservationMaxAge();
-    if (snapshot.observedAt() == null
-        || (observationMaxAge != null
-            && !observationMaxAge.isZero()
-            && !observationMaxAge.isNegative()
-            && snapshot.observedAt().plus(observationMaxAge).isBefore(Instant.now()))) {
-      return degraded(
-          "SCANNER_OBSERVATION_STALE", snapshot.id(), snapshot.vulnerabilityDatabaseUpdatedAt());
-    }
-    Instant databaseUpdatedAt = snapshot.vulnerabilityDatabaseUpdatedAt();
-    Duration maxAge = properties.getScannerDatabaseMaxAge();
-    if (databaseUpdatedAt == null) {
-      return degraded("DATABASE_AGE_UNKNOWN", snapshot.id(), null);
-    }
-    if (maxAge != null
-        && !maxAge.isZero()
-        && !maxAge.isNegative()
-        && databaseUpdatedAt.plus(maxAge).isBefore(Instant.now())) {
-      return degraded("DATABASE_STALE", snapshot.id(), databaseUpdatedAt);
+          status.reasonCode(),
+          snapshot == null ? null : snapshot.id(),
+          snapshot == null ? null : snapshot.vulnerabilityDatabaseUpdatedAt());
     }
     return Health.up()
         .withDetail("enabled", true)
         .withDetail("snapshotId", snapshot.id())
-        .withDetail("databaseUpdatedAt", databaseUpdatedAt)
+        .withDetail("databaseUpdatedAt", snapshot.vulnerabilityDatabaseUpdatedAt())
         .build();
   }
 

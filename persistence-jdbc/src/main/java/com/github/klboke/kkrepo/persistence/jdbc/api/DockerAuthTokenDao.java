@@ -18,7 +18,13 @@ public interface DockerAuthTokenDao {
 
   Optional<TokenRecord> findValid(String tokenHash, Instant now);
 
-  int deleteExpired(Instant now);
+  /**
+   * Claims and deletes at most {@code maxItems} expired tokens.
+   *
+   * <p>The claim must skip rows locked by another replica so scheduled cleanup can run safely on
+   * every node.
+   */
+  int deleteExpired(Instant now, int maxItems);
 
   record TokenRecord(
       String tokenHash,

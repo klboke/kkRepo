@@ -1125,6 +1125,8 @@ OCI scanner 按 digest 从 kkRepo 内部 registry 地址拉取：
 
 - kkRepo 签发只读、仓库范围、digest/manifest 范围、短 TTL token。
 - token 不继承触发扫描用户的长期 credential。
+- 过期 token 由独立于 Docker upload cleanup 开关的 worker 按索引分批领取并删除；
+  每个副本使用 `FOR UPDATE SKIP LOCKED` 协作，不依赖进程内状态。
 - scanner 必须按 digest 而不是可变化 tag 拉取。
 - index 根据 platform policy 解析并记录实际扫描的平台。
 - scanner 不挂载宿主 Docker socket。
