@@ -60,7 +60,9 @@ public class ScannerDatabaseUpdater {
   public ScannerDatabaseCoordinator.UpdateResult updateOnce() {
     try {
       ScannerDatabaseCoordinator.UpdateResult result = database.updateIfDue(
-          properties.getVulnerabilityDatabaseUpdateInterval(), this::runUpdate);
+          properties.getVulnerabilityDatabaseUpdateInterval(),
+          properties.getDatabaseUpdateLockTimeout(),
+          this::runUpdate);
       metrics.recordDatabaseUpdate(result.name().toLowerCase(java.util.Locale.ROOT));
       if (result == ScannerDatabaseCoordinator.UpdateResult.UPDATED) {
         engine.invalidateReadiness();

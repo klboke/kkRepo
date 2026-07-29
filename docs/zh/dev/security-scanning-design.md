@@ -406,6 +406,15 @@ attributes 或 component 关系不产生内容事件。
 feature flag。全局扫描关闭、scanner 不可用、扫描数据库投影处理失败时，asset 上传和
 proxy cache commit 仍按仓库核心语义完成。
 
+滚动升级时，旧版本副本可能在新 migration 已生效后继续写入 asset，但还不会追加
+`artifact_change_event`。因此扫描域另有一个持续运行、持久游标驱动的校对 worker：
+它同时检查最近发生变化的 asset，以及按 `asset.id` 循环推进的有界主键分页，并把
+当前 Blob binding 与 candidate/result 水位比较。最近窗口让升级期遗漏快速收敛，循环
+分页保证窗口外遗漏最终也会被发现；每轮默认各处理不超过 1000 条。查询分别使用
+`asset(last_updated_at,id)` 和主键索引，不做无界全表扫描。这个兼容层不依赖数据库
+trigger，避免 MySQL 开启 binary log 时引入额外的 trigger 创建权限，也不把扫描逻辑
+放回制品写入路径。所有副本通过 `maintenance_cursor` 行锁共享一个校对水位。
+
 ### 独立消费与 candidate projection
 
 轻量投影 worker 使用 `maintenance_cursor` 中独立的
@@ -1155,14 +1164,17 @@ Grype 数据库读取与更新使用同一协调器：
 - 同一进程使用公平读写锁；扫描持有读锁，更新持有写锁。
 - 多个 adapter 共享同一数据库卷时，再使用卷内 POSIX 文件锁，避免一个 Pod 更新时
   另一个 Pod 读取半更新目录；共享卷必须支持文件锁并使用 `ReadWriteMany`。
-- Docker Compose 可以由 scanner 进程每分钟检查一次是否达到默认 6 小时更新间隔。
-  Helm 中提供扫描服务的 Pod 永远关闭进程内更新，也没有公网 HTTPS 出站；独立
-  `database-update-only` CronJob 默认每 5 分钟启动一次，挂载相同 PVC，只执行一次
-  协调后的到期检查/更新并退出。成功后原子写共享 marker，因此调度频率不会缩短
+- Docker Compose 和 Helm 中提供扫描服务的容器都固定关闭进程内更新，并处在不能
+  公网出站的内部网络。独立 `database-update-only` updater 挂载相同数据库卷；
+  Compose 默认每 5 分钟循环执行一次，Helm CronJob 默认每 5 分钟启动一次。每次只做
+  协调后的到期检查/更新并退出，成功后原子写共享 marker，因此调度频率不会缩短
   6 小时最小成功更新间隔。
-- Helm updater 不创建 credential-protected HTTP controller、不接收 scanner service
-  credential，也不处理制品；NetworkPolicy 只给 updater 的 443 公网出站，服务 Pod
-  只允许访问 kkRepo 与 DNS。
+- updater 不创建 credential-protected HTTP controller、不接收 scanner service
+  credential，也不处理制品；只有 updater 获得漏洞库发布源的公网 HTTPS 出站。
+- updater 先取得跨进程 writer-intent gate，阻止新 scan reader 进入，再等待已有
+  reader 排空并取得数据库独占锁。默认总等待上限 10 分钟；超时返回 `BUSY` 时进程
+  必须以非零状态退出，由 Compose restart policy 或 Kubernetes Job controller 重试，
+  不能把没有发生的更新记录成成功。
 - Helm 必须使用持久数据库卷。单副本默认 `ReadWriteOnce` 时，required pod affinity
   把 updater 调度到 scanner 所在节点；多 scanner 副本必须提供支持文件锁的
   `ReadWriteMany` existing claim。
@@ -1210,9 +1222,12 @@ run，不在第一阶段自动合并、投票或覆盖。
 OCI scanner 按 digest 从 kkRepo 内部 registry 地址拉取：
 
 - kkRepo 签发只读、仓库 ID、image name 与根 manifest digest 范围的短 TTL token。
-  授权时从该根 digest 遍历数据库中持久化的 descriptor 图，只允许读取可达的 child
-  manifest、config 和 layer；tag、无关 digest、其它 image/repository 与任何 push
-  action 都拒绝。遍历最多 1024 个 manifest 节点、100000 条引用，越界 fail closed。
+  签发事务只遍历一次数据库中持久化的 descriptor 图，把可达的 child manifest、
+  config 和 layer 写入 `(token_hash, resource_kind, digest)` 主键 allowlist；遍历最多
+  1024 个 manifest 节点、100000 条引用，越界 fail closed。后续每个 registry 请求
+  只做一次 token 与资源类型/digest 的索引等值查询，不再重复遍历整张图，避免镜像
+  layer 数量增长时出现平方级授权开销。tag、无关 digest、其它 image/repository 与
+  任何 push action 都拒绝。
 - token 不继承触发扫描用户的长期 credential。
 - 过期 token 由独立于 Docker upload cleanup 开关的 worker 按索引分批领取并删除；
   每个副本使用 `FOR UPDATE SKIP LOCKED` 协作，不依赖进程内状态。
@@ -1706,7 +1721,9 @@ Docker Compose/quickstart：
   `--profile security-scanning` 启动 scanner，例如
   `KKREPO_SECURITY_SCANNING_ENABLED=true docker compose --profile security-scanning up -d`。
 - 上述操作只提供部署能力，之后仍由仓库管理员在 Admin UI 按仓库启用。
-- scanner 使用独立 volume/cache 保存可重建漏洞数据库。
+- 提供扫描服务的 scanner 和 database updater 共享独立 volume/cache；scanner 位于
+  internal network，只能访问 kkRepo，且不持有公网出站。updater 不接收 service
+  credential，只连接独立 update-egress network。
 - 不挂载 Docker socket。
 - readiness 未通过时 kkRepo audit 模式仍可启动，但 health details 显示 degraded。
 

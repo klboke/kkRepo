@@ -17,6 +17,8 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
+    networks:
+      - kkrepo-internal
 
   app-data-perms:
     image: alpine:3.20
@@ -24,6 +26,7 @@ services:
     volumes:
       - kkrepo-data:/data
     command: ["sh", "-c", "mkdir -p /data/blobs && chown -R 999:999 /data"]
+    network_mode: none
 
   kkrepo:
     image: ghcr.io/klboke/kkrepo:${KKREPO_IMAGE_TAG:-0.6.0}
@@ -52,6 +55,9 @@ services:
       - "${KKREPO_MANAGEMENT_PORT:-19091}:8081"
     volumes:
       - kkrepo-data:/var/lib/kkrepo
+    networks:
+      - kkrepo-internal
+      - application-egress
     restart: unless-stopped
 
   scanner:
@@ -59,7 +65,8 @@ services:
     profiles: ["security-scanning"]
     environment:
       KKREPO_SCANNER_SERVICE_CREDENTIAL: ${KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL:-}
-      KKREPO_SCANNER_DB_AUTO_UPDATE: ${KKREPO_SCANNER_DB_AUTO_UPDATE:-true}
+      # Serving scanners process untrusted artifacts and never receive public update egress.
+      KKREPO_SCANNER_DB_AUTO_UPDATE: "false"
       KKREPO_SCANNER_DB_DIRECTORY: /var/lib/kkrepo-scanner/grype
       KKREPO_SCANNER_MAX_SCRATCH_BYTES: ${KKREPO_SCANNER_MAX_SCRATCH_BYTES:-7516192768}
     read_only: true
@@ -72,6 +79,8 @@ services:
     cap_drop:
       - ALL
     pids_limit: 128
+    networks:
+      - kkrepo-internal
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/actuator/health/readiness >/dev/null"]
       interval: 15s
@@ -80,7 +89,46 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  scanner-database-updater:
+    image: ghcr.io/klboke/kkrepo-scanner:${KKREPO_SCANNER_IMAGE_TAG:-0.6.0}
+    profiles: ["security-scanning"]
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        while true; do
+          java -XX:MaxRAMPercentage=75.0 -Djava.io.tmpdir=/tmp \
+            -jar /app/scanner-adapter.jar \
+            --spring.main.web-application-type=none || exit "$$?"
+          sleep "$${KKREPO_SCANNER_DB_UPDATE_CHECK_SECONDS}"
+        done
+    environment:
+      KKREPO_SCANNER_DATABASE_UPDATE_ONLY: "true"
+      KKREPO_SCANNER_DB_AUTO_UPDATE: "false"
+      KKREPO_SCANNER_DB_UPDATE_INTERVAL: ${KKREPO_SCANNER_DB_UPDATE_INTERVAL:-6h}
+      KKREPO_SCANNER_DATABASE_UPDATE_LOCK_TIMEOUT: ${KKREPO_SCANNER_DATABASE_UPDATE_LOCK_TIMEOUT:-10m}
+      KKREPO_SCANNER_DB_UPDATE_CHECK_SECONDS: ${KKREPO_SCANNER_DB_UPDATE_CHECK_SECONDS:-300}
+      KKREPO_SCANNER_DB_DIRECTORY: /var/lib/kkrepo-scanner/grype
+    read_only: true
+    tmpfs:
+      - /tmp:size=${KKREPO_SCANNER_UPDATER_TMPFS_SIZE:-1g},uid=10001,gid=10001,mode=1770
+    volumes:
+      - scanner-db:/var/lib/kkrepo-scanner/grype
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 64
+    networks:
+      - scanner-update-egress
+    restart: unless-stopped
+
 volumes:
   mysql-data:
   kkrepo-data:
   scanner-db:
+
+networks:
+  kkrepo-internal:
+    internal: true
+  application-egress:
+  scanner-update-egress:

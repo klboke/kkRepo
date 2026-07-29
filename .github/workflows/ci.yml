@@ -131,6 +131,7 @@ jobs:
           scripts/ci/check-flyway-parity.sh
           docker compose -f docker-compose.quickstart.yml config
           docker compose -f docker-compose.quickstart-postgresql.yml config
+          scripts/ci/check-compose-scanner-isolation.sh
           docker compose -f docker-compose.compat-postgres.yml --profile kkrepo-postgresql config
       - uses: azure/setup-helm@v5
       - name: Verify Helm rendering and scanner egress isolation

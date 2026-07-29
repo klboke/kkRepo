@@ -14,8 +14,9 @@ Security boundaries:
 - binaries are invoked directly without a shell, with a minimal environment, bounded output,
   timeout, forced process termination, and cleanup;
 - OCI targets use an exact manifest digest and the request-scoped registry token only;
-- database update is disabled by default. Set `KKREPO_SCANNER_DB_AUTO_UPDATE=true` only in a
-  deployment whose egress policy permits the Grype database source.
+- database update is disabled in scan-serving containers. The supplied Compose and Helm
+  deployments use a separate credential-free, update-only workload with public update egress,
+  a shared database volume, a writer-intent gate, and bounded retryable lock acquisition.
 
 Build from the repository root after packaging:
 
@@ -33,7 +34,7 @@ KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL="$(openssl rand -hex 32)" \
 docker compose -f docker-compose.quickstart.yml up -d
 ```
 
-The Compose profile starts this adapter container, while
+The Compose profile starts this adapter container plus its isolated database updater, while
 `KKREPO_SECURITY_SCANNING_ENABLED=true` enables kkRepo's coordination workers. Neither setting
 activates a repository; select repositories later in **Admin > Security > Artifact Scanning**.
 

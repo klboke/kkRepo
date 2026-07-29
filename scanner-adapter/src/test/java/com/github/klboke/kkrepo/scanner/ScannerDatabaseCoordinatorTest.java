@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.scanner;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -62,6 +63,56 @@ class ScannerDatabaseCoordinatorTest {
               () -> {
                 throw new AssertionError("not-due update must not run");
               }));
+    } finally {
+      release.countDown();
+      executor.shutdownNow();
+    }
+  }
+
+  @Test
+  void writerGateStopsNewReadersWhileAnUpdaterWaitsForActiveReaders() throws Exception {
+    ScannerAdapterProperties properties = properties();
+    properties.setDatabaseLockTimeout(Duration.ofMillis(25));
+    ScannerDatabaseCoordinator activeReader = new ScannerDatabaseCoordinator(properties);
+    ScannerDatabaseCoordinator newReader = new ScannerDatabaseCoordinator(properties);
+    ScannerDatabaseCoordinator updater = new ScannerDatabaseCoordinator(properties);
+    ExecutorService executor = Executors.newFixedThreadPool(2);
+    CountDownLatch reading = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    Future<String> heldRead = executor.submit(() -> activeReader.withRead(() -> {
+      reading.countDown();
+      try {
+        assertTrue(release.await(5, TimeUnit.SECONDS));
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new AssertionError(e);
+      }
+      return "read";
+    }));
+    try {
+      assertTrue(reading.await(1, TimeUnit.SECONDS));
+      Future<ScannerDatabaseCoordinator.UpdateResult> waitingUpdate = executor.submit(
+          () -> updater.updateIfDue(
+              Duration.ZERO, Duration.ofSeconds(2), () -> {}));
+
+      ScannerRequestException denied = null;
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+      while (denied == null && System.nanoTime() < deadline) {
+        try {
+          newReader.withRead(() -> "transient");
+          TimeUnit.MILLISECONDS.sleep(5);
+        } catch (ScannerRequestException failure) {
+          denied = failure;
+        }
+      }
+      assertNotNull(denied);
+      assertEquals("SCANNER_DATABASE_UPDATING", denied.code());
+
+      release.countDown();
+      assertEquals("read", heldRead.get(1, TimeUnit.SECONDS));
+      assertEquals(
+          ScannerDatabaseCoordinator.UpdateResult.UPDATED,
+          waitingUpdate.get(2, TimeUnit.SECONDS));
     } finally {
       release.countDown();
       executor.shutdownNow();

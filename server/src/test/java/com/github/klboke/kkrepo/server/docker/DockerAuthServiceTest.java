@@ -5,8 +5,10 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -16,6 +18,8 @@ import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.ScannerResourceKind;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.ScannerTokenResource;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.TokenKind;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
@@ -168,6 +172,13 @@ class DockerAuthServiceTest {
         .thenReturn(List.of(reference(11L, childDigest, "MANIFEST")));
     when(docker.listReferences(12L))
         .thenReturn(List.of(reference(12L, layerDigest, "LAYER")));
+    when(tokenDao.scannerResourceAllowed(
+        anyString(), eq(ScannerResourceKind.MANIFEST), anyString()))
+        .thenAnswer(invocation -> Set.of(rootDigest, childDigest)
+            .contains(invocation.getArgument(2)));
+    when(tokenDao.scannerResourceAllowed(
+        anyString(), eq(ScannerResourceKind.BLOB), anyString()))
+        .thenAnswer(invocation -> layerDigest.equals(invocation.getArgument(2)));
 
     String token =
         service.grantScannerPull(7L, "docker-hosted", "team/app", rootDigest, 120);
@@ -193,6 +204,16 @@ class DockerAuthServiceTest {
         "repositoryId", 7L,
         "rootManifestDigest", rootDigest)), scopes.getValue());
     assertTrue(expiry.getValue().isAfter(Instant.now().plusSeconds(100)));
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<ScannerTokenResource>> resources =
+        ArgumentCaptor.forClass((Class<List<ScannerTokenResource>>) (Class<?>) List.class);
+    verify(tokenDao).insertScannerResources(eq(hash.getValue()), resources.capture());
+    assertEquals(
+        Set.of(
+            new ScannerTokenResource(ScannerResourceKind.MANIFEST, rootDigest),
+            new ScannerTokenResource(ScannerResourceKind.MANIFEST, childDigest),
+            new ScannerTokenResource(ScannerResourceKind.BLOB, layerDigest)),
+        Set.copyOf(resources.getValue()));
 
     DockerAuthTokenDao.TokenRecord stored = new DockerAuthTokenDao.TokenRecord(
         hash.getValue(),
@@ -274,6 +295,8 @@ class DockerAuthServiceTest {
     assertEquals(
         DockerAuthService.MAX_SCANNER_PULL_TOKEN_TTL_SECONDS,
         DockerAuthService.scannerPullTokenTtlSeconds(Long.MAX_VALUE));
+    verify(docker, times(1)).listReferences(11L);
+    verify(docker, times(1)).listReferences(12L);
   }
 
   @Test

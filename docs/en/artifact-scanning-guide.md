@@ -92,12 +92,20 @@ docker compose \
 
 Both controls are required:
 
-- `--profile security-scanning` starts the scanner adapter container.
+- `--profile security-scanning` starts the scanner adapter and dedicated database-updater
+  containers.
 - `KKREPO_SECURITY_SCANNING_ENABLED=true` starts kkRepo coordination workers and download-policy
   integration.
 
 Store the generated credential in a protected `.env` file or secret manager. Rotate it by updating
 both components and restarting kkRepo and the scanner adapter together.
+
+Compose places the database, kkRepo, and the scan-serving adapter on an internal network; the
+adapter has no public egress. A separate updater mounts the same vulnerability-database volume,
+uses only an update-egress network, receives no service credential, and exposes no HTTP service.
+It checks every five minutes by default while preserving the six-hour minimum successful-update
+interval. If readers do not drain within ten minutes, it exits unsuccessfully so the restart
+policy retries.
 
 Check the containers and scanner readiness:
 
@@ -308,15 +316,21 @@ a partial result. Registry transport, authorization-service, and 5xx failures re
 are never recorded as missing platforms.
 For Docker/OCI scans, the adapter uses the short-lived read token to fetch and verify manifests,
 configuration blobs, and required layers into a request-local OCI layout, then asks Syft to scan
-that local layout. The token is not passed to Syft. All platforms share compressed-input, archive
-entry, single-file, expanded-byte, nesting, and expansion-ratio budgets, including gzip, xz, and
-zstd layers, and those bounds are checked before Syft starts.
+that local layout. The token is not passed to Syft. Token issuance materializes the root
+manifest's reachable manifests, configuration blobs, and layers once into a primary-keyed resource
+allowlist. Each subsequent registry request performs one indexed lookup by token, resource kind,
+and digest instead of walking the image graph for every layer. All platforms share
+compressed-input, archive-entry, single-file, expanded-byte, nesting, and expansion-ratio budgets,
+including gzip, xz, and zstd layers, and those bounds are checked before Syft starts.
 
 ## Scan Triggers
 
 - After an artifact is created or replaced, the committed durable content event automatically
   creates a candidate and task. Workers poll at about one-second intervals by default; this is not
   a once-per-minute full-database scan.
+- A rolling-upgrade writer that predates content events is covered by a reconciliation worker
+  combining a recent-change window with a bounded cyclic primary-key page. Both paths are indexed;
+  this is not a per-second full-table scan.
 - Activating a repository or expanding hosted/proxy scope creates a durable backfill for existing
   artifacts.
 - **rescan** creates a high-priority task with reason `MANUAL`.
@@ -456,6 +470,8 @@ source repositories; repository-less artifact waivers are rejected.
 | `KKREPO_SECURITY_SCANNING_RESPONSE_MEMORY_BUDGET_BYTES` | `268435456` | Process-local admission budget derived from the byte and token ceilings; it must admit one bounded response and remain no more than half the JVM max heap |
 | `KKREPO_SECURITY_SCANNING_WORKER_BATCH_SIZE` | `4` | Tasks claimed per worker cycle |
 | `KKREPO_SECURITY_SCANNING_WORKER_MAX_ATTEMPTS` | `5` | Automatic attempt limit |
+| `KKREPO_SECURITY_SCANNING_ARTIFACT_RECONCILE_BATCH_SIZE` | `1000` | Maximum assets checked in each recent-change and cyclic-primary-key pass |
+| `KKREPO_SECURITY_SCANNING_ARTIFACT_RECONCILE_RECENT_WINDOW` | `1d` | Window prioritized for recently changed assets |
 | `KKREPO_SECURITY_SCANNING_METRICS_COUNT_LIMIT` | `10000` | Gauge saturation limit that avoids unbounded counts |
 | `KKREPO_SECURITY_SCANNING_TERMINAL_TASK_RETENTION_DAYS` | `30` | Terminal-task retention |
 | `KKREPO_SECURITY_SCANNING_RESULT_RETENTION_DAYS` | `90` | Unreferenced historical-result retention |
@@ -468,8 +484,9 @@ and OCI registry URL.
 | Environment variable | Application default | Purpose |
 | --- | ---: | --- |
 | `KKREPO_SCANNER_SERVICE_CREDENTIAL` | Required | Must match the kkRepo credential; the adapter refuses to start when it is empty |
-| `KKREPO_SCANNER_DB_AUTO_UPDATE` | `false` | In-process automatic update; Compose enables it, while Helm serving Pods keep it disabled |
-| `KKREPO_SCANNER_DATABASE_UPDATE_ONLY` | `false` | Run one coordinated update and exit without creating the credential-protected HTTP controller; used by the Helm updater CronJob |
+| `KKREPO_SCANNER_DB_AUTO_UPDATE` | `false` | In-process automatic update; both Compose and Helm serving containers keep it disabled |
+| `KKREPO_SCANNER_DATABASE_UPDATE_ONLY` | `false` | Run one coordinated update and exit without creating the credential-protected HTTP controller; used by the dedicated updater |
+| `KKREPO_SCANNER_DATABASE_UPDATE_LOCK_TIMEOUT` | `10m` | Total bound for acquiring writer intent, draining readers, and acquiring the exclusive database lock; timeout fails the process so orchestration retries |
 | `KKREPO_SCANNER_DB_DIRECTORY` | `/var/lib/kkrepo-scanner/grype` | Grype database directory |
 | `KKREPO_SCANNER_DB_UPDATE_INTERVAL` | `6h` | Target update interval |
 | `KKREPO_SCANNER_DB_UPDATE_CHECK_INTERVAL` | `1m` | Update-eligibility check interval |
@@ -553,7 +570,7 @@ At minimum, alert on:
 | Download returns `503` | Pending/failed/partial is configured to `BLOCK`; wait for completion or temporarily restore `ALLOW` |
 | Download returns `403` | A complete result matches an unwaived policy; upgrade, revise policy, or approve a waiver |
 | OCI scan fails | Ensure `KKREPO_SECURITY_SCANNING_OCI_REGISTRY_URL` is reachable from the scanner, credentials match, and required platforms exist |
-| Vulnerability DB is stale | On Helm, inspect the updater CronJob/Jobs, updater HTTPS egress, shared-volume permissions, and free space; on Compose, inspect scanner automatic updates |
+| Vulnerability DB is stale | On Helm, inspect the updater CronJob/Jobs; on Compose, inspect the `scanner-database-updater` container; for both, check updater HTTPS egress, shared-volume permissions, lock waits, and free space |
 | SBOM download fails | Check browse/read permission, SBOM blob references, and the backing blob store |
 
 Do not log service credentials, temporary registry tokens, signed artifact URLs, or complete

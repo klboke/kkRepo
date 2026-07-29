@@ -20,6 +20,10 @@ public class ScannerDatabaseUpdateOnlyRunner implements ApplicationRunner {
 
   @Override
   public void run(ApplicationArguments args) {
-    updater.updateOnce();
+    ScannerDatabaseCoordinator.UpdateResult result = updater.updateOnce();
+    if (result == ScannerDatabaseCoordinator.UpdateResult.BUSY) {
+      throw new IllegalStateException(
+          "Scanner vulnerability database updater could not acquire the writer gate");
+    }
   }
 }

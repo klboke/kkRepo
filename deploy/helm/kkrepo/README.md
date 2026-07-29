@@ -63,8 +63,11 @@ hide healthy replicas or multiply outage delays by the replica count. For multip
 replicas, provide
 `securityScanning.scannerDatabase.persistence.existingClaim` backed by `ReadWriteMany`, or disable
 scanner database persistence so each pod uses an ephemeral cache. Shared-database replicas use
-cross-process read/update locks and a shared update marker. The updater CronJob runs every five
-minutes by default, while the marker enforces at least six hours between successful updates. With
+cross-process read/update locks, a writer-intent gate, and a shared update marker. The updater
+waits up to ten minutes by default for active readers to drain and exits unsuccessfully if it
+still cannot update, allowing the Job controller to retry instead of recording false success.
+The CronJob runs every five minutes by default, while the marker enforces at least six hours
+between successful updates. With
 the default single-replica `ReadWriteOnce` claim, required pod affinity schedules the updater on
 the scanner node; multi-replica deployments still require `ReadWriteMany`. Each adapter also
 admits at most two active and four queued scans by default, returning a retryable HTTP 429 with

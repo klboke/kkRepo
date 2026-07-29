@@ -80,6 +80,10 @@ spec:
               value: {{ .Values.securityScanning.worker.artifactChangeBatchSize | quote }}
             - name: KKREPO_SECURITY_SCANNING_ARTIFACT_CHANGE_CLEANUP_BATCH_SIZE
               value: {{ .Values.securityScanning.worker.artifactChangeCleanupBatchSize | quote }}
+            - name: KKREPO_SECURITY_SCANNING_ARTIFACT_RECONCILE_BATCH_SIZE
+              value: {{ .Values.securityScanning.worker.artifactReconcileBatchSize | quote }}
+            - name: KKREPO_SECURITY_SCANNING_ARTIFACT_RECONCILE_RECENT_WINDOW
+              value: {{ .Values.securityScanning.worker.artifactReconcileRecentWindow | quote }}
             - name: KKREPO_SECURITY_SCANNING_RETENTION_ENABLED
               value: {{ .Values.securityScanning.retention.enabled | quote }}
             - name: KKREPO_SECURITY_SCANNING_TERMINAL_TASK_RETENTION_DAYS

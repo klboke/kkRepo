@@ -11,6 +11,16 @@ CREATE TABLE artifact_change_event (
   INDEX idx_artifact_change_asset (asset_id, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE docker_scanner_token_resource (
+  token_hash CHAR(64) NOT NULL,
+  resource_kind VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  digest VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (token_hash, resource_kind, digest),
+  CONSTRAINT fk_docker_scanner_token_resource_token
+    FOREIGN KEY (token_hash) REFERENCES docker_auth_token(token_hash) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE blob_reference (
   owner_type VARCHAR(64) NOT NULL,
   owner_id BIGINT UNSIGNED NOT NULL,
@@ -522,3 +532,6 @@ VALUES
 
 INSERT INTO maintenance_cursor (task_name, last_seen_id)
 VALUES ('artifact_change:security_scan', 0);
+
+INSERT INTO maintenance_cursor (task_name, last_seen_id)
+VALUES ('artifact_reconcile:security_scan', 0);

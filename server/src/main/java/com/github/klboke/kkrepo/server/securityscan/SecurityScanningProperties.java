@@ -155,6 +155,8 @@ public class SecurityScanningProperties {
     private int maxBackoffSeconds = 1800;
     private int artifactChangeBatchSize = 1000;
     private int artifactChangeCleanupBatchSize = 5000;
+    private int artifactReconcileBatchSize = 1000;
+    private Duration artifactReconcileRecentWindow = Duration.ofDays(1);
     private int candidateBatchSize = 500;
     private int backfillBatchSize = 500;
     private int backfillMaxPagesPerRun = 20;
@@ -217,6 +219,27 @@ public class SecurityScanningProperties {
     public void setArtifactChangeCleanupBatchSize(int artifactChangeCleanupBatchSize) {
       this.artifactChangeCleanupBatchSize =
           Math.max(1, Math.min(50_000, artifactChangeCleanupBatchSize));
+    }
+
+    public int getArtifactReconcileBatchSize() {
+      return artifactReconcileBatchSize;
+    }
+
+    public void setArtifactReconcileBatchSize(int artifactReconcileBatchSize) {
+      this.artifactReconcileBatchSize =
+          Math.max(1, Math.min(10_000, artifactReconcileBatchSize));
+    }
+
+    public Duration getArtifactReconcileRecentWindow() {
+      return artifactReconcileRecentWindow;
+    }
+
+    public void setArtifactReconcileRecentWindow(Duration artifactReconcileRecentWindow) {
+      this.artifactReconcileRecentWindow =
+          artifactReconcileRecentWindow == null
+                  || artifactReconcileRecentWindow.isZero()
+                  || artifactReconcileRecentWindow.isNegative()
+              ? Duration.ofDays(1) : artifactReconcileRecentWindow;
     }
 
     public int getCandidateBatchSize() {

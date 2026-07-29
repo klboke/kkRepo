@@ -57,20 +57,41 @@ public class ScannerDatabaseCoordinator {
   }
 
   public UpdateResult updateIfDue(Duration interval, CheckedRunnable update) {
+    return updateIfDue(interval, properties.getDatabaseLockTimeout(), update);
+  }
+
+  public UpdateResult updateIfDue(
+      Duration interval, Duration acquisitionTimeout, CheckedRunnable update) {
+    ensureDirectory();
+    long timeoutNanos = timeoutNanos(acquisitionTimeout);
+    long deadlineNanos = System.nanoTime() + timeoutNanos;
+    try (FileChannel gateChannel = openWriterGateChannel()) {
+      FileLock writerGate = tryFileLock(gateChannel, false, timeoutNanos);
+      if (writerGate == null) return UpdateResult.BUSY;
+      try (writerGate) {
+        return updateWhileWriterGateHeld(interval, deadlineNanos, update);
+      }
+    } catch (IOException e) {
+      throw unavailable("SCANNER_DATABASE_COORDINATION_IO", e);
+    }
+  }
+
+  private UpdateResult updateWhileWriterGateHeld(
+      Duration interval, long deadlineNanos, CheckedRunnable update) {
     Lock write = localLock.writeLock();
-    long timeoutNanos = timeoutNanos(properties.getDatabaseLockTimeout());
     boolean localAcquired;
     try {
-      localAcquired = write.tryLock(timeoutNanos, TimeUnit.NANOSECONDS);
+      localAcquired =
+          write.tryLock(remainingNanos(deadlineNanos), TimeUnit.NANOSECONDS);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       throw unavailable("SCANNER_DATABASE_LOCK_INTERRUPTED", e);
     }
     if (!localAcquired) return UpdateResult.BUSY;
     try {
-      ensureDirectory();
       try (FileChannel channel = openLockChannel()) {
-        FileLock exclusive = tryExclusiveLock(channel, timeoutNanos);
+        FileLock exclusive =
+            tryFileLock(channel, false, remainingNanos(deadlineNanos));
         if (exclusive == null) return UpdateResult.BUSY;
         try (exclusive) {
           Instant lastUpdated = lastSuccessfulUpdate();
@@ -105,33 +126,29 @@ public class ScannerDatabaseCoordinator {
 
   private void registerReader(long deadlineNanos) {
     synchronized (readersMonitor) {
-      if (localReaders == 0) {
-        ensureDirectory();
-        sharedReadChannel = openLockChannel();
-        while (sharedReadLock == null) {
-          try {
-            sharedReadLock = sharedReadChannel.tryLock(0, LOCK_LENGTH, true);
-          } catch (java.nio.channels.OverlappingFileLockException e) {
-            sharedReadLock = null;
-          } catch (IOException e) {
-            closeSharedRead();
-            throw unavailable("SCANNER_DATABASE_COORDINATION_IO", e);
-          }
-          if (sharedReadLock != null) break;
-          if (System.nanoTime() >= deadlineNanos) {
-            closeSharedRead();
-            throw unavailable("SCANNER_DATABASE_UPDATING", null);
-          }
-          try {
-            TimeUnit.MILLISECONDS.sleep(25);
-          } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            closeSharedRead();
-            throw unavailable("SCANNER_DATABASE_LOCK_INTERRUPTED", e);
+      ensureDirectory();
+      try (FileChannel gateChannel = openWriterGateChannel()) {
+        long gateTimeout = Math.max(1, deadlineNanos - System.nanoTime());
+        FileLock readerGate = tryFileLock(gateChannel, true, gateTimeout);
+        if (readerGate == null) {
+          throw unavailable("SCANNER_DATABASE_UPDATING", null);
+        }
+        try (readerGate) {
+          if (localReaders == 0) {
+            sharedReadChannel = openLockChannel();
+            long readTimeout = Math.max(1, deadlineNanos - System.nanoTime());
+            sharedReadLock = tryFileLock(sharedReadChannel, true, readTimeout);
+            if (sharedReadLock == null) {
+              closeSharedRead();
+              throw unavailable("SCANNER_DATABASE_UPDATING", null);
+            }
           }
         }
+        localReaders++;
+      } catch (IOException e) {
+        closeSharedRead();
+        throw unavailable("SCANNER_DATABASE_COORDINATION_IO", e);
       }
-      localReaders++;
     }
   }
 
@@ -160,9 +177,17 @@ public class ScannerDatabaseCoordinator {
   }
 
   private FileChannel openLockChannel() {
+    return openCoordinationChannel(lockPath());
+  }
+
+  private FileChannel openWriterGateChannel() {
+    return openCoordinationChannel(writerGatePath());
+  }
+
+  private FileChannel openCoordinationChannel(Path path) {
     try {
       return FileChannel.open(
-          lockPath(),
+          path,
           StandardOpenOption.CREATE,
           StandardOpenOption.READ,
           StandardOpenOption.WRITE);
@@ -171,12 +196,13 @@ public class ScannerDatabaseCoordinator {
     }
   }
 
-  private FileLock tryExclusiveLock(FileChannel channel, long timeoutNanos)
+  private FileLock tryFileLock(
+      FileChannel channel, boolean shared, long timeoutNanos)
       throws IOException {
     long started = System.nanoTime();
     while (true) {
       try {
-        FileLock lock = channel.tryLock(0, LOCK_LENGTH, false);
+        FileLock lock = channel.tryLock(0, LOCK_LENGTH, shared);
         if (lock != null) return lock;
       } catch (java.nio.channels.OverlappingFileLockException ignored) {
         // Another coordinator in this JVM still owns a shared or exclusive lock.
@@ -236,6 +262,10 @@ public class ScannerDatabaseCoordinator {
     return properties.getVulnerabilityDatabaseDirectory().resolve(".kkrepo-db.lock");
   }
 
+  private Path writerGatePath() {
+    return properties.getVulnerabilityDatabaseDirectory().resolve(".kkrepo-db.writer-gate");
+  }
+
   private Path markerPath() {
     return properties.getVulnerabilityDatabaseDirectory().resolve(".kkrepo-db-updated");
   }
@@ -248,6 +278,10 @@ public class ScannerDatabaseCoordinator {
     } catch (ArithmeticException e) {
       return TimeUnit.HOURS.toNanos(1);
     }
+  }
+
+  private static long remainingNanos(long deadlineNanos) {
+    return Math.max(0, deadlineNanos - System.nanoTime());
   }
 
   private static ScannerRequestException unavailable(String code, Throwable cause) {

@@ -23,6 +23,10 @@ class PostgreSqlSecurityScanSummaryIndexTest extends PostgreSqlIntegrationTestSu
             + "USING btree (repository_id, id)",
         indexDefinition("idx_asset_repository_id"));
     assertEquals(
+        "CREATE INDEX idx_asset_last_updated_id ON public.asset "
+            + "USING btree (last_updated_at, id) WHERE (asset_blob_id IS NOT NULL)",
+        indexDefinition("idx_asset_last_updated_id"));
+    assertEquals(
         "CREATE INDEX idx_docker_reference_policy_lookup "
             + "ON public.docker_manifest_reference "
             + "USING btree (repository_id, digest_hash, manifest_id)",
@@ -109,9 +113,10 @@ class PostgreSqlSecurityScanSummaryIndexTest extends PostgreSqlIntegrationTestSu
         resource("db/migration/postgresql/"
             + "V37__artifact_security_scanning_online_indexes.sql.conf");
 
-    assertEquals(2, occurrences(migration, "CREATE INDEX CONCURRENTLY"));
-    assertEquals(2, occurrences(migration, "DROP INDEX CONCURRENTLY IF EXISTS"));
+    assertEquals(3, occurrences(migration, "CREATE INDEX CONCURRENTLY"));
+    assertEquals(3, occurrences(migration, "DROP INDEX CONCURRENTLY IF EXISTS"));
     assertTrue(migration.contains("ON asset(repository_id, id)"));
+    assertTrue(migration.contains("ON asset(last_updated_at, id)"));
     assertTrue(migration.contains(
         "ON docker_manifest_reference(repository_id, digest_hash, manifest_id)"));
     assertEquals("executeInTransaction=false", configuration.strip());

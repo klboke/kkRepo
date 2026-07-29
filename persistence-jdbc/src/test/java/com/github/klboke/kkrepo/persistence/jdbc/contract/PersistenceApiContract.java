@@ -15,6 +15,8 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ArtifactChangeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.ScannerResourceKind;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.ScannerTokenResource;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.TokenKind;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceStores;
@@ -107,6 +109,7 @@ public abstract class PersistenceApiContract {
         "docker_auth_token",
         "docker_manifest",
         "docker_manifest_reference",
+        "docker_scanner_token_resource",
         "docker_tag",
         "docker_upload_chunk",
         "docker_upload_session",
@@ -1615,6 +1618,84 @@ public abstract class PersistenceApiContract {
         scans.findDownloadPolicySnapshots(assetId, repositoryId)
             .getFirst()
             .requiredWaiverRevision());
+  }
+
+  @Test
+  void securityScanningReconcilesWritesThatMissedAnAlreadyAdvancedEventCursor() {
+    SecurityScanDao scans = stores().securityScanning();
+    long repositoryId =
+        createRepository("scan-rolling-upgrade-reconcile", RepositoryFormat.MAVEN2);
+    long blobStoreId =
+        stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
+    Instant now = Instant.parse("2026-07-24T12:00:00Z");
+    long firstBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "scan/reconcile-1.jar", "scan-reconcile-1"));
+    String path = "com/acme/reconcile/1.0/reconcile-1.0.jar";
+    long assetId = stores().assets().insertAsset(new AssetRecord(
+        null,
+        repositoryId,
+        null,
+        firstBlobId,
+        RepositoryFormat.MAVEN2,
+        path,
+        PersistenceHashes.pathHash(path),
+        "reconcile-1.0.jar",
+        "ARTIFACT",
+        "application/java-archive",
+        42L,
+        null,
+        now,
+        Map.of()));
+    assertEquals(1, scans.recordArtifactContentChange(assetId));
+    assertTrue(scans.markCandidateEnqueued(assetId, 1));
+
+    long recentBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "scan/reconcile-2.jar", "scan-reconcile-2"));
+    assertEquals(
+        1,
+        stores().assets().updateAssetBlobBinding(
+            assetId,
+            recentBlobId,
+            "application/java-archive",
+            43,
+            now.plusSeconds(1)));
+
+    SecurityScanDao.ReconciliationPage recent = inTransaction(
+        () -> scans.reconcileArtifactChanges(
+            assetId, now, 10, 10));
+    assertEquals(1, recent.recentAssets());
+    assertEquals(0, recent.scannedAssets());
+    assertEquals(1, recent.markedAssets());
+    assertEquals(recentBlobId, scans.findCandidate(assetId).orElseThrow().assetBlobId());
+    assertEquals(2, scans.findCandidate(assetId).orElseThrow().contentGeneration());
+    assertTrue(scans.markCandidateEnqueued(assetId, 2));
+
+    long oldTimestampBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "scan/reconcile-3.jar", "scan-reconcile-3"));
+    assertEquals(
+        1,
+        stores().assets().updateAssetBlobBinding(
+            assetId,
+            oldTimestampBlobId,
+            "application/java-archive",
+            44,
+            now.minusSeconds(1)));
+
+    SecurityScanDao.ReconciliationPage wrap = inTransaction(
+        () -> scans.reconcileArtifactChanges(
+            assetId, now, 10, 10));
+    assertEquals(0, wrap.markedAssets());
+    assertTrue(wrap.wrapped());
+    assertEquals(0, wrap.nextAssetId());
+    SecurityScanDao.ReconciliationPage cyclic = inTransaction(
+        () -> scans.reconcileArtifactChanges(
+            wrap.nextAssetId(), now, 10, 10));
+    assertEquals(1, cyclic.scannedAssets());
+    assertEquals(1, cyclic.markedAssets());
+    assertEquals(
+        oldTimestampBlobId,
+        scans.findCandidate(assetId).orElseThrow().assetBlobId());
+    assertEquals(3, scans.findCandidate(assetId).orElseThrow().contentGeneration());
   }
 
   @Test
@@ -3663,6 +3744,11 @@ public abstract class PersistenceApiContract {
           TokenKind.SECURITY_SCANNER,
           scopes,
           expiresAt);
+      tokens.insertScannerResources(scannerHash, List.of(
+          new ScannerTokenResource(
+              ScannerResourceKind.MANIFEST, "sha256:" + "c".repeat(64)),
+          new ScannerTokenResource(
+              ScannerResourceKind.BLOB, "sha256:" + "d".repeat(64))));
       return null;
     });
 
@@ -3674,6 +3760,12 @@ public abstract class PersistenceApiContract {
     assertEquals(TokenKind.SECURITY_SCANNER, scanner.tokenKind());
     assertEquals(scopes, user.scopes().get("scopes"));
     assertEquals(scopes, scanner.scopes().get("scopes"));
+    assertTrue(inTransaction(() -> tokens.scannerResourceAllowed(
+        scannerHash, ScannerResourceKind.MANIFEST, "sha256:" + "c".repeat(64))));
+    assertTrue(inTransaction(() -> tokens.scannerResourceAllowed(
+        scannerHash, ScannerResourceKind.BLOB, "sha256:" + "d".repeat(64))));
+    assertFalse(inTransaction(() -> tokens.scannerResourceAllowed(
+        scannerHash, ScannerResourceKind.BLOB, "sha256:" + "e".repeat(64))));
   }
 
   @Test

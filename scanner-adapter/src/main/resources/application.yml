@@ -48,3 +48,4 @@ kkrepo:
     admission-timeout: ${KKREPO_SCANNER_ADMISSION_TIMEOUT:1s}
     retry-after-seconds: ${KKREPO_SCANNER_RETRY_AFTER_SECONDS:5}
     database-lock-timeout: ${KKREPO_SCANNER_DATABASE_LOCK_TIMEOUT:2s}
+    database-update-lock-timeout: ${KKREPO_SCANNER_DATABASE_UPDATE_LOCK_TIMEOUT:10m}

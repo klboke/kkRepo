@@ -26,6 +26,9 @@ class MySqlSecurityScanSummaryIndexTest extends MySqlIntegrationTestSupport {
         List.of("repository_id", "id"),
         indexColumns("asset", "idx_asset_repository_id"));
     assertEquals(
+        List.of("last_updated_at", "id"),
+        indexColumns("asset", "idx_asset_last_updated_id"));
+    assertEquals(
         List.of("repository_id", "digest_hash", "manifest_id"),
         indexColumns(
             "docker_manifest_reference", "idx_docker_reference_policy_lookup"));
@@ -121,10 +124,10 @@ class MySqlSecurityScanSummaryIndexTest extends MySqlIntegrationTestSupport {
     String migration =
         resource("db/migration/mysql/V37__artifact_security_scanning_online_indexes.sql");
 
-    assertEquals(2, occurrences(migration, "ALGORITHM=INPLACE"));
-    assertEquals(2, occurrences(migration, "LOCK=NONE"));
-    assertEquals(2, occurrences(migration, "information_schema.statistics"));
-    assertEquals(4, occurrences(migration, "PREPARE kkrepo_"));
+    assertEquals(3, occurrences(migration, "ALGORITHM=INPLACE"));
+    assertEquals(3, occurrences(migration, "LOCK=NONE"));
+    assertEquals(3, occurrences(migration, "information_schema.statistics"));
+    assertEquals(6, occurrences(migration, "PREPARE kkrepo_"));
   }
 
   @Test
@@ -145,6 +148,9 @@ class MySqlSecurityScanSummaryIndexTest extends MySqlIntegrationTestSupport {
     assertEquals(
         List.of("repository_id", "id"),
         indexColumns("asset", "idx_asset_repository_id"));
+    assertEquals(
+        List.of("last_updated_at", "id"),
+        indexColumns("asset", "idx_asset_last_updated_id"));
     assertEquals(
         List.of("repository_id", "digest_hash", "manifest_id"),
         indexColumns(

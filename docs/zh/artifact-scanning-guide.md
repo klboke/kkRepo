@@ -84,11 +84,17 @@ docker compose \
 
 两个条件缺一不可：
 
-- `--profile security-scanning` 启动 scanner adapter 容器。
+- `--profile security-scanning` 启动 scanner adapter 和独立 database updater 容器。
 - `KKREPO_SECURITY_SCANNING_ENABLED=true` 启动 kkRepo 内的协调 worker 和下载策略集成。
 
 建议把生成的 credential 保存到受保护的 `.env` 或 Secret 管理系统中。修改 credential
 时必须同时滚动重启 kkRepo 和 scanner adapter。
+
+Compose 把数据库、kkRepo 和提供扫描服务的 scanner 放在 internal network；scanner
+没有公网出站。独立 updater 只挂载同一个漏洞数据库卷并连接 update-egress network，
+不接收 service credential，也不提供 HTTP 服务。updater 默认每 5 分钟做一次到期
+检查，成功更新最短间隔仍为 6 小时；等待 reader 排空超过 10 分钟会失败退出并由
+restart policy 重试。
 
 检查容器和 scanner readiness：
 
@@ -287,13 +293,17 @@ Docker Blob 实际按仓库和 digest 复用，因此 layer 下载会取仓库�
 授权服务和 5xx 错误保持可重试，不能记录成缺失平台。
 扫描 Docker/OCI 时，adapter 使用短期只读 token 获取并校验 manifest、config 和所需
 layer，在请求临时目录生成本地 OCI layout，再让 Syft 扫描该本地 layout。token 不会
-传给 Syft。所有平台共享压缩输入、归档条目、单文件、解压总量、嵌套和膨胀率限制，
-gzip/xz/zstd 等 layer 都在 Syft 启动前完成边界检查。
+传给 Syft。token 签发时会把根 manifest 可达的 manifest/config/layer 一次性写入有
+主键索引的资源 allowlist；后续每个 registry 请求只按 token、资源类型和 digest 做
+等值授权，不会为每个 layer 重复遍历镜像图。所有平台共享压缩输入、归档条目、单文件、
+解压总量、嵌套和膨胀率限制，gzip/xz/zstd 等 layer 都在 Syft 启动前完成边界检查。
 
 ## 扫描何时发生
 
 - 新增或替换制品后，事务提交的持久内容事件会自动生成候选和扫描任务。默认 worker
   轮询间隔约 1 秒，不是每分钟全库扫描。
+- 滚动升级期间仍由旧副本写入、尚未产生内容事件的 asset，会由最近变更窗口加有界
+  主键循环分页的校对 worker 补齐；两类查询都有索引，不执行每秒全表扫描。
 - 首次启用仓库或扩大 hosted/proxy 范围时，会为现有制品创建持久 backfill。
 - 点击 **rescan** 会创建一个高优先级、原因标记为 `MANUAL` 的新任务。
 - scanner engine 或漏洞数据库 revision 变化时，已保存 SBOM 可以进入重新匹配流程；
@@ -420,6 +430,8 @@ Waivers 页签用于查看 Active/Expired、scope、仓库、制品、exception�
 | `KKREPO_SECURITY_SCANNING_RESPONSE_MEMORY_BUDGET_BYTES` | `268435456` | 根据 byte/token 上限推导的进程内准入预算；必须至少容纳一个有界响应，且不得超过 JVM 最大堆的一半 |
 | `KKREPO_SECURITY_SCANNING_WORKER_BATCH_SIZE` | `4` | 每轮任务领取上限 |
 | `KKREPO_SECURITY_SCANNING_WORKER_MAX_ATTEMPTS` | `5` | 自动尝试上限 |
+| `KKREPO_SECURITY_SCANNING_ARTIFACT_RECONCILE_BATCH_SIZE` | `1000` | 每轮最近变更与主键循环校对各自的最大 asset 数量 |
+| `KKREPO_SECURITY_SCANNING_ARTIFACT_RECONCILE_RECENT_WINDOW` | `1d` | 优先校对最近发生内容变化的时间窗口 |
 | `KKREPO_SECURITY_SCANNING_METRICS_COUNT_LIMIT` | `10000` | 指标聚合饱和值，避免无界 count |
 | `KKREPO_SECURITY_SCANNING_TERMINAL_TASK_RETENTION_DAYS` | `30` | 终态 task 保留天数 |
 | `KKREPO_SECURITY_SCANNING_RESULT_RETENTION_DAYS` | `90` | 无引用历史结果保留天数 |
@@ -432,8 +444,9 @@ Waivers 页签用于查看 Active/Expired、scope、仓库、制品、exception�
 | 环境变量 | 应用默认值 | 用途 |
 | --- | ---: | --- |
 | `KKREPO_SCANNER_SERVICE_CREDENTIAL` | 必填 | 必须与 kkRepo credential 相同；为空时 adapter 拒绝启动 |
-| `KKREPO_SCANNER_DB_AUTO_UPDATE` | `false` | 进程内自动更新；Compose 会开启，Helm 的服务 Pod 保持关闭 |
-| `KKREPO_SCANNER_DATABASE_UPDATE_ONLY` | `false` | 只执行一次协调更新后退出，不创建需要 credential 的 HTTP controller；供 Helm updater CronJob 使用 |
+| `KKREPO_SCANNER_DB_AUTO_UPDATE` | `false` | 进程内自动更新；Compose 和 Helm 的服务容器都保持关闭 |
+| `KKREPO_SCANNER_DATABASE_UPDATE_ONLY` | `false` | 只执行一次协调更新后退出，不创建需要 credential 的 HTTP controller；供独立 updater 使用 |
+| `KKREPO_SCANNER_DATABASE_UPDATE_LOCK_TIMEOUT` | `10m` | updater 获取 writer gate、等待 reader 排空并取得独占锁的总上限；超时进程失败以触发重试 |
 | `KKREPO_SCANNER_DB_DIRECTORY` | `/var/lib/kkrepo-scanner/grype` | Grype 数据库目录 |
 | `KKREPO_SCANNER_DB_UPDATE_INTERVAL` | `6h` | 目标更新间隔 |
 | `KKREPO_SCANNER_DB_UPDATE_CHECK_INTERVAL` | `1m` | 更新资格检查间隔 |
@@ -512,7 +525,7 @@ scanner adapter 自身还暴露 active、queued、admission rejected 和数据�
 | 下载返回 `503` | pending/failed/partial 被配置为 `BLOCK`；等待任务完成或先恢复为 `ALLOW` |
 | 下载返回 `403` | 完整结果命中未豁免漏洞策略；升级制品、调整策略或按审批流程创建 waiver |
 | OCI 扫描失败 | 确认 `KKREPO_SECURITY_SCANNING_OCI_REGISTRY_URL` 可从 scanner 访问，credential 一致，要求的平台存在 |
-| Vulnerability DB 过旧 | Helm 检查 updater CronJob/Job、updater HTTPS 出站、共享卷权限和空间；Compose 检查 scanner 进程内自动更新 |
+| Vulnerability DB 过旧 | Helm 检查 updater CronJob/Job；Compose 检查 `scanner-database-updater` 容器；两者都检查 updater HTTPS 出站、共享卷权限、锁等待和空间 |
 | SBOM 下载失败 | 检查用户 browse/read 权限、SBOM blob 引用和底层 blob store |
 
 查看日志时不要记录 service credential、临时 registry token、制品签名 URL 或完整敏感

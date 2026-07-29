@@ -6,6 +6,8 @@ import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.ScannerResourceKind;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.ScannerTokenResource;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.TokenKind;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
@@ -135,10 +137,13 @@ public class DockerAuthService {
         new LinkedHashMap<>(new Scope(repository, imageName, List.of("pull")).toMap());
     scannerScope.put(SCANNER_REPOSITORY_ID, repositoryId);
     scannerScope.put(SCANNER_ROOT_DIGEST, normalizedRootDigest);
+    List<ScannerTokenResource> resources =
+        materializeScannerResources(repositoryId, imageName, normalizedRootDigest);
     String token = randomToken();
+    String tokenHash = sha256(token);
     long ttl = scannerPullTokenTtlSeconds(requestedTtlSeconds);
     tokenDao.insert(
-        sha256(token),
+        tokenHash,
         SCANNER_SUBJECT_SOURCE,
         "scanner",
         null,
@@ -146,6 +151,7 @@ public class DockerAuthService {
         TokenKind.SECURITY_SCANNER,
         List.of(Map.copyOf(scannerScope)),
         Instant.now().plusSeconds(ttl));
+    tokenDao.insertScannerResources(tokenHash, resources);
     return token;
   }
 
@@ -176,7 +182,7 @@ public class DockerAuthService {
     }
     if (row.tokenKind() == TokenKind.SECURITY_SCANNER
         && !scannerManifestGraphAllows(
-            row.scopes(), repositoryId, repository, imageName, action, path)) {
+            row, repositoryId, repository, imageName, action, path)) {
       throw new DockerProtocolException(
           DockerErrorCode.DENIED,
           "scanner token does not allow the requested manifest graph resource",
@@ -188,14 +194,14 @@ public class DockerAuthService {
   }
 
   private boolean scannerManifestGraphAllows(
-      Map<String, Object> storedScopes,
+      DockerAuthTokenDao.TokenRecord token,
       long repositoryId,
       String repository,
       String imageName,
       String action,
       DockerPath path) {
     Map<?, ?> scannerScope =
-        matchingScope(storedScopes, repository, imageName, action).orElse(null);
+        matchingScope(token.scopes(), repository, imageName, action).orElse(null);
     if (scannerScope == null
         || repositoryId <= 0
         || path == null
@@ -218,57 +224,66 @@ public class DockerAuthService {
     } catch (RuntimeException invalidScope) {
       return false;
     }
-    DockerManifestRecord root = dockerRegistryDao
-        .findManifestByDigest(repositoryId, imageName, rootDigest)
-        .orElse(null);
-    if (root == null) {
+    String requestedDigest = path.digest().value();
+    if (rootDigest.equals(requestedDigest) && path.kind() != DockerPath.Kind.MANIFEST) {
       return false;
     }
-    String requestedDigest = path.digest().value();
-    if (rootDigest.equals(requestedDigest)) {
-      return path.kind() == DockerPath.Kind.MANIFEST;
-    }
+    ScannerResourceKind resourceKind = path.kind() == DockerPath.Kind.MANIFEST
+        ? ScannerResourceKind.MANIFEST : ScannerResourceKind.BLOB;
+    return tokenDao.scannerResourceAllowed(token.tokenHash(), resourceKind, requestedDigest);
+  }
 
+  private List<ScannerTokenResource> materializeScannerResources(
+      long repositoryId, String imageName, String rootDigest) {
+    DockerManifestRecord root = dockerRegistryDao
+        .findManifestByDigest(repositoryId, imageName, rootDigest)
+        .orElseThrow(() -> new IllegalStateException(
+            "OCI root manifest disappeared before scanner token issuance"));
     Deque<DockerManifestRecord> pending = new ArrayDeque<>();
     Set<String> visited = new HashSet<>();
+    Set<ScannerTokenResource> resources = new LinkedHashSet<>();
     pending.add(root);
-    visited.add(root.digest());
+    visited.add(rootDigest);
+    resources.add(new ScannerTokenResource(ScannerResourceKind.MANIFEST, rootDigest));
     int observedReferences = 0;
     while (!pending.isEmpty()) {
       DockerManifestRecord manifest = pending.removeFirst();
       for (DockerManifestReferenceRecord reference :
           dockerRegistryDao.listReferences(manifest.id())) {
-        observedReferences++;
-        if (observedReferences > MAX_SCANNER_MANIFEST_GRAPH_REFERENCES) {
-          return false;
+        if (++observedReferences > MAX_SCANNER_MANIFEST_GRAPH_REFERENCES) {
+          throw new IllegalStateException(
+              "OCI manifest graph exceeds the scanner reference limit");
         }
-        if (requestedDigest.equals(reference.digest())
-            && descriptorAllows(path.kind(), reference.referenceKind())) {
-          return true;
+        String digest;
+        try {
+          digest = DockerDigest.parse(reference.digest()).value();
+        } catch (RuntimeException invalidDigest) {
+          throw new IllegalStateException(
+              "OCI manifest graph contains an invalid descriptor digest", invalidDigest);
         }
-        if (!"MANIFEST".equalsIgnoreCase(reference.referenceKind())
-            || visited.contains(reference.digest())) {
+        String referenceKind = reference.referenceKind();
+        if ("CONFIG".equalsIgnoreCase(referenceKind)
+            || "LAYER".equalsIgnoreCase(referenceKind)) {
+          resources.add(new ScannerTokenResource(ScannerResourceKind.BLOB, digest));
           continue;
         }
-        if (visited.size() >= MAX_SCANNER_MANIFEST_GRAPH_NODES) {
-          return false;
+        if (!"MANIFEST".equalsIgnoreCase(referenceKind)) {
+          continue;
         }
-        visited.add(reference.digest());
+        resources.add(new ScannerTokenResource(ScannerResourceKind.MANIFEST, digest));
+        if (!visited.add(digest)) {
+          continue;
+        }
+        if (visited.size() > MAX_SCANNER_MANIFEST_GRAPH_NODES) {
+          throw new IllegalStateException(
+              "OCI manifest graph exceeds the scanner manifest limit");
+        }
         dockerRegistryDao
-            .findManifestByDigest(repositoryId, imageName, reference.digest())
+            .findManifestByDigest(repositoryId, imageName, digest)
             .ifPresent(pending::addLast);
       }
     }
-    return false;
-  }
-
-  private static boolean descriptorAllows(DockerPath.Kind requestedKind, String referenceKind) {
-    if (requestedKind == DockerPath.Kind.MANIFEST) {
-      return "MANIFEST".equalsIgnoreCase(referenceKind);
-    }
-    return requestedKind == DockerPath.Kind.BLOB
-        && ("CONFIG".equalsIgnoreCase(referenceKind)
-            || "LAYER".equalsIgnoreCase(referenceKind));
+    return List.copyOf(resources);
   }
 
   private static Optional<Map<?, ?>> matchingScope(

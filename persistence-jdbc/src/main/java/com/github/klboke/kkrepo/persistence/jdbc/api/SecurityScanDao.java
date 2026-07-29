@@ -97,6 +97,16 @@ public interface SecurityScanDao {
   BackfillPage markRepositoryAssetsForBackfill(
       long repositoryId, long afterAssetId, int maxItems);
 
+  /**
+   * Repairs candidate projection drift from current asset/blob database truth.
+   *
+   * <p>The recent window gives rolling-upgrade writes from an older binary a fast path even after
+   * the cyclic primary-key cursor passed their assets. The bounded cyclic page is the
+   * correctness backstop for long transactions, null timestamps, and any other missed event.
+   */
+  ReconciliationPage reconcileArtifactChanges(
+      long afterAssetId, Instant recentSince, int maxRecentItems, int maxPageItems);
+
   long createTask(TaskDraft task);
 
   Optional<ScanTask> findTask(long taskId);
@@ -993,6 +1003,13 @@ public interface SecurityScanDao {
       int markedAssets,
       long nextAssetId,
       boolean complete) {}
+
+  record ReconciliationPage(
+      int recentAssets,
+      int scannedAssets,
+      int markedAssets,
+      long nextAssetId,
+      boolean wrapped) {}
 
   record ScanSummary(
       long candidateBacklog,

@@ -12,6 +12,15 @@ CREATE INDEX idx_artifact_change_repository
 CREATE INDEX idx_artifact_change_asset
   ON artifact_change_event(asset_id, id);
 
+CREATE TABLE docker_scanner_token_resource (
+  token_hash CHAR(64) NOT NULL
+    REFERENCES docker_auth_token(token_hash) ON DELETE CASCADE,
+  resource_kind VARCHAR(16) NOT NULL,
+  digest VARCHAR(255) NOT NULL,
+  created_at TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (token_hash, resource_kind, digest)
+);
+
 CREATE TABLE blob_reference (
   owner_type VARCHAR(64) NOT NULL,
   owner_id BIGINT NOT NULL CHECK (owner_id >= 0),
@@ -490,3 +499,6 @@ SELECT setval(
 
 INSERT INTO maintenance_cursor (task_name, last_seen_id)
 VALUES ('artifact_change:security_scan', 0);
+
+INSERT INTO maintenance_cursor (task_name, last_seen_id)
+VALUES ('artifact_reconcile:security_scan', 0);

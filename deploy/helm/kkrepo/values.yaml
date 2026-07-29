@@ -93,6 +93,8 @@ securityScanning:
       backoffLimit: 2
       successfulJobsHistoryLimit: 1
       failedJobsHistoryLimit: 3
+      # A busy update exits non-zero after this writer-gate bound so the Job controller retries.
+      lockTimeout: 10m
       scratchVolumeSize: 1Gi
       resources:
         requests:
@@ -117,6 +119,8 @@ securityScanning:
     maxBackoffSeconds: 1800
     artifactChangeBatchSize: 1000
     artifactChangeCleanupBatchSize: 5000
+    artifactReconcileBatchSize: 1000
+    artifactReconcileRecentWindow: 1d
     candidateBatchSize: 500
     backfillBatchSize: 500
     backfillMaxPagesPerRun: 20

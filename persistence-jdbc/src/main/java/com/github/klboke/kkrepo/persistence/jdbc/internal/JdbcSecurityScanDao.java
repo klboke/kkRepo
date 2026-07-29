@@ -36,6 +36,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.UUID;
@@ -895,7 +896,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Transactional
   public int recordArtifactContentChange(long assetId) {
     List<Long> blobIds = jdbc.query(
-        "SELECT asset_blob_id FROM asset WHERE id = ?",
+        "SELECT asset_blob_id FROM asset WHERE id = ? FOR UPDATE",
         (rs, rowNum) -> nullableLong(rs, "asset_blob_id"),
         assetId);
     if (blobIds.isEmpty() || blobIds.getFirst() == null) {
@@ -963,6 +964,68 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     return new BackfillPage(rows.size(), marked, nextAssetId, rows.size() < limit);
   }
 
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public ReconciliationPage reconcileArtifactChanges(
+      long afterAssetId, Instant recentSince, int maxRecentItems, int maxPageItems) {
+    List<ArtifactBinding> recent = jdbc.query("""
+        SELECT recent.id, recent.asset_blob_id,
+               candidate.asset_blob_id AS candidate_blob_id
+        FROM (
+          SELECT id, asset_blob_id, last_updated_at
+          FROM asset
+          WHERE asset_blob_id IS NOT NULL
+            AND last_updated_at >= ?
+          ORDER BY last_updated_at DESC, id DESC
+          LIMIT ?
+        ) recent
+        LEFT JOIN security_scan_candidate candidate ON candidate.asset_id = recent.id
+        ORDER BY recent.last_updated_at DESC, recent.id DESC
+        """,
+        JdbcSecurityScanDao::artifactBinding,
+        nullableTimestamp(recentSince == null ? Instant.EPOCH : recentSince),
+        safeLimit(maxRecentItems));
+    int marked = reconcileBindings(recent);
+
+    int pageLimit = safeLimit(maxPageItems);
+    List<ArtifactBinding> page = jdbc.query("""
+        SELECT a.id, a.asset_blob_id, candidate.asset_blob_id AS candidate_blob_id
+        FROM asset a
+        LEFT JOIN security_scan_candidate candidate ON candidate.asset_id = a.id
+        WHERE a.id > ?
+          AND a.asset_blob_id IS NOT NULL
+        ORDER BY a.id
+        LIMIT ?
+        """,
+        JdbcSecurityScanDao::artifactBinding,
+        Math.max(0, afterAssetId),
+        pageLimit);
+    marked += reconcileBindings(page);
+    boolean wrapped = page.size() < pageLimit;
+    long nextAssetId = wrapped || page.isEmpty()
+        ? 0 : page.getLast().assetId();
+    return new ReconciliationPage(
+        recent.size(), page.size(), marked, nextAssetId, wrapped);
+  }
+
+  private int reconcileBindings(List<ArtifactBinding> bindings) {
+    int marked = 0;
+    for (ArtifactBinding binding : bindings) {
+      if (!Objects.equals(binding.assetBlobId(), binding.candidateBlobId())) {
+        marked += recordArtifactContentChange(binding.assetId());
+      }
+    }
+    return marked;
+  }
+
+  private static ArtifactBinding artifactBinding(ResultSet rs, int rowNumber)
+      throws SQLException {
+    return new ArtifactBinding(
+        rs.getLong("id"),
+        rs.getLong("asset_blob_id"),
+        nullableLong(rs, "candidate_blob_id"));
+  }
+
   private int ensureCandidate(long assetId, long assetBlobId) {
     int updated = jdbc.update("""
         UPDATE security_scan_candidate
@@ -1001,6 +1064,9 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
           AND content_generation > 0
           AND enqueued_generation >= content_generation
         """, assetId, assetBlobId);
+  }
+
+  private record ArtifactBinding(long assetId, long assetBlobId, Long candidateBlobId) {
   }
 
   @Override

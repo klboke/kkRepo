@@ -2,6 +2,8 @@ package com.github.klboke.kkrepo.persistence.jdbc.internal;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.TokenRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.TokenKind;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.ScannerResourceKind;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.ScannerTokenResource;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -72,6 +74,52 @@ public class JdbcDockerAuthTokenDao implements com.github.klboke.kkrepo.persiste
         },
         normalize(tokenHash),
         Timestamp.from(now)).stream().findFirst();
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void insertScannerResources(
+      String tokenHash, List<ScannerTokenResource> resources) {
+    String normalizedHash = normalize(tokenHash);
+    List<ScannerTokenResource> distinct = resources == null
+        ? List.of()
+        : resources.stream().distinct().toList();
+    if (distinct.isEmpty()) {
+      return;
+    }
+    jdbcTemplate.batchUpdate("""
+        INSERT INTO docker_scanner_token_resource
+          (token_hash, resource_kind, digest)
+        VALUES (?, ?, ?)
+        """,
+        distinct,
+        500,
+        (ps, resource) -> {
+          ps.setString(1, normalizedHash);
+          ps.setString(2, resource.resourceKind().name());
+          ps.setString(3, resource.digest());
+        });
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public boolean scannerResourceAllowed(
+      String tokenHash, ScannerResourceKind resourceKind, String digest) {
+    if (resourceKind == null || digest == null || digest.isBlank()) {
+      return false;
+    }
+    return !jdbcTemplate.queryForList("""
+        SELECT token_hash
+        FROM docker_scanner_token_resource
+        WHERE token_hash = ?
+          AND resource_kind = ?
+          AND digest = ?
+        LIMIT 1
+        """,
+        String.class,
+        normalize(tokenHash),
+        resourceKind.name(),
+        digest).isEmpty();
   }
 
   @Transactional(propagation = Propagation.MANDATORY)

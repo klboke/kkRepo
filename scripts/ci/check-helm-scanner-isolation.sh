@@ -42,6 +42,8 @@ grep -A2 -F "name: KKREPO_SCANNER_DB_AUTO_UPDATE" <<<"$scanner_statefulset" \
 grep -Fq "KKREPO_SCANNER_DATABASE_UPDATE_ONLY" <<<"$updater_cronjob"
 grep -A1 -F "KKREPO_SCANNER_DATABASE_UPDATE_ONLY" <<<"$updater_cronjob" \
   | grep -Fq 'value: "true"'
+grep -A1 -F "KKREPO_SCANNER_DATABASE_UPDATE_LOCK_TIMEOUT" <<<"$updater_cronjob" \
+  | grep -Fq 'value: "10m"'
 if grep -Fq "KKREPO_SCANNER_SERVICE_CREDENTIAL" <<<"$updater_cronjob"; then
   echo "database updater must not receive the scanner service credential" >&2
   exit 1

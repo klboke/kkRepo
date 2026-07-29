@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.scanner;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -86,11 +87,25 @@ class ScannerOperationalComponentsTest {
   @Test
   void updateOnlyRunnerUsesTheCoordinatedUpdaterWithoutEnablingTheServingScheduler() {
     ScannerDatabaseUpdater updater = mock(ScannerDatabaseUpdater.class);
+    when(updater.updateOnce())
+        .thenReturn(ScannerDatabaseCoordinator.UpdateResult.UPDATED);
 
     new ScannerDatabaseUpdateOnlyRunner(updater)
         .run(new DefaultApplicationArguments(new String[0]));
 
     verify(updater).updateOnce();
+  }
+
+  @Test
+  void updateOnlyRunnerFailsTheWorkloadWhenTheWriterGateRemainsBusy() {
+    ScannerDatabaseUpdater updater = mock(ScannerDatabaseUpdater.class);
+    when(updater.updateOnce())
+        .thenReturn(ScannerDatabaseCoordinator.UpdateResult.BUSY);
+
+    assertThrows(
+        IllegalStateException.class,
+        () -> new ScannerDatabaseUpdateOnlyRunner(updater)
+            .run(new DefaultApplicationArguments(new String[0])));
   }
 
   @Test
@@ -146,6 +161,7 @@ class ScannerOperationalComponentsTest {
     properties.setReadinessCache(null);
     properties.setVulnerabilityDatabaseUpdateInterval(null);
     properties.setVulnerabilityDatabaseUpdateCheckInterval(null);
+    properties.setDatabaseUpdateLockTimeout(null);
     assertEquals("", properties.getServiceCredential());
     assertEquals("safe-syft", properties.getSyftExecutable());
     assertEquals("safe-grype", properties.getGrypeExecutable());
@@ -155,6 +171,7 @@ class ScannerOperationalComponentsTest {
     assertEquals(Duration.ofSeconds(30), properties.getReadinessCache());
     assertEquals(Duration.ofHours(6), properties.getVulnerabilityDatabaseUpdateInterval());
     assertEquals(Duration.ofMinutes(1), properties.getVulnerabilityDatabaseUpdateCheckInterval());
+    assertEquals(Duration.ofMinutes(10), properties.getDatabaseUpdateLockTimeout());
 
     ScannerRequestException error =
         new ScannerRequestException("CODE", "message", 422, false, new Exception("cause"));
