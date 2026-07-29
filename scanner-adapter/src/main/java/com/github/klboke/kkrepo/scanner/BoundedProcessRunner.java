@@ -29,27 +29,41 @@ public class BoundedProcessRunner {
   private static final long PROCESS_TERMINATION_POLL_MILLIS = 10;
 
   private final ScannerAdapterProperties properties;
+  private final ScannerDatabaseCoordinator database;
   private final FileSizeReader fileSizeReader;
   private final ProcessGroupSupport processGroups;
 
   @Autowired
-  public BoundedProcessRunner(ScannerAdapterProperties properties) {
+  public BoundedProcessRunner(
+      ScannerAdapterProperties properties,
+      ScannerDatabaseCoordinator database) {
     this(
         properties,
+        database,
         BoundedProcessRunner::defaultFileSize,
         ProcessGroupSupport.detect());
   }
 
+  BoundedProcessRunner(ScannerAdapterProperties properties) {
+    this(properties, new ScannerDatabaseCoordinator(properties));
+  }
+
   BoundedProcessRunner(
       ScannerAdapterProperties properties, FileSizeReader fileSizeReader) {
-    this(properties, fileSizeReader, ProcessGroupSupport.detect());
+    this(
+        properties,
+        new ScannerDatabaseCoordinator(properties),
+        fileSizeReader,
+        ProcessGroupSupport.detect());
   }
 
   BoundedProcessRunner(
       ScannerAdapterProperties properties,
+      ScannerDatabaseCoordinator database,
       FileSizeReader fileSizeReader,
       ProcessGroupSupport processGroups) {
     this.properties = properties;
+    this.database = database;
     this.fileSizeReader = fileSizeReader;
     this.processGroups = processGroups;
   }
@@ -83,8 +97,13 @@ public class BoundedProcessRunner {
       environment.put("SYFT_CHECK_FOR_APP_UPDATE", "false");
       environment.put("GRYPE_CHECK_FOR_APP_UPDATE", "false");
       environment.put("GRYPE_DB_AUTO_UPDATE", "false");
+      String explicitDatabaseDirectory = scannerEnvironment == null
+          ? null : scannerEnvironment.get("GRYPE_DB_CACHE_DIR");
       environment.put(
-          "GRYPE_DB_CACHE_DIR", properties.getVulnerabilityDatabaseDirectory().toString());
+          "GRYPE_DB_CACHE_DIR",
+          explicitDatabaseDirectory == null
+              ? database.databaseDirectoryForProcess().toString()
+              : explicitDatabaseDirectory);
       if (sslCertFile != null) environment.put("SSL_CERT_FILE", sslCertFile);
       if (sslCertDir != null) environment.put("SSL_CERT_DIR", sslCertDir);
       if (scannerEnvironment != null) {

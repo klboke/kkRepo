@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.persistence.mysql;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -10,6 +11,7 @@ import java.io.InputStream;
 import java.security.MessageDigest;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 
 /** Guards the frozen V1-V29 chain and validates repeat startup after newer migrations. */
@@ -35,6 +37,81 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
     var result = flyway().migrate();
     assertEquals(0, result.migrationsExecuted);
     assertEquals("37", flyway().info().current().getVersion().getVersion());
+  }
+
+  @Test
+  void repairedPartialV36CanResumeWithoutManualSchemaSurgery() {
+    Flyway throughV35 = migration("35");
+    throughV35.clean();
+    assertEquals(35, throughV35.migrate().migrationsExecuted);
+
+    jdbc().execute("""
+        CREATE TABLE artifact_change_event (
+          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+          repository_id BIGINT UNSIGNED NOT NULL,
+          asset_id BIGINT UNSIGNED NOT NULL,
+          previous_asset_blob_id BIGINT UNSIGNED NULL,
+          asset_blob_id BIGINT UNSIGNED NOT NULL,
+          change_kind VARCHAR(32) NOT NULL,
+          occurred_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          PRIMARY KEY (id),
+          INDEX idx_artifact_change_repository (repository_id, id),
+          INDEX idx_artifact_change_asset (asset_id, id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """);
+    jdbc().execute("""
+        CREATE TABLE blob_reference (
+          owner_type VARCHAR(64) NOT NULL,
+          owner_id BIGINT UNSIGNED NOT NULL,
+          blob_id BIGINT UNSIGNED NOT NULL,
+          created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          PRIMARY KEY (owner_type, owner_id, blob_id),
+          CONSTRAINT fk_blob_reference_blob
+            FOREIGN KEY (blob_id) REFERENCES asset_blob(id) ON DELETE RESTRICT,
+          INDEX idx_blob_reference_blob (blob_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """);
+    jdbc().execute("""
+        ALTER TABLE asset_blob
+          ADD COLUMN external_reference_count BIGINT UNSIGNED NOT NULL DEFAULT 0
+        """);
+
+    Flyway resumed = migration(null);
+    resumed.repair();
+    assertEquals(2, resumed.migrate().migrationsExecuted);
+    assertEquals("37", resumed.info().current().getVersion().getVersion());
+    assertEquals(1, jdbc().queryForObject("""
+        SELECT COUNT(*)
+        FROM information_schema.table_constraints
+        WHERE constraint_schema = DATABASE()
+          AND table_name = 'asset_blob'
+          AND constraint_name = 'ck_asset_blob_external_reference_live'
+        """, Integer.class));
+    assertEquals(1, jdbc().queryForObject(
+        "SELECT COUNT(*) FROM security_scan_profile WHERE id = 1", Integer.class));
+  }
+
+  @Test
+  void mysqlV36KeepsEveryAutocommittedStepRestartSafe() throws Exception {
+    try (InputStream stream = getClass().getResourceAsStream(
+        "/db/migration/mysql/V36__artifact_security_scanning.sql")) {
+      assertNotNull(stream);
+      String migration = new String(
+          stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+      assertFalse(
+          java.util.regex.Pattern.compile(
+              "(?m)^CREATE TABLE (?!IF NOT EXISTS )")
+              .matcher(migration)
+              .find());
+      assertFalse(
+          java.util.regex.Pattern.compile("(?m)^INSERT INTO ")
+              .matcher(migration)
+              .find());
+      assertTrue(migration.contains(
+          "information_schema.columns"));
+      assertTrue(migration.contains(
+          "information_schema.table_constraints"));
+    }
   }
 
   @Test
@@ -80,6 +157,16 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
 
   private static String hex(byte[] bytes) {
     return java.util.HexFormat.of().formatHex(bytes);
+  }
+
+  private Flyway migration(String target) {
+    var configuration = Flyway.configure()
+        .dataSource(flyway().getConfiguration().getDataSource())
+        .locations("classpath:db/migration/mysql")
+        .failOnMissingLocations(true)
+        .cleanDisabled(false);
+    if (target != null) configuration.target(target);
+    return configuration.load();
   }
 
   private static Map<String, String> checksums() {

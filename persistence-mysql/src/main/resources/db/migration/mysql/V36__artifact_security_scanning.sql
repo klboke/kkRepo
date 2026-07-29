@@ -1,4 +1,6 @@
-CREATE TABLE artifact_change_event (
+-- MySQL auto-commits DDL. Every V36 step is therefore restart-safe so Flyway repair followed by
+-- migrate can resume after a process or infrastructure failure without manual schema surgery.
+CREATE TABLE IF NOT EXISTS artifact_change_event (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   repository_id BIGINT UNSIGNED NOT NULL,
   asset_id BIGINT UNSIGNED NOT NULL,
@@ -11,7 +13,7 @@ CREATE TABLE artifact_change_event (
   INDEX idx_artifact_change_asset (asset_id, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE docker_scanner_token_resource (
+CREATE TABLE IF NOT EXISTS docker_scanner_token_resource (
   token_hash CHAR(64) NOT NULL,
   resource_kind VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   digest VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -21,7 +23,7 @@ CREATE TABLE docker_scanner_token_resource (
     FOREIGN KEY (token_hash) REFERENCES docker_auth_token(token_hash) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE blob_reference (
+CREATE TABLE IF NOT EXISTS blob_reference (
   owner_type VARCHAR(64) NOT NULL,
   owner_id BIGINT UNSIGNED NOT NULL,
   blob_id BIGINT UNSIGNED NOT NULL,
@@ -36,12 +38,37 @@ CREATE TABLE blob_reference (
 -- during a rolling upgrade. Their blob GC does not know about blob_reference, so reject a legacy
 -- soft-delete UPDATE while a new document owner exists. A constraint is used instead of a trigger
 -- so standard MySQL deployments with binary logging do not require SUPER privileges.
-ALTER TABLE asset_blob
-  ADD COLUMN external_reference_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
-  ADD CONSTRAINT ck_asset_blob_external_reference_live
-    CHECK (external_reference_count = 0 OR deleted_at IS NULL);
+SET @kkrepo_blob_reference_count_column_sql = (
+  SELECT IF(
+    COUNT(*) = 0,
+    'ALTER TABLE asset_blob ADD COLUMN external_reference_count BIGINT UNSIGNED NOT NULL DEFAULT 0',
+    'SELECT 1')
+  FROM information_schema.columns
+  WHERE table_schema = DATABASE()
+    AND table_name = 'asset_blob'
+    AND column_name = 'external_reference_count'
+);
+PREPARE kkrepo_blob_reference_count_column_statement
+  FROM @kkrepo_blob_reference_count_column_sql;
+EXECUTE kkrepo_blob_reference_count_column_statement;
+DEALLOCATE PREPARE kkrepo_blob_reference_count_column_statement;
 
-CREATE TABLE security_scan_profile (
+SET @kkrepo_blob_reference_live_constraint_sql = (
+  SELECT IF(
+    COUNT(*) = 0,
+    'ALTER TABLE asset_blob ADD CONSTRAINT ck_asset_blob_external_reference_live CHECK (external_reference_count = 0 OR deleted_at IS NULL)',
+    'SELECT 1')
+  FROM information_schema.table_constraints
+  WHERE constraint_schema = DATABASE()
+    AND table_name = 'asset_blob'
+    AND constraint_name = 'ck_asset_blob_external_reference_live'
+);
+PREPARE kkrepo_blob_reference_live_constraint_statement
+  FROM @kkrepo_blob_reference_live_constraint_sql;
+EXECUTE kkrepo_blob_reference_live_constraint_statement;
+DEALLOCATE PREPARE kkrepo_blob_reference_live_constraint_statement;
+
+CREATE TABLE IF NOT EXISTS security_scan_profile (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   name VARCHAR(128) NOT NULL,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
@@ -66,7 +93,7 @@ CREATE TABLE security_scan_profile (
   CONSTRAINT uk_security_scan_profile_digest UNIQUE (configuration_digest)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE security_scan_policy (
+CREATE TABLE IF NOT EXISTS security_scan_policy (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   name VARCHAR(128) NOT NULL,
   name_normalized VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
@@ -86,7 +113,7 @@ CREATE TABLE security_scan_policy (
   INDEX idx_security_scan_policy_active (enabled, name, revision)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE repository_security_scan_config (
+CREATE TABLE IF NOT EXISTS repository_security_scan_config (
   repository_id BIGINT UNSIGNED NOT NULL,
   enabled BOOLEAN NOT NULL DEFAULT FALSE,
   profile_id BIGINT UNSIGNED NOT NULL,
@@ -112,7 +139,7 @@ CREATE TABLE repository_security_scan_config (
   INDEX idx_repository_security_scan_profile (profile_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE security_scan_candidate (
+CREATE TABLE IF NOT EXISTS security_scan_candidate (
   asset_id BIGINT UNSIGNED NOT NULL,
   asset_blob_id BIGINT UNSIGNED NULL,
   content_generation BIGINT NOT NULL,
@@ -129,7 +156,7 @@ CREATE TABLE security_scan_candidate (
     (pending, changed_at, asset_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE security_scanner_snapshot (
+CREATE TABLE IF NOT EXISTS security_scanner_snapshot (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   adapter_name VARCHAR(128) NOT NULL,
   adapter_api_version VARCHAR(32) NOT NULL,
@@ -149,7 +176,7 @@ CREATE TABLE security_scanner_snapshot (
     (ready, vulnerability_database_updated_at, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE security_scan_task (
+CREATE TABLE IF NOT EXISTS security_scan_task (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   repository_id BIGINT UNSIGNED NOT NULL,
   asset_id BIGINT UNSIGNED NULL,
@@ -213,7 +240,7 @@ CREATE TABLE security_scan_task (
   INDEX idx_security_scan_task_pending_age (status, created_at, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE security_sbom (
+CREATE TABLE IF NOT EXISTS security_sbom (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   subject_kind VARCHAR(32) NOT NULL,
   subject_identity VARCHAR(1024) NOT NULL,
@@ -240,7 +267,7 @@ CREATE TABLE security_sbom (
   INDEX idx_security_sbom_document_blob (document_blob_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE security_sbom_component (
+CREATE TABLE IF NOT EXISTS security_sbom_component (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   sbom_id BIGINT UNSIGNED NOT NULL,
   component_ref VARCHAR(1024) NOT NULL,
@@ -263,7 +290,7 @@ CREATE TABLE security_sbom_component (
   INDEX idx_security_sbom_component_name (name(191), version(191))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE security_scan_run (
+CREATE TABLE IF NOT EXISTS security_scan_run (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   task_id BIGINT UNSIGNED NULL,
   sbom_id BIGINT UNSIGNED NOT NULL,
@@ -306,7 +333,7 @@ CREATE TABLE security_scan_run (
   INDEX idx_security_scan_run_retention (last_accessed_at, completed_at, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE security_scan_run_subject (
+CREATE TABLE IF NOT EXISTS security_scan_run_subject (
   scan_run_id BIGINT UNSIGNED NOT NULL,
   repository_id BIGINT UNSIGNED NOT NULL,
   asset_id BIGINT UNSIGNED NOT NULL,
@@ -327,7 +354,7 @@ CREATE TABLE security_scan_run_subject (
   INDEX idx_security_scan_run_subject_retention (associated_at, scan_run_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE security_scan_finding (
+CREATE TABLE IF NOT EXISTS security_scan_finding (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   scan_run_id BIGINT UNSIGNED NOT NULL,
   finding_key VARCHAR(2048) NOT NULL,
@@ -359,7 +386,7 @@ CREATE TABLE security_scan_finding (
   INDEX idx_security_scan_finding_run_severity (scan_run_id, severity, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE asset_security_state (
+CREATE TABLE IF NOT EXISTS asset_security_state (
   asset_id BIGINT UNSIGNED NOT NULL,
   profile_id BIGINT UNSIGNED NOT NULL,
   repository_id BIGINT UNSIGNED NOT NULL,
@@ -398,7 +425,7 @@ CREATE TABLE asset_security_state (
     (repository_id, scan_state, policy_decision)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE asset_security_policy_state (
+CREATE TABLE IF NOT EXISTS asset_security_policy_state (
   asset_id BIGINT UNSIGNED NOT NULL,
   profile_id BIGINT UNSIGNED NOT NULL,
   repository_id BIGINT UNSIGNED NOT NULL,
@@ -434,7 +461,7 @@ CREATE TABLE asset_security_policy_state (
   INDEX idx_asset_security_policy_expiry (next_waiver_expiry, repository_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE security_scan_waiver_revision (
+CREATE TABLE IF NOT EXISTS security_scan_waiver_revision (
   singleton_id TINYINT UNSIGNED NOT NULL,
   current_revision BIGINT NOT NULL,
   global_invalidation_revision BIGINT NOT NULL,
@@ -443,11 +470,11 @@ CREATE TABLE security_scan_waiver_revision (
   CONSTRAINT ck_security_scan_waiver_revision_singleton CHECK (singleton_id = 1)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-INSERT INTO security_scan_waiver_revision
+INSERT IGNORE INTO security_scan_waiver_revision
   (singleton_id, current_revision, global_invalidation_revision, updated_at)
 VALUES (1, 0, 0, CURRENT_TIMESTAMP(3));
 
-CREATE TABLE security_scan_waiver (
+CREATE TABLE IF NOT EXISTS security_scan_waiver (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   scope_type VARCHAR(24) NOT NULL,
   repository_id BIGINT UNSIGNED NULL,
@@ -481,7 +508,7 @@ CREATE TABLE security_scan_waiver (
   INDEX idx_security_scan_waiver_package (package_selector(255))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE security_scan_backfill_job (
+CREATE TABLE IF NOT EXISTS security_scan_backfill_job (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   repository_id BIGINT UNSIGNED NOT NULL,
   status VARCHAR(24) NOT NULL,
@@ -509,7 +536,7 @@ CREATE TABLE security_scan_backfill_job (
   INDEX idx_security_scan_backfill_retention (status, completed_at, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-INSERT INTO security_scan_profile
+INSERT IGNORE INTO security_scan_profile
   (id, name, enabled, catalog_engine, matcher_engine, scanner_types_json,
    target_rules_json, max_input_bytes, max_archive_entries, max_uncompressed_bytes,
    max_single_file_bytes, max_nested_depth, timeout_seconds, oci_platform_policy,
@@ -521,7 +548,7 @@ VALUES
    'a939b553200d01acf4f7a5f7ff122ff045714827dc7266b1e8f05cba7a2c32ca',
    1, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3));
 
-INSERT INTO security_scan_policy
+INSERT IGNORE INTO security_scan_policy
   (id, name, name_normalized, enabled, block_severity, only_fixable,
    block_unknown_severity,
    require_complete_inventory, max_result_age_seconds, required_platforms_json,
@@ -530,8 +557,8 @@ VALUES
   (1, 'default-audit', 'default-audit', TRUE, 'CRITICAL', FALSE, FALSE, FALSE, 604800,
    JSON_ARRAY('linux/amd64'), 1, 'system', CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3));
 
-INSERT INTO maintenance_cursor (task_name, last_seen_id)
+INSERT IGNORE INTO maintenance_cursor (task_name, last_seen_id)
 VALUES ('artifact_change:security_scan', 0);
 
-INSERT INTO maintenance_cursor (task_name, last_seen_id)
+INSERT IGNORE INTO maintenance_cursor (task_name, last_seen_id)
 VALUES ('artifact_reconcile:security_scan', 0);

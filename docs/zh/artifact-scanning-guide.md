@@ -90,11 +90,12 @@ docker compose \
 建议把生成的 credential 保存到受保护的 `.env` 或 Secret 管理系统中。修改 credential
 时必须同时滚动重启 kkRepo 和 scanner adapter。
 
-Compose 把数据库、kkRepo 和提供扫描服务的 scanner 放在 internal network；scanner
-没有公网出站。独立 updater 只挂载同一个漏洞数据库卷并连接 update-egress network，
-不接收 service credential，也不提供 HTTP 服务。updater 默认每 5 分钟做一次到期
-检查，成功更新最短间隔仍为 6 小时；等待 reader 排空超过 10 分钟会失败退出并由
-restart policy 重试。
+Compose 使用互不相交的 database internal network 和 scanner internal network，
+kkRepo 分别连接两者；提供扫描服务的容器不能直连数据库，也没有公网出站。独立
+updater 以可写方式挂载漏洞库卷并连接 update-egress network，不接收 service
+credential，也不提供 HTTP 服务；scanner 对同一卷只有只读权限。updater 默认每
+5 分钟做一次到期检查，成功更新最短间隔仍为 6 小时；争抢发布锁超过 10 分钟会失败
+退出并由 restart policy 重试。
 
 检查容器和 scanner readiness：
 
@@ -173,15 +174,15 @@ kubectl logs statefulset/kkrepo-scanner
   副本 ready，部署能力就保持可用。两个端点和全部 ordinal 共享 15 秒总 deadline，
   scanner 整体故障时等待时间不会按副本数线性放大。
 - 提供扫描服务的 Pod 关闭进程内自动更新，也没有公网 HTTPS 出站。独立 updater
-  CronJob 默认每 5 分钟启动一次，只完成一次协调后的到期检查/更新并退出；共享 marker
-  保证两次成功更新至少间隔 6 小时。updater 不接收 scanner service credential，也
-  不处理制品请求。
+  CronJob 默认每 5 分钟启动一次，只完成一次协调后的到期检查/更新并退出；原子
+  generation pointer 保证两次成功更新至少间隔 6 小时。updater 不接收 scanner
+  service credential，也不处理制品请求。
 - chart 要求持久化 scanner 数据库。默认单副本 `ReadWriteOnce` 卷通过 required pod
-  affinity 把 updater 调度到 scanner 所在节点；文件锁保证更新期间扫描返回可重试
-  状态，而不会读取半更新数据库。
+  affinity 把 updater 调度到 scanner 所在节点；scanner 只读挂载已发布的不可变
+  generation，更新期间已有请求继续读取其固定代，新请求读取原子发布后的当前代。
 - 使用多个 scanner 副本且需要共享持久缓存时，为
   `securityScanning.scannerDatabase.persistence.existingClaim` 提供支持
-  `ReadWriteMany` 的 PVC。
+  `ReadWriteMany` 且能保证 generation pointer 原子改名可见性的 PVC。
 - 不要让多个 Pod 以 `ReadWriteOnce` 卷跨节点共享同一挂载。
 
 完整 chart 参数见 [Helm chart README](../../deploy/helm/kkrepo/README.md)。
@@ -446,8 +447,8 @@ Waivers 页签用于查看 Active/Expired、scope、仓库、制品、exception�
 | `KKREPO_SCANNER_SERVICE_CREDENTIAL` | 必填 | 必须与 kkRepo credential 相同；为空时 adapter 拒绝启动 |
 | `KKREPO_SCANNER_DB_AUTO_UPDATE` | `false` | 进程内自动更新；Compose 和 Helm 的服务容器都保持关闭 |
 | `KKREPO_SCANNER_DATABASE_UPDATE_ONLY` | `false` | 只执行一次协调更新后退出，不创建需要 credential 的 HTTP controller；供独立 updater 使用 |
-| `KKREPO_SCANNER_DATABASE_UPDATE_LOCK_TIMEOUT` | `10m` | updater 获取 writer gate、等待 reader 排空并取得独占锁的总上限；超时进程失败以触发重试 |
-| `KKREPO_SCANNER_DB_DIRECTORY` | `/var/lib/kkrepo-scanner/grype` | Grype 数据库目录 |
+| `KKREPO_SCANNER_DATABASE_UPDATE_LOCK_TIMEOUT` | `10m` | updater 获取跨进程发布锁的总上限；超时进程失败以触发重试 |
+| `KKREPO_SCANNER_DB_DIRECTORY` | `/var/lib/kkrepo-scanner/grype` | 不可变 Grype 数据库代际的共享根目录；服务容器只读挂载 |
 | `KKREPO_SCANNER_DB_UPDATE_INTERVAL` | `6h` | 目标更新间隔 |
 | `KKREPO_SCANNER_DB_UPDATE_CHECK_INTERVAL` | `1m` | 更新资格检查间隔 |
 | `KKREPO_SCANNER_MAX_CONCURRENT_SCANS` | `2` | 单 Pod 并发扫描上限 |
@@ -525,7 +526,7 @@ scanner adapter 自身还暴露 active、queued、admission rejected 和数据�
 | 下载返回 `503` | pending/failed/partial 被配置为 `BLOCK`；等待任务完成或先恢复为 `ALLOW` |
 | 下载返回 `403` | 完整结果命中未豁免漏洞策略；升级制品、调整策略或按审批流程创建 waiver |
 | OCI 扫描失败 | 确认 `KKREPO_SECURITY_SCANNING_OCI_REGISTRY_URL` 可从 scanner 访问，credential 一致，要求的平台存在 |
-| Vulnerability DB 过旧 | Helm 检查 updater CronJob/Job；Compose 检查 `scanner-database-updater` 容器；两者都检查 updater HTTPS 出站、共享卷权限、锁等待和空间 |
+| Vulnerability DB 过旧 | Helm 检查 updater CronJob/Job；Compose 检查 `scanner-database-updater` 容器；两者都检查 updater HTTPS 出站、共享卷权限、发布锁争抢和空间 |
 | SBOM 下载失败 | 检查用户 browse/read 权限、SBOM blob 引用和底层 blob store |
 
 查看日志时不要记录 service credential、临时 registry token、制品签名 URL 或完整敏感
@@ -549,6 +550,8 @@ scanner adapter 自身还暴露 active、queued、admission rejected 和数据�
 - 使用随机 service credential，并通过 Secret 注入；不要写入镜像、仓库或日志。
 - 不挂载 Docker socket，不授予额外 Linux capability。
 - 保持 read-only root filesystem、non-root 用户、临时目录和资源上限。
+- scanner 的漏洞库卷也必须只读挂载；只有不接收制品和 service credential 的 updater
+  可以写入并原子发布新的不可变代际。
 - 只给独立 database updater 开放公网 HTTPS；提供扫描服务的工作负载只应访问 kkRepo
   和 DNS。
 - 先运行 Audit，再逐仓库启用 Enforce；对无期限 waiver 定期审计。

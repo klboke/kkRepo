@@ -93,7 +93,7 @@ securityScanning:
       backoffLimit: 2
       successfulJobsHistoryLimit: 1
       failedJobsHistoryLimit: 3
-      # A busy update exits non-zero after this writer-gate bound so the Job controller retries.
+      # A busy update exits non-zero after this publication-lock bound so the Job controller retries.
       lockTimeout: 10m
       scratchVolumeSize: 1Gi
       resources:
@@ -147,7 +147,6 @@ securityScanning:
     maxQueuedScans: 4
     admissionTimeout: 1s
     retryAfterSeconds: 5
-    databaseLockTimeout: 2s
   podSecurityContext:
     runAsNonRoot: true
     runAsUser: 10001

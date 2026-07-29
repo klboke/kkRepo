@@ -19,6 +19,19 @@ class PostgreSqlMigrationCompatibilityTest extends PostgreSqlIntegrationTestSupp
   }
 
   @Test
+  void onlineBlobReferenceConstraintsAreValidatedAfterV37() {
+    assertEquals(2, jdbc().queryForObject("""
+        SELECT COUNT(*)
+        FROM pg_constraint
+        WHERE conrelid = 'asset_blob'::regclass
+          AND conname IN (
+            'ck_asset_blob_external_reference_nonnegative',
+            'ck_asset_blob_external_reference_live')
+          AND convalidated
+        """, Integer.class));
+  }
+
+  @Test
   void migrationFencesSecurityDocumentsFromLegacyBlobGcUpdates() {
     jdbc().update("""
         INSERT INTO blob_store (name, type, attributes_json)

@@ -26,10 +26,14 @@ services = model["services"]
 scanner = services["scanner"]
 updater = services["scanner-database-updater"]
 application = services["kkrepo"]
+database = services["mysql"] if "mysql" in services else services["postgresql"]
 
 assert scanner["environment"]["KKREPO_SCANNER_DB_AUTO_UPDATE"] == "false", source
-assert set(scanner["networks"]) == {"kkrepo-internal"}, source
-assert model["networks"]["kkrepo-internal"]["internal"] is True, source
+assert set(scanner["networks"]) == {"scanner-internal"}, source
+assert model["networks"]["scanner-internal"]["internal"] is True, source
+assert set(database["networks"]) == {"database-internal"}, source
+assert model["networks"]["database-internal"]["internal"] is True, source
+assert set(scanner["networks"]).isdisjoint(database["networks"]), source
 
 assert "KKREPO_SCANNER_SERVICE_CREDENTIAL" not in updater["environment"], source
 assert updater["environment"]["KKREPO_SCANNER_DATABASE_UPDATE_ONLY"] == "true", source
@@ -38,17 +42,22 @@ assert updater["environment"]["KKREPO_SCANNER_DATABASE_UPDATE_LOCK_TIMEOUT"] == 
 assert set(updater["networks"]) == {"scanner-update-egress"}, source
 assert "scanner-update-egress" not in application["networks"], source
 assert set(application["networks"]) == {
-    "kkrepo-internal",
+    "database-internal",
+    "scanner-internal",
     "application-egress",
 }, source
 
-def mounted_source(service):
+def mounted_volume(service):
     for volume in service["volumes"]:
         if volume["target"] == "/var/lib/kkrepo-scanner/grype":
-            return volume["source"]
+            return volume
     raise AssertionError(f"{source}: scanner database volume is missing")
 
-assert mounted_source(scanner) == mounted_source(updater), source
+scanner_volume = mounted_volume(scanner)
+updater_volume = mounted_volume(updater)
+assert scanner_volume["source"] == updater_volume["source"], source
+assert scanner_volume["read_only"] is True, source
+assert updater_volume.get("read_only", False) is False, source
 PY
   rm -f "$rendered"
   trap - EXIT

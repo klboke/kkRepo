@@ -100,12 +100,13 @@ Both controls are required:
 Store the generated credential in a protected `.env` file or secret manager. Rotate it by updating
 both components and restarting kkRepo and the scanner adapter together.
 
-Compose places the database, kkRepo, and the scan-serving adapter on an internal network; the
-adapter has no public egress. A separate updater mounts the same vulnerability-database volume,
-uses only an update-egress network, receives no service credential, and exposes no HTTP service.
-It checks every five minutes by default while preserving the six-hour minimum successful-update
-interval. If readers do not drain within ten minutes, it exits unsuccessfully so the restart
-policy retries.
+Compose uses disjoint database-internal and scanner-internal networks, with kkRepo connected to
+both. The scan-serving adapter cannot reach the database and has no public egress. A separate
+updater mounts the vulnerability-database volume read-write, uses only an update-egress network,
+receives no service credential, and exposes no HTTP service; the serving scanner mounts the same
+volume read-only. It checks every five minutes by default while preserving the six-hour minimum
+successful-update interval. Publication-lock contention beyond ten minutes exits unsuccessfully
+so the restart policy retries.
 
 Check the containers and scanner readiness:
 
@@ -190,13 +191,15 @@ For multiple scanner replicas:
   replica count.
 - Scan-serving Pods have automatic updates disabled and no public HTTPS egress. The updater
   CronJob runs every five minutes by default, performs only a coordinated due-check/update, and
-  exits. A shared marker preserves the minimum six-hour interval between successful updates. The
-  updater receives neither the scanner service credential nor artifact traffic.
+  exits. The atomic generation pointer preserves the minimum six-hour interval between successful
+  updates. The updater receives neither the scanner service credential nor artifact traffic.
 - Scanner database persistence is required by the chart. With the default single-replica
-  `ReadWriteOnce` claim, required pod affinity co-locates the updater with the scanner. The file
-  lock makes scans fail retryably rather than read a partially updated database.
+  `ReadWriteOnce` claim, required pod affinity co-locates the updater with the scanner. The serving
+  Pod mounts published immutable generations read-only: in-flight requests retain their pinned
+  generation while new requests observe the atomically published current generation.
 - If replicas share a persistent database cache, set
-  `securityScanning.scannerDatabase.persistence.existingClaim` to a `ReadWriteMany` PVC.
+  `securityScanning.scannerDatabase.persistence.existingClaim` to a `ReadWriteMany` PVC whose
+  filesystem provides atomic rename visibility for the generation pointer.
 - Do not attempt to mount one cross-node `ReadWriteOnce` volume into several Pods.
 
 See the [Helm chart README](../../deploy/helm/kkrepo/README.md) for all chart values.
@@ -486,8 +489,8 @@ and OCI registry URL.
 | `KKREPO_SCANNER_SERVICE_CREDENTIAL` | Required | Must match the kkRepo credential; the adapter refuses to start when it is empty |
 | `KKREPO_SCANNER_DB_AUTO_UPDATE` | `false` | In-process automatic update; both Compose and Helm serving containers keep it disabled |
 | `KKREPO_SCANNER_DATABASE_UPDATE_ONLY` | `false` | Run one coordinated update and exit without creating the credential-protected HTTP controller; used by the dedicated updater |
-| `KKREPO_SCANNER_DATABASE_UPDATE_LOCK_TIMEOUT` | `10m` | Total bound for acquiring writer intent, draining readers, and acquiring the exclusive database lock; timeout fails the process so orchestration retries |
-| `KKREPO_SCANNER_DB_DIRECTORY` | `/var/lib/kkrepo-scanner/grype` | Grype database directory |
+| `KKREPO_SCANNER_DATABASE_UPDATE_LOCK_TIMEOUT` | `10m` | Total bound for acquiring the cross-process publication lock; timeout fails the process so orchestration retries |
+| `KKREPO_SCANNER_DB_DIRECTORY` | `/var/lib/kkrepo-scanner/grype` | Shared root for immutable Grype database generations; serving containers mount it read-only |
 | `KKREPO_SCANNER_DB_UPDATE_INTERVAL` | `6h` | Target update interval |
 | `KKREPO_SCANNER_DB_UPDATE_CHECK_INTERVAL` | `1m` | Update-eligibility check interval |
 | `KKREPO_SCANNER_MAX_CONCURRENT_SCANS` | `2` | Active scans per Pod |
@@ -570,7 +573,7 @@ At minimum, alert on:
 | Download returns `503` | Pending/failed/partial is configured to `BLOCK`; wait for completion or temporarily restore `ALLOW` |
 | Download returns `403` | A complete result matches an unwaived policy; upgrade, revise policy, or approve a waiver |
 | OCI scan fails | Ensure `KKREPO_SECURITY_SCANNING_OCI_REGISTRY_URL` is reachable from the scanner, credentials match, and required platforms exist |
-| Vulnerability DB is stale | On Helm, inspect the updater CronJob/Jobs; on Compose, inspect the `scanner-database-updater` container; for both, check updater HTTPS egress, shared-volume permissions, lock waits, and free space |
+| Vulnerability DB is stale | On Helm, inspect the updater CronJob/Jobs; on Compose, inspect the `scanner-database-updater` container; for both, check updater HTTPS egress, shared-volume permissions, publication-lock contention, and free space |
 | SBOM download fails | Check browse/read permission, SBOM blob references, and the backing blob store |
 
 Do not log service credentials, temporary registry tokens, signed artifact URLs, or complete
@@ -596,6 +599,8 @@ sensitive paths while troubleshooting.
   repository, or log.
 - Do not mount the Docker socket or grant additional Linux capabilities.
 - Keep a read-only root filesystem, non-root user, bounded temporary storage, and resource limits.
+- Mount the scanner vulnerability-database volume read-only. Only the updater, which receives no
+  artifacts or service credential, may write and atomically publish a new immutable generation.
 - Give public HTTPS egress only to the dedicated database updater. Scan-serving workloads should
   reach only kkRepo and DNS.
 - Start with Audit, then enable Enforce per repository. Review non-expiring waivers regularly.

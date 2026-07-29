@@ -74,7 +74,7 @@ public class ScannerDatabaseUpdater {
     }
   }
 
-  private void runUpdate() {
+  private void runUpdate(Path databaseDirectory) {
     Path workspace = null;
     try {
       Files.createDirectories(properties.getWorkDirectory());
@@ -84,7 +84,9 @@ public class ScannerDatabaseUpdater {
           workspace,
           workspace.resolve("stdout.log"),
           Duration.ofMinutes(30),
-          Map.of("GRYPE_DB_AUTO_UPDATE", "true"));
+          Map.of(
+              "GRYPE_DB_AUTO_UPDATE", "true",
+              "GRYPE_DB_CACHE_DIR", databaseDirectory.toString()));
     } catch (IOException e) {
       throw new ScannerRequestException(
           "SCANNER_DATABASE_UPDATE_IO",

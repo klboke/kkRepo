@@ -89,6 +89,16 @@ class BoundedProcessRunnerTest {
     assertEquals(7, success.outputBytes());
     assertEquals("success", Files.readString(output));
 
+    Path explicitDatabase = directory.resolve("explicit-database");
+    Path environmentOutput = directory.resolve("environment.out");
+    runner.run(
+        List.of("/bin/sh", "-c", "printf '%s' \"$GRYPE_DB_CACHE_DIR\""),
+        directory,
+        environmentOutput,
+        Duration.ofSeconds(2),
+        Map.of("GRYPE_DB_CACHE_DIR", explicitDatabase.toString()));
+    assertEquals(explicitDatabase.toString(), Files.readString(environmentOutput));
+
     ScannerRequestException failure = assertThrows(
         ScannerRequestException.class,
         () -> runner.run(

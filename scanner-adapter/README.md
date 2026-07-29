@@ -16,7 +16,9 @@ Security boundaries:
 - OCI targets use an exact manifest digest and the request-scoped registry token only;
 - database update is disabled in scan-serving containers. The supplied Compose and Helm
   deployments use a separate credential-free, update-only workload with public update egress,
-  a shared database volume, a writer-intent gate, and bounded retryable lock acquisition.
+  a shared database volume, and bounded retryable publication locking. The updater builds a new
+  immutable database generation and atomically publishes its pointer; serving containers mount
+  every published generation read-only and pin each request to one generation.
 
 Build from the repository root after packaging:
 

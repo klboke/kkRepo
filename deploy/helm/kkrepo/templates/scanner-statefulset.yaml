@@ -66,8 +66,6 @@ spec:
               value: {{ .Values.securityScanning.limits.admissionTimeout | quote }}
             - name: KKREPO_SCANNER_RETRY_AFTER_SECONDS
               value: {{ .Values.securityScanning.limits.retryAfterSeconds | quote }}
-            - name: KKREPO_SCANNER_DATABASE_LOCK_TIMEOUT
-              value: {{ .Values.securityScanning.limits.databaseLockTimeout | quote }}
           startupProbe:
             httpGet:
               path: /actuator/health/liveness
@@ -90,6 +88,7 @@ spec:
               mountPath: /tmp
             - name: scanner-db
               mountPath: /var/lib/kkrepo-scanner/grype
+              readOnly: true
       volumes:
         - name: tmp
           emptyDir:

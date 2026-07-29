@@ -23,7 +23,7 @@ public class ScannerDatabaseUpdateOnlyRunner implements ApplicationRunner {
     ScannerDatabaseCoordinator.UpdateResult result = updater.updateOnce();
     if (result == ScannerDatabaseCoordinator.UpdateResult.BUSY) {
       throw new IllegalStateException(
-          "Scanner vulnerability database updater could not acquire the writer gate");
+          "Scanner vulnerability database updater could not acquire the publication lock");
     }
   }
 }

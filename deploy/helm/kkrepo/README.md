@@ -49,7 +49,9 @@ NetworkPolicy accepts scanner API traffic only from kkRepo pods and permits the 
 egress only to kkRepo and DNS. When automatic vulnerability-database updates are enabled, a
 separate non-serving CronJob mounts the same database volume and is the only scanner workload
 allowed public HTTPS egress. The updater does not receive the scanner service credential and
-cannot serve or process artifact requests.
+cannot serve or process artifact requests. It is also the only workload with a writable database
+mount: each successful update publishes a new immutable generation through an atomic pointer,
+while scan-serving Pods mount the generations read-only.
 
 The scanner workload is a StatefulSet so every replica has a stable network identity. kkRepo uses
 the run hash to select a preferred ordinal, then fails retryable catalog, match, and OCI requests
@@ -61,12 +63,14 @@ kkRepo database, not in the StatefulSet. Capability and readiness observations a
 across ordinals under one 15-second end-to-end deadline, so a rollout or ordinal failure does not
 hide healthy replicas or multiply outage delays by the replica count. For multiple adapter
 replicas, provide
-`securityScanning.scannerDatabase.persistence.existingClaim` backed by `ReadWriteMany`, or disable
-scanner database persistence so each pod uses an ephemeral cache. Shared-database replicas use
-cross-process read/update locks, a writer-intent gate, and a shared update marker. The updater
-waits up to ten minutes by default for active readers to drain and exits unsuccessfully if it
-still cannot update, allowing the Job controller to retry instead of recording false success.
-The CronJob runs every five minutes by default, while the marker enforces at least six hours
+`securityScanning.scannerDatabase.persistence.existingClaim` backed by `ReadWriteMany`.
+The backing filesystem must provide atomic rename visibility for the generation pointer.
+Shared-database replicas read immutable generations and therefore never contend with the updater
+or observe a half-written database. Updaters serialize through one cross-process publication lock,
+wait up to ten minutes by default, and exit unsuccessfully on contention so the Job controller
+retries instead of recording false success. The atomically published pointer also records the last
+successful update;
+the CronJob runs every five minutes by default while that timestamp enforces at least six hours
 between successful updates. With
 the default single-replica `ReadWriteOnce` claim, required pod affinity schedules the updater on
 the scanner node; multi-replica deployments still require `ReadWriteMany`. Each adapter also

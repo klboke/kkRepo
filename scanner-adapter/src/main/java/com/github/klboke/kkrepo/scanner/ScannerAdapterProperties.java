@@ -24,7 +24,6 @@ public class ScannerAdapterProperties {
   private int maxQueuedScans = 4;
   private Duration admissionTimeout = Duration.ofSeconds(1);
   private int retryAfterSeconds = 5;
-  private Duration databaseLockTimeout = Duration.ofSeconds(2);
   private Duration databaseUpdateLockTimeout = Duration.ofMinutes(10);
 
   public String getServiceCredential() {
@@ -167,15 +166,6 @@ public class ScannerAdapterProperties {
 
   public void setRetryAfterSeconds(int retryAfterSeconds) {
     this.retryAfterSeconds = Math.max(1, Math.min(3600, retryAfterSeconds));
-  }
-
-  public Duration getDatabaseLockTimeout() {
-    return databaseLockTimeout;
-  }
-
-  public void setDatabaseLockTimeout(Duration databaseLockTimeout) {
-    this.databaseLockTimeout =
-        databaseLockTimeout == null ? Duration.ofSeconds(2) : databaseLockTimeout;
   }
 
   public Duration getDatabaseUpdateLockTimeout() {

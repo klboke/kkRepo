@@ -332,6 +332,13 @@ class ScannerEngineServiceBehaviorTest {
             ? "{}".getBytes() : syftOutput);
         return new BoundedProcessRunner.Result(0, Files.size(output), new byte[0]);
       }).when(processes).run(anyList(), any(), any(), any(), any());
+      ScannerDatabaseCoordinator database = new ScannerDatabaseCoordinator(properties);
+      assertEquals(
+          ScannerDatabaseCoordinator.UpdateResult.UPDATED,
+          database.updateIfDue(
+              Duration.ZERO,
+              Duration.ofSeconds(1),
+              directory -> Files.writeString(directory.resolve("database"), "fixture")));
       engine = new ScannerEngineService(
           properties,
           processes,
@@ -339,7 +346,7 @@ class ScannerEngineServiceBehaviorTest {
           archiveGuard,
           ociRegistryStager,
           documents,
-          new ScannerDatabaseCoordinator(properties));
+          database);
     }
   }
 }

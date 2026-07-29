@@ -1159,25 +1159,31 @@ adapter API 使用同步、可安全重试的调用。scanner 可以在请求期
 但请求结束后不需要保留任务状态。kkRepo 超时后用相同 Idempotency-Key 重试时，结果
 必须保持内容幂等。
 
-Grype 数据库读取与更新使用同一协调器：
+Grype 数据库使用不可变代际发布：
 
-- 同一进程使用公平读写锁；扫描持有读锁，更新持有写锁。
-- 多个 adapter 共享同一数据库卷时，再使用卷内 POSIX 文件锁，避免一个 Pod 更新时
-  另一个 Pod 读取半更新目录；共享卷必须支持文件锁并使用 `ReadWriteMany`。
+- updater 在共享卷的私有 staging 目录下载完整数据库，成功后把目录原子改名为新的
+  generation，再通过原子 pointer 文件发布；失败的 staging 不会成为可见数据库。
+  共享卷必须保证同目录原子改名的可见性；不满足该能力时 updater 失败而不降级为
+  非原子 pointer 覆盖。
+- 每个 readiness/Match 操作开始时解析一次 pointer，并在完整操作期间固定到同一
+  generation。更新不改写旧 generation，因此不需要让扫描请求持有共享写锁，也不会
+  读到半更新目录。
+- 提供扫描服务的容器把整个数据库卷只读挂载；唯一可写方是不接收制品、不持有
+  service credential 的 updater。旧 generation 在超过最大请求时长和更新间隔保护窗
+  后由后续 updater 回收。
 - Docker Compose 和 Helm 中提供扫描服务的容器都固定关闭进程内更新，并处在不能
   公网出站的内部网络。独立 `database-update-only` updater 挂载相同数据库卷；
   Compose 默认每 5 分钟循环执行一次，Helm CronJob 默认每 5 分钟启动一次。每次只做
-  协调后的到期检查/更新并退出，成功后原子写共享 marker，因此调度频率不会缩短
+  协调后的到期检查/更新并退出，pointer 同时记录成功时间，因此调度频率不会缩短
   6 小时最小成功更新间隔。
 - updater 不创建 credential-protected HTTP controller、不接收 scanner service
   credential，也不处理制品；只有 updater 获得漏洞库发布源的公网 HTTPS 出站。
-- updater 先取得跨进程 writer-intent gate，阻止新 scan reader 进入，再等待已有
-  reader 排空并取得数据库独占锁。默认总等待上限 10 分钟；超时返回 `BUSY` 时进程
-  必须以非零状态退出，由 Compose restart policy 或 Kubernetes Job controller 重试，
-  不能把没有发生的更新记录成成功。
+- 多个 updater 通过卷内跨进程 publication lock 串行发布，默认等待上限 10 分钟；
+  超时返回 `BUSY` 时进程必须以非零状态退出，由 Compose restart policy 或
+  Kubernetes Job controller 重试，不能把没有发生的更新记录成成功。
 - Helm 必须使用持久数据库卷。单副本默认 `ReadWriteOnce` 时，required pod affinity
-  把 updater 调度到 scanner 所在节点；多 scanner 副本必须提供支持文件锁的
-  `ReadWriteMany` existing claim。
+  把 updater 调度到 scanner 所在节点；多 scanner 副本必须提供 `ReadWriteMany`
+  existing claim。
 - readiness 和 Match 响应都必须带非空数据库 revision 与更新时间；未知、过期或更新
   中均返回可重试失败，不能用“ready=true 但 provenance 为空”的结果生成 run。
 
@@ -1672,7 +1678,6 @@ kkrepo.scanner.max-concurrent-scans=2
 kkrepo.scanner.max-queued-scans=4
 kkrepo.scanner.admission-timeout=1s
 kkrepo.scanner.retry-after-seconds=5
-kkrepo.scanner.database-lock-timeout=2s
 kkrepo.scanner.max-scratch-bytes=7516192768
 kkrepo.scanner.max-output-bytes=16777216
 kkrepo.scanner.vulnerability-database-update-interval=6h
@@ -1721,8 +1726,9 @@ Docker Compose/quickstart：
   `--profile security-scanning` 启动 scanner，例如
   `KKREPO_SECURITY_SCANNING_ENABLED=true docker compose --profile security-scanning up -d`。
 - 上述操作只提供部署能力，之后仍由仓库管理员在 Admin UI 按仓库启用。
-- 提供扫描服务的 scanner 和 database updater 共享独立 volume/cache；scanner 位于
-  internal network，只能访问 kkRepo，且不持有公网出站。updater 不接收 service
+- 提供扫描服务的 scanner 和 database updater 共享独立 volume/cache；scanner 只读
+  挂载不可变数据库代际，并位于只连接 kkRepo 的 scanner internal network。数据库在
+  另一张 database internal network，两者没有网络交集。updater 不接收 service
   credential，只连接独立 update-egress network。
 - 不挂载 Docker socket。
 - readiness 未通过时 kkRepo audit 模式仍可启动，但 health details 显示 degraded。
@@ -1733,7 +1739,8 @@ Helm/Kubernetes：
   部署能力 gate；开启自动更新时还部署独立、非服务型 updater CronJob。它仍不会
   自动启用任何仓库。
 - scanner pod 有 CPU、memory、ephemeral-storage request/limit。
-- 支持 NetworkPolicy、Pod Security Context、read-only root filesystem。
+- 支持 NetworkPolicy、Pod Security Context、read-only root filesystem；scanner 的
+  数据库 PVC mount 同样为只读，只有 updater 可写并发布新 generation。
 - scanner 服务 Pod 的自动更新固定关闭，NetworkPolicy 不允许公网；updater 默认每
   5 分钟只做一次 due-check/update，独占公网 443 出站且不注入 service credential。
   chart 要求 scanner database persistence；单副本 RWO 通过 pod affinity 同节点挂载，

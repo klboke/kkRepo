@@ -17,7 +17,7 @@ services:
       retries: 12
       start_period: 10s
     networks:
-      - kkrepo-internal
+      - database-internal
 
   app-data-perms:
     image: alpine:3.20
@@ -55,7 +55,8 @@ services:
     volumes:
       - kkrepo-data:/var/lib/kkrepo
     networks:
-      - kkrepo-internal
+      - database-internal
+      - scanner-internal
       - application-egress
     restart: unless-stopped
 
@@ -72,14 +73,14 @@ services:
     tmpfs:
       - /tmp:size=${KKREPO_SCANNER_TMPFS_SIZE:-8g},uid=10001,gid=10001,mode=1770
     volumes:
-      - scanner-db:/var/lib/kkrepo-scanner/grype
+      - scanner-db:/var/lib/kkrepo-scanner/grype:ro
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
     pids_limit: 128
     networks:
-      - kkrepo-internal
+      - scanner-internal
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/actuator/health/readiness >/dev/null"]
       interval: 15s
@@ -127,7 +128,9 @@ volumes:
   scanner-db:
 
 networks:
-  kkrepo-internal:
+  database-internal:
+    internal: true
+  scanner-internal:
     internal: true
   application-egress:
   scanner-update-egress:
