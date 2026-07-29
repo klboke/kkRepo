@@ -1272,25 +1272,97 @@ public abstract class PersistenceApiContract {
             now,
             now));
 
+    SecurityScanDao.AssetSecurityState partialState = scans.upsertAssetStateIfCurrent(
+        new SecurityScanDao.AssetSecurityState(
+            storedState.assetId(),
+            storedState.profileId(),
+            storedState.contentGeneration(),
+            storedState.subjectIdentityHash(),
+            storedState.latestScanRunId(),
+            ScanState.PARTIAL,
+            ScanCompleteness.PARTIAL,
+            false,
+            storedState.maxSeverity(),
+            storedState.findingCounts(),
+            storedState.policyId(),
+            storedState.policyRevision(),
+            storedState.policyDecision(),
+            storedState.policyReasonCode(),
+            storedState.staleAt(),
+            now.plusSeconds(3),
+            storedState.version()));
+    Instant partialPolicyStaleAt =
+        Instant.ofEpochMilli(Instant.now().plusSeconds(3600).toEpochMilli());
+    SecurityScanDao.AssetPolicyState partialSourcePolicyState =
+        scans.upsertAssetPolicyStateIfCurrent(new SecurityScanDao.AssetPolicyState(
+            refreshedPolicyState.assetId(),
+            refreshedPolicyState.profileId(),
+            refreshedPolicyState.repositoryId(),
+            refreshedPolicyState.contentGeneration(),
+            refreshedPolicyState.latestScanRunId(),
+            refreshedPolicyState.policyId(),
+            refreshedPolicyState.policyRevision(),
+            restoredSourceConfig.configRevision(),
+            PolicyDecision.BLOCK_VULNERABILITY,
+            "PARTIAL_SOURCE_BLOCK",
+            refreshedPolicyState.waivedFindings(),
+            partialPolicyStaleAt,
+            refreshedPolicyState.nextWaiverExpiry(),
+            now.plusSeconds(3),
+            refreshedPolicyState.version(),
+            currentWaiverRevision));
+    SecurityScanDao.RepositoryScanConfig currentGroupConfig =
+        scans.findRepositoryConfig(groupRepositoryId).orElseThrow();
+    SecurityScanDao.AssetPolicyState currentGroupPolicyState =
+        scans.findAssetPolicyState(assetId, profileId, groupRepositoryId).orElseThrow();
+    scans.upsertAssetPolicyStateIfCurrent(new SecurityScanDao.AssetPolicyState(
+        currentGroupPolicyState.assetId(),
+        currentGroupPolicyState.profileId(),
+        currentGroupPolicyState.repositoryId(),
+        currentGroupPolicyState.contentGeneration(),
+        currentGroupPolicyState.latestScanRunId(),
+        currentGroupPolicyState.policyId(),
+        currentGroupPolicyState.policyRevision(),
+        currentGroupConfig.configRevision(),
+        PolicyDecision.ALLOW,
+        "PARTIAL_GROUP_ALLOW",
+        currentGroupPolicyState.waivedFindings(),
+        partialPolicyStaleAt,
+        currentGroupPolicyState.nextWaiverExpiry(),
+        now.plusSeconds(3),
+        currentGroupPolicyState.version(),
+        currentWaiverRevision));
+    SecurityScanDao.ScanSummary partialSourceSummary = scans.summary(List.of(repositoryId));
+    assertEquals(1, partialSourceSummary.partialAssets());
+    assertEquals(
+        1,
+        partialSourceSummary.blockedAssets(),
+        "a partial scan must count its authoritative vulnerability block when partial is allowed");
+    assertEquals(
+        0,
+        scans.summary(List.of(groupRepositoryId)).blockedAssets(),
+        "a partial scan must count its authoritative allow when the partial fallback blocks");
+
     assertTrue(scans.listPolicyEvaluationTargets(
-        repositoryId, repositoryId, profileId, config.configRevision(),
+        repositoryId, repositoryId, profileId, restoredSourceConfig.configRevision(),
         policyId, 1L, 0, now.plusSeconds(3), 10).isEmpty());
     SecurityScanDao.PolicyEvaluationTarget ageExpired =
         scans.listPolicyEvaluationTargets(
                 repositoryId,
                 repositoryId,
                 profileId,
-                config.configRevision(),
+                restoredSourceConfig.configRevision(),
                 policyId,
                 1L,
                 0,
-                now.plusSeconds(3601),
+                partialPolicyStaleAt.plusSeconds(1),
                 10)
             .getFirst();
-    assertEquals(now.plusSeconds(3600), ageExpired.staleAt());
+    assertEquals(partialPolicyStaleAt, ageExpired.staleAt());
     assertEquals(1, scans.listPolicyEvaluationTargets(
-        repositoryId, repositoryId, profileId, config.configRevision() + 1,
+        repositoryId, repositoryId, profileId, restoredSourceConfig.configRevision() + 1,
         policyId, 1L, 0, now.plusSeconds(3), 10).size());
+    assertEquals(ScanState.PARTIAL, partialState.scanState());
     assertTrue(scans.completeTask(taskId, takeover.leaseToken(), now.plusSeconds(3)));
     assertTrue(
         scans.oldestPendingTaskCreatedAt().isEmpty(),
@@ -1345,7 +1417,7 @@ public abstract class PersistenceApiContract {
         new SecurityScanDao.AssetPolicyState(
             assetId, profileId, repositoryId, 1, runId, policyId, 1L,
             config.configRevision(), PolicyDecision.ALLOW, "STALE_POLICY_WORKER", 0,
-            null, null, now.plusSeconds(5), refreshedPolicyState.version(),
+            null, null, now.plusSeconds(5), partialSourcePolicyState.version(),
             currentWaiverRevision));
     assertEquals(
         PolicyDecision.BLOCK_VULNERABILITY,

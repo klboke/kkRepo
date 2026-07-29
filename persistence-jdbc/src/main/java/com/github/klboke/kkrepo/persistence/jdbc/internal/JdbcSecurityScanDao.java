@@ -2507,7 +2507,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
             OR s.asset_id IS NULL
             OR s.content_generation <> c.content_generation
             OR (
-              s.scan_state = 'COMPLETE'
+              s.scan_state IN ('PARTIAL', 'COMPLETE')
               AND (
                 ps.asset_id IS NULL
                 OR ps.content_generation <> c.content_generation
@@ -3649,13 +3649,12 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
             profile.enabled AS profile_enabled,
             config.pending_action,
             config.failure_action,
-            config.partial_action,
             policy_state.policy_decision,
             CASE
               WHEN policy_state.asset_id IS NOT NULL
                AND candidate.asset_id IS NOT NULL
                AND state.asset_id IS NOT NULL
-               AND state.scan_state = 'COMPLETE'
+               AND state.scan_state IN ('PARTIAL', 'COMPLETE')
                AND state.content_generation = candidate.content_generation
                AND policy_state.content_generation = candidate.content_generation
                AND (
@@ -3740,13 +3739,11 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
               THEN CASE WHEN pending_action = 'BLOCK' THEN asset_id END
             WHEN scan_state IN ('FAILED', 'CANCELLED')
               THEN CASE WHEN failure_action = 'BLOCK' THEN asset_id END
-            WHEN scan_state = 'PARTIAL'
-              THEN CASE WHEN partial_action = 'BLOCK' THEN asset_id END
-            WHEN scan_state = 'COMPLETE'
+            WHEN scan_state IN ('PARTIAL', 'COMPLETE')
               AND policy_authoritative = TRUE
               AND policy_decision <> 'ALLOW'
               THEN asset_id
-            WHEN scan_state = 'COMPLETE'
+            WHEN scan_state IN ('PARTIAL', 'COMPLETE')
               AND policy_authoritative = FALSE
               THEN CASE WHEN pending_action = 'BLOCK' THEN asset_id END
             ELSE NULL
