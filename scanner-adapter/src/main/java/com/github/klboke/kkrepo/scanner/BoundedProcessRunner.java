@@ -155,35 +155,27 @@ public class BoundedProcessRunner {
   }
 
   private static void terminate(Process process) throws InterruptedException {
-    List<ProcessHandle> descendants = process.descendants().toList();
-    descendants.forEach(ProcessHandle::destroy);
-    process.destroy();
-    if (!waitForTreeExit(process, descendants, PROCESS_TERMINATION_TIMEOUT)) {
-      descendants.forEach(ProcessHandle::destroyForcibly);
-      if (process.isAlive()) process.destroyForcibly();
-      waitForTreeExit(process, descendants, PROCESS_TERMINATION_TIMEOUT);
+    Map<Long, ProcessHandle> observed = new LinkedHashMap<>();
+    if (!terminateTree(process, observed, false, PROCESS_TERMINATION_TIMEOUT)) {
+      terminateTree(process, observed, true, PROCESS_TERMINATION_TIMEOUT);
     }
   }
 
   private static void terminateAfterFailure(Process process) {
     if (process == null) return;
     boolean interrupted = Thread.interrupted();
-    List<ProcessHandle> descendants = process.descendants().toList();
+    Map<Long, ProcessHandle> observed = new LinkedHashMap<>();
     try {
-      descendants.forEach(ProcessHandle::destroy);
-      if (process.isAlive()) process.destroy();
       boolean cleanlyExited = false;
       try {
-        cleanlyExited =
-            waitForTreeExit(process, descendants, PROCESS_TERMINATION_TIMEOUT);
+        cleanlyExited = terminateTree(
+            process, observed, false, PROCESS_TERMINATION_TIMEOUT);
       } catch (InterruptedException ignored) {
         interrupted = true;
       }
       if (!cleanlyExited) {
-        descendants.forEach(ProcessHandle::destroyForcibly);
-        if (process.isAlive()) process.destroyForcibly();
         try {
-          waitForTreeExit(process, descendants, PROCESS_TERMINATION_TIMEOUT);
+          terminateTree(process, observed, true, PROCESS_TERMINATION_TIMEOUT);
         } catch (InterruptedException ignored) {
           interrupted = true;
         }
@@ -193,12 +185,42 @@ public class BoundedProcessRunner {
     }
   }
 
-  private static boolean waitForTreeExit(
-      Process process, List<ProcessHandle> descendants, Duration timeout)
+  /**
+   * Re-discovers descendants on every termination pass.
+   *
+   * <p>A scanner or shell wrapper can fork while handling TERM. Keeping every observed handle and
+   * walking descendants of both the root and still-live observed processes prevents that child
+   * from escaping the later forced pass merely because it was absent from the first snapshot.
+   */
+  private static boolean terminateTree(
+      Process process,
+      Map<Long, ProcessHandle> observed,
+      boolean forcibly,
+      Duration timeout)
       throws InterruptedException {
     long deadline = System.nanoTime() + timeout.toNanos();
-    while (process.isAlive()
-        || descendants.stream().anyMatch(ProcessHandle::isAlive)) {
+    int quiescentPasses = 0;
+    while (true) {
+      discoverDescendants(process, observed);
+      observed.values().stream()
+          .filter(ProcessHandle::isAlive)
+          .forEach(handle -> terminate(handle, forcibly));
+      if (process.isAlive()) {
+        if (forcibly) {
+          process.destroyForcibly();
+        } else {
+          process.destroy();
+        }
+      }
+      discoverDescendants(process, observed);
+      boolean alive =
+          process.isAlive() || observed.values().stream().anyMatch(ProcessHandle::isAlive);
+      if (!alive) {
+        quiescentPasses++;
+        if (quiescentPasses >= 2) return true;
+      } else {
+        quiescentPasses = 0;
+      }
       long remainingNanos = deadline - System.nanoTime();
       if (remainingNanos <= 0) return false;
       long waitMillis = Math.max(
@@ -206,13 +228,28 @@ public class BoundedProcessRunner {
           Math.min(
               PROCESS_TERMINATION_POLL_MILLIS,
               TimeUnit.NANOSECONDS.toMillis(remainingNanos)));
-      if (process.isAlive()) {
-        process.waitFor(waitMillis, TimeUnit.MILLISECONDS);
-      } else {
-        Thread.sleep(waitMillis);
+      Thread.sleep(waitMillis);
+    }
+  }
+
+  private static void discoverDescendants(
+      Process process, Map<Long, ProcessHandle> observed) {
+    if (process.isAlive()) {
+      process.descendants().forEach(handle -> observed.putIfAbsent(handle.pid(), handle));
+    }
+    for (ProcessHandle known : List.copyOf(observed.values())) {
+      if (known.isAlive()) {
+        known.descendants().forEach(handle -> observed.putIfAbsent(handle.pid(), handle));
       }
     }
-    return true;
+  }
+
+  private static void terminate(ProcessHandle handle, boolean forcibly) {
+    if (forcibly) {
+      handle.destroyForcibly();
+    } else {
+      handle.destroy();
+    }
   }
 
   @FunctionalInterface

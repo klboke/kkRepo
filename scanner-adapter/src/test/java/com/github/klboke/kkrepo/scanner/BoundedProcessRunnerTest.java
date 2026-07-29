@@ -201,6 +201,32 @@ class BoundedProcessRunnerTest {
   }
 
   @Test
+  void terminationDiscoversDescendantsForkedByASignalHandler() throws Exception {
+    ScannerAdapterProperties properties = new ScannerAdapterProperties();
+    BoundedProcessRunner runner = new BoundedProcessRunner(properties);
+    Path spawnedPidFile = directory.resolve("spawned-during-termination.pid");
+
+    ScannerRequestException failure = assertThrows(
+        ScannerRequestException.class,
+        () -> runner.run(
+            List.of(
+                "/bin/sh",
+                "-c",
+                "trap 'sleep 30 & child=$!; printf \"%s\" \"$child\" > \""
+                    + spawnedPidFile
+                    + "\"; sleep 1' TERM; while :; do sleep 1; done"),
+            directory,
+            directory.resolve("fork-during-termination.out"),
+            Duration.ofMillis(100),
+            Map.of()));
+
+    assertEquals("SCANNER_TIMEOUT", failure.code());
+    assertTrue(Files.exists(spawnedPidFile));
+    long spawnedPid = Long.parseLong(Files.readString(spawnedPidFile));
+    assertFalse(ProcessHandle.of(spawnedPid).map(ProcessHandle::isAlive).orElse(false));
+  }
+
+  @Test
   void postStartIoFailureTerminatesTheActiveScannerProcessTree() throws Exception {
     ScannerAdapterProperties properties = new ScannerAdapterProperties();
     Path pidFile = directory.resolve("io-failure.pid");

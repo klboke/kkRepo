@@ -20,6 +20,11 @@ class PostgreSqlSecurityScanSummaryIndexTest extends PostgreSqlIntegrationTestSu
             + "USING btree (repository_id, id)",
         indexDefinition("idx_asset_repository_id"));
     assertEquals(
+        "CREATE INDEX idx_docker_reference_policy_lookup "
+            + "ON public.docker_manifest_reference "
+            + "USING btree (repository_id, digest_hash, manifest_id)",
+        indexDefinition("idx_docker_reference_policy_lookup"));
+    assertEquals(
         "CREATE INDEX idx_security_scan_candidate_queue ON public.security_scan_candidate "
             + "USING btree (pending, changed_at, asset_id)",
         indexDefinition("idx_security_scan_candidate_queue"));

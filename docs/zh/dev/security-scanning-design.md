@@ -1017,6 +1017,11 @@ WHERE id = ? AND status = 'RUNNING' AND lease_token = ?
 task id 作为 run id，向全部配置 adapter ordinal 广播带 service credential 的取消
 请求；事务回滚时不得发送取消。worker 的下一次 heartbeat 发现 lease 已失效后仍会
 中断当前 scanner HTTP 请求并重复广播，作为管理节点提交后崩溃或网络故障的兜底。
+滚动关闭等原因直接中断执行线程时，worker 也必须先临时清除 interrupt flag，在可执行
+HTTP/数据库清理的上下文中把当前任务释放为 `RETRY_WAIT` 并广播远端取消，再恢复
+interrupt flag；若已耗尽尝试次数则按普通失败策略落终态，不能只退出线程并等待 lease
+过期，也不能把可恢复的滚动关闭永久落为 `CANCELLED`。进程关闭必须为这段清理等待
+最长 10 秒的有界宽限期，避免虚拟线程尚未完成清理时 JVM 已退出。
 SBOM/report 的临时 `blob_reference` 发布也必须在同一事务中锁定 task 行并校验当前
 `lease_token`；因此它要么先提交并由随后的取消/重试/完成事务释放，要么在终态提交后
 观察到 lease 已失效而拒绝发布，不能在 owner 已清理后由旧 worker 重新留下孤儿引用。
@@ -1182,6 +1187,9 @@ task 却被标记 COMPLETE 的状态。
 - 规范化每个归档路径并拒绝绝对路径、`..` 和 Unicode/分隔符绕过。
 - 限制压缩层级、归档条目数、单文件大小、解压总量和压缩膨胀率。
 - 限制 CPU、内存、临时磁盘、进程数和 wall-clock timeout。
+- timeout、请求中断或 I/O 失败时先终止 scanner 进程树；在优雅和强制终止阶段都持续
+  重新发现仍存活进程新创建的后代，跟踪所有已观测 PID，直到进程树连续静默，不能只
+  使用终止开始时的一次 descendants 快照。
 - 不挂载宿主源码、Docker socket、kkRepo 配置目录或云凭据目录。
 - 默认禁止任意出站网络；漏洞数据库更新使用独立、允许列表控制的流程。
 - 分别限制 scanner 原始 SBOM/report 与 HTTP JSON response：原始文档限制还覆盖 OCI
@@ -1299,19 +1307,20 @@ dependency resolution 兼容测试。
 
 策略主体仍是 manifest/index，不为每个 layer 单独生成 finding 或扫描状态。读取
 `/v2/<name>/blobs/<digest>` 时，服务端通过
-`repository_id + image_name + digest_hash` 的索引查询所有仍有效、引用该 digest 的
-manifest asset。热路径只读取最多 1025 个 ID：前 1024 个由一条聚合策略 SQL 判定，
+`repository_id + digest_hash` 的索引查询仓库内所有仍有效、引用该 digest 的
+manifest asset；`<name>` 不能缩小这个集合，因为实际 Blob 读取本身只按仓库和 digest
+解析。热路径只读取最多 1025 个 ID：前 1024 个由一条聚合策略 SQL 判定，
 第 1025 个只作为 overflow 标记。存在 overflow 且任一适用配置为 `ENFORCE` 时，
 固定成本地按 pending fail-closed，不继续按 tag 数量分页；只有全部适用配置均为
-`AUDIT` 时才允许继续。任一关联 manifest 被阻断时，同一 image namespace 下的直接
-digest 下载也阻断，不能绕过 manifest 检查。
+`AUDIT` 时才允许继续。任一关联 manifest 被阻断时，同一仓库内通过别名 image name
+发起的直接 digest 下载也阻断，不能绕过 manifest 检查。
 
-若请求的 image namespace 下没有任何仍有效的 manifest 引用该 digest，即使仓库全局
-存在相同内容 Blob，也返回 Registry V2 `BLOB_UNKNOWN`。上传中间 Blob 在 manifest
-提交前不可通过其它 image 名称读取，避免用可猜 digest 跨 image namespace 取得内容
-或绕过另一个镜像的策略。
-同一 layer 在不同 image namespace 的判定相互独立，避免一个镜像的策略直接污染其它
-镜像。
+Hosted 上传和 cross-mount 的中间 Blob 可以在 manifest 提交前保持未引用状态，以兼容
+Registry push 工作流；没有任何 manifest 引用时不凭空创建扫描主体。Proxy Blob 则是
+已经可下载的远端内容：若 manifest 尚未缓存，按该源仓库及请求入口 group 的 pending
+action 判定，不能利用“先请求 layer、后请求 manifest”的顺序绕过隔离。一个 layer 被
+多个 manifest 复用时取所有关联 manifest 的最严格决定，这是 repository-scoped digest
+端点无法区分调用方实际意图时的安全边界。
 
 ## 管理 API 与权限
 
@@ -1610,8 +1619,10 @@ Helm/Kubernetes：
   ordinal 恢复。
 - 用户取消、lease 丢失或 worker 中断时，取消请求广播到全部配置 ordinal。无法访问
   的 ordinal 不能把调用方阻塞时间放大为 `5 秒 × 副本数`：各请求并行执行并共享
-  5 秒总 deadline。无法访问的旧执行最多运行到 profile timeout；持久任务 lease、
-  fencing 和数据库结果提交仍是唯一正确性边界。
+  5 秒总 deadline。执行线程已带 interrupt flag 时，worker 会临时清除它，先把任务
+  释放为可重试状态并完成广播，再恢复中断状态，避免 HttpClient 立即拒绝清理请求；
+  已耗尽尝试次数时按普通失败策略落终态。无法访问的旧执行最多运行到 profile timeout；
+  持久任务 lease、fencing 和数据库结果提交仍是唯一正确性边界。
 - capability/readiness 观测遍历全部配置 ordinal；任一副本 ready 即认为 adapter
   部署可用，避免滚动发布或 ordinal 0 故障把整个扫描集群误判为不可用。一次观测的
   capability、readiness 和全部 ordinal 共享 15 秒单调时钟总 deadline，不能占用

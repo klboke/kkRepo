@@ -26,7 +26,7 @@ CREATE TABLE blob_reference (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE INDEX idx_docker_reference_policy_lookup
-  ON docker_manifest_reference(repository_id, digest_hash, image_name, manifest_id);
+  ON docker_manifest_reference(repository_id, digest_hash, manifest_id);
 
 CREATE TABLE security_scan_profile (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

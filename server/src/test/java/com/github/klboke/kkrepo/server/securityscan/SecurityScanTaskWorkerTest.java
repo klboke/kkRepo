@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -113,6 +114,45 @@ class SecurityScanTaskWorkerTest {
           any());
     } finally {
       unexpected.worker.shutdown();
+    }
+  }
+
+  @Test
+  void interruptedAdapterFailureRequeuesDurableWorkAndCancelsRemoteWithoutAnInterrupt() {
+    Fixture fixture = new Fixture();
+    AtomicBoolean cancellationSawInterrupt = new AtomicBoolean(true);
+    AtomicBoolean completionSawRestoredInterrupt = new AtomicBoolean();
+    try {
+      when(fixture.executor.execute(fixture.task)).thenAnswer(invocation -> {
+        Thread.currentThread().interrupt();
+        throw new ScannerAdapterException(
+            "SCANNER_INTERRUPTED", "scanner request interrupted", true);
+      });
+      when(fixture.adapter.cancel("5")).thenAnswer(invocation -> {
+        cancellationSawInterrupt.set(Thread.currentThread().isInterrupted());
+        return null;
+      });
+      doAnswer(invocation -> {
+        completionSawRestoredInterrupt.set(Thread.currentThread().isInterrupted());
+        return null;
+      }).when(fixture.metrics).recordTask(
+          eq("MAVEN2"), any(), any(), eq("retry"), any());
+
+      fixture.worker.runOnce();
+
+      var cleanupOrder = org.mockito.Mockito.inOrder(fixture.adapter, fixture.finalizer);
+      cleanupOrder.verify(fixture.adapter).cancel("5");
+      cleanupOrder.verify(fixture.finalizer).failCurrentTask(
+          eq(fixture.task),
+          eq("SCAN_INTERRUPTED"),
+          anyString(),
+          eq(true),
+          any());
+      verify(fixture.finalizer, never()).cancelCurrentTask(eq(fixture.task), any());
+      assertFalse(cancellationSawInterrupt.get());
+      assertTrue(completionSawRestoredInterrupt.get());
+    } finally {
+      fixture.worker.shutdown();
     }
   }
 

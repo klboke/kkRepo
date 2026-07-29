@@ -154,6 +154,9 @@ kubectl logs statefulset/kkrepo-scanner
 - 管理员取消会先提交持久任务状态和审计记录，再立即向所有配置 ordinal 广播取消；
   所有请求并行执行并共享 5 秒总 deadline。worker 丢失 lease 时使用同一有界广播
   作为兜底，因为超时的首选请求可能仍在退出，同时备用副本上已经存在新的执行。
+  worker 线程被滚动关闭等操作中断时，也会先把持久任务释放为可重试状态，并在非中断
+  上下文完成广播，再恢复线程中断状态；若已是最后一次尝试，则按普通失败策略落终态。
+  进程关闭会为这段清理保留最长 10 秒的有界宽限期。
 - capability/readiness 观测会在所有配置的 ordinal 间容灾；只要至少一个 adapter
   副本 ready，部署能力就保持可用。两个端点和全部 ordinal 共享 15 秒总 deadline，
   scanner 整体故障时等待时间不会按副本数线性放大。
@@ -257,6 +260,10 @@ metadata 不会被送入扫描器。
 | RubyGems | `.gem` |
 | Yum | `.rpm`，不扫描 `repodata` |
 | Raw | `.zip`、`.tar`、`.tar.gz`、`.tgz`、`.jar`、`.war`、`.ear`、`.whl`、`.crate`、`.gem`、`.nupkg`、`.rpm` |
+
+Docker Blob 实际按仓库和 digest 复用，因此 layer 下载会取仓库内所有引用 manifest
+的最严格决定，不能通过替换 URL 中的 image name 绕过。Proxy layer 在 manifest 尚未
+缓存时按 pending action 处理；Hosted 上传中的未引用 Blob 仍可用于完成 push。
 
 超过 profile 输入限制的制品会标记为失败，而不是显示为 clean。内置 profile 默认
 最大输入为 `1 GiB`；adapter 默认硬上限为 `2 GiB`，实际生效值取更严格的限制。
@@ -421,6 +428,8 @@ Waivers 页签用于查看 Active/Expired、scope、仓库、制品、exception�
 每个 profile 的扫描超时最长为 3600 秒，并覆盖完整 adapter 请求：输入流复制、归档检查、
 所有 Syft/Grype 进程和结果映射共用同一个单调时钟 deadline。OCI 临时拉取令牌在该有效
 deadline 之外额外保留 120 秒，用于传输和进程退出。
+超时、中断或 I/O 失败会触发进程树清理；adapter 在优雅和强制终止阶段持续重新发现
+新 fork 的后代并等待进程树静默，而不是只清理终止开始时看见的 PID。
 
 完整低级参数见
 [scanner adapter application.yml](../../scanner-adapter/src/main/resources/application.yml)。

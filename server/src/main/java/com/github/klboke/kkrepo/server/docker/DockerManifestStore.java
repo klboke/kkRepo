@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.docker;
 import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
@@ -246,14 +247,17 @@ public class DockerManifestStore {
   void beforeBlobRead(RepositoryRuntime runtime, String imageName, DockerDigest digest) {
     List<Long> manifestAssetIds = dockerDao.listManifestAssetIdsReferencingDigest(
         runtime.id(),
-        imageName,
         digest.value(),
         0,
         SecurityScanDao.MAX_DOWNLOAD_POLICY_BATCH + 1);
     if (manifestAssetIds.isEmpty()) {
-      // Uploaded and cross-mounted blobs are valid before a manifest references them. With no
-      // manifest context there is no artifact policy to evaluate; DockerBlobStore remains
-      // authoritative for repository-scoped existence.
+      // Hosted uploads and cross-mounts are valid before a manifest references them. Proxy blobs
+      // are remote download content, however, and must follow the pending action until a manifest
+      // provides the OCI scan subject. The repository-wide query above also prevents an alias
+      // image name from hiding an existing manifest reference to this repository-scoped digest.
+      if (downloadPolicy != null && runtime.type() == RepositoryType.PROXY) {
+        downloadPolicy.beforePendingOciImageRead(runtime.id(), imageName);
+      }
       return;
     }
     boolean truncated =

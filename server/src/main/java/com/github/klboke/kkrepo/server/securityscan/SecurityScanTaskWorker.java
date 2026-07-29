@@ -32,6 +32,7 @@ import org.springframework.stereotype.Component;
     prefix = "kkrepo.security-scanning", name = "enabled", havingValue = "true")
 public class SecurityScanTaskWorker {
   private static final Logger log = LoggerFactory.getLogger(SecurityScanTaskWorker.class);
+  private static final long SHUTDOWN_GRACE_SECONDS = 10;
 
   private final SecurityScanDao scans;
   private final SecurityScanTaskCoordinator coordinator;
@@ -148,8 +149,8 @@ public class SecurityScanTaskWorker {
         executor.execute(task);
       }
     } catch (InterruptedException e) {
-      outcome = "cancelled";
       Thread.currentThread().interrupt();
+      outcome = retryInterruptedTask(task, finished, heartbeat);
     } catch (SupersededSecurityScanTaskException e) {
       outcome = "superseded";
       if (!finalizer.cancelCurrentTask(task, Instant.now())) {
@@ -160,14 +161,14 @@ public class SecurityScanTaskWorker {
       log.debug("Security scan task {} was taken over by another worker", task.id());
     } catch (ScannerAdapterException e) {
       if (Thread.currentThread().isInterrupted()) {
-        outcome = "cancelled";
+        outcome = retryInterruptedTask(task, finished, heartbeat);
       } else {
         outcome = e.retryable() && task.attempts() < task.maxAttempts() ? "retry" : "failed";
         fail(task, e.code(), e.getMessage(), e.retryable());
       }
     } catch (RuntimeException e) {
       if (Thread.currentThread().isInterrupted()) {
-        outcome = "cancelled";
+        outcome = retryInterruptedTask(task, finished, heartbeat);
       } else {
         outcome = task.attempts() < task.maxAttempts() ? "retry" : "failed";
         log.warn("Unexpected security scan task failure: {}", task.id(), e);
@@ -179,6 +180,49 @@ public class SecurityScanTaskWorker {
       metrics.recordTask(
           format, task.stage(), task.requestReason(), outcome, timer);
     }
+  }
+
+  /**
+   * Releases durable work for retry and cancels remote work while temporarily clearing the
+   * interrupt flag.
+   *
+   * <p>HttpClient and the adapter cancellation broadcast abort immediately on an interrupted
+   * caller. Stop the task heartbeat first so lease-loss handling cannot re-interrupt this cleanup.
+   * Clearing only around cleanup lets shutdown actively stop Syft/Grype and requeue the durable
+   * task instead of leaving it RUNNING until lease expiry. An interruption on the final permitted
+   * attempt follows the ordinary terminal failure policy. The worker's interruption contract is
+   * restored before it returns to the executor.
+   */
+  private String retryInterruptedTask(
+      ScanTask task, AtomicBoolean finished, ScheduledFuture<?> heartbeat) {
+    finished.set(true);
+    heartbeat.cancel(false);
+    boolean restoreInterrupt = Thread.interrupted();
+    boolean retryable = task.attempts() < task.maxAttempts();
+    String outcome = retryable ? "retry" : "failed";
+    try {
+      // Keep the fenced RUNNING lease while broadcasting cancellation so another replica cannot
+      // claim the same task and then receive this old execution's cancellation request.
+      cancelAdapterRun(task.id());
+      try {
+        finalizer.failCurrentTask(
+            task,
+            "SCAN_INTERRUPTED",
+            retryable
+                ? "Scan execution was interrupted and will retry on an available worker"
+                : "Scan execution was interrupted on its final permitted attempt",
+            true,
+            Instant.now().plusSeconds(backoffSeconds(task.attempts())));
+      } catch (LostSecurityScanLeaseException e) {
+        outcome = "lease_lost";
+        log.debug("Did not requeue interrupted scan task after lease loss: {}", task.id());
+      } catch (RuntimeException e) {
+        log.warn("Unable to requeue interrupted scan task {}", task.id(), e);
+      }
+    } finally {
+      if (restoreInterrupt) Thread.currentThread().interrupt();
+    }
+    return outcome;
   }
 
   private void heartbeat(ScanTask task, Thread activeThread, AtomicBoolean finished) {
@@ -237,8 +281,17 @@ public class SecurityScanTaskWorker {
 
   @PreDestroy
   void shutdown() {
-    taskExecutor.shutdownNow();
     heartbeatExecutor.shutdownNow();
+    taskExecutor.shutdownNow();
+    try {
+      if (!taskExecutor.awaitTermination(SHUTDOWN_GRACE_SECONDS, TimeUnit.SECONDS)) {
+        log.warn(
+            "Security scan workers did not finish interrupted-task cleanup within {} seconds",
+            SHUTDOWN_GRACE_SECONDS);
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    }
   }
 
   private static String hostName() {

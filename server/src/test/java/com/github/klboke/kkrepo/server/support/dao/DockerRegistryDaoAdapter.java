@@ -90,7 +90,7 @@ public class DockerRegistryDaoAdapter implements DockerRegistryDao {
 
   @Override
   public List<Long> listManifestAssetIdsReferencingDigest(
-      long arg0, String arg1, String arg2, long arg3, int arg4) {
+      long arg0, String arg1, long arg2, int arg3) {
     throw new UnsupportedOperationException();
   }
 

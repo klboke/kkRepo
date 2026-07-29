@@ -166,7 +166,11 @@ For multiple scanner replicas:
 - Administrative cancellation commits the durable task state and audit record before immediately
   broadcasting cancellation in parallel across all configured ordinals under one five-second
   overall deadline. Worker lease loss uses the same bounded broadcast as a fallback because a
-  timed-out primary request may still be winding down while a fallback attempt is active.
+  timed-out primary request may still be winding down while a fallback attempt is active. A worker
+  thread interrupted during shutdown also releases the durable task for retry and broadcasts from
+  a temporarily non-interrupted context before restoring its interrupt status. An interruption on
+  the final permitted attempt follows the normal terminal failure policy. Process shutdown keeps a
+  bounded ten-second grace window for this cleanup.
 - Capability and readiness observation fails over across the configured ordinals and treats the
   deployment as ready when at least one adapter replica is ready. One 15-second end-to-end budget
   covers both endpoints and every ordinal, so an outage cannot multiply the worker delay by the
@@ -276,6 +280,11 @@ signatures, indexes, and ordinary protocol metadata are excluded.
 | RubyGems | `.gem` |
 | Yum | `.rpm`; excludes `repodata` |
 | Raw | `.zip`, `.tar`, `.tar.gz`, `.tgz`, `.jar`, `.war`, `.ear`, `.whl`, `.crate`, `.gem`, `.nupkg`, `.rpm` |
+
+Docker blobs are repository-scoped and reusable by digest, so a layer download uses the strictest
+decision among every referencing manifest in that repository; changing the image name in the URL
+cannot bypass it. A proxy layer whose manifest is not cached yet follows the pending action, while
+an unreferenced hosted blob remains available to complete an upload.
 
 An artifact above the profile limit is marked failed rather than clean. The built-in profile limit
 is `1 GiB`, while the adapter hard limit defaults to `2 GiB`; the stricter limit wins.
@@ -456,6 +465,9 @@ Each profile's scan timeout is capped at 3,600 seconds and applies to the comple
 input streaming, archive inspection, every Syft/Grype process, and result mapping share one monotonic
 deadline. OCI pull tokens remain valid for that effective deadline plus a 120-second transport and
 shutdown grace period.
+Timeout, interruption, and I/O failure trigger process-tree cleanup. During both graceful and
+forced termination the adapter repeatedly discovers newly forked descendants and waits for the
+observed tree to become quiescent instead of relying on one initial PID snapshot.
 
 See the
 [scanner adapter application.yml](../../scanner-adapter/src/main/resources/application.yml) for

@@ -197,10 +197,11 @@ class DockerProxyServiceTest {
   @Test
   void blobRemoteNotFoundIsRememberedInSharedNegativeCache() throws Exception {
     DockerBlobStore blobStore = mock(DockerBlobStore.class);
+    DockerManifestStore manifestStore = mock(DockerManifestStore.class);
     DockerRemoteRegistryClient remoteClient = mock(DockerRemoteRegistryClient.class);
     ProxyNegativeCache negativeCache = new ProxyNegativeCache(new InMemorySharedCache(), true, 5, null);
     DockerProxyService service = new DockerProxyService(
-        blobStore, mock(DockerManifestStore.class), remoteClient, negativeCache);
+        blobStore, manifestStore, remoteClient, negativeCache);
     RepositoryRuntime runtime = proxyRuntime(1);
     DockerDigest digest = DockerDigest.parse("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     when(blobStore.getBlob(runtime, digest, false))
@@ -216,14 +217,16 @@ class DockerProxyServiceTest {
     assertEquals(DockerErrorCode.BLOB_UNKNOWN, first.code());
     assertEquals(DockerErrorCode.BLOB_UNKNOWN, second.code());
     verify(remoteClient).get(eq(runtime), eq("library/alpine/blobs/" + digest.value()), eq("application/octet-stream"));
+    verify(manifestStore, never()).beforeBlobRead(any(), any(), any());
   }
 
   @Test
   void proxiedBlobHeadReturnsDigestLengthAndContentTypeAfterRemoteFetch() throws Exception {
     DockerBlobStore blobStore = mock(DockerBlobStore.class);
+    DockerManifestStore manifestStore = mock(DockerManifestStore.class);
     DockerRemoteRegistryClient remoteClient = mock(DockerRemoteRegistryClient.class);
     DockerProxyService service = new DockerProxyService(
-        blobStore, mock(DockerManifestStore.class), remoteClient);
+        blobStore, manifestStore, remoteClient);
     RepositoryRuntime runtime = proxyRuntime(1);
     byte[] body = "hello".getBytes(StandardCharsets.UTF_8);
     DockerDigest digest = DockerDigest.sha256(body);
@@ -251,6 +254,7 @@ class DockerProxyServiceTest {
     assertEquals(body.length, response.contentLength());
     assertEquals("application/vnd.oci.image.layer.v1.tar", response.contentType());
     assertEquals(digest.value(), response.headers().get(DockerConstants.CONTENT_DIGEST_HEADER));
+    verify(manifestStore).beforeBlobRead(runtime, "alpine", digest);
   }
 
   @Test

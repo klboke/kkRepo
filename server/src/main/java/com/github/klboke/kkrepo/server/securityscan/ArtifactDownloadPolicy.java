@@ -215,6 +215,24 @@ public class ArtifactDownloadPolicy {
   }
 
   /**
+   * Applies pending policy to a proxy layer whose OCI manifest is not cached yet.
+   *
+   * <p>A hosted unreferenced blob can legitimately be part of an upload in progress, but a proxy
+   * blob is already downloadable remote content. Until its manifest provides the scan subject,
+   * model that image as an applicable pending OCI manifest instead of classifying the layer itself
+   * as non-applicable.
+   */
+  public Decision beforePendingOciImageRead(long sourceRepositoryId, String imageName) {
+    return beforeUncachedRead(
+        sourceRepositoryId,
+        RepositoryFormat.DOCKER,
+        "docker/manifests/" + (imageName == null ? "" : imageName) + "/pending",
+        "MANIFEST",
+        "application/vnd.oci.image.manifest.v1+json",
+        0);
+  }
+
+  /**
    * Evaluates a bounded set of manifest assets that authorize one shared Docker blob.
    *
    * <p>The DAO loads the batch in one statement; the strictest applicable manifest decision wins.

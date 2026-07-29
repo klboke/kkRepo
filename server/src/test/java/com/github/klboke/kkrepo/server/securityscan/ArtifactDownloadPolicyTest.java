@@ -187,6 +187,23 @@ class ArtifactDownloadPolicyTest {
   }
 
   @Test
+  void proxyLayerWithoutACachedManifestUsesOciPendingPolicy() {
+    properties.setEnabled(true);
+    when(scans.findDownloadPolicyContexts(10L, null)).thenReturn(List.of(
+        new DownloadPolicyContext(
+            config(10L, EnforcementMode.ENFORCE, PolicyAction.BLOCK),
+            profile())));
+
+    ArtifactPolicyException failure = assertThrows(
+        ArtifactPolicyException.class,
+        () -> policy.beforePendingOciImageRead(10L, "team/app"));
+
+    assertEquals(PolicyDecision.BLOCK_PENDING, failure.decision());
+    verify(scans).findDownloadPolicyContexts(10L, null);
+    verifyNoMoreInteractions(scans);
+  }
+
+  @Test
   void groupCacheFallsBackToPendingPolicyWhenConcreteSourceDisappeared() {
     properties.setEnabled(true);
     when(scans.findDownloadPolicySnapshots(101L, 1L)).thenReturn(List.of());

@@ -149,9 +149,9 @@ public class DockerProxyService {
 
   public DockerResponse getBlob(RepositoryRuntime runtime, String imageName, DockerDigest digest, boolean headOnly) {
     ensureProxy(runtime);
-    manifestStore.beforeBlobRead(runtime, imageName, digest);
     try {
       DockerResponse response = blobStore.getBlob(runtime, digest, headOnly);
+      manifestStore.beforeBlobRead(runtime, imageName, digest);
       recordCache(runtime, "blob", "hit");
       return response;
     } catch (DockerProtocolException e) {
@@ -207,6 +207,7 @@ public class DockerProxyService {
               stored.blob().size(),
               blobContentType(stored.blob().contentType()),
               stored.asset().lastUpdatedAt());
+      manifestStore.beforeBlobRead(runtime, imageName, digest);
       return response
           .withContentType(blobContentType(stored.blob().contentType()))
           .withHeader(DockerConstants.CONTENT_DIGEST_HEADER, digest.value())
