@@ -1339,7 +1339,9 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Override
   @Transactional
   public boolean cancelTask(long taskId, Instant cancelledAt) {
-    transitionCurrentTaskProjectionToCancelled(taskId, cancelledAt);
+    if (!taskProjectionIsSuperseded(taskId)) {
+      transitionCurrentTaskProjectionToCancelled(taskId, cancelledAt);
+    }
     return jdbc.update("""
         UPDATE security_scan_task
         SET status = 'CANCELLED', claimed_by = NULL, lease_token = NULL, lease_until = NULL,
@@ -1433,7 +1435,9 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Override
   @Transactional
   public boolean requeueTask(long taskId, Instant requestedAt, String requestedBy) {
-    transitionCurrentTaskProjectionToPending(taskId, requestedAt);
+    if (!taskProjectionIsSuperseded(taskId)) {
+      transitionCurrentTaskProjectionToPending(taskId, requestedAt);
+    }
     return jdbc.update("""
         UPDATE security_scan_task
         SET status = 'PENDING', attempts = 0, next_attempt_at = ?, claimed_by = NULL,
@@ -1541,6 +1545,62 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
             AND task.content_generation = state.content_generation
         )
         """, nullableTimestamp(requestedAt), taskId);
+  }
+
+  /**
+   * A historical task cannot project pending/cancelled state over a run published by newer work.
+   *
+   * <p>Snapshot ordering protects pinned vulnerability-database rematches, while task ordering
+   * covers unpinned/manual work. The candidate row is locked before this query, so the decision
+   * remains stable until the surrounding task transition commits on every replica.
+   */
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public boolean taskProjectionIsSuperseded(long taskId) {
+    lockTaskCandidate(taskId);
+    Integer superseded = jdbc.queryForObject("""
+        SELECT CASE WHEN EXISTS (
+          SELECT 1
+          FROM security_scan_task task
+          JOIN asset_security_state state
+            ON state.asset_id = task.asset_id
+           AND state.profile_id = task.profile_id
+           AND state.content_generation = task.content_generation
+          LEFT JOIN security_scan_run current_run ON current_run.id = state.latest_scan_run_id
+          WHERE task.id = ?
+            AND (
+              (current_run.task_id IS NOT NULL AND current_run.task_id > task.id)
+              OR (
+                task.requested_scanner_snapshot_id IS NOT NULL
+                AND current_run.scanner_snapshot_id > task.requested_scanner_snapshot_id
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM security_scan_task newer_task
+                WHERE newer_task.asset_id = task.asset_id
+                  AND newer_task.profile_id = task.profile_id
+                  AND newer_task.content_generation = task.content_generation
+                  AND newer_task.id > task.id
+                  AND newer_task.status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
+              )
+            )
+        ) THEN 1 ELSE 0 END
+        """, Integer.class, taskId);
+    return superseded != null && superseded == 1;
+  }
+
+  private void lockTaskCandidate(long taskId) {
+    List<Long> assetIds = jdbc.queryForList("""
+        SELECT candidate.asset_id
+        FROM security_scan_task task
+        JOIN security_scan_candidate candidate
+          ON candidate.asset_id = task.asset_id
+         AND candidate.content_generation = task.content_generation
+        WHERE task.id = ?
+        """, Long.class, taskId);
+    if (!assetIds.isEmpty()) {
+      lockScanCandidate(assetIds.getFirst());
+    }
   }
 
   @Override
@@ -2213,6 +2273,18 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   public Optional<AssetSecurityState> findAssetState(long assetId, long profileId) {
     return jdbc.query("""
         SELECT * FROM asset_security_state WHERE asset_id = ? AND profile_id = ?
+        """, stateMapper, assetId, profileId).stream().findFirst();
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public Optional<AssetSecurityState> findAssetStateForUpdate(long assetId, long profileId) {
+    lockScanCandidate(assetId);
+    return jdbc.query("""
+        SELECT *
+        FROM asset_security_state
+        WHERE asset_id = ? AND profile_id = ?
+        FOR UPDATE
         """, stateMapper, assetId, profileId).stream().findFirst();
   }
 

@@ -230,7 +230,21 @@ class SecurityScanSchedulingServicesTest {
     SecurityScanMetrics metrics = mock(SecurityScanMetrics.class);
     SecurityScannerSnapshotService service =
         new SecurityScannerSnapshotService(adapter, scans, properties, metrics);
-    when(scans.latestScannerSnapshot()).thenReturn(Optional.empty());
+    Instant persistedFutureObservation = Instant.now().plus(Duration.ofDays(2));
+    ScannerSnapshot futureSnapshot = new ScannerSnapshot(
+        7L,
+        "adapter",
+        ScannerContract.API_VERSION,
+        "grype",
+        "2",
+        "future-db",
+        Instant.now(),
+        "capability",
+        "future-fingerprint",
+        persistedFutureObservation,
+        true,
+        Map.of());
+    when(scans.latestScannerSnapshot()).thenReturn(Optional.of(futureSnapshot));
     Capabilities capabilities = new Capabilities(
         ScannerContract.API_VERSION,
         "adapter",
@@ -240,6 +254,7 @@ class SecurityScanSchedulingServicesTest {
         1024,
         2048,
         "capability");
+    Instant adapterObservedAt = Instant.now().plus(Duration.ofDays(1));
     Readiness readiness = new Readiness(
         true,
         "READY",
@@ -247,7 +262,7 @@ class SecurityScanSchedulingServicesTest {
         "2",
         "db-2",
         Instant.now(),
-        null,
+        adapterObservedAt,
         Map.of("catalogEngineVersion", "1"));
     when(adapter.observation()).thenReturn(new Observation(capabilities, readiness));
     when(scans.insertSnapshotOrFindExisting(any()))
@@ -299,6 +314,13 @@ class SecurityScanSchedulingServicesTest {
         ArgumentCaptor.forClass(ScannerSnapshot.class);
     verify(scans, org.mockito.Mockito.atLeast(4))
         .insertSnapshotOrFindExisting(snapshots.capture());
+    ScannerSnapshot receivedObservation = snapshots.getAllValues().getFirst();
+    assertTrue(
+        receivedObservation.observedAt().isBefore(adapterObservedAt),
+        "adapter clock time must not become the shared freshness timestamp");
+    assertEquals(
+        adapterObservedAt.toString(),
+        receivedObservation.details().get("adapterObservedAt"));
     assertEquals(false, snapshots.getAllValues().getLast().ready());
     assertEquals(
         "SCANNER_OBSERVATION_FAILED",

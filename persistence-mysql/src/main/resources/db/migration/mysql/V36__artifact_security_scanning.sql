@@ -184,6 +184,8 @@ CREATE TABLE security_scan_task (
     (status, next_attempt_at, lease_until, priority, requested_at, id),
   INDEX idx_security_scan_task_requested_snapshot (requested_scanner_snapshot_id),
   INDEX idx_security_scan_task_asset (asset_id, created_at, id),
+  INDEX idx_security_scan_task_projection
+    (asset_id, profile_id, content_generation, id, status),
   INDEX idx_security_scan_task_repository (repository_id, created_at, id),
   INDEX idx_security_scan_task_repository_profile (repository_id, profile_id, id),
   INDEX idx_security_scan_task_repository_status (repository_id, status, id),

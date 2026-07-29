@@ -1563,6 +1563,41 @@ public abstract class PersistenceApiContract {
             true,
             Map.of()));
     assertTrue(newerSnapshot.id() > olderSnapshot.id());
+    long olderTaskId = scans.createTask(new SecurityScanDao.TaskDraft(
+        repositoryId,
+        assetId,
+        SubjectKind.ASSET_BLOB,
+        "sha256:" + "5".repeat(64),
+        1,
+        profile.id(),
+        profile.revision(),
+        olderSnapshot.id(),
+        ScanStage.MATCH_ONLY,
+        RequestReason.VULNERABILITY_DB_CHANGED,
+        25,
+        3,
+        "contract",
+        "older-snapshot-task",
+        "older-snapshot-task",
+        now));
+    long newerTaskId = scans.createTask(new SecurityScanDao.TaskDraft(
+        repositoryId,
+        assetId,
+        SubjectKind.ASSET_BLOB,
+        "sha256:" + "5".repeat(64),
+        1,
+        profile.id(),
+        profile.revision(),
+        newerSnapshot.id(),
+        ScanStage.MATCH_ONLY,
+        RequestReason.VULNERABILITY_DB_CHANGED,
+        25,
+        3,
+        "contract",
+        "newer-snapshot-task",
+        "newer-snapshot-task",
+        now.plusSeconds(1)));
+    assertTrue(newerTaskId > olderTaskId);
 
     long sbomBlobId = stores().assets().insertBlob(
         blob(blobStoreId, "security/snapshot-fence-sbom.json", "snapshot-fence-sbom"));
@@ -1588,7 +1623,7 @@ public abstract class PersistenceApiContract {
     SecurityScanDao.ScanRun olderRun =
         scans.insertRunOrFindExisting(new SecurityScanDao.ScanRun(
             null,
-            null,
+            olderTaskId,
             sbom.id(),
             olderSnapshot.id(),
             "9".repeat(64),
@@ -1611,7 +1646,7 @@ public abstract class PersistenceApiContract {
     SecurityScanDao.ScanRun newerRun =
         scans.insertRunOrFindExisting(new SecurityScanDao.ScanRun(
             null,
-            null,
+            newerTaskId,
             sbom.id(),
             newerSnapshot.id(),
             "9".repeat(64),
@@ -1728,6 +1763,30 @@ public abstract class PersistenceApiContract {
             waiverRevision));
     assertEquals(newerRun.id(), afterOlderPolicy.latestScanRunId());
     assertEquals(PolicyDecision.BLOCK_VULNERABILITY, afterOlderPolicy.policyDecision());
+
+    assertTrue(scans.cancelTask(olderTaskId, now.plusSeconds(5)));
+    SecurityScanDao.AssetSecurityState afterHistoricalCancel =
+        scans.findAssetState(assetId, profile.id()).orElseThrow();
+    assertEquals(newerRun.id(), afterHistoricalCancel.latestScanRunId());
+    assertEquals(ScanState.COMPLETE, afterHistoricalCancel.scanState());
+    assertEquals(PolicyDecision.BLOCK_VULNERABILITY, afterHistoricalCancel.policyDecision());
+    assertEquals(
+        PolicyDecision.BLOCK_VULNERABILITY,
+        scans.findAssetPolicyState(assetId, profile.id(), repositoryId)
+            .orElseThrow()
+            .policyDecision());
+
+    assertTrue(scans.requeueTask(olderTaskId, now.plusSeconds(6), "contract"));
+    SecurityScanDao.AssetSecurityState afterHistoricalRetry =
+        scans.findAssetState(assetId, profile.id()).orElseThrow();
+    assertEquals(newerRun.id(), afterHistoricalRetry.latestScanRunId());
+    assertEquals(ScanState.COMPLETE, afterHistoricalRetry.scanState());
+    assertEquals(PolicyDecision.BLOCK_VULNERABILITY, afterHistoricalRetry.policyDecision());
+    assertEquals(
+        PolicyDecision.BLOCK_VULNERABILITY,
+        scans.findAssetPolicyState(assetId, profile.id(), repositoryId)
+            .orElseThrow()
+            .policyDecision());
   }
 
   @Test

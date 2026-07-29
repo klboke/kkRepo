@@ -12,6 +12,7 @@ import java.time.Instant;
  * database ages past the configured limit.
  */
 public record SecurityScannerStatus(boolean ready, String reasonCode) {
+  private static final Duration MAX_OBSERVATION_CLOCK_SKEW = Duration.ofSeconds(5);
   static final String READY = "READY";
   static final String DEPLOYMENT_DISABLED = "DEPLOYMENT_DISABLED";
   static final String SNAPSHOT_UNAVAILABLE = "SNAPSHOT_UNAVAILABLE";
@@ -34,6 +35,7 @@ public record SecurityScannerStatus(boolean ready, String reasonCode) {
     }
     Duration observationMaxAge = properties.getScannerObservationMaxAge();
     if (snapshot.observedAt() == null
+        || observedTooFarInFuture(snapshot.observedAt(), now)
         || expired(snapshot.observedAt(), observationMaxAge, now)) {
       return new SecurityScannerStatus(false, SCANNER_OBSERVATION_STALE);
     }
@@ -45,6 +47,10 @@ public record SecurityScannerStatus(boolean ready, String reasonCode) {
       return new SecurityScannerStatus(false, DATABASE_STALE);
     }
     return new SecurityScannerStatus(true, READY);
+  }
+
+  static boolean observedTooFarInFuture(Instant observedAt, Instant now) {
+    return observedAt.isAfter(now.plus(MAX_OBSERVATION_CLOCK_SKEW));
   }
 
   private static boolean expired(Instant timestamp, Duration maxAge, Instant now) {

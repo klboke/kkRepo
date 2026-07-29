@@ -159,8 +159,14 @@ class SecurityScanInfrastructureTest {
     when(snapshot.observedAt()).thenReturn(Instant.now().minus(Duration.ofMinutes(3)));
     assertEquals(
         "SCANNER_OBSERVATION_STALE", health.health().getDetails().get("reasonCode"));
+    when(snapshot.observedAt()).thenReturn(Instant.now().plus(Duration.ofHours(1)));
+    assertEquals(
+        "SCANNER_OBSERVATION_STALE", health.health().getDetails().get("reasonCode"));
     properties.setScannerObservationMaxAge(Duration.ZERO);
     properties.setScannerDatabaseMaxAge(Duration.ofSeconds(-1));
+    assertEquals(
+        "SCANNER_OBSERVATION_STALE", health.health().getDetails().get("reasonCode"));
+    when(snapshot.observedAt()).thenReturn(Instant.now());
     assertEquals(Status.UP, health.health().getStatus());
   }
 

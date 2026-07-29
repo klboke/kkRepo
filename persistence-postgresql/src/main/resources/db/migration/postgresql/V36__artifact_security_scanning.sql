@@ -167,6 +167,8 @@ CREATE INDEX idx_security_scan_task_requested_snapshot
   ON security_scan_task(requested_scanner_snapshot_id);
 CREATE INDEX idx_security_scan_task_asset
   ON security_scan_task(asset_id, created_at, id);
+CREATE INDEX idx_security_scan_task_projection
+  ON security_scan_task(asset_id, profile_id, content_generation, id, status);
 CREATE INDEX idx_security_scan_task_repository
   ON security_scan_task(repository_id, created_at, id);
 CREATE INDEX idx_security_scan_task_repository_profile

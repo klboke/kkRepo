@@ -262,6 +262,23 @@ public interface SecurityScanDao {
 
   Optional<AssetSecurityState> findAssetState(long assetId, long profileId);
 
+  /**
+   * Locks the durable publication authority for one asset and returns its current profile state.
+   *
+   * <p>Callers must already be in a transaction. The lock is shared with successful, failed,
+   * cancelled, and retried scan-state publication so a task can decide whether it has been
+   * superseded without racing another replica.
+   */
+  Optional<AssetSecurityState> findAssetStateForUpdate(long assetId, long profileId);
+
+  /**
+   * Returns whether durable work newer than {@code taskId} already owns this task's projection.
+   *
+   * <p>Callers must already be in a transaction. The implementation locks the same per-asset
+   * publication authority used by finalization, cancellation, and retry.
+   */
+  boolean taskProjectionIsSuperseded(long taskId);
+
   List<AssetSecurityState> listAssetStates(long assetId);
 
   /**

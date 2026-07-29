@@ -78,7 +78,7 @@ class SecurityScanFinalizerTest {
     RepositoryScanConfig config = config(1L, 101L);
     AssetSecurityState current = assetState(PolicyDecision.ALLOW);
     when(scans.findRepositoryConfig(1L)).thenReturn(Optional.of(config));
-    when(scans.findAssetState(10L, 1L)).thenReturn(Optional.of(current));
+    when(scans.findAssetStateForUpdate(10L, 1L)).thenReturn(Optional.of(current));
     when(scans.upsertAssetStateIfCurrent(any())).thenAnswer(invocation -> invocation.getArgument(0));
     when(scans.failTask(eq(5L), eq("lease"), eq("ENGINE_FAILED"), eq("boom"), any(Instant.class)))
         .thenReturn(true);
@@ -110,7 +110,7 @@ class SecurityScanFinalizerTest {
         PolicyAction.BLOCK, PolicyAction.ALLOW, PolicyAction.BLOCK,
         null, null, 1L, Instant.EPOCH, Instant.EPOCH);
     when(scans.findRepositoryConfig(1L)).thenReturn(Optional.of(config));
-    when(scans.findAssetState(10L, 1L))
+    when(scans.findAssetStateForUpdate(10L, 1L))
         .thenReturn(Optional.of(assetState(PolicyDecision.BLOCK_VULNERABILITY)));
     when(scans.upsertAssetStateIfCurrent(any())).thenAnswer(invocation -> invocation.getArgument(0));
     when(scans.failTask(eq(5L), eq("lease"), eq("FAILED"), eq("boom"), any(Instant.class)))
@@ -125,6 +125,55 @@ class SecurityScanFinalizerTest {
     verify(scans).upsertAssetStateIfCurrent(state.capture());
     assertEquals(PolicyDecision.ALLOW, state.getValue().policyDecision());
     verify(documents, never()).releaseOwner(anyLong());
+  }
+
+  @Test
+  void olderSnapshotFailureDoesNotReplaceANewerCompletedRun() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    SecurityScanAuditService audit = mock(SecurityScanAuditService.class);
+    SecurityScanDocumentPersistence documents = mock(SecurityScanDocumentPersistence.class);
+    stubWaiverRevision(scans);
+    when(repositories.findById(1L)).thenReturn(Optional.of(hostedRepository(1L)));
+    SecurityScanFinalizer finalizer =
+        new SecurityScanFinalizer(scans, repositories, audit, documents);
+    Instant now = Instant.now();
+    ScanTask task = task(3, 3);
+    when(task.requestedScannerSnapshotId()).thenReturn(40L);
+    RepositoryScanConfig config = config(1L, 101L);
+    ScanRun newerRun = run(31L, 6L, 41L, now);
+    AssetSecurityState newerState = new AssetSecurityState(
+        10L,
+        1L,
+        1L,
+        new byte[] {1},
+        newerRun.id(),
+        ScanState.COMPLETE,
+        ScanCompleteness.COMPLETE,
+        true,
+        Severity.CRITICAL,
+        Map.of("critical", 1),
+        101L,
+        1L,
+        PolicyDecision.BLOCK_VULNERABILITY,
+        "NEWER_SNAPSHOT",
+        now.plusSeconds(3600),
+        now,
+        2L);
+    when(scans.findRepositoryConfig(1L)).thenReturn(Optional.of(config));
+    when(scans.findAssetStateForUpdate(10L, 1L)).thenReturn(Optional.of(newerState));
+    when(scans.taskProjectionIsSuperseded(5L)).thenReturn(true);
+    when(scans.failTask(eq(5L), eq("lease"), eq("ENGINE_FAILED"), eq("boom"), any()))
+        .thenReturn(true);
+
+    finalizer.failCurrentTask(
+        task, "ENGINE_FAILED", "boom", false, now.plusSeconds(30));
+
+    verify(scans, never()).upsertAssetStateIfCurrent(any());
+    verify(scans, never()).upsertAssetPolicyStateIfCurrent(any());
+    verify(audit, never()).recordSystem(eq("POLICY_STATE_CHANGED"), anyLong(), any(Map.class));
+    verify(scans).failTask(eq(5L), eq("lease"), eq("ENGINE_FAILED"), eq("boom"), any());
+    verify(documents).releaseOwner(5L);
   }
 
   @Test
@@ -467,6 +516,7 @@ class SecurityScanFinalizerTest {
     when(task.assetId()).thenReturn(10L);
     when(task.contentGeneration()).thenReturn(1L);
     when(task.profileId()).thenReturn(1L);
+    when(task.requestedScannerSnapshotId()).thenReturn(null);
     when(task.attempts()).thenReturn(attempts);
     when(task.maxAttempts()).thenReturn(maxAttempts);
     when(task.leaseToken()).thenReturn("lease");
@@ -508,8 +558,12 @@ class SecurityScanFinalizerTest {
   }
 
   private static ScanRun run(Instant now) {
+    return run(30L, 5L, 40L, now);
+  }
+
+  private static ScanRun run(long id, long taskId, long snapshotId, Instant now) {
     return new ScanRun(
-        30L, 5L, 20L, 40L, "b".repeat(64), "c".repeat(64),
+        id, taskId, 20L, snapshotId, "b".repeat(64), "c".repeat(64),
         ScanState.COMPLETE, ScanCompleteness.COMPLETE, 50L, "d".repeat(64),
         2, 2, 0, 2, 0, 0, 0, Severity.HIGH, now, now, now);
   }

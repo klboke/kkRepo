@@ -38,6 +38,7 @@ public class SecurityScannerSnapshotService {
     Instant now = Instant.now();
     var recent = scans.latestScannerSnapshot()
         .filter(snapshot -> snapshot.observedAt() != null
+            && !SecurityScannerStatus.observedTooFarInFuture(snapshot.observedAt(), now)
             && snapshot.observedAt().plus(OBSERVATION_TTL).isAfter(now));
     if (recent.isPresent()) {
       metrics.observeScanner(
@@ -71,6 +72,9 @@ public class SecurityScannerSnapshotService {
           false);
     }
     Map<String, Object> details = new LinkedHashMap<>(readiness.details());
+    if (readiness.observedAt() != null) {
+      details.put("adapterObservedAt", readiness.observedAt().toString());
+    }
     details.put("adapterVersion", capabilities.adapterVersion());
     details.put("operations", capabilities.operations());
     details.put("targetClassifications", capabilities.targetClassifications());
@@ -95,7 +99,7 @@ public class SecurityScannerSnapshotService {
         readiness.vulnerabilityDatabaseUpdatedAt(),
         capabilities.capabilityDigest(),
         fingerprint,
-        readiness.observedAt() == null ? now : readiness.observedAt(),
+        now,
         readiness.ready(),
         details));
     metrics.observeScanner(snapshot.ready(), snapshot.vulnerabilityDatabaseUpdatedAt());

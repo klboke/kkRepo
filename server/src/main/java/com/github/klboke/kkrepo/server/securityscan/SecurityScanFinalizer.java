@@ -147,10 +147,12 @@ public class SecurityScanFinalizer {
     if (task.assetId() != null) {
       List<RepositoryScanConfig> contexts =
           applicablePolicyContexts(task.repositoryId(), task.profileId());
-      var current = scans.findAssetState(task.assetId(), task.profileId()).orElse(null);
+      var current =
+          scans.findAssetStateForUpdate(task.assetId(), task.profileId()).orElse(null);
       if (current != null
           && current.contentGeneration() == task.contentGeneration()
-          && !contexts.isEmpty()) {
+          && !contexts.isEmpty()
+          && !scans.taskProjectionIsSuperseded(task.id())) {
         RepositoryScanConfig primary = contexts.getFirst();
         PolicyDecision decision = primary.failureAction() == PolicyAction.BLOCK
             ? PolicyDecision.BLOCK_SCAN_FAILED : PolicyDecision.ALLOW;
