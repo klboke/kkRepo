@@ -88,8 +88,8 @@ class NexusRestClientTest {
         "realm", "LDAP",
         "firstName", "Caibao",
         "status", "active",
-        "roles", List.of("engineering"),
-        "externalRoles", List.of("engineering")));
+        "roles", List.of("engineering", "engineers", "finance"),
+        "externalRoles", List.of("engineering", "engineers", "finance")));
     nexus.securityUserRoleMappings = List.of(
         Map.of("userId", "alice", "source", "default", "roles", List.of("nx-admin")),
         Map.of("userId", "agan", "source", "default", "roles", List.of("nx-admin")),
@@ -122,7 +122,7 @@ class NexusRestClientTest {
             .map(user -> String.valueOf(user.get("userId")))
             .toList());
     assertEquals("LDAP", inventory.securityExport().users().get(2).get("source"));
-    assertEquals(List.of("engineering"),
+    assertEquals(List.of("engineering", "engineers", "finance"),
         inventory.securityExport().users().get(2).get("externalRoles"));
     assertEquals(List.of("engineering", "engineers"),
         inventory.securityExport().roles().stream()
@@ -135,7 +135,7 @@ class NexusRestClientTest {
         .orElseThrow();
     assertEquals("ldap-engineering", engineering.get("name"));
     assertEquals(List.of("pypi-deploy"), engineering.get("roles"));
-    assertEquals(List.of("engineering"), inventory.securityExport().userRoleMappings().stream()
+    assertEquals(List.of("engineering", "engineers"), inventory.securityExport().userRoleMappings().stream()
         .filter(mapping -> "caibao".equals(mapping.get("userId")))
         .findFirst()
         .orElseThrow()
@@ -152,13 +152,13 @@ class NexusRestClientTest {
         .findFirst()
         .orElseThrow()
         .source());
-    assertEquals(List.of("engineering"), batch.users().stream()
+    assertEquals(List.of("engineering", "engineers", "finance"), batch.users().stream()
         .filter(user -> "caibao".equals(user.id()))
         .findFirst()
         .orElseThrow()
         .attributes()
         .get("groups"));
-    assertEquals(List.of("engineering"), batch.userRoleMappings().stream()
+    assertEquals(List.of("engineering", "engineers"), batch.userRoleMappings().stream()
         .filter(mapping -> "caibao".equals(mapping.userId()))
         .findFirst()
         .orElseThrow()

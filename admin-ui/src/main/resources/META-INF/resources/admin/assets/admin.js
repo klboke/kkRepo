@@ -2305,8 +2305,10 @@ function securityRoleCandidates(excludedRoleId = "") {
     })
     .map((role) => ({
       id: role.roleId,
-      label: role.roleId,
-      meta: role.readOnly ? "read-only" : "role",
+      label: role.name || role.roleId,
+      meta: role.name && role.name !== role.roleId
+        ? role.roleId
+        : role.readOnly ? "read-only" : "role",
       filterValues: [role.roleId, role.name, role.description, role.readOnly ? "read-only" : "role"]
     }))
     .sort(compareTransferItems);

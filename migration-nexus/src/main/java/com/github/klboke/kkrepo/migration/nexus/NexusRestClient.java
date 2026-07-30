@@ -1619,8 +1619,13 @@ public class NexusRestClient {
     List<Map<String, Object>> users = getList(LOCAL_USERS_PATH).stream()
         .filter(NexusRestClient::isLocalUser)
         .toList();
+    List<Map<String, Object>> roles = getList(CONFIGURED_ROLES_PATH);
+    Set<String> roleIds = roles.stream()
+        .map(role -> firstString(role, "id"))
+        .filter(java.util.Objects::nonNull)
+        .collect(java.util.stream.Collectors.toUnmodifiableSet());
     SecurityScriptProbe securityScriptProbe = readLocalSecurityScriptExport(probe);
-    SecurityUiUsersProbe securityUiUsersProbe = readSecurityUiUsers(securityScriptProbe);
+    SecurityUiUsersProbe securityUiUsersProbe = readSecurityUiUsers(securityScriptProbe, roleIds);
     List<Map<String, Object>> mergedUsers = mergeUsers(users, securityScriptProbe.users());
     mergedUsers = mergeUsers(mergedUsers, securityUiUsersProbe.users());
     List<Map<String, Object>> userRoleMappings = mergeUserRoleMappings(
@@ -1631,7 +1636,7 @@ public class NexusRestClient {
     warnings.addAll(securityUiUsersProbe.warnings());
     return new SecurityExportResult(new NexusSecurityExport(
         mergedUsers,
-        getList(CONFIGURED_ROLES_PATH),
+        roles,
         getList("/service/rest/v1/security/privileges"),
         userRoleMappings,
         securityScriptProbe.apiKeys(),
@@ -1642,7 +1647,9 @@ public class NexusRestClient {
         warnings);
   }
 
-  private SecurityUiUsersProbe readSecurityUiUsers(SecurityScriptProbe scriptProbe)
+  private SecurityUiUsersProbe readSecurityUiUsers(
+      SecurityScriptProbe scriptProbe,
+      Set<String> configuredRoleIds)
       throws InterruptedException {
     LinkedHashSet<String> sources = new LinkedHashSet<>();
     scriptProbe.users().forEach(user -> addExternalUserSource(sources, firstString(user, "source")));
@@ -1682,7 +1689,7 @@ public class NexusRestClient {
           continue;
         }
         objectMaps(result.get("data")).stream()
-            .map(NexusRestClient::normalizeSecurityUiUser)
+            .map(document -> normalizeSecurityUiUser(document, configuredRoleIds))
             .forEach(users::add);
       } catch (IOException e) {
         warnings.add("Source Nexus UI API did not expose " + source
@@ -1701,11 +1708,20 @@ public class NexusRestClient {
     return objectValue(call.get("result"));
   }
 
-  private static Map<String, Object> normalizeSecurityUiUser(Map<String, Object> document) {
+  private static Map<String, Object> normalizeSecurityUiUser(
+      Map<String, Object> document,
+      Set<String> configuredRoleIds) {
     LinkedHashMap<String, Object> normalized = new LinkedHashMap<>(document);
     String source = firstString(document, "source", "realm");
     if (source != null) {
       normalized.put("source", source);
+    }
+    // Nexus bulk UI reads can expose all external LDAP groups as roles. Only group names
+    // matching configured role IDs are effective role grants; externalRoles retains the snapshot.
+    if (document.containsKey("roles")) {
+      normalized.put("roles", stringList(document.get("roles")).stream()
+          .filter(configuredRoleIds::contains)
+          .toList());
     }
     return Map.copyOf(normalized);
   }
