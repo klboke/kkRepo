@@ -26,9 +26,12 @@ import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityMigrationW
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MigrationJobDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRoleRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
 import java.io.ByteArrayOutputStream;
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
@@ -179,6 +182,70 @@ class NexusApiMigrationServiceTest {
         null);
 
     assertFalse(preflight.security().anonymous().enabled());
+  }
+
+  @Test
+  void validationReportsMissingMigratedUserRolesAndExternalGroups() {
+    SecurityUserRecord caibao = new SecurityUserRecord(
+        1L,
+        "LDAP",
+        "caibao",
+        "Caibao",
+        null,
+        null,
+        null,
+        "active",
+        null,
+        Map.of("groups", List.of()));
+    SecurityRoleRecord engineering = new SecurityRoleRecord(
+        "engineering",
+        "Local",
+        "ldap-engineering",
+        null,
+        false,
+        Map.of());
+    SecurityDao security = (SecurityDao) Proxy.newProxyInstance(
+        SecurityDao.class.getClassLoader(),
+        new Class<?>[] {SecurityDao.class},
+        (proxy, method, args) -> switch (method.getName()) {
+          case "findUser" -> Optional.of(caibao);
+          case "findRole" -> Optional.of(engineering);
+          case "listUserRoleIds" -> List.of();
+          default -> throw new UnsupportedOperationException(method.getName());
+        });
+    NexusApiMigrationService service = new NexusApiMigrationService(
+        new ObjectMapper(),
+        new FakeBlobStoreDao().asDao(),
+        new FakeRepositoryDao().asDao(),
+        security,
+        null,
+        null);
+    NexusSecurityExport export = new NexusSecurityExport(
+        List.of(Map.of(
+            "userId", "caibao",
+            "source", "LDAP",
+            "attributes", Map.of("groups", List.of("engineering")))),
+        List.of(Map.of(
+            "id", "engineering",
+            "name", "ldap-engineering")),
+        List.of(),
+        List.of(Map.of(
+            "userId", "caibao",
+            "source", "LDAP",
+            "roles", List.of("engineering"))),
+        List.of(),
+        List.of(),
+        List.of(),
+        List.of(),
+        Map.of());
+
+    NexusApiMigrationService.ValidationCheck validation = service.validateSecurityObjects(export);
+
+    assertEquals("FAIL", validation.status());
+    assertTrue(validation.details().contains(
+        "user-groups:LDAP/caibao expected [engineering] but found []"));
+    assertTrue(validation.details().contains(
+        "user-roles:LDAP/caibao expected [engineering] but found []"));
   }
 
   @Test

@@ -235,7 +235,11 @@ class NexusRestClientTest {
     assertTrue(script.contains("security.listUserRoleMappings()"));
     assertTrue(script.contains("container.lookup('org.sonatype.nexus.security.SecuritySystem')"));
     assertTrue(script.contains("securitySystem.listUsers()"));
-    assertTrue(script.contains("[groups: externalRoles]"));
+    assertTrue(script.contains("def mergeSecurityUser = { user ->"));
+    assertTrue(script.contains("userRoleMappings.each { mapping ->"));
+    assertTrue(script.contains("securitySystem.getUser(mapping.userId, mappingSource)"));
+    assertTrue(script.contains("Source Nexus script API could not enrich mapped user"));
+    assertTrue(script.contains("[groups: externalRoles.unique().sort()]"));
     assertTrue(script.contains("mergeStrings(merged[field], value)"));
     assertTrue(script.contains("mergeStrings(attributes[attribute], attributeValue)"));
     assertTrue(script.contains("new JsonSlurper().parseText(args)"));

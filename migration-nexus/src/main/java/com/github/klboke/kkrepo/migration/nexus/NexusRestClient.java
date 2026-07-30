@@ -114,6 +114,32 @@ public class NexusRestClient {
         }
         usersByKey[key] = merged
       }
+      def mergeSecurityUser = { user ->
+        def localRoles = []
+        def externalRoles = []
+        def roleIdentifiers = safeProperty(user, 'roles') ?: []
+        roleIdentifiers.each { role ->
+          def roleId = safeProperty(role, 'roleId')
+          def roleSource = safeProperty(role, 'source')
+          if (roleId != null) {
+            if (roleSource == null || String.valueOf(roleSource).equalsIgnoreCase('default')) {
+              localRoles << String.valueOf(roleId)
+            } else {
+              externalRoles << String.valueOf(roleId)
+            }
+          }
+        }
+        mergeUser([
+          userId: safeProperty(user, 'userId'),
+          source: safeProperty(user, 'source'),
+          firstName: safeProperty(user, 'firstName'),
+          lastName: safeProperty(user, 'lastName'),
+          emailAddress: safeProperty(user, 'emailAddress'),
+          status: safeProperty(user, 'status'),
+          roles: localRoles.unique().sort(),
+          attributes: externalRoles.isEmpty() ? [:] : [groups: externalRoles.unique().sort()]
+        ])
+      }
       try {
         def security = null
         try {
@@ -162,32 +188,17 @@ public class NexusRestClient {
           warnings << 'Source Nexus script API did not expose external users or role memberships: SecuritySystem unavailable'
         } else {
           securitySystem.listUsers().each { user ->
-            def localRoles = []
-            def externalRoles = []
-            def roleIdentifiers = safeProperty(user, 'roles') ?: []
-            roleIdentifiers.each { role ->
-              def roleId = safeProperty(role, 'roleId')
-              def roleSource = safeProperty(role, 'source')
-              if (roleId != null) {
-                if (roleSource == null || String.valueOf(roleSource).equalsIgnoreCase('default')) {
-                  localRoles << String.valueOf(roleId)
-                } else {
-                  externalRoles << String.valueOf(roleId)
-                }
-              }
+            mergeSecurityUser(user)
+          }
+          userRoleMappings.each { mapping ->
+            try {
+              def mappingSource = mapping.source == null ? 'default' : mapping.source
+              mergeSecurityUser(securitySystem.getUser(mapping.userId, mappingSource))
+            } catch (e) {
+              warnings << ('Source Nexus script API could not enrich mapped user '
+                  + String.valueOf(mapping.source) + '/' + String.valueOf(mapping.userId)
+                  + ': ' + errorText(e))
             }
-            localRoles = localRoles.unique().sort()
-            externalRoles = externalRoles.unique().sort()
-            mergeUser([
-              userId: safeProperty(user, 'userId'),
-              source: safeProperty(user, 'source'),
-              firstName: safeProperty(user, 'firstName'),
-              lastName: safeProperty(user, 'lastName'),
-              emailAddress: safeProperty(user, 'emailAddress'),
-              status: safeProperty(user, 'status'),
-              roles: localRoles,
-              attributes: externalRoles.isEmpty() ? [:] : [groups: externalRoles]
-            ])
           }
         }
       } catch (e) {

@@ -32,6 +32,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.security.Security;
@@ -43,6 +44,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Supplier;
 import org.bouncycastle.bcpg.ArmoredOutputStream;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
@@ -793,12 +795,32 @@ public class NexusApiMigrationService {
             mismatches);
   }
 
-  private ValidationCheck validateSecurityObjects(NexusSecurityExport export) {
+  ValidationCheck validateSecurityObjects(NexusSecurityExport export) {
     NexusSecurityMigrationBatch batch = new NexusSecurityExportReader().read(export);
     List<String> missing = new ArrayList<>();
     for (NexusUser user : batch.users()) {
-      if (securityDao.findUser(user.source(), user.id()).isEmpty()) {
+      Optional<SecurityUserRecord> stored = securityDao.findUser(user.source(), user.id());
+      if (stored.isEmpty()) {
         missing.add("user:" + user.source() + "/" + user.id());
+        continue;
+      }
+      Map<String, Object> storedAttributes = stored.get().attributes() == null
+          ? Map.of()
+          : stored.get().attributes();
+      List<String> expectedGroups = securityRelationshipValues(user.attributes().get("groups"));
+      List<String> actualGroups = securityRelationshipValues(storedAttributes.get("groups"));
+      if (!expectedGroups.equals(actualGroups)) {
+        missing.add("user-groups:" + user.source() + "/" + user.id()
+            + " expected " + expectedGroups + " but found " + actualGroups);
+      }
+    }
+    for (NexusUserRoleMapping mapping : batch.userRoleMappings()) {
+      List<String> expectedRoles = securityRelationshipValues(mapping.roles());
+      List<String> actualRoles = securityRelationshipValues(
+          securityDao.listUserRoleIds(mapping.source(), mapping.userId()));
+      if (!expectedRoles.equals(actualRoles)) {
+        missing.add("user-roles:" + mapping.source() + "/" + mapping.userId()
+            + " expected " + expectedRoles + " but found " + actualRoles);
       }
     }
     batch.roles().forEach(role -> {
@@ -821,7 +843,7 @@ public class NexusApiMigrationService {
             "security",
             "objects",
             ValidationStatus.PASS.name(),
-            "All source users, roles, privileges, and API keys are present in target.",
+            "All source security objects and user-role relationships are present in target.",
             List.of(
                 "users=" + batch.users().size(),
                 "roles=" + batch.roles().size(),
@@ -831,8 +853,25 @@ public class NexusApiMigrationService {
             "security",
             "objects",
             ValidationStatus.FAIL.name(),
-            "Some source security objects are missing in target.",
+            "Some source security objects or user-role relationships are missing in target.",
             missing);
+  }
+
+  private static List<String> securityRelationshipValues(Object source) {
+    LinkedHashSet<String> values = new LinkedHashSet<>();
+    if (source instanceof Iterable<?> iterable) {
+      iterable.forEach(value -> addSecurityRelationshipValue(values, value));
+    } else {
+      addSecurityRelationshipValue(values, source);
+    }
+    return values.stream().sorted().toList();
+  }
+
+  private static void addSecurityRelationshipValue(Set<String> values, Object value) {
+    String text = value == null ? null : String.valueOf(value).trim();
+    if (text != null && !text.isEmpty()) {
+      values.add(text);
+    }
   }
 
   private ValidationCheck validateApiKeyExport(NexusInventory inventory) {
