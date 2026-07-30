@@ -225,6 +225,7 @@ public class PypiProxyService {
         if (status >= 200 && status < 300) {
           negativeCache.invalidate(runtime, path);
           PypiAssetWriter.PackageCoordinate coordinate = coordinateFromPackagePath(path);
+          String kind = path.endsWith(".asc") ? "package-signature" : "package";
           Map<String, Object> attrs = new LinkedHashMap<>();
           attrs.put("name", coordinate.originalName());
           attrs.put("normalizedName", coordinate.normalizedName());
@@ -238,7 +239,7 @@ public class PypiProxyService {
               path,
               result.body(),
               result.contentType(),
-              path.endsWith(".asc") ? "package-signature" : "package",
+              kind,
               coordinate,
               cacheAttributes(runtime, cacheType, now, attrs),
               remoteAttrs(result),
@@ -280,6 +281,7 @@ public class PypiProxyService {
 
   private PypiResponse responseFromStored(PypiAssetWriter.Stored stored, boolean headOnly) {
     try {
+      reader.beforeRead(stored.asset().id(), stored.blob().id());
       if (headOnly) {
         stored.discardBody();
         return PypiResponse.noBody(200, stored.blob().size(), stored.asset().contentType(),

@@ -89,6 +89,12 @@ public class DockerRegistryDaoAdapter implements DockerRegistryDao {
   }
 
   @Override
+  public List<Long> listManifestAssetIdsReferencingDigest(
+      long arg0, String arg1, int arg2) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
   public List<BrowseImageRow> listBrowseImages(long arg0, String arg1) {
     throw new UnsupportedOperationException();
   }

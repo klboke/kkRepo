@@ -7,9 +7,11 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.core.BlobStorage;
@@ -27,6 +29,7 @@ import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -39,6 +42,7 @@ import org.junit.jupiter.api.Test;
 
 class GoProxyServiceTest {
   private static final String PATH = "example.com/acme/demo/@v/v1.2.3.mod";
+  private static final String ZIP_PATH = "example.com/acme/demo/@v/v1.2.3.zip";
 
   @Test
   void servesFreshCachedBodyAndMissingPhysicalBlob() throws Exception {
@@ -178,6 +182,10 @@ class GoProxyServiceTest {
   }
 
   private static Fixture fixture() {
+    return fixture(null);
+  }
+
+  private static Fixture fixture(ArtifactDownloadPolicy downloadPolicy) {
     AssetDao assetDao = mock(AssetDao.class);
     BlobStorageRegistry registry = mock(BlobStorageRegistry.class);
     GoAssetWriter writer = mock(GoAssetWriter.class);
@@ -189,7 +197,8 @@ class GoProxyServiceTest {
     return new Fixture(
         assetDao, registry, writer, proxyStateDao, fetcher, negativeCache, cache, storage,
         new GoProxyService(
-            assetDao, registry, writer, proxyStateDao, fetcher, negativeCache, cache));
+            assetDao, registry, writer, proxyStateDao, fetcher, negativeCache, cache,
+            downloadPolicy));
   }
 
   private static RepositoryRuntime runtime(int maxAgeMinutes, Long blobStoreId) {

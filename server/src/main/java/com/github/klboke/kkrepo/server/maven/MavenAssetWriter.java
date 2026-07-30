@@ -287,9 +287,8 @@ public class MavenAssetWriter {
           .map(ComponentRecord::id).orElse(null);
     }
 
-    Map<String, Object> attrs = cacheAttributes(runtime, path, now, Map.of(
-        "sourceRepositoryId", source.repositoryId(),
-        "sourcePath", source.path()));
+    Map<String, Object> attrs =
+        cacheAttributes(runtime, path, now, groupCacheSourceAttributes(source));
     AssetBlobRecord blob = source.toBlobRecord();
     AssetRecord persistedAsset;
     Optional<AssetRecord> existing = assetDao.findAssetByPath(runtime.id(), path.path());
@@ -335,6 +334,69 @@ public class MavenAssetWriter {
     browseNodeDao.upsertPathAncestors(runtime.id(), path.path(), persistedAsset.id(), componentId);
     assetMetadataCache.evictAfterCommit(runtime.id(), path.path());
     return CachedAssetMetadata.of(persistedAsset, blob);
+  }
+
+  /**
+   * Carries the concrete hosted/proxy asset through every group-cache layer.
+   *
+   * <p>Nested Maven groups otherwise turn the cache row itself into the apparent source. Security
+   * policy is materialized against the concrete member asset, so flattening this identity lets a
+   * later cache hit evaluate the same asset and every group on the request path without another
+   * member fan-out.
+   */
+  static Map<String, Object> groupCacheSourceAttributes(CachedAssetMetadata source) {
+    Map<String, Object> sourceAttributes =
+        source.attributes() == null ? Map.of() : source.attributes();
+    Long inheritedRepositoryId = positiveLong(sourceAttributes.get("sourceRepositoryId"));
+    String inheritedPath = text(sourceAttributes.get("sourcePath"));
+    boolean inheritedGroupSource =
+        Boolean.TRUE.equals(sourceAttributes.get("mavenGroupCache"))
+            || (inheritedRepositoryId != null
+                && inheritedPath != null
+                && !inheritedPath.isBlank());
+    Long inheritedAssetId = inheritedGroupSource
+        ? positiveLong(sourceAttributes.get("sourceAssetId"))
+        : null;
+    Long inheritedBlobId = inheritedGroupSource
+        ? positiveLong(sourceAttributes.get("sourceBlobId"))
+        : null;
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("mavenGroupCache", true);
+    attributes.put(
+        "sourceAssetId", inheritedAssetId == null ? source.assetId() : inheritedAssetId);
+    Long sourceBlobId = inheritedBlobId == null ? source.blobId() : inheritedBlobId;
+    if (sourceBlobId != null) {
+      attributes.put("sourceBlobId", sourceBlobId);
+    }
+    attributes.put(
+        "sourceRepositoryId",
+        !inheritedGroupSource || inheritedRepositoryId == null
+            ? source.repositoryId()
+            : inheritedRepositoryId);
+    attributes.put(
+        "sourcePath",
+        !inheritedGroupSource || inheritedPath == null || inheritedPath.isBlank()
+            ? source.path()
+            : inheritedPath);
+    return attributes;
+  }
+
+  private static Long positiveLong(Object value) {
+    if (value instanceof Number number) {
+      long parsed = number.longValue();
+      return parsed > 0 ? parsed : null;
+    }
+    if (value == null) return null;
+    try {
+      long parsed = Long.parseLong(value.toString());
+      return parsed > 0 ? parsed : null;
+    } catch (NumberFormatException ignored) {
+      return null;
+    }
+  }
+
+  private static String text(Object value) {
+    return value == null ? null : value.toString();
   }
 
   private void notifyAssetStored(RepositoryRuntime runtime, MavenPath path) {

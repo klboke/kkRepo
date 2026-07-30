@@ -2,7 +2,6 @@ package com.github.klboke.kkrepo.server.docker;
 
 import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
-import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerUploadDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerUploadChunkRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerUploadSessionRecord;
@@ -34,7 +33,6 @@ class DockerUploadCleanupWorker {
   private static final Logger log = LoggerFactory.getLogger(DockerUploadCleanupWorker.class);
 
   private final DockerUploadDao uploadDao;
-  private final DockerAuthTokenDao authTokenDao;
   private final RepositoryRuntimeRegistry runtimeRegistry;
   private final BlobStorageRegistry blobStorageRegistry;
   private final TransactionTemplate transactionTemplate;
@@ -45,7 +43,6 @@ class DockerUploadCleanupWorker {
 
   DockerUploadCleanupWorker(
       DockerUploadDao uploadDao,
-      DockerAuthTokenDao authTokenDao,
       RepositoryRuntimeRegistry runtimeRegistry,
       BlobStorageRegistry blobStorageRegistry,
       PlatformTransactionManager transactionManager,
@@ -53,7 +50,6 @@ class DockerUploadCleanupWorker {
       @Value("${kkrepo.docker.cleanup.batch-size:64}") int batchSize,
       @Value("${kkrepo.docker.cleanup.lease-seconds:300}") long leaseSeconds) {
     this.uploadDao = uploadDao;
-    this.authTokenDao = authTokenDao;
     this.runtimeRegistry = runtimeRegistry;
     this.blobStorageRegistry = blobStorageRegistry;
     this.transactionTemplate = new TransactionTemplate(transactionManager);
@@ -72,10 +68,7 @@ class DockerUploadCleanupWorker {
     }
     try {
       Instant now = Instant.now();
-      transactionTemplate.executeWithoutResult(status -> {
-        uploadDao.expireSessions(now);
-        authTokenDao.deleteExpired(now);
-      });
+      transactionTemplate.executeWithoutResult(status -> uploadDao.expireSessions(now));
       cleanupUploadSessions(now);
     } catch (RuntimeException e) {
       log.warn("Docker upload cleanup failed; will retry next cycle", e);

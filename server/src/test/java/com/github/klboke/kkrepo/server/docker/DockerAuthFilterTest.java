@@ -1,7 +1,10 @@
 package com.github.klboke.kkrepo.server.docker;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -22,6 +25,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -171,7 +175,8 @@ class DockerAuthFilterTest {
   void bearerTokenScopeFailureReturnsDockerChallengeInsteadOfEscapingAsServerError() throws Exception {
     RepositoryRuntime runtime = dockerProxy("docker-live-proxy");
     when(registry.resolve("docker-live-proxy")).thenReturn(Optional.of(runtime));
-    when(authService.authenticateBearer(anyString(), anyString(), anyString(), anyString()))
+    when(authService.authenticateBearer(
+        anyString(), anyLong(), anyString(), anyString(), anyString(), any()))
         .thenThrow(new DockerProtocolException(DockerErrorCode.DENIED, "token scope does not allow pull", 403));
     when(authService.challenge(
         "http://127.0.0.1:18090/service/rest/v1/docker/token",
@@ -240,8 +245,13 @@ class DockerAuthFilterTest {
     RepositoryRuntime runtime = dockerProxy("docker-live-proxy");
     when(registry.resolve("docker-live-proxy")).thenReturn(Optional.of(runtime));
     when(authService.authenticateBearer(
-        "valid-token", "docker-live-proxy", "library/alpine", "pull"))
-        .thenReturn(Optional.of(subject));
+        eq("valid-token"),
+        eq(runtime.id()),
+        eq("docker-live-proxy"),
+        eq("library/alpine"),
+        eq("pull"),
+        any()))
+        .thenReturn(userBearer(subject));
     when(accessDecisionService.decide(org.mockito.ArgumentMatchers.eq(subject.permissionSubject()), org.mockito.ArgumentMatchers.any()))
         .thenReturn(AccessDecision.allow());
     DockerAuthFilter filter = new DockerAuthFilter(
@@ -260,12 +270,91 @@ class DockerAuthFilterTest {
   }
 
   @Test
+  void scannerNamedUserSourceStillRequiresRepositoryPermission() throws Exception {
+    RepositoryRuntime runtime = dockerProxy("docker-live-proxy");
+    when(registry.resolve("docker-live-proxy")).thenReturn(Optional.of(runtime));
+    PermissionSubject realmPermissions = new PermissionSubject(
+        DockerAuthService.SCANNER_SUBJECT_SOURCE, "alice", Set.of(), "ordinary-token");
+    AuthenticatedSubject realmUser = new AuthenticatedSubject(
+        DockerAuthService.SCANNER_SUBJECT_SOURCE,
+        "alice",
+        "realm-1",
+        null,
+        realmPermissions);
+    when(authService.authenticateBearer(
+        eq("ordinary-token"),
+        eq(runtime.id()),
+        eq("docker-live-proxy"),
+        eq("library/alpine"),
+        eq("pull"),
+        any()))
+        .thenReturn(userBearer(realmUser));
+    when(accessDecisionService.decide(
+        org.mockito.ArgumentMatchers.eq(realmPermissions),
+        org.mockito.ArgumentMatchers.any()))
+        .thenReturn(AccessDecision.deny("missing read"));
+    DockerAuthFilter filter = new DockerAuthFilter(
+        registry, authService, mock(SecurityAuthenticationService.class), accessDecisionService,
+        forwardedHeaderPolicy);
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("GET", "/v2/docker-live-proxy/library/alpine/manifests/latest");
+    request.addHeader(HttpHeaders.AUTHORIZATION, "Bearer ordinary-token");
+    MockHttpServletResponse response = new MockHttpServletResponse();
+
+    filter.doFilter(request, response, new MockFilterChain());
+
+    assertEquals(401, response.getStatus());
+    verify(accessDecisionService).decide(
+        org.mockito.ArgumentMatchers.eq(realmPermissions),
+        org.mockito.ArgumentMatchers.any());
+  }
+
+  @Test
+  void internalScannerGrantCarriesTheTrustedPolicyBypassMarker() throws Exception {
+    RepositoryRuntime runtime = dockerProxy("docker-live-proxy");
+    when(registry.resolve("docker-live-proxy")).thenReturn(Optional.of(runtime));
+    when(authService.authenticateBearer(
+        eq("scanner-token"),
+        eq(runtime.id()),
+        eq("docker-live-proxy"),
+        eq("library/alpine"),
+        eq("pull"),
+        any()))
+        .thenReturn(Optional.of(
+            new DockerAuthService.BearerAuthentication(subject, true)));
+    DockerAuthFilter filter = new DockerAuthFilter(
+        registry, authService, mock(SecurityAuthenticationService.class), accessDecisionService,
+        forwardedHeaderPolicy);
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("GET", "/v2/docker-live-proxy/library/alpine/manifests/latest");
+    request.addHeader(HttpHeaders.AUTHORIZATION, "Bearer scanner-token");
+    MockHttpServletResponse response = new MockHttpServletResponse();
+
+    filter.doFilter(request, response, new MockFilterChain());
+
+    assertEquals(200, response.getStatus());
+    assertEquals(
+        true,
+        request.getAttribute(ArtifactDownloadPolicy.INTERNAL_SCANNER_REQUEST_ATTRIBUTE));
+    verify(
+        accessDecisionService,
+        never()).decide(
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any());
+  }
+
+  @Test
   void bearerSubjectRolesAreUsedForRepositoryPermissionCheck() throws Exception {
     RepositoryRuntime runtime = dockerProxy("docker-live-proxy");
     when(registry.resolve("docker-live-proxy")).thenReturn(Optional.of(runtime));
     when(authService.authenticateBearer(
-        "valid-token", "docker-live-proxy", "library/alpine", "push"))
-        .thenReturn(Optional.of(subject));
+        eq("valid-token"),
+        eq(runtime.id()),
+        eq("docker-live-proxy"),
+        eq("library/alpine"),
+        eq("push"),
+        any()))
+        .thenReturn(userBearer(subject));
     when(accessDecisionService.decide(
         org.mockito.ArgumentMatchers.eq(permissionSubject),
         org.mockito.ArgumentMatchers.any()))
@@ -293,8 +382,13 @@ class DockerAuthFilterTest {
     RepositoryRuntime runtime = dockerProxy("docker-live-proxy");
     when(registry.resolve("docker-live-proxy")).thenReturn(Optional.of(runtime));
     when(authService.authenticateBearer(
-        "valid-token", "docker-live-proxy", "library/alpine", "push"))
-        .thenReturn(Optional.of(subject));
+        eq("valid-token"),
+        eq(runtime.id()),
+        eq("docker-live-proxy"),
+        eq("library/alpine"),
+        eq("push"),
+        any()))
+        .thenReturn(userBearer(subject));
     when(accessDecisionService.decide(org.mockito.ArgumentMatchers.eq(permissionSubject), org.mockito.ArgumentMatchers.any()))
         .thenReturn(AccessDecision.allow());
     DockerAuthFilter filter = new DockerAuthFilter(
@@ -317,8 +411,13 @@ class DockerAuthFilterTest {
     RepositoryRuntime runtime = dockerProxy("docker-live-proxy");
     when(registry.resolve("docker-live-proxy")).thenReturn(Optional.of(runtime));
     when(authService.authenticateBearer(
-        "valid-token", "docker-live-proxy", "library/alpine", "push"))
-        .thenReturn(Optional.of(subject));
+        eq("valid-token"),
+        eq(runtime.id()),
+        eq("docker-live-proxy"),
+        eq("library/alpine"),
+        eq("push"),
+        any()))
+        .thenReturn(userBearer(subject));
     when(accessDecisionService.decide(org.mockito.ArgumentMatchers.eq(permissionSubject), org.mockito.ArgumentMatchers.any()))
         .thenReturn(AccessDecision.allow());
     DockerAuthFilter filter = new DockerAuthFilter(
@@ -341,8 +440,13 @@ class DockerAuthFilterTest {
     RepositoryRuntime runtime = dockerProxy("docker-live-proxy");
     when(registry.resolve("docker-live-proxy")).thenReturn(Optional.of(runtime));
     when(authService.authenticateBearer(
-        "valid-token", "docker-live-proxy", null, "catalog"))
-        .thenReturn(Optional.of(subject));
+        eq("valid-token"),
+        eq(runtime.id()),
+        eq("docker-live-proxy"),
+        eq(null),
+        eq("catalog"),
+        any()))
+        .thenReturn(userBearer(subject));
     when(accessDecisionService.decide(org.mockito.ArgumentMatchers.eq(permissionSubject), org.mockito.ArgumentMatchers.any()))
         .thenReturn(AccessDecision.allow());
     DockerAuthFilter filter = new DockerAuthFilter(
@@ -422,6 +526,11 @@ class DockerAuthFilterTest {
     ArgumentCaptor<RepositoryPermission> captor = ArgumentCaptor.forClass(RepositoryPermission.class);
     verify(accessDecisionService).decide(org.mockito.ArgumentMatchers.eq(permissionSubject), captor.capture());
     return captor.getValue();
+  }
+
+  private static Optional<DockerAuthService.BearerAuthentication> userBearer(
+      AuthenticatedSubject subject) {
+    return Optional.of(new DockerAuthService.BearerAuthentication(subject, false));
   }
 
   private static RepositoryRuntime dockerProxy(String name) {

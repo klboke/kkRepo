@@ -7,6 +7,8 @@ import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -16,22 +18,38 @@ import org.springframework.stereotype.Component;
 class CargoAssetReader {
   private final AssetDao assetDao;
   private final BlobStorageRegistry blobStorageRegistry;
+  private final ArtifactDownloadPolicy downloadPolicy;
 
   CargoAssetReader(AssetDao assetDao, BlobStorageRegistry blobStorageRegistry) {
+    this(assetDao, blobStorageRegistry, null);
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  CargoAssetReader(
+      AssetDao assetDao,
+      BlobStorageRegistry blobStorageRegistry,
+      ArtifactDownloadPolicy downloadPolicy) {
     this.assetDao = assetDao;
     this.blobStorageRegistry = blobStorageRegistry;
+    this.downloadPolicy = downloadPolicy;
   }
 
   MavenResponse serve(AssetRecord asset, boolean headOnly, String path) {
     AssetBlobRecord blob = asset.assetBlobId() == null
         ? null
         : assetDao.findBlobById(asset.assetBlobId()).orElse(null);
-    return serveBlob(blob, asset.contentType(), asset.lastUpdatedAt(), headOnly, path);
+    return serveBlob(
+        asset.id(), blob, asset.contentType(), asset.lastUpdatedAt(), headOnly, path);
   }
 
   MavenResponse serveSnapshot(CachedAssetMetadata snapshot, boolean headOnly, String path) {
-    return serveBlob(snapshot.toBlobRecord(), snapshot.contentType(), snapshot.lastUpdatedAt(),
-        headOnly, path);
+    return serveBlob(
+        snapshot.assetId(),
+        snapshot.toBlobRecord(),
+        snapshot.contentType(),
+        snapshot.lastUpdatedAt(),
+        headOnly,
+        path);
   }
 
   boolean exists(CachedAssetMetadata snapshot) {
@@ -48,6 +66,7 @@ class CargoAssetReader {
     if (blob == null) {
       throw new CargoExceptions.CargoNotFoundException(path);
     }
+    beforeRead(snapshot.assetId(), blob.id());
     try (var in = blobStorageRegistry.forBlobStoreId(blob.blobStoreId()).get(
         BlobReferenceCodec.reference(blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size()))
         .orElseThrow(() -> new CargoExceptions.CargoNotFoundException(path))) {
@@ -57,11 +76,17 @@ class CargoAssetReader {
     }
   }
 
-  private MavenResponse serveBlob(AssetBlobRecord blob, String contentType, Instant lastModified,
-      boolean headOnly, String path) {
+  private MavenResponse serveBlob(
+      long assetId,
+      AssetBlobRecord blob,
+      String contentType,
+      Instant lastModified,
+      boolean headOnly,
+      String path) {
     if (blob == null) {
       throw new CargoExceptions.CargoNotFoundException(path);
     }
+    beforeRead(assetId, blob.id());
     var storage = blobStorageRegistry.forBlobStoreId(blob.blobStoreId());
     var reference = BlobReferenceCodec.reference(
         blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size());
@@ -76,5 +101,9 @@ class CargoAssetReader {
         () -> storage.get(reference)
             .orElseThrow(() -> new CargoExceptions.CargoNotFoundException(path)),
         blob.size(), contentType, etag, lastModified);
+  }
+
+  void beforeRead(long assetId, long blobId) {
+    if (downloadPolicy != null) downloadPolicy.beforeRead(assetId, blobId);
   }
 }

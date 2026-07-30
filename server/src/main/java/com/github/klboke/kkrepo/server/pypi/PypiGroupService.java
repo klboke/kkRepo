@@ -148,6 +148,7 @@ public class PypiGroupService {
 
   private PypiResponse responseFromStored(PypiAssetWriter.Stored stored, boolean headOnly) {
     try {
+      reader.beforeRead(stored.asset().id(), stored.blob().id());
       if (headOnly) {
         stored.discardBody();
         return PypiResponse.noBody(200, stored.blob().size(), stored.asset().contentType(),

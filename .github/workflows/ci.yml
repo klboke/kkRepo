@@ -43,7 +43,7 @@ jobs:
           docker compose -f docker-compose.quickstart-postgresql.yml config
 
       - name: Run server tests
-        run: mvn -B -ntp -pl server -am -Dsurefire.failIfNoSpecifiedTests=false verify
+        run: mvn -B -ntp -pl server,scanner-adapter -am -Dsurefire.failIfNoSpecifiedTests=false verify
 
       - name: Run non-live compatibility tests
         run: mvn -B -ntp -pl compat-test -am -Dtest=MavenMetadataMergeCompatibilityTest,MavenWritePolicyCompatibilityTest,NpmProtocolCompatibilityTest -Dsurefire.failIfNoSpecifiedTests=false verify
@@ -131,9 +131,16 @@ jobs:
           scripts/ci/check-flyway-parity.sh
           docker compose -f docker-compose.quickstart.yml config
           docker compose -f docker-compose.quickstart-postgresql.yml config
+          scripts/ci/check-compose-scanner-isolation.sh
           docker compose -f docker-compose.compat-postgres.yml --profile kkrepo-postgresql config
       - uses: azure/setup-helm@v5
-      - run: helm lint deploy/helm/kkrepo
+      - name: Verify Helm rendering and scanner egress isolation
+        run: |
+          helm lint deploy/helm/kkrepo
+          helm lint deploy/helm/kkrepo \
+            --set securityScanning.enabled=true \
+            --set securityScanning.serviceCredential.existingSecret=kkrepo-scanner
+          scripts/ci/check-helm-scanner-isolation.sh
 
   dev-jar-deploy-contract:
     name: dev-jar-deploy-contract

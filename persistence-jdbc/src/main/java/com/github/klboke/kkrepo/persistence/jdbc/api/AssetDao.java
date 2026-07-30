@@ -24,6 +24,14 @@ public interface AssetDao {
 
   Optional<AssetBlobRecord> recoverDeletedBlobBySha256(long blobStoreId, String sha256, long size);
 
+  /**
+   * Restores one known soft-deleted blob row while holding its GC fence.
+   *
+   * <p>The caller must have just materialized the exact object identity represented by the row
+   * and publish durable ownership in the same transaction.
+   */
+  Optional<AssetBlobRecord> restoreDeletedBlobById(long assetBlobId);
+
   long insertAsset(AssetRecord record);
 
   /**

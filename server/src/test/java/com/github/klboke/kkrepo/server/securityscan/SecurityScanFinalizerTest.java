@@ -1,0 +1,619 @@
+package com.github.klboke.kkrepo.server.securityscan;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.AssetPolicyState;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.AssetSecurityState;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.RepositoryScanConfig;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanFinding;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanPolicy;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanProfile;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanRun;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanTask;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanWaiver;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.Sbom;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.WaiverRevision;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.EnforcementMode;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.OciPlatformPolicy;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyAction;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyDecision;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanCompleteness;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanState;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.SubjectKind;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+
+class SecurityScanFinalizerTest {
+  @Test
+  void retriesRetryableFailuresAndFencesLeaseLoss() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    SecurityScanFinalizer finalizer = finalizer(scans);
+    ScanTask task = task(1, 3);
+    Instant nextAttemptAt = Instant.now().plusSeconds(30);
+    when(scans.retryTask(
+            eq(5L),
+            eq("lease"),
+            eq(nextAttemptAt),
+            eq("SCANNER_BUSY"),
+            eq("busy"),
+            any(Instant.class)))
+        .thenReturn(true, false);
+
+    finalizer.failCurrentTask(task, "SCANNER_BUSY", "busy", true, nextAttemptAt);
+    assertThrows(
+        SecurityScanFinalizer.LostSecurityScanLeaseException.class,
+        () -> finalizer.failCurrentTask(task, "SCANNER_BUSY", "busy", true, nextAttemptAt));
+  }
+
+  @Test
+  void terminalFailurePublishesBlockingAssetStateAndAuditTransition() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    stubWaiverRevision(scans);
+    SecurityScanAuditService audit = mock(SecurityScanAuditService.class);
+    SecurityScanDocumentPersistence documents = mock(SecurityScanDocumentPersistence.class);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    when(repositories.findById(1L)).thenReturn(Optional.of(hostedRepository(1L)));
+    SecurityScanFinalizer finalizer =
+        new SecurityScanFinalizer(
+            scans, repositories, audit, documents);
+    ScanTask task = task(3, 3);
+    RepositoryScanConfig config = config(1L, 101L);
+    AssetSecurityState current = assetState(PolicyDecision.ALLOW);
+    when(scans.findRepositoryConfig(1L)).thenReturn(Optional.of(config));
+    when(scans.findAssetStateForUpdate(10L, 1L)).thenReturn(Optional.of(current));
+    when(scans.upsertAssetStateIfCurrent(any())).thenAnswer(invocation -> invocation.getArgument(0));
+    when(scans.failTask(eq(5L), eq("lease"), eq("ENGINE_FAILED"), eq("boom"), any(Instant.class)))
+        .thenReturn(true);
+
+    finalizer.failCurrentTask(task, "ENGINE_FAILED", "boom", false, Instant.now());
+
+    ArgumentCaptor<AssetSecurityState> state =
+        ArgumentCaptor.forClass(AssetSecurityState.class);
+    verify(scans).upsertAssetStateIfCurrent(state.capture());
+    assertEquals(ScanState.FAILED, state.getValue().scanState());
+    assertEquals(PolicyDecision.BLOCK_SCAN_FAILED, state.getValue().policyDecision());
+    assertEquals("ENGINE_FAILED", state.getValue().policyReasonCode());
+    verify(audit).recordSystem(eq("POLICY_STATE_CHANGED"), eq(1L), any(Map.class));
+    verify(documents).releaseOwner(5L);
+  }
+
+  @Test
+  void terminalFailureAllowsWhenConfiguredAndReportsLostCompletionLease() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    SecurityScanDocumentPersistence documents = mock(SecurityScanDocumentPersistence.class);
+    stubWaiverRevision(scans);
+    when(repositories.findById(1L)).thenReturn(Optional.of(hostedRepository(1L)));
+    SecurityScanFinalizer finalizer = new SecurityScanFinalizer(
+        scans, repositories, mock(SecurityScanAuditService.class), documents);
+    ScanTask task = task(3, 3);
+    RepositoryScanConfig config = new RepositoryScanConfig(
+        1L, true, 1L, true, true, EnforcementMode.AUDIT,
+        PolicyAction.BLOCK, PolicyAction.ALLOW, PolicyAction.BLOCK,
+        null, null, 1L, Instant.EPOCH, Instant.EPOCH);
+    when(scans.findRepositoryConfig(1L)).thenReturn(Optional.of(config));
+    when(scans.findAssetStateForUpdate(10L, 1L))
+        .thenReturn(Optional.of(assetState(PolicyDecision.BLOCK_VULNERABILITY)));
+    when(scans.upsertAssetStateIfCurrent(any())).thenAnswer(invocation -> invocation.getArgument(0));
+    when(scans.failTask(eq(5L), eq("lease"), eq("FAILED"), eq("boom"), any(Instant.class)))
+        .thenReturn(false);
+
+    assertThrows(
+        SecurityScanFinalizer.LostSecurityScanLeaseException.class,
+        () -> finalizer.failCurrentTask(task, "FAILED", "boom", false, Instant.now()));
+
+    ArgumentCaptor<AssetSecurityState> state =
+        ArgumentCaptor.forClass(AssetSecurityState.class);
+    verify(scans).upsertAssetStateIfCurrent(state.capture());
+    assertEquals(PolicyDecision.ALLOW, state.getValue().policyDecision());
+    verify(documents, never()).releaseOwner(anyLong());
+  }
+
+  @Test
+  void olderSnapshotFailureDoesNotReplaceANewerCompletedRun() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    SecurityScanAuditService audit = mock(SecurityScanAuditService.class);
+    SecurityScanDocumentPersistence documents = mock(SecurityScanDocumentPersistence.class);
+    stubWaiverRevision(scans);
+    when(repositories.findById(1L)).thenReturn(Optional.of(hostedRepository(1L)));
+    SecurityScanFinalizer finalizer =
+        new SecurityScanFinalizer(scans, repositories, audit, documents);
+    Instant now = Instant.now();
+    ScanTask task = task(3, 3);
+    when(task.requestedScannerSnapshotId()).thenReturn(40L);
+    RepositoryScanConfig config = config(1L, 101L);
+    ScanRun newerRun = run(31L, 6L, 41L, now);
+    AssetSecurityState newerState = new AssetSecurityState(
+        10L,
+        1L,
+        1L,
+        new byte[] {1},
+        newerRun.id(),
+        ScanState.COMPLETE,
+        ScanCompleteness.COMPLETE,
+        true,
+        Severity.CRITICAL,
+        Map.of("critical", 1),
+        101L,
+        1L,
+        PolicyDecision.BLOCK_VULNERABILITY,
+        "NEWER_SNAPSHOT",
+        now.plusSeconds(3600),
+        now,
+        2L);
+    when(scans.findRepositoryConfig(1L)).thenReturn(Optional.of(config));
+    when(scans.findAssetStateForUpdate(10L, 1L)).thenReturn(Optional.of(newerState));
+    when(scans.taskProjectionIsSuperseded(5L)).thenReturn(true);
+    when(scans.failTask(eq(5L), eq("lease"), eq("ENGINE_FAILED"), eq("boom"), any()))
+        .thenReturn(true);
+
+    finalizer.failCurrentTask(
+        task, "ENGINE_FAILED", "boom", false, now.plusSeconds(30));
+
+    verify(scans, never()).upsertAssetStateIfCurrent(any());
+    verify(scans, never()).upsertAssetPolicyStateIfCurrent(any());
+    verify(audit, never()).recordSystem(eq("POLICY_STATE_CHANGED"), anyLong(), any(Map.class));
+    verify(scans).failTask(eq(5L), eq("lease"), eq("ENGINE_FAILED"), eq("boom"), any());
+    verify(documents).releaseOwner(5L);
+  }
+
+  @Test
+  void newerPendingTaskPreventsOlderSuccessfulProjection() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    SecurityScanAuditService audit = mock(SecurityScanAuditService.class);
+    SecurityScanDocumentPersistence documents = mock(SecurityScanDocumentPersistence.class);
+    stubWaiverRevision(scans);
+    SecurityScanFinalizer finalizer =
+        new SecurityScanFinalizer(scans, repositories, audit, documents);
+    Instant now = Instant.now();
+    ScanTask task = task(1, 3);
+    ScanProfile profile = profile(now);
+    RepositoryScanConfig config = config(1L, 101L);
+    ScanRun run = run(now);
+    Sbom sbom = mock(Sbom.class);
+    when(sbom.subjectKind()).thenReturn(SubjectKind.ASSET_BLOB);
+    when(scans.insertRunOrFindExisting(run)).thenReturn(run);
+    when(scans.findSbom(run.sbomId())).thenReturn(Optional.of(sbom));
+    when(scans.findPolicy(101L)).thenReturn(Optional.of(policy(101L, Severity.HIGH, now)));
+    when(scans.taskProjectionIsSuperseded(5L)).thenReturn(true);
+    when(scans.completeTask(eq(5L), eq("lease"), any())).thenReturn(true);
+
+    ScanRun completed = finalizer.finalizeRun(
+        task, profile, config, "sha256:" + "a".repeat(64), run, List.of());
+
+    assertEquals(run, completed);
+    verify(scans, never()).upsertAssetStateIfCurrent(any());
+    verify(scans, never()).upsertAssetPolicyStateIfCurrent(any());
+    verify(audit, never()).recordSystem(eq("POLICY_STATE_CHANGED"), anyLong(), any(Map.class));
+    verify(scans).completeTask(eq(5L), eq("lease"), any());
+    verify(documents).releaseOwner(5L);
+  }
+
+  @Test
+  void materializesIndependentMemberAndGroupPolicyContexts() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    stubWaiverRevision(scans);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    SecurityScanAuditService audit = mock(SecurityScanAuditService.class);
+    SecurityScanFinalizer finalizer = new SecurityScanFinalizer(
+        scans, repositories, audit, mock(SecurityScanDocumentPersistence.class));
+    Instant now = Instant.now();
+    ScanTask task = mock(ScanTask.class);
+    when(task.id()).thenReturn(5L);
+    when(task.repositoryId()).thenReturn(1L);
+    when(task.assetId()).thenReturn(10L);
+    when(task.contentGeneration()).thenReturn(1L);
+    when(task.leaseToken()).thenReturn("lease");
+    ScanProfile profile = profile(now);
+    RepositoryScanConfig memberConfig = config(1L, 101L);
+    RepositoryScanConfig groupConfig = config(2L, 102L);
+    ScanPolicy memberPolicy = policy(101L, Severity.HIGH, now);
+    ScanPolicy groupPolicy = policy(102L, Severity.CRITICAL, now);
+    ScanRun run = run(now);
+    ScanFinding finding = finding(now);
+    ScanFinding otherFinding = otherFinding(now);
+    ScanWaiver exactWaiver = new ScanWaiver(
+        70L, "FINDING", 1L, 10L, finding.id(), null, null, Map.of(),
+        "Temporary exception", null, null, "admin", "admin",
+        now.plusSeconds(3600), now, now);
+
+    when(scans.insertRunOrFindExisting(run)).thenReturn(run);
+    when(scans.listFindings(eq(null), eq(30L), eq(null), eq(0L), eq(1000)))
+        .thenReturn(List.of(finding, otherFinding));
+    when(scans.listActiveWaivers(
+        anyLong(), eq(10L), any(Instant.class), eq(0L), eq(1000)))
+        .thenReturn(List.of(exactWaiver));
+    when(scans.findPolicy(101L)).thenReturn(Optional.of(memberPolicy));
+    when(scans.findPolicy(102L)).thenReturn(Optional.of(groupPolicy));
+    when(scans.findRepositoryConfig(1L)).thenReturn(Optional.of(memberConfig));
+    when(scans.findRepositoryConfig(2L)).thenReturn(Optional.of(groupConfig));
+    when(scans.upsertAssetStateIfCurrent(any())).thenAnswer(invocation -> invocation.getArgument(0));
+    when(scans.upsertAssetPolicyStateIfCurrent(any()))
+        .thenAnswer(invocation -> invocation.getArgument(0));
+    when(scans.completeTask(eq(5L), eq("lease"), any(Instant.class))).thenReturn(true);
+    RepositoryRecord group = new RepositoryRecord(
+        2L, "public", RepositoryFormat.MAVEN2, RepositoryType.GROUP,
+        "maven2-group", true, null, null, null, null, null, null, true, Map.of());
+    when(repositories.listGroupsContaining(1L)).thenReturn(List.of(group));
+    when(repositories.listGroupsContaining(2L)).thenReturn(List.of());
+    when(repositories.findById(1L)).thenReturn(Optional.of(hostedRepository(1L)));
+
+    finalizer.finalizeRun(
+        task, profile, memberConfig, "sha256:" + "a".repeat(64), run, List.of(finding));
+
+    ArgumentCaptor<AssetPolicyState> states = ArgumentCaptor.forClass(AssetPolicyState.class);
+    verify(scans, org.mockito.Mockito.times(2))
+        .upsertAssetPolicyStateIfCurrent(states.capture());
+    Map<Long, PolicyDecision> decisions = states.getAllValues().stream()
+        .collect(java.util.stream.Collectors.toMap(
+            AssetPolicyState::repositoryId, AssetPolicyState::policyDecision));
+    assertEquals(PolicyDecision.BLOCK_VULNERABILITY, decisions.get(1L));
+    assertEquals(PolicyDecision.ALLOW, decisions.get(2L));
+    assertEquals(
+        Map.of(1L, 1, 2L, 1),
+        states.getAllValues().stream()
+            .collect(java.util.stream.Collectors.toMap(
+                AssetPolicyState::repositoryId, AssetPolicyState::waivedFindings)));
+    assertEquals(
+        List.of(7L, 7L),
+        states.getAllValues().stream().map(AssetPolicyState::waiverRevision).toList());
+  }
+
+  @Test
+  void evaluatesWaiversBeyondTheFirstThousandRows() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    stubWaiverRevision(scans);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    SecurityScanFinalizer finalizer = new SecurityScanFinalizer(
+        scans,
+        repositories,
+        mock(SecurityScanAuditService.class),
+        mock(SecurityScanDocumentPersistence.class));
+    Instant now = Instant.now();
+    ScanTask task = task(1, 3);
+    ScanProfile profile = profile(now);
+    RepositoryScanConfig config = config(1L, 101L);
+    ScanPolicy policy = policy(101L, Severity.HIGH, now);
+    ScanRun run = run(now);
+    ScanFinding finding = finding(now);
+    List<ScanWaiver> firstPage = java.util.stream.LongStream.rangeClosed(1, 1000)
+        .mapToObj(id -> new ScanWaiver(
+            id,
+            "ADVISORY",
+            null,
+            null,
+            null,
+            "CVE-NOT-" + id,
+            null,
+            Map.of(),
+            "unrelated",
+            null,
+            null,
+            "admin",
+            "admin",
+            null,
+            now,
+            now))
+        .toList();
+    ScanWaiver matching = new ScanWaiver(
+        1001L, "FINDING", 1L, 10L, finding.id(), null, null, Map.of(),
+        "approved", null, null, "admin", "admin", null, now, now);
+
+    when(repositories.findById(1L)).thenReturn(Optional.of(hostedRepository(1L)));
+    when(scans.insertRunOrFindExisting(run)).thenReturn(run);
+    when(scans.listFindings(eq(null), eq(30L), eq(null), eq(0L), eq(1000)))
+        .thenReturn(List.of(finding));
+    when(scans.listFindings(eq(null), eq(30L), eq(null), eq(60L), eq(1000)))
+        .thenReturn(List.of());
+    when(scans.listActiveWaivers(eq(1L), eq(10L), any(), eq(0L), eq(1000)))
+        .thenReturn(firstPage);
+    when(scans.listActiveWaivers(eq(1L), eq(10L), any(), eq(1000L), eq(1000)))
+        .thenReturn(List.of(matching));
+    when(scans.findPolicy(101L)).thenReturn(Optional.of(policy));
+    when(scans.findRepositoryConfig(1L)).thenReturn(Optional.of(config));
+    when(scans.upsertAssetStateIfCurrent(any()))
+        .thenAnswer(invocation -> invocation.getArgument(0));
+    when(scans.upsertAssetPolicyStateIfCurrent(any()))
+        .thenAnswer(invocation -> invocation.getArgument(0));
+    when(scans.completeTask(eq(5L), eq("lease"), any())).thenReturn(true);
+
+    finalizer.finalizeRun(
+        task, profile, config, "sha256:" + "a".repeat(64), run, List.of(finding));
+
+    ArgumentCaptor<AssetPolicyState> state =
+        ArgumentCaptor.forClass(AssetPolicyState.class);
+    verify(scans).upsertAssetPolicyStateIfCurrent(state.capture());
+    assertEquals(PolicyDecision.ALLOW, state.getValue().policyDecision());
+    verify(scans).listActiveWaivers(eq(1L), eq(10L), any(), eq(1000L), eq(1000));
+  }
+
+  @Test
+  void skipsPolicyPublicationWhenANewerScannerSnapshotAlreadyWon() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    stubWaiverRevision(scans);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    SecurityScanAuditService audit = mock(SecurityScanAuditService.class);
+    SecurityScanDocumentPersistence documents = mock(SecurityScanDocumentPersistence.class);
+    SecurityScanFinalizer finalizer =
+        new SecurityScanFinalizer(scans, repositories, audit, documents);
+    Instant now = Instant.now();
+    ScanTask task = task(1, 3);
+    ScanProfile profile = profile(now);
+    RepositoryScanConfig config = config(1L, 101L);
+    ScanRun olderRun = run(now);
+    AssetSecurityState newerState = new AssetSecurityState(
+        10L,
+        1L,
+        1L,
+        new byte[] {1},
+        31L,
+        ScanState.COMPLETE,
+        ScanCompleteness.COMPLETE,
+        true,
+        Severity.CRITICAL,
+        Map.of("critical", 1),
+        101L,
+        1L,
+        PolicyDecision.BLOCK_VULNERABILITY,
+        "NEWER_SNAPSHOT",
+        now.plusSeconds(3600),
+        now,
+        2L);
+
+    when(scans.insertRunOrFindExisting(olderRun)).thenReturn(olderRun);
+    when(scans.findAssetState(10L, 1L)).thenReturn(Optional.of(newerState));
+    when(scans.upsertAssetStateIfCurrent(any())).thenReturn(newerState);
+    when(scans.completeTask(eq(5L), eq("lease"), any())).thenReturn(true);
+
+    finalizer.finalizeRun(
+        task, profile, config, "sha256:" + "a".repeat(64), olderRun, List.of());
+
+    verify(scans, never()).upsertAssetPolicyStateIfCurrent(any());
+    verify(repositories, never()).listGroupsContaining(anyLong());
+    verify(audit, never()).recordSystem(eq("POLICY_STATE_CHANGED"), anyLong(), any(Map.class));
+    verify(scans).completeTask(eq(5L), eq("lease"), any());
+    verify(documents).releaseOwner(5L);
+  }
+
+  @Test
+  void materializesMissingPolicyPlatformAsPartialForOciSubjects() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    stubWaiverRevision(scans);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    SecurityScanFinalizer finalizer = new SecurityScanFinalizer(
+        scans,
+        repositories,
+        mock(SecurityScanAuditService.class),
+        mock(SecurityScanDocumentPersistence.class));
+    Instant now = Instant.now();
+    ScanTask task = task(1, 3);
+    ScanProfile profile = profile(now);
+    RepositoryScanConfig config = config(1L, 101L);
+    ScanPolicy policy = new ScanPolicy(
+        101L,
+        "arm64-required",
+        true,
+        Severity.CRITICAL,
+        false,
+        false,
+        false,
+        null,
+        List.of("linux/arm64"),
+        1L,
+        "test",
+        now,
+        now);
+    ScanRun run = new ScanRun(
+        30L,
+        5L,
+        20L,
+        40L,
+        "b".repeat(64),
+        "c".repeat(64),
+        ScanState.COMPLETE,
+        ScanCompleteness.COMPLETE,
+        50L,
+        "d".repeat(64),
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        Severity.UNKNOWN,
+        List.of("linux/amd64"),
+        List.of(),
+        now,
+        now,
+        now);
+    Sbom sbom = new Sbom(
+        20L,
+        SubjectKind.OCI_MANIFEST,
+        "sha256:" + "a".repeat(64),
+        new byte[] {1},
+        "syft",
+        "1",
+        "config",
+        "fingerprint",
+        60L,
+        "e".repeat(64),
+        "CycloneDX",
+        "1.5",
+        0,
+        0,
+        true,
+        now);
+
+    when(scans.insertRunOrFindExisting(run)).thenReturn(run);
+    when(scans.findSbom(20L)).thenReturn(Optional.of(sbom));
+    when(scans.findPolicy(101L)).thenReturn(Optional.of(policy));
+    when(scans.findRepositoryConfig(1L)).thenReturn(Optional.of(config));
+    when(scans.upsertAssetStateIfCurrent(any()))
+        .thenAnswer(invocation -> invocation.getArgument(0));
+    when(scans.upsertAssetPolicyStateIfCurrent(any()))
+        .thenAnswer(invocation -> invocation.getArgument(0));
+    when(scans.completeTask(eq(5L), eq("lease"), any())).thenReturn(true);
+    when(repositories.findById(1L)).thenReturn(Optional.of(new RepositoryRecord(
+        1L,
+        "docker-hosted",
+        RepositoryFormat.DOCKER,
+        RepositoryType.HOSTED,
+        "docker-hosted",
+        true,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        true,
+        Map.of())));
+    when(repositories.listGroupsContaining(1L)).thenReturn(List.of());
+
+    finalizer.finalizeRun(
+        task, profile, config, "sha256:" + "a".repeat(64), run, List.of());
+
+    ArgumentCaptor<AssetPolicyState> state =
+        ArgumentCaptor.forClass(AssetPolicyState.class);
+    verify(scans).upsertAssetPolicyStateIfCurrent(state.capture());
+    assertEquals(PolicyDecision.BLOCK_PARTIAL, state.getValue().policyDecision());
+    assertEquals("REQUIRED_PLATFORMS_MISSING", state.getValue().policyReasonCode());
+  }
+
+  private static ScanProfile profile(Instant now) {
+    return new ScanProfile(
+        1L, "default", true, "syft", "grype", List.of("vuln"), Map.of(),
+        1024 * 1024, 1000, 4 * 1024 * 1024, 1024 * 1024, 2, 60,
+        OciPlatformPolicy.REQUIRED_SET, List.of("linux/amd64"),
+        "a".repeat(64), 1L, now, now);
+  }
+
+  private static SecurityScanFinalizer finalizer(SecurityScanDao scans) {
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    stubWaiverRevision(scans);
+    when(repositories.findById(1L)).thenReturn(Optional.of(hostedRepository(1L)));
+    return new SecurityScanFinalizer(
+        scans,
+        repositories,
+        mock(SecurityScanAuditService.class),
+        mock(SecurityScanDocumentPersistence.class));
+  }
+
+  private static void stubWaiverRevision(SecurityScanDao scans) {
+    when(scans.waiverRevision()).thenReturn(new WaiverRevision(7, 0));
+  }
+
+  private static RepositoryRecord hostedRepository(long id) {
+    return new RepositoryRecord(
+        id,
+        "hosted-" + id,
+        RepositoryFormat.MAVEN2,
+        RepositoryType.HOSTED,
+        "maven2-hosted",
+        true,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        true,
+        Map.of());
+  }
+
+  private static ScanTask task(int attempts, int maxAttempts) {
+    ScanTask task = mock(ScanTask.class);
+    when(task.id()).thenReturn(5L);
+    when(task.repositoryId()).thenReturn(1L);
+    when(task.assetId()).thenReturn(10L);
+    when(task.contentGeneration()).thenReturn(1L);
+    when(task.profileId()).thenReturn(1L);
+    when(task.requestedScannerSnapshotId()).thenReturn(null);
+    when(task.attempts()).thenReturn(attempts);
+    when(task.maxAttempts()).thenReturn(maxAttempts);
+    when(task.leaseToken()).thenReturn("lease");
+    return task;
+  }
+
+  private static AssetSecurityState assetState(PolicyDecision decision) {
+    return new AssetSecurityState(
+        10L,
+        1L,
+        1L,
+        new byte[] {1},
+        30L,
+        ScanState.COMPLETE,
+        ScanCompleteness.COMPLETE,
+        true,
+        Severity.HIGH,
+        Map.of("high", 1),
+        101L,
+        1L,
+        decision,
+        "VULNERABILITY",
+        Instant.now().plusSeconds(3600),
+        Instant.now(),
+        1L);
+  }
+
+  private static RepositoryScanConfig config(long repositoryId, long policyId) {
+    return new RepositoryScanConfig(
+        repositoryId, true, 1L, true, true, EnforcementMode.AUDIT,
+        PolicyAction.BLOCK, PolicyAction.BLOCK, PolicyAction.BLOCK,
+        3600L, policyId, 1L, Instant.EPOCH, Instant.EPOCH);
+  }
+
+  private static ScanPolicy policy(long id, Severity severity, Instant now) {
+    return new ScanPolicy(
+        id, "policy-" + id, true, severity, false, false, true,
+        3600L, List.of("linux/amd64"), 1L, "test", now, now);
+  }
+
+  private static ScanRun run(Instant now) {
+    return run(30L, 5L, 40L, now);
+  }
+
+  private static ScanRun run(long id, long taskId, long snapshotId, Instant now) {
+    return new ScanRun(
+        id, taskId, 20L, snapshotId, "b".repeat(64), "c".repeat(64),
+        ScanState.COMPLETE, ScanCompleteness.COMPLETE, 50L, "d".repeat(64),
+        2, 2, 0, 2, 0, 0, 0, Severity.HIGH, now, now, now);
+  }
+
+  private static ScanFinding finding(Instant now) {
+    return new ScanFinding(
+        60L, 30L, "finding", null, "CVE-2026-0001", List.of(),
+        "fixture", "pkg:maven/acme/demo@1", "demo", "1", List.of("2"),
+        Severity.HIGH, "fixture", null, null, "title", "description",
+        "https://example.invalid/CVE-2026-0001", List.of("demo.jar"), "active", now);
+  }
+
+  private static ScanFinding otherFinding(Instant now) {
+    return new ScanFinding(
+        61L, 30L, "other-finding", null, "CVE-2026-0002", List.of(),
+        "fixture", "pkg:maven/acme/other@1", "other", "1", List.of("2"),
+        Severity.HIGH, "fixture", null, null, "other title", "other description",
+        "https://example.invalid/CVE-2026-0002", List.of("other.jar"), "active", now);
+  }
+}

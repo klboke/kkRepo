@@ -1,19 +1,52 @@
 package com.github.klboke.kkrepo.server.config;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseType;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.SQLException;
 import javax.sql.DataSource;
+import org.flywaydb.core.Flyway;
+import org.flywaydb.database.postgresql.PostgreSQLConfigurationExtension;
 import org.junit.jupiter.api.Test;
 
 class DatabaseBackendConfigurationTest {
+  @Test
+  void configuresPostgreSqlOnlineMigrations() {
+    DatabaseDialect dialect = mock(DatabaseDialect.class);
+    when(dialect.type()).thenReturn(DatabaseType.POSTGRESQL);
+    var configuration = Flyway.configure();
+
+    new DatabaseBackendConfiguration()
+        .databaseFlywayCustomizer(dialect)
+        .customize(configuration);
+
+    assertTrue(configuration.isMixed());
+    assertFalse(configuration
+        .getConfigurationExtension(PostgreSQLConfigurationExtension.class)
+        .isTransactionalLock());
+  }
+
+  @Test
+  void keepsMixedMigrationsDisabledForMySql() {
+    DatabaseDialect dialect = mock(DatabaseDialect.class);
+    when(dialect.type()).thenReturn(DatabaseType.MYSQL);
+    var configuration = Flyway.configure();
+
+    new DatabaseBackendConfiguration()
+        .databaseFlywayCustomizer(dialect)
+        .customize(configuration);
+
+    assertFalse(configuration.isMixed());
+  }
+
   @Test
   void acceptsMatchingConfiguredAndJdbcDatabaseTypes() throws Exception {
     assertDoesNotThrow(() -> DatabaseBackendConfiguration.validateDatabaseProduct(

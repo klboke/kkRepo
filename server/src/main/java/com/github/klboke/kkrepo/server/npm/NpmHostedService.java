@@ -16,6 +16,7 @@ import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -40,6 +41,7 @@ public class NpmHostedService {
   private final NpmAssetWriter writer;
   private final ObjectMapper mapper;
   private final AssetMetadataCache assetMetadataCache;
+  private final ArtifactDownloadPolicy downloadPolicy;
 
   private record PublishWritePlan(Optional<Map<String, Object>> existingPackageRoot, String effectiveRevision) {}
 
@@ -49,11 +51,23 @@ public class NpmHostedService {
       NpmAssetWriter writer,
       ObjectMapper mapper,
       AssetMetadataCache assetMetadataCache) {
+    this(assetDao, blobStorageRegistry, writer, mapper, assetMetadataCache, null);
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  public NpmHostedService(
+      AssetDao assetDao,
+      BlobStorageRegistry blobStorageRegistry,
+      NpmAssetWriter writer,
+      ObjectMapper mapper,
+      AssetMetadataCache assetMetadataCache,
+      ArtifactDownloadPolicy downloadPolicy) {
     this.assetDao = assetDao;
     this.blobStorageRegistry = blobStorageRegistry;
     this.writer = writer;
     this.mapper = mapper;
     this.assetMetadataCache = assetMetadataCache;
+    this.downloadPolicy = downloadPolicy;
   }
 
   public MavenResponse get(RepositoryRuntime runtime, NpmPath path, String repositoryBaseUrl, boolean headOnly) {
@@ -299,12 +313,20 @@ public class NpmHostedService {
       String repositoryBaseUrl,
       boolean headOnly,
       NpmPackumentVariant variant) {
-    Map<String, Object> packageRoot = loadPackageRootMap(runtime, packageId)
+    CachedAssetMetadata metadata = assetMetadataCache.find(
+        runtime.id(),
+        packageId.id(),
+        () -> AssetMetadataCache.Loaded.from(
+            assetDao.findAssetByPath(runtime.id(), packageId.id()), assetDao))
+        .orElseThrow(() -> new NpmExceptions.NpmNotFoundException(
+            "Package '" + packageId.id() + "' not found"));
+    Map<String, Object> packageRoot = packageRoot(metadata)
         .orElseThrow(() -> new NpmExceptions.NpmNotFoundException("Package '" + packageId.id() + "' not found"));
     byte[] bytes = NpmPackumentResponseWriter.write(
         mapper, packageRoot, null, null, variant, packageId, repositoryBaseUrl);
-    AssetRecord asset = assetDao.findAssetByPath(runtime.id(), packageId.id()).orElse(null);
-    Instant lastModified = asset == null ? Instant.now() : asset.lastUpdatedAt();
+    AssetBlobRecord blob = metadata.toBlobRecord();
+    if (downloadPolicy != null) downloadPolicy.beforeRead(metadata.assetId(), blob.id());
+    Instant lastModified = metadata.lastUpdatedAt();
     if (headOnly) {
       return MavenResponse.noBody(200, bytes.length, NpmResponseSupport.JSON, null, lastModified);
     }
@@ -346,6 +368,7 @@ public class NpmHostedService {
     if (blob == null) {
       throw new NpmExceptions.NpmNotFoundException(asset.path());
     }
+    beforeRead(asset.id(), blob.id());
     String contentType = responseContentType(asset);
     if (headOnly) {
       return MavenResponse.noBody(200, blob.size(), contentType, blob.sha1(), asset.lastUpdatedAt());
@@ -362,6 +385,7 @@ public class NpmHostedService {
     if (blob == null) {
       throw new NpmExceptions.NpmNotFoundException(snapshot.path());
     }
+    beforeRead(snapshot.assetId(), blob.id());
     String contentType = responseContentType(snapshot.kind(), snapshot.path(), snapshot.contentType());
     if (headOnly) {
       return MavenResponse.noBody(200, blob.size(), contentType, blob.sha1(), snapshot.lastUpdatedAt());
@@ -371,6 +395,12 @@ public class NpmHostedService {
                 blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size()))
             .orElseThrow(() -> new NpmExceptions.NpmNotFoundException(snapshot.path())),
         blob.size(), contentType, blob.sha1(), snapshot.lastUpdatedAt());
+  }
+
+  void beforeRead(long assetId, long blobId) {
+    if (downloadPolicy != null) {
+      downloadPolicy.beforeRead(assetId, blobId);
+    }
   }
 
   private static String responseContentType(AssetRecord asset) {

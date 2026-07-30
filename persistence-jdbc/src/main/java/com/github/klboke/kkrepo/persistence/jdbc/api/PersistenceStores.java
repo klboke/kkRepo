@@ -4,9 +4,13 @@ package com.github.klboke.kkrepo.persistence.jdbc.api;
 public interface PersistenceStores extends AutoCloseable {
   AnsibleGalaxyRegistryDao ansibleGalaxyRegistry();
 
+  ArtifactChangeDao artifactChanges();
+
   AssetDao assets();
 
   AuthTicketDao authTickets();
+
+  BlobReferenceDao blobReferences();
 
   BlobStoreDao blobStores();
 
@@ -45,6 +49,8 @@ public interface PersistenceStores extends AutoCloseable {
   SecurityAuditDao securityAudit();
 
   SecurityDao security();
+
+  SecurityScanDao securityScanning();
 
   SwiftRegistryDao swiftRegistry();
 

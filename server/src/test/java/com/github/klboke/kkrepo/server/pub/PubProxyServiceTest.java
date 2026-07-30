@@ -2,17 +2,35 @@ package com.github.klboke.kkrepo.server.pub;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.protocol.pub.PubContentTypes;
+import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
+import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
+import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -107,6 +125,64 @@ class PubProxyServiceTest {
     assertEquals("true", computedOnly.get("remoteArchiveSha256Missing"));
   }
 
+  @Test
+  void freshProxyArchiveHeadIsPolicyCheckedBeforeResponse() throws Exception {
+    AssetDao assetDao = mock(AssetDao.class);
+    BlobStorageRegistry registry = mock(BlobStorageRegistry.class);
+    PubAssetWriter writer = mock(PubAssetWriter.class);
+    PubAssetReader reader = mock(PubAssetReader.class);
+    ProxyStateDao proxyStateDao = mock(ProxyStateDao.class);
+    HttpRemoteFetcher fetcher = mock(HttpRemoteFetcher.class);
+    ProxyNegativeCache negativeCache = mock(ProxyNegativeCache.class);
+    AssetMetadataCache cache = mock(AssetMetadataCache.class);
+    BlobStorage storage = mock(BlobStorage.class);
+    RepositoryRuntime runtime = runtime();
+    TestPubProxyService service = new TestPubProxyService(
+        Map.of(
+            "name", "example_package",
+            "versions", List.of(Map.of(
+                "version", "1.0.0",
+                "archive_url", "https://pub.dev/api/archives/example_package-1.0.0.tar.gz"))),
+        assetDao,
+        registry,
+        writer,
+        reader,
+        proxyStateDao,
+        fetcher,
+        negativeCache,
+        cache);
+    PubAssetWriter.Stored stored = storedArchive();
+    when(registry.forBlobStoreId(1L)).thenReturn(storage);
+    when(writer.writeArchive(
+        eq(runtime),
+        eq(storage),
+        eq(1L),
+        any(InputStream.class),
+        eq("example_package"),
+        eq("1.0.0"),
+        isNull(),
+        any(),
+        any(),
+        eq("proxy"),
+        eq(runtime.proxyRemoteUrl()),
+        eq(true),
+        eq(false)))
+        .thenReturn(stored);
+    doAnswer(invocation -> {
+      @SuppressWarnings("unchecked")
+      HttpRemoteFetcher.ResultHandler<MavenResponse> handler = invocation.getArgument(2);
+      return handler.handle(new HttpRemoteFetcher.Result(
+          200,
+          Map.of("Content-Type", PubContentTypes.ARCHIVE),
+          new ByteArrayInputStream("body".getBytes(StandardCharsets.UTF_8))));
+    }).when(fetcher).fetchWithBodyRetry(any(), anyString(), any());
+
+    MavenResponse response = service.download(runtime, "example_package", "1.0.0", true);
+
+    assertEquals(200, response.status());
+    verify(reader).beforeRead(stored.asset().id(), stored.blob().id());
+  }
+
   private static Map<String, Object> readJson(MavenResponse response) throws IOException {
     try (var body = response.body()) {
       return MAPPER.readValue(body, JSON_MAP);
@@ -132,11 +208,75 @@ class PubProxyServiceTest {
         List.of());
   }
 
+  private static PubAssetWriter.Stored storedArchive() {
+    AssetRecord asset = new AssetRecord(
+        1L,
+        2L,
+        null,
+        2L,
+        RepositoryFormat.PUB,
+        "api/archives/example_package-1.0.0.tar.gz",
+        null,
+        "example_package-1.0.0.tar.gz",
+        "archive",
+        PubContentTypes.ARCHIVE,
+        4L,
+        null,
+        Instant.EPOCH,
+        Map.of());
+    AssetBlobRecord blob = new AssetBlobRecord(
+        2L,
+        1L,
+        "blob://bucket/object",
+        null,
+        "object",
+        null,
+        "sha1",
+        "sha256",
+        "md5",
+        4L,
+        PubContentTypes.ARCHIVE,
+        "proxy",
+        "upstream",
+        Instant.EPOCH,
+        Instant.EPOCH,
+        Map.of());
+    return new PubAssetWriter.Stored(
+        asset,
+        blob,
+        new PubAssetWriter.Digests("md5", "sha1", "sha256", "sha512", 4L),
+        true,
+        null);
+  }
+
   private static final class TestPubProxyService extends PubProxyService {
     private final Map<String, Object> body;
 
     TestPubProxyService(Map<String, Object> body) {
       super(null, null, null, null, null, null, null, null, MAPPER);
+      this.body = body;
+    }
+
+    TestPubProxyService(
+        Map<String, Object> body,
+        AssetDao assetDao,
+        BlobStorageRegistry registry,
+        PubAssetWriter writer,
+        PubAssetReader reader,
+        ProxyStateDao proxyStateDao,
+        HttpRemoteFetcher fetcher,
+        ProxyNegativeCache negativeCache,
+        AssetMetadataCache cache) {
+      super(
+          assetDao,
+          registry,
+          writer,
+          reader,
+          proxyStateDao,
+          fetcher,
+          negativeCache,
+          cache,
+          MAPPER);
       this.body = body;
     }
 

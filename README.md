@@ -176,7 +176,7 @@ AI agent and contributor development instructions are in [AGENTS.md](AGENTS.md).
 Platform infrastructure roadmap:
 
 1. ✅ PostgreSQL database backend - Implemented through the public `persistence-jdbc` contracts, semantic dialect SPIs, backend-owned Flyway migrations, dual-database contract tests, and multi-replica server smoke tests. MySQL remains the default backend ([database backend guide](docs/en/database-backends.md), [Chinese design plan](docs/zh/dev/pluggable-database-access-layer-design.md)).
-2. Artifact security scanning - Planned with SBOM and known-vulnerability scanning for hosted, proxy, and migrated artifacts, Docker/OCI multi-platform scanning, durable database-backed multi-replica coordination, policy evaluation, and optional download enforcement ([Chinese design notes](docs/zh/dev/security-scanning-design.md)).
+2. ✅ Artifact security scanning - Implemented behind a disabled-by-default deployment capability gate. While disabled, upgrades do not process historical artifacts or add upload-outbox writes. After an operator explicitly enables capability, administrators still activate repositories individually in Admin UI; a feature-neutral transactional asset-change outbox then keeps uploads independent from asynchronous SBOM/known-vulnerability analysis. Durable multi-replica coordination, Docker/OCI multi-platform coverage, policy/waiver evaluation, and optional download enforcement are included ([usage guide](docs/en/artifact-scanning-guide.md), [Chinese design notes](docs/zh/dev/security-scanning-design.md)).
 
 Repository format roadmap:
 
@@ -216,6 +216,7 @@ kkRepo is open sourced under the [Apache License 2.0](LICENSE).
 
 - [Development Guide](docs/en/development-guide.md)
 - [Build And Deployment Guide](docs/en/build-deployment-guide.md)
+- [Artifact Scanning Guide](docs/en/artifact-scanning-guide.md)
 - [Native Image or JVM Selection Guide](docs/en/native-vs-jvm-guide.md)
 - [Nginx Reverse Proxy Notes](docs/en/nginx-reverse-proxy.md)
 - [Client Recipes](docs/en/client-recipes.md)

@@ -207,7 +207,9 @@ final class SwiftGitHubClient {
   }
 
   SwiftArchiveInspector.InspectedArchive archive(
-      RepositoryRuntime runtime, Coordinates coordinates, String commitSha) {
+      RepositoryRuntime runtime,
+      Coordinates coordinates,
+      String commitSha) {
     requireGitHubProxy(runtime);
     if (commitSha == null || !SHA.matcher(commitSha).matches()) {
       throw new SwiftExceptions.BadUpstream("GitHub returned an invalid commit SHA");
@@ -240,7 +242,9 @@ final class SwiftGitHubClient {
   }
 
   private SwiftArchiveInspector.InspectedArchive archiveFromApi(
-      RepositoryRuntime runtime, Coordinates coordinates, String commitSha) throws IOException {
+      RepositoryRuntime runtime,
+      Coordinates coordinates,
+      String commitSha) throws IOException {
     String url = API + coordinates.owner() + "/" + coordinates.repository()
         + "/zipball/" + commitSha;
     return fetchWithTransientStatusRetry(
@@ -250,7 +254,9 @@ final class SwiftGitHubClient {
   }
 
   private SwiftArchiveInspector.InspectedArchive archiveFromWeb(
-      RepositoryRuntime runtime, Coordinates coordinates, String commitSha) throws IOException {
+      RepositoryRuntime runtime,
+      Coordinates coordinates,
+      String commitSha) throws IOException {
     String url = coordinates.repositoryUrl() + "/archive/" + commitSha + ".zip";
     return fetcher.fetchWithBodyRetry(
         githubWebRequest(runtime, url, true),

@@ -17,6 +17,7 @@ import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.HashMap;
@@ -35,6 +36,7 @@ public class GoProxyService {
   private final HttpRemoteFetcher fetcher;
   private final ProxyNegativeCache negativeCache;
   private final AssetMetadataCache assetMetadataCache;
+  private final ArtifactDownloadPolicy downloadPolicy;
 
   public GoProxyService(
       AssetDao assetDao,
@@ -44,6 +46,27 @@ public class GoProxyService {
       HttpRemoteFetcher fetcher,
       ProxyNegativeCache negativeCache,
       AssetMetadataCache assetMetadataCache) {
+    this(
+        assetDao,
+        blobStorageRegistry,
+        writer,
+        proxyStateDao,
+        fetcher,
+        negativeCache,
+        assetMetadataCache,
+        null);
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  public GoProxyService(
+      AssetDao assetDao,
+      BlobStorageRegistry blobStorageRegistry,
+      GoAssetWriter writer,
+      ProxyStateDao proxyStateDao,
+      HttpRemoteFetcher fetcher,
+      ProxyNegativeCache negativeCache,
+      AssetMetadataCache assetMetadataCache,
+      ArtifactDownloadPolicy downloadPolicy) {
     this.assetDao = assetDao;
     this.blobStorageRegistry = blobStorageRegistry;
     this.writer = writer;
@@ -51,6 +74,7 @@ public class GoProxyService {
     this.fetcher = fetcher;
     this.negativeCache = negativeCache;
     this.assetMetadataCache = assetMetadataCache;
+    this.downloadPolicy = downloadPolicy;
   }
 
   public MavenResponse get(RepositoryRuntime runtime, String rawPath, boolean headOnly) {
@@ -154,6 +178,9 @@ public class GoProxyService {
     GoAssetWriter.Stored stored = writer.write(
         runtime, storage, blobStoreId, path, result.body(), extras, !headOnly);
     try {
+      if (downloadPolicy != null) {
+        downloadPolicy.beforeRead(stored.asset().id(), stored.blob().id());
+      }
       proxyStateDao.recordSuccess(runtime.id(), now);
       if (headOnly) {
         stored.discardBody();
@@ -174,6 +201,7 @@ public class GoProxyService {
     if (blob == null) {
       throw new MavenExceptions.MavenNotFoundException(path.path());
     }
+    if (downloadPolicy != null) downloadPolicy.beforeRead(snapshot.assetId(), blob.id());
     BlobStorage storage = blobStorageRegistry.forBlobStoreId(blob.blobStoreId());
     return toResponse(storage, snapshot.lastUpdatedAt(), blob, headOnly, path);
   }

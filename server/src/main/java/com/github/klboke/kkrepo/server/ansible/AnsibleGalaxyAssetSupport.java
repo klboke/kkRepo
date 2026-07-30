@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.InputStream;
 import java.nio.file.Path;
 import java.util.Map;
@@ -21,14 +22,25 @@ final class AnsibleGalaxyAssetSupport {
   private final AssetDao assets;
   private final BlobStorageRegistry storages;
   private final RawHostedService hosted;
+  private final ArtifactDownloadPolicy downloadPolicy;
 
   AnsibleGalaxyAssetSupport(
       AssetDao assets,
       BlobStorageRegistry storages,
       RawHostedService hosted) {
+    this(assets, storages, hosted, null);
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  AnsibleGalaxyAssetSupport(
+      AssetDao assets,
+      BlobStorageRegistry storages,
+      RawHostedService hosted,
+      ArtifactDownloadPolicy downloadPolicy) {
     this.assets = assets;
     this.storages = storages;
     this.hosted = hosted;
+    this.downloadPolicy = downloadPolicy;
   }
 
   record StoredCollection(AssetRecord asset, boolean created) {
@@ -128,6 +140,7 @@ final class AnsibleGalaxyAssetSupport {
     if (blob == null) {
       throw new AnsibleGalaxyExceptions.NotFound("Ansible collection blob is missing");
     }
+    if (downloadPolicy != null) downloadPolicy.beforeRead(asset.id(), blob.id());
     var storage = storages.forBlobStoreId(blob.blobStoreId());
     var reference = BlobReferenceCodec.reference(
         blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size());

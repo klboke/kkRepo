@@ -240,7 +240,7 @@ public class DockerRegistryController {
 
   private DockerResponse dispatchBlob(RepositoryRuntime runtime, DockerPath path, boolean headOnly) {
     return switch (runtime.type()) {
-      case HOSTED -> hosted.getBlob(runtime, path.digest(), headOnly);
+      case HOSTED -> hosted.getBlob(runtime, path.imageName(), path.digest(), headOnly);
       case PROXY -> proxy.getBlob(runtime, path.imageName(), path.digest(), headOnly);
       case GROUP -> group.getBlob(runtime, path.imageName(), path.digest(), headOnly);
     };

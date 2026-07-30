@@ -17,6 +17,7 @@ import static org.mockito.Mockito.when;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao.BlobReconcileWindow;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BlobReferenceDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MaintenanceCursorDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
@@ -39,17 +40,21 @@ class BlobGarbageCollectionWorkerTest {
   @Test
   void disabledWorkerDoesNotTouchSharedState() {
     AssetDao assetDao = mock(AssetDao.class);
+    BlobReferenceDao blobReferences = mock(BlobReferenceDao.class);
     MaintenanceCursorDao cursorDao = mock(MaintenanceCursorDao.class);
     BlobStorageRegistry storageRegistry = mock(BlobStorageRegistry.class);
 
-    worker(assetDao, cursorDao, storageRegistry, false, new SimpleMeterRegistry()).drain();
+    worker(
+        assetDao, blobReferences, cursorDao, storageRegistry, false, new SimpleMeterRegistry())
+        .drain();
 
-    verifyNoInteractions(assetDao, cursorDao, storageRegistry);
+    verifyNoInteractions(assetDao, blobReferences, cursorDao, storageRegistry);
   }
 
   @Test
   void lockedReconcileCursorSkipsScanAndRecordsLockOutcome() {
     AssetDao assetDao = mock(AssetDao.class);
+    BlobReferenceDao blobReferences = mock(BlobReferenceDao.class);
     MaintenanceCursorDao cursorDao = mock(MaintenanceCursorDao.class);
     BlobStorageRegistry storageRegistry = mock(BlobStorageRegistry.class);
     SimpleMeterRegistry registry = new SimpleMeterRegistry();
@@ -57,7 +62,7 @@ class BlobGarbageCollectionWorkerTest {
         .thenReturn(OptionalLong.empty());
     when(assetDao.claimDeletedBlobsForGc(anyInt(), any(), any())).thenReturn(List.of());
 
-    worker(assetDao, cursorDao, storageRegistry, true, registry).drain();
+    worker(assetDao, blobReferences, cursorDao, storageRegistry, true, registry).drain();
 
     verify(assetDao, never()).markUnreferencedBlobsDeletedAfter(anyLong(), anyInt(), anyInt(), any());
     assertNotNull(registry.find("kkrepo_worker_items_total")
@@ -68,6 +73,7 @@ class BlobGarbageCollectionWorkerTest {
   @Test
   void reconcileAdvancesCursorAndCollectsUnreferencedBlob() {
     AssetDao assetDao = mock(AssetDao.class);
+    BlobReferenceDao blobReferences = mock(BlobReferenceDao.class);
     MaintenanceCursorDao cursorDao = mock(MaintenanceCursorDao.class);
     BlobStorageRegistry storageRegistry = mock(BlobStorageRegistry.class);
     BlobStorage storage = mock(BlobStorage.class);
@@ -82,7 +88,7 @@ class BlobGarbageCollectionWorkerTest {
     when(storageRegistry.forBlobStoreId(3L)).thenReturn(storage);
     SimpleMeterRegistry registry = new SimpleMeterRegistry();
 
-    worker(assetDao, cursorDao, storageRegistry, true, registry).drain();
+    worker(assetDao, blobReferences, cursorDao, storageRegistry, true, registry).drain();
 
     verify(cursorDao).updateLastSeenId(MaintenanceCursorDao.BLOB_UNREFERENCED_RECONCILE, 12L);
     verify(storage).delete(argThat(reference ->
@@ -97,6 +103,7 @@ class BlobGarbageCollectionWorkerTest {
   @Test
   void liveReferenceKeepsPhysicalObjectButRemovesDeletedBlobRow() {
     AssetDao assetDao = mock(AssetDao.class);
+    BlobReferenceDao blobReferences = mock(BlobReferenceDao.class);
     MaintenanceCursorDao cursorDao = mock(MaintenanceCursorDao.class);
     BlobStorageRegistry storageRegistry = mock(BlobStorageRegistry.class);
     BlobStorage storage = mock(BlobStorage.class);
@@ -107,15 +114,42 @@ class BlobGarbageCollectionWorkerTest {
     when(assetDao.hasLiveBlobForObjectKeyHash(3L, blob.objectKeyHash())).thenReturn(true);
     when(storageRegistry.forBlobStoreId(3L)).thenReturn(storage);
 
-    worker(assetDao, cursorDao, storageRegistry, true, new SimpleMeterRegistry()).drain();
+    worker(
+        assetDao, blobReferences, cursorDao, storageRegistry, true, new SimpleMeterRegistry())
+        .drain();
 
     verify(storage, never()).delete(any());
     verify(assetDao).hardDeleteBlobByIdIfDeleted(12L);
   }
 
   @Test
+  void retainedBlobIsRecheckedUnderTheGcRowLockBeforeObjectDeletion() {
+    AssetDao assetDao = mock(AssetDao.class);
+    BlobReferenceDao blobReferences = mock(BlobReferenceDao.class);
+    MaintenanceCursorDao cursorDao = mock(MaintenanceCursorDao.class);
+    BlobStorageRegistry storageRegistry = mock(BlobStorageRegistry.class);
+    BlobStorage storage = mock(BlobStorage.class);
+    AssetBlobRecord blob = blob(14L);
+    stubLockedReconcile(cursorDao);
+    when(assetDao.claimDeletedBlobsForGc(anyInt(), any(), any())).thenReturn(List.of(blob));
+    when(assetDao.lockDeletedBlobById(14L)).thenReturn(Optional.of(blob));
+    when(blobReferences.isReferenced(14L)).thenReturn(true);
+    when(storageRegistry.forBlobStoreId(3L)).thenReturn(storage);
+
+    worker(
+        assetDao, blobReferences, cursorDao, storageRegistry, true, new SimpleMeterRegistry())
+        .drain();
+
+    verify(storage, never()).delete(any());
+    verify(assetDao).releaseBlobGcClaim(14L);
+    verify(assetDao, never()).hardDeleteBlobByIdIfDeleted(14L);
+    verify(assetDao, never()).hasLiveBlobForObjectKeyHash(anyLong(), any());
+  }
+
+  @Test
   void storageFailureReleasesClaimForRetry() {
     AssetDao assetDao = mock(AssetDao.class);
+    BlobReferenceDao blobReferences = mock(BlobReferenceDao.class);
     MaintenanceCursorDao cursorDao = mock(MaintenanceCursorDao.class);
     BlobStorageRegistry storageRegistry = mock(BlobStorageRegistry.class);
     BlobStorage storage = mock(BlobStorage.class);
@@ -127,7 +161,9 @@ class BlobGarbageCollectionWorkerTest {
     when(storageRegistry.forBlobStoreId(3L)).thenReturn(storage);
     doThrow(new IllegalStateException("storage unavailable")).when(storage).delete(any());
 
-    worker(assetDao, cursorDao, storageRegistry, true, new SimpleMeterRegistry()).drain();
+    worker(
+        assetDao, blobReferences, cursorDao, storageRegistry, true, new SimpleMeterRegistry())
+        .drain();
 
     verify(assetDao).releaseBlobGcClaim(13L);
     verify(assetDao, never()).hardDeleteBlobByIdIfDeleted(13L);
@@ -140,12 +176,14 @@ class BlobGarbageCollectionWorkerTest {
 
   private static BlobGarbageCollectionWorker worker(
       AssetDao assetDao,
+      BlobReferenceDao blobReferences,
       MaintenanceCursorDao cursorDao,
       BlobStorageRegistry storageRegistry,
       boolean enabled,
       SimpleMeterRegistry registry) {
     return new BlobGarbageCollectionWorker(
         assetDao,
+        blobReferences,
         cursorDao,
         storageRegistry,
         new RecordingTransactionManager(),

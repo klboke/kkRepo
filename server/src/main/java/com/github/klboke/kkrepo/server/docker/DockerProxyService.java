@@ -129,6 +129,7 @@ public class DockerProxyService {
           false);
       recordCache(runtime, "manifest", "remote_store");
       ensureAccepted(stored.manifest().mediaType(), acceptHeaders);
+      manifestStore.beforeRead(stored);
       DockerResponse response = headOnly
           ? DockerResponse.noBody(
               200, body.length, stored.manifest().mediaType(), stored.manifest().updatedAt())
@@ -150,6 +151,7 @@ public class DockerProxyService {
     ensureProxy(runtime);
     try {
       DockerResponse response = blobStore.getBlob(runtime, digest, headOnly);
+      manifestStore.beforeBlobRead(runtime, imageName, digest);
       recordCache(runtime, "blob", "hit");
       return response;
     } catch (DockerProtocolException e) {
@@ -174,6 +176,10 @@ public class DockerProxyService {
       if (result.status() < 200 || result.status() >= 300) {
         throw new DockerProtocolException(DockerErrorCode.NAME_UNKNOWN, "remote returned " + result.status(), 502);
       }
+      // The upstream response has established that the blob exists. Apply pending/referenced
+      // download policy before consuming a potentially multi-gigabyte body or writing it to
+      // object storage; the 404 path above must retain BLOB_UNKNOWN precedence.
+      manifestStore.beforeBlobRead(runtime, imageName, digest);
       remoteBlob = spoolAndDigest(runtime, result.body());
       if (!digest.isSha256() || !digest.hex().equals(remoteBlob.sha256())) {
         recordDigest(runtime, "proxy_blob", "failure");

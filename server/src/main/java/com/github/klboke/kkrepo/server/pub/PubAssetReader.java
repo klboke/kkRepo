@@ -6,6 +6,8 @@ import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -15,14 +17,30 @@ import org.springframework.stereotype.Component;
 class PubAssetReader {
   private final AssetDao assetDao;
   private final BlobStorageRegistry blobStorageRegistry;
+  private final ArtifactDownloadPolicy downloadPolicy;
 
   PubAssetReader(AssetDao assetDao, BlobStorageRegistry blobStorageRegistry) {
+    this(assetDao, blobStorageRegistry, null);
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  PubAssetReader(
+      AssetDao assetDao,
+      BlobStorageRegistry blobStorageRegistry,
+      ArtifactDownloadPolicy downloadPolicy) {
     this.assetDao = assetDao;
     this.blobStorageRegistry = blobStorageRegistry;
+    this.downloadPolicy = downloadPolicy;
   }
 
   MavenResponse serveSnapshot(CachedAssetMetadata snapshot, boolean headOnly, String path) {
-    return serveBlob(snapshot.toBlobRecord(), snapshot.contentType(), snapshot.lastUpdatedAt(), headOnly, path);
+    return serveBlob(
+        snapshot.assetId(),
+        snapshot.toBlobRecord(),
+        snapshot.contentType(),
+        snapshot.lastUpdatedAt(),
+        headOnly,
+        path);
   }
 
   String readText(CachedAssetMetadata snapshot, String path) {
@@ -30,6 +48,7 @@ class PubAssetReader {
     if (blob == null) {
       throw new PubExceptions.PubNotFoundException(path);
     }
+    beforeRead(snapshot.assetId(), blob.id());
     try (var in = blobStorageRegistry.forBlobStoreId(blob.blobStoreId()).get(
         BlobReferenceCodec.reference(blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size()))
         .orElseThrow(() -> new PubExceptions.PubNotFoundException(path))) {
@@ -39,11 +58,17 @@ class PubAssetReader {
     }
   }
 
-  private MavenResponse serveBlob(AssetBlobRecord blob, String contentType, Instant lastModified,
-      boolean headOnly, String path) {
+  private MavenResponse serveBlob(
+      long assetId,
+      AssetBlobRecord blob,
+      String contentType,
+      Instant lastModified,
+      boolean headOnly,
+      String path) {
     if (blob == null) {
       throw new PubExceptions.PubNotFoundException(path);
     }
+    beforeRead(assetId, blob.id());
     var storage = blobStorageRegistry.forBlobStoreId(blob.blobStoreId());
     var reference = BlobReferenceCodec.reference(
         blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size());
@@ -57,5 +82,9 @@ class PubAssetReader {
     return MavenResponse.ok(
         () -> storage.get(reference).orElseThrow(() -> new PubExceptions.PubNotFoundException(path)),
         blob.size(), contentType, etag, lastModified);
+  }
+
+  void beforeRead(long assetId, long blobId) {
+    if (downloadPolicy != null) downloadPolicy.beforeRead(assetId, blobId);
   }
 }

@@ -1,5 +1,7 @@
 package com.github.klboke.kkrepo.persistence.jdbc.contract;
 
+import static com.github.klboke.kkrepo.security.scan.ScanEnums.SCANNER_OBSERVATION_UNAVAILABLE;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -11,12 +13,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ArtifactChangeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.ScannerResourceKind;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.ScannerTokenResource;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.TokenKind;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceStores;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PubUploadSessionDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDataMigrationDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
@@ -31,6 +39,18 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityPrivilegeReco
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRoleRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerUploadSessionRecord;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.EnforcementMode;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.OciPlatformPolicy;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyAction;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyDecision;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.RequestReason;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanCompleteness;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanStage;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanState;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.SubjectKind;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.TaskStatus;
+import com.github.klboke.kkrepo.security.scan.ScanTaskPriorities;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -42,13 +62,16 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.DuplicateKeyException;
 
 /** Reusable black-box contract that every database backend must pass through the public API. */
@@ -73,8 +96,12 @@ public abstract class PersistenceApiContract {
         "ansible_registry_lease",
         "asset",
         "asset_blob",
+        "asset_security_policy_state",
+        "asset_security_state",
+        "artifact_change_event",
         "auth_ticket",
         "blob_store",
+        "blob_reference",
         "browse_node",
         "cache_version",
         "cleanup_policy",
@@ -84,6 +111,7 @@ public abstract class PersistenceApiContract {
         "docker_auth_token",
         "docker_manifest",
         "docker_manifest_reference",
+        "docker_scanner_token_resource",
         "docker_tag",
         "docker_upload_chunk",
         "docker_upload_session",
@@ -102,6 +130,7 @@ public abstract class PersistenceApiContract {
         "repository_data_migration_repository",
         "repository_index_rebuild_marker",
         "repository_member",
+        "repository_security_scan_config",
         "routing_rule",
         "security_anonymous_config",
         "security_audit_log",
@@ -112,6 +141,19 @@ public abstract class PersistenceApiContract {
         "security_role",
         "security_role_inheritance",
         "security_role_privilege",
+        "security_sbom",
+        "security_sbom_component",
+        "security_scan_backfill_job",
+        "security_scan_candidate",
+        "security_scan_finding",
+        "security_scan_policy",
+        "security_scan_profile",
+        "security_scan_run",
+        "security_scan_run_subject",
+        "security_scan_task",
+        "security_scan_waiver",
+        "security_scan_waiver_revision",
+        "security_scanner_snapshot",
         "security_user",
         "security_user_role",
         "spring_session",
@@ -131,6 +173,2567 @@ public abstract class PersistenceApiContract {
         "terraform_signing_key",
         "terraform_source_binding",
         "ui_settings"), databaseTables());
+  }
+
+  @Test
+  void securityScanningIsIdempotentFencedAndProtectsImmutableDocuments() throws Exception {
+    SecurityScanDao scans = stores().securityScanning();
+    long repositoryId = createRepository("scan-contract", RepositoryFormat.MAVEN2);
+    long blobStoreId = stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
+    Instant now = Instant.parse("2026-07-24T12:00:00Z");
+
+    long artifactBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "scan/app-1.0.jar", "scan-artifact"));
+    String path = "com/acme/app/1.0/app-1.0.jar";
+    long assetId = stores().assets().insertAsset(new AssetRecord(
+        null, repositoryId, null, artifactBlobId, RepositoryFormat.MAVEN2, path,
+        PersistenceHashes.pathHash(path), "app-1.0.jar", "ARTIFACT",
+        "application/java-archive", 42L, null, now, Map.of()));
+
+    assertTrue(
+        scans.findCandidate(assetId).isEmpty(),
+        "the core asset write path must not update scan-specific tables");
+    List<ArtifactChangeDao.ArtifactChange> originalEvents = stores().artifactChanges()
+        .listAfter(0, 1000).stream()
+        .filter(event -> event.assetId() == assetId)
+        .toList();
+    assertEquals(1, originalEvents.size());
+    assertEquals(ArtifactChangeDao.ChangeKind.CONTENT_CREATED, originalEvents.getFirst().changeKind());
+
+    String artifactChangeCursor = "contract_security_scan_artifact_change";
+    assertEquals(1, foldArtifactChanges(artifactChangeCursor));
+    SecurityScanDao.ScanCandidate originalCandidate = scans.findCandidate(assetId).orElseThrow();
+    assertEquals(1, originalCandidate.contentGeneration());
+    stores().assets().touchAssetLastUpdated(assetId, now.plusSeconds(1));
+    stores().assets().updateAssetAttributes(assetId, Map.of("metadataOnly", true));
+    assertEquals(
+        1,
+        stores().artifactChanges().listAfter(0, 1000).stream()
+            .filter(event -> event.assetId() == assetId)
+            .count(),
+        "metadata-only changes must not emit content-change events");
+    assertEquals(0, foldArtifactChanges(artifactChangeCursor));
+    assertEquals(
+        originalCandidate.contentGeneration(),
+        scans.findCandidate(assetId).orElseThrow().contentGeneration(),
+        "metadata-only changes must not create a new content generation");
+
+    SecurityScanDao.BackfillPage firstBackfill = inTransaction(
+        () -> scans.markRepositoryAssetsForBackfill(repositoryId, 0, 100));
+    SecurityScanDao.BackfillPage repeatedBackfill = inTransaction(
+        () -> scans.markRepositoryAssetsForBackfill(repositoryId, 0, 100));
+    assertEquals(0, firstBackfill.markedAssets());
+    assertEquals(0, repeatedBackfill.markedAssets());
+    assertEquals(
+        1,
+        scans.findCandidate(assetId).orElseThrow().contentGeneration(),
+        "backfill must be idempotent for an unchanged blob binding");
+    assertEquals(
+        assetId,
+        inTransaction(() -> scans.claimCandidates(10)).getFirst().assetId(),
+        "the generated pending projection must expose unqueued content");
+    assertTrue(scans.markCandidateEnqueued(assetId, 1));
+    assertTrue(
+        inTransaction(() -> scans.claimCandidates(10)).isEmpty(),
+        "the generated pending projection must hide the acknowledged generation");
+    SecurityScanDao.BackfillPage enabledRepositoryBackfill = inTransaction(
+        () -> scans.markRepositoryAssetsForBackfill(repositoryId, 0, 100));
+    SecurityScanDao.BackfillPage repeatedEnabledRepositoryBackfill = inTransaction(
+        () -> scans.markRepositoryAssetsForBackfill(repositoryId, 0, 100));
+    assertEquals(1, enabledRepositoryBackfill.markedAssets());
+    assertEquals(0, repeatedEnabledRepositoryBackfill.markedAssets());
+    assertEquals(
+        1,
+        scans.findCandidate(assetId).orElseThrow().contentGeneration(),
+        "enabling a profile must requeue an unchanged candidate without inventing new content");
+    assertEquals(
+        assetId,
+        inTransaction(() -> scans.claimCandidates(10)).getFirst().assetId(),
+        "a repository backfill must expose an acknowledged unchanged candidate again");
+    assertTrue(scans.markCandidateEnqueued(assetId, 1));
+
+    SecurityScanDao.ScanProfile profile = scans.createProfile(new SecurityScanDao.ScanProfile(
+        null, "contract-profile", true, "syft", "grype", List.of("vuln"), Map.of(),
+        1024 * 1024, 1000, 10 * 1024 * 1024, 1024 * 1024, 2, 60,
+        OciPlatformPolicy.REQUIRED_SET, List.of("linux/amd64"), "9".repeat(64), 1, now, now));
+    SecurityScanDao.ScanPolicy policy = scans.createPolicy(new SecurityScanDao.ScanPolicy(
+        null, "contract-policy", true, Severity.HIGH, false, false, true,
+        3600L, List.of("linux/amd64"), 1, "contract", now, now));
+    assertTrue(scans.createPolicyIfAbsent(new SecurityScanDao.ScanPolicy(
+        null, "CONTRACT-POLICY", true, Severity.HIGH, false, false, true,
+        3600L, List.of("linux/amd64"), 1, "contract", now, now)).isEmpty(),
+        "logical policy names must be unique independent of case");
+    List<Boolean> policyCreateResults = invokeConcurrently(List.of(
+        () -> inTransaction(() -> scans.createPolicyIfAbsent(new SecurityScanDao.ScanPolicy(
+            null, "Concurrent-Create", true, Severity.HIGH, false, false, true,
+            3600L, List.of(), 1, "contract", now, now)).isPresent()),
+        () -> inTransaction(() -> scans.createPolicyIfAbsent(new SecurityScanDao.ScanPolicy(
+            null, "concurrent-create", true, Severity.HIGH, false, false, true,
+            3600L, List.of(), 1, "contract", now, now)).isPresent())), 2);
+    assertEquals(
+        1,
+        policyCreateResults.stream().filter(Boolean::booleanValue).count(),
+        "concurrent case variants must atomically create one logical policy");
+    SecurityScanDao.ScanPolicy concurrentPolicy = scans.createPolicy(
+        new SecurityScanDao.ScanPolicy(
+            null, "concurrent-policy", true, Severity.HIGH, false, false, true,
+            3600L, List.of("linux/amd64"), 1, "contract", now, now));
+    SecurityScanDao.ScanPolicy revisionDraft = new SecurityScanDao.ScanPolicy(
+        null, "CONCURRENT-POLICY", true, Severity.HIGH, false, false, true,
+        3600L, List.of("linux/amd64"), 1, "contract", now, now);
+    List<Long> allocatedRevisions = invokeConcurrently(List.of(
+        () -> inTransaction(() -> scans.createNextPolicyRevision(
+                concurrentPolicy.id(), revisionDraft)
+            .map(SecurityScanDao.ScanPolicy::revision)
+            .orElse(0L)),
+        () -> inTransaction(() -> scans.createNextPolicyRevision(
+                concurrentPolicy.id(), revisionDraft)
+            .map(SecurityScanDao.ScanPolicy::revision)
+            .orElse(0L))), 2);
+    assertEquals(
+        List.of(0L, 2L),
+        allocatedRevisions.stream().sorted().toList(),
+        "only one replica may revise the expected immutable policy head");
+    long profileId = profile.id();
+    long policyId = policy.id();
+
+    long concurrentConfigRepositoryId =
+        createRepository("scan-config-concurrent", RepositoryFormat.MAVEN2);
+    SecurityScanDao.RepositoryScanConfig firstConcurrentConfig =
+        new SecurityScanDao.RepositoryScanConfig(
+            concurrentConfigRepositoryId, true, profileId, true, false,
+            EnforcementMode.AUDIT, PolicyAction.ALLOW, PolicyAction.BLOCK,
+            PolicyAction.ALLOW, 3600L, null, 1, now, now);
+    SecurityScanDao.RepositoryScanConfig secondConcurrentConfig =
+        new SecurityScanDao.RepositoryScanConfig(
+            concurrentConfigRepositoryId, false, profileId, true, false,
+            EnforcementMode.ENFORCE, PolicyAction.BLOCK, PolicyAction.ALLOW,
+            PolicyAction.BLOCK, 7200L, null, 1, now.plusSeconds(1), now.plusSeconds(1));
+    CyclicBarrier concurrentConfigStart = new CyclicBarrier(2);
+    List<SecurityScanDao.RepositoryScanConfig> concurrentConfigs = invokeConcurrently(List.of(
+        () -> {
+          concurrentConfigStart.await();
+          return inTransaction(() -> scans.upsertRepositoryConfig(firstConcurrentConfig));
+        },
+        () -> {
+          concurrentConfigStart.await();
+          return inTransaction(() -> scans.upsertRepositoryConfig(secondConcurrentConfig));
+        }), 2);
+    assertTrue(concurrentConfigs.getFirst().enabled());
+    assertEquals(EnforcementMode.AUDIT, concurrentConfigs.getFirst().enforcementMode());
+    assertFalse(concurrentConfigs.getLast().enabled());
+    assertEquals(EnforcementMode.ENFORCE, concurrentConfigs.getLast().enforcementMode());
+    assertEquals(
+        List.of(1L, 2L),
+        concurrentConfigs.stream()
+            .map(SecurityScanDao.RepositoryScanConfig::configRevision)
+            .sorted()
+            .toList(),
+        "both concurrent first writes must be applied and receive distinct revisions");
+
+    SecurityScanDao.RepositoryScanConfig config = scans.upsertRepositoryConfig(
+        new SecurityScanDao.RepositoryScanConfig(
+            repositoryId, true, profileId, true, true, EnforcementMode.AUDIT,
+            PolicyAction.ALLOW, PolicyAction.BLOCK, PolicyAction.ALLOW,
+            3600L, policyId, 1, now, now));
+    assertTrue(config.enabled());
+    assertEquals(1, config.configRevision());
+    List<SecurityScanDao.DownloadPolicyContext> directPolicyContexts =
+        scans.findDownloadPolicyContexts(repositoryId, repositoryId);
+    assertEquals(1, directPolicyContexts.size());
+    assertEquals(repositoryId, directPolicyContexts.getFirst().config().repositoryId());
+    assertEquals(profileId, directPolicyContexts.getFirst().profile().id());
+    long proxyPolicyRepositoryId =
+        createRepository(
+            "scan-policy-proxy", RepositoryFormat.MAVEN2, RepositoryType.PROXY);
+    scans.upsertRepositoryConfig(new SecurityScanDao.RepositoryScanConfig(
+        proxyPolicyRepositoryId, true, profileId, false, true, EnforcementMode.ENFORCE,
+        PolicyAction.BLOCK, PolicyAction.BLOCK, PolicyAction.BLOCK,
+        3600L, null, 1, now, now));
+    assertEquals(
+        List.of(proxyPolicyRepositoryId),
+        scans.findDownloadPolicyContexts(proxyPolicyRepositoryId, null).stream()
+            .map(context -> context.config().repositoryId())
+            .toList(),
+        "uncached proxy policy lookup must honor the proxy-content toggle");
+    assertEquals(
+        List.of(repositoryId),
+        scans.findRepositoryConfigs(List.of(repositoryId, repositoryId, Long.MAX_VALUE)).stream()
+            .map(SecurityScanDao.RepositoryScanConfig::repositoryId)
+            .toList(),
+        "repository configuration scope must be deduplicated and relation-backed");
+
+    SecurityScanDao.TaskDraft draft = new SecurityScanDao.TaskDraft(
+        repositoryId,
+        assetId,
+        SubjectKind.ASSET_BLOB,
+        "sha256:" + "2".repeat(64),
+        1,
+        profileId,
+        1,
+        null,
+        ScanStage.CATALOG_AND_MATCH,
+        RequestReason.CONTENT_CHANGED,
+        0,
+        5,
+        "contract",
+        null,
+        null,
+        now);
+    long taskId = scans.createTask(draft);
+    assertEquals(taskId, scans.createTask(draft), "automatic task creation must deduplicate");
+    SecurityScanDao.AssetSecurityState initialPendingState =
+        scans.findAssetState(assetId, profileId).orElseThrow();
+    assertEquals(ScanState.PENDING, initialPendingState.scanState());
+    assertEquals(PolicyDecision.ALLOW, initialPendingState.policyDecision());
+    assertEquals("SCAN_PENDING", initialPendingState.policyReasonCode());
+    assertArrayEquals(
+        PersistenceHashes.sha256("sha256:" + "2".repeat(64)),
+        initialPendingState.subjectIdentityHash(),
+        "task creation must atomically materialize the pending projection");
+    assertEquals(
+        taskId,
+        scans.listTasks(null, null, "scan-contract", 0, 10).getFirst().id(),
+        "task search must include repository names");
+    assertEquals(
+        taskId,
+        scans.listTasksByRepositories(
+                List.of(repositoryId), null, "scan-contract", 0, 10)
+            .getFirst()
+            .id(),
+        "global task pages must filter a visible repository relation in one query");
+    assertTrue(scans.listTasksByRepositories(
+        List.of(Long.MAX_VALUE), null, null, 0, 10).isEmpty());
+    assertTrue(scans.listTasks(null, null, "missing-task", 0, 10).isEmpty());
+    assertEquals(
+        Optional.of(now),
+        scans.oldestPendingTaskCreatedAt(),
+        "the oldest pending task timestamp must be observable");
+    assertEquals(
+        1,
+        scans.metricSummary(100).pendingTasks(),
+        "periodic task metrics must use a bounded status projection");
+
+    scans.upsertAssetPolicyStateIfCurrent(new SecurityScanDao.AssetPolicyState(
+        assetId,
+        profileId,
+        repositoryId,
+        1,
+        null,
+        policyId,
+        1L,
+        config.configRevision(),
+        PolicyDecision.ALLOW,
+        "SCAN_PENDING",
+        0,
+        null,
+        null,
+        now,
+        0));
+    assertTrue(scans.cancelTask(taskId, now.plusSeconds(1)));
+    SecurityScanDao.AssetSecurityState cancelledState =
+        scans.findAssetState(assetId, profileId).orElseThrow();
+    assertEquals(ScanState.CANCELLED, cancelledState.scanState());
+    assertEquals(PolicyDecision.BLOCK_SCAN_FAILED, cancelledState.policyDecision());
+    assertEquals("TASK_CANCELLED", cancelledState.policyReasonCode());
+    SecurityScanDao.AssetPolicyState cancelledPolicyState =
+        scans.findAssetPolicyState(assetId, profileId, repositoryId).orElseThrow();
+    assertEquals(PolicyDecision.BLOCK_SCAN_FAILED, cancelledPolicyState.policyDecision());
+    assertEquals("TASK_CANCELLED", cancelledPolicyState.policyReasonCode());
+    assertTrue(scans.requeueTask(taskId, now.plusSeconds(2), "contract"));
+    assertEquals(
+        ScanState.PENDING,
+        scans.findAssetState(assetId, profileId).orElseThrow().scanState(),
+        "retrying a cancelled task must restore pending-action semantics");
+    assertEquals(
+        PolicyDecision.ALLOW,
+        scans.findAssetPolicyState(assetId, profileId, repositoryId)
+            .orElseThrow()
+            .policyDecision());
+
+    CountDownLatch administrativeLockHeld = new CountDownLatch(1);
+    CountDownLatch claimAttemptFinished = new CountDownLatch(1);
+    List<Boolean> lockFenceOutcomes = invokeConcurrently(List.of(
+        () -> inTransaction(() -> {
+          SecurityScanDao.ScanTask locked =
+              scans.findTaskForUpdate(taskId).orElseThrow();
+          administrativeLockHeld.countDown();
+          try {
+            assertTrue(claimAttemptFinished.await(
+                30, java.util.concurrent.TimeUnit.SECONDS));
+          } catch (InterruptedException stopped) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(stopped);
+          }
+          return locked.status() == TaskStatus.PENDING;
+        }),
+        () -> {
+          assertTrue(administrativeLockHeld.await(
+              30, java.util.concurrent.TimeUnit.SECONDS));
+          try {
+            return inTransaction(() -> scans.claimTasks(
+                "replica-while-admin-locked",
+                now.plusSeconds(2),
+                now.plusSeconds(30),
+                1).isEmpty());
+          } finally {
+            claimAttemptFinished.countDown();
+          }
+        }), 2);
+    assertEquals(List.of(true, true), lockFenceOutcomes);
+
+    CountDownLatch projectionCandidateLockHeld = new CountDownLatch(1);
+    CountDownLatch releaseProjectionCandidateLock = new CountDownLatch(1);
+    CountDownLatch administrativeLookupStarted = new CountDownLatch(1);
+    CountDownLatch administrativeLookupReturned = new CountDownLatch(1);
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var projection = executor.submit(() -> inTransaction(() -> {
+        scans.taskProjectionIsSuperseded(taskId);
+        projectionCandidateLockHeld.countDown();
+        try {
+          assertTrue(releaseProjectionCandidateLock.await(
+              30, java.util.concurrent.TimeUnit.SECONDS));
+        } catch (InterruptedException stopped) {
+          Thread.currentThread().interrupt();
+          throw new IllegalStateException(stopped);
+        }
+        return true;
+      }));
+      assertTrue(projectionCandidateLockHeld.await(
+          30, java.util.concurrent.TimeUnit.SECONDS));
+      var administration = executor.submit(() -> {
+        administrativeLookupStarted.countDown();
+        try {
+          return inTransaction(() -> scans.findTaskForUpdate(taskId).isPresent());
+        } finally {
+          administrativeLookupReturned.countDown();
+        }
+      });
+      assertTrue(administrativeLookupStarted.await(
+          30, java.util.concurrent.TimeUnit.SECONDS));
+      try {
+        assertFalse(
+            administrativeLookupReturned.await(
+                500, java.util.concurrent.TimeUnit.MILLISECONDS),
+            "administrative lookup must wait for the candidate before locking the task");
+      } finally {
+        releaseProjectionCandidateLock.countDown();
+      }
+      assertTrue(projection.get(30, java.util.concurrent.TimeUnit.SECONDS));
+      assertTrue(administration.get(30, java.util.concurrent.TimeUnit.SECONDS));
+    }
+
+    SecurityScanDao.ScanTask firstLease = inTransaction(() -> scans.claimTasks(
+        "replica-a", now.plusSeconds(2), now.plusSeconds(30), 1).getFirst());
+    assertTrue(inTransaction(() -> scans.claimTasks(
+        "replica-b", now.plusSeconds(29), now.plusSeconds(59), 1)).isEmpty());
+    SecurityScanDao.ScanTask takeover = inTransaction(() -> scans.claimTasks(
+        "replica-b", now.plusSeconds(31), now.plusSeconds(61), 1).getFirst());
+    assertNotEquals(firstLease.leaseToken(), takeover.leaseToken());
+    assertFalse(scans.heartbeatTask(
+        taskId, firstLease.leaseToken(), now.plusSeconds(90), now.plusSeconds(32)));
+    assertFalse(scans.completeTask(taskId, firstLease.leaseToken(), now.plusSeconds(32)));
+    assertFalse(inTransaction(
+        () -> scans.lockCurrentTaskLease(taskId, firstLease.leaseToken())));
+    assertTrue(inTransaction(
+        () -> scans.lockCurrentTaskLease(taskId, takeover.leaseToken())));
+
+    long cancellationFenceBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "security/cancellation-fence.json", "scan-cancellation-fence"));
+    String cancellationKey = "cancel-publication-fence";
+    long cancellationTaskId = scans.createTask(new SecurityScanDao.TaskDraft(
+        repositoryId,
+        assetId,
+        SubjectKind.ASSET_BLOB,
+        "sha256:" + "2".repeat(64),
+        1,
+        profileId,
+        1,
+        null,
+        ScanStage.CATALOG_AND_MATCH,
+        RequestReason.MANUAL,
+        ScanTaskPriorities.MANUAL,
+        2,
+        "contract",
+        cancellationKey,
+        cancellationKey,
+        now.plusSeconds(2)));
+    SecurityScanDao.ScanTask cancellationLease = inTransaction(() ->
+        scans.claimTasks(
+                "cancellation-fence-replica",
+                now.plusSeconds(2),
+                now.plusSeconds(62),
+                10)
+            .stream()
+            .filter(task -> task.id() == cancellationTaskId)
+            .findFirst()
+            .orElseThrow());
+    CyclicBarrier cancellationFenceStart = new CyclicBarrier(2);
+    List<Boolean> cancellationFenceOutcomes = invokeConcurrently(List.of(
+        () -> {
+          cancellationFenceStart.await();
+          return inTransaction(() -> {
+            if (!scans.lockCurrentTaskLease(
+                cancellationTaskId, cancellationLease.leaseToken())) {
+              return false;
+            }
+            return stores().blobReferences().retain(
+                "security-scan-persisting", cancellationTaskId, cancellationFenceBlobId);
+          });
+        },
+        () -> {
+          cancellationFenceStart.await();
+          return inTransaction(() -> {
+            boolean cancelled =
+                scans.cancelTask(cancellationTaskId, now.plusSeconds(3));
+            stores().blobReferences().releaseOwner(
+                "security-scan-persisting", cancellationTaskId);
+            return cancelled;
+          });
+        }), 2);
+    assertTrue(cancellationFenceOutcomes.getLast());
+    assertFalse(
+        stores().blobReferences().isReferenced(cancellationFenceBlobId),
+        "cancellation must either reject a late report owner or remove an earlier publication");
+    assertEquals(
+        1,
+        stores().assets().markBlobDeletedIfUnreferenced(
+            cancellationFenceBlobId, "scan-cancellation-fence-cleanup"));
+    assertEquals(
+        1,
+        stores().assets().hardDeleteBlobByIdIfDeleted(cancellationFenceBlobId));
+
+    SecurityScanDao.ScannerSnapshot snapshot = scans.insertSnapshotOrFindExisting(
+        new SecurityScanDao.ScannerSnapshot(
+            null, "contract-adapter", "v1", "grype", "0.1.0", "fixture-db",
+            now.minusSeconds(60), "a".repeat(64), "b".repeat(64), now, true,
+            Map.of("catalogEngineVersion", "1.0.0")));
+    SecurityScanDao.ScannerSnapshot observedAgain = scans.insertSnapshotOrFindExisting(
+        new SecurityScanDao.ScannerSnapshot(
+            null, "contract-adapter", "v1", "grype", "0.1.0", "fixture-db",
+            now.minusSeconds(30), "a".repeat(64), "b".repeat(64), now.plusSeconds(1), true,
+            Map.of("catalogEngineVersion", "1.0.0")));
+    assertEquals(snapshot.id(), observedAgain.id());
+    assertEquals(now.plusSeconds(1), observedAgain.observedAt());
+    SecurityScanDao.ScannerSnapshot staleObservation = scans.insertSnapshotOrFindExisting(
+        new SecurityScanDao.ScannerSnapshot(
+            null, "contract-adapter", "v1", "grype", "0.1.0", "fixture-db",
+            now.minusSeconds(90), "a".repeat(64), "b".repeat(64), now.minusSeconds(1), true,
+            Map.of("catalogEngineVersion", "stale")));
+    assertEquals(snapshot.id(), staleObservation.id());
+    assertEquals(
+        now.plusSeconds(1),
+        staleObservation.observedAt(),
+        "an older replica observation must not move the shared snapshot timestamp backwards");
+    assertEquals(
+        now.minusSeconds(60),
+        staleObservation.vulnerabilityDatabaseUpdatedAt(),
+        "database build provenance is immutable for one snapshot fingerprint");
+    assertEquals("1.0.0", staleObservation.details().get("catalogEngineVersion"));
+    SecurityScanDao.ScannerSnapshot newestDatabase =
+        scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+            null, "contract-adapter", "v1", "grype", "0.1.0", "newest-db",
+            now.minusSeconds(10), "a".repeat(64), "c".repeat(64), now.plusSeconds(2), true,
+            Map.of()));
+    SecurityScanDao.ScannerSnapshot laggingReplica =
+        scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+            null, "contract-adapter", "v1", "grype", "0.1.0", "lagging-db",
+            now.minusSeconds(300), "a".repeat(64), "d".repeat(64), now.plusSeconds(3), true,
+            Map.of()));
+    assertEquals(
+        laggingReplica.id(),
+        scans.latestScannerSnapshot().orElseThrow().id(),
+        "latest observation still represents scanner health");
+    assertEquals(
+        newestDatabase.id(),
+        scans.latestReadyScannerSnapshot(now.plusSeconds(5)).orElseThrow().id(),
+        "a later observation from a lagging replica must not regress the authoritative DB epoch");
+    Instant equalDatabaseEpoch = now.minusSeconds(5);
+    SecurityScanDao.ScannerSnapshot equalEpochFirst =
+        scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+            null, "contract-adapter", "v1", "grype", "0.1.0", "equal-db-first",
+            equalDatabaseEpoch, "a".repeat(64), "e".repeat(64), now.plusSeconds(4), true,
+            Map.of()));
+    SecurityScanDao.ScannerSnapshot equalEpochSecond =
+        scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+            null, "contract-adapter", "v1", "grype", "0.2.0", "equal-db-second",
+            equalDatabaseEpoch, "a".repeat(64), "f".repeat(64), now.plusSeconds(5), true,
+            Map.of()));
+    assertTrue(equalEpochSecond.id() > equalEpochFirst.id());
+    scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+        null, "contract-adapter", "v1", "grype", "0.1.0", "equal-db-first",
+        equalDatabaseEpoch, "a".repeat(64), "e".repeat(64), now.plusSeconds(6), true,
+        Map.of()));
+    assertEquals(
+        equalEpochFirst.id(),
+        scans.latestScannerSnapshot().orElseThrow().id(),
+        "mutable observation time remains the scanner-health signal");
+    assertEquals(
+        equalEpochSecond.id(),
+        scans.latestReadyScannerSnapshot(now.plusSeconds(7)).orElseThrow().id(),
+        "equal database epochs must use the immutable snapshot ID tie-breaker");
+    long snapshotTaskId = scans.createTask(new SecurityScanDao.TaskDraft(
+        repositoryId,
+        assetId,
+        SubjectKind.ASSET_BLOB,
+        "sha256:" + "2".repeat(64),
+        1,
+        profileId,
+        1,
+        snapshot.id(),
+        ScanStage.MATCH_ONLY,
+        RequestReason.VULNERABILITY_DB_CHANGED,
+        25,
+        1,
+        "contract",
+        "snapshot-reactivation",
+        "snapshot-reactivation",
+        now.plusSeconds(2)));
+    SecurityScanDao.ScanTask snapshotLease = inTransaction(() -> scans.claimTasks(
+        "snapshot-replica", now.plusSeconds(2), now.plusSeconds(32), 1).getFirst());
+    assertEquals(snapshotTaskId, snapshotLease.id());
+    assertTrue(scans.completeTask(
+        snapshotTaskId, snapshotLease.leaseToken(), now.plusSeconds(3)));
+    assertTrue(scans.reactivateSnapshotTask(
+        snapshotTaskId, snapshot.id(), now.plusSeconds(4), "snapshot-reconciler"));
+    SecurityScanDao.ScanTask reactivatedSnapshotTask =
+        scans.findTask(snapshotTaskId).orElseThrow();
+    assertEquals(
+        com.github.klboke.kkrepo.security.scan.ScanEnums.TaskStatus.PENDING,
+        reactivatedSnapshotTask.status());
+    assertEquals(0, reactivatedSnapshotTask.attempts());
+    assertFalse(scans.reactivateSnapshotTask(
+        snapshotTaskId, snapshot.id() + 1, now.plusSeconds(5), "snapshot-reconciler"));
+    SecurityScanDao.ScanTask reactivatedSnapshotLease = inTransaction(() -> scans.claimTasks(
+        "snapshot-replica-2", now.plusSeconds(5), now.plusSeconds(35), 1).getFirst());
+    assertEquals(snapshotTaskId, reactivatedSnapshotLease.id());
+    assertTrue(scans.completeTask(
+        snapshotTaskId, reactivatedSnapshotLease.leaseToken(), now.plusSeconds(6)));
+
+    long deletedDocumentBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "security/deleted-sbom.json", "scan-deleted-sbom"));
+    assertEquals(
+        1,
+        stores().assets()
+            .markBlobDeletedIfUnreferenced(deletedDocumentBlobId, "gc-race-fixture"));
+    assertFalse(
+        inTransaction(() ->
+            stores()
+                .blobReferences()
+                .retain("security-scan-persisting", taskId, deletedDocumentBlobId)),
+        "a committed soft-delete fence must reject late ownership publication");
+    SecurityScanDao.Sbom rejectedSbom = new SecurityScanDao.Sbom(
+        null,
+        SubjectKind.ASSET_BLOB,
+        "sha256:" + "7".repeat(64),
+        null,
+        "syft",
+        "1.0.0",
+        "7".repeat(64),
+        "8".repeat(64),
+        deletedDocumentBlobId,
+        "9".repeat(64),
+        "CycloneDX",
+        "1.6",
+        1,
+        0,
+        true,
+        now);
+    assertThrows(
+        IllegalStateException.class,
+        () -> inTransaction(() -> scans.insertSbomOrFindExisting(rejectedSbom)),
+        "metadata publication must abort when GC committed the document deletion fence");
+    assertTrue(
+        scans.findSbomByCatalogFingerprint(rejectedSbom.catalogFingerprint()).isEmpty(),
+        "a rejected document must not leave committed metadata pointing at deleted content");
+    assertEquals(
+        1,
+        stores().assets().hardDeleteBlobByIdIfDeleted(deletedDocumentBlobId));
+    long recoveredDocumentBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "security/recovered-sbom.json", "scan-recovered-sbom"));
+    assertEquals(
+        1,
+        stores().assets()
+            .markBlobDeletedIfUnreferenced(
+                recoveredDocumentBlobId, "gc-recovery-fixture"));
+    inTransaction(() -> {
+      assertTrue(
+          stores().assets().restoreDeletedBlobById(recoveredDocumentBlobId).isPresent());
+      assertTrue(
+          stores().blobReferences().retain(
+              "security-scan-persisting", taskId, recoveredDocumentBlobId));
+      return null;
+    });
+    assertEquals(
+        0,
+        stores().assets()
+            .markBlobDeletedIfUnreferenced(
+                recoveredDocumentBlobId, "gc-recovery-referenced-fixture"));
+    assertEquals(
+        1,
+        stores().blobReferences().releaseOwner("security-scan-persisting", taskId));
+    assertEquals(
+        1,
+        stores().assets()
+            .markBlobDeletedIfUnreferenced(
+                recoveredDocumentBlobId, "gc-recovery-cleanup"));
+    assertEquals(
+        1,
+        stores().assets().hardDeleteBlobByIdIfDeleted(recoveredDocumentBlobId));
+    long sbomBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "security/sbom.json", "scan-sbom"));
+    assertTrue(inTransaction(() ->
+        stores().blobReferences().retain("security-scan-persisting", taskId, sbomBlobId)));
+    assertEquals(
+        0,
+        stores().assets().markBlobDeletedIfUnreferenced(sbomBlobId, "gc-race-fixture"),
+        "ownership published first must prevent the soft-delete fence");
+    long concurrentFenceBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "security/concurrent-sbom.json", "scan-concurrent-sbom"));
+    CyclicBarrier concurrentFenceStart = new CyclicBarrier(2);
+    List<Boolean> concurrentFenceOutcomes = invokeConcurrently(List.of(
+        () -> {
+          concurrentFenceStart.await();
+          return inTransaction(() -> stores().blobReferences().retain(
+              "security-scan-persisting", taskId, concurrentFenceBlobId));
+        },
+        () -> {
+          concurrentFenceStart.await();
+          return inTransaction(() -> stores().assets().markBlobDeletedIfUnreferenced(
+              concurrentFenceBlobId, "gc-concurrent-race-fixture") == 1);
+        }), 2);
+    assertEquals(
+        1,
+        concurrentFenceOutcomes.stream().filter(Boolean::booleanValue).count(),
+        "concurrent ownership publication and the GC fence must have exactly one winner");
+    if (concurrentFenceOutcomes.getFirst()) {
+      assertEquals(
+          1,
+          stores().blobReferences().release(
+              "security-scan-persisting", taskId, concurrentFenceBlobId));
+      assertEquals(
+          1,
+          stores().assets().markBlobDeletedIfUnreferenced(
+              concurrentFenceBlobId, "gc-concurrent-cleanup"));
+    }
+    assertEquals(1, stores().assets().hardDeleteBlobByIdIfDeleted(concurrentFenceBlobId));
+    long concurrentReconcileBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "security/reconcile-sbom.json", "scan-reconcile-sbom"));
+    CyclicBarrier concurrentReconcileStart = new CyclicBarrier(2);
+    List<Boolean> concurrentReconcileOutcomes = invokeConcurrently(List.of(
+        () -> {
+          concurrentReconcileStart.await();
+          return inTransaction(() -> stores().blobReferences().retain(
+              "security-scan-persisting", taskId, concurrentReconcileBlobId));
+        },
+        () -> {
+          concurrentReconcileStart.await();
+          return inTransaction(() -> stores().assets().markUnreferencedBlobsDeletedAfter(
+              concurrentReconcileBlobId - 1,
+              1,
+              1,
+              "gc-concurrent-reconcile-fixture").marked() == 1);
+        }), 2);
+    assertEquals(
+        1,
+        concurrentReconcileOutcomes.stream().filter(Boolean::booleanValue).count(),
+        "concurrent ownership publication and orphan reconciliation must have one winner");
+    if (concurrentReconcileOutcomes.getFirst()) {
+      assertEquals(
+          1,
+          stores().blobReferences().release(
+              "security-scan-persisting", taskId, concurrentReconcileBlobId));
+      assertEquals(
+          1,
+          stores().assets().markBlobDeletedIfUnreferenced(
+              concurrentReconcileBlobId, "gc-concurrent-reconcile-cleanup"));
+    }
+    assertEquals(1, stores().assets().hardDeleteBlobByIdIfDeleted(concurrentReconcileBlobId));
+    SecurityScanDao.Sbom sbomDraft = new SecurityScanDao.Sbom(
+        null, SubjectKind.ASSET_BLOB, "sha256:" + "2".repeat(64), null,
+        "syft", "1.0.0", "c".repeat(64), "d".repeat(64), sbomBlobId,
+        "e".repeat(64), "CycloneDX", "1.6", 1, 0, true, now);
+    List<Long> sbomIds = invokeConcurrently(List.of(
+        () -> inTransaction(() -> scans.insertSbomOrFindExisting(sbomDraft).id()),
+        () -> inTransaction(() -> scans.insertSbomOrFindExisting(sbomDraft).id())), 2);
+    assertEquals(1, new HashSet<>(sbomIds).size());
+    long sbomId = sbomIds.getFirst();
+    assertEquals(
+        1,
+        stores().blobReferences().release("security-scan-persisting", taskId, sbomBlobId));
+    SecurityScanDao.SbomComponent component = new SecurityScanDao.SbomComponent(
+        null, sbomId, "pkg:maven/com.acme/app@1.0", null,
+        "pkg:maven/com.acme/app@1.0", null, "library", "com.acme", "app", "1.0",
+        "direct", List.of("app.jar"), List.of("Apache-2.0"), Map.of());
+    assertEquals(1, inTransaction(() -> scans.insertSbomComponents(sbomId, List.of(component))));
+    assertEquals(0, inTransaction(() -> scans.insertSbomComponents(sbomId, List.of(component))));
+    long atomicSbomBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "security/atomic-sbom.json", "scan-atomic-sbom"));
+    SecurityScanDao.Sbom atomicSbom = new SecurityScanDao.Sbom(
+        null, SubjectKind.ASSET_BLOB, "sha256:" + "4".repeat(64), null,
+        "syft", "1.0.0", "f".repeat(64), "atomic-" + "f".repeat(57), atomicSbomBlobId,
+        "a".repeat(64), "CycloneDX", "1.6", 1, 0, true, now);
+    SecurityScanDao.SbomComponent invalidComponent = new SecurityScanDao.SbomComponent(
+        null, 0, "pkg:maven/com.acme/invalid@1.0", null,
+        "pkg:maven/com.acme/invalid@1.0", null, "library", "com.acme", null, "1.0",
+        "direct", List.of(), List.of(), Map.of());
+    assertThrows(
+        RuntimeException.class,
+        () -> inTransaction(() -> scans.publishSbom(atomicSbom, List.of(invalidComponent))),
+        "SBOM metadata and its component projection must roll back together");
+    assertTrue(scans.findSbomByCatalogFingerprint(atomicSbom.catalogFingerprint()).isEmpty());
+    assertEquals(
+        1,
+        stores().assets().markBlobDeletedIfUnreferenced(
+            atomicSbomBlobId, "atomic-sbom-rollback"));
+    assertEquals(1, stores().assets().hardDeleteBlobByIdIfDeleted(atomicSbomBlobId));
+
+    long deletedReportBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "security/deleted-report.json", "scan-deleted-report"));
+    assertEquals(
+        1,
+        stores().assets()
+            .markBlobDeletedIfUnreferenced(deletedReportBlobId, "gc-report-race-fixture"));
+    SecurityScanDao.ScanRun rejectedRun = new SecurityScanDao.ScanRun(
+        null,
+        taskId,
+        sbomId,
+        snapshot.id(),
+        "6".repeat(64),
+        "7".repeat(64),
+        ScanState.COMPLETE,
+        ScanCompleteness.COMPLETE,
+        deletedReportBlobId,
+        "8".repeat(64),
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        Severity.UNKNOWN,
+        List.of(),
+        List.of(),
+        now,
+        now.plusSeconds(2),
+        now.plusSeconds(2));
+    assertThrows(
+        IllegalStateException.class,
+        () -> inTransaction(() -> scans.insertRunOrFindExisting(rejectedRun)),
+        "run publication must abort when GC committed the report deletion fence");
+    assertTrue(
+        scans.findRunByMatchFingerprint(rejectedRun.matchFingerprint()).isEmpty(),
+        "a rejected report must not leave committed run metadata");
+    assertEquals(
+        1,
+        stores().assets().hardDeleteBlobByIdIfDeleted(deletedReportBlobId));
+
+    long reportBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "security/report.json", "scan-report"));
+    SecurityScanDao.ScanRun runDraft = new SecurityScanDao.ScanRun(
+        null, taskId, sbomId, snapshot.id(), "f".repeat(64), "0".repeat(64),
+        ScanState.COMPLETE, ScanCompleteness.COMPLETE, reportBlobId, "1".repeat(64),
+        1, 1, 0, 1, 0, 0, 0, Severity.HIGH,
+        List.of("linux/amd64"), List.of("linux/arm64"),
+        now, now.plusSeconds(2), now.plusSeconds(2));
+    List<Long> runIds = invokeConcurrently(List.of(
+        () -> inTransaction(() -> scans.insertRunOrFindExisting(runDraft).id()),
+        () -> inTransaction(() -> scans.insertRunOrFindExisting(runDraft).id())), 2);
+    assertEquals(1, new HashSet<>(runIds).size());
+    long runId = runIds.getFirst();
+    assertEquals(List.of("linux/amd64"), scans.findRun(runId).orElseThrow().scannedPlatforms());
+    assertEquals(List.of("linux/arm64"), scans.findRun(runId).orElseThrow().missingPlatforms());
+    long groupRepositoryId =
+        createRepository("scan-contract-group", RepositoryFormat.MAVEN2, RepositoryType.GROUP);
+    stores().repositories().addMember(groupRepositoryId, repositoryId, 0);
+    inTransaction(() -> {
+      scans.associateRun(
+          runId, repositoryId, assetId, profileId, 1, now.plusSeconds(2));
+      scans.associateRun(
+          runId, repositoryId, assetId, profileId, 1, now.plusSeconds(2));
+      scans.associateRun(
+          runId, groupRepositoryId, assetId, profileId, 1, now.plusSeconds(2));
+      return null;
+    });
+    assertEquals(
+        java.util.stream.Stream.of(repositoryId, groupRepositoryId).sorted().toList(),
+        scans.listRepositoryIdsForRun(runId));
+    assertEquals(
+        runId,
+        scans.listRuns(repositoryId, "complete", 0, 10).getFirst().id(),
+        "run search must include status and completeness");
+    assertEquals(
+        runId,
+        scans.listRunsByRepositories(
+                List.of(repositoryId, groupRepositoryId), "scan-contract-group", 0, 10)
+            .getFirst()
+            .id(),
+        "global run pages must search names inside the visible repository relation");
+
+    SecurityScanDao.ScanFinding finding = new SecurityScanDao.ScanFinding(
+        null, runId, "GHSA-fixture|pkg:maven/com.acme/app@1.0", null,
+        "GHSA-fixture", List.of("CVE-2026-0001"), "fixture",
+        "pkg:maven/com.acme/app@1.0", "app", "1.0", List.of("1.1"),
+        Severity.HIGH, "fixture", "CVSS:3.1/AV:N", 8.1,
+        "<script>fixture</script>", "details", "javascript:alert(1)",
+        List.of("app.jar"), "active", now.plusSeconds(2));
+    assertEquals(1, inTransaction(() -> scans.insertFindings(runId, List.of(finding))));
+    assertEquals(0, inTransaction(() -> scans.insertFindings(runId, List.of(finding))));
+    SecurityScanDao.ScanFinding storedFinding =
+        scans.listFindings(repositoryId, runId, Severity.HIGH, 0, 10).getFirst();
+    assertNull(storedFinding.primaryUrl(), "unsafe finding URLs must not reach the UI projection");
+    assertEquals(
+        storedFinding.id(),
+        inTransaction(() -> scans.findFindingForUpdate(storedFinding.id()).orElseThrow()).id());
+    assertEquals(
+        storedFinding.id(),
+        scans.listFindings(repositoryId, null, null, "ghsa-fixture", 0, 10)
+            .getFirst().id(),
+        "finding search must include advisory identifiers");
+    assertEquals(
+        storedFinding.id(),
+        scans.listFindingsByRepositories(
+                List.of(repositoryId, groupRepositoryId),
+                null,
+                null,
+                "scan-contract-group",
+                0,
+                10)
+            .getFirst()
+            .id(),
+        "global finding pages must search names inside the visible repository relation");
+    assertEquals(
+        policyId,
+        scans.listPolicies("contract-policy", 0, 10).getFirst().id(),
+        "policy search must include policy names");
+    SecurityScanDao.ScanWaiver waiver = scans.createWaiver(new SecurityScanDao.ScanWaiver(
+        null, "FINDING", repositoryId, assetId, storedFinding.id(), null, null, Map.of(),
+        "Accepted until the scheduled upgrade", policyId, 1L, "contract", "contract",
+        now.plusSeconds(3600), now.plusSeconds(2), now.plusSeconds(2)));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> scans.createWaiver(new SecurityScanDao.ScanWaiver(
+            null,
+            "FINDING",
+            repositoryId,
+            assetId,
+            storedFinding.id(),
+            null,
+            null,
+            Map.of(),
+            "r".repeat(SecurityScanDao.MAX_WAIVER_REASON_LENGTH + 1),
+            policyId,
+            1L,
+            "contract",
+            "contract",
+            now.plusSeconds(3600),
+            now.plusSeconds(2),
+            now.plusSeconds(2))),
+        "persistence must never silently truncate an audit justification");
+    assertEquals(
+        waiver.id(),
+        scans.listWaivers(null, "scheduled upgrade", 0, 10).getFirst().id(),
+        "waiver search must include reasons");
+    assertEquals(
+        waiver.id(),
+        scans.listWaivers(null, "com/acme/app", 0, 10).getFirst().id(),
+        "waiver search must include artifact paths");
+    assertEquals(
+        waiver.id(),
+        scans.listWaivers(null, "ghsa-fixture", 0, 10).getFirst().id(),
+        "waiver search must include exact-finding advisories");
+    assertEquals(
+        waiver.id(),
+        scans.listActiveWaivers(
+                repositoryId, assetId, now.plusSeconds(3), 0, 10)
+            .getFirst()
+            .id(),
+        "active waiver lookup must cover repository-and-asset scoped rows");
+    assertEquals(
+        waiver.id(),
+        scans.listWaiversForFindings(
+                List.of(storedFinding.id()),
+                List.of(runId),
+                List.of(storedFinding.advisoryId(), "CVE-2026-0001"),
+                List.of(storedFinding.packageUrl(), storedFinding.packageName()),
+                0,
+                10)
+            .getFirst()
+            .id(),
+        "finding pages must query only waivers matching their finding and subject keys");
+    assertTrue(scans.listWaiversForFindings(
+        List.of(storedFinding.id()),
+        List.of(runId),
+        List.of(storedFinding.advisoryId()),
+        List.of(storedFinding.packageUrl()),
+        waiver.id(),
+        10).isEmpty(), "finding waiver keyset cursor must exclude earlier rows");
+    assertTrue(scans.listWaiversForFindings(
+        List.of(storedFinding.id()),
+        List.of(runId + 1),
+        List.of(storedFinding.advisoryId()),
+        List.of(storedFinding.packageUrl()),
+        0,
+        10).isEmpty());
+    assertTrue(scans.runSubjectExists(runId, repositoryId, assetId));
+    assertEquals(
+        List.of(repositoryId, groupRepositoryId),
+        scans.listRunSubjects(runId, 0, 0, 10).stream()
+            .map(SecurityScanDao.ScanRunSubject::repositoryId)
+            .toList());
+
+    SecurityScanDao.AssetSecurityState storedState = scans.upsertAssetStateIfCurrent(
+        new SecurityScanDao.AssetSecurityState(
+            assetId, profileId, 1, PersistenceHashes.sha256("sha256:" + "2".repeat(64)),
+            runId, ScanState.COMPLETE, ScanCompleteness.COMPLETE, true, Severity.HIGH,
+            Map.of("high", 1), policyId, 1L, PolicyDecision.BLOCK_VULNERABILITY,
+            "SEVERITY_THRESHOLD", now.plusSeconds(3600), now.plusSeconds(2), 0));
+    assertEquals(runId, storedState.latestScanRunId());
+    SecurityScanDao.AssetPolicyState policyState = scans.upsertAssetPolicyStateIfCurrent(
+        new SecurityScanDao.AssetPolicyState(
+            assetId, profileId, repositoryId, 1, runId, policyId, 1L,
+            config.configRevision(), PolicyDecision.BLOCK_VULNERABILITY,
+            "SEVERITY_THRESHOLD", 0, now.plusSeconds(3600), null,
+            now.plusSeconds(2), 0));
+    assertEquals(
+        PolicyDecision.BLOCK_VULNERABILITY,
+        scans.findAssetPolicyState(assetId, profileId, repositoryId)
+            .orElseThrow().policyDecision());
+
+    List<SecurityScanDao.DownloadPolicySnapshot> directSnapshots =
+        scans.findDownloadPolicySnapshots(assetId, repositoryId);
+    assertEquals(1, directSnapshots.size());
+    SecurityScanDao.DownloadPolicySnapshot directSnapshot = directSnapshots.getFirst();
+    assertEquals(assetId, directSnapshot.assetId());
+    assertEquals(repositoryId, directSnapshot.sourceRepositoryId());
+    assertEquals(RepositoryFormat.MAVEN2, directSnapshot.format());
+    assertEquals(path, directSnapshot.path());
+    assertEquals("ARTIFACT", directSnapshot.kind());
+    assertEquals("application/java-archive", directSnapshot.contentType());
+    assertEquals(42L, directSnapshot.blobSize());
+    assertEquals(repositoryId, directSnapshot.config().repositoryId());
+    assertEquals(profileId, directSnapshot.profile().id());
+    assertEquals(artifactBlobId, directSnapshot.candidate().assetBlobId());
+    assertEquals(runId, directSnapshot.assetState().latestScanRunId());
+    assertEquals(policyId, directSnapshot.policy().id());
+    assertEquals(
+        PolicyDecision.BLOCK_VULNERABILITY,
+        directSnapshot.policyState().policyDecision());
+    assertEquals(
+        List.of(assetId),
+        scans.findDownloadPolicySnapshots(
+                List.of(assetId, assetId), repositoryId).stream()
+            .map(SecurityScanDao.DownloadPolicySnapshot::assetId)
+            .distinct()
+            .toList(),
+        "batch policy lookup must deduplicate asset IDs and preserve snapshot semantics");
+    assertEquals(1, scans.findDownloadPolicySnapshots(assetId, null).size());
+    SecurityScanDao.ScanSummary visibleSummary = scans.summary(List.of(repositoryId));
+    assertEquals(1, visibleSummary.completeAssets());
+    assertEquals(1, visibleSummary.highFindings());
+    assertEquals(
+        1,
+        scans.metricSummary(100).highRiskFindings(),
+        "operational finding counters must include the current authoritative run");
+    assertEquals(
+        1,
+        scans.summary(List.of(repositoryId, groupRepositoryId)).highFindings(),
+        "a finding associated with multiple visible repositories must be counted once");
+    assertEquals(
+        new SecurityScanDao.ScanSummary(0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+        scans.summary(List.of()),
+        "an empty permission scope must not query or expose global scan totals");
+
+    scans.upsertRepositoryConfig(
+        new SecurityScanDao.RepositoryScanConfig(
+            groupRepositoryId, true, profileId, false, true, EnforcementMode.ENFORCE,
+            PolicyAction.BLOCK, PolicyAction.BLOCK, PolicyAction.BLOCK,
+            3600L, null, 1, now, now));
+    assertEquals(
+        1,
+        scans.findDownloadPolicySnapshots(assetId, groupRepositoryId).size(),
+        "a group hosted-content toggle must exclude hosted member assets");
+    assertTrue(
+        scans.listTasksByRepositories(List.of(groupRepositoryId), null, null, 0, 10).isEmpty(),
+        "a group task scope must honor the hosted-content toggle");
+    SecurityScanDao.RepositoryScanConfig groupConfig = scans.upsertRepositoryConfig(
+        new SecurityScanDao.RepositoryScanConfig(
+            groupRepositoryId, true, profileId, true, true, EnforcementMode.ENFORCE,
+            PolicyAction.BLOCK, PolicyAction.BLOCK, PolicyAction.BLOCK,
+            3600L, null, 1, now, now));
+    assertEquals(
+        taskId,
+        scans.listTasksByRepositories(List.of(groupRepositoryId), null, null, 0, 10)
+            .getFirst()
+            .id(),
+        "group-visible task pages must include work stored against the concrete member source");
+    assertEquals(
+        1,
+        scans.summary(List.of(groupRepositoryId)).runningTasks(),
+        "group-only overview metrics must use the same member task scope as task pages");
+    List<SecurityScanDao.DownloadPolicySnapshot> groupSnapshots =
+        scans.findDownloadPolicySnapshots(assetId, groupRepositoryId);
+    assertEquals(2, groupSnapshots.size());
+    assertEquals(
+        List.of(repositoryId, groupRepositoryId),
+        scans.findDownloadPolicyContexts(repositoryId, groupRepositoryId).stream()
+            .map(context -> context.config().repositoryId())
+            .toList(),
+        "uncached policy lookup must include only configurations on the entry-to-source path");
+    SecurityScanDao.DownloadPolicySnapshot sourceContext = groupSnapshots.stream()
+        .filter(row -> row.config().repositoryId() == repositoryId)
+        .findFirst()
+        .orElseThrow();
+    SecurityScanDao.DownloadPolicySnapshot groupContext = groupSnapshots.stream()
+        .filter(row -> row.config().repositoryId() == groupRepositoryId)
+        .findFirst()
+        .orElseThrow();
+    assertEquals(policyId, sourceContext.policy().id());
+    assertEquals(groupConfig.configRevision(), groupContext.config().configRevision());
+    assertEquals(profileId, groupContext.profile().id());
+    assertEquals(runId, groupContext.assetState().latestScanRunId());
+    assertNull(groupContext.policy());
+    assertNull(groupContext.policyState());
+    scans.upsertAssetPolicyStateIfCurrent(
+        new SecurityScanDao.AssetPolicyState(
+            assetId,
+            profileId,
+            repositoryId,
+            1,
+            runId,
+            policyId,
+            1L,
+            config.configRevision(),
+            PolicyDecision.ALLOW,
+            "SOURCE_ALLOW",
+            0,
+            now.plusSeconds(3600),
+            null,
+            now.plusSeconds(2),
+            policyState.version()));
+    scans.upsertAssetPolicyStateIfCurrent(
+        new SecurityScanDao.AssetPolicyState(
+            assetId,
+            profileId,
+            groupRepositoryId,
+            1,
+            runId,
+            null,
+            null,
+            groupConfig.configRevision(),
+            PolicyDecision.BLOCK_VULNERABILITY,
+            "GROUP_BLOCK",
+            0,
+            now.plusSeconds(3600),
+            null,
+            now.plusSeconds(2),
+            0));
+    SecurityScanDao.ScanSummary sourceOnlySummary = scans.summary(List.of(repositoryId));
+    assertEquals(1, sourceOnlySummary.completeAssets());
+    assertEquals(0, sourceOnlySummary.blockedAssets());
+    SecurityScanDao.ScanSummary groupOnlySummary = scans.summary(List.of(groupRepositoryId));
+    assertEquals(1, groupOnlySummary.completeAssets());
+    assertEquals(1, groupOnlySummary.blockedAssets());
+    assertEquals(
+        1,
+        groupOnlySummary.highFindings(),
+        "group-only visibility must include findings associated with the group policy context");
+    scans.upsertRepositoryConfig(new SecurityScanDao.RepositoryScanConfig(
+        groupRepositoryId,
+        true,
+        profileId,
+        true,
+        true,
+        EnforcementMode.ENFORCE,
+        PolicyAction.ALLOW,
+        PolicyAction.BLOCK,
+        PolicyAction.BLOCK,
+        3600L,
+        null,
+        groupConfig.configRevision(),
+        now,
+        now.plusSeconds(3)));
+    assertEquals(
+        0,
+        scans.summary(List.of(groupRepositoryId)).blockedAssets(),
+        "a stale materialized block must not be counted when the current pending action allows");
+    scans.upsertRepositoryConfig(new SecurityScanDao.RepositoryScanConfig(
+        groupRepositoryId,
+        true,
+        profileId,
+        true,
+        true,
+        EnforcementMode.ENFORCE,
+        PolicyAction.BLOCK,
+        PolicyAction.BLOCK,
+        PolicyAction.BLOCK,
+        3600L,
+        null,
+        groupConfig.configRevision() + 1,
+        now,
+        now.plusSeconds(4)));
+    assertEquals(
+        1,
+        scans.summary(List.of(groupRepositoryId)).blockedAssets(),
+        "a current blocking pending action must count before a policy row is rematerialized");
+    long outerGroupRepositoryId =
+        createRepository("scan-contract-outer", RepositoryFormat.MAVEN2, RepositoryType.GROUP);
+    stores().repositories().addMember(outerGroupRepositoryId, groupRepositoryId, 0);
+    scans.upsertRepositoryConfig(new SecurityScanDao.RepositoryScanConfig(
+        outerGroupRepositoryId,
+        true,
+        profileId,
+        true,
+        true,
+        EnforcementMode.ENFORCE,
+        PolicyAction.BLOCK,
+        PolicyAction.BLOCK,
+        PolicyAction.BLOCK,
+        3600L,
+        null,
+        1,
+        now,
+        now));
+    assertEquals(
+        java.util.stream.Stream.of(repositoryId, groupRepositoryId, outerGroupRepositoryId)
+            .sorted()
+            .toList(),
+        scans.findDownloadPolicySnapshots(assetId, outerGroupRepositoryId).stream()
+            .map(snapshotRow -> snapshotRow.config().repositoryId())
+            .sorted()
+            .toList(),
+        "nested downloads must enforce every configured group on the actual source-to-entry path");
+    long unrelatedGroupRepositoryId =
+        createRepository("scan-contract-unrelated", RepositoryFormat.MAVEN2, RepositoryType.GROUP);
+    scans.upsertRepositoryConfig(new SecurityScanDao.RepositoryScanConfig(
+        unrelatedGroupRepositoryId,
+        true,
+        profileId,
+        true,
+        true,
+        EnforcementMode.ENFORCE,
+        PolicyAction.BLOCK,
+        PolicyAction.BLOCK,
+        PolicyAction.BLOCK,
+        3600L,
+        null,
+        1,
+        now,
+        now));
+    assertEquals(
+        List.of(repositoryId),
+        scans.findDownloadPolicySnapshots(assetId, unrelatedGroupRepositoryId).stream()
+            .map(snapshotRow -> snapshotRow.config().repositoryId())
+            .toList(),
+        "an unrelated entry repository must not inject its policy into the download path");
+    assertEquals(1, scans.invalidatePolicyStatesForWaiver(waiver));
+    assertTrue(scans.findAssetPolicyState(assetId, profileId, repositoryId).isEmpty());
+    assertTrue(scans.findAssetPolicyState(assetId, profileId, groupRepositoryId).isPresent());
+    assertThrows(
+        IllegalStateException.class,
+        () -> scans.upsertAssetPolicyStateIfCurrent(policyState),
+        "an evaluator that read waivers before their revision changed must be fenced");
+    long currentWaiverRevision = scans.waiverRevision().currentRevision();
+    SecurityScanDao.AssetPolicyState refreshedPolicyState =
+        scans.upsertAssetPolicyStateIfCurrent(new SecurityScanDao.AssetPolicyState(
+            policyState.assetId(),
+            policyState.profileId(),
+            policyState.repositoryId(),
+            policyState.contentGeneration(),
+            policyState.latestScanRunId(),
+            policyState.policyId(),
+            policyState.policyRevision(),
+            policyState.configRevision(),
+            policyState.policyDecision(),
+            policyState.policyReasonCode(),
+            policyState.waivedFindings(),
+            policyState.staleAt(),
+            policyState.nextWaiverExpiry(),
+            now.plusSeconds(3),
+            policyState.version(),
+            currentWaiverRevision));
+    scans.upsertRepositoryConfig(new SecurityScanDao.RepositoryScanConfig(
+        repositoryId,
+        true,
+        profileId,
+        false,
+        true,
+        EnforcementMode.AUDIT,
+        PolicyAction.ALLOW,
+        PolicyAction.ALLOW,
+        PolicyAction.ALLOW,
+        3600L,
+        policyId,
+        config.configRevision(),
+        now,
+        now));
+    assertEquals(
+        assetId,
+        scans.listAssetStatesNeedingSnapshot(
+                profileId, snapshot.id() + 1000, 0, 10)
+            .getFirst()
+            .assetId(),
+        "group-only applicable policy state must participate in database rematching");
+    SecurityScanDao.RepositoryScanConfig restoredSourceConfig =
+        scans.upsertRepositoryConfig(new SecurityScanDao.RepositoryScanConfig(
+            repositoryId,
+            true,
+            profileId,
+            true,
+            true,
+            EnforcementMode.AUDIT,
+            PolicyAction.ALLOW,
+            PolicyAction.ALLOW,
+            PolicyAction.ALLOW,
+            3600L,
+            policyId,
+            config.configRevision(),
+            now,
+            now));
+
+    SecurityScanDao.AssetSecurityState partialState = scans.upsertAssetStateIfCurrent(
+        new SecurityScanDao.AssetSecurityState(
+            storedState.assetId(),
+            storedState.profileId(),
+            storedState.contentGeneration(),
+            storedState.subjectIdentityHash(),
+            storedState.latestScanRunId(),
+            ScanState.PARTIAL,
+            ScanCompleteness.PARTIAL,
+            false,
+            storedState.maxSeverity(),
+            storedState.findingCounts(),
+            storedState.policyId(),
+            storedState.policyRevision(),
+            storedState.policyDecision(),
+            storedState.policyReasonCode(),
+            storedState.staleAt(),
+            now.plusSeconds(3),
+            storedState.version()));
+    Instant partialPolicyStaleAt =
+        Instant.ofEpochMilli(Instant.now().plusSeconds(3600).toEpochMilli());
+    SecurityScanDao.AssetPolicyState partialSourcePolicyState =
+        scans.upsertAssetPolicyStateIfCurrent(new SecurityScanDao.AssetPolicyState(
+            refreshedPolicyState.assetId(),
+            refreshedPolicyState.profileId(),
+            refreshedPolicyState.repositoryId(),
+            refreshedPolicyState.contentGeneration(),
+            refreshedPolicyState.latestScanRunId(),
+            refreshedPolicyState.policyId(),
+            refreshedPolicyState.policyRevision(),
+            restoredSourceConfig.configRevision(),
+            PolicyDecision.BLOCK_VULNERABILITY,
+            "PARTIAL_SOURCE_BLOCK",
+            refreshedPolicyState.waivedFindings(),
+            partialPolicyStaleAt,
+            refreshedPolicyState.nextWaiverExpiry(),
+            now.plusSeconds(3),
+            refreshedPolicyState.version(),
+            currentWaiverRevision));
+    SecurityScanDao.RepositoryScanConfig currentGroupConfig =
+        scans.findRepositoryConfig(groupRepositoryId).orElseThrow();
+    SecurityScanDao.AssetPolicyState currentGroupPolicyState =
+        scans.findAssetPolicyState(assetId, profileId, groupRepositoryId).orElseThrow();
+    scans.upsertAssetPolicyStateIfCurrent(new SecurityScanDao.AssetPolicyState(
+        currentGroupPolicyState.assetId(),
+        currentGroupPolicyState.profileId(),
+        currentGroupPolicyState.repositoryId(),
+        currentGroupPolicyState.contentGeneration(),
+        currentGroupPolicyState.latestScanRunId(),
+        currentGroupPolicyState.policyId(),
+        currentGroupPolicyState.policyRevision(),
+        currentGroupConfig.configRevision(),
+        PolicyDecision.ALLOW,
+        "PARTIAL_GROUP_ALLOW",
+        currentGroupPolicyState.waivedFindings(),
+        partialPolicyStaleAt,
+        currentGroupPolicyState.nextWaiverExpiry(),
+        now.plusSeconds(3),
+        currentGroupPolicyState.version(),
+        currentWaiverRevision));
+    SecurityScanDao.ScanSummary partialSourceSummary = scans.summary(List.of(repositoryId));
+    assertEquals(1, partialSourceSummary.partialAssets());
+    assertEquals(
+        1,
+        partialSourceSummary.blockedAssets(),
+        "a partial scan must count its authoritative vulnerability block when partial is allowed");
+    assertEquals(
+        0,
+        scans.summary(List.of(groupRepositoryId)).blockedAssets(),
+        "a partial scan must count its authoritative allow when the partial fallback blocks");
+
+    assertTrue(scans.listPolicyEvaluationTargets(
+        repositoryId, repositoryId, profileId, restoredSourceConfig.configRevision(),
+        policyId, 1L, 0, now.plusSeconds(3), 10).isEmpty());
+    SecurityScanDao.PolicyEvaluationTarget ageExpired =
+        scans.listPolicyEvaluationTargets(
+                repositoryId,
+                repositoryId,
+                profileId,
+                restoredSourceConfig.configRevision(),
+                policyId,
+                1L,
+                0,
+                partialPolicyStaleAt.plusSeconds(1),
+                10)
+            .getFirst();
+    assertEquals(partialPolicyStaleAt, ageExpired.staleAt());
+    assertEquals(1, scans.listPolicyEvaluationTargets(
+        repositoryId, repositoryId, profileId, restoredSourceConfig.configRevision() + 1,
+        policyId, 1L, 0, now.plusSeconds(3), 10).size());
+    assertEquals(ScanState.PARTIAL, partialState.scanState());
+    assertTrue(scans.completeTask(taskId, takeover.leaseToken(), now.plusSeconds(3)));
+    assertTrue(
+        scans.oldestPendingTaskCreatedAt().isEmpty(),
+        "completed tasks must leave the pending-age gauge");
+
+    assertTrue(stores().blobReferences().isReferenced(sbomBlobId));
+    assertTrue(stores().blobReferences().isReferenced(reportBlobId));
+    assertEquals(
+        0,
+        stores().assets().markBlobDeletedIfUnreferenced(sbomBlobId, "contract"),
+        "SBOM document blobs remain live while referenced");
+    assertEquals(
+        0,
+        stores().assets().markBlobDeletedIfUnreferenced(reportBlobId, "contract"),
+        "raw report blobs remain live while referenced");
+
+    AssetBlobRecord replacement = blob(blobStoreId, "scan/app-2.0.jar", "scan-replacement");
+    long replacementBlobId = stores().assets().insertBlob(new AssetBlobRecord(
+        replacement.id(), replacement.blobStoreId(), replacement.blobRef(),
+        replacement.blobRefHash(), replacement.objectKey(), replacement.objectKeyHash(),
+        replacement.sha1(), "4".repeat(64), replacement.md5(), replacement.size(),
+        replacement.contentType(), replacement.createdBy(), replacement.createdByIp(),
+        replacement.blobCreatedAt(), replacement.blobUpdatedAt(), replacement.attributes()));
+    stores().assets().updateAssetBlobBinding(
+        assetId, replacementBlobId, "application/java-archive", 42, now.plusSeconds(4));
+    assertEquals(
+        1,
+        scans.findCandidate(assetId).orElseThrow().contentGeneration(),
+        "asset writes must not synchronously mutate scan candidates");
+    List<ArtifactChangeDao.ArtifactChange> replacementEvents = stores().artifactChanges()
+        .listAfter(originalEvents.getFirst().id(), 1000).stream()
+        .filter(event -> event.assetId() == assetId)
+        .toList();
+    assertEquals(1, replacementEvents.size());
+    assertEquals(
+        ArtifactChangeDao.ChangeKind.CONTENT_REPLACED,
+        replacementEvents.getFirst().changeKind());
+    assertEquals(artifactBlobId, replacementEvents.getFirst().previousAssetBlobId());
+    assertEquals(replacementBlobId, replacementEvents.getFirst().assetBlobId());
+    assertEquals(1, foldArtifactChanges(artifactChangeCursor));
+    assertEquals(2, scans.findCandidate(assetId).orElseThrow().contentGeneration());
+    SecurityScanDao.ScanSummary obsoleteGenerationSummary =
+        scans.summary(List.of(repositoryId));
+    assertEquals(0, obsoleteGenerationSummary.completeAssets());
+    assertEquals(0, obsoleteGenerationSummary.partialAssets());
+    assertEquals(0, obsoleteGenerationSummary.staleAssets());
+    assertEquals(
+        0,
+        obsoleteGenerationSummary.highFindings(),
+        "overview finding counters must exclude obsolete content generations");
+    assertEquals(
+        0,
+        scans.metricSummary(100).partialAssets(),
+        "operational state counters must exclude obsolete content generations");
+    assertEquals(
+        0,
+        scans.metricSummary(100).highRiskFindings(),
+        "operational finding counters must exclude obsolete content generations");
+    SecurityScanDao.AssetSecurityState afterStaleFinalize = scans.upsertAssetStateIfCurrent(
+        new SecurityScanDao.AssetSecurityState(
+            assetId, profileId, 1, PersistenceHashes.sha256("stale"), runId, ScanState.COMPLETE,
+            ScanCompleteness.COMPLETE, true, Severity.UNKNOWN, Map.of(), policyId, 1L,
+            PolicyDecision.ALLOW, "STALE_WORKER", null, now.plusSeconds(5), 0));
+    assertEquals(
+        PolicyDecision.BLOCK_VULNERABILITY,
+        afterStaleFinalize.policyDecision(),
+        "an old generation cannot overwrite the latest materialized state");
+    SecurityScanDao.AssetPolicyState afterStalePolicy = scans.upsertAssetPolicyStateIfCurrent(
+        new SecurityScanDao.AssetPolicyState(
+            assetId, profileId, repositoryId, 1, runId, policyId, 1L,
+            config.configRevision(), PolicyDecision.ALLOW, "STALE_POLICY_WORKER", 0,
+            null, null, now.plusSeconds(5), partialSourcePolicyState.version(),
+            currentWaiverRevision));
+    assertEquals(
+        PolicyDecision.BLOCK_VULNERABILITY,
+        afterStalePolicy.policyDecision(),
+        "an old generation cannot overwrite repository-context policy state");
+
+    SecurityScanDao.ScanPolicy replacementPolicy =
+        inTransaction(() -> scans.createNextPolicyRevision(
+            policyId,
+            new SecurityScanDao.ScanPolicy(
+                null, "contract-policy", true, Severity.CRITICAL, true, false, true,
+                7200L, List.of("linux/amd64"), 1, "contract", now.plusSeconds(6),
+                now.plusSeconds(6))).orElseThrow());
+    assertEquals(
+        1,
+        scans.replaceRepositoryPolicy(
+            policyId, replacementPolicy.id(), now.plusSeconds(6)));
+    SecurityScanDao.RepositoryScanConfig reboundConfig =
+        scans.findRepositoryConfig(repositoryId).orElseThrow();
+    assertEquals(replacementPolicy.id(), reboundConfig.policyId());
+    assertEquals(
+        restoredSourceConfig.configRevision() + 1,
+        reboundConfig.configRevision(),
+        "switching policy revisions must invalidate materialized repository decisions");
+    assertTrue(
+        inTransaction(() -> scans.createNextPolicyRevision(
+            policyId,
+            new SecurityScanDao.ScanPolicy(
+                null, "contract-policy", true, Severity.CRITICAL, true, false, true,
+                7200L, List.of("linux/amd64"), 1, "contract", now.plusSeconds(7),
+                now.plusSeconds(7)))).isEmpty(),
+        "a stale policy revision must not publish another immutable head");
+
+    SecurityScanDao.ScanWaiver globalWaiver =
+        scans.createWaiver(new SecurityScanDao.ScanWaiver(
+            null,
+            "GLOBAL",
+            null,
+            null,
+            null,
+            "GHSA-fixture",
+            null,
+            Map.of(),
+            "Installation-wide advisory exception",
+            null,
+            null,
+            "contract",
+            "contract",
+            null,
+            now.plusSeconds(7),
+            now.plusSeconds(7)));
+    assertTrue(scans.findAssetPolicyState(assetId, profileId, repositoryId).isPresent());
+    assertEquals(
+        0,
+        scans.invalidatePolicyStatesForWaiver(globalWaiver),
+        "global waiver changes must advance a watermark instead of deleting the state table");
+    SecurityScanDao.WaiverRevision globalRevision = scans.waiverRevision();
+    assertEquals(currentWaiverRevision + 1, globalRevision.currentRevision());
+    assertEquals(globalRevision.currentRevision(), globalRevision.globalInvalidationRevision());
+    assertTrue(scans.findAssetPolicyState(assetId, profileId, repositoryId).isPresent());
+    assertEquals(
+        globalRevision.globalInvalidationRevision(),
+        scans.findDownloadPolicySnapshots(assetId, repositoryId)
+            .getFirst()
+            .requiredWaiverRevision());
+  }
+
+  @Test
+  void securityScanningReconcilesWritesThatMissedAnAlreadyAdvancedEventCursor() {
+    SecurityScanDao scans = stores().securityScanning();
+    long repositoryId =
+        createRepository("scan-rolling-upgrade-reconcile", RepositoryFormat.MAVEN2);
+    long blobStoreId =
+        stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
+    Instant now = Instant.parse("2026-07-24T12:00:00Z");
+    long firstBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "scan/reconcile-1.jar", "scan-reconcile-1"));
+    String path = "com/acme/reconcile/1.0/reconcile-1.0.jar";
+    long assetId = stores().assets().insertAsset(new AssetRecord(
+        null,
+        repositoryId,
+        null,
+        firstBlobId,
+        RepositoryFormat.MAVEN2,
+        path,
+        PersistenceHashes.pathHash(path),
+        "reconcile-1.0.jar",
+        "ARTIFACT",
+        "application/java-archive",
+        42L,
+        null,
+        now,
+        Map.of()));
+    assertEquals(1, scans.recordArtifactContentChange(assetId));
+    assertTrue(scans.markCandidateEnqueued(assetId, 1));
+
+    long recentBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "scan/reconcile-2.jar", "scan-reconcile-2"));
+    assertEquals(
+        1,
+        stores().assets().updateAssetBlobBinding(
+            assetId,
+            recentBlobId,
+            "application/java-archive",
+            43,
+            now.plusSeconds(1)));
+
+    SecurityScanDao.ReconciliationPage recent = inTransaction(
+        () -> scans.reconcileArtifactChanges(
+            assetId, now, 10, 10));
+    assertEquals(1, recent.recentAssets());
+    assertEquals(0, recent.scannedAssets());
+    assertEquals(1, recent.markedAssets());
+    assertEquals(recentBlobId, scans.findCandidate(assetId).orElseThrow().assetBlobId());
+    assertEquals(2, scans.findCandidate(assetId).orElseThrow().contentGeneration());
+    assertTrue(scans.markCandidateEnqueued(assetId, 2));
+
+    long oldTimestampBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "scan/reconcile-3.jar", "scan-reconcile-3"));
+    assertEquals(
+        1,
+        stores().assets().updateAssetBlobBinding(
+            assetId,
+            oldTimestampBlobId,
+            "application/java-archive",
+            44,
+            now.minusSeconds(1)));
+
+    SecurityScanDao.ReconciliationPage wrap = inTransaction(
+        () -> scans.reconcileArtifactChanges(
+            assetId, now, 10, 10));
+    assertEquals(0, wrap.markedAssets());
+    assertTrue(wrap.wrapped());
+    assertEquals(0, wrap.nextAssetId());
+    SecurityScanDao.ReconciliationPage cyclic = inTransaction(
+        () -> scans.reconcileArtifactChanges(
+            wrap.nextAssetId(), now, 10, 10));
+    assertEquals(1, cyclic.scannedAssets());
+    assertEquals(1, cyclic.markedAssets());
+    assertEquals(
+        oldTimestampBlobId,
+        scans.findCandidate(assetId).orElseThrow().assetBlobId());
+    assertEquals(3, scans.findCandidate(assetId).orElseThrow().contentGeneration());
+  }
+
+  @Test
+  void securityScanningKeepsNewestScannerSnapshotWhenRematchesCompleteOutOfOrder()
+      throws Exception {
+    SecurityScanDao scans = stores().securityScanning();
+    long repositoryId =
+        createRepository("scan-snapshot-publication-fence", RepositoryFormat.MAVEN2);
+    long blobStoreId =
+        stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
+    Instant now = Instant.parse("2026-07-24T12:00:00Z");
+    long artifactBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "scan/snapshot-fence.jar", "scan-snapshot-fence-artifact"));
+    String path = "com/acme/snapshot-fence/1.0/snapshot-fence-1.0.jar";
+    long assetId = stores().assets().insertAsset(new AssetRecord(
+        null,
+        repositoryId,
+        null,
+        artifactBlobId,
+        RepositoryFormat.MAVEN2,
+        path,
+        PersistenceHashes.pathHash(path),
+        "snapshot-fence-1.0.jar",
+        "ARTIFACT",
+        "application/java-archive",
+        42L,
+        null,
+        now,
+        Map.of()));
+    assertEquals(1, scans.recordArtifactContentChange(assetId));
+
+    SecurityScanDao.ScanProfile profile = scans.createProfile(new SecurityScanDao.ScanProfile(
+        null,
+        "snapshot-publication-fence-profile",
+        true,
+        "syft",
+        "grype",
+        List.of("vuln"),
+        Map.of(),
+        1024 * 1024,
+        1000,
+        10 * 1024 * 1024,
+        1024 * 1024,
+        2,
+        60,
+        OciPlatformPolicy.REQUIRED_SET,
+        List.of(),
+        "1".repeat(64),
+        1,
+        now,
+        now));
+    SecurityScanDao.ScannerSnapshot newerSnapshot =
+        scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+            null,
+            "contract-adapter",
+            "v1",
+            "grype",
+            "0.1.0",
+            "newer-db",
+            now.minusSeconds(60),
+            "2".repeat(64),
+            "4".repeat(64),
+            now,
+            true,
+            Map.of()));
+    SecurityScanDao.ScannerSnapshot olderSnapshot =
+        scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+            null,
+            "contract-adapter",
+            "v1",
+            "grype",
+            "0.1.0",
+            "older-db",
+            now.minusSeconds(120),
+            "2".repeat(64),
+            "3".repeat(64),
+            now.plusSeconds(1),
+            true,
+            Map.of()));
+    assertTrue(
+        olderSnapshot.id() > newerSnapshot.id(),
+        "snapshot IDs intentionally run opposite to vulnerability database chronology");
+    assertEquals(
+        newerSnapshot.id(),
+        scans.latestReadyScannerSnapshot(now.plusSeconds(5)).orElseThrow().id());
+    long olderTaskId = scans.createTask(new SecurityScanDao.TaskDraft(
+        repositoryId,
+        assetId,
+        SubjectKind.ASSET_BLOB,
+        "sha256:" + "5".repeat(64),
+        1,
+        profile.id(),
+        profile.revision(),
+        olderSnapshot.id(),
+        ScanStage.MATCH_ONLY,
+        RequestReason.VULNERABILITY_DB_CHANGED,
+        25,
+        3,
+        "contract",
+        "older-snapshot-task",
+        "older-snapshot-task",
+        now));
+    long newerTaskId = scans.createTask(new SecurityScanDao.TaskDraft(
+        repositoryId,
+        assetId,
+        SubjectKind.ASSET_BLOB,
+        "sha256:" + "5".repeat(64),
+        1,
+        profile.id(),
+        profile.revision(),
+        newerSnapshot.id(),
+        ScanStage.MATCH_ONLY,
+        RequestReason.VULNERABILITY_DB_CHANGED,
+        25,
+        3,
+        "contract",
+        "newer-snapshot-task",
+        "newer-snapshot-task",
+        now.plusSeconds(1)));
+    assertTrue(newerTaskId > olderTaskId);
+
+    scans.upsertAssetStateIfCurrent(new SecurityScanDao.AssetSecurityState(
+        assetId,
+        profile.id(),
+        1,
+        PersistenceHashes.sha256("sha256:" + "5".repeat(64)),
+        null,
+        ScanState.PENDING,
+        ScanCompleteness.PARTIAL,
+        false,
+        Severity.UNKNOWN,
+        Map.of(),
+        null,
+        null,
+        PolicyDecision.BLOCK_PENDING,
+        "NEWER_TASK_PENDING",
+        null,
+        now.plusSeconds(1),
+        0));
+    assertTrue(scans.cancelTask(olderTaskId, now.plusSeconds(1)));
+    SecurityScanDao.AssetSecurityState afterOlderPendingCancel =
+        scans.findAssetState(assetId, profile.id()).orElseThrow();
+    assertEquals(ScanState.PENDING, afterOlderPendingCancel.scanState());
+    assertEquals(PolicyDecision.BLOCK_PENDING, afterOlderPendingCancel.policyDecision());
+    assertTrue(scans.requeueTask(olderTaskId, now.plusSeconds(1), "contract"));
+    SecurityScanDao.AssetSecurityState afterOlderPendingRetry =
+        scans.findAssetState(assetId, profile.id()).orElseThrow();
+    assertEquals(ScanState.PENDING, afterOlderPendingRetry.scanState());
+    assertEquals(PolicyDecision.BLOCK_PENDING, afterOlderPendingRetry.policyDecision());
+
+    long sbomBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "security/snapshot-fence-sbom.json", "snapshot-fence-sbom"));
+    SecurityScanDao.Sbom sbom = scans.insertSbomOrFindExisting(new SecurityScanDao.Sbom(
+        null,
+        SubjectKind.ASSET_BLOB,
+        "sha256:" + "5".repeat(64),
+        null,
+        "syft",
+        "1.0.0",
+        "6".repeat(64),
+        "7".repeat(64),
+        sbomBlobId,
+        "8".repeat(64),
+        "CycloneDX",
+        "1.6",
+        1,
+        0,
+        true,
+        now));
+    long reportBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "security/snapshot-fence-report.json", "snapshot-fence-report"));
+    SecurityScanDao.ScanRun olderRun =
+        scans.insertRunOrFindExisting(new SecurityScanDao.ScanRun(
+            null,
+            olderTaskId,
+            sbom.id(),
+            olderSnapshot.id(),
+            "9".repeat(64),
+            "a".repeat(64),
+            ScanState.COMPLETE,
+            ScanCompleteness.COMPLETE,
+            reportBlobId,
+            "b".repeat(64),
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            Severity.UNKNOWN,
+            now,
+            now.plusSeconds(2),
+            now.plusSeconds(2)));
+    SecurityScanDao.ScanRun newerRun =
+        scans.insertRunOrFindExisting(new SecurityScanDao.ScanRun(
+            null,
+            newerTaskId,
+            sbom.id(),
+            newerSnapshot.id(),
+            "9".repeat(64),
+            "c".repeat(64),
+            ScanState.COMPLETE,
+            ScanCompleteness.COMPLETE,
+            reportBlobId,
+            "b".repeat(64),
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            Severity.CRITICAL,
+            now.plusSeconds(1),
+            now.plusSeconds(3),
+            now.plusSeconds(3)));
+
+    SecurityScanDao.AssetSecurityState olderState =
+        new SecurityScanDao.AssetSecurityState(
+            assetId,
+            profile.id(),
+            1,
+            PersistenceHashes.sha256("sha256:" + "5".repeat(64)),
+            olderRun.id(),
+            ScanState.COMPLETE,
+            ScanCompleteness.COMPLETE,
+            true,
+            Severity.UNKNOWN,
+            Map.of(),
+            null,
+            null,
+            PolicyDecision.ALLOW,
+            "OLDER_SNAPSHOT",
+            null,
+            now.plusSeconds(2),
+            0);
+    SecurityScanDao.AssetSecurityState newerState =
+        new SecurityScanDao.AssetSecurityState(
+            assetId,
+            profile.id(),
+            1,
+            PersistenceHashes.sha256("sha256:" + "5".repeat(64)),
+            newerRun.id(),
+            ScanState.COMPLETE,
+            ScanCompleteness.COMPLETE,
+            true,
+            Severity.CRITICAL,
+            Map.of("critical", 1),
+            null,
+            null,
+            PolicyDecision.BLOCK_VULNERABILITY,
+            "NEWER_SNAPSHOT",
+            null,
+            now.plusSeconds(3),
+            0);
+    scans.upsertAssetStateIfCurrent(olderState);
+    CyclicBarrier publicationStart = new CyclicBarrier(2);
+    invokeConcurrently(List.of(
+        () -> {
+          publicationStart.await();
+          return inTransaction(() -> scans.upsertAssetStateIfCurrent(olderState));
+        },
+        () -> {
+          publicationStart.await();
+          return inTransaction(() -> scans.upsertAssetStateIfCurrent(newerState));
+        }), 2);
+    SecurityScanDao.AssetSecurityState published =
+        scans.findAssetState(assetId, profile.id()).orElseThrow();
+    assertEquals(
+        newerRun.id(),
+        published.latestScanRunId(),
+        "an older vulnerability snapshot must not replace a newer rematch result");
+    assertEquals(PolicyDecision.BLOCK_VULNERABILITY, published.policyDecision());
+
+    long waiverRevision = scans.waiverRevision().currentRevision();
+    SecurityScanDao.AssetPolicyState newerPolicyState =
+        scans.upsertAssetPolicyStateIfCurrent(new SecurityScanDao.AssetPolicyState(
+            assetId,
+            profile.id(),
+            repositoryId,
+            1,
+            newerRun.id(),
+            null,
+            null,
+            1,
+            PolicyDecision.BLOCK_VULNERABILITY,
+            "NEWER_SNAPSHOT",
+            0,
+            null,
+            null,
+            now.plusSeconds(3),
+            0,
+            waiverRevision));
+    SecurityScanDao.AssetPolicyState afterOlderPolicy =
+        scans.upsertAssetPolicyStateIfCurrent(new SecurityScanDao.AssetPolicyState(
+            assetId,
+            profile.id(),
+            repositoryId,
+            1,
+            olderRun.id(),
+            null,
+            null,
+            1,
+            PolicyDecision.ALLOW,
+            "OLDER_SNAPSHOT",
+            0,
+            null,
+            null,
+            now.plusSeconds(4),
+            newerPolicyState.version(),
+            waiverRevision));
+    assertEquals(newerRun.id(), afterOlderPolicy.latestScanRunId());
+    assertEquals(PolicyDecision.BLOCK_VULNERABILITY, afterOlderPolicy.policyDecision());
+
+    assertTrue(scans.cancelTask(olderTaskId, now.plusSeconds(5)));
+    SecurityScanDao.AssetSecurityState afterHistoricalCancel =
+        scans.findAssetState(assetId, profile.id()).orElseThrow();
+    assertEquals(newerRun.id(), afterHistoricalCancel.latestScanRunId());
+    assertEquals(ScanState.COMPLETE, afterHistoricalCancel.scanState());
+    assertEquals(PolicyDecision.BLOCK_VULNERABILITY, afterHistoricalCancel.policyDecision());
+    assertEquals(
+        PolicyDecision.BLOCK_VULNERABILITY,
+        scans.findAssetPolicyState(assetId, profile.id(), repositoryId)
+            .orElseThrow()
+            .policyDecision());
+
+    assertTrue(scans.requeueTask(olderTaskId, now.plusSeconds(6), "contract"));
+    SecurityScanDao.AssetSecurityState afterHistoricalRetry =
+        scans.findAssetState(assetId, profile.id()).orElseThrow();
+    assertEquals(newerRun.id(), afterHistoricalRetry.latestScanRunId());
+    assertEquals(ScanState.COMPLETE, afterHistoricalRetry.scanState());
+    assertEquals(PolicyDecision.BLOCK_VULNERABILITY, afterHistoricalRetry.policyDecision());
+    assertEquals(
+        PolicyDecision.BLOCK_VULNERABILITY,
+        scans.findAssetPolicyState(assetId, profile.id(), repositoryId)
+            .orElseThrow()
+            .policyDecision());
+
+    Instant equalDatabaseEpoch = now.minusSeconds(30);
+    SecurityScanDao.ScannerSnapshot equalEpochLower =
+        scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+            null,
+            "contract-adapter",
+            "v1",
+            "grype",
+            "0.2.0",
+            "equal-epoch-lower",
+            equalDatabaseEpoch,
+            "2".repeat(64),
+            "5".repeat(64),
+            now.plusSeconds(7),
+            true,
+            Map.of()));
+    SecurityScanDao.ScannerSnapshot equalEpochHigher =
+        scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+            null,
+            "contract-adapter",
+            "v1",
+            "grype",
+            "0.3.0",
+            "equal-epoch-higher",
+            equalDatabaseEpoch,
+            "2".repeat(64),
+            "6".repeat(64),
+            now.plusSeconds(8),
+            true,
+            Map.of()));
+    assertTrue(equalEpochHigher.id() > equalEpochLower.id());
+    scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+        null,
+        "contract-adapter",
+        "v1",
+        "grype",
+        "0.2.0",
+        "equal-epoch-lower",
+        equalDatabaseEpoch,
+        "2".repeat(64),
+        "5".repeat(64),
+        now.plusSeconds(9),
+        true,
+        Map.of()));
+    assertEquals(
+        equalEpochHigher.id(),
+        scans.latestReadyScannerSnapshot(now.plusSeconds(10)).orElseThrow().id(),
+        "a refreshed observation must not change equal-epoch authority");
+
+    long equalEpochHigherTaskId = scans.createTask(new SecurityScanDao.TaskDraft(
+        repositoryId,
+        assetId,
+        SubjectKind.ASSET_BLOB,
+        "sha256:" + "5".repeat(64),
+        1,
+        profile.id(),
+        profile.revision(),
+        equalEpochHigher.id(),
+        ScanStage.MATCH_ONLY,
+        RequestReason.VULNERABILITY_DB_CHANGED,
+        25,
+        3,
+        "contract",
+        "equal-epoch-higher-task",
+        "equal-epoch-higher-task",
+        now.plusSeconds(10)));
+    long equalEpochLowerTaskId = scans.createTask(new SecurityScanDao.TaskDraft(
+        repositoryId,
+        assetId,
+        SubjectKind.ASSET_BLOB,
+        "sha256:" + "5".repeat(64),
+        1,
+        profile.id(),
+        profile.revision(),
+        equalEpochLower.id(),
+        ScanStage.MATCH_ONLY,
+        RequestReason.VULNERABILITY_DB_CHANGED,
+        25,
+        3,
+        "contract",
+        "equal-epoch-lower-task",
+        "equal-epoch-lower-task",
+        now.plusSeconds(11)));
+    assertTrue(
+        equalEpochLowerTaskId > equalEpochHigherTaskId,
+        "task chronology intentionally opposes the immutable snapshot tie-breaker");
+
+    SecurityScanDao.ScanRun equalEpochHigherRun =
+        scans.insertRunOrFindExisting(new SecurityScanDao.ScanRun(
+            null,
+            equalEpochHigherTaskId,
+            sbom.id(),
+            equalEpochHigher.id(),
+            "9".repeat(64),
+            "d".repeat(64),
+            ScanState.COMPLETE,
+            ScanCompleteness.COMPLETE,
+            reportBlobId,
+            "b".repeat(64),
+            1,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            Severity.CRITICAL,
+            now.plusSeconds(10),
+            now.plusSeconds(12),
+            now.plusSeconds(12)));
+    SecurityScanDao.ScanRun equalEpochLowerRun =
+        scans.insertRunOrFindExisting(new SecurityScanDao.ScanRun(
+            null,
+            equalEpochLowerTaskId,
+            sbom.id(),
+            equalEpochLower.id(),
+            "9".repeat(64),
+            "e".repeat(64),
+            ScanState.COMPLETE,
+            ScanCompleteness.COMPLETE,
+            reportBlobId,
+            "b".repeat(64),
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            Severity.UNKNOWN,
+            now.plusSeconds(11),
+            now.plusSeconds(13),
+            now.plusSeconds(13)));
+
+    SecurityScanDao.AssetSecurityState equalEpochHigherState =
+        scans.upsertAssetStateIfCurrent(new SecurityScanDao.AssetSecurityState(
+            assetId,
+            profile.id(),
+            1,
+            PersistenceHashes.sha256("sha256:" + "5".repeat(64)),
+            equalEpochHigherRun.id(),
+            ScanState.COMPLETE,
+            ScanCompleteness.COMPLETE,
+            true,
+            Severity.CRITICAL,
+            Map.of("critical", 1),
+            null,
+            null,
+            PolicyDecision.BLOCK_VULNERABILITY,
+            "EQUAL_EPOCH_HIGHER",
+            null,
+            now.plusSeconds(12),
+            afterHistoricalRetry.version()));
+    assertTrue(
+        inTransaction(() -> scans.taskProjectionIsSuperseded(equalEpochLowerTaskId)),
+        "the immutable snapshot order must supersede a later task for the lower snapshot");
+    SecurityScanDao.AssetSecurityState afterEqualEpochLower =
+        scans.upsertAssetStateIfCurrent(new SecurityScanDao.AssetSecurityState(
+            assetId,
+            profile.id(),
+            1,
+            PersistenceHashes.sha256("sha256:" + "5".repeat(64)),
+            equalEpochLowerRun.id(),
+            ScanState.COMPLETE,
+            ScanCompleteness.COMPLETE,
+            true,
+            Severity.UNKNOWN,
+            Map.of(),
+            null,
+            null,
+            PolicyDecision.ALLOW,
+            "EQUAL_EPOCH_LOWER",
+            null,
+            now.plusSeconds(13),
+            equalEpochHigherState.version()));
+    assertEquals(equalEpochHigherRun.id(), afterEqualEpochLower.latestScanRunId());
+    assertEquals(
+        PolicyDecision.BLOCK_VULNERABILITY,
+        afterEqualEpochLower.policyDecision());
+
+    SecurityScanDao.AssetPolicyState equalEpochHigherPolicy =
+        scans.upsertAssetPolicyStateIfCurrent(new SecurityScanDao.AssetPolicyState(
+            assetId,
+            profile.id(),
+            repositoryId,
+            1,
+            equalEpochHigherRun.id(),
+            null,
+            null,
+            1,
+            PolicyDecision.BLOCK_VULNERABILITY,
+            "EQUAL_EPOCH_HIGHER",
+            0,
+            null,
+            null,
+            now.plusSeconds(12),
+            afterOlderPolicy.version(),
+            waiverRevision));
+    SecurityScanDao.AssetPolicyState afterEqualEpochLowerPolicy =
+        scans.upsertAssetPolicyStateIfCurrent(new SecurityScanDao.AssetPolicyState(
+            assetId,
+            profile.id(),
+            repositoryId,
+            1,
+            equalEpochLowerRun.id(),
+            null,
+            null,
+            1,
+            PolicyDecision.ALLOW,
+            "EQUAL_EPOCH_LOWER",
+            0,
+            null,
+            null,
+            now.plusSeconds(13),
+            equalEpochHigherPolicy.version(),
+            waiverRevision));
+    assertEquals(
+        equalEpochHigherRun.id(),
+        afterEqualEpochLowerPolicy.latestScanRunId());
+    assertEquals(
+        PolicyDecision.BLOCK_VULNERABILITY,
+        afterEqualEpochLowerPolicy.policyDecision());
+  }
+
+  @Test
+  void securityScanningRequeuesAFirstObservationFailureExactlyOnce() {
+    SecurityScanDao scans = stores().securityScanning();
+    long repositoryId =
+        createRepository("scan-observation-recovery", RepositoryFormat.MAVEN2);
+    long blobStoreId =
+        stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
+    Instant now = Instant.parse("2026-07-24T12:00:00Z");
+    long artifactBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "scan/observation-recovery.jar", "scan-observation-recovery"));
+    String path = "com/acme/recovery/1.0/recovery-1.0.jar";
+    long assetId = stores().assets().insertAsset(new AssetRecord(
+        null,
+        repositoryId,
+        null,
+        artifactBlobId,
+        RepositoryFormat.MAVEN2,
+        path,
+        PersistenceHashes.pathHash(path),
+        "recovery-1.0.jar",
+        "ARTIFACT",
+        "application/java-archive",
+        42L,
+        null,
+        now,
+        Map.of()));
+    assertEquals(1, scans.recordArtifactContentChange(assetId));
+    assertTrue(scans.markCandidateEnqueued(assetId, 1));
+
+    SecurityScanDao.ScanProfile profile = scans.createProfile(new SecurityScanDao.ScanProfile(
+        null,
+        "observation-recovery-profile",
+        true,
+        "syft",
+        "grype",
+        List.of("vuln"),
+        Map.of(),
+        1024 * 1024,
+        1000,
+        10 * 1024 * 1024,
+        1024 * 1024,
+        2,
+        60,
+        OciPlatformPolicy.REQUIRED_SET,
+        List.of(),
+        "8".repeat(64),
+        1,
+        now,
+        now));
+    SecurityScanDao.RepositoryScanConfig config =
+        scans.upsertRepositoryConfig(new SecurityScanDao.RepositoryScanConfig(
+            repositoryId,
+            true,
+            profile.id(),
+            true,
+            true,
+            EnforcementMode.AUDIT,
+            PolicyAction.ALLOW,
+            PolicyAction.ALLOW,
+            PolicyAction.ALLOW,
+            null,
+            null,
+            1,
+            now,
+            now));
+    scans.upsertAssetStateIfCurrent(new SecurityScanDao.AssetSecurityState(
+        assetId,
+        profile.id(),
+        1,
+        PersistenceHashes.sha256("sha256:" + "a".repeat(64)),
+        null,
+        ScanState.FAILED,
+        ScanCompleteness.UNKNOWN,
+        false,
+        Severity.UNKNOWN,
+        Map.of(),
+        null,
+        null,
+        PolicyDecision.ALLOW,
+        SCANNER_OBSERVATION_UNAVAILABLE,
+        null,
+        now,
+        0));
+    scans.upsertAssetPolicyStateIfCurrent(new SecurityScanDao.AssetPolicyState(
+        assetId,
+        profile.id(),
+        repositoryId,
+        1,
+        null,
+        null,
+        null,
+        config.configRevision(),
+        PolicyDecision.ALLOW,
+        SCANNER_OBSERVATION_UNAVAILABLE,
+        0,
+        null,
+        null,
+        now,
+        0,
+        scans.waiverRevision().currentRevision()));
+
+    assertEquals(
+        assetId,
+        scans.listAssetStatesNeedingSnapshot(profile.id(), 99L, 0, 10)
+            .getFirst()
+            .assetId());
+    assertTrue(scans.requeueCandidateAfterObservationFailure(
+        assetId, profile.id(), 1, now.plusSeconds(1)));
+    assertEquals(
+        assetId,
+        inTransaction(() -> scans.claimCandidates(10)).getFirst().assetId());
+    assertFalse(scans.requeueCandidateAfterObservationFailure(
+        assetId, profile.id(), 1, now.plusSeconds(2)));
+  }
+
+  @Test
+  void securityScanningRecoversFinalAttemptsAndCleansUnreferencedHistory() {
+    SecurityScanDao scans = stores().securityScanning();
+    long repositoryId =
+        createRepository("scan-lifecycle", RepositoryFormat.MAVEN2);
+    long blobStoreId =
+        stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
+    Instant fixtureTime = Instant.parse("2026-07-24T12:00:00Z");
+    long artifactBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "scan/lifecycle.jar", "scan-lifecycle-artifact"));
+    String path = "com/acme/lifecycle/1.0/lifecycle-1.0.jar";
+    long assetId = stores().assets().insertAsset(new AssetRecord(
+        null,
+        repositoryId,
+        null,
+        artifactBlobId,
+        RepositoryFormat.MAVEN2,
+        path,
+        PersistenceHashes.pathHash(path),
+        "lifecycle-1.0.jar",
+        "ARTIFACT",
+        "application/java-archive",
+        42L,
+        null,
+        fixtureTime,
+        Map.of()));
+
+    ArtifactChangeDao.ArtifactChange change =
+        stores().artifactChanges().listAfter(0, 10).getFirst();
+    advanceCursor("artifact_change:security_scan", change.id());
+    advanceCursor("artifact_change:contract", change.id());
+    assertEquals(
+        change.id(),
+        stores()
+            .maintenanceCursors()
+            .minimumLastSeenId("artifact_change:")
+            .orElseThrow());
+    ArtifactChangeDao.EventRange retainedRange =
+        stores().artifactChanges().retainedRange().orElseThrow();
+    assertEquals(change.id(), retainedRange.oldestId());
+    assertEquals(change.id(), retainedRange.newestId());
+    assertEquals(1, retainedRange.estimatedCount());
+    assertEquals(1, stores().artifactChanges().deleteThrough(change.id(), 1));
+    assertTrue(stores().artifactChanges().retainedRange().isEmpty());
+
+    SecurityScanDao.ScanProfile profile = scans.createProfile(
+        new SecurityScanDao.ScanProfile(
+            null,
+            "lifecycle-profile",
+            true,
+            "syft",
+            "grype",
+            List.of("vuln"),
+            Map.of(),
+            1024 * 1024,
+            1000,
+            10 * 1024 * 1024,
+            1024 * 1024,
+            2,
+            60,
+            OciPlatformPolicy.REQUIRED_SET,
+            List.of("linux/amd64"),
+            "7".repeat(64),
+            1,
+            fixtureTime,
+            fixtureTime));
+    SecurityScanDao.ScannerSnapshot snapshot =
+        scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+            null,
+            "contract-adapter",
+            "v1",
+            "grype",
+            "0.1.0",
+            "lifecycle-db",
+            fixtureTime.minusSeconds(60),
+            "8".repeat(64),
+            "9".repeat(64),
+            fixtureTime,
+            true,
+            Map.of()));
+    long taskId = scans.createTask(new SecurityScanDao.TaskDraft(
+        repositoryId,
+        assetId,
+        SubjectKind.ASSET_BLOB,
+        "sha256:" + "6".repeat(64),
+        1,
+        profile.id(),
+        profile.revision(),
+        snapshot.id(),
+        ScanStage.CATALOG_AND_MATCH,
+        RequestReason.MANUAL,
+        0,
+        1,
+        "contract",
+        null,
+        null,
+        fixtureTime));
+    SecurityScanDao.ScanTask finalAttempt = inTransaction(
+        () -> scans.claimTasks(
+                "replica-a",
+                fixtureTime,
+                fixtureTime.plusSeconds(30),
+                1)
+            .getFirst());
+    assertEquals(1, finalAttempt.attempts());
+    assertTrue(inTransaction(
+            () -> scans.claimExpiredExhaustedTasks(
+                "replica-b",
+                fixtureTime.plusSeconds(29),
+                fixtureTime.plusSeconds(59),
+                1))
+        .isEmpty());
+    SecurityScanDao.ScanTask recovered = inTransaction(
+        () -> scans.claimExpiredExhaustedTasks(
+                "replica-b",
+                fixtureTime.plusSeconds(31),
+                fixtureTime.plusSeconds(61),
+                1)
+            .getFirst());
+    assertEquals(1, recovered.attempts());
+    assertNotEquals(finalAttempt.leaseToken(), recovered.leaseToken());
+    assertTrue(scans.failTask(
+        taskId,
+        recovered.leaseToken(),
+        "SCAN_ATTEMPTS_EXHAUSTED",
+        "final lease expired",
+        fixtureTime.plusSeconds(32)));
+
+    SecurityScanDao.BackfillJob backfill =
+        scans.createBackfillJob(repositoryId, "contract", fixtureTime);
+    SecurityScanDao.BackfillJob claimedBackfill = inTransaction(
+        () -> scans.claimBackfillJobs(
+                "replica-a",
+                fixtureTime,
+                fixtureTime.plusSeconds(30),
+                1)
+            .getFirst());
+    assertEquals(backfill.id(), claimedBackfill.id());
+    assertEquals(1, claimedBackfill.attempts());
+    assertTrue(scans.requeueBackfill(
+        claimedBackfill.id(),
+        claimedBackfill.leaseToken(),
+        assetId,
+        1,
+        1,
+        "deadlock",
+        fixtureTime.plusSeconds(10),
+        fixtureTime.plusSeconds(1)));
+    assertTrue(inTransaction(
+            () -> scans.claimBackfillJobs(
+                "replica-b",
+                fixtureTime.plusSeconds(9),
+                fixtureTime.plusSeconds(39),
+                1))
+        .isEmpty());
+    SecurityScanDao.BackfillJob retriedBackfill = inTransaction(
+        () -> scans.claimBackfillJobs(
+                "replica-b",
+                fixtureTime.plusSeconds(10),
+                fixtureTime.plusSeconds(40),
+                1)
+            .getFirst());
+    assertEquals(2, retriedBackfill.attempts());
+    assertEquals(assetId, retriedBackfill.cursorAssetId());
+    assertTrue(scans.updateBackfillProgress(
+        retriedBackfill.id(),
+        retriedBackfill.leaseToken(),
+        assetId,
+        1,
+        1,
+        com.github.klboke.kkrepo.security.scan.ScanEnums.BackfillStatus.SUCCEEDED,
+        null,
+        null,
+        fixtureTime.plusSeconds(11)));
+
+    long sbomBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "security/lifecycle-sbom.json", "lifecycle-sbom"));
+    SecurityScanDao.Sbom sbom = scans.insertSbomOrFindExisting(
+        new SecurityScanDao.Sbom(
+            null,
+            SubjectKind.ASSET_BLOB,
+            "sha256:" + "6".repeat(64),
+            null,
+            "syft",
+            "1.0.0",
+            "a".repeat(64),
+            "b".repeat(64),
+            sbomBlobId,
+            "c".repeat(64),
+            "CycloneDX",
+            "1.6",
+            1,
+            0,
+            true,
+            fixtureTime));
+    long reportBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "security/lifecycle-report.json", "lifecycle-report"));
+    SecurityScanDao.ScanRun run = scans.insertRunOrFindExisting(
+        new SecurityScanDao.ScanRun(
+            null,
+            taskId,
+            sbom.id(),
+            snapshot.id(),
+            "d".repeat(64),
+            "e".repeat(64),
+            ScanState.COMPLETE,
+            ScanCompleteness.COMPLETE,
+            reportBlobId,
+            "f".repeat(64),
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            Severity.UNKNOWN,
+            fixtureTime,
+            fixtureTime.plusSeconds(1),
+            fixtureTime.plusSeconds(1)));
+    assertTrue(stores().blobReferences().isReferenced(sbomBlobId));
+    assertTrue(stores().blobReferences().isReferenced(reportBlobId));
+
+    Instant cutoff = Instant.now().plusSeconds(60);
+    SecurityScanDao.RetentionResult retained =
+        scans.cleanupRetainedData(cutoff, cutoff, 50);
+
+    assertEquals(1, retained.taskCount());
+    assertEquals(1, retained.backfillJobCount());
+    assertEquals(0, retained.runSubjectCount());
+    assertEquals(1, retained.runCount());
+    assertEquals(1, retained.sbomCount());
+    assertEquals(1, retained.scannerSnapshotCount());
+    assertEquals(5, retained.total());
+    assertTrue(scans.findRun(run.id()).isEmpty());
+    assertTrue(scans.findSbom(sbom.id()).isEmpty());
+    assertTrue(scans.findScannerSnapshot(snapshot.id()).isEmpty());
+    assertFalse(stores().blobReferences().isReferenced(sbomBlobId));
+    assertFalse(stores().blobReferences().isReferenced(reportBlobId));
+  }
+
+  @Test
+  void securityBackfillWaitsForLockedAssetsInsteadOfSkippingTheirCursor() throws Exception {
+    long repositoryId = createRepository("scan-backfill-lock", RepositoryFormat.MAVEN2);
+    long blobStoreId = stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
+    Instant now = Instant.parse("2026-07-24T14:00:00Z");
+    long blobId = stores().assets().insertBlob(
+        blob(blobStoreId, "scan/locked-app.jar", "scan-locked-artifact"));
+    String path = "locked/app.jar";
+    long assetId = stores().assets().insertAsset(new AssetRecord(
+        null,
+        repositoryId,
+        null,
+        blobId,
+        RepositoryFormat.MAVEN2,
+        path,
+        PersistenceHashes.pathHash(path),
+        "app.jar",
+        "ARTIFACT",
+        "application/java-archive",
+        42L,
+        null,
+        now,
+        Map.of()));
+    CountDownLatch rowLocked = new CountDownLatch(1);
+    CountDownLatch releaseWriter = new CountDownLatch(1);
+
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var writer = executor.submit(() -> inTransaction(() -> {
+        assertEquals(
+            assetId,
+            stores().assets().claimStaleAssetsByPrefix(
+                repositoryId, "locked/", now.plusSeconds(1), 1).getFirst().id());
+        rowLocked.countDown();
+        await(releaseWriter);
+        return null;
+      }));
+      assertTrue(rowLocked.await(30, java.util.concurrent.TimeUnit.SECONDS));
+
+      var backfill = executor.submit(() -> inTransaction(() ->
+          stores().securityScanning().markRepositoryAssetsForBackfill(repositoryId, 0, 100)));
+
+      assertThrows(
+          java.util.concurrent.TimeoutException.class,
+          () -> backfill.get(250, java.util.concurrent.TimeUnit.MILLISECONDS),
+          "a cursor page must wait for a locked asset rather than skip and complete past it");
+      releaseWriter.countDown();
+      writer.get(30, java.util.concurrent.TimeUnit.SECONDS);
+      SecurityScanDao.BackfillPage page =
+          backfill.get(30, java.util.concurrent.TimeUnit.SECONDS);
+      assertEquals(1, page.scannedAssets());
+      assertEquals(assetId, page.nextAssetId());
+      assertTrue(page.complete());
+      assertEquals(
+          assetId,
+          stores().securityScanning().findCandidate(assetId).orElseThrow().assetId());
+    } finally {
+      releaseWriter.countDown();
+    }
+  }
+
+  @Test
+  void securityArtifactChangeFoldDefersInsteadOfBlockingForegroundAssetLocks()
+      throws Exception {
+    long repositoryId = createRepository("scan-event-lock", RepositoryFormat.MAVEN2);
+    long blobStoreId = stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
+    Instant now = Instant.parse("2026-07-24T14:30:00Z");
+    long blobId = stores().assets().insertBlob(
+        blob(blobStoreId, "scan/event-lock.jar", "scan-event-lock-artifact"));
+    String path = "locked/event-lock.jar";
+    long assetId = stores().assets().insertAsset(new AssetRecord(
+        null,
+        repositoryId,
+        null,
+        blobId,
+        RepositoryFormat.MAVEN2,
+        path,
+        PersistenceHashes.pathHash(path),
+        "event-lock.jar",
+        "ARTIFACT",
+        "application/java-archive",
+        42L,
+        null,
+        now,
+        Map.of()));
+    CountDownLatch rowLocked = new CountDownLatch(1);
+    CountDownLatch releaseWriter = new CountDownLatch(1);
+
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var writer = executor.submit(() -> inTransaction(() -> {
+        assertEquals(
+            assetId,
+            stores().assets().claimStaleAssetsByPrefix(
+                repositoryId, "locked/", now.plusSeconds(1), 1).getFirst().id());
+        rowLocked.countDown();
+        await(releaseWriter);
+        return null;
+      }));
+      assertTrue(rowLocked.await(30, java.util.concurrent.TimeUnit.SECONDS));
+
+      var fold = executor.submit(() ->
+          inTransaction(() -> stores().securityScanning().recordArtifactContentChange(assetId)));
+      ExecutionException deferred = assertThrows(
+          ExecutionException.class,
+          () -> fold.get(5, java.util.concurrent.TimeUnit.SECONDS),
+          "artifact-change folding must defer rather than wait on a foreground asset lock");
+      assertTrue(
+          deferred.getCause() instanceof CannotAcquireLockException,
+          () -> "unexpected contention failure: " + deferred.getCause());
+
+      releaseWriter.countDown();
+      writer.get(30, java.util.concurrent.TimeUnit.SECONDS);
+      assertEquals(
+          1,
+          inTransaction(
+              () -> stores().securityScanning().recordArtifactContentChange(assetId)));
+    } finally {
+      releaseWriter.countDown();
+    }
   }
 
   @Test
@@ -1174,6 +3777,95 @@ public abstract class PersistenceApiContract {
   }
 
   @Test
+  void dockerAuthTokenKindsRoundTripWithoutTrustingTheSubjectSource() {
+    DockerAuthTokenDao tokens = stores().dockerAuthTokens();
+    Instant expiresAt = Instant.parse("2036-07-13T11:00:00Z");
+    List<Map<String, Object>> scopes = List.of(Map.of(
+        "repository", "docker-hosted",
+        "imageName", "acme/app",
+        "actions", List.of("pull")));
+    String userHash = "a".repeat(64);
+    String scannerHash = "b".repeat(64);
+
+    inTransaction(() -> {
+      tokens.insert(
+          userHash,
+          "security-scanner",
+          "alice",
+          "realm-1",
+          null,
+          TokenKind.USER,
+          scopes,
+          expiresAt);
+      tokens.insert(
+          scannerHash,
+          "security-scanner",
+          "scanner",
+          null,
+          null,
+          TokenKind.SECURITY_SCANNER,
+          scopes,
+          expiresAt);
+      tokens.insertScannerResources(scannerHash, List.of(
+          new ScannerTokenResource(
+              ScannerResourceKind.MANIFEST, "sha256:" + "c".repeat(64)),
+          new ScannerTokenResource(
+              ScannerResourceKind.BLOB, "sha256:" + "d".repeat(64))));
+      return null;
+    });
+
+    DockerAuthTokenDao.TokenRecord user =
+        inTransaction(() -> tokens.findValid(userHash, Instant.now()).orElseThrow());
+    DockerAuthTokenDao.TokenRecord scanner =
+        inTransaction(() -> tokens.findValid(scannerHash, Instant.now()).orElseThrow());
+    assertEquals(TokenKind.USER, user.tokenKind());
+    assertEquals(TokenKind.SECURITY_SCANNER, scanner.tokenKind());
+    assertEquals(scopes, user.scopes().get("scopes"));
+    assertEquals(scopes, scanner.scopes().get("scopes"));
+    assertTrue(inTransaction(() -> tokens.scannerResourceAllowed(
+        scannerHash, ScannerResourceKind.MANIFEST, "sha256:" + "c".repeat(64))));
+    assertTrue(inTransaction(() -> tokens.scannerResourceAllowed(
+        scannerHash, ScannerResourceKind.BLOB, "sha256:" + "d".repeat(64))));
+    assertFalse(inTransaction(() -> tokens.scannerResourceAllowed(
+        scannerHash, ScannerResourceKind.BLOB, "sha256:" + "e".repeat(64))));
+  }
+
+  @Test
+  void dockerAuthTokenCleanupIsBoundedAndPreservesUnexpiredTokens() {
+    DockerAuthTokenDao tokens = stores().dockerAuthTokens();
+    Instant cleanupAt = Instant.parse("2026-07-13T11:00:00Z");
+    inTransaction(() -> {
+      for (String tokenHash : List.of("c".repeat(64), "d".repeat(64), "e".repeat(64))) {
+        tokens.insert(
+            tokenHash,
+            "security-scanner",
+            "scanner",
+            null,
+            null,
+            TokenKind.SECURITY_SCANNER,
+            List.of(),
+            cleanupAt.minusSeconds(1));
+      }
+      tokens.insert(
+          "f".repeat(64),
+          "security-scanner",
+          "scanner",
+          null,
+          null,
+          TokenKind.SECURITY_SCANNER,
+          List.of(),
+          cleanupAt.plusSeconds(60));
+      return null;
+    });
+
+    assertEquals(0, inTransaction(() -> tokens.deleteExpired(cleanupAt, 0)));
+    assertEquals(2, inTransaction(() -> tokens.deleteExpired(cleanupAt, 2)));
+    assertEquals(1, inTransaction(() -> tokens.deleteExpired(cleanupAt, 2)));
+    assertEquals(0, inTransaction(() -> tokens.deleteExpired(cleanupAt, 2)));
+    assertTrue(inTransaction(() -> tokens.findValid("f".repeat(64), cleanupAt)).isPresent());
+  }
+
+  @Test
   void dockerUnreferencedBlobCleanupSqlIsPortable() {
     long dockerRepositoryId = createRepository("docker-cleanup", RepositoryFormat.DOCKER);
     long dockerBlobStoreId = stores().repositories().findById(dockerRepositoryId)
@@ -1598,6 +4290,42 @@ public abstract class PersistenceApiContract {
       }
       return results;
     }
+  }
+
+  private int foldArtifactChanges(String cursorName) {
+    return inTransaction(() -> {
+      stores().maintenanceCursors().ensureCursor(cursorName);
+      var cursor = stores().maintenanceCursors().tryLockLastSeenId(cursorName);
+      if (cursor.isEmpty()) {
+        return 0;
+      }
+      List<ArtifactChangeDao.ArtifactChange> events =
+          stores().artifactChanges().listAfter(cursor.getAsLong(), 1000);
+      if (events.isEmpty()) {
+        return 0;
+      }
+      events.stream()
+          .map(ArtifactChangeDao.ArtifactChange::assetId)
+          .distinct()
+          .forEach(stores().securityScanning()::recordArtifactContentChange);
+      assertEquals(
+          1,
+          stores().maintenanceCursors().updateLastSeenId(
+              cursorName, events.getLast().id()));
+      return events.size();
+    });
+  }
+
+  private void advanceCursor(String cursorName, long eventId) {
+    inTransaction(() -> {
+      stores().maintenanceCursors().ensureCursor(cursorName);
+      assertTrue(
+          stores().maintenanceCursors().tryLockLastSeenId(cursorName).isPresent());
+      assertEquals(
+          1,
+          stores().maintenanceCursors().updateLastSeenId(cursorName, eventId));
+      return null;
+    });
   }
 
   private boolean createAnsibleTaskReservation(

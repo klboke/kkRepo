@@ -1,10 +1,14 @@
 package com.github.klboke.kkrepo.server.docker;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -24,10 +28,12 @@ import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
 import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 
 class DockerProxyServiceTest {
@@ -152,6 +158,57 @@ class DockerProxyServiceTest {
   }
 
   @Test
+  void blockedRemoteManifestIsPersistedBeforeItsResponseIsRejected() throws Exception {
+    DockerManifestStore manifestStore = mock(DockerManifestStore.class);
+    DockerRemoteRegistryClient remoteClient = mock(DockerRemoteRegistryClient.class);
+    DockerProxyService service = new DockerProxyService(
+        mock(DockerBlobStore.class), manifestStore, remoteClient);
+    RepositoryRuntime runtime = proxyRuntime(1);
+    byte[] body = "{}".getBytes(StandardCharsets.UTF_8);
+    DockerManifestStore.StoredManifest stored = storedManifest(
+        runtime,
+        "library/alpine",
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        Instant.now());
+    when(manifestStore.getManifest(runtime, "library/alpine", "latest"))
+        .thenThrow(new DockerProtocolException(DockerErrorCode.MANIFEST_UNKNOWN, "missing"));
+    when(remoteClient.get(eq(runtime), eq("library/alpine/manifests/latest"), any()))
+        .thenReturn(new HttpRemoteFetcher.Result(
+            200,
+            Map.of("Content-Type", DockerConstants.MEDIA_TYPE_SCHEMA2_MANIFEST),
+            new ByteArrayInputStream(body)));
+    when(manifestStore.putManifest(
+        eq(runtime),
+        eq("library/alpine"),
+        eq("latest"),
+        eq(body),
+        eq(DockerConstants.MEDIA_TYPE_SCHEMA2_MANIFEST),
+        eq("proxy"),
+        eq(runtime.proxyRemoteUrl()),
+        eq(false)))
+        .thenReturn(stored);
+    DockerProtocolException blocked =
+        new DockerProtocolException(DockerErrorCode.DENIED, "blocked", 403);
+    doThrow(blocked).when(manifestStore).beforeRead(stored);
+
+    DockerProtocolException actual = assertThrows(
+        DockerProtocolException.class,
+        () -> service.getManifest(runtime, "library/alpine", "latest", false));
+
+    assertEquals(blocked, actual);
+    verify(manifestStore).putManifest(
+        runtime,
+        "library/alpine",
+        "latest",
+        body,
+        DockerConstants.MEDIA_TYPE_SCHEMA2_MANIFEST,
+        "proxy",
+        runtime.proxyRemoteUrl(),
+        false);
+    verify(manifestStore).beforeRead(stored);
+  }
+
+  @Test
   void digestManifestReferenceUsesImmutableCacheEvenWhenOld() throws Exception {
     DockerManifestStore manifestStore = mock(DockerManifestStore.class);
     DockerRemoteRegistryClient remoteClient = mock(DockerRemoteRegistryClient.class);
@@ -197,10 +254,11 @@ class DockerProxyServiceTest {
   @Test
   void blobRemoteNotFoundIsRememberedInSharedNegativeCache() throws Exception {
     DockerBlobStore blobStore = mock(DockerBlobStore.class);
+    DockerManifestStore manifestStore = mock(DockerManifestStore.class);
     DockerRemoteRegistryClient remoteClient = mock(DockerRemoteRegistryClient.class);
     ProxyNegativeCache negativeCache = new ProxyNegativeCache(new InMemorySharedCache(), true, 5, null);
     DockerProxyService service = new DockerProxyService(
-        blobStore, mock(DockerManifestStore.class), remoteClient, negativeCache);
+        blobStore, manifestStore, remoteClient, negativeCache);
     RepositoryRuntime runtime = proxyRuntime(1);
     DockerDigest digest = DockerDigest.parse("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     when(blobStore.getBlob(runtime, digest, false))
@@ -216,14 +274,16 @@ class DockerProxyServiceTest {
     assertEquals(DockerErrorCode.BLOB_UNKNOWN, first.code());
     assertEquals(DockerErrorCode.BLOB_UNKNOWN, second.code());
     verify(remoteClient).get(eq(runtime), eq("library/alpine/blobs/" + digest.value()), eq("application/octet-stream"));
+    verify(manifestStore, never()).beforeBlobRead(any(), any(), any());
   }
 
   @Test
   void proxiedBlobHeadReturnsDigestLengthAndContentTypeAfterRemoteFetch() throws Exception {
     DockerBlobStore blobStore = mock(DockerBlobStore.class);
+    DockerManifestStore manifestStore = mock(DockerManifestStore.class);
     DockerRemoteRegistryClient remoteClient = mock(DockerRemoteRegistryClient.class);
     DockerProxyService service = new DockerProxyService(
-        blobStore, mock(DockerManifestStore.class), remoteClient);
+        blobStore, manifestStore, remoteClient);
     RepositoryRuntime runtime = proxyRuntime(1);
     byte[] body = "hello".getBytes(StandardCharsets.UTF_8);
     DockerDigest digest = DockerDigest.sha256(body);
@@ -251,6 +311,44 @@ class DockerProxyServiceTest {
     assertEquals(body.length, response.contentLength());
     assertEquals("application/vnd.oci.image.layer.v1.tar", response.contentType());
     assertEquals(digest.value(), response.headers().get(DockerConstants.CONTENT_DIGEST_HEADER));
+    verify(manifestStore).beforeBlobRead(runtime, "alpine", digest);
+  }
+
+  @Test
+  void blockedRemoteBlobIsRejectedBeforeItsBodyIsConsumedOrStored() throws Exception {
+    DockerBlobStore blobStore = mock(DockerBlobStore.class);
+    DockerManifestStore manifestStore = mock(DockerManifestStore.class);
+    DockerRemoteRegistryClient remoteClient = mock(DockerRemoteRegistryClient.class);
+    DockerProxyService service = new DockerProxyService(blobStore, manifestStore, remoteClient);
+    RepositoryRuntime runtime = proxyRuntime(1);
+    DockerDigest digest =
+        DockerDigest.parse("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    AtomicBoolean bodyRead = new AtomicBoolean();
+    InputStream body = new InputStream() {
+      @Override
+      public int read() {
+        bodyRead.set(true);
+        return -1;
+      }
+    };
+    when(blobStore.getBlob(runtime, digest, false))
+        .thenThrow(new DockerProtocolException(DockerErrorCode.BLOB_UNKNOWN, digest.value()));
+    when(remoteClient.get(
+            eq(runtime),
+            eq("library/alpine/blobs/" + digest.value()),
+            eq("application/octet-stream")))
+        .thenReturn(new HttpRemoteFetcher.Result(200, Map.of(), body));
+    DockerProtocolException blocked =
+        new DockerProtocolException(DockerErrorCode.DENIED, "blocked", 403);
+    doThrow(blocked).when(manifestStore).beforeBlobRead(runtime, "alpine", digest);
+
+    DockerProtocolException thrown = assertThrows(
+        DockerProtocolException.class,
+        () -> service.getBlob(runtime, "alpine", digest, false));
+
+    assertEquals(blocked, thrown);
+    assertFalse(bodyRead.get());
+    verify(blobStore, never()).putBlob(any(), any(), any(), anyLong(), any(), any(), any());
   }
 
   @Test

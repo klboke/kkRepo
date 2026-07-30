@@ -2535,3 +2535,646 @@ code {
   width: 15px;
   height: 15px;
 }
+.security-scan-summary {
+  grid-template-columns: repeat(10, minmax(136px, 1fr));
+  margin-right: 24px;
+  margin-bottom: 18px;
+  margin-left: 24px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.security-scan-summary > div {
+  min-width: 0;
+}
+
+.security-scan-summary strong {
+  white-space: nowrap;
+}
+
+.security-scan-summary .security-scan-database-revision {
+  overflow: hidden;
+  font-size: 16px;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.security-scan-summary .security-scan-database-label,
+.security-scan-summary .security-scan-database-revision-date,
+.security-scan-summary .security-scan-database-revision-time {
+  white-space: nowrap;
+}
+
+.security-scan-summary .security-scan-database-revision-date,
+.security-scan-summary .security-scan-database-revision-time {
+  display: block;
+  color: inherit;
+  font-size: inherit;
+}
+
+.security-scan-summary .security-scan-database-revision-time {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.security-scan-scanner-state {
+  display: flex !important;
+  align-items: center;
+  gap: 6px;
+}
+
+.security-scan-scanner-state .lucide-icon {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  color: inherit;
+  font-size: inherit;
+}
+
+.security-scan-scanner-state.is-ready {
+  color: var(--success, #147a43);
+}
+
+.security-scan-scanner-state.is-degraded {
+  color: #a15c00;
+}
+
+.security-scan-scanner-state.is-disabled {
+  color: var(--muted, #667085);
+}
+
+.security-scan-repository-status {
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.security-scan-repository-status .lucide-icon {
+  width: 13px;
+  height: 13px;
+  color: inherit;
+}
+
+.security-scan-repository-status.is-disabled {
+  background: #edf1ef;
+  color: var(--muted, #667085);
+}
+
+.security-scan-severity {
+  min-width: 100px;
+  justify-content: flex-start;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.security-scan-severity .lucide-icon {
+  width: 13px;
+  height: 13px;
+  color: inherit;
+}
+
+.security-scan-severity.is-critical {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.security-scan-severity.is-high {
+  background: #fff0df;
+  color: #994b00;
+}
+
+.security-scan-severity.is-medium {
+  background: var(--warning-bg);
+  color: #755900;
+}
+
+.security-scan-severity.is-low {
+  background: var(--info-bg);
+  color: var(--info);
+}
+
+.security-scan-severity.is-unknown {
+  background: #edf1ef;
+  color: #596963;
+}
+
+.security-scan-advisory-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--info);
+  font-weight: var(--fw-bold);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.security-scan-advisory-link code {
+  color: inherit;
+}
+
+.security-scan-advisory-link .lucide-icon {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  color: inherit;
+}
+
+.security-scan-advisory-link:hover {
+  color: var(--brand-strong);
+}
+
+.security-scan-advisory-link:focus-visible {
+  border-radius: 3px;
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.security-scan-capability-banner {
+  display: grid;
+  gap: 4px;
+  margin: 0 24px 16px;
+  padding: 12px 14px;
+  border: 1px solid #b8c4d6;
+  border-radius: 6px;
+  background: #f4f7fb;
+  color: #344054;
+}
+
+.security-scan-capability-banner[hidden] {
+  display: none;
+}
+
+.security-scan-capability-banner.is-disabled {
+  border-color: #e3b341;
+  background: #fff8e5;
+  color: #7a4d00;
+}
+
+.security-scan-capability-banner span {
+  color: inherit;
+}
+
+#security-scanning-view.is-deployment-disabled .security-scan-capability-content,
+#security-scanning-view.is-deployment-pending .security-scan-capability-content {
+  opacity: 0.46;
+  filter: grayscale(0.55);
+  pointer-events: none;
+  cursor: not-allowed;
+}
+
+.security-scan-tabs {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0;
+  overflow-x: auto;
+  margin: 0 24px 16px;
+  padding: 0;
+  border-bottom: 1px solid var(--border-subtle, #d8dee8);
+}
+
+.security-scan-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  margin: 0 0 -1px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: var(--muted, #667085);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 650;
+  padding: 0 16px;
+  white-space: nowrap;
+}
+
+.security-scan-tab:hover {
+  background: #f5f8f7;
+  color: var(--ink-1, #17211e);
+}
+
+.security-scan-tab:focus-visible {
+  z-index: 1;
+  border-radius: 4px 4px 0 0;
+  outline: 3px solid var(--focus, rgba(22, 128, 113, 0.22));
+  outline-offset: -3px;
+}
+
+.security-scan-tab.is-active {
+  color: var(--active, #0f7c6f);
+  border-bottom-color: currentColor;
+  background: transparent;
+}
+
+.security-scan-tab:disabled {
+  cursor: not-allowed;
+}
+
+.security-scan-panel {
+  display: none;
+  margin: 0 24px 24px;
+}
+
+.security-scan-panel.is-active {
+  display: block;
+}
+
+.security-scan-list-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
+.security-scan-list-toolbar .filter-box {
+  flex: 1 1 360px;
+  width: auto;
+  max-width: 680px;
+  min-width: 220px;
+}
+
+.security-scan-list-toolbar .create-button,
+.security-scan-list-toolbar .row-action {
+  flex: 0 0 auto;
+}
+
+.security-scan-pagination {
+  margin: 8px 0 0;
+}
+
+.security-scan-panel > .nx-table-frame {
+  margin: 0;
+}
+
+.security-scan-form {
+  margin-top: 16px;
+}
+
+.security-scan-form-intro {
+  margin: -4px 0 16px;
+}
+
+.security-scan-policy-form-note {
+  margin: -4px 0 16px;
+}
+
+.security-scan-config-grid {
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+}
+
+.security-scan-config-grid > label:not(.checkbox-field) {
+  align-self: start;
+}
+
+.security-scan-policy-grid {
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+}
+
+.security-scan-waiver-grid {
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+}
+
+.security-scan-waiver-status-button {
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.security-scan-waiver-status-button:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.security-scan-waiver-detail-list {
+  display: grid;
+  gap: 12px;
+}
+
+.security-scan-waiver-detail-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfb;
+  padding: 14px;
+}
+
+.security-scan-waiver-detail-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+}
+
+.security-scan-waiver-detail-target {
+  min-width: 0;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+.security-scan-waiver-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.security-scan-waiver-detail-grid > div {
+  min-width: 0;
+}
+
+.security-scan-waiver-detail-grid span,
+.security-scan-waiver-detail-reason > span {
+  display: block;
+  color: var(--ink-4);
+  font-size: 12px;
+  font-weight: var(--fw-bold);
+  text-transform: uppercase;
+}
+
+.security-scan-waiver-detail-grid strong {
+  display: block;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.security-scan-waiver-detail-selector {
+  grid-column: span 2;
+}
+
+.security-scan-waiver-detail-reason {
+  margin-top: 14px;
+}
+
+.security-scan-waiver-detail-reason p {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+}
+
+.security-scan-finding-actions {
+  width: 190px;
+  min-width: 190px;
+  max-width: 190px;
+  white-space: nowrap;
+}
+
+.security-scan-finding-repositories {
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+}
+
+.security-scan-finding-detail-content {
+  margin-top: 2px;
+}
+
+.security-scan-finding-detail-hero {
+  padding: 2px 0 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.security-scan-finding-detail-kicker {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.security-scan-finding-detail-kicker code {
+  color: var(--ink-3);
+  font-size: 13px;
+  font-weight: var(--fw-bold);
+}
+
+.security-scan-finding-detail-kicker .security-scan-advisory-link code {
+  color: inherit;
+}
+
+.security-scan-finding-detail-hero h3 {
+  margin: 12px 0 4px;
+  color: var(--ink);
+  font-size: 21px;
+  line-height: 1.3;
+}
+
+.security-scan-finding-detail-hero p {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 14px;
+  font-weight: var(--fw-semibold);
+}
+
+.security-scan-finding-detail-highlights {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 18px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.security-scan-finding-detail-highlights > div {
+  min-width: 0;
+  padding: 0 22px;
+}
+
+.security-scan-finding-detail-highlights > div:first-child {
+  padding-left: 0;
+}
+
+.security-scan-finding-detail-highlights > div + div {
+  border-left: 1px solid var(--line);
+}
+
+.security-scan-finding-detail-highlights span {
+  display: block;
+  color: var(--ink-4);
+  font-size: 12px;
+  font-weight: var(--fw-bold);
+  text-transform: uppercase;
+}
+
+.security-scan-finding-detail-highlights strong {
+  display: block;
+  margin-top: 5px;
+  color: var(--ink);
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.security-scan-finding-detail-sections {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 32px;
+  padding-top: 22px;
+}
+
+.security-scan-finding-detail-section h3 {
+  margin: 0 0 6px;
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.security-scan-finding-detail-section dl {
+  margin: 0;
+}
+
+.security-scan-finding-detail-section dl > div {
+  display: grid;
+  grid-template-columns: minmax(100px, 130px) minmax(0, 1fr);
+  gap: 16px;
+  padding: 9px 0;
+  border-bottom: 1px solid #edf1ef;
+}
+
+.security-scan-finding-detail-section dt {
+  color: var(--ink-4);
+  font-size: 12px;
+  font-weight: var(--fw-bold);
+}
+
+.security-scan-finding-detail-section dd {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.security-scan-enabled-field {
+  align-self: start;
+  min-height: 36px;
+  padding-top: 24px;
+}
+
+.security-scan-scope {
+  margin: 16px 0 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfb;
+  padding: 12px 14px;
+}
+
+.security-scan-scope legend {
+  padding: 0 6px;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: var(--fw-bold);
+}
+
+.security-scan-scope-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 28px;
+}
+
+.security-scan-scope .checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #344641;
+  font-size: 13px;
+  font-weight: var(--fw-bold);
+}
+
+.security-scan-scope .form-note {
+  margin-top: 8px;
+}
+
+.security-scan-advanced {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.security-scan-advanced summary {
+  cursor: pointer;
+  padding: 12px 14px;
+  color: #344641;
+  font-size: 13px;
+  font-weight: var(--fw-bold);
+}
+
+.security-scan-advanced[open] summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.security-scan-advanced > .form-note {
+  margin: 12px 14px 0;
+}
+
+.security-scan-advanced-grid {
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  padding: 12px 14px 14px;
+}
+
+@media (max-width: 1100px) {
+  .security-scan-config-grid {
+    grid-template-columns: repeat(2, minmax(180px, 1fr));
+  }
+
+  .security-scan-waiver-detail-grid {
+    grid-template-columns: repeat(2, minmax(140px, 1fr));
+  }
+
+}
+
+@media (max-width: 980px) {
+  .security-scan-summary,
+  .security-scan-capability-banner,
+  .security-scan-tabs,
+  .security-scan-panel {
+    margin-right: 16px;
+    margin-left: 16px;
+  }
+
+  .security-scan-list-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .security-scan-list-toolbar .filter-box {
+    flex-basis: 100%;
+    max-width: none;
+  }
+}
+
+@media (max-width: 700px) {
+  .security-scan-waiver-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .security-scan-waiver-detail-selector {
+    grid-column: auto;
+  }
+
+  .security-scan-finding-detail-highlights,
+  .security-scan-finding-detail-sections {
+    grid-template-columns: 1fr;
+  }
+
+  .security-scan-finding-detail-highlights {
+    gap: 14px;
+  }
+
+  .security-scan-finding-detail-highlights > div {
+    padding: 0;
+  }
+
+  .security-scan-finding-detail-highlights > div + div {
+    border-left: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .security-scan-config-grid,
+  .security-scan-advanced-grid,
+  .security-scan-policy-grid,
+  .security-scan-waiver-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .security-scan-enabled-field {
+    padding-top: 4px;
+  }
+}

@@ -10,6 +10,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao.CleanupMa
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao.CleanupPolicyRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao.CleanupTagCandidate;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao.DeletedManifest;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestReferenceRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerTagRecord;
@@ -438,6 +439,29 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
           AND deleted_at IS NULL
         """, Integer.class, repositoryId, hash(imageName), hash(digest));
     return manifestCount != null && manifestCount > 0;
+  }
+
+  @Override
+  public List<Long> listManifestAssetIdsReferencingDigest(
+      long repositoryId, String digest, int maxItems) {
+    return jdbcTemplate.queryForList("""
+        SELECT m.asset_id
+        FROM (
+          SELECT DISTINCT r.manifest_id
+          FROM docker_manifest_reference r
+          WHERE r.repository_id = ?
+            AND r.digest_hash = ?
+          ORDER BY r.manifest_id
+          LIMIT ?
+        ) bounded_reference
+        JOIN docker_manifest m ON m.id = bounded_reference.manifest_id
+        WHERE m.deleted_at IS NULL
+        ORDER BY bounded_reference.manifest_id
+        """,
+        Long.class,
+        repositoryId,
+        hash(digest),
+        Math.max(1, Math.min(maxItems, SecurityScanDao.MAX_DOWNLOAD_POLICY_BATCH + 1)));
   }
 
   public OptionalLong findUnreferencedBlobAssetIdForCleanup(

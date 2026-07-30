@@ -23,6 +23,8 @@ class DockerRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
     long repositoryId = insertRepository("docker-hosted", "docker");
     AssetDao assetDao = new JdbcAssetDao(jdbc(), jsonColumns());
     long assetId = assetDao.insertAsset(asset(repositoryId, "docker/manifests/acme/app/v1"));
+    long otherAssetId =
+        assetDao.insertAsset(asset(repositoryId, "docker/manifests/acme/other/v1"));
     DockerRegistryDao dao = new JdbcDockerRegistryDao(jdbc(), jsonColumns());
     DockerManifestRecord first = manifest(repositoryId, assetId, "sha256:" + "a".repeat(64), 10);
 
@@ -40,6 +42,16 @@ class DockerRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
       dao.upsertTag(tag(repositoryId, updated, "1.0"));
       dao.replaceManifestReferences(updated.id(), List.of(reference(repositoryId, updated)));
     });
+    DockerManifestRecord other = inTransaction(() -> dao.upsertManifest(
+        manifest(
+            repositoryId,
+            otherAssetId,
+            "sha256:" + "c".repeat(64),
+            30,
+            "acme/other")));
+    inTransaction(
+        () -> dao.replaceManifestReferences(
+            other.id(), List.of(reference(repositoryId, other))));
 
     assertEquals(List.of("1.0", "latest"), dao.listTags(repositoryId, "acme/app", null, 10));
     assertEquals(List.of("latest"), dao.listTags(repositoryId, "acme/app", "1.0", 10));
@@ -49,7 +61,11 @@ class DockerRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
         repositoryId, "acme/app", "latest").orElseThrow().id());
     assertEquals(1, dao.listReferences(updated.id()).size());
     assertTrue(dao.imageReferencesDigest(repositoryId, "acme/app", referenceDigest()));
-    assertEquals(List.of("acme/app"), dao.listCatalog(repositoryId, null, 10));
+    assertEquals(
+        List.of(assetId, otherAssetId),
+        dao.listManifestAssetIdsReferencingDigest(
+            repositoryId, referenceDigest(), 10));
+    assertEquals(List.of("acme/app", "acme/other"), dao.listCatalog(repositoryId, null, 10));
 
     DockerRegistryDao.DeletedManifest deleted = inTransaction(
         () -> dao.deleteManifest(repositoryId, "acme/app", first.digest()));

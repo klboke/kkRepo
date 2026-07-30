@@ -10,6 +10,8 @@ import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.time.Instant;
 import java.util.Locale;
 import org.springframework.stereotype.Component;
@@ -18,29 +20,59 @@ import org.springframework.stereotype.Component;
 class RawAssetReader {
   private final AssetDao assetDao;
   private final BlobStorageRegistry blobStorageRegistry;
+  private final ArtifactDownloadPolicy downloadPolicy;
 
   RawAssetReader(AssetDao assetDao, BlobStorageRegistry blobStorageRegistry) {
+    this(assetDao, blobStorageRegistry, null);
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  RawAssetReader(
+      AssetDao assetDao,
+      BlobStorageRegistry blobStorageRegistry,
+      ArtifactDownloadPolicy downloadPolicy) {
     this.assetDao = assetDao;
     this.blobStorageRegistry = blobStorageRegistry;
+    this.downloadPolicy = downloadPolicy;
   }
 
   MavenResponse serve(AssetRecord asset, boolean headOnly, String path, String contentDisposition) {
     AssetBlobRecord blob = asset.assetBlobId() == null
         ? null
         : assetDao.findBlobById(asset.assetBlobId()).orElse(null);
-    return serveBlob(blob, asset.contentType(), asset.lastUpdatedAt(), headOnly, path, contentDisposition);
+    return serveBlob(
+        asset.id(),
+        blob,
+        asset.contentType(),
+        asset.lastUpdatedAt(),
+        headOnly,
+        path,
+        contentDisposition);
   }
 
   MavenResponse serveSnapshot(CachedAssetMetadata snapshot, boolean headOnly, String path, String contentDisposition) {
-    return serveBlob(snapshot.toBlobRecord(), snapshot.contentType(), snapshot.lastUpdatedAt(),
-        headOnly, path, contentDisposition);
+    return serveBlob(
+        snapshot.assetId(),
+        snapshot.toBlobRecord(),
+        snapshot.contentType(),
+        snapshot.lastUpdatedAt(),
+        headOnly,
+        path,
+        contentDisposition);
   }
 
-  private MavenResponse serveBlob(AssetBlobRecord blob, String contentType, Instant lastModified,
-      boolean headOnly, String path, String contentDisposition) {
+  private MavenResponse serveBlob(
+      long assetId,
+      AssetBlobRecord blob,
+      String contentType,
+      Instant lastModified,
+      boolean headOnly,
+      String path,
+      String contentDisposition) {
     if (blob == null) {
       throw new MavenExceptions.MavenNotFoundException(path);
     }
+    beforeRead(assetId, blob.id());
     String etag = blob.sha1();
     if (headOnly) {
       return MavenResponse.noBody(200, blob.size(), contentType, etag, lastModified);
@@ -58,6 +90,10 @@ class RawAssetReader {
         ? "ATTACHMENT"
         : contentDisposition;
     return value.toLowerCase(Locale.ROOT);
+  }
+
+  void beforeRead(long assetId, long blobId) {
+    if (downloadPolicy != null) downloadPolicy.beforeRead(assetId, blobId);
   }
 
 }

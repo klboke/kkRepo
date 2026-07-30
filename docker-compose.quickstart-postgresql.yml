@@ -16,6 +16,8 @@ services:
       timeout: 5s
       retries: 12
       start_period: 10s
+    networks:
+      - database-internal
 
   app-data-perms:
     image: alpine:3.20
@@ -23,6 +25,7 @@ services:
     volumes:
       - kkrepo-data:/data
     command: ["sh", "-c", "mkdir -p /data/blobs && chown -R 999:999 /data"]
+    network_mode: none
 
   kkrepo:
     image: ghcr.io/klboke/kkrepo:${KKREPO_IMAGE_TAG:-0.6.0}
@@ -39,13 +42,96 @@ services:
       KKREPO_CREDENTIAL_SECRET: ${KKREPO_CREDENTIAL_SECRET:-quickstart-credential-secret-change-me-0123456789}
       KKREPO_API_KEY_PAYLOAD_SECRET: ${KKREPO_API_KEY_PAYLOAD_SECRET:-quickstart-api-key-payload-secret-change-me-0123456789}
       KKREPO_FILE_BASE_DIR: ${KKREPO_FILE_BASE_DIR:-/var/lib/kkrepo/blobs}
+      # Deployment capability only: starts kkRepo scan coordination and policy integration.
+      # The scanner container also requires --profile security-scanning, and repository
+      # administrators still activate scanning per repository in the Admin UI.
+      KKREPO_SECURITY_SCANNING_ENABLED: ${KKREPO_SECURITY_SCANNING_ENABLED:-false}
+      KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URL: http://scanner:8080
+      KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL: ${KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL:-}
+      KKREPO_SECURITY_SCANNING_OCI_REGISTRY_URL: http://kkrepo:8080
     ports:
       - "${KKREPO_HTTP_PORT:-19090}:8080"
       - "${KKREPO_MANAGEMENT_PORT:-19091}:8081"
     volumes:
       - kkrepo-data:/var/lib/kkrepo
+    networks:
+      - database-internal
+      - scanner-internal
+      - application-egress
+    restart: unless-stopped
+
+  scanner:
+    image: ghcr.io/klboke/kkrepo-scanner:${KKREPO_SCANNER_IMAGE_TAG:-0.6.0}
+    profiles: ["security-scanning"]
+    environment:
+      KKREPO_SCANNER_SERVICE_CREDENTIAL: ${KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL:-}
+      # Serving scanners process untrusted artifacts and never receive public update egress.
+      KKREPO_SCANNER_DB_AUTO_UPDATE: "false"
+      KKREPO_SCANNER_DB_DIRECTORY: /var/lib/kkrepo-scanner/grype
+      KKREPO_SCANNER_MAX_OCI_REQUEST_BYTES: ${KKREPO_SCANNER_MAX_OCI_REQUEST_BYTES:-65536}
+      KKREPO_SCANNER_MAX_SCRATCH_BYTES: ${KKREPO_SCANNER_MAX_SCRATCH_BYTES:-7516192768}
+    read_only: true
+    tmpfs:
+      - /tmp:size=${KKREPO_SCANNER_TMPFS_SIZE:-8g},uid=10001,gid=10001,mode=1770
+    volumes:
+      - scanner-db:/var/lib/kkrepo-scanner/grype:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    networks:
+      - scanner-internal
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/actuator/health/readiness >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
+  scanner-database-updater:
+    image: ghcr.io/klboke/kkrepo-scanner:${KKREPO_SCANNER_IMAGE_TAG:-0.6.0}
+    profiles: ["security-scanning"]
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        while true; do
+          java -XX:MaxRAMPercentage=75.0 -Djava.io.tmpdir=/tmp \
+            -jar /app/scanner-adapter.jar \
+            --spring.main.web-application-type=none || exit "$$?"
+          sleep "$${KKREPO_SCANNER_DB_UPDATE_CHECK_SECONDS}"
+        done
+    environment:
+      KKREPO_SCANNER_DATABASE_UPDATE_ONLY: "true"
+      KKREPO_SCANNER_DB_AUTO_UPDATE: "false"
+      KKREPO_SCANNER_DB_UPDATE_INTERVAL: ${KKREPO_SCANNER_DB_UPDATE_INTERVAL:-6h}
+      KKREPO_SCANNER_DATABASE_UPDATE_LOCK_TIMEOUT: ${KKREPO_SCANNER_DATABASE_UPDATE_LOCK_TIMEOUT:-10m}
+      KKREPO_SCANNER_DB_UPDATE_CHECK_SECONDS: ${KKREPO_SCANNER_DB_UPDATE_CHECK_SECONDS:-300}
+      KKREPO_SCANNER_DB_DIRECTORY: /var/lib/kkrepo-scanner/grype
+    read_only: true
+    tmpfs:
+      - /tmp:size=${KKREPO_SCANNER_UPDATER_TMPFS_SIZE:-1g},uid=10001,gid=10001,mode=1770
+    volumes:
+      - scanner-db:/var/lib/kkrepo-scanner/grype
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 64
+    networks:
+      - scanner-update-egress
     restart: unless-stopped
 
 volumes:
   postgresql-data:
   kkrepo-data:
+  scanner-db:
+
+networks:
+  database-internal:
+    internal: true
+  scanner-internal:
+    internal: true
+  application-egress:
+  scanner-update-egress:

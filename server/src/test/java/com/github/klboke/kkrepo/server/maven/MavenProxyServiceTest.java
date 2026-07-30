@@ -4,9 +4,14 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.github.klboke.kkrepo.core.BlobObjectMetadata;
 import com.github.klboke.kkrepo.core.BlobReference;
@@ -20,6 +25,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
 import com.github.klboke.kkrepo.server.support.dao.AssetDaoAdapter;
 import com.github.klboke.kkrepo.server.support.dao.ProxyStateDaoAdapter;
@@ -65,21 +71,24 @@ class MavenProxyServiceTest {
 
   @Test
   void headHitReturnsRemoteHeadersWithoutWritingBlob() {
-    CapturingFetcher fetcher = new CapturingFetcher(new HttpRemoteFetcher.Result(
+    HttpRemoteFetcher.Result upstream = new HttpRemoteFetcher.Result(
         200,
         Map.of(
             "Content-Length", "47706",
             "Content-Type", "binary/octet-stream",
             "ETag", "\"fb9532624e7bf327a6c6249c59b64d377e0a2866\"",
             "Last-Modified", "Mon, 25 May 2026 07:24:48 GMT"),
-        InputStream.nullInputStream()));
+        InputStream.nullInputStream());
+    CapturingFetcher fetcher = new CapturingFetcher(upstream);
     RecordingProxyStateDao proxyState = new RecordingProxyStateDao();
-    MavenProxyService service = service(fetcher, proxyState);
+    ArtifactDownloadPolicy downloadPolicy = mock(ArtifactDownloadPolicy.class);
+    MavenProxyService service = service(fetcher, proxyState, downloadPolicy);
+    MavenPath requestedPath = path(
+        "org/gradle/kotlin/gradle-kotlin-dsl-plugins/4.2.1/"
+            + "gradle-kotlin-dsl-plugins-4.2.1.jar");
 
-    MavenResponse response = service.get(
-        runtime(),
-        path("org/gradle/kotlin/gradle-kotlin-dsl-plugins/4.2.1/gradle-kotlin-dsl-plugins-4.2.1.jar"),
-        true);
+    RepositoryRuntime runtime = runtime();
+    MavenResponse response = service.get(runtime, requestedPath, true);
 
     assertNotNull(fetcher.request);
     assertTrue(fetcher.request.headOnly());
@@ -91,6 +100,45 @@ class MavenProxyServiceTest {
     assertEquals(Instant.parse("2026-05-25T07:24:48Z"), response.lastModified());
     assertEquals(1, proxyState.successCount);
     assertEquals(0, proxyState.failureCount);
+    verifyNoInteractions(downloadPolicy);
+  }
+
+  @Test
+  void getMissPersistsBeforePendingPolicyBlocksTheResponse() {
+    byte[] upstreamBytes = "artifact-bytes".getBytes(StandardCharsets.UTF_8);
+    HttpRemoteFetcher.Result upstream = new HttpRemoteFetcher.Result(
+        200,
+        Map.of(
+            "Content-Type", "application/java-archive"),
+        new java.io.ByteArrayInputStream(upstreamBytes));
+    CapturingFetcher fetcher = new CapturingFetcher(upstream);
+    RecordingProxyStateDao proxyState = new RecordingProxyStateDao();
+    CountingBlobStorage storage = new CountingBlobStorage();
+    TempFileWriter writer = new TempFileWriter();
+    ArtifactDownloadPolicy downloadPolicy = mock(ArtifactDownloadPolicy.class);
+    RepositoryRuntime runtime = runtime();
+    MavenPath requestedPath = path("com/acme/demo/1.0.0/demo-1.0.0.jar");
+    RuntimeException blocked = new RuntimeException("blocked after persistence");
+    doThrow(blocked).when(downloadPolicy).beforeRead(88L, 99L);
+    MavenProxyService service = new MavenProxyService(
+        new EmptyAssetDao(),
+        new FixedBlobStorageRegistry(storage),
+        writer,
+        proxyState,
+        fetcher,
+        null,
+        new AssetMetadataCache(new InMemorySharedCache(), false, 0, 0),
+        null,
+        downloadPolicy);
+
+    RuntimeException actual = assertThrows(
+        RuntimeException.class,
+        () -> service.get(runtime, requestedPath, false));
+
+    assertSame(blocked, actual);
+    assertTrue(writer.keepResponseFile);
+    assertEquals(1, proxyState.successCount);
+    verify(downloadPolicy).beforeRead(88L, 99L);
   }
 
   @Test
@@ -272,6 +320,13 @@ class MavenProxyServiceTest {
   }
 
   private static MavenProxyService service(CapturingFetcher fetcher, RecordingProxyStateDao proxyState) {
+    return service(fetcher, proxyState, null);
+  }
+
+  private static MavenProxyService service(
+      CapturingFetcher fetcher,
+      RecordingProxyStateDao proxyState,
+      ArtifactDownloadPolicy downloadPolicy) {
     return new MavenProxyService(
         new EmptyAssetDao(),
         null,
@@ -279,7 +334,9 @@ class MavenProxyServiceTest {
         proxyState,
         fetcher,
         null,
-        new AssetMetadataCache(new InMemorySharedCache(), false, 0, 0));
+        new AssetMetadataCache(new InMemorySharedCache(), false, 0, 0),
+        null,
+        downloadPolicy);
   }
 
   private static RepositoryRuntime runtime() {

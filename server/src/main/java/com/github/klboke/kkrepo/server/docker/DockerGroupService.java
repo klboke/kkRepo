@@ -254,7 +254,7 @@ public class DockerGroupService {
   private DockerResponse getBlobFromMember(
       RepositoryRuntime member, String imageName, DockerDigest digest, boolean headOnly) {
     return switch (member.type()) {
-      case HOSTED -> hosted.getBlob(member, digest, headOnly);
+      case HOSTED -> hosted.getBlob(member, imageName, digest, headOnly);
       case PROXY -> proxy.getBlob(member, imageName, digest, headOnly);
       case GROUP -> getBlob(member, imageName, digest, headOnly);
     };

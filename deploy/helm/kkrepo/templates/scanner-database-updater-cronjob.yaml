@@ -1,0 +1,84 @@
+{{- if and .Values.securityScanning.enabled .Values.securityScanning.scannerDatabase.autoUpdate }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "kkrepo.scannerUpdaterName" . }}
+  labels:
+    {{- include "kkrepo.scannerUpdaterLabels" . | nindent 4 }}
+spec:
+  schedule: {{ required "securityScanning.scannerDatabase.updateSchedule is required when auto-update is enabled" .Values.securityScanning.scannerDatabase.updateSchedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: {{ .Values.securityScanning.scannerDatabase.updater.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.securityScanning.scannerDatabase.updater.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: {{ .Values.securityScanning.scannerDatabase.updater.backoffLimit }}
+      template:
+        metadata:
+          labels:
+            {{- include "kkrepo.scannerUpdaterSelectorLabels" . | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ include "kkrepo.serviceAccountName" . }}
+          automountServiceAccountToken: false
+          securityContext:
+            {{- toYaml .Values.securityScanning.podSecurityContext | nindent 12 }}
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          # Co-location lets the default ReadWriteOnce claim be mounted by the scanner and updater
+          # on one node. Multi-replica scanner deployments already require a shared RWX claim.
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchLabels:
+                      {{- include "kkrepo.scannerSelectorLabels" . | nindent 22 }}
+                  topologyKey: kubernetes.io/hostname
+          containers:
+            - name: database-updater
+              image: "{{ .Values.securityScanning.image.repository }}:{{ default .Chart.AppVersion .Values.securityScanning.image.tag }}"
+              imagePullPolicy: {{ .Values.securityScanning.image.pullPolicy }}
+              args:
+                - --spring.main.web-application-type=none
+              securityContext:
+                {{- toYaml .Values.securityScanning.securityContext | nindent 16 }}
+              env:
+                - name: KKREPO_SCANNER_DATABASE_UPDATE_ONLY
+                  value: "true"
+                - name: KKREPO_SCANNER_DB_AUTO_UPDATE
+                  value: "false"
+                - name: KKREPO_SCANNER_DB_UPDATE_INTERVAL
+                  value: {{ .Values.securityScanning.scannerDatabase.updateInterval | quote }}
+                - name: KKREPO_SCANNER_DB_DIRECTORY
+                  value: /var/lib/kkrepo-scanner/grype
+                - name: KKREPO_SCANNER_MAX_OUTPUT_BYTES
+                  value: {{ .Values.securityScanning.limits.maxOutputBytes | quote }}
+                - name: KKREPO_SCANNER_MAX_STDERR_BYTES
+                  value: {{ .Values.securityScanning.limits.maxStderrBytes | quote }}
+                - name: KKREPO_SCANNER_DATABASE_UPDATE_LOCK_TIMEOUT
+                  value: {{ .Values.securityScanning.scannerDatabase.updater.lockTimeout | quote }}
+              resources:
+                {{- toYaml .Values.securityScanning.scannerDatabase.updater.resources | nindent 16 }}
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+                - name: scanner-db
+                  mountPath: /var/lib/kkrepo-scanner/grype
+          volumes:
+            - name: tmp
+              emptyDir:
+                sizeLimit: {{ .Values.securityScanning.scannerDatabase.updater.scratchVolumeSize }}
+            - name: scanner-db
+              persistentVolumeClaim:
+                claimName: {{ default (include "kkrepo.scannerDatabaseClaimName" .) .Values.securityScanning.scannerDatabase.persistence.existingClaim }}
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

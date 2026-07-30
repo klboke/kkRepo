@@ -39,6 +39,15 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   static final int FILTER_ORDER = SessionRepositoryFilter.DEFAULT_ORDER + 20;
   public static final String REPOSITORY_RECORD_ATTRIBUTE =
       RepositorySecurityFilter.class.getName() + ".REPOSITORY_RECORD";
+  /**
+   * Repository named by the external request before any group service dispatches to a member.
+   *
+   * <p>Protocol services resolve group members in-process, so this request-scoped identity remains
+   * stable and lets downstream policy checks evaluate both the concrete source and the entry
+   * repository.
+   */
+  public static final String ENTRY_REPOSITORY_ID_ATTRIBUTE =
+      RepositorySecurityFilter.class.getName() + ".ENTRY_REPOSITORY_ID";
   public static final String NORMALIZED_REPOSITORY_PATH_ATTRIBUTE =
       RepositorySecurityFilter.class.getName() + ".NORMALIZED_REPOSITORY_PATH";
   public static final String TERRAFORM_URL_TOKEN_SEGMENT_ATTRIBUTE =
@@ -90,6 +99,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       return;
     }
     request.setAttribute(REPOSITORY_RECORD_ATTRIBUTE, repository.get());
+    request.setAttribute(ENTRY_REPOSITORY_ID_ATTRIBUTE, repository.get().id());
     String terraformUrlToken = null;
     TerraformPath terraformPath = null;
     if (repository.get().format() == RepositoryFormat.TERRAFORM

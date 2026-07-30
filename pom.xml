@@ -33,6 +33,8 @@
     <module>protocol-rubygems</module>
     <module>protocol-yum</module>
     <module>migration-nexus</module>
+    <module>security-scan</module>
+    <module>scanner-adapter</module>
     <module>persistence-jdbc</module>
     <module>persistence-mysql</module>
     <module>persistence-postgresql</module>
@@ -55,6 +57,7 @@
     <aws.sdk.version>2.49.3</aws.sdk.version>
     <commons.compress.version>1.28.0</commons.compress.version>
     <xz.version>1.12</xz.version>
+    <zstd.jni.version>1.5.7-11</zstd.jni.version>
     <commons.lang3.version>3.20.0</commons.lang3.version>
     <bouncycastle.version>1.85</bouncycastle.version>
     <jacoco.version>0.8.15</jacoco.version>
@@ -126,6 +129,11 @@
         <groupId>org.tukaani</groupId>
         <artifactId>xz</artifactId>
         <version>${xz.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.github.luben</groupId>
+        <artifactId>zstd-jni</artifactId>
+        <version>${zstd.jni.version}</version>
       </dependency>
       <dependency>
         <groupId>org.apache.commons</groupId>
@@ -247,6 +255,16 @@
       <dependency>
         <groupId>com.github.klboke</groupId>
         <artifactId>kkrepo-migration-nexus</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.github.klboke</groupId>
+        <artifactId>kkrepo-security-scan</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.github.klboke</groupId>
+        <artifactId>kkrepo-scanner-adapter</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>

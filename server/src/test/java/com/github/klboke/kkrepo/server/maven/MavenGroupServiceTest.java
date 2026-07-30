@@ -16,6 +16,7 @@ import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache.Loaded;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
 import com.github.klboke.kkrepo.server.support.dao.AssetDaoAdapter;
 import java.io.ByteArrayInputStream;
@@ -103,6 +104,106 @@ class MavenGroupServiceTest {
 
     assertEquals(200, response.status());
     assertEquals("cached-group", new String(response.body().readAllBytes(), StandardCharsets.UTF_8));
+  }
+
+  @Test
+  void cachedGroupArtifactEnforcesPolicyAgainstConcreteMemberAsset() {
+    InMemorySharedCache shared = new InMemorySharedCache();
+    AssetMetadataCache cache = new AssetMetadataCache(shared, true, 120, 5);
+    MavenPath path = markerJar();
+    CachedAssetMetadata concrete =
+        snapshot(101L, 3L, path.path(), blob(900L));
+    Map<String, Object> sourceAttributes =
+        MavenAssetWriter.groupCacheSourceAttributes(concrete);
+    warmCache(
+        cache,
+        1L,
+        path.path(),
+        snapshot(100L, 1L, path.path(), blob(900L), Instant.now(), sourceAttributes));
+    CapturingDownloadPolicy policy = new CapturingDownloadPolicy();
+    MavenGroupService service = new MavenGroupService(
+        new MissingHostedService(),
+        new FailingProxyService(),
+        new EmptyAssetDao(),
+        new FixedBlobStorageRegistry(new BytesBlobStorage("cached-group")),
+        null,
+        cache,
+        null,
+        policy);
+
+    MavenResponse response = service.get(group(), path, true);
+
+    assertEquals(200, response.status());
+    assertEquals(101L, policy.assetId);
+    assertEquals(900L, policy.sourceBlobId);
+    assertEquals(3L, policy.sourceRepositoryId);
+    assertEquals(1L, policy.entryRepositoryId);
+    assertEquals(true, sourceAttributes.get("mavenGroupCache"));
+    assertEquals(900L, sourceAttributes.get("sourceBlobId"));
+  }
+
+  @Test
+  void nestedGroupCachePreservesTheOuterEntryRepositoryForPolicy() {
+    InMemorySharedCache shared = new InMemorySharedCache();
+    AssetMetadataCache cache = new AssetMetadataCache(shared, true, 120, 5);
+    MavenPath path = markerJar();
+    CachedAssetMetadata concrete = snapshot(101L, 3L, path.path(), blob(900L));
+    warmCache(
+        cache,
+        11L,
+        path.path(),
+        snapshot(
+            201L,
+            11L,
+            path.path(),
+            blob(900L),
+            Instant.now(),
+            MavenAssetWriter.groupCacheSourceAttributes(concrete)));
+    RepositoryRuntime nested = group(11L, "nested", List.of(proxy()));
+    RepositoryRuntime outer = group(10L, "outer", List.of(nested));
+    CapturingDownloadPolicy policy = new CapturingDownloadPolicy();
+    MavenGroupService service = new MavenGroupService(
+        new MissingHostedService(),
+        new FailingProxyService(),
+        new EmptyAssetDao(),
+        new FixedBlobStorageRegistry(new BytesBlobStorage("cached-nested-group")),
+        null,
+        cache,
+        null,
+        policy);
+
+    MavenResponse response = service.get(outer, path, true);
+
+    assertEquals(200, response.status());
+    assertEquals(101L, policy.assetId);
+    assertEquals(900L, policy.sourceBlobId);
+    assertEquals(3L, policy.sourceRepositoryId);
+    assertEquals(10L, policy.entryRepositoryId);
+  }
+
+  @Test
+  void nestedGroupCacheFlattensTheConcreteMemberIdentity() {
+    MavenPath path = markerJar();
+    CachedAssetMetadata nestedGroupAsset = snapshot(
+        201L,
+        11L,
+        path.path(),
+        blob(900L),
+        Instant.now(),
+        Map.of(
+            "mavenGroupCache", true,
+            "sourceAssetId", 101L,
+            "sourceBlobId", 900L,
+            "sourceRepositoryId", 3L,
+            "sourcePath", path.path()));
+
+    Map<String, Object> attributes =
+        MavenAssetWriter.groupCacheSourceAttributes(nestedGroupAsset);
+
+    assertEquals(101L, attributes.get("sourceAssetId"));
+    assertEquals(900L, attributes.get("sourceBlobId"));
+    assertEquals(3L, attributes.get("sourceRepositoryId"));
+    assertEquals(path.path(), attributes.get("sourcePath"));
   }
 
   @Test
@@ -261,6 +362,16 @@ class MavenGroupServiceTest {
       String path,
       AssetBlobRecord blob,
       Instant lastUpdatedAt) {
+    return snapshot(assetId, repositoryId, path, blob, lastUpdatedAt, Map.of());
+  }
+
+  private static CachedAssetMetadata snapshot(
+      long assetId,
+      long repositoryId,
+      String path,
+      AssetBlobRecord blob,
+      Instant lastUpdatedAt,
+      Map<String, Object> attributes) {
     return CachedAssetMetadata.of(new AssetRecord(
         assetId,
         repositoryId,
@@ -275,7 +386,7 @@ class MavenGroupServiceTest {
         blob.size(),
         null,
         lastUpdatedAt,
-        Map.of()),
+        attributes),
         blob);
   }
 
@@ -332,6 +443,35 @@ class MavenGroupServiceTest {
         String createdByIp) {
       reference = runtime.name() + ":" + path.path() + ":" + source.repositoryId();
       return source;
+    }
+  }
+
+  private static class CapturingDownloadPolicy extends ArtifactDownloadPolicy {
+    private long assetId;
+    private long sourceBlobId;
+    private long sourceRepositoryId;
+    private long entryRepositoryId;
+
+    CapturingDownloadPolicy() {
+      super(null, null, null, null);
+    }
+
+    @Override
+    public Decision beforeGroupCacheRead(
+        long sourceAssetId,
+        long sourceBlobId,
+        long sourceRepositoryId,
+        RepositoryFormat format,
+        String path,
+        String kind,
+        String contentType,
+        long contentLength,
+        long entryRepositoryId) {
+      this.assetId = sourceAssetId;
+      this.sourceBlobId = sourceBlobId;
+      this.sourceRepositoryId = sourceRepositoryId;
+      this.entryRepositoryId = entryRepositoryId;
+      return null;
     }
   }
 

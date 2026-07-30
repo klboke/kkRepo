@@ -5,6 +5,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialects;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseType;
 import java.sql.SQLException;
 import javax.sql.DataSource;
+import org.flywaydb.database.postgresql.PostgreSQLConfigurationExtension;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.flyway.autoconfigure.FlywayConfigurationCustomizer;
 import org.springframework.boot.flyway.autoconfigure.FlywayMigrationStrategy;
@@ -22,7 +23,18 @@ public class DatabaseBackendConfiguration {
 
   @Bean
   FlywayConfigurationCustomizer databaseFlywayCustomizer(DatabaseDialect dialect) {
-    return configuration -> configuration.baselineOnMigrate(dialect.type() == DatabaseType.MYSQL);
+    return configuration -> {
+      configuration.baselineOnMigrate(dialect.type() == DatabaseType.MYSQL);
+      if (dialect.type() == DatabaseType.POSTGRESQL) {
+        // V37 validates NOT VALID constraints and builds indexes CONCURRENTLY in one explicitly
+        // non-transactional migration. Flyway must allow those transactional and
+        // non-transactional PostgreSQL statements to coexist in that script.
+        configuration.mixed(true);
+        configuration
+            .getConfigurationExtension(PostgreSQLConfigurationExtension.class)
+            .setTransactionalLock(false);
+      }
+    };
   }
 
   @Bean
