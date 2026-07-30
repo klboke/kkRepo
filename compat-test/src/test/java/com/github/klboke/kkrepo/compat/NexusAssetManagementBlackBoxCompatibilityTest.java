@@ -94,6 +94,10 @@ class NexusAssetManagementBlackBoxCompatibilityTest {
           "/service/rest/v1/assets/" + encodeSegment(candidateId)).GET()).body());
       assertAsset(referenceGet, repository, path, payload);
       assertAsset(candidateGet, repository, path, payload);
+      assertDetailAsset(referenceGet, "raw");
+      assertDetailAsset(candidateGet, "raw");
+      assertEquals(requiredText(referenceGet, "contentType"), requiredText(candidateGet, "contentType"));
+      assertEquals(requiredText(referenceGet, "blobStoreName"), requiredText(candidateGet, "blobStoreName"));
 
       assertDownload(reference, referenceGet, payload);
       assertDownload(candidate, candidateGet, payload);
@@ -121,6 +125,57 @@ class NexusAssetManagementBlackBoxCompatibilityTest {
       deleteQuietly(reference, referenceId);
       deleteQuietly(candidate, candidateId);
     }
+  }
+
+  @Test
+  void mavenNameSearchUsesComponentNameInsteadOfAssetPathWhenWriteEnabled() throws Exception {
+    assumeTrue(writeEnabled(),
+        "Set COMPAT_WRITE_ENABLED=true to run Maven asset name compatibility");
+    Endpoint reference = Endpoint.referenceEndpoint();
+    Endpoint candidate = Endpoint.candidateEndpoint();
+    String repository = setting(
+        "compat.asset.mavenRepository", "COMPAT_ASSET_MAVEN_REPOSITORY")
+        .orElse("maven-releases");
+    String suffix = Long.toUnsignedString(System.nanoTime());
+    String artifactName = "asset-api-fixture-" + suffix;
+    String path = "com/kkrepo/compat/" + artifactName + "/1.0.0/"
+        + artifactName + "-1.0.0.jar";
+    byte[] payload = ("Maven asset component fixture " + suffix + "\n")
+        .getBytes(StandardCharsets.UTF_8);
+
+    Exchange referenceUpload = send(reference.request(
+        "/repository/" + encodeSegment(repository) + "/" + path)
+        .header("Content-Type", "application/java-archive")
+        .PUT(HttpRequest.BodyPublishers.ofByteArray(payload)));
+    Exchange candidateUpload = send(candidate.request(
+        "/repository/" + encodeSegment(repository) + "/" + path)
+        .header("Content-Type", "application/java-archive")
+        .PUT(HttpRequest.BodyPublishers.ofByteArray(payload)));
+    assertTrue(referenceUpload.status() >= 200 && referenceUpload.status() < 300,
+        "reference Maven fixture upload");
+    assertTrue(candidateUpload.status() >= 200 && candidateUpload.status() < 300,
+        "candidate Maven fixture upload");
+
+    JsonNode referenceAsset = awaitAssetByPath(reference, repository, artifactName, path);
+    JsonNode candidateAsset = awaitAssetByPath(candidate, repository, artifactName, path);
+    assertEquals(path, requiredText(referenceAsset, "path"));
+    assertEquals(path, requiredText(candidateAsset, "path"));
+    assertTrue(!artifactName.equals(path), "component name must differ from the asset path");
+  }
+
+  private static JsonNode awaitAssetByPath(
+      Endpoint endpoint, String repository, String componentName, String expectedPath)
+      throws Exception {
+    for (int attempt = 0; attempt < 40; attempt++) {
+      JsonNode items = json(search(endpoint, repository, componentName)).path("items");
+      for (JsonNode item : items) {
+        if (expectedPath.equals(item.path("path").asText())) {
+          return item;
+        }
+      }
+      Thread.sleep(500);
+    }
+    throw new AssertionError("asset search did not index " + expectedPath + " at " + endpoint.baseUrl);
   }
 
   private static void assertEmptyPage(byte[] body) throws Exception {
@@ -188,6 +243,15 @@ class NexusAssetManagementBlackBoxCompatibilityTest {
     assertFalse(requiredText(asset, "downloadUrl").isBlank());
     assertEquals(digest("SHA-1", payload), requiredText(asset.path("checksum"), "sha1"));
     assertEquals(digest("MD5", payload), requiredText(asset.path("checksum"), "md5"));
+  }
+
+  private static void assertDetailAsset(JsonNode asset, String format) {
+    assertFalse(requiredText(asset, "contentType").isBlank());
+    assertFalse(requiredText(asset, "lastModified").isBlank());
+    assertTrue(asset.has("lastDownloaded"), "lastDownloaded must be present, including when null");
+    assertFalse(requiredText(asset, "blobCreated").isBlank());
+    assertFalse(requiredText(asset, "blobStoreName").isBlank());
+    assertTrue(asset.path(format).isObject(), format + " detail attributes must be an object");
   }
 
   private static void assertDownload(

@@ -33,8 +33,7 @@ class NexusAssetAuthorizerTest {
   void anonymousRepositoryPermissionSetsAuditAndRepositoryContext() {
     SecurityAuthenticationService authentication = mock(SecurityAuthenticationService.class);
     SecurityManagementService security = mock(SecurityManagementService.class);
-    NexusAssetAuthorizer authorizer =
-        new NexusAssetAuthorizer(authentication, security);
+    NexusAssetAuthorizer authorizer = new NexusAssetAuthorizer(authentication, security);
     AuthenticatedSubject anonymous = subject("anonymous");
     RepositoryRecord repository = repository();
     MockHttpServletRequest request = new MockHttpServletRequest();
@@ -58,11 +57,50 @@ class NexusAssetAuthorizerTest {
   }
 
   @Test
+  void searchRequiresTheNxSearchReadPrivilegeBeforeRepositoryBrowse() {
+    SecurityAuthenticationService authentication = mock(SecurityAuthenticationService.class);
+    SecurityManagementService security = mock(SecurityManagementService.class);
+    NexusAssetAuthorizer authorizer = new NexusAssetAuthorizer(authentication, security);
+    AuthenticatedSubject user = subject("reader");
+    MockHttpServletRequest request = new MockHttpServletRequest();
+    when(authentication.authenticate(request)).thenReturn(Optional.of(user));
+    when(security.decide(user.permissionSubject(), "nexus:search:read"))
+        .thenReturn(AccessDecision.deny("missing permission nexus:search:read"));
+
+    ResponseStatusException failure = assertThrows(
+        ResponseStatusException.class, () -> authorizer.requireSearch(request));
+
+    assertEquals(HttpStatus.FORBIDDEN, failure.getStatusCode());
+    assertEquals(
+        "nexus:search:read",
+        request.getAttribute(SecurityManagementFilter.REQUESTED_PERMISSION_ATTRIBUTE));
+    verify(security).decide(user.permissionSubject(), "nexus:search:read");
+  }
+
+  @Test
+  void browseProbeReturnsFalseForASelectorDeniedCandidatePath() {
+    SecurityAuthenticationService authentication = mock(SecurityAuthenticationService.class);
+    SecurityManagementService security = mock(SecurityManagementService.class);
+    NexusAssetAuthorizer authorizer = new NexusAssetAuthorizer(authentication, security);
+    AuthenticatedSubject user = subject("reader");
+    RepositoryRecord repository = repository();
+    MockHttpServletRequest request = new MockHttpServletRequest();
+    when(authentication.authenticate(request)).thenReturn(Optional.of(user));
+    RepositoryPermission permission = new RepositoryPermission(
+        repository.name(), repository.format(), "private/secret.zip", PermissionAction.BROWSE);
+    when(security.decide(user.permissionSubject(), permission))
+        .thenReturn(AccessDecision.deny("content selector denied path"));
+
+    assertEquals(false, authorizer.repositoryActionAllowed(
+        request, repository, "private/secret.zip", PermissionAction.BROWSE));
+    verify(security).decide(user.permissionSubject(), permission);
+  }
+
+  @Test
   void invalidExplicitCredentialsNeverDowngradeToAnonymous() {
     SecurityAuthenticationService authentication = mock(SecurityAuthenticationService.class);
     SecurityManagementService security = mock(SecurityManagementService.class);
-    NexusAssetAuthorizer authorizer =
-        new NexusAssetAuthorizer(authentication, security);
+    NexusAssetAuthorizer authorizer = new NexusAssetAuthorizer(authentication, security);
     MockHttpServletRequest request = new MockHttpServletRequest();
     request.addHeader("Authorization", "Basic invalid");
     when(authentication.authenticate(request)).thenReturn(Optional.empty());
