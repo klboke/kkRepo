@@ -97,6 +97,27 @@ class NexusSecurityExportReaderTest {
   }
 
   @Test
+  void preservesExternalRolesAsUserGroups() {
+    NexusSecurityMigrationBatch batch = reader.read(new NexusSecurityExport(
+        List.of(Map.of(
+            "userId", "caibao",
+            "source", "LDAP",
+            "attributes", Map.of("groups", List.of("ldap-engineering")))),
+        List.of(),
+        List.of(),
+        List.of(),
+        List.of(),
+        List.of(),
+        List.of(),
+        List.of(),
+        Map.of()));
+
+    assertEquals("LDAP", batch.users().get(0).source());
+    assertEquals(List.of("ldap-engineering"), batch.users().get(0).attributes().get("groups"));
+    assertEquals("user", batch.users().get(0).attributes().get("sourceClass"));
+  }
+
+  @Test
   void preservesDisabledAnonymousConfigFromRestExport() {
     NexusSecurityMigrationBatch batch = reader.read(new NexusSecurityExport(
         List.of(),

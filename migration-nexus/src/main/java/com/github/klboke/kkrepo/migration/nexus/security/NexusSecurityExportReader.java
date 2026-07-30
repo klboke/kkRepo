@@ -102,6 +102,11 @@ public class NexusSecurityExportReader {
 
   private static Map<String, Object> attributes(Map<String, Object> document, String sourceClass) {
     LinkedHashMap<String, Object> attributes = new LinkedHashMap<>();
+    attributes.putAll(objectMap(document.get("attributes")));
+    Object externalRoles = firstPresent(document, "groups", "externalRoles");
+    if (externalRoles != null) {
+      attributes.put("groups", stringList(externalRoles));
+    }
     attributes.put("sourceClass", sourceClass);
     Object rid = firstPresent(document, "@rid", "rid");
     if (rid != null) {

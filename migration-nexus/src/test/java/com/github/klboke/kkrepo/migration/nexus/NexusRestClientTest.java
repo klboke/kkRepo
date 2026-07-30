@@ -76,13 +76,34 @@ class NexusRestClientTest {
             "status", "active"),
         Map.of(
             "userId", "caibao",
-            "source", "default",
+            "source", "LDAP",
             "firstName", "Caibao",
-            "status", "active"));
+            "status", "active",
+            "roles", List.of(),
+            "attributes", Map.of("groups", List.of("ldap-engineering"))));
     nexus.securityUserRoleMappings = List.of(
         Map.of("userId", "alice", "source", "default", "roles", List.of("nx-admin")),
         Map.of("userId", "agan", "source", "default", "roles", List.of("nx-admin")),
         Map.of("userId", "banban", "source", "LDAP", "roles", List.of("nx-admin")));
+    nexus.securityRoles = List.of(
+        Map.of(
+            "id", "nx-admin",
+            "name", "nx-admin",
+            "source", "default",
+            "privileges", List.of("nx-all"),
+            "roles", List.of()),
+        Map.of(
+            "id", "ldap-engineering",
+            "name", "LDAP engineering",
+            "source", "default",
+            "privileges", List.of("nx-repository-view-maven2-releases-read"),
+            "roles", List.of()),
+        Map.of(
+            "id", "ldap-engineering",
+            "name", "ldap-engineering",
+            "source", "LDAP",
+            "privileges", List.of(),
+            "roles", List.of()));
 
     NexusInventory inventory = client(nexus).readInventory();
 
@@ -90,7 +111,13 @@ class NexusRestClientTest {
         inventory.securityExport().users().stream()
             .map(user -> String.valueOf(user.get("userId")))
             .toList());
-    assertEquals("LDAP", inventory.securityExport().users().get(3).get("source"));
+    assertEquals("LDAP", inventory.securityExport().users().get(2).get("source"));
+    assertEquals(List.of("ldap-engineering"),
+        ((Map<?, ?>) inventory.securityExport().users().get(2).get("attributes")).get("groups"));
+    assertEquals(List.of("ldap-engineering"), inventory.securityExport().roles().stream()
+        .filter(role -> "ldap-engineering".equals(role.get("id")))
+        .map(role -> String.valueOf(role.get("id")))
+        .toList());
     assertEquals(List.of("nx-admin"), inventory.securityExport().userRoleMappings().stream()
         .filter(mapping -> "banban".equals(mapping.get("userId")))
         .findFirst()
@@ -103,6 +130,12 @@ class NexusRestClientTest {
         .findFirst()
         .orElseThrow()
         .source());
+    assertEquals(List.of("ldap-engineering"), batch.users().stream()
+        .filter(user -> "caibao".equals(user.id()))
+        .findFirst()
+        .orElseThrow()
+        .attributes()
+        .get("groups"));
     assertEquals(List.of("nx-admin"), batch.userRoleMappings().stream()
         .filter(mapping -> "banban".equals(mapping.userId()))
         .findFirst()
@@ -174,6 +207,9 @@ class NexusRestClientTest {
 
     assertTrue(script.contains("container.lookup('org.sonatype.nexus.security.config.SecurityConfigurationManager')"));
     assertTrue(script.contains("security.listUserRoleMappings()"));
+    assertTrue(script.contains("container.lookup('org.sonatype.nexus.security.SecuritySystem')"));
+    assertTrue(script.contains("securitySystem.listUsers()"));
+    assertTrue(script.contains("[groups: externalRoles]"));
     assertTrue(script.contains("new JsonSlurper().parseText(args)"));
     assertTrue(script.contains("metadataEngine == 'ORIENTDB'"));
     assertTrue(script.contains("metadataEngine.startsWith('DATASTORE')"));
@@ -438,6 +474,19 @@ class NexusRestClientTest {
         "source", "default",
         "passwordHash", "$shiro1$SHA-512$hash"));
     private List<Map<String, Object>> securityUserRoleMappings = List.of();
+    private List<Map<String, Object>> securityRoles = List.of(
+        Map.of(
+            "id", "nx-admin",
+            "name", "nx-admin",
+            "source", "default",
+            "privileges", List.of("nx-all"),
+            "roles", List.of()),
+        Map.of(
+            "id", "ldap-role",
+            "name", "ldap-role",
+            "source", "LDAP",
+            "privileges", List.of(),
+            "roles", List.of()));
 
     private FakeNexus(boolean scriptApiEnabled) {
       this.scriptApiEnabled = scriptApiEnabled;
@@ -528,19 +577,7 @@ class NexusRestClientTest {
       }
       if ("GET".equals(method) && "/service/rest/v1/security/roles?source=default".equals(path)) {
         rolesPath = path;
-        return json(200, List.of(
-            Map.of(
-                "id", "nx-admin",
-                "name", "nx-admin",
-                "source", "default",
-                "privileges", List.of("nx-all"),
-                "roles", List.of()),
-            Map.of(
-                "id", "ldap-role",
-                "name", "ldap-role",
-                "source", "LDAP",
-                "privileges", List.of(),
-                "roles", List.of())));
+        return json(200, securityRoles);
       }
       if ("GET".equals(method) && "/service/rest/v1/security/privileges".equals(path)) {
         return json(200, List.of());

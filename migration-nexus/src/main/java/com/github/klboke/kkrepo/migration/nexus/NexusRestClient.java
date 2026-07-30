@@ -60,6 +60,30 @@ public class NexusRestClient {
       def warnings = []
       def users = []
       def userRoleMappings = []
+      def safeProperty = { target, property ->
+        try {
+          return target."${property}"
+        } catch (ignored) {
+          return null
+        }
+      }
+      def usersByKey = [:]
+      def mergeUser = { user ->
+        def userId = user.userId == null ? null : String.valueOf(user.userId)
+        if (userId == null || userId.trim().isEmpty()) {
+          return
+        }
+        def source = user.source == null ? 'default' : String.valueOf(user.source)
+        def key = source.toLowerCase() + '|' + userId
+        def merged = [:]
+        merged.putAll(usersByKey[key] ?: [:])
+        user.each { field, value ->
+          if (value != null) {
+            merged[field] = value
+          }
+        }
+        usersByKey[key] = merged
+      }
       try {
         def security = null
         try {
@@ -74,15 +98,8 @@ public class NexusRestClient {
         if (security == null) {
           warnings << 'Source Nexus script API did not expose configured users or user-role mappings: SecurityConfigurationManager unavailable'
         } else {
-          def safeProperty = { target, property ->
-            try {
-              return target."${property}"
-            } catch (ignored) {
-              return null
-            }
-          }
-          users = security.listUsers().collect { user ->
-            [
+          security.listUsers().each { user ->
+            mergeUser([
               userId: user.id,
               source: 'default',
               firstName: safeProperty(user, 'firstName'),
@@ -90,7 +107,7 @@ public class NexusRestClient {
               emailAddress: safeProperty(user, 'email'),
               status: safeProperty(user, 'status'),
               passwordHash: safeProperty(user, 'password')
-            ]
+            ])
           }
           userRoleMappings = security.listUserRoleMappings().collect { mapping ->
             [
@@ -102,9 +119,51 @@ public class NexusRestClient {
         }
       } catch (e) {
         warnings << 'Source Nexus script API did not expose configured users or user-role mappings: ' + errorText(e)
-        users = []
         userRoleMappings = []
       }
+      try {
+        def securitySystem = null
+        try {
+          securitySystem = container.lookup('org.sonatype.nexus.security.SecuritySystem')
+        } catch (ignored) {
+          securitySystem = null
+        }
+        if (securitySystem == null) {
+          warnings << 'Source Nexus script API did not expose external users or role memberships: SecuritySystem unavailable'
+        } else {
+          securitySystem.listUsers().each { user ->
+            def localRoles = []
+            def externalRoles = []
+            def roleIdentifiers = safeProperty(user, 'roles') ?: []
+            roleIdentifiers.each { role ->
+              def roleId = safeProperty(role, 'roleId')
+              def roleSource = safeProperty(role, 'source')
+              if (roleId != null) {
+                if (roleSource == null || String.valueOf(roleSource).equalsIgnoreCase('default')) {
+                  localRoles << String.valueOf(roleId)
+                } else {
+                  externalRoles << String.valueOf(roleId)
+                }
+              }
+            }
+            localRoles = localRoles.unique().sort()
+            externalRoles = externalRoles.unique().sort()
+            mergeUser([
+              userId: safeProperty(user, 'userId'),
+              source: safeProperty(user, 'source'),
+              firstName: safeProperty(user, 'firstName'),
+              lastName: safeProperty(user, 'lastName'),
+              emailAddress: safeProperty(user, 'emailAddress'),
+              status: safeProperty(user, 'status'),
+              roles: localRoles,
+              attributes: externalRoles.isEmpty() ? [:] : [groups: externalRoles]
+            ])
+          }
+        }
+      } catch (e) {
+        warnings << 'Source Nexus script API did not expose external users or role memberships: ' + errorText(e)
+      }
+      users = usersByKey.values().toList()
       def principalDetails = { bytes ->
         if (bytes == null) {
           return [:]
@@ -1588,7 +1647,8 @@ public class NexusRestClient {
       HttpTextResponse run = postText("/service/rest/v1/script/"
           + encodePathSegment(scriptName)
           + "/run", objectMapper.writeValueAsString(Map.of(
-              "metadataEngine", firstNonBlank(probe == null ? null : probe.metadataEngine(), "UNKNOWN"))));
+              "metadataEngine", firstNonBlank(probe == null ? null : probe.metadataEngine(), "UNKNOWN"))),
+          REPOSITORY_DATA_SCRIPT_TIMEOUT);
       if (!run.success()) {
         return SecurityScriptProbe.warning("Source Nexus script API did not return configured users, user-role mappings, password hashes, or API keys: "
             + run.describe());

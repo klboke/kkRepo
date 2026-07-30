@@ -236,6 +236,25 @@ class SecurityManagementServicePermissionTest {
   }
 
   @Test
+  void ldapExternalGroupUsesMatchingMigratedRole() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.grant("ldap-engineering", privilege(
+        "nx-repository-view-maven2-releases-read",
+        "repository-view",
+        Map.of("format", "maven2", "repository", "releases", "actions", "read,browse")));
+    SecurityManagementService service = new SecurityManagementService(dao);
+    PermissionSubject caibao = new PermissionSubject(
+        "LDAP", "caibao", Set.of("ldap-engineering"), null);
+
+    assertTrue(service.decide(
+        caibao,
+        repositoryPermission("releases", "com/acme/app/1.0/app-1.0.pom", PermissionAction.READ)).allowed());
+    assertFalse(service.decide(
+        caibao,
+        repositoryPermission("snapshots", "com/acme/app/1.0/app-1.0.pom", PermissionAction.READ)).allowed());
+  }
+
+  @Test
   void inheritedRolesContributeRepositoryPrivileges() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.assign("Local", "alice", "nx-parent");
