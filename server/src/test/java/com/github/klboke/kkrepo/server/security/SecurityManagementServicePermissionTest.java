@@ -238,14 +238,13 @@ class SecurityManagementServicePermissionTest {
   @Test
   void ldapExternalGroupUsesMigratedExternalRoleMapping() {
     FakeSecurityDao dao = new FakeSecurityDao();
-    dao.inherit("ldap-engineering", "engineering");
     dao.grant("engineering", privilege(
         "nx-repository-view-maven2-releases-read",
         "repository-view",
         Map.of("format", "maven2", "repository", "releases", "actions", "read,browse")));
     SecurityManagementService service = new SecurityManagementService(dao);
     PermissionSubject caibao = new PermissionSubject(
-        "LDAP", "caibao", Set.of("ldap-engineering"), null);
+        "LDAP", "caibao", Set.of("engineering"), null);
 
     assertTrue(service.decide(
         caibao,

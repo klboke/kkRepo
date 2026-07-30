@@ -20,6 +20,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -69,6 +70,21 @@ public class NexusRestClient {
         }
       }
       def usersByKey = [:]
+      def mergeStrings = { left, right ->
+        def values = []
+        [left, right].each { sourceValues ->
+          if (sourceValues instanceof Iterable) {
+            sourceValues.each { value ->
+              if (value != null) {
+                values << String.valueOf(value)
+              }
+            }
+          } else if (sourceValues != null) {
+            values << String.valueOf(sourceValues)
+          }
+        }
+        return values.unique().sort()
+      }
       def mergeUser = { user ->
         def userId = user.userId == null ? null : String.valueOf(user.userId)
         if (userId == null || userId.trim().isEmpty()) {
@@ -80,7 +96,20 @@ public class NexusRestClient {
         merged.putAll(usersByKey[key] ?: [:])
         user.each { field, value ->
           if (value != null) {
-            merged[field] = value
+            if (field == 'roles') {
+              merged[field] = mergeStrings(merged[field], value)
+            } else if (field == 'attributes' && value instanceof Map) {
+              def attributes = [:]
+              attributes.putAll(merged[field] instanceof Map ? merged[field] : [:])
+              value.each { attribute, attributeValue ->
+                attributes[attribute] = attribute == 'groups'
+                    ? mergeStrings(attributes[attribute], attributeValue)
+                    : attributeValue
+              }
+              merged[field] = attributes
+            } else {
+              merged[field] = value
+            }
           }
         }
         usersByKey[key] = merged
@@ -1615,7 +1644,18 @@ public class NexusRestClient {
     for (Map<String, Object> mapping : configuredMappings) {
       String userId = firstString(mapping, "userId", "id");
       if (userId != null) {
-        merged.put(userKey(firstString(mapping, "source"), userId), objectMap(mapping));
+        String key = userKey(firstString(mapping, "source"), userId);
+        Map<String, Object> userMapping = merged.get(key);
+        if (userMapping == null) {
+          merged.put(key, objectMap(mapping));
+        } else {
+          LinkedHashMap<String, Object> combined = new LinkedHashMap<>(userMapping);
+          combined.putAll(objectMap(mapping));
+          LinkedHashSet<String> roles = new LinkedHashSet<>(stringList(userMapping.get("roles")));
+          roles.addAll(stringList(mapping.get("roles")));
+          combined.put("roles", List.copyOf(roles));
+          merged.put(key, Map.copyOf(combined));
+        }
       }
     }
     return List.copyOf(merged.values());

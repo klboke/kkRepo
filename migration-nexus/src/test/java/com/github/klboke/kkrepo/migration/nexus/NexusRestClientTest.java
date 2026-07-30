@@ -82,11 +82,12 @@ class NexusRestClientTest {
             "source", "LDAP",
             "firstName", "Caibao",
             "status", "active",
-            "roles", List.of(),
-            "attributes", Map.of("groups", List.of("ldap-engineering"))));
+            "roles", List.of("engineering"),
+            "attributes", Map.of("groups", List.of("engineering"))));
     nexus.securityUserRoleMappings = List.of(
         Map.of("userId", "alice", "source", "default", "roles", List.of("nx-admin")),
         Map.of("userId", "agan", "source", "default", "roles", List.of("nx-admin")),
+        Map.of("userId", "caibao", "source", "LDAP", "roles", List.of()),
         Map.of("userId", "banban", "source", "LDAP", "roles", List.of("nx-admin")));
     nexus.securityRoles = List.of(
         Map.of(
@@ -97,22 +98,16 @@ class NexusRestClientTest {
             "roles", List.of()),
         Map.of(
             "id", "engineering",
-            "name", "Engineering",
+            "name", "ldap-engineering",
             "source", "default",
             "privileges", List.of("nx-repository-view-maven2-releases-read"),
-            "roles", List.of()),
+            "roles", List.of("pypi-deploy")),
         Map.of(
-            "id", "ldap-engineering",
-            "name", "ldap-engineering",
-            "source", "LDAP",
-            "privileges", List.of(),
-            "roles", List.of("engineering")),
-        Map.of(
-            "id", "ldap-engineers",
+            "id", "engineers",
             "name", "ldap-engineers",
-            "source", "LDAP",
-            "privileges", List.of(),
-            "roles", List.of("engineering")));
+            "source", "default",
+            "privileges", List.of("nx-repository-view-maven2-releases-browse"),
+            "roles", List.of()));
 
     NexusInventory inventory = client(nexus).readInventory();
 
@@ -121,16 +116,21 @@ class NexusRestClientTest {
             .map(user -> String.valueOf(user.get("userId")))
             .toList());
     assertEquals("LDAP", inventory.securityExport().users().get(2).get("source"));
-    assertEquals(List.of("ldap-engineering"),
+    assertEquals(List.of("engineering"),
         ((Map<?, ?>) inventory.securityExport().users().get(2).get("attributes")).get("groups"));
-    assertEquals(List.of("engineering", "ldap-engineering", "ldap-engineers"),
+    assertEquals(List.of("engineering", "engineers"),
         inventory.securityExport().roles().stream()
-            .filter(role -> List.of("engineering", "ldap-engineering", "ldap-engineers")
-                .contains(role.get("id")))
+            .filter(role -> List.of("engineering", "engineers").contains(role.get("id")))
             .map(role -> String.valueOf(role.get("id")))
             .toList());
-    assertEquals(List.of("engineering"), inventory.securityExport().roles().stream()
-        .filter(role -> "ldap-engineering".equals(role.get("id")))
+    Map<String, Object> engineering = inventory.securityExport().roles().stream()
+        .filter(role -> "engineering".equals(role.get("id")))
+        .findFirst()
+        .orElseThrow();
+    assertEquals("ldap-engineering", engineering.get("name"));
+    assertEquals(List.of("pypi-deploy"), engineering.get("roles"));
+    assertEquals(List.of("engineering"), inventory.securityExport().userRoleMappings().stream()
+        .filter(mapping -> "caibao".equals(mapping.get("userId")))
         .findFirst()
         .orElseThrow()
         .get("roles"));
@@ -146,19 +146,24 @@ class NexusRestClientTest {
         .findFirst()
         .orElseThrow()
         .source());
-    assertEquals(List.of("ldap-engineering"), batch.users().stream()
+    assertEquals(List.of("engineering"), batch.users().stream()
         .filter(user -> "caibao".equals(user.id()))
         .findFirst()
         .orElseThrow()
         .attributes()
         .get("groups"));
+    assertEquals(List.of("engineering"), batch.userRoleMappings().stream()
+        .filter(mapping -> "caibao".equals(mapping.userId()))
+        .findFirst()
+        .orElseThrow()
+        .roles());
     assertEquals(List.of("nx-admin"), batch.userRoleMappings().stream()
         .filter(mapping -> "banban".equals(mapping.userId()))
         .findFirst()
         .orElseThrow()
         .roles());
-    assertEquals(List.of("engineering"), batch.roles().stream()
-        .filter(role -> "ldap-engineering".equals(role.id()))
+    assertEquals(List.of("pypi-deploy"), batch.roles().stream()
+        .filter(role -> "engineering".equals(role.id()))
         .findFirst()
         .orElseThrow()
         .roles());
@@ -231,6 +236,8 @@ class NexusRestClientTest {
     assertTrue(script.contains("container.lookup('org.sonatype.nexus.security.SecuritySystem')"));
     assertTrue(script.contains("securitySystem.listUsers()"));
     assertTrue(script.contains("[groups: externalRoles]"));
+    assertTrue(script.contains("mergeStrings(merged[field], value)"));
+    assertTrue(script.contains("mergeStrings(attributes[attribute], attributeValue)"));
     assertTrue(script.contains("new JsonSlurper().parseText(args)"));
     assertTrue(script.contains("metadataEngine == 'ORIENTDB'"));
     assertTrue(script.contains("metadataEngine.startsWith('DATASTORE')"));
