@@ -43,6 +43,7 @@ public class NexusRestClient {
   private static final String LOCAL_USERS_PATH = "/service/rest/v1/security/users?source=default";
   // The query selects the default manager; its external mappings can still have source=LDAP.
   private static final String CONFIGURED_ROLES_PATH = "/service/rest/v1/security/roles?source=default";
+  private static final int EXT_DIRECT_SECURITY_USERS_LIMIT = 5000;
   private static final String DOCKER_MANIFEST_ACCEPT = String.join(", ",
       "application/vnd.docker.distribution.manifest.v2+json",
       "application/vnd.docker.distribution.manifest.list.v2+json",
@@ -1619,11 +1620,15 @@ public class NexusRestClient {
         .filter(NexusRestClient::isLocalUser)
         .toList();
     SecurityScriptProbe securityScriptProbe = readLocalSecurityScriptExport(probe);
+    SecurityUiUsersProbe securityUiUsersProbe = readSecurityUiUsers(securityScriptProbe);
     List<Map<String, Object>> mergedUsers = mergeUsers(users, securityScriptProbe.users());
+    mergedUsers = mergeUsers(mergedUsers, securityUiUsersProbe.users());
     List<Map<String, Object>> userRoleMappings = mergeUserRoleMappings(
         mergedUsers,
         securityScriptProbe.userRoleMappings());
     mergedUsers = mergeMappedUsers(mergedUsers, userRoleMappings);
+    List<String> warnings = new ArrayList<>(securityScriptProbe.warnings());
+    warnings.addAll(securityUiUsersProbe.warnings());
     return new SecurityExportResult(new NexusSecurityExport(
         mergedUsers,
         getList(CONFIGURED_ROLES_PATH),
@@ -1634,7 +1639,81 @@ public class NexusRestClient {
         List.of(),
         List.of(),
         getMap("/service/rest/v1/security/anonymous")),
-        securityScriptProbe.warnings());
+        warnings);
+  }
+
+  private SecurityUiUsersProbe readSecurityUiUsers(SecurityScriptProbe scriptProbe)
+      throws InterruptedException {
+    LinkedHashSet<String> sources = new LinkedHashSet<>();
+    scriptProbe.users().forEach(user -> addExternalUserSource(sources, firstString(user, "source")));
+    scriptProbe.userRoleMappings().forEach(mapping ->
+        addExternalUserSource(sources, firstString(mapping, "source")));
+    if (sources.isEmpty()) {
+      return SecurityUiUsersProbe.empty();
+    }
+
+    List<Map<String, Object>> users = new ArrayList<>();
+    List<String> warnings = new ArrayList<>();
+    int tid = 1;
+    for (String source : sources) {
+      try {
+        Map<String, Object> parameters = Map.of(
+            "page", 1,
+            "start", 0,
+            "limit", EXT_DIRECT_SECURITY_USERS_LIMIT,
+            "filter", List.of(Map.of("property", "source", "value", source)));
+        Map<String, Object> call = Map.of(
+            "action", "coreui_User",
+            "method", "read",
+            "type", "rpc",
+            "tid", tid++,
+            "data", List.of(parameters));
+        HttpTextResponse response = postJson("/service/extdirect", List.of(call));
+        if (!response.success()) {
+          warnings.add("Source Nexus UI API did not expose " + source
+              + " user role memberships: " + response.describe());
+          continue;
+        }
+        Map<String, Object> result = extDirectResult(response.body());
+        if (!bool(result.get("success"))) {
+          warnings.add("Source Nexus UI API did not expose " + source
+              + " user role memberships: "
+              + firstNonBlank(string(result.get("message")), "request failed"));
+          continue;
+        }
+        objectMaps(result.get("data")).stream()
+            .map(NexusRestClient::normalizeSecurityUiUser)
+            .forEach(users::add);
+      } catch (IOException e) {
+        warnings.add("Source Nexus UI API did not expose " + source
+            + " user role memberships: " + e.getMessage());
+      }
+    }
+    return new SecurityUiUsersProbe(users, warnings);
+  }
+
+  private Map<String, Object> extDirectResult(String body) throws IOException {
+    Object document = objectMapper.readValue(body, Object.class);
+    Map<String, Object> call = document instanceof List<?> calls && !calls.isEmpty()
+        && calls.getFirst() instanceof Map<?, ?> first
+            ? objectMap(first)
+            : document instanceof Map<?, ?> map ? objectMap(map) : Map.of();
+    return objectValue(call.get("result"));
+  }
+
+  private static Map<String, Object> normalizeSecurityUiUser(Map<String, Object> document) {
+    LinkedHashMap<String, Object> normalized = new LinkedHashMap<>(document);
+    String source = firstString(document, "source", "realm");
+    if (source != null) {
+      normalized.put("source", source);
+    }
+    return Map.copyOf(normalized);
+  }
+
+  private static void addExternalUserSource(Set<String> sources, String source) {
+    if (source != null && !"local".equals(normalizeSource(source))) {
+      sources.add(source);
+    }
   }
 
   private static List<Map<String, Object>> mergeUserRoleMappings(
@@ -1740,10 +1819,24 @@ public class NexusRestClient {
       } else {
         LinkedHashMap<String, Object> combined = new LinkedHashMap<>(objectMap(user));
         combined.putAll(existing);
+        mergeStringField(combined, existing, user, "roles");
+        mergeStringField(combined, existing, user, "externalRoles");
         merged.put(key, Map.copyOf(combined));
       }
     }
     return List.copyOf(merged.values());
+  }
+
+  private static void mergeStringField(
+      Map<String, Object> target,
+      Map<String, Object> left,
+      Map<String, Object> right,
+      String field) {
+    LinkedHashSet<String> values = new LinkedHashSet<>(stringList(left.get(field)));
+    values.addAll(stringList(right.get(field)));
+    if (!values.isEmpty() || left.containsKey(field) || right.containsKey(field)) {
+      target.put(field, List.copyOf(values));
+    }
   }
 
   private static List<Map<String, Object>> mergeMappedUsers(
@@ -2415,6 +2508,20 @@ public class NexusRestClient {
 
     private static SecurityScriptProbe warning(String warning) {
       return new SecurityScriptProbe(List.of(), List.of(), List.of(), List.of(warning));
+    }
+  }
+
+  private record SecurityUiUsersProbe(
+      List<Map<String, Object>> users,
+      List<String> warnings) {
+
+    private SecurityUiUsersProbe {
+      users = users == null ? List.of() : List.copyOf(users);
+      warnings = warnings == null ? List.of() : List.copyOf(warnings);
+    }
+
+    private static SecurityUiUsersProbe empty() {
+      return new SecurityUiUsersProbe(List.of(), List.of());
     }
   }
 

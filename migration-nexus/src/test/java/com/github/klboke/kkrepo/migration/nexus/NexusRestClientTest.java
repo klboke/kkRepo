@@ -65,7 +65,7 @@ class NexusRestClientTest {
   }
 
   @Test
-  void mergesConfiguredUsersAndAuthoritativeUserRoleMappingsFromSourceScript() throws Exception {
+  void enrichesScriptUsersWithAuthoritativeNexusUiRoleMappings() throws Exception {
     FakeNexus nexus = new FakeNexus(true);
     nexus.securityUsers = List.of(
         Map.of(
@@ -82,8 +82,14 @@ class NexusRestClientTest {
             "source", "LDAP",
             "firstName", "Caibao",
             "status", "active",
-            "roles", List.of("engineering"),
-            "attributes", Map.of("groups", List.of("engineering"))));
+            "roles", List.of()));
+    nexus.securityUiUsers = List.of(Map.of(
+        "userId", "caibao",
+        "realm", "LDAP",
+        "firstName", "Caibao",
+        "status", "active",
+        "roles", List.of("engineering"),
+        "externalRoles", List.of("engineering")));
     nexus.securityUserRoleMappings = List.of(
         Map.of("userId", "alice", "source", "default", "roles", List.of("nx-admin")),
         Map.of("userId", "agan", "source", "default", "roles", List.of("nx-admin")),
@@ -117,7 +123,7 @@ class NexusRestClientTest {
             .toList());
     assertEquals("LDAP", inventory.securityExport().users().get(2).get("source"));
     assertEquals(List.of("engineering"),
-        ((Map<?, ?>) inventory.securityExport().users().get(2).get("attributes")).get("groups"));
+        inventory.securityExport().users().get(2).get("externalRoles"));
     assertEquals(List.of("engineering", "engineers"),
         inventory.securityExport().roles().stream()
             .filter(role -> List.of("engineering", "engineers").contains(role.get("id")))
@@ -167,6 +173,14 @@ class NexusRestClientTest {
         .findFirst()
         .orElseThrow()
         .roles());
+    List<?> uiCalls = OBJECT_MAPPER.readValue(nexus.securityUiReadRequestBody, List.class);
+    Map<?, ?> uiRequest = (Map<?, ?>) uiCalls.getFirst();
+    assertEquals("coreui_User", uiRequest.get("action"));
+    assertEquals("read", uiRequest.get("method"));
+    Map<?, ?> uiParameters = (Map<?, ?>) ((List<?>) uiRequest.get("data")).getFirst();
+    assertEquals(
+        List.of(Map.of("property", "source", "value", "LDAP")),
+        uiParameters.get("filter"));
   }
 
   @Test
@@ -497,6 +511,7 @@ class NexusRestClientTest {
     private String usersPath;
     private String rolesPath;
     private String securityExportRequestBody = "{}";
+    private String securityUiReadRequestBody = "";
     private int scriptCreates;
     private int scriptRuns;
     private String profileRunContentType = "";
@@ -506,6 +521,7 @@ class NexusRestClientTest {
         "source", "default",
         "passwordHash", "$shiro1$SHA-512$hash"));
     private List<Map<String, Object>> securityUserRoleMappings = List.of();
+    private List<Map<String, Object>> securityUiUsers = List.of();
     private List<Map<String, Object>> securityRoles = List.of(
         Map.of(
             "id", "nx-admin",
@@ -622,6 +638,15 @@ class NexusRestClientTest {
       }
       if ("GET".equals(method) && "/service/rest/v1/security/anonymous".equals(path)) {
         return json(200, Map.of("enabled", false));
+      }
+      if ("POST".equals(method) && "/service/extdirect".equals(path)) {
+        securityUiReadRequestBody = bodyString(request).orElse("");
+        return json(200, Map.of(
+            "type", "rpc",
+            "tid", 1,
+            "action", "coreui_User",
+            "method", "read",
+            "result", Map.of("success", true, "data", securityUiUsers)));
       }
       if ("POST".equals(method) && "/service/rest/v1/script".equals(path)) {
         if (!scriptApiEnabled) {
