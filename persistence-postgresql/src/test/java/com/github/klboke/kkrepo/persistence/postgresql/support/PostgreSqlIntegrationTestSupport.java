@@ -52,6 +52,7 @@ public abstract class PostgreSqlIntegrationTestSupport {
       var configuration = Flyway.configure()
           .dataSource(dataSource)
           .locations("classpath:db/migration/postgresql")
+          .mixed(true)
           .failOnMissingLocations(true);
       configuration
           .getConfigurationExtension(PostgreSQLConfigurationExtension.class)

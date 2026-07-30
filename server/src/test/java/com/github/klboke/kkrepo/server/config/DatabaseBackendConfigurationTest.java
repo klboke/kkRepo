@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test;
 
 class DatabaseBackendConfigurationTest {
   @Test
-  void usesSessionFlywayLockForPostgreSqlOnlineMigrations() {
+  void configuresPostgreSqlOnlineMigrations() {
     DatabaseDialect dialect = mock(DatabaseDialect.class);
     when(dialect.type()).thenReturn(DatabaseType.POSTGRESQL);
     var configuration = Flyway.configure();
@@ -28,9 +28,23 @@ class DatabaseBackendConfigurationTest {
         .databaseFlywayCustomizer(dialect)
         .customize(configuration);
 
+    assertTrue(configuration.isMixed());
     assertFalse(configuration
         .getConfigurationExtension(PostgreSQLConfigurationExtension.class)
         .isTransactionalLock());
+  }
+
+  @Test
+  void keepsMixedMigrationsDisabledForMySql() {
+    DatabaseDialect dialect = mock(DatabaseDialect.class);
+    when(dialect.type()).thenReturn(DatabaseType.MYSQL);
+    var configuration = Flyway.configure();
+
+    new DatabaseBackendConfiguration()
+        .databaseFlywayCustomizer(dialect)
+        .customize(configuration);
+
+    assertFalse(configuration.isMixed());
   }
 
   @Test

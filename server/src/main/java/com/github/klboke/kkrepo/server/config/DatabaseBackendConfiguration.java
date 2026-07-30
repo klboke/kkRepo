@@ -26,6 +26,10 @@ public class DatabaseBackendConfiguration {
     return configuration -> {
       configuration.baselineOnMigrate(dialect.type() == DatabaseType.MYSQL);
       if (dialect.type() == DatabaseType.POSTGRESQL) {
+        // V37 validates NOT VALID constraints and builds indexes CONCURRENTLY in one explicitly
+        // non-transactional migration. Flyway must allow those transactional and
+        // non-transactional PostgreSQL statements to coexist in that script.
+        configuration.mixed(true);
         configuration
             .getConfigurationExtension(PostgreSQLConfigurationExtension.class)
             .setTransactionalLock(false);
