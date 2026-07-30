@@ -11,10 +11,14 @@
 Artifact Scanning 使用 Syft 生成 CycloneDX SBOM，并使用 Grype 匹配已知漏洞。需要先
 理解以下边界：
 
-- 扫描是异步的。上传或代理缓存事务只提交制品与通用内容变更事件，不会在上传请求
-  中调用扫描器。
-- `KKREPO_SECURITY_SCANNING_ENABLED=true` 只开启 kkRepo 的部署能力、后台协调任务和
-  下载策略集成，不会自动启用任何仓库。
+- 扫描是异步的。显式开启部署能力后，上传或代理缓存事务只额外提交一条通用内容
+  变更事件，不会在上传请求中调用扫描器。
+- `KKREPO_SECURITY_SCANNING_ENABLED` 默认为 `false`。保持默认值升级时，除了 Flyway
+  创建安全扫描专用表、索引、内置初始配置，以及给 `asset_blob` 增加通用 Blob 引用
+  计数字段和约束外，kkRepo 不把已有制品作为扫描输入读取或改写，不写内容事件，不
+  启动扫描后台任务，下载链路也不查询扫描状态。
+- `KKREPO_SECURITY_SCANNING_ENABLED=true` 是部署人员的显式启用意图：它会开启内容
+  事件、后台协调/校对/维护任务和下载策略集成，但不会自动启用任何仓库。
 - 仓库管理员必须在 **Admin > Security > Artifact Scanning > Repositories** 中逐个
   启用仓库。
 - 扫描器是独立容器或 Pod。kkRepo 不在自身 JVM 内执行 Syft/Grype，也不需要 Docker
@@ -39,6 +43,26 @@ Artifact Scanning 使用 Syft 生成 CycloneDX SBOM，并使用 Grype 匹配已�
 
 不要在首次启用扫描时同时开启严格阻断。存量回填、漏洞数据库初始化或扫描容量不足都
 可能让大量制品暂时处于 pending 状态。
+
+## 升级与显式启用行为
+
+升级本身和启用扫描是两个独立动作。不要仅因为新版本包含安全扫描 migration，就把
+`KKREPO_SECURITY_SCANNING_ENABLED` 设为 `true`。
+
+| 状态 | 对已有制品的行为 | 对新写入的行为 | 扫描与下载策略 |
+| --- | --- | --- | --- |
+| 未配置或显式为 `false` | Flyway 创建新 schema、索引、内置 profile/policy、空游标，并给 `asset_blob` 增加 Blob 引用计数字段/约束；不会把历史制品读入扫描流程，不创建 candidate、backfill 或 task | 不追加扫描使用的内容事件 | 不运行扫描协调、校对或保留清理，周期指标不查询扫描表；不调用 adapter；下载直接放行；页面控件置灰 |
+| 显式为 `true`，尚未启用仓库 | 启动有界、索引化的最近变更校对和主键循环校对，以建立可靠基线 | 事务内追加通用内容事件，提交后异步投影 | 开始观测 adapter 和运行维护任务，但不会为未启用仓库创建实际扫描任务 |
+| 显式为 `true`，并在 UI 启用仓库 | 为该仓库创建可恢复的持久 backfill，分页发现现有制品 | 内容事件触发后续候选和任务 | 按仓库配置执行扫描；只有显式 `ENFORCE` 才可能阻断下载 |
+
+因此，开启全局配置前应评估数据库 I/O 和 scanner 容量。全局校对默认每轮对最近变更
+窗口和主键循环各最多检查 1000 个 asset；仓库启用后的 backfill 默认每页 500 个、
+每轮最多 20 页，均使用持久游标并可在多副本间接管。大型实例应先在测试环境测量，
+再小范围启用仓库。
+
+上述 Flyway DDL 与是否开启扫描无关，会按版本正常执行。它不读取 Blob 正文，也不
+生成历史扫描数据，但数据库可能为 `asset_blob` 的列/约束变更获取 DDL 锁；大型表仍
+应按常规数据库升级流程评估执行窗口。
 
 ## 前置条件
 
@@ -307,10 +331,12 @@ layer，在请求临时目录生成本地 OCI layout，再让 Syft 扫描该本�
 
 ## 扫描何时发生
 
-- 新增或替换制品后，事务提交的持久内容事件会自动生成候选和扫描任务。默认 worker
-  轮询间隔约 1 秒，不是每分钟全库扫描。
-- 滚动升级期间仍由旧副本写入、尚未产生内容事件的 asset，会由最近变更窗口加有界
-  主键循环分页的校对 worker 补齐；两类查询都有索引，不执行每秒全表扫描。
+- 以下自动触发只在 `KKREPO_SECURITY_SCANNING_ENABLED=true` 后运行。
+- 新增或替换制品后，事务提交的持久内容事件会自动生成候选；只有对应仓库已在 UI
+  启用时才会继续生成扫描任务。默认 worker 轮询间隔约 1 秒，不是每分钟全库扫描。
+- 显式开启部署能力后，滚动升级期间仍由旧副本写入、尚未产生内容事件的 asset，以及
+  关闭期间未记录事件的当前内容，会由最近变更窗口加有界主键循环分页的校对 worker
+  补齐；两类查询都有索引，不执行每秒全表扫描。
 - 首次启用仓库或扩大 hosted/proxy 范围时，会为现有制品创建持久 backfill。
 - 点击 **rescan** 会创建一个高优先级、原因标记为 `MANUAL` 的新任务。
 - scanner engine 或漏洞数据库 revision 变化时，已保存 SBOM 可以进入重新匹配流程；
@@ -422,7 +448,7 @@ Waivers 页签用于查看 Active/Expired、scope、仓库、制品、exception�
 
 | 环境变量 | 默认值 | 用途 |
 | --- | ---: | --- |
-| `KKREPO_SECURITY_SCANNING_ENABLED` | `false` | 部署能力 gate |
+| `KKREPO_SECURITY_SCANNING_ENABLED` | `false` | 显式部署能力 gate；`false` 时升级不遍历历史制品、不写内容事件、不运行扫描后台任务；`true` 时启动有界历史校对和协调任务，仓库仍需在 UI 单独启用 |
 | `KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URL` | `http://scanner:8080` | 单 adapter 内部地址，Compose 使用，也是列表为空时的回退值 |
 | `KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URLS` | 空 | 逗号分隔的稳定 adapter 地址；配置后覆盖单地址，并启用按 run 选择首选副本、可重试执行容灾和取消广播 |
 | `KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL` | 启用扫描时必填 | kkRepo 调用 adapter 的共享凭据；启用扫描后为空会拒绝启动 |
@@ -543,9 +569,10 @@ scanner adapter 自身还暴露 active、queued、admission rejected 和数据�
 
 - 在 Repositories 中关闭某个仓库，只停止该仓库后续扫描和策略应用；历史 run、finding
   和 waiver 按保留策略继续存在。
-- 把 `KKREPO_SECURITY_SCANNING_ENABLED=false` 并滚动重启所有 kkRepo 副本后，协调
-  worker 停止，下载策略直接放行，Admin UI 控件置灰；已有仓库配置和历史结果不会被
-  删除。
+- 把 `KKREPO_SECURITY_SCANNING_ENABLED=false` 并滚动重启所有 kkRepo 副本后，内容
+  事件写入和全部扫描协调、校对及保留任务停止，周期指标不再查询扫描表，下载策略直接
+  放行，Admin UI 控件置灰；已有仓库配置和历史结果不会被删除。以后重新开启时，有界
+  校对与仓库 backfill 会按当前数据库事实补齐关闭期间的变化。
 - 全局 gate 关闭后再停止 scanner adapter，避免仍在运行的 kkRepo worker持续产生
   可重试失败。
 - 默认终态 task 保留 30 天，无引用历史结果保留 90 天。不要手工删除扫描表或 SBOM

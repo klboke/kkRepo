@@ -14,10 +14,16 @@ The Chinese version is available in the
 Artifact Scanning uses Syft to generate CycloneDX SBOMs and Grype to match known vulnerabilities.
 Keep these boundaries in mind:
 
-- Scanning is asynchronous. Upload and proxy-cache transactions only commit the artifact and a
-  generic durable content-change event; they do not call the scanner in the upload request.
-- `KKREPO_SECURITY_SCANNING_ENABLED=true` only enables kkRepo deployment capability,
-  coordination workers, and download-policy integration. It does not activate any repository.
+- Scanning is asynchronous. After deployment capability is explicitly enabled, upload and
+  proxy-cache transactions only add a generic durable content-change event; they never call the
+  scanner in the upload request.
+- `KKREPO_SECURITY_SCANNING_ENABLED` defaults to `false`. An upgrade that keeps this default lets
+  Flyway create the dedicated scan tables, indexes, built-in seed configuration, and the generic
+  Blob-reference counter and constraints on `asset_blob`. kkRepo does not read existing artifacts
+  as scan input, emit content events, start scan jobs, or query scan state on download paths.
+- `KKREPO_SECURITY_SCANNING_ENABLED=true` is an explicit operator opt-in. It enables content
+  events, background coordination/reconciliation/maintenance, and download-policy integration,
+  but it still does not activate any repository.
 - A repository administrator must activate each repository under
   **Admin > Security > Artifact Scanning > Repositories**.
 - The scanner runs as a separate container or Pod. kkRepo does not execute Syft/Grype inside its
@@ -47,6 +53,27 @@ Use this rollout order in production:
 Do not enable strict blocking at the same time as the first backfill. Database initialization,
 scanner capacity, and a large existing artifact set can temporarily put many artifacts in a
 pending state.
+
+## Upgrade And Explicit Opt-In
+
+Upgrading kkRepo and enabling scanning are separate operations. Do not set
+`KKREPO_SECURITY_SCANNING_ENABLED=true` merely because the new release contains scan migrations.
+
+| State | Existing artifacts | New writes | Scanning and download policy |
+| --- | --- | --- | --- |
+| Unset or explicitly `false` | Flyway creates the new schema, indexes, built-in profile/policy, empty cursors, and Blob-reference counter/constraints on `asset_blob`; it does not feed historical artifacts into scanning or create candidates, backfills, or tasks | Do not append the content events used by scanning | Do not run scan coordination, reconciliation, or retention, and periodic metrics do not query scan tables; do not call the adapter; downloads allow directly; UI controls remain disabled |
+| Explicitly `true`, no repository active | Start bounded indexed recent-change and cyclic-primary-key reconciliation to establish a reliable baseline | Append a generic content event in the transaction and project it asynchronously after commit | Observe the adapter and run maintenance, but do not create actual scan tasks for inactive repositories |
+| Explicitly `true`, repository active in the UI | Create a durable resumable backfill that pages through that repository's current artifacts | Turn content events into candidates and tasks | Scan according to repository settings; downloads can be blocked only by an explicit `ENFORCE` mode |
+
+Plan database I/O and scanner capacity before enabling the global setting. Global reconciliation
+checks at most 1,000 recent and 1,000 cyclic assets per pass by default. A repository backfill uses
+500-asset pages and at most 20 pages per worker turn. Both use durable cursors and can be taken over
+by another replica. Benchmark large installations first, then activate repositories gradually.
+
+This Flyway DDL runs as part of the version upgrade regardless of scan activation. It does not
+read Blob bodies or create historical scan data, but the database can acquire a DDL lock while
+adding the `asset_blob` column and constraints. Plan the normal database-upgrade window for large
+tables.
 
 ## Prerequisites
 
@@ -333,11 +360,15 @@ including gzip, xz, and zstd layers, and those bounds are checked before Syft st
 
 ## Scan Triggers
 
+- The following automatic triggers run only after
+  `KKREPO_SECURITY_SCANNING_ENABLED=true`.
 - After an artifact is created or replaced, the committed durable content event automatically
-  creates a candidate and task. Workers poll at about one-second intervals by default; this is not
-  a once-per-minute full-database scan.
-- A rolling-upgrade writer that predates content events is covered by a reconciliation worker
-  combining a recent-change window with a bounded cyclic primary-key page. Both paths are indexed;
+  creates a candidate. It becomes a scan task only when the relevant repository is active in the
+  UI. Workers poll at about one-second intervals by default; this is not a once-per-minute
+  full-database scan.
+- After explicit deployment opt-in, a reconciliation worker covers both rolling-upgrade writers
+  that predate content events and current content changed while the capability was disabled. It
+  combines a recent-change window with a bounded cyclic primary-key page. Both paths are indexed;
   this is not a per-second full-table scan.
 - Activating a repository or expanding hosted/proxy scope creates a durable backfill for existing
   artifacts.
@@ -463,7 +494,7 @@ source repositories; repository-less artifact waivers are rejected.
 
 | Environment variable | Default | Purpose |
 | --- | ---: | --- |
-| `KKREPO_SECURITY_SCANNING_ENABLED` | `false` | Deployment capability gate |
+| `KKREPO_SECURITY_SCANNING_ENABLED` | `false` | Explicit deployment gate; `false` means upgrades do not traverse historical artifacts, emit content events, or run scan jobs; `true` starts bounded reconciliation and coordination, while each repository still requires UI activation |
 | `KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URL` | `http://scanner:8080` | Single internal adapter URL, used by Compose and as the fallback |
 | `KKREPO_SECURITY_SCANNING_ADAPTER_BASE_URLS` | Empty | Comma-separated stable adapter URLs; when present, overrides the single URL and enables a deterministic per-run preference, retryable execution failover, and cancellation broadcast |
 | `KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL` | Required when scanning is enabled | Shared credential used by kkRepo; kkRepo refuses to start with scanning enabled when this is empty |
@@ -589,9 +620,12 @@ sensitive paths while troubleshooting.
 
 - Disabling one repository stops future scan requirements and policy application for that
   repository. Historical runs, findings, and waivers remain until retention permits cleanup.
-- Set `KKREPO_SECURITY_SCANNING_ENABLED=false` and restart every kkRepo replica to stop coordination
-  workers, make the download policy allow directly, and disable the Admin UI controls. Existing
-  repository configuration and historical results are preserved.
+- Set `KKREPO_SECURITY_SCANNING_ENABLED=false` and restart every kkRepo replica to stop content
+  event emission and all scan coordination, reconciliation, and retention jobs; periodic metrics
+  no longer query scan tables. The download policy allows directly and Admin UI controls are
+  disabled. Existing repository configuration and historical results are preserved. A later
+  re-enable uses bounded reconciliation and repository backfills to recover changes made while
+  disabled.
 - Disable the global gate before stopping the scanner adapter so active workers do not keep
   producing retryable failures.
 - Terminal tasks are retained for 30 days by default, and unreferenced historical results for 90

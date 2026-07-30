@@ -2,11 +2,14 @@ package com.github.klboke.kkrepo.server.securityscan;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-/** Runs the bounded rolling-upgrade and projection-drift reconciliation on every deployment. */
+/** Runs bounded rolling-upgrade and projection-drift reconciliation only when explicitly enabled. */
 @Component
+@ConditionalOnProperty(
+    prefix = "kkrepo.security-scanning", name = "enabled", havingValue = "true")
 public class SecurityScanArtifactReconciliationWorker {
   private static final Logger log =
       LoggerFactory.getLogger(SecurityScanArtifactReconciliationWorker.class);

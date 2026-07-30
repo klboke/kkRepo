@@ -6,11 +6,14 @@ import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicLong;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /** Backlog visibility for the durable artifact-change projection. */
 @Component
+@ConditionalOnProperty(
+    prefix = "kkrepo.security-scanning", name = "enabled", havingValue = "true")
 public class SecurityScanArtifactChangeMetrics {
   private final ArtifactChangeDao changes;
   private final AtomicLong backlog = new AtomicLong();

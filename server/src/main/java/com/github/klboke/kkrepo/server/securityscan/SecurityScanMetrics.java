@@ -158,6 +158,17 @@ public class SecurityScanMetrics {
 
   @Scheduled(fixedDelayString = "${kkrepo.security-scanning.metrics-refresh:15s}")
   public void refresh() {
+    if (!properties.isEnabled()) {
+      backlog.set(0);
+      running.set(0);
+      failures.set(0);
+      partial.set(0);
+      findings.set(0);
+      oldestAgeSeconds.set(0);
+      scannerReady.set(0);
+      databaseAgeSeconds.set(-1);
+      return;
+    }
     ScanMetricSummary summary = scans.metricSummary(properties.getMetricsCountLimit());
     backlog.set(summary.pendingTasks());
     running.set(summary.runningTasks());

@@ -42,7 +42,10 @@ so enabling the scanner cannot silently widen port 53 egress to arbitrary worklo
 This chart value is a deployment capability gate; it does not activate scanning for any
 repository. After the deployment is ready, a repository administrator selects repositories and
 their audit/enforcement policies in **Admin > Security > Artifact Scanning**. When the chart value
-is disabled, that page remains visible but all scanning controls are disabled.
+is disabled, that page remains visible but all scanning controls are disabled. Enabling the value
+is also an explicit opt-in to bounded indexed reconciliation of current artifact metadata; each
+repository's durable historical backfill and actual scan tasks begin only after its UI activation.
+Plan database and scanner capacity before enabling it on a large existing installation.
 
 See the [Artifact Scanning Guide](../../../docs/en/artifact-scanning-guide.md) for repository
 activation, policy, waiver, monitoring, and troubleshooting instructions.

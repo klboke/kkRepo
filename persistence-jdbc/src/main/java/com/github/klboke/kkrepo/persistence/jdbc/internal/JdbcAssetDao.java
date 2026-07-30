@@ -8,6 +8,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ArtifactChangeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ArtifactChangeDao.ArtifactChange;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ArtifactChangeDao.ChangeKind;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ArtifactChangeEventMode;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao.BlobReconcileWindow;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao.HelmIndexRow;
@@ -32,6 +33,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -44,13 +46,36 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
   private final JdbcTemplate jdbcTemplate;
   private final JsonColumns jsonColumns;
   private final ArtifactChangeDao artifactChanges;
+  private final boolean artifactChangeEventsEnabled;
   private final RowMapper<AssetBlobRecord> blobRowMapper;
   private final RowMapper<AssetRecord> assetRowMapper;
 
   public JdbcAssetDao(JdbcTemplate jdbcTemplate, JsonColumns jsonColumns) {
+    this(jdbcTemplate, jsonColumns, new JdbcArtifactChangeDao(jdbcTemplate), true);
+  }
+
+  @Autowired
+  public JdbcAssetDao(
+      JdbcTemplate jdbcTemplate,
+      JsonColumns jsonColumns,
+      ArtifactChangeDao artifactChanges,
+      ArtifactChangeEventMode artifactChangeEventMode) {
+    this(
+        jdbcTemplate,
+        jsonColumns,
+        artifactChanges,
+        artifactChangeEventMode.enabled());
+  }
+
+  JdbcAssetDao(
+      JdbcTemplate jdbcTemplate,
+      JsonColumns jsonColumns,
+      ArtifactChangeDao artifactChanges,
+      boolean artifactChangeEventsEnabled) {
     this.jdbcTemplate = jdbcTemplate;
     this.jsonColumns = jsonColumns;
-    this.artifactChanges = new JdbcArtifactChangeDao(jdbcTemplate);
+    this.artifactChanges = artifactChanges;
+    this.artifactChangeEventsEnabled = artifactChangeEventsEnabled;
     this.blobRowMapper = (rs, rowNum) -> new AssetBlobRecord(
         rs.getLong("id"),
         rs.getLong("blob_store_id"),
@@ -237,7 +262,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, ps -> setAssetInsertParameters(ps, record));
     if (inserted.isPresent() && record.assetBlobId() != null) {
-      artifactChanges.append(new ArtifactChange(
+      appendArtifactChange(new ArtifactChange(
           null,
           record.repositoryId(),
           inserted.getAsLong(),
@@ -725,7 +750,8 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
   @Transactional
   public int updateAssetBlobBinding(long assetId, long assetBlobId, String contentType,
       long size, Instant lastUpdatedAt) {
-    AssetContentBinding previous = lockAssetContentBinding(assetId).orElse(null);
+    AssetContentBinding previous = artifactChangeEventsEnabled
+        ? lockAssetContentBinding(assetId).orElse(null) : null;
     int updated = jdbcTemplate.update("""
         UPDATE asset
         SET asset_blob_id = ?, content_type = ?, size = ?, last_updated_at = ?
@@ -738,7 +764,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         assetId);
     if (updated == 1 && previous != null
         && !Objects.equals(previous.assetBlobId(), assetBlobId)) {
-      artifactChanges.append(new ArtifactChange(
+      appendArtifactChange(new ArtifactChange(
           null,
           previous.repositoryId(),
           assetId,
@@ -755,7 +781,8 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
   public int updateAssetBlobBindingAndMetadata(long assetId, Long componentId, long assetBlobId,
       String kind, String contentType, long size, Instant lastUpdatedAt,
       java.util.Map<String, Object> attributes) {
-    AssetContentBinding previous = lockAssetContentBinding(assetId).orElse(null);
+    AssetContentBinding previous = artifactChangeEventsEnabled
+        ? lockAssetContentBinding(assetId).orElse(null) : null;
     int updated = jdbcTemplate.update("""
         UPDATE asset
         SET component_id = ?, asset_blob_id = ?, kind = ?, content_type = ?, size = ?,
@@ -772,7 +799,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         assetId);
     if (updated == 1 && previous != null
         && !Objects.equals(previous.assetBlobId(), assetBlobId)) {
-      artifactChanges.append(new ArtifactChange(
+      appendArtifactChange(new ArtifactChange(
           null,
           previous.repositoryId(),
           assetId,
@@ -783,6 +810,12 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
           null));
     }
     return updated;
+  }
+
+  void appendArtifactChange(ArtifactChange change) {
+    if (artifactChangeEventsEnabled) {
+      artifactChanges.append(change);
+    }
   }
 
   private Optional<AssetContentBinding> lockAssetContentBinding(long assetId) {

@@ -17,9 +17,10 @@ Maven、npm、PyPI、Docker/OCI 等客户端可见行为必须保持不变；只
 
 - 新增 `security-scan` 领域模块和独立 `scanner-adapter`，通过 Syft 生成 CycloneDX
   SBOM、通过 Grype 匹配已知漏洞；扫描器可替换且不进入 kkRepo JVM。
-- hosted、proxy、迁移资产的核心写入事务只追加通用 `artifact_change_event`；启用后的
-  扫描 worker 使用独立数据库游标异步折叠成 candidate，再进入持久任务。claim、
-  lease、heartbeat、接管和 fencing 在 MySQL 8/PostgreSQL 12+ 使用相同语义。
+- 显式启用部署能力后，hosted、proxy、迁移资产的核心写入事务只追加通用
+  `artifact_change_event`；扫描 worker 使用独立数据库游标异步折叠成 candidate，再
+  进入持久任务。claim、lease、heartbeat、接管和 fencing 在 MySQL 8/PostgreSQL 12+
+  使用相同语义。默认关闭时不追加事件，也不运行历史校对。
 - SBOM、组件投影、scanner snapshot、不可变 run、finding、asset state、仓库入口策略
   state、waiver 和 backfill job 均持久化；SBOM 与原始报告正文继续保存在 BlobStorage。
 - 普通制品使用流式输入；Docker/OCI 使用 manifest digest、平台集合和精确 image scope
@@ -31,11 +32,16 @@ Maven、npm、PyPI、Docker/OCI 等客户端可见行为必须保持不变；只
 - Admin UI、受权限控制的管理 API、审计、Prometheus 指标、health、Compose 可选
   profile 和 Helm 部署资源均已提供。
 
-部署能力仍由 `kkrepo.security-scanning.enabled=false` 默认关闭。该配置只决定
-kkRepo 是否装载扫描协调 worker 与下载策略集成，不负责启动外部 scanner，也不代表
-任何仓库已经启用扫描。部署方先提供 scanner 进程与资源，使用方再在 Admin UI 中
-按仓库启用并从小范围 Audit 逐步放量到 Enforce。源码扫描、恶意软件、secret、
-license、misconfiguration、VEX 和 OCI SBOM referrer 仍属于后续独立能力。
+部署能力仍由 `kkrepo.security-scanning.enabled=false` 默认关闭。保持默认值升级时，
+Flyway 创建扫描专用 schema、索引、内置 profile/policy、空游标，并给 `asset_blob`
+增加通用 Blob 引用计数字段和约束；kkRepo 不把历史 asset 读入扫描流程、不追加扫描
+所用内容事件、不运行扫描后台任务，下载链路也不查询扫描状态。该 DDL 不读取 Blob
+正文或生成历史扫描数据，但大型 `asset_blob` 仍需按数据库升级规范评估 DDL 锁窗口。
+把该配置显式改为 `true` 后，kkRepo 才装载事件投影、历史校对、协调/维护 worker 与
+下载策略集成。该配置不负责启动外部 scanner，也不代表任何仓库已经启用扫描。部署方
+先提供 scanner 进程与资源，使用方再在 Admin UI 中按仓库启用并从小范围 Audit 逐步
+放量到 Enforce。源码扫描、恶意软件、secret、license、misconfiguration、VEX 和
+OCI SBOM referrer 仍属于后续独立能力。
 
 ## 设计决策摘要
 
@@ -46,8 +52,9 @@ license、misconfiguration、VEX 和 OCI SBOM referrer 仍属于后续独立能�
 - 以 CycloneDX SBOM 为长期 inventory，Catalog 与漏洞 Match 分离。
 - 普通制品按 asset/blob 内容扫描；Docker/OCI 按 manifest digest 和平台扫描；group
   复用实际 member 结果。
-- hosted、proxy 和迁移写入只产生与扫描无关的内容变更事件；扫描子系统异步消费并
-  维护自己的 candidate，上传代码不引用扫描表、扫描配置、扫描 client 或扫描状态。
+- 部署能力开启后，hosted、proxy 和迁移写入只产生与扫描无关的内容变更事件；扫描
+  子系统异步消费并维护自己的 candidate。关闭时不写该事件。上传代码不引用扫描表、
+  仓库扫描配置、扫描 client 或扫描状态。
 - 结果去重同时包含内容、引擎版本、漏洞数据库 revision 和配置 digest，不使用
   “checksum + 时间窗口”作为唯一新鲜度判断。
 - 第一阶段只实现 vulnerability 类型；secret、license 和 misconfiguration
@@ -59,9 +66,9 @@ license、misconfiguration、VEX 和 OCI SBOM referrer 仍属于后续独立能�
 
 扫描任务协调与扫描器执行使用不同的故障边界，但不拆成两套业务系统：
 
-- kkRepo 进程负责通用内容事件消费、candidate、任务领取、lease/heartbeat、重试、
-  结果持久化、策略判定、权限与管理 API。这里已有固定大小线程池，但线程池只控制
-  并发，不承担安全隔离。
+- 显式开启部署能力后，kkRepo 进程负责通用内容事件消费、candidate、历史校对、任务
+  领取、lease/heartbeat、重试、结果持久化、策略判定、权限与管理 API。这里已有固定
+  大小线程池，但线程池只控制并发，不承担安全隔离。
 - scanner 进程是无状态执行适配器，只接收有界输入、校验 digest、运行 Syft/Grype、
   返回标准化文档并维护可重建漏洞库；不连接 kkRepo 数据库，不拥有任务状态和策略。
 - 两者只使用一个有版本的内部 HTTP 契约。当前不增加消息队列、事件总线、scanner
@@ -121,23 +128,23 @@ Compose 和 Kubernetes 使用同一 adapter 契约。
 
 安全扫描按三个平面拆分：
 
-1. **制品写入平面**：完成协议校验、Blob 持久化、asset 绑定，并在同一数据库事务中
-   追加通用 `artifact_change_event`。该事件是仓库核心的内容变更事实，不含 profile、
-   policy、severity、scanner 或 candidate 字段。
-2. **异步分析平面**：轻量投影 worker 始终使用数据库游标消费通用事件，折叠为每个
-   asset 一行的 `security_scan_candidate`；只有部署能力 gate 启用后，后续 worker
-   才执行分类、创建任务、生成 SBOM 和漏洞匹配。scanner 不可用、超时或扫描表故障
+1. **制品写入平面**：完成协议校验、Blob 持久化和 asset 绑定。部署能力开启时，在
+   同一数据库事务中追加通用 `artifact_change_event`；关闭时不追加。该事件是仓库
+   核心的内容变更事实，不含 profile、policy、severity、scanner 或 candidate 字段。
+2. **异步分析平面**：只有部署能力 gate 启用后，轻量投影 worker 才使用数据库游标
+   消费通用事件，折叠为每个 asset 一行的 `security_scan_candidate`，并由后续 worker
+   执行分类、创建任务、生成 SBOM 和漏洞匹配。scanner 不可用、超时或扫描表故障
    不得回滚已经提交的上传。
 3. **下载执行平面**：协议层解析出实际 asset/member/manifest 后，
    `ArtifactDownloadPolicy` 根据物化结果决定 allow、pending 或 deny。上传成功不等于
    严格仓库立即可下载。
 
-这里的事务性 outbox 是核心内容一致性的一部分，因此 outbox 写入失败可以让 asset
-事务失败；这是“内容事实没有可靠发布”的仓库故障，不是扫描故障。扫描执行关闭时，
-轻量投影仍推进共享游标并合并 candidate，但不创建或领取扫描任务，也不调用 adapter；
-这样事件表可以按消费者低水位有界清理，后续启用时直接从 candidate generation 追平。
-上线前已存在、或因运维原因需要核对的资产由数据库 backfill/reconciliation 补齐，
-正确性不依赖单个 JVM 的内存事件。
+部署能力开启后，事务性 outbox 是异步分析一致性的一部分，因此 outbox 写入失败可以
+让 asset 事务失败；这是“已启用的内容事实没有可靠发布”的仓库故障，不是 scanner
+RPC 故障。部署能力关闭时不写 outbox，也不运行投影、校对或保留任务，普通制品写入
+保持原有事务路径。以后显式启用时，由有界数据库 reconciliation 建立全局当前状态
+基线；仓库在 UI 启用后再创建持久 backfill 和实际扫描任务。正确性不依赖关闭期间
+积压事件，也不依赖单个 JVM 的内存事件。
 
 ### 行业边界与 Nexus 参考
 
@@ -224,7 +231,7 @@ scanner 不负责保存 kkRepo 的长期任务状态，也不能要求请求始�
 ```text
 hosted / proxy / migration 写入
              |
-             | 同一数据库事务只追加通用内容变更事实
+             | 部署能力开启时，同一数据库事务追加通用内容变更事实
              v
      artifact_change_event
              |
@@ -384,8 +391,11 @@ classifier 返回以下之一：
 
 ### 事务性 artifact change outbox
 
-`artifact_change_event` 属于仓库核心持久化模型，不属于安全扫描表。所有产生或替换
-asset Blob binding 的公共 DAO 路径，在提交 asset 的同一事务中追加一条事件：
+`artifact_change_event` 属于仓库核心持久化模型，不属于安全扫描结果表。server
+启动配置会把唯一的部署能力 gate 转换为通用、只读的 `ArtifactChangeEventMode`
+并注入持久层；不存在第二个可独立修改的用户开关。只有该模式为 enabled 时，所有
+产生或替换 asset Blob binding 的公共 DAO 路径才在提交 asset 的同一事务中追加一条
+事件：
 
 | 字段 | 语义 |
 | --- | --- |
@@ -402,9 +412,11 @@ asset Blob binding 的公共 DAO 路径，在提交 asset 的同一事务中追�
 proxy 和迁移最终都复用这些公共 DAO。仅更新下载时间、proxy validator、普通
 attributes 或 component 关系不产生内容事件。
 
-`JdbcAssetDao` 不允许引用 `security_scan_*`、扫描 profile/policy、scanner client 或
-feature flag。全局扫描关闭、scanner 不可用、扫描数据库投影处理失败时，asset 上传和
-proxy cache commit 仍按仓库核心语义完成。
+`JdbcAssetDao` 不允许引用 `security_scan_*`、仓库扫描 profile/policy、scanner client
+或扫描状态。它只接收一个启动时确定的通用事件开关；默认关闭时不执行事件 INSERT，
+不会让未启用安全扫描的实例承担 outbox 写入或积压成本。部署能力开启后，scanner
+不可用或扫描数据库投影处理失败仍不会在上传请求中调用 scanner；只有同事务事件写入
+本身失败才按数据库事务语义回滚。
 
 滚动升级时，旧版本副本可能在新 migration 已生效后继续写入 asset，但还不会追加
 `artifact_change_event`。因此扫描域另有一个持续运行、持久游标驱动的校对 worker：
@@ -413,7 +425,9 @@ proxy cache commit 仍按仓库核心语义完成。
 分页保证窗口外遗漏最终也会被发现；每轮默认各处理不超过 1000 条。查询分别使用
 `asset(last_updated_at,id)` 和主键索引，不做无界全表扫描。这个兼容层不依赖数据库
 trigger，避免 MySQL 开启 binary log 时引入额外的 trigger 创建权限，也不把扫描逻辑
-放回制品写入路径。所有副本通过 `maintenance_cursor` 行锁共享一个校对水位。
+放回制品写入路径。所有副本通过 `maintenance_cursor` 行锁共享一个校对水位。该 worker
+只在 `kkrepo.security-scanning.enabled=true` 时装载；因此默认关闭升级不会读取历史
+asset。首次显式开启时，它也负责补齐功能关闭期间未记录事件的当前内容。
 
 ### 独立消费与 candidate projection
 
@@ -427,12 +441,13 @@ trigger，避免 MySQL 开启 binary log 时引入额外的 trigger 创建权限
 5. 在同一事务中推进游标；任一步失败则 candidate 与游标一起回滚并重试。
 
 事件流是 at-least-once 可恢复输入，candidate 是扫描域的可合并投影。投影 worker
-不执行外部调用后再持有游标锁；外部 scanner 调用只发生在后续有 lease/fencing 的
-task worker。默认每次读取 1000 条事件并按 asset 合并；推进游标后，读取所有
+只在部署能力显式开启时装载，不执行外部调用后再持有游标锁；外部 scanner 调用只
+发生在后续有 lease/fencing 的 task worker。默认每次读取 1000 条事件并按 asset 合并；
+推进游标后，读取所有
 `artifact_change:` 已注册消费者的最小水位，每次最多删除 5000 条已被全部消费者消费的
 事件。新增消费者必须先注册初始游标再发布对应版本，不能在运行中先读低水位、后补
-游标。即使部署能力关闭，投影仍推进，重新启用后从 candidate generation 追平；全量
-backfill 继续作为上线前资产和灾难恢复路径。
+游标。部署能力关闭时既不写事件也不推进投影；重新启用后由校对 worker 建立当前状态
+基线，全量 backfill 继续作为仓库启用、上线前资产和灾难恢复路径。
 
 ### 持久化 candidate marker
 
@@ -1383,8 +1398,9 @@ redirect/download endpoint。
 
 ### Hosted 上传
 
-上传校验和仓库 write policy 仍在同步请求内完成。上传代码不读取扫描配置，也不判断
-仓库是否启用扫描。扫描异步进行：
+上传校验和仓库 write policy 仍在同步请求内完成。上传代码不读取仓库扫描配置，也不
+判断仓库是否启用扫描；它只使用服务启动时已经确定的通用事件开关。部署能力关闭时，
+上传保持原有事务路径且没有以下扫描后续步骤。部署能力开启后，扫描异步进行：
 
 1. 上传成功并在一个事务内持久化 Blob/asset 与通用 `artifact_change_event`。
 2. 提交后由独立扫描 worker 消费事件并推进 candidate。
@@ -1392,8 +1408,8 @@ redirect/download endpoint。
 4. scan 与 policy 通过后，下载策略允许读取。
 
 scanner 超时、不可用、扫描投影事务失败或 worker 停止，都不回滚已经提交的 Blob 和
-asset；管理员可以修复 scanner 后重试、添加有期限 waiver 或删除制品。只有仓库核心
-写入本身失败（包括通用 outbox 无法与 asset 原子提交）才使上传失败。
+asset；管理员可以修复 scanner 后重试、添加有期限 waiver 或删除制品。部署能力开启
+时，只有仓库核心写入本身失败（包括通用 outbox 无法与 asset 原子提交）才使上传失败。
 
 ### Proxy 首次回源
 
@@ -1713,16 +1729,24 @@ concurrency = min(worker.batch-size, response-memory-budget-bytes / reservation)
 
 `kkrepo.security-scanning.enabled` 是 kkRepo 节点的部署能力 gate：
 
-- `false`：不运行 candidate 调度、backfill、task、snapshot 或 policy-reconcile
-  worker，下载策略直接放行，Admin UI 扫描页面置灰；通用事件到 candidate 的轻量投影
-  和有界保留清理仍运行，但不会创建扫描任务或调用 adapter。已有仓库配置和历史结果
-  不会被开关直接删除。
-- `true`：装载上述协调 worker 与下载策略集成，但不会启动 scanner 进程，也不会
-  自动启用任何仓库。仓库管理员必须在 Admin UI 的 **Repositories** 中显式启用。
+- `false`（默认）：Flyway 创建版本化的扫描 schema、索引、内置 profile/policy、空
+  游标，以及 `asset_blob` 上的通用 Blob 引用计数字段/约束；除此之外不把历史
+  asset/Blob 读入扫描流程，不追加扫描所用内容事件，不装载事件投影、历史校对、
+  candidate、backfill、task、snapshot、policy-reconcile 或 retention worker，周期
+  指标不查询扫描表；下载策略直接放行，Admin UI 扫描页面置灰。已有仓库配置和历史
+  结果不会被开关直接删除。
+- `true`：这是部署人员对数据库工作负载的显式 opt-in。kkRepo 开始追加通用内容事件，
+  装载有界事件投影、全局历史校对、协调/维护 worker 与下载策略集成，并观测 adapter；
+  但不会启动 scanner 进程，也不会自动启用任何仓库。仓库管理员必须在 Admin UI 的
+  **Repositories** 中显式启用，届时才为该仓库创建历史 backfill 和实际扫描任务。
 - 所有 kkRepo 副本必须使用相同值。切换该值需要按部署配置变更并滚动重启，不能由
   普通应用管理员在 UI 中修改。
 
-其余默认值可在生产启用前根据制品规模、扫描耗时和 scanner 容量测试结果调整。
+因此升级与启用是两个独立操作。大型实例在把 gate 改为 `true` 前，必须评估历史校对
+和后续仓库 backfill 的数据库 I/O 与 scanner 容量。全局校对默认每轮对最近窗口和
+主键循环各最多读取 1000 个 asset；仓库 backfill 默认每页 500 个、每轮最多 20 页，
+均通过共享持久游标和短事务限流。其余默认值可在生产启用前根据制品规模、扫描耗时和
+scanner 容量测试结果调整。
 
 Docker Compose/quickstart：
 
@@ -1820,7 +1844,8 @@ MySQL 与 PostgreSQL 必须保持：
 
 MySQL/PostgreSQL 公共 contract 至少覆盖：
 
-1. asset 新增/替换只产生通用事件，metadata-only 更新不产生事件，且上传 DAO 不访问扫描表。
+1. 通用事件开关开启时，asset 新增/替换只产生通用事件，metadata-only 更新不产生
+   事件；开关关闭时不写事件；两种模式下上传 DAO 都不访问扫描表。
 2. 两个副本不能同时推进同一消费游标，candidate 与游标要么一起提交、要么一起回滚。
 3. 延迟旧事件不能把 candidate 恢复为旧 Blob，重复 backfill 不增加未变化 generation。
 4. 并发创建同一 fingerprint 只产生一个 immutable SBOM/run。
@@ -1889,7 +1914,8 @@ MySQL 和 PostgreSQL 分别运行真实集成测试：
 Audit 模式：
 
 - 全部现有真实客户端 E2E 的 status/header/body 不变。
-- hosted、proxy、迁移写入产生通用事件，异步消费后产生正确候选和结果。
+- 部署能力和仓库扫描均启用时，hosted、proxy、迁移写入产生通用事件，异步消费后
+  产生正确候选和结果。
 - metadata、checksum、signature 不产生无意义任务。
 
 Enforce 模式：
@@ -1936,15 +1962,18 @@ Enforce 模式：
 
 ### PR 2：可靠候选与任务编排
 
-- `JdbcAssetDao` 内容变更时只事务性追加通用 `artifact_change_event`。
-- 独立事件消费游标把当前 asset/blob binding 投影为 candidate。
+- 部署能力开启时，`JdbcAssetDao` 内容变更只事务性追加通用
+  `artifact_change_event`；关闭时不写事件。
+- 仅在部署能力开启时装载的独立事件消费游标把当前 asset/blob binding 投影为
+  candidate。
 - Candidate worker、reconciliation/backfill job、task worker 和 retry/lease。
 - Fake scanner adapter contract。
 - task/queue 指标和审计。
 
 验收：
 
-- hosted、proxy、迁移写入都能产生通用事件并异步收敛为候选。
+- 部署能力开启时，hosted、proxy、迁移写入都能产生通用事件并异步收敛为候选；默认
+  关闭升级不写事件、不读取历史 asset、不运行扫描后台任务。
 - 上传/缓存/迁移写入代码不引用扫描表或 scanner，扫描故障不回滚已提交内容。
 - asset 覆盖、并发写和 worker crash 不会丢失扫描需求。
 - 多副本不会重复拥有同一 task。
@@ -2032,8 +2061,9 @@ Enforce 模式：
 
 回滚：
 
-- 全局关闭执行能力会停止新任务调度与领取并保留数据库状态；通用事件投影和保留清理
-  继续运行，不调用 scanner。
+- 全局关闭执行能力并滚动重启全部 kkRepo 副本后，会停止内容事件写入、事件投影、
+  历史校对、任务调度/领取、周期指标和保留清理并保留数据库状态，不调用 scanner。
+  以后重新开启时，由有界校对和仓库 backfill 按当前数据库事实补齐关闭期间的变化。
 - 仓库从 enforce 切回 audit 立即停止下载阻断。
 - scanner adapter 回滚不修改已有 immutable run；新任务记录回滚后的真实版本。
 - migration 回滚遵循 kkRepo 现有数据库策略，不通过手工删表恢复旧应用。
@@ -2042,7 +2072,8 @@ Enforce 模式：
 
 安全扫描能力只有在以下条件全部满足后才可声明生产可用：
 
-1. hosted、proxy、迁移写入只发布通用内容事件，扫描异步追平且不会丢失候选。
+1. 部署能力开启时，hosted、proxy、迁移写入只发布通用内容事件，扫描异步追平且
+   不会丢失候选；默认关闭升级只创建安全扫描 schema，不处理历史制品。
 2. MySQL/PostgreSQL 使用相同 claim、lease、fingerprint 和 finalize 语义。
 3. worker/scanner 任一副本退出后任务可恢复，旧 worker 不能覆盖新结果。
 4. SBOM、finding、scanner/version/database provenance 可追溯。

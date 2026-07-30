@@ -84,6 +84,7 @@ class SecurityScanInfrastructureTest {
     SecurityScanDao scans = mock(SecurityScanDao.class);
     SimpleMeterRegistry registry = new SimpleMeterRegistry();
     SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.setEnabled(true);
     properties.setMetricsCountLimit(123);
     SecurityScanMetrics metrics = new SecurityScanMetrics(registry, scans, properties);
     when(scans.metricSummary(123)).thenReturn(new ScanMetricSummary(2, 3, 4, 6, 19));
@@ -318,6 +319,23 @@ class SecurityScanInfrastructureTest {
   }
 
   @Test
+  void disabledMetricsDoNotQuerySecurityScanState() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    SimpleMeterRegistry registry = new SimpleMeterRegistry();
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    SecurityScanMetrics metrics = new SecurityScanMetrics(registry, scans, properties);
+
+    metrics.refresh();
+
+    verifyNoInteractions(scans);
+    assertEquals(0.0, registry.get("kkrepo_security_scan_backlog").gauge().value());
+    assertEquals(0.0, registry.get("kkrepo_security_scan_running").gauge().value());
+    assertEquals(0.0, registry.get("kkrepo_security_scan_scanner_ready").gauge().value());
+    assertEquals(
+        -1.0, registry.get("kkrepo_security_scan_database_age_seconds").gauge().value());
+  }
+
+  @Test
   void refreshesArtifactEventMetricsAndRunsBoundedRetention() {
     ArtifactChangeDao changes = mock(ArtifactChangeDao.class);
     SimpleMeterRegistry registry = new SimpleMeterRegistry();
@@ -365,6 +383,18 @@ class SecurityScanInfrastructureTest {
     verify(scans).cleanupRetainedData(any(), any(), eq(50));
     verify(metrics).recordRetention(result);
     assertEquals(21, result.total());
+  }
+
+  @Test
+  void disabledRetentionDoesNotTouchSecurityScanState() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    SecurityScanMetrics metrics = mock(SecurityScanMetrics.class);
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.getRetention().setEnabled(false);
+
+    new SecurityScanRetentionWorker(scans, properties, metrics).runOnce();
+
+    verifyNoInteractions(scans, metrics);
   }
 
   @Test

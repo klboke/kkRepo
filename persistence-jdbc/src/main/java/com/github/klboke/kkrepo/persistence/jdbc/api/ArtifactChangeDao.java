@@ -5,7 +5,8 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Durable, feature-neutral content-change stream emitted by the core asset persistence path.
+ * Durable, feature-neutral content-change stream emitted by the core asset persistence path when
+ * an optional server consumer activates {@link ArtifactChangeEventMode}.
  *
  * <p>Consumers own their cursors separately. Reading this stream must never be required to finish
  * an upload transaction.

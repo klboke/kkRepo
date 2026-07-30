@@ -2,17 +2,15 @@ package com.github.klboke.kkrepo.server.securityscan;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-/**
- * Maintains the bounded scan-candidate projection even while scanner execution is disabled.
- *
- * <p>This keeps the generic artifact event stream reclaimable and lets a later deployment enable
- * scanning without losing changes made while the adapter was unavailable.
- */
+/** Maintains the bounded scan-candidate projection after deployment capability is enabled. */
 @Component
+@ConditionalOnProperty(
+    prefix = "kkrepo.security-scanning", name = "enabled", havingValue = "true")
 public class SecurityScanArtifactChangeWorker {
   private static final Logger log =
       LoggerFactory.getLogger(SecurityScanArtifactChangeWorker.class);
