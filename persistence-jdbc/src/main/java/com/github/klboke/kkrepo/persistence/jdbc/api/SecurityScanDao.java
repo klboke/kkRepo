@@ -74,6 +74,11 @@ public interface SecurityScanDao {
   /**
    * Folds a generic artifact content-change event into the scan-specific candidate projection.
    * The current asset/blob binding is re-read so a delayed event cannot restore stale content.
+   *
+   * <p>This asynchronous fold never waits for an asset row that an upload or protocol transaction
+   * is modifying. It throws {@link org.springframework.dao.CannotAcquireLockException} instead so
+   * the caller can roll back its durable cursor and retry the event after the foreground
+   * transaction completes.
    */
   int recordArtifactContentChange(long assetId);
 

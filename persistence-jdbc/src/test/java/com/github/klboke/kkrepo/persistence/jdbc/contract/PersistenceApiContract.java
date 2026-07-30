@@ -67,9 +67,11 @@ import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.DuplicateKeyException;
 
 /** Reusable black-box contract that every database backend must pass through the public API. */
@@ -2669,6 +2671,66 @@ public abstract class PersistenceApiContract {
       assertEquals(
           assetId,
           stores().securityScanning().findCandidate(assetId).orElseThrow().assetId());
+    } finally {
+      releaseWriter.countDown();
+    }
+  }
+
+  @Test
+  void securityArtifactChangeFoldDefersInsteadOfBlockingForegroundAssetLocks()
+      throws Exception {
+    long repositoryId = createRepository("scan-event-lock", RepositoryFormat.MAVEN2);
+    long blobStoreId = stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
+    Instant now = Instant.parse("2026-07-24T14:30:00Z");
+    long blobId = stores().assets().insertBlob(
+        blob(blobStoreId, "scan/event-lock.jar", "scan-event-lock-artifact"));
+    String path = "locked/event-lock.jar";
+    long assetId = stores().assets().insertAsset(new AssetRecord(
+        null,
+        repositoryId,
+        null,
+        blobId,
+        RepositoryFormat.MAVEN2,
+        path,
+        PersistenceHashes.pathHash(path),
+        "event-lock.jar",
+        "ARTIFACT",
+        "application/java-archive",
+        42L,
+        null,
+        now,
+        Map.of()));
+    CountDownLatch rowLocked = new CountDownLatch(1);
+    CountDownLatch releaseWriter = new CountDownLatch(1);
+
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var writer = executor.submit(() -> inTransaction(() -> {
+        assertEquals(
+            assetId,
+            stores().assets().claimStaleAssetsByPrefix(
+                repositoryId, "locked/", now.plusSeconds(1), 1).getFirst().id());
+        rowLocked.countDown();
+        await(releaseWriter);
+        return null;
+      }));
+      assertTrue(rowLocked.await(30, java.util.concurrent.TimeUnit.SECONDS));
+
+      var fold = executor.submit(() ->
+          inTransaction(() -> stores().securityScanning().recordArtifactContentChange(assetId)));
+      ExecutionException deferred = assertThrows(
+          ExecutionException.class,
+          () -> fold.get(5, java.util.concurrent.TimeUnit.SECONDS),
+          "artifact-change folding must defer rather than wait on a foreground asset lock");
+      assertTrue(
+          deferred.getCause() instanceof CannotAcquireLockException,
+          () -> "unexpected contention failure: " + deferred.getCause());
+
+      releaseWriter.countDown();
+      writer.get(30, java.util.concurrent.TimeUnit.SECONDS);
+      assertEquals(
+          1,
+          inTransaction(
+              () -> stores().securityScanning().recordArtifactContentChange(assetId)));
     } finally {
       releaseWriter.countDown();
     }

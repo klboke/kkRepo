@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.securityscan;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -28,6 +29,9 @@ public class SecurityScanArtifactChangeWorker {
   public void runOnce() {
     try {
       artifactChanges.processBatch();
+    } catch (CannotAcquireLockException contention) {
+      log.debug(
+          "Security scan artifact-change batch deferred while foreground content is changing");
     } catch (RuntimeException e) {
       log.warn("Security scan artifact-change batch failed; cursor remains durable for retry", e);
     }

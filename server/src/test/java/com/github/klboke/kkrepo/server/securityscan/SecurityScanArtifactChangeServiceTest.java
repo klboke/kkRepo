@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.securityscan;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -16,6 +17,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.OptionalLong;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.CannotAcquireLockException;
 
 class SecurityScanArtifactChangeServiceTest {
   @Test
@@ -84,5 +86,28 @@ class SecurityScanArtifactChangeServiceTest {
             changes, cursors, scans, properties);
 
     assertThrows(IllegalStateException.class, service::processBatch);
+  }
+
+  @Test
+  void leavesTheCursorAtTheDurableEventWhenAnAssetIsBusy() {
+    ArtifactChangeDao changes = mock(ArtifactChangeDao.class);
+    MaintenanceCursorDao cursors = mock(MaintenanceCursorDao.class);
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    ArtifactChange event = new ArtifactChange(
+        11L, 1L, 101L, null, 201L, ChangeKind.CONTENT_CREATED, Instant.EPOCH);
+    when(cursors.tryLockLastSeenId(SecurityScanArtifactChangeService.CURSOR_NAME))
+        .thenReturn(OptionalLong.of(10L));
+    when(changes.listAfter(10L, properties.getWorker().getArtifactChangeBatchSize()))
+        .thenReturn(List.of(event));
+    when(scans.recordArtifactContentChange(101L))
+        .thenThrow(new CannotAcquireLockException("busy"));
+
+    SecurityScanArtifactChangeService service =
+        new SecurityScanArtifactChangeService(changes, cursors, scans, properties);
+
+    assertThrows(CannotAcquireLockException.class, service::processBatch);
+    verify(cursors, never())
+        .updateLastSeenId(SecurityScanArtifactChangeService.CURSOR_NAME, 11L);
   }
 }

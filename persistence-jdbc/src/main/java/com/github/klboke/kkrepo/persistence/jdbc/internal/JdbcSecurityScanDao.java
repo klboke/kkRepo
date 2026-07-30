@@ -40,6 +40,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.UUID;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
@@ -896,10 +897,21 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Transactional
   public int recordArtifactContentChange(long assetId) {
     List<Long> blobIds = jdbc.query(
-        "SELECT asset_blob_id FROM asset WHERE id = ? FOR UPDATE",
+        "SELECT asset_blob_id FROM asset WHERE id = ? FOR UPDATE SKIP LOCKED",
         (rs, rowNum) -> nullableLong(rs, "asset_blob_id"),
         assetId);
-    if (blobIds.isEmpty() || blobIds.getFirst() == null) {
+    if (blobIds.isEmpty()) {
+      Long visibleRows = jdbc.queryForObject(
+          "SELECT COUNT(*) FROM asset WHERE id = ?",
+          Long.class,
+          assetId);
+      if (visibleRows != null && visibleRows > 0) {
+        throw new CannotAcquireLockException(
+            "Artifact change folding deferred for locked asset " + assetId);
+      }
+      return 0;
+    }
+    if (blobIds.getFirst() == null) {
       return 0;
     }
     return ensureCandidate(assetId, blobIds.getFirst());
