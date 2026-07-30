@@ -287,7 +287,30 @@ class RawAssetWriter {
     }
     AssetRecord asset = existing.get();
     Long componentId = asset.componentId();
-    deleteOne(storage, asset);
+    int deleted = deleteOne(asset);
+    if (deleted == 0) {
+      return 0;
+    }
+    if (componentId != null) {
+      componentDao.deleteIfNoAssets(componentId);
+    }
+    return 1;
+  }
+
+  @Transactional
+  int deleteAssetById(RepositoryRuntime runtime, long assetId) {
+    Optional<AssetRecord> existing = assetDao.findAssetById(assetId)
+        .filter(asset -> asset.repositoryId() == runtime.id()
+            && asset.format() == runtime.format());
+    if (existing.isEmpty()) {
+      return 0;
+    }
+    AssetRecord asset = existing.orElseThrow();
+    Long componentId = asset.componentId();
+    int deleted = deleteOne(asset);
+    if (deleted == 0) {
+      return 0;
+    }
     if (componentId != null) {
       componentDao.deleteIfNoAssets(componentId);
     }
@@ -642,14 +665,18 @@ class RawAssetWriter {
     return assetDao.findReusableBlobBySha256(blobStoreId, sha256, size);
   }
 
-  private void deleteOne(BlobStorage storage, AssetRecord asset) {
+  private int deleteOne(AssetRecord asset) {
     Long blobId = asset.assetBlobId();
     browseNodeDao.deleteByAssetId(asset.id());
-    assetDao.deleteAssetById(asset.id());
+    int deleted = assetDao.deleteAssetById(asset.id());
+    if (deleted == 0) {
+      return 0;
+    }
     if (blobId != null) {
       assetDao.markBlobDeletedIfUnreferenced(blobId, "asset unlinked");
     }
     assetMetadataCache.evictAfterCommit(asset.repositoryId(), asset.path());
+    return 1;
   }
 
   private static long streamWithDigests(InputStream in, OutputStream out, MessageDigest... digests)

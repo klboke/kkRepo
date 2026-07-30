@@ -140,6 +140,19 @@ class RawHostedServiceTest {
         "user", "127.0.0.1", component, "acme/tools/1.0.0/file");
   }
 
+  @Test
+  void deletesRawHostedAssetByDatabaseIdOnly() {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.HOSTED, 1L, "ALLOW");
+    when(fixture.writer.deleteAssetById(runtime, 12L)).thenReturn(0, 1);
+
+    assertEquals(404, fixture.service.deleteById(runtime, 12L).status());
+    assertEquals(204, fixture.service.deleteById(runtime, 12L).status());
+    assertThrows(MavenExceptions.MethodNotAllowed.class,
+        () -> fixture.service.deleteById(
+            runtime(RepositoryType.PROXY, 1L, "ALLOW"), 12L));
+  }
+
   private static Fixture fixture() {
     AssetDao assetDao = mock(AssetDao.class);
     BlobStorageRegistry registry = mock(BlobStorageRegistry.class);

@@ -329,12 +329,32 @@ class RawAssetWriterTest {
         "file.txt", "raw", "text/plain", 4L, null, Instant.EPOCH, Map.of());
     when(fixture.assetDao.findAssetByPath(runtime.id(), "docs/file.txt"))
         .thenReturn(Optional.of(asset));
+    when(fixture.assetDao.deleteAssetById(11L)).thenReturn(1);
 
     assertEquals(1, fixture.writer.deleteAsset(
         runtime, fixture.storage, "docs/file.txt"));
 
     verify(fixture.browseNodeDao).deleteByAssetId(11L);
     verify(fixture.assetDao).deleteAssetById(11L);
+    verify(fixture.assetDao).markBlobDeletedIfUnreferenced(33L, "asset unlinked");
+    verify(fixture.componentDao).deleteIfNoAssets(22L);
+    verify(fixture.cache).evictAfterCommit(runtime.id(), "docs/file.txt");
+  }
+
+  @Test
+  void deletesByIdOnlyWhenAssetBelongsToRawRepository() {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime();
+    AssetRecord asset = new AssetRecord(
+        11L, runtime.id(), 22L, 33L, RepositoryFormat.RAW, "docs/file.txt", null,
+        "file.txt", "raw", "text/plain", 4L, null, Instant.EPOCH, Map.of());
+    when(fixture.assetDao.findAssetById(11L)).thenReturn(Optional.of(asset));
+    when(fixture.assetDao.deleteAssetById(11L)).thenReturn(1, 0);
+
+    assertEquals(1, fixture.writer.deleteAssetById(runtime, 11L));
+    assertEquals(0, fixture.writer.deleteAssetById(runtime, 11L));
+
+    verify(fixture.assetDao, org.mockito.Mockito.times(2)).deleteAssetById(11L);
     verify(fixture.assetDao).markBlobDeletedIfUnreferenced(33L, "asset unlinked");
     verify(fixture.componentDao).deleteIfNoAssets(22L);
     verify(fixture.cache).evictAfterCommit(runtime.id(), "docs/file.txt");

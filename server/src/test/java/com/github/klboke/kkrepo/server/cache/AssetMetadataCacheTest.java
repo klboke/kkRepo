@@ -14,7 +14,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache.Loaded;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
-import java.time.Duration;
+import com.github.klboke.kkrepo.server.support.InMemoryVersionWatermark;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
@@ -215,6 +215,29 @@ class AssetMetadataCacheTest {
     assertFalse(sharedCache.getString("asset-metadata", "7:b.jar").isPresent());
     assertTrue(sharedCache.getString("asset-metadata", "8:c.jar").isPresent(),
         "repo 8 entries untouched");
+  }
+
+  @Test
+  void repositoryWatermarkInvalidatesSiblingReplicaCache() {
+    InMemoryVersionWatermark watermark = new InMemoryVersionWatermark();
+    AssetMetadataCache writerReplica = new AssetMetadataCache(
+        new InMemorySharedCache(), watermark, true, 120, 5);
+    AssetMetadataCache readerReplica = new AssetMetadataCache(
+        new InMemorySharedCache(), watermark, true, 120, 5);
+    AtomicInteger loads = new AtomicInteger();
+
+    readerReplica.find(7L, "x.jar", () -> {
+      loads.incrementAndGet();
+      return Optional.of(new Loaded(asset(1L, 7L, "x.jar"), blob(10L)));
+    });
+    writerReplica.evictAfterCommit(7L, "x.jar");
+    Optional<CachedAssetMetadata> refreshed = readerReplica.find(7L, "x.jar", () -> {
+      loads.incrementAndGet();
+      return Optional.of(new Loaded(asset(2L, 7L, "x.jar"), blob(20L)));
+    });
+
+    assertEquals(2, loads.get());
+    assertEquals(2L, refreshed.orElseThrow().assetId());
   }
 
   @Test

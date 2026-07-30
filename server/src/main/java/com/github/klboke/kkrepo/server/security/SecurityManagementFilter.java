@@ -18,7 +18,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 @Order(SecurityManagementFilter.FILTER_ORDER)
 public class SecurityManagementFilter extends OncePerRequestFilter {
   static final int FILTER_ORDER = SessionRepositoryFilter.DEFAULT_ORDER + 10;
-  static final String REQUESTED_PERMISSION_ATTRIBUTE =
+  public static final String REQUESTED_PERMISSION_ATTRIBUTE =
       SecurityManagementFilter.class.getName() + ".REQUESTED_PERMISSION";
   private static final String AUTHENTICATED_ONLY = "__authenticated__";
   private static final String AUTH_REQUIRED_WELCOME = "/browse/?login=1#browse/welcome";
