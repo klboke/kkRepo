@@ -1,6 +1,8 @@
 package com.github.klboke.kkrepo.server.npm;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
@@ -32,15 +34,19 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 import org.springframework.mock.web.MockMultipartFile;
 
@@ -57,6 +63,15 @@ class NpmHostedServiceTest {
         .thenReturn(Optional.empty());
     String attachment = Base64.getEncoder()
         .encodeToString("tarball".getBytes(StandardCharsets.UTF_8));
+    AtomicReference<byte[]> uploadedTarball = new AtomicReference<>();
+    when(fixture.writer.writeTarball(
+        eq(runtime("ALLOW", 7L)), eq(fixture.storage), eq(7L), eq(PACKAGE),
+        eq("1.0.0"), eq("demo-1.0.0.tgz"), any(), eq("application/octet-stream"),
+        eq("alice"), eq("127.0.0.1"), eq(Map.of())))
+        .thenAnswer(invocation -> {
+          uploadedTarball.set(((InputStream) invocation.getArgument(6)).readAllBytes());
+          return null;
+        });
     String body = """
         {
           "name":"demo",
@@ -76,6 +91,7 @@ class NpmHostedServiceTest {
         eq(runtime("ALLOW", 7L)), eq(fixture.storage), eq(7L), eq(PACKAGE),
         eq("1.0.0"), eq("demo-1.0.0.tgz"), any(), eq("application/octet-stream"),
         eq("alice"), eq("127.0.0.1"), eq(Map.of()));
+    assertArrayEquals("tarball".getBytes(StandardCharsets.UTF_8), uploadedTarball.get());
     ArgumentCaptor<byte[]> json = ArgumentCaptor.forClass(byte[].class);
     verify(fixture.writer).writePackageRoot(
         eq(runtime("ALLOW", 7L)), eq(fixture.storage), eq(7L), eq(PACKAGE),
@@ -83,6 +99,78 @@ class NpmHostedServiceTest {
     Map<String, Object> stored = fixture.mapper.readValue(json.getValue(), MAP);
     assertNotNull(stored.get("_rev"));
     assertEquals(null, stored.get("_attachments"));
+  }
+
+  @Test
+  void invalidBase64AndTruncatedJsonReturnBadRequestAndCleanStaging(@TempDir Path tempDir) {
+    Fixture fixture = fixture(tempDir);
+    String invalidBase64 = """
+        {"name":"demo","_attachments":{"demo-1.0.0.tgz":{"data":"AAAA*"}}}
+        """;
+
+    NpmExceptions.BadRequestException invalidBase64Error = assertThrows(
+        NpmExceptions.BadRequestException.class,
+        () -> fixture.service.putPackage(
+            runtime("ALLOW", 7L),
+            PACKAGE,
+            null,
+            new ByteArrayInputStream(invalidBase64.getBytes(StandardCharsets.UTF_8)),
+            "alice",
+            null));
+    assertEquals("Invalid npm publish JSON", invalidBase64Error.getMessage());
+    assertDirectoryEmpty(tempDir);
+
+    String truncated = """
+        {"name":"demo","_attachments":{"demo-1.0.0.tgz":{"data":"AAAA"
+        """;
+    NpmExceptions.BadRequestException truncatedError = assertThrows(
+        NpmExceptions.BadRequestException.class,
+        () -> fixture.service.putPackage(
+            runtime("ALLOW", 7L),
+            PACKAGE,
+            null,
+            new ByteArrayInputStream(truncated.getBytes(StandardCharsets.UTF_8)),
+            "alice",
+            null));
+    assertEquals("Invalid npm publish JSON", truncatedError.getMessage());
+    assertDirectoryEmpty(tempDir);
+    verify(fixture.writer, never()).writeTarball(
+        any(), any(), anyLong(), any(), anyString(), anyString(), any(),
+        anyString(), anyString(), any(), any());
+  }
+
+  @Test
+  void cleansStagedAttachmentWhenPersistenceFails(@TempDir Path tempDir) {
+    Fixture fixture = fixture(tempDir);
+    when(fixture.assetDao.findAssetByPath(10L, "demo")).thenReturn(Optional.empty());
+    when(fixture.assetDao.findAssetByPath(10L, "demo/-/demo-1.0.0.tgz"))
+        .thenReturn(Optional.empty());
+    when(fixture.writer.writeTarball(
+        any(), any(), anyLong(), any(), anyString(), anyString(), any(),
+        anyString(), anyString(), any(), any()))
+        .thenThrow(new IllegalStateException("storage failed"));
+    String body = """
+        {
+          "name":"demo",
+          "versions":{"1.0.0":{"name":"demo","version":"1.0.0",
+            "dist":{"tarball":"demo-1.0.0.tgz"}}},
+          "_attachments":{"demo-1.0.0.tgz":{"data":"dGFyYmFsbA=="}}
+        }
+        """;
+
+    assertThrows(
+        IllegalStateException.class,
+        () -> fixture.service.putPackage(
+            runtime("ALLOW", 7L),
+            PACKAGE,
+            null,
+            new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)),
+            "alice",
+            null));
+
+    assertDirectoryEmpty(tempDir);
+    verify(fixture.writer, never()).writePackageRoot(
+        any(), any(), anyLong(), any(), any(), anyString(), any());
   }
 
   @Test
@@ -365,6 +453,10 @@ class NpmHostedServiceTest {
   }
 
   private static Fixture fixture() {
+    return fixture(null);
+  }
+
+  private static Fixture fixture(Path tempDirectory) {
     AssetDao assetDao = mock(AssetDao.class);
     BlobStorageRegistry registry = mock(BlobStorageRegistry.class);
     NpmAssetWriter writer = mock(NpmAssetWriter.class);
@@ -373,9 +465,27 @@ class NpmHostedServiceTest {
     ArtifactDownloadPolicy downloadPolicy = mock(ArtifactDownloadPolicy.class);
     ObjectMapper mapper = new ObjectMapper();
     when(registry.forBlobStoreId(7L)).thenReturn(storage);
+    NpmPublishParser publishParser = tempDirectory == null
+        ? new NpmPublishParser(mapper)
+        : new NpmPublishParser(mapper, tempDirectory);
     return new Fixture(
         assetDao, registry, writer, storage, cache, downloadPolicy, mapper,
-        new NpmHostedService(assetDao, registry, writer, mapper, cache, downloadPolicy));
+        new NpmHostedService(
+            assetDao,
+            registry,
+            writer,
+            mapper,
+            cache,
+            downloadPolicy,
+            publishParser));
+  }
+
+  private static void assertDirectoryEmpty(Path directory) {
+    try (var files = Files.list(directory)) {
+      assertFalse(files.findAny().isPresent());
+    } catch (IOException e) {
+      throw new AssertionError(e);
+    }
   }
 
   private static RepositoryRuntime runtime(String writePolicy, Long blobStoreId) {
