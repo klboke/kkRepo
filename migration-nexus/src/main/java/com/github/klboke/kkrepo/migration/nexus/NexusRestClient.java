@@ -59,6 +59,7 @@ public class NexusRestClient {
       def metadataEngine = String.valueOf(request.metadataEngine ?: '').trim().toUpperCase()
       def warnings = []
       def users = []
+      def userRoleMappings = []
       try {
         def security = null
         try {
@@ -71,25 +72,38 @@ public class NexusRestClient {
           }
         }
         if (security == null) {
-          warnings << 'Source Nexus script API did not expose local password hashes: SecurityConfigurationManager unavailable'
+          warnings << 'Source Nexus script API did not expose configured users or user-role mappings: SecurityConfigurationManager unavailable'
         } else {
-          users = security.listUsers().collect { user ->
-            def passwordHash = null
+          def safeProperty = { target, property ->
             try {
-              passwordHash = user.password
+              return target."${property}"
             } catch (ignored) {
-              passwordHash = null
+              return null
             }
+          }
+          users = security.listUsers().collect { user ->
             [
               userId: user.id,
               source: 'default',
-              passwordHash: passwordHash
+              firstName: safeProperty(user, 'firstName'),
+              lastName: safeProperty(user, 'lastName'),
+              emailAddress: safeProperty(user, 'email'),
+              status: safeProperty(user, 'status'),
+              passwordHash: safeProperty(user, 'password')
+            ]
+          }
+          userRoleMappings = security.listUserRoleMappings().collect { mapping ->
+            [
+              userId: mapping.userId,
+              source: mapping.source,
+              roles: mapping.roles == null ? [] : mapping.roles.collect { String.valueOf(it) }
             ]
           }
         }
       } catch (e) {
-        warnings << 'Source Nexus script API did not expose local password hashes: ' + errorText(e)
+        warnings << 'Source Nexus script API did not expose configured users or user-role mappings: ' + errorText(e)
         users = []
+        userRoleMappings = []
       }
       def principalDetails = { bytes ->
         if (bytes == null) {
@@ -229,7 +243,12 @@ public class NexusRestClient {
               + errorText(e))
           apiKeys = []
         }
-        return JsonOutput.toJson([users: users, apiKeys: apiKeys, warnings: warnings])
+        return JsonOutput.toJson([
+          users: users,
+          userRoleMappings: userRoleMappings,
+          apiKeys: apiKeys,
+          warnings: warnings
+        ])
       }
       if (metadataEngine.startsWith('DATASTORE')) {
         try {
@@ -239,11 +258,21 @@ public class NexusRestClient {
               + errorText(e))
           apiKeys = []
         }
-        return JsonOutput.toJson([users: users, apiKeys: apiKeys, warnings: warnings])
+        return JsonOutput.toJson([
+          users: users,
+          userRoleMappings: userRoleMappings,
+          apiKeys: apiKeys,
+          warnings: warnings
+        ])
       }
       try {
         exportApiKeysFromService()
-        return JsonOutput.toJson([users: users, apiKeys: apiKeys, warnings: warnings])
+        return JsonOutput.toJson([
+          users: users,
+          userRoleMappings: userRoleMappings,
+          apiKeys: apiKeys,
+          warnings: warnings
+        ])
       } catch (ignored) {
         apiKeyServiceError = ignored
         apiKeys = []
@@ -258,7 +287,12 @@ public class NexusRestClient {
             + errorText(e) + serviceMessage)
         apiKeys = []
       }
-      return JsonOutput.toJson([users: users, apiKeys: apiKeys, warnings: warnings])
+      return JsonOutput.toJson([
+        users: users,
+        userRoleMappings: userRoleMappings,
+        apiKeys: apiKeys,
+        warnings: warnings
+      ])
       """;
   private static final String LOCAL_REPOSITORY_DATA_EXPORT_SCRIPT = """
       import groovy.json.JsonOutput
@@ -1485,16 +1519,11 @@ public class NexusRestClient {
         .filter(NexusRestClient::isLocalUser)
         .toList();
     SecurityScriptProbe securityScriptProbe = readLocalSecurityScriptExport(probe);
-    List<Map<String, Object>> mergedUsers = mergePasswordHashes(users, securityScriptProbe.passwordHashes());
-    List<Map<String, Object>> userRoleMappings = users.stream()
-        .map(user -> {
-          LinkedHashMap<String, Object> mapping = new LinkedHashMap<>();
-          mapping.put("userId", firstString(user, "userId", "id"));
-          mapping.put("source", firstString(user, "source"));
-          mapping.put("roles", stringList(user.get("roles")));
-          return Map.copyOf(mapping);
-        })
-        .toList();
+    List<Map<String, Object>> mergedUsers = mergeUsers(users, securityScriptProbe.users());
+    List<Map<String, Object>> userRoleMappings = mergeUserRoleMappings(
+        mergedUsers,
+        securityScriptProbe.userRoleMappings());
+    mergedUsers = mergeMappedUsers(mergedUsers, userRoleMappings);
     return new SecurityExportResult(new NexusSecurityExport(
         mergedUsers,
         getList(LOCAL_ROLES_PATH).stream()
@@ -1508,6 +1537,30 @@ public class NexusRestClient {
         List.of(),
         getMap("/service/rest/v1/security/anonymous")),
         securityScriptProbe.warnings());
+  }
+
+  private static List<Map<String, Object>> mergeUserRoleMappings(
+      List<Map<String, Object>> users,
+      List<Map<String, Object>> configuredMappings) {
+    LinkedHashMap<String, Map<String, Object>> merged = new LinkedHashMap<>();
+    users.stream()
+        .map(user -> {
+          LinkedHashMap<String, Object> mapping = new LinkedHashMap<>();
+          mapping.put("userId", firstString(user, "userId", "id"));
+          mapping.put("source", firstString(user, "source"));
+          mapping.put("roles", stringList(user.get("roles")));
+          return Map.copyOf(mapping);
+        })
+        .forEach(mapping -> merged.put(
+            userKey(firstString(mapping, "source"), firstString(mapping, "userId")),
+            mapping));
+    for (Map<String, Object> mapping : configuredMappings) {
+      String userId = firstString(mapping, "userId", "id");
+      if (userId != null) {
+        merged.put(userKey(firstString(mapping, "source"), userId), objectMap(mapping));
+      }
+    }
+    return List.copyOf(merged.values());
   }
 
   private static boolean isLocalUser(Map<String, Object> user) {
@@ -1528,7 +1581,7 @@ public class NexusRestClient {
         "content", LOCAL_SECURITY_EXPORT_SCRIPT);
     HttpTextResponse created = postJson("/service/rest/v1/script", createRequest);
     if (!created.success()) {
-      return SecurityScriptProbe.warning("Source Nexus script API did not expose local user password hashes or API keys: "
+      return SecurityScriptProbe.warning("Source Nexus script API did not expose configured users, user-role mappings, password hashes, or API keys: "
           + created.describe());
     }
     try {
@@ -1537,13 +1590,13 @@ public class NexusRestClient {
           + "/run", objectMapper.writeValueAsString(Map.of(
               "metadataEngine", firstNonBlank(probe == null ? null : probe.metadataEngine(), "UNKNOWN"))));
       if (!run.success()) {
-        return SecurityScriptProbe.warning("Source Nexus script API did not return local user password hashes or API keys: "
+        return SecurityScriptProbe.warning("Source Nexus script API did not return configured users, user-role mappings, password hashes, or API keys: "
             + run.describe());
       }
       Map<String, Object> document = objectMapper.readValue(run.body(), MAP);
       String result = string(document.get("result"));
       if (result == null) {
-        return SecurityScriptProbe.warning("Source Nexus script API returned an empty local user password hash/API key result.");
+        return SecurityScriptProbe.warning("Source Nexus script API returned an empty security export result.");
       }
       return securityScriptProbeFromScriptResult(result);
     } finally {
@@ -1553,47 +1606,67 @@ public class NexusRestClient {
 
   private SecurityScriptProbe securityScriptProbeFromScriptResult(String result) throws IOException {
     Map<String, Object> document = objectMapper.readValue(result, MAP);
-    Object users = document.get("users");
-    LinkedHashMap<String, String> hashes = new LinkedHashMap<>();
-    if (users instanceof Iterable<?> iterable) {
-      for (Object item : iterable) {
-        if (!(item instanceof Map<?, ?> rawUser)) {
-          continue;
-        }
-        Map<String, Object> user = objectMap(rawUser);
-        String userId = firstString(user, "userId", "id");
-        String hash = firstString(user, "passwordHash", "password", "password_hash");
-        if (userId != null && hash != null) {
-          hashes.put(userKey(firstString(user, "source"), userId), hash);
-        }
-      }
-    }
     return new SecurityScriptProbe(
-        Map.copyOf(hashes),
+        objectMaps(document.get("users")),
+        objectMaps(document.get("userRoleMappings")),
         objectMaps(document.get("apiKeys")),
         stringList(document.get("warnings")));
   }
 
-  private static List<Map<String, Object>> mergePasswordHashes(
-      List<Map<String, Object>> users,
-      Map<String, String> passwordHashes) {
-    if (passwordHashes.isEmpty()) {
-      return users;
-    }
-    ArrayList<Map<String, Object>> merged = new ArrayList<>(users.size());
-    for (Map<String, Object> user : users) {
+  private static List<Map<String, Object>> mergeUsers(
+      List<Map<String, Object>> restUsers,
+      List<Map<String, Object>> configuredUsers) {
+    LinkedHashMap<String, Map<String, Object>> merged = new LinkedHashMap<>();
+    for (Map<String, Object> user : restUsers) {
       String userId = firstString(user, "userId", "id");
-      String key = userKey(firstString(user, "source"), userId);
-      String hash = passwordHashes.get(key);
-      if (hash == null || firstString(user, "passwordHash", "password", "password_hash") != null) {
-        merged.add(user);
+      if (userId != null) {
+        merged.put(userKey(firstString(user, "source"), userId), objectMap(user));
+      }
+    }
+    for (Map<String, Object> user : configuredUsers) {
+      String userId = firstString(user, "userId", "id");
+      if (userId == null) {
         continue;
       }
-      LinkedHashMap<String, Object> copy = new LinkedHashMap<>(user);
-      copy.put("passwordHash", hash);
-      merged.add(Map.copyOf(copy));
+      String key = userKey(firstString(user, "source"), userId);
+      Map<String, Object> existing = merged.get(key);
+      if (existing == null) {
+        merged.put(key, objectMap(user));
+      } else {
+        LinkedHashMap<String, Object> combined = new LinkedHashMap<>(objectMap(user));
+        combined.putAll(existing);
+        merged.put(key, Map.copyOf(combined));
+      }
     }
-    return List.copyOf(merged);
+    return List.copyOf(merged.values());
+  }
+
+  private static List<Map<String, Object>> mergeMappedUsers(
+      List<Map<String, Object>> users,
+      List<Map<String, Object>> userRoleMappings) {
+    LinkedHashMap<String, Map<String, Object>> merged = new LinkedHashMap<>();
+    for (Map<String, Object> user : users) {
+      String userId = firstString(user, "userId", "id");
+      if (userId != null) {
+        merged.put(userKey(firstString(user, "source"), userId), user);
+      }
+    }
+    for (Map<String, Object> mapping : userRoleMappings) {
+      String userId = firstString(mapping, "userId", "id");
+      String source = firstString(mapping, "source");
+      if (userId == null) {
+        continue;
+      }
+      String key = userKey(source, userId);
+      if (!merged.containsKey(key)) {
+        LinkedHashMap<String, Object> user = new LinkedHashMap<>();
+        user.put("userId", userId);
+        user.put("source", source == null ? LOCAL_USER_SOURCE : source);
+        user.put("status", "active");
+        merged.put(key, Map.copyOf(user));
+      }
+    }
+    return List.copyOf(merged.values());
   }
 
   private List<Map<String, Object>> getList(String path) throws IOException, InterruptedException {
@@ -2223,18 +2296,20 @@ public class NexusRestClient {
   }
 
   private record SecurityScriptProbe(
-      Map<String, String> passwordHashes,
+      List<Map<String, Object>> users,
+      List<Map<String, Object>> userRoleMappings,
       List<Map<String, Object>> apiKeys,
       List<String> warnings) {
 
     private SecurityScriptProbe {
-      passwordHashes = passwordHashes == null ? Map.of() : Map.copyOf(passwordHashes);
+      users = users == null ? List.of() : List.copyOf(users);
+      userRoleMappings = userRoleMappings == null ? List.of() : List.copyOf(userRoleMappings);
       apiKeys = apiKeys == null ? List.of() : List.copyOf(apiKeys);
       warnings = warnings == null ? List.of() : List.copyOf(warnings);
     }
 
     private static SecurityScriptProbe warning(String warning) {
-      return new SecurityScriptProbe(Map.of(), List.of(), List.of(warning));
+      return new SecurityScriptProbe(List.of(), List.of(), List.of(), List.of(warning));
     }
   }
 

@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.NexusInventory;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.HttpTextResponse;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.SourceProbe;
+import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityExportReader;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpRequest;
@@ -58,6 +59,55 @@ class NexusRestClientTest {
     assertTrue(nexus.scriptDeleted);
     assertEquals("/service/rest/v1/security/users?source=default", nexus.usersPath);
     assertEquals("/service/rest/v1/security/roles?source=default", nexus.rolesPath);
+  }
+
+  @Test
+  void mergesConfiguredUsersAndAuthoritativeUserRoleMappingsFromSourceScript() throws Exception {
+    FakeNexus nexus = new FakeNexus(true);
+    nexus.securityUsers = List.of(
+        Map.of(
+            "userId", "alice",
+            "source", "default",
+            "passwordHash", "$shiro1$SHA-512$hash"),
+        Map.of(
+            "userId", "agan",
+            "source", "default",
+            "firstName", "Agan",
+            "status", "active"),
+        Map.of(
+            "userId", "caibao",
+            "source", "default",
+            "firstName", "Caibao",
+            "status", "active"));
+    nexus.securityUserRoleMappings = List.of(
+        Map.of("userId", "alice", "source", "default", "roles", List.of("nx-admin")),
+        Map.of("userId", "agan", "source", "default", "roles", List.of("nx-admin")),
+        Map.of("userId", "banban", "source", "LDAP", "roles", List.of("nx-admin")));
+
+    NexusInventory inventory = client(nexus).readInventory();
+
+    assertEquals(List.of("alice", "agan", "caibao", "banban"),
+        inventory.securityExport().users().stream()
+            .map(user -> String.valueOf(user.get("userId")))
+            .toList());
+    assertEquals("LDAP", inventory.securityExport().users().get(3).get("source"));
+    assertEquals(List.of("nx-admin"), inventory.securityExport().userRoleMappings().stream()
+        .filter(mapping -> "banban".equals(mapping.get("userId")))
+        .findFirst()
+        .orElseThrow()
+        .get("roles"));
+
+    var batch = new NexusSecurityExportReader().read(inventory.securityExport());
+    assertEquals("LDAP", batch.users().stream()
+        .filter(user -> "banban".equals(user.id()))
+        .findFirst()
+        .orElseThrow()
+        .source());
+    assertEquals(List.of("nx-admin"), batch.userRoleMappings().stream()
+        .filter(mapping -> "banban".equals(mapping.userId()))
+        .findFirst()
+        .orElseThrow()
+        .roles());
   }
 
   @Test
@@ -123,6 +173,7 @@ class NexusRestClientTest {
     String script = (String) field.get(null);
 
     assertTrue(script.contains("container.lookup('org.sonatype.nexus.security.config.SecurityConfigurationManager')"));
+    assertTrue(script.contains("security.listUserRoleMappings()"));
     assertTrue(script.contains("new JsonSlurper().parseText(args)"));
     assertTrue(script.contains("metadataEngine == 'ORIENTDB'"));
     assertTrue(script.contains("metadataEngine.startsWith('DATASTORE')"));
@@ -382,6 +433,11 @@ class NexusRestClientTest {
     private int scriptRuns;
     private String profileRunContentType = "";
     private boolean emptyStatusBody;
+    private List<Map<String, Object>> securityUsers = List.of(Map.of(
+        "userId", "alice",
+        "source", "default",
+        "passwordHash", "$shiro1$SHA-512$hash"));
+    private List<Map<String, Object>> securityUserRoleMappings = List.of();
 
     private FakeNexus(boolean scriptApiEnabled) {
       this.scriptApiEnabled = scriptApiEnabled;
@@ -526,10 +582,8 @@ class NexusRestClientTest {
         }
         securityExportRequestBody = bodyString(request).orElse("");
         String result = OBJECT_MAPPER.writeValueAsString(Map.of(
-            "users", List.of(Map.of(
-                "userId", "alice",
-                "source", "default",
-                "passwordHash", "$shiro1$SHA-512$hash")),
+            "users", securityUsers,
+            "userRoleMappings", securityUserRoleMappings,
             "apiKeys", List.of(Map.of(
                 "domain", "NpmToken",
                 "api_key", "alice-token",
