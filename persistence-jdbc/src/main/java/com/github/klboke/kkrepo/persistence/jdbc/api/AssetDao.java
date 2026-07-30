@@ -101,6 +101,18 @@ public interface AssetDao {
         .toList();
   }
 
+  /**
+   * Returns a stable keyset page of assets whose owning component has the requested name.
+   *
+   * <p>Asset management search uses component coordinates rather than storage paths. Production
+   * implementations override this with a bounded join; the default is intentionally empty because
+   * an asset row alone does not carry its component name.
+   */
+  default List<AssetWithBlob> listAssetWithBlobPageByComponentName(
+      long repositoryId, String componentName, long afterAssetId, int maxItems) {
+    return List.of();
+  }
+
   Optional<AssetRecord> findDockerBlobAssetBySha256(long repositoryId, String sha256);
 
   /**

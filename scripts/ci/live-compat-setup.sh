@@ -250,6 +250,13 @@ nexus_try_create_repo() {
 }
 
 ensure_nexus_repositories() {
+  nexus_create_repo "asset-api-raw-hosted" "$NEXUS_URL/service/rest/v1/repositories/raw/hosted" '{
+    "name":"asset-api-raw-hosted",
+    "online":true,
+    "storage":{"blobStoreName":"default","strictContentTypeValidation":true,"writePolicy":"ALLOW"},
+    "raw":{"contentDisposition":"ATTACHMENT"}
+  }'
+
   nexus_create_repo "maven-releases" "$NEXUS_URL/service/rest/v1/repositories/maven/hosted" '{
     "name":"maven-releases",
     "online":true,
@@ -457,6 +464,16 @@ kkrepo_create_repo() {
 }
 
 ensure_kkrepo_repositories() {
+  kkrepo_create_repo "asset-api-raw-hosted" '{
+    "name":"asset-api-raw-hosted",
+    "recipe":"raw-hosted",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "hosted":{"writePolicy":"ALLOW","versionPolicy":null,"layoutPolicy":null},
+    "raw":{"contentDisposition":"ATTACHMENT"}
+  }'
+
   kkrepo_create_repo "maven-releases" '{
     "name":"maven-releases",
     "recipe":"maven2-hosted",

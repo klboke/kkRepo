@@ -3,8 +3,8 @@ package com.github.klboke.kkrepo.server.management;
 import com.github.klboke.kkrepo.server.management.NexusAssetIdCodec.InvalidAssetIdException;
 import com.github.klboke.kkrepo.server.management.NexusAssetIdCodec.InvalidContinuationTokenException;
 import com.github.klboke.kkrepo.server.management.NexusAssetManagementService.AssetNotFoundException;
+import com.github.klboke.kkrepo.server.management.NexusAssetManagementService.AssetDetailView;
 import com.github.klboke.kkrepo.server.management.NexusAssetManagementService.AssetPage;
-import com.github.klboke.kkrepo.server.management.NexusAssetManagementService.AssetView;
 import com.github.klboke.kkrepo.server.management.NexusAssetManagementService.InvalidSearchRequestException;
 import com.github.klboke.kkrepo.server.management.NexusAssetManagementService.UnsupportedAssetDeleteException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -53,7 +53,7 @@ public class NexusAssetController {
   }
 
   @GetMapping("/assets/{id}")
-  public AssetView get(@PathVariable("id") String id, HttpServletRequest request) {
+  public AssetDetailView get(@PathVariable("id") String id, HttpServletRequest request) {
     return service.get(id, request);
   }
 

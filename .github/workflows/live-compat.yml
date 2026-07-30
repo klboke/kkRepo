@@ -99,6 +99,7 @@ jobs:
       LIVE_COMPAT_SUITE: ${{ (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e') && 'client-e2e') || inputs.suite }}
       NEXUS_COMPAT_IMAGE: ${{ ((github.event_name == 'workflow_dispatch' && (inputs.suite == 'client-e2e' || inputs.suite == 'swift' || inputs.suite == 'full')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && 'sonatype/nexus3:3.94.0' || 'sonatype/nexus3:3.92.0' }}
       PUB_COMPAT_ENABLED: "true"
+      COMPAT_ASSET_RAW_REPOSITORY: asset-api-raw-hosted
       COMPOSER_COMPAT_ENABLED: "true"
       SWIFT_KKREPO_SECONDARY_BASE_URL: http://127.0.0.1:18094
       SWIFT_COMPAT_PROXY_VERSION: "1.6.3"
@@ -752,6 +753,7 @@ jobs:
       COMPAT_WRITE_ENABLED: "true"
       CARGO_COMPAT_ENABLED: "true"
       PUB_COMPAT_ENABLED: "true"
+      COMPAT_ASSET_RAW_REPOSITORY: asset-api-raw-hosted
       COMPOSER_COMPAT_ENABLED: "true"
       COMPOSER_NEXUS_REQUIRED: "true"
       SWIFT_COMPAT_ENABLED: "true"

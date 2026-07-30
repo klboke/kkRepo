@@ -29,19 +29,38 @@ public class NexusRepositoryManagementAuthorizer {
     this.securityService = securityService;
   }
 
+  public void requireSearch(HttpServletRequest request) {
+    AuthenticatedSubject subject = requireSubject(request);
+    String permission = "nexus:search:read";
+    request.setAttribute(SecurityManagementFilter.REQUESTED_PERMISSION_ATTRIBUTE, permission);
+    requireAllowed(securityService.decide(subject.permissionSubject(), permission));
+  }
+
   public void requireRepositoryAction(
       HttpServletRequest request,
       RepositoryRecord repository,
       String path,
       PermissionAction action) {
+    requireAllowed(repositoryActionDecision(request, repository, path, action));
+  }
+
+  public boolean repositoryActionAllowed(
+      HttpServletRequest request,
+      RepositoryRecord repository,
+      String path,
+      PermissionAction action) {
+    return repositoryActionDecision(request, repository, path, action).allowed();
+  }
+
+  private AccessDecision repositoryActionDecision(
+      HttpServletRequest request, RepositoryRecord repository, String path, PermissionAction action) {
     AuthenticatedSubject subject = requireSubject(request);
     String permission = "nexus:repository-view:"
         + nexusFormat(repository.format()) + ":" + repository.name() + ":" + action.nexusAction();
     setRequestContext(request, repository, permission);
-    AccessDecision decision = securityService.decide(
+    return securityService.decide(
         subject.permissionSubject(),
         new RepositoryPermission(repository.name(), repository.format(), path == null ? "" : path, action));
-    requireAllowed(decision);
   }
 
   public void requireRepositoryAdmin(
