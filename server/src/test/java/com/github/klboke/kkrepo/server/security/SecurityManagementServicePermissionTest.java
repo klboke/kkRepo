@@ -236,9 +236,10 @@ class SecurityManagementServicePermissionTest {
   }
 
   @Test
-  void ldapExternalGroupUsesMatchingMigratedRole() {
+  void ldapExternalGroupUsesMigratedExternalRoleMapping() {
     FakeSecurityDao dao = new FakeSecurityDao();
-    dao.grant("ldap-engineering", privilege(
+    dao.inherit("ldap-engineering", "engineering");
+    dao.grant("engineering", privilege(
         "nx-repository-view-maven2-releases-read",
         "repository-view",
         Map.of("format", "maven2", "repository", "releases", "actions", "read,browse")));

@@ -48,7 +48,10 @@ class NexusRestClientTest {
     assertEquals(1, inventory.securityExport().apiKeys().size());
     assertEquals("NpmToken", inventory.securityExport().apiKeys().get(0).get("domain"));
     assertEquals("alice-token", inventory.securityExport().apiKeys().get(0).get("api_key"));
-    assertEquals(1, inventory.securityExport().roles().size());
+    assertEquals(2, inventory.securityExport().roles().size());
+    assertEquals(List.of("nx-admin", "ldap-role"), inventory.securityExport().roles().stream()
+        .map(role -> String.valueOf(role.get("id")))
+        .toList());
     assertEquals("nx-admin", inventory.securityExport().roles().get(0).get("id"));
     assertEquals(List.of(), inventory.securityExport().realmOrder());
     assertEquals(false, inventory.securityExport().anonymous().get("enabled"));
@@ -93,8 +96,8 @@ class NexusRestClientTest {
             "privileges", List.of("nx-all"),
             "roles", List.of()),
         Map.of(
-            "id", "ldap-engineering",
-            "name", "LDAP engineering",
+            "id", "engineering",
+            "name", "Engineering",
             "source", "default",
             "privileges", List.of("nx-repository-view-maven2-releases-read"),
             "roles", List.of()),
@@ -103,7 +106,13 @@ class NexusRestClientTest {
             "name", "ldap-engineering",
             "source", "LDAP",
             "privileges", List.of(),
-            "roles", List.of()));
+            "roles", List.of("engineering")),
+        Map.of(
+            "id", "ldap-engineers",
+            "name", "ldap-engineers",
+            "source", "LDAP",
+            "privileges", List.of(),
+            "roles", List.of("engineering")));
 
     NexusInventory inventory = client(nexus).readInventory();
 
@@ -114,10 +123,17 @@ class NexusRestClientTest {
     assertEquals("LDAP", inventory.securityExport().users().get(2).get("source"));
     assertEquals(List.of("ldap-engineering"),
         ((Map<?, ?>) inventory.securityExport().users().get(2).get("attributes")).get("groups"));
-    assertEquals(List.of("ldap-engineering"), inventory.securityExport().roles().stream()
+    assertEquals(List.of("engineering", "ldap-engineering", "ldap-engineers"),
+        inventory.securityExport().roles().stream()
+            .filter(role -> List.of("engineering", "ldap-engineering", "ldap-engineers")
+                .contains(role.get("id")))
+            .map(role -> String.valueOf(role.get("id")))
+            .toList());
+    assertEquals(List.of("engineering"), inventory.securityExport().roles().stream()
         .filter(role -> "ldap-engineering".equals(role.get("id")))
-        .map(role -> String.valueOf(role.get("id")))
-        .toList());
+        .findFirst()
+        .orElseThrow()
+        .get("roles"));
     assertEquals(List.of("nx-admin"), inventory.securityExport().userRoleMappings().stream()
         .filter(mapping -> "banban".equals(mapping.get("userId")))
         .findFirst()
@@ -138,6 +154,11 @@ class NexusRestClientTest {
         .get("groups"));
     assertEquals(List.of("nx-admin"), batch.userRoleMappings().stream()
         .filter(mapping -> "banban".equals(mapping.userId()))
+        .findFirst()
+        .orElseThrow()
+        .roles());
+    assertEquals(List.of("engineering"), batch.roles().stream()
+        .filter(role -> "ldap-engineering".equals(role.id()))
         .findFirst()
         .orElseThrow()
         .roles());
@@ -486,7 +507,7 @@ class NexusRestClientTest {
             "name", "ldap-role",
             "source", "LDAP",
             "privileges", List.of(),
-            "roles", List.of()));
+            "roles", List.of("nx-admin")));
 
     private FakeNexus(boolean scriptApiEnabled) {
       this.scriptApiEnabled = scriptApiEnabled;

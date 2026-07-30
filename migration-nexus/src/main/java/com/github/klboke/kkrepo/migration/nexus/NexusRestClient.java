@@ -40,7 +40,8 @@ public class NexusRestClient {
       };
   private static final String LOCAL_USER_SOURCE = "default";
   private static final String LOCAL_USERS_PATH = "/service/rest/v1/security/users?source=default";
-  private static final String LOCAL_ROLES_PATH = "/service/rest/v1/security/roles?source=default";
+  // The query selects the default manager; its external mappings can still have source=LDAP.
+  private static final String CONFIGURED_ROLES_PATH = "/service/rest/v1/security/roles?source=default";
   private static final String DOCKER_MANIFEST_ACCEPT = String.join(", ",
       "application/vnd.docker.distribution.manifest.v2+json",
       "application/vnd.docker.distribution.manifest.list.v2+json",
@@ -1585,9 +1586,7 @@ public class NexusRestClient {
     mergedUsers = mergeMappedUsers(mergedUsers, userRoleMappings);
     return new SecurityExportResult(new NexusSecurityExport(
         mergedUsers,
-        getList(LOCAL_ROLES_PATH).stream()
-            .filter(NexusRestClient::isLocalRole)
-            .toList(),
+        getList(CONFIGURED_ROLES_PATH),
         getList("/service/rest/v1/security/privileges"),
         userRoleMappings,
         securityScriptProbe.apiKeys(),
@@ -1624,11 +1623,6 @@ public class NexusRestClient {
 
   private static boolean isLocalUser(Map<String, Object> user) {
     String source = firstString(user, "source");
-    return source == null || LOCAL_USER_SOURCE.equalsIgnoreCase(source);
-  }
-
-  private static boolean isLocalRole(Map<String, Object> role) {
-    String source = firstString(role, "source");
     return source == null || LOCAL_USER_SOURCE.equalsIgnoreCase(source);
   }
 
