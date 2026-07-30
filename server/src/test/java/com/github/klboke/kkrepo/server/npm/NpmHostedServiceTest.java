@@ -41,6 +41,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
@@ -169,6 +170,50 @@ class NpmHostedServiceTest {
             null));
 
     assertDirectoryEmpty(tempDir);
+    verify(fixture.writer, never()).writePackageRoot(
+        any(), any(), anyLong(), any(), any(), anyString(), any());
+  }
+
+  @Test
+  void reportsStagedAttachmentReadFailureAndCleansRequest(@TempDir Path tempDir) {
+    Fixture fixture = fixture(tempDir);
+    when(fixture.assetDao.findAssetByPath(10L, "demo")).thenReturn(Optional.empty());
+    AtomicInteger tarballLookups = new AtomicInteger();
+    when(fixture.assetDao.findAssetByPath(10L, "demo/-/demo-1.0.0.tgz"))
+        .thenAnswer(invocation -> {
+          if (tarballLookups.incrementAndGet() == 2) {
+            try (var files = Files.list(tempDir)) {
+              Files.delete(files.findFirst().orElseThrow());
+            }
+          }
+          return Optional.empty();
+        });
+    String body = """
+        {
+          "name":"demo",
+          "versions":{"1.0.0":{"name":"demo","version":"1.0.0",
+            "dist":{"tarball":"demo-1.0.0.tgz"}}},
+          "_attachments":{"demo-1.0.0.tgz":{"data":"dGFyYmFsbA=="}}
+        }
+        """;
+
+    IllegalStateException error = assertThrows(
+        IllegalStateException.class,
+        () -> fixture.service.putPackage(
+            runtime("ALLOW", 7L),
+            PACKAGE,
+            null,
+            new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)),
+            "alice",
+            null));
+
+    assertEquals(
+        "Failed to read staged npm attachment demo-1.0.0.tgz",
+        error.getMessage());
+    assertDirectoryEmpty(tempDir);
+    verify(fixture.writer, never()).writeTarball(
+        any(), any(), anyLong(), any(), anyString(), anyString(), any(),
+        anyString(), anyString(), any(), any());
     verify(fixture.writer, never()).writePackageRoot(
         any(), any(), anyLong(), any(), any(), anyString(), any());
   }

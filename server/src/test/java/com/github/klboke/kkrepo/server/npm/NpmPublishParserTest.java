@@ -81,6 +81,97 @@ class NpmPublishParserTest {
     assertDirectoryEmpty(tempDir);
   }
 
+  @Test
+  void rejectsNonObjectRootAndTrailingJson(@TempDir Path tempDir) {
+    NpmPublishParser parser = new NpmPublishParser(new ObjectMapper(), tempDir);
+
+    assertThrows(
+        IOException.class,
+        () -> parser.parse(new ByteArrayInputStream("[]".getBytes(StandardCharsets.UTF_8))));
+    assertThrows(
+        IOException.class,
+        () -> parser.parse(new ByteArrayInputStream("{}{}".getBytes(StandardCharsets.UTF_8))));
+
+    assertDirectoryEmpty(tempDir);
+  }
+
+  @Test
+  void ignoresNonObjectAttachmentContainersAndEntries(@TempDir Path tempDir) throws Exception {
+    NpmPublishParser parser = new NpmPublishParser(new ObjectMapper(), tempDir);
+
+    try (NpmPublishParser.PublishRequest request = parser.parse(new ByteArrayInputStream("""
+        {"name":"demo","_attachments":["ignored"]}
+        """.getBytes(StandardCharsets.UTF_8)))) {
+      assertTrue(request.attachments().isEmpty());
+    }
+
+    try (NpmPublishParser.PublishRequest request = parser.parse(new ByteArrayInputStream("""
+        {
+          "name":"demo",
+          "_attachments":{
+            "not-an-object":"ignored",
+            "missing-data":{"extra":{"nested":true}}
+          }
+        }
+        """.getBytes(StandardCharsets.UTF_8)))) {
+      assertTrue(request.attachments().isEmpty());
+    }
+
+    assertDirectoryEmpty(tempDir);
+  }
+
+  @Test
+  void keepsLastDuplicateAttachmentAndDeletesReplacedFile(@TempDir Path tempDir)
+      throws Exception {
+    NpmPublishParser parser = new NpmPublishParser(new ObjectMapper(), tempDir);
+    String duplicate = """
+        {
+          "name":"demo",
+          "_attachments":{
+            "demo-1.0.0.tgz":{"data":"Zmlyc3Q="},
+            "demo-1.0.0.tgz":{"data":"c2Vjb25k"}
+          }
+        }
+        """;
+
+    try (NpmPublishParser.PublishRequest request = parser.parse(
+        new ByteArrayInputStream(duplicate.getBytes(StandardCharsets.UTF_8)))) {
+      assertEquals(1, request.attachments().size());
+      assertArrayEquals(
+          "second".getBytes(StandardCharsets.UTF_8),
+          Files.readAllBytes(request.attachments().get(0).file()));
+      try (var files = Files.list(tempDir)) {
+        assertEquals(1L, files.count());
+      }
+    }
+
+    assertDirectoryEmpty(tempDir);
+  }
+
+  @Test
+  void dropsAttachmentWhenLastDataValueIsNull(@TempDir Path tempDir) throws Exception {
+    NpmPublishParser parser = new NpmPublishParser(new ObjectMapper(), tempDir);
+    String cleared = """
+        {
+          "name":"demo",
+          "_attachments":{
+            "demo-1.0.0.tgz":{
+              "data":"Zmlyc3Q=",
+              "ignored":{"nested":true},
+              "data":null
+            }
+          }
+        }
+        """;
+
+    try (NpmPublishParser.PublishRequest request = parser.parse(
+        new ByteArrayInputStream(cleared.getBytes(StandardCharsets.UTF_8)))) {
+      assertTrue(request.attachments().isEmpty());
+    }
+
+    assertDirectoryEmpty(tempDir);
+  }
+
   private static InputStream zeroFilledPublishBody(long decodedBytes) {
     byte[] prefix = """
         {"name":"demo",
