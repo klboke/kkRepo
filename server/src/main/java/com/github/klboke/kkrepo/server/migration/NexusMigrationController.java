@@ -184,6 +184,7 @@ public class NexusMigrationController {
         command.checksumValidation(),
         command.captureNexusPublicAssetIds(),
         command.publicIdBackfillOnly(),
+        repositoryNames(command.publicIdRepositories(), command.publicIdRepositoryNames()),
         parseInstant(command.metadataSince(), "metadataSince"),
         repositoryNames(command.repositories(), command.repositoryNames()),
         repositoryNames(command.backupProxyRepositories(), command.backupProxyRepositoryNames())));
@@ -404,6 +405,8 @@ public class NexusMigrationController {
       String sourceNexusVersion,
       List<String> repositories,
       String repositoryNames,
+      List<String> publicIdRepositories,
+      String publicIdRepositoryNames,
       List<String> backupProxyRepositories,
       String backupProxyRepositoryNames,
       Integer pageSize,

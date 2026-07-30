@@ -131,6 +131,139 @@ class RepositoryDataMigrationServiceTest {
   }
 
   @Test
+  void normalMigrationWithoutRepositoryFilterSelectsAllSupportedHostedRepositories() throws Exception {
+    List<?> sources = sourceRepositories(
+        List.of(),
+        List.of(),
+        inventory(
+            repository("raw-a", "raw", "hosted"),
+            repository("raw-b", "raw", "hosted"),
+            repository("raw-proxy", "raw", "proxy")));
+
+    assertEquals(2, sources.size());
+    assertEquals("raw-a", sourceName(sources.get(0)));
+    assertEquals("raw-b", sourceName(sources.get(1)));
+  }
+
+  @Test
+  void publicIdBackfillScopeSelectsOnlyExplicitHostedRepositories() throws Exception {
+    List<?> sources = sourceRepositories(
+        List.of("raw-b"),
+        List.of(),
+        inventory(
+            repository("raw-a", "raw", "hosted"),
+            repository("raw-b", "raw", "hosted")));
+
+    assertEquals(1, sources.size());
+    assertEquals("raw-b", sourceName(sources.getFirst()));
+  }
+
+  @Test
+  void publicIdCaptureRequiresExplicitRepositoryScope() {
+    RepositoryDataMigrationService service = new RepositoryDataMigrationService(
+        null, null, null, null, mock(PlatformTransactionManager.class));
+    RepositoryDataMigrationService.RepositoryDataMigrationRequest request =
+        new RepositoryDataMigrationService.RepositoryDataMigrationRequest(
+            "http://localhost:28090",
+            "admin",
+            "secret",
+            "3.29.2-02",
+            100,
+            1,
+            true,
+            true,
+            false,
+            List.of(),
+            null,
+            List.of(),
+            List.of());
+
+    IllegalArgumentException thrown = assertThrows(
+        IllegalArgumentException.class,
+        () -> service.start(request));
+
+    assertEquals(
+        "publicIdRepositories is required when Nexus public ID capture is enabled",
+        thrown.getMessage());
+  }
+
+  @Test
+  void publicIdBackfillRequiresExplicitRepositoryScope() {
+    RepositoryDataMigrationService service = new RepositoryDataMigrationService(
+        null, null, null, null, mock(PlatformTransactionManager.class));
+    RepositoryDataMigrationService.RepositoryDataMigrationRequest request =
+        new RepositoryDataMigrationService.RepositoryDataMigrationRequest(
+            "http://localhost:28090",
+            "admin",
+            "secret",
+            "3.29.2-02",
+            100,
+            1,
+            true,
+            false,
+            true,
+            List.of(),
+            null,
+            List.of(),
+            List.of());
+
+    IllegalArgumentException thrown = assertThrows(
+        IllegalArgumentException.class,
+        () -> service.start(request));
+
+    assertEquals(
+        "publicIdRepositories is required when Nexus public ID capture is enabled",
+        thrown.getMessage());
+  }
+
+  @Test
+  void publicIdBackfillRejectsProxyBackupScopeBeforeReadingNexus() {
+    RepositoryDataMigrationService service = new RepositoryDataMigrationService(
+        null, null, null, null, mock(PlatformTransactionManager.class));
+    RepositoryDataMigrationService.RepositoryDataMigrationRequest request =
+        new RepositoryDataMigrationService.RepositoryDataMigrationRequest(
+            "http://localhost:28090",
+            "admin",
+            "secret",
+            "3.29.2-02",
+            100,
+            1,
+            true,
+            false,
+            true,
+            List.of("raw-hosted"),
+            null,
+            List.of(),
+            List.of("raw-proxy"));
+
+    IllegalArgumentException thrown = assertThrows(
+        IllegalArgumentException.class,
+        () -> service.start(request));
+
+    assertEquals(
+        "backupProxyRepositories is not supported for public ID backfill-only jobs",
+        thrown.getMessage());
+  }
+
+  @Test
+  void publicIdRepositoriesMustBeWithinSelectedHostedRepositories() throws Exception {
+    List<?> sources = sourceRepositories(
+        List.of("raw-a"),
+        List.of(),
+        inventory(
+            repository("raw-a", "raw", "hosted"),
+            repository("raw-b", "raw", "hosted")));
+
+    IllegalArgumentException thrown = assertThrows(
+        IllegalArgumentException.class,
+        () -> validatePublicIdRepositories(List.of("raw-b"), sources));
+
+    assertEquals(
+        "Public ID repositories must be selected supported hosted repositories: [raw-b]",
+        thrown.getMessage());
+  }
+
+  @Test
   void repositoryDataJobOptionsPersistProfileAndPlanHashes() throws Exception {
     NexusInventory inventory = inventory(
         repository("docker-hosted", "docker", "hosted"));
@@ -153,6 +286,7 @@ class RepositoryDataMigrationServiceTest {
             true,
             true,
             false,
+            List.of("docker-hosted"),
             Instant.parse("2026-06-30T00:00:00Z"),
             List.of("docker-hosted"),
             List.of());
@@ -167,6 +301,7 @@ class RepositoryDataMigrationServiceTest {
     assertEquals(List.of("docker-hosted"), options.get("repositories"));
     assertEquals(true, options.get("captureNexusPublicAssetIds"));
     assertEquals(false, options.get("publicIdBackfillOnly"));
+    assertEquals(List.of("docker-hosted"), options.get("publicIdRepositories"));
   }
 
   @Test
@@ -186,6 +321,7 @@ class RepositoryDataMigrationServiceTest {
             true,
             null,
             null,
+            List.of(),
             null,
             List.of("docker-hosted"),
             List.of());
@@ -219,6 +355,7 @@ class RepositoryDataMigrationServiceTest {
             false,
             true,
             true,
+            List.of("docker-hosted"),
             2,
             true,
             false,
@@ -240,6 +377,7 @@ class RepositoryDataMigrationServiceTest {
     assertEquals(plan, summary.get("migrationPlan"));
     assertEquals(true, summary.get("captureNexusPublicAssetIds"), "capture mode should be visible");
     assertEquals(true, summary.get("publicIdBackfillOnly"), "backfill-only mode should be visible");
+    assertEquals(List.of("docker-hosted"), summary.get("publicIdRepositories"));
     assertEquals(2L, summary.get("nexusPublicIdMappedAssets"), "mapped asset count should be visible");
     assertEquals(false, summary.containsKey("sourcePassword"));
   }
@@ -256,6 +394,7 @@ class RepositoryDataMigrationServiceTest {
     RepositoryDataMigrationService.RepositoryDataMigrationStatus status = service.status(7L);
 
     assertEquals(0L, status.nexusPublicIdMappedAssets(), "non-capture jobs should report zero aliases");
+    assertEquals(null, status.publicIdRepositories(), "legacy jobs should retain an unrestricted scope");
     verify(migrationDao, never()).nexusPublicIdMappedAssets(7L);
   }
 
@@ -265,7 +404,10 @@ class RepositoryDataMigrationServiceTest {
     RepositoryDataMigrationDao migrationDao = mock(RepositoryDataMigrationDao.class);
     RepositoryDataMigrationService service = service(jobDao, migrationDao);
     when(jobDao.findById(8L)).thenReturn(Optional.of(job(
-        8L, Map.of("captureNexusPublicAssetIds", true, "publicIdBackfillOnly", true))));
+        8L, Map.of(
+            "captureNexusPublicAssetIds", true,
+            "publicIdBackfillOnly", true,
+            "publicIdRepositories", List.of("docker-hosted")))));
     when(migrationDao.listRepositories(8L)).thenReturn(List.of());
     when(migrationDao.jobProgress(8L)).thenReturn(progress());
     when(migrationDao.nexusPublicIdMappedAssets(8L)).thenReturn(Map.of(81L, 3L, 82L, 4L));
@@ -274,6 +416,7 @@ class RepositoryDataMigrationServiceTest {
 
     assertEquals(7L, status.nexusPublicIdMappedAssets(), "capture jobs should report live alias counts");
     verify(migrationDao).nexusPublicIdMappedAssets(8L);
+    assertEquals(List.of("docker-hosted"), status.publicIdRepositories());
   }
 
   private static RepositoryDataMigrationService service(
@@ -334,6 +477,25 @@ class RepositoryDataMigrationServiceTest {
     method.setAccessible(true);
     return (String) method.invoke(sourceRepository);
   }
+
+  private static void validatePublicIdRepositories(
+      List<String> publicIdRepositories,
+      List<?> sourceRepositories) throws Exception {
+    Method method = RepositoryDataMigrationService.class.getDeclaredMethod(
+        "validatePublicIdRepositories",
+        List.class,
+        List.class);
+    method.setAccessible(true);
+    try {
+      method.invoke(null, publicIdRepositories, sourceRepositories);
+    } catch (InvocationTargetException e) {
+      if (e.getCause() instanceof RuntimeException runtime) {
+        throw runtime;
+      }
+      throw e;
+    }
+  }
+
 
   private static String sourceMigrationMode(Object sourceRepository) throws Exception {
     Method method = sourceRepository.getClass().getDeclaredMethod("migrationMode");

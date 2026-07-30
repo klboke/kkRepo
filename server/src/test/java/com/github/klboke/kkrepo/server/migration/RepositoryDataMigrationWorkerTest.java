@@ -254,7 +254,7 @@ class RepositoryDataMigrationWorkerTest {
               Instant.class,
               RepositoryDataMigrationWorker.SourceAccess.class
           },
-          repository, page, null, sourceAccess(client, true, true)));
+          repository, page, null, sourceAccess(client, true, true, Set.of("source"))));
 
       verify(fixture.publicIdCaptureService).capture(
           eq(client), eq("http://nexus.example"), eq(100L), eq("source"), eq(9L), any(), eq(30L));
@@ -416,7 +416,7 @@ class RepositoryDataMigrationWorkerTest {
       invoke(
           fixture.worker, "migrateOne",
           new Class<?>[] {AssetClaim.class, RepositoryDataMigrationWorker.SourceAccess.class},
-          claim, sourceAccess(client, true, false));
+          claim, sourceAccess(client, true, false, Set.of("source")));
 
       verify(fixture.publicIdCaptureService).capture(
           client, "http://nexus.example", 100L, "source", 1L, claim.asset(), 30L);
@@ -503,6 +503,41 @@ class RepositoryDataMigrationWorkerTest {
     assertEquals("UNKNOWN", invokeStatic(
         "metadataEngine", new Class<?>[] {Map.class}, Map.of()));
   }
+
+  @Test
+  void sourceAccessPreservesLegacyCaptureScopeAndHonorsExplicitAllowlist() {
+    Fixture fixture = fixture();
+    try {
+      RepositoryDataMigrationWorker.SourceAccess legacy =
+          (RepositoryDataMigrationWorker.SourceAccess) invoke(
+              fixture.worker,
+              "sourceAccess",
+              new Class<?>[] {Map.class, String.class},
+              Map.of(
+                  "sourceUsername", "admin",
+                  "sourcePassword", "secret",
+                  "captureNexusPublicAssetIds", true),
+              "http://nexus.example");
+      RepositoryDataMigrationWorker.SourceAccess scoped =
+          (RepositoryDataMigrationWorker.SourceAccess) invoke(
+              fixture.worker,
+              "sourceAccess",
+              new Class<?>[] {Map.class, String.class},
+              Map.of(
+                  "captureNexusPublicAssetIds", true,
+                  "sourceUsername", "admin",
+                  "sourcePassword", "secret",
+                  "publicIdRepositories", List.of("selected")),
+              "http://nexus.example");
+
+      assertTrue(legacy.capturesPublicIds("source"));
+      assertTrue(scoped.capturesPublicIds("selected"));
+      assertFalse(scoped.capturesPublicIds("source"));
+    } finally {
+      fixture.worker.shutdown();
+    }
+  }
+
 
   private static Fixture fixture() {
     MigrationJobDao migrationJobDao = mock(MigrationJobDao.class);
@@ -606,14 +641,23 @@ class RepositoryDataMigrationWorkerTest {
   }
 
   private static RepositoryDataMigrationWorker.SourceAccess sourceAccess(
-      NexusRestClient client, boolean capturePublicIds, boolean backfillOnly) {
+      NexusRestClient client,
+      boolean capturePublicIds,
+      boolean backfillOnly,
+      Set<String> publicIdRepositories) {
     return new RepositoryDataMigrationWorker.SourceAccess(
         client,
         "UNKNOWN",
         true,
         capturePublicIds,
         backfillOnly,
+        publicIdRepositories,
         "http://nexus.example");
+  }
+
+  private static RepositoryDataMigrationWorker.SourceAccess sourceAccess(
+      NexusRestClient client, boolean capturePublicIds, boolean backfillOnly) {
+    return sourceAccess(client, capturePublicIds, backfillOnly, null);
   }
 
   private static AssetClaim claim(long repositoryJobId, long migrationJobId, String path) {

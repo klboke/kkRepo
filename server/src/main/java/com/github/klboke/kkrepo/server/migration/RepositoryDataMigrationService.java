@@ -28,7 +28,9 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.stereotype.Service;
+import java.util.stream.Collectors;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -69,6 +71,19 @@ class RepositoryDataMigrationService {
     boolean publicIdBackfillOnly = Boolean.TRUE.equals(request.publicIdBackfillOnly());
     boolean captureNexusPublicAssetIds = publicIdBackfillOnly
         || Boolean.TRUE.equals(request.captureNexusPublicAssetIds());
+    List<String> publicIdRepositories = normalizeNames(request.publicIdRepositories());
+    if (captureNexusPublicAssetIds && publicIdRepositories.isEmpty()) {
+      throw new IllegalArgumentException(
+          "publicIdRepositories is required when Nexus public ID capture is enabled");
+    }
+    List<String> requestedRepositories = publicIdBackfillOnly
+        ? publicIdRepositories
+        : normalizeNames(request.repositories());
+    List<String> backupProxyRepositories = normalizeNames(request.backupProxyRepositories());
+    if (publicIdBackfillOnly && !backupProxyRepositories.isEmpty()) {
+      throw new IllegalArgumentException(
+          "backupProxyRepositories is not supported for public ID backfill-only jobs");
+    }
     NexusInventory inventory = new NexusRestClient(
         request.sourceBaseUrl(),
         request.sourceUsername(),
@@ -78,17 +93,18 @@ class RepositoryDataMigrationService {
     NexusMigrationPlan migrationPlan = new MigrationPlanBuilder().build(
         sourceProfile,
         new MigrationScope(
-            requestedScope(request.repositories(), request.backupProxyRepositories()),
+            requestedScope(requestedRepositories, backupProxyRepositories),
             true,
-            !normalizeNames(request.backupProxyRepositories()).isEmpty()));
+            !backupProxyRepositories.isEmpty()));
     List<SourceRepository> sourceRepositories = sourceRepositories(
         inventory,
-        request.repositories(),
-        request.backupProxyRepositories(),
+        requestedRepositories,
+        backupProxyRepositories,
         migrationPlan);
     if (sourceRepositories.isEmpty()) {
       throw new IllegalArgumentException("No supported source repositories matched the request");
     }
+    validatePublicIdRepositories(publicIdRepositories, sourceRepositories);
     Map<String, RepositoryRecord> targets = targetRepositories(sourceRepositories);
     List<String> missingTargets = sourceRepositories.stream()
         .filter(source -> !targets.containsKey(source.name()))
@@ -156,6 +172,7 @@ class RepositoryDataMigrationService {
     Map<String, Object> options = jobOptions(job);
     boolean captureNexusPublicAssetIds = optionBoolean(options, "captureNexusPublicAssetIds");
     boolean publicIdBackfillOnly = optionBoolean(options, "publicIdBackfillOnly");
+    List<String> publicIdRepositories = optionNames(options, "publicIdRepositories");
     Map<Long, Long> nexusPublicIdMappedAssets = captureNexusPublicAssetIds
         ? migrationDao.nexusPublicIdMappedAssets(jobId)
         : Map.of();
@@ -174,6 +191,7 @@ class RepositoryDataMigrationService {
         packageMigrationEnabled(job),
         captureNexusPublicAssetIds,
         publicIdBackfillOnly,
+        publicIdRepositories,
         nexusPublicIdMappedAssets.values().stream().mapToLong(Long::longValue).sum(),
         progress.active(),
         progress.failedRepositories(),
@@ -284,6 +302,26 @@ class RepositoryDataMigrationService {
     return List.copyOf(selected.values());
   }
 
+  private static void validatePublicIdRepositories(
+      List<String> publicIdRepositories,
+      List<SourceRepository> sourceRepositories) {
+    if (publicIdRepositories.isEmpty()) {
+      return;
+    }
+    Set<String> selectedHostedRepositories = sourceRepositories.stream()
+        .filter(source -> MODE_HOSTED.equals(source.migrationMode()))
+        .map(SourceRepository::name)
+        .collect(Collectors.toSet());
+    List<String> invalid = publicIdRepositories.stream()
+        .filter(name -> !selectedHostedRepositories.contains(name))
+        .toList();
+    if (!invalid.isEmpty()) {
+      throw new IllegalArgumentException(
+          "Public ID repositories must be selected supported hosted repositories: " + invalid);
+    }
+  }
+
+
   private static boolean planAllowsRepositoryData(String repositoryName, NexusMigrationPlan migrationPlan) {
     if (migrationPlan == null) {
       return true;
@@ -377,6 +415,7 @@ class RepositoryDataMigrationService {
     options.put("concurrency", concurrency);
     options.put("checksumValidation", checksumValidation);
     options.put("captureNexusPublicAssetIds", captureNexusPublicAssetIds);
+    options.put("publicIdRepositories", normalizeNames(request.publicIdRepositories()));
     options.put("publicIdBackfillOnly", publicIdBackfillOnly);
     options.put("packageMigrationEnabled", false);
     options.put("repositories", repositories.stream().map(SourceRepository::name).toList());
@@ -485,6 +524,33 @@ class RepositoryDataMigrationService {
     return Boolean.TRUE.equals(value) || "true".equalsIgnoreCase(String.valueOf(value));
   }
 
+  private static List<String> optionNames(Map<String, Object> options, String name) {
+    if (!options.containsKey(name)) {
+      return null;
+    }
+    Object value = options.get(name);
+    if (value instanceof Iterable<?> values) {
+      List<String> names = new ArrayList<>();
+      for (Object candidate : values) {
+        String normalized = string(candidate);
+        if (normalized != null) {
+          names.add(normalized);
+        }
+      }
+      return normalizeNames(names);
+    }
+    String text = string(value);
+    if (text == null) {
+      return List.of();
+    }
+    List<String> names = new ArrayList<>();
+    for (String candidate : text.split("[,\\s]+")) {
+      names.add(candidate);
+    }
+    return normalizeNames(names);
+  }
+
+
   record RepositoryDataMigrationRequest(
       String sourceBaseUrl,
       String sourceUsername,
@@ -495,6 +561,7 @@ class RepositoryDataMigrationService {
       Boolean checksumValidation,
       Boolean captureNexusPublicAssetIds,
       Boolean publicIdBackfillOnly,
+      List<String> publicIdRepositories,
       Instant metadataSince,
       List<String> repositories,
       List<String> backupProxyRepositories) {
@@ -515,6 +582,7 @@ class RepositoryDataMigrationService {
       boolean packageMigrationEnabled,
       boolean captureNexusPublicAssetIds,
       boolean publicIdBackfillOnly,
+      List<String> publicIdRepositories,
       long nexusPublicIdMappedAssets,
       boolean active,
       boolean failedRepositories,
@@ -539,6 +607,7 @@ class RepositoryDataMigrationService {
       summary.put("failedAssets", failedAssets);
       summary.put("pendingAssets", pendingAssets);
       summary.put("packageMigrationEnabled", packageMigrationEnabled);
+      putIfNotNull(summary, "publicIdRepositories", publicIdRepositories);
       summary.put("captureNexusPublicAssetIds", captureNexusPublicAssetIds);
       summary.put("publicIdBackfillOnly", publicIdBackfillOnly);
       summary.put("nexusPublicIdMappedAssets", nexusPublicIdMappedAssets);

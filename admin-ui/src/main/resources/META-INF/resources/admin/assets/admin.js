@@ -3814,7 +3814,9 @@ function repositoryDataMigrationPayload() {
     checksumValidation: document.getElementById("repository-data-migration-checksum-validation").checked,
     captureNexusPublicAssetIds: document.getElementById("repository-data-migration-capture-public-ids").checked,
     publicIdBackfillOnly: document.getElementById("repository-data-migration-public-id-backfill-only").checked,
+    publicIdRepositories: nameListValue("repository-data-migration-public-id-repositories"),
     metadataSince: dateTimeInstantValue("repository-data-migration-metadata-since"),
+    repositories: nameListValue("repository-data-migration-repositories"),
     backupProxyRepositories: nameListValue("repository-data-migration-backup-proxies")
   };
 }
@@ -3856,6 +3858,11 @@ function renderRepositoryDataMigrationStatus(payload, title = "Repository data m
   const publicIdMode = payload.publicIdBackfillOnly
     ? "Backfill only"
     : payload.captureNexusPublicAssetIds ? "Capture during migration" : "Disabled";
+  const publicIdScope = payload.publicIdRepositories == null
+    ? (payload.captureNexusPublicAssetIds ? "Legacy: all selected repositories" : "-")
+    : payload.publicIdRepositories.length
+      ? payload.publicIdRepositories.join(", ")
+      : "-";
   result.hidden = false;
   result.innerHTML = `
     <div class="form-title">${escapeHtml(title)}</div>
@@ -3872,6 +3879,7 @@ function renderRepositoryDataMigrationStatus(payload, title = "Repository data m
       <div><span>Pending</span><strong>${escapeHtml(compactNumber(pendingAssets))}</strong></div>
       <div><span>Failed</span><strong>${escapeHtml(compactNumber(failedAssets))}</strong></div>
       <div><span>Public ID mode</span><strong>${escapeHtml(publicIdMode)}</strong></div>
+      <div><span>Public ID scope</span><strong>${escapeHtml(publicIdScope)}</strong></div>
       <div><span>Nexus ID mapped assets</span><strong>${escapeHtml(compactNumber(payload.nexusPublicIdMappedAssets))}</strong></div>
       <div><span>Package progress</span><strong>${escapeHtml(formatPercent(packagePercent))}</strong></div>
     </div>
@@ -4035,12 +4043,20 @@ function renderRepositoryDataMigrationError(title, message) {
 
 async function startRepositoryDataMetadataMigration() {
   if (!validateRequiredFields(repositoryDataMigrationRequiredFields)) return;
+  const migrationRequest = repositoryDataMigrationPayload();
+  if ((migrationRequest.captureNexusPublicAssetIds || migrationRequest.publicIdBackfillOnly)
+      && !migrationRequest.publicIdRepositories.length) {
+    document.getElementById("repository-data-migration-public-id-repositories").focus();
+    showToast("Public ID repositories are required when public ID capture is enabled.", "error");
+    return;
+  }
+
   try {
     showToast("Syncing repository metadata...");
     const response = await fetch("/internal/migration/nexus/repository-data/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(repositoryDataMigrationPayload())
+      body: JSON.stringify(migrationRequest)
     });
     if (!response.ok) throw new Error(await responseErrorMessage(response));
     const payload = await response.json();

@@ -207,6 +207,8 @@ class NexusMigrationControllerTest {
             null,
             List.of(),
             null,
+            List.of(),
+            null,
             100,
             1,
             true,
@@ -233,6 +235,8 @@ class NexusMigrationControllerTest {
             "3.29.2-02",
             List.of("docker-hosted"),
             "docker-extra docker-second,docker-third",
+            List.of("raw-hosted"),
+            "raw-extra",
             List.of("docker-proxy"),
             "docker-proxy-extra",
             100,
@@ -252,8 +256,12 @@ class NexusMigrationControllerTest {
         List.of("docker-hosted", "docker-extra", "docker-second", "docker-third"),
         method.invoke(null, command.repositories(), command.repositoryNames()));
     assertEquals(
+        List.of("raw-hosted", "raw-extra"),
+        method.invoke(null, command.publicIdRepositories(), command.publicIdRepositoryNames()));
+    assertEquals(
         List.of("docker-proxy", "docker-proxy-extra"),
-        method.invoke(null, command.backupProxyRepositories(), command.backupProxyRepositoryNames()));
+        method.invoke(
+            null, command.backupProxyRepositories(), command.backupProxyRepositoryNames()));
   }
 
   @Test

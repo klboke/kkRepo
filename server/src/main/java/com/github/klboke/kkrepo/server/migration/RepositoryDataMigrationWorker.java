@@ -275,7 +275,7 @@ class RepositoryDataMigrationWorker {
         });
     Map<ByteBuffer, RepositoryDataMigrationDao.TargetAssetRef> targetRefs =
         existingTargets == null ? Map.of() : existingTargets;
-    if (source.captureNexusPublicAssetIds()) {
+    if (source.capturesPublicIds(repositoryJob.sourceRepositoryName())) {
       for (RepositoryDataMigrationAssetRecord record : records) {
         RepositoryDataMigrationDao.TargetAssetRef target = targetRefs.get(
             ByteBuffer.wrap(record.sourcePathHash()));
@@ -437,7 +437,7 @@ class RepositoryDataMigrationWorker {
           contentType,
           source.checksumValidation() && shouldValidateDownloadedSize(claim),
           downloadEvidence(response));
-      if (source.captureNexusPublicAssetIds()) {
+      if (source.capturesPublicIds(claim.sourceRepositoryName())) {
         publicIdCaptureService.capture(
             source.client(),
             source.sourceInstance(),
@@ -579,12 +579,14 @@ class RepositoryDataMigrationWorker {
     boolean checksumValidation = bool(options.get("checksumValidation"), true);
     boolean captureNexusPublicAssetIds = bool(options.get("captureNexusPublicAssetIds"), false);
     boolean publicIdBackfillOnly = bool(options.get("publicIdBackfillOnly"), false);
+    Set<String> publicIdRepositories = optionNames(options, "publicIdRepositories");
     return new SourceAccess(
         new NexusRestClient(sourceBaseUrl, sourceUsername, sourcePassword, objectMapper),
         metadataEngine(options),
         checksumValidation,
         captureNexusPublicAssetIds || publicIdBackfillOnly,
         publicIdBackfillOnly,
+        publicIdRepositories,
         sourceBaseUrl);
   }
 
@@ -826,6 +828,34 @@ class RepositoryDataMigrationWorker {
     return text.isEmpty() ? null : text;
   }
 
+  private static Set<String> optionNames(Map<String, Object> options, String name) {
+    if (!options.containsKey(name)) {
+      return null;
+    }
+    Object value = options.get(name);
+    LinkedHashSet<String> names = new LinkedHashSet<>();
+    if (value instanceof Iterable<?> values) {
+      for (Object candidate : values) {
+        String normalized = string(candidate);
+        if (normalized != null) {
+          names.add(normalized);
+        }
+      }
+    } else {
+      String text = string(value);
+      if (text != null) {
+        for (String candidate : text.split("[,\\s]+")) {
+          String normalized = string(candidate);
+          if (normalized != null) {
+            names.add(normalized);
+          }
+        }
+      }
+    }
+    return Set.copyOf(names);
+  }
+
+
   private static void putIfPresent(Map<String, Object> target, String key, Object value) {
     if (value != null) {
       target.put(key, value);
@@ -846,7 +876,13 @@ class RepositoryDataMigrationWorker {
       boolean checksumValidation,
       boolean captureNexusPublicAssetIds,
       boolean publicIdBackfillOnly,
+      Set<String> publicIdRepositories,
       String sourceInstance) {
+
+    boolean capturesPublicIds(String repositoryName) {
+      return captureNexusPublicAssetIds
+          && (publicIdRepositories == null || publicIdRepositories.contains(repositoryName));
+    }
   }
 
   private record CompletedWork<T>(T item, Throwable failure) {

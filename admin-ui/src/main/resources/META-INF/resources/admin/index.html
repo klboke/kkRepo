@@ -1002,6 +1002,7 @@
               <label><span>Page size</span><input id="repository-data-migration-page-size" type="number" min="100" max="5000" value="1000"></label>
               <label><span>Concurrency</span><input id="repository-data-migration-concurrency" type="number" min="1" max="64" value="8"></label>
               <label><span>Metadata since</span><input id="repository-data-migration-metadata-since" type="datetime-local"></label>
+              <label class="full-width"><span>Optional hosted repositories</span><textarea id="repository-data-migration-repositories" rows="2" spellcheck="false" placeholder="hosted-repository-a"></textarea></label>
               <label class="checkbox-field">
                 <input id="repository-data-migration-checksum-validation" type="checkbox" checked>
                 <span>Validate size</span>
@@ -1014,6 +1015,7 @@
                 <input id="repository-data-migration-public-id-backfill-only" type="checkbox">
                 <span>Public ID backfill only</span>
               </label>
+              <label class="full-width"><span>Public ID repositories <span class="required-mark">*</span></span><textarea id="repository-data-migration-public-id-repositories" rows="2" spellcheck="false" placeholder="hosted-repository-a"></textarea></label>
               <label class="full-width"><span>Optional proxy repositories</span><textarea id="repository-data-migration-backup-proxies" rows="2" spellcheck="false" placeholder="maven-proxy-backup"></textarea></label>
             </div>
             <div class="form-actions">
@@ -1030,8 +1032,8 @@
       </main>
     </div>
 
-    <script src="/login/assets/ui-i18n.js?v=20260729-public-id-backfill-1"></script>
+    <script src="/login/assets/ui-i18n.js?v=20260730-public-id-scope-1"></script>
     <script src="./assets/admin-filter.js?v=20260706-wildcard-filter-1"></script>
-    <script src="./assets/admin.js?v=20260729-public-id-backfill-1"></script>
+    <script src="./assets/admin.js?v=20260730-public-id-scope-1"></script>
   </body>
 </html>
