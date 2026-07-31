@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.management;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
@@ -36,6 +37,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 class NexusComponentSearchServiceTest {
@@ -108,6 +110,16 @@ class NexusComponentSearchServiceTest {
     verify(componentDao).searchPage(criteria.capture(), eq(0L), eq(51));
     assertEquals("demo-api", criteria.getValue().keyword());
     assertEquals(RepositoryFormat.MAVEN2, criteria.getValue().format());
+  }
+
+  @Test
+  void searchTransactionAllowsDurablePublicIdRegistration() throws Exception {
+    Transactional transaction = NexusComponentSearchService.class
+        .getMethod("search", SearchRequest.class, jakarta.servlet.http.HttpServletRequest.class)
+        .getAnnotation(Transactional.class);
+
+    assertNotNull(transaction);
+    assertFalse(transaction.readOnly());
   }
 
   @Test

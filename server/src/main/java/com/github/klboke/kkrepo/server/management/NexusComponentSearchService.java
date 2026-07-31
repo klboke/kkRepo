@@ -54,7 +54,7 @@ public class NexusComponentSearchService {
     this.assetManagementService = assetManagementService;
   }
 
-  @Transactional(readOnly = true)
+  @Transactional
   public ComponentPage search(SearchRequest search, HttpServletRequest request) {
     SearchSpec spec = SearchSpec.from(search);
     authorizer.requireSearch(request);
