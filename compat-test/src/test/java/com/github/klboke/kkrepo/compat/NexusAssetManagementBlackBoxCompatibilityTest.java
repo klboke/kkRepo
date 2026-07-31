@@ -81,8 +81,8 @@ class NexusAssetManagementBlackBoxCompatibilityTest {
       assertEquals(204, upload(candidate, repository, directory, filename, payload).status(),
           "candidate Raw multipart upload");
 
-      JsonNode referenceAsset = oneAsset(search(reference, repository, path));
-      JsonNode candidateAsset = oneAsset(search(candidate, repository, path));
+      JsonNode referenceAsset = awaitOnlyAssetByPath(reference, repository, path);
+      JsonNode candidateAsset = awaitOnlyAssetByPath(candidate, repository, path);
       referenceId = requiredText(referenceAsset, "id");
       candidateId = requiredText(candidateAsset, "id");
       assertAsset(referenceAsset, repository, path, payload);
@@ -119,8 +119,8 @@ class NexusAssetManagementBlackBoxCompatibilityTest {
       assertEquals(404, send(candidate.request(
           "/service/rest/v1/assets/" + encodeSegment(requiredText(candidateAsset, "id")))
           .GET()).status(), "candidate GET after delete");
-      assertEmptyPage(search(reference, repository, path));
-      assertEmptyPage(search(candidate, repository, path));
+      awaitEmptySearch(reference, repository, path);
+      awaitEmptySearch(candidate, repository, path);
     } finally {
       deleteQuietly(reference, referenceId);
       deleteQuietly(candidate, candidateId);
@@ -136,50 +136,90 @@ class NexusAssetManagementBlackBoxCompatibilityTest {
     String repository = setting(
         "compat.asset.mavenRepository", "COMPAT_ASSET_MAVEN_REPOSITORY")
         .orElse("maven-releases");
-    String suffix = Long.toUnsignedString(System.nanoTime());
-    String groupId = "com.kkrepo.compat";
-    String artifactName = "asset-api-fixture-" + suffix;
-    String version = "1.0.0";
-    String path = groupId.replace('.', '/') + "/" + artifactName + "/" + version + "/"
-        + artifactName + "-" + version + ".jar";
-    byte[] payload = ("Maven asset component fixture " + suffix + "\n")
-        .getBytes(StandardCharsets.UTF_8);
-    byte[] pom = ("""
-        <project xmlns="http://maven.apache.org/POM/4.0.0">
-          <modelVersion>4.0.0</modelVersion>
-          <groupId>%s</groupId>
-          <artifactId>%s</artifactId>
-          <version>%s</version>
-        </project>
-        """.formatted(groupId, artifactName, version)).getBytes(StandardCharsets.UTF_8);
+    try (MavenRepositoryBlackBoxCompatibilityTest.ReleaseDeployment deployment =
+        MavenRepositoryBlackBoxCompatibilityTest.deployReleaseFixture(
+            repository,
+            reference.baseUrl(),
+            CompatDefaults.nexusUsername().orElseThrow(),
+            CompatDefaults.nexusPassword().orElseThrow(),
+            candidate.baseUrl(),
+            CompatDefaults.nexusPlusUsername().orElseThrow(),
+            CompatDefaults.nexusPlusPassword().orElseThrow())) {
+      String artifactName = deployment.artifactId();
+      String path = deployment.jarPath();
+      JsonNode referenceAsset = awaitAssetByPath(reference, repository, artifactName, path);
+      JsonNode candidateAsset = awaitAssetByPath(candidate, repository, artifactName, path);
+      assertEquals(path, requiredText(referenceAsset, "path"));
+      assertEquals(path, requiredText(candidateAsset, "path"));
+      assertTrue(!artifactName.equals(path), "component name must differ from the asset path");
+    }
+  }
 
-    assertEquals(204, uploadMavenComponent(
-        reference, repository, groupId, artifactName, version, payload, pom).status(),
-        "reference Maven component upload");
-    assertEquals(204, uploadMavenComponent(
-        candidate, repository, groupId, artifactName, version, payload, pom).status(),
-        "candidate Maven component upload");
-
-    JsonNode referenceAsset = awaitAssetByPath(reference, repository, artifactName, path);
-    JsonNode candidateAsset = awaitAssetByPath(candidate, repository, artifactName, path);
-    assertEquals(path, requiredText(referenceAsset, "path"));
-    assertEquals(path, requiredText(candidateAsset, "path"));
-    assertTrue(!artifactName.equals(path), "component name must differ from the asset path");
+  private static JsonNode awaitOnlyAssetByPath(
+      Endpoint endpoint, String repository, String path) throws Exception {
+    JsonNode page = awaitSearchPageWithPath(endpoint, repository, path, path);
+    assertEquals(1, page.path("items").size(), "exact path search must return one asset");
+    assertTrue(page.path("continuationToken").isNull(), "exact path search has no next page");
+    return page.path("items").get(0);
   }
 
   private static JsonNode awaitAssetByPath(
       Endpoint endpoint, String repository, String componentName, String expectedPath)
       throws Exception {
-    for (int attempt = 0; attempt < 40; attempt++) {
-      JsonNode items = json(search(endpoint, repository, componentName)).path("items");
+    JsonNode page = awaitSearchPageWithPath(endpoint, repository, componentName, expectedPath);
+    for (JsonNode item : page.path("items")) {
+      if (expectedPath.equals(item.path("path").asText())) {
+        return item;
+      }
+    }
+    throw new AssertionError("search result lost expected asset " + expectedPath);
+  }
+
+  private static JsonNode awaitSearchPageWithPath(
+      Endpoint endpoint, String repository, String name, String expectedPath) throws Exception {
+    byte[] lastBody = new byte[0];
+    for (int attempt = 0; attempt < 120; attempt++) {
+      lastBody = search(endpoint, repository, name);
+      JsonNode page = json(lastBody);
+      JsonNode items = page.path("items");
       for (JsonNode item : items) {
         if (expectedPath.equals(item.path("path").asText())) {
-          return item;
+          return page;
         }
       }
       Thread.sleep(500);
     }
-    throw new AssertionError("asset search did not index " + expectedPath + " at " + endpoint.baseUrl);
+    throw new AssertionError(
+        "asset search did not index expectedPath=" + expectedPath
+            + ", repository=" + repository
+            + ", name=" + name
+            + ", endpoint=" + endpoint.baseUrl()
+            + ", lastResponse=" + diagnosticBody(lastBody));
+  }
+
+  private static void awaitEmptySearch(Endpoint endpoint, String repository, String name)
+      throws Exception {
+    byte[] lastBody = new byte[0];
+    for (int attempt = 0; attempt < 120; attempt++) {
+      lastBody = search(endpoint, repository, name);
+      JsonNode page = json(lastBody);
+      if (page.path("items").isArray() && page.path("items").isEmpty()) {
+        assertTrue(page.path("continuationToken").isNull(),
+            "empty search continuationToken must be null");
+        return;
+      }
+      Thread.sleep(500);
+    }
+    throw new AssertionError(
+        "asset search did not become empty for repository=" + repository
+            + ", name=" + name
+            + ", endpoint=" + endpoint.baseUrl()
+            + ", lastResponse=" + diagnosticBody(lastBody));
+  }
+
+  private static String diagnosticBody(byte[] body) {
+    String value = new String(body, StandardCharsets.UTF_8);
+    return value.length() <= 2_000 ? value : value.substring(0, 2_000) + "...";
   }
 
   private static void assertEmptyPage(byte[] body) throws Exception {
@@ -221,29 +261,6 @@ class NexusAssetManagementBlackBoxCompatibilityTest {
         .POST(HttpRequest.BodyPublishers.ofByteArray(multipart.body())));
   }
 
-  private static Exchange uploadMavenComponent(
-      Endpoint endpoint,
-      String repository,
-      String groupId,
-      String artifactId,
-      String version,
-      byte[] jar,
-      byte[] pom) throws Exception {
-    Multipart multipart = new Multipart()
-        .field("maven2.groupId", groupId)
-        .field("maven2.artifactId", artifactId)
-        .field("maven2.version", version)
-        .file("maven2.asset1", artifactId + "-" + version + ".jar",
-            "application/java-archive", jar)
-        .field("maven2.asset1.extension", "jar")
-        .file("maven2.asset2", artifactId + "-" + version + ".pom", "application/xml", pom)
-        .field("maven2.asset2.extension", "pom");
-    return send(endpoint.request(
-        "/service/rest/v1/components?repository=" + query(repository))
-        .header("Content-Type", "multipart/form-data; boundary=" + multipart.boundary)
-        .POST(HttpRequest.BodyPublishers.ofByteArray(multipart.body())));
-  }
-
   private static byte[] search(Endpoint endpoint, String repository, String name)
       throws Exception {
     Exchange response = send(endpoint.request(
@@ -251,14 +268,6 @@ class NexusAssetManagementBlackBoxCompatibilityTest {
             + "&name=" + query(name)).GET());
     assertEquals(200, response.status(), "asset search status at " + endpoint.baseUrl);
     return response.body();
-  }
-
-  private static JsonNode oneAsset(byte[] pageBody) throws Exception {
-    JsonNode page = json(pageBody);
-    assertTrue(page.path("items").isArray(), "items must be an array");
-    assertEquals(1, page.path("items").size(), "exact path search must return one asset");
-    assertTrue(page.path("continuationToken").isNull(), "exact path search has no next page");
-    return page.path("items").get(0);
   }
 
   private static void assertAsset(

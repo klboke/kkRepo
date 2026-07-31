@@ -234,7 +234,7 @@ class MavenRepositoryBlackBoxCompatibilityTest {
     }
   }
 
-  private DeployResult deploy(Endpoint endpoint, ArtifactFixture fixture) throws Exception {
+  private static DeployResult deploy(Endpoint endpoint, ArtifactFixture fixture) throws Exception {
     Exchange putPom = put(endpoint, fixture.pomPath(), fixture.pom(), "application/xml");
     List<Exchange> putPomSidecars = putSidecars(endpoint, fixture.pomPath(), fixture.pom());
     Exchange putJar = put(endpoint, fixture.jarPath(), fixture.jar(), "application/java-archive");
@@ -262,6 +262,24 @@ class MavenRepositoryBlackBoxCompatibilityTest {
         get(endpoint, fixture.metadataPath()),
         get(endpoint, fixture.jarPath() + ".sha1"),
         get(endpoint, fixture.pomPath() + ".sha256"));
+  }
+
+  static ReleaseDeployment deployReleaseFixture(
+      String repository,
+      String referenceBaseUrl,
+      String referenceUsername,
+      String referencePassword,
+      String candidateBaseUrl,
+      String candidateUsername,
+      String candidatePassword) throws Exception {
+    ArtifactFixture fixture = ArtifactFixture.create();
+    Endpoint reference = releaseEndpoint(
+        "nexus", referenceBaseUrl, repository, referenceUsername, referencePassword);
+    Endpoint candidate = releaseEndpoint(
+        "kkrepo", candidateBaseUrl, repository, candidateUsername, candidatePassword);
+    deploy(reference, fixture);
+    deploy(candidate, fixture);
+    return new ReleaseDeployment(reference, candidate, fixture);
   }
 
   private SnapshotDeployResult deploySnapshot(Endpoint endpoint, SnapshotFixture fixture) throws Exception {
@@ -305,7 +323,8 @@ class MavenRepositoryBlackBoxCompatibilityTest {
         get(endpoint, fixture.snapshotMetadataPath() + ".sha256"));
   }
 
-  private List<Exchange> putSidecars(Endpoint endpoint, String path, byte[] body) throws Exception {
+  private static List<Exchange> putSidecars(Endpoint endpoint, String path, byte[] body)
+      throws Exception {
     return List.of(
         put(endpoint, path + ".md5", checksum(body, "MD5"), "text/plain"),
         put(endpoint, path + ".sha1", checksum(body, "SHA-1"), "text/plain"),
@@ -313,7 +332,7 @@ class MavenRepositoryBlackBoxCompatibilityTest {
         put(endpoint, path + ".sha512", checksum(body, "SHA-512"), "text/plain"));
   }
 
-  private void cleanup(Endpoint endpoint, MavenFixture fixture) throws Exception {
+  private static void cleanup(Endpoint endpoint, MavenFixture fixture) throws Exception {
     for (String path : fixture.allPathsForCleanup()) {
       delete(endpoint, path);
     }
@@ -422,6 +441,49 @@ class MavenRepositoryBlackBoxCompatibilityTest {
       Exchange getMetadata,
       Exchange getJarSha1,
       Exchange getPomSha256) {}
+
+  static final class ReleaseDeployment implements AutoCloseable {
+    private final Endpoint reference;
+    private final Endpoint candidate;
+    private final ArtifactFixture fixture;
+
+    private ReleaseDeployment(
+        Endpoint reference, Endpoint candidate, ArtifactFixture fixture) {
+      this.reference = reference;
+      this.candidate = candidate;
+      this.fixture = fixture;
+    }
+
+    String artifactId() {
+      return fixture.artifactId();
+    }
+
+    String jarPath() {
+      return fixture.jarPath();
+    }
+
+    @Override
+    public void close() throws Exception {
+      Exception failure = null;
+      try {
+        cleanup(reference, fixture);
+      } catch (Exception exception) {
+        failure = exception;
+      }
+      try {
+        cleanup(candidate, fixture);
+      } catch (Exception exception) {
+        if (failure == null) {
+          failure = exception;
+        } else {
+          failure.addSuppressed(exception);
+        }
+      }
+      if (failure != null) {
+        throw failure;
+      }
+    }
+  }
 
   private record SnapshotDeployResult(
       Exchange putPom,
@@ -735,6 +797,20 @@ class MavenRepositoryBlackBoxCompatibilityTest {
     Endpoint withRepository(String repository) {
       return new Endpoint(name, baseUrl, repository, username, password);
     }
+  }
+
+  private static Endpoint releaseEndpoint(
+      String name, String baseUrl, String repository, String username, String password) {
+    return new Endpoint(
+        name,
+        Optional.of(stripTrailingSlash(baseUrl)),
+        repository,
+        optionalSetting(username),
+        optionalSetting(password));
+  }
+
+  private static Optional<String> optionalSetting(String value) {
+    return value == null || value.isBlank() ? Optional.empty() : Optional.of(value.trim());
   }
 
   private static Optional<String> setting(String property, String env) {
