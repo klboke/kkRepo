@@ -4,6 +4,7 @@ import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRow
 import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRows.nullableTimestamp;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.ComponentSearchCriteria;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.ComponentSearchRow;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.EnumColumns;
@@ -253,6 +254,57 @@ public class JdbcComponentDao implements com.github.klboke.kkrepo.persistence.jd
         """);
     args.add(safeLimit);
     return jdbcTemplate.query(sql.toString(), searchRowMapper, args.toArray());
+  }
+
+  @Override
+  public List<ComponentSearchRow> searchPage(
+      ComponentSearchCriteria criteria, long afterComponentId, int limit) {
+    ComponentSearchCriteria effective = criteria == null
+        ? new ComponentSearchCriteria(null, null, null, null, null, null)
+        : criteria;
+    String keyword = effective.keyword() == null ? "" : effective.keyword().trim();
+    String booleanQuery = keyword.isEmpty()
+        ? null : searchDialect.prepareComponentAnyQuery(keyword);
+    if (!keyword.isEmpty() && booleanQuery.isBlank()) {
+      return List.of();
+    }
+
+    StringBuilder sql = new StringBuilder(searchProjection);
+    if (booleanQuery == null) {
+      sql.append("FROM component c\nJOIN repository r ON r.id = c.repository_id\n");
+    } else {
+      sql.append("FROM component_search cs\n")
+          .append("JOIN component c ON c.id = cs.component_id\n")
+          .append("JOIN repository r ON r.id = c.repository_id\n");
+    }
+    sql.append("WHERE c.id > ?\n");
+    List<Object> args = new ArrayList<>();
+    args.add(Math.max(0, afterComponentId));
+    if (booleanQuery != null) {
+      sql.append("  AND ").append(searchDialect.componentSearchPredicate("cs")).append('\n');
+      args.add(booleanQuery);
+    }
+    if (effective.format() != null) {
+      sql.append("  AND c.format = ?\n");
+      args.add(EnumColumns.write(effective.format()));
+    }
+    appendExactFilter(sql, args, "r.name", effective.repositoryName());
+    appendExactFilter(sql, args, "c.namespace", effective.namespace());
+    appendExactFilter(sql, args, "c.name", effective.name());
+    appendExactFilter(sql, args, "c.version", effective.version());
+    sql.append("  AND ").append(SEARCH_VISIBLE_PREDICATE).append('\n')
+        .append("ORDER BY c.id\nLIMIT ?");
+    args.add(Math.max(1, limit));
+    return jdbcTemplate.query(sql.toString(), searchRowMapper, args.toArray());
+  }
+
+  private static void appendExactFilter(
+      StringBuilder sql, List<Object> args, String column, String value) {
+    if (value == null) {
+      return;
+    }
+    sql.append("  AND ").append(column).append(" = ?\n");
+    args.add(value);
   }
 
   public List<ComponentRecord> searchComponentsByRepositoryIds(

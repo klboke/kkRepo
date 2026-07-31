@@ -237,6 +237,11 @@ public class NexusAssetManagementService {
         checksums(stored.blob()));
   }
 
+  AssetSummaryView componentSearchSummary(
+      RepositoryRecord repository, AssetWithBlob stored, HttpServletRequest request) {
+    return toSummary(repository, stored, request);
+  }
+
   private AssetDetailView toDetail(
       RepositoryRecord repository, AssetWithBlob stored, HttpServletRequest request) {
     AssetRecord asset = stored.asset();

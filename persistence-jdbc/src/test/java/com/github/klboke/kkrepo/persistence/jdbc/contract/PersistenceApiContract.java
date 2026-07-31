@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.ComponentSearchCriteria;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceStores;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PubUploadSessionDao;
@@ -634,6 +635,20 @@ public abstract class PersistenceApiContract {
         stores().components().search("telemetry tracing", RepositoryFormat.MAVEN2, 20)
             .stream().map(row -> row.version()).toList());
     assertFalse(stores().components().search("telemetry", RepositoryFormat.NPM, 20).isEmpty());
+
+    ComponentSearchCriteria exact = new ComponentSearchCriteria(
+        "telemetry tracing", RepositoryFormat.MAVEN2, "maven-search",
+        "com.acme.platform", "observability-library", "2.0.0");
+    var exactPage = stores().components().searchPage(exact, 0, 2);
+    assertEquals(List.of("2.0.0"), exactPage.stream().map(row -> row.version()).toList());
+
+    ComponentSearchCriteria paged = new ComponentSearchCriteria(
+        "telemetry", RepositoryFormat.MAVEN2, null, null, null, null);
+    var firstPage = stores().components().searchPage(paged, 0, 1);
+    var secondPage = stores().components().searchPage(paged, firstPage.getFirst().id(), 1);
+    assertEquals(1, firstPage.size());
+    assertEquals(1, secondPage.size());
+    assertTrue(secondPage.getFirst().id() > firstPage.getFirst().id());
   }
 
   @Test

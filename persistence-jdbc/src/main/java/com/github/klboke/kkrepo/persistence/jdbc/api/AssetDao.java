@@ -154,6 +154,15 @@ public interface AssetDao {
 
   List<AssetRecord> listAssetsByComponent(long componentId);
 
+  /** Loads a component's assets and live blob metadata in one database round trip when supported. */
+  default List<AssetWithBlob> listAssetWithBlobByComponent(long componentId) {
+    return listAssetsByComponent(componentId).stream()
+        .map(asset -> new AssetWithBlob(
+            asset,
+            asset.assetBlobId() == null ? null : findBlobById(asset.assetBlobId()).orElse(null)))
+        .toList();
+  }
+
   int deleteAssetById(long assetId);
 
   int deleteBlobById(long assetBlobId);

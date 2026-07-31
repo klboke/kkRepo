@@ -52,6 +52,18 @@ class NexusAssetIdCodecTest {
         () -> codec.decodeContinuation(codec.encodeAssetId("repo", 99L)));
   }
 
+  @Test
+  void componentContinuationRoundTripsWithoutNodeLocalState() {
+    String fingerprint = "0123456789abcdef0123456789abcdef";
+    String encoded = codec.encodeComponentContinuation(fingerprint, 123L);
+
+    assertEquals(
+        new NexusAssetIdCodec.DecodedComponentContinuation(fingerprint, 123L),
+        new NexusAssetIdCodec().decodeComponentContinuation(encoded));
+    assertThrows(InvalidContinuationTokenException.class,
+        () -> codec.decodeComponentContinuation(codec.encodeContinuation(7L, 123L)));
+  }
+
   private static String base64(String value) {
     return Base64.getUrlEncoder().withoutPadding()
         .encodeToString(value.getBytes(StandardCharsets.UTF_8));

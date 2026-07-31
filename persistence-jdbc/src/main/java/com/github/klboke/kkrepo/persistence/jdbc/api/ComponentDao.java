@@ -37,6 +37,28 @@ public interface ComponentDao {
       String keyword,
       int limit);
 
+  /**
+   * Returns a stable component-search keyset page. The database remains the shared source of truth;
+   * callers may carry {@code afterComponentId} between replicas without node-local search state.
+   */
+  default List<ComponentSearchRow> searchPage(
+      ComponentSearchCriteria criteria, long afterComponentId, int limit) {
+    ComponentSearchCriteria effective = criteria == null
+        ? new ComponentSearchCriteria(null, null, null, null, null, null)
+        : criteria;
+    return search(effective.keyword(), effective.format(), Math.max(limit, 300)).stream()
+        .filter(row -> row.id() > Math.max(0, afterComponentId))
+        .filter(row -> effective.repositoryName() == null
+            || effective.repositoryName().equals(row.repositoryName()))
+        .filter(row -> effective.namespace() == null
+            || effective.namespace().equals(row.namespace()))
+        .filter(row -> effective.name() == null || effective.name().equals(row.name()))
+        .filter(row -> effective.version() == null || effective.version().equals(row.version()))
+        .sorted(java.util.Comparator.comparingLong(ComponentSearchRow::id))
+        .limit(Math.max(1, limit))
+        .toList();
+  }
+
   List<ComponentRecord> searchComponentsByRepositoryIds(
       List<Long> repositoryIds,
       RepositoryFormat format,
@@ -64,5 +86,14 @@ public interface ComponentDao {
       String kind,
       java.time.Instant lastUpdatedAt,
       String storagePath) {
+  }
+
+  record ComponentSearchCriteria(
+      String keyword,
+      RepositoryFormat format,
+      String repositoryName,
+      String namespace,
+      String name,
+      String version) {
   }
 }

@@ -231,6 +231,15 @@ public final class PostgreSqlDatabaseDialect implements DatabaseDialect {
 
     @Override
     public String prepareComponentQuery(String keyword) {
+      return prepareComponentQuery(keyword, " & ");
+    }
+
+    @Override
+    public String prepareComponentAnyQuery(String keyword) {
+      return prepareComponentQuery(keyword, " | ");
+    }
+
+    private static String prepareComponentQuery(String keyword, String operator) {
       if (keyword == null || keyword.isBlank()) {
         return "";
       }
@@ -245,7 +254,7 @@ public final class PostgreSqlDatabaseDialect implements DatabaseDialect {
         }
       }
       addTerm(terms, token);
-      return String.join(" & ", terms);
+      return String.join(operator, terms);
     }
 
     private static void addTerm(List<String> terms, StringBuilder token) {

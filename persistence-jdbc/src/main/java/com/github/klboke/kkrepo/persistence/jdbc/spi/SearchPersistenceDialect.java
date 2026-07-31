@@ -5,4 +5,9 @@ public interface SearchPersistenceDialect {
   String componentSearchPredicate(String searchAlias);
 
   String prepareComponentQuery(String keyword);
+
+  /** Prepares Nexus {@code q} semantics, where any normalized term may match. */
+  default String prepareComponentAnyQuery(String keyword) {
+    return prepareComponentQuery(keyword);
+  }
 }

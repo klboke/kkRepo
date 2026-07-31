@@ -228,6 +228,15 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
 
     @Override
     public String prepareComponentQuery(String keyword) {
+      return prepareComponentQuery(keyword, true);
+    }
+
+    @Override
+    public String prepareComponentAnyQuery(String keyword) {
+      return prepareComponentQuery(keyword, false);
+    }
+
+    private static String prepareComponentQuery(String keyword, boolean required) {
       if (keyword == null || keyword.isBlank()) {
         return "";
       }
@@ -238,16 +247,17 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
         if (Character.isLetterOrDigit(value)) {
           token.append(Character.toLowerCase(value));
         } else {
-          addTerm(terms, token);
+          addTerm(terms, token, required);
         }
       }
-      addTerm(terms, token);
+      addTerm(terms, token, required);
       return String.join(" ", terms);
     }
 
-    private static void addTerm(List<String> terms, StringBuilder token) {
+    private static void addTerm(
+        List<String> terms, StringBuilder token, boolean required) {
       if (!token.isEmpty()) {
-        terms.add("+" + token + "*");
+        terms.add((required ? "+" : "") + token + "*");
         token.setLength(0);
       }
     }

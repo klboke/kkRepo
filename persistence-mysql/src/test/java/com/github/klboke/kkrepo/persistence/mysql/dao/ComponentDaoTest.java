@@ -142,6 +142,24 @@ class ComponentDaoTest {
   }
 
   @Test
+  void nexusSearchPageUsesAnyKeywordTermAndStableKeysetOrder() {
+    RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
+    ComponentDao dao = new JdbcComponentDao(
+        jdbcTemplate,
+        new JsonColumns(new ObjectMapper(), DIALECT),
+        DIALECT);
+
+    dao.searchPage(new ComponentDao.ComponentSearchCriteria(
+        "drawings sdk", RepositoryFormat.MAVEN2, "maven-releases",
+        null, null, null), 41L, 51);
+
+    assertTrue(jdbcTemplate.sql.contains("WHERE c.id > ?"));
+    assertTrue(jdbcTemplate.sql.contains("r.name = ?"));
+    assertTrue(jdbcTemplate.sql.contains("ORDER BY c.id"));
+    Assertions.assertEquals("drawings* sdk*", jdbcTemplate.args[1]);
+  }
+
+  @Test
   void fulltextBooleanQueryTokenizesWithoutRegexBacktracking() {
     String keyword = "\"".repeat(4096) + "Com.Example artifact-1.0";
 
@@ -177,10 +195,12 @@ class ComponentDaoTest {
 
   private static final class RecordingJdbcTemplate extends JdbcTemplate {
     private String sql;
+    private Object[] args;
 
     @Override
     public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... args) {
       this.sql = sql;
+      this.args = args;
       return List.of();
     }
   }

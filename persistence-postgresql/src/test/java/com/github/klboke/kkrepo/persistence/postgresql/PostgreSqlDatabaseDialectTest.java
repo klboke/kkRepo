@@ -48,6 +48,9 @@ class PostgreSqlDatabaseDialectTest {
     assertEquals(
         "com:* & example:* & artifact:* & 1:* & 0:*",
         dialect.search().prepareComponentQuery("Com.Example artifact-1.0"));
+    assertEquals(
+        "com:* | example:* | artifact:* | 1:* | 0:*",
+        dialect.search().prepareComponentAnyQuery("Com.Example artifact-1.0"));
     assertEquals("", dialect.search().prepareComponentQuery("  --  "));
     assertEquals(
         "COALESCE(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - MIN(enqueued_at))), 0)",

@@ -625,6 +625,33 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         """, assetRowMapper, componentId);
   }
 
+  @Override
+  public List<AssetWithBlob> listAssetWithBlobByComponent(long componentId) {
+    return jdbcTemplate.query("""
+        SELECT a.*,
+               b.id AS joined_blob_id,
+               b.blob_store_id AS joined_blob_store_id,
+               b.blob_ref AS joined_blob_ref,
+               b.blob_ref_hash AS joined_blob_ref_hash,
+               b.object_key AS joined_object_key,
+               b.object_key_hash AS joined_object_key_hash,
+               b.sha1 AS joined_sha1,
+               b.sha256 AS joined_sha256,
+               b.md5 AS joined_md5,
+               b.size AS joined_size,
+               b.content_type AS joined_content_type,
+               b.created_by AS joined_created_by,
+               b.created_by_ip AS joined_created_by_ip,
+               b.blob_created_at AS joined_blob_created_at,
+               b.blob_updated_at AS joined_blob_updated_at,
+               b.attributes_json AS joined_blob_attributes_json
+        FROM asset a
+        LEFT JOIN asset_blob b ON b.id = a.asset_blob_id
+        WHERE a.component_id = ?
+        ORDER BY a.path
+        """, this::mapAssetWithBlob, componentId);
+  }
+
   public int deleteAssetById(long assetId) {
     return jdbcTemplate.update("DELETE FROM asset WHERE id = ?", assetId);
   }

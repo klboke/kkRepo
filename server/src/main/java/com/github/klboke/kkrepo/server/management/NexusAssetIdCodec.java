@@ -15,6 +15,8 @@ public class NexusAssetIdCodec {
       Pattern.compile("([A-Za-z0-9][A-Za-z0-9_.-]{0,199}):([0-9a-f]{32})");
   private static final Pattern CONTINUATION_PAYLOAD =
       Pattern.compile("v1:([0-9a-f]{16}):([0-9a-f]{16})");
+  private static final Pattern COMPONENT_CONTINUATION_PAYLOAD =
+      Pattern.compile("v2:([0-9a-f]{32}):([0-9a-f]{16})");
   private static final Base64.Encoder ENCODER = Base64.getUrlEncoder().withoutPadding();
   private static final Base64.Decoder DECODER = Base64.getUrlDecoder();
 
@@ -68,6 +70,28 @@ public class NexusAssetIdCodec {
     }
   }
 
+  public String encodeComponentContinuation(String queryFingerprint, long lastComponentId) {
+    if (queryFingerprint == null
+        || !queryFingerprint.matches("[0-9a-f]{32}")
+        || lastComponentId <= 0) {
+      throw new IllegalArgumentException(
+          "A 32-character query fingerprint and positive component ID are required");
+    }
+    return encode("v2:" + queryFingerprint + ":" + String.format("%016x", lastComponentId));
+  }
+
+  public DecodedComponentContinuation decodeComponentContinuation(String encoded) {
+    try {
+      Matcher matcher = COMPONENT_CONTINUATION_PAYLOAD.matcher(decodeCanonical(encoded));
+      if (!matcher.matches()) {
+        throw new IllegalArgumentException("Invalid payload");
+      }
+      return new DecodedComponentContinuation(matcher.group(1), positiveLong(matcher.group(2)));
+    } catch (IllegalArgumentException e) {
+      throw new InvalidContinuationTokenException("Invalid continuation token", e);
+    }
+  }
+
   private static String encode(String payload) {
     return ENCODER.encodeToString(payload.getBytes(StandardCharsets.UTF_8));
   }
@@ -99,6 +123,8 @@ public class NexusAssetIdCodec {
   public record DecodedAssetId(String repositoryName, String opaqueId) {}
 
   public record DecodedContinuation(long repositoryId, long lastAssetId) {}
+
+  public record DecodedComponentContinuation(String queryFingerprint, long lastComponentId) {}
 
   public static class InvalidAssetIdException extends RuntimeException {
     public InvalidAssetIdException(String message) {

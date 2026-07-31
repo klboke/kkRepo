@@ -45,6 +45,9 @@ class MySqlDatabaseDialectTest {
     assertEquals(
         "+com* +example* +artifact* +1* +0*",
         dialect.search().prepareComponentQuery("\"".repeat(4096) + "Com.Example artifact-1.0"));
+    assertEquals(
+        "com* example* artifact* 1* 0*",
+        dialect.search().prepareComponentAnyQuery("Com.Example artifact-1.0"));
     assertThrows(IllegalArgumentException.class,
         () -> dialect.json().extractText("attributes_json; DROP TABLE asset", "key"));
     assertThrows(IllegalArgumentException.class,
