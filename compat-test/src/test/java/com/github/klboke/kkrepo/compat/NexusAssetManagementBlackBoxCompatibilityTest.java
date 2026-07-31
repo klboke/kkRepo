@@ -17,8 +17,10 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 /** Black-box compatibility checks for Nexus 3 asset management endpoints. */
@@ -81,19 +83,19 @@ class NexusAssetManagementBlackBoxCompatibilityTest {
       assertEquals(204, upload(candidate, repository, directory, filename, payload).status(),
           "candidate Raw multipart upload");
 
-      JsonNode referenceAsset = awaitOnlyAssetByPath(reference, repository, path);
-      JsonNode candidateAsset = awaitOnlyAssetByPath(candidate, repository, path);
+      JsonNode referenceAsset = awaitAssetByPath(reference, repository, null, path);
+      JsonNode candidateAsset = awaitAssetByPath(candidate, repository, null, path);
       referenceId = requiredText(referenceAsset, "id");
       candidateId = requiredText(candidateAsset, "id");
-      assertAsset(referenceAsset, repository, path, payload);
-      assertAsset(candidateAsset, repository, path, payload);
+      assertAsset(reference, referenceAsset, repository, path, payload);
+      assertAsset(candidate, candidateAsset, repository, path, payload);
 
       JsonNode referenceGet = json(send(reference.request(
           "/service/rest/v1/assets/" + encodeSegment(referenceId)).GET()).body());
       JsonNode candidateGet = json(send(candidate.request(
           "/service/rest/v1/assets/" + encodeSegment(candidateId)).GET()).body());
-      assertAsset(referenceGet, repository, path, payload);
-      assertAsset(candidateGet, repository, path, payload);
+      assertAsset(reference, referenceGet, repository, path, payload);
+      assertAsset(candidate, candidateGet, repository, path, payload);
       assertDetailAsset(referenceGet, "raw");
       assertDetailAsset(candidateGet, "raw");
       assertEquals(requiredText(referenceGet, "contentType"), requiredText(candidateGet, "contentType"));
@@ -119,8 +121,8 @@ class NexusAssetManagementBlackBoxCompatibilityTest {
       assertEquals(404, send(candidate.request(
           "/service/rest/v1/assets/" + encodeSegment(requiredText(candidateAsset, "id")))
           .GET()).status(), "candidate GET after delete");
-      awaitEmptySearch(reference, repository, path);
-      awaitEmptySearch(candidate, repository, path);
+      awaitAssetMissingByPath(reference, repository, null, path);
+      awaitAssetMissingByPath(candidate, repository, null, path);
     } finally {
       deleteQuietly(reference, referenceId);
       deleteQuietly(candidate, candidateId);
@@ -149,72 +151,89 @@ class NexusAssetManagementBlackBoxCompatibilityTest {
       String path = deployment.jarPath();
       JsonNode referenceAsset = awaitAssetByPath(reference, repository, artifactName, path);
       JsonNode candidateAsset = awaitAssetByPath(candidate, repository, artifactName, path);
-      assertEquals(path, requiredText(referenceAsset, "path"));
-      assertEquals(path, requiredText(candidateAsset, "path"));
+      assertPath(reference, referenceAsset, path);
+      assertPath(candidate, candidateAsset, path);
       assertTrue(!artifactName.equals(path), "component name must differ from the asset path");
     }
   }
 
-  private static JsonNode awaitOnlyAssetByPath(
-      Endpoint endpoint, String repository, String path) throws Exception {
-    JsonNode page = awaitSearchPageWithPath(endpoint, repository, path, path);
-    assertEquals(1, page.path("items").size(), "exact path search must return one asset");
-    assertTrue(page.path("continuationToken").isNull(), "exact path search has no next page");
-    return page.path("items").get(0);
-  }
-
   private static JsonNode awaitAssetByPath(
-      Endpoint endpoint, String repository, String componentName, String expectedPath)
+      Endpoint endpoint, String repository, String name, String expectedPath)
       throws Exception {
-    JsonNode page = awaitSearchPageWithPath(endpoint, repository, componentName, expectedPath);
-    for (JsonNode item : page.path("items")) {
-      if (expectedPath.equals(item.path("path").asText())) {
-        return item;
-      }
-    }
-    throw new AssertionError("search result lost expected asset " + expectedPath);
-  }
-
-  private static JsonNode awaitSearchPageWithPath(
-      Endpoint endpoint, String repository, String name, String expectedPath) throws Exception {
-    byte[] lastBody = new byte[0];
+    SearchScan lastScan = null;
     for (int attempt = 0; attempt < 120; attempt++) {
-      lastBody = search(endpoint, repository, name);
-      JsonNode page = json(lastBody);
-      JsonNode items = page.path("items");
-      for (JsonNode item : items) {
-        if (expectedPath.equals(item.path("path").asText())) {
-          return page;
-        }
+      lastScan = scanSearch(endpoint, repository, name, expectedPath);
+      if (lastScan.asset() != null) {
+        return lastScan.asset();
       }
       Thread.sleep(500);
     }
     throw new AssertionError(
         "asset search did not index expectedPath=" + expectedPath
             + ", repository=" + repository
-            + ", name=" + name
+            + ", name=" + diagnosticName(name)
             + ", endpoint=" + endpoint.baseUrl()
-            + ", lastResponse=" + diagnosticBody(lastBody));
+            + ", lastResponse=" + diagnosticBody(lastScan.lastBody()));
   }
 
-  private static void awaitEmptySearch(Endpoint endpoint, String repository, String name)
-      throws Exception {
-    byte[] lastBody = new byte[0];
+  private static void awaitAssetMissingByPath(
+      Endpoint endpoint, String repository, String name, String expectedPath) throws Exception {
+    SearchScan lastScan = null;
     for (int attempt = 0; attempt < 120; attempt++) {
-      lastBody = search(endpoint, repository, name);
-      JsonNode page = json(lastBody);
-      if (page.path("items").isArray() && page.path("items").isEmpty()) {
-        assertTrue(page.path("continuationToken").isNull(),
-            "empty search continuationToken must be null");
+      lastScan = scanSearch(endpoint, repository, name, expectedPath);
+      if (lastScan.asset() == null) {
         return;
       }
       Thread.sleep(500);
     }
     throw new AssertionError(
-        "asset search did not become empty for repository=" + repository
-            + ", name=" + name
+        "asset search still returned expectedPath=" + expectedPath
+            + ", repository=" + repository
+            + ", name=" + diagnosticName(name)
             + ", endpoint=" + endpoint.baseUrl()
+            + ", lastResponse=" + diagnosticBody(lastScan.lastBody()));
+  }
+
+  private static SearchScan scanSearch(
+      Endpoint endpoint, String repository, String name, String expectedPath)
+      throws Exception {
+    String continuationToken = null;
+    Set<String> seenTokens = new HashSet<>();
+    byte[] lastBody = new byte[0];
+    for (int pageNumber = 0; pageNumber < 100; pageNumber++) {
+      lastBody = search(endpoint, repository, name, continuationToken);
+      JsonNode page = json(lastBody);
+      JsonNode items = page.path("items");
+      assertTrue(items.isArray(), "search items must be an array");
+      for (JsonNode item : items) {
+        if (expectedPath.equals(comparablePath(endpoint, item.path("path").asText()))) {
+          return new SearchScan(item, lastBody);
+        }
+      }
+      JsonNode tokenNode = page.path("continuationToken");
+      if (!tokenNode.isTextual() || tokenNode.asText().isBlank()) {
+        return new SearchScan(null, lastBody);
+      }
+      continuationToken = tokenNode.asText();
+      if (!seenTokens.add(continuationToken)) {
+        throw new AssertionError(
+            "asset search repeated continuationToken at " + endpoint.baseUrl());
+      }
+    }
+    throw new AssertionError(
+        "asset search exceeded 100 pages at " + endpoint.baseUrl()
             + ", lastResponse=" + diagnosticBody(lastBody));
+  }
+
+  private static String comparablePath(Endpoint endpoint, String path) {
+    if (endpoint.reference() && path.startsWith("/")) {
+      return path.substring(1);
+    }
+    return path;
+  }
+
+  private static String diagnosticName(String name) {
+    return name == null ? "<none>" : name;
   }
 
   private static String diagnosticBody(byte[] body) {
@@ -261,24 +280,36 @@ class NexusAssetManagementBlackBoxCompatibilityTest {
         .POST(HttpRequest.BodyPublishers.ofByteArray(multipart.body())));
   }
 
-  private static byte[] search(Endpoint endpoint, String repository, String name)
+  private static byte[] search(
+      Endpoint endpoint, String repository, String name, String continuationToken)
       throws Exception {
-    Exchange response = send(endpoint.request(
-        "/service/rest/v1/search/assets?repository=" + query(repository)
-            + "&name=" + query(name)).GET());
+    StringBuilder path = new StringBuilder(
+        "/service/rest/v1/search/assets?repository=" + query(repository));
+    if (name != null) {
+      path.append("&name=").append(query(name));
+    }
+    if (continuationToken != null) {
+      path.append("&continuationToken=").append(query(continuationToken));
+    }
+    Exchange response = send(endpoint.request(path.toString()).GET());
     assertEquals(200, response.status(), "asset search status at " + endpoint.baseUrl);
     return response.body();
   }
 
   private static void assertAsset(
-      JsonNode asset, String repository, String path, byte[] payload) throws Exception {
+      Endpoint endpoint, JsonNode asset, String repository, String path, byte[] payload)
+      throws Exception {
     assertEquals(repository, requiredText(asset, "repository"));
-    assertEquals(path, requiredText(asset, "path"));
+    assertPath(endpoint, asset, path);
     assertEquals("raw", requiredText(asset, "format"));
     assertFalse(requiredText(asset, "id").isBlank());
     assertFalse(requiredText(asset, "downloadUrl").isBlank());
     assertEquals(digest("SHA-1", payload), requiredText(asset.path("checksum"), "sha1"));
     assertEquals(digest("MD5", payload), requiredText(asset.path("checksum"), "md5"));
+  }
+
+  private static void assertPath(Endpoint endpoint, JsonNode asset, String expectedPath) {
+    assertEquals(expectedPath, comparablePath(endpoint, requiredText(asset, "path")));
   }
 
   private static void assertDetailAsset(JsonNode asset, String format) {
@@ -419,6 +450,8 @@ class NexusAssetManagementBlackBoxCompatibilityTest {
       output.write(value.getBytes(StandardCharsets.UTF_8));
     }
   }
+
+  private record SearchScan(JsonNode asset, byte[] lastBody) {}
 
   private record Exchange(int status, byte[] body) {}
 }
