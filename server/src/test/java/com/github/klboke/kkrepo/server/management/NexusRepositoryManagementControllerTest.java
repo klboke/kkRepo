@@ -12,6 +12,7 @@ import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.GroupSett
 import com.github.klboke.kkrepo.server.repositories.RepositoryNotFoundException;
 import com.github.klboke.kkrepo.server.repositories.RepositoryService;
 import com.github.klboke.kkrepo.server.repositories.RepositoryView;
+import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
@@ -23,15 +24,20 @@ class NexusRepositoryManagementControllerTest {
     RepositoryService service = mock(RepositoryService.class);
     NexusRepositoryManagementAuthorizer authorizer =
         mock(NexusRepositoryManagementAuthorizer.class);
+    ForwardedHeaderPolicy forwarded = mock(ForwardedHeaderPolicy.class);
     NexusRepositoryManagementController controller =
-        new NexusRepositoryManagementController(service, authorizer);
+        new NexusRepositoryManagementController(service, authorizer, forwarded);
     MockHttpServletRequest request = new MockHttpServletRequest();
     RepositoryView repository = view(RepositoryFormat.MAVEN2, RepositoryType.GROUP);
     when(service.get("maven-public")).thenReturn(repository);
+    when(forwarded.serverBaseUrl(request)).thenReturn("https://repo.example");
 
     var response = controller.getMavenGroup("maven-public", request);
 
     assertEquals("maven-public", response.name());
+    assertEquals("maven2", response.format());
+    assertEquals("group", response.type());
+    assertEquals("https://repo.example/repository/maven-public", response.url());
     assertEquals(true, response.online());
     assertEquals("default", response.storage().blobStoreName());
     assertEquals(true, response.storage().strictContentTypeValidation());
@@ -48,7 +54,8 @@ class NexusRepositoryManagementControllerTest {
     NexusRepositoryManagementAuthorizer authorizer =
         mock(NexusRepositoryManagementAuthorizer.class);
     NexusRepositoryManagementController controller =
-        new NexusRepositoryManagementController(service, authorizer);
+        new NexusRepositoryManagementController(
+            service, authorizer, mock(ForwardedHeaderPolicy.class));
     when(service.get("maven-public")).thenReturn(
         view(RepositoryFormat.RAW, RepositoryType.GROUP));
 
