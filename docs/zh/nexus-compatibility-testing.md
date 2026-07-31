@@ -20,7 +20,7 @@ compat-test/
 - hosted 写入、删除和重复上传行为
 - proxy、group、browse/search 等客户端可见行为
 
-当前模块中包含 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Docker/OCI、NuGet、RubyGems、Yum、Raw、组件上传、安全管理接口等方向的兼容性测试类。
+当前模块中包含 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Docker/OCI、NuGet、RubyGems、Yum、Raw、组件上传、安全管理接口等方向的兼容性测试类。
 
 常规测试命令：
 
@@ -66,7 +66,11 @@ Terraform 兼容性测试使用 Nexus 3.90.0+ hosted/proxy/group reference。`Te
 
 Swift 兼容性测试会覆盖通用 compose 的 Nexus 3.92.0 默认值，使用 Nexus 3.94.x hosted/proxy/group reference。`SwiftRepositoryBlackBoxCompatibilityTest` 会比较 canonical Registry v1 JSON/`Link`、negotiation、release/manifest/archive/identifier、不可变 multipart publish、签名、`v`/`V` 与 renamed GitHub repository、group 重排/nested、并发首次访问、unavailable problem 和跨副本可见性。Swift 规范将 `POST /login` 定义为可选能力，所以未实现该能力的 reference 返回 `501` 是合法分支；kkRepo 已实现该端点，预期结果为 `200`/`401`。客户端 workflow 在 Linux 运行 SwiftPM 5.7/5.10/6.x，在 macOS 运行 Xcode registry fixture，在 Windows 运行 proxy resolve/build。
 
+Ansible Galaxy 兼容性使用 opt-in `ansible` suite 和 Nexus 3.94.x reference，因为原生 `ansiblegalaxy` 仓库从 Nexus 3.93.0 开始提供。`AnsibleGalaxyRepositoryBlackBoxCompatibilityTest` 对比 discovery、Galaxy v3 短/长路径、hosted multipart publish/import task、Nexus raw PUT、版本不可变、dependency metadata、artifact GET/HEAD/validator、group priority、proxy read、pagination、认证和 reference 错误状态。执行 `scripts/ci/run-live-compat.sh ansible`；如果所选 reference 没有必需 Ansible recipe，该 suite 会明确失败。配置 `ANSIBLE_GALAXY_BINS` 后，真实客户端会覆盖 Ansible 2.9 与当前 ansible-core。
+
 验证证据保持在对应层级：compatibility black box 覆盖 active/revoked/expired `GenericToken`，server/persistence test 覆盖 moving tag 不可变性、1,200 tag 分页上界、cleanup 和 429/5xx 传播。定时 Swift resilience lane 使用双副本和通过 AWS S3-compatible adapter 访问的 MinIO，验证多 MiB package、共享 429/5xx 水位与 stale fallback、lease takeover、restart 和破坏式关系数据库/object 备份恢复。阿里云 OSS Native 引擎有 adapter contract 覆盖，但不声称已运行真实 endpoint E2E。
+
+当 Pull Request 需要覆盖全部 E2E 维度时，添加 `run-full-e2e` 标签。`Full E2E` 编排器会针对实际被测 commit 仅构建一份 JVM 候选镜像和一份 Native 候选镜像，在每个消费任务中校验共享镜像产物的 checksum 与 identity，预热固定版本的 Swift 客户端镜像缓存，然后并行展开到保持不变的 JVM/Native MySQL/PostgreSQL 客户端矩阵、Nexus 兼容性、迁移矩阵、OCI conformance，以及 Swift 平台/S3 lane。原有的 `run-client-e2e`、`run-native-client-e2e`、`run-live-compat`、`run-migration-e2e` 和 `run-docker-oci-conformance` 标签继续用于定向重跑。存在 `run-full-e2e` 标签时，普通 PR 更新只运行统一编排器；显式新增某个定向标签仍只触发对应工作流，不会重启整套矩阵。
 
 ## 真实客户端 E2E
 
@@ -76,15 +80,15 @@ Swift 兼容性测试会覆盖通用 compose 的 Nexus 3.92.0 默认值，使用
 scripts/ci/run-live-compat.sh client-e2e
 ```
 
-它会覆盖 Maven、npm、PyPI、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform 0.13/当前稳定版、SwiftPM/Xcode、NuGet、RubyGems、Yum、Docker/OCI 的发布/上传和下载/解析流程。Composer 覆盖 hosted archive、group、Packagist proxy、传递依赖、Basic 认证和服务端 cache lock replay；Terraform 覆盖 hosted module/provider 上传、registry.terraform.io proxy、group 解析、URL token 认证、checksum 和 signature；Swift 5.7 覆盖 registry/proxy resolve/build，5.10/6.x 额外覆盖 hosted publish、Basic/GenericToken login、group resolve/build、GitHub SCM replacement、checksum replay 和跨副本读取，macOS/Windows 分别提供 Xcode 和 proxy-only 专用 lane；Go 通过 Go module proxy 做 resolve-only 验证，因为 Go hosted 发布不是当前仓库模式。Docker image push/pull 会固定覆盖；如果运行环境里有 `oras`，还会额外 push/pull 一个通用 OCI artifact。
+它会覆盖 Maven、npm、PyPI、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform 0.13/当前稳定版、SwiftPM/Xcode、Ansible Galaxy 2.9/当前版、NuGet、RubyGems、Yum、Docker/OCI 的发布/上传和下载/解析流程。Composer 覆盖 hosted archive、group、Packagist proxy、传递依赖、Basic 认证和服务端 cache lock replay；Terraform 覆盖 hosted module/provider 上传、registry.terraform.io proxy、group 解析、URL token 认证、checksum 和 signature；Swift 5.7 覆盖 registry/proxy resolve/build，5.10/6.x 额外覆盖 hosted publish、Basic/GenericToken login、group resolve/build、GitHub SCM replacement、checksum replay 和跨副本读取；Ansible 会构建有依赖关系的 collection、通过 hosted 发布、拒绝重复版本、通过 group 安装/下载、验证 GenericToken/Basic/anonymous、访问 public Galaxy proxy，并可从第二副本读取。macOS/Windows 分别提供 Xcode 和 proxy-only 专用 lane；Go 通过 Go module proxy 做 resolve-only 验证，因为 Go hosted 发布不是当前仓库模式。Docker image push/pull 会固定覆盖；如果运行环境里有 `oras`，还会额外 push/pull 一个通用 OCI artifact。
 
-当变更影响真实客户端会直接走到的仓库协议行为时，应运行这个 suite，例如认证 header 或 API key、发布/上传路径、生成的 metadata、包索引形态、checksum/download 行为、Docker connector port、group/proxy 解析等。在 GitHub Actions 中，可以手动选择 `Live Compatibility` workflow 的 `client-e2e` suite，或给 PR 加 `run-client-e2e` label。
+当变更影响真实客户端会直接走到的仓库协议行为时，应运行这个 suite，例如认证 header 或 API key、发布/上传路径、生成的 metadata、包索引形态、checksum/download 行为、Docker connector port、group/proxy 解析等。在 GitHub Actions 中，可以手动选择 `Live Compatibility` workflow 的 `client-e2e` suite，或给 PR 加 `run-client-e2e` label。Spring AOT、runtime hint 或 Native 打包变更应添加 `run-native-client-e2e`；独立 Native workflow 会复用 Linux 客户端 suite，分别覆盖 MySQL 和 PostgreSQL，同时不替代默认 JVM lane。
 
 客户端命令日志、下载到的 metadata、部分 inspect 输出和诊断信息会写入 `artifacts/client-e2e/`；可能包含 URL token 的 Terraform metadata 会在上传前脱敏。该 suite 依赖 [compat-test README](../../compat-test/README.md) 中列出的真实工具，本地机器可能需要先安装对应 SDK 或包管理器才能跑完整矩阵。
 
 ## 迁移 E2E
 
-`Migration E2E` workflow 会从受支持的 Nexus 代际导入配置、安全元数据和仓库数据，包括历史 3.29.x embedded/OrientDB 参考实例，以及 datastore 时代的 H2/PostgreSQL 参考实例。Swift hosted 数据仅对已验证 Nexus 3.92.x-3.94.x datastore shape 规划为 `FULL`，版本超出范围或 shape 漂移保持 manual。Swift live 矩阵使用 Nexus 3.94，覆盖 H2 源到 MySQL，以及 PostgreSQL 源到 MySQL/PostgreSQL 目标、restart/resume、精确行数幂等和被遮蔽/缺失 proxy secret 的 fail-closed 路径；同时证明原生 Nexus 3.94 不会把上传的可选签名、原始 metadata 和 repository URL 写入源导出，目标也不会伪造，独立 writer contract 则保证源导出确有这些字段时原样保留。这类 proxy 保持 offline 且不写入占位 credential，直到在目标端显式补齐。当变更影响 source detection、迁移 adapter、仓库数据导入、blob/checksum 校验、权限或迁移后的协议行为时，给 PR 加 `run-migration-e2e` label。
+`Migration E2E` workflow 会从受支持的 Nexus 代际导入配置、安全元数据和仓库数据，包括历史 3.29.x embedded/OrientDB 参考实例，以及 datastore 时代的 H2/PostgreSQL 参考实例。live 矩阵按 Nexus 持久化时期及其内部数据库/content model shape 选择代表版本，不逐个覆盖所有补丁版本；只要迁移可见的数据库 schema 和 source fingerprint 未变化，已有 lane 就代表同一时期的后续版本，仅在持久化引擎、schema/content shape 或迁移行为变化时新增版本 lane。每个真实源仍会在 preflight 阶段校验 fingerprint，未知漂移一律 fail closed。Swift hosted 数据仅对已验证 Nexus 3.92.x-3.94.x datastore shape 规划为 `FULL`，版本超出范围或 shape 漂移保持 manual。Swift live 矩阵使用 Nexus 3.94，覆盖 H2 源到 MySQL，以及 PostgreSQL 源到 MySQL/PostgreSQL 目标、restart/resume、精确行数幂等和被遮蔽/缺失 proxy secret 的 fail-closed 路径；同时证明原生 Nexus 3.94 不会把上传的可选签名、原始 metadata 和 repository URL 写入源导出，目标也不会伪造，独立 writer contract 则保证源导出确有这些字段时原样保留。Ansible migration contract 强制 Nexus 3.93.x-3.94.x version/shape gate、协议感知 archive 恢复、不可变幂等、显式选择 proxy cache 和 proxy secret fail closed；完整 collection manifest/files JSON 保存在 blob storage，而不是关系数据库 JSON 列。这类 proxy 保持 offline 且不写入占位 credential，直到在目标端显式补齐。当变更影响 source detection、迁移 adapter、仓库数据导入、blob/checksum 校验、权限或迁移后的协议行为时，给 PR 加 `run-migration-e2e` label。
 
 ## 流量镜像验证
 
@@ -92,7 +96,7 @@ scripts/ci/run-live-compat.sh client-e2e
 
 这个历史验证阶段的目标是：
 
-- 确认 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Docker/OCI、Terraform、SwiftPM/Xcode 等真实客户端请求都能被 kkrepo 正确识别。
+- 确认 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Docker/OCI、Terraform、SwiftPM/Xcode、Ansible Galaxy 等真实客户端请求都能被 kkrepo 正确识别。
 - 对比 Nexus 主链路和 kkrepo 镜像链路的 HTTP status、错误类型和关键响应行为。
 - 观察 proxy 回源、blob 存储、权限认证、metadata/index 重建在真实流量下的稳定性。
 - 发现 `compat-test` 未覆盖的边缘请求，例如客户端特殊 header、老版本客户端行为、CI 插件探测请求和偶发代理请求。
@@ -107,7 +111,7 @@ Istio 流量镜像只复制请求到 kkrepo，客户端仍接收主链路响应�
 - proxy 回源错误和延迟
 - blob 存储读写错误
 
-需要注意，Nexus UI 管理请求、ExtDirect 轮询、脚本 API 请求等管理面流量，不等同于 Maven/npm/PyPI/Go/Helm/Cargo/Pub/Composer/Docker/OCI/Terraform 等仓库协议流量。分析镜像异常时要先区分请求类型，避免把管理面请求误判为仓库协议兼容性问题。
+需要注意，Nexus UI 管理请求、ExtDirect 轮询、脚本 API 请求等管理面流量，不等同于 Maven/npm/PyPI/Go/Helm/Cargo/Pub/Composer/Docker/OCI/Terraform/Ansible 等仓库协议流量。分析镜像异常时要先区分请求类型，避免把管理面请求误判为仓库协议兼容性问题。
 
 ## 生产规模验证
 
@@ -132,7 +136,7 @@ kkrepo 已经经过一轮真实生产规模验证。验证场景主要使用以�
 
 这组数据用于说明 kkrepo 在真实业务流量和迁移规模下的验证结果，不代表固定 SLA。实际吞吐和延迟仍会受到 MySQL 规格、OSS/S3 性能、网络、proxy 上游质量、仓库数量、包大小和副本数影响。
 
-Cargo / Rust、Dart / Pub、Terraform 和 Swift 不包含在上述历史生产规模验证数据中。生产切换前应通过 Nexus 3.77.x+ 兼容性测试套件和真实 Cargo 客户端验证 Cargo，通过 Nexus 3.92.0+ 兼容性测试套件和真实 `dart pub` / `flutter pub` 客户端验证 Pub，通过 Nexus 3.90.0+ reference 与 Terraform 0.13/当前稳定版 `terraform init` 验证 Terraform，并通过 Nexus 3.94.x reference 与跨平台 SwiftPM/Xcode matrix 验证 Swift。
+Cargo / Rust、Dart / Pub、Terraform、Swift 和 Ansible Galaxy 不包含在上述历史生产规模验证数据中。生产切换前应通过 Nexus 3.77.x+ 兼容性测试套件和真实 Cargo 客户端验证 Cargo，通过 Nexus 3.92.0+ 兼容性测试套件和真实 `dart pub` / `flutter pub` 客户端验证 Pub，通过 Nexus 3.90.0+ reference 与 Terraform 0.13/当前稳定版 `terraform init` 验证 Terraform，通过 Nexus 3.94.x reference 与跨平台 SwiftPM/Xcode matrix 验证 Swift，并通过 Nexus 3.94.x `ansible` suite 与 Ansible 2.9/当前版 `ansible-galaxy` 验证 Ansible。
 
 ## 兼容性问题处理流程
 

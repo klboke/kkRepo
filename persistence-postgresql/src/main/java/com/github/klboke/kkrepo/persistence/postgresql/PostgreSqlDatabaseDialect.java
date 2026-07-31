@@ -195,6 +195,15 @@ public final class PostgreSqlDatabaseDialect implements DatabaseDialect {
           + value + "'::jsonb, true)";
     }
 
+    @Override
+    public String selectLongsFromArray(String columnAlias) {
+      String alias = column(columnAlias);
+      return """
+          SELECT CAST(value AS BIGINT) AS %s
+          FROM jsonb_array_elements_text(CAST(? AS jsonb)) AS scope(value)
+          """.formatted(alias);
+    }
+
     private static String column(String value) {
       if (value == null || !IDENTIFIER.matcher(value).matches()) {
         throw new IllegalArgumentException("Unsafe JSON column: " + value);

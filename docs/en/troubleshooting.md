@@ -87,7 +87,7 @@ If using a reverse proxy, verify:
 - The proxy forwards the full path.
 - Large upload body size is allowed.
 - Read and write timeouts are long enough for artifact uploads.
-- The proxy does not strip authentication headers required by Maven/npm/pip/Helm/Cargo/Pub/Composer/NuGet/gem/yum clients, and Terraform `host.services` keeps its URL-token segment through generated archive/checksum/signature URLs.
+- The proxy does not strip authentication headers required by Maven/npm/pip/Helm/Cargo/Pub/Composer/Ansible/NuGet/gem/yum clients, and Terraform `host.services` keeps its URL-token segment through generated archive/checksum/signature URLs.
 
 ## Initial Admin Setup Problems
 
@@ -162,7 +162,7 @@ Check:
 - The client is using the right credential type for the protocol.
 - Reverse proxies preserve the `Authorization` header.
 
-For npm, Cargo, Pub, NuGet, RubyGems, and other token-based clients, regenerate the relevant token or API key after changing user or realm settings. Terraform uses a `GenericToken` embedded in the configured `host.services` URL; regenerate the token and update the CLI configuration together. Private Composer repositories normally use HTTP Basic through `COMPOSER_AUTH`/`auth.json`; for a 401, verify that the host key exactly matches the repository host and port, and do not commit credentials to `composer.json`.
+For npm, Cargo, Pub, NuGet, RubyGems, and other token-based clients, regenerate the relevant token or API key after changing user or realm settings. Terraform uses a `GenericToken` embedded in the configured `host.services` URL; regenerate the token and update the CLI configuration together. Ansible Galaxy uses `GenericToken` through Bearer on current ansible-core or Token on Ansible 2.9; older clients may expose `--api-key` instead of `--token`. Nexus-compatible Base64 `username:password` is accepted only on Ansible routes and is not encryption. Private Composer repositories normally use HTTP Basic through `COMPOSER_AUTH`/`auth.json`; for a 401, verify that the host key exactly matches the repository host and port, and do not commit credentials to `composer.json`.
 
 If the issue is a Nexus compatibility difference, include the same request against Nexus and kkrepo when opening an issue.
 
@@ -178,6 +178,8 @@ Check:
 - The user has the required repository add/edit permission.
 
 For duplicate upload failures, verify the hosted repository write policy. Some repositories intentionally reject redeploys.
+
+For Ansible Galaxy, a duplicate `(namespace, name, version)` always fails because collection versions are immutable. Inspect the durable import-task message for canonical filename, request SHA-256, `MANIFEST.json`/`FILES.json`, per-file checksum, archive safety, or configured size-limit failures. Raising only the reverse-proxy body limit does not raise the Ansible archive inspector limits.
 
 ## Migration Problems
 
@@ -198,6 +200,7 @@ Common causes:
 - Cargo / Rust migration was blocked because preflight did not prove a supported datastore Cargo content model; review the Source Profile and plan item status.
 - For blocked Composer migration, confirm that the source is a native Nexus 3.75.0+ Pro `composer-proxy` and explicitly select it under `Optional proxy repositories`. Community plugins, hosted/group sources, and sources without a Composer content schema do not silently downgrade to migration.
 - For blocked Terraform migration, confirm the source uses a native `terraform-hosted` or `terraform-proxy` recipe from a supported Nexus version. Proxy cache data requires explicit selection under `Optional proxy repositories` and a `FULL` source plan. Only recognized module/provider archives are restored. Restored module archives are discoverable from their local Nexus paths; provider routes, validators, checksum manifests, and signing snapshots are rebuilt from the configured upstream and pin their cache for the metadata lifetime. Unknown schemas, community plugins, and unsupported product capabilities still fail closed.
+- For blocked Ansible migration, confirm the source uses a native Nexus 3.93.x-3.94.x `ansiblegalaxy-hosted` or `ansiblegalaxy-proxy` recipe and that the Source Profile proves collection identity, archive, checksum, and manifest shape. Proxy cache must be selected under `Optional proxy repositories` with a `FULL` plan. Unknown shapes and masked/missing proxy secrets fail closed; complete manifest/files JSON is restored to blob storage rather than a database JSON column.
 - Blob migration is slow because concurrency is too low, source Nexus is overloaded, or object storage is throttling.
 
 See [Nexus Migration Guide](nexus-migration-guide.md).
@@ -221,6 +224,12 @@ docker compose -f docker-compose.compat.yml down -v
 ```
 
 Nexus compatibility for newer repository formats uses the datastore-era Nexus PostgreSQL reference compose file and the `nexus` suite. See [compat-test README](../../compat-test/README.md) before running live read/write checks.
+
+Ansible Galaxy uses a separate Nexus 3.94.x suite:
+
+```bash
+scripts/ci/run-live-compat.sh ansible
+```
 
 For real package client coverage, run the client E2E suite against the same disposable kkrepo candidate:
 

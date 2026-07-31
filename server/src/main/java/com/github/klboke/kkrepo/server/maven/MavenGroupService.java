@@ -15,6 +15,7 @@ import com.github.klboke.kkrepo.server.cache.NexusCacheType;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheInfo;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -22,6 +23,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import org.slf4j.Logger;
@@ -48,13 +50,16 @@ public class MavenGroupService {
   private final MavenAssetWriter writer;
   private final AssetMetadataCache assetMetadataCache;
   private final NexusLikeCacheController cacheController;
+  private final ArtifactDownloadPolicy downloadPolicy;
   private final MavenPathParser parser = new MavenPathParser();
   private final MavenMetadataMerger metadataMerger = new MavenMetadataMerger();
 
   @Autowired
   public MavenGroupService(MavenHostedService hosted, MavenProxyService proxy,
       AssetDao assetDao, BlobStorageRegistry blobStorageRegistry, MavenAssetWriter writer,
-      AssetMetadataCache assetMetadataCache, NexusLikeCacheController cacheController) {
+      AssetMetadataCache assetMetadataCache,
+      NexusLikeCacheController cacheController,
+      ArtifactDownloadPolicy downloadPolicy) {
     this.hosted = hosted;
     this.proxy = proxy;
     this.assetDao = assetDao;
@@ -62,16 +67,44 @@ public class MavenGroupService {
     this.writer = writer;
     this.assetMetadataCache = assetMetadataCache;
     this.cacheController = cacheController;
+    this.downloadPolicy = downloadPolicy;
+  }
+
+  public MavenGroupService(
+      MavenHostedService hosted,
+      MavenProxyService proxy,
+      AssetDao assetDao,
+      BlobStorageRegistry blobStorageRegistry,
+      MavenAssetWriter writer,
+      AssetMetadataCache assetMetadataCache,
+      NexusLikeCacheController cacheController) {
+    this(
+        hosted,
+        proxy,
+        assetDao,
+        blobStorageRegistry,
+        writer,
+        assetMetadataCache,
+        cacheController,
+        null);
   }
 
   public MavenGroupService(MavenHostedService hosted, MavenProxyService proxy,
       AssetDao assetDao, BlobStorageRegistry blobStorageRegistry, MavenAssetWriter writer,
       AssetMetadataCache assetMetadataCache) {
-    this(hosted, proxy, assetDao, blobStorageRegistry, writer, assetMetadataCache, null);
+    this(
+        hosted,
+        proxy,
+        assetDao,
+        blobStorageRegistry,
+        writer,
+        assetMetadataCache,
+        null,
+        null);
   }
 
   public MavenResponse get(RepositoryRuntime group, MavenPath path, boolean headOnly) {
-    return get(group, path, headOnly, new DispatchedRepositories());
+    return get(group, path, headOnly, new DispatchedRepositories(group.id()));
   }
 
   private MavenResponse get(
@@ -92,7 +125,8 @@ public class MavenGroupService {
       RepositoryRuntime group, MavenPath path, boolean headOnly, DispatchedRepositories dispatched) {
     Optional<CachedAssetMetadata> groupCached = cachedGroupContent(group, path, Instant.now());
     if (groupCached.isPresent()) {
-      return serveCached(groupCached.get(), headOnly, path);
+      return serveGroupCached(
+          dispatched.entryRepositoryId(), groupCached.get(), headOnly, path);
     }
     for (RepositoryRuntime member : group.members()) {
       if (dispatched.contains(member)) {
@@ -207,6 +241,7 @@ public class MavenGroupService {
         group, storage, blobStoreId, path, merged, MavenContentType.XML, "group", group.name());
     AssetRecord asset = stored.asset();
     AssetBlobRecord blob = stored.blob();
+    if (downloadPolicy != null) downloadPolicy.beforeRead(asset.id(), blob.id(), group.id());
     if (headOnly) {
       return MavenResponse.noBody(200, blob.size(), asset.contentType(), blob.sha1(), asset.lastUpdatedAt());
     }
@@ -268,6 +303,38 @@ public class MavenGroupService {
   private MavenResponse serveCached(CachedAssetMetadata snapshot, boolean headOnly, MavenPath path) {
     AssetBlobRecord blob = snapshot.toBlobRecord();
     if (blob == null) throw new MavenExceptions.MavenNotFoundException(path.path());
+    if (downloadPolicy != null) downloadPolicy.beforeRead(snapshot.assetId(), blob.id());
+    return cachedResponse(snapshot, blob, headOnly, path);
+  }
+
+  private MavenResponse serveGroupCached(
+      long entryRepositoryId,
+      CachedAssetMetadata snapshot,
+      boolean headOnly,
+      MavenPath path) {
+    AssetBlobRecord blob = snapshot.toBlobRecord();
+    if (blob == null) throw new MavenExceptions.MavenNotFoundException(path.path());
+    if (downloadPolicy != null) {
+      GroupCacheSource source = groupCacheSource(snapshot);
+      downloadPolicy.beforeGroupCacheRead(
+          source.assetId(),
+          blob.id(),
+          source.repositoryId(),
+          snapshot.format(),
+          source.path(),
+          snapshot.kind(),
+          snapshot.contentType(),
+          blob.size(),
+          entryRepositoryId);
+    }
+    return cachedResponse(snapshot, blob, headOnly, path);
+  }
+
+  private MavenResponse cachedResponse(
+      CachedAssetMetadata snapshot,
+      AssetBlobRecord blob,
+      boolean headOnly,
+      MavenPath path) {
     String etag = blob.sha1();
     Instant lastModified = snapshot.lastUpdatedAt();
     if (headOnly) {
@@ -280,6 +347,69 @@ public class MavenGroupService {
         blob.size(), snapshot.contentType(), etag, lastModified);
   }
 
+  /**
+   * Resolves legacy group-cache rows while keeping current rows on the zero-extra-query path.
+   *
+   * <p>Current writers persist a flattened {@code sourceAssetId}. Rows written by an earlier
+   * version only carry repository/path, so follow that bounded chain until the concrete member is
+   * reached. A missing or cyclic legacy reference safely falls back to the last visible asset.
+   */
+  private GroupCacheSource groupCacheSource(CachedAssetMetadata snapshot) {
+    long currentAssetId = snapshot.assetId();
+    long currentRepositoryId = snapshot.repositoryId();
+    String currentPath = snapshot.path();
+    Map<String, Object> attributes = snapshot.attributes();
+    Set<Long> visited = new HashSet<>();
+    visited.add(currentAssetId);
+    for (int depth = 0; depth < 16; depth++) {
+      Long repositoryId = positiveLong(attribute(attributes, "sourceRepositoryId"));
+      String sourcePath = text(attribute(attributes, "sourcePath"));
+      if (repositoryId == null || sourcePath == null || sourcePath.isBlank()) {
+        return new GroupCacheSource(currentAssetId, currentRepositoryId, currentPath);
+      }
+      Long flattened = positiveLong(attribute(attributes, "sourceAssetId"));
+      if (flattened != null) {
+        return new GroupCacheSource(flattened, repositoryId, sourcePath);
+      }
+      if (assetDao == null) {
+        return new GroupCacheSource(currentAssetId, repositoryId, sourcePath);
+      }
+      Optional<AssetRecord> source = assetDao.findAssetByPath(repositoryId, sourcePath);
+      if (source.isEmpty() || !visited.add(source.get().id())) {
+        return new GroupCacheSource(currentAssetId, repositoryId, sourcePath);
+      }
+      currentAssetId = source.get().id();
+      currentRepositoryId = source.get().repositoryId();
+      currentPath = source.get().path();
+      attributes = source.get().attributes();
+    }
+    return new GroupCacheSource(currentAssetId, currentRepositoryId, currentPath);
+  }
+
+  private static Object attribute(Map<String, Object> attributes, String name) {
+    return attributes == null ? null : attributes.get(name);
+  }
+
+  private static Long positiveLong(Object value) {
+    if (value instanceof Number number) {
+      long parsed = number.longValue();
+      return parsed > 0 ? parsed : null;
+    }
+    if (value == null) return null;
+    try {
+      long parsed = Long.parseLong(value.toString());
+      return parsed > 0 ? parsed : null;
+    } catch (NumberFormatException ignored) {
+      return null;
+    }
+  }
+
+  private static String text(Object value) {
+    return value == null ? null : value.toString();
+  }
+
+  private record GroupCacheSource(long assetId, long repositoryId, String path) {}
+
   private long requireBlobStore(RepositoryRuntime runtime) {
     Long id = runtime.blobStoreId();
     if (id == null) {
@@ -289,7 +419,16 @@ public class MavenGroupService {
   }
 
   private static final class DispatchedRepositories {
+    private final long entryRepositoryId;
     private final Set<Long> repositoryIds = new HashSet<>();
+
+    private DispatchedRepositories(long entryRepositoryId) {
+      this.entryRepositoryId = entryRepositoryId;
+    }
+
+    long entryRepositoryId() {
+      return entryRepositoryId;
+    }
 
     boolean contains(RepositoryRuntime runtime) {
       return repositoryIds.contains(runtime.id());

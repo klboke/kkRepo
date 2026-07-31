@@ -76,6 +76,10 @@
     </dependency>
     <dependency>
       <groupId>com.github.klboke</groupId>
+      <artifactId>kkrepo-security-scan</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.github.klboke</groupId>
       <artifactId>kkrepo-storage-s3</artifactId>
     </dependency>
     <dependency>
@@ -117,6 +121,10 @@
     <dependency>
       <groupId>com.github.klboke</groupId>
       <artifactId>kkrepo-protocol-swift</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.github.klboke</groupId>
+      <artifactId>kkrepo-protocol-ansible</artifactId>
     </dependency>
     <dependency>
       <groupId>com.github.klboke</groupId>
@@ -240,13 +248,22 @@
         </configuration>
       </plugin>
       <plugin>
+        <groupId>org.graalvm.buildtools</groupId>
+        <artifactId>native-maven-plugin</artifactId>
+        <configuration>
+          <imageName>kkrepo</imageName>
+          <mainClass>com.github.klboke.kkrepo.server.KkRepoApplication</mainClass>
+          <fallback>false</fallback>
+        </configuration>
+      </plugin>
+      <plugin>
         <artifactId>maven-assembly-plugin</artifactId>
         <version>3.8.0</version>
         <configuration>
           <descriptors>
             <descriptor>src/assembly/dist.xml</descriptor>
           </descriptors>
-          <finalName>kkrepo-${kkrepo.dist.version}</finalName>
+          <finalName>kkrepo-${kkrepo.dist.version}${kkrepo.dist.suffix}</finalName>
           <appendAssemblyId>false</appendAssemblyId>
         </configuration>
       </plugin>

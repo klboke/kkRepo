@@ -7,7 +7,7 @@
 - JDK 25
 - Maven 3.9 或兼容版本
 - MySQL 8.0 或 PostgreSQL 12+（生产使用仍在维护期的 PostgreSQL 版本）
-- 可选：Docker，用于构建镜像或运行容器化依赖
+- 可选：Docker，用于构建镜像或运行容器化依赖；构建 Native 镜像或 Native 压缩包时必须启动 Docker daemon，并允许拉取 Cloud Native Buildpacks 的 builder/run 镜像
 
 服务运行时依赖一个共享关系数据库：默认使用 MySQL，也支持 PostgreSQL。blob store 本地试用可以使用 File，生产环境建议使用 OSS/S3。详见[数据库后端](database-backends.md)。
 
@@ -26,11 +26,27 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
   | KKREPO_DATABASE_TYPE=postgresql bash
 ```
 
+默认使用 JVM 运行时。如需改用 Native 镜像：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quickstart.sh \
+  | KKREPO_RUNTIME=native bash
+```
+
+运行时和数据库可以独立选择。使用 Native 镜像和 PostgreSQL 启动：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quickstart.sh \
+  | KKREPO_RUNTIME=native KKREPO_DATABASE_TYPE=postgresql bash
+```
+
+`KKREPO_RUNTIME=jvm` 选择 `ghcr.io/klboke/kkrepo:0.6.0`，`KKREPO_RUNTIME=native` 选择 `ghcr.io/klboke/kkrepo:0.6.0-native`。两种镜像均发布 Linux `amd64` 和 `arm64` 架构。显式设置 `KKREPO_IMAGE_TAG` 时，会覆盖对应运行时的默认 tag。
+
 该脚本会逐步打印日志并执行：
 
 1. 检查 Docker、Docker Compose 和 curl。
 2. 创建 `kkrepo-quickstart/` 工作目录。
-3. 生成 `.env`，保存镜像 tag、端口和本地试用密钥。
+3. 生成 `.env`，保存运行时、镜像 tag、端口和本地试用密钥。
 4. 下载 `docker-compose.quickstart.yml`。
 5. 检查宿主机端口占用。
 6. 拉取镜像并执行 `docker compose up -d`。
@@ -45,7 +61,7 @@ bash quickstart.sh
 
 默认会启动：
 
-- `ghcr.io/klboke/kkrepo:0.5.1`
+- `ghcr.io/klboke/kkrepo:0.6.0` 中的 JVM 运行时
 - MySQL 8.0
 - 用于本地试用的持久化 MySQL volume 和 File blob storage volume
 
@@ -137,13 +153,20 @@ server/target/kkrepo-server-<version>.jar
 拉取最新公开发行镜像：
 
 ```bash
-docker pull ghcr.io/klboke/kkrepo:0.5.1
+docker pull ghcr.io/klboke/kkrepo:0.6.0
 ```
 
 也可以使用 `latest` 跟随最新公开发行版本：
 
 ```bash
 docker pull ghcr.io/klboke/kkrepo:latest
+```
+
+Native 镜像使用独立 tag：
+
+```bash
+docker pull ghcr.io/klboke/kkrepo:0.6.0-native
+docker pull ghcr.io/klboke/kkrepo:native-latest
 ```
 
 构建默认镜像：
@@ -158,11 +181,61 @@ docker pull ghcr.io/klboke/kkrepo:latest
 ./scripts/build-docker-image.sh kkrepo:local
 ```
 
+构建当前 Docker 主机架构的 Native 镜像：
+
+```bash
+./scripts/build-docker-image.sh --native kkrepo:native-local
+docker image inspect kkrepo:native-local \
+  --format '{{.Os}}/{{.Architecture}} {{json .Config.Entrypoint}}'
+```
+
+该命令通过 Spring Boot Cloud Native Buildpacks 在容器中完成 GraalVM 编译，本机不需要预装 GraalVM。它生成的是可直接运行的 OCI 镜像，而不是供现有 `Dockerfile` 再次复制的中间二进制，因此不需要新增 Native 专用 Dockerfile。首次构建需要下载 builder、run image 和 Native 工具链，耗时与内存占用会明显高于 JVM 镜像构建。
+
 容器化部署仍建议使用独立 MySQL 和 OSS/S3 blob store，不建议把容器本地文件系统作为长期生产 blob 存储。
+
+## GraalVM Native Image
+
+`native` Maven profile 会先执行 Spring AOT 处理，再使用 GraalVM Native Image 编译服务端。构建本地可执行文件前，需要安装包含 `native-image` 工具的 GraalVM JDK 25，然后执行：
+
+```bash
+mvn -Pnative -pl server -am -DskipTests package
+./server/target/kkrepo
+```
+
+如果不想在本机安装 GraalVM，也可以通过 Cloud Native Buildpacks 在容器中完成原生编译：
+
+```bash
+mvn -Pnative -pl server -am -DskipTests \
+  -DskipNativeBuild=true \
+  -Dspring-boot.build-image.imageName=kkrepo:native \
+  clean install spring-boot:build-image-no-fork
+```
+
+本项目是多模块 Maven reactor，构建镜像时应使用 `build-image-no-fork`。这里必须使用 `-DskipTests`，不能使用 `-Dmaven.test.skip=true`，因为下游 persistence 模块仍需要 reactor 中编译并附加的 test-jar。生成的 `kkrepo:native` 镜像沿用 JVM 镜像的数据库、密钥、存储和服务端配置。
+
+推荐使用封装了上述参数和镜像存在性检查的辅助脚本：
+
+```bash
+./scripts/build-docker-image.sh --native kkrepo:native
+```
+
+如果需要一次 Native 编译同时生成发行压缩包并保留对应镜像，可以执行：
+
+```bash
+KKREPO_NATIVE_IMAGE=kkrepo:native \
+KKREPO_KEEP_NATIVE_IMAGE=true \
+  ./scripts/build-dist.sh --native
+```
+
+`KKREPO_NATIVE_IMAGE` 指定中间及最终保留的镜像 tag；默认情况下 `build-dist.sh --native` 会在提取可执行文件后清理临时镜像，只有将 `KKREPO_KEEP_NATIVE_IMAGE` 显式设为 `true` 才会保留。
+
+以上本地命令只生成 Docker daemon 当前平台的镜像，例如在 x86_64 Linux Docker 主机上生成 `linux/amd64`，在 ARM64 Linux Docker 主机上生成 `linux/arm64`。它不通过模拟器交叉编译 Native 二进制。正式发行由 GitHub `Release Packages` 工作流分别在原生 `amd64` 和 `arm64` runner 上构建，再合并为多架构 manifest。
+
+不传 `--native` 时，脚本仍构建 JVM 镜像。Native 打包已在 MySQL 和 PostgreSQL 上通过完整真实客户端 E2E 矩阵。用于生产前，应验证实际部署使用的可选集成，尤其是外部 Apollo 配置中心及 OSS/S3 存储提供方。实测差异和当前建议见 [Native Image 与 JVM 选型指南](native-vs-jvm-guide.md)。
 
 ## 压缩包部署
 
-压缩包中包含可执行 jar、启动脚本、停止脚本、重启脚本、状态检查脚本和外部配置文件，适合快速试用、传统 VM 部署或需要接入 systemd 的环境。
+默认压缩包中包含可执行 jar、启动脚本、停止脚本、重启脚本、状态检查脚本和外部配置文件，适合快速试用、传统 VM 部署或需要接入 systemd 的环境。
 
 在仓库根目录执行：
 
@@ -176,6 +249,23 @@ docker pull ghcr.io/klboke/kkrepo:latest
 server/target/kkrepo-<release-version>.tar.gz
 server/target/kkrepo-<release-version>.zip
 ```
+
+通过 Docker 和 Cloud Native Buildpacks 显式构建对应平台的 Native 压缩包：
+
+```bash
+./scripts/build-dist.sh --native
+```
+
+该可选构建会同时生成带平台后缀的两种压缩格式：
+
+```text
+server/target/kkrepo-<release-version>-native-linux-<architecture>.tar.gz
+server/target/kkrepo-<release-version>-native-linux-<architecture>.zip
+```
+
+手动触发 GitHub 的 `Release Packages` 工作流后，它只接受已经合并到 `main` 的版本，并构建公开发行矩阵：一组平台无关的 JVM 压缩包、Native Linux `amd64` 和 `arm64` 压缩包，以及一份合并的 SHA-256 清单。同一批对应架构的 Native 构建会先推送 `<version>-native-amd64` 和 `<version>-native-arm64` 镜像，再合成为公开使用的版本化 `<version>-native` 和滚动更新的 `native-latest` 多架构 manifest。创建 GitHub Release 和上传压缩包资产仍是后续独立、显式的发行步骤。
+
+默认仍是 JVM 打包。JVM 压缩包包含 `lib/kkrepo.jar`，Native 压缩包包含可执行文件 `lib/kkrepo`。共用的 `bin/start.sh` 会自动选择包内运行时，因此服务命令和外部配置目录保持一致。Native 压缩包的目标机器不需要 Java，但操作系统和 CPU 架构必须与包名一致。
 
 如果后续开发版本使用 Maven `-SNAPSHOT` 后缀，构建脚本会自动在压缩包文件名和解压目录中去掉该后缀。
 
@@ -191,7 +281,8 @@ kkrepo-<release-version>/
   conf/
     application.properties
   lib/
-    kkrepo.jar
+    kkrepo.jar        # JVM 压缩包
+    # 或 kkrepo       # Native 压缩包
   logs/
   data/
 ```
@@ -244,10 +335,13 @@ bin/stop.sh
 | `KKREPO_CONF_DIR` | `$KKREPO_HOME/conf` | 外部配置目录 |
 | `KKREPO_LOG_DIR` | `$KKREPO_HOME/logs` | 日志目录 |
 | `KKREPO_PID_FILE` | `$KKREPO_LOG_DIR/kkrepo.pid` | PID 文件 |
-| `KKREPO_JAR_FILE` | `$KKREPO_HOME/lib/kkrepo.jar` | 可执行 jar |
-| `JAVA_OPTS` | 空 | JVM 参数 |
+| `KKREPO_RUNTIME` | `auto` | 存在 `lib/kkrepo` 时选择 `native`，否则选择 `jvm` |
+| `KKREPO_JAR_FILE` | `$KKREPO_HOME/lib/kkrepo.jar` | JVM 可执行 jar |
+| `KKREPO_NATIVE_FILE` | `$KKREPO_HOME/lib/kkrepo` | Native 可执行文件 |
+| `JAVA_OPTS` | 空 | 仅用于 JVM 的参数 |
+| `KKREPO_NATIVE_OPTS` | 空 | Native 可执行文件参数 |
 
-示例：
+JVM 示例：
 
 ```bash
 export JAVA_OPTS='-Xms2g -Xmx4g -XX:+UseG1GC'
@@ -284,7 +378,7 @@ WantedBy=multi-user.target
 生产部署建议使用多副本 kkrepo 服务、独立 MySQL 或 PostgreSQL 和 OSS/S3 blob store：
 
 ```text
-Maven/npm/PyPI/Go/Helm/Cargo/Pub/Composer/Terraform/Docker/OCI/NuGet/RubyGems/Yum clients
+Maven/npm/PyPI/Go/Helm/Cargo/Pub/Composer/Terraform/Ansible Galaxy/Docker/OCI/NuGet/RubyGems/Yum clients
         |
 DNS / Load Balancer / Reverse Proxy
         |
@@ -293,7 +387,7 @@ kkrepo replicas
         |---------------- OSS / S3 blob store
 ```
 
-kkrepo 运行时不依赖 OrientDB、内嵌 Elasticsearch 或本地持久化 blob 文件系统。仓库、组件、asset、用户、权限、token、审计、迁移状态和跨副本协调状态存储在所选关系数据库；大 blob 存储在 OSS/S3；进程内 TTL 缓存只作为可重建热缓存。
+kkrepo 运行时不依赖 OrientDB、内嵌 Elasticsearch 或本地持久化 blob 文件系统。仓库、组件、asset、用户、权限、token、审计、迁移状态和跨副本协调状态存储在所选关系数据库；包括 Ansible collection archive 与完整 manifest/files JSON 在内的大 blob 存储在 OSS/S3；进程内 TTL 缓存只作为可重建热缓存。
 
 ## 生产资源建议
 

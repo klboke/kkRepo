@@ -64,6 +64,25 @@ class NexusAssetIdCodecTest {
         () -> codec.decodeComponentContinuation(codec.encodeContinuation(7L, 123L)));
   }
 
+  @Test
+  void encodersRejectInvalidRepositoryAndNumericInputs() {
+    assertThrows(IllegalArgumentException.class, () -> codec.encodeAssetId(null, 1L));
+    assertThrows(IllegalArgumentException.class, () -> codec.encodeAssetId("", 1L));
+    assertThrows(IllegalArgumentException.class, () -> codec.encodeAssetId("invalid/name", 1L));
+    assertThrows(IllegalArgumentException.class, () -> codec.encodeAssetId("repo", 0L));
+    assertThrows(IllegalArgumentException.class, () -> codec.encodeContinuation(0L, 1L));
+    assertThrows(IllegalArgumentException.class, () -> codec.encodeContinuation(1L, 0L));
+    assertThrows(IllegalArgumentException.class,
+        () -> codec.encodeComponentContinuation("invalid", 1L));
+  }
+
+  @Test
+  void publicExceptionTypesPreserveMessages() {
+    assertEquals("asset", new InvalidAssetIdException("asset").getMessage());
+    assertEquals("continuation",
+        new InvalidContinuationTokenException("continuation").getMessage());
+  }
+
   private static String base64(String value) {
     return Base64.getUrlEncoder().withoutPadding()
         .encodeToString(value.getBytes(StandardCharsets.UTF_8));

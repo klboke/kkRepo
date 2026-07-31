@@ -15,6 +15,41 @@ let securityLdap = null;
 let securityOidc = null;
 let securityAnonymous = null;
 let securityApiKeys = [];
+let securityScanState = {
+  summary: null,
+  tasks: [],
+  runs: [],
+  findings: [],
+  repositories: [],
+  policies: [],
+  waivers: []
+};
+const SECURITY_SCAN_DEFAULT_PAGE_SIZE = 10;
+const securityScanListEndpoints = {
+  runs: "runs",
+  tasks: "tasks",
+  findings: "findings",
+  repositories: "repositories",
+  policies: "policies",
+  waivers: "waivers"
+};
+let securityScanPages = Object.fromEntries(
+  Object.keys(securityScanListEndpoints).map((key) => [
+    key,
+    {
+      after: 0,
+      cursors: [0],
+      page: 0,
+      size: SECURITY_SCAN_DEFAULT_PAGE_SIZE,
+      query: "",
+      nextAfter: null
+    }
+  ]));
+let securityScanPolicyFormMode = "create";
+let editingSecurityScanPolicyId = null;
+let editingSecurityScanPolicyEnabled = true;
+let editingSecurityScanPolicyPlatforms = ["linux/amd64"];
+let securityScanWaiverContext = null;
 const AUDIT_LOG_DEFAULT_PAGE_SIZE = 15;
 let auditLogPage = { total: 0, page: 0, size: AUDIT_LOG_DEFAULT_PAGE_SIZE, items: [] };
 let currentSession = null;
@@ -34,6 +69,14 @@ let securityPrivilegeMode = "create";
 let repositorySort = { key: "name", direction: "asc" };
 const BUILT_IN_READ_ONLY_ROLE_IDS = new Set(["nx-admin", "nx-anonymous"]);
 const formModalDismissHandlers = new Map();
+const securityScanPolicyRequiredFields = [
+  { id: "security-scan-policy-name", label: "Name" }
+];
+const securityScanWaiverRequiredFields = [
+  { id: "security-scan-waiver-target", label: "Repository artifact" },
+  { id: "security-scan-waiver-duration", label: "Expiration" },
+  { id: "security-scan-waiver-reason", label: "Reason" }
+];
 
 function installCsrfFetch() {
   if (window.__nexusPlusCsrfFetchInstalled) return;
@@ -66,6 +109,12 @@ function csrfToken() {
     ?.substring("KKREPO_CSRF=".length) || "";
 }
 
+const SECURITY_SCAN_ROUTE_BASE = "#admin/security/artifact-scanning";
+const SECURITY_SCAN_ROUTE_ALIASES =
+  [SECURITY_SCAN_ROUTE_BASE, "#admin/security/scanning"];
+const SECURITY_SCAN_TABS =
+  new Set(["overview", "tasks", "findings", "repositories", "policies", "waivers"]);
+
 const viewHashRoutes = {
   repositories: "#admin/repository/repositories",
   blobstores: "#admin/repository/blobstores",
@@ -78,6 +127,7 @@ const viewHashRoutes = {
   "security-oidc": "#admin/security/oidc",
   "security-anonymous": "#admin/security/anonymous",
   "security-api-keys": "#admin/security/api-keys",
+  "security-scanning": SECURITY_SCAN_ROUTE_BASE,
   "security-audit-log": "#admin/security/audit-log",
   "ui-settings": "#admin/system/ui-settings",
   "nexus-migration": "#admin/migration/nexus",
@@ -102,6 +152,8 @@ const hashViewRoutes = {
   "#admin/security/anonymous": "security-anonymous",
   "#admin/security/api-keys": "security-api-keys",
   "#admin/security/apikeys": "security-api-keys",
+  "#admin/security/artifact-scanning": "security-scanning",
+  "#admin/security/scanning": "security-scanning",
   "#admin/security/audit-log": "security-audit-log",
   "#admin/security/audit": "security-audit-log",
   "#admin/system": "ui-settings",
@@ -373,6 +425,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   yum: "yum",
   terraform: "terraform",
   swift: "swift",
+  ansiblegalaxy: "ansiblegalaxy",
   raw: "raw",
 });
 
@@ -391,6 +444,7 @@ const FORMAT_DISPLAY_NAMES = Object.freeze({
   yum: "Yum / RPM",
   terraform: "Terraform",
   swift: "Swift",
+  ansiblegalaxy: "Ansible Galaxy",
   raw: "Raw",
 });
 
@@ -477,8 +531,21 @@ function normalizeAdminHash(hash) {
   return path.replace(/\/+$/, "").toLowerCase();
 }
 
+function securityScanTabFromHash(hash = window.location.hash) {
+  const path = normalizeAdminHash(hash);
+  for (const base of SECURITY_SCAN_ROUTE_ALIASES) {
+    if (path === base) return "overview";
+    if (!path.startsWith(`${base}/`)) continue;
+    const tab = path.substring(base.length + 1);
+    return SECURITY_SCAN_TABS.has(tab) ? tab : "overview";
+  }
+  return null;
+}
+
 function viewFromHash(hash = window.location.hash) {
-  return hashViewRoutes[normalizeAdminHash(hash)] || null;
+  const path = normalizeAdminHash(hash);
+  if (securityScanTabFromHash(path) != null) return "security-scanning";
+  return hashViewRoutes[path] || null;
 }
 
 function readSideGroupState() {
@@ -557,6 +624,19 @@ function initializeSideGroups() {
 function updateHashForView(view, replace = false) {
   const hash = viewHashRoutes[view];
   if (!hash || window.location.hash === hash) return;
+  if (replace) {
+    window.history.replaceState(null, "", hash);
+  } else {
+    window.history.pushState(null, "", hash);
+  }
+}
+
+function updateHashForSecurityScanTab(tab, replace = false) {
+  const selected = SECURITY_SCAN_TABS.has(tab) ? tab : "overview";
+  const hash = selected === "overview"
+    ? SECURITY_SCAN_ROUTE_BASE
+    : `${SECURITY_SCAN_ROUTE_BASE}/${selected}`;
+  if (window.location.hash === hash) return;
   if (replace) {
     window.history.replaceState(null, "", hash);
   } else {
@@ -1722,7 +1802,8 @@ function memberCandidates() {
   const recipe = currentRecipe();
   const format = recipe ? recipe.format : null;
   if (!format) return [];
-  const allowNestedGroups = format === "pub" || format === "composer" || format === "terraform" || format === "swift";
+  const allowNestedGroups = format === "pub" || format === "composer"
+    || format === "terraform" || format === "swift" || format === "ansiblegalaxy";
   return repositories.filter((repo) => {
     if (repo.format !== format) return false;
     if (repositoryFormMode === "edit" && repo.name === editingRepositoryName) return false;
@@ -1965,7 +2046,8 @@ function refreshRepositoryRemoteDefaults(recipe) {
     pub: "https://pub.dev/",
     composer: "https://repo.packagist.org/",
     terraform: "https://registry.terraform.io/",
-    swift: "https://github.com/"
+    swift: "https://github.com/",
+    ansiblegalaxy: "https://galaxy.ansible.com/"
   };
   if (recipe.format === "swift") {
     remote.value = defaults.swift;
@@ -4156,6 +4238,1069 @@ function startRepositoryDataMigrationPolling(jobId) {
       3000);
 }
 
+function securityScanTone(status) {
+  const value = String(status || "").toUpperCase();
+  if (["COMPLETE", "SUCCEEDED", "ALLOW", "READY"].includes(value)) return "ok";
+  if (["FAILED", "BLOCK_VULNERABILITY", "CANCELLED"].includes(value)) return "error";
+  return "warn";
+}
+
+const SECURITY_SCAN_SEVERITY_PRESENTATION = Object.freeze({
+  CRITICAL: { tone: "is-critical", icon: "octagon-alert" },
+  HIGH: { tone: "is-high", icon: "triangle-alert" },
+  MEDIUM: { tone: "is-medium", icon: "circle-alert" },
+  LOW: { tone: "is-low", icon: "info" },
+  UNKNOWN: { tone: "is-unknown", icon: "circle-help" }
+});
+
+function renderSecurityScanSeverity(severity) {
+  const value = String(severity || "UNKNOWN").toUpperCase();
+  const presentation =
+    SECURITY_SCAN_SEVERITY_PRESENTATION[value]
+      || SECURITY_SCAN_SEVERITY_PRESENTATION.UNKNOWN;
+  return `
+    <span class="state-badge compact security-scan-severity ${presentation.tone}">
+      <span class="lucide-icon icon-${presentation.icon}" aria-hidden="true"></span>
+      ${escapeHtml(value)}
+    </span>`;
+}
+
+function applySecurityScanDeploymentState(enabled, options = {}) {
+  const view = document.getElementById("security-scanning-view");
+  const content = document.getElementById("security-scan-capability-content");
+  const banner = document.getElementById("security-scan-capability-banner");
+  const pending = Boolean(options.pending);
+  const unavailable = Boolean(options.unavailable);
+  const available = enabled === true && !pending;
+
+  view.classList.toggle("is-deployment-pending", pending);
+  view.classList.toggle("is-deployment-disabled", !available && !pending);
+  content.inert = !available;
+  content.setAttribute("aria-disabled", String(!available));
+
+  content.querySelectorAll("button, input, select, textarea").forEach((control) => {
+    if (!available && !control.disabled) {
+      control.dataset.securityScanDeploymentDisabled = "true";
+      control.disabled = true;
+      return;
+    }
+    if (available && control.dataset.securityScanDeploymentDisabled === "true") {
+      control.disabled = false;
+      delete control.dataset.securityScanDeploymentDisabled;
+    }
+  });
+  content.querySelectorAll("a[href]").forEach((link) => {
+    if (available) {
+      link.removeAttribute("aria-disabled");
+    } else {
+      link.setAttribute("aria-disabled", "true");
+    }
+  });
+
+  banner.hidden = available;
+  banner.classList.toggle("is-pending", pending);
+  banner.classList.toggle("is-disabled", !available && !pending);
+  if (pending) {
+    banner.innerHTML = `
+      <strong>Checking deployment capability…</strong>
+      <span>Scanning controls remain unavailable until kkRepo confirms the deployment setting.</span>`;
+  } else if (unavailable) {
+    banner.innerHTML = `
+      <strong>Unable to verify the artifact scanning deployment capability.</strong>
+      <span>Scanning controls remain disabled. Check the kkRepo management API and reload this page.</span>`;
+  } else if (available) {
+    banner.replaceChildren();
+  } else {
+    banner.innerHTML = `
+      <strong>Artifact scanning is unavailable in this deployment.</strong>
+      <span>A deployment operator must deploy the scanner adapter, set KKREPO_SECURITY_SCANNING_ENABLED=true, and restart kkRepo. Existing repository settings are preserved.</span>`;
+  }
+}
+
+function renderSecurityScanSummary() {
+  const payload = securityScanState.summary;
+  const target = document.getElementById("security-scan-summary");
+  if (!payload) {
+    target.innerHTML = '<div><span>Status</span><strong>Unavailable</strong></div>';
+    document.getElementById("security-scan-status").textContent = "Capability status unavailable";
+    return;
+  }
+  const summary = payload.summary || {};
+  const scanner = payload.scanner;
+  const matchingScanner = payload.matchingScanner || scanner;
+  const scannerHealth = payload.scannerStatus;
+  const scannerStatus = !payload.deploymentEnabled
+    ? "Disabled"
+    : scannerHealth?.ready ? "Ready" : "Degraded";
+  const scannerPresentation = scannerStatus === "Ready"
+    ? { tone: "is-ready", icon: "check" }
+    : scannerStatus === "Degraded"
+      ? { tone: "is-degraded", icon: "info" }
+      : { tone: "is-disabled", icon: "circle-slash" };
+  const scannerReason = securityScannerReasonLabel(scannerHealth?.reasonCode);
+  const scannerDescription = scannerStatus === "Disabled"
+    ? "Scanner deployment capability is disabled"
+    : scannerStatus === "Ready"
+      ? "Scanner is ready"
+      : scannerReason;
+  const scannerCard = `
+    <div>
+      <span>Scanner</span>
+      <strong class="security-scan-scanner-state ${scannerPresentation.tone}"
+        aria-label="${escapeHtml(scannerDescription)}"
+        title="${escapeHtml(scannerDescription)}">
+        <span class="lucide-icon icon-${scannerPresentation.icon}" aria-hidden="true"></span>
+        ${escapeHtml(scannerStatus)}
+      </strong>
+    </div>`;
+  const databaseRevision =
+    String(matchingScanner?.vulnerabilityDatabaseRevision || "-");
+  const databaseRevisionMatch =
+    databaseRevision.match(/^(\d{4}-\d{2}-\d{2})T(.+)$/);
+  const databaseRevisionMarkup = databaseRevisionMatch
+    ? `<span class="security-scan-database-revision-date">${escapeHtml(databaseRevisionMatch[1])}</span>
+       <span class="security-scan-database-revision-time">${escapeHtml(databaseRevisionMatch[2])}</span>`
+    : escapeHtml(shortText(databaseRevision, 18));
+  const databaseRevisionCard = `
+    <div>
+      <span class="security-scan-database-label"
+        aria-label="Vulnerability DB version"
+        title="Version of the vulnerability database used to match findings">Vulnerability DB</span>
+      <strong class="security-scan-database-revision"
+        title="${escapeHtml(databaseRevision)}">${databaseRevisionMarkup}</strong>
+    </div>`;
+  target.innerHTML = scannerCard + databaseRevisionCard + [
+    ["Candidate backlog", summary.candidateBacklog ?? 0],
+    ["Pending tasks", summary.pendingTasks ?? 0],
+    ["Running", summary.runningTasks ?? 0],
+    ["Failed", summary.failedTasks ?? 0],
+    ["Complete assets", summary.completeAssets ?? 0],
+    ["Partial / stale", (summary.partialAssets ?? 0) + (summary.staleAssets ?? 0)],
+    ["Policy blocks", summary.blockedAssets ?? 0],
+    ["Critical / high", `${summary.criticalFindings ?? 0} / ${summary.highFindings ?? 0}`]
+  ].map(([label, value]) =>
+    `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
+  document.getElementById("security-scan-status").textContent =
+    scanner?.observedAt ? `Scanner observed ${formatDateTime(scanner.observedAt)}` : "";
+}
+
+function securityScannerReasonLabel(reasonCode) {
+  const labels = {
+    SNAPSHOT_UNAVAILABLE: "Scanner status has not been observed",
+    SCANNER_NOT_READY: "Scanner reported that it is not ready",
+    SCANNER_OBSERVATION_STALE: "Scanner status observation is stale",
+    DATABASE_AGE_UNKNOWN: "Vulnerability database age is unavailable",
+    DATABASE_STALE: "Vulnerability database is stale"
+  };
+  return labels[reasonCode] || "Scanner readiness is degraded";
+}
+
+function renderSecurityScanRuns() {
+  document.getElementById("security-scan-run-table").innerHTML =
+    securityScanState.runs.map((run) => `
+      <tr>
+        <td>${escapeHtml(run.id)}</td>
+        <td>${escapeHtml(run.taskId ?? "-")}</td>
+        <td><span class="state-badge compact ${securityScanTone(run.status)}">${escapeHtml(run.status)}</span></td>
+        <td>${escapeHtml(run.completeness)}</td>
+        <td>${escapeHtml(run.findingCount)}</td>
+        <td>${escapeHtml(run.criticalCount)}</td>
+        <td>${escapeHtml(run.highCount)}</td>
+        <td>${escapeHtml(formatDateTime(run.completedAt))}</td>
+        <td><a class="row-action" href="/internal/security/scanning/sboms/${encodeURIComponent(run.sbomId)}">download</a></td>
+      </tr>`).join("")
+      || '<tr><td colspan="9" class="placeholder">No scan runs are visible.</td></tr>';
+}
+
+function renderSecurityScanTasks() {
+  document.getElementById("security-scan-task-table").innerHTML =
+    securityScanState.tasks.map((task) => {
+      const retry = ["FAILED", "CANCELLED"].includes(task.status)
+        ? `<button class="row-action security-scan-task-retry" data-id="${task.id}" type="button">retry</button>`
+        : "";
+      const cancel = ["PENDING", "RETRY_WAIT", "RUNNING"].includes(task.status)
+        ? `<button class="row-action security-scan-task-cancel" data-id="${task.id}" type="button">cancel</button>`
+        : "";
+      const rescan = task.assetId
+        ? `<button class="row-action security-scan-asset-rescan" data-id="${task.assetId}" type="button">rescan</button>`
+        : "";
+      return `
+        <tr>
+          <td>${escapeHtml(task.id)}</td>
+          <td>${escapeHtml(task.repository || `#${task.repositoryId}`)}</td>
+          <td>${escapeHtml(task.assetId ?? "-")}</td>
+          <td>${escapeHtml(task.stage)}</td>
+          <td>${escapeHtml(task.reason)}</td>
+          <td><span class="state-badge compact ${securityScanTone(task.status)}">${escapeHtml(task.status)}</span></td>
+          <td>${escapeHtml(`${task.attempts}/${task.maxAttempts}`)}</td>
+          <td>${escapeHtml(formatDateTime(task.leaseUntil))}</td>
+          <td title="${escapeHtml(task.lastErrorSummary || "")}">${escapeHtml(task.lastErrorCode || "-")}</td>
+          <td class="actions-column">${retry}${cancel}${rescan}</td>
+        </tr>`;
+    }).join("")
+      || '<tr><td colspan="10" class="placeholder">No scan tasks are visible.</td></tr>';
+}
+
+function renderSecurityScanFindingRepositories(finding) {
+  const repositories = Array.isArray(finding.repositories)
+    ? finding.repositories.filter(Boolean)
+    : [];
+  if (repositories.length === 0) return "-";
+  const fullLabel = repositories.join(", ");
+  const visibleLabel = repositories.length > 1
+    ? `${repositories[0]} +${repositories.length - 1}`
+    : repositories[0];
+  return `<span class="security-scan-finding-repositories" title="${escapeHtml(fullLabel)}">${escapeHtml(visibleLabel)}</span>`;
+}
+
+function securityScanExternalHttpUrl(value) {
+  if (!value) return "";
+  try {
+    const url = new URL(String(value));
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return "";
+    return url.href;
+  } catch {
+    return "";
+  }
+}
+
+function securityScanFindingAdvisoryUrl(finding) {
+  return [finding.primaryUrl, finding.dataSource]
+    .map(securityScanExternalHttpUrl)
+    .find(Boolean) || "";
+}
+
+function renderSecurityScanFindingAdvisory(finding) {
+  const label = finding.advisoryId || `#${finding.id}`;
+  const href = securityScanFindingAdvisoryUrl(finding);
+  const content = `<code>${escapeHtml(label)}</code>`;
+  if (!href) return content;
+  return `
+    <a class="security-scan-advisory-link"
+       href="${escapeHtml(href)}"
+       target="_blank"
+       rel="noopener noreferrer"
+       title="Open vulnerability advisory"
+       aria-label="${escapeHtml(`Open advisory ${label} in a new tab`)}">
+      ${content}
+      ${lucideIcon("external-link")}
+    </a>`;
+}
+
+function renderSecurityScanFindings() {
+  document.getElementById("security-scan-finding-table").innerHTML =
+    securityScanState.findings.map((finding) => `
+      <tr>
+        <td>${renderSecurityScanSeverity(finding.severity)}</td>
+        <td>${renderSecurityScanFindingAdvisory(finding)}</td>
+        <td>${renderSecurityScanFindingRepositories(finding)}</td>
+        <td title="${escapeHtml(finding.packageUrl || "")}">${escapeHtml(finding.packageName)}</td>
+        <td>${escapeHtml(finding.installedVersion || "-")}</td>
+        <td>${escapeHtml((finding.fixedVersions || []).join(", ") || "-")}</td>
+        <td>${renderSecurityScanFindingWaiverStatus(finding)}</td>
+        <td class="actions-column security-scan-finding-actions">${renderSecurityScanFindingActions(finding)}</td>
+      </tr>`).join("")
+      || '<tr><td colspan="8" class="placeholder">No known vulnerability findings are visible.</td></tr>';
+}
+
+function renderSecurityScanFindingWaiverStatus(finding) {
+  const expired = Number(finding.expiredWaiverCount || 0);
+  const targetCount = Number(finding.waiverTargetCount || 0);
+  const waivedTargetCount = Number(finding.waivedTargetCount || 0);
+  if (waivedTargetCount > 0) {
+    const label = waivedTargetCount < targetCount
+      ? `Partially waived · ${waivedTargetCount}/${targetCount}`
+      : "Waived";
+    return `<button class="state-badge compact ok security-scan-waiver-status-button security-scan-finding-waiver-detail" data-id="${escapeHtml(finding.id)}" type="button" title="View applicable waiver details">${escapeHtml(label)}</button>`;
+  }
+  if (expired > 0) {
+    const label = expired === 1 ? "Expired" : `Expired · ${expired}`;
+    return `<button class="state-badge compact warn security-scan-waiver-status-button security-scan-finding-waiver-detail" data-id="${escapeHtml(finding.id)}" type="button" title="View expired waiver details">${escapeHtml(label)}</button>`;
+  }
+  return '<span class="state-badge compact">Not waived</span>';
+}
+
+function renderSecurityScanFindingWaiverAction(finding) {
+  const targetCount = Number(finding.waiverTargetCount || 0);
+  const waivedTargetCount = Number(finding.waivedTargetCount || 0);
+  const fullyWaived = targetCount > 0 && waivedTargetCount >= targetCount;
+  if (fullyWaived) {
+    return `<button class="row-action security-scan-finding-waive" data-id="${escapeHtml(finding.id)}" type="button" title="All associated repository artifacts are already waived" disabled>waived</button>`;
+  }
+  const label = waivedTargetCount > 0 ? "waive remaining" : "waive";
+  return `<button class="row-action security-scan-finding-waive" data-id="${escapeHtml(finding.id)}" type="button">${label}</button>`;
+}
+
+function renderSecurityScanFindingActions(finding) {
+  const view = `<button class="row-action security-scan-finding-view" data-id="${escapeHtml(finding.id)}" type="button" title="View finding details">view</button>`;
+  return `${view}${renderSecurityScanFindingWaiverAction(finding)}`;
+}
+
+function renderSecurityScanRepositoryStatus(enabled) {
+  const presentation = enabled
+    ? { label: "Enabled", tone: "ok", icon: "check" }
+    : { label: "Disabled", tone: "is-disabled", icon: "circle-slash" };
+  return `
+    <span class="state-badge compact security-scan-repository-status ${presentation.tone}">
+      <span class="lucide-icon icon-${presentation.icon}" aria-hidden="true"></span>
+      ${presentation.label}
+    </span>`;
+}
+
+function renderSecurityScanRepositories() {
+  document.getElementById("security-scan-repository-table").innerHTML =
+    securityScanState.repositories.map((repository) => {
+      const config = repository.config;
+      return `
+        <tr>
+          <td>${renderSecurityScanRepositoryStatus(config?.enabled === true)}</td>
+          <td>${escapeHtml(repository.name)}</td>
+          <td>${escapeHtml(repository.format)}</td>
+          <td>${escapeHtml(repository.type)}</td>
+          <td>${escapeHtml(repository.profileName || "Unavailable profile")}</td>
+          <td>${escapeHtml(repository.policyName || "Built-in critical baseline")}</td>
+          <td>${escapeHtml(config?.enforcementMode || "AUDIT")}</td>
+          <td class="actions-column"><button class="row-action security-scan-repository-edit" data-id="${repository.id}" type="button">configure</button></td>
+        </tr>`;
+    }).join("")
+      || '<tr><td colspan="8" class="placeholder">No repositories are visible.</td></tr>';
+}
+
+function renderSecurityScanPolicies() {
+  document.getElementById("security-scan-policy-table").innerHTML =
+    securityScanState.policies.map((policy) => `
+      <tr><td>${escapeHtml(policy.name)}</td>
+      <td>${escapeHtml(policy.revision)}</td><td>${escapeHtml(policy.blockSeverity)}</td>
+      <td>${policy.requireCompleteInventory ? "yes" : "no"}</td>
+      <td>${escapeHtml(formatSecurityScanValidity(policy.maxResultAgeSeconds) || "No expiry")}</td>
+      <td class="actions-column"><button class="row-action security-scan-policy-edit" data-id="${escapeHtml(policy.id)}" type="button">edit</button></td></tr>`).join("")
+      || '<tr><td colspan="6" class="placeholder">No policies are visible.</td></tr>';
+}
+
+function renderSecurityScanWaivers() {
+  document.getElementById("security-scan-waiver-table").innerHTML =
+    securityScanState.waivers.map((waiver) => {
+      return `
+        <tr><td><span class="state-badge compact ${waiver.active ? "ok" : "warn"}">${waiver.active ? "Active" : "Expired"}</span></td>
+        <td>${escapeHtml(waiver.scopeType)}</td>
+        <td>${escapeHtml(waiver.repository || "Global")}</td>
+        <td title="${escapeHtml(waiver.assetPath || "")}">${escapeHtml(waiver.assetPath || "All artifacts")}</td>
+        <td>${escapeHtml(waiver.exception || (waiver.findingId ? `Finding #${waiver.findingId}` : "-"))}</td>
+        <td>${escapeHtml(waiver.expiresAt ? formatDateTime(waiver.expiresAt) : "Never expires")}</td>
+        <td>${escapeHtml(waiver.approvedBy || "-")}</td><td>${escapeHtml(waiver.reason)}</td>
+        <td class="actions-column"><button class="row-action security-scan-waiver-delete" data-id="${waiver.id}" type="button">delete</button></td></tr>`;
+    }).join("")
+      || '<tr><td colspan="9" class="placeholder">No waivers are visible.</td></tr>';
+}
+
+function securityScanPageParams(key) {
+  const page = securityScanPages[key];
+  const params = new URLSearchParams();
+  params.set("after", String(page.after || 0));
+  params.set("limit", String(page.size || SECURITY_SCAN_DEFAULT_PAGE_SIZE));
+  if (page.query) params.set("q", page.query);
+  return params;
+}
+
+async function fetchSecurityScanPage(key) {
+  const endpoint = securityScanListEndpoints[key];
+  return fetchJson(
+    `/internal/security/scanning/${endpoint}?${securityScanPageParams(key).toString()}`,
+    { items: [], nextAfter: null },
+    `Failed to load scan ${key}`);
+}
+
+function resetSecurityScanPage(key) {
+  const page = securityScanPages[key];
+  page.after = 0;
+  page.cursors = [0];
+  page.page = 0;
+  page.nextAfter = null;
+}
+
+function renderSecurityScanPagination(key) {
+  const page = securityScanPages[key];
+  const items = securityScanState[key] || [];
+  const summary = document.querySelector(`[data-security-scan-page-summary="${key}"]`);
+  const label = document.querySelector(`[data-security-scan-page-label="${key}"]`);
+  const previous = document.querySelector(
+    `[data-security-scan-page-action="prev"][data-security-scan-page-list="${key}"]`);
+  const next = document.querySelector(
+    `[data-security-scan-page-action="next"][data-security-scan-page-list="${key}"]`);
+  const size = document.querySelector(`[data-security-scan-page-size="${key}"]`);
+  const query = document.querySelector(`[data-security-scan-query="${key}"]`);
+  if (summary) {
+    summary.textContent = items.length === 1
+      ? "1 result on this page"
+      : `${items.length} results on this page`;
+  }
+  if (label) label.textContent = `Page ${page.page + 1}`;
+  if (previous) previous.disabled = page.page <= 0;
+  if (next) next.disabled = page.nextAfter == null;
+  if (size) size.value = String(page.size);
+  if (query && document.activeElement !== query) query.value = page.query;
+}
+
+function renderSecurityScanList(key) {
+  const renderers = {
+    runs: renderSecurityScanRuns,
+    tasks: renderSecurityScanTasks,
+    findings: renderSecurityScanFindings,
+    repositories: renderSecurityScanRepositories,
+    policies: renderSecurityScanPolicies,
+    waivers: renderSecurityScanWaivers
+  };
+  renderers[key]?.();
+  renderSecurityScanPagination(key);
+}
+
+async function loadSecurityScanList(key) {
+  const payload = await fetchSecurityScanPage(key);
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  const page = securityScanPages[key];
+  if (items.length === 0 && page.page > 0) {
+    page.cursors.pop();
+    page.page -= 1;
+    page.after = page.cursors.at(-1) || 0;
+    return loadSecurityScanList(key);
+  }
+  securityScanState[key] = items;
+  page.nextAfter = payload?.nextAfter ?? null;
+  renderSecurityScanList(key);
+}
+
+async function searchSecurityScanList(key) {
+  const input = document.querySelector(`[data-security-scan-query="${key}"]`);
+  securityScanPages[key].query = input?.value.trim() || "";
+  resetSecurityScanPage(key);
+  await loadSecurityScanList(key);
+}
+
+async function clearSecurityScanListSearch(key) {
+  securityScanPages[key].query = "";
+  const input = document.querySelector(`[data-security-scan-query="${key}"]`);
+  if (input) input.value = "";
+  resetSecurityScanPage(key);
+  await loadSecurityScanList(key);
+}
+
+async function moveSecurityScanPage(key, direction) {
+  const page = securityScanPages[key];
+  if (direction === "next") {
+    if (page.nextAfter == null) return;
+    page.after = page.nextAfter;
+    page.cursors.push(page.after);
+    page.page += 1;
+  } else {
+    if (page.page <= 0) return;
+    page.cursors.pop();
+    page.page -= 1;
+    page.after = page.cursors.at(-1) || 0;
+  }
+  await loadSecurityScanList(key);
+}
+
+async function resizeSecurityScanPage(key, size) {
+  securityScanPages[key].size = Number(size) || SECURITY_SCAN_DEFAULT_PAGE_SIZE;
+  resetSecurityScanPage(key);
+  await loadSecurityScanList(key);
+}
+
+function renderSecurityScanning() {
+  renderSecurityScanSummary();
+  renderSecurityScanRuns();
+  renderSecurityScanTasks();
+  renderSecurityScanFindings();
+  renderSecurityScanRepositories();
+  renderSecurityScanPolicies();
+  renderSecurityScanWaivers();
+  const deploymentEnabled = securityScanState.summary?.deploymentEnabled === true;
+  applySecurityScanDeploymentState(
+    deploymentEnabled,
+    { unavailable: securityScanState.summary == null });
+  if (deploymentEnabled) {
+    Object.keys(securityScanListEndpoints).forEach(renderSecurityScanPagination);
+  }
+}
+
+async function loadSecurityScanning() {
+  applySecurityScanDeploymentState(false, { pending: true });
+  document.getElementById("security-scan-status").textContent = "Loading…";
+  const keys = Object.keys(securityScanListEndpoints);
+  const [summary, ...pages] = await Promise.all([
+    fetchJson("/internal/security/scanning/summary", null, "Failed to load scan summary"),
+    ...keys.map(fetchSecurityScanPage)
+  ]);
+  securityScanState.summary = summary;
+  keys.forEach((key, index) => {
+    const payload = pages[index];
+    securityScanState[key] = Array.isArray(payload?.items) ? payload.items : [];
+    securityScanPages[key].nextAfter = payload?.nextAfter ?? null;
+  });
+  renderSecurityScanning();
+  const emptyLaterPages = keys.filter(
+    (key) => securityScanState[key].length === 0 && securityScanPages[key].page > 0);
+  await Promise.all(emptyLaterPages.map((key) => {
+    const page = securityScanPages[key];
+    page.cursors.pop();
+    page.page -= 1;
+    page.after = page.cursors.at(-1) || 0;
+    return loadSecurityScanList(key);
+  }));
+}
+
+function selectSecurityScanTab(tab, options = {}) {
+  const selected = SECURITY_SCAN_TABS.has(tab) ? tab : "overview";
+  if (options.updateHash !== false) {
+    updateHashForSecurityScanTab(selected, Boolean(options.replaceHash));
+  }
+  document.querySelectorAll("[data-scan-tab]").forEach((button) => {
+    const active = button.dataset.scanTab === selected;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
+  });
+  document.querySelectorAll("[data-scan-panel]").forEach((panel) => {
+    const active = panel.dataset.scanPanel === selected;
+    panel.classList.toggle("is-active", active);
+    panel.hidden = !active;
+  });
+}
+
+function handleSecurityScanTabKeydown(event) {
+  const tabs = Array.from(document.querySelectorAll("[data-scan-tab]"));
+  const currentIndex = tabs.indexOf(event.currentTarget);
+  if (currentIndex < 0) return;
+  let nextIndex;
+  if (event.key === "ArrowRight") {
+    nextIndex = (currentIndex + 1) % tabs.length;
+  } else if (event.key === "ArrowLeft") {
+    nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+  } else if (event.key === "Home") {
+    nextIndex = 0;
+  } else if (event.key === "End") {
+    nextIndex = tabs.length - 1;
+  } else {
+    return;
+  }
+  event.preventDefault();
+  const nextTab = tabs[nextIndex];
+  selectSecurityScanTab(nextTab.dataset.scanTab);
+  nextTab.focus();
+}
+
+function formatSecurityScanValidity(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  if (value % 86400 === 0) {
+    const days = value / 86400;
+    return `${days} ${days === 1 ? "day" : "days"}`;
+  }
+  if (value % 3600 === 0) {
+    const hours = value / 3600;
+    return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  }
+  return `${value} seconds`;
+}
+
+function setSecurityScanDurationSelect(selectId, seconds) {
+  const select = document.getElementById(selectId);
+  select.querySelectorAll("option[data-current-value]").forEach((option) => option.remove());
+  const value = seconds == null ? "" : String(seconds);
+  if (value && !Array.from(select.options).some((option) => option.value === value)) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.dataset.currentValue = "true";
+    option.textContent = `Current setting (${formatSecurityScanValidity(seconds)})`;
+    select.appendChild(option);
+  }
+  select.value = value;
+}
+
+function setSecurityScanResultValidity(seconds) {
+  setSecurityScanDurationSelect("security-scan-max-age", seconds);
+}
+
+function applySecurityScanRepositoryScope(repository, config) {
+  const type = String(repository.type || "").toUpperCase();
+  const form = document.getElementById("security-scan-repository-form");
+  const hostedField = document.getElementById("security-scan-hosted-field");
+  const proxyField = document.getElementById("security-scan-proxy-field");
+  const hosted = document.getElementById("security-scan-hosted");
+  const proxy = document.getElementById("security-scan-proxy");
+  const showHosted = type !== "PROXY";
+  const showProxy = type !== "HOSTED";
+
+  form.dataset.repositoryType = type;
+  hostedField.hidden = !showHosted;
+  proxyField.hidden = !showProxy;
+  hosted.disabled = !showHosted;
+  proxy.disabled = !showProxy;
+  hosted.checked = showHosted && config.scanHostedContent !== false;
+  proxy.checked = showProxy && config.scanProxyContent !== false;
+
+  const scopeNote = document.getElementById("security-scan-scope-note");
+  if (type === "HOSTED") {
+    scopeNote.textContent = "Hosted repositories scan packages uploaded to kkRepo.";
+  } else if (type === "PROXY") {
+    scopeNote.textContent = "Proxy repositories scan packages cached from the remote repository.";
+  } else {
+    scopeNote.textContent = "Group repositories can scan content resolved from hosted and proxy members.";
+  }
+}
+
+function editSecurityScanRepository(repositoryId) {
+  const repository = securityScanState.repositories.find((item) => Number(item.id) === Number(repositoryId));
+  if (!repository) return;
+  const config = repository.config || {};
+  document.getElementById("security-scan-repository-id").value = repository.id;
+  document.getElementById("security-scan-repository-name").value = repository.name;
+  document.getElementById("security-scan-profile-name").value = repository.profileName || "Unavailable profile";
+  document.getElementById("security-scan-profile-id").value = config.profileId || "";
+  document.getElementById("security-scan-repository-policy-name").value =
+    repository.policyName || "Built-in critical baseline";
+  document.getElementById("security-scan-policy-id").value = config.policyId || "";
+  document.getElementById("security-scan-enforcement-mode").value = config.enforcementMode || "AUDIT";
+  document.getElementById("security-scan-pending-action").value = config.pendingAction || "ALLOW";
+  document.getElementById("security-scan-failure-action").value = config.failureAction || "ALLOW";
+  document.getElementById("security-scan-partial-action").value = config.partialAction || "ALLOW";
+  setSecurityScanResultValidity(config.maxResultAgeSeconds);
+  document.getElementById("security-scan-enabled").checked = Boolean(config.enabled);
+  applySecurityScanRepositoryScope(repository, config);
+  document.getElementById("security-scan-advanced").open =
+    [config.pendingAction, config.failureAction, config.partialAction].includes("BLOCK");
+  openFormModal("security-scan-repository-form", "security-scan-enabled");
+}
+
+function hideSecurityScanRepositoryForm() {
+  document.getElementById("security-scan-repository-id").value = "";
+  closeFormModal("security-scan-repository-form");
+}
+
+function optionalNumber(id) {
+  const value = document.getElementById(id).value;
+  return value === "" ? null : Number(value);
+}
+
+async function saveSecurityScanRepository(event) {
+  event.preventDefault();
+  const form = document.getElementById("security-scan-repository-form");
+  const repositoryId = Number(document.getElementById("security-scan-repository-id").value);
+  const repositoryType = form.dataset.repositoryType;
+  const payload = {
+    enabled: document.getElementById("security-scan-enabled").checked,
+    profileId: Number(document.getElementById("security-scan-profile-id").value),
+    scanHostedContent: repositoryType === "PROXY"
+      ? false : document.getElementById("security-scan-hosted").checked,
+    scanProxyContent: repositoryType === "HOSTED"
+      ? false : document.getElementById("security-scan-proxy").checked,
+    enforcementMode: document.getElementById("security-scan-enforcement-mode").value,
+    pendingAction: document.getElementById("security-scan-pending-action").value,
+    failureAction: document.getElementById("security-scan-failure-action").value,
+    partialAction: document.getElementById("security-scan-partial-action").value,
+    maxResultAgeSeconds: optionalNumber("security-scan-max-age"),
+    policyId: optionalNumber("security-scan-policy-id")
+  };
+  try {
+    const response = await fetch(`/internal/security/scanning/repositories/${repositoryId}/config`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    hideSecurityScanRepositoryForm();
+    showToast("Repository scanning configuration saved.", "ok");
+    await loadSecurityScanning();
+  } catch (error) {
+    showToast(`Save failed: ${error.message}`, "error");
+  }
+}
+
+function showCreateSecurityScanPolicyForm() {
+  securityScanPolicyFormMode = "create";
+  editingSecurityScanPolicyId = null;
+  editingSecurityScanPolicyEnabled = true;
+  editingSecurityScanPolicyPlatforms = ["linux/amd64"];
+  const form = document.getElementById("security-scan-policy-form");
+  form.reset();
+  document.getElementById("security-scan-policy-source-id").value = "";
+  document.getElementById("security-scan-policy-name").disabled = false;
+  document.getElementById("security-scan-policy-form-title").textContent = "Create policy";
+  document.getElementById("security-scan-policy-form-note").textContent =
+    "Policies are versioned so past scan decisions remain traceable.";
+  document.getElementById("security-scan-save-policy-button").textContent = "Create policy";
+  setSecurityScanDurationSelect("security-scan-policy-max-age", null);
+  clearRequiredFieldErrors(securityScanPolicyRequiredFields);
+  openFormModal("security-scan-policy-form", "security-scan-policy-name");
+}
+
+function showEditSecurityScanPolicyForm(policyId) {
+  const policy = securityScanState.policies.find(
+    (item) => Number(item.id) === Number(policyId));
+  if (!policy) {
+    showToast("Policy no longer exists. Refresh and try again.", "error");
+    return;
+  }
+  securityScanPolicyFormMode = "edit";
+  editingSecurityScanPolicyId = policy.id;
+  editingSecurityScanPolicyEnabled = policy.enabled !== false;
+  editingSecurityScanPolicyPlatforms =
+    Array.isArray(policy.requiredPlatforms) ? [...policy.requiredPlatforms] : [];
+  document.getElementById("security-scan-policy-source-id").value = policy.id;
+  document.getElementById("security-scan-policy-name").value = policy.name || "";
+  document.getElementById("security-scan-policy-name").disabled = true;
+  document.getElementById("security-scan-policy-severity").value =
+    policy.blockSeverity || "CRITICAL";
+  document.getElementById("security-scan-policy-fixable").checked =
+    Boolean(policy.onlyFixable);
+  document.getElementById("security-scan-policy-block-unknown").checked =
+    Boolean(policy.blockUnknownSeverity);
+  document.getElementById("security-scan-policy-complete").checked =
+    Boolean(policy.requireCompleteInventory);
+  setSecurityScanDurationSelect(
+    "security-scan-policy-max-age", policy.maxResultAgeSeconds);
+  document.getElementById("security-scan-policy-form-title").textContent =
+    `Edit policy: ${policy.name}`;
+  document.getElementById("security-scan-policy-form-note").textContent =
+    `Saving creates a new revision. Repositories using revision ${policy.revision} will move to it; historical decisions keep their original revision.`;
+  document.getElementById("security-scan-save-policy-button").textContent = "Save changes";
+  clearRequiredFieldErrors(securityScanPolicyRequiredFields);
+  openFormModal("security-scan-policy-form", "security-scan-policy-severity");
+}
+
+function hideSecurityScanPolicyForm() {
+  securityScanPolicyFormMode = "create";
+  editingSecurityScanPolicyId = null;
+  editingSecurityScanPolicyEnabled = true;
+  editingSecurityScanPolicyPlatforms = ["linux/amd64"];
+  document.getElementById("security-scan-policy-name").disabled = false;
+  clearRequiredFieldErrors(securityScanPolicyRequiredFields);
+  closeFormModal("security-scan-policy-form");
+}
+
+async function saveSecurityScanPolicy(event) {
+  event.preventDefault();
+  if (!validateRequiredFields(
+      securityScanPolicyRequiredFields,
+      { prefix: "Policy fields missing" })) return;
+  const editing = securityScanPolicyFormMode === "edit";
+  const payload = {
+    name: document.getElementById("security-scan-policy-name").value.trim(),
+    enabled: editingSecurityScanPolicyEnabled,
+    blockSeverity: document.getElementById("security-scan-policy-severity").value,
+    onlyFixable: document.getElementById("security-scan-policy-fixable").checked,
+    blockUnknownSeverity: document.getElementById("security-scan-policy-block-unknown").checked,
+    requireCompleteInventory: document.getElementById("security-scan-policy-complete").checked,
+    maxResultAgeSeconds: optionalNumber("security-scan-policy-max-age"),
+    requiredPlatforms: editingSecurityScanPolicyPlatforms
+  };
+  try {
+    const path = editing
+      ? `/internal/security/scanning/policies/${editingSecurityScanPolicyId}`
+      : "/internal/security/scanning/policies";
+    const response = await fetch(path, {
+      method: editing ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    hideSecurityScanPolicyForm();
+    showToast(editing
+      ? "Security scan policy revision saved."
+      : "Security scan policy created.", "ok");
+    await loadSecurityScanning();
+    selectSecurityScanTab("policies");
+  } catch (error) {
+    showToast(`Policy save failed: ${error.message}`, "error");
+  }
+}
+
+function securityScanWaiverTargetLabel(waiver) {
+  if (waiver.repository && waiver.assetPath) {
+    return `${waiver.repository} — ${waiver.assetPath}`;
+  }
+  if (waiver.repository) return `${waiver.repository} — all artifacts`;
+  if (waiver.assetPath) return waiver.assetPath;
+  return "All repositories and artifacts";
+}
+
+function securityScanWaiverPolicyLabel(waiver) {
+  if (waiver.policyId == null) return "All policies";
+  return waiver.policyRevision == null
+    ? `Policy #${waiver.policyId}`
+    : `Policy #${waiver.policyId}, revision ${waiver.policyRevision}`;
+}
+
+function renderSecurityScanWaiverDetail(detail) {
+  const waivers = detail.waivers || [];
+  const summary = document.getElementById("security-scan-waiver-detail-summary");
+  summary.textContent =
+    `${detail.advisoryId || "Finding"} · ${detail.packageName || detail.packageUrl || "Unknown package"} · `
+    + `${detail.activeWaiverCount || 0} active, ${detail.expiredWaiverCount || 0} expired. `
+    + "Each entry applies only to the repository artifact and policy scope shown below.";
+  document.getElementById("security-scan-waiver-detail-list").innerHTML =
+    waivers.map((waiver) => `
+      <article class="security-scan-waiver-detail-card">
+        <div class="security-scan-waiver-detail-head">
+          <span class="state-badge compact ${waiver.active ? "ok" : "warn"}">${waiver.active ? "Active" : "Expired"}</span>
+          <strong>Waiver #${escapeHtml(waiver.id)}</strong>
+          <span class="security-scan-waiver-detail-target">${escapeHtml(securityScanWaiverTargetLabel(waiver))}</span>
+        </div>
+        <div class="security-scan-waiver-detail-grid">
+          <div><span>Scope</span><strong>${escapeHtml(waiver.scopeType || "-")}</strong></div>
+          <div><span>Policy</span><strong>${escapeHtml(securityScanWaiverPolicyLabel(waiver))}</strong></div>
+          <div><span>Approved by</span><strong>${escapeHtml(waiver.approvedBy || "-")}</strong></div>
+          <div><span>Created</span><strong>${escapeHtml(formatDateTime(waiver.createdAt))}</strong></div>
+          <div><span>Expires</span><strong>${escapeHtml(waiver.expiresAt ? formatDateTime(waiver.expiresAt) : "Never expires")}</strong></div>
+          <div class="security-scan-waiver-detail-selector"><span>Exception</span><strong>${escapeHtml(waiver.advisorySelector || waiver.packageSelector || "-")}</strong></div>
+        </div>
+        <div class="security-scan-waiver-detail-reason"><span>Reason</span><p>${escapeHtml(waiver.reason || "-")}</p></div>
+      </article>`).join("")
+      || '<div class="placeholder">No applicable waiver is currently visible.</div>';
+}
+
+async function showSecurityScanWaiverDetail(findingId) {
+  const finding = securityScanState.findings.find(
+    (item) => Number(item.id) === Number(findingId));
+  document.getElementById("security-scan-waiver-detail-title").textContent =
+    `Finding waiver details${finding?.advisoryId ? `: ${finding.advisoryId}` : ""}`;
+  document.getElementById("security-scan-waiver-detail-summary").textContent =
+    "Loading applicable waivers…";
+  document.getElementById("security-scan-waiver-detail-list").innerHTML = "";
+  openFormModal("security-scan-waiver-detail", "security-scan-close-waiver-detail-button");
+  try {
+    const response = await fetch(
+      `/internal/security/scanning/findings/${encodeURIComponent(findingId)}/waivers`,
+      { cache: "no-store" });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    renderSecurityScanWaiverDetail(await response.json());
+  } catch (error) {
+    document.getElementById("security-scan-waiver-detail-summary").textContent =
+      `Unable to load waiver details: ${error.message}`;
+    showToast(`Unable to load waiver details: ${error.message}`, "error");
+  }
+}
+
+function hideSecurityScanWaiverDetail() {
+  closeFormModal("security-scan-waiver-detail");
+}
+
+function viewAllSecurityScanWaivers() {
+  hideSecurityScanWaiverDetail();
+  selectSecurityScanTab("waivers");
+}
+
+function securityScanFindingDetailValue(value) {
+  if (Array.isArray(value)) return value.filter(Boolean).join(", ") || "-";
+  return value == null || value === "" ? "-" : String(value);
+}
+
+function renderSecurityScanFindingDetailSection(title, fields) {
+  return `
+    <section class="security-scan-finding-detail-section">
+      <h3>${escapeHtml(title)}</h3>
+      <dl>
+        ${fields.map(([label, value]) => `
+          <div>
+            <dt>${escapeHtml(label)}</dt>
+            <dd>${escapeHtml(securityScanFindingDetailValue(value))}</dd>
+          </div>`).join("")}
+      </dl>
+    </section>`;
+}
+
+function showSecurityScanFindingDetail(findingId) {
+  const finding = securityScanState.findings.find(
+    (item) => Number(item.id) === Number(findingId));
+  if (!finding) {
+    showToast("Finding details are no longer available. Refresh and try again.", "error");
+    return;
+  }
+  const waiverCoverage = Number(finding.waiverTargetCount || 0) > 0
+    ? `${Number(finding.waivedTargetCount || 0)} of ${Number(finding.waiverTargetCount)} artifacts waived`
+    : `${Number(finding.activeWaiverCount || 0)} active, ${Number(finding.expiredWaiverCount || 0)} expired`;
+  const packageLabel =
+    [finding.packageName || finding.packageUrl || "Unknown package", finding.installedVersion]
+      .filter(Boolean)
+      .join(" @ ");
+  document.getElementById("security-scan-finding-detail-title").textContent = "Finding details";
+  document.getElementById("security-scan-finding-detail-content").innerHTML = `
+    <div class="security-scan-finding-detail-hero">
+      <div class="security-scan-finding-detail-kicker">
+        ${renderSecurityScanSeverity(finding.severity)}
+        ${renderSecurityScanFindingAdvisory(finding)}
+      </div>
+      <h3>${escapeHtml(finding.title || "Known vulnerability finding")}</h3>
+      <p>${escapeHtml(packageLabel)}</p>
+    </div>
+    <div class="security-scan-finding-detail-highlights">
+      <div><span>Repositories</span><strong>${escapeHtml(securityScanFindingDetailValue(finding.repositories))}</strong></div>
+      <div><span>Fixed versions</span><strong>${escapeHtml(securityScanFindingDetailValue(finding.fixedVersions))}</strong></div>
+      <div><span>Waiver coverage</span><strong>${escapeHtml(waiverCoverage)}</strong></div>
+    </div>
+    <div class="security-scan-finding-detail-sections">
+      ${renderSecurityScanFindingDetailSection("Vulnerability", [
+        ["Aliases", finding.aliases],
+        ["CVSS score", finding.cvssScore],
+        ["CVSS vector", finding.cvssVector],
+        ["Severity source", finding.severitySource],
+        ["Source", finding.dataSource],
+        ["Source status", finding.sourceStatus]
+      ])}
+      ${renderSecurityScanFindingDetailSection("Traceability", [
+        ["Scan run", finding.scanRunId],
+        ["Finding ID", finding.id],
+        ["Package URL", finding.packageUrl],
+        ["Locations", finding.locations],
+        ["Primary URL", finding.primaryUrl]
+      ])}
+    </div>`;
+  openFormModal("security-scan-finding-detail", "security-scan-close-finding-detail-button");
+}
+
+function hideSecurityScanFindingDetail() {
+  closeFormModal("security-scan-finding-detail");
+}
+
+async function showCreateSecurityScanWaiverForm(findingId) {
+  const form = document.getElementById("security-scan-waiver-form");
+  form.reset();
+  clearRequiredFieldErrors(securityScanWaiverRequiredFields);
+  securityScanWaiverContext = null;
+  try {
+    const response = await fetch(
+      `/internal/security/scanning/findings/${encodeURIComponent(findingId)}/waiver-context`,
+      { cache: "no-store" });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    const context = await response.json();
+    if (!Array.isArray(context.targets) || context.targets.length === 0) {
+      if (Number(context.targetCount || 0) > 0
+          && Number(context.waivedTargetCount || 0) >= Number(context.targetCount || 0)) {
+        await loadSecurityScanning();
+        showToast("This finding is already waived for all manageable repository artifacts.", "ok");
+        return;
+      }
+      throw new Error("No repository artifact is available for this finding.");
+    }
+    securityScanWaiverContext = context;
+    document.getElementById("security-scan-waiver-finding-id").value = context.findingId;
+    document.getElementById("security-scan-waiver-finding").value =
+      `${context.severity || "UNKNOWN"} · ${context.advisoryId || "Unknown advisory"}`;
+    document.getElementById("security-scan-waiver-package").value =
+      [context.packageName || context.packageUrl || "Unknown package", context.installedVersion]
+        .filter(Boolean)
+        .join(" @ ");
+    document.getElementById("security-scan-waiver-target").innerHTML =
+      context.targets.map((target, index) => `
+        <option value="${index}">${escapeHtml(target.repository)} — ${escapeHtml(target.assetPath)}</option>`)
+        .join("");
+    document.getElementById("security-scan-waiver-duration").value = "604800";
+    openFormModal(
+      "security-scan-waiver-form",
+      context.targets.length > 1 ? "security-scan-waiver-target" : "security-scan-waiver-reason");
+  } catch (error) {
+    showToast(`Unable to create waiver: ${error.message}`, "error");
+  }
+}
+
+function hideSecurityScanWaiverForm() {
+  clearRequiredFieldErrors(securityScanWaiverRequiredFields);
+  securityScanWaiverContext = null;
+  closeFormModal("security-scan-waiver-form");
+}
+
+async function createSecurityScanWaiver(event) {
+  event.preventDefault();
+  if (!validateRequiredFields(
+      securityScanWaiverRequiredFields,
+      { prefix: "Waiver fields missing" })) return;
+  const targetIndex = Number(document.getElementById("security-scan-waiver-target").value);
+  const target = securityScanWaiverContext?.targets?.[targetIndex];
+  const durationValue = document.getElementById("security-scan-waiver-duration").value;
+  const neverExpires = durationValue === "never";
+  const durationSeconds = neverExpires ? null : Number(durationValue);
+  if (!target
+      || (!neverExpires && (!Number.isFinite(durationSeconds) || durationSeconds <= 0))) {
+    showToast("Waiver target or expiration is no longer available.", "error");
+    return;
+  }
+  const payload = {
+    scopeType: "FINDING",
+    repositoryId: target.repositoryId,
+    assetId: target.assetId,
+    findingId: securityScanWaiverContext.findingId,
+    advisorySelector: null,
+    packageSelector: null,
+    selector: {},
+    reason: document.getElementById("security-scan-waiver-reason").value.trim(),
+    policyId: null,
+    policyRevision: null,
+    expiresAt: neverExpires
+      ? null
+      : new Date(Date.now() + durationSeconds * 1000).toISOString()
+  };
+  try {
+    const response = await fetch("/internal/security/scanning/waivers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (response.status === 409) {
+      hideSecurityScanWaiverForm();
+      await loadSecurityScanning();
+      selectSecurityScanTab("findings");
+      showToast(
+        "Waiver state changed while this form was open. Findings and remaining targets were refreshed.",
+        "ok");
+      return;
+    }
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    hideSecurityScanWaiverForm();
+    showToast("Security scan waiver created.", "ok");
+    await loadSecurityScanning();
+    selectSecurityScanTab("findings");
+  } catch (error) {
+    showToast(`Waiver creation failed: ${error.message}`, "error");
+  }
+}
+
+async function securityScanTaskAction(kind, id) {
+  try {
+    const response = await fetch(`/internal/security/scanning/tasks/${id}/${kind}`, { method: "POST" });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    showToast(`Scan task ${kind} accepted.`, "ok");
+    await loadSecurityScanning();
+    selectSecurityScanTab("tasks");
+  } catch (error) {
+    showToast(`Task action failed: ${error.message}`, "error");
+  }
+}
+
+async function securityScanRescan(assetId) {
+  try {
+    const response = await fetch(`/internal/security/scanning/assets/${assetId}/rescan`, { method: "POST" });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    showToast("Artifact rescan queued.", "ok");
+    await loadSecurityScanning();
+    selectSecurityScanTab("tasks");
+  } catch (error) {
+    showToast(`Rescan failed: ${error.message}`, "error");
+  }
+}
+
+async function deleteSecurityScanWaiver(waiverId) {
+  if (!window.confirm(`Delete security scan waiver ${waiverId}?`)) return;
+  try {
+    const response = await fetch(`/internal/security/scanning/waivers/${waiverId}`, { method: "DELETE" });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    showToast("Security scan waiver deleted.", "ok");
+    await loadSecurityScanning();
+    selectSecurityScanTab("waivers");
+  } catch (error) {
+    showToast(`Waiver deletion failed: ${error.message}`, "error");
+  }
+}
+
 function switchView(view, options = {}) {
   if (!document.getElementById(`${view}-view`)) return false;
   if (options.updateHash !== false) {
@@ -4183,6 +5328,12 @@ function switchView(view, options = {}) {
   if (view === "security-oidc") loadSecurityOidc();
   if (view === "security-anonymous") loadSecurityAnonymous();
   if (view === "security-api-keys") loadSecurityApiKeys();
+  if (view === "security-scanning") {
+    selectSecurityScanTab(
+        securityScanTabFromHash() || "overview",
+        { updateHash: false });
+    loadSecurityScanning();
+  }
   if (view === "security-audit-log") loadAuditLogs(0);
   if (view === "ui-settings") loadUiSettings();
   if (view === "repository-data-migration") loadRepositoryDataMigrationJobs();
@@ -4192,6 +5343,13 @@ function switchView(view, options = {}) {
 function applyHashRoute() {
   const view = viewFromHash();
   if (!view) return false;
+  if (view === "security-scanning"
+      && document.getElementById("security-scanning-view").classList.contains("is-active")) {
+    selectSecurityScanTab(
+        securityScanTabFromHash() || "overview",
+        { updateHash: false });
+    return true;
+  }
   return switchView(view, { updateHash: false });
 }
 
@@ -4203,7 +5361,12 @@ initializeSideGroups();
   ["security-user-form", hideSecurityUserForm],
   ["security-role-form", hideSecurityRoleForm],
   ["security-privilege-form", hideSecurityPrivilegeForm],
-  ["security-api-key-form", hideSecurityApiKeyForm]
+  ["security-api-key-form", hideSecurityApiKeyForm],
+  ["security-scan-repository-form", hideSecurityScanRepositoryForm],
+  ["security-scan-policy-form", hideSecurityScanPolicyForm],
+  ["security-scan-waiver-form", hideSecurityScanWaiverForm],
+  ["security-scan-waiver-detail", hideSecurityScanWaiverDetail],
+  ["security-scan-finding-detail", hideSecurityScanFindingDetail]
 ].forEach(([formId, handler]) => bindFormModalDismiss(formId, handler));
 
 document.querySelectorAll(".side-item[data-view]").forEach((item) => {
@@ -4289,6 +5452,95 @@ document.getElementById("repository-table").addEventListener("click", (event) =>
 });
 document.getElementById("docker-connectors-refresh-button").addEventListener("click", refreshDockerConnectors);
 document.getElementById("docker-cache-clear-button").addEventListener("click", clearDockerCache);
+
+document.getElementById("security-scan-refresh-button").addEventListener("click", loadSecurityScanning);
+document.querySelectorAll("[data-scan-tab]").forEach((button) => {
+  button.addEventListener("click", () => selectSecurityScanTab(button.dataset.scanTab));
+  button.addEventListener("keydown", handleSecurityScanTabKeydown);
+});
+document.querySelectorAll("[data-security-scan-list-form]").forEach((form) => {
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    searchSecurityScanList(form.dataset.securityScanListForm);
+  });
+});
+document.querySelectorAll("[data-security-scan-clear]").forEach((button) => {
+  button.addEventListener(
+    "click",
+    () => clearSecurityScanListSearch(button.dataset.securityScanClear));
+});
+document.querySelectorAll("[data-security-scan-page-action]").forEach((button) => {
+  button.addEventListener(
+    "click",
+    () => moveSecurityScanPage(
+      button.dataset.securityScanPageList,
+      button.dataset.securityScanPageAction));
+});
+document.querySelectorAll("[data-security-scan-page-size]").forEach((select) => {
+  select.addEventListener(
+    "change",
+    () => resizeSecurityScanPage(select.dataset.securityScanPageSize, select.value));
+});
+document.getElementById("security-scan-repository-table").addEventListener("click", (event) => {
+  const editButton = event.target.closest(".security-scan-repository-edit");
+  if (editButton) editSecurityScanRepository(editButton.dataset.id);
+});
+document.getElementById("security-scan-repository-form").addEventListener("submit", saveSecurityScanRepository);
+document.getElementById("security-scan-cancel-repository-button").addEventListener(
+  "click", hideSecurityScanRepositoryForm);
+document.getElementById("security-scan-create-policy-button").addEventListener(
+  "click", showCreateSecurityScanPolicyForm);
+document.getElementById("security-scan-cancel-policy-button").addEventListener(
+  "click", hideSecurityScanPolicyForm);
+document.getElementById("security-scan-policy-form").addEventListener(
+  "submit", saveSecurityScanPolicy);
+bindRequiredFieldErrors(securityScanPolicyRequiredFields);
+document.getElementById("security-scan-policy-table").addEventListener("click", (event) => {
+  const editButton = event.target.closest(".security-scan-policy-edit");
+  if (editButton) showEditSecurityScanPolicyForm(editButton.dataset.id);
+});
+document.getElementById("security-scan-cancel-waiver-button").addEventListener(
+  "click", hideSecurityScanWaiverForm);
+document.getElementById("security-scan-waiver-form").addEventListener("submit", createSecurityScanWaiver);
+document.getElementById("security-scan-close-waiver-detail-button").addEventListener(
+  "click", hideSecurityScanWaiverDetail);
+document.getElementById("security-scan-view-all-waivers-button").addEventListener(
+  "click", viewAllSecurityScanWaivers);
+document.getElementById("security-scan-close-finding-detail-button").addEventListener(
+  "click", hideSecurityScanFindingDetail);
+bindRequiredFieldErrors(securityScanWaiverRequiredFields);
+document.getElementById("security-scan-finding-table").addEventListener("click", (event) => {
+  const viewButton = event.target.closest(".security-scan-finding-view");
+  if (viewButton) {
+    showSecurityScanFindingDetail(viewButton.dataset.id);
+    return;
+  }
+  const detailButton = event.target.closest(".security-scan-finding-waiver-detail");
+  if (detailButton) {
+    showSecurityScanWaiverDetail(detailButton.dataset.id);
+    return;
+  }
+  const waiveButton = event.target.closest(".security-scan-finding-waive");
+  if (waiveButton) showCreateSecurityScanWaiverForm(waiveButton.dataset.id);
+});
+document.getElementById("security-scan-task-table").addEventListener("click", (event) => {
+  const retryButton = event.target.closest(".security-scan-task-retry");
+  if (retryButton) {
+    securityScanTaskAction("retry", retryButton.dataset.id);
+    return;
+  }
+  const cancelButton = event.target.closest(".security-scan-task-cancel");
+  if (cancelButton) {
+    securityScanTaskAction("cancel", cancelButton.dataset.id);
+    return;
+  }
+  const rescanButton = event.target.closest(".security-scan-asset-rescan");
+  if (rescanButton) securityScanRescan(rescanButton.dataset.id);
+});
+document.getElementById("security-scan-waiver-table").addEventListener("click", (event) => {
+  const deleteButton = event.target.closest(".security-scan-waiver-delete");
+  if (deleteButton) deleteSecurityScanWaiver(deleteButton.dataset.id);
+});
 
 document.getElementById("security-user-filter").addEventListener("input", renderSecurityUsers);
 document.getElementById("security-user-source-filter").addEventListener("change", renderSecurityUsers);

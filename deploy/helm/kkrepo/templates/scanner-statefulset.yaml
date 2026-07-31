@@ -1,0 +1,117 @@
+{{- if .Values.securityScanning.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "kkrepo.scannerName" . }}
+  labels:
+    {{- include "kkrepo.scannerLabels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "kkrepo.scannerHeadlessName" . }}
+  podManagementPolicy: Parallel
+  replicas: {{ .Values.securityScanning.replicaCount }}
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "kkrepo.scannerSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kkrepo.scannerSelectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "kkrepo.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.securityScanning.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: scanner
+          image: "{{ .Values.securityScanning.image.repository }}:{{ default .Chart.AppVersion .Values.securityScanning.image.tag }}"
+          imagePullPolicy: {{ .Values.securityScanning.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityScanning.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: KKREPO_SCANNER_SERVICE_CREDENTIAL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.securityScanning.serviceCredential.existingSecret }}
+                  key: {{ .Values.securityScanning.serviceCredential.key }}
+            - name: KKREPO_SCANNER_DB_AUTO_UPDATE
+              # Public update egress belongs only to the dedicated updater CronJob.
+              value: "false"
+            - name: KKREPO_SCANNER_DB_UPDATE_INTERVAL
+              value: {{ .Values.securityScanning.scannerDatabase.updateInterval | quote }}
+            - name: KKREPO_SCANNER_DB_DIRECTORY
+              value: /var/lib/kkrepo-scanner/grype
+            - name: KKREPO_SCANNER_MAX_OCI_REQUEST_BYTES
+              value: {{ .Values.securityScanning.limits.maxOciRequestBytes | quote }}
+            - name: KKREPO_SCANNER_MAX_INPUT_BYTES
+              value: {{ .Values.securityScanning.limits.maxInputBytes | quote }}
+            - name: KKREPO_SCANNER_MAX_OUTPUT_BYTES
+              value: {{ .Values.securityScanning.limits.maxOutputBytes | quote }}
+            - name: KKREPO_SCANNER_MAX_STDERR_BYTES
+              value: {{ .Values.securityScanning.limits.maxStderrBytes | quote }}
+            - name: KKREPO_SCANNER_MAX_SCRATCH_BYTES
+              value: {{ .Values.securityScanning.limits.maxScratchBytes | quote }}
+            - name: KKREPO_SCANNER_MAX_CONCURRENT_SCANS
+              value: {{ .Values.securityScanning.limits.maxConcurrentScans | quote }}
+            - name: KKREPO_SCANNER_MAX_QUEUED_SCANS
+              value: {{ .Values.securityScanning.limits.maxQueuedScans | quote }}
+            - name: KKREPO_SCANNER_ADMISSION_TIMEOUT
+              value: {{ .Values.securityScanning.limits.admissionTimeout | quote }}
+            - name: KKREPO_SCANNER_RETRY_AFTER_SECONDS
+              value: {{ .Values.securityScanning.limits.retryAfterSeconds | quote }}
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            {{- toYaml .Values.securityScanning.startupProbe | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            {{- toYaml .Values.securityScanning.readinessProbe | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            {{- toYaml .Values.securityScanning.livenessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.securityScanning.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: scanner-db
+              mountPath: /var/lib/kkrepo-scanner/grype
+              readOnly: true
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.securityScanning.limits.scratchVolumeSize }}
+        - name: scanner-db
+          {{- if .Values.securityScanning.scannerDatabase.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ default (include "kkrepo.scannerDatabaseClaimName" .) .Values.securityScanning.scannerDatabase.persistence.existingClaim }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

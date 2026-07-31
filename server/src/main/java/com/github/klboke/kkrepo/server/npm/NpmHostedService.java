@@ -16,11 +16,11 @@ import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.time.Instant;
-import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -40,6 +40,8 @@ public class NpmHostedService {
   private final NpmAssetWriter writer;
   private final ObjectMapper mapper;
   private final AssetMetadataCache assetMetadataCache;
+  private final ArtifactDownloadPolicy downloadPolicy;
+  private final NpmPublishParser publishParser;
 
   private record PublishWritePlan(Optional<Map<String, Object>> existingPackageRoot, String effectiveRevision) {}
 
@@ -49,11 +51,42 @@ public class NpmHostedService {
       NpmAssetWriter writer,
       ObjectMapper mapper,
       AssetMetadataCache assetMetadataCache) {
+    this(assetDao, blobStorageRegistry, writer, mapper, assetMetadataCache, null);
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  public NpmHostedService(
+      AssetDao assetDao,
+      BlobStorageRegistry blobStorageRegistry,
+      NpmAssetWriter writer,
+      ObjectMapper mapper,
+      AssetMetadataCache assetMetadataCache,
+      ArtifactDownloadPolicy downloadPolicy) {
+    this(
+        assetDao,
+        blobStorageRegistry,
+        writer,
+        mapper,
+        assetMetadataCache,
+        downloadPolicy,
+        new NpmPublishParser(mapper));
+  }
+
+  NpmHostedService(
+      AssetDao assetDao,
+      BlobStorageRegistry blobStorageRegistry,
+      NpmAssetWriter writer,
+      ObjectMapper mapper,
+      AssetMetadataCache assetMetadataCache,
+      ArtifactDownloadPolicy downloadPolicy,
+      NpmPublishParser publishParser) {
     this.assetDao = assetDao;
     this.blobStorageRegistry = blobStorageRegistry;
     this.writer = writer;
     this.mapper = mapper;
     this.assetMetadataCache = assetMetadataCache;
+    this.downloadPolicy = downloadPolicy;
+    this.publishParser = publishParser;
   }
 
   public MavenResponse get(RepositoryRuntime runtime, NpmPath path, String repositoryBaseUrl, boolean headOnly) {
@@ -89,8 +122,8 @@ public class NpmHostedService {
       String createdBy,
       String createdByIp) {
     enforceHosted(runtime);
-    try {
-      Map<String, Object> incoming = mapper.readValue(body, MAP_TYPE);
+    try (NpmPublishParser.PublishRequest publish = publishParser.parse(body)) {
+      Map<String, Object> incoming = publish.packageRoot();
       String payloadName = NpmMetadata.stringValue(incoming.get(NpmMetadata.NAME), packageId.id());
       if (!packageId.id().equals(payloadName)) {
         throw new NpmExceptions.BadRequestException(
@@ -98,10 +131,18 @@ public class NpmHostedService {
       }
 
       PublishWritePlan plan = packageRootWritePlan(runtime, packageId, revision, incoming);
-      validateAttachmentsWrite(runtime, packageId, incoming);
+      validateAttachmentsWrite(runtime, packageId, incoming, publish.attachments());
       long blobStoreId = requireBlobStore(runtime);
       BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);
-      writeAttachments(runtime, storage, blobStoreId, packageId, incoming, createdBy, createdByIp);
+      writeAttachments(
+          runtime,
+          storage,
+          blobStoreId,
+          packageId,
+          incoming,
+          publish.attachments(),
+          createdBy,
+          createdByIp);
       Map<String, Object> toStore = packageRootForStorage(packageId, incoming, plan);
       byte[] json = NpmResponseSupport.write(mapper, toStore);
       writer.writePackageRoot(runtime, storage, blobStoreId, packageId, json, createdBy, createdByIp);
@@ -299,12 +340,20 @@ public class NpmHostedService {
       String repositoryBaseUrl,
       boolean headOnly,
       NpmPackumentVariant variant) {
-    Map<String, Object> packageRoot = loadPackageRootMap(runtime, packageId)
+    CachedAssetMetadata metadata = assetMetadataCache.find(
+        runtime.id(),
+        packageId.id(),
+        () -> AssetMetadataCache.Loaded.from(
+            assetDao.findAssetByPath(runtime.id(), packageId.id()), assetDao))
+        .orElseThrow(() -> new NpmExceptions.NpmNotFoundException(
+            "Package '" + packageId.id() + "' not found"));
+    Map<String, Object> packageRoot = packageRoot(metadata)
         .orElseThrow(() -> new NpmExceptions.NpmNotFoundException("Package '" + packageId.id() + "' not found"));
     byte[] bytes = NpmPackumentResponseWriter.write(
         mapper, packageRoot, null, null, variant, packageId, repositoryBaseUrl);
-    AssetRecord asset = assetDao.findAssetByPath(runtime.id(), packageId.id()).orElse(null);
-    Instant lastModified = asset == null ? Instant.now() : asset.lastUpdatedAt();
+    AssetBlobRecord blob = metadata.toBlobRecord();
+    if (downloadPolicy != null) downloadPolicy.beforeRead(metadata.assetId(), blob.id());
+    Instant lastModified = metadata.lastUpdatedAt();
     if (headOnly) {
       return MavenResponse.noBody(200, bytes.length, NpmResponseSupport.JSON, null, lastModified);
     }
@@ -346,6 +395,7 @@ public class NpmHostedService {
     if (blob == null) {
       throw new NpmExceptions.NpmNotFoundException(asset.path());
     }
+    beforeRead(asset.id(), blob.id());
     String contentType = responseContentType(asset);
     if (headOnly) {
       return MavenResponse.noBody(200, blob.size(), contentType, blob.sha1(), asset.lastUpdatedAt());
@@ -362,6 +412,7 @@ public class NpmHostedService {
     if (blob == null) {
       throw new NpmExceptions.NpmNotFoundException(snapshot.path());
     }
+    beforeRead(snapshot.assetId(), blob.id());
     String contentType = responseContentType(snapshot.kind(), snapshot.path(), snapshot.contentType());
     if (headOnly) {
       return MavenResponse.noBody(200, blob.size(), contentType, blob.sha1(), snapshot.lastUpdatedAt());
@@ -371,6 +422,12 @@ public class NpmHostedService {
                 blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size()))
             .orElseThrow(() -> new NpmExceptions.NpmNotFoundException(snapshot.path())),
         blob.size(), contentType, blob.sha1(), snapshot.lastUpdatedAt());
+  }
+
+  void beforeRead(long assetId, long blobId) {
+    if (downloadPolicy != null) {
+      downloadPolicy.beforeRead(assetId, blobId);
+    }
   }
 
   private static String responseContentType(AssetRecord asset) {
@@ -390,47 +447,33 @@ public class NpmHostedService {
       long blobStoreId,
       NpmPackageId packageId,
       Map<String, Object> packageRoot,
+      Iterable<NpmPublishParser.Attachment> attachments,
       String createdBy,
       String createdByIp) {
-    Object raw = packageRoot.get(NpmMetadata.ATTACHMENTS);
-    if (!(raw instanceof Map<?, ?> attachments)) {
-      return;
-    }
-    for (Map.Entry<?, ?> entry : attachments.entrySet()) {
-      String tarballName = NpmMetadata.extractTarballName(String.valueOf(entry.getKey()));
-      if (!(entry.getValue() instanceof Map<?, ?> attachment)) {
-        continue;
-      }
-      Object data = attachment.get("data");
-      if (data == null) {
-        continue;
-      }
+    for (NpmPublishParser.Attachment attachment : attachments) {
+      String tarballName = attachment.tarballName();
       String version = NpmMetadata.findVersionForTarball(packageRoot, tarballName);
       if (version == null) {
         throw new NpmExceptions.BadRequestException("Unable to resolve version for tarball " + tarballName);
       }
       Optional<AssetRecord> existing = assetDao.findAssetByPath(runtime.id(), packageId.tarballPath(tarballName));
       enforceWritePolicy(runtime, "tarball", existing.isPresent());
-      byte[] tarball = Base64.getMimeDecoder().decode(data.toString());
-      String contentType = NpmMetadata.stringValue(attachment.get("content_type"), NpmResponseSupport.TARBALL);
-      writer.writeTarball(runtime, storage, blobStoreId, packageId, version, tarballName,
-          new ByteArrayInputStream(tarball), contentType, createdBy, createdByIp, Map.of());
+      try (InputStream tarball = attachment.openStream()) {
+        writer.writeTarball(runtime, storage, blobStoreId, packageId, version, tarballName,
+            tarball, attachment.contentType(), createdBy, createdByIp, Map.of());
+      } catch (IOException e) {
+        throw new IllegalStateException("Failed to read staged npm attachment " + tarballName, e);
+      }
     }
   }
 
   private void validateAttachmentsWrite(
       RepositoryRuntime runtime,
       NpmPackageId packageId,
-      Map<String, Object> packageRoot) {
-    Object raw = packageRoot.get(NpmMetadata.ATTACHMENTS);
-    if (!(raw instanceof Map<?, ?> attachments)) {
-      return;
-    }
-    for (Map.Entry<?, ?> entry : attachments.entrySet()) {
-      String tarballName = NpmMetadata.extractTarballName(String.valueOf(entry.getKey()));
-      if (!(entry.getValue() instanceof Map<?, ?> attachment) || attachment.get("data") == null) {
-        continue;
-      }
+      Map<String, Object> packageRoot,
+      Iterable<NpmPublishParser.Attachment> attachments) {
+    for (NpmPublishParser.Attachment attachment : attachments) {
+      String tarballName = attachment.tarballName();
       String version = NpmMetadata.findVersionForTarball(packageRoot, tarballName);
       if (version == null) {
         throw new NpmExceptions.BadRequestException("Unable to resolve version for tarball " + tarballName);

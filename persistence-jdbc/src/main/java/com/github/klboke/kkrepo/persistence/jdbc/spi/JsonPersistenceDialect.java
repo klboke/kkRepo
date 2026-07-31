@@ -12,4 +12,10 @@ public interface JsonPersistenceDialect {
   String extractText(String column, String... path);
 
   String setBoolean(String column, boolean value, String... path);
+
+  /**
+   * Returns a one-column SELECT that expands a JSON array bind parameter into BIGINT rows.
+   * Implementations must validate {@code columnAlias} before interpolating it into SQL.
+   */
+  String selectLongsFromArray(String columnAlias);
 }

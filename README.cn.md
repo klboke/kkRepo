@@ -9,11 +9,12 @@
 
 [English](README.md) | **中文**
 
-kkRepo 是一款社区驱动、完全开源的自托管制品仓库，旨在解决 Sonatype Nexus 社区版的各类限制与痛点，为社区提供开放、可靠且可持续演进的制品管理方案。目前已支持 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等制品格式。
+kkRepo 是一款社区驱动、完全开源的自托管制品仓库，旨在解决 Sonatype Nexus 社区版的各类限制与痛点，为社区提供开放、可靠且可持续演进的制品管理方案。目前已支持 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等制品格式。
 
 ## 功能特性
 
-- 支持 15+ 种主流仓库格式，覆盖 hosted、proxy 和 group 仓库管理。
+- 支持 16+ 种主流仓库格式，覆盖 hosted、proxy 和 group 仓库管理。
+- 支持 AOT 编译运行，约 1 秒启动就绪，内存占用低于 200 MB。
 - Proxy 仓库支持按仓库配置出站 HTTP 或 SOCKS5 网络代理，并支持可选的代理认证和 HTTPS 上游隧道。
 - 兼容 Sonatype Nexus API 协议、用户权限模型、和 `/repository/<repo>/...` URL 布局。
 - 可使用 kkRepo 平替 Sonatype Nexus，支持存量数据一键迁移并沿用原仓库域名和 URL，原有客户端配置与 CI 工作流无需改动。
@@ -45,6 +46,14 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quickstart.sh | KKREPO_DATABASE_TYPE=postgresql bash
 ```
 
+如需从默认 JVM 镜像切换到多架构 Native 镜像：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quickstart.sh | KKREPO_RUNTIME=native bash
+```
+
+`KKREPO_RUNTIME` 和 `KKREPO_DATABASE_TYPE` 可以独立选择，也可以组合使用，例如 `KKREPO_RUNTIME=native KKREPO_DATABASE_TYPE=postgresql`。
+
 启动后访问：
 
 - 管理控制台：`http://127.0.0.1:19090/admin/`
@@ -58,6 +67,8 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 ## 构建和部署
 
 本地快速启动、Spring Boot 可执行 jar、Docker 镜像、压缩包、生产部署架构、资源规格和升级流程见 [构建部署指南](docs/zh/build-deployment-guide.md)。
+
+默认 JVM 与显式开启的 Native Image 在启动、内存、镜像体积和预热后吞吐方面的实测差异见 [Native Image 与 JVM 选型指南](docs/zh/native-vs-jvm-guide.md)。
 
 如果 kkRepo 部署在 Nginx 或其他 HTTPS 反向代理后面，请参考 [Nginx 反向代理配置注意事项](docs/zh/nginx-reverse-proxy.md)，确保 npm `dist.tarball` 等生成的仓库 URL 保持公网 `https://` scheme 和 host。
 
@@ -77,13 +88,12 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 | Composer / PHP | hosted / proxy / group | Composer 没有标准 publish 命令；支持 Components API 和 UI 上传 zip/tar archive，并通过 Composer 2 安装 | 支持 package/version、dist、HTML View、Browse/Search 和 Usage | Nexus 原生 Composer proxy 配置可迁移；cache 仅在管理员显式选择且 source profile 证明后迁移 |
 | Terraform Provider / Module Registry | hosted / proxy / group | 支持 Nexus 兼容 PUT 和 UI/API archive 上传；`terraform init` 可通过 group 解析 hosted 与 proxy module/provider | 支持 module/provider coordinate、version、platform、Browse/Search 和 Usage | 支持 Nexus Terraform hosted 数据和显式选择的 proxy archive cache 迁移；同时迁移 proxy/group 配置 |
 | Swift Package Registry | hosted / proxy / group | 支持 `swift package-registry publish`、Basic/Bearer 登录和 UI/API source archive 上传 | 支持 Registry v1 release/manifest/archive 元数据、Browse/Search 和 Usage | 仅已验证 Nexus 3.92.x-3.94.x datastore shape 可规划为 `FULL`；shape 漂移或 proxy secret 不可用时需人工处理 |
+| Ansible Galaxy | hosted / proxy / group | 支持 `ansible-galaxy collection publish`、Nexus 兼容 raw PUT、route-scoped Base64 Bearer/Ansible 2.9 Token 凭据、GenericToken 和 UI/API collection 上传（[使用指南](docs/zh/ansible-galaxy-guide.md)） | 支持 Galaxy v3 collection/version/artifact 元数据、依赖、Browse/Search 和 Usage | 支持 Nexus 3.93.x-3.94.x 仓库定义与 shape-gated hosted/proxy collection 数据迁移；未知 datastore shape 失败关闭 |
 | Docker / OCI | hosted / proxy / group | 支持 Registry V2 login、hosted push/pull、proxy pull、group pull、OCI referrers、cleanup 和 connector port 访问 | 支持 manifest/tag/blob metadata | Docker hosted 仓库数据迁移走 Nexus Repository Data 流程 |
 | NuGet | hosted / proxy / group | 支持 package push 和管理台上传 | 支持 v3 service index / search | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 | RubyGems | hosted / proxy / group | 支持 gem push/yank 和管理台上传 | 支持 | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 | Yum | hosted / proxy / group | 支持 RPM 上传和管理台上传 | 支持 repodata | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 | Raw | hosted / proxy / group | 支持 PUT 上传和管理台上传 | 支持 | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
-
-仓库数据迁移默认扫描 hosted 仓库；如需迁移源 Sonatype Nexus Repository 部署中作为历史备份或回源缓存使用的 proxy 仓库，可以在迁移页面的 `Optional proxy repositories` 中显式指定仓库名。Cargo / Rust、Dart / Pub、Nexus 原生 Composer 和 Terraform proxy cache 在显式选择且 source profile 接受时可迁移。Swift hosted archive、manifest、签名、metadata 和 repository URL mapping 仅对 Nexus 3.92.x-3.94.x 且 datastore fingerprint 能证明预期 Swift content model 的源恢复；版本超出范围、shape 漂移或未知 profile 均 fail closed 并生成 manual action。如果 Swift proxy 的源端 secret 被遮蔽或缺失，目标 proxy 会以 offline 状态创建且不写入占位 credential，需管理员显式补齐。Terraform 使用独立 proxy-cache writer 恢复 module/provider archive、保留 Nexus 公开 asset path，且不会把 cache asset 当作 hosted publication 重放。已恢复的 module archive 可不回源直接完成 module download discovery；Provider route 从已配置上游重建并校验 checksum/signature snapshot，其缓存 blob 在 metadata 有效期内保持固定。
 
 ## 从 Sonatype Nexus Repository 迁移
 
@@ -102,7 +112,7 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 | 维度 | Sonatype Nexus Repository OSS / Community Edition | kkRepo                                                                                                        |
 | --- | --- |-------------------------------------------------------------------------------------------------------------------|
 | 产品定位 | 通用制品仓库管理平台，功能完整，覆盖大量官方格式和管理能力 | 提供面向迁移的客户端行为、权限模型和 `/repository/<repo>/...` URL 布局兼容，同时采用共享关系数据库、OSS/S3-first、适合多副本部署的架构 |
-| 支持格式 | 官方支持格式更多，具体能力随版本和发行形态变化 | 聚焦常用制品格式，当前支持 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Docker/OCI、NuGet、RubyGems、Yum 和 Raw；每个格式以独立 protocol 模块实现，便于按优先级扩展和验证                       |
+| 支持格式 | 官方支持格式更多，具体能力随版本和发行形态变化 | 聚焦常用制品格式，当前支持 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Docker/OCI、NuGet、RubyGems、Yum 和 Raw；每个格式以独立 protocol 模块实现，便于按优先级扩展和验证                       |
 | 使用限制 | Community Edition 面向个人和小团队，官方限制为最多 40,000 components、100,000 requests/day；超过阈值后会暂停新增 component，直到用量回到限制以下 | 不内置 Community Edition 这类版本授权用量限制；容量边界由所选关系数据库、OSS/S3、运行副本数和部署规格决定，适合按实际业务规模扩容 |
 | 高可用部署 | 开源版适合单实例或基础 Kubernetes 部署；官方 HA deployment 属于 Pro 能力 | 从设计上默认支持多副本：session、认证 ticket、catalog 水位、锁、迁移进度和短生命周期协同状态都落 MySQL 或 PostgreSQL，进程内缓存只作为可重建热缓存 |
 | 稳定性和升级 | 版本边界复杂：3.70.x 是最后支持 OrientDB 的版本；3.71.0 起新安装默认 H2，但 H2 仍是内嵌数据库；Community Edition 到 3.77.0+ 才支持免费使用外部 PostgreSQL；3.88.0 起搜索才完全改为 SQL、替代 Elasticsearch。旧版 OrientDB/Elasticsearch/本地数据目录组合升级窗口重，文件损坏后恢复高度依赖备份、修复任务和人工介入 | 运行时支持 MySQL/PostgreSQL，不依赖 OrientDB 和内嵌 Elasticsearch；核心状态在共享关系数据库，blob 在 OSS/S3/File blob store，缓存和索引均可重建，更适合滚动升级、故障切换和数据恢复 |
@@ -127,7 +137,7 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 
 ![前台仓库列表](docs/img/img_7.png)
 
-按格式搜索组件，支持 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等仓库类型的制品检索。
+按格式搜索组件，支持 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等仓库类型的制品检索。
 
 ![前台制品搜索](docs/img/img.png)
 
@@ -166,6 +176,7 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 基础设施路线图：
 
 1. ✅ PostgreSQL 数据库后端支持 - 已实现。通过 `persistence-jdbc` 公共契约、语义化 dialect SPI、backend 自有 Flyway migration、双库 contract test 和多副本 server smoke test 隔离并验证差异；MySQL 继续作为默认后端（[数据库后端指南](docs/zh/database-backends.md)、[设计方案](docs/zh/dev/pluggable-database-access-layer-design.md)）。
+2. ✅ 制品安全扫描 - 已实现，部署能力默认关闭；关闭时升级不处理历史制品，也不增加上传 outbox 写入。部署人员显式开启能力后，管理员仍需在 Admin UI 按仓库启用；此时上传事务只写通用制品变更 outbox，SBOM 与已知漏洞分析完全异步。同时覆盖 Docker/OCI 多平台、数据库持久任务、多副本协同、policy/waiver 评估和可选下载阻断（[使用指南](docs/zh/artifact-scanning-guide.md)、[设计说明](docs/zh/dev/security-scanning-design.md)）。
 
 仓库格式路线图：
 
@@ -175,13 +186,13 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 4. ✅ Composer / PHP - hosted、proxy、group、UI/API 上传、搜索、真实客户端 E2E、强制 Nexus live 对比和显式选择的 Nexus proxy cache 迁移 E2E 已实现（[设计说明](docs/zh/dev/composer-php-repository-design.md)）
 5. ✅ Terraform Provider / Module Registry - hosted、proxy、group、Provider GPG 签名、Nexus 路径兼容、UI/API 上传、搜索、真实 Terraform CLI E2E、Nexus hosted 数据迁移和显式选择的 proxy cache 迁移已实现（[设计说明](docs/zh/dev/terraform-repository-design.md)）
 6. ✅ Swift Package Registry - hosted、GitHub-backed proxy、group、Registry v1、不可变签名发布、UI/API 上传、Browse/Search、多副本协同、真实 SwiftPM/Xcode E2E 和 shape-gated Nexus 3.92.x-3.94.x 迁移已实现（[设计说明](docs/zh/dev/swift-package-registry-design.md)）
-7. ohpm / HarmonyOS - 规划中，覆盖 hosted、proxy、group、导入和管理端能力（[设计说明](docs/zh/dev/ohpm-repository-design.md)）
-8. Ansible Galaxy
+7. ✅ Ansible Galaxy - 已实现 Galaxy v3 hosted/proxy/group、collection 不可变发布、依赖解析、route-scoped Base64 Bearer/Ansible 2.9 Token 与 GenericToken 认证、UI/API 上传、Browse/Search、持久化多副本 import/proxy 协同、Ansible 2.9/当前版真实客户端 E2E、Nexus 黑盒兼容和 shape-gated Nexus 3.93.x-3.94.x 迁移（[使用指南](docs/zh/ansible-galaxy-guide.md)、[设计说明](docs/zh/dev/ansible-galaxy-repository-design.md)）
+8. ohpm / HarmonyOS - 规划中，覆盖 hosted、proxy、group、导入和管理端能力（[设计说明](docs/zh/dev/ohpm-repository-design.md)）
 9. APT / Debian
 10. Conan
 11. Conda
 
-用户和管理端 UI 已暴露的 token 类型包括协议专用 token（`NpmToken`、`CargoToken`、`PubToken`、`NuGetApiKey`、`RubyGemsApiKey`），以及面向 Terraform 服务 URL、CI、脚本和自定义 HTTP 客户端的 `GenericToken`；`GenericToken` 适用于能够发送已配置 API-key header 或 bearer token 的调用方。
+用户和管理端 UI 已暴露的 token 类型包括协议专用 token（`NpmToken`、`CargoToken`、`PubToken`、`NuGetApiKey`、`RubyGemsApiKey`），以及面向 Terraform 服务 URL、Ansible Galaxy 客户端、CI、脚本和自定义 HTTP 客户端的 `GenericToken`；`GenericToken` 适用于能够发送已配置 API-key header 或 bearer token 的调用方。
 
 ## 参与贡献
 
@@ -205,6 +216,8 @@ kkRepo 使用 [Apache License 2.0](LICENSE) 开源。
 
 - [中文开发指南](docs/zh/development-guide.md)
 - [构建部署指南](docs/zh/build-deployment-guide.md)
+- [Artifact Scanning 使用指南](docs/zh/artifact-scanning-guide.md)
+- [Native Image 与 JVM 选型指南](docs/zh/native-vs-jvm-guide.md)
 - [Nginx 反向代理配置注意事项](docs/zh/nginx-reverse-proxy.md)
 - [客户端配置示例](docs/zh/client-recipes.md)
 - [架构说明](docs/zh/architecture.md)

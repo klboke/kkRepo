@@ -15,7 +15,10 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
@@ -27,6 +30,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -34,6 +38,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.GZIPOutputStream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /**
  * Live npm compatibility checks against a reference Nexus and kkrepo.
@@ -86,6 +91,53 @@ class NpmRepositoryBlackBoxCompatibilityTest {
       assertDistTags(nexus, nexusPlus, fixture);
       assertSearchContains(nexus, fixture.packageName());
       assertSearchContains(nexusPlus, fixture.packageName());
+    } finally {
+      delete(nexus, fixture.packageName());
+      delete(nexusPlus, fixture.packageName());
+    }
+  }
+
+  @Test
+  void hostedLargePublishWithRealNpmClientMatchesNexusWhenConfigured(@TempDir Path tempDir)
+      throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeTrue(config.configured(),
+        "Set NEXUS_COMPAT_BASE_URL and KKREPO_COMPAT_BASE_URL to run npm compatibility");
+    assumeTrue(config.writeEnabled(),
+        "Set COMPAT_WRITE_ENABLED=true to run npm write/delete compatibility against disposable repos");
+    assumeTrue(npmAvailable(), "Install npm to run the large real-client publish compatibility test");
+
+    RealNpmFixture fixture = RealNpmFixture.create(tempDir);
+    Endpoint nexus = config.nexusHosted();
+    Endpoint nexusPlus = config.nexusPlusHosted();
+    try {
+      publishWithNpm(nexus, fixture.tarball(), tempDir.resolve("nexus.npmrc"), tempDir);
+      publishWithNpm(nexusPlus, fixture.tarball(), tempDir.resolve("kkrepo.npmrc"), tempDir);
+
+      Map<String, Object> referencePackage = getJson(nexus, fixture.packageName());
+      Map<String, Object> candidatePackage = getJson(nexusPlus, fixture.packageName());
+      assertFalse(referencePackage.containsKey("_attachments"),
+          "Nexus stored package metadata must not retain publish attachments");
+      assertFalse(candidatePackage.containsKey("_attachments"),
+          "kkrepo stored package metadata must not retain publish attachments");
+
+      Map<String, Object> referenceVersion = version(referencePackage, fixture.version());
+      Map<String, Object> candidateVersion = version(candidatePackage, fixture.version());
+      assertPublishedDigests(fixture, referenceVersion, "Nexus");
+      assertPublishedDigests(fixture, candidateVersion, "kkrepo");
+
+      Exchange referenceTarball = get(
+          nexus,
+          tarballPath(nexus, referencePackage, fixture.version()));
+      Exchange candidateTarball = get(
+          nexusPlus,
+          tarballPath(nexusPlus, candidatePackage, fixture.version()));
+      assert2xx("Nexus large npm tarball", referenceTarball);
+      assert2xx("kkrepo large npm tarball", candidateTarball);
+      assertArrayEquals(fixture.tarballBytes(), referenceTarball.body(),
+          "Nexus large published tarball bytes");
+      assertArrayEquals(fixture.tarballBytes(), candidateTarball.body(),
+          "kkrepo large published tarball bytes");
     } finally {
       delete(nexus, fixture.packageName());
       delete(nexusPlus, fixture.packageName());
@@ -403,6 +455,11 @@ class NpmRepositoryBlackBoxCompatibilityTest {
   }
 
   @SuppressWarnings("unchecked")
+  private static Map<String, Object> version(Map<String, Object> doc, String version) {
+    return (Map<String, Object>) versions(doc).get(version);
+  }
+
+  @SuppressWarnings("unchecked")
   private static String latest(Map<String, Object> doc) {
     return ((Map<String, Object>) doc.get("dist-tags")).get("latest").toString();
   }
@@ -522,6 +579,142 @@ class NpmRepositoryBlackBoxCompatibilityTest {
     }
   }
 
+  private record RealNpmFixture(
+      String packageName,
+      String version,
+      Path tarball,
+      byte[] tarballBytes,
+      String sha1,
+      String integrity) {
+    private static final int FIXTURE_BYTES = 30 * 1024 * 1024;
+
+    static RealNpmFixture create(Path tempDir) throws Exception {
+      long stamp = System.currentTimeMillis();
+      String packageName = "kkrepo-npm-large-" + stamp;
+      String version = "1.0.0";
+      Path packageDir = Files.createDirectories(tempDir.resolve("package"));
+      Files.write(
+          packageDir.resolve("package.json"),
+          MAPPER.writeValueAsBytes(Map.of(
+              "name", packageName,
+              "version", version,
+              "description", "kkrepo large npm publish compatibility fixture")));
+      Random random = new Random(stamp);
+      try (OutputStream output = Files.newOutputStream(packageDir.resolve("fixture.bin"))) {
+        byte[] buffer = new byte[64 * 1024];
+        int remaining = FIXTURE_BYTES;
+        while (remaining > 0) {
+          random.nextBytes(buffer);
+          int count = Math.min(buffer.length, remaining);
+          output.write(buffer, 0, count);
+          remaining -= count;
+        }
+      }
+
+      runProcess(
+          List.of(
+              "npm",
+              "pack",
+              packageDir.toString(),
+              "--pack-destination",
+              tempDir.toString(),
+              "--ignore-scripts"),
+          tempDir,
+          Duration.ofMinutes(3));
+      Path tarball = tempDir.resolve(packageName + "-" + version + ".tgz");
+      assertTrue(Files.isRegularFile(tarball), "npm pack should create " + tarball);
+      assertTrue(Files.size(tarball) > 20_000_000L,
+          "large npm fixture must exceed Jackson's default JSON string limit after base64 encoding");
+      byte[] tarballBytes = Files.readAllBytes(tarball);
+      String sha1 = hex(MessageDigest.getInstance("SHA-1").digest(tarballBytes));
+      String integrity = "sha512-" + Base64.getEncoder().encodeToString(
+          MessageDigest.getInstance("SHA-512").digest(tarballBytes));
+      return new RealNpmFixture(packageName, version, tarball, tarballBytes, sha1, integrity);
+    }
+  }
+
+  private static void publishWithNpm(
+      Endpoint endpoint,
+      Path tarball,
+      Path npmrc,
+      Path workingDirectory) throws Exception {
+    String registry = endpoint.repositoryUrl();
+    StringBuilder config = new StringBuilder("registry=").append(registry).append('\n');
+    if (endpoint.username().isPresent() && endpoint.password().isPresent()) {
+      URI registryUri = URI.create(registry);
+      String authScope = "//" + registryUri.getRawAuthority() + registryUri.getRawPath();
+      String credentials = Base64.getEncoder().encodeToString(
+          (endpoint.username().get() + ":" + endpoint.password().get())
+              .getBytes(StandardCharsets.UTF_8));
+      config.append(authScope).append(":_auth=").append(credentials).append('\n');
+    }
+    Files.writeString(npmrc, config, StandardCharsets.UTF_8);
+    runProcess(
+        List.of(
+            "npm",
+            "publish",
+            tarball.toString(),
+            "--registry",
+            registry,
+            "--userconfig",
+            npmrc.toString(),
+            "--ignore-scripts"),
+        workingDirectory,
+        Duration.ofMinutes(5));
+  }
+
+  private static void assertPublishedDigests(
+      RealNpmFixture fixture,
+      Map<String, Object> version,
+      String label) {
+    assertTrue(version != null, label + " package metadata must contain " + fixture.version());
+    Object rawDist = version.get("dist");
+    assertTrue(rawDist instanceof Map<?, ?>, label + " version metadata must contain dist");
+    Map<?, ?> dist = (Map<?, ?>) rawDist;
+    assertEquals(fixture.sha1(), dist.get("shasum"), label + " tarball sha1");
+    assertEquals(fixture.integrity(), dist.get("integrity"), label + " tarball integrity");
+  }
+
+  private static boolean npmAvailable() {
+    try {
+      Process process = new ProcessBuilder("npm", "--version")
+          .redirectErrorStream(true)
+          .start();
+      if (!process.waitFor(15, TimeUnit.SECONDS)) {
+        process.destroyForcibly();
+        return false;
+      }
+      return process.exitValue() == 0;
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      return false;
+    } catch (IOException e) {
+      return false;
+    }
+  }
+
+  private static void runProcess(
+      List<String> command,
+      Path workingDirectory,
+      Duration timeout) throws Exception {
+    Path output = Files.createTempFile(workingDirectory, "npm-command-", ".log");
+    Process process = new ProcessBuilder(command)
+        .directory(workingDirectory.toFile())
+        .redirectErrorStream(true)
+        .redirectOutput(output.toFile())
+        .start();
+    boolean finished = process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
+    if (!finished) {
+      process.destroyForcibly();
+      process.waitFor(15, TimeUnit.SECONDS);
+      throw new AssertionError("Command timed out: " + String.join(" ", command));
+    }
+    String processOutput = Files.readString(output, StandardCharsets.UTF_8);
+    Files.deleteIfExists(output);
+    assertEquals(0, process.exitValue(),
+        () -> "Command failed: " + String.join(" ", command) + "\n" + processOutput);
+  }
+
   private static byte[] tarGz(String entryName, byte[] content) throws IOException {
     ByteArrayOutputStream tar = new ByteArrayOutputStream();
     byte[] header = new byte[512];
@@ -633,8 +826,12 @@ class NpmRepositoryBlackBoxCompatibilityTest {
       String repository,
       Optional<String> username,
       Optional<String> password) {
+    String repositoryUrl() {
+      return baseUrl.orElseThrow() + "/repository/" + repository + "/";
+    }
+
     HttpRequest.Builder request(String repositoryPath) {
-      URI uri = URI.create(baseUrl.orElseThrow() + "/repository/" + repository + "/" + repositoryPath);
+      URI uri = URI.create(repositoryUrl() + repositoryPath);
       HttpRequest.Builder builder = HttpRequest.newBuilder(uri);
       addAuth(builder);
       return builder;

@@ -8,6 +8,8 @@ target
 **/target/**
 !server/target/
 !server/target/kkrepo-server-*.jar
+!scanner-adapter/target/
+!scanner-adapter/target/kkrepo-scanner-adapter-*.jar
 
 logs
 *.log

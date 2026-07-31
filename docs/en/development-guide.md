@@ -170,7 +170,9 @@ For protocol paths that real package managers exercise directly, run the real cl
 scripts/ci/run-live-compat.sh client-e2e
 ```
 
-This suite publishes/uploads and then downloads/resolves through Maven, npm, PyPI, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform 0.13/current, SwiftPM/Xcode, NuGet, RubyGems, Yum, and Docker/OCI clients. Composer additionally covers a hosted-to-proxy transitive dependency, rejected Basic credentials, and lock replay after clearing the client cache and detaching the upstream; Terraform covers hosted and registry.terraform.io proxy modules/providers through a group, including provider checksum/signature metadata; Swift 5.7 covers registry/proxy resolve/build, while 5.10/6.x additionally cover HTTPS login, immutable publication, hosted/group flows, SCM replacement, and cross-replica reads; dedicated lanes cover macOS Xcode and Windows proxy resolution. Go is resolve-only through the Go module proxy. Client diagnostics are written under `artifacts/client-e2e/`, with credential-bearing metadata redacted before artifact upload.
+This suite publishes/uploads and then downloads/resolves through Maven, npm, PyPI, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform 0.13/current, SwiftPM/Xcode, Ansible Galaxy 2.9/current, NuGet, RubyGems, Yum, and Docker/OCI clients. Composer additionally covers a hosted-to-proxy transitive dependency, rejected Basic credentials, and lock replay after clearing the client cache and detaching the upstream; Terraform covers hosted and registry.terraform.io proxy modules/providers through a group, including provider checksum/signature metadata; Swift 5.7 covers registry/proxy resolve/build, while 5.10/6.x additionally cover HTTPS login, immutable publication, hosted/group flows, SCM replacement, and cross-replica reads; Ansible covers Galaxy v3 discovery, durable publish tasks, immutable versions, range/transitive dependencies, hosted/group download, public Galaxy proxying, Basic/GenericToken/Nexus bearer authentication, and cross-replica reads. Dedicated Swift lanes cover macOS Xcode and Windows proxy resolution. Go is resolve-only through the Go module proxy. Client diagnostics are written under `artifacts/client-e2e/`, with credential-bearing metadata redacted before artifact upload.
+
+On pull requests, `run-client-e2e` validates the default JVM candidate. Use the independent `run-native-client-e2e` label for Spring AOT, runtime-hint, or Native packaging changes; that workflow builds a Native candidate and runs the Linux real-client matrix against both MySQL and PostgreSQL.
 
 Swift production-hardening evidence is split into separate lanes: the scheduled S3-compatible resilience job uses two replicas, PostgreSQL, and MinIO through the AWS S3 adapter for lease takeover, 429/5xx stale behavior, restart, large-package, and destructive backup/restore checks; Alibaba OSS Native remains adapter-contract coverage rather than a live endpoint run. The migration workflow uses Nexus 3.94 H2 to MySQL and PostgreSQL source to MySQL/PostgreSQL target lanes, and verifies fail-closed source profiles and proxy credentials, restart/resume, checksums, and idempotency.
 
@@ -184,6 +186,8 @@ Detailed design and implementation plans for repository formats and migration wo
 - [Composer / PHP Repository Design Notes](../zh/dev/composer-php-repository-design.md) (Chinese)
 - [Terraform Provider / Module Registry Design Notes](../zh/dev/terraform-repository-design.md) (Chinese)
 - [Swift Package Registry Design Notes](../zh/dev/swift-package-registry-design.md) (Chinese)
+- [Ansible Galaxy Repository Design Notes](../zh/dev/ansible-galaxy-repository-design.md) (Chinese)
+- [Ansible Galaxy Repository Guide](ansible-galaxy-guide.md)
 - [Nexus Compatibility Migration Refactor Plan](dev/nexus-migration-compatibility-refactor-plan.md)
 
 ## Configuration Center

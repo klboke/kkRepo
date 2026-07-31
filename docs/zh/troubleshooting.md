@@ -87,7 +87,7 @@ java -jar server/target/kkrepo-server-*.jar
 - 代理保留完整 path。
 - 允许足够大的上传 body。
 - 上传和下载 timeout 足够长。
-- 不会移除 Maven/npm/pip/Helm/Cargo/Pub/Composer/NuGet/gem/yum 客户端需要的认证 header；Terraform `host.services` 的 URL token segment 会继续出现在生成的 archive/checksum/signature URL 中。
+- 不会移除 Maven/npm/pip/Helm/Cargo/Pub/Composer/Ansible/NuGet/gem/yum 客户端需要的认证 header；Terraform `host.services` 的 URL token segment 会继续出现在生成的 archive/checksum/signature URL 中。
 
 ## 初始管理员设置问题
 
@@ -162,7 +162,7 @@ export KKREPO_DATABASE_TYPE=mysql
 - 客户端使用了该协议正确的凭据类型。
 - 反向代理保留了 `Authorization` header。
 
-对于 npm、Cargo、Pub、NuGet、RubyGems 等 token 型客户端，修改用户或 realm 设置后，建议重新生成相关 token 或 API key。Terraform 使用嵌入 `host.services` URL 的 `GenericToken`，轮换 token 时应同步更新 CLI 配置。Composer 私有仓库通常使用 `COMPOSER_AUTH`/`auth.json` 的 HTTP Basic；出现 401 时检查 host key 是否与实际仓库 host:port 完全一致，并避免把 credentials 写入 `composer.json`。
+对于 npm、Cargo、Pub、NuGet、RubyGems 等 token 型客户端，修改用户或 realm 设置后，建议重新生成相关 token 或 API key。Terraform 使用嵌入 `host.services` URL 的 `GenericToken`，轮换 token 时应同步更新 CLI 配置。Ansible Galaxy 在当前 ansible-core 中通过 Bearer、在 Ansible 2.9 中通过 Token scheme 发送 `GenericToken`；旧客户端可能提供 `--api-key` 而不是 `--token`。Nexus 兼容 Base64 `username:password` 只在 Ansible route 内接受，且不是加密。Composer 私有仓库通常使用 `COMPOSER_AUTH`/`auth.json` 的 HTTP Basic；出现 401 时检查 host key 是否与实际仓库 host:port 完全一致，并避免把 credentials 写入 `composer.json`。
 
 如果问题是 Nexus 兼容差异，提交 issue 时请同时提供 Nexus 和 kkrepo 对同一请求的响应。
 
@@ -178,6 +178,8 @@ export KKREPO_DATABASE_TYPE=mysql
 - 用户具备所需仓库 add/edit 权限。
 
 如果重复上传失败，请确认 hosted 仓库 write policy。部分仓库会按设计拒绝重复发布。
+
+Ansible Galaxy 的重复 `(namespace, name, version)` 始终失败，因为 collection version 不可变。请从持久化 import task message 检查 canonical filename、请求 SHA-256、`MANIFEST.json`/`FILES.json`、逐文件 checksum、archive 安全或配置大小限制。只提高反向代理 body limit 不会提高 Ansible archive inspector limit。
 
 ## 迁移问题
 
@@ -198,6 +200,7 @@ export KKREPO_DATABASE_TYPE=mysql
 - Cargo / Rust 迁移被阻断，通常是因为 preflight 未证明受支持的 datastore Cargo content model；请查看 Source Profile 和对应 plan item 状态。
 - Composer 迁移被阻断时，确认源仓库是 Nexus 3.75.0+ Pro 原生 `composer-proxy`，并通过 `Optional proxy repositories` 显式选择。Community plugin、hosted/group 或没有 Composer content schema 的源不会自动降级迁移。
 - Terraform 迁移被阻断时，确认源仓库使用受支持 Nexus 版本的原生 `terraform-hosted` 或 `terraform-proxy` recipe。Proxy cache 数据必须在 `Optional proxy repositories` 中显式选择，且 source plan 为 `FULL`。迁移只恢复可识别的 module/provider archive；已恢复的 module archive 可从本地 Nexus path 直接发现，Provider route、validator、checksum manifest 和 signing snapshot 从已配置上游重建，并在 metadata 有效期内固定对应缓存。未知 schema、community plugin 和不支持的产品能力仍会 fail closed。
+- Ansible 迁移被阻断时，确认源仓库使用原生 Nexus 3.93.x-3.94.x `ansiblegalaxy-hosted` 或 `ansiblegalaxy-proxy` recipe，且 Source Profile 能证明 collection identity、archive、checksum 和 manifest shape。Proxy cache 必须在 `Optional proxy repositories` 中显式选择且 plan 为 `FULL`。未知 shape 与被遮蔽/缺失的 proxy secret 会 fail closed；完整 manifest/files JSON 恢复到 blob storage，不写入数据库 JSON 列。
 - blob 迁移慢，可能是并发过低、源 Nexus 压力过大，或对象存储限流。
 
 详见 [Nexus 迁移说明](nexus-migration-guide.md)。
@@ -221,6 +224,12 @@ docker compose -f docker-compose.compat.yml down -v
 ```
 
 较新仓库格式的 Nexus 兼容性测试使用 datastore 时代的 Nexus PostgreSQL 参考 compose 文件和 `nexus` suite。运行 live 读写检查前请先查看 [compat-test README](../../compat-test/README.md)。
+
+Ansible Galaxy 使用单独的 Nexus 3.94.x suite：
+
+```bash
+scripts/ci/run-live-compat.sh ansible
+```
 
 如果需要覆盖真实包管理器客户端，请对同一个一次性 kkrepo 候选实例运行客户端 E2E：
 

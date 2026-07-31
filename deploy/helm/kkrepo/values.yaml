@@ -65,6 +65,129 @@ blobStorage:
     existingClaim: ""
     mountPath: /var/lib/kkrepo/blobs
 
+# Deployment capability for the optional isolated Syft/Grype adapter. Enabling this value deploys
+# the adapter and starts kkRepo scan coordination; it does not activate scanning for any repository.
+# Repository administrators select repositories in Admin > Security > Artifact Scanning.
+# Task ownership and scan results stay in the shared relational database; the adapter volume
+# contains only a rebuildable vulnerability database.
+securityScanning:
+  enabled: false
+  metricsCountLimit: 10000
+  image:
+    repository: ghcr.io/klboke/kkrepo-scanner
+    pullPolicy: IfNotPresent
+    tag: ""
+  replicaCount: 1
+  service:
+    port: 8080
+  serviceCredential:
+    existingSecret: kkrepo-scanner
+    key: service-credential
+  scannerDatabase:
+    # Disabling the updater requires persistence.existingClaim to point at a pre-populated
+    # immutable generation layout containing .kkrepo-db-current and generations/generation-*.
+    autoUpdate: true
+    updateInterval: 6h
+    # A separate non-serving CronJob checks the shared database on this schedule. The interval
+    # above remains the minimum age between successful Grype updates.
+    updateSchedule: "*/5 * * * *"
+    updater:
+      backoffLimit: 2
+      successfulJobsHistoryLimit: 1
+      failedJobsHistoryLimit: 3
+      # A busy update exits non-zero after this publication-lock bound so the Job controller retries.
+      lockTimeout: 10m
+      scratchVolumeSize: 1Gi
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
+    maxAge: 48h
+    observationMaxAge: 2m
+    persistence:
+      enabled: true
+      existingClaim: ""
+      storageClass: ""
+      accessModes: ["ReadWriteOnce"]
+      size: 10Gi
+  worker:
+    batchSize: 4
+    leaseSeconds: 300
+    heartbeatSeconds: 60
+    maxAttempts: 5
+    maxBackoffSeconds: 1800
+    artifactChangeBatchSize: 1000
+    artifactChangeCleanupBatchSize: 5000
+    artifactReconcileBatchSize: 1000
+    artifactReconcileRecentWindow: 1d
+    candidateBatchSize: 500
+    backfillBatchSize: 500
+    backfillMaxPagesPerRun: 20
+    snapshotRematchBatchSize: 200
+    snapshotRematchMaxBatches: 10
+  retention:
+    enabled: true
+    terminalTaskDays: 30
+    resultDays: 90
+    batchSize: 200
+    delay: 1h
+    initialDelay: 5m
+  limits:
+    maxOciRequestBytes: 65536
+    maxInputBytes: 2147483648
+    maxOutputBytes: 16777216
+    maxResponseBytes: 67108864
+    maxResponseTokens: 262144
+    responseMemoryBudgetBytes: 268435456
+    maxStderrBytes: 262144
+    # Shared admission budget across concurrent scans. Keep this below scratchVolumeSize.
+    maxScratchBytes: 7516192768
+    scratchVolumeSize: 8Gi
+    maxConcurrentScans: 2
+    maxQueuedScans: 4
+    admissionTimeout: 1s
+    retryAfterSeconds: 5
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    readOnlyRootFilesystem: true
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+      ephemeral-storage: 1Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+      ephemeral-storage: 9Gi
+  startupProbe:
+    failureThreshold: 60
+    periodSeconds: 5
+  readinessProbe:
+    periodSeconds: 10
+    timeoutSeconds: 3
+  livenessProbe:
+    periodSeconds: 20
+    timeoutSeconds: 3
+  networkPolicy:
+    enabled: true
+    # Restrict port 53 to the cluster DNS workload. Override both selectors when the cluster uses
+    # different DNS labels; empty selectors are rejected instead of widening egress.
+    dns:
+      namespaceSelector:
+        kubernetes.io/metadata.name: kube-system
+      podSelector:
+        k8s-app: kube-dns
+
 resources:
   requests:
     cpu: 500m

@@ -9,11 +9,12 @@
 
 **English** | [中文](README.cn.md)
 
-kkRepo is a community-driven, fully open-source, self-hosted artifact repository designed to address the limitations and pain points of Sonatype Nexus Community Edition and provide the community with an open, reliable, and sustainably evolving artifact management solution. It currently supports Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift Package Registry, Docker/OCI, NuGet, RubyGems, Yum, Raw, and other artifact formats.
+kkRepo is a community-driven, fully open-source, self-hosted artifact repository designed to address the limitations and pain points of Sonatype Nexus Community Edition and provide the community with an open, reliable, and sustainably evolving artifact management solution. It currently supports Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift Package Registry, Ansible Galaxy, Docker/OCI, NuGet, RubyGems, Yum, Raw, and other artifact formats.
 
 ## Features
 
-- Support for 15+ mainstream repository formats across hosted, proxy, and group repository types.
+- Support for 16+ mainstream repository formats across hosted, proxy, and group repository types.
+- Supports AOT compilation and runtime, with about one-second startup readiness and memory usage below 200 MB.
 - Per-repository outbound HTTP or SOCKS5 proxy configuration for proxy repositories, with optional proxy authentication and HTTPS upstream tunneling.
 - Compatibility with Sonatype Nexus APIs, user permission model, and the `/repository/<repo>/...` URL layout.
 - Use kkRepo as a drop-in replacement for Sonatype Nexus, with one-click migration of existing data while preserving repository domains and URLs, so client configurations and CI workflows continue unchanged.
@@ -45,6 +46,14 @@ To run the same image with the default PostgreSQL 16 quickstart instead (the run
 curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quickstart.sh | KKREPO_DATABASE_TYPE=postgresql bash
 ```
 
+To use the multi-architecture Native image instead of the default JVM image:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quickstart.sh | KKREPO_RUNTIME=native bash
+```
+
+`KKREPO_RUNTIME` and `KKREPO_DATABASE_TYPE` are independent and can be combined, for example with `KKREPO_RUNTIME=native KKREPO_DATABASE_TYPE=postgresql`.
+
 Open:
 
 - Admin console: `http://127.0.0.1:19090/admin/`
@@ -58,6 +67,8 @@ If you prefer to inspect the script before running it, download `scripts/quickst
 ## Build And Deployment
 
 Local quick start, Spring Boot executable jar, Docker image, archive package, production deployment architecture, resource sizing, and upgrade flow are documented in the [Build And Deployment Guide](docs/en/build-deployment-guide.md).
+
+For measured startup, memory, image-size, and warmed-throughput tradeoffs between the default JVM runtime and the opt-in Native Image runtime, see the [Native Image or JVM Selection Guide](docs/en/native-vs-jvm-guide.md).
 
 If kkRepo is deployed behind Nginx or another HTTPS reverse proxy, follow the [Nginx Reverse Proxy Notes](docs/en/nginx-reverse-proxy.md) so generated repository URLs, such as npm `dist.tarball`, keep the public `https://` scheme and host.
 
@@ -77,13 +88,12 @@ Local hot-reload development and testing are documented in the [Development Guid
 | Composer / PHP | hosted / proxy / group | Composer has no standard publish command; Components API and UI zip/tar archive upload plus Composer 2 installation are supported | Package/version metadata, dist, HTML View, Browse/Search, and Usage supported | Native Nexus Composer proxy configuration is migrated; cache migration requires explicit administrator selection and a proven source profile |
 | Terraform Provider / Module Registry | hosted / proxy / group | Nexus-compatible PUT and UI/API archive upload; `terraform init` resolves hosted and proxied modules/providers through groups | Module/provider coordinates, versions, platforms, Browse/Search, and Usage supported | Nexus Terraform hosted data and explicitly selected proxy archive caches are migrated; proxy/group configuration is also migrated |
 | Swift Package Registry | hosted / proxy / group | `swift package-registry publish`, Basic/Bearer login, and UI/API source archive upload | Registry v1 release/manifest/archive metadata, Browse/Search, and Usage supported | Swift hosted data is `FULL` only for verified Nexus 3.92.x-3.94.x datastore shapes; drift and unavailable proxy secrets require manual action |
+| Ansible Galaxy | hosted / proxy / group | `ansible-galaxy collection publish`, Nexus-compatible raw PUT, route-scoped Base64 Bearer/Ansible 2.9 Token credentials, GenericToken, and UI/API collection upload ([usage guide](docs/en/ansible-galaxy-guide.md)) | Galaxy v3 collection/version/artifact metadata, dependencies, Browse/Search, and Usage supported | Nexus 3.93.x-3.94.x repository definitions and shape-gated hosted/proxy collection data are supported; unknown datastore shapes fail closed |
 | Docker / OCI | hosted / proxy / group | Registry V2 login, hosted push/pull, proxy pull, group pull, OCI referrers, cleanup, and connector-port access | Manifest/tag/blob metadata supported | Hosted Docker repository data migration is supported through the Nexus Repository Data flow |
 | NuGet | hosted / proxy / group | package push and admin UI upload | v3 service index / search supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
 | RubyGems | hosted / proxy / group | gem push/yank and admin UI upload | Supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
 | Yum | hosted / proxy / group | RPM upload and admin UI upload | repodata supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
 | Raw | hosted / proxy / group | PUT upload and admin UI upload | Supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
-
-Repository data migration scans hosted repositories by default. If you need to migrate proxy repositories from a source Sonatype Nexus Repository deployment as historical backup data or upstream cache data, explicitly specify repository names in `Optional proxy repositories` on the migration page. Cargo / Rust, Dart / Pub, native Nexus Composer, and Terraform proxy-cache migration are supported when explicitly selected and accepted by the source profile. Swift hosted archives, checksums, and manifests are restored only for Nexus 3.92.x-3.94.x sources whose datastore fingerprint proves the expected Swift content model; optional signatures, original metadata, and repository URL mappings are preserved only when the source export actually contains them. Native Nexus 3.94 accepts those optional publication fields but does not persist or re-expose them, so migration does not fabricate them. An out-of-range version, shape drift, or an unknown profile fails closed with a manual action. A Swift proxy whose source secret is masked or missing is created offline without a placeholder credential and must be completed explicitly in the target. Terraform restores module/provider archives through an independent proxy-cache writer and preserves Nexus public asset paths instead of replaying cache assets as hosted publications. Restored module archives can satisfy module download discovery without an upstream call; provider routes rebuild the verified checksum/signature snapshot from the configured upstream and pin its cached blobs for the metadata lifetime.
 
 ## Migrating From Sonatype Nexus Repository
 
@@ -102,7 +112,7 @@ Migration supports interruption and resume. Completed data is skipped on later r
 | Dimension | Sonatype Nexus Repository OSS / Community Edition | kkRepo |
 | --- | --- | --- |
 | Product positioning | A general-purpose artifact repository management platform with broad format and management coverage | Provides migration-oriented client behavior, permission model, and `/repository/<repo>/...` URL compatibility while using a relational-database, OSS/S3-first, multi-replica-friendly architecture |
-| Supported formats | Officially supports more formats; exact capabilities vary by version and distribution | Focuses on common artifact formats. Currently supports Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift Package Registry, Docker/OCI, NuGet, RubyGems, Yum, and Raw. Each format is implemented as an independent protocol module for prioritized extension and validation |
+| Supported formats | Officially supports more formats; exact capabilities vary by version and distribution | Focuses on common artifact formats. Currently supports Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift Package Registry, Ansible Galaxy, Docker/OCI, NuGet, RubyGems, Yum, and Raw. Each format is implemented as an independent protocol module for prioritized extension and validation |
 | Usage limits | Community Edition targets individuals and small teams. Official limits are up to 40,000 components and 100,000 requests/day. When exceeded, new component creation is paused until usage returns below the limits | Does not include Community Edition-style license usage limits. Capacity is bounded by the selected relational database, OSS/S3, replica count, and deployment sizing, so it can scale with actual business needs |
 | High availability deployment | Open source editions are suitable for a single instance or basic Kubernetes deployment; official HA deployment is a Pro capability | Designed for multi-replica deployment by default: session, authentication tickets, catalog watermarks, locks, migration progress, and short-lived coordination state are stored in MySQL or PostgreSQL. In-process cache is only a rebuildable hot cache |
 | Stability and upgrade | Version boundaries are complex: 3.70.x is the last version supporting OrientDB; 3.71.0 defaults new installs to H2, but H2 is still embedded; Community Edition did not support free external PostgreSQL until 3.77.0+; search was fully moved to SQL and away from Elasticsearch only in 3.88.0. Older OrientDB/Elasticsearch/local-data-directory deployments carry heavy upgrade windows and recovery depends heavily on backups, repair tasks, and manual intervention | MySQL/PostgreSQL runtime with no dependency on OrientDB or embedded Elasticsearch. Core state is in the shared relational database, blobs are in OSS/S3/File blob store, and cache/index data is rebuildable, making rolling upgrade, failover, and recovery easier |
@@ -127,7 +137,7 @@ The repository list shows hosted, proxy, and group repositories with format, sta
 
 ![User repository list](docs/img/img_7.png)
 
-Search components by format across Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift Package Registry, Docker/OCI, NuGet, RubyGems, Yum, Raw, and other repository types.
+Search components by format across Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift Package Registry, Ansible Galaxy, Docker/OCI, NuGet, RubyGems, Yum, Raw, and other repository types.
 
 ![User artifact search](docs/img/img.png)
 
@@ -166,6 +176,7 @@ AI agent and contributor development instructions are in [AGENTS.md](AGENTS.md).
 Platform infrastructure roadmap:
 
 1. ✅ PostgreSQL database backend - Implemented through the public `persistence-jdbc` contracts, semantic dialect SPIs, backend-owned Flyway migrations, dual-database contract tests, and multi-replica server smoke tests. MySQL remains the default backend ([database backend guide](docs/en/database-backends.md), [Chinese design plan](docs/zh/dev/pluggable-database-access-layer-design.md)).
+2. ✅ Artifact security scanning - Implemented behind a disabled-by-default deployment capability gate. While disabled, upgrades do not process historical artifacts or add upload-outbox writes. After an operator explicitly enables capability, administrators still activate repositories individually in Admin UI; a feature-neutral transactional asset-change outbox then keeps uploads independent from asynchronous SBOM/known-vulnerability analysis. Durable multi-replica coordination, Docker/OCI multi-platform coverage, policy/waiver evaluation, and optional download enforcement are included ([usage guide](docs/en/artifact-scanning-guide.md), [Chinese design notes](docs/zh/dev/security-scanning-design.md)).
 
 Repository format roadmap:
 
@@ -175,13 +186,13 @@ Repository format roadmap:
 4. ✅ Composer / PHP - Hosted, proxy, group, UI/API upload, search, real-client E2E, required Nexus live comparison, and explicitly selected Nexus proxy-cache migration E2E implemented ([Chinese design notes](docs/zh/dev/composer-php-repository-design.md))
 5. ✅ Terraform Provider / Module Registry - Hosted, proxy, group, provider GPG signing, Nexus-compatible paths, UI/API upload, search, real Terraform CLI E2E, Nexus hosted-data migration, and explicitly selected proxy-cache migration implemented ([Chinese design notes](docs/zh/dev/terraform-repository-design.md))
 6. ✅ Swift Package Registry - Hosted, GitHub-backed proxy, group, Registry v1, immutable signed publication, UI/API upload, Browse/Search, multi-replica coordination, real SwiftPM/Xcode E2E, and shape-gated Nexus 3.92.x-3.94.x migration are implemented ([Chinese design notes](docs/zh/dev/swift-package-registry-design.md))
-7. ohpm / HarmonyOS - Planned with hosted, proxy, group, import, and admin capabilities ([Chinese design notes](docs/zh/dev/ohpm-repository-design.md))
-8. Ansible Galaxy
+7. ✅ Ansible Galaxy - Galaxy v3 hosted/proxy/group, immutable collection publishing, dependency resolution, route-scoped Base64 Bearer/Ansible 2.9 Token and GenericToken authentication, UI/API upload, Browse/Search, durable multi-replica import/proxy coordination, real Ansible 2.9/current client E2E, Nexus black-box compatibility, and shape-gated Nexus 3.93.x-3.94.x migration are implemented ([usage guide](docs/en/ansible-galaxy-guide.md), [Chinese design notes](docs/zh/dev/ansible-galaxy-repository-design.md))
+8. ohpm / HarmonyOS - Planned with hosted, proxy, group, import, and admin capabilities ([Chinese design notes](docs/zh/dev/ohpm-repository-design.md))
 9. APT / Debian
 10. Conan
 11. Conda
 
-Token types exposed in the user and admin UI include protocol-specific tokens (`NpmToken`, `CargoToken`, `PubToken`, `NuGetApiKey`, `RubyGemsApiKey`) plus `GenericToken` for Terraform service URLs, CI, scripts, and custom HTTP clients that can send the configured API-key header or bearer token.
+Token types exposed in the user and admin UI include protocol-specific tokens (`NpmToken`, `CargoToken`, `PubToken`, `NuGetApiKey`, `RubyGemsApiKey`) plus `GenericToken` for Terraform service URLs, Ansible Galaxy clients, CI, scripts, and custom HTTP clients that can send the configured API-key header or bearer token.
 
 ## Contributing
 
@@ -205,6 +216,8 @@ kkRepo is open sourced under the [Apache License 2.0](LICENSE).
 
 - [Development Guide](docs/en/development-guide.md)
 - [Build And Deployment Guide](docs/en/build-deployment-guide.md)
+- [Artifact Scanning Guide](docs/en/artifact-scanning-guide.md)
+- [Native Image or JVM Selection Guide](docs/en/native-vs-jvm-guide.md)
 - [Nginx Reverse Proxy Notes](docs/en/nginx-reverse-proxy.md)
 - [Client Recipes](docs/en/client-recipes.md)
 - [Architecture](docs/en/architecture.md)

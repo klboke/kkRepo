@@ -8,13 +8,13 @@
     <format>zip</format>
   </formats>
   <includeBaseDirectory>true</includeBaseDirectory>
-  <baseDirectory>kkrepo-${kkrepo.dist.version}</baseDirectory>
+  <baseDirectory>kkrepo-${kkrepo.dist.version}${kkrepo.dist.suffix}</baseDirectory>
   <files>
     <file>
-      <source>${project.build.directory}/${project.build.finalName}.jar</source>
+      <source>${kkrepo.dist.runtime.source}</source>
       <outputDirectory>lib</outputDirectory>
-      <destName>kkrepo.jar</destName>
-      <fileMode>0644</fileMode>
+      <destName>${kkrepo.dist.runtime.name}</destName>
+      <fileMode>${kkrepo.dist.runtime.mode}</fileMode>
     </file>
     <file>
       <source>${project.basedir}/../README.md</source>

@@ -78,9 +78,7 @@ public class DockerConnectorRuntime implements ApplicationListener<ApplicationRe
       DockerConnectorManager.ConnectorTuning tuning) {
     Connector connector = new Connector(org.springframework.boot.tomcat.servlet.TomcatServletWebServerFactory.DEFAULT_PROTOCOL);
     connector.setPort(port);
-    connector.setProperty("connectionTimeout", Integer.toString(tuning.connectionTimeoutMillis()));
-    connector.setProperty("maxConnections", Integer.toString(tuning.maxConnections()));
-    connector.setProperty("acceptCount", Integer.toString(tuning.acceptCount()));
+    DockerConnectorConfiguration.configureConnector(connector, tuning);
     service.addConnector(connector);
     try {
       connector.start();

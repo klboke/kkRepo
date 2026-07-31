@@ -82,7 +82,7 @@ class ManagementAuditFilterTest {
         new MockHttpServletRequest("DELETE", "/service/rest/v1/assets/opaque-id");
     request.setAttribute(
         SecurityManagementFilter.REQUESTED_PERMISSION_ATTRIBUTE,
-        "nexus:repository-view:raw:windows-artifacts:delete");
+        "nexus:repository-view:raw:raw-hosted:delete");
 
     filter.doFilter(
         request,
@@ -93,7 +93,7 @@ class ManagementAuditFilterTest {
     verify(auditDao).insert(record.capture());
     assertEquals("DELETE", record.getValue().method());
     assertEquals("/service/rest/v1/assets/opaque-id", record.getValue().path());
-    assertEquals("nexus:repository-view:raw:windows-artifacts:delete", record.getValue().permission());
+    assertEquals("nexus:repository-view:raw:raw-hosted:delete", record.getValue().permission());
     assertEquals(204, record.getValue().status());
   }
 

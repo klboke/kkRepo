@@ -5,6 +5,10 @@ import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRow
 import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRows.nullableTimestamp;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ArtifactChangeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ArtifactChangeDao.ArtifactChange;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ArtifactChangeDao.ChangeKind;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ArtifactChangeEventMode;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao.BlobReconcileWindow;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao.HelmIndexRow;
@@ -27,9 +31,11 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -41,13 +47,38 @@ import org.springframework.transaction.annotation.Transactional;
 public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao {
   private final JdbcTemplate jdbcTemplate;
   private final JsonColumns jsonColumns;
+  private final ArtifactChangeDao artifactChanges;
+  private final boolean artifactChangeEventsEnabled;
   private final RowMapper<AssetBlobRecord> blobRowMapper;
   private final RowMapper<AssetRecord> assetRowMapper;
   private final RowMapper<AssetPublicIdentifierRecord> publicIdentifierRowMapper;
 
   public JdbcAssetDao(JdbcTemplate jdbcTemplate, JsonColumns jsonColumns) {
+    this(jdbcTemplate, jsonColumns, new JdbcArtifactChangeDao(jdbcTemplate), true);
+  }
+
+  @Autowired
+  public JdbcAssetDao(
+      JdbcTemplate jdbcTemplate,
+      JsonColumns jsonColumns,
+      ArtifactChangeDao artifactChanges,
+      ArtifactChangeEventMode artifactChangeEventMode) {
+    this(
+        jdbcTemplate,
+        jsonColumns,
+        artifactChanges,
+        artifactChangeEventMode.enabled());
+  }
+
+  JdbcAssetDao(
+      JdbcTemplate jdbcTemplate,
+      JsonColumns jsonColumns,
+      ArtifactChangeDao artifactChanges,
+      boolean artifactChangeEventsEnabled) {
     this.jdbcTemplate = jdbcTemplate;
     this.jsonColumns = jsonColumns;
+    this.artifactChanges = artifactChanges;
+    this.artifactChangeEventsEnabled = artifactChangeEventsEnabled;
     this.blobRowMapper = (rs, rowNum) -> new AssetBlobRecord(
         rs.getLong("id"),
         rs.getLong("blob_store_id"),
@@ -191,6 +222,16 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         });
   }
 
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public Optional<AssetBlobRecord> restoreDeletedBlobById(long assetBlobId) {
+    return lockDeletedBlobById(assetBlobId)
+        .map(blob -> {
+          restoreBlobIfDeleted(blob.id());
+          return findBlobById(blob.id()).orElse(blob);
+        });
+  }
+
   private Optional<Long> findReusableBlobIdBySha256(
       long blobStoreId, String sha256, long size, boolean deletedOnly) {
     return jdbcTemplate.queryForList(reusableBlobIdSql(deletedOnly),
@@ -215,6 +256,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         """;
   }
 
+  @Transactional
   public long insertAsset(AssetRecord record) {
     OptionalLong inserted = tryInsertAsset(record);
     if (inserted.isPresent()) {
@@ -224,13 +266,25 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         .orElseThrow(() -> new DuplicateKeyException("Duplicate asset path"));
   }
 
+  @Transactional
   public OptionalLong tryInsertAsset(AssetRecord record) {
-    return JdbcInserts.tryInsert(jdbcTemplate, """
+    OptionalLong inserted = JdbcInserts.tryInsert(jdbcTemplate, """
         INSERT INTO asset
           (repository_id, component_id, asset_blob_id, format, path, path_hash,
            name, kind, content_type, size, last_downloaded_at, last_updated_at, attributes_json)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, ps -> setAssetInsertParameters(ps, record));
+    if (inserted.isPresent() && record.assetBlobId() != null) {
+      appendArtifactChange(new ArtifactChange(
+          null,
+          record.repositoryId(),
+          inserted.getAsLong(),
+          null,
+          record.assetBlobId(),
+          ChangeKind.CONTENT_CREATED,
+          null));
+    }
+    return inserted;
   }
 
   public Optional<AssetRecord> findAssetByPathHash(long repositoryId, byte[] pathHash) {
@@ -667,18 +721,17 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
             delete_reason = COALESCE(delete_reason, ?),
             delete_claimed_at = NULL
         WHERE id = ?
+          AND external_reference_count = 0
         """, reason, assetBlobId);
   }
 
+  @Transactional
   public int markBlobDeletedIfUnreferenced(long assetBlobId, String reason) {
-    return jdbcTemplate.update("""
-        UPDATE asset_blob b
-        SET deleted_at = COALESCE(b.deleted_at, CURRENT_TIMESTAMP),
-            delete_reason = COALESCE(b.delete_reason, ?),
-            delete_claimed_at = NULL
-        WHERE b.id = ?
-          AND NOT EXISTS (SELECT 1 FROM asset a WHERE a.asset_blob_id = b.id)
-        """, reason, assetBlobId);
+    if (!lockBlobIds(List.of(assetBlobId)).contains(assetBlobId)
+        || !findUnreferencedBlobIds(List.of(assetBlobId), 1).contains(assetBlobId)) {
+      return 0;
+    }
+    return markBlobIdsDeleted(List.of(assetBlobId), reason);
   }
 
   public int hardDeleteBlobById(long assetBlobId) {
@@ -690,6 +743,9 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         DELETE FROM asset_blob
         WHERE id = ?
           AND deleted_at IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM blob_reference r WHERE r.blob_id = asset_blob.id
+          )
         """, assetBlobId);
   }
 
@@ -729,6 +785,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         FROM asset_blob
         WHERE deleted_at IS NOT NULL
           AND deleted_at < ?
+          AND NOT EXISTS (SELECT 1 FROM blob_reference r WHERE r.blob_id = asset_blob.id)
           AND (delete_claimed_at IS NULL""" + retryPredicate + """
         )
         ORDER BY deleted_at
@@ -770,12 +827,32 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
       return new BlobReconcileWindow(0, 0, 0, true);
     }
 
-    List<Long> orphanIds = findUnreferencedBlobIds(scannedIds, safeMarkBatchSize);
+    // Discover likely orphans without holding a broad scan-window lock, then lock only that bounded
+    // candidate set and recheck ownership in a fresh statement. PostgreSQL does not re-evaluate a
+    // NOT EXISTS subquery after an UPDATE waits on a row lock, so the explicit lock-then-recheck
+    // sequence is required to serialize this marker with asset and scanner-document publication.
+    List<Long> candidates = findUnreferencedBlobIds(scannedIds, safeMarkBatchSize);
+    List<Long> lockedCandidates = lockBlobIds(candidates);
+    List<Long> orphanIds =
+        findUnreferencedBlobIds(lockedCandidates, Math.max(1, lockedCandidates.size()));
     int marked = markBlobIdsDeleted(orphanIds, reason);
-    long nextLastSeenId = orphanIds.size() >= safeMarkBatchSize
-        ? orphanIds.get(orphanIds.size() - 1)
+    long nextLastSeenId = candidates.size() >= safeMarkBatchSize
+        ? candidates.get(candidates.size() - 1)
         : scannedIds.get(scannedIds.size() - 1);
     return new BlobReconcileWindow(marked, scannedIds.size(), nextLastSeenId, false);
+  }
+
+  private List<Long> lockBlobIds(List<Long> blobIds) {
+    if (blobIds.isEmpty()) return List.of();
+    return jdbcTemplate.queryForList("""
+        SELECT id
+        FROM asset_blob
+        WHERE id IN (""" + placeholders(blobIds.size()) + """
+          )
+          AND deleted_at IS NULL
+        ORDER BY id
+        FOR UPDATE SKIP LOCKED
+        """, Long.class, blobIds.toArray());
   }
 
   private List<Long> findUnreferencedBlobIds(List<Long> scannedIds, int maxItems) {
@@ -785,11 +862,11 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
     return jdbcTemplate.queryForList("""
         SELECT b.id
         FROM asset_blob b
-        LEFT JOIN asset a ON a.asset_blob_id = b.id
         WHERE b.id IN (""" + placeholders(scannedIds.size()) + """
           )
           AND b.deleted_at IS NULL
-          AND a.id IS NULL
+          AND NOT EXISTS (SELECT 1 FROM asset a WHERE a.asset_blob_id = b.id)
+          AND NOT EXISTS (SELECT 1 FROM blob_reference r WHERE r.blob_id = b.id)
         ORDER BY b.id
         LIMIT ?
         """, Long.class, args.toArray());
@@ -809,12 +886,16 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
           )
           AND b.deleted_at IS NULL
           AND NOT EXISTS (SELECT 1 FROM asset a WHERE a.asset_blob_id = b.id)
+          AND NOT EXISTS (SELECT 1 FROM blob_reference r WHERE r.blob_id = b.id)
         """, args.toArray());
   }
 
   public long countDeletedBlobsAwaitingGc() {
     Long count = jdbcTemplate.queryForObject("""
-        SELECT COUNT(*) FROM asset_blob WHERE deleted_at IS NOT NULL
+        SELECT COUNT(*)
+        FROM asset_blob b
+        WHERE deleted_at IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM blob_reference r WHERE r.blob_id = b.id)
         """, Long.class);
     return count == null ? 0 : count;
   }
@@ -825,13 +906,17 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         FROM asset_blob b
         WHERE b.deleted_at IS NULL
           AND NOT EXISTS (SELECT 1 FROM asset a WHERE a.asset_blob_id = b.id)
+          AND NOT EXISTS (SELECT 1 FROM blob_reference r WHERE r.blob_id = b.id)
         """, Long.class);
     return count == null ? 0 : count;
   }
 
+  @Transactional
   public int updateAssetBlobBinding(long assetId, long assetBlobId, String contentType,
       long size, Instant lastUpdatedAt) {
-    return jdbcTemplate.update("""
+    AssetContentBinding previous = artifactChangeEventsEnabled
+        ? lockAssetContentBinding(assetId).orElse(null) : null;
+    int updated = jdbcTemplate.update("""
         UPDATE asset
         SET asset_blob_id = ?, content_type = ?, size = ?, last_updated_at = ?
         WHERE id = ?
@@ -841,12 +926,28 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         size,
         nullableTimestamp(lastUpdatedAt),
         assetId);
+    if (updated == 1 && previous != null
+        && !Objects.equals(previous.assetBlobId(), assetBlobId)) {
+      appendArtifactChange(new ArtifactChange(
+          null,
+          previous.repositoryId(),
+          assetId,
+          previous.assetBlobId(),
+          assetBlobId,
+          previous.assetBlobId() == null
+              ? ChangeKind.CONTENT_CREATED : ChangeKind.CONTENT_REPLACED,
+          null));
+    }
+    return updated;
   }
 
+  @Transactional
   public int updateAssetBlobBindingAndMetadata(long assetId, Long componentId, long assetBlobId,
       String kind, String contentType, long size, Instant lastUpdatedAt,
       java.util.Map<String, Object> attributes) {
-    return jdbcTemplate.update("""
+    AssetContentBinding previous = artifactChangeEventsEnabled
+        ? lockAssetContentBinding(assetId).orElse(null) : null;
+    int updated = jdbcTemplate.update("""
         UPDATE asset
         SET component_id = ?, asset_blob_id = ?, kind = ?, content_type = ?, size = ?,
             last_updated_at = ?, attributes_json = ?
@@ -860,6 +961,39 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         nullableTimestamp(lastUpdatedAt),
         jsonColumns.parameter(attributes),
         assetId);
+    if (updated == 1 && previous != null
+        && !Objects.equals(previous.assetBlobId(), assetBlobId)) {
+      appendArtifactChange(new ArtifactChange(
+          null,
+          previous.repositoryId(),
+          assetId,
+          previous.assetBlobId(),
+          assetBlobId,
+          previous.assetBlobId() == null
+              ? ChangeKind.CONTENT_CREATED : ChangeKind.CONTENT_REPLACED,
+          null));
+    }
+    return updated;
+  }
+
+  void appendArtifactChange(ArtifactChange change) {
+    if (artifactChangeEventsEnabled) {
+      artifactChanges.append(change);
+    }
+  }
+
+  private Optional<AssetContentBinding> lockAssetContentBinding(long assetId) {
+    return jdbcTemplate.query("""
+        SELECT repository_id, asset_blob_id
+        FROM asset
+        WHERE id = ?
+        FOR UPDATE
+        """, (rs, rowNum) -> new AssetContentBinding(
+        rs.getLong("repository_id"),
+        nullableLong(rs, "asset_blob_id")), assetId).stream().findFirst();
+  }
+
+  private record AssetContentBinding(long repositoryId, Long assetBlobId) {
   }
 
   public int updateAssetComponentBinding(long assetId, Long componentId) {

@@ -1,0 +1,2118 @@
+# kkRepo 制品安全扫描开发设计说明
+
+本文定义 kkRepo 制品安全扫描能力的开发设计。目标是在现有关系数据库、
+OSS/S3-first Blob 存储、Nexus 兼容协议和多副本运行模型上，增加可恢复、
+可审计、可替换扫描引擎的 SBOM 与已知漏洞扫描能力。
+
+安全扫描是 kkRepo 的产品增强，不改变各制品协议本身。默认关闭下载阻断时，
+Maven、npm、PyPI、Docker/OCI 等客户端可见行为必须保持不变；只有管理员明确为
+仓库启用强制策略后，安全判定才参与下载路径。
+
+部署、启用、策略、豁免、监控和排障操作见
+[Artifact Scanning 使用指南](../artifact-scanning-guide.md)。
+
+## 当前支持状态
+
+本文定义的制品漏洞扫描主链路已经在当前实现中落地，并保持默认关闭：
+
+- 新增 `security-scan` 领域模块和独立 `scanner-adapter`，通过 Syft 生成 CycloneDX
+  SBOM、通过 Grype 匹配已知漏洞；扫描器可替换且不进入 kkRepo JVM。
+- 显式启用部署能力后，hosted、proxy、迁移资产的核心写入事务只追加通用
+  `artifact_change_event`；扫描 worker 使用独立数据库游标异步折叠成 candidate，再
+  进入持久任务。claim、lease、heartbeat、接管和 fencing 在 MySQL 8/PostgreSQL 12+
+  使用相同语义。默认关闭时不追加事件，也不运行历史校对。
+- SBOM、组件投影、scanner snapshot、不可变 run、finding、asset state、仓库入口策略
+  state、waiver 和 backfill job 均持久化；SBOM 与原始报告正文继续保存在 BlobStorage。
+- 普通制品使用流式输入；Docker/OCI 使用 manifest digest、平台集合和精确 image scope
+  的短期内部 token，不挂载 Docker socket。
+- 漏洞数据库更新复用已有 SBOM，只创建 `MATCH_ONLY`；policy、waiver 或 group 上下文
+  变化使用 `POLICY_ONLY` 复用现有 finding，并由数据库去重任务收敛所有副本。
+- Audit 和按仓库显式启用的 Enforce 均已接入实际下载路径；group 同时读取 member 与
+  入口仓库各自物化的策略结果并选择更严格决定。
+- Admin UI、受权限控制的管理 API、审计、Prometheus 指标、health、Compose 可选
+  profile 和 Helm 部署资源均已提供。
+
+部署能力仍由 `kkrepo.security-scanning.enabled=false` 默认关闭。保持默认值升级时，
+Flyway 创建扫描专用 schema、索引、内置 profile/policy、空游标，并给 `asset_blob`
+增加通用 Blob 引用计数字段和约束；kkRepo 不把历史 asset 读入扫描流程、不追加扫描
+所用内容事件、不运行扫描后台任务，下载链路也不查询扫描状态。该 DDL 不读取 Blob
+正文或生成历史扫描数据，但大型 `asset_blob` 仍需按数据库升级规范评估 DDL 锁窗口。
+把该配置显式改为 `true` 后，kkRepo 才装载事件投影、历史校对、协调/维护 worker 与
+下载策略集成。该配置不负责启动外部 scanner，也不代表任何仓库已经启用扫描。部署方
+先提供 scanner 进程与资源，使用方再在 Admin UI 中按仓库启用并从小范围 Audit 逐步
+放量到 Enforce。源码扫描、恶意软件、secret、license、misconfiguration、VEX 和
+OCI SBOM referrer 仍属于后续独立能力。
+
+## 设计决策摘要
+
+- 使用独立 scanner service 执行不可信输入分析，kkRepo JVM 不内嵌扫描器，也不执行
+  制品代码。
+- 使用 MySQL/PostgreSQL 通用内容变更 outbox、独立消费游标、candidate marker、
+  task lease 和 fencing token 保证多副本任务不丢失、可接管。
+- 以 CycloneDX SBOM 为长期 inventory，Catalog 与漏洞 Match 分离。
+- 普通制品按 asset/blob 内容扫描；Docker/OCI 按 manifest digest 和平台扫描；group
+  复用实际 member 结果。
+- 部署能力开启后，hosted、proxy 和迁移写入只产生与扫描无关的内容变更事件；扫描
+  子系统异步消费并维护自己的 candidate。关闭时不写该事件。上传代码不引用扫描表、
+  仓库扫描配置、扫描 client 或扫描状态。
+- 结果去重同时包含内容、引擎版本、漏洞数据库 revision 和配置 digest，不使用
+  “checksum + 时间窗口”作为唯一新鲜度判断。
+- 第一阶段只实现 vulnerability 类型；secret、license 和 misconfiguration
+  仍按独立 profile 交付。下载阻断是仓库级显式开关，默认保持 Audit。
+- 下载阻断由解析出具体 asset/manifest 后的 `ArtifactDownloadPolicy` 执行，不放进
+  只能识别仓库请求的通用鉴权 Filter。
+
+## 进程边界与简化原则
+
+扫描任务协调与扫描器执行使用不同的故障边界，但不拆成两套业务系统：
+
+- 显式开启部署能力后，kkRepo 进程负责通用内容事件消费、candidate、历史校对、任务
+  领取、lease/heartbeat、重试、结果持久化、策略判定、权限与管理 API。这里已有固定
+  大小线程池，但线程池只控制并发，不承担安全隔离。
+- scanner 进程是无状态执行适配器，只接收有界输入、校验 digest、运行 Syft/Grype、
+  返回标准化文档并维护可重建漏洞库；不连接 kkRepo 数据库，不拥有任务状态和策略。
+- 两者只使用一个有版本的内部 HTTP 契约。当前不增加消息队列、事件总线、scanner
+  自有数据库或按任务创建 Kubernetes Job。
+
+方案比较：
+
+| 方案 | 优点 | 主要问题 | 结论 |
+| --- | --- | --- | --- |
+| kkRepo JVM 内额外线程池 | 少一个 Java 进程和一次内部 HTTP 调用 | Syft/Grype 仍是子进程；CPU、内存、临时盘、文件描述符、漏洞库更新和 OOM 与仓库请求共享容器；主镜像必须携带扫描器，关闭功能也扩大攻击面 | 不作为生产模式 |
+| 每个 kkRepo Pod 的 sidecar | 保留容器级资源限制，网络路径短 | 扫描容量与 API 副本绑定，每个 Pod 重复漏洞库，扩容仓库服务会同步放大扫描资源 | 暂不采用 |
+| 独立无状态 adapter StatefulSet/Compose service | 可独立设置 CPU、内存、临时盘和安全上下文；扫描异常不重启仓库；漏洞库集中复用；Kubernetes ordinal 提供稳定的负载首选地址和容灾目标 | 多一个可选部署单元和内部 HTTP 健康检查 | 当前方案 |
+| 每个任务一个 Kubernetes Job | 单任务隔离最强 | 控制面对象、镜像启动、回收和排障成本高，非 Kubernetes 部署还需另一套实现 | 暂不采用 |
+
+因此这里坚持“独立进程，薄适配器，不独立业务”。将扫描执行并入 JVM 只能省去薄
+适配层，不能消除 Syft/Grype 子进程，反而让不可信归档解析和仓库在线流量共享故障
+半径。为了减少组合数量，本阶段也不提供可切换的 in-process 生产实现；本地、
+Compose 和 Kubernetes 使用同一 adapter 契约。
+
+## 设计目标
+
+1. 对 hosted、proxy 和迁移进入 kkRepo 的可扫描制品生成软件包清单，并匹配已知漏洞。
+2. 使用数据库持久化通用内容变更事件、消费游标、候选标记、任务、租约、重试和结果，
+   支持多个 kkRepo 副本共同工作。
+3. 把软件清单生成和漏洞匹配分开；漏洞数据库更新时复用已有 SBOM，避免重复下载和解包。
+4. 使用内容身份、扫描器版本、漏洞数据库版本和扫描配置共同确定结果是否可复用。
+5. 支持普通制品归档与 Docker/OCI 镜像，但不把所有协议强行映射成同一种输入。
+6. 保存完整、可追溯的原始扫描文档，同时只在关系数据库中保存有上限的查询投影。
+7. 第一阶段使用 audit-only 模式；策略阻断必须在覆盖全部读取入口并完成真实客户端测试后启用。
+8. 扫描器必须可替换。kkRepo 业务代码不能依赖某个扫描器的私有 JSON 模型。
+9. 扫描故障、结果不完整和不适用必须是显式状态，不能被解释成“未发现漏洞”。
+10. 扫描过程不得执行上传制品中的脚本、安装钩子、二进制或构建逻辑。
+
+## 非目标
+
+第一阶段明确不实现：
+
+- 不提供源码仓库 SAST、DAST、IaC 合规或运行时行为分析。
+- 不执行 `npm install`、Maven plugin、Python setup hook、RPM scriptlet 等制品代码。
+- 不把恶意软件沙箱、病毒特征扫描和已知漏洞扫描混成一个结果模型。
+- 不承诺所有 Raw 文件都可以自动识别；无法可靠识别的内容返回 `NOT_APPLICABLE`。
+- 不在上传 HTTP 请求内同步等待扫描完成。
+- 不在上传、proxy cache commit 或迁移写入代码中读取扫描配置、写扫描表、调用扫描器，
+  或根据扫描状态决定写入是否成功。
+- 不在 MySQL/PostgreSQL 中保存无上限的 SBOM、扫描器原始报告或解压文件正文。
+- 不把 scanner 本地目录、scanner 本地队列或某个 JVM 内存状态作为正确性真相。
+- 不默认把内部生成的 SBOM 发布为用户可见仓库资产或 OCI referrer。
+- 不在第一阶段提供第三方漏洞治理产品的 API 兼容层。
+- 不把“没有匹配到漏洞”等同于制品绝对安全。
+
+恶意软件扫描、签名验证、VEX、许可证策略和 OCI SBOM referrer 可以复用本文任务与
+策略框架，但应分别增加扫描类型和验收标准。
+
+## 核心设计原则
+
+### 写入、分析与执行三平面分离
+
+安全扫描按三个平面拆分：
+
+1. **制品写入平面**：完成协议校验、Blob 持久化和 asset 绑定。部署能力开启时，在
+   同一数据库事务中追加通用 `artifact_change_event`；关闭时不追加。该事件是仓库
+   核心的内容变更事实，不含 profile、policy、severity、scanner 或 candidate 字段。
+2. **异步分析平面**：只有部署能力 gate 启用后，轻量投影 worker 才使用数据库游标
+   消费通用事件，折叠为每个 asset 一行的 `security_scan_candidate`，并由后续 worker
+   执行分类、创建任务、生成 SBOM 和漏洞匹配。scanner 不可用、超时或扫描表故障
+   不得回滚已经提交的上传。
+3. **下载执行平面**：协议层解析出实际 asset/member/manifest 后，
+   `ArtifactDownloadPolicy` 根据物化结果决定 allow、pending 或 deny。上传成功不等于
+   严格仓库立即可下载。
+
+部署能力开启后，事务性 outbox 是异步分析一致性的一部分，因此 outbox 写入失败可以
+让 asset 事务失败；这是“已启用的内容事实没有可靠发布”的仓库故障，不是 scanner
+RPC 故障。部署能力关闭时不写 outbox，也不运行投影、校对或保留任务，普通制品写入
+保持原有事务路径。以后显式启用时，由有界数据库 reconciliation 建立全局当前状态
+基线；仓库在 UI 启用后再创建持久 backfill 和实际扫描任务。正确性不依赖关闭期间
+积压事件，也不依赖单个 JVM 的内存事件。
+
+### 行业边界与 Nexus 参考
+
+Nexus Repository 的公开代码在 content store 完成资产创建/更新后发布通用
+`AssetCreatedEvent`/`AssetUpdatedEvent`，并通过 post-commit event support 把内容写入
+与后续消费者解耦。这个模式说明仓库核心应发布内容事实，而不是在上传 handler 中调用
+某个安全产品。Sonatype Repository Firewall 由独立 IQ Server 提供分析与策略能力，
+Nexus Repository 负责连接服务、选择受保护仓库并在 proxy/download 边界执行
+quarantine；外部分析工作不进入上传事务。
+
+Harbor 的 scanner registration API 同样把扫描器作为可插拔外部 adapter；JFrog Xray
+的阻断能力也在下载执行点消费已经计算的策略结果。各产品内部队列和数据模型不同，
+但共同边界是：
+
+- 写入路径只产生稳定、通用的内容事实。
+- 分析服务异步、可替换、可停机追平。
+- quarantine/block 是读取或推广（promotion）策略，不是把 scanner RPC 变成上传事务。
+- 多副本正确性来自持久状态、幂等键、锁/lease 和 reconciliation，而不是进程内事件。
+
+kkRepo 采用数据库 outbox 而不是照搬 Nexus 的进程内实现，是因为本项目要求
+MySQL/PostgreSQL 多副本下事件不可丢失；Nexus 在这里是产品边界和行为参考，不是内部
+机制模板。
+
+### 内容身份优先
+
+普通制品的扫描主体是不可变 Blob 内容，不是可变化的仓库路径。内容身份至少包含：
+
+```text
+blob store + SHA-256 + size + target classification
+```
+
+Docker/OCI 的扫描主体是 manifest digest 与平台集合。tag 只是不稳定指针，不能作为
+扫描结果去重键。
+
+同一 Blob 被多个仓库路径或 group 成员引用时，可以复用不可变 SBOM 和扫描结果，
+但仓库策略判定、豁免和最新状态仍分别绑定到具体 asset 与访问上下文。
+
+### SBOM 与漏洞匹配分层
+
+扫描分为两个可独立重试和复用的阶段：
+
+1. **Catalog**：从制品或镜像生成完整软件包清单和 CycloneDX SBOM。
+2. **Match**：使用某一漏洞数据库快照，把 SBOM 中的软件包与已知漏洞匹配。
+
+Catalog fingerprint 由内容身份、catalog engine 版本和 catalog 配置决定。
+Match fingerprint 由 SBOM SHA-256、matcher 版本、漏洞数据库 revision 和匹配配置决定。
+
+漏洞数据库更新只会让 Match 结果过期，不会自动让 SBOM 过期。
+
+### 数据库协调、外部执行
+
+kkRepo 负责：
+
+- 在核心资产事务中发布通用内容变更事实。
+- 在独立扫描 worker 中发现和折叠扫描候选。
+- 持久化任务和租约。
+- 读取 Blob。
+- 调用 scanner。
+- 规范化、保存和展示结果。
+- 计算策略决定。
+
+scanner 负责：
+
+- 在隔离的临时工作区识别和解包制品。
+- 生成 SBOM。
+- 匹配漏洞。
+- 返回带引擎与漏洞库 provenance 的版本化结果。
+
+scanner 不负责保存 kkRepo 的长期任务状态，也不能要求请求始终回到同一个 scanner
+实例。
+
+### 审计优先、阻断后置
+
+第一阶段只记录结果，不改变下载响应。强制策略上线前必须证明：
+
+- 所有可下载二进制路径都能解析到准确的 asset 或 OCI manifest。
+- group 请求使用实际命中成员的扫描结果。
+- proxy 首次回源不会在严格模式下先把未扫描字节流给客户端。
+- pending、scanner failure 和 partial result 都有管理员明确选择的行为。
+- 真实客户端可以正确处理策略返回的状态码和响应体。
+
+## 总体架构
+
+```text
+hosted / proxy / migration 写入
+             |
+             | 部署能力开启时，同一数据库事务追加通用内容变更事实
+             v
+     artifact_change_event
+             |
+             | 独立 DB cursor + transaction
+             v
+ security_scan_candidate
+             |
+             | claim + classify + dedupe
+             v
+     security_scan_task  <---- 手动扫描 / 定时重扫 / 漏洞库更新
+             |
+             | DB lease + fencing token
+             v
+     SecurityScanWorker
+             |
+             +---- BlobStorage.get() 流式输入
+             |        或短生命周期只读 URL
+             |
+             +---- Docker/OCI digest + scoped read token
+             v
+  scanner adapter / scanner pool
+       | Catalog          | Match
+       v                  v
+ CycloneDX SBOM       vulnerability report
+       |                  |
+       +--------+---------+
+                v
+ 原始文档进入 Blob storage
+ 有上限投影和聚合状态进入 MySQL/PostgreSQL
+                |
+                +---- Admin API / UI / Audit / Metrics
+                |
+                v
+       ArtifactDownloadPolicy
+                |
+        allow / pending / deny
+```
+
+## 模块边界
+
+新增 `security-scan` Maven 模块，保持引擎无关的领域模型和 SPI：
+
+| 模块 | 新增职责 |
+| --- | --- |
+| `security-scan` | 扫描主体、状态机、fingerprint、scanner SPI、规范化结果、策略输入输出 |
+| `core` | 通用资产写入语义；不依赖扫描配置、扫描状态或 scanner |
+| `persistence-jdbc.api` | 通用 artifact change stream、Blob 引用、Scan DAO、record、分页与统计接口 |
+| `persistence-jdbc.internal` | 通用 outbox/Blob 引用、公共 JDBC 实现、claim、lease、finalize transaction |
+| `persistence-mysql` | MySQL migration、dialect 和 contract test |
+| `persistence-postgresql` | PostgreSQL migration、dialect 和 contract test |
+| `server` | 独立事件消费、候选分类、worker、scanner client、管理 API、策略接入和调度 |
+| `scanner-adapter` | 独立部署的内部 HTTP adapter、固定版本 Syft/Grype、输入限制和进程隔离 |
+| `protocol-*` | 必要时提供格式专用 candidate classifier 或下载主体解析，不放扫描器调用 |
+| `admin-ui` | 扫描概览、任务、结果、仓库配置、策略和豁免 |
+| `browse-ui` | 后续按权限展示制品安全摘要；第一阶段可以不展示 |
+| `compat-test` | audit-only 无回归与 enforce 模式真实客户端测试 |
+
+Controller 只能做鉴权、参数校验和 DTO 转换。任务状态机、结果复用、策略计算和
+scanner 调用必须位于 service/domain 层。
+
+`scanner-adapter` 是独立发布镜像，不进入 `server` 运行时 classpath。它可以使用单独
+构建目录和语言工具链，但公开契约只能是版本化 HTTP/schema，kkRepo 不能 import
+adapter 的进程管理或第三方扫描器类型。
+
+## 扫描主体与候选分类
+
+### 普通 asset
+
+普通制品主体包含：
+
+```text
+subjectKind       = ASSET_BLOB
+repositoryId
+assetId
+assetBlobId
+sha256
+size
+format
+assetKind
+contentType
+classification   = ARCHIVE | PACKAGE | MANIFEST | RAW_FILE
+```
+
+asset 路径被新 Blob 覆盖时，即使 asset ID 不变，也必须推进 candidate generation。
+worker 必须重新读取当前 asset/blob binding；旧 generation 的结果不得覆盖新内容状态。
+
+### Docker/OCI
+
+Docker/OCI 不对每个 layer Blob 单独创建用户可见扫描状态。扫描主体为：
+
+```text
+subjectKind       = OCI_MANIFEST
+repositoryId
+manifestAssetId
+manifestDigest
+mediaType
+platformPolicy
+resolvedPlatforms
+referencedDigests
+```
+
+对于 image index：
+
+- `ALL`：扫描全部可识别平台；超过平台上限时结果为 `PARTIAL`。
+- `REQUIRED_SET`：扫描仓库配置指定的平台集合；未覆盖平台在 UI 中明确展示。
+
+第一阶段默认使用 `REQUIRED_SET`，默认平台可配置为 `linux/amd64`。只有
+`ALL` 完成，或策略明确声明只要求某个平台集合时，才能把聚合结果标记为对应范围内的
+`COMPLETE`。单次 scanner 请求最多接受 16 个平台，且全部平台原始 SBOM 的总字节数
+和合并后的 SBOM 都受同一个 output budget 约束，避免平台 fanout 把堆和临时磁盘占用
+放大为无界工作。
+
+tag 更新到新 digest 时，tag 本身不复制扫描结果；读取路径解析到新 manifest 后使用
+新 digest 对应的状态。
+
+### Group
+
+group 不生成新的扫描任务和 SBOM：
+
+- 先按现有 group 解析规则得到实际 member asset 或 manifest。
+- 使用 member 的不可变扫描结果。
+- 使用“请求 group 策略 + member 仓库策略”计算最终决定，默认取更严格结果。
+- 成员顺序或 source binding 变化后，不复用旧成员的 asset security state。
+
+### 格式适用矩阵
+
+candidate classifier 必须由 format、asset kind、规范路径和 media type 共同判断，
+不能只按文件后缀猜测。
+
+| 格式 | 第一阶段扫描主体 | 默认跳过 |
+| --- | --- | --- |
+| Maven | `.jar`、`.war`、`.ear`、发布归档 | `maven-metadata.xml`、checksum、signature |
+| npm | package tarball | packument、dist-tag metadata |
+| PyPI | wheel、sdist archive | simple index、项目 metadata 页面 |
+| Go | module `.zip`，可选结合 `.mod` 增强清单 | `.info`、版本列表 |
+| Helm | chart `.tgz` | `index.yaml`、provenance 文件单独扫描 |
+| Cargo/Rust | `.crate` | sparse index、crate metadata API |
+| Dart/Pub | package archive | version metadata |
+| Composer/PHP | dist archive；无 dist 时可按 profile 扫 source archive | `packages.json` 和 provider metadata |
+| Terraform | Module/Provider archive | versions、download metadata、SHA256SUMS、signature |
+| Swift | source archive | release metadata、manifest endpoint 响应 |
+| Ansible Galaxy | collection tarball | collection/version metadata、import task、signature |
+| Docker/OCI | image manifest/index 及所需 layers | 独立 layer asset、普通 tag/index JSON asset |
+| NuGet | `.nupkg`，可配置包含 `.snupkg` | service index、registration、search metadata |
+| RubyGems | `.gem` | specs/index metadata |
+| Yum | `.rpm` | repodata、checksum 和签名文件 |
+| Raw | allowlist 命中的 archive/package，或手动指定 | 未识别、超限或明确排除的文件 |
+
+classifier 返回以下之一：
+
+- `SCANNABLE`：给出规范 target classification 和 profile。
+- `NOT_APPLICABLE`：协议 metadata、checksum、signature 或不支持的内容。
+- `DEFERRED`：还缺少必要关联，例如 OCI index 尚未解析完整。
+- `REJECTED_BY_LIMIT`：大小或类型不满足当前 profile，记录为显式 partial/failure。
+
+## 通用内容变更流与扫描触发
+
+### 事务性 artifact change outbox
+
+`artifact_change_event` 属于仓库核心持久化模型，不属于安全扫描结果表。server
+启动配置会把唯一的部署能力 gate 转换为通用、只读的 `ArtifactChangeEventMode`
+并注入持久层；不存在第二个可独立修改的用户开关。只有该模式为 enabled 时，所有
+产生或替换 asset Blob binding 的公共 DAO 路径才在提交 asset 的同一事务中追加一条
+事件：
+
+| 字段 | 语义 |
+| --- | --- |
+| `id` | 全局单调递增事件 ID，也是消费顺序 |
+| `repository_id` | 发生变化时的仓库 |
+| `asset_id` | 发生变化时的 asset |
+| `previous_asset_blob_id` | 替换前 Blob；首次绑定为空 |
+| `asset_blob_id` | 新 Blob |
+| `change_kind` | `CONTENT_CREATED` 或 `CONTENT_REPLACED` |
+| `occurred_at` | 数据库时间 |
+
+事件只描述内容事实，不含任何扫描字段。当前写入点为新建带 Blob 的 asset、
+`updateAssetBlobBinding`、`updateAssetBlobBindingAndMetadata`，Docker/OCI、hosted、
+proxy 和迁移最终都复用这些公共 DAO。仅更新下载时间、proxy validator、普通
+attributes 或 component 关系不产生内容事件。
+
+`JdbcAssetDao` 不允许引用 `security_scan_*`、仓库扫描 profile/policy、scanner client
+或扫描状态。它只接收一个启动时确定的通用事件开关；默认关闭时不执行事件 INSERT，
+不会让未启用安全扫描的实例承担 outbox 写入或积压成本。部署能力开启后，scanner
+不可用或扫描数据库投影处理失败仍不会在上传请求中调用 scanner；只有同事务事件写入
+本身失败才按数据库事务语义回滚。
+
+滚动升级时，旧版本副本可能在新 migration 已生效后继续写入 asset，但还不会追加
+`artifact_change_event`。因此扫描域另有一个持续运行、持久游标驱动的校对 worker：
+它同时检查最近发生变化的 asset，以及按 `asset.id` 循环推进的有界主键分页，并把
+当前 Blob binding 与 candidate/result 水位比较。最近窗口让升级期遗漏快速收敛，循环
+分页保证窗口外遗漏最终也会被发现；每轮默认各处理不超过 1000 条。查询分别使用
+`asset(last_updated_at,id)` 和主键索引，不做无界全表扫描。这个兼容层不依赖数据库
+trigger，避免 MySQL 开启 binary log 时引入额外的 trigger 创建权限，也不把扫描逻辑
+放回制品写入路径。所有副本通过 `maintenance_cursor` 行锁共享一个校对水位。该 worker
+只在 `kkrepo.security-scanning.enabled=true` 时装载；因此默认关闭升级不会读取历史
+asset。首次显式开启时，它也负责补齐功能关闭期间未记录事件的当前内容。
+
+### 独立消费与 candidate projection
+
+轻量投影 worker 使用 `maintenance_cursor` 中独立的
+`artifact_change:security_scan` 游标消费事件。每批处理在一个短数据库事务内完成：
+
+1. 使用 `FOR UPDATE SKIP LOCKED` 尝试锁定共享游标；其它副本未取得锁时立即跳过。
+2. 按事件 ID 读取有界批次，并在批内按 asset 合并。
+3. 重新读取当前 asset/blob binding；延迟到达的旧事件不能把 candidate 恢复为旧 Blob。
+4. 插入或推进 `security_scan_candidate`。
+5. 在同一事务中推进游标；任一步失败则 candidate 与游标一起回滚并重试。
+
+事件流是 at-least-once 可恢复输入，candidate 是扫描域的可合并投影。投影 worker
+只在部署能力显式开启时装载，不执行外部调用后再持有游标锁；外部 scanner 调用只
+发生在后续有 lease/fencing 的 task worker。默认每次读取 1000 条事件并按 asset 合并；
+推进游标后，读取所有
+`artifact_change:` 已注册消费者的最小水位，每次最多删除 5000 条已被全部消费者消费的
+事件。新增消费者必须先注册初始游标再发布对应版本，不能在运行中先读低水位、后补
+游标。部署能力关闭时既不写事件也不推进投影；重新启用后由校对 worker 建立当前状态
+基线，全量 backfill 继续作为仓库启用、上线前资产和灾难恢复路径。
+
+### 持久化 candidate marker
+
+`security_scan_candidate` 以 `asset_id` 为主键，每个 asset 最多保留一行最新待处理变化：
+
+| 字段 | 语义 |
+| --- | --- |
+| `asset_id` | 当前 asset |
+| `asset_blob_id` | 消费时重新确认的当前 Blob；允许为空 |
+| `content_generation` | 当前内容与已投影内容不同时单调递增 |
+| `enqueued_generation` | 已经转换成 task 的最新 generation |
+| `pending` | 由 `content_generation > enqueued_generation` 生成的持久列，用作待处理队列索引前缀 |
+| `changed_at` | 数据库时间 |
+| `updated_at` | marker 更新时间 |
+
+marker 不是 scanner 队列。Candidate worker 领取 marker 后：
+
+1. 重新加载 asset、Blob、repository 和扫描配置。
+2. 确认 marker generation 仍对应当前 Blob。
+3. 分类为可扫描、不适用或暂缓。
+4. 幂等创建 `security_scan_task`。
+5. 推进 `enqueued_generation`。
+
+这种设计使 hosted、proxy、迁移写入共享同一可靠入口，同时让扫描域可以独立部署、
+停用、追平和失败恢复。
+
+### 仓库启用与历史回填
+
+仓库从 disabled/manual-only 切换到自动扫描时，需要持久化 backfill job：
+
+- 按 `(repository_id, asset_id)` 游标分页。
+- 对当前有 Blob 的 asset 插入或推进 candidate marker。
+- 支持暂停、恢复、进度和失败重试。
+- 不一次性把全库 asset 装入内存。
+- 多副本通过数据库 claim 分片执行。
+- 单次调度默认连续处理最多 20 页、每页 500 个 asset；每页都持久化游标并续租，
+  达到预算后把未完成 job 释放回 `PENDING`，让其它仓库和其它副本公平取得执行机会。
+
+backfill 既覆盖 outbox 上线前已有资产，也作为运维 reconciliation：它读取当前
+asset/blob binding，只有 candidate 缺失或指向不同 Blob 时才推进 generation，因此
+可以安全重复执行，并可修复极端情况下的事件/投影漂移。
+
+删除仓库或 asset 时，candidate 与 asset state 随外键清理；不可变 SBOM/scan run
+按保留策略处理，不能破坏仍由其它 asset 复用的结果。
+
+### 触发来源
+
+`security_scan_task.request_reason` 使用有界枚举：
+
+- `CONTENT_CHANGED`
+- `REPOSITORY_BACKFILL`
+- `MANUAL`
+- `PROFILE_CHANGED`
+- `SCANNER_CHANGED`
+- `VULNERABILITY_DB_CHANGED`
+- `MAX_AGE_EXPIRED`
+- `RETRY`
+
+手动“重新评估”优先复用 SBOM，只重跑 Match。只有管理员选择“重新生成 SBOM”，
+或 catalog fingerprint 已变化时，才重新读取和解包制品。
+
+## 数据模型
+
+下列表名是逻辑设计；MySQL 与 PostgreSQL migration 使用各自类型和索引实现相同语义。
+
+大表查询必须从游标、状态或外键前缀进入索引。V36 创建扫描域表及其关键索引；需要
+加到既有 `asset`、`docker_manifest_reference` 大表上的两个索引单独放在 V37：
+PostgreSQL 使用非事务 migration 的 `CREATE INDEX CONCURRENTLY`，MySQL 显式使用
+`ALGORITHM=INPLACE, LOCK=NONE`。该拆分是在线 DDL 的事务边界，不是功能发布后的修复
+migration；PostgreSQL 部署同时把 Flyway advisory lock 切为 session lock，避免
+transactional lock 自身阻塞 concurrent index build。滚动升级期间旧副本可以继续处理
+制品写入与下载水位更新。MySQL DDL 会逐条隐式提交，因此每条 `ALTER` 前都查询
+`information_schema.statistics`，再通过动态语句执行缺失索引；若进程在第一条提交后
+退出，Flyway repair 后重跑会跳过已有索引并继续第二条，不会因重复索引再次中断。
+
+- task/backfill 的 claim、terminal retention 与 scanner snapshot 外键索引；
+- candidate 的 `pending + changed_at` 队列索引，以及 task 的
+  `repository_id + status` 汇总索引；
+- run/SBOM 的 `last_accessed_at` retention 索引，以及 run 到 snapshot/SBOM 的索引；
+- asset state 的 `repository_id + scan_state + policy_decision` 覆盖索引，以及
+  asset state、repository policy state 到 `latest_scan_run_id` 的反向索引；
+- waiver 的 repository/asset/id 活跃游标、finding/advisory/package selector 索引；
+- repository policy state 的 config/waiver revision 上下文索引；
+- finding、run subject、scanner snapshot 的 retention/关联索引。
+- Overview 与指标先收敛到当前内容代际的去重 run 集合，再通过
+  `(scan_run_id, severity, id)` 覆盖索引读取高风险 finding；历史 run 数量不会线性
+  放大每次统计的 finding 扫描范围。
+
+事件 backlog 指标只读取 `artifact_change_event` 主键最小/最大水位；周期性状态指标按
+索引最多读取 `metrics-count-limit` 行并在上限处饱和，不执行无界全表 `COUNT(*)`。
+Overview 对操作者可见的全部仓库一次聚合，每张事实表只扫描一次，不按仓库执行 N 组
+计数。聚合查询先以 pending、repository、status 或 severity 缩小扫描范围；精确总数
+的成本仍与匹配索引项数量线性相关，但不会回表扫描无关的历史任务、低等级 finding
+或其它仓库状态。列表使用 keyset cursor，retention 使用有界批次和 `SKIP LOCKED`。MySQL 与
+PostgreSQL 契约测试必须同时覆盖这些查询的语义，避免依赖 MySQL 默认大小写或
+collation 的行为。
+
+### `security_scan_profile`
+
+定义扫描输入、引擎和资源限制：
+
+- `id`
+- `name`
+- `enabled`
+- `catalog_engine`
+- `matcher_engine`
+- `scanner_types_json`
+- `target_rules_json`
+- `max_input_bytes`
+- `max_archive_entries`
+- `max_uncompressed_bytes`
+- `max_single_file_bytes`
+- `max_nested_depth`
+- `timeout_seconds`
+- `oci_platform_policy`
+- `required_platforms_json`
+- `configuration_digest`
+- `revision`
+- `created_at`
+- `updated_at`
+
+影响扫描语义的配置变化必须生成新的 `configuration_digest` 和 revision。
+
+第一阶段 profile 只启用 `vuln`。Secret、misconfiguration 和 license scanner 必须通过
+独立 profile 显式开启，不能继承 scanner CLI 可能变化的默认值。
+
+### `repository_security_scan_config`
+
+每个仓库一行：
+
+- `repository_id`
+- `enabled`
+- `profile_id`
+- `scan_hosted_content`
+- `scan_proxy_content`
+- `enforcement_mode`
+- `pending_action`
+- `failure_action`
+- `partial_action`
+- `max_result_age_seconds`
+- `policy_id`
+- `config_revision`
+- `created_at`
+- `updated_at`
+
+`enforcement_mode`：
+
+- `AUDIT`：记录结果但不影响下载。
+- `ENFORCE`：使用 materialized policy decision。
+
+`pending_action`、`failure_action`、`partial_action` 分别配置 `ALLOW` 或 `BLOCK`。
+默认全部是 `ALLOW`，且 `enforcement_mode=AUDIT`。
+
+### `security_scan_task`
+
+持久化待执行工作：
+
+- `id`
+- `repository_id`
+- `asset_id`
+- `subject_kind`
+- `subject_key`
+- `subject_key_hash`
+- `content_generation`
+- `profile_id`
+- `profile_revision`
+- `stage`
+- `request_reason`
+- `priority`
+- `status`
+- `attempts`
+- `max_attempts`
+- `next_attempt_at`
+- `claimed_by`
+- `lease_token`
+- `lease_until`
+- `last_heartbeat_at`
+- `last_error_code`
+- `last_error_summary`
+- `requested_by`
+- `requested_at`
+- `started_at`
+- `finished_at`
+- `created_at`
+- `updated_at`
+
+`stage` 是：
+
+- `CATALOG_AND_MATCH`：读取制品并生成 SBOM，然后执行漏洞匹配。
+- `MATCH_ONLY`：复用 SBOM，只在 scanner/漏洞数据库变化后重新匹配。
+- `POLICY_ONLY`：复用 immutable run/finding，只重新计算 policy、waiver 和 group
+  入口上下文。
+
+candidate 自动任务使用由 candidate 当前入队 marker 派生的稳定 request UUID，并建立
+以下语义的唯一键：
+
+```text
+asset + content generation + profile revision + stage + requested scanner snapshot
++ candidate enqueue request UUID
+```
+
+同一 marker 被多个副本重复处理时 UUID 相同，因此仍会去重；仓库关闭后重新启用、
+profile 范围扩大等 backfill 会刷新 marker，从而得到新的 UUID，不能错误复用旧的
+`SUCCEEDED` 终态任务并把 asset 永久留在 `PENDING`。
+
+普通 content-change、manual 和 policy/max-age 任务不在调度时绑定最近一次 scanner
+观测；worker 真正开始执行时才获取并验证 ready snapshot，因此短暂不可用期间写入的
+任务会按可重试语义等待恢复，不会被 `ready=false` 的失败观测永久钉死。只有由漏洞库
+变更 watcher 创建的 `MATCH_ONLY` rematch task 显式携带
+`requested_scanner_snapshot_id`，并在 HTTP 请求、响应 provenance 和最终数据库
+snapshot ID 三处校验该指定快照。
+
+手动强制扫描增加 request UUID，因此可以有新的审计记录；普通重复点击应通过
+Idempotency-Key 合并。
+
+### `security_scanner_snapshot`
+
+记录 scanner 可复现输入：
+
+- `id`
+- `adapter_name`
+- `adapter_api_version`
+- `engine_name`
+- `engine_version`
+- `vulnerability_database_revision`
+- `vulnerability_database_updated_at`
+- `capability_digest`
+- `observed_at`
+- `ready`
+- `details_json`
+
+`details_json` 必须有大小上限且不能保存 credential。后台 watcher 把 scanner metadata
+写入共享数据库，所有副本使用同一观察结果安排重扫。
+
+`observed_at` 只表示 adapter 健康观测时间，不能作为漏洞库新旧顺序。调度和状态投影按
+`vulnerability_database_updated_at` 选择最新、且未超出允许时钟偏差的 ready snapshot；
+同一漏洞库构建时间下，使用不可变的 snapshot `id` 作为唯一确定性排序项。`observed_at`
+不会参与权威版本排序，因此对已有 snapshot 的健康观测更新不能改变匹配版本的先后关系。
+snapshot fingerprint 必须包含漏洞库构建时间，避免 schema/revision 未变化的数据库更新
+被错误合并。来自落后副本的较晚观测可以保留用于健康诊断，但不能回滚已生效的匹配版本。
+构建时间在 HTTP 校验、fingerprint 和持久化边界统一规范到数据库支持的毫秒精度，避免
+同一构建因 wire timestamp 的更细精度被误判为不同 snapshot。
+
+### `security_sbom`
+
+不可变 SBOM：
+
+- `id`
+- `subject_kind`
+- `subject_identity`
+- `subject_identity_hash`
+- `catalog_engine`
+- `catalog_engine_version`
+- `catalog_configuration_digest`
+- `catalog_fingerprint`
+- `document_blob_id`
+- `document_sha256`
+- `spec_name`
+- `spec_version`
+- `component_count`
+- `dependency_count`
+- `inventory_complete`
+- `created_at`
+
+`document_blob_id` 引用 `asset_blob`，但不创建用户可见 `asset`。扫描 DAO 在持久化
+SBOM 或 raw report 时，同时登记通用 `blob_reference(owner_type, owner_id, blob_id)`。
+Blob GC 只依赖 `asset` 与 `blob_reference` 计算引用，不允许直接 JOIN
+`security_sbom`、`security_scan_run` 等功能表。这样扫描文档受保护，同时核心 GC
+不反向依赖扫描域。
+
+V36 同时给 `asset_blob` 增加 `external_reference_count` 和约束：
+`external_reference_count > 0` 时 `deleted_at` 必须为空。引用 DAO 先按主键锁定活动
+Blob，在同一事务内插入 `blob_reference` 并递增计数；释放时按相同锁顺序删除引用并
+递减/重算计数。这个数据库约束是滚动升级 fence：不了解 `blob_reference` 的旧副本
+即使继续执行原有 GC 软删除 SQL，也会被约束拒绝，不能先提交 `deleted_at` 再删除
+对象存储内容。若旧 GC 先提交删除，新引用发布会在行锁后看到删除 fence 并失败。该
+方案不依赖 MySQL trigger，因此开启 binlog 的普通应用账号不需要 `SUPER` 权限。
+
+唯一键：
+
+```text
+catalog_fingerprint =
+  hash(subject identity,
+       target classification,
+       catalog engine,
+       catalog engine version,
+       catalog configuration digest,
+       actual scanned platforms,
+       actual missing platforms)
+```
+
+平台集合排序并去重；普通制品使用两个空集合。这样两次 OCI catalog 即使配置相同，
+只要实际平台覆盖不同，也不会复用旧 SBOM 并把新 findings 错误关联到旧文档。
+`missing platforms` 只接受 Syft 依赖在成功解析 manifest/index 后返回的明确平台
+不匹配错误。registry 网络、token service、认证和 5xx 等非零退出统一保持可重试，
+不能发布为 `PARTIAL`。
+
+### `security_sbom_component`
+
+SBOM 的有上限查询投影：
+
+- `sbom_id`
+- `component_ref`
+- `package_url`
+- `package_url_hash`
+- `type`
+- `namespace`
+- `name`
+- `version`
+- `directness`
+- `locations_json`
+- `licenses_json`
+- `properties_json`
+
+优先使用 Package URL 标识软件包。不能生成可靠 PURL 时保留 engine-native identity，
+并在 UI 中标记匹配精度。
+
+完整 dependency graph 保留在原始 CycloneDX 文档中；关系数据库只投影 UI、搜索和策略
+真正需要的有界字段。
+
+### `security_scan_run`
+
+不可变漏洞匹配结果：
+
+- `id`
+- `task_id`
+- `sbom_id`
+- `scanner_snapshot_id`
+- `match_configuration_digest`
+- `match_fingerprint`
+- `status`
+- `scan_completeness`
+- `raw_report_blob_id`
+- `raw_report_sha256`
+- `finding_count`
+- `fixable_finding_count`
+- `critical_count`
+- `high_count`
+- `medium_count`
+- `low_count`
+- `unknown_count`
+- `max_severity`
+- `scanned_platforms_json`
+- `missing_platforms_json`
+- `started_at`
+- `completed_at`
+- `created_at`
+
+唯一键：
+
+```text
+match_fingerprint =
+  hash(SBOM SHA-256,
+       inventory complete,
+       matcher engine,
+       matcher engine version,
+       vulnerability database revision,
+       match configuration digest,
+       scanned platforms,
+       missing platforms)
+```
+
+平台集合排序并去重后参与 fingerprint。这样相同 fingerprint 才能直接引用已有
+immutable run，不会把平台覆盖范围不同的 OCI 结果误复用，也不复制 findings 或
+component projection。
+
+### `security_scan_finding`
+
+规范化 finding：
+
+- `id`
+- `scan_run_id`
+- `finding_key`
+- `finding_key_hash`
+- `advisory_id`
+- `aliases_json`
+- `data_source`
+- `package_url`
+- `package_name`
+- `installed_version`
+- `fixed_versions_json`
+- `severity`
+- `severity_source`
+- `cvss_vector`
+- `cvss_score`
+- `title`
+- `description`
+- `primary_url`
+- `locations_json`
+- `source_status`
+- `created_at`
+
+`finding_key` 至少包含 advisory identity、package identity、installed version 和
+location/layer identity。不同数据库对同一漏洞的 alias 不在写入时武断合并；保留来源，
+展示层可以按 canonical ID/alias 聚合。
+
+title、description 和 URL 都来自外部数据，进入 UI 前必须转义并限制 scheme。
+
+### `asset_security_state`
+
+下载热路径只读取 materialized state，不在请求内聚合 findings：
+
+- `asset_id`
+- `profile_id`
+- `repository_id`（来源仓库的冗余键，只用于权限范围汇总与索引，不代表 group 下载入口）
+- `content_generation`
+- `subject_identity_hash`
+- `latest_scan_run_id`
+- `scan_state`
+- `scan_completeness`
+- `inventory_complete`
+- `max_severity`
+- `finding_counts_json`
+- `policy_id`
+- `policy_revision`
+- `policy_decision`
+- `policy_reason_code`
+- `stale_at`
+- `last_evaluated_at`
+- `version`
+
+asset 当前 Blob、generation 或 profile 与 state 不一致时，读取逻辑必须返回 `STALE`，
+不能继续使用旧的 `ALLOW`。
+
+该表的 `version` 单调标识状态更新，便于并发诊断和后续安全地引入可重建读缓存；当前
+下载阻断路径不使用节点本地 decision cache，始终以数据库聚合快照为准。
+
+### `asset_security_policy_state`
+
+同一 member asset 可能同时从 member 仓库和多个 group 入口下载，各入口可以配置不同
+policy、结果年龄和 waiver。为避免一个入口覆盖另一个入口的决定，策略结果按
+`asset_id + profile_id + repository_id` 分别物化：
+
+- `asset_id`
+- `profile_id`
+- `repository_id`
+- `content_generation`
+- `latest_scan_run_id`
+- `policy_id`
+- `policy_revision`
+- `config_revision`
+- `waiver_revision`
+- `policy_decision`
+- `policy_reason_code`
+- `waived_findings`
+- `stale_at`
+- `next_waiver_expiry`
+- `last_evaluated_at`
+- `version`
+
+下载热路径通过一次聚合查询读取 asset/blob 分类字段、member 与 entry/group 配置、
+profile、candidate、最新 state、policy 和对应的 policy state，并同时校验 candidate
+generation、最新 run、config/policy/waiver revision、全局 waiver 失效水位、结果年龄
+和下一次 waiver 到期时间。
+任一字段不一致时返回 pending，不在请求内查询 finding，也不把节点本地 cache 作为
+阻断依据。后台 reconciler 使用有界、确定性去重的 `POLICY_ONLY` 任务重新物化；多副本
+同时运行不会产生不同的最终决定。
+
+### `security_scan_policy` 与 `security_scan_waiver`
+
+策略使用版本化、可审计模型。第一阶段规则：
+
+- 阻断的最低 severity。
+- 是否只阻断存在 fix 的 finding。
+- 允许或阻断 `UNKNOWN` severity。
+- 最大结果年龄。
+- 是否要求完整 inventory。
+- OCI 必须覆盖的平台集合。
+
+策略禁用后不再应用 severity、inventory、结果年龄或 OCI 平台规则；仓库级
+pending/failure/partial action 仍用于表达扫描流水线本身的状态。OCI 策略要求的平台
+必须包含在 run 的 `scanned_platforms_json` 中，否则按 partial action 判定。
+
+策略记录创建后不可原地覆盖。管理端“编辑策略”会创建同名的下一 revision，并在同一
+事务中把仍引用被编辑 revision 的仓库配置切换到新记录，同时增加
+`config_revision`，使后台重新物化策略决定。历史 scan state、审计记录和 waiver
+继续保留原 policy ID/revision，不随配置指针改写。
+
+waiver 字段至少包含：
+
+- scope：finding、component、asset 或 repository。
+- advisory/package/finding selector。
+- reason。
+- created by / approved by。
+- expires at（可为空；空值表示无期限，直到管理员主动撤销）。
+- policy revision。
+- audit timestamps。
+
+waiver 不能修改原始 finding。策略重新计算时把有效 waiver 作为独立输入，并把命中
+waiver 的 finding 数量写入 policy evaluation。
+
+`security_scan_waiver_revision` 保存单例的单调 `current_revision` 和
+`global_invalidation_revision`。每次创建或删除 waiver 都在同一数据库事务中推进
+`current_revision`；policy evaluator 在读取 waiver 前捕获 revision，写
+`asset_security_policy_state` 时对 singleton 行持共享锁并校验 revision 未变化。
+因此另一个副本不能在 waiver 删除后重新插入基于旧 waiver 集合计算的 `ALLOW`。
+
+repository/asset 范围的 waiver 仍只删除对应 policy state；无 repository/asset 的广域
+waiver 不在管理 API 事务内执行全表 `DELETE`，而是 O(1) 推进
+`global_invalidation_revision`。下载聚合快照将低于该水位的 state 视为 pending，
+reconciler 以有界批次重算，并把 current revision 放入 `POLICY_ONLY` 任务的确定性
+request UUID，避免新一轮重算复用旧终态任务。
+
+Findings 列表不会一次加载全部 waiver 历史。DAO 只按当前页的 finding ID、
+advisory/alias、package selector 及可见 run subject 查询候选 waiver，并按
+`w.id > cursor ORDER BY w.id LIMIT 256` 做 keyset 分页；服务层逐页执行精确组合匹配，
+只保留当前页 waiver ID 集合和每个 finding 的 target bitset。为保持 active/expired
+精确计数，总耗时仍与实际匹配的候选 waiver 数量线性相关，但单条 SQL、参数数量和请求
+工作集有固定上限，不会把全部历史记录一次物化到堆中。
+
+管理 UI 不提供从空表单创建全局或整仓豁免的入口。普通交互必须从具体 finding 发起，
+后端根据 `security_scan_run_subject` 返回当前操作者可管理的仓库制品，UI 只展示
+“仓库名 + 制品路径”并提交精确的 `finding_id + repository_id + asset_id`。漏洞编号、
+包名和内部 ID 均为只读上下文，不能由用户手填。服务端从 finding 固化 advisory 与
+package selector，使豁免在同一漏洞的后续重扫中继续有效，但不能扩散到其它漏洞。
+有效期可从 1、7、30、90 天或“无期限”中选择，默认 7 天，reason 必填。“无期限”
+必须由用户显式选择，并始终保留撤销入口，避免用任意超长日期表达永久风险接受。
+同一 `finding_id + repository_id + asset_id` 已被任一有效且已审批 waiver 覆盖时，
+不得再次创建 finding waiver。创建事务先对 finding 行执行 `SELECT ... FOR UPDATE`，
+再检查有效 waiver 并在重复时返回 `409 Conflict`，使多个 kkRepo 副本上的并发点击
+也串行到同一判断。已过期或已撤销的记录不阻止重新豁免。
+广域 API 豁免必须至少提供 advisory 或 package selector；拒绝无 finding、无
+selector 的全局或整仓“全部漏洞豁免”，历史空 selector 记录也不能匹配 finding。
+任何包含 `asset_id` 的 API 豁免都必须同时提供明确的 `repository_id`，授权和生效
+范围均以该仓库策略上下文为准；group 上下文只允许 group 管理员创建，并校验制品
+来源仍属于该 group。禁止用 `repository_id = NULL` 的 asset 豁免跨越调用者无权
+管理的 group 策略上下文。
+
+## 状态机
+
+### Task 状态
+
+```text
+PENDING
+  -> RUNNING
+      -> SUCCEEDED
+      -> RETRY_WAIT -> RUNNING
+      -> FAILED
+      -> CANCELLED
+```
+
+只有持有当前 `lease_token` 的 worker 可以 heartbeat、完成或重试任务。
+
+### Scan 状态
+
+| 状态 | 语义 |
+| --- | --- |
+| `PENDING` | 已排队但未完成 |
+| `RUNNING` | scanner 正在处理 |
+| `COMPLETE` | 当前 profile 范围内完整完成 |
+| `PARTIAL` | 有可用结果，但 inventory、平台或 finding 投影不完整 |
+| `FAILED` | scanner、输入、存储或持久化失败 |
+| `NOT_APPLICABLE` | 该 asset 明确不属于当前扫描范围 |
+| `CANCELLED` | 管理员取消或任务被新 generation 取代 |
+| `STALE` | 有旧结果，但内容、profile、scanner 或漏洞数据库 freshness 不满足当前要求 |
+
+`COMPLETE` 且 finding 为 0 只表示“在记录的 scanner 和数据库快照下未发现匹配”，UI
+使用“未发现已知漏洞”，不使用“安全”或“无风险”。
+
+### Policy 决定
+
+```text
+ALLOW
+BLOCK_PENDING
+BLOCK_SCAN_FAILED
+BLOCK_PARTIAL
+BLOCK_VULNERABILITY
+```
+
+状态与策略决定分离。同一个 scan run 可以在不同仓库策略下得到不同决定。
+
+## 数据库任务领取与多副本语义
+
+任务优先级不是任意整数，而是四个固定档位：
+
+| 档位 | 值 | 来源 |
+|---|---:|---|
+| `MANUAL` | 100 | 管理员手工 rescan |
+| `VULNERABILITY_DATABASE` | 25 | 漏洞库更新后的 rematch |
+| `POLICY` | 20 | 策略或结果有效期变更 |
+| `CONTENT` | 0 | 新增、替换制品或 backfill |
+
+固定档位由应用层校验和数据库 `CHECK` 约束共同保证。worker 对一个精确 status 使用
+`UNION ALL` 分别读取四个优先级的可执行时间范围，每个分支最多读取一个 batch：
+
+```sql
+SELECT id, priority, requested_at, eligible_at
+FROM (
+  (SELECT id, priority, requested_at, next_attempt_at AS eligible_at
+   FROM security_scan_task
+   WHERE status = ?
+     AND attempts_remaining = TRUE
+     AND priority = 100
+     AND next_attempt_at <= CURRENT_TIMESTAMP
+   ORDER BY next_attempt_at, requested_at, id
+   LIMIT ?)
+  UNION ALL
+  -- priority 25、20、0 使用相同的有界分支
+) claimable
+ORDER BY priority DESC, eligible_at, requested_at, id
+LIMIT ?;
+```
+
+`PENDING`、`RETRY_WAIT` 分别执行上述查询；过期 `RUNNING` 候选使用
+`lease_until < CURRENT_TIMESTAMP`。每个 status 的外层排序最多处理四倍 batch size，
+不会随数据库中的未来任务或已耗尽任务数量增长。三个最多为 batch size 的候选集在 JVM
+中按 `priority DESC, eligible_at, requested_at, id` 归并，随后只对准备领取的 id
+用主键重新校验条件并执行
+`FOR UPDATE SKIP LOCKED`，直到拿满 batch。这样不会为了跨 status 排序而锁住最终不
+领取的行，多个副本选择到同一候选时也只有一个能持有行锁。
+
+`attempts_remaining` 是 `attempts < max_attempts` 的 stored generated column。V36
+提供 `idx_security_scan_task_claim_ready(status, attempts_remaining, priority DESC,
+next_attempt_at, requested_at, id)` 和
+`idx_security_scan_task_claim_running(status, attempts_remaining, priority DESC,
+lease_until, requested_at, id)`。因为每个分支已固定前三列，MySQL 与 PostgreSQL 都能
+直接对 `next_attempt_at` 或 `lease_until` 做索引 range scan。最终尝试已耗尽的 lease
+回收另用 `idx_security_scan_task_claim_exhausted(status, attempts_remaining,
+lease_until, id)`。普通领取和耗尽回收因此不会扫描彼此的任务。
+
+领取事务同时：
+
+1. 把任务设置为 `RUNNING`。
+2. 增加 attempts。
+3. 写入随机 `lease_token`、`claimed_by` 和 `lease_until`。
+4. 提交后才开始 Blob I/O 和 scanner 调用。
+
+长任务定期 heartbeat 延长 lease。完成更新必须包含：
+
+```sql
+WHERE id = ? AND status = 'RUNNING' AND lease_token = ?
+```
+
+旧 worker 在 lease 失效后返回，不得覆盖接管 worker 的结果。
+
+管理员取消 `RUNNING` 任务时，数据库状态和 lease fencing 仍是集群正确性的唯一真相。
+对 asset 任务，管理事务先用轻量主键查询取得不可变的 `asset_id`，再按全局
+`candidate row -> task row` 顺序加锁；终态发布也遵循相同顺序，禁止形成
+`candidate -> task` 与 `task -> candidate` 的反向等待。任务行锁定后才从同一份投影
+捕获当前 lease，再原子提交 `CANCELLED` 状态、blob owner 释放和审计记录。
+非 asset 任务直接锁 task。claim/takeover 使用
+`SKIP LOCKED`，因此不能在 lease 捕获与取消更新之间替换 owner。提交成功后立即使用
+`task id + 本次随机 lease token` 作为 run id，向全部配置 adapter ordinal 广播带
+service credential 的取消请求；不能只使用 attempts，因为管理员 retry 会把 attempts
+重置为 0。事务回滚时不得发送取消。worker 的下一次 heartbeat 发现 lease 已失效后仍会
+中断当前 scanner HTTP 请求并重复广播，作为管理节点提交后崩溃或网络故障的兜底。
+滚动关闭等原因直接中断执行线程时，worker 也必须先临时清除 interrupt flag，在可执行
+HTTP/数据库清理的上下文中把当前任务释放为 `RETRY_WAIT` 并广播远端取消，再恢复
+interrupt flag；若已耗尽尝试次数则按普通失败策略落终态，不能只退出线程并等待 lease
+过期，也不能把可恢复的滚动关闭永久落为 `CANCELLED`。进程关闭必须为这段清理等待
+最长 10 秒的有界宽限期，避免虚拟线程尚未完成清理时 JVM 已退出。
+SBOM/report 的临时 `blob_reference` 发布也必须在同一事务中锁定 task 行并校验当前
+`lease_token`；因此它要么先提交并由随后的取消/重试/完成事务释放，要么在终态提交后
+观察到 lease 已失效而拒绝发布，不能在 owner 已清理后由旧 worker 重新留下孤儿引用。
+adapter 只在本实例维护短生命周期的 active-run 映射，用于中断对应请求线程和终止
+Syft/Grype 进程树；该映射不是持久任务状态，也不参与多副本正确性。资源释放是 best
+effort，scanner 端到端超时仍是最终上界，任何迟到结果都会被 lease token 拒绝。
+heartbeat 的 lease-loss 判定、中断执行线程与任务完成后的 heartbeat 停止/interrupt
+清理使用同一个进程内 gate 串行化。这样已经进入数据库调用但尚未返回的 heartbeat，
+在完成清理设置 `finished` 后不能再迟到地中断已复用的 worker 线程；该 gate 只解决
+单次执行的线程生命周期竞态，任务所有权仍完全由数据库 lease token 决定。
+
+若 worker 在最后一次允许的 attempt 内崩溃，普通 claim 不能再次增加 attempts 并执行
+第 `max_attempts + 1` 次。独立终态回收查询会领取
+`RUNNING AND attempts >= max_attempts AND lease_until < now`，只生成新的 fencing token，
+不增加 attempts、不再次调用 scanner，并以 `SCAN_ATTEMPTS_EXHAUSTED` 物化失败策略和
+终态。这样最后一次进程崩溃不会留下永久 `RUNNING` 任务。
+
+退避使用带 jitter 的指数策略。以下错误默认可重试：
+
+- scanner `429`、`502`、`503`、`504`。
+- 网络中断和明确的临时对象存储错误。
+- scanner 数据库正在更新。
+
+以下错误默认不可重试或需要管理员修复：
+
+- checksum 不匹配。
+- 不支持的 scanner API/schema。
+- 归档路径穿越、设备文件或资源上限违规。
+- scanner 返回无效 JSON、过大报告或 provenance 缺失。
+
+进程内 executor/semaphore 可以保护单个 JVM，但不能决定集群总任务所有权。当前
+adapter 每个实例默认最多执行 2 个扫描、排队 4 个请求，排队超过 1 秒或队列已满时
+返回可重试 HTTP `429` 和 `Retry-After: 5`；active、queued 和 rejected 均暴露指标。
+kkRepo 任务的指数退避负责削峰。需要严格集群总并发上限时，再增加数据库
+`security_scanner_slot` lease，而不是把每个副本的 semaphore 误当成全局限制。
+
+## Scanner Adapter 契约
+
+kkRepo 定义小型、版本化的内部接口，不直接把第三方 CLI 输出暴露给业务层。
+
+当前端点：
+
+```text
+GET  /v1/capabilities
+GET  /v1/readiness
+POST /v1/catalog
+POST /v1/match
+POST /v1/oci/scan
+```
+
+共同请求信息：
+
+- API version。
+- kkRepo run ID 和 Idempotency-Key。
+- target classification。
+- 期望 SHA-256、size 和 media type。
+- 从规范 asset path 提取并严格白名单化的制品后缀；adapter 仅用它保留工具对
+  `.jar`、`.nupkg`、`.tar.gz` 等封装格式的识别能力，不能据此替代服务端 classifier。
+- profile configuration digest。
+- timeout 与资源上限。
+
+共同响应信息：
+
+- adapter/engine 名称和版本。
+- 漏洞数据库 revision 与更新时间。
+- capability digest。
+- 输入实际 SHA-256。
+- completeness。
+- 有界 summary。
+- CycloneDX 或版本化 vulnerability report。
+
+adapter API 使用同步、可安全重试的调用。scanner 可以在请求期间使用本地临时目录，
+但请求结束后不需要保留任务状态。kkRepo 超时后用相同 Idempotency-Key 重试时，结果
+必须保持内容幂等。
+
+Grype 数据库使用不可变代际发布：
+
+- updater 在共享卷的私有 staging 目录下载完整数据库，成功后把目录原子改名为新的
+  generation，再通过原子 pointer 文件发布；失败的 staging 不会成为可见数据库。
+  共享卷必须保证同目录原子改名的可见性；不满足该能力时 updater 失败而不降级为
+  非原子 pointer 覆盖。
+- 每个 readiness/Match 操作开始时解析一次 pointer，并在完整操作期间固定到同一
+  generation。更新不改写旧 generation，因此不需要让扫描请求持有共享写锁，也不会
+  读到半更新目录。
+- 提供扫描服务的容器把整个数据库卷只读挂载；唯一可写方是不接收制品、不持有
+  service credential 的 updater。旧 generation 在超过最大请求时长和更新间隔保护窗
+  后由后续 updater 回收。
+- Docker Compose 和 Helm 中提供扫描服务的容器都固定关闭进程内更新，并处在不能
+  公网出站的内部网络。独立 `database-update-only` updater 挂载相同数据库卷；
+  Compose 默认每 5 分钟循环执行一次，Helm CronJob 默认每 5 分钟启动一次。每次只做
+  协调后的到期检查/更新并退出，pointer 同时记录成功时间，因此调度频率不会缩短
+  6 小时最小成功更新间隔。
+- updater 不创建 credential-protected HTTP controller、不接收 scanner service
+  credential，也不处理制品；只有 updater 获得漏洞库发布源的公网 HTTPS 出站。
+- 多个 updater 通过卷内跨进程 publication lock 串行发布，默认等待上限 10 分钟；
+  超时返回 `BUSY` 时进程必须以非零状态退出，由 Compose restart policy 或
+  Kubernetes Job controller 重试，不能把没有发生的更新记录成成功。
+- Helm 必须使用持久数据库卷。单副本默认 `ReadWriteOnce` 时，required pod affinity
+  把 updater 调度到 scanner 所在节点；多 scanner 副本必须提供 `ReadWriteMany`
+  existing claim。
+- readiness 和 Match 响应都必须带非空数据库 revision 与更新时间；未知、过期或更新
+  中均返回可重试失败，不能用“ready=true 但 provenance 为空”的结果生成 run。
+
+第一版只交付一个 `syft-grype-v1` 参考 profile：
+
+- Syft 负责 Catalog，并输出包含 package identity、location 和 dependency 的
+  CycloneDX JSON。
+- Grype 读取已保存的 CycloneDX 完成 Match，adapter 记录实际 Grype 版本与
+  vulnerability database revision。
+- CycloneDX JSON 是 kkRepo 长期保存、可导出的引擎中性 SBOM；adapter 内部格式不能
+  成为数据库 API。
+- scanner container 通过 image digest 固定工具版本，升级工具或 catalog 配置会生成
+  新 fingerprint。
+
+后续可以增加 `trivy-vuln` 等 adapter/profile。不同引擎的 finding 默认分别形成 scan
+run，不在第一阶段自动合并、投票或覆盖。
+
+禁止在 kkRepo 内重新实现 Maven/npm/PyPI 等生态的漏洞匹配器。协议模块负责识别
+哪个 asset 是发布制品，包目录识别和漏洞匹配由 scanner 工具链完成。
+
+## Blob 与输入传输
+
+### 普通制品
+
+`ScanInputBroker` 支持两种模式：
+
+1. `STREAM`：kkRepo 通过 `BlobStorage.get()` 打开 InputStream，边读边把 multipart
+   body 发送给 scanner。所有 Blob backend 都必须支持，是第一阶段基线。
+2. `SIGNED_URL`：Blob backend 支持时生成短生命周期、只读、绑定对象的 URL，让
+   scanner 直接读取。它是性能优化，不能改变正确性。
+
+无论哪种模式：
+
+- scanner 必须重新计算 SHA-256 与 size。
+- 不把 OSS/S3 access key 交给 scanner。
+- signed URL 不写日志、finding、metric label 或审计详情。
+- scanner 只能读取该次任务目标对象，不能列出 bucket。
+- 传输失败不能创建 COMPLETE 结果。
+
+### Docker/OCI
+
+OCI scanner 按 digest 从 kkRepo 内部 registry 地址拉取：
+
+- kkRepo 签发只读、仓库 ID、image name 与根 manifest digest 范围的短 TTL token。
+  签发事务只遍历一次数据库中持久化的 descriptor 图，把可达的 child manifest、
+  config 和 layer 写入 `(token_hash, resource_kind, digest)` 主键 allowlist；遍历最多
+  1024 个 manifest 节点、100000 条引用，越界 fail closed。后续每个 registry 请求
+  只做一次 token 与资源类型/digest 的索引等值查询，不再重复遍历整张图，避免镜像
+  layer 数量增长时出现平方级授权开销。tag、无关 digest、其它 image/repository 与
+  任何 push action 都拒绝。
+- token 不继承触发扫描用户的长期 credential。
+- 过期 token 由独立于 Docker upload cleanup 开关的 worker 按索引分批领取并删除；
+  每个副本使用 `FOR UPDATE SKIP LOCKED` 协作，不依赖进程内状态。
+- scanner 必须按 digest 而不是可变化 tag 拉取。
+- index 根据 platform policy 解析并记录实际扫描的平台。
+- index descriptor 只用于筛选候选 manifest；adapter 还必须读取并校验每个 child
+  config 的 `os`、`architecture` 和可选 `variant`。单 manifest 也只能满足其 config
+  声明的平台，不能把同一 manifest 重新标记成所有 required platform。
+- scanner 不挂载宿主 Docker socket。
+- adapter 自己使用有界 HTTP 客户端获取 manifest、config 与所需 layer，逐项校验
+  descriptor size 和 SHA-256，并在请求独立临时目录生成本地 OCI layout；短期 token
+  只用于这一阶段，不传给 Syft 子进程或写入子进程环境。
+- registry 请求 header timeout 不能替代正文 deadline：每个 response body 都由绝对
+  单调 deadline watcher 管理，peer 在 headers 后停滞时主动关闭流并返回可重试
+  `SCANNER_TIMEOUT`，不能无限占用 scanner 容量并继续 heartbeat。
+- manifest/config/layer 的压缩字节共享 `maxInputBytes`，descriptor 数量受
+  `maxArchiveEntries` 约束；所有唯一 layer 在 Syft 启动前共享检查归档条目数、单文件
+  大小、解压总量、嵌套深度和膨胀率。普通 tar、gzip、xz 与 zstd layer 使用同一预算。
+- Syft 只扫描 `oci-dir:<local-layout>`，并额外设置单 layer 文件读取上限作为纵深防御；
+  这项 Syft 限制不能替代 adapter 的请求级总量校验。
+
+后续也可以把 OCI layout 通过对象存储提供给 scanner，但不能要求 kkRepo 主进程在本地
+拼装完整镜像。
+
+### 原始结果
+
+SBOM 和 raw vulnerability report 使用专用对象前缀，例如：
+
+```text
+security-scan/sbom/<sha256>.cdx.json
+security-scan/report/<sha256>.json
+```
+
+先写 staging object，再在一个数据库事务中：
+
+1. 插入或复用 immutable SBOM。
+2. 插入或复用 scan run。
+3. 写入完整、有上限的 component/finding 投影。
+4. 计算并更新 asset security state。
+5. 使用 lease token 完成 task。
+6. 写入安全审计事件。
+
+事务失败后 staging object 由持久 cleanup marker 清理。不能出现 finding 已写入一半，
+task 却被标记 COMPLETE 的状态。
+
+## 安全解包与执行隔离
+
+所有输入均视为不可信。scanner 必须：
+
+- 使用非 root 用户和只读 root filesystem。
+- 每个请求使用独立临时目录，结束后清理。
+- scanner 在进程内同时执行“并发槽位”和“共享 scratch 字节预算”准入。单请求预留按
+  `min(maxInput, adapterInputLimit) + min(maxUncompressed, maxSingleFile * maxNestedDepth)
+  + 3 * maxOutput + maxStderr` 保守估算，并向 MiB 上取整；前两项覆盖根输入/OCI layout
+  与递归检查时同时保留的父级嵌套归档，后两项覆盖 Syft、Grype 和合并结果的受限输出。
+  单请求超过进程预算返回不可重试 `413`，并发预算在 admission timeout 内拿不到则
+  返回可重试 `429`。默认共享预算 `7 GiB`，Helm/Compose scratch volume 为 `8 GiB`，
+  Helm ephemeral-storage limit 为 `9 GiB`；预算必须始终小于实际 volume，二者调整时
+  必须同步压测。
+- 禁止执行归档中的二进制、脚本和 package lifecycle hook。
+- 禁止设备文件、FIFO、socket、hard link 和逃逸工作区的 symlink。
+- 规范化每个归档路径并拒绝绝对路径、`..` 和 Unicode/分隔符绕过。
+- 限制压缩层级、归档条目数、单文件大小、解压总量和压缩膨胀率。
+- `.rpm` 先有界解析 lead、signature/main header 和对齐，再识别其压缩方式并把内部
+  CPIO payload 纳入同一条目数、单文件、累计解压量、嵌套深度、路径与 deadline
+  预算；拒绝 CPIO device/FIFO/socket 等特殊文件。不能把 RPM 外壳当成不透明单文件
+  直接交给 Syft。
+- 限制 CPU、内存、临时磁盘、进程数和 wall-clock timeout。
+- Linux 上每个 Syft/Grype 命令必须通过 `setsid` 建立独立 session/process group；
+  timeout、请求中断、I/O 失败以及父进程正常退出后仍有残留进程时，对整个 group 先
+  `TERM`、再有界等待并 `KILL`。因此中间父进程退出后被重新挂到 PID 1 的后代仍在可
+  寻址范围内；只剩无法执行的 zombie 时不把清理误判为失败。生产 Linux 镜像缺少
+  `setsid` 或 `kill` 必须 fail closed。非 Linux 开发环境才使用持续重新发现后代并
+  跟踪已观测 PID 的 `ProcessHandle` fallback。
+- 不挂载宿主源码、Docker socket、kkRepo 配置目录或云凭据目录。
+- 默认禁止任意出站网络；漏洞数据库更新使用独立、允许列表控制的流程。
+- 分别限制 scanner 原始 SBOM/report 与 HTTP JSON response：原始文档限制还覆盖 OCI
+  各平台输入总和和合并结果；response 限制需要计入 Base64 膨胀、JSON 字段及投影，
+  不能与原始输出错误地共用同一个字节值。
+- 对 scanner response 设置 JSON nesting 和字段长度上限。
+
+scanner adapter 与 kkRepo 之间使用受保护的内部网络，并支持 mTLS 或轮换的 service
+credential。readiness 必须同时验证扫描器可执行、漏洞数据库可读且未超过允许运维
+年龄；不能只判断 HTTP 端口可连接。
+
+## 漏洞数据库与结果新鲜度
+
+scanner 定期报告：
+
+- engine version。
+- vulnerability database revision。
+- database updated at。
+- supported target/capability digest。
+
+`ScannerSnapshotWatcher` 把变化写入共享数据库。新 revision 出现后：
+
+1. 找出仍有有效 SBOM、但 match fingerprint 使用旧 revision 的 asset。
+2. 按优先级创建 `MATCH_ONLY` task。
+3. 复用 SBOM，不重新读取原始制品。
+4. 在新结果完成前把旧结果显示为 `STALE`，是否阻断由仓库 freshness 策略决定。
+
+多个 scanner 实例短时间处于不同数据库 revision 时，每个 run 记录真实 revision。
+不能把“本周扫描过”作为唯一复用条件。
+
+数据库 revision 获取失败时 scanner readiness 为 degraded。Audit 仓库继续正常提供
+制品并暴露告警；Enforce 仓库根据 `failure_action` 和 `max_result_age_seconds` 决定。
+
+## 策略与下载路径
+
+### 接入位置
+
+`RepositorySecurityFilter` 继续只负责身份与仓库权限，不能在这里推断最终 asset。
+
+新增 `ArtifactDownloadPolicy`，在协议 service 已经解析实际 asset/member/manifest，
+但尚未调用 `BlobStorage.get()` 前执行：
+
+```text
+authorization
+  -> repository/group resolution
+  -> concrete asset or OCI manifest resolution
+  -> ArtifactDownloadPolicy
+  -> BlobStorage.get()
+```
+
+普通协议 reader、Components/Browse download 和 Docker manifest 路由都必须接入。
+不能只覆盖 `/repository/{repo}` 而遗漏 Docker `/v2`、仓库 connector port 或内部
+redirect/download endpoint。
+
+### Audit 模式
+
+- 总是允许原协议请求继续。
+- 记录本次访问关联的 scan state 与 policy shadow decision。
+- 不改变 status、header 或 body。
+- 指标展示“如果开启 enforce 将阻断多少次”，用于评估误报和覆盖率。
+
+### Enforce 模式
+
+普通制品：
+
+- confirmed policy violation：默认 `403`。
+- pending/stale 且配置阻断：默认 `503`，带有界 `Retry-After`。
+- 不在错误正文暴露调用方无权限查看的 CVE、内部路径或 scanner 信息。
+
+不同协议需要专用错误适配。Docker 必须返回 Registry V2 JSON 错误；其它包客户端要
+用真实客户端验证重试和错误展示。最终状态码、header 和 body 以兼容测试固定，不能由
+一个通用 controller 猜测。
+
+### Hosted 上传
+
+上传校验和仓库 write policy 仍在同步请求内完成。上传代码不读取仓库扫描配置，也不
+判断仓库是否启用扫描；它只使用服务启动时已经确定的通用事件开关。部署能力关闭时，
+上传保持原有事务路径且没有以下扫描后续步骤。部署能力开启后，扫描异步进行：
+
+1. 上传成功并在一个事务内持久化 Blob/asset 与通用 `artifact_change_event`。
+2. 提交后由独立扫描 worker 消费事件并推进 candidate。
+3. 严格仓库中的新 asset 在下载策略视角处于 pending/quarantined-for-download。
+4. scan 与 policy 通过后，下载策略允许读取。
+
+scanner 超时、不可用、扫描投影事务失败或 worker 停止，都不回滚已经提交的 Blob 和
+asset；管理员可以修复 scanner 后重试、添加有期限 waiver 或删除制品。部署能力开启
+时，只有仓库核心写入本身失败（包括通用 outbox 无法与 asset 原子提交）才使上传失败。
+
+### Proxy 首次回源
+
+Audit 模式保持当前边下载边缓存/响应语义。
+
+Enforce 且 pending 必须阻断的仓库不能把首次回源字节先流给客户端：
+
+1. 把完整上游响应写入 staging/Blob 并校验 checksum。
+2. 原子提交 proxy asset 与通用内容变更事件。
+3. 返回可重试的 pending 响应。
+4. 独立 worker 生成 candidate 并完成扫描后，客户端重试命中本地 Blob。
+
+普通 proxy 包和 manifest 必须在步骤 2 完成后，使用刚提交的具体 asset/blob 快照执行
+pending 判定；禁止在读取上游 body 前做通用 pending 阻断，否则内容事件永远不会产生，
+客户端重试也无法推进扫描。没有响应体的未缓存 HEAD 不创建扫描主体，实际 GET 仍按上述
+流程持久化后判定。
+
+这会增加严格 proxy 仓库第一次请求的延迟和一次失败重试，必须在管理端明确提示，
+并用 Maven/npm/PyPI/Docker 等真实客户端验证。
+
+Docker/OCI layer 是 manifest 扫描主体的组成部分，不是独立扫描主体。代理回源已经
+获得 2xx、确认 Blob 存在后，必须在读取上游 body 之前按该仓库中所有引用 manifest
+执行 pending/failed/partial/vulnerability 决策；若被阻断，立即关闭上游 body，不把
+可能为多 GiB 的 layer 写入临时盘或对象存储。404 仍优先返回 `BLOB_UNKNOWN`。scanner
+持有的 digest-scoped token 走内部扫描读取语义，可为 manifest 扫描获取所需 layer，
+不会与客户端阻断形成循环依赖。
+
+### Group 策略
+
+group 不复制扫描结果。最终决定使用：
+
+- 实际命中 member asset 的 scan state。
+- member 仓库 policy。
+- 请求入口 group 的 policy。
+
+默认取更严格决定。Group metadata 可以继续展示版本，但实际二进制下载仍需在解析
+member 后执行策略。若未来支持“隐藏被阻断版本”，必须作为独立行为并补客户端
+dependency resolution 兼容测试。
+
+### Docker Blob 下载
+
+策略主体仍是 manifest/index，不为每个 layer 单独生成 finding 或扫描状态。读取
+`/v2/<name>/blobs/<digest>` 时，服务端通过
+`repository_id + digest_hash` 的索引查询仓库内所有仍有效、引用该 digest 的
+manifest asset；`<name>` 不能缩小这个集合，因为实际 Blob 读取本身只按仓库和 digest
+解析。DAO 先沿 `(repository_id, digest_hash, manifest_id)` 覆盖索引在
+`docker_manifest_reference` 内完成 `DISTINCT + ORDER BY + LIMIT 1025`，再把这一固定
+集合关联到仍有效 manifest；不会先 JOIN/排序该 digest 的全部历史引用。热路径只读取
+最多 1025 个 ID：前 1024 个由一条聚合策略 SQL 判定，
+第 1025 个只作为 overflow 标记。存在 overflow 且任一适用配置为 `ENFORCE` 时，
+固定成本地按 pending fail-closed，不继续按 tag 数量分页；只有全部适用配置均为
+`AUDIT` 时才允许继续。任一关联 manifest 被阻断时，同一仓库内通过别名 image name
+发起的直接 digest 下载也阻断，不能绕过 manifest 检查。
+
+Hosted 上传和 cross-mount 的中间 Blob 可以在 manifest 提交前保持未引用状态，以兼容
+Registry push 工作流；没有任何 manifest 引用时不凭空创建扫描主体。Proxy Blob 则是
+已经可下载的远端内容：若 manifest 尚未缓存，按该源仓库及请求入口 group 的 pending
+action 判定，不能利用“先请求 layer、后请求 manifest”的顺序绕过隔离。一个 layer 被
+多个 manifest 复用时取所有关联 manifest 的最严格决定，这是 repository-scoped digest
+端点无法区分调用方实际意图时的安全边界。
+
+## 管理 API 与权限
+
+第一阶段使用 kkRepo internal API，不声明 Nexus REST API 兼容：
+
+```text
+GET    /internal/security/scanning/summary
+GET    /internal/security/scanning/tasks
+GET    /internal/security/scanning/runs
+GET    /internal/security/scanning/findings
+GET    /internal/security/scanning/findings/{findingId}/waiver-context
+GET    /internal/security/scanning/findings/{findingId}/waivers
+GET    /internal/security/scanning/assets/{assetId}
+POST   /internal/security/scanning/assets/{assetId}/rescan
+POST   /internal/security/scanning/tasks/{taskId}/retry
+POST   /internal/security/scanning/tasks/{taskId}/cancel
+GET    /internal/security/scanning/repositories
+GET    /internal/security/scanning/repositories/{repositoryId}/config
+PUT    /internal/security/scanning/repositories/{repositoryId}/config
+GET    /internal/security/scanning/policies
+POST   /internal/security/scanning/policies
+PUT    /internal/security/scanning/policies/{policyId}
+GET    /internal/security/scanning/waivers
+POST   /internal/security/scanning/waivers
+DELETE /internal/security/scanning/waivers/{id}
+GET    /internal/security/scanning/sboms/{sbomId}
+```
+
+`GET /summary` 的 `deploymentEnabled` 字段只表达当前 kkRepo 节点是否启用部署能力，
+不能命名为 `globallyEnabled`，也不能被前端解释成“全部仓库已启用”。仓库实际状态从
+repository config 的 `enabled` 字段读取。
+
+权限要求：
+
+- 所有查询必须按仓库权限过滤，不能通过 finding、SBOM 或 task ID 枚举其它仓库。
+- 查看完整 SBOM/finding 需要仓库 `browse/read` 和安全扫描查看权限。
+- 修改仓库扫描配置、重试和手动扫描需要 repository administration 权限。
+- 修改全局 profile、policy 和 scanner 配置需要 application/security administration 权限。
+- 创建 waiver 需要单独的高权限动作，并写入审计日志。
+- SBOM/raw report 下载使用受鉴权 controller 或短期 URL，不直接暴露 object key。
+
+API 列表使用稳定分页和有界 filter。Runs、Tasks、Findings、Repositories、Policies、
+Waivers 统一返回 `{items, nextAfter}`，按不可变主键升序使用 keyset cursor；服务端多取
+一条判断下一页，不使用扫描期间容易跳页或重复的 offset。`limit` 最大 200，关键字
+`q` 最大 200 个字符并在数据库查询中参数化、转义通配符。description、raw report 和
+SBOM 不进入列表响应。
+
+## Admin UI
+
+新增 **Security > Artifact Scanning**：
+
+- 页面首先读取只读的部署能力状态。`kkrepo.security-scanning.enabled=false`、状态
+  尚未返回或状态读取失败时，页面保留可见以说明原因，但 Refresh、tab、表单、任务
+  操作、SBOM 下载等扫描 UI 全部置灰且不可点击；已有仓库配置保持不变。
+- 部署能力开启后页面解除禁用。实际扫描仍由 **Repositories** 中每个仓库的
+  **Enabled** 控件启用，部署能力开启不会自动启用任何仓库。
+- scanner 暂时 degraded 与部署能力关闭不同：前者保留管理操作，允许管理员查看
+  状态、调整 Audit 配置或重试；后者不允许从 UI 修改扫描配置。
+- Overview 的 Runs 以及其余五个 tab 的业务列表都提供独立搜索、10/15/25/50/100 行
+  page size（默认 10 行）和前后翻页；搜索词、游标历史与 page size 按 tab 隔离，
+  手动 Refresh 和行内操作后保留当前条件。主列表不执行昂贵的全表 `COUNT(*)`，
+  只根据 `nextAfter` 判断是否可进入下一页。
+- Tasks 搜索任务、仓库、制品、状态和错误；Findings 搜索 advisory、package/PURL、
+  version、source 和 title；Waivers 搜索 exception、仓库、制品、审批人和 reason。
+  Repositories、Policies 与 Runs 使用各自页面可见字段搜索，不在浏览器对已截断的
+  前 100 条做伪搜索。
+
+1. **Overview**
+   - scanner readiness 和数据库更新时间。
+   - 扫描覆盖率。
+   - pending/failed/partial/stale 数量。
+   - severity 分布和将被策略阻断的 asset 数。
+2. **Tasks**
+   - 状态、repository、format、reason、attempt、lease age、error。
+   - retry/cancel，但不显示 credential 或 signed URL。
+3. **Findings**
+   - repository、component、asset、package/PURL、advisory、severity、fixed version。
+   - 原始来源和 scan snapshot。
+   - 每条 finding 显示后端按实际 run subject、repository、asset 和 selector 计算的
+     waiver 状态；不能只在浏览器按 advisory/package 猜测，否则同一漏洞出现在不同
+     仓库时会误标。
+   - 主列表展示制品目标覆盖率而不是 waiver 记录数：所有关联目标均被覆盖时显示
+     `Waived` 并禁用行内豁免按钮；部分覆盖时显示 `Partially waived · 已覆盖/总数`
+     并只允许对剩余目标执行 `waive remaining`。多个范围重叠的 waiver 仍保留在详情
+     和治理列表中，但不会把主状态显示成容易误解的 `Waived · 2`。
+   - 有效或已过期的状态徽标可点击查看适用制品、范围、策略、reason、审批人和到期
+     时间；新建 waiver 仍从 finding 行内发起，成功后留在 Findings 并立即刷新状态。
+4. **Repositories**
+   - profile、hosted/proxy trigger、audit/enforce、pending/failure/partial action。
+   - 仓库列表通过行内“configure”打开统一弹窗，不在列表下方展开常驻配置表单。
+   - profile 和 policy 由后台统一管理；仓库表单只显示解析后的名称并置灰，不暴露或允许
+     编辑数据库 ID。保存仓库配置时由隐藏的绑定值原样提交，避免一次普通 UI 编辑意外
+     切换扫描器或策略。
+   - 结果有效期使用“使用策略默认值 / 1 天 / 7 天 / 30 天”等业务含义选项，不要求
+     用户换算秒数；兼容已有自定义值时只显示当前可读时长。
+   - hosted 仓库只展示 hosted 内容开关，proxy 仓库只展示 proxy 内容开关，group
+     仓库同时展示两者；不适用的范围不出现在表单中。
+   - pending、failed、partial 三类异常动作收进默认折叠的高级设置；已有任一
+     `BLOCK` 配置时自动展开，避免隐藏正在生效的阻断行为。
+5. **Policies**
+   - 展示版本、阈值、完整性和结果有效期。
+   - 策略列表通过“Create policy”和行内“edit”进入同一弹窗表单，不在列表页面内
+     常驻新增表单；编辑弹窗明确提示将创建新 revision 以及受影响仓库的切换语义。
+6. **Waivers**
+   - 作为独立治理页签展示有效/过期状态、范围、适用仓库/制品、到期时间、审批人、
+     reason 和撤销入口。它不是发现漏洞的第二份列表，而是 exception 生命周期和审计
+     管理视图，因此不与 Findings 合并，也不与 Policies 挤在同一面板。
+   - 仓库和制品显示名称与路径，不把 repository/asset 等数据库 ID 暴露为需要用户
+     理解的业务信息。
+   - 列表不提供无上下文的“Create waiver”。新建 waiver 从 Findings 行内“waive”
+     发起，通过统一弹窗展示只读的漏洞和包信息。
+   - 弹窗中的适用制品只能从后端返回的关联仓库制品中选择，不允许手填 repository、
+     asset、finding ID；有效期使用 1、7、30、90 天或“无期限”，默认 7 天且
+     reason 必填；无期限豁免在列表和详情中明确标记，并可随时撤销。
+   - waiver context 只返回尚未被有效 waiver 覆盖的关联制品；如果列表加载后发生
+     并发创建，最终 `POST /waivers` 仍由服务端重复检查拒绝，不能依赖按钮置灰保证
+     正确性。
+   - 从 Findings 打开的新建和详情弹窗挂在扫描页面公共层，不嵌套在任一隐藏 tab
+     panel 内，避免“状态已打开但祖先仍 hidden”导致弹窗不可见。
+
+Browse UI 第一阶段只显示有权限用户可见的状态徽标和最后扫描时间，不直接展示完整
+漏洞描述。finding 详情统一进入受权限控制的管理页面。
+
+## 可观测性
+
+新增有界指标：
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `kkrepo_security_scan_tasks_total` | counter | task outcome，按 stage/reason 分类 |
+| `kkrepo_security_scan_task_duration_seconds` | timer | task 总耗时 |
+| `kkrepo_security_scan_catalog_duration_seconds` | timer | Catalog 耗时 |
+| `kkrepo_security_scan_match_duration_seconds` | timer | Match 耗时 |
+| `kkrepo_security_scan_input_bytes_total` | counter | 发送给 scanner 的字节数 |
+| `kkrepo_security_scan_backlog` | gauge | 可领取任务数 |
+| `kkrepo_security_scan_oldest_age_seconds` | gauge | 最老待处理任务年龄 |
+| `kkrepo_security_scan_running` | gauge | 当前有效 lease 数 |
+| `kkrepo_security_scan_failures` | gauge | 终态失败任务数 |
+| `kkrepo_security_scan_partial` | gauge | 当前 partial asset 数 |
+| `kkrepo_security_scan_findings` | gauge | 当前 asset state 的 finding 聚合 |
+| `kkrepo_security_scan_scanner_ready` | gauge | scanner readiness |
+| `kkrepo_security_scan_database_age_seconds` | gauge | 漏洞数据库年龄 |
+| `kkrepo_security_scan_artifact_event_backlog` | gauge | 尚未回收内容事件数的保守估算；按主键首尾水位计算，不对大表执行 `COUNT(*)` |
+| `kkrepo_security_scan_artifact_event_oldest_age_seconds` | gauge | 最老未回收内容事件年龄 |
+| `kkrepo_security_scan_retention_deleted_total` | counter | 按有界对象类型统计保留清理数量 |
+| `kkrepo_security_policy_decisions_total` | counter | allow/block/shadow decision |
+| `kkrepo_security_policy_evaluation_duration_seconds` | timer | 下载策略判定耗时，按 format/outcome 分类 |
+| `kkrepo_scanner_active` | gauge | 单个 adapter 当前执行的扫描数 |
+| `kkrepo_scanner_queued` | gauge | 单个 adapter 等待执行容量的请求数 |
+| `kkrepo_scanner_admission_rejected_total` | counter | adapter 容量拒绝次数 |
+| `kkrepo_scanner_database_updates_total` | counter | 数据库 updated/not_due/busy/failed 结果 |
+
+允许的低基数标签：
+
+- `format`
+- `repository_type`
+- `stage`
+- `reason`
+- `outcome`
+- `severity`
+- `scanner`
+- `decision`
+
+禁止把 repository 名、asset path、component coordinate、PURL、CVE、task UUID、
+object key 和 token 放入 metric label。按具体对象排查使用受权限控制的 API、审计和
+结构化日志。
+
+建议告警：
+
+- scanner 连续不可用。
+- 漏洞数据库超过允许运维年龄。
+- oldest backlog age 持续增长。
+- terminal failure 增长。
+- lease takeover 频率异常。
+- partial/inventory incomplete 比例异常。
+- enforce 仓库存在大量 pending block。
+
+## 审计
+
+以下动作写入 `security_audit_log`：
+
+- 启用/关闭仓库扫描。
+- profile、policy、enforcement mode 变化。
+- 手动 scan/rescan/retry/cancel。
+- waiver 创建、更新、过期和删除。
+- asset policy state 从 allow 变为 block，或从 block 变为 allow。
+- scanner snapshot 变化导致批量 stale/rescan。
+
+批量重扫不为每个 worker heartbeat 写审计，避免日志膨胀。每个 run 通过 task/run ID
+关联触发人、触发原因、scanner snapshot、policy revision 和最终决定。
+
+## 配置与部署
+
+全局配置及当前默认值：
+
+```properties
+kkrepo.security-scanning.enabled=false
+kkrepo.security-scanning.adapter.base-url=http://scanner:8080
+# 多副本 Kubernetes 使用有序稳定地址；非空时覆盖 base-url
+kkrepo.security-scanning.adapter.base-urls=
+kkrepo.security-scanning.metrics-count-limit=10000
+kkrepo.security-scanning.max-response-bytes=67108864
+kkrepo.security-scanning.max-response-tokens=262144
+kkrepo.security-scanning.response-memory-budget-bytes=268435456
+kkrepo.security-scanning.worker.batch-size=4
+kkrepo.security-scanning.worker.lease-seconds=300
+kkrepo.security-scanning.worker.heartbeat-seconds=60
+kkrepo.security-scanning.worker.max-attempts=5
+kkrepo.security-scanning.worker.max-backoff-seconds=1800
+kkrepo.security-scanning.worker.artifact-change-batch-size=1000
+kkrepo.security-scanning.worker.artifact-change-cleanup-batch-size=5000
+kkrepo.security-scanning.worker.candidate-batch-size=500
+kkrepo.security-scanning.worker.backfill-batch-size=500
+kkrepo.security-scanning.worker.backfill-max-pages-per-run=20
+kkrepo.security-scanning.worker.snapshot-rematch-batch-size=200
+kkrepo.security-scanning.worker.snapshot-rematch-max-batches=10
+kkrepo.security-scanning.policy-reconcile-delay=60s
+kkrepo.security-scanning.scanner-database-max-age=48h
+kkrepo.security-scanning.scanner-observation-max-age=2m
+kkrepo.security-scanning.retention.enabled=true
+kkrepo.security-scanning.retention.terminal-task-days=30
+kkrepo.security-scanning.retention.result-days=90
+kkrepo.security-scanning.retention.batch-size=200
+kkrepo.security-scanning.retention.delay=1h
+
+kkrepo.scanner.max-concurrent-scans=2
+kkrepo.scanner.max-queued-scans=4
+kkrepo.scanner.admission-timeout=1s
+kkrepo.scanner.retry-after-seconds=5
+kkrepo.scanner.max-scratch-bytes=7516192768
+kkrepo.scanner.max-output-bytes=16777216
+kkrepo.scanner.vulnerability-database-update-interval=6h
+kkrepo.scanner.vulnerability-database-update-check-interval=1m
+kkrepo.scanner.database-update-only=false
+```
+
+scanner 成功响应从有界流直接反序列化，不在 kkRepo 内额外保留完整 transport
+`byte[]`。解析器同时约束 response byte、token 总量、嵌套深度、字段名、字符串、
+component/finding 投影数量、嵌套列表和 component property 数量；不物化 adapter
+返回的任意 `summary` graph。内嵌原始 SBOM/report 使用流式 token 校验完整 JSON 和
+根 schema，不再调用 `readTree` 构造第二份文档对象树。component/finding 投影硬上限
+分别为 4096/2048；超出时保留原始不可变文档，但结果降级为 `PARTIAL`，由仓库
+`partial_action` 决定是否因 inventory 不完整而阻断；已经投影并命中策略的 finding
+仍按 `BLOCK_VULNERABILITY` 判定，不能被 `partial_action=ALLOW` 绕过。
+
+每个执行中任务的节点内共享准入预留按下式从上述硬上限推导：
+
+```text
+reservation = 3 * max-response-bytes + 256 * max-response-tokens
+concurrency = min(worker.batch-size, response-memory-budget-bytes / reservation)
+```
+
+其中 byte 项覆盖 UTF-8/Base64 临时缓冲和 record 对文档 `byte[]` 的防御性复制，token
+项覆盖 record、集合、引用和标量对象开销。预算租约覆盖解析、校验和持久化全过程。
+配置无法容纳一个推导后的 reservation，或预算超过 JVM 最大堆一半时，启用扫描的节点
+拒绝启动。该预算仅保护节点本地堆，任务所有权和重试正确性仍由 MySQL 租约负责。
+
+`kkrepo.security-scanning.enabled` 是 kkRepo 节点的部署能力 gate：
+
+- `false`（默认）：Flyway 创建版本化的扫描 schema、索引、内置 profile/policy、空
+  游标，以及 `asset_blob` 上的通用 Blob 引用计数字段/约束；除此之外不把历史
+  asset/Blob 读入扫描流程，不追加扫描所用内容事件，不装载事件投影、历史校对、
+  candidate、backfill、task、snapshot、policy-reconcile 或 retention worker，周期
+  指标不查询扫描表；下载策略直接放行，Admin UI 扫描页面置灰。已有仓库配置和历史
+  结果不会被开关直接删除。
+- `true`：这是部署人员对数据库工作负载的显式 opt-in。kkRepo 开始追加通用内容事件，
+  装载有界事件投影、全局历史校对、协调/维护 worker 与下载策略集成，并观测 adapter；
+  但不会启动 scanner 进程，也不会自动启用任何仓库。仓库管理员必须在 Admin UI 的
+  **Repositories** 中显式启用，届时才为该仓库创建历史 backfill 和实际扫描任务。
+- 所有 kkRepo 副本必须使用相同值。切换该值需要按部署配置变更并滚动重启，不能由
+  普通应用管理员在 UI 中修改。
+
+因此升级与启用是两个独立操作。大型实例在把 gate 改为 `true` 前，必须评估历史校对
+和后续仓库 backfill 的数据库 I/O 与 scanner 容量。全局校对默认每轮对最近窗口和
+主键循环各最多读取 1000 个 asset；仓库 backfill 默认每页 500 个、每轮最多 20 页，
+均通过共享持久游标和短事务限流。其余默认值可在生产启用前根据制品规模、扫描耗时和
+scanner 容量测试结果调整。
+
+Docker Compose/quickstart：
+
+- scanner 是可选 profile，不默认增加基础 quickstart 资源占用。
+- `KKREPO_SECURITY_SCANNING_ENABLED=true` 只启用 kkRepo 集成；还必须使用
+  `--profile security-scanning` 启动 scanner，例如
+  `KKREPO_SECURITY_SCANNING_ENABLED=true docker compose --profile security-scanning up -d`。
+- 上述操作只提供部署能力，之后仍由仓库管理员在 Admin UI 按仓库启用。
+- 提供扫描服务的 scanner 和 database updater 共享独立 volume/cache；scanner 只读
+  挂载不可变数据库代际，并位于只连接 kkRepo 的 scanner internal network。数据库在
+  另一张 database internal network，两者没有网络交集。updater 不接收 service
+  credential，只连接独立 update-egress network。
+- 不挂载 Docker socket。
+- readiness 未通过时 kkRepo audit 模式仍可启动，但 health details 显示 degraded。
+
+Helm/Kubernetes：
+
+- `securityScanning.enabled` 同时部署 adapter StatefulSet/Service 并设置 kkRepo 的
+  部署能力 gate；开启自动更新时还部署独立、非服务型 updater CronJob。它仍不会
+  自动启用任何仓库。
+- scanner pod 有 CPU、memory、ephemeral-storage request/limit。
+- 支持 NetworkPolicy、Pod Security Context、read-only root filesystem；scanner 的
+  数据库 PVC mount 同样为只读，只有 updater 可写并发布新 generation。
+- scanner 服务 Pod 的自动更新固定关闭，NetworkPolicy 不允许公网；updater 默认每
+  5 分钟只做一次 due-check/update，独占公网 443 出站且不注入 service credential。
+  chart 要求 scanner database persistence；单副本 RWO 通过 pod affinity 同节点挂载，
+  多副本使用 RWX existing claim。
+- 每个 run 按 ID hash 选择稳定的首选 ordinal；catalog、match 和 OCI 操作遇到可重试
+  的传输、容量或可用性错误时，在一个单调时钟总 deadline 内按地址列表环形切换到
+  其余 ordinal；每个备用请求的 HTTP timeout、scanner timeout header 和 OCI
+  `ResourceLimits` 都缩减为剩余预算，不能把总耗时放大为 `ordinal 数 × profile
+  timeout`。二进制请求通过 `InputStreamSource` 从不可变 blob 重新打开，OCI JSON
+  请求使用按剩余预算重新生成的有界正文。
+- JDK HTTP request timeout 只覆盖收到 response headers 之前的等待；kkRepo 读取
+  scanner response body 时继续使用同一个绝对单调 deadline。peer 在 headers 后停滞
+  时由 watcher 主动关闭流并返回可重试 `SCANNER_TIMEOUT`，不能无限占用 worker。
+- 可重试失败可能发生在 adapter 已接受执行但响应丢失之后；切换到备用 ordinal 前，
+  kkRepo 会尽力定向取消失败 ordinal 上的同 run 执行。409
+  `SCANNER_RUN_ALREADY_ACTIVE` 保留 adapter 返回的可重试语义，旧执行被取消后在其它
+  ordinal 恢复。
+- 用户取消、lease 丢失或 worker 中断时，取消请求广播到全部配置 ordinal。无法访问
+  的 ordinal 不能把调用方阻塞时间放大为 `5 秒 × 副本数`：各请求并行执行并共享
+  5 秒总 deadline。执行线程已带 interrupt flag 时，worker 会临时清除它，先把任务
+  释放为可重试状态并完成广播，再恢复中断状态，避免 HttpClient 立即拒绝清理请求；
+  已耗尽尝试次数时按普通失败策略落终态。无法访问的旧执行最多运行到 profile timeout；
+  持久任务 lease、fencing 和数据库结果提交仍是唯一正确性边界。
+- capability/readiness 观测遍历全部配置 ordinal；任一副本 ready 即认为 adapter
+  部署可用，避免滚动发布或 ordinal 0 故障把整个扫描集群误判为不可用。一次观测的
+  capability、readiness 和全部 ordinal 共享 15 秒单调时钟总 deadline，不能占用
+  worker 达到 `15 秒 × 端点数 × 副本数`。
+- StatefulSet 只提供稳定网络身份；任务所有权、lease、fencing 和结果仍在共享数据库。
+- 所有 kkRepo 副本应使用相同顺序的 adapter 地址列表，以保持负载首选分布可预测；
+  副本数变化不会改变任务和结果的数据库正确性。
+- adapter rolling update 期间 run 记录真实 engine/database snapshot。
+
+## 保留、删除与 GC
+
+默认每小时执行一次有界清理，每类数据每批最多 200 行：
+
+- `SUCCEEDED/FAILED/CANCELLED` task 和 terminal backfill job 默认保留 30 天。
+- 不再被当前 asset/policy state、run subject 或 finding waiver 引用的 immutable
+  run/finding、SBOM 和 scanner snapshot 默认保留 90 天。
+- run/SBOM 被管理 API、复用查询或下载读取时更新 `last_accessed_at`；同一对象最多每
+  小时触碰一次，避免高频详情/SBOM 下载把读流量放大为等量写流量。读取与清理使用
+  同一数据库事务/行锁语义，避免刚被复用的结果被并发删除。
+- 当前 asset state、repository policy state、有效或历史 waiver 引用的 finding/run
+  不按普通孤儿结果清理；审计日志仍按独立审计保留策略管理。
+
+删除顺序：
+
+1. 清理不再作为当前决定、且已超过保留期的历史 run subject。
+2. 清理不再被 state、subject 或 waiver 引用的 finding/run。
+3. 清理不再被 run 引用的 SBOM projection 和无引用 scanner snapshot。
+4. 在同一清理事务中释放 SBOM/raw report 的 `blob_reference`；Blob GC 之后再次检查
+   所有通用引用，再决定是否软删除物理 Blob。
+
+不能因为原始制品 asset 被删除，就立即删除仍被相同内容的其它 asset 复用的 SBOM。
+核心 Blob GC 不理解 SBOM 或扫描 run；任何新增功能要长期持有 Blob，都必须通过
+`blob_reference` 注册和释放引用。
+
+## 双数据库实现约束
+
+MySQL 与 PostgreSQL 必须保持：
+
+- 相同状态枚举和时间精度。
+- 相同唯一键、fingerprint 和幂等语义。
+- 相同 `artifact_change_event` 顺序、游标锁和“candidate + cursor”原子提交语义。
+- 相同 `SKIP LOCKED` claim、lease takeover 和 fencing 行为。
+- 相同 JSON DTO 语义，但核心 filter/order 字段使用普通列和索引。
+- 相同分页稳定顺序。
+- 相同删除/外键和通用 Blob 引用语义。
+
+不使用 PostgreSQL advisory lock 作为公共正确性机制，也不依赖 MySQL 专属
+`GET_LOCK`。跨后端协调统一使用行锁、唯一约束、lease token 和 dialect 中性事务。
+
+MySQL/PostgreSQL 公共 contract 至少覆盖：
+
+1. 通用事件开关开启时，asset 新增/替换只产生通用事件，metadata-only 更新不产生
+   事件；开关关闭时不写事件；两种模式下上传 DAO 都不访问扫描表。
+2. 两个副本不能同时推进同一消费游标，candidate 与游标要么一起提交、要么一起回滚。
+3. 延迟旧事件不能把 candidate 恢复为旧 Blob，重复 backfill 不增加未变化 generation。
+4. 并发创建同一 fingerprint 只产生一个 immutable SBOM/run。
+5. 两个 worker 不领取同一 task。
+6. lease 过期后可接管，旧 fencing token 无法完成任务。
+7. finalize transaction 要么完整写入 finding/state/task，要么全部回滚。
+8. asset Blob 替换后旧 run 不能更新最新 state。
+9. Blob GC 通过 `blob_reference` 保护 SBOM/raw report，不依赖扫描表结构。
+10. backfill 可暂停、恢复并在重复执行时幂等。
+
+## 测试设计
+
+### Domain 与单元测试
+
+- candidate classifier 对全部 format 的正例、metadata 跳过和边界路径。
+- catalog/match fingerprint 稳定性。
+- scan/task/policy 状态机。
+- severity 规范化、alias 和 finding key。
+- waiver scope、到期和 policy revision。
+- OCI platform aggregation。
+- group 使用实际 member state 并选择更严格策略。
+
+### Scanner contract
+
+使用固定 scanner 版本与离线测试数据库，覆盖：
+
+- capability/readiness/provenance。
+- 普通 archive、单文件、CycloneDX 和 OCI digest。
+- 0 finding、多个 severity、fixed/unfixed、withdrawn advisory。
+- unsupported target。
+- malformed/oversized report。
+- timeout、429、临时错误和不可重试错误。
+- scanner 版本与数据库 revision 变化。
+
+CI 不能依赖实时漏洞源返回固定 finding；fixture 必须可复现。
+
+### 恶意输入
+
+- `../`、绝对路径、混合分隔符和 Unicode 路径逃逸。
+- symlink/hard link/device/FIFO/socket。
+- zip/tar bomb、超多条目、深层嵌套、超大单文件。
+- RPM header/payload 截断、异常长度、CPIO 路径逃逸、特殊文件和嵌套 RPM。
+- checksum/size 不匹配。
+- 恶意 package metadata、HTML/Markdown 和 URL。
+- scanner 报告的 JSON nesting/field/body 上限。
+- scoped token 对 tag、无关 manifest/config/layer、其它 image/repository、push 的
+  越权，图遍历上限、过期和日志脱敏。
+- signed URL 重放与越权 object。
+
+### Persistence 与多副本
+
+MySQL 和 PostgreSQL 分别运行真实集成测试：
+
+- 通用内容事件、独立游标、candidate projection 的提交/回滚与多副本竞争。
+- 扫描关闭或扫描表不参与时，hosted/proxy/迁移写入路径保持正常。
+- candidate/task/SBOM/run/finding/state 全链路。
+- 并发 claim 和 fingerprint insert。
+- worker 中途退出后接管。
+- scanner 调用完成但 DB finalize 前退出。
+- finalize 完成但 HTTP 响应丢失后的幂等重试。
+- backfill 与在线写入并发。
+- profile/policy 更新与在途任务并发。
+
+### 协议与真实客户端
+
+Audit 模式：
+
+- 全部现有真实客户端 E2E 的 status/header/body 不变。
+- 部署能力和仓库扫描均启用时，hosted、proxy、迁移写入产生通用事件，异步消费后
+  产生正确候选和结果。
+- metadata、checksum、signature 不产生无意义任务。
+
+Enforce 模式：
+
+- Maven、npm、PyPI、Go、Helm、Cargo、Pub、Composer、Terraform、Swift、
+  Ansible、Docker、NuGet、RubyGems、Yum 和 Raw 分别覆盖 pending、block、allow。
+- proxy 第一次回源严格模式不会泄漏未扫描响应体。
+- group 命中不同 member 时使用正确 state。
+- Docker tag、digest、multi-arch index 和 connector port 路由一致。
+- HEAD、Range、conditional GET 和 redirect 不绕过策略。
+- Components API、Browse download 和协议专用 artifact endpoint 不绕过策略。
+
+安全扫描默认 disabled/audit，因此 Nexus 兼容黑盒不应产生差异。Enforce 是管理员显式
+产品策略，其响应行为由 kkRepo 专项测试固定。
+
+### 性能与容量
+
+至少基准：
+
+- 10 MB、100 MB、1 GB archive 的流式传输和临时磁盘峰值。
+- 大量小文件归档。
+- 大型 SBOM 与 finding 投影。
+- 100 万 asset backfill 对数据库和线上请求的影响。
+- 多副本 claim 吞吐与 scanner backpressure。
+- 下载热路径 direct 与 group 聚合快照查询的 p50/p95/p99、吞吐及数据库调用次数。
+- OCI 多平台镜像扫描和 layer 复用。
+
+## 实施顺序
+
+### PR 1：领域模型与双数据库骨架
+
+- 新增 `security-scan` 模块。
+- 定义 subject、fingerprint、状态机、scanner SPI 和 policy decision。
+- 增加通用 artifact change outbox、通用 Blob 引用、双数据库 migration、DAO API 与
+  contract test。
+- 实现 candidate/task/SBOM/run/finding/state 的基本 CRUD。
+- 不接真实 scanner，不改变下载行为。
+
+验收：
+
+- MySQL/PostgreSQL fresh migration 和重复启动通过。
+- 并发 claim、fencing、immutable fingerprint contract 通过。
+- 模块依赖没有把 JDBC/internal 类型暴露给 domain/server 业务代码。
+
+### PR 2：可靠候选与任务编排
+
+- 部署能力开启时，`JdbcAssetDao` 内容变更只事务性追加通用
+  `artifact_change_event`；关闭时不写事件。
+- 仅在部署能力开启时装载的独立事件消费游标把当前 asset/blob binding 投影为
+  candidate。
+- Candidate worker、reconciliation/backfill job、task worker 和 retry/lease。
+- Fake scanner adapter contract。
+- task/queue 指标和审计。
+
+验收：
+
+- 部署能力开启时，hosted、proxy、迁移写入都能产生通用事件并异步收敛为候选；默认
+  关闭升级不写事件、不读取历史 asset、不运行扫描后台任务。
+- 上传/缓存/迁移写入代码不引用扫描表或 scanner，扫描故障不回滚已提交内容。
+- asset 覆盖、并发写和 worker crash 不会丢失扫描需求。
+- 多副本不会重复拥有同一 task。
+
+### PR 3：普通制品 Audit 扫描
+
+- 交付参考 scanner adapter。
+- STREAM Blob 输入、安全解包、Catalog、Match。
+- CycloneDX/raw report Blob 与有界数据库投影。
+- 格式 candidate matrix。
+- Admin overview、task、run 和 finding 页面。
+
+验收：
+
+- 第一阶段支持矩阵中的普通制品产生可追溯 SBOM 与 finding。
+- 漏洞数据库更新只创建 MATCH_ONLY task。
+- 所有现有客户端 E2E 在 audit 模式无响应回归。
+
+### PR 4：Docker/OCI
+
+- digest-scoped 短期 scanner token。
+- manifest/index/platform 解析和聚合状态。
+- OCI scanner contract 与多平台测试。
+- tag 移动、proxy/group 和 connector port 覆盖。
+
+验收：
+
+- 不按 tag 复用旧结果。
+- 平台覆盖范围和 partial 状态准确。
+- scanner 无需 Docker socket 或长期 registry credential。
+
+### PR 5：策略、Waiver 与 Shadow Decision
+
+- policy/waiver 版本化模型。
+- materialized asset security state。
+- `ArtifactDownloadPolicy` 接入全部读取入口，但只运行 shadow/audit。
+- 统计潜在阻断与误报。
+
+验收：
+
+- 普通 reader、Components/Browse、group 和 Docker 路径没有漏点。
+- shadow decision 不改变任何协议响应。
+- waiver 权限、到期和审计通过。
+
+### PR 6：可选 Enforce
+
+- 仓库级 enforce feature flag。
+- pending/failure/partial/finding 响应适配。
+- proxy buffer-before-release。
+- 真实客户端 enforce E2E。
+- 运维告警、回滚开关和生产文档。
+
+验收：
+
+- 关闭 enforce 可立即恢复原协议行为，不需要清理扫描数据。
+- 严格 proxy 首次回源不返回未扫描字节。
+- 全协议真实客户端矩阵和多副本故障注入通过。
+- scanner 不可用、数据库过期和 partial result 行为与配置一致。
+
+### PR 7：生产加固与后续扩展
+
+- signed URL 输入优化。
+- 更完整的 retention/GC 和大规模 backfill。
+- VEX、许可证、secret/misconfiguration 独立 profile。
+- 可选 OCI SBOM referrer。
+- 外部漏洞治理系统导出。
+
+每项扩展都必须保留扫描类型、权限、结果状态和策略边界，不能把不同风险类别压缩成
+一个 severity 字段。
+
+## 发布与回滚
+
+发布顺序：
+
+1. 数据库 migration 和 domain/DAO，功能保持 disabled。
+2. `Release Packages` 工作流从同一 release source 构建并发布
+   `ghcr.io/klboke/kkrepo-scanner:<version>` 多架构镜像；Helm 和 quickstart 使用与
+   kkRepo 相同的版本 tag，不能依赖带外手工发布。
+3. 部署 scanner，验证 readiness、数据库更新和资源上限。
+4. 对测试仓库启用 audit。
+5. 执行小范围 backfill，观察 backlog、partial、失败率和 finding 质量。
+6. 扩大 audit 覆盖。
+7. 只对经过验证的仓库启用 shadow policy。
+8. 最后按仓库显式启用 enforce。
+
+回滚：
+
+- 全局关闭执行能力并滚动重启全部 kkRepo 副本后，会停止内容事件写入、事件投影、
+  历史校对、任务调度/领取、周期指标和保留清理并保留数据库状态，不调用 scanner。
+  以后重新开启时，由有界校对和仓库 backfill 按当前数据库事实补齐关闭期间的变化。
+- 仓库从 enforce 切回 audit 立即停止下载阻断。
+- scanner adapter 回滚不修改已有 immutable run；新任务记录回滚后的真实版本。
+- migration 回滚遵循 kkRepo 现有数据库策略，不通过手工删表恢复旧应用。
+
+## 完成标准
+
+安全扫描能力只有在以下条件全部满足后才可声明生产可用：
+
+1. 部署能力开启时，hosted、proxy、迁移写入只发布通用内容事件，扫描异步追平且
+   不会丢失候选；默认关闭升级只创建安全扫描 schema，不处理历史制品。
+2. MySQL/PostgreSQL 使用相同 claim、lease、fingerprint 和 finalize 语义。
+3. worker/scanner 任一副本退出后任务可恢复，旧 worker 不能覆盖新结果。
+4. SBOM、finding、scanner/version/database provenance 可追溯。
+5. 漏洞库更新可以复用 SBOM 重新匹配。
+6. 普通制品与 OCI 平台覆盖范围明确，unsupported/partial 不会显示为 clean。
+7. 扫描器不执行制品代码，并通过恶意归档与资源耗尽测试。
+8. Audit 模式不改变现有协议和真实客户端行为。
+9. Enforce 覆盖所有实际下载入口，proxy 严格模式不会先返回未扫描字节。
+10. policy、waiver、重扫和阻断都有权限校验与审计。
+11. backlog、scanner readiness、数据库年龄、failure、partial 和 policy block 可监控告警。
+12. Blob GC 只依赖通用引用契约，retention 和仓库删除不会破坏仍被引用的扫描文档或
+    泄漏越权数据。
+
+## 参考资料
+
+### kkRepo 内部设计
+
+- [架构说明](../architecture.md)
+- [安全模型](../security-model.md)
+- [监控观测指南](../monitoring-observability-guide.md)
+- [MySQL / PostgreSQL 可插拔数据库访问层设计](pluggable-database-access-layer-design.md)
+- [Docker 仓库实现说明](docker-repository-implementation-plan.md)
+
+### 外部规范与扫描器能力
+
+- [Nexus Repository `AssetStore` post-commit asset events](https://github.com/sonatype/nexus-public/blob/0a8a425daa4b37e924ca11e4637a41afce7b115c/public/common/components/nexus-repository-content/src/main/java/org/sonatype/nexus/repository/content/store/AssetStore.java#L297-L302)
+- [Nexus Repository `ContentStoreEventSupport`](https://github.com/sonatype/nexus-public/blob/0a8a425daa4b37e924ca11e4637a41afce7b115c/public/common/components/nexus-repository-content/src/main/java/org/sonatype/nexus/repository/content/store/ContentStoreEventSupport.java#L61-L75)
+- [Sonatype Repository Firewall（由 IQ Server 提供能力）](https://help.sonatype.com/en/repository-firewall.html)
+- [Sonatype Repository Firewall 自托管接入流程](https://help.sonatype.com/en/repository-firewall-getting-started.html)
+- [Sonatype Repository Firewall quarantine](https://help.sonatype.com/en/firewall-quarantine.html)
+- [Harbor pluggable scanners](https://goharbor.io/docs/2.5.0/administration/vulnerability-scanning/pluggable-scanners/)
+- [JFrog Xray download blocking](https://jfrog.com/help/r/xray-how-to-work-with-jfrog-xray-block-download-artifacts-functionality/xray-how-to-work-with-jfrog-xray-block-download-artifacts-functionality/)
+- [Trivy Filesystem scanning](https://trivy.dev/docs/latest/target/filesystem/)
+- [Trivy client/server 模式](https://trivy.dev/docs/latest/guide/references/modes/client-server/)
+- [Trivy filesystem CLI options](https://trivy.dev/docs/latest/references/configuration/cli/trivy_filesystem/)
+- [Syft supported scan targets](https://oss.anchore.com/docs/guides/sbom/scan-targets/)
+- [Grype supported scan targets](https://oss.anchore.com/docs/guides/vulnerability/scan-targets/)
+- [CycloneDX specification overview](https://cyclonedx.org/specification/overview/)
+- [Package URL specification](https://github.com/package-url/purl-spec/blob/main/PURL-SPECIFICATION.rst)
+- [Open Source Vulnerability schema](https://ossf.github.io/osv-schema/)
+- [OCI Distribution Specification](https://github.com/opencontainers/distribution-spec/blob/main/spec.md)
+- [OCI Image Format Specification](https://github.com/opencontainers/image-spec/blob/main/spec.md)

@@ -191,6 +191,17 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
       return "JSON_SET(" + column(column) + ", '" + path(path) + "', " + value + ")";
     }
 
+    @Override
+    public String selectLongsFromArray(String columnAlias) {
+      String alias = column(columnAlias);
+      return """
+          SELECT %s
+          FROM JSON_TABLE(
+            ?, '$[*]' COLUMNS (%s BIGINT PATH '$')
+          ) AS scope
+          """.formatted(alias, alias);
+    }
+
     private static String column(String value) {
       if (value == null || !IDENTIFIER.matcher(value).matches()) {
         throw new IllegalArgumentException("Unsafe JSON column: " + value);

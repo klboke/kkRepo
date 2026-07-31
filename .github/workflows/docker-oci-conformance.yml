@@ -1,6 +1,28 @@
 name: Docker OCI Conformance
 
 on:
+  workflow_call:
+    inputs:
+      content_management:
+        description: Enable OCI Content Management tests
+        required: false
+        default: true
+        type: boolean
+      candidate_image_artifact:
+        description: Prebuilt JVM candidate image artifact from this workflow run
+        required: false
+        default: ""
+        type: string
+      candidate_source_sha:
+        description: Exact source SHA embedded in the candidate artifact
+        required: false
+        default: ""
+        type: string
+      artifact_prefix:
+        description: Prefix used to keep artifacts unique across reusable workflow calls
+        required: false
+        default: docker-oci
+        type: string
   workflow_dispatch:
     inputs:
       content_management:
@@ -21,15 +43,52 @@ permissions:
   contents: read
 
 concurrency:
-  group: docker-oci-conformance-${{ github.ref }}
+  group: docker-oci-conformance-${{ github.workflow }}-${{ github.ref }}-${{ inputs.artifact_prefix || 'direct' }}
   cancel-in-progress: true
 
 jobs:
+  build-candidate:
+    name: Build JVM candidate once for direct OCI conformance runs
+    if: >-
+      inputs.candidate_image_artifact == '' &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'pull_request' &&
+          contains(github.event.pull_request.labels.*.name, 'run-docker-oci-conformance') &&
+          (
+            !contains(github.event.pull_request.labels.*.name, 'run-full-e2e') ||
+            (github.event.action == 'labeled' && github.event.label.name == 'run-docker-oci-conformance')
+          )
+        )
+      )
+    uses: ./.github/workflows/build-e2e-candidate.yml
+    with:
+      runtime: jvm
+      source_sha: ${{ github.sha }}
+      artifact_key: ${{ github.event.pull_request.head.sha || github.sha }}
+
   conformance:
     name: OCI Distribution conformance
+    needs: build-candidate
     runs-on: ubuntu-latest
     timeout-minutes: 75
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-docker-oci-conformance')
+    if: >-
+      always() &&
+      !cancelled() &&
+      (inputs.candidate_image_artifact != '' || needs.build-candidate.result == 'success') &&
+      (
+        inputs.candidate_image_artifact != '' ||
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'pull_request' &&
+          contains(github.event.pull_request.labels.*.name, 'run-docker-oci-conformance') &&
+          (
+            !contains(github.event.pull_request.labels.*.name, 'run-full-e2e') ||
+            (github.event.action == 'labeled' && github.event.label.name == 'run-docker-oci-conformance')
+          )
+        )
+      )
     env:
       COMPOSE_PROJECT_NAME: kkrepo-oci-conformance
       KKREPO_COMPAT_PORT: "18090"
@@ -42,24 +101,24 @@ jobs:
       OCI_TEST_PULL: "1"
       OCI_TEST_PUSH: "1"
       OCI_TEST_CONTENT_DISCOVERY: "1"
-      OCI_TEST_CONTENT_MANAGEMENT: ${{ github.event_name != 'workflow_dispatch' || inputs.content_management }}
+      OCI_TEST_CONTENT_MANAGEMENT: ${{ github.event_name == 'pull_request' || inputs.content_management }}
+      # kkRepo supports source-scoped mounts with an explicit `from` image; validate
+      # that automatic cross-repository blob discovery remains disabled.
+      OCI_AUTOMATIC_CROSSMOUNT: "0"
       DOCKER_OCI_CONFORMANCE_USE_DOCKER: "1"
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
 
-      - name: Set up JDK 25
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "25"
-          cache: maven
-
       - name: Validate live compatibility compose file
         run: docker compose -f docker-compose.compat.yml config
 
-      - name: Build candidate image
-        run: scripts/build-docker-image.sh kkrepo:compat
+      - name: Load verified candidate image
+        uses: ./.github/actions/load-e2e-candidate
+        with:
+          artifact_name: ${{ inputs.candidate_image_artifact || needs.build-candidate.outputs.image_artifact }}
+          runtime: jvm
+          source_sha: ${{ inputs.candidate_source_sha || github.sha }}
 
       - name: Start candidate service
         run: docker compose -f docker-compose.compat.yml up -d mysql kkrepo
@@ -77,14 +136,16 @@ jobs:
           docker compose -f docker-compose.compat.yml ps > artifacts/docker-oci-conformance-ps.txt || true
           docker compose -f docker-compose.compat.yml logs --no-color --timestamps > artifacts/docker-oci-conformance-compose.log || true
           cp -R target/oci-conformance artifacts/oci-conformance || true
+          test -s artifacts/oci-conformance/docker/junit.xml
+          test -s artifacts/oci-conformance/docker/report.html
 
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: docker-oci-conformance-logs
+          name: ${{ inputs.artifact_prefix || 'docker-oci' }}-logs
           path: artifacts/
-          if-no-files-found: ignore
+          if-no-files-found: error
 
       - name: Stop services
         if: always()

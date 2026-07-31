@@ -9,6 +9,8 @@ LOG_DIR="${KKREPO_LOG_DIR:-$APP_HOME/logs}"
 PID_FILE="${KKREPO_PID_FILE:-$LOG_DIR/kkrepo.pid}"
 CONSOLE_LOG="${KKREPO_CONSOLE_LOG:-$LOG_DIR/console.log}"
 JAR_FILE="${KKREPO_JAR_FILE:-$APP_HOME/lib/kkrepo.jar}"
+NATIVE_FILE="${KKREPO_NATIVE_FILE:-$APP_HOME/lib/kkrepo}"
+RUNTIME="${KKREPO_RUNTIME:-auto}"
 JAVA_BIN="${JAVA_HOME:+$JAVA_HOME/bin/}java"
 
 is_running() {
@@ -18,13 +20,38 @@ is_running() {
 
 mkdir -p "$LOG_DIR" "$APP_HOME/data"
 
-if [[ ! -f "$JAR_FILE" ]]; then
-  echo "[start] missing jar: $JAR_FILE" >&2
+if [[ ! -f "$CONF_DIR/application.properties" ]]; then
+  echo "[start] missing config: $CONF_DIR/application.properties" >&2
   exit 1
 fi
 
-if [[ ! -f "$CONF_DIR/application.properties" ]]; then
-  echo "[start] missing config: $CONF_DIR/application.properties" >&2
+case "$RUNTIME" in
+  auto)
+    if [[ -f "$NATIVE_FILE" ]]; then
+      RUNTIME="native"
+    else
+      RUNTIME="jvm"
+    fi
+    ;;
+  native|jvm)
+    ;;
+  *)
+    echo "[start] unsupported KKREPO_RUNTIME: $RUNTIME (expected auto, native, or jvm)" >&2
+    exit 2
+    ;;
+esac
+
+if [[ "$RUNTIME" == "native" ]]; then
+  if [[ ! -f "$NATIVE_FILE" ]]; then
+    echo "[start] missing native executable: $NATIVE_FILE" >&2
+    exit 1
+  fi
+  if [[ ! -x "$NATIVE_FILE" ]]; then
+    echo "[start] native executable is not executable: $NATIVE_FILE" >&2
+    exit 1
+  fi
+elif [[ ! -f "$JAR_FILE" ]]; then
+  echo "[start] missing jar: $JAR_FILE" >&2
   exit 1
 fi
 
@@ -40,17 +67,26 @@ fi
 
 export KKREPO_HOME="$APP_HOME"
 
-COMMAND=("$JAVA_BIN")
-if [[ -n "${JAVA_OPTS:-}" ]]; then
-  # shellcheck disable=SC2206
-  COMMAND+=($JAVA_OPTS)
+if [[ "$RUNTIME" == "native" ]]; then
+  COMMAND=("$NATIVE_FILE")
+  if [[ -n "${KKREPO_NATIVE_OPTS:-}" ]]; then
+    # shellcheck disable=SC2206
+    COMMAND+=($KKREPO_NATIVE_OPTS)
+  fi
+else
+  COMMAND=("$JAVA_BIN")
+  if [[ -n "${JAVA_OPTS:-}" ]]; then
+    # shellcheck disable=SC2206
+    COMMAND+=($JAVA_OPTS)
+  fi
+  COMMAND+=( -jar "$JAR_FILE" )
 fi
 COMMAND+=(
-  -jar "$JAR_FILE"
   "--spring.config.additional-location=optional:file:$CONF_DIR/"
 )
 
 echo "[start] starting kkrepo"
+echo "[start] runtime=$RUNTIME"
 echo "[start] home=$APP_HOME"
 echo "[start] config=$CONF_DIR/application.properties"
 echo "[start] log=$CONSOLE_LOG"

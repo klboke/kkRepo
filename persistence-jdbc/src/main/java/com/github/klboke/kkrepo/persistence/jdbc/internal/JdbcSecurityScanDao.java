@@ -1,0 +1,4380 @@
+package com.github.klboke.kkrepo.persistence.jdbc.internal;
+
+import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRows.nullableInstant;
+import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRows.nullableLong;
+import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRows.nullableTimestamp;
+import static com.github.klboke.kkrepo.security.scan.ScanEnums.SCANNER_OBSERVATION_UNAVAILABLE;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BlobReferenceDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.EnumColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcInserts;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.JsonPersistenceDialect;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.BackfillStatus;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.EnforcementMode;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.OciPlatformPolicy;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyAction;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyDecision;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.RequestReason;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanCompleteness;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanStage;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanState;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.SubjectKind;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.TaskStatus;
+import com.github.klboke.kkrepo.security.scan.ScanTaskPriorities;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.OptionalLong;
+import java.util.UUID;
+import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
+
+/** Database-neutral JDBC implementation using row locks, leases, and fencing tokens. */
+@Repository
+public class JdbcSecurityScanDao implements SecurityScanDao {
+  private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() {};
+  private static final TypeReference<Map<String, Integer>> INTEGER_MAP = new TypeReference<>() {};
+  private static final String SBOM_BLOB_OWNER = "security-sbom";
+  private static final String SCAN_REPORT_BLOB_OWNER = "security-scan-report";
+  private static final long RESULT_ACCESS_TOUCH_INTERVAL_SECONDS = 3_600;
+  private static final String READY_CLAIM_BRANCH = """
+      (SELECT id, priority, requested_at, next_attempt_at AS eligible_at
+       FROM security_scan_task
+       WHERE status = ?
+         AND attempts_remaining = TRUE
+         AND priority = ?
+         AND next_attempt_at <= ?
+       ORDER BY next_attempt_at, requested_at, id
+       LIMIT ?)
+      """;
+  private static final String EXPIRED_CLAIM_BRANCH = """
+      (SELECT id, priority, requested_at, lease_until AS eligible_at
+       FROM security_scan_task
+       WHERE status = ?
+         AND attempts_remaining = TRUE
+         AND priority = ?
+         AND lease_until < ?
+       ORDER BY lease_until, requested_at, id
+       LIMIT ?)
+      """;
+  private static final Comparator<ClaimCandidate> CLAIM_ORDER =
+      Comparator.comparingInt(ClaimCandidate::priority)
+          .reversed()
+          .thenComparing(ClaimCandidate::eligibleAt)
+          .thenComparing(ClaimCandidate::requestedAt)
+          .thenComparingLong(ClaimCandidate::id);
+
+  private final JdbcTemplate jdbc;
+  private final BlobReferenceDao blobReferences;
+  private final JsonPersistenceDialect jsonDialect;
+  // Row mappers are constructed before the constructor body and dereference this field only when
+  // a query executes, after construction has completed.
+  private JsonColumns json;
+
+  private final RowMapper<ScanProfile> profileMapper = (rs, rowNum) -> new ScanProfile(
+      rs.getLong("id"),
+      rs.getString("name"),
+      rs.getBoolean("enabled"),
+      rs.getString("catalog_engine"),
+      rs.getString("matcher_engine"),
+      list(rs.getString("scanner_types_json")),
+      json.read(rs.getString("target_rules_json")),
+      rs.getLong("max_input_bytes"),
+      rs.getInt("max_archive_entries"),
+      rs.getLong("max_uncompressed_bytes"),
+      rs.getLong("max_single_file_bytes"),
+      rs.getInt("max_nested_depth"),
+      rs.getInt("timeout_seconds"),
+      enumValue(OciPlatformPolicy.class, rs.getString("oci_platform_policy")),
+      list(rs.getString("required_platforms_json")),
+      rs.getString("configuration_digest"),
+      rs.getLong("revision"),
+      nullableInstant(rs, "created_at"),
+      nullableInstant(rs, "updated_at"));
+
+  private final RowMapper<RepositoryScanConfig> configMapper =
+      (rs, rowNum) -> new RepositoryScanConfig(
+          rs.getLong("repository_id"),
+          rs.getBoolean("enabled"),
+          rs.getLong("profile_id"),
+          rs.getBoolean("scan_hosted_content"),
+          rs.getBoolean("scan_proxy_content"),
+          enumValue(EnforcementMode.class, rs.getString("enforcement_mode")),
+          enumValue(PolicyAction.class, rs.getString("pending_action")),
+          enumValue(PolicyAction.class, rs.getString("failure_action")),
+          enumValue(PolicyAction.class, rs.getString("partial_action")),
+          nullableLong(rs, "max_result_age_seconds"),
+          nullableLong(rs, "policy_id"),
+          rs.getLong("config_revision"),
+          nullableInstant(rs, "created_at"),
+          nullableInstant(rs, "updated_at"));
+
+  private final RowMapper<ScanCandidate> candidateMapper = (rs, rowNum) -> new ScanCandidate(
+      rs.getLong("asset_id"),
+      nullableLong(rs, "asset_blob_id"),
+      rs.getLong("content_generation"),
+      rs.getLong("enqueued_generation"),
+      nullableInstant(rs, "changed_at"),
+      nullableInstant(rs, "updated_at"));
+
+  private final RowMapper<ScanTask> taskMapper = (rs, rowNum) -> new ScanTask(
+      rs.getLong("id"),
+      rs.getLong("repository_id"),
+      nullableLong(rs, "asset_id"),
+      enumValue(SubjectKind.class, rs.getString("subject_kind")),
+      rs.getString("subject_key"),
+      rs.getBytes("subject_key_hash"),
+      rs.getLong("content_generation"),
+      rs.getLong("profile_id"),
+      rs.getLong("profile_revision"),
+      nullableLong(rs, "requested_scanner_snapshot_id"),
+      enumValue(ScanStage.class, rs.getString("stage")),
+      enumValue(RequestReason.class, rs.getString("request_reason")),
+      rs.getInt("priority"),
+      enumValue(TaskStatus.class, rs.getString("status")),
+      rs.getInt("attempts"),
+      rs.getInt("max_attempts"),
+      nullableInstant(rs, "next_attempt_at"),
+      rs.getString("claimed_by"),
+      rs.getString("lease_token"),
+      nullableInstant(rs, "lease_until"),
+      nullableInstant(rs, "last_heartbeat_at"),
+      rs.getString("last_error_code"),
+      rs.getString("last_error_summary"),
+      rs.getString("requested_by"),
+      rs.getString("request_uuid"),
+      nullableInstant(rs, "requested_at"),
+      nullableInstant(rs, "started_at"),
+      nullableInstant(rs, "finished_at"),
+      nullableInstant(rs, "created_at"),
+      nullableInstant(rs, "updated_at"));
+
+  private final RowMapper<ScannerSnapshot> snapshotMapper =
+      (rs, rowNum) -> new ScannerSnapshot(
+          rs.getLong("id"),
+          rs.getString("adapter_name"),
+          rs.getString("adapter_api_version"),
+          rs.getString("engine_name"),
+          rs.getString("engine_version"),
+          rs.getString("vulnerability_database_revision"),
+          nullableInstant(rs, "vulnerability_database_updated_at"),
+          rs.getString("capability_digest"),
+          rs.getString("snapshot_fingerprint"),
+          nullableInstant(rs, "observed_at"),
+          rs.getBoolean("ready"),
+          json.read(rs.getString("details_json")));
+
+  private final RowMapper<Sbom> sbomMapper = (rs, rowNum) -> new Sbom(
+      rs.getLong("id"),
+      enumValue(SubjectKind.class, rs.getString("subject_kind")),
+      rs.getString("subject_identity"),
+      rs.getBytes("subject_identity_hash"),
+      rs.getString("catalog_engine"),
+      rs.getString("catalog_engine_version"),
+      rs.getString("catalog_configuration_digest"),
+      rs.getString("catalog_fingerprint"),
+      rs.getLong("document_blob_id"),
+      rs.getString("document_sha256"),
+      rs.getString("spec_name"),
+      rs.getString("spec_version"),
+      rs.getInt("component_count"),
+      rs.getInt("dependency_count"),
+      rs.getBoolean("inventory_complete"),
+      nullableInstant(rs, "created_at"));
+
+  private final RowMapper<SbomComponent> componentMapper = (rs, rowNum) -> new SbomComponent(
+      rs.getLong("id"),
+      rs.getLong("sbom_id"),
+      rs.getString("component_ref"),
+      rs.getBytes("component_ref_hash"),
+      rs.getString("package_url"),
+      rs.getBytes("package_url_hash"),
+      rs.getString("component_type"),
+      rs.getString("namespace"),
+      rs.getString("name"),
+      rs.getString("version"),
+      rs.getString("directness"),
+      list(rs.getString("locations_json")),
+      list(rs.getString("licenses_json")),
+      json.read(rs.getString("properties_json")));
+
+  private final RowMapper<ScanRun> runMapper = (rs, rowNum) -> new ScanRun(
+      rs.getLong("id"),
+      nullableLong(rs, "task_id"),
+      rs.getLong("sbom_id"),
+      rs.getLong("scanner_snapshot_id"),
+      rs.getString("match_configuration_digest"),
+      rs.getString("match_fingerprint"),
+      enumValue(ScanState.class, rs.getString("status")),
+      enumValue(ScanCompleteness.class, rs.getString("scan_completeness")),
+      rs.getLong("raw_report_blob_id"),
+      rs.getString("raw_report_sha256"),
+      rs.getInt("finding_count"),
+      rs.getInt("fixable_finding_count"),
+      rs.getInt("critical_count"),
+      rs.getInt("high_count"),
+      rs.getInt("medium_count"),
+      rs.getInt("low_count"),
+      rs.getInt("unknown_count"),
+      enumValue(Severity.class, rs.getString("max_severity")),
+      list(rs.getString("scanned_platforms_json")),
+      list(rs.getString("missing_platforms_json")),
+      nullableInstant(rs, "started_at"),
+      nullableInstant(rs, "completed_at"),
+      nullableInstant(rs, "created_at"));
+
+  private final RowMapper<ScanFinding> findingMapper = (rs, rowNum) -> {
+    Number score = (Number) rs.getObject("cvss_score");
+    return new ScanFinding(
+        rs.getLong("id"),
+        rs.getLong("scan_run_id"),
+        rs.getString("finding_key"),
+        rs.getBytes("finding_key_hash"),
+        rs.getString("advisory_id"),
+        list(rs.getString("aliases_json")),
+        rs.getString("data_source"),
+        rs.getString("package_url"),
+        rs.getString("package_name"),
+        rs.getString("installed_version"),
+        list(rs.getString("fixed_versions_json")),
+        enumValue(Severity.class, rs.getString("severity")),
+        rs.getString("severity_source"),
+        rs.getString("cvss_vector"),
+        score == null ? null : score.doubleValue(),
+        rs.getString("title"),
+        rs.getString("description"),
+        rs.getString("primary_url"),
+        list(rs.getString("locations_json")),
+        rs.getString("source_status"),
+        nullableInstant(rs, "created_at"));
+  };
+
+  private final RowMapper<AssetSecurityState> stateMapper =
+      (rs, rowNum) -> new AssetSecurityState(
+          rs.getLong("asset_id"),
+          rs.getLong("profile_id"),
+          rs.getLong("content_generation"),
+          rs.getBytes("subject_identity_hash"),
+          nullableLong(rs, "latest_scan_run_id"),
+          enumValue(ScanState.class, rs.getString("scan_state")),
+          enumValue(ScanCompleteness.class, rs.getString("scan_completeness")),
+          rs.getBoolean("inventory_complete"),
+          enumValue(Severity.class, rs.getString("max_severity")),
+          integerMap(rs.getString("finding_counts_json")),
+          nullableLong(rs, "policy_id"),
+          nullableLong(rs, "policy_revision"),
+          enumValue(PolicyDecision.class, rs.getString("policy_decision")),
+          rs.getString("policy_reason_code"),
+          nullableInstant(rs, "stale_at"),
+          nullableInstant(rs, "last_evaluated_at"),
+          rs.getLong("version"));
+
+  private final RowMapper<AssetPolicyState> policyStateMapper =
+      (rs, rowNum) -> new AssetPolicyState(
+          rs.getLong("asset_id"),
+          rs.getLong("profile_id"),
+          rs.getLong("repository_id"),
+          rs.getLong("content_generation"),
+          nullableLong(rs, "latest_scan_run_id"),
+          nullableLong(rs, "policy_id"),
+          nullableLong(rs, "policy_revision"),
+          rs.getLong("config_revision"),
+          enumValue(PolicyDecision.class, rs.getString("policy_decision")),
+          rs.getString("policy_reason_code"),
+          rs.getInt("waived_findings"),
+          nullableInstant(rs, "stale_at"),
+          nullableInstant(rs, "next_waiver_expiry"),
+          nullableInstant(rs, "last_evaluated_at"),
+          rs.getLong("version"),
+          rs.getLong("waiver_revision"));
+
+  private final RowMapper<ScanPolicy> policyMapper = (rs, rowNum) -> new ScanPolicy(
+      rs.getLong("id"),
+      rs.getString("name"),
+      rs.getBoolean("enabled"),
+      enumValue(Severity.class, rs.getString("block_severity")),
+      rs.getBoolean("only_fixable"),
+      rs.getBoolean("block_unknown_severity"),
+      rs.getBoolean("require_complete_inventory"),
+      nullableLong(rs, "max_result_age_seconds"),
+      list(rs.getString("required_platforms_json")),
+      rs.getLong("revision"),
+      rs.getString("created_by"),
+      nullableInstant(rs, "created_at"),
+      nullableInstant(rs, "updated_at"));
+
+  private final RowMapper<DownloadPolicySnapshot> downloadPolicySnapshotMapper =
+      (rs, rowNum) -> {
+        RepositoryScanConfig config = downloadPolicyConfig(rs);
+        ScanProfile profile = downloadPolicyProfile(rs);
+        ScanCandidate candidate =
+            rs.getObject("dp_candidate_asset_id") == null ? null : new ScanCandidate(
+                rs.getLong("dp_candidate_asset_id"),
+                nullableLong(rs, "dp_candidate_asset_blob_id"),
+                rs.getLong("dp_candidate_content_generation"),
+                rs.getLong("dp_candidate_enqueued_generation"),
+                nullableInstant(rs, "dp_candidate_changed_at"),
+                nullableInstant(rs, "dp_candidate_updated_at"));
+        AssetSecurityState state =
+            rs.getObject("dp_state_asset_id") == null ? null : new AssetSecurityState(
+                rs.getLong("dp_state_asset_id"),
+                rs.getLong("dp_state_profile_id"),
+                rs.getLong("dp_state_content_generation"),
+                rs.getBytes("dp_state_subject_identity_hash"),
+                nullableLong(rs, "dp_state_latest_scan_run_id"),
+                enumValue(ScanState.class, rs.getString("dp_state_scan_state")),
+                enumValue(
+                    ScanCompleteness.class,
+                    rs.getString("dp_state_scan_completeness")),
+                rs.getBoolean("dp_state_inventory_complete"),
+                enumValue(Severity.class, rs.getString("dp_state_max_severity")),
+                integerMap(rs.getString("dp_state_finding_counts_json")),
+                nullableLong(rs, "dp_state_policy_id"),
+                nullableLong(rs, "dp_state_policy_revision"),
+                enumValue(
+                    PolicyDecision.class,
+                    rs.getString("dp_state_policy_decision")),
+                rs.getString("dp_state_policy_reason_code"),
+                nullableInstant(rs, "dp_state_stale_at"),
+                nullableInstant(rs, "dp_state_last_evaluated_at"),
+                rs.getLong("dp_state_version"));
+        ScanPolicy policy = rs.getObject("dp_policy_id") == null ? null : new ScanPolicy(
+            rs.getLong("dp_policy_id"),
+            rs.getString("dp_policy_name"),
+            rs.getBoolean("dp_policy_enabled"),
+            enumValue(Severity.class, rs.getString("dp_policy_block_severity")),
+            rs.getBoolean("dp_policy_only_fixable"),
+            rs.getBoolean("dp_policy_block_unknown_severity"),
+            rs.getBoolean("dp_policy_require_complete_inventory"),
+            nullableLong(rs, "dp_policy_max_result_age_seconds"),
+            list(rs.getString("dp_policy_required_platforms_json")),
+            rs.getLong("dp_policy_revision"),
+            rs.getString("dp_policy_created_by"),
+            nullableInstant(rs, "dp_policy_created_at"),
+            nullableInstant(rs, "dp_policy_updated_at"));
+        AssetPolicyState policyState =
+            rs.getObject("dp_policy_state_asset_id") == null ? null : new AssetPolicyState(
+                rs.getLong("dp_policy_state_asset_id"),
+                rs.getLong("dp_policy_state_profile_id"),
+                rs.getLong("dp_policy_state_repository_id"),
+                rs.getLong("dp_policy_state_content_generation"),
+                nullableLong(rs, "dp_policy_state_latest_scan_run_id"),
+                nullableLong(rs, "dp_policy_state_policy_id"),
+                nullableLong(rs, "dp_policy_state_policy_revision"),
+                rs.getLong("dp_policy_state_config_revision"),
+                enumValue(
+                    PolicyDecision.class,
+                    rs.getString("dp_policy_state_policy_decision")),
+                rs.getString("dp_policy_state_policy_reason_code"),
+                rs.getInt("dp_policy_state_waived_findings"),
+                nullableInstant(rs, "dp_policy_state_stale_at"),
+                nullableInstant(rs, "dp_policy_state_next_waiver_expiry"),
+                nullableInstant(rs, "dp_policy_state_last_evaluated_at"),
+                rs.getLong("dp_policy_state_version"),
+                rs.getLong("dp_policy_state_waiver_revision"));
+        return new DownloadPolicySnapshot(
+            rs.getLong("dp_asset_id"),
+            rs.getLong("dp_source_repository_id"),
+            enumValue(RepositoryFormat.class, rs.getString("dp_format")),
+            rs.getString("dp_path"),
+            rs.getString("dp_kind"),
+            rs.getString("dp_content_type"),
+            rs.getLong("dp_blob_size"),
+            config,
+            profile,
+            candidate,
+            state,
+            policy,
+            policyState,
+            rs.getLong("dp_required_waiver_revision"));
+      };
+
+  private final RowMapper<DownloadPolicyContext> downloadPolicyContextMapper =
+      (rs, rowNum) ->
+          new DownloadPolicyContext(downloadPolicyConfig(rs), downloadPolicyProfile(rs));
+
+  private RepositoryScanConfig downloadPolicyConfig(ResultSet rs) throws SQLException {
+    return new RepositoryScanConfig(
+        rs.getLong("dp_config_repository_id"),
+        rs.getBoolean("dp_config_enabled"),
+        rs.getLong("dp_config_profile_id"),
+        rs.getBoolean("dp_config_scan_hosted_content"),
+        rs.getBoolean("dp_config_scan_proxy_content"),
+        enumValue(EnforcementMode.class, rs.getString("dp_config_enforcement_mode")),
+        enumValue(PolicyAction.class, rs.getString("dp_config_pending_action")),
+        enumValue(PolicyAction.class, rs.getString("dp_config_failure_action")),
+        enumValue(PolicyAction.class, rs.getString("dp_config_partial_action")),
+        nullableLong(rs, "dp_config_max_result_age_seconds"),
+        nullableLong(rs, "dp_config_policy_id"),
+        rs.getLong("dp_config_revision"),
+        nullableInstant(rs, "dp_config_created_at"),
+        nullableInstant(rs, "dp_config_updated_at"));
+  }
+
+  private ScanProfile downloadPolicyProfile(ResultSet rs) throws SQLException {
+    if (rs.getObject("dp_profile_id") == null) return null;
+    return new ScanProfile(
+        rs.getLong("dp_profile_id"),
+        rs.getString("dp_profile_name"),
+        rs.getBoolean("dp_profile_enabled"),
+        rs.getString("dp_profile_catalog_engine"),
+        rs.getString("dp_profile_matcher_engine"),
+        list(rs.getString("dp_profile_scanner_types_json")),
+        json.read(rs.getString("dp_profile_target_rules_json")),
+        rs.getLong("dp_profile_max_input_bytes"),
+        rs.getInt("dp_profile_max_archive_entries"),
+        rs.getLong("dp_profile_max_uncompressed_bytes"),
+        rs.getLong("dp_profile_max_single_file_bytes"),
+        rs.getInt("dp_profile_max_nested_depth"),
+        rs.getInt("dp_profile_timeout_seconds"),
+        enumValue(
+            OciPlatformPolicy.class,
+            rs.getString("dp_profile_oci_platform_policy")),
+        list(rs.getString("dp_profile_required_platforms_json")),
+        rs.getString("dp_profile_configuration_digest"),
+        rs.getLong("dp_profile_revision"),
+        nullableInstant(rs, "dp_profile_created_at"),
+        nullableInstant(rs, "dp_profile_updated_at"));
+  }
+
+  private final RowMapper<ScanWaiver> waiverMapper = (rs, rowNum) -> new ScanWaiver(
+      rs.getLong("id"),
+      rs.getString("scope_type"),
+      nullableLong(rs, "repository_id"),
+      nullableLong(rs, "asset_id"),
+      nullableLong(rs, "finding_id"),
+      rs.getString("advisory_selector"),
+      rs.getString("package_selector"),
+      json.read(rs.getString("selector_json")),
+      rs.getString("reason"),
+      nullableLong(rs, "policy_id"),
+      nullableLong(rs, "policy_revision"),
+      rs.getString("created_by"),
+      rs.getString("approved_by"),
+      nullableInstant(rs, "expires_at"),
+      nullableInstant(rs, "created_at"),
+      nullableInstant(rs, "updated_at"));
+
+  private final RowMapper<BackfillJob> backfillMapper = (rs, rowNum) -> new BackfillJob(
+      rs.getLong("id"),
+      rs.getLong("repository_id"),
+      enumValue(BackfillStatus.class, rs.getString("status")),
+      rs.getLong("cursor_asset_id"),
+      rs.getLong("scanned_assets"),
+      rs.getLong("marked_assets"),
+      rs.getInt("attempts"),
+      rs.getString("claimed_by"),
+      rs.getString("lease_token"),
+      nullableInstant(rs, "lease_until"),
+      nullableInstant(rs, "next_attempt_at"),
+      rs.getString("last_error_summary"),
+      rs.getString("created_by"),
+      nullableInstant(rs, "created_at"),
+      nullableInstant(rs, "updated_at"),
+      nullableInstant(rs, "completed_at"));
+
+  public JdbcSecurityScanDao(
+      JdbcTemplate jdbc, JsonColumns json, DatabaseDialect databaseDialect) {
+    this.jdbc = jdbc;
+    this.json = json;
+    this.blobReferences = new JdbcBlobReferenceDao(jdbc);
+    this.jsonDialect = databaseDialect.json();
+  }
+
+  @Override
+  public Optional<ScanProfile> findProfile(long profileId) {
+    return jdbc.query("SELECT * FROM security_scan_profile WHERE id = ?", profileMapper, profileId)
+        .stream().findFirst();
+  }
+
+  @Override
+  public List<ScanProfile> listProfiles() {
+    return jdbc.query("SELECT * FROM security_scan_profile ORDER BY name, revision, id", profileMapper);
+  }
+
+  @Override
+  public ScanProfile createProfile(ScanProfile profile) {
+    long id = JdbcInserts.insert(jdbc, """
+        INSERT INTO security_scan_profile
+          (name, enabled, catalog_engine, matcher_engine, scanner_types_json, target_rules_json,
+           max_input_bytes, max_archive_entries, max_uncompressed_bytes, max_single_file_bytes,
+           max_nested_depth, timeout_seconds, oci_platform_policy, required_platforms_json,
+           configuration_digest, revision, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, ps -> {
+      ps.setString(1, profile.name());
+      ps.setBoolean(2, profile.enabled());
+      ps.setString(3, profile.catalogEngine());
+      ps.setString(4, profile.matcherEngine());
+      json.bindSerialized(ps, 5, json.writeValue(profile.scannerTypes()));
+      json.bind(ps, 6, profile.targetRules());
+      ps.setLong(7, profile.maxInputBytes());
+      ps.setInt(8, profile.maxArchiveEntries());
+      ps.setLong(9, profile.maxUncompressedBytes());
+      ps.setLong(10, profile.maxSingleFileBytes());
+      ps.setInt(11, profile.maxNestedDepth());
+      ps.setInt(12, profile.timeoutSeconds());
+      ps.setString(13, profile.ociPlatformPolicy().name());
+      json.bindSerialized(ps, 14, json.writeValue(profile.requiredPlatforms()));
+      ps.setString(15, profile.configurationDigest());
+      ps.setLong(16, Math.max(1, profile.revision()));
+      ps.setTimestamp(17, nullableTimestamp(profile.createdAt()));
+      ps.setTimestamp(18, nullableTimestamp(profile.updatedAt()));
+    });
+    return findProfile(id).orElseThrow();
+  }
+
+  @Override
+  public Optional<RepositoryScanConfig> findRepositoryConfig(long repositoryId) {
+    return jdbc.query(
+        "SELECT * FROM repository_security_scan_config WHERE repository_id = ?",
+        configMapper,
+        repositoryId).stream().findFirst();
+  }
+
+  @Override
+  public List<RepositoryScanConfig> findRepositoryConfigs(List<Long> repositoryIds) {
+    List<Long> ids = distinctLongs(repositoryIds);
+    if (ids.isEmpty()) return List.of();
+    return jdbc.query(
+        repositoryScopeCte() + """
+        SELECT config.*
+        FROM repository_security_scan_config config
+        JOIN visible_repository visible
+          ON visible.repository_id = config.repository_id
+        ORDER BY config.repository_id
+        """,
+        configMapper,
+        repositoryScopeParameter(ids));
+  }
+
+  @Override
+  public List<DownloadPolicyContext> findDownloadPolicyContexts(
+      long sourceRepositoryId, Long entryRepositoryId) {
+    if (sourceRepositoryId <= 0) return List.of();
+    return jdbc.query("""
+        WITH RECURSIVE
+        source_ancestors(repository_id) AS (
+          SELECT id
+          FROM repository
+          WHERE id = ?
+          UNION
+          SELECT rm.repository_id
+          FROM repository_member rm
+          JOIN source_ancestors ancestor
+            ON ancestor.repository_id = rm.member_repository_id
+        ),
+        entry_descendants(repository_id) AS (
+          SELECT id
+          FROM repository
+          WHERE id = ?
+          UNION
+          SELECT rm.member_repository_id
+          FROM repository_member rm
+          JOIN entry_descendants descendant
+            ON descendant.repository_id = rm.repository_id
+        ),
+        policy_contexts(repository_id) AS (
+          SELECT ancestor.repository_id
+          FROM source_ancestors ancestor
+          WHERE ancestor.repository_id = ?
+             OR ancestor.repository_id IN (
+               SELECT repository_id FROM entry_descendants
+             )
+        )
+        SELECT
+          c.repository_id AS dp_config_repository_id,
+          c.enabled AS dp_config_enabled,
+          c.profile_id AS dp_config_profile_id,
+          c.scan_hosted_content AS dp_config_scan_hosted_content,
+          c.scan_proxy_content AS dp_config_scan_proxy_content,
+          c.enforcement_mode AS dp_config_enforcement_mode,
+          c.pending_action AS dp_config_pending_action,
+          c.failure_action AS dp_config_failure_action,
+          c.partial_action AS dp_config_partial_action,
+          c.max_result_age_seconds AS dp_config_max_result_age_seconds,
+          c.policy_id AS dp_config_policy_id,
+          c.config_revision AS dp_config_revision,
+          c.created_at AS dp_config_created_at,
+          c.updated_at AS dp_config_updated_at,
+          profile.id AS dp_profile_id,
+          profile.name AS dp_profile_name,
+          profile.enabled AS dp_profile_enabled,
+          profile.catalog_engine AS dp_profile_catalog_engine,
+          profile.matcher_engine AS dp_profile_matcher_engine,
+          profile.scanner_types_json AS dp_profile_scanner_types_json,
+          profile.target_rules_json AS dp_profile_target_rules_json,
+          profile.max_input_bytes AS dp_profile_max_input_bytes,
+          profile.max_archive_entries AS dp_profile_max_archive_entries,
+          profile.max_uncompressed_bytes AS dp_profile_max_uncompressed_bytes,
+          profile.max_single_file_bytes AS dp_profile_max_single_file_bytes,
+          profile.max_nested_depth AS dp_profile_max_nested_depth,
+          profile.timeout_seconds AS dp_profile_timeout_seconds,
+          profile.oci_platform_policy AS dp_profile_oci_platform_policy,
+          profile.required_platforms_json AS dp_profile_required_platforms_json,
+          profile.configuration_digest AS dp_profile_configuration_digest,
+          profile.revision AS dp_profile_revision,
+          profile.created_at AS dp_profile_created_at,
+          profile.updated_at AS dp_profile_updated_at
+        FROM repository source_repository
+        JOIN repository_security_scan_config c
+          ON c.repository_id IN (
+            SELECT repository_id FROM policy_contexts
+          )
+         AND (
+           (source_repository.type = 'hosted' AND c.scan_hosted_content = TRUE)
+           OR (source_repository.type = 'proxy' AND c.scan_proxy_content = TRUE)
+         )
+        LEFT JOIN security_scan_profile profile ON profile.id = c.profile_id
+        WHERE source_repository.id = ?
+        ORDER BY c.repository_id
+        """,
+        downloadPolicyContextMapper,
+        sourceRepositoryId,
+        entryRepositoryId,
+        sourceRepositoryId,
+        sourceRepositoryId);
+  }
+
+  @Override
+  public List<DownloadPolicySnapshot> findDownloadPolicySnapshots(
+      long assetId, Long entryRepositoryId) {
+    return findDownloadPolicySnapshots(List.of(assetId), entryRepositoryId);
+  }
+
+  @Override
+  public List<DownloadPolicySnapshot> findDownloadPolicySnapshots(
+      List<Long> assetIds, Long entryRepositoryId) {
+    List<Long> ids = distinctLongs(assetIds).stream().filter(id -> id > 0).toList();
+    if (ids.isEmpty()) {
+      return List.of();
+    }
+    if (ids.size() > MAX_DOWNLOAD_POLICY_BATCH) {
+      throw new IllegalArgumentException(
+          "Download policy batch is limited to " + MAX_DOWNLOAD_POLICY_BATCH + " assets");
+    }
+    String placeholders = String.join(", ", java.util.Collections.nCopies(ids.size(), "?"));
+    List<Object> args = new ArrayList<>(ids.size() + 1);
+    args.addAll(ids);
+    args.add(entryRepositoryId);
+    return jdbc.query("""
+        WITH RECURSIVE
+        target_asset AS (
+          SELECT *
+          FROM asset
+          WHERE id IN (
+        """ + placeholders + """
+          )
+        ),
+        source_ancestors(repository_id) AS (
+          SELECT repository_id
+          FROM target_asset
+          UNION
+          SELECT rm.repository_id
+          FROM repository_member rm
+          JOIN source_ancestors ancestor
+            ON ancestor.repository_id = rm.member_repository_id
+        ),
+        entry_descendants(repository_id) AS (
+          SELECT id
+          FROM repository
+          WHERE id = ?
+          UNION
+          SELECT rm.member_repository_id
+          FROM repository_member rm
+          JOIN entry_descendants descendant
+            ON descendant.repository_id = rm.repository_id
+        ),
+        policy_contexts(repository_id) AS (
+          SELECT ancestor.repository_id
+          FROM source_ancestors ancestor
+          WHERE ancestor.repository_id IN (
+            SELECT repository_id FROM target_asset
+          )
+          OR ancestor.repository_id IN (
+            SELECT repository_id FROM entry_descendants
+          )
+        )
+        SELECT
+          a.id AS dp_asset_id,
+          a.repository_id AS dp_source_repository_id,
+          a.format AS dp_format,
+          a.path AS dp_path,
+          a.kind AS dp_kind,
+          a.content_type AS dp_content_type,
+          b.size AS dp_blob_size,
+          c.repository_id AS dp_config_repository_id,
+          c.enabled AS dp_config_enabled,
+          c.profile_id AS dp_config_profile_id,
+          c.scan_hosted_content AS dp_config_scan_hosted_content,
+          c.scan_proxy_content AS dp_config_scan_proxy_content,
+          c.enforcement_mode AS dp_config_enforcement_mode,
+          c.pending_action AS dp_config_pending_action,
+          c.failure_action AS dp_config_failure_action,
+          c.partial_action AS dp_config_partial_action,
+          c.max_result_age_seconds AS dp_config_max_result_age_seconds,
+          c.policy_id AS dp_config_policy_id,
+          c.config_revision AS dp_config_revision,
+          c.created_at AS dp_config_created_at,
+          c.updated_at AS dp_config_updated_at,
+          profile.id AS dp_profile_id,
+          profile.name AS dp_profile_name,
+          profile.enabled AS dp_profile_enabled,
+          profile.catalog_engine AS dp_profile_catalog_engine,
+          profile.matcher_engine AS dp_profile_matcher_engine,
+          profile.scanner_types_json AS dp_profile_scanner_types_json,
+          profile.target_rules_json AS dp_profile_target_rules_json,
+          profile.max_input_bytes AS dp_profile_max_input_bytes,
+          profile.max_archive_entries AS dp_profile_max_archive_entries,
+          profile.max_uncompressed_bytes AS dp_profile_max_uncompressed_bytes,
+          profile.max_single_file_bytes AS dp_profile_max_single_file_bytes,
+          profile.max_nested_depth AS dp_profile_max_nested_depth,
+          profile.timeout_seconds AS dp_profile_timeout_seconds,
+          profile.oci_platform_policy AS dp_profile_oci_platform_policy,
+          profile.required_platforms_json AS dp_profile_required_platforms_json,
+          profile.configuration_digest AS dp_profile_configuration_digest,
+          profile.revision AS dp_profile_revision,
+          profile.created_at AS dp_profile_created_at,
+          profile.updated_at AS dp_profile_updated_at,
+          candidate.asset_id AS dp_candidate_asset_id,
+          candidate.asset_blob_id AS dp_candidate_asset_blob_id,
+          candidate.content_generation AS dp_candidate_content_generation,
+          candidate.enqueued_generation AS dp_candidate_enqueued_generation,
+          candidate.changed_at AS dp_candidate_changed_at,
+          candidate.updated_at AS dp_candidate_updated_at,
+          state.asset_id AS dp_state_asset_id,
+          state.profile_id AS dp_state_profile_id,
+          state.content_generation AS dp_state_content_generation,
+          state.subject_identity_hash AS dp_state_subject_identity_hash,
+          state.latest_scan_run_id AS dp_state_latest_scan_run_id,
+          state.scan_state AS dp_state_scan_state,
+          state.scan_completeness AS dp_state_scan_completeness,
+          state.inventory_complete AS dp_state_inventory_complete,
+          state.max_severity AS dp_state_max_severity,
+          state.finding_counts_json AS dp_state_finding_counts_json,
+          state.policy_id AS dp_state_policy_id,
+          state.policy_revision AS dp_state_policy_revision,
+          state.policy_decision AS dp_state_policy_decision,
+          state.policy_reason_code AS dp_state_policy_reason_code,
+          state.stale_at AS dp_state_stale_at,
+          state.last_evaluated_at AS dp_state_last_evaluated_at,
+          state.version AS dp_state_version,
+          policy.id AS dp_policy_id,
+          policy.name AS dp_policy_name,
+          policy.enabled AS dp_policy_enabled,
+          policy.block_severity AS dp_policy_block_severity,
+          policy.only_fixable AS dp_policy_only_fixable,
+          policy.block_unknown_severity AS dp_policy_block_unknown_severity,
+          policy.require_complete_inventory AS dp_policy_require_complete_inventory,
+          policy.max_result_age_seconds AS dp_policy_max_result_age_seconds,
+          policy.required_platforms_json AS dp_policy_required_platforms_json,
+          policy.revision AS dp_policy_revision,
+          policy.created_by AS dp_policy_created_by,
+          policy.created_at AS dp_policy_created_at,
+          policy.updated_at AS dp_policy_updated_at,
+          policy_state.asset_id AS dp_policy_state_asset_id,
+          policy_state.profile_id AS dp_policy_state_profile_id,
+          policy_state.repository_id AS dp_policy_state_repository_id,
+          policy_state.content_generation AS dp_policy_state_content_generation,
+          policy_state.latest_scan_run_id AS dp_policy_state_latest_scan_run_id,
+          policy_state.policy_id AS dp_policy_state_policy_id,
+          policy_state.policy_revision AS dp_policy_state_policy_revision,
+          policy_state.config_revision AS dp_policy_state_config_revision,
+          policy_state.waiver_revision AS dp_policy_state_waiver_revision,
+          policy_state.policy_decision AS dp_policy_state_policy_decision,
+          policy_state.policy_reason_code AS dp_policy_state_policy_reason_code,
+          policy_state.waived_findings AS dp_policy_state_waived_findings,
+          policy_state.stale_at AS dp_policy_state_stale_at,
+          policy_state.next_waiver_expiry AS dp_policy_state_next_waiver_expiry,
+          policy_state.last_evaluated_at AS dp_policy_state_last_evaluated_at,
+          policy_state.version AS dp_policy_state_version,
+          waiver_revision.global_invalidation_revision AS dp_required_waiver_revision
+        FROM target_asset a
+        JOIN asset_blob b ON b.id = a.asset_blob_id
+        JOIN repository source_repository ON source_repository.id = a.repository_id
+        JOIN security_scan_waiver_revision waiver_revision
+          ON waiver_revision.singleton_id = 1
+        JOIN repository_security_scan_config c
+          ON c.repository_id IN (SELECT repository_id FROM policy_contexts)
+         AND (
+           (source_repository.type = 'hosted' AND c.scan_hosted_content = TRUE)
+           OR (source_repository.type = 'proxy' AND c.scan_proxy_content = TRUE)
+         )
+        LEFT JOIN security_scan_profile profile ON profile.id = c.profile_id
+        LEFT JOIN security_scan_candidate candidate ON candidate.asset_id = a.id
+        LEFT JOIN asset_security_state state
+          ON state.asset_id = a.id AND state.profile_id = c.profile_id
+        LEFT JOIN security_scan_policy policy ON policy.id = c.policy_id
+        LEFT JOIN asset_security_policy_state policy_state
+          ON policy_state.asset_id = a.id
+         AND policy_state.profile_id = c.profile_id
+         AND policy_state.repository_id = c.repository_id
+        ORDER BY a.id, c.repository_id
+        """, downloadPolicySnapshotMapper, args.toArray());
+  }
+
+  @Override
+  @Transactional
+  public RepositoryScanConfig upsertRepositoryConfig(RepositoryScanConfig config) {
+    Instant now = requiredNow(config.updatedAt());
+    if (!insertRepositoryConfig(config, now)) {
+      int updated = updateRepositoryConfig(config, now);
+      if (updated != 1) {
+        throw new IllegalStateException(
+            "Concurrent repository scan configuration could not be applied");
+      }
+    }
+    return findRepositoryConfig(config.repositoryId()).orElseThrow();
+  }
+
+  private int updateRepositoryConfig(RepositoryScanConfig config, Instant now) {
+    return jdbc.update("""
+        UPDATE repository_security_scan_config
+        SET enabled = ?, profile_id = ?, scan_hosted_content = ?, scan_proxy_content = ?,
+            enforcement_mode = ?, pending_action = ?, failure_action = ?, partial_action = ?,
+            max_result_age_seconds = ?, policy_id = ?, config_revision = config_revision + 1,
+            updated_at = ?
+        WHERE repository_id = ?
+        """,
+        config.enabled(),
+        config.profileId(),
+        config.scanHostedContent(),
+        config.scanProxyContent(),
+        config.enforcementMode().name(),
+        config.pendingAction().name(),
+        config.failureAction().name(),
+        config.partialAction().name(),
+        config.maxResultAgeSeconds(),
+        config.policyId(),
+        nullableTimestamp(now),
+        config.repositoryId());
+  }
+
+  private boolean insertRepositoryConfig(RepositoryScanConfig config, Instant now) {
+    return JdbcInserts.tryUpdate(jdbc, """
+        INSERT INTO repository_security_scan_config
+          (repository_id, enabled, profile_id, scan_hosted_content, scan_proxy_content,
+           enforcement_mode, pending_action, failure_action, partial_action,
+           max_result_age_seconds, policy_id, config_revision, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, ps -> {
+      ps.setLong(1, config.repositoryId());
+      ps.setBoolean(2, config.enabled());
+      ps.setLong(3, config.profileId());
+      ps.setBoolean(4, config.scanHostedContent());
+      ps.setBoolean(5, config.scanProxyContent());
+      ps.setString(6, config.enforcementMode().name());
+      ps.setString(7, config.pendingAction().name());
+      ps.setString(8, config.failureAction().name());
+      ps.setString(9, config.partialAction().name());
+      setNullableLong(ps, 10, config.maxResultAgeSeconds());
+      setNullableLong(ps, 11, config.policyId());
+      ps.setLong(12, Math.max(1, config.configRevision()));
+      ps.setTimestamp(13, nullableTimestamp(now));
+      ps.setTimestamp(14, nullableTimestamp(now));
+    });
+  }
+
+  @Override
+  @Transactional
+  public int recordArtifactContentChange(long assetId) {
+    List<Long> blobIds = jdbc.query(
+        "SELECT asset_blob_id FROM asset WHERE id = ? FOR UPDATE SKIP LOCKED",
+        (rs, rowNum) -> nullableLong(rs, "asset_blob_id"),
+        assetId);
+    if (blobIds.isEmpty()) {
+      Long visibleRows = jdbc.queryForObject(
+          "SELECT COUNT(*) FROM asset WHERE id = ?",
+          Long.class,
+          assetId);
+      if (visibleRows != null && visibleRows > 0) {
+        throw new CannotAcquireLockException(
+            "Artifact change folding deferred for locked asset " + assetId);
+      }
+      return 0;
+    }
+    if (blobIds.getFirst() == null) {
+      return 0;
+    }
+    return ensureCandidate(assetId, blobIds.getFirst());
+  }
+
+  @Override
+  public Optional<ScanCandidate> findCandidate(long assetId) {
+    return jdbc.query(
+        "SELECT * FROM security_scan_candidate WHERE asset_id = ?",
+        candidateMapper,
+        assetId).stream().findFirst();
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public List<ScanCandidate> claimCandidates(int maxItems) {
+    return jdbc.query("""
+        SELECT *
+        FROM security_scan_candidate
+        WHERE pending = TRUE
+        ORDER BY changed_at, asset_id
+        LIMIT ?
+        FOR UPDATE SKIP LOCKED
+        """, candidateMapper, safeLimit(maxItems));
+  }
+
+  @Override
+  public boolean markCandidateEnqueued(long assetId, long expectedGeneration) {
+    return jdbc.update("""
+        UPDATE security_scan_candidate
+        SET enqueued_generation = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE asset_id = ?
+          AND content_generation = ?
+          AND enqueued_generation < ?
+        """, expectedGeneration, assetId, expectedGeneration, expectedGeneration) == 1;
+  }
+
+  @Override
+  @Transactional
+  public BackfillPage markRepositoryAssetsForBackfill(
+      long repositoryId, long afterAssetId, int maxItems) {
+    int limit = safeLimit(maxItems);
+    List<Map<String, Object>> rows = jdbc.queryForList("""
+        SELECT id, asset_blob_id
+        FROM asset
+        WHERE repository_id = ?
+          AND id > ?
+          AND asset_blob_id IS NOT NULL
+        ORDER BY id
+        LIMIT ?
+        FOR UPDATE
+        """, repositoryId, Math.max(0, afterAssetId), limit);
+    int marked = 0;
+    long nextAssetId = Math.max(0, afterAssetId);
+    for (Map<String, Object> row : rows) {
+      long assetId = ((Number) row.get("id")).longValue();
+      long blobId = ((Number) row.get("asset_blob_id")).longValue();
+      int changed = ensureCandidate(assetId, blobId);
+      marked += changed == 1 ? 1 : markUnchangedCandidatePending(assetId, blobId);
+      nextAssetId = assetId;
+    }
+    return new BackfillPage(rows.size(), marked, nextAssetId, rows.size() < limit);
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public ReconciliationPage reconcileArtifactChanges(
+      long afterAssetId, Instant recentSince, int maxRecentItems, int maxPageItems) {
+    List<ArtifactBinding> recent = jdbc.query("""
+        SELECT recent.id, recent.asset_blob_id,
+               candidate.asset_blob_id AS candidate_blob_id
+        FROM (
+          SELECT id, asset_blob_id, last_updated_at
+          FROM asset
+          WHERE asset_blob_id IS NOT NULL
+            AND last_updated_at >= ?
+          ORDER BY last_updated_at DESC, id DESC
+          LIMIT ?
+        ) recent
+        LEFT JOIN security_scan_candidate candidate ON candidate.asset_id = recent.id
+        ORDER BY recent.last_updated_at DESC, recent.id DESC
+        """,
+        JdbcSecurityScanDao::artifactBinding,
+        nullableTimestamp(recentSince == null ? Instant.EPOCH : recentSince),
+        safeLimit(maxRecentItems));
+    int marked = reconcileBindings(recent);
+
+    int pageLimit = safeLimit(maxPageItems);
+    List<ArtifactBinding> page = jdbc.query("""
+        SELECT a.id, a.asset_blob_id, candidate.asset_blob_id AS candidate_blob_id
+        FROM asset a
+        LEFT JOIN security_scan_candidate candidate ON candidate.asset_id = a.id
+        WHERE a.id > ?
+          AND a.asset_blob_id IS NOT NULL
+        ORDER BY a.id
+        LIMIT ?
+        """,
+        JdbcSecurityScanDao::artifactBinding,
+        Math.max(0, afterAssetId),
+        pageLimit);
+    marked += reconcileBindings(page);
+    boolean wrapped = page.size() < pageLimit;
+    long nextAssetId = wrapped || page.isEmpty()
+        ? 0 : page.getLast().assetId();
+    return new ReconciliationPage(
+        recent.size(), page.size(), marked, nextAssetId, wrapped);
+  }
+
+  private int reconcileBindings(List<ArtifactBinding> bindings) {
+    int marked = 0;
+    for (ArtifactBinding binding : bindings) {
+      if (!Objects.equals(binding.assetBlobId(), binding.candidateBlobId())) {
+        marked += recordArtifactContentChange(binding.assetId());
+      }
+    }
+    return marked;
+  }
+
+  private static ArtifactBinding artifactBinding(ResultSet rs, int rowNumber)
+      throws SQLException {
+    return new ArtifactBinding(
+        rs.getLong("id"),
+        rs.getLong("asset_blob_id"),
+        nullableLong(rs, "candidate_blob_id"));
+  }
+
+  private int ensureCandidate(long assetId, long assetBlobId) {
+    int updated = jdbc.update("""
+        UPDATE security_scan_candidate
+        SET asset_blob_id = ?, content_generation = content_generation + 1,
+            changed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+        WHERE asset_id = ?
+          AND (asset_blob_id IS NULL OR asset_blob_id <> ?)
+        """, assetBlobId, assetId, assetBlobId);
+    if (updated == 1) return 1;
+    boolean inserted = JdbcInserts.tryUpdate(jdbc, """
+        INSERT INTO security_scan_candidate
+          (asset_id, asset_blob_id, content_generation, enqueued_generation, changed_at, updated_at)
+        VALUES (?, ?, 1, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """, ps -> {
+      ps.setLong(1, assetId);
+      ps.setLong(2, assetBlobId);
+    });
+    if (inserted) return 1;
+    return jdbc.update("""
+        UPDATE security_scan_candidate
+        SET asset_blob_id = ?, content_generation = content_generation + 1,
+            changed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+        WHERE asset_id = ?
+          AND (asset_blob_id IS NULL OR asset_blob_id <> ?)
+        """, assetBlobId, assetId, assetBlobId);
+  }
+
+  private int markUnchangedCandidatePending(long assetId, long assetBlobId) {
+    return jdbc.update("""
+        UPDATE security_scan_candidate
+        SET enqueued_generation = content_generation - 1,
+            changed_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE asset_id = ?
+          AND asset_blob_id = ?
+          AND content_generation > 0
+          AND enqueued_generation >= content_generation
+        """, assetId, assetBlobId);
+  }
+
+  private record ArtifactBinding(long assetId, long assetBlobId, Long candidateBlobId) {
+  }
+
+  @Override
+  @Transactional
+  public long createTask(TaskDraft task) {
+    int priority = ScanTaskPriorities.requireSupported(task.priority());
+    if (task.assetId() != null) {
+      // Task creation and terminal projection share one durable per-asset authority. Once a newer
+      // task exists, an older replica cannot publish a transient or terminal state over it.
+      lockScanCandidate(task.assetId());
+    }
+    Instant requestedAt = requiredNow(task.requestedAt());
+    byte[] subjectHash = PersistenceHashes.sha256(task.subjectKey());
+    String snapshot = task.requestedScannerSnapshotId() == null
+        ? "" : task.requestedScannerSnapshotId().toString();
+    byte[] dedupeKey = PersistenceHashes.sha256(
+        task.subjectKind().name(),
+        task.subjectKey(),
+        Long.toString(task.contentGeneration()),
+        Long.toString(task.profileId()),
+        Long.toString(task.profileRevision()),
+        task.stage().name(),
+        snapshot,
+        task.requestUuid());
+    byte[] idempotencyHash = blank(task.idempotencyKey())
+        ? null : PersistenceHashes.sha256(task.idempotencyKey());
+
+    OptionalLong inserted = JdbcInserts.tryInsert(jdbc, """
+        INSERT INTO security_scan_task
+          (repository_id, asset_id, subject_kind, subject_key, subject_key_hash,
+           content_generation, profile_id, profile_revision, requested_scanner_snapshot_id,
+           stage, request_reason, priority, status, attempts, max_attempts, next_attempt_at,
+           requested_by, request_uuid, idempotency_key_hash, requested_at, created_at, updated_at,
+           dedupe_key)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, ps -> {
+      int index = 1;
+      ps.setLong(index++, task.repositoryId());
+      setNullableLong(ps, index++, task.assetId());
+      ps.setString(index++, task.subjectKind().name());
+      ps.setString(index++, task.subjectKey());
+      ps.setBytes(index++, subjectHash);
+      ps.setLong(index++, task.contentGeneration());
+      ps.setLong(index++, task.profileId());
+      ps.setLong(index++, task.profileRevision());
+      setNullableLong(ps, index++, task.requestedScannerSnapshotId());
+      ps.setString(index++, task.stage().name());
+      ps.setString(index++, task.requestReason().name());
+      ps.setInt(index++, priority);
+      ps.setString(index++, TaskStatus.PENDING.name());
+      ps.setInt(index++, Math.max(1, task.maxAttempts()));
+      ps.setTimestamp(index++, nullableTimestamp(requestedAt));
+      ps.setString(index++, task.requestedBy());
+      ps.setString(index++, task.requestUuid());
+      ps.setBytes(index++, idempotencyHash);
+      ps.setTimestamp(index++, nullableTimestamp(requestedAt));
+      ps.setTimestamp(index++, nullableTimestamp(requestedAt));
+      ps.setTimestamp(index++, nullableTimestamp(requestedAt));
+      ps.setBytes(index, dedupeKey);
+    });
+    if (inserted.isPresent()) {
+      if (task.assetId() != null) {
+        materializePendingTaskProjection(task, subjectHash, requestedAt);
+      }
+      return inserted.getAsLong();
+    }
+    if (idempotencyHash != null) {
+      List<Long> ids = jdbc.queryForList("""
+          SELECT id FROM security_scan_task
+          WHERE repository_id = ? AND idempotency_key_hash = ?
+          """, Long.class, task.repositoryId(), idempotencyHash);
+      if (!ids.isEmpty()) return ids.getFirst();
+    }
+    return jdbc.queryForObject(
+        "SELECT id FROM security_scan_task WHERE dedupe_key = ?",
+        Long.class,
+        dedupeKey);
+  }
+
+  /**
+   * The first task for an asset/profile owns a durable pending projection in the same transaction.
+   *
+   * <p>This is intentionally below the individual schedulers: manual scans, policy reconciliation,
+   * content discovery, and snapshot rematches must all expose failure/cancellation semantics even
+   * when no earlier asset state exists. Existing projections remain authoritative while refresh
+   * work runs; content-change scheduling updates them explicitly for the new generation.
+   */
+  private void materializePendingTaskProjection(
+      TaskDraft task, byte[] subjectIdentityHash, Instant requestedAt) {
+    AssetSecurityState current =
+        findAssetState(task.assetId(), task.profileId()).orElse(null);
+    if (current != null) {
+      return;
+    }
+    ScanCandidate scanCandidate = findCandidate(task.assetId()).orElse(null);
+    if (scanCandidate == null
+        || scanCandidate.contentGeneration() != task.contentGeneration()) {
+      return;
+    }
+    RepositoryScanConfig config = findRepositoryConfig(task.repositoryId())
+        .filter(RepositoryScanConfig::enabled)
+        .filter(candidate -> candidate.profileId() == task.profileId())
+        .orElse(null);
+    Long policyId = config == null
+        ? null
+        : config.policyId();
+    Long policyRevision = policyId == null
+        ? null
+        : findPolicy(policyId).map(ScanPolicy::revision).orElse(null);
+    PolicyDecision pendingDecision =
+        config != null && config.pendingAction() == PolicyAction.BLOCK
+            ? PolicyDecision.BLOCK_PENDING
+            : PolicyDecision.ALLOW;
+    upsertAssetStateIfCurrent(new AssetSecurityState(
+        task.assetId(),
+        task.profileId(),
+        task.contentGeneration(),
+        subjectIdentityHash,
+        null,
+        ScanState.PENDING,
+        ScanCompleteness.UNKNOWN,
+        false,
+        Severity.UNKNOWN,
+        Map.of(),
+        policyId,
+        policyRevision,
+        pendingDecision,
+        "SCAN_PENDING",
+        null,
+        requestedAt,
+        0));
+  }
+
+  @Override
+  public Optional<ScanTask> findTask(long taskId) {
+    return jdbc.query("SELECT * FROM security_scan_task WHERE id = ?", taskMapper, taskId)
+        .stream().findFirst();
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public Optional<ScanTask> findTaskForUpdate(long taskId) {
+    List<Long> assetIds = jdbc.queryForList(
+        "SELECT asset_id FROM security_scan_task WHERE id = ? AND asset_id IS NOT NULL",
+        Long.class,
+        taskId);
+    if (!assetIds.isEmpty()) {
+      // Terminal publication takes the candidate row before it updates the task. Administrative
+      // cancellation must use the same global order to avoid a candidate -> task / task ->
+      // candidate deadlock across replicas.
+      lockScanCandidate(assetIds.getFirst());
+    }
+    return jdbc.query(
+            "SELECT * FROM security_scan_task WHERE id = ? FOR UPDATE",
+            taskMapper,
+            taskId)
+        .stream()
+        .findFirst();
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public boolean lockCurrentTaskLease(long taskId, String leaseToken) {
+    if (blank(leaseToken)) return false;
+    return !jdbc.query("""
+        SELECT id
+        FROM security_scan_task
+        WHERE id = ?
+          AND status = 'RUNNING'
+          AND lease_token = ?
+        FOR UPDATE
+        """, (rs, rowNum) -> rs.getLong(1), taskId, leaseToken).isEmpty();
+  }
+
+  @Override
+  public List<ScanTask> listTasks(
+      Long repositoryId, TaskStatus status, long afterId, int maxItems) {
+    return listTasks(repositoryId, status, null, afterId, maxItems);
+  }
+
+  @Override
+  public List<ScanTask> listTasks(
+      Long repositoryId,
+      TaskStatus status,
+      String query,
+      long afterId,
+      int maxItems) {
+    return listTasks(repositoryId, null, status, query, afterId, maxItems);
+  }
+
+  @Override
+  public List<ScanTask> listTasksByRepositories(
+      List<Long> repositoryIds,
+      TaskStatus status,
+      String query,
+      long afterId,
+      int maxItems) {
+    List<Long> ids = distinctLongs(repositoryIds);
+    if (ids.isEmpty()) return List.of();
+    return listTasks(null, ids, status, query, afterId, maxItems);
+  }
+
+  private List<ScanTask> listTasks(
+      Long repositoryId,
+      List<Long> repositoryIds,
+      TaskStatus status,
+      String query,
+      long afterId,
+      int maxItems) {
+    List<Object> args = new ArrayList<>();
+    StringBuilder sql = new StringBuilder();
+    if (repositoryIds != null) {
+      sql.append(taskRepositoryScopeCte());
+      args.add(repositoryScopeParameter(repositoryIds));
+    }
+    sql.append("""
+        SELECT t.*
+        FROM security_scan_task t
+        JOIN repository r ON r.id = t.repository_id
+        LEFT JOIN asset a ON a.id = t.asset_id
+        WHERE t.id > ?
+        """);
+    args.add(Math.max(0, afterId));
+    if (repositoryId != null) {
+      sql.append(" AND t.repository_id = ?");
+      args.add(repositoryId);
+    } else if (repositoryIds != null) {
+      sql.append("""
+           AND EXISTS (
+             SELECT 1
+             FROM task_repository_scope scope
+             JOIN repository source_repository
+               ON source_repository.id = scope.source_repository_id
+             WHERE scope.source_repository_id = t.repository_id
+               AND (
+                 scope.directly_visible = TRUE
+                 OR (
+                   scope.profile_id = t.profile_id
+                   AND (
+                     (
+                       source_repository.type = 'hosted'
+                       AND scope.scan_hosted_content = TRUE
+                     )
+                     OR (
+                       source_repository.type = 'proxy'
+                       AND scope.scan_proxy_content = TRUE
+                     )
+                   )
+                 )
+               )
+           )
+          """);
+    }
+    if (status != null) {
+      sql.append(" AND t.status = ?");
+      args.add(status.name());
+    }
+    String pattern = searchPattern(query);
+    if (pattern != null) {
+      sql.append("""
+           AND (
+             LOWER(r.name) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(a.path, '')) LIKE ? ESCAPE '!'
+             OR LOWER(t.subject_key) LIKE ? ESCAPE '!'
+             OR LOWER(t.stage) LIKE ? ESCAPE '!'
+             OR LOWER(t.request_reason) LIKE ? ESCAPE '!'
+             OR LOWER(t.status) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(t.last_error_code, '')) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(t.last_error_summary, '')) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(t.requested_by, '')) LIKE ? ESCAPE '!'
+          """);
+      addRepeated(args, pattern, 9);
+      Long numeric = numericSearch(query);
+      if (numeric != null) {
+        sql.append(" OR t.id = ? OR t.asset_id = ?");
+        args.add(numeric);
+        args.add(numeric);
+      }
+      sql.append(")");
+    }
+    sql.append(" ORDER BY t.id LIMIT ?");
+    args.add(safeLimit(maxItems));
+    return jdbc.query(sql.toString(), taskMapper, args.toArray());
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public List<ScanTask> claimTasks(
+      String workerId, Instant now, Instant leaseUntil, int maxItems) {
+    if (blank(workerId)) throw new IllegalArgumentException("workerId is required");
+    if (leaseUntil == null || now == null || !leaseUntil.isAfter(now)) {
+      throw new IllegalArgumentException("leaseUntil must be after now");
+    }
+    int limit = safeLimit(maxItems);
+    List<ClaimCandidate> candidates = new ArrayList<>(limit * 3);
+    candidates.addAll(readyClaimCandidates(TaskStatus.PENDING, now, limit));
+    candidates.addAll(readyClaimCandidates(TaskStatus.RETRY_WAIT, now, limit));
+    candidates.addAll(expiredClaimCandidates(now, limit));
+    candidates.sort(CLAIM_ORDER);
+
+    List<ScanTask> claimed = new ArrayList<>(limit);
+    for (ClaimCandidate candidate : candidates) {
+      if (claimed.size() >= limit) break;
+      if (!lockEligibleClaimCandidate(candidate, now)) continue;
+      String token = UUID.randomUUID().toString();
+      int updated = jdbc.update("""
+          UPDATE security_scan_task
+          SET status = 'RUNNING', attempts = attempts + 1, claimed_by = ?, lease_token = ?,
+              lease_until = ?, last_heartbeat_at = ?, started_at = COALESCE(started_at, ?),
+              updated_at = ?
+          WHERE id = ? AND status = ? AND attempts < max_attempts
+          """,
+          workerId,
+          token,
+          nullableTimestamp(leaseUntil),
+          nullableTimestamp(now),
+          nullableTimestamp(now),
+          nullableTimestamp(now),
+          candidate.id(),
+          candidate.status().name());
+      if (updated == 1) {
+        claimed.add(findTask(candidate.id()).orElseThrow());
+      }
+    }
+    return List.copyOf(claimed);
+  }
+
+  private List<ClaimCandidate> readyClaimCandidates(
+      TaskStatus status, Instant now, int limit) {
+    return eligibleClaimCandidates(status, false, now, limit);
+  }
+
+  private List<ClaimCandidate> expiredClaimCandidates(Instant now, int limit) {
+    return eligibleClaimCandidates(TaskStatus.RUNNING, true, now, limit);
+  }
+
+  /**
+   * Reads at most {@code limit} rows from each fixed priority range, then merges that bounded set.
+   *
+   * <p>Every UNION branch fixes status, remaining-attempt state and priority before applying the
+   * eligibility timestamp range. The claim indexes can therefore seek directly to ready rows even
+   * when a higher-priority class contains a large future backlog.
+   */
+  private List<ClaimCandidate> eligibleClaimCandidates(
+      TaskStatus status, boolean expired, Instant now, int limit) {
+    StringBuilder sql = new StringBuilder(
+        "SELECT id, priority, requested_at, eligible_at FROM (");
+    List<Object> args = new ArrayList<>();
+    boolean first = true;
+    for (int priority : ScanTaskPriorities.descending()) {
+      if (!first) sql.append(" UNION ALL ");
+      first = false;
+      sql.append(expired ? EXPIRED_CLAIM_BRANCH : READY_CLAIM_BRANCH);
+      args.add(status.name());
+      args.add(priority);
+      args.add(nullableTimestamp(now));
+      args.add(limit);
+    }
+    sql.append(
+        ") claimable ORDER BY priority DESC, eligible_at, requested_at, id LIMIT ?");
+    args.add(limit);
+    return jdbc.query(
+        sql.toString(),
+        (rs, rowNum) -> new ClaimCandidate(
+            rs.getLong("id"),
+            status,
+            rs.getInt("priority"),
+            java.util.Objects.requireNonNull(nullableInstant(rs, "eligible_at")),
+            java.util.Objects.requireNonNull(nullableInstant(rs, "requested_at"))),
+        args.toArray());
+  }
+
+  private boolean lockEligibleClaimCandidate(ClaimCandidate candidate, Instant now) {
+    if (candidate.status() == TaskStatus.RUNNING) {
+      return !jdbc.queryForList("""
+          SELECT id
+          FROM security_scan_task
+          WHERE id = ?
+            AND status = 'RUNNING'
+            AND attempts < max_attempts
+            AND lease_until < ?
+          FOR UPDATE SKIP LOCKED
+          """,
+          Long.class,
+          candidate.id(),
+          nullableTimestamp(now)).isEmpty();
+    }
+    return !jdbc.queryForList("""
+        SELECT id
+        FROM security_scan_task
+        WHERE id = ?
+          AND status = ?
+          AND attempts < max_attempts
+          AND next_attempt_at <= ?
+        FOR UPDATE SKIP LOCKED
+        """,
+        Long.class,
+        candidate.id(),
+        candidate.status().name(),
+        nullableTimestamp(now)).isEmpty();
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public List<ScanTask> claimExpiredExhaustedTasks(
+      String workerId, Instant now, Instant leaseUntil, int maxItems) {
+    if (blank(workerId)) throw new IllegalArgumentException("workerId is required");
+    if (leaseUntil == null || now == null || !leaseUntil.isAfter(now)) {
+      throw new IllegalArgumentException("leaseUntil must be after now");
+    }
+    List<Long> ids = jdbc.queryForList("""
+        SELECT id
+        FROM security_scan_task
+        WHERE status = 'RUNNING'
+          AND attempts_remaining = FALSE
+          AND lease_until < ?
+        ORDER BY lease_until, id
+        LIMIT ?
+        FOR UPDATE SKIP LOCKED
+        """, Long.class, nullableTimestamp(now), safeLimit(maxItems));
+    List<ScanTask> claimed = new ArrayList<>(ids.size());
+    for (Long id : ids) {
+      String token = UUID.randomUUID().toString();
+      int updated = jdbc.update("""
+          UPDATE security_scan_task
+          SET claimed_by = ?, lease_token = ?, lease_until = ?, last_heartbeat_at = ?,
+              updated_at = ?
+          WHERE id = ? AND status = 'RUNNING' AND attempts_remaining = FALSE
+          """,
+          workerId,
+          token,
+          nullableTimestamp(leaseUntil),
+          nullableTimestamp(now),
+          nullableTimestamp(now),
+          id);
+      if (updated == 1) {
+        claimed.add(findTask(id).orElseThrow());
+      }
+    }
+    return List.copyOf(claimed);
+  }
+
+  @Override
+  public boolean heartbeatTask(
+      long taskId, String leaseToken, Instant leaseUntil, Instant heartbeatAt) {
+    return jdbc.update("""
+        UPDATE security_scan_task
+        SET lease_until = ?, last_heartbeat_at = ?, updated_at = ?
+        WHERE id = ? AND status = 'RUNNING' AND lease_token = ?
+        """,
+        nullableTimestamp(leaseUntil),
+        nullableTimestamp(heartbeatAt),
+        nullableTimestamp(heartbeatAt),
+        taskId,
+        leaseToken) == 1;
+  }
+
+  @Override
+  public boolean completeTask(long taskId, String leaseToken, Instant completedAt) {
+    return terminalTask(
+        taskId, leaseToken, TaskStatus.SUCCEEDED, null, null, completedAt);
+  }
+
+  @Override
+  public boolean retryTask(
+      long taskId,
+      String leaseToken,
+      Instant nextAttemptAt,
+      String errorCode,
+      String errorSummary,
+      Instant updatedAt) {
+    return jdbc.update("""
+        UPDATE security_scan_task
+        SET status = 'RETRY_WAIT', next_attempt_at = ?, claimed_by = NULL, lease_token = NULL,
+            lease_until = NULL, last_heartbeat_at = NULL, last_error_code = ?,
+            last_error_summary = ?, updated_at = ?
+        WHERE id = ? AND status = 'RUNNING' AND lease_token = ?
+        """,
+        nullableTimestamp(nextAttemptAt),
+        errorCode,
+        truncate(errorSummary, 2048),
+        nullableTimestamp(updatedAt),
+        taskId,
+        leaseToken) == 1;
+  }
+
+  @Override
+  public boolean failTask(
+      long taskId,
+      String leaseToken,
+      String errorCode,
+      String errorSummary,
+      Instant completedAt) {
+    return terminalTask(
+        taskId, leaseToken, TaskStatus.FAILED, errorCode, errorSummary, completedAt);
+  }
+
+  private boolean terminalTask(
+      long taskId,
+      String leaseToken,
+      TaskStatus status,
+      String errorCode,
+      String errorSummary,
+      Instant completedAt) {
+    return jdbc.update("""
+        UPDATE security_scan_task
+        SET status = ?, claimed_by = NULL, lease_token = NULL, lease_until = NULL,
+            last_heartbeat_at = NULL, last_error_code = ?, last_error_summary = ?,
+            finished_at = ?, updated_at = ?
+        WHERE id = ? AND status = 'RUNNING' AND lease_token = ?
+        """,
+        status.name(),
+        errorCode,
+        truncate(errorSummary, 2048),
+        nullableTimestamp(completedAt),
+        nullableTimestamp(completedAt),
+        taskId,
+        leaseToken) == 1;
+  }
+
+  @Override
+  @Transactional
+  public boolean cancelTask(long taskId, Instant cancelledAt) {
+    if (!taskProjectionIsSuperseded(taskId)) {
+      transitionCurrentTaskProjectionToCancelled(taskId, cancelledAt);
+    }
+    return jdbc.update("""
+        UPDATE security_scan_task
+        SET status = 'CANCELLED', claimed_by = NULL, lease_token = NULL, lease_until = NULL,
+            last_heartbeat_at = NULL, finished_at = ?, updated_at = ?
+        WHERE id = ? AND status IN ('PENDING', 'RUNNING', 'RETRY_WAIT')
+        """, nullableTimestamp(cancelledAt), nullableTimestamp(cancelledAt), taskId) == 1;
+  }
+
+  private void transitionCurrentTaskProjectionToCancelled(long taskId, Instant cancelledAt) {
+    jdbc.update("""
+        UPDATE asset_security_state state
+        SET scan_state = 'CANCELLED',
+            inventory_complete = FALSE,
+            policy_decision = CASE
+              WHEN EXISTS (
+                SELECT 1
+                FROM repository_security_scan_config config
+                WHERE config.repository_id = state.repository_id
+                  AND config.profile_id = state.profile_id
+                  AND config.enabled = TRUE
+                  AND config.failure_action = 'BLOCK'
+              )
+              THEN 'BLOCK_SCAN_FAILED'
+              ELSE 'ALLOW'
+            END,
+            policy_reason_code = 'TASK_CANCELLED',
+            last_evaluated_at = ?,
+            version = version + 1
+        WHERE EXISTS (
+          SELECT 1
+          FROM security_scan_task task
+          JOIN security_scan_candidate candidate
+            ON candidate.asset_id = task.asset_id
+           AND candidate.content_generation = task.content_generation
+          WHERE task.id = ?
+            AND task.status IN ('PENDING', 'RUNNING', 'RETRY_WAIT')
+            AND task.asset_id = state.asset_id
+            AND task.profile_id = state.profile_id
+            AND task.content_generation = state.content_generation
+        )
+        """, nullableTimestamp(cancelledAt), taskId);
+    jdbc.update("""
+        UPDATE asset_security_policy_state state
+        SET policy_decision = CASE
+              WHEN EXISTS (
+                SELECT 1
+                FROM repository_security_scan_config config
+                WHERE config.repository_id = state.repository_id
+                  AND config.profile_id = state.profile_id
+                  AND config.enabled = TRUE
+                  AND config.failure_action = 'BLOCK'
+              )
+              THEN 'BLOCK_SCAN_FAILED'
+              ELSE 'ALLOW'
+            END,
+            policy_reason_code = 'TASK_CANCELLED',
+            waived_findings = 0,
+            stale_at = NULL,
+            next_waiver_expiry = NULL,
+            last_evaluated_at = ?,
+            version = version + 1
+        WHERE EXISTS (
+          SELECT 1
+          FROM security_scan_task task
+          JOIN security_scan_candidate candidate
+            ON candidate.asset_id = task.asset_id
+           AND candidate.content_generation = task.content_generation
+          WHERE task.id = ?
+            AND task.status IN ('PENDING', 'RUNNING', 'RETRY_WAIT')
+            AND task.asset_id = state.asset_id
+            AND task.profile_id = state.profile_id
+            AND task.content_generation = state.content_generation
+        )
+        """, nullableTimestamp(cancelledAt), taskId);
+  }
+
+  @Override
+  public boolean cancelClaimedTask(long taskId, String leaseToken, Instant cancelledAt) {
+    return jdbc.update("""
+        UPDATE security_scan_task
+        SET status = 'CANCELLED', claimed_by = NULL, lease_token = NULL, lease_until = NULL,
+            last_heartbeat_at = NULL, finished_at = ?, updated_at = ?
+        WHERE id = ? AND status = 'RUNNING' AND lease_token = ?
+        """,
+        nullableTimestamp(cancelledAt),
+        nullableTimestamp(cancelledAt),
+        taskId,
+        leaseToken) == 1;
+  }
+
+  @Override
+  @Transactional
+  public boolean requeueTask(long taskId, Instant requestedAt, String requestedBy) {
+    if (!taskProjectionIsSuperseded(taskId)) {
+      transitionCurrentTaskProjectionToPending(taskId, requestedAt);
+    }
+    return jdbc.update("""
+        UPDATE security_scan_task
+        SET status = 'PENDING', attempts = 0, next_attempt_at = ?, claimed_by = NULL,
+            lease_token = NULL, lease_until = NULL, last_heartbeat_at = NULL,
+            last_error_code = NULL, last_error_summary = NULL, requested_by = ?,
+            requested_at = ?, started_at = NULL, finished_at = NULL, updated_at = ?
+        WHERE id = ? AND status IN ('FAILED', 'CANCELLED')
+        """,
+        nullableTimestamp(requestedAt),
+        requestedBy,
+        nullableTimestamp(requestedAt),
+        nullableTimestamp(requestedAt),
+        taskId) == 1;
+  }
+
+  @Override
+  @Transactional
+  public boolean reactivateSnapshotTask(
+      long taskId,
+      long requestedScannerSnapshotId,
+      Instant requestedAt,
+      String requestedBy) {
+    return jdbc.update("""
+        UPDATE security_scan_task
+        SET status = 'PENDING', attempts = 0, next_attempt_at = ?, claimed_by = NULL,
+            lease_token = NULL, lease_until = NULL, last_heartbeat_at = NULL,
+            last_error_code = NULL, last_error_summary = NULL, requested_by = ?,
+            requested_at = ?, started_at = NULL, finished_at = NULL, updated_at = ?
+        WHERE id = ?
+          AND requested_scanner_snapshot_id = ?
+          AND status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
+        """,
+        nullableTimestamp(requestedAt),
+        requestedBy,
+        nullableTimestamp(requestedAt),
+        nullableTimestamp(requestedAt),
+        taskId,
+        requestedScannerSnapshotId) == 1;
+  }
+
+  private void transitionCurrentTaskProjectionToPending(long taskId, Instant requestedAt) {
+    jdbc.update("""
+        UPDATE asset_security_state state
+        SET scan_state = 'PENDING',
+            inventory_complete = FALSE,
+            policy_decision = CASE
+              WHEN EXISTS (
+                SELECT 1
+                FROM repository_security_scan_config config
+                WHERE config.repository_id = state.repository_id
+                  AND config.profile_id = state.profile_id
+                  AND config.enabled = TRUE
+                  AND config.pending_action = 'BLOCK'
+              )
+              THEN 'BLOCK_PENDING'
+              ELSE 'ALLOW'
+            END,
+            policy_reason_code = 'SCAN_PENDING',
+            stale_at = NULL,
+            last_evaluated_at = ?,
+            version = version + 1
+        WHERE EXISTS (
+          SELECT 1
+          FROM security_scan_task task
+          JOIN security_scan_candidate candidate
+            ON candidate.asset_id = task.asset_id
+           AND candidate.content_generation = task.content_generation
+          WHERE task.id = ?
+            AND task.status IN ('FAILED', 'CANCELLED')
+            AND task.asset_id = state.asset_id
+            AND task.profile_id = state.profile_id
+            AND task.content_generation = state.content_generation
+        )
+        """, nullableTimestamp(requestedAt), taskId);
+    jdbc.update("""
+        UPDATE asset_security_policy_state state
+        SET policy_decision = CASE
+              WHEN EXISTS (
+                SELECT 1
+                FROM repository_security_scan_config config
+                WHERE config.repository_id = state.repository_id
+                  AND config.profile_id = state.profile_id
+                  AND config.enabled = TRUE
+                  AND config.pending_action = 'BLOCK'
+              )
+              THEN 'BLOCK_PENDING'
+              ELSE 'ALLOW'
+            END,
+            policy_reason_code = 'SCAN_PENDING',
+            waived_findings = 0,
+            stale_at = NULL,
+            next_waiver_expiry = NULL,
+            last_evaluated_at = ?,
+            version = version + 1
+        WHERE EXISTS (
+          SELECT 1
+          FROM security_scan_task task
+          JOIN security_scan_candidate candidate
+            ON candidate.asset_id = task.asset_id
+           AND candidate.content_generation = task.content_generation
+          WHERE task.id = ?
+            AND task.status IN ('FAILED', 'CANCELLED')
+            AND task.asset_id = state.asset_id
+            AND task.profile_id = state.profile_id
+            AND task.content_generation = state.content_generation
+        )
+        """, nullableTimestamp(requestedAt), taskId);
+  }
+
+  /**
+   * A historical task cannot project pending/cancelled state over a run published by newer work.
+   *
+   * <p>Snapshot ordering protects pinned vulnerability-database rematches, while task ordering
+   * covers unpinned/manual work. The candidate row is locked before this query, so the decision
+   * remains stable until the surrounding task transition commits on every replica.
+   */
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public boolean taskProjectionIsSuperseded(long taskId) {
+    lockTaskCandidate(taskId);
+    Integer superseded = jdbc.queryForObject("""
+        SELECT CASE WHEN EXISTS (
+          SELECT 1
+          FROM security_scan_task task
+          LEFT JOIN asset_security_state state
+            ON state.asset_id = task.asset_id
+           AND state.profile_id = task.profile_id
+           AND state.content_generation = task.content_generation
+          LEFT JOIN security_scan_run current_run ON current_run.id = state.latest_scan_run_id
+          LEFT JOIN security_scanner_snapshot current_snapshot
+            ON current_snapshot.id = current_run.scanner_snapshot_id
+          LEFT JOIN security_scanner_snapshot requested_snapshot
+            ON requested_snapshot.id = task.requested_scanner_snapshot_id
+          WHERE task.id = ?
+            AND (
+              (current_run.task_id IS NOT NULL AND current_run.task_id > task.id)
+              OR (
+                task.requested_scanner_snapshot_id IS NOT NULL
+                AND (
+                  current_snapshot.vulnerability_database_updated_at
+                      > requested_snapshot.vulnerability_database_updated_at
+                  OR (
+                    current_snapshot.vulnerability_database_updated_at
+                        = requested_snapshot.vulnerability_database_updated_at
+                    AND current_snapshot.id > requested_snapshot.id
+                  )
+                )
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM security_scan_task newer_task
+                WHERE newer_task.asset_id = task.asset_id
+                  AND newer_task.profile_id = task.profile_id
+                  AND newer_task.content_generation = task.content_generation
+                  AND newer_task.id > task.id
+              )
+            )
+        ) THEN 1 ELSE 0 END
+        """, Integer.class, taskId);
+    return superseded != null && superseded == 1;
+  }
+
+  private void lockTaskCandidate(long taskId) {
+    List<Long> assetIds = jdbc.queryForList("""
+        SELECT candidate.asset_id
+        FROM security_scan_task task
+        JOIN security_scan_candidate candidate
+          ON candidate.asset_id = task.asset_id
+         AND candidate.content_generation = task.content_generation
+        WHERE task.id = ?
+        """, Long.class, taskId);
+    if (!assetIds.isEmpty()) {
+      lockScanCandidate(assetIds.getFirst());
+    }
+  }
+
+  @Override
+  @Transactional
+  public ScannerSnapshot insertSnapshotOrFindExisting(ScannerSnapshot snapshot) {
+    OptionalLong inserted = JdbcInserts.tryInsert(jdbc, """
+        INSERT INTO security_scanner_snapshot
+          (adapter_name, adapter_api_version, engine_name, engine_version,
+           vulnerability_database_revision, vulnerability_database_updated_at,
+           capability_digest, snapshot_fingerprint, observed_at, ready, details_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, ps -> {
+      ps.setString(1, snapshot.adapterName());
+      ps.setString(2, snapshot.adapterApiVersion());
+      ps.setString(3, snapshot.engineName());
+      ps.setString(4, snapshot.engineVersion());
+      ps.setString(5, snapshot.vulnerabilityDatabaseRevision());
+      ps.setTimestamp(6, nullableTimestamp(snapshot.vulnerabilityDatabaseUpdatedAt()));
+      ps.setString(7, snapshot.capabilityDigest());
+      ps.setString(8, snapshot.snapshotFingerprint());
+      ps.setTimestamp(9, nullableTimestamp(snapshot.observedAt()));
+      ps.setBoolean(10, snapshot.ready());
+      json.bind(ps, 11, snapshot.details());
+    });
+    if (inserted.isPresent()) {
+      return snapshotWithId(inserted.getAsLong());
+    }
+    jdbc.update("""
+        UPDATE security_scanner_snapshot
+        SET observed_at = ?, ready = ?, details_json = ?
+        WHERE snapshot_fingerprint = ?
+          AND observed_at < ?
+        """,
+        nullableTimestamp(snapshot.observedAt()),
+        snapshot.ready(),
+        json.serializedParameter(json.writeValue(snapshot.details())),
+        snapshot.snapshotFingerprint(),
+        nullableTimestamp(snapshot.observedAt()));
+    return jdbc.query("""
+        SELECT * FROM security_scanner_snapshot WHERE snapshot_fingerprint = ?
+        """, snapshotMapper, snapshot.snapshotFingerprint()).stream().findFirst().orElseThrow();
+  }
+
+  private ScannerSnapshot snapshotWithId(long id) {
+    return jdbc.query(
+        "SELECT * FROM security_scanner_snapshot WHERE id = ?",
+        snapshotMapper,
+        id).stream().findFirst().orElseThrow();
+  }
+
+  @Override
+  public Optional<ScannerSnapshot> findScannerSnapshot(long snapshotId) {
+    return jdbc.query(
+        "SELECT * FROM security_scanner_snapshot WHERE id = ?",
+        snapshotMapper,
+        snapshotId).stream().findFirst();
+  }
+
+  @Override
+  public Optional<ScannerSnapshot> latestScannerSnapshot() {
+    return jdbc.query("""
+        SELECT * FROM security_scanner_snapshot ORDER BY observed_at DESC, id DESC LIMIT 1
+        """, snapshotMapper).stream().findFirst();
+  }
+
+  @Override
+  public Optional<ScannerSnapshot> latestReadyScannerSnapshot(
+      Instant maximumDatabaseUpdatedAt) {
+    return jdbc.query("""
+        SELECT *
+        FROM security_scanner_snapshot
+        WHERE ready = TRUE
+          AND vulnerability_database_updated_at IS NOT NULL
+          AND vulnerability_database_updated_at <= ?
+        ORDER BY vulnerability_database_updated_at DESC, id DESC
+        LIMIT 1
+        """, snapshotMapper, nullableTimestamp(maximumDatabaseUpdatedAt))
+        .stream()
+        .findFirst();
+  }
+
+  @Override
+  @Transactional
+  public Sbom insertSbomOrFindExisting(Sbom sbom) {
+    byte[] subjectHash = sbom.subjectIdentityHash() == null
+        ? PersistenceHashes.sha256(sbom.subjectIdentity()) : sbom.subjectIdentityHash();
+    OptionalLong inserted = JdbcInserts.tryInsert(jdbc, """
+        INSERT INTO security_sbom
+          (subject_kind, subject_identity, subject_identity_hash, catalog_engine,
+           catalog_engine_version, catalog_configuration_digest, catalog_fingerprint,
+           document_blob_id, document_sha256, spec_name, spec_version, component_count,
+           dependency_count, inventory_complete, created_at, last_accessed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, ps -> {
+      ps.setString(1, sbom.subjectKind().name());
+      ps.setString(2, sbom.subjectIdentity());
+      ps.setBytes(3, subjectHash);
+      ps.setString(4, sbom.catalogEngine());
+      ps.setString(5, sbom.catalogEngineVersion());
+      ps.setString(6, sbom.catalogConfigurationDigest());
+      ps.setString(7, sbom.catalogFingerprint());
+      ps.setLong(8, sbom.documentBlobId());
+      ps.setString(9, sbom.documentSha256());
+      ps.setString(10, sbom.specName());
+      ps.setString(11, sbom.specVersion());
+      ps.setInt(12, sbom.componentCount());
+      ps.setInt(13, sbom.dependencyCount());
+      ps.setBoolean(14, sbom.inventoryComplete());
+      ps.setTimestamp(15, nullableTimestamp(sbom.createdAt()));
+      ps.setTimestamp(16, nullableTimestamp(sbom.createdAt()));
+    });
+    Sbom stored = inserted.isPresent()
+        ? findSbom(inserted.getAsLong()).orElseThrow()
+        : findSbomByCatalogFingerprint(sbom.catalogFingerprint()).orElseThrow();
+    ensureBlobReference(SBOM_BLOB_OWNER, stored.id(), stored.documentBlobId());
+    return stored;
+  }
+
+  @Override
+  @Transactional
+  public Sbom publishSbom(Sbom sbom, List<SbomComponent> components) {
+    Sbom stored = insertSbomOrFindExisting(sbom);
+    insertSbomComponents(stored.id(), components);
+    return stored;
+  }
+
+  @Override
+  public Optional<Sbom> findSbom(long sbomId) {
+    jdbc.update("""
+        UPDATE security_sbom
+        SET last_accessed_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND last_accessed_at < ?
+        """, sbomId, nullableTimestamp(resultAccessTouchCutoff()));
+    return findStoredSbom(sbomId);
+  }
+
+  private Optional<Sbom> findStoredSbom(long sbomId) {
+    return jdbc.query("SELECT * FROM security_sbom WHERE id = ?", sbomMapper, sbomId)
+        .stream().findFirst();
+  }
+
+  @Override
+  public Optional<Sbom> findSbomByCatalogFingerprint(String catalogFingerprint) {
+    jdbc.update("""
+        UPDATE security_sbom
+        SET last_accessed_at = CURRENT_TIMESTAMP
+        WHERE catalog_fingerprint = ? AND last_accessed_at < ?
+        """, catalogFingerprint, nullableTimestamp(resultAccessTouchCutoff()));
+    return jdbc.query("""
+        SELECT * FROM security_sbom WHERE catalog_fingerprint = ?
+        """, sbomMapper, catalogFingerprint).stream().findFirst();
+  }
+
+  @Override
+  public Optional<Sbom> findReusableSbom(
+      SubjectKind subjectKind,
+      byte[] subjectIdentityHash,
+      String catalogEngine,
+      String catalogEngineVersion,
+      String catalogConfigurationDigest) {
+    Optional<Sbom> candidate = jdbc.query("""
+        SELECT *
+        FROM security_sbom
+        WHERE subject_kind = ?
+          AND subject_identity_hash = ?
+          AND catalog_engine = ?
+          AND catalog_engine_version = ?
+          AND catalog_configuration_digest = ?
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        sbomMapper,
+        subjectKind.name(),
+        subjectIdentityHash,
+        catalogEngine,
+        catalogEngineVersion,
+        catalogConfigurationDigest).stream().findFirst();
+    if (candidate.isEmpty()) return Optional.empty();
+    return findSbom(candidate.get().id());
+  }
+
+  @Override
+  @Transactional
+  public int insertSbomComponents(long sbomId, List<SbomComponent> components) {
+    int inserted = 0;
+    for (SbomComponent component : components == null ? List.<SbomComponent>of() : components) {
+      byte[] refHash = component.componentRefHash() == null
+          ? PersistenceHashes.sha256(component.componentRef()) : component.componentRefHash();
+      byte[] purlHash = blank(component.packageUrl())
+          ? null : (component.packageUrlHash() == null
+              ? PersistenceHashes.sha256(component.packageUrl()) : component.packageUrlHash());
+      OptionalLong row = JdbcInserts.tryInsert(jdbc, """
+          INSERT INTO security_sbom_component
+            (sbom_id, component_ref, component_ref_hash, package_url, package_url_hash,
+             component_type, namespace, name, version, directness, locations_json,
+             licenses_json, properties_json)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          """, ps -> {
+        ps.setLong(1, sbomId);
+        ps.setString(2, component.componentRef());
+        ps.setBytes(3, refHash);
+        ps.setString(4, component.packageUrl());
+        ps.setBytes(5, purlHash);
+        ps.setString(6, component.type());
+        ps.setString(7, component.namespace());
+        ps.setString(8, component.name());
+        ps.setString(9, component.version());
+        ps.setString(10, component.directness());
+        json.bindSerialized(ps, 11, json.writeValue(component.locations()));
+        json.bindSerialized(ps, 12, json.writeValue(component.licenses()));
+        json.bind(ps, 13, component.properties());
+      });
+      if (row.isPresent()) inserted++;
+    }
+    return inserted;
+  }
+
+  @Override
+  public List<SbomComponent> listSbomComponents(long sbomId, long afterId, int maxItems) {
+    return jdbc.query("""
+        SELECT * FROM security_sbom_component
+        WHERE sbom_id = ? AND id > ?
+        ORDER BY id
+        LIMIT ?
+        """, componentMapper, sbomId, Math.max(0, afterId), safeLimit(maxItems));
+  }
+
+  @Override
+  @Transactional
+  public ScanRun insertRunOrFindExisting(ScanRun run) {
+    OptionalLong inserted = JdbcInserts.tryInsert(jdbc, """
+        INSERT INTO security_scan_run
+          (task_id, sbom_id, scanner_snapshot_id, match_configuration_digest,
+           match_fingerprint, status, scan_completeness, raw_report_blob_id,
+           raw_report_sha256, finding_count, fixable_finding_count, critical_count,
+           high_count, medium_count, low_count, unknown_count, max_severity,
+           scanned_platforms_json, missing_platforms_json, started_at, completed_at,
+           created_at, last_accessed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, ps -> {
+      setNullableLong(ps, 1, run.taskId());
+      ps.setLong(2, run.sbomId());
+      ps.setLong(3, run.scannerSnapshotId());
+      ps.setString(4, run.matchConfigurationDigest());
+      ps.setString(5, run.matchFingerprint());
+      ps.setString(6, run.status().name());
+      ps.setString(7, run.scanCompleteness().name());
+      ps.setLong(8, run.rawReportBlobId());
+      ps.setString(9, run.rawReportSha256());
+      ps.setInt(10, run.findingCount());
+      ps.setInt(11, run.fixableFindingCount());
+      ps.setInt(12, run.criticalCount());
+      ps.setInt(13, run.highCount());
+      ps.setInt(14, run.mediumCount());
+      ps.setInt(15, run.lowCount());
+      ps.setInt(16, run.unknownCount());
+      ps.setString(17, run.maxSeverity().name());
+      json.bindSerialized(ps, 18, json.writeValue(run.scannedPlatforms()));
+      json.bindSerialized(ps, 19, json.writeValue(run.missingPlatforms()));
+      ps.setTimestamp(20, nullableTimestamp(run.startedAt()));
+      ps.setTimestamp(21, nullableTimestamp(run.completedAt()));
+      ps.setTimestamp(22, nullableTimestamp(run.createdAt()));
+      ps.setTimestamp(23, nullableTimestamp(run.createdAt()));
+    });
+    ScanRun stored = inserted.isPresent()
+        ? findRun(inserted.getAsLong()).orElseThrow()
+        : findRunByMatchFingerprint(run.matchFingerprint()).orElseThrow();
+    ensureBlobReference(SCAN_REPORT_BLOB_OWNER, stored.id(), stored.rawReportBlobId());
+    return stored;
+  }
+
+  private void ensureBlobReference(String ownerType, long ownerId, long blobId) {
+    if (!blobReferences.retain(ownerType, ownerId, blobId)) {
+      throw new IllegalStateException(
+          "Security scan document blob is unavailable for publication: " + blobId);
+    }
+  }
+
+  @Override
+  public Optional<ScanRun> findRun(long runId) {
+    jdbc.update("""
+        UPDATE security_scan_run
+        SET last_accessed_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND last_accessed_at < ?
+        """, runId, nullableTimestamp(resultAccessTouchCutoff()));
+    return jdbc.query("SELECT * FROM security_scan_run WHERE id = ?", runMapper, runId)
+        .stream().findFirst();
+  }
+
+  @Override
+  public Optional<ScanRun> findRunByMatchFingerprint(String matchFingerprint) {
+    jdbc.update("""
+        UPDATE security_scan_run
+        SET last_accessed_at = CURRENT_TIMESTAMP
+        WHERE match_fingerprint = ? AND last_accessed_at < ?
+        """, matchFingerprint, nullableTimestamp(resultAccessTouchCutoff()));
+    return jdbc.query("""
+        SELECT * FROM security_scan_run WHERE match_fingerprint = ?
+        """, runMapper, matchFingerprint).stream().findFirst();
+  }
+
+  @Override
+  public List<ScanRun> listRuns(Long repositoryId, long afterId, int maxItems) {
+    return listRuns(repositoryId, null, afterId, maxItems);
+  }
+
+  @Override
+  public List<ScanRun> listRuns(
+      Long repositoryId, String query, long afterId, int maxItems) {
+    return listRuns(repositoryId, null, query, afterId, maxItems);
+  }
+
+  @Override
+  public List<ScanRun> listRunsByRepositories(
+      List<Long> repositoryIds, String query, long afterId, int maxItems) {
+    List<Long> ids = distinctLongs(repositoryIds);
+    if (ids.isEmpty()) return List.of();
+    return listRuns(null, ids, query, afterId, maxItems);
+  }
+
+  private List<ScanRun> listRuns(
+      Long repositoryId,
+      List<Long> repositoryIds,
+      String query,
+      long afterId,
+      int maxItems) {
+    StringBuilder sql = new StringBuilder();
+    List<Object> args = new ArrayList<>();
+    if (repositoryIds != null) {
+      sql.append(repositoryScopeCte());
+      args.add(repositoryScopeParameter(repositoryIds));
+    }
+    sql.append("""
+        SELECT sr.*
+        FROM security_scan_run sr
+        WHERE sr.id > ?
+        """);
+    args.add(Math.max(0, afterId));
+    if (repositoryId != null) {
+      sql.append("""
+           AND EXISTS (
+             SELECT 1 FROM security_scan_run_subject s
+             WHERE s.scan_run_id = sr.id AND s.repository_id = ?
+           )
+          """);
+      args.add(repositoryId);
+    } else if (repositoryIds != null) {
+      sql.append("""
+           AND EXISTS (
+             SELECT 1
+             FROM security_scan_run_subject s
+             JOIN visible_repository visible
+               ON visible.repository_id = s.repository_id
+             WHERE s.scan_run_id = sr.id
+           )
+          """);
+    }
+    String pattern = searchPattern(query);
+    if (pattern != null) {
+      sql.append("""
+           AND (
+             LOWER(sr.status) LIKE ? ESCAPE '!'
+             OR LOWER(sr.scan_completeness) LIKE ? ESCAPE '!'
+             OR LOWER(sr.max_severity) LIKE ? ESCAPE '!'
+          """);
+      addRepeated(args, pattern, 3);
+      sql.append("""
+             OR EXISTS (
+               SELECT 1
+               FROM security_scan_run_subject search_subject
+               JOIN repository search_repository
+                 ON search_repository.id = search_subject.repository_id
+          """);
+      if (repositoryIds != null) {
+        sql.append("""
+               JOIN visible_repository search_visible
+                 ON search_visible.repository_id = search_subject.repository_id
+          """);
+      }
+      sql.append("""
+               WHERE search_subject.scan_run_id = sr.id
+                 AND LOWER(search_repository.name) LIKE ? ESCAPE '!'
+          """);
+      args.add(pattern);
+      if (repositoryId != null) {
+        sql.append(" AND search_subject.repository_id = ?");
+        args.add(repositoryId);
+      }
+      sql.append(")");
+      Long numeric = numericSearch(query);
+      if (numeric != null) {
+        sql.append(" OR sr.id = ? OR sr.task_id = ? OR sr.sbom_id = ?");
+        args.add(numeric);
+        args.add(numeric);
+        args.add(numeric);
+      }
+      sql.append(")");
+    }
+    sql.append(" ORDER BY sr.id LIMIT ?");
+    args.add(safeLimit(maxItems));
+    return jdbc.query(sql.toString(), runMapper, args.toArray());
+  }
+
+  @Override
+  public void associateRun(
+      long scanRunId,
+      long repositoryId,
+      long assetId,
+      long profileId,
+      long contentGeneration,
+      Instant associatedAt) {
+    JdbcInserts.tryUpdate(jdbc, """
+        INSERT INTO security_scan_run_subject
+          (scan_run_id, repository_id, asset_id, profile_id, content_generation, associated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """, ps -> {
+      ps.setLong(1, scanRunId);
+      ps.setLong(2, repositoryId);
+      ps.setLong(3, assetId);
+      ps.setLong(4, profileId);
+      ps.setLong(5, contentGeneration);
+      ps.setTimestamp(6, nullableTimestamp(requiredNow(associatedAt)));
+    });
+  }
+
+  @Override
+  public List<Long> listRepositoryIdsForRun(long scanRunId) {
+    return jdbc.queryForList("""
+        SELECT DISTINCT repository_id
+        FROM security_scan_run_subject
+        WHERE scan_run_id = ?
+        ORDER BY repository_id
+        """, Long.class, scanRunId);
+  }
+
+  @Override
+  public List<ScanRunSubject> listRunSubjects(
+      long scanRunId, long afterRepositoryId, long afterAssetId, int maxItems) {
+    return jdbc.query("""
+        SELECT
+          scan_run_id,
+          repository_id,
+          asset_id,
+          MIN(profile_id) AS profile_id,
+          MIN(content_generation) AS content_generation,
+          MIN(associated_at) AS associated_at
+        FROM security_scan_run_subject
+        WHERE scan_run_id = ?
+          AND (
+            repository_id > ?
+            OR (repository_id = ? AND asset_id > ?)
+          )
+        GROUP BY scan_run_id, repository_id, asset_id
+        ORDER BY repository_id, asset_id
+        LIMIT ?
+        """,
+        (rs, rowNum) -> new ScanRunSubject(
+            rs.getLong("scan_run_id"),
+            rs.getLong("repository_id"),
+            rs.getLong("asset_id"),
+            rs.getLong("profile_id"),
+            rs.getLong("content_generation"),
+            nullableInstant(rs, "associated_at")),
+        scanRunId,
+        Math.max(0, afterRepositoryId),
+        Math.max(0, afterRepositoryId),
+        Math.max(0, afterAssetId),
+        safeLimit(maxItems));
+  }
+
+  @Override
+  public boolean runSubjectExists(long scanRunId, long repositoryId, long assetId) {
+    List<Integer> matches = jdbc.query("""
+        SELECT 1
+        FROM security_scan_run_subject
+        WHERE scan_run_id = ?
+          AND repository_id = ?
+          AND asset_id = ?
+        LIMIT 1
+        """, (rs, rowNum) -> rs.getInt(1), scanRunId, repositoryId, assetId);
+    return !matches.isEmpty();
+  }
+
+  @Override
+  public List<Long> listRepositoryIdsForSbom(long sbomId) {
+    return jdbc.queryForList("""
+        SELECT DISTINCT s.repository_id
+        FROM security_scan_run_subject s
+        JOIN security_scan_run sr ON sr.id = s.scan_run_id
+        WHERE sr.sbom_id = ?
+        ORDER BY s.repository_id
+        """, Long.class, sbomId);
+  }
+
+  @Override
+  @Transactional
+  public int insertFindings(long scanRunId, List<ScanFinding> findings) {
+    int inserted = 0;
+    for (ScanFinding finding : findings == null ? List.<ScanFinding>of() : findings) {
+      byte[] keyHash = finding.findingKeyHash() == null
+          ? PersistenceHashes.sha256(finding.findingKey()) : finding.findingKeyHash();
+      OptionalLong row = JdbcInserts.tryInsert(jdbc, """
+          INSERT INTO security_scan_finding
+            (scan_run_id, finding_key, finding_key_hash, advisory_id, aliases_json,
+             data_source, package_url, package_name, installed_version, fixed_versions_json,
+             severity, severity_source, cvss_vector, cvss_score, title, description,
+             primary_url, locations_json, source_status, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          """, ps -> {
+        ps.setLong(1, scanRunId);
+        ps.setString(2, finding.findingKey());
+        ps.setBytes(3, keyHash);
+        ps.setString(4, finding.advisoryId());
+        json.bindSerialized(ps, 5, json.writeValue(finding.aliases()));
+        ps.setString(6, finding.dataSource());
+        ps.setString(7, finding.packageUrl());
+        ps.setString(8, finding.packageName());
+        ps.setString(9, finding.installedVersion());
+        json.bindSerialized(ps, 10, json.writeValue(finding.fixedVersions()));
+        ps.setString(11, finding.severity().name());
+        ps.setString(12, finding.severitySource());
+        ps.setString(13, finding.cvssVector());
+        if (finding.cvssScore() == null) {
+          ps.setNull(14, java.sql.Types.NUMERIC);
+        } else {
+          ps.setDouble(14, finding.cvssScore());
+        }
+        ps.setString(15, truncate(finding.title(), 1024));
+        ps.setString(16, truncate(finding.description(), 65535));
+        ps.setString(17, safeUrl(finding.primaryUrl()));
+        json.bindSerialized(ps, 18, json.writeValue(finding.locations()));
+        ps.setString(19, finding.sourceStatus());
+        ps.setTimestamp(20, nullableTimestamp(finding.createdAt()));
+      });
+      if (row.isPresent()) inserted++;
+    }
+    return inserted;
+  }
+
+  @Override
+  public Optional<ScanFinding> findFinding(long findingId) {
+    return jdbc.query(
+        "SELECT * FROM security_scan_finding WHERE id = ?",
+        findingMapper,
+        findingId).stream().findFirst();
+  }
+
+  @Override
+  public Optional<ScanFinding> findFindingForUpdate(long findingId) {
+    return jdbc.query(
+        "SELECT * FROM security_scan_finding WHERE id = ? FOR UPDATE",
+        findingMapper,
+        findingId).stream().findFirst();
+  }
+
+  @Override
+  public List<ScanFinding> listFindings(
+      Long repositoryId, Long scanRunId, Severity severity, long afterId, int maxItems) {
+    return listFindings(repositoryId, scanRunId, severity, null, afterId, maxItems);
+  }
+
+  @Override
+  public List<ScanFinding> listFindings(
+      Long repositoryId,
+      Long scanRunId,
+      Severity severity,
+      String query,
+      long afterId,
+      int maxItems) {
+    return listFindings(
+        repositoryId, null, scanRunId, severity, query, afterId, maxItems);
+  }
+
+  @Override
+  public List<ScanFinding> listFindingsByRepositories(
+      List<Long> repositoryIds,
+      Long scanRunId,
+      Severity severity,
+      String query,
+      long afterId,
+      int maxItems) {
+    List<Long> ids = distinctLongs(repositoryIds);
+    if (ids.isEmpty()) return List.of();
+    return listFindings(null, ids, scanRunId, severity, query, afterId, maxItems);
+  }
+
+  private List<ScanFinding> listFindings(
+      Long repositoryId,
+      List<Long> repositoryIds,
+      Long scanRunId,
+      Severity severity,
+      String query,
+      long afterId,
+      int maxItems) {
+    StringBuilder sql = new StringBuilder();
+    List<Object> args = new ArrayList<>();
+    if (repositoryIds != null) {
+      sql.append(repositoryScopeCte());
+      args.add(repositoryScopeParameter(repositoryIds));
+    }
+    sql.append("""
+        SELECT f.*
+        FROM security_scan_finding f
+        WHERE f.id > ?
+        """);
+    args.add(Math.max(0, afterId));
+    if (repositoryId != null) {
+      sql.append("""
+           AND EXISTS (
+             SELECT 1 FROM security_scan_run_subject s
+             WHERE s.scan_run_id = f.scan_run_id AND s.repository_id = ?
+           )
+          """);
+      args.add(repositoryId);
+    } else if (repositoryIds != null) {
+      sql.append("""
+           AND EXISTS (
+             SELECT 1
+             FROM security_scan_run_subject s
+             JOIN visible_repository visible
+               ON visible.repository_id = s.repository_id
+             WHERE s.scan_run_id = f.scan_run_id
+           )
+          """);
+    }
+    if (scanRunId != null) {
+      sql.append(" AND f.scan_run_id = ?");
+      args.add(scanRunId);
+    }
+    if (severity != null) {
+      sql.append(" AND f.severity = ?");
+      args.add(severity.name());
+    }
+    String pattern = searchPattern(query);
+    if (pattern != null) {
+      sql.append("""
+           AND (
+             LOWER(f.advisory_id) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(f.package_url, '')) LIKE ? ESCAPE '!'
+             OR LOWER(f.package_name) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(f.installed_version, '')) LIKE ? ESCAPE '!'
+             OR LOWER(f.severity) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(f.data_source, '')) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(f.title, '')) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(f.source_status, '')) LIKE ? ESCAPE '!'
+          """);
+      addRepeated(args, pattern, 8);
+      sql.append("""
+             OR EXISTS (
+               SELECT 1
+               FROM security_scan_run_subject search_subject
+               JOIN repository search_repository
+                 ON search_repository.id = search_subject.repository_id
+          """);
+      if (repositoryIds != null) {
+        sql.append("""
+               JOIN visible_repository search_visible
+                 ON search_visible.repository_id = search_subject.repository_id
+          """);
+      }
+      sql.append("""
+               WHERE search_subject.scan_run_id = f.scan_run_id
+                 AND LOWER(search_repository.name) LIKE ? ESCAPE '!'
+          """);
+      args.add(pattern);
+      if (repositoryId != null) {
+        sql.append(" AND search_subject.repository_id = ?");
+        args.add(repositoryId);
+      }
+      sql.append(")");
+      Long numeric = numericSearch(query);
+      if (numeric != null) {
+        sql.append(" OR f.id = ? OR f.scan_run_id = ?");
+        args.add(numeric);
+        args.add(numeric);
+      }
+      sql.append(")");
+    }
+    sql.append(" ORDER BY f.id LIMIT ?");
+    args.add(safeLimit(maxItems));
+    return jdbc.query(sql.toString(), findingMapper, args.toArray());
+  }
+
+  @Override
+  public Optional<AssetSecurityState> findAssetState(long assetId, long profileId) {
+    return jdbc.query("""
+        SELECT * FROM asset_security_state WHERE asset_id = ? AND profile_id = ?
+        """, stateMapper, assetId, profileId).stream().findFirst();
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public Optional<AssetSecurityState> findAssetStateForUpdate(long assetId, long profileId) {
+    lockScanCandidate(assetId);
+    return jdbc.query("""
+        SELECT *
+        FROM asset_security_state
+        WHERE asset_id = ? AND profile_id = ?
+        FOR UPDATE
+        """, stateMapper, assetId, profileId).stream().findFirst();
+  }
+
+  @Override
+  public List<AssetSecurityState> listAssetStates(long assetId) {
+    return jdbc.query("""
+        SELECT * FROM asset_security_state
+        WHERE asset_id = ?
+        ORDER BY profile_id
+        """, stateMapper, assetId);
+  }
+
+  @Override
+  public List<AssetSecurityState> listAssetStatesNeedingSnapshot(
+      long profileId, long scannerSnapshotId, long afterAssetId, int maxItems) {
+    return jdbc.query("""
+        SELECT s.*
+        FROM asset_security_state s
+        JOIN asset a ON a.id = s.asset_id
+        JOIN repository source_repository ON source_repository.id = a.repository_id
+        JOIN security_scan_candidate candidate
+          ON candidate.asset_id = s.asset_id
+         AND candidate.content_generation = s.content_generation
+        LEFT JOIN security_scan_run run ON run.id = s.latest_scan_run_id
+        WHERE s.profile_id = ?
+          AND s.asset_id > ?
+          AND (
+            (
+              s.latest_scan_run_id IS NOT NULL
+              AND (run.scanner_snapshot_id IS NULL OR run.scanner_snapshot_id <> ?)
+            )
+            OR (
+              s.latest_scan_run_id IS NULL
+              AND s.scan_state = 'FAILED'
+              AND s.policy_reason_code = ?
+            )
+          )
+          AND EXISTS (
+            SELECT 1
+            FROM asset_security_policy_state policy_state
+            JOIN repository_security_scan_config config
+              ON config.repository_id = policy_state.repository_id
+             AND config.profile_id = policy_state.profile_id
+             AND config.enabled = TRUE
+            WHERE policy_state.asset_id = s.asset_id
+              AND policy_state.profile_id = s.profile_id
+              AND (
+                (source_repository.type = 'hosted' AND config.scan_hosted_content = TRUE)
+                OR (source_repository.type = 'proxy' AND config.scan_proxy_content = TRUE)
+              )
+          )
+        ORDER BY s.asset_id
+        LIMIT ?
+        """, stateMapper, profileId, Math.max(0, afterAssetId), scannerSnapshotId,
+        SCANNER_OBSERVATION_UNAVAILABLE, safeLimit(maxItems));
+  }
+
+  @Override
+  public boolean requeueCandidateAfterObservationFailure(
+      long assetId, long profileId, long expectedContentGeneration, Instant changedAt) {
+    Instant now = requiredNow(changedAt);
+    return jdbc.update("""
+        UPDATE security_scan_candidate
+        SET enqueued_generation = content_generation - 1,
+            changed_at = ?,
+            updated_at = ?
+        WHERE asset_id = ?
+          AND content_generation = ?
+          AND enqueued_generation >= content_generation
+          AND EXISTS (
+            SELECT 1
+            FROM asset_security_state state
+            WHERE state.asset_id = security_scan_candidate.asset_id
+              AND state.profile_id = ?
+              AND state.content_generation = security_scan_candidate.content_generation
+              AND state.latest_scan_run_id IS NULL
+              AND state.scan_state = 'FAILED'
+              AND state.policy_reason_code = ?
+          )
+        """,
+        nullableTimestamp(now),
+        nullableTimestamp(now),
+        assetId,
+        expectedContentGeneration,
+        profileId,
+        SCANNER_OBSERVATION_UNAVAILABLE) == 1;
+  }
+
+  @Override
+  @Transactional
+  public AssetSecurityState upsertAssetStateIfCurrent(AssetSecurityState state) {
+    lockScanCandidate(state.assetId());
+    int updated = updateAssetState(state);
+    if (updated == 0 && candidateGenerationMatches(state.assetId(), state.contentGeneration())) {
+      boolean inserted = JdbcInserts.tryUpdate(jdbc, """
+          INSERT INTO asset_security_state
+            (asset_id, profile_id, repository_id, content_generation, subject_identity_hash,
+             latest_scan_run_id, scan_state, scan_completeness, inventory_complete,
+             max_severity, finding_counts_json, policy_id, policy_revision,
+             policy_decision, policy_reason_code, stale_at, last_evaluated_at, version)
+          SELECT ?, ?, asset.repository_id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1
+          FROM asset
+          WHERE asset.id = ?
+          """, ps -> {
+        ps.setLong(1, state.assetId());
+        ps.setLong(2, state.profileId());
+        ps.setLong(3, state.contentGeneration());
+        ps.setBytes(4, state.subjectIdentityHash());
+        setNullableLong(ps, 5, state.latestScanRunId());
+        ps.setString(6, state.scanState().name());
+        ps.setString(7, state.scanCompleteness().name());
+        ps.setBoolean(8, state.inventoryComplete());
+        ps.setString(9, state.maxSeverity().name());
+        json.bindSerialized(ps, 10, json.writeValue(state.findingCounts()));
+        setNullableLong(ps, 11, state.policyId());
+        setNullableLong(ps, 12, state.policyRevision());
+        ps.setString(13, state.policyDecision().name());
+        ps.setString(14, state.policyReasonCode());
+        ps.setTimestamp(15, nullableTimestamp(state.staleAt()));
+        ps.setTimestamp(16, nullableTimestamp(state.lastEvaluatedAt()));
+        ps.setLong(17, state.assetId());
+      });
+      if (!inserted) {
+        updateAssetState(state);
+      }
+    }
+    return findAssetState(state.assetId(), state.profileId()).orElseThrow(
+        () -> new IllegalStateException("Asset content generation changed before scan finalization"));
+  }
+
+  private int updateAssetState(AssetSecurityState state) {
+    return jdbc.update("""
+        UPDATE asset_security_state s
+        SET content_generation = ?, subject_identity_hash = ?, latest_scan_run_id = ?,
+            scan_state = ?, scan_completeness = ?, inventory_complete = ?, max_severity = ?,
+            finding_counts_json = ?, policy_id = ?, policy_revision = ?, policy_decision = ?,
+            policy_reason_code = ?, stale_at = ?, last_evaluated_at = ?, version = version + 1
+        WHERE s.asset_id = ? AND s.profile_id = ?
+          AND s.content_generation <= ?
+          AND EXISTS (
+            SELECT 1 FROM security_scan_candidate c
+            WHERE c.asset_id = s.asset_id AND c.content_generation = ?
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM security_scan_run current_run
+            JOIN security_scan_run proposed_run ON proposed_run.id = ?
+            JOIN security_scanner_snapshot current_snapshot
+              ON current_snapshot.id = current_run.scanner_snapshot_id
+            JOIN security_scanner_snapshot proposed_snapshot
+              ON proposed_snapshot.id = proposed_run.scanner_snapshot_id
+            WHERE current_run.id = s.latest_scan_run_id
+              AND (
+                current_snapshot.vulnerability_database_updated_at
+                    > proposed_snapshot.vulnerability_database_updated_at
+                OR (
+                  current_snapshot.vulnerability_database_updated_at
+                      = proposed_snapshot.vulnerability_database_updated_at
+                  AND current_snapshot.id > proposed_snapshot.id
+                )
+              )
+          )
+        """,
+        state.contentGeneration(),
+        state.subjectIdentityHash(),
+        state.latestScanRunId(),
+        state.scanState().name(),
+        state.scanCompleteness().name(),
+        state.inventoryComplete(),
+        state.maxSeverity().name(),
+        json.serializedParameter(json.writeValue(state.findingCounts())),
+        state.policyId(),
+        state.policyRevision(),
+        state.policyDecision().name(),
+        state.policyReasonCode(),
+        nullableTimestamp(state.staleAt()),
+        nullableTimestamp(state.lastEvaluatedAt()),
+        state.assetId(),
+        state.profileId(),
+        state.contentGeneration(),
+        state.contentGeneration(),
+        state.latestScanRunId());
+  }
+
+  @Override
+  public Optional<AssetPolicyState> findAssetPolicyState(
+      long assetId, long profileId, long repositoryId) {
+    return jdbc.query("""
+        SELECT * FROM asset_security_policy_state
+        WHERE asset_id = ? AND profile_id = ? AND repository_id = ?
+        """, policyStateMapper, assetId, profileId, repositoryId).stream().findFirst();
+  }
+
+  @Override
+  @Transactional
+  public AssetPolicyState upsertAssetPolicyStateIfCurrent(AssetPolicyState state) {
+    if (!lockWaiverRevision(state.waiverRevision())) {
+      throw new IllegalStateException(
+          "Waiver revision changed before policy evaluation was materialized");
+    }
+    int updated = updateAssetPolicyState(state);
+    if (updated == 0 && candidateGenerationMatches(state.assetId(), state.contentGeneration())) {
+      boolean inserted = JdbcInserts.tryUpdate(jdbc, """
+          INSERT INTO asset_security_policy_state
+            (asset_id, profile_id, repository_id, content_generation, latest_scan_run_id,
+             policy_id, policy_revision, config_revision, waiver_revision, policy_decision,
+             policy_reason_code, waived_findings, stale_at, next_waiver_expiry,
+             last_evaluated_at, version)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+          """, ps -> {
+        ps.setLong(1, state.assetId());
+        ps.setLong(2, state.profileId());
+        ps.setLong(3, state.repositoryId());
+        ps.setLong(4, state.contentGeneration());
+        setNullableLong(ps, 5, state.latestScanRunId());
+        setNullableLong(ps, 6, state.policyId());
+        setNullableLong(ps, 7, state.policyRevision());
+        ps.setLong(8, state.configRevision());
+        ps.setLong(9, state.waiverRevision());
+        ps.setString(10, state.policyDecision().name());
+        ps.setString(11, state.policyReasonCode());
+        ps.setInt(12, Math.max(0, state.waivedFindings()));
+        ps.setTimestamp(13, nullableTimestamp(state.staleAt()));
+        ps.setTimestamp(14, nullableTimestamp(state.nextWaiverExpiry()));
+        ps.setTimestamp(15, nullableTimestamp(state.lastEvaluatedAt()));
+      });
+      if (!inserted) updateAssetPolicyState(state);
+    }
+    return findAssetPolicyState(state.assetId(), state.profileId(), state.repositoryId())
+        .orElseThrow(() ->
+            new IllegalStateException("Asset content generation changed before policy evaluation"));
+  }
+
+  private int updateAssetPolicyState(AssetPolicyState state) {
+    return jdbc.update("""
+        UPDATE asset_security_policy_state s
+        SET content_generation = ?, latest_scan_run_id = ?, policy_id = ?,
+            policy_revision = ?, config_revision = ?, waiver_revision = ?,
+            policy_decision = ?, policy_reason_code = ?, waived_findings = ?,
+            stale_at = ?, next_waiver_expiry = ?, last_evaluated_at = ?,
+            version = version + 1
+        WHERE s.asset_id = ? AND s.profile_id = ? AND s.repository_id = ?
+          AND EXISTS (
+            SELECT 1 FROM security_scan_candidate c
+            WHERE c.asset_id = s.asset_id AND c.content_generation = ?
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM security_scan_run current_run
+            JOIN security_scan_run proposed_run ON proposed_run.id = ?
+            JOIN security_scanner_snapshot current_snapshot
+              ON current_snapshot.id = current_run.scanner_snapshot_id
+            JOIN security_scanner_snapshot proposed_snapshot
+              ON proposed_snapshot.id = proposed_run.scanner_snapshot_id
+            WHERE current_run.id = s.latest_scan_run_id
+              AND (
+                current_snapshot.vulnerability_database_updated_at
+                    > proposed_snapshot.vulnerability_database_updated_at
+                OR (
+                  current_snapshot.vulnerability_database_updated_at
+                      = proposed_snapshot.vulnerability_database_updated_at
+                  AND current_snapshot.id > proposed_snapshot.id
+                )
+              )
+          )
+        """,
+        state.contentGeneration(),
+        state.latestScanRunId(),
+        state.policyId(),
+        state.policyRevision(),
+        state.configRevision(),
+        state.waiverRevision(),
+        state.policyDecision().name(),
+        state.policyReasonCode(),
+        Math.max(0, state.waivedFindings()),
+        nullableTimestamp(state.staleAt()),
+        nullableTimestamp(state.nextWaiverExpiry()),
+        nullableTimestamp(state.lastEvaluatedAt()),
+        state.assetId(),
+        state.profileId(),
+        state.repositoryId(),
+        state.contentGeneration(),
+        state.latestScanRunId());
+  }
+
+  private boolean lockWaiverRevision(long expectedRevision) {
+    ensureWaiverRevisionRow();
+    Long current = jdbc.queryForObject("""
+        SELECT current_revision
+        FROM security_scan_waiver_revision
+        WHERE singleton_id = 1
+        FOR SHARE
+        """, Long.class);
+    return current != null && current == expectedRevision;
+  }
+
+  @Override
+  public List<PolicyEvaluationTarget> listPolicyEvaluationTargets(
+      long sourceRepositoryId,
+      long contextRepositoryId,
+      long profileId,
+      long configRevision,
+      Long policyId,
+      Long policyRevision,
+      long afterAssetId,
+      Instant evaluatedAt,
+      int maxItems) {
+    StringBuilder sql = new StringBuilder("""
+        SELECT a.id AS asset_id,
+               a.repository_id AS source_repository_id,
+               COALESCE(c.content_generation, 0) AS content_generation,
+               s.content_generation AS state_content_generation,
+               s.latest_scan_run_id,
+               s.scan_state,
+               COALESCE(ps.version, 0) AS policy_state_version,
+               ps.stale_at,
+               ps.next_waiver_expiry,
+               waiver_revision.current_revision AS waiver_revision
+        FROM asset a
+        JOIN security_scan_waiver_revision waiver_revision
+          ON waiver_revision.singleton_id = 1
+        LEFT JOIN security_scan_candidate c ON c.asset_id = a.id
+        LEFT JOIN asset_security_state s
+          ON s.asset_id = a.id AND s.profile_id = ?
+        LEFT JOIN asset_security_policy_state ps
+          ON ps.asset_id = a.id
+         AND ps.profile_id = ?
+         AND ps.repository_id = ?
+        WHERE a.repository_id = ?
+          AND a.id > ?
+          AND (
+            c.asset_id IS NULL
+            OR s.asset_id IS NULL
+            OR s.content_generation <> c.content_generation
+            OR (
+              s.scan_state IN ('PARTIAL', 'COMPLETE')
+              AND (
+                ps.asset_id IS NULL
+                OR ps.content_generation <> c.content_generation
+                OR ps.latest_scan_run_id IS NULL
+                OR ps.latest_scan_run_id <> s.latest_scan_run_id
+                OR ps.config_revision <> ?
+                OR ps.waiver_revision < waiver_revision.global_invalidation_revision
+                OR (ps.stale_at IS NOT NULL AND ps.stale_at <= ?)
+        """);
+    List<Object> args = new ArrayList<>();
+    args.add(profileId);
+    args.add(profileId);
+    args.add(contextRepositoryId);
+    args.add(sourceRepositoryId);
+    args.add(Math.max(0, afterAssetId));
+    args.add(configRevision);
+    args.add(nullableTimestamp(requiredNow(evaluatedAt)));
+    if (policyId == null) {
+      sql.append("""
+                OR ps.policy_id IS NOT NULL
+                OR ps.policy_revision IS NOT NULL
+          """);
+    } else {
+      sql.append("""
+                OR ps.policy_id IS NULL
+                OR ps.policy_id <> ?
+                OR ps.policy_revision IS NULL
+                OR ps.policy_revision <> ?
+          """);
+      args.add(policyId);
+      args.add(policyRevision == null ? 0 : policyRevision);
+    }
+    sql.append("""
+                OR (ps.next_waiver_expiry IS NOT NULL AND ps.next_waiver_expiry <= ?)
+              )
+            )
+          )
+        ORDER BY a.id
+        LIMIT ?
+        """);
+    args.add(nullableTimestamp(requiredNow(evaluatedAt)));
+    args.add(safeLimit(maxItems));
+    return jdbc.query(sql.toString(), (rs, rowNum) -> new PolicyEvaluationTarget(
+        rs.getLong("asset_id"),
+        rs.getLong("source_repository_id"),
+        rs.getLong("content_generation"),
+        nullableLong(rs, "state_content_generation"),
+        nullableLong(rs, "latest_scan_run_id"),
+        rs.getString("scan_state") == null
+            ? null : enumValue(ScanState.class, rs.getString("scan_state")),
+        rs.getLong("policy_state_version"),
+        nullableInstant(rs, "stale_at"),
+        nullableInstant(rs, "next_waiver_expiry"),
+        rs.getLong("waiver_revision")), args.toArray());
+  }
+
+  private boolean candidateGenerationMatches(long assetId, long generation) {
+    Long count = jdbc.queryForObject("""
+        SELECT COUNT(*) FROM security_scan_candidate
+        WHERE asset_id = ? AND content_generation = ?
+        """, Long.class, assetId, generation);
+    return count != null && count == 1;
+  }
+
+  /**
+   * Serializes final publication for one asset across replicas.
+   *
+   * <p>The candidate is the durable content-generation authority and exists before any scan state.
+   * Taking its row lock also makes the subsequent scanner-snapshot fence observe the winner of a
+   * concurrent publication on PostgreSQL, whose statement snapshot alone is not sufficient after
+   * waiting for another updater.
+   */
+  private void lockScanCandidate(long assetId) {
+    jdbc.queryForList("""
+        SELECT asset_id
+        FROM security_scan_candidate
+        WHERE asset_id = ?
+        FOR UPDATE
+        """, Long.class, assetId);
+  }
+
+  @Override
+  public boolean markAssetStateStale(
+      long assetId,
+      long profileId,
+      long expectedScanRunId,
+      Instant staleAt) {
+    return jdbc.update("""
+        UPDATE asset_security_state
+        SET scan_state = 'STALE', stale_at = ?, version = version + 1
+        WHERE asset_id = ? AND profile_id = ? AND latest_scan_run_id = ?
+        """, nullableTimestamp(staleAt), assetId, profileId, expectedScanRunId) == 1;
+  }
+
+  @Override
+  public int markStatesStaleForSnapshot(long profileId, Instant staleAt, int maxItems) {
+    List<Long> assetIds = jdbc.queryForList("""
+        SELECT asset_id FROM asset_security_state
+        WHERE profile_id = ? AND scan_state <> 'STALE'
+        ORDER BY asset_id
+        LIMIT ?
+        """, Long.class, profileId, safeLimit(maxItems));
+    int changed = 0;
+    for (Long assetId : assetIds) {
+      changed += jdbc.update("""
+          UPDATE asset_security_state
+          SET scan_state = 'STALE', stale_at = ?, version = version + 1
+          WHERE asset_id = ? AND profile_id = ? AND scan_state <> 'STALE'
+          """, nullableTimestamp(staleAt), assetId, profileId);
+    }
+    return changed;
+  }
+
+  @Override
+  public List<ScanPolicy> listPolicies() {
+    return jdbc.query(
+        "SELECT * FROM security_scan_policy ORDER BY name, revision DESC, id DESC",
+        policyMapper);
+  }
+
+  @Override
+  public List<ScanPolicy> listPolicies(String query, long afterId, int maxItems) {
+    StringBuilder sql = new StringBuilder(
+        "SELECT * FROM security_scan_policy WHERE id > ?");
+    List<Object> args = new ArrayList<>();
+    args.add(Math.max(0, afterId));
+    String pattern = searchPattern(query);
+    if (pattern != null) {
+      sql.append("""
+           AND (
+             LOWER(name) LIKE ? ESCAPE '!'
+             OR LOWER(block_severity) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(created_by, '')) LIKE ? ESCAPE '!'
+          """);
+      addRepeated(args, pattern, 3);
+      Long numeric = numericSearch(query);
+      if (numeric != null) {
+        sql.append(" OR id = ? OR revision = ?");
+        args.add(numeric);
+        args.add(numeric);
+      }
+      sql.append(")");
+    }
+    sql.append(" ORDER BY id LIMIT ?");
+    args.add(safeLimit(maxItems));
+    return jdbc.query(sql.toString(), policyMapper, args.toArray());
+  }
+
+  @Override
+  public Optional<ScanPolicy> findPolicy(long policyId) {
+    return jdbc.query(
+        "SELECT * FROM security_scan_policy WHERE id = ?",
+        policyMapper,
+        policyId).stream().findFirst();
+  }
+
+  @Override
+  public ScanPolicy createPolicy(ScanPolicy policy) {
+    return findPolicy(insertPolicy(policy)).orElseThrow();
+  }
+
+  @Override
+  public Optional<ScanPolicy> createPolicyIfAbsent(ScanPolicy policy) {
+    OptionalLong inserted = tryInsertPolicy(policy);
+    return inserted.isPresent()
+        ? findPolicy(inserted.getAsLong())
+        : Optional.empty();
+  }
+
+  private long insertPolicy(ScanPolicy policy) {
+    return JdbcInserts.insert(jdbc, policyInsertSql(), ps -> bindPolicy(ps, policy));
+  }
+
+  private OptionalLong tryInsertPolicy(ScanPolicy policy) {
+    return JdbcInserts.tryInsert(jdbc, policyInsertSql(), ps -> bindPolicy(ps, policy));
+  }
+
+  private static String policyInsertSql() {
+    return """
+        INSERT INTO security_scan_policy
+          (name, name_normalized, enabled, block_severity, only_fixable,
+           block_unknown_severity,
+           require_complete_inventory, max_result_age_seconds, required_platforms_json,
+           revision, created_by, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """;
+  }
+
+  private void bindPolicy(PreparedStatement ps, ScanPolicy policy) throws SQLException {
+    ps.setString(1, policy.name());
+    ps.setString(2, normalizedPolicyName(policy.name()));
+    ps.setBoolean(3, policy.enabled());
+    ps.setString(4, policy.blockSeverity().name());
+    ps.setBoolean(5, policy.onlyFixable());
+    ps.setBoolean(6, policy.blockUnknownSeverity());
+    ps.setBoolean(7, policy.requireCompleteInventory());
+    setNullableLong(ps, 8, policy.maxResultAgeSeconds());
+    json.bindSerialized(ps, 9, json.writeValue(policy.requiredPlatforms()));
+    ps.setLong(10, Math.max(1, policy.revision()));
+    ps.setString(11, policy.createdBy());
+    ps.setTimestamp(12, nullableTimestamp(policy.createdAt()));
+    ps.setTimestamp(13, nullableTimestamp(policy.updatedAt()));
+  }
+
+  @Override
+  @Transactional
+  public Optional<ScanPolicy> createNextPolicyRevision(
+      long expectedHeadPolicyId, ScanPolicy policy) {
+    String normalizedName = normalizedPolicyName(policy.name());
+    jdbc.query("""
+        SELECT id
+        FROM security_scan_policy
+        WHERE name_normalized = ?
+        ORDER BY id
+        LIMIT 1
+        FOR UPDATE
+        """, (rs, rowNum) -> rs.getLong("id"), normalizedName)
+        .stream()
+        .findFirst()
+        .orElseThrow(() ->
+            new IllegalStateException("Security scan policy root no longer exists"));
+    PolicyHead head = jdbc.query("""
+        SELECT id, revision
+        FROM security_scan_policy
+        WHERE name_normalized = ?
+        ORDER BY revision DESC, id DESC
+        LIMIT 1
+        FOR UPDATE
+        """, (rs, rowNum) -> new PolicyHead(
+            rs.getLong("id"), rs.getLong("revision")), normalizedName)
+        .stream()
+        .findFirst()
+        .orElseThrow(() ->
+            new IllegalStateException("Security scan policy head no longer exists"));
+    if (head.id() != expectedHeadPolicyId) {
+      return Optional.empty();
+    }
+    long revision = Math.addExact(head.revision(), 1);
+    return Optional.of(createPolicy(new ScanPolicy(
+        null,
+        policy.name(),
+        policy.enabled(),
+        policy.blockSeverity(),
+        policy.onlyFixable(),
+        policy.blockUnknownSeverity(),
+        policy.requireCompleteInventory(),
+        policy.maxResultAgeSeconds(),
+        policy.requiredPlatforms(),
+        revision,
+        policy.createdBy(),
+        policy.createdAt(),
+        policy.updatedAt())));
+  }
+
+  private static String normalizedPolicyName(String name) {
+    if (name == null || name.isBlank()) {
+      throw new IllegalArgumentException("Security scan policy name is required");
+    }
+    return name.trim().toLowerCase(java.util.Locale.ROOT);
+  }
+
+  private record PolicyHead(long id, long revision) {}
+
+  @Override
+  public int replaceRepositoryPolicy(
+      long currentPolicyId, long replacementPolicyId, Instant updatedAt) {
+    return jdbc.update("""
+        UPDATE repository_security_scan_config
+        SET policy_id = ?, config_revision = config_revision + 1, updated_at = ?
+        WHERE policy_id = ?
+        """,
+        replacementPolicyId,
+        nullableTimestamp(requiredNow(updatedAt)),
+        currentPolicyId);
+  }
+
+  @Override
+  public ScanWaiver createWaiver(ScanWaiver waiver) {
+    long id = JdbcInserts.insert(jdbc, """
+        INSERT INTO security_scan_waiver
+          (scope_type, repository_id, asset_id, finding_id, advisory_selector,
+           package_selector, selector_json, reason, policy_id, policy_revision,
+           created_by, approved_by, expires_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, ps -> {
+      ps.setString(1, waiver.scopeType());
+      setNullableLong(ps, 2, waiver.repositoryId());
+      setNullableLong(ps, 3, waiver.assetId());
+      setNullableLong(ps, 4, waiver.findingId());
+      ps.setString(
+          5,
+          requireMaxLength(
+              waiver.advisorySelector(),
+              SecurityScanDao.MAX_WAIVER_ADVISORY_SELECTOR_LENGTH,
+              "advisory selector"));
+      ps.setString(
+          6,
+          requireMaxLength(
+              waiver.packageSelector(),
+              SecurityScanDao.MAX_WAIVER_PACKAGE_SELECTOR_LENGTH,
+              "package selector"));
+      json.bind(ps, 7, waiver.selector());
+      ps.setString(
+          8,
+          requireMaxLength(
+              waiver.reason(), SecurityScanDao.MAX_WAIVER_REASON_LENGTH, "waiver reason"));
+      setNullableLong(ps, 9, waiver.policyId());
+      setNullableLong(ps, 10, waiver.policyRevision());
+      ps.setString(11, waiver.createdBy());
+      ps.setString(12, waiver.approvedBy());
+      ps.setTimestamp(13, nullableTimestamp(waiver.expiresAt()));
+      ps.setTimestamp(14, nullableTimestamp(waiver.createdAt()));
+      ps.setTimestamp(15, nullableTimestamp(waiver.updatedAt()));
+    });
+    return jdbc.query(
+        "SELECT * FROM security_scan_waiver WHERE id = ?",
+        waiverMapper,
+        id).stream().findFirst().orElseThrow();
+  }
+
+  @Override
+  public Optional<ScanWaiver> findWaiver(long waiverId) {
+    return jdbc.query(
+        "SELECT * FROM security_scan_waiver WHERE id = ?",
+        waiverMapper,
+        waiverId).stream().findFirst();
+  }
+
+  @Override
+  @Transactional
+  public int invalidatePolicyStatesForWaiver(ScanWaiver waiver) {
+    ensureWaiverRevisionRow();
+    boolean globalScope = waiver.repositoryId() == null && waiver.assetId() == null;
+    jdbc.update("""
+        UPDATE security_scan_waiver_revision
+        SET global_invalidation_revision =
+              CASE WHEN ? THEN current_revision + 1 ELSE global_invalidation_revision END,
+            current_revision = current_revision + 1,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE singleton_id = 1
+        """, globalScope);
+    if (globalScope) return 0;
+
+    StringBuilder sql = new StringBuilder(
+        "DELETE FROM asset_security_policy_state WHERE 1 = 1");
+    List<Object> args = new ArrayList<>();
+    if (waiver.assetId() != null) {
+      sql.append(" AND asset_id = ?");
+      args.add(waiver.assetId());
+    }
+    if (waiver.repositoryId() != null) {
+      sql.append(" AND repository_id = ?");
+      args.add(waiver.repositoryId());
+    }
+    if (waiver.policyId() != null) {
+      sql.append(" AND policy_id = ?");
+      args.add(waiver.policyId());
+    }
+    if (waiver.policyRevision() != null) {
+      sql.append(" AND policy_revision = ?");
+      args.add(waiver.policyRevision());
+    }
+    return jdbc.update(sql.toString(), args.toArray());
+  }
+
+  @Override
+  public WaiverRevision waiverRevision() {
+    ensureWaiverRevisionRow();
+    return jdbc.query("""
+        SELECT current_revision, global_invalidation_revision
+        FROM security_scan_waiver_revision
+        WHERE singleton_id = 1
+        """, (rs, rowNum) -> new WaiverRevision(
+            rs.getLong("current_revision"),
+            rs.getLong("global_invalidation_revision"))).stream().findFirst().orElseThrow();
+  }
+
+  private void ensureWaiverRevisionRow() {
+    JdbcInserts.tryUpdate(jdbc, """
+        INSERT INTO security_scan_waiver_revision
+          (singleton_id, current_revision, global_invalidation_revision, updated_at)
+        VALUES (1, 0, 0, CURRENT_TIMESTAMP)
+        """, statement -> {});
+  }
+
+  @Override
+  public List<ScanWaiver> listWaivers(Long repositoryId, long afterId, int maxItems) {
+    return listWaivers(repositoryId, null, afterId, maxItems);
+  }
+
+  @Override
+  public List<ScanWaiver> listWaivers(
+      Long repositoryId, String query, long afterId, int maxItems) {
+    StringBuilder sql = new StringBuilder("""
+        SELECT w.*
+        FROM security_scan_waiver w
+        LEFT JOIN asset a ON a.id = w.asset_id
+        LEFT JOIN repository r ON r.id = COALESCE(w.repository_id, a.repository_id)
+        LEFT JOIN security_scan_finding f ON f.id = w.finding_id
+        WHERE w.id > ?
+        """);
+    List<Object> args = new ArrayList<>();
+    args.add(Math.max(0, afterId));
+    if (repositoryId != null) {
+      sql.append("""
+           AND (
+             w.repository_id = ?
+             OR (w.repository_id IS NULL AND (w.asset_id IS NULL OR a.repository_id = ?))
+           )
+          """);
+      args.add(repositoryId);
+      args.add(repositoryId);
+    }
+    String pattern = searchPattern(query);
+    if (pattern != null) {
+      sql.append("""
+           AND (
+             LOWER(w.scope_type) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(r.name, '')) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(a.path, '')) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(f.advisory_id, '')) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(w.advisory_selector, '')) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(w.package_selector, '')) LIKE ? ESCAPE '!'
+             OR LOWER(w.reason) LIKE ? ESCAPE '!'
+             OR LOWER(w.created_by) LIKE ? ESCAPE '!'
+             OR LOWER(COALESCE(w.approved_by, '')) LIKE ? ESCAPE '!'
+          """);
+      addRepeated(args, pattern, 9);
+      Long numeric = numericSearch(query);
+      if (numeric != null) {
+        sql.append("""
+             OR w.id = ?
+             OR w.repository_id = ?
+             OR w.asset_id = ?
+             OR w.finding_id = ?
+            """);
+        addRepeated(args, numeric, 4);
+      }
+      sql.append(")");
+    }
+    sql.append(" ORDER BY w.id LIMIT ?");
+    args.add(safeLimit(maxItems));
+    return jdbc.query(sql.toString(), waiverMapper, args.toArray());
+  }
+
+  @Override
+  public List<ScanWaiver> listActiveWaivers(
+      long repositoryId,
+      Long assetId,
+      Instant evaluatedAt,
+      long afterId,
+      int maxItems) {
+    if (assetId != null) {
+      return jdbc.query("""
+          SELECT applicable.*
+          FROM (
+            SELECT *
+            FROM security_scan_waiver
+            WHERE repository_id IS NULL AND asset_id IS NULL
+              AND (expires_at IS NULL OR expires_at > ?) AND id > ?
+            UNION ALL
+            SELECT *
+            FROM security_scan_waiver
+            WHERE repository_id = ? AND asset_id IS NULL
+              AND (expires_at IS NULL OR expires_at > ?) AND id > ?
+            UNION ALL
+            SELECT *
+            FROM security_scan_waiver
+            WHERE repository_id IS NULL AND asset_id = ?
+              AND (expires_at IS NULL OR expires_at > ?) AND id > ?
+            UNION ALL
+            SELECT *
+            FROM security_scan_waiver
+            WHERE repository_id = ? AND asset_id = ?
+              AND (expires_at IS NULL OR expires_at > ?) AND id > ?
+          ) applicable
+          ORDER BY id
+          LIMIT ?
+          """,
+          waiverMapper,
+          nullableTimestamp(evaluatedAt),
+          Math.max(0, afterId),
+          repositoryId,
+          nullableTimestamp(evaluatedAt),
+          Math.max(0, afterId),
+          assetId,
+          nullableTimestamp(evaluatedAt),
+          Math.max(0, afterId),
+          repositoryId,
+          assetId,
+          nullableTimestamp(evaluatedAt),
+          Math.max(0, afterId),
+          safeLimit(maxItems));
+    }
+    return jdbc.query("""
+        SELECT *
+        FROM security_scan_waiver
+        WHERE (repository_id IS NULL OR repository_id = ?)
+          AND (asset_id IS NULL OR asset_id = ?)
+          AND (expires_at IS NULL OR expires_at > ?)
+          AND id > ?
+        ORDER BY id
+        LIMIT ?
+        """,
+        waiverMapper,
+        repositoryId,
+        assetId,
+        nullableTimestamp(evaluatedAt),
+        Math.max(0, afterId),
+        safeLimit(maxItems));
+  }
+
+  @Override
+  public List<ScanWaiver> listWaiversForFindings(
+      List<Long> findingIds,
+      List<Long> scanRunIds,
+      List<String> advisorySelectors,
+      List<String> packageSelectors,
+      long afterId,
+      int maxItems) {
+    List<Long> findings = distinctLongs(findingIds);
+    List<Long> runs = distinctLongs(scanRunIds);
+    if (findings.isEmpty() || runs.isEmpty()) return List.of();
+    List<String> advisories = distinctStrings(advisorySelectors, true);
+    List<String> packages = distinctStrings(packageSelectors, false);
+    List<Object> args = new ArrayList<>();
+    StringBuilder sql = new StringBuilder("""
+        SELECT w.*
+        FROM security_scan_waiver w
+        WHERE w.approved_by IS NOT NULL
+          AND w.approved_by <> ''
+          AND w.id > ?
+          AND EXISTS (
+            SELECT 1
+            FROM security_scan_run_subject s
+            WHERE s.scan_run_id IN (
+        """);
+    args.add(Math.max(0, afterId));
+    appendIn(sql, args, runs);
+    sql.append("""
+            )
+              AND (w.repository_id IS NULL OR w.repository_id = s.repository_id)
+              AND (w.asset_id IS NULL OR w.asset_id = s.asset_id)
+          )
+          AND (
+            w.finding_id IN (
+        """);
+    appendIn(sql, args, findings);
+    sql.append("""
+            )
+            OR (
+              w.finding_id IS NULL
+              AND
+        """);
+    if (advisories.isEmpty()) {
+      sql.append(" NULLIF(w.advisory_selector, '') IS NULL");
+    } else {
+      sql.append(
+          " (NULLIF(w.advisory_selector, '') IS NULL OR LOWER(w.advisory_selector) IN (");
+      appendIn(sql, args, advisories);
+      sql.append("))");
+    }
+    sql.append(" AND");
+    if (packages.isEmpty()) {
+      sql.append(" NULLIF(w.package_selector, '') IS NULL");
+    } else {
+      sql.append(" (NULLIF(w.package_selector, '') IS NULL OR w.package_selector IN (");
+      appendIn(sql, args, packages);
+      sql.append("))");
+    }
+    sql.append("""
+              AND (
+                NULLIF(w.advisory_selector, '') IS NOT NULL
+                OR NULLIF(w.package_selector, '') IS NOT NULL
+              )
+            )
+          )
+        ORDER BY w.id
+        LIMIT ?
+        """);
+    args.add(safeLimit(maxItems));
+    return jdbc.query(sql.toString(), waiverMapper, args.toArray());
+  }
+
+  @Override
+  public boolean deleteWaiver(long waiverId) {
+    return jdbc.update("DELETE FROM security_scan_waiver WHERE id = ?", waiverId) == 1;
+  }
+
+  @Override
+  public BackfillJob createBackfillJob(long repositoryId, String createdBy, Instant now) {
+    long id = JdbcInserts.insert(jdbc, """
+        INSERT INTO security_scan_backfill_job
+          (repository_id, status, cursor_asset_id, scanned_assets, marked_assets, attempts,
+           created_by, created_at, updated_at)
+        VALUES (?, 'PENDING', 0, 0, 0, 0, ?, ?, ?)
+        """, ps -> {
+      ps.setLong(1, repositoryId);
+      ps.setString(2, createdBy);
+      ps.setTimestamp(3, nullableTimestamp(now));
+      ps.setTimestamp(4, nullableTimestamp(now));
+    });
+    return findBackfill(id).orElseThrow();
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public List<BackfillJob> claimBackfillJobs(
+      String workerId, Instant now, Instant leaseUntil, int maxItems) {
+    List<Long> ids = jdbc.queryForList("""
+        SELECT id
+        FROM security_scan_backfill_job
+        WHERE (status = 'PENDING' AND (next_attempt_at IS NULL OR next_attempt_at <= ?))
+           OR (status = 'RUNNING' AND lease_until < ?)
+        ORDER BY created_at, id
+        LIMIT ?
+        FOR UPDATE SKIP LOCKED
+        """,
+        Long.class,
+        nullableTimestamp(now),
+        nullableTimestamp(now),
+        safeLimit(maxItems));
+    List<BackfillJob> jobs = new ArrayList<>();
+    for (Long id : ids) {
+      String token = UUID.randomUUID().toString();
+      jdbc.update("""
+          UPDATE security_scan_backfill_job
+          SET status = 'RUNNING', attempts = attempts + 1, claimed_by = ?, lease_token = ?,
+              lease_until = ?, next_attempt_at = NULL, updated_at = ?
+          WHERE id = ?
+          """, workerId, token, nullableTimestamp(leaseUntil), nullableTimestamp(now), id);
+      jobs.add(findBackfill(id).orElseThrow());
+    }
+    return List.copyOf(jobs);
+  }
+
+  private Optional<BackfillJob> findBackfill(long id) {
+    return jdbc.query(
+        "SELECT * FROM security_scan_backfill_job WHERE id = ?",
+        backfillMapper,
+        id).stream().findFirst();
+  }
+
+  @Override
+  public boolean updateBackfillProgress(
+      long jobId,
+      String leaseToken,
+      long cursorAssetId,
+      long scannedAssets,
+      long markedAssets,
+      BackfillStatus status,
+      String errorSummary,
+      Instant leaseUntil,
+      Instant updatedAt) {
+    boolean terminal = status == BackfillStatus.SUCCEEDED
+        || status == BackfillStatus.FAILED
+        || status == BackfillStatus.CANCELLED;
+    boolean retainLease = status == BackfillStatus.RUNNING;
+    if (retainLease && (leaseUntil == null || !leaseUntil.isAfter(updatedAt))) {
+      throw new IllegalArgumentException("leaseUntil must be after updatedAt while running");
+    }
+    if (retainLease) {
+      return jdbc.update("""
+          UPDATE security_scan_backfill_job
+          SET cursor_asset_id = ?, scanned_assets = ?, marked_assets = ?, status = ?,
+              last_error_summary = ?, lease_until = ?, next_attempt_at = NULL,
+              completed_at = NULL, updated_at = ?
+          WHERE id = ? AND status = 'RUNNING' AND lease_token = ?
+          """,
+          cursorAssetId,
+          scannedAssets,
+          markedAssets,
+          status.name(),
+          truncate(errorSummary, 2048),
+          nullableTimestamp(leaseUntil),
+          nullableTimestamp(updatedAt),
+          jobId,
+          leaseToken) == 1;
+    }
+    return jdbc.update("""
+        UPDATE security_scan_backfill_job
+        SET cursor_asset_id = ?, scanned_assets = ?, marked_assets = ?, status = ?,
+            last_error_summary = ?, claimed_by = NULL, lease_token = NULL, lease_until = NULL,
+            next_attempt_at = NULL, completed_at = ?, updated_at = ?
+        WHERE id = ? AND status = 'RUNNING' AND lease_token = ?
+        """,
+        cursorAssetId,
+        scannedAssets,
+        markedAssets,
+        status.name(),
+        truncate(errorSummary, 2048),
+        terminal ? nullableTimestamp(updatedAt) : null,
+        nullableTimestamp(updatedAt),
+        jobId,
+        leaseToken) == 1;
+  }
+
+  @Override
+  public boolean requeueBackfill(
+      long jobId,
+      String leaseToken,
+      long cursorAssetId,
+      long scannedAssets,
+      long markedAssets,
+      String errorSummary,
+      Instant nextAttemptAt,
+      Instant updatedAt) {
+    if (nextAttemptAt == null || !nextAttemptAt.isAfter(updatedAt)) {
+      throw new IllegalArgumentException("nextAttemptAt must be after updatedAt");
+    }
+    return jdbc.update("""
+        UPDATE security_scan_backfill_job
+        SET cursor_asset_id = ?, scanned_assets = ?, marked_assets = ?, status = 'PENDING',
+            last_error_summary = ?, claimed_by = NULL, lease_token = NULL, lease_until = NULL,
+            next_attempt_at = ?, completed_at = NULL, updated_at = ?
+        WHERE id = ? AND status = 'RUNNING' AND lease_token = ?
+        """,
+        cursorAssetId,
+        scannedAssets,
+        markedAssets,
+        truncate(errorSummary, 2048),
+        nullableTimestamp(nextAttemptAt),
+        nullableTimestamp(updatedAt),
+        jobId,
+        leaseToken) == 1;
+  }
+
+  @Override
+  @Transactional
+  public RetentionResult cleanupRetainedData(
+      Instant terminalTaskCutoff, Instant resultCutoff, int maxItems) {
+    int limit = safeLimit(maxItems);
+    int tasks = deleteTerminalTasks(terminalTaskCutoff, limit);
+    int backfills = deleteTerminalBackfills(terminalTaskCutoff, limit);
+    int subjects = deleteHistoricalRunSubjects(resultCutoff, limit);
+    int runs = deleteUnreferencedRuns(resultCutoff, limit);
+    int sboms = deleteUnreferencedSboms(resultCutoff, limit);
+    int snapshots = deleteUnreferencedSnapshots(resultCutoff, limit);
+    return new RetentionResult(tasks, backfills, subjects, runs, sboms, snapshots);
+  }
+
+  private int deleteTerminalTasks(Instant cutoff, int limit) {
+    List<Long> ids = jdbc.queryForList("""
+        SELECT id
+        FROM security_scan_task
+        WHERE status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
+          AND finished_at < ?
+        ORDER BY finished_at, id
+        LIMIT ?
+        FOR UPDATE SKIP LOCKED
+        """, Long.class, nullableTimestamp(cutoff), limit);
+    int deleted = 0;
+    for (Long id : ids) {
+      deleted += jdbc.update("""
+          DELETE FROM security_scan_task
+          WHERE id = ?
+            AND status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
+            AND finished_at < ?
+          """, id, nullableTimestamp(cutoff));
+    }
+    return deleted;
+  }
+
+  private int deleteTerminalBackfills(Instant cutoff, int limit) {
+    List<Long> ids = jdbc.queryForList("""
+        SELECT id
+        FROM security_scan_backfill_job
+        WHERE status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
+          AND completed_at < ?
+        ORDER BY completed_at, id
+        LIMIT ?
+        FOR UPDATE SKIP LOCKED
+        """, Long.class, nullableTimestamp(cutoff), limit);
+    int deleted = 0;
+    for (Long id : ids) {
+      deleted += jdbc.update("""
+          DELETE FROM security_scan_backfill_job
+          WHERE id = ?
+            AND status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
+            AND completed_at < ?
+          """, id, nullableTimestamp(cutoff));
+    }
+    return deleted;
+  }
+
+  private int deleteHistoricalRunSubjects(Instant cutoff, int limit) {
+    List<Map<String, Object>> rows = jdbc.queryForList("""
+        SELECT subject.scan_run_id, subject.repository_id, subject.asset_id,
+               subject.profile_id, subject.content_generation
+        FROM security_scan_run_subject subject
+        JOIN security_scan_run run ON run.id = subject.scan_run_id
+        WHERE subject.associated_at < ?
+          AND run.last_accessed_at < ?
+          AND NOT EXISTS (
+            SELECT 1
+            FROM asset_security_state asset_state
+            WHERE asset_state.latest_scan_run_id = subject.scan_run_id
+              AND asset_state.asset_id = subject.asset_id
+              AND asset_state.profile_id = subject.profile_id
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM asset_security_policy_state policy_state
+            WHERE policy_state.latest_scan_run_id = subject.scan_run_id
+              AND policy_state.asset_id = subject.asset_id
+              AND policy_state.profile_id = subject.profile_id
+              AND policy_state.repository_id = subject.repository_id
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM security_scan_waiver waiver
+            JOIN security_scan_finding finding ON finding.id = waiver.finding_id
+            WHERE finding.scan_run_id = subject.scan_run_id
+          )
+        ORDER BY subject.associated_at, subject.scan_run_id
+        LIMIT ?
+        FOR UPDATE SKIP LOCKED
+        """, nullableTimestamp(cutoff), nullableTimestamp(cutoff), limit);
+    int deleted = 0;
+    for (Map<String, Object> row : rows) {
+      deleted += jdbc.update("""
+          DELETE FROM security_scan_run_subject
+          WHERE scan_run_id = ? AND repository_id = ? AND asset_id = ?
+            AND profile_id = ? AND content_generation = ?
+          """,
+          number(row, "scan_run_id"),
+          number(row, "repository_id"),
+          number(row, "asset_id"),
+          number(row, "profile_id"),
+          number(row, "content_generation"));
+    }
+    return deleted;
+  }
+
+  private int deleteUnreferencedRuns(Instant cutoff, int limit) {
+    List<Map<String, Object>> rows = jdbc.queryForList("""
+        SELECT run.id, run.raw_report_blob_id
+        FROM security_scan_run run
+        WHERE run.completed_at < ?
+          AND run.last_accessed_at < ?
+          AND NOT EXISTS (
+            SELECT 1 FROM security_scan_run_subject subject
+            WHERE subject.scan_run_id = run.id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM asset_security_state asset_state
+            WHERE asset_state.latest_scan_run_id = run.id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM asset_security_policy_state policy_state
+            WHERE policy_state.latest_scan_run_id = run.id
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM security_scan_waiver waiver
+            JOIN security_scan_finding finding ON finding.id = waiver.finding_id
+            WHERE finding.scan_run_id = run.id
+          )
+        ORDER BY run.last_accessed_at, run.id
+        LIMIT ?
+        FOR UPDATE SKIP LOCKED
+        """, nullableTimestamp(cutoff), nullableTimestamp(cutoff), limit);
+    int deleted = 0;
+    for (Map<String, Object> row : rows) {
+      long runId = number(row, "id");
+      long blobId = number(row, "raw_report_blob_id");
+      blobReferences.release(SCAN_REPORT_BLOB_OWNER, runId, blobId);
+      deleted += jdbc.update("DELETE FROM security_scan_run WHERE id = ?", runId);
+    }
+    return deleted;
+  }
+
+  private int deleteUnreferencedSboms(Instant cutoff, int limit) {
+    List<Map<String, Object>> rows = jdbc.queryForList("""
+        SELECT sbom.id, sbom.document_blob_id
+        FROM security_sbom sbom
+        WHERE sbom.created_at < ?
+          AND sbom.last_accessed_at < ?
+          AND NOT EXISTS (
+            SELECT 1 FROM security_scan_run run WHERE run.sbom_id = sbom.id
+          )
+        ORDER BY sbom.last_accessed_at, sbom.id
+        LIMIT ?
+        FOR UPDATE SKIP LOCKED
+        """, nullableTimestamp(cutoff), nullableTimestamp(cutoff), limit);
+    int deleted = 0;
+    for (Map<String, Object> row : rows) {
+      long sbomId = number(row, "id");
+      long blobId = number(row, "document_blob_id");
+      blobReferences.release(SBOM_BLOB_OWNER, sbomId, blobId);
+      deleted += jdbc.update("DELETE FROM security_sbom WHERE id = ?", sbomId);
+    }
+    return deleted;
+  }
+
+  private int deleteUnreferencedSnapshots(Instant cutoff, int limit) {
+    List<Long> ids = jdbc.queryForList("""
+        SELECT snapshot.id
+        FROM security_scanner_snapshot snapshot
+        WHERE snapshot.observed_at < ?
+          AND NOT EXISTS (
+            SELECT 1 FROM security_scan_run run
+            WHERE run.scanner_snapshot_id = snapshot.id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM security_scan_task task
+            WHERE task.requested_scanner_snapshot_id = snapshot.id
+          )
+        ORDER BY snapshot.observed_at, snapshot.id
+        LIMIT ?
+        FOR UPDATE SKIP LOCKED
+        """, Long.class, nullableTimestamp(cutoff), limit);
+    int deleted = 0;
+    for (Long id : ids) {
+      deleted += jdbc.update(
+          "DELETE FROM security_scanner_snapshot WHERE id = ?", id);
+    }
+    return deleted;
+  }
+
+  private static long number(Map<String, Object> row, String column) {
+    return ((Number) row.get(column)).longValue();
+  }
+
+  private static List<Long> distinctLongs(List<Long> values) {
+    return values == null
+        ? List.of()
+        : values.stream()
+            .filter(java.util.Objects::nonNull)
+            .distinct()
+            .toList();
+  }
+
+  /**
+   * Materializes an authorization-filtered repository scope from one JSON bind value. This avoids
+   * both one query per repository and database parameter-limit failures for large installations.
+   */
+  private String repositoryScopeCte() {
+    return """
+        WITH visible_repository AS (
+        %s
+        )
+        """.formatted(jsonDialect.selectLongsFromArray("repository_id"));
+  }
+
+  private String recursiveRepositoryScopeCte() {
+    return """
+        WITH RECURSIVE visible_repository AS (
+        %s
+        )
+        """.formatted(jsonDialect.selectLongsFromArray("repository_id"));
+  }
+
+  /**
+   * Expands visible group policy contexts to their concrete source repositories while retaining
+   * direct repository visibility as an unrestricted task scope.
+   */
+  private String taskRepositoryScopeCte() {
+    return recursiveRepositoryScopeCte() + """
+        ,
+        task_policy_source(
+          context_repository_id,
+          source_repository_id,
+          profile_id,
+          scan_hosted_content,
+          scan_proxy_content
+        ) AS (
+          SELECT
+            config.repository_id,
+            config.repository_id,
+            config.profile_id,
+            config.scan_hosted_content,
+            config.scan_proxy_content
+          FROM repository_security_scan_config config
+          JOIN visible_repository visible
+            ON visible.repository_id = config.repository_id
+          WHERE config.enabled = TRUE
+          UNION
+          SELECT
+            context.context_repository_id,
+            member.member_repository_id,
+            context.profile_id,
+            context.scan_hosted_content,
+            context.scan_proxy_content
+          FROM task_policy_source context
+          JOIN repository_member member
+            ON member.repository_id = context.source_repository_id
+        ),
+        task_repository_scope(
+          source_repository_id,
+          profile_id,
+          scan_hosted_content,
+          scan_proxy_content,
+          directly_visible
+        ) AS (
+          SELECT repository_id, NULL, FALSE, FALSE, TRUE
+          FROM visible_repository
+          UNION
+          SELECT
+            source_repository_id,
+            profile_id,
+            scan_hosted_content,
+            scan_proxy_content,
+            FALSE
+          FROM task_policy_source
+          WHERE context_repository_id <> source_repository_id
+        )
+        """;
+  }
+
+  private Object repositoryScopeParameter(List<Long> repositoryIds) {
+    return json.serializedParameter(json.writeValue(distinctLongs(repositoryIds)));
+  }
+
+  private static List<String> distinctStrings(List<String> values, boolean lowercase) {
+    return values == null
+        ? List.of()
+        : values.stream()
+            .filter(java.util.Objects::nonNull)
+            .map(String::trim)
+            .filter(value -> !value.isEmpty())
+            .map(value -> lowercase ? value.toLowerCase(java.util.Locale.ROOT) : value)
+            .distinct()
+            .toList();
+  }
+
+  private static void appendIn(
+      StringBuilder sql, List<Object> arguments, List<?> values) {
+    sql.append(String.join(",", java.util.Collections.nCopies(values.size(), "?")));
+    arguments.addAll(values);
+  }
+
+  @Override
+  public ScanSummary summary() {
+    return summary(jdbc.queryForList("SELECT id FROM repository", Long.class));
+  }
+
+  @Override
+  public ScanSummary summary(long repositoryId) {
+    return summary(List.of(repositoryId));
+  }
+
+  @Override
+  public ScanSummary summary(List<Long> repositoryIds) {
+    List<Long> ids = repositoryIds == null
+        ? List.of()
+        : repositoryIds.stream()
+            .filter(java.util.Objects::nonNull)
+            .distinct()
+            .toList();
+    if (ids.isEmpty()) {
+      return new ScanSummary(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    }
+    Object repositoryScope = repositoryScopeParameter(ids);
+    long candidates = count(taskRepositoryScopeCte() + """
+        SELECT COUNT(*)
+        FROM security_scan_candidate candidate
+        JOIN asset asset ON asset.id = candidate.asset_id
+        WHERE candidate.pending = TRUE
+          AND EXISTS (
+            SELECT 1
+            FROM task_repository_scope scope
+            JOIN repository source_repository
+              ON source_repository.id = scope.source_repository_id
+            WHERE scope.source_repository_id = asset.repository_id
+              AND (
+                scope.directly_visible = TRUE
+                OR (
+                  (
+                    source_repository.type = 'hosted'
+                    AND scope.scan_hosted_content = TRUE
+                  )
+                  OR (
+                    source_repository.type = 'proxy'
+                    AND scope.scan_proxy_content = TRUE
+                  )
+                )
+              )
+          )
+        """, repositoryScope);
+    Map<String, Object> tasks = jdbc.queryForMap(taskRepositoryScopeCte() + """
+        SELECT
+          COALESCE(SUM(CASE
+            WHEN task.status IN ('PENDING', 'RETRY_WAIT') THEN 1 ELSE 0 END), 0)
+            AS pending_tasks,
+          COALESCE(SUM(CASE
+            WHEN task.status = 'RUNNING' THEN 1 ELSE 0 END), 0)
+            AS running_tasks,
+          COALESCE(SUM(CASE
+            WHEN task.status = 'FAILED' THEN 1 ELSE 0 END), 0)
+            AS failed_tasks
+        FROM security_scan_task task
+        WHERE task.status IN ('PENDING', 'RETRY_WAIT', 'RUNNING', 'FAILED')
+          AND EXISTS (
+            SELECT 1
+            FROM task_repository_scope scope
+            JOIN repository source_repository
+              ON source_repository.id = scope.source_repository_id
+            WHERE scope.source_repository_id = task.repository_id
+              AND (
+                scope.directly_visible = TRUE
+                OR (
+                  scope.profile_id = task.profile_id
+                  AND (
+                    (
+                      source_repository.type = 'hosted'
+                      AND scope.scan_hosted_content = TRUE
+                    )
+                    OR (
+                      source_repository.type = 'proxy'
+                      AND scope.scan_proxy_content = TRUE
+                    )
+                  )
+                )
+              )
+          )
+        """, repositoryScope);
+    Instant summaryAt = Instant.now();
+    Map<String, Object> states = jdbc.queryForMap(
+        recursiveRepositoryScopeCte() + """
+        ,
+        policy_context_source(context_repository_id, source_repository_id) AS (
+          SELECT config.repository_id, config.repository_id
+          FROM repository_security_scan_config config
+          JOIN visible_repository visible
+            ON visible.repository_id = config.repository_id
+          WHERE config.enabled = TRUE
+          UNION
+          SELECT context.context_repository_id, member.member_repository_id
+          FROM policy_context_source context
+          JOIN repository_member member
+            ON member.repository_id = context.source_repository_id
+        ),
+        policy_subject(context_repository_id, source_repository_id, asset_id) AS (
+          SELECT context.context_repository_id, state.repository_id, state.asset_id
+          FROM policy_context_source context
+          JOIN asset_security_state state
+            ON state.repository_id = context.source_repository_id
+          UNION
+          SELECT context.context_repository_id, asset.repository_id, candidate.asset_id
+          FROM policy_context_source context
+          JOIN asset asset
+            ON asset.repository_id = context.source_repository_id
+          JOIN security_scan_candidate candidate
+            ON candidate.asset_id = asset.id
+        ),
+        policy_snapshot AS (
+          SELECT
+            subject.asset_id,
+            state.asset_id AS state_asset_id,
+            candidate.asset_id AS candidate_asset_id,
+            candidate.content_generation AS candidate_content_generation,
+            state.content_generation AS state_content_generation,
+            state.scan_state,
+            profile.id AS profile_id,
+            profile.enabled AS profile_enabled,
+            config.pending_action,
+            config.failure_action,
+            policy_state.policy_decision,
+            CASE
+              WHEN policy_state.asset_id IS NOT NULL
+               AND candidate.asset_id IS NOT NULL
+               AND state.asset_id IS NOT NULL
+               AND state.scan_state IN ('PARTIAL', 'COMPLETE')
+               AND state.content_generation = candidate.content_generation
+               AND policy_state.content_generation = candidate.content_generation
+               AND (
+                 policy_state.latest_scan_run_id = state.latest_scan_run_id
+                 OR (
+                   policy_state.latest_scan_run_id IS NULL
+                   AND state.latest_scan_run_id IS NULL
+                 )
+               )
+               AND policy_state.config_revision = config.config_revision
+               AND policy_state.waiver_revision
+                   >= waiver_revision.global_invalidation_revision
+               AND (
+                 (
+                   config.policy_id IS NULL
+                   AND policy_state.policy_id IS NULL
+                   AND policy_state.policy_revision IS NULL
+                 )
+                 OR (
+                   config.policy_id IS NOT NULL
+                   AND current_policy.id IS NOT NULL
+                   AND policy_state.policy_id = current_policy.id
+                   AND policy_state.policy_revision = current_policy.revision
+                 )
+               )
+               AND (
+                 policy_state.stale_at IS NULL
+                 OR policy_state.stale_at > ?
+               )
+               AND (
+                 policy_state.next_waiver_expiry IS NULL
+                 OR policy_state.next_waiver_expiry > ?
+               )
+              THEN TRUE
+              ELSE FALSE
+            END AS policy_authoritative
+          FROM policy_subject subject
+          JOIN repository_security_scan_config config
+            ON config.repository_id = subject.context_repository_id
+           AND config.enabled = TRUE
+          JOIN repository source_repository
+            ON source_repository.id = subject.source_repository_id
+          JOIN security_scan_waiver_revision waiver_revision
+            ON waiver_revision.singleton_id = 1
+          LEFT JOIN security_scan_candidate candidate
+            ON candidate.asset_id = subject.asset_id
+          LEFT JOIN asset_security_state state
+            ON state.asset_id = subject.asset_id
+           AND state.profile_id = config.profile_id
+          LEFT JOIN security_scan_profile profile
+            ON profile.id = config.profile_id
+          LEFT JOIN security_scan_policy current_policy
+            ON current_policy.id = config.policy_id
+          LEFT JOIN asset_security_policy_state policy_state
+            ON policy_state.asset_id = subject.asset_id
+           AND policy_state.profile_id = config.profile_id
+           AND policy_state.repository_id = config.repository_id
+          WHERE (
+            (source_repository.type = 'hosted' AND config.scan_hosted_content = TRUE)
+            OR (source_repository.type = 'proxy' AND config.scan_proxy_content = TRUE)
+          )
+        )
+        SELECT
+          COUNT(DISTINCT CASE
+            WHEN scan_state = 'COMPLETE'
+             AND state_content_generation = candidate_content_generation
+              THEN asset_id END)
+            AS complete_assets,
+          COUNT(DISTINCT CASE
+            WHEN scan_state = 'PARTIAL'
+             AND state_content_generation = candidate_content_generation
+              THEN asset_id END)
+            AS partial_assets,
+          COUNT(DISTINCT CASE
+            WHEN scan_state = 'STALE'
+             AND state_content_generation = candidate_content_generation
+              THEN asset_id END)
+            AS stale_assets,
+          COUNT(DISTINCT CASE
+            WHEN profile_id IS NULL OR profile_enabled = FALSE
+              THEN CASE WHEN failure_action = 'BLOCK' THEN asset_id END
+            WHEN state_asset_id IS NULL
+              OR candidate_asset_id IS NULL
+              OR state_content_generation <> candidate_content_generation
+              THEN CASE WHEN pending_action = 'BLOCK' THEN asset_id END
+            WHEN scan_state = 'NOT_APPLICABLE' THEN NULL
+            WHEN scan_state IN ('PENDING', 'RUNNING', 'STALE')
+              THEN CASE WHEN pending_action = 'BLOCK' THEN asset_id END
+            WHEN scan_state IN ('FAILED', 'CANCELLED')
+              THEN CASE WHEN failure_action = 'BLOCK' THEN asset_id END
+            WHEN scan_state IN ('PARTIAL', 'COMPLETE')
+              AND policy_authoritative = TRUE
+              AND policy_decision <> 'ALLOW'
+              THEN asset_id
+            WHEN scan_state IN ('PARTIAL', 'COMPLETE')
+              AND policy_authoritative = FALSE
+              THEN CASE WHEN pending_action = 'BLOCK' THEN asset_id END
+            ELSE NULL
+          END)
+            AS blocked_assets
+        FROM policy_snapshot
+        """,
+        repositoryScope,
+        nullableTimestamp(summaryAt),
+        nullableTimestamp(summaryAt));
+    Map<String, Object> findings = jdbc.queryForMap(repositoryScopeCte() + """
+        , current_run AS (
+          SELECT DISTINCT state.latest_scan_run_id AS scan_run_id
+          FROM asset_security_state state
+          JOIN security_scan_candidate candidate
+            ON candidate.asset_id = state.asset_id
+           AND candidate.content_generation = state.content_generation
+          JOIN security_scan_run_subject subject
+            ON subject.scan_run_id = state.latest_scan_run_id
+           AND subject.asset_id = state.asset_id
+           AND subject.profile_id = state.profile_id
+           AND subject.content_generation = state.content_generation
+          JOIN visible_repository visible
+            ON visible.repository_id = subject.repository_id
+          WHERE state.latest_scan_run_id IS NOT NULL
+        )
+        SELECT
+          COALESCE(SUM(CASE WHEN finding.severity = 'CRITICAL' THEN 1 ELSE 0 END), 0)
+            AS critical_findings,
+          COALESCE(SUM(CASE WHEN finding.severity = 'HIGH' THEN 1 ELSE 0 END), 0)
+            AS high_findings
+        FROM current_run
+        JOIN security_scan_finding finding
+          ON finding.scan_run_id = current_run.scan_run_id
+        WHERE finding.severity IN ('CRITICAL', 'HIGH')
+        """, repositoryScope);
+    return new ScanSummary(
+        candidates,
+        number(tasks, "pending_tasks"),
+        number(tasks, "running_tasks"),
+        number(tasks, "failed_tasks"),
+        number(states, "complete_assets"),
+        number(states, "partial_assets"),
+        number(states, "stale_assets"),
+        number(states, "blocked_assets"),
+        number(findings, "critical_findings"),
+        number(findings, "high_findings"));
+  }
+
+  @Override
+  public ScanMetricSummary metricSummary(int maxCount) {
+    int limit = Math.max(1, Math.min(1_000_000, maxCount));
+    return new ScanMetricSummary(
+        boundedCount("""
+            SELECT id FROM security_scan_task
+            WHERE status IN ('PENDING', 'RETRY_WAIT')
+            """, limit),
+        boundedCount("""
+            SELECT id FROM security_scan_task
+            WHERE status = 'RUNNING'
+            """, limit),
+        boundedCount("""
+            SELECT id FROM security_scan_task
+            WHERE status = 'FAILED'
+            """, limit),
+        boundedCount("""
+            SELECT state.asset_id
+            FROM asset_security_state state
+            JOIN security_scan_candidate candidate
+              ON candidate.asset_id = state.asset_id
+             AND candidate.content_generation = state.content_generation
+            WHERE state.scan_state = 'PARTIAL'
+            """, limit),
+        boundedCount("""
+            SELECT finding.id
+            FROM (
+              SELECT DISTINCT state.latest_scan_run_id AS scan_run_id
+              FROM asset_security_state state
+              JOIN security_scan_candidate candidate
+                ON candidate.asset_id = state.asset_id
+               AND candidate.content_generation = state.content_generation
+              WHERE state.latest_scan_run_id IS NOT NULL
+            ) current_run
+            JOIN security_scan_finding finding
+              ON finding.scan_run_id = current_run.scan_run_id
+             AND finding.severity IN ('CRITICAL', 'HIGH')
+            """, limit));
+  }
+
+  @Override
+  public Optional<Instant> oldestPendingTaskCreatedAt() {
+    List<Instant> values = jdbc.query("""
+        SELECT created_at AS oldest_created_at
+        FROM security_scan_task
+        WHERE status IN ('PENDING','RETRY_WAIT')
+        ORDER BY created_at, id
+        LIMIT 1
+        """, (rs, rowNum) -> nullableInstant(rs, "oldest_created_at"));
+    return values.isEmpty() ? Optional.empty() : Optional.ofNullable(values.getFirst());
+  }
+
+  private long count(String sql) {
+    Long value = jdbc.queryForObject(sql, Long.class);
+    return value == null ? 0 : value;
+  }
+
+  private long count(String sql, Object... args) {
+    Long value = jdbc.queryForObject(sql, Long.class, args);
+    return value == null ? 0 : value;
+  }
+
+  private long boundedCount(String selectionSql, int limit) {
+    return count(
+        "SELECT COUNT(*) FROM (" + selectionSql + " LIMIT ?) bounded_count",
+        limit);
+  }
+
+  private List<String> list(String value) {
+    List<String> result = json.readValue(value, STRING_LIST);
+    return result == null ? List.of() : result;
+  }
+
+  private Map<String, Integer> integerMap(String value) {
+    Map<String, Integer> result = json.readValue(value, INTEGER_MAP);
+    return result == null ? Map.of() : result;
+  }
+
+  private static <E extends Enum<E>> E enumValue(Class<E> type, String value) {
+    return EnumColumns.read(type, value);
+  }
+
+  private static void setNullableLong(PreparedStatement ps, int index, Long value)
+      throws SQLException {
+    if (value == null) {
+      ps.setNull(index, java.sql.Types.BIGINT);
+    } else {
+      ps.setLong(index, value);
+    }
+  }
+
+  private static int safeLimit(int maxItems) {
+    return Math.max(1, Math.min(maxItems, 1000));
+  }
+
+  private record ClaimCandidate(
+      long id, TaskStatus status, int priority, Instant eligibleAt, Instant requestedAt) {}
+
+  private static String searchPattern(String query) {
+    if (blank(query)) return null;
+    String escaped = query.trim()
+        .toLowerCase(java.util.Locale.ROOT)
+        .replace("!", "!!")
+        .replace("%", "!%")
+        .replace("_", "!_");
+    return "%" + escaped + "%";
+  }
+
+  private static Long numericSearch(String query) {
+    if (blank(query)) return null;
+    String value = query.trim();
+    if (value.startsWith("#")) value = value.substring(1);
+    try {
+      long result = Long.parseLong(value);
+      return result >= 0 ? result : null;
+    } catch (NumberFormatException ignored) {
+      return null;
+    }
+  }
+
+  private static void addRepeated(List<Object> values, Object value, int count) {
+    for (int index = 0; index < count; index++) {
+      values.add(value);
+    }
+  }
+
+  private static Instant requiredNow(Instant value) {
+    return value == null ? Instant.now() : value;
+  }
+
+  private static Instant resultAccessTouchCutoff() {
+    return Instant.now().minusSeconds(RESULT_ACCESS_TOUCH_INTERVAL_SECONDS);
+  }
+
+  private static boolean blank(String value) {
+    return value == null || value.isBlank();
+  }
+
+  private static String truncate(String value, int maxLength) {
+    if (value == null || value.length() <= maxLength) return value;
+    return value.substring(0, maxLength);
+  }
+
+  private static String requireMaxLength(String value, int maxLength, String field) {
+    if (value != null && value.length() > maxLength) {
+      throw new IllegalArgumentException(
+          field + " exceeds its maximum length of " + maxLength);
+    }
+    return value;
+  }
+
+  private static String safeUrl(String value) {
+    if (blank(value)) return value;
+    String lower = value.trim().toLowerCase(java.util.Locale.ROOT);
+    if (!lower.startsWith("https://") && !lower.startsWith("http://")) {
+      return null;
+    }
+    return truncate(value.trim(), 2048);
+  }
+}

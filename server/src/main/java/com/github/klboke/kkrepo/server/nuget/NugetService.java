@@ -138,6 +138,8 @@ public class NugetService {
   }
 
   private MavenResponse dispatchRawGet(RepositoryRuntime runtime, String rawPath, boolean headOnly) {
+    // Package bodies remain on RawAssetReader: it resolves the concrete asset, applies
+    // ArtifactDownloadPolicy with the request's entry-repository context, then opens the blob.
     return switch (runtime.type()) {
       case HOSTED -> hosted.get(runtime, rawPath, headOnly);
       case PROXY -> proxyGet(runtime, rawPath, headOnly);

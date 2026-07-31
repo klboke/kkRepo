@@ -35,7 +35,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.security.Security;
+import java.security.Provider;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -47,7 +47,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Supplier;
 import org.bouncycastle.bcpg.ArmoredOutputStream;
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.openpgp.PGPSecretKey;
 import org.bouncycastle.openpgp.PGPSecretKeyRing;
 import org.bouncycastle.openpgp.PGPSecretKeyRingCollection;
@@ -576,9 +575,7 @@ public class NexusApiMigrationService {
     }
     String passphrase = defaultString(string(signing.get("passphrase")), "");
     try {
-      if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
-        Security.addProvider(new BouncyCastleProvider());
-      }
+      Provider provider = NexusPgpCryptoProvider.current();
       PGPSecretKeyRingCollection rings = new PGPSecretKeyRingCollection(
           PGPUtil.getDecoderStream(new java.io.ByteArrayInputStream(
               privateArmor.getBytes(java.nio.charset.StandardCharsets.UTF_8))),
@@ -592,9 +589,10 @@ public class NexusApiMigrationService {
         while (keys.hasNext()) {
           PGPSecretKey candidate = keys.next();
           if (candidate.isSigningKey()) {
-            candidate.extractPrivateKey(new JcePBESecretKeyDecryptorBuilder()
-                .setProvider(BouncyCastleProvider.PROVIDER_NAME)
-                .build(passphrase.toCharArray()));
+            JcePBESecretKeyDecryptorBuilder decryptorBuilder =
+                new JcePBESecretKeyDecryptorBuilder();
+            if (provider != null) decryptorBuilder.setProvider(provider);
+            candidate.extractPrivateKey(decryptorBuilder.build(passphrase.toCharArray()));
             selectedRing = candidateRing;
             signingKey = candidate;
             break;

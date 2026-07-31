@@ -107,8 +107,10 @@ public class DockerHostedService {
     return DockerResponse.noBody(202);
   }
 
-  public DockerResponse getBlob(RepositoryRuntime runtime, DockerDigest digest, boolean headOnly) {
+  public DockerResponse getBlob(
+      RepositoryRuntime runtime, String imageName, DockerDigest digest, boolean headOnly) {
     ensureType(runtime, RepositoryType.HOSTED);
+    manifestStore.beforeBlobRead(runtime, imageName, digest);
     return blobStore.getBlob(runtime, digest, headOnly);
   }
 

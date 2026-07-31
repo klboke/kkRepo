@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.browse;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -11,6 +12,7 @@ import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
@@ -174,11 +176,73 @@ class ComponentSearchControllerSecurityTest {
     controller.search(null, "yum", null, request("GET", "/internal/search/components"));
     controller.search(null, "terraform", null, request("GET", "/internal/search/components"));
     controller.search(null, "swift", null, request("GET", "/internal/search/components"));
+    controller.search(null, "ansible", null, request("GET", "/internal/search/components"));
+    controller.search(null, "ansiblegalaxy", null, request("GET", "/internal/search/components"));
 
     assertEquals(
         List.of(
-            "|nuget|300", "|pub|300", "|rubygems|300", "|yum|300", "|terraform|300", "|swift|300"),
+            "|nuget|300", "|pub|300", "|rubygems|300", "|yum|300", "|terraform|300", "|swift|300",
+            "|ansiblegalaxy|300", "|ansiblegalaxy|300"),
         components.calls);
+  }
+
+  @Test
+  void ansibleSearchIncludesArtifactDependenciesSignaturesAndSourceDetails() {
+    StubComponentDao components = new StubComponentDao();
+    components.rows = List.of(
+        row(42L, "ansible-hosted", RepositoryFormat.ANSIBLEGALAXY,
+            "acme", "tools", "1.2.3", "ansible-collection",
+            "acme/tools/1.2.3/acme-tools-1.2.3.tar.gz"),
+        row(43L, "ansible-hosted", RepositoryFormat.ANSIBLEGALAXY,
+            "acme", "minimal", "1.0.0", "ansible-collection",
+            "acme/minimal/1.0.0/acme-minimal-1.0.0.tar.gz"),
+        row(44L, "ansible-hosted", RepositoryFormat.ANSIBLEGALAXY,
+            "acme", "missing", "2.0.0", "ansible-collection",
+            "acme/missing/2.0.0/acme-missing-2.0.0.tar.gz"));
+    AnsibleGalaxyRegistryDao ansible = mock(AnsibleGalaxyRegistryDao.class);
+    Instant now = Instant.parse("2026-07-21T08:00:00Z");
+    AnsibleGalaxyRegistryDao.CollectionVersion version =
+        new AnsibleGalaxyRegistryDao.CollectionVersion(
+            50L, 42L, 42L, 60L,
+            "acme", "acme", "tools", "tools", "1.2.3", "1.2.3",
+            "acme-tools-1.2.3.tar.gz", "a".repeat(64), 1024L, Map.of(),
+            Map.of("acme.base", ">=1.0.0"), ">=2.15", "HOSTED", 7L,
+            AnsibleGalaxyRegistryDao.VERSION_READY, now, now, now);
+    AnsibleGalaxyRegistryDao.CollectionVersion minimalVersion =
+        new AnsibleGalaxyRegistryDao.CollectionVersion(
+            51L, 43L, 43L, 61L,
+            "acme", "acme", "minimal", "minimal", "1.0.0", "1.0.0",
+            "acme-minimal-1.0.0.tar.gz", "b".repeat(64), 512L, Map.of(),
+            Map.of(), null, "HOSTED", 8L,
+            AnsibleGalaxyRegistryDao.VERSION_READY, now, now, now);
+    when(ansible.findVersion(42L, "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.of(version));
+    when(ansible.findVersion(43L, "acme", "minimal", "1.0.0"))
+        .thenReturn(Optional.of(minimalVersion));
+    when(ansible.findVersion(44L, "acme", "missing", "2.0.0"))
+        .thenReturn(Optional.empty());
+    when(ansible.listSignatures(version.id())).thenReturn(List.of(
+        new AnsibleGalaxyRegistryDao.Signature(
+            1L, version.id(), null, "b".repeat(64), null, "HOSTED", now)));
+    RecordingSecurityService security =
+        new RecordingSecurityService(permission -> AccessDecision.allow());
+    ComponentSearchController controller = new ComponentSearchController(
+        components, new StubAuthenticationService(subject("alice"), null), security);
+    controller.setAnsibleGalaxyRegistry(ansible);
+
+    ComponentSearchController.ComponentSearchResponse response = controller.search(
+        "tools", "ansiblegalaxy", 10, request("GET", "/internal/search/components"));
+
+    Map<String, Object> details = response.items().getFirst().details();
+    assertEquals("a".repeat(64), details.get("artifactSha256"));
+    assertEquals(1024L, details.get("artifactSize"));
+    assertEquals(Map.of("acme.base", ">=1.0.0"), details.get("dependencies"));
+    assertEquals(">=2.15", details.get("requiresAnsible"));
+    assertEquals(1, details.get("signatureCount"));
+    assertEquals("HOSTED", details.get("sourceKind"));
+    assertEquals("ansible-hosted", details.get("sourceRepository"));
+    assertFalse(response.items().get(1).details().containsKey("requiresAnsible"));
+    assertEquals(Map.of(), response.items().get(2).details());
   }
 
   @Test

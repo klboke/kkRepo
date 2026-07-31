@@ -2,7 +2,7 @@
 
 ## What is kkrepo?
 
-kkrepo is a Nexus-compatible, self-hosted artifact repository for common package formats such as Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Docker/OCI, NuGet, RubyGems, Yum, and Raw.
+kkrepo is a Nexus-compatible, self-hosted artifact repository for common package formats such as Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift Package Registry, Ansible Galaxy, Docker/OCI, NuGet, RubyGems, Yum, and Raw.
 
 It keeps Nexus-like client URLs, protocol behavior, permissions, and migration goals while using MySQL for metadata and OSS/S3-compatible storage for blobs.
 
@@ -31,6 +31,8 @@ Current supported formats:
 - Dart / Pub
 - Composer / PHP
 - Terraform Provider / Module Registry
+- Swift Package Registry
+- Ansible Galaxy
 - Docker / OCI
 - NuGet
 - RubyGems
@@ -45,7 +47,7 @@ For supported non-Docker formats, the main client URL shape is compatible with N
 /repository/<repo>/<artifact-path>
 ```
 
-This helps preserve Maven, npm, pip, Helm, Cargo, Dart/Flutter Pub, Composer, Terraform, NuGet, RubyGems, Yum, Raw, and CI client configuration during migration for formats covered by the migration flow.
+This helps preserve Maven, npm, pip, Helm, Cargo, Dart/Flutter Pub, Composer, Terraform, SwiftPM, Ansible Galaxy, NuGet, RubyGems, Yum, Raw, and CI client configuration during migration for formats covered by the migration flow.
 
 Docker / OCI uses the Registry HTTP API V2 `/v2/...` route instead of `/repository/<repo>/...`: shared-entrypoint deployments use `<host>/<repo>/<image>:<tag>`, and repository-level connector ports can expose `<host>:<repo-port>/<image>:<tag>`.
 
@@ -154,6 +156,12 @@ Composer has no standard publish command, so hosted packages are zip/tar archive
 Yes. Terraform hosted, proxy, and group repositories implement the Module Registry and Provider Registry protocols using Nexus-compatible `/repository/<repo>/v1/modules/...` and `/v1/providers/...` paths. kkRepo supports module/provider upload, versions and platforms, registry.terraform.io proxying, group resolution, URL-token authentication, provider SHA256SUMS, hosted detached GPG signing, Browse/Search/Usage, and real `terraform init` validation on Terraform 0.13 and the current stable release.
 
 Configure Terraform CLI `host.services` to point `modules.v1` and `providers.v1` at the selected group. Root-domain discovery and the Provider Network Mirror Protocol are not part of the current public surface. Nexus Terraform hosted data and proxy/group configuration are migratable. When a native Nexus Terraform proxy is explicitly selected and its migration plan is `FULL`, kkrepo also restores module/provider archive caches through a proxy-only path. Restored module archives are discoverable without an upstream request; the target reconstructs and verifies the current provider route, checksum manifest, and signature snapshot before serving the provider cache pinned to that metadata snapshot.
+
+## Is Ansible Galaxy supported?
+
+Yes. `ansiblegalaxy-hosted`, `ansiblegalaxy-proxy`, and `ansiblegalaxy-group` implement Galaxy v3 collection discovery, immutable publication/import tasks, version/dependency metadata, artifact download, public Galaxy proxying, group source binding, Browse/Search/Usage, and Ansible 2.9/current client flows. `GenericToken`, HTTP Basic, and route-scoped Nexus-compatible Base64 credentials are supported. Galaxy v1 roles and `ansible-galaxy role install` are not.
+
+Nexus 3.93.x-3.94.x native Ansible repository definitions and shape-gated hosted/proxy collection data can be migrated. Collection tarballs, complete `MANIFEST.json`/`FILES.json`, oversized upstream JSON, and signature payloads stay in blob storage; MySQL/PostgreSQL stores bounded metadata projections, hashes, references, tasks, leases, and bindings. See the [Ansible Galaxy Repository Guide](ansible-galaxy-guide.md).
 
 ## Is kkrepo production-ready?
 

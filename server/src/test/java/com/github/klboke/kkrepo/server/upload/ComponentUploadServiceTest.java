@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.upload;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -14,6 +15,8 @@ import static org.mockito.Mockito.when;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
+import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyService;
 import com.github.klboke.kkrepo.server.cargo.CargoHostedService;
 import com.github.klboke.kkrepo.server.composer.ComposerHostedService;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
@@ -39,6 +42,62 @@ import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.web.multipart.MultipartFile;
 
 class ComponentUploadServiceTest {
+
+  @Test
+  void uploadSpecsIncludeAnsibleGalaxySingleAssetUpload() {
+    ComponentUploadService service = service(mock(CargoHostedService.class));
+
+    UploadDefinition definition = service.definition("ansiblegalaxy");
+
+    assertFalse(definition.multipleUpload());
+    assertTrue(definition.componentFields().isEmpty());
+    assertEquals(List.of("asset"),
+        definition.assetFields().stream().map(UploadFieldDefinition::name).toList());
+  }
+
+  @Test
+  void ansibleGalaxyComponentUploadDelegatesCanonicalArchiveToProtocolService() throws Exception {
+    AnsibleGalaxyService ansibleService = mock(AnsibleGalaxyService.class);
+    ComponentUploadService service = service(ansibleService);
+
+    ComponentUploadService.UploadResult result = service.upload(
+        "ansible-hosted",
+        Map.of(),
+        files("ansiblegalaxy.asset", "acme-tools-1.2.3.tar.gz"),
+        "alice",
+        "127.0.0.1");
+
+    String path = AnsibleGalaxyPathParser.ARTIFACT_BASE + "acme-tools-1.2.3.tar.gz";
+    assertEquals(List.of(path), result.paths());
+    verify(ansibleService).putArtifact(
+        any(RepositoryRuntime.class), eq(path), any(InputStream.class),
+        eq("alice"), eq("127.0.0.1"));
+  }
+
+  @Test
+  void ansibleGalaxyComponentUploadValidatesServiceAndArchiveName() {
+    RepositoryRuntime runtime = runtime("ansible-hosted", RepositoryFormat.ANSIBLEGALAXY);
+    ComponentUploadService unavailable = service(
+        runtime, mock(CargoHostedService.class), mock(PubHostedService.class));
+
+    UploadValidationException missingService = assertThrows(
+        UploadValidationException.class,
+        () -> unavailable.upload(
+            runtime.name(), Map.of(),
+            files("ansiblegalaxy.asset", "acme-tools-1.2.3.tar.gz"),
+            "alice", "127.0.0.1"));
+    assertEquals("Ansible upload service is unavailable", missingService.getMessage());
+
+    AnsibleGalaxyService ansibleService = mock(AnsibleGalaxyService.class);
+    ComponentUploadService service = service(ansibleService);
+    UploadValidationException invalidName = assertThrows(
+        UploadValidationException.class,
+        () -> service.upload(
+            runtime.name(), Map.of(), files("ansiblegalaxy.asset", "collection.tar.gz"),
+            "alice", "127.0.0.1"));
+    assertTrue(invalidName.getMessage().contains("canonical namespace-name-version.tar.gz"));
+    verify(ansibleService, never()).putArtifact(any(), any(), any(), any(), any());
+  }
 
   @Test
   void uploadSpecsIncludeCargoSingleAssetUpload() {
@@ -379,6 +438,14 @@ class ComponentUploadServiceTest {
         mock(YumService.class),
         mock(TerraformService.class),
         swiftService);
+  }
+
+  private static ComponentUploadService service(AnsibleGalaxyService ansibleService) {
+    RepositoryRuntime runtime = runtime("ansible-hosted", RepositoryFormat.ANSIBLEGALAXY);
+    ComponentUploadService service = service(
+        runtime, mock(CargoHostedService.class), mock(PubHostedService.class));
+    service.setAnsibleGalaxyService(ansibleService);
+    return service;
   }
 
   private static ComponentUploadService service(

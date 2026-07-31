@@ -122,6 +122,19 @@ class NexusAssetManagementServiceTest {
   }
 
   @Test
+  void groupRepositorySearchFailsClearlyInsteadOfReturningIncompleteAssets() {
+    RepositoryRecord repository = repository(RepositoryFormat.MAVEN2, RepositoryType.GROUP);
+    when(repositoryDao.findByName(repository.name())).thenReturn(Optional.of(repository));
+
+    NexusAssetManagementService.InvalidSearchRequestException failure = assertThrows(
+        NexusAssetManagementService.InvalidSearchRequestException.class,
+        () -> service.search(repository.name(), null, null, request));
+
+    assertEquals("Asset search does not support group repositories", failure.getMessage());
+    verifyNoInteractions(assetDao);
+  }
+
+  @Test
   void emptyPageAlwaysSerializesNullContinuationToken() throws Exception {
     ObjectMapper mapper = new ObjectMapper()
         .setSerializationInclusion(JsonInclude.Include.NON_NULL);

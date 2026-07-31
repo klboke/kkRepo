@@ -16,3 +16,6 @@ Brand icons are sourced from Simple Icons 16.25.0.
 - RubyGems: https://rubygems.org/pages/about
 
 The Yum and Raw fallback icons are sourced from Lucide Static 1.24.0 (ISC).
+
+The Ansible Galaxy compatibility mark is an original geometric mark drawn for kkRepo. It is not
+an official Ansible or Red Hat trademark asset.

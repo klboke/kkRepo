@@ -9,14 +9,31 @@ import jakarta.servlet.Filter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletResponse;
 import java.util.Map;
+import org.apache.catalina.connector.Connector;
+import org.apache.coyote.AbstractProtocol;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.boot.tomcat.servlet.TomcatServletWebServerFactory;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.session.web.http.SessionRepositoryFilter;
 
 class DockerConnectorConfigurationTest {
+  @Test
+  void configuresProtocolWithoutReflectiveStringProperties() {
+    Connector connector = new Connector(TomcatServletWebServerFactory.DEFAULT_PROTOCOL);
+    DockerConnectorManager.ConnectorTuning tuning =
+        new DockerConnectorManager.ConnectorTuning(211, 37, 12_345, 2, 3);
+
+    DockerConnectorConfiguration.configureConnector(connector, tuning);
+
+    AbstractProtocol<?> protocol = (AbstractProtocol<?>) connector.getProtocolHandler();
+    assertEquals(12_345, protocol.getConnectionTimeout());
+    assertEquals(211, protocol.getMaxConnections());
+    assertEquals(37, protocol.getAcceptCount());
+  }
+
   @Test
   void connectorRepositoryFilterRunsBeforeDockerAuthFilter() {
     DockerConnectorConfiguration configuration = new DockerConnectorConfiguration();

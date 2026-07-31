@@ -2,12 +2,31 @@ package com.github.klboke.kkrepo.server.catalog;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.server.support.InMemoryVersionWatermark;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
+import org.springframework.scheduling.config.IntervalTask;
+import org.springframework.scheduling.config.ScheduledTaskRegistrar;
 
 class JdbcCatalogCacheBroadcasterTest {
+
+  @Test
+  void configuresFixedDelayWithPerReplicaInitialJitter() {
+    JdbcCatalogCacheBroadcaster broadcaster =
+        new JdbcCatalogCacheBroadcaster(new InMemoryVersionWatermark(), 750, 500, 100);
+    ScheduledTaskRegistrar taskRegistrar = new ScheduledTaskRegistrar();
+
+    broadcaster.configureTasks(taskRegistrar);
+
+    assertEquals(1, taskRegistrar.getFixedDelayTaskList().size());
+    IntervalTask task = taskRegistrar.getFixedDelayTaskList().getFirst();
+    assertEquals(750, task.getIntervalDuration().toMillis());
+    assertTrue(task.getInitialDelayDuration().toMillis() >= 500);
+    assertTrue(task.getInitialDelayDuration().toMillis() <= 600);
+  }
+
   @Test
   void subscribeStartsAtCurrentVersionAndPublishSuppressesLocalPollReload() {
     InMemoryVersionWatermark watermark = new InMemoryVersionWatermark();

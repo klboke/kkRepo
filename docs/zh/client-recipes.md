@@ -422,6 +422,32 @@ swift package resolve --replace-scm-with-registry
 
 CI 可创建 `GenericToken`，并使用 `swift package-registry login --token <token>`。GitHub-backed proxy 接受 GitHub HTTPS/SSH repository identity，首次观察 tag 后固定 commit 和 archive checksum；上游 tag 移动不会改写已缓存 release。
 
+## Ansible Galaxy
+
+创建 `ansiblegalaxy-hosted`、`ansiblegalaxy-proxy` 和 `ansiblegalaxy-group`。发布使用 hosted，安装/下载使用 group：
+
+```ini
+# ansible.cfg
+[galaxy]
+server_list = kkrepo
+
+[galaxy_server.kkrepo]
+url = https://nexus.example.com/repository/ansible-group/
+token = GenericToken.REDACTED
+```
+
+```bash
+ansible-galaxy collection build --output-path dist
+ansible-galaxy collection publish dist/acme-tools-1.0.0.tar.gz \
+  --server https://nexus.example.com/repository/ansible-hosted/ \
+  --token "$KKREPO_ANSIBLE_TOKEN"
+ansible-galaxy collection install acme.tools:1.0.0 \
+  --server https://nexus.example.com/repository/ansible-group/ \
+  --token "$KKREPO_ANSIBLE_TOKEN"
+```
+
+Ansible 2.9 可能把 token 选项命名为 `--api-key`。Collection version 不可变；group 会保证 dependency、checksum、signature、metadata 和 artifact 读取绑定到同一优先成员。`requirements.yml`、Nexus 兼容凭据/PUT 上传、proxy、迁移、存储上限和排障见 [Ansible Galaxy 仓库使用指南](ansible-galaxy-guide.md)。
+
 ## NuGet
 
 添加 source：

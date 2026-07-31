@@ -1,0 +1,362 @@
+package com.github.klboke.kkrepo.server.securityscan;
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanTask;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.RequestReason;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanStage;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.Adapter;
+import java.lang.reflect.Method;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import org.junit.jupiter.api.Test;
+
+class SecurityScanTaskWorkerTest {
+  @Test
+  void claimsExecutesAndRecordsACompletedTask() {
+    Fixture fixture = new Fixture();
+    try {
+      fixture.worker.runOnce();
+      verify(fixture.executor).execute(fixture.task);
+      verify(fixture.metrics).recordTask(
+          eq("MAVEN2"), eq(ScanStage.CATALOG_AND_MATCH),
+          eq(RequestReason.MANUAL), eq("success"), any());
+    } finally {
+      fixture.worker.shutdown();
+    }
+  }
+
+  @Test
+  void containsClaimFailureAndSupersededTask() {
+    Fixture claimFailure = new Fixture();
+    try {
+      when(claimFailure.coordinator.claim(anyString()))
+          .thenThrow(new IllegalStateException("database unavailable"));
+      claimFailure.worker.runOnce();
+      verify(claimFailure.executor, never()).execute(any());
+    } finally {
+      claimFailure.worker.shutdown();
+    }
+
+    Fixture superseded = new Fixture();
+    try {
+      when(superseded.executor.execute(superseded.task))
+          .thenThrow(new SecurityScanExecutor.SupersededSecurityScanTaskException(5L));
+      when(superseded.finalizer.cancelCurrentTask(eq(superseded.task), any()))
+          .thenReturn(false);
+      superseded.worker.runOnce();
+      verify(superseded.finalizer).cancelCurrentTask(eq(superseded.task), any());
+      verify(superseded.metrics).recordTask(
+          eq("MAVEN2"), any(), any(), eq("superseded"), any());
+    } finally {
+      superseded.worker.shutdown();
+    }
+  }
+
+  @Test
+  void classifiesRetryableTerminalAndUnexpectedFailures() {
+    Fixture retryable = new Fixture();
+    try {
+      when(retryable.executor.execute(retryable.task))
+          .thenThrow(new ScannerAdapterException("DOWN", "scanner down", true));
+      retryable.worker.runOnce();
+      verify(retryable.finalizer).failCurrentTask(
+          eq(retryable.task), eq("DOWN"), eq("scanner down"), eq(true), any());
+      verify(retryable.metrics).recordTask(
+          eq("MAVEN2"), any(), any(), eq("retry"), any());
+    } finally {
+      retryable.worker.shutdown();
+    }
+
+    Fixture terminal = new Fixture();
+    try {
+      when(terminal.task.attempts()).thenReturn(5);
+      when(terminal.task.maxAttempts()).thenReturn(5);
+      when(terminal.executor.execute(terminal.task))
+          .thenThrow(new ScannerAdapterException("INVALID", "bad response", false));
+      terminal.worker.runOnce();
+      verify(terminal.finalizer).failCurrentTask(
+          eq(terminal.task), eq("INVALID"), eq("bad response"), eq(false), any());
+      verify(terminal.metrics).recordTask(
+          eq("MAVEN2"), any(), any(), eq("failed"), any());
+    } finally {
+      terminal.worker.shutdown();
+    }
+
+    Fixture unexpected = new Fixture();
+    try {
+      when(unexpected.executor.execute(unexpected.task))
+          .thenThrow(new IllegalStateException());
+      unexpected.worker.runOnce();
+      verify(unexpected.finalizer).failCurrentTask(
+          eq(unexpected.task),
+          eq("SCAN_INTERNAL_ERROR"),
+          eq("IllegalStateException"),
+          eq(true),
+          any());
+    } finally {
+      unexpected.worker.shutdown();
+    }
+  }
+
+  @Test
+  void interruptedAdapterFailureRequeuesDurableWorkAndCancelsRemoteWithoutAnInterrupt() {
+    Fixture fixture = new Fixture();
+    AtomicBoolean cancellationSawInterrupt = new AtomicBoolean(true);
+    AtomicBoolean completionSawRestoredInterrupt = new AtomicBoolean();
+    try {
+      when(fixture.executor.execute(fixture.task)).thenAnswer(invocation -> {
+        Thread.currentThread().interrupt();
+        throw new ScannerAdapterException(
+            "SCANNER_INTERRUPTED", "scanner request interrupted", true);
+      });
+      when(fixture.adapter.cancel("5:lease")).thenAnswer(invocation -> {
+        cancellationSawInterrupt.set(Thread.currentThread().isInterrupted());
+        return null;
+      });
+      doAnswer(invocation -> {
+        completionSawRestoredInterrupt.set(Thread.currentThread().isInterrupted());
+        return null;
+      }).when(fixture.metrics).recordTask(
+          eq("MAVEN2"), any(), any(), eq("retry"), any());
+
+      fixture.worker.runOnce();
+
+      var cleanupOrder = org.mockito.Mockito.inOrder(fixture.adapter, fixture.finalizer);
+      cleanupOrder.verify(fixture.adapter).cancel("5:lease");
+      cleanupOrder.verify(fixture.finalizer).failCurrentTask(
+          eq(fixture.task),
+          eq("SCAN_INTERRUPTED"),
+          anyString(),
+          eq(true),
+          any());
+      verify(fixture.finalizer, never()).cancelCurrentTask(eq(fixture.task), any());
+      assertFalse(cancellationSawInterrupt.get());
+      assertTrue(completionSawRestoredInterrupt.get());
+    } finally {
+      fixture.worker.shutdown();
+    }
+  }
+
+  @Test
+  void toleratesLeaseLossDuringExecutionAndFailureFinalization() {
+    Fixture executionLoss = new Fixture();
+    try {
+      when(executionLoss.executor.execute(executionLoss.task))
+          .thenThrow(new SecurityScanFinalizer.LostSecurityScanLeaseException(5L));
+      executionLoss.worker.runOnce();
+      verify(executionLoss.finalizer, never()).failCurrentTask(
+          any(), anyString(), anyString(), eq(true), any());
+      verify(executionLoss.metrics).recordTask(
+          eq("MAVEN2"), any(), any(), eq("lease_lost"), any());
+    } finally {
+      executionLoss.worker.shutdown();
+    }
+
+    Fixture finalizationLoss = new Fixture();
+    try {
+      when(finalizationLoss.executor.execute(finalizationLoss.task))
+          .thenThrow(new ScannerAdapterException("DOWN", "scanner down", true));
+      doThrow(new SecurityScanFinalizer.LostSecurityScanLeaseException(5L))
+          .when(finalizationLoss.finalizer)
+          .failCurrentTask(any(), anyString(), anyString(), eq(true), any());
+      finalizationLoss.worker.runOnce();
+      verify(finalizationLoss.metrics).recordTask(
+          eq("MAVEN2"), any(), any(), eq("retry"), any());
+    } finally {
+      finalizationLoss.worker.shutdown();
+    }
+  }
+
+  @Test
+  void renewsHeartbeatLeaseUsingTheSharedDao() throws Exception {
+    Fixture fixture = new Fixture();
+    try {
+      when(fixture.scans.heartbeatTask(eq(5L), eq("lease"), any(), any()))
+          .thenReturn(false);
+      Thread activeThread = new Thread();
+      Method heartbeat =
+          SecurityScanTaskWorker.class.getDeclaredMethod(
+              "heartbeat", ScanTask.class, Thread.class, AtomicBoolean.class, Object.class);
+      heartbeat.setAccessible(true);
+      heartbeat.invoke(
+          fixture.worker, fixture.task, activeThread, new AtomicBoolean(false), new Object());
+      verify(fixture.scans).heartbeatTask(eq(5L), eq("lease"), any(), any());
+      verify(fixture.adapter).cancel("5:lease");
+      assertTrue(activeThread.isInterrupted());
+    } finally {
+      fixture.worker.shutdown();
+    }
+  }
+
+  @Test
+  void containsHeartbeatDatabaseFailuresSoThePeriodicCallbackCanRetry() throws Exception {
+    Fixture fixture = new Fixture();
+    try {
+      when(fixture.scans.heartbeatTask(eq(5L), eq("lease"), any(), any()))
+          .thenThrow(new IllegalStateException("temporary"));
+      Thread activeThread = new Thread();
+      Method heartbeat =
+          SecurityScanTaskWorker.class.getDeclaredMethod(
+              "heartbeat", ScanTask.class, Thread.class, AtomicBoolean.class, Object.class);
+      heartbeat.setAccessible(true);
+
+      heartbeat.invoke(
+          fixture.worker, fixture.task, activeThread, new AtomicBoolean(false), new Object());
+      heartbeat.invoke(
+          fixture.worker, fixture.task, activeThread, new AtomicBoolean(false), new Object());
+
+      verify(fixture.scans, times(2))
+          .heartbeatTask(eq(5L), eq("lease"), any(), any());
+      assertFalse(activeThread.isInterrupted());
+    } finally {
+      fixture.worker.shutdown();
+    }
+  }
+
+  @Test
+  void completedCleanupFencesAHeartbeatThatWasAlreadyInFlight() throws Exception {
+    Fixture fixture = new Fixture();
+    try {
+      CountDownLatch databaseCallStarted = new CountDownLatch(1);
+      CountDownLatch releaseDatabaseCall = new CountDownLatch(1);
+      when(fixture.scans.heartbeatTask(eq(5L), eq("lease"), any(), any()))
+          .thenAnswer(invocation -> {
+            databaseCallStarted.countDown();
+            assertTrue(releaseDatabaseCall.await(5, TimeUnit.SECONDS));
+            return false;
+          });
+      AtomicBoolean finished = new AtomicBoolean();
+      Object heartbeatGate = new Object();
+      ScheduledFuture<?> heartbeatFuture = mock(ScheduledFuture.class);
+      Thread activeThread = Thread.currentThread();
+      Method heartbeat =
+          SecurityScanTaskWorker.class.getDeclaredMethod(
+              "heartbeat",
+              ScanTask.class,
+              Thread.class,
+              AtomicBoolean.class,
+              Object.class);
+      heartbeat.setAccessible(true);
+      AtomicReference<Throwable> callbackFailure = new AtomicReference<>();
+      Thread callback = Thread.ofVirtual().start(() -> {
+        try {
+          heartbeat.invoke(
+              fixture.worker,
+              fixture.task,
+              activeThread,
+              finished,
+              heartbeatGate);
+        } catch (Throwable failure) {
+          callbackFailure.set(failure);
+        }
+      });
+      assertTrue(databaseCallStarted.await(5, TimeUnit.SECONDS));
+
+      Method stop =
+          SecurityScanTaskWorker.class.getDeclaredMethod(
+              "stopHeartbeatAndClearInterrupt",
+              AtomicBoolean.class,
+              ScheduledFuture.class,
+              Object.class);
+      stop.setAccessible(true);
+      assertFalse((boolean) stop.invoke(null, finished, heartbeatFuture, heartbeatGate));
+      releaseDatabaseCall.countDown();
+      callback.join();
+
+      assertFalse(activeThread.isInterrupted());
+      assertTrue(callbackFailure.get() == null);
+      verify(fixture.adapter, never()).cancel("5:lease");
+    } finally {
+      fixture.worker.shutdown();
+    }
+  }
+
+  @Test
+  void terminalizesAnExpiredFinalAttemptWithoutExecutingItAgain() {
+    Fixture fixture = new Fixture();
+    try {
+      when(fixture.coordinator.claimExpiredExhausted(anyString()))
+          .thenReturn(List.of(fixture.task));
+      when(fixture.coordinator.claim(anyString())).thenReturn(List.of());
+
+      fixture.worker.runOnce();
+
+      verify(fixture.finalizer).failCurrentTask(
+          eq(fixture.task),
+          eq("SCAN_ATTEMPTS_EXHAUSTED"),
+          eq("The worker lease expired after the final permitted scan attempt"),
+          eq(false),
+          any());
+      verify(fixture.executor, never()).execute(any());
+    } finally {
+      fixture.worker.shutdown();
+    }
+  }
+
+  private static final class Fixture {
+    final SecurityScanDao scans = mock(SecurityScanDao.class);
+    final SecurityScanTaskCoordinator coordinator = mock(SecurityScanTaskCoordinator.class);
+    final SecurityScanExecutor executor = mock(SecurityScanExecutor.class);
+    final SecurityScanFinalizer finalizer = mock(SecurityScanFinalizer.class);
+    final SecurityScanningProperties properties = new SecurityScanningProperties();
+    final SecurityScanResponseMemoryBudget responseMemoryBudget;
+    final AssetDao assets = mock(AssetDao.class);
+    final SecurityScanMetrics metrics = mock(SecurityScanMetrics.class);
+    final Adapter adapter = mock(Adapter.class);
+    final ScanTask task = mock(ScanTask.class);
+    final SecurityScanTaskWorker worker;
+
+    Fixture() {
+      properties.getWorker().setBatchSize(1);
+      properties.getWorker().setLeaseSeconds(30);
+      properties.getWorker().setHeartbeatSeconds(5);
+      properties.getWorker().setMaxBackoffSeconds(30);
+      responseMemoryBudget = new SecurityScanResponseMemoryBudget(properties);
+      when(task.id()).thenReturn(5L);
+      when(task.assetId()).thenReturn(10L);
+      when(task.leaseToken()).thenReturn("lease");
+      when(task.stage()).thenReturn(ScanStage.CATALOG_AND_MATCH);
+      when(task.requestReason()).thenReturn(RequestReason.MANUAL);
+      when(task.attempts()).thenReturn(1);
+      when(task.maxAttempts()).thenReturn(5);
+      when(coordinator.claim(anyString())).thenReturn(List.of(task));
+      when(assets.findAssetById(10L)).thenReturn(Optional.of(new AssetRecord(
+          10L, 1L, null, 11L, RepositoryFormat.MAVEN2, "demo.jar", new byte[32],
+          "demo.jar", "artifact", "application/java-archive", 8L,
+          null, Instant.EPOCH, Map.of())));
+      worker = new SecurityScanTaskWorker(
+          scans,
+          coordinator,
+          executor,
+          finalizer,
+          properties,
+          responseMemoryBudget,
+          assets,
+          metrics,
+          adapter);
+    }
+  }
+}

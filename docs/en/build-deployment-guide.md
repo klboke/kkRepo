@@ -7,7 +7,7 @@ This document covers local startup, release builds, archive package deployment, 
 - JDK 25
 - Maven 3.9 or a compatible version
 - MySQL 8.0 or PostgreSQL 12+ (use a maintained PostgreSQL release in production)
-- Optional: Docker, for building images or running containerized dependencies
+- Optional: Docker, for building images or running containerized dependencies; a running Docker daemon with access to pull the Cloud Native Buildpacks builder/run images is required for Native images and Native archives
 
 The service requires one shared relational backend: MySQL is the default and PostgreSQL is also supported. For local trials, the blob store can use File storage. For production, OSS/S3 is recommended. See [Database Backends](database-backends.md).
 
@@ -26,11 +26,27 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
   | KKREPO_DATABASE_TYPE=postgresql bash
 ```
 
+JVM is the default runtime. To use the Native image instead:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quickstart.sh \
+  | KKREPO_RUNTIME=native bash
+```
+
+Runtime and database selection are independent. To start the Native image with PostgreSQL:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quickstart.sh \
+  | KKREPO_RUNTIME=native KKREPO_DATABASE_TYPE=postgresql bash
+```
+
+`KKREPO_RUNTIME=jvm` selects `ghcr.io/klboke/kkrepo:0.6.0`, while `KKREPO_RUNTIME=native` selects `ghcr.io/klboke/kkrepo:0.6.0-native`. Both are published for Linux `amd64` and `arm64`. An explicit `KKREPO_IMAGE_TAG` overrides the runtime's default tag.
+
 The script prints each step and:
 
 1. Checks Docker, Docker Compose, and curl.
 2. Creates the `kkrepo-quickstart/` working directory.
-3. Generates `.env` with the image tag, ports, and local-trial secrets.
+3. Generates `.env` with the runtime, image tag, ports, and local-trial secrets.
 4. Downloads `docker-compose.quickstart.yml`.
 5. Checks host port availability.
 6. Pulls images and runs `docker compose up -d`.
@@ -45,7 +61,7 @@ bash quickstart.sh
 
 By default, it starts:
 
-- `ghcr.io/klboke/kkrepo:0.5.1`
+- The JVM runtime from `ghcr.io/klboke/kkrepo:0.6.0`
 - MySQL 8.0
 - Persistent MySQL and File blob storage volumes for local trials
 
@@ -137,13 +153,20 @@ Note: a normal `server` module jar does not contain a Spring Boot executable ent
 Pull the latest public release image:
 
 ```bash
-docker pull ghcr.io/klboke/kkrepo:0.5.1
+docker pull ghcr.io/klboke/kkrepo:0.6.0
 ```
 
 You can also use `latest` to follow the latest public release:
 
 ```bash
 docker pull ghcr.io/klboke/kkrepo:latest
+```
+
+The Native image is published separately:
+
+```bash
+docker pull ghcr.io/klboke/kkrepo:0.6.0-native
+docker pull ghcr.io/klboke/kkrepo:native-latest
 ```
 
 Build the default image:
@@ -158,11 +181,61 @@ Specify an image tag:
 ./scripts/build-docker-image.sh kkrepo:local
 ```
 
+Build a Native image for the current Docker host architecture:
+
+```bash
+./scripts/build-docker-image.sh --native kkrepo:native-local
+docker image inspect kkrepo:native-local \
+  --format '{{.Os}}/{{.Architecture}} {{json .Config.Entrypoint}}'
+```
+
+This command performs the GraalVM compilation in a container through Spring Boot Cloud Native Buildpacks, so GraalVM does not need to be installed on the host. It produces a directly runnable OCI image, not an intermediate binary that must be copied by the existing `Dockerfile`; a separate Native Dockerfile is therefore unnecessary. The first build downloads the builder, run image, and Native toolchain, and takes substantially more time and memory than the JVM image build.
+
 Container deployments should still use an independent MySQL instance and OSS/S3 blob store. Do not use a container-local filesystem as long-term production blob storage.
+
+## GraalVM Native Image
+
+The `native` Maven profile runs Spring AOT processing and then compiles the server with GraalVM Native Image. To build a local executable, install a GraalVM JDK 25 distribution that includes the `native-image` tool, then run:
+
+```bash
+mvn -Pnative -pl server -am -DskipTests package
+./server/target/kkrepo
+```
+
+You can build the native executable inside a Cloud Native Buildpacks container instead of installing GraalVM locally:
+
+```bash
+mvn -Pnative -pl server -am -DskipTests \
+  -DskipNativeBuild=true \
+  -Dspring-boot.build-image.imageName=kkrepo:native \
+  clean install spring-boot:build-image-no-fork
+```
+
+Use `build-image-no-fork` for this multi-module reactor. This command must use `-DskipTests`, not `-Dmaven.test.skip=true`, because downstream persistence modules still consume test-jars compiled and attached by the reactor. The resulting `kkrepo:native` image accepts the same database, secret, storage, and server configuration as the JVM image.
+
+The recommended helper wraps these arguments and verifies that the image exists:
+
+```bash
+./scripts/build-docker-image.sh --native kkrepo:native
+```
+
+To compile Native once, generate the release archives, and retain the corresponding image, run:
+
+```bash
+KKREPO_NATIVE_IMAGE=kkrepo:native \
+KKREPO_KEEP_NATIVE_IMAGE=true \
+  ./scripts/build-dist.sh --native
+```
+
+`KKREPO_NATIVE_IMAGE` selects the intermediate and retained image tag. By default, `build-dist.sh --native` removes its temporary image after extracting the executable; it retains that image only when `KKREPO_KEEP_NATIVE_IMAGE` is explicitly set to `true`.
+
+These local commands build only for the Docker daemon's current platform: for example, an x86_64 Linux Docker host produces `linux/amd64`, while an ARM64 Linux Docker host produces `linux/arm64`. They do not cross-compile the Native binary through emulation. The GitHub `Release Packages` workflow builds on native `amd64` and `arm64` runners and then combines the results into a multi-architecture manifest.
+
+Without `--native`, the helper continues to build the JVM image. Native packaging has passed the full real-client E2E matrix on both MySQL and PostgreSQL. Before production adoption, validate the optional integrations used by your deployment, especially external Apollo configuration and OSS/S3 providers. See the [Native Image or JVM Selection Guide](native-vs-jvm-guide.md) for the measured tradeoffs and current recommendation.
 
 ## Archive Package Deployment
 
-The archive package contains the executable jar, start script, stop script, restart script, status script, and external configuration file. It is suitable for quick trials, traditional VM deployment, or environments that need systemd integration.
+The default archive package contains the executable jar, start script, stop script, restart script, status script, and external configuration file. It is suitable for quick trials, traditional VM deployment, or environments that need systemd integration.
 
 Run from the repository root:
 
@@ -176,6 +249,23 @@ The build generates:
 server/target/kkrepo-<release-version>.tar.gz
 server/target/kkrepo-<release-version>.zip
 ```
+
+Build platform-specific Native archives explicitly with Docker and Cloud Native Buildpacks:
+
+```bash
+./scripts/build-dist.sh --native
+```
+
+This opt-in build generates both archive formats with a platform suffix:
+
+```text
+server/target/kkrepo-<release-version>-native-linux-<architecture>.tar.gz
+server/target/kkrepo-<release-version>-native-linux-<architecture>.zip
+```
+
+When manually dispatched, the GitHub `Release Packages` workflow accepts only a version already merged into `main` and builds the public release matrix: one platform-independent JVM archive pair, Native Linux `amd64` and `arm64` archive pairs, and a combined SHA-256 manifest. The same architecture-native builds first push `<version>-native-amd64` and `<version>-native-arm64`, then combine them into the public versioned `<version>-native` and rolling `native-latest` multi-architecture manifests. Creating the GitHub Release and uploading the archive assets remain a separate, explicit release step.
+
+The default remains JVM packaging. A JVM archive contains `lib/kkrepo.jar`; a Native archive contains the executable `lib/kkrepo`. The shared `bin/start.sh` selects the packaged runtime automatically, so the service commands and external configuration layout remain the same. Native archives do not require a Java runtime on the target host, but they must run on the matching operating system and CPU architecture.
 
 If a future development version uses the Maven `-SNAPSHOT` suffix, the build script automatically removes that suffix from the archive filename and extracted directory name.
 
@@ -191,7 +281,8 @@ kkrepo-<release-version>/
   conf/
     application.properties
   lib/
-    kkrepo.jar
+    kkrepo.jar        # JVM archive
+    # or kkrepo       # Native archive
   logs/
   data/
 ```
@@ -244,10 +335,13 @@ The startup script uses the extracted directory as `KKREPO_HOME` by default. Com
 | `KKREPO_CONF_DIR` | `$KKREPO_HOME/conf` | External configuration directory |
 | `KKREPO_LOG_DIR` | `$KKREPO_HOME/logs` | Log directory |
 | `KKREPO_PID_FILE` | `$KKREPO_LOG_DIR/kkrepo.pid` | PID file |
-| `KKREPO_JAR_FILE` | `$KKREPO_HOME/lib/kkrepo.jar` | Executable jar |
-| `JAVA_OPTS` | Empty | JVM options |
+| `KKREPO_RUNTIME` | `auto` | Select `native` when `lib/kkrepo` exists; otherwise select `jvm` |
+| `KKREPO_JAR_FILE` | `$KKREPO_HOME/lib/kkrepo.jar` | JVM executable jar |
+| `KKREPO_NATIVE_FILE` | `$KKREPO_HOME/lib/kkrepo` | Native executable |
+| `JAVA_OPTS` | Empty | JVM-only options |
+| `KKREPO_NATIVE_OPTS` | Empty | Native executable options |
 
-Example:
+JVM example:
 
 ```bash
 export JAVA_OPTS='-Xms2g -Xmx4g -XX:+UseG1GC'
@@ -284,7 +378,7 @@ WantedBy=multi-user.target
 Production deployments should use multiple kkrepo replicas, an independent MySQL or PostgreSQL instance, and an OSS/S3 blob store:
 
 ```text
-Maven/npm/PyPI/Go/Helm/Cargo/Pub/Composer/Terraform/Docker/OCI/NuGet/RubyGems/Yum clients
+Maven/npm/PyPI/Go/Helm/Cargo/Pub/Composer/Terraform/Ansible Galaxy/Docker/OCI/NuGet/RubyGems/Yum clients
         |
 DNS / Load Balancer / Reverse Proxy
         |
@@ -293,7 +387,7 @@ kkrepo replicas
         |---------------- OSS / S3 blob store
 ```
 
-kkrepo does not depend on OrientDB, embedded Elasticsearch, or a local persistent blob filesystem at runtime. Repositories, components, assets, users, permissions, tokens, audit logs, migration state, and cross-replica coordination state are stored in the selected relational database. Large blobs are stored in OSS/S3. In-process TTL cache is only a rebuildable hot cache.
+kkrepo does not depend on OrientDB, embedded Elasticsearch, or a local persistent blob filesystem at runtime. Repositories, components, assets, users, permissions, tokens, audit logs, migration state, and cross-replica coordination state are stored in the selected relational database. Large blobs, including Ansible collection archives and complete manifest/files JSON, are stored in OSS/S3. In-process TTL cache is only a rebuildable hot cache.
 
 ## Production Resource Recommendations
 

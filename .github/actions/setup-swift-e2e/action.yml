@@ -1,0 +1,95 @@
+name: Set up cached Swift E2E clients
+description: Build fixed Swift client images from reusable BuildKit caches and optionally install wrappers
+
+inputs:
+  versions:
+    description: all, current, 5.7, 5.10, or 6
+    required: false
+    default: all
+  cache_write:
+    description: Export refreshed layers to the GitHub Actions cache
+    required: false
+    default: "false"
+  wrapper_mode:
+    description: none, matrix, or single
+    required: false
+    default: none
+  ca_certificate:
+    description: Optional run-specific root CA mounted into Swift client containers
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Validate Swift E2E image inputs
+      shell: bash
+      env:
+        SWIFT_E2E_VERSIONS: ${{ inputs.versions }}
+        SWIFT_E2E_WRAPPER_MODE: ${{ inputs.wrapper_mode }}
+      run: |
+        set -euo pipefail
+        case "$SWIFT_E2E_VERSIONS" in
+          all|current|5.7|5.10|6) ;;
+          *) echo "invalid Swift E2E versions selector: $SWIFT_E2E_VERSIONS" >&2; exit 2 ;;
+        esac
+        case "$SWIFT_E2E_WRAPPER_MODE" in
+          none|matrix|single) ;;
+          *) echo "invalid Swift E2E wrapper mode: $SWIFT_E2E_WRAPPER_MODE" >&2; exit 2 ;;
+        esac
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v4
+
+    - name: Build Swift 5.7 E2E image
+      if: inputs.versions == 'all' || inputs.versions == '5.7'
+      uses: docker/build-push-action@v7
+      env:
+        DOCKER_BUILD_RECORD_UPLOAD: "false"
+      with:
+        context: ${{ github.action_path }}/../../../scripts/ci/swift-e2e-image
+        build-args: BASE_IMAGE=swift:5.7.3-jammy
+        tags: kkrepo/swift-e2e:5.7.3-jammy-v1
+        load: true
+        pull: true
+        cache-from: type=gha,scope=kkrepo-swift-e2e-5.7.3-jammy-v1
+        cache-to: ${{ inputs.cache_write == 'true' && 'type=gha,scope=kkrepo-swift-e2e-5.7.3-jammy-v1,mode=min,ignore-error=true,timeout=20m' || '' }}
+
+    - name: Build Swift 5.10 E2E image
+      if: inputs.versions == 'all' || inputs.versions == '5.10'
+      uses: docker/build-push-action@v7
+      env:
+        DOCKER_BUILD_RECORD_UPLOAD: "false"
+      with:
+        context: ${{ github.action_path }}/../../../scripts/ci/swift-e2e-image
+        build-args: BASE_IMAGE=swift:5.10.1-jammy
+        tags: kkrepo/swift-e2e:5.10.1-jammy-v1
+        load: true
+        pull: true
+        cache-from: type=gha,scope=kkrepo-swift-e2e-5.10.1-jammy-v1
+        cache-to: ${{ inputs.cache_write == 'true' && 'type=gha,scope=kkrepo-swift-e2e-5.10.1-jammy-v1,mode=min,ignore-error=true,timeout=20m' || '' }}
+
+    - name: Build Swift 6 E2E image
+      if: inputs.versions == 'all' || inputs.versions == 'current' || inputs.versions == '6'
+      uses: docker/build-push-action@v7
+      env:
+        DOCKER_BUILD_RECORD_UPLOAD: "false"
+      with:
+        context: ${{ github.action_path }}/../../../scripts/ci/swift-e2e-image
+        build-args: BASE_IMAGE=swift:6.3.3-jammy
+        tags: kkrepo/swift-e2e:6.3.3-jammy-v1
+        load: true
+        pull: true
+        cache-from: type=gha,scope=kkrepo-swift-e2e-6.3.3-jammy-v1
+        cache-to: ${{ inputs.cache_write == 'true' && 'type=gha,scope=kkrepo-swift-e2e-6.3.3-jammy-v1,mode=min,ignore-error=true,timeout=20m' || '' }}
+
+    - name: Install Swift E2E wrappers
+      if: inputs.wrapper_mode != 'none'
+      shell: bash
+      env:
+        SWIFT_E2E_WRAPPER_MODE: ${{ inputs.wrapper_mode }}
+        SWIFT_E2E_WRAPPER_CA_CERTIFICATE: ${{ inputs.ca_certificate }}
+      run: >-
+        "$GITHUB_ACTION_PATH/../../../scripts/ci/setup-swift-e2e-wrappers.sh"
+        "$SWIFT_E2E_WRAPPER_MODE"
+        "$SWIFT_E2E_WRAPPER_CA_CERTIFICATE"

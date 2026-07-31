@@ -30,6 +30,29 @@ import org.junit.jupiter.api.Test;
 class HttpRemoteFetcherTest {
 
   @Test
+  void resultParsesContentLengthDefensively() {
+    assertEquals(
+        42L,
+        new HttpRemoteFetcher.Result(
+            200, Map.of("content-length", " 42 "), InputStream.nullInputStream())
+            .contentLength());
+    assertEquals(
+        0L,
+        new HttpRemoteFetcher.Result(
+            200, Map.of("Content-Length", "-1"), InputStream.nullInputStream())
+            .contentLength());
+    assertEquals(
+        0L,
+        new HttpRemoteFetcher.Result(
+            200, Map.of("Content-Length", "invalid"), InputStream.nullInputStream())
+            .contentLength());
+    assertEquals(
+        0L,
+        new HttpRemoteFetcher.Result(200, Map.of(), InputStream.nullInputStream())
+            .contentLength());
+  }
+
+  @Test
   void httpVersionDefaultsToHttp11() {
     assertEquals(HttpClient.Version.HTTP_1_1, HttpRemoteFetcher.httpVersion(null));
     assertEquals(HttpClient.Version.HTTP_1_1, HttpRemoteFetcher.httpVersion(""));
@@ -260,6 +283,23 @@ class HttpRemoteFetcherTest {
     assertNull(request.authorizationHeader());
     assertNull(request.authorizationHeaderForRedirect(current, cdn));
     assertEquals("cdn.example.net", request.trustedHostForRedirect(current, cdn));
+  }
+
+  @Test
+  void integrityPinnedRepositoryDownloadsCanFollowAnyPolicyApprovedUnsignedOrigin() {
+    RepositoryRuntime runtime = runtime("robot", "secret", null);
+    HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request
+        .get("https://repo.example.com/artifacts/app.tar.gz")
+        .withRepositoryAllowingUnsignedRedirects(runtime, true, Set.of("*"));
+    URI current = URI.create("https://repo.example.com/artifacts/app.tar.gz");
+    URI signedObject = URI.create("https://objects.example.net/signed/app.tar.gz?signature=redacted");
+
+    assertNotNull(request.authorizationHeader());
+    assertNull(request.authorizationHeaderForRedirect(current, signedObject));
+    assertEquals(
+        "objects.example.net",
+        request.trustedHostForRedirect(current, signedObject),
+        "cross-origin redirect remains DNS pinned but carries no repository credential");
   }
 
   @Test

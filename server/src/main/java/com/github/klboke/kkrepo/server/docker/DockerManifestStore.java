@@ -3,8 +3,10 @@ package com.github.klboke.kkrepo.server.docker;
 import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
@@ -24,6 +26,7 @@ import com.github.klboke.kkrepo.server.blob.BlobTransactionCleanup;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -36,6 +39,7 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -49,6 +53,7 @@ public class DockerManifestStore {
   private final TransientTransactionRetry transactionRetry;
   private final GroupMemberAssetCache groupMemberAssetCache;
   private final DockerMetrics metrics;
+  private final ArtifactDownloadPolicy downloadPolicy;
 
   @Autowired
   public DockerManifestStore(
@@ -59,7 +64,36 @@ public class DockerManifestStore {
       AssetMetadataCache assetMetadataCache,
       TransientTransactionRetry transactionRetry,
       GroupMemberAssetCache groupMemberAssetCache,
+      DockerMetrics metrics,
+      ObjectProvider<ArtifactDownloadPolicy> downloadPolicyProvider) {
+    this(assetDao, dockerDao, blobStore, manifestParser, assetMetadataCache, transactionRetry,
+        groupMemberAssetCache, metrics,
+        downloadPolicyProvider == null ? null : downloadPolicyProvider.getIfAvailable());
+  }
+
+  public DockerManifestStore(
+      AssetDao assetDao,
+      DockerRegistryDao dockerDao,
+      DockerBlobStore blobStore,
+      DockerManifestParser manifestParser,
+      AssetMetadataCache assetMetadataCache,
+      TransientTransactionRetry transactionRetry,
+      GroupMemberAssetCache groupMemberAssetCache,
       DockerMetrics metrics) {
+    this(assetDao, dockerDao, blobStore, manifestParser, assetMetadataCache, transactionRetry,
+        groupMemberAssetCache, metrics, (ArtifactDownloadPolicy) null);
+  }
+
+  DockerManifestStore(
+      AssetDao assetDao,
+      DockerRegistryDao dockerDao,
+      DockerBlobStore blobStore,
+      DockerManifestParser manifestParser,
+      AssetMetadataCache assetMetadataCache,
+      TransientTransactionRetry transactionRetry,
+      GroupMemberAssetCache groupMemberAssetCache,
+      DockerMetrics metrics,
+      ArtifactDownloadPolicy downloadPolicy) {
     this.assetDao = assetDao;
     this.dockerDao = dockerDao;
     this.blobStore = blobStore;
@@ -68,6 +102,7 @@ public class DockerManifestStore {
     this.transactionRetry = transactionRetry;
     this.groupMemberAssetCache = groupMemberAssetCache;
     this.metrics = metrics;
+    this.downloadPolicy = downloadPolicy;
   }
 
   public DockerManifestStore(
@@ -188,6 +223,7 @@ public class DockerManifestStore {
 
   public DockerResponse serveManifest(StoredManifest stored, boolean headOnly, List<String> acceptHeaders) {
     ensureAccepted(stored.manifest().mediaType(), acceptHeaders);
+    beforeRead(stored);
     DockerResponse response = headOnly
         ? DockerResponse.noBody(200, stored.blob().size(), stored.manifest().mediaType(), stored.manifest().updatedAt())
         : DockerResponse.body(
@@ -200,6 +236,39 @@ public class DockerManifestStore {
         .withContentType(stored.manifest().mediaType())
         .withHeader(DockerConstants.CONTENT_DIGEST_HEADER, stored.manifest().digest())
         .withHeader("ETag", "\"" + stored.manifest().digest() + "\"");
+  }
+
+  void beforeRead(StoredManifest stored) {
+    if (downloadPolicy != null) {
+      downloadPolicy.beforeRead(stored.asset().id(), stored.blob().id());
+    }
+  }
+
+  void beforeBlobRead(RepositoryRuntime runtime, String imageName, DockerDigest digest) {
+    if (downloadPolicy == null || !downloadPolicy.shouldEvaluateCurrentRequest()) {
+      return;
+    }
+    List<Long> manifestAssetIds = dockerDao.listManifestAssetIdsReferencingDigest(
+        runtime.id(),
+        digest.value(),
+        SecurityScanDao.MAX_DOWNLOAD_POLICY_BATCH + 1);
+    if (manifestAssetIds.isEmpty()) {
+      // Hosted uploads and cross-mounts are valid before a manifest references them. Proxy blobs
+      // are remote download content, however, and must follow the pending action until a manifest
+      // provides the OCI scan subject. The repository-wide query above also prevents an alias
+      // image name from hiding an existing manifest reference to this repository-scoped digest.
+      if (runtime.type() == RepositoryType.PROXY) {
+        downloadPolicy.beforePendingOciImageRead(runtime.id(), imageName);
+      }
+      return;
+    }
+    boolean truncated =
+        manifestAssetIds.size() > SecurityScanDao.MAX_DOWNLOAD_POLICY_BATCH;
+    if (truncated) {
+      manifestAssetIds =
+          manifestAssetIds.subList(0, SecurityScanDao.MAX_DOWNLOAD_POLICY_BATCH);
+    }
+    downloadPolicy.beforeReadAll(manifestAssetIds, truncated);
   }
 
   private static void ensureAccepted(String mediaType, List<String> acceptHeaders) {

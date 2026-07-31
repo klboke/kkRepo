@@ -95,6 +95,20 @@ class RepositoryDataMigrationPathsTest {
   }
 
   @Test
+  void ansibleDiscoveryKeepsOnlyCanonicalCollectionArchives() {
+    assertTrue(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.ANSIBLEGALAXY,
+        "api/v3/plugin/ansible/content/published/collections/artifacts/acme-tools-1.2.3.tar.gz"));
+    assertTrue(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.ANSIBLEGALAXY, "acme/tools/1.2.3/acme-tools-1.2.3.tar.gz"));
+
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.ANSIBLEGALAXY, "api/v3/collections/acme/tools/versions/1.2.3/"));
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.ANSIBLEGALAXY, "acme-tools-latest.tar.gz"));
+  }
+
+  @Test
   void checksumGenerationRunsForMavenNonChecksumContent() {
     assertTrue(RepositoryDataMigrationPaths.shouldGenerateMavenChecksumSiblings(
         MAVEN_PATH_PARSER.parsePath("com/acme/app/1.0/app-1.0.jar")));

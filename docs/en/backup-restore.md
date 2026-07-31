@@ -106,7 +106,7 @@ Check:
 - `/actuator/health` is `UP`.
 - Admin login works.
 - Repository list and blob store list load.
-- Key Maven/npm/PyPI/Go/Helm/Cargo/Pub/Composer/Terraform/Docker/OCI/NuGet/RubyGems/Yum/Raw packages or images can be downloaded; for Composer, verify `packages.json`, p2 metadata, and the dist archive; for Terraform, verify module/provider metadata, the platform archive, SHA256SUMS, and detached signature through the group.
+- Key Maven/npm/PyPI/Go/Helm/Cargo/Pub/Composer/Terraform/Ansible Galaxy/Docker/OCI/NuGet/RubyGems/Yum/Raw packages or images can be downloaded; for Composer, verify `packages.json`, p2 metadata, and the dist archive; for Terraform, verify module/provider metadata, the platform archive, SHA256SUMS, and detached signature through the group; for Ansible, verify v3 discovery, version/dependency metadata, artifact SHA-256, group installation, and that no import task remains incorrectly claimed by a lost replica.
 - Hosted upload works on a test repository.
 - Browse/search returns expected assets.
 - Migration pages do not show stuck running jobs from the old environment unless intentionally resumed.

@@ -213,6 +213,7 @@ Script REST API 很重要，因为部分 Nexus 数据无法通过普通 REST API
 - Nexus 3.92.0 Pub 迁移后的 package metadata、`version.json`、archive 下载、`archive_sha256` 和 publish token 行为。
 - 显式选择 Nexus 原生 Composer proxy 后，验证 `packages.json`、p2 metadata、语义化 dist path、checksum，以及断开 Packagist 后的缓存下载；未选择时确认只迁移配置。
 - Terraform 迁移后通过 group 执行 `terraform init`，同时覆盖 hosted module/provider 和通过已迁移 proxy 解析的 Provider。对于显式选择的 proxy，先在请求目标 metadata 前确认源 archive path 与 SHA-256 已存在于目标端，再验证 Provider platform metadata、archive checksum、SHA256SUMS 和 detached signature；这样既能区分迁移 cache 命中与目标端重新下载，也能证明目标端已重建有效的当前上游快照。
+- Ansible Galaxy 迁移后，使用 Ansible 2.9 与当前 ansible-core 通过 group 安装已迁移 hosted collection 及其依赖，验证 artifact SHA-256 和重复版本不可变拒绝；对显式选择的 proxy cache 在断开上游后安装。确认 collection archive 与完整 `MANIFEST.json`/`FILES.json` 通过 blob reference 存在，而关系数据库 JSON 仍是有上限的元数据投影。未知 Nexus 版本/shape 或 proxy secret 缺失必须保留为 manual action。
 - 管理员登录。
 - Browse/search。
 - 用户角色和仓库权限。

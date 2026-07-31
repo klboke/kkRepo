@@ -43,7 +43,7 @@ public class NexusAssetController {
         .orElse(null);
     if (unsupported != null) {
       throw new InvalidSearchRequestException(
-          "Unsupported asset search parameter in the Moon compatibility scope: " + unsupported);
+          "Unsupported asset search parameter: " + unsupported);
     }
     return service.search(
         parameters.get("repository"),

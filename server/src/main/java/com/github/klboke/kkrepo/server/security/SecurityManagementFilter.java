@@ -203,6 +203,16 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
     if (path.equals("audit-log")) {
       return Optional.of("nexus:settings:read");
     }
+    if (path.equals("scanning") || path.startsWith("scanning/")) {
+      if (path.equals("scanning/waivers") && "POST".equals(method)) {
+        return Optional.of("nexus:security-scanning-waivers:create");
+      }
+      if (path.startsWith("scanning/waivers/") && "DELETE".equals(method)) {
+        return Optional.of("nexus:security-scanning-waivers:delete");
+      }
+      return Optional.of(
+          "nexus:security-scanning:" + ("GET".equals(method) ? "read" : "update"));
+    }
     if (path.equals("oidc/login") || path.equals("oidc/callback") || path.equals("logout")) {
       return Optional.empty();
     }

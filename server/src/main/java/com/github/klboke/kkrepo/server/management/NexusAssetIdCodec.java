@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.management;
 
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.regex.Matcher;
@@ -110,7 +111,7 @@ public class NexusAssetIdCodec {
 
   private static long positiveLong(String hex) {
     try {
-      long value = Long.parseUnsignedLong(hex, 16);
+      long value = new BigInteger(hex, 16).longValueExact();
       if (value <= 0) {
         throw new ArithmeticException("not positive");
       }

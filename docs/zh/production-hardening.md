@@ -176,6 +176,8 @@ KKREPO_UPLOAD_MAX_REQUEST_BYTES=1073741824
 
 确保代理限制、应用限制和对象存储 multipart 参数一致。
 
+Ansible collection 上传还会应用 archive compressed/expanded size、entry size/count、compression ratio、inspection time 和 multipart overhead 限制。至少应检查 `KKREPO_ANSIBLE_ARCHIVE_MAX_COMPRESSED_BYTES`、`KKREPO_ANSIBLE_ARCHIVE_MAX_EXPANDED_BYTES`、`KKREPO_ANSIBLE_ARCHIVE_MAX_ENTRIES` 和 `KKREPO_ANSIBLE_MULTIPART_MAX_OVERHEAD_BYTES`。提高 HTTP body limit 不会绕过 archive 安全校验。完整 `MANIFEST.json`/`FILES.json` 与超大上游 JSON 应放在 blob storage，不能通过扩大关系数据库 JSON 列来容纳。
+
 ## 缓存
 
 节点本地 cache 都是可重建缓存。正确性不能依赖本地内存作为唯一状态。
@@ -225,6 +227,7 @@ KKREPO_CATALOG_CACHE_BROADCAST_BACKEND=mysql
 - 执行代表性的客户端 pull 和 push。
 - 对 Composer / PHP 执行 hosted archive 上传和 group `composer install --prefer-dist`，同时验证 `packages.json`、p2 metadata、dist 下载、HTTP Basic 和 lock replay。
 - 对 Terraform 上传 hosted module/provider，并使用 Terraform 0.13 与当前稳定版从 group 执行 `terraform init`；验证 proxy Provider、SHA256SUMS、detached signature、lock file，以及诊断信息中的 URL token 脱敏。
+- 对 Ansible 使用 2.9 和当前 ansible-core 构建/发布 collection，再通过 group 安装其依赖；验证重复版本拒绝、proxy install、artifact SHA-256、import task 恢复和另一副本读取。
 
 推荐发布流程：
 

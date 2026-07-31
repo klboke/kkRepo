@@ -179,6 +179,54 @@ public class SecurityAuthenticationService {
   }
 
   /**
+   * Uses normal kkrepo credentials first, then the Ansible/Nexus token conventions. Current
+   * ansible-core sends {@code Bearer}; Ansible 2.9 sends {@code Token}. Both may carry a normal
+   * kkrepo API key or strict Base64(username:password). The repository filter invokes this method
+   * only for Ansible Galaxy routes, so these legacy schemes do not become site-wide credentials.
+   */
+  @Transactional
+  public Optional<AuthenticatedSubject> authenticateAnsibleGalaxy(HttpServletRequest request) {
+    Optional<AuthenticatedSubject> standard = authenticate(request);
+    if (standard.isPresent()) {
+      return standard;
+    }
+    String token = ansibleGalaxyToken(request);
+    if (token == null || token.length() > 4096 || token.indexOf('\r') >= 0
+        || token.indexOf('\n') >= 0) {
+      return Optional.empty();
+    }
+    Optional<AuthenticatedSubject> apiKey = apiKeyAuthCache == null
+        ? resolveApiKey(ApiKeyTokenCandidate.fromPresentedToken(token))
+        : apiKeyAuthCache.find("ansible:" + token,
+            () -> resolveApiKey(ApiKeyTokenCandidate.fromPresentedToken(token)));
+    if (apiKey.isPresent()) {
+      return apiKey;
+    }
+    try {
+      byte[] decodedBytes = Base64.getDecoder().decode(token);
+      String decoded = StandardCharsets.UTF_8.newDecoder()
+          .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+          .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+          .decode(java.nio.ByteBuffer.wrap(decodedBytes))
+          .toString();
+      int separator = decoded.indexOf(':');
+      String username = separator < 0 ? "" : decoded.substring(0, separator);
+      String password = separator < 0 ? "" : decoded.substring(separator + 1);
+      if (separator <= 0 || username.isBlank() || password.isBlank()
+          || containsControl(username) || containsControl(password)) {
+        return Optional.empty();
+      }
+      return authenticateBasic(username, password);
+    } catch (IllegalArgumentException | java.nio.charset.CharacterCodingException e) {
+      return Optional.empty();
+    }
+  }
+
+  private static boolean containsControl(String value) {
+    return value.chars().anyMatch(ch -> ch <= 0x1f || ch == 0x7f);
+  }
+
+  /**
    * Returns whether the request explicitly presented a credential understood by repository
    * authentication. An invalid explicit credential must never silently downgrade to anonymous
    * access, even when anonymous reads are enabled for the repository.
@@ -1107,6 +1155,23 @@ public class SecurityAuthenticationService {
       return token.isBlank() ? null : token;
     }
     return null;
+  }
+
+  private static String ansibleGalaxyToken(HttpServletRequest request) {
+    String authorization = request.getHeader("Authorization");
+    if (authorization == null) {
+      return null;
+    }
+    int prefixLength;
+    if (authorization.regionMatches(true, 0, "Bearer ", 0, 7)) {
+      prefixLength = 7;
+    } else if (authorization.regionMatches(true, 0, "Token ", 0, 6)) {
+      prefixLength = 6;
+    } else {
+      return null;
+    }
+    String token = authorization.substring(prefixLength).trim();
+    return token.isBlank() ? null : token;
   }
 
   private static String headerValue(HttpServletRequest request, String headerName) {

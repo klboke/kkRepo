@@ -191,6 +191,11 @@ public class AssetDaoAdapter implements AssetDao {
   }
 
   @Override
+  public Optional<AssetBlobRecord> restoreDeletedBlobById(long arg0) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
   public int releaseBlobGcClaim(long arg0) {
     throw new UnsupportedOperationException();
   }

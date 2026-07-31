@@ -4,6 +4,38 @@ All notable public changes to kkrepo are documented in this file.
 
 This project follows a pragmatic early-stage release process. Until a stable `1.0.0` release is announced, minor versions may include behavior changes, but releases should call out migration impact, compatibility changes, and operational notes.
 
+## 0.6.0 - 2026-07-24
+
+### Added
+
+- Nexus-compatible Ansible Galaxy v3 hosted, proxy, and group repositories, including immutable collection publication, dependency and artifact APIs, import-task recovery, proxy/group coordination, Components API/UI upload, Browse/Search/Admin integration, migration, metrics, and current plus Ansible 2.9 client coverage. (#158)
+- npm proxy repositories can enforce a configurable minimum release age across packuments, dist-tags, cached and uncached tarball requests, and group resolution. The default remains `0`, preserving existing repository behavior until administrators opt in. (#141)
+- Opt-in Spring AOT and GraalVM Native Image builds, Docker images, archive distributions, automatic launcher runtime selection, runtime hints, and real-client E2E coverage. JVM remains the default runtime. (#151)
+
+### Changed
+
+- Release packages now use a reproducible GitHub Actions matrix: platform-independent JVM archives plus Native Linux `amd64` and `arm64` archives, each in tar.gz and zip formats, with one combined SHA-256 manifest. The Native builds are also published as the multi-architecture `0.6.0-native` and `native-latest` GHCR images.
+- Quickstart defaults, Dockerfile packaging, deployment documentation, and the Helm application version now use `0.6.0`.
+- Quickstart accepts `KKREPO_RUNTIME=jvm|native`, independently of `KKREPO_DATABASE_TYPE`, and selects the matching JVM or Native release image while preserving explicit image-tag overrides.
+- Native startup and memory guidance reflects the measured roughly one-second readiness and below-200-MiB idle memory baseline, while retaining the JVM recommendation for maximum warmed throughput. (#154, #155, #156)
+- Maven, Bouncy Castle, XZ, AWS SDK, and GitHub Actions dependencies were refreshed. (#143, #144, #145, #146, #147, #148, #149, #150)
+
+### Fixed
+
+- Docker Bearer challenges and upload, blob, and manifest response locations now honor forwarded host, scheme, and port values only from configured trusted proxies, without changing explicit connector public-URL precedence. (#142)
+
+### Compatibility And Validation
+
+- Native packaging has passed the full real-client E2E matrix on MySQL and PostgreSQL; the release matrix builds Linux `amd64` and `arm64` executables on matching GitHub-hosted runners. (#151)
+- Ansible Galaxy behavior is covered against Nexus 3.93.x-3.94.x, current Ansible clients, Ansible 2.9, dual-replica coordination, MySQL/PostgreSQL persistence, and source migration. (#158)
+- npm minimum-release-age coverage includes fail-closed timestamp handling, cache revalidation, group policy, indexed MySQL/PostgreSQL state, and existing-repository compatibility. (#141)
+
+### Upgrade Notes
+
+- Existing `0.5.1` MySQL and PostgreSQL deployments can upgrade in place through Flyway V34-V35. Back up the database and blob store together before upgrading, and do not run mixed application versions after the new migrations are applied.
+- V34 adds the rebuildable npm release-age index, and V35 adds Ansible Galaxy registry, import, cache, lease, and group-binding state. Large collection archives and package blobs remain in the configured blob store.
+- Native archives require Linux and the matching `amd64` or `arm64` architecture. The `0.6.0-native` container tag is multi-architecture and lets Docker select the matching image automatically. Use the JVM archive or container image when maximum warmed throughput matters more than startup time and memory.
+
 ## 0.5.1 - 2026-07-18
 
 ### Changed

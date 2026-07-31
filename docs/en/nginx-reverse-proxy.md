@@ -4,7 +4,7 @@ This note covers the common deployment shape where Nginx terminates HTTPS and fo
 
 ## Why Forwarded Headers Matter
 
-kkRepo generates some client-visible absolute URLs from the incoming request. For example, npm package metadata rewrites `dist.tarball`, Composer p2 metadata rewrites `dist.url`, and Docker generates the token challenge `realm` and `service` plus upload response `Location` headers. These values must use the client-visible public scheme, host, and port.
+kkRepo generates some client-visible absolute URLs from the incoming request. For example, npm package metadata rewrites `dist.tarball`, Composer p2 metadata rewrites `dist.url`, Ansible Galaxy renders task/artifact links, and Docker generates the token challenge `realm` and `service` plus upload response `Location` headers. These values must use the client-visible public scheme, host, and port.
 
 If Nginx receives `https://nexus.example.com` but forwards to kkRepo as plain HTTP, kkRepo must receive trusted forwarded headers. Otherwise generated URLs may use the backend view of the request, such as `http://...` or a backend port.
 
@@ -101,6 +101,15 @@ curl -u alice:"$KKREPO_PASSWORD" \
 ```
 
 The `dist.url` value should start with `https://nexus.example.com/repository/composer-group/`.
+
+For Ansible Galaxy, inspect a version response through the public group URL:
+
+```bash
+curl -u alice:"$KKREPO_PASSWORD" \
+  https://nexus.example.com/repository/ansible-group/api/v3/collections/acme/tools/versions/1.0.0/
+```
+
+Its `href` and `download_url` must use the public HTTPS host and remain under `/repository/ansible-group/`. Publishing also requires Nginx to preserve `Authorization`, multipart bodies, and long-running import-task polling; align `client_max_body_size` and timeouts with the application limits without disabling the Ansible archive inspector.
 
 For Docker, first inspect the registry challenge:
 

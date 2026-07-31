@@ -80,17 +80,20 @@ Available suites:
 - `smoke`: diagnostic console API checks plus Maven proxy GET/HEAD/checksum read compatibility.
 - `write-smoke`: Maven hosted release/snapshot write compatibility with `COMPAT_WRITE_ENABLED=true`.
 - `nexus`: the disposable Nexus reference matrix. It enables write checks and compares kkrepo with
-  Nexus across Maven, npm, PyPI, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Raw, selected NuGet/RubyGems/Yum behavior,
+  Nexus across Maven, npm, PyPI, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift, Ansible Galaxy, Raw, selected NuGet/RubyGems/Yum behavior,
   Go proxy endpoints, Helm hosted round trips, component upload specs, and selected security/admin
   contracts. Composer is required when enabled; a missing Nexus Composer endpoint fails instead of skipping.
 - `extended`: diagnostic smoke coverage plus currently separated PyPI, Helm, Pub, NuGet, RubyGems, and Yum checks.
 - `client-e2e`: starts from the disposable kkrepo service and uses real package clients to publish
   and then download/resolve through hosted and group/proxy repositories. It covers Maven, npm,
-  PyPI, Helm, Cargo/Rust, Dart/Pub, Flutter Pub, Composer/PHP, Terraform 0.13/current, NuGet, RubyGems, Yum, and Docker/OCI. Go is
+  PyPI, Helm, Cargo/Rust, Dart/Pub, Flutter Pub, Composer/PHP, Terraform 0.13/current, Ansible Galaxy 2.9/current, NuGet, RubyGems, Yum, and Docker/OCI. Go is
   resolve-only through the Go proxy because hosted Go publishing is not a supported repository mode.
   SwiftPM is included when `swift` or `SWIFT_E2E_BINS` is available; it publishes to Swift hosted,
   resolves and builds through group, checks immutable conflict and checksum replay, and exercises
   GitHub SCM-to-registry replacement through proxy.
+  Ansible is included when `ansible-galaxy` or `ANSIBLE_GALAXY_BINS` is available; it builds and
+  publishes dependent collections, checks task polling and immutable conflicts, installs through
+  group, downloads the exact hosted bytes, and installs a fixed public Galaxy collection through proxy.
   The Composer flow additionally validates a hosted-to-proxy transitive dependency, rejected Basic
   credentials, and lock replay from the server cache after clearing the client cache and detaching
   the Packagist upstream.
@@ -98,6 +101,8 @@ Available suites:
   when working through known protocol gaps.
 - `swift`: the opt-in Nexus 3.94.x Swift Registry v1 matrix. It creates isolated hosted, proxy, and
   group fixtures and is skipped unless `SWIFT_COMPAT_ENABLED=true` is set by the wrapper.
+- `ansible`: the opt-in Nexus 3.94.x Galaxy v3 matrix. It creates isolated hosted/proxy/group
+  fixtures and covers publish/task, metadata, artifact HTTP, group priority, and public Galaxy proxying.
 
 In GitHub Actions, add the `run-live-compat` label to a PR to run the unified Nexus compatibility
 matrix against the Nexus 3.92.0 PostgreSQL reference. The live compatibility workflow
@@ -119,11 +124,38 @@ docker compose -f docker-compose.compat.yml down -v
 ```
 
 The runner must have `mvn`, `npm`, `python3` with `build` and `twine`, `go`, `helm`, `cargo`,
-`dart`, `composer`, `php`, Terraform 0.13 and a current stable Terraform binary, `dotnet`, `ruby`/`gem`, and Docker available. `flutter` is used for the Flutter Pub check
+`dart`, `composer`, `php`, Terraform 0.13 and a current stable Terraform binary, `ansible-galaxy`, `dotnet`, `ruby`/`gem`, and Docker available. `flutter` is used for the Flutter Pub check
 when installed; GitHub Actions installs it for the `client-e2e` workflow. ORAS is optional; when
 present the Docker/OCI part also pushes and pulls a generic OCI artifact. Client logs, downloaded
 metadata, and selected inspect outputs are written under `artifacts/client-e2e/`. Terraform URLs can
 contain URL tokens, so the runner redacts those values before uploading captured metadata.
+
+### Ansible Galaxy compatibility and client matrix
+
+The HTTP matrix targets Nexus 3.94.x because Ansible repositories were introduced in Nexus 3.93.0.
+It compares Galaxy v3 discovery, short and Nexus long aliases, multipart publish/import tasks, raw
+PUT, immutable conflicts, pagination, metadata/artifact source binding, GET/HEAD/304 behavior, and
+public Galaxy proxy downloads. Run it explicitly with:
+
+```bash
+ANSIBLE_NEXUS_COMPAT_BASE_URL=http://127.0.0.1:38090 \
+ANSIBLE_KKREPO_COMPAT_BASE_URL=http://127.0.0.1:18090 \
+scripts/ci/run-live-compat.sh ansible
+```
+
+The real-client flow accepts a comma-separated labeled executable matrix:
+
+```bash
+CLIENT_E2E_TESTS=ansible \
+ANSIBLE_GALAXY_BINS='2.9=/opt/ansible-2.9/bin/ansible-galaxy,current=/opt/ansible-current/bin/ansible-galaxy' \
+ANSIBLE_E2E_REQUIRE_2_9_CURRENT=true \
+scripts/ci/run-client-e2e.sh
+```
+
+Without `ANSIBLE_GALAXY_BINS`, an installed `ansible-galaxy` runs as `current`; if neither is
+available, the script reports an explicit skip. Set `ANSIBLE_E2E_PROXY_ENABLED=false` only when the
+public Galaxy upstream is intentionally unavailable. Set `ANSIBLE_KKREPO_SECONDARY_BASE_URL` to a
+second replica sharing the database and blob store to include cross-replica visibility.
 
 ### Swift Registry compatibility and client matrix
 

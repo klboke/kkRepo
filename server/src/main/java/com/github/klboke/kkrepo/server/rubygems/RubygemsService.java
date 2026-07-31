@@ -338,6 +338,7 @@ public class RubygemsService {
   }
 
   private MavenResponse dispatchRawGet(RepositoryRuntime runtime, String rawPath, boolean headOnly) {
+    // .gem bodies remain on RawAssetReader, which enforces ArtifactDownloadPolicy before blob IO.
     return switch (runtime.type()) {
       case HOSTED -> hosted.get(runtime, rawPath, headOnly);
       case PROXY -> proxyGet(runtime, rawPath, headOnly);

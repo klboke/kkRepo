@@ -70,8 +70,12 @@ final class NexusMigrationAdapters {
       return SupportStatus.CONFIG_ONLY;
     }
 
-    private static boolean swiftHosted(String format, String type) {
-      return "swift".equals(lower(format)) && "hosted".equals(lower(type));
+    private static boolean requiresVerifiedContentShape(String format, String type) {
+      String normalizedFormat = lower(format);
+      String normalizedType = lower(type);
+      return ("swift".equals(normalizedFormat) && "hosted".equals(normalizedType))
+          || ("ansiblegalaxy".equals(normalizedFormat)
+              && ("hosted".equals(normalizedType) || "proxy".equals(normalizedType)));
     }
 
     @Override
@@ -82,7 +86,8 @@ final class NexusMigrationAdapters {
       if (supportsContent(format, type)) {
         return SupportStatus.FULL;
       }
-      return swiftHosted(format, type) ? SupportStatus.NEEDS_MANUAL_ACTION : unsupportedContentStatus();
+      return requiresVerifiedContentShape(format, type)
+          ? SupportStatus.NEEDS_MANUAL_ACTION : unsupportedContentStatus();
     }
 
     @Override
@@ -97,7 +102,8 @@ final class NexusMigrationAdapters {
       if (supportsContent(profile, format, type)) {
         return SupportStatus.FULL;
       }
-      return swiftHosted(format, type) ? SupportStatus.NEEDS_MANUAL_ACTION : unsupportedContentStatus();
+      return requiresVerifiedContentShape(format, type)
+          ? SupportStatus.NEEDS_MANUAL_ACTION : unsupportedContentStatus();
     }
 
     protected boolean supportsContent(String format, String type) {
@@ -134,7 +140,8 @@ final class NexusMigrationAdapters {
     @Override
     protected boolean supportsContent(String format, String type) {
       String normalized = lower(format);
-      return !"cargo".equals(normalized) && !"pub".equals(normalized) && !"swift".equals(normalized);
+      return !"cargo".equals(normalized) && !"pub".equals(normalized)
+          && !"swift".equals(normalized) && !"ansiblegalaxy".equals(normalized);
     }
 
     @Override
@@ -157,7 +164,8 @@ final class NexusMigrationAdapters {
     @Override
     protected boolean supportsContent(NexusSourceProfile profile, String format, String type) {
       return hasDatastoreContentModel(profile, format)
-          && (!"swift".equals(lower(format)) || "hosted".equals(lower(type)));
+          && (!"swift".equals(lower(format)) || "hosted".equals(lower(type)))
+          && (!"ansiblegalaxy".equals(lower(format)) || !"group".equals(lower(type)));
     }
 
     @Override
@@ -180,7 +188,8 @@ final class NexusMigrationAdapters {
     @Override
     protected boolean supportsContent(NexusSourceProfile profile, String format, String type) {
       return hasDatastoreContentModel(profile, format)
-          && (!"swift".equals(lower(format)) || "hosted".equals(lower(type)));
+          && (!"swift".equals(lower(format)) || "hosted".equals(lower(type)))
+          && (!"ansiblegalaxy".equals(lower(format)) || !"group".equals(lower(type)));
     }
 
     @Override

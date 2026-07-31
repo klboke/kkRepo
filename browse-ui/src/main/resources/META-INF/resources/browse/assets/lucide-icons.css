@@ -30,6 +30,11 @@
 .icon-arrow-down { --lucide-icon: url("./icons/arrow-down.svg"); }
 .icon-arrow-up-down { --lucide-icon: url("./icons/arrow-up-down.svg"); }
 .icon-info { --lucide-icon: url("./icons/info.svg"); }
+.icon-octagon-alert { --lucide-icon: url("./icons/octagon-alert.svg"); }
+.icon-triangle-alert { --lucide-icon: url("./icons/triangle-alert.svg"); }
+.icon-circle-alert { --lucide-icon: url("./icons/circle-alert.svg"); }
+.icon-circle-help { --lucide-icon: url("./icons/circle-help.svg"); }
+.icon-external-link { --lucide-icon: url("./icons/external-link.svg"); }
 .icon-plus { --lucide-icon: url("./icons/plus.svg"); }
 .icon-refresh-cw { --lucide-icon: url("./icons/refresh-cw.svg"); }
 .icon-database { --lucide-icon: url("./icons/database.svg"); }

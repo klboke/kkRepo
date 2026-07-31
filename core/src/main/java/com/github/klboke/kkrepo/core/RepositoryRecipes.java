@@ -53,6 +53,9 @@ public final class RepositoryRecipes {
       new RepositoryRecipe("swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED),
       new RepositoryRecipe("swift-proxy", RepositoryFormat.SWIFT, RepositoryType.PROXY),
       new RepositoryRecipe("swift-group", RepositoryFormat.SWIFT, RepositoryType.GROUP),
+      new RepositoryRecipe("ansiblegalaxy-hosted", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.HOSTED),
+      new RepositoryRecipe("ansiblegalaxy-proxy", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.PROXY),
+      new RepositoryRecipe("ansiblegalaxy-group", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.GROUP),
       new RepositoryRecipe("raw-hosted", RepositoryFormat.RAW, RepositoryType.HOSTED),
       new RepositoryRecipe("raw-proxy", RepositoryFormat.RAW, RepositoryType.PROXY),
       new RepositoryRecipe("raw-group", RepositoryFormat.RAW, RepositoryType.GROUP));

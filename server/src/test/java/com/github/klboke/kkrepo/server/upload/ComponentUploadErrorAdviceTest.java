@@ -9,11 +9,16 @@ import static org.mockito.Mockito.mock;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyExceptions;
 import com.github.klboke.kkrepo.server.cargo.CargoExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.swift.SwiftExceptions;
 import java.util.Map;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.web.servlet.MockMvc;
@@ -78,5 +83,46 @@ class ComponentUploadErrorAdviceTest {
         .getContentAsString();
 
     assertEquals("{\"error\":\"Invalid Swift source archive\"}", responseBody);
+  }
+
+  @ParameterizedTest
+  @MethodSource("ansibleUploadFailures")
+  void ansibleComponentUploadPreservesProtocolFailureStatus(
+      AnsibleGalaxyExceptions.GalaxyException failure, HttpStatus expectedStatus)
+      throws Exception {
+    ComponentUploadService uploadService = mock(ComponentUploadService.class);
+    doThrow(failure)
+        .when(uploadService)
+        .upload(anyString(), anyMap(), any(), anyString(), anyString());
+    MockMvc mvc = MockMvcBuilders
+        .standaloneSetup(new ComponentUploadController(uploadService))
+        .setControllerAdvice(advice)
+        .build();
+
+    String responseBody = mvc.perform(multipart("/service/rest/v1/components")
+            .param("repository", "ansible-hosted"))
+        .andExpect(result -> assertEquals(
+            expectedStatus.value(), result.getResponse().getStatus()))
+        .andReturn()
+        .getResponse()
+        .getContentAsString();
+
+    assertEquals("{\"error\":\"" + failure.getMessage() + "\"}", responseBody);
+  }
+
+  private static Stream<Arguments> ansibleUploadFailures() {
+    return Stream.of(
+        Arguments.of(
+            new AnsibleGalaxyExceptions.BadRequest("Invalid collection archive"),
+            HttpStatus.BAD_REQUEST),
+        Arguments.of(
+            new AnsibleGalaxyExceptions.Conflict("Collection version already exists"),
+            HttpStatus.BAD_REQUEST),
+        Arguments.of(
+            new AnsibleGalaxyExceptions.Forbidden("Repository write policy denied the upload"),
+            HttpStatus.FORBIDDEN),
+        Arguments.of(
+            new AnsibleGalaxyExceptions.ContentTooLarge("Collection archive exceeds the limit"),
+            HttpStatus.PAYLOAD_TOO_LARGE));
   }
 }

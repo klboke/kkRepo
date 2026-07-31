@@ -1253,7 +1253,8 @@ class SwiftServiceTest {
         "https://repo.example/repository/swift-proxy/",
         SwiftMediaTypes.VENDOR_JSON,
         false));
-    verify(fixture.github, times(1)).archive(eq(proxy), any(), eq("a".repeat(40)));
+    verify(fixture.github, times(1)).archive(
+        eq(proxy), any(), eq("a".repeat(40)));
   }
 
   @Test

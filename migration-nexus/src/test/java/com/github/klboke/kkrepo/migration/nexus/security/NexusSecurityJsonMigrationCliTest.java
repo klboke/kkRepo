@@ -36,7 +36,7 @@ class NexusSecurityJsonMigrationCliTest {
         "--source-data-path", "/nexus-data"
     });
 
-    assertEquals("/tmp/security-export.json", options.exportPath().toString());
+    assertEquals(Path.of("/tmp/security-export.json"), options.exportPath());
     assertEquals("jdbc:mysql://127.0.0.1:3306/kkrepo", options.jdbcUrl());
     assertEquals("kkrepo", options.username());
     assertEquals("secret", options.password());

@@ -13,7 +13,6 @@ import static org.mockito.Mockito.when;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerUploadDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerUploadChunkRecord;
@@ -36,7 +35,6 @@ class DockerUploadCleanupWorkerTest {
   @Test
   void cleanupDeletesTerminalUploadChunksBeforeDeletingSession() {
     DockerUploadDao uploadDao = mock(DockerUploadDao.class);
-    DockerAuthTokenDao authTokenDao = mock(DockerAuthTokenDao.class);
     RepositoryRuntimeRegistry runtimeRegistry = mock(RepositoryRuntimeRegistry.class);
     BlobStorageRegistry blobStorageRegistry = mock(BlobStorageRegistry.class);
     BlobStorage storage = mock(BlobStorage.class);
@@ -50,7 +48,7 @@ class DockerUploadCleanupWorkerTest {
     when(runtimeRegistry.resolveById(runtime.id())).thenReturn(Optional.of(runtime));
     when(blobStorageRegistry.forBlobStoreId(runtime.blobStoreId())).thenReturn(storage);
     DockerUploadCleanupWorker worker = new DockerUploadCleanupWorker(
-        uploadDao, authTokenDao, runtimeRegistry, blobStorageRegistry, transactions, true, 64, 300);
+        uploadDao, runtimeRegistry, blobStorageRegistry, transactions, true, 64, 300);
 
     worker.cleanup();
 
@@ -66,7 +64,6 @@ class DockerUploadCleanupWorkerTest {
   @Test
   void cleanupKeepsSessionWhenRepositoryRuntimeIsTemporarilyUnavailable() {
     DockerUploadDao uploadDao = mock(DockerUploadDao.class);
-    DockerAuthTokenDao authTokenDao = mock(DockerAuthTokenDao.class);
     RepositoryRuntimeRegistry runtimeRegistry = mock(RepositoryRuntimeRegistry.class);
     BlobStorageRegistry blobStorageRegistry = mock(BlobStorageRegistry.class);
     RepositoryRuntime runtime = hostedRuntime();
@@ -76,7 +73,7 @@ class DockerUploadCleanupWorkerTest {
     when(uploadDao.listChunks("upload-1")).thenReturn(List.of(chunk()));
     when(runtimeRegistry.resolveById(runtime.id())).thenReturn(Optional.empty());
     DockerUploadCleanupWorker worker = new DockerUploadCleanupWorker(
-        uploadDao, authTokenDao, runtimeRegistry, blobStorageRegistry,
+        uploadDao, runtimeRegistry, blobStorageRegistry,
         new RecordingTransactionManager(), true, 64, 300);
 
     worker.cleanup();

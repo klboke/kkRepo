@@ -126,6 +126,7 @@ class PypiProxyServiceTest {
 
     assertEquals(200, fixture.service.getPackage(runtime, packagePath, true).status());
     assertEquals("https://pypi.example.test/files/demo-1.0.0.whl", packageUrl.get());
+    verify(fixture.reader).beforeRead(1L, 2L);
     verify(fixture.writer).write(
         eq(runtime), eq(fixture.storage), eq(7L), eq(packagePath), any(),
         eq("application/zip"), eq("package"),

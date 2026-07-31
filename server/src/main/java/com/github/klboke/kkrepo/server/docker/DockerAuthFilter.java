@@ -12,7 +12,9 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
+import com.github.klboke.kkrepo.server.security.RepositorySecurityFilter;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
+import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -73,17 +75,26 @@ public class DockerAuthFilter extends OncePerRequestFilter {
       filterChain.doFilter(request, response);
       return;
     }
+    request.setAttribute(
+        RepositorySecurityFilter.ENTRY_REPOSITORY_ID_ATTRIBUTE, runtime.get().id());
     String action = dockerAction(request.getMethod(), target.path());
     String[] challengeActions = challengeActions(action);
-    Optional<AuthenticatedSubject> subject;
+    Optional<DockerAuthService.BearerAuthentication> bearerAuthentication;
     try {
-      subject = bearer(request)
+      bearerAuthentication = bearer(request)
           .flatMap(token -> authService.authenticateBearer(
-              token, target.repository(), target.path().imageName(), action));
+              token,
+              runtime.get().id(),
+              target.repository(),
+              target.path().imageName(),
+              action,
+              target.path()));
     } catch (DockerProtocolException e) {
       challenge(response, request, target, challengeActions);
       return;
     }
+    Optional<AuthenticatedSubject> subject =
+        bearerAuthentication.map(DockerAuthService.BearerAuthentication::subject);
     if (subject.isEmpty()) {
       subject = authenticationService.authenticate(request);
     }
@@ -95,7 +106,11 @@ public class DockerAuthFilter extends OncePerRequestFilter {
       return;
     }
     PermissionAction permission = permissionFor(action, request.getMethod(), target.path());
-    if (permission != null && !accessDecisionService.decide(
+    boolean scannerToken =
+        bearerAuthentication
+            .map(DockerAuthService.BearerAuthentication::internalScanner)
+            .orElse(false);
+    if (!scannerToken && permission != null && !accessDecisionService.decide(
         subject.get().permissionSubject(),
         new RepositoryPermission(
             target.repository(), RepositoryFormat.DOCKER, target.path().imageName(), permission)).allowed()) {
@@ -103,6 +118,9 @@ public class DockerAuthFilter extends OncePerRequestFilter {
       return;
     }
     request.setAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE, subject.get());
+    if (scannerToken) {
+      request.setAttribute(ArtifactDownloadPolicy.INTERNAL_SCANNER_REQUEST_ATTRIBUTE, true);
+    }
     filterChain.doFilter(request, response);
   }
 

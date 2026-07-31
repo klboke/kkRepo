@@ -25,6 +25,7 @@
     <module>protocol-composer</module>
     <module>protocol-terraform</module>
     <module>protocol-swift</module>
+    <module>protocol-ansible</module>
     <module>protocol-go</module>
     <module>protocol-helm</module>
     <module>protocol-docker</module>
@@ -32,6 +33,8 @@
     <module>protocol-rubygems</module>
     <module>protocol-yum</module>
     <module>migration-nexus</module>
+    <module>security-scan</module>
+    <module>scanner-adapter</module>
     <module>persistence-jdbc</module>
     <module>persistence-mysql</module>
     <module>persistence-postgresql</module>
@@ -42,23 +45,29 @@
   </modules>
 
   <properties>
-    <revision>0.5.1</revision>
+    <revision>0.6.0</revision>
     <java.version>25</java.version>
     <spring.boot.version>4.1.0</spring.boot.version>
+    <native-build-tools-plugin.version>1.1.6</native-build-tools-plugin.version>
     <apollo.client.version>2.5.0</apollo.client.version>
     <guava.version>33.6.0-jre</guava.version>
     <guice.version>7.0.0</guice.version>
     <re2j.version>1.8</re2j.version>
     <maven.artifact.version>3.9.16</maven.artifact.version>
-    <aws.sdk.version>2.48.3</aws.sdk.version>
+    <aws.sdk.version>2.49.3</aws.sdk.version>
     <commons.compress.version>1.28.0</commons.compress.version>
     <xz.version>1.12</xz.version>
+    <zstd.jni.version>1.5.7-11</zstd.jni.version>
     <commons.lang3.version>3.20.0</commons.lang3.version>
     <bouncycastle.version>1.85</bouncycastle.version>
     <jacoco.version>0.8.15</jacoco.version>
-    <flatten.maven.plugin.version>1.7.3</flatten.maven.plugin.version>
+    <flatten.maven.plugin.version>1.8.0</flatten.maven.plugin.version>
     <maven.compiler.release>${java.version}</maven.compiler.release>
     <kkrepo.dist.version>${project.version}</kkrepo.dist.version>
+    <kkrepo.dist.suffix></kkrepo.dist.suffix>
+    <kkrepo.dist.runtime.source>${project.build.directory}/${project.build.finalName}.jar</kkrepo.dist.runtime.source>
+    <kkrepo.dist.runtime.name>kkrepo.jar</kkrepo.dist.runtime.name>
+    <kkrepo.dist.runtime.mode>0644</kkrepo.dist.runtime.mode>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
   </properties>
@@ -120,6 +129,11 @@
         <groupId>org.tukaani</groupId>
         <artifactId>xz</artifactId>
         <version>${xz.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.github.luben</groupId>
+        <artifactId>zstd-jni</artifactId>
+        <version>${zstd.jni.version}</version>
       </dependency>
       <dependency>
         <groupId>org.apache.commons</groupId>
@@ -205,6 +219,11 @@
       </dependency>
       <dependency>
         <groupId>com.github.klboke</groupId>
+        <artifactId>kkrepo-protocol-ansible</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.github.klboke</groupId>
         <artifactId>kkrepo-protocol-go</artifactId>
         <version>${project.version}</version>
       </dependency>
@@ -236,6 +255,16 @@
       <dependency>
         <groupId>com.github.klboke</groupId>
         <artifactId>kkrepo-migration-nexus</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.github.klboke</groupId>
+        <artifactId>kkrepo-security-scan</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.github.klboke</groupId>
+        <artifactId>kkrepo-scanner-adapter</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
@@ -290,6 +319,12 @@
             <skip>true</skip>
           </configuration>
         </plugin>
+        <plugin>
+          <groupId>org.graalvm.buildtools</groupId>
+          <artifactId>native-maven-plugin</artifactId>
+          <version>${native-build-tools-plugin.version}</version>
+          <extensions>true</extensions>
+        </plugin>
       </plugins>
     </pluginManagement>
     <plugins>
@@ -339,4 +374,66 @@
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <profile>
+      <id>native</id>
+      <build>
+        <pluginManagement>
+          <plugins>
+            <plugin>
+              <groupId>org.apache.maven.plugins</groupId>
+              <artifactId>maven-jar-plugin</artifactId>
+              <configuration>
+                <archive>
+                  <manifestEntries>
+                    <Spring-Boot-Native-Processed>true</Spring-Boot-Native-Processed>
+                  </manifestEntries>
+                </archive>
+              </configuration>
+            </plugin>
+            <plugin>
+              <groupId>org.springframework.boot</groupId>
+              <artifactId>spring-boot-maven-plugin</artifactId>
+              <executions>
+                <execution>
+                  <id>process-aot</id>
+                  <goals>
+                    <goal>process-aot</goal>
+                  </goals>
+                </execution>
+              </executions>
+            </plugin>
+            <plugin>
+              <groupId>org.graalvm.buildtools</groupId>
+              <artifactId>native-maven-plugin</artifactId>
+              <configuration>
+                <classesDirectory>${project.build.outputDirectory}</classesDirectory>
+                <exclusions>
+                  <exclusion>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-devtools</artifactId>
+                  </exclusion>
+                </exclusions>
+              </configuration>
+              <executions>
+                <execution>
+                  <id>add-reachability-metadata</id>
+                  <goals>
+                    <goal>add-reachability-metadata</goal>
+                  </goals>
+                </execution>
+                <execution>
+                  <id>build-native</id>
+                  <goals>
+                    <goal>compile-no-fork</goal>
+                  </goals>
+                </execution>
+              </executions>
+            </plugin>
+          </plugins>
+        </pluginManagement>
+      </build>
+    </profile>
+  </profiles>
 </project>

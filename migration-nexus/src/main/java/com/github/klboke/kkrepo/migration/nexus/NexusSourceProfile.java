@@ -27,6 +27,8 @@ public record NexusSourceProfile(
   // Newer minors must be fingerprinted deliberately instead of being accepted optimistically.
   private static final int SWIFT_MIGRATION_MIN_MINOR = 92;
   private static final int SWIFT_MIGRATION_MAX_MINOR = 94;
+  private static final int ANSIBLE_MIGRATION_MIN_MINOR = 93;
+  private static final int ANSIBLE_MIGRATION_MAX_MINOR = 94;
 
   public NexusSourceProfile {
     scriptApi = scriptApi == null ? ScriptApiProfile.unknown() : scriptApi;
@@ -207,10 +209,13 @@ public record NexusSourceProfile(
       boolean datastoreContent = contentModel != null
           && contentModel.supported()
           && (!"swift".equals(format)
-              || swiftContentModelSupported(probedNexusVersion, contentModel));
+              || swiftContentModelSupported(probedNexusVersion, contentModel))
+          && (!"ansiblegalaxy".equals(format)
+              || ansibleContentModelSupported(probedNexusVersion, contentModel));
       boolean content = config
           && ((metadataEngine == MetadataEngine.ORIENTDB
-                  && !"cargo".equals(format) && !"pub".equals(format) && !"swift".equals(format))
+                  && !"cargo".equals(format) && !"pub".equals(format)
+                  && !"swift".equals(format) && !"ansiblegalaxy".equals(format))
               || ((metadataEngine == MetadataEngine.DATASTORE_H2
                   || metadataEngine == MetadataEngine.DATASTORE_POSTGRESQL)
                   && datastoreContent));
@@ -264,6 +269,14 @@ public record NexusSourceProfile(
       if ("swift".equals(format) && !swiftFormatShapeSupported(contentModel.formatShape())) {
         return "swift-content-shape-incomplete";
       }
+      if ("ansiblegalaxy".equals(format)
+          && !knownAnsibleMigrationVersion(probedNexusVersion)) {
+        return "ansiblegalaxy-source-version-unverified";
+      }
+      if ("ansiblegalaxy".equals(format)
+          && !ansibleFormatShapeSupported(contentModel.formatShape())) {
+        return "ansiblegalaxy-content-shape-incomplete";
+      }
       return "datastore-content-schema-incomplete";
     }
     return "configuration-only";
@@ -303,7 +316,22 @@ public record NexusSourceProfile(
         && swiftFormatShapeSupported(contentModel.formatShape());
   }
 
+  private static boolean ansibleContentModelSupported(
+      String probedNexusVersion,
+      ContentModelFingerprint contentModel) {
+    return knownAnsibleMigrationVersion(probedNexusVersion)
+        && ansibleFormatShapeSupported(contentModel.formatShape());
+  }
+
   private static boolean knownSwiftMigrationVersion(String version) {
+    return knownMigrationVersion(version, SWIFT_MIGRATION_MIN_MINOR, SWIFT_MIGRATION_MAX_MINOR);
+  }
+
+  private static boolean knownAnsibleMigrationVersion(String version) {
+    return knownMigrationVersion(version, ANSIBLE_MIGRATION_MIN_MINOR, ANSIBLE_MIGRATION_MAX_MINOR);
+  }
+
+  private static boolean knownMigrationVersion(String version, int minimumMinor, int maximumMinor) {
     String normalized = string(version);
     if (normalized == null) {
       return false;
@@ -318,8 +346,8 @@ public record NexusSourceProfile(
       int minor = Integer.parseInt(parts[1]);
       Integer.parseInt(parts[2]);
       return major == 3
-          && minor >= SWIFT_MIGRATION_MIN_MINOR
-          && minor <= SWIFT_MIGRATION_MAX_MINOR;
+          && minor >= minimumMinor
+          && minor <= maximumMinor;
     } catch (NumberFormatException ignored) {
       return false;
     }
@@ -331,6 +359,13 @@ public record NexusSourceProfile(
         && bool(shape.get("manifestShape"), false)
         && bool(shape.get("swiftAssetAttributes"), false)
         && bool(shape.get("signatureAttributes"), false)
+        && bool(shape.get("sha256Checksum"), false);
+  }
+
+  private static boolean ansibleFormatShapeSupported(Map<String, Object> shape) {
+    return shape != null
+        && bool(shape.get("collectionAssetPath"), false)
+        && bool(shape.get("collectionAttributes"), false)
         && bool(shape.get("sha256Checksum"), false);
   }
 

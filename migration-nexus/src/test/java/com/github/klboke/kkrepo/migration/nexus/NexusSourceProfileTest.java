@@ -23,6 +23,11 @@ class NexusSourceProfileTest {
       "signatureAttributes", true,
       "sha256Checksum", true,
       "inspectedAssetCount", 4);
+  private static final Map<String, Object> VERIFIED_ANSIBLE_SHAPE = Map.of(
+      "collectionAssetPath", true,
+      "collectionAttributes", true,
+      "sha256Checksum", true,
+      "inspectedAssetCount", 1);
 
   @Test
   void enablesSwiftHostedContentOnlyForKnownNexusVersionsAndVerifiedShape() {
@@ -70,6 +75,37 @@ class NexusSourceProfileTest {
     }
   }
 
+  @Test
+  void enablesAnsibleHostedContentOnlyForNexus393And394WithVerifiedShape() {
+    for (String version : List.of("3.93.0-01", "3.93.1-01", "3.94.0-01")) {
+      NexusSourceProfile profile = ansibleProfile(version, VERIFIED_ANSIBLE_SHAPE);
+
+      assertTrue(profile.formatCapabilities().get("ansiblegalaxy").contentMigration(), version);
+      assertEquals(SupportStatus.FULL, ansibleHostedStatus(profile), version);
+    }
+  }
+
+  @Test
+  void unknownVersionOrDriftedShapeKeepsAnsibleMigrationManual() {
+    for (String version : List.of("unknown", "3.92.2-01", "3.95.0-01", "4.0.0")) {
+      NexusSourceProfile profile = ansibleProfile(version, VERIFIED_ANSIBLE_SHAPE);
+      assertFalse(profile.formatCapabilities().get("ansiblegalaxy").contentMigration(), version);
+      assertEquals(SupportStatus.NEEDS_MANUAL_ACTION, ansibleHostedStatus(profile), version);
+    }
+    for (String missing : List.of(
+        "collectionAssetPath", "collectionAttributes", "sha256Checksum")) {
+      Map<String, Object> drifted = new LinkedHashMap<>(VERIFIED_ANSIBLE_SHAPE);
+      drifted.remove(missing);
+      NexusSourceProfile profile = ansibleProfile("3.94.0-01", drifted);
+      assertFalse(profile.formatCapabilities().get("ansiblegalaxy").contentMigration(), missing);
+      assertEquals(
+          "ansiblegalaxy-content-shape-incomplete",
+          profile.formatCapabilities().get("ansiblegalaxy").evidence(),
+          missing);
+      assertEquals(SupportStatus.NEEDS_MANUAL_ACTION, ansibleHostedStatus(profile), missing);
+    }
+  }
+
   private static SupportStatus hostedStatus(NexusSourceProfile profile) {
     return new MigrationPlanBuilder().build(
             profile, new MigrationScope(List.of("swift-hosted"), false, false))
@@ -78,6 +114,58 @@ class NexusSourceProfileTest {
         .findFirst()
         .orElseThrow()
         .status();
+  }
+
+  private static SupportStatus ansibleHostedStatus(NexusSourceProfile profile) {
+    return new MigrationPlanBuilder().build(
+            profile, new MigrationScope(List.of("ansible-hosted"), false, false))
+        .items().stream()
+        .filter(item -> "ansible-hosted".equals(item.name()))
+        .findFirst()
+        .orElseThrow()
+        .status();
+  }
+
+  private static NexusSourceProfile ansibleProfile(
+      String probedVersion,
+      Map<String, Object> formatShape) {
+    SourceProbe probe = new SourceProbe(
+        probedVersion,
+        true,
+        true,
+        true,
+        "text/plain",
+        "ok",
+        "DATASTORE_POSTGRESQL",
+        "PostgreSQL",
+        "jdbc:postgresql://nexus/nexus",
+        Map.of("datastoreContentModels", Map.of("ansiblegalaxy", Map.of(
+            "prefix", "ANSIBLEGALAXY",
+            "tablesPresent", true,
+            "requiredColumnsPresent", true,
+            "tables", Map.of(
+                "contentRepository", "ANSIBLEGALAXY_CONTENT_REPOSITORY",
+                "asset", "ANSIBLEGALAXY_ASSET",
+                "assetBlob", "ANSIBLEGALAXY_ASSET_BLOB",
+                "component", "ANSIBLEGALAXY_COMPONENT"),
+            "columns", Map.of(),
+            "formatShape", formatShape))),
+        List.of());
+    RepositoryDocument repository = new RepositoryDocument(
+        Map.of(
+            "name", "ansible-hosted",
+            "format", "ansiblegalaxy",
+            "type", "hosted",
+            "online", true),
+        Map.of("storage", Map.of("blobStoreName", "default")));
+    return NexusSourceProfile.fromInventory(
+        new NexusInventory(
+            List.of(Map.of("name", "default", "type", "File")),
+            List.of(repository),
+            NexusSecurityExport.empty(),
+            List.of(),
+            probe),
+        null);
   }
 
   private static NexusSourceProfile profile(

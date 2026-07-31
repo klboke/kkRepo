@@ -45,6 +45,7 @@ const SEARCH_ROUTE_FORMAT = {
   composer: "composer",
   terraform: "terraform",
   swift: "swift",
+  ansiblegalaxy: "ansiblegalaxy",
   pypi: "pypi",
   rubygems: "rubygems",
   yum: "yum",
@@ -60,6 +61,7 @@ const FORMAT_ROUTE_SEGMENT = {
   composer: "composer",
   terraform: "terraform",
   swift: "swift",
+  ansiblegalaxy: "ansiblegalaxy",
   pypi: "pypi",
   rubygems: "rubygems",
   yum: "yum",
@@ -152,6 +154,9 @@ function componentBrowsePath(component) {
   }
   if (format === "terraform") return name;
   if (format === "swift") {
+    return [group, name, version].filter(Boolean).join("/");
+  }
+  if (format === "ansiblegalaxy") {
     return [group, name, version].filter(Boolean).join("/");
   }
   return "";
@@ -633,6 +638,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   composer: "composer",
   terraform: "terraform",
   swift: "swift",
+  ansiblegalaxy: "ansiblegalaxy",
   go: "go",
   helm: "helm",
   docker: "docker",
@@ -1571,6 +1577,7 @@ function renderAttributesSection(detail, opts = {}) {
     renderAttributeGroup("Pub", detail.pub),
     renderAttributeGroup("Composer", detail.composer),
     renderAttributeGroup("Swift", detail.swift),
+    renderAttributeGroup("Ansible Galaxy", detail.ansible),
     renderAttributeGroup("Provenance", detail.provenance),
   ].filter(Boolean).join("");
   if (!body) return "";
@@ -2531,6 +2538,50 @@ function swiftUsageDetail(entry) {
   return { crumbText: entry.path, summaryRows, snippets };
 }
 
+function ansibleGalaxyUsageDetail(entry) {
+  const parts = pathSegments(entry.path);
+  const namespace = parts[0] || "";
+  const name = parts[1] || "";
+  const rawVersion = parts[2] || "";
+  const version = rawVersion.endsWith(".tar.gz") ? rawVersion.slice(0, -7) : rawVersion;
+  const collection = namespace && name ? `${namespace}.${name}` : "namespace.collection";
+  const repoUrl = repositoryBaseUrl();
+  const serverName = String(state.repo || "kkrepo").replace(/[^A-Za-z0-9_]/g, "_");
+  const summaryRows = [
+    ["Repository", state.repo],
+    ["Format", "ansiblegalaxy"],
+    ["Collection", namespace && name ? collection : "-"],
+    ["Version", version || "latest"],
+    ["Galaxy server URL", repoUrl],
+  ];
+  const snippets = [
+    usageSnippet(
+      "ansible.cfg",
+      `[galaxy]\nserver_list = ${serverName}\n\n[galaxy_server.${serverName}]\nurl = ${repoUrl}\ntoken = GenericToken.<token>`,
+      "Use a GenericToken/API key in preference to a reusable password",
+    ),
+    usageSnippet(
+      "requirements.yml",
+      `collections:\n  - name: ${collection}\n    version: "${version || ">=1.0.0"}"\n    source: ${repoUrl}`,
+    ),
+    usageSnippet(
+      "Install",
+      `ansible-galaxy collection install ${collection}${version ? `:${version}` : ""} --server ${repoUrl}`,
+    ),
+  ];
+  if (currentRepository()?.type === "hosted") {
+    snippets.push(usageSnippet(
+      "Publish",
+      `ansible-galaxy collection publish ${namespace || "namespace"}-${name || "collection"}-${version || "1.0.0"}.tar.gz --server ${repoUrl}`,
+      "The archive filename and MANIFEST.json identity must match",
+    ));
+  }
+  if (window.location.protocol !== "https:") {
+    summaryRows.push(["Transport warning", "Use HTTPS in production for Galaxy credentials"]);
+  }
+  return { crumbText: entry.path, summaryRows, snippets };
+}
+
 async function usageDetailForEntry(entry, detail = null) {
   const repo = currentRepository();
   if (!repo) return null;
@@ -2544,6 +2595,7 @@ async function usageDetailForEntry(entry, detail = null) {
   if (repo.format === "composer") return composerUsageDetail(entry, detail);
   if (repo.format === "terraform") return terraformUsageDetail(entry);
   if (repo.format === "swift") return swiftUsageDetail(entry);
+  if (repo.format === "ansiblegalaxy") return ansibleGalaxyUsageDetail(entry);
   if (repo.format === "docker") return dockerUsageDetail(entry);
   return null;
 }
@@ -2806,6 +2858,20 @@ function renderUploadFields() {
     `;
     return;
   }
+  if (repo.format === "ansiblegalaxy") {
+    fields.innerHTML = `
+      <label class="upload-file">
+        <span>Collection artifact</span>
+        <input id="upload-file" type="file" accept=".tar.gz,application/gzip,application/x-gzip" required>
+      </label>
+      <div class="muted-row full-width">Use the canonical <code>namespace-name-version.tar.gz</code> artifact produced by <code>ansible-galaxy collection build</code>. The server validates MANIFEST.json, FILES.json, identity, and checksums.</div>
+      <label class="upload-path">
+        <span>Collection artifact</span>
+        <input id="upload-path" type="text" readonly>
+      </label>
+    `;
+    return;
+  }
   fields.innerHTML = `
     <label class="upload-file">
       <span>File</span>
@@ -2897,6 +2963,10 @@ function computedUploadPaths() {
     const version = uploadFieldValue("upload-swift-version");
     const archive = document.getElementById("upload-file")?.files?.[0];
     return scope && name && version && archive ? [`${scope}/${name}/${version}`] : [];
+  }
+  if (repo.format === "ansiblegalaxy") {
+    const file = document.getElementById("upload-file")?.files?.[0];
+    return file ? [file.name] : [];
   }
   if (repo.format !== "maven2") {
     const file = document.getElementById("upload-file")?.files?.[0];
@@ -3062,6 +3132,14 @@ function buildUploadForm(repo, form) {
       form.append("swift.metadata-signature", metadataSignature, metadataSignature.name);
     }
     form.append("swift.source-archive", archive, archive.name);
+    return;
+  }
+  if (repo.format === "ansiblegalaxy") {
+    const file = document.getElementById("upload-file")?.files?.[0];
+    if (!file || !/^[A-Za-z0-9_]+-[A-Za-z0-9_]+-[0-9A-Za-z.+-]+\.tar\.gz$/.test(file.name)) {
+      throw new Error("A canonical namespace-name-version.tar.gz collection artifact is required.");
+    }
+    form.append("ansiblegalaxy.asset", file, file.name);
     return;
   }
   const file = document.getElementById("upload-file")?.files?.[0];

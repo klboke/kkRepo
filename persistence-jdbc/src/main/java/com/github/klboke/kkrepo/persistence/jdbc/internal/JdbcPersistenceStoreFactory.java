@@ -2,7 +2,10 @@ package com.github.klboke.kkrepo.persistence.jdbc.internal;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ArtifactChangeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AuthTicketDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BlobReferenceDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CacheVersionDao;
@@ -25,6 +28,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDataMigrationDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.UiSettingsDao;
@@ -51,8 +55,11 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
   public static PersistenceStores createStores(JdbcTemplate jdbc, DatabaseDialect dialect) {
     JsonColumns json = new JsonColumns(new ObjectMapper(), dialect);
     return new DefaultPersistenceStores(
+        new JdbcAnsibleGalaxyRegistryDao(jdbc, json, dialect),
+        new JdbcArtifactChangeDao(jdbc),
         new JdbcAssetDao(jdbc, json),
         new JdbcAuthTicketDao(jdbc),
+        new JdbcBlobReferenceDao(jdbc),
         new JdbcBlobStoreDao(jdbc, json),
         new JdbcBrowseNodeDao(jdbc),
         new JdbcCacheVersionDao(jdbc, dialect),
@@ -72,14 +79,18 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
         new JdbcRepositoryIndexRebuildDao(jdbc, dialect),
         new JdbcSecurityAuditDao(jdbc, json),
         new JdbcSecurityDao(jdbc, json, dialect),
+        new JdbcSecurityScanDao(jdbc, json, dialect),
         new JdbcSwiftRegistryDao(jdbc, json, dialect),
         new JdbcTerraformRegistryDao(jdbc),
         new JdbcUiSettingsDao(jdbc));
   }
 
   private record DefaultPersistenceStores(
+      AnsibleGalaxyRegistryDao ansibleGalaxyRegistry,
+      ArtifactChangeDao artifactChanges,
       AssetDao assets,
       AuthTicketDao authTickets,
+      BlobReferenceDao blobReferences,
       BlobStoreDao blobStores,
       BrowseNodeDao browseNodes,
       CacheVersionDao cacheVersions,
@@ -99,6 +110,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
       RepositoryIndexRebuildDao repositoryIndexRebuild,
       SecurityAuditDao securityAudit,
       SecurityDao security,
+      SecurityScanDao securityScanning,
       SwiftRegistryDao swiftRegistry,
       TerraformRegistryDao terraformRegistry,
       UiSettingsDao uiSettings) implements PersistenceStores {

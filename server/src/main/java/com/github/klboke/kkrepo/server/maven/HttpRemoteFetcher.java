@@ -493,7 +493,9 @@ public class HttpRemoteFetcher {
 
     private void ensureUnsignedRedirectAllowed(URI redirected) {
       String host = normalizeHost(redirected == null ? null : redirected.getHost());
-      if (!host.isBlank() && allowedUnsignedRedirectHosts.contains(host)) {
+      if (!host.isBlank()
+          && (allowedUnsignedRedirectHosts.contains(host)
+              || allowedUnsignedRedirectHosts.contains("*"))) {
         return;
       }
       throw new SecurityValidationException("remote redirect URL host is not allowed: " + host);
@@ -599,6 +601,18 @@ public class HttpRemoteFetcher {
 
     public String contentType() {
       return header("Content-Type");
+    }
+
+    public long contentLength() {
+      String raw = header("Content-Length");
+      if (raw == null || raw.isBlank()) {
+        return 0;
+      }
+      try {
+        return Math.max(0, Long.parseLong(raw.trim()));
+      } catch (NumberFormatException ignored) {
+        return 0;
+      }
     }
 
     @Override
