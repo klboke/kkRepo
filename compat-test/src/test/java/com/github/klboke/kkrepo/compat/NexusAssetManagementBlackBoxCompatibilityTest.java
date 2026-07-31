@@ -69,7 +69,7 @@ class NexusAssetManagementBlackBoxCompatibilityTest {
 
     String suffix = Long.toUnsignedString(System.nanoTime());
     String directory = "nexus-asset-compat/" + suffix;
-    String filename = "artifact-" + suffix + ".zip";
+    String filename = "artifact-" + suffix + ".txt";
     String path = directory + "/" + filename;
     byte[] payload = ("Nexus asset API compatibility fixture " + suffix + "\n")
         .getBytes(StandardCharsets.UTF_8);
@@ -137,24 +137,28 @@ class NexusAssetManagementBlackBoxCompatibilityTest {
         "compat.asset.mavenRepository", "COMPAT_ASSET_MAVEN_REPOSITORY")
         .orElse("maven-releases");
     String suffix = Long.toUnsignedString(System.nanoTime());
+    String groupId = "com.kkrepo.compat";
     String artifactName = "asset-api-fixture-" + suffix;
-    String path = "com/kkrepo/compat/" + artifactName + "/1.0.0/"
-        + artifactName + "-1.0.0.jar";
+    String version = "1.0.0";
+    String path = groupId.replace('.', '/') + "/" + artifactName + "/" + version + "/"
+        + artifactName + "-" + version + ".jar";
     byte[] payload = ("Maven asset component fixture " + suffix + "\n")
         .getBytes(StandardCharsets.UTF_8);
+    byte[] pom = ("""
+        <project xmlns="http://maven.apache.org/POM/4.0.0">
+          <modelVersion>4.0.0</modelVersion>
+          <groupId>%s</groupId>
+          <artifactId>%s</artifactId>
+          <version>%s</version>
+        </project>
+        """.formatted(groupId, artifactName, version)).getBytes(StandardCharsets.UTF_8);
 
-    Exchange referenceUpload = send(reference.request(
-        "/repository/" + encodeSegment(repository) + "/" + path)
-        .header("Content-Type", "application/java-archive")
-        .PUT(HttpRequest.BodyPublishers.ofByteArray(payload)));
-    Exchange candidateUpload = send(candidate.request(
-        "/repository/" + encodeSegment(repository) + "/" + path)
-        .header("Content-Type", "application/java-archive")
-        .PUT(HttpRequest.BodyPublishers.ofByteArray(payload)));
-    assertTrue(referenceUpload.status() >= 200 && referenceUpload.status() < 300,
-        "reference Maven fixture upload");
-    assertTrue(candidateUpload.status() >= 200 && candidateUpload.status() < 300,
-        "candidate Maven fixture upload");
+    assertEquals(204, uploadMavenComponent(
+        reference, repository, groupId, artifactName, version, payload, pom).status(),
+        "reference Maven component upload");
+    assertEquals(204, uploadMavenComponent(
+        candidate, repository, groupId, artifactName, version, payload, pom).status(),
+        "candidate Maven component upload");
 
     JsonNode referenceAsset = awaitAssetByPath(reference, repository, artifactName, path);
     JsonNode candidateAsset = awaitAssetByPath(candidate, repository, artifactName, path);
@@ -209,8 +213,31 @@ class NexusAssetManagementBlackBoxCompatibilityTest {
       byte[] payload) throws Exception {
     Multipart multipart = new Multipart()
         .field("raw.directory", directory)
-        .file("raw.asset1", filename, "application/zip", payload)
+        .file("raw.asset1", filename, "text/plain", payload)
         .field("raw.asset1.filename", filename);
+    return send(endpoint.request(
+        "/service/rest/v1/components?repository=" + query(repository))
+        .header("Content-Type", "multipart/form-data; boundary=" + multipart.boundary)
+        .POST(HttpRequest.BodyPublishers.ofByteArray(multipart.body())));
+  }
+
+  private static Exchange uploadMavenComponent(
+      Endpoint endpoint,
+      String repository,
+      String groupId,
+      String artifactId,
+      String version,
+      byte[] jar,
+      byte[] pom) throws Exception {
+    Multipart multipart = new Multipart()
+        .field("maven2.groupId", groupId)
+        .field("maven2.artifactId", artifactId)
+        .field("maven2.version", version)
+        .file("maven2.asset1", artifactId + "-" + version + ".jar",
+            "application/java-archive", jar)
+        .field("maven2.asset1.extension", "jar")
+        .file("maven2.asset2", artifactId + "-" + version + ".pom", "application/xml", pom)
+        .field("maven2.asset2.extension", "pom");
     return send(endpoint.request(
         "/service/rest/v1/components?repository=" + query(repository))
         .header("Content-Type", "multipart/form-data; boundary=" + multipart.boundary)

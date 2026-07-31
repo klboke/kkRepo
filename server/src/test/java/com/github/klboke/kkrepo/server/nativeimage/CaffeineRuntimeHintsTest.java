@@ -26,6 +26,9 @@ class CaffeineRuntimeHintsTest {
     List<Cache<Object, Object>> caches =
         List.of(
             Caffeine.newBuilder()
+                .maximumSize(100_000)
+                .build(),
+            Caffeine.newBuilder()
                 .maximumSize(10)
                 .expireAfter(
                     Expiry.creating((Object key, Object value) -> Duration.ofMinutes(1)))

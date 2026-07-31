@@ -11,13 +11,18 @@ public final class CaffeineRuntimeHints implements RuntimeHintsRegistrar {
 
   static final List<String> BOUNDED_CACHE_TYPES =
       List.of(
+          CACHE_PACKAGE + "SSMS",
           CACHE_PACKAGE + "SSMSA",
           CACHE_PACKAGE + "SSMWA",
           CACHE_PACKAGE + "SSMSW",
           CACHE_PACKAGE + "SSLA");
 
   static final List<String> NODE_TYPES =
-      List.of(CACHE_PACKAGE + "PSWMS", CACHE_PACKAGE + "PSAMW", CACHE_PACKAGE + "PSA");
+      List.of(
+          CACHE_PACKAGE + "PSMS",
+          CACHE_PACKAGE + "PSWMS",
+          CACHE_PACKAGE + "PSAMW",
+          CACHE_PACKAGE + "PSA");
 
   @Override
   public void registerHints(RuntimeHints hints, ClassLoader classLoader) {
