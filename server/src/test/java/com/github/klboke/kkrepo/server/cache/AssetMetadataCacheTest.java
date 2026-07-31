@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.github.klboke.kkrepo.cache.SharedCache;
@@ -238,6 +240,44 @@ class AssetMetadataCacheTest {
 
     assertEquals(2, loads.get());
     assertEquals(2L, refreshed.orElseThrow().assetId());
+  }
+
+  @Test
+  void watermarkReadFailureBypassesCacheForReadsAndTouches() {
+    VersionWatermark watermark = mock(VersionWatermark.class);
+    when(watermark.current("asset-metadata:repo:7"))
+        .thenThrow(new IllegalStateException("watermark unavailable"));
+    AssetMetadataCache cache = new AssetMetadataCache(
+        sharedCache, watermark, true, 120, 5);
+    AtomicInteger loads = new AtomicInteger();
+
+    Optional<CachedAssetMetadata> loaded = cache.find(7L, "x.jar", () -> {
+      loads.incrementAndGet();
+      return Optional.of(new Loaded(asset(1L, 7L, "x.jar"), blob(10L)));
+    });
+    cache.touchVerified(7L, "x.jar", Instant.now());
+
+    assertEquals(1, loads.get());
+    assertEquals(1L, loaded.orElseThrow().assetId());
+    assertFalse(sharedCache.getString("asset-metadata", "7:x.jar").isPresent(),
+        "watermark failures must bypass shared cache reads and writes");
+  }
+
+  @Test
+  void watermarkBumpFailureStillEvictsTheLocalEntry() {
+    VersionWatermark watermark = mock(VersionWatermark.class);
+    when(watermark.current("asset-metadata:repo:7")).thenReturn(0L);
+    when(watermark.bump("asset-metadata:repo:7"))
+        .thenThrow(new IllegalStateException("watermark unavailable"));
+    AssetMetadataCache cache = new AssetMetadataCache(
+        sharedCache, watermark, true, 120, 5);
+    cache.find(7L, "x.jar",
+        () -> Optional.of(new Loaded(asset(1L, 7L, "x.jar"), blob(10L))));
+    assertTrue(sharedCache.getString("asset-metadata", "7:x.jar").isPresent());
+
+    cache.evict(7L, "x.jar");
+
+    assertFalse(sharedCache.getString("asset-metadata", "7:x.jar").isPresent());
   }
 
   @Test
