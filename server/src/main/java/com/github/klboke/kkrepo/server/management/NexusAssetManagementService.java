@@ -86,6 +86,10 @@ public class NexusAssetManagementService {
     if (repository == null) {
       return new AssetPage(List.of(), null);
     }
+    if (repository.type() == RepositoryType.GROUP) {
+      throw new InvalidSearchRequestException(
+          "Asset search does not support group repositories");
+    }
 
     long afterAssetId = 0;
     if (continuationToken != null && !continuationToken.isBlank()) {
