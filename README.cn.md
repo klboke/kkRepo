@@ -16,6 +16,7 @@ kkRepo 是一款社区驱动、完全开源的自托管制品仓库，旨在解�
 - 支持 16+ 种主流仓库格式，覆盖 hosted、proxy 和 group 仓库管理。
 - 支持 AOT 编译运行，约 1 秒启动就绪，内存占用低于 200 MB。
 - Proxy 仓库支持按仓库配置出站 HTTP 或 SOCKS5 网络代理，并支持可选的代理认证和 HTTPS 上游隧道。
+- 支持制品安全扫描，包括 CycloneDX SBOM 生成、已知漏洞匹配、策略与豁免管理，以及可选的下载阻断。
 - 兼容 Sonatype Nexus API 协议、用户权限模型、和 `/repository/<repo>/...` URL 布局。
 - 可使用 kkRepo 平替 Sonatype Nexus，支持存量数据一键迁移并沿用原仓库域名和 URL，原有客户端配置与 CI 工作流无需改动。
 - 支持完整的身份与访问控制，覆盖 Local、LDAP、OIDC 认证、匿名访问策略和细粒度权限管理。
