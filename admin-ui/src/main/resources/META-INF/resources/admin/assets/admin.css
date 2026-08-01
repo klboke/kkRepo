@@ -44,7 +44,7 @@ select {
   position: fixed;
   top: 70px;
   right: 16px;
-  z-index: 20;
+  z-index: 1100;
   display: grid;
   gap: 8px;
   max-width: min(420px, calc(100vw - 32px));

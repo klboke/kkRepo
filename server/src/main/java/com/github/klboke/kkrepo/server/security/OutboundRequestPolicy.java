@@ -51,11 +51,19 @@ public class OutboundRequestPolicy {
    * transport so the approved DNS answers cannot be discarded before connection establishment.
    */
   public URI validateHttpUri(String rawUrl, String purpose) {
+    return validateHttpUri(rawUrl, purpose, false);
+  }
+
+  /**
+   * Validates a URL for storage, optionally delegating hostname resolution to an explicitly
+   * configured repository proxy.
+   */
+  public URI validateHttpUri(String rawUrl, String purpose, boolean proxyResolvesDns) {
     if (rawUrl == null || rawUrl.isBlank()) {
       throw new SecurityValidationException(purpose + " URL is required");
     }
     try {
-      return validateHttpUri(new URI(rawUrl), purpose);
+      return validateHttpUri(new URI(rawUrl), purpose, proxyResolvesDns);
     } catch (URISyntaxException e) {
       throw new SecurityValidationException(purpose + " URL is not valid: " + e.getMessage(), e);
     }
@@ -63,11 +71,16 @@ public class OutboundRequestPolicy {
 
   /** See {@link #validateHttpUri(String, String)}. */
   public URI validateHttpUri(URI uri, String purpose) {
+    return validateHttpUri(uri, purpose, false);
+  }
+
+  /** See {@link #validateHttpUri(String, String, boolean)}. */
+  public URI validateHttpUri(URI uri, String purpose, boolean proxyResolvesDns) {
     String host = validatedHost(uri, purpose);
     if (allowedHosts.contains(normalizeHost(host))) {
       return uri;
     }
-    return resolveHttpTarget(uri, purpose).uri();
+    return resolveHttpTarget(uri, purpose, proxyResolvesDns).uri();
   }
 
   /**
@@ -77,18 +90,37 @@ public class OutboundRequestPolicy {
    * checks.
    */
   public ResolvedHttpTarget resolveHttpTarget(String rawUrl, String purpose) {
+    return resolveHttpTarget(rawUrl, purpose, false);
+  }
+
+  /**
+   * Validates an outbound target. When {@code proxyResolvesDns} is true, the returned capability
+   * carries the original hostname instead of locally resolved addresses so the configured proxy can
+   * apply its own DNS and hostname-routing policy.
+   */
+  public ResolvedHttpTarget resolveHttpTarget(
+      String rawUrl, String purpose, boolean proxyResolvesDns) {
     if (rawUrl == null || rawUrl.isBlank()) {
       throw new SecurityValidationException(purpose + " URL is required");
     }
     try {
-      return resolveHttpTarget(new URI(rawUrl), purpose);
+      return resolveHttpTarget(new URI(rawUrl), purpose, proxyResolvesDns);
     } catch (URISyntaxException e) {
       throw new SecurityValidationException(purpose + " URL is not valid: " + e.getMessage(), e);
     }
   }
 
   public ResolvedHttpTarget resolveHttpTarget(URI uri, String purpose) {
+    return resolveHttpTarget(uri, purpose, false);
+  }
+
+  public ResolvedHttpTarget resolveHttpTarget(
+      URI uri, String purpose, boolean proxyResolvesDns) {
     String host = validatedHost(uri, purpose);
+    if (proxyResolvesDns) {
+      validateProxyResolvedHost(host, purpose);
+      return new ResolvedHttpTarget(uri, List.of(), true);
+    }
     InetAddress[] addresses;
     try {
       addresses = hostResolver.resolve(host);
@@ -113,7 +145,40 @@ public class OutboundRequestPolicy {
         }
       }
     }
-    return new ResolvedHttpTarget(uri, Arrays.asList(addresses));
+    return new ResolvedHttpTarget(uri, Arrays.asList(addresses), false);
+  }
+
+  private void validateProxyResolvedHost(String host, String purpose) {
+    String normalized = normalizeHost(host);
+    if (allowPrivateAddresses || allowedHosts.contains(normalized)) {
+      return;
+    }
+    InetAddress literal = literalAddress(normalized);
+    if (literal != null && blockedAddress(literal)) {
+      throw new SecurityValidationException(
+          purpose + " URL resolves to a private or local address: " + host + " -> "
+              + literal.getHostAddress());
+    }
+    if (isLocalOnlyHost(normalized)) {
+      throw new SecurityValidationException(purpose + " URL uses a local-only host: " + host);
+    }
+  }
+
+  private static InetAddress literalAddress(String host) {
+    try {
+      return InetAddress.ofLiteral(host);
+    } catch (IllegalArgumentException ignored) {
+      return null;
+    }
+  }
+
+  private static boolean isLocalOnlyHost(String host) {
+    return host.equals("localhost")
+        || host.endsWith(".localhost")
+        || host.equals("local")
+        || host.endsWith(".local")
+        || host.equals("home.arpa")
+        || host.endsWith(".home.arpa");
   }
 
   private String validatedHost(URI uri, String purpose) {
@@ -180,6 +245,9 @@ public class OutboundRequestPolicy {
     if (value.startsWith("[") && value.endsWith("]")) {
       value = value.substring(1, value.length() - 1);
     }
+    while (value.endsWith(".")) {
+      value = value.substring(0, value.length() - 1);
+    }
     return value;
   }
 
@@ -192,10 +260,13 @@ public class OutboundRequestPolicy {
   public static final class ResolvedHttpTarget {
     private final URI uri;
     private final List<InetAddress> addresses;
+    private final boolean proxyResolvesDns;
 
-    private ResolvedHttpTarget(URI uri, List<InetAddress> addresses) {
+    private ResolvedHttpTarget(
+        URI uri, List<InetAddress> addresses, boolean proxyResolvesDns) {
       this.uri = uri;
       this.addresses = List.copyOf(addresses);
+      this.proxyResolvesDns = proxyResolvesDns;
     }
 
     public URI uri() {
@@ -204,6 +275,10 @@ public class OutboundRequestPolicy {
 
     public List<InetAddress> addresses() {
       return addresses;
+    }
+
+    public boolean proxyResolvesDns() {
+      return proxyResolvesDns;
     }
   }
 }

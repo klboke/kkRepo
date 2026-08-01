@@ -123,7 +123,7 @@ public class DockerRemoteRegistryClient {
     }
   }
 
-  /** DNS-pinned Docker fetch, optionally routed through the repository's SOCKS/HTTP proxy. */
+  /** Docker fetch using either direct DNS pinning or the repository's SOCKS/HTTP proxy DNS. */
   private RemoteFetch pinnedFetchWithHeaders(
       String url,
       RepositoryRuntime runtime,
@@ -138,7 +138,8 @@ public class DockerRemoteRegistryClient {
     ProxiedHttpClientFactory.ProxiedResponse response = null;
     try {
       OutboundRequestPolicy.ResolvedHttpTarget target =
-          outboundPolicy.resolveHttpTarget(url, "docker remote fetch");
+          outboundPolicy.resolveHttpTarget(
+              url, "docker remote fetch", proxyResolvesDns(runtime));
       URI uri = target.uri();
       Map<String, String> headers = new LinkedHashMap<>();
       headers.put("User-Agent", "kkrepo/0.1");
@@ -194,7 +195,7 @@ public class DockerRemoteRegistryClient {
     }
   }
 
-  /** DNS-pinned Docker OAuth token exchange using the same optional outbound proxy. */
+  /** Docker OAuth token exchange using the same direct or proxied resolution mode. */
   private Optional<RemoteToken> pinnedFetchToken(
       RepositoryRuntime runtime,
       BearerChallenge bearer,
@@ -206,7 +207,8 @@ public class DockerRemoteRegistryClient {
     ProxiedHttpClientFactory.ProxiedResponse response = null;
     try {
       OutboundRequestPolicy.ResolvedHttpTarget target =
-          outboundPolicy.resolveHttpTarget(url, "docker token fetch");
+          outboundPolicy.resolveHttpTarget(
+              url, "docker token fetch", proxyResolvesDns(runtime));
       Map<String, String> headers = new LinkedHashMap<>();
       headers.put("User-Agent", "kkrepo/0.1");
       basicAuthorization(runtime).ifPresent(value -> headers.put("Authorization", value));
@@ -358,6 +360,12 @@ public class DockerRemoteRegistryClient {
 
   private static long runtimeId(RepositoryRuntime runtime) {
     return runtime == null ? 0 : runtime.id();
+  }
+
+  private static boolean proxyResolvesDns(RepositoryRuntime runtime) {
+    return runtime != null
+        && runtime.outboundProxy() != null
+        && runtime.outboundProxy().enabled();
   }
 
   private static String credentialFingerprint(RepositoryRuntime runtime) {

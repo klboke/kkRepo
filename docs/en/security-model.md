@@ -208,6 +208,14 @@ KKREPO_OUTBOUND_ALLOWED_HOSTS=
 
 Only allow internal upstream hosts when required. This helps reduce SSRF-style risk from misconfigured proxy repositories.
 
+Direct outbound requests are resolved locally and pinned to policy-approved IP addresses. When a
+repository has an explicit HTTP or SOCKS5 outbound proxy, the upstream hostname is instead sent to
+that proxy for resolution so proxy DNS rules and hostname-based routing remain effective. Treat the
+configured proxy as a trusted egress boundary: by default kkrepo still rejects explicit private IP
+targets and local-only names, but it cannot inspect the IP address returned by DNS inside the proxy.
+The proxy should deny loopback, private-network, link-local, and cloud-metadata destinations unless
+that access is intentionally required.
+
 ## Audit Logs
 
 Security-sensitive actions should be recorded in `security_audit_log`, including administrative changes such as user, role, privilege, realm, and token operations.

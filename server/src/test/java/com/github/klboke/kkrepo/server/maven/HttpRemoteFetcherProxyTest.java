@@ -3,7 +3,6 @@ package com.github.klboke.kkrepo.server.maven;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
@@ -32,7 +31,7 @@ class HttpRemoteFetcherProxyTest {
       HttpRemoteFetcher fetcher = proxiedFetcher(factory);
       Instant lastModified = Instant.ofEpochMilli(1700000000000L);
       HttpRemoteFetcher.Request request = new HttpRemoteFetcher.Request(
-          "http://localhost/com/acme/lib/1.0/lib-1.0.pom",
+          "http://packages.invalid/com/acme/lib/1.0/lib-1.0.pom",
           "abc123",
           lastModified,
           null,
@@ -40,7 +39,7 @@ class HttpRemoteFetcherProxyTest {
           false,
           "maven-proxy",
           "MAVEN2",
-          "localhost",
+          "packages.invalid",
           "Basic cm9ib3Q6c2VjcmV0",
           Set.of(),
           proxyConfig(proxy.port(), null, null));
@@ -54,8 +53,9 @@ class HttpRemoteFetcherProxyTest {
       assertEquals(1, proxy.requests().size());
       FakeHttpProxyServer.RecordedRequest recorded = proxy.requests().get(0);
       assertEquals("GET", recorded.method());
-      assertPinnedLocalhostTarget(recorded, "/com/acme/lib/1.0/lib-1.0.pom");
-      assertEquals("localhost", recorded.header("Host"));
+      assertProxyResolvedTarget(
+          recorded, "packages.invalid", "/com/acme/lib/1.0/lib-1.0.pom");
+      assertEquals("packages.invalid", recorded.header("Host"));
       assertEquals("\"abc123\"", recorded.header("If-None-Match"));
       assertEquals(
           DateTimeFormatter.RFC_1123_DATE_TIME.withZone(ZoneOffset.UTC).format(lastModified),
@@ -136,7 +136,7 @@ class HttpRemoteFetcherProxyTest {
       }
 
       assertEquals(2, proxy.requests().size());
-      assertPinnedLocalhostTarget(proxy.requests().get(1), "/moved/lib-1.0.jar");
+      assertProxyResolvedTarget(proxy.requests().get(1), "localhost", "/moved/lib-1.0.jar");
       assertEquals("Basic cm9ib3Q6c2VjcmV0", proxy.requests().get(1).header("Authorization"));
       assertEquals("application/json", proxy.requests().get(0).header("Accept"));
       assertEquals("application/json", proxy.requests().get(1).header("Accept"));
@@ -226,13 +226,10 @@ class HttpRemoteFetcherProxyTest {
     return new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "127.0.0.1", port, username, password);
   }
 
-  private static void assertPinnedLocalhostTarget(
-      FakeHttpProxyServer.RecordedRequest recorded, String expectedPath)
-      throws Exception {
+  private static void assertProxyResolvedTarget(
+      FakeHttpProxyServer.RecordedRequest recorded, String expectedHost, String expectedPath) {
     URI routed = URI.create(recorded.target());
-    java.net.InetAddress routedAddress = java.net.InetAddress.getByName(routed.getHost());
-    assertTrue(java.util.Arrays.stream(java.net.InetAddress.getAllByName("localhost"))
-        .anyMatch(routedAddress::equals));
+    assertEquals(expectedHost, routed.getHost());
     assertEquals(expectedPath, routed.getRawPath());
   }
 }

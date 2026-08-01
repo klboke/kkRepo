@@ -476,6 +476,32 @@ class RepositoryServiceTest {
   }
 
   @Test
+  void outboundProxyAllowsRemoteHostThatOnlyTheProxyCanResolve() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "maven-proxy",
+        "maven2-proxy",
+        true,
+        "default",
+        true,
+        null,
+        new ProxySettings(
+            "https://packages.invalid/maven2/",
+            1440, 1440, true,
+            null, null, null,
+            null, null,
+            "HTTP", "192.168.1.10", 7890,
+            null, null,
+            null),
+        null, null, null, null));
+
+    assertEquals("https://packages.invalid/maven2/", created.proxy().remoteUrl());
+    assertEquals("HTTP", created.proxy().outboundProxyType());
+  }
+
+  @Test
   void outboundProxyTypeAliasIsStoredAsCanonicalType() {
     StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
     RepositoryService service = service(repositories);

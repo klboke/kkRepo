@@ -1015,12 +1015,13 @@ public class RepositoryService {
         && (settings.remoteUsername() == null || settings.remoteUsername().isBlank())) {
       throw new RepositoryValidationException("proxy.remoteUsername is required when proxy.remotePassword is set");
     }
+    OutboundProxyConfig outboundProxy = validateOutboundProxy(settings);
     try {
-      outboundPolicy.validateHttpUri(settings.remoteUrl(), "proxy.remoteUrl");
+      outboundPolicy.validateHttpUri(
+          settings.remoteUrl(), "proxy.remoteUrl", outboundProxy != null && outboundProxy.enabled());
     } catch (SecurityValidationException e) {
       throw new RepositoryValidationException(e.getMessage());
     }
-    validateOutboundProxy(settings);
     int minimumReleaseAge = settings.minimumReleaseAgeMinutes() == null
         ? 0
         : settings.minimumReleaseAgeMinutes();
@@ -1036,14 +1037,14 @@ public class RepositoryService {
     }
   }
 
-  private void validateOutboundProxy(ProxySettings settings) {
+  private OutboundProxyConfig validateOutboundProxy(ProxySettings settings) {
     boolean hasType = settings.outboundProxyType() != null && !settings.outboundProxyType().isBlank();
     boolean hasHost = settings.outboundProxyHost() != null && !settings.outboundProxyHost().isBlank();
     Integer port = settings.outboundProxyPort();
     if (!hasType && !hasHost && port == null
         && (settings.outboundProxyUsername() == null || settings.outboundProxyUsername().isBlank())
         && (settings.outboundProxyPassword() == null || settings.outboundProxyPassword().isBlank())) {
-      return;
+      return null;
     }
     if (!hasHost) {
       throw new RepositoryValidationException("proxy.outboundProxyHost is required when an outbound proxy is configured");
@@ -1051,8 +1052,7 @@ public class RepositoryService {
     if (port == null || port < 1 || port > 65535) {
       throw new RepositoryValidationException("proxy.outboundProxyPort must be between 1 and 65535");
     }
-    com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.Type type =
-        com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.parseType(settings.outboundProxyType());
+    OutboundProxyConfig.Type type = OutboundProxyConfig.parseType(settings.outboundProxyType());
     if (type == null) {
       throw new RepositoryValidationException(
           "proxy.outboundProxyType must be HTTP or SOCKS (was: " + settings.outboundProxyType() + ")");
@@ -1062,6 +1062,12 @@ public class RepositoryService {
       throw new RepositoryValidationException(
           "proxy.outboundProxyUsername is required when proxy.outboundProxyPassword is set");
     }
+    return new OutboundProxyConfig(
+        type,
+        settings.outboundProxyHost(),
+        port,
+        settings.outboundProxyUsername(),
+        settings.outboundProxyPassword());
   }
 
   private static String normalizeSwiftRemoteUrl(String remoteUrl) {
