@@ -1,8 +1,10 @@
 package com.github.klboke.kkrepo.server.management;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.server.repositories.RepositoryNotFoundException;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.HostedSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryService;
 import com.github.klboke.kkrepo.server.repositories.RepositoryView;
 import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
@@ -35,26 +37,42 @@ public class NexusRepositoryManagementController {
   }
 
   @GetMapping("/maven/group/{repositoryName}")
-  public MavenGroupRepositoryView getMavenGroup(
+  public MavenRepositoryView getMavenGroup(
       @PathVariable("repositoryName") String repositoryName,
       HttpServletRequest request) {
     authorizer.requireRepositoryAdmin(
         request, RepositoryFormat.MAVEN2, repositoryName, "read");
     RepositoryView repository = repositoryService.get(repositoryName);
-    if (repository.format() != RepositoryFormat.MAVEN2
-        || repository.type() != RepositoryType.GROUP
-        || repository.group() == null) {
+    if (repository.format() != RepositoryFormat.MAVEN2) {
       throw new RepositoryNotFoundException(repositoryName);
     }
-    return new MavenGroupRepositoryView(
-        repository.name(),
-        repository.format().id(),
-        repositoryUrl(repository.name(), request),
-        repository.online(),
-        new StorageAttributes(
-            repository.blobStoreName(), repository.strictContentTypeValidation()),
-        new GroupAttributes(repository.group().memberNames()),
-        repository.type().name().toLowerCase(Locale.ROOT));
+    String url = repositoryUrl(repository.name(), request);
+    if (repository.type() == RepositoryType.GROUP && repository.group() != null) {
+      return new MavenGroupRepositoryView(
+          repository.name(),
+          repository.format().id(),
+          url,
+          repository.online(),
+          new StorageAttributes(
+              repository.blobStoreName(), repository.strictContentTypeValidation()),
+          new GroupAttributes(repository.group().memberNames()),
+          repository.type().name().toLowerCase(Locale.ROOT));
+    }
+    if (repository.type() == RepositoryType.HOSTED && repository.hosted() != null) {
+      HostedSettings hosted = repository.hosted();
+      return new MavenHostedRepositoryView(
+          repository.name(),
+          url,
+          repository.online(),
+          new HostedStorageAttributes(
+              repository.blobStoreName(), repository.strictContentTypeValidation(),
+              hosted.writePolicy()),
+          null,
+          new MavenAttributes(hosted.versionPolicy(), hosted.layoutPolicy()),
+          repository.format().id(),
+          repository.type().name().toLowerCase(Locale.ROOT));
+    }
+    throw new RepositoryNotFoundException(repositoryName);
   }
 
   private String repositoryUrl(String repositoryName, HttpServletRequest request) {
@@ -70,6 +88,8 @@ public class NexusRepositoryManagementController {
     return ResponseEntity.notFound().build();
   }
 
+  public interface MavenRepositoryView {}
+
   public record MavenGroupRepositoryView(
       String name,
       String format,
@@ -77,11 +97,30 @@ public class NexusRepositoryManagementController {
       boolean online,
       StorageAttributes storage,
       GroupAttributes group,
-      String type) {}
+      String type) implements MavenRepositoryView {}
+
+  public record MavenHostedRepositoryView(
+      String name,
+      String url,
+      boolean online,
+      HostedStorageAttributes storage,
+      @JsonInclude(JsonInclude.Include.ALWAYS) Object cleanup,
+      MavenAttributes maven,
+      String format,
+      String type) implements MavenRepositoryView {}
 
   public record StorageAttributes(
       String blobStoreName,
       boolean strictContentTypeValidation) {}
+
+  public record HostedStorageAttributes(
+      String blobStoreName,
+      boolean strictContentTypeValidation,
+      String writePolicy) {}
+
+  public record MavenAttributes(
+      String versionPolicy,
+      String layoutPolicy) {}
 
   public record GroupAttributes(List<String> memberNames) {}
 }

@@ -160,6 +160,27 @@ class ComponentDaoTest {
   }
 
   @Test
+  void nexusSearchPageFiltersComponentsByAssetSha1() {
+    RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
+    ComponentDao dao = new JdbcComponentDao(
+        jdbcTemplate,
+        new JsonColumns(new ObjectMapper(), DIALECT),
+        DIALECT);
+    String sha1 = "abcdef0123456789abcdef0123456789abcdef01";
+
+    dao.searchPage(new ComponentDao.ComponentSearchCriteria(
+        null, null, null, null, null, null, sha1), 0L, 51);
+
+    assertTrue(jdbcTemplate.sql.contains("FROM asset a"));
+    assertTrue(jdbcTemplate.sql.contains("JOIN asset_blob b ON b.id = a.asset_blob_id"));
+    assertTrue(jdbcTemplate.sql.contains("a.component_id = c.id"));
+    assertTrue(jdbcTemplate.sql.contains("a.repository_id = c.repository_id"));
+    assertTrue(jdbcTemplate.sql.contains("b.sha1 = ?"));
+    assertTrue(jdbcTemplate.sql.contains("b.deleted_at IS NULL"));
+    Assertions.assertEquals(sha1, jdbcTemplate.args[1]);
+  }
+
+  @Test
   void fulltextBooleanQueryTokenizesWithoutRegexBacktracking() {
     String keyword = "\"".repeat(4096) + "Com.Example artifact-1.0";
 

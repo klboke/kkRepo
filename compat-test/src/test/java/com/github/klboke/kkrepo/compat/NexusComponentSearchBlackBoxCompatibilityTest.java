@@ -59,6 +59,31 @@ class NexusComponentSearchBlackBoxCompatibilityTest {
     assertComponentShape(candidate.path("items").get(0));
   }
 
+  @Test
+  void invalidContinuationAndSha1ParameterMatchNexus() throws Exception {
+    Endpoint reference = Endpoint.reference();
+    Endpoint candidate = Endpoint.candidate();
+
+    String invalidTokenPath =
+        "/service/rest/v1/search?q=idc-component&format=maven2"
+            + "&continuationToken=invalid-token";
+    Exchange referenceInvalid = send(reference.request(invalidTokenPath));
+    Exchange candidateInvalid = send(candidate.request(invalidTokenPath));
+    assertEquals(referenceInvalid.status(), candidateInvalid.status(),
+        "invalid continuation status");
+    assertEquals(500, candidateInvalid.status());
+    assertTrue(referenceInvalid.contentType().startsWith("text/plain"));
+    assertTrue(candidateInvalid.contentType().startsWith("text/plain"));
+
+    String sha1Path = "/service/rest/v1/search?sha1=abc";
+    Exchange referenceSha1 = send(reference.request(sha1Path));
+    Exchange candidateSha1 = send(candidate.request(sha1Path));
+    assertEquals(referenceSha1.status(), candidateSha1.status(), "short SHA-1 status");
+    assertEquals(200, candidateSha1.status());
+    assertEmptyPage(referenceSha1.body());
+    assertEmptyPage(candidateSha1.body());
+  }
+
   private static void assertEmptyPage(byte[] body) throws Exception {
     JsonNode page = json(body);
     assertPageShape(page);
@@ -88,7 +113,9 @@ class NexusComponentSearchBlackBoxCompatibilityTest {
     HttpResponse<byte[]> response = HTTP.send(
         request.timeout(Duration.ofSeconds(60)).GET().build(),
         HttpResponse.BodyHandlers.ofByteArray());
-    return new Exchange(response.statusCode(), response.body());
+    return new Exchange(
+        response.statusCode(), response.headers().firstValue("Content-Type").orElse(""),
+        response.body());
   }
 
   private static JsonNode json(byte[] body) throws Exception {
@@ -126,6 +153,6 @@ class NexusComponentSearchBlackBoxCompatibilityTest {
     }
   }
 
-  private record Exchange(int status, byte[] body) {
+  private record Exchange(int status, String contentType, byte[] body) {
   }
 }

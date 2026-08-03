@@ -24,7 +24,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/service/rest/v1")
 public class NexusAssetController {
   private static final Set<String> SUPPORTED_SEARCH_PARAMETERS =
-      Set.of("repository", "name", "continuationToken");
+      Set.of("repository", "format", "name", "continuationToken");
 
   private final NexusAssetManagementService service;
 
@@ -48,6 +48,7 @@ public class NexusAssetController {
     return service.search(
         parameters.get("repository"),
         parameters.get("name"),
+        parameters.get("format"),
         parameters.get("continuationToken"),
         request);
   }
@@ -68,8 +69,13 @@ public class NexusAssetController {
     return ResponseEntity.unprocessableEntity().build();
   }
 
-  @ExceptionHandler({InvalidContinuationTokenException.class, InvalidSearchRequestException.class})
-  public ResponseEntity<Void> invalidSearch(RuntimeException ignored) {
+  @ExceptionHandler(InvalidContinuationTokenException.class)
+  public ResponseEntity<String> invalidContinuation(InvalidContinuationTokenException exception) {
+    return NexusSearchErrorResponses.invalidContinuation(exception);
+  }
+
+  @ExceptionHandler(InvalidSearchRequestException.class)
+  public ResponseEntity<Void> invalidSearch(InvalidSearchRequestException ignored) {
     return ResponseEntity.badRequest().build();
   }
 

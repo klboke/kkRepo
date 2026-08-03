@@ -109,6 +109,22 @@ class NexusAssetManagementServiceTest {
   }
 
   @Test
+  void assetFormatFiltersByRepositoryFormat() {
+    RepositoryRecord repository = repository(RepositoryFormat.RAW, RepositoryType.HOSTED);
+    when(repositoryDao.findByName(repository.name())).thenReturn(Optional.of(repository));
+    when(assetDao.listAssetWithBlobPage(repository.id(), 0, 51)).thenReturn(List.of());
+
+    assertEquals(List.of(), service.search(
+        repository.name(), null, "raw", null, request).items());
+    assertEquals(List.of(), service.search(
+        repository.name(), null, "maven2", null, request).items());
+    assertEquals(List.of(), service.search(
+        repository.name(), null, "not-a-format", null, request).items());
+
+    verify(assetDao).listAssetWithBlobPage(repository.id(), 0, 51);
+  }
+
+  @Test
   void searchPermissionIsRequiredBeforeRepositoryLookup() {
     doThrow(new ResponseStatusException(HttpStatus.FORBIDDEN, "missing search permission"))
         .when(authorizer).requireSearch(request);

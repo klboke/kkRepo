@@ -81,10 +81,24 @@ public class NexusAssetManagementService {
       String name,
       String continuationToken,
       HttpServletRequest request) {
+    return search(repositoryName, name, null, continuationToken, request);
+  }
+
+  @Transactional
+  public AssetPage search(
+      String repositoryName,
+      String name,
+      String format,
+      String continuationToken,
+      HttpServletRequest request) {
     if (repositoryName == null || repositoryName.isBlank()) {
       throw new InvalidSearchRequestException("repository is required for asset search");
     }
     authorizer.requireSearch(request);
+    RepositoryFormat requestedFormat = parseFormat(format);
+    if (format != null && !format.isBlank() && requestedFormat == null) {
+      return new AssetPage(List.of(), null);
+    }
     RepositoryRecord repository = repositoryDao.findByName(repositoryName).orElse(null);
     if (repository == null) {
       return new AssetPage(List.of(), null);
@@ -92,6 +106,9 @@ public class NexusAssetManagementService {
     if (repository.type() == RepositoryType.GROUP) {
       throw new InvalidSearchRequestException(
           "Asset search does not support group repositories");
+    }
+    if (requestedFormat != null && requestedFormat != repository.format()) {
+      return new AssetPage(List.of(), null);
     }
 
     long afterAssetId = 0;
@@ -356,6 +373,17 @@ public class NexusAssetManagementService {
 
   private static String blankToNull(String value) {
     return value == null || value.isBlank() ? null : value;
+  }
+
+  private static RepositoryFormat parseFormat(String value) {
+    if (value == null || value.isBlank()) {
+      return null;
+    }
+    try {
+      return RepositoryFormat.fromJson(value);
+    } catch (IllegalArgumentException ignored) {
+      return null;
+    }
   }
 
   private static boolean belongsTo(AssetRecord asset, RepositoryRecord repository) {

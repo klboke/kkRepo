@@ -59,7 +59,7 @@ public class NexusComponentSearchService {
     SearchSpec spec = SearchSpec.from(search);
     authorizer.requireSearch(request);
     long afterComponentId = continuationOffset(spec, search.continuationToken());
-    if (spec.invalidFormat()) {
+    if (spec.invalidFormat() || spec.invalidSha1()) {
       return new ComponentPage(List.of(), null);
     }
 
@@ -179,7 +179,18 @@ public class NexusComponentSearchService {
       String group,
       String name,
       String version,
+      String sha1,
       String continuationToken) {
+    public SearchRequest(
+        String keyword,
+        String repository,
+        String format,
+        String group,
+        String name,
+        String version,
+        String continuationToken) {
+      this(keyword, repository, format, group, name, version, null, continuationToken);
+    }
   }
 
   public record ComponentView(
@@ -203,7 +214,8 @@ public class NexusComponentSearchService {
   private record SearchSpec(
       ComponentSearchCriteria criteria,
       String fingerprint,
-      boolean invalidFormat) {
+      boolean invalidFormat,
+      boolean invalidSha1) {
 
     private static SearchSpec from(SearchRequest request) {
       String keyword = blankToNull(request.keyword());
@@ -212,6 +224,7 @@ public class NexusComponentSearchService {
       String group = blankToNull(request.group());
       String name = blankToNull(request.name());
       String version = blankToNull(request.version());
+      String sha1Value = blankToNull(request.sha1());
       RepositoryFormat format = null;
       boolean invalidFormat = false;
       if (formatValue != null) {
@@ -223,8 +236,11 @@ public class NexusComponentSearchService {
       }
       String normalizedFormat = formatValue == null
           ? null : formatValue.toLowerCase(Locale.ROOT);
+      boolean invalidSha1 = sha1Value != null && !sha1Value.matches("(?i)[0-9a-f]{40}");
+      String sha1 = sha1Value == null || invalidSha1
+          ? null : sha1Value.toLowerCase(Locale.ROOT);
       ComponentSearchCriteria criteria = new ComponentSearchCriteria(
-          keyword, format, repository, group, name, version);
+          keyword, format, repository, group, name, version, sha1);
       return new SearchSpec(
           criteria,
           NexusComponentSearchService.fingerprint(List.of(
@@ -233,8 +249,10 @@ public class NexusComponentSearchService {
               value(normalizedFormat),
               value(group),
               value(name),
-              value(version))),
-          invalidFormat);
+              value(version),
+              value(sha1))),
+          invalidFormat,
+          invalidSha1);
     }
 
     private static String value(String value) {

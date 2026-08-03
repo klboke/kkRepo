@@ -44,8 +44,11 @@ public interface ComponentDao {
   default List<ComponentSearchRow> searchPage(
       ComponentSearchCriteria criteria, long afterComponentId, int limit) {
     ComponentSearchCriteria effective = criteria == null
-        ? new ComponentSearchCriteria(null, null, null, null, null, null)
+        ? new ComponentSearchCriteria(null, null, null, null, null, null, null)
         : criteria;
+    if (effective.sha1() != null) {
+      return List.of();
+    }
     return search(effective.keyword(), effective.format(), Math.max(limit, 300)).stream()
         .filter(row -> row.id() > Math.max(0, afterComponentId))
         .filter(row -> effective.repositoryName() == null
@@ -94,6 +97,16 @@ public interface ComponentDao {
       String repositoryName,
       String namespace,
       String name,
-      String version) {
+      String version,
+      String sha1) {
+    public ComponentSearchCriteria(
+        String keyword,
+        RepositoryFormat format,
+        String repositoryName,
+        String namespace,
+        String name,
+        String version) {
+      this(keyword, format, repositoryName, namespace, name, version, null);
+    }
   }
 }

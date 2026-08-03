@@ -152,6 +152,75 @@ class MoonWindowsManagementBlackBoxCompatibilityTest {
         "Maven group members");
   }
 
+  @Test
+  void assetFormatAndInvalidContinuationMatchNexus() throws Exception {
+    Endpoint reference = Endpoint.referenceEndpoint();
+    Endpoint candidate = Endpoint.candidateEndpoint();
+    String repository = setting(
+        "compat.moon.rawSearchRepository", "COMPAT_MOON_RAW_SEARCH_REPOSITORY")
+        .orElse("windows-components");
+    String basePath = "/service/rest/v1/search/assets?repository=" + query(repository);
+
+    Exchange referenceFormat = send(reference.request(basePath + "&format=raw").GET());
+    Exchange candidateFormat = send(candidate.request(basePath + "&format=raw").GET());
+    assertEquals(referenceFormat.status(), candidateFormat.status(), "asset format status");
+    assertEquals(200, candidateFormat.status());
+    assertAssetPageFormat(json(referenceFormat.body()), "raw");
+    assertAssetPageFormat(json(candidateFormat.body()), "raw");
+
+    Exchange referenceInvalid = send(
+        reference.request(basePath + "&continuationToken=invalid-token").GET());
+    Exchange candidateInvalid = send(
+        candidate.request(basePath + "&continuationToken=invalid-token").GET());
+    assertEquals(referenceInvalid.status(), candidateInvalid.status(),
+        "asset invalid continuation status");
+    assertEquals(500, candidateInvalid.status());
+    assertTrue(referenceInvalid.contentType().startsWith("text/plain"));
+    assertTrue(candidateInvalid.contentType().startsWith("text/plain"));
+  }
+
+  @Test
+  void mavenTypedGroupRouteReturnsHostedShapeLikeNexus() throws Exception {
+    Endpoint reference = Endpoint.referenceEndpoint();
+    Endpoint candidate = Endpoint.candidateEndpoint();
+    String repository = setting(
+        "compat.moon.mavenHostedRepository", "COMPAT_MOON_MAVEN_HOSTED_REPOSITORY")
+        .orElse("maven-releases");
+    String path = "/service/rest/v1/repositories/maven/group/" + encodeSegment(repository);
+
+    Exchange referenceResponse = send(reference.request(path).GET());
+    Exchange candidateResponse = send(candidate.request(path).GET());
+    assertEquals(referenceResponse.status(), candidateResponse.status(),
+        "Maven typed-route hosted status");
+    assertEquals(200, candidateResponse.status());
+    JsonNode referenceJson = json(referenceResponse.body());
+    JsonNode candidateJson = json(candidateResponse.body());
+    assertMavenHostedShape(referenceJson, repository);
+    assertMavenHostedShape(candidateJson, repository);
+    assertEquals(referenceJson.path("storage").path("writePolicy"),
+        candidateJson.path("storage").path("writePolicy"));
+    assertEquals(referenceJson.path("maven"), candidateJson.path("maven"));
+  }
+
+  private static void assertAssetPageFormat(JsonNode page, String format) {
+    assertTrue(page.path("items").isArray());
+    assertFalse(page.path("items").isEmpty(), "configured Raw repository must contain assets");
+    page.path("items").forEach(item -> assertEquals(format, item.path("format").asText()));
+  }
+
+  private static void assertMavenHostedShape(JsonNode repository, String name) {
+    assertEquals(name, repository.path("name").asText());
+    assertEquals("maven2", repository.path("format").asText());
+    assertEquals("hosted", repository.path("type").asText());
+    assertTrue(repository.path("online").isBoolean());
+    assertTrue(repository.path("storage").path("blobStoreName").isTextual());
+    assertTrue(repository.path("storage").path("strictContentTypeValidation").isBoolean());
+    assertTrue(repository.path("storage").path("writePolicy").isTextual());
+    assertTrue(repository.path("cleanup").isNull());
+    assertTrue(repository.path("maven").path("versionPolicy").isTextual());
+    assertTrue(repository.path("maven").path("layoutPolicy").isTextual());
+  }
+
   private static void assertEmptyPage(byte[] body) throws Exception {
     JsonNode page = MAPPER.readTree(body);
     assertTrue(page.path("items").isArray(), "items must be an array");
@@ -165,14 +234,18 @@ class MoonWindowsManagementBlackBoxCompatibilityTest {
         .GET()
         .build();
     HttpResponse<byte[]> response = HTTP.send(request, HttpResponse.BodyHandlers.ofByteArray());
-    return new Exchange(response.statusCode(), response.body());
+    return new Exchange(
+        response.statusCode(), response.headers().firstValue("Content-Type").orElse(""),
+        response.body());
   }
 
   private static Exchange send(HttpRequest.Builder request) throws Exception {
     HttpResponse<byte[]> response = HTTP.send(
         request.timeout(Duration.ofSeconds(60)).build(),
         HttpResponse.BodyHandlers.ofByteArray());
-    return new Exchange(response.statusCode(), response.body());
+    return new Exchange(
+        response.statusCode(), response.headers().firstValue("Content-Type").orElse(""),
+        response.body());
   }
 
   private static Exchange upload(
@@ -398,5 +471,5 @@ class MoonWindowsManagementBlackBoxCompatibilityTest {
     }
   }
 
-  private record Exchange(int status, byte[] body) {}
+  private record Exchange(int status, String contentType, byte[] body) {}
 }

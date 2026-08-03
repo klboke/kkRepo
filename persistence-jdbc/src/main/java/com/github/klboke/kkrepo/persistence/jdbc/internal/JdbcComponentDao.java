@@ -260,7 +260,7 @@ public class JdbcComponentDao implements com.github.klboke.kkrepo.persistence.jd
   public List<ComponentSearchRow> searchPage(
       ComponentSearchCriteria criteria, long afterComponentId, int limit) {
     ComponentSearchCriteria effective = criteria == null
-        ? new ComponentSearchCriteria(null, null, null, null, null, null)
+        ? new ComponentSearchCriteria(null, null, null, null, null, null, null)
         : criteria;
     String keyword = effective.keyword() == null ? "" : effective.keyword().trim();
     String booleanQuery = keyword.isEmpty()
@@ -292,6 +292,21 @@ public class JdbcComponentDao implements com.github.klboke.kkrepo.persistence.jd
     appendExactFilter(sql, args, "c.namespace", effective.namespace());
     appendExactFilter(sql, args, "c.name", effective.name());
     appendExactFilter(sql, args, "c.version", effective.version());
+    if (effective.sha1() != null) {
+      sql.append("""
+          AND EXISTS (
+            SELECT 1
+            FROM asset a
+            JOIN asset_blob b ON b.id = a.asset_blob_id
+            WHERE a.component_id = c.id
+              AND a.repository_id = c.repository_id
+              AND a.format = c.format
+              AND b.sha1 = ?
+              AND b.deleted_at IS NULL
+          )
+          """);
+      args.add(effective.sha1());
+    }
     sql.append("  AND ").append(SEARCH_VISIBLE_PREDICATE).append('\n')
         .append("ORDER BY c.id\nLIMIT ?");
     args.add(Math.max(1, limit));

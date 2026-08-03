@@ -3538,7 +3538,7 @@ public abstract class PersistenceApiContract {
     long otherMavenRepository = createRepository("maven-other", RepositoryFormat.MAVEN2);
     long npmRepository = createRepository("npm-search", RepositoryFormat.NPM);
 
-    stores().components().upsertReturningId(component(
+    long checksumComponentId = stores().components().upsertReturningId(component(
         mavenRepository, RepositoryFormat.MAVEN2, "com.acme.platform", "observability-library",
         "2.0.0", Map.of("keywords", "telemetry tracing"), Instant.parse("2026-07-13T10:00:00Z")));
     stores().components().upsertReturningId(component(
@@ -3565,11 +3565,31 @@ public abstract class PersistenceApiContract {
             .stream().map(row -> row.version()).toList());
     assertFalse(stores().components().search("telemetry", RepositoryFormat.NPM, 20).isEmpty());
 
+    long blobStoreId = stores().repositories().findById(mavenRepository)
+        .orElseThrow().blobStoreId();
+    long checksumBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "maven-search/observability-library.jar", "component-search-sha1"));
+    String checksumPath = "com/acme/platform/observability-library/2.0.0/"
+        + "observability-library-2.0.0.jar";
+    stores().assets().insertAsset(new AssetRecord(
+        null, mavenRepository, checksumComponentId, checksumBlobId, RepositoryFormat.MAVEN2,
+        checksumPath, PersistenceHashes.pathHash(checksumPath),
+        "observability-library-2.0.0.jar", "ARTIFACT", "application/java-archive", 42L,
+        null, Instant.parse("2026-07-13T10:00:00Z"), Map.of()));
+
     ComponentSearchCriteria exact = new ComponentSearchCriteria(
         "telemetry tracing", RepositoryFormat.MAVEN2, "maven-search",
         "com.acme.platform", "observability-library", "2.0.0");
     var exactPage = stores().components().searchPage(exact, 0, 2);
     assertEquals(List.of("2.0.0"), exactPage.stream().map(row -> row.version()).toList());
+
+    ComponentSearchCriteria checksum = new ComponentSearchCriteria(
+        null, null, null, null, null, null, "1".repeat(40));
+    assertEquals(List.of("2.0.0"), stores().components().searchPage(checksum, 0, 2)
+        .stream().map(row -> row.version()).toList());
+    ComponentSearchCriteria missingChecksum = new ComponentSearchCriteria(
+        null, null, null, null, null, null, "f".repeat(40));
+    assertTrue(stores().components().searchPage(missingChecksum, 0, 2).isEmpty());
 
     ComponentSearchCriteria paged = new ComponentSearchCriteria(
         "telemetry", RepositoryFormat.MAVEN2, null, null, null, null);

@@ -191,6 +191,31 @@ class NexusComponentSearchServiceTest {
     verifyNoInteractions(componentDao, assetDao);
   }
 
+  @Test
+  void invalidSha1ReturnsNexusEmptyPageWithoutDatabaseSearch() {
+    var page = service.search(
+        new SearchRequest(null, null, null, null, null, null, "abc", null), request);
+
+    assertEquals(List.of(), page.items());
+    assertNull(page.continuationToken());
+    verifyNoInteractions(componentDao, assetDao, repositoryDao);
+  }
+
+  @Test
+  void validSha1IsNormalizedAndPassedToSharedDatabaseSearch() {
+    String sha1 = "ABCDEF0123456789ABCDEF0123456789ABCDEF01";
+    when(componentDao.searchPage(any(ComponentSearchCriteria.class), eq(0L), eq(51)))
+        .thenReturn(List.of());
+
+    service.search(
+        new SearchRequest(null, null, null, null, null, null, sha1, null), request);
+
+    ArgumentCaptor<ComponentSearchCriteria> criteria =
+        ArgumentCaptor.forClass(ComponentSearchCriteria.class);
+    verify(componentDao).searchPage(criteria.capture(), eq(0L), eq(51));
+    assertEquals(sha1.toLowerCase(java.util.Locale.ROOT), criteria.getValue().sha1());
+  }
+
   private ComponentSearchRow component(long id, String group, String name, String version) {
     return new ComponentSearchRow(
         id, repository.id(), repository.name(), repository.format(), group, name, version,
