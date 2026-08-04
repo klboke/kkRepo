@@ -14,6 +14,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ArtifactChangeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.ScannerResourceKind;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.ScannerTokenResource;
@@ -54,10 +55,12 @@ import com.github.klboke.kkrepo.security.scan.ScanTaskPriorities;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -105,6 +108,15 @@ public abstract class PersistenceApiContract {
         "browse_node",
         "cache_version",
         "cleanup_policy",
+        "cleanup_policy_repository_cursor",
+        "cleanup_policy_schedule",
+        "cleanup_protection",
+        "cleanup_repository_lease",
+        "cleanup_run",
+        "cleanup_run_item",
+        "cleanup_run_repository",
+        "cleanup_usage",
+        "cleanup_usage_tracking_repository",
         "component",
         "component_search",
         "content_selector",
@@ -124,6 +136,17 @@ public abstract class PersistenceApiContract {
         "npm_release_index_revision",
         "proxy_remote_state",
         "pub_upload_session",
+        "qrtz_blob_triggers",
+        "qrtz_calendars",
+        "qrtz_cron_triggers",
+        "qrtz_fired_triggers",
+        "qrtz_job_details",
+        "qrtz_locks",
+        "qrtz_paused_trigger_grps",
+        "qrtz_scheduler_state",
+        "qrtz_simple_triggers",
+        "qrtz_simprop_triggers",
+        "qrtz_triggers",
         "repository",
         "repository_cleanup_policy",
         "repository_data_migration_asset",
@@ -173,6 +196,548 @@ public abstract class PersistenceApiContract {
         "terraform_signing_key",
         "terraform_source_binding",
         "ui_settings"), databaseTables());
+  }
+
+  @Test
+  void cleanupPoliciesPersistTargetsSchedulesAndBoundedRunResults() {
+    CleanupPolicyDao cleanup = stores().cleanupPolicies();
+    Instant now = Instant.parse("2026-08-01T00:00:00Z");
+    long blobStoreId = stores().blobStores().insert(blobStore("cleanup-contract"));
+    long firstRepositoryId = insertRepository(
+        "cleanup-first", RepositoryFormat.MAVEN2, blobStoreId);
+    long secondRepositoryId = insertRepository(
+        "cleanup-second", RepositoryFormat.MAVEN2, blobStoreId);
+    long policyId = cleanup.createPolicy(new CleanupPolicyDao.CleanupPolicy(
+        null,
+        "contract cleanup",
+        RepositoryFormat.MAVEN2,
+        "contract",
+        Map.of("pattern", "fixture-*", "retainCount", 2),
+        1,
+        "PAUSED",
+        50,
+        5,
+        now,
+        now));
+    cleanup.replaceTargets(policyId, List.of(firstRepositoryId, secondRepositoryId));
+    assertTrue(cleanup.hasRepositoryReferences(firstRepositoryId));
+    cleanup.upsertSchedule(new CleanupPolicyDao.CleanupSchedule(
+        policyId,
+        "0 0 10 * * ?",
+        "Asia/Shanghai",
+        true,
+        null,
+        now,
+        now));
+
+    assertEquals(2, cleanup.listTargets(policyId).size());
+    assertEquals(
+        "0 0 10 * * ?",
+        cleanup.findSchedule(policyId).orElseThrow().cronExpression());
+    assertEquals(1, cleanup.listSchedules().size());
+    cleanup.upsertSchedule(new CleanupPolicyDao.CleanupSchedule(
+        policyId,
+        "0 30 11 * * ?",
+        "UTC",
+        false,
+        null,
+        now,
+        now.plusSeconds(1)));
+    CleanupPolicyDao.CleanupSchedule updatedSchedule =
+        cleanup.findSchedule(policyId).orElseThrow();
+    assertEquals("0 30 11 * * ?", updatedSchedule.cronExpression());
+    assertEquals("UTC", updatedSchedule.timeZone());
+    assertFalse(updatedSchedule.enabled());
+
+    long runId = cleanup.createRun(new CleanupPolicyDao.CleanupRun(
+        null,
+        policyId,
+        1,
+        "TRY_RUN",
+        "MANUAL",
+        "RUNNING",
+        "contract",
+        null,
+        50,
+        5,
+        Map.of("retainCount", 2),
+        List.of(Map.of("id", firstRepositoryId, "name", "cleanup-first")),
+        0,
+        0,
+        0,
+        0,
+        0,
+        null,
+        now,
+        null,
+        now,
+        now));
+    long shardId = cleanup.createRunRepository(new CleanupPolicyDao.CleanupRunRepository(
+        null,
+        runId,
+        firstRepositoryId,
+        "cleanup-first",
+        RepositoryFormat.MAVEN2,
+        RepositoryType.HOSTED,
+        "RUNNING",
+        0,
+        0,
+        0,
+        0,
+        false,
+        null,
+        now,
+        null,
+        now,
+        now));
+    cleanup.insertRunItems(List.of(new CleanupPolicyDao.CleanupRunItem(
+        null,
+        shardId,
+        "COMPONENT",
+        "component:1",
+        PersistenceHashes.sha256("component:1"),
+        "fixture",
+        "fixture:1.0.0",
+        "1.0.0",
+        "org/example/fixture/1.0.0",
+        null,
+        now,
+        2,
+        42,
+        "WOULD_DELETE",
+        Map.of("versionRank", 3),
+        null,
+        now,
+        now)));
+    cleanup.completeRunRepository(
+        shardId, "SUCCEEDED", 3, 1, 1, 0, 0, false, null, now.plusSeconds(1));
+    cleanup.completeRun(
+        runId, "SUCCEEDED", 3, 1, 1, 0, 0, 0, null, now.plusSeconds(1));
+
+    CleanupPolicyDao.CleanupRun completedRun = cleanup.findRun(runId).orElseThrow();
+    assertEquals("SUCCEEDED", completedRun.state());
+    assertEquals(1, completedRun.wouldDeleteSubjects());
+    assertEquals(1, cleanup.listRunRepositories(runId).size());
+    assertEquals("fixture:1.0.0", cleanup.listRunItems(shardId, 0, 10).getFirst().displayName());
+
+    cleanup.deleteSchedule(policyId);
+    cleanup.replaceTargets(policyId, List.of());
+    assertFalse(
+        cleanup.hasRepositoryReferences(firstRepositoryId),
+        "terminal run history must not permanently block repository deletion");
+    assertTrue(cleanup.markPolicyDeleted(policyId, 1, now.plusSeconds(2)));
+    assertTrue(cleanup.findPolicy(policyId).isEmpty());
+    long replacementPolicyId = cleanup.createPolicy(new CleanupPolicyDao.CleanupPolicy(
+        null,
+        "contract cleanup",
+        RepositoryFormat.MAVEN2,
+        null,
+        Map.of("publishedOlderThanDays", 30),
+        1,
+        "PAUSED",
+        50,
+        5,
+        now,
+        now));
+    assertTrue(replacementPolicyId > policyId, "a deleted policy name must be reusable");
+  }
+
+  @Test
+  void cleanupRuntimeIsMonotonicFencedRecoverableAndGloballyBounded() {
+    CleanupPolicyDao cleanup = stores().cleanupPolicies();
+    assertNotNull(cleanup.currentTime());
+    Instant base = Instant.now().plusSeconds(1).truncatedTo(ChronoUnit.MILLIS);
+    long blobStoreId = stores().blobStores().insert(blobStore("cleanup-runtime-contract"));
+    long firstRepositoryId = insertRepository(
+        "cleanup-runtime-first", RepositoryFormat.RAW, blobStoreId);
+    long secondRepositoryId = insertRepository(
+        "cleanup-runtime-second", RepositoryFormat.RAW, blobStoreId);
+    long blobId = stores().assets().insertBlob(
+        blob(blobStoreId, "cleanup/runtime.bin", "cleanup-runtime-blob"));
+    String path = "runtime.bin";
+    long assetId = stores().assets().insertAsset(new AssetRecord(
+        null,
+        firstRepositoryId,
+        null,
+        blobId,
+        RepositoryFormat.RAW,
+        path,
+        PersistenceHashes.pathHash(path),
+        path,
+        "FILE",
+        "application/octet-stream",
+        42L,
+        null,
+        base.minusSeconds(3_600),
+        Map.of()));
+
+    cleanup.synchronizeUsageTracking(Map.of(firstRepositoryId, base.minusSeconds(60)), base);
+    assertEquals(
+        CleanupPolicyDao.CleanupUsageWriteOutcome.WRITTEN,
+        inTransaction(() -> cleanup.recordAssetUsage(
+            assetId, firstRepositoryId, Duration.ofMinutes(5))));
+    CleanupPolicyDao.CleanupUsage firstUsage = inTransaction(() ->
+        cleanup.upsertAssetUsage(assetId, base).orElseThrow());
+    CleanupPolicyDao.CleanupUsage outOfOrderUsage = inTransaction(() ->
+        cleanup.upsertAssetUsage(assetId, base.minusSeconds(30)).orElseThrow());
+    CleanupPolicyDao.CleanupUsage latestUsage = inTransaction(() ->
+        cleanup.upsertAssetUsage(assetId, base.plusSeconds(30)).orElseThrow());
+    assertEquals(base, firstUsage.lastDownloadedAt());
+    assertEquals(firstUsage.usageRevision(), outOfOrderUsage.usageRevision());
+    assertEquals(base, outOfOrderUsage.lastDownloadedAt());
+    assertTrue(latestUsage.usageRevision() > firstUsage.usageRevision());
+    assertEquals(base.plusSeconds(30), latestUsage.lastDownloadedAt());
+    assertEquals(
+        CleanupPolicyDao.CleanupUsageWriteOutcome.COALESCED,
+        inTransaction(() -> cleanup.recordAssetUsage(
+            assetId, firstRepositoryId, Duration.ofMinutes(5))));
+
+    String subjectKey = "asset:" + assetId;
+    long protectionId = cleanup.createProtection(new CleanupPolicyDao.CleanupProtection(
+        null,
+        "SUBJECT",
+        firstRepositoryId,
+        "ASSET",
+        subjectKey,
+        PersistenceHashes.sha256(subjectKey),
+        "MANUAL",
+        null,
+        "contract hold",
+        true,
+        base.plusSeconds(3_600),
+        null,
+        "contract",
+        base,
+        base));
+    assertEquals(protectionId, cleanup.findActiveProtection(
+        firstRepositoryId,
+        "ASSET",
+        subjectKey,
+        PersistenceHashes.sha256(subjectKey),
+        base.plusSeconds(1)).orElseThrow().id());
+    long repositoryProtectionId = cleanup.createProtection(
+        new CleanupPolicyDao.CleanupProtection(
+            null,
+            "REPOSITORY",
+            firstRepositoryId,
+            null,
+            null,
+            null,
+            "MANUAL",
+            null,
+            "contract repository hold",
+            true,
+            base.plusSeconds(3_600),
+            null,
+            "contract",
+            base,
+            base));
+    String otherSubjectKey = "asset:other";
+    Map<String, CleanupPolicyDao.CleanupProtection> batchedProtections =
+        cleanup.findActiveProtections(
+            firstRepositoryId,
+            List.of(
+                new CleanupPolicyDao.CleanupProtectionLookup(
+                    "exact", "ASSET", subjectKey, PersistenceHashes.sha256(subjectKey)),
+                new CleanupPolicyDao.CleanupProtectionLookup(
+                    "broad", "ASSET", otherSubjectKey,
+                    PersistenceHashes.sha256(otherSubjectKey))),
+            base.plusSeconds(1));
+    assertEquals(protectionId, batchedProtections.get("exact").id());
+    assertEquals(repositoryProtectionId, batchedProtections.get("broad").id());
+
+    long policyId = cleanup.createPolicy(new CleanupPolicyDao.CleanupPolicy(
+        null,
+        "cleanup runtime contract",
+        RepositoryFormat.RAW,
+        null,
+        Map.of("publishedOlderThanDays", 1),
+        1,
+        "ACTIVE",
+        30_000,
+        100,
+        base,
+        base));
+    cleanup.replaceTargets(policyId, List.of(firstRepositoryId, secondRepositoryId));
+    long budgetRunId = cleanup.createRun(cleanupRun(policyId, "TRY_RUN", base));
+    long firstBudgetShard = cleanup.createRunRepository(cleanupShard(
+        budgetRunId, firstRepositoryId, "cleanup-runtime-first", base));
+    long secondBudgetShard = cleanup.createRunRepository(cleanupShard(
+        budgetRunId, secondRepositoryId, "cleanup-runtime-second", base));
+    assertEquals(30_000, cleanup.reserveTryRunScanBudget(
+        budgetRunId, firstBudgetShard, 30_000, 50_000));
+    assertEquals(20_000, cleanup.reserveTryRunScanBudget(
+        budgetRunId, secondBudgetShard, 30_000, 50_000));
+    assertEquals(30_000, cleanup.reserveTryRunScanBudget(
+        budgetRunId, firstBudgetShard, 30_000, 50_000));
+    cleanup.completeRunRepository(
+        firstBudgetShard, "SUCCEEDED", 30_000, 0, 0, 0, 0, false, null, base);
+    cleanup.completeRunRepository(
+        secondBudgetShard, "SUCCEEDED", 20_000, 0, 0, 0, 0, false, null, base);
+    cleanup.completeRun(
+        budgetRunId, "SUCCEEDED", 50_000, 0, 0, 0, 0, 0, null, base);
+
+    long leaseRunId = cleanup.createRun(cleanupRun(policyId, "EXECUTE", base));
+    long leaseShardId = cleanup.createRunRepository(cleanupShard(
+        leaseRunId, firstRepositoryId, "cleanup-runtime-first", base));
+    CleanupPolicyDao.ClaimedRunRepository firstClaim = inTransaction(() ->
+        cleanup.claimRunRepositories("worker-a", base, base.plusSeconds(2), 1)).getFirst();
+    assertEquals(leaseShardId, firstClaim.id());
+    assertTrue(inTransaction(() -> cleanup.claimRunRepositories(
+        "worker-b", base.plusSeconds(1), base.plusSeconds(3), 1)).isEmpty());
+    CleanupPolicyDao.ClaimedRunRepository takeover = inTransaction(() ->
+        cleanup.claimRunRepositories(
+            "worker-b", base.plusSeconds(3), base.plusSeconds(30), 1)).getFirst();
+    assertEquals(leaseShardId, takeover.id());
+    assertTrue(takeover.fencingToken() > firstClaim.fencingToken());
+    assertFalse(cleanup.heartbeatRunRepository(
+        firstClaim.id(),
+        firstClaim.leaseToken(),
+        firstClaim.fencingToken(),
+        base.plusSeconds(30),
+        base.plusSeconds(3)));
+    assertTrue(takeover.takeover());
+    CleanupPolicyDao.CleanupScanCursor startCursor =
+        cleanup.acquireRunRepositoryScanCursor(
+            takeover.id(),
+            takeover.leaseToken(),
+            takeover.fencingToken(),
+            "COMPONENT",
+            base.plusSeconds(3));
+    assertEquals("COMPONENT", startCursor.phase());
+    assertEquals(0, startCursor.revision());
+    CleanupPolicyDao.CleanupScanCursor nextCursor = new CleanupPolicyDao.CleanupScanCursor(
+        startCursor.policyId(),
+        startCursor.repositoryId(),
+        "ASSET",
+        null,
+        null,
+        null,
+        assetId,
+        startCursor.revision(),
+        startCursor.wrappedCount());
+    CleanupPolicyDao.CleanupCursorCompletion cursorCompletion =
+        cleanup.completeClaimedRunRepositoryAndAdvanceCursor(
+        takeover.id(),
+        takeover.leaseToken(),
+        takeover.fencingToken(),
+        "SUCCEEDED",
+        0,
+        0,
+        0,
+        0,
+        0,
+        false,
+        null,
+        base.plusSeconds(4),
+        startCursor,
+        nextCursor);
+    assertTrue(cursorCompletion.completed());
+    assertTrue(cursorCompletion.cursorAdvanced());
+
+    long runningCancellationRunId = cleanup.createRun(cleanupRun(policyId, "EXECUTE", base));
+    long runningCancellationShardId = cleanup.createRunRepository(cleanupShard(
+        runningCancellationRunId, firstRepositoryId, "cleanup-runtime-first", base));
+    CleanupPolicyDao.ClaimedRunRepository runningCancellationClaim = inTransaction(() ->
+        cleanup.claimRunRepositories(
+            "worker-c", base.plusSeconds(5), base.plusSeconds(30), 1)).getFirst();
+    assertEquals(runningCancellationShardId, runningCancellationClaim.id());
+    CleanupPolicyDao.CleanupScanCursor resumedCursor =
+        cleanup.acquireRunRepositoryScanCursor(
+            runningCancellationClaim.id(),
+            runningCancellationClaim.leaseToken(),
+            runningCancellationClaim.fencingToken(),
+            "COMPONENT",
+            base.plusSeconds(5));
+    assertEquals("ASSET", resumedCursor.phase());
+    assertEquals(assetId, resumedCursor.subjectId());
+    assertEquals(1, resumedCursor.revision());
+    assertTrue(cleanup.requestRunCancellation(
+        runningCancellationRunId, base.plusSeconds(6)));
+    assertTrue(inTransaction(() -> cleanup.lockCurrentRunRepositoryLease(
+        runningCancellationClaim.id(),
+        runningCancellationClaim.leaseToken(),
+        runningCancellationClaim.fencingToken(),
+        base.plusSeconds(6))),
+        "a valid owner must enter its short transaction and observe cancellation");
+    assertTrue(cleanup.retryClaimedRunRepository(
+        runningCancellationClaim.id(),
+        runningCancellationClaim.leaseToken(),
+        runningCancellationClaim.fencingToken(),
+        base.plusSeconds(20),
+        "TRANSIENT",
+        "cancelled while retrying",
+        base.plusSeconds(6)));
+    assertEquals(
+        "CANCELLED",
+        cleanup.listRunRepositories(runningCancellationRunId).getFirst().state());
+
+    long abandonedCancellationRunId = cleanup.createRun(cleanupRun(policyId, "EXECUTE", base));
+    long abandonedCancellationShardId = cleanup.createRunRepository(cleanupShard(
+        abandonedCancellationRunId, firstRepositoryId, "cleanup-runtime-first", base));
+    CleanupPolicyDao.ClaimedRunRepository abandonedCancellationClaim = inTransaction(() ->
+        cleanup.claimRunRepositories(
+            "worker-abandoned", base.plusSeconds(7), base.plusSeconds(9), 1)).getFirst();
+    assertEquals(abandonedCancellationShardId, abandonedCancellationClaim.id());
+    assertTrue(cleanup.requestRunCancellation(
+        abandonedCancellationRunId, base.plusSeconds(8)));
+    assertTrue(inTransaction(() -> cleanup.claimRunRepositories(
+        "worker-before-expiry", base.plusSeconds(8), base.plusSeconds(10), 1)).isEmpty());
+    CleanupPolicyDao.ClaimedRunRepository cancelledTakeover = inTransaction(() ->
+        cleanup.claimRunRepositories(
+            "worker-cancel-takeover", base.plusSeconds(10), base.plusSeconds(30), 1)).getFirst();
+    assertEquals(abandonedCancellationShardId, cancelledTakeover.id());
+    assertTrue(cancelledTakeover.fencingToken() > abandonedCancellationClaim.fencingToken());
+    assertTrue(cleanup.completeClaimedRunRepository(
+        cancelledTakeover.id(),
+        cancelledTakeover.leaseToken(),
+        cancelledTakeover.fencingToken(),
+        "CANCELLED",
+        0,
+        0,
+        0,
+        0,
+        0,
+        false,
+        "cancelled shard recovered after owner loss",
+        base.plusSeconds(11)));
+
+    long busyRunId = cleanup.createRun(cleanupRun(policyId, "EXECUTE", base));
+    long busyShardId = cleanup.createRunRepository(cleanupShard(
+        busyRunId, firstRepositoryId, "cleanup-runtime-first", base));
+    CleanupPolicyDao.ClaimedRunRepository busyClaim = inTransaction(() ->
+        cleanup.claimRunRepositories(
+            "worker-busy", base.plusSeconds(12), base.plusSeconds(120), 1)).getFirst();
+    assertEquals(busyShardId, busyClaim.id());
+    for (int index = 0; index < 4; index++) {
+      long blockedRunId = cleanup.createRun(cleanupRun(policyId, "EXECUTE", base));
+      cleanup.createRunRepository(cleanupShard(
+          blockedRunId, firstRepositoryId, "cleanup-runtime-first", base));
+    }
+    long availableRunId = cleanup.createRun(cleanupRun(policyId, "EXECUTE", base));
+    long availableShardId = cleanup.createRunRepository(cleanupShard(
+        availableRunId, secondRepositoryId, "cleanup-runtime-second", base));
+    CleanupPolicyDao.ClaimedRunRepository availableClaim = inTransaction(() ->
+        cleanup.claimRunRepositories(
+            "worker-available", base.plusSeconds(13), base.plusSeconds(60), 1)).getFirst();
+    assertEquals(
+        availableShardId,
+        availableClaim.id(),
+        "queued shards behind a busy repository must not starve an available repository");
+
+    long cancelledRunId = cleanup.createRun(cleanupRun(policyId, "EXECUTE", base));
+    cleanup.createRunRepository(cleanupShard(
+        cancelledRunId, secondRepositoryId, "cleanup-runtime-second", base));
+    assertTrue(cleanup.requestRunCancellation(cancelledRunId, base.plusSeconds(5)));
+    assertTrue(cleanup.isRunCancellationRequested(cancelledRunId));
+    assertEquals("CANCELLED", cleanup.listRunRepositories(cancelledRunId).getFirst().state());
+  }
+
+  @Test
+  void cleanupHistoryRetentionIsBoundedAndPreservesRecentPolicyRuns() {
+    CleanupPolicyDao cleanup = stores().cleanupPolicies();
+    Instant base = Instant.parse("2025-01-01T00:00:00Z");
+    long blobStoreId = stores().blobStores().insert(blobStore("cleanup-history-contract"));
+    long repositoryId = insertRepository(
+        "cleanup-history-contract", RepositoryFormat.RAW, blobStoreId);
+    long policyId = cleanup.createPolicy(new CleanupPolicyDao.CleanupPolicy(
+        null,
+        "cleanup history contract",
+        RepositoryFormat.RAW,
+        null,
+        Map.of("publishedOlderThanDays", 1),
+        1,
+        "ACTIVE",
+        100,
+        10,
+        base,
+        base));
+    for (int index = 0; index < 4; index++) {
+      long runId = cleanup.createRun(cleanupRun(policyId, "TRY_RUN", base.plusSeconds(index)));
+      long shardId = cleanup.createRunRepository(cleanupShard(
+          runId, repositoryId, "cleanup-history-contract", base.plusSeconds(index)));
+      Instant completedAt = base.plusSeconds(100 + index);
+      cleanup.completeRunRepository(
+          shardId, "SUCCEEDED", 1, 0, 0, 0, 0, false, null, completedAt);
+      assertTrue(cleanup.completeRun(
+          runId, "SUCCEEDED", 1, 0, 0, 0, 0, 0, null, completedAt));
+    }
+
+    assertEquals(1, inTransaction(() -> cleanup.deleteTerminalRunsBefore(
+        base.plusSeconds(1_000), 1, 2)));
+    assertEquals(3, cleanup.listRuns(policyId, 0, 100).size());
+    assertEquals(1, inTransaction(() -> cleanup.deleteTerminalRunsBefore(
+        base.plusSeconds(1_000), 10, 2)));
+    assertEquals(2, cleanup.listRuns(policyId, 0, 100).size());
+    assertEquals(0, inTransaction(() -> cleanup.deleteTerminalRunsBefore(
+        base.plusSeconds(1_000), 10, 2)));
+  }
+
+  @Test
+  void componentCleanupPageUsesCaseSensitiveFamilyKeysetOrdering() {
+    long repositoryId = createRepository("cleanup-keyset-contract", RepositoryFormat.RAW);
+    Instant now = Instant.parse("2026-08-01T00:00:00Z");
+    for (String name : List.of("Artifact", "artifact", "beta")) {
+      stores().components().insert(new ComponentRecord(
+          null,
+          repositoryId,
+          RepositoryFormat.RAW,
+          "scope",
+          name,
+          "1",
+          "package",
+          PersistenceHashes.sha256("cleanup-keyset:" + name),
+          Map.of(),
+          now));
+    }
+
+    List<ComponentRecord> firstPage = stores().components().listCleanupPage(
+        repositoryId, null, 10);
+    assertEquals(List.of("Artifact", "artifact", "beta"),
+        firstPage.stream().map(ComponentRecord::name).toList());
+    List<ComponentRecord> resumed = stores().components().listCleanupPage(
+        repositoryId,
+        new com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.CleanupFamilyCursor(
+            "scope", "Artifact", "package"),
+        10);
+    assertEquals(List.of("artifact", "beta"),
+        resumed.stream().map(ComponentRecord::name).toList());
+  }
+
+  @Test
+  void componentCleanupCursorMatchesIndexedLongFamilyKeys() {
+    long repositoryId = createRepository("cleanup-long-keyset-contract", RepositoryFormat.RAW);
+    Instant now = Instant.parse("2026-08-01T00:00:00Z");
+    String sharedPrefix = "x".repeat(400);
+    for (String suffix : List.of("alpha", "beta", "gamma")) {
+      String name = sharedPrefix + suffix;
+      stores().components().insert(new ComponentRecord(
+          null,
+          repositoryId,
+          RepositoryFormat.RAW,
+          "scope",
+          name,
+          "1",
+          "package",
+          PersistenceHashes.sha256("cleanup-long-keyset:" + suffix),
+          Map.of(),
+          now));
+    }
+
+    List<ComponentRecord> ordered = stores().components().listCleanupPage(
+        repositoryId, null, 10);
+    assertEquals(3, ordered.size());
+    for (int index = 0; index < ordered.size(); index++) {
+      ComponentRecord current = ordered.get(index);
+      List<ComponentRecord> resumed = stores().components().listCleanupPage(
+          repositoryId,
+          new com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.CleanupFamilyCursor(
+              current.namespace(), current.name(), current.kind()),
+          10);
+      assertEquals(
+          ordered.subList(index + 1, ordered.size()).stream().map(ComponentRecord::id).toList(),
+          resumed.stream().map(ComponentRecord::id).toList());
+    }
   }
 
   @Test
@@ -4161,6 +4726,55 @@ public abstract class PersistenceApiContract {
       assertEquals(instant, stored.blobCreatedAt());
       assertEquals(instant, stored.blobUpdatedAt());
     }
+  }
+
+  private static CleanupPolicyDao.CleanupRun cleanupRun(
+      long policyId, String mode, Instant now) {
+    return new CleanupPolicyDao.CleanupRun(
+        null,
+        policyId,
+        1,
+        mode,
+        "MANUAL",
+        "PENDING",
+        "contract",
+        null,
+        30_000,
+        100,
+        Map.of("publishedOlderThanDays", 1),
+        List.of(),
+        0,
+        0,
+        0,
+        0,
+        0,
+        null,
+        null,
+        null,
+        now,
+        now);
+  }
+
+  private static CleanupPolicyDao.CleanupRunRepository cleanupShard(
+      long runId, long repositoryId, String repositoryName, Instant now) {
+    return new CleanupPolicyDao.CleanupRunRepository(
+        null,
+        runId,
+        repositoryId,
+        repositoryName,
+        RepositoryFormat.RAW,
+        RepositoryType.HOSTED,
+        "PENDING",
+        0,
+        0,
+        0,
+        0,
+        false,
+        null,
+        null,
+        null,
+        now,
+        now);
   }
 
   private long createRepository(String name, RepositoryFormat format) {

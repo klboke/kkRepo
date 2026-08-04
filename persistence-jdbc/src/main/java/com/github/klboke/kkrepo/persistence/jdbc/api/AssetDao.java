@@ -46,6 +46,11 @@ public interface AssetDao {
 
   Optional<AssetRecord> findAssetById(long assetId);
 
+  /** Locks one live asset generation for cleanup revalidation. */
+  default Optional<AssetRecord> findAssetByIdForUpdate(long assetId) {
+    return findAssetById(assetId);
+  }
+
   /**
    * Loads an asset and its live blob metadata in one database round trip when supported.
    *
@@ -72,6 +77,14 @@ public interface AssetDao {
         .map(asset -> new AssetWithBlob(
             asset,
             asset.assetBlobId() == null ? null : findBlobById(asset.assetBlobId()).orElse(null)))
+        .toList();
+  }
+
+  /** Returns a bounded keyset page of repository-owned assets without a component binding. */
+  default List<AssetWithBlob> listUnboundAssetWithBlobPage(
+      long repositoryId, long afterAssetId, int maxItems) {
+    return listAssetWithBlobPage(repositoryId, afterAssetId, maxItems).stream()
+        .filter(row -> row.asset().componentId() == null)
         .toList();
   }
 
@@ -127,6 +140,50 @@ public interface AssetDao {
       long repositoryId, String pathPrefix, Instant updatedBefore, int maxItems);
 
   List<AssetRecord> listAssetsByComponent(long componentId);
+
+  /**
+   * Loads assets for a bounded set of components in backend-sized batches.
+   *
+   * <p>The default preserves source compatibility for lightweight adapters. Production scanners
+   * should use this method instead of issuing one query per component.
+   */
+  default List<AssetRecord> listAssetsByComponents(Collection<Long> componentIds) {
+    if (componentIds == null || componentIds.isEmpty()) return List.of();
+    return componentIds.stream()
+        .filter(java.util.Objects::nonNull)
+        .distinct()
+        .flatMap(componentId -> listAssetsByComponent(componentId).stream())
+        .toList();
+  }
+
+  /** Loads assets by primary key in backend-sized batches. */
+  default Map<Long, AssetRecord> findAssetsByIds(Collection<Long> assetIds) {
+    if (assetIds == null || assetIds.isEmpty()) return Map.of();
+    Map<Long, AssetRecord> result = new java.util.LinkedHashMap<>();
+    assetIds.stream()
+        .filter(java.util.Objects::nonNull)
+        .distinct()
+        .forEach(assetId -> findAssetById(assetId).ifPresent(asset -> result.put(assetId, asset)));
+    return Map.copyOf(result);
+  }
+
+  /** Loads exact repository paths in backend-sized batches, keyed by the canonical stored path. */
+  default Map<String, AssetRecord> findAssetsByPaths(
+      long repositoryId, Collection<String> paths) {
+    if (paths == null || paths.isEmpty()) return Map.of();
+    Map<String, AssetRecord> result = new java.util.LinkedHashMap<>();
+    paths.stream()
+        .filter(java.util.Objects::nonNull)
+        .distinct()
+        .forEach(path -> findAssetByPath(repositoryId, path)
+            .ifPresent(asset -> result.put(asset.path(), asset)));
+    return Map.copyOf(result);
+  }
+
+  /** Locks all current assets of a locked component in stable order. */
+  default List<AssetRecord> listAssetsByComponentForUpdate(long componentId) {
+    return listAssetsByComponent(componentId);
+  }
 
   int deleteAssetById(long assetId);
 

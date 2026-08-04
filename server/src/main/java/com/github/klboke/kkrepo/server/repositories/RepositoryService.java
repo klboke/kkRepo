@@ -6,6 +6,7 @@ import com.github.klboke.kkrepo.core.RepositoryRecipes;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
@@ -77,6 +78,7 @@ public class RepositoryService {
   private final ProxiedHttpClientFactory proxiedHttpClientFactory;
   private final SwiftRegistryDao swiftRegistry;
   private AnsibleGalaxyRegistryDao ansibleRegistry;
+  private CleanupPolicyDao cleanupPolicies;
   private final String urlPrefix;
   private final int serverPort;
   private final int managementPort;
@@ -128,6 +130,11 @@ public class RepositoryService {
   @Autowired(required = false)
   void setAnsibleGalaxyRegistry(AnsibleGalaxyRegistryDao ansibleRegistry) {
     this.ansibleRegistry = ansibleRegistry;
+  }
+
+  @Autowired(required = false)
+  void setCleanupPolicyDao(CleanupPolicyDao cleanupPolicies) {
+    this.cleanupPolicies = cleanupPolicies;
   }
 
   public RepositoryService(
@@ -384,6 +391,11 @@ public class RepositoryService {
       throw new RepositoryValidationException(
           "Repository '" + name + "' is a member of group(s): "
               + groups.stream().map(RepositoryRecord::name).toList());
+    }
+    if (cleanupPolicies != null && cleanupPolicies.hasRepositoryReferences(existing.id())) {
+      throw new RepositoryValidationException(
+          "Repository '" + name + "' is referenced by a cleanup policy or active cleanup run. "
+              + "Remove it from cleanup policies and wait for active runs to finish.");
     }
     if (repositoryDao.hasComponents(existing.id())) {
       throw new RepositoryValidationException(

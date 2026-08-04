@@ -5,6 +5,7 @@ import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRow
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.ComponentSearchRow;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.CleanupFamilyCursor;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.EnumColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.HashColumns;
@@ -53,6 +54,7 @@ public class JdbcComponentDao implements com.github.klboke.kkrepo.persistence.jd
   private final SearchPersistenceDialect searchDialect;
   private final String searchProjection;
   private final String searchSelect;
+  private final List<String> cleanupFamilyOrder;
   private final RowMapper<ComponentRecord> rowMapper;
 
   @Autowired
@@ -64,6 +66,10 @@ public class JdbcComponentDao implements com.github.klboke.kkrepo.persistence.jd
     this.jsonColumns = jsonColumns;
     this.componentDialect = databaseDialect.components();
     this.searchDialect = databaseDialect.search();
+    this.cleanupFamilyOrder = List.copyOf(componentDialect.cleanupFamilyOrderExpressions());
+    if (cleanupFamilyOrder.isEmpty()) {
+      throw new IllegalStateException("cleanup family order must not be empty");
+    }
     this.searchProjection = """
         SELECT c.id, c.repository_id, r.name AS repository_name, c.format, c.namespace,
                c.name, c.version, c.kind, c.last_updated_at,
@@ -114,6 +120,17 @@ public class JdbcComponentDao implements com.github.klboke.kkrepo.persistence.jd
         """, rowMapper, componentId).stream().findFirst();
   }
 
+  @Override
+  @org.springframework.transaction.annotation.Transactional(
+      propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+  public Optional<ComponentRecord> findByIdForUpdate(long componentId) {
+    return jdbcTemplate.query("""
+        SELECT * FROM component
+        WHERE id = ?
+        FOR UPDATE
+        """, rowMapper, componentId).stream().findFirst();
+  }
+
   public long upsertReturningId(ComponentRecord record) {
     long id = upsertReturningIdFromDatabase(record);
     return id;
@@ -137,6 +154,43 @@ public class JdbcComponentDao implements com.github.klboke.kkrepo.persistence.jd
         WHERE repository_id = ?
         ORDER BY name, version
         """, rowMapper, repositoryId);
+  }
+
+  @Override
+  public List<ComponentRecord> listByRepositoryId(long repositoryId, int maxItems) {
+    return jdbcTemplate.query("""
+        SELECT * FROM component
+        WHERE repository_id = ?
+        ORDER BY COALESCE(namespace, ''), name, COALESCE(kind, ''), id
+        LIMIT ?
+        """, rowMapper, repositoryId, Math.max(1, maxItems));
+  }
+
+  @Override
+  public List<ComponentRecord> listCleanupPage(
+      long repositoryId, CleanupFamilyCursor afterFamily, int maxItems) {
+    int limit = Math.max(1, maxItems);
+    String familyOrder = String.join(", ", cleanupFamilyOrder);
+    String order = " ORDER BY " + familyOrder + ", id LIMIT ?";
+    if (afterFamily == null) {
+      return jdbcTemplate.query(
+          "SELECT * FROM component WHERE repository_id = ?" + order,
+          rowMapper,
+          repositoryId,
+          limit);
+    }
+    String familyTuple = "(" + familyOrder + ")";
+    List<Object> arguments = new ArrayList<>();
+    arguments.add(repositoryId);
+    arguments.addAll(componentDialect.cleanupFamilyCursorValues(
+        afterFamily.namespace(), afterFamily.name(), afterFamily.kind()));
+    arguments.add(limit);
+    return jdbcTemplate.query(
+        "SELECT * FROM component WHERE repository_id = ? AND " + familyTuple
+            + " > (" + String.join(",", Collections.nCopies(cleanupFamilyOrder.size(), "?"))
+            + ")" + order,
+        rowMapper,
+        arguments.toArray());
   }
 
   public List<String> listDistinctNamesByRepositoryId(long repositoryId) {

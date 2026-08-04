@@ -13,6 +13,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
@@ -1210,6 +1211,22 @@ class RepositoryServiceTest {
 
     verify(ansible).deleteRepositoryState(51L);
     assertTrue(repositories.findByName("ansible-hosted").isEmpty());
+  }
+
+  @Test
+  void deleteRejectsRepositoryReferencedByCleanupPolicyOrActiveRun() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    CleanupPolicyDao cleanupPolicies = mock(CleanupPolicyDao.class);
+    org.mockito.Mockito.when(cleanupPolicies.hasRepositoryReferences(10L)).thenReturn(true);
+    RepositoryService service = service(repositories);
+    service.setCleanupPolicyDao(cleanupPolicies);
+
+    RepositoryValidationException failure = assertThrows(
+        RepositoryValidationException.class,
+        () -> service.delete("maven-releases"));
+
+    assertTrue(failure.getMessage().contains("cleanup policy or active cleanup run"));
+    assertTrue(repositories.findByName("maven-releases").isPresent());
   }
 
   @Test

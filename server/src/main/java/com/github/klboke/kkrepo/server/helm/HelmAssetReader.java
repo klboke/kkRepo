@@ -47,7 +47,7 @@ class HelmAssetReader {
     if (blob == null) {
       throw new MavenExceptions.MavenNotFoundException(path);
     }
-    beforeRead(asset.id(), blob.id());
+    beforeRead(asset.id(), blob.id(), asset.repositoryId());
     String etag = blob.sha1();
     Instant lastModified = asset.lastUpdatedAt();
     if (headOnly) {
@@ -65,7 +65,7 @@ class HelmAssetReader {
     if (blob == null) {
       throw new MavenExceptions.MavenNotFoundException(path);
     }
-    beforeRead(snapshot.assetId(), blob.id());
+    beforeRead(snapshot.assetId(), blob.id(), snapshot.repositoryId());
     String etag = blob.sha1();
     Instant lastModified = snapshot.lastUpdatedAt();
     if (headOnly) {
@@ -78,8 +78,10 @@ class HelmAssetReader {
         blob.size(), snapshot.contentType(), etag, lastModified);
   }
 
-  void beforeRead(long assetId, long blobId) {
-    if (downloadPolicy != null) downloadPolicy.beforeRead(assetId, blobId);
+  void beforeRead(long assetId, long blobId, long sourceRepositoryId) {
+    if (downloadPolicy != null) {
+      downloadPolicy.beforeReadFromRepository(assetId, blobId, sourceRepositoryId);
+    }
   }
 
 }

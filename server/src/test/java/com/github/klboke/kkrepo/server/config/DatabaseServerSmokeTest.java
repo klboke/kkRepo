@@ -5,17 +5,27 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CacheVersionDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupRun;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MetadataRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseType;
+import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.server.BlobStoresController;
 import com.github.klboke.kkrepo.server.BlobStoresController.BlobStoreRequest;
 import com.github.klboke.kkrepo.server.KkRepoApplication;
+import com.github.klboke.kkrepo.server.cleanup.CleanupPolicyService;
+import com.github.klboke.kkrepo.server.cleanup.CleanupPolicyService.PolicyCommand;
+import com.github.klboke.kkrepo.server.cleanup.CleanupPolicyService.ScheduleCommand;
+import com.github.klboke.kkrepo.server.cleanup.CleanupRunService;
+import com.github.klboke.kkrepo.server.cleanup.CleanupRunService.RunCommand;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
+import com.github.klboke.kkrepo.server.maven.MavenExceptions.MavenNotFoundException;
 import com.github.klboke.kkrepo.server.maven.MavenHostedService;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CreateCommand;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.GroupSettings;
@@ -26,7 +36,10 @@ import com.github.klboke.kkrepo.server.security.SecurityManagementService;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AdminBootstrapCommand;
 import java.io.ByteArrayInputStream;
 import java.nio.file.Files;
+import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -173,6 +186,83 @@ class DatabaseServerSmokeTest {
       assertEquals("dual-database-smoke",
           new String(body.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
     }
+
+    CleanupPolicyService firstCleanup = first.getBean(CleanupPolicyService.class);
+    var cleanupPolicy = firstCleanup.create(new PolicyCommand(
+        "server-smoke-cleanup",
+        RepositoryFormat.MAVEN2,
+        "cross-node cleanup validation",
+        Map.of(
+            "patternType", "GLOB",
+            "pattern", "*",
+            "publishedOlderThanDays", 0),
+        List.of(hosted.id()),
+        100,
+        10,
+        new ScheduleCommand("0 0 2 * * ?", "UTC", false),
+        null));
+    CleanupPolicyService secondCleanup = second.getBean(CleanupPolicyService.class);
+    assertEquals(1, secondCleanup.get(cleanupPolicy.policy().id()).repositories().size());
+    assertFalse(secondCleanup.get(cleanupPolicy.policy().id()).schedule().enabled());
+
+    CleanupRunService cleanupRuns = second.getBean(CleanupRunService.class);
+    var queuedTryRun = cleanupRuns.startManual(
+        cleanupPolicy.policy().id(),
+        new RunCommand("TRY_RUN", cleanupPolicy.policy().revision(), 100),
+        "server-smoke");
+    var tryRun = awaitCleanupRun(
+        cleanupRuns, queuedTryRun.run().id(), Duration.ofSeconds(20));
+    assertEquals(1, tryRun.run().matchedSubjects(), tryRun.toString());
+    var tryRunRepository = tryRun.repositories().getFirst();
+    assertEquals(
+        "WOULD_DELETE",
+        cleanupRuns.listItems(tryRun.run().id(), tryRunRepository.id(), 0, 10)
+            .getFirst().decision());
+
+    var queuedExecution = cleanupRuns.startManual(
+        cleanupPolicy.policy().id(),
+        new RunCommand("EXECUTE", cleanupPolicy.policy().revision(), null),
+        "server-smoke");
+    var execution = awaitCleanupRun(
+        cleanupRuns, queuedExecution.run().id(), Duration.ofSeconds(20));
+    assertEquals(1, execution.run().deletedSubjects());
+    awaitMavenDeletionVisible(
+        second.getBean(MavenHostedService.class),
+        secondRuntimes.resolve("smoke-hosted").orElseThrow(),
+        path,
+        Duration.ofSeconds(5));
+
+    ZonedDateTime fireAt = ZonedDateTime.now(ZoneOffset.UTC).plusSeconds(10);
+    String cron = "%d %d %d * * ?".formatted(
+        fireAt.getSecond(), fireAt.getMinute(), fireAt.getHour());
+    var activePolicy = firstCleanup.update(cleanupPolicy.policy().id(), new PolicyCommand(
+        cleanupPolicy.policy().name(),
+        cleanupPolicy.policy().format(),
+        cleanupPolicy.policy().notes(),
+        cleanupPolicy.policy().criteria(),
+        List.of(hosted.id()),
+        cleanupPolicy.policy().scanLimitPerRepository(),
+        cleanupPolicy.policy().deleteLimitPerRepository(),
+        new ScheduleCommand(cron, "UTC", true),
+        cleanupPolicy.policy().revision()));
+    assertTrue(activePolicy.schedule().enabled());
+    long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+    List<CleanupRun> scheduledRuns = List.of();
+    while (System.nanoTime() < deadline) {
+      scheduledRuns = cleanupRuns.listRuns(activePolicy.policy().id(), 0, 100).stream()
+          .filter(run -> "SCHEDULED".equals(run.triggerKind()))
+          .toList();
+      if (!scheduledRuns.isEmpty()) {
+        break;
+      }
+      Thread.sleep(100);
+    }
+    assertEquals(1, scheduledRuns.size(), scheduledRuns.toString());
+    var scheduledRun = awaitCleanupRun(
+        cleanupRuns, scheduledRuns.getFirst().id(), Duration.ofSeconds(20)).run();
+    assertEquals(activePolicy.policy().revision(), scheduledRun.policyRevision());
+    assertEquals("SUCCEEDED", scheduledRun.state());
+
     MetadataRebuildDao firstMarkers = first.getBean(MetadataRebuildDao.class);
     MetadataRebuildDao secondMarkers = second.getBean(MetadataRebuildDao.class);
     long markerCount = secondMarkers.countBacklog();
@@ -192,6 +282,45 @@ class DatabaseServerSmokeTest {
         null, null, 0, 10));
     assertEquals(1, audit.total());
     assertEquals("admin", audit.items().getFirst().actorUserId());
+  }
+
+  private static CleanupRunService.RunView awaitCleanupRun(
+      CleanupRunService runs, long runId, Duration timeout) throws InterruptedException {
+    long deadline = System.nanoTime() + timeout.toNanos();
+    CleanupRunService.RunView current = runs.getRun(runId);
+    while (System.nanoTime() < deadline) {
+      if (isTerminalCleanupState(current.run().state())) {
+        return current;
+      }
+      Thread.sleep(50);
+      current = runs.getRun(runId);
+    }
+    throw new AssertionError("cleanup run did not finish: " + current);
+  }
+
+  private static void awaitMavenDeletionVisible(
+      MavenHostedService maven,
+      RepositoryRuntime runtime,
+      MavenPath path,
+      Duration timeout) throws InterruptedException {
+    long deadline = System.nanoTime() + timeout.toNanos();
+    while (System.nanoTime() < deadline) {
+      try {
+        maven.get(runtime, path, false);
+      } catch (MavenNotFoundException missing) {
+        return;
+      }
+      Thread.sleep(50);
+    }
+    throw new AssertionError("cleanup deletion did not become visible on the sibling replica");
+  }
+
+  private static boolean isTerminalCleanupState(String state) {
+    return switch (state) {
+      case "SUCCEEDED", "SUCCEEDED_TRUNCATED", "PARTIAL", "PARTIAL_LIMIT_REACHED",
+          "FAILED", "CANCELLED" -> true;
+      default -> false;
+    };
   }
 
   private static ConfigurableApplicationContext start(Map<String, Object> properties) {
@@ -225,6 +354,10 @@ class DatabaseServerSmokeTest {
     values.put("kkrepo.catalog-cache.refresh-interval-ms", "3600000");
     values.put("kkrepo.catalog-cache.initial-delay-ms", "3600000");
     values.put("kkrepo.catalog-cache.jdbc.initial-delay-ms", "3600000");
+    values.put("kkrepo.cleanup.scheduler.projection-delay-ms", "100");
+    values.put("kkrepo.cleanup.scheduler.projection-initial-delay-ms", "100");
+    values.put("kkrepo.cleanup.worker.poll-delay-ms", "50");
+    values.put("kkrepo.cleanup.worker.initial-delay-ms", "50");
     values.put("kkrepo.blob-gc.enabled", "false");
     values.put("kkrepo.repository-index-rebuild.enabled", "false");
     values.put("kkrepo.maven.metadata-rebuild.enabled", "false");

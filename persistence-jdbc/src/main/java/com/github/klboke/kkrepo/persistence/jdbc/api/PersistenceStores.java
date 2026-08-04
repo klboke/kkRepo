@@ -20,6 +20,8 @@ public interface PersistenceStores extends AutoCloseable {
 
   ComponentDao components();
 
+  CleanupPolicyDao cleanupPolicies();
+
   DockerAuthTokenDao dockerAuthTokens();
 
   DockerRegistryDao dockerRegistry();

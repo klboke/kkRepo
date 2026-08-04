@@ -38,12 +38,13 @@ class PypiAssetReader {
         ? null
         : assetDao.findBlobById(asset.assetBlobId()).orElse(null);
     return serveBlob(
-        asset.id(), blob, asset.contentType(), asset.lastUpdatedAt(), headOnly, path);
+        asset.id(), asset.repositoryId(), blob, asset.contentType(), asset.lastUpdatedAt(), headOnly, path);
   }
 
   PypiResponse serveSnapshot(CachedAssetMetadata snapshot, boolean headOnly, String path) {
     return serveBlob(
         snapshot.assetId(),
+        snapshot.repositoryId(),
         snapshot.toBlobRecord(),
         snapshot.contentType(),
         snapshot.lastUpdatedAt(),
@@ -53,6 +54,7 @@ class PypiAssetReader {
 
   private PypiResponse serveBlob(
       long assetId,
+      long sourceRepositoryId,
       AssetBlobRecord blob,
       String contentType,
       Instant lastModified,
@@ -61,7 +63,7 @@ class PypiAssetReader {
     if (blob == null) {
       throw new PypiExceptions.PypiNotFoundException(path);
     }
-    beforeRead(assetId, blob.id());
+    beforeRead(assetId, blob.id(), sourceRepositoryId);
     String etag = blob.sha1();
     if (headOnly) {
       return PypiResponse.noBody(200, blob.size(), contentType, etag, lastModified);
@@ -73,8 +75,10 @@ class PypiAssetReader {
         blob.size(), contentType, etag, lastModified);
   }
 
-  void beforeRead(long assetId, long blobId) {
-    if (downloadPolicy != null) downloadPolicy.beforeRead(assetId, blobId);
+  void beforeRead(long assetId, long blobId, long sourceRepositoryId) {
+    if (downloadPolicy != null) {
+      downloadPolicy.beforeReadFromRepository(assetId, blobId, sourceRepositoryId);
+    }
   }
 
 }

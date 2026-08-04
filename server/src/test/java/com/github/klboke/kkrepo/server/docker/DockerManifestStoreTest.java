@@ -53,8 +53,8 @@ class DockerManifestStoreTest {
     DockerBlobStore blobStore = mock(DockerBlobStore.class);
     DockerManifestParser parser = mock(DockerManifestParser.class);
     ArtifactDownloadPolicy policy = mock(ArtifactDownloadPolicy.class);
-    when(policy.shouldEvaluateCurrentRequest()).thenReturn(true);
     RepositoryRuntime runtime = runtime("ALLOW");
+    when(policy.shouldInspectDownload(runtime.id())).thenReturn(true);
     DockerDigest digest = DockerDigest.parse(
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     when(dockerDao.listManifestAssetIdsReferencingDigest(
@@ -76,15 +76,15 @@ class DockerManifestStoreTest {
 
     store.beforeBlobRead(runtime, "team/alias", digest);
 
-    verify(policy).beforeReadAll(List.of(31L, 32L), false);
+    verify(policy).beforeReadAll(List.of(31L, 32L), false, runtime.id());
   }
 
   @Test
   void allowsRepositoryScopedBlobBeforeAManifestReferencesIt() {
     DockerRegistryDao dockerDao = mock(DockerRegistryDao.class);
     ArtifactDownloadPolicy policy = mock(ArtifactDownloadPolicy.class);
-    when(policy.shouldEvaluateCurrentRequest()).thenReturn(true);
     RepositoryRuntime runtime = runtime("ALLOW");
+    when(policy.shouldInspectDownload(runtime.id())).thenReturn(true);
     DockerDigest digest = DockerDigest.parse(
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     when(dockerDao.listManifestAssetIdsReferencingDigest(
@@ -103,7 +103,7 @@ class DockerManifestStoreTest {
 
     store.beforeBlobRead(runtime, "team/other", digest);
 
-    verify(policy, never()).beforeReadAll(any(), anyBoolean());
+    verify(policy, never()).beforeReadAll(any(), anyBoolean(), anyLong());
     verify(policy, never()).beforePendingOciImageRead(anyLong(), anyString());
   }
 
@@ -111,8 +111,8 @@ class DockerManifestStoreTest {
   void appliesPendingPolicyToAProxyBlobBeforeItsManifestIsCached() {
     DockerRegistryDao dockerDao = mock(DockerRegistryDao.class);
     ArtifactDownloadPolicy policy = mock(ArtifactDownloadPolicy.class);
-    when(policy.shouldEvaluateCurrentRequest()).thenReturn(true);
     RepositoryRuntime runtime = runtime("ALLOW", RepositoryType.PROXY);
+    when(policy.shouldInspectDownload(runtime.id())).thenReturn(true);
     DockerDigest digest = DockerDigest.parse(
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     when(dockerDao.listManifestAssetIdsReferencingDigest(
@@ -138,8 +138,8 @@ class DockerManifestStoreTest {
   void boundsSharedBlobPolicyEvaluationAndMarksReferenceOverflow() {
     DockerRegistryDao dockerDao = mock(DockerRegistryDao.class);
     ArtifactDownloadPolicy policy = mock(ArtifactDownloadPolicy.class);
-    when(policy.shouldEvaluateCurrentRequest()).thenReturn(true);
     RepositoryRuntime runtime = runtime("ALLOW");
+    when(policy.shouldInspectDownload(runtime.id())).thenReturn(true);
     DockerDigest digest = DockerDigest.parse(
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     List<Long> manifestAssetIds = java.util.stream.LongStream.rangeClosed(
@@ -169,7 +169,8 @@ class DockerManifestStoreTest {
             0,
             com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao
                 .MAX_DOWNLOAD_POLICY_BATCH),
-        true);
+        true,
+        runtime.id());
   }
 
   @Test
@@ -194,7 +195,7 @@ class DockerManifestStoreTest {
 
     verify(dockerDao, never()).listManifestAssetIdsReferencingDigest(
         anyLong(), anyString(), anyInt());
-    verify(policy, never()).beforeReadAll(any(), anyBoolean());
+    verify(policy, never()).beforeReadAll(any(), anyBoolean(), anyLong());
     verify(policy, never()).beforePendingOciImageRead(anyLong(), anyString());
   }
 

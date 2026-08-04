@@ -122,6 +122,11 @@ public final class PostgreSqlDatabaseDialect implements DatabaseDialect {
     }
 
     @Override
+    public String caseSensitiveText(String expression) {
+      return "(" + expression + ") COLLATE \"C\"";
+    }
+
+    @Override
     public void upsertSearchDocument(JdbcOperations jdbc, ComponentSearchDocument document) {
       jdbc.update(
           UPSERT_SEARCH_DOCUMENT_SQL,

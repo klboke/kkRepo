@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.persistence.postgresql.support.PostgreSqlIntegrationTestSupport;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 
 /** Proves the PostgreSQL baseline validates and remains idempotent on repeated startup. */
@@ -15,7 +17,7 @@ class PostgreSqlMigrationCompatibilityTest extends PostgreSqlIntegrationTestSupp
     assertTrue(flyway().validateWithResult().validationSuccessful);
     var result = flyway().migrate();
     assertEquals(0, result.migrationsExecuted);
-    assertEquals("37", flyway().info().current().getVersion().getVersion());
+    assertEquals("43", flyway().info().current().getVersion().getVersion());
   }
 
   @Test
@@ -29,6 +31,32 @@ class PostgreSqlMigrationCompatibilityTest extends PostgreSqlIntegrationTestSupp
             'ck_asset_blob_external_reference_live')
           AND convalidated
         """, Integer.class));
+  }
+
+  @Test
+  void cleanupIndexesAreOnlineAndRepairableAfterInterruptedBuilds() throws Exception {
+    String migration;
+    try (InputStream stream = getClass().getResourceAsStream(
+        "/db/migration/postgresql/V42__cleanup_scan_indexes.sql")) {
+      assertNotNull(stream);
+      migration = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+    }
+    for (String index : java.util.List.of(
+        "idx_component_cleanup_scan",
+        "idx_asset_cleanup_unbound",
+        "idx_docker_manifest_cleanup",
+        "idx_cleanup_protection_scan")) {
+      int drop = migration.indexOf("DROP INDEX CONCURRENTLY IF EXISTS " + index);
+      int create = migration.indexOf("CREATE INDEX CONCURRENTLY " + index);
+      assertTrue(drop >= 0 && create > drop, index + " must be rebuilt restart-safely");
+    }
+    try (InputStream stream = getClass().getResourceAsStream(
+        "/db/migration/postgresql/V42__cleanup_scan_indexes.sql.conf")) {
+      assertNotNull(stream);
+      assertEquals(
+          "executeInTransaction=false",
+          new String(stream.readAllBytes(), StandardCharsets.UTF_8).trim());
+    }
   }
 
   @Test

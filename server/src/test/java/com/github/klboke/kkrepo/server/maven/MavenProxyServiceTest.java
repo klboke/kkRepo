@@ -119,7 +119,7 @@ class MavenProxyServiceTest {
     RepositoryRuntime runtime = runtime();
     MavenPath requestedPath = path("com/acme/demo/1.0.0/demo-1.0.0.jar");
     RuntimeException blocked = new RuntimeException("blocked after persistence");
-    doThrow(blocked).when(downloadPolicy).beforeRead(88L, 99L);
+    doThrow(blocked).when(downloadPolicy).beforeReadFromRepository(88L, 99L, runtime.id());
     MavenProxyService service = new MavenProxyService(
         new EmptyAssetDao(),
         new FixedBlobStorageRegistry(storage),
@@ -138,7 +138,7 @@ class MavenProxyServiceTest {
     assertSame(blocked, actual);
     assertTrue(writer.keepResponseFile);
     assertEquals(1, proxyState.successCount);
-    verify(downloadPolicy).beforeRead(88L, 99L);
+    verify(downloadPolicy).beforeReadFromRepository(88L, 99L, runtime.id());
   }
 
   @Test

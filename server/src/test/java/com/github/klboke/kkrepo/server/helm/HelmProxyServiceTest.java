@@ -111,7 +111,8 @@ class HelmProxyServiceTest {
 
     assertEquals(200, response.status());
     assertEquals(stored.blob().size(), response.contentLength());
-    verify(fixture.reader).beforeRead(stored.asset().id(), stored.blob().id());
+    verify(fixture.reader).beforeRead(
+        stored.asset().id(), stored.blob().id(), stored.asset().repositoryId());
     verify(fixture.proxyStateDao).recordSuccess(eq(runtime.id()), any());
     verify(fixture.negativeCache).invalidate(runtime, "index.yaml");
   }

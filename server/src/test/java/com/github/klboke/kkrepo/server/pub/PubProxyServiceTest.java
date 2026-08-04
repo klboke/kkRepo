@@ -180,7 +180,8 @@ class PubProxyServiceTest {
     MavenResponse response = service.download(runtime, "example_package", "1.0.0", true);
 
     assertEquals(200, response.status());
-    verify(reader).beforeRead(stored.asset().id(), stored.blob().id());
+    verify(reader).beforeRead(
+        stored.asset().id(), stored.blob().id(), stored.asset().repositoryId());
   }
 
   private static Map<String, Object> readJson(MavenResponse response) throws IOException {

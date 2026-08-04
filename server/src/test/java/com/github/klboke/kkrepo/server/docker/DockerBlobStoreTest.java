@@ -2,7 +2,11 @@ package com.github.klboke.kkrepo.server.docker;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.core.BlobObjectMetadata;
 import com.github.klboke.kkrepo.core.BlobReference;
@@ -31,6 +35,43 @@ import java.util.OptionalLong;
 import org.junit.jupiter.api.Test;
 
 class DockerBlobStoreTest {
+  @Test
+  void blobReadsDoNotUpdateADeletionWatermark() {
+    DockerDigest digest = DockerDigest.parse(
+        "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+    AssetDao assetDao = mock(AssetDao.class);
+    AssetBlobRecord blob = existingBlob(digest, "existing-object");
+    String path = "docker/blobs/sha256/ee/" + digest.hex();
+    AssetRecord asset = new AssetRecord(
+        88L,
+        runtime().id(),
+        null,
+        blob.id(),
+        RepositoryFormat.DOCKER,
+        path,
+        PersistenceHashes.pathHash(path),
+        digest.value(),
+        "BLOB",
+        "application/octet-stream",
+        blob.size(),
+        null,
+        Instant.EPOCH,
+        Map.of());
+    when(assetDao.findAssetByPath(runtime().id(), path)).thenReturn(Optional.of(asset));
+    when(assetDao.findBlobById(blob.id())).thenReturn(Optional.of(blob));
+    DockerBlobStore blobStore = new DockerBlobStore(
+        assetDao,
+        mock(BlobStorageRegistry.class),
+        mock(AssetMetadataCache.class),
+        null);
+
+    assertEquals(200, blobStore.getBlob(runtime(), digest, true).status());
+    assertEquals(200, blobStore.getBlob(runtime(), digest, false).status());
+
+    verify(assetDao, never()).touchLastDownloaded(
+        org.mockito.ArgumentMatchers.eq(88L), any(Instant.class));
+  }
+
   @Test
   void putBlobReusesExistingAssetBlobBeforeUploadingContentAddressedObject() {
     DockerDigest digest = DockerDigest.parse(

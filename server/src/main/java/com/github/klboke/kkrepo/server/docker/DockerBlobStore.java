@@ -83,7 +83,6 @@ public class DockerBlobStore {
   public DockerResponse getBlob(RepositoryRuntime runtime, DockerDigest digest, boolean headOnly) {
     StoredBlob stored = findBlob(runtime, digest)
         .orElseThrow(() -> new DockerProtocolException(DockerErrorCode.BLOB_UNKNOWN, digest.value()));
-    assetDao.touchLastDownloaded(stored.asset().id(), Instant.now());
     DockerResponse response = headOnly
         ? DockerResponse.noBody(200, stored.blob().size(), contentType(stored.blob()), stored.asset().lastUpdatedAt())
         : DockerResponse.body(

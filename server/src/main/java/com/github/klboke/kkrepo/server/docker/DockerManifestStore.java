@@ -240,12 +240,13 @@ public class DockerManifestStore {
 
   void beforeRead(StoredManifest stored) {
     if (downloadPolicy != null) {
-      downloadPolicy.beforeRead(stored.asset().id(), stored.blob().id());
+      downloadPolicy.beforeReadFromRepository(
+          stored.asset().id(), stored.blob().id(), stored.asset().repositoryId());
     }
   }
 
   void beforeBlobRead(RepositoryRuntime runtime, String imageName, DockerDigest digest) {
-    if (downloadPolicy == null || !downloadPolicy.shouldEvaluateCurrentRequest()) {
+    if (downloadPolicy == null || !downloadPolicy.shouldInspectDownload(runtime.id())) {
       return;
     }
     List<Long> manifestAssetIds = dockerDao.listManifestAssetIdsReferencingDigest(
@@ -268,7 +269,7 @@ public class DockerManifestStore {
       manifestAssetIds =
           manifestAssetIds.subList(0, SecurityScanDao.MAX_DOWNLOAD_POLICY_BATCH);
     }
-    downloadPolicy.beforeReadAll(manifestAssetIds, truncated);
+    downloadPolicy.beforeReadAll(manifestAssetIds, truncated, runtime.id());
   }
 
   private static void ensureAccepted(String mediaType, List<String> acceptHeaders) {

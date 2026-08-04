@@ -140,7 +140,9 @@ final class AnsibleGalaxyAssetSupport {
     if (blob == null) {
       throw new AnsibleGalaxyExceptions.NotFound("Ansible collection blob is missing");
     }
-    if (downloadPolicy != null) downloadPolicy.beforeRead(asset.id(), blob.id());
+    if (downloadPolicy != null) {
+      downloadPolicy.beforeReadFromRepository(asset.id(), blob.id(), asset.repositoryId());
+    }
     var storage = storages.forBlobStoreId(blob.blobStoreId());
     var reference = BlobReferenceCodec.reference(
         blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size());

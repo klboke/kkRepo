@@ -146,7 +146,9 @@ final class SwiftAssetSupport {
     if (blob == null) {
       throw new SwiftExceptions.NotFound("Swift release blob is missing");
     }
-    if (downloadPolicy != null) downloadPolicy.beforeRead(asset.id(), blob.id());
+    if (downloadPolicy != null) {
+      downloadPolicy.beforeReadFromRepository(asset.id(), blob.id(), asset.repositoryId());
+    }
     var storage = storages.forBlobStoreId(blob.blobStoreId());
     var reference = BlobReferenceCodec.reference(
         blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size());

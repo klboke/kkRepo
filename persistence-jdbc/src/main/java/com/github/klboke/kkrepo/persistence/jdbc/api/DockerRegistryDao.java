@@ -14,6 +14,11 @@ public interface DockerRegistryDao {
   Optional<DockerManifestRecord> findManifestByDigest(
       long repositoryId, String imageName, String digest);
 
+  default Optional<DockerManifestRecord> findManifestByDigestForUpdate(
+      long repositoryId, String imageName, String digest) {
+    return findManifestByDigest(repositoryId, imageName, digest);
+  }
+
   Optional<DockerManifestRecord> findManifestByTag(
       long repositoryId, String imageName, String tag);
 
@@ -44,6 +49,22 @@ public interface DockerRegistryDao {
   boolean tagExists(long repositoryId, String imageName, String tag);
 
   List<DockerTagRecord> listTagsForManifest(long manifestId);
+
+  /** Loads tags for a bounded manifest set without one query per manifest. */
+  default Map<Long, List<DockerTagRecord>> listTagsForManifests(
+      Collection<Long> manifestIds) {
+    if (manifestIds == null || manifestIds.isEmpty()) return Map.of();
+    Map<Long, List<DockerTagRecord>> result = new java.util.LinkedHashMap<>();
+    manifestIds.stream()
+        .filter(java.util.Objects::nonNull)
+        .distinct()
+        .forEach(manifestId -> result.put(manifestId, listTagsForManifest(manifestId)));
+    return Map.copyOf(result);
+  }
+
+  default List<DockerTagRecord> listTagsForManifestForUpdate(long manifestId) {
+    return listTagsForManifest(manifestId);
+  }
 
   int deleteTag(long repositoryId, String imageName, String tag);
 
@@ -79,6 +100,16 @@ public interface DockerRegistryDao {
       Instant lastDownloadedBefore,
       Instant lastUpdatedBefore,
       int limit);
+
+  /** Returns a stable cleanup keyset page ordered by the manifest's owning asset id. */
+  default List<CleanupManifestCandidate> listManifestCleanupCandidatesPage(
+      long repositoryId, long afterAssetId, int limit) {
+    return listManifestCleanupCandidates(repositoryId, false, null, null, limit).stream()
+        .filter(candidate -> candidate.assetId() > afterAssetId)
+        .sorted(java.util.Comparator.comparingLong(CleanupManifestCandidate::assetId))
+        .limit(Math.max(1, limit))
+        .toList();
+  }
 
   List<String> listCatalog(long repositoryId, String last, int limit);
 
@@ -117,6 +148,15 @@ public interface DockerRegistryDao {
   record CleanupTagCandidate(String imageName, String tag) {
   }
 
-  record CleanupManifestCandidate(String imageName, String digest) {
+  record CleanupManifestCandidate(
+      String imageName,
+      String digest,
+      long assetId,
+      Instant lastDownloadedAt,
+      Instant updatedAt,
+      long size) {
+    public CleanupManifestCandidate(String imageName, String digest) {
+      this(imageName, digest, 0, null, null, 0);
+    }
   }
 }

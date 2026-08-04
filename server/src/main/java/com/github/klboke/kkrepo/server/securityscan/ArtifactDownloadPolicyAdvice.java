@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
+import com.github.klboke.kkrepo.server.cleanup.CleanupUsageUnavailableException;
 import com.github.klboke.kkrepo.protocol.docker.DockerConstants;
 import com.github.klboke.kkrepo.protocol.docker.DockerErrorCode;
 import jakarta.servlet.http.HttpServletRequest;
@@ -17,6 +18,16 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @RestControllerAdvice
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class ArtifactDownloadPolicyAdvice {
+  @ExceptionHandler(CleanupUsageUnavailableException.class)
+  public ResponseEntity<Map<String, Object>> cleanupUsageUnavailable(
+      CleanupUsageUnavailableException failure) {
+    return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+        .header("Retry-After", "5")
+        .body(Map.of(
+            "code", "CLEANUP_USAGE_UNAVAILABLE",
+            "message", failure.getMessage()));
+  }
+
   @ExceptionHandler(ArtifactPolicyException.class)
   public ResponseEntity<?> blocked(
       ArtifactPolicyException failure, HttpServletRequest request) {

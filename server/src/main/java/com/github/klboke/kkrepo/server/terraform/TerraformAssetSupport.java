@@ -132,7 +132,9 @@ final class TerraformAssetSupport {
     AssetRecord asset = find(runtime, path).orElseThrow(() -> notFound(path));
     AssetBlobRecord blob = blob(asset);
     if (blob == null) throw notFound(path);
-    if (downloadPolicy != null) downloadPolicy.beforeRead(asset.id(), blob.id());
+    if (downloadPolicy != null) {
+      downloadPolicy.beforeReadFromRepository(asset.id(), blob.id(), asset.repositoryId());
+    }
     var ref = BlobReferenceCodec.reference(blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size());
     var storage = storages.forBlobStoreId(blob.blobStoreId());
     if (storage.stat(ref).isEmpty()) throw notFound(path);

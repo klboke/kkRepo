@@ -8,6 +8,9 @@ import com.github.klboke.kkrepo.persistence.jdbc.spi.JsonPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.MigrationPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.SearchPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.SecurityPersistenceDialect;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Types;
@@ -117,6 +120,51 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
         throw new IllegalStateException("Component upsert did not return an id");
       }
       return key;
+    }
+
+    @Override
+    public String caseSensitiveText(String expression) {
+      return "CAST(" + expression + " AS BINARY)";
+    }
+
+    @Override
+    public List<String> cleanupFamilyOrderExpressions() {
+      return List.of(
+          "cleanup_namespace_prefix",
+          "cleanup_namespace_hash",
+          "cleanup_name_prefix",
+          "cleanup_name_hash",
+          "cleanup_kind_key");
+    }
+
+    @Override
+    public List<Object> cleanupFamilyCursorValues(
+        String namespace, String name, String kind) {
+      String normalizedNamespace = namespace == null ? "" : namespace;
+      String normalizedName = name == null ? "" : name;
+      String normalizedKind = kind == null ? "" : kind;
+      return List.of(
+          binaryPrefix(normalizedNamespace, 384),
+          rawSha256(normalizedNamespace),
+          binaryPrefix(normalizedName, 384),
+          rawSha256(normalizedName),
+          binaryPrefix(normalizedKind, 200));
+    }
+
+    private static byte[] rawSha256(String value) {
+      try {
+        return MessageDigest.getInstance("SHA-256")
+            .digest(value.getBytes(StandardCharsets.UTF_8));
+      } catch (NoSuchAlgorithmException exception) {
+        throw new IllegalStateException("SHA-256 is not available", exception);
+      }
+    }
+
+    private static byte[] binaryPrefix(String value, int maxBytes) {
+      byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+      return bytes.length <= maxBytes
+          ? bytes
+          : java.util.Arrays.copyOf(bytes, maxBytes);
     }
 
     @Override

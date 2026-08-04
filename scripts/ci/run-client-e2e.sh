@@ -19,6 +19,11 @@ SWIFT_LOGIN_TIMEOUT_SECONDS="${SWIFT_E2E_LOGIN_TIMEOUT_SECONDS:-60}"
 ANSIBLE_IMPORT_TIMEOUT_SECONDS="${ANSIBLE_E2E_IMPORT_TIMEOUT_SECONDS:-120}"
 KKREPO_AUTH_URL=""
 REDACTION_VALUES=("$KKREPO_PASSWORD" "$KKREPO_AUTH")
+CLEANUP_FIXTURE_FORMAT=""
+CLEANUP_FIXTURE_REPOSITORY=""
+CLEANUP_FIXTURE_PATTERN=""
+CLEANUP_FIXTURE_LABEL=""
+SWIFT_CLEANUP_FIXTURE_AVAILABLE=false
 
 if [[ ! "$SWIFT_LOGIN_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   printf '[client-e2e] SWIFT_E2E_LOGIN_TIMEOUT_SECONDS must be a positive integer\n' >&2
@@ -417,6 +422,117 @@ wait_for_body_contains() {
   return 1
 }
 
+register_cleanup_fixture() {
+  CLEANUP_FIXTURE_FORMAT="$1"
+  CLEANUP_FIXTURE_REPOSITORY="$2"
+  CLEANUP_FIXTURE_PATTERN="$3"
+  CLEANUP_FIXTURE_LABEL="$4"
+}
+
+run_registered_cleanup() {
+  if [[ -z "$CLEANUP_FIXTURE_FORMAT" ]]; then
+    return 0
+  fi
+  if [[ "${CLIENT_E2E_CLEANUP_ENABLED:-true}" != "true" ]]; then
+    log "cleanup verification skipped by CLIENT_E2E_CLEANUP_ENABLED"
+    return 0
+  fi
+  log "running cleanup Try Run and Execute for $CLEANUP_FIXTURE_LABEL"
+  python3 - \
+    "$KKREPO_URL" "$KKREPO_AUTH" "$CLEANUP_FIXTURE_FORMAT" \
+    "$CLEANUP_FIXTURE_REPOSITORY" "$CLEANUP_FIXTURE_PATTERN" \
+    "$CLEANUP_FIXTURE_LABEL" "$STAMP" "$ARTIFACT_DIR" <<'PY'
+import base64
+import json
+import pathlib
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+base_url, credentials, fmt, repository, pattern, label, stamp, artifact_dir = sys.argv[1:]
+authorization = "Basic " + base64.b64encode(credentials.encode("utf-8")).decode("ascii")
+
+
+def request(method, path, payload=None, expected=(200,)):
+    body = None if payload is None else json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    headers = {"Authorization": authorization, "Accept": "application/json"}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(base_url.rstrip("/") + path, body, headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            status = response.status
+            raw = response.read()
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace")
+        raise SystemExit(f"cleanup {method} {path} failed with HTTP {error.code}: {detail}") from error
+    if status not in expected:
+        raise SystemExit(f"cleanup {method} {path} returned unexpected HTTP {status}")
+    return json.loads(raw) if raw else None
+
+
+def await_run(run_id):
+    deadline = time.monotonic() + 180
+    latest = None
+    while time.monotonic() < deadline:
+        latest = request("GET", f"/internal/cleanup/runs/{run_id}")
+        if latest["run"]["state"] in {
+            "SUCCEEDED", "SUCCEEDED_TRUNCATED", "PARTIAL", "PARTIAL_LIMIT_REACHED",
+            "FAILED", "CANCELLED",
+        }:
+            return latest
+        time.sleep(0.5)
+    raise SystemExit(f"cleanup run {run_id} did not finish: {latest}")
+
+
+repository_view = request(
+    "GET", "/internal/repositories/" + urllib.parse.quote(repository, safe=""))
+policy_view = request("POST", "/internal/cleanup/policies", {
+    "name": f"client-e2e-cleanup-{label}-{stamp}",
+    "format": fmt,
+    "notes": "real client cleanup verification",
+    "criteria": {
+      "patternType": "GLOB",
+      "pattern": pattern,
+      "publishedOlderThanDays": 0
+    },
+    "repositoryIds": [repository_view["id"]],
+    "scanLimitPerRepository": 10000,
+    "deleteLimitPerRepository": 1000,
+}, expected=(201,))
+policy = policy_view["policy"]
+
+try_queued = request(
+    "POST", f"/internal/cleanup/policies/{policy['id']}/runs",
+    {"mode": "TRY_RUN", "expectedPolicyRevision": policy["revision"],
+     "scanLimitPerRepository": 10000}, expected=(202,))
+try_run = await_run(try_queued["run"]["id"])
+if try_run["run"]["state"] != "SUCCEEDED" or try_run["run"]["matchedSubjects"] < 1:
+    raise SystemExit(f"cleanup Try Run did not produce a complete match: {try_run}")
+
+execute_queued = request(
+    "POST", f"/internal/cleanup/policies/{policy['id']}/runs",
+    {"mode": "EXECUTE", "expectedPolicyRevision": policy["revision"]}, expected=(202,))
+execute_run = await_run(execute_queued["run"]["id"])
+if (execute_run["run"]["state"] != "SUCCEEDED"
+        or execute_run["run"]["deletedSubjects"] < 1
+        or execute_run["run"]["failedSubjects"] != 0):
+    raise SystemExit(f"cleanup Execute did not delete the real-client fixture cleanly: {execute_run}")
+
+request(
+    "DELETE",
+    f"/internal/cleanup/policies/{policy['id']}?revision={policy['revision']}",
+    expected=(204,))
+report = {"policy": policy_view, "tryRun": try_run, "executeRun": execute_run}
+safe_label = "".join(character if character.isalnum() or character in "-_" else "-"
+                     for character in label)
+pathlib.Path(artifact_dir, f"cleanup-{safe_label}.json").write_text(
+    json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+PY
+}
+
 capture_rubygems_metadata() {
   local name="$1"
   local dependencies="$ARTIFACT_DIR/rubygems-dependencies.marshal"
@@ -439,6 +555,19 @@ capture_rubygems_metadata() {
   run_logged_output rubygems-package "$gem" \
     curl -m 10 -fsS -u "$KKREPO_AUTH" \
     "$KKREPO_URL/repository/rubygems-group/gems/$name-1.0.0.gem"
+}
+
+test_raw() {
+  local path="client-e2e/$STAMP/payload.txt"
+  local payload="$WORK_DIR/raw-payload.txt"
+  printf 'kkrepo raw client e2e %s\n' "$STAMP" >"$payload"
+  run_logged raw-upload curl -m 30 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    --upload-file "$payload" \
+    "$KKREPO_URL/repository/asset-api-raw-hosted/$path"
+  run_logged_output raw-download "$ARTIFACT_DIR/raw-payload.txt" \
+    curl -m 30 -fsS -u "$KKREPO_AUTH" \
+    "$KKREPO_URL/repository/asset-api-raw-hosted/$path"
+  cmp "$payload" "$ARTIFACT_DIR/raw-payload.txt"
 }
 
 test_maven() {
@@ -1734,6 +1863,7 @@ EOF
     export SWIFT_XCODE_E2E_GENERATED_VERSION="$version"
   fi
 
+  SWIFT_CLEANUP_FIXTURE_AVAILABLE=true
   test_swift_proxy_binary "$label" "$swift_bin" "$home" "$dir"
 }
 
@@ -2255,58 +2385,88 @@ run_selected_tests() {
   local test
 
   if [[ -z "$selection" || "$selection" == "all" ]]; then
-    tests=(maven npm pypi go helm cargo pub composer nuget rubygems yum terraform swift ansible docker-oci)
+    tests=(raw maven npm pypi go helm cargo pub composer nuget rubygems yum terraform swift ansible docker-oci)
   else
     IFS=',' read -r -a tests <<<"$selection"
   fi
 
   for test in "${tests[@]}"; do
     test="${test//[[:space:]]/}"
+    CLEANUP_FIXTURE_FORMAT=""
+    CLEANUP_FIXTURE_REPOSITORY=""
+    CLEANUP_FIXTURE_PATTERN=""
+    CLEANUP_FIXTURE_LABEL=""
     case "$test" in
+      raw)
+        test_raw
+        register_cleanup_fixture raw asset-api-raw-hosted "*$STAMP*" raw
+        ;;
       maven)
         test_maven
+        register_cleanup_fixture maven2 maven-releases "*client-e2e-maven-$STAMP*" maven
         ;;
       npm)
         test_npm
+        register_cleanup_fixture npm npm-hosted "*npm-$STAMP*" npm
         ;;
       pypi)
         test_pypi
+        register_cleanup_fixture pypi pypi-hosted "*$STAMP*" pypi
         ;;
       go)
         test_go
+        register_cleanup_fixture go go-proxy "*rsc.io/quote*" go
         ;;
       helm)
         test_helm
+        register_cleanup_fixture helm helm-hosted "*helm-$STAMP*" helm
         ;;
       cargo)
         test_cargo
+        register_cleanup_fixture cargo cargo-hosted "*cargo_$STAMP*" cargo
         ;;
       pub|dart-pub|flutter-pub)
         test_pub
+        if command -v dart >/dev/null 2>&1; then
+          register_cleanup_fixture pub pub-hosted "*pub_$STAMP*" pub
+        fi
         ;;
       composer|php)
         test_composer
+        register_cleanup_fixture composer composer-hosted "*package-$STAMP*" composer
         ;;
       nuget)
         test_nuget
+        register_cleanup_fixture nuget nuget-hosted "*$STAMP*" nuget
         ;;
       rubygems|ruby)
         test_rubygems
+        register_cleanup_fixture rubygems rubygems-hosted "*rubygems_$STAMP*" rubygems
         ;;
       yum)
         test_yum
+        register_cleanup_fixture yum yum-hosted "*6tunnel*" yum
         ;;
       terraform)
         test_terraform
+        register_cleanup_fixture terraform terraform-hosted "*client-e2e*" terraform
         ;;
       swift|swiftpm)
+        SWIFT_CLEANUP_FIXTURE_AVAILABLE=false
         test_swift
+        if [[ "$SWIFT_CLEANUP_FIXTURE_AVAILABLE" == "true" ]]; then
+          register_cleanup_fixture swift swift-hosted "*client-e2e-${STAMP}*" swift
+        fi
         ;;
       ansible|ansible-galaxy)
         test_ansible
+        if [[ -n "${ANSIBLE_GALAXY_BINS:-}" ]] || command -v ansible-galaxy >/dev/null 2>&1; then
+          register_cleanup_fixture ansiblegalaxy ansible-hosted "*${STAMP:0:14}*" ansible
+        fi
         ;;
       docker|docker-oci|oci)
         test_docker_oci
+        register_cleanup_fixture docker docker-hosted "*kkrepo-client-e2e/docker-oci*" docker-oci
         ;;
       "")
         ;;
@@ -2315,6 +2475,7 @@ run_selected_tests() {
         exit 2
         ;;
     esac
+    run_registered_cleanup
   done
 }
 
