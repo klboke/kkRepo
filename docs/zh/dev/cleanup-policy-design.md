@@ -188,8 +188,8 @@ kkRepo 对应协议实现为准。已有设计基线优先复用：
 | --- | --- | --- |
 | 原生 policy aggregate | V38 与 `CleanupPolicyService` 提供 CRUD、revision、同格式多仓库 target、规则快照和独立 schedule | 跨格式单策略、策略模板 |
 | Quartz 集群 Cron | V39 官方 JDBC JobStore 表；policy schedule 是真相，Quartz 是可重建投影，scheduled fire 有唯一键 | maintenance window、节假日日历 |
-| 持久异步执行 | V40、`CleanupRunWorker` 与 cleanup DAO 提供按仓库公平 claim、重试、取消、心跳、owner 失联后的 cancel takeover、repository lease 与 fencing | 跨区域调度队列 |
-| 游标与历史治理 | V41 提供 policy/repository 持久游标、shard 游标快照与 revision CAS；V43 持久化 Try Run 的 `wouldDeleteSubjects`；终态 run 按时间、最小保留数和有界批次回收 | 冷归档/导出 |
+| 持久异步执行 | V38、`CleanupRunWorker` 与 cleanup DAO 提供按仓库公平 claim、重试、取消、心跳、owner 失联后的 cancel takeover、repository lease 与 fencing | 跨区域调度队列 |
+| 游标与历史治理 | V38 提供 policy/repository 持久游标、shard 游标快照、revision CAS 与 Try Run 的 `wouldDeleteSubjects`；终态 run 按时间、最小保留数和有界批次回收 | 冷归档/导出 |
 | 并发安全删除 | scanner 生成 content token/usage revision；execute 在事务中锁定原生行并复检，再调用 `RepositoryContentDeletionService`；Hosted 生成 metadata 不独立入选，npm 原子重写 packument/dist-tags，NuGet 成对处理 nupkg/nuspec | Cleanup 专属 tombstone/restore |
 | 全格式 usage | 公共 `ArtifactDownloadPolicy` 只记录成功外部 GET，按 asset 实际 source repository 落库；HEAD、内部请求、拒绝请求不更新 | 对共享 Docker layer 向所有 manifest 扇出 usage |
 | 写放大控制 | usage-policy 投影、节点 TTL coalescer、单调 upsert、warm-up/safety lag、默认 fail closed | durable usage event outbox 模式 |
@@ -711,7 +711,7 @@ canonical key 复检。
 
 ### 未来：Cleanup Tombstone 与恢复
 
-本节是独立后续设计，当前 V38–V43 没有 `cleanup_tombstone` 表，也没有 restore/release API；
+本节是独立后续设计，当前 V38–V40 没有 `cleanup_tombstone` 表，也没有 restore/release API；
 当前 EXECUTE 一旦提交即不可逆。后续实现不得只增加 UI，而必须完成下列持久引用与冲突语义：
 
 `cleanup_tombstone` 保存 format、subject identity、adapter schema/version、格式原生 metadata
@@ -831,7 +831,7 @@ packument/dist-tags；PyPI 要重建 simple index；Docker 要先删除 referenc
 
 - scanner 每页批量读取 component assets、usage、NuGet 关联文件、Docker manifest/tag 和 protection；
   DAO 把大 `IN` 集合切成最多 500 个参数的后端批次，扫描 SQL 数量不再随 subject 数线性增长。
-- component family 使用 keyset cursor。V42 为 MySQL 提供二进制前缀加原始 SHA-256 的可索引排序
+- component family 使用 keyset cursor。V40 为 MySQL 提供二进制前缀加原始 SHA-256 的可索引排序
   键，为 PostgreSQL 提供 `C` collation expression index，并补齐 unbound asset、Docker manifest
   和 protection hash 索引。MySQL DDL 使用 `INSTANT/INPLACE + LOCK=NONE` 且每步可恢复；PostgreSQL
   使用可恢复的 `CREATE INDEX CONCURRENTLY`。
@@ -1126,7 +1126,7 @@ Maven 多模块 fixture 覆盖多个不同版本的 `jackson-*` artifactId；其
 
 ### 已落地 4：持续扫描与运行治理
 
-- V41 为每个策略/仓库提供跨 run 持久游标，shard 固化 revision，终态提交和游标推进原子完成；
+- V38 为每个策略/仓库提供跨 run 持久游标，shard 固化 revision，终态提交和游标推进原子完成；
   takeover、取消、删除限额和 oversized family 都有明确的前进/不前进语义。
 - 终态 run 按保留期、每策略最小保留数和每轮最大批次自动回收；多副本用行锁和
   `SKIP LOCKED` 协调，不依赖单 JVM leader。

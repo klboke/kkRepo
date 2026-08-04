@@ -17,7 +17,7 @@ class PostgreSqlMigrationCompatibilityTest extends PostgreSqlIntegrationTestSupp
     assertTrue(flyway().validateWithResult().validationSuccessful);
     var result = flyway().migrate();
     assertEquals(0, result.migrationsExecuted);
-    assertEquals("43", flyway().info().current().getVersion().getVersion());
+    assertEquals("40", flyway().info().current().getVersion().getVersion());
   }
 
   @Test
@@ -37,7 +37,7 @@ class PostgreSqlMigrationCompatibilityTest extends PostgreSqlIntegrationTestSupp
   void cleanupIndexesAreOnlineAndRepairableAfterInterruptedBuilds() throws Exception {
     String migration;
     try (InputStream stream = getClass().getResourceAsStream(
-        "/db/migration/postgresql/V42__cleanup_scan_indexes.sql")) {
+        "/db/migration/postgresql/V40__cleanup_scan_indexes.sql")) {
       assertNotNull(stream);
       migration = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
     }
@@ -51,7 +51,7 @@ class PostgreSqlMigrationCompatibilityTest extends PostgreSqlIntegrationTestSupp
       assertTrue(drop >= 0 && create > drop, index + " must be rebuilt restart-safely");
     }
     try (InputStream stream = getClass().getResourceAsStream(
-        "/db/migration/postgresql/V42__cleanup_scan_indexes.sql.conf")) {
+        "/db/migration/postgresql/V40__cleanup_scan_indexes.sql.conf")) {
       assertNotNull(stream);
       assertEquals(
           "executeInTransaction=false",
