@@ -156,11 +156,6 @@ public class AssetDaoAdapter implements AssetDao {
   }
 
   @Override
-  public List<String> listPypiProjectNames(long arg0) {
-    throw new UnsupportedOperationException();
-  }
-
-  @Override
   public List<PypiProjectIndexRow> listPypiProjectIndexRows(long arg0, String arg1) {
     throw new UnsupportedOperationException();
   }

@@ -2,7 +2,6 @@ package com.github.klboke.kkrepo.server.pypi;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import com.github.klboke.kkrepo.core.BlobObjectMetadata;
@@ -197,30 +196,6 @@ class PypiHostedServiceTest {
             "admin", null));
   }
 
-  @Test
-  void rootIndexUsesPackagePathsWhenMigratedComponentsAreMissing() {
-    RootIndexAssetDao assetDao = new RootIndexAssetDao();
-    IndexRecordingWriter writer = new IndexRecordingWriter();
-    AssetMetadataCache cache = new AssetMetadataCache(new InMemorySharedCache(), false, 0, 0);
-    FixedBlobStorageRegistry registry = new FixedBlobStorageRegistry();
-    PypiHostedService service = new PypiHostedService(
-        assetDao,
-        new EmptyComponentDao(),
-        new RecordingIndexRebuildDao(),
-        registry,
-        writer,
-        new PypiAssetReader(assetDao, registry),
-        cache,
-        0);
-
-    service.rebuildRootIndex(runtime(), new NoopBlobStorage(), 1L, "system", null);
-
-    String html = new String(writer.indexBody, StandardCharsets.UTF_8);
-    assertTrue(html.contains(">demo-pkg</a>"));
-    assertTrue(html.contains("href=\"demo-pkg/\""));
-    assertTrue(html.contains(">path-fallback</a>"));
-  }
-
   private static PypiHostedService service(
       AssetDao assetDao, RecordingIndexRebuildDao rebuildDao, RecordingWriter writer) {
     AssetMetadataCache cache = new AssetMetadataCache(new InMemorySharedCache(), false, 0, 0);
@@ -300,13 +275,6 @@ class PypiHostedServiceTest {
     }
   }
 
-  private static final class RootIndexAssetDao extends EmptyAssetDao {
-    @Override
-    public List<String> listPypiProjectNames(long repositoryId) {
-      return List.of("demo-pkg", "path-fallback");
-    }
-  }
-
   private static class RecordingIndexRebuildDao extends RepositoryIndexRebuildDaoAdapter {
     final List<String> enqueues = new ArrayList<>();
 
@@ -373,27 +341,6 @@ class PypiHostedServiceTest {
         String createdByIp) {
       indexWrites++;
       fail("PyPI upload must enqueue index rebuilds instead of writing index blobs synchronously");
-      return null;
-    }
-  }
-
-  private static final class IndexRecordingWriter extends RecordingWriter {
-    private byte[] indexBody;
-
-    @Override
-    Stored writeBytes(
-        RepositoryRuntime runtime,
-        BlobStorage storage,
-        long blobStoreId,
-        String path,
-        byte[] body,
-        String contentType,
-        String kind,
-        PackageCoordinate coordinate,
-        Map<String, Object> assetAttributes,
-        String createdBy,
-        String createdByIp) {
-      indexBody = body;
       return null;
     }
   }

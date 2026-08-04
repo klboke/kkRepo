@@ -3763,7 +3763,7 @@ public abstract class PersistenceApiContract {
     String pypiPath = "packages/portable-pkg/1.0.0/portable_pkg-1.0.0-py3-none-any.whl";
     stores().assets().insertAsset(new AssetRecord(
         null, pypiRepositoryId, null, pypiBlobId, RepositoryFormat.PYPI,
-        pypiPath, sha256(pypiPath), "portable_pkg-1.0.0-py3-none-any.whl", "PACKAGE",
+        pypiPath, sha256(pypiPath), "portable_pkg-1.0.0-py3-none-any.whl", "package",
         "application/octet-stream", 42L, null, Instant.parse("2026-07-13T10:00:00Z"),
         Map.of("normalizedName", "portable-pkg", "requires_python", ">=3.8")));
 
@@ -3771,7 +3771,6 @@ public abstract class PersistenceApiContract {
     assertEquals(1, pypiRows.size());
     assertEquals(pypiPath, pypiRows.getFirst().path());
     assertEquals(">=3.8", pypiRows.getFirst().attributes().get("requires_python"));
-    assertEquals(List.of("portable-pkg"), stores().assets().listPypiProjectNames(pypiRepositoryId));
     assertEquals(List.of(pypiPath), stores().assets()
         .listAssetsByPrefix(pypiRepositoryId, "packages/portable-pkg/")
         .stream().map(AssetRecord::path).toList());

@@ -75,8 +75,7 @@ public class PypiHostedService {
     String normalized = PypiPaths.normalizeName(projectName);
     String path = PypiPaths.indexPath(normalized);
     if (componentDao.listByName(runtime.id(), normalized).isEmpty()
-        && lookupCached(runtime, path).isEmpty()
-        && assetDao.listPypiProjectIndexRows(runtime.id(), normalized).isEmpty()) {
+        && lookupCached(runtime, path).isEmpty()) {
       throw new PypiExceptions.PypiNotFoundException(projectName);
     }
     waitForProjectIndexRebuild(runtime.id(), normalized);
@@ -204,9 +203,8 @@ public class PypiHostedService {
       String normalizedName,
       String createdBy,
       String createdByIp) {
-    String normalized = PypiPaths.normalizeName(normalizedName);
-    writeIndex(runtime, storage, blobStoreId, PypiPaths.indexPath(normalized),
-        buildProjectIndex(runtime, normalized), "index", Map.of("name", normalized),
+    writeIndex(runtime, storage, blobStoreId, PypiPaths.indexPath(normalizedName),
+        buildProjectIndex(runtime, normalizedName), "index", Map.of("name", normalizedName),
         createdBy, createdByIp);
   }
 
@@ -270,11 +268,9 @@ public class PypiHostedService {
 
   private String buildRootIndex(RepositoryRuntime runtime) {
     Map<String, PypiLink> links = new TreeMap<>();
-    for (String name : assetDao.listPypiProjectNames(runtime.id())) {
+    for (String name : componentDao.listDistinctNamesByRepositoryId(runtime.id())) {
       if (name == null || name.isBlank()) continue;
-      String normalized = PypiPaths.normalizeName(name);
-      if (normalized.isBlank()) continue;
-      links.putIfAbsent(normalized, new PypiLink(normalized, normalized + "/", ""));
+      links.putIfAbsent(name, new PypiLink(name, name + "/", ""));
     }
     return PypiIndex.buildRoot(links.values());
   }

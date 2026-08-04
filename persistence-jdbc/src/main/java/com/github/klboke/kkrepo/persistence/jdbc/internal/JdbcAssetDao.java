@@ -1060,25 +1060,6 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         EnumColumns.write(RepositoryFormat.HELM));
   }
 
-  public List<String> listPypiProjectNames(long repositoryId) {
-    return jdbcTemplate.queryForList("""
-        SELECT DISTINCT SUBSTRING(
-          a.path,
-          10,
-          POSITION('/' IN SUBSTRING(a.path, 10)) - 1
-        ) AS project_name
-        FROM asset a
-        JOIN asset_blob b ON b.id = a.asset_blob_id
-        WHERE a.repository_id = ?
-          AND a.format = ?
-          AND a.path LIKE 'packages/%/%'
-          AND POSITION('/' IN SUBSTRING(a.path, 10)) > 1
-          AND LOWER(a.kind) IN ('package', 'package-signature')
-          AND b.deleted_at IS NULL
-        ORDER BY project_name
-        """, String.class, repositoryId, EnumColumns.write(RepositoryFormat.PYPI));
-  }
-
   public List<PypiProjectIndexRow> listPypiProjectIndexRows(long repositoryId, String normalizedName) {
     String prefix = "packages/" + normalizedName + "/";
     return jdbcTemplate.query("""
@@ -1088,7 +1069,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         WHERE a.repository_id = ?
           AND a.format = ?
           AND a.path LIKE ? ESCAPE '!'
-          AND LOWER(a.kind) IN ('package', 'package-signature')
+          AND a.kind IN ('package', 'package-signature')
           AND b.deleted_at IS NULL
         ORDER BY a.path
         """, (rs, rowNum) -> new PypiProjectIndexRow(

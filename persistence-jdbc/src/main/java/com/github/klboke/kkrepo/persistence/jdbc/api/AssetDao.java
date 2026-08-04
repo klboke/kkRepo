@@ -222,8 +222,6 @@ public interface AssetDao {
 
   List<HelmIndexRow> listHelmIndexRows(long repositoryId);
 
-  List<String> listPypiProjectNames(long repositoryId);
-
   List<PypiProjectIndexRow> listPypiProjectIndexRows(long repositoryId, String normalizedName);
 
   record AssetWithBlob(AssetRecord asset, AssetBlobRecord blob) {}

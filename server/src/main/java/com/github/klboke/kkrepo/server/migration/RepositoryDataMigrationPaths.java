@@ -26,10 +26,6 @@ final class RepositoryDataMigrationPaths {
     if (format == RepositoryFormat.DOCKER) {
       return path.contains("/manifests/") || path.contains("/blobs/");
     }
-    if (format == RepositoryFormat.PYPI) {
-      String normalized = stripLeadingSlashes(path);
-      return normalized.startsWith("packages/") && normalized.indexOf('/', "packages/".length()) > 0;
-    }
     if (format == RepositoryFormat.PUB) {
       return PubRepositoryDataMigrationWriter.isMigratablePubPath(path);
     }
@@ -43,14 +39,6 @@ final class RepositoryDataMigrationPaths {
       return AnsibleGalaxyRepositoryDataMigrationWriter.isMigratableAnsiblePath(path);
     }
     return true;
-  }
-
-  private static String stripLeadingSlashes(String path) {
-    String normalized = path;
-    while (normalized.startsWith("/")) {
-      normalized = normalized.substring(1);
-    }
-    return normalized;
   }
 
   static boolean shouldGenerateMavenChecksumSiblings(MavenPath path) {

@@ -157,20 +157,6 @@ class RepositoryDataMigrationWorkerTest {
   }
 
   @Test
-  void pypiDerivedSimpleIndexesAreNotMigratedAsSourceBlobs() {
-    assertTrue(RepositoryDataMigrationWorker.shouldMigrateSourceAsset(
-        RepositoryFormat.PYPI,
-        "packages/demo-pkg/1.0.0/demo_pkg-1.0.0-py3-none-any.whl"));
-
-    assertFalse(RepositoryDataMigrationWorker.shouldMigrateSourceAsset(
-        RepositoryFormat.PYPI,
-        "simple/"));
-    assertFalse(RepositoryDataMigrationWorker.shouldMigrateSourceAsset(
-        RepositoryFormat.PYPI,
-        "simple/demo-pkg/"));
-  }
-
-  @Test
   void rubygemsDependencyIndexUsesDownloadedBytesInsteadOfSourceMetadataSize() {
     assertFalse(RepositoryDataMigrationWorker.shouldValidateDownloadedSize(
         claim(10L, 100L, RepositoryFormat.RUBYGEMS, "dependencies/demo.ruby")));
