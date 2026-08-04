@@ -55,6 +55,7 @@ import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -626,6 +627,9 @@ class RepositoryDataMigrationWriter {
     if (repository.format() == RepositoryFormat.CARGO) {
       return upsertCargoComponent(repository, source, lastUpdatedAt, digests, cargoMetadata);
     }
+    if (repository.format() == RepositoryFormat.PYPI) {
+      return upsertPypiComponent(repository, source, lastUpdatedAt);
+    }
     if (source.name() == null || source.name().isBlank()) {
       return null;
     }
@@ -639,6 +643,28 @@ class RepositoryDataMigrationWriter {
         componentKind(repository.format(), source),
         PersistenceHashes.componentCoordinateHash(blankToNull(source.namespace()), source.name(), blankToNull(source.version())),
         componentAttributes(source),
+        lastUpdatedAt);
+    return componentDao.upsertReturningId(component);
+  }
+
+  private Long upsertPypiComponent(
+      RepositoryRecord repository,
+      RepositoryDataMigrationAssetRecord source,
+      Instant lastUpdatedAt) {
+    PypiMigrationCoordinate coordinate = pypiCoordinate(source);
+    if (coordinate == null) {
+      return null;
+    }
+    ComponentRecord component = new ComponentRecord(
+        null,
+        repository.id(),
+        RepositoryFormat.PYPI,
+        null,
+        coordinate.normalizedName(),
+        coordinate.version(),
+        "package",
+        PersistenceHashes.componentCoordinateHash(null, coordinate.normalizedName(), coordinate.version()),
+        pypiComponentAttributes(source, coordinate),
         lastUpdatedAt);
     return componentDao.upsertReturningId(component);
   }
@@ -850,7 +876,44 @@ class RepositoryDataMigrationWriter {
       attributes.put("cargo", cargoMetadata.assetAttributes());
       attributes.put("cratePath", source.sourcePath());
     }
+    PypiMigrationCoordinate pypi = pypiCoordinate(source);
+    if (pypi != null) {
+      attributes.put("name", pypi.originalName());
+      attributes.put("normalizedName", pypi.normalizedName());
+      putIfPresent(attributes, "version", pypi.version());
+      putIfPresent(attributes, "requires_python", nestedAttribute(source, "requires_python"));
+    }
     return Map.copyOf(attributes);
+  }
+
+  private static Map<String, Object> pypiComponentAttributes(
+      RepositoryDataMigrationAssetRecord source,
+      PypiMigrationCoordinate coordinate) {
+    LinkedHashMap<String, Object> attributes = new LinkedHashMap<>(componentAttributes(source));
+    attributes.put("name", coordinate.originalName());
+    putIfPresent(attributes, "version", coordinate.version());
+    return Map.copyOf(attributes);
+  }
+
+  private static Object nestedAttribute(RepositoryDataMigrationAssetRecord source, String key) {
+    return source.metadata() == null ? null : nestedAttribute(source.metadata(), key, 0);
+  }
+
+  private static Object nestedAttribute(Map<?, ?> values, String key, int depth) {
+    if (values == null || depth > 4) return null;
+    for (Map.Entry<?, ?> entry : values.entrySet()) {
+      String candidate = String.valueOf(entry.getKey()).replace('-', '_');
+      if (candidate.equalsIgnoreCase(key)) {
+        return entry.getValue();
+      }
+    }
+    for (Object value : values.values()) {
+      if (value instanceof Map<?, ?> nested) {
+        Object found = nestedAttribute(nested, key, depth + 1);
+        if (found != null) return found;
+      }
+    }
+    return null;
   }
 
   private static Map<String, Object> dockerAssetAttributes(
@@ -894,8 +957,10 @@ class RepositoryDataMigrationWriter {
     }
     if (repository.format() == RepositoryFormat.PYPI) {
       indexRebuildDao.enqueue(repository.id(), RepositoryIndexRebuildDao.PYPI_ROOT);
-      if (source.name() != null && !source.name().isBlank()) {
-        indexRebuildDao.enqueue(repository.id(), RepositoryIndexRebuildDao.PYPI_PROJECT, source.name());
+      PypiMigrationCoordinate coordinate = pypiCoordinate(source);
+      if (coordinate != null) {
+        indexRebuildDao.enqueue(
+            repository.id(), RepositoryIndexRebuildDao.PYPI_PROJECT, coordinate.normalizedName());
       }
     }
   }
@@ -904,7 +969,8 @@ class RepositoryDataMigrationWriter {
     return switch (format) {
       case MAVEN2 -> mavenAssetKind(source.sourcePath());
       case NPM -> source.sourcePath().endsWith(".tgz") ? "tarball" : "package-root";
-      case PYPI -> "PACKAGE";
+      case PYPI -> source.sourcePath().toLowerCase(Locale.ROOT).endsWith(".asc")
+          ? "package-signature" : "package";
       case HELM -> source.sourcePath().endsWith("index.yaml")
           ? "INDEX"
           : source.sourcePath().endsWith(".prov") ? "PROVENANCE" : "PACKAGE";
@@ -933,6 +999,30 @@ class RepositoryDataMigrationWriter {
       return "swift-package-release";
     }
     return "package";
+  }
+
+  private static PypiMigrationCoordinate pypiCoordinate(RepositoryDataMigrationAssetRecord source) {
+    if (source == null || source.format() != RepositoryFormat.PYPI) return null;
+    String[] pathParts = stripLeadingSlashes(source.sourcePath()).split("/");
+    String pathName = pathParts.length >= 2 && "packages".equals(pathParts[0]) ? pathParts[1] : null;
+    String name = firstNonBlank(pathName, source.name());
+    if (name == null || name.isBlank()) return null;
+    String normalizedName = normalizePypiName(name);
+    if (normalizedName.isBlank()) return null;
+    String originalName = firstNonBlank(source.name(), firstNonBlank(pathName, normalizedName));
+    String pathVersion = pathParts.length >= 3 ? pathParts[2] : null;
+    return new PypiMigrationCoordinate(
+        originalName, normalizedName, blankToNull(firstNonBlank(source.version(), pathVersion)));
+  }
+
+  private static String normalizePypiName(String name) {
+    return name == null ? "" : name.replaceAll("[-_.]+", "-").toLowerCase(Locale.ENGLISH);
+  }
+
+  private static String stripLeadingSlashes(String path) {
+    String normalized = path == null ? "" : path;
+    while (normalized.startsWith("/")) normalized = normalized.substring(1);
+    return normalized;
   }
 
   private static String swiftAssetKind(String path) {
@@ -1191,6 +1281,12 @@ class RepositoryDataMigrationWriter {
       Digests digests,
       Path tempFile,
       boolean uploaded) {
+  }
+
+  private record PypiMigrationCoordinate(
+      String originalName,
+      String normalizedName,
+      String version) {
   }
 
   record DockerManifestMigrationTarget(String imageName, String reference) {

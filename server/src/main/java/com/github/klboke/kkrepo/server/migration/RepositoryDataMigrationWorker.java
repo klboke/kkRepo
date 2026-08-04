@@ -516,7 +516,8 @@ class RepositoryDataMigrationWorker {
       return false;
     }
     if ((format == RepositoryFormat.PUB || format == RepositoryFormat.TERRAFORM
-        || format == RepositoryFormat.SWIFT || format == RepositoryFormat.ANSIBLEGALAXY)
+        || format == RepositoryFormat.SWIFT || format == RepositoryFormat.ANSIBLEGALAXY
+        || format == RepositoryFormat.PYPI)
         && !RepositoryDataMigrationPaths.shouldDiscoverAsset(format, path)) {
       return false;
     }

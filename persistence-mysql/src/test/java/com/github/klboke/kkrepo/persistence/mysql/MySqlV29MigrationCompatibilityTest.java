@@ -36,7 +36,7 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
     assertTrue(flyway().validateWithResult().validationSuccessful);
     var result = flyway().migrate();
     assertEquals(0, result.migrationsExecuted);
-    assertEquals("39", flyway().info().current().getVersion().getVersion());
+    assertEquals("40", flyway().info().current().getVersion().getVersion());
   }
 
   @Test
@@ -78,8 +78,8 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
 
     Flyway resumed = migration(null);
     resumed.repair();
-    assertEquals(2, resumed.migrate().migrationsExecuted);
-    assertEquals("39", resumed.info().current().getVersion().getVersion());
+    assertEquals(3, resumed.migrate().migrationsExecuted);
+    assertEquals("40", resumed.info().current().getVersion().getVersion());
     assertEquals(1, jdbc().queryForObject("""
         SELECT COUNT(*)
         FROM information_schema.table_constraints

@@ -47,6 +47,21 @@ class RepositoryDataMigrationPathsTest {
   }
 
   @Test
+  void pypiDiscoveryMigratesPackagesButRebuildsSimpleMetadata() {
+    assertTrue(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.PYPI, "packages/demo-pkg/1.0.0/demo_pkg-1.0.0-py3-none-any.whl"));
+    assertTrue(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.PYPI, "/packages/demo-pkg/1.0.0/demo_pkg-1.0.0.tar.gz"));
+
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.PYPI, "simple/"));
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.PYPI, "simple/demo-pkg/"));
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.PYPI, "unrelated/generated-metadata"));
+  }
+
+  @Test
   void pubDiscoveryKeepsPackageMetadataAndArchiveAssetsOnly() {
     assertTrue(RepositoryDataMigrationPaths.shouldDiscoverAsset(
         RepositoryFormat.PUB, "api/packages/example_package"));

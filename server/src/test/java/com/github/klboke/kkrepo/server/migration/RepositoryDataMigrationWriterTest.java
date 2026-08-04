@@ -366,6 +366,89 @@ class RepositoryDataMigrationWriterTest {
   }
 
   @Test
+  void migratedPypiPackageNormalizesComponentAndProjectMarker() {
+    byte[] wheel = "migrated wheel".getBytes(StandardCharsets.UTF_8);
+    RepositoryDao repositoryDao = mock(RepositoryDao.class);
+    ComponentDao componentDao = mock(ComponentDao.class);
+    RepositoryIndexRebuildDao indexRebuildDao = mock(RepositoryIndexRebuildDao.class);
+    RecordingAssetDao assetDao = new RecordingAssetDao();
+    when(repositoryDao.findById(12L)).thenReturn(Optional.of(pypiRepository()));
+    when(componentDao.upsertReturningId(any())).thenReturn(601L);
+    RepositoryDataMigrationWriter writer = new RepositoryDataMigrationWriter(
+        repositoryDao,
+        componentDao,
+        assetDao,
+        mock(BrowseNodeDao.class),
+        new FixedBlobStorageRegistry(new MemoryBlobStorage()),
+        indexRebuildDao,
+        mock(DockerRegistryDao.class),
+        new DockerManifestParser(new ObjectMapper()),
+        null,
+        new TransientTransactionRetry(new RecordingTransactionManager(), 1, 0));
+
+    writer.write(
+        12L,
+        pypiSource(
+            "packages/demo-pkg/1.2.3/demo_pkg-1.2.3-py3-none-any.whl",
+            "Demo_Pkg",
+            "1.2.3",
+            wheel.length),
+        new ByteArrayInputStream(wheel),
+        "application/octet-stream",
+        true);
+
+    ArgumentCaptor<ComponentRecord> componentCaptor = ArgumentCaptor.forClass(ComponentRecord.class);
+    verify(componentDao).upsertReturningId(componentCaptor.capture());
+    assertEquals("demo-pkg", componentCaptor.getValue().name());
+    assertEquals("1.2.3", componentCaptor.getValue().version());
+    assertEquals("package", componentCaptor.getValue().kind());
+    assertEquals("package", assetDao.asset.kind());
+    assertEquals("demo-pkg", assetDao.asset.attributes().get("normalizedName"));
+    assertEquals("Demo_Pkg", assetDao.asset.attributes().get("name"));
+    verify(indexRebuildDao).enqueue(12L, RepositoryIndexRebuildDao.PYPI_ROOT);
+    verify(indexRebuildDao).enqueue(12L, RepositoryIndexRebuildDao.PYPI_PROJECT, "demo-pkg");
+  }
+
+  @Test
+  void migratedPypiPackageFallsBackToCanonicalPackagePathCoordinates() {
+    byte[] sdist = "migrated sdist".getBytes(StandardCharsets.UTF_8);
+    RepositoryDao repositoryDao = mock(RepositoryDao.class);
+    ComponentDao componentDao = mock(ComponentDao.class);
+    RepositoryIndexRebuildDao indexRebuildDao = mock(RepositoryIndexRebuildDao.class);
+    when(repositoryDao.findById(12L)).thenReturn(Optional.of(pypiRepository()));
+    when(componentDao.upsertReturningId(any())).thenReturn(602L);
+    RepositoryDataMigrationWriter writer = new RepositoryDataMigrationWriter(
+        repositoryDao,
+        componentDao,
+        new RecordingAssetDao(),
+        mock(BrowseNodeDao.class),
+        new FixedBlobStorageRegistry(new MemoryBlobStorage()),
+        indexRebuildDao,
+        mock(DockerRegistryDao.class),
+        new DockerManifestParser(new ObjectMapper()),
+        null,
+        new TransientTransactionRetry(new RecordingTransactionManager(), 1, 0));
+
+    writer.write(
+        12L,
+        pypiSource(
+            "packages/path-fallback/2.0.0/path_fallback-2.0.0.tar.gz",
+            null,
+            null,
+            sdist.length),
+        new ByteArrayInputStream(sdist),
+        "application/gzip",
+        true);
+
+    ArgumentCaptor<ComponentRecord> componentCaptor = ArgumentCaptor.forClass(ComponentRecord.class);
+    verify(componentDao).upsertReturningId(componentCaptor.capture());
+    assertEquals("path-fallback", componentCaptor.getValue().name());
+    assertEquals("2.0.0", componentCaptor.getValue().version());
+    verify(indexRebuildDao).enqueue(12L, RepositoryIndexRebuildDao.PYPI_ROOT);
+    verify(indexRebuildDao).enqueue(12L, RepositoryIndexRebuildDao.PYPI_PROJECT, "path-fallback");
+  }
+
+  @Test
   @SuppressWarnings("unchecked")
   void writeMigratedCargoCrateBuildsSparseIndexComponentMetadata() throws Exception {
     byte[] crate = cargoCrate("cargo_demo", "0.1.0", """
@@ -475,6 +558,24 @@ class RepositoryDataMigrationWriterTest {
         Map.of());
   }
 
+  private static RepositoryRecord pypiRepository() {
+    return new RepositoryRecord(
+        12L,
+        "pypi-hosted",
+        RepositoryFormat.PYPI,
+        RepositoryType.HOSTED,
+        "pypi-hosted",
+        true,
+        1L,
+        null,
+        null,
+        null,
+        null,
+        "ALLOW",
+        true,
+        Map.of());
+  }
+
   private static RepositoryDao mockRepositoryDao() {
     RepositoryDao repositoryDao = mock(RepositoryDao.class);
     when(repositoryDao.findById(10L)).thenReturn(Optional.of(dockerRepository()));
@@ -504,6 +605,42 @@ class RepositoryDataMigrationWriterTest {
         "0.1.0",
         "crate",
         "application/x-tar",
+        (long) size,
+        "source-blob-ref",
+        now.minusSeconds(60),
+        null,
+        now.minusSeconds(120),
+        now.minusSeconds(60),
+        "nexus-admin",
+        "127.0.0.1",
+        null,
+        0,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        Map.of(),
+        now.minusSeconds(180));
+  }
+
+  private static RepositoryDataMigrationAssetRecord pypiSource(
+      String path, String name, String version, int size) {
+    Instant now = Instant.now();
+    return new RepositoryDataMigrationAssetRecord(
+        1L,
+        2L,
+        "pypi-asset-1",
+        name == null ? null : "pypi-component-1",
+        path,
+        PersistenceHashes.pathHash(path),
+        RepositoryFormat.PYPI,
+        null,
+        name,
+        version,
+        "package",
+        "application/octet-stream",
         (long) size,
         "source-blob-ref",
         now.minusSeconds(60),
