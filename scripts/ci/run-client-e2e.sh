@@ -444,7 +444,9 @@ run_registered_cleanup() {
     "$CLEANUP_FIXTURE_LABEL" "$STAMP" "$ARTIFACT_DIR" <<'PY'
 import base64
 import json
+import os
 import pathlib
+import ssl
 import sys
 import time
 import urllib.error
@@ -453,6 +455,8 @@ import urllib.request
 
 base_url, credentials, fmt, repository, pattern, label, stamp, artifact_dir = sys.argv[1:]
 authorization = "Basic " + base64.b64encode(credentials.encode("utf-8")).decode("ascii")
+ca_bundle = os.environ.get("SSL_CERT_FILE") or os.environ.get("CURL_CA_BUNDLE")
+ssl_context = ssl.create_default_context(cafile=ca_bundle) if ca_bundle else None
 
 
 def request(method, path, payload=None, expected=(200,)):
@@ -462,7 +466,10 @@ def request(method, path, payload=None, expected=(200,)):
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(base_url.rstrip("/") + path, body, headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=30) as response:
+        open_options = {"timeout": 30}
+        if ssl_context is not None:
+            open_options["context"] = ssl_context
+        with urllib.request.urlopen(req, **open_options) as response:
             status = response.status
             raw = response.read()
     except urllib.error.HTTPError as error:

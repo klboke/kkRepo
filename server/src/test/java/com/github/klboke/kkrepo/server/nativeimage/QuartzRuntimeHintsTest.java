@@ -24,5 +24,12 @@ class QuartzRuntimeHintsTest {
         .onType(CleanupQuartzJob.class)
         .withMemberCategory(org.springframework.aot.hint.MemberCategory.ACCESS_DECLARED_FIELDS)
         .test(hints));
+    for (Class<?> type : QuartzRuntimeHints.REFLECTIVELY_CONSTRUCTED_TYPES) {
+      assertTrue(RuntimeHintsPredicates.reflection()
+          .onType(type)
+          .withMemberCategory(
+              org.springframework.aot.hint.MemberCategory.INVOKE_DECLARED_CONSTRUCTORS)
+          .test(hints), () -> "Missing Quartz constructor hint for " + type.getName());
+    }
   }
 }

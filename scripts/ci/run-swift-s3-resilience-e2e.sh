@@ -738,7 +738,10 @@ export SWIFT_E2E_PROXY_VERSION="$SWIFT_PROXY_VERSION"
 export SWIFT_E2E_LARGE_FIXTURE_BYTES="${SWIFT_E2E_LARGE_FIXTURE_BYTES:-2097152}"
 export SWIFT_KKREPO_BASE_URL="$PRIMARY_URL"
 export SWIFT_KKREPO_SECONDARY_BASE_URL="$SECONDARY_URL"
-"$SCRIPT_DIR/run-client-e2e.sh"
+# This lane reuses the published Swift package for failover and restart probes below.
+# Cleanup Execute is already covered by the regular MySQL/PostgreSQL client matrix;
+# deleting this lane's only fixture here would turn the resilience reads into 404s.
+CLIENT_E2E_CLEANUP_ENABLED=false "$SCRIPT_DIR/run-client-e2e.sh"
 
 assert_lease_takeover "$lease_key" hosted
 verify_minio_objects
