@@ -165,6 +165,19 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
   }
 
   @Test
+  void rubygemsRepositoryRootPagesMatchNexusWhenConfigured() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeLiveEndpoints(config);
+
+    if (config.setupEnabled()) {
+      ensureRubygemsRepositories(config);
+    }
+
+    assertRubyRepositoryRootMatches(config, config.rubygemsHostedRepository());
+    assertRubyRepositoryRootMatches(config, config.rubygemsGroupRepository());
+  }
+
+  @Test
   void yumHostedRootAndMissingPackageResponsesMatchNexusWhenConfigured() throws Exception {
     CompatConfig config = CompatConfig.load();
     assumeLiveEndpoints(config);
@@ -246,6 +259,40 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
     assertPackageHeadMatches("NuGet proxy package HEAD",
         head(config.nexus.absolute(appendPath(referencePackageBase, packageSuffix))),
         head(config.nexusPlus.absolute(appendPath(candidatePackageBase, packageSuffix))));
+  }
+
+  private static void assertRubyRepositoryRootMatches(CompatConfig config, String repository)
+      throws Exception {
+    Exchange referenceBare = get(config.nexus.repositoryRoot(repository, false));
+    Exchange candidateBare = get(config.nexusPlus.repositoryRoot(repository, false));
+    assertSameStatus("RubyGems " + repository + " bare root GET", referenceBare, candidateBare);
+    assertEquals(400, candidateBare.status(), "kkrepo RubyGems bare root GET status");
+    assertContentTypeMatches(referenceBare, candidateBare,
+        "RubyGems " + repository + " bare root GET content type");
+    assertEquals("text/html", normalizedContentType(candidateBare));
+
+    Exchange referenceRoot = get(config.nexus.repositoryRoot(repository, true));
+    Exchange candidateRoot = get(config.nexusPlus.repositoryRoot(repository, true));
+    assertSameStatus("RubyGems " + repository + " root GET", referenceRoot, candidateRoot);
+    assertEquals(200, candidateRoot.status(), "kkrepo RubyGems root GET status");
+    assertContentTypeMatches(referenceRoot, candidateRoot,
+        "RubyGems " + repository + " root GET content type");
+    assertEquals("text/html", normalizedContentType(candidateRoot));
+    assertTrue(candidateRoot.bodyText().contains("This rubygems "),
+        "kkrepo RubyGems root GET should render the repository HTML page");
+
+    Exchange referenceBareHead = head(config.nexus.repositoryRoot(repository, false));
+    Exchange candidateBareHead = head(config.nexusPlus.repositoryRoot(repository, false));
+    assertSameStatus("RubyGems " + repository + " bare root HEAD",
+        referenceBareHead, candidateBareHead);
+    assertContentTypeMatches(referenceBareHead, candidateBareHead,
+        "RubyGems " + repository + " bare root HEAD content type");
+
+    Exchange referenceRootHead = head(config.nexus.repositoryRoot(repository, true));
+    Exchange candidateRootHead = head(config.nexusPlus.repositoryRoot(repository, true));
+    assertSameStatus("RubyGems " + repository + " root HEAD", referenceRootHead, candidateRootHead);
+    assertContentTypeMatches(referenceRootHead, candidateRootHead,
+        "RubyGems " + repository + " root HEAD content type");
   }
 
   private static void assertNugetServiceIndexShape(
@@ -1279,6 +1326,10 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
     HttpRequest.Builder repository(String repository, String repositoryPath) {
       String suffix = repositoryPath == null || repositoryPath.isBlank() ? "" : repositoryPath;
       return raw("/repository/" + repository + "/" + suffix);
+    }
+
+    HttpRequest.Builder repositoryRoot(String repository, boolean trailingSlash) {
+      return raw("/repository/" + repository + (trailingSlash ? "/" : ""));
     }
 
     HttpRequest.Builder absolute(String url) {

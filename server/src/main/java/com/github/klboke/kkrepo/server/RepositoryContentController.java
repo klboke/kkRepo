@@ -359,8 +359,7 @@ public class RepositoryContentController {
       return toHeadResponse(resp, request);
     }
     if (runtime.format() == RepositoryFormat.RUBYGEMS) {
-      String raw = withQuery(extractRepositoryPath(name, request, true), request);
-      MavenResponse resp = rubygems.get(runtime, raw, true);
+      MavenResponse resp = dispatchRubygemsGet(runtime, name, request, true);
       return toHeadResponse(resp, request);
     }
     if (runtime.format() == RepositoryFormat.YUM) {
@@ -820,8 +819,7 @@ public class RepositoryContentController {
       return toStreamingResponse(resp, request, false);
     }
     if (runtime.format() == RepositoryFormat.RUBYGEMS) {
-      String raw = withQuery(extractRepositoryPath(name, request, true), request);
-      MavenResponse resp = rubygems.get(runtime, raw, headOnly);
+      MavenResponse resp = dispatchRubygemsGet(runtime, name, request, headOnly);
       return toStreamingResponse(resp, request, false);
     }
     if (runtime.format() == RepositoryFormat.YUM) {
@@ -945,6 +943,21 @@ public class RepositoryContentController {
       case HOSTED -> throw new MavenExceptions.MavenNotFoundException(
           "Go hosted repositories are not supported: " + runtime.name());
     };
+  }
+
+  private MavenResponse dispatchRubygemsGet(
+      RepositoryRuntime runtime,
+      String name,
+      HttpServletRequest request,
+      boolean headOnly) {
+    DirectoryRequest directory = detectDirectory(name, request);
+    if (directory != null && directory.path().isEmpty()) {
+      return directory.needsRedirect()
+          ? badRepositoryPath(headOnly)
+          : repositoryInfo(runtime, request, "rubygems", headOnly);
+    }
+    String raw = withQuery(extractRepositoryPath(name, request, true), request);
+    return rubygems.get(runtime, raw, headOnly);
   }
 
   private MavenResponse dispatchRawGet(RepositoryRuntime runtime, String rawPath, boolean headOnly) {
@@ -1456,7 +1469,7 @@ public class RepositoryContentController {
    */
   private DirectoryRequest detectDirectory(String name, HttpServletRequest request) {
     String uri = request.getRequestURI();
-    String prefix = "/repository/" + name;
+    String prefix = request.getContextPath() + "/repository/" + name;
     if (uri.equals(prefix)) {
       return new DirectoryRequest("", true);
     }
