@@ -1,15 +1,21 @@
 package com.github.klboke.kkrepo.server.cleanup;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao.AssetWithBlob;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.CleanupFamilyCursor;
+import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
@@ -99,6 +105,206 @@ class CleanupPersistenceDefaultsTest {
     assertEquals(0, legacy.assetId());
   }
 
+  @Test
+  void cleanupPolicyDefaultsProvideBoundedBatchFallbacks() {
+    CleanupPolicyDao dao = mock(CleanupPolicyDao.class, Answers.CALLS_REAL_METHODS);
+    CleanupPolicyDao.CleanupPolicy first = cleanupPolicy(1L);
+    CleanupPolicyDao.CleanupPolicy second = cleanupPolicy(2L);
+    CleanupPolicyDao.CleanupPolicy withoutId = cleanupPolicy(null);
+    CleanupPolicyDao.TargetRepository target = new CleanupPolicyDao.TargetRepository(
+        7, "raw", RepositoryFormat.RAW, RepositoryType.HOSTED, true);
+    CleanupPolicyDao.CleanupSchedule schedule = new CleanupPolicyDao.CleanupSchedule(
+        1, "0 0 2 * * ?", "UTC", true, NOW, NOW, NOW);
+    doReturn(List.of(second, withoutId, first)).when(dao).listPolicies();
+    doReturn(Optional.of(first)).when(dao).findPolicy(1);
+    doReturn(Optional.empty()).when(dao).findPolicy(2);
+    doReturn(List.of(target)).when(dao).listTargets(1);
+    doReturn(List.of()).when(dao).listTargets(2);
+    doReturn(Optional.of(schedule)).when(dao).findSchedule(1);
+    doReturn(Optional.empty()).when(dao).findSchedule(2);
+
+    assertEquals(List.of(first, second), dao.listPolicies(0, 2));
+    assertEquals(List.of(first), dao.listPolicies(-1, 0));
+    assertEquals(
+        Map.of(1L, first),
+        dao.findPolicies(java.util.Arrays.asList(1L, null, 2L, 1L)));
+    assertEquals(Map.of(), dao.findPolicies(null));
+    assertEquals(
+        Map.of(1L, List.of(target), 2L, List.of()),
+        dao.listTargets(java.util.Arrays.asList(1L, null, 2L, 1L)));
+    assertEquals(Map.of(), dao.listTargets((java.util.Collection<Long>) null));
+    assertTrue(dao.isPolicyTarget(1, 7));
+    assertFalse(dao.isPolicyTarget(1, 8));
+    assertEquals(
+        Map.of(1L, schedule),
+        dao.findSchedules(java.util.Arrays.asList(1L, null, 2L, 1L)));
+    assertEquals(Map.of(), dao.findSchedules(List.of()));
+
+    CleanupPolicyDao.CleanupRunRepository runRepository =
+        mock(CleanupPolicyDao.CleanupRunRepository.class);
+    CleanupPolicyDao.CleanupRunItem item = mock(CleanupPolicyDao.CleanupRunItem.class);
+    doReturn(101L).when(runRepository).id();
+    doReturn(List.of(runRepository)).when(dao).listRunRepositories(9);
+    doReturn(List.of(item)).when(dao).listRunItems(101, 0, 1);
+
+    dao.createRunRepositories(null);
+    dao.createRunRepositories(List.of(runRepository));
+    dao.upsertRunItems(null);
+    dao.upsertRunItems(List.of(item));
+    assertSame(runRepository, dao.findRunRepository(9, 101).orElseThrow());
+    assertTrue(dao.findRunRepository(9, 999).isEmpty());
+    assertEquals(
+        Map.of(101L, List.of(item)),
+        dao.listRunItems(java.util.Arrays.asList(101L, null), 0));
+    assertEquals(Map.of(), dao.listRunItems((java.util.Collection<Long>) null, 10));
+    assertEquals(Map.of(101L, List.of(item)), dao.listRunItemsByRun(9, 1));
+    verify(dao).createRunRepository(runRepository);
+    verify(dao).upsertRunItem(item);
+
+    doReturn(4).when(dao).deleteTerminalRunsBefore(NOW, 3, 2);
+    CleanupPolicyDao.CleanupHistoryPruneResult pruned =
+        dao.pruneTerminalRunHistory(NOW, 3, 2, 100);
+    assertEquals(4, pruned.deletedRuns());
+    assertEquals(0, pruned.deletedRunItems());
+
+    byte[] subjectHash = new byte[] {1};
+    CleanupPolicyDao.CleanupProtection protection =
+        mock(CleanupPolicyDao.CleanupProtection.class);
+    CleanupPolicyDao.CleanupProtectionLookup lookup =
+        new CleanupPolicyDao.CleanupProtectionLookup("one", "ASSET", "asset:1", subjectHash);
+    doReturn(Optional.of(protection)).when(dao)
+        .findActiveProtection(7, "ASSET", "asset:1", subjectHash, NOW);
+    assertEquals(
+        Map.of("one", protection),
+        dao.findActiveProtections(7, List.of(lookup), NOW));
+    assertEquals(Map.of(), dao.findActiveProtections(7, null, NOW));
+  }
+
+  @Test
+  void cleanupCompatibilityConstructorsPreserveLegacyDefaults() {
+    CleanupPolicyDao.CleanupRun run = new CleanupPolicyDao.CleanupRun(
+        1L,
+        7,
+        2,
+        "EXECUTE",
+        "MANUAL",
+        "SUCCEEDED",
+        "admin",
+        null,
+        100,
+        10,
+        Map.of(),
+        List.of(),
+        4,
+        3,
+        2,
+        1,
+        0,
+        null,
+        NOW,
+        NOW,
+        NOW,
+        NOW);
+    assertFalse(run.cancelRequested());
+    assertEquals(0, run.wouldDeleteSubjects());
+    assertNull(run.cancelledAt());
+
+    CleanupPolicyDao.CleanupRunRepository repository =
+        new CleanupPolicyDao.CleanupRunRepository(
+            2L,
+            1,
+            7,
+            "raw",
+            RepositoryFormat.RAW,
+            RepositoryType.HOSTED,
+            "SUCCEEDED",
+            4,
+            3,
+            2,
+            1,
+            false,
+            null,
+            NOW,
+            NOW,
+            NOW,
+            NOW);
+    assertNull(repository.scanBudget());
+    assertEquals(0, repository.attemptCount());
+    assertEquals(3, repository.maxAttempts());
+    assertEquals(NOW, repository.nextAttemptAt());
+    assertEquals(0, repository.wouldDeleteSubjects());
+
+    CleanupPolicyDao.CleanupRunItem item = new CleanupPolicyDao.CleanupRunItem(
+        3L,
+        2,
+        "ASSET",
+        "asset:1",
+        new byte[] {1},
+        "family",
+        "name",
+        "1.0",
+        "name/1.0.bin",
+        NOW,
+        NOW,
+        1,
+        10,
+        "DELETED",
+        Map.of(),
+        null,
+        NOW,
+        NOW);
+    assertNull(item.expectedContentToken());
+    assertEquals(0, item.expectedUsageRevision());
+    assertNull(item.protectionId());
+    assertNull(item.evaluatedAt());
+
+    CleanupPolicyDao.ClaimedRunRepository claim =
+        new CleanupPolicyDao.ClaimedRunRepository(
+            2,
+            1,
+            7,
+            "raw",
+            RepositoryFormat.RAW,
+            RepositoryType.HOSTED,
+            "worker",
+            "lease",
+            3,
+            1,
+            3,
+            NOW);
+    assertFalse(claim.takeover());
+    assertFalse(new CleanupPolicyDao.CleanupHistoryPruneResult(0, 0).workPerformed());
+    assertTrue(new CleanupPolicyDao.CleanupHistoryPruneResult(0, 1).workPerformed());
+
+    CleanupPolicyDao.CleanupUsage usage =
+        new CleanupPolicyDao.CleanupUsage(3, 7, NOW, NOW, 2, NOW);
+    assertEquals(3, usage.assetId());
+    assertEquals(
+        List.of(
+            CleanupPolicyDao.CleanupUsageWriteOutcome.WRITTEN,
+            CleanupPolicyDao.CleanupUsageWriteOutcome.COALESCED,
+            CleanupPolicyDao.CleanupUsageWriteOutcome.NOT_TRACKED),
+        List.of(CleanupPolicyDao.CleanupUsageWriteOutcome.values()));
+    CleanupPolicyDao.CleanupProtection concreteProtection =
+        new CleanupPolicyDao.CleanupProtection(
+            4L,
+            "REPOSITORY",
+            7L,
+            "ASSET",
+            "asset:1",
+            new byte[] {1},
+            "MANUAL",
+            null,
+            "release",
+            true,
+            null,
+            NOW,
+            "admin",
+            NOW,
+            NOW);
+    assertEquals("release", concreteProtection.reason());
+  }
+
   private static AssetRecord asset(long id, Long componentId, String path) {
     return new AssetRecord(
         id, 7, componentId, id + 100, RepositoryFormat.RAW, path, new byte[] {(byte) id},
@@ -121,5 +327,20 @@ class CleanupPersistenceDefaultsTest {
   private static DockerRegistryDao.CleanupManifestCandidate candidate(long assetId) {
     return new DockerRegistryDao.CleanupManifestCandidate(
         "demo", "sha256:" + assetId, assetId, null, NOW, 10);
+  }
+
+  private static CleanupPolicyDao.CleanupPolicy cleanupPolicy(Long id) {
+    return new CleanupPolicyDao.CleanupPolicy(
+        id,
+        "cleanup-" + id,
+        RepositoryFormat.RAW,
+        null,
+        Map.of(),
+        1,
+        "ACTIVE",
+        100,
+        10,
+        NOW,
+        NOW);
   }
 }
