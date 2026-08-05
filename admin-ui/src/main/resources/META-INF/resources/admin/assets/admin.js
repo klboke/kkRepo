@@ -10,8 +10,14 @@ let blobStores = [];
 let cleanupPolicies = [];
 let cleanupCapabilities = [];
 let cleanupRuns = [];
-const CLEANUP_POLICY_PAGE_SIZE = 25;
-let cleanupPolicyPage = { after: 0, cursors: [0], page: 0, nextAfter: null };
+const CLEANUP_POLICY_DEFAULT_PAGE_SIZE = 10;
+let cleanupPolicyPage = {
+  after: 0,
+  cursors: [0],
+  page: 0,
+  size: CLEANUP_POLICY_DEFAULT_PAGE_SIZE,
+  nextAfter: null
+};
 let editingCleanupPolicyId = null;
 let cleanupTryRunPolicyId = null;
 let cleanupTryRunTrigger = null;
@@ -5493,14 +5499,23 @@ function handleCleanupPolicyActionMenuKeydown(event) {
   return true;
 }
 
-function renderCleanupPolicies() {
-  closeCleanupPolicyActionMenu();
-  const body = document.getElementById("cleanup-policy-table");
+function renderCleanupPolicyPagination() {
   document.getElementById("cleanup-policy-page-summary").textContent =
+    cleanupPolicies.length === 1
+      ? "1 result on this page"
+      : `${cleanupPolicies.length} results on this page`;
+  document.getElementById("cleanup-policy-page-label").textContent =
     `Page ${cleanupPolicyPage.page + 1}`;
   document.getElementById("cleanup-policy-page-prev").disabled = cleanupPolicyPage.page === 0;
   document.getElementById("cleanup-policy-page-next").disabled =
     cleanupPolicyPage.nextAfter == null;
+  document.getElementById("cleanup-policy-page-size").value = String(cleanupPolicyPage.size);
+}
+
+function renderCleanupPolicies() {
+  closeCleanupPolicyActionMenu();
+  const body = document.getElementById("cleanup-policy-table");
+  renderCleanupPolicyPagination();
   if (!cleanupPolicies.length) {
     body.innerHTML = '<tr><td colspan="7" class="empty-cell">No cleanup policies yet.</td></tr>';
     return;
@@ -5576,13 +5591,20 @@ function renderCleanupRuns() {
   }).join("");
 }
 
+function resetCleanupPolicyPage() {
+  cleanupPolicyPage.after = 0;
+  cleanupPolicyPage.cursors = [0];
+  cleanupPolicyPage.page = 0;
+  cleanupPolicyPage.nextAfter = null;
+}
+
 async function loadCleanupPolicies(options = {}) {
   if (options.resetPage) {
-    cleanupPolicyPage = { after: 0, cursors: [0], page: 0, nextAfter: null };
+    resetCleanupPolicyPage();
   }
   try {
     const [policyResponse, capabilityResponse, repositoryResponse, runResponse] = await Promise.all([
-      fetch(`/internal/cleanup/policies?after=${encodeURIComponent(cleanupPolicyPage.after)}&limit=${CLEANUP_POLICY_PAGE_SIZE}`),
+      fetch(`/internal/cleanup/policies?after=${encodeURIComponent(cleanupPolicyPage.after)}&limit=${cleanupPolicyPage.size}`),
       fetch("/internal/cleanup/capabilities"),
       fetch("/internal/repositories?purpose=admin"),
       fetch("/internal/cleanup/runs?limit=25")
@@ -5594,6 +5616,12 @@ async function loadCleanupPolicies(options = {}) {
     const policyPage = await policyResponse.json();
     cleanupPolicies = policyPage.items || [];
     cleanupPolicyPage.nextAfter = policyPage.nextAfter ?? null;
+    if (cleanupPolicies.length === 0 && cleanupPolicyPage.page > 0) {
+      cleanupPolicyPage.cursors.pop();
+      cleanupPolicyPage.page -= 1;
+      cleanupPolicyPage.after = cleanupPolicyPage.cursors.at(-1) || 0;
+      return loadCleanupPolicies();
+    }
     cleanupCapabilities = await capabilityResponse.json();
     repositories = await repositoryResponse.json();
     cleanupRuns = await runResponse.json();
@@ -5607,13 +5635,21 @@ async function loadCleanupPolicies(options = {}) {
 async function changeCleanupPolicyPage(direction) {
   if (direction === "next") {
     if (cleanupPolicyPage.nextAfter == null) return;
-    cleanupPolicyPage.cursors[cleanupPolicyPage.page + 1] = cleanupPolicyPage.nextAfter;
+    cleanupPolicyPage.after = cleanupPolicyPage.nextAfter;
+    cleanupPolicyPage.cursors.push(cleanupPolicyPage.after);
     cleanupPolicyPage.page += 1;
   } else {
     if (cleanupPolicyPage.page === 0) return;
+    cleanupPolicyPage.cursors.pop();
     cleanupPolicyPage.page -= 1;
+    cleanupPolicyPage.after = cleanupPolicyPage.cursors.at(-1) || 0;
   }
-  cleanupPolicyPage.after = cleanupPolicyPage.cursors[cleanupPolicyPage.page] || 0;
+  await loadCleanupPolicies();
+}
+
+async function resizeCleanupPolicyPage(size) {
+  cleanupPolicyPage.size = Number(size) || CLEANUP_POLICY_DEFAULT_PAGE_SIZE;
+  resetCleanupPolicyPage();
   await loadCleanupPolicies();
 }
 
@@ -6739,6 +6775,8 @@ document.getElementById("cleanup-policy-page-prev").addEventListener(
   "click", () => changeCleanupPolicyPage("prev"));
 document.getElementById("cleanup-policy-page-next").addEventListener(
   "click", () => changeCleanupPolicyPage("next"));
+document.getElementById("cleanup-policy-page-size").addEventListener(
+  "change", (event) => resizeCleanupPolicyPage(event.currentTarget.value));
 document.getElementById("cancel-cleanup-policy-button").addEventListener("click", hideCleanupPolicyForm);
 document.getElementById("cleanup-policy-form").addEventListener("submit", saveCleanupPolicy);
 document.getElementById("cancel-cleanup-try-run-button").addEventListener("click", hideCleanupTryRunDialog);

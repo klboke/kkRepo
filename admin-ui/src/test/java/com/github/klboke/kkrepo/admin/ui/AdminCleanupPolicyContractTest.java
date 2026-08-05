@@ -51,7 +51,13 @@ class AdminCleanupPolicyContractTest {
     assertFalse(index.contains("cleanup-section-heading"));
     assertTrue(index.contains("class=\"nx-table cleanup-policy-table\""));
     assertTrue(index.contains("id=\"cleanup-policy-page-prev\""));
+    assertTrue(index.contains("id=\"cleanup-policy-page-label\">Page 1"));
     assertTrue(index.contains("id=\"cleanup-policy-page-next\""));
+    assertTrue(index.contains("id=\"cleanup-policy-page-size\""));
+    int cleanupPageSizeStart = index.indexOf("id=\"cleanup-policy-page-size\"");
+    int cleanupPageSizeEnd = index.indexOf("</select>", cleanupPageSizeStart);
+    String cleanupPageSize = index.substring(cleanupPageSizeStart, cleanupPageSizeEnd);
+    assertTrue(cleanupPageSize.contains("<option value=\"10\" selected>10</option>"));
     assertTrue(index.contains("class=\"nx-table cleanup-run-table\""));
     assertFalse(index.contains("Try Run scan limit / repository"));
     assertFalse(index.contains("Delete limit / repository"));
@@ -120,6 +126,12 @@ class AdminCleanupPolicyContractTest {
     assertTrue(javascript.contains("cleanupRepositorySelection = new Set"));
     assertTrue(javascript.contains("bindCleanupRepositoryPicker"));
     assertTrue(javascript.contains("CLEANUP_TABS = new Set([\"policies\", \"runs\"])"));
+    assertTrue(javascript.contains("const CLEANUP_POLICY_DEFAULT_PAGE_SIZE = 10;"));
+    assertTrue(javascript.contains("function renderCleanupPolicyPagination()"));
+    assertTrue(javascript.contains("results on this page"));
+    assertTrue(javascript.contains("cleanupPolicyPage.cursors.push(cleanupPolicyPage.after)"));
+    assertTrue(javascript.contains("cleanupPolicyPage.cursors.at(-1) || 0"));
+    assertTrue(javascript.contains("function resizeCleanupPolicyPage(size)"));
     assertTrue(javascript.contains("cleanupTabFromHash"));
     assertTrue(javascript.contains("selectCleanupTab"));
     assertTrue(javascript.contains("handleCleanupTabKeydown"));
@@ -153,6 +165,7 @@ class AdminCleanupPolicyContractTest {
     assertFalse(javascript.contains("scrollIntoView({ behavior: \"smooth\", block: \"start\" })"));
     assertTrue(stylesheet.contains(".security-scan-tabs,\n.cleanup-tabs"));
     assertTrue(stylesheet.contains(".cleanup-tab-panel.is-active"));
+    assertTrue(stylesheet.contains(".security-scan-pagination,\n.cleanup-policy-pagination"));
     assertTrue(stylesheet.contains(".field-help-popover"));
     assertTrue(stylesheet.contains("pointer-events: auto"));
     assertTrue(stylesheet.contains("user-select: text"));

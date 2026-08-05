@@ -2811,7 +2811,8 @@ code {
   flex: 0 0 auto;
 }
 
-.security-scan-pagination {
+.security-scan-pagination,
+.cleanup-policy-pagination {
   margin: 8px 0 0;
 }
 
