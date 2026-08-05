@@ -17,6 +17,7 @@ kkRepo is a community-driven, fully open-source, self-hosted artifact repository
 - Supports AOT compilation and runtime, with about one-second startup readiness and memory usage below 200 MB.
 - Per-repository outbound HTTP or SOCKS5 proxy configuration for proxy repositories, with optional proxy authentication and HTTPS upstream tunneling.
 - Artifact security scanning with CycloneDX SBOM generation, known-vulnerability matching, policy and waiver management, and optional download enforcement.
+- Repository cleanup policies for hosted and proxy repositories, with name/path, publication-age, download-activity, and version-retention rules, bounded Try Run previews, manual execution, and independent Cron schedules.
 - Compatibility with Sonatype Nexus APIs, user permission model, and the `/repository/<repo>/...` URL layout.
 - Use kkRepo as a drop-in replacement for Sonatype Nexus, with one-click migration of existing data while preserving repository domains and URLs, so client configurations and CI workflows continue unchanged.
 - Comprehensive identity and access control with Local, LDAP, and OIDC authentication, configurable anonymous access policies, and fine-grained permissions.
@@ -218,6 +219,7 @@ kkRepo is open sourced under the [Apache License 2.0](LICENSE).
 - [Development Guide](docs/en/development-guide.md)
 - [Build And Deployment Guide](docs/en/build-deployment-guide.md)
 - [Artifact Scanning Guide](docs/en/artifact-scanning-guide.md)
+- [Cleanup Policy Guide](docs/en/cleanup-policy-guide.md)
 - [Native Image or JVM Selection Guide](docs/en/native-vs-jvm-guide.md)
 - [Nginx Reverse Proxy Notes](docs/en/nginx-reverse-proxy.md)
 - [Client Recipes](docs/en/client-recipes.md)

@@ -188,6 +188,7 @@ Detailed design and implementation plans for repository formats and migration wo
 - [Swift Package Registry Design Notes](../zh/dev/swift-package-registry-design.md) (Chinese)
 - [Ansible Galaxy Repository Design Notes](../zh/dev/ansible-galaxy-repository-design.md) (Chinese)
 - [Cleanup Policy Design Notes](../zh/dev/cleanup-policy-design.md) (Chinese)
+- [Cleanup Policy Guide](cleanup-policy-guide.md)
 - [Ansible Galaxy Repository Guide](ansible-galaxy-guide.md)
 - [Nexus Compatibility Migration Refactor Plan](dev/nexus-migration-compatibility-refactor-plan.md)
 
