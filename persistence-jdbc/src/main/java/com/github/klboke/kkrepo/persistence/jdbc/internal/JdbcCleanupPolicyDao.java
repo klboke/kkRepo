@@ -14,6 +14,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupPro
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupProtectionLookup;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupRun;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupRunItem;
+import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupRunItemSummary;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupRunRepository;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupScanCursor;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupSchedule;
@@ -1423,6 +1424,7 @@ public class JdbcCleanupPolicyDao
   }
 
   @Override
+  @Transactional
   public void upsertRunItems(List<CleanupRunItem> items) {
     if (items == null || items.isEmpty()) return;
     int[] updated = jdbc.batchUpdate("""
@@ -1480,6 +1482,25 @@ public class JdbcCleanupPolicyDao
         WHERE run_repository_id = ? AND id > ?
         ORDER BY id LIMIT ?
         """, runItemMapper, runRepositoryId, Math.max(0, afterId), Math.max(1, maxItems));
+  }
+
+  @Override
+  public CleanupRunItemSummary summarizeRunItems(long runRepositoryId) {
+    return jdbc.queryForObject("""
+        SELECT COUNT(*) AS decisions,
+               COALESCE(SUM(CASE WHEN decision = 'WOULD_DELETE' THEN 1 ELSE 0 END), 0)
+                 AS would_delete_subjects,
+               COALESCE(SUM(CASE WHEN decision = 'DELETED' THEN 1 ELSE 0 END), 0)
+                 AS deleted_subjects,
+               COALESCE(SUM(CASE WHEN decision = 'FAILED' THEN 1 ELSE 0 END), 0)
+                 AS failed_subjects
+        FROM cleanup_run_item
+        WHERE run_repository_id = ?
+        """, (rs, rowNum) -> new CleanupRunItemSummary(
+            rs.getLong("decisions"),
+            rs.getLong("would_delete_subjects"),
+            rs.getLong("deleted_subjects"),
+            rs.getLong("failed_subjects")), runRepositoryId);
   }
 
   @Override

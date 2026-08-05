@@ -19,6 +19,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.ClaimedRun
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupPolicy;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupCursorCompletion;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupRun;
+import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupRunItemSummary;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupRunRepository;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupScanCursor;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.TargetRepository;
@@ -349,10 +350,44 @@ class CleanupRunServiceTest {
 
     verify(execution).applyBatch(
         claim, run, List.of(candidate), "cleanup-run:100:admin");
-    verify(cleanupDao).upsertRunItems(argThat(items ->
-        items.size() == 1
-            && "DELETED".equals(items.getFirst().decision())
-            && Integer.valueOf(1).equals(items.getFirst().reason().get("deletedAssets"))));
+    verify(cleanupDao, never()).upsertRunItems(any());
+  }
+
+  @Test
+  void takeoverRestoresDurableDeleteCountBeforeApplyingTheDeleteLimit() {
+    CleanupPolicy policy = policy(RepositoryFormat.MAVEN2, 100, "PAUSED", 1);
+    CleanupRun run = run(112, policy, "EXECUTE", "RUNNING", 100);
+    ClaimedRunRepository claim = claim(
+        212, 112, 3, RepositoryFormat.MAVEN2, 2, 3, true);
+    CleanupScanCursor startCursor = cursor(212, 3, null);
+    CleanupScanCursor nextCursor = cursor(212, 3, "demo");
+    Candidate candidate = new Candidate(
+        subject(12, "demo:4.0", "4.0"), Map.of("age", 30));
+    when(cleanupDao.findRun(112)).thenReturn(Optional.of(run));
+    when(repositoryDao.findById(3)).thenReturn(Optional.of(
+        repository(3, "takeover-releases", RepositoryFormat.MAVEN2)));
+    when(cleanupDao.heartbeatRunRepository(
+        eq(212L), eq("lease"), eq(9L), any(), eq(now))).thenReturn(true);
+    when(cleanupDao.acquireRunRepositoryScanCursor(
+        212, "lease", 9, "COMPONENT", now)).thenReturn(startCursor);
+    when(cleanupDao.summarizeRunItems(212))
+        .thenReturn(new CleanupRunItemSummary(1, 0, 1, 0));
+    when(scanner.scan(any(), eq(policy.criteria()), eq(100), eq(now), eq(startCursor)))
+        .thenReturn(new ScanResult(
+            1, false, null, List.of(candidate), null, startCursor, nextCursor, null));
+    when(cleanupDao.completeClaimedRunRepository(
+        eq(212L), eq("lease"), eq(9L), eq("PARTIAL_LIMIT_REACHED"),
+        eq(1L), eq(1L), eq(0L), eq(1L), eq(0L), eq(false), eq(null), eq(now)))
+        .thenReturn(true);
+    when(cleanupDao.listRunRepositories(112)).thenReturn(List.of());
+
+    service.process(claim);
+
+    verify(execution, never()).apply(any(), any(), any(), any());
+    verify(cleanupDao, never()).completeClaimedRunRepositoryAndAdvanceCursor(
+        any(Long.class), any(), any(Long.class), any(), any(Long.class), any(Long.class),
+        any(Long.class), any(Long.class), any(Long.class), any(Boolean.class), any(),
+        any(), any(), any());
   }
 
   @Test

@@ -358,6 +358,39 @@ public abstract class PersistenceApiContract {
     assertEquals("KEEP_PROTECTED",
         cleanup.listRunItems(List.of(shardId, shardId), 10)
             .get(shardId).getFirst().decision());
+    CleanupPolicyDao.CleanupRunItemSummary protectedSummary =
+        cleanup.summarizeRunItems(shardId);
+    assertEquals(1, protectedSummary.decisions());
+    assertEquals(0, protectedSummary.wouldDeleteSubjects());
+    assertEquals(0, protectedSummary.deletedSubjects());
+    assertEquals(0, protectedSummary.failedSubjects());
+    cleanup.upsertRunItem(new CleanupPolicyDao.CleanupRunItem(
+        null,
+        shardId,
+        persistedItem.subjectKind(),
+        persistedItem.subjectKey(),
+        persistedItem.subjectKeyHash(),
+        persistedItem.familyKey(),
+        persistedItem.displayName(),
+        persistedItem.version(),
+        persistedItem.deletePath(),
+        persistedItem.lastDownloadedAt(),
+        persistedItem.publishedAt(),
+        persistedItem.assetCount(),
+        persistedItem.estimatedBytes(),
+        persistedItem.expectedContentToken(),
+        persistedItem.expectedUsageRevision(),
+        null,
+        now.plusSeconds(2),
+        "DELETED",
+        Map.of("deletedAssets", 2),
+        null,
+        now,
+        now.plusSeconds(2)));
+    CleanupPolicyDao.CleanupRunItemSummary deletedSummary =
+        cleanup.summarizeRunItems(shardId);
+    assertEquals(1, deletedSummary.decisions());
+    assertEquals(1, deletedSummary.deletedSubjects());
     assertEquals(shardId, cleanup.findRunRepository(runId, shardId).orElseThrow().id());
     assertFalse(cleanup.listRuns(null, 0, 10).isEmpty());
 

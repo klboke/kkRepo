@@ -1,14 +1,110 @@
-ALTER TABLE cleanup_policy
-  ADD COLUMN revision BIGINT UNSIGNED NOT NULL DEFAULT 1 AFTER criteria_json,
-  ADD COLUMN state VARCHAR(32) NOT NULL DEFAULT 'PAUSED' AFTER revision,
-  ADD COLUMN scan_limit_per_repository INT UNSIGNED NOT NULL DEFAULT 1000 AFTER state,
-  ADD COLUMN delete_limit_per_repository INT UNSIGNED NOT NULL DEFAULT 100 AFTER scan_limit_per_repository;
+-- Existing cleanup policies may be numerous on upgraded installations. Keep every evolution of
+-- that live table online and restart-safe because MySQL commits ALTER TABLE independently.
+SET @kkrepo_cleanup_policy_revision_sql = (
+  SELECT IF(
+    COUNT(*) = 0,
+    'ALTER TABLE cleanup_policy ADD COLUMN revision BIGINT UNSIGNED NOT NULL DEFAULT 1, ALGORITHM=INSTANT',
+    'SELECT 1')
+  FROM information_schema.columns
+  WHERE table_schema = DATABASE()
+    AND table_name = 'cleanup_policy'
+    AND column_name = 'revision'
+);
+PREPARE kkrepo_cleanup_policy_revision_statement
+  FROM @kkrepo_cleanup_policy_revision_sql;
+EXECUTE kkrepo_cleanup_policy_revision_statement;
+DEALLOCATE PREPARE kkrepo_cleanup_policy_revision_statement;
 
-ALTER TABLE cleanup_policy
-  DROP INDEX uk_cleanup_policy_name,
-  ADD COLUMN active_name VARCHAR(200)
-    GENERATED ALWAYS AS (CASE WHEN state = 'DELETED' THEN NULL ELSE name END) STORED,
-  ADD UNIQUE KEY uk_cleanup_policy_active_name (active_name);
+SET @kkrepo_cleanup_policy_state_sql = (
+  SELECT IF(
+    COUNT(*) = 0,
+    'ALTER TABLE cleanup_policy ADD COLUMN state VARCHAR(32) NOT NULL DEFAULT ''PAUSED'', ALGORITHM=INSTANT',
+    'SELECT 1')
+  FROM information_schema.columns
+  WHERE table_schema = DATABASE()
+    AND table_name = 'cleanup_policy'
+    AND column_name = 'state'
+);
+PREPARE kkrepo_cleanup_policy_state_statement FROM @kkrepo_cleanup_policy_state_sql;
+EXECUTE kkrepo_cleanup_policy_state_statement;
+DEALLOCATE PREPARE kkrepo_cleanup_policy_state_statement;
+
+SET @kkrepo_cleanup_policy_scan_limit_sql = (
+  SELECT IF(
+    COUNT(*) = 0,
+    'ALTER TABLE cleanup_policy ADD COLUMN scan_limit_per_repository INT UNSIGNED NOT NULL DEFAULT 1000, ALGORITHM=INSTANT',
+    'SELECT 1')
+  FROM information_schema.columns
+  WHERE table_schema = DATABASE()
+    AND table_name = 'cleanup_policy'
+    AND column_name = 'scan_limit_per_repository'
+);
+PREPARE kkrepo_cleanup_policy_scan_limit_statement
+  FROM @kkrepo_cleanup_policy_scan_limit_sql;
+EXECUTE kkrepo_cleanup_policy_scan_limit_statement;
+DEALLOCATE PREPARE kkrepo_cleanup_policy_scan_limit_statement;
+
+SET @kkrepo_cleanup_policy_delete_limit_sql = (
+  SELECT IF(
+    COUNT(*) = 0,
+    'ALTER TABLE cleanup_policy ADD COLUMN delete_limit_per_repository INT UNSIGNED NOT NULL DEFAULT 100, ALGORITHM=INSTANT',
+    'SELECT 1')
+  FROM information_schema.columns
+  WHERE table_schema = DATABASE()
+    AND table_name = 'cleanup_policy'
+    AND column_name = 'delete_limit_per_repository'
+);
+PREPARE kkrepo_cleanup_policy_delete_limit_statement
+  FROM @kkrepo_cleanup_policy_delete_limit_sql;
+EXECUTE kkrepo_cleanup_policy_delete_limit_statement;
+DEALLOCATE PREPARE kkrepo_cleanup_policy_delete_limit_statement;
+
+SET @kkrepo_cleanup_policy_active_name_sql = (
+  SELECT IF(
+    COUNT(*) = 0,
+    'ALTER TABLE cleanup_policy ADD COLUMN active_name VARCHAR(200) GENERATED ALWAYS AS (CASE WHEN state = ''DELETED'' THEN NULL ELSE name END) VIRTUAL, ALGORITHM=INSTANT',
+    'SELECT 1')
+  FROM information_schema.columns
+  WHERE table_schema = DATABASE()
+    AND table_name = 'cleanup_policy'
+    AND column_name = 'active_name'
+);
+PREPARE kkrepo_cleanup_policy_active_name_statement
+  FROM @kkrepo_cleanup_policy_active_name_sql;
+EXECUTE kkrepo_cleanup_policy_active_name_statement;
+DEALLOCATE PREPARE kkrepo_cleanup_policy_active_name_statement;
+
+-- Build the replacement while the original unique index still prevents conflicting names, then
+-- remove the redundant index. Each step can be resumed independently after Flyway repair.
+SET @kkrepo_cleanup_policy_active_name_index_sql = (
+  SELECT IF(
+    COUNT(*) = 0,
+    'ALTER TABLE cleanup_policy ADD UNIQUE KEY uk_cleanup_policy_active_name (active_name), ALGORITHM=INPLACE, LOCK=NONE',
+    'SELECT 1')
+  FROM information_schema.statistics
+  WHERE table_schema = DATABASE()
+    AND table_name = 'cleanup_policy'
+    AND index_name = 'uk_cleanup_policy_active_name'
+);
+PREPARE kkrepo_cleanup_policy_active_name_index_statement
+  FROM @kkrepo_cleanup_policy_active_name_index_sql;
+EXECUTE kkrepo_cleanup_policy_active_name_index_statement;
+DEALLOCATE PREPARE kkrepo_cleanup_policy_active_name_index_statement;
+
+SET @kkrepo_cleanup_policy_legacy_name_index_sql = (
+  SELECT IF(
+    COUNT(*) > 0,
+    'ALTER TABLE cleanup_policy DROP INDEX uk_cleanup_policy_name, ALGORITHM=INPLACE, LOCK=NONE',
+    'SELECT 1')
+  FROM information_schema.statistics
+  WHERE table_schema = DATABASE()
+    AND table_name = 'cleanup_policy'
+    AND index_name = 'uk_cleanup_policy_name'
+);
+PREPARE kkrepo_cleanup_policy_legacy_name_index_statement
+  FROM @kkrepo_cleanup_policy_legacy_name_index_sql;
+EXECUTE kkrepo_cleanup_policy_legacy_name_index_statement;
+DEALLOCATE PREPARE kkrepo_cleanup_policy_legacy_name_index_statement;
 
 ALTER TABLE repository_cleanup_policy
   DROP FOREIGN KEY fk_repository_cleanup_policy_repository;

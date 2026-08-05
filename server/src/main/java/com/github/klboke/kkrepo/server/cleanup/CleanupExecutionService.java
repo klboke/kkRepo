@@ -4,6 +4,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.ClaimedRunRepository;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupProtection;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupRun;
+import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupRunItem;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.browse.RepositoryContentDeletionService;
@@ -13,6 +14,7 @@ import com.github.klboke.kkrepo.server.cleanup.CleanupSubjectScanner.Subject;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -74,22 +76,31 @@ public class CleanupExecutionService {
       throw new CleanupFenceLostException(claim.id());
     }
     if (cleanupDao.isRunCancellationRequested(run.id())) {
-      return repeated(
+      return persistRunItems(claim.id(), candidates, repeated(
           candidates.size(),
-          new ExecutionResult("CANCELLED", 0, null, Map.of("cancelled", true)));
+          new ExecutionResult("CANCELLED", 0, null, Map.of("cancelled", true))), now);
     }
     if (cleanupDao.findPolicy(run.policyId()).isEmpty()) {
-      return repeated(candidates.size(), stale("policy is no longer active"));
+      return persistRunItems(
+          claim.id(), candidates,
+          repeated(candidates.size(), stale("policy is no longer active")), now);
     }
     boolean stillTargeted = cleanupDao.listTargets(run.policyId()).stream()
         .anyMatch(target -> target.id() == claim.repositoryId());
     if (!stillTargeted) {
-      return repeated(candidates.size(), stale("repository is no longer targeted by the policy"));
+      return persistRunItems(
+          claim.id(), candidates,
+          repeated(
+              candidates.size(),
+              stale("repository is no longer targeted by the policy")),
+          now);
     }
 
     RepositoryRecord repository = repositoryDao.findById(claim.repositoryId()).orElse(null);
     if (repository == null || !repository.online() || repository.format() != claim.format()) {
-      return repeated(candidates.size(), stale("repository state changed"));
+      return persistRunItems(
+          claim.id(), candidates,
+          repeated(candidates.size(), stale("repository state changed")), now);
     }
     List<ExecutionResult> results = new ArrayList<>(
         java.util.Collections.nCopies(candidates.size(), null));
@@ -146,7 +157,55 @@ public class CleanupExecutionService {
           null,
           Map.of("deletedAssets", deletedAssets)));
     }
-    return List.copyOf(results);
+    return persistRunItems(claim.id(), candidates, List.copyOf(results), now);
+  }
+
+  /**
+   * Persists the final decision before the surrounding delete transaction commits. A takeover can
+   * therefore recover an already-committed deletion from durable audit state instead of losing the
+   * only evidence when a worker exits between deletion and shard completion.
+   */
+  private List<ExecutionResult> persistRunItems(
+      long runRepositoryId,
+      List<Candidate> candidates,
+      List<ExecutionResult> results,
+      Instant evaluatedAt) {
+    if (results.size() != candidates.size()) {
+      throw new IllegalStateException("cleanup execution returned an invalid result count");
+    }
+    List<CleanupRunItem> items = new ArrayList<>(candidates.size());
+    for (int index = 0; index < candidates.size(); index++) {
+      Candidate candidate = candidates.get(index);
+      ExecutionResult result = results.get(index);
+      Map<String, Object> reason = new LinkedHashMap<>(candidate.reason());
+      reason.putAll(result.reason());
+      Subject subject = candidate.subject();
+      items.add(new CleanupRunItem(
+          null,
+          runRepositoryId,
+          subject.kind(),
+          subject.key(),
+          subject.keyHash(),
+          subject.familyKey(),
+          subject.displayName(),
+          subject.version(),
+          subject.deletePath(),
+          subject.lastDownloadedAt(),
+          subject.publishedAt(),
+          subject.assetCount(),
+          subject.estimatedBytes(),
+          subject.contentToken(),
+          subject.usageRevision(),
+          result.protectionId(),
+          evaluatedAt,
+          result.decision(),
+          Map.copyOf(reason),
+          null,
+          null,
+          null));
+    }
+    cleanupDao.upsertRunItems(items);
+    return results;
   }
 
   private static List<ExecutionResult> repeated(int count, ExecutionResult result) {

@@ -708,7 +708,11 @@ item 保存 run repository id、subject kind、canonical key/hash、family/displ
 protection id、evaluated time、decision、reason JSON 和有界错误。
 
 唯一键 `(run_repository_id, subject_kind, subject_key_hash)` 保证重试幂等；hash 冲突仍以
-canonical key 复检。
+canonical key 复检。EXECUTE 的最终 decision 由删除服务在同一个短数据库事务内 upsert：审计写入
+失败会使数据库删除一并回滚，worker 崩溃也不会留下“删除已提交但 DELETED decision 尚在内存”的
+窗口。接管者在扫描前从这些幂等 decision 恢复已提交删除数，继续遵守每仓库 delete limit；终态
+提交也从 decision 汇总恢复删除/失败统计。Try Run decision 和删除前失败不包含已提交删除，继续
+使用有界批次写入。
 
 ### 未来：Cleanup Tombstone 与恢复
 
@@ -836,8 +840,12 @@ packument/dist-tags；PyPI 要重建 simple index；Docker 要先删除 referenc
   键，为 PostgreSQL 提供 `C` collation expression index，并补齐 unbound asset、Docker manifest
   和 protection hash 索引。MySQL DDL 使用 `INSTANT/INPLACE + LOCK=NONE` 且每步可恢复；PostgreSQL
   使用可恢复的 `CREATE INDEX CONCURRENTLY`。
-- run item 每 100 条批量 upsert；循环最多每 5 秒 pulse 一次 lease/cancel，达到 delete limit 立即
-  停止，不为未执行候选制造 `LIMIT_REACHED` 行。
+- V38 对 MySQL `cleanup_policy` 增加普通字段与 `VIRTUAL active_name` 时使用 `INSTANT`，替换唯一索引
+  使用 `INPLACE + LOCK=NONE`；每一步通过 `information_schema` 守卫，可在 MySQL 隐式提交后恢复执行，
+  且不因增加 `STORED` 生成列复制并阻塞整张策略表。
+- EXECUTE 成功 decision 随删除事务写入；Try Run 和删除前失败每 100 条批量 upsert。循环最多每
+  5 秒 pulse 一次 lease/cancel，达到 delete limit 立即停止，不为未执行候选制造
+  `LIMIT_REACHED` 行。
 - worker 在 claim 前用 semaphore 预留槽位，节点并发默认 2、最大 32；处理和 heartbeat 使用独立
   executor，空队列按 500ms 到 10s 指数退避，避免共享 scheduler 被长任务占住或空轮询打数据库。
 - npm Hosted 将同一 package family 最多 100 个 version 合并删除：packument 与 dist-tags 只读取、
@@ -1088,7 +1096,8 @@ write failure、Try Run 频繁触及硬上限、反复 takeover、FAILED/PARTIAL
 - `CleanupPolicyCapabilitiesTest` 遍历 `RepositoryFormat.values()`，要求每个当前 format 明确暴露
   Try Run、last-download 和 execute capability；retain 只对已有官方比较器的格式开放。
 - `CleanupRepositoryContentDeletionServiceTest` 固化 Docker manifest 与非 Docker 应用删除分派，
-  `CleanupExecutionServiceTest` 固化 fence、cancel、content token、usage revision 和 protection 复检。
+  `CleanupExecutionServiceTest` 固化 fence、cancel、content token、usage revision、protection 复检，
+  并要求 EXECUTE decision 在删除事务返回前持久化，审计失败不能返回删除成功。
 - `scripts/ci/run-client-e2e.sh` 在现有格式客户端 fixture 后统一创建 policy，要求 Try Run 精确成功、
   Execute 至少删除一个 subject 且 failed=0，并保存独立 JSON 报告。增加新格式时必须补该 fixture。
 

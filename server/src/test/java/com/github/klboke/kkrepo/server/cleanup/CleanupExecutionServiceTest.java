@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -147,11 +149,37 @@ class CleanupExecutionServiceTest {
         new CleanupDeleteSubject("ASSET", 9, "file.zip"));
     when(deletion.deleteBatchForCleanup("raw-releases", subjects, "cleanup"))
         .thenReturn(List.of(1));
+    Candidate candidate = new Candidate(expected, Map.of("publishedOlderThanDays", 30));
 
-    var result = service.apply(claim, run, new Candidate(expected, Map.of()), "cleanup");
+    var result = service.apply(claim, run, candidate, "cleanup");
 
     assertEquals("DELETED", result.decision());
     verify(deletion).deleteBatchForCleanup("raw-releases", subjects, "cleanup");
+    verify(cleanupDao).upsertRunItems(argThat(items ->
+        items.size() == 1
+            && items.getFirst().runRepositoryId() == claim.id()
+            && "DELETED".equals(items.getFirst().decision())
+            && Integer.valueOf(30).equals(
+                items.getFirst().reason().get("publishedOlderThanDays"))
+            && Integer.valueOf(1).equals(items.getFirst().reason().get("deletedAssets"))));
+  }
+
+  @Test
+  void auditFailureEscapesTheDeleteTransactionInsteadOfReturningSuccess() {
+    when(scanner.resolveLocked(repository(), "ASSET", 9, "file.zip"))
+        .thenReturn(Optional.of(expected));
+    when(deletion.deleteBatchForCleanup(
+        "raw-releases",
+        List.of(new CleanupDeleteSubject("ASSET", 9, "file.zip")),
+        "cleanup")).thenReturn(List.of(1));
+    doThrow(new IllegalStateException("audit unavailable"))
+        .when(cleanupDao).upsertRunItems(any());
+
+    IllegalStateException failure = assertThrows(
+        IllegalStateException.class,
+        () -> service.apply(claim, run, new Candidate(expected, Map.of()), "cleanup"));
+
+    assertEquals("audit unavailable", failure.getMessage());
   }
 
   private Subject subject(String token, long usageRevision) {

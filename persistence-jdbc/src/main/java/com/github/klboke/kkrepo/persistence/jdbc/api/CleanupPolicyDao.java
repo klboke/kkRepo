@@ -238,6 +238,9 @@ public interface CleanupPolicyDao {
 
   List<CleanupRunItem> listRunItems(long runRepositoryId, long afterId, int maxItems);
 
+  /** Rebuilds crash-safe progress from the idempotent decision rows for one shard. */
+  CleanupRunItemSummary summarizeRunItems(long runRepositoryId);
+
   /** Returns a bounded first page for each requested shard without scanning unrelated decisions. */
   default Map<Long, List<CleanupRunItem>> listRunItems(
       Collection<Long> runRepositoryIds, int maxItemsPerRepository) {
@@ -602,6 +605,13 @@ public interface CleanupPolicyDao {
           createdAt,
           updatedAt);
     }
+  }
+
+  record CleanupRunItemSummary(
+      long decisions,
+      long wouldDeleteSubjects,
+      long deletedSubjects,
+      long failedSubjects) {
   }
 
   record ClaimedRunRepository(

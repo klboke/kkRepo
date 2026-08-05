@@ -5,6 +5,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.ClaimedRun
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupPolicy;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupRun;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupRunItem;
+import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupRunItemSummary;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupRunRepository;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupScanCursor;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.TargetRepository;
@@ -331,10 +332,12 @@ public class CleanupRunService {
     } else {
       scan = scanner.scan(repository, run.criteriaSnapshot(), scanLimit, cutoff);
     }
-    long deleted = 0;
-    long wouldDelete = 0;
+    CleanupRunItemSummary durableDecisions = cleanupDao.summarizeRunItems(claim.id());
+    long deleted = durableDecisions == null ? 0 : durableDecisions.deletedSubjects();
+    long wouldDelete = durableDecisions == null ? 0 : durableDecisions.wouldDeleteSubjects();
     long failed = 0;
-    boolean deleteLimitReached = false;
+    boolean deleteLimitReached = "EXECUTE".equals(run.mode())
+        && deleted >= run.deleteLimitPerRepository();
     Instant evaluatedAt = databaseNow();
     List<CleanupRunItem> itemBatch = new ArrayList<>(RUN_ITEM_BATCH_SIZE);
     long pulseIntervalNanos = durationNanos(minimum(
@@ -377,19 +380,8 @@ public class CleanupRunService {
             throw new IllegalStateException("cleanup execution batch returned an invalid result count");
           }
           for (int batchIndex = 0; batchIndex < familyBatch.size(); batchIndex++) {
-            Candidate batchedCandidate = familyBatch.get(batchIndex);
             ExecutionResult result = results.get(batchIndex);
-            Map<String, Object> reason = new LinkedHashMap<>(batchedCandidate.reason());
-            reason.putAll(result.reason());
             if ("DELETED".equals(result.decision())) deleted++;
-            itemBatch.add(item(
-                claim.id(),
-                batchedCandidate,
-                result.decision(),
-                null,
-                reason,
-                result.protectionId(),
-                evaluatedAt));
           }
         } catch (CleanupFenceLostException lost) {
           throw lost;
@@ -414,13 +406,18 @@ public class CleanupRunService {
         }
         continue;
       }
-      String decision;
-      String error = null;
-      Long protectionId = candidate.protectionId();
-      Map<String, Object> reason = new LinkedHashMap<>(candidate.reason());
       if ("TRY_RUN".equals(run.mode())) {
-        decision = protectionId == null ? "WOULD_DELETE" : "KEEP_PROTECTED";
+        Long protectionId = candidate.protectionId();
+        String decision = protectionId == null ? "WOULD_DELETE" : "KEEP_PROTECTED";
         if ("WOULD_DELETE".equals(decision)) wouldDelete++;
+        itemBatch.add(item(
+            claim.id(),
+            candidate,
+            decision,
+            null,
+            new LinkedHashMap<>(candidate.reason()),
+            protectionId,
+            evaluatedAt));
       } else {
         try {
           ExecutionResult result = execution.apply(
@@ -428,20 +425,21 @@ public class CleanupRunService {
               run,
               candidate,
               "cleanup-run:" + run.id() + ":" + run.requestedBy());
-          decision = result.decision();
-          protectionId = result.protectionId();
-          reason.putAll(result.reason());
-          if ("DELETED".equals(decision)) deleted++;
+          if ("DELETED".equals(result.decision())) deleted++;
         } catch (CleanupFenceLostException lost) {
           throw lost;
         } catch (RuntimeException itemFailure) {
-          decision = "FAILED";
-          error = boundedMessage(itemFailure);
           failed++;
+          itemBatch.add(item(
+              claim.id(),
+              candidate,
+              "FAILED",
+              boundedMessage(itemFailure),
+              new LinkedHashMap<>(candidate.reason()),
+              candidate.protectionId(),
+              evaluatedAt));
         }
       }
-      itemBatch.add(item(
-          claim.id(), candidate, decision, error, reason, protectionId, evaluatedAt));
       if ("EXECUTE".equals(run.mode())
           && deleted >= run.deleteLimitPerRepository()
           && index + 1 < candidates.size()) {
@@ -555,6 +553,19 @@ public class CleanupRunService {
       CleanupScanCursor startCursor,
       CleanupScanCursor nextCursor,
       boolean advanceCursor) {
+    CleanupRunItemSummary durableDecisions = cleanupDao.summarizeRunItems(claim.id());
+    if (durableDecisions != null) {
+      matched = Math.max(matched, durableDecisions.decisions());
+      scanned = Math.max(scanned, matched);
+      wouldDelete = durableDecisions.wouldDeleteSubjects();
+      deleted = durableDecisions.deletedSubjects();
+      failed = Math.max(failed, durableDecisions.failedSubjects());
+      if (durableDecisions.failedSubjects() > 0
+          && !"FAILED".equals(state)
+          && !"CANCELLED".equals(state)) {
+        state = "PARTIAL";
+      }
+    }
     Instant completedAt = databaseNow();
     boolean completed;
     if (advanceCursor && startCursor != null && nextCursor != null) {
