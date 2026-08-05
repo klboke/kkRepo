@@ -19,6 +19,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.ScannerResourceKind;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.ScannerTokenResource;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.TokenKind;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceStores;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PubUploadSessionDao;
@@ -39,6 +40,8 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryDataMigrati
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityPrivilegeRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRoleRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerTagRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerUploadSessionRecord;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.EnforcementMode;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.OciPlatformPolicy;
@@ -309,6 +312,29 @@ public abstract class PersistenceApiContract {
         null,
         now,
         now)));
+    cleanup.upsertRunItem(new CleanupPolicyDao.CleanupRunItem(
+        null,
+        shardId,
+        "COMPONENT",
+        "component:1",
+        PersistenceHashes.sha256("component:1"),
+        "fixture",
+        "fixture:1.0.0",
+        "1.0.0",
+        "org/example/fixture/1.0.0",
+        null,
+        now,
+        2,
+        84,
+        "content-token",
+        2,
+        null,
+        now.plusSeconds(1),
+        "KEEP_PROTECTED",
+        Map.of("versionRank", 2),
+        "protection added",
+        now,
+        now.plusSeconds(1)));
     cleanup.completeRunRepository(
         shardId, "SUCCEEDED", 3, 1, 1, 0, 0, false, null, now.plusSeconds(1));
     cleanup.completeRun(
@@ -318,7 +344,12 @@ public abstract class PersistenceApiContract {
     assertEquals("SUCCEEDED", completedRun.state());
     assertEquals(1, completedRun.wouldDeleteSubjects());
     assertEquals(1, cleanup.listRunRepositories(runId).size());
-    assertEquals("fixture:1.0.0", cleanup.listRunItems(shardId, 0, 10).getFirst().displayName());
+    CleanupPolicyDao.CleanupRunItem persistedItem =
+        cleanup.listRunItems(shardId, 0, 10).getFirst();
+    assertEquals("fixture:1.0.0", persistedItem.displayName());
+    assertEquals("KEEP_PROTECTED", persistedItem.decision());
+    assertEquals(84, persistedItem.estimatedBytes());
+    assertFalse(cleanup.listRuns(null, 0, 10).isEmpty());
 
     cleanup.deleteSchedule(policyId);
     cleanup.replaceTargets(policyId, List.of());
@@ -415,6 +446,30 @@ public abstract class PersistenceApiContract {
         subjectKey,
         PersistenceHashes.sha256(subjectKey),
         base.plusSeconds(1)).orElseThrow().id());
+    CleanupPolicyDao.CleanupProtection storedProtection =
+        cleanup.findProtection(protectionId).orElseThrow();
+    assertFalse(cleanup.listProtections(0, 10, null).isEmpty());
+    assertFalse(cleanup.listProtections(0, 10, base.plusSeconds(1)).isEmpty());
+    Instant updatedProtectionAt = storedProtection.updatedAt().plusSeconds(1);
+    assertTrue(cleanup.updateProtection(new CleanupPolicyDao.CleanupProtection(
+        storedProtection.id(),
+        storedProtection.scope(),
+        storedProtection.repositoryId(),
+        storedProtection.subjectKind(),
+        storedProtection.subjectKey(),
+        storedProtection.subjectKeyHash(),
+        storedProtection.source(),
+        storedProtection.externalId(),
+        "updated contract hold",
+        storedProtection.enabled(),
+        storedProtection.expiresAt(),
+        storedProtection.freshnessAt(),
+        storedProtection.createdBy(),
+        storedProtection.createdAt(),
+        updatedProtectionAt), storedProtection.updatedAt()));
+    assertEquals(
+        "updated contract hold",
+        cleanup.findProtection(protectionId).orElseThrow().reason());
     long repositoryProtectionId = cleanup.createProtection(
         new CleanupPolicyDao.CleanupProtection(
             null,
@@ -445,6 +500,14 @@ public abstract class PersistenceApiContract {
             base.plusSeconds(1));
     assertEquals(protectionId, batchedProtections.get("exact").id());
     assertEquals(repositoryProtectionId, batchedProtections.get("broad").id());
+    CleanupPolicyDao.CleanupProtection repositoryProtection =
+        cleanup.findProtection(repositoryProtectionId).orElseThrow();
+    assertFalse(cleanup.deleteProtection(
+        repositoryProtectionId, repositoryProtection.updatedAt().minusSeconds(1)));
+    assertTrue(cleanup.deleteProtection(repositoryProtectionId, repositoryProtection.updatedAt()));
+    assertEquals(1, cleanup.listUsageTrackingRepositories().size());
+    assertEquals(latestUsage.lastDownloadedAt(),
+        cleanup.findAssetUsage(List.of(assetId)).get(assetId).lastDownloadedAt());
 
     long policyId = cleanup.createPolicy(new CleanupPolicyDao.CleanupPolicy(
         null,
@@ -671,6 +734,52 @@ public abstract class PersistenceApiContract {
     assertEquals(2, cleanup.listRuns(policyId, 0, 100).size());
     assertEquals(0, inTransaction(() -> cleanup.deleteTerminalRunsBefore(
         base.plusSeconds(1_000), 10, 2)));
+  }
+
+  @Test
+  void cleanupAssetBatchReadsAndLocksUseBoundedProductionQueries() {
+    long repositoryId = createRepository("cleanup-asset-batches", RepositoryFormat.RAW);
+    long blobStoreId = stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
+    Instant now = Instant.parse("2026-08-02T00:00:00Z");
+    long componentId = stores().components().insert(component(
+        repositoryId, RepositoryFormat.RAW, "acme", "fixture", "1.0.0", Map.of(), now));
+    long boundBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "cleanup/bound.bin", "cleanup-bound-blob"));
+    String boundPath = "acme/fixture/1.0.0/bound.bin";
+    long boundAssetId = stores().assets().insertAsset(new AssetRecord(
+        null, repositoryId, componentId, boundBlobId, RepositoryFormat.RAW,
+        boundPath, PersistenceHashes.pathHash(boundPath), "bound.bin", "FILE",
+        "application/octet-stream", 42L, null, now, Map.of()));
+    long unboundBlobId = stores().assets().insertBlob(
+        blob(blobStoreId, "cleanup/unbound.bin", "cleanup-unbound-blob"));
+    String unboundPath = "unbound.bin";
+    long unboundAssetId = stores().assets().insertAsset(new AssetRecord(
+        null, repositoryId, null, unboundBlobId, RepositoryFormat.RAW,
+        unboundPath, PersistenceHashes.pathHash(unboundPath), "unbound.bin", "FILE",
+        "application/octet-stream", 42L, null, now, Map.of()));
+
+    var unboundPage = stores().assets().listUnboundAssetWithBlobPage(repositoryId, 0, 10);
+    assertEquals(List.of(unboundAssetId),
+        unboundPage.stream().map(row -> row.asset().id()).toList());
+    assertEquals(unboundBlobId, unboundPage.getFirst().blob().id());
+    assertEquals(List.of(boundAssetId), stores().assets()
+        .listAssetsByComponents(List.of(componentId, componentId, -1L)).stream()
+        .map(AssetRecord::id).toList());
+    assertEquals(Set.of(boundAssetId, unboundAssetId), stores().assets()
+        .findAssetsByIds(List.of(boundAssetId, unboundAssetId, boundAssetId, 0L)).keySet());
+    assertEquals(Set.of(boundPath, unboundPath), stores().assets()
+        .findAssetsByPaths(repositoryId, List.of(boundPath, "missing", unboundPath, boundPath))
+        .keySet());
+    assertTrue(stores().assets().findAssetsByIds(null).isEmpty());
+    assertTrue(stores().assets().findAssetsByPaths(repositoryId, null).isEmpty());
+
+    inTransaction(() -> {
+      assertEquals(boundAssetId,
+          stores().assets().findAssetByIdForUpdate(boundAssetId).orElseThrow().id());
+      assertEquals(List.of(boundAssetId), stores().assets()
+          .listAssetsByComponentForUpdate(componentId).stream().map(AssetRecord::id).toList());
+      return null;
+    });
   }
 
   @Test
@@ -4450,6 +4559,75 @@ public abstract class PersistenceApiContract {
         .findUnreferencedBlobAssetIdForCleanup(
             dockerRepositoryId, 0, 10, Instant.parse("2026-07-13T11:00:00Z"))
         .orElseThrow());
+  }
+
+  @Test
+  void dockerCleanupBatchReadsAndLocksArePortable() {
+    long repositoryId = createRepository("docker-cleanup-batches", RepositoryFormat.DOCKER);
+    long blobStoreId = stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
+    Instant now = Instant.parse("2026-08-02T01:00:00Z");
+    long blobId = stores().assets().insertBlob(
+        blob(blobStoreId, "docker/manifests/acme/app/v1", "docker-cleanup-manifest"));
+    String assetPath = "v2/acme/app/manifests/v1";
+    long assetId = stores().assets().insertAsset(new AssetRecord(
+        null, repositoryId, null, blobId, RepositoryFormat.DOCKER,
+        assetPath, PersistenceHashes.pathHash(assetPath), "manifest.json", "MANIFEST",
+        "application/vnd.oci.image.manifest.v1+json", 42L, now.minusSeconds(60), now,
+        Map.of()));
+    String imageName = "acme/app";
+    String digest = "sha256:" + "a".repeat(64);
+    DockerRegistryDao registry = stores().dockerRegistry();
+    DockerManifestRecord manifest = inTransaction(() -> registry.upsertManifest(
+        new DockerManifestRecord(
+            null,
+            repositoryId,
+            imageName,
+            PersistenceHashes.sha256(imageName),
+            "sha256",
+            digest,
+            PersistenceHashes.sha256(digest),
+            "application/vnd.oci.image.manifest.v1+json",
+            null,
+            null,
+            null,
+            assetId,
+            42,
+            "contract",
+            "127.0.0.1",
+            null,
+            Map.of("source", "cleanup-contract"),
+            now,
+            now)));
+    inTransaction(() -> {
+      registry.upsertTag(new DockerTagRecord(
+          null,
+          repositoryId,
+          imageName,
+          PersistenceHashes.sha256(imageName),
+          "latest",
+          PersistenceHashes.sha256("latest"),
+          manifest.id(),
+          digest,
+          "contract",
+          "127.0.0.1",
+          now,
+          now));
+      return null;
+    });
+
+    assertEquals(manifest.id(), inTransaction(() -> registry.findManifestByDigestForUpdate(
+        repositoryId, imageName, digest)).orElseThrow().id());
+    assertEquals(List.of("latest"), registry.listTagsForManifests(
+        List.of(manifest.id(), manifest.id(), 999_999L)).get(manifest.id()).stream()
+        .map(DockerTagRecord::tag).toList());
+    assertTrue(registry.listTagsForManifests(null).isEmpty());
+    assertEquals("latest", inTransaction(() ->
+        registry.listTagsForManifestForUpdate(manifest.id())).getFirst().tag());
+    DockerRegistryDao.CleanupManifestCandidate candidate =
+        registry.listManifestCleanupCandidatesPage(repositoryId, 0, 10).getFirst();
+    assertEquals(assetId, candidate.assetId());
+    assertEquals(now.minusSeconds(60), candidate.lastDownloadedAt());
+    assertTrue(registry.listManifestCleanupCandidatesPage(repositoryId, assetId, 10).isEmpty());
   }
 
   @Test

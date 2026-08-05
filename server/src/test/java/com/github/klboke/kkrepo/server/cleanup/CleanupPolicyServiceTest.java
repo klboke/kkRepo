@@ -3,7 +3,10 @@ package com.github.klboke.kkrepo.server.cleanup;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -23,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 class CleanupPolicyServiceTest {
   @Test
@@ -266,6 +270,174 @@ class CleanupPolicyServiceTest {
         Clock.fixed(now, ZoneOffset.UTC));
 
     assertNull(service.get(7L).schedule().nextRunAt());
+  }
+
+  @Test
+  void createPersistsPausedScheduleAndReconcilesClusterServices() {
+    CleanupPolicyDao cleanupDao = mock(CleanupPolicyDao.class);
+    RepositoryDao repositoryDao = mock(RepositoryDao.class);
+    CleanupQuartzScheduleManager scheduleManager = mock(CleanupQuartzScheduleManager.class);
+    CleanupUsageTrackingService usageTracking = mock(CleanupUsageTrackingService.class);
+    Instant now = Instant.parse("2026-08-01T00:00:00Z");
+    when(repositoryDao.findById(1)).thenReturn(Optional.of(repository(
+        1, "maven", RepositoryFormat.MAVEN2)));
+    when(cleanupDao.createPolicy(any())).thenReturn(7L);
+    CleanupPolicyDao.CleanupPolicy persisted = new CleanupPolicyDao.CleanupPolicy(
+        7L, "scheduled", RepositoryFormat.MAVEN2, "notes",
+        Map.of("publishedOlderThanDays", 30), 1, "PAUSED", 1_000, 100, now, now);
+    when(cleanupDao.findPolicy(7)).thenReturn(Optional.of(persisted));
+    when(cleanupDao.listTargets(7)).thenReturn(List.of());
+    CleanupPolicyService service = new CleanupPolicyService(
+        cleanupDao,
+        repositoryDao,
+        new CleanupPolicyCapabilities(),
+        scheduleManager,
+        usageTracking,
+        Clock.fixed(now, ZoneOffset.UTC));
+
+    service.create(new PolicyCommand(
+        " scheduled ",
+        RepositoryFormat.MAVEN2,
+        " notes ",
+        Map.of("publishedOlderThanDays", 30),
+        List.of(1L, 1L),
+        null,
+        null,
+        new ScheduleCommand("0 0 2 * * ?", "UTC", true),
+        null));
+
+    verify(cleanupDao).replaceTargets(7, List.of(1L));
+    ArgumentCaptor<CleanupPolicyDao.CleanupSchedule> schedule =
+        ArgumentCaptor.forClass(CleanupPolicyDao.CleanupSchedule.class);
+    verify(cleanupDao).upsertSchedule(schedule.capture());
+    assertEquals(false, schedule.getValue().enabled());
+    assertNull(schedule.getValue().nextRunAt());
+    verify(scheduleManager).reconcileAfterCommit(7);
+    verify(usageTracking).reconcileAfterCommit();
+  }
+
+  @Test
+  void updateEnablesUnchangedScheduleAndDeleteUsesRevisionFence() {
+    CleanupPolicyDao cleanupDao = mock(CleanupPolicyDao.class);
+    RepositoryDao repositoryDao = mock(RepositoryDao.class);
+    CleanupQuartzScheduleManager scheduleManager = mock(CleanupQuartzScheduleManager.class);
+    CleanupUsageTrackingService usageTracking = mock(CleanupUsageTrackingService.class);
+    Instant now = Instant.parse("2026-08-01T00:00:00Z");
+    CleanupPolicyDao.CleanupPolicy existing = new CleanupPolicyDao.CleanupPolicy(
+        7L, "scheduled", RepositoryFormat.MAVEN2, null,
+        Map.of("publishedOlderThanDays", 30), 1, "PAUSED", 100, 10, now, now);
+    CleanupPolicyDao.CleanupPolicy updated = new CleanupPolicyDao.CleanupPolicy(
+        7L, "scheduled", RepositoryFormat.MAVEN2, null,
+        Map.of("publishedOlderThanDays", 30), 2, "ACTIVE", 100, 10, now, now);
+    when(cleanupDao.findPolicy(7)).thenReturn(
+        Optional.of(existing), Optional.of(updated), Optional.of(updated));
+    when(cleanupDao.listTargets(7)).thenReturn(List.of(
+        new CleanupPolicyDao.TargetRepository(
+            1, "maven", RepositoryFormat.MAVEN2, RepositoryType.HOSTED, true)));
+    when(repositoryDao.findById(1)).thenReturn(Optional.of(repository(
+        1, "maven", RepositoryFormat.MAVEN2)));
+    when(cleanupDao.findSchedule(7)).thenReturn(Optional.of(
+        new CleanupPolicyDao.CleanupSchedule(
+            7, "0 0 2 * * ?", "UTC", true, null, now, now)));
+    when(cleanupDao.updatePolicy(any(), eq(1L))).thenReturn(true);
+    when(cleanupDao.markPolicyDeleted(7, 2, now)).thenReturn(true);
+    CleanupPolicyService service = new CleanupPolicyService(
+        cleanupDao,
+        repositoryDao,
+        new CleanupPolicyCapabilities(),
+        scheduleManager,
+        usageTracking,
+        Clock.fixed(now, ZoneOffset.UTC));
+
+    CleanupPolicyService.PolicyView view = service.update(7, new PolicyCommand(
+        "scheduled",
+        RepositoryFormat.MAVEN2,
+        null,
+        Map.of("publishedOlderThanDays", 30),
+        List.of(1L),
+        100,
+        10,
+        new ScheduleCommand("0 0 2 * * ?", "UTC", true),
+        1L));
+
+    assertEquals("ACTIVE", view.policy().state());
+    ArgumentCaptor<CleanupPolicyDao.CleanupSchedule> schedules =
+        ArgumentCaptor.forClass(CleanupPolicyDao.CleanupSchedule.class);
+    verify(cleanupDao).upsertSchedule(schedules.capture());
+    assertEquals(true, schedules.getValue().enabled());
+    assertEquals(Instant.parse("2026-08-01T02:00:00Z"), schedules.getValue().nextRunAt());
+
+    service.delete(7, 2);
+    verify(cleanupDao).markPolicyDeleted(7, 2, now);
+    verify(scheduleManager, times(2)).reconcileAfterCommit(7);
+    verify(usageTracking, times(2)).reconcileAfterCommit();
+  }
+
+  @Test
+  void validatesRequiredFieldsLimitsRepositoryIdsAndRevisionFences() {
+    CleanupPolicyDao cleanupDao = mock(CleanupPolicyDao.class);
+    RepositoryDao repositoryDao = mock(RepositoryDao.class);
+    Instant now = Instant.parse("2026-08-01T00:00:00Z");
+    CleanupPolicyService service = new CleanupPolicyService(
+        cleanupDao,
+        repositoryDao,
+        new CleanupPolicyCapabilities(),
+        Clock.fixed(now, ZoneOffset.UTC));
+
+    assertThrows(CleanupValidationException.class, () -> service.create(null));
+    assertThrows(CleanupValidationException.class, () -> service.create(command(
+        " ", RepositoryFormat.RAW, List.of(1L), 10, 10)));
+    assertThrows(CleanupValidationException.class, () -> service.create(command(
+        "x".repeat(201), RepositoryFormat.RAW, List.of(1L), 10, 10)));
+    assertThrows(CleanupValidationException.class, () -> service.create(command(
+        "missing format", null, List.of(1L), 10, 10)));
+    assertThrows(CleanupValidationException.class, () -> service.create(command(
+        "missing targets", RepositoryFormat.RAW, null, 10, 10)));
+    assertThrows(CleanupValidationException.class, () -> service.create(command(
+        "invalid target", RepositoryFormat.RAW, List.of(0L), 10, 10)));
+    assertThrows(CleanupValidationException.class, () -> service.create(command(
+        "scan limit", RepositoryFormat.RAW, List.of(1L), 0, 10)));
+    assertThrows(CleanupValidationException.class, () -> service.create(command(
+        "delete limit", RepositoryFormat.RAW, List.of(1L), 10, 1_001)));
+    assertThrows(CleanupValidationException.class, () -> service.create(command(
+        "too many", RepositoryFormat.RAW,
+        java.util.stream.LongStream.rangeClosed(1, 101).boxed().toList(), 10, 10)));
+    assertThrows(CleanupValidationException.class, () -> service.create(command(
+        "missing repository", RepositoryFormat.RAW, List.of(999L), 10, 10)));
+    assertThrows(CleanupValidationException.class, () -> service.previewSchedule(null));
+    assertEquals(List.of(), CleanupPolicyService.nextRunTimes(
+        new ScheduleCommand("0 0 2 * * ?", "UTC", true), now, 0));
+
+    CleanupPolicyDao.CleanupPolicy existing = new CleanupPolicyDao.CleanupPolicy(
+        7L, "existing", RepositoryFormat.RAW, null,
+        Map.of("publishedOlderThanDays", 30), 3, "PAUSED", 10, 10, now, now);
+    when(cleanupDao.findPolicy(7)).thenReturn(Optional.of(existing));
+    assertThrows(CleanupValidationException.class, () -> service.update(7, command(
+        "existing", RepositoryFormat.RAW, List.of(1L), 10, 10)));
+    PolicyCommand stale = new PolicyCommand(
+        "existing", RepositoryFormat.RAW, null, Map.of("publishedOlderThanDays", 30),
+        List.of(1L), 10, 10, null, 2L);
+    assertThrows(CleanupRevisionConflictException.class, () -> service.update(7, stale));
+    assertThrows(CleanupRevisionConflictException.class, () -> service.delete(7, 2));
+    assertThrows(CleanupNotFoundException.class, () -> service.get(999));
+  }
+
+  private static PolicyCommand command(
+      String name,
+      RepositoryFormat format,
+      List<Long> repositoryIds,
+      Integer scanLimit,
+      Integer deleteLimit) {
+    return new PolicyCommand(
+        name,
+        format,
+        null,
+        Map.of("publishedOlderThanDays", 30),
+        repositoryIds,
+        scanLimit,
+        deleteLimit,
+        null,
+        null);
   }
 
   private static RepositoryRecord repository(

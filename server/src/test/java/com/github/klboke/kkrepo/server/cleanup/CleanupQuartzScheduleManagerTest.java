@@ -1,8 +1,10 @@
 package com.github.klboke.kkrepo.server.cleanup;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -12,12 +14,15 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupPolicy;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupSchedule;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.quartz.CronTrigger;
 import org.quartz.JobDetail;
+import org.quartz.JobKey;
 import org.quartz.Scheduler;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -91,6 +96,44 @@ class CleanupQuartzScheduleManagerTest {
     verifyNoInteractions(scheduler);
     manager.reconcilePendingSafely();
     verify(scheduler).deleteJob(CleanupQuartzScheduleManager.jobKey(7));
+  }
+
+  @Test
+  void reconcilesImmediatelyWhenNoTransactionIsActive() throws Exception {
+    CleanupPolicyDao cleanupDao = mock(CleanupPolicyDao.class);
+    Scheduler scheduler = mock(Scheduler.class);
+    when(cleanupDao.findSchedule(7)).thenReturn(Optional.empty());
+    CleanupQuartzScheduleManager manager = new CleanupQuartzScheduleManager(
+        cleanupDao, scheduler, true);
+
+    manager.reconcileAfterCommit(7);
+
+    verify(scheduler).deleteJob(CleanupQuartzScheduleManager.jobKey(7));
+  }
+
+  @Test
+  void fullReconciliationRemovesOnlyMissingCleanupPolicyJobs() throws Exception {
+    CleanupPolicyDao cleanupDao = mock(CleanupPolicyDao.class);
+    Scheduler scheduler = mock(Scheduler.class);
+    CleanupSchedule persisted = new CleanupSchedule(
+        7, "0 0 2 * * ?", "UTC", false, null, NOW, NOW);
+    JobKey orphan = CleanupQuartzScheduleManager.jobKey(9);
+    JobKey unrelated = JobKey.jobKey("maintenance", CleanupQuartzScheduleManager.GROUP);
+    JobKey malformed = JobKey.jobKey("policy-invalid", CleanupQuartzScheduleManager.GROUP);
+    when(cleanupDao.listSchedules()).thenReturn(List.of(persisted));
+    when(cleanupDao.findSchedule(7)).thenReturn(Optional.of(persisted));
+    when(cleanupDao.findPolicy(7)).thenReturn(Optional.of(policy("PAUSED")));
+    when(scheduler.getJobKeys(any())).thenReturn(Set.of(
+        CleanupQuartzScheduleManager.jobKey(7), orphan, unrelated, malformed));
+    CleanupQuartzScheduleManager manager = new CleanupQuartzScheduleManager(
+        cleanupDao, scheduler, true);
+
+    manager.reconcileAll();
+
+    verify(scheduler).deleteJob(CleanupQuartzScheduleManager.jobKey(7));
+    verify(scheduler).deleteJob(orphan);
+    verify(scheduler, never()).deleteJob(unrelated);
+    verify(scheduler, never()).deleteJob(malformed);
   }
 
   private static CleanupPolicy policy(String state) {
