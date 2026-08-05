@@ -125,11 +125,24 @@ public class CleanupRunService {
     return view(requireRun(runId));
   }
 
+  public CleanupRun getRunSummary(long runId) {
+    return requireRun(runId);
+  }
+
+  public RunDetailView getRunDetails(long runId, int itemsPerRepository) {
+    CleanupRun run = requireRun(runId);
+    List<CleanupRunRepository> repositories = cleanupDao.listRunRepositories(runId);
+    return new RunDetailView(
+        run,
+        repositories,
+        cleanupDao.listRunItems(
+            repositories.stream().map(CleanupRunRepository::id).toList(),
+            Math.min(Math.max(1, itemsPerRepository), 200)));
+  }
+
   public List<CleanupRunItem> listItems(
       long runId, long runRepositoryId, long afterId, int limit) {
-    CleanupRunRepository repository = cleanupDao.listRunRepositories(runId).stream()
-        .filter(item -> item.id() == runRepositoryId)
-        .findFirst()
+    CleanupRunRepository repository = cleanupDao.findRunRepository(runId, runRepositoryId)
         .orElseThrow(() -> new CleanupNotFoundException(
             "cleanup run repository", runRepositoryId));
     return cleanupDao.listRunItems(
@@ -201,8 +214,8 @@ public class CleanupRunService {
     } else {
       runId = cleanupDao.createRun(run);
     }
-    for (TargetRepository target : targets) {
-      cleanupDao.createRunRepository(new CleanupRunRepository(
+    List<CleanupRunRepository> runRepositories = targets.stream()
+        .map(target -> new CleanupRunRepository(
           null,
           runId,
           target.id(),
@@ -219,8 +232,9 @@ public class CleanupRunService {
           null,
           null,
           createdAt,
-          createdAt));
-    }
+          createdAt))
+        .toList();
+    cleanupDao.createRunRepositories(runRepositories);
     return getRun(runId);
   }
 
@@ -753,6 +767,12 @@ public class CleanupRunService {
   }
 
   public record RunView(CleanupRun run, List<CleanupRunRepository> repositories) {
+  }
+
+  public record RunDetailView(
+      CleanupRun run,
+      List<CleanupRunRepository> repositories,
+      Map<Long, List<CleanupRunItem>> itemsByRepository) {
   }
 
   private record RepositoryTotals(

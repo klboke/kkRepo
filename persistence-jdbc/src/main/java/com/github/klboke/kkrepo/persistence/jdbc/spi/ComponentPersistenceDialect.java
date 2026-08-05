@@ -35,6 +35,24 @@ public interface ComponentPersistenceDialect {
         kind == null ? "" : kind);
   }
 
+  /** Backend-optimized keyset predicate over the configured family order expressions. */
+  default CleanupFamilyCursorClause cleanupFamilyCursorClause(
+      String namespace, String name, String kind) {
+    List<String> expressions = cleanupFamilyOrderExpressions();
+    List<Object> values = cleanupFamilyCursorValues(namespace, name, kind);
+    return new CleanupFamilyCursorClause(
+        "(" + String.join(",", expressions) + ") > ("
+            + String.join(",", java.util.Collections.nCopies(expressions.size(), "?"))
+            + ")",
+        values);
+  }
+
+  record CleanupFamilyCursorClause(String sql, List<Object> arguments) {
+    public CleanupFamilyCursorClause {
+      arguments = List.copyOf(arguments);
+    }
+  }
+
   record ComponentUpsert(
       long repositoryId,
       String format,

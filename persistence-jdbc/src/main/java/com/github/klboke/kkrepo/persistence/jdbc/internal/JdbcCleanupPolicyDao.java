@@ -8,6 +8,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupPolicy;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupCursorCompletion;
+import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupHistoryPruneResult;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupOperationalSummary;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupProtection;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupProtectionLookup;
@@ -25,6 +26,8 @@ import com.github.klboke.kkrepo.persistence.jdbc.internal.support.EnumColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcInserts;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcUpserts;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.CoordinationPersistenceDialect;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -53,6 +56,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Repository
 public class JdbcCleanupPolicyDao
     implements com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao {
+  private static final int IN_QUERY_BATCH_SIZE = 500;
+  private static final String USAGE_TRACKING_REVISION = "cleanup-usage-tracking";
   private static final TypeReference<List<Map<String, Object>>> REPOSITORY_SNAPSHOT_TYPE =
       new TypeReference<>() {
       };
@@ -62,6 +67,8 @@ public class JdbcCleanupPolicyDao
 
   private final JdbcTemplate jdbc;
   private final JsonColumns json;
+  private final CoordinationPersistenceDialect coordination;
+  private final String orderedRunItemTable;
   private final RowMapper<CleanupPolicy> policyMapper;
   private final RowMapper<CleanupSchedule> scheduleMapper;
   private final RowMapper<CleanupRun> runMapper;
@@ -78,9 +85,13 @@ public class JdbcCleanupPolicyDao
     return timestamp.toInstant();
   }
 
-  public JdbcCleanupPolicyDao(JdbcTemplate jdbc, JsonColumns json) {
+  public JdbcCleanupPolicyDao(
+      JdbcTemplate jdbc, JsonColumns json, DatabaseDialect databaseDialect) {
     this.jdbc = jdbc;
     this.json = json;
+    this.coordination = databaseDialect.coordination();
+    this.orderedRunItemTable = databaseDialect.tableReferenceWithPreferredIndex(
+        "cleanup_run_item", "idx_cleanup_run_item_repository");
     this.policyMapper = (rs, rowNum) -> new CleanupPolicy(
         rs.getLong("id"),
         rs.getString("name"),
@@ -190,6 +201,32 @@ public class JdbcCleanupPolicyDao
   }
 
   @Override
+  public List<CleanupPolicy> listPolicies(long afterId, int maxItems) {
+    return jdbc.query("""
+        SELECT * FROM cleanup_policy
+        WHERE mode = 'NATIVE' AND state <> 'DELETED' AND id > ?
+        ORDER BY id
+        LIMIT ?
+        """, policyMapper, Math.max(0, afterId), Math.max(1, maxItems));
+  }
+
+  @Override
+  public Map<Long, CleanupPolicy> findPolicies(Collection<Long> policyIds) {
+    List<Long> ids = distinctIds(policyIds);
+    if (ids.isEmpty()) return Map.of();
+    Map<Long, CleanupPolicy> result = new LinkedHashMap<>();
+    for (List<Long> batch : batches(ids, IN_QUERY_BATCH_SIZE)) {
+      jdbc.query("""
+          SELECT * FROM cleanup_policy
+          WHERE mode = 'NATIVE' AND state <> 'DELETED' AND id IN ("""
+              + placeholders(batch.size()) + ")",
+          policyMapper,
+          batch.toArray()).forEach(policy -> result.put(policy.id(), policy));
+    }
+    return Map.copyOf(result);
+  }
+
+  @Override
   public Optional<CleanupPolicy> findPolicy(long policyId) {
     return jdbc.query("""
         SELECT * FROM cleanup_policy
@@ -268,6 +305,45 @@ public class JdbcCleanupPolicyDao
   }
 
   @Override
+  public Map<Long, List<TargetRepository>> listTargets(Collection<Long> policyIds) {
+    List<Long> ids = distinctIds(policyIds);
+    if (ids.isEmpty()) return Map.of();
+    Map<Long, List<TargetRepository>> result = new LinkedHashMap<>();
+    ids.forEach(id -> result.put(id, new ArrayList<>()));
+    for (List<Long> batch : batches(ids, IN_QUERY_BATCH_SIZE)) {
+      jdbc.query("""
+          SELECT rp.cleanup_policy_id, r.id, r.name, r.format, r.type, r.online
+          FROM repository_cleanup_policy rp
+          JOIN repository r ON r.id = rp.repository_id
+          WHERE rp.cleanup_policy_id IN (""" + placeholders(batch.size()) + """
+          )
+          ORDER BY rp.cleanup_policy_id, r.name, r.id
+          """, rs -> {
+        while (rs.next()) {
+          result.get(rs.getLong("cleanup_policy_id")).add(new TargetRepository(
+              rs.getLong("id"),
+              rs.getString("name"),
+              EnumColumns.read(RepositoryFormat.class, rs.getString("format")),
+              EnumColumns.read(RepositoryType.class, rs.getString("type")),
+              rs.getBoolean("online")));
+        }
+        return null;
+      }, batch.toArray());
+    }
+    result.replaceAll((ignored, targets) -> List.copyOf(targets));
+    return Map.copyOf(result);
+  }
+
+  @Override
+  public boolean isPolicyTarget(long policyId, long repositoryId) {
+    return !jdbc.queryForList("""
+        SELECT repository_id
+        FROM repository_cleanup_policy
+        WHERE cleanup_policy_id = ? AND repository_id = ?
+        """, Long.class, policyId, repositoryId).isEmpty();
+  }
+
+  @Override
   public boolean hasRepositoryReferences(long repositoryId) {
     Long references = jdbc.queryForObject("""
         SELECT COUNT(*) FROM (
@@ -329,6 +405,21 @@ public class JdbcCleanupPolicyDao
     return jdbc.query(
         "SELECT * FROM cleanup_policy_schedule ORDER BY policy_id",
         scheduleMapper);
+  }
+
+  @Override
+  public Map<Long, CleanupSchedule> findSchedules(Collection<Long> policyIds) {
+    List<Long> ids = distinctIds(policyIds);
+    if (ids.isEmpty()) return Map.of();
+    Map<Long, CleanupSchedule> result = new LinkedHashMap<>();
+    for (List<Long> batch : batches(ids, IN_QUERY_BATCH_SIZE)) {
+      jdbc.query("""
+          SELECT * FROM cleanup_policy_schedule
+          WHERE policy_id IN (""" + placeholders(batch.size()) + ")",
+          scheduleMapper,
+          batch.toArray()).forEach(schedule -> result.put(schedule.policyId(), schedule));
+    }
+    return Map.copyOf(result);
   }
 
   @Override
@@ -480,10 +571,74 @@ public class JdbcCleanupPolicyDao
   }
 
   @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void createRunRepositories(List<CleanupRunRepository> runRepositories) {
+    if (runRepositories == null || runRepositories.isEmpty()) return;
+    List<CleanupRunRepository> repositories = runRepositories.stream()
+        .filter(Objects::nonNull)
+        .toList();
+    if (repositories.isEmpty()) return;
+    List<Long> repositoryIds = repositories.stream()
+        .map(CleanupRunRepository::repositoryId)
+        .distinct()
+        .sorted()
+        .toList();
+
+    // Repository rows are locked in a deterministic order. This makes the following portable
+    // batch insert duplicate-safe even when two policy runs first target the same repository.
+    List<Long> lockedIds = jdbc.queryForList(
+        "SELECT id FROM repository WHERE id IN (" + placeholders(repositoryIds.size())
+            + ") ORDER BY id FOR UPDATE",
+        Long.class,
+        repositoryIds.toArray());
+    if (lockedIds.size() != repositoryIds.size()) {
+      throw new IllegalStateException("cleanup run target repository disappeared");
+    }
+    List<Long> existingLeaseIds = jdbc.queryForList(
+        "SELECT repository_id FROM cleanup_repository_lease WHERE repository_id IN ("
+            + placeholders(repositoryIds.size()) + ")",
+        Long.class,
+        repositoryIds.toArray());
+    java.util.Set<Long> existingLeases = java.util.Set.copyOf(existingLeaseIds);
+    List<Long> missingLeases = repositoryIds.stream()
+        .filter(repositoryId -> !existingLeases.contains(repositoryId))
+        .toList();
+    if (!missingLeases.isEmpty()) {
+      jdbc.batchUpdate(
+          "INSERT INTO cleanup_repository_lease (repository_id) VALUES (?)",
+          missingLeases,
+          missingLeases.size(),
+          (ps, repositoryId) -> ps.setLong(1, repositoryId));
+    }
+    jdbc.batchUpdate("""
+        INSERT INTO cleanup_run_repository
+          (run_id, repository_id, repository_name, format, repository_type, state, started_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, repositories, repositories.size(), (ps, repository) -> {
+      ps.setLong(1, repository.runId());
+      ps.setLong(2, repository.repositoryId());
+      ps.setString(3, repository.repositoryName());
+      ps.setString(4, EnumColumns.write(repository.format()));
+      ps.setString(5, EnumColumns.write(repository.repositoryType()));
+      ps.setString(6, repository.state());
+      ps.setObject(7, nullableTimestamp(repository.startedAt()));
+    });
+  }
+
+  @Override
   public List<CleanupRunRepository> listRunRepositories(long runId) {
     return jdbc.query("""
         SELECT * FROM cleanup_run_repository WHERE run_id = ? ORDER BY id
         """, runRepositoryMapper, runId);
+  }
+
+  @Override
+  public Optional<CleanupRunRepository> findRunRepository(
+      long runId, long runRepositoryId) {
+    return jdbc.query("""
+        SELECT * FROM cleanup_run_repository
+        WHERE run_id = ? AND id = ?
+        """, runRepositoryMapper, runId, runRepositoryId).stream().findFirst();
   }
 
   @Override
@@ -1301,38 +1456,134 @@ public class JdbcCleanupPolicyDao
   }
 
   @Override
+  public Map<Long, List<CleanupRunItem>> listRunItems(
+      Collection<Long> runRepositoryIds, int maxItemsPerRepository) {
+    List<Long> repositoryIds = distinctIds(runRepositoryIds);
+    if (repositoryIds.isEmpty()) return Map.of();
+    int limit = Math.max(1, Math.min(200, maxItemsPerRepository));
+    Map<Long, List<CleanupRunItem>> result = new LinkedHashMap<>();
+    for (List<Long> batch : batches(repositoryIds, 50)) {
+      String shardQueries = batch.stream()
+          .map(ignored -> "(SELECT * FROM " + orderedRunItemTable
+              + " WHERE run_repository_id = ? ORDER BY id LIMIT ?)")
+          .collect(java.util.stream.Collectors.joining(" UNION ALL "));
+      List<Object> arguments = new ArrayList<>(batch.size() * 2);
+      for (Long repositoryId : batch) {
+        arguments.add(repositoryId);
+        arguments.add(limit);
+      }
+      jdbc.query(
+          "SELECT bounded.* FROM (" + shardQueries + ") bounded "
+              + "ORDER BY bounded.run_repository_id, bounded.id",
+          rs -> {
+            int rowNum = 0;
+            while (rs.next()) {
+              CleanupRunItem item = runItemMapper.mapRow(rs, rowNum++);
+              result.computeIfAbsent(item.runRepositoryId(), ignored -> new ArrayList<>()).add(item);
+            }
+            return null;
+          },
+          arguments.toArray());
+    }
+    result.replaceAll((ignored, items) -> List.copyOf(items));
+    return Map.copyOf(result);
+  }
+
+  @Override
   @Transactional
   public int deleteTerminalRunsBefore(
       Instant completedBefore, int maxItems, int minimumRunsPerPolicy) {
+    return pruneTerminalRunHistory(
+        completedBefore, maxItems, minimumRunsPerPolicy, 5_000).deletedRuns();
+  }
+
+  @Override
+  @Transactional
+  public CleanupHistoryPruneResult pruneTerminalRunHistory(
+      Instant completedBefore,
+      int maxRuns,
+      int minimumRunsPerPolicy,
+      int maxRunItems) {
     if (completedBefore == null) {
       throw new IllegalArgumentException("completedBefore is required");
     }
-    int limit = Math.max(1, Math.min(1000, maxItems));
+    int limit = Math.max(1, Math.min(1000, maxRuns));
     int retained = Math.max(1, Math.min(1000, minimumRunsPerPolicy));
-    List<Long> ids = jdbc.queryForList("""
+    int itemLimit = Math.max(1, Math.min(50_000, maxRunItems));
+    List<Long> candidates = jdbc.queryForList("""
         SELECT cleanup.id
         FROM cleanup_run cleanup
+        JOIN (
+          SELECT policy_id, id AS retained_floor
+          FROM (
+            SELECT policy_id,
+                   id,
+                   ROW_NUMBER() OVER (
+                     PARTITION BY policy_id ORDER BY id DESC
+                   ) AS retention_rank
+            FROM cleanup_run
+          ) ranked
+          WHERE retention_rank = ?
+        ) retention
+          ON retention.policy_id = cleanup.policy_id
+         AND cleanup.id < retention.retained_floor
         WHERE cleanup.state IN (
             'SUCCEEDED', 'SUCCEEDED_TRUNCATED', 'PARTIAL_LIMIT_REACHED',
             'PARTIAL', 'FAILED', 'CANCELLED')
           AND cleanup.completed_at < ?
-          AND (
-            SELECT COUNT(*) FROM cleanup_run newer
-            WHERE newer.policy_id = cleanup.policy_id AND newer.id > cleanup.id
-          ) >= ?
         ORDER BY cleanup.completed_at, cleanup.id
         LIMIT ?
-        FOR UPDATE SKIP LOCKED
         """,
         Long.class,
-        nullableTimestamp(completedBefore),
         retained,
+        nullableTimestamp(completedBefore),
         limit);
-    if (ids.isEmpty()) return 0;
-    String placeholders = String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
-    return jdbc.update(
-        "DELETE FROM cleanup_run WHERE id IN (" + placeholders + ")",
-        ids.toArray());
+    List<Long> ids = new ArrayList<>(candidates.size());
+    for (List<Long> batch : batches(candidates, IN_QUERY_BATCH_SIZE)) {
+      ids.addAll(jdbc.queryForList(
+          "SELECT id FROM cleanup_run WHERE id IN (" + placeholders(batch.size()) + ") "
+              + "ORDER BY id FOR UPDATE SKIP LOCKED",
+          Long.class,
+          batch.toArray()));
+    }
+    if (ids.isEmpty()) return new CleanupHistoryPruneResult(0, 0);
+    List<Long> itemIds = new ArrayList<>(Math.min(itemLimit, 5_000));
+    for (List<Long> batch : batches(ids, IN_QUERY_BATCH_SIZE)) {
+      int remaining = itemLimit - itemIds.size();
+      if (remaining <= 0) break;
+      itemIds.addAll(jdbc.queryForList("""
+          SELECT item.id
+          FROM cleanup_run_item item
+          JOIN cleanup_run_repository repository
+            ON repository.id = item.run_repository_id
+          WHERE repository.run_id IN (""" + placeholders(batch.size()) + """
+          )
+          ORDER BY item.id
+          LIMIT ?
+          FOR UPDATE SKIP LOCKED
+          """, Long.class, append(batch, remaining)));
+    }
+    int deletedItems = 0;
+    for (List<Long> batch : batches(itemIds, IN_QUERY_BATCH_SIZE)) {
+      deletedItems += jdbc.update(
+          "DELETE FROM cleanup_run_item WHERE id IN (" + placeholders(batch.size()) + ")",
+          batch.toArray());
+    }
+    int deletedRuns = 0;
+    for (List<Long> batch : batches(ids, IN_QUERY_BATCH_SIZE)) {
+      deletedRuns += jdbc.update("""
+          DELETE FROM cleanup_run
+          WHERE id IN (""" + placeholders(batch.size()) + """
+          )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM cleanup_run_repository repository
+              JOIN cleanup_run_item item ON item.run_repository_id = repository.id
+              WHERE repository.run_id = cleanup_run.id
+            )
+          """, batch.toArray());
+    }
+    return new CleanupHistoryPruneResult(deletedRuns, deletedItems);
   }
 
   @Override
@@ -1364,48 +1615,97 @@ public class JdbcCleanupPolicyDao
 
   @Override
   @Transactional
-  public void synchronizeUsageTracking(
+  public boolean synchronizeUsageTracking(
       Map<Long, Instant> repositoryTrackingStartedAt, Instant now) {
+    lockUsageTrackingRevision();
     Map<Long, Instant> required = repositoryTrackingStartedAt == null
         ? Map.of()
         : Map.copyOf(repositoryTrackingStartedAt);
-    if (required.isEmpty()) {
-      jdbc.update("DELETE FROM cleanup_usage_tracking_repository");
-      return;
+    Map<Long, Instant> existing = new LinkedHashMap<>();
+    jdbc.query("""
+        SELECT repository_id, tracking_started_at
+        FROM cleanup_usage_tracking_repository
+        ORDER BY repository_id
+        FOR UPDATE
+        """, rs -> {
+      while (rs.next()) {
+        existing.put(rs.getLong("repository_id"), nullableInstant(rs, "tracking_started_at"));
+      }
+      return null;
+    });
+    List<Long> removed = existing.keySet().stream()
+        .filter(repositoryId -> !required.containsKey(repositoryId))
+        .toList();
+    List<Map.Entry<Long, Instant>> added = required.entrySet().stream()
+        .filter(entry -> !existing.containsKey(entry.getKey()))
+        .toList();
+    List<Map.Entry<Long, Instant>> movedEarlier = required.entrySet().stream()
+        .filter(entry -> existing.containsKey(entry.getKey()))
+        .filter(entry -> entry.getValue().isBefore(existing.get(entry.getKey())))
+        .toList();
+    if (removed.isEmpty() && added.isEmpty() && movedEarlier.isEmpty()) return false;
+
+    for (List<Long> batch : batches(removed, IN_QUERY_BATCH_SIZE)) {
+      jdbc.update(
+          "DELETE FROM cleanup_usage_tracking_repository WHERE repository_id IN ("
+              + placeholders(batch.size()) + ")",
+          batch.toArray());
     }
-    String placeholders = String.join(",", java.util.Collections.nCopies(required.size(), "?"));
-    jdbc.update(
-        "DELETE FROM cleanup_usage_tracking_repository WHERE repository_id NOT IN ("
-            + placeholders + ")",
-        required.keySet().toArray());
-    for (Map.Entry<Long, Instant> entry : required.entrySet()) {
-      String updateSql = """
+    if (!movedEarlier.isEmpty()) {
+      jdbc.batchUpdate("""
           UPDATE cleanup_usage_tracking_repository
-          SET tracking_started_at = CASE
-                WHEN tracking_started_at < ? THEN tracking_started_at ELSE ? END,
-              updated_at = ?
+          SET tracking_started_at = ?, updated_at = ?
           WHERE repository_id = ?
-          """;
-      Object[] updateArguments = {
-          nullableTimestamp(entry.getValue()),
-          nullableTimestamp(entry.getValue()),
-          nullableTimestamp(now),
-          entry.getKey()
-      };
-      JdbcUpserts.updateThenInsert(
-          jdbc,
-          updateSql,
-          updateArguments,
-          """
-            INSERT INTO cleanup_usage_tracking_repository
-              (repository_id, tracking_started_at, updated_at)
-            VALUES (?, ?, ?)
-            """,
-          new Object[] {
-            entry.getKey(),
-            nullableTimestamp(entry.getValue()),
-            nullableTimestamp(now)
-          });
+          """, movedEarlier, movedEarlier.size(), (ps, entry) -> {
+        ps.setObject(1, nullableTimestamp(entry.getValue()));
+        ps.setObject(2, nullableTimestamp(now));
+        ps.setLong(3, entry.getKey());
+      });
+    }
+    if (!added.isEmpty()) {
+      jdbc.batchUpdate("""
+          INSERT INTO cleanup_usage_tracking_repository
+            (repository_id, tracking_started_at, updated_at)
+          VALUES (?, ?, ?)
+          """, added, added.size(), (ps, entry) -> {
+        ps.setLong(1, entry.getKey());
+        ps.setObject(2, nullableTimestamp(entry.getValue()));
+        ps.setObject(3, nullableTimestamp(now));
+      });
+    }
+    coordination.bumpCacheVersion(jdbc, USAGE_TRACKING_REVISION);
+    return true;
+  }
+
+  @Override
+  public long usageTrackingRevision() {
+    List<Long> values = jdbc.query("""
+        SELECT version FROM cache_version WHERE name = ?
+        """, (rs, rowNum) -> rs.getLong("version"), USAGE_TRACKING_REVISION);
+    return values.isEmpty() ? 0 : values.get(0);
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void lockUsageTrackingProjection() {
+    lockUsageTrackingRevision();
+  }
+
+  private void lockUsageTrackingRevision() {
+    List<Long> revision = jdbc.queryForList(
+        "SELECT version FROM cache_version WHERE name = ? FOR UPDATE",
+        Long.class,
+        USAGE_TRACKING_REVISION);
+    if (!revision.isEmpty()) return;
+
+    // Bootstrap is the only path allowed to bump without a projection change. Concurrent first
+    // reconcilers may both reach this point; the dialect upsert serializes them on the same row.
+    coordination.bumpCacheVersion(jdbc, USAGE_TRACKING_REVISION);
+    if (jdbc.queryForList(
+        "SELECT version FROM cache_version WHERE name = ? FOR UPDATE",
+        Long.class,
+        USAGE_TRACKING_REVISION).isEmpty()) {
+      throw new IllegalStateException("cleanup usage revision row disappeared");
     }
   }
 
@@ -1906,6 +2206,31 @@ public class JdbcCleanupPolicyDao
   private List<Map<String, Object>> snapshot(String value) {
     List<Map<String, Object>> result = json.readValue(value, REPOSITORY_SNAPSHOT_TYPE);
     return result == null ? List.of() : result;
+  }
+
+  private static List<Long> distinctIds(Collection<Long> values) {
+    if (values == null || values.isEmpty()) return List.of();
+    return values.stream().filter(Objects::nonNull).distinct().toList();
+  }
+
+  private static <T> List<List<T>> batches(List<T> values, int batchSize) {
+    if (values == null || values.isEmpty()) return List.of();
+    List<List<T>> result = new ArrayList<>();
+    for (int start = 0; start < values.size(); start += batchSize) {
+      result.add(values.subList(start, Math.min(values.size(), start + batchSize)));
+    }
+    return result;
+  }
+
+  private static String placeholders(int count) {
+    return String.join(",", java.util.Collections.nCopies(Math.max(1, count), "?"));
+  }
+
+  private static Object[] append(List<Long> values, Object tail) {
+    Object[] arguments = new Object[values.size() + 1];
+    for (int index = 0; index < values.size(); index++) arguments[index] = values.get(index);
+    arguments[values.size()] = tail;
+    return arguments;
   }
 
   private record ClaimCandidate(

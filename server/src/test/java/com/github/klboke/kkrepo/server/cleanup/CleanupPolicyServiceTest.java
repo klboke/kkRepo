@@ -422,6 +422,42 @@ class CleanupPolicyServiceTest {
     assertThrows(CleanupNotFoundException.class, () -> service.get(999));
   }
 
+  @Test
+  void pagesPoliciesAndLoadsTargetsAndSchedulesInBatches() {
+    CleanupPolicyDao cleanupDao = mock(CleanupPolicyDao.class);
+    Instant now = Instant.parse("2026-08-01T00:00:00Z");
+    CleanupPolicyDao.CleanupPolicy first = new CleanupPolicyDao.CleanupPolicy(
+        11L, "first", RepositoryFormat.RAW, null,
+        Map.of("publishedOlderThanDays", 30), 1, "PAUSED", 100, 10, now, now);
+    CleanupPolicyDao.CleanupPolicy second = new CleanupPolicyDao.CleanupPolicy(
+        12L, "second", RepositoryFormat.RAW, null,
+        Map.of("publishedOlderThanDays", 30), 1, "PAUSED", 100, 10, now, now);
+    CleanupPolicyDao.CleanupPolicy lookahead = new CleanupPolicyDao.CleanupPolicy(
+        13L, "lookahead", RepositoryFormat.RAW, null,
+        Map.of("publishedOlderThanDays", 30), 1, "PAUSED", 100, 10, now, now);
+    when(cleanupDao.listPolicies(10, 3)).thenReturn(List.of(first, second, lookahead));
+    when(cleanupDao.listTargets(List.of(11L, 12L))).thenReturn(Map.of(
+        11L, List.of(new CleanupPolicyDao.TargetRepository(
+            1, "raw-a", RepositoryFormat.RAW, RepositoryType.HOSTED, true)),
+        12L, List.of(new CleanupPolicyDao.TargetRepository(
+            2, "raw-b", RepositoryFormat.RAW, RepositoryType.PROXY, true))));
+    when(cleanupDao.findSchedules(List.of(11L, 12L))).thenReturn(Map.of());
+    CleanupPolicyService service = new CleanupPolicyService(
+        cleanupDao,
+        mock(RepositoryDao.class),
+        new CleanupPolicyCapabilities(),
+        Clock.fixed(now, ZoneOffset.UTC));
+
+    CleanupPolicyService.PolicyPage page = service.listPage(10, 2);
+
+    assertEquals(List.of(11L, 12L),
+        page.items().stream().map(view -> view.policy().id()).toList());
+    assertEquals(12L, page.nextAfter());
+    assertEquals("raw-a", page.items().getFirst().repositories().getFirst().name());
+    verify(cleanupDao).listTargets(List.of(11L, 12L));
+    verify(cleanupDao).findSchedules(List.of(11L, 12L));
+  }
+
   private static PolicyCommand command(
       String name,
       RepositoryFormat format,

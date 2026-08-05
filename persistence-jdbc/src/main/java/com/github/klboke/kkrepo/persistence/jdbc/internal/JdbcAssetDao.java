@@ -19,6 +19,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.internal.support.EnumColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.HashColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcInserts;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -47,11 +48,30 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
   private final JsonColumns jsonColumns;
   private final ArtifactChangeDao artifactChanges;
   private final boolean artifactChangeEventsEnabled;
+  private final String materializedCteModifier;
+  private final String unboundAssetRepositoryExpression;
   private final RowMapper<AssetBlobRecord> blobRowMapper;
   private final RowMapper<AssetRecord> assetRowMapper;
 
   public JdbcAssetDao(JdbcTemplate jdbcTemplate, JsonColumns jsonColumns) {
-    this(jdbcTemplate, jsonColumns, new JdbcArtifactChangeDao(jdbcTemplate), true);
+    this(
+        jdbcTemplate,
+        jsonColumns,
+        new JdbcArtifactChangeDao(jdbcTemplate),
+        true,
+        "",
+        "repository_id");
+  }
+
+  public JdbcAssetDao(
+      JdbcTemplate jdbcTemplate, JsonColumns jsonColumns, DatabaseDialect databaseDialect) {
+    this(
+        jdbcTemplate,
+        jsonColumns,
+        new JdbcArtifactChangeDao(jdbcTemplate),
+        true,
+        databaseDialect.materializedCteModifier(),
+        databaseDialect.unboundAssetRepositoryExpression());
   }
 
   @Autowired
@@ -59,12 +79,15 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
       JdbcTemplate jdbcTemplate,
       JsonColumns jsonColumns,
       ArtifactChangeDao artifactChanges,
-      ArtifactChangeEventMode artifactChangeEventMode) {
+      ArtifactChangeEventMode artifactChangeEventMode,
+      DatabaseDialect databaseDialect) {
     this(
         jdbcTemplate,
         jsonColumns,
         artifactChanges,
-        artifactChangeEventMode.enabled());
+        artifactChangeEventMode.enabled(),
+        databaseDialect.materializedCteModifier(),
+        databaseDialect.unboundAssetRepositoryExpression());
   }
 
   JdbcAssetDao(
@@ -72,10 +95,28 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
       JsonColumns jsonColumns,
       ArtifactChangeDao artifactChanges,
       boolean artifactChangeEventsEnabled) {
+    this(
+        jdbcTemplate,
+        jsonColumns,
+        artifactChanges,
+        artifactChangeEventsEnabled,
+        "",
+        "repository_id");
+  }
+
+  private JdbcAssetDao(
+      JdbcTemplate jdbcTemplate,
+      JsonColumns jsonColumns,
+      ArtifactChangeDao artifactChanges,
+      boolean artifactChangeEventsEnabled,
+      String materializedCteModifier,
+      String unboundAssetRepositoryExpression) {
     this.jdbcTemplate = jdbcTemplate;
     this.jsonColumns = jsonColumns;
     this.artifactChanges = artifactChanges;
     this.artifactChangeEventsEnabled = artifactChangeEventsEnabled;
+    this.materializedCteModifier = materializedCteModifier;
+    this.unboundAssetRepositoryExpression = unboundAssetRepositoryExpression;
     this.blobRowMapper = (rs, rowNum) -> new AssetBlobRecord(
         rs.getLong("id"),
         rs.getLong("blob_store_id"),
@@ -351,6 +392,15 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
   public List<AssetWithBlob> listUnboundAssetWithBlobPage(
       long repositoryId, long afterAssetId, int maxItems) {
     return jdbcTemplate.query("""
+        WITH bounded AS %s (
+          SELECT id
+          FROM asset
+          WHERE %s = ?
+            AND component_id IS NULL
+            AND id > ?
+          ORDER BY %s, id
+          LIMIT ?
+        )
         SELECT a.*,
                b.id AS joined_blob_id,
                b.blob_store_id AS joined_blob_store_id,
@@ -368,14 +418,15 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
                b.blob_created_at AS joined_blob_created_at,
                b.blob_updated_at AS joined_blob_updated_at,
                b.attributes_json AS joined_blob_attributes_json
-        FROM asset a
+        FROM bounded
+        JOIN asset a ON a.id = bounded.id
         LEFT JOIN asset_blob b ON b.id = a.asset_blob_id
-        WHERE a.repository_id = ?
-          AND a.component_id IS NULL
-          AND a.id > ?
         ORDER BY a.id
-        LIMIT ?
-        """, this::mapAssetWithBlob, repositoryId, Math.max(0, afterAssetId), Math.max(1, maxItems));
+        """.formatted(
+            materializedCteModifier,
+            unboundAssetRepositoryExpression,
+            unboundAssetRepositoryExpression), this::mapAssetWithBlob,
+        repositoryId, Math.max(0, afterAssetId), Math.max(1, maxItems));
   }
 
   @Override

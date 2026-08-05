@@ -154,6 +154,8 @@ public class CleanupRuntimeProperties {
     private int batchSize = 25;
     private int maxBatchesPerRun = 10;
     private int minimumRunsPerPolicy = 10;
+    private int itemBatchSize = 5_000;
+    private Duration clusterInterval = Duration.ofMinutes(55);
 
     public boolean isEnabled() {
       return enabled;
@@ -196,6 +198,22 @@ public class CleanupRuntimeProperties {
 
     public void setMinimumRunsPerPolicy(int minimumRunsPerPolicy) {
       this.minimumRunsPerPolicy = Math.max(1, Math.min(1000, minimumRunsPerPolicy));
+    }
+
+    public int getItemBatchSize() {
+      return itemBatchSize;
+    }
+
+    public void setItemBatchSize(int itemBatchSize) {
+      this.itemBatchSize = Math.max(100, Math.min(50_000, itemBatchSize));
+    }
+
+    public Duration getClusterInterval() {
+      return clusterInterval;
+    }
+
+    public void setClusterInterval(Duration clusterInterval) {
+      this.clusterInterval = positive(clusterInterval, Duration.ofMinutes(55));
     }
   }
 

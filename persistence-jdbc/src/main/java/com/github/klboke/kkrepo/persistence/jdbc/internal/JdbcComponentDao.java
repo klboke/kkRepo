@@ -179,16 +179,14 @@ public class JdbcComponentDao implements com.github.klboke.kkrepo.persistence.jd
           repositoryId,
           limit);
     }
-    String familyTuple = "(" + familyOrder + ")";
+    var cursorClause = componentDialect.cleanupFamilyCursorClause(
+        afterFamily.namespace(), afterFamily.name(), afterFamily.kind());
     List<Object> arguments = new ArrayList<>();
     arguments.add(repositoryId);
-    arguments.addAll(componentDialect.cleanupFamilyCursorValues(
-        afterFamily.namespace(), afterFamily.name(), afterFamily.kind()));
+    arguments.addAll(cursorClause.arguments());
     arguments.add(limit);
     return jdbcTemplate.query(
-        "SELECT * FROM component WHERE repository_id = ? AND " + familyTuple
-            + " > (" + String.join(",", Collections.nCopies(cleanupFamilyOrder.size(), "?"))
-            + ")" + order,
+        "SELECT * FROM component WHERE repository_id = ? AND " + cursorClause.sql() + order,
         rowMapper,
         arguments.toArray());
   }

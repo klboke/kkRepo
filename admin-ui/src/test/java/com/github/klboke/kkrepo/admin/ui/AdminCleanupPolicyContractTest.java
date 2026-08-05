@@ -50,6 +50,8 @@ class AdminCleanupPolicyContractTest {
     assertTrue(index.contains("data-cleanup-panel=\"runs\" role=\"tabpanel\""));
     assertFalse(index.contains("cleanup-section-heading"));
     assertTrue(index.contains("class=\"nx-table cleanup-policy-table\""));
+    assertTrue(index.contains("id=\"cleanup-policy-page-prev\""));
+    assertTrue(index.contains("id=\"cleanup-policy-page-next\""));
     assertTrue(index.contains("class=\"nx-table cleanup-run-table\""));
     assertFalse(index.contains("Try Run scan limit / repository"));
     assertFalse(index.contains("Delete limit / repository"));
@@ -130,6 +132,9 @@ class AdminCleanupPolicyContractTest {
     assertTrue(javascript.contains("Cleanup policy created. Its schedule is paused."));
     assertFalse(javascript.contains("Run a Try Run before enabling its schedule"));
     assertTrue(javascript.contains("/internal/cleanup/runs/${runId}/cancel"));
+    assertTrue(javascript.contains("/internal/cleanup/runs/${runId}/summary"));
+    assertTrue(javascript.contains("/internal/cleanup/runs/${runId}/details?itemsPerRepository=50"));
+    assertFalse(javascript.contains("/repositories/${repository.id}/items?limit=50"));
     assertTrue(javascript.contains("monitorCleanupRun"));
     assertTrue(javascript.contains("cleanupRunProgressLabel"));
     assertTrue(javascript.contains("run.wouldDeleteSubjects"));

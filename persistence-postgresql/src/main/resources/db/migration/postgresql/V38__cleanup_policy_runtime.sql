@@ -247,3 +247,7 @@ CREATE TABLE cleanup_policy_repository_cursor (
 
 CREATE INDEX idx_cleanup_policy_repository_cursor_repository
   ON cleanup_policy_repository_cursor (repository_id, policy_id);
+
+INSERT INTO cache_version (name, version, updated_at)
+VALUES ('cleanup-usage-tracking', 0, CURRENT_TIMESTAMP)
+ON CONFLICT (name) DO NOTHING;

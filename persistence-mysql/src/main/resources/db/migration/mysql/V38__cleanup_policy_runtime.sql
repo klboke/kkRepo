@@ -234,3 +234,6 @@ CREATE TABLE cleanup_policy_repository_cursor (
   CONSTRAINT fk_cleanup_policy_repository_cursor_repository
     FOREIGN KEY (repository_id) REFERENCES repository (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT IGNORE INTO cache_version (name, version, updated_at)
+VALUES ('cleanup-usage-tracking', 0, CURRENT_TIMESTAMP(3));

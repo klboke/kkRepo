@@ -36,6 +36,11 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
   }
 
   @Override
+  public String tableReferenceWithPreferredIndex(String tableName, String indexName) {
+    return tableName + " FORCE INDEX (" + indexName + ")";
+  }
+
+  @Override
   public ComponentPersistenceDialect components() {
     return components;
   }
@@ -149,6 +154,27 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
           binaryPrefix(normalizedName, 384),
           rawSha256(normalizedName),
           binaryPrefix(normalizedKind, 200));
+    }
+
+    @Override
+    public CleanupFamilyCursorClause cleanupFamilyCursorClause(
+        String namespace, String name, String kind) {
+      List<String> expressions = cleanupFamilyOrderExpressions();
+      List<Object> values = cleanupFamilyCursorValues(namespace, name, kind);
+      List<String> alternatives = new ArrayList<>(expressions.size());
+      List<Object> arguments = new ArrayList<>(expressions.size() * (expressions.size() + 1) / 2);
+      for (int rangeColumn = 0; rangeColumn < expressions.size(); rangeColumn++) {
+        List<String> terms = new ArrayList<>(rangeColumn + 1);
+        for (int equalityColumn = 0; equalityColumn < rangeColumn; equalityColumn++) {
+          terms.add(expressions.get(equalityColumn) + " = ?");
+          arguments.add(values.get(equalityColumn));
+        }
+        terms.add(expressions.get(rangeColumn) + " > ?");
+        arguments.add(values.get(rangeColumn));
+        alternatives.add("(" + String.join(" AND ", terms) + ")");
+      }
+      return new CleanupFamilyCursorClause(
+          "(" + String.join(" OR ", alternatives) + ")", arguments);
     }
 
     private static byte[] rawSha256(String value) {

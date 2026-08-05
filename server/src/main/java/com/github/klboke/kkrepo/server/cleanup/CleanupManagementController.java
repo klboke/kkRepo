@@ -5,12 +5,14 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupRun
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupRunItem;
 import com.github.klboke.kkrepo.server.cleanup.CleanupPolicyCapabilities.FormatCapability;
 import com.github.klboke.kkrepo.server.cleanup.CleanupPolicyService.PolicyCommand;
+import com.github.klboke.kkrepo.server.cleanup.CleanupPolicyService.PolicyPage;
 import com.github.klboke.kkrepo.server.cleanup.CleanupPolicyService.PolicyView;
 import com.github.klboke.kkrepo.server.cleanup.CleanupPolicyService.ScheduleCommand;
 import com.github.klboke.kkrepo.server.cleanup.CleanupPolicyService.SchedulePreview;
 import com.github.klboke.kkrepo.server.cleanup.CleanupProtectionService.ProtectionCommand;
 import com.github.klboke.kkrepo.server.cleanup.CleanupProtectionService.ProtectionView;
 import com.github.klboke.kkrepo.server.cleanup.CleanupRunService.RunCommand;
+import com.github.klboke.kkrepo.server.cleanup.CleanupRunService.RunDetailView;
 import com.github.klboke.kkrepo.server.cleanup.CleanupRunService.RunView;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
@@ -59,9 +61,12 @@ public class CleanupManagementController {
   }
 
   @GetMapping("/policies")
-  public List<PolicyView> policies(HttpServletRequest request) {
+  public PolicyPage policies(
+      @RequestParam(name = "after", defaultValue = "0") long after,
+      @RequestParam(name = "limit", defaultValue = "25") int limit,
+      HttpServletRequest request) {
     requireAdmin(request);
-    return policies.list();
+    return policies.listPage(after, limit);
   }
 
   @GetMapping("/policies/{policyId}")
@@ -128,6 +133,22 @@ public class CleanupManagementController {
   public RunView run(@PathVariable("runId") long runId, HttpServletRequest request) {
     requireAdmin(request);
     return runs.getRun(runId);
+  }
+
+  @GetMapping("/runs/{runId}/summary")
+  public CleanupRun runSummary(
+      @PathVariable("runId") long runId, HttpServletRequest request) {
+    requireAdmin(request);
+    return runs.getRunSummary(runId);
+  }
+
+  @GetMapping("/runs/{runId}/details")
+  public RunDetailView runDetails(
+      @PathVariable("runId") long runId,
+      @RequestParam(name = "itemsPerRepository", defaultValue = "50") int itemsPerRepository,
+      HttpServletRequest request) {
+    requireAdmin(request);
+    return runs.getRunDetails(runId, itemsPerRepository);
   }
 
   @PostMapping("/runs/{runId}/cancel")

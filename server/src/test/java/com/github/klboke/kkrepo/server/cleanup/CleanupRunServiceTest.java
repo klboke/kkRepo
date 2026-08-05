@@ -36,7 +36,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
-import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -100,7 +99,7 @@ class CleanupRunServiceTest {
     verify(cleanupDao).listRuns(null, 5, 1);
     verify(cleanupDao).listRuns(7L, 6, 100);
 
-    when(cleanupDao.listRunRepositories(100)).thenReturn(List.of(
+    when(cleanupDao.findRunRepository(100, 200)).thenReturn(Optional.of(
         shard(200, 100, "SUCCEEDED", 1, 1, 1, 1, 0, false, null)));
     service.listItems(100, 200, 9, 0);
     service.listItems(100, 200, 10, 1_000);
@@ -109,6 +108,19 @@ class CleanupRunServiceTest {
     assertThrows(
         CleanupNotFoundException.class,
         () -> service.listItems(100, 999, 0, 10));
+
+    CleanupRun run = run(100, policy, "TRY_RUN", "SUCCEEDED", 100);
+    CleanupRunRepository first = shard(
+        200, 100, "SUCCEEDED", 1, 1, 1, 0, 0, false, null);
+    CleanupRunRepository second = shard(
+        201, 100, "SUCCEEDED", 1, 1, 1, 0, 0, false, null);
+    when(cleanupDao.findRun(100)).thenReturn(Optional.of(run));
+    when(cleanupDao.listRunRepositories(100)).thenReturn(List.of(first, second));
+    when(cleanupDao.listRunItems(List.of(200L, 201L), 200)).thenReturn(Map.of());
+
+    service.getRunDetails(100, 1_000);
+
+    verify(cleanupDao).listRunItems(List.of(200L, 201L), 200);
   }
 
   @Test
@@ -163,8 +175,6 @@ class CleanupRunServiceTest {
         target(1, "releases-a", RepositoryFormat.MAVEN2),
         target(2, "releases-b", RepositoryFormat.MAVEN2)));
     when(cleanupDao.createRun(any())).thenReturn(100L);
-    AtomicLong shardId = new AtomicLong(200);
-    when(cleanupDao.createRunRepository(any())).thenAnswer(ignored -> shardId.getAndIncrement());
     when(cleanupDao.findRun(100)).thenReturn(Optional.of(run(100, policy, "TRY_RUN", "PENDING", 5)));
     when(cleanupDao.listRunRepositories(100)).thenReturn(List.of());
 
@@ -172,11 +182,10 @@ class CleanupRunServiceTest {
 
     assertEquals("PENDING", view.run().state());
     @SuppressWarnings("unchecked")
-    ArgumentCaptor<CleanupRunRepository> shards =
-        ArgumentCaptor.forClass(CleanupRunRepository.class);
-    verify(cleanupDao, org.mockito.Mockito.times(2)).createRunRepository(shards.capture());
+    ArgumentCaptor<List<CleanupRunRepository>> shards = ArgumentCaptor.forClass(List.class);
+    verify(cleanupDao).createRunRepositories(shards.capture());
     assertEquals(List.of(1L, 2L),
-        shards.getAllValues().stream().map(CleanupRunRepository::repositoryId).toList());
+        shards.getValue().stream().map(CleanupRunRepository::repositoryId).toList());
     verify(scanner, never()).scan(any(), any(), any(Integer.class), any(Instant.class));
   }
 

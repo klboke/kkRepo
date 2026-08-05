@@ -70,8 +70,9 @@ Blob GC，不在本文中把尚未实现的恢复窗口标记为已交付。
   合并已经成功提交的重复写，水位单调递增，写失败默认 fail closed；tracking warm-up 与 safety
   lag 防止策略刚启用时删除尚未建立历史水位的内容。
 - 终态运行历史默认保留 90 天且每个策略至少保留最近 10 次。后台任务每轮只锁定并删除有限批次，
-  使用 `SKIP LOCKED` 支持多副本并发；运行 backlog、最老等待年龄、过期 lease、takeover、游标
-  冲突、run 时长和历史回收都提供低基数指标。
+  候选边界只计算一次，再按主键使用 `SKIP LOCKED` 锁定；run item 与 parent run 分开限批，避免
+  外键级联形成无界事务。运行 backlog、最老等待年龄、过期 lease、takeover、游标冲突、run
+  时长和历史回收都提供低基数指标。
 - `scripts/ci/run-client-e2e.sh` 已为 Raw 及现有真实客户端矩阵增加 cleanup gate：在发布/下载
   fixture 完成后，针对对应 hosted 或 proxy 仓库执行 Try Run 和 Execute，要求完整命中、
   零失败和至少一个实际删除，并保存独立运行报告。本分支完成的是门禁实现和静态校验；
@@ -843,6 +844,53 @@ packument/dist-tags；PyPI 要重建 simple index；Docker 要先删除 referenc
   重写和失效一次；其他格式继续走原生单 subject 删除路径。
 - Try Run 每仓库最多扫描 10,000 个 subject，单 run 总预算 50,000；候选批次和返回分页均有
   服务端硬上限，不允许一次装载整个仓库的 subject 集合。
+- 策略列表使用 25 条 keyset 页，并批量读取该页的 target/schedule；run 详情一次请求返回、按
+  50 个 shard 组成一批，每个 shard 最多读取 200 条 decision。Docker manifest 关联查询和所有
+  大 `IN` 参数都按最多 500 个 ID 分批。
+- usage 本地快照每秒只读取一个共享 revision；只有 revision 变化才重载投影。完整 usage 与
+  Quartz reconciliation 通过数据库 maintenance cursor 在集群内限频，策略变更只投递可丢失的
+  节点提示。usage 投影先锁共享 revision 行，再只写新增、删除或向前移动的水位；配置未变化时
+  不更新投影行，也不增加 revision。
+- 历史保留不再对每个候选执行相关 `COUNT`。窗口查询一次求出每个策略的保留边界，随后按主键
+  分批锁定；PostgreSQL 因禁止给含窗口函数的查询直接加 `FOR UPDATE`，候选计算与锁定明确拆成
+  两步。每个事务同时受 parent run 数和 run item 数两个独立上限控制。
+
+### 本地大仓库容量验证（2026-08-05）
+
+`scripts/perf/run-cleanup-large-repository.sh` 会在已有本地 MySQL/PostgreSQL 容器中创建独立的
+`kkrepo_cleanup_perf` 数据库，应用当前全部 migration、造数、执行 `EXPLAIN ANALYZE`、执行一次
+真实有界历史删除，并在成功后删掉该数据库。默认数据集为：100 万 component、110 万 asset
+（100 万绑定 component、10 万未绑定）、100 个仓库、100 个策略、199 个策略绑定、5,001 个 run、
+5,100 个 repository shard 和 60 万个 run item。可通过同名 `CLEANUP_PERF_*` 环境变量缩小或放大，
+但默认门禁必须直接运行：
+
+```bash
+scripts/perf/run-cleanup-large-repository.sh all
+```
+
+本次在 MySQL 8.0.46（128 MiB buffer pool）和 PostgreSQL 17.10（128 MiB shared buffers）的本地
+容器上完成。时间是冷/热页混合的单次观测值，不作为生产 SLO；门禁判断的是访问路径和写入上限：
+
+| 查询 | MySQL 实测 | PostgreSQL 实测 | 验证结论 |
+| --- | ---: | ---: | --- |
+| component 首页 / 中段 keyset，各 1,001 条 | 6.83 / 7.54 ms | 1.53 / 1.51 ms | 两页均命中 `idx_component_cleanup_scan`，无 offset 扫描 |
+| 未绑定 asset 首页 / 中段 keyset，最多 1,001 条 | 70.9 / 3.16 ms | 30.1 / 3.22 ms | 两页均命中 `idx_asset_cleanup_unbound`；PostgreSQL 使用条件表达式索引，避免仓库数据倾斜时误扫全部 NULL component |
+| policy 页 / 25 个策略 targets / schedules | 0.11 / 1.20 / 0.08 ms | 0.07 / 0.57 / 0.09 ms | policy keyset 加两次批量查询，不再逐策略 N+1 |
+| 100 个 shard、每 shard 前 50 条 decision 的单查询上界探针 | 46.2 ms | 39.7 ms | 每个子查询命中 `idx_cleanup_run_item_repository`；生产 DAO 和当前门禁按 50-shard 分批 |
+| 5,001 个 run 的历史候选 | 23.1 ms | 15.9 ms | 使用一次窗口边界；MySQL 无 dependent subquery，PostgreSQL 无 `SubPlan` |
+| 100 行 usage 投影锁定读取 | 0.07 ms | 0.16 ms | 集群限频后才执行；稳定投影由双库 contract 证明 revision 不变且不进入 DML |
+
+写放大探针给 25 个候选 parent run 设置 500 个 item 的事务上限；两种数据库均实际删除
+`500 run item + 5 parent run`，表行数差值与 JDBC 返回值一致，没有通过外键一次级联全部 2,500
+个候选 item。生产默认单事务上限是 25 个 parent run 与 5,000 个 run item；最多 100 个目标仓库
+的产品约束继续限制 parent 删除时的 shard 级联规模。数据库 contract 另用 1,201 个 Docker
+asset ID 验证 500 参数分批路径，并覆盖稳定 usage 投影第二次同步返回未变化且共享 revision 不变。
+表中的 100-shard 数字是为确认 SQL 形态上界而执行的一次性单查询结果；仓库内可重复脚本和生产
+DAO 都使用最多 50 个 shard 的批次，避免动态 SQL 随策略目标数继续增长。
+
+这组结果关闭“本分支没有真实规模造数、查询计划和写放大证据”的缺口。它不替代正式数据分布、
+持续写入下 autovacuum/undo/replication lag、对象存储延迟、跨区域数据库和多小时运行的发布环境
+soak；这些仍保留为上线门禁。
 
 当前 Cleanup 已复用 Browse/API 手工删除语义，后续应把遗留 controller 内部逻辑进一步下沉为
 共享 service，减少不同入口分叉。proxy subject 删除后允许重新回源；group 永远不能把 member
@@ -859,6 +907,8 @@ GET/PUT/DELETE   /internal/cleanup/policies/{policyId}
 POST              /internal/cleanup/policies/{policyId}/runs
 GET               /internal/cleanup/runs
 GET               /internal/cleanup/runs/{runId}
+GET               /internal/cleanup/runs/{runId}/summary
+GET               /internal/cleanup/runs/{runId}/details
 POST              /internal/cleanup/runs/{runId}/cancel
 GET               /internal/cleanup/runs/{runId}/repositories/{runRepositoryId}/items
 GET/POST          /internal/cleanup/protections
@@ -881,11 +931,12 @@ POST/PUT policy body 同时包含规则、target repository ids、execution limi
 依靠 `(policy_id, scheduled_for)` 幂等；手动 run 当前每次请求创建新 run，因此 UI 在收到 `202`
 后只轮询返回的 run id，不自动重放 POST。通用 `Idempotency-Key` 是后续 API 增强项。
 
-run、item 和 protection 列表使用 `after=<id>&limit=<n>` 的稳定 keyset 分页，不使用数据库
-offset；policy/capability 集合当前有服务端上限约束且一次返回。cleanup 业务错误至少包含稳定
+policy、run、item 和 protection 列表使用 `after=<id>&limit=<n>` 的稳定 keyset 分页，不使用数据库
+offset；policy 每页最多 100 条，Admin UI 使用 25 条。cleanup 业务错误至少包含稳定
 `code` 与 message，revision/protection 冲突返回当前版本信息。
 
-Try Run summary 先返回策略级汇总和 repository shard 列表；item 返回 repository、通用 subject
+轮询只调用 run summary；打开详情弹窗时调用一次 details，由服务端按 shard 批量读取前 N 条
+decision，避免浏览器逐仓库请求。item 兼容端点继续提供独立 keyset 分页，返回 repository、通用 subject
 identity、format-specific coordinate、时间、命中规则、保护原因、版本排名、asset count、
 estimated bytes 和 adapter explanation。默认分页，不返回无上限 JSON。
 
@@ -920,7 +971,8 @@ UI 不能把 unsupported criterion 或 regex 编译失败展示为“无匹配�
 
 - Quartz clustered JDBC JobStore 负责 Cron trigger 的跨副本唯一获取；
   `(policy_id, scheduled_for)` 唯一 fire key 是最终幂等屏障。Spring `@Scheduled` 只做
-  policy schedule 到 Quartz 投影的周期 reconciliation。
+  policy schedule 到 Quartz 投影的周期 reconciliation；完整 reconciliation 通过数据库 cursor
+  在集群内至少间隔 5 分钟，策略变更仍可触发低延迟的单策略投影。
 - cleanup repository shard 有 heartbeat、lease expiry 和 fencing token；已有 metadata/index/Blob GC
   worker 继续使用各自原有的可接管机制。旧 cleanup owner 的提交必须因 token 不匹配失败。
 - 同一 repository 同时只允许一个 EXECUTE shard 持有 cleanup lease；来自其他 policy 的 shard
@@ -952,6 +1004,7 @@ kkrepo.cleanup.scheduler.projection-delay-ms=1000
 kkrepo.cleanup.scheduler.projection-initial-delay-ms=1000
 kkrepo.cleanup.scheduler.reconcile-interval-ms=60000
 kkrepo.cleanup.scheduler.reconcile-initial-delay-ms=60000
+kkrepo.cleanup.scheduler.full-reconcile-min-interval-ms=300000
 kkrepo.cleanup.worker.poll-delay-ms=500
 kkrepo.cleanup.worker.initial-delay-ms=1000
 kkrepo.cleanup.worker.batch-size=2
@@ -968,6 +1021,8 @@ kkrepo.cleanup.history.retention=90d
 kkrepo.cleanup.history.batch-size=25
 kkrepo.cleanup.history.max-batches-per-run=10
 kkrepo.cleanup.history.minimum-runs-per-policy=10
+kkrepo.cleanup.history.item-batch-size=5000
+kkrepo.cleanup.history.cluster-interval=55m
 kkrepo.cleanup.history.cleanup-delay=1h
 kkrepo.cleanup.history.initial-delay=5m
 kkrepo.cleanup.usage.projection-delay-ms=60000
@@ -1001,7 +1056,7 @@ spring.quartz.properties.org.quartz.scheduler.instanceId=AUTO
 - `kkrepo_cleanup_lease_takeovers_total`
 - `kkrepo_cleanup_cursor_conflicts_total`
 - `kkrepo_cleanup_run_duration_seconds{outcome,mode,trigger}`
-- `kkrepo_cleanup_history_deleted_runs_total` 与
+- `kkrepo_cleanup_history_deleted_runs_total`、`kkrepo_cleanup_history_deleted_items_total` 与
   `kkrepo_cleanup_history_retention_failures_total`
 - `kkrepo_cleanup_pending_shards`、`kkrepo_cleanup_retry_waiting_shards`、
   `kkrepo_cleanup_running_shards`、`kkrepo_cleanup_expired_running_leases` 与
@@ -1058,7 +1113,9 @@ write failure、Try Run 频繁触及硬上限、反复 takeover、FAILED/PARTIAL
   变化必须 skip；取消与删除事务串行化后 shard 必须可终止。
 - 双 worker claim、crash/takeover、旧 fencing owner 心跳/完成失败由 JDBC contract 覆盖；
   `DatabaseServerSmokeTest` 用两个 Spring context 验证共享 policy、异步 Try Run/Execute 和 Quartz fire。
-- 超大仓库长期 soak、跨区域高延迟数据库和 run history 容量验证属于上线环境门禁，不由单元测试替代。
+- 双数据库百万级本地造数、关键查询计划和有界历史写放大由
+  `scripts/perf/run-cleanup-large-repository.sh` 验证；真实生产分布的长期 soak、跨区域高延迟、
+  持续写入和超大 run history 仍属于上线环境门禁，不由本地探针或单元测试替代。
 
 ### 协议与真实客户端
 
@@ -1104,7 +1161,8 @@ Maven 多模块 fixture 覆盖多个不同版本的 `jackson-*` artifactId；其
   一项发布时间、最后下载时间或 retain 删除条件。
 - format-aware scanner 实现 component/asset/Docker manifest projection、usage attribution 和 capability。
 - 持久 TRY_RUN parent/repository shard、每仓库 scan limit、服务端总硬上限、分页解释和 Admin UI。
-- 真实大仓库影子运行、查询计划和写放大验证作为发布前 soak 门禁，不标记为当前分支已完成。
+- 本地双数据库百万级造数、查询计划和受限写放大已闭环；生产影子流量、长时间 soak、跨区域
+  延迟与恢复压力仍作为发布门禁，不标记为本分支已完成。
 
 ### 已落地 2：全格式手动执行的生产运行基线
 
@@ -1155,7 +1213,7 @@ Maven 多模块 fixture 覆盖多个不同版本的 `jackson-*` artifactId；其
    总硬上限约束；未命中 subject 也计数，达到上限明确返回截断，且不对不完整 family 给出
    删除结论。
 5. 每个 hosted/proxy 仓库都能使用其 adapter 支持的时间、usage、matcher 和 retain 规则；group
-   可绑定策略但只清自有派生内容，绝不级联 member。
+   不持有独立制品，不能绑定清理策略，也绝不通过清理 member 实现隐式级联。
 6. `jackson-*` 示例能对每个 Maven GA 独立保留 N；其他有版本格式也按各自 family 和
    官方版本顺序独立保留，Raw 不伪造版本语义。
 7. Try Run 列出扫描范围内的 subject 和逐条原因；之后有新下载、重发或 tag move 时不会误删。

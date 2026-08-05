@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.server.cleanup.CleanupPolicyService.PolicyCommand;
+import com.github.klboke.kkrepo.server.cleanup.CleanupPolicyService.PolicyPage;
 import com.github.klboke.kkrepo.server.cleanup.CleanupPolicyService.ScheduleCommand;
 import com.github.klboke.kkrepo.server.cleanup.CleanupProtectionService.ProtectionCommand;
 import com.github.klboke.kkrepo.server.cleanup.CleanupRunService.RunCommand;
@@ -57,13 +58,13 @@ class CleanupManagementControllerTest {
     ProtectionCommand protectionCommand = mock(ProtectionCommand.class);
     Instant updatedAt = Instant.parse("2026-08-01T00:00:00Z");
     when(policies.formatCapabilities()).thenReturn(List.of());
-    when(policies.list()).thenReturn(List.of());
+    when(policies.listPage(0, 25)).thenReturn(new PolicyPage(List.of(), null));
     when(runs.listRuns(null, 0, 25)).thenReturn(List.of());
     when(runs.listItems(9, 10, 0, 50)).thenReturn(List.of());
     when(protections.list(0, 50, true)).thenReturn(List.of());
 
     assertEquals(List.of(), controller.capabilities(request));
-    assertEquals(List.of(), controller.policies(request));
+    assertEquals(new PolicyPage(List.of(), null), controller.policies(0, 25, request));
     assertNull(controller.policy(7, request));
     assertNull(controller.previewSchedule(scheduleCommand, request));
     assertEquals(HttpStatus.CREATED, controller.createPolicy(policyCommand, request).getStatusCode());
@@ -74,6 +75,8 @@ class CleanupManagementControllerTest {
         controller.startRun(7, runCommand, request).getStatusCode());
     assertEquals(List.of(), controller.listRuns(null, 0, 25, request));
     assertNull(controller.run(9, request));
+    assertNull(controller.runSummary(9, request));
+    assertNull(controller.runDetails(9, 50, request));
     assertEquals(HttpStatus.ACCEPTED, controller.cancelRun(9, request).getStatusCode());
     assertEquals(List.of(), controller.runItems(9, 10, 0, 50, request));
     assertEquals(List.of(), controller.protections(0, 50, true, request));
@@ -91,6 +94,8 @@ class CleanupManagementControllerTest {
     verify(policies).delete(7, 3);
     verify(runs).startManual(7, runCommand, "admin");
     verify(runs).getRun(9);
+    verify(runs).getRunSummary(9);
+    verify(runs).getRunDetails(9, 50);
     verify(runs).cancel(9);
     verify(protections).get(11);
     verify(protections).create(protectionCommand, "admin");
@@ -129,12 +134,12 @@ class CleanupManagementControllerTest {
   void rejectsMissingAndUnauthorizedSubjects() {
     HttpServletRequest anonymous = mock(HttpServletRequest.class);
     ResponseStatusException unauthenticated = assertThrows(
-        ResponseStatusException.class, () -> controller.policies(anonymous));
+        ResponseStatusException.class, () -> controller.policies(0, 25, anonymous));
     assertEquals(HttpStatus.UNAUTHORIZED, unauthenticated.getStatusCode());
 
     when(security.decide(actor.permissionSubject(), "nexus:*")).thenReturn(AccessDecision.deny("no"));
     ResponseStatusException forbidden = assertThrows(
-        ResponseStatusException.class, () -> controller.policies(request));
+        ResponseStatusException.class, () -> controller.policies(0, 25, request));
     assertEquals(HttpStatus.FORBIDDEN, forbidden.getStatusCode());
   }
 }

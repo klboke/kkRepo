@@ -36,6 +36,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Repository
 public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao {
+  private static final int ASSET_ID_QUERY_BATCH_SIZE = 500;
   private final JdbcTemplate jdbcTemplate;
   private final JsonColumns jsonColumns;
   private final RowMapper<DockerManifestRecord> manifestMapper;
@@ -151,15 +152,19 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
     if (ids.isEmpty()) {
       return Map.of();
     }
-    List<Object> args = new ArrayList<>(ids);
     Map<Long, DockerManifestRecord> byAssetId = new LinkedHashMap<>();
-    jdbcTemplate.query("""
-        SELECT *
-        FROM docker_manifest
-        WHERE asset_id IN (""" + placeholders(ids.size()) + """
-          )
-          AND deleted_at IS NULL
-        """, manifestMapper, args.toArray()).forEach(row -> byAssetId.put(row.assetId(), row));
+    for (int start = 0; start < ids.size(); start += ASSET_ID_QUERY_BATCH_SIZE) {
+      List<Long> batch = ids.subList(
+          start, Math.min(ids.size(), start + ASSET_ID_QUERY_BATCH_SIZE));
+      jdbcTemplate.query("""
+          SELECT *
+          FROM docker_manifest
+          WHERE asset_id IN (""" + placeholders(batch.size()) + """
+            )
+            AND deleted_at IS NULL
+          """, manifestMapper, batch.toArray())
+          .forEach(row -> byAssetId.put(row.assetId(), row));
+    }
     return byAssetId;
   }
 

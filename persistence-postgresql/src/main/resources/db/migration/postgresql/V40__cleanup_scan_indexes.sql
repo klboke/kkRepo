@@ -12,8 +12,13 @@ CREATE INDEX CONCURRENTLY idx_component_cleanup_scan
 
 DROP INDEX CONCURRENTLY IF EXISTS idx_asset_cleanup_unbound;
 CREATE INDEX CONCURRENTLY idx_asset_cleanup_unbound
-  ON asset (repository_id, id)
+  ON asset ((CASE WHEN component_id IS NULL THEN repository_id END), id)
   WHERE component_id IS NULL;
+
+-- The expression has index-local distribution statistics for unbound assets. Plain
+-- (repository_id, id) inherits the whole table's repository skew and can make PostgreSQL scan
+-- every NULL entry through idx_asset_component after a large write burst.
+ANALYZE asset;
 
 DROP INDEX CONCURRENTLY IF EXISTS idx_docker_manifest_cleanup;
 CREATE INDEX CONCURRENTLY idx_docker_manifest_cleanup

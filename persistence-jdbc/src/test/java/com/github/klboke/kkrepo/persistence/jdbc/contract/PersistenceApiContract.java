@@ -233,10 +233,16 @@ public abstract class PersistenceApiContract {
         now,
         now));
 
+    assertEquals(List.of(policyId), cleanup.listPolicies(0, 10).stream()
+        .map(CleanupPolicyDao.CleanupPolicy::id).toList());
+    assertEquals(Set.of(policyId), cleanup.findPolicies(List.of(policyId, policyId, -1L)).keySet());
     assertEquals(2, cleanup.listTargets(policyId).size());
+    assertEquals(2, cleanup.listTargets(List.of(policyId, policyId)).get(policyId).size());
     assertEquals(
         "0 0 10 * * ?",
         cleanup.findSchedule(policyId).orElseThrow().cronExpression());
+    assertEquals("0 0 10 * * ?",
+        cleanup.findSchedules(List.of(policyId, policyId)).get(policyId).cronExpression());
     assertEquals(1, cleanup.listSchedules().size());
     cleanup.upsertSchedule(new CleanupPolicyDao.CleanupSchedule(
         policyId,
@@ -349,6 +355,10 @@ public abstract class PersistenceApiContract {
     assertEquals("fixture:1.0.0", persistedItem.displayName());
     assertEquals("KEEP_PROTECTED", persistedItem.decision());
     assertEquals(84, persistedItem.estimatedBytes());
+    assertEquals("KEEP_PROTECTED",
+        cleanup.listRunItems(List.of(shardId, shardId), 10)
+            .get(shardId).getFirst().decision());
+    assertEquals(shardId, cleanup.findRunRepository(runId, shardId).orElseThrow().id());
     assertFalse(cleanup.listRuns(null, 0, 10).isEmpty());
 
     cleanup.deleteSchedule(policyId);
@@ -402,7 +412,13 @@ public abstract class PersistenceApiContract {
         base.minusSeconds(3_600),
         Map.of()));
 
-    cleanup.synchronizeUsageTracking(Map.of(firstRepositoryId, base.minusSeconds(60)), base);
+    assertTrue(cleanup.synchronizeUsageTracking(
+        Map.of(firstRepositoryId, base.minusSeconds(60)), base));
+    long usageTrackingRevision = cleanup.usageTrackingRevision();
+    assertFalse(cleanup.synchronizeUsageTracking(
+        Map.of(firstRepositoryId, base.minusSeconds(60)), base.plusSeconds(30)));
+    assertEquals(usageTrackingRevision, cleanup.usageTrackingRevision(),
+        "an unchanged usage projection must not bump its shared revision");
     assertEquals(
         CleanupPolicyDao.CleanupUsageWriteOutcome.WRITTEN,
         inTransaction(() -> cleanup.recordAssetUsage(
@@ -719,6 +735,32 @@ public abstract class PersistenceApiContract {
       long runId = cleanup.createRun(cleanupRun(policyId, "TRY_RUN", base.plusSeconds(index)));
       long shardId = cleanup.createRunRepository(cleanupShard(
           runId, repositoryId, "cleanup-history-contract", base.plusSeconds(index)));
+      if (index == 0) {
+        List<CleanupPolicyDao.CleanupRunItem> items = new ArrayList<>();
+        for (int itemIndex = 0; itemIndex < 3; itemIndex++) {
+          String subjectKey = "history:" + itemIndex;
+          items.add(new CleanupPolicyDao.CleanupRunItem(
+              null,
+              shardId,
+              "ASSET",
+              subjectKey,
+              PersistenceHashes.sha256(subjectKey),
+              "history",
+              subjectKey,
+              null,
+              subjectKey,
+              null,
+              base,
+              1,
+              1,
+              "WOULD_DELETE",
+              Map.of(),
+              null,
+              base,
+              base));
+        }
+        cleanup.insertRunItems(items);
+      }
       Instant completedAt = base.plusSeconds(100 + index);
       cleanup.completeRunRepository(
           shardId, "SUCCEEDED", 1, 0, 0, 0, 0, false, null, completedAt);
@@ -726,8 +768,15 @@ public abstract class PersistenceApiContract {
           runId, "SUCCEEDED", 1, 0, 0, 0, 0, 0, null, completedAt));
     }
 
-    assertEquals(1, inTransaction(() -> cleanup.deleteTerminalRunsBefore(
-        base.plusSeconds(1_000), 1, 2)));
+    CleanupPolicyDao.CleanupHistoryPruneResult firstBatch = inTransaction(() ->
+        cleanup.pruneTerminalRunHistory(base.plusSeconds(1_000), 1, 2, 2));
+    assertEquals(0, firstBatch.deletedRuns());
+    assertEquals(2, firstBatch.deletedRunItems());
+    assertEquals(4, cleanup.listRuns(policyId, 0, 100).size());
+    CleanupPolicyDao.CleanupHistoryPruneResult secondBatch = inTransaction(() ->
+        cleanup.pruneTerminalRunHistory(base.plusSeconds(1_000), 1, 2, 2));
+    assertEquals(1, secondBatch.deletedRuns());
+    assertEquals(1, secondBatch.deletedRunItems());
     assertEquals(3, cleanup.listRuns(policyId, 0, 100).size());
     assertEquals(1, inTransaction(() -> cleanup.deleteTerminalRunsBefore(
         base.plusSeconds(1_000), 10, 2)));
@@ -4620,6 +4669,15 @@ public abstract class PersistenceApiContract {
     assertEquals(List.of("latest"), registry.listTagsForManifests(
         List.of(manifest.id(), manifest.id(), 999_999L)).get(manifest.id()).stream()
         .map(DockerTagRecord::tag).toList());
+    List<Long> largeAssetIdBatch = new ArrayList<>();
+    largeAssetIdBatch.add(assetId);
+    for (long candidateId = 1_000_000; candidateId < 1_001_200; candidateId++) {
+      largeAssetIdBatch.add(candidateId);
+    }
+    assertEquals(
+        manifest.id(),
+        registry.findManifestsByAssetIds(largeAssetIdBatch).get(assetId).id(),
+        "large cleanup candidate sets must be read through bounded IN-query batches");
     assertTrue(registry.listTagsForManifests(null).isEmpty());
     assertEquals("latest", inTransaction(() ->
         registry.listTagsForManifestForUpdate(manifest.id())).getFirst().tag());

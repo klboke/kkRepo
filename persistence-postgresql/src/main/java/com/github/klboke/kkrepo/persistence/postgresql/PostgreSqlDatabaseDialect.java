@@ -37,6 +37,16 @@ public final class PostgreSqlDatabaseDialect implements DatabaseDialect {
   }
 
   @Override
+  public String materializedCteModifier() {
+    return "MATERIALIZED";
+  }
+
+  @Override
+  public String unboundAssetRepositoryExpression() {
+    return "CASE WHEN component_id IS NULL THEN repository_id END";
+  }
+
+  @Override
   public ComponentPersistenceDialect components() {
     return components;
   }

@@ -126,6 +126,14 @@ public class CleanupMetrics {
         .increment(deletedRuns);
   }
 
+  void retentionItems(int deletedItems) {
+    if (deletedItems <= 0) return;
+    Counter.builder("kkrepo_cleanup_history_deleted_items_total")
+        .description("Cleanup decision rows deleted in bounded history-retention batches")
+        .register(registry)
+        .increment(deletedItems);
+  }
+
   void retentionFailure() {
     Counter.builder("kkrepo_cleanup_history_retention_failures_total")
         .description("Cleanup history retention failures")

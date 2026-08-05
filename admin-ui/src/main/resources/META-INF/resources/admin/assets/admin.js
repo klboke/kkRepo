@@ -10,6 +10,8 @@ let blobStores = [];
 let cleanupPolicies = [];
 let cleanupCapabilities = [];
 let cleanupRuns = [];
+const CLEANUP_POLICY_PAGE_SIZE = 25;
+let cleanupPolicyPage = { after: 0, cursors: [0], page: 0, nextAfter: null };
 let editingCleanupPolicyId = null;
 let cleanupTryRunPolicyId = null;
 let cleanupTryRunTrigger = null;
@@ -23,6 +25,7 @@ let cleanupRunDetailTrigger = null;
 let cleanupRunDetailLoadSequence = 0;
 let cleanupRunDetailItemGroups = [];
 let cleanupRunDetailItemsLoaded = false;
+let cleanupRunDetailView = null;
 let cleanupRepositorySelection = new Set();
 let cleanupRepositoryFilter = "";
 let cleanupSchedulePreviewTimer = null;
@@ -5493,6 +5496,11 @@ function handleCleanupPolicyActionMenuKeydown(event) {
 function renderCleanupPolicies() {
   closeCleanupPolicyActionMenu();
   const body = document.getElementById("cleanup-policy-table");
+  document.getElementById("cleanup-policy-page-summary").textContent =
+    `Page ${cleanupPolicyPage.page + 1}`;
+  document.getElementById("cleanup-policy-page-prev").disabled = cleanupPolicyPage.page === 0;
+  document.getElementById("cleanup-policy-page-next").disabled =
+    cleanupPolicyPage.nextAfter == null;
   if (!cleanupPolicies.length) {
     body.innerHTML = '<tr><td colspan="7" class="empty-cell">No cleanup policies yet.</td></tr>';
     return;
@@ -5568,10 +5576,13 @@ function renderCleanupRuns() {
   }).join("");
 }
 
-async function loadCleanupPolicies() {
+async function loadCleanupPolicies(options = {}) {
+  if (options.resetPage) {
+    cleanupPolicyPage = { after: 0, cursors: [0], page: 0, nextAfter: null };
+  }
   try {
     const [policyResponse, capabilityResponse, repositoryResponse, runResponse] = await Promise.all([
-      fetch("/internal/cleanup/policies"),
+      fetch(`/internal/cleanup/policies?after=${encodeURIComponent(cleanupPolicyPage.after)}&limit=${CLEANUP_POLICY_PAGE_SIZE}`),
       fetch("/internal/cleanup/capabilities"),
       fetch("/internal/repositories?purpose=admin"),
       fetch("/internal/cleanup/runs?limit=25")
@@ -5580,7 +5591,9 @@ async function loadCleanupPolicies() {
     if (!capabilityResponse.ok) throw new Error(await responseErrorMessage(capabilityResponse));
     if (!repositoryResponse.ok) throw new Error(await responseErrorMessage(repositoryResponse));
     if (!runResponse.ok) throw new Error(await responseErrorMessage(runResponse));
-    cleanupPolicies = await policyResponse.json();
+    const policyPage = await policyResponse.json();
+    cleanupPolicies = policyPage.items || [];
+    cleanupPolicyPage.nextAfter = policyPage.nextAfter ?? null;
     cleanupCapabilities = await capabilityResponse.json();
     repositories = await repositoryResponse.json();
     cleanupRuns = await runResponse.json();
@@ -5589,6 +5602,19 @@ async function loadCleanupPolicies() {
   } catch (error) {
     showToast(`Cleanup policies failed to load: ${error.message}`, "error");
   }
+}
+
+async function changeCleanupPolicyPage(direction) {
+  if (direction === "next") {
+    if (cleanupPolicyPage.nextAfter == null) return;
+    cleanupPolicyPage.cursors[cleanupPolicyPage.page + 1] = cleanupPolicyPage.nextAfter;
+    cleanupPolicyPage.page += 1;
+  } else {
+    if (cleanupPolicyPage.page === 0) return;
+    cleanupPolicyPage.page -= 1;
+  }
+  cleanupPolicyPage.after = cleanupPolicyPage.cursors[cleanupPolicyPage.page] || 0;
+  await loadCleanupPolicies();
 }
 
 function cleanupRepositoryCandidates() {
@@ -6290,19 +6316,24 @@ async function monitorCleanupRun(runId, label) {
   const token = ++cleanupRunPollToken;
   while (token === cleanupRunPollToken) {
     await new Promise((resolve) => window.setTimeout(resolve, 1000));
-    const response = await fetch(`/internal/cleanup/runs/${runId}`);
+    const response = await fetch(`/internal/cleanup/runs/${runId}/summary`);
     if (!response.ok) {
       showToast(`${label} status refresh failed: ${await responseErrorMessage(response)}`, "error");
       return;
     }
-    const view = await response.json();
-    updateCleanupRunInList(view.run);
+    const run = await response.json();
+    updateCleanupRunInList(run);
     if (String(activeCleanupRunDetailId) === String(runId)) {
-      await renderCleanupRun(view, { reloadItems: cleanupRunTerminal(view.run?.state) });
+      if (cleanupRunTerminal(run?.state)) {
+        const detail = await loadCleanupRunDetails(runId);
+        if (detail) await renderCleanupRun(detail, { reloadItems: true });
+      } else if (cleanupRunDetailView) {
+        await renderCleanupRun({ ...cleanupRunDetailView, run });
+      }
     }
-    if (cleanupRunTerminal(view.run?.state)) {
-      const succeeded = String(view.run.state).startsWith("SUCCEEDED");
-      showToast(`${label} finished with state ${view.run.state}.`, succeeded ? "ok" : "error");
+    if (cleanupRunTerminal(run?.state)) {
+      const succeeded = String(run.state).startsWith("SUCCEEDED");
+      showToast(`${label} finished with state ${run.state}.`, succeeded ? "ok" : "error");
       await loadCleanupPolicies();
       return;
     }
@@ -6314,6 +6345,7 @@ function showCleanupRunDetail(runId, trigger = null) {
   cleanupRunDetailTrigger = trigger;
   cleanupRunDetailItemGroups = [];
   cleanupRunDetailItemsLoaded = false;
+  cleanupRunDetailView = null;
   document.getElementById("cleanup-run-detail-title").textContent = `Cleanup run #${runId}`;
   document.getElementById("cleanup-run-detail-content").innerHTML = '<p class="form-note">Loading run details…</p>';
   openFormModal("cleanup-run-detail");
@@ -6326,6 +6358,7 @@ function hideCleanupRunDetail(options = {}) {
   cleanupRunDetailTrigger = null;
   cleanupRunDetailItemGroups = [];
   cleanupRunDetailItemsLoaded = false;
+  cleanupRunDetailView = null;
   cleanupRunDetailLoadSequence++;
   closeFormModal("cleanup-run-detail");
   if (options.restoreFocus !== false && trigger?.isConnected) trigger.focus();
@@ -6335,9 +6368,8 @@ async function viewCleanupRun(runId, trigger = null) {
   showCleanupRunDetail(runId, trigger);
   const sequence = ++cleanupRunDetailLoadSequence;
   try {
-    const response = await fetch(`/internal/cleanup/runs/${runId}`);
-    if (!response.ok) throw new Error(await responseErrorMessage(response));
-    const view = await response.json();
+    const view = await loadCleanupRunDetails(runId);
+    if (!view) throw new Error("Cleanup run details are unavailable");
     if (sequence !== cleanupRunDetailLoadSequence
         || String(activeCleanupRunDetailId) !== String(runId)) return;
     updateCleanupRunInList(view.run);
@@ -6360,7 +6392,8 @@ async function cancelCleanupRun(runId) {
     const view = await response.json();
     updateCleanupRunInList(view.run);
     if (String(activeCleanupRunDetailId) === String(runId)) {
-      await renderCleanupRun(view, { reloadItems: true });
+      const detail = await loadCleanupRunDetails(runId);
+      if (detail) await renderCleanupRun(detail, { reloadItems: true });
     }
     showToast(`Cancellation requested for cleanup run #${runId}.`, "ok");
     if (!cleanupRunTerminal(view.run?.state)) monitorCleanupRun(runId, "Cleanup run");
@@ -6370,23 +6403,11 @@ async function cancelCleanupRun(runId) {
   }
 }
 
-async function loadCleanupRunItemGroups(runId, repositories) {
-  const groups = [];
-  const batchSize = 6;
-  for (let index = 0; index < repositories.length; index += batchSize) {
-    const batch = repositories.slice(index, index + batchSize);
-    const loaded = await Promise.all(batch.map(async (repository) => {
-      try {
-        const response = await fetch(`/internal/cleanup/runs/${runId}/repositories/${repository.id}/items?limit=50`);
-        if (!response.ok) throw new Error(await responseErrorMessage(response));
-        return { repository, items: await response.json(), loadError: null };
-      } catch (error) {
-        return { repository, items: [], loadError: error.message };
-      }
-    }));
-    groups.push(...loaded);
-  }
-  return groups;
+async function loadCleanupRunDetails(runId) {
+  const response = await fetch(
+    `/internal/cleanup/runs/${runId}/details?itemsPerRepository=50`);
+  if (!response.ok) throw new Error(await responseErrorMessage(response));
+  return response.json();
 }
 
 function cleanupRunRuleSnapshot(criteria = {}) {
@@ -6424,9 +6445,15 @@ async function renderCleanupRun(view, options = {}) {
   const renderSequence = ++cleanupRunDetailLoadSequence;
   const repositories = view.repositories || [];
   if (options.reloadItems || !cleanupRunDetailItemsLoaded) {
-    cleanupRunDetailItemGroups = await loadCleanupRunItemGroups(run.id, repositories);
+    const itemsByRepository = view.itemsByRepository || {};
+    cleanupRunDetailItemGroups = repositories.map((repository) => ({
+      repository,
+      items: itemsByRepository[String(repository.id)] || itemsByRepository[repository.id] || [],
+      loadError: null
+    }));
     cleanupRunDetailItemsLoaded = true;
   }
+  cleanupRunDetailView = view;
   if (renderSequence !== cleanupRunDetailLoadSequence
       || String(activeCleanupRunDetailId) !== String(run.id)) return;
 
@@ -6708,6 +6735,10 @@ document.getElementById("repository-table").addEventListener("click", (event) =>
 });
 document.getElementById("create-cleanup-policy-button").addEventListener("click", showCreateCleanupPolicyForm);
 document.getElementById("refresh-cleanup-policy-button").addEventListener("click", loadCleanupPolicies);
+document.getElementById("cleanup-policy-page-prev").addEventListener(
+  "click", () => changeCleanupPolicyPage("prev"));
+document.getElementById("cleanup-policy-page-next").addEventListener(
+  "click", () => changeCleanupPolicyPage("next"));
 document.getElementById("cancel-cleanup-policy-button").addEventListener("click", hideCleanupPolicyForm);
 document.getElementById("cleanup-policy-form").addEventListener("submit", saveCleanupPolicy);
 document.getElementById("cancel-cleanup-try-run-button").addEventListener("click", hideCleanupTryRunDialog);

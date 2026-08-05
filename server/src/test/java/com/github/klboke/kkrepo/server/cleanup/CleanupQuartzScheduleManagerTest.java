@@ -121,8 +121,7 @@ class CleanupQuartzScheduleManagerTest {
     JobKey unrelated = JobKey.jobKey("maintenance", CleanupQuartzScheduleManager.GROUP);
     JobKey malformed = JobKey.jobKey("policy-invalid", CleanupQuartzScheduleManager.GROUP);
     when(cleanupDao.listSchedules()).thenReturn(List.of(persisted));
-    when(cleanupDao.findSchedule(7)).thenReturn(Optional.of(persisted));
-    when(cleanupDao.findPolicy(7)).thenReturn(Optional.of(policy("PAUSED")));
+    when(cleanupDao.findPolicies(List.of(7L))).thenReturn(Map.of(7L, policy("PAUSED")));
     when(scheduler.getJobKeys(any())).thenReturn(Set.of(
         CleanupQuartzScheduleManager.jobKey(7), orphan, unrelated, malformed));
     CleanupQuartzScheduleManager manager = new CleanupQuartzScheduleManager(
@@ -132,6 +131,7 @@ class CleanupQuartzScheduleManagerTest {
 
     verify(scheduler).deleteJob(CleanupQuartzScheduleManager.jobKey(7));
     verify(scheduler).deleteJob(orphan);
+    verify(cleanupDao).findPolicies(List.of(7L));
     verify(scheduler, never()).deleteJob(unrelated);
     verify(scheduler, never()).deleteJob(malformed);
   }

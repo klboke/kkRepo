@@ -6,7 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -21,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -48,7 +51,11 @@ class CleanupUsageTrackingServiceTest {
     service.reconcilePolicyProjection();
 
     verify(transactions).executeWithoutResult(any());
-    verify(cleanupDao).synchronizeUsageTracking(Map.of(), now);
+    InOrder projectionOrder = inOrder(cleanupDao);
+    projectionOrder.verify(cleanupDao).lockUsageTrackingProjection();
+    projectionOrder.verify(cleanupDao).listUsageTrackingRepositories();
+    projectionOrder.verify(cleanupDao).listPolicies(0, 500);
+    projectionOrder.verify(cleanupDao).synchronizeUsageTracking(Map.of(), now);
   }
 
   @Test
@@ -101,14 +108,14 @@ class CleanupUsageTrackingServiceTest {
     when(cleanupDao.listUsageTrackingRepositories()).thenReturn(List.of(
         new CleanupPolicyDao.UsageTrackingRepository(10, existingStart),
         new CleanupPolicyDao.UsageTrackingRepository(11, now.minusSeconds(60))));
-    when(cleanupDao.listPolicies()).thenReturn(List.of(
+    when(cleanupDao.listPolicies(0, 500)).thenReturn(List.of(
         policy(7, Map.of("lastDownloadedOlderThanDays", 30)),
         policy(8, Map.of("publishedOlderThanDays", 30))));
-    when(cleanupDao.listTargets(7)).thenReturn(List.of(
+    when(cleanupDao.listTargets(List.of(7L))).thenReturn(Map.of(7L, List.of(
         new CleanupPolicyDao.TargetRepository(
             10, "existing", RepositoryFormat.RAW, RepositoryType.HOSTED, true),
         new CleanupPolicyDao.TargetRepository(
-            12, "new", RepositoryFormat.RAW, RepositoryType.PROXY, true)));
+            12, "new", RepositoryFormat.RAW, RepositoryType.PROXY, true))));
     CleanupUsageTrackingService service = new CleanupUsageTrackingService(
         cleanupDao, metrics, Clock.fixed(now, ZoneOffset.UTC), transactions);
 
@@ -124,6 +131,9 @@ class CleanupUsageTrackingServiceTest {
     assertEquals(existingStart, service.trackingStartedAt(10));
     assertNull(service.trackingStartedAt(999));
     verify(metrics).trackedRepositories(2);
+
+    service.refreshLocalSnapshot();
+    verify(cleanupDao, times(2)).listUsageTrackingRepositories();
 
     service.reconcileAfterCommit();
     verify(transactions).executeWithoutResult(any());

@@ -17,6 +17,7 @@ import java.util.Comparator;
 import java.util.Date;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -80,7 +81,17 @@ public class CleanupPolicyService {
   }
 
   public List<PolicyView> list() {
-    return cleanupDao.listPolicies().stream().map(this::view).toList();
+    return listPage(0, 100).items();
+  }
+
+  public PolicyPage listPage(long afterId, int limit) {
+    int safeLimit = Math.min(Math.max(1, limit), 100);
+    List<CleanupPolicy> rows = cleanupDao.listPolicies(Math.max(0, afterId), safeLimit + 1);
+    boolean hasMore = rows.size() > safeLimit;
+    List<CleanupPolicy> page = hasMore ? rows.subList(0, safeLimit) : rows;
+    List<PolicyView> items = views(page);
+    Long nextAfter = hasMore && !page.isEmpty() ? page.get(page.size() - 1).id() : null;
+    return new PolicyPage(items, nextAfter);
   }
 
   public PolicyView get(long policyId) {
@@ -213,6 +224,41 @@ public class CleanupPolicyService {
 
   private PolicyView view(CleanupPolicy policy) {
     CleanupSchedule persistedSchedule = cleanupDao.findSchedule(policy.id()).orElse(null);
+    FormatCapability capability = capabilities.all().stream()
+        .filter(item -> item.format() == policy.format())
+        .findFirst()
+        .orElseThrow();
+    return new PolicyView(
+        policy,
+        cleanupDao.listTargets(policy.id()),
+        scheduleView(
+            persistedSchedule,
+            persistedSchedule != null && persistedSchedule.enabled() ? databaseNow() : null),
+        capability);
+  }
+
+  private List<PolicyView> views(List<CleanupPolicy> policies) {
+    if (policies == null || policies.isEmpty()) return List.of();
+    List<Long> policyIds = policies.stream().map(CleanupPolicy::id).toList();
+    Map<Long, List<TargetRepository>> targets = cleanupDao.listTargets(policyIds);
+    Map<Long, CleanupSchedule> schedules = cleanupDao.findSchedules(policyIds);
+    Map<RepositoryFormat, FormatCapability> capabilitiesByFormat = new LinkedHashMap<>();
+    capabilities.all().forEach(capability -> capabilitiesByFormat.put(
+        capability.format(), capability));
+    Instant evaluatedAt = schedules.values().stream().anyMatch(CleanupSchedule::enabled)
+        ? databaseNow()
+        : null;
+    return policies.stream().map(policy -> new PolicyView(
+        policy,
+        targets.getOrDefault(policy.id(), List.of()),
+        scheduleView(schedules.get(policy.id()), evaluatedAt),
+        Objects.requireNonNull(
+            capabilitiesByFormat.get(policy.format()),
+            "cleanup capability is missing for " + policy.format())))
+        .toList();
+  }
+
+  private CleanupSchedule scheduleView(CleanupSchedule persistedSchedule, Instant evaluatedAt) {
     CleanupSchedule schedule = persistedSchedule == null
         ? null
         : new CleanupSchedule(
@@ -224,18 +270,11 @@ public class CleanupPolicyService {
                 ? nextRunAtOrNull(new ScheduleCommand(
                     persistedSchedule.cronExpression(),
                     persistedSchedule.timeZone(),
-                    true), databaseNow())
+                    true), evaluatedAt)
                 : null,
             persistedSchedule.createdAt(),
             persistedSchedule.updatedAt());
-    return new PolicyView(
-        policy,
-        cleanupDao.listTargets(policy.id()),
-        schedule,
-        capabilities.all().stream()
-            .filter(item -> item.format() == policy.format())
-            .findFirst()
-            .orElseThrow());
+    return schedule;
   }
 
   private CleanupPolicy requirePolicy(long policyId) {
@@ -460,6 +499,9 @@ public class CleanupPolicyService {
       List<TargetRepository> repositories,
       CleanupSchedule schedule,
       FormatCapability capability) {
+  }
+
+  public record PolicyPage(List<PolicyView> items, Long nextAfter) {
   }
 
   private record ValidatedCommand(

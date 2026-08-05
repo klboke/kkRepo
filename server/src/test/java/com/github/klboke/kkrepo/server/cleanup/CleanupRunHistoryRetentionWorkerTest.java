@@ -6,6 +6,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupHistoryPruneResult;
 import java.time.Instant;
 import org.junit.jupiter.api.Test;
 
@@ -21,13 +22,17 @@ class CleanupRunHistoryRetentionWorkerTest {
     Instant now = Instant.parse("2026-08-01T00:00:00Z");
     Instant cutoff = Instant.parse("2026-05-03T00:00:00Z");
     when(cleanupDao.currentTime()).thenReturn(now);
-    when(cleanupDao.deleteTerminalRunsBefore(cutoff, 2, 5)).thenReturn(2, 1);
+    when(cleanupDao.pruneTerminalRunHistory(cutoff, 2, 5, 5_000)).thenReturn(
+        new CleanupHistoryPruneResult(2, 5_000),
+        new CleanupHistoryPruneResult(1, 10),
+        new CleanupHistoryPruneResult(0, 0));
 
     new CleanupRunHistoryRetentionWorker(cleanupDao, properties, metrics).runOnce();
 
-    verify(cleanupDao, org.mockito.Mockito.times(2))
-        .deleteTerminalRunsBefore(cutoff, 2, 5);
+    verify(cleanupDao, org.mockito.Mockito.times(3))
+        .pruneTerminalRunHistory(cutoff, 2, 5, 5_000);
     verify(metrics).retention(3);
+    verify(metrics).retentionItems(5_010);
   }
 
   @Test

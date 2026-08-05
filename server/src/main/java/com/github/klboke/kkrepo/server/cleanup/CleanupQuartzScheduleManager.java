@@ -5,11 +5,14 @@ import static com.github.klboke.kkrepo.server.cleanup.CleanupQuartzJob.POLICY_RE
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupSchedule;
+import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupPolicy;
+import com.github.klboke.kkrepo.persistence.jdbc.api.MaintenanceCursorDao;
 import java.time.ZoneId;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.TimeZone;
+import java.util.OptionalLong;
 import java.util.concurrent.ConcurrentHashMap;
 import org.quartz.CronScheduleBuilder;
 import org.quartz.CronTrigger;
@@ -30,6 +33,8 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
@@ -37,12 +42,16 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 @Component
 public class CleanupQuartzScheduleManager implements ApplicationRunner {
   static final String GROUP = "kkrepo-cleanup";
+  private static final String RECONCILIATION_CURSOR = "cleanup_quartz_reconcile";
 
   private static final Logger log = LoggerFactory.getLogger(CleanupQuartzScheduleManager.class);
 
   private final CleanupPolicyDao cleanupDao;
   private final Scheduler scheduler;
   private final boolean enabled;
+  private final MaintenanceCursorDao cursors;
+  private final TransactionTemplate transactions;
+  private final long fullReconciliationIntervalMillis;
   private final Set<Long> pendingPolicyIds = ConcurrentHashMap.newKeySet();
 
   @Autowired
@@ -50,15 +59,38 @@ public class CleanupQuartzScheduleManager implements ApplicationRunner {
       CleanupPolicyDao cleanupDao,
       Scheduler scheduler,
       CleanupRuntimeProperties runtimeProperties,
+      MaintenanceCursorDao cursors,
+      PlatformTransactionManager transactionManager,
+      @Value("${kkrepo.cleanup.scheduler.full-reconcile-min-interval-ms:300000}")
+      long fullReconciliationIntervalMillis,
       @Value("${kkrepo.cleanup.scheduler.enabled:true}") boolean enabled) {
-    this(cleanupDao, scheduler, runtimeProperties.isEnabled() && enabled);
+    this(
+        cleanupDao,
+        scheduler,
+        runtimeProperties.isEnabled() && enabled,
+        cursors,
+        new TransactionTemplate(transactionManager),
+        fullReconciliationIntervalMillis);
   }
 
   CleanupQuartzScheduleManager(
       CleanupPolicyDao cleanupDao, Scheduler scheduler, boolean enabled) {
+    this(cleanupDao, scheduler, enabled, null, null, 0);
+  }
+
+  CleanupQuartzScheduleManager(
+      CleanupPolicyDao cleanupDao,
+      Scheduler scheduler,
+      boolean enabled,
+      MaintenanceCursorDao cursors,
+      TransactionTemplate transactions,
+      long fullReconciliationIntervalMillis) {
     this.cleanupDao = cleanupDao;
     this.scheduler = scheduler;
     this.enabled = enabled;
+    this.cursors = cursors;
+    this.transactions = transactions;
+    this.fullReconciliationIntervalMillis = Math.max(1_000, fullReconciliationIntervalMillis);
   }
 
   @Override
@@ -100,6 +132,7 @@ public class CleanupQuartzScheduleManager implements ApplicationRunner {
       initialDelayString = "${kkrepo.cleanup.scheduler.reconcile-initial-delay-ms:60000}")
   public void reconcileAllSafely() {
     try {
+      if (!reserveFullReconciliation()) return;
       reconcileAll();
     } catch (RuntimeException | SchedulerException e) {
       log.warn("Cleanup Quartz schedule reconciliation failed", e);
@@ -108,11 +141,19 @@ public class CleanupQuartzScheduleManager implements ApplicationRunner {
 
   void reconcileAll() throws SchedulerException {
     Set<Long> persistedPolicyIds = new HashSet<>();
-    for (CleanupSchedule schedule : cleanupDao.listSchedules()) {
+    var schedules = cleanupDao.listSchedules();
+    var policies = cleanupDao.findPolicies(
+        schedules.stream().map(CleanupSchedule::policyId).toList());
+    Set<JobKey> existingJobKeys = scheduler.getJobKeys(GroupMatcher.jobGroupEquals(GROUP));
+    for (CleanupSchedule schedule : schedules) {
       persistedPolicyIds.add(schedule.policyId());
-      reconcile(schedule.policyId());
+      reconcile(
+          schedule.policyId(),
+          schedule,
+          policies.get(schedule.policyId()),
+          existingJobKeys.contains(jobKey(schedule.policyId())));
     }
-    for (JobKey jobKey : scheduler.getJobKeys(GroupMatcher.jobGroupEquals(GROUP))) {
+    for (JobKey jobKey : existingJobKeys) {
       long policyId = policyId(jobKey);
       if (policyId > 0 && !persistedPolicyIds.contains(policyId)) {
         scheduler.deleteJob(jobKey);
@@ -123,10 +164,22 @@ public class CleanupQuartzScheduleManager implements ApplicationRunner {
   void reconcile(long policyId) throws SchedulerException {
     CleanupSchedule schedule = cleanupDao.findSchedule(policyId).orElse(null);
     var policy = cleanupDao.findPolicy(policyId).orElse(null);
+    // A targeted projection follows a known policy mutation. Quartz delete is idempotent and
+    // getJobDetail already distinguishes create from replace, so an extra existence query adds no
+    // value on this low-latency path.
+    reconcile(policyId, schedule, policy, true);
+  }
+
+  private void reconcile(
+      long policyId,
+      CleanupSchedule schedule,
+      CleanupPolicy policy,
+      boolean jobExists)
+      throws SchedulerException {
     JobKey jobKey = jobKey(policyId);
     if (!enabled || schedule == null || !schedule.enabled() || policy == null
         || !"ACTIVE".equals(policy.state())) {
-      scheduler.deleteJob(jobKey);
+      if (jobExists) scheduler.deleteJob(jobKey);
       return;
     }
 
@@ -137,7 +190,7 @@ public class CleanupQuartzScheduleManager implements ApplicationRunner {
         .storeDurably()
         .requestRecovery(true)
         .build();
-    JobDetail existingJob = scheduler.getJobDetail(jobKey);
+    JobDetail existingJob = jobExists ? scheduler.getJobDetail(jobKey) : null;
     boolean jobChanged = existingJob == null
         || existingJob.getJobDataMap().getLong(POLICY_REVISION) != policy.revision();
     if (existingJob == null) {
@@ -168,6 +221,19 @@ public class CleanupQuartzScheduleManager implements ApplicationRunner {
     } else {
       scheduler.rescheduleJob(triggerKey, trigger);
     }
+  }
+
+  private boolean reserveFullReconciliation() {
+    if (cursors == null || transactions == null) return true;
+    cursors.ensureCursor(RECONCILIATION_CURSOR);
+    Boolean reserved = transactions.execute(ignored -> {
+      OptionalLong locked = cursors.tryLockLastSeenId(RECONCILIATION_CURSOR);
+      if (locked.isEmpty()) return false;
+      long now = cleanupDao.currentTime().toEpochMilli();
+      if (locked.getAsLong() + fullReconciliationIntervalMillis > now) return false;
+      return cursors.updateLastSeenId(RECONCILIATION_CURSOR, now) == 1;
+    });
+    return Boolean.TRUE.equals(reserved);
   }
 
   private void reconcileSafely(long policyId) {

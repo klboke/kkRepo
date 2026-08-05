@@ -17,6 +17,24 @@ public interface CleanupPolicyDao {
 
   List<CleanupPolicy> listPolicies();
 
+  /** Stable keyset page used by the administration API. */
+  default List<CleanupPolicy> listPolicies(long afterId, int maxItems) {
+    return listPolicies().stream()
+        .filter(policy -> policy.id() != null && policy.id() > Math.max(0, afterId))
+        .sorted(java.util.Comparator.comparingLong(CleanupPolicy::id))
+        .limit(Math.max(1, maxItems))
+        .toList();
+  }
+
+  /** Batch lookup used by cluster reconciliation paths. */
+  default Map<Long, CleanupPolicy> findPolicies(Collection<Long> policyIds) {
+    if (policyIds == null || policyIds.isEmpty()) return Map.of();
+    Map<Long, CleanupPolicy> result = new java.util.LinkedHashMap<>();
+    policyIds.stream().filter(java.util.Objects::nonNull).distinct().forEach(policyId ->
+        findPolicy(policyId).ifPresent(policy -> result.put(policyId, policy)));
+    return Map.copyOf(result);
+  }
+
   Optional<CleanupPolicy> findPolicy(long policyId);
 
   long createPolicy(CleanupPolicy policy);
@@ -27,6 +45,19 @@ public interface CleanupPolicyDao {
 
   List<TargetRepository> listTargets(long policyId);
 
+  /** Batch target lookup that avoids one query per policy. */
+  default Map<Long, List<TargetRepository>> listTargets(Collection<Long> policyIds) {
+    if (policyIds == null || policyIds.isEmpty()) return Map.of();
+    Map<Long, List<TargetRepository>> result = new java.util.LinkedHashMap<>();
+    policyIds.stream().filter(java.util.Objects::nonNull).distinct()
+        .forEach(policyId -> result.put(policyId, listTargets(policyId)));
+    return Map.copyOf(result);
+  }
+
+  default boolean isPolicyTarget(long policyId, long repositoryId) {
+    return listTargets(policyId).stream().anyMatch(target -> target.id() == repositoryId);
+  }
+
   /** Prevents repository removal from invalidating a policy aggregate or stranding active work. */
   boolean hasRepositoryReferences(long repositoryId);
 
@@ -35,6 +66,15 @@ public interface CleanupPolicyDao {
   Optional<CleanupSchedule> findSchedule(long policyId);
 
   List<CleanupSchedule> listSchedules();
+
+  /** Batch schedule lookup that avoids one query per policy view. */
+  default Map<Long, CleanupSchedule> findSchedules(Collection<Long> policyIds) {
+    if (policyIds == null || policyIds.isEmpty()) return Map.of();
+    Map<Long, CleanupSchedule> result = new java.util.LinkedHashMap<>();
+    policyIds.stream().filter(java.util.Objects::nonNull).distinct().forEach(policyId ->
+        findSchedule(policyId).ifPresent(schedule -> result.put(policyId, schedule)));
+    return Map.copyOf(result);
+  }
 
   void upsertSchedule(CleanupSchedule schedule);
 
@@ -66,7 +106,20 @@ public interface CleanupPolicyDao {
 
   long createRunRepository(CleanupRunRepository runRepository);
 
+  /** Creates all repository shards for one run using bounded backend batches. */
+  default void createRunRepositories(List<CleanupRunRepository> runRepositories) {
+    if (runRepositories == null) return;
+    runRepositories.forEach(this::createRunRepository);
+  }
+
   List<CleanupRunRepository> listRunRepositories(long runId);
+
+  default Optional<CleanupRunRepository> findRunRepository(
+      long runId, long runRepositoryId) {
+    return listRunRepositories(runId).stream()
+        .filter(repository -> repository.id() != null && repository.id() == runRepositoryId)
+        .findFirst();
+  }
 
   void ensureRepositoryLease(long repositoryId);
 
@@ -177,13 +230,60 @@ public interface CleanupPolicyDao {
 
   List<CleanupRunItem> listRunItems(long runRepositoryId, long afterId, int maxItems);
 
+  /** Returns a bounded first page for each requested shard without scanning unrelated decisions. */
+  default Map<Long, List<CleanupRunItem>> listRunItems(
+      Collection<Long> runRepositoryIds, int maxItemsPerRepository) {
+    Map<Long, List<CleanupRunItem>> result = new java.util.LinkedHashMap<>();
+    if (runRepositoryIds == null) return Map.of();
+    for (Long runRepositoryId : runRepositoryIds) {
+      if (runRepositoryId == null) continue;
+      result.put(
+          runRepositoryId,
+          listRunItems(runRepositoryId, 0, Math.max(1, maxItemsPerRepository)));
+    }
+    return Map.copyOf(result);
+  }
+
+  /** Returns at most {@code maxItemsPerRepository} decisions for every shard in one run. */
+  default Map<Long, List<CleanupRunItem>> listRunItemsByRun(
+      long runId, int maxItemsPerRepository) {
+    return listRunItems(
+        listRunRepositories(runId).stream().map(CleanupRunRepository::id).toList(),
+        maxItemsPerRepository);
+  }
+
   /** Deletes a small locked batch of old terminal runs while retaining recent policy history. */
   int deleteTerminalRunsBefore(
       Instant completedBefore, int maxItems, int minimumRunsPerPolicy);
 
+  /**
+   * Prunes history with independent run and item bounds so foreign-key cascades stay small.
+   */
+  default CleanupHistoryPruneResult pruneTerminalRunHistory(
+      Instant completedBefore,
+      int maxRuns,
+      int minimumRunsPerPolicy,
+      int maxRunItems) {
+    int deletedRuns = deleteTerminalRunsBefore(
+        completedBefore, maxRuns, minimumRunsPerPolicy);
+    return new CleanupHistoryPruneResult(deletedRuns, 0);
+  }
+
   CleanupOperationalSummary operationalSummary();
 
-  void synchronizeUsageTracking(Map<Long, Instant> repositoryTrackingStartedAt, Instant now);
+  /** Reconciles the projection and returns whether its durable membership changed. */
+  boolean synchronizeUsageTracking(Map<Long, Instant> repositoryTrackingStartedAt, Instant now);
+
+  /** Cheap scalar checked by every replica before refreshing the complete local snapshot. */
+  long usageTrackingRevision();
+
+  /**
+   * Serializes a complete usage-policy projection calculation across replicas.
+   *
+   * <p>The caller must hold a transaction and acquire this lock before reading policies or the
+   * current projection. Otherwise an older policy snapshot could be committed after a newer one.
+   */
+  void lockUsageTrackingProjection();
 
   List<UsageTrackingRepository> listUsageTrackingRepositories();
 
@@ -561,6 +661,12 @@ public interface CleanupPolicyDao {
       long runningShards,
       long expiredRunningLeases,
       Instant oldestOutstandingCreatedAt) {
+  }
+
+  record CleanupHistoryPruneResult(int deletedRuns, int deletedRunItems) {
+    public boolean workPerformed() {
+      return deletedRuns > 0 || deletedRunItems > 0;
+    }
   }
 
   record UsageTrackingRepository(long repositoryId, Instant trackingStartedAt) {
