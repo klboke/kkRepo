@@ -15,6 +15,7 @@ import com.github.klboke.kkrepo.server.cleanup.CleanupPolicyService.PolicyPage;
 import com.github.klboke.kkrepo.server.cleanup.CleanupPolicyService.ScheduleCommand;
 import com.github.klboke.kkrepo.server.cleanup.CleanupProtectionService.ProtectionCommand;
 import com.github.klboke.kkrepo.server.cleanup.CleanupRunService.RunCommand;
+import com.github.klboke.kkrepo.server.cleanup.CleanupRunService.RunPage;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -59,7 +60,8 @@ class CleanupManagementControllerTest {
     Instant updatedAt = Instant.parse("2026-08-01T00:00:00Z");
     when(policies.formatCapabilities()).thenReturn(List.of());
     when(policies.listPage(0, 25)).thenReturn(new PolicyPage(List.of(), null));
-    when(runs.listRuns(null, 0, 25)).thenReturn(List.of());
+    RunPage runPage = new RunPage(List.of(), null);
+    when(runs.listRunPage(null, 0, 25)).thenReturn(runPage);
     when(runs.listItems(9, 10, 0, 50)).thenReturn(List.of());
     when(protections.list(0, 50, true)).thenReturn(List.of());
 
@@ -73,7 +75,7 @@ class CleanupManagementControllerTest {
         controller.deletePolicy(7, 3, request).getStatusCode());
     assertEquals(HttpStatus.ACCEPTED,
         controller.startRun(7, runCommand, request).getStatusCode());
-    assertEquals(List.of(), controller.listRuns(null, 0, 25, request));
+    assertEquals(runPage, controller.listRuns(null, 0, 25, request));
     assertNull(controller.run(9, request));
     assertNull(controller.runSummary(9, request));
     assertNull(controller.runDetails(9, 50, request));

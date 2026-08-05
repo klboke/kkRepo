@@ -121,12 +121,28 @@ public class CleanupRunService {
     return cleanupDao.listRuns(policyId, afterId, Math.min(Math.max(1, limit), 100));
   }
 
+  public RunPage listRunPage(Long policyId, long beforeId, int limit) {
+    int safeLimit = Math.min(Math.max(1, limit), 100);
+    List<CleanupRun> rows =
+        cleanupDao.listRunsBefore(policyId, Math.max(0, beforeId), safeLimit + 1);
+    boolean hasMore = rows.size() > safeLimit;
+    List<CleanupRun> items = hasMore ? rows.subList(0, safeLimit) : rows;
+    Long nextBefore = hasMore && !items.isEmpty() ? items.getLast().id() : null;
+    return new RunPage(items, nextBefore);
+  }
+
   public RunView getRun(long runId) {
     return view(requireRun(runId));
   }
 
   public CleanupRun getRunSummary(long runId) {
     return requireRun(runId);
+  }
+
+  public record RunPage(List<CleanupRun> items, Long nextBefore) {
+    public RunPage {
+      items = items == null ? List.of() : List.copyOf(items);
+    }
   }
 
   public RunDetailView getRunDetails(long runId, int itemsPerRepository) {

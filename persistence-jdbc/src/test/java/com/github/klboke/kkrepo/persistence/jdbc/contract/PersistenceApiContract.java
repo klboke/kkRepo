@@ -731,8 +731,10 @@ public abstract class PersistenceApiContract {
         10,
         base,
         base));
+    List<Long> createdRunIds = new ArrayList<>();
     for (int index = 0; index < 4; index++) {
       long runId = cleanup.createRun(cleanupRun(policyId, "TRY_RUN", base.plusSeconds(index)));
+      createdRunIds.add(runId);
       long shardId = cleanup.createRunRepository(cleanupShard(
           runId, repositoryId, "cleanup-history-contract", base.plusSeconds(index)));
       if (index == 0) {
@@ -767,6 +769,22 @@ public abstract class PersistenceApiContract {
       assertTrue(cleanup.completeRun(
           runId, "SUCCEEDED", 1, 0, 0, 0, 0, 0, null, completedAt));
     }
+
+    List<CleanupPolicyDao.CleanupRun> newestRuns = cleanup.listRunsBefore(policyId, 0, 2);
+    assertEquals(List.of(createdRunIds.get(3), createdRunIds.get(2)),
+        newestRuns.stream().map(CleanupPolicyDao.CleanupRun::id).toList());
+    assertEquals(List.of(createdRunIds.get(1), createdRunIds.get(0)),
+        cleanup.listRunsBefore(policyId, newestRuns.getLast().id(), 2).stream()
+            .map(CleanupPolicyDao.CleanupRun::id)
+            .toList());
+    assertEquals(List.of(createdRunIds.get(3), createdRunIds.get(2)),
+        cleanup.listRunsBefore(null, 0, 2).stream()
+            .map(CleanupPolicyDao.CleanupRun::id)
+            .toList());
+    assertEquals(List.of(createdRunIds.get(1), createdRunIds.get(0)),
+        cleanup.listRunsBefore(null, newestRuns.getLast().id(), 2).stream()
+            .map(CleanupPolicyDao.CleanupRun::id)
+            .toList());
 
     CleanupPolicyDao.CleanupHistoryPruneResult firstBatch = inTransaction(() ->
         cleanup.pruneTerminalRunHistory(base.plusSeconds(1_000), 1, 2, 2));

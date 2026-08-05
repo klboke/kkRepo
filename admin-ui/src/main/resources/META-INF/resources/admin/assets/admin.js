@@ -11,12 +11,20 @@ let cleanupPolicies = [];
 let cleanupCapabilities = [];
 let cleanupRuns = [];
 const CLEANUP_POLICY_DEFAULT_PAGE_SIZE = 10;
+const CLEANUP_RUN_DEFAULT_PAGE_SIZE = 10;
 let cleanupPolicyPage = {
   after: 0,
   cursors: [0],
   page: 0,
   size: CLEANUP_POLICY_DEFAULT_PAGE_SIZE,
   nextAfter: null
+};
+let cleanupRunPage = {
+  before: 0,
+  cursors: [0],
+  page: 0,
+  size: CLEANUP_RUN_DEFAULT_PAGE_SIZE,
+  nextBefore: null
 };
 let editingCleanupPolicyId = null;
 let cleanupTryRunPolicyId = null;
@@ -5557,22 +5565,41 @@ function updateCleanupRunInList(run) {
   const index = cleanupRuns.findIndex((item) => String(item.id) === String(run.id));
   if (index >= 0) {
     cleanupRuns[index] = run;
-  } else {
+  } else if (cleanupRunPage.page === 0) {
+    const hadMore = cleanupRunPage.nextBefore != null;
     cleanupRuns.push(run);
     cleanupRuns = cleanupRuns
-      .sort((left, right) => Number(left.id) - Number(right.id))
-      .slice(-25);
+      .sort((left, right) => Number(right.id) - Number(left.id));
+    const overflowed = cleanupRuns.length > cleanupRunPage.size;
+    cleanupRuns = cleanupRuns.slice(0, cleanupRunPage.size);
+    cleanupRunPage.nextBefore = overflowed || hadMore
+      ? cleanupRuns.at(-1)?.id ?? null
+      : null;
   }
   renderCleanupRuns();
 }
 
+function renderCleanupRunPagination() {
+  document.getElementById("cleanup-run-page-summary").textContent =
+    cleanupRuns.length === 1
+      ? "1 result on this page"
+      : `${cleanupRuns.length} results on this page`;
+  document.getElementById("cleanup-run-page-label").textContent =
+    `Page ${cleanupRunPage.page + 1}`;
+  document.getElementById("cleanup-run-page-prev").disabled = cleanupRunPage.page === 0;
+  document.getElementById("cleanup-run-page-next").disabled =
+    cleanupRunPage.nextBefore == null;
+  document.getElementById("cleanup-run-page-size").value = String(cleanupRunPage.size);
+}
+
 function renderCleanupRuns() {
   const body = document.getElementById("cleanup-run-table");
+  renderCleanupRunPagination();
   if (!cleanupRuns.length) {
     body.innerHTML = '<tr><td colspan="7" class="empty-cell">No cleanup runs yet.</td></tr>';
     return;
   }
-  body.innerHTML = cleanupRuns.slice().reverse().map((run) => {
+  body.innerHTML = cleanupRuns.map((run) => {
     const policy = cleanupPolicyView(run.policyId)?.policy;
     const terminal = cleanupRunTerminal(run.state);
     return `
@@ -5598,21 +5625,55 @@ function resetCleanupPolicyPage() {
   cleanupPolicyPage.nextAfter = null;
 }
 
+function resetCleanupRunPage() {
+  cleanupRunPage.before = 0;
+  cleanupRunPage.cursors = [0];
+  cleanupRunPage.page = 0;
+  cleanupRunPage.nextBefore = null;
+}
+
+async function fetchCleanupRunPage() {
+  const response = await fetch(
+    `/internal/cleanup/runs?before=${encodeURIComponent(cleanupRunPage.before)}&limit=${cleanupRunPage.size}`);
+  if (!response.ok) throw new Error(await responseErrorMessage(response));
+  return response.json();
+}
+
+function applyCleanupRunPage(page) {
+  cleanupRuns = page.items || [];
+  cleanupRunPage.nextBefore = page.nextBefore ?? null;
+}
+
+async function loadCleanupRuns() {
+  try {
+    const page = await fetchCleanupRunPage();
+    applyCleanupRunPage(page);
+    if (cleanupRuns.length === 0 && cleanupRunPage.page > 0) {
+      cleanupRunPage.cursors.pop();
+      cleanupRunPage.page -= 1;
+      cleanupRunPage.before = cleanupRunPage.cursors.at(-1) || 0;
+      return loadCleanupRuns();
+    }
+    renderCleanupRuns();
+  } catch (error) {
+    showToast(`Cleanup runs failed to load: ${error.message}`, "error");
+  }
+}
+
 async function loadCleanupPolicies(options = {}) {
   if (options.resetPage) {
     resetCleanupPolicyPage();
   }
   try {
-    const [policyResponse, capabilityResponse, repositoryResponse, runResponse] = await Promise.all([
+    const [policyResponse, capabilityResponse, repositoryResponse, runPage] = await Promise.all([
       fetch(`/internal/cleanup/policies?after=${encodeURIComponent(cleanupPolicyPage.after)}&limit=${cleanupPolicyPage.size}`),
       fetch("/internal/cleanup/capabilities"),
       fetch("/internal/repositories?purpose=admin"),
-      fetch("/internal/cleanup/runs?limit=25")
+      fetchCleanupRunPage()
     ]);
     if (!policyResponse.ok) throw new Error(await responseErrorMessage(policyResponse));
     if (!capabilityResponse.ok) throw new Error(await responseErrorMessage(capabilityResponse));
     if (!repositoryResponse.ok) throw new Error(await responseErrorMessage(repositoryResponse));
-    if (!runResponse.ok) throw new Error(await responseErrorMessage(runResponse));
     const policyPage = await policyResponse.json();
     cleanupPolicies = policyPage.items || [];
     cleanupPolicyPage.nextAfter = policyPage.nextAfter ?? null;
@@ -5624,7 +5685,13 @@ async function loadCleanupPolicies(options = {}) {
     }
     cleanupCapabilities = await capabilityResponse.json();
     repositories = await repositoryResponse.json();
-    cleanupRuns = await runResponse.json();
+    applyCleanupRunPage(runPage);
+    if (cleanupRuns.length === 0 && cleanupRunPage.page > 0) {
+      cleanupRunPage.cursors.pop();
+      cleanupRunPage.page -= 1;
+      cleanupRunPage.before = cleanupRunPage.cursors.at(-1) || 0;
+      return loadCleanupPolicies();
+    }
     renderCleanupPolicies();
     renderCleanupRuns();
   } catch (error) {
@@ -5651,6 +5718,27 @@ async function resizeCleanupPolicyPage(size) {
   cleanupPolicyPage.size = Number(size) || CLEANUP_POLICY_DEFAULT_PAGE_SIZE;
   resetCleanupPolicyPage();
   await loadCleanupPolicies();
+}
+
+async function changeCleanupRunPage(direction) {
+  if (direction === "next") {
+    if (cleanupRunPage.nextBefore == null) return;
+    cleanupRunPage.before = cleanupRunPage.nextBefore;
+    cleanupRunPage.cursors.push(cleanupRunPage.before);
+    cleanupRunPage.page += 1;
+  } else {
+    if (cleanupRunPage.page === 0) return;
+    cleanupRunPage.cursors.pop();
+    cleanupRunPage.page -= 1;
+    cleanupRunPage.before = cleanupRunPage.cursors.at(-1) || 0;
+  }
+  await loadCleanupRuns();
+}
+
+async function resizeCleanupRunPage(size) {
+  cleanupRunPage.size = Number(size) || CLEANUP_RUN_DEFAULT_PAGE_SIZE;
+  resetCleanupRunPage();
+  await loadCleanupRuns();
 }
 
 function cleanupRepositoryCandidates() {
@@ -6295,8 +6383,11 @@ async function queueCleanupRun(policyId, mode, scanLimit = null) {
     });
     if (!response.ok) throw new Error(await responseErrorMessage(response));
     const run = await response.json();
+    resetCleanupRunPage();
+    cleanupRuns = run.run ? [run.run] : [];
     selectCleanupTab("runs");
-    updateCleanupRunInList(run.run);
+    renderCleanupRuns();
+    await loadCleanupRuns();
     showToast(`${isTryRun ? "Try Run" : "Cleanup execution"} queued as run #${run.run?.id}.`, "ok");
     monitorCleanupRun(run.run.id, isTryRun ? "Try Run" : "Cleanup execution");
     return true;
@@ -6777,6 +6868,12 @@ document.getElementById("cleanup-policy-page-next").addEventListener(
   "click", () => changeCleanupPolicyPage("next"));
 document.getElementById("cleanup-policy-page-size").addEventListener(
   "change", (event) => resizeCleanupPolicyPage(event.currentTarget.value));
+document.getElementById("cleanup-run-page-prev").addEventListener(
+  "click", () => changeCleanupRunPage("prev"));
+document.getElementById("cleanup-run-page-next").addEventListener(
+  "click", () => changeCleanupRunPage("next"));
+document.getElementById("cleanup-run-page-size").addEventListener(
+  "change", (event) => resizeCleanupRunPage(event.currentTarget.value));
 document.getElementById("cancel-cleanup-policy-button").addEventListener("click", hideCleanupPolicyForm);
 document.getElementById("cleanup-policy-form").addEventListener("submit", saveCleanupPolicy);
 document.getElementById("cancel-cleanup-try-run-button").addEventListener("click", hideCleanupTryRunDialog);

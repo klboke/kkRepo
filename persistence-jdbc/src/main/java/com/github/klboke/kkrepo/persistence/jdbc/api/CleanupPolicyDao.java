@@ -91,6 +91,14 @@ public interface CleanupPolicyDao {
 
   List<CleanupRun> listRuns(Long policyId, long afterId, int maxItems);
 
+  /**
+   * Lists runs newest first, optionally continuing before an exclusive run id.
+   *
+   * <p>A non-positive {@code beforeId} starts at the newest run. Implementations must use keyset
+   * pagination rather than an offset so the cost remains bounded on deep pages.
+   */
+  List<CleanupRun> listRunsBefore(Long policyId, long beforeId, int maxItems);
+
   /** Completes a parent run once; returns false when another replica already won aggregation. */
   boolean completeRun(
       long runId,

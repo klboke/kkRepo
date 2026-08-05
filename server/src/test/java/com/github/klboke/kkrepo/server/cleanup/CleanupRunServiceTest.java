@@ -124,6 +124,33 @@ class CleanupRunServiceTest {
   }
 
   @Test
+  void pagesNewestRunsWithAnExclusiveKeysetCursorAndBoundedLookahead() {
+    CleanupPolicy policy = policy(RepositoryFormat.MAVEN2, 100);
+    CleanupRun newest = run(103, policy, "TRY_RUN", "SUCCEEDED", 100);
+    CleanupRun middle = run(102, policy, "TRY_RUN", "SUCCEEDED", 100);
+    CleanupRun lookahead = run(101, policy, "TRY_RUN", "SUCCEEDED", 100);
+    when(cleanupDao.listRunsBefore(null, 0, 3))
+        .thenReturn(List.of(newest, middle, lookahead));
+
+    CleanupRunService.RunPage firstPage = service.listRunPage(null, -1, 2);
+
+    assertEquals(List.of(newest, middle), firstPage.items());
+    assertEquals(102L, firstPage.nextBefore());
+    verify(cleanupDao).listRunsBefore(null, 0, 3);
+
+    when(cleanupDao.listRunsBefore(7L, 102, 101)).thenReturn(List.of(lookahead));
+    CleanupRunService.RunPage lastPage = service.listRunPage(7L, 102, 1_000);
+
+    assertEquals(List.of(lookahead), lastPage.items());
+    assertEquals(null, lastPage.nextBefore());
+    verify(cleanupDao).listRunsBefore(7L, 102, 101);
+
+    when(cleanupDao.listRunsBefore(7L, 101, 2)).thenReturn(List.of());
+    assertEquals(List.of(), service.listRunPage(7L, 101, 0).items());
+    verify(cleanupDao).listRunsBefore(7L, 101, 2);
+  }
+
+  @Test
   void scheduledRunIsIdempotentAndReportsInvisibleWinner() {
     Instant scheduledFor = now.plusSeconds(60);
     CleanupPolicy active = policy(RepositoryFormat.MAVEN2, 100, "ACTIVE", 10);

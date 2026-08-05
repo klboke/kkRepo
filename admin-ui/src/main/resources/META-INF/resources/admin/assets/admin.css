@@ -2812,7 +2812,8 @@ code {
 }
 
 .security-scan-pagination,
-.cleanup-policy-pagination {
+.cleanup-policy-pagination,
+.cleanup-run-pagination {
   margin: 8px 0 0;
 }
 

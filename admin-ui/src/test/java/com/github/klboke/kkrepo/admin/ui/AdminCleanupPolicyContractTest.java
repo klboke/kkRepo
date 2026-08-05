@@ -59,6 +59,14 @@ class AdminCleanupPolicyContractTest {
     String cleanupPageSize = index.substring(cleanupPageSizeStart, cleanupPageSizeEnd);
     assertTrue(cleanupPageSize.contains("<option value=\"10\" selected>10</option>"));
     assertTrue(index.contains("class=\"nx-table cleanup-run-table\""));
+    assertTrue(index.contains("id=\"cleanup-run-page-prev\""));
+    assertTrue(index.contains("id=\"cleanup-run-page-label\">Page 1"));
+    assertTrue(index.contains("id=\"cleanup-run-page-next\""));
+    assertTrue(index.contains("id=\"cleanup-run-page-size\""));
+    int cleanupRunPageSizeStart = index.indexOf("id=\"cleanup-run-page-size\"");
+    int cleanupRunPageSizeEnd = index.indexOf("</select>", cleanupRunPageSizeStart);
+    String cleanupRunPageSize = index.substring(cleanupRunPageSizeStart, cleanupRunPageSizeEnd);
+    assertTrue(cleanupRunPageSize.contains("<option value=\"10\" selected>10</option>"));
     assertFalse(index.contains("Try Run scan limit / repository"));
     assertFalse(index.contains("Delete limit / repository"));
     assertTrue(index.contains("id=\"cleanup-policy-cron-expression\""));
@@ -132,6 +140,12 @@ class AdminCleanupPolicyContractTest {
     assertTrue(javascript.contains("cleanupPolicyPage.cursors.push(cleanupPolicyPage.after)"));
     assertTrue(javascript.contains("cleanupPolicyPage.cursors.at(-1) || 0"));
     assertTrue(javascript.contains("function resizeCleanupPolicyPage(size)"));
+    assertTrue(javascript.contains("const CLEANUP_RUN_DEFAULT_PAGE_SIZE = 10;"));
+    assertTrue(javascript.contains("function renderCleanupRunPagination()"));
+    assertTrue(javascript.contains("cleanupRunPage.cursors.push(cleanupRunPage.before)"));
+    assertTrue(javascript.contains("cleanupRunPage.cursors.at(-1) || 0"));
+    assertTrue(javascript.contains("function resizeCleanupRunPage(size)"));
+    assertTrue(javascript.contains("/internal/cleanup/runs?before="));
     assertTrue(javascript.contains("cleanupTabFromHash"));
     assertTrue(javascript.contains("selectCleanupTab"));
     assertTrue(javascript.contains("handleCleanupTabKeydown"));
@@ -165,7 +179,8 @@ class AdminCleanupPolicyContractTest {
     assertFalse(javascript.contains("scrollIntoView({ behavior: \"smooth\", block: \"start\" })"));
     assertTrue(stylesheet.contains(".security-scan-tabs,\n.cleanup-tabs"));
     assertTrue(stylesheet.contains(".cleanup-tab-panel.is-active"));
-    assertTrue(stylesheet.contains(".security-scan-pagination,\n.cleanup-policy-pagination"));
+    assertTrue(stylesheet.contains(
+        ".security-scan-pagination,\n.cleanup-policy-pagination,\n.cleanup-run-pagination"));
     assertTrue(stylesheet.contains(".field-help-popover"));
     assertTrue(stylesheet.contains("pointer-events: auto"));
     assertTrue(stylesheet.contains("user-select: text"));

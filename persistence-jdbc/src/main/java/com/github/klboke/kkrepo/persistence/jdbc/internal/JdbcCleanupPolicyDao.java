@@ -522,6 +522,33 @@ public class JdbcCleanupPolicyDao
   }
 
   @Override
+  public List<CleanupRun> listRunsBefore(Long policyId, long beforeId, int maxItems) {
+    int limit = Math.max(1, maxItems);
+    if (policyId == null) {
+      if (beforeId <= 0) {
+        return jdbc.query("""
+            SELECT * FROM cleanup_run
+            ORDER BY id DESC LIMIT ?
+            """, runMapper, limit);
+      }
+      return jdbc.query("""
+          SELECT * FROM cleanup_run
+          WHERE id < ? ORDER BY id DESC LIMIT ?
+          """, runMapper, beforeId, limit);
+    }
+    if (beforeId <= 0) {
+      return jdbc.query("""
+          SELECT * FROM cleanup_run
+          WHERE policy_id = ? ORDER BY id DESC LIMIT ?
+          """, runMapper, policyId, limit);
+    }
+    return jdbc.query("""
+        SELECT * FROM cleanup_run
+        WHERE policy_id = ? AND id < ? ORDER BY id DESC LIMIT ?
+        """, runMapper, policyId, beforeId, limit);
+  }
+
+  @Override
   public boolean completeRun(
       long runId,
       String state,

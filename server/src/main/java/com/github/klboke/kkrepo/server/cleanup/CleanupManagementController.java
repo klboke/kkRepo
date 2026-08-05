@@ -120,13 +120,13 @@ public class CleanupManagementController {
   }
 
   @GetMapping("/runs")
-  public List<CleanupRun> listRuns(
+  public CleanupRunService.RunPage listRuns(
       @RequestParam(name = "policyId", required = false) Long policyId,
-      @RequestParam(name = "after", defaultValue = "0") long after,
-      @RequestParam(name = "limit", defaultValue = "25") int limit,
+      @RequestParam(name = "before", defaultValue = "0") long before,
+      @RequestParam(name = "limit", defaultValue = "10") int limit,
       HttpServletRequest request) {
     requireAdmin(request);
-    return runs.listRuns(policyId, after, limit);
+    return runs.listRunPage(policyId, before, limit);
   }
 
   @GetMapping("/runs/{runId}")

@@ -844,9 +844,11 @@ packument/dist-tags；PyPI 要重建 simple index；Docker 要先删除 referenc
   重写和失效一次；其他格式继续走原生单 subject 删除路径。
 - Try Run 每仓库最多扫描 10,000 个 subject，单 run 总预算 50,000；候选批次和返回分页均有
   服务端硬上限，不允许一次装载整个仓库的 subject 集合。
-- 策略列表使用 25 条 keyset 页，并批量读取该页的 target/schedule；run 详情一次请求返回、按
-  50 个 shard 组成一批，每个 shard 最多读取 200 条 decision。Docker manifest 关联查询和所有
-  大 `IN` 参数都按最多 500 个 ID 分批。
+- 策略与 run 列表都使用 keyset 页，默认 10 条、最大 100 条，并只多读 1 条判断下一页；run
+  列表按 `id DESC` 展示，跨页使用排他的 `id < before`，不执行随页深增长的 `OFFSET` 或总数
+  `COUNT`。策略页批量读取 target/schedule；run 详情一次请求返回、按 50 个 shard 组成一批，
+  每个 shard 最多读取 200 条 decision。Docker manifest 关联查询和所有大 `IN` 参数都按最多
+  500 个 ID 分批。
 - usage 本地快照每秒只读取一个共享 revision；只有 revision 变化才重载投影。完整 usage 与
   Quartz reconciliation 通过数据库 maintenance cursor 在集群内限频，策略变更只投递可丢失的
   节点提示。usage 投影先锁共享 revision 行，再只写新增、删除或向前移动的水位；配置未变化时
@@ -879,6 +881,12 @@ scripts/perf/run-cleanup-large-repository.sh all
 | 100 个 shard、每 shard 前 50 条 decision 的单查询上界探针 | 46.2 ms | 39.7 ms | 每个子查询命中 `idx_cleanup_run_item_repository`；生产 DAO 和当前门禁按 50-shard 分批 |
 | 5,001 个 run 的历史候选 | 23.1 ms | 15.9 ms | 使用一次窗口边界；MySQL 无 dependent subquery，PostgreSQL 无 `SubPlan` |
 | 100 行 usage 投影锁定读取 | 0.07 ms | 0.16 ms | 集群限频后才执行；稳定投影由双库 contract 证明 revision 不变且不进入 DML |
+
+Run 列表分页另用 50 万行临时数据验证首页和深页游标：MySQL 全局查询为 0.06/0.04 ms、按策略
+查询为 0.06/0.15 ms；PostgreSQL 全局查询为 0.04/0.05 ms、按策略查询为 0.04/0.06 ms。两种
+数据库都只返回 11 条探针行；MySQL 分别命中主键和 `(policy_id, id)`，PostgreSQL 根据策略密度
+在主键反向扫描与 `(policy_id, id)` 之间选择，未出现全表扫描。该探针使用临时表，会话结束自动
+删除，不写入开发数据。
 
 写放大探针给 25 个候选 parent run 设置 500 个 item 的事务上限；两种数据库均实际删除
 `500 run item + 5 parent run`，表行数差值与 JDBC 返回值一致，没有通过外键一次级联全部 2,500
