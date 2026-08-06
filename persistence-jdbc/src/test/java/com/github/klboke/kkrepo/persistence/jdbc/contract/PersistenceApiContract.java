@@ -420,7 +420,11 @@ public abstract class PersistenceApiContract {
   void cleanupRuntimeIsMonotonicFencedRecoverableAndGloballyBounded() {
     CleanupPolicyDao cleanup = stores().cleanupPolicies();
     assertNotNull(cleanup.currentTime());
-    Instant base = Instant.now().plusSeconds(1).truncatedTo(ChronoUnit.MILLIS);
+    // Run shards initialize next_attempt_at from the database clock. Keep this synthetic lease
+    // timeline comfortably ahead of real setup time so slower container hosts do not make the
+    // first shard ineligible before the claim assertions begin.
+    Instant base = cleanup.currentTime().plus(Duration.ofHours(1))
+        .truncatedTo(ChronoUnit.MILLIS);
     long blobStoreId = stores().blobStores().insert(blobStore("cleanup-runtime-contract"));
     long firstRepositoryId = insertRepository(
         "cleanup-runtime-first", RepositoryFormat.RAW, blobStoreId);
