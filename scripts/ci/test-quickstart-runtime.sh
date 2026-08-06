@@ -58,21 +58,22 @@ run_quickstart() {
 
 run_quickstart default-jvm
 grep -qx 'KKREPO_RUNTIME=jvm' "$TMP_ROOT/default-jvm/.env"
-grep -qx 'KKREPO_IMAGE_TAG=0.6.0' "$TMP_ROOT/default-jvm/.env"
-grep -qx 'jvm|0.6.0' "$TMP_ROOT/default-jvm.log"
+grep -qx 'KKREPO_IMAGE_TAG=0.7.0' "$TMP_ROOT/default-jvm/.env"
+grep -qx 'jvm|0.7.0' "$TMP_ROOT/default-jvm.log"
 
 run_quickstart native KKREPO_RUNTIME=native
 grep -qx 'KKREPO_RUNTIME=native' "$TMP_ROOT/native/.env"
-grep -qx 'KKREPO_IMAGE_TAG=0.6.0-native' "$TMP_ROOT/native/.env"
-grep -qx 'native|0.6.0-native' "$TMP_ROOT/native.log"
+grep -qx 'KKREPO_IMAGE_TAG=0.7.0-native' "$TMP_ROOT/native/.env"
+grep -qx 'native|0.7.0-native' "$TMP_ROOT/native.log"
 
 mkdir -p "$TMP_ROOT/existing-jvm"
+# Simulate a persisted v0.6.0 JVM quickstart before explicitly switching runtimes.
 cat >"$TMP_ROOT/existing-jvm/.env" <<'EOF'
 KKREPO_RUNTIME=jvm
 KKREPO_IMAGE_TAG=0.6.0
 EOF
 run_quickstart existing-jvm KKREPO_RUNTIME=native
-grep -qx 'native|0.6.0-native' "$TMP_ROOT/existing-jvm.log"
+grep -qx 'native|0.7.0-native' "$TMP_ROOT/existing-jvm.log"
 
 run_quickstart custom-native \
   KKREPO_RUNTIME=native \
