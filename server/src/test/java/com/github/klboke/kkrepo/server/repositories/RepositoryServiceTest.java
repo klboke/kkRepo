@@ -13,6 +13,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
@@ -473,6 +474,32 @@ class RepositoryServiceTest {
     assertEquals(7890, proxy.get("outboundProxyPort"));
     assertEquals("clash-user", proxy.get("outboundProxyUsername"));
     assertEquals("clash-pass", proxy.get("outboundProxyPassword"));
+  }
+
+  @Test
+  void outboundProxyAllowsRemoteHostThatOnlyTheProxyCanResolve() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "maven-proxy",
+        "maven2-proxy",
+        true,
+        "default",
+        true,
+        null,
+        new ProxySettings(
+            "https://packages.invalid/maven2/",
+            1440, 1440, true,
+            null, null, null,
+            null, null,
+            "HTTP", "192.168.1.10", 7890,
+            null, null,
+            null),
+        null, null, null, null));
+
+    assertEquals("https://packages.invalid/maven2/", created.proxy().remoteUrl());
+    assertEquals("HTTP", created.proxy().outboundProxyType());
   }
 
   @Test
@@ -1184,6 +1211,22 @@ class RepositoryServiceTest {
 
     verify(ansible).deleteRepositoryState(51L);
     assertTrue(repositories.findByName("ansible-hosted").isEmpty());
+  }
+
+  @Test
+  void deleteRejectsRepositoryReferencedByCleanupPolicyOrActiveRun() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    CleanupPolicyDao cleanupPolicies = mock(CleanupPolicyDao.class);
+    org.mockito.Mockito.when(cleanupPolicies.hasRepositoryReferences(10L)).thenReturn(true);
+    RepositoryService service = service(repositories);
+    service.setCleanupPolicyDao(cleanupPolicies);
+
+    RepositoryValidationException failure = assertThrows(
+        RepositoryValidationException.class,
+        () -> service.delete("maven-releases"));
+
+    assertTrue(failure.getMessage().contains("cleanup policy or active cleanup run"));
+    assertTrue(repositories.findByName("maven-releases").isPresent());
   }
 
   @Test

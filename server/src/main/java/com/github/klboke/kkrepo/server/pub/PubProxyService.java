@@ -175,7 +175,8 @@ public class PubProxyService {
               !headOnly);
           proxyStateDao.recordSuccess(runtime.id(), now);
           negativeCache.invalidate(runtime, path);
-          reader.beforeRead(stored.asset().id(), stored.blob().id());
+          reader.beforeRead(
+              stored.asset().id(), stored.blob().id(), stored.asset().repositoryId());
           if (headOnly) {
             stored.discardBody();
             return MavenResponse.noBody(200, stored.digests().size(),

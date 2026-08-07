@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="/browse/assets/tokens.css?v=20260724-visual-upgrade-1">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20260721-ansiblegalaxy-1">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20260728-security-advisory-link-1">
-    <link rel="stylesheet" href="./assets/admin.css?v=20260728-security-scanning-11">
+    <link rel="stylesheet" href="./assets/admin.css?v=20260805-cleanup-policy-31">
   </head>
   <body>
     <div class="nx-shell">
@@ -35,6 +35,8 @@
         </div>
       </header>
       <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+      <div class="field-help-popover" id="field-help-popover" role="tooltip" hidden></div>
+      <div class="cleanup-policy-action-menu" id="cleanup-policy-action-menu" role="menu" aria-hidden="true" hidden></div>
 
       <aside class="nx-sidebar">
         <nav class="side-nav" aria-label="Administration navigation">
@@ -44,6 +46,7 @@
           </button>
           <div class="side-group-items" id="side-group-repository-items" data-side-group-items="repository">
             <button class="side-item is-active" data-view="repositories" type="button"><span class="side-item-icon lucide-icon icon-package" aria-hidden="true"></span><span>Repositories</span></button>
+            <button class="side-item" data-view="cleanup-policies" type="button"><span class="side-item-icon lucide-icon icon-archive" aria-hidden="true"></span><span>Cleanup Policies</span></button>
             <button class="side-item" data-view="blobstores" type="button"><span class="side-item-icon lucide-icon icon-database" aria-hidden="true"></span><span>Blob Stores</span></button>
             <button class="side-item" data-view="docker-registry" type="button"><span class="side-item-icon lucide-icon icon-container" aria-hidden="true"></span><span>Docker Registry</span></button>
           </div>
@@ -372,6 +375,171 @@
               </thead>
               <tbody id="repository-table"></tbody>
             </table>
+          </div>
+        </section>
+
+        <section class="view cleanup-policies-view" id="cleanup-policies-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-archive" aria-hidden="true"></span></span>
+            <h1>Cleanup Policies</h1>
+            <span class="heading-copy">Clean multiple repositories with independently scheduled policies</span>
+          </div>
+          <div class="action-bar">
+            <button class="create-button" id="create-cleanup-policy-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create policy</button>
+            <button class="create-button secondary" id="refresh-cleanup-policy-button" type="button"><span class="lucide-icon icon-refresh-cw" aria-hidden="true"></span> Refresh</button>
+          </div>
+          <div class="cleanup-tabs" role="tablist" aria-label="Cleanup policy sections">
+            <button class="cleanup-tab is-active" id="cleanup-tab-policies" data-cleanup-tab="policies" type="button" role="tab" aria-selected="true" aria-controls="cleanup-panel-policies" tabindex="0">Policies</button>
+            <button class="cleanup-tab" id="cleanup-tab-runs" data-cleanup-tab="runs" type="button" role="tab" aria-selected="false" aria-controls="cleanup-panel-runs" tabindex="-1">Runs</button>
+          </div>
+
+          <div class="form-modal" id="cleanup-policy-form-modal" data-form-id="cleanup-policy-form" role="dialog" aria-modal="true" aria-labelledby="cleanup-policy-form-title" hidden>
+            <div class="form-modal-backdrop" data-modal-dismiss="cleanup-policy-form"></div>
+            <div class="form-modal-panel cleanup-policy-modal-panel">
+              <button class="form-modal-close" data-modal-dismiss="cleanup-policy-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
+              <form class="blobstore-form modal-form cleanup-policy-form" id="cleanup-policy-form" hidden novalidate>
+                <div class="form-title" id="cleanup-policy-form-title">Create cleanup policy</div>
+                <div class="form-grid cleanup-policy-form-grid">
+                  <fieldset class="cleanup-policy-section cleanup-policy-details-section">
+                    <legend>Policy details</legend>
+                    <div class="cleanup-policy-section-grid cleanup-policy-details-grid">
+                      <label class="cleanup-policy-field"><span class="field-label">Name <span class="required-mark">*</span></span><input id="cleanup-policy-name" type="text" maxlength="200" required></label>
+                      <label class="cleanup-policy-field"><span class="field-label">Format <span class="required-mark">*</span></span><select id="cleanup-policy-format" required></select></label>
+                      <div class="form-field cleanup-repository-field">
+                        <span class="field-label" id="cleanup-policy-repository-label">Repositories <span class="required-mark">*</span><span class="field-help" tabindex="0" role="note" aria-label="One policy can target multiple repositories, but all selected repositories must use the policy format." data-tooltip="One policy can target multiple repositories, but all selected repositories must use the policy format."><span class="lucide-icon icon-info" aria-hidden="true"></span></span></span>
+                        <div class="cleanup-repository-picker" id="cleanup-policy-repository-picker">
+                          <button class="cleanup-repository-trigger" id="cleanup-policy-repository-trigger" type="button" aria-expanded="false" aria-haspopup="listbox" aria-controls="cleanup-policy-repository-options" aria-labelledby="cleanup-policy-repository-label cleanup-policy-repository-summary">
+                            <span class="cleanup-repository-summary" id="cleanup-policy-repository-summary">Select repositories</span>
+                            <span class="cleanup-repository-caret lucide-icon icon-chevron-down" aria-hidden="true"></span>
+                          </button>
+                          <div class="cleanup-repository-popover" id="cleanup-policy-repository-popover" hidden>
+                            <div class="cleanup-repository-toolbar">
+                              <label class="cleanup-repository-search" for="cleanup-policy-repository-search">
+                                <span class="lucide-icon icon-search" aria-hidden="true"></span>
+                                <input id="cleanup-policy-repository-search" type="search" autocomplete="off" placeholder="Search repositories">
+                              </label>
+                              <div class="cleanup-repository-bulk-actions">
+                                <button id="cleanup-policy-repository-select-all" type="button">Select visible</button>
+                                <button id="cleanup-policy-repository-clear" type="button">Clear</button>
+                              </div>
+                            </div>
+                            <div class="cleanup-repository-options" id="cleanup-policy-repository-options" role="listbox" aria-multiselectable="true" aria-labelledby="cleanup-policy-repository-label"></div>
+                            <p class="cleanup-repository-empty" id="cleanup-policy-repository-empty" role="status" hidden></p>
+                            <div class="cleanup-repository-footer" id="cleanup-policy-repository-count" aria-live="polite">0 selected</div>
+                          </div>
+                        </div>
+                        <span class="form-note cleanup-repository-error" id="cleanup-policy-repository-error" role="alert" hidden>Select at least one target repository.</span>
+                      </div>
+                    </div>
+                  </fieldset>
+
+                  <fieldset class="cleanup-policy-section cleanup-policy-rules-section">
+                    <legend>Cleanup rules</legend>
+                    <p class="cleanup-policy-section-copy">At least one deletion rule is required. A pattern only narrows the scope; every configured age rule must also match.</p>
+                    <div class="cleanup-policy-section-grid cleanup-policy-rule-grid">
+                      <label class="cleanup-policy-field"><span class="field-label">Pattern type</span><select id="cleanup-policy-pattern-type"><option value="GLOB">Wildcard</option><option value="REGEX">Regular expression</option></select></label>
+                      <label class="cleanup-policy-field cleanup-policy-pattern-field"><span class="field-label">Name/path pattern <span class="field-help" tabindex="0" role="note" aria-label="Optional. The pattern filters artifact names or paths but does not make an artifact eligible for deletion by itself." data-tooltip="Optional. The pattern filters artifact names or paths but does not make an artifact eligible for deletion by itself."><span class="lucide-icon icon-info" aria-hidden="true"></span></span></span><input id="cleanup-policy-pattern" type="text" maxlength="512" placeholder="jackson-*"></label>
+                      <label class="cleanup-policy-field"><span class="field-label">Published older than (days) <span class="field-help" tabindex="0" role="note" aria-label="Only artifacts published before this age are eligible. Leave empty to ignore publication age." data-tooltip="Only artifacts published before this age are eligible. Leave empty to ignore publication age."><span class="lucide-icon icon-info" aria-hidden="true"></span></span></span><input id="cleanup-policy-published-days" type="number" min="0" max="36500"></label>
+                      <label class="cleanup-policy-field"><span class="field-label">Last downloaded older than (days) <span class="field-help" id="cleanup-policy-downloaded-help" tabindex="0" role="note"><span class="lucide-icon icon-info" aria-hidden="true"></span></span></span><input id="cleanup-policy-downloaded-days" type="number" min="0" max="36500"></label>
+                      <label class="cleanup-policy-field"><span class="field-label">Keep newest versions <span class="field-help" id="cleanup-policy-retain-help" tabindex="0" role="note"><span class="lucide-icon icon-info" aria-hidden="true"></span></span></span><input id="cleanup-policy-retain-count" type="number" min="0" max="10000"></label>
+                    </div>
+                  </fieldset>
+
+                  <fieldset class="cleanup-policy-section cleanup-policy-schedule-section">
+                    <legend>Execution schedule</legend>
+                    <div class="cleanup-policy-section-grid cleanup-policy-schedule-grid">
+                      <label class="cleanup-policy-field"><span class="field-label">Run schedule <span class="field-help" tabindex="0" role="note" aria-label="Uses Quartz Cron syntax with six or seven fields. For example, 0 0 2 * * ? runs every day at 02:00 in the selected time zone." data-tooltip="Uses Quartz Cron syntax with six or seven fields. Example: 0 0 2 * * ? runs every day at 02:00 in the selected time zone."><span class="lucide-icon icon-info" aria-hidden="true"></span></span></span><input id="cleanup-policy-cron-expression" type="text" maxlength="120" placeholder="0 0 2 * * ?" aria-describedby="cleanup-policy-schedule-preview"></label>
+                      <label class="cleanup-policy-field"><span class="field-label">Time zone <span class="field-help" tabindex="0" role="note" aria-label="The schedule is interpreted in this IANA time zone. It keeps execution stable when servers run in another zone and applies daylight-saving transitions correctly." data-tooltip="The schedule is interpreted in this IANA time zone. It keeps execution stable when servers run in another zone and applies daylight-saving transitions correctly."><span class="lucide-icon icon-info" aria-hidden="true"></span></span></span><input id="cleanup-policy-time-zone" type="text" list="cleanup-policy-time-zone-options" value="Asia/Shanghai" placeholder="Asia/Shanghai" autocomplete="off"><datalist id="cleanup-policy-time-zone-options"></datalist></label>
+                      <div class="cleanup-schedule-preview" id="cleanup-policy-schedule-preview" data-state="empty" role="status" aria-live="polite">
+                        <span class="cleanup-schedule-preview-icon lucide-icon icon-info" aria-hidden="true"></span>
+                        <div>
+                          <strong id="cleanup-policy-schedule-preview-title">Manual execution only</strong>
+                          <ol id="cleanup-policy-schedule-preview-times" hidden></ol>
+                        </div>
+                      </div>
+                      <p class="form-note cleanup-policy-execute-help" id="cleanup-policy-execute-help"></p>
+                    </div>
+                  </fieldset>
+
+                  <fieldset class="cleanup-policy-section cleanup-policy-notes-section">
+                    <legend>Notes</legend>
+                    <label class="cleanup-policy-notes-field"><textarea id="cleanup-policy-notes" rows="2" maxlength="2048" aria-label="Notes" placeholder="Why this policy exists, ownership, or rollback notes"></textarea></label>
+                  </fieldset>
+                </div>
+                <div class="form-actions cleanup-policy-form-actions">
+                  <button class="create-button" id="save-cleanup-policy-button" type="submit">Save policy</button>
+                  <button class="create-button secondary" id="cancel-cleanup-policy-button" type="button">Cancel</button>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <div class="form-modal" id="cleanup-try-run-form-modal" data-form-id="cleanup-try-run-form" role="dialog" aria-modal="true" aria-labelledby="cleanup-try-run-form-title" hidden>
+            <div class="form-modal-backdrop" data-modal-dismiss="cleanup-try-run-form"></div>
+            <div class="form-modal-panel cleanup-try-run-modal-panel">
+              <button class="form-modal-close" data-modal-dismiss="cleanup-try-run-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
+              <form class="blobstore-form modal-form cleanup-try-run-form" id="cleanup-try-run-form" hidden novalidate>
+                <div class="form-title" id="cleanup-try-run-form-title">Start Try Run</div>
+                <p class="cleanup-try-run-copy">Preview which artifact versions match this policy. No artifacts will be deleted.</p>
+                <dl class="cleanup-try-run-context">
+                  <div><dt>Policy</dt><dd id="cleanup-try-run-policy-name"></dd></div>
+                  <div><dt>Repositories</dt><dd id="cleanup-try-run-repository-count"></dd></div>
+                </dl>
+                <div class="form-grid cleanup-try-run-grid">
+                  <label><span>Scan limit per repository <span class="required-mark">*</span></span><input id="cleanup-try-run-scan-limit" type="number" min="1" max="10000" required aria-describedby="cleanup-try-run-scan-limit-help cleanup-try-run-scan-limit-error"></label>
+                  <span class="form-note" id="cleanup-try-run-scan-limit-help">Limits the number of subjects inspected in each selected repository for this run.</span>
+                  <span class="form-note cleanup-try-run-error" id="cleanup-try-run-scan-limit-error" role="alert" hidden>Enter a whole number between 1 and 10,000.</span>
+                </div>
+                <div class="form-actions cleanup-try-run-actions">
+                  <button class="create-button" id="start-cleanup-try-run-button" type="submit">Start Try Run</button>
+                  <button class="create-button secondary" id="cancel-cleanup-try-run-button" type="button">Cancel</button>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <div class="form-modal" id="cleanup-run-detail-modal" data-form-id="cleanup-run-detail" role="dialog" aria-modal="true" aria-labelledby="cleanup-run-detail-title" hidden>
+            <div class="form-modal-backdrop" data-modal-dismiss="cleanup-run-detail"></div>
+            <div class="form-modal-panel cleanup-run-detail-modal-panel">
+              <div class="cleanup-run-detail-modal-header">
+                <div class="form-title" id="cleanup-run-detail-title">Cleanup run details</div>
+                <button class="form-modal-close" data-modal-dismiss="cleanup-run-detail" type="button" aria-label="Close run details" title="Close run details"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
+              </div>
+              <div class="blobstore-form modal-form cleanup-run-detail" id="cleanup-run-detail" hidden>
+                <div class="cleanup-run-detail-content" id="cleanup-run-detail-content" aria-live="polite"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="cleanup-tab-panel is-active" id="cleanup-panel-policies" data-cleanup-panel="policies" role="tabpanel" aria-labelledby="cleanup-tab-policies">
+            <div class="nx-table-frame cleanup-table-frame">
+              <table class="nx-table cleanup-policy-table">
+                <thead><tr><th>Name</th><th>Format</th><th>Repositories</th><th>Rules</th><th>Schedule</th><th>Status</th><th class="actions-column">Actions</th></tr></thead>
+                <tbody id="cleanup-policy-table"></tbody>
+              </table>
+            </div>
+            <div class="pagination-bar cleanup-policy-pagination">
+              <span class="pagination-summary" id="cleanup-policy-page-summary">0 results</span>
+              <button class="row-action" id="cleanup-policy-page-prev" type="button" title="Previous page" aria-label="Previous policy page"><span class="lucide-icon icon-chevron-left" aria-hidden="true"></span></button>
+              <span class="pagination-page" id="cleanup-policy-page-label">Page 1</span>
+              <button class="row-action" id="cleanup-policy-page-next" type="button" title="Next page" aria-label="Next policy page"><span class="lucide-icon icon-chevron-right" aria-hidden="true"></span></button>
+              <label class="select-filter pagination-size"><span>Rows</span><select id="cleanup-policy-page-size"><option value="10" selected>10</option><option value="15">15</option><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></label>
+            </div>
+          </div>
+          <div class="cleanup-tab-panel" id="cleanup-panel-runs" data-cleanup-panel="runs" role="tabpanel" aria-labelledby="cleanup-tab-runs" hidden>
+            <div class="nx-table-frame cleanup-table-frame">
+              <table class="nx-table cleanup-run-table">
+                <thead><tr><th>Run</th><th>Policy</th><th>Mode</th><th>Trigger</th><th>Status</th><th>Progress</th><th class="actions-column">Actions</th></tr></thead>
+                <tbody id="cleanup-run-table"></tbody>
+              </table>
+            </div>
+            <div class="pagination-bar cleanup-run-pagination">
+              <span class="pagination-summary" id="cleanup-run-page-summary">0 results</span>
+              <button class="row-action" id="cleanup-run-page-prev" type="button" title="Previous page" aria-label="Previous run page"><span class="lucide-icon icon-chevron-left" aria-hidden="true"></span></button>
+              <span class="pagination-page" id="cleanup-run-page-label">Page 1</span>
+              <button class="row-action" id="cleanup-run-page-next" type="button" title="Next page" aria-label="Next run page"><span class="lucide-icon icon-chevron-right" aria-hidden="true"></span></button>
+              <label class="select-filter pagination-size"><span>Rows</span><select id="cleanup-run-page-size"><option value="10" selected>10</option><option value="15">15</option><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></label>
+            </div>
           </div>
         </section>
 
@@ -1365,6 +1533,6 @@
 
     <script src="/login/assets/ui-i18n.js?v=20260730-public-id-scope-1"></script>
     <script src="./assets/admin-filter.js?v=20260706-wildcard-filter-1"></script>
-    <script src="./assets/admin.js?v=20260731-upstream-sync-1"></script>
+    <script src="./assets/admin.js?v=20260807-upstream-merge-1"></script>
   </body>
 </html>

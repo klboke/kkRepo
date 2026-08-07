@@ -16,6 +16,8 @@ kkRepo is a community-driven, fully open-source, self-hosted artifact repository
 - Support for 16+ mainstream repository formats across hosted, proxy, and group repository types.
 - Supports AOT compilation and runtime, with about one-second startup readiness and memory usage below 200 MB.
 - Per-repository outbound HTTP or SOCKS5 proxy configuration for proxy repositories, with optional proxy authentication and HTTPS upstream tunneling.
+- Artifact security scanning with CycloneDX SBOM generation, known-vulnerability matching, policy and waiver management, and optional download enforcement.
+- Rich artifact cleanup policies for enterprise-grade artifact lifecycle management.
 - Compatibility with Sonatype Nexus APIs, user permission model, and the `/repository/<repo>/...` URL layout.
 - Use kkRepo as a drop-in replacement for Sonatype Nexus, with one-click migration of existing data while preserving repository domains and URLs, so client configurations and CI workflows continue unchanged.
 - Comprehensive identity and access control with Local, LDAP, and OIDC authentication, configurable anonymous access policies, and fine-grained permissions.
@@ -188,9 +190,9 @@ Repository format roadmap:
 6. ✅ Swift Package Registry - Hosted, GitHub-backed proxy, group, Registry v1, immutable signed publication, UI/API upload, Browse/Search, multi-replica coordination, real SwiftPM/Xcode E2E, and shape-gated Nexus 3.92.x-3.94.x migration are implemented ([Chinese design notes](docs/zh/dev/swift-package-registry-design.md))
 7. ✅ Ansible Galaxy - Galaxy v3 hosted/proxy/group, immutable collection publishing, dependency resolution, route-scoped Base64 Bearer/Ansible 2.9 Token and GenericToken authentication, UI/API upload, Browse/Search, durable multi-replica import/proxy coordination, real Ansible 2.9/current client E2E, Nexus black-box compatibility, and shape-gated Nexus 3.93.x-3.94.x migration are implemented ([usage guide](docs/en/ansible-galaxy-guide.md), [Chinese design notes](docs/zh/dev/ansible-galaxy-repository-design.md))
 8. ohpm / HarmonyOS - Planned with hosted, proxy, group, import, and admin capabilities ([Chinese design notes](docs/zh/dev/ohpm-repository-design.md))
-9. APT / Debian
-10. Conan
-11. Conda
+9. Conda - Planned with hosted, proxy, group, automatic channel metadata, modern repodata, and Nexus migration ([Chinese design notes](docs/zh/dev/conda-repository-design.md))
+10. APT / Debian
+11. Conan
 
 Token types exposed in the user and admin UI include protocol-specific tokens (`NpmToken`, `CargoToken`, `PubToken`, `NuGetApiKey`, `RubyGemsApiKey`) plus `GenericToken` for Terraform service URLs, Ansible Galaxy clients, CI, scripts, and custom HTTP clients that can send the configured API-key header or bearer token.
 
@@ -217,6 +219,7 @@ kkRepo is open sourced under the [Apache License 2.0](LICENSE).
 - [Development Guide](docs/en/development-guide.md)
 - [Build And Deployment Guide](docs/en/build-deployment-guide.md)
 - [Artifact Scanning Guide](docs/en/artifact-scanning-guide.md)
+- [Cleanup Policy Guide](docs/en/cleanup-policy-guide.md)
 - [Native Image or JVM Selection Guide](docs/en/native-vs-jvm-guide.md)
 - [Nginx Reverse Proxy Notes](docs/en/nginx-reverse-proxy.md)
 - [Client Recipes](docs/en/client-recipes.md)

@@ -738,7 +738,8 @@ public class NpmProxyService {
 
   private MavenResponse tarballResponseFromStored(NpmAssetWriter.Stored stored, boolean headOnly) {
     try {
-      hosted.beforeRead(stored.asset().id(), stored.blob().id());
+      hosted.beforeRead(
+          stored.asset().id(), stored.blob().id(), stored.asset().repositoryId());
       if (headOnly) {
         stored.discardBody();
         return MavenResponse.noBody(200, stored.blob().size(), stored.asset().contentType(),

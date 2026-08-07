@@ -10,6 +10,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.protocol.npm.NpmMetadata;
 import com.github.klboke.kkrepo.protocol.npm.NpmPackageId;
 import com.github.klboke.kkrepo.protocol.npm.NpmPath;
+import com.github.klboke.kkrepo.protocol.npm.NpmPathParser;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
@@ -21,7 +22,9 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -29,6 +32,7 @@ import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 @Service
@@ -255,6 +259,59 @@ public class NpmHostedService {
     return NpmResponseSupport.success(mapper);
   }
 
+  /**
+   * Deletes one hosted npm version for an administrator-owned cleanup run.
+   *
+   * <p>The package-root document is canonical hosted metadata, not a disposable cache. Keeping
+   * the tarball deletion and packument rewrite in one transaction prevents cleanup from leaving a
+   * published version that points at a missing tarball. Repository client write policy does not
+   * apply to this separately authorized administrative workflow.
+   */
+  @Transactional
+  public int deleteTarballForCleanup(
+      RepositoryRuntime runtime, String rawPath, String actorId) {
+    return deleteTarballsForCleanup(runtime, List.of(rawPath), actorId).getFirst();
+  }
+
+  /** Deletes a bounded set of versions from one package and rewrites its packument once. */
+  @Transactional
+  public List<Integer> deleteTarballsForCleanup(
+      RepositoryRuntime runtime, List<String> rawPaths, String actorId) {
+    enforceHosted(runtime);
+    if (rawPaths == null || rawPaths.isEmpty()) return List.of();
+    NpmPathParser parser = new NpmPathParser();
+    List<NpmPath> paths = rawPaths.stream().map(parser::parse).toList();
+    NpmPackageId packageId = null;
+    for (NpmPath path : paths) {
+      if (!path.isTarball() || path.packageId() == null || path.tarballName() == null) {
+        throw new IllegalArgumentException("npm cleanup subject must be a package tarball path");
+      }
+      if (packageId == null) packageId = path.packageId();
+      if (!packageId.equals(path.packageId())) {
+        throw new IllegalArgumentException("npm cleanup batch must contain one package family");
+      }
+    }
+    long blobStoreId = requireBlobStore(runtime);
+    BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);
+    Map<String, Object> packageRoot = loadPackageRootMap(runtime, packageId).orElse(null);
+    List<Integer> deleted = new ArrayList<>(paths.size());
+    List<String> deletedTarballs = new ArrayList<>();
+    for (NpmPath path : paths) {
+      int count = writer.deletePath(runtime, storage, path.assetPath());
+      deleted.add(count);
+      if (count > 0) deletedTarballs.add(path.tarballName());
+    }
+    if (packageRoot != null && removeVersionsForTarballs(packageRoot, deletedTarballs)) {
+      savePackageRoot(
+          runtime,
+          packageId,
+          packageRoot,
+          actorId == null || actorId.isBlank() ? "system:cleanup" : actorId,
+          null);
+    }
+    return List.copyOf(deleted);
+  }
+
   public MavenResponse putDistTag(
       RepositoryRuntime runtime,
       NpmPackageId packageId,
@@ -352,7 +409,10 @@ public class NpmHostedService {
     byte[] bytes = NpmPackumentResponseWriter.write(
         mapper, packageRoot, null, null, variant, packageId, repositoryBaseUrl);
     AssetBlobRecord blob = metadata.toBlobRecord();
-    if (downloadPolicy != null) downloadPolicy.beforeRead(metadata.assetId(), blob.id());
+    if (downloadPolicy != null) {
+      downloadPolicy.beforeReadFromRepository(
+          metadata.assetId(), blob.id(), metadata.repositoryId());
+    }
     Instant lastModified = metadata.lastUpdatedAt();
     if (headOnly) {
       return MavenResponse.noBody(200, bytes.length, NpmResponseSupport.JSON, null, lastModified);
@@ -395,7 +455,7 @@ public class NpmHostedService {
     if (blob == null) {
       throw new NpmExceptions.NpmNotFoundException(asset.path());
     }
-    beforeRead(asset.id(), blob.id());
+    beforeRead(asset.id(), blob.id(), asset.repositoryId());
     String contentType = responseContentType(asset);
     if (headOnly) {
       return MavenResponse.noBody(200, blob.size(), contentType, blob.sha1(), asset.lastUpdatedAt());
@@ -412,7 +472,7 @@ public class NpmHostedService {
     if (blob == null) {
       throw new NpmExceptions.NpmNotFoundException(snapshot.path());
     }
-    beforeRead(snapshot.assetId(), blob.id());
+    beforeRead(snapshot.assetId(), blob.id(), snapshot.repositoryId());
     String contentType = responseContentType(snapshot.kind(), snapshot.path(), snapshot.contentType());
     if (headOnly) {
       return MavenResponse.noBody(200, blob.size(), contentType, blob.sha1(), snapshot.lastUpdatedAt());
@@ -424,9 +484,9 @@ public class NpmHostedService {
         blob.size(), contentType, blob.sha1(), snapshot.lastUpdatedAt());
   }
 
-  void beforeRead(long assetId, long blobId) {
+  void beforeRead(long assetId, long blobId, long sourceRepositoryId) {
     if (downloadPolicy != null) {
-      downloadPolicy.beforeRead(assetId, blobId);
+      downloadPolicy.beforeReadFromRepository(assetId, blobId, sourceRepositoryId);
     }
   }
 
@@ -534,12 +594,25 @@ public class NpmHostedService {
       return;
     }
     Map<String, Object> packageRoot = packageRootOpt.get();
-    String version = NpmMetadata.findVersionForTarball(packageRoot, tarballName);
-    if (version != null) {
-      NpmMetadata.versions(packageRoot).remove(version);
-      NpmMetadata.distTags(packageRoot).entrySet().removeIf(e -> version.equals(String.valueOf(e.getValue())));
+    if (removeVersionsForTarballs(packageRoot, List.of(tarballName))) {
       savePackageRoot(runtime, packageId, packageRoot, createdBy, createdByIp);
     }
+  }
+
+  private static boolean removeVersionsForTarballs(
+      Map<String, Object> packageRoot, List<String> tarballNames) {
+    if (tarballNames == null || tarballNames.isEmpty()) return false;
+    java.util.Set<String> removedVersions = new java.util.LinkedHashSet<>();
+    for (String tarballName : tarballNames) {
+      String version = NpmMetadata.findVersionForTarball(packageRoot, tarballName);
+      if (version != null && NpmMetadata.versions(packageRoot).remove(version) != null) {
+        removedVersions.add(version);
+      }
+    }
+    if (removedVersions.isEmpty()) return false;
+    NpmMetadata.distTags(packageRoot).entrySet().removeIf(
+        entry -> removedVersions.contains(String.valueOf(entry.getValue())));
+    return true;
   }
 
   private void savePackageRoot(
@@ -550,8 +623,8 @@ public class NpmHostedService {
       String createdByIp) {
     long blobStoreId = requireBlobStore(runtime);
     BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);
-    Map<String, Object> existing = loadPackageRootMap(runtime, packageId).orElse(null);
-    NpmMetadata.prepareForStorage(packageRoot, packageId, NpmMetadata.nextRevision(existing, existing == null));
+    String nextRevision = NpmMetadata.nextRevision(packageRoot, false);
+    NpmMetadata.prepareForStorage(packageRoot, packageId, nextRevision);
     writer.writePackageRoot(runtime, storage, blobStoreId, packageId,
         NpmResponseSupport.write(mapper, packageRoot), createdBy, createdByIp);
   }

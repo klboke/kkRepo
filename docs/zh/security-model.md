@@ -201,6 +201,11 @@ KKREPO_OUTBOUND_ALLOWED_HOSTS=
 
 只有确实需要内部上游仓库时才允许内部 host。这可以降低 proxy repository 配置错误带来的 SSRF 类风险。
 
+直连出站请求仍由 kkrepo 在本机解析，并固定到策略允许的 IP。仓库显式配置 HTTP 或 SOCKS5
+出站代理后，上游域名会交给该代理解析，确保代理 DNS 规则和基于域名的路由生效。此时应把所配置的
+代理视为可信出站边界：kkrepo 默认仍会拒绝显式私网 IP 和仅限本地的域名，但无法检查代理内部 DNS
+最终返回的 IP。除非业务明确需要，代理侧应拒绝 loopback、私网、link-local 和云 metadata 目标。
+
 ## 审计日志
 
 安全敏感动作应记录到 `security_audit_log`，包括用户、角色、权限、realm、token 等管理变更。

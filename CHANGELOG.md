@@ -4,6 +4,38 @@ All notable public changes to kkrepo are documented in this file.
 
 This project follows a pragmatic early-stage release process. Until a stable `1.0.0` release is announced, minor versions may include behavior changes, but releases should call out migration impact, compatibility changes, and operational notes.
 
+## 0.7.0 - 2026-08-06
+
+### Added
+
+- Opt-in asynchronous artifact security scanning with Syft/Grype, durable MySQL/PostgreSQL task and result state, CycloneDX SBOMs, vulnerability findings, audit/enforcement policies, waivers, and Admin/Browse integration. A hardened standalone scanner adapter, isolated Docker Compose profile, and multi-replica Helm deployment keep untrusted scanning work outside the kkRepo JVM and off upload request paths. (#170)
+- Repository cleanup policies for every current format, targeting Hosted and Proxy repositories with bounded Try Run, manual and Quartz-scheduled execution, run history, cancellation, retries, usage-aware retention, protocol-aware deletion, and database-backed leases and fencing across replicas. (#180)
+- Nexus-compatible asset search and detail APIs plus Raw hosted asset deletion, with `nx-search-read`, per-asset repository/content-selector authorization, stable keyset pagination, audit coverage, and cross-replica cache invalidation. (#171)
+
+### Changed
+
+- Admin, Browse, and login surfaces now share a unified design-token foundation for typography, tables, buttons, elevation, and interaction states while preserving the existing DOM and JavaScript contracts. (#162)
+- Quickstart defaults, Dockerfile packaging, deployment documentation, and the Helm application version now use `0.7.0`; the optional scanner profile uses the matching `kkrepo-scanner:0.7.0` image.
+- AWS SDK, Alibaba Cloud OSS, zstd-jni, GraalVM Native Build Tools, Maven Jar/Flatten plugins, and GitHub Actions dependencies were refreshed. (#164, #165, #166, #167, #168, #169, #176, #177)
+
+### Fixed
+
+- npm hosted publication now stream-decodes base64 attachments to bounded request-local staging files, allowing large packages beyond Jackson's default 20-million-character string limit without materializing the full archive payload in heap. (#173)
+- Repository upstream DNS can be delegated to an explicitly configured HTTP or SOCKS5 proxy while direct traffic and non-repository security endpoints retain local resolution, validation, and IP pinning. Explicit private or local upstream targets remain rejected by default. (#175)
+- RubyGems hosted, proxy, and group repository roots now return Nexus-compatible HTML for trailing-slash requests and the compatible `400` HTML response for bare roots, without changing explicit metadata or gem download endpoints. (#182)
+
+### Compatibility And Validation
+
+- Security scanning includes MySQL/PostgreSQL persistence contracts, multi-replica coordination, hardened archive and OCI staging limits, Compose/Helm network isolation checks, and an end-to-end vulnerable Maven artifact scan. (#170)
+- Cleanup policies are covered across every repository format, both database backends, clustered scheduling, worker takeover, fencing, bounded scans, group-to-source usage attribution, protocol metadata updates, and restart-safe online index migrations. (#180)
+- Asset management and RubyGems root behavior include live Nexus comparisons, while npm publication coverage includes a 30 MiB incompressible package through the real npm client. (#171, #173, #182)
+
+### Upgrade Notes
+
+- Existing `0.6.0` MySQL and PostgreSQL deployments can upgrade in place through Flyway V36-V40. Back up the database and blob store together before upgrading, allow time for DDL and online-index work on large tables, and do not run mixed application versions after the migrations are applied.
+- V36-V37 add artifact-change, Blob-reference, security-scan, policy, result, and online-index state. Scanning remains disabled by default after upgrade: enabling `KKREPO_SECURITY_SCANNING_ENABLED`, deploying the matching scanner image, and activating repositories are separate explicit steps.
+- V38-V40 add cleanup runtime state, clustered Quartz JobStore tables, and cleanup/scan indexes. New cleanup policies always start paused and never delete content until an administrator runs or explicitly schedules them; use a bounded Try Run and retain a tested backup before the first execution.
+
 ## 0.6.0 - 2026-07-24
 
 ### Added

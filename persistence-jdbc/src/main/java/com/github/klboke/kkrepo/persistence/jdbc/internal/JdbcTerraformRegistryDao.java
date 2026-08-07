@@ -146,6 +146,21 @@ public class JdbcTerraformRegistryDao implements TerraformRegistryDao {
   }
 
   @Override
+  @org.springframework.transaction.annotation.Transactional
+  public int deleteProviderVersion(
+      long repositoryId, String namespace, String type, String version) {
+    int deleted = jdbc.update("""
+        DELETE FROM terraform_provider_platform
+        WHERE repository_id = ? AND namespace = ? AND provider_type = ? AND version = ?
+        """, repositoryId, namespace, type, version);
+    deleted += jdbc.update("""
+        DELETE FROM terraform_provider_signing_state
+        WHERE repository_id = ? AND namespace = ? AND provider_type = ? AND version = ?
+        """, repositoryId, namespace, type, version);
+    return deleted;
+  }
+
+  @Override
   public boolean tryAcquirePublishLease(String leaseKey, String owner, Instant expiresAt) {
     Instant now = Instant.now();
     int updated = jdbc.update("""

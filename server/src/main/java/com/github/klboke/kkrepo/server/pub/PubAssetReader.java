@@ -36,6 +36,7 @@ class PubAssetReader {
   MavenResponse serveSnapshot(CachedAssetMetadata snapshot, boolean headOnly, String path) {
     return serveBlob(
         snapshot.assetId(),
+        snapshot.repositoryId(),
         snapshot.toBlobRecord(),
         snapshot.contentType(),
         snapshot.lastUpdatedAt(),
@@ -48,7 +49,7 @@ class PubAssetReader {
     if (blob == null) {
       throw new PubExceptions.PubNotFoundException(path);
     }
-    beforeRead(snapshot.assetId(), blob.id());
+    beforeRead(snapshot.assetId(), blob.id(), snapshot.repositoryId());
     try (var in = blobStorageRegistry.forBlobStoreId(blob.blobStoreId()).get(
         BlobReferenceCodec.reference(blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size()))
         .orElseThrow(() -> new PubExceptions.PubNotFoundException(path))) {
@@ -60,6 +61,7 @@ class PubAssetReader {
 
   private MavenResponse serveBlob(
       long assetId,
+      long sourceRepositoryId,
       AssetBlobRecord blob,
       String contentType,
       Instant lastModified,
@@ -68,7 +70,7 @@ class PubAssetReader {
     if (blob == null) {
       throw new PubExceptions.PubNotFoundException(path);
     }
-    beforeRead(assetId, blob.id());
+    beforeRead(assetId, blob.id(), sourceRepositoryId);
     var storage = blobStorageRegistry.forBlobStoreId(blob.blobStoreId());
     var reference = BlobReferenceCodec.reference(
         blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size());
@@ -84,7 +86,9 @@ class PubAssetReader {
         blob.size(), contentType, etag, lastModified);
   }
 
-  void beforeRead(long assetId, long blobId) {
-    if (downloadPolicy != null) downloadPolicy.beforeRead(assetId, blobId);
+  void beforeRead(long assetId, long blobId, long sourceRepositoryId) {
+    if (downloadPolicy != null) {
+      downloadPolicy.beforeReadFromRepository(assetId, blobId, sourceRepositoryId);
+    }
   }
 }

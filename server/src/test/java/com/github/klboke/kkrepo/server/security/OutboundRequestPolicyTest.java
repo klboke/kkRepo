@@ -51,6 +51,53 @@ class OutboundRequestPolicyTest {
   }
 
   @Test
+  void proxyResolvedTargetSkipsLocalDnsAndCarriesTheOriginalHostname() {
+    AtomicInteger lookups = new AtomicInteger();
+    OutboundRequestPolicy policy = new OutboundRequestPolicy(
+        false,
+        "",
+        host -> {
+          lookups.incrementAndGet();
+          throw new UnknownHostException(host);
+        });
+
+    OutboundRequestPolicy.ResolvedHttpTarget target = policy.resolveHttpTarget(
+        "https://packages.invalid/repository/", "remote fetch", true);
+
+    assertEquals(0, lookups.get());
+    assertEquals("packages.invalid", target.uri().getHost());
+    assertTrue(target.proxyResolvesDns());
+    assertTrue(target.addresses().isEmpty());
+  }
+
+  @Test
+  void proxyResolvedTargetsStillRejectExplicitPrivateAndLocalOnlyHosts() {
+    OutboundRequestPolicy policy = new OutboundRequestPolicy(false, "");
+
+    assertThrows(SecurityValidationException.class, () ->
+        policy.resolveHttpTarget("http://127.0.0.1/artifact", "remote fetch", true));
+    assertThrows(SecurityValidationException.class, () ->
+        policy.resolveHttpTarget("http://2130706433/artifact", "remote fetch", true));
+    assertThrows(SecurityValidationException.class, () ->
+        policy.resolveHttpTarget("http://localhost/artifact", "remote fetch", true));
+    assertThrows(SecurityValidationException.class, () ->
+        policy.resolveHttpTarget("http://packages.local/artifact", "remote fetch", true));
+    assertThrows(SecurityValidationException.class, () ->
+        policy.resolveHttpTarget("http://registry.home.arpa/artifact", "remote fetch", true));
+  }
+
+  @Test
+  void privateAddressOverrideAlsoAppliesToProxyResolvedTargets() {
+    OutboundRequestPolicy policy = OutboundRequestPolicy.allowPrivateForTests();
+
+    OutboundRequestPolicy.ResolvedHttpTarget target =
+        policy.resolveHttpTarget("http://localhost/artifact", "remote fetch", true);
+
+    assertTrue(target.proxyResolvesDns());
+    assertTrue(target.addresses().isEmpty());
+  }
+
+  @Test
   void rejectsUnsupportedSchemes() {
     OutboundRequestPolicy policy = OutboundRequestPolicy.allowPrivateForTests();
 

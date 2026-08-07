@@ -459,7 +459,9 @@ public class HttpRemoteFetcher {
 
     OutboundRequestPolicy.ResolvedHttpTarget resolvedTarget(
         OutboundRequestPolicy policy, String purpose) {
-      OutboundRequestPolicy.ResolvedHttpTarget target = policy.resolveHttpTarget(url, purpose);
+      boolean proxyResolvesDns = outboundProxy != null && outboundProxy.enabled();
+      OutboundRequestPolicy.ResolvedHttpTarget target =
+          policy.resolveHttpTarget(url, purpose, proxyResolvesDns);
       if (trustedHost != null && !normalizeHost(target.uri().getHost()).equals(trustedHost)) {
         throw new SecurityValidationException(purpose + " URL host must remain " + trustedHost);
       }

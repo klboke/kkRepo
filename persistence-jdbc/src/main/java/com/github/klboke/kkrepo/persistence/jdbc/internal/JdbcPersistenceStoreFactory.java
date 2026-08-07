@@ -10,6 +10,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CacheVersionDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DatabaseConnectionSettings;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
@@ -57,13 +58,14 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
     return new DefaultPersistenceStores(
         new JdbcAnsibleGalaxyRegistryDao(jdbc, json, dialect),
         new JdbcArtifactChangeDao(jdbc),
-        new JdbcAssetDao(jdbc, json),
+        new JdbcAssetDao(jdbc, json, dialect),
         new JdbcAuthTicketDao(jdbc),
         new JdbcBlobReferenceDao(jdbc),
         new JdbcBlobStoreDao(jdbc, json),
         new JdbcBrowseNodeDao(jdbc),
         new JdbcCacheVersionDao(jdbc, dialect),
         new JdbcComponentDao(jdbc, json, dialect),
+        new JdbcCleanupPolicyDao(jdbc, json, dialect),
         new JdbcDockerAuthTokenDao(jdbc, json),
         new JdbcDockerRegistryDao(jdbc, json),
         new JdbcDockerUploadDao(jdbc, json),
@@ -95,6 +97,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
       BrowseNodeDao browseNodes,
       CacheVersionDao cacheVersions,
       ComponentDao components,
+      CleanupPolicyDao cleanupPolicies,
       DockerAuthTokenDao dockerAuthTokens,
       DockerRegistryDao dockerRegistry,
       DockerUploadDao dockerUploads,

@@ -42,6 +42,7 @@ class RawAssetReader {
         : assetDao.findBlobById(asset.assetBlobId()).orElse(null);
     return serveBlob(
         asset.id(),
+        asset.repositoryId(),
         blob,
         asset.contentType(),
         asset.lastUpdatedAt(),
@@ -53,6 +54,7 @@ class RawAssetReader {
   MavenResponse serveSnapshot(CachedAssetMetadata snapshot, boolean headOnly, String path, String contentDisposition) {
     return serveBlob(
         snapshot.assetId(),
+        snapshot.repositoryId(),
         snapshot.toBlobRecord(),
         snapshot.contentType(),
         snapshot.lastUpdatedAt(),
@@ -63,6 +65,7 @@ class RawAssetReader {
 
   private MavenResponse serveBlob(
       long assetId,
+      long sourceRepositoryId,
       AssetBlobRecord blob,
       String contentType,
       Instant lastModified,
@@ -72,7 +75,7 @@ class RawAssetReader {
     if (blob == null) {
       throw new MavenExceptions.MavenNotFoundException(path);
     }
-    beforeRead(assetId, blob.id());
+    beforeRead(assetId, blob.id(), sourceRepositoryId);
     String etag = blob.sha1();
     if (headOnly) {
       return MavenResponse.noBody(200, blob.size(), contentType, etag, lastModified);
@@ -92,8 +95,10 @@ class RawAssetReader {
     return value.toLowerCase(Locale.ROOT);
   }
 
-  void beforeRead(long assetId, long blobId) {
-    if (downloadPolicy != null) downloadPolicy.beforeRead(assetId, blobId);
+  void beforeRead(long assetId, long blobId, long sourceRepositoryId) {
+    if (downloadPolicy != null) {
+      downloadPolicy.beforeReadFromRepository(assetId, blobId, sourceRepositoryId);
+    }
   }
 
 }

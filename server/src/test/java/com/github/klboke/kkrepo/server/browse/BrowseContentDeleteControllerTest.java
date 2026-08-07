@@ -25,6 +25,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
@@ -106,6 +107,24 @@ class BrowseContentDeleteControllerTest {
   }
 
   @Test
+  void cleanupOfGroupDeletesOnlyGroupOwnedCacheContent() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord group =
+        repository(1L, "maven-group", RepositoryFormat.MAVEN2, RepositoryType.GROUP);
+    String path = "com/acme/app/1.0/app-1.0.jar";
+    AssetRecord groupCache = asset(
+        11L, 21L, 31L, RepositoryFormat.MAVEN2, path, "artifact", Map.of());
+    when(fixture.repositoryDao.findByName(group.name())).thenReturn(Optional.of(group));
+    when(fixture.assetDao.findAssetById(groupCache.id())).thenReturn(Optional.of(groupCache));
+
+    assertEquals(1, fixture.controller.deleteForCleanup(
+        group.name(), "ASSET", groupCache.id(), path, "cleanup-run:1"));
+
+    verify(fixture.assetDao).deleteAssetById(groupCache.id());
+    verify(fixture.repositoryDao, never()).listMembers(group.id());
+  }
+
+  @Test
   void invalidatesNpmPackageAndMemberCaches() {
     Fixture fixture = fixture(true, AccessDecision.allow());
     RepositoryRecord repository =
@@ -148,6 +167,87 @@ class BrowseContentDeleteControllerTest {
         1L, RepositoryIndexRebuildDao.PYPI_PROJECT, "demo-pkg");
     verify(fixture.pypiCache).invalidateMemberProjectAfterCommit(1L, "demo-pkg");
     verify(fixture.groupMemberAssetCache).invalidateMemberAfterCommit(1L);
+  }
+
+  @Test
+  void cleanupEnqueuesYumMetadataRebuild() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord repository =
+        repository(1L, "yum", RepositoryFormat.YUM, RepositoryType.HOSTED);
+    AssetRecord rpm = asset(
+        11L, 21L, 31L, RepositoryFormat.YUM, "Packages/d/demo-1.0-1.noarch.rpm",
+        "package", Map.of());
+    when(fixture.repositoryDao.findByName(repository.name())).thenReturn(Optional.of(repository));
+    when(fixture.assetDao.findAssetById(rpm.id())).thenReturn(Optional.of(rpm));
+
+    assertEquals(1, fixture.controller.deleteForCleanup(
+        repository.name(), "ASSET", rpm.id(), rpm.path(), "cleanup-run:1"));
+
+    verify(fixture.assetDao).deleteAssetById(rpm.id());
+    verify(fixture.indexRebuildDao).enqueue(
+        repository.id(), RepositoryIndexRebuildDao.YUM_METADATA);
+  }
+
+  @Test
+  void cleanupEnqueuesRubyGemsMetadataRebuild() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord repository =
+        repository(1L, "rubygems", RepositoryFormat.RUBYGEMS, RepositoryType.HOSTED);
+    AssetRecord gem = asset(
+        11L, 21L, 31L, RepositoryFormat.RUBYGEMS, "gems/demo-1.0.0.gem",
+        "gem", Map.of());
+    when(fixture.repositoryDao.findByName(repository.name())).thenReturn(Optional.of(repository));
+    when(fixture.assetDao.findAssetById(gem.id())).thenReturn(Optional.of(gem));
+
+    assertEquals(1, fixture.controller.deleteForCleanup(
+        repository.name(), "ASSET", gem.id(), gem.path(), "cleanup-run:1"));
+
+    verify(fixture.assetDao).deleteAssetById(gem.id());
+    verify(fixture.indexRebuildDao).enqueue(
+        repository.id(), RepositoryIndexRebuildDao.RUBYGEMS_METADATA);
+  }
+
+  @Test
+  void cleanupDeletesNugetPackageAndNuspecAsOneSubject() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord repository =
+        repository(1L, "nuget", RepositoryFormat.NUGET, RepositoryType.HOSTED);
+    String packagePath = "v3-flatcontainer/demo/1.0.0/demo.1.0.0.nupkg";
+    String nuspecPath = "v3-flatcontainer/demo/1.0.0/demo.nuspec";
+    ComponentRecord packageComponent = new ComponentRecord(
+        21L,
+        repository.id(),
+        RepositoryFormat.NUGET,
+        "v3-flatcontainer/demo/1.0.0",
+        packagePath,
+        null,
+        "nuget",
+        new byte[] {21},
+        Map.of("path", packagePath),
+        Instant.EPOCH);
+    AssetRecord nupkg = asset(
+        11L, packageComponent.id(), 31L, RepositoryFormat.NUGET, packagePath,
+        "nuget", Map.of());
+    AssetRecord nuspec = asset(
+        12L, 22L, 32L, RepositoryFormat.NUGET, nuspecPath,
+        "nuget", Map.of());
+    when(fixture.repositoryDao.findByName(repository.name())).thenReturn(Optional.of(repository));
+    when(fixture.componentDao.findById(packageComponent.id()))
+        .thenReturn(Optional.of(packageComponent));
+    when(fixture.assetDao.listAssetsByComponent(packageComponent.id()))
+        .thenReturn(List.of(nupkg));
+    when(fixture.assetDao.findAssetByPath(repository.id(), packagePath))
+        .thenReturn(Optional.of(nupkg));
+    when(fixture.assetDao.findAssetByPath(repository.id(), nuspecPath))
+        .thenReturn(Optional.of(nuspec));
+
+    assertEquals(2, fixture.controller.deleteForCleanup(
+        repository.name(), "COMPONENT", packageComponent.id(), packagePath, "cleanup-run:1"));
+
+    verify(fixture.assetDao).deleteAssetById(nupkg.id());
+    verify(fixture.assetDao).deleteAssetById(nuspec.id());
+    verify(fixture.componentDao).deleteIfNoAssets(packageComponent.id());
+    verify(fixture.componentDao).deleteIfNoAssets(22L);
   }
 
   @Test

@@ -36,7 +36,7 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
     assertTrue(flyway().validateWithResult().validationSuccessful);
     var result = flyway().migrate();
     assertEquals(0, result.migrationsExecuted);
-    assertEquals("40", flyway().info().current().getVersion().getVersion());
+    assertEquals("43", flyway().info().current().getVersion().getVersion());
   }
 
   @Test
@@ -78,8 +78,8 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
 
     Flyway resumed = migration(null);
     resumed.repair();
-    assertEquals(3, resumed.migrate().migrationsExecuted);
-    assertEquals("40", resumed.info().current().getVersion().getVersion());
+    assertEquals(6, resumed.migrate().migrationsExecuted);
+    assertEquals("43", resumed.info().current().getVersion().getVersion());
     assertEquals(1, jdbc().queryForObject("""
         SELECT COUNT(*)
         FROM information_schema.table_constraints
@@ -89,6 +89,49 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
         """, Integer.class));
     assertEquals(1, jdbc().queryForObject(
         "SELECT COUNT(*) FROM security_scan_profile WHERE id = 1", Integer.class));
+  }
+
+  @Test
+  void cleanupIndexMigrationResumesAfterCommittedOnlineDdl() {
+    Flyway throughV42 = migration("42");
+    throughV42.clean();
+    assertEquals(42, throughV42.migrate().migrationsExecuted);
+
+    jdbc().execute("""
+        ALTER TABLE component
+          ADD COLUMN cleanup_namespace_prefix VARBINARY(384)
+            GENERATED ALWAYS AS (
+              LEFT(CAST(COALESCE(namespace, '') AS BINARY), 384)
+            ) VIRTUAL,
+          ALGORITHM=INSTANT
+        """);
+    jdbc().execute("""
+        ALTER TABLE asset
+          ADD INDEX idx_asset_cleanup_unbound (repository_id, component_id, id),
+          ALGORITHM=INPLACE,
+          LOCK=NONE
+        """);
+
+    Flyway resumed = migration(null);
+    assertEquals(1, resumed.migrate().migrationsExecuted);
+    assertEquals("43", resumed.info().current().getVersion().getVersion());
+    assertEquals(5, jdbc().queryForObject("""
+        SELECT COUNT(*)
+        FROM information_schema.columns
+        WHERE table_schema = DATABASE()
+          AND table_name = 'component'
+          AND column_name IN (
+            'cleanup_namespace_prefix', 'cleanup_namespace_hash',
+            'cleanup_name_prefix', 'cleanup_name_hash', 'cleanup_kind_key')
+        """, Integer.class));
+    assertEquals(4, jdbc().queryForObject("""
+        SELECT COUNT(DISTINCT index_name)
+        FROM information_schema.statistics
+        WHERE table_schema = DATABASE()
+          AND index_name IN (
+            'idx_component_cleanup_scan', 'idx_asset_cleanup_unbound',
+            'idx_docker_manifest_cleanup', 'idx_cleanup_protection_scan')
+        """, Integer.class));
   }
 
   @Test

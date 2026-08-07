@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.AssetPolicyState;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.AssetSecurityState;
@@ -16,12 +17,14 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.EnforcementMode;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyAction;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyDecision;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanState;
+import com.github.klboke.kkrepo.server.cleanup.CleanupUsageTracker;
 import com.github.klboke.kkrepo.server.security.RepositorySecurityFilter;
 import io.micrometer.core.instrument.Timer;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
@@ -41,16 +44,40 @@ public class ArtifactDownloadPolicy {
   private final SecurityScanCandidateClassifier classifier;
   private final SecurityScanningProperties properties;
   private final SecurityScanMetrics metrics;
+  private final AssetDao assets;
+  private final CleanupUsageTracker cleanupUsage;
+
+  @Autowired
+  public ArtifactDownloadPolicy(
+      SecurityScanDao scans,
+      SecurityScanCandidateClassifier classifier,
+      SecurityScanningProperties properties,
+      SecurityScanMetrics metrics,
+      AssetDao assets,
+      CleanupUsageTracker cleanupUsage) {
+    this.scans = scans;
+    this.classifier = classifier;
+    this.properties = properties;
+    this.metrics = metrics;
+    this.assets = assets;
+    this.cleanupUsage = cleanupUsage;
+  }
+
+  public ArtifactDownloadPolicy(
+      SecurityScanDao scans,
+      SecurityScanCandidateClassifier classifier,
+      SecurityScanningProperties properties,
+      SecurityScanMetrics metrics,
+      AssetDao assets) {
+    this(scans, classifier, properties, metrics, assets, null);
+  }
 
   public ArtifactDownloadPolicy(
       SecurityScanDao scans,
       SecurityScanCandidateClassifier classifier,
       SecurityScanningProperties properties,
       SecurityScanMetrics metrics) {
-    this.scans = scans;
-    this.classifier = classifier;
-    this.properties = properties;
-    this.metrics = metrics;
+    this(scans, classifier, properties, metrics, null, null);
   }
 
   public Decision beforeRead(long assetId, long servedBlobId) {
@@ -58,12 +85,30 @@ public class ArtifactDownloadPolicy {
   }
 
   public Decision beforeRead(long assetId, long servedBlobId, Long entryRepositoryId) {
-    if (!shouldEvaluateCurrentRequest()) return Decision.allow();
-    return evaluateSnapshots(
-        () -> scans.findDownloadPolicySnapshots(assetId, entryRepositoryId).stream()
-            .map(snapshot -> bindServedBlobSnapshot(snapshot, servedBlobId))
-            .toList(),
-        false);
+    return beforeRead(assetId, servedBlobId, entryRepositoryId, entryRepositoryId);
+  }
+
+  /** Evaluates against the request entry while recording usage for the concrete source. */
+  public Decision beforeReadFromRepository(
+      long assetId, long servedBlobId, long sourceRepositoryId) {
+    return beforeRead(
+        assetId, servedBlobId, sourceRepositoryId, requestEntryRepositoryId());
+  }
+
+  private Decision beforeRead(
+      long assetId,
+      long servedBlobId,
+      Long sourceRepositoryId,
+      Long entryRepositoryId) {
+    Decision decision = shouldEvaluateCurrentRequest()
+        ? evaluateSnapshots(
+            () -> scans.findDownloadPolicySnapshots(assetId, entryRepositoryId).stream()
+                .map(snapshot -> bindServedBlobSnapshot(snapshot, servedBlobId))
+                .toList(),
+            false)
+        : Decision.allow();
+    recordDownload(assetId, sourceRepositoryId);
+    return decision;
   }
 
   /**
@@ -106,36 +151,39 @@ public class ArtifactDownloadPolicy {
       String contentType,
       long contentLength,
       long entryRepositoryId) {
-    if (!shouldEvaluateCurrentRequest()) return Decision.allow();
-    return evaluateSnapshots(
-        () -> {
-          List<DownloadPolicySnapshot> snapshots =
-              scans.findDownloadPolicySnapshots(sourceAssetId, entryRepositoryId);
-          if (!snapshots.isEmpty()) {
-            return snapshots.stream()
-                .map(snapshot -> bindGroupCacheSnapshot(
-                    snapshot,
-                    sourceBlobId,
-                    sourceRepositoryId,
-                    format,
-                    path,
-                    kind,
-                    contentType,
-                    contentLength))
-                .toList();
-          }
-          return scans.findDownloadPolicyContexts(sourceRepositoryId, entryRepositoryId).stream()
-              .map(context -> pendingSnapshot(
-                  sourceRepositoryId,
-                  format,
-                  path,
-                  kind,
-                  contentType,
-                  contentLength,
-                  context))
-              .toList();
-        },
-        false);
+    Decision decision = shouldEvaluateCurrentRequest()
+        ? evaluateSnapshots(
+            () -> {
+              List<DownloadPolicySnapshot> snapshots =
+                  scans.findDownloadPolicySnapshots(sourceAssetId, entryRepositoryId);
+              if (!snapshots.isEmpty()) {
+                return snapshots.stream()
+                    .map(snapshot -> bindGroupCacheSnapshot(
+                        snapshot,
+                        sourceBlobId,
+                        sourceRepositoryId,
+                        format,
+                        path,
+                        kind,
+                        contentType,
+                        contentLength))
+                    .toList();
+              }
+              return scans.findDownloadPolicyContexts(sourceRepositoryId, entryRepositoryId).stream()
+                  .map(context -> pendingSnapshot(
+                      sourceRepositoryId,
+                      format,
+                      path,
+                      kind,
+                      contentType,
+                      contentLength,
+                      context))
+                  .toList();
+            },
+            false)
+        : Decision.allow();
+    recordDownload(sourceAssetId, sourceRepositoryId);
+    return decision;
   }
 
   /**
@@ -233,7 +281,7 @@ public class ArtifactDownloadPolicy {
    * <p>The DAO loads the batch in one statement; the strictest applicable manifest decision wins.
    */
   public Decision beforeReadAll(List<Long> assetIds) {
-    return beforeReadAll(assetIds, false);
+    return beforeReadAll(assetIds, false, requestEntryRepositoryId());
   }
 
   /**
@@ -243,7 +291,11 @@ public class ArtifactDownloadPolicy {
    * closed instead of issuing additional hot-path queries whose count depends on tag cardinality.
    */
   public Decision beforeReadAll(List<Long> assetIds, boolean referencesTruncated) {
-    if (!shouldEvaluateCurrentRequest()) return Decision.allow();
+    return beforeReadAll(assetIds, referencesTruncated, requestEntryRepositoryId());
+  }
+
+  public Decision beforeReadAll(
+      List<Long> assetIds, boolean referencesTruncated, Long sourceRepositoryId) {
     List<Long> ids = assetIds == null
         ? List.of()
         : assetIds.stream()
@@ -258,9 +310,13 @@ public class ArtifactDownloadPolicy {
       ids = ids.subList(0, SecurityScanDao.MAX_DOWNLOAD_POLICY_BATCH);
     }
     List<Long> boundedIds = ids;
-    return evaluateSnapshots(
-        () -> scans.findDownloadPolicySnapshots(boundedIds, requestEntryRepositoryId()),
-        truncated);
+    Decision decision = shouldEvaluateCurrentRequest()
+        ? evaluateSnapshots(
+            () -> scans.findDownloadPolicySnapshots(boundedIds, requestEntryRepositoryId()),
+            truncated)
+        : Decision.allow();
+    boundedIds.forEach(assetId -> recordDownload(assetId, sourceRepositoryId));
+    return decision;
   }
 
   private Decision evaluateSnapshots(
@@ -457,6 +513,33 @@ public class ArtifactDownloadPolicy {
    */
   public boolean shouldEvaluateCurrentRequest() {
     return properties.isEnabled() && !internalScannerRequest();
+  }
+
+  /** Cheap guard for protocol paths that need a repository-wide reference lookup. */
+  public boolean shouldInspectDownload(Long sourceRepositoryId) {
+    return shouldEvaluateCurrentRequest()
+        || (isExternalGetRequest()
+            && cleanupUsage != null
+            && cleanupUsage.isTracked(sourceRepositoryId));
+  }
+
+  private void recordDownload(long assetId, Long sourceRepositoryId) {
+    if (assetId <= 0 || !isExternalGetRequest()) {
+      return;
+    }
+    if (cleanupUsage != null) {
+      cleanupUsage.record(assetId, sourceRepositoryId);
+    } else if (assets != null) {
+      assets.touchLastDownloaded(assetId, Instant.now());
+    }
+  }
+
+  private boolean isExternalGetRequest() {
+    if (internalScannerRequest()
+        || !(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attrs)) {
+      return false;
+    }
+    return "GET".equalsIgnoreCase(attrs.getRequest().getMethod());
   }
 
   private boolean internalScannerRequest() {

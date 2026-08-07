@@ -28,7 +28,7 @@ services:
     network_mode: none
 
   kkrepo:
-    image: ghcr.io/klboke/kkrepo:${KKREPO_IMAGE_TAG:-0.6.0}
+    image: ghcr.io/klboke/kkrepo:${KKREPO_IMAGE_TAG:-0.7.0}
     depends_on:
       postgresql:
         condition: service_healthy
@@ -61,7 +61,7 @@ services:
     restart: unless-stopped
 
   scanner:
-    image: ghcr.io/klboke/kkrepo-scanner:${KKREPO_SCANNER_IMAGE_TAG:-0.6.0}
+    image: ghcr.io/klboke/kkrepo-scanner:${KKREPO_SCANNER_IMAGE_TAG:-0.7.0}
     profiles: ["security-scanning"]
     environment:
       KKREPO_SCANNER_SERVICE_CREDENTIAL: ${KKREPO_SECURITY_SCANNING_SERVICE_CREDENTIAL:-}
@@ -91,7 +91,7 @@ services:
     restart: unless-stopped
 
   scanner-database-updater:
-    image: ghcr.io/klboke/kkrepo-scanner:${KKREPO_SCANNER_IMAGE_TAG:-0.6.0}
+    image: ghcr.io/klboke/kkrepo-scanner:${KKREPO_SCANNER_IMAGE_TAG:-0.7.0}
     profiles: ["security-scanning"]
     entrypoint: ["/bin/sh", "-ec"]
     command:

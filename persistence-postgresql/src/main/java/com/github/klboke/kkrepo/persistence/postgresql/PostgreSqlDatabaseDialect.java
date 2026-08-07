@@ -37,6 +37,16 @@ public final class PostgreSqlDatabaseDialect implements DatabaseDialect {
   }
 
   @Override
+  public String materializedCteModifier() {
+    return "MATERIALIZED";
+  }
+
+  @Override
+  public String unboundAssetRepositoryExpression() {
+    return "CASE WHEN component_id IS NULL THEN repository_id END";
+  }
+
+  @Override
   public ComponentPersistenceDialect components() {
     return components;
   }
@@ -119,6 +129,11 @@ public final class PostgreSqlDatabaseDialect implements DatabaseDialect {
         throw new IllegalStateException("Component upsert did not return an id");
       }
       return id;
+    }
+
+    @Override
+    public String caseSensitiveText(String expression) {
+      return "(" + expression + ") COLLATE \"C\"";
     }
 
     @Override

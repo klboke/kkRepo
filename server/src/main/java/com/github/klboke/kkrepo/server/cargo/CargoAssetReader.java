@@ -39,12 +39,13 @@ class CargoAssetReader {
         ? null
         : assetDao.findBlobById(asset.assetBlobId()).orElse(null);
     return serveBlob(
-        asset.id(), blob, asset.contentType(), asset.lastUpdatedAt(), headOnly, path);
+        asset.id(), asset.repositoryId(), blob, asset.contentType(), asset.lastUpdatedAt(), headOnly, path);
   }
 
   MavenResponse serveSnapshot(CachedAssetMetadata snapshot, boolean headOnly, String path) {
     return serveBlob(
         snapshot.assetId(),
+        snapshot.repositoryId(),
         snapshot.toBlobRecord(),
         snapshot.contentType(),
         snapshot.lastUpdatedAt(),
@@ -66,7 +67,7 @@ class CargoAssetReader {
     if (blob == null) {
       throw new CargoExceptions.CargoNotFoundException(path);
     }
-    beforeRead(snapshot.assetId(), blob.id());
+    beforeRead(snapshot.assetId(), blob.id(), snapshot.repositoryId());
     try (var in = blobStorageRegistry.forBlobStoreId(blob.blobStoreId()).get(
         BlobReferenceCodec.reference(blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size()))
         .orElseThrow(() -> new CargoExceptions.CargoNotFoundException(path))) {
@@ -78,6 +79,7 @@ class CargoAssetReader {
 
   private MavenResponse serveBlob(
       long assetId,
+      long sourceRepositoryId,
       AssetBlobRecord blob,
       String contentType,
       Instant lastModified,
@@ -86,7 +88,7 @@ class CargoAssetReader {
     if (blob == null) {
       throw new CargoExceptions.CargoNotFoundException(path);
     }
-    beforeRead(assetId, blob.id());
+    beforeRead(assetId, blob.id(), sourceRepositoryId);
     var storage = blobStorageRegistry.forBlobStoreId(blob.blobStoreId());
     var reference = BlobReferenceCodec.reference(
         blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size());
@@ -103,7 +105,9 @@ class CargoAssetReader {
         blob.size(), contentType, etag, lastModified);
   }
 
-  void beforeRead(long assetId, long blobId) {
-    if (downloadPolicy != null) downloadPolicy.beforeRead(assetId, blobId);
+  void beforeRead(long assetId, long blobId, long sourceRepositoryId) {
+    if (downloadPolicy != null) {
+      downloadPolicy.beforeReadFromRepository(assetId, blobId, sourceRepositoryId);
+    }
   }
 }

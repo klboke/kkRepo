@@ -58,6 +58,25 @@ class ProxiedHttpClientFactoryTest {
   }
 
   @Test
+  void proxyResolvedTargetRequiresAnEnabledProxy() throws Exception {
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      IllegalArgumentException error = assertThrows(
+          IllegalArgumentException.class,
+          () -> factory.execute(
+              "repo-a",
+              null,
+              "GET",
+              proxyTarget("http://packages.invalid/artifact"),
+              Map.of(),
+              5000));
+
+      assertEquals(
+          "proxy-resolved outbound target requires an enabled proxy config",
+          error.getMessage());
+    }
+  }
+
+  @Test
   void disabledProxyUsesPinnedDirectClientAndNormalizesEmptyPath() throws Exception {
     HttpServer upstream = HttpServer.create(
         new InetSocketAddress(java.net.InetAddress.getByName("127.0.0.1"), 0), 0);
@@ -334,6 +353,34 @@ class ProxiedHttpClientFactoryTest {
   }
 
   @Test
+  void socksClientDelegatesTargetDnsToConfiguredProxy() throws Exception {
+    RecordingSocksServer server = RecordingSocksServer.acceptingAny();
+    server.start();
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      OutboundProxyConfig config = new OutboundProxyConfig(
+          OutboundProxyConfig.Type.SOCKS, "127.0.0.1", server.port(), null, null);
+
+      assertThrows(IOException.class, () -> factory.execute(
+          "repo-a",
+          config,
+          "GET",
+          proxyTarget("http://artifact.example/packages/demo.jar"),
+          Map.of(),
+          5000));
+
+      assertTrue(server.awaitHandshake(), "SOCKS server never saw CONNECT");
+      assertTrue(!server.targetAddressTypes().isEmpty(), "SOCKS server never saw a target");
+      assertTrue(server.targetAddressTypes().stream().allMatch(type -> type == 0x03),
+          "proxy-resolved SOCKS targets must use the domain address type: "
+              + server.targetAddressTypes());
+      assertTrue(server.targetHosts().stream().allMatch("artifact.example"::equals),
+          "SOCKS proxy received an unexpected target hostname: " + server.targetHosts());
+    } finally {
+      server.stop();
+    }
+  }
+
+  @Test
   void standaloneSocksSocketRetainsUnresolvedDomainCompatibility() throws Exception {
     RecordingSocksServer server = RecordingSocksServer.acceptingAny();
     server.start();
@@ -498,6 +545,34 @@ class ProxiedHttpClientFactoryTest {
   }
 
   @Test
+  void httpProxyReceivesOriginalHostnameForProxyResolvedTarget() throws Exception {
+    try (FakeHttpProxyServer proxy = FakeHttpProxyServer.start(request ->
+            FakeHttpProxyServer.FakeResponse.bytes(200, Map.of(),
+                "proxied".getBytes(StandardCharsets.UTF_8)));
+        ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      OutboundProxyConfig config = new OutboundProxyConfig(
+          OutboundProxyConfig.Type.HTTP, "127.0.0.1", proxy.port(), null, null);
+
+      try (ProxiedHttpClientFactory.ProxiedResponse response = factory.execute(
+          "repo-a",
+          config,
+          "GET",
+          proxyTarget("http://packages.invalid/org/foo.jar?raw=true"),
+          Map.of(),
+          5000)) {
+        assertEquals(200, response.status());
+      }
+
+      FakeHttpProxyServer.RecordedRequest recorded = proxy.requests().get(0);
+      URI routed = URI.create(recorded.target());
+      assertEquals("packages.invalid", routed.getHost());
+      assertEquals("/org/foo.jar", routed.getRawPath());
+      assertEquals("raw=true", routed.getRawQuery());
+      assertEquals("packages.invalid", recorded.header("Host"));
+    }
+  }
+
+  @Test
   void httpProxyHeadRequestReturnsEntityLessResponse() throws Exception {
     try (FakeHttpProxyServer proxy = FakeHttpProxyServer.start(request ->
             FakeHttpProxyServer.FakeResponse.status(200, Map.of("ETag", "\"abc\"")));
@@ -609,6 +684,28 @@ class ProxiedHttpClientFactoryTest {
       assertEquals(target.addresses().get(0),
           java.net.InetAddress.getByName(URI.create("http://" + connect.target()).getHost()));
       assertTrue(connect.target().endsWith(":8443"));
+    }
+  }
+
+  @Test
+  void httpsProxyConnectUsesOriginalHostnameForProxyResolvedTarget() throws Exception {
+    try (FakeHttpProxyServer proxy = FakeHttpProxyServer.start(request ->
+            FakeHttpProxyServer.FakeResponse.status(500, Map.of()));
+        ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      OutboundProxyConfig config = new OutboundProxyConfig(
+          OutboundProxyConfig.Type.HTTP, "127.0.0.1", proxy.port(), null, null);
+
+      assertThrows(IOException.class, () -> factory.execute(
+          "repo-a",
+          config,
+          "GET",
+          proxyTarget("https://packages.invalid:8443/path"),
+          Map.of(),
+          5000));
+
+      FakeHttpProxyServer.RecordedRequest connect = proxy.requests().get(0);
+      assertEquals("CONNECT", connect.method());
+      assertEquals("packages.invalid:8443", connect.target());
     }
   }
 
@@ -733,6 +830,11 @@ class ProxiedHttpClientFactoryTest {
         .resolveHttpTarget(url, "outbound client test");
   }
 
+  private static ResolvedHttpTarget proxyTarget(String url) {
+    return OutboundRequestPolicy.allowPrivateForTests()
+        .resolveHttpTarget(url, "outbound client test", true);
+  }
+
   private static void assertPinnedProxyTarget(
       ResolvedHttpTarget target, FakeHttpProxyServer.RecordedRequest recorded)
       throws Exception {
@@ -757,6 +859,7 @@ class ProxiedHttpClientFactoryTest {
     private final List<String> attempts = new CopyOnWriteArrayList<>();
     private final List<Integer> selectedMethods = new CopyOnWriteArrayList<>();
     private final List<Integer> targetAddressTypes = new CopyOnWriteArrayList<>();
+    private final List<String> targetHosts = new CopyOnWriteArrayList<>();
     private final CountDownLatch handshakeSeen = new CountDownLatch(1);
     private ServerSocket serverSocket;
     private Thread thread;
@@ -804,6 +907,11 @@ class ProxiedHttpClientFactoryTest {
     /** SOCKS5 address types used by CONNECT (0x01 IPv4, 0x03 domain, 0x04 IPv6). */
     List<Integer> targetAddressTypes() {
       return targetAddressTypes;
+    }
+
+    /** Domain names sent in SOCKS5 CONNECT requests. */
+    List<String> targetHosts() {
+      return targetHosts;
     }
 
     boolean awaitHandshake() throws InterruptedException {
@@ -889,7 +997,8 @@ class ProxiedHttpClientFactoryTest {
         targetAddressTypes.add(atyp);
         if (atyp == 0x03) {
           int len = in.read();
-          in.readNBytes(Math.max(0, len));
+          targetHosts.add(new String(
+              in.readNBytes(Math.max(0, len)), StandardCharsets.US_ASCII));
         } else if (atyp == 0x01) {
           in.readNBytes(4);
         } else if (atyp == 0x04) {

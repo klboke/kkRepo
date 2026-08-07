@@ -7,6 +7,46 @@ installCsrfFetch();
 let repositories = [];
 let repositoryRecipes = [];
 let blobStores = [];
+let cleanupPolicies = [];
+let cleanupCapabilities = [];
+let cleanupRuns = [];
+const CLEANUP_POLICY_DEFAULT_PAGE_SIZE = 10;
+const CLEANUP_RUN_DEFAULT_PAGE_SIZE = 10;
+let cleanupPolicyPage = {
+  after: 0,
+  cursors: [0],
+  page: 0,
+  size: CLEANUP_POLICY_DEFAULT_PAGE_SIZE,
+  nextAfter: null
+};
+let cleanupRunPage = {
+  before: 0,
+  cursors: [0],
+  page: 0,
+  size: CLEANUP_RUN_DEFAULT_PAGE_SIZE,
+  nextBefore: null
+};
+let editingCleanupPolicyId = null;
+let cleanupTryRunPolicyId = null;
+let cleanupTryRunTrigger = null;
+let cleanupTryRunSubmitting = false;
+const cleanupScheduleToggleInFlight = new Set();
+let cleanupActionMenuPolicyId = null;
+let cleanupActionMenuTrigger = null;
+let cleanupRunPollToken = 0;
+let activeCleanupRunDetailId = null;
+let cleanupRunDetailTrigger = null;
+let cleanupRunDetailLoadSequence = 0;
+let cleanupRunDetailItemGroups = [];
+let cleanupRunDetailItemsLoaded = false;
+let cleanupRunDetailView = null;
+let cleanupRepositorySelection = new Set();
+let cleanupRepositoryFilter = "";
+let cleanupSchedulePreviewTimer = null;
+let cleanupSchedulePreviewController = null;
+let cleanupSchedulePreviewSequence = 0;
+let activeFieldHelpTrigger = null;
+let fieldHelpHideTimer = null;
 let securityUsers = [];
 let securityRoles = [];
 let securityPrivileges = [];
@@ -114,9 +154,14 @@ const SECURITY_SCAN_ROUTE_ALIASES =
   [SECURITY_SCAN_ROUTE_BASE, "#admin/security/scanning"];
 const SECURITY_SCAN_TABS =
   new Set(["overview", "tasks", "findings", "repositories", "policies", "waivers"]);
+const CLEANUP_ROUTE_BASE = "#admin/repository/cleanup-policies";
+const CLEANUP_ROUTE_ALIASES =
+  [CLEANUP_ROUTE_BASE, "#admin/repository/cleanup"];
+const CLEANUP_TABS = new Set(["policies", "runs"]);
 
 const viewHashRoutes = {
   repositories: "#admin/repository/repositories",
+  "cleanup-policies": CLEANUP_ROUTE_BASE,
   blobstores: "#admin/repository/blobstores",
   "docker-registry": "#admin/repository/docker",
   "security-users": "#admin/security/users",
@@ -138,6 +183,8 @@ const hashViewRoutes = {
   "#admin": "repositories",
   "#admin/repository": "repositories",
   "#admin/repository/repositories": "repositories",
+  "#admin/repository/cleanup-policies": "cleanup-policies",
+  "#admin/repository/cleanup": "cleanup-policies",
   "#admin/repository/blobstores": "blobstores",
   "#admin/repository/blob-stores": "blobstores",
   "#admin/repository/docker": "docker-registry",
@@ -542,9 +589,21 @@ function securityScanTabFromHash(hash = window.location.hash) {
   return null;
 }
 
+function cleanupTabFromHash(hash = window.location.hash) {
+  const path = normalizeAdminHash(hash);
+  for (const base of CLEANUP_ROUTE_ALIASES) {
+    if (path === base) return "policies";
+    if (!path.startsWith(`${base}/`)) continue;
+    const tab = path.substring(base.length + 1);
+    return CLEANUP_TABS.has(tab) ? tab : "policies";
+  }
+  return null;
+}
+
 function viewFromHash(hash = window.location.hash) {
   const path = normalizeAdminHash(hash);
   if (securityScanTabFromHash(path) != null) return "security-scanning";
+  if (cleanupTabFromHash(path) != null) return "cleanup-policies";
   return hashViewRoutes[path] || null;
 }
 
@@ -636,6 +695,19 @@ function updateHashForSecurityScanTab(tab, replace = false) {
   const hash = selected === "overview"
     ? SECURITY_SCAN_ROUTE_BASE
     : `${SECURITY_SCAN_ROUTE_BASE}/${selected}`;
+  if (window.location.hash === hash) return;
+  if (replace) {
+    window.history.replaceState(null, "", hash);
+  } else {
+    window.history.pushState(null, "", hash);
+  }
+}
+
+function updateHashForCleanupTab(tab, replace = false) {
+  const selected = CLEANUP_TABS.has(tab) ? tab : "policies";
+  const hash = selected === "policies"
+    ? CLEANUP_ROUTE_BASE
+    : `${CLEANUP_ROUTE_BASE}/${selected}`;
   if (window.location.hash === hash) return;
   if (replace) {
     window.history.replaceState(null, "", hash);
@@ -5301,6 +5373,1347 @@ async function deleteSecurityScanWaiver(waiverId) {
   }
 }
 
+// ---- Cleanup policies ---------------------------------------------------
+
+function cleanupCapability(format) {
+  return cleanupCapabilities.find((item) => lowerOrEmpty(item.format) === lowerOrEmpty(format)) || null;
+}
+
+function cleanupPolicyView(policyId) {
+  return cleanupPolicies.find((item) => Number(item.policy?.id) === Number(policyId)) || null;
+}
+
+function selectCleanupTab(tab, options = {}) {
+  const selected = CLEANUP_TABS.has(tab) ? tab : "policies";
+  if (options.updateHash !== false) {
+    updateHashForCleanupTab(selected, Boolean(options.replaceHash));
+  }
+  document.querySelectorAll("[data-cleanup-tab]").forEach((button) => {
+    const active = button.dataset.cleanupTab === selected;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
+  });
+  document.querySelectorAll("[data-cleanup-panel]").forEach((panel) => {
+    const active = panel.dataset.cleanupPanel === selected;
+    panel.classList.toggle("is-active", active);
+    panel.hidden = !active;
+  });
+  document.getElementById("create-cleanup-policy-button").hidden = selected !== "policies";
+}
+
+function handleCleanupTabKeydown(event) {
+  const tabs = Array.from(document.querySelectorAll("[data-cleanup-tab]"));
+  const currentIndex = tabs.indexOf(event.currentTarget);
+  if (currentIndex < 0) return;
+  let nextIndex;
+  if (event.key === "ArrowRight") {
+    nextIndex = (currentIndex + 1) % tabs.length;
+  } else if (event.key === "ArrowLeft") {
+    nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+  } else if (event.key === "Home") {
+    nextIndex = 0;
+  } else if (event.key === "End") {
+    nextIndex = tabs.length - 1;
+  } else {
+    return;
+  }
+  event.preventDefault();
+  const nextTab = tabs[nextIndex];
+  selectCleanupTab(nextTab.dataset.cleanupTab);
+  nextTab.focus();
+}
+
+function cleanupRuleBadges(criteria = {}) {
+  const rules = [];
+  if (criteria.pattern) rules.push(`${criteria.patternType === "REGEX" ? "regex" : "glob"}: ${criteria.pattern}`);
+  if (criteria.publishedOlderThanDays != null) rules.push(`published > ${criteria.publishedOlderThanDays}d`);
+  if (criteria.lastDownloadedOlderThanDays != null) rules.push(`downloaded > ${criteria.lastDownloadedOlderThanDays}d`);
+  if (criteria.retainCount != null) rules.push(`keep ${criteria.retainCount}`);
+  return `<div class="cleanup-policy-rule-list">${rules
+    .map((rule) => `<span class="state-badge compact">${escapeHtml(rule)}</span>`)
+    .join("")}</div>`;
+}
+
+function cleanupScheduleLabel(schedule) {
+  if (!schedule) return "Disabled";
+  return `${schedule.cronExpression} · ${schedule.timeZone}`;
+}
+
+function cleanupActionMenuItems() {
+  return Array.from(document.querySelectorAll(
+    "#cleanup-policy-action-menu [role='menuitem']:not(:disabled)"));
+}
+
+function positionCleanupPolicyActionMenu() {
+  const menu = document.getElementById("cleanup-policy-action-menu");
+  const trigger = cleanupActionMenuTrigger;
+  if (!trigger?.isConnected || menu.hidden) return;
+  const triggerRect = trigger.getBoundingClientRect();
+  if (triggerRect.bottom < 0 || triggerRect.top > window.innerHeight) {
+    closeCleanupPolicyActionMenu();
+    return;
+  }
+  const menuRect = menu.getBoundingClientRect();
+  const viewportPadding = 10;
+  const gap = 6;
+  let left = triggerRect.right - menuRect.width;
+  left = Math.max(viewportPadding, Math.min(left, window.innerWidth - menuRect.width - viewportPadding));
+  let top = triggerRect.bottom + gap;
+  if (top + menuRect.height > window.innerHeight - viewportPadding
+      && triggerRect.top - menuRect.height - gap >= viewportPadding) {
+    top = triggerRect.top - menuRect.height - gap;
+  }
+  menu.style.left = `${Math.round(left)}px`;
+  menu.style.top = `${Math.round(top)}px`;
+}
+
+function closeCleanupPolicyActionMenu(options = {}) {
+  const menu = document.getElementById("cleanup-policy-action-menu");
+  const trigger = cleanupActionMenuTrigger;
+  if (trigger) trigger.setAttribute("aria-expanded", "false");
+  cleanupActionMenuPolicyId = null;
+  cleanupActionMenuTrigger = null;
+  menu.hidden = true;
+  menu.setAttribute("aria-hidden", "true");
+  menu.removeAttribute("aria-labelledby");
+  menu.innerHTML = "";
+  if (options.restoreFocus && trigger?.isConnected) trigger.focus();
+}
+
+function openCleanupPolicyActionMenu(policyId, trigger, focusTarget = null) {
+  const numericPolicyId = Number(policyId);
+  const view = cleanupPolicyView(numericPolicyId);
+  if (!view) return;
+  const menu = document.getElementById("cleanup-policy-action-menu");
+  if (!menu.hidden && cleanupActionMenuPolicyId === numericPolicyId) {
+    closeCleanupPolicyActionMenu({ restoreFocus: true });
+    return;
+  }
+  closeCleanupPolicyActionMenu();
+  cleanupActionMenuPolicyId = numericPolicyId;
+  cleanupActionMenuTrigger = trigger;
+  const executeSupported = Boolean(view.capability?.executeSupported);
+  const scheduleEnabled = Boolean(view.schedule?.enabled);
+  const scheduleToggleDisabled = !scheduleEnabled && !executeSupported;
+  menu.innerHTML = `
+    <button class="cleanup-policy-action-menu-item" data-cleanup-action="try-run" type="button" role="menuitem">Try Run</button>
+    <button class="cleanup-policy-action-menu-item" data-cleanup-action="execute" type="button" role="menuitem" ${executeSupported ? "" : "disabled"} title="${executeSupported ? "Run cleanup now" : "Protocol deletion adapter is still Try-Run-only"}">Run now</button>
+    ${view.schedule ? `<button class="cleanup-policy-action-menu-item" data-cleanup-action="schedule" data-enable="${scheduleEnabled ? "false" : "true"}" type="button" role="menuitem" ${scheduleToggleDisabled ? "disabled" : ""} title="${scheduleToggleDisabled ? "Protocol deletion adapter is still Try-Run-only" : scheduleEnabled ? "Disable automatic execution" : "Enable automatic execution"}">${scheduleEnabled ? "Disable schedule" : "Enable schedule"}</button>` : ""}
+    <div class="cleanup-policy-action-menu-separator" role="separator"></div>
+    <button class="cleanup-policy-action-menu-item is-danger" data-cleanup-action="delete" type="button" role="menuitem">Delete policy</button>`;
+  trigger.setAttribute("aria-expanded", "true");
+  menu.setAttribute("aria-hidden", "false");
+  menu.setAttribute("aria-labelledby", trigger.id);
+  menu.hidden = false;
+  positionCleanupPolicyActionMenu();
+  const items = cleanupActionMenuItems();
+  if (focusTarget === "first") items[0]?.focus();
+  if (focusTarget === "last") items.at(-1)?.focus();
+}
+
+function handleCleanupPolicyActionMenuKeydown(event) {
+  const menu = document.getElementById("cleanup-policy-action-menu");
+  if (menu.hidden || !menu.contains(event.target)) return false;
+  const items = cleanupActionMenuItems();
+  const currentIndex = items.indexOf(document.activeElement);
+  let nextIndex = null;
+  if (event.key === "ArrowDown") nextIndex = (currentIndex + 1) % items.length;
+  if (event.key === "ArrowUp") nextIndex = (currentIndex - 1 + items.length) % items.length;
+  if (event.key === "Home") nextIndex = 0;
+  if (event.key === "End") nextIndex = items.length - 1;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeCleanupPolicyActionMenu({ restoreFocus: true });
+    return true;
+  }
+  if (nextIndex == null) return false;
+  event.preventDefault();
+  items[nextIndex]?.focus();
+  return true;
+}
+
+function renderCleanupPolicyPagination() {
+  document.getElementById("cleanup-policy-page-summary").textContent =
+    cleanupPolicies.length === 1
+      ? "1 result on this page"
+      : `${cleanupPolicies.length} results on this page`;
+  document.getElementById("cleanup-policy-page-label").textContent =
+    `Page ${cleanupPolicyPage.page + 1}`;
+  document.getElementById("cleanup-policy-page-prev").disabled = cleanupPolicyPage.page === 0;
+  document.getElementById("cleanup-policy-page-next").disabled =
+    cleanupPolicyPage.nextAfter == null;
+  document.getElementById("cleanup-policy-page-size").value = String(cleanupPolicyPage.size);
+}
+
+function renderCleanupPolicies() {
+  closeCleanupPolicyActionMenu();
+  const body = document.getElementById("cleanup-policy-table");
+  renderCleanupPolicyPagination();
+  if (!cleanupPolicies.length) {
+    body.innerHTML = '<tr><td colspan="7" class="empty-cell">No cleanup policies yet.</td></tr>';
+    return;
+  }
+  body.innerHTML = cleanupPolicies.map((view) => {
+    const policy = view.policy;
+    const repositoryNames = (view.repositories || []).map((repository) => repository.name).join(", ");
+    return `
+      <tr>
+        <td><strong>${escapeHtml(policy.name)}</strong><br><span class="muted">revision ${escapeHtml(policy.revision)}</span></td>
+        <td>${formatBadge(policy.format)}</td>
+        <td title="${escapeHtml(repositoryNames)}">${escapeHtml((view.repositories || []).length)} · ${escapeHtml(repositoryNames)}</td>
+        <td>${cleanupRuleBadges(policy.criteria)}</td>
+        <td>${escapeHtml(cleanupScheduleLabel(view.schedule))}${view.schedule?.nextRunAt ? `<br><span class="muted">Next ${escapeHtml(formatDateTime(view.schedule.nextRunAt))}</span>` : ""}</td>
+        <td><span class="state-badge compact ${policy.state === "ACTIVE" ? "ok" : "warn"}">${escapeHtml(policy.state)}</span></td>
+        <td>
+          <div class="cleanup-policy-actions">
+            <button class="row-action cleanup-policy-edit" data-id="${escapeHtml(policy.id)}" type="button">Edit</button>
+            <button class="row-action cleanup-policy-more-actions" id="cleanup-policy-more-actions-${escapeHtml(policy.id)}" data-id="${escapeHtml(policy.id)}" type="button" aria-label="More actions for ${escapeHtml(policy.name)}" aria-haspopup="menu" aria-controls="cleanup-policy-action-menu" aria-expanded="false" title="More actions"><span aria-hidden="true">⋯</span></button>
+          </div>
+        </td>
+      </tr>`;
+  }).join("");
+}
+
+function cleanupRunTerminal(state) {
+  return ["SUCCEEDED", "SUCCEEDED_TRUNCATED", "PARTIAL_LIMIT_REACHED", "PARTIAL", "FAILED", "CANCELLED"].includes(String(state || ""));
+}
+
+function cleanupRunProgressLabel(run) {
+  const outcome = run.mode === "TRY_RUN"
+    ? `${run.wouldDeleteSubjects ?? 0} would delete`
+    : `${run.deletedSubjects ?? 0} deleted`;
+  return `${run.scannedSubjects ?? 0} scanned · ${outcome}`;
+}
+
+function updateCleanupRunInList(run) {
+  if (!run?.id) return;
+  const index = cleanupRuns.findIndex((item) => String(item.id) === String(run.id));
+  if (index >= 0) {
+    cleanupRuns[index] = run;
+  } else if (cleanupRunPage.page === 0) {
+    const hadMore = cleanupRunPage.nextBefore != null;
+    cleanupRuns.push(run);
+    cleanupRuns = cleanupRuns
+      .sort((left, right) => Number(right.id) - Number(left.id));
+    const overflowed = cleanupRuns.length > cleanupRunPage.size;
+    cleanupRuns = cleanupRuns.slice(0, cleanupRunPage.size);
+    cleanupRunPage.nextBefore = overflowed || hadMore
+      ? cleanupRuns.at(-1)?.id ?? null
+      : null;
+  }
+  renderCleanupRuns();
+}
+
+function renderCleanupRunPagination() {
+  document.getElementById("cleanup-run-page-summary").textContent =
+    cleanupRuns.length === 1
+      ? "1 result on this page"
+      : `${cleanupRuns.length} results on this page`;
+  document.getElementById("cleanup-run-page-label").textContent =
+    `Page ${cleanupRunPage.page + 1}`;
+  document.getElementById("cleanup-run-page-prev").disabled = cleanupRunPage.page === 0;
+  document.getElementById("cleanup-run-page-next").disabled =
+    cleanupRunPage.nextBefore == null;
+  document.getElementById("cleanup-run-page-size").value = String(cleanupRunPage.size);
+}
+
+function renderCleanupRuns() {
+  const body = document.getElementById("cleanup-run-table");
+  renderCleanupRunPagination();
+  if (!cleanupRuns.length) {
+    body.innerHTML = '<tr><td colspan="7" class="empty-cell">No cleanup runs yet.</td></tr>';
+    return;
+  }
+  body.innerHTML = cleanupRuns.map((run) => {
+    const policy = cleanupPolicyView(run.policyId)?.policy;
+    const terminal = cleanupRunTerminal(run.state);
+    return `
+      <tr>
+        <td><strong>#${escapeHtml(run.id)}</strong><br><span class="muted">${escapeHtml(formatDateTime(run.createdAt))}</span></td>
+        <td>${escapeHtml(policy?.name || `#${run.policyId}`)}</td>
+        <td>${escapeHtml(run.mode)}</td>
+        <td>${escapeHtml(run.triggerKind)}</td>
+        <td><span class="state-badge compact ${run.state === "FAILED" ? "bad" : terminal ? "ok" : "warn"}">${escapeHtml(run.state)}</span></td>
+        <td>${escapeHtml(cleanupRunProgressLabel(run))}</td>
+        <td><div class="cleanup-policy-actions">
+          <button class="row-action cleanup-run-view" data-id="${escapeHtml(run.id)}" type="button">View</button>
+          ${terminal ? "" : `<button class="row-action cleanup-run-cancel" data-id="${escapeHtml(run.id)}" type="button">Cancel</button>`}
+        </div></td>
+      </tr>`;
+  }).join("");
+}
+
+function resetCleanupPolicyPage() {
+  cleanupPolicyPage.after = 0;
+  cleanupPolicyPage.cursors = [0];
+  cleanupPolicyPage.page = 0;
+  cleanupPolicyPage.nextAfter = null;
+}
+
+function resetCleanupRunPage() {
+  cleanupRunPage.before = 0;
+  cleanupRunPage.cursors = [0];
+  cleanupRunPage.page = 0;
+  cleanupRunPage.nextBefore = null;
+}
+
+async function fetchCleanupRunPage() {
+  const response = await fetch(
+    `/internal/cleanup/runs?before=${encodeURIComponent(cleanupRunPage.before)}&limit=${cleanupRunPage.size}`);
+  if (!response.ok) throw new Error(await responseErrorMessage(response));
+  return response.json();
+}
+
+function applyCleanupRunPage(page) {
+  cleanupRuns = page.items || [];
+  cleanupRunPage.nextBefore = page.nextBefore ?? null;
+}
+
+async function loadCleanupRuns() {
+  try {
+    const page = await fetchCleanupRunPage();
+    applyCleanupRunPage(page);
+    if (cleanupRuns.length === 0 && cleanupRunPage.page > 0) {
+      cleanupRunPage.cursors.pop();
+      cleanupRunPage.page -= 1;
+      cleanupRunPage.before = cleanupRunPage.cursors.at(-1) || 0;
+      return loadCleanupRuns();
+    }
+    renderCleanupRuns();
+  } catch (error) {
+    showToast(`Cleanup runs failed to load: ${error.message}`, "error");
+  }
+}
+
+async function loadCleanupPolicies(options = {}) {
+  if (options.resetPage) {
+    resetCleanupPolicyPage();
+  }
+  try {
+    const [policyResponse, capabilityResponse, repositoryResponse, runPage] = await Promise.all([
+      fetch(`/internal/cleanup/policies?after=${encodeURIComponent(cleanupPolicyPage.after)}&limit=${cleanupPolicyPage.size}`),
+      fetch("/internal/cleanup/capabilities"),
+      fetch("/internal/repositories?purpose=admin"),
+      fetchCleanupRunPage()
+    ]);
+    if (!policyResponse.ok) throw new Error(await responseErrorMessage(policyResponse));
+    if (!capabilityResponse.ok) throw new Error(await responseErrorMessage(capabilityResponse));
+    if (!repositoryResponse.ok) throw new Error(await responseErrorMessage(repositoryResponse));
+    const policyPage = await policyResponse.json();
+    cleanupPolicies = policyPage.items || [];
+    cleanupPolicyPage.nextAfter = policyPage.nextAfter ?? null;
+    if (cleanupPolicies.length === 0 && cleanupPolicyPage.page > 0) {
+      cleanupPolicyPage.cursors.pop();
+      cleanupPolicyPage.page -= 1;
+      cleanupPolicyPage.after = cleanupPolicyPage.cursors.at(-1) || 0;
+      return loadCleanupPolicies();
+    }
+    cleanupCapabilities = await capabilityResponse.json();
+    repositories = await repositoryResponse.json();
+    applyCleanupRunPage(runPage);
+    if (cleanupRuns.length === 0 && cleanupRunPage.page > 0) {
+      cleanupRunPage.cursors.pop();
+      cleanupRunPage.page -= 1;
+      cleanupRunPage.before = cleanupRunPage.cursors.at(-1) || 0;
+      return loadCleanupPolicies();
+    }
+    renderCleanupPolicies();
+    renderCleanupRuns();
+  } catch (error) {
+    showToast(`Cleanup policies failed to load: ${error.message}`, "error");
+  }
+}
+
+async function changeCleanupPolicyPage(direction) {
+  if (direction === "next") {
+    if (cleanupPolicyPage.nextAfter == null) return;
+    cleanupPolicyPage.after = cleanupPolicyPage.nextAfter;
+    cleanupPolicyPage.cursors.push(cleanupPolicyPage.after);
+    cleanupPolicyPage.page += 1;
+  } else {
+    if (cleanupPolicyPage.page === 0) return;
+    cleanupPolicyPage.cursors.pop();
+    cleanupPolicyPage.page -= 1;
+    cleanupPolicyPage.after = cleanupPolicyPage.cursors.at(-1) || 0;
+  }
+  await loadCleanupPolicies();
+}
+
+async function resizeCleanupPolicyPage(size) {
+  cleanupPolicyPage.size = Number(size) || CLEANUP_POLICY_DEFAULT_PAGE_SIZE;
+  resetCleanupPolicyPage();
+  await loadCleanupPolicies();
+}
+
+async function changeCleanupRunPage(direction) {
+  if (direction === "next") {
+    if (cleanupRunPage.nextBefore == null) return;
+    cleanupRunPage.before = cleanupRunPage.nextBefore;
+    cleanupRunPage.cursors.push(cleanupRunPage.before);
+    cleanupRunPage.page += 1;
+  } else {
+    if (cleanupRunPage.page === 0) return;
+    cleanupRunPage.cursors.pop();
+    cleanupRunPage.page -= 1;
+    cleanupRunPage.before = cleanupRunPage.cursors.at(-1) || 0;
+  }
+  await loadCleanupRuns();
+}
+
+async function resizeCleanupRunPage(size) {
+  cleanupRunPage.size = Number(size) || CLEANUP_RUN_DEFAULT_PAGE_SIZE;
+  resetCleanupRunPage();
+  await loadCleanupRuns();
+}
+
+function cleanupRepositoryCandidates() {
+  const format = document.getElementById("cleanup-policy-format").value;
+  return repositories
+    .filter((repository) => lowerOrEmpty(repository.format) === lowerOrEmpty(format))
+    .filter((repository) => ["hosted", "proxy"].includes(lowerOrEmpty(repository.type)))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function cleanupVisibleRepositories(candidates = cleanupRepositoryCandidates()) {
+  const query = lowerOrEmpty(cleanupRepositoryFilter).trim();
+  if (!query) return candidates;
+  return candidates.filter((repository) => [
+    repository.name,
+    repositoryTypeLabel(repository.type),
+    repository.online === false ? "offline" : "online"
+  ].some((value) => lowerOrEmpty(value).includes(query)));
+}
+
+function cleanupSelectedRepositoryIds() {
+  return Array.from(cleanupRepositorySelection)
+    .map(Number)
+    .filter(Number.isFinite);
+}
+
+function setCleanupRepositoryPickerInvalid(invalid) {
+  const trigger = document.getElementById("cleanup-policy-repository-trigger");
+  trigger.classList.toggle("is-invalid", invalid);
+  trigger.setAttribute("aria-invalid", String(invalid));
+  document.getElementById("cleanup-policy-repository-error").hidden = !invalid;
+}
+
+function cleanupRepositorySummaryHtml(candidates) {
+  const selected = candidates.filter((repository) => cleanupRepositorySelection.has(String(repository.id)));
+  if (selected.length === 0) {
+    const format = repositoryFormatLabel(document.getElementById("cleanup-policy-format").value);
+    return `<span class="cleanup-repository-placeholder">Select one or more ${escapeHtml(format)} repositories</span>`;
+  }
+  const chips = selected.slice(0, 2)
+    .map((repository) => `<span class="cleanup-repository-chip"><span>${escapeHtml(repository.name)}</span></span>`)
+    .join("");
+  const more = selected.length > 2
+    ? `<span class="cleanup-repository-more">+${selected.length - 2} more</span>`
+    : "";
+  return `${chips}${more}`;
+}
+
+function refreshCleanupRepositorySelectionChrome(candidates = cleanupRepositoryCandidates(), visible = cleanupVisibleRepositories(candidates)) {
+  document.getElementById("cleanup-policy-repository-summary").innerHTML = cleanupRepositorySummaryHtml(candidates);
+  document.getElementById("cleanup-policy-repository-count").textContent =
+    `${cleanupRepositorySelection.size} selected · ${candidates.length} available`;
+  document.getElementById("cleanup-policy-repository-select-all").disabled =
+    visible.length === 0 || visible.every((repository) => cleanupRepositorySelection.has(String(repository.id)));
+  document.getElementById("cleanup-policy-repository-clear").disabled = cleanupRepositorySelection.size === 0;
+  if (cleanupRepositorySelection.size > 0) setCleanupRepositoryPickerInvalid(false);
+}
+
+function renderCleanupRepositoryOptions() {
+  const candidates = cleanupRepositoryCandidates();
+  const visible = cleanupVisibleRepositories(candidates);
+  const options = document.getElementById("cleanup-policy-repository-options");
+  options.innerHTML = visible.map((repository) => {
+    const repositoryId = String(repository.id);
+    const selected = cleanupRepositorySelection.has(repositoryId);
+    const state = repository.online === false ? "Offline" : "Online";
+    return `
+      <label class="cleanup-repository-option ${selected ? "is-selected" : ""}" role="option" aria-selected="${selected}">
+        <input type="checkbox" value="${escapeHtml(repositoryId)}" data-cleanup-repository-id="${escapeHtml(repositoryId)}" ${selected ? "checked" : ""}>
+        <span class="format-logo format-logo-${formatIconName(repository.format)}" aria-hidden="true"></span>
+        <span class="cleanup-repository-option-copy">
+          <strong>${escapeHtml(repository.name)}</strong>
+          <small>${escapeHtml(repositoryFormatLabel(repository.format))} · ${escapeHtml(state)}</small>
+        </span>
+        <span class="cleanup-repository-type">${escapeHtml(repositoryTypeLabel(repository.type))}</span>
+      </label>`;
+  }).join("");
+  options.hidden = visible.length === 0;
+
+  const empty = document.getElementById("cleanup-policy-repository-empty");
+  empty.hidden = visible.length > 0;
+  if (visible.length === 0) {
+    const format = repositoryFormatLabel(document.getElementById("cleanup-policy-format").value);
+    empty.textContent = candidates.length === 0
+      ? `No Hosted or Proxy ${format} repositories are available. Create one first.`
+      : `No repositories match “${cleanupRepositoryFilter.trim()}”.`;
+  }
+  refreshCleanupRepositorySelectionChrome(candidates, visible);
+}
+
+function setCleanupRepositoryPickerOpen(open, focusSearch = false) {
+  const popover = document.getElementById("cleanup-policy-repository-popover");
+  const trigger = document.getElementById("cleanup-policy-repository-trigger");
+  popover.hidden = !open;
+  trigger.setAttribute("aria-expanded", String(open));
+  if (open) {
+    renderCleanupRepositoryOptions();
+    if (focusSearch) setTimeout(() => document.getElementById("cleanup-policy-repository-search").focus(), 0);
+  }
+}
+
+function closeCleanupRepositoryPicker(focusTrigger = false) {
+  setCleanupRepositoryPickerOpen(false);
+  if (focusTrigger) document.getElementById("cleanup-policy-repository-trigger").focus();
+}
+
+function refreshCleanupRepositoryOptions(selectedIds = cleanupSelectedRepositoryIds()) {
+  const candidateIds = new Set(cleanupRepositoryCandidates().map((repository) => String(repository.id)));
+  cleanupRepositorySelection = new Set(selectedIds
+    .map(String)
+    .filter((repositoryId) => candidateIds.has(repositoryId)));
+  cleanupRepositoryFilter = "";
+  document.getElementById("cleanup-policy-repository-search").value = "";
+  setCleanupRepositoryPickerInvalid(false);
+  renderCleanupRepositoryOptions();
+  refreshCleanupCapabilityHelp();
+}
+
+function bindCleanupRepositoryPicker() {
+  const picker = document.getElementById("cleanup-policy-repository-picker");
+  const trigger = document.getElementById("cleanup-policy-repository-trigger");
+  const popover = document.getElementById("cleanup-policy-repository-popover");
+  const search = document.getElementById("cleanup-policy-repository-search");
+  const options = document.getElementById("cleanup-policy-repository-options");
+
+  trigger.addEventListener("click", () => setCleanupRepositoryPickerOpen(popover.hidden, popover.hidden));
+  trigger.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      setCleanupRepositoryPickerOpen(true, true);
+      return;
+    }
+    if (event.key === "Escape" && !popover.hidden) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeCleanupRepositoryPicker(true);
+    }
+  });
+
+  search.addEventListener("input", () => {
+    cleanupRepositoryFilter = search.value;
+    renderCleanupRepositoryOptions();
+  });
+  search.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") event.preventDefault();
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeCleanupRepositoryPicker(true);
+    }
+  });
+
+  options.addEventListener("change", (event) => {
+    const checkbox = event.target.closest("[data-cleanup-repository-id]");
+    if (!checkbox) return;
+    const repositoryId = checkbox.dataset.cleanupRepositoryId;
+    if (checkbox.checked) cleanupRepositorySelection.add(repositoryId);
+    else cleanupRepositorySelection.delete(repositoryId);
+    const option = checkbox.closest(".cleanup-repository-option");
+    option.classList.toggle("is-selected", checkbox.checked);
+    option.setAttribute("aria-selected", String(checkbox.checked));
+    refreshCleanupRepositorySelectionChrome();
+  });
+  options.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeCleanupRepositoryPicker(true);
+  });
+
+  document.getElementById("cleanup-policy-repository-select-all").addEventListener("click", () => {
+    cleanupVisibleRepositories().forEach((repository) => cleanupRepositorySelection.add(String(repository.id)));
+    renderCleanupRepositoryOptions();
+  });
+  document.getElementById("cleanup-policy-repository-clear").addEventListener("click", () => {
+    cleanupRepositorySelection.clear();
+    renderCleanupRepositoryOptions();
+  });
+  document.addEventListener("click", (event) => {
+    if (!picker.contains(event.target)) closeCleanupRepositoryPicker();
+  });
+}
+
+function refreshCleanupCapabilityHelp() {
+  const format = document.getElementById("cleanup-policy-format").value;
+  const capability = cleanupCapability(format);
+  const retainInput = document.getElementById("cleanup-policy-retain-count");
+  retainInput.disabled = !capability?.retainCountSupported;
+  if (retainInput.disabled) retainInput.value = "";
+  setCleanupFieldHelp("cleanup-policy-retain-help", capability?.retainCountSupported
+    ? "Uses this format's protocol version comparator."
+    : "Version retention is not enabled for this format yet; pattern and age rules remain available.");
+  const downloadedInput = document.getElementById("cleanup-policy-downloaded-days");
+  downloadedInput.disabled = !capability?.lastDownloadedSupported;
+  if (downloadedInput.disabled) {
+    downloadedInput.value = "";
+  }
+  setCleanupFieldHelp("cleanup-policy-downloaded-help", capability?.lastDownloadedSupported
+    ? "Successful authorized GET requests persist a shared download watermark; HEAD requests do not count. Artifacts without a download timestamp are skipped."
+    : "Last-download retention is disabled until this format records a validated shared download watermark.");
+  document.getElementById("cleanup-policy-execute-help").textContent = capability?.executeSupported
+    ? editingCleanupPolicyId == null
+      ? ""
+      : "Changing cleanup rules or target repositories pauses automatic execution until you review and re-enable it."
+    : "Try Run is available. Actual deletion and schedule enablement stay blocked until this format's protocol adapter passes deletion validation.";
+}
+
+function setCleanupFieldHelp(id, message) {
+  const help = document.getElementById(id);
+  help.dataset.tooltip = message;
+  help.setAttribute("aria-label", message);
+  if (activeFieldHelpTrigger === help) showFieldHelpPopover(help);
+}
+
+function clearFieldHelpHideTimer() {
+  clearTimeout(fieldHelpHideTimer);
+  fieldHelpHideTimer = null;
+}
+
+function positionFieldHelpPopover(trigger) {
+  const popover = document.getElementById("field-help-popover");
+  const triggerRect = trigger.getBoundingClientRect();
+  if (triggerRect.bottom < 0 || triggerRect.top > window.innerHeight) {
+    hideFieldHelpPopover();
+    return;
+  }
+  const popoverRect = popover.getBoundingClientRect();
+  const viewportPadding = 10;
+  const gap = 7;
+  let left = triggerRect.left + (triggerRect.width / 2) - (popoverRect.width / 2);
+  left = Math.max(viewportPadding, Math.min(left, window.innerWidth - popoverRect.width - viewportPadding));
+  let top = triggerRect.bottom + gap;
+  if (top + popoverRect.height > window.innerHeight - viewportPadding
+      && triggerRect.top - popoverRect.height - gap >= viewportPadding) {
+    top = triggerRect.top - popoverRect.height - gap;
+  }
+  popover.style.left = `${Math.round(left)}px`;
+  popover.style.top = `${Math.round(top)}px`;
+}
+
+function showFieldHelpPopover(trigger) {
+  const message = trigger?.dataset.tooltip?.trim();
+  if (!message) return;
+  clearFieldHelpHideTimer();
+  if (activeFieldHelpTrigger && activeFieldHelpTrigger !== trigger) {
+    activeFieldHelpTrigger.removeAttribute("aria-describedby");
+  }
+  activeFieldHelpTrigger = trigger;
+  const popover = document.getElementById("field-help-popover");
+  popover.textContent = message;
+  popover.hidden = false;
+  trigger.setAttribute("aria-describedby", popover.id);
+  positionFieldHelpPopover(trigger);
+}
+
+function hideFieldHelpPopover() {
+  clearFieldHelpHideTimer();
+  if (activeFieldHelpTrigger) activeFieldHelpTrigger.removeAttribute("aria-describedby");
+  activeFieldHelpTrigger = null;
+  document.getElementById("field-help-popover").hidden = true;
+}
+
+function scheduleFieldHelpPopoverHide() {
+  clearFieldHelpHideTimer();
+  fieldHelpHideTimer = setTimeout(() => {
+    const popover = document.getElementById("field-help-popover");
+    const triggerActive = activeFieldHelpTrigger
+      && (activeFieldHelpTrigger.matches(":hover") || document.activeElement === activeFieldHelpTrigger);
+    if (!triggerActive && !popover.matches(":hover")) hideFieldHelpPopover();
+  }, 220);
+}
+
+function bindFieldHelpTooltips() {
+  const popover = document.getElementById("field-help-popover");
+  document.querySelectorAll(".field-help").forEach((trigger) => {
+    trigger.addEventListener("mouseenter", () => showFieldHelpPopover(trigger));
+    trigger.addEventListener("mouseleave", scheduleFieldHelpPopoverHide);
+    trigger.addEventListener("focus", () => showFieldHelpPopover(trigger));
+    trigger.addEventListener("blur", scheduleFieldHelpPopoverHide);
+    trigger.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") hideFieldHelpPopover();
+    });
+  });
+  popover.addEventListener("mouseenter", clearFieldHelpHideTimer);
+  popover.addEventListener("mouseleave", scheduleFieldHelpPopoverHide);
+  document.addEventListener("scroll", () => {
+    if (activeFieldHelpTrigger && !popover.hidden) positionFieldHelpPopover(activeFieldHelpTrigger);
+  }, true);
+  window.addEventListener("resize", () => {
+    if (activeFieldHelpTrigger && !popover.hidden) positionFieldHelpPopover(activeFieldHelpTrigger);
+  });
+}
+
+function refreshCleanupScheduleFields() {
+  const hasSchedule = Boolean(document.getElementById("cleanup-policy-cron-expression").value.trim());
+  document.getElementById("cleanup-policy-time-zone").disabled = !hasSchedule;
+}
+
+function populateCleanupTimeZoneOptions() {
+  const datalist = document.getElementById("cleanup-policy-time-zone-options");
+  if (datalist.dataset.populated === "true") return;
+  const values = new Set(["UTC", Intl.DateTimeFormat().resolvedOptions().timeZone].filter(Boolean));
+  if (typeof Intl.supportedValuesOf === "function") {
+    Intl.supportedValuesOf("timeZone").forEach((timeZone) => values.add(timeZone));
+  }
+  datalist.innerHTML = Array.from(values)
+    .sort((left, right) => left.localeCompare(right))
+    .map((timeZone) => `<option value="${escapeHtml(timeZone)}"></option>`)
+    .join("");
+  datalist.dataset.populated = "true";
+}
+
+function formatCleanupScheduleTime(value, timeZone) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value || "");
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      timeZone,
+      timeZoneName: "short"
+    }).format(date);
+  } catch (_error) {
+    return formatDateTime(value);
+  }
+}
+
+function renderCleanupSchedulePreview(state, title, nextRuns = [], timeZone = "") {
+  const preview = document.getElementById("cleanup-policy-schedule-preview");
+  const list = document.getElementById("cleanup-policy-schedule-preview-times");
+  preview.dataset.state = state;
+  document.getElementById("cleanup-policy-schedule-preview-title").textContent = title;
+  list.innerHTML = nextRuns
+    .map((value) => `<li>${escapeHtml(formatCleanupScheduleTime(value, timeZone))}</li>`)
+    .join("");
+  list.hidden = nextRuns.length === 0;
+}
+
+function cancelCleanupSchedulePreview() {
+  clearTimeout(cleanupSchedulePreviewTimer);
+  cleanupSchedulePreviewTimer = null;
+  cleanupSchedulePreviewSequence += 1;
+  if (cleanupSchedulePreviewController) cleanupSchedulePreviewController.abort();
+  cleanupSchedulePreviewController = null;
+}
+
+function scheduleCleanupSchedulePreview() {
+  cancelCleanupSchedulePreview();
+  const cronExpression = document.getElementById("cleanup-policy-cron-expression").value.trim();
+  const timeZone = document.getElementById("cleanup-policy-time-zone").value.trim();
+  if (!cronExpression) {
+    renderCleanupSchedulePreview("empty", "Manual execution only");
+    return;
+  }
+  if (!timeZone) {
+    renderCleanupSchedulePreview("error", "Choose a time zone to preview this schedule.");
+    return;
+  }
+  const sequence = cleanupSchedulePreviewSequence;
+  renderCleanupSchedulePreview("loading", "Checking the next two runs…");
+  cleanupSchedulePreviewTimer = setTimeout(
+    () => loadCleanupSchedulePreview(cronExpression, timeZone, sequence),
+    300);
+}
+
+async function loadCleanupSchedulePreview(cronExpression, timeZone, sequence) {
+  const controller = new AbortController();
+  cleanupSchedulePreviewController = controller;
+  try {
+    const response = await fetch("/internal/cleanup/schedules/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cronExpression, timeZone, enabled: false }),
+      signal: controller.signal
+    });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    const preview = await response.json();
+    if (sequence !== cleanupSchedulePreviewSequence) return;
+    const nextRuns = Array.isArray(preview.nextRuns) ? preview.nextRuns : [];
+    const label = nextRuns.length > 1 ? "Next two runs" : "Next run";
+    renderCleanupSchedulePreview(
+      "valid",
+      `${label} in ${preview.timeZone || timeZone}`,
+      nextRuns,
+      preview.timeZone || timeZone);
+  } catch (error) {
+    if (error.name === "AbortError" || sequence !== cleanupSchedulePreviewSequence) return;
+    renderCleanupSchedulePreview("error", `Check the run schedule: ${error.message}`);
+  } finally {
+    if (cleanupSchedulePreviewController === controller) cleanupSchedulePreviewController = null;
+  }
+}
+
+function populateCleanupFormatOptions(selectedFormat = null) {
+  const select = document.getElementById("cleanup-policy-format");
+  select.innerHTML = cleanupCapabilities.map((capability) => `
+    <option value="${escapeHtml(capability.format)}" ${lowerOrEmpty(capability.format) === lowerOrEmpty(selectedFormat) ? "selected" : ""}>
+      ${escapeHtml(repositoryFormatLabel(capability.format))}
+    </option>`).join("");
+}
+
+function showCreateCleanupPolicyForm() {
+  editingCleanupPolicyId = null;
+  const form = document.getElementById("cleanup-policy-form");
+  form.reset();
+  populateCleanupTimeZoneOptions();
+  populateCleanupFormatOptions(cleanupCapabilities[0]?.format || "maven2");
+  document.getElementById("cleanup-policy-time-zone").value = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  document.getElementById("cleanup-policy-form-title").textContent = "Create cleanup policy";
+  document.getElementById("save-cleanup-policy-button").textContent = "Create policy";
+  refreshCleanupRepositoryOptions([]);
+  refreshCleanupScheduleFields();
+  scheduleCleanupSchedulePreview();
+  openFormModal("cleanup-policy-form", "cleanup-policy-name");
+}
+
+function showEditCleanupPolicyForm(policyId) {
+  const view = cleanupPolicyView(policyId);
+  if (!view) {
+    showToast("Cleanup policy no longer exists. Refresh and try again.", "error");
+    return;
+  }
+  editingCleanupPolicyId = Number(policyId);
+  populateCleanupTimeZoneOptions();
+  const policy = view.policy;
+  const criteria = policy.criteria || {};
+  populateCleanupFormatOptions(policy.format);
+  document.getElementById("cleanup-policy-name").value = policy.name || "";
+  document.getElementById("cleanup-policy-pattern-type").value = criteria.patternType || "GLOB";
+  document.getElementById("cleanup-policy-pattern").value = criteria.pattern || "";
+  document.getElementById("cleanup-policy-published-days").value = criteria.publishedOlderThanDays ?? "";
+  document.getElementById("cleanup-policy-downloaded-days").value = criteria.lastDownloadedOlderThanDays ?? "";
+  document.getElementById("cleanup-policy-retain-count").value = criteria.retainCount ?? "";
+  document.getElementById("cleanup-policy-notes").value = policy.notes || "";
+  document.getElementById("cleanup-policy-cron-expression").value = view.schedule?.cronExpression || "";
+  document.getElementById("cleanup-policy-time-zone").value = view.schedule?.timeZone || "UTC";
+  document.getElementById("cleanup-policy-form-title").textContent = `Edit cleanup policy: ${policy.name}`;
+  document.getElementById("save-cleanup-policy-button").textContent = "Save changes";
+  refreshCleanupRepositoryOptions((view.repositories || []).map((repository) => repository.id));
+  refreshCleanupCapabilityHelp();
+  refreshCleanupScheduleFields();
+  scheduleCleanupSchedulePreview();
+  openFormModal("cleanup-policy-form", "cleanup-policy-name");
+}
+
+function hideCleanupPolicyForm() {
+  cancelCleanupSchedulePreview();
+  hideFieldHelpPopover();
+  editingCleanupPolicyId = null;
+  closeCleanupRepositoryPicker();
+  closeFormModal("cleanup-policy-form");
+}
+
+function cleanupOptionalNumber(id) {
+  const raw = document.getElementById(id).value;
+  return raw === "" ? null : Number(raw);
+}
+
+function cleanupPolicyPayload() {
+  const currentView = editingCleanupPolicyId == null ? null : cleanupPolicyView(editingCleanupPolicyId);
+  const current = currentView?.policy || null;
+  const criteria = {};
+  const pattern = document.getElementById("cleanup-policy-pattern").value.trim();
+  const publishedDays = cleanupOptionalNumber("cleanup-policy-published-days");
+  const downloadedDays = cleanupOptionalNumber("cleanup-policy-downloaded-days");
+  const retainCount = cleanupOptionalNumber("cleanup-policy-retain-count");
+  if (pattern) {
+    criteria.pattern = pattern;
+    criteria.patternType = document.getElementById("cleanup-policy-pattern-type").value;
+  }
+  if (publishedDays != null) criteria.publishedOlderThanDays = publishedDays;
+  if (downloadedDays != null) {
+    criteria.lastDownloadedOlderThanDays = downloadedDays;
+  }
+  if (retainCount != null) criteria.retainCount = retainCount;
+  const cronExpression = document.getElementById("cleanup-policy-cron-expression").value.trim();
+  const schedule = cronExpression ? {
+    cronExpression,
+    timeZone: document.getElementById("cleanup-policy-time-zone").value.trim(),
+    enabled: Boolean(currentView?.schedule?.enabled)
+  } : null;
+  return {
+    name: document.getElementById("cleanup-policy-name").value.trim(),
+    format: document.getElementById("cleanup-policy-format").value,
+    notes: document.getElementById("cleanup-policy-notes").value.trim() || null,
+    criteria,
+    repositoryIds: cleanupSelectedRepositoryIds(),
+    scanLimitPerRepository: current?.scanLimitPerRepository ?? null,
+    deleteLimitPerRepository: current?.deleteLimitPerRepository ?? null,
+    schedule,
+    revision: current?.revision ?? null
+  };
+}
+
+async function saveCleanupPolicy(event) {
+  event.preventDefault();
+  const payload = cleanupPolicyPayload();
+  setCleanupRepositoryPickerInvalid(payload.repositoryIds.length === 0);
+  if (!payload.name || payload.repositoryIds.length === 0) {
+    showToast("Policy name and at least one target repository are required.", "error");
+    if (payload.repositoryIds.length === 0) document.getElementById("cleanup-policy-repository-trigger").focus();
+    return;
+  }
+  if (Object.keys(payload.criteria).length === 0) {
+    showToast("Add at least one pattern, age, or retain rule.", "error");
+    return;
+  }
+  const editing = editingCleanupPolicyId != null;
+  try {
+    const response = await fetch(editing
+      ? `/internal/cleanup/policies/${editingCleanupPolicyId}`
+      : "/internal/cleanup/policies", {
+      method: editing ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    hideCleanupPolicyForm();
+    showToast(editing
+      ? "Cleanup policy saved. Rule or repository changes pause its schedule."
+      : "Cleanup policy created. Its schedule is paused.", "ok");
+    await loadCleanupPolicies();
+  } catch (error) {
+    showToast(`Cleanup policy save failed: ${error.message}`, "error");
+  }
+}
+
+function cleanupPolicyCommandForView(view, scheduleEnabled) {
+  const policy = view.policy;
+  return {
+    name: policy.name,
+    format: policy.format,
+    notes: policy.notes,
+    criteria: policy.criteria || {},
+    repositoryIds: (view.repositories || []).map((repository) => repository.id),
+    scanLimitPerRepository: policy.scanLimitPerRepository,
+    deleteLimitPerRepository: policy.deleteLimitPerRepository,
+    schedule: view.schedule ? {
+      cronExpression: view.schedule.cronExpression,
+      timeZone: view.schedule.timeZone,
+      enabled: scheduleEnabled
+    } : null,
+    revision: policy.revision
+  };
+}
+
+async function setCleanupPolicyScheduleEnabled(policyId, enabled, button) {
+  const numericPolicyId = Number(policyId);
+  if (cleanupScheduleToggleInFlight.has(numericPolicyId)) return;
+  const view = cleanupPolicyView(numericPolicyId);
+  if (!view?.schedule) {
+    showToast("Add a run schedule before enabling automatic execution.", "error");
+    return;
+  }
+  if (enabled && !view.capability?.executeSupported) {
+    showToast("Automatic execution is not available for this repository format.", "error");
+    return;
+  }
+  cleanupScheduleToggleInFlight.add(numericPolicyId);
+  const originalLabel = button?.textContent;
+  if (button) {
+    button.disabled = true;
+    button.textContent = enabled ? "Enabling…" : "Disabling…";
+  }
+  try {
+    const response = await fetch(`/internal/cleanup/policies/${numericPolicyId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cleanupPolicyCommandForView(view, enabled))
+    });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    showToast(`Automatic execution ${enabled ? "enabled" : "disabled"} for "${view.policy.name}".`, "ok");
+    await loadCleanupPolicies();
+  } catch (error) {
+    showToast(`Schedule update failed: ${error.message}`, "error");
+    await loadCleanupPolicies();
+  } finally {
+    cleanupScheduleToggleInFlight.delete(numericPolicyId);
+    if (button?.isConnected) {
+      button.disabled = false;
+      button.textContent = originalLabel;
+    }
+  }
+}
+
+function setCleanupTryRunError(message = "") {
+  const input = document.getElementById("cleanup-try-run-scan-limit");
+  const error = document.getElementById("cleanup-try-run-scan-limit-error");
+  input.classList.toggle("is-invalid", Boolean(message));
+  input.setAttribute("aria-invalid", String(Boolean(message)));
+  error.textContent = message;
+  error.hidden = !message;
+}
+
+function showCleanupTryRunDialog(policyId, trigger = null) {
+  const view = cleanupPolicyView(policyId);
+  if (!view) {
+    showToast("Cleanup policy no longer exists. Refresh and try again.", "error");
+    return;
+  }
+  cleanupTryRunPolicyId = Number(policyId);
+  cleanupTryRunTrigger = trigger;
+  cleanupTryRunSubmitting = false;
+  document.getElementById("cleanup-try-run-policy-name").textContent = view.policy.name;
+  document.getElementById("cleanup-try-run-repository-count").textContent = String((view.repositories || []).length);
+  document.getElementById("cleanup-try-run-scan-limit").value = String(view.policy.scanLimitPerRepository || 1000);
+  setCleanupTryRunError();
+  openFormModal("cleanup-try-run-form", "cleanup-try-run-scan-limit");
+}
+
+function hideCleanupTryRunDialog(options = {}) {
+  if (cleanupTryRunSubmitting && options.force !== true) return;
+  const restoreFocus = options.restoreFocus !== false;
+  const trigger = cleanupTryRunTrigger;
+  cleanupTryRunPolicyId = null;
+  cleanupTryRunTrigger = null;
+  setCleanupTryRunError();
+  closeFormModal("cleanup-try-run-form");
+  if (restoreFocus && trigger?.isConnected) trigger.focus();
+}
+
+async function queueCleanupRun(policyId, mode, scanLimit = null) {
+  const view = cleanupPolicyView(policyId);
+  if (!view) {
+    showToast("Cleanup policy no longer exists. Refresh and try again.", "error");
+    return false;
+  }
+  const isTryRun = mode === "TRY_RUN";
+  try {
+    const response = await fetch(`/internal/cleanup/policies/${policyId}/runs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode,
+        expectedPolicyRevision: view.policy.revision,
+        scanLimitPerRepository: scanLimit
+      })
+    });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    const run = await response.json();
+    resetCleanupRunPage();
+    cleanupRuns = run.run ? [run.run] : [];
+    selectCleanupTab("runs");
+    renderCleanupRuns();
+    await loadCleanupRuns();
+    showToast(`${isTryRun ? "Try Run" : "Cleanup execution"} queued as run #${run.run?.id}.`, "ok");
+    monitorCleanupRun(run.run.id, isTryRun ? "Try Run" : "Cleanup execution");
+    return true;
+  } catch (error) {
+    showToast(`${isTryRun ? "Try Run" : "Cleanup execution"} failed: ${error.message}`, "error");
+    return false;
+  }
+}
+
+async function submitCleanupTryRun(event) {
+  event.preventDefault();
+  const input = document.getElementById("cleanup-try-run-scan-limit");
+  const scanLimit = Number(input.value);
+  if (!Number.isInteger(scanLimit) || scanLimit < 1 || scanLimit > 10000) {
+    setCleanupTryRunError("Enter a whole number between 1 and 10,000.");
+    input.focus();
+    return;
+  }
+  const policyId = cleanupTryRunPolicyId;
+  if (policyId == null) return;
+  const button = document.getElementById("start-cleanup-try-run-button");
+  const cancelButton = document.getElementById("cancel-cleanup-try-run-button");
+  const closeButton = document.querySelector("#cleanup-try-run-form-modal .form-modal-close");
+  cleanupTryRunSubmitting = true;
+  button.disabled = true;
+  cancelButton.disabled = true;
+  closeButton.disabled = true;
+  button.textContent = "Starting…";
+  try {
+    const queued = await queueCleanupRun(policyId, "TRY_RUN", scanLimit);
+    if (queued) hideCleanupTryRunDialog({ restoreFocus: false, force: true });
+  } finally {
+    cleanupTryRunSubmitting = false;
+    button.disabled = false;
+    cancelButton.disabled = false;
+    closeButton.disabled = false;
+    button.textContent = "Start Try Run";
+  }
+}
+
+function startCleanupRun(policyId, mode, trigger = null) {
+  const view = cleanupPolicyView(policyId);
+  if (!view) return;
+  if (mode === "TRY_RUN") {
+    showCleanupTryRunDialog(policyId, trigger);
+    return;
+  }
+  if (!window.confirm(`Run cleanup policy "${view.policy.name}" now? Matching artifacts can be deleted.`)) return;
+  queueCleanupRun(policyId, mode);
+}
+
+async function monitorCleanupRun(runId, label) {
+  const token = ++cleanupRunPollToken;
+  while (token === cleanupRunPollToken) {
+    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    const response = await fetch(`/internal/cleanup/runs/${runId}/summary`);
+    if (!response.ok) {
+      showToast(`${label} status refresh failed: ${await responseErrorMessage(response)}`, "error");
+      return;
+    }
+    const run = await response.json();
+    updateCleanupRunInList(run);
+    if (String(activeCleanupRunDetailId) === String(runId)) {
+      if (cleanupRunTerminal(run?.state)) {
+        const detail = await loadCleanupRunDetails(runId);
+        if (detail) await renderCleanupRun(detail, { reloadItems: true });
+      } else if (cleanupRunDetailView) {
+        await renderCleanupRun({ ...cleanupRunDetailView, run });
+      }
+    }
+    if (cleanupRunTerminal(run?.state)) {
+      const succeeded = String(run.state).startsWith("SUCCEEDED");
+      showToast(`${label} finished with state ${run.state}.`, succeeded ? "ok" : "error");
+      await loadCleanupPolicies();
+      return;
+    }
+  }
+}
+
+function showCleanupRunDetail(runId, trigger = null) {
+  activeCleanupRunDetailId = String(runId);
+  cleanupRunDetailTrigger = trigger;
+  cleanupRunDetailItemGroups = [];
+  cleanupRunDetailItemsLoaded = false;
+  cleanupRunDetailView = null;
+  document.getElementById("cleanup-run-detail-title").textContent = `Cleanup run #${runId}`;
+  document.getElementById("cleanup-run-detail-content").innerHTML = '<p class="form-note">Loading run details…</p>';
+  openFormModal("cleanup-run-detail");
+  document.getElementById("cleanup-run-detail").scrollTop = 0;
+}
+
+function hideCleanupRunDetail(options = {}) {
+  const trigger = cleanupRunDetailTrigger;
+  activeCleanupRunDetailId = null;
+  cleanupRunDetailTrigger = null;
+  cleanupRunDetailItemGroups = [];
+  cleanupRunDetailItemsLoaded = false;
+  cleanupRunDetailView = null;
+  cleanupRunDetailLoadSequence++;
+  closeFormModal("cleanup-run-detail");
+  if (options.restoreFocus !== false && trigger?.isConnected) trigger.focus();
+}
+
+async function viewCleanupRun(runId, trigger = null) {
+  showCleanupRunDetail(runId, trigger);
+  const sequence = ++cleanupRunDetailLoadSequence;
+  try {
+    const view = await loadCleanupRunDetails(runId);
+    if (!view) throw new Error("Cleanup run details are unavailable");
+    if (sequence !== cleanupRunDetailLoadSequence
+        || String(activeCleanupRunDetailId) !== String(runId)) return;
+    updateCleanupRunInList(view.run);
+    await renderCleanupRun(view, { reloadItems: true });
+    if (!cleanupRunTerminal(view.run?.state)) monitorCleanupRun(runId, "Cleanup run");
+  } catch (error) {
+    if (sequence === cleanupRunDetailLoadSequence
+        && String(activeCleanupRunDetailId) === String(runId)) {
+      document.getElementById("cleanup-run-detail-content").innerHTML = `<p class="form-note"><strong>Run details could not be loaded.</strong> ${escapeHtml(error.message)}</p>`;
+    }
+    showToast(`Cleanup run failed to load: ${error.message}`, "error");
+  }
+}
+
+async function cancelCleanupRun(runId) {
+  if (!window.confirm(`Cancel cleanup run #${runId}? A deletion already committed by a worker remains committed.`)) return;
+  try {
+    const response = await fetch(`/internal/cleanup/runs/${runId}/cancel`, { method: "POST" });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    const view = await response.json();
+    updateCleanupRunInList(view.run);
+    if (String(activeCleanupRunDetailId) === String(runId)) {
+      const detail = await loadCleanupRunDetails(runId);
+      if (detail) await renderCleanupRun(detail, { reloadItems: true });
+    }
+    showToast(`Cancellation requested for cleanup run #${runId}.`, "ok");
+    if (!cleanupRunTerminal(view.run?.state)) monitorCleanupRun(runId, "Cleanup run");
+    await loadCleanupPolicies();
+  } catch (error) {
+    showToast(`Cleanup run cancellation failed: ${error.message}`, "error");
+  }
+}
+
+async function loadCleanupRunDetails(runId) {
+  const response = await fetch(
+    `/internal/cleanup/runs/${runId}/details?itemsPerRepository=50`);
+  if (!response.ok) throw new Error(await responseErrorMessage(response));
+  return response.json();
+}
+
+function cleanupRunRuleSnapshot(criteria = {}) {
+  const pattern = criteria.pattern
+    ? `${criteria.patternType === "REGEX" ? "Regular expression" : "Wildcard"} · ${criteria.pattern}`
+    : "All names and paths";
+  return `
+    <dl class="cleanup-run-rule-grid">
+      <div><dt>Name/path pattern</dt><dd>${escapeHtml(pattern)}</dd></div>
+      <div><dt>Published age</dt><dd>${criteria.publishedOlderThanDays == null ? "Not configured" : `Older than ${escapeHtml(criteria.publishedOlderThanDays)} days`}</dd></div>
+      <div><dt>Download activity</dt><dd>${criteria.lastDownloadedOlderThanDays == null ? "Not configured" : `Last downloaded more than ${escapeHtml(criteria.lastDownloadedOlderThanDays)} days ago`}</dd></div>
+      <div><dt>Version retention</dt><dd>${criteria.retainCount == null ? "Not configured" : `Keep newest ${escapeHtml(criteria.retainCount)} versions per family`}</dd></div>
+    </dl>`;
+}
+
+function cleanupRunRepositorySnapshot(run, repositories) {
+  const snapshot = Array.isArray(run.repositorySnapshot) && run.repositorySnapshot.length > 0
+    ? run.repositorySnapshot
+    : repositories.map((repository) => ({
+        name: repository.repositoryName,
+        format: repository.format,
+        type: repository.repositoryType
+      }));
+  if (snapshot.length === 0) return '<span class="muted">No repository snapshot.</span>';
+  return `<div class="cleanup-run-repository-list">${snapshot.map((repository) => `
+    <span class="cleanup-run-repository-chip">
+      <strong>${escapeHtml(repository.name || `#${repository.id}`)}</strong>
+      <span>${escapeHtml(repositoryFormatLabel(repository.format))} · ${escapeHtml(repositoryTypeLabel(repository.type))}</span>
+    </span>`).join("")}</div>`;
+}
+
+async function renderCleanupRun(view, options = {}) {
+  const run = view.run;
+  if (!run || String(activeCleanupRunDetailId) !== String(run.id)) return;
+  const renderSequence = ++cleanupRunDetailLoadSequence;
+  const repositories = view.repositories || [];
+  if (options.reloadItems || !cleanupRunDetailItemsLoaded) {
+    const itemsByRepository = view.itemsByRepository || {};
+    cleanupRunDetailItemGroups = repositories.map((repository) => ({
+      repository,
+      items: itemsByRepository[String(repository.id)] || itemsByRepository[repository.id] || [],
+      loadError: null
+    }));
+    cleanupRunDetailItemsLoaded = true;
+  }
+  cleanupRunDetailView = view;
+  if (renderSequence !== cleanupRunDetailLoadSequence
+      || String(activeCleanupRunDetailId) !== String(run.id)) return;
+
+  const itemRows = cleanupRunDetailItemGroups.flatMap(({ repository, items, loadError }) => {
+    if (items.length === 0) {
+      const operational = [
+        loadError ? `Items could not be loaded: ${loadError}` : null,
+        repository.errorSummary,
+        repository.attemptCount ? `attempt ${repository.attemptCount}/${repository.maxAttempts}` : null,
+        repository.leaseUntil ? `lease until ${formatDateTime(repository.leaseUntil)}` : null
+      ].filter(Boolean).join(" · ");
+      return [`
+        <tr>
+          <td>${escapeHtml(repository.repositoryName)}</td>
+          <td>-</td>
+          <td>-</td>
+          <td><span class="state-badge compact ${repository.state === "FAILED" ? "bad" : cleanupRunTerminal(repository.state) ? "ok" : "warn"}">${escapeHtml(repository.state)}</span></td>
+          <td>${escapeHtml(operational || "No cleanup decisions recorded.")}</td>
+        </tr>`];
+    }
+    return items.map((item) => `
+      <tr>
+        <td>${escapeHtml(repository.repositoryName)}</td>
+        <td>${escapeHtml(item.displayName)}</td>
+        <td>${escapeHtml(item.version || "-")}</td>
+        <td><span class="state-badge compact ${item.decision === "DELETED" ? "ok" : item.decision === "FAILED" ? "bad" : "warn"}">${escapeHtml(item.decision)}</span></td>
+        <td>${escapeHtml(item.errorSummary || JSON.stringify(item.reason || {}))}</td>
+      </tr>`);
+  });
+  const policy = cleanupPolicyView(run.policyId)?.policy;
+  const policyName = policy?.name || `Policy #${run.policyId}`;
+  const tryRun = run.mode === "TRY_RUN";
+  const outcomeLabel = tryRun ? "Would delete" : "Deleted";
+  const outcomeValue = tryRun ? run.wouldDeleteSubjects : run.deletedSubjects;
+  const stateTone = run.state === "FAILED" ? "bad" : cleanupRunTerminal(run.state) ? "ok" : "warn";
+  document.getElementById("cleanup-run-detail-title").textContent = `Cleanup run #${run.id}`;
+  document.getElementById("cleanup-run-detail-content").innerHTML = `
+    <div class="cleanup-run-detail-heading">
+      <div class="cleanup-run-policy-identity">
+        <strong>${escapeHtml(policyName)}</strong>
+        <span>Policy revision ${escapeHtml(run.policyRevision)}</span>
+      </div>
+      ${cleanupRunTerminal(run.state) ? "" : `<button class="row-action cleanup-run-cancel" data-id="${escapeHtml(run.id)}" type="button">Cancel run</button>`}
+    </div>
+
+    <section class="cleanup-run-detail-section" aria-labelledby="cleanup-run-context-title">
+      <h3 id="cleanup-run-context-title">Run context</h3>
+      <dl class="cleanup-run-context-grid">
+        <div><dt>Mode</dt><dd>${escapeHtml(run.mode)}</dd></div>
+        <div><dt>Trigger</dt><dd>${escapeHtml(run.triggerKind)}</dd></div>
+        <div><dt>Status</dt><dd><span class="state-badge compact ${stateTone}">${escapeHtml(run.state)}</span></dd></div>
+        <div><dt>Requested by</dt><dd>${escapeHtml(run.requestedBy || "-")}</dd></div>
+        <div><dt>Created</dt><dd>${escapeHtml(formatDateTime(run.createdAt))}</dd></div>
+        <div><dt>Started</dt><dd>${escapeHtml(formatDateTime(run.startedAt))}</dd></div>
+        <div><dt>Completed</dt><dd>${escapeHtml(formatDateTime(run.completedAt))}</dd></div>
+        <div><dt>Scheduled for</dt><dd>${escapeHtml(formatDateTime(run.scheduledFor))}</dd></div>
+      </dl>
+    </section>
+
+    <section class="cleanup-run-detail-section" aria-labelledby="cleanup-run-policy-title">
+      <div class="cleanup-run-section-heading">
+        <h3 id="cleanup-run-policy-title">Deletion policy <span class="cleanup-run-heading-note">Snapshot used by this run</span></h3>
+      </div>
+      ${cleanupRunRuleSnapshot(run.criteriaSnapshot || {})}
+      <dl class="cleanup-run-limit-grid">
+        <div><dt>Scan limit / repository</dt><dd>${escapeHtml(run.scanLimitPerRepository)}</dd></div>
+        <div><dt>Delete limit / repository</dt><dd>${tryRun ? "Not applied in Try Run" : escapeHtml(run.deleteLimitPerRepository)}</dd></div>
+      </dl>
+      <div class="cleanup-run-repository-snapshot">
+        <strong>Target repositories</strong>
+        ${cleanupRunRepositorySnapshot(run, repositories)}
+      </div>
+    </section>
+
+    <section class="cleanup-run-detail-section" aria-labelledby="cleanup-run-summary-title">
+      <h3 id="cleanup-run-summary-title">Run summary</h3>
+      ${run.truncatedRepositories > 0 ? '<p class="form-note cleanup-run-notice"><strong>Scan was truncated.</strong> Results cover only the bounded scan range; incomplete version families were excluded.</p>' : ""}
+      ${run.errorSummary ? `<p class="form-note cleanup-run-notice"><strong>Run errors:</strong> ${escapeHtml(run.errorSummary)}</p>` : ""}
+      <div class="cleanup-run-summary">
+        <div><strong>${escapeHtml(run.scannedSubjects ?? 0)}</strong><span>Scanned</span></div>
+        <div><strong>${escapeHtml(run.matchedSubjects ?? 0)}</strong><span>Matched</span></div>
+        <div><strong>${escapeHtml(outcomeValue ?? 0)}</strong><span>${outcomeLabel}</span></div>
+        <div><strong>${escapeHtml(run.failedSubjects ?? 0)}</strong><span>Failed</span></div>
+      </div>
+    </section>
+
+    <section class="cleanup-run-detail-section cleanup-run-decisions" aria-labelledby="cleanup-run-decisions-title">
+      <div class="cleanup-run-section-heading">
+        <h3 id="cleanup-run-decisions-title">Decision details <span class="cleanup-run-heading-note">Showing up to 50 decisions per repository</span></h3>
+      </div>
+      <div class="nx-table-frame cleanup-run-detail-table-frame"><table class="nx-table compact migration-detail-table"><thead><tr><th>Repository</th><th>Subject</th><th>Version</th><th>Decision</th><th>Reason</th></tr></thead><tbody>${itemRows.join("") || '<tr><td colspan="5" class="empty-cell">No cleanup decisions in the bounded scan.</td></tr>'}</tbody></table></div>
+    </section>`;
+}
+
+async function deleteCleanupPolicy(policyId) {
+  const view = cleanupPolicyView(policyId);
+  if (!view || !window.confirm(`Delete cleanup policy "${view.policy.name}"? Historical runs remain available.`)) return;
+  try {
+    const response = await fetch(`/internal/cleanup/policies/${policyId}?revision=${view.policy.revision}`, { method: "DELETE" });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    showToast("Cleanup policy deleted.", "ok");
+    await loadCleanupPolicies();
+  } catch (error) {
+    showToast(`Cleanup policy deletion failed: ${error.message}`, "error");
+  }
+}
+
 function switchView(view, options = {}) {
   if (!document.getElementById(`${view}-view`)) return false;
   if (options.updateHash !== false) {
@@ -5318,6 +6731,12 @@ function switchView(view, options = {}) {
   }
   if (view === "repositories") {
     loadRepositories();
+  }
+  if (view === "cleanup-policies") {
+    selectCleanupTab(
+      cleanupTabFromHash() || "policies",
+      { updateHash: false });
+    loadCleanupPolicies();
   }
   if (view === "docker-registry") loadDockerOperations();
   if (view === "security-users") loadSecurityUsers();
@@ -5343,6 +6762,13 @@ function switchView(view, options = {}) {
 function applyHashRoute() {
   const view = viewFromHash();
   if (!view) return false;
+  if (view === "cleanup-policies"
+      && document.getElementById("cleanup-policies-view").classList.contains("is-active")) {
+    selectCleanupTab(
+      cleanupTabFromHash() || "policies",
+      { updateHash: false });
+    return true;
+  }
   if (view === "security-scanning"
       && document.getElementById("security-scanning-view").classList.contains("is-active")) {
     selectSecurityScanTab(
@@ -5358,6 +6784,9 @@ initializeSideGroups();
 [
   ["repository-form", hideRepositoryForm],
   ["blobstore-form", hideBlobStoreForm],
+  ["cleanup-policy-form", hideCleanupPolicyForm],
+  ["cleanup-try-run-form", hideCleanupTryRunDialog],
+  ["cleanup-run-detail", hideCleanupRunDetail],
   ["security-user-form", hideSecurityUserForm],
   ["security-role-form", hideSecurityRoleForm],
   ["security-privilege-form", hideSecurityPrivilegeForm],
@@ -5402,9 +6831,16 @@ document.addEventListener("click", (event) => {
 });
 document.addEventListener("click", (event) => {
   if (!document.getElementById("user-menu").contains(event.target)) closeUserMenu();
+  const actionMenu = document.getElementById("cleanup-policy-action-menu");
+  if (!actionMenu.hidden
+      && !actionMenu.contains(event.target)
+      && !event.target.closest(".cleanup-policy-more-actions")) {
+    closeCleanupPolicyActionMenu();
+  }
 });
 document.addEventListener("keydown", (event) => {
   if (handleFormModalKeydown(event)) return;
+  if (handleCleanupPolicyActionMenuKeydown(event)) return;
   if (event.key === "Escape") closeUserMenu();
 });
 document.getElementById("create-blobstore-button").addEventListener("click", showCreateBlobStoreForm);
@@ -5449,6 +6885,96 @@ document.getElementById("repository-table").addEventListener("click", (event) =>
   if (deleteButton) {
     deleteRepository(deleteButton.dataset.name);
   }
+});
+document.getElementById("create-cleanup-policy-button").addEventListener("click", showCreateCleanupPolicyForm);
+document.getElementById("refresh-cleanup-policy-button").addEventListener("click", loadCleanupPolicies);
+document.getElementById("cleanup-policy-page-prev").addEventListener(
+  "click", () => changeCleanupPolicyPage("prev"));
+document.getElementById("cleanup-policy-page-next").addEventListener(
+  "click", () => changeCleanupPolicyPage("next"));
+document.getElementById("cleanup-policy-page-size").addEventListener(
+  "change", (event) => resizeCleanupPolicyPage(event.currentTarget.value));
+document.getElementById("cleanup-run-page-prev").addEventListener(
+  "click", () => changeCleanupRunPage("prev"));
+document.getElementById("cleanup-run-page-next").addEventListener(
+  "click", () => changeCleanupRunPage("next"));
+document.getElementById("cleanup-run-page-size").addEventListener(
+  "change", (event) => resizeCleanupRunPage(event.currentTarget.value));
+document.getElementById("cancel-cleanup-policy-button").addEventListener("click", hideCleanupPolicyForm);
+document.getElementById("cleanup-policy-form").addEventListener("submit", saveCleanupPolicy);
+document.getElementById("cancel-cleanup-try-run-button").addEventListener("click", hideCleanupTryRunDialog);
+document.getElementById("cleanup-try-run-form").addEventListener("submit", submitCleanupTryRun);
+document.getElementById("cleanup-try-run-scan-limit").addEventListener("input", () => setCleanupTryRunError());
+bindFieldHelpTooltips();
+bindCleanupRepositoryPicker();
+document.querySelectorAll("[data-cleanup-tab]").forEach((button) => {
+  button.addEventListener("click", () => selectCleanupTab(button.dataset.cleanupTab));
+  button.addEventListener("keydown", handleCleanupTabKeydown);
+});
+document.getElementById("cleanup-policy-format").addEventListener("change", () => {
+  refreshCleanupRepositoryOptions([]);
+  refreshCleanupScheduleFields();
+});
+document.getElementById("cleanup-policy-cron-expression").addEventListener("input", () => {
+  refreshCleanupScheduleFields();
+  scheduleCleanupSchedulePreview();
+});
+document.getElementById("cleanup-policy-time-zone").addEventListener("input", scheduleCleanupSchedulePreview);
+document.getElementById("cleanup-policy-time-zone").addEventListener("change", scheduleCleanupSchedulePreview);
+document.getElementById("cleanup-policy-table").addEventListener("click", (event) => {
+  const editButton = event.target.closest(".cleanup-policy-edit");
+  if (editButton) {
+    showEditCleanupPolicyForm(editButton.dataset.id);
+    return;
+  }
+  const moreButton = event.target.closest(".cleanup-policy-more-actions");
+  if (moreButton) openCleanupPolicyActionMenu(moreButton.dataset.id, moreButton);
+});
+document.getElementById("cleanup-policy-table").addEventListener("keydown", (event) => {
+  const moreButton = event.target.closest(".cleanup-policy-more-actions");
+  if (!moreButton || !["ArrowDown", "ArrowUp"].includes(event.key)) return;
+  event.preventDefault();
+  openCleanupPolicyActionMenu(
+    moreButton.dataset.id,
+    moreButton,
+    event.key === "ArrowDown" ? "first" : "last");
+});
+document.getElementById("cleanup-policy-action-menu").addEventListener("click", (event) => {
+  const item = event.target.closest("[data-cleanup-action]");
+  if (!item || item.disabled || cleanupActionMenuPolicyId == null) return;
+  const policyId = cleanupActionMenuPolicyId;
+  const actionTrigger = cleanupActionMenuTrigger;
+  const action = item.dataset.cleanupAction;
+  const enableSchedule = item.dataset.enable === "true";
+  closeCleanupPolicyActionMenu();
+  if (action === "try-run") startCleanupRun(policyId, "TRY_RUN", actionTrigger);
+  if (action === "execute") startCleanupRun(policyId, "EXECUTE");
+  if (action === "schedule") setCleanupPolicyScheduleEnabled(policyId, enableSchedule, null);
+  if (action === "delete") deleteCleanupPolicy(policyId);
+});
+document.getElementById("cleanup-policy-action-menu").addEventListener("focusout", () => {
+  setTimeout(() => {
+    const menu = document.getElementById("cleanup-policy-action-menu");
+    if (!menu.contains(document.activeElement)
+        && document.activeElement !== cleanupActionMenuTrigger) {
+      closeCleanupPolicyActionMenu();
+    }
+  }, 0);
+});
+document.addEventListener("scroll", () => positionCleanupPolicyActionMenu(), true);
+window.addEventListener("resize", positionCleanupPolicyActionMenu);
+document.getElementById("cleanup-run-table").addEventListener("click", (event) => {
+  const viewButton = event.target.closest(".cleanup-run-view");
+  if (viewButton) {
+    viewCleanupRun(viewButton.dataset.id, viewButton);
+    return;
+  }
+  const cancelButton = event.target.closest(".cleanup-run-cancel");
+  if (cancelButton) cancelCleanupRun(cancelButton.dataset.id);
+});
+document.getElementById("cleanup-run-detail-content").addEventListener("click", (event) => {
+  const cancelButton = event.target.closest(".cleanup-run-cancel");
+  if (cancelButton) cancelCleanupRun(cancelButton.dataset.id);
 });
 document.getElementById("docker-connectors-refresh-button").addEventListener("click", refreshDockerConnectors);
 document.getElementById("docker-cache-clear-button").addEventListener("click", clearDockerCache);

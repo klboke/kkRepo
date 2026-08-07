@@ -16,6 +16,8 @@ kkRepo 是一款社区驱动、完全开源的自托管制品仓库，旨在解�
 - 支持 16+ 种主流仓库格式，覆盖 hosted、proxy 和 group 仓库管理。
 - 支持 AOT 编译运行，约 1 秒启动就绪，内存占用低于 200 MB。
 - Proxy 仓库支持按仓库配置出站 HTTP 或 SOCKS5 网络代理，并支持可选的代理认证和 HTTPS 上游隧道。
+- 支持制品安全扫描，包括 CycloneDX SBOM 生成、已知漏洞匹配、策略与豁免管理，以及可选的下载阻断。
+- 支持丰富的制品清理策略，提供企业级制品生命周期管理。
 - 兼容 Sonatype Nexus API 协议、用户权限模型、和 `/repository/<repo>/...` URL 布局。
 - 可使用 kkRepo 平替 Sonatype Nexus，支持存量数据一键迁移并沿用原仓库域名和 URL，原有客户端配置与 CI 工作流无需改动。
 - 支持完整的身份与访问控制，覆盖 Local、LDAP、OIDC 认证、匿名访问策略和细粒度权限管理。
@@ -188,9 +190,9 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 6. ✅ Swift Package Registry - hosted、GitHub-backed proxy、group、Registry v1、不可变签名发布、UI/API 上传、Browse/Search、多副本协同、真实 SwiftPM/Xcode E2E 和 shape-gated Nexus 3.92.x-3.94.x 迁移已实现（[设计说明](docs/zh/dev/swift-package-registry-design.md)）
 7. ✅ Ansible Galaxy - 已实现 Galaxy v3 hosted/proxy/group、collection 不可变发布、依赖解析、route-scoped Base64 Bearer/Ansible 2.9 Token 与 GenericToken 认证、UI/API 上传、Browse/Search、持久化多副本 import/proxy 协同、Ansible 2.9/当前版真实客户端 E2E、Nexus 黑盒兼容和 shape-gated Nexus 3.93.x-3.94.x 迁移（[使用指南](docs/zh/ansible-galaxy-guide.md)、[设计说明](docs/zh/dev/ansible-galaxy-repository-design.md)）
 8. ohpm / HarmonyOS - 规划中，覆盖 hosted、proxy、group、导入和管理端能力（[设计说明](docs/zh/dev/ohpm-repository-design.md)）
-9. APT / Debian
-10. Conan
-11. Conda
+9. Conda - 规划中，覆盖 hosted、proxy、group、channel 元数据生成、现代 repodata 和 Nexus 迁移（[设计说明](docs/zh/dev/conda-repository-design.md)）
+10. APT / Debian
+11. Conan
 
 用户和管理端 UI 已暴露的 token 类型包括协议专用 token（`NpmToken`、`CargoToken`、`PubToken`、`NuGetApiKey`、`RubyGemsApiKey`），以及面向 Terraform 服务 URL、Ansible Galaxy 客户端、CI、脚本和自定义 HTTP 客户端的 `GenericToken`；`GenericToken` 适用于能够发送已配置 API-key header 或 bearer token 的调用方。
 
@@ -217,6 +219,7 @@ kkRepo 使用 [Apache License 2.0](LICENSE) 开源。
 - [中文开发指南](docs/zh/development-guide.md)
 - [构建部署指南](docs/zh/build-deployment-guide.md)
 - [Artifact Scanning 使用指南](docs/zh/artifact-scanning-guide.md)
+- [Cleanup Policy 使用指南](docs/zh/cleanup-policy-guide.md)
 - [Native Image 与 JVM 选型指南](docs/zh/native-vs-jvm-guide.md)
 - [Nginx 反向代理配置注意事项](docs/zh/nginx-reverse-proxy.md)
 - [客户端配置示例](docs/zh/client-recipes.md)

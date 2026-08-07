@@ -13,6 +13,11 @@ public interface ComponentDao {
 
   Optional<ComponentRecord> findById(long componentId);
 
+  /** Locks the native component identity for cleanup revalidation. */
+  default Optional<ComponentRecord> findByIdForUpdate(long componentId) {
+    return findById(componentId);
+  }
+
   long upsertReturningId(ComponentRecord record);
 
   Optional<ComponentRecord> findByGav(long repositoryId, String groupId, String artifactId, String version);
@@ -20,6 +25,30 @@ public interface ComponentDao {
   Optional<ComponentRecord> findByNameAndVersion(long repositoryId, String name, String version);
 
   List<ComponentRecord> listByRepositoryId(long repositoryId);
+
+  default List<ComponentRecord> listByRepositoryId(long repositoryId, int maxItems) {
+    return listByRepositoryId(repositoryId).stream().limit(Math.max(1, maxItems)).toList();
+  }
+
+  /**
+   * Returns a bounded, stable page starting strictly after a complete cleanup family.
+   *
+   * <p>The family tuple deliberately excludes version and component id. Cleanup policies that
+   * retain versions must never resume in the middle of a family. Production implementations use
+   * case-sensitive database ordering; this default keeps lightweight test adapters compatible.
+   */
+  default List<ComponentRecord> listCleanupPage(
+      long repositoryId, CleanupFamilyCursor afterFamily, int maxItems) {
+    return listByRepositoryId(repositoryId).stream()
+        .filter(component -> afterFamily == null || compareFamily(component, afterFamily) > 0)
+        .sorted(java.util.Comparator
+            .comparing((ComponentRecord component) -> cleanupValue(component.namespace()))
+            .thenComparing(component -> cleanupValue(component.name()))
+            .thenComparing(component -> cleanupValue(component.kind()))
+            .thenComparingLong(ComponentRecord::id))
+        .limit(Math.max(1, maxItems))
+        .toList();
+  }
 
   List<String> listDistinctNamesByRepositoryId(long repositoryId);
 
@@ -108,5 +137,21 @@ public interface ComponentDao {
         String version) {
       this(keyword, format, repositoryName, namespace, name, version, null);
     }
+  }
+
+  record CleanupFamilyCursor(String namespace, String name, String kind) {
+  }
+
+  private static int compareFamily(
+      ComponentRecord component, CleanupFamilyCursor cursor) {
+    int namespace = cleanupValue(component.namespace()).compareTo(cleanupValue(cursor.namespace()));
+    if (namespace != 0) return namespace;
+    int name = cleanupValue(component.name()).compareTo(cleanupValue(cursor.name()));
+    if (name != 0) return name;
+    return cleanupValue(component.kind()).compareTo(cleanupValue(cursor.kind()));
+  }
+
+  private static String cleanupValue(String value) {
+    return value == null ? "" : value;
   }
 }

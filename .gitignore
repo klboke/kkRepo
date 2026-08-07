@@ -6,6 +6,7 @@ target/
 .DS_Store
 logs/
 artifacts/
+server/blobs/
 *.log
 .local/
 .claude/settings.local.json

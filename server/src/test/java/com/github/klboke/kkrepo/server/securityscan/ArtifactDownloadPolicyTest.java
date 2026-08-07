@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -12,6 +13,7 @@ import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.AssetPolicyState;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.AssetSecurityState;
@@ -59,6 +61,86 @@ class ArtifactDownloadPolicyTest {
   void disabledFeatureNeverTouchesTheHotPathDatabase() {
     assertEquals(PolicyDecision.ALLOW, policy.beforeRead(10L, 100L, 1L).decision());
     verifyNoInteractions(scans);
+  }
+
+  @Test
+  void authorizedExternalGetPersistsDownloadWatermarkEvenWhenScanningIsDisabled() {
+    AssetDao assets = mock(AssetDao.class);
+    ArtifactDownloadPolicy trackingPolicy = new ArtifactDownloadPolicy(
+        scans,
+        new SecurityScanCandidateClassifier(),
+        properties,
+        new SecurityScanMetrics(registry, scans, properties),
+        assets);
+    MockHttpServletRequest request = new MockHttpServletRequest("GET", "/repository/npm/pkg.tgz");
+    RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+    try {
+      assertEquals(
+          PolicyDecision.ALLOW,
+          trackingPolicy.beforeRead(10L, 100L, 1L).decision());
+    } finally {
+      RequestContextHolder.resetRequestAttributes();
+    }
+
+    verify(assets).touchLastDownloaded(org.mockito.ArgumentMatchers.eq(10L), any(Instant.class));
+    verifyNoInteractions(scans);
+  }
+
+  @Test
+  void headAndTrustedInternalScannerRequestsDoNotAdvanceDownloadWatermark() {
+    AssetDao assets = mock(AssetDao.class);
+    ArtifactDownloadPolicy trackingPolicy = new ArtifactDownloadPolicy(
+        scans,
+        new SecurityScanCandidateClassifier(),
+        properties,
+        new SecurityScanMetrics(registry, scans, properties),
+        assets);
+    MockHttpServletRequest head = new MockHttpServletRequest("HEAD", "/repository/raw/file.zip");
+    RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(head));
+    try {
+      trackingPolicy.beforeRead(10L, 100L, 1L);
+    } finally {
+      RequestContextHolder.resetRequestAttributes();
+    }
+    MockHttpServletRequest scanner = new MockHttpServletRequest("GET", "/repository/raw/file.zip");
+    scanner.setAttribute(ArtifactDownloadPolicy.INTERNAL_SCANNER_REQUEST_ATTRIBUTE, true);
+    RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(scanner));
+    try {
+      trackingPolicy.beforeRead(10L, 100L, 1L);
+    } finally {
+      RequestContextHolder.resetRequestAttributes();
+    }
+
+    verifyNoInteractions(assets);
+    verifyNoInteractions(scans);
+  }
+
+  @Test
+  void enforcedDownloadRejectionDoesNotAdvanceDownloadWatermark() {
+    arrange(
+        EnforcementMode.ENFORCE,
+        PolicyAction.ALLOW,
+        complete(PolicyDecision.BLOCK_VULNERABILITY));
+    AssetDao assets = mock(AssetDao.class);
+    ArtifactDownloadPolicy trackingPolicy = new ArtifactDownloadPolicy(
+        scans,
+        new SecurityScanCandidateClassifier(),
+        properties,
+        new SecurityScanMetrics(registry, scans, properties),
+        assets);
+    MockHttpServletRequest request = new MockHttpServletRequest(
+        "GET", "/repository/maven/com/acme/demo/1/demo-1.jar");
+    RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+    try {
+      assertThrows(
+          ArtifactPolicyException.class,
+          () -> trackingPolicy.beforeRead(10L, 100L, 1L));
+    } finally {
+      RequestContextHolder.resetRequestAttributes();
+    }
+
+    verifyNoInteractions(assets);
+    assertSingleSnapshotLookup(1L);
   }
 
   @Test

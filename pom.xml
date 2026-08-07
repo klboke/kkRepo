@@ -45,7 +45,7 @@
   </modules>
 
   <properties>
-    <revision>0.6.0</revision>
+    <revision>0.7.0</revision>
     <java.version>25</java.version>
     <spring.boot.version>4.1.0</spring.boot.version>
     <native-build-tools-plugin.version>1.1.6</native-build-tools-plugin.version>
@@ -54,10 +54,10 @@
     <guice.version>7.0.0</guice.version>
     <re2j.version>1.8</re2j.version>
     <maven.artifact.version>3.9.16</maven.artifact.version>
-    <aws.sdk.version>2.49.3</aws.sdk.version>
+    <aws.sdk.version>2.50.0</aws.sdk.version>
     <commons.compress.version>1.28.0</commons.compress.version>
     <xz.version>1.12</xz.version>
-    <zstd.jni.version>1.5.7-11</zstd.jni.version>
+    <zstd.jni.version>1.5.7-12</zstd.jni.version>
     <commons.lang3.version>3.20.0</commons.lang3.version>
     <bouncycastle.version>1.85</bouncycastle.version>
     <jacoco.version>0.8.15</jacoco.version>

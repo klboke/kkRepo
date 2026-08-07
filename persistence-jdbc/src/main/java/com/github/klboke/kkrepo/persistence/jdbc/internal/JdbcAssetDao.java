@@ -21,6 +21,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.internal.support.EnumColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.HashColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcInserts;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -49,12 +50,31 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
   private final JsonColumns jsonColumns;
   private final ArtifactChangeDao artifactChanges;
   private final boolean artifactChangeEventsEnabled;
+  private final String materializedCteModifier;
+  private final String unboundAssetRepositoryExpression;
   private final RowMapper<AssetBlobRecord> blobRowMapper;
   private final RowMapper<AssetRecord> assetRowMapper;
   private final RowMapper<AssetPublicIdentifierRecord> publicIdentifierRowMapper;
 
   public JdbcAssetDao(JdbcTemplate jdbcTemplate, JsonColumns jsonColumns) {
-    this(jdbcTemplate, jsonColumns, new JdbcArtifactChangeDao(jdbcTemplate), true);
+    this(
+        jdbcTemplate,
+        jsonColumns,
+        new JdbcArtifactChangeDao(jdbcTemplate),
+        true,
+        "",
+        "repository_id");
+  }
+
+  public JdbcAssetDao(
+      JdbcTemplate jdbcTemplate, JsonColumns jsonColumns, DatabaseDialect databaseDialect) {
+    this(
+        jdbcTemplate,
+        jsonColumns,
+        new JdbcArtifactChangeDao(jdbcTemplate),
+        true,
+        databaseDialect.materializedCteModifier(),
+        databaseDialect.unboundAssetRepositoryExpression());
   }
 
   @Autowired
@@ -62,12 +82,15 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
       JdbcTemplate jdbcTemplate,
       JsonColumns jsonColumns,
       ArtifactChangeDao artifactChanges,
-      ArtifactChangeEventMode artifactChangeEventMode) {
+      ArtifactChangeEventMode artifactChangeEventMode,
+      DatabaseDialect databaseDialect) {
     this(
         jdbcTemplate,
         jsonColumns,
         artifactChanges,
-        artifactChangeEventMode.enabled());
+        artifactChangeEventMode.enabled(),
+        databaseDialect.materializedCteModifier(),
+        databaseDialect.unboundAssetRepositoryExpression());
   }
 
   JdbcAssetDao(
@@ -75,10 +98,28 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
       JsonColumns jsonColumns,
       ArtifactChangeDao artifactChanges,
       boolean artifactChangeEventsEnabled) {
+    this(
+        jdbcTemplate,
+        jsonColumns,
+        artifactChanges,
+        artifactChangeEventsEnabled,
+        "",
+        "repository_id");
+  }
+
+  private JdbcAssetDao(
+      JdbcTemplate jdbcTemplate,
+      JsonColumns jsonColumns,
+      ArtifactChangeDao artifactChanges,
+      boolean artifactChangeEventsEnabled,
+      String materializedCteModifier,
+      String unboundAssetRepositoryExpression) {
     this.jdbcTemplate = jdbcTemplate;
     this.jsonColumns = jsonColumns;
     this.artifactChanges = artifactChanges;
     this.artifactChangeEventsEnabled = artifactChangeEventsEnabled;
+    this.materializedCteModifier = materializedCteModifier;
+    this.unboundAssetRepositoryExpression = unboundAssetRepositoryExpression;
     this.blobRowMapper = (rs, rowNum) -> new AssetBlobRecord(
         rs.getLong("id"),
         rs.getLong("blob_store_id"),
@@ -419,6 +460,47 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
   }
 
   @Override
+  public List<AssetWithBlob> listUnboundAssetWithBlobPage(
+      long repositoryId, long afterAssetId, int maxItems) {
+    return jdbcTemplate.query("""
+        WITH bounded AS %s (
+          SELECT id
+          FROM asset
+          WHERE %s = ?
+            AND component_id IS NULL
+            AND id > ?
+          ORDER BY %s, id
+          LIMIT ?
+        )
+        SELECT a.*,
+               b.id AS joined_blob_id,
+               b.blob_store_id AS joined_blob_store_id,
+               b.blob_ref AS joined_blob_ref,
+               b.blob_ref_hash AS joined_blob_ref_hash,
+               b.object_key AS joined_object_key,
+               b.object_key_hash AS joined_object_key_hash,
+               b.sha1 AS joined_sha1,
+               b.sha256 AS joined_sha256,
+               b.md5 AS joined_md5,
+               b.size AS joined_size,
+               b.content_type AS joined_content_type,
+               b.created_by AS joined_created_by,
+               b.created_by_ip AS joined_created_by_ip,
+               b.blob_created_at AS joined_blob_created_at,
+               b.blob_updated_at AS joined_blob_updated_at,
+               b.attributes_json AS joined_blob_attributes_json
+        FROM bounded
+        JOIN asset a ON a.id = bounded.id
+        LEFT JOIN asset_blob b ON b.id = a.asset_blob_id
+        ORDER BY a.id
+        """.formatted(
+            materializedCteModifier,
+            unboundAssetRepositoryExpression,
+            unboundAssetRepositoryExpression), this::mapAssetWithBlob,
+        repositoryId, Math.max(0, afterAssetId), Math.max(1, maxItems));
+  }
+
+  @Override
   public List<AssetWithBlob> listAssetWithBlobPageByComponentName(
       long repositoryId, String componentName, long afterAssetId, int maxItems) {
     return jdbcTemplate.query("""
@@ -704,6 +786,92 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         WHERE a.component_id = ?
         ORDER BY a.path
         """, this::mapAssetWithBlob, componentId);
+  }
+
+  @Override
+  public List<AssetRecord> listAssetsByComponents(Collection<Long> componentIds) {
+    List<Long> ids = distinctPositiveIds(componentIds);
+    if (ids.isEmpty()) return List.of();
+    List<AssetRecord> result = new ArrayList<>();
+    for (int offset = 0; offset < ids.size(); offset += 500) {
+      List<Long> batch = ids.subList(offset, Math.min(ids.size(), offset + 500));
+      result.addAll(jdbcTemplate.query("""
+          SELECT * FROM asset
+          WHERE component_id IN (""" + placeholders(batch.size()) + """
+            )
+          ORDER BY component_id, path
+          """, assetRowMapper, batch.toArray()));
+    }
+    return List.copyOf(result);
+  }
+
+  @Override
+  public Map<Long, AssetRecord> findAssetsByIds(Collection<Long> assetIds) {
+    List<Long> ids = distinctPositiveIds(assetIds);
+    if (ids.isEmpty()) return Map.of();
+    Map<Long, AssetRecord> result = new LinkedHashMap<>(ids.size() * 2);
+    for (int offset = 0; offset < ids.size(); offset += 500) {
+      List<Long> batch = ids.subList(offset, Math.min(ids.size(), offset + 500));
+      jdbcTemplate.query(
+              "SELECT * FROM asset WHERE id IN (" + placeholders(batch.size()) + ")",
+              assetRowMapper,
+              batch.toArray())
+          .forEach(asset -> result.put(asset.id(), asset));
+    }
+    return Map.copyOf(result);
+  }
+
+  @Override
+  public Map<String, AssetRecord> findAssetsByPaths(
+      long repositoryId, Collection<String> paths) {
+    List<String> unique = paths == null
+        ? List.of()
+        : paths.stream().filter(Objects::nonNull).distinct().toList();
+    if (unique.isEmpty()) return Map.of();
+    Map<String, AssetRecord> result = new LinkedHashMap<>(unique.size() * 2);
+    for (int offset = 0; offset < unique.size(); offset += 500) {
+      List<String> batch = unique.subList(offset, Math.min(unique.size(), offset + 500));
+      List<Object> args = new ArrayList<>(batch.size() + 1);
+      args.add(repositoryId);
+      batch.forEach(path -> args.add(PersistenceHashes.pathHash(path)));
+      jdbcTemplate.query("""
+          SELECT * FROM asset
+          WHERE repository_id = ?
+            AND path_hash IN (""" + placeholders(batch.size()) + ")",
+          assetRowMapper,
+          args.toArray()).forEach(asset -> result.put(asset.path(), asset));
+    }
+    result.keySet().retainAll(new java.util.HashSet<>(unique));
+    return Map.copyOf(result);
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public Optional<AssetRecord> findAssetByIdForUpdate(long assetId) {
+    return jdbcTemplate.query("""
+        SELECT * FROM asset WHERE id = ? FOR UPDATE
+        """, assetRowMapper, assetId).stream().findFirst();
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public List<AssetRecord> listAssetsByComponentForUpdate(long componentId) {
+    return jdbcTemplate.query("""
+        SELECT * FROM asset
+        WHERE component_id = ?
+        ORDER BY path
+        FOR UPDATE
+        """, assetRowMapper, componentId);
+  }
+
+  private static List<Long> distinctPositiveIds(Collection<Long> ids) {
+    return ids == null
+        ? List.of()
+        : ids.stream()
+            .filter(Objects::nonNull)
+            .filter(id -> id > 0)
+            .distinct()
+            .toList();
   }
 
   public int deleteAssetById(long assetId) {
@@ -1005,8 +1173,13 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
 
   public int touchLastDownloaded(long assetId, Instant when) {
     return jdbcTemplate.update("""
-        UPDATE asset SET last_downloaded_at = ? WHERE id = ?
-        """, nullableTimestamp(when), assetId);
+        UPDATE asset
+        SET last_downloaded_at = CASE
+          WHEN last_downloaded_at IS NULL OR last_downloaded_at < ? THEN ?
+          ELSE last_downloaded_at
+        END
+        WHERE id = ?
+        """, nullableTimestamp(when), nullableTimestamp(when), assetId);
   }
 
   public int touchAssetLastUpdated(long assetId, Instant when) {

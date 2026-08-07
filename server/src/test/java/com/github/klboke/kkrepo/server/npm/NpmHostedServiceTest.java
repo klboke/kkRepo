@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -12,6 +13,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -397,6 +399,75 @@ class NpmHostedServiceTest {
   }
 
   @Test
+  void cleanupDeletionRewritesHostedPackumentEvenWhenClientWritesAreDenied() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime("DENY", 7L);
+    stubPackageRoot(fixture, """
+        {
+          "name":"demo",
+          "_rev":"1-existing",
+          "versions":{
+            "1.0.0":{"name":"demo","version":"1.0.0",
+              "dist":{"tarball":"demo-1.0.0.tgz"}}
+          },
+          "dist-tags":{"latest":"1.0.0"}
+        }
+        """);
+    when(fixture.writer.deletePath(
+        runtime, fixture.storage, "demo/-/demo-1.0.0.tgz")).thenReturn(1);
+
+    assertEquals(1, fixture.service.deleteTarballForCleanup(
+        runtime, "demo/-/demo-1.0.0.tgz", "cleanup-run:7"));
+
+    ArgumentCaptor<byte[]> json = ArgumentCaptor.forClass(byte[].class);
+    verify(fixture.writer).writePackageRoot(
+        eq(runtime), eq(fixture.storage), eq(7L), eq(PACKAGE),
+        json.capture(), eq("cleanup-run:7"), eq(null));
+    Map<String, Object> stored = fixture.mapper.readValue(json.getValue(), MAP);
+    assertTrue(map(stored.get("versions")).isEmpty());
+    assertTrue(map(stored.get("dist-tags")).isEmpty());
+  }
+
+  @Test
+  void cleanupBatchReadsAndRewritesTheHostedPackumentOncePerFamily() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime("DENY", 7L);
+    stubPackageRoot(fixture, """
+        {
+          "name":"demo",
+          "_rev":"2-existing",
+          "versions":{
+            "1.0.0":{"name":"demo","version":"1.0.0",
+              "dist":{"tarball":"demo-1.0.0.tgz"}},
+            "2.0.0":{"name":"demo","version":"2.0.0",
+              "dist":{"tarball":"demo-2.0.0.tgz"}}
+          },
+          "dist-tags":{"latest":"2.0.0","stable":"1.0.0"}
+        }
+        """);
+    when(fixture.writer.deletePath(runtime, fixture.storage, "demo/-/demo-1.0.0.tgz"))
+        .thenReturn(1);
+    when(fixture.writer.deletePath(runtime, fixture.storage, "demo/-/demo-2.0.0.tgz"))
+        .thenReturn(1);
+
+    assertEquals(List.of(1, 1), fixture.service.deleteTarballsForCleanup(
+        runtime,
+        List.of("demo/-/demo-1.0.0.tgz", "demo/-/demo-2.0.0.tgz"),
+        "cleanup-run:7"));
+
+    verify(fixture.assetDao, times(1)).findAssetByPath(10L, "demo");
+    verify(fixture.assetDao, times(1)).findBlobById(3L);
+    verify(fixture.storage, times(1)).get(any());
+    ArgumentCaptor<byte[]> json = ArgumentCaptor.forClass(byte[].class);
+    verify(fixture.writer, times(1)).writePackageRoot(
+        eq(runtime), eq(fixture.storage), eq(7L), eq(PACKAGE),
+        json.capture(), eq("cleanup-run:7"), eq(null));
+    Map<String, Object> stored = fixture.mapper.readValue(json.getValue(), MAP);
+    assertTrue(map(stored.get("versions")).isEmpty());
+    assertTrue(map(stored.get("dist-tags")).isEmpty());
+  }
+
+  @Test
   void readsPackageRootFromResolvedSnapshotAndRewritesServedTarballUrl() throws Exception {
     Fixture fixture = fixture();
     String json = """
@@ -419,7 +490,8 @@ class NpmHostedServiceTest {
         .body().readAllBytes(), StandardCharsets.UTF_8);
     assertEquals(true, served.contains(
         "https://packages.example/npm/demo/-/demo-1.0.0.tgz"));
-    verify(fixture.downloadPolicy).beforeRead(snapshot.assetId(), snapshot.blob().id());
+    verify(fixture.downloadPolicy).beforeReadFromRepository(
+        snapshot.assetId(), snapshot.blob().id(), snapshot.repositoryId());
   }
 
   @Test

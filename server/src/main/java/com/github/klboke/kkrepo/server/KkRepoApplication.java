@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server;
 import com.github.klboke.kkrepo.server.nativeimage.ApolloRuntimeHints;
 import com.github.klboke.kkrepo.server.nativeimage.CaffeineRuntimeHints;
 import com.github.klboke.kkrepo.server.nativeimage.JacksonRuntimeHints;
+import com.github.klboke.kkrepo.server.nativeimage.QuartzRuntimeHints;
 import java.util.Map;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -17,7 +18,10 @@ import org.springframework.scheduling.annotation.EnableScheduling;
     })
 @EnableScheduling
 @ImportRuntimeHints({
-    ApolloRuntimeHints.class, CaffeineRuntimeHints.class, JacksonRuntimeHints.class
+    ApolloRuntimeHints.class,
+    CaffeineRuntimeHints.class,
+    JacksonRuntimeHints.class,
+    QuartzRuntimeHints.class
 })
 public class KkRepoApplication {
   private static final String APOLLO_CONFIG_IMPORT = "optional:apollo://";

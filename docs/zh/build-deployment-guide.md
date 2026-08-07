@@ -40,7 +40,7 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
   | KKREPO_RUNTIME=native KKREPO_DATABASE_TYPE=postgresql bash
 ```
 
-`KKREPO_RUNTIME=jvm` 选择 `ghcr.io/klboke/kkrepo:0.6.0`，`KKREPO_RUNTIME=native` 选择 `ghcr.io/klboke/kkrepo:0.6.0-native`。两种镜像均发布 Linux `amd64` 和 `arm64` 架构。显式设置 `KKREPO_IMAGE_TAG` 时，会覆盖对应运行时的默认 tag。
+`KKREPO_RUNTIME=jvm` 选择 `ghcr.io/klboke/kkrepo:0.7.0`，`KKREPO_RUNTIME=native` 选择 `ghcr.io/klboke/kkrepo:0.7.0-native`。两种镜像均发布 Linux `amd64` 和 `arm64` 架构。显式设置 `KKREPO_IMAGE_TAG` 时，会覆盖对应运行时的默认 tag。
 
 该脚本会逐步打印日志并执行：
 
@@ -61,7 +61,7 @@ bash quickstart.sh
 
 默认会启动：
 
-- `ghcr.io/klboke/kkrepo:0.6.0` 中的 JVM 运行时
+- `ghcr.io/klboke/kkrepo:0.7.0` 中的 JVM 运行时
 - MySQL 8.0
 - 用于本地试用的持久化 MySQL volume 和 File blob storage volume
 
@@ -153,7 +153,7 @@ server/target/kkrepo-server-<version>.jar
 拉取最新公开发行镜像：
 
 ```bash
-docker pull ghcr.io/klboke/kkrepo:0.6.0
+docker pull ghcr.io/klboke/kkrepo:0.7.0
 ```
 
 也可以使用 `latest` 跟随最新公开发行版本：
@@ -165,7 +165,7 @@ docker pull ghcr.io/klboke/kkrepo:latest
 Native 镜像使用独立 tag：
 
 ```bash
-docker pull ghcr.io/klboke/kkrepo:0.6.0-native
+docker pull ghcr.io/klboke/kkrepo:0.7.0-native
 docker pull ghcr.io/klboke/kkrepo:native-latest
 ```
 

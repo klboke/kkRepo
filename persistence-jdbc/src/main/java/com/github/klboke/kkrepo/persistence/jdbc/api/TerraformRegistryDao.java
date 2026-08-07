@@ -23,6 +23,9 @@ public interface TerraformRegistryDao {
 
   void publishProvider(ProviderPlatform platform, ProviderState state);
 
+  int deleteProviderVersion(
+      long repositoryId, String namespace, String type, String version);
+
   boolean tryAcquirePublishLease(String leaseKey, String owner, Instant expiresAt);
 
   boolean renewPublishLease(String leaseKey, String owner, Instant expiresAt);

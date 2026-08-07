@@ -13,8 +13,12 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
+import com.github.klboke.kkrepo.protocol.nuget.NugetPath;
+import com.github.klboke.kkrepo.protocol.nuget.NugetPathParser;
+import com.github.klboke.kkrepo.protocol.nuget.NugetPaths;
 import com.github.klboke.kkrepo.protocol.swift.SwiftPath;
 import com.github.klboke.kkrepo.protocol.swift.SwiftPathParser;
 import com.github.klboke.kkrepo.protocol.swift.SwiftToolsVersions;
@@ -30,6 +34,7 @@ import com.github.klboke.kkrepo.server.security.SecurityManagementService;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -51,6 +56,7 @@ import org.springframework.web.server.ResponseStatusException;
 public class BrowseContentDeleteController {
   private static final List<String> MAVEN_HASH_SUFFIXES = List.of(".sha1", ".sha256", ".sha512", ".md5");
   private static final SwiftPathParser SWIFT_PATHS = new SwiftPathParser();
+  private static final NugetPathParser NUGET_PATHS = new NugetPathParser();
 
   private final RepositoryDao repositoryDao;
   private final AssetDao assetDao;
@@ -119,6 +125,74 @@ public class BrowseContentDeleteController {
       throw new ResponseStatusException(HttpStatus.FORBIDDEN, decision.reason());
     }
 
+    return deleteAuthorized(repository, path, sourceRepository, subject.userId());
+  }
+
+  @Transactional
+  public int deleteForCleanup(
+      String repository,
+      String subjectKind,
+      long subjectId,
+      String path,
+      String actorId) {
+    RepositoryRecord target = repositoryByName(repository);
+    if ("COMPONENT".equals(subjectKind)) {
+      ComponentRecord component = componentDao.findById(subjectId)
+          .filter(row -> row.repositoryId() == target.id())
+          .orElseThrow(() -> new ResponseStatusException(
+              HttpStatus.NOT_FOUND, "Cleanup component was not found: " + subjectId));
+      if (target.format() == RepositoryFormat.SWIFT) {
+        return deleteAuthorized(
+            repository,
+            component.namespace() + "/" + component.name() + "/" + component.version(),
+            repository,
+            actorId).deletedAssets();
+      }
+      if (target.format() == RepositoryFormat.ANSIBLEGALAXY) {
+        List<AssetRecord> componentAssets = assetDao.listAssetsByComponent(component.id());
+        AssetRecord archive = componentAssets.stream().findFirst()
+            .orElseThrow(() -> new ResponseStatusException(
+                HttpStatus.NOT_FOUND, "Cleanup component has no assets: " + subjectId));
+        String filename = archive.path().substring(archive.path().lastIndexOf('/') + 1);
+        String publicPath = component.namespace() + "/" + component.name() + "/"
+            + component.version() + "/" + filename;
+        return deleteAuthorized(repository, publicPath, repository, actorId).deletedAssets();
+      }
+      if (target.format() == RepositoryFormat.TERRAFORM
+          && "terraform-provider".equals(component.kind())) {
+        terraformRegistryDao.deleteProviderVersion(
+            target.id(), component.namespace(), component.name(), component.version());
+      }
+      List<AssetRecord> assets = expandNugetPackageAssets(
+          target, assetDao.listAssetsByComponent(component.id()));
+      if (assets.isEmpty()) {
+        throw new ResponseStatusException(
+            HttpStatus.NOT_FOUND, "Cleanup component has no assets: " + subjectId);
+      }
+      String storagePath = assets.getFirst().path();
+      String publicPath = path == null || path.isBlank() ? storagePath : path;
+      return deleteResolvedAssets(
+          target, target, publicPath, storagePath, assets, Set.of(component.id())).deletedAssets();
+    }
+    if ("ASSET".equals(subjectKind)) {
+      AssetRecord asset = assetDao.findAssetById(subjectId)
+          .filter(row -> row.repositoryId() == target.id())
+          .orElseThrow(() -> new ResponseStatusException(
+              HttpStatus.NOT_FOUND, "Cleanup asset was not found: " + subjectId));
+      return deleteResolvedAssets(
+          target,
+          target,
+          asset.path(),
+          asset.path(),
+          expandNugetPackageAssets(target, List.of(asset)),
+          Set.of()).deletedAssets();
+    }
+    throw new ResponseStatusException(
+        HttpStatus.BAD_REQUEST, "Unsupported cleanup subject: " + subjectKind);
+  }
+
+  private BrowseDeleteResult deleteAuthorized(
+      String repository, String path, String sourceRepository, String actorId) {
     RepositoryRecord requested = repositoryByName(repository);
     String publicPath = normalize(path);
     if (publicPath.isEmpty()) {
@@ -195,7 +269,7 @@ public class BrowseContentDeleteController {
               coordinate.scopeLc(),
               coordinate.nameLc(),
               coordinate.version(),
-              "administrative delete by " + subject.userId(),
+              "administrative delete by " + actorId,
               Instant.now())
           .orElseThrow(() -> new ResponseStatusException(
               HttpStatus.CONFLICT,
@@ -213,16 +287,29 @@ public class BrowseContentDeleteController {
       }
     }
 
+    Set<Long> extraComponentIds = new HashSet<>();
+    if (swiftComponentId != null) {
+      extraComponentIds.add(swiftComponentId);
+    }
+    if (ansibleComponentId != null) {
+      extraComponentIds.add(ansibleComponentId);
+    }
+    return deleteResolvedAssets(
+        requested, target, publicPath, storagePath, assets, extraComponentIds);
+  }
+
+  private BrowseDeleteResult deleteResolvedAssets(
+      RepositoryRecord requested,
+      RepositoryRecord target,
+      String publicPath,
+      String storagePath,
+      List<AssetRecord> assets,
+      Set<Long> extraComponentIds) {
     Set<Long> componentIds = assets.stream()
         .map(AssetRecord::componentId)
         .filter(id -> id != null)
-        .collect(Collectors.toSet());
-    if (swiftComponentId != null) {
-      componentIds.add(swiftComponentId);
-    }
-    if (ansibleComponentId != null) {
-      componentIds.add(ansibleComponentId);
-    }
+        .collect(Collectors.toCollection(HashSet::new));
+    componentIds.addAll(extraComponentIds);
     Set<String> npmPackageIds = assets.stream()
         .map(BrowseContentDeleteController::npmPackageIdForInvalidation)
         .filter(id -> id != null && !id.isBlank())
@@ -346,6 +433,30 @@ public class BrowseContentDeleteController {
       matches.put(asset.id(), asset);
     }
     return new ArrayList<>(matches.values());
+  }
+
+  private List<AssetRecord> expandNugetPackageAssets(
+      RepositoryRecord repository, List<AssetRecord> assets) {
+    if (repository.format() != RepositoryFormat.NUGET || assets == null || assets.isEmpty()) {
+      return assets == null ? List.of() : assets;
+    }
+    LinkedHashMap<Long, AssetRecord> matches = new LinkedHashMap<>();
+    assets.forEach(asset -> matches.put(asset.id(), asset));
+    for (AssetRecord asset : List.copyOf(matches.values())) {
+      NugetPath parsed = NUGET_PATHS.parse(asset.path());
+      if (parsed.packageId() == null || parsed.version() == null
+          || (parsed.kind() != NugetPath.Kind.FLAT_CONTAINER_PACKAGE
+              && parsed.kind() != NugetPath.Kind.FLAT_CONTAINER_NUSPEC)) {
+        continue;
+      }
+      assetDao.findAssetByPath(
+          repository.id(), NugetPaths.flatContainerPackage(parsed.packageId(), parsed.version()))
+          .ifPresent(related -> matches.put(related.id(), related));
+      assetDao.findAssetByPath(
+          repository.id(), NugetPaths.flatContainerNuspec(parsed.packageId(), parsed.version()))
+          .ifPresent(related -> matches.put(related.id(), related));
+    }
+    return List.copyOf(matches.values());
   }
 
   private List<String> mavenHashSiblings(RepositoryRecord repository, String storagePath) {
@@ -474,6 +585,15 @@ public class BrowseContentDeleteController {
       if (project != null && !project.isBlank()) {
         repositoryIndexRebuildDao.enqueue(target.id(), RepositoryIndexRebuildDao.PYPI_PROJECT, project);
       }
+      return;
+    }
+    if (target.format() == RepositoryFormat.YUM) {
+      repositoryIndexRebuildDao.enqueue(target.id(), RepositoryIndexRebuildDao.YUM_METADATA);
+      return;
+    }
+    if (target.format() == RepositoryFormat.RUBYGEMS) {
+      repositoryIndexRebuildDao.enqueue(
+          target.id(), RepositoryIndexRebuildDao.RUBYGEMS_METADATA);
     }
   }
 

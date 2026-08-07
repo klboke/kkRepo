@@ -13,6 +13,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.apache.hc.client5.http.DnsResolver;
 import org.apache.hc.client5.http.HttpRoute;
 import org.apache.hc.client5.http.auth.AuthScope;
 import org.apache.hc.client5.http.auth.UsernamePasswordCredentials;
@@ -78,6 +79,19 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
   private static final Logger log = LoggerFactory.getLogger(ProxiedHttpClientFactory.class);
   private static final String ORIGINAL_TARGET_CONTEXT =
       ProxiedHttpClientFactory.class.getName() + ".originalTarget";
+  // HttpClient turns a null DNS answer into an unresolved socket address. The SOCKS socket then
+  // serializes that address as RFC 1928 ATYP=domain instead of resolving it in this JVM.
+  private static final DnsResolver PROXY_DNS_RESOLVER = new DnsResolver() {
+    @Override
+    public InetAddress[] resolve(String host) {
+      return null;
+    }
+
+    @Override
+    public String resolveCanonicalHostname(String host) {
+      return host;
+    }
+  };
 
   private final Cache<String, CloseableHttpClient> cache;
   private final CloseableHttpClient directClient;
@@ -153,15 +167,15 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
   }
 
   /**
-   * Executes a GET/HEAD against an already validated and DNS-resolved target. The caller must
+   * Executes a GET/HEAD against an already validated target. The caller must
    * {@link ProxiedResponse#close()} it after draining the body so the connection returns to the pool.
    * When {@code config} is enabled, {@code owner} keys the proxy client; otherwise the shared direct
    * client is used.
    *
-   * <p>The actual socket or HTTP CONNECT destination is one of the policy-approved IP addresses.
-   * The original host remains the HTTP Host / TLS SNI and certificate-verification name. This binds
-   * address validation to connection establishment and prevents a second DNS lookup from changing
-   * the destination after validation.
+   * <p>Direct requests connect to policy-approved pinned IP addresses. Requests with an explicitly
+   * configured repository proxy can instead carry a proxy-resolved target, in which case HTTP
+   * CONNECT or SOCKS5 receives the original hostname and owns DNS resolution. The original host is
+   * always retained for HTTP Host, TLS SNI, and certificate verification.
    *
    * <p>The connect timeout is configured once per cached client on its connection manager
    * ({@code kkrepo.outbound-proxy.connect-timeout-ms}), because HttpClient 5.4+ removed per-request
@@ -181,9 +195,9 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
   }
 
   /**
-   * Executes an HTTP request with an optional repeatable body against an already validated and
-   * DNS-resolved target. Non-idempotent requests are not retried against another approved address
-   * after an I/O failure, because doing so could submit the same operation twice.
+   * Executes an HTTP request with an optional repeatable body against an already validated target.
+   * Non-idempotent pinned requests are not retried against another approved address after an I/O
+   * failure, because doing so could submit the same operation twice.
    */
   @SuppressWarnings("resource") // the shared client is closed by this factory, not per request
   public ProxiedResponse execute(
@@ -201,17 +215,26 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
     CloseableHttpClient client = config != null && config.enabled()
         ? clientFor(owner, config)
         : directClient;
+    boolean proxyEnabled = config != null && config.enabled();
     RequestConfig requestConfig = RequestConfig.custom()
         .setResponseTimeout(Timeout.ofMilliseconds(Math.max(1L, responseTimeoutMillis)))
         .build();
     String requestMethod = method == null || method.isBlank() ? "GET" : method;
+    if (target.proxyResolvesDns()) {
+      if (!proxyEnabled) {
+        throw new IllegalArgumentException(
+            "proxy-resolved outbound target requires an enabled proxy config");
+      }
+      return executeAtTarget(
+          client, config, requestMethod, target.uri(), null, true, headers, body, requestConfig);
+    }
     boolean retryable =
         "GET".equalsIgnoreCase(requestMethod) || "HEAD".equalsIgnoreCase(requestMethod);
     IOException failure = null;
     for (InetAddress address : target.addresses()) {
       try {
-        return executeAtAddress(
-            client, config, requestMethod, target.uri(), address, headers, body, requestConfig);
+        return executeAtTarget(
+            client, config, requestMethod, target.uri(), address, false, headers, body, requestConfig);
       } catch (IOException e) {
         failure = e;
         if (!retryable) {
@@ -223,20 +246,22 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
   }
 
   @SuppressWarnings("resource") // the client is pooled and closed by this factory, not per request
-  private ProxiedResponse executeAtAddress(
+  private ProxiedResponse executeAtTarget(
       CloseableHttpClient client,
       OutboundProxyConfig config,
       String method,
       URI uri,
       InetAddress address,
+      boolean proxyResolvesDns,
       Map<String, String> headers,
       byte[] body,
       RequestConfig requestConfig)
       throws IOException {
     int port = effectivePort(uri);
     String originalHost = endpointHost(uri);
-    HttpHost pinnedTarget =
-        new HttpHost(uri.getScheme(), address, address.getHostAddress(), port);
+    HttpHost connectionTarget = proxyResolvesDns
+        ? new HttpHost(uri.getScheme(), originalHost, port)
+        : new HttpHost(uri.getScheme(), address, address.getHostAddress(), port);
     HttpHost originalTarget = new HttpHost(uri.getScheme(), originalHost, port);
     ClassicRequestBuilder requestBuilder =
         ClassicRequestBuilder.create(method).setPath(requestPath(uri));
@@ -258,8 +283,9 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
         && URIScheme.HTTP.same(uri.getScheme());
     request.setScheme(uri.getScheme());
     request.setAuthority(new URIAuthority(
-        plainHttpProxy ? address.getHostAddress() : originalHost, uri.getPort()));
-    if (plainHttpProxy) {
+        plainHttpProxy && !proxyResolvesDns ? address.getHostAddress() : originalHost,
+        uri.getPort()));
+    if (plainHttpProxy && !proxyResolvesDns) {
       request.setHeader(HttpHeaders.HOST, hostHeader(uri));
     }
 
@@ -267,7 +293,7 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
     context.setRequestConfig(requestConfig);
     context.setAttribute(ORIGINAL_TARGET_CONTEXT, originalTarget);
     // executeOpen returns a live, caller-closed response required by streaming callers.
-    ClassicHttpResponse response = client.executeOpen(pinnedTarget, request, context);
+    ClassicHttpResponse response = client.executeOpen(connectionTarget, request, context);
     Map<String, String> responseHeaders = new LinkedHashMap<>();
     for (Header header : response.getHeaders()) {
       responseHeaders.putIfAbsent(header.getName(), header.getValue());
@@ -321,7 +347,7 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
     configureConnectionManager(connectionManager);
     return HttpClients.custom()
         .setConnectionManager(connectionManager)
-        .setRoutePlanner(new PinnedRoutePlanner(null))
+        .setRoutePlanner(new PinnedRoutePlanner(null, false))
         .disableContentCompression()
         .disableRedirectHandling()
         .build();
@@ -333,7 +359,7 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
     configureConnectionManager(connectionManager);
     var builder = HttpClients.custom()
         .setConnectionManager(connectionManager)
-        .setRoutePlanner(new PinnedRoutePlanner(proxy))
+        .setRoutePlanner(new PinnedRoutePlanner(proxy, true))
         .disableContentCompression()
         .disableRedirectHandling();
     if (config.authenticated()) {
@@ -365,7 +391,8 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
         .register(URIScheme.HTTPS.getId(), DefaultClientTlsStrategy.createDefault())
         .build();
     HttpClientConnectionOperator operator =
-        new DefaultHttpClientConnectionOperator(socketFactory, null, null, tlsStrategies);
+        new DefaultHttpClientConnectionOperator(
+            socketFactory, null, PROXY_DNS_RESOLVER, tlsStrategies);
     PoolingHttpClientConnectionManager connectionManager =
         new PoolingHttpClientConnectionManager(operator, null, null, null, null);
     configureConnectionManager(connectionManager);
@@ -373,7 +400,7 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
         config.host(), config.port());
     return HttpClients.custom()
         .setConnectionManager(connectionManager)
-        .setRoutePlanner(new PinnedRoutePlanner(null))
+        .setRoutePlanner(new PinnedRoutePlanner(null, true))
         .disableContentCompression()
         .disableRedirectHandling()
         .build();
@@ -405,16 +432,18 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
 
   private static final class PinnedRoutePlanner implements HttpRoutePlanner {
     private final HttpHost proxy;
+    private final boolean allowUnresolvedTarget;
 
-    private PinnedRoutePlanner(HttpHost proxy) {
+    private PinnedRoutePlanner(HttpHost proxy, boolean allowUnresolvedTarget) {
       this.proxy = proxy;
+      this.allowUnresolvedTarget = allowUnresolvedTarget;
     }
 
     @Override
     public HttpRoute determineRoute(
         HttpHost target, org.apache.hc.core5.http.protocol.HttpContext context)
         throws ProtocolException {
-      if (target == null || target.getAddress() == null) {
+      if (target == null || (!allowUnresolvedTarget && target.getAddress() == null)) {
         throw new ProtocolException("Resolved target address is required");
       }
       Object original = context.getAttribute(ORIGINAL_TARGET_CONTEXT);

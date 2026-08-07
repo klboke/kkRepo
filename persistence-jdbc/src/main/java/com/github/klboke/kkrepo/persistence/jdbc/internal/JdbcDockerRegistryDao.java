@@ -36,6 +36,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Repository
 public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao {
+  private static final int ASSET_ID_QUERY_BATCH_SIZE = 500;
   private final JdbcTemplate jdbcTemplate;
   private final JsonColumns jsonColumns;
   private final RowMapper<DockerManifestRecord> manifestMapper;
@@ -104,6 +105,21 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
         """, manifestMapper, repositoryId, hash(imageName), hash(digest)).stream().findFirst();
   }
 
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public Optional<DockerManifestRecord> findManifestByDigestForUpdate(
+      long repositoryId, String imageName, String digest) {
+    return jdbcTemplate.query("""
+        SELECT *
+        FROM docker_manifest
+        WHERE repository_id = ?
+          AND image_name_hash = ?
+          AND digest_hash = ?
+          AND deleted_at IS NULL
+        FOR UPDATE
+        """, manifestMapper, repositoryId, hash(imageName), hash(digest)).stream().findFirst();
+  }
+
   public Optional<DockerManifestRecord> findManifestByTag(
       long repositoryId, String imageName, String tag) {
     return jdbcTemplate.query("""
@@ -136,15 +152,19 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
     if (ids.isEmpty()) {
       return Map.of();
     }
-    List<Object> args = new ArrayList<>(ids);
     Map<Long, DockerManifestRecord> byAssetId = new LinkedHashMap<>();
-    jdbcTemplate.query("""
-        SELECT *
-        FROM docker_manifest
-        WHERE asset_id IN (""" + placeholders(ids.size()) + """
-          )
-          AND deleted_at IS NULL
-        """, manifestMapper, args.toArray()).forEach(row -> byAssetId.put(row.assetId(), row));
+    for (int start = 0; start < ids.size(); start += ASSET_ID_QUERY_BATCH_SIZE) {
+      List<Long> batch = ids.subList(
+          start, Math.min(ids.size(), start + ASSET_ID_QUERY_BATCH_SIZE));
+      jdbcTemplate.query("""
+          SELECT *
+          FROM docker_manifest
+          WHERE asset_id IN (""" + placeholders(batch.size()) + """
+            )
+            AND deleted_at IS NULL
+          """, manifestMapper, batch.toArray())
+          .forEach(row -> byAssetId.put(row.assetId(), row));
+    }
     return byAssetId;
   }
 
@@ -355,6 +375,48 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
         """, tagMapper, manifestId);
   }
 
+  @Override
+  public Map<Long, List<DockerTagRecord>> listTagsForManifests(
+      Collection<Long> manifestIds) {
+    List<Long> ids = manifestIds == null
+        ? List.of()
+        : manifestIds.stream()
+            .filter(java.util.Objects::nonNull)
+            .filter(id -> id > 0)
+            .distinct()
+            .toList();
+    if (ids.isEmpty()) return Map.of();
+    Map<Long, List<DockerTagRecord>> result = new LinkedHashMap<>();
+    ids.forEach(id -> result.put(id, new ArrayList<>()));
+    for (int offset = 0; offset < ids.size(); offset += 500) {
+      List<Long> batch = ids.subList(offset, Math.min(ids.size(), offset + 500));
+      jdbcTemplate.query("""
+          SELECT *
+          FROM docker_tag
+          WHERE manifest_id IN (""" + placeholders(batch.size()) + """
+            )
+          ORDER BY manifest_id, tag
+          """, tagMapper, batch.toArray())
+          .forEach(tag -> result.computeIfAbsent(tag.manifestId(), ignored -> new ArrayList<>())
+              .add(tag));
+    }
+    Map<Long, List<DockerTagRecord>> immutable = new LinkedHashMap<>();
+    result.forEach((id, tags) -> immutable.put(id, List.copyOf(tags)));
+    return Map.copyOf(immutable);
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public List<DockerTagRecord> listTagsForManifestForUpdate(long manifestId) {
+    return jdbcTemplate.query("""
+        SELECT *
+        FROM docker_tag
+        WHERE manifest_id = ?
+        ORDER BY tag
+        FOR UPDATE
+        """, tagMapper, manifestId);
+  }
+
   public int deleteTag(long repositoryId, String imageName, String tag) {
     return jdbcTemplate.update("""
         DELETE FROM docker_tag
@@ -530,6 +592,7 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
         JOIN cleanup_policy p ON p.id = rp.cleanup_policy_id
         WHERE rp.repository_id = ?
           AND p.format = 'docker'
+          AND p.mode <> 'NATIVE'
         ORDER BY p.name
         """, (rs, rowNum) -> new CleanupPolicyRecord(
             rs.getLong("id"),
@@ -582,7 +645,7 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
     }
     args.add(Math.max(1, limit));
     return jdbcTemplate.query("""
-        SELECT m.image_name, m.digest
+        SELECT m.image_name, m.digest, m.asset_id, a.last_downloaded_at, m.updated_at, m.size
         FROM docker_manifest m
         JOIN asset a ON a.id = m.asset_id
         WHERE m.repository_id = ?
@@ -592,8 +655,36 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
         LIMIT ?
         """, (rs, rowNum) -> new CleanupManifestCandidate(
             rs.getString("image_name"),
-            rs.getString("digest")),
+            rs.getString("digest"),
+            rs.getLong("asset_id"),
+            nullableInstant(rs, "last_downloaded_at"),
+            nullableInstant(rs, "updated_at"),
+            rs.getLong("size")),
         args.toArray());
+  }
+
+  @Override
+  public List<CleanupManifestCandidate> listManifestCleanupCandidatesPage(
+      long repositoryId, long afterAssetId, int limit) {
+    return jdbcTemplate.query("""
+        SELECT m.image_name, m.digest, m.asset_id, a.last_downloaded_at, m.updated_at, m.size
+        FROM docker_manifest m
+        JOIN asset a ON a.id = m.asset_id
+        WHERE m.repository_id = ?
+          AND m.deleted_at IS NULL
+          AND m.asset_id > ?
+        ORDER BY m.asset_id
+        LIMIT ?
+        """, (rs, rowNum) -> new CleanupManifestCandidate(
+        rs.getString("image_name"),
+        rs.getString("digest"),
+        rs.getLong("asset_id"),
+        nullableInstant(rs, "last_downloaded_at"),
+        nullableInstant(rs, "updated_at"),
+        rs.getLong("size")),
+        repositoryId,
+        Math.max(0, afterAssetId),
+        Math.max(1, limit));
   }
 
   public List<String> listCatalog(long repositoryId, String last, int limit) {
