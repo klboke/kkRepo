@@ -37,6 +37,9 @@ class PostgreSqlDatabaseDialectTest {
   @Test
   void exposesPostgreSqlJsonSearchAndCoordinationSemantics() {
     assertEquals(
+        "repository_data_migration_asset a",
+        dialect.migrations().assetClaimTableReference());
+    assertEquals(
         "c.attributes_json #>> '{distPath}'",
         dialect.json().extractText("c.attributes_json", "distPath"));
     assertEquals(

@@ -370,6 +370,12 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
     }
 
     @Override
+    public String assetClaimTableReference() {
+      return "repository_data_migration_asset a "
+          + "FORCE INDEX (idx_repo_data_migration_asset_repo_status)";
+    }
+
+    @Override
     public void upsertDiscoveredAssets(JdbcOperations jdbc, List<DiscoveredAsset> assets) {
       jdbc.batchUpdate(UPSERT_DISCOVERED_ASSET_SQL, assets, Math.min(assets.size(), 500),
           (statement, asset) -> bind(statement, asset));

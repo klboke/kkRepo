@@ -6,6 +6,10 @@ import org.springframework.jdbc.core.JdbcOperations;
 
 /** Batch persistence operations for resumable repository-data migration. */
 public interface MigrationPersistenceDialect {
+  default String assetClaimTableReference() {
+    return "repository_data_migration_asset a";
+  }
+
   void upsertDiscoveredAssets(JdbcOperations jdbc, List<DiscoveredAsset> assets);
 
   record DiscoveredAsset(

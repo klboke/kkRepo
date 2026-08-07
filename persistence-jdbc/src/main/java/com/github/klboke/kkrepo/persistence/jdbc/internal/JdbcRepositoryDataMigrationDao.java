@@ -391,9 +391,9 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
       if (!lockRepositoryJob(repositoryJobId)) {
         continue;
       }
-      List<RepositoryDataMigrationAssetRecord> assets = jdbcTemplate.query("""
+      String claimAssetsSql = """
           SELECT a.*
-          FROM repository_data_migration_asset a
+          FROM %s
           WHERE a.repository_job_id = ?
             AND a.status = ?
             AND a.attempts < ?
@@ -401,7 +401,8 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
           ORDER BY a.id
           LIMIT ?
           FOR UPDATE SKIP LOCKED
-          """, assetRowMapper,
+          """.formatted(migrationDialect.assetClaimTableReference());
+      List<RepositoryDataMigrationAssetRecord> assets = jdbcTemplate.query(claimAssetsSql, assetRowMapper,
           repositoryJobId,
           assetStatus,
           maxAttempts,

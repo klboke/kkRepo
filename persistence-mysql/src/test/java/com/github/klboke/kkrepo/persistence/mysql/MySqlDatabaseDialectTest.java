@@ -34,6 +34,10 @@ class MySqlDatabaseDialectTest {
   @Test
   void exposesMySqlJsonAndSearchSemantics() {
     assertEquals(
+        "repository_data_migration_asset a "
+            + "FORCE INDEX (idx_repo_data_migration_asset_repo_status)",
+        dialect.migrations().assetClaimTableReference());
+    assertEquals(
         "JSON_UNQUOTE(JSON_EXTRACT(c.attributes_json, '$.distPath'))",
         dialect.json().extractText("c.attributes_json", "distPath"));
     assertEquals(
