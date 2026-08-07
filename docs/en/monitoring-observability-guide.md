@@ -68,6 +68,27 @@ spec:
 
 Metrics include the `application` label by default. Its value comes from `spring.application.name`, which is `kkrepo` by default. For multi-environment deployments, keep labels such as `namespace`, `pod`, and `instance` on the Prometheus side so you can troubleshoot by environment and replica.
 
+### Tetris QPM Integration
+
+By default, kkrepo exports the Tetris APM-compatible metric from the same `/actuator/prometheus` endpoint:
+
+```text
+hunter_api_response_duration_seconds_count
+hunter_api_response_duration_seconds_sum
+hunter_api_response_duration_seconds_bucket
+```
+
+The histogram uses the Tetris label contract: `uriPattern`, `method`, `statusCode`, `upServiceName`, and `bizCode`. `statusCode` is grouped into classes such as `2xx`, `4xx`, and `5xx`. `uriPattern` comes only from the matched Spring MVC route template, so repository names, package names, versions, and asset paths are not copied into metric labels.
+
+Keep the Moon/Tetris scrape path set to `http&/actuator/prometheus`; no `/faros` scrape path is required. After deployment, generate a few real API requests and verify the series:
+
+```bash
+curl -sS http://127.0.0.1:8081/actuator/prometheus \
+  | grep hunter_api_response_duration_seconds
+```
+
+Set `KKREPO_TETRIS_API_METRICS_ENABLED=false` to disable the compatibility metric. These metrics are per-replica process telemetry and are aggregated across replicas by Prometheus/Tetris. A Pod restart resets its local counters without affecting application correctness.
+
 ## Grafana Dashboard
 
 Bundled Grafana dashboard:
@@ -107,6 +128,7 @@ Background tasks, rebuild queues, GC, and rate-limit metrics:
 | Metric | Type | Description |
 | --- | --- | --- |
 | `http_server_requests_seconds_*` | Spring Boot timer | HTTP request latency and count |
+| `hunter_api_response_duration_seconds_*` | Tetris-compatible histogram | Tetris QPM, average latency, P95, and status-code ratios |
 | `kkrepo_repository_requests_total` | counter | Repository protocol request count |
 | `kkrepo_repository_request_duration_seconds_*` | timer | Repository protocol request latency |
 | `kkrepo_repository_upload_bytes_total` | counter | Uploaded request body bytes |

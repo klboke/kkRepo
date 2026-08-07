@@ -68,6 +68,27 @@ spec:
 
 指标默认带 `application` 标签，默认值来自 `spring.application.name`，也就是 `kkrepo`。如果部署多个环境，建议在 Prometheus 侧保留 `namespace`、`pod`、`instance` 等标签，便于按环境和副本排查。
 
+### Tetris QPM 接入
+
+kkrepo 默认在同一个 `/actuator/prometheus` 端点输出 Tetris APM 面板识别的兼容指标：
+
+```text
+hunter_api_response_duration_seconds_count
+hunter_api_response_duration_seconds_sum
+hunter_api_response_duration_seconds_bucket
+```
+
+该 Histogram 使用 Tetris 约定的 `uriPattern`、`method`、`statusCode`、`upServiceName` 和 `bizCode` 标签。`statusCode` 按 `2xx`、`4xx`、`5xx` 等状态码类别聚合；`uriPattern` 只使用 Spring MVC 匹配后的路由模板，不会把仓库名、包名、版本或 asset path 直接写入标签。
+
+Moon/Tetris 继续抓取管理端口的 `http&/actuator/prometheus` 即可，不需要增加 `/faros` 抓取路径。部署后先产生几次实际接口请求，再验证：
+
+```bash
+curl -sS http://127.0.0.1:8081/actuator/prometheus \
+  | grep hunter_api_response_duration_seconds
+```
+
+可通过 `KKREPO_TETRIS_API_METRICS_ENABLED=false` 关闭兼容指标。指标是各副本的进程内遥测数据，由 Prometheus/Tetris 跨副本聚合；Pod 重启后本地计数重置，不影响业务正确性。
+
 ## Grafana 仪表盘
 
 内置 Grafana dashboard 文件：
@@ -107,6 +128,7 @@ docs/resources/grafana/dashboard.json
 | 指标 | 类型 | 说明 |
 | --- | --- | --- |
 | `http_server_requests_seconds_*` | Spring Boot timer | HTTP 请求延迟和数量 |
+| `hunter_api_response_duration_seconds_*` | Tetris-compatible histogram | Tetris QPM、平均延迟、P95 和状态码比例 |
 | `kkrepo_repository_requests_total` | counter | 仓库协议请求数 |
 | `kkrepo_repository_request_duration_seconds_*` | timer | 仓库协议请求延迟 |
 | `kkrepo_repository_upload_bytes_total` | counter | 上传请求体字节数 |
