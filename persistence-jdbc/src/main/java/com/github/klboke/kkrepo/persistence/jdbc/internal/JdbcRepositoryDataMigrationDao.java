@@ -387,52 +387,49 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
       int limit,
       int maxAttempts,
       Instant retryBefore) {
-    Long repositoryJobId = findClaimableRepositoryJob(
-        migrationJobId, assetStatus, maxAttempts, retryBefore);
-    if (repositoryJobId == null) {
-      return List.of();
+    for (Long repositoryJobId : findCandidateRepositoryJobIds(migrationJobId)) {
+      if (!lockRepositoryJob(repositoryJobId)) {
+        continue;
+      }
+      List<RepositoryDataMigrationAssetRecord> assets = jdbcTemplate.query("""
+          SELECT a.*
+          FROM repository_data_migration_asset a
+          WHERE a.repository_job_id = ?
+            AND a.status = ?
+            AND a.attempts < ?
+            AND (a.claimed_at IS NULL OR a.claimed_at < ?)
+          ORDER BY a.id
+          LIMIT ?
+          FOR UPDATE SKIP LOCKED
+          """, assetRowMapper,
+          repositoryJobId,
+          assetStatus,
+          maxAttempts,
+          nullableTimestamp(retryBefore),
+          limit);
+      if (assets.isEmpty()) {
+        continue;
+      }
+      AssetClaimContext context = assetClaimContext(repositoryJobId);
+      return assets.stream()
+          .map(asset -> new AssetClaim(
+              asset,
+              context.migrationJobId(),
+              context.sourceRepositoryName(),
+              context.targetRepositoryName(),
+              context.targetRepositoryId(),
+              context.repositoryFormat(),
+              context.sourceDataPath(),
+              context.jobOptions()))
+          .toList();
     }
-    AssetClaimContext context = assetClaimContext(repositoryJobId);
-    List<RepositoryDataMigrationAssetRecord> assets = jdbcTemplate.query("""
-        SELECT a.*
-        FROM repository_data_migration_asset a
-        WHERE a.repository_job_id = ?
-          AND a.status = ?
-          AND a.attempts < ?
-          AND (a.claimed_at IS NULL OR a.claimed_at < ?)
-        ORDER BY a.id
-        LIMIT ?
-        FOR UPDATE SKIP LOCKED
-        """, assetRowMapper,
-        repositoryJobId,
-        assetStatus,
-        maxAttempts,
-        nullableTimestamp(retryBefore),
-        limit);
-    return assets.stream()
-        .map(asset -> new AssetClaim(
-            asset,
-            context.migrationJobId(),
-            context.sourceRepositoryName(),
-            context.targetRepositoryName(),
-            context.targetRepositoryId(),
-            context.repositoryFormat(),
-            context.sourceDataPath(),
-            context.jobOptions()))
-        .toList();
+    return List.of();
   }
 
-  private Long findClaimableRepositoryJob(
-      Long migrationJobId,
-      String assetStatus,
-      int maxAttempts,
-      Instant retryBefore) {
+  private List<Long> findCandidateRepositoryJobIds(Long migrationJobId) {
     List<Object> args = new ArrayList<>();
     args.add(REPOSITORY_READY);
     args.add(REPOSITORY_MIGRATING);
-    args.add(assetStatus);
-    args.add(maxAttempts);
-    args.add(nullableTimestamp(retryBefore));
     String jobPredicate = "";
     if (migrationJobId != null) {
       jobPredicate = "  AND r.migration_job_id = ?\n";
@@ -440,32 +437,36 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
     }
     String packageMigrationEnabled = jsonColumns.extractText(
         "mj.options_json", "packageMigrationEnabled");
-    String claimRepositorySql = """
+    String candidateRepositorySql = """
         SELECT r.id
         FROM repository_data_migration_repository r
+        JOIN migration_job mj ON mj.id = r.migration_job_id
         WHERE r.status IN (?, ?)
+          AND %s = 'true'
+        %s
+        ORDER BY r.id
+        """.formatted(packageMigrationEnabled, jobPredicate);
+    return jdbcTemplate.queryForList(candidateRepositorySql, Long.class, args.toArray());
+  }
+
+  private boolean lockRepositoryJob(long repositoryJobId) {
+    String packageMigrationEnabled = jsonColumns.extractText(
+        "mj.options_json", "packageMigrationEnabled");
+    List<Long> lockedRepositoryJobIds = jdbcTemplate.queryForList("""
+        SELECT r.id
+        FROM repository_data_migration_repository r
+        WHERE r.id = ?
+          AND r.status IN (?, ?)
           AND EXISTS (
             SELECT 1
             FROM migration_job mj
             WHERE mj.id = r.migration_job_id
               AND %s = 'true'
           )
-          AND EXISTS (
-            SELECT 1
-            FROM repository_data_migration_asset a
-            WHERE a.repository_job_id = r.id
-              AND a.status = ?
-              AND a.attempts < ?
-              AND (a.claimed_at IS NULL OR a.claimed_at < ?)
-          )
-        %s
-        ORDER BY r.id
-        LIMIT 1
         FOR UPDATE SKIP LOCKED
-        """.formatted(packageMigrationEnabled, jobPredicate);
-    List<Long> repositoryJobIds = jdbcTemplate.queryForList(
-        claimRepositorySql, Long.class, args.toArray());
-    return repositoryJobIds.isEmpty() ? null : repositoryJobIds.getFirst();
+        """.formatted(packageMigrationEnabled), Long.class,
+        repositoryJobId, REPOSITORY_READY, REPOSITORY_MIGRATING);
+    return !lockedRepositoryJobIds.isEmpty();
   }
 
   private AssetClaimContext assetClaimContext(long repositoryJobId) {

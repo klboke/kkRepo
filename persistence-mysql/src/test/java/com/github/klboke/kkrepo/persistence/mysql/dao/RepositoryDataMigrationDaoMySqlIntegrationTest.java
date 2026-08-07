@@ -128,6 +128,40 @@ class RepositoryDataMigrationDaoMySqlIntegrationTest extends MySqlIntegrationTes
   }
 
   @Test
+  void assetClaimSkipsEarlierRepositoryWithoutMatchingAssets() {
+    long firstRepositoryId = insertRepository("skip-empty-target", "maven2");
+    long secondRepositoryId = insertRepository("claim-pending-target", "maven2");
+    long migrationJobId = insertMigrationJob(true);
+    RepositoryDataMigrationDao dao = new JdbcRepositoryDataMigrationDao(
+        jdbc(), jsonColumns(), new com.github.klboke.kkrepo.persistence.mysql.MySqlDatabaseDialect());
+    long firstRepositoryJobId = dao.createRepositoryJob(
+        migrationJobId, "skip-empty-source", "skip-empty-target", firstRepositoryId,
+        RepositoryFormat.MAVEN2, 50, Map.of());
+    long secondRepositoryJobId = dao.createRepositoryJob(
+        migrationJobId, "claim-pending-source", "claim-pending-target", secondRepositoryId,
+        RepositoryFormat.MAVEN2, 50, Map.of());
+    String inFlightPath = "com/acme/in-flight/1.0/in-flight-1.0.jar";
+    String pendingPath = "com/acme/next/1.0/next-1.0.jar";
+    dao.upsertDiscoveredAssets(firstRepositoryJobId, List.of(asset(inFlightPath)), Map.of());
+    dao.finishDiscoveryPage(firstRepositoryJobId, null, true);
+    jdbc().update("""
+        UPDATE repository_data_migration_asset
+        SET status = ?, attempts = 1, claimed_at = CURRENT_TIMESTAMP
+        WHERE repository_job_id = ? AND source_path = ?
+        """, JdbcRepositoryDataMigrationDao.ASSET_MIGRATING, firstRepositoryJobId, inFlightPath);
+    dao.upsertDiscoveredAssets(secondRepositoryJobId, List.of(asset(pendingPath)), Map.of());
+    dao.finishDiscoveryPage(secondRepositoryJobId, null, true);
+
+    List<RepositoryDataMigrationDao.AssetClaim> claims = inTransaction(
+        () -> dao.claimAssetsForMigration(
+            migrationJobId, 1, 5, Instant.now().minusSeconds(60)));
+
+    assertEquals(1, claims.size());
+    assertEquals(secondRepositoryJobId, claims.getFirst().asset().repositoryJobId());
+    assertEquals(pendingPath, claims.getFirst().asset().sourcePath());
+  }
+
+  @Test
   void discoveryClaimHonorsJobFilterAndRetryCutoff() {
     long firstRepositoryId = insertRepository("target-one", "maven2");
     long secondRepositoryId = insertRepository("target-two", "maven2");
