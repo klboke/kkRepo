@@ -192,7 +192,7 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 8. ohpm / HarmonyOS - 规划中，覆盖 hosted、proxy、group、导入和管理端能力（[设计说明](docs/zh/dev/ohpm-repository-design.md)）
 9. APT / Debian
 10. Conan
-11. Conda
+11. Conda - 规划中，覆盖 hosted、proxy、group、channel 元数据生成、现代 repodata 和 Nexus 迁移（[设计说明](docs/zh/dev/conda-repository-design.md)）
 
 用户和管理端 UI 已暴露的 token 类型包括协议专用 token（`NpmToken`、`CargoToken`、`PubToken`、`NuGetApiKey`、`RubyGemsApiKey`），以及面向 Terraform 服务 URL、Ansible Galaxy 客户端、CI、脚本和自定义 HTTP 客户端的 `GenericToken`；`GenericToken` 适用于能够发送已配置 API-key header 或 bearer token 的调用方。
 

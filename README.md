@@ -192,7 +192,7 @@ Repository format roadmap:
 8. ohpm / HarmonyOS - Planned with hosted, proxy, group, import, and admin capabilities ([Chinese design notes](docs/zh/dev/ohpm-repository-design.md))
 9. APT / Debian
 10. Conan
-11. Conda
+11. Conda - Planned with hosted, proxy, group, automatic channel metadata, modern repodata, and Nexus migration ([Chinese design notes](docs/zh/dev/conda-repository-design.md))
 
 Token types exposed in the user and admin UI include protocol-specific tokens (`NpmToken`, `CargoToken`, `PubToken`, `NuGetApiKey`, `RubyGemsApiKey`) plus `GenericToken` for Terraform service URLs, Ansible Galaxy clients, CI, scripts, and custom HTTP clients that can send the configured API-key header or bearer token.
 
