@@ -190,9 +190,9 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 6. ✅ Swift Package Registry - hosted、GitHub-backed proxy、group、Registry v1、不可变签名发布、UI/API 上传、Browse/Search、多副本协同、真实 SwiftPM/Xcode E2E 和 shape-gated Nexus 3.92.x-3.94.x 迁移已实现（[设计说明](docs/zh/dev/swift-package-registry-design.md)）
 7. ✅ Ansible Galaxy - 已实现 Galaxy v3 hosted/proxy/group、collection 不可变发布、依赖解析、route-scoped Base64 Bearer/Ansible 2.9 Token 与 GenericToken 认证、UI/API 上传、Browse/Search、持久化多副本 import/proxy 协同、Ansible 2.9/当前版真实客户端 E2E、Nexus 黑盒兼容和 shape-gated Nexus 3.93.x-3.94.x 迁移（[使用指南](docs/zh/ansible-galaxy-guide.md)、[设计说明](docs/zh/dev/ansible-galaxy-repository-design.md)）
 8. ohpm / HarmonyOS - 规划中，覆盖 hosted、proxy、group、导入和管理端能力（[设计说明](docs/zh/dev/ohpm-repository-design.md)）
-9. APT / Debian
-10. Conan
-11. Conda - 规划中，覆盖 hosted、proxy、group、channel 元数据生成、现代 repodata 和 Nexus 迁移（[设计说明](docs/zh/dev/conda-repository-design.md)）
+9. Conda - 规划中，覆盖 hosted、proxy、group、channel 元数据生成、现代 repodata 和 Nexus 迁移（[设计说明](docs/zh/dev/conda-repository-design.md)）
+10. APT / Debian
+11. Conan
 
 用户和管理端 UI 已暴露的 token 类型包括协议专用 token（`NpmToken`、`CargoToken`、`PubToken`、`NuGetApiKey`、`RubyGemsApiKey`），以及面向 Terraform 服务 URL、Ansible Galaxy 客户端、CI、脚本和自定义 HTTP 客户端的 `GenericToken`；`GenericToken` 适用于能够发送已配置 API-key header 或 bearer token 的调用方。
 
