@@ -147,6 +147,7 @@ jobs:
             composer-migration-enabled: true
             swift-migration-enabled: false
             conda-migration-enabled: true
+            apt-migration-enabled: true
             secondary-port: 19096
             secondary-management-port: 19097
             wait-timeout-seconds: 300
@@ -181,6 +182,7 @@ jobs:
             composer-migration-enabled: false
             swift-migration-enabled: true
             conda-migration-enabled: true
+            apt-migration-enabled: true
             secondary-port: 18106
             secondary-management-port: 18107
             wait-timeout-seconds: 420
@@ -203,6 +205,7 @@ jobs:
             swift-migration-enabled: true
             ansible-migration-enabled: true
             conda-migration-enabled: true
+            apt-migration-enabled: true
             secondary-port: 18110
             secondary-management-port: 18111
             wait-timeout-seconds: 420
@@ -233,6 +236,8 @@ jobs:
       SWIFT_MIGRATION_ENABLED: ${{ matrix.swift-migration-enabled }}
       ANSIBLE_MIGRATION_ENABLED: ${{ matrix.ansible-migration-enabled || false }}
       CONDA_MIGRATION_ENABLED: ${{ matrix.conda-migration-enabled || false }}
+      APT_MIGRATION_ENABLED: ${{ matrix.apt-migration-enabled || false }}
+      APT_MIGRATION_FIXTURE_DIR: ${{ github.workspace }}/target/apt-migration-fixture
       KKREPO_MIGRATION_TARGET_DATABASE: ${{ matrix.target-database || 'mysql' }}
       KKREPO_MIGRATION_TARGET_DATABASE_SERVICE: ${{ matrix.target-database-service || 'mysql' }}
       KKREPO_SECONDARY_COMPAT_PORT: ${{ matrix.secondary-port }}
@@ -289,6 +294,17 @@ jobs:
 
       - name: Prepare migration fixtures
         run: scripts/ci/live-compat-setup.sh
+
+      - name: Prepare Nexus APT migration fixture
+        if: matrix.apt-migration-enabled
+        env:
+          APT_COMPAT_ENABLED: "true"
+          APT_COMPAT_REFERENCE_ONLY: "true"
+          APT_MIGRATION_PREP_ENABLED: "true"
+        run: >-
+          mvn -B -ntp -pl compat-test -am
+          -Dtest=AptRepositoryBlackBoxCompatibilityTest#preparesNexusHostedMigrationFixtureWhenConfigured
+          -Dsurefire.failIfNoSpecifiedTests=false test
 
       - name: Start shared-database migration read replica
         if: matrix.swift-migration-enabled

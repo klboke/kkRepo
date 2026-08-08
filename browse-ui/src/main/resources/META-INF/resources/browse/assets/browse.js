@@ -47,6 +47,7 @@ const SEARCH_ROUTE_FORMAT = {
   swift: "swift",
   ansiblegalaxy: "ansiblegalaxy",
   conda: "conda",
+  apt: "apt",
   pypi: "pypi",
   rubygems: "rubygems",
   yum: "yum",
@@ -64,6 +65,7 @@ const FORMAT_ROUTE_SEGMENT = {
   swift: "swift",
   ansiblegalaxy: "ansiblegalaxy",
   conda: "conda",
+  apt: "apt",
   pypi: "pypi",
   rubygems: "rubygems",
   yum: "yum",
@@ -162,6 +164,9 @@ function componentBrowsePath(component) {
     return [group, name, version].filter(Boolean).join("/");
   }
   if (format === "conda") {
+    return [group, name, version].filter(Boolean).join("/");
+  }
+  if (format === "apt") {
     return [group, name, version].filter(Boolean).join("/");
   }
   return "";
@@ -645,6 +650,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   swift: "swift",
   ansiblegalaxy: "ansiblegalaxy",
   conda: "conda",
+  apt: "apt",
   go: "go",
   helm: "helm",
   docker: "docker",
@@ -2640,6 +2646,56 @@ function condaUsageDetail(entry, detail = null) {
   return { crumbText: entry.path, summaryRows, snippets };
 }
 
+function aptUsageDetail(entry, detail = null) {
+  const metadata = detail?.apt || {};
+  const repo = currentRepository();
+  const settings = repo?.apt || {};
+  const distribution = metadata.distribution || settings.distribution || "stable";
+  const component = metadata.component || settings.component || "main";
+  const architecture = metadata.architecture || "-";
+  const packageName = metadata.package || metadata.name || "<package>";
+  const version = metadata.version || "";
+  const repositoryUrl = repositoryBaseUrl().replace(/\/+$/, "");
+  const keyring = `/etc/apt/keyrings/${state.repo}.gpg`;
+  const summaryRows = [
+    ["Repository", state.repo],
+    ["Format", "apt"],
+    ["Distribution", distribution || "multi-distribution proxy"],
+    ["Component", component],
+    ["Package", packageName],
+    ["Version", version || "-"],
+    ["Architecture", architecture],
+  ];
+  if (metadata.sourcePackage) summaryRows.push(["Source package", metadata.sourcePackage]);
+  if (metadata.section) summaryRows.push(["Section", metadata.section]);
+  if (metadata.priority) summaryRows.push(["Priority", metadata.priority]);
+  if (metadata.sha256) summaryRows.push(["SHA-256", metadata.sha256]);
+  const snippets = [
+    usageSnippet(
+      "Scoped keyring",
+      `curl --fail '${repositoryUrl}/gpg.key' | gpg --dearmor | sudo tee '${keyring}' >/dev/null`,
+      "For private repositories, place credentials in /etc/apt/auth.conf.d instead of the URL",
+    ),
+    usageSnippet(
+      "sources.list.d",
+      `deb [signed-by=${keyring}] ${repositoryUrl} ${distribution || "<distribution>"} ${component}`,
+    ),
+    usageSnippet("Update", "sudo apt-get update"),
+    usageSnippet(
+      "Install",
+      `sudo apt-get install '${packageName}${version ? `=${version}` : ""}'`,
+    ),
+  ];
+  if (repo?.type === "hosted") {
+    snippets.push(usageSnippet(
+      "Publish",
+      `curl --fail --user '<username>:<token>' -F 'apt.asset=@package.deb' '${window.location.origin}/service/rest/v1/components?repository=${encodeURIComponent(state.repo)}'`,
+      "Package identity and canonical pool path are read from the .deb control archive",
+    ));
+  }
+  return { crumbText: entry.path, summaryRows, snippets };
+}
+
 async function usageDetailForEntry(entry, detail = null) {
   const repo = currentRepository();
   if (!repo) return null;
@@ -2655,6 +2711,7 @@ async function usageDetailForEntry(entry, detail = null) {
   if (repo.format === "swift") return swiftUsageDetail(entry);
   if (repo.format === "ansiblegalaxy") return ansibleGalaxyUsageDetail(entry);
   if (repo.format === "conda") return condaUsageDetail(entry, detail);
+  if (repo.format === "apt") return aptUsageDetail(entry, detail);
   if (repo.format === "docker") return dockerUsageDetail(entry);
   return null;
 }
@@ -2935,6 +2992,20 @@ function renderUploadFields() {
       <label class="upload-path">
         <span>Package path</span>
         <input id="upload-path" type="text" readonly>
+      </label>
+    `;
+    return;
+  }
+  if (repo.format === "apt") {
+    fields.innerHTML = `
+      <label class="upload-file">
+        <span>Debian binary package</span>
+        <input id="upload-file" type="file" accept=".deb,application/vnd.debian.binary-package" required>
+      </label>
+      <div class="muted-row full-width">The server safely inspects the control archive, validates package identity and architecture, stores the canonical pool asset, then atomically publishes signed metadata.</div>
+      <label class="upload-path">
+        <span>Package path</span>
+        <input id="upload-path" type="text" value="Canonical pool path is determined from package control metadata" readonly>
       </label>
     `;
     return;
@@ -3239,6 +3310,14 @@ function buildUploadForm(repo, form) {
       throw new Error("A canonical namespace-name-version.tar.gz collection artifact is required.");
     }
     form.append("ansiblegalaxy.asset", file, file.name);
+    return;
+  }
+  if (repo.format === "apt") {
+    const file = document.getElementById("upload-file")?.files?.[0];
+    if (!file || !file.name.toLowerCase().endsWith(".deb")) {
+      throw new Error("A .deb package is required.");
+    }
+    form.append("apt.asset", file, file.name);
     return;
   }
   const file = document.getElementById("upload-file")?.files?.[0];

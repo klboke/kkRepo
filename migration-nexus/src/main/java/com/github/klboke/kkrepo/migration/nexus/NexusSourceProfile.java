@@ -31,6 +31,8 @@ public record NexusSourceProfile(
   private static final int ANSIBLE_MIGRATION_MAX_MINOR = 94;
   private static final int CONDA_MIGRATION_MIN_MINOR = 92;
   private static final int CONDA_MIGRATION_MAX_MINOR = 94;
+  private static final int APT_MIGRATION_MIN_MINOR = 92;
+  private static final int APT_MIGRATION_MAX_MINOR = 94;
 
   public NexusSourceProfile {
     scriptApi = scriptApi == null ? ScriptApiProfile.unknown() : scriptApi;
@@ -215,7 +217,9 @@ public record NexusSourceProfile(
           && (!"ansiblegalaxy".equals(format)
               || ansibleContentModelSupported(probedNexusVersion, contentModel))
           && (!"conda".equals(format)
-              || condaContentModelSupported(probedNexusVersion, contentModel));
+              || condaContentModelSupported(probedNexusVersion, contentModel))
+          && (!"apt".equals(format)
+              || aptContentModelSupported(probedNexusVersion, contentModel));
       boolean content = config
           && ((metadataEngine == MetadataEngine.ORIENTDB
                   && !"cargo".equals(format) && !"pub".equals(format)
@@ -290,6 +294,14 @@ public record NexusSourceProfile(
           && !condaFormatShapeSupported(contentModel.formatShape())) {
         return "conda-content-shape-incomplete";
       }
+      if ("apt".equals(format)
+          && !knownAptMigrationVersion(probedNexusVersion)) {
+        return "apt-source-version-unverified";
+      }
+      if ("apt".equals(format)
+          && !aptFormatShapeSupported(contentModel.formatShape())) {
+        return "apt-content-shape-incomplete";
+      }
       return "datastore-content-schema-incomplete";
     }
     return "configuration-only";
@@ -343,6 +355,13 @@ public record NexusSourceProfile(
         && condaFormatShapeSupported(contentModel.formatShape());
   }
 
+  private static boolean aptContentModelSupported(
+      String probedNexusVersion,
+      ContentModelFingerprint contentModel) {
+    return knownAptMigrationVersion(probedNexusVersion)
+        && aptFormatShapeSupported(contentModel.formatShape());
+  }
+
   private static boolean knownSwiftMigrationVersion(String version) {
     return knownMigrationVersion(version, SWIFT_MIGRATION_MIN_MINOR, SWIFT_MIGRATION_MAX_MINOR);
   }
@@ -353,6 +372,10 @@ public record NexusSourceProfile(
 
   private static boolean knownCondaMigrationVersion(String version) {
     return knownMigrationVersion(version, CONDA_MIGRATION_MIN_MINOR, CONDA_MIGRATION_MAX_MINOR);
+  }
+
+  private static boolean knownAptMigrationVersion(String version) {
+    return knownMigrationVersion(version, APT_MIGRATION_MIN_MINOR, APT_MIGRATION_MAX_MINOR);
   }
 
   private static boolean knownMigrationVersion(String version, int minimumMinor, int maximumMinor) {
@@ -396,6 +419,13 @@ public record NexusSourceProfile(
   private static boolean condaFormatShapeSupported(Map<String, Object> shape) {
     return shape != null
         && bool(shape.get("packageAssetPath"), false)
+        && bool(shape.get("sha256Checksum"), false);
+  }
+
+  private static boolean aptFormatShapeSupported(Map<String, Object> shape) {
+    return shape != null
+        && bool(shape.get("packageAssetPath"), false)
+        && bool(shape.get("aptAssetAttributes"), false)
         && bool(shape.get("sha256Checksum"), false);
   }
 

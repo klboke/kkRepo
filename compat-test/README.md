@@ -22,7 +22,7 @@ NEXUS_COMPAT_PASSWORD=Admin1234
 Current Maven compatibility checks and repository-format compatibility checks can compare against
 this same long-running Nexus reference unless a test explicitly documents why it needs an isolated
 throwaway Nexus instance. Cargo/Rust requires Nexus 3.77.x+, Terraform requires Nexus 3.90.0+ for
-hosted/proxy/group coverage, Pub and Conda require Nexus 3.92.0+, and the Swift reference matrix targets
+hosted/proxy/group coverage, Pub, Conda, and APT require Nexus 3.92.0+, and the Swift reference matrix targets
 Nexus 3.94.x so versioned-manifest fallback and `v`/`V` tag normalization include the latest fixes; the
 datastore-era PostgreSQL compose file below defaults to Nexus 3.92.0 for the general newer-format
 checks, while the Swift workflow explicitly overrides that image with Nexus 3.94.x.
@@ -59,7 +59,7 @@ docker compose -f docker-compose.compat.yml down -v
 
 For datastore-era compatibility work, use the Nexus PostgreSQL compose file instead of the default
 Nexus 3.29.2 OrientDB reference. It pins Nexus to 3.92.0 with PostgreSQL datastore enabled, which
-covers Cargo/Rust, Dart/Pub, Terraform, Conda, and the other newer-format live checks:
+covers Cargo/Rust, Dart/Pub, Terraform, Conda, APT/Debian, and the other newer-format live checks:
 
 ```bash
 scripts/build-docker-image.sh kkrepo:compat
@@ -80,7 +80,7 @@ Available suites:
 - `smoke`: diagnostic console API checks plus Maven proxy GET/HEAD/checksum read compatibility.
 - `write-smoke`: Maven hosted release/snapshot write compatibility with `COMPAT_WRITE_ENABLED=true`.
 - `nexus`: the disposable Nexus reference matrix. It enables write checks and compares kkrepo with
-  Nexus across Maven, npm, PyPI, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift, Ansible Galaxy, Raw, selected NuGet/RubyGems/Yum behavior,
+  Nexus across Maven, npm, PyPI, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift, Ansible Galaxy, Conda, APT/Debian, Raw, selected NuGet/RubyGems/Yum behavior,
   Go proxy endpoints, Helm hosted round trips, component upload specs, and selected security/admin
   contracts. Composer is required when enabled; a missing Nexus Composer endpoint fails instead of skipping.
   The self-contained Conda fixtures run in this module, while the live Conda comparison is enabled
@@ -88,7 +88,7 @@ Available suites:
 - `extended`: diagnostic smoke coverage plus currently separated PyPI, Helm, Pub, NuGet, RubyGems, and Yum checks.
 - `client-e2e`: starts from the disposable kkrepo service and uses real package clients to publish
   and then download/resolve through hosted and group/proxy repositories. It covers Maven, npm,
-  PyPI, Helm, Cargo/Rust, Dart/Pub, Flutter Pub, Composer/PHP, Terraform 0.13/current, Ansible Galaxy 2.9/current, Conda, NuGet, RubyGems, Yum, and Docker/OCI. Go is
+  PyPI, Helm, Cargo/Rust, Dart/Pub, Flutter Pub, Composer/PHP, Terraform 0.13/current, Ansible Galaxy 2.9/current, Conda, APT/Debian, NuGet, RubyGems, Yum, and Docker/OCI. Go is
   resolve-only through the Go proxy because hosted Go publishing is not a supported repository mode.
   SwiftPM is included when `swift` or `SWIFT_E2E_BINS` is available; it publishes to Swift hosted,
   resolves and builds through group, checks immutable conflict and checksum replay, and exercises
@@ -99,6 +99,9 @@ Available suites:
   Conda is included when `conda` or `CONDA_E2E_BIN` is available; it uploads an installable hosted
   package, searches/creates/lists through group and proxy channels, verifies package bytes and
   repodata variants, and runs the shared cleanup gate for the hosted fixture.
+  APT runs in Debian 12, Ubuntu 24.04, and Debian testing containers; it validates scoped keys,
+  `auth.conf`, hosted install/upgrade/delete, key rotation, dual-replica reads, passthrough/offline
+  proxy cache, and local re-signing.
   The Composer flow additionally validates a hosted-to-proxy transitive dependency, rejected Basic
   credentials, and lock replay from the server cache after clearing the client cache and detaching
   the Packagist upstream.
@@ -108,6 +111,8 @@ Available suites:
   group fixtures and is skipped unless `SWIFT_COMPAT_ENABLED=true` is set by the wrapper.
 - `ansible`: the opt-in Nexus 3.94.x Galaxy v3 matrix. It creates isolated hosted/proxy/group
   fixtures and covers publish/task, metadata, artifact HTTP, group priority, and public Galaxy proxying.
+- `apt`: the opt-in Nexus 3.94.x APT matrix. It compares isolated hosted upload, canonical pool
+  paths, signed metadata, checksums, validators, Range, Browse, and Search.
 
 In GitHub Actions, add the `run-live-compat` label to a PR to run the unified Nexus compatibility
 matrix against the Nexus 3.92.0 PostgreSQL reference. The live compatibility workflow
@@ -188,6 +193,38 @@ scripts/ci/run-client-e2e.sh
 ```
 
 The client flow uploads a generated package to hosted, resolves it through group, resolves a controlled public package through proxy, records `search/create/list` diagnostics, and verifies cleanup. The existing migration workflow additionally exercises native Nexus 3.92/3.94 hosted/proxy/group definitions, shape-gated package restoration, rebuilt target repodata, real client installation, checksums, row-count idempotency, restart/resume, both target databases, and cross-replica reads where available.
+
+### APT compatibility and client matrix
+
+`AptRepositoryBlackBoxCompatibilityTest` creates an ephemeral signing key and isolated hosted
+repositories on Nexus and kkrepo. It compares repository-root POST and Components API upload,
+canonical pool paths, Packages representations, Release/InRelease signatures, package bytes,
+GET/HEAD/Range/conditional reads, Browse, and Search. Enable the live comparison explicitly:
+
+```bash
+APT_COMPAT_ENABLED=true \
+APT_NEXUS_COMPAT_BASE_URL=http://127.0.0.1:39400 \
+APT_KKREPO_COMPAT_BASE_URL=http://127.0.0.1:18090 \
+APT_NEXUS_COMPAT_USERNAME=admin \
+APT_NEXUS_COMPAT_PASSWORD=Admin1234 \
+APT_KKREPO_COMPAT_USERNAME=admin \
+APT_KKREPO_COMPAT_PASSWORD=12345678 \
+mvn -pl compat-test -am \
+  -Dtest=AptRepositoryBlackBoxCompatibilityTest \
+  -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+Run the real-client matrix with:
+
+```bash
+CLIENT_E2E_TESTS=apt scripts/ci/run-client-e2e.sh
+```
+
+Set `APT_KKREPO_SECONDARY_BASE_URL` to a second replica sharing the same database and blob store
+to require byte-identical metadata and an install through that replica. Migration E2E prepares a
+real signed Nexus fixture, proves the H2/PostgreSQL source shape, restores only the `.deb`, confirms
+that the target remains offline without a key, explicitly imports the test key, rebuilds metadata,
+and runs a real `apt` install on MySQL/PostgreSQL targets.
 
 ### Swift Registry compatibility and client matrix
 

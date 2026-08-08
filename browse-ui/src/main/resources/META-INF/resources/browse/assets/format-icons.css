@@ -93,6 +93,11 @@
   --format-logo: url("/browse/assets/formats/conda.svg");
 }
 
+.format-logo-apt {
+  --format-color: #d70a53;
+  --format-logo: url("/browse/assets/formats/apt.svg");
+}
+
 .format-logo-raw {
   --format-color: #52625e;
   --format-logo: url("/browse/assets/formats/raw.svg");

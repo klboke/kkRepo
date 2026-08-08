@@ -209,6 +209,12 @@ class NexusRestClientTest {
     assertTrue(script.contains("packageAssetPath: false"));
     assertTrue(script.contains("path.endsWith('.conda') || path.endsWith('.tar.bz2')"));
     assertTrue(script.contains("Conda datastore content shape probe failed:"));
+    assertTrue(script.contains("apt: 'APT'"));
+    assertTrue(script.contains("def inspectAptShape = { tableNames ->"));
+    assertTrue(script.contains("parts.length >= 4"));
+    assertTrue(script.contains("aptAssetAttributes: false"));
+    assertTrue(script.contains("APT datastore content shape probe failed:"));
+    assertFalse(script.contains("+ ' '\n                      + fingerprintText"));
     assertFalse(script.contains("javax.sql.DataSource.class"));
     assertFalse(script.contains("catch (Throwable"));
     assertFalse(script.contains(" as Set"));

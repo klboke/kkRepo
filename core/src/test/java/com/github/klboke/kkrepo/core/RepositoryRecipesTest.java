@@ -40,6 +40,9 @@ class RepositoryRecipesTest {
     assertRecipe(recipes, "conda-hosted", RepositoryFormat.CONDA, RepositoryType.HOSTED);
     assertRecipe(recipes, "conda-proxy", RepositoryFormat.CONDA, RepositoryType.PROXY);
     assertRecipe(recipes, "conda-group", RepositoryFormat.CONDA, RepositoryType.GROUP);
+    assertRecipe(recipes, "apt-hosted", RepositoryFormat.APT, RepositoryType.HOSTED);
+    assertRecipe(recipes, "apt-proxy", RepositoryFormat.APT, RepositoryType.PROXY);
+    assertTrue(!recipes.containsKey("apt-group"));
   }
 
   private static void assertRecipe(

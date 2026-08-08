@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.cleanup;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyVersions;
+import com.github.klboke.kkrepo.protocol.apt.DebianVersions;
 import com.github.klboke.kkrepo.protocol.cargo.CargoVersions;
 import com.github.klboke.kkrepo.protocol.conda.CondaVersions;
 import com.github.klboke.kkrepo.protocol.maven.metadata.MavenVersionComparator;
@@ -29,6 +30,7 @@ public class CleanupPolicyCapabilities {
     comparators.put(RepositoryFormat.SWIFT, SwiftVersions.COMPARATOR);
     comparators.put(RepositoryFormat.ANSIBLEGALAXY, AnsibleGalaxyVersions.COMPARATOR);
     comparators.put(RepositoryFormat.CONDA, CondaVersions.COMPARATOR);
+    comparators.put(RepositoryFormat.APT, DebianVersions::compare);
     this.versionComparators = Map.copyOf(comparators);
   }
 

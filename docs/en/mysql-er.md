@@ -1,8 +1,8 @@
 # kkrepo MySQL ER Design
 
-The historical MySQL schema starts at `persistence-mysql/src/main/resources/db/migration/mysql/V1__init_schema.sql`; MySQL and PostgreSQL then advance through paired migrations, currently V41. Flyway executes the applicable history during service startup. MySQL 8 uses InnoDB. PostgreSQL has an equivalent V29 baseline plus the same V30+ logical changes; this document remains the detailed logical ER reference for both engines. See [Database Schema](database-schema.md).
+The historical MySQL schema starts at `persistence-mysql/src/main/resources/db/migration/mysql/V1__init_schema.sql`; MySQL and PostgreSQL then advance through paired migrations, currently V42. Flyway executes the applicable history during service startup. MySQL 8 uses InnoDB. PostgreSQL has an equivalent V29 baseline plus the same V30+ logical changes; this document remains the detailed logical ER reference for both engines. See [Database Schema](database-schema.md).
 
-The schema uses a "unified content table + format field" model for shared asset/blob data. Cargo / Rust, Dart / Pub, Composer / PHP, Terraform, Swift, Ansible, and Conda use this shared model with protocol metadata stored in component/asset attributes. Composer package/version/dist data does not add a dedicated business table, and proxy routes are stored as rebuildable internal assets. Pub adds `pub_upload_session` for the official multi-step publish flow. Terraform adds signing-key, provider revision/platform, group source-binding, and publish-lease side tables. Ansible V35 adds collection version/signature, durable import task, proxy state, group binding, and fenced lease tables. Conda V41 adds bounded package/channel projections, tombstones, group source bindings, and fenced coordinate leases because channel metadata and package bytes must remain consistent across replicas. Formats with other protocol-specific relationships, such as Docker/OCI manifests, tags, upload sessions, auth tokens, and referrers, also add dedicated side tables. This is more suitable for migration from Nexus and unified admin-console queries. If a specific format becomes significantly larger later, it can be optimized with partitioning or additional dedicated tables.
+The schema uses a "unified content table + format field" model for shared asset/blob data. Cargo / Rust, Dart / Pub, Composer / PHP, Terraform, Swift, Ansible, Conda, and APT use this shared model with protocol metadata stored in component/asset attributes. Composer package/version/dist data does not add a dedicated business table, and proxy routes are stored as rebuildable internal assets. Pub adds `pub_upload_session` for the official multi-step publish flow. Terraform adds signing-key, provider revision/platform, group source-binding, and publish-lease side tables. Ansible V35 adds collection version/signature, durable import task, proxy state, group binding, and fenced lease tables. Conda V41 adds bounded package/channel projections, tombstones, group source bindings, and fenced coordinate leases. APT V42 adds bounded package/tombstone projections, suite revisions, immutable published snapshot manifests, encrypted key revisions, proxy release state, and fenced publish leases so signed indexes and package bytes remain consistent across replicas. Formats with other protocol-specific relationships, such as Docker/OCI manifests, tags, upload sessions, auth tokens, and referrers, also add dedicated side tables. This is more suitable for migration from Nexus and unified admin-console queries. If a specific format becomes significantly larger later, it can be optimized with partitioning or additional dedicated tables.
 
 ## Repository And Content ER
 
@@ -66,6 +66,13 @@ erDiagram
   REPOSITORY ||--o{ CONDA_PACKAGE_TOMBSTONE : tombstone
   REPOSITORY ||--o{ CONDA_GROUP_SOURCE_BINDING : group_source
   REPOSITORY ||--o{ CONDA_COORDINATE_LEASE : fenced_lease
+  REPOSITORY ||--o{ APT_PACKAGE_RECORD : package_record
+  REPOSITORY ||--o{ APT_PACKAGE_TOMBSTONE : tombstone
+  REPOSITORY ||--o{ APT_SUITE_STATE : suite_revision
+  APT_SUITE_STATE ||--o{ APT_SNAPSHOT : published_snapshot
+  REPOSITORY ||--o{ APT_SIGNING_KEY : signing_revision
+  REPOSITORY ||--o{ APT_PROXY_DISTRIBUTION : proxy_release
+  REPOSITORY ||--o{ APT_PUBLISH_LEASE : fenced_publish
   SPRING_SESSION ||--o{ SPRING_SESSION_ATTRIBUTES : has
   MIGRATION_JOB ||--o{ MIGRATION_CHECKPOINT : records
   MIGRATION_JOB ||--o{ MIGRATION_VALIDATION_RESULT : validates
@@ -133,6 +140,13 @@ erDiagram
 | `conda_package_tombstone` | Hosted package removal record used to generate deterministic repodata `removed` entries without hiding an active replacement |
 | `conda_group_source_binding` | Group filename binding to one ordered member revision/content identity/checksum, keeping repodata selection and package bytes on the same source snapshot |
 | `conda_coordinate_lease` | Shared expiring lease and fencing token for hosted publication, deletion, and proxy inventory replacement across replicas |
+| `apt_package_record` | Bounded hosted/proxy binary package projection with distribution/component/architecture/coordinate, control fields, checksums, size, source, and component/asset binding |
+| `apt_package_tombstone` | Removed package coordinate/path and revision used to publish a new complete snapshot without exposing a partial delete |
+| `apt_suite_state` | Desired and published revision, active signing-key revision, publish timestamps, and last rebuild error per repository/distribution |
+| `apt_snapshot` | Immutable manifest and Release identity for one revision; only rows with `published_at` are client-visible snapshots |
+| `apt_signing_key` | Encrypted private key material plus public key/fingerprint by revision, with one active revision per repository |
+| `apt_proxy_distribution` | Observed upstream Release identity, bounded manifest, signature-verification state, and observation time per distribution |
+| `apt_publish_lease` | Expiring owner/fencing-token lease that serializes snapshot publication and permits safe takeover across replicas |
 
 ### Permission Layer
 
@@ -182,3 +196,4 @@ erDiagram
 17. V28 adds `pub_upload_session` because Pub publish is a multi-request protocol. Session state, temporary blob references, parsed metadata, and finalization status must survive replica switches and restarts; archive bytes still live in blob storage and are not stored in MySQL.
 18. V35 adds Ansible Galaxy protocol state. Immutable collection identity is protected by explicit unique constraints, tasks and leases survive process loss, group bindings keep metadata/checksum/artifact on one member, and archive/signature bytes remain in blob storage.
 19. V41 adds Conda protocol state, including canonical record fingerprints and compound indexes for bounded proxy deltas and streaming metadata projection. Package/channel projections and tombstones make repodata deterministic and rebuildable; group bindings pin metadata to package bytes, and transactionally revalidated coordinate leases fence publication and proxy inventory changes. Package and staging bytes remain in blob storage.
+20. V42 adds APT protocol state. Package projections and tombstones drive deterministic Packages indexes; suite revision plus immutable snapshot manifests provide atomic publication; encrypted key revisions and fenced leases make signing/rebuild safe across replicas. `.deb`, index, Release, and signature bytes remain in blob storage.

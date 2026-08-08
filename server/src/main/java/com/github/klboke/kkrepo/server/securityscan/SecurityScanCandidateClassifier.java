@@ -16,7 +16,8 @@ import org.springframework.stereotype.Component;
 public class SecurityScanCandidateClassifier {
   private static final Set<String> ARCHIVE_SUFFIXES = Set.of(
       ".zip", ".tar", ".tar.gz", ".tgz", ".tar.xz", ".txz", ".xz", ".tar.bz2", ".tbz2",
-      ".jar", ".war", ".ear", ".whl", ".crate", ".gem", ".nupkg", ".rpm", ".conda");
+      ".jar", ".war", ".ear", ".whl", ".crate", ".gem", ".nupkg", ".rpm", ".conda",
+      ".deb");
 
   public Classification classify(
       AssetRecord asset, AssetBlobRecord blob, ScanProfile profile) {
@@ -76,6 +77,7 @@ public class SecurityScanCandidateClassifier {
           && !containsAny(kind, "metadata", "signature", "import");
       case CONDA -> hasAnySuffix(path, ".conda", ".tar.bz2")
           && !containsAny(kind, "metadata", "repodata", "channeldata");
+      case APT -> hasAnySuffix(path, ".deb") && !path.contains("/.apt/");
       case NUGET -> hasAnySuffix(path, ".nupkg") && !hasAnySuffix(path, ".snupkg");
       case RUBYGEMS -> hasAnySuffix(path, ".gem") && !containsAny(kind, "index", "spec");
       case YUM -> hasAnySuffix(path, ".rpm") && !path.contains("/repodata/");

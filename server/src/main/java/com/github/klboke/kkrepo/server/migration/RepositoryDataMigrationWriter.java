@@ -33,6 +33,7 @@ import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.blob.BlobTransactionCleanup;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyRepositoryDataMigrationWriter;
+import com.github.klboke.kkrepo.server.apt.AptRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.conda.CondaRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.docker.DockerManifestParser;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
@@ -80,6 +81,7 @@ class RepositoryDataMigrationWriter {
   private final SwiftRepositoryDataMigrationWriter swiftMigrationWriter;
   private final AnsibleGalaxyRepositoryDataMigrationWriter ansibleMigrationWriter;
   private CondaRepositoryDataMigrationWriter condaMigrationWriter;
+  private AptRepositoryDataMigrationWriter aptMigrationWriter;
   private final TransientTransactionRetry transactionRetry;
   private final MavenPathParser mavenPathParser = new MavenPathParser();
 
@@ -202,6 +204,11 @@ class RepositoryDataMigrationWriter {
     this.condaMigrationWriter = condaMigrationWriter;
   }
 
+  @Autowired(required = false)
+  void setAptMigrationWriter(AptRepositoryDataMigrationWriter aptMigrationWriter) {
+    this.aptMigrationWriter = aptMigrationWriter;
+  }
+
   WriteResult write(long targetRepositoryId, RepositoryDataMigrationAssetRecord source, InputStream body,
       String responseContentType, boolean validateSize) {
     RepositoryRecord repository = repositoryDao.findById(targetRepositoryId)
@@ -253,6 +260,16 @@ class RepositoryDataMigrationWriter {
       }
       CondaRepositoryDataMigrationWriter.MigratedAsset migrated = condaMigrationWriter.write(
           repository, source, body, responseContentType, validateSize);
+      return new WriteResult(
+          migrated.componentId(), migrated.assetId(), migrated.assetBlobId(),
+          migrated.assetBlobObjectKey());
+    }
+    if (repository.format() == RepositoryFormat.APT) {
+      if (aptMigrationWriter == null) {
+        throw new IllegalStateException("APT migration writer is not configured");
+      }
+      AptRepositoryDataMigrationWriter.MigratedAsset migrated = aptMigrationWriter.write(
+          repository, source, body, validateSize);
       return new WriteResult(
           migrated.componentId(), migrated.assetId(), migrated.assetBlobId(),
           migrated.assetBlobObjectKey());
@@ -896,6 +913,7 @@ class RepositoryDataMigrationWriter {
       case CONDA -> source.sourcePath().endsWith(".conda")
               || source.sourcePath().endsWith(".tar.bz2")
           ? "conda-package" : "conda-metadata";
+      case APT -> source.sourcePath().endsWith(".deb") ? "apt-package" : "apt-metadata";
       case RAW -> "asset";
     };
   }

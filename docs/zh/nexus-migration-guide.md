@@ -2,7 +2,7 @@
 
 本文说明从 Nexus Repository 迁移到 kkrepo 的准备条件、执行顺序、增量迁移和域名切换方式。
 
-kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议行为和权限认证模型。迁移完成后，只需要把原 Nexus 域名指向 kkrepo，Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、NuGet、RubyGems、Yum 等已被迁移流程覆盖的非 Docker 客户端配置不需要修改。Docker / OCI 使用 Registry HTTP API V2 的 `/v2/...` 路由；切换 Docker 客户端时需要保持仓库名和 connector/path-based routing 入口一致。
+kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议行为和权限认证模型。迁移完成后，只需要把原 Nexus 域名指向 kkrepo，Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、APT/Debian、NuGet、RubyGems、Yum 等已被迁移流程覆盖的非 Docker 客户端配置不需要修改。Docker / OCI 使用 Registry HTTP API V2 的 `/v2/...` 路由；切换 Docker 客户端时需要保持仓库名和 connector/path-based routing 入口一致。
 
 ## 仓库数据范围与格式边界
 
@@ -15,6 +15,7 @@ kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议行
 - **Terraform：** 元数据迁移识别原生 `terraform-hosted`、`terraform-proxy`、`terraform-group` recipe，并保留 `/repository/<repo>/v1/modules/...` 与 `/v1/providers/...` 服务基址。独立 proxy-cache writer 按 Nexus 公开 path 恢复可识别的 module/provider archive，不创建 hosted publication 或 signing state。已恢复的 module 可在本地完成 download discovery；Provider metadata 从已配置上游重建并校验 route、validator、checksum manifest 和 signature snapshot，再在该 metadata 有效期内固定缓存。
 - **Ansible Galaxy：** 元数据迁移识别 `ansiblegalaxy-hosted`、`ansiblegalaxy-proxy`、`ansiblegalaxy-group`，保留 remote、TTL、online、write policy、有序成员和 `/repository/<repo>/` Galaxy v3 base。Hosted collection 与显式选择的 proxy cache 仅对 Nexus 3.93.x-3.94.x 原生源恢复，且 datastore fingerprint 必须证明预期 collection identity 与完整性 shape。版本未知、fingerprint 不完整、checksum/manifest 缺失或 shape 漂移都会生成 `NEEDS_MANUAL_ACTION`。完整 collection archive 及其 `MANIFEST.json`/`FILES.json` 保留在 blob storage；关系数据库只存有上限的 metadata 投影、hash、引用、task 和 binding。
 - **Conda：** 元数据迁移识别 `conda-hosted`、`conda-proxy` 和 `conda-group`，保留 remote、TTL、online、write policy 与有序成员。Hosted `.tar.bz2`/`.conda` package 只对 Nexus 3.92.x-3.94.x 且 datastore fingerprint 能证明预期 Conda package shape 的源恢复。源端生成的 repodata/channeldata 会被过滤并在目标端重建。未知 profile、shape 漂移、不支持的 asset 或无法证明 package identity 时生成 `NEEDS_MANUAL_ACTION`；不会把 proxy package cache 当作 hosted content 重放。
+- **APT / Debian：** 元数据迁移识别 `apt-hosted` 和 `apt-proxy`，保留 distribution policy、passthrough/re-sign 模式、remote、TTL、online 和 write policy。Hosted `.deb` 仅对 Nexus 3.92.x-3.94.x 且 datastore fingerprint 能证明 canonical package path、APT attributes 与 SHA-256 的源恢复；源端生成的 `dists/` metadata 会过滤并重建。Private signing key 绝不静默复制，受影响目标会保持 offline 并报告 `NEEDS_MANUAL_ACTION`，直到管理员显式导入预期 key。未知 profile/shape 漂移 fail closed；proxy cache 默认不选择。
 - **Proxy credential：** 可恢复的源端 secret 会加密写入目标。如果 Swift 或 Ansible proxy secret 被遮蔽或缺失，迁移会把目标 proxy 创建为 offline，不写入占位 credential，需管理员显式补齐。
 
 ## 迁移流程概览
@@ -102,6 +103,10 @@ Conda 复用现有迁移 workflow，不新增独立 job。矩阵覆盖 PostgreSQ
 
 每个启用 lane 都会在 Nexus 创建原生 Conda hosted/proxy/group definition、发布可安装 package 并校验源端 `repodata.json`，随后执行 migration preflight 与 package sync。验收覆盖 recipe 配置和 member 顺序、package 原始字节/SHA-256、目标端重建 repodata、通过迁移后 group 执行真实 `conda search/create/list`、协议表精确行数、restart/resume 幂等，以及具备第二目标副本的 lane 中的跨副本读取。Nexus 生成的 repodata/channeldata 不会作为 package content 复制。
 
+### APT 迁移 E2E 边界
+
+APT 复用 Nexus 3.92 PostgreSQL 与 Nexus 3.94 H2/PostgreSQL 代表源 lane，并覆盖 MySQL/PostgreSQL 目标。每个启用 lane 创建原生签名 hosted 仓库和可安装 `.deb`，验证真实 datastore fingerprint，确认 preflight 不转移 key material 且目标保持 offline，然后按 checksum 恢复 package、显式导入临时测试 key、重建 Release/InRelease/Packages 并执行真实 `apt` 安装。可用时同时校验协议表行数与跨副本读取；源端生成 metadata 不会复制。
+
 ### 增量迁移
 
 第二次及后续迁移时，可以指定 `Metadata since` 做增量迁移。`Metadata since` 会按源 Nexus asset/blob 的更新时间过滤，只扫描该时间之后新增或更新的资产。
@@ -128,7 +133,7 @@ Conda 复用现有迁移 workflow，不新增独立 job。矩阵覆盖 PostgreSQ
 
 全量迁移和最终增量迁移完成后，检查关键仓库的 browse/search、包下载、checksum 和常用客户端拉取行为。
 
-确认无问题后，把原 Nexus 域名通过 DNS 或反向代理指向 kkrepo。由于 kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议和权限认证模型，对于已迁移的仓库格式，客户端不需要修改 Maven settings、npm registry、PyPI index-url、Go GOPROXY、Helm repo、Cargo sparse registry URL、Pub hosted URL、Composer repository URL、Terraform `host.services` URL、Swift registry base、Ansible Galaxy server URL、Conda channel URL 等配置。
+确认无问题后，把原 Nexus 域名通过 DNS 或反向代理指向 kkrepo。由于 kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议和权限认证模型，对于已迁移的仓库格式，客户端不需要修改 Maven settings、npm registry、PyPI index-url、Go GOPROXY、Helm repo、Cargo sparse registry URL、Pub hosted URL、Composer repository URL、Terraform `host.services` URL、Swift registry base、Ansible Galaxy server URL、Conda channel URL、APT source URL 等配置。APT 客户端应继续信任管理员在目标端显式导入的同一 signing identity。
 
 切换完成后，建议保留源 Nexus 一段观察期，并在确认不再需要补偿迁移后关闭源端脚本能力。
 
@@ -302,3 +307,4 @@ nexus.scripts.allowCreation=true
 - Sonatype Scripting Nexus Repository 3: https://support.sonatype.com/hc/en-us/articles/360045220393-Scripting-Nexus-Repository-3
 - Sonatype Configure Ansible with Nexus: https://help.sonatype.com/en/configure-ansible-with-nexus.html
 - Sonatype Configure Conda with Nexus: https://help.sonatype.com/en/configure-conda-with-nexus.html
+- Sonatype APT Repositories: https://help.sonatype.com/en/apt-repositories.html

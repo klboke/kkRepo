@@ -17,6 +17,7 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
 import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyService;
+import com.github.klboke.kkrepo.server.apt.AptService;
 import com.github.klboke.kkrepo.server.cargo.CargoHostedService;
 import com.github.klboke.kkrepo.server.composer.ComposerHostedService;
 import com.github.klboke.kkrepo.server.conda.CondaService;
@@ -43,6 +44,33 @@ import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.web.multipart.MultipartFile;
 
 class ComponentUploadServiceTest {
+
+  @Test
+  void aptComponentUploadUsesNexusCompatibleSingleAssetFieldAndSharedImporter() throws Exception {
+    AptService apt = mock(AptService.class);
+    ComponentUploadService service = service(apt);
+    String path = "pool/main/d/demo/demo_1.0_amd64.deb";
+    when(apt.publish(
+        any(RepositoryRuntime.class), eq("demo_1.0_amd64.deb"), any(InputStream.class),
+        isNull(), isNull(), eq("alice"), eq("127.0.0.1")))
+        .thenReturn(new AptService.PublishedPackage(
+            path, "demo", "1.0", "amd64", "a".repeat(64), 5));
+
+    UploadDefinition definition = service.definition("apt");
+    assertFalse(definition.multipleUpload());
+    assertTrue(definition.componentFields().isEmpty());
+    assertEquals(List.of("asset"),
+        definition.assetFields().stream().map(UploadFieldDefinition::name).toList());
+
+    ComponentUploadService.UploadResult result = service.upload(
+        "apt-hosted", Map.of(), files("apt.asset", "demo_1.0_amd64.deb"),
+        "alice", "127.0.0.1");
+
+    assertEquals(List.of(path), result.paths());
+    verify(apt).publish(
+        any(RepositoryRuntime.class), eq("demo_1.0_amd64.deb"), any(InputStream.class),
+        isNull(), isNull(), eq("alice"), eq("127.0.0.1"));
+  }
 
   @Test
   void uploadSpecsIncludeAnsibleGalaxySingleAssetUpload() {
@@ -524,6 +552,14 @@ class ComponentUploadServiceTest {
     ComponentUploadService service = service(
         runtime, mock(CargoHostedService.class), mock(PubHostedService.class));
     service.setCondaService(condaService);
+    return service;
+  }
+
+  private static ComponentUploadService service(AptService aptService) {
+    RepositoryRuntime runtime = runtime("apt-hosted", RepositoryFormat.APT);
+    ComponentUploadService service = service(
+        runtime, mock(CargoHostedService.class), mock(PubHostedService.class));
+    service.setAptService(aptService);
     return service;
   }
 

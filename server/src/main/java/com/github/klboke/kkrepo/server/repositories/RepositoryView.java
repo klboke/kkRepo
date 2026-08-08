@@ -8,6 +8,7 @@ import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.GroupSett
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.HostedSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.ProxySettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.RawSettings;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.AptSettings;
 
 public record RepositoryView(
     Long id,
@@ -24,5 +25,25 @@ public record RepositoryView(
     RawSettings raw,
     DockerSettings docker,
     CargoSettings cargo,
-    GroupSettings group) {
+    GroupSettings group,
+    AptSettings apt) {
+  public RepositoryView(
+      Long id,
+      String name,
+      String recipe,
+      RepositoryFormat format,
+      RepositoryType type,
+      boolean online,
+      String blobStoreName,
+      boolean strictContentTypeValidation,
+      String url,
+      HostedSettings hosted,
+      ProxySettings proxy,
+      RawSettings raw,
+      DockerSettings docker,
+      CargoSettings cargo,
+      GroupSettings group) {
+    this(id, name, recipe, format, type, online, blobStoreName,
+        strictContentTypeValidation, url, hosted, proxy, raw, docker, cargo, group, null);
+  }
 }

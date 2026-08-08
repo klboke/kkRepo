@@ -790,6 +790,26 @@ ensure_kkrepo_repositories() {
     "group":{"memberNames":["yum-hosted"]}
   }'
 
+  kkrepo_create_repo "apt-hosted" '{
+    "name":"apt-hosted",
+    "recipe":"apt-hosted",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "hosted":{"writePolicy":"ALLOW"},
+    "apt":{
+      "distribution":"stable",
+      "component":"main",
+      "architectures":["amd64","arm64"],
+      "flat":false,
+      "enforceDistribution":true,
+      "metadataMode":"RESIGN",
+      "validUntilDays":30,
+      "origin":"kkRepo client E2E",
+      "label":"kkRepo client E2E"
+    }
+  }'
+
   kkrepo_create_repo "terraform-hosted" '{
     "name":"terraform-hosted",
     "recipe":"terraform-hosted",

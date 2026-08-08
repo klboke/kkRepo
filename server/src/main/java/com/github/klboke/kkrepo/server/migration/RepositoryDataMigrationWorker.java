@@ -312,7 +312,7 @@ class RepositoryDataMigrationWorker {
     }
     if ((format == RepositoryFormat.PUB || format == RepositoryFormat.TERRAFORM
         || format == RepositoryFormat.SWIFT || format == RepositoryFormat.ANSIBLEGALAXY
-        || format == RepositoryFormat.CONDA)
+        || format == RepositoryFormat.CONDA || format == RepositoryFormat.APT)
         && !RepositoryDataMigrationPaths.shouldDiscoverAsset(format, path)) {
       return false;
     }

@@ -4,6 +4,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.server.pub.PubRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyRepositoryDataMigrationWriter;
+import com.github.klboke.kkrepo.server.apt.AptRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.conda.CondaRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.swift.SwiftRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.terraform.TerraformRepositoryDataMigrationWriter;
@@ -41,6 +42,9 @@ final class RepositoryDataMigrationPaths {
     }
     if (format == RepositoryFormat.CONDA) {
       return CondaRepositoryDataMigrationWriter.isMigratableCondaPath(path);
+    }
+    if (format == RepositoryFormat.APT) {
+      return AptRepositoryDataMigrationWriter.isMigratableAptPath(path);
     }
     return true;
   }

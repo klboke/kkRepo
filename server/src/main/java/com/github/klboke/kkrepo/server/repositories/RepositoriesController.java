@@ -7,6 +7,9 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryRecipe;
 import com.github.klboke.kkrepo.core.RepositoryRecipes;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.server.apt.AptService;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
@@ -16,6 +19,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.server.ResponseStatusException;
@@ -36,6 +40,8 @@ public class RepositoriesController {
   private final RepositoryService service;
   private final SecurityAuthenticationService authenticationService;
   private final SecurityManagementService securityService;
+  private AptService aptService;
+  private RepositoryRuntimeRegistry runtimeRegistry;
 
   public RepositoriesController(
       RepositoryService service,
@@ -44,6 +50,13 @@ public class RepositoriesController {
     this.service = service;
     this.authenticationService = authenticationService;
     this.securityService = securityService;
+  }
+
+  @Autowired(required = false)
+  void setAptManagement(
+      AptService aptService, RepositoryRuntimeRegistry runtimeRegistry) {
+    this.aptService = aptService;
+    this.runtimeRegistry = runtimeRegistry;
   }
 
   @GetMapping
@@ -141,6 +154,54 @@ public class RepositoriesController {
     return service.replaceMembers(name, body.memberNames());
   }
 
+  @GetMapping("/{name}/apt/status")
+  public AptService.Status aptStatus(
+      @PathVariable("name") String name, HttpServletRequest request) {
+    AuthenticatedSubject subject = requireAuthenticated(request);
+    RepositoryView existing = requireAptRepository(name);
+    requireRepositoryAdmin(subject, existing.format(), existing.name(), "read");
+    return apt().status(aptRuntime(name));
+  }
+
+  @PostMapping("/{name}/apt/rebuild")
+  public ResponseEntity<Void> rebuildApt(
+      @PathVariable("name") String name,
+      @RequestBody(required = false) AptRebuildRequest body,
+      HttpServletRequest request) {
+    AuthenticatedSubject subject = requireAuthenticated(request);
+    RepositoryView existing = requireAptRepository(name);
+    requireRepositoryAdmin(subject, existing.format(), existing.name(), "edit");
+    apt().rebuild(aptRuntime(name), body == null ? null : body.distribution());
+    return ResponseEntity.noContent().build();
+  }
+
+  @PutMapping("/{name}/apt/signing-key")
+  public AptService.KeyStatus rotateAptSigningKey(
+      @PathVariable("name") String name,
+      @RequestBody AptSigningKeyRequest body,
+      HttpServletRequest request) {
+    AuthenticatedSubject subject = requireAuthenticated(request);
+    RepositoryView existing = requireAptRepository(name);
+    requireRepositoryAdmin(subject, existing.format(), existing.name(), "edit");
+    if (body == null) {
+      throw new RepositoryValidationException("APT signing key request is required");
+    }
+    boolean generate = Boolean.TRUE.equals(body.generate());
+    if (!generate && (body.privateKey() == null || body.privateKey().isBlank())) {
+      throw new RepositoryValidationException(
+          "APT private signing key is required unless generate is true");
+    }
+    if (generate && body.privateKey() != null && !body.privateKey().isBlank()) {
+      throw new RepositoryValidationException(
+          "APT signing key request cannot import and generate a key at the same time");
+    }
+    var row = generate
+        ? apt().rotateGeneratedKey(aptRuntime(name))
+        : apt().rotateKey(aptRuntime(name), body.privateKey(), body.passphrase());
+    return new AptService.KeyStatus(
+        row.revision(), row.keyId(), row.fingerprint(), row.createdAt());
+  }
+
   @ExceptionHandler(RepositoryNotFoundException.class)
   public ResponseEntity<Map<String, String>> handleNotFound(RepositoryNotFoundException e) {
     return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("message", e.getMessage()));
@@ -152,6 +213,37 @@ public class RepositoriesController {
   }
 
   public record MembersRequest(List<String> memberNames) {
+  }
+
+  public record AptRebuildRequest(String distribution) {
+  }
+
+  public record AptSigningKeyRequest(String privateKey, String passphrase, Boolean generate) {
+  }
+
+  private RepositoryView requireAptRepository(String name) {
+    RepositoryView view = service.get(name);
+    if (view.format() != RepositoryFormat.APT || view.type() == RepositoryType.GROUP) {
+      throw new RepositoryValidationException("Repository is not an APT hosted/proxy repository");
+    }
+    return view;
+  }
+
+  private AptService apt() {
+    if (aptService == null) {
+      throw new ResponseStatusException(
+          HttpStatus.SERVICE_UNAVAILABLE, "APT repository service is unavailable");
+    }
+    return aptService;
+  }
+
+  private RepositoryRuntime aptRuntime(String name) {
+    if (runtimeRegistry == null) {
+      throw new ResponseStatusException(
+          HttpStatus.SERVICE_UNAVAILABLE, "Repository runtime registry is unavailable");
+    }
+    return runtimeRegistry.resolve(name)
+        .orElseThrow(() -> new RepositoryNotFoundException("Repository not found: " + name));
   }
 
   private AuthenticatedSubject requireAuthenticated(HttpServletRequest request) {

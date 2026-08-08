@@ -7,26 +7,16 @@ import com.github.klboke.kkrepo.server.maven.MavenHtmlListingService;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import jakarta.servlet.http.HttpServletRequest;
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.util.MultiValueMap;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 @RestController
@@ -82,23 +72,6 @@ public class PypiRepositoryController {
     return toHeadResponse(dispatchIndex(resolve(name), project, true), request);
   }
 
-  @PostMapping(value = {"", "/"}, consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-  public ResponseEntity<Void> upload(
-      @PathVariable("name") String name,
-      @RequestParam MultiValueMap<String, String> fields,
-      @RequestPart("content") MultipartFile content,
-      @RequestPart(value = "gpg_signature", required = false) MultipartFile signature,
-      HttpServletRequest request) throws IOException {
-    PypiResponse response = hosted.upload(
-        resolveHosted(name),
-        flatten(fields),
-        content,
-        signature,
-        "anonymous",
-        request.getRemoteAddr());
-    return ResponseEntity.status(response.status()).build();
-  }
-
   private PypiResponse dispatchRoot(RepositoryRuntime runtime, boolean headOnly) {
     return switch (runtime.type()) {
       case HOSTED -> hosted.getRootIndex(runtime, headOnly);
@@ -130,15 +103,6 @@ public class PypiRepositoryController {
       throw new PypiExceptions.PypiNotFoundException("Repository is not PyPI format: " + name);
     }
     return runtime;
-  }
-
-  private Map<String, String> flatten(MultiValueMap<String, String> values) {
-    Map<String, String> result = new LinkedHashMap<>();
-    values.forEach((key, list) -> {
-      if (list == null || list.isEmpty()) return;
-      result.put(key, String.join("\n", list));
-    });
-    return result;
   }
 
   private ResponseEntity<StreamingResponseBody> toBodyResponse(PypiResponse resp, HttpServletRequest request) {

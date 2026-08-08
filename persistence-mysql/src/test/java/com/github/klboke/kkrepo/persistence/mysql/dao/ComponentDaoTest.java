@@ -111,6 +111,21 @@ class ComponentDaoTest {
   }
 
   @Test
+  void aptSearchReturnsPackageAssetPathForProtocolDetails() {
+    RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
+    ComponentDao dao = new JdbcComponentDao(
+        jdbcTemplate,
+        new JsonColumns(new ObjectMapper(), DIALECT),
+        DIALECT);
+
+    dao.search(null, RepositoryFormat.APT, 20);
+
+    assertTrue(jdbcTemplate.sql.contains(
+        "JSON_EXTRACT(c.attributes_json, '$.assetPath')"));
+    assertTrue(jdbcTemplate.sql.contains("WHEN c.format = 'apt'"));
+  }
+
+  @Test
   void repositoryScopedSearchIncludesStoragePathProjection() {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
     ComponentDao dao = new JdbcComponentDao(

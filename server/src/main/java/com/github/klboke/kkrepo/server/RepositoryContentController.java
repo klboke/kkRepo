@@ -30,6 +30,7 @@ import com.github.klboke.kkrepo.server.composer.ComposerGroupService;
 import com.github.klboke.kkrepo.server.composer.ComposerHostedService;
 import com.github.klboke.kkrepo.server.composer.ComposerProxyService;
 import com.github.klboke.kkrepo.server.conda.CondaService;
+import com.github.klboke.kkrepo.server.apt.AptService;
 import com.github.klboke.kkrepo.server.goartifact.GoGroupService;
 import com.github.klboke.kkrepo.server.goartifact.GoProxyService;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
@@ -77,8 +78,11 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.Part;
 import java.io.ByteArrayInputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.List;
@@ -142,6 +146,7 @@ public class RepositoryContentController {
   private AnsibleGalaxyService ansible;
   private AnsibleGalaxyMultipartReader ansibleMultipart;
   private CondaService conda;
+  private AptService apt;
   private final NugetService nuget;
   private final RubygemsService rubygems;
   private final YumService yum;
@@ -177,6 +182,11 @@ public class RepositoryContentController {
   @Autowired(required = false)
   void setCondaService(CondaService conda) {
     this.conda = conda;
+  }
+
+  @Autowired(required = false)
+  void setAptService(AptService apt) {
+    this.apt = apt;
   }
 
   @Autowired
@@ -357,6 +367,10 @@ public class RepositoryContentController {
       String raw = extractRepositoryPath(name, request, true);
       return toHeadResponse(conda().get(runtime, raw, true), request);
     }
+    if (runtime.format() == RepositoryFormat.APT) {
+      String raw = extractRepositoryPath(name, request, true);
+      return toHeadResponse(apt().get(runtime, raw, true), request);
+    }
     if (runtime.format() == RepositoryFormat.PYPI) {
       String raw = extractRepositoryPath(name, request, true);
       PypiResponse resp = isDirectoryPath(raw)
@@ -480,6 +494,16 @@ public class RepositoryContentController {
             runtime, raw, body, contentType, userId, request.getRemoteAddr());
       }
       return ResponseEntity.status(response.status()).build();
+    }
+    if (runtime.format() == RepositoryFormat.APT) {
+      String raw = extractRepositoryPath(name, request, true);
+      MavenResponse response;
+      try (InputStream body = request.getInputStream()) {
+        response = apt().put(runtime, raw, body, contentType, userId, request.getRemoteAddr());
+      }
+      return ResponseEntity.status(response.status())
+          .header(HttpHeaders.LOCATION, response.headers().get(HttpHeaders.LOCATION))
+          .build();
     }
     if (runtime.format() == RepositoryFormat.SWIFT) {
       String rawPath = extractRepositoryPath(name, request, true);
@@ -605,6 +629,11 @@ public class RepositoryContentController {
       MavenResponse response = conda().delete(runtime, raw);
       return ResponseEntity.status(response.status()).build();
     }
+    if (runtime.format() == RepositoryFormat.APT) {
+      String raw = extractRepositoryPath(name, request, true);
+      MavenResponse response = apt().delete(runtime, raw, "repository-content-delete", true);
+      return ResponseEntity.status(response.status()).build();
+    }
     if (runtime.format() == RepositoryFormat.NUGET) {
       String raw = extractRepositoryPath(name, request, true);
       MavenResponse resp = nuget.deletePackage(runtime, raw);
@@ -636,6 +665,80 @@ public class RepositoryContentController {
   @PostMapping("/**")
   public ResponseEntity<?> post(@PathVariable("name") String name, HttpServletRequest request) {
     RepositoryRuntime runtime = resolveRuntime(name);
+    if (runtime.format() == RepositoryFormat.PYPI) {
+      if (!runtime.isHosted()) {
+        throw new PypiExceptions.MethodNotAllowed(
+            "PyPI uploads are only valid on hosted repositories");
+      }
+      String raw = extractRepositoryPath(name, request, true);
+      if (!raw.isBlank()) {
+        throw new PypiExceptions.MethodNotAllowed(
+            "PyPI multipart upload is only valid at repository root");
+      }
+      if (!isMultipart(request.getContentType())
+          || !hasMultipartBoundary(request.getContentType())) {
+        throw new PypiExceptions.BadRequestException(
+            "PyPI upload requires multipart/form-data with a boundary");
+      }
+      Map<String, String> fields = flattenParameters(request.getParameterMap());
+      MultipartFile content = pypiMultipartFile(request, "content", true);
+      MultipartFile signature = pypiMultipartFile(request, "gpg_signature", false);
+      try {
+        PypiResponse response = pypiHosted.upload(
+            runtime,
+            fields,
+            content,
+            signature,
+            requestUserId(request),
+            request.getRemoteAddr());
+        return ResponseEntity.status(response.status()).build();
+      } catch (IOException error) {
+        throw new PypiExceptions.BadRequestException(
+            "Unable to read PyPI multipart upload: " + error.getMessage());
+      }
+    }
+    if (runtime.format() == RepositoryFormat.APT) {
+      if (!runtime.isHosted()) {
+        throw new MavenExceptions.MethodNotAllowed("APT upload is only valid on hosted repositories");
+      }
+      String raw = extractRepositoryPath(name, request, true);
+      if (!raw.isBlank()) {
+        throw new MavenExceptions.MethodNotAllowed("APT multipart upload is only valid at repository root");
+      }
+      if (!isMultipart(request.getContentType())) {
+        throw new MavenExceptions.BadRequestException("APT upload requires multipart/form-data");
+      }
+      try {
+        if (!hasMultipartBoundary(request.getContentType())) {
+          try (InputStream body = request.getInputStream()) {
+            AptService.PublishedPackage published = apt().publish(
+                runtime,
+                null,
+                body,
+                null,
+                null,
+                requestUserId(request),
+                request.getRemoteAddr());
+            return aptUploadResponse(published);
+          }
+        }
+        Part part = aptPackagePart(request);
+        Map<String, String> fields = multipartFields(request);
+        try (InputStream body = part.getInputStream()) {
+          AptService.PublishedPackage published = apt().publish(
+              runtime,
+              part.getSubmittedFileName(),
+              body,
+              firstNonBlank(fields.get("apt.distribution"), fields.get("distribution")),
+              firstNonBlank(fields.get("apt.component"), fields.get("component")),
+              requestUserId(request),
+              request.getRemoteAddr());
+          return aptUploadResponse(published);
+        }
+      } catch (IOException e) {
+        throw new MavenExceptions.BadRequestException("Unable to read APT multipart upload", e);
+      }
+    }
     if (runtime.format() == RepositoryFormat.ANSIBLEGALAXY) {
       if (!runtime.isHosted()) {
         throw new AnsibleGalaxyExceptions.NotFound(
@@ -833,6 +936,11 @@ public class RepositoryContentController {
       boolean packageResponse = !headOnly
           && (raw.endsWith(".conda") || raw.endsWith(".tar.bz2"));
       return toStreamingResponse(response, request, packageResponse);
+    }
+    if (runtime.format() == RepositoryFormat.APT) {
+      String raw = extractRepositoryPath(name, request, true);
+      MavenResponse response = apt().get(runtime, raw, headOnly);
+      return toStreamingResponse(response, request, !headOnly && raw.endsWith(".deb"));
     }
     if (runtime.format() == RepositoryFormat.PYPI) {
       String raw = extractRepositoryPath(name, request, true);
@@ -1125,6 +1233,13 @@ public class RepositoryContentController {
       throw new IllegalStateException("Conda repository service is unavailable");
     }
     return conda;
+  }
+
+  private AptService apt() {
+    if (apt == null) {
+      throw new IllegalStateException("APT repository service is unavailable");
+    }
+    return apt;
   }
 
   private MavenResponse dispatchNpmGet(
@@ -1485,6 +1600,120 @@ public class RepositoryContentController {
     } catch (IOException | ServletException e) {
       throw new PubExceptions.BadRequestException("Invalid Pub multipart upload", e);
     }
+  }
+
+  private static Part aptPackagePart(HttpServletRequest request) {
+    try {
+      Part firstFile = null;
+      for (Part part : request.getParts()) {
+        if (part == null || part.getSize() <= 0) continue;
+        boolean namedPackage = "apt.asset".equals(part.getName())
+            || "asset".equals(part.getName()) || "file".equals(part.getName());
+        boolean hasFilename = part.getSubmittedFileName() != null
+            && !part.getSubmittedFileName().isBlank();
+        if (namedPackage && hasFilename) return part;
+        if (firstFile == null && hasFilename) firstFile = part;
+      }
+      if (firstFile != null) return firstFile;
+      throw new MavenExceptions.BadRequestException(
+          "APT multipart upload requires a .deb file part");
+    } catch (IOException | ServletException error) {
+      throw new MavenExceptions.BadRequestException("Invalid APT multipart upload", error);
+    }
+  }
+
+  private static Map<String, String> flattenParameters(Map<String, String[]> values) {
+    Map<String, String> result = new java.util.LinkedHashMap<>();
+    values.forEach((key, list) -> {
+      if (list == null || list.length == 0) return;
+      result.put(key, String.join("\n", list));
+    });
+    return result;
+  }
+
+  private static MultipartFile pypiMultipartFile(
+      HttpServletRequest request, String name, boolean required) {
+    try {
+      for (Part part : request.getParts()) {
+        if (name.equals(part.getName())) return new PartMultipartFile(part);
+      }
+    } catch (IOException | ServletException error) {
+      throw new PypiExceptions.BadRequestException(
+          "Invalid PyPI multipart upload: " + error.getMessage());
+    }
+    if (required) {
+      throw new PypiExceptions.BadRequestException(
+          "PyPI upload requires multipart file field '" + name + "'");
+    }
+    return null;
+  }
+
+  private record PartMultipartFile(Part part) implements MultipartFile {
+    @Override
+    public String getName() {
+      return part.getName();
+    }
+
+    @Override
+    public String getOriginalFilename() {
+      return part.getSubmittedFileName();
+    }
+
+    @Override
+    public String getContentType() {
+      return part.getContentType();
+    }
+
+    @Override
+    public boolean isEmpty() {
+      return part.getSize() == 0;
+    }
+
+    @Override
+    public long getSize() {
+      return part.getSize();
+    }
+
+    @Override
+    public byte[] getBytes() throws IOException {
+      try (InputStream input = part.getInputStream()) {
+        return input.readAllBytes();
+      }
+    }
+
+    @Override
+    public InputStream getInputStream() throws IOException {
+      return part.getInputStream();
+    }
+
+    @Override
+    public void transferTo(File destination) throws IOException {
+      try (InputStream input = part.getInputStream()) {
+        Files.copy(input, destination.toPath(), StandardCopyOption.REPLACE_EXISTING);
+      }
+    }
+  }
+
+  private static boolean hasMultipartBoundary(String contentType) {
+    return contentType != null
+        && contentType.toLowerCase(Locale.ROOT).contains("boundary=");
+  }
+
+  private static ResponseEntity<?> aptUploadResponse(AptService.PublishedPackage published) {
+    return ResponseEntity.status(201)
+        .header(HttpHeaders.LOCATION, published.path())
+        .body(Map.of(
+            "path", published.path(),
+            "name", published.packageName(),
+            "version", published.version(),
+            "architecture", published.architecture(),
+            "sha256", published.sha256(),
+            "size", published.size()));
+  }
+
+  private static String firstNonBlank(String first, String second) {
+    if (first != null && !first.isBlank()) return first;
+    return second == null || second.isBlank() ? null : second;
   }
 
   private static Map<String, String> multipartFields(HttpServletRequest request) {

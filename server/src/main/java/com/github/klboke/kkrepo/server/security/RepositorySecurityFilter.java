@@ -228,7 +228,8 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   private List<PermissionAction> actionsForDecision(
       RepositoryRecord repository, RepositoryRequest target) {
     if ((repository.format() == RepositoryFormat.SWIFT
-        || repository.format() == RepositoryFormat.ANSIBLEGALAXY)
+        || repository.format() == RepositoryFormat.ANSIBLEGALAXY
+        || repository.format() == RepositoryFormat.APT)
         && target.componentUploadRoute()) {
       return List.of(PermissionAction.ADD);
     }
@@ -243,6 +244,11 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
         CondaPath path = CONDA_PATH_PARSER.parse(target.path());
         if (!path.packageFile()) return List.of(PermissionAction.EDIT);
         boolean exists = assetDao.findAssetByPath(repository.id(), path.canonicalPath()).isPresent();
+        return exists ? List.of(PermissionAction.EDIT) : List.of(PermissionAction.ADD);
+      }
+      if (repository.format() == RepositoryFormat.APT
+          && "PUT".equalsIgnoreCase(target.method())) {
+        boolean exists = assetDao.findAssetByPath(repository.id(), target.path()).isPresent();
         return exists ? List.of(PermissionAction.EDIT) : List.of(PermissionAction.ADD);
       }
       return target.actions(repository.format());
@@ -366,6 +372,9 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       return List.of(PermissionAction.ADD);
     }
     if (format == RepositoryFormat.CONDA && "PUT".equalsIgnoreCase(method)) {
+      return List.of(PermissionAction.ADD, PermissionAction.EDIT);
+    }
+    if (format == RepositoryFormat.APT && "PUT".equalsIgnoreCase(method)) {
       return List.of(PermissionAction.ADD, PermissionAction.EDIT);
     }
     if (format == RepositoryFormat.SWIFT && "POST".equalsIgnoreCase(method)

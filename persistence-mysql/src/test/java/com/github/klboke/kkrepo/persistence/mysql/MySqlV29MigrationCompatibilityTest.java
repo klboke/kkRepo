@@ -36,7 +36,7 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
     assertTrue(flyway().validateWithResult().validationSuccessful);
     var result = flyway().migrate();
     assertEquals(0, result.migrationsExecuted);
-    assertEquals("41", flyway().info().current().getVersion().getVersion());
+    assertEquals("42", flyway().info().current().getVersion().getVersion());
   }
 
   @Test
@@ -78,8 +78,8 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
 
     Flyway resumed = migration(null);
     resumed.repair();
-    assertEquals(6, resumed.migrate().migrationsExecuted);
-    assertEquals("41", resumed.info().current().getVersion().getVersion());
+    assertEquals(7, resumed.migrate().migrationsExecuted);
+    assertEquals("42", resumed.info().current().getVersion().getVersion());
     assertEquals(1, jdbc().queryForObject("""
         SELECT COUNT(*)
         FROM information_schema.table_constraints
@@ -113,8 +113,8 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
         """);
 
     Flyway resumed = migration(null);
-    assertEquals(2, resumed.migrate().migrationsExecuted);
-    assertEquals("41", resumed.info().current().getVersion().getVersion());
+    assertEquals(3, resumed.migrate().migrationsExecuted);
+    assertEquals("42", resumed.info().current().getVersion().getVersion());
     assertEquals(5, jdbc().queryForObject("""
         SELECT COUNT(*)
         FROM information_schema.columns
