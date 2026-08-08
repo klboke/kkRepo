@@ -237,7 +237,7 @@ jobs:
       ANSIBLE_MIGRATION_ENABLED: ${{ matrix.ansible-migration-enabled || false }}
       CONDA_MIGRATION_ENABLED: ${{ matrix.conda-migration-enabled || false }}
       APT_MIGRATION_ENABLED: ${{ matrix.apt-migration-enabled || false }}
-      APT_MIGRATION_FIXTURE_DIR: ${{ runner.temp }}/kkrepo-apt-migration-fixture
+      APT_MIGRATION_FIXTURE_DIR: ${{ github.workspace }}/target/apt-migration-fixture
       KKREPO_MIGRATION_TARGET_DATABASE: ${{ matrix.target-database || 'mysql' }}
       KKREPO_MIGRATION_TARGET_DATABASE_SERVICE: ${{ matrix.target-database-service || 'mysql' }}
       KKREPO_SECONDARY_COMPAT_PORT: ${{ matrix.secondary-port }}
