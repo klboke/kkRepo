@@ -84,6 +84,10 @@ class CondaProxyInventorySchedulerTest {
       assertEquals(0, scheduler.scheduledCount());
       scheduler.schedule("repo:main:noarch", retried::countDown);
       assertTrue(retried.await(2, TimeUnit.SECONDS));
+      for (int attempt = 0; attempt < 200 && scheduler.scheduledCount() != 0; attempt++) {
+        Thread.sleep(5);
+      }
+      assertEquals(0, scheduler.scheduledCount());
     } finally {
       scheduler.close();
     }
