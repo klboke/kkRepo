@@ -172,11 +172,11 @@ final class CondaMetadataCodec {
             if ("packages".equals(field)) {
               parsePackageMap(
                   parser, value, repositoryId, channel, subdir, "tar.bz2", indexedAt,
-                  record -> writer.writeObject(SpoolRecord.from(record)), recordCount);
+                  record -> writeSpoolRecord(writer, record), recordCount);
             } else if ("packages.conda".equals(field)) {
               parsePackageMap(
                   parser, value, repositoryId, channel, subdir, "conda", indexedAt,
-                  record -> writer.writeObject(SpoolRecord.from(record)), recordCount);
+                  record -> writeSpoolRecord(writer, record), recordCount);
             } else if ("info".equals(field)) {
               JsonNode rawInfo = mapper.readTree(parser);
               ObjectNode root = mapper.createObjectNode();
@@ -244,8 +244,8 @@ final class CondaMetadataCodec {
                spool, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
            JsonGenerator writer = mapper.getFactory().createGenerator(output)) {
         writer.writeStartArray();
-        source.visit("tar.bz2", record -> writer.writeObject(SpoolRecord.from(record)));
-        source.visit("conda", record -> writer.writeObject(SpoolRecord.from(record)));
+        source.visit("tar.bz2", record -> writeSpoolRecord(writer, record));
+        source.visit("conda", record -> writeSpoolRecord(writer, record));
         writer.writeEndArray();
       }
       Path snapshot = spool;
@@ -1122,7 +1122,7 @@ final class CondaMetadataCodec {
         if (token == null || token != JsonToken.START_OBJECT) {
           throw new IllegalStateException("Conda proxy inventory spool is incomplete");
         }
-        SpoolRecord record = mapper.readValue(parser, SpoolRecord.class);
+        SpoolRecord record = readSpoolRecord(parser);
         visitor.accept(record.toPackageRecord(repositoryId, channel, subdir, indexedAt));
       }
       if (parser.nextToken() != null) {
@@ -1148,7 +1148,7 @@ final class CondaMetadataCodec {
         if (token == null || token != JsonToken.START_OBJECT) {
           throw new IOException("Conda render source spool is incomplete");
         }
-        SpoolRecord record = mapper.readValue(parser, SpoolRecord.class);
+        SpoolRecord record = readSpoolRecord(parser);
         if (archiveFormat.equals(record.archiveFormat())) {
           visitor.accept(record.toPackageRecord(0, "", subdir, Instant.EPOCH));
         }
@@ -1157,6 +1157,118 @@ final class CondaMetadataCodec {
         throw new IOException("Conda render source spool has trailing content");
       }
     }
+  }
+
+  /**
+   * Writes the private spool schema explicitly so GraalVM native images do not need Jackson
+   * reflection metadata for {@link SpoolRecord}. The metadata value itself is limited to JSON
+   * maps, lists, and scalars by the Conda record parser.
+   */
+  private void writeSpoolRecord(
+      JsonGenerator writer, CondaRegistryDao.PackageRecord record) throws IOException {
+    if (record == null) throw new IOException("Conda spool record is missing");
+    writer.writeStartObject();
+    writer.writeStringField("filename", record.filename());
+    writer.writeStringField("name", record.name());
+    writer.writeStringField("version", record.version());
+    writer.writeStringField("build", record.build());
+    writer.writeNumberField("buildNumber", record.buildNumber());
+    writer.writeStringField("archiveFormat", record.archiveFormat());
+    writer.writeObjectField("metadata", record.metadata() == null ? Map.of() : record.metadata());
+    writer.writeStringField("recordSha256", record.recordSha256());
+    writeNullableStringField(writer, "md5", record.md5());
+    writeNullableStringField(writer, "sha256", record.sha256());
+    writer.writeNumberField("size", record.size());
+    writer.writeEndObject();
+  }
+
+  /** Reads the private spool schema without reflective POJO or record deserialization. */
+  @SuppressWarnings("unchecked")
+  private SpoolRecord readSpoolRecord(JsonParser parser) throws IOException {
+    String filename = null;
+    String name = null;
+    String version = null;
+    String build = null;
+    long buildNumber = 0;
+    String archiveFormat = null;
+    Map<String, Object> metadata = null;
+    String recordSha256 = null;
+    String md5 = null;
+    String sha256 = null;
+    long size = 0;
+    int seen = 0;
+
+    JsonToken fieldToken;
+    while ((fieldToken = parser.nextToken()) != JsonToken.END_OBJECT) {
+      if (fieldToken == null) throw new IOException("Conda spool record is incomplete");
+      String field = parser.currentName();
+      JsonToken value = parser.nextToken();
+      if (value == null) throw new IOException("Conda spool record is incomplete");
+      int bit = switch (field) {
+        case "filename" -> 1;
+        case "name" -> 1 << 1;
+        case "version" -> 1 << 2;
+        case "build" -> 1 << 3;
+        case "buildNumber" -> 1 << 4;
+        case "archiveFormat" -> 1 << 5;
+        case "metadata" -> 1 << 6;
+        case "recordSha256" -> 1 << 7;
+        case "md5" -> 1 << 8;
+        case "sha256" -> 1 << 9;
+        case "size" -> 1 << 10;
+        default -> throw new IOException("Conda spool record contains an unknown field");
+      };
+      if ((seen & bit) != 0) throw new IOException("Conda spool record contains a duplicate field");
+      seen |= bit;
+
+      switch (field) {
+        case "filename" -> filename = spoolText(parser, value, field, false);
+        case "name" -> name = spoolText(parser, value, field, false);
+        case "version" -> version = spoolText(parser, value, field, false);
+        case "build" -> build = spoolText(parser, value, field, false);
+        case "buildNumber" -> buildNumber = spoolLong(parser, value, field);
+        case "archiveFormat" -> archiveFormat = spoolText(parser, value, field, false);
+        case "metadata" -> {
+          if (value != JsonToken.START_OBJECT) {
+            throw new IOException("Conda spool record has invalid metadata");
+          }
+          metadata = mapper.readValue(parser, Map.class);
+        }
+        case "recordSha256" -> recordSha256 = spoolText(parser, value, field, false);
+        case "md5" -> md5 = spoolText(parser, value, field, true);
+        case "sha256" -> sha256 = spoolText(parser, value, field, true);
+        case "size" -> size = spoolLong(parser, value, field);
+      }
+    }
+    if (seen != (1 << 11) - 1) throw new IOException("Conda spool record is incomplete");
+    return new SpoolRecord(
+        filename, name, version, build, buildNumber, archiveFormat, metadata, recordSha256,
+        md5, sha256, size);
+  }
+
+  private static void writeNullableStringField(
+      JsonGenerator writer, String field, String value) throws IOException {
+    if (value == null) writer.writeNullField(field);
+    else writer.writeStringField(field, value);
+  }
+
+  private static String spoolText(
+      JsonParser parser, JsonToken token, String field, boolean nullable) throws IOException {
+    if (token == JsonToken.VALUE_NULL && nullable) return null;
+    if (token != JsonToken.VALUE_STRING || parser.getText().isEmpty()) {
+      throw new IOException("Conda spool record has invalid " + field);
+    }
+    return parser.getText();
+  }
+
+  private static long spoolLong(JsonParser parser, JsonToken token, String field)
+      throws IOException {
+    if (token != JsonToken.VALUE_NUMBER_INT) {
+      throw new IOException("Conda spool record has invalid " + field);
+    }
+    long value = parser.getLongValue();
+    if (value < 0) throw new IOException("Conda spool record has invalid " + field);
+    return value;
   }
 
   private static void delete(Path file) {
@@ -1473,21 +1585,6 @@ final class CondaMetadataCodec {
       String md5,
       String sha256,
       long size) {
-    private static SpoolRecord from(CondaRegistryDao.PackageRecord record) {
-      return new SpoolRecord(
-          record.filename(),
-          record.name(),
-          record.version(),
-          record.build(),
-          record.buildNumber(),
-          record.archiveFormat(),
-          record.metadata(),
-          record.recordSha256(),
-          record.md5(),
-          record.sha256(),
-          record.size());
-    }
-
     private CondaRegistryDao.PackageRecord toPackageRecord(
         long repositoryId, String channel, String subdir, Instant indexedAt) {
       Instant when = indexedAt == null ? Instant.now() : indexedAt;

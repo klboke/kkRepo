@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
+import com.fasterxml.jackson.annotation.PropertyAccessor;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
@@ -118,6 +120,38 @@ class CondaMetadataCodecTest {
     }
 
     assertFalse(Files.exists(spool));
+  }
+
+  @Test
+  void spoolCodecDoesNotRequirePojoReflectionInNativeImages() throws Exception {
+    ObjectMapper reflectionRestricted = new ObjectMapper();
+    reflectionRestricted.setVisibility(PropertyAccessor.ALL, JsonAutoDetect.Visibility.NONE);
+    CondaMetadataCodec nativeSafeCodec = new CondaMetadataCodec(reflectionRestricted);
+    CondaRegistryDao.PackageRecord expected = record(
+        "demo-1.0-0.tar.bz2", "1.0", "0", 0, "tar.bz2", Instant.EPOCH);
+
+    try (CondaMetadataCodec.RecordSourceFile snapshot = nativeSafeCodec.snapshotRecordSource(
+        "linux-64", (format, visitor) -> {
+          if ("tar.bz2".equals(format)) visitor.accept(expected);
+        })) {
+      ArrayList<CondaRegistryDao.PackageRecord> replayed = new ArrayList<>();
+      snapshot.records().visit("tar.bz2", replayed::add);
+      assertEquals(List.of(expected.filename()),
+          replayed.stream().map(CondaRegistryDao.PackageRecord::filename).toList());
+      assertEquals("Demo package", replayed.getFirst().metadata().get("summary"));
+      assertEquals(0L, ((Number) replayed.getFirst().metadata().get("timestamp")).longValue());
+    }
+
+    byte[] upstream = ("{\"packages\":{\"demo-1.0-0.tar.bz2\":"
+        + recordJson("demo", "1.0", "0", 0, ".tar.bz2") + "}}")
+        .getBytes(StandardCharsets.UTF_8);
+    try (CondaMetadataCodec.ProxyInventoryFile inventory = nativeSafeCodec.parseRepodataFile(
+        new ByteArrayInputStream(upstream), SHA256, 1, "main", "linux-64", Instant.EPOCH)) {
+      ArrayList<CondaRegistryDao.PackageRecord> replayed = new ArrayList<>();
+      inventory.records().visit(replayed::add);
+      assertEquals(List.of("demo-1.0-0.tar.bz2"),
+          replayed.stream().map(CondaRegistryDao.PackageRecord::filename).toList());
+    }
   }
 
   @Test
@@ -682,7 +716,15 @@ class CondaMetadataCodecTest {
 
   @Test
   void detectsCorruptInventoryAndRenderSpools() throws Exception {
-    for (String corrupt : List.of("{}", "[1]", "[{}] {}", "[{")) {
+    for (String corrupt : List.of(
+        "{}",
+        "[1]",
+        "[{}] {}",
+        "[{",
+        "[{\"unknown\":1}]",
+        "[{\"metadata\":[]}]",
+        "[{\"filename\":1}]",
+        "[{\"buildNumber\":\"x\"}]")) {
       try (CondaMetadataCodec.ProxyInventoryFile inventory = codec.parseRepodataFile(
           new ByteArrayInputStream("{}".getBytes(StandardCharsets.UTF_8)),
           SHA256, 1, "main", "noarch", Instant.EPOCH)) {
