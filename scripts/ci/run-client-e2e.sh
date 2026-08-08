@@ -55,6 +55,9 @@ log() {
 
 cleanup_apt_e2e_containers() {
   local container
+  if (( ${#APT_E2E_CONTAINERS[@]} == 0 )); then
+    return
+  fi
   for container in "${APT_E2E_CONTAINERS[@]}"; do
     docker rm -f "$container" >/dev/null 2>&1 || true
   done
