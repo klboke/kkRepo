@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.conda;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -12,9 +13,12 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.protocol.conda.CondaMediaTypes;
 import com.github.klboke.kkrepo.protocol.conda.CondaPath;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
+import com.github.luben.zstd.Zstd;
 import com.github.luben.zstd.ZstdInputStream;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -26,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
+import org.apache.commons.compress.compressors.bzip2.BZip2CompressorOutputStream;
 import org.junit.jupiter.api.Test;
 
 class CondaMetadataCodecTest {
@@ -339,6 +344,391 @@ class CondaMetadataCodecTest {
     assertTrue(sink.bytes > 0);
   }
 
+  @Test
+  void decodesEverySupportedRepodataEncodingAndClosesFailedInputs() throws Exception {
+    byte[] json = "{\"packages\":{}}".getBytes(StandardCharsets.UTF_8);
+    ByteArrayInputStream plain = new ByteArrayInputStream(json);
+    assertSame(plain, codec.decodeRepodata(plain, CondaPath.Encoding.JSON));
+    try (InputStream decoded = codec.decodeRepodata(
+        new ByteArrayInputStream(compressBzip2(json)), CondaPath.Encoding.BZIP2)) {
+      assertArrayEquals(json, decoded.readAllBytes());
+    }
+    try (InputStream decoded = codec.decodeRepodata(
+        new ByteArrayInputStream(Zstd.compress(json)), CondaPath.Encoding.ZSTD)) {
+      assertArrayEquals(json, decoded.readAllBytes());
+    }
+
+    CloseTrackingInputStream unsupported = new CloseTrackingInputStream(new byte[0], false);
+    assertThrows(IOException.class,
+        () -> codec.decodeRepodata(unsupported, CondaPath.Encoding.NONE));
+    assertTrue(unsupported.closed);
+    CloseTrackingInputStream invalidBzip = new CloseTrackingInputStream(new byte[] {1}, true);
+    assertThrows(IOException.class,
+        () -> codec.decodeRepodata(invalidBzip, CondaPath.Encoding.BZIP2));
+    assertTrue(invalidBzip.closed);
+  }
+
+  @Test
+  void rejectsMalformedRootCollectionsRemovedEntriesAndDuplicateNames() {
+    for (String invalid : List.of(
+        "[]",
+        "{} {}",
+        "{\"packages\":{},\"packages\":{}}",
+        "{\"packages\":[]}",
+        "{\"packages.conda\":[]}",
+        "{\"removed\":{}}",
+        "{\"removed\":[1]}",
+        "{\"removed\":[\"not-a-package\"]}",
+        "{\"packages\":{\"demo-1.0-0.tar.bz2\":{},\"demo-1.0-0.tar.bz2\":{}}}",
+        "{\"packages\":{\"bad.txt\":{}}}",
+        "{\"packages\":{\"demo-1.0-0.conda\":{}}}",
+        "{\"packages.conda\":{\"demo-1.0-0.tar.bz2\":{}}}",
+        "{\"packages\":{\"demo-1.0-0.tar.bz2\":null}}")) {
+      assertBadRepodata(invalid);
+    }
+
+    CondaMetadataCodec.ProxyInventory empty = codec.parseRepodata(
+        "{\"packages\":null,\"packages.conda\":null,\"removed\":null,\"ignored\":[1]}"
+            .getBytes(StandardCharsets.UTF_8),
+        1, "main", "noarch", Instant.EPOCH);
+    assertTrue(empty.records().isEmpty());
+  }
+
+  @Test
+  void validatesAllPackageCoordinateIntegrityAndMetadataFieldShapes() {
+    for (String record : List.of(
+        "{}",
+        validRecord().replace("\"name\":\"demo\"", "\"name\":1"),
+        validRecord().replace("\"name\":\"demo\"", "\"name\":\"bad--name\""),
+        validRecord().replace("\"version\":\"1.0\"", "\"version\":\"\""),
+        validRecord().replace("\"version\":\"1.0\"", "\"version\":\"1+bad\""),
+        validRecord().replace("\"build\":\"0\"", "\"build\":\"bad-build\""),
+        validRecord().replace("\"build_number\":0", "\"build_number\":-1"),
+        validRecord().replace("\"build_number\":0", "\"build_number\":\"0\""),
+        validRecord().replace("\"size\":12", "\"size\":0"),
+        validRecord().replace("\"size\":12", "\"size\":1.5"),
+        validRecord().replace("\"md5\":\"" + MD5 + "\",", "")
+            .replace(",\"sha256\":\"" + SHA256 + "\"", ""),
+        validRecord().replace(SHA256, "x".repeat(64)),
+        validRecord().replace(MD5, "x".repeat(32)),
+        validRecord().replace("\"subdir\":\"linux-64\"", "\"subdir\":1"),
+        validRecord().replace("\"subdir\":\"linux-64\"", "\"subdir\":\"osx-64\""),
+        validRecord().replace("\"depends\":[\"python\"]", "\"depends\":1"),
+        validRecord().replace("\"depends\":[\"python\"]", "\"depends\":[\"\"]"),
+        validRecord().replace("\"features\":\"mkl\"", "\"features\":1"),
+        validRecord().replace("\"features\":\"mkl\"", "\"features\":[\"\"]"))) {
+      assertBadRecord(record);
+    }
+
+    String md5Only = validRecord().replace(",\"sha256\":\"" + SHA256 + "\"", "")
+        .replace(MD5, MD5.toUpperCase());
+    CondaRegistryDao.PackageRecord accepted = codec.parseRepodata(
+        ("{\"packages\":{\"demo-1.0-0.tar.bz2\":" + md5Only + "}}")
+            .getBytes(StandardCharsets.UTF_8),
+        1, "main", "linux-64", null).records().getFirst();
+    assertEquals(MD5, accepted.md5());
+    assertTrue(accepted.sha256() == null);
+    assertTrue(accepted.indexedAt().isAfter(Instant.EPOCH));
+  }
+
+  @Test
+  void rendersNullInputsNoneEncodingAndSanitizedNestedMetadata() throws Exception {
+    assertTrue(mapper.readTree(codec.emptyNotices().body()).path("notices").isEmpty());
+    CondaMetadataCodec.Rendered empty = codec.renderRepodata(
+        "noarch", null, null, CondaPath.Encoding.NONE);
+    JsonNode emptyRoot = mapper.readTree(empty.body());
+    assertTrue(emptyRoot.path("packages").isEmpty());
+    assertEquals(CondaMediaTypes.JSON, empty.contentType());
+
+    LinkedHashMap<String, Object> nested = new LinkedHashMap<>();
+    nested.put("base_url", "https://secret.invalid");
+    nested.put("children", List.of(Map.of(
+        "download_url", "https://secret.invalid/package", "kept", true)));
+    CondaRegistryDao.PackageRecord withoutChecksums = new CondaRegistryDao.PackageRecord(
+        null, 1, "main", "noarch", "demo-1.0-0.conda", "demo", "1.0", "0", 0,
+        "conda", nested, SHA256, null, null, 12, null, null,
+        CondaRegistryDao.SOURCE_HOSTED, 1, Instant.EPOCH, Instant.EPOCH);
+    JsonNode rendered = mapper.readTree(codec.renderRepodata(
+        "noarch", List.of(withoutChecksums), List.of(), CondaPath.Encoding.JSON).body())
+        .path("packages.conda").path(withoutChecksums.filename());
+    assertFalse(rendered.has("md5"));
+    assertFalse(rendered.has("sha256"));
+    assertFalse(rendered.has("base_url"));
+    assertFalse(rendered.path("children").get(0).has("download_url"));
+    assertTrue(rendered.path("children").get(0).path("kept").booleanValue());
+
+    assertThrows(MavenExceptions.MavenNotFoundException.class, () -> codec.renderRepodata(
+        "noarch", List.of(), List.of(), CondaPath.Encoding.MSGPACK_ZSTD));
+    assertThrows(MavenExceptions.MavenNotFoundException.class, () -> {
+      try (OutputStream ignored = codec.encodedOutput(
+          new ByteArrayOutputStream(), CondaPath.Encoding.MSGPACK_ZSTD)) {
+      }
+    });
+  }
+
+  @Test
+  void mergesMaterializedRawAndRecordSourcesByRepositoryPriority() throws Exception {
+    CondaRegistryDao.PackageRecord preferred = record(
+        "demo-1.0-0.tar.bz2", "1.0", "0", 0, "tar.bz2", Instant.EPOCH);
+    CondaRegistryDao.PackageRecord modern = record(
+        "modern-2.0-1.conda", "2.0", "1", 1, "conda", Instant.EPOCH);
+    CondaMetadataCodec.RecordSource records = (format, visitor) -> {
+      if ("tar.bz2".equals(format)) visitor.accept(preferred);
+      if ("conda".equals(format)) visitor.accept(modern);
+    };
+    byte[] fallback = ("""
+        {"packages":{"demo-1.0-0.tar.bz2":{"summary":"fallback"},
+          "raw-1.0-0.tar.bz2":{"summary":"raw","base_url":"https://hidden.invalid"}},
+         "packages.conda":{},"removed":["old-1.0-0.tar.bz2","demo-1.0-0.tar.bz2"]}
+        """).getBytes(StandardCharsets.UTF_8);
+    CondaRegistryDao.Tombstone tombstone = new CondaRegistryDao.Tombstone(
+        1, "main", "linux-64", "gone-1.0-0.conda", "delete", 1, Instant.EPOCH);
+
+    try (CondaMetadataCodec.RenderedFile file = codec.renderMergedRepodataFile(
+        "linux-64",
+        List.of(CondaMetadataCodec.MergeSource.records(records),
+            CondaMetadataCodec.MergeSource.raw(fallback.length,
+                () -> new ByteArrayInputStream(fallback))),
+        List.of(tombstone), CondaPath.Encoding.JSON)) {
+      JsonNode root = mapper.readTree(file.path().toFile());
+      assertEquals("Demo package",
+          root.path("packages").path(preferred.filename()).path("summary").textValue());
+      assertFalse(root.path("packages").path("raw-1.0-0.tar.bz2").has("base_url"));
+      assertTrue(root.path("packages.conda").has(modern.filename()));
+      assertEquals(List.of("gone-1.0-0.conda", "old-1.0-0.tar.bz2"),
+          mapper.convertValue(root.path("removed"), List.class));
+    }
+
+    assertThrows(IllegalStateException.class, () -> codec.renderMergedRepodataFile(
+        "linux-64", List.of(CondaMetadataCodec.MergeSource.raw(2,
+            () -> new ByteArrayInputStream("[]".getBytes(StandardCharsets.UTF_8)))),
+        List.of(), CondaPath.Encoding.JSON));
+    assertThrows(IllegalStateException.class, () -> codec.renderMergedRepodataFile(
+        "linux-64", List.of(CondaMetadataCodec.MergeSource.raw(20,
+            () -> new ByteArrayInputStream(
+                "{\"packages\":[]}".getBytes(StandardCharsets.UTF_8)))),
+        List.of(), CondaPath.Encoding.JSON));
+    assertThrows(IllegalStateException.class, () -> codec.renderMergedRepodataFile(
+        "linux-64", List.of(CondaMetadataCodec.MergeSource.raw(20,
+            () -> new ByteArrayInputStream(
+                "{\"removed\":{}}".getBytes(StandardCharsets.UTF_8)))),
+        List.of(), CondaPath.Encoding.JSON));
+
+    for (CondaPath.Encoding encoding : List.of(
+        CondaPath.Encoding.BZIP2, CondaPath.Encoding.ZSTD)) {
+      try (CondaMetadataCodec.RenderedFile file = codec.renderMergedRepodataFile(
+          "linux-64", List.of(CondaMetadataCodec.MergeSource.records(records)),
+          List.of(tombstone), encoding)) {
+        byte[] encoded = Files.readAllBytes(file.path());
+        byte[] decoded = encoding == CondaPath.Encoding.BZIP2
+            ? decompressBzip2(encoded)
+            : decompressZstd(encoded);
+        JsonNode root = mapper.readTree(decoded);
+        assertTrue(root.path("packages").has(preferred.filename()));
+        assertTrue(root.path("packages.conda").has(modern.filename()));
+      }
+    }
+  }
+
+  @Test
+  void spooledMergeKeepsTheFirstRecordAndSuppressesVisibleTombstones() throws Exception {
+    CondaRegistryDao.PackageRecord legacy = record(
+        "demo-1.0-0.tar.bz2", "1.0", "0", 0, "tar.bz2", Instant.EPOCH);
+    CondaMetadataCodec.RecordSource records = (format, visitor) -> {
+      if ("tar.bz2".equals(format)) visitor.accept(legacy);
+    };
+    byte[] raw = ("{\"removed\":[\"" + legacy.filename() + "\"]}")
+        .getBytes(StandardCharsets.UTF_8);
+
+    try (CondaMetadataCodec.RenderedFile file = codec.renderMergedRepodataFile(
+        "linux-64",
+        List.of(
+            CondaMetadataCodec.MergeSource.records(records),
+            CondaMetadataCodec.MergeSource.records(records),
+            CondaMetadataCodec.MergeSource.raw(
+                Long.MAX_VALUE, () -> new ByteArrayInputStream(raw))),
+        List.of(), CondaPath.Encoding.JSON)) {
+      JsonNode root = mapper.readTree(file.path().toFile());
+      assertTrue(root.path("packages").has(legacy.filename()));
+      assertTrue(root.path("removed").isEmpty());
+    }
+  }
+
+  @Test
+  void channeldataHandlesNullRecordsTieBreakersAndRejectsOutOfOrderSources()
+      throws Exception {
+    assertTrue(mapper.readTree(codec.renderChanneldata(null).body()).path("packages").isEmpty());
+    CondaRegistryDao.PackageRecord base = record(
+        "demo-1.0-a.conda", "1.0", "a", 1, "conda", Instant.EPOCH);
+    CondaRegistryDao.PackageRecord newerBuild = record(
+        "demo-1.0-b.conda", "1.0", "b", 1, "conda", Instant.EPOCH.plusSeconds(1));
+    JsonNode latest = mapper.readTree(codec.renderChanneldata(List.of(base, newerBuild)).body())
+        .path("packages").path("demo");
+    assertEquals("demo-1.0-b.conda", latest.path("reference_package").textValue());
+
+    try (CondaMetadataCodec.RenderedFile file = codec.renderChanneldataFile(visitor -> {
+      visitor.accept(null);
+      visitor.accept(namedRecord("zeta", "zeta-1.0-0.conda"));
+      visitor.accept(namedRecord("alpha", "alpha-1.0-0.conda"));
+    })) {
+      throw new AssertionError("out-of-order channeldata unexpectedly rendered: " + file.path());
+    } catch (IllegalStateException expected) {
+      assertTrue(expected.getMessage().contains("Failed rendering Conda channeldata"));
+    }
+  }
+
+  @Test
+  void rejectsEmptyAndMalformedSanitizedMetadataAndSnapshotsSourceFailures() {
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> codec.sanitizeJson(new byte[0]));
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> codec.sanitizeJson("{\"base_url\":".getBytes(StandardCharsets.UTF_8)));
+    assertThrows(IllegalStateException.class, () -> codec.snapshotRecordSource(
+        "linux-64", (format, visitor) -> {
+          throw new IOException("source failed");
+        }));
+
+    assertEquals(
+        codec.fingerprint(Map.of("kept", List.of(Map.of("value", 1)))),
+        codec.fingerprint(Map.of(
+            "base_url", "hidden", "kept", List.of(Map.of("download_url", "hidden", "value", 1)))));
+  }
+
+  @Test
+  void coversStreamingFailureCleanupAndOversizedRecordValidation() {
+    assertBadRepodata("{\"packages\":");
+    assertThrows(IllegalStateException.class, () -> codec.renderRepodataFile(
+        "noarch", (format, visitor) -> {
+          throw new IOException("record stream failed");
+        }, List.of(), CondaPath.Encoding.JSON));
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> codec.renderMergedRepodataFile(
+            "noarch", List.of(), List.of(), CondaPath.Encoding.MSGPACK_ZSTD));
+
+    String oversized = validRecord().replace(
+        "\"features\":\"mkl\"",
+        "\"features\":\"mkl\",\"summary\":\"" + "x".repeat(270_000) + "\"");
+    assertBadRecord(oversized);
+
+    Object broken = new Object() {
+      public String getValue() {
+        throw new IllegalStateException("cannot encode");
+      }
+    };
+    assertThrows(IllegalArgumentException.class,
+        () -> codec.fingerprint(Map.of("broken", broken)));
+  }
+
+  @Test
+  void validatesEveryPackageBaseUrlShapeAndMissingRequiredIntegers() {
+    for (String invalid : List.of(
+        "{\"info\":[]}",
+        "{\"info\":{\"base_url\":1}}",
+        "{\"info\":{\"base_url\":\" \"}}",
+        "{\"info\":{\"base_url\":\"//bad_host/packages/\"}}",
+        "{\"info\":{\"base_url\":\"http://[invalid\"}}")) {
+      assertBadRepodata(invalid);
+    }
+    assertBadRecord(validRecord().replace("\"build_number\":0,", ""));
+    assertBadRecord(validRecord().replace("\"version\":\"1.0\"", "\"version\":\"bad!\""));
+  }
+
+  @Test
+  void rejectsMalformedDiskBackedGroupSourcesAndExercisesRawRangeCompaction() throws Exception {
+    for (String invalid : List.of(
+        "[]",
+        "{} {}",
+        "{\"packages\":{},\"packages\":{}}",
+        "{\"packages\":[]}",
+        "{\"packages\":{\"bad.txt\":{}}}",
+        "{\"packages\":{\"demo-1.0-0.tar.bz2\":null}}",
+        "{\"packages\":{\"demo-1.0-0.tar.bz2\":{},\"demo-1.0-0.tar.bz2\":{}}}",
+        "{\"removed\":[1]}")) {
+      assertBadSpoolMerge(invalid);
+    }
+    for (String invalid : List.of(
+        "{\"packages\":{\"bad.txt\":{}}}",
+        "{\"removed\":[1]}")) {
+      assertBadMaterializedMerge(invalid);
+    }
+    assertBadSpoolMerge("{\"packages\":{\"demo-1.0-0.tar.bz2\":{");
+    assertBadSpoolMerge("""
+        {"packages":{"demo-1.0-0.tar.bz2":{
+          "base_url":"https://hidden.invalid","summary":"%s"}}}
+        """.formatted("x".repeat(270_000)));
+
+    String safeThenSanitized = """
+        {"packages":{
+          "safe-1.0-0.tar.bz2":{"summary":"a\\\"b\\\\c"},
+          "remote-1.0-0.tar.bz2":{"base_url":"https://hidden.invalid","value":1}},
+         "removed":["safe-1.0-0.tar.bz2","gone-1.0-0.tar.bz2"]}
+        """;
+    try (CondaMetadataCodec.RenderedFile file = codec.renderMergedRepodataFile(
+        "linux-64",
+        List.of(CondaMetadataCodec.MergeSource.raw(
+            Long.MAX_VALUE,
+            () -> new ByteArrayInputStream(safeThenSanitized.getBytes(StandardCharsets.UTF_8)))),
+        List.of(new CondaRegistryDao.Tombstone(
+            1, "main", "linux-64", "deleted-1.0-0.conda", "delete", 1, Instant.EPOCH)),
+        CondaPath.Encoding.JSON)) {
+      JsonNode root = mapper.readTree(file.path().toFile());
+      assertEquals("a\"b\\c",
+          root.path("packages").path("safe-1.0-0.tar.bz2").path("summary").textValue());
+      assertFalse(root.path("packages").path("remote-1.0-0.tar.bz2").has("base_url"));
+      assertEquals(List.of("deleted-1.0-0.conda", "gone-1.0-0.tar.bz2"),
+          mapper.convertValue(root.path("removed"), List.class));
+    }
+  }
+
+  @Test
+  void detectsCorruptInventoryAndRenderSpools() throws Exception {
+    for (String corrupt : List.of("{}", "[1]", "[{}] {}", "[{")) {
+      try (CondaMetadataCodec.ProxyInventoryFile inventory = codec.parseRepodataFile(
+          new ByteArrayInputStream("{}".getBytes(StandardCharsets.UTF_8)),
+          SHA256, 1, "main", "noarch", Instant.EPOCH)) {
+        Files.writeString(inventory.path(), corrupt);
+        assertThrows(IllegalStateException.class,
+            () -> inventory.records().visit(ignored -> { }), corrupt);
+      }
+    }
+
+    for (String corrupt : List.of("{}", "[1]", "[{}] {}")) {
+      try (CondaMetadataCodec.RecordSourceFile source = codec.snapshotRecordSource(
+          "noarch", (format, visitor) -> { })) {
+        Files.writeString(source.path(), corrupt);
+        assertThrows(IOException.class,
+            () -> source.records().visit("conda", ignored -> { }), corrupt);
+      }
+    }
+  }
+
+  @Test
+  void channeldataFlushesPackagesAndUsesTimestampThenFilenameTieBreakers() throws Exception {
+    JsonNode differentNames = mapper.readTree(codec.renderChanneldata(List.of(
+        namedRecord("zeta", "zeta-1.0-0.conda"),
+        namedRecord("alpha", "alpha-1.0-0.conda"))).body());
+    assertTrue(differentNames.path("packages").has("alpha"));
+    assertTrue(differentNames.path("packages").has("zeta"));
+
+    CondaRegistryDao.PackageRecord older = record(
+        "demo-1.0-0.tar.bz2", "1.0", "0", 0, "tar.bz2", Instant.EPOCH);
+    CondaRegistryDao.PackageRecord newer = record(
+        "demo-1.0-0.conda", "1.0", "0", 0, "conda", Instant.EPOCH.plusSeconds(1));
+    JsonNode timestampWinner = mapper.readTree(codec.renderChanneldata(List.of(older, newer)).body());
+    assertEquals(newer.filename(), timestampWinner.path("packages").path("demo")
+        .path("reference_package").textValue());
+
+    CondaRegistryDao.PackageRecord filenameFirst = namedRecord("same", "same-1.0-0.conda");
+    CondaRegistryDao.PackageRecord filenameLast = new CondaRegistryDao.PackageRecord(
+        null, 1, "main", "linux-64", "same-1.0-0.tar.bz2", "same", "1.0", "0", 0,
+        "tar.bz2", Map.of(), SHA256, MD5, SHA256, 12, null, null,
+        CondaRegistryDao.SOURCE_HOSTED, 1, Instant.EPOCH, Instant.EPOCH);
+    JsonNode filenameWinner = mapper.readTree(
+        codec.renderChanneldata(List.of(filenameFirst, filenameLast)).body());
+    assertEquals(filenameLast.filename(), filenameWinner.path("packages").path("same")
+        .path("reference_package").textValue());
+  }
+
   private static String recordJson(
       String name, String version, String build, long buildNumber, String suffix) {
     return """
@@ -349,6 +739,41 @@ class CondaMetadataCodecTest {
           "download_url":"https://upstream.invalid/package"
         }
         """.formatted(name, version, build, buildNumber, MD5, SHA256, suffix);
+  }
+
+  private void assertBadRepodata(String value) {
+    assertThrows(MavenExceptions.BadUpstreamException.class, () -> codec.parseRepodata(
+        value.getBytes(StandardCharsets.UTF_8), 1, "main", "linux-64", Instant.EPOCH), value);
+  }
+
+  private void assertBadRecord(String value) {
+    assertBadRepodata("{\"packages\":{\"demo-1.0-0.tar.bz2\":" + value + "}}");
+  }
+
+  private void assertBadSpoolMerge(String value) {
+    assertThrows(IllegalStateException.class, () -> codec.renderMergedRepodataFile(
+        "linux-64",
+        List.of(CondaMetadataCodec.MergeSource.raw(
+            Long.MAX_VALUE,
+            () -> new ByteArrayInputStream(value.getBytes(StandardCharsets.UTF_8)))),
+        List.of(), CondaPath.Encoding.JSON), value);
+  }
+
+  private void assertBadMaterializedMerge(String value) {
+    byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+    assertThrows(IllegalStateException.class, () -> codec.renderMergedRepodataFile(
+        "linux-64",
+        List.of(CondaMetadataCodec.MergeSource.raw(
+            bytes.length, () -> new ByteArrayInputStream(bytes))),
+        List.of(), CondaPath.Encoding.JSON), value);
+  }
+
+  private static String validRecord() {
+    return """
+        {"name":"demo","version":"1.0","build":"0","build_number":0,"size":12,
+         "subdir":"linux-64","md5":"%s","sha256":"%s","depends":["python"],
+         "constrains":null,"track_features":null,"features":"mkl"}
+        """.formatted(MD5, SHA256);
   }
 
   private static final class CountingOutputStream extends OutputStream {
@@ -385,6 +810,13 @@ class CondaMetadataCodecTest {
         CondaRegistryDao.SOURCE_HOSTED, 1, timestamp, timestamp);
   }
 
+  private static CondaRegistryDao.PackageRecord namedRecord(String name, String filename) {
+    return new CondaRegistryDao.PackageRecord(
+        null, 1, "main", "linux-64", filename, name, "1.0", "0", 0,
+        "conda", Map.of(), SHA256, MD5, SHA256, 12, 10L, 20L,
+        CondaRegistryDao.SOURCE_HOSTED, 1, Instant.EPOCH, Instant.EPOCH);
+  }
+
   private static byte[] decompressBzip2(byte[] body) throws Exception {
     try (BZip2CompressorInputStream input = new BZip2CompressorInputStream(
         new ByteArrayInputStream(body))) {
@@ -395,6 +827,31 @@ class CondaMetadataCodecTest {
   private static byte[] decompressZstd(byte[] body) throws Exception {
     try (ZstdInputStream input = new ZstdInputStream(new ByteArrayInputStream(body))) {
       return input.readAllBytes();
+    }
+  }
+
+  private static byte[] compressBzip2(byte[] body) throws Exception {
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    try (BZip2CompressorOutputStream compressed = new BZip2CompressorOutputStream(output)) {
+      compressed.write(body);
+    }
+    return output.toByteArray();
+  }
+
+  private static final class CloseTrackingInputStream extends ByteArrayInputStream {
+    private final boolean failClose;
+    private boolean closed;
+
+    private CloseTrackingInputStream(byte[] body, boolean failClose) {
+      super(body);
+      this.failClose = failClose;
+    }
+
+    @Override
+    public void close() throws IOException {
+      closed = true;
+      if (failClose) throw new IOException("close failed");
+      super.close();
     }
   }
 }

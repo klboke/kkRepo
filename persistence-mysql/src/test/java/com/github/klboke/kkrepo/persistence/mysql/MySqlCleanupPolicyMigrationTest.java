@@ -7,15 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.github.klboke.kkrepo.persistence.mysql.support.MySqlIntegrationTestSupport;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 class MySqlCleanupPolicyMigrationTest extends MySqlIntegrationTestSupport {
-
-  @BeforeAll
-  static void startBackend() {
-    startMySql();
-  }
 
   @Test
   void activePolicyNameUsesAnIndexedVirtualGeneratedColumn() {

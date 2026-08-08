@@ -74,12 +74,93 @@ class CondaMetadataBuildLimiterTest {
           MavenExceptions.BadUpstreamException.class,
           () -> limiter.execute("repo/main/noarch", () -> "duplicate"));
 
+      Thread.currentThread().interrupt();
+      try {
+        assertThrows(MavenExceptions.BadUpstreamException.class,
+            () -> limiter.execute("repo/main/noarch", () -> "interrupted-duplicate"));
+        assertTrue(Thread.currentThread().isInterrupted());
+      } finally {
+        Thread.interrupted();
+      }
+
       release.countDown();
       assertEquals("metadata", leader.get(2, TimeUnit.SECONDS));
     } finally {
       release.countDown();
       executor.shutdownNow();
     }
+  }
+
+  @Test
+  void blankCoordinatesUsePermitAndCapacityTimeoutsRemainBounded() throws Exception {
+    CondaMetadataBuildLimiter limiter = new CondaMetadataBuildLimiter(1, 25);
+    assertEquals("direct", limiter.execute(" ", () -> "direct"));
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    CountDownLatch entered = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    try {
+      Future<String> holder = executor.submit(() -> limiter.execute(() -> {
+        entered.countDown();
+        await(release);
+        return "holder";
+      }));
+      assertTrue(entered.await(2, TimeUnit.SECONDS));
+      assertThrows(MavenExceptions.BadUpstreamException.class,
+          () -> limiter.execute(() -> "blocked"));
+      release.countDown();
+      assertEquals("holder", holder.get(2, TimeUnit.SECONDS));
+    } finally {
+      release.countDown();
+      executor.shutdownNow();
+    }
+  }
+
+  @Test
+  void interruptedCapacityWaitPreservesInterruptAndLeaderFailuresReachWaiters() throws Exception {
+    CondaMetadataBuildLimiter interrupted = new CondaMetadataBuildLimiter(1, 25);
+    Thread.currentThread().interrupt();
+    try {
+      assertThrows(MavenExceptions.BadUpstreamException.class,
+          () -> interrupted.execute(() -> "never"));
+      assertTrue(Thread.currentThread().isInterrupted());
+    } finally {
+      Thread.interrupted();
+    }
+
+    CondaMetadataBuildLimiter limiter = new CondaMetadataBuildLimiter(2, 2_000);
+    ExecutorService executor = Executors.newFixedThreadPool(2);
+    CountDownLatch entered = new CountDownLatch(1);
+    CountDownLatch followerStarted = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    AtomicReference<Thread> followerThread = new AtomicReference<>();
+    try {
+      Future<?> leader = executor.submit(() -> assertThrows(
+          IllegalArgumentException.class,
+          () -> limiter.execute("failure", () -> {
+            entered.countDown();
+            await(release);
+            throw new IllegalArgumentException("boom");
+          })));
+      assertTrue(entered.await(2, TimeUnit.SECONDS));
+      Future<?> follower = executor.submit(() -> {
+        followerThread.set(Thread.currentThread());
+        followerStarted.countDown();
+        assertThrows(IllegalArgumentException.class,
+            () -> limiter.execute("failure", () -> "never"));
+      });
+      assertTrue(followerStarted.await(2, TimeUnit.SECONDS));
+      assertTrue(awaitWaiting(followerThread));
+      release.countDown();
+      leader.get(2, TimeUnit.SECONDS);
+      follower.get(2, TimeUnit.SECONDS);
+      assertEquals(0, limiter.inFlightCount());
+    } finally {
+      release.countDown();
+      executor.shutdownNow();
+    }
+
+    assertThrows(AssertionError.class,
+        () -> limiter.execute("fatal", () -> { throw new AssertionError("fatal"); }));
   }
 
   private static boolean awaitWaiting(AtomicReference<Thread> thread) throws InterruptedException {

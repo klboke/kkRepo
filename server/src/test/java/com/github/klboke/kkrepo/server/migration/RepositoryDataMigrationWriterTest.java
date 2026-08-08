@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -37,6 +38,7 @@ import com.github.klboke.kkrepo.protocol.maven.path.HashType;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.server.docker.DockerManifestParser;
+import com.github.klboke.kkrepo.server.conda.CondaRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.support.dao.AssetDaoAdapter;
 import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
@@ -354,6 +356,57 @@ class RepositoryDataMigrationWriterTest {
     assertEquals(List.of("derive"), deps.get(0).get("features"));
   }
 
+  @Test
+  void delegatesCondaMigrationAndFailsClosedWhenProtocolWriterIsUnavailable() {
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    BlobStorageRegistry storages = mock(BlobStorageRegistry.class);
+    BlobStorage storage = mock(BlobStorage.class);
+    RepositoryRecord repository = condaRepository();
+    RepositoryDataMigrationAssetRecord source = condaSource(
+        "main/noarch/demo-1.0-0.conda", SAMPLE.length);
+    when(repositories.findById(repository.id())).thenReturn(Optional.of(repository));
+    when(storages.forBlobStoreId(repository.blobStoreId())).thenReturn(storage);
+    RepositoryDataMigrationWriter writer = new RepositoryDataMigrationWriter(
+        repositories,
+        mock(ComponentDao.class),
+        new RecordingAssetDao(),
+        mock(BrowseNodeDao.class),
+        storages,
+        mock(RepositoryIndexRebuildDao.class),
+        mock(DockerRegistryDao.class),
+        new DockerManifestParser(new ObjectMapper()),
+        null,
+        new TransientTransactionRetry(new RecordingTransactionManager(), 1, 0));
+
+    assertThrows(IllegalStateException.class, () -> writer.write(
+        repository.id(), source, new ByteArrayInputStream(SAMPLE),
+        "application/vnd.conda.package.v2", true));
+
+    CondaRepositoryDataMigrationWriter conda = mock(CondaRepositoryDataMigrationWriter.class);
+    when(conda.write(
+        org.mockito.ArgumentMatchers.eq(repository),
+        org.mockito.ArgumentMatchers.eq(source),
+        any(InputStream.class),
+        org.mockito.ArgumentMatchers.eq("application/vnd.conda.package.v2"),
+        org.mockito.ArgumentMatchers.eq(true)))
+        .thenReturn(new CondaRepositoryDataMigrationWriter.MigratedAsset(101L, 102L, 103L, "obj"));
+    writer.setCondaMigrationWriter(conda);
+    RepositoryDataMigrationWriter.WriteResult result = writer.write(
+        repository.id(), source, new ByteArrayInputStream(SAMPLE),
+        "application/vnd.conda.package.v2", true);
+
+    assertEquals(101L, result.componentId());
+    assertEquals(102L, result.assetId());
+    assertEquals(103L, result.assetBlobId());
+    assertEquals("obj", result.assetBlobObjectKey());
+    verify(conda).write(
+        org.mockito.ArgumentMatchers.eq(repository),
+        org.mockito.ArgumentMatchers.eq(source),
+        any(InputStream.class),
+        org.mockito.ArgumentMatchers.eq("application/vnd.conda.package.v2"),
+        org.mockito.ArgumentMatchers.eq(true));
+  }
+
   private static void assertChecksum(
       RepositoryDataMigrationWriter.GeneratedMavenChecksum checksum,
       String expectedPath,
@@ -455,6 +508,22 @@ class RepositoryDataMigrationWriterTest {
         null,
         Map.of(),
         now.minusSeconds(180));
+  }
+
+  private static RepositoryDataMigrationAssetRecord condaSource(String path, int size) {
+    return new RepositoryDataMigrationAssetRecord(
+        1L, 2L, "source", "component", path, PersistenceHashes.pathHash(path),
+        RepositoryFormat.CONDA, "main/noarch", "demo", "1.0", "conda-package",
+        "application/vnd.conda.package.v2", (long) size, null,
+        Instant.EPOCH, Instant.EPOCH, Instant.EPOCH, Instant.EPOCH,
+        "nexus", "127.0.0.1", "PENDING", 0, null, null,
+        null, null, null, null, Map.of("sha256", "a".repeat(64)), Instant.EPOCH);
+  }
+
+  private static RepositoryRecord condaRepository() {
+    return new RepositoryRecord(
+        12L, "conda-hosted", RepositoryFormat.CONDA, RepositoryType.HOSTED,
+        "conda-hosted", true, 1L, null, null, null, null, "ALLOW_ONCE", true, Map.of());
   }
 
   private static RepositoryDataMigrationAssetRecord dockerSource(

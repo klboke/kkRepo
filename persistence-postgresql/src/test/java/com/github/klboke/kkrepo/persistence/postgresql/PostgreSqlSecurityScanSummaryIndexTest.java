@@ -6,15 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.github.klboke.kkrepo.persistence.postgresql.support.PostgreSqlIntegrationTestSupport;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 class PostgreSqlSecurityScanSummaryIndexTest extends PostgreSqlIntegrationTestSupport {
-
-  @BeforeAll
-  static void startBackend() {
-    startPostgreSql();
-  }
 
   @Test
   void summaryFactsHaveSelectiveCoveringIndexes() {

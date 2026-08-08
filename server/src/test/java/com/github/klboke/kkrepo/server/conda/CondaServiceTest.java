@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doCallRealMethod;
@@ -28,6 +29,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
+import com.github.klboke.kkrepo.protocol.conda.CondaPathParser;
 import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
@@ -53,6 +55,7 @@ import org.apache.commons.compress.compressors.bzip2.BZip2CompressorOutputStream
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.transaction.PlatformTransactionManager;
 
 class CondaServiceTest {
   private static final String MD5 = "0123456789abcdef0123456789abcdef";
@@ -107,8 +110,14 @@ class CondaServiceTest {
         any(RepositoryRuntime.class), anyString(), anyBoolean())).thenAnswer(invocation -> {
           RepositoryRuntime runtime = invocation.getArgument(0);
           String path = invocation.getArgument(1);
+          boolean headOnly = invocation.getArgument(2);
           InternalAsset asset = internalAssets.get(internalKey(runtime, path));
           if (asset == null) throw new MavenExceptions.MavenNotFoundException(path);
+          if (headOnly) {
+            return MavenResponse.noBody(
+                200, asset.body().length, asset.contentType(), digest(asset.body()),
+                asset.updatedAt());
+          }
           return MavenResponse.ok(
               new ByteArrayInputStream(asset.body()), asset.body().length, asset.contentType(),
               digest(asset.body()), asset.updatedAt());
@@ -863,6 +872,662 @@ class CondaServiceTest {
     verify(registry, times(2)).listPackages(hosted.id(), "main", "linux-64");
   }
 
+  @Test
+  void servesRootAndOptionalNoticesAndRejectsInvalidRuntimeAndPaths() throws Exception {
+    RepositoryRuntime hosted = runtime(
+        40, "conda<&\"hosted", RepositoryType.HOSTED, null, List.of());
+
+    MavenResponse root = service.get(hosted, "", false);
+    String html = new String(root.body().readAllBytes(), StandardCharsets.UTF_8);
+    assertTrue(html.contains("conda&lt;&amp;&quot;hosted"));
+    MavenResponse rootHead = service.get(hosted, "/", true);
+    assertFalse(rootHead.hasBody());
+    assertEquals(root.contentLength(), rootHead.contentLength());
+
+    JsonNode notices = json(service.get(hosted, "main/notices.json", false));
+    assertTrue(notices.path("notices").isArray());
+    MavenResponse noticesHead = service.get(hosted, "main/notices.json", true);
+    assertFalse(noticesHead.hasBody());
+    assertEquals("application/json", noticesHead.contentType());
+
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(hosted, "main/linux-64/repodata_shards.msgpack.zst", false));
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(hosted, "main/linux-64/unknown.bin", false));
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(hosted, "main/linux-64/missing-1.0-0.conda", false));
+    assertThrows(MavenExceptions.MethodNotAllowed.class,
+        () -> service.get(null, "", false));
+    assertThrows(MavenExceptions.MethodNotAllowed.class,
+        () -> service.get(runtimeWith(
+            41, "raw", RepositoryFormat.RAW, RepositoryType.HOSTED, true, "ALLOW"), "", false));
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(runtimeWith(
+            42, "offline", RepositoryFormat.CONDA, RepositoryType.HOSTED, false, "ALLOW"),
+            "", false));
+  }
+
+  @Test
+  void sanitizesProxyChannelJsonAndFallsBackForOptionalMetadata() throws Exception {
+    RepositoryRuntime proxyRuntime = runtime(
+        43, "conda-proxy", RepositoryType.PROXY, "https://repo.example/channels/", List.of());
+    when(proxy.getMetadataFromUrlUnindexed(
+        eq(proxyRuntime), anyString(), anyString(), eq(true))).thenAnswer(invocation -> {
+          String localPath = invocation.getArgument(1);
+          String remoteUrl = invocation.getArgument(2);
+          String body = remoteUrl.endsWith("notices.json")
+              ? "{\"notices\":[],\"download_url\":\"secret\"}"
+              : "{\"channeldata_version\":1,\"packages\":{},\"base_url\":\"secret\"}";
+          cacheInternal(proxyRuntime, localPath, body.getBytes(StandardCharsets.UTF_8));
+          return MavenResponse.noBody(200);
+        });
+
+    JsonNode channeldata = json(service.get(proxyRuntime, "main/channeldata.json", false));
+    assertFalse(channeldata.has("base_url"));
+    JsonNode notices = json(service.get(proxyRuntime, "main/notices.json", false));
+    assertFalse(notices.has("download_url"));
+    MavenResponse cachedHead = service.get(proxyRuntime, "main/channeldata.json", true);
+    assertFalse(cachedHead.hasBody());
+
+    RepositoryRuntime optional = runtime(
+        44, "optional", RepositoryType.PROXY, "https://repo.example/channels/", List.of());
+    when(proxy.getMetadataFromUrlUnindexed(
+        eq(optional), anyString(), anyString(), eq(true)))
+        .thenThrow(new MavenExceptions.MavenNotFoundException("optional metadata missing"));
+    assertTrue(json(service.get(optional, "main/notices.json", false))
+        .path("notices").isArray());
+    when(registry.currentRepositoryRevision(optional.id())).thenReturn(0L);
+    assertTrue(json(service.get(optional, "main/channeldata.json", false))
+        .path("packages").isObject());
+  }
+
+  @Test
+  void migrationRestoreIsIdempotentAndRejectsContentDrift() throws Exception {
+    RepositoryRuntime hosted = runtime(
+        45, "conda-hosted", RepositoryType.HOSTED, null, List.of());
+    String path = "main/linux-64/demo-1.0-0.conda";
+    byte[] archive = CondaTestArchive.modern("demo", "1.0", "0", 0, "linux-64");
+    CondaArchiveInspector.InspectedPackage inspected = inspector.inspect(
+        new ByteArrayInputStream(archive), "demo-1.0-0.conda", "linux-64");
+    AssetRecord asset = asset(hosted, path, archive.length, 101, 102, 103);
+    CondaAssetSupport.StagedAsset staged = new CondaAssetSupport.StagedAsset(
+        ".conda/staging/migration/package", blob(archive, inspected.sha256()));
+    AtomicReference<CondaRegistryDao.PackageRecord> stored = new AtomicReference<>();
+    AtomicReference<Boolean> assetPresent = new AtomicReference<>(false);
+    when(assets.find(hosted, path)).thenAnswer(
+        ignored -> assetPresent.get() ? Optional.of(asset) : Optional.empty());
+    when(assets.stage(
+        eq(hosted), eq(path), eq(inspected.file()), anyString(), any(), any(), any(),
+        eq(inspected.sha256()), eq(inspected.size())))
+        .thenReturn(staged);
+    when(assets.promote(
+        eq(hosted), eq(path), anyString(), eq(staged), anyString(), any(), any(), any()))
+        .thenAnswer(ignored -> {
+          assetPresent.set(true);
+          return asset;
+        });
+    when(registry.findPackage(hosted.id(), "main", "linux-64", "demo-1.0-0.conda"))
+        .thenAnswer(ignored -> Optional.ofNullable(stored.get()));
+    when(registry.saveHostedPackage(any())).thenAnswer(invocation -> {
+      CondaRegistryDao.PackageRecord value = invocation.getArgument(0);
+      CondaRegistryDao.PackageRecord persisted = value.withRevision(3, Instant.EPOCH);
+      stored.set(persisted);
+      return persisted;
+    });
+    when(assets.blob(hosted, path)).thenReturn(
+        blob(archive, inspected.sha256()), blob(archive, SHA_B));
+
+    try {
+      CondaRegistryDao.PackageRecord first = service.restoreHostedPackageForMigration(
+          hosted, new CondaPathParser().parse(path), inspected,
+          "application/octet-stream", "migration", "127.0.0.1", null);
+      CondaRegistryDao.PackageRecord second = service.restoreHostedPackageForMigration(
+          hosted, new CondaPathParser().parse(path), inspected,
+          "application/octet-stream", "migration", "127.0.0.1", Instant.EPOCH);
+      assertEquals(first, second);
+      assertThrows(IllegalStateException.class, () -> service.restoreHostedPackageForMigration(
+          hosted, new CondaPathParser().parse(path), inspected,
+          "application/octet-stream", "migration", "127.0.0.1", Instant.EPOCH));
+      assertThrows(IllegalArgumentException.class, () -> service.restoreHostedPackageForMigration(
+          hosted, null, inspected, null, null, null, null));
+      assertThrows(IllegalArgumentException.class, () -> service.restoreHostedPackageForMigration(
+          hosted, new CondaPathParser().parse("main/noarch/other-1.0-0.conda"),
+          inspected, null, null, null, null));
+      verify(assets, times(3)).discard(hosted, staged);
+      verify(assets, times(1)).promote(
+          eq(hosted), eq(path), anyString(), eq(staged), anyString(), any(), any(), any());
+    } finally {
+      CondaArchiveInspector.delete(inspected.file());
+    }
+  }
+
+  @Test
+  void enforcesWriteDeletePoliciesAndRollsBackUntransactionalPublishFailure() throws Exception {
+    byte[] archive = CondaTestArchive.legacy("demo", "1.0", "0", 0, "linux-64");
+    String path = "main/linux-64/demo-1.0-0.tar.bz2";
+    RepositoryRuntime denied = runtimeWith(
+        46, "denied", RepositoryFormat.CONDA, RepositoryType.HOSTED, true, "DENY");
+    when(assets.find(denied, path)).thenReturn(Optional.empty());
+    assertThrows(MavenExceptions.WritePolicyDenied.class, () -> service.put(
+        denied, path, new ByteArrayInputStream(archive), null, "alice", "127.0.0.1"));
+    assertThrows(MavenExceptions.WritePolicyDenied.class, () -> service.delete(denied, path));
+
+    RepositoryRuntime once = runtimeWith(
+        47, "once", RepositoryFormat.CONDA, RepositoryType.HOSTED, true, "ALLOW_ONCE");
+    when(assets.find(once, path)).thenReturn(Optional.of(asset(once, path, 1, 1, 2, 3)));
+    assertThrows(MavenExceptions.WritePolicyDenied.class, () -> service.put(
+        once, path, new ByteArrayInputStream(archive), null, "alice", "127.0.0.1"));
+    assertThrows(MavenExceptions.MethodNotAllowed.class,
+        () -> service.delete(once, "main/linux-64/repodata.json"));
+
+    RepositoryRuntime administrative = runtime(
+        48, "admin", RepositoryType.HOSTED, null, List.of());
+    when(registry.tombstoneAndDeletePackage(
+        eq(administrative.id()), eq("main"), eq("linux-64"),
+        eq("demo-1.0-0.tar.bz2"), eq("administrative-delete"), eq(0L), any()))
+        .thenReturn(Optional.empty());
+    assertEquals(404, service.deleteAdministrative(administrative, path, " ").status());
+
+    RepositoryRuntime failing = runtimeWith(
+        49, "failing", RepositoryFormat.CONDA, RepositoryType.HOSTED, true, "ALLOW");
+    AssetRecord promoted = asset(failing, path, archive.length, 11, 12, 13);
+    CondaAssetSupport.StagedAsset staged = new CondaAssetSupport.StagedAsset(
+        ".conda/staging/failing/package", blob(archive, sha256(archive)));
+    AtomicReference<Boolean> promotedState = new AtomicReference<>(false);
+    when(assets.find(failing, path)).thenAnswer(
+        ignored -> promotedState.get() ? Optional.of(promoted) : Optional.empty());
+    when(assets.stage(
+        eq(failing), eq(path), any(Path.class), eq("application/x-conda-test"), any(),
+        eq("alice"), eq("127.0.0.1"), anyString(), eq((long) archive.length)))
+        .thenReturn(staged);
+    when(assets.promote(
+        eq(failing), eq(path), anyString(), eq(staged), eq("application/x-conda-test"),
+        eq("alice"), eq("127.0.0.1"), any()))
+        .thenAnswer(ignored -> {
+          promotedState.set(true);
+          return promoted;
+        });
+    when(registry.saveHostedPackage(any())).thenThrow(new IllegalStateException("database failed"));
+    assertThrows(IllegalStateException.class, () -> service.put(
+        failing, path, new ByteArrayInputStream(archive), "application/x-conda-test",
+        "alice", "127.0.0.1"));
+    verify(assets).delete(failing, path);
+    verify(assets).discard(failing, staged);
+  }
+
+  @Test
+  void rejectsBrokenCompactMetadataAndInvalidProxyLocations() throws Exception {
+    RepositoryRuntime proxyRuntime = runtime(
+        50, "conda-proxy", RepositoryType.PROXY, "https://repo.example/channels/", List.of());
+    when(proxy.getMetadataFromUrlUnindexed(
+        eq(proxyRuntime), anyString(),
+        eq("https://repo.example/channels/main/linux-64/repodata.json.zst"), eq(false)))
+        .thenReturn(
+            MavenResponse.noBody(200),
+            MavenResponse.ok(new ByteArrayInputStream(new byte[] {1}),
+                256L * 1024 * 1024 + 1, "application/zstd", null, Instant.EPOCH));
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> service.get(proxyRuntime, "main/linux-64/repodata.json", false));
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> service.get(proxyRuntime, "main/linux-64/repodata.json", false));
+
+    RepositoryRuntime missingRemote = runtime(
+        51, "missing-remote", RepositoryType.PROXY, null, List.of());
+    service = serviceWithScheduler(mock(CondaProxyInventoryScheduler.class));
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> service.get(missingRemote, "main/noarch/demo-1.0-0.conda", false));
+
+    RepositoryRuntime invalidBase = runtime(
+        52, "invalid-base", RepositoryType.PROXY, "https://repo.example/channels/", List.of());
+    CondaRegistryDao.PackageRecord known = proxyRecord(
+        invalidBase.id(), "demo-1.0-0.conda", SHA_A, 5, 1);
+    byte[] cachedRepodata = "{}".getBytes(StandardCharsets.UTF_8);
+    cacheInternal(
+        invalidBase, upstreamRepodataPath("main", "linux-64"), cachedRepodata);
+    when(registry.findPackage(invalidBase.id(), "main", "linux-64", known.filename()))
+        .thenReturn(Optional.of(known));
+    when(registry.findChannelState(invalidBase.id(), "main", "linux-64"))
+        .thenReturn(Optional.of(new CondaRegistryDao.ChannelState(
+            invalidBase.id(), "main", "linux-64", digest(cachedRepodata), "file:///tmp/", 1,
+            Instant.EPOCH, Instant.EPOCH)));
+    assertThrows(MavenExceptions.BadUpstreamException.class, () -> service.get(
+        invalidBase, "main/linux-64/" + known.filename(), false));
+  }
+
+  @Test
+  void autowiredConstructorAndCompactDecodeFailuresUseProtocolResponses() throws Exception {
+    CondaService transactional = new CondaService(
+        registry,
+        inspector,
+        new CondaMetadataCodec(mapper),
+        new CondaComponentFactory(),
+        assets,
+        new CondaLeaseManager(registry),
+        proxy,
+        mock(CondaProxyInventoryScheduler.class),
+        new CondaMetadataBuildLimiter(),
+        new CondaPublishLimiter(),
+        mock(PlatformTransactionManager.class));
+    RepositoryRuntime hosted = runtime(
+        53, "<conda&hosted>", RepositoryType.HOSTED, null, List.of());
+    assertFalse(transactional.get(hosted, "", true).hasBody());
+
+    RepositoryRuntime empty = runtime(
+        54, "empty", RepositoryType.PROXY, "https://repo.example/channels/", List.of());
+    byte[] emptyFrame = Zstd.compress(new byte[0]);
+    when(proxy.getMetadataFromUrlUnindexed(
+        eq(empty), anyString(),
+        eq("https://repo.example/channels/main/noarch/repodata.json.zst"), eq(false)))
+        .thenReturn(MavenResponse.ok(
+            new ByteArrayInputStream(emptyFrame), emptyFrame.length,
+            "application/zstd", null, Instant.EPOCH));
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> service.get(empty, "main/noarch/repodata.json", false));
+
+    RepositoryRuntime noEtag = runtime(
+        55, "no-etag", RepositoryType.PROXY, "https://repo.example/channels/", List.of());
+    byte[] json = "{\"packages\":{}}".getBytes(StandardCharsets.UTF_8);
+    byte[] compressed = Zstd.compress(json);
+    when(proxy.getMetadataFromUrlUnindexed(
+        eq(noEtag), anyString(),
+        eq("https://repo.example/channels/main/noarch/repodata.json.zst"), eq(false)))
+        .thenReturn(MavenResponse.ok(
+            new ByteArrayInputStream(compressed), compressed.length,
+            "application/zstd", null, Instant.EPOCH));
+    MavenResponse decoded = service.get(noEtag, "main/noarch/repodata.json", false);
+    assertEquals(json.length, decoded.contentLength());
+    assertEquals(new String(json, StandardCharsets.UTF_8),
+        new String(decoded.body().readAllBytes(), StandardCharsets.UTF_8));
+  }
+
+  @Test
+  void proxyRawMetadataReusesWinnerAndFreshLocalSnapshots() throws Exception {
+    RepositoryRuntime fresh = runtime(
+        56, "fresh", RepositoryType.PROXY, "https://repo.example/channels/", List.of());
+    String localPath = upstreamRepodataPath("main", "noarch", "repodata.json.bz2");
+    cacheInternal(fresh, localPath, "fresh".getBytes(StandardCharsets.UTF_8));
+    assertEquals("fresh", new String(service.get(
+        fresh, "main/noarch/repodata.json.bz2", false).body().readAllBytes(),
+        StandardCharsets.UTF_8));
+    verify(proxy, never()).getMetadataFromUrlUnindexed(
+        eq(fresh), anyString(), anyString(), anyBoolean());
+
+    RepositoryRuntime waiter = runtime(
+        57, "waiter", RepositoryType.PROXY, "https://repo.example/channels/", List.of());
+    when(registry.tryAcquireLease(anyString(), anyString(), any())).thenAnswer(invocation -> {
+      cacheInternal(waiter, localPath, "winner".getBytes(StandardCharsets.UTF_8));
+      return Optional.empty();
+    });
+    assertEquals("winner", new String(service.get(
+        waiter, "main/noarch/repodata.json.bz2", false).body().readAllBytes(),
+        StandardCharsets.UTF_8));
+
+    RepositoryRuntime recheck = runtime(
+        58, "recheck", RepositoryType.PROXY, "https://repo.example/channels/", List.of());
+    when(registry.tryAcquireLease(anyString(), anyString(), any())).thenAnswer(invocation -> {
+      cacheInternal(recheck, localPath, "rechecked".getBytes(StandardCharsets.UTF_8));
+      return Optional.of(new CondaRegistryDao.Lease(
+          invocation.getArgument(0), invocation.getArgument(1), 2,
+          invocation.getArgument(2), Instant.now()));
+    });
+    assertEquals("rechecked", new String(service.get(
+        recheck, "main/noarch/repodata.json.bz2", false).body().readAllBytes(),
+        StandardCharsets.UTF_8));
+  }
+
+  @Test
+  void staleRevisionsAbortMetadataBuildsAfterBoundedRetries() {
+    RepositoryRuntime hosted = runtime(
+        59, "unstable", RepositoryType.HOSTED, null, List.of());
+    AtomicLong stateRevision = new AtomicLong();
+    when(registry.findChannelState(hosted.id(), "main", "linux-64"))
+        .thenAnswer(ignored -> Optional.of(new CondaRegistryDao.ChannelState(
+            hosted.id(), "main", "linux-64", null, null,
+            stateRevision.incrementAndGet(), Instant.EPOCH, Instant.EPOCH)));
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> service.get(hosted, "main/linux-64/repodata.json", false));
+
+    AtomicLong repositoryRevision = new AtomicLong();
+    when(registry.currentRepositoryRevision(hosted.id()))
+        .thenAnswer(ignored -> repositoryRevision.incrementAndGet());
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> service.get(hosted, "main/channeldata.json", false));
+
+    RepositoryRuntime empty = runtime(
+        60, "empty-hosted", RepositoryType.HOSTED, null, List.of());
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(empty, "main/linux-64/repodata.json", false));
+    assertEquals(200, service.get(empty, "main/noarch/repodata.json", false).status());
+  }
+
+  @Test
+  void groupKnownProxyPackageBindsCachedMd5AssetAndPinsMember() throws Exception {
+    RepositoryRuntime hosted = runtime(
+        61, "hosted", RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime member = runtime(
+        62, "proxy", RepositoryType.PROXY, "https://repo.example/channels/", List.of());
+    RepositoryRuntime group = runtime(
+        63, "group", RepositoryType.GROUP, null, List.of(hosted, member));
+    String filename = "demo-1.0-0.tar.bz2";
+    String path = "main/linux-64/" + filename;
+    byte[] bytes = "md5-package".getBytes(StandardCharsets.UTF_8);
+    CondaRegistryDao.PackageRecord known = new CondaRegistryDao.PackageRecord(
+        1L, member.id(), "main", "linux-64", filename, "demo", "1.0", "0", 0,
+        "tar.bz2", Map.of(), SHA_A, MD5, null, bytes.length, null, null,
+        CondaRegistryDao.SOURCE_PROXY, 4, Instant.EPOCH, Instant.EPOCH);
+    byte[] repodata = "{}".getBytes(StandardCharsets.UTF_8);
+    cacheInternal(member, upstreamRepodataPath("main", "linux-64"), repodata);
+    when(registry.findChannelState(member.id(), "main", "linux-64"))
+        .thenReturn(Optional.of(new CondaRegistryDao.ChannelState(
+            member.id(), "main", "linux-64", digest(repodata), null, 4,
+            Instant.EPOCH, Instant.EPOCH)));
+    when(registry.findPackage(member.id(), "main", "linux-64", filename))
+        .thenReturn(Optional.of(known));
+    AssetRecord cached = new AssetRecord(
+        71L, member.id(), null, 72L, RepositoryFormat.CONDA, path, new byte[32], filename,
+        "package", "application/x-tar", (long) bytes.length, null, Instant.EPOCH, Map.of());
+    when(assets.find(member, path)).thenReturn(Optional.of(cached));
+    when(assets.blob(member, path)).thenReturn(blob(bytes, null));
+    when(proxy.getPinnedAssetFromUrlWithComponentAtBrowsePath(
+        eq(member), eq(path), eq("https://repo.example/channels/" + path), any(),
+        eq("main/linux-64/demo/1.0/" + filename), eq(false)))
+        .thenReturn(MavenResponse.ok(
+            new ByteArrayInputStream(bytes), bytes.length, "application/x-tar", MD5,
+            Instant.EPOCH));
+
+    MavenResponse response = service.get(group, path, false);
+
+    assertEquals("md5-package",
+        new String(response.body().readAllBytes(), StandardCharsets.UTF_8));
+    verify(assets).bindCachedPackage(eq(member), eq(cached), any(), any(),
+        eq("main/linux-64/demo/1.0/" + filename));
+    verify(registry).upsertGroupSourceBinding(any());
+  }
+
+  @Test
+  void groupResolutionStopsAfterThreeStaleUnknownBindings() {
+    RepositoryRuntime group = runtime(
+        64, "stale-group", RepositoryType.GROUP, null, List.of());
+    CondaRegistryDao.PackageRecord unknown = record(
+        999, "demo-1.0-0.tar.bz2", SHA_A, "unknown member");
+    when(registry.findPreferredPackage(
+        any(), eq("main"), eq("linux-64"), eq(unknown.filename())))
+        .thenReturn(Optional.of(unknown));
+
+    assertThrows(MavenExceptions.BadUpstreamException.class, () -> service.get(
+        group, "main/linux-64/" + unknown.filename(), false));
+    verify(registry, times(3)).upsertGroupSourceBinding(any());
+  }
+
+  @Test
+  void groupChanneldataStreamsPreferredRecords() throws Exception {
+    RepositoryRuntime first = runtime(
+        65, "first", RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime second = runtime(
+        66, "second", RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime group = runtime(
+        67, "channel-group", RepositoryType.GROUP, null, List.of(first, second));
+    when(registry.currentRepositoryRevision(group.id())).thenReturn(3L);
+    doAnswer(invocation -> {
+      @SuppressWarnings("unchecked")
+      java.util.function.Consumer<CondaRegistryDao.PackageRecord> consumer =
+          invocation.getArgument(2);
+      consumer.accept(new CondaRegistryDao.PackageRecord(
+          null, first.id(), "main", "linux-64", "alpha-1.0-0.tar.bz2", "alpha",
+          "1.0", "0", 0, "tar.bz2", Map.of("summary", "alpha"), SHA_A, MD5, SHA_A,
+          5, null, null, CondaRegistryDao.SOURCE_HOSTED, 1, Instant.EPOCH, Instant.EPOCH));
+      consumer.accept(new CondaRegistryDao.PackageRecord(
+          null, second.id(), "main", "linux-64", "zeta-1.0-0.tar.bz2", "zeta",
+          "1.0", "0", 0, "tar.bz2", Map.of("summary", "zeta"), SHA_B, MD5, SHA_B,
+          5, null, null, CondaRegistryDao.SOURCE_HOSTED, 1, Instant.EPOCH, Instant.EPOCH));
+      return null;
+    }).when(registry).visitPreferredPackagesByChannel(any(), eq("main"), any());
+
+    JsonNode channeldata = json(service.get(group, "main/channeldata.json", false));
+
+    assertTrue(channeldata.path("packages").has("alpha"));
+    assertTrue(channeldata.path("packages").has("zeta"));
+  }
+
+  @Test
+  void servesHostedPackagesAndCompressedIndexesAndRejectsMetadataUploads() throws Exception {
+    RepositoryRuntime hosted = runtime(
+        68, "compressed-hosted", RepositoryType.HOSTED, null, List.of());
+    assertThrows(MavenExceptions.MethodNotAllowed.class, () -> service.put(
+        hosted, "main/noarch/repodata.json", new ByteArrayInputStream(new byte[0]),
+        "application/json", "alice", "127.0.0.1"));
+
+    when(registry.findChannelState(hosted.id(), "main", "noarch"))
+        .thenReturn(Optional.of(new CondaRegistryDao.ChannelState(
+            hosted.id(), "main", "noarch", null, null, 1, Instant.EPOCH, Instant.EPOCH)));
+    when(registry.listPackages(hosted.id(), "main", "noarch")).thenReturn(List.of());
+    when(registry.listTombstones(hosted.id(), "main", "noarch")).thenReturn(List.of());
+    assertEquals("BZh", new String(service.get(
+        hosted, "main/noarch/repodata.json.bz2", false).body().readNBytes(3),
+        StandardCharsets.US_ASCII));
+    assertTrue(service.get(
+        hosted, "main/noarch/repodata.json.zst", false).contentLength() > 0);
+
+    String filename = "demo-1.0-0.conda";
+    String path = "main/noarch/" + filename;
+    when(registry.findPackage(hosted.id(), "main", "noarch", filename))
+        .thenReturn(Optional.of(proxyRecord(hosted.id(), filename, SHA_A, 5, 1)));
+    when(assets.serve(hosted, path, true)).thenReturn(MavenResponse.noBody(200));
+    assertEquals(200, service.get(hosted, path, true).status());
+
+    RepositoryRuntime currentProxy = runtime(
+        69, "current-proxy", RepositoryType.PROXY,
+        "https://repo.example/channels/", List.of());
+    byte[] json = "{\"packages\":{}}".getBytes(StandardCharsets.UTF_8);
+    byte[] zstd = Zstd.compress(json);
+    when(proxy.getMetadataFromUrlUnindexed(
+        eq(currentProxy), anyString(),
+        eq("https://repo.example/channels/main/noarch/current_repodata.json.zst"),
+        eq(false))).thenReturn(MavenResponse.ok(
+            new ByteArrayInputStream(zstd), zstd.length, "application/zstd", SHA_A,
+            Instant.EPOCH));
+    assertEquals(json.length, service.get(
+        currentProxy, "main/noarch/current_repodata.json", true).contentLength());
+  }
+
+  @Test
+  void failsClosedForUnavailableOrIdentitylessGroupProxyMetadata() {
+    RepositoryRuntime first = runtime(
+        70, "first-broken-proxy", RepositoryType.PROXY,
+        "https://repo.example/channels/", List.of());
+    RepositoryRuntime second = runtime(
+        71, "second-broken-proxy", RepositoryType.PROXY,
+        "https://repo.example/channels/", List.of());
+    RepositoryRuntime unavailable = runtime(
+        72, "unavailable-group", RepositoryType.GROUP, null, List.of(first, second));
+    when(proxy.getMetadataFromUrlUnindexed(
+        any(RepositoryRuntime.class), anyString(), anyString(), anyBoolean()))
+        .thenThrow(new MavenExceptions.BadUpstreamException("upstream failed"));
+    assertThrows(MavenExceptions.BadUpstreamException.class, () -> service.get(
+        unavailable, "main/linux-64/repodata.json", false));
+
+    clearInvocations(proxy);
+    RepositoryRuntime identitylessFirst = runtime(
+        73, "identityless-first", RepositoryType.PROXY,
+        "https://repo.example/channels/", List.of());
+    RepositoryRuntime identitylessSecond = runtime(
+        74, "identityless-second", RepositoryType.PROXY,
+        "https://repo.example/channels/", List.of());
+    RepositoryRuntime identitylessGroup = runtime(
+        75, "identityless-group", RepositoryType.GROUP, null,
+        List.of(identitylessFirst, identitylessSecond));
+    String localPath = upstreamRepodataPath("main", "linux-64", "repodata.json.zst");
+    for (RepositoryRuntime member : List.of(identitylessFirst, identitylessSecond)) {
+      CachedAssetMetadata invalid = new CachedAssetMetadata(
+          1, member.id(), null, 1L, RepositoryFormat.CONDA, localPath,
+          "repodata.json.zst", "conda-internal", "application/zstd", 1L,
+          Instant.now(), Map.of(),
+          new CachedAssetMetadata.CachedBlob(
+              1, 1, "blob", "object", "", "", MD5, 1,
+              "application/zstd", "proxy", null, Instant.now(), Instant.now(), Map.of()));
+      when(assets.findInternal(member, localPath)).thenReturn(Optional.of(invalid));
+    }
+    assertThrows(MavenExceptions.BadUpstreamException.class, () -> service.get(
+        identitylessGroup, "main/linux-64/repodata.json", false));
+  }
+
+  @Test
+  void resolvesHostedGroupPackagesAndDeletesInvalidCachedProxyBindings() throws Exception {
+    RepositoryRuntime hosted = runtime(
+        76, "direct-hosted", RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime group = runtime(
+        77, "direct-group", RepositoryType.GROUP, null, List.of(hosted));
+    String filename = "demo-1.0-0.tar.bz2";
+    String path = "main/linux-64/" + filename;
+    CondaRegistryDao.PackageRecord hostedRecord = record(
+        hosted.id(), filename, SHA_A, "direct");
+    when(registry.findPackage(hosted.id(), "main", "linux-64", filename))
+        .thenReturn(Optional.of(hostedRecord));
+    when(assets.serve(hosted, path, false)).thenReturn(MavenResponse.ok(
+        new ByteArrayInputStream(new byte[] {1}), 1, "application/x-tar", SHA_A,
+        Instant.EPOCH));
+    assertEquals(200, service.get(group, path, false).status());
+    verify(registry).upsertGroupSourceBinding(any());
+
+    RepositoryRuntime proxyRuntime = runtime(
+        78, "invalid-cache", RepositoryType.PROXY,
+        "https://repo.example/channels/", List.of());
+    CondaRegistryDao.PackageRecord known = proxyRecord(
+        proxyRuntime.id(), "demo-1.0-0.conda", SHA_A, 5, 2);
+    String proxyPath = "main/linux-64/" + known.filename();
+    byte[] repodata = "{}".getBytes(StandardCharsets.UTF_8);
+    cacheInternal(proxyRuntime, upstreamRepodataPath("main", "linux-64"), repodata);
+    when(registry.findChannelState(proxyRuntime.id(), "main", "linux-64"))
+        .thenReturn(Optional.of(new CondaRegistryDao.ChannelState(
+            proxyRuntime.id(), "main", "linux-64", digest(repodata), null, 2,
+            Instant.EPOCH, Instant.EPOCH)));
+    when(registry.findPackage(proxyRuntime.id(), "main", "linux-64", known.filename()))
+        .thenReturn(Optional.of(known));
+    AssetRecord cached = new AssetRecord(
+        80L, proxyRuntime.id(), null, 81L, RepositoryFormat.CONDA, proxyPath,
+        new byte[32], known.filename(), "package", "application/x-conda", 1L,
+        null, Instant.EPOCH, Map.of());
+    when(assets.find(proxyRuntime, proxyPath)).thenReturn(Optional.of(cached));
+    when(assets.blob(proxyRuntime, proxyPath)).thenReturn(blob(new byte[] {1}, SHA_B));
+    when(proxy.getPinnedAssetFromUrlWithComponentAtBrowsePath(
+        eq(proxyRuntime), eq(proxyPath), anyString(), any(), anyString(), eq(false)))
+        .thenReturn(MavenResponse.ok(
+            new ByteArrayInputStream(new byte[] {1}), 1, "application/x-conda", SHA_B,
+            Instant.EPOCH));
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> service.get(proxyRuntime, proxyPath, false));
+    verify(assets, times(2)).delete(proxyRuntime, proxyPath);
+  }
+
+  @Test
+  void recordsMissingNoarchProxyInventoryAsAnEmptyProjection() {
+    RepositoryRuntime missing = runtime(
+        79, "missing-noarch", RepositoryType.PROXY,
+        "https://repo.example/channels/", List.of());
+    when(proxy.getMetadataFromUrlUnindexed(
+        eq(missing), anyString(), anyString(), anyBoolean()))
+        .thenThrow(new MavenExceptions.MavenNotFoundException("metadata missing"));
+
+    assertThrows(MavenExceptions.MavenNotFoundException.class, () -> service.get(
+        missing, "main/noarch/demo-1.0-0.conda", false));
+
+    verify(registry).replaceProxyPackages(
+        eq(missing.id()), eq("main"), eq("noarch"), anyString(), eq(null), anyList(), any());
+  }
+
+  @Test
+  void bindsCanonicalProxyCacheAndRetriesRelocatedPackagesAfterInventoryRefresh()
+      throws Exception {
+    service = serviceWithScheduler(mock(CondaProxyInventoryScheduler.class));
+    RepositoryRuntime canonical = runtime(
+        80, "canonical-cache", RepositoryType.PROXY,
+        "https://repo.example/channels/", List.of());
+    String filename = "demo-1.0-0.conda";
+    String path = "main/linux-64/" + filename;
+    AssetRecord cached = new AssetRecord(
+        90L, canonical.id(), null, 91L, RepositoryFormat.CONDA, path, new byte[32],
+        filename, "package", "application/x-conda", 5L, null, Instant.EPOCH, Map.of());
+    when(assets.find(canonical, path)).thenReturn(Optional.of(cached));
+    when(assets.blob(canonical, path)).thenReturn(blob(new byte[5], SHA_A));
+    when(proxy.getPinnedAssetFromUrlWithComponentAtBrowsePath(
+        eq(canonical), eq(path), anyString(), any(),
+        eq("main/linux-64/demo/1.0/" + filename), eq(true)))
+        .thenReturn(MavenResponse.noBody(200));
+
+    assertEquals(200, service.get(canonical, path, true).status());
+    verify(assets).bindCachedPackage(
+        eq(canonical), eq(cached), any(), any(),
+        eq("main/linux-64/demo/1.0/" + filename));
+
+    RepositoryRuntime relocated = runtime(
+        81, "relocated", RepositoryType.PROXY,
+        "https://repo.example/channels/", List.of());
+    CondaRegistryDao.PackageRecord refreshed = proxyRecord(
+        relocated.id(), filename, SHA_A, 5, 3);
+    byte[] repodata = ("""
+        {"packages.conda":{"%s":{
+          "name":"demo","version":"1.0","build":"0","build_number":0,
+          "size":5,"subdir":"linux-64","sha256":"%s"}}}
+        """).formatted(filename, SHA_A).getBytes(StandardCharsets.UTF_8);
+    cacheInternal(relocated, upstreamRepodataPath("main", "linux-64"), repodata);
+    when(registry.findPackage(relocated.id(), "main", "linux-64", filename))
+        .thenReturn(Optional.empty(), Optional.of(refreshed));
+    when(proxy.getPinnedAssetFromUrlWithComponentAtBrowsePath(
+        eq(relocated), eq(path), anyString(), any(),
+        eq("main/linux-64/demo/1.0/" + filename), eq(false)))
+        .thenThrow(new MavenExceptions.MavenNotFoundException("canonical package missing"))
+        .thenReturn(MavenResponse.ok(
+            new ByteArrayInputStream(new byte[5]), 5, "application/x-conda", SHA_A,
+            Instant.EPOCH));
+    when(assets.blob(relocated, path)).thenReturn(blob(new byte[5], SHA_A));
+
+    assertEquals(200, service.get(relocated, path, false).status());
+    verify(registry).replaceProxyPackages(
+        eq(relocated.id()), eq("main"), eq("linux-64"), anyString(), eq(null),
+        any(CondaRegistryDao.PackageRecordSource.class), any());
+  }
+
+  @Test
+  void rejectsGroupRecordsWithoutAContentIdentity() {
+    RepositoryRuntime hosted = runtime(
+        82, "checksumless-hosted", RepositoryType.HOSTED, null, List.of());
+    RepositoryRuntime group = runtime(
+        83, "checksumless-group", RepositoryType.GROUP, null, List.of(hosted));
+    String filename = "demo-1.0-0.tar.bz2";
+    CondaRegistryDao.PackageRecord checksumless = new CondaRegistryDao.PackageRecord(
+        1L, hosted.id(), "main", "linux-64", filename, "demo", "1.0", "0", 0,
+        "tar.bz2", Map.of(), SHA_A, null, null, 5, null, null,
+        CondaRegistryDao.SOURCE_HOSTED, 1, Instant.EPOCH, Instant.EPOCH);
+    when(registry.findPackage(hosted.id(), "main", "linux-64", filename))
+        .thenReturn(Optional.of(checksumless));
+
+    assertThrows(MavenExceptions.BadUpstreamException.class, () -> service.get(
+        group, "main/linux-64/" + filename, false));
+  }
+
+  @Test
+  void skipsInvalidGroupMembersAndPropagatesTheLastProxyFailure() {
+    RepositoryRuntime offline = runtimeWith(
+        84, "offline", RepositoryFormat.CONDA, RepositoryType.PROXY, false, "ALLOW_ONCE");
+    RepositoryRuntime wrongFormat = runtimeWith(
+        85, "raw", RepositoryFormat.RAW, RepositoryType.HOSTED, true, "ALLOW_ONCE");
+    RepositoryRuntime first = runtime(
+        86, "first-failing", RepositoryType.PROXY,
+        "https://first.example/channels/", List.of());
+    RepositoryRuntime second = runtime(
+        87, "second-failing", RepositoryType.PROXY,
+        "https://second.example/channels/", List.of());
+    RepositoryRuntime group = runtime(
+        88, "failing-group", RepositoryType.GROUP, null,
+        List.of(offline, wrongFormat, first, second));
+    when(proxy.getMetadataFromUrlUnindexed(
+        any(RepositoryRuntime.class), anyString(), anyString(), anyBoolean()))
+        .thenThrow(new MavenExceptions.BadUpstreamException("proxy metadata failed"));
+
+    assertThrows(MavenExceptions.BadUpstreamException.class, () -> service.get(
+        group, "main/linux-64/demo-1.0-0.conda", false));
+  }
+
   private CondaService serviceWithScheduler(CondaProxyInventoryScheduler scheduler) {
     return new CondaService(
         registry,
@@ -892,6 +1557,18 @@ class CondaServiceTest {
     return new RepositoryRuntime(
         id, name, RepositoryFormat.CONDA, type, "conda-" + type.name().toLowerCase(),
         true, 1L, "ALLOW_ONCE", null, null, true, remote, 60, 60, true, null, members);
+  }
+
+  private static RepositoryRuntime runtimeWith(
+      long id,
+      String name,
+      RepositoryFormat format,
+      RepositoryType type,
+      boolean online,
+      String writePolicy) {
+    return new RepositoryRuntime(
+        id, name, format, type, format.id() + "-" + type.name().toLowerCase(),
+        online, 1L, writePolicy, null, null, true, null, 60, 60, true, null, List.of());
   }
 
   private static AssetRecord asset(

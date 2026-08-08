@@ -19,6 +19,7 @@ import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
 import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyService;
 import com.github.klboke.kkrepo.server.cargo.CargoHostedService;
 import com.github.klboke.kkrepo.server.composer.ComposerHostedService;
+import com.github.klboke.kkrepo.server.conda.CondaService;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
 import com.github.klboke.kkrepo.server.maven.MavenHostedService;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
@@ -53,6 +54,76 @@ class ComponentUploadServiceTest {
     assertTrue(definition.componentFields().isEmpty());
     assertEquals(List.of("asset"),
         definition.assetFields().stream().map(UploadFieldDefinition::name).toList());
+  }
+
+  @Test
+  void condaUploadDefinitionAndDelegationPreserveChannelCoordinates() throws Exception {
+    CondaService conda = mock(CondaService.class);
+    ComponentUploadService service = service(conda);
+    UploadDefinition definition = service.definition("conda");
+    assertFalse(definition.multipleUpload());
+    assertEquals(List.of("channel", "subdir"),
+        definition.componentFields().stream().map(UploadFieldDefinition::name).toList());
+    assertEquals(List.of("asset"),
+        definition.assetFields().stream().map(UploadFieldDefinition::name).toList());
+
+    ComponentUploadService.UploadResult nested = service.upload(
+        "conda-hosted",
+        Map.of(
+            "conda.channel", new String[] {" team/release "},
+            "conda.subdir", new String[] {" linux-64 "}),
+        files("conda.asset", "demo-1.0-0.conda"),
+        "alice", "127.0.0.1");
+    assertEquals(List.of("team/release/linux-64/demo-1.0-0.conda"), nested.paths());
+    verify(conda).put(
+        any(RepositoryRuntime.class), eq("team/release/linux-64/demo-1.0-0.conda"),
+        any(InputStream.class), eq("application/x-tar"), eq("alice"), eq("127.0.0.1"));
+
+    ComponentUploadService.UploadResult root = service.upload(
+        "conda-hosted",
+        Map.of("conda.subdir", new String[] {"noarch"}),
+        files("conda.asset", "root-1.0-0.tar.bz2"),
+        "alice", "127.0.0.1");
+    assertEquals(List.of("noarch/root-1.0-0.tar.bz2"), root.paths());
+  }
+
+  @Test
+  void condaComponentUploadValidatesServiceAssetSubdirAndFilename() {
+    RepositoryRuntime runtime = runtime("conda-hosted", RepositoryFormat.CONDA);
+    ComponentUploadService unavailable = service(
+        runtime, mock(CargoHostedService.class), mock(PubHostedService.class));
+    UploadValidationException missingService = assertThrows(
+        UploadValidationException.class,
+        () -> unavailable.upload(runtime.name(),
+            Map.of("conda.subdir", new String[] {"noarch"}),
+            files("conda.asset", "demo-1.0-0.conda"), "alice", "127.0.0.1"));
+    assertEquals("Conda upload service is unavailable", missingService.getMessage());
+
+    CondaService conda = mock(CondaService.class);
+    ComponentUploadService service = service(conda);
+    LinkedMultiValueMap<String, MultipartFile> multiple = files(
+        "conda.asset", "demo-1.0-0.conda");
+    multiple.add("conda.asset2", new MockMultipartFile(
+        "conda.asset2", "other-1.0-0.conda", "application/octet-stream", new byte[] {1}));
+    assertEquals("Conda upload requires exactly one package", assertThrows(
+        UploadValidationException.class,
+        () -> service.upload(runtime.name(),
+            Map.of("conda.subdir", new String[] {"noarch"}), multiple,
+            "alice", "127.0.0.1")).getMessage());
+    assertTrue(assertThrows(UploadValidationException.class,
+        () -> service.upload(runtime.name(), Map.of(),
+            files("conda.asset", "demo-1.0-0.conda"), "alice", "127.0.0.1"))
+        .getMessage().contains("subdir"));
+
+    LinkedMultiValueMap<String, MultipartFile> unnamed = new LinkedMultiValueMap<>();
+    unnamed.add("conda.asset", new MockMultipartFile(
+        "conda.asset", null, "application/octet-stream", new byte[] {1}));
+    assertEquals("Conda package filename is required", assertThrows(
+        UploadValidationException.class,
+        () -> service.upload(runtime.name(),
+            Map.of("conda.subdir", new String[] {"noarch"}), unnamed,
+            "alice", "127.0.0.1")).getMessage());
+    verify(conda, never()).put(any(), any(), any(), any(), any(), any());
   }
 
   @Test
@@ -445,6 +516,14 @@ class ComponentUploadServiceTest {
     ComponentUploadService service = service(
         runtime, mock(CargoHostedService.class), mock(PubHostedService.class));
     service.setAnsibleGalaxyService(ansibleService);
+    return service;
+  }
+
+  private static ComponentUploadService service(CondaService condaService) {
+    RepositoryRuntime runtime = runtime("conda-hosted", RepositoryFormat.CONDA);
+    ComponentUploadService service = service(
+        runtime, mock(CargoHostedService.class), mock(PubHostedService.class));
+    service.setCondaService(condaService);
     return service;
   }
 

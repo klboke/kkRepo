@@ -8,11 +8,11 @@ import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
 import com.github.klboke.kkrepo.persistence.mysql.MySqlDatabaseDialect;
 import java.sql.Statement;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Supplier;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.BeforeEach;
 import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
@@ -24,7 +24,8 @@ public abstract class MySqlIntegrationTestSupport {
   private static final MySQLContainer MYSQL = new MySQLContainer("mysql:8.0")
       .withDatabaseName("kkrepo")
       .withUsername("kkrepo")
-      .withPassword("kkrepo");
+      .withPassword("kkrepo")
+      .withTmpFs(Map.of("/var/lib/mysql", "rw"));
 
   private static JdbcTemplate jdbcTemplate;
   private static JsonColumns jsonColumns;
@@ -54,10 +55,10 @@ public abstract class MySqlIntegrationTestSupport {
       flyway.migrate();
       stores = JdbcPersistenceStoreFactory.createStores(jdbcTemplate, dialect);
     }
+    truncateDatabase();
   }
 
-  @BeforeEach
-  protected void truncateDatabase() {
+  protected static void truncateDatabase() {
     List<String> tables = jdbcTemplate.queryForList("""
         SELECT table_name
         FROM information_schema.tables

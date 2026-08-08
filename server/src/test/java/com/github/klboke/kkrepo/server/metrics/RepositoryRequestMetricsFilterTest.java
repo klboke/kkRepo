@@ -161,6 +161,41 @@ class RepositoryRequestMetricsFilterTest {
   }
 
   @Test
+  void recordsLowCardinalityCondaOperations() throws Exception {
+    String[][] requests = {
+        {"GET", "/repository/conda-group/main/linux-64/repodata.json", "conda_repodata"},
+        {"GET", "/repository/conda-group/main/noarch/repodata.json.bz2", "conda_repodata"},
+        {"GET", "/repository/conda-group/main/noarch/current_repodata.json.zst", "conda_repodata"},
+        {"GET", "/repository/conda-group/main/channeldata.json", "conda_channeldata"},
+        {"GET", "/repository/conda-group/main/noarch/demo-1.0-0.conda", "conda_package_download"},
+        {"PUT", "/repository/conda-hosted/main/noarch/demo-1.0-0.tar.bz2", "conda_package_upload"},
+        {"DELETE", "/repository/conda-hosted/main/noarch/demo-1.0-0.conda", "conda_package_delete"},
+        {"GET", "/repository/conda-group/main/notices.json", "conda_repository"},
+    };
+
+    for (String[] item : requests) {
+      SimpleMeterRegistry registry = new SimpleMeterRegistry();
+      RepositoryRequestMetricsFilter filter = new RepositoryRequestMetricsFilter(
+          new KkRepoMetrics(registry), true, "");
+      MockHttpServletRequest request = new MockHttpServletRequest(item[0], item[1]);
+      MockHttpServletResponse response = new MockHttpServletResponse();
+      RepositoryType type = item[1].contains("conda-hosted")
+          ? RepositoryType.HOSTED
+          : RepositoryType.GROUP;
+      FilterChain chain = (req, resp) -> req.setAttribute(
+          RepositorySecurityFilter.REPOSITORY_RECORD_ATTRIBUTE,
+          repository(type == RepositoryType.HOSTED ? "conda-hosted" : "conda-group",
+              RepositoryFormat.CONDA, type));
+
+      filter.doFilter(request, response, chain);
+
+      assertNotNull(registry.find("kkrepo_repository_requests_total")
+          .tags("operation", item[2], "status", "200")
+          .counter(), item[2]);
+    }
+  }
+
+  @Test
   void recordsSecurityFailuresWhenFilterChainStopsEarly() throws Exception {
     SimpleMeterRegistry registry = new SimpleMeterRegistry();
     RepositoryRequestMetricsFilter filter = new RepositoryRequestMetricsFilter(new KkRepoMetrics(registry), true, "");

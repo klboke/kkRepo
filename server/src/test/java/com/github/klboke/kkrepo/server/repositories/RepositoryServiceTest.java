@@ -13,6 +13,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
@@ -27,6 +28,7 @@ import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CargoSett
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CreateCommand;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.DockerSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.HostedSettings;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.GroupSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.ProxySettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.UpdateCommand;
 import com.github.klboke.kkrepo.server.support.InMemoryVersionWatermark;
@@ -1214,6 +1216,66 @@ class RepositoryServiceTest {
   }
 
   @Test
+  void createsAndReplacesNestedCondaGroupsWithDurableRevisionInvalidation() {
+    StubRepositoryDao repositories = new StubRepositoryDao(
+        condaHostedRepository(61L, "conda-hosted"),
+        condaGroupRepository(62L, "conda-nested"));
+    CondaRegistryDao conda = mock(CondaRegistryDao.class);
+    RepositoryService service = service(repositories);
+    service.setCondaRegistry(conda);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "conda-root", "conda-group", true, "default", true,
+        null, null, null, null, null,
+        new GroupSettings(List.of("conda-nested", "conda-hosted"))));
+
+    assertEquals(List.of("conda-nested", "conda-hosted"), created.group().memberNames());
+    verify(conda).nextRepositoryRevision(100L);
+
+    RepositoryView updated = service.replaceMembers(
+        "conda-root", List.of("conda-hosted", "conda-nested"));
+    assertEquals(List.of("conda-hosted", "conda-nested"), updated.group().memberNames());
+    verify(conda, org.mockito.Mockito.times(2)).nextRepositoryRevision(100L);
+    verify(conda).deleteGroupSourceBindings(100L);
+  }
+
+  @Test
+  void updatingCondaMemberInvalidatesEveryContainingGroupTransitively() {
+    StubRepositoryDao repositories = new StubRepositoryDao(
+        condaHostedRepository(61L, "conda-hosted"),
+        condaGroupRepository(62L, "conda-nested"),
+        condaGroupRepository(63L, "conda-root"));
+    repositories.replaceMembers(62L, List.of(61L));
+    repositories.replaceMembers(63L, List.of(62L));
+    CondaRegistryDao conda = mock(CondaRegistryDao.class);
+    RepositoryService service = service(repositories);
+    service.setCondaRegistry(conda);
+
+    service.update("conda-hosted",
+        new UpdateCommand(false, null, null, null, null, null, null, null, null));
+
+    verify(conda).nextRepositoryRevision(61L);
+    verify(conda).nextRepositoryRevision(62L);
+    verify(conda).deleteGroupSourceBindings(62L);
+    verify(conda).nextRepositoryRevision(63L);
+    verify(conda).deleteGroupSourceBindings(63L);
+  }
+
+  @Test
+  void deletingCondaRepositoryDeletesProtocolState() {
+    StubRepositoryDao repositories = new StubRepositoryDao(
+        condaHostedRepository(61L, "conda-hosted"));
+    CondaRegistryDao conda = mock(CondaRegistryDao.class);
+    RepositoryService service = service(repositories);
+    service.setCondaRegistry(conda);
+
+    service.delete("conda-hosted");
+
+    verify(conda).deleteRepositoryState(61L);
+    assertTrue(repositories.findByName("conda-hosted").isEmpty());
+  }
+
+  @Test
   void deleteRejectsRepositoryReferencedByCleanupPolicyOrActiveRun() {
     StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
     CleanupPolicyDao cleanupPolicies = mock(CleanupPolicyDao.class);
@@ -1640,6 +1702,25 @@ class RepositoryServiceTest {
     return new RepositoryRecord(
         id, name, RepositoryFormat.ANSIBLEGALAXY, RepositoryType.GROUP,
         "ansiblegalaxy-group", true, 1L, null, null, null, null,
+        null, true, attributes);
+  }
+
+  private static RepositoryRecord condaHostedRepository(long id, String name) {
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", "conda-hosted");
+    return new RepositoryRecord(
+        id, name, RepositoryFormat.CONDA, RepositoryType.HOSTED,
+        "conda-hosted", true, 1L, null, null, null, null,
+        "ALLOW_ONCE", true, attributes);
+  }
+
+  private static RepositoryRecord condaGroupRepository(long id, String name) {
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", "conda-group");
+    attributes.put("group", Map.of());
+    return new RepositoryRecord(
+        id, name, RepositoryFormat.CONDA, RepositoryType.GROUP,
+        "conda-group", true, 1L, null, null, null, null,
         null, true, attributes);
   }
 

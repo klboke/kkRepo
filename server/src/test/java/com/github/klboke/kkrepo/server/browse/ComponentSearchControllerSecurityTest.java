@@ -13,6 +13,7 @@ import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
@@ -287,6 +288,55 @@ class ComponentSearchControllerSecurityTest {
     assertEquals("HOSTED", item.details().get("sourceKind"));
     assertEquals("swift-hosted", item.details().get("sourceRepository"));
     assertEquals(List.of("5.9"), item.details().get("swiftToolsVersions"));
+  }
+
+  @Test
+  void condaSearchIncludesPackageCoordinatesAndHandlesMissingProjection() {
+    StubComponentDao components = new StubComponentDao();
+    components.rows = List.of(
+        row(80L, "conda-hosted", RepositoryFormat.CONDA, "main/noarch", "demo", "1.0",
+            "conda-package", "main/noarch/demo/1.0/demo-1.0-0.conda"),
+        row(81L, "conda-hosted", RepositoryFormat.CONDA, null, "unprojected", null,
+            "conda-package", "not-a-package"),
+        row(82L, "conda-hosted", RepositoryFormat.CONDA, null, "missing", null,
+            "conda-package", null));
+    CondaRegistryDao conda = mock(CondaRegistryDao.class);
+    when(conda.findPackage(80L, "main", "noarch", "demo-1.0-0.conda"))
+        .thenReturn(Optional.of(new CondaRegistryDao.PackageRecord(
+            83L, 80L, "main", "noarch", "demo-1.0-0.conda", "demo", "1.0", "0",
+            0L, "conda", Map.of("depends", List.of("python >=3.12")), "fingerprint",
+            "a".repeat(32), "b".repeat(64), 123L, 84L, 85L,
+            CondaRegistryDao.SOURCE_HOSTED, 4L, Instant.EPOCH, Instant.EPOCH)));
+    RecordingSecurityService security =
+        new RecordingSecurityService(permission -> AccessDecision.allow());
+    ComponentSearchController controller = controller(
+        components, subject("alice"), null, security);
+    controller.setCondaRegistry(conda);
+
+    ComponentSearchController.ComponentSearchResponse response = controller.search(
+        "demo", "conda", 10, request("GET", "/internal/search/components"));
+
+    assertEquals("demo|conda|10", components.calls.getFirst());
+    Map<String, Object> details = response.items().getFirst().details();
+    assertEquals("main", details.get("channel"));
+    assertEquals("noarch", details.get("subdir"));
+    assertEquals("0", details.get("build"));
+    assertEquals(0L, details.get("buildNumber"));
+    assertEquals("conda", details.get("archiveFormat"));
+    assertEquals("a".repeat(32), details.get("md5"));
+    assertEquals("b".repeat(64), details.get("sha256"));
+    assertEquals(123L, details.get("size"));
+    assertEquals(CondaRegistryDao.SOURCE_HOSTED, details.get("sourceKind"));
+    assertEquals("conda-hosted", details.get("sourceRepository"));
+    assertEquals(List.of("python >=3.12"), details.get("depends"));
+    assertEquals(Map.of(), response.items().get(1).details());
+    assertEquals(Map.of(), response.items().get(2).details());
+
+    ComponentSearchController withoutRegistry = controller(
+        components, subject("alice"), null, security);
+    assertEquals(Map.of(), withoutRegistry.search(
+        null, "conda", 10, request("GET", "/internal/search/components"))
+        .items().getFirst().details());
   }
 
   @Test

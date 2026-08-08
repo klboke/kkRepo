@@ -123,6 +123,47 @@ class CondaStagingCleanupWorkerTest {
   }
 
   @Test
+  void boundsEachBatchAndHandlesStringOrMalformedGeneratedRevisions() {
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    AssetDao assets = mock(AssetDao.class);
+    BrowseNodeDao browse = mock(BrowseNodeDao.class);
+    AssetMetadataCache cache = mock(AssetMetadataCache.class);
+    CondaRegistryDao registry = mock(CondaRegistryDao.class);
+    KkRepoMetrics metrics = mock(KkRepoMetrics.class);
+    when(repositories.list()).thenReturn(List.of(
+        repository(10L, RepositoryFormat.CONDA, RepositoryType.HOSTED, true),
+        repository(11L, RepositoryFormat.CONDA, RepositoryType.HOSTED, true)));
+    List<AssetRecord> fullBatch = List.of(
+        stagedAsset(110L, 510L), stagedAsset(111L, 511L),
+        stagedAsset(112L, 512L), stagedAsset(113L, 513L),
+        stagedAsset(114L, 514L), stagedAsset(115L, 515L),
+        stagedAsset(116L, 516L), stagedAsset(117L, 517L));
+    when(assets.claimStaleAssetsByPrefix(
+        eq(10L), eq(CondaStagingCleanupWorker.STAGING_PREFIX), any(Instant.class), eq(8)))
+        .thenReturn(fullBatch);
+    when(assets.claimStaleAssetsByPrefix(
+        eq(10L), eq(CondaStagingCleanupWorker.GENERATED_PREFIX), any(Instant.class), eq(8)))
+        .thenReturn(List.of(
+            generatedAssetWithAttributes(201L, Map.of("condaRevision", "7")),
+            generatedAssetWithAttributes(202L, Map.of("condaRevision", "invalid")),
+            generatedAssetWithAttributes(203L, Map.of())));
+    when(registry.currentRepositoryRevision(10L)).thenReturn(7L);
+    when(assets.deleteAssetById(anyLong())).thenReturn(1);
+    when(assets.deleteAssetById(202L)).thenReturn(0);
+    when(assets.deleteAssetById(203L)).thenReturn(0);
+
+    new CondaStagingCleanupWorker(
+        repositories, assets, browse, cache, registry, new RecordingTransactionManager(), metrics,
+        true, 8, 3600, 3600, 8).cleanup();
+
+    verify(assets, never()).claimStaleAssetsByPrefix(
+        eq(11L), eq(CondaStagingCleanupWorker.STAGING_PREFIX), any(Instant.class), anyInt());
+    verify(assets).touchAssetLastUpdated(eq(201L), any(Instant.class));
+    verify(assets).deleteAssetById(202L);
+    verify(assets).deleteAssetById(203L);
+  }
+
+  @Test
   void disabledCleanupDoesNotReadSharedState() {
     RepositoryDao repositories = mock(RepositoryDao.class);
 
@@ -222,6 +263,26 @@ class CondaStagingCleanupWorkerTest {
         null,
         Instant.parse("2026-07-15T00:00:00Z"),
         Map.of("condaGenerated", true, "condaRevision", revision));
+  }
+
+  private static AssetRecord generatedAssetWithAttributes(
+      long assetId, Map<String, Object> attributes) {
+    String path = ".conda/generated/channel/linux-64/" + assetId + "/repodata.json.zst";
+    return new AssetRecord(
+        assetId,
+        10L,
+        null,
+        null,
+        RepositoryFormat.CONDA,
+        path,
+        PersistenceHashes.pathHash(path),
+        "repodata.json.zst",
+        "conda-generated",
+        "application/zstd",
+        42L,
+        null,
+        Instant.parse("2026-07-15T00:00:00Z"),
+        attributes);
   }
 
   private static final class RecordingTransactionManager implements PlatformTransactionManager {

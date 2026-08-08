@@ -16,6 +16,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
@@ -1177,6 +1178,142 @@ class BrowseAssetDetailServiceTest {
     assertEquals(childDigest, manifestDescriptors.get(0).get("digest"));
   }
 
+  @Test
+  void condaDetailMapsProjectedPathAndExposesRegistryIdentity() {
+    RepositoryRecord repository = repository(
+        60L, "conda-hosted", RepositoryFormat.CONDA, RepositoryType.HOSTED);
+    String publicPath = "main/linux-64/demo/1.2.3/demo-1.2.3-py312_0.conda";
+    String storagePath = "main/linux-64/demo-1.2.3-py312_0.conda";
+    AssetRecord archive = new AssetRecord(
+        61L, repository.id(), 62L, 63L, RepositoryFormat.CONDA,
+        storagePath, PersistenceHashes.pathHash(storagePath),
+        "demo-1.2.3-py312_0.conda", "package", "application/vnd.conda.package.v2",
+        512L, null, Instant.EPOCH, Map.of());
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(repository.id(), storagePath), archive), Map.of(63L, blob(63L, 512L)));
+    CondaRegistryDao conda = mock(CondaRegistryDao.class);
+    CondaRegistryDao.PackageRecord record = new CondaRegistryDao.PackageRecord(
+        64L, repository.id(), "main", "linux-64", archive.name(),
+        "demo", "1.2.3", "py312_0", 0L, "conda",
+        Map.of(
+            "depends", List.of("python >=3.12"),
+            "constrains", List.of("openssl >=3"),
+            "license", "BSD-3-Clause",
+            "noarch", false),
+        "fingerprint", "a".repeat(32), "b".repeat(64), 512L,
+        archive.id(), archive.componentId(), CondaRegistryDao.SOURCE_HOSTED, 7L,
+        Instant.EPOCH, Instant.EPOCH);
+    when(conda.findPackage(repository.id(), "main", "linux-64", archive.name()))
+        .thenReturn(Optional.of(record));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(), assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+    service.setCondaRegistryDao(conda);
+
+    BrowseAssetDetailService.BrowseAssetDetail detail =
+        service.detail(repository, publicPath, null);
+
+    assertEquals(publicPath, detail.path());
+    assertEquals(storagePath, assets.pathLookups.getFirst().split("\\|", 2)[1]);
+    assertEquals("main", detail.conda().get("channel"));
+    assertEquals("linux-64", detail.conda().get("subdir"));
+    assertEquals("demo", detail.conda().get("name"));
+    assertEquals("1.2.3", detail.conda().get("version"));
+    assertEquals("py312_0", detail.conda().get("build"));
+    assertEquals(0L, detail.conda().get("build_number"));
+    assertEquals("conda", detail.conda().get("archive_format"));
+    assertEquals(CondaRegistryDao.SOURCE_HOSTED, detail.conda().get("source_kind"));
+    assertEquals(repository.name(), detail.conda().get("source_repository"));
+    assertEquals(List.of("python >=3.12"), detail.conda().get("depends"));
+    assertEquals("BSD-3-Clause", detail.conda().get("license"));
+  }
+
+  @Test
+  void condaDetailFailsClosedForMissingOrConflictingRegistryIdentity() {
+    RepositoryRecord repository = repository(
+        65L, "conda-hosted", RepositoryFormat.CONDA, RepositoryType.HOSTED);
+    String publicPath = "main/noarch/demo/1.0/demo-1.0-0.tar.bz2";
+    String storagePath = "main/noarch/demo-1.0-0.tar.bz2";
+    AssetRecord archive = new AssetRecord(
+        66L, repository.id(), null, 67L, RepositoryFormat.CONDA,
+        storagePath, PersistenceHashes.pathHash(storagePath), archiveName(storagePath),
+        "package", "application/x-tar", 10L, null, Instant.EPOCH, Map.of());
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(
+            key(repository.id(), storagePath), archive,
+            key(repository.id(), "main/noarch/not-a-package"), new AssetRecord(
+                68L, repository.id(), null, 67L, RepositoryFormat.CONDA,
+                "main/noarch/not-a-package", PersistenceHashes.pathHash("main/noarch/not-a-package"),
+                "not-a-package", "package", "application/octet-stream", 10L, null,
+                Instant.EPOCH, Map.of())),
+        Map.of(67L, blob(67L, 10L)));
+
+    BrowseAssetDetailService unavailable = new BrowseAssetDetailService(
+        new StubRepositoryDao(), assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+    assertTrue(unavailable.detail(repository, publicPath, null).conda().isEmpty());
+
+    CondaRegistryDao conda = mock(CondaRegistryDao.class);
+    BrowseAssetDetailService missing = new BrowseAssetDetailService(
+        new StubRepositoryDao(), assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+    missing.setCondaRegistryDao(conda);
+    ResponseStatusException noRecord = assertThrows(
+        ResponseStatusException.class, () -> missing.detail(repository, publicPath, null));
+    assertEquals(HttpStatus.NOT_FOUND, noRecord.getStatusCode());
+    ResponseStatusException noCoordinate = assertThrows(
+        ResponseStatusException.class,
+        () -> missing.detail(repository, "main/noarch/not-a-package", null));
+    assertEquals(HttpStatus.NOT_FOUND, noCoordinate.getStatusCode());
+
+    when(conda.findPackage(repository.id(), "main", "noarch", archive.name()))
+        .thenReturn(Optional.of(new CondaRegistryDao.PackageRecord(
+            69L, repository.id(), "main", "noarch", archive.name(), "demo", "1.0", "0",
+            0L, "tar.bz2", Map.of(), "fingerprint", null, "b".repeat(64), 10L,
+            999L, null, CondaRegistryDao.SOURCE_HOSTED, 1L, Instant.EPOCH, Instant.EPOCH)));
+    ResponseStatusException conflict = assertThrows(
+        ResponseStatusException.class, () -> missing.detail(repository, publicPath, null));
+    assertEquals(HttpStatus.CONFLICT, conflict.getStatusCode());
+  }
+
+  @Test
+  void condaGroupDetailTraversesNestedSources() {
+    RepositoryRecord group = repository(
+        70L, "conda-group", RepositoryFormat.CONDA, RepositoryType.GROUP);
+    RepositoryRecord nested = repository(
+        71L, "conda-nested", RepositoryFormat.CONDA, RepositoryType.GROUP);
+    RepositoryRecord hosted = repository(
+        72L, "conda-hosted", RepositoryFormat.CONDA, RepositoryType.HOSTED);
+    String publicPath = "main/noarch/demo/1.0/demo-1.0-0.conda";
+    String storagePath = "main/noarch/demo-1.0-0.conda";
+    AssetRecord archive = new AssetRecord(
+        73L, hosted.id(), null, 74L, RepositoryFormat.CONDA, storagePath,
+        PersistenceHashes.pathHash(storagePath), archiveName(storagePath), "package",
+        "application/vnd.conda.package.v2", 10L, null, Instant.EPOCH, Map.of());
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(hosted.id(), storagePath), archive), Map.of(74L, blob(74L, 10L)));
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    when(repositories.listMembers(group.id())).thenReturn(List.of(nested));
+    when(repositories.listMembers(nested.id())).thenReturn(List.of(hosted, group));
+    CondaRegistryDao conda = mock(CondaRegistryDao.class);
+    when(conda.findPackage(hosted.id(), "main", "noarch", archive.name()))
+        .thenReturn(Optional.of(new CondaRegistryDao.PackageRecord(
+            75L, hosted.id(), "main", "noarch", archive.name(), "demo", "1.0", "0", 0L,
+            "conda", Map.of(), "fingerprint", null, "b".repeat(64), 10L,
+            archive.id(), null, CondaRegistryDao.SOURCE_HOSTED, 1L,
+            Instant.EPOCH, Instant.EPOCH)));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        repositories, assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+    service.setCondaRegistryDao(conda);
+
+    BrowseAssetDetailService.BrowseAssetDetail detail =
+        service.detail(group, publicPath, hosted.name());
+
+    assertEquals(group.name(), detail.repository());
+    assertEquals(hosted.name(), detail.sourceRepository());
+  }
+
   private static AnsibleGalaxyRegistryDao.CollectionVersion ansibleVersion(long repositoryId) {
     Instant now = Instant.parse("2026-07-21T00:00:00Z");
     return new AnsibleGalaxyRegistryDao.CollectionVersion(
@@ -1190,6 +1327,10 @@ class BrowseAssetDetailServiceTest {
             "description", "fixture"),
         Map.of("acme.base", ">=1.0.0"), ">=2.15", "HOSTED", 1L,
         AnsibleGalaxyRegistryDao.VERSION_READY, now, now, now);
+  }
+
+  private static String archiveName(String path) {
+    return path.substring(path.lastIndexOf('/') + 1);
   }
 
   private static RepositoryRecord repository(

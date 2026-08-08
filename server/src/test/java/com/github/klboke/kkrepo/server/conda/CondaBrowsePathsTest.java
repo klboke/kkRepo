@@ -1,6 +1,8 @@
 package com.github.klboke.kkrepo.server.conda;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
@@ -61,6 +63,41 @@ class CondaBrowsePathsTest {
     assertEquals("10.0", projected.component().version());
     assertEquals("noarch/basesystem-amzn2-aarch64/10.0/" + filename,
         projected.browsePath());
+  }
+
+  @Test
+  void rejectsUnprojectableCoordinatesAndBoundsDerivedBuildNumbers() {
+    CondaComponentFactory components = new CondaComponentFactory();
+    CondaPathParser parser = new CondaPathParser();
+    RepositoryRuntime proxy = new RepositoryRuntime(
+        2, "conda-proxy", RepositoryFormat.CONDA, RepositoryType.PROXY, "conda-proxy",
+        true, 1L, "ALLOW_ONCE", null, null, true, "https://repo.example/", 60, 60,
+        true, null, List.of());
+
+    assertTrue(components.projectPackagePath(
+        proxy, parser.parse("noarch/repodata.json"), Instant.EPOCH).isEmpty());
+    assertTrue(components.projectPackagePath(
+        proxy, parser.parse("noarch/bad--name-1.0-0.conda"), Instant.EPOCH).isEmpty());
+    assertTrue(components.projectPackagePath(
+        proxy, parser.parse("noarch/demo-!-0.conda"), Instant.EPOCH).isEmpty());
+
+    CondaComponentFactory.ProjectedPackage nonNumeric = components.projectPackagePath(
+        proxy, parser.parse("noarch/demo-1.0-py_x.conda"), Instant.EPOCH).orElseThrow();
+    assertEquals(0L, nonNumeric.component().attributes().get("buildNumber"));
+    CondaComponentFactory.ProjectedPackage overflow = components.projectPackagePath(
+        proxy,
+        parser.parse("noarch/demo-1.0-py_999999999999999999999999999999.conda"),
+        Instant.EPOCH).orElseThrow();
+    assertEquals(0L, overflow.component().attributes().get("buildNumber"));
+
+    RepositoryRuntime group = new RepositoryRuntime(
+        3, "conda-group", RepositoryFormat.CONDA, RepositoryType.GROUP, "conda-group",
+        true, 1L, "ALLOW_ONCE", null, null, true, null, 60, 60,
+        true, null, List.of());
+    assertThrows(IllegalArgumentException.class, () -> components.projectPackagePath(
+        group, parser.parse("noarch/demo-1.0-0.conda"), Instant.EPOCH));
+    assertFalse(components.projectPackagePath(
+        proxy, parser.parse("noarch/demo-1.0-0.txt"), Instant.EPOCH).isPresent());
   }
 
   @Test

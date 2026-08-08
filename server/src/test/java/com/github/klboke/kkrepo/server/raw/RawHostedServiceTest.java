@@ -138,6 +138,33 @@ class RawHostedServiceTest {
     verify(fixture.writer).linkExistingBlobAtBrowsePathIfAbsent(
         runtime, storage, 1L, "file", blob, "application/octet-stream",
         "user", "127.0.0.1", component, "acme/tools/1.0.0/file");
+
+    assertEquals(201, fixture.service.linkInternalBlobWithComponentAtBrowsePath(
+        runtime, "/file", blob, "application/octet-stream", "user", "127.0.0.1",
+        component, "/acme//tools/1.0.0/file").status());
+    verify(fixture.writer).linkExistingBlobAtBrowsePath(
+        runtime, storage, 1L, "file", blob, "application/octet-stream",
+        "user", "127.0.0.1", component, "acme/tools/1.0.0/file");
+  }
+
+  @Test
+  void findsAndServesInternalProtocolAssetsWithoutRepositoryTypeChecks() {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 1L, "ALLOW");
+    CachedAssetMetadata cached = snapshot(".conda/generated/repodata.json");
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.cache.find(eq(runtime.id()), eq(".conda/generated/repodata.json"), any()))
+        .thenReturn(Optional.of(cached));
+    when(fixture.reader.serveSnapshot(
+        cached, true, ".conda/generated/repodata.json", "ATTACHMENT"))
+        .thenReturn(expected);
+
+    assertEquals(Optional.of(cached), fixture.service.findInternal(
+        runtime, "//.conda//generated/repodata.json"));
+    assertSame(expected, fixture.service.getInternal(
+        runtime, "//.conda//generated/repodata.json", true));
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> fixture.service.getInternal(runtime, "missing", false));
   }
 
   @Test

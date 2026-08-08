@@ -94,6 +94,108 @@ class BrowseContentDeleteControllerTest {
   }
 
   @Test
+  void condaDeletionFailsClosedForInvalidPathRuntimeServiceAndProtocolStatus() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord repository =
+        repository(1L, "conda-hosted", RepositoryFormat.CONDA, RepositoryType.HOSTED);
+    when(fixture.repositoryDao.findByName(repository.name())).thenReturn(Optional.of(repository));
+    assertStatus(HttpStatus.BAD_REQUEST, () -> fixture.controller.delete(
+        repository.name(), "main/noarch/repodata.json", null, new MockHttpServletRequest()));
+
+    String path = "main/noarch/demo-1.0-0.conda";
+    fixture.controller.setCondaDeleteSupport(null, null);
+    assertStatus(HttpStatus.SERVICE_UNAVAILABLE, () -> fixture.controller.delete(
+        repository.name(), path, null, new MockHttpServletRequest()));
+    fixture.controller.setCondaDeleteSupport(fixture.runtimeRegistry, fixture.condaService);
+    assertStatus(HttpStatus.CONFLICT, () -> fixture.controller.delete(
+        repository.name(), path, null, new MockHttpServletRequest()));
+
+    RepositoryRuntime runtime = new RepositoryRuntime(
+        1L, repository.name(), RepositoryFormat.CONDA, RepositoryType.HOSTED, "conda-hosted",
+        true, 7L, "ALLOW", null, null, true, null, null, null, null, null, List.of());
+    when(fixture.runtimeRegistry.resolveById(repository.id())).thenReturn(Optional.of(runtime));
+    when(fixture.condaService.deleteAdministrative(
+        runtime, path, "administrative delete by admin"))
+        .thenReturn(MavenResponse.noBody(404), MavenResponse.noBody(200));
+    assertStatus(HttpStatus.NOT_FOUND, () -> fixture.controller.delete(
+        repository.name(), path, null, new MockHttpServletRequest()));
+    assertStatus(HttpStatus.CONFLICT, () -> fixture.controller.delete(
+        repository.name(), path, null, new MockHttpServletRequest()));
+  }
+
+  @Test
+  void condaCleanupUsesComponentBrowsePathAndAssetFallback() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord repository =
+        repository(1L, "conda-hosted", RepositoryFormat.CONDA, RepositoryType.HOSTED);
+    RepositoryRuntime runtime = new RepositoryRuntime(
+        1L, repository.name(), RepositoryFormat.CONDA, RepositoryType.HOSTED, "conda-hosted",
+        true, 7L, "ALLOW", null, null, true, null, null, null, null, null, List.of());
+    String browsePath = "main/noarch/demo/1.0/demo-1.0-0.conda";
+    String canonicalPath = "main/noarch/demo-1.0-0.conda";
+    ComponentRecord component = new ComponentRecord(
+        21L, repository.id(), RepositoryFormat.CONDA, "main/noarch", "demo", "1.0",
+        "conda-package", new byte[] {1}, Map.of("browsePath", browsePath), Instant.EPOCH);
+    AssetRecord asset = asset(
+        22L, component.id(), 23L, RepositoryFormat.CONDA, canonicalPath, "package", Map.of());
+    when(fixture.repositoryDao.findByName(repository.name())).thenReturn(Optional.of(repository));
+    when(fixture.componentDao.findById(component.id())).thenReturn(Optional.of(component));
+    when(fixture.assetDao.findAssetById(asset.id())).thenReturn(Optional.of(asset));
+    when(fixture.runtimeRegistry.resolveById(repository.id())).thenReturn(Optional.of(runtime));
+    when(fixture.condaService.deleteAdministrative(
+        eq(runtime), eq(canonicalPath), any())).thenReturn(MavenResponse.noBody(204));
+
+    assertEquals(1, fixture.controller.deleteForCleanup(
+        repository.name(), "COMPONENT", component.id(), null, "cleanup-run:1"));
+    assertEquals(1, fixture.controller.deleteForCleanup(
+        repository.name(), "ASSET", asset.id(), asset.path(), "cleanup-run:2"));
+    verify(fixture.condaService).deleteAdministrative(
+        runtime, canonicalPath, "administrative delete by cleanup-run:1");
+    verify(fixture.condaService).deleteAdministrative(
+        runtime, canonicalPath, "administrative delete by cleanup-run:2");
+
+    ComponentRecord fallback = new ComponentRecord(
+        24L, repository.id(), RepositoryFormat.CONDA, "main/noarch", "other", "1.0",
+        "conda-package", new byte[] {2}, Map.of(), Instant.EPOCH);
+    AssetRecord fallbackAsset = asset(
+        25L, fallback.id(), 26L, RepositoryFormat.CONDA,
+        "main/noarch/other-1.0-0.conda", "package", Map.of());
+    when(fixture.componentDao.findById(fallback.id())).thenReturn(Optional.of(fallback));
+    when(fixture.assetDao.listAssetsByComponent(fallback.id())).thenReturn(List.of(fallbackAsset));
+    when(fixture.condaService.deleteAdministrative(
+        eq(runtime), eq(fallbackAsset.path()), any())).thenReturn(MavenResponse.noBody(204));
+    assertEquals(1, fixture.controller.deleteForCleanup(
+        repository.name(), "COMPONENT", fallback.id(), " ", "cleanup-run:3"));
+  }
+
+  @Test
+  void condaGroupDeletionTraversesNestedSourceMembership() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord hosted =
+        repository(1L, "conda-hosted", RepositoryFormat.CONDA, RepositoryType.HOSTED);
+    RepositoryRecord nested =
+        repository(2L, "conda-nested", RepositoryFormat.CONDA, RepositoryType.GROUP);
+    RepositoryRecord group =
+        repository(3L, "conda-group", RepositoryFormat.CONDA, RepositoryType.GROUP);
+    RepositoryRuntime runtime = new RepositoryRuntime(
+        1L, hosted.name(), RepositoryFormat.CONDA, RepositoryType.HOSTED, "conda-hosted",
+        true, 7L, "ALLOW", null, null, true, null, null, null, null, null, List.of());
+    String path = "main/noarch/demo-1.0-0.conda";
+    when(fixture.repositoryDao.findByName(group.name())).thenReturn(Optional.of(group));
+    when(fixture.repositoryDao.findByName(hosted.name())).thenReturn(Optional.of(hosted));
+    when(fixture.repositoryDao.listMembers(group.id())).thenReturn(List.of(nested));
+    when(fixture.repositoryDao.listMembers(nested.id())).thenReturn(List.of(hosted, group));
+    when(fixture.runtimeRegistry.resolveById(hosted.id())).thenReturn(Optional.of(runtime));
+    when(fixture.condaService.deleteAdministrative(
+        eq(runtime), eq(path), any())).thenReturn(MavenResponse.noBody(204));
+
+    BrowseContentDeleteController.BrowseDeleteResult result = fixture.controller.delete(
+        group.name(), path, hosted.name(), new MockHttpServletRequest());
+
+    assertEquals(hosted.name(), result.sourceRepository());
+  }
+
+  @Test
   void deletesMavenAssetChecksumSiblingAndEnqueuesMetadataRebuilds() {
     Fixture fixture = fixture(true, AccessDecision.allow());
     RepositoryRecord repository =

@@ -7,18 +7,12 @@ import com.github.klboke.kkrepo.persistence.mysql.support.MySqlIntegrationTestSu
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.support.EncodedResource;
 import org.springframework.jdbc.datasource.init.ScriptUtils;
 
 class MySqlSecurityScanSummaryIndexTest extends MySqlIntegrationTestSupport {
-
-  @BeforeAll
-  static void startBackend() {
-    startMySql();
-  }
 
   @Test
   void summaryFactsHaveSelectiveCoveringIndexes() {

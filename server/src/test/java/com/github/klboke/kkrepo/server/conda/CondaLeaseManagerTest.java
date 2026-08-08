@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.conda;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -10,6 +11,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
+import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import java.time.Instant;
 import java.util.Optional;
 import org.junit.jupiter.api.AfterEach;
@@ -34,6 +36,7 @@ class CondaLeaseManagerTest {
     lease.close();
 
     verify(registry).releaseLease(anyString(), anyString(), anyLong());
+    assertThrows(MavenExceptions.WritePolicyDenied.class, lease::assertHeld);
   }
 
   @Test
@@ -62,6 +65,35 @@ class CondaLeaseManagerTest {
 
     assertTrue(acquired.isEmpty());
     verify(registry, never()).renewLease(anyString(), anyString(), anyLong(), any());
+  }
+
+  @Test
+  void acquisitionAndRenewalFailuresFailClosedAndPreserveInterrupt() {
+    CondaRegistryDao unavailable = mock(CondaRegistryDao.class);
+    when(unavailable.tryAcquireLease(anyString(), anyString(), any())).thenReturn(Optional.empty());
+    Thread.currentThread().interrupt();
+    try {
+      assertThrows(MavenExceptions.WritePolicyDenied.class,
+          () -> new CondaLeaseManager(unavailable).acquire("busy"));
+      assertTrue(Thread.currentThread().isInterrupted());
+    } finally {
+      Thread.interrupted();
+    }
+
+    CondaRegistryDao lost = registry();
+    when(lost.renewLease(anyString(), anyString(), anyLong(), any())).thenReturn(false);
+    CondaLeaseManager.Lease lease = new CondaLeaseManager(lost).acquire("lost");
+    assertThrows(MavenExceptions.WritePolicyDenied.class, lease::assertHeld);
+    lease.close();
+    lease.close();
+    verify(lost).releaseLease(anyString(), anyString(), anyLong());
+
+    CondaRegistryDao failed = registry();
+    when(failed.renewLease(anyString(), anyString(), anyLong(), any()))
+        .thenThrow(new IllegalStateException("database unavailable"));
+    try (CondaLeaseManager.Lease failing = new CondaLeaseManager(failed).acquire("failed")) {
+      assertThrows(MavenExceptions.WritePolicyDenied.class, failing::assertHeld);
+    }
   }
 
   private static CondaRegistryDao registry() {

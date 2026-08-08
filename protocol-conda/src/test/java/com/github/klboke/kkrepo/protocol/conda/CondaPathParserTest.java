@@ -41,10 +41,14 @@ class CondaPathParserTest {
 
   @Test
   void recognizesOptionalFastPathDocuments() {
-    assertEquals(CondaPath.Kind.CURRENT_REPODATA,
-        parser.parse("linux-64/current_repodata.json.zst").kind());
-    assertEquals(CondaPath.Kind.SHARDED_REPODATA,
-        parser.parse("linux-64/repodata_shards.msgpack.zst").kind());
+    CondaPath current = parser.parse("linux-64/current_repodata.json.zst");
+    assertEquals(CondaPath.Kind.CURRENT_REPODATA, current.kind());
+    assertTrue(current.metadata());
+    CondaPath shards = parser.parse("linux-64/repodata_shards.msgpack.zst");
+    assertEquals(CondaPath.Kind.SHARDED_REPODATA, shards.kind());
+    assertTrue(shards.metadata());
+    assertTrue(parser.parse("main/notices.json").metadata());
+    assertFalse(parser.parse("linux-64/demo-1.0-0.conda").metadata());
   }
 
   @Test
@@ -56,7 +60,14 @@ class CondaPathParserTest {
         "team/linux/repodata.json",
         "team/linux_64/repodata.json",
         "label/Release Candidate/linux-64/repodata.json",
+        "label/linux-64/repodata.json",
         "team/%252fetc/noarch/repodata.json",
+        "linux-64/%",
+        "linux-64/%G0",
+        "linux-64/%C3%28",
+        "linux-64/repodata.json?x=1",
+        "linux-64\\repodata.json",
+        "linux-64/repodata.json\u0001",
         "linux-64/not-a-package.zip"
     }) {
       assertEquals(CondaPath.Kind.UNKNOWN, parser.parse(path).kind(), path);
@@ -64,5 +75,10 @@ class CondaPathParserTest {
     assertFalse(CondaPathParser.isPackage("../../demo-1.0-0.conda"));
     assertTrue(CondaPathParser.isPackage("a".repeat(205) + ".conda"));
     assertFalse(CondaPathParser.isPackage("a".repeat(206) + ".conda"));
+    assertFalse(CondaPathParser.isPackage(null));
+    assertFalse(CondaPathParser.isPackage(" "));
+    assertFalse(CondaPathParser.isPackage("demo\\1.0.conda"));
+    assertEquals(CondaPath.Kind.REPODATA,
+        parser.parse("///main/linux-64/repodata.json///").kind());
   }
 }

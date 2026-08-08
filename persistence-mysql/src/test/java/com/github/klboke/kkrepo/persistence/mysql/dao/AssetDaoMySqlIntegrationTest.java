@@ -14,9 +14,19 @@ import com.github.klboke.kkrepo.persistence.mysql.support.MySqlIntegrationTestSu
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 
 class AssetDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
+  @BeforeEach
+  void isolateGlobalReconciliation(TestInfo testInfo) {
+    if (testInfo.getTestMethod().orElseThrow().getName()
+        .equals("reconciliationAndGcClaimOnlyUnreferencedDeletedBlobs")) {
+      truncateDatabase();
+    }
+  }
+
   @Test
   void blobLifecycleDeduplicatesSoftDeletesAndRecovers() {
     long blobStoreId = insertBlobStore("asset-store");
@@ -39,6 +49,9 @@ class AssetDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
     assertEquals(inserted.id(), recovered.id());
     assertEquals(0, dao.countDeletedBlobsAwaitingGc());
     assertTrue(dao.hasLiveBlobForObjectKeyHash(blobStoreId, candidate.objectKeyHash()));
+
+    assertEquals(1, dao.markBlobDeletedIfUnreferenced(recovered.id(), "test teardown"));
+    assertEquals(1, dao.hardDeleteBlobByIdIfDeleted(recovered.id()));
   }
 
   @Test
@@ -72,7 +85,7 @@ class AssetDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
 
   @Test
   void managementAssetPageUsesStableIdCursorAndJoinsBlobMetadata() {
-    long repositoryId = insertRepository("raw-hosted", "raw");
+    long repositoryId = insertRepository("raw-page-hosted", "raw");
     long blobStoreId = jdbc().queryForObject(
         "SELECT blob_store_id FROM repository WHERE id = ?", Long.class, repositoryId);
     AssetDao dao = new JdbcAssetDao(jdbc(), jsonColumns());
@@ -102,7 +115,7 @@ class AssetDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
 
   @Test
   void reconciliationAndGcClaimOnlyUnreferencedDeletedBlobs() {
-    long repositoryId = insertRepository("raw-hosted", "raw");
+    long repositoryId = insertRepository("raw-reconcile-hosted", "raw");
     long blobStoreId = jdbc().queryForObject(
         "SELECT blob_store_id FROM repository WHERE id = ?", Long.class, repositoryId);
     AssetDao dao = new JdbcAssetDao(jdbc(), jsonColumns());

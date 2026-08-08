@@ -5,6 +5,7 @@ import com.github.luben.zstd.ZstdOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.zip.CRC32;
@@ -28,11 +29,17 @@ final class CondaTestArchive {
   }
 
   static byte[] legacy(byte[] index, List<TarItem> additionalEntries) throws IOException {
+    ArrayList<TarItem> entries = new ArrayList<>();
+    entries.add(TarItem.file("info/index.json", index));
+    entries.addAll(additionalEntries);
+    return legacyOnly(entries);
+  }
+
+  static byte[] legacyOnly(List<TarItem> entries) throws IOException {
     ByteArrayOutputStream bytes = new ByteArrayOutputStream();
     try (BZip2CompressorOutputStream bzip2 = new BZip2CompressorOutputStream(bytes);
          TarArchiveOutputStream tar = new TarArchiveOutputStream(bzip2)) {
-      putFile(tar, "info/index.json", index);
-      for (TarItem item : additionalEntries) put(tar, item);
+      for (TarItem item : entries) put(tar, item);
       tar.finish();
     }
     return bytes.toByteArray();
@@ -83,7 +90,17 @@ final class CondaTestArchive {
     return MAPPER.writeValueAsBytes(index);
   }
 
-  private static byte[] zstdTar(List<TarItem> entries) throws IOException {
+  static byte[] zip(List<ZipItem> entries) throws IOException {
+    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+    try (ZipOutputStream zip = new ZipOutputStream(bytes)) {
+      for (ZipItem entry : entries) {
+        putZip(zip, entry.name(), entry.content(), entry.stored());
+      }
+    }
+    return bytes.toByteArray();
+  }
+
+  static byte[] zstdTar(List<TarItem> entries) throws IOException {
     ByteArrayOutputStream bytes = new ByteArrayOutputStream();
     try (ZstdOutputStream zstd = new ZstdOutputStream(bytes);
          TarArchiveOutputStream tar = new TarArchiveOutputStream(zstd)) {
@@ -94,6 +111,12 @@ final class CondaTestArchive {
   }
 
   private static void put(TarArchiveOutputStream tar, TarItem item) throws IOException {
+    if (item.special()) {
+      TarArchiveEntry entry = new TarArchiveEntry(item.name(), TarConstants.LF_FIFO);
+      tar.putArchiveEntry(entry);
+      tar.closeArchiveEntry();
+      return;
+    }
     if (item.linkTarget() == null) {
       putFile(tar, item.name(), item.content());
       return;
@@ -131,21 +154,44 @@ final class CondaTestArchive {
   }
 
   record TarItem(
-      String name, byte[] content, String linkTarget, boolean symbolicLink) {
+      String name, byte[] content, String linkTarget, boolean symbolicLink, boolean special) {
     TarItem {
       content = content == null ? new byte[0] : content.clone();
     }
 
     static TarItem file(String name, byte[] content) {
-      return new TarItem(name, content, null, false);
+      return new TarItem(name, content, null, false, false);
     }
 
     static TarItem symlink(String name, String target) {
-      return new TarItem(name, new byte[0], target, true);
+      return new TarItem(name, new byte[0], target, true, false);
     }
 
     static TarItem hardlink(String name, String target) {
-      return new TarItem(name, new byte[0], target, false);
+      return new TarItem(name, new byte[0], target, false, false);
+    }
+
+    static TarItem special(String name) {
+      return new TarItem(name, new byte[0], null, false, true);
+    }
+
+    @Override
+    public byte[] content() {
+      return content.clone();
+    }
+  }
+
+  record ZipItem(String name, byte[] content, boolean stored) {
+    ZipItem {
+      content = content == null ? new byte[0] : content.clone();
+    }
+
+    static ZipItem stored(String name, byte[] content) {
+      return new ZipItem(name, content, true);
+    }
+
+    static ZipItem compressed(String name, byte[] content) {
+      return new ZipItem(name, content, false);
     }
 
     @Override

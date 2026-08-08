@@ -243,7 +243,8 @@ final class CondaArchiveInspector {
       if (!names.add(name)) throw bad("Conda info archive contains duplicate entries");
       if (entry.isLink() || entry.isSymbolicLink()) {
         validateLinkTarget(name, entry.getLinkName(), entry.isSymbolicLink());
-      } else if (!entry.isFile() && !entry.isDirectory()) {
+      } else if (entry.isBlockDevice() || entry.isCharacterDevice() || entry.isFIFO()
+          || (!entry.isFile() && !entry.isDirectory())) {
         throw bad("Conda package contains a special file");
       }
       if ("info/paths.json".equals(name)) {

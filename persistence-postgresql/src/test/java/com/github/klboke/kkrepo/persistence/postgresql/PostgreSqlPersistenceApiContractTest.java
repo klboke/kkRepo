@@ -7,9 +7,18 @@ import java.util.Set;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.TestInfo;
 
 /** Runs the reusable public persistence contract against the minimum supported PostgreSQL 12. */
 class PostgreSqlPersistenceApiContractTest extends PersistenceApiContract {
+  private static final Set<String> STATE_SENSITIVE_CONTRACTS = Set.of(
+      "cleanupPoliciesPersistTargetsSchedulesAndBoundedRunResults",
+      "markerClaimsPartitionConcurrentWorkersAndFailuresReenqueue",
+      "securityScanningIsIdempotentFencedAndProtectsImmutableDocuments",
+      "securityScanningKeepsNewestScannerSnapshotWhenRematchesCompleteOutOfOrder",
+      "securityScanningReconcilesWritesThatMissedAnAlreadyAdvancedEventCursor",
+      "securityScanningRecoversFinalAttemptsAndCleansUnreferencedHistory");
+
   private final Backend backend = new Backend();
 
   @BeforeAll
@@ -18,8 +27,10 @@ class PostgreSqlPersistenceApiContractTest extends PersistenceApiContract {
   }
 
   @BeforeEach
-  void resetBackend() {
-    backend.truncate();
+  void isolateStateSensitiveContract(TestInfo testInfo) {
+    if (STATE_SENSITIVE_CONTRACTS.contains(testInfo.getTestMethod().orElseThrow().getName())) {
+      backend.truncate();
+    }
   }
 
   @Override
