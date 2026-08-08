@@ -301,8 +301,27 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
       case TERRAFORM -> terraformOperation(path, normalizedMethod);
       case SWIFT -> swiftOperation(path, normalizedMethod);
       case ANSIBLEGALAXY -> ansibleOperation(path, normalizedMethod);
+      case CONDA -> condaOperation(path, normalizedMethod);
       case RAW -> rawOperation(normalizedMethod);
     };
+  }
+
+  private static String condaOperation(String path, String method) {
+    if (path.endsWith("repodata.json") || path.endsWith("repodata.json.bz2")
+        || path.endsWith("repodata.json.zst") || path.endsWith("current_repodata.json")
+        || path.endsWith("current_repodata.json.bz2")
+        || path.endsWith("current_repodata.json.zst")) {
+      return "conda_repodata";
+    }
+    if (path.endsWith("channeldata.json")) return "conda_channeldata";
+    if (path.endsWith(".conda") || path.endsWith(".tar.bz2")) {
+      return switch (method) {
+        case "PUT" -> "conda_package_upload";
+        case "DELETE" -> "conda_package_delete";
+        default -> "conda_package_download";
+      };
+    }
+    return "conda_repository";
   }
 
   private static String ansibleOperation(String path, String method) {

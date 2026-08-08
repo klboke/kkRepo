@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.cleanup;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyVersions;
 import com.github.klboke.kkrepo.protocol.cargo.CargoVersions;
+import com.github.klboke.kkrepo.protocol.conda.CondaVersions;
 import com.github.klboke.kkrepo.protocol.maven.metadata.MavenVersionComparator;
 import com.github.klboke.kkrepo.protocol.pub.PubVersions;
 import com.github.klboke.kkrepo.protocol.swift.SwiftVersions;
@@ -27,6 +28,7 @@ public class CleanupPolicyCapabilities {
     comparators.put(RepositoryFormat.TERRAFORM, TerraformVersions.comparator());
     comparators.put(RepositoryFormat.SWIFT, SwiftVersions.COMPARATOR);
     comparators.put(RepositoryFormat.ANSIBLEGALAXY, AnsibleGalaxyVersions.COMPARATOR);
+    comparators.put(RepositoryFormat.CONDA, CondaVersions.COMPARATOR);
     this.versionComparators = Map.copyOf(comparators);
   }
 

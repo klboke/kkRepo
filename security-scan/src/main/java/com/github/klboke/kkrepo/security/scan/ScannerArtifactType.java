@@ -28,6 +28,7 @@ public enum ScannerArtifactType {
   WHL(".whl", "artifact.whl"),
   EGG(".egg", "artifact.egg"),
   CRATE(".crate", "artifact.crate"),
+  CONDA(".conda", "artifact.conda"),
   GEM(".gem", "artifact.gem"),
   NUPKG(".nupkg", "artifact.nupkg"),
   RPM(".rpm", "artifact.rpm"),
@@ -94,6 +95,7 @@ public enum ScannerArtifactType {
       case "WHL" -> WHL;
       case "EGG" -> EGG;
       case "CRATE" -> CRATE;
+      case "CONDA" -> CONDA;
       case "GEM" -> GEM;
       case "NUPKG" -> NUPKG;
       case "RPM" -> RPM;

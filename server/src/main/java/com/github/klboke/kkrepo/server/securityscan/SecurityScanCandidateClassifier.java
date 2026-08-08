@@ -16,7 +16,7 @@ import org.springframework.stereotype.Component;
 public class SecurityScanCandidateClassifier {
   private static final Set<String> ARCHIVE_SUFFIXES = Set.of(
       ".zip", ".tar", ".tar.gz", ".tgz", ".tar.xz", ".txz", ".xz", ".tar.bz2", ".tbz2",
-      ".jar", ".war", ".ear", ".whl", ".crate", ".gem", ".nupkg", ".rpm");
+      ".jar", ".war", ".ear", ".whl", ".crate", ".gem", ".nupkg", ".rpm", ".conda");
 
   public Classification classify(
       AssetRecord asset, AssetBlobRecord blob, ScanProfile profile) {
@@ -74,6 +74,8 @@ public class SecurityScanCandidateClassifier {
       case SWIFT -> isArchive(path) && !containsAny(kind, "manifest", "metadata");
       case ANSIBLEGALAXY -> hasAnySuffix(path, ".tar.gz")
           && !containsAny(kind, "metadata", "signature", "import");
+      case CONDA -> hasAnySuffix(path, ".conda", ".tar.bz2")
+          && !containsAny(kind, "metadata", "repodata", "channeldata");
       case NUGET -> hasAnySuffix(path, ".nupkg") && !hasAnySuffix(path, ".snupkg");
       case RUBYGEMS -> hasAnySuffix(path, ".gem") && !containsAny(kind, "index", "spec");
       case YUM -> hasAnySuffix(path, ".rpm") && !path.contains("/repodata/");
@@ -86,7 +88,9 @@ public class SecurityScanCandidateClassifier {
     TargetClassification target = format == RepositoryFormat.RAW
         ? TargetClassification.ARCHIVE
         : TargetClassification.PACKAGE;
-    return scannable(SubjectKind.ASSET_BLOB, target);
+    SubjectKind subjectKind = format == RepositoryFormat.CONDA
+        ? SubjectKind.CONDA_PACKAGE : SubjectKind.ASSET_BLOB;
+    return scannable(subjectKind, target);
   }
 
   private static boolean rawAllowed(String path, ScanProfile profile) {

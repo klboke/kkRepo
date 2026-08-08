@@ -30,16 +30,44 @@ class BrowseRepositorySourcesTest {
             .toList());
   }
 
+  @Test
+  void recursivelyFlattensCondaGroupsInMemberOrderAndAvoidsCycles() {
+    RepositoryRecord outer = repository(
+        11L, "conda-outer", RepositoryType.GROUP, RepositoryFormat.CONDA);
+    RepositoryRecord nested = repository(
+        12L, "conda-nested", RepositoryType.GROUP, RepositoryFormat.CONDA);
+    RepositoryRecord first = repository(
+        13L, "conda-first", RepositoryType.HOSTED, RepositoryFormat.CONDA);
+    RepositoryRecord second = repository(
+        14L, "conda-second", RepositoryType.PROXY, RepositoryFormat.CONDA);
+    RepositoryDao repositoryDao = mock(RepositoryDao.class);
+    when(repositoryDao.listMembers(outer.id())).thenReturn(List.of(nested, second));
+    when(repositoryDao.listMembers(nested.id())).thenReturn(List.of(first, outer));
+
+    assertEquals(List.of("conda-first", "conda-second"),
+        BrowseRepositorySources.condaSources(outer, repositoryDao).stream()
+            .map(RepositoryRecord::name)
+            .toList());
+  }
+
   private static RepositoryRecord repository(
       long id,
       String name,
       RepositoryType type) {
+    return repository(id, name, type, RepositoryFormat.SWIFT);
+  }
+
+  private static RepositoryRecord repository(
+      long id,
+      String name,
+      RepositoryType type,
+      RepositoryFormat format) {
     return new RepositoryRecord(
         id,
         name,
-        RepositoryFormat.SWIFT,
+        format,
         type,
-        "swift-" + type.name().toLowerCase(Locale.ROOT),
+        format.name().toLowerCase(Locale.ROOT) + "-" + type.name().toLowerCase(Locale.ROOT),
         true,
         1L,
         null,

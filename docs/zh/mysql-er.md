@@ -1,8 +1,8 @@
 # kkrepo MySQL ER 设计
 
-历史 MySQL schema 从 `persistence-mysql/src/main/resources/db/migration/mysql/V1__init_schema.sql` 开始；MySQL 与 PostgreSQL 之后通过成对 migration 演进，当前到 V35，并由 Flyway 在服务启动时执行。MySQL 8 使用 InnoDB；PostgreSQL 提供逻辑等价的 V29 baseline 和相同的 V30+ 变更。本文继续作为两种引擎的详细逻辑 ER 参考，另见[数据库 Schema](database-schema.md)。
+历史 MySQL schema 从 `persistence-mysql/src/main/resources/db/migration/mysql/V1__init_schema.sql` 开始；MySQL 与 PostgreSQL 之后通过成对 migration 演进，当前到 V41，并由 Flyway 在服务启动时执行。MySQL 8 使用 InnoDB；PostgreSQL 提供逻辑等价的 V29 baseline 和相同的 V30+ 变更。本文继续作为两种引擎的详细逻辑 ER 参考，另见[数据库 Schema](database-schema.md)。
 
-Schema 对共享 asset/blob 数据采用“统一内容表 + format 字段”的模型。Cargo / Rust、Dart / Pub、Composer / PHP、Terraform、Swift 和 Ansible 使用这套共享模型，协议元数据保存在 component/asset attributes 中；Composer package/version/dist 不增加专用业务表，proxy route 也作为可重建内部 asset 保存。Pub 为官方多步骤 publish flow 增加 `pub_upload_session`。Terraform 使用 signing key、Provider revision/platform、group source binding 和 publish lease 旁表；Ansible V35 增加 collection version/signature、持久化 import task、proxy state、group binding 和带 fencing 的 lease 表，以保证跨副本一致性。Docker/OCI manifest、tag、upload session、auth token、referrers 等其它协议专有关系同样使用专用旁表。这样更适合从 Nexus 迁移和管理台统一查询；如果后续某个格式数据量明显过大，再通过分区或更多专用表优化。
+Schema 对共享 asset/blob 数据采用“统一内容表 + format 字段”的模型。Cargo / Rust、Dart / Pub、Composer / PHP、Terraform、Swift、Ansible 和 Conda 使用这套共享模型，协议元数据保存在 component/asset attributes 中；Composer package/version/dist 不增加专用业务表，proxy route 也作为可重建内部 asset 保存。Pub 为官方多步骤 publish flow 增加 `pub_upload_session`。Terraform 使用 signing key、Provider revision/platform、group source binding 和 publish lease 旁表；Ansible V35 增加 collection version/signature、持久化 import task、proxy state、group binding 和带 fencing 的 lease 表。Conda V41 增加有界 package/channel 投影、tombstone、group source binding 和带 fencing 的 coordinate lease，确保 channel metadata 与 package bytes 在多副本下保持一致。Docker/OCI manifest、tag、upload session、auth token、referrers 等其它协议专有关系同样使用专用旁表。这样更适合从 Nexus 迁移和管理台统一查询；如果后续某个格式数据量明显过大，再通过分区或更多专用表优化。
 
 ## 仓库与内容 ER
 
@@ -61,6 +61,11 @@ erDiagram
   REPOSITORY ||--o{ ANSIBLE_PROXY_VERSION_STATE : proxy_state
   REPOSITORY ||--o{ ANSIBLE_GROUP_BINDING : group_source
   REPOSITORY ||--o{ ANSIBLE_REGISTRY_LEASE : fenced_lease
+  REPOSITORY ||--o{ CONDA_PACKAGE_RECORD : package_record
+  REPOSITORY ||--o{ CONDA_CHANNEL_STATE : channel_state
+  REPOSITORY ||--o{ CONDA_PACKAGE_TOMBSTONE : tombstone
+  REPOSITORY ||--o{ CONDA_GROUP_SOURCE_BINDING : group_source
+  REPOSITORY ||--o{ CONDA_COORDINATE_LEASE : fenced_lease
   SPRING_SESSION ||--o{ SPRING_SESSION_ATTRIBUTES : has
   MIGRATION_JOB ||--o{ MIGRATION_CHECKPOINT : records
   MIGRATION_JOB ||--o{ MIGRATION_VALIDATION_RESULT : validates
@@ -123,6 +128,11 @@ erDiagram
 | `ansible_proxy_version_state` | 上游 discovery/detail identity、validator、预期 artifact checksum、cache/negative state 和完整性状态 |
 | `ansible_group_binding` | 将 group collection version 绑定到一个有序 source member/revision/filename/checksum；proxy artifact 落地前 version 引用可为空，避免 metadata 读取提前下载 blob，同时防止 metadata 与 artifact 错配 |
 | `ansible_registry_lease` | 跨副本 publish、proxy materialization/revalidation 和 takeover 使用的共享过期 lease/fencing token |
+| `conda_package_record` | hosted/proxy package 的有界投影，保存 channel/subdir/coordinate、checksum、size、format、source 与 component/asset 绑定；完整 package 字节仍只在 blob storage |
+| `conda_channel_state` | repository/channel/subdir 维度的 revision、已验证 proxy metadata identity、索引时间与 CEP 15 package base URL |
+| `conda_package_tombstone` | hosted package 删除记录，用于确定性生成 repodata `removed`，且不会遮蔽同名 active replacement |
+| `conda_group_source_binding` | 将 group filename 绑定到一个有序 member revision/content identity/checksum，保证 repodata 选择与 package bytes 来自同一 source snapshot |
+| `conda_coordinate_lease` | hosted 发布、删除和 proxy inventory 替换使用的跨副本共享过期 lease/fencing token |
 
 ### 权限层
 
@@ -171,3 +181,4 @@ erDiagram
 16. V24 将历史 `jindo` / `jindo-oss` blob store engine 归一化为 `oss-native`；大 blob 的真相仍在 OSS/S3/File blob store，MySQL 只保存元数据、状态、索引和引用。
 17. V28 增加 `pub_upload_session`，原因是 Pub publish 是多请求协议。Session 状态、临时 blob 引用、解析出的 metadata 和 finalize 状态必须能跨副本切换和重启恢复；archive 字节仍存放在 blob storage，不进入 MySQL。
 18. V35 增加 Ansible Galaxy 协议状态。显式唯一约束保护不可变 collection identity；task/lease 可在进程丢失后继续；group binding 保证 metadata/checksum/artifact 来自同一成员；archive/signature 字节仍只在 blob storage。
+19. V41 增加 Conda 协议状态，包括 canonical record fingerprint，以及用于有界 proxy 增量同步和流式 metadata 投影的复合索引。Package/channel 投影与 tombstone 让 repodata 可确定性重建；group binding 将 metadata 固定到 package bytes，事务内重新校验的 coordinate lease 对发布和 proxy inventory 变更做 fencing；package 与 staging 字节仍只在 blob storage。

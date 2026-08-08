@@ -20,6 +20,7 @@ public enum RepositoryFormat {
   TERRAFORM,
   SWIFT,
   ANSIBLEGALAXY,
+  CONDA,
   RAW;
 
   @JsonCreator

@@ -37,6 +37,9 @@ class RepositoryRecipesTest {
     assertRecipe(recipes, "ansiblegalaxy-hosted", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.HOSTED);
     assertRecipe(recipes, "ansiblegalaxy-proxy", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.PROXY);
     assertRecipe(recipes, "ansiblegalaxy-group", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.GROUP);
+    assertRecipe(recipes, "conda-hosted", RepositoryFormat.CONDA, RepositoryType.HOSTED);
+    assertRecipe(recipes, "conda-proxy", RepositoryFormat.CONDA, RepositoryType.PROXY);
+    assertRecipe(recipes, "conda-group", RepositoryFormat.CONDA, RepositoryType.GROUP);
   }
 
   private static void assertRecipe(

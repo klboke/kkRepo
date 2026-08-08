@@ -103,6 +103,29 @@ class SecurityScanExecutorTest {
   }
 
   @Test
+  void isolatesCondaCatalogAndSbomReuseFromGenericArchives() throws Exception {
+    Fixture fixture = new Fixture(ScanStage.CATALOG_AND_MATCH, SubjectKind.CONDA_PACKAGE);
+    when(fixture.adapter.catalog(any(), any())).thenReturn(catalogResponse());
+    when(fixture.adapter.match(any(), any())).thenReturn(matchResponse());
+
+    fixture.executor.execute(fixture.task);
+
+    ArgumentCaptor<SubjectKind> reusableKind = ArgumentCaptor.forClass(SubjectKind.class);
+    verify(fixture.scans).findReusableSbom(
+        reusableKind.capture(), any(), anyString(), anyString(), anyString());
+    assertEquals(SubjectKind.CONDA_PACKAGE, reusableKind.getValue());
+
+    ArgumentCaptor<CatalogRequest> catalog = ArgumentCaptor.forClass(CatalogRequest.class);
+    verify(fixture.adapter).catalog(catalog.capture(), any());
+    assertEquals(SubjectKind.CONDA_PACKAGE, catalog.getValue().subject().kind());
+    assertEquals(RepositoryFormat.CONDA.name(), catalog.getValue().subject().format());
+
+    ArgumentCaptor<Sbom> published = ArgumentCaptor.forClass(Sbom.class);
+    verify(fixture.scans).publishSbom(published.capture(), anyList());
+    assertEquals(SubjectKind.CONDA_PACKAGE, published.getValue().subjectKind());
+  }
+
+  @Test
   void reusesPriorSbomAndMatchRunWithoutCallingTheAdapter() {
     Fixture fixture = new Fixture(ScanStage.MATCH_ONLY, SubjectKind.ASSET_BLOB);
     Sbom sbom = storedSbom();
@@ -558,10 +581,13 @@ class SecurityScanExecutorTest {
     }
 
     Fixture(ScanStage stage, SubjectKind kind, int timeoutSeconds) {
+      boolean conda = kind == SubjectKind.CONDA_PACKAGE;
+      RepositoryFormat format = conda ? RepositoryFormat.CONDA : RepositoryFormat.MAVEN2;
+      String path = conda ? "noarch/demo-1.0-py_0.conda" : "acme/demo.jar";
       asset = new AssetRecord(
-          10L, 1L, null, 11L, RepositoryFormat.MAVEN2, "acme/demo.jar",
-          PersistenceHashes.pathHash("acme/demo.jar"), "demo.jar",
-          kind == SubjectKind.OCI_MANIFEST ? "manifest" : "artifact",
+          10L, 1L, null, 11L, format, path,
+          PersistenceHashes.pathHash(path), conda ? "demo-1.0-py_0.conda" : "demo.jar",
+          kind == SubjectKind.OCI_MANIFEST ? "manifest" : conda ? "package" : "artifact",
           "application/octet-stream", 8L, null, NOW, Map.of());
       blob = new AssetBlobRecord(
           11L, 2L, "blob://test/object", PersistenceHashes.blobRefHash("blob://test/object"),
@@ -597,8 +623,9 @@ class SecurityScanExecutorTest {
       when(candidate.assetBlobId()).thenReturn(11L);
       when(scans.findCandidate(10L)).thenReturn(Optional.of(candidate));
       when(repositories.findById(1L)).thenReturn(Optional.of(new RepositoryRecord(
-          1L, "repo", RepositoryFormat.MAVEN2, RepositoryType.HOSTED,
-          "maven2-hosted", true, 2L, null, null, null, null, null, true, Map.of())));
+          1L, "repo", format, RepositoryType.HOSTED,
+          conda ? "conda-hosted" : "maven2-hosted",
+          true, 2L, null, null, null, null, null, true, Map.of())));
       when(scans.findProfile(1L)).thenReturn(Optional.of(profile));
       when(scope.effectiveConfig(1L, 1L)).thenReturn(Optional.of(config));
       when(classifier.classify(asset, blob, profile))
@@ -606,7 +633,8 @@ class SecurityScanExecutorTest {
               CandidateDisposition.SCANNABLE,
               kind,
               kind == SubjectKind.OCI_MANIFEST
-                  ? TargetClassification.OCI_IMAGE : TargetClassification.ARCHIVE,
+                  ? TargetClassification.OCI_IMAGE
+                  : conda ? TargetClassification.PACKAGE : TargetClassification.ARCHIVE,
               "SCANNABLE"));
       when(snapshots.readySnapshot()).thenReturn(snapshot);
       when(snapshots.snapshotFor(any(), any())).thenReturn(snapshot);

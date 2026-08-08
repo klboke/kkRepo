@@ -87,7 +87,7 @@ java -jar server/target/kkrepo-server-*.jar
 - 代理保留完整 path。
 - 允许足够大的上传 body。
 - 上传和下载 timeout 足够长。
-- 不会移除 Maven/npm/pip/Helm/Cargo/Pub/Composer/Ansible/NuGet/gem/yum 客户端需要的认证 header；Terraform `host.services` 的 URL token segment 会继续出现在生成的 archive/checksum/signature URL 中。
+- 不会移除 Maven/npm/pip/Helm/Cargo/Pub/Composer/Ansible/Conda/NuGet/gem/yum 客户端需要的认证 header；Terraform `host.services` 的 URL token segment 会继续出现在生成的 archive/checksum/signature URL 中。
 
 ## 初始管理员设置问题
 
@@ -181,6 +181,8 @@ export KKREPO_DATABASE_TYPE=mysql
 
 Ansible Galaxy 的重复 `(namespace, name, version)` 始终失败，因为 collection version 不可变。请从持久化 import task message 检查 canonical filename、请求 SHA-256、`MANIFEST.json`/`FILES.json`、逐文件 checksum、archive 安全或配置大小限制。只提高反向代理 body limit 不会提高 Ansible archive inspector limit。
 
+Conda 只能向 hosted 的 `<可选-channel>/<subdir>/<filename>` 路径上传 `.conda` 或 `.tar.bz2` package archive。Filename 必须与 `info/index.json` 中的 name/version/build 完全一致，目标 subdir 也必须匹配 package metadata。不要上传 `repodata.json*` 或 `channeldata.json`，这些文件由 kkrepo 生成。即使反向代理 body limit 足够大，archive 安全、entry/展开字节、deadline 和并发检查上限仍可能拒绝 package。
+
 ## 迁移问题
 
 推荐顺序：
@@ -201,6 +203,7 @@ Ansible Galaxy 的重复 `(namespace, name, version)` 始终失败，因为 coll
 - Composer 迁移被阻断时，确认源仓库是 Nexus 3.75.0+ Pro 原生 `composer-proxy`，并通过 `Optional proxy repositories` 显式选择。Community plugin、hosted/group 或没有 Composer content schema 的源不会自动降级迁移。
 - Terraform 迁移被阻断时，确认源仓库使用受支持 Nexus 版本的原生 `terraform-hosted` 或 `terraform-proxy` recipe。Proxy cache 数据必须在 `Optional proxy repositories` 中显式选择，且 source plan 为 `FULL`。迁移只恢复可识别的 module/provider archive；已恢复的 module archive 可从本地 Nexus path 直接发现，Provider route、validator、checksum manifest 和 signing snapshot 从已配置上游重建，并在 metadata 有效期内固定对应缓存。未知 schema、community plugin 和不支持的产品能力仍会 fail closed。
 - Ansible 迁移被阻断时，确认源仓库使用原生 Nexus 3.93.x-3.94.x `ansiblegalaxy-hosted` 或 `ansiblegalaxy-proxy` recipe，且 Source Profile 能证明 collection identity、archive、checksum 和 manifest shape。Proxy cache 必须在 `Optional proxy repositories` 中显式选择且 plan 为 `FULL`。未知 shape 与被遮蔽/缺失的 proxy secret 会 fail closed；完整 manifest/files JSON 恢复到 blob storage，不写入数据库 JSON 列。
+- Conda 迁移被阻断时，确认源仓库使用原生 Nexus 3.92.x-3.94.x `conda-hosted` recipe，且 Source Profile 能证明预期 datastore package shape。只恢复 identity、size 和 checksum 可证明的 `.tar.bz2`/`.conda` package asset；生成的 repodata/channeldata 在目标端重建。未知 profile、shape 漂移和 proxy-cache asset 会 fail closed，不会转成 hosted package。
 - blob 迁移慢，可能是并发过低、源 Nexus 压力过大，或对象存储限流。
 
 详见 [Nexus 迁移说明](nexus-migration-guide.md)。
@@ -230,6 +233,8 @@ Ansible Galaxy 使用单独的 Nexus 3.94.x suite：
 ```bash
 scripts/ci/run-live-compat.sh ansible
 ```
+
+Conda live black-box 对比通过 `CONDA_COMPAT_*` 环境变量和 `CondaRepositoryBlackBoxCompatibilityTest` 显式启用，完整命令见 [compat-test README](../../compat-test/README.md)。环境中存在 `conda` 时，真实 Conda 客户端流程已包含在 `client-e2e` 中。
 
 如果需要覆盖真实包管理器客户端，请对同一个一次性 kkrepo 候选实例运行客户端 E2E：
 

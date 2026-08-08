@@ -449,6 +449,47 @@ ansible-galaxy collection install acme.tools:1.0.0 \
 
 Ansible 2.9 may name the token option `--api-key`. Collection versions are immutable, and dependency, checksum, signature, metadata, and artifact reads through a group remain bound to the same priority member. See the [Ansible Galaxy Repository Guide](ansible-galaxy-guide.md) for `requirements.yml`, Nexus-compatible credentials/PUT upload, proxy, migration, storage limits, and troubleshooting.
 
+## Conda
+
+Create `conda-hosted`, `conda-proxy`, and `conda-group` repositories. Point the proxy at a channel root such as `https://repo.anaconda.com/pkgs/main/`, add hosted before proxy in the group, and configure the group as the client channel:
+
+```yaml
+# ~/.condarc
+channels:
+  - https://nexus.example.com/repository/conda-group
+channel_priority: strict
+show_channel_urls: true
+```
+
+For a private repository, keep the password out of `.condarc` and use the standard netrc file:
+
+```text
+# ~/.netrc
+machine nexus.example.com
+  login alice
+  password <password>
+```
+
+Protect the file with `chmod 600 ~/.netrc`. Then search and install through the group; Conda automatically requests the current platform subdir and `noarch` metadata:
+
+```bash
+conda search --override-channels \
+  -c https://nexus.example.com/repository/conda-group demo
+conda create -y -n demo-env --override-channels \
+  -c https://nexus.example.com/repository/conda-group demo=1.0.0
+conda list -n demo-env demo
+```
+
+Conda has no package publish command. Upload a validated `.conda` or `.tar.bz2` archive through the admin UI/Components API, or use the Nexus-compatible hosted PUT path. The path is `<optional-channel>/<subdir>/<filename>`:
+
+```bash
+curl -u "alice:$KKREPO_PASSWORD" \
+  --upload-file demo-1.0.0-py_0.conda \
+  https://nexus.example.com/repository/conda-hosted/team/release/noarch/demo-1.0.0-py_0.conda
+```
+
+The package filename, `info/index.json` name/version/build, and target subdir must agree. kkRepo rebuilds `repodata.json`, `repodata.json.bz2`, `repodata.json.zst`, `current_repodata.json*`, and `channeldata.json`; do not upload generated metadata as package content.
+
 ## NuGet
 
 Add a source:

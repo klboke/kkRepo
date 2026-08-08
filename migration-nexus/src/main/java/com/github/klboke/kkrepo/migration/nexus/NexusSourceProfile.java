@@ -29,6 +29,8 @@ public record NexusSourceProfile(
   private static final int SWIFT_MIGRATION_MAX_MINOR = 94;
   private static final int ANSIBLE_MIGRATION_MIN_MINOR = 93;
   private static final int ANSIBLE_MIGRATION_MAX_MINOR = 94;
+  private static final int CONDA_MIGRATION_MIN_MINOR = 92;
+  private static final int CONDA_MIGRATION_MAX_MINOR = 94;
 
   public NexusSourceProfile {
     scriptApi = scriptApi == null ? ScriptApiProfile.unknown() : scriptApi;
@@ -211,11 +213,14 @@ public record NexusSourceProfile(
           && (!"swift".equals(format)
               || swiftContentModelSupported(probedNexusVersion, contentModel))
           && (!"ansiblegalaxy".equals(format)
-              || ansibleContentModelSupported(probedNexusVersion, contentModel));
+              || ansibleContentModelSupported(probedNexusVersion, contentModel))
+          && (!"conda".equals(format)
+              || condaContentModelSupported(probedNexusVersion, contentModel));
       boolean content = config
           && ((metadataEngine == MetadataEngine.ORIENTDB
                   && !"cargo".equals(format) && !"pub".equals(format)
-                  && !"swift".equals(format) && !"ansiblegalaxy".equals(format))
+                  && !"swift".equals(format) && !"ansiblegalaxy".equals(format)
+                  && !"conda".equals(format))
               || ((metadataEngine == MetadataEngine.DATASTORE_H2
                   || metadataEngine == MetadataEngine.DATASTORE_POSTGRESQL)
                   && datastoreContent));
@@ -277,6 +282,14 @@ public record NexusSourceProfile(
           && !ansibleFormatShapeSupported(contentModel.formatShape())) {
         return "ansiblegalaxy-content-shape-incomplete";
       }
+      if ("conda".equals(format)
+          && !knownCondaMigrationVersion(probedNexusVersion)) {
+        return "conda-source-version-unverified";
+      }
+      if ("conda".equals(format)
+          && !condaFormatShapeSupported(contentModel.formatShape())) {
+        return "conda-content-shape-incomplete";
+      }
       return "datastore-content-schema-incomplete";
     }
     return "configuration-only";
@@ -323,12 +336,23 @@ public record NexusSourceProfile(
         && ansibleFormatShapeSupported(contentModel.formatShape());
   }
 
+  private static boolean condaContentModelSupported(
+      String probedNexusVersion,
+      ContentModelFingerprint contentModel) {
+    return knownCondaMigrationVersion(probedNexusVersion)
+        && condaFormatShapeSupported(contentModel.formatShape());
+  }
+
   private static boolean knownSwiftMigrationVersion(String version) {
     return knownMigrationVersion(version, SWIFT_MIGRATION_MIN_MINOR, SWIFT_MIGRATION_MAX_MINOR);
   }
 
   private static boolean knownAnsibleMigrationVersion(String version) {
     return knownMigrationVersion(version, ANSIBLE_MIGRATION_MIN_MINOR, ANSIBLE_MIGRATION_MAX_MINOR);
+  }
+
+  private static boolean knownCondaMigrationVersion(String version) {
+    return knownMigrationVersion(version, CONDA_MIGRATION_MIN_MINOR, CONDA_MIGRATION_MAX_MINOR);
   }
 
   private static boolean knownMigrationVersion(String version, int minimumMinor, int maximumMinor) {
@@ -366,6 +390,12 @@ public record NexusSourceProfile(
     return shape != null
         && bool(shape.get("collectionAssetPath"), false)
         && bool(shape.get("collectionAttributes"), false)
+        && bool(shape.get("sha256Checksum"), false);
+  }
+
+  private static boolean condaFormatShapeSupported(Map<String, Object> shape) {
+    return shape != null
+        && bool(shape.get("packageAssetPath"), false)
         && bool(shape.get("sha256Checksum"), false);
   }
 

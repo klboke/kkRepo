@@ -311,7 +311,8 @@ class RepositoryDataMigrationWorker {
       return false;
     }
     if ((format == RepositoryFormat.PUB || format == RepositoryFormat.TERRAFORM
-        || format == RepositoryFormat.SWIFT || format == RepositoryFormat.ANSIBLEGALAXY)
+        || format == RepositoryFormat.SWIFT || format == RepositoryFormat.ANSIBLEGALAXY
+        || format == RepositoryFormat.CONDA)
         && !RepositoryDataMigrationPaths.shouldDiscoverAsset(format, path)) {
       return false;
     }

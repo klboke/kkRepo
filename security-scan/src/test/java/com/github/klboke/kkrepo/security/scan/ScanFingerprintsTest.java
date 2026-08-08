@@ -27,6 +27,22 @@ class ScanFingerprintsTest {
   }
 
   @Test
+  void condaCatalogModeHasADistinctContentFingerprint() {
+    ScanSubject generic = new ScanSubject(
+        SubjectKind.ASSET_BLOB, 1, 2L, 3L, "sha256:" + "a".repeat(64), "a".repeat(64),
+        42, "RAW", "file", "application/octet-stream",
+        TargetClassification.PACKAGE, List.of(), Map.of());
+    ScanSubject conda = new ScanSubject(
+        SubjectKind.CONDA_PACKAGE, 1, 2L, 3L, "sha256:" + "a".repeat(64), "a".repeat(64),
+        42, "CONDA", "package", "application/octet-stream",
+        TargetClassification.PACKAGE, List.of(), Map.of());
+
+    assertNotEquals(
+        ScanFingerprints.catalog(generic, "syft", "1", "config"),
+        ScanFingerprints.catalog(conda, "syft", "1", "config"));
+  }
+
+  @Test
   void lengthPrefixPreventsAmbiguousInputs() {
     assertNotEquals(
         ScanFingerprints.sha256("ab", "c"),

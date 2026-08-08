@@ -115,7 +115,7 @@ Background tasks, rebuild queues, GC, and rate-limit metrics:
 Common labels:
 
 - `repo`: repository name
-- `format`: artifact format, such as `maven2`, `npm`, `pypi`, `cargo`, `pub`, `composer`, `docker`
+- `format`: artifact format, such as `maven2`, `npm`, `pypi`, `cargo`, `pub`, `composer`, `conda`, `docker`
 - `type`: repository type, such as `hosted`, `proxy`, `group`
 - `method`: HTTP method
 - `operation`: protocol operation
@@ -206,6 +206,19 @@ Ansible Galaxy emits repository, proxy-upstream, and blob-storage metrics with `
 - `ansible_repository`
 
 Monitor publish and import-task outcomes together: repeated `ansible_publish` success followed by import-task errors normally means archive/manifest/checksum validation or worker takeover is failing. The orphan cleanup reports `worker="ansible_staging_cleanup"` batch outcomes and `worker="ansible_cleanup", item="staging_asset", outcome="deleted"` item counts; sustained deletion growth indicates replicas are terminating between staging and durable cleanup. Shared-state cleanup reports `worker="ansible_cleanup"` with `item="proxy_cache"`, `item="terminal_task"`, or `item="expired_lease"`; sustained counts indicate undersized retention/cleanup capacity or persistent upstream churn. For proxy/group incidents, correlate version-detail latency with `kkrepo_proxy_remote_*` and artifact reads with blob-storage metrics. Namespace, collection name, version, task UUID, and token material must not become metric labels; use access-controlled audit/task detail for coordinate-level diagnosis. Complete manifest/files documents remain inside collection blobs, live upstream JSON is reduced to bounded fields, and any large raw JSON that must be retained belongs in blob storage. Database growth should therefore come from bounded projections and task/state rows rather than payload size.
+
+### Conda
+
+Conda emits repository, proxy-upstream, and blob-storage metrics with `format="conda"`. Repository operation labels are bounded to:
+
+- `conda_repodata`
+- `conda_channeldata`
+- `conda_package_upload`
+- `conda_package_download`
+- `conda_package_delete`
+- `conda_repository`
+
+For slow cold proxy access, correlate `conda_repodata` with `kkrepo_proxy_remote_*` and blob `get` latency. The raw JSON response is streamed from a cached ZSTD/BZ2 backing object when available, so object-storage bytes can be much smaller than the response; do not infer a cache miss from that difference alone. Cleanup reports `worker="conda_staging_cleanup"` batch outcomes plus `worker="conda_cleanup"` item counts for `staging_asset`, `generated_metadata`, and `coordinate_lease`. Sustained counts indicate interrupted publication/metadata work or insufficient cleanup capacity. Keep channel, subdir, package name, version, build, and filenames out of metric labels; use Browse/Search/audit detail for coordinate-level diagnosis.
 
 ### Blob Storage
 

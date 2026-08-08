@@ -49,6 +49,24 @@ public class RawHostedService {
     return reader.serveSnapshot(snapshot, headOnly, path, runtime.rawContentDispositionOrDefault());
   }
 
+  /**
+   * Serves a hidden protocol-owned asset for hosted, proxy, or group repositories. Protocol
+   * implementations use this for revisioned derived metadata stored in the repository blob store;
+   * callers remain responsible for format/type validation.
+   */
+  public MavenResponse getInternal(RepositoryRuntime runtime, String rawPath, boolean headOnly) {
+    String path = normalizeAssetPath(rawPath);
+    CachedAssetMetadata snapshot = lookupCached(runtime, path)
+        .orElseThrow(() -> new MavenExceptions.MavenNotFoundException(path));
+    return reader.serveSnapshot(snapshot, headOnly, path, runtime.rawContentDispositionOrDefault());
+  }
+
+  /** Returns the metadata/blob snapshot without opening the object-store body. */
+  public Optional<CachedAssetMetadata> findInternal(
+      RepositoryRuntime runtime, String rawPath) {
+    return lookupCached(runtime, normalizeAssetPath(rawPath));
+  }
+
   Optional<CachedAssetMetadata> lookupCached(RepositoryRuntime runtime, String path) {
     return assetMetadataCache.find(
         runtime.id(), path,
@@ -205,6 +223,24 @@ public class RawHostedService {
     return writer.linkExistingBlobAtBrowsePathIfAbsent(
         runtime, blobStorage(runtime), requireBlobStore(runtime), path, blob, contentType,
         createdBy, createdByIp, component, browsePath).created();
+  }
+
+  /** Rebinds a protocol path to an already uploaded blob inside the caller's transaction. */
+  public MavenResponse linkInternalBlobWithComponentAtBrowsePath(
+      RepositoryRuntime runtime,
+      String rawPath,
+      com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord blob,
+      String contentType,
+      String createdBy,
+      String createdByIp,
+      ComponentRecord component,
+      String rawBrowsePath) {
+    String path = normalizeAssetPath(rawPath);
+    String browsePath = normalizeAssetPath(rawBrowsePath);
+    writer.linkExistingBlobAtBrowsePath(
+        runtime, blobStorage(runtime), requireBlobStore(runtime), path, blob, contentType,
+        createdBy, createdByIp, component, browsePath);
+    return MavenResponse.created();
   }
 
   /** Deletes protocol-generated content without applying Raw repository type checks. */

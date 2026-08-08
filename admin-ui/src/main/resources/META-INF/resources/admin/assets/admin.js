@@ -473,6 +473,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   terraform: "terraform",
   swift: "swift",
   ansiblegalaxy: "ansiblegalaxy",
+  conda: "conda",
   raw: "raw",
 });
 
@@ -492,6 +493,7 @@ const FORMAT_DISPLAY_NAMES = Object.freeze({
   terraform: "Terraform",
   swift: "Swift",
   ansiblegalaxy: "Ansible Galaxy",
+  conda: "Conda",
   raw: "Raw",
 });
 
@@ -1875,7 +1877,8 @@ function memberCandidates() {
   const format = recipe ? recipe.format : null;
   if (!format) return [];
   const allowNestedGroups = format === "pub" || format === "composer"
-    || format === "terraform" || format === "swift" || format === "ansiblegalaxy";
+    || format === "terraform" || format === "swift" || format === "ansiblegalaxy"
+    || format === "conda";
   return repositories.filter((repo) => {
     if (repo.format !== format) return false;
     if (repositoryFormMode === "edit" && repo.name === editingRepositoryName) return false;
@@ -2119,7 +2122,8 @@ function refreshRepositoryRemoteDefaults(recipe) {
     composer: "https://repo.packagist.org/",
     terraform: "https://registry.terraform.io/",
     swift: "https://github.com/",
-    ansiblegalaxy: "https://galaxy.ansible.com/"
+    ansiblegalaxy: "https://galaxy.ansible.com/",
+    conda: "https://repo.anaconda.com/pkgs/main/"
   };
   if (recipe.format === "swift") {
     remote.value = defaults.swift;

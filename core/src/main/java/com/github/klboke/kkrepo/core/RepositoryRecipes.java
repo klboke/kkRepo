@@ -56,6 +56,9 @@ public final class RepositoryRecipes {
       new RepositoryRecipe("ansiblegalaxy-hosted", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.HOSTED),
       new RepositoryRecipe("ansiblegalaxy-proxy", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.PROXY),
       new RepositoryRecipe("ansiblegalaxy-group", RepositoryFormat.ANSIBLEGALAXY, RepositoryType.GROUP),
+      new RepositoryRecipe("conda-hosted", RepositoryFormat.CONDA, RepositoryType.HOSTED),
+      new RepositoryRecipe("conda-proxy", RepositoryFormat.CONDA, RepositoryType.PROXY),
+      new RepositoryRecipe("conda-group", RepositoryFormat.CONDA, RepositoryType.GROUP),
       new RepositoryRecipe("raw-hosted", RepositoryFormat.RAW, RepositoryType.HOSTED),
       new RepositoryRecipe("raw-proxy", RepositoryFormat.RAW, RepositoryType.PROXY),
       new RepositoryRecipe("raw-group", RepositoryFormat.RAW, RepositoryType.GROUP));

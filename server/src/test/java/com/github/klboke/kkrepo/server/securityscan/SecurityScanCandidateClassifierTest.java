@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.CandidateDisposition;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.OciPlatformPolicy;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.SubjectKind;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -44,6 +45,8 @@ class SecurityScanCandidateClassifierTest {
         Arguments.of(RepositoryFormat.TERRAFORM, "modules/acme/vpc/1.0.0.zip", "module"),
         Arguments.of(RepositoryFormat.SWIFT, "acme/demo/1.0.0.zip", "source-archive"),
         Arguments.of(RepositoryFormat.ANSIBLEGALAXY, "artifacts/acme-demo-1.0.0.tar.gz", "collection-artifact"),
+        Arguments.of(RepositoryFormat.CONDA, "noarch/demo-1.0-py_0.conda", "package"),
+        Arguments.of(RepositoryFormat.CONDA, "linux-64/demo-1.0-py_0.tar.bz2", "package"),
         Arguments.of(RepositoryFormat.NUGET, "flat/demo/1.0.0/demo.1.0.0.nupkg", "package"),
         Arguments.of(RepositoryFormat.RUBYGEMS, "gems/demo-1.0.0.gem", "gem"),
         Arguments.of(RepositoryFormat.YUM, "packages/demo-1.0.0.x86_64.rpm", "package"),
@@ -66,6 +69,16 @@ class SecurityScanCandidateClassifierTest {
             .disposition());
   }
 
+  @Test
+  void isolatesCondaCatalogResultsFromGenericArchiveSbomReuse() {
+    var classification = classifier.classify(
+        asset(RepositoryFormat.CONDA, "noarch/demo-1.0-py_0.tar.bz2", "package"),
+        blob(42),
+        profile(1024));
+
+    assertEquals(SubjectKind.CONDA_PACKAGE, classification.subjectKind());
+  }
+
   @ParameterizedTest
   @MethodSource("metadata")
   void skipsProtocolMetadata(RepositoryFormat format, String path, String kind) {
@@ -84,6 +97,8 @@ class SecurityScanCandidateClassifierTest {
         Arguments.of(RepositoryFormat.HELM, "index.yaml", "index"),
         Arguments.of(RepositoryFormat.CARGO, "index/de/mo/demo", "index"),
         Arguments.of(RepositoryFormat.TERRAFORM, "providers/demo/1.0.0_SHA256SUMS", "checksum"),
+        Arguments.of(RepositoryFormat.CONDA, "noarch/repodata.json", "repodata"),
+        Arguments.of(RepositoryFormat.CONDA, "channeldata.json", "channeldata"),
         Arguments.of(RepositoryFormat.NUGET, "registration/demo/index.json", "metadata"),
         Arguments.of(RepositoryFormat.YUM, "repodata/primary.xml.gz", "metadata"));
   }

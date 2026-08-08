@@ -8,6 +8,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
@@ -22,6 +23,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPath;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPathParser;
 import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
+import com.github.klboke.kkrepo.protocol.conda.CondaPath;
 import com.github.klboke.kkrepo.protocol.npm.NpmMetadata;
 import com.github.klboke.kkrepo.protocol.npm.NpmPackageId;
 import com.github.klboke.kkrepo.protocol.swift.SwiftPath;
@@ -30,6 +32,7 @@ import com.github.klboke.kkrepo.protocol.swift.SwiftToolsVersions;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPath;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPathParser;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
+import com.github.klboke.kkrepo.server.conda.CondaBrowsePaths;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmFormatAttributes;
 import java.io.ByteArrayInputStream;
@@ -66,6 +69,7 @@ public class BrowseAssetDetailService {
   private final TerraformRegistryDao terraformDao;
   private final SwiftRegistryDao swiftDao;
   private AnsibleGalaxyRegistryDao ansibleDao;
+  private CondaRegistryDao condaDao;
   private final BlobStorageRegistry blobStorageRegistry;
   private final ObjectMapper objectMapper;
 
@@ -90,6 +94,11 @@ public class BrowseAssetDetailService {
   @Autowired(required = false)
   void setAnsibleGalaxyRegistryDao(AnsibleGalaxyRegistryDao ansibleDao) {
     this.ansibleDao = ansibleDao;
+  }
+
+  @Autowired(required = false)
+  void setCondaRegistryDao(CondaRegistryDao condaDao) {
+    this.condaDao = condaDao;
   }
 
   public BrowseAssetDetailService(
@@ -181,6 +190,9 @@ public class BrowseAssetDetailService {
     Map<String, Object> composer = source.format() == RepositoryFormat.COMPOSER
         ? composerAttributes(asset)
         : Map.of();
+    Map<String, Object> conda = source.format() == RepositoryFormat.CONDA
+        ? condaAttributes(source, asset, publicPath)
+        : Map.of();
     Map<String, Object> swift = source.format() == RepositoryFormat.SWIFT
         ? swiftAttributes(source, asset)
         : Map.of();
@@ -212,9 +224,50 @@ public class BrowseAssetDetailService {
         npm,
         pub,
         composer,
+        conda,
         swift,
         ansible,
         provenance);
+  }
+
+  private Map<String, Object> condaAttributes(
+      RepositoryRecord source, AssetRecord asset, String publicPath) {
+    if (condaDao == null) {
+      return Map.of();
+    }
+    CondaPath coordinate = CondaBrowsePaths.packagePath(publicPath)
+        .orElseThrow(() -> new ResponseStatusException(
+            HttpStatus.NOT_FOUND, "Conda package identity not found"));
+    CondaRegistryDao.PackageRecord record = condaDao.findPackage(
+            source.id(), coordinate.channel(), coordinate.subdir(), coordinate.filename())
+        .orElseThrow(() -> new ResponseStatusException(
+            HttpStatus.NOT_FOUND, "Conda package identity not found"));
+    if (record.assetId() != null && !record.assetId().equals(asset.id())) {
+      throw new ResponseStatusException(
+          HttpStatus.CONFLICT, "Conda package asset does not match registry state");
+    }
+    LinkedHashMap<String, Object> conda = new LinkedHashMap<>();
+    put(conda, "channel", record.channel());
+    put(conda, "subdir", record.subdir());
+    put(conda, "name", record.name());
+    put(conda, "version", record.version());
+    put(conda, "build", record.build());
+    put(conda, "build_number", record.buildNumber());
+    put(conda, "archive_format", record.archiveFormat());
+    put(conda, "filename", record.filename());
+    put(conda, "md5", record.md5());
+    put(conda, "sha256", record.sha256());
+    put(conda, "size", record.size());
+    put(conda, "source_kind", record.sourceKind());
+    put(conda, "source_repository", source.name());
+    put(conda, "revision", record.revision());
+    put(conda, "indexed_at", record.indexedAt());
+    for (String key : List.of(
+        "depends", "constrains", "license", "license_family", "timestamp", "features",
+        "track_features", "noarch")) {
+      put(conda, key, record.metadata().get(key));
+    }
+    return Collections.unmodifiableMap(conda);
   }
 
   private Map<String, Object> ansibleAttributes(
@@ -373,6 +426,7 @@ public class BrowseAssetDetailService {
           Map.of(),
           Map.of(),
           Map.of(),
+          Map.of(),
           swiftReleaseAttributes(source, row),
           Map.of(),
           Map.of("dynamic", true, "hashes_not_verified", false)));
@@ -466,6 +520,7 @@ public class BrowseAssetDetailService {
           null,
           Map.copyOf(checksum),
           Map.of("generated", true, "format", "swift-manifest-browse"),
+          Map.of(),
           Map.of(),
           Map.of(),
           Map.of(),
@@ -613,6 +668,7 @@ public class BrowseAssetDetailService {
         Map.of(),
         Map.of(),
         Map.of(),
+        Map.of(),
         provenance);
   }
 
@@ -637,6 +693,7 @@ public class BrowseAssetDetailService {
         null,
         Map.of(),
         content,
+        Map.of(),
         Map.of(),
         Map.of(),
         Map.of(),
@@ -689,6 +746,8 @@ public class BrowseAssetDetailService {
         ? BrowseRepositorySources.swiftSources(visibleRepository, repositoryDao)
         : visibleRepository.format() == RepositoryFormat.ANSIBLEGALAXY
             ? BrowseRepositorySources.ansibleSources(visibleRepository, repositoryDao)
+            : visibleRepository.format() == RepositoryFormat.CONDA
+                ? BrowseRepositorySources.condaSources(visibleRepository, repositoryDao)
             : repositoryDao.listMembers(visibleRepository.id());
     if (sourceRepositoryName != null && !sourceRepositoryName.isBlank()) {
       RepositoryRecord source = members.stream()
@@ -778,6 +837,10 @@ public class BrowseAssetDetailService {
         return new ResolvedStoragePath(
             AnsibleGalaxyPathParser.ARTIFACT_BASE + segments[3], sourceRepositoryName);
       }
+    }
+    if (visibleRepository.format() == RepositoryFormat.CONDA) {
+      return new ResolvedStoragePath(
+          CondaBrowsePaths.toStoragePath(normalized), sourceRepositoryName);
     }
     return new ResolvedStoragePath(normalized, sourceRepositoryName);
   }
@@ -1317,6 +1380,7 @@ public class BrowseAssetDetailService {
       Map<String, Object> npm,
       Map<String, Object> pub,
       Map<String, Object> composer,
+      Map<String, Object> conda,
       Map<String, Object> swift,
       Map<String, Object> ansible,
       Map<String, Object> provenance) {}

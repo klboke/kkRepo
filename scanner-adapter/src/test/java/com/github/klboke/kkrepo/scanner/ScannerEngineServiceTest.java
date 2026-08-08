@@ -22,6 +22,10 @@ class ScannerEngineServiceTest {
     assertEquals(
         ScannerArtifactType.NUPKG,
         ScannerArtifactType.fromWireValue("nupkg"));
+    assertEquals(
+        ScannerArtifactType.CONDA,
+        ScannerArtifactType.fromPath("noarch/demo-1.0-py_0.conda"));
+    assertEquals("artifact.conda", ScannerArtifactType.CONDA.safeFilename());
     assertEquals(ScannerArtifactType.UNKNOWN, ScannerArtifactType.fromPath(null));
   }
 

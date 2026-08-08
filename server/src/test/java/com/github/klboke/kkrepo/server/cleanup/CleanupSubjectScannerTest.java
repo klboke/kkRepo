@@ -83,6 +83,33 @@ class CleanupSubjectScannerTest {
   }
 
   @Test
+  void retainsEveryCondaBuildOfTheNewestVersion() {
+    List<ComponentRecord> components = List.of(
+        condaComponent(11L, "1.0", "py310_0"),
+        condaComponent(12L, "2.0", "py310_0"),
+        condaComponent(13L, "2.0", "py311_0"));
+    when(componentDao.listCleanupPage(1, null, 11)).thenReturn(components);
+    doReturn(List.of(
+        condaAsset(11L, "1.0", "py310_0"),
+        condaAsset(12L, "2.0", "py310_0"),
+        condaAsset(13L, "2.0", "py311_0")))
+        .when(assetDao).listAssetsByComponents(List.of(11L, 12L, 13L));
+
+    var result = scanner.scan(
+        repository(RepositoryFormat.CONDA),
+        Map.of("retainCount", 1),
+        10,
+        Instant.parse("2026-08-01T00:00:00Z"));
+
+    assertEquals(3, result.scannedSubjects());
+    assertEquals(1, result.candidates().size());
+    var candidate = result.candidates().getFirst();
+    assertEquals("1.0", candidate.subject().version());
+    assertEquals("noarch/demo/1.0/demo-1.0-py310_0.conda", candidate.subject().deletePath());
+    assertEquals(2, candidate.reason().get("versionRank"));
+  }
+
+  @Test
   void excludesTheFamilyCutByTryRunLimit() {
     when(componentDao.listCleanupPage(1, null, 3)).thenReturn(List.of(
         component(1, "1.0.0"),
@@ -363,6 +390,44 @@ class CleanupSubjectScannerTest {
         new byte[] {(byte) id},
         Map.of(),
         Instant.parse("2026-01-01T00:00:00Z"));
+  }
+
+  private static ComponentRecord condaComponent(long id, String version, String build) {
+    String filename = "demo-" + version + "-" + build + ".conda";
+    return new ComponentRecord(
+        id,
+        1,
+        RepositoryFormat.CONDA,
+        "noarch",
+        "demo",
+        version,
+        "conda-package",
+        new byte[] {(byte) id},
+        Map.of(
+            "subdir", "noarch",
+            "build", build,
+            "filename", filename,
+            "browsePath", "noarch/demo/" + version + "/" + filename),
+        Instant.parse("2026-01-01T00:00:00Z"));
+  }
+
+  private static AssetRecord condaAsset(long componentId, String version, String build) {
+    String filename = "demo-" + version + "-" + build + ".conda";
+    return new AssetRecord(
+        componentId,
+        1,
+        componentId,
+        componentId,
+        RepositoryFormat.CONDA,
+        "noarch/" + filename,
+        new byte[] {(byte) componentId},
+        filename,
+        "package",
+        "application/octet-stream",
+        100L,
+        Instant.parse("2025-01-01T00:00:00Z"),
+        Instant.parse("2026-01-01T00:00:00Z"),
+        Map.of());
   }
 
   private static AssetRecord asset(long componentId, String version) {

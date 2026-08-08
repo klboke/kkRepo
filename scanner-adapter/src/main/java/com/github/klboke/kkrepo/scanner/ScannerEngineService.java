@@ -41,6 +41,7 @@ public class ScannerEngineService {
   private final BoundedProcessRunner processes;
   private final ScannerInput scannerInput;
   private final ArchiveGuard archiveGuard;
+  private final CondaPackageCataloger condaPackages;
   private final OciRegistryStager ociRegistryStager;
   private final ScannerDocumentMapper documents;
   private final ScannerDatabaseCoordinator database;
@@ -52,6 +53,7 @@ public class ScannerEngineService {
       BoundedProcessRunner processes,
       ScannerInput scannerInput,
       ArchiveGuard archiveGuard,
+      CondaPackageCataloger condaPackages,
       OciRegistryStager ociRegistryStager,
       ScannerDocumentMapper documents,
       ScannerDatabaseCoordinator database) {
@@ -59,6 +61,7 @@ public class ScannerEngineService {
     this.processes = processes;
     this.scannerInput = scannerInput;
     this.archiveGuard = archiveGuard;
+    this.condaPackages = condaPackages;
     this.ociRegistryStager = ociRegistryStager;
     this.documents = documents;
     this.database = database;
@@ -70,7 +73,7 @@ public class ScannerEngineService {
         "syft-grype-v1",
         Long.toString(properties.getMaxInputBytes()),
         Long.toString(properties.getMaxOutputBytes()),
-        "catalog", "match", "oci-scan", "cancel"));
+        "catalog", "match", "oci-scan", "cancel", "conda-meta-v1"));
     return new Capabilities(
         ScannerContract.API_VERSION,
         "syft-grype-v1",
@@ -141,8 +144,14 @@ public class ScannerEngineService {
       ScannerInput.Verified verified =
           scannerInput.copy(
               input, artifact, expectedSha256, expectedSize, effectiveLimits, deadline);
-      ArchiveGuard.Inspection inspection = archiveGuard.inspect(
-          artifact, effectiveLimits, workspace, deadline);
+      boolean conda = safeType == ScannerArtifactType.CONDA;
+      ArchiveGuard.Inspection inspection = conda
+          ? archiveGuard.inspectConda(artifact, effectiveLimits, workspace, deadline)
+          : archiveGuard.inspect(artifact, effectiveLimits, workspace, deadline);
+      CondaPackageCataloger.Prepared condaPackage = conda
+          ? condaPackages.prepare(
+              artifact, safeType, effectiveLimits, workspace, deadline, inspection.condaIndex())
+          : null;
       deadline.check();
       Readiness ready = requireReady(deadline);
       deadline.check();
@@ -151,7 +160,7 @@ public class ScannerEngineService {
           List.of(
               properties.getSyftExecutable(),
               "scan",
-              artifact.toString(),
+              conda ? "dir:" + condaPackage.scanRoot() : artifact.toString(),
               "--output",
               "cyclonedx-json"),
           workspace,
@@ -161,16 +170,26 @@ public class ScannerEngineService {
       deadline.check();
       byte[] cyclonedx = BoundedProcessRunner.readBounded(sbom, properties.getMaxOutputBytes());
       deadline.check();
+      Map<String, Object> summary = new LinkedHashMap<>();
+      summary.put("inputBytes", verified.size());
+      summary.put("archiveEntries", inspection.entries());
+      summary.put("expandedBytes", inspection.expandedBytes());
+      summary.put("nestedArchives", inspection.nestedArchives());
+      if (condaPackage != null) {
+        summary.put("condaName", condaPackage.name());
+        summary.put("condaVersion", condaPackage.version());
+        summary.put("condaBuild", condaPackage.build());
+        summary.put("condaSubdir", condaPackage.subdir());
+      }
       CatalogResponse response = documents.catalog(
           cyclonedx,
           verified.sha256(),
           string(ready.details().get("catalogEngineVersion"), ready.engineVersion()),
           capabilities().capabilityDigest(),
-          Map.of(
-              "inputBytes", verified.size(),
-              "archiveEntries", inspection.entries(),
-              "expandedBytes", inspection.expandedBytes(),
-              "nestedArchives", inspection.nestedArchives()));
+          summary);
+      if (condaPackage != null) {
+        requireCondaComponent(response, condaPackage);
+      }
       deadline.check();
       return response;
     } catch (IOException e) {
@@ -178,6 +197,22 @@ public class ScannerEngineService {
           "CATALOG_IO", "Unable to read scanner output", 503, true, e);
     } finally {
       TempDirectories.deleteRecursively(workspace);
+    }
+  }
+
+  private static void requireCondaComponent(
+      CatalogResponse response, CondaPackageCataloger.Prepared expected) {
+    boolean found = response.components().stream().anyMatch(component ->
+        expected.name().equals(component.name())
+            && expected.version().equals(component.version())
+            && "conda".equalsIgnoreCase(String.valueOf(
+                component.properties().get("syft:package:type"))));
+    if (!found) {
+      throw new ScannerRequestException(
+          "CONDA_CATALOG_EMPTY",
+          "Syft did not identify the expected Conda package metadata",
+          422,
+          false);
     }
   }
 

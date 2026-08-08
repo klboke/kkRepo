@@ -4,11 +4,11 @@
 [GitHub Issue #61](https://github.com/klboke/kkRepo/issues/61) 只提供了最初的业务场景，不是
 功能范围、兼容目标或实现约束。Cleanup Policy 是仓库平台能力，必须覆盖当前
 `RepositoryFormat` 中的 Maven、npm、PyPI、Cargo、Pub、Composer、Go、Helm、Docker、
-NuGet、RubyGems、Yum、Terraform、Swift、Ansible Galaxy 和 Raw，而不是 Maven 专属功能。
+NuGet、RubyGems、Yum、Terraform、Swift、Ansible Galaxy、Conda 和 Raw，而不是 Maven 专属功能。
 其中的 Maven 多模块场景只是一个用例和验收 fixture。
 
 本文同时描述目标架构和本分支已经落地的生产运行基线。当前实现已经打通“策略聚合、多仓库、
-Quartz Cron、有界 Try Run、异步手动/定时执行、逐条审计”主链路，并向当前 16 种格式开放扫描、
+Quartz Cron、有界 Try Run、异步手动/定时执行、逐条审计”主链路，并向当前 17 种格式开放扫描、
 最后下载条件和应用层实际删除；同时补齐了数据库 claim、repository lease/fencing、心跳、接管、
 有界重试、取消、持久 protection、跨 run 扫描游标、下载水位写合并、有界历史保留和双数据库
 合同。不能通过直接写表绕过 API 校验启用自动清理。
@@ -26,20 +26,21 @@ Blob GC，不在本文中把尚未实现的恢复窗口标记为已交付。
   Hosted/Proxy 仓库，同一仓库也可以属于多个策略。Group 不持有独立清理对象，不能作为策略目标。
 - 每个策略拥有自己的 Quartz Cron 表达式和 IANA 时区。新策略默认暂停；修改规则、目标仓库
   或限额会自动暂停 schedule，要求管理员重新确认后启用。
-- 16 种 `RepositoryFormat` 都可以保存策略并执行有界 Try Run。扫描上限按仓库设置，单次
+- 17 种 `RepositoryFormat` 都可以保存策略并执行有界 Try Run。扫描上限按仓库设置，单次
   Try Run 另受服务端 50,000 subject 总硬上限约束；被截断的 family 不给出删除结论。
-- Maven、Cargo、Pub、Terraform、Swift 和 Ansible Galaxy 复用现有版本比较器支持
+- Maven、Cargo、Pub、Terraform、Swift、Ansible Galaxy 和 Conda 复用现有版本比较器支持
   `retainCount`；其他格式在比较器完成协议验证前不展示该规则。
 - `lastDownloadedOlderThanDays` 对全部格式开放。各协议已有的 `ArtifactDownloadPolicy` 读取关口
   在成功授权的外部 GET 上更新具体 source asset 水位；Hosted、Proxy 以及通过 Group 访问时解析出的
   实际 source repository 都能正确归属。HEAD、内部扫描器请求和策略拒绝请求不更新；body 打开后的网络中断可能保守地保留一次
   使用记录。Docker 以 manifest GET 作为镜像 subject 的使用水位；共享 layer GET 不向所有引用
   manifest 扇出写入。
-- 16 种格式都开放手动执行和定时执行。非 Docker subject 复用现有 Browse/协议应用层删除事务；
+- 17 种格式都开放手动执行和定时执行。非 Docker subject 复用现有 Browse/协议应用层删除事务；
   Docker manifest 复用 `DockerManifestStore.deleteReference`；Swift、Ansible Galaxy 和 Terraform
   provider 同时清理各自 registry state。Hosted npm 以 tarball/version 为清理单位，在同一事务
   重写 packument 与 dist-tags；NuGet 把同一 id/version 的 nupkg 与 nuspec 作为一个 subject
-  锁定和删除。删除不以通用 SQL 绕过应用层，既有 Maven metadata、Helm/PyPI index、
+  锁定和删除；Conda 通过带坐标 lease 的协议删除入口写 tombstone 并更新 channel revision。
+  删除不以通用 SQL 绕过应用层，既有 Maven metadata、Helm/PyPI index、
   Yum/RubyGems metadata、npm/PyPI group cache、Terraform metadata cache 和 Blob 引用处理继续生效。
 - Hosted 仓库中的 packument、index、repodata 等协议生成物不是独立清理 subject，只由所属制品
   删除流程重写或重建；Proxy 持有的本地缓存可以作为清理 subject。Group 派生缓存由 member 变更失效
@@ -111,7 +112,7 @@ Blob GC，不在本文中把尚未实现的恢复窗口标记为已交付。
 
 ## 目标
 
-1. 对当前 16 种 `RepositoryFormat` 的 hosted/proxy recipe 提供明确的清理能力，并明确排除
+1. 对当前 17 种 `RepositoryFormat` 的 hosted/proxy recipe 提供明确的清理能力，并明确排除
    不持有独立制品的 group；每种格式都必须注册适配器或声明某项规则不支持，不能回退为通用逐文件删除。
 2. 支持发布时间/更新时间、最后下载时间、namespace/name/coordinate/path 的 glob/regex
    include/exclude，以及人工和外部 protection。
@@ -249,6 +250,7 @@ metadata、checksum、签名、索引、Browse/Search 和 group 派生缓存，�
 | Terraform | 一个 module release 或 provider release；provider 的全部平台包属于同一 version subject | module/provider identity；Terraform 接受的 SemVer，复用 `TerraformVersions` | 重建 versions/platforms metadata，保持 checksum/signature/platform 集合一致 |
 | Swift | 一个 scope/name release 的 archive、manifest、metadata 和签名 | `(scope, name)`；SwiftPM SemVer，复用 `SwiftVersions` | 复用 release tombstone/revision 语义，重建 release/identifier 视图和 Links |
 | Ansible Galaxy | 一个 namespace/name collection version、artifact、metadata 和签名 | `(namespace, name)`；Galaxy SemVer，复用 `AnsibleGalaxyVersions` | 更新 v3 collection/version index、artifact、依赖和 signature 视图 |
+| Conda | 一个 channel/subdir/name/version/build package archive | `(channel, subdir, name)`；Conda VersionOrder，保留某个 version 时同时保留该 version 的全部 build | Hosted 写 tombstone 并递增 channel revision；Proxy 仅移除本地 cache asset、保留已验证 inventory 以便下次回源；失效相关 group binding/Browse/Search |
 | Raw | 一个规范化 asset path | 默认无 version/retain；仅支持 path/name/time/usage，未来可显式配置 path extractor | 删除该 asset，更新 Browse/Search、cache 和 Blob 引用，不猜测文件名中的版本 |
 
 矩阵中的版本比较器若尚未在协议模块中公开，必须先抽取到对应 `protocol-*` 模块并用官方
@@ -1155,7 +1157,7 @@ write failure、Try Run 频繁触及硬上限、反复 takeover、FAILED/PARTIAL
 6. MySQL/PostgreSQL 双副本下 active worker 丢失后，另一副本接管且旧 fence 不能提交。
 
 Maven 多模块 fixture 覆盖多个不同版本的 `jackson-*` artifactId；其他格式继续使用官方客户端
-（npm/pip/cargo/dart/composer/go/helm/docker/nuget/gem/dnf/terraform/swift/ansible）。Raw 使用 HTTP GET
+（npm/pip/cargo/dart/composer/go/helm/docker/nuget/gem/dnf/terraform/swift/ansible/conda）。Raw 使用 HTTP GET
 和路径规则验收。
 
 ## 落地阶段与后续边界
@@ -1169,7 +1171,7 @@ Maven 多模块 fixture 覆盖多个不同版本的 `jackson-*` artifactId；其
   语义，不引入第三方兼容 DTO。
 - 建立 format capability、subject/content token 和应用删除入口契约。
 - 增加 Flyway migration、公共 DAO 和双数据库 contract test。
-- 为 16 种格式登记清理单位、官方版本来源和删除后修复清单。
+- 为 17 种格式登记清理单位、官方版本来源和删除后修复清单。
 
 ### 已落地 1：全格式安全 Try Run
 
@@ -1220,7 +1222,7 @@ Maven 多模块 fixture 覆盖多个不同版本的 `jackson-*` artifactId；其
 
 本轮不可逆清理生产基线必须同时满足：
 
-1. `RepositoryFormat.values()` 中 16 种格式都有明确 capability；执行只走 format-aware subject
+1. `RepositoryFormat.values()` 中 17 种格式都有明确 capability；执行只走 format-aware subject
    projection 与既有应用删除入口，不存在 worker 直接删协议表或 Blob 的 fallback。
 2. 一个策略可选择多个目标仓库并拥有自己的 schedule；可以创建多个策略，同一仓库可被不同
    schedule 的多个策略选择。

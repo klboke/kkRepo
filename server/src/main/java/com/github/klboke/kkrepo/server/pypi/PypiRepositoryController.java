@@ -149,6 +149,7 @@ public class PypiRepositoryController {
       PypiResponse resp, HttpServletRequest request, boolean partialFetchAllowed) {
     if (ConditionalResponses.shouldReturnNotModified(
         request, resp.status(), resp.etag(), resp.lastModified())) {
+      resp.closeBodyIfOpen();
       return ResponseEntity.status(HttpStatus.NOT_MODIFIED)
           .headers(notModifiedHeaders(resp))
           .body(null);
@@ -168,6 +169,7 @@ public class PypiRepositoryController {
   private ResponseEntity<Void> toHeadResponse(PypiResponse resp, HttpServletRequest request) {
     if (ConditionalResponses.shouldReturnNotModified(
         request, resp.status(), resp.etag(), resp.lastModified())) {
+      resp.closeBodyIfOpen();
       return ResponseEntity.status(HttpStatus.NOT_MODIFIED).headers(notModifiedHeaders(resp)).build();
     }
     return ResponseEntity.status(resp.status()).headers(headers(resp, true)).build();

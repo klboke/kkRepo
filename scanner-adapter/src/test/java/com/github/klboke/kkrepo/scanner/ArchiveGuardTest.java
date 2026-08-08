@@ -224,6 +224,46 @@ class ArchiveGuardTest {
   }
 
   @Test
+  void condaInspectionAcceptsOnlyLinksThatStayInsideTheArchive() throws IOException {
+    Path safe = temporary.resolve("conda-safe-links.tar");
+    try (TarArchiveOutputStream output =
+        new TarArchiveOutputStream(Files.newOutputStream(safe))) {
+      writeTarEntry(output, "lib/libdemo.so.1", "library".getBytes());
+      TarArchiveEntry symlink = new TarArchiveEntry("lib/libdemo.so", TarConstants.LF_SYMLINK);
+      symlink.setLinkName("libdemo.so.1");
+      output.putArchiveEntry(symlink);
+      output.closeArchiveEntry();
+      TarArchiveEntry hardlink = new TarArchiveEntry("lib/libdemo-hard", TarConstants.LF_LINK);
+      hardlink.setLinkName("lib/libdemo.so.1");
+      output.putArchiveEntry(hardlink);
+      output.closeArchiveEntry();
+    }
+
+    ArchiveGuard.Inspection inspection =
+        guard.inspectConda(safe, limits(10, 1024), temporary, deadline());
+
+    assertThat(inspection.entries()).isEqualTo(3);
+    assertThatThrownBy(() -> guard.inspect(safe, limits(10, 1024), temporary, deadline()))
+        .isInstanceOf(ScannerRequestException.class)
+        .extracting(failure -> ((ScannerRequestException) failure).code())
+        .isEqualTo("ARCHIVE_SPECIAL_FILE_REJECTED");
+
+    Path escaping = temporary.resolve("conda-escaping-link.tar");
+    try (TarArchiveOutputStream output =
+        new TarArchiveOutputStream(Files.newOutputStream(escaping))) {
+      TarArchiveEntry link = new TarArchiveEntry("lib/libdemo.so", TarConstants.LF_SYMLINK);
+      link.setLinkName("../../outside");
+      output.putArchiveEntry(link);
+      output.closeArchiveEntry();
+    }
+    assertThatThrownBy(
+            () -> guard.inspectConda(escaping, limits(10, 1024), temporary, deadline()))
+        .isInstanceOf(ScannerRequestException.class)
+        .extracting(failure -> ((ScannerRequestException) failure).code())
+        .isEqualTo("ARCHIVE_LINK_ESCAPE");
+  }
+
+  @Test
   void stopsArchiveTraversalWhenTheSharedDeadlineExpires() throws IOException {
     Path archive = zip("deadline.zip", "entry.txt", "content".getBytes());
     AtomicLong clock = new AtomicLong();

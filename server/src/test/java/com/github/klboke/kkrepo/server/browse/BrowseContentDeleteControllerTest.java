@@ -31,6 +31,10 @@ import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
 import com.github.klboke.kkrepo.server.cache.NexusCacheType;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
+import com.github.klboke.kkrepo.server.conda.CondaService;
+import com.github.klboke.kkrepo.server.maven.MavenResponse;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmGroupPackumentCache;
 import com.github.klboke.kkrepo.server.pypi.PypiGroupSimpleIndexCache;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
@@ -62,6 +66,31 @@ class BrowseContentDeleteControllerTest {
         .thenReturn(Optional.of(repository(1L, "raw", RepositoryFormat.RAW, RepositoryType.HOSTED)));
     assertStatus(HttpStatus.BAD_REQUEST, () -> blank.controller.delete(
         "raw", " / ", null, new MockHttpServletRequest()));
+  }
+
+  @Test
+  void condaHostedDeletionDelegatesToTheLeaseProtectedProtocolService() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord repository =
+        repository(1L, "conda-hosted", RepositoryFormat.CONDA, RepositoryType.HOSTED);
+    RepositoryRuntime runtime = new RepositoryRuntime(
+        1L, "conda-hosted", RepositoryFormat.CONDA, RepositoryType.HOSTED, "conda-hosted",
+        true, 7L, "ALLOW", null, null, true, null, null, null, null, null, List.of());
+    String path = "main/linux-64/demo-1.0-0.conda";
+    when(fixture.repositoryDao.findByName(repository.name())).thenReturn(Optional.of(repository));
+    when(fixture.runtimeRegistry.resolveById(repository.id())).thenReturn(Optional.of(runtime));
+    when(fixture.condaService.deleteAdministrative(
+        runtime, path, "administrative delete by admin"))
+        .thenReturn(MavenResponse.noBody(204));
+
+    BrowseContentDeleteController.BrowseDeleteResult result = fixture.controller.delete(
+        repository.name(), path, null, new MockHttpServletRequest());
+
+    assertEquals(1, result.deletedAssets());
+    assertEquals(repository.name(), result.sourceRepository());
+    verify(fixture.condaService).deleteAdministrative(
+        runtime, path, "administrative delete by admin");
+    verify(fixture.assetDao, never()).deleteAssetById(anyLong());
   }
 
   @Test
@@ -615,6 +644,8 @@ class BrowseContentDeleteControllerTest {
     PypiGroupSimpleIndexCache pypiCache = mock(PypiGroupSimpleIndexCache.class);
     GroupMemberAssetCache groupMemberAssetCache = mock(GroupMemberAssetCache.class);
     NexusLikeCacheController cacheController = mock(NexusLikeCacheController.class);
+    RepositoryRuntimeRegistry runtimeRegistry = mock(RepositoryRuntimeRegistry.class);
+    CondaService condaService = mock(CondaService.class);
     PermissionSubject permissionSubject = mock(PermissionSubject.class);
     AuthenticatedSubject subject =
         new AuthenticatedSubject("test", "admin", "local", null, permissionSubject);
@@ -626,10 +657,12 @@ class BrowseContentDeleteControllerTest {
         browseNodeDao, componentDao, metadataRebuildDao,
         indexRebuildDao, authentication, security, assetCache, npmCache, pypiCache,
         groupMemberAssetCache, cacheController);
+    controller.setCondaDeleteSupport(runtimeRegistry, condaService);
     return new Fixture(
         repositoryDao, assetDao, terraformRegistryDao, swiftRegistryDao, ansibleRegistryDao,
         browseNodeDao, componentDao, metadataRebuildDao,
-        indexRebuildDao, npmCache, pypiCache, groupMemberAssetCache, cacheController, controller);
+        indexRebuildDao, npmCache, pypiCache, groupMemberAssetCache, cacheController,
+        runtimeRegistry, condaService, controller);
   }
 
   private static RepositoryRecord repository(
@@ -676,6 +709,8 @@ class BrowseContentDeleteControllerTest {
       PypiGroupSimpleIndexCache pypiCache,
       GroupMemberAssetCache groupMemberAssetCache,
       NexusLikeCacheController cacheController,
+      RepositoryRuntimeRegistry runtimeRegistry,
+      CondaService condaService,
       BrowseContentDeleteController controller) {
   }
 }

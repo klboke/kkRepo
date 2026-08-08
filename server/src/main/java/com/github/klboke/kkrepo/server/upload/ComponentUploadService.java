@@ -8,6 +8,7 @@ import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyService;
 import com.github.klboke.kkrepo.server.cargo.CargoHostedService;
 import com.github.klboke.kkrepo.server.composer.ComposerHostedService;
+import com.github.klboke.kkrepo.server.conda.CondaService;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenHostedService;
@@ -99,6 +100,14 @@ public class ComponentUploadService {
               field("source-archive-signature", "FILE", "Optional source archive CMS signature", true, null),
               field("metadata-signature", "FILE", "Optional metadata signature", true, null))),
       singleAsset("ansiblegalaxy"),
+      new UploadDefinition(
+          "conda",
+          false,
+          List.of(
+              field("channel", "STRING", "Nested channel path", true, "Component coordinates"),
+              field("subdir", "STRING", "Conda subdir, for example linux-64 or noarch", false,
+                  "Component coordinates")),
+          List.of(field("asset", "FILE", "Conda .conda or .tar.bz2 package", false, null))),
       rawLikeUpload("nuget"),
       rawLikeUpload("rubygems"),
       rawLikeUpload("yum"),
@@ -118,6 +127,7 @@ public class ComponentUploadService {
   private final TerraformService terraformService;
   private final SwiftService swiftService;
   private AnsibleGalaxyService ansibleGalaxyService;
+  private CondaService condaService;
   private final MavenPathParser mavenPathParser = new MavenPathParser();
   private final TerraformPathParser terraformPathParser = new TerraformPathParser();
 
@@ -202,6 +212,11 @@ public class ComponentUploadService {
     this.ansibleGalaxyService = ansibleGalaxyService;
   }
 
+  @Autowired(required = false)
+  void setCondaService(CondaService condaService) {
+    this.condaService = condaService;
+  }
+
   public UploadDefinition definition(String format) {
     String normalized = normalizeFormat(format);
     return DEFINITIONS.stream()
@@ -245,6 +260,7 @@ public class ComponentUploadService {
       case TERRAFORM -> uploadTerraform(runtime, upload, createdBy, createdByIp);
       case SWIFT -> uploadSwift(runtime, upload, createdBy, createdByIp);
       case ANSIBLEGALAXY -> uploadAnsible(runtime, upload, createdBy, createdByIp);
+      case CONDA -> uploadConda(runtime, upload, createdBy, createdByIp);
       case DOCKER -> throw new UploadValidationException("Docker hosted upload must use the Docker Registry V2 API");
       case NUGET -> uploadRaw(runtime, upload, createdBy, createdByIp);
       case RUBYGEMS -> uploadRaw(runtime, upload, createdBy, createdByIp);
@@ -252,6 +268,32 @@ public class ComponentUploadService {
       case RAW -> uploadRaw(runtime, upload, createdBy, createdByIp);
     };
     return new UploadResult(paths);
+  }
+
+  private List<String> uploadConda(
+      RepositoryRuntime runtime,
+      NormalizedUpload upload,
+      String createdBy,
+      String createdByIp) throws IOException {
+    if (condaService == null) {
+      throw new UploadValidationException("Conda upload service is unavailable");
+    }
+    if (upload.assets().size() != 1) {
+      throw new UploadValidationException("Conda upload requires exactly one package");
+    }
+    String channel = upload.fields().getOrDefault("channel", "").trim();
+    String subdir = requireField(upload.fields(), "subdir").trim();
+    AssetUpload asset = upload.assets().getFirst();
+    String filename = asset.file().getOriginalFilename();
+    if (filename == null || filename.isBlank()) {
+      throw new UploadValidationException("Conda package filename is required");
+    }
+    String path = (channel.isBlank() ? "" : channel + "/") + subdir + "/" + filename;
+    try (InputStream body = asset.file().getInputStream()) {
+      condaService.put(
+          runtime, path, body, asset.file().getContentType(), createdBy, createdByIp);
+    }
+    return List.of(path);
   }
 
   private List<String> uploadTerraform(
@@ -615,6 +657,7 @@ public class ComponentUploadService {
       case TERRAFORM -> "terraform";
       case SWIFT -> "swift";
       case ANSIBLEGALAXY -> "ansiblegalaxy";
+      case CONDA -> "conda";
       case RAW -> "raw";
     };
   }

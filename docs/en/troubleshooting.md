@@ -87,7 +87,7 @@ If using a reverse proxy, verify:
 - The proxy forwards the full path.
 - Large upload body size is allowed.
 - Read and write timeouts are long enough for artifact uploads.
-- The proxy does not strip authentication headers required by Maven/npm/pip/Helm/Cargo/Pub/Composer/Ansible/NuGet/gem/yum clients, and Terraform `host.services` keeps its URL-token segment through generated archive/checksum/signature URLs.
+- The proxy does not strip authentication headers required by Maven/npm/pip/Helm/Cargo/Pub/Composer/Ansible/Conda/NuGet/gem/yum clients, and Terraform `host.services` keeps its URL-token segment through generated archive/checksum/signature URLs.
 
 ## Initial Admin Setup Problems
 
@@ -181,6 +181,8 @@ For duplicate upload failures, verify the hosted repository write policy. Some r
 
 For Ansible Galaxy, a duplicate `(namespace, name, version)` always fails because collection versions are immutable. Inspect the durable import-task message for canonical filename, request SHA-256, `MANIFEST.json`/`FILES.json`, per-file checksum, archive safety, or configured size-limit failures. Raising only the reverse-proxy body limit does not raise the Ansible archive inspector limits.
 
+For Conda, upload only `.conda` or `.tar.bz2` package archives to a hosted path shaped as `<optional-channel>/<subdir>/<filename>`. The filename must exactly match the name/version/build in `info/index.json`, and the target subdir must match the package metadata. Do not upload `repodata.json*` or `channeldata.json`; kkrepo generates them. Archive safety, entry/expanded-byte, deadline, and concurrent-inspection limits can still reject a package even when the reverse-proxy body limit is large enough.
+
 ## Migration Problems
 
 Recommended order:
@@ -201,6 +203,7 @@ Common causes:
 - For blocked Composer migration, confirm that the source is a native Nexus 3.75.0+ Pro `composer-proxy` and explicitly select it under `Optional proxy repositories`. Community plugins, hosted/group sources, and sources without a Composer content schema do not silently downgrade to migration.
 - For blocked Terraform migration, confirm the source uses a native `terraform-hosted` or `terraform-proxy` recipe from a supported Nexus version. Proxy cache data requires explicit selection under `Optional proxy repositories` and a `FULL` source plan. Only recognized module/provider archives are restored. Restored module archives are discoverable from their local Nexus paths; provider routes, validators, checksum manifests, and signing snapshots are rebuilt from the configured upstream and pin their cache for the metadata lifetime. Unknown schemas, community plugins, and unsupported product capabilities still fail closed.
 - For blocked Ansible migration, confirm the source uses a native Nexus 3.93.x-3.94.x `ansiblegalaxy-hosted` or `ansiblegalaxy-proxy` recipe and that the Source Profile proves collection identity, archive, checksum, and manifest shape. Proxy cache must be selected under `Optional proxy repositories` with a `FULL` plan. Unknown shapes and masked/missing proxy secrets fail closed; complete manifest/files JSON is restored to blob storage rather than a database JSON column.
+- For blocked Conda migration, confirm the source uses a native Nexus 3.92.x-3.94.x `conda-hosted` recipe and that the Source Profile proves the expected datastore package shape. Only `.tar.bz2`/`.conda` package assets with provable identity, size, and checksums are restored; generated repodata/channeldata is rebuilt at the target. Unknown profiles, shape drift, and proxy-cache assets fail closed instead of becoming hosted packages.
 - Blob migration is slow because concurrency is too low, source Nexus is overloaded, or object storage is throttling.
 
 See [Nexus Migration Guide](nexus-migration-guide.md).
@@ -230,6 +233,8 @@ Ansible Galaxy uses a separate Nexus 3.94.x suite:
 ```bash
 scripts/ci/run-live-compat.sh ansible
 ```
+
+Conda live black-box comparison is opt-in through the `CONDA_COMPAT_*` variables and `CondaRepositoryBlackBoxCompatibilityTest`; the exact command is in [compat-test README](../../compat-test/README.md). The real Conda client flow is part of `client-e2e` when `conda` is available.
 
 For real package client coverage, run the client E2E suite against the same disposable kkrepo candidate:
 

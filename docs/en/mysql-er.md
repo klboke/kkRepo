@@ -1,8 +1,8 @@
 # kkrepo MySQL ER Design
 
-The historical MySQL schema starts at `persistence-mysql/src/main/resources/db/migration/mysql/V1__init_schema.sql`; MySQL and PostgreSQL then advance through paired migrations, currently V35. Flyway executes the applicable history during service startup. MySQL 8 uses InnoDB. PostgreSQL has an equivalent V29 baseline plus the same V30+ logical changes; this document remains the detailed logical ER reference for both engines. See [Database Schema](database-schema.md).
+The historical MySQL schema starts at `persistence-mysql/src/main/resources/db/migration/mysql/V1__init_schema.sql`; MySQL and PostgreSQL then advance through paired migrations, currently V41. Flyway executes the applicable history during service startup. MySQL 8 uses InnoDB. PostgreSQL has an equivalent V29 baseline plus the same V30+ logical changes; this document remains the detailed logical ER reference for both engines. See [Database Schema](database-schema.md).
 
-The schema uses a "unified content table + format field" model for shared asset/blob data. Cargo / Rust, Dart / Pub, Composer / PHP, Terraform, Swift, and Ansible use this shared model with protocol metadata stored in component/asset attributes. Composer package/version/dist data does not add a dedicated business table, and proxy routes are stored as rebuildable internal assets. Pub adds `pub_upload_session` for the official multi-step publish flow. Terraform adds signing-key, provider revision/platform, group source-binding, and publish-lease side tables. Ansible V35 adds collection version/signature, durable import task, proxy state, group binding, and fenced lease tables because those relationships must remain consistent across replicas. Formats with other protocol-specific relationships, such as Docker/OCI manifests, tags, upload sessions, auth tokens, and referrers, also add dedicated side tables. This is more suitable for migration from Nexus and unified admin-console queries. If a specific format becomes significantly larger later, it can be optimized with partitioning or additional dedicated tables.
+The schema uses a "unified content table + format field" model for shared asset/blob data. Cargo / Rust, Dart / Pub, Composer / PHP, Terraform, Swift, Ansible, and Conda use this shared model with protocol metadata stored in component/asset attributes. Composer package/version/dist data does not add a dedicated business table, and proxy routes are stored as rebuildable internal assets. Pub adds `pub_upload_session` for the official multi-step publish flow. Terraform adds signing-key, provider revision/platform, group source-binding, and publish-lease side tables. Ansible V35 adds collection version/signature, durable import task, proxy state, group binding, and fenced lease tables. Conda V41 adds bounded package/channel projections, tombstones, group source bindings, and fenced coordinate leases because channel metadata and package bytes must remain consistent across replicas. Formats with other protocol-specific relationships, such as Docker/OCI manifests, tags, upload sessions, auth tokens, and referrers, also add dedicated side tables. This is more suitable for migration from Nexus and unified admin-console queries. If a specific format becomes significantly larger later, it can be optimized with partitioning or additional dedicated tables.
 
 ## Repository And Content ER
 
@@ -61,6 +61,11 @@ erDiagram
   REPOSITORY ||--o{ ANSIBLE_PROXY_VERSION_STATE : proxy_state
   REPOSITORY ||--o{ ANSIBLE_GROUP_BINDING : group_source
   REPOSITORY ||--o{ ANSIBLE_REGISTRY_LEASE : fenced_lease
+  REPOSITORY ||--o{ CONDA_PACKAGE_RECORD : package_record
+  REPOSITORY ||--o{ CONDA_CHANNEL_STATE : channel_state
+  REPOSITORY ||--o{ CONDA_PACKAGE_TOMBSTONE : tombstone
+  REPOSITORY ||--o{ CONDA_GROUP_SOURCE_BINDING : group_source
+  REPOSITORY ||--o{ CONDA_COORDINATE_LEASE : fenced_lease
   SPRING_SESSION ||--o{ SPRING_SESSION_ATTRIBUTES : has
   MIGRATION_JOB ||--o{ MIGRATION_CHECKPOINT : records
   MIGRATION_JOB ||--o{ MIGRATION_VALIDATION_RESULT : validates
@@ -123,6 +128,11 @@ erDiagram
 | `ansible_proxy_version_state` | Upstream discovery/detail identity, validators, expected artifact checksum, cache/negative state, and integrity status |
 | `ansible_group_binding` | Group collection-version binding to one ordered source member/revision/filename/checksum; the version reference is nullable until the bound proxy artifact is materialized, so metadata and artifact cannot diverge without forcing metadata reads to download blobs |
 | `ansible_registry_lease` | Shared expiring lease and fencing token for publication, proxy materialization, revalidation, and takeover across replicas |
+| `conda_package_record` | Bounded hosted/proxy package projection with channel/subdir/coordinate, checksums, size, format, source, and component/asset binding; complete package bytes remain in blob storage |
+| `conda_channel_state` | Per repository/channel/subdir revision, verified proxy metadata identity, indexed timestamp, and CEP 15 package base URL |
+| `conda_package_tombstone` | Hosted package removal record used to generate deterministic repodata `removed` entries without hiding an active replacement |
+| `conda_group_source_binding` | Group filename binding to one ordered member revision/content identity/checksum, keeping repodata selection and package bytes on the same source snapshot |
+| `conda_coordinate_lease` | Shared expiring lease and fencing token for hosted publication, deletion, and proxy inventory replacement across replicas |
 
 ### Permission Layer
 
@@ -171,3 +181,4 @@ erDiagram
 16. V24 normalizes historical `jindo` / `jindo-oss` blob store engines to `oss-native`. The source of truth for large blobs remains OSS/S3/File blob store; MySQL stores only metadata, state, indexes, and references.
 17. V28 adds `pub_upload_session` because Pub publish is a multi-request protocol. Session state, temporary blob references, parsed metadata, and finalization status must survive replica switches and restarts; archive bytes still live in blob storage and are not stored in MySQL.
 18. V35 adds Ansible Galaxy protocol state. Immutable collection identity is protected by explicit unique constraints, tasks and leases survive process loss, group bindings keep metadata/checksum/artifact on one member, and archive/signature bytes remain in blob storage.
+19. V41 adds Conda protocol state, including canonical record fingerprints and compound indexes for bounded proxy deltas and streaming metadata projection. Package/channel projections and tombstones make repodata deterministic and rebuildable; group bindings pin metadata to package bytes, and transactionally revalidated coordinate leases fence publication and proxy inventory changes. Package and staging bytes remain in blob storage.

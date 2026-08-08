@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
 NEXUS_URL="${NEXUS_COMPAT_BASE_URL:-http://localhost:28090}"
 NEXUS_REPOSITORY="${DOCKER_MIGRATION_NEXUS_REPOSITORY:-docker-hosted}"
 CARGO_NEXUS_REPOSITORY="${CARGO_MIGRATION_NEXUS_REPOSITORY:-cargo-hosted}"
@@ -15,6 +18,9 @@ ANSIBLE_NEXUS_REPOSITORY="${ANSIBLE_MIGRATION_NEXUS_REPOSITORY:-ansible-hosted}"
 ANSIBLE_PROXY_NEXUS_REPOSITORY="${ANSIBLE_PROXY_MIGRATION_NEXUS_REPOSITORY:-ansible-proxy}"
 ANSIBLE_GROUP_NEXUS_REPOSITORY="${ANSIBLE_GROUP_MIGRATION_NEXUS_REPOSITORY:-ansible-group}"
 ANSIBLE_SECRET_PROXY_NEXUS_REPOSITORY="${ANSIBLE_SECRET_PROXY_MIGRATION_NEXUS_REPOSITORY:-ansible-secret-proxy}"
+CONDA_NEXUS_REPOSITORY="${CONDA_MIGRATION_NEXUS_REPOSITORY:-conda-hosted}"
+CONDA_PROXY_NEXUS_REPOSITORY="${CONDA_PROXY_MIGRATION_NEXUS_REPOSITORY:-conda-proxy}"
+CONDA_GROUP_NEXUS_REPOSITORY="${CONDA_GROUP_MIGRATION_NEXUS_REPOSITORY:-conda-group}"
 NEXUS_USER="${NEXUS_COMPAT_USERNAME:-admin}"
 NEXUS_PASSWORD="${NEXUS_COMPAT_PASSWORD:-Admin1234}"
 
@@ -34,6 +40,9 @@ ANSIBLE_KKREPO_REPOSITORY="${ANSIBLE_MIGRATION_KKREPO_REPOSITORY:-ansible-hosted
 ANSIBLE_PROXY_KKREPO_REPOSITORY="${ANSIBLE_PROXY_MIGRATION_KKREPO_REPOSITORY:-ansible-proxy}"
 ANSIBLE_GROUP_KKREPO_REPOSITORY="${ANSIBLE_GROUP_MIGRATION_KKREPO_REPOSITORY:-ansible-group}"
 ANSIBLE_SECRET_PROXY_KKREPO_REPOSITORY="${ANSIBLE_SECRET_PROXY_MIGRATION_KKREPO_REPOSITORY:-ansible-secret-proxy}"
+CONDA_KKREPO_REPOSITORY="${CONDA_MIGRATION_KKREPO_REPOSITORY:-conda-hosted}"
+CONDA_PROXY_KKREPO_REPOSITORY="${CONDA_PROXY_MIGRATION_KKREPO_REPOSITORY:-conda-proxy}"
+CONDA_GROUP_KKREPO_REPOSITORY="${CONDA_GROUP_MIGRATION_KKREPO_REPOSITORY:-conda-group}"
 KKREPO_SECONDARY_URL="${KKREPO_MIGRATION_SECONDARY_URL:-}"
 KKREPO_TARGET_DATABASE="${KKREPO_MIGRATION_TARGET_DATABASE:-mysql}"
 KKREPO_TARGET_DATABASE_SERVICE="${KKREPO_MIGRATION_TARGET_DATABASE_SERVICE:-mysql}"
@@ -92,6 +101,17 @@ ANSIBLE_FIXTURE_SHA256=""
 ANSIBLE_FIXTURE_FILES_JSON_SIZE=""
 ANSIBLE_PROXY_FIXTURE_ARCHIVE=""
 ANSIBLE_PROXY_FIXTURE_SHA256=""
+CONDA_MIGRATION_ENABLED="${CONDA_MIGRATION_ENABLED:-false}"
+CONDA_BIN="${CONDA_E2E_BIN:-${CONDA_BIN:-conda}}"
+CONDA_PACKAGE="${CONDA_MIGRATION_PACKAGE:-kkrepo_migration_e2e_${TAG_SAFE_LC}}"
+CONDA_PACKAGE="${CONDA_PACKAGE:0:64}"
+CONDA_VERSION="${CONDA_MIGRATION_VERSION:-1.2.3}"
+CONDA_BUILD="${CONDA_MIGRATION_BUILD:-0}"
+CONDA_SUBDIR="${CONDA_MIGRATION_SUBDIR:-linux-64}"
+CONDA_FIXTURE_WORKDIR=""
+CONDA_FIXTURE_ARCHIVE=""
+CONDA_FIXTURE_SHA256=""
+CONDA_FIXTURE_MARKER="kkrepo Conda Nexus migration E2E $TAG_SAFE_LC"
 TERRAFORM_PROXY_PROVIDER_NAMESPACE="${TERRAFORM_PROXY_PROVIDER_NAMESPACE:-hashicorp}"
 TERRAFORM_PROXY_PROVIDER_NAME="${TERRAFORM_PROXY_PROVIDER_NAME:-null}"
 TERRAFORM_PROXY_PROVIDER_VERSION="${TERRAFORM_PROXY_PROVIDER_VERSION:-3.2.4}"
@@ -236,6 +256,9 @@ cleanup() {
   fi
   if [[ -n "$ANSIBLE_FIXTURE_WORKDIR" ]]; then
     rm -rf "$ANSIBLE_FIXTURE_WORKDIR"
+  fi
+  if [[ -n "$CONDA_FIXTURE_WORKDIR" ]]; then
+    rm -rf "$CONDA_FIXTURE_WORKDIR"
   fi
 }
 
@@ -394,6 +417,330 @@ swift_migration_enabled() {
 
 ansible_migration_enabled() {
   [[ "$ANSIBLE_MIGRATION_ENABLED" == "true" ]]
+}
+
+conda_migration_enabled() {
+  [[ "$CONDA_MIGRATION_ENABLED" == "true" ]]
+}
+
+source_conda_available() {
+  local endpoint
+  for endpoint in \
+      "hosted/$CONDA_NEXUS_REPOSITORY" \
+      "proxy/$CONDA_PROXY_NEXUS_REPOSITORY" \
+      "group/$CONDA_GROUP_NEXUS_REPOSITORY"; do
+    if ! curl -m 20 -fsS \
+        -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+        "$NEXUS_URL/service/rest/v1/repositories/conda/$endpoint" \
+        >/dev/null 2>&1; then
+      return 1
+    fi
+  done
+}
+
+prepare_conda_fixture() {
+  CONDA_FIXTURE_WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-conda-migration.XXXXXX")"
+  CONDA_FIXTURE_ARCHIVE="$CONDA_FIXTURE_WORKDIR/$CONDA_PACKAGE-$CONDA_VERSION-$CONDA_BUILD.tar.bz2"
+  python3 "$PROJECT_ROOT/scripts/ci/create-conda-e2e-fixture.py" \
+    --name "$CONDA_PACKAGE" \
+    --version "$CONDA_VERSION" \
+    --build "$CONDA_BUILD" \
+    --subdir "$CONDA_SUBDIR" \
+    --marker "$CONDA_FIXTURE_MARKER" \
+    --output "$CONDA_FIXTURE_ARCHIVE" \
+    >"$CONDA_FIXTURE_WORKDIR/fixture.json"
+  CONDA_FIXTURE_SHA256="$(file_sha256 "$CONDA_FIXTURE_ARCHIVE")"
+}
+
+publish_conda_fixture_to_source_nexus() {
+  local status
+  status="$(curl -m 60 -sS \
+    -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    -X PUT \
+    -H "Content-Type: application/x-tar" \
+    --data-binary "@$CONDA_FIXTURE_ARCHIVE" \
+    -o "$CONDA_FIXTURE_WORKDIR/source-upload.json" \
+    -w '%{http_code}' \
+    "$NEXUS_URL/repository/$CONDA_NEXUS_REPOSITORY/$CONDA_SUBDIR/$(basename "$CONDA_FIXTURE_ARCHIVE")")"
+  expect_status "$status" "201" "publish source Conda fixture"
+}
+
+wait_for_conda_repodata() {
+  local label="$1"
+  local base_url="$2"
+  local repository="$3"
+  local credentials="$4"
+  local output="$5"
+  local filename
+  filename="$(basename "$CONDA_FIXTURE_ARCHIVE")"
+  for ((i = 1; i <= WAIT_TIMEOUT_SECONDS; i++)); do
+    if curl -m 30 -fsS -u "$credentials" \
+        "$base_url/repository/$repository/$CONDA_SUBDIR/repodata.json" \
+        -o "$output" 2>/dev/null \
+        && grep -Fq "\"$filename\"" "$output"; then
+      return 0
+    fi
+    sleep 1
+  done
+  log "timed out waiting for $label Conda repodata to contain $filename"
+  exit 1
+}
+
+run_conda_client_acceptance() {
+  local label="$1"
+  local base_url="$2"
+  local repository="$3"
+  local safe_label workdir condarc prefix search list channel marker_path
+  safe_label="$(printf '%s' "$label" | tr -c 'A-Za-z0-9._-' '-')"
+  workdir="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-conda-client-${safe_label}.XXXXXX")"
+  condarc="$workdir/condarc"
+  prefix="$workdir/prefix"
+  search="$workdir/search.json"
+  list="$workdir/list.json"
+  channel="${base_url%/}/repository/$repository"
+  marker_path="share/kkrepo-conda-e2e/$CONDA_PACKAGE.txt"
+  mkdir -p "$workdir/pkgs" "$workdir/envs"
+  cat >"$condarc" <<EOF
+channels: []
+default_channels: []
+channel_priority: strict
+show_channel_urls: true
+auto_activate_base: false
+pkgs_dirs:
+  - $workdir/pkgs
+envs_dirs:
+  - $workdir/envs
+EOF
+  log "running Conda client search/create acceptance through $label"
+  env \
+    CONDARC="$condarc" \
+    CONDA_PKGS_DIRS="$workdir/pkgs" \
+    CONDA_ENVS_PATH="$workdir/envs" \
+    CONDA_SUBDIR="$CONDA_SUBDIR" \
+    "$CONDA_BIN" search --json --override-channels \
+      --channel "$channel" "$CONDA_PACKAGE=$CONDA_VERSION=$CONDA_BUILD" \
+      >"$search"
+  python3 - "$search" "$CONDA_PACKAGE" "$CONDA_VERSION" "$CONDA_BUILD" <<'PY'
+import json
+import pathlib
+import sys
+
+path, name, version, build = sys.argv[1:5]
+payload = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+records = payload.get(name) or []
+if not any(
+    record.get("version") == version and record.get("build") == build
+    for record in records
+):
+    raise SystemExit(f"Conda client search did not find migrated fixture: {payload}")
+PY
+  env \
+    CONDARC="$condarc" \
+    CONDA_PKGS_DIRS="$workdir/pkgs" \
+    CONDA_ENVS_PATH="$workdir/envs" \
+    CONDA_SUBDIR="$CONDA_SUBDIR" \
+    "$CONDA_BIN" create --json --yes --no-deps \
+      --prefix "$prefix" --override-channels \
+      --channel "$channel" "$CONDA_PACKAGE=$CONDA_VERSION=$CONDA_BUILD" \
+      >"$workdir/create.json"
+  grep -Fxq "$CONDA_FIXTURE_MARKER" "$prefix/$marker_path"
+  env \
+    CONDARC="$condarc" \
+    CONDA_PKGS_DIRS="$workdir/pkgs" \
+    CONDA_ENVS_PATH="$workdir/envs" \
+    CONDA_SUBDIR="$CONDA_SUBDIR" \
+    "$CONDA_BIN" list --json --prefix "$prefix" >"$list"
+  python3 - "$list" "$CONDA_PACKAGE" "$CONDA_VERSION" "$CONDA_BUILD" <<'PY'
+import json
+import pathlib
+import sys
+
+path, name, version, build = sys.argv[1:5]
+records = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+if not any(
+    record.get("name") == name
+    and record.get("version") == version
+    and record.get("build_string") == build
+    for record in records
+):
+    raise SystemExit(f"Conda client did not install migrated fixture: {records}")
+PY
+  rm -rf "$workdir"
+}
+
+verify_source_conda_fixture() {
+  local repodata downloaded
+  repodata="$CONDA_FIXTURE_WORKDIR/source-repodata.json"
+  downloaded="$CONDA_FIXTURE_WORKDIR/source-package.tar.bz2"
+  wait_for_conda_repodata \
+    "source Nexus" "$NEXUS_URL" "$CONDA_NEXUS_REPOSITORY" \
+    "$NEXUS_USER:$NEXUS_PASSWORD" "$repodata"
+  python3 - "$repodata" "$(basename "$CONDA_FIXTURE_ARCHIVE")" "$CONDA_FIXTURE_SHA256" <<'PY'
+import json
+import pathlib
+import sys
+
+path, filename, checksum = sys.argv[1:4]
+payload = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+record = (payload.get("packages") or {}).get(filename)
+if not record or str(record.get("sha256") or "").lower() != checksum:
+    raise SystemExit(f"Nexus Conda fixture checksum was not indexed: {record}")
+PY
+  curl -m 60 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$NEXUS_URL/repository/$CONDA_NEXUS_REPOSITORY/$CONDA_SUBDIR/$(basename "$CONDA_FIXTURE_ARCHIVE")" \
+    -o "$downloaded"
+  cmp "$CONDA_FIXTURE_ARCHIVE" "$downloaded"
+  run_conda_client_acceptance "source Nexus hosted" "$NEXUS_URL" "$CONDA_NEXUS_REPOSITORY"
+}
+
+verify_conda_repository_definitions() {
+  local target_url="$1"
+  local label="$2"
+  local workdir hosted proxy group
+  workdir="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-conda-definitions.XXXXXX")"
+  hosted="$workdir/hosted.json"
+  proxy="$workdir/proxy.json"
+  group="$workdir/group.json"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/internal/repositories/$CONDA_KKREPO_REPOSITORY" >"$hosted"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/internal/repositories/$CONDA_PROXY_KKREPO_REPOSITORY" >"$proxy"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/internal/repositories/$CONDA_GROUP_KKREPO_REPOSITORY" >"$group"
+  python3 - \
+    "$hosted" "$proxy" "$group" \
+    "$CONDA_KKREPO_REPOSITORY" "$CONDA_PROXY_KKREPO_REPOSITORY" \
+    "$CONDA_GROUP_KKREPO_REPOSITORY" <<'PY'
+import json
+import pathlib
+import sys
+
+hosted_path, proxy_path, group_path, hosted_name, proxy_name, group_name = sys.argv[1:7]
+hosted = json.loads(pathlib.Path(hosted_path).read_text(encoding="utf-8"))
+proxy = json.loads(pathlib.Path(proxy_path).read_text(encoding="utf-8"))
+group = json.loads(pathlib.Path(group_path).read_text(encoding="utf-8"))
+if hosted.get("recipe") != "conda-hosted":
+    raise SystemExit(f"migrated Conda hosted definition is invalid: {hosted}")
+if proxy.get("recipe") != "conda-proxy":
+    raise SystemExit(f"migrated Conda proxy definition is invalid: {proxy}")
+if (proxy.get("proxy") or {}).get("remoteUrl", "").rstrip("/") != "https://repo.anaconda.com/pkgs/main":
+    raise SystemExit(f"migrated Conda proxy remote URL changed: {proxy}")
+if group.get("recipe") != "conda-group":
+    raise SystemExit(f"migrated Conda group definition is invalid: {group}")
+members = (group.get("group") or {}).get("memberNames") or []
+if members != [hosted_name, proxy_name]:
+    raise SystemExit(f"migrated Conda group members changed: {members!r} for {group_name}")
+PY
+  rm -rf "$workdir"
+  log "Conda hosted/proxy/group definitions verified through $label"
+}
+
+verify_migrated_conda_fixture() {
+  local job_id="$1"
+  local target_url="${2:-$KKREPO_URL}"
+  local label="${3:-primary}"
+  local workdir job repodata downloaded
+  workdir="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-conda-migrated.XXXXXX")"
+  job="$workdir/job.json"
+  repodata="$workdir/repodata.json"
+  downloaded="$workdir/package.tar.bz2"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/internal/migration/nexus/repository-data/jobs/$job_id" >"$job"
+  python3 - "$job" "$CONDA_NEXUS_REPOSITORY" <<'PY'
+import json
+import pathlib
+import sys
+
+path, repository = sys.argv[1:3]
+payload = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+rows = payload.get("repositoryJobs") or payload.get("repositoryStatuses") or payload.get("repositoryDetails") or []
+matches = [
+    row for row in rows
+    if (row.get("sourceRepositoryName") or row.get("repositoryName") or row.get("name")) == repository
+]
+if not matches:
+    raise SystemExit(f"Conda migration repository status not found: {repository}")
+row = matches[0]
+if int(row.get("migratedAssets") or 0) < 1:
+    raise SystemExit(f"Conda migration did not restore a package: {row}")
+if int(row.get("failedAssets") or 0) != 0:
+    raise SystemExit(f"Conda migration has failed assets: {row}")
+PY
+  wait_for_conda_repodata \
+    "migrated $label" "$target_url" "$CONDA_KKREPO_REPOSITORY" \
+    "$(auth)" "$repodata"
+  python3 - "$repodata" "$(basename "$CONDA_FIXTURE_ARCHIVE")" "$CONDA_FIXTURE_SHA256" <<'PY'
+import json
+import pathlib
+import sys
+
+path, filename, checksum = sys.argv[1:4]
+payload = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+record = (payload.get("packages") or {}).get(filename)
+if not record or str(record.get("sha256") or "").lower() != checksum:
+    raise SystemExit(f"migrated Conda repodata checksum changed: {record}")
+PY
+  curl -m 60 -fsS -u "$(auth)" \
+    "$target_url/repository/$CONDA_KKREPO_REPOSITORY/$CONDA_SUBDIR/$(basename "$CONDA_FIXTURE_ARCHIVE")" \
+    -o "$downloaded"
+  cmp "$CONDA_FIXTURE_ARCHIVE" "$downloaded"
+  run_conda_client_acceptance "$label group" "$target_url" "$CONDA_GROUP_KKREPO_REPOSITORY"
+  rm -rf "$workdir"
+  log "Conda hosted package and group client install verified through $label"
+}
+
+conda_fixture_row_counts() {
+  local repository_name group_name package_name version filename subdir
+  repository_name="$(sql_literal "$CONDA_KKREPO_REPOSITORY")"
+  group_name="$(sql_literal "$CONDA_GROUP_KKREPO_REPOSITORY")"
+  package_name="$(sql_literal "$CONDA_PACKAGE")"
+  version="$(sql_literal "$CONDA_VERSION")"
+  filename="$(sql_literal "$(basename "$CONDA_FIXTURE_ARCHIVE")")"
+  subdir="$(sql_literal "$CONDA_SUBDIR")"
+  target_db_query "
+    SELECT
+      (SELECT COUNT(*)
+         FROM conda_package_record cp JOIN repository r ON r.id = cp.repository_id
+        WHERE r.name = $repository_name AND cp.name = $package_name
+          AND cp.version = $version AND cp.filename = $filename),
+      (SELECT COUNT(*)
+         FROM component c JOIN repository r ON r.id = c.repository_id
+        WHERE r.name = $repository_name AND c.format = 'conda'
+          AND c.name = $package_name AND c.version = $version),
+      (SELECT COUNT(*)
+         FROM asset a JOIN component c ON c.id = a.component_id
+         JOIN repository r ON r.id = c.repository_id
+        WHERE r.name = $repository_name AND c.format = 'conda'
+          AND c.name = $package_name AND c.version = $version),
+      (SELECT COUNT(DISTINCT ab.id)
+         FROM asset_blob ab JOIN asset a ON a.asset_blob_id = ab.id
+         JOIN component c ON c.id = a.component_id
+         JOIN repository r ON r.id = c.repository_id
+        WHERE r.name = $repository_name AND c.format = 'conda'
+          AND c.name = $package_name AND c.version = $version),
+      (SELECT COUNT(*)
+         FROM conda_channel_state cs JOIN repository r ON r.id = cs.repository_id
+        WHERE r.name = $repository_name AND cs.subdir = $subdir),
+      (SELECT COUNT(*)
+         FROM conda_group_source_binding gb JOIN repository r ON r.id = gb.group_repository_id
+        WHERE r.name = $group_name AND gb.filename = $filename)"
+}
+
+assert_conda_fixture_counts() {
+  local counts="$1"
+  python3 - "$counts" <<'PY'
+import sys
+
+raw = sys.argv[1]
+values = [int(value) for value in raw.split()]
+names = ["package", "component", "asset", "blob", "channel_state", "group_binding"]
+if len(values) != len(names):
+    raise SystemExit(f"unexpected Conda row-count snapshot: {raw!r}")
+missing = [name for name, value in zip(names, values) if value != 1]
+if missing:
+    raise SystemExit(f"Conda migration row counts are not exactly one for {missing}: {raw!r}")
+print(" ".join(f"{name}={value}" for name, value in zip(names, values)))
+PY
 }
 
 source_ansible_available() {
@@ -2914,7 +3261,9 @@ run_config_metadata_migration() {
     "$ANSIBLE_MIGRATION_ENABLED" \
     "$ANSIBLE_NEXUS_REPOSITORY" \
     "$ANSIBLE_PROXY_NEXUS_REPOSITORY" \
-    "$ANSIBLE_SECRET_PROXY_NEXUS_REPOSITORY" <<'PY'
+    "$ANSIBLE_SECRET_PROXY_NEXUS_REPOSITORY" \
+    "$CONDA_MIGRATION_ENABLED" \
+    "$CONDA_NEXUS_REPOSITORY" <<'PY'
 import json
 import sys
 
@@ -2930,7 +3279,9 @@ import sys
     ansible_repository,
     ansible_proxy_repository,
     ansible_secret_proxy_repository,
-) = sys.argv[1:12]
+    conda_enabled,
+    conda_repository,
+) = sys.argv[1:14]
 with open(path, "r", encoding="utf-8") as source:
     payload = json.load(source)
 plan = payload.get("migrationPlan") or {}
@@ -3075,6 +3426,19 @@ if ansible_enabled == "true":
         raise SystemExit(
             f"Ansible proxy preflight did not report an unavailable credential: {proxy_risks}"
         )
+if conda_enabled == "true":
+    capability = ((profile.get("formatCapabilities") or {}).get("conda") or {})
+    if capability.get("contentMigration") is not True:
+        raise SystemExit(f"Conda datastore content model was not proven: {capability}")
+    conda = [
+        item
+        for item in items
+        if item.get("area") == "repository" and item.get("name") == conda_repository
+    ]
+    if not conda:
+        raise SystemExit(f"Conda hosted plan item not found: {conda_repository}")
+    if conda[0].get("status") != "FULL" or conda[0].get("readMode") != "script-datastore":
+        raise SystemExit(f"Conda hosted migration is not fail-closed FULL: {conda[0]}")
 print(
     "preflight adapter="
     + str(adapter)
@@ -3276,6 +3640,20 @@ if ansible_migration_enabled; then
   warm_ansible_proxy_fixture
   ensure_ansible_source_secret_proxy
 fi
+if conda_migration_enabled; then
+  need python3
+  need cmp
+  need "$CONDA_BIN"
+  if ! source_conda_available; then
+    log "required Conda hosted/proxy/group repositories are not available on the Nexus 3.92/3.94 source"
+    exit 1
+  fi
+  # Seed an installable package before preflight so the fail-closed source-profile probe can
+  # fingerprint the real Nexus Conda datastore tables and package asset shape.
+  prepare_conda_fixture
+  publish_conda_fixture_to_source_nexus
+  verify_source_conda_fixture
+fi
 run_config_metadata_migration
 if composer_migration_enabled; then
   verify_composer_requires_explicit_proxy_selection
@@ -3288,6 +3666,9 @@ fi
 if ansible_migration_enabled; then
   verify_ansible_repository_definitions "$KKREPO_URL" "primary"
   verify_ansible_secret_proxy_storage
+fi
+if conda_migration_enabled; then
+  verify_conda_repository_definitions "$KKREPO_URL" "primary"
 fi
 
 kkrepo_ref="${KKREPO_DOCKER_REGISTRY}/${IMAGE}:${TAG}"
@@ -3327,6 +3708,9 @@ if ansible_migration_enabled; then
     backup_proxy_repository_values="$backup_proxy_repository_values,"
   fi
   backup_proxy_repository_values="$backup_proxy_repository_values\"$(json_escape "$ANSIBLE_PROXY_NEXUS_REPOSITORY")\""
+fi
+if conda_migration_enabled; then
+  migration_repositories_json="$migration_repositories_json,\"$(json_escape "$CONDA_NEXUS_REPOSITORY")\""
 fi
 if terraform_migration_enabled; then
   migration_repositories_json="$migration_repositories_json,\"$(json_escape "$TERRAFORM_NEXUS_REPOSITORY")\""
@@ -3434,6 +3818,16 @@ if ansible_migration_enabled; then
   fi
 fi
 
+if conda_migration_enabled; then
+  verify_migrated_conda_fixture "$job_id" "$KKREPO_URL" "primary"
+  conda_counts="$(conda_fixture_row_counts)"
+  log "Conda migration row counts: $(assert_conda_fixture_counts "$conda_counts")"
+  if swift_migration_enabled && [[ -n "$KKREPO_SECONDARY_URL" ]]; then
+    verify_conda_repository_definitions "$KKREPO_SECONDARY_URL" "secondary"
+    verify_migrated_conda_fixture "$job_id" "$KKREPO_SECONDARY_URL" "secondary"
+  fi
+fi
+
 if swift_migration_enabled; then
   swift_counts_before=""
   swift_counts_after=""
@@ -3471,4 +3865,4 @@ if swift_migration_enabled; then
   fi
 fi
 
-log "Docker/Cargo/Pub/Composer/Terraform/Swift/Ansible migration E2E completed: job=$job_id source=${NEXUS_URL%/}/repository/${NEXUS_REPOSITORY}/v2/${IMAGE}:${TAG} target=$kkrepo_ref"
+log "Docker/Cargo/Pub/Composer/Terraform/Swift/Ansible/Conda migration E2E completed: job=$job_id source=${NEXUS_URL%/}/repository/${NEXUS_REPOSITORY}/v2/${IMAGE}:${TAG} target=$kkrepo_ref"

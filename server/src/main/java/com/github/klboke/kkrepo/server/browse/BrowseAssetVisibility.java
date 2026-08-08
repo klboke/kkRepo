@@ -8,6 +8,7 @@ public final class BrowseAssetVisibility {
   private static final String TERRAFORM_INTERNAL_PREFIX = ".terraform";
   private static final String SWIFT_INTERNAL_PREFIX = ".swift";
   private static final String ANSIBLE_INTERNAL_PREFIX = ".ansible";
+  private static final String CONDA_INTERNAL_PREFIX = ".conda";
 
   private BrowseAssetVisibility() {
   }
@@ -20,6 +21,7 @@ public final class BrowseAssetVisibility {
         || (format == RepositoryFormat.TERRAFORM
             && (under(path, TERRAFORM_INTERNAL_PREFIX) || terraformProviderInternal(path)))
         || (format == RepositoryFormat.SWIFT && under(path, SWIFT_INTERNAL_PREFIX))
+        || (format == RepositoryFormat.CONDA && under(path, CONDA_INTERNAL_PREFIX))
         || (format == RepositoryFormat.ANSIBLEGALAXY
             && (under(path, ANSIBLE_INTERNAL_PREFIX) || ansibleArtifactInternal(path)));
   }

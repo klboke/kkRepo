@@ -15,10 +15,12 @@
 - 清理对象是完整的逻辑制品版本，而不是任意 blob 或文件。格式对应的删除流程还会同步维护生成的
   metadata、index 和 cache。
 - 当前全部格式都支持 Try Run、手动执行和定时执行。只有已经验证协议版本比较器的 Maven、
-  Cargo/Rust、Dart/Pub、Terraform、Swift Package Registry 和 Ansible Galaxy 支持
+  Cargo/Rust、Dart/Pub、Terraform、Swift Package Registry、Ansible Galaxy 和 Conda 支持
   **保留最新版本**规则。
 - 实际执行不可逆。kkRepo 当前没有 Cleanup 专属恢复窗口，因此生产环境启用删除前应准备并验证
   数据库与 blob store 备份。
+
+Conda 的一个清理 subject 是完整的 channel/subdir/name/version/build package。**保留最新版本**在每个 `(channel, subdir, name)` family 内使用 Conda VersionOrder，并保留入选 version 的全部 build。Hosted 删除会写 tombstone 并递增 channel revision，使 repodata、channeldata、Browse、Search 和 group binding 一致重建；Proxy 清理只移除本地 package cache asset，保留已验证上游 inventory 供下次回源。
 
 ## 规则组合语义
 

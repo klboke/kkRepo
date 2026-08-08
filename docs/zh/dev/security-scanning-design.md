@@ -300,7 +300,7 @@ adapter 的进程管理或第三方扫描器类型。
 
 ### 普通 asset
 
-普通制品主体包含：
+除协议专用主体外，普通制品主体包含：
 
 ```text
 subjectKind       = ASSET_BLOB
@@ -317,6 +317,25 @@ classification   = ARCHIVE | PACKAGE | MANIFEST | RAW_FILE
 
 asset 路径被新 Blob 覆盖时，即使 asset ID 不变，也必须推进 candidate generation。
 worker 必须重新读取当前 asset/blob binding；旧 generation 的结果不得覆盖新内容状态。
+
+### Conda package
+
+Conda 的 `.conda` 和 `.tar.bz2` package 使用：
+
+```text
+subjectKind       = CONDA_PACKAGE
+repositoryId
+assetId
+assetBlobId
+sha256
+size
+format            = CONDA
+classification    = PACKAGE
+```
+
+该独立 subject kind 是 SBOM 复用边界的一部分。Conda 需要把有界 `info/index.json` 投影为
+Syft 可识别的 `conda-meta/package.json`，不能复用同一字节曾以普通压缩包方式生成的 SBOM，
+也不能让 Conda 的专用 catalog 结果污染普通 archive 的 content-addressed 复用。
 
 ### Docker/OCI
 

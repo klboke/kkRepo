@@ -146,6 +146,7 @@ jobs:
             docker-port: 18189
             composer-migration-enabled: true
             swift-migration-enabled: false
+            conda-migration-enabled: true
             secondary-port: 19096
             secondary-management-port: 19097
             wait-timeout-seconds: 300
@@ -162,6 +163,7 @@ jobs:
             docker-port: 18191
             composer-migration-enabled: false
             swift-migration-enabled: true
+            conda-migration-enabled: true
             secondary-port: 18102
             secondary-management-port: 18103
             wait-timeout-seconds: 420
@@ -178,6 +180,7 @@ jobs:
             docker-port: 18193
             composer-migration-enabled: false
             swift-migration-enabled: true
+            conda-migration-enabled: true
             secondary-port: 18106
             secondary-management-port: 18107
             wait-timeout-seconds: 420
@@ -199,6 +202,7 @@ jobs:
             composer-migration-enabled: false
             swift-migration-enabled: true
             ansible-migration-enabled: true
+            conda-migration-enabled: true
             secondary-port: 18110
             secondary-management-port: 18111
             wait-timeout-seconds: 420
@@ -228,6 +232,7 @@ jobs:
       COMPOSER_NEXUS_REQUIRED: ${{ matrix.composer-migration-enabled }}
       SWIFT_MIGRATION_ENABLED: ${{ matrix.swift-migration-enabled }}
       ANSIBLE_MIGRATION_ENABLED: ${{ matrix.ansible-migration-enabled || false }}
+      CONDA_MIGRATION_ENABLED: ${{ matrix.conda-migration-enabled || false }}
       KKREPO_MIGRATION_TARGET_DATABASE: ${{ matrix.target-database || 'mysql' }}
       KKREPO_MIGRATION_TARGET_DATABASE_SERVICE: ${{ matrix.target-database-service || 'mysql' }}
       KKREPO_SECONDARY_COMPAT_PORT: ${{ matrix.secondary-port }}
@@ -247,6 +252,24 @@ jobs:
           distribution: temurin
           java-version: "25"
           cache: maven
+
+      - name: Set up Conda migration client
+        if: matrix.conda-migration-enabled
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: "26.3.2-3"
+          activate-environment: conda-migration-e2e
+          auto-activate-base: false
+          conda-remove-defaults: true
+
+      - name: Export Conda migration client executable
+        if: matrix.conda-migration-enabled
+        shell: bash -el {0}
+        run: |
+          set -euo pipefail
+          conda_bin="$(command -v conda)"
+          "$conda_bin" --version
+          echo "CONDA_BIN=$conda_bin" >> "$GITHUB_ENV"
 
       - name: Validate migration compose file
         run: docker compose -f "$COMPOSE_FILE" config

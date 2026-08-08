@@ -101,7 +101,8 @@ public final class MavenResponse {
     return internalAttributes.get(name);
   }
 
-  void closeBodyIfOpen() {
+  /** Closes an eagerly opened body without invoking a lazy body supplier. */
+  public void closeBodyIfOpen() {
     if (body == null) {
       return;
     }

@@ -217,6 +217,24 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Set up Conda client
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e'
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: "26.3.2-3"
+          activate-environment: conda-client-e2e
+          auto-activate-base: false
+          conda-remove-defaults: true
+
+      - name: Export Conda client executable
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e'
+        shell: bash -el {0}
+        run: |
+          set -euo pipefail
+          conda_bin="$(command -v conda)"
+          "$conda_bin" --version
+          echo "CONDA_BIN=$conda_bin" >> "$GITHUB_ENV"
+
       - name: Set up Python 3.9 for Ansible 2.9
         id: ansible-python29
         if: env.LIVE_COMPAT_SUITE == 'client-e2e'

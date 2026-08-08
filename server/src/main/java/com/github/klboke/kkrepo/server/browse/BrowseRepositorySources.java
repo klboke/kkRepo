@@ -29,6 +29,12 @@ final class BrowseRepositorySources {
     return swiftSources(visibleRepository, repositoryDao);
   }
 
+  static List<RepositoryRecord> condaSources(
+      RepositoryRecord visibleRepository,
+      RepositoryDao repositoryDao) {
+    return swiftSources(visibleRepository, repositoryDao);
+  }
+
   private static void collect(
       RepositoryRecord repository,
       RepositoryDao repositoryDao,

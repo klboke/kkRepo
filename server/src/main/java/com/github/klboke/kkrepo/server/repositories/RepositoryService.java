@@ -7,6 +7,7 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
@@ -78,6 +79,7 @@ public class RepositoryService {
   private final ProxiedHttpClientFactory proxiedHttpClientFactory;
   private final SwiftRegistryDao swiftRegistry;
   private AnsibleGalaxyRegistryDao ansibleRegistry;
+  private CondaRegistryDao condaRegistry;
   private CleanupPolicyDao cleanupPolicies;
   private final String urlPrefix;
   private final int serverPort;
@@ -130,6 +132,11 @@ public class RepositoryService {
   @Autowired(required = false)
   void setAnsibleGalaxyRegistry(AnsibleGalaxyRegistryDao ansibleRegistry) {
     this.ansibleRegistry = ansibleRegistry;
+  }
+
+  @Autowired(required = false)
+  void setCondaRegistry(CondaRegistryDao condaRegistry) {
+    this.condaRegistry = condaRegistry;
   }
 
   @Autowired(required = false)
@@ -271,6 +278,9 @@ public class RepositoryService {
     if (recipe.type() == RepositoryType.GROUP) {
       List<Long> memberIds = resolveMemberIds(name, recipe.format(), command.group());
       repositoryDao.replaceMembers(id, memberIds);
+      if (recipe.format() == RepositoryFormat.CONDA && condaRegistry != null) {
+        condaRegistry.nextRepositoryRevision(id);
+      }
     }
 
     invalidateRuntimeCache(id, name);
@@ -366,6 +376,7 @@ public class RepositoryService {
       invalidateTerraformGroupBindings(existing.format(), existing.id());
       invalidateSwiftGroupBindings(existing.format(), existing.id());
       invalidateAnsibleGroupBindings(existing.format(), existing.id());
+      invalidateCondaGroupBindings(existing.format(), existing.id());
     } else if (recipe.type() != RepositoryType.GROUP) {
       invalidateNpmMemberAfterCommit(existing.format(), existing.id());
       invalidatePypiMemberAfterCommit(existing.format(), existing.id());
@@ -373,6 +384,7 @@ public class RepositoryService {
       invalidateTerraformContainingGroupBindings(existing.format(), existing.id(), new HashSet<>());
       invalidateSwiftContainingGroupBindings(existing.format(), existing.id(), new HashSet<>());
       invalidateAnsibleContainingGroupBindings(existing.format(), existing.id(), new HashSet<>());
+      invalidateCondaMemberAndContainingGroups(existing.format(), existing.id(), new HashSet<>());
     }
 
     invalidateRuntimeCache(existing.id(), name);
@@ -407,6 +419,9 @@ public class RepositoryService {
     if (ansibleRegistry != null && existing.format() == RepositoryFormat.ANSIBLEGALAXY) {
       ansibleRegistry.deleteRepositoryState(existing.id());
     }
+    if (condaRegistry != null && existing.format() == RepositoryFormat.CONDA) {
+      condaRegistry.deleteRepositoryState(existing.id());
+    }
     int removed = repositoryDao.deleteById(existing.id());
     if (removed == 0) {
       throw new RepositoryNotFoundException(name);
@@ -435,6 +450,7 @@ public class RepositoryService {
     invalidateTerraformGroupBindings(existing.format(), existing.id());
     invalidateSwiftGroupBindings(existing.format(), existing.id());
     invalidateAnsibleGroupBindings(existing.format(), existing.id());
+    invalidateCondaGroupBindings(existing.format(), existing.id());
     runtimeRegistry.invalidate(name);
     invalidateRepositoryCacheTokensAfterCommit(existing.id());
     refreshRepositoryCatalogAfterCommit();
@@ -578,6 +594,40 @@ public class RepositoryService {
       ansibleRegistry.nextGroupConfigRevision(group.id());
       ansibleRegistry.deleteGroupBindings(group.id());
       invalidateAnsibleContainingGroupBindings(format, group.id(), visited);
+    }
+  }
+
+  private void invalidateCondaGroupBindings(
+      RepositoryFormat format, long groupRepositoryId) {
+    if (format != RepositoryFormat.CONDA || condaRegistry == null) {
+      return;
+    }
+    condaRegistry.nextRepositoryRevision(groupRepositoryId);
+    condaRegistry.deleteGroupSourceBindings(groupRepositoryId);
+    invalidateCondaContainingGroupBindings(format, groupRepositoryId, new HashSet<>());
+  }
+
+  private void invalidateCondaMemberAndContainingGroups(
+      RepositoryFormat format, long repositoryId, Set<Long> visited) {
+    if (format != RepositoryFormat.CONDA || condaRegistry == null) {
+      return;
+    }
+    condaRegistry.nextRepositoryRevision(repositoryId);
+    invalidateCondaContainingGroupBindings(format, repositoryId, visited);
+  }
+
+  private void invalidateCondaContainingGroupBindings(
+      RepositoryFormat format, long repositoryId, Set<Long> visited) {
+    if (format != RepositoryFormat.CONDA || condaRegistry == null) {
+      return;
+    }
+    for (RepositoryRecord group : repositoryDao.listGroupsContaining(repositoryId)) {
+      if (group.id() == null || !visited.add(group.id())) {
+        continue;
+      }
+      condaRegistry.nextRepositoryRevision(group.id());
+      condaRegistry.deleteGroupSourceBindings(group.id());
+      invalidateCondaContainingGroupBindings(format, group.id(), visited);
     }
   }
 
@@ -1387,7 +1437,7 @@ public class RepositoryService {
   private static boolean supportsNestedGroups(RepositoryFormat format) {
     return format == RepositoryFormat.PUB || format == RepositoryFormat.COMPOSER
         || format == RepositoryFormat.TERRAFORM || format == RepositoryFormat.SWIFT
-        || format == RepositoryFormat.ANSIBLEGALAXY;
+        || format == RepositoryFormat.ANSIBLEGALAXY || format == RepositoryFormat.CONDA;
   }
 
   private static String normalizeAnsibleGalaxyRemoteUrl(String remoteUrl) {

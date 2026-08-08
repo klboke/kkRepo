@@ -345,6 +345,28 @@ ensure_nexus_repositories() {
     "group":{"memberNames":["pub-hosted","pub-proxy"]}
   }'
 
+  nexus_try_create_repo "conda-hosted" "$NEXUS_URL/service/rest/v1/repositories/conda/hosted" '{
+    "name":"conda-hosted",
+    "online":true,
+    "storage":{"blobStoreName":"default","strictContentTypeValidation":true,"writePolicy":"ALLOW"}
+  }'
+
+  nexus_try_create_repo "conda-proxy" "$NEXUS_URL/service/rest/v1/repositories/conda/proxy" '{
+    "name":"conda-proxy",
+    "online":true,
+    "storage":{"blobStoreName":"default","strictContentTypeValidation":true},
+    "proxy":{"remoteUrl":"https://repo.anaconda.com/pkgs/main/","contentMaxAge":1440,"metadataMaxAge":60},
+    "negativeCache":{"enabled":true,"timeToLive":5},
+    "httpClient":{"blocked":false,"autoBlock":true}
+  }'
+
+  nexus_try_create_repo "conda-group" "$NEXUS_URL/service/rest/v1/repositories/conda/group" '{
+    "name":"conda-group",
+    "online":true,
+    "storage":{"blobStoreName":"default","strictContentTypeValidation":true},
+    "group":{"memberNames":["conda-hosted","conda-proxy"]}
+  }'
+
   nexus_try_create_repo "swift-hosted" "$NEXUS_URL/service/rest/v1/repositories/swift/hosted" '{
     "name":"swift-hosted",
     "online":true,
@@ -793,6 +815,33 @@ ensure_kkrepo_repositories() {
     "blobStoreName":"default",
     "strictContentTypeValidation":true,
     "group":{"memberNames":["terraform-hosted","terraform-proxy"]}
+  }'
+
+  kkrepo_create_repo "conda-hosted" '{
+    "name":"conda-hosted",
+    "recipe":"conda-hosted",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "hosted":{"writePolicy":"ALLOW"}
+  }'
+
+  kkrepo_create_repo "conda-proxy" '{
+    "name":"conda-proxy",
+    "recipe":"conda-proxy",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "proxy":{"remoteUrl":"https://repo.anaconda.com/pkgs/main/","contentMaxAgeMinutes":1440,"metadataMaxAgeMinutes":60,"negativeCacheEnabled":true,"negativeCacheTtlMinutes":5,"autoBlock":true}
+  }'
+
+  kkrepo_create_repo "conda-group" '{
+    "name":"conda-group",
+    "recipe":"conda-group",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "group":{"memberNames":["conda-hosted","conda-proxy"]}
   }'
 
   kkrepo_create_repo "swift-hosted" '{

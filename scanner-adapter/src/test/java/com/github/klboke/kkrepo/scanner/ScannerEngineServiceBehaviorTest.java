@@ -21,10 +21,12 @@ import com.github.klboke.kkrepo.scanner.ScannerDocumentMapper.EngineVersion;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.ScanCompleteness;
 import com.github.klboke.kkrepo.security.scan.ScannerArtifactType;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.CatalogResponse;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.Component;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.ResourceLimits;
 import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -81,6 +83,78 @@ class ScannerEngineServiceBehaviorTest {
     assertFalse(command.getValue().stream()
         .anyMatch(value -> value.startsWith("cyclonedx-json=")));
     assertEquals("sbom.cdx.json", scannerOutput.getValue().getFileName().toString());
+  }
+
+  @Test
+  void catalogsCondaThroughSyntheticCondaMetaAndRequiresTheExpectedPackage() throws Exception {
+    Fixture fixture = new Fixture(temporaryDirectory);
+    when(fixture.scannerInput.copy(any(), any(), eq(SHA256), eq(8L), any(), any()))
+        .thenAnswer(invocation -> {
+          Path path = invocation.getArgument(1);
+          Files.write(path, "artifact".getBytes());
+          return new ScannerInput.Verified(path, SHA256, 8);
+        });
+    when(fixture.archiveGuard.inspectConda(any(), any(), any(), any()))
+        .thenReturn(new ArchiveGuard.Inspection(
+            4, 128, 2, "{}".getBytes(StandardCharsets.UTF_8)));
+    Path scanRoot = temporaryDirectory.resolve("prepared-conda");
+    when(fixture.condaPackages.prepare(
+        any(), eq(ScannerArtifactType.CONDA), any(), any(), any(), any(byte[].class)))
+        .thenReturn(new CondaPackageCataloger.Prepared(
+            scanRoot, "demo", "1.0", "py_0", "noarch"));
+    when(fixture.documents.catalog(any(), anyString(), anyString(), anyString(), any()))
+        .thenReturn(condaCatalog());
+
+    CatalogResponse response = fixture.engine.catalog(
+        new ByteArrayInputStream("artifact".getBytes()),
+        SHA256,
+        8,
+        ScannerArtifactType.CONDA,
+        limits());
+
+    assertEquals(1, response.componentCount());
+    verify(fixture.archiveGuard).inspectConda(any(), any(), any(), any());
+    verify(fixture.archiveGuard, never()).inspect(any(), any(), any(), any());
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<String>> command = ArgumentCaptor.forClass(List.class);
+    verify(fixture.processes).run(command.capture(), any(), any(), any(), any());
+    assertTrue(command.getValue().contains("dir:" + scanRoot));
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<Map<String, Object>> summary = ArgumentCaptor.forClass(Map.class);
+    verify(fixture.documents).catalog(
+        any(), eq(SHA256), eq("1.2"), anyString(), summary.capture());
+    assertEquals("demo", summary.getValue().get("condaName"));
+    assertEquals("py_0", summary.getValue().get("condaBuild"));
+  }
+
+  @Test
+  void failsClosedWhenSyftDoesNotRecognizeCondaMetadata() throws Exception {
+    Fixture fixture = new Fixture(temporaryDirectory);
+    when(fixture.scannerInput.copy(any(), any(), eq(SHA256), eq(8L), any(), any()))
+        .thenAnswer(invocation -> {
+          Path path = invocation.getArgument(1);
+          Files.write(path, "artifact".getBytes());
+          return new ScannerInput.Verified(path, SHA256, 8);
+        });
+    when(fixture.archiveGuard.inspectConda(any(), any(), any(), any()))
+        .thenReturn(new ArchiveGuard.Inspection(
+            1, 8, 0, "{}".getBytes(StandardCharsets.UTF_8)));
+    when(fixture.condaPackages.prepare(
+        any(), eq(ScannerArtifactType.CONDA), any(), any(), any(), any(byte[].class)))
+        .thenReturn(new CondaPackageCataloger.Prepared(
+            temporaryDirectory.resolve("prepared-empty"), "demo", "1.0", "py_0", "noarch"));
+
+    ScannerRequestException failure = assertCode(
+        "CONDA_CATALOG_EMPTY",
+        () -> fixture.engine.catalog(
+            new ByteArrayInputStream("artifact".getBytes()),
+            SHA256,
+            8,
+            ScannerArtifactType.CONDA,
+            limits()));
+
+    assertEquals(422, failure.status());
+    assertFalse(failure.retryable());
   }
 
   @Test
@@ -267,6 +341,24 @@ class ScannerEngineServiceBehaviorTest {
         "{\"bomFormat\":\"CycloneDX\"}".getBytes(), List.of(), Map.of());
   }
 
+  private static CatalogResponse condaCatalog() {
+    Component component = new Component(
+        "conda-ref",
+        null,
+        "library",
+        null,
+        "demo",
+        "1.0",
+        "UNKNOWN",
+        List.of("conda-meta/package.json"),
+        List.of(),
+        Map.of("syft:package:type", "conda"));
+    return new CatalogResponse(
+        "adapter", "1", "syft", "1.2", "cap", SHA256,
+        ScanCompleteness.COMPLETE, "CycloneDX", "1.5", 1, 0,
+        "{\"bomFormat\":\"CycloneDX\"}".getBytes(), List.of(component), Map.of());
+  }
+
   private static MatchResponse match() {
     return new MatchResponse(
         "adapter", "1", "grype", "2.3", "db-1", NOW, "cap",
@@ -278,6 +370,7 @@ class ScannerEngineServiceBehaviorTest {
     final BoundedProcessRunner processes = mock(BoundedProcessRunner.class);
     final ScannerInput scannerInput = mock(ScannerInput.class);
     final ArchiveGuard archiveGuard = mock(ArchiveGuard.class);
+    final CondaPackageCataloger condaPackages = mock(CondaPackageCataloger.class);
     final OciRegistryStager ociRegistryStager = mock(OciRegistryStager.class);
     final ScannerDocumentMapper documents = mock(ScannerDocumentMapper.class);
     final ScannerEngineService engine;
@@ -344,6 +437,7 @@ class ScannerEngineServiceBehaviorTest {
           processes,
           scannerInput,
           archiveGuard,
+          condaPackages,
           ociRegistryStager,
           documents,
           database);

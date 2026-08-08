@@ -514,8 +514,14 @@ public class CleanupSubjectScanner {
         continue;
       }
       Map<Long, Integer> ranks = new HashMap<>();
-      for (int index = 0; index < versions.size(); index++) {
-        ranks.put(versions.get(index).identityId(), index + 1);
+      int rank = 0;
+      String previousVersion = null;
+      for (Subject subject : versions) {
+        if (previousVersion == null || comparator.compare(previousVersion, subject.version()) != 0) {
+          rank++;
+          previousVersion = subject.version();
+        }
+        ranks.put(subject.identityId(), rank);
       }
       result.put(family.getKey(), Map.copyOf(ranks));
     }

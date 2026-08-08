@@ -51,7 +51,7 @@ The real cost is not just "deploying a new service"; it is a company-wide migrat
 
 - Server operations engineers need to migrate all historical data to the new platform.
 - Users, roles, permissions, tokens, repository configuration, and blob data need to be maintained again.
-- Users need to modify CI, build scripts, Maven settings, npm registry, PyPI index-url, Go proxy, Helm repo, Cargo registry config, Pub hosted URL, Composer repository URL, Terraform `host.services`, Ansible Galaxy server URL, and similar configuration one by one.
+- Users need to modify CI, build scripts, Maven settings, npm registry, PyPI index-url, Go proxy, Helm repo, Cargo registry config, Pub hosted URL, Composer repository URL, Terraform `host.services`, Ansible Galaxy server URL, Conda channel configuration, and similar configuration one by one.
 - In a large company, this kind of change affects many business lines, build tasks, and release flows.
 
 If a new platform cannot stay compatible with the `/repository/<repo>/...` URL layout, client protocols, and permission/authentication model that existing clients depend on, migration cost becomes very high and transparent cutover becomes difficult.

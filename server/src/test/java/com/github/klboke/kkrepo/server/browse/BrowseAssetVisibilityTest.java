@@ -26,4 +26,12 @@ class BrowseAssetVisibilityTest {
         RepositoryFormat.ANSIBLEGALAXY,
         "api/tools/1.2.3/api-tools-1.2.3.tar.gz"));
   }
+
+  @Test
+  void condaHidesOnlyItsProxyMetadataCache() {
+    assertTrue(BrowseAssetVisibility.hidden(
+        RepositoryFormat.CONDA, ".conda/upstream/channel/linux-64/repodata.json"));
+    assertFalse(BrowseAssetVisibility.hidden(
+        RepositoryFormat.CONDA, "main/linux-64/demo-1.0-0.conda"));
+  }
 }

@@ -26,6 +26,7 @@
     <module>protocol-terraform</module>
     <module>protocol-swift</module>
     <module>protocol-ansible</module>
+    <module>protocol-conda</module>
     <module>protocol-go</module>
     <module>protocol-helm</module>
     <module>protocol-docker</module>
@@ -220,6 +221,11 @@
       <dependency>
         <groupId>com.github.klboke</groupId>
         <artifactId>kkrepo-protocol-ansible</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.github.klboke</groupId>
+        <artifactId>kkrepo-protocol-conda</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>

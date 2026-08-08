@@ -154,6 +154,9 @@ public class SecurityScannerSnapshotRematchService {
   }
 
   private static SubjectKind subjectKind(RepositoryFormat format, String kind) {
+    if (format == RepositoryFormat.CONDA) {
+      return SubjectKind.CONDA_PACKAGE;
+    }
     return format == RepositoryFormat.DOCKER
         && kind != null
         && kind.toLowerCase(java.util.Locale.ROOT).contains("manifest")

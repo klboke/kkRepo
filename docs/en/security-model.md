@@ -84,9 +84,12 @@ actions. For example, Cargo, Pub, Swift, and Ansible Galaxy collection publish
 flows use `add`, while
 Terraform distinguishes a new module/provider coordinate or platform from a
 redeployment, and Docker push scopes may combine `add` and `edit` for different
-parts of the push. Ansible collection versions remain immutable regardless of
-`edit`, and a durable import task is readable only by its requester or an
-administrator who still has access to the target repository.
+parts of the push. Conda package `PUT` resolves the canonical package path and
+requires `add` for a new package or `edit` for an existing package; generated
+channel metadata paths are not package publication endpoints. Ansible collection
+versions remain immutable regardless of `edit`, and a durable import task is
+readable only by its requester or an administrator who still has access to the
+target repository.
 
 Repository permissions and hosted write policy are separate checks. Having
 `edit` permission does not override a repository write policy such as
@@ -124,7 +127,7 @@ The custom API-key header is:
 X-Nexus-Plus-Token
 ```
 
-Protocol-specific clients should keep using their native auth mechanisms and matching token domains. Current protocol-token domains include `NpmToken`, `CargoToken`, `PubToken`, `NuGetApiKey`, and `RubyGemsApiKey` where the corresponding client protocol uses tokens or API keys; Cargo, Pub, and RubyGems clients send their registry/API key token through the `Authorization` header. Private Composer repositories should normally use HTTP Basic through `COMPOSER_AUTH`/`auth.json`; Composer or CI callers that explicitly send bearer or custom API-key headers can use `GenericToken`. Terraform CLI can use a `GenericToken` embedded only in the configured `modules.v1`/`providers.v1` service URL; generated archive/checksum/signature URLs preserve that credential segment, while logs, metrics, and uploaded CI diagnostics must redact it. Ansible Galaxy clients may send a `GenericToken` through the current ansible-core Bearer scheme or the Ansible 2.9 Token scheme. On Ansible routes only, kkrepo also accepts Nexus-compatible Base64 `username:password`; it is password transport rather than encryption and should not be logged or preferred over a scoped token. An explicit invalid Ansible credential must return `401` instead of falling back to anonymous access. `GenericToken` is not a universal replacement for every package client token format.
+Protocol-specific clients should keep using their native auth mechanisms and matching token domains. Current protocol-token domains include `NpmToken`, `CargoToken`, `PubToken`, `NuGetApiKey`, and `RubyGemsApiKey` where the corresponding client protocol uses tokens or API keys; Cargo, Pub, and RubyGems clients send their registry/API key token through the `Authorization` header. Private Composer repositories should normally use HTTP Basic through `COMPOSER_AUTH`/`auth.json`; Composer or CI callers that explicitly send bearer or custom API-key headers can use `GenericToken`. Terraform CLI can use a `GenericToken` embedded only in the configured `modules.v1`/`providers.v1` service URL; generated archive/checksum/signature URLs preserve that credential segment, while logs, metrics, and uploaded CI diagnostics must redact it. Ansible Galaxy clients may send a `GenericToken` through the current ansible-core Bearer scheme or the Ansible 2.9 Token scheme. On Ansible routes only, kkrepo also accepts Nexus-compatible Base64 `username:password`; it is password transport rather than encryption and should not be logged or preferred over a scoped token. An explicit invalid Ansible credential must return `401` instead of falling back to anonymous access. Private Conda channels normally use HTTP Basic credentials from `.netrc`; callers that explicitly send bearer or the custom API-key header can use `GenericToken`. Do not embed reusable secrets in `.condarc`. `GenericToken` is not a universal replacement for every package client token format.
 
 ## Encryption Secrets
 

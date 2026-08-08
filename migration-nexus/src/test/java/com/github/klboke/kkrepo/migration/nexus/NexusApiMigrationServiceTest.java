@@ -583,6 +583,42 @@ class NexusApiMigrationServiceTest {
   }
 
   @Test
+  void migratesCondaDefinitionsWithChannelRemoteAndOrderedMembers() {
+    FakeBlobStoreDao blobStores = new FakeBlobStoreDao();
+    FakeRepositoryDao repositories = new FakeRepositoryDao();
+    NexusApiMigrationService service = service(blobStores, repositories);
+    NexusInventory inventory = new NexusInventory(
+        List.of(Map.of("name", "default")),
+        List.of(
+            repository("conda-hosted", "conda", "hosted", Map.of(
+                "storage", Map.of(
+                    "blobStoreName", "default",
+                    "writePolicy", "allow_once"))),
+            repository("conda-proxy", "conda", "proxy", Map.of(
+                "storage", storage("default"),
+                "proxy", Map.of("remoteUrl", "https://repo.anaconda.com/pkgs/main"))),
+            repository("conda-group", "conda", "group", Map.of(
+                "storage", storage("default"),
+                "group", Map.of("memberNames", List.of("conda-hosted", "conda-proxy"))))),
+        NexusSecurityExport.empty(),
+        List.of());
+
+    ConfigMigrationCounts counts = service.migrateConfig(
+        inventory, request("https://old-nexus.example"));
+
+    assertEquals(3, counts.repositories());
+    assertEquals(RepositoryFormat.CONDA, repositories.required("conda-hosted").format());
+    assertEquals("conda-hosted", repositories.required("conda-hosted").recipeName());
+    assertEquals("ALLOW_ONCE", repositories.required("conda-hosted").writePolicy());
+    assertEquals(
+        "https://repo.anaconda.com/pkgs/main",
+        repositories.required("conda-proxy").proxyRemoteUrl());
+    assertEquals(
+        List.of("conda-hosted", "conda-proxy"),
+        repositories.memberNames("conda-group"));
+  }
+
+  @Test
   void migratesSwiftProxyAuthenticationAndTtlsWithoutKeepingNestedSecrets() {
     FakeRepositoryDao repositories = new FakeRepositoryDao();
     NexusApiMigrationService service = service(new FakeBlobStoreDao(), repositories);

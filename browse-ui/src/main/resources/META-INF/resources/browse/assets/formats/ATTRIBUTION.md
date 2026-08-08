@@ -19,3 +19,6 @@ The Yum and Raw fallback icons are sourced from Lucide Static 1.24.0 (ISC).
 
 The Ansible Galaxy compatibility mark is an original geometric mark drawn for kkRepo. It is not
 an official Ansible or Red Hat trademark asset.
+
+The Conda compatibility mark is an original geometric mark drawn for kkRepo. It is not an
+official Conda or Anaconda trademark asset.

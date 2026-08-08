@@ -2,7 +2,7 @@
 
 This document describes prerequisites, execution order, incremental migration, and domain cutover when migrating from Nexus Repository to kkrepo.
 
-kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client protocol behavior, and permission/authentication model. After migration, only point the original Nexus domain to kkrepo. Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift Package Registry, Ansible Galaxy, NuGet, RubyGems, Yum, and other migrated non-Docker client configurations do not need to change. Docker / OCI uses Registry HTTP API V2 `/v2/...` routes; preserve repository names and connector/path-based routing when cutting Docker clients over.
+kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client protocol behavior, and permission/authentication model. After migration, only point the original Nexus domain to kkrepo. Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift Package Registry, Ansible Galaxy, Conda, NuGet, RubyGems, Yum, and other migrated non-Docker client configurations do not need to change. Docker / OCI uses Registry HTTP API V2 `/v2/...` routes; preserve repository names and connector/path-based routing when cutting Docker clients over.
 
 ## Repository Data Scope And Format Boundaries
 
@@ -14,6 +14,7 @@ kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client pr
 - **Swift Package Registry:** Metadata migration recognizes `swift-hosted`, `swift-proxy`, and `swift-group`, preserving proxy TTLs and ordered members. Hosted archives, checksums, and default/versioned manifests are restored only for Nexus 3.92.x-3.94.x sources whose datastore fingerprint proves the expected Swift content shape. Optional CMS signatures, original release metadata, and repository URL mappings are preserved only when present in the source export; native Nexus 3.94 accepts those publication fields but does not persist or re-expose them, so migration does not fabricate them. Out-of-range versions, unknown profiles, and shape drift produce `NEEDS_MANUAL_ACTION`; proxy cache data is not replayed as hosted publication.
 - **Terraform:** Metadata migration recognizes native `terraform-hosted`, `terraform-proxy`, and `terraform-group` recipes and preserves the `/repository/<repo>/v1/modules/...` and `/v1/providers/...` service bases. A dedicated proxy-cache writer restores recognized module/provider archives at their Nexus public paths without creating hosted publication or signing state. Restored modules can satisfy download discovery locally; provider metadata rebuilds and verifies its route, validators, checksum manifest, and signature snapshot from the configured upstream, then pins the cache for that metadata lifetime.
 - **Ansible Galaxy:** Metadata migration recognizes `ansiblegalaxy-hosted`, `ansiblegalaxy-proxy`, and `ansiblegalaxy-group`, preserving remote settings, TTLs, online state, write policy, ordered members, and the `/repository/<repo>/` Galaxy v3 base. Hosted collections and explicitly selected proxy cache data are restored only for native Nexus 3.93.x-3.94.x sources whose datastore fingerprint proves the expected collection identity and integrity shape. Unknown versions, incomplete fingerprints, missing checksums/manifests, and shape drift produce `NEEDS_MANUAL_ACTION`. Complete collection archives and their `MANIFEST.json`/`FILES.json` stay in blob storage; the relational database stores only bounded metadata projections, hashes, references, tasks, and bindings.
+- **Conda:** Metadata migration recognizes `conda-hosted`, `conda-proxy`, and `conda-group`, preserving remote settings, TTLs, online state, write policy, and ordered members. Hosted `.tar.bz2` and `.conda` packages are restored only for Nexus 3.92.x-3.94.x sources whose datastore fingerprint proves the expected Conda package shape. Generated repodata/channeldata is filtered from source assets and rebuilt at the target. Unknown profiles, shape drift, unsupported assets, or package identities that cannot be proven produce `NEEDS_MANUAL_ACTION`; proxy package cache is not replayed as hosted content.
 - **Proxy credentials:** A recoverable source secret is encrypted in the target. If a Swift or Ansible proxy secret is masked or missing, migration creates the target proxy offline, writes no placeholder credential, and requires an administrator to supply the credential explicitly.
 
 ## Migration Flow Overview
@@ -95,6 +96,12 @@ The current Swift migration workflow uses a Nexus 3.94 fixture and runs these so
 
 Each lane publishes a signed archive with metadata and a repository URL to Nexus, then verifies the actual Nexus 3.94 persistence boundary: archive bytes and checksum survive, the default manifest is exported, the versioned manifest is reconstructed from the archive, and the source-blob timestamp becomes `publishedAt`. Nexus 3.94 does not persist the supplied signature, original metadata, or repository URL, so the target must remain unsigned and must not fabricate metadata or an identifier mapping. The lanes also verify cross-replica reads, restart/resume, exact row-count idempotency, the fail-closed proxy-secret path, and explicit target-side credential completion. Conditional writer contracts separately prove that optional fields are preserved when a source export does contain them. The 3.92.x-3.94.x version/shape gate is covered by source-profile contracts; the live matrix does not imply support for versions outside that range or for an unrecognized datastore shape.
 
+### Conda Migration E2E Boundaries
+
+Conda reuses the existing migration workflow rather than a separate job. The matrix covers Nexus 3.92.0 with PostgreSQL metadata plus Nexus 3.94.0 with H2/PostgreSQL metadata, and exercises MySQL as well as PostgreSQL kkrepo targets.
+
+Each enabled lane creates native Conda hosted/proxy/group definitions in Nexus, publishes an installable package, verifies source `repodata.json`, then runs migration preflight and package sync. Acceptance verifies recipe settings and member order, exact package bytes/SHA-256, rebuilt target repodata, real `conda search/create/list` through the migrated group, protocol-table row counts, restart/resume idempotency, and cross-replica reads where the lane provides a second target replica. Generated Nexus repodata/channeldata is deliberately not copied as package content.
+
 ### Incremental Migration
 
 For the second and later migrations, set `Metadata since` for incremental migration. `Metadata since` filters by source Nexus asset/blob update time and scans only assets added or updated after that time.
@@ -121,7 +128,7 @@ Migration is designed to be interruptible and resumable. Completed data remains 
 
 After full migration and the final incremental migration are complete, check browse/search, package downloads, checksums, and common client pull behavior for key repositories.
 
-After confirming there are no issues, point the original Nexus domain to kkrepo through DNS or a reverse proxy. Because kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client protocols, and permission/authentication model, clients do not need to modify Maven settings, npm registry, PyPI index-url, Go GOPROXY, Helm repo, Cargo sparse registry URL, Pub hosted URL, Composer repository URL, Terraform `host.services` URL, Swift registry base, Ansible Galaxy server URL, or similar configuration for migrated repository formats.
+After confirming there are no issues, point the original Nexus domain to kkrepo through DNS or a reverse proxy. Because kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client protocols, and permission/authentication model, clients do not need to modify Maven settings, npm registry, PyPI index-url, Go GOPROXY, Helm repo, Cargo sparse registry URL, Pub hosted URL, Composer repository URL, Terraform `host.services` URL, Swift registry base, Ansible Galaxy server URL, Conda channel URL, or similar configuration for migrated repository formats.
 
 After cutover, keep the source Nexus for an observation period, and disable source script capability after confirming no further compensation migration is needed.
 
@@ -294,3 +301,4 @@ Having source Script API available does not guarantee every local user password 
 - Sonatype Script API: https://help.sonatype.com/en/script-api.html
 - Sonatype Scripting Nexus Repository 3: https://support.sonatype.com/hc/en-us/articles/360045220393-Scripting-Nexus-Repository-3
 - Sonatype Configure Ansible with Nexus: https://help.sonatype.com/en/configure-ansible-with-nexus.html
+- Sonatype Configure Conda with Nexus: https://help.sonatype.com/en/configure-conda-with-nexus.html

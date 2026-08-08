@@ -29,6 +29,7 @@ import com.github.klboke.kkrepo.server.cargo.CargoSearchQuery;
 import com.github.klboke.kkrepo.server.composer.ComposerGroupService;
 import com.github.klboke.kkrepo.server.composer.ComposerHostedService;
 import com.github.klboke.kkrepo.server.composer.ComposerProxyService;
+import com.github.klboke.kkrepo.server.conda.CondaService;
 import com.github.klboke.kkrepo.server.goartifact.GoGroupService;
 import com.github.klboke.kkrepo.server.goartifact.GoProxyService;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
@@ -84,6 +85,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -100,7 +102,6 @@ import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
-import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * Unified content entry point for Nexus-compatible repository URLs. URL shape
@@ -140,6 +141,7 @@ public class RepositoryContentController {
   private SwiftService swift;
   private AnsibleGalaxyService ansible;
   private AnsibleGalaxyMultipartReader ansibleMultipart;
+  private CondaService conda;
   private final NugetService nuget;
   private final RubygemsService rubygems;
   private final YumService yum;
@@ -170,6 +172,11 @@ public class RepositoryContentController {
   @Autowired(required = false)
   void setAnsibleGalaxyMultipartReader(AnsibleGalaxyMultipartReader ansibleMultipart) {
     this.ansibleMultipart = ansibleMultipart;
+  }
+
+  @Autowired(required = false)
+  void setCondaService(CondaService conda) {
+    this.conda = conda;
   }
 
   @Autowired
@@ -346,6 +353,10 @@ public class RepositoryContentController {
           true, requestUserId(request));
       return toHeadResponse(response, request);
     }
+    if (runtime.format() == RepositoryFormat.CONDA) {
+      String raw = extractRepositoryPath(name, request, true);
+      return toHeadResponse(conda().get(runtime, raw, true), request);
+    }
     if (runtime.format() == RepositoryFormat.PYPI) {
       String raw = extractRepositoryPath(name, request, true);
       PypiResponse resp = isDirectoryPath(raw)
@@ -458,6 +469,15 @@ public class RepositoryContentController {
       try (InputStream body = request.getInputStream()) {
         response = ansible().putArtifact(
             runtime, raw, body, userId, request.getRemoteAddr());
+      }
+      return ResponseEntity.status(response.status()).build();
+    }
+    if (runtime.format() == RepositoryFormat.CONDA) {
+      String raw = extractRepositoryPath(name, request, true);
+      MavenResponse response;
+      try (InputStream body = request.getInputStream()) {
+        response = conda().put(
+            runtime, raw, body, contentType, userId, request.getRemoteAddr());
       }
       return ResponseEntity.status(response.status()).build();
     }
@@ -579,6 +599,11 @@ public class RepositoryContentController {
     if (runtime.format() == RepositoryFormat.ANSIBLEGALAXY) {
       throw new AnsibleGalaxyExceptions.MethodNotAllowed(
           "Ansible Galaxy client repository paths do not support DELETE");
+    }
+    if (runtime.format() == RepositoryFormat.CONDA) {
+      String raw = extractRepositoryPath(name, request, true);
+      MavenResponse response = conda().delete(runtime, raw);
+      return ResponseEntity.status(response.status()).build();
     }
     if (runtime.format() == RepositoryFormat.NUGET) {
       String raw = extractRepositoryPath(name, request, true);
@@ -802,6 +827,13 @@ public class RepositoryContentController {
       return toStreamingResponse(response, request, !headOnly
           && "application/octet-stream".equalsIgnoreCase(response.contentType()));
     }
+    if (runtime.format() == RepositoryFormat.CONDA) {
+      String raw = extractRepositoryPath(name, request, true);
+      MavenResponse response = conda().get(runtime, raw, headOnly);
+      boolean packageResponse = !headOnly
+          && (raw.endsWith(".conda") || raw.endsWith(".tar.bz2"));
+      return toStreamingResponse(response, request, packageResponse);
+    }
     if (runtime.format() == RepositoryFormat.PYPI) {
       String raw = extractRepositoryPath(name, request, true);
       boolean directory = isDirectoryPath(raw);
@@ -849,6 +881,7 @@ public class RepositoryContentController {
   private ResponseEntity<Void> toHeadResponse(MavenResponse resp, HttpServletRequest request) {
     if (ConditionalResponses.shouldReturnNotModified(
         request, resp.status(), resp.etag(), resp.lastModified())) {
+      resp.closeBodyIfOpen();
       return ResponseEntity.status(HttpStatus.NOT_MODIFIED).headers(notModifiedHeaders(resp)).build();
     }
     HttpHeaders headers = responseHeaders(resp, true);
@@ -882,6 +915,7 @@ public class RepositoryContentController {
       MavenResponse resp, HttpServletRequest request, boolean partialFetchAllowed) {
     if (ConditionalResponses.shouldReturnNotModified(
         request, resp.status(), resp.etag(), resp.lastModified())) {
+      resp.closeBodyIfOpen();
       return ResponseEntity.status(HttpStatus.NOT_MODIFIED)
           .headers(notModifiedHeaders(resp))
           .body(null);
@@ -1084,6 +1118,13 @@ public class RepositoryContentController {
       throw new IllegalStateException("Ansible Galaxy multipart reader is unavailable");
     }
     return ansibleMultipart;
+  }
+
+  private CondaService conda() {
+    if (conda == null) {
+      throw new IllegalStateException("Conda repository service is unavailable");
+    }
+    return conda;
   }
 
   private MavenResponse dispatchNpmGet(

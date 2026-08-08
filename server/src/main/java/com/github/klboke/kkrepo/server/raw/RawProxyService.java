@@ -128,6 +128,19 @@ public class RawProxyService {
         HttpRemoteFetcher.TimeoutProfile.CONTENT, ComponentBinding.perAsset(), headOnly);
   }
 
+  /**
+   * Caches immutable protocol content without inventing a generic component coordinate.
+   *
+   * <p>Formats whose exact component identity comes from a large remote index can return the
+   * bytes first and attach the component projection after that index has been processed.
+   */
+  public MavenResponse getPinnedAssetFromUrlUnindexed(
+      RepositoryRuntime runtime, String path, String remoteUrl, boolean headOnly) {
+    return getAssetFromUrl(
+        runtime, path, remoteUrl, runtime.metadataMaxAgeMinutesOrDefault(),
+        HttpRemoteFetcher.TimeoutProfile.CONTENT, ComponentBinding.none(), "", headOnly);
+  }
+
   public MavenResponse getPinnedAssetFromUrlWithComponent(
       RepositoryRuntime runtime,
       String path,
@@ -137,6 +150,24 @@ public class RawProxyService {
     return getAssetFromUrl(
         runtime, path, remoteUrl, runtime.metadataMaxAgeMinutesOrDefault(),
         HttpRemoteFetcher.TimeoutProfile.CONTENT, ComponentBinding.explicit(component), headOnly);
+  }
+
+  /**
+   * Caches a protocol asset at its canonical repository path while indexing an independent
+   * logical path for Browse. The two paths intentionally differ for formats such as Conda whose
+   * Nexus component tree is richer than the client-facing download layout.
+   */
+  public MavenResponse getPinnedAssetFromUrlWithComponentAtBrowsePath(
+      RepositoryRuntime runtime,
+      String path,
+      String remoteUrl,
+      ComponentRecord component,
+      String browsePath,
+      boolean headOnly) {
+    return getAssetFromUrl(
+        runtime, path, remoteUrl, runtime.metadataMaxAgeMinutesOrDefault(),
+        HttpRemoteFetcher.TimeoutProfile.CONTENT, ComponentBinding.explicit(component),
+        browsePath, headOnly);
   }
 
   public MavenResponse getMetadataFromUrl(
@@ -169,6 +200,16 @@ public class RawProxyService {
       HttpRemoteFetcher.TimeoutProfile timeoutProfile,
       ComponentBinding componentBinding,
       boolean headOnly) {
+    return getAssetFromUrl(
+        runtime, path, remoteUrl, maxAgeMinutes, timeoutProfile, componentBinding, path, headOnly);
+  }
+
+  private MavenResponse getAssetFromUrl(
+      RepositoryRuntime runtime, String path, String remoteUrl, int maxAgeMinutes,
+      HttpRemoteFetcher.TimeoutProfile timeoutProfile,
+      ComponentBinding componentBinding,
+      String browsePath,
+      boolean headOnly) {
     Optional<CachedAssetMetadata> cached = lookupCached(runtime, path);
     Instant now = Instant.now();
     if (cached.isPresent() && isFresh(cached.get(), maxAgeMinutes, now)) {
@@ -184,7 +225,8 @@ public class RawProxyService {
       throw new MavenExceptions.BadUpstreamException("Upstream temporarily blocked: " + remoteUrl);
     }
     return fetchAndCacheUrl(
-        runtime, path, remoteUrl, cached, headOnly, now, timeoutProfile, componentBinding);
+        runtime, path, remoteUrl, cached, headOnly, now, timeoutProfile, componentBinding,
+        browsePath);
   }
 
   private Optional<CachedAssetMetadata> lookupCached(RepositoryRuntime runtime, String path) {
@@ -212,7 +254,7 @@ public class RawProxyService {
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
         .withRepository(runtime);
     return fetchAndCache(
-        runtime, path, cached, headOnly, now, req, ComponentBinding.perAsset());
+        runtime, path, cached, headOnly, now, req, ComponentBinding.perAsset(), path);
   }
 
   private MavenResponse fetchAndCacheUrl(
@@ -223,7 +265,8 @@ public class RawProxyService {
       boolean headOnly,
       Instant now,
       HttpRemoteFetcher.TimeoutProfile timeoutProfile,
-      ComponentBinding componentBinding) {
+      ComponentBinding componentBinding,
+      String browsePath) {
     String etag = null;
     Instant lastModified = null;
     if (cached.isPresent() && cached.get().blob() != null) {
@@ -233,7 +276,8 @@ public class RawProxyService {
     }
     HttpRemoteFetcher.Request req = cachePopulationRequest(
         runtime, remoteUrl, etag, lastModified).withTimeoutProfile(timeoutProfile);
-    return fetchAndCache(runtime, path, cached, headOnly, now, req, componentBinding);
+    return fetchAndCache(
+        runtime, path, cached, headOnly, now, req, componentBinding, browsePath);
   }
 
   static HttpRemoteFetcher.Request cachePopulationRequest(
@@ -257,7 +301,8 @@ public class RawProxyService {
       boolean headOnly,
       Instant now,
       HttpRemoteFetcher.Request req,
-      ComponentBinding componentBinding) {
+      ComponentBinding componentBinding,
+      String browsePath) {
     try {
       return fetcher.fetchWithBodyRetry(req, path, result -> {
         int status = result.status();
@@ -270,7 +315,8 @@ public class RawProxyService {
         }
         if (status >= 200 && status < 300) {
           negativeCache.invalidate(runtime, path);
-          RawAssetWriter.Stored stored = persist(runtime, path, result, componentBinding);
+          RawAssetWriter.Stored stored = persist(
+              runtime, path, result, componentBinding, browsePath);
           try {
             proxyStateDao.recordSuccess(runtime.id(), now);
             if (headOnly) {
@@ -309,7 +355,8 @@ public class RawProxyService {
       RepositoryRuntime runtime,
       String path,
       HttpRemoteFetcher.Result result,
-      ComponentBinding componentBinding) {
+      ComponentBinding componentBinding,
+      String browsePath) {
     Map<String, String> extras = new HashMap<>();
     if (result.etag() != null) extras.put("remoteEtag", result.etag());
     if (result.lastModified() != null) extras.put("remoteLastModified", result.lastModified().toString());
@@ -320,10 +367,10 @@ public class RawProxyService {
       case NONE -> writer.writeUnindexed(
           runtime, blobStorage(runtime), requireBlobStore(runtime), path, result.body(),
           result.contentType(), extras, "proxy", runtime.proxyRemoteUrl(), true);
-      case EXPLICIT -> writer.writeWithComponent(
+      case EXPLICIT -> writer.writeWithComponentAtBrowsePath(
           runtime, blobStorage(runtime), requireBlobStore(runtime), path, result.body(),
           result.contentType(), extras, "proxy", runtime.proxyRemoteUrl(),
-          componentBinding.component(), true);
+          componentBinding.component(), browsePath, true);
     };
   }
 

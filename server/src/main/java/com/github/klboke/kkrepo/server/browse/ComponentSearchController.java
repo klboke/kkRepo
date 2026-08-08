@@ -7,7 +7,10 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.ComponentSearchRow;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
+import com.github.klboke.kkrepo.protocol.conda.CondaPath;
+import com.github.klboke.kkrepo.server.conda.CondaBrowsePaths;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
@@ -37,6 +40,7 @@ public class ComponentSearchController {
   private final SecurityManagementService securityService;
   private final SwiftRegistryDao swiftRegistry;
   private AnsibleGalaxyRegistryDao ansibleRegistry;
+  private CondaRegistryDao condaRegistry;
 
   @Autowired
   public ComponentSearchController(
@@ -53,6 +57,11 @@ public class ComponentSearchController {
   @Autowired(required = false)
   void setAnsibleGalaxyRegistry(AnsibleGalaxyRegistryDao ansibleRegistry) {
     this.ansibleRegistry = ansibleRegistry;
+  }
+
+  @Autowired(required = false)
+  void setCondaRegistry(CondaRegistryDao condaRegistry) {
+    this.condaRegistry = condaRegistry;
   }
 
   public ComponentSearchController(
@@ -100,7 +109,40 @@ public class ComponentSearchController {
     if (row.format() == RepositoryFormat.ANSIBLEGALAXY) {
       return ansibleDetails(row);
     }
+    if (row.format() == RepositoryFormat.CONDA) {
+      return condaDetails(row);
+    }
     return swiftDetails(row);
+  }
+
+  private Map<String, Object> condaDetails(ComponentSearchRow row) {
+    if (condaRegistry == null || row.storagePath() == null) {
+      return Map.of();
+    }
+    Optional<CondaPath> coordinate = CondaBrowsePaths.packagePath(row.storagePath());
+    if (coordinate.isEmpty()) {
+      return Map.of();
+    }
+    CondaPath path = coordinate.orElseThrow();
+    return condaRegistry.findPackage(
+            row.repositoryId(), path.channel(), path.subdir(), path.filename())
+        .map(record -> {
+          LinkedHashMap<String, Object> details = new LinkedHashMap<>();
+          details.put("channel", record.channel());
+          details.put("subdir", record.subdir());
+          details.put("build", record.build());
+          details.put("buildNumber", record.buildNumber());
+          details.put("archiveFormat", record.archiveFormat());
+          if (record.md5() != null) details.put("md5", record.md5());
+          if (record.sha256() != null) details.put("sha256", record.sha256());
+          details.put("size", record.size());
+          details.put("sourceKind", record.sourceKind());
+          details.put("sourceRepository", row.repositoryName());
+          Object depends = record.metadata().get("depends");
+          if (depends != null) details.put("depends", depends);
+          return Map.copyOf(details);
+        })
+        .orElseGet(Map::of);
   }
 
   private Map<String, Object> ansibleDetails(ComponentSearchRow row) {
@@ -184,6 +226,7 @@ public class ComponentSearchController {
       case "terraform" -> RepositoryFormat.TERRAFORM;
       case "swift" -> RepositoryFormat.SWIFT;
       case "ansiblegalaxy", "ansible" -> RepositoryFormat.ANSIBLEGALAXY;
+      case "conda" -> RepositoryFormat.CONDA;
       case "raw" -> RepositoryFormat.RAW;
       default -> null;
     };

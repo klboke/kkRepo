@@ -22,7 +22,7 @@ NEXUS_COMPAT_PASSWORD=Admin1234
 Current Maven compatibility checks and repository-format compatibility checks can compare against
 this same long-running Nexus reference unless a test explicitly documents why it needs an isolated
 throwaway Nexus instance. Cargo/Rust requires Nexus 3.77.x+, Terraform requires Nexus 3.90.0+ for
-hosted/proxy/group coverage, Pub requires Nexus 3.92.0+, and the Swift reference matrix targets
+hosted/proxy/group coverage, Pub and Conda require Nexus 3.92.0+, and the Swift reference matrix targets
 Nexus 3.94.x so versioned-manifest fallback and `v`/`V` tag normalization include the latest fixes; the
 datastore-era PostgreSQL compose file below defaults to Nexus 3.92.0 for the general newer-format
 checks, while the Swift workflow explicitly overrides that image with Nexus 3.94.x.
@@ -59,7 +59,7 @@ docker compose -f docker-compose.compat.yml down -v
 
 For datastore-era compatibility work, use the Nexus PostgreSQL compose file instead of the default
 Nexus 3.29.2 OrientDB reference. It pins Nexus to 3.92.0 with PostgreSQL datastore enabled, which
-covers Cargo/Rust, Dart/Pub, Terraform, and the other newer-format live checks:
+covers Cargo/Rust, Dart/Pub, Terraform, Conda, and the other newer-format live checks:
 
 ```bash
 scripts/build-docker-image.sh kkrepo:compat
@@ -83,10 +83,12 @@ Available suites:
   Nexus across Maven, npm, PyPI, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift, Ansible Galaxy, Raw, selected NuGet/RubyGems/Yum behavior,
   Go proxy endpoints, Helm hosted round trips, component upload specs, and selected security/admin
   contracts. Composer is required when enabled; a missing Nexus Composer endpoint fails instead of skipping.
+  The self-contained Conda fixtures run in this module, while the live Conda comparison is enabled
+  explicitly as described below.
 - `extended`: diagnostic smoke coverage plus currently separated PyPI, Helm, Pub, NuGet, RubyGems, and Yum checks.
 - `client-e2e`: starts from the disposable kkrepo service and uses real package clients to publish
   and then download/resolve through hosted and group/proxy repositories. It covers Maven, npm,
-  PyPI, Helm, Cargo/Rust, Dart/Pub, Flutter Pub, Composer/PHP, Terraform 0.13/current, Ansible Galaxy 2.9/current, NuGet, RubyGems, Yum, and Docker/OCI. Go is
+  PyPI, Helm, Cargo/Rust, Dart/Pub, Flutter Pub, Composer/PHP, Terraform 0.13/current, Ansible Galaxy 2.9/current, Conda, NuGet, RubyGems, Yum, and Docker/OCI. Go is
   resolve-only through the Go proxy because hosted Go publishing is not a supported repository mode.
   SwiftPM is included when `swift` or `SWIFT_E2E_BINS` is available; it publishes to Swift hosted,
   resolves and builds through group, checks immutable conflict and checksum replay, and exercises
@@ -94,6 +96,9 @@ Available suites:
   Ansible is included when `ansible-galaxy` or `ANSIBLE_GALAXY_BINS` is available; it builds and
   publishes dependent collections, checks task polling and immutable conflicts, installs through
   group, downloads the exact hosted bytes, and installs a fixed public Galaxy collection through proxy.
+  Conda is included when `conda` or `CONDA_E2E_BIN` is available; it uploads an installable hosted
+  package, searches/creates/lists through group and proxy channels, verifies package bytes and
+  repodata variants, and runs the shared cleanup gate for the hosted fixture.
   The Composer flow additionally validates a hosted-to-proxy transitive dependency, rejected Basic
   credentials, and lock replay from the server cache after clearing the client cache and detaching
   the Packagist upstream.
@@ -124,7 +129,7 @@ docker compose -f docker-compose.compat.yml down -v
 ```
 
 The runner must have `mvn`, `npm`, `python3` with `build` and `twine`, `go`, `helm`, `cargo`,
-`dart`, `composer`, `php`, Terraform 0.13 and a current stable Terraform binary, `ansible-galaxy`, `dotnet`, `ruby`/`gem`, and Docker available. `flutter` is used for the Flutter Pub check
+`dart`, `composer`, `php`, Terraform 0.13 and a current stable Terraform binary, `ansible-galaxy`, `conda`, `dotnet`, `ruby`/`gem`, and Docker available. `flutter` is used for the Flutter Pub check
 when installed; GitHub Actions installs it for the `client-e2e` workflow. ORAS is optional; when
 present the Docker/OCI part also pushes and pulls a generic OCI artifact. Client logs, downloaded
 metadata, and selected inspect outputs are written under `artifacts/client-e2e/`. Terraform URLs can
@@ -156,6 +161,33 @@ Without `ANSIBLE_GALAXY_BINS`, an installed `ansible-galaxy` runs as `current`; 
 available, the script reports an explicit skip. Set `ANSIBLE_E2E_PROXY_ENABLED=false` only when the
 public Galaxy upstream is intentionally unavailable. Set `ANSIBLE_KKREPO_SECONDARY_BASE_URL` to a
 second replica sharing the database and blob store to include cross-replica visibility.
+
+### Conda compatibility and client matrix
+
+`CondaRepositoryBlackBoxCompatibilityTest` always runs self-contained archive/path/metadata fixtures. Its live branch creates isolated hosted/proxy/group repositories on Nexus and kkrepo, then compares root/nested channels, `.tar.bz2`/`.conda` publication, JSON/BZ2/ZSTD/current repodata, channeldata, group priority, package bytes/checksums, and conditional requests. Enable it explicitly:
+
+```bash
+CONDA_COMPAT_ENABLED=true \
+CONDA_NEXUS_COMPAT_BASE_URL=http://127.0.0.1:39400 \
+CONDA_KKREPO_COMPAT_BASE_URL=http://127.0.0.1:18090 \
+CONDA_NEXUS_COMPAT_USERNAME=admin \
+CONDA_NEXUS_COMPAT_PASSWORD=Admin1234 \
+CONDA_KKREPO_COMPAT_USERNAME=admin \
+CONDA_KKREPO_COMPAT_PASSWORD=12345678 \
+mvn -pl compat-test -am \
+  -Dtest=CondaRepositoryBlackBoxCompatibilityTest \
+  -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+Run only the real Conda client flow with:
+
+```bash
+CLIENT_E2E_TESTS=conda \
+CONDA_E2E_BIN=/path/to/conda \
+scripts/ci/run-client-e2e.sh
+```
+
+The client flow uploads a generated package to hosted, resolves it through group, resolves a controlled public package through proxy, records `search/create/list` diagnostics, and verifies cleanup. The existing migration workflow additionally exercises native Nexus 3.92/3.94 hosted/proxy/group definitions, shape-gated package restoration, rebuilt target repodata, real client installation, checksums, row-count idempotency, restart/resume, both target databases, and cross-replica reads where available.
 
 ### Swift Registry compatibility and client matrix
 

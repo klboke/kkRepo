@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.scanner;
 import com.github.klboke.kkrepo.security.scan.ScannerArtifactType;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.ResourceLimits;
 import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
@@ -57,12 +58,32 @@ public class ArchiveGuard {
     try {
       deadline.check();
       Budget budget = new Budget(limits, Files.size(input), deadline);
-      inspectPath(input, "", 0, budget, workspace, false);
+      inspectPath(input, "", 0, budget, workspace, false, false);
       deadline.check();
-      return new Inspection(budget.entries, budget.expandedBytes, budget.nestedArchives);
+      return new Inspection(budget.entries, budget.expandedBytes, budget.nestedArchives, null);
     } catch (IOException e) {
       throw new ScannerRequestException(
           "ARCHIVE_INVALID", "Input archive is malformed or unsupported", 422, false, e);
+    }
+  }
+
+  /**
+   * Applies the ordinary archive budgets while accepting only links that remain inside a Conda
+   * package. Conda payload tarballs commonly use symlinks and hardlinks, but the scanner never
+   * extracts or executes them.
+   */
+  public Inspection inspectConda(
+      Path input, ResourceLimits limits, Path workspace, ScanDeadline deadline) {
+    try {
+      deadline.check();
+      Budget budget = new Budget(limits, Files.size(input), deadline);
+      inspectPath(input, "", 0, budget, workspace, false, true);
+      deadline.check();
+      return new Inspection(
+          budget.entries, budget.expandedBytes, budget.nestedArchives, budget.condaIndex);
+    } catch (IOException e) {
+      throw new ScannerRequestException(
+          "ARCHIVE_INVALID", "Conda package is malformed or unsupported", 422, false, e);
     }
   }
 
@@ -90,10 +111,10 @@ public class ArchiveGuard {
       }
       Budget budget = new Budget(limits, compressedBytes, deadline);
       for (Path layer : layers) {
-        inspectPath(layer, "", 0, budget, workspace, true);
+        inspectPath(layer, "", 0, budget, workspace, true, false);
       }
       deadline.check();
-      return new Inspection(budget.entries, budget.expandedBytes, budget.nestedArchives);
+      return new Inspection(budget.entries, budget.expandedBytes, budget.nestedArchives, null);
     } catch (IOException e) {
       throw new ScannerRequestException(
           "OCI_LAYER_INVALID", "OCI layer is malformed or unsupported", 422, false, e);
@@ -106,14 +127,17 @@ public class ArchiveGuard {
       int depth,
       Budget budget,
       Path workspace,
-      boolean allowImageFilesystemMetadata) {
+      boolean allowImageFilesystemMetadata,
+      boolean allowSafeArchiveLinks) {
     try {
       if (inspectAsRpm(
-          input, depth, budget, workspace, allowImageFilesystemMetadata)) return;
+          input, depth, budget, workspace, allowImageFilesystemMetadata,
+          allowSafeArchiveLinks)) return;
       if (inspectAsArchive(
-          input, depth, budget, workspace, allowImageFilesystemMetadata)) return;
-      inspectAsCompressed(
-          input, hint, depth, budget, workspace, allowImageFilesystemMetadata);
+          input, depth, budget, workspace, allowImageFilesystemMetadata,
+          allowSafeArchiveLinks)) return;
+      inspectAsCompressed(input, hint, depth, budget, workspace,
+          allowImageFilesystemMetadata, allowSafeArchiveLinks);
     } catch (ScannerRequestException e) {
       throw e;
     } catch (IOException e) {
@@ -131,7 +155,8 @@ public class ArchiveGuard {
       int depth,
       Budget budget,
       Path workspace,
-      boolean allowImageFilesystemMetadata)
+      boolean allowImageFilesystemMetadata,
+      boolean allowSafeArchiveLinks)
       throws IOException, ArchiveException, CompressorException {
     if (!startsWith(input, RPM_LEAD_MAGIC)) {
       return false;
@@ -164,7 +189,8 @@ public class ArchiveGuard {
           try (ArchiveInputStream<?> archive =
               ArchiveStreamFactory.DEFAULT.createArchiveInputStream(archiveType, expanded)) {
             inspectEntries(
-                archive, depth, budget, workspace, allowImageFilesystemMetadata);
+                archive, depth, budget, workspace, allowImageFilesystemMetadata,
+                allowSafeArchiveLinks);
           }
         }
       }
@@ -255,7 +281,8 @@ public class ArchiveGuard {
       int depth,
       Budget budget,
       Path workspace,
-      boolean allowImageFilesystemMetadata)
+      boolean allowImageFilesystemMetadata,
+      boolean allowSafeArchiveLinks)
       throws IOException, ArchiveException {
     budget.check();
     try (BufferedInputStream raw = new BufferedInputStream(Files.newInputStream(input))) {
@@ -269,7 +296,8 @@ public class ArchiveGuard {
       try (ArchiveInputStream<?> archive =
           ArchiveStreamFactory.DEFAULT.createArchiveInputStream(type, raw)) {
         inspectEntries(
-            archive, depth, budget, workspace, allowImageFilesystemMetadata);
+            archive, depth, budget, workspace, allowImageFilesystemMetadata,
+            allowSafeArchiveLinks);
       }
       return true;
     }
@@ -281,7 +309,8 @@ public class ArchiveGuard {
       int depth,
       Budget budget,
       Path workspace,
-      boolean allowImageFilesystemMetadata)
+      boolean allowImageFilesystemMetadata,
+      boolean allowSafeArchiveLinks)
       throws IOException, CompressorException, ArchiveException {
     budget.check();
     try (BufferedInputStream raw = new BufferedInputStream(Files.newInputStream(input))) {
@@ -301,7 +330,8 @@ public class ArchiveGuard {
           try (ArchiveInputStream<?> archive =
               ArchiveStreamFactory.DEFAULT.createArchiveInputStream(type, expanded)) {
             inspectEntries(
-                archive, depth, budget, workspace, allowImageFilesystemMetadata);
+                archive, depth, budget, workspace, allowImageFilesystemMetadata,
+                allowSafeArchiveLinks);
           }
         } catch (ArchiveException singleCompressedFile) {
           drain(expanded, budget, budget.limits.maxSingleFileBytes());
@@ -315,7 +345,8 @@ public class ArchiveGuard {
       int depth,
       Budget budget,
       Path workspace,
-      boolean allowImageFilesystemMetadata)
+      boolean allowImageFilesystemMetadata,
+      boolean allowSafeArchiveLinks)
       throws IOException {
     while (true) {
       budget.check();
@@ -324,7 +355,7 @@ public class ArchiveGuard {
       if (entry == null) break;
       budget.addEntry();
       validatePath(entry.getName());
-      if (!allowImageFilesystemMetadata) validateType(entry);
+      if (!allowImageFilesystemMetadata) validateType(entry, allowSafeArchiveLinks);
       long declaredSize = entry.getSize();
       if (declaredSize > budget.limits.maxSingleFileBytes()) {
         throw rejected("ARCHIVE_ENTRY_TOO_LARGE", "Archive entry exceeds the single-file limit");
@@ -340,7 +371,14 @@ public class ArchiveGuard {
         throw rejected("ARCHIVE_ENTRY_UNREADABLE", "Archive contains an unsupported entry");
       }
 
-      if (looksNested(entry.getName())) {
+      if (allowSafeArchiveLinks && "info/index.json".equals(entry.getName())) {
+        if (budget.condaIndex != null) {
+          throw rejected(
+              "CONDA_INDEX_DUPLICATE", "Conda package contains duplicate info/index.json");
+        }
+        budget.condaIndex = readEntry(
+            archive, budget, Math.min(2L * 1024 * 1024, budget.limits.maxSingleFileBytes()));
+      } else if (looksNested(entry.getName())) {
         if (depth >= budget.limits.maxNestedDepth()) {
           throw rejected("ARCHIVE_NESTING_LIMIT", "Archive nesting exceeds the configured limit");
         }
@@ -354,7 +392,8 @@ public class ArchiveGuard {
               depth + 1,
               budget,
               workspace,
-              allowImageFilesystemMetadata);
+              allowImageFilesystemMetadata,
+              allowSafeArchiveLinks);
         } finally {
           Files.deleteIfExists(nested);
         }
@@ -392,22 +431,57 @@ public class ArchiveGuard {
     }
   }
 
-  private static void validateType(ArchiveEntry entry) {
+  private static void validateType(ArchiveEntry entry, boolean allowSafeArchiveLinks) {
     if (entry instanceof ZipArchiveEntry zip && zip.isUnixSymlink()) {
       throw rejected("ARCHIVE_LINK_REJECTED", "Archive links are not permitted");
     }
-    if (entry instanceof TarArchiveEntry tar
-        && (tar.isSymbolicLink()
-            || tar.isLink()
-            || tar.isCharacterDevice()
-            || tar.isBlockDevice()
-            || tar.isFIFO())) {
-      throw rejected("ARCHIVE_SPECIAL_FILE_REJECTED", "Archive special files are not permitted");
+    if (entry instanceof TarArchiveEntry tar) {
+      if (tar.isCharacterDevice() || tar.isBlockDevice() || tar.isFIFO()) {
+        throw rejected(
+            "ARCHIVE_SPECIAL_FILE_REJECTED", "Archive special files are not permitted");
+      }
+      if (tar.isSymbolicLink() || tar.isLink()) {
+        if (!allowSafeArchiveLinks) {
+          throw rejected(
+              "ARCHIVE_SPECIAL_FILE_REJECTED", "Archive special files are not permitted");
+        }
+        validateLinkTarget(tar.getName(), tar.getLinkName(), tar.isSymbolicLink());
+      }
     }
     if (entry instanceof CpioArchiveEntry cpio
         && !cpio.isRegularFile()
         && !cpio.isDirectory()) {
       throw rejected("ARCHIVE_SPECIAL_FILE_REJECTED", "Archive special files are not permitted");
+    }
+  }
+
+  static void validateLinkTarget(
+      String rawEntryName, String rawTarget, boolean relativeToParent) {
+    validatePath(rawEntryName);
+    if (rawTarget == null || rawTarget.isBlank() || rawTarget.indexOf('\0') >= 0) {
+      throw rejected("ARCHIVE_LINK_ESCAPE", "Archive contains an unsafe link target");
+    }
+    String target = Normalizer.normalize(rawTarget, Normalizer.Form.NFKC);
+    if (target.indexOf('\\') >= 0
+        || target.indexOf('\u2215') >= 0
+        || target.indexOf('\u2044') >= 0
+        || target.indexOf('\uff0f') >= 0
+        || target.startsWith("/")
+        || WINDOWS_ABSOLUTE.matcher(target).matches()) {
+      throw rejected("ARCHIVE_LINK_ESCAPE", "Archive contains an unsafe link target");
+    }
+    try {
+      Path entry = Path.of(Normalizer.normalize(rawEntryName, Normalizer.Form.NFKC)).normalize();
+      Path base = relativeToParent && entry.getParent() != null
+          ? entry.getParent() : Path.of("");
+      Path resolved = base.resolve(target).normalize();
+      if (resolved.isAbsolute() || resolved.startsWith("..")) {
+        throw rejected("ARCHIVE_LINK_ESCAPE", "Archive link escapes the scanner workspace");
+      }
+    } catch (ScannerRequestException e) {
+      throw e;
+    } catch (RuntimeException e) {
+      throw rejected("ARCHIVE_LINK_ESCAPE", "Archive contains an unsafe link target");
     }
   }
 
@@ -456,6 +530,30 @@ public class ArchiveGuard {
     }
   }
 
+  private static byte[] readEntry(InputStream input, Budget budget, long maximum)
+      throws IOException {
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    long count = 0;
+    byte[] buffer = new byte[16 * 1024];
+    while (true) {
+      budget.check();
+      int read = input.read(buffer);
+      budget.check();
+      if (read < 0) break;
+      if (read == 0) continue;
+      count += read;
+      budget.addBytes(read);
+      if (count > maximum) {
+        throw rejected("CONDA_INDEX_TOO_LARGE", "Conda info/index.json exceeds the limit");
+      }
+      output.write(buffer, 0, read);
+    }
+    if (output.size() == 0) {
+      throw rejected("CONDA_INDEX_EMPTY", "Conda info/index.json is empty");
+    }
+    return output.toByteArray();
+  }
+
   private static ScannerRequestException rejected(String code, String message) {
     return new ScannerRequestException(code, message, 422, false);
   }
@@ -467,6 +565,7 @@ public class ArchiveGuard {
     private int entries;
     private long expandedBytes;
     private int nestedArchives;
+    private byte[] condaIndex;
 
     private Budget(ResourceLimits limits, long compressedBytes, ScanDeadline deadline) {
       this.limits = limits;
@@ -500,5 +599,19 @@ public class ArchiveGuard {
     }
   }
 
-  public record Inspection(int entries, long expandedBytes, int nestedArchives) {}
+  public record Inspection(
+      int entries, long expandedBytes, int nestedArchives, byte[] condaIndex) {
+    public Inspection(int entries, long expandedBytes, int nestedArchives) {
+      this(entries, expandedBytes, nestedArchives, null);
+    }
+
+    public Inspection {
+      condaIndex = condaIndex == null ? null : condaIndex.clone();
+    }
+
+    @Override
+    public byte[] condaIndex() {
+      return condaIndex == null ? null : condaIndex.clone();
+    }
+  }
 }

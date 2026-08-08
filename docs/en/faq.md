@@ -2,7 +2,7 @@
 
 ## What is kkrepo?
 
-kkrepo is a Nexus-compatible, self-hosted artifact repository for common package formats such as Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift Package Registry, Ansible Galaxy, Docker/OCI, NuGet, RubyGems, Yum, and Raw.
+kkrepo is a Nexus-compatible, self-hosted artifact repository for common package formats such as Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift Package Registry, Ansible Galaxy, Conda, Docker/OCI, NuGet, RubyGems, Yum, and Raw.
 
 It keeps Nexus-like client URLs, protocol behavior, permissions, and migration goals while using MySQL for metadata and OSS/S3-compatible storage for blobs.
 
@@ -33,6 +33,7 @@ Current supported formats:
 - Terraform Provider / Module Registry
 - Swift Package Registry
 - Ansible Galaxy
+- Conda
 - Docker / OCI
 - NuGet
 - RubyGems
@@ -47,7 +48,7 @@ For supported non-Docker formats, the main client URL shape is compatible with N
 /repository/<repo>/<artifact-path>
 ```
 
-This helps preserve Maven, npm, pip, Helm, Cargo, Dart/Flutter Pub, Composer, Terraform, SwiftPM, Ansible Galaxy, NuGet, RubyGems, Yum, Raw, and CI client configuration during migration for formats covered by the migration flow.
+This helps preserve Maven, npm, pip, Helm, Cargo, Dart/Flutter Pub, Composer, Terraform, SwiftPM, Ansible Galaxy, Conda, NuGet, RubyGems, Yum, Raw, and CI client configuration during migration for formats covered by the migration flow.
 
 Docker / OCI uses the Registry HTTP API V2 `/v2/...` route instead of `/repository/<repo>/...`: shared-entrypoint deployments use `<host>/<repo>/<image>:<tag>`, and repository-level connector ports can expose `<host>:<repo-port>/<image>:<tag>`.
 
@@ -162,6 +163,12 @@ Configure Terraform CLI `host.services` to point `modules.v1` and `providers.v1`
 Yes. `ansiblegalaxy-hosted`, `ansiblegalaxy-proxy`, and `ansiblegalaxy-group` implement Galaxy v3 collection discovery, immutable publication/import tasks, version/dependency metadata, artifact download, public Galaxy proxying, group source binding, Browse/Search/Usage, and Ansible 2.9/current client flows. `GenericToken`, HTTP Basic, and route-scoped Nexus-compatible Base64 credentials are supported. Galaxy v1 roles and `ansible-galaxy role install` are not.
 
 Nexus 3.93.x-3.94.x native Ansible repository definitions and shape-gated hosted/proxy collection data can be migrated. Collection tarballs, complete `MANIFEST.json`/`FILES.json`, oversized upstream JSON, and signature payloads stay in blob storage; MySQL/PostgreSQL stores bounded metadata projections, hashes, references, tasks, leases, and bindings. See the [Ansible Galaxy Repository Guide](ansible-galaxy-guide.md).
+
+## Is Conda supported?
+
+Yes. `conda-hosted`, `conda-proxy`, and `conda-group` support root and nested channels, platform subdirs plus `noarch`, `.tar.bz2` and `.conda` packages, JSON/BZ2/ZSTD repodata, channeldata, conditional reads, Browse/Search/Usage, UI/API upload, and Nexus-compatible raw PUT. Real Conda client E2E covers hosted publication, group search/create/list, upstream proxy search/create/list, and cleanup.
+
+Nexus 3.92.x-3.94.x Conda repository definitions and shape-gated hosted packages can be migrated. Generated repodata/channeldata is rebuilt at the target; unknown source profiles, datastore shapes, or packages whose identity cannot be proven fail closed instead of being guessed. See [Client Recipes](client-recipes.md#conda) and the [Conda Repository Design Notes](../zh/dev/conda-repository-design.md).
 
 ## Is kkrepo production-ready?
 

@@ -46,6 +46,7 @@ const SEARCH_ROUTE_FORMAT = {
   terraform: "terraform",
   swift: "swift",
   ansiblegalaxy: "ansiblegalaxy",
+  conda: "conda",
   pypi: "pypi",
   rubygems: "rubygems",
   yum: "yum",
@@ -62,6 +63,7 @@ const FORMAT_ROUTE_SEGMENT = {
   terraform: "terraform",
   swift: "swift",
   ansiblegalaxy: "ansiblegalaxy",
+  conda: "conda",
   pypi: "pypi",
   rubygems: "rubygems",
   yum: "yum",
@@ -157,6 +159,9 @@ function componentBrowsePath(component) {
     return [group, name, version].filter(Boolean).join("/");
   }
   if (format === "ansiblegalaxy") {
+    return [group, name, version].filter(Boolean).join("/");
+  }
+  if (format === "conda") {
     return [group, name, version].filter(Boolean).join("/");
   }
   return "";
@@ -639,6 +644,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   terraform: "terraform",
   swift: "swift",
   ansiblegalaxy: "ansiblegalaxy",
+  conda: "conda",
   go: "go",
   helm: "helm",
   docker: "docker",
@@ -1576,6 +1582,7 @@ function renderAttributesSection(detail, opts = {}) {
     renderAttributeGroup("Npm", detail.npm),
     renderAttributeGroup("Pub", detail.pub),
     renderAttributeGroup("Composer", detail.composer),
+    renderAttributeGroup("Conda", detail.conda),
     renderAttributeGroup("Swift", detail.swift),
     renderAttributeGroup("Ansible Galaxy", detail.ansible),
     renderAttributeGroup("Provenance", detail.provenance),
@@ -2582,6 +2589,57 @@ function ansibleGalaxyUsageDetail(entry) {
   return { crumbText: entry.path, summaryRows, snippets };
 }
 
+function condaUsageDetail(entry, detail = null) {
+  const metadata = detail?.conda || {};
+  const parts = pathSegments(entry.path);
+  const logicalPackage = parts.length >= 5;
+  const subdirIndex = logicalPackage ? parts.length - 5 : -1;
+  const channel = metadata.channel ?? (subdirIndex > 0 ? parts.slice(0, subdirIndex).join("/") : "");
+  const subdir = metadata.subdir || (subdirIndex >= 0 ? parts[subdirIndex] : "");
+  const name = metadata.name || (logicalPackage ? parts[parts.length - 4] : "");
+  const version = metadata.version || (logicalPackage ? parts[parts.length - 3] : "");
+  const build = metadata.build || (logicalPackage ? parts[parts.length - 2] : "");
+  const filename = metadata.filename || (entry.leaf ? parts[parts.length - 1] : "");
+  const repositoryUrl = repositoryBaseUrl().replace(/\/+$/, "");
+  const channelUrl = channel ? `${repositoryUrl}/${channel}` : repositoryUrl;
+  const summaryRows = [
+    ["Repository", state.repo],
+    ["Format", "conda"],
+    ["Channel", channel || "root"],
+    ["Subdir", subdir || "-"],
+    ["Package", name || "-"],
+    ["Version", version || "-"],
+    ["Build", build || "-"],
+    ["Channel URL", channelUrl],
+  ];
+  const snippets = [
+    usageSnippet(
+      ".condarc",
+      `channels:\n  - ${channelUrl}\nchannel_priority: strict`,
+      "Use an API key or scoped token through .netrc when authentication is required",
+    ),
+    usageSnippet(
+      "Search",
+      `conda search --override-channels -c ${channelUrl} ${name || "<package>"}`,
+    ),
+    usageSnippet(
+      "Install",
+      `conda install --override-channels -c ${channelUrl} ${name || "<package>"}${version ? `=${version}` : ""}`,
+    ),
+  ];
+  if (currentRepository()?.type === "hosted" && filename && subdir) {
+    const packageUrl = `${channelUrl}/${subdir}/${filename}`;
+    snippets.push(usageSnippet(
+      "Publish",
+      `curl --fail --user '<username>:<token>' --upload-file '${filename}' '${packageUrl}'`,
+      "The archive identity and URL subdir are validated before publication",
+    ));
+  }
+  if (metadata.sha256) summaryRows.push(["SHA-256", metadata.sha256]);
+  if (metadata.size != null) summaryRows.push(["Size", formatBytesDetail(metadata.size)]);
+  return { crumbText: entry.path, summaryRows, snippets };
+}
+
 async function usageDetailForEntry(entry, detail = null) {
   const repo = currentRepository();
   if (!repo) return null;
@@ -2596,6 +2654,7 @@ async function usageDetailForEntry(entry, detail = null) {
   if (repo.format === "terraform") return terraformUsageDetail(entry);
   if (repo.format === "swift") return swiftUsageDetail(entry);
   if (repo.format === "ansiblegalaxy") return ansibleGalaxyUsageDetail(entry);
+  if (repo.format === "conda") return condaUsageDetail(entry, detail);
   if (repo.format === "docker") return dockerUsageDetail(entry);
   return null;
 }
@@ -2858,6 +2917,28 @@ function renderUploadFields() {
     `;
     return;
   }
+  if (repo.format === "conda") {
+    fields.innerHTML = `
+      <label>
+        <span>Channel path (optional)</span>
+        <input id="upload-conda-channel" type="text" placeholder="team/release">
+      </label>
+      <label>
+        <span>Subdir</span>
+        <input id="upload-conda-subdir" type="text" value="noarch" placeholder="linux-64 or noarch" required>
+      </label>
+      <label class="upload-file">
+        <span>Conda package</span>
+        <input id="upload-file" type="file" accept=".conda,.tar.bz2,application/zip,application/x-bzip2" required>
+      </label>
+      <div class="muted-row full-width">Upload a canonical <code>.conda</code> or <code>.tar.bz2</code> package. The server validates <code>info/index.json</code>, filename, subdir, checksums, and archive limits.</div>
+      <label class="upload-path">
+        <span>Package path</span>
+        <input id="upload-path" type="text" readonly>
+      </label>
+    `;
+    return;
+  }
   if (repo.format === "ansiblegalaxy") {
     fields.innerHTML = `
       <label class="upload-file">
@@ -2963,6 +3044,12 @@ function computedUploadPaths() {
     const version = uploadFieldValue("upload-swift-version");
     const archive = document.getElementById("upload-file")?.files?.[0];
     return scope && name && version && archive ? [`${scope}/${name}/${version}`] : [];
+  }
+  if (repo.format === "conda") {
+    const channel = uploadFieldValue("upload-conda-channel").replace(/^\/+|\/+$/g, "");
+    const subdir = uploadFieldValue("upload-conda-subdir");
+    const file = document.getElementById("upload-file")?.files?.[0];
+    return subdir && file ? [[channel, subdir, file.name].filter(Boolean).join("/")] : [];
   }
   if (repo.format === "ansiblegalaxy") {
     const file = document.getElementById("upload-file")?.files?.[0];
@@ -3132,6 +3219,18 @@ function buildUploadForm(repo, form) {
       form.append("swift.metadata-signature", metadataSignature, metadataSignature.name);
     }
     form.append("swift.source-archive", archive, archive.name);
+    return;
+  }
+  if (repo.format === "conda") {
+    const channel = uploadFieldValue("upload-conda-channel").replace(/^\/+|\/+$/g, "");
+    const subdir = uploadFieldValue("upload-conda-subdir");
+    const file = document.getElementById("upload-file")?.files?.[0];
+    if (!subdir || !file || !(file.name.endsWith(".conda") || file.name.endsWith(".tar.bz2"))) {
+      throw new Error("Subdir and a .conda or .tar.bz2 package are required.");
+    }
+    if (channel) form.append("conda.channel", channel);
+    form.append("conda.subdir", subdir);
+    form.append("conda.asset", file, file.name);
     return;
   }
   if (repo.format === "ansiblegalaxy") {

@@ -1178,6 +1178,29 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
+  void restCondaComponentUploadRequiresEditBecauseTheTargetPathIsMultipartData() throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "conda-hosted", RepositoryFormat.CONDA, RepositoryType.HOSTED)),
+        false,
+        true);
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("POST", "/service/rest/v1/components", Map.of("repository", "conda-hosted")),
+        new MockHttpServletResponse(),
+        chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(PermissionAction.EDIT, decisions.permission.action());
+  }
+
+  @Test
   void nonPostComponentsEndpointIsNotTreatedAsUploadPermission() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("alice")));
     RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.deny("should not be checked"));
@@ -1372,6 +1395,38 @@ class RepositorySecurityFilterTest {
 
     filter.doFilter(
         request("PUT", "/repository/terraform-hosted/" + path), response.proxy(), chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(expected, decisions.permission.action());
+  }
+
+  @Test
+  void condaPutRequiresAddForANewPathAndEditForAnExistingPath() throws Exception {
+    String path = "team/linux-64/demo-1.0-0.conda";
+    assertCondaPutAction(path, Set.of(), PermissionAction.ADD);
+    assertCondaPutAction(path, Set.of(path), PermissionAction.EDIT);
+  }
+
+  private static void assertCondaPutAction(
+      String path, Set<String> existingPaths, PermissionAction expected) throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "conda-hosted", RepositoryFormat.CONDA, RepositoryType.HOSTED)),
+        new FakeAssetDao(existingPaths),
+        terraformRegistry(Set.of()),
+        new ForwardedHeaderPolicy(""),
+        new NexusLegacyUiCompatibility(false));
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("PUT", "/repository/conda-hosted/" + path),
+        new MockHttpServletResponse(),
+        chain);
 
     assertEquals(1, chain.calls);
     assertEquals(expected, decisions.permission.action());
@@ -1746,6 +1801,15 @@ class RepositorySecurityFilterTest {
 
     private FakeAssetDao(Set<String> existingPaths) {
       this.existingPaths = existingPaths;
+    }
+
+    @Override
+    public Optional<AssetRecord> findAssetByPath(long repositoryId, String path) {
+      if (!existingPaths.contains(path)) return Optional.empty();
+      return Optional.of(new AssetRecord(
+          1L, repositoryId, null, null, RepositoryFormat.CONDA, path, new byte[32],
+          path.substring(path.lastIndexOf('/') + 1), "conda", "application/octet-stream", 1L,
+          null, Instant.EPOCH, Map.of()));
     }
 
     @Override

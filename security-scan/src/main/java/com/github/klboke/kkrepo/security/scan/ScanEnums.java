@@ -12,6 +12,7 @@ public final class ScanEnums {
 
   public enum SubjectKind {
     ASSET_BLOB,
+    CONDA_PACKAGE,
     OCI_MANIFEST
   }
 

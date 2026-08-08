@@ -17,6 +17,10 @@ STAMP="${CLIENT_E2E_STAMP:-$(date +%Y%m%d%H%M%S)}"
 START_TIMEOUT_SECONDS="${LIVE_COMPAT_START_TIMEOUT_SECONDS:-240}"
 SWIFT_LOGIN_TIMEOUT_SECONDS="${SWIFT_E2E_LOGIN_TIMEOUT_SECONDS:-60}"
 ANSIBLE_IMPORT_TIMEOUT_SECONDS="${ANSIBLE_E2E_IMPORT_TIMEOUT_SECONDS:-120}"
+CONDA_BIN="${CONDA_E2E_BIN:-${CONDA_BIN:-conda}}"
+CONDA_HOSTED_REPOSITORY="${CONDA_E2E_HOSTED_REPOSITORY:-conda-hosted}"
+CONDA_PROXY_REPOSITORY="${CONDA_E2E_PROXY_REPOSITORY:-conda-proxy}"
+CONDA_GROUP_REPOSITORY="${CONDA_E2E_GROUP_REPOSITORY:-conda-group}"
 KKREPO_AUTH_URL=""
 REDACTION_VALUES=("$KKREPO_PASSWORD" "$KKREPO_AUTH")
 CLEANUP_FIXTURE_FORMAT=""
@@ -1235,6 +1239,155 @@ dnf -y download --repo kkrepo-client-e2e --destdir /work 6tunnel"
   ls "$dir"/6tunnel-*.rpm >/dev/null
 }
 
+test_conda() {
+  need "$CONDA_BIN"
+  local dir="$WORK_DIR/conda"
+  local package="kkrepo_conda_e2e_${STAMP}"
+  local version="1.0.0"
+  local build="0"
+  local subdir="${CONDA_E2E_SUBDIR:-linux-64}"
+  local filename="$package-$version-$build.tar.bz2"
+  local archive="$dir/$filename"
+  local marker="kkrepo Conda client E2E $STAMP"
+  local marker_path="share/kkrepo-conda-e2e/$package.txt"
+  local condarc="$dir/condarc"
+  local hosted_search="$ARTIFACT_DIR/conda-hosted-search.json"
+  local hosted_list="$ARTIFACT_DIR/conda-hosted-list.json"
+  local proxy_search="$ARTIFACT_DIR/conda-proxy-search.json"
+  local proxy_list="$ARTIFACT_DIR/conda-proxy-list.json"
+  local hosted_prefix="$dir/hosted-prefix"
+  local proxy_prefix="$dir/proxy-prefix"
+  local hosted_channel="$KKREPO_URL/repository/$CONDA_GROUP_REPOSITORY"
+  local proxy_channel="$KKREPO_URL/repository/$CONDA_PROXY_REPOSITORY"
+  local proxy_name="${CONDA_E2E_PROXY_PACKAGE:-tzdata}"
+  local proxy_spec
+  local -a conda_env
+
+  mkdir -p "$dir/pkgs" "$dir/envs"
+  python3 "$PROJECT_ROOT/scripts/ci/create-conda-e2e-fixture.py" \
+    --name "$package" \
+    --version "$version" \
+    --build "$build" \
+    --subdir "$subdir" \
+    --marker "$marker" \
+    --output "$archive" \
+    >"$ARTIFACT_DIR/conda-hosted-fixture.json"
+  cat >"$condarc" <<EOF
+channels: []
+default_channels: []
+channel_priority: strict
+show_channel_urls: true
+auto_activate_base: false
+pkgs_dirs:
+  - $dir/pkgs
+envs_dirs:
+  - $dir/envs
+EOF
+  conda_env=(
+    env
+    "CONDARC=$condarc"
+    "CONDA_PKGS_DIRS=$dir/pkgs"
+    "CONDA_ENVS_PATH=$dir/envs"
+    "CONDA_SUBDIR=$subdir"
+  )
+
+  run_logged conda-hosted-upload curl -m 60 --fail-with-body -sS \
+    -u "$KKREPO_AUTH" \
+    -X PUT \
+    -H "Content-Type: application/x-tar" \
+    --data-binary "@$archive" \
+    "$KKREPO_URL/repository/$CONDA_HOSTED_REPOSITORY/$subdir/$filename"
+  wait_for_body_contains conda-hosted-repodata "$filename" \
+    "$KKREPO_URL/repository/$CONDA_HOSTED_REPOSITORY/$subdir/repodata.json" \
+    "$ARTIFACT_DIR/conda-hosted-repodata.json"
+
+  run_logged_output conda-hosted-search "$hosted_search" \
+    "${conda_env[@]}" "$CONDA_BIN" search --json --override-channels \
+    --channel "$hosted_channel" "$package=$version=$build"
+  python3 - "$hosted_search" "$package" "$version" "$build" "$subdir" <<'PY'
+import json
+import pathlib
+import sys
+
+path, name, version, build, subdir = sys.argv[1:6]
+payload = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+records = payload.get(name) or []
+if not any(
+    record.get("version") == version
+    and record.get("build") == build
+    and record.get("subdir") == subdir
+    for record in records
+):
+    raise SystemExit(f"Conda group search did not find the hosted fixture: {payload}")
+PY
+  run_logged_output conda-hosted-create "$ARTIFACT_DIR/conda-hosted-create.json" \
+    "${conda_env[@]}" "$CONDA_BIN" create --json --yes --no-deps \
+    --prefix "$hosted_prefix" --override-channels \
+    --channel "$hosted_channel" "$package=$version=$build"
+  grep -Fxq "$marker" "$hosted_prefix/$marker_path"
+  run_logged_output conda-hosted-list "$hosted_list" \
+    "${conda_env[@]}" "$CONDA_BIN" list --json --prefix "$hosted_prefix"
+  python3 - "$hosted_list" "$package" "$version" "$build" <<'PY'
+import json
+import pathlib
+import sys
+
+path, name, version, build = sys.argv[1:5]
+records = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+if not any(
+    record.get("name") == name
+    and record.get("version") == version
+    and record.get("build_string") == build
+    for record in records
+):
+    raise SystemExit(f"Conda group install did not register the hosted fixture: {records}")
+PY
+
+  run_logged_output conda-proxy-search "$proxy_search" \
+    "${conda_env[@]}" "$CONDA_BIN" search --json --override-channels \
+    --channel "$proxy_channel" "$proxy_name"
+  proxy_spec="$(python3 - "$proxy_search" "$proxy_name" <<'PY'
+import json
+import pathlib
+import sys
+
+path, name = sys.argv[1:3]
+payload = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+records = [
+    record for record in payload.get(name) or []
+    if record.get("subdir") == "noarch"
+    and record.get("noarch") == "generic"
+    and not (record.get("depends") or [])
+    and record.get("version")
+    and record.get("build")
+]
+if not records:
+    raise SystemExit(
+        f"Conda proxy search returned no dependency-free noarch generic package for {name}: "
+        f"{payload}"
+    )
+record = min(records, key=lambda item: (int(item.get("size") or 0), item["version"], item["build"]))
+print(f"{name}={record['version']}={record['build']}")
+PY
+)"
+  run_logged_output conda-proxy-create "$ARTIFACT_DIR/conda-proxy-create.json" \
+    "${conda_env[@]}" "$CONDA_BIN" create --json --yes --no-deps \
+    --prefix "$proxy_prefix" --override-channels \
+    --channel "$proxy_channel" "$proxy_spec"
+  run_logged_output conda-proxy-list "$proxy_list" \
+    "${conda_env[@]}" "$CONDA_BIN" list --json --prefix "$proxy_prefix"
+  python3 - "$proxy_list" "$proxy_name" <<'PY'
+import json
+import pathlib
+import sys
+
+path, name = sys.argv[1:3]
+records = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+if not any(record.get("name") == name for record in records):
+    raise SystemExit(f"Conda proxy install did not register {name}: {records}")
+PY
+}
+
 test_docker_oci() {
   need docker
   wait_for_docker_registry
@@ -2392,7 +2545,7 @@ run_selected_tests() {
   local test
 
   if [[ -z "$selection" || "$selection" == "all" ]]; then
-    tests=(raw maven npm pypi go helm cargo pub composer nuget rubygems yum terraform swift ansible docker-oci)
+    tests=(raw maven npm pypi go helm cargo pub composer nuget rubygems yum conda terraform swift ansible docker-oci)
   else
     IFS=',' read -r -a tests <<<"$selection"
   fi
@@ -2453,6 +2606,10 @@ run_selected_tests() {
       yum)
         test_yum
         register_cleanup_fixture yum yum-hosted "*6tunnel*" yum
+        ;;
+      conda)
+        test_conda
+        register_cleanup_fixture conda "$CONDA_HOSTED_REPOSITORY" "*kkrepo_conda_e2e_$STAMP*" conda
         ;;
       terraform)
         test_terraform

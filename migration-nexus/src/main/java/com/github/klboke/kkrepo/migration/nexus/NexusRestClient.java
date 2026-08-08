@@ -407,7 +407,8 @@ public class NexusRestClient {
           cargo: 'CARGO',
           terraform: 'TERRAFORM',
           swift: 'SWIFT',
-          ansiblegalaxy: 'ANSIBLEGALAXY'
+          ansiblegalaxy: 'ANSIBLEGALAXY',
+          conda: 'CONDA'
         ]
         return prefixes[format]
       }
@@ -817,7 +818,8 @@ public class NexusRestClient {
           cargo: 'CARGO',
           terraform: 'TERRAFORM',
           swift: 'SWIFT',
-          ansiblegalaxy: 'ANSIBLEGALAXY'
+          ansiblegalaxy: 'ANSIBLEGALAXY',
+          conda: 'CONDA'
         ]
         def upperTables = []
         allTables.each { tableName ->
@@ -1029,6 +1031,73 @@ public class NexusRestClient {
           }
           return shape
         }
+        def inspectCondaShape = { tableNames ->
+          def shape = [
+            packageAssetPath: false,
+            sha256Checksum: false,
+            inspectedAssetCount: 0,
+            packageAssetCount: 0
+          ]
+          def fingerprintText = { value ->
+            if (value == null) {
+              return ''
+            }
+            if (value instanceof byte[]) {
+              return new String(value, 'UTF-8').toLowerCase()
+            }
+            if (value.getClass().name == 'org.postgresql.util.PGobject'
+                && value.respondsTo('getValue')) {
+              return String.valueOf(value.getValue()).toLowerCase()
+            }
+            return String.valueOf(value).toLowerCase()
+          }
+          def sql = '''
+              select
+                a.path as asset_path,
+                b.checksums as blob_checksums
+              from ''' + tableNames.asset + ''' a
+              left join ''' + tableNames.assetBlob + ''' b on a.asset_blob_id = b.asset_blob_id
+              order by a.path
+              limit 1024'''
+          try {
+            def statement = connection.prepareStatement(sql)
+            try {
+              def rows = statement.executeQuery()
+              try {
+                while (rows.next()) {
+                  shape.inspectedAssetCount++
+                  def path = fingerprintText(rows.getObject('asset_path')).replaceFirst('^/+', '')
+                  def packageAsset = path.endsWith('.conda') || path.endsWith('.tar.bz2')
+                  if (!packageAsset) {
+                    continue
+                  }
+                  shape.packageAssetCount++
+                  def parts = path.split('/')
+                  if (parts.length >= 2
+                      && parts[parts.length - 2]
+                          ==~ /(?:noarch|(?=.{1,32}$)[a-z0-9]+-[a-z0-9]+)/
+                      && parts[parts.length - 1].length() <= 211) {
+                    shape.packageAssetPath = true
+                  }
+                  def checksums = fingerprintText(rows.getObject('blob_checksums'))
+                  if ((checksums.contains('"sha256"') || checksums.contains('"sha-256"'))
+                      && (checksums =~ /[0-9a-f]{64}/).find()) {
+                    shape.sha256Checksum = true
+                  }
+                }
+              } finally {
+                rows.close()
+              }
+            } finally {
+              statement.close()
+            }
+          } catch (e) {
+            shape.packageAssetPath = false
+            shape.sha256Checksum = false
+            out.warnings << 'Conda datastore content shape probe failed: ' + errorText(e)
+          }
+          return shape
+        }
         def contentModels = [:]
         datastoreFormats.each { format, prefix ->
           def tableNames = [
@@ -1077,6 +1146,9 @@ public class NexusRestClient {
           }
           if (format == 'ansiblegalaxy' && requiredColumnsPresent) {
             contentModel.formatShape = inspectAnsibleGalaxyShape(tableNames)
+          }
+          if (format == 'conda' && requiredColumnsPresent) {
+            contentModel.formatShape = inspectCondaShape(tableNames)
           }
           contentModels[format] = contentModel
         }

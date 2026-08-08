@@ -38,11 +38,20 @@
     </dependency>
     <dependency>
       <groupId>com.github.klboke</groupId>
+      <artifactId>kkrepo-protocol-conda</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.github.klboke</groupId>
       <artifactId>kkrepo-protocol-docker</artifactId>
     </dependency>
     <dependency>
       <groupId>org.apache.commons</groupId>
       <artifactId>commons-compress</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.github.luben</groupId>
+      <artifactId>zstd-jni</artifactId>
       <scope>test</scope>
     </dependency>
     <dependency>

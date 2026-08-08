@@ -378,7 +378,7 @@ WantedBy=multi-user.target
 Production deployments should use multiple kkrepo replicas, an independent MySQL or PostgreSQL instance, and an OSS/S3 blob store:
 
 ```text
-Maven/npm/PyPI/Go/Helm/Cargo/Pub/Composer/Terraform/Ansible Galaxy/Docker/OCI/NuGet/RubyGems/Yum clients
+Maven/npm/PyPI/Go/Helm/Cargo/Pub/Composer/Terraform/Ansible Galaxy/Conda/Docker/OCI/NuGet/RubyGems/Yum clients
         |
 DNS / Load Balancer / Reverse Proxy
         |
@@ -387,7 +387,7 @@ kkrepo replicas
         |---------------- OSS / S3 blob store
 ```
 
-kkrepo does not depend on OrientDB, embedded Elasticsearch, or a local persistent blob filesystem at runtime. Repositories, components, assets, users, permissions, tokens, audit logs, migration state, and cross-replica coordination state are stored in the selected relational database. Large blobs, including Ansible collection archives and complete manifest/files JSON, are stored in OSS/S3. In-process TTL cache is only a rebuildable hot cache.
+kkrepo does not depend on OrientDB, embedded Elasticsearch, or a local persistent blob filesystem at runtime. Repositories, components, assets, users, permissions, tokens, audit logs, migration state, and cross-replica coordination state are stored in the selected relational database. Large blobs, including Ansible collection archives, complete manifest/files JSON, Conda packages, and cached compressed repodata, are stored in OSS/S3. In-process TTL cache is only a rebuildable hot cache.
 
 ## Production Resource Recommendations
 

@@ -1229,6 +1229,9 @@ public class SecurityScanManagementService {
   }
 
   private static SubjectKind subjectKind(AssetRecord asset) {
+    if (asset.format() == com.github.klboke.kkrepo.core.RepositoryFormat.CONDA) {
+      return SubjectKind.CONDA_PACKAGE;
+    }
     return asset.format() == com.github.klboke.kkrepo.core.RepositoryFormat.DOCKER
         && asset.kind() != null
         && asset.kind().toLowerCase(java.util.Locale.ROOT).contains("manifest")

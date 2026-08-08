@@ -115,7 +115,7 @@ docs/resources/grafana/dashboard.json
 常用标签：
 
 - `repo`：仓库名
-- `format`：制品格式，例如 `maven2`、`npm`、`pypi`、`cargo`、`pub`、`composer`、`docker`
+- `format`：制品格式，例如 `maven2`、`npm`、`pypi`、`cargo`、`pub`、`composer`、`conda`、`docker`
 - `type`：仓库类型，例如 `hosted`、`proxy`、`group`
 - `method`：HTTP method
 - `operation`：协议操作
@@ -202,6 +202,19 @@ Ansible Galaxy 通过 `format="ansiblegalaxy"` 暴露 repository、proxy 回源�
 - `ansible_repository`
 
 应把 publish 与 import task outcome 联合监控：`ansible_publish` 成功后持续出现 task error，通常表示 archive/manifest/checksum 校验或 worker takeover 失败。孤儿清理通过 `worker="ansible_staging_cleanup"` 报告 batch outcome，并通过 `worker="ansible_cleanup", item="staging_asset", outcome="deleted"` 报告清理数量；持续增长通常表示副本在 staging 与持久清理之间反复终止。共享状态 cleanup 还会以 `worker="ansible_cleanup"` 和 `item="proxy_cache"`、`item="terminal_task"`、`item="expired_lease"` 报告删除量；持续增长通常表示 retention/cleanup 容量不足或上游反复抖动。排查 proxy/group 时，把 version-detail 延迟与 `kkrepo_proxy_remote_*` 关联，并把 artifact 读取与 blob-storage 指标关联。Namespace、collection name、version、task UUID 和 token material 不能成为 metric label；coordinate 级排查应使用受控 audit/task detail。完整 manifest/files 文档保留在 collection blob 内，线上游 JSON 只留下有上限投影，任何必须原样保留的大 JSON 也应写 blob。因此数据库增长应来自有上限的投影与 task/state 行，而不是 payload 大小。
+
+### Conda
+
+Conda 通过 `format="conda"` 暴露 repository、proxy 回源和 blob storage 指标。Repository operation label 固定为以下有界集合：
+
+- `conda_repodata`
+- `conda_channeldata`
+- `conda_package_upload`
+- `conda_package_download`
+- `conda_package_delete`
+- `conda_repository`
+
+排查冷态 proxy 访问慢时，把 `conda_repodata` 与 `kkrepo_proxy_remote_*`、blob `get` 延迟关联。存在 ZSTD/BZ2 backing object 时，raw JSON 会从压缩缓存流式解码，因此对象存储读取字节数可以显著小于响应体；不能仅凭该差异判断 cache miss。Cleanup 通过 `worker="conda_staging_cleanup"` 报告 batch outcome，并以 `worker="conda_cleanup"`、`item="staging_asset"`/`generated_metadata`/`coordinate_lease` 报告删除量；持续增长通常表示 publication/metadata 工作反复中断或 cleanup 容量不足。Channel、subdir、package name、version、build 和 filename 不能成为 metric label；coordinate 级排查使用 Browse/Search/audit detail。
 
 ### Blob 存储
 

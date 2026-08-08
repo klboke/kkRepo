@@ -68,22 +68,39 @@ class HttpSecurityScannerAdapterTest {
       "release/invalid.jar?download=true,UNKNOWN"
   })
   void derivesOnlyClosedArtifactTypes(String path, ScannerArtifactType expected) {
-    ScanSubject subject = new ScanSubject(
-        SubjectKind.ASSET_BLOB,
+    ScanSubject subject = subject("MAVEN2", path);
+
+    assertEquals(expected, HttpSecurityScannerAdapter.artifactType(subject));
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+      "noarch/demo-1.0-py_0.conda,CONDA",
+      "linux-64/demo-1.0-py_0.tar.bz2,CONDA",
+      "noarch/repodata.json,UNKNOWN",
+      "noarch/demo-1.0-py_0.conda?download=true,UNKNOWN"
+  })
+  void mapsBothCondaPackageContainersToTheCondaScannerType(
+      String path, ScannerArtifactType expected) {
+    assertEquals(expected, HttpSecurityScannerAdapter.artifactType(subject("CONDA", path)));
+  }
+
+  private static ScanSubject subject(String format, String path) {
+    return new ScanSubject(
+        "CONDA".equals(format) ? SubjectKind.CONDA_PACKAGE : SubjectKind.ASSET_BLOB,
         1L,
         2L,
         3L,
         "sha256:" + "a".repeat(64),
         "a".repeat(64),
         42L,
-        "MAVEN2",
+        format,
         "artifact",
         "application/octet-stream",
-        TargetClassification.ARCHIVE,
+        "CONDA".equals(format)
+            ? TargetClassification.PACKAGE : TargetClassification.ARCHIVE,
         List.of(),
         Map.of("path", path));
-
-    assertEquals(expected, HttpSecurityScannerAdapter.artifactType(subject));
   }
 
   @Test

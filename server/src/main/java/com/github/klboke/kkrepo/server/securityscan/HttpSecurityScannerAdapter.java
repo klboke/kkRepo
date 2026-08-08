@@ -806,8 +806,17 @@ public class HttpSecurityScannerAdapter implements Adapter {
   static ScannerArtifactType artifactType(ScanSubject subject) {
     Object pathValue = subject == null || subject.attributes() == null
         ? null : subject.attributes().get("path");
-    return pathValue instanceof String path
+    ScannerArtifactType inferred = pathValue instanceof String path
         ? ScannerArtifactType.fromPath(path) : ScannerArtifactType.UNKNOWN;
+    if (subject != null
+        && "CONDA".equalsIgnoreCase(subject.format())
+        && (inferred == ScannerArtifactType.CONDA
+            || inferred == ScannerArtifactType.TAR_BZ2)) {
+      // One closed wire type covers both Conda v2 ZIP packages and legacy .tar.bz2 packages.
+      // The scanner validates the archive magic before selecting the metadata reader.
+      return ScannerArtifactType.CONDA;
+    }
+    return inferred;
   }
 
   private void withServiceCredential(HttpRequest.Builder builder) {

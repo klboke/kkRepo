@@ -8,7 +8,7 @@ The goal is not to copy Nexus internals. kkrepo keeps client-visible protocol be
 
 ```text
 Artifact clients
-  Maven / npm / PyPI / Go / Helm / Cargo/Rust / Dart/Pub / Composer/PHP / Terraform / Swift / Ansible Galaxy / Docker/OCI / NuGet / RubyGems / Yum / Raw
+  Maven / npm / PyPI / Go / Helm / Cargo/Rust / Dart/Pub / Composer/PHP / Terraform / Swift / Ansible Galaxy / Conda / Docker/OCI / NuGet / RubyGems / Yum / Raw
         |
         v
 Load balancer / reverse proxy
@@ -82,6 +82,7 @@ Admin UI and Browse UI are served by the Spring Boot service as static assets:
 | `protocol-terraform` | Terraform Module/Provider Registry paths, versions, platforms, metadata, checksum, and URL-token helpers |
 | `protocol-swift` | Swift Package Registry v1 paths, media types, SemVer, identities, release models, links, and problem details |
 | `protocol-ansible` | Ansible Galaxy v3 paths, collection coordinates, SemVer, pagination, metadata models, and errors |
+| `protocol-conda` | Conda channel/subdir paths, package identity, VersionOrder, archive/repodata models, hashes, and media types |
 | `protocol-docker` | Docker Registry V2 / OCI path, digest, manifest, media type, and error helpers |
 | `protocol-nuget` | NuGet path helpers |
 | `protocol-rubygems` | RubyGems metadata helpers |
@@ -109,6 +110,7 @@ The selected relational database stores:
 - Terraform provider platform/revision/signing state, group source bindings, and publish leases.
 - Swift immutable releases/manifests, SCM URL mappings, GitHub source pins, group bindings, repository revisions, publish leases, tombstones, and negative cache.
 - Ansible collection coordinates, bounded metadata/dependency projections, import tasks, proxy validators/negative cache, group source bindings, signatures by blob reference, and fenced leases.
+- Conda package records, channel/subdir revisions, tombstones, group source bindings, proxy validators, and fenced coordinate leases.
 - Cache version watermarks and cross-replica coordination state.
 
 Blob storage stores:
@@ -117,6 +119,7 @@ Blob storage stores:
 - Cached upstream artifacts.
 - Generated or migrated blob objects.
 - Ansible collection tarballs, complete `MANIFEST.json`/`FILES.json`, oversized upstream JSON, and signature payloads.
+- Conda `.tar.bz2`/`.conda` packages and cached compressed upstream repodata backing objects.
 
 The database stores references to blobs, not large blob payloads or unbounded protocol JSON.
 

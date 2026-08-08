@@ -245,6 +245,28 @@ class RawAssetWriterTest {
   }
 
   @Test
+  void indexesProxyAssetAtLogicalBrowsePathWithoutChangingItsStoragePath() {
+    Fixture fixture = fixture();
+    stubUploadedBlob(fixture);
+    when(fixture.assetDao.findAssetByPath(1L, PATH)).thenReturn(Optional.empty());
+    when(fixture.assetDao.tryInsertAsset(any())).thenReturn(OptionalLong.of(11L));
+    when(fixture.componentDao.upsertReturningId(any())).thenReturn(77L);
+    String browsePath = "noarch/demo/1.0/demo-1.0-py312_0.conda";
+    ComponentRecord component = new ComponentRecord(
+        null, 1L, RepositoryFormat.RAW, "noarch", "demo", "1.0", "conda-package",
+        new byte[32], Map.of("browsePath", browsePath), Instant.now());
+
+    RawAssetWriter.Stored stored = fixture.writer.writeWithComponentAtBrowsePath(
+        runtime(), fixture.storage, 1L, PATH,
+        new ByteArrayInputStream("body".getBytes(StandardCharsets.UTF_8)),
+        "application/octet-stream", Map.of(), "proxy", null, component, browsePath, false);
+
+    assertEquals(PATH, stored.asset().path());
+    verify(fixture.browseNodeDao).upsertPathAncestors(1L, browsePath, 11L, 77L);
+    verify(fixture.browseNodeDao, never()).upsertPathAncestors(1L, PATH, 11L, 77L);
+  }
+
+  @Test
   void writesFileAtAProtocolPathAndIndexesOnlyItsLogicalBrowsePath(@TempDir Path tempDir)
       throws Exception {
     Fixture fixture = fixture();

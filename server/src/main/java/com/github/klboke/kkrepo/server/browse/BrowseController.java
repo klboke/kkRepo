@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
+import com.github.klboke.kkrepo.server.conda.CondaBrowsePaths;
 import com.github.klboke.kkrepo.server.repositories.RepositoryNotFoundException;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
@@ -104,6 +105,8 @@ public class BrowseController {
             ? BrowseRepositorySources.swiftSources(repo, repositoryDao)
             : repo.format() == RepositoryFormat.ANSIBLEGALAXY
                 ? BrowseRepositorySources.ansibleSources(repo, repositoryDao)
+                : repo.format() == RepositoryFormat.CONDA
+                    ? BrowseRepositorySources.condaSources(repo, repositoryDao)
             : repositoryDao.listMembers(repo.id())
         : List.of(repo);
     if (repo.format() == RepositoryFormat.DOCKER && dockerBrowseService != null) {
@@ -241,11 +244,19 @@ public class BrowseController {
         row.assetContentType(),
         row.assetSha1(),
         row.assetLastUpdatedAt(),
-        row.leaf() ? BrowseDownloadUrls.asset(
-            visibleRepository,
-            visibleRepository.format() == RepositoryFormat.ANSIBLEGALAXY
-                ? AnsibleGalaxyPathParser.ARTIFACT_BASE + row.displayName()
-                : row.path()) : null);
+        row.leaf() ? BrowseDownloadUrls.asset(visibleRepository, downloadPath(
+            visibleRepository.format(), publicPath, row)) : null);
+  }
+
+  private static String downloadPath(
+      RepositoryFormat format, String publicPath, BrowseNodeDao.BrowseChild row) {
+    if (format == RepositoryFormat.ANSIBLEGALAXY) {
+      return AnsibleGalaxyPathParser.ARTIFACT_BASE + row.displayName();
+    }
+    if (format == RepositoryFormat.CONDA) {
+      return CondaBrowsePaths.toStoragePath(publicPath);
+    }
+    return row.path();
   }
 
   private static void mergeEntry(LinkedHashMap<String, BrowseEntry> merged, BrowseEntry entry) {

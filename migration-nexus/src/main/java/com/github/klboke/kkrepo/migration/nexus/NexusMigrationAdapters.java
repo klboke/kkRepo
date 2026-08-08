@@ -75,7 +75,8 @@ final class NexusMigrationAdapters {
       String normalizedType = lower(type);
       return ("swift".equals(normalizedFormat) && "hosted".equals(normalizedType))
           || ("ansiblegalaxy".equals(normalizedFormat)
-              && ("hosted".equals(normalizedType) || "proxy".equals(normalizedType)));
+              && ("hosted".equals(normalizedType) || "proxy".equals(normalizedType)))
+          || ("conda".equals(normalizedFormat) && "hosted".equals(normalizedType));
     }
 
     @Override
@@ -141,7 +142,8 @@ final class NexusMigrationAdapters {
     protected boolean supportsContent(String format, String type) {
       String normalized = lower(format);
       return !"cargo".equals(normalized) && !"pub".equals(normalized)
-          && !"swift".equals(normalized) && !"ansiblegalaxy".equals(normalized);
+          && !"swift".equals(normalized) && !"ansiblegalaxy".equals(normalized)
+          && !"conda".equals(normalized);
     }
 
     @Override
@@ -165,7 +167,8 @@ final class NexusMigrationAdapters {
     protected boolean supportsContent(NexusSourceProfile profile, String format, String type) {
       return hasDatastoreContentModel(profile, format)
           && (!"swift".equals(lower(format)) || "hosted".equals(lower(type)))
-          && (!"ansiblegalaxy".equals(lower(format)) || !"group".equals(lower(type)));
+          && (!"ansiblegalaxy".equals(lower(format)) || !"group".equals(lower(type)))
+          && (!"conda".equals(lower(format)) || "hosted".equals(lower(type)));
     }
 
     @Override
@@ -189,7 +192,8 @@ final class NexusMigrationAdapters {
     protected boolean supportsContent(NexusSourceProfile profile, String format, String type) {
       return hasDatastoreContentModel(profile, format)
           && (!"swift".equals(lower(format)) || "hosted".equals(lower(type)))
-          && (!"ansiblegalaxy".equals(lower(format)) || !"group".equals(lower(type)));
+          && (!"ansiblegalaxy".equals(lower(format)) || !"group".equals(lower(type)))
+          && (!"conda".equals(lower(format)) || "hosted".equals(lower(type)));
     }
 
     @Override

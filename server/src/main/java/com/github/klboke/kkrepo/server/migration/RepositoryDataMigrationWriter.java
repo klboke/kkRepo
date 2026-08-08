@@ -33,6 +33,7 @@ import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.blob.BlobTransactionCleanup;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyRepositoryDataMigrationWriter;
+import com.github.klboke.kkrepo.server.conda.CondaRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.docker.DockerManifestParser;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.pub.PubRepositoryDataMigrationWriter;
@@ -78,6 +79,7 @@ class RepositoryDataMigrationWriter {
   private final TerraformRepositoryDataMigrationWriter terraformMigrationWriter;
   private final SwiftRepositoryDataMigrationWriter swiftMigrationWriter;
   private final AnsibleGalaxyRepositoryDataMigrationWriter ansibleMigrationWriter;
+  private CondaRepositoryDataMigrationWriter condaMigrationWriter;
   private final TransientTransactionRetry transactionRetry;
   private final MavenPathParser mavenPathParser = new MavenPathParser();
 
@@ -195,6 +197,11 @@ class RepositoryDataMigrationWriter {
     this.transactionRetry = transactionRetry;
   }
 
+  @Autowired(required = false)
+  void setCondaMigrationWriter(CondaRepositoryDataMigrationWriter condaMigrationWriter) {
+    this.condaMigrationWriter = condaMigrationWriter;
+  }
+
   WriteResult write(long targetRepositoryId, RepositoryDataMigrationAssetRecord source, InputStream body,
       String responseContentType, boolean validateSize) {
     RepositoryRecord repository = repositoryDao.findById(targetRepositoryId)
@@ -236,6 +243,16 @@ class RepositoryDataMigrationWriter {
       }
       AnsibleGalaxyRepositoryDataMigrationWriter.MigratedAsset migrated =
           ansibleMigrationWriter.write(repository, source, body, validateSize);
+      return new WriteResult(
+          migrated.componentId(), migrated.assetId(), migrated.assetBlobId(),
+          migrated.assetBlobObjectKey());
+    }
+    if (repository.format() == RepositoryFormat.CONDA) {
+      if (condaMigrationWriter == null) {
+        throw new IllegalStateException("Conda migration writer is not configured");
+      }
+      CondaRepositoryDataMigrationWriter.MigratedAsset migrated = condaMigrationWriter.write(
+          repository, source, body, responseContentType, validateSize);
       return new WriteResult(
           migrated.componentId(), migrated.assetId(), migrated.assetBlobId(),
           migrated.assetBlobObjectKey());
@@ -876,6 +893,9 @@ class RepositoryDataMigrationWriter {
       case SWIFT -> swiftAssetKind(source.sourcePath());
       case ANSIBLEGALAXY -> source.sourcePath().endsWith(".tar.gz")
           ? "ansible-collection" : "ansible-metadata";
+      case CONDA -> source.sourcePath().endsWith(".conda")
+              || source.sourcePath().endsWith(".tar.bz2")
+          ? "conda-package" : "conda-metadata";
       case RAW -> "asset";
     };
   }

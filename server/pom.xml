@@ -132,6 +132,10 @@
     </dependency>
     <dependency>
       <groupId>com.github.klboke</groupId>
+      <artifactId>kkrepo-protocol-conda</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.github.klboke</groupId>
       <artifactId>kkrepo-protocol-go</artifactId>
     </dependency>
     <dependency>
@@ -170,6 +174,10 @@
     <dependency>
       <groupId>org.tukaani</groupId>
       <artifactId>xz</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.github.luben</groupId>
+      <artifactId>zstd-jni</artifactId>
     </dependency>
     <dependency>
       <groupId>org.bouncycastle</groupId>

@@ -126,6 +126,24 @@ class RawAssetWriter {
         keepResponseFile);
   }
 
+  Stored writeWithComponentAtBrowsePath(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      String path,
+      InputStream body,
+      String contentTypeHint,
+      Map<String, ?> extraBlobAttributes,
+      String createdBy,
+      String createdByIp,
+      ComponentRecord component,
+      String browsePath,
+      boolean keepResponseFile) {
+    return write(runtime, storage, blobStoreId, path, body, contentTypeHint,
+        extraBlobAttributes, createdBy, createdByIp, ComponentBinding.explicit(component),
+        keepResponseFile, browsePath);
+  }
+
   Stored writeFile(
       RepositoryRuntime runtime,
       BlobStorage storage,
@@ -192,6 +210,39 @@ class RawAssetWriter {
       String createdByIp,
       ComponentRecord component,
       String browsePath) {
+    return linkExistingBlobAtBrowsePath(
+        runtime, storage, blobStoreId, path, blob, contentTypeHint, createdBy, createdByIp,
+        component, browsePath, false);
+  }
+
+  Stored linkExistingBlobAtBrowsePath(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      String path,
+      AssetBlobRecord blob,
+      String contentTypeHint,
+      String createdBy,
+      String createdByIp,
+      ComponentRecord component,
+      String browsePath) {
+    return linkExistingBlobAtBrowsePath(
+        runtime, storage, blobStoreId, path, blob, contentTypeHint, createdBy, createdByIp,
+        component, browsePath, true);
+  }
+
+  private Stored linkExistingBlobAtBrowsePath(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      String path,
+      AssetBlobRecord blob,
+      String contentTypeHint,
+      String createdBy,
+      String createdByIp,
+      ComponentRecord component,
+      String browsePath,
+      boolean replaceExisting) {
     if (blob == null || blob.id() == null || blob.blobStoreId() != blobStoreId) {
       throw new IllegalArgumentException("An existing blob from the repository blob store is required");
     }
@@ -208,7 +259,8 @@ class RawAssetWriter {
         "Link existing raw blob " + runtime.name() + "/" + path,
         () -> persist(
             runtime, storage, blobStoreId, path, upload, contentTypeHint, Map.of(),
-            createdBy, createdByIp, ComponentBinding.explicit(component), null, browsePath, false));
+            createdBy, createdByIp, ComponentBinding.explicit(component), null, browsePath,
+            replaceExisting));
   }
 
   private Stored writeFileAtBrowsePath(
@@ -253,13 +305,31 @@ class RawAssetWriter {
       String createdByIp,
       ComponentBinding componentBinding,
       boolean keepResponseFile) {
+    return write(
+        runtime, storage, blobStoreId, path, body, contentTypeHint, extraBlobAttributes,
+        createdBy, createdByIp, componentBinding, keepResponseFile, path);
+  }
+
+  private Stored write(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      String path,
+      InputStream body,
+      String contentTypeHint,
+      Map<String, ?> extraBlobAttributes,
+      String createdBy,
+      String createdByIp,
+      ComponentBinding componentBinding,
+      boolean keepResponseFile,
+      String browsePath) {
     DigestedUpload upload = uploadWithDigests(runtime, storage, blobStoreId, path, body, extraBlobAttributes);
     try {
       Stored stored = executePersist(
           "Persist raw asset " + runtime.name() + "/" + path,
           () -> persist(runtime, storage, blobStoreId, path, upload, contentTypeHint,
               extraBlobAttributes, createdBy, createdByIp, componentBinding,
-              keepResponseFile ? upload.tempFile() : null, path, true));
+              keepResponseFile ? upload.tempFile() : null, browsePath, true));
       cleanupUnusedUploadedBlob(storage, blobStoreId, upload, stored.blob());
       if (!keepResponseFile) {
         TempBlobFiles.deleteQuietly(upload.tempFile());

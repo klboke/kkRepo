@@ -16,6 +16,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
+import com.github.klboke.kkrepo.protocol.conda.CondaPath;
 import com.github.klboke.kkrepo.protocol.nuget.NugetPath;
 import com.github.klboke.kkrepo.protocol.nuget.NugetPathParser;
 import com.github.klboke.kkrepo.protocol.nuget.NugetPaths;
@@ -26,6 +27,11 @@ import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
 import com.github.klboke.kkrepo.server.cache.NexusCacheType;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
+import com.github.klboke.kkrepo.server.conda.CondaBrowsePaths;
+import com.github.klboke.kkrepo.server.conda.CondaService;
+import com.github.klboke.kkrepo.server.maven.MavenResponse;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmGroupPackumentCache;
 import com.github.klboke.kkrepo.server.pypi.PypiGroupSimpleIndexCache;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
@@ -43,6 +49,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.http.HttpStatus;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -74,6 +81,8 @@ public class BrowseContentDeleteController {
   private final PypiGroupSimpleIndexCache pypiGroupSimpleIndexCache;
   private final GroupMemberAssetCache groupMemberAssetCache;
   private final NexusLikeCacheController cacheController;
+  private RepositoryRuntimeRegistry runtimeRegistry;
+  private CondaService condaService;
 
   public BrowseContentDeleteController(
       RepositoryDao repositoryDao,
@@ -108,6 +117,13 @@ public class BrowseContentDeleteController {
     this.pypiGroupSimpleIndexCache = pypiGroupSimpleIndexCache;
     this.groupMemberAssetCache = groupMemberAssetCache;
     this.cacheController = cacheController;
+  }
+
+  @Autowired(required = false)
+  void setCondaDeleteSupport(
+      RepositoryRuntimeRegistry runtimeRegistry, CondaService condaService) {
+    this.runtimeRegistry = runtimeRegistry;
+    this.condaService = condaService;
   }
 
   @DeleteMapping("/{repository}")
@@ -158,6 +174,21 @@ public class BrowseContentDeleteController {
             + component.version() + "/" + filename;
         return deleteAuthorized(repository, publicPath, repository, actorId).deletedAssets();
       }
+      if (target.format() == RepositoryFormat.CONDA) {
+        Object browsePath = component.attributes() == null
+            ? null
+            : component.attributes().get("browsePath");
+        String publicPath = browsePath == null ? path : browsePath.toString();
+        if (publicPath == null || publicPath.isBlank()) {
+          List<AssetRecord> componentAssets = assetDao.listAssetsByComponent(component.id());
+          if (componentAssets.isEmpty()) {
+            throw new ResponseStatusException(
+                HttpStatus.NOT_FOUND, "Cleanup component has no assets: " + subjectId);
+          }
+          publicPath = componentAssets.getFirst().path();
+        }
+        return deleteAuthorized(repository, publicPath, repository, actorId).deletedAssets();
+      }
       if (target.format() == RepositoryFormat.TERRAFORM
           && "terraform-provider".equals(component.kind())) {
         terraformRegistryDao.deleteProviderVersion(
@@ -179,6 +210,9 @@ public class BrowseContentDeleteController {
           .filter(row -> row.repositoryId() == target.id())
           .orElseThrow(() -> new ResponseStatusException(
               HttpStatus.NOT_FOUND, "Cleanup asset was not found: " + subjectId));
+      if (target.format() == RepositoryFormat.CONDA) {
+        return deleteAuthorized(repository, asset.path(), repository, actorId).deletedAssets();
+      }
       return deleteResolvedAssets(
           target,
           target,
@@ -201,10 +235,17 @@ public class BrowseContentDeleteController {
     AnsibleCoordinate ansibleCoordinate = requested.format() == RepositoryFormat.ANSIBLEGALAXY
         ? ansibleCoordinate(publicPath)
         : null;
+    CondaPath condaCoordinate = requested.format() == RepositoryFormat.CONDA
+        ? CondaBrowsePaths.packagePath(publicPath).orElse(null)
+        : null;
     if (requested.format() == RepositoryFormat.ANSIBLEGALAXY && ansibleCoordinate == null) {
       throw new ResponseStatusException(
           HttpStatus.BAD_REQUEST,
           "Ansible deletion requires a collection archive browse path");
+    }
+    if (requested.format() == RepositoryFormat.CONDA && condaCoordinate == null) {
+      throw new ResponseStatusException(
+          HttpStatus.BAD_REQUEST, "Conda deletion requires a package browse path");
     }
     String storagePath = toStoragePath(requested.format(), publicPath);
     String resolvedSourceRepository = sourceRepository;
@@ -226,6 +267,10 @@ public class BrowseContentDeleteController {
     }
     RepositoryRecord target = resolveTargetRepository(
         requested, storagePath, resolvedSourceRepository);
+    if (target.format() == RepositoryFormat.CONDA
+        && target.type() == RepositoryType.HOSTED) {
+      return deleteCondaPackage(requested, target, publicPath, condaCoordinate, actorId);
+    }
     List<AssetRecord> assets = matchingAssets(target, storagePath);
     if (assets.isEmpty()) {
       throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Browse path not found: " + publicPath);
@@ -296,6 +341,33 @@ public class BrowseContentDeleteController {
     }
     return deleteResolvedAssets(
         requested, target, publicPath, storagePath, assets, extraComponentIds);
+  }
+
+  private BrowseDeleteResult deleteCondaPackage(
+      RepositoryRecord requested,
+      RepositoryRecord target,
+      String publicPath,
+      CondaPath coordinate,
+      String actorId) {
+    if (runtimeRegistry == null || condaService == null) {
+      throw new ResponseStatusException(
+          HttpStatus.SERVICE_UNAVAILABLE, "Conda delete service is unavailable");
+    }
+    RepositoryRuntime runtime = runtimeRegistry.resolveById(target.id())
+        .filter(candidate -> candidate.format() == RepositoryFormat.CONDA
+            && candidate.type() == RepositoryType.HOSTED)
+        .orElseThrow(() -> new ResponseStatusException(
+            HttpStatus.CONFLICT, "Conda repository runtime is unavailable"));
+    MavenResponse response = condaService.deleteAdministrative(
+        runtime, coordinate.canonicalPath(), "administrative delete by " + actorId);
+    if (response.status() == 404) {
+      throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Conda package state was not found");
+    }
+    if (response.status() != 204) {
+      throw new ResponseStatusException(
+          HttpStatus.CONFLICT, "Conda package could not be deleted");
+    }
+    return new BrowseDeleteResult(requested.name(), target.name(), publicPath, 1);
   }
 
   private BrowseDeleteResult deleteResolvedAssets(
@@ -399,6 +471,9 @@ public class BrowseContentDeleteController {
     }
     if (repository.format() == RepositoryFormat.ANSIBLEGALAXY) {
       return BrowseRepositorySources.ansibleSources(repository, repositoryDao);
+    }
+    if (repository.format() == RepositoryFormat.CONDA) {
+      return BrowseRepositorySources.condaSources(repository, repositoryDao);
     }
     return repositoryDao.listMembers(repository.id());
   }
@@ -655,6 +730,9 @@ public class BrowseContentDeleteController {
       return coordinate == null
           ? publicPath
           : AnsibleGalaxyPathParser.ARTIFACT_BASE + coordinate.filename();
+    }
+    if (format == RepositoryFormat.CONDA) {
+      return CondaBrowsePaths.toStoragePath(publicPath);
     }
     if (format != RepositoryFormat.PYPI) {
       return publicPath;

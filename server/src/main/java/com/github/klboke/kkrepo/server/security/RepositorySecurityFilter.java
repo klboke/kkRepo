@@ -12,6 +12,8 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPath;
 import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
+import com.github.klboke.kkrepo.protocol.conda.CondaPath;
+import com.github.klboke.kkrepo.protocol.conda.CondaPathParser;
 import com.github.klboke.kkrepo.protocol.pub.PubPath;
 import com.github.klboke.kkrepo.protocol.pub.PubPathParser;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPath;
@@ -55,6 +57,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   private static final AnsibleGalaxyPathParser ANSIBLE_GALAXY_PATH_PARSER =
       new AnsibleGalaxyPathParser();
   private static final PubPathParser PUB_PATH_PARSER = new PubPathParser();
+  private static final CondaPathParser CONDA_PATH_PARSER = new CondaPathParser();
   private static final TerraformPathParser TERRAFORM_PATH_PARSER = new TerraformPathParser();
   private final SecurityAuthenticationService authenticationService;
   private final AccessDecisionService accessDecisionService;
@@ -235,6 +238,13 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     }
     if (repository.format() != RepositoryFormat.TERRAFORM
         || !"PUT".equalsIgnoreCase(target.method())) {
+      if (repository.format() == RepositoryFormat.CONDA
+          && "PUT".equalsIgnoreCase(target.method())) {
+        CondaPath path = CONDA_PATH_PARSER.parse(target.path());
+        if (!path.packageFile()) return List.of(PermissionAction.EDIT);
+        boolean exists = assetDao.findAssetByPath(repository.id(), path.canonicalPath()).isPresent();
+        return exists ? List.of(PermissionAction.EDIT) : List.of(PermissionAction.ADD);
+      }
       return target.actions(repository.format());
     }
     TerraformPath path = TERRAFORM_PATH_PARSER.parse(target.path());
@@ -354,6 +364,9 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     if (format == RepositoryFormat.ANSIBLEGALAXY
         && ("PUT".equalsIgnoreCase(method) || "POST".equalsIgnoreCase(method))) {
       return List.of(PermissionAction.ADD);
+    }
+    if (format == RepositoryFormat.CONDA && "PUT".equalsIgnoreCase(method)) {
+      return List.of(PermissionAction.ADD, PermissionAction.EDIT);
     }
     if (format == RepositoryFormat.SWIFT && "POST".equalsIgnoreCase(method)
         && "login".equals(path)) {

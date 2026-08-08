@@ -78,10 +78,13 @@ public class JdbcComponentDao implements com.github.klboke.kkrepo.persistence.jd
                       THEN COALESCE(NULLIF(%s, 'null'), c.name)
                     WHEN c.format = 'terraform'
                       THEN NULLIF(%s, 'null')
+                    WHEN c.format = 'conda'
+                      THEN NULLIF(%s, 'null')
                     ELSE NULL
                END AS storage_path
         """.formatted(
         jsonColumns.extractText("c.attributes_json", "distPath"),
+        jsonColumns.extractText("c.attributes_json", "browsePath"),
         jsonColumns.extractText("c.attributes_json", "browsePath"));
     this.searchSelect = searchProjection + """
         FROM component c

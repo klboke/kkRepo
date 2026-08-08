@@ -448,6 +448,47 @@ ansible-galaxy collection install acme.tools:1.0.0 \
 
 Ansible 2.9 可能把 token 选项命名为 `--api-key`。Collection version 不可变；group 会保证 dependency、checksum、signature、metadata 和 artifact 读取绑定到同一优先成员。`requirements.yml`、Nexus 兼容凭据/PUT 上传、proxy、迁移、存储上限和排障见 [Ansible Galaxy 仓库使用指南](ansible-galaxy-guide.md)。
 
+## Conda
+
+创建 `conda-hosted`、`conda-proxy` 和 `conda-group`。Proxy remote 指向 `https://repo.anaconda.com/pkgs/main/` 这类 channel root，group 中把 hosted 排在 proxy 前面，然后把 group 配置成客户端 channel：
+
+```yaml
+# ~/.condarc
+channels:
+  - https://nexus.example.com/repository/conda-group
+channel_priority: strict
+show_channel_urls: true
+```
+
+私有仓库不要把密码写进 `.condarc`，使用标准 netrc 文件：
+
+```text
+# ~/.netrc
+machine nexus.example.com
+  login alice
+  password <password>
+```
+
+执行 `chmod 600 ~/.netrc` 保护文件。随后通过 group 搜索和安装；Conda 会自动请求当前平台 subdir 与 `noarch` metadata：
+
+```bash
+conda search --override-channels \
+  -c https://nexus.example.com/repository/conda-group demo
+conda create -y -n demo-env --override-channels \
+  -c https://nexus.example.com/repository/conda-group demo=1.0.0
+conda list -n demo-env demo
+```
+
+Conda 没有 package publish 命令。可以通过管理 UI/Components API 上传已校验的 `.conda` 或 `.tar.bz2` archive，也可以使用 Nexus 兼容 hosted PUT；路径格式为 `<可选-channel>/<subdir>/<filename>`：
+
+```bash
+curl -u "alice:$KKREPO_PASSWORD" \
+  --upload-file demo-1.0.0-py_0.conda \
+  https://nexus.example.com/repository/conda-hosted/team/release/noarch/demo-1.0.0-py_0.conda
+```
+
+Package filename、`info/index.json` 中的 name/version/build 和目标 subdir 必须一致。kkRepo 会重建 `repodata.json`、`repodata.json.bz2`、`repodata.json.zst`、`current_repodata.json*` 与 `channeldata.json`，不要把生成的 metadata 当作 package content 上传。
+
 ## NuGet
 
 添加 source：

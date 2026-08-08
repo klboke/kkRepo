@@ -1,495 +1,320 @@
 # Conda 仓库开发设计说明
 
-本文记录 kkrepo Conda 仓库格式的开发设计。目标不是把 `.conda` 或 `.tar.bz2` 文件当作 Raw 制品保存，而是对齐 Conda 官方 channel、package 和 repodata 规范，并以 Sonatype Nexus Repository 的客户端入口和仓库 recipe 作为兼容性参考，按 kkrepo 的关系数据库 + OSS/S3 + 多副本约束落地 hosted、proxy、group 三类 Conda 仓库。
-
-## 当前支持状态
-
-截至 2026-08-07，kkrepo 尚未实现 Conda 格式。本设计是后续实现基线，不表示当前版本已经可以创建或使用 Conda 仓库。
-
-计划新增：
-
-- `RepositoryFormat.CONDA`。
-- `conda-hosted`、`conda-proxy`、`conda-group` 三个 recipe。
-- 独立 `protocol-conda` 模块，以及 Admin、Browse、Search、上传、迁移和兼容性测试入口。
-- `.tar.bz2` 与 `.conda` 两种 package format。
-- `repodata.json`、`repodata.json.bz2`、`repodata.json.zst`、`channeldata.json` 和后续的 sharded repodata 能力。
-
-三类仓库共用同一套 channel/path、package record、metadata revision、权限和多副本语义，因此在一份设计中统一说明；实现时仍须保持 hosted、proxy、group 的写入边界和服务职责独立。
-
-## 调研基线
-
-实现前必须对照以下官方规范、客户端行为和 Nexus 参考行为：
-
-- Conda [Channel identifiers](https://conda.org/learn/specifications/channels/channel-identifiers/) 定义 channel base、`noarch`、平台 subdir 和 channel URL 语义。一个有效 channel 必须存在 `noarch/repodata.json`。
-- Conda [Package specification](https://docs.conda.io/projects/conda-build/en/latest/resources/package-spec.html)、[`.tar.bz2` package format](https://conda.org/learn/ceps/cep-0034/) 和 [`.conda` package format](https://conda.org/learn/ceps/cep-0035/) 定义文件命名、`info/index.json`、归档布局和两种 package container。
-- Conda [repodata specification](https://conda.org/learn/ceps/cep-0036/) 定义 `packages`、`packages.conda`、`removed`、checksum、size、`info.subdir`、`base_url` 和压缩变体。
-- Conda [channeldata specification](https://conda.org/learn/ceps/cep-0038/) 定义 channel root 下可选的 `channeldata.json`。
-- Conda [sharded repodata](https://conda.org/learn/ceps/cep-0016/) 定义 `repodata_shards.msgpack.zst` 和 content-addressed shard；当前客户端已经会探测该能力。
-- Conda [run exports](https://conda.org/learn/ceps/cep-0012/)、[repodata `base_url`](https://conda.org/learn/ceps/cep-0015/)、[channel notices](https://conda.org/learn/ceps/cep-0006/) 和 [channel relations](https://conda.org/learn/ceps/cep-0042/) 用于补齐 package metadata、代理 URL 改写和可选 channel root 能力。
-- Conda 官方 [Creating custom channels](https://docs.conda.io/projects/conda/en/stable/user-guide/tasks/create-custom-channels.html) 与 conda-build [Generating channel indexes](https://docs.conda.io/projects/conda-build/en/latest/concepts/generating-index.html) 给出真实 channel 目录和索引生成流程。
-- Sonatype Nexus [Conda Repositories](https://help.sonatype.com/en/conda-repositories.html)、[Create a Conda Repository](https://help.sonatype.com/en/create-a-conda-repository.html)、[Configure Conda with Nexus](https://help.sonatype.com/en/configure-conda-with-nexus.html) 和 [Conda CLI Usage](https://help.sonatype.com/en/conda-cli-usage.html) 定义 Nexus 的 hosted/proxy/group recipe、`/repository/{repo}/...` 入口、客户端配置和 raw HTTP `PUT` 上传方式。
-- Sonatype Nexus [3.92.0 release notes](https://help.sonatype.com/en/sonatype-nexus-repository-3-92-0-release-notes.html) 是 hosted/group 与自动 metadata 生成能力的版本基线，也说明 Nexus 数据迁移只迁移 package binary、在目标端重建生成 metadata。
-
-关键结论：
-
-- Conda 仓库的协议边界是 channel，不是文件目录列表。channel root 下按 `noarch` 或平台 subdir 分区，每个 subdir 都有独立 repodata。
-- package identity 不能只用 `name + version`。同一 version 可以有多个 build；完整发布身份至少是 `(channel, subdir, name, version, build)`。
-- `.tar.bz2` 记录位于 `packages`，`.conda` 记录位于 `packages.conda`。同一 build 的两种归档可以共存，不能互相覆盖。
-- package filename 中的连字符不足以可靠拆分 name、version 和 build；服务端必须读取受限的 `info/index.json`，再校验 URL、filename 和 metadata 一致性。
-- CEP 34 schema v2 要求 `subdir` 等字段，但历史 `.tar.bz2` package 可能只有旧版 `index.json`。Hosted importer 需要区分 strict v2 与经 fixture 允许的 legacy v1；legacy 缺少 `subdir` 时可以从已验证的上传路径派生 repodata 字段，但不能改写原 package bytes。
-- `repodata.json` 的 package record 至少需要稳定的 MD5、SHA-256、size、build、build number、depends、name、version 和 subdir。完整 package bytes 及生成 metadata blob 放 OSS/S3，数据库只保存有界投影、引用和 revision。
-- Nexus 文档中的 hosted 上传是 `PUT /repository/{repo}/{channel-prefix?}/{subdir}/{filename}`。Proxy 和 group 对该写路径只读；kkrepo 必须先以黑盒测试固定状态码，再实现相同行为。
-- Channel prefix 必须进入 package identity。Nexus 3.94 黑盒中，同一 package 先上传到根 channel、再上传到嵌套 channel 时可能第二次返回 `201` 但不真正发布；kkrepo 不复制这种静默成功行为。
-- Group 不能只合并 repodata。索引选中的记录与后续 package 下载必须绑定同一成员，否则客户端会收到索引中存在但下载 `404`，或 checksum 与 bytes 不一致的结果。
-- `info.base_url`、shard base URL 和 channel relation 可以让客户端下载其它 origin。Proxy/group 必须删除或安全改写为当前 kkrepo 入口，避免绕过权限、审计、缓存和出站策略。
-- Nexus 3.94 黑盒会生成 `repodata.json`、`repodata.json.bz2` 和 `channeldata.json`，但不会生成 `.zst`、`current_repodata.json` 或 shard。它也不会为空 channel 自动补 `noarch/repodata.json`。kkrepo 以 Nexus 路由兼容为基线，但对这些官方协议和当前客户端能力采用明确的产品增强，不复制已知缺口。
-- Conda version/build 排序不是 SemVer。凡是需要选取 latest、生成 `channeldata.json` 或裁剪 `current_repodata.json` 的地方，必须使用与 Conda `VersionOrder`/build 规则一致并由 fixture 固定的比较器，不能复用通用 SemVer 工具。
-
-## 功能范围
-
-### 第一阶段必须实现
-
-1. Conda hosted
-   - 新增 `RepositoryFormat.CONDA`、`conda-hosted` recipe 和 `protocol-conda` 模块。
-   - 支持根 channel 和有路径前缀的 channel；相同 package coordinate 可以独立发布到不同 channel。
-   - 支持 raw HTTP `PUT`、Admin/UI upload 和 Components API upload，所有入口复用同一个 protocol-aware importer。
-   - 支持 `.tar.bz2` 和 `.conda`，校验归档结构、canonical filename、`info/index.json`、subdir、依赖、checksum 和资源限制。
-   - 自动生成每个 subdir 的 repodata，以及 channel root 的 `channeldata.json`；已知 channel 自动提供最小 `noarch/repodata.json`。
-   - 支持 package `GET`/`HEAD`、Range、ETag、Last-Modified 和 conditional request。
-   - 发布、替换或删除后以 revision snapshot 原子切换 package 可见性和生成 metadata，不能让客户端观察到 metadata 与 package bytes 的半完成状态。
-
-2. Conda proxy
-   - 新增 `conda-proxy` recipe；remote URL 表示一个准确的上游 channel root。
-   - 缓存并校验上游 repodata、channeldata、package bytes、validator、negative result 和可选 shard。
-   - 区分 metadata TTL 与 content TTL；metadata 高频 revalidate 不能让不可变 package blob 重复回源。
-   - 首次下载 package 时依据同一 subdir 的 repodata 校验 MD5/SHA-256/size，校验失败时 fail closed。
-   - 把 metadata 中会绕过本仓库的 URL 改写或删除；跨 origin redirect 不转发上游 credential。
-   - 支持 remote Basic/Bearer/token、出站 HTTP/SOCKS5 proxy、auto-block、stale policy、SSRF 防护和凭据脱敏。
-   - 多副本 miss 使用数据库 lease/fencing 合并回源；单 JVM single-flight 只能作为额外优化。
-
-3. Conda group
-   - 新增 `conda-group` recipe；成员只允许 Conda hosted/proxy/group，并拒绝直接或间接循环。
-   - 按成员顺序聚合每个 `(channel, subdir)` 的 `packages` 与 `packages.conda`；同名记录冲突时第一成员优先。
-   - 为选中的 package record 建立持久化 source binding；metadata、signature/checksum 和下载 bytes 来自同一成员。
-   - 合并 `channeldata.json`、`removed` 和支持的压缩 metadata 变体，并把所有对外 URL 渲染为 group URL。
-   - 成员发布、删除、revalidate 或重排后，通过共享 revision 使 materialized metadata 和 binding 失效。
-   - Group 只读，不把上传请求自动转发到某个 hosted 成员。
-
-4. 权限与认证
-   - Metadata、package `GET`/`HEAD` 映射 repository `READ`。
-   - Hosted 首次上传映射 `ADD`；允许 redeploy 时的替换映射 `EDIT`；删除映射 `DELETE`。
-   - 支持 HTTP Basic、现有 API key/CI token 和 `GenericToken`。显式无效 credential 不得降级为 anonymous。
-   - Proxy remote secret 加密保存，UI/API/log/audit/metric 不回显明文或带 credential 的 channel URL。
-
-5. Browse、Search、管理和迁移
-   - Admin UI 支持创建/编辑三类 recipe，以及 hosted write policy、proxy remote/TTL/stale/auth 和 group member 顺序。
-   - Browse/Search 展示 channel、subdir、name、version、build、build number、格式、依赖、license、timestamp、size、checksum 和来源成员。
-   - Nexus repository definition 迁移识别 `conda` hosted/proxy/group；hosted data 迁移 package binary 后由目标 importer 重建 metadata。
-   - Proxy cache 仅在管理员显式选择且 source shape 可证明时迁移，不能把 cache package 变成 hosted publication。
-
-6. 兼容性和真实客户端验证
-   - 在实现前新增面向 Nexus 和 kkrepo 的 Conda black-box compatibility fixture。
-- 覆盖 Nexus 支持的 Conda 4.6+ 基线和 CI 选定的当前稳定 Conda 客户端。
-- Conda 4.6 lane 使用 legacy `.tar.bz2`；`.conda` format 从支持该 container 的 Conda 4.7+ lane 开始验证。
-   - 使用真实 `conda search`、`conda create`、`conda install` 验证 hosted/proxy/group、认证、平台选择、依赖和离线 cache。
-   - 独立比较状态码、header、JSON 语义、压缩内容、package bytes、checksum、channel prefix 和 group member priority。
-
-### 后续扩展和非目标
-
-后续可以扩展：
-
-- CEP 16 sharded repodata 的 hosted/group 原生生成，以及 proxy shard 的安全改写和缓存。
-- 与官方 `conda-index` 等价的 `current_repodata.json` 裁剪优化。
-- CEP 6 notices、CEP 42 channel relations、CEP 47 indexed timestamp 和管理端 channel policy。
-- 已验证的 package signatures、供应链策略、quarantine、promotion 和跨仓库 copy。
-- Micromamba、Mamba、Libmamba solver 的独立兼容矩阵。
-
-第一阶段明确不做：
-
-- 不实现 Anaconda.org 的账号、组织、Web UI、构建云或 token issuance API。
-- 不把 Conda package 当成 Raw asset 后要求管理员手工运行 `conda index`。
-- 不解析或执行 package 内脚本，也不在服务端解出 payload 文件供浏览。
-- 不自行伪造 `signatures`；没有可验证的签名来源时保持字段缺失或为空。
-- 不把完整 package、完整 repodata、shard 或解压内容存入 MySQL/PostgreSQL。
-- 不依赖单副本临时目录、内存锁、内存 metadata map 或本地定时任务作为正确性真相。
-- 不把 Nexus 的无效 channel、静默发布、metadata 500 或索引/下载不一致当作必须复制的兼容行为；这些差异必须在 compatibility fixture 中显式记录。
-
-## URL 与路由设计
-
-### 客户端配置
-
-推荐把 group URL 作为一个 Conda channel：
-
-```yaml
-# ~/.condarc
-channels:
-  - https://repo.example.com/repository/conda-group
-show_channel_urls: true
-```
-
-也可以在命令行覆盖默认 channel：
-
-```bash
-conda search --override-channels \
-  -c https://repo.example.com/repository/conda-group zlib
-
-conda create --override-channels \
-  -c https://repo.example.com/repository/conda-group \
-  -n conda-smoke zlib
-```
-
-若仓库内使用嵌套 channel，channel URL 包含该前缀：
-
-```text
-https://repo.example.com/repository/conda-hosted/team-a/release
-```
-
-### Route contract
-
-`{channel}` 表示仓库根下可为空的 channel path，`{subdir}` 是 `noarch` 或 Conda 平台 subdir：
-
-| 请求 | Hosted | Proxy | Group |
-| --- | --- | --- | --- |
-| `GET/HEAD /repository/{repo}/{channel}/{subdir}/repodata.json` | 生成快照 | 回源/缓存/改写 | 聚合快照 |
-| `GET/HEAD .../repodata.json.bz2` | 与 JSON 同 revision | 回源或本地重编码 | 与聚合 JSON 同 revision |
-| `GET/HEAD .../repodata.json.zst` | 与 JSON 同 revision | 回源或本地重编码 | 与聚合 JSON 同 revision |
-| `GET/HEAD .../current_repodata.json[.bz2|.zst]` | 后续优化；缺失时允许客户端回退 | 安全透传/缓存 | 后续聚合优化 |
-| `GET/HEAD .../repodata_shards.msgpack.zst` | 后续生成 | 安全缓存/改写 | 后续聚合 |
-| `GET/HEAD .../{package}.tar.bz2` | 读取 package | 校验后缓存 | 按 binding 读取 |
-| `GET/HEAD .../{package}.conda` | 读取 package | 校验后缓存 | 按 binding 读取 |
-| `PUT .../{package}.tar.bz2` | 发布 | 拒绝 | 拒绝 |
-| `PUT .../{package}.conda` | 发布 | 拒绝 | 拒绝 |
-| `GET/HEAD /repository/{repo}/{channel}/channeldata.json` | 生成快照 | 回源/缓存/改写 | 聚合快照 |
-| `GET/HEAD /repository/{repo}/{channel}/notices.json` | 可选 | 可选缓存 | 可选聚合 |
-
-表中 `...` 代表 `/repository/{repo}/{channel}/{subdir}`。实现必须同时覆盖 bare repository/channel URL 与尾部 `/`，但不能用浏览器 HTML 页面替代协议 metadata。
-
-### Path 规范化
-
-- HTTP path 只 percent-decode 一次；拒绝空段、`.`、`..`、反斜杠、控制字符、NUL 和编码后的路径穿越。
-- 仓库根 channel 使用内部稳定 key，不把 `_root` 等内部占位暴露到 URL。
-- Channel path、subdir 和 filename 共同参与 asset path；query string、host 和 credential 不参与 identity。
-- 不对合法 package filename 做大小写折叠，也不通过连字符拆分 coordinate。
-- Subdir 必须是 `noarch` 或符合 Conda channel identifier 规范的平台 subdir；schema v2 上传 metadata 中的 `subdir` 必须与 URL 一致，legacy v1 缺失时只允许按受测兼容规则从 URL 派生。
-- 已知 channel root 必须能读取 `noarch/repodata.json`。没有 noarch package 时返回合法空索引，而不是 HTML `404`。
-- Package response 保持原始 bytes；metadata 的 JSON、BZ2、ZSTD 变体来自同一个 canonical JSON snapshot。
-- `HEAD` 与 `GET` 返回一致的状态和实体 header；Range 只用于 package/blob，不对动态 JSON 做不稳定的临时切片。
-
-## 数据模型落地
-
-### Component 与 Asset
-
-优先复用通用 component/asset/blob 模型：
-
-- `component.format = CONDA`。
-- `component.kind = conda-package`。
-- `component.namespace = {canonical-channel-key}/{subdir}`。
-- `component.name = info/index.json.name`。
-- `component.version = info/index.json.version`。
-- `component.attributes` 保存有界的 build、build number、depends、constrains、license、timestamp、track features、features 和 noarch 类型投影。
-- `coordinate_hash = sha256("conda-package", channelKey, subdir, name, version, build)`；repository 已由数据库唯一约束的 `repository_id` 维度隔离，不重复混入 hash。
-
-同一 coordinate 可以有 `.tar.bz2` 和 `.conda` 两个 package asset；asset path、archive format、MD5、SHA-1、SHA-256、size、filename 和原始 package record 分开保存。唯一约束至少覆盖：
-
-- `(repository_id, coordinate_hash)` 的 component 唯一性。
-- `(repository_id, normalized_asset_path)` 的 asset 唯一性。
-- `(repository_id, channel_key, subdir, filename)` 的 active package record 唯一性。
-
-Filename 与 `info/index.json` 不一致、同一路径指向另一 coordinate、或同一 archive format 出现不同 bytes 时，按 hosted write policy 明确拒绝或原子替换，不能静默成功。
-
-### Conda 专用投影
-
-通用模型之外，需要双数据库 migration 增加有界协议投影；具体版本号在实现分支按当时最新 Flyway 序列分配：
-
-- `conda_package_record`：package asset、channel/subdir、name/version/build、archive format、repodata 字段、checksum、size、状态和 content revision。
-- `conda_channel_revision`：repository/channel/subdir 的 committed revision、metadata blob 引用、ETag、生成状态和更新时间。
-- `conda_proxy_metadata_state`：上游 metadata path、validator、cache deadline、negative state、blob 引用、解析状态和 fencing token。
-- `conda_group_source_binding`：group、channel/subdir、package filename/coordinate、member、member revision、checksum 和 group revision。
-- 复用或扩展通用 durable marker/lease 表，驱动 publish、delete、metadata rebuild、proxy fetch 和 cleanup。
-
-完整 package、完整 repodata JSON、压缩 metadata 和 shard 只存 OSS/S3/File blob store。数据库可以保存查询所需的有界 package record，但不允许把无上限上游 JSON 直接塞进 JSON/TEXT 列。
-
-### Revision 与可见状态
-
-每个 channel/subdir 有单调递增 content revision：
-
-1. Package bytes 先流式写 staging blob，并完成格式与 checksum 校验。
-2. 数据库事务预留 coordinate/path，写入 pending package record 和 durable rebuild marker。
-3. Worker 或同步 writer 基于 fenced revision 生成 canonical repodata 及压缩 blob。
-4. 最后一个短事务同时激活 package record、切换 metadata blob pointer、递增 committed revision，并写 group invalidation marker。
-5. 读请求始终读取一个 committed revision；旧 snapshot 在新 snapshot 提交前继续可用。
-
-发布接口只有在新 package 与对应 metadata snapshot 都可读后才返回成功。失败或失去 fencing token 的 worker 不能覆盖更新 revision；staging 和过期 snapshot 由可接管的有界 cleanup 回收。
-
-## Hosted 发布与索引流程
-
-### Package 导入
-
-Hosted raw upload 路径与 Nexus 一致：
-
-```bash
-curl --fail --user "$CONDA_USER:$CONDA_PASSWORD" \
-  --upload-file ./acme_tools-1.2.3-py_0.conda \
-  https://repo.example.com/repository/conda-hosted/team-a/linux-64/acme_tools-1.2.3-py_0.conda
-```
-
-Admin/UI 和 Components API 需要显式选择 channel 与 subdir，随后调用相同 importer。Importer 流程：
-
-1. 验证 repository online、hosted recipe、权限、write policy、channel/subdir/path 和上传字节上限。
-2. 流式写 staging blob，同时计算 MD5、SHA-1、SHA-256 和 size；不把完整包读入 JVM heap。
-3. `.tar.bz2` 只按需流式读取 `info/index.json` 等受支持的 `info/` entry；`.conda` 先验证 ZIP container、`metadata.json`、唯一的 `info-*.tar.zst` 与 `pkg-*.tar.zst`，再有界读取 info tar。
-4. 校验 archive entry 数量、声明/实际解压大小、压缩比、路径、link、重复 entry 和嵌套 container 限制。
-5. 从 `info/index.json` 读取 name、version、build、build number、subdir、depends 等字段，并与 filename、URL subdir 和 channel policy 对照；legacy v1 的缺失字段只按明确 compatibility profile 派生。
-6. 在共享 coordinate lease 内复查 active record，按 write policy 决定 create、conflict 或 replace。
-7. 写 pending record、生成新 metadata snapshot，并按前述 revision 流程原子发布。
-8. 返回 Nexus compatibility fixture 固定的状态与 header；初始目标为成功 `PUT` 返回 `201`。
-
-Channel path 是 coordinate 的一部分。同一 bytes 上传到 `team-a/linux-64` 与 `team-b/linux-64` 会创建两个独立 publication；任何 dedup 只允许复用底层 content-addressed blob，不能合并 publication 或 metadata。
-
-### Repodata 生成
-
-每个 `(repository, channel, subdir)` 生成一个 canonical `repodata.json`：
-
-- `info.subdir` 等于当前 subdir，`repodata_version` 使用客户端兼容值。
-- `.tar.bz2` record 放入 `packages`，`.conda` record 放入 `packages.conda`。
-- Record key 是 package filename；MD5、SHA-256 和 size 来自最终 archive bytes。
-- `removed` 只包含已从 active maps 移除且仍处于 tombstone 保留期的 filename，不得同时出现在 active map。
-- 未经验证的上游/用户 signature 不进入 `signatures`；若未来支持签名，必须保持 filename 与 package hash 绑定。
-- JSON key 与 package record 采用稳定排序，时间字段来自持久化 publish time，保证多副本生成相同 bytes 和 ETag。
-
-同一 canonical JSON bytes 生成 BZ2 和 ZSTD 变体。压缩结果作为 metadata asset 写入 blob store，并与 revision 绑定；请求线程不能每次临时压缩整个索引。
-
-根 channel 和每个已知嵌套 channel 都生成 `channeldata.json`。字段选择、latest version 和 subdirs 必须遵循 CEP 38 与 Conda 排序规则；不能复制 Nexus 3.94 黑盒中缺少 `subdirs` 或嵌套 channel 返回空 packages 的结果。
-
-已知 channel 若没有 noarch package，仍生成最小合法 `noarch/repodata.json` 及压缩变体。删除最后一个 package 后 channel 是否保留，由显式 channel lifecycle 管理；在 channel 仍存在期间不能退化为 HTML `404`。
-
-`current_repodata.json` 只有在裁剪算法经官方工具/客户端 fixture 验证后才生成。未实现时返回 reference 固定的 missing 状态，让客户端回退到完整 repodata，不能返回内容不完整却状态为 `200` 的伪索引。
-
-### 删除与替换
-
-- 删除 package 映射 `DELETE`，写 tombstone、生成新 metadata snapshot，再切换 committed revision。
-- Package 是否在 tombstone 期间允许 direct download、保留多久，以及重复发布是否清除 tombstone，必须由 Nexus black-box 与产品 retention policy 共同固定。
-- Disable Redeploy 下，同一路径或同一 coordinate/archive format 的第二次上传返回 conflict；允许 redeploy 时也必须把 blob、record 和 metadata 作为一个新 revision 原子替换。
-- 删除 channel/subdir 是管理操作，必须先枚举影响、支持 dry-run，并用 durable job 有界处理；不能在一个 HTTP 事务中扫描和删除整个 channel。
-
-## Proxy 缓存流程
-
-Proxy remote URL 表示上游 channel root，例如 `https://conda.anaconda.org/conda-forge/`。本地 `/repository/conda-proxy/linux-64/...` 映射到该 root 的 `linux-64/...`，不能把本地 repository 名或任意客户端 Host 拼入上游 URL。
-
-Metadata 请求：
-
-1. 规范化请求为 channel/subdir/metadata variant，并检查本地 committed cache。
-2. Fresh 时直接返回本地重写后的 snapshot；命中共享 negative cache 时返回缓存状态。
-3. Stale 时获取数据库 revalidation lease，携带 ETag/Last-Modified 向上游请求；其它副本等候相同 revision。
-4. 上游 `304` 只刷新 verified/cache time；`200` 以流式、有大小/深度限制的 parser 校验 schema、subdir、filename、record 和 checksum。
-5. 保存完整原始 metadata blob及有界 record 投影，删除或改写不安全的 `base_url`、shard base URL、channel relation 和绝对 package URL。
-6. 生成本地 canonical JSON/压缩 snapshot，提交 validator、cache deadline 和 revision；等待者读取同一结果。
-7. 上游 `404/410` 写短 TTL negative cache；认证失败、限流和 5xx 按 auto-block/stale policy 处理，不能伪装成 package missing。
-
-Package 请求：
-
-1. 在同一 channel/subdir 的已验证 package record 中解析 filename，取得 archive format、expected MD5/SHA-256/size。
-2. 若 checksum 对应 blob 已缓存且 asset binding 有效，直接返回。
-3. 否则按 `(repository, channel, subdir, filename, checksum)` 获取 fenced fetch lease，流式回源到 staging blob。
-4. Redirect 每一跳都通过 `OutboundRequestPolicy`；跨 origin 删除 Authorization、cookie 和其它 secret-bearing header。
-5. 边下载边计算 checksum/size，与 repodata 不一致时删除 staging、记录 integrity failure 并 fail closed。
-6. 成功后原子提交 asset/blob binding；等待者只读取已提交结果。
-
-客户端直接请求一个尚未缓存且不在已验证 repodata 中的 package 时，proxy 应先 revalidate 对应 subdir metadata。官方 channel 未发布的任意文件不应无校验地成为持久 cache。
-
-Metadata TTL 与 content TTL 分离：repodata 可以分钟级 revalidate，已按 hash 固定的 package blob 可以长期复用。Remote 配置/auth revision 变化后立即失效 metadata/negative state，但 content-addressed blob 只有在没有引用并满足 retention 时才清理。
-
-Stale-if-error 必须由管理员显式启用并设最大窗口。只允许返回最近一次校验成功的完整 snapshot/package；从未成功验证的响应、checksum mismatch、显式权限失败或 remote identity 改变不能 stale serve。
-
-## Group 聚合流程
-
-Group 以调用者可读的有序成员为输入，对每个 channel/subdir 生成统一视图：
-
-1. 读取成员 config revision 和各成员 committed content revision。
-2. 按顺序读取成员 `packages`、`packages.conda` 与 tombstone 投影。
-3. 同一 map 内相同 filename 第一成员优先，并记录 member、member revision、checksum、size 和 coordinate。
-4. `.tar.bz2` 与 `.conda` map 分开合并；相同 coordinate 的两种 archive 可以分别来自不同成员，但每个 filename 的 record 与 bytes 必须固定到同一成员。
-5. 生成 group canonical repodata、压缩变体、ETag 和 source binding，并以一个 group revision 原子提交。
-
-Package GET/HEAD 先读取 source binding，再从绑定成员取 bytes。即使客户端没有先请求 repodata，也必须运行与聚合器相同的选择算法并保存/验证 binding，不能另做一次简单的“逐成员第一个 200”搜索。
-
-成员中较高优先级的 active package 覆盖低优先级同名 package。`removed` 只有在最终 group 视图中确实没有 active record 时才输出；高优先级成员的 tombstone 默认不能遮蔽低优先级仍有效的 package，除非 Nexus/Conda compatibility fixture 证明 tombstone 具有跨成员遮蔽语义。
-
-`channeldata.json` 按 package name 聚合 subdirs 和有界字段。发生冲突时保持成员优先级，latest 选择使用 Conda version/build 排序，并保存来源；不能混合一个成员的 version 与另一个成员的 summary/license 形成不存在的记录。
-
-Group response 中的 URL、ETag 和 conditional semantics 属于 group 自身。成员变化、proxy revalidation、hosted publish/delete 或 member reorder 递增共享水位并失效受影响的 channel/subdir；本地 TTL cache 只缓存已提交 group revision。
-
-Nexus 3.94 黑盒已经出现过 group repodata `500`，以及嵌套 channel 的 repodata 宣告 package 但 group package 下载 `404`。兼容测试保留这些 reference observation，但 kkrepo 的验收标准是返回可消费的聚合索引，并保证每个被宣告 package 都能通过同一个 group URL 下载并通过 checksum。
-
-## 权限与认证
-
-权限映射：
-
-| Conda 操作 | kkrepo 权限 |
+本文记录 kkrepo Conda 仓库的协议边界、当前实现和后续演进约束。Conda 仓库不是 Raw 文件目录：服务端必须理解 channel、subdir、package record 和 repodata，并保证索引中声明的 checksum、size 与实际下载字节一致。
+
+## 当前状态
+
+截至 2026-08-08，kkrepo 已实现 Conda hosted、proxy、group 三类仓库：
+
+- 新增 CONDA format、conda-hosted、conda-proxy、conda-group recipe 和独立 protocol-conda 模块。
+- 支持仓库根 channel、嵌套 channel、label channel，以及 noarch 和平台 subdir。
+- 支持传统 .tar.bz2 与 Conda v2 .conda package。
+- 支持 repodata.json、repodata.json.bz2、repodata.json.zst、current_repodata 的三种编码、channeldata.json、notices.json 和空 noarch 索引。
+- 支持 hosted HTTP PUT、管理端上传、Components API 上传、GET、HEAD、DELETE、write policy、权限，以及基于 Syft/Grype 的 Conda 感知安全扫描。
+- 支持 proxy repodata 投影、CEP 15 package base URL、package checksum/size 校验、共享 proxy cache、negative cache、auto-block、remote auth、redirect 和出站访问策略。
+- 支持 group 按成员顺序聚合 metadata，并持久化 package source binding，确保索引记录与下载来源一致。
+- 支持 Admin、Browse、Search、cleanup policy、请求指标和双数据库持久化。
+- 支持 Nexus Conda repository definition 迁移，以及经过 source version/shape gate 的 hosted package 数据迁移。
+- 提供本地 package fixture、协议单元/集成测试、可选的 Nexus/kkrepo 黑盒对照测试，并接入现有 Client E2E 与 Nexus Migration E2E。
+
+CEP 16 sharded repodata 尚未实现，对应路径返回 404。current_repodata 当前返回完整 repodata snapshot，属于客户端可回退的兼容实现；按最新版裁剪仍是后续容量优化。CEP 43/44/45 引入的 schema v3 package record 需要避免进入面向旧客户端的 repodata v1；在尚未提供对应协商或衍生 metadata 前，hosted importer 明确拒绝 schema v3，而不是生成会被旧 solver 误解的索引。真实 Nexus 黑盒矩阵依赖外部环境，compat-test 默认不启动，必须显式设置 CONDA_COMPAT_ENABLED=true 执行；当前 Miniforge Conda 客户端验证则复用现有 Client E2E 流程。
+
+## 协议基线
+
+实现以官方规范为协议真相，以 Nexus Repository 的 recipe、URL 和可观测客户端行为作为兼容性参考：
+
+- Conda [Channel identifiers](https://conda.org/learn/specifications/channels/channel-identifiers/) 定义 channel base、label、noarch 和平台 subdir。
+- [CEP 15](https://conda.org/learn/ceps/cep-0015/) 定义 repodata 与 package 分离托管时 `info.base_url` 的下载语义。
+- [CEP 26](https://conda.org/learn/ceps/cep-0026/) 定义 package name、version、build、filename、channel、subdir 和 label 标识规则。
+- [CEP 34](https://conda.org/learn/ceps/cep-0034/) 与 [CEP 35](https://conda.org/learn/ceps/cep-0035/) 定义 .tar.bz2 和 .conda package container。
+- [CEP 36](https://conda.org/learn/ceps/cep-0036/) 定义 packages、packages.conda、removed、checksum、size 和 repodata 压缩变体。
+- [CEP 38](https://conda.org/learn/ceps/cep-0038/) 定义 channeldata.json。
+- [CEP 16](https://conda.org/learn/ceps/cep-0016/) 定义可选的 sharded repodata。
+- [CEP 43](https://conda.org/learn/ceps/cep-0043/)、[CEP 44](https://conda.org/learn/ceps/cep-0044/) 与 [CEP 45](https://conda.org/learn/ceps/cep-0045/) 定义 schema v3 的条件依赖、可选依赖组与 variant flags，以及对旧客户端 repodata 的隔离要求。
+- Sonatype [Conda Repositories](https://help.sonatype.com/en/conda-repositories.html) 与 [Conda CLI Usage](https://help.sonatype.com/en/conda-cli-usage.html) 用于固定 Nexus recipe 和 /repository/{repo}/... 入口。
+
+关键约束：
+
+- package identity 至少包含 channel、subdir、name、version、build 和 archive format；同一 package 可以发布到不同 channel。
+- package filename 不能靠连字符切分，必须读取 info/index.json，并反向校验 canonical filename。
+- .tar.bz2 record 写入 packages；.conda record 写入 packages.conda。
+- Conda 版本不是 SemVer。latest 选择使用 protocol-conda 中按 VersionOrder 规则实现的比较器，再比较 build number、build 和 timestamp。
+- Proxy 和 group 不能把上游 base_url 或 download_url 原样暴露给客户端。
+- Group 的 metadata 选择与 package 下载必须绑定同一成员和同一 checksum。
+
+## 模块与职责
+
+| 模块 | 职责 |
 | --- | --- |
-| repodata/channeldata/notices/shard `GET`/`HEAD` | `READ` |
-| package `GET`/`HEAD` | `READ` |
-| hosted package 首次 `PUT`/UI upload | `ADD` |
-| hosted package redeploy | `EDIT`，且 write policy 允许 |
-| package/channel 管理删除 | `DELETE` |
-| proxy/group upload | 拒绝写入 |
+| core | CONDA format 和三类 recipe |
+| protocol-conda | 严格路径解析、media type、版本比较和协议常量 |
+| persistence-jdbc | Conda DAO、revision、tombstone、group binding 和 lease |
+| persistence-mysql / persistence-postgresql | V41 Conda schema |
+| server/conda | archive inspector、metadata codec、hosted/proxy/group 服务和迁移 writer |
+| server 通用入口 | Controller、安全、上传、Browse、Search、cleanup、指标和 repository 生命周期 |
+| migration-nexus | Nexus format/recipe 探测、shape gate 和 definition 迁移 |
+| admin-ui / browse-ui | recipe、上传、浏览、使用说明和格式图标 |
+| compat-test | package fixture 与可选 Nexus/kkrepo 黑盒对照 |
 
-认证规则：
+Controller 只负责 HTTP 路由与通用条件请求处理；Conda 协议行为集中在 CondaService、CondaArchiveInspector 和 CondaMetadataCodec。
 
-- 支持 HTTP Basic 和 kkrepo 现有 token；认证完成后仍走 repository privilege，不因协议 route 绕过授权。
-- 未提供 credential 且仓库允许匿名读取时可以匿名；提供了无效/过期/禁用 credential 时返回 `401`，不回落到 anonymous。
-- `WWW-Authenticate`、`404`/`403` 的可见性行为由通用安全策略和 Nexus fixture 固定，不能泄露调用者无权读取的 channel/package 是否存在。
-- Proxy remote credential 只加入允许的 upstream origin。Redirect、更换 remote、日志、异常、audit 和 debug dump 都不得暴露 secret。
-- `.condarc`、`.netrc` 和环境变量是客户端凭据载体，不是服务端新建 token 协议的理由；文档优先推荐 scoped token，而不是在 URL 中嵌入用户名密码。
+## URL 与路由
 
-## 多副本与缓存语义
+推荐把 group URL 配置为 channel：
 
-- Repository 配置、package record、asset/blob 引用、channel revision、metadata pointer、proxy validator/negative state、group source binding、lease、marker 和迁移进度以 MySQL/PostgreSQL 与 OSS/S3 为真相。
-- 本地 cache 只保存可按 revision 重建的 metadata/binding/permission 热数据，必须有 TTL 或版本水位失效条件；缓存丢失不能改变结果。
-- Hosted publish/delete、proxy fetch/revalidate、group rebuild、migration 和 cleanup 使用数据库 lease/fencing 或 durable marker queue。节点内锁只能减少本副本重复工作。
-- 大 metadata 在 blob store 中物化；数据库只原子切换 blob pointer 和 committed revision，避免长 JSON 生成占用事务锁。
-- Marker 消费者使用有界批次和可接管 claim；失去 lease 的 worker 不能提交。失败 marker 保留 error、retry count 和 next attempt，支持运维观察与重试。
-- Staging package、孤立 metadata snapshot、过期 negative state 和无引用 blob 由 `FOR UPDATE SKIP LOCKED` 或等价方言能力分批清理，不能依赖原上传请求的 `finally`。
-- Group source binding 包含 member config/content revision。任何副本发现 revision 不匹配时重新解析，不能继续按陈旧成员下载。
-- 多副本故障测试至少覆盖并发上传同一 coordinate、并发 proxy miss、metadata rebuild 中途退出、group member 重排、数据库短暂故障和对象存储 promote 失败。
+    channels:
+      - https://repo.example.com/repository/conda-group
+    show_channel_urls: true
 
-## Nexus 迁移设计
+也可以直接使用嵌套 channel：
 
-Conda repository migration 必须 version/shape gated：
+    conda search --override-channels \
+      -c https://repo.example.com/repository/conda-group/team-a/release demo
 
-- Repository definition 识别 `format=conda` 与 `conda-hosted`、`conda-proxy`、`conda-group` recipe，迁移名称、online、blob store、write policy、remote、TTL、negative cache、HTTP client/auth 和有序成员。
-- 保留 repository 名称可以保持 `/repository/{repo}/...` channel URL 不变；重命名必须在报告中生成客户端配置 action。
-- Hosted data 只迁移 `.tar.bz2`/`.conda` package binary。Nexus 生成的 repodata/channeldata 不作为源真相；目标端通过同一 importer 校验 package、恢复 channel/subdir/coordinate 并重建 metadata。
-- 源 asset path 中的 channel prefix 必须保留。发现同一 coordinate 被 Nexus 静默折叠到其它 prefix、metadata 宣告但 package 缺失或 checksum 不一致时标记 `NEEDS_MANUAL_ACTION`，不能猜测目标路径。
-- Proxy cache 默认不迁移。管理员显式选择时，只有已验证的 metadata、package checksum 与 asset shape 才能恢复，并继续保持 proxy cache 语义。
-- Masked/missing remote secret 不写占位值；目标 proxy 保持 offline，并在报告中列出 manual action。
-- Group 成员只在所有引用都能映射到目标 Conda repository 时创建；缺失成员或循环引用使该 definition 进入 manual action。
-- Migration job 支持 dry-run、resume、checksum、幂等、分片 claim、失败报告和复跑。重复运行不能重复发布 package 或增加 blob 引用。
+路由契约：
 
-## 安全与资源限制
+| 路径 | Hosted | Proxy | Group |
+| --- | --- | --- | --- |
+| {channel}/{subdir}/repodata.json | 从数据库投影生成 | 优先复用 zstd/bz2 共享缓存并流式解压，缺失时原样缓存 | 按成员顺序聚合 |
+| repodata.json.bz2 / .zst | 同一 JSON snapshot 压缩 | 原样缓存上游表示 | 同一聚合 snapshot 压缩 |
+| current_repodata.json 及压缩变体 | 返回完整 snapshot | 返回完整 snapshot | 返回完整 snapshot |
+| {channel}/channeldata.json | 从 package record 生成 | 优先安全缓存上游，缺失时生成 | 聚合生成 |
+| {channel}/notices.json | 返回空 notices | 安全缓存上游，缺失时返回空 | 返回空 notices |
+| {channel}/{subdir}/{package} | 读取 hosted blob | canonical URL 直取并在写缓存时建组件 | 按成员优先级读取 |
+| PUT package | 发布 | 405 | 405 |
+| DELETE package | 删除并写 tombstone | 405 | 405 |
+| repodata_shards.msgpack.zst | 404 | 404 | 404 |
 
-- 上传先限制 compressed bytes，再限制 entry 数、单 entry 大小、总声明/实际解压字节、压缩比、嵌套层数、JSON 大小/深度、字符串和集合数量。
-- TAR/ZIP parser 拒绝绝对路径、`..`、反斜杠穿越、设备文件、FIFO、危险 symlink/hardlink、重复关键 entry 和多份 `info/index.json`。
-- `.conda` container 只接受规范允许的成员；ZIP central directory 与实际 stream 必须一致，Zstandard 解压设置明确上限。
-- Metadata parser 使用流式读取；不允许先把大型 repodata、channeldata、shard 或 package 解压到 heap。
-- Name、version、build、subdir、channel path、filename、dependency、license 和 URL 都设置长度/数量限制；异常内容不能进入 metric label。
-- Proxy remote、redirect、`base_url`、channel relation 和 shard URL 统一走 `OutboundRequestPolicy`，阻止 loopback、link-local、云 metadata service、DNS rebinding 和跨协议跳转。
-- Upstream credential、client Authorization、signed URL、token 和 package 内可能包含的敏感 metadata 在日志、trace、audit detail、错误响应与 CI artifact 中脱敏。
-- Package checksum/size 不一致、metadata subdir 不一致、同一路径 upstream drift 或 group binding checksum 不一致都 fail closed。
+路径只 percent-decode 一次，并拒绝 query、fragment、编码后的分隔符、二次编码、空段、点段、反斜杠、控制字符和超长字段。普通 channel segment 使用小写规范；label 后允许官方 label 形态。subdir 必须是 noarch 或合法的平台-架构形式。
 
-## Browse、管理和观测
+已知 channel 始终可以读取 noarch/repodata.json；没有 noarch package 时返回合法空索引。未知的非 noarch subdir 返回 404。
 
-Admin UI：
+## Hosted 发布
 
-- Hosted：blob store、write policy、strict validation、upload/archive limit、channel lifecycle 和 tombstone retention。
-- Proxy：remote URL/auth、metadata/content/negative TTL、stale window、auto-block、HTTP/SOCKS5 proxy 和 last validation error。
-- Group：有序成员、循环校验、当前 config revision、待重建 channel 数和 binding 状态。
-- 上传页要求选择 channel/subdir，显示解析出的 name/version/build、archive format、size、checksum、warning 和最终路径。
+Raw HTTP 上传示例：
 
-Browse/Search：
+    curl --fail --user "$CONDA_USER:$CONDA_PASSWORD" \
+      --upload-file ./demo-1.2.3-py_0.conda \
+      https://repo.example.com/repository/conda-hosted/team-a/linux-64/demo-1.2.3-py_0.conda
 
-- Channel/subdir 层显示 package 数、两种 archive 数、metadata revision、更新时间和健康状态。
-- Package 层显示 name、version、build、build number、depends、constrains、license、timestamp、size、MD5/SHA-256 和来源成员。
-- 下载始终经过 repository route、权限、审计和 group binding，不暴露内部 blob key 或上游 credential URL。
+所有上传入口复用同一个 importer：
 
-建议指标：
+1. 校验 hosted recipe、write policy、权限、channel、subdir 和 filename。
+2. 将上传流写入受限临时文件，同时计算 MD5、SHA-256 和 size。
+3. .tar.bz2 有界读取 info/index.json；.conda 校验 ZIP_STORED outer entries、metadata.json、唯一且 identity 一致的 info/pkg tar.zst，再有界读取 info/index.json。
+4. 对传统 archive 和 v2 info archive 拒绝路径穿越、绝对路径、重复 entry、special file、越界 link、超量 entry、超大展开字节、超时和并发检查过载。
+5. 校验 name、version、build、build_number、subdir、dependency 集合和 canonical filename。
+6. 在坐标 lease 和数据库事务之外，把已校验的 package 绑定到隐藏的 `.conda/staging/<uuid>/...` asset；长时间对象存储上传不会占用数据库事务。
+7. 获取数据库 lease，在一个短事务内同步续租并锁定 lease 行，复查目标路径、write policy、已有 record 和实际 blob checksum/size，再把同一 blob 引用晋升到最终 asset/component，提交 Conda package record、noarch 状态和 repository revision。
+8. 事务提交后解除 staging 引用；失败时也做 best-effort 清理。metadata 和 Conda package GET 只以已提交的 Conda package record 为可见真相，因此 staging、回滚或孤儿 blob 都不会进入 channel。副本异常退出遗留的 staging asset 由所有副本均可运行的有界 worker 通过数据库行锁和 `SKIP LOCKED` claim，解除最后引用后再交给全局 Blob GC。
 
-- `conda_publish_total{result,format}`、`conda_publish_duration_seconds`。
-- `conda_metadata_build_total{type,result}`、`conda_metadata_build_duration_seconds`、`conda_metadata_revision_lag`。
-- `conda_proxy_request_total{kind,result}`、`conda_proxy_cache_total{kind,result}`、`conda_proxy_integrity_failure_total`。
-- `conda_group_build_total{result}`、`conda_group_binding_miss_total`、`conda_group_source_drift_total`。
-- `conda_archive_rejection_total{reason}`、`conda_marker_backlog`、`conda_staging_bytes`。
+删除先在数据库中删除 active record、写 tombstone 并递增 revision，再删除 asset。repodata 的 removed 集合只包含当前没有 active record 的 filename。
 
-Repository、recipe、result、format 可以作为低基数 label；channel、subdir、package name/version/build、URL、token 和 user 不进入 metric label，只进入受控 audit/log field。
+## Metadata 生成与性能边界
 
-## 兼容性测试矩阵
+Hosted/group repodata 按 repository、channel、subdir、有序成员及各成员当前 channel state
+计算内容 identity，生成型 channeldata 按 repository revision 物化为隐藏的
+`.conda/generated/<channel-hash>/.../<identity>/...` asset。命中时直接读取共享 blob；只有新
+identity 第一次访问才从数据库投影，并按请求编码为 JSON、BZIP2 或 Zstandard。这样同仓库其它
+subdir 的变化不会使当前 subdir 的大索引失效：
 
-### M0 Nexus 参考基线
+- package filename 使用有序 map，removed 使用有序集合。
+- record 顶层字段、info、channeldata package 和可选字段顺序固定。
+- JSON、BZ2、ZSTD 分别按响应字节计算稳定 ETag。
+- info.subdir 和 repodata_version 都写入响应。
+- channeldata 按 package name 聚合 subdir，并按 Conda VersionOrder/build 规则选 reference_package。
+- package record 使用 JDBC cursor 按 filename 流式写入可重放 spool，随即释放数据库连接；renderer 再从 spool 写入压缩临时文件，不会在压缩期间持有数据库游标，也不同时保留完整 record list、JSON 和压缩字节数组。channeldata 只保留当前 package name 的聚合状态。
+- BZIP2 使用与 Nexus 一致的 block size 9。小型 group 冷合并先一次序列化完整 JSON，再批量压缩，避免 Jackson 的细粒度写入放大 BZIP2 CPU；超过内存上限的输入先落盘为 package collection spool，再批量压缩。64 KiB 缓冲位于压缩器输出侧、SHA-256 和文件 sink 之前，避免压缩器的细粒度输出放大 digest 与文件写入成本。
+- 同一节点先按生成路径 single-flight，再用有界 semaphore 限制 CPU/临时磁盘密集的 metadata build；不同坐标可并行，多副本通过数据库 lease 合并同一 identity 的冷构建，等待者直接消费胜者写入的 blob。
+- `current_repodata` 在尚未实现裁剪时与完整 snapshot 复用同一 revision/编码物化结果。
+- 旧 revision 物化 asset 由有界 cleanup worker 清理，默认保留 7 天；删除后仍可由数据库状态确定性重建。
 
-在实现 controller/service 前，先把 Nexus reference 行为固化为黑盒 fixture。2026-08-07 对 Nexus 3.94 的本地预研观察包括：
+物化结果只是可丢失缓存，不是协议真相。任意副本只依赖数据库 revision/package state 和 blob
+store 即可验证或重建响应；节点本地缓存丢失不影响正确性。
 
-- 根 channel 与嵌套 channel 的 package `PUT` 返回 `201`；proxy/group 对同一路径 `PUT` 返回 `404`。
-- Hosted 会生成 `repodata.json`、`repodata.json.bz2` 和 `channeldata.json`，不会生成 `.zst`、`current_repodata.json` 或 shard。
-- 空 hosted 不会自动返回 `noarch/repodata.json`；嵌套 channel 可以拥有独立 repodata。
-- 同一 coordinate 跨 channel prefix 的第二次上传可能返回成功但不可见，属于需要避免的 reference quirk。
-- Group 的 metadata 聚合和 package 下载必须分别探测；预研中出现过 metadata `500`，也出现过 metadata 宣告 package 但下载 `404`。
+## Proxy
 
-这些观察只能作为 fixture 种子。自动化测试仍需在 Nexus 3.92.x+ 和执行时当前稳定版本上重跑，记录 exact status、header、body、资产列表和版本差异。
+Proxy remote URL 表示上游 channel root。本地 channel/subdir 路径直接追加到该 root。
 
-### 自动化矩阵
+Repodata 流程：
 
-| 场景 | Nexus 对照 | kkrepo 断言 |
-| --- | --- | --- |
-| 空根 channel / 空 noarch | 记录 reference | kkrepo 返回官方有效空 noarch 索引 |
-| `.tar.bz2` 根 channel PUT | 状态、header、metadata | 可 search/install，checksum 一致 |
-| `.conda` 嵌套 channel PUT | 状态、header、metadata | channel identity 独立、可 install |
-| 同 coordinate 多 channel | 记录 Nexus quirk | 两个 publication 均可见 |
-| 重复 PUT/write policy | 对照 Allow/Disable | conflict 或原子替换，无半状态 |
-| repodata JSON/BZ2/ZSTD | 内容解压比较 | 同 revision、同语义、稳定 ETag |
-| channeldata/noarch | schema 与缺失行为 | 符合 CEP、可被客户端消费 |
-| GET/HEAD/Range/conditional | 状态与实体 header | package bytes 一致，无额外回源 |
-| Proxy 首次/重复/离线读取 | remote 请求计数 | 校验 hash、cache 命中、stale 受控 |
-| Proxy 404/401/429/5xx | 状态和 auto-block | negative/error 分类正确 |
-| Group 同名冲突 | 成员优先级 | record 与 bytes 绑定同一成员 |
-| Group member reorder/delete | revision/binding | 新请求观察新顺序，无陈旧下载 |
-| Basic/token/anonymous | 认证挑战与权限 | 无效 credential 不匿名降级 |
-| 多副本并发和故障接管 | N/A | 单次 publication/fetch、snapshot 原子 |
-| Nexus hosted data migration | package 与生成 metadata | package hash 相同、metadata 重建 |
+1. 客户端直接请求 `repodata.json.zst` 或 `repodata.json.bz2` 时，按原路径、原编码通过共享 RawProxy 缓存；RawProxy 负责 validator、TTL、negative cache、auto-block、remote auth、redirect 和 OutboundRequestPolicy。
+2. 客户端请求未压缩 `repodata.json` 或 `current_repodata.json` 时，proxy 依次选择对应的 Zstandard、BZIP2 共享快照作为 backing blob，读取 frame 声明的解压长度并流式解压响应，不再把同一份百兆级 JSON 作为第二个 S3 object 同步写入。ETag 从 backing blob identity 稳定派生，HEAD、条件请求和多副本 cache miss 继续使用同一数据库 lease；上游没有压缩表示时才回退原始 JSON。
+3. 直连 proxy 的首请求不写 package projection，也不重压缩上游 BZIP2/Zstandard。异常 package URL 确需 inventory 时也复用同一压缩快照有界解压，不再固定缓存原始 JSON。
+3. 常规 metadata、group 聚合和可由请求路径解析的 package 都不触发 inventory projection。只有非标准 `info.base_url`、无法按 Nexus route token 解析的异常 filename，或已有受校验 inventory 的刷新才按需投影完整索引。节点本地延迟队列只负责限流和相同 coordinate 去重，真正的跨副本互斥与完成状态仍由数据库 lease、channel state 和共享 blob 保证。
+4. 若共享 RawProxy blob 的 SHA-256 与 channel state 一致且仍在 TTL 内，直接复用 inventory，不再解析 JSON 或写数据库。
+5. 上游字节变化时限制 metadata 最大字节数，流式解析 packages 与 packages.conda，拒绝无 checksum、size/coordinate/subdir 不一致、重复 filename 或记录过大的上游数据。记录写入可重放临时 spool，解析期间只保留单条 record。
+6. 解析并验证 `info.base_url`；将它作为内部 channel state 持久化，同时递归删除 package record 中的 `base_url` 与 `download_url`。数据库以 canonical record SHA-256 计算增删改，只批量写入变化行并删除消失行；只有协议投影变化才递增 revision，仅上游 validator/base URL 变化时更新 state 而不使大 channel metadata 失效。
+7. `record_sha256` 为空的存量行只在第一次真实上游变化时流式计算并分批回填，后续同步不再读取整列 record JSON。
 
-真实客户端 E2E 至少覆盖：
+Package 流程：
 
-- Nexus 支持的 Conda 4.6+ 最低 lane，以及当前稳定 `conda`/libmamba solver lane。
-- Linux CI 的 `linux-64` 与 `noarch`；能提供 runner 时扩展 `osx-arm64`、`osx-64`、`win-64`。
-- `conda search --override-channels`、`conda create`、`conda install`、dependency solve、anonymous 和 authenticated channel。
-- Hosted 两种 package format、proxy public channel、group 冲突优先级、嵌套 channel、离线 proxy cache 和 metadata revalidation。
-- 通过请求计数证明多副本 miss 不形成回源风暴，并通过 kill/restart 证明 publish/rebuild 可接管。
+1. 严格路径解析后先查已投影 record。已知 filename 按 CEP 15 `info.base_url` 或 repodata 同目录回源，缓存完成后校验 size 与 SHA-256；只有上游未给 SHA-256 时才回退 MD5，checksum drift 会删除 asset 并 fail closed。
+2. 首个尚未投影的 canonical package 请求和 Nexus 一样直接走共享 proxy blob cache。服务端按 Nexus package route 从 filename 右侧提取 name、version、build，并在同一个缓存写事务中创建 Conda component 与 `channel/subdir/name/version/filename` Browse 路径；不会为了显示目录而扫描、解析和批量写入整个 repodata。
+3. 旧版本留下的未绑定缓存 asset 在下一次命中时复用同一 blob 原地补齐 component/Browse binding，不重新下载。Conda 客户端仍按刚取得的上游 repodata checksum 校验下载；已有 inventory 的记录继续在服务端校验 size 与 checksum，drift 时删除缓存并 fail closed。
+4. 无法可靠从 filename 投影坐标时才异步构建 inventory；非标准 `info.base_url` 导致 canonical URL 404 时同步投影后按已验证 URL 重试。未投影 asset 仍是共享 asset/blob，继续进入通用 cleanup、审计和按扩展名分类的安全扫描链路。
 
-## 实施顺序
+跨副本 metadata/package miss 继续由数据库 lease 和通用 RawProxy 共享缓存合并；组件、asset 和 Browse 节点持久化在共享数据库中，节点本地调度器只承担异常路径的投影限流，不承担正确性。
 
-1. M0：编写 Nexus Conda black-box fixture，固定三类 recipe、路由、上传、metadata、header、group priority 和错误行为。
-2. M1：新增 format/recipe、`protocol-conda` 模块、路由骨架、双数据库 schema 和 repository definition API/UI。
-3. M2：实现有界 `.tar.bz2`/`.conda` inspector、staging blob、coordinate/path 校验和 package download。
-4. M3：实现 hosted revision writer、repodata/channeldata、BZ2/ZSTD、空 noarch 和 publish/delete 原子可见性。
-5. M4：接入权限、Basic/token、Browse/Search、Components API/UI upload、HEAD/Range/conditional response。
-6. M5：实现 proxy metadata/package cache、checksum 收口、TTL/negative/stale、remote auth、redirect 和 SSRF policy。
-7. M6：实现 group 聚合、source binding、member revision invalidation 和 group conditional response。
-8. M7：实现 Nexus repository definition 与 hosted data migration，再补显式选择的 proxy cache migration。
-9. M8：补齐跨副本并发、worker 接管、对象存储/数据库故障注入、cleanup 和容量压测。
-10. M9：在 fixture 验证后增加 `current_repodata` 与 CEP 16 shard，覆盖当前 Conda 客户端的现代 metadata fast path。
-11. M10：完成真实 Conda 客户端矩阵、文档、示例配置、运维指标和兼容性报告。
+## Group
 
-## 验收标准
+Group 对有序 Conda 成员递归生成 snapshot：
 
-- Admin/API 可以创建 `conda-hosted`、`conda-proxy`、`conda-group`，配置与 Nexus recipe 迁移映射清晰。
-- `.tar.bz2` 与 `.conda` 都能经同一 importer 安全发布，并被真实 Conda 客户端 search/create/install。
-- 根 channel、嵌套 channel 和空 noarch 都返回合法 metadata；相同 coordinate 跨 channel 不互相覆盖。
-- Repodata 中的 filename、record、checksum、size 与实际 package bytes 一致，JSON/BZ2/ZSTD 属于同一 revision。
-- Proxy 可在多副本下合并回源、校验 package、正确处理 TTL/negative/stale/redirect，并在允许的离线窗口继续工作。
-- Group 按成员顺序稳定聚合；索引中每个 package 都能通过 group URL 下载，bytes 来自绑定成员并通过 checksum。
-- 显式无效认证不会降级匿名，上传/替换/删除权限与 write policy 生效，remote secret 不泄露。
-- 任一副本在上传、回源或 metadata rebuild 中退出后，另一副本可以接管；客户端只观察旧或新完整 snapshot。
-- Nexus migration 支持 dry-run/resume/checksum/idempotency，hosted package bytes 保持 hash，生成 metadata 在目标端重建。
-- Archive bomb/path traversal、恶意 metadata、SSRF、cross-origin credential、checksum drift 和资源耗尽测试全部通过。
-- `compat-test` 同时保存 Nexus reference 与 kkrepo 结果；所有故意优于 Nexus quirk 的差异都有测试名和设计说明。
+- 跳过 offline 或非 Conda 成员，并检测运行时循环。
+- package filename 冲突时第一成员优先；packages 与 packages.conda 根据文件格式分别输出。
+- tombstone 不会覆盖仍由其它成员提供的 active package。
+- 只有一个 proxy 成员的 group 直接委托该 proxy 的共享缓存，不做无意义的 JSON 解析和重压缩。
+- 纯数据库成员的 repodata 使用 window query 按成员优先级选择同 filename 的首条记录，并通过 JDBC cursor 直接送入 renderer；不会在 JVM 中构建完整成员 snapshot。Tombstone 是否仍有 active record 也使用分批集合查询，避免逐条 N+1。
+- 含 proxy 的 mixed group 冷请求不等待 package inventory 写入 MySQL。已有新鲜快照时按 Zstandard、BZIP2、JSON 顺序复用；全冷时也依次回源，并把上游压缩表示原样存入共享 RawProxy，只在合并阶段有界解压。这样 OSS/S3 的首次写入和跨副本读取通常从百兆级 pretty-printed JSON 降到十余兆，而上游缺少压缩表示时仍兼容回退原始 `repodata.json`。解压后的聚合原始字节不超过 16 MiB 时按 Nexus 3.94 的方式把每个成员解析一次、合并 JsonNode、一次序列化后批量压缩；更大的聚合只扫描一次 JSON，把连续且无需改写的安全 package record 作为原始字节大区间复制到磁盘 spool，复制时用字符串感知状态机删除 JSON 非语义空白，仅对含 `base_url`/`download_url` 的记录重新序列化，再整块压缩。两条路径都会递归移除远端地址字段、执行成员优先级去重并合并 `removed`，不会在响应后追加仅供 Browse 使用的全量 inventory 任务。
+- 客户端实际请求某个 package 时先按成员顺序尝试 canonical URL，并在被选成员的 cache-write 事务中只创建该制品的 component/Browse 路径；已有可信 record 时才持久化该 filename 的 group repository、channel、subdir、member repository、member revision、content identity 和 group config revision，不为大 channel 全量写 binding。
+- Package GET 先刷新已绑定的 proxy 成员 inventory，再验证 binding、group revision、member revision、content identity 和 checksum；任一值变化就重新聚合并只绑定当前请求的 package。验证通过后按该次快照中的精确 record 取包，不再做第二次 inventory 刷新。
+- 成员发布、删除或 group 配置变更会递增相关 repository revision；旧 binding 通过 revision 比较惰性失效，不再同步批量删除整组 binding。
+
+Group 不接受上传，也不会把写请求隐式转发到 hosted 成员。
+
+真实 Nexus 3.94 对重复 filename 存在不一致：group repodata 可能被后置成员的 checksum
+覆盖，但 package GET 仍返回首成员字节；嵌套 channel 的 hosted PUT 也会规范化到根 channel。
+kkrepo 不复制这个会导致客户端 checksum 校验失败的行为，而是让首成员的 metadata、持久 binding
+和下载字节保持一致；黑盒测试同时记录 Nexus 的可接受观测值并强校验 kkrepo 的一致性。
+
+## 数据模型与多副本语义
+
+V41 在 MySQL 和 PostgreSQL 中增加：
+
+| 表 | 用途 |
+| --- | --- |
+| conda_package_record | hosted/proxy package 的有界协议投影和 asset/component binding |
+| conda_channel_state | repository/channel/subdir revision、proxy metadata hash 与 CEP 15 package base URL |
+| conda_package_tombstone | hosted 删除记录 |
+| conda_group_source_binding | group record 到成员/checksum/revision 的持久绑定 |
+| conda_coordinate_lease | hosted publish 与 proxy inventory 的可续约 fenced lease |
+
+Repository revision 复用共享 cache_version 表，并向包含该成员的 group 传播失效。package blob 仍只存 OSS/S3 或开发用 File storage；数据库保存 metadata 投影、checksum、引用和协调状态。
+
+V41 在初始 Conda schema 中直接包含 package record fingerprint，以及面向 repodata 流式扫描和 channeldata/group 优先级查询的复合索引。异常协议路径确需同步 inventory 时使用 500 行有界 batch，避免十几万行记录变化时形成超大 JDBC 参数集合或全表 delete/insert；常规 Browse 不执行这条批处理链路。
+
+正确性不依赖 JVM 内存：
+
+- lease owner、fencing token 和到期时间持久化在数据库；获取与释放使用独立短事务，使租约在外层发布、迁移或 cleanup 事务中也对其它副本可见。
+- lease 在工作期间由 virtual thread 续约；最终状态变更前还会在同一数据库事务内条件续租并锁定 lease 行，外层事务存在时延迟到事务完成后释放，从而阻止已失去租约的副本提交可见状态，也避免 cleanup 锁定 asset 后另起删除事务造成反向等待。
+- package record、channel state、tombstone 和 group binding 都可由其它副本直接读取。
+- 上传临时文件仅用于流式检查；共享 blob/asset staging 也保持隐藏。节点退出最多留下不可见的 staging/orphan blob，不会形成 active Conda record；staging cleanup 使用共享数据库年龄水位、有界 batch 和行锁跨副本接管，不依赖某个 JVM 存活。
+- metadata build、archive inspection、hosted publish 和 migration importer 都有节点级有界并发；数据库 lease 提供跨副本 single-flight 与 fencing。进程内 cache 和 semaphore 只作为可丢失的节点热状态，丢失后可从数据库和 blob store 重建。
+
+## 权限、管理与浏览
+
+权限沿用 repository privilege：
+
+| 操作 | 权限 |
+| --- | --- |
+| metadata/package GET、HEAD | READ |
+| hosted 首次上传 | ADD |
+| hosted overwrite | EDIT 且 write policy 允许 |
+| hosted DELETE | DELETE 且 write policy 允许 |
+| proxy/group 上传 | 拒绝 |
+
+路径明确的 HTTP PUT 可以在安全过滤器中区分首次上传与覆盖。Components API 和管理端 multipart 上传在鉴权阶段尚不能可信解析最终路径，因此统一要求 EDIT，避免允许 redeploy 时由 ADD 权限绕过覆盖授权。
+
+Conda 已接入 Basic/token/anonymous 的通用安全链路；显式无效 credential 不回退匿名。Proxy remote secret、redirect 和 SSRF 防护沿用共享 remote HTTP 实现。
+
+安全扫描只把 `.conda` 和 `.tar.bz2` package 判为候选，repodata、channeldata 和其它协议 metadata 不进入扫描队列。Conda package 使用独立 subject kind，使其专用 catalog 结果不会命中或污染普通压缩包的 content-addressed SBOM 复用。Scanner adapter 先按通用输入、entry、展开字节、嵌套深度和 deadline 限额检查整个 archive；Conda tar payload 只允许解析后仍位于 archive 内的 symlink/hardlink，路径穿越、绝对目标和 special file 继续 fail closed。该遍检查同时捕获有界的 `info/index.json`，catalog 准备阶段复用它，不再第二次展开 info tar；`.conda` 仍会快速复核 outer ZIP、payload identity 和 `metadata.json`。随后在请求临时目录中生成唯一的 `conda-meta/package.json`，让 Syft 的 `conda-meta-cataloger` 生成 CycloneDX；原 package payload 不落地、不执行。响应中必须存在 name/version 匹配且 `syft:package:type=conda` 的 component，否则以 `CONDA_CATALOG_EMPTY` 失败，不能把零 component 当作完成。匹配后的 SBOM 继续进入既有 Grype、快照一致性、重试、结果保留和下载策略链路；扫描器数据库过期或不可用时沿用全局 readiness 的 fail-closed 行为。
+
+Admin UI 可以创建三类 recipe、设置 remote、write policy 和有序 group 成员。Browse UI 提供 Conda 图标、上传表单，以及与 Nexus 一致的 channel/subdir/name/version/package 层级；build 保留在 package identity 和详情中，不额外占用一层目录。Browse 路径只是逻辑投影，不改变客户端下载路径或 blob 存储结构。Cleanup 使用 Conda VersionOrder，不复用 SemVer。
+
+## Nexus 迁移
+
+迁移必须同时通过 source version 和 datastore shape gate：
+
+- 识别 format=conda 的 hosted、proxy、group definition。
+- 迁移名称、online、blob store、write policy、remote URL 和有序成员；remote URL 使用统一规范化。
+- hosted data 只接收 .tar.bz2 与 .conda package asset，过滤 Nexus 生成的 repodata/channeldata。
+- source package 必须带可验证 SHA-256；目标端重新执行 archive inspector，核对 size、name、version 和 checksum，再通过正常 hosted importer 发布。
+- 同 checksum 的重复运行幂等；同路径不同字节 fail closed。
+- 迁移导入和在线 hosted 发布共用有界 publish permit，archive inspector 也有独立有界并发，避免批量迁移压垮临时磁盘、CPU 或对象存储连接池。
+- 当前不迁移 proxy cache，也不把 proxy package 提升为 hosted publication。
+
+源 Nexus 无 Conda datastore shape、版本早于已知 Conda recipe，或 asset 不能证明 package 身份时，迁移报告必须阻止自动数据恢复。
+
+## 测试与兼容性
+
+自动测试覆盖：
+
+- path、label、subdir、percent decoding 与非法路径。
+- VersionOrder 代表性序列。
+- .tar.bz2/.conda 正常归档，以及 traversal、link、special file、identity、compression method 和资源限制。
+- repodata parse/render、空上游、JSON/BZ2/ZSTD 等价、稳定输出、tombstone、channeldata latest。
+- hosted 发布/删除、空 noarch、current_repodata fallback。
+- cleanup retain 对同一 version 的全部 build 一致保留、hosted 协议删除、proxy cache 删除，以及跨副本 staging 回收和 Blob GC 交接。
+- 安全扫描候选分类、两种 package 的有界 `info/index.json` 投影、安全 link、真实 Conda component 识别和零 component fail-closed。
+- proxy inventory、CEP 15 绝对/相对 package base URL、package checksum drift 和缓存删除。
+- group member priority、持久 binding 和 revision 失效。
+- Controller GET/HEAD/PUT/DELETE 路由。
+- MySQL/PostgreSQL V41 migration、DAO revision、binding 和 lease。
+- Nexus version/shape gate、definition migration 和 hosted data writer。
+- Admin/Browse 合约与本地生成的两种 package fixture。
+- 现有 Client E2E 中使用 Miniforge Conda 完成 hosted 上传、group search/create/list、proxy search/create/list，并通过现有 cleanup Try Run/Execute 删除真实客户端 fixture。
+- 现有 Nexus Migration E2E 中在 Nexus 3.92/3.94、H2/PostgreSQL source lane 创建 hosted/proxy/group、发布可安装 package、执行 source/target Conda 客户端验收，并校验定义、blob checksum、协议表行数与多副本读取。
+
+compat-test 中的 CondaRepositoryBlackBoxCompatibilityTest 默认只运行自包含 package fixture。设置下列环境变量后，才运行真实 Nexus/kkrepo 对照：
+
+    CONDA_COMPAT_ENABLED=true
+    CONDA_NEXUS_COMPAT_BASE_URL=http://...
+    CONDA_KKREPO_COMPAT_BASE_URL=http://...
+    CONDA_NEXUS_COMPAT_USERNAME=...
+    CONDA_NEXUS_COMPAT_PASSWORD=...
+    CONDA_NEXUS_COMPAT_BLOB_STORE=default
+    CONDA_KKREPO_COMPAT_USERNAME=...
+    CONDA_KKREPO_COMPAT_PASSWORD=...
+    CONDA_KKREPO_COMPAT_BLOB_STORE=default
+
+黑盒用例覆盖 hosted 根/嵌套 channel、两种 package、repodata JSON/BZ2/ZSTD/current/noarch、group priority、conditional request 和 proxy package 校验。真实 `conda search/create/list` 已在现有 Client E2E 和 Migration E2E 中运行，自包含 HTTP fixture 仍只用于快速协议回归，不能替代真实客户端验收。
+
+## 已知限制与后续演进
+
+- 实现 CEP 16 sharded repodata，并安全处理 proxy shard URL。
+- 为 CEP 43/44/45 schema v3 package records 增加客户端能力协商或独立 metadata 衍生路径，再开放 hosted 发布。
+- 根据 conda-index 语义生成裁剪后的 current_repodata，而不是当前完整 snapshot fallback。
+- 为 group 超大 channel 增加可观测的预热/容量策略，进一步降低首次本地投影等待。
+- 在当前 Miniforge Conda/libmamba Linux lane 基础上，增加 Conda 4.6+、micromamba 与 macOS/Windows 多平台矩阵。
+- 增加多副本 kill/restart、对象存储故障、长时间 lease 接管和大 channel 容量压测。
+- 视实际兼容需求扩展 notices、channel relations 和 verified signature。
+
+这些优化不能改变现有安全边界：数据库仍是 active package、revision 和 binding 的真相，package blob 仍在 OSS/S3，任何缓存或物化结果都必须可丢失、可校验、可重建。
+
+## 验收边界
+
+当前代码级验收要求：
+
+- 三类 recipe 可创建，并能通过统一 /repository/{repo}/... 路由使用。
+- 两种 package format 都经过安全 inspector，hosted metadata 与 package checksum/size 一致。
+- 根 channel、嵌套 channel、空 noarch、JSON/BZ2/ZSTD/current fallback 可用。
+- Proxy 压缩 metadata 首次请求按 Nexus 语义原样缓存；未压缩 JSON 从同一共享压缩 blob 流式派生，上游无压缩表示时兼容回退。Package 在同一写事务中建立单制品 component/Browse 路径；已有 inventory 的 package 在响应前校验，checksum drift 删除缓存并 fail closed，常规请求不做全 channel Browse projection。
+- Group 索引选择与 package bytes 绑定同一成员。
+- MySQL/PostgreSQL、迁移、UI、Browse、Search、cleanup 和安全链路都有 Conda 接入；安全扫描必须产出匹配 package name/version 的 Conda component。
+- 单元、集成和自包含 black-box fixture 全部通过；现有 Client E2E 与 Nexus Migration E2E 包含 Conda lane，不另建独立 workflow/job。
+- 当前 Miniforge Conda 能通过 group 搜索并安装 hosted fixture、通过 proxy 搜索并安装上游 package，cleanup 能删除该 fixture；迁移 E2E 能从受支持 Nexus source 恢复同一可安装 package。
+
+上线前环境级验收另行要求：
+
+- 对目标 Nexus 版本重跑 opt-in 对照测试。
+- 补充 Conda 4.6+、micromamba 与目标操作系统平台的客户端矩阵。
+- 在真实 MySQL/PostgreSQL、S3/OSS 和多副本部署中验证并发、故障接管和容量。
 
 ## 参考资料
 
 - [Conda channel identifiers](https://conda.org/learn/specifications/channels/channel-identifiers/)
-- [Conda package specification](https://docs.conda.io/projects/conda-build/en/latest/resources/package-spec.html)
-- [CEP 34: `.tar.bz2` package format](https://conda.org/learn/ceps/cep-0034/)
-- [CEP 35: `.conda` package format](https://conda.org/learn/ceps/cep-0035/)
+- [Conda package specification](https://docs.conda.io/projects/conda/en/24.11.x/user-guide/concepts/pkg-specs.html)
+- [CEP 15: separate repodata and package hosting](https://conda.org/learn/ceps/cep-0015/)
+- [CEP 26: package and channel identifiers](https://conda.org/learn/ceps/cep-0026/)
+- [CEP 34: .tar.bz2 package format](https://conda.org/learn/ceps/cep-0034/)
+- [CEP 35: .conda package format](https://conda.org/learn/ceps/cep-0035/)
 - [CEP 36: repodata](https://conda.org/learn/ceps/cep-0036/)
 - [CEP 38: channeldata](https://conda.org/learn/ceps/cep-0038/)
 - [CEP 16: sharded repodata](https://conda.org/learn/ceps/cep-0016/)
-- [CEP 12: run exports](https://conda.org/learn/ceps/cep-0012/)
-- [CEP 15: repodata base URL](https://conda.org/learn/ceps/cep-0015/)
-- [CEP 6: channel notices](https://conda.org/learn/ceps/cep-0006/)
-- [CEP 42: channel relations](https://conda.org/learn/ceps/cep-0042/)
-- [CEP 47: indexed timestamp](https://conda.org/learn/ceps/cep-0047/)
+- [CEP 43: conditional dependencies](https://conda.org/learn/ceps/cep-0043/)
+- [CEP 44: optional dependency groups](https://conda.org/learn/ceps/cep-0044/)
+- [CEP 45: simplified variant selection](https://conda.org/learn/ceps/cep-0045/)
 - [Creating custom channels](https://docs.conda.io/projects/conda/en/stable/user-guide/tasks/create-custom-channels.html)
-- [Generating channel indexes](https://docs.conda.io/projects/conda-build/en/latest/concepts/generating-index.html)
 - [Sonatype Nexus Conda Repositories](https://help.sonatype.com/en/conda-repositories.html)
-- [Create a Conda Repository](https://help.sonatype.com/en/create-a-conda-repository.html)
 - [Configure Conda with Nexus](https://help.sonatype.com/en/configure-conda-with-nexus.html)
 - [Conda CLI Usage with Nexus](https://help.sonatype.com/en/conda-cli-usage.html)
-- [Nexus Repository 3.92.0 release notes](https://help.sonatype.com/en/sonatype-nexus-repository-3-92-0-release-notes.html)

@@ -22,6 +22,8 @@ public interface PersistenceStores extends AutoCloseable {
 
   CleanupPolicyDao cleanupPolicies();
 
+  CondaRegistryDao condaRegistry();
+
   DockerAuthTokenDao dockerAuthTokens();
 
   DockerRegistryDao dockerRegistry();
