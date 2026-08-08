@@ -105,6 +105,9 @@ public class MigrationPlanBuilder {
       if ("swift".equals(format) && "hosted".equals(type)) {
         reasons.add("Nexus Swift hosted content model was not proven by the datastore schema fingerprint; content migration requires manual action.");
         warnings.add("Swift hosted archives and manifests are not imported until the source datastore profile is verified.");
+      } else if ("apt".equals(format) && "hosted".equals(type)) {
+        reasons.add("Nexus APT hosted package shape was not proven by the datastore schema fingerprint; content migration requires manual action.");
+        warnings.add("APT package blobs are not imported until package paths, attributes, and checksums are verified.");
       } else {
         reasons.add("Datastore content schema fingerprint is incomplete for this format; repository content migration stays configuration-only.");
         warnings.add("Datastore content exporter is not enabled until required tables and columns are present for this format.");

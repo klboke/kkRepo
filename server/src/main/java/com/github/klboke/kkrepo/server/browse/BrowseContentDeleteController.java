@@ -4,6 +4,7 @@ import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
@@ -27,6 +28,7 @@ import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
 import com.github.klboke.kkrepo.server.cache.NexusCacheType;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
+import com.github.klboke.kkrepo.server.apt.AptService;
 import com.github.klboke.kkrepo.server.conda.CondaBrowsePaths;
 import com.github.klboke.kkrepo.server.conda.CondaService;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
@@ -82,6 +84,8 @@ public class BrowseContentDeleteController {
   private final GroupMemberAssetCache groupMemberAssetCache;
   private final NexusLikeCacheController cacheController;
   private RepositoryRuntimeRegistry runtimeRegistry;
+  private AptRegistryDao aptRegistry;
+  private AptService aptService;
   private CondaService condaService;
 
   public BrowseContentDeleteController(
@@ -124,6 +128,16 @@ public class BrowseContentDeleteController {
       RepositoryRuntimeRegistry runtimeRegistry, CondaService condaService) {
     this.runtimeRegistry = runtimeRegistry;
     this.condaService = condaService;
+  }
+
+  @Autowired(required = false)
+  void setAptDeleteSupport(
+      RepositoryRuntimeRegistry runtimeRegistry,
+      AptRegistryDao aptRegistry,
+      AptService aptService) {
+    this.runtimeRegistry = runtimeRegistry;
+    this.aptRegistry = aptRegistry;
+    this.aptService = aptService;
   }
 
   @DeleteMapping("/{repository}")
@@ -189,6 +203,21 @@ public class BrowseContentDeleteController {
         }
         return deleteAuthorized(repository, publicPath, repository, actorId).deletedAssets();
       }
+      if (target.format() == RepositoryFormat.APT) {
+        Object assetPath = component.attributes() == null
+            ? null
+            : component.attributes().get("assetPath");
+        String publicPath = assetPath == null ? path : assetPath.toString();
+        if (publicPath == null || publicPath.isBlank()) {
+          List<AssetRecord> componentAssets = assetDao.listAssetsByComponent(component.id());
+          if (componentAssets.isEmpty()) {
+            throw new ResponseStatusException(
+                HttpStatus.NOT_FOUND, "Cleanup component has no assets: " + subjectId);
+          }
+          publicPath = componentAssets.getFirst().path();
+        }
+        return deleteAuthorized(repository, publicPath, repository, actorId).deletedAssets();
+      }
       if (target.format() == RepositoryFormat.TERRAFORM
           && "terraform-provider".equals(component.kind())) {
         terraformRegistryDao.deleteProviderVersion(
@@ -210,7 +239,8 @@ public class BrowseContentDeleteController {
           .filter(row -> row.repositoryId() == target.id())
           .orElseThrow(() -> new ResponseStatusException(
               HttpStatus.NOT_FOUND, "Cleanup asset was not found: " + subjectId));
-      if (target.format() == RepositoryFormat.CONDA) {
+      if (target.format() == RepositoryFormat.CONDA
+          || target.format() == RepositoryFormat.APT) {
         return deleteAuthorized(repository, asset.path(), repository, actorId).deletedAssets();
       }
       return deleteResolvedAssets(
@@ -248,6 +278,9 @@ public class BrowseContentDeleteController {
           HttpStatus.BAD_REQUEST, "Conda deletion requires a package browse path");
     }
     String storagePath = toStoragePath(requested.format(), publicPath);
+    if (requested.format() == RepositoryFormat.APT) {
+      storagePath = aptStoragePath(requested, publicPath);
+    }
     String resolvedSourceRepository = sourceRepository;
     if (requested.format() == RepositoryFormat.TERRAFORM) {
       Optional<TerraformBrowseAssetPathResolver.ResolvedStoragePath> resolved =
@@ -270,6 +303,10 @@ public class BrowseContentDeleteController {
     if (target.format() == RepositoryFormat.CONDA
         && target.type() == RepositoryType.HOSTED) {
       return deleteCondaPackage(requested, target, publicPath, condaCoordinate, actorId);
+    }
+    if (target.format() == RepositoryFormat.APT
+        && target.type() == RepositoryType.HOSTED) {
+      return deleteAptPackage(requested, target, publicPath, storagePath, actorId);
     }
     List<AssetRecord> assets = matchingAssets(target, storagePath);
     if (assets.isEmpty()) {
@@ -368,6 +405,53 @@ public class BrowseContentDeleteController {
           HttpStatus.CONFLICT, "Conda package could not be deleted");
     }
     return new BrowseDeleteResult(requested.name(), target.name(), publicPath, 1);
+  }
+
+  private BrowseDeleteResult deleteAptPackage(
+      RepositoryRecord requested,
+      RepositoryRecord target,
+      String publicPath,
+      String storagePath,
+      String actorId) {
+    if (runtimeRegistry == null || aptService == null) {
+      throw new ResponseStatusException(
+          HttpStatus.SERVICE_UNAVAILABLE, "APT delete service is unavailable");
+    }
+    RepositoryRuntime runtime = runtimeRegistry.resolveById(target.id())
+        .filter(candidate -> candidate.format() == RepositoryFormat.APT
+            && candidate.type() == RepositoryType.HOSTED)
+        .orElseThrow(() -> new ResponseStatusException(
+            HttpStatus.CONFLICT, "APT repository runtime is unavailable"));
+    MavenResponse response = aptService.delete(
+        runtime, storagePath, "administrative delete by " + actorId, false);
+    if (response.status() == 404) {
+      throw new ResponseStatusException(HttpStatus.NOT_FOUND, "APT package state was not found");
+    }
+    if (response.status() != 204) {
+      throw new ResponseStatusException(
+          HttpStatus.CONFLICT, "APT package could not be deleted");
+    }
+    return new BrowseDeleteResult(requested.name(), target.name(), publicPath, 1);
+  }
+
+  private String aptStoragePath(RepositoryRecord repository, String publicPath) {
+    if (aptRegistry == null) {
+      return publicPath;
+    }
+    Optional<AptRegistryDao.PackageRecord> direct =
+        aptRegistry.findPackageByPath(repository.id(), publicPath);
+    if (direct.isPresent()) {
+      return direct.orElseThrow().path();
+    }
+    String[] segments = publicPath.split("/", -1);
+    if (segments.length != 6) {
+      return publicPath;
+    }
+    return aptRegistry.findPackage(
+            repository.id(), segments[0], segments[1], segments[2], segments[3], segments[4])
+        .filter(record -> segments[5].equals(record.filename()))
+        .map(AptRegistryDao.PackageRecord::path)
+        .orElse(publicPath);
   }
 
   private BrowseDeleteResult deleteResolvedAssets(

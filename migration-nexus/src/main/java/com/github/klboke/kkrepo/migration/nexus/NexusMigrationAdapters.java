@@ -76,7 +76,8 @@ final class NexusMigrationAdapters {
       return ("swift".equals(normalizedFormat) && "hosted".equals(normalizedType))
           || ("ansiblegalaxy".equals(normalizedFormat)
               && ("hosted".equals(normalizedType) || "proxy".equals(normalizedType)))
-          || ("conda".equals(normalizedFormat) && "hosted".equals(normalizedType));
+          || ("conda".equals(normalizedFormat) && "hosted".equals(normalizedType))
+          || ("apt".equals(normalizedFormat) && "hosted".equals(normalizedType));
     }
 
     @Override

@@ -21,6 +21,8 @@ CONDA_BIN="${CONDA_E2E_BIN:-${CONDA_BIN:-conda}}"
 CONDA_HOSTED_REPOSITORY="${CONDA_E2E_HOSTED_REPOSITORY:-conda-hosted}"
 CONDA_PROXY_REPOSITORY="${CONDA_E2E_PROXY_REPOSITORY:-conda-proxy}"
 CONDA_GROUP_REPOSITORY="${CONDA_E2E_GROUP_REPOSITORY:-conda-group}"
+APT_HOSTED_REPOSITORY="${APT_E2E_HOSTED_REPOSITORY:-apt-hosted}"
+APT_CLIENT_IMAGES="${APT_E2E_IMAGES:-debian12=debian:12-slim,ubuntu24=ubuntu:24.04,current=debian:testing-slim}"
 KKREPO_AUTH_URL=""
 REDACTION_VALUES=("$KKREPO_PASSWORD" "$KKREPO_AUTH")
 CLEANUP_FIXTURE_FORMAT=""
@@ -28,6 +30,7 @@ CLEANUP_FIXTURE_REPOSITORY=""
 CLEANUP_FIXTURE_PATTERN=""
 CLEANUP_FIXTURE_LABEL=""
 SWIFT_CLEANUP_FIXTURE_AVAILABLE=false
+APT_E2E_CONTAINERS=()
 
 if [[ ! "$SWIFT_LOGIN_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   printf '[client-e2e] SWIFT_E2E_LOGIN_TIMEOUT_SECONDS must be a positive integer\n' >&2
@@ -49,6 +52,15 @@ export DOTNET_SKIP_FIRST_TIME_EXPERIENCE="${DOTNET_SKIP_FIRST_TIME_EXPERIENCE:-1
 log() {
   printf '[client-e2e] %s\n' "$*"
 }
+
+cleanup_apt_e2e_containers() {
+  local container
+  for container in "${APT_E2E_CONTAINERS[@]}"; do
+    docker rm -f "$container" >/dev/null 2>&1 || true
+  done
+}
+
+trap cleanup_apt_e2e_containers EXIT
 
 need() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -2497,6 +2509,432 @@ EOF
   fi
 }
 
+apt_client_base_url() {
+  python3 - "$1" <<'PY'
+import sys
+from urllib.parse import urlsplit, urlunsplit
+
+parts = urlsplit(sys.argv[1])
+host = parts.hostname or ""
+if host in {"127.0.0.1", "localhost", "::1"}:
+    host = "host.docker.internal"
+port = f":{parts.port}" if parts.port else ""
+print(urlunsplit((parts.scheme, host + port, parts.path.rstrip("/"), "", "")))
+PY
+}
+
+apt_write_client_config() {
+  local directory="$1"
+  local base_url="$2"
+  local repository="$3"
+  local key_file="$4"
+  local client_url auth_machine
+  client_url="$(apt_client_base_url "$base_url")"
+  auth_machine="$(python3 - "$client_url" "$repository" <<'PY'
+import sys
+from urllib.parse import urlsplit
+
+parts = urlsplit(sys.argv[1])
+print(f"{parts.scheme}://{parts.netloc}/repository/{sys.argv[2]}/")
+PY
+)"
+  mkdir -p "$directory"
+  printf 'deb [signed-by=/etc/apt/keyrings/kkrepo.asc] %s/repository/%s stable main\n' \
+    "$client_url" "$repository" >"$directory/kkrepo.list"
+  printf 'machine %s\nlogin %s\npassword %s\n' \
+    "$auth_machine" "$KKREPO_USER" "$KKREPO_PASSWORD" >"$directory/kkrepo.conf"
+  chmod 0600 "$directory/kkrepo.conf"
+  cp "$key_file" "$directory/kkrepo.asc"
+}
+
+apt_create_fixture() {
+  local output="$1"
+  local package="$2"
+  local version="$3"
+  local architecture="$4"
+  local depends="$5"
+  local message="$6"
+  local -a command=(
+    python3 "$PROJECT_ROOT/scripts/ci/create-apt-e2e-fixture.py"
+    --output "$output"
+    --package "$package"
+    --version "$version"
+    --architecture "$architecture"
+    --message "$message"
+  )
+  if [[ -n "$depends" ]]; then
+    command+=(--depends "$depends")
+  fi
+  run_logged "apt-fixture-$package-$version" "${command[@]}"
+}
+
+apt_upload_fixture() {
+  local label="$1"
+  local file="$2"
+  run_logged_output "apt-$label-upload" "$ARTIFACT_DIR/apt-$label-upload.json" \
+    curl -m 60 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    -H 'Content-Type: multipart/form-data' --data-binary "@$file" \
+    "$KKREPO_URL/repository/$APT_HOSTED_REPOSITORY/"
+}
+
+apt_start_client() {
+  local container="$1"
+  local image="$2"
+  local config_dir="$3"
+  run_logged "apt-$container-start" docker run --detach --name "$container" \
+    --add-host host.docker.internal:host-gateway \
+    --volume "$config_dir/kkrepo.list:/etc/apt/sources.list.d/kkrepo.list:ro" \
+    --volume "$config_dir/kkrepo.conf:/etc/apt/auth.conf.d/kkrepo.conf:ro" \
+    --volume "$config_dir/kkrepo.asc:/etc/apt/keyrings/kkrepo.asc:ro" \
+    "$image" sleep infinity
+  APT_E2E_CONTAINERS+=("$container")
+}
+
+apt_prepare_client() {
+  local container="$1"
+  run_logged "apt-$container-prepare" docker exec "$container" sh -euxc '
+    find /etc/apt/sources.list.d -maxdepth 1 -type f ! -name kkrepo.list -delete
+    rm -f /etc/apt/sources.list
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb
+  '
+}
+
+apt_install_version() {
+  local container="$1"
+  local package="$2"
+  local version="$3"
+  local expected_message="$4"
+  local expected_sha="$5"
+  run_logged "apt-$container-install-$version" docker exec \
+    -e DEBIAN_FRONTEND=noninteractive \
+    -e APT_PACKAGE="$package" \
+    -e APT_VERSION="$version" \
+    -e APT_MESSAGE="$expected_message" \
+    -e APT_SHA256="$expected_sha" \
+    "$container" sh -euxc '
+      apt-get update
+      cd /tmp
+      rm -f "${APT_PACKAGE}"_*.deb
+      apt-get download "$APT_PACKAGE=$APT_VERSION"
+      archive="$(find /tmp -maxdepth 1 -type f -name "${APT_PACKAGE}_*.deb" -print -quit)"
+      test -n "$archive"
+      test "$(sha256sum "$archive" | cut -d " " -f 1)" = "$APT_SHA256"
+      apt-get install -y --no-install-recommends "$APT_PACKAGE=$APT_VERSION"
+      test "$(dpkg-query -W -f="\${Version}" "$APT_PACKAGE")" = "$APT_VERSION"
+      test "$(cat "/usr/share/$APT_PACKAGE/message.txt")" = "$APT_MESSAGE"
+    '
+}
+
+apt_upgrade_version() {
+  local container="$1"
+  local package="$2"
+  local version="$3"
+  local expected_message="$4"
+  run_logged "apt-$container-upgrade-$version" docker exec \
+    -e DEBIAN_FRONTEND=noninteractive \
+    -e APT_PACKAGE="$package" \
+    -e APT_VERSION="$version" \
+    -e APT_MESSAGE="$expected_message" \
+    "$container" sh -euxc '
+      rm -rf /var/lib/apt/lists/*
+      apt-get update
+      apt-get install -y --no-install-recommends --only-upgrade "$APT_PACKAGE=$APT_VERSION"
+      test "$(dpkg-query -W -f="\${Version}" "$APT_PACKAGE")" = "$APT_VERSION"
+      test "$(cat "/usr/share/$APT_PACKAGE/message.txt")" = "$APT_MESSAGE"
+    '
+}
+
+apt_assert_old_version_absent() {
+  local container="$1"
+  local package="$2"
+  local version="$3"
+  run_logged "apt-$container-deleted-version" docker exec \
+    -e APT_PACKAGE="$package" -e APT_VERSION="$version" "$container" sh -euxc '
+      rm -rf /var/lib/apt/lists/*
+      apt-get update
+      ! apt-cache madison "$APT_PACKAGE" | grep -F " $APT_VERSION "
+    '
+}
+
+apt_stop_client() {
+  local container="$1"
+  docker rm -f "$container" >/dev/null
+}
+
+apt_test_key_rotation() {
+  local directory="$1"
+  local image="$2"
+  local old_key="$3"
+  local old_config="$directory/key-old"
+  local new_config="$directory/key-new"
+  local old_log="$ARTIFACT_DIR/apt-key-rotation-old-key.log"
+
+  run_logged_output apt-key-rotation "$ARTIFACT_DIR/apt-key-rotation.json" \
+    curl -m 60 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    -X PUT -H 'Content-Type: application/json' --data '{"generate":true}' \
+    "$KKREPO_URL/internal/repositories/$APT_HOSTED_REPOSITORY/apt/signing-key"
+  run_logged_output apt-key-rotation-public-key "$directory/new-key.asc" \
+    curl -m 20 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    "$KKREPO_URL/repository/$APT_HOSTED_REPOSITORY/gpg.key"
+
+  apt_write_client_config "$old_config" "$KKREPO_URL" "$APT_HOSTED_REPOSITORY" "$old_key"
+  set +e
+  docker run --rm --add-host host.docker.internal:host-gateway \
+    --volume "$old_config/kkrepo.list:/etc/apt/sources.list.d/kkrepo.list:ro" \
+    --volume "$old_config/kkrepo.conf:/etc/apt/auth.conf.d/kkrepo.conf:ro" \
+    --volume "$old_config/kkrepo.asc:/etc/apt/keyrings/kkrepo.asc:ro" \
+    "$image" sh -ec \
+    'find /etc/apt/sources.list.d -type f ! -name kkrepo.list -delete; rm -f /etc/apt/sources.list; apt-get update' \
+    >"$old_log" 2>&1
+  local old_status=$?
+  set -e
+  redact_log_file "$old_log"
+  if [[ "$old_status" -eq 0 ]] || ! grep -Eq 'NO_PUBKEY|signatures couldn.t be verified' "$old_log"; then
+    log "APT key rotation did not reject metadata with the retired scoped key"
+    return 1
+  fi
+
+  apt_write_client_config "$new_config" "$KKREPO_URL" "$APT_HOSTED_REPOSITORY" \
+    "$directory/new-key.asc"
+  run_logged apt-key-rotation-new-key docker run --rm \
+    --add-host host.docker.internal:host-gateway \
+    --volume "$new_config/kkrepo.list:/etc/apt/sources.list.d/kkrepo.list:ro" \
+    --volume "$new_config/kkrepo.conf:/etc/apt/auth.conf.d/kkrepo.conf:ro" \
+    --volume "$new_config/kkrepo.asc:/etc/apt/keyrings/kkrepo.asc:ro" \
+    "$image" sh -euxc \
+    'find /etc/apt/sources.list.d -type f ! -name kkrepo.list -delete; rm -f /etc/apt/sources.list; apt-get update'
+}
+
+apt_test_secondary_replica() {
+  local directory="$1"
+  local image="$2"
+  local package="$3"
+  local version="$4"
+  local expected_message="$5"
+  local secondary_url="${APT_KKREPO_SECONDARY_BASE_URL:-}"
+  if [[ -z "$secondary_url" ]]; then
+    log "APT secondary-replica client check skipped: APT_KKREPO_SECONDARY_BASE_URL is unset"
+    return 0
+  fi
+  run_logged_output apt-primary-release "$directory/primary-Release" \
+    curl -m 20 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    "$KKREPO_URL/repository/$APT_HOSTED_REPOSITORY/dists/stable/Release"
+  run_logged_output apt-secondary-release "$directory/secondary-Release" \
+    curl -m 20 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    "$secondary_url/repository/$APT_HOSTED_REPOSITORY/dists/stable/Release"
+  cmp "$directory/primary-Release" "$directory/secondary-Release"
+  run_logged_output apt-secondary-key "$directory/secondary-key.asc" \
+    curl -m 20 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    "$secondary_url/repository/$APT_HOSTED_REPOSITORY/gpg.key"
+  local config="$directory/secondary-config"
+  local container="kkrepo-apt-secondary-${STAMP}"
+  apt_write_client_config "$config" "$secondary_url" "$APT_HOSTED_REPOSITORY" \
+    "$directory/secondary-key.asc"
+  apt_start_client "$container" "$image" "$config"
+  apt_prepare_client "$container"
+  run_logged "apt-secondary-install" docker exec \
+    -e DEBIAN_FRONTEND=noninteractive -e APT_PACKAGE="$package" \
+    -e APT_VERSION="$version" -e APT_MESSAGE="$expected_message" \
+    "$container" sh -euxc '
+      apt-get update
+      apt-get install -y --no-install-recommends "$APT_PACKAGE=$APT_VERSION"
+      test "$(dpkg-query -W -f="\${Version}" "$APT_PACKAGE")" = "$APT_VERSION"
+      test "$(cat "/usr/share/$APT_PACKAGE/message.txt")" = "$APT_MESSAGE"
+    '
+  apt_stop_client "$container"
+}
+
+apt_create_proxy_repository() {
+  local repository="$1"
+  local metadata_mode="$2"
+  local remote_url="$3"
+  local payload
+  payload="$(python3 - "$repository" "$metadata_mode" "$remote_url" <<'PY'
+import json
+import sys
+
+repository, metadata_mode, remote_url = sys.argv[1:]
+print(json.dumps({
+    "name": repository,
+    "recipe": "apt-proxy",
+    "online": True,
+    "blobStoreName": "default",
+    "strictContentTypeValidation": True,
+    "proxy": {
+        "remoteUrl": remote_url,
+        "contentMaxAgeMinutes": 1440,
+        "metadataMaxAgeMinutes": 60,
+        "negativeCacheEnabled": True,
+        "negativeCacheTtlMinutes": 5,
+        "autoBlock": True,
+    },
+    "apt": {
+        "distribution": "stable",
+        "component": "main",
+        "architectures": ["amd64", "arm64"],
+        "flat": False,
+        "enforceDistribution": True,
+        "metadataMode": metadata_mode,
+        "validUntilDays": 30,
+        "origin": "kkRepo APT proxy E2E",
+        "label": "kkRepo APT proxy E2E",
+    },
+}, separators=(",", ":")))
+PY
+)"
+  run_logged_output "apt-$repository-create" "$ARTIFACT_DIR/apt-$repository-create.json" \
+    curl -m 30 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    -H 'Content-Type: application/json' --data "$payload" \
+    "$KKREPO_URL/internal/repositories"
+}
+
+apt_test_proxy_modes() {
+  local directory="$1"
+  local image="$2"
+  local package="$3"
+  local version="$4"
+  local expected_message="$5"
+  local expected_sha="$6"
+  local upstream_url proxy_name resign_name proxy_config resign_config container
+  upstream_url="$(apt_client_base_url "$KKREPO_URL")/repository/$APT_HOSTED_REPOSITORY/"
+  proxy_name="apt-proxy-$STAMP"
+  resign_name="apt-resign-$STAMP"
+
+  apt_create_proxy_repository "$proxy_name" PASSTHROUGH "$upstream_url"
+  run_logged_output apt-proxy-upstream-inrelease "$directory/proxy-upstream-InRelease" \
+    curl -m 20 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    "$KKREPO_URL/repository/$APT_HOSTED_REPOSITORY/dists/stable/InRelease"
+  run_logged_output apt-proxy-inrelease "$directory/proxy-InRelease" \
+    curl -m 20 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    "$KKREPO_URL/repository/$proxy_name/dists/stable/InRelease"
+  cmp "$directory/proxy-upstream-InRelease" "$directory/proxy-InRelease"
+  run_logged_output apt-proxy-key "$directory/proxy-key.asc" \
+    curl -m 20 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    "$KKREPO_URL/repository/$proxy_name/gpg.key"
+  proxy_config="$directory/proxy-config"
+  apt_write_client_config "$proxy_config" "$KKREPO_URL" "$proxy_name" \
+    "$directory/proxy-key.asc"
+  container="kkrepo-apt-proxy-${STAMP}"
+  apt_start_client "$container" "$image" "$proxy_config"
+  apt_prepare_client "$container"
+  apt_install_version "$container" "$package" "$version" "$expected_message" "$expected_sha"
+  apt_stop_client "$container"
+
+  set_repository_proxy_remote "$proxy_name" "http://host.docker.internal:9/unavailable/"
+  container="kkrepo-apt-proxy-offline-${STAMP}"
+  apt_start_client "$container" "$image" "$proxy_config"
+  apt_prepare_client "$container"
+  apt_install_version "$container" "$package" "$version" "$expected_message" "$expected_sha"
+  apt_stop_client "$container"
+
+  apt_create_proxy_repository "$resign_name" RESIGN "$upstream_url"
+  run_logged_output apt-resign-inrelease "$directory/resign-InRelease" \
+    curl -m 120 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    "$KKREPO_URL/repository/$resign_name/dists/stable/InRelease"
+  if cmp -s "$directory/proxy-upstream-InRelease" "$directory/resign-InRelease"; then
+    log "APT re-sign proxy unexpectedly returned the upstream signed bytes"
+    return 1
+  fi
+  run_logged_output apt-resign-packages "$directory/resign-Packages" \
+    curl -m 20 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    "$KKREPO_URL/repository/$resign_name/dists/stable/main/binary-all/Packages"
+  if grep -Fq 'Filename: .apt/' "$directory/resign-Packages"; then
+    log "APT re-sign proxy exposed an internal cache path"
+    return 1
+  fi
+  run_logged_output apt-resign-key "$directory/resign-key.asc" \
+    curl -m 20 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    "$KKREPO_URL/repository/$resign_name/gpg.key"
+  resign_config="$directory/resign-config"
+  apt_write_client_config "$resign_config" "$KKREPO_URL" "$resign_name" \
+    "$directory/resign-key.asc"
+  container="kkrepo-apt-resign-${STAMP}"
+  apt_start_client "$container" "$image" "$resign_config"
+  apt_prepare_client "$container"
+  apt_install_version "$container" "$package" "$version" "$expected_message" "$expected_sha"
+  apt_stop_client "$container"
+}
+
+test_apt() {
+  need docker
+  local directory="$WORK_DIR/apt"
+  local key_file="$directory/initial-key.asc"
+  local base_package="kkrepo-apt-base-$STAMP"
+  local base_file="$directory/${base_package}_1.0.0_all.deb"
+  mkdir -p "$directory"
+  run_logged_output apt-public-key "$key_file" \
+    curl -m 20 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    "$KKREPO_URL/repository/$APT_HOSTED_REPOSITORY/gpg.key"
+  apt_create_fixture "$base_file" "$base_package" 1.0.0 all "" \
+    "kkRepo APT architecture-all dependency"
+  apt_upload_fixture base "$base_file"
+
+  local entry label image label_slug architecture package container config
+  local v1_file v2_file v1_sha v2_sha v1_message v2_message
+  local final_package="" final_message="" final_image="" final_sha=""
+  IFS=',' read -r -a entries <<<"$APT_CLIENT_IMAGES"
+  for entry in "${entries[@]}"; do
+    label="${entry%%=*}"
+    image="${entry#*=}"
+    if [[ "$entry" != *=* || -z "$label" || -z "$image" ]]; then
+      log "invalid APT_E2E_IMAGES entry: $entry"
+      return 2
+    fi
+    label_slug="$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-')"
+    label_slug="${label_slug#-}"
+    label_slug="${label_slug%-}"
+    run_logged "apt-$label_slug-pull" docker pull "$image"
+    architecture="$(docker run --rm "$image" dpkg --print-architecture)"
+    package="kkrepo-apt-${label_slug}-${STAMP}"
+    container="kkrepo-apt-${label_slug}-${STAMP}"
+    config="$directory/config-$label_slug"
+    v1_file="$directory/${package}_1.0.0_${architecture}.deb"
+    v2_file="$directory/${package}_1.1.0_${architecture}.deb"
+    v1_message="kkRepo APT $label version 1.0.0"
+    v2_message="kkRepo APT $label version 1.1.0"
+    apt_create_fixture "$v1_file" "$package" 1.0.0 "$architecture" \
+      "$base_package (= 1.0.0)" "$v1_message"
+    apt_upload_fixture "$label_slug-v1" "$v1_file"
+    v1_sha="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$v1_file")"
+    apt_write_client_config "$config" "$KKREPO_URL" "$APT_HOSTED_REPOSITORY" "$key_file"
+    apt_start_client "$container" "$image" "$config"
+    apt_prepare_client "$container"
+    apt_install_version "$container" "$package" 1.0.0 "$v1_message" "$v1_sha"
+
+    apt_create_fixture "$v2_file" "$package" 1.1.0 "$architecture" \
+      "$base_package (= 1.0.0)" "$v2_message"
+    apt_upload_fixture "$label_slug-v2" "$v2_file"
+    v2_sha="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$v2_file")"
+    apt_upgrade_version "$container" "$package" 1.1.0 "$v2_message"
+    run_logged "apt-$label_slug-v2-bytes" docker exec \
+      -e APT_PACKAGE="$package" -e APT_VERSION=1.1.0 -e APT_SHA256="$v2_sha" \
+      "$container" sh -euxc '
+        cd /tmp
+        rm -f "${APT_PACKAGE}"_*.deb
+        apt-get download "$APT_PACKAGE=$APT_VERSION"
+        archive="$(find /tmp -maxdepth 1 -type f -name "${APT_PACKAGE}_*.deb" -print -quit)"
+        test "$(sha256sum "$archive" | cut -d " " -f 1)" = "$APT_SHA256"
+      '
+    local prefix="${package:0:1}"
+    run_logged "apt-$label_slug-delete-v1" curl -m 30 --fail-with-body -sS \
+      -u "$KKREPO_AUTH" -X DELETE \
+      "$KKREPO_URL/repository/$APT_HOSTED_REPOSITORY/pool/$prefix/$package/${package}_1.0.0_${architecture}.deb"
+    apt_assert_old_version_absent "$container" "$package" 1.0.0
+    apt_stop_client "$container"
+    final_package="$package"
+    final_message="$v2_message"
+    final_image="$image"
+    final_sha="$v2_sha"
+  done
+
+  [[ -n "$final_image" ]] || { log "APT client image matrix is empty"; return 2; }
+  apt_test_key_rotation "$directory" "$final_image" "$key_file"
+  apt_test_secondary_replica "$directory" "$final_image" "$final_package" 1.1.0 \
+    "$final_message"
+  apt_test_proxy_modes "$directory" "$final_image" "$final_package" 1.1.0 \
+    "$final_message" "$final_sha"
+}
+
 test_ansible() {
   local matrix="${ANSIBLE_GALAXY_BINS:-}"
   if [[ -z "$matrix" ]] && command -v ansible-galaxy >/dev/null 2>&1; then
@@ -2545,7 +2983,7 @@ run_selected_tests() {
   local test
 
   if [[ -z "$selection" || "$selection" == "all" ]]; then
-    tests=(raw maven npm pypi go helm cargo pub composer nuget rubygems yum conda terraform swift ansible docker-oci)
+    tests=(raw maven npm pypi go helm cargo pub composer nuget rubygems yum apt conda terraform swift ansible docker-oci)
   else
     IFS=',' read -r -a tests <<<"$selection"
   fi
@@ -2606,6 +3044,10 @@ run_selected_tests() {
       yum)
         test_yum
         register_cleanup_fixture yum yum-hosted "*6tunnel*" yum
+        ;;
+      apt|debian)
+        test_apt
+        register_cleanup_fixture apt "$APT_HOSTED_REPOSITORY" "*kkrepo-apt-*-$STAMP*" apt
         ;;
       conda)
         test_conda

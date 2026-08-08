@@ -7,6 +7,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.ComponentSearchRow;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.protocol.conda.CondaPath;
@@ -40,6 +41,7 @@ public class ComponentSearchController {
   private final SecurityManagementService securityService;
   private final SwiftRegistryDao swiftRegistry;
   private AnsibleGalaxyRegistryDao ansibleRegistry;
+  private AptRegistryDao aptRegistry;
   private CondaRegistryDao condaRegistry;
 
   @Autowired
@@ -60,6 +62,11 @@ public class ComponentSearchController {
   }
 
   @Autowired(required = false)
+  void setAptRegistry(AptRegistryDao aptRegistry) {
+    this.aptRegistry = aptRegistry;
+  }
+
+  @Autowired(required = false)
   void setCondaRegistry(CondaRegistryDao condaRegistry) {
     this.condaRegistry = condaRegistry;
   }
@@ -76,20 +83,57 @@ public class ComponentSearchController {
       @RequestParam(value = "q", required = false) String keyword,
       @RequestParam(value = "format", required = false) String format,
       @RequestParam(value = "limit", required = false) Integer limit,
+      @RequestParam(value = "distribution", required = false) String distribution,
+      @RequestParam(value = "component", required = false) String component,
+      @RequestParam(value = "architecture", required = false) String architecture,
+      @RequestParam(value = "sourcePackage", required = false) String sourcePackage,
+      @RequestParam(value = "checksum", required = false) String checksum,
+      HttpServletRequest request) {
+    return searchInternal(
+        keyword,
+        format,
+        limit,
+        new AptSearchFilters(
+            distribution, component, architecture, sourcePackage, checksum),
+        request);
+  }
+
+  ComponentSearchResponse search(
+      String keyword,
+      String format,
+      Integer limit,
+      HttpServletRequest request) {
+    return searchInternal(keyword, format, limit, AptSearchFilters.EMPTY, request);
+  }
+
+  private ComponentSearchResponse searchInternal(
+      String keyword,
+      String format,
+      Integer limit,
+      AptSearchFilters aptFilters,
       HttpServletRequest request) {
     AuthenticatedSubject subject = currentOrAnonymous(request).orElseThrow(() ->
         new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication required"));
     requireSearch(subject);
-    int effectiveLimit = limit == null ? DEFAULT_LIMIT : limit;
+    int effectiveLimit = limit == null
+        ? DEFAULT_LIMIT : Math.max(1, Math.min(limit, DEFAULT_LIMIT));
     RepositoryFormat repositoryFormat = parseFormat(format);
+    AptSearchFilters normalizedFilters = aptFilters.normalized();
+    if (normalizedFilters.present() && repositoryFormat != RepositoryFormat.APT) {
+      throw new ResponseStatusException(
+          HttpStatus.BAD_REQUEST, "APT coordinate filters require format=apt");
+    }
     Map<RepositoryBrowseKey, Boolean> browseDecisions = new HashMap<>();
-    List<ComponentSearchItem> items = componentDao.search(keyword, repositoryFormat, effectiveLimit).stream()
+    int queryLimit = normalizedFilters.present() ? DEFAULT_LIMIT : effectiveLimit;
+    List<ComponentSearchItem> items = componentDao.search(keyword, repositoryFormat, queryLimit).stream()
         .filter(row -> !BrowseAssetVisibility.hidden(row.format(), row.name())
             && !BrowseAssetVisibility.hidden(row.format(), row.storagePath()))
         .filter(row -> repositoryBrowseAllowed(subject, row, browseDecisions))
         .map(this::toItem)
+        .filter(normalizedFilters::matches)
+        .limit(effectiveLimit)
         .toList();
-    return new ComponentSearchResponse(Math.max(1, Math.min(effectiveLimit, DEFAULT_LIMIT)), items.size(), items);
+    return new ComponentSearchResponse(effectiveLimit, items.size(), items);
   }
 
   private ComponentSearchItem toItem(ComponentSearchRow row) {
@@ -112,7 +156,36 @@ public class ComponentSearchController {
     if (row.format() == RepositoryFormat.CONDA) {
       return condaDetails(row);
     }
+    if (row.format() == RepositoryFormat.APT) {
+      return aptDetails(row);
+    }
     return swiftDetails(row);
+  }
+
+  private Map<String, Object> aptDetails(ComponentSearchRow row) {
+    if (aptRegistry == null || row.storagePath() == null) {
+      return Map.of();
+    }
+    return aptRegistry.findPackageByPath(row.repositoryId(), row.storagePath())
+        .map(record -> {
+          LinkedHashMap<String, Object> details = new LinkedHashMap<>();
+          details.put("distribution", record.distribution());
+          details.put("component", record.component());
+          details.put("architecture", record.architecture());
+          if (record.sourcePackage() != null) details.put("sourcePackage", record.sourcePackage());
+          details.put("filename", record.filename());
+          details.put("sha256", record.sha256());
+          details.put("size", record.size());
+          details.put("sourceKind", record.sourceKind());
+          details.put("sourceRepository", row.repositoryName());
+          for (String field : List.of("Section", "Priority", "Maintainer", "Description", "Depends")) {
+            Object value = record.controlFields().get(field);
+            if (value != null) details.put(field.substring(0, 1).toLowerCase(Locale.ROOT)
+                + field.substring(1), value);
+          }
+          return Map.copyOf(details);
+        })
+        .orElseGet(Map::of);
   }
 
   private Map<String, Object> condaDetails(ComponentSearchRow row) {
@@ -227,6 +300,7 @@ public class ComponentSearchController {
       case "swift" -> RepositoryFormat.SWIFT;
       case "ansiblegalaxy", "ansible" -> RepositoryFormat.ANSIBLEGALAXY;
       case "conda" -> RepositoryFormat.CONDA;
+      case "apt" -> RepositoryFormat.APT;
       case "raw" -> RepositoryFormat.RAW;
       default -> null;
     };
@@ -274,6 +348,63 @@ public class ComponentSearchController {
   }
 
   private record RepositoryBrowseKey(String repositoryName, RepositoryFormat format) {
+  }
+
+  private record AptSearchFilters(
+      String distribution,
+      String component,
+      String architecture,
+      String sourcePackage,
+      String checksum) {
+    private static final AptSearchFilters EMPTY =
+        new AptSearchFilters(null, null, null, null, null);
+
+    AptSearchFilters normalized() {
+      String normalizedChecksum = normalized(checksum);
+      if (normalizedChecksum != null
+          && (normalizedChecksum.length() < 8
+              || normalizedChecksum.length() > 64
+              || !normalizedChecksum.matches("[0-9a-fA-F]+"))) {
+        throw new ResponseStatusException(
+            HttpStatus.BAD_REQUEST, "APT checksum must be an 8-64 character hexadecimal prefix");
+      }
+      return new AptSearchFilters(
+          normalized(distribution),
+          normalized(component),
+          normalized(architecture),
+          normalized(sourcePackage),
+          normalizedChecksum == null ? null : normalizedChecksum.toLowerCase(Locale.ROOT));
+    }
+
+    boolean present() {
+      return distribution != null || component != null || architecture != null
+          || sourcePackage != null || checksum != null;
+    }
+
+    boolean matches(ComponentSearchItem item) {
+      if (!present()) return true;
+      Map<String, Object> details = item.details();
+      return matchesExact(distribution, details.get("distribution"))
+          && matchesExact(component, details.get("component"))
+          && matchesExact(architecture, details.get("architecture"))
+          && matchesExact(sourcePackage, details.get("sourcePackage"))
+          && matchesChecksum(checksum, details.get("sha256"));
+    }
+
+    private static boolean matchesExact(String expected, Object actual) {
+      return expected == null
+          || (actual != null && expected.equalsIgnoreCase(actual.toString()));
+    }
+
+    private static boolean matchesChecksum(String expected, Object actual) {
+      return expected == null
+          || (actual != null
+              && actual.toString().toLowerCase(Locale.ROOT).startsWith(expected));
+    }
+
+    private static String normalized(String value) {
+      return value == null || value.isBlank() ? null : value.trim();
+    }
   }
 
   public record ComponentSearchResponse(int limit, int count, List<ComponentSearchItem> items) {

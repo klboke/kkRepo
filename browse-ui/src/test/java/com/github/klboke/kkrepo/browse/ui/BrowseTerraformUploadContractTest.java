@@ -39,7 +39,7 @@ class BrowseTerraformUploadContractTest {
     assertTrue(javascript.contains("const repoUrl = repositoryBaseUrl().replace(/\\/+$/, \"\")"));
     assertTrue(javascript.contains("crumbIcon: repositoryFormatIcon()"));
     assertTrue(javascript.contains("await activateTreeBranch(entry, toggleExpand)"));
-    assertTrue(index.contains("/browse/assets/browse.js?v=20260807-conda-1"));
+    assertTrue(index.contains("/browse/assets/browse.js?v=20260808-apt-1"));
   }
 
   private String resource(String path) throws IOException {

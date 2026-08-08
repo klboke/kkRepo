@@ -372,7 +372,7 @@ class PypiRepositoryBlackBoxCompatibilityTest {
               """.formatted(config.proxyRepository())))));
     }
     String groupPayload = """
-        {"name":"%s","recipe":"pypi-group","online":true,"strictContentTypeValidation":true,"group":{"memberNames":["%s","%s"]}}
+        {"name":"%s","recipe":"pypi-group","online":true,"blobStoreName":"default","strictContentTypeValidation":true,"group":{"memberNames":["%s","%s"]}}
         """.formatted(config.groupRepository(), config.hostedRepository(), config.proxyRepository());
     repositories = send(config.nexusPlusInternal("/internal/repositories").GET()).bodyAsString();
     if (!repositories.contains("\"name\":\"" + config.groupRepository() + "\"")) {

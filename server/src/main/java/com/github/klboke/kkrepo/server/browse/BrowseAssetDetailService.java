@@ -7,6 +7,7 @@ import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
@@ -70,6 +71,7 @@ public class BrowseAssetDetailService {
   private final SwiftRegistryDao swiftDao;
   private AnsibleGalaxyRegistryDao ansibleDao;
   private CondaRegistryDao condaDao;
+  private AptRegistryDao aptDao;
   private final BlobStorageRegistry blobStorageRegistry;
   private final ObjectMapper objectMapper;
 
@@ -99,6 +101,11 @@ public class BrowseAssetDetailService {
   @Autowired(required = false)
   void setCondaRegistryDao(CondaRegistryDao condaDao) {
     this.condaDao = condaDao;
+  }
+
+  @Autowired(required = false)
+  void setAptRegistryDao(AptRegistryDao aptDao) {
+    this.aptDao = aptDao;
   }
 
   public BrowseAssetDetailService(
@@ -193,6 +200,9 @@ public class BrowseAssetDetailService {
     Map<String, Object> conda = source.format() == RepositoryFormat.CONDA
         ? condaAttributes(source, asset, publicPath)
         : Map.of();
+    Map<String, Object> apt = source.format() == RepositoryFormat.APT
+        ? aptAttributes(source, asset)
+        : Map.of();
     Map<String, Object> swift = source.format() == RepositoryFormat.SWIFT
         ? swiftAttributes(source, asset)
         : Map.of();
@@ -225,6 +235,7 @@ public class BrowseAssetDetailService {
         pub,
         composer,
         conda,
+        apt,
         swift,
         ansible,
         provenance);
@@ -268,6 +279,43 @@ public class BrowseAssetDetailService {
       put(conda, key, record.metadata().get(key));
     }
     return Collections.unmodifiableMap(conda);
+  }
+
+  private Map<String, Object> aptAttributes(
+      RepositoryRecord source, AssetRecord asset) {
+    if (aptDao == null) {
+      return Map.of();
+    }
+    AptRegistryDao.PackageRecord record = aptDao.findPackageByPath(source.id(), asset.path())
+        .orElseThrow(() -> new ResponseStatusException(
+            HttpStatus.NOT_FOUND, "APT package identity not found"));
+    if (record.assetId() != null && !record.assetId().equals(asset.id())) {
+      throw new ResponseStatusException(
+          HttpStatus.CONFLICT, "APT package asset does not match registry state");
+    }
+    LinkedHashMap<String, Object> apt = new LinkedHashMap<>();
+    put(apt, "distribution", record.distribution());
+    put(apt, "component", record.component());
+    put(apt, "architecture", record.architecture());
+    put(apt, "package", record.packageName());
+    put(apt, "version", record.version());
+    put(apt, "source_package", record.sourcePackage());
+    put(apt, "filename", record.filename());
+    put(apt, "md5", record.md5());
+    put(apt, "sha1", record.sha1());
+    put(apt, "sha256", record.sha256());
+    put(apt, "size", record.size());
+    put(apt, "source_kind", record.sourceKind());
+    put(apt, "source_repository", source.name());
+    put(apt, "revision", record.revision());
+    put(apt, "indexed_at", record.indexedAt());
+    for (String field : List.of("Section", "Priority", "Maintainer", "Description", "Depends")) {
+      Object value = record.controlFields().get(field);
+      if (value != null) {
+        put(apt, field.substring(0, 1).toLowerCase(Locale.ROOT) + field.substring(1), value);
+      }
+    }
+    return Collections.unmodifiableMap(apt);
   }
 
   private Map<String, Object> ansibleAttributes(
@@ -427,6 +475,7 @@ public class BrowseAssetDetailService {
           Map.of(),
           Map.of(),
           Map.of(),
+          Map.of(),
           swiftReleaseAttributes(source, row),
           Map.of(),
           Map.of("dynamic", true, "hashes_not_verified", false)));
@@ -520,6 +569,7 @@ public class BrowseAssetDetailService {
           null,
           Map.copyOf(checksum),
           Map.of("generated", true, "format", "swift-manifest-browse"),
+          Map.of(),
           Map.of(),
           Map.of(),
           Map.of(),
@@ -669,6 +719,7 @@ public class BrowseAssetDetailService {
         Map.of(),
         Map.of(),
         Map.of(),
+        Map.of(),
         provenance);
   }
 
@@ -693,6 +744,7 @@ public class BrowseAssetDetailService {
         null,
         Map.of(),
         content,
+        Map.of(),
         Map.of(),
         Map.of(),
         Map.of(),
@@ -841,6 +893,22 @@ public class BrowseAssetDetailService {
     if (visibleRepository.format() == RepositoryFormat.CONDA) {
       return new ResolvedStoragePath(
           CondaBrowsePaths.toStoragePath(normalized), sourceRepositoryName);
+    }
+    if (visibleRepository.format() == RepositoryFormat.APT && aptDao != null) {
+      String[] segments = normalized.split("/", -1);
+      if (segments.length == 6) {
+        Optional<AptRegistryDao.PackageRecord> projected = aptDao.findPackage(
+            visibleRepository.id(),
+            segments[0],
+            segments[1],
+            segments[2],
+            segments[3],
+            segments[4]);
+        if (projected.isPresent() && segments[5].equals(projected.orElseThrow().filename())) {
+          return new ResolvedStoragePath(
+              projected.orElseThrow().path(), sourceRepositoryName);
+        }
+      }
     }
     return new ResolvedStoragePath(normalized, sourceRepositoryName);
   }
@@ -1381,6 +1449,7 @@ public class BrowseAssetDetailService {
       Map<String, Object> pub,
       Map<String, Object> composer,
       Map<String, Object> conda,
+      Map<String, Object> apt,
       Map<String, Object> swift,
       Map<String, Object> ansible,
       Map<String, Object> provenance) {}

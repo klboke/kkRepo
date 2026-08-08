@@ -408,7 +408,8 @@ public class NexusRestClient {
           terraform: 'TERRAFORM',
           swift: 'SWIFT',
           ansiblegalaxy: 'ANSIBLEGALAXY',
-          conda: 'CONDA'
+          conda: 'CONDA',
+          apt: 'APT'
         ]
         return prefixes[format]
       }
@@ -819,7 +820,8 @@ public class NexusRestClient {
           terraform: 'TERRAFORM',
           swift: 'SWIFT',
           ansiblegalaxy: 'ANSIBLEGALAXY',
-          conda: 'CONDA'
+          conda: 'CONDA',
+          apt: 'APT'
         ]
         def upperTables = []
         allTables.each { tableName ->
@@ -1098,6 +1100,86 @@ public class NexusRestClient {
           }
           return shape
         }
+        def inspectAptShape = { tableNames ->
+          def shape = [
+            packageAssetPath: false,
+            aptAssetAttributes: false,
+            sha256Checksum: false,
+            inspectedAssetCount: 0,
+            packageAssetCount: 0
+          ]
+          def fingerprintText = { value ->
+            if (value == null) {
+              return ''
+            }
+            if (value instanceof byte[]) {
+              return new String(value, 'UTF-8').toLowerCase()
+            }
+            if (value.getClass().name == 'org.postgresql.util.PGobject'
+                && value.respondsTo('getValue')) {
+              return String.valueOf(value.getValue()).toLowerCase()
+            }
+            return String.valueOf(value).toLowerCase()
+          }
+          def sql = '''
+              select
+                a.path as asset_path,
+                a.attributes as asset_attributes,
+                b.checksums as blob_checksums,
+                c.namespace as component_namespace,
+                c.name as component_name,
+                c.version as component_version,
+                c.attributes as component_attributes
+              from ''' + tableNames.asset + ''' a
+              left join ''' + tableNames.assetBlob + ''' b on a.asset_blob_id = b.asset_blob_id
+              left join ''' + tableNames.component + ''' c on a.component_id = c.component_id
+              order by a.path
+              limit 1024'''
+          try {
+            def statement = connection.prepareStatement(sql)
+            try {
+              def rows = statement.executeQuery()
+              try {
+                while (rows.next()) {
+                  shape.inspectedAssetCount++
+                  def path = fingerprintText(rows.getObject('asset_path')).replaceFirst('^/+', '')
+                  if (!path.startsWith('pool/') || !path.endsWith('.deb')) {
+                    continue
+                  }
+                  shape.packageAssetCount++
+                  def parts = path.split('/')
+                  if (parts.length >= 4 && parts[parts.length - 1].length() <= 255) {
+                    shape.packageAssetPath = true
+                  }
+                  def attributes = fingerprintText(rows.getObject('asset_attributes')) + ' ' +
+                      fingerprintText(rows.getObject('component_attributes'))
+                  def namespace = fingerprintText(rows.getObject('component_namespace'))
+                  def name = fingerprintText(rows.getObject('component_name'))
+                  def version = fingerprintText(rows.getObject('component_version'))
+                  if ((attributes.contains('apt') || attributes.contains('debian'))
+                      && !namespace.isEmpty() && !name.isEmpty() && !version.isEmpty()) {
+                    shape.aptAssetAttributes = true
+                  }
+                  def checksums = fingerprintText(rows.getObject('blob_checksums'))
+                  if ((checksums.contains('"sha256"') || checksums.contains('"sha-256"'))
+                      && (checksums =~ /[0-9a-f]{64}/).find()) {
+                    shape.sha256Checksum = true
+                  }
+                }
+              } finally {
+                rows.close()
+              }
+            } finally {
+              statement.close()
+            }
+          } catch (e) {
+            shape.packageAssetPath = false
+            shape.aptAssetAttributes = false
+            shape.sha256Checksum = false
+            out.warnings << 'APT datastore content shape probe failed: ' + errorText(e)
+          }
+          return shape
+        }
         def contentModels = [:]
         datastoreFormats.each { format, prefix ->
           def tableNames = [
@@ -1149,6 +1231,9 @@ public class NexusRestClient {
           }
           if (format == 'conda' && requiredColumnsPresent) {
             contentModel.formatShape = inspectCondaShape(tableNames)
+          }
+          if (format == 'apt' && requiredColumnsPresent) {
+            contentModel.formatShape = inspectAptShape(tableNames)
           }
           contentModels[format] = contentModel
         }

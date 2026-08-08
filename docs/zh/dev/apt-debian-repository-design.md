@@ -4,16 +4,23 @@
 
 ## 当前支持状态与落地结论
 
-截至 2026-08-08，kkrepo 尚未实现 APT 仓库：代码中没有 `RepositoryFormat.APT`、`apt-hosted`、`apt-proxy` 或 `protocol-apt`，路线图此前只保留了 `APT / Debian` 占位项。
+截至 2026-08-08，本文定义的第一阶段能力已经落地：代码已注册 `RepositoryFormat.APT`、`apt-hosted`、`apt-proxy` 和独立 `protocol-apt`，并接入双数据库持久化、Admin/Browse/Search、Components API、cleanup/scanning、Nexus definition/content migration 和多副本发布协调。路线图状态同步调整为“已实现”。
 
-本设计完成后，路线图状态调整为“设计已完成、待实现”，并把 APT 提升为下一个仓库格式优先项。落地判断如下：
+当前验证证据包括：
+
+- Nexus 3.94 APT 黑盒对照，覆盖仓库根 POST、Components API、canonical pool path、Packages/Release/InRelease、签名、HTTP validator、Range、Browse 和 Search。
+- Debian 12、Ubuntu 24.04 和 Debian testing 真实客户端，覆盖 scoped keyring、`auth.conf`、update/download/install/upgrade、`Architecture: all`、删除、key rotation、proxy passthrough/re-sign 和断网 cache。
+- MySQL/PostgreSQL contract、snapshot CAS/fencing lease 与双副本读取；Migration E2E 对 Nexus 3.92.x-3.94.x H2/PostgreSQL shape fail closed，并要求目标端显式导入 signing key。
+- 同机、同 payload、交替顺序的 Nexus 3.94 对照结果记录在 [APT 性能基线](apt-performance-baseline.md)，原始测量可由仓库脚本复现。
+
+落地结论如下：
 
 - APT 适合在 kkrepo 中落地。官方仓库格式、真实客户端和 Nexus reference 都可用于黑盒验证，协议风险可控。
-- 总体改动量为中到大。难点不在 `.deb` 下载，而在签名 metadata 的原子发布、压缩索引的一致性、Proxy 的签名边界、密钥轮换以及多副本重建协调。
-- 第一版只注册 `apt-hosted` 和 `apt-proxy`。当前 Nexus 官方兼容矩阵明确不支持 APT group；APT 客户端本身支持配置多个有序 source，因此不为追求形式统一而发明 `apt-group`。
+- 总体改动量为中到大。实现重点不在 `.deb` 下载，而在签名 metadata 的原子发布、压缩索引的一致性、Proxy 的签名边界、密钥轮换以及多副本重建协调。
+- 当前只注册 `apt-hosted` 和 `apt-proxy`。Nexus 官方兼容矩阵明确不支持 APT group；APT 客户端本身支持配置多个有序 source，因此不为追求形式统一而发明 `apt-group`。
 - Hosted 以结构化仓库、二进制 `.deb`、签名 `Release` / `InRelease`、`Packages` 索引和 Components API 上传为核心。
 - Proxy 同时覆盖透明透传和 Nexus 风格可选重签名，但两种模式使用不同的缓存与可信边界。
-- Flat repository、source package、metadata snapshot、PDiff、Contents 和 Translation 按分阶段边界实现，不阻塞第一版真实 `apt update` / `apt install`。
+- Flat hosted、source package、PDiff、生成式 Contents/Translation 和 `.udeb` 仍属于后续扩展，不影响当前 binary `.deb` 的真实 `apt update` / `apt install` 闭环。
 
 ## 调研基线
 
@@ -41,7 +48,7 @@ Nexus 兼容结论：
 - Hosted 支持仓库根 POST 上传和 UI 上传；Components API 使用单一 `apt.asset` multipart 字段。
 - Proxy 支持 distribution、`Enforce Distribution`、flat mode，以及未配置 signing 时的 metadata passthrough 和配置 signing 后的 metadata re-signing。
 - Proxy 在未配置 distribution 时可工作在 multi-distribution 模式；启用 enforce 但未配置 distribution 属于错误配置，kkrepo 应在保存配置时直接拒绝，而不是复制参考实现的 fail-open 行为。
-- Nexus 提供 `/gpg.key`、metadata rebuild 和 metadata snapshot 等产品行为；第一版优先完成安全发布和真实客户端闭环，snapshot 放在后续阶段。
+- Nexus 提供 `/gpg.key`、metadata rebuild 和面向用户的 metadata snapshot 等产品行为；当前版本已用内部 immutable snapshot 保证发布原子性，但不暴露 Nexus 风格的 snapshot 管理 API。
 
 ## 功能范围
 
@@ -66,7 +73,8 @@ Nexus 兼容结论：
 
 3. APT proxy re-signing
    - 配置本地 signing key 后，为指定 distribution 或已观察到的多个 distribution 生成本地 metadata。
-   - 本地 metadata 只声明已经完整缓存并校验的 package，不把尚未缓存的上游 package 写入本地索引。
+   - 先用上游 Release 的 SHA-256/size 校验 Packages，再在安全上限内拉取其中声明的全部 package，并逐个校验 size/SHA-256；只有完整投影成功后才发布本地 metadata。
+   - 单次重签名最多接受 10,000 个 package、20 GiB package 总量；超限、缺项或校验失败都保持旧 snapshot 并失败关闭。
    - 重签名快照沿用 hosted 的 immutable build + CAS publish 机制，不能在同一 Release 下混用来自不同 rebuild 的压缩索引。
    - 首次本地 metadata 尚未生成时的 passthrough、rebuild 中的响应以及 key rotation 行为必须先记录 Nexus 黑盒结果，再固定状态码。
 
@@ -83,7 +91,8 @@ Nexus 兼容结论：
 - Flat hosted repository；第一版只要求 flat proxy passthrough。
 - `Contents-*`、Translation 和 PDiff 的 hosted 生成。
 - `.udeb` 与 `debian-installer/binary-*` 索引。
-- Nexus 风格 metadata snapshot；启用前必须同时解决 snapshot metadata 与 package blob 的保留关系。
+- Nexus 风格的 snapshot 管理 API；当前内部 `apt_snapshot` 只用于原子发布与历史 by-hash 读取。
+- 历史 snapshot/package blob 的自动保留期回收，以及超大 hosted Packages 的 cursor/spool 流式生成；当前版本保守地保留历史对象并按单 architecture 在内存中构建索引。
 - Release 中 `NotAutomatic`、`ButAutomaticUpgrades`、`Signed-By`、Changelogs 和 Snapshots 等高级字段。
 - 可选的外部 KMS/HSM/OpenPGP signer；初版使用 kkrepo 加密后的 repository signing key。
 
@@ -104,7 +113,7 @@ Nexus 兼容结论：
 | `protocol-apt` | path parser、deb822 codec、Debian version comparator、`.deb` control parser、Release model、media type |
 | `persistence-jdbc` | APT DAO、package projection、suite revision、snapshot、signing key、proxy distribution state 和 lease |
 | `persistence-mysql` / `persistence-postgresql` | 同号 APT schema migration 与双库索引/约束 |
-| `server/apt` | hosted importer、metadata builder、OpenPGP signer、proxy passthrough/re-signing 和 rebuild worker |
+| `server/apt` | hosted importer、metadata builder、OpenPGP signer、proxy passthrough/re-signing 和 rebuild pipeline |
 | server 通用入口 | Controller、安全过滤、Components API、Browse/Search、cleanup、metrics 和 repository 生命周期 |
 | `migration-nexus` | Nexus APT definition/content shape 探测、迁移计划、writer 和校验器 |
 | `admin-ui` / `browse-ui` | recipe 配置、key 管理、上传、浏览、Usage 和 rebuild 状态 |
@@ -152,7 +161,7 @@ password <token-or-password>
 | `Packages.gz/.bz2/.xz` | 同一 Packages bytes 的压缩表示 | 原样缓存上游 | 同一 Packages bytes 的压缩表示 |
 | `.../by-hash/SHA256/<digest>` | immutable metadata blob | 原样缓存上游 | immutable metadata blob |
 | `/pool/<prefix>/<package>/<file>.deb` | 读取 hosted blob | 按同一路径代理并缓存 | 读取已校验 proxy cache |
-| `/snapshots/<id>/...` | 后续阶段 | 后续阶段 | 后续阶段 |
+| `/snapshots/<id>/...` | 不暴露；内部 snapshot 仅用于发布 | 不适用 | 不暴露；内部 snapshot 仅用于发布 |
 
 `pool` 的 prefix、filename 中 epoch 处理、architecture `all` 的索引归属，以及 Nexus 是否生成额外压缩表示，必须在 M0 对 Nexus reference 上传 fixture 后固化；实现不能靠示例文件名反推 package identity。
 
@@ -236,78 +245,60 @@ Debian version comparator 必须按官方 algorithm 实现并做 differential te
 ### 通用表复用
 
 - `repository` / `repository_member`：APT repository 定义；第一版没有 APT member。
+- `repository.attributes_json`：distribution、component、architectures、flat/enforce、metadata mode、Valid-Until 和加密后的 proxy credential 等 APT 配置；不另建重复的 config 表。
 - `component`：distribution/component 下的 package name + version。
 - `asset` / `asset_blob` / `blob`：`.deb`、public key 和 immutable/generated metadata。
 - `browse_node`、search projection、audit、cleanup 和 scan outbox：复用通用能力。
-- `repository_index_rebuild_marker`：扩展 `APT_METADATA` kind，用于 crash recovery 和管理员 rebuild。
 
 ### APT 专用表
 
-建议新增：
+V42 在 MySQL/PostgreSQL 同号落地七张表：
 
-1. `apt_repository_config`
-   - `repository_id` unique FK。
-   - `distribution`、`default_component`、`architectures`、`flat_mode`、`enforce_distribution`。
-   - `proxy_mode`：`PASSTHROUGH` 或 `RESIGN`。
-   - `valid_until_seconds` nullable。
-   - `active_signing_key_revision` nullable；hosted 必填，passthrough proxy 可为空。
+1. `apt_package_record`
+   - 当前 repository/distribution/component/package/version/architecture identity，使用 coordinate hash 唯一约束。
+   - component/asset 引用、canonical path、control fields、source package、size、MD5、SHA-1、SHA-256、来源类型与 mutation revision。
 
-2. `apt_package`
-   - repository/distribution/component/package/version/architecture identity 与 immutable generation。
-   - component id、asset id、blob id、canonical path、size、MD5、SHA-1、SHA-256。
-   - source package、section、priority、maintainer、description、dependency fields、Multi-Arch。
-   - canonical Packages stanza 或生成 stanza 所需的受限字段投影。
-   - `introduced_revision` 与 nullable `retired_revision`；target revision 只读取在该 revision 可见的 generation。
-   - state：`STAGED`、`PUBLISHED`、`RETIRED`、`FAILED`。
-   - unique `(repository_id, distribution, component, package_name, version, architecture, generation)`。
+2. `apt_package_tombstone`
+   - 保存已删除 coordinate、asset path、删除 revision、原因和时间；防止多副本并发删除丢失状态。
 
-3. `apt_package_head`
-   - unique `(repository_id, distribution, component, package_name, version, architecture)`。
-   - current package generation、last mutation revision 与 tombstone 状态。
-   - coordinate lease 下更新，保证任一时刻只有一个期望中的当前 generation。
+3. `apt_suite_state`
+   - `(repository_id, distribution_name)` 为主键。
+   - desired/published revision、实际 signing key revision、发布时间和最近构建错误。
 
-4. `apt_suite_revision`
-   - `(repository_id, distribution)` unique。
-   - desired revision、published revision、published snapshot id、config revision、updated_at。
-   - 任何 package mutation 或 signing config mutation 递增 desired revision；mutation 同时记录其 revision。
+4. `apt_snapshot`
+   - repository/distribution/revision、signing key revision、canonical-to-hidden manifest、Release SHA-256、创建/发布时间。
+   - 与 suite published revision 共同构成当前可见 snapshot；同一 revision 的内容不可变。
 
-5. `apt_metadata_snapshot`
-   - repository/distribution/revision、state、signing key revision、Release digest、Date、可选 Valid-Until。
-   - 记录 immutable metadata asset id 集合的 manifest blob 或规范化子表。
-   - state：`BUILDING`、`READY`、`PUBLISHED`、`SUPERSEDED`、`FAILED`。
-
-6. `apt_signing_key`
-   - repository id、revision、fingerprint、key id、public armor、encrypted private material、active、created_at、retired_at。
+5. `apt_signing_key`
+   - repository id、revision、fingerprint、key id、public armor、encrypted private material、active 和 created_at。
    - private key 与 passphrase 使用 `SecretCipher(EncryptionSecrets.credentialSecret())` 加密；API 永不回显 private material。
 
-7. `apt_proxy_distribution_state`
-   - repository/distribution、last observed Release identity、validator、expiry、projection revision、re-sign status 和 last error。
+6. `apt_proxy_distribution`
+   - repository/distribution、last observed Release identity、Release 覆盖的 index SHA-256/size manifest、观察时间和 signature 状态。
    - multi-distribution proxy 通过此表恢复已观察 distribution，不能依赖单 JVM set。
 
-8. `apt_coordinate_lease`
+7. `apt_publish_lease`
    - lease key、owner、fencing token、expires_at、attempt count、updated_at。
-   - 用于 package coordinate mutation、suite snapshot build 和 key rotation。
+   - 用于 package coordinate mutation 和 suite snapshot publish；过期后其他副本可用递增 fencing token 接管。
 
-所有 identity 字段都使用显式长度上限与 canonical form。MySQL 和 PostgreSQL migration 使用相同版本号并由 persistence contract 覆盖 unique constraint、CAS publish、lease takeover、分页读取和清理。
+所有 identity 字段都使用显式长度上限与 canonical form。MySQL 和 PostgreSQL migration 使用相同版本号并由 persistence contract 覆盖 unique constraint、CAS publish、lease takeover、snapshot/签名/proxy 状态读取和 repository 级清理。
 
 ## Hosted 上传与原子发布
 
 APT 的正确性单位不是单个 `Packages.gz`，而是一个由同一 signed Release 引用的完整 metadata snapshot。上传流程：
 
 1. Controller 完成认证、recipe、online、write policy 和 `ADD`/`EDIT` 权限检查。
-2. 上传流写入受限临时文件，流式计算 checksum；`.deb` inspector 提取并校验 control identity。
-3. 把 blob 写入隐藏 staging asset；长时间 OSS/S3 上传期间不持有数据库事务。
-4. 获取 package coordinate lease，在短事务内复查 write policy、重复 identity、checksum 和目标 revision。
-5. 创建 immutable package generation、更新 `apt_package_head`、为被替换 generation 写 `retired_revision`，递增 suite desired revision，并 enqueue scoped `APT_METADATA` marker。
-6. 当前请求尝试获取 suite snapshot lease。获得者捕获 target desired revision，在事务外只读取该 revision 可见的 generation 并构建 immutable snapshot；更高 revision 的并发 mutation 留给下一轮。
-7. Builder 从数据库 cursor 流式生成每个 architecture 的 Packages spool，再生成压缩表示、Release、InRelease 和 Release.gpg，写入 `.apt/generated/<distribution>/<revision>/...` 隐藏资产。
-8. Builder 在短事务内用 `(target_revision, fencing_token, config_revision, signing_key_revision)` CAS 发布 snapshot pointer，并把该 revision 已纳入的 package generation 切换为 `PUBLISHED`。
-9. 对外 route 只读取 published snapshot manifest 引用的 package generation。任一构建失败时继续提供上一个完整 snapshot，不暴露半套新 metadata。
-10. 提交后解除 staging 引用；旧 snapshot 和 tombstoned package blob 按 by-hash/client grace period 延迟清理。
+2. 上传流写入有大小/时间限制的临时文件并计算 checksum；`.deb` inspector 提取并校验 control identity、canonical filename 与 pool path。
+3. 获取 package coordinate lease，复查 write policy、重复 identity 和 path 冲突，再通过通用 hosted 存储把 blob、asset、component 与 Browse 投影写入共享存储/数据库。
+4. `apt_package_record` upsert 在短事务内分配 repository mutation revision、推进 suite desired revision；替换时解绑旧 component/Browse 投影。
+5. 当前请求获取 suite publish lease。获得者捕获当前 desired revision，在事务外读取当前 projection，构建 Packages 的四种表示、Release、InRelease 和 Release.gpg，并写入 `.apt/snapshots/<distribution>/<revision>/...` 隐藏资产。
+6. Builder 完成所有对象后，通过 `(desired_revision, published_revision, owner, fencing_token, lease expiry)` 条件更新发布 snapshot；并发 mutation 使 CAS 失败时会重新读取 revision 并重建。
+7. 对外 metadata route 只通过 published snapshot manifest 解析 canonical path。任一构建失败时继续提供上一个完整 snapshot，不暴露半套新 metadata。
+8. 当前版本保留历史 snapshot、by-hash 对象和被删除 package blob，优先保证已有客户端可继续下载；自动 retention 回收在后续版本补充。
 
 如果请求在发布提交后断连，客户端重试同一 coordinate + checksum 应返回幂等成功；同一 coordinate + 不同 checksum 按 write policy 拒绝或替换，并生成新 revision。
 
-管理员“Rebuild APT metadata”和 key rotation 使用同一 pipeline，不允许维护第二套生成逻辑。Worker claim、lease 和 snapshot pointer 都持久化，使任意副本都能接管崩溃任务。
+管理员“Rebuild APT metadata”和 key rotation 使用同一同步 pipeline，不维护第二套生成逻辑。Lease 和 snapshot pointer 都持久化，其他副本在 lease 过期后可接管；没有节点本地状态参与正确性判断。
 
 ## Metadata 生成
 
@@ -318,7 +309,7 @@ APT 的正确性单位不是单个 `Packages.gz`，而是一个由同一 signed 
 - stanza 从已校验 control fields 生成，再追加 canonical `Filename`、`Size`、`MD5sum`、`SHA1` 和 `SHA256`。
 - `Filename` 必须是 archive root 相对路径，不含 `.`、`..`、encoded separator 或 query。
 - 稳定排序至少以 package name、Debian version、architecture 和 filename 为键；具体同版本排序通过 fixture 固定。
-- 生成器使用 JDBC cursor + 临时 spool，不把完整仓库的 stanza list、四种压缩表示和签名字节同时放进 heap。
+- 当前生成器按 architecture 读取当前 package projection，在内存中生成稳定 Packages bytes 及四种压缩表示；因此超大 hosted index 的 cursor/spool 化列为后续扩展，运维侧应结合 JVM 容量控制单 suite 规模。
 - GZIP/BZIP2/XZ 参数固定，保证同 revision 重建产生相同 Packages 表示；timestamp 字段不得使用请求时间。
 
 ### Release 与签名
@@ -332,27 +323,27 @@ Release 至少写入：
 - SHA256；为 Nexus/旧客户端兼容可同时生成 MD5Sum 和 SHA1，但安全判断不依赖弱 hash。
 - 可选 Valid-Until；关闭时省略而不是写无限未来时间。
 
-每个 checksum 行的 size 和 digest 必须基于已经写完且 fsync/close 的最终 bytes。生成顺序为 Packages -> compressed indices -> Release -> signatures；只有所有 blob 写入并复读校验成功后才能发布 pointer。
+每个 checksum 行的 size 和 digest 都基于最终 representation bytes。生成顺序为 Packages -> compressed indices -> Release -> signatures；只有所有 revisioned hidden asset 都写入成功后才能 CAS 发布 pointer。
 
 OpenPGP signer：
 
 - 复用 Bouncy Castle provider 和 kkrepo credential encryption，不调用外部 `gpg` 进程作为运行时正确性依赖。
 - `InRelease` 使用 cleartext signature，`Release.gpg` 对完全相同的 Release bytes 生成 detached signature。
-- signature hash 至少为 SHA-256；key algorithm、过期时间和 subkey 选择在导入时校验。
+- signature hash 使用 SHA-256；导入时校验 signing capability、passphrase、撤销和有效期，并选择可用 signing key。
 - `/gpg.key` 返回 active public key。轮换窗口可同时发布旧/新 public key bundle，但每个 snapshot 只记录实际 signing key revision。
 - key rotation 先保存并验证新 key，再触发全量 rebuild；新 snapshot 发布前旧 snapshot 保持可用。
 
 ### By-hash 与保留
 
 - 每个 index 表示同时写 canonical path 和 `by-hash/SHA256/<digest>` identity；route 可以通过 snapshot manifest 映射到同一 blob，避免重复存储。
-- 当前版本必须保留，至少再保留两个历史版本；实际保留时间还要覆盖 metadata cache age、最大客户端离线窗口和 cleanup policy。
+- 当前版本和历史版本均保留；by-hash route 最多查询最近 100 个已发布 snapshot。自动保留期回收尚未启用，避免在缺少客户端 grace-period 配置时提前删除仍被旧 metadata 引用的对象。
 - canonical path 的 ETag 基于当前 blob digest；by-hash path 使用 immutable cache headers。
-- 清理 snapshot 前先证明没有 published pointer、snapshot retention、迁移任务或 blob reference 依赖。
+- 后续增加自动清理时，必须先证明没有 published pointer、snapshot retention、迁移任务或 blob reference 依赖。
 
 ## 删除与 write policy
 
-- 删除 component/package 先获取 coordinate/suite lease，在事务中写 tombstone、递增 desired revision 并 enqueue rebuild。
-- 新 snapshot 成功发布后，该 package 才从 Packages 消失；旧 snapshot 和 package blob 在 grace period 内仍可服务已有客户端。
+- 删除 component/package 先获取 coordinate lease，在事务中写 tombstone、递增 desired revision，随后沿同一同步 pipeline 发布新 snapshot。
+- 新 snapshot 成功发布后，该 package 才从 Packages 消失；旧 snapshot 和 package blob 继续保留并可服务已有客户端，自动 grace-period 回收尚未启用。
 - 删除失败或 rebuild 失败时继续提供旧 snapshot，不允许 Packages 已删但 Release 仍引用旧 checksum，或反向出现新 Packages 未签名的状态。
 - `ALLOW_ONCE` 对已存在 coordinate 拒绝；`ALLOW` 允许相同 identity 替换，但必须经过完整 snapshot pipeline；`DENY` 拒绝所有写入。
 - Browse/API 删除与 repository content DELETE 复用同一路径，不能直接删 asset 绕过 APT projection。
@@ -371,13 +362,14 @@ Passthrough 保留上游信任链，不生成本地签名：
 6. `.deb` 下载在首次缓存时校验已知 Packages checksum/size；如果尚无可信投影，先按 RawProxy 安全边界缓存，客户端仍会根据 Packages 校验，后台投影不能声称已验证。
 7. 上游 404/410 使用短 negative TTL；auth error、429、5xx 和 timeout 不进入 not-found cache。
 
-Proxy metadata projection 以 Release identity 为 revision。只有 index bytes 与 Release 中的强 hash/size 一致时才解析并写入 Browse/Search；若配置了 upstream public key，再额外验证 Release signature。未知字段保留在 bounded raw stanza 中，解析失败不影响透明下载，但不会生成可信 component 投影。
+Proxy metadata projection 以 Release blob SHA-256 为 identity。只有 index bytes 与 Release 中的 SHA-256/size 一致时才解析并写入 Browse/Search；当前服务端不导入或验证 upstream public key，`signature_verified` 固定为 false，passthrough 模式由真实 APT 客户端验证原始上游签名链。解析失败不影响透明下载，但不会生成可信 component 投影。
 
 ### Re-signing mode
 
 Re-signing 是新的本地 archive，不再是透明 mirror：
 
-- 只索引已经缓存、checksum 已验证且 blob 可读的 package。
+- 刷新时先验证 Release -> Packages 的 SHA-256/size，再主动拉取索引声明的全部 package，验证 Packages -> package 的 SHA-256/size；整批完成后才切换本地 snapshot。
+- 为避免一次刷新无限扩张，单次最多处理 10,000 个 package、20 GiB package 总量；超限时失败关闭。
 - 通过本地 Release 和 signing key 建立新的信任边界；UI 必须明确展示“本地重签名，不代表完整上游镜像”。
 - single-distribution 模式只生成配置的 distribution；multi-distribution 模式把已观察 distribution 持久化到数据库。
 - 上游 package 从缓存淘汰前必须先发布不再引用它的新 snapshot；否则本地签名会引用不可下载的 Filename。
@@ -415,11 +407,11 @@ APT group 不是按路径 first-hit 就能正确实现：
 
 ## 资源与安全边界
 
-- 上传 byte limit、control archive 展开 byte limit、entry count、field count、line length、description size 和 dependency size 全部可配置并有安全默认值。
+- 上传 byte limit 来自 repository 配置；control archive 展开字节、entry count、field count、line length 和解析时长使用有界安全默认值。
 - ar/tar/decompressor 使用流式读取和明确 EOF；拒绝 truncated member、超大声明、压缩炸弹、路径穿越、symlink/device 和重复关键 entry。
 - deb822 parser 对字段名、continuation、UTF-8 和 stanza 数设置上限；不能把整个远端多 GB Packages 文件一次性读入内存。
-- Metadata builder 使用有界 worker pool、临时磁盘配额和 build timeout；每个 distribution 最多一个跨副本 active build。
-- 上传临时文件、build spool 和孤儿 staging asset 由持久化 marker 驱动的 cleanup worker 回收。
+- Metadata builder 由请求线程同步执行；每个 distribution 通过共享 lease 最多一个跨副本 active build，lease 过期后可由其他副本接管。
+- 上传临时文件由 importer 的 `AutoCloseable`/异常路径显式回收；metadata 直接写 revisioned hidden asset，不依赖节点本地 build spool 或 marker 作为真相。
 - `Filename`、redirect 和 remote URL 不能绕过出站访问策略；query 中的 credential 不写 cache key、日志或 Browse。
 - Package 安全扫描在 snapshot 发布后异步执行；是否下载阻断由现有 scanning policy 决定，不能在 metadata 中宣称可安装却永远阻断而无可观测原因。
 
@@ -430,8 +422,8 @@ Admin UI：
 - 创建 `apt-hosted`：distribution、component、architectures、write policy、signing key、Valid-Until policy。
 - 创建 `apt-proxy`：remote URL、flat、distribution、enforce、passthrough/re-sign、remote auth、TTL、negative cache、auto-block 和 signing key。
 - 只显示 hosted/proxy，不显示 group member editor。
-- 显示 desired/published revision、last successful rebuild、pending marker、active key fingerprint、proxy Release age 和失败原因。
-- 支持导入/轮换 key、下载 public key、触发 rebuild、重试失败 marker 和查看审计。
+- 显示 desired/published revision、last successful rebuild、active key fingerprint、proxy Release identity/观察时间和失败原因。
+- 支持导入/轮换 key、下载 public key 和触发 rebuild；失败重试仍走同一 rebuild 操作。
 
 Browse/Search：
 
@@ -440,7 +432,7 @@ Browse/Search：
 - Usage 生成 `signed-by` source 示例与私有仓库 `auth.conf` 示例，不默认输出包含明文 credential 的 URL。
 - Component delete 和 asset delete 都调用 APT mutation service；generated metadata 默认不可直接删除。
 
-观测指标建议：
+当前通过通用 repository request metric 以 `format=apt` 和操作分类统计请求；以下专用指标仍是后续可观测性扩展建议，而非当前已经暴露的指标：
 
 - `kkrepo_apt_requests_total{repository,type,path_kind,status}`
 - `kkrepo_apt_upload_total{repository,result}`
@@ -476,7 +468,7 @@ Nexus 没有 APT group；遇到未知 `apt-*` recipe 或第三方 plugin shape �
 - Proxy cache 默认不迁移。用户显式选择时，只迁移有 Release/index checksum 证据的 cache；缺少 remote credential 时目标 proxy 保持 offline。
 - Flat repository 和 source package 只有在目标实现对应能力且 source shape 经过验证后才可标为 `FULL`。
 
-迁移任务继续支持 dry-run、resume、checksum、精确计数、失败报告和 profile hash。至少覆盖 Nexus 3.29.2 OrientDB 与 datastore-era Nexus 3.92.x；自动范围由真实 schema fingerprint 决定，不仅按版本字符串判断。
+迁移任务继续支持 dry-run、resume、checksum、精确计数、失败报告和 profile hash。当前 CI 覆盖 Nexus 3.92.x-3.94.x H2/PostgreSQL profile；自动范围由真实 source profile 与 APT content shape 决定，不仅按版本字符串判断，未知或不完整 shape 一律失败关闭。
 
 ## 兼容性测试矩阵
 
@@ -523,31 +515,31 @@ Nexus 没有 APT group；遇到未知 `apt-*` recipe 或第三方 plugin shape �
 - 验证 dry-run、resume、重复运行幂等、精确 package/asset/blob/projection 计数、checksum 和跨副本读取。
 - 验证缺失 signing private key、masked proxy secret、未知 source shape 和未选择 proxy cache 均 fail closed 并给出可操作报告。
 
-## 实施顺序
+## 落地记录
 
-1. PR 1：M0 与 protocol foundation
+1. ✅ M0 与 protocol foundation
    - 增加 Nexus APT 黑盒 probe、真实 `.deb` fixture 和可控 upstream。
    - 新增 `protocol-apt`、path/deb822/version/deb parser 与单元测试。
    - 不先注册可创建 recipe，避免 skeleton 被误认为可用。
 
-2. PR 2：Hosted persistence 与安全发布
+2. ✅ Hosted persistence 与安全发布
    - 增加双数据库 schema、DAO contract、format/recipe。
    - 实现 importer、component/asset 投影、suite revision、lease、snapshot builder 和 OpenPGP signer。
    - 接入 repository-root POST 和 content GET/HEAD/Range。
 
-3. PR 3：Components API、Admin/Browse/Search
+3. ✅ Components API、Admin/Browse/Search
    - 增加 `apt.asset`、UI upload、Usage、key 管理、rebuild、delete、cleanup 和 scanning。
    - 完成真实 hosted `apt update/install` E2E。
 
-4. PR 4：Proxy passthrough
+4. ✅ Proxy passthrough
    - 接入 RawProxy 共享 cache、distribution policy、flat、auth、redirect、negative cache、projection 和断网验证。
    - 完成可控 Debian/Ubuntu upstream 与真实客户端 E2E。
 
-5. PR 5：Proxy re-signing
-   - 增加 cached-package projection、multi-distribution state、本地 snapshot、key rotation 和 cache-retention 约束。
+5. ✅ Proxy re-signing
+   - 增加全量校验 package projection、multi-distribution state、本地 snapshot、key rotation 和单次投影资源上限。
    - 对齐 Nexus re-sign 初始/重建/失败状态。
 
-6. PR 6：Nexus 迁移与发布闭环
+6. ✅ Nexus 迁移与发布闭环
    - 增加 definition/content adapter、shape gate、dry-run/resume/checksum 报告。
    - 更新 compatibility matrix、client recipes、migration docs、backup/restore 和 Nexus compatibility 说明。
    - 跑 Nexus compatibility、Client E2E、Migration E2E 和双数据库/双副本矩阵。
@@ -559,7 +551,7 @@ Nexus 没有 APT group；遇到未知 `apt-*` recipe 或第三方 plugin shape �
 - 真实 APT 客户端能用 `signed-by` 完成 update、download、install 和 upgrade。
 - Packages 中 identity、Filename、size/checksum 与实际 blob 一致；Release 中每个 index size/checksum 与响应 bytes 一致。
 - InRelease 和 Release.gpg 能由 `/gpg.key` 对应 public key 验证；key rotation 不暴露半完成 snapshot。
-- 同一客户端轮询、多副本并发和 worker 接管期间，不出现 Release/Packages 压缩表示互相不一致。
+- 同一客户端轮询、多副本并发和 lease 接管期间，不出现 Release/Packages 压缩表示互相不一致。
 - Proxy passthrough 不修改上游 signed bytes，且 package cache、TTL、negative cache、auth、redirect 和 auto-block 按策略工作。
 - Proxy re-signing 只声明已验证且可下载的 cached package，不把部分上游目录伪装成完整 mirror。
 - Browse/Search/Usage、cleanup、security scanning、metrics 和 audit 都能识别 APT package 而非 Raw file。

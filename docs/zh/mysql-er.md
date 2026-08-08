@@ -1,8 +1,8 @@
 # kkrepo MySQL ER 设计
 
-历史 MySQL schema 从 `persistence-mysql/src/main/resources/db/migration/mysql/V1__init_schema.sql` 开始；MySQL 与 PostgreSQL 之后通过成对 migration 演进，当前到 V41，并由 Flyway 在服务启动时执行。MySQL 8 使用 InnoDB；PostgreSQL 提供逻辑等价的 V29 baseline 和相同的 V30+ 变更。本文继续作为两种引擎的详细逻辑 ER 参考，另见[数据库 Schema](database-schema.md)。
+历史 MySQL schema 从 `persistence-mysql/src/main/resources/db/migration/mysql/V1__init_schema.sql` 开始；MySQL 与 PostgreSQL 之后通过成对 migration 演进，当前到 V42，并由 Flyway 在服务启动时执行。MySQL 8 使用 InnoDB；PostgreSQL 提供逻辑等价的 V29 baseline 和相同的 V30+ 变更。本文继续作为两种引擎的详细逻辑 ER 参考，另见[数据库 Schema](database-schema.md)。
 
-Schema 对共享 asset/blob 数据采用“统一内容表 + format 字段”的模型。Cargo / Rust、Dart / Pub、Composer / PHP、Terraform、Swift、Ansible 和 Conda 使用这套共享模型，协议元数据保存在 component/asset attributes 中；Composer package/version/dist 不增加专用业务表，proxy route 也作为可重建内部 asset 保存。Pub 为官方多步骤 publish flow 增加 `pub_upload_session`。Terraform 使用 signing key、Provider revision/platform、group source binding 和 publish lease 旁表；Ansible V35 增加 collection version/signature、持久化 import task、proxy state、group binding 和带 fencing 的 lease 表。Conda V41 增加有界 package/channel 投影、tombstone、group source binding 和带 fencing 的 coordinate lease，确保 channel metadata 与 package bytes 在多副本下保持一致。Docker/OCI manifest、tag、upload session、auth token、referrers 等其它协议专有关系同样使用专用旁表。这样更适合从 Nexus 迁移和管理台统一查询；如果后续某个格式数据量明显过大，再通过分区或更多专用表优化。
+Schema 对共享 asset/blob 数据采用“统一内容表 + format 字段”的模型。Cargo / Rust、Dart / Pub、Composer / PHP、Terraform、Swift、Ansible、Conda 和 APT 使用这套共享模型，协议元数据保存在 component/asset attributes 中；Composer package/version/dist 不增加专用业务表，proxy route 也作为可重建内部 asset 保存。Pub 为官方多步骤 publish flow 增加 `pub_upload_session`。Terraform 使用 signing key、Provider revision/platform、group source binding 和 publish lease 旁表；Ansible V35 增加 collection version/signature、持久化 import task、proxy state、group binding 和带 fencing 的 lease 表；Conda V41 增加有界 package/channel 投影、tombstone、group source binding 和带 fencing 的 coordinate lease；APT V42 增加有界 package/tombstone 投影、suite revision、不可变 published snapshot manifest、加密 key revision、proxy release state 和带 fencing 的 publish lease，确保签名索引与 package bytes 在多副本下保持一致。Docker/OCI manifest、tag、upload session、auth token、referrers 等其它协议专有关系同样使用专用旁表。这样更适合从 Nexus 迁移和管理台统一查询；如果后续某个格式数据量明显过大，再通过分区或更多专用表优化。
 
 ## 仓库与内容 ER
 
@@ -66,6 +66,13 @@ erDiagram
   REPOSITORY ||--o{ CONDA_PACKAGE_TOMBSTONE : tombstone
   REPOSITORY ||--o{ CONDA_GROUP_SOURCE_BINDING : group_source
   REPOSITORY ||--o{ CONDA_COORDINATE_LEASE : fenced_lease
+  REPOSITORY ||--o{ APT_PACKAGE_RECORD : package_record
+  REPOSITORY ||--o{ APT_PACKAGE_TOMBSTONE : tombstone
+  REPOSITORY ||--o{ APT_SUITE_STATE : suite_revision
+  APT_SUITE_STATE ||--o{ APT_SNAPSHOT : published_snapshot
+  REPOSITORY ||--o{ APT_SIGNING_KEY : signing_revision
+  REPOSITORY ||--o{ APT_PROXY_DISTRIBUTION : proxy_release
+  REPOSITORY ||--o{ APT_PUBLISH_LEASE : fenced_publish
   SPRING_SESSION ||--o{ SPRING_SESSION_ATTRIBUTES : has
   MIGRATION_JOB ||--o{ MIGRATION_CHECKPOINT : records
   MIGRATION_JOB ||--o{ MIGRATION_VALIDATION_RESULT : validates
@@ -133,6 +140,13 @@ erDiagram
 | `conda_package_tombstone` | hosted package 删除记录，用于确定性生成 repodata `removed`，且不会遮蔽同名 active replacement |
 | `conda_group_source_binding` | 将 group filename 绑定到一个有序 member revision/content identity/checksum，保证 repodata 选择与 package bytes 来自同一 source snapshot |
 | `conda_coordinate_lease` | hosted 发布、删除和 proxy inventory 替换使用的跨副本共享过期 lease/fencing token |
+| `apt_package_record` | hosted/proxy binary package 的有界投影，保存 distribution/component/architecture/coordinate、control fields、checksum、size、source 与 component/asset 绑定 |
+| `apt_package_tombstone` | 已删除 package coordinate/path 与 revision，用于发布新的完整 snapshot，避免暴露半完成删除 |
+| `apt_suite_state` | repository/distribution 维度的 desired/published revision、active signing-key revision、发布时间和最后 rebuild error |
+| `apt_snapshot` | 单个 revision 的不可变 manifest 与 Release identity；只有设置 `published_at` 的行可作为客户端 snapshot |
+| `apt_signing_key` | 按 revision 加密保存 private key，并保存 public key/fingerprint；每个 repository 只有一个 active revision |
+| `apt_proxy_distribution` | 每个 distribution 观察到的 upstream Release identity、有界 manifest、签名验证状态与观察时间 |
+| `apt_publish_lease` | 带 owner/fencing token 的过期 lease，用于跨副本串行发布 snapshot 与安全接管 |
 
 ### 权限层
 
@@ -182,3 +196,4 @@ erDiagram
 17. V28 增加 `pub_upload_session`，原因是 Pub publish 是多请求协议。Session 状态、临时 blob 引用、解析出的 metadata 和 finalize 状态必须能跨副本切换和重启恢复；archive 字节仍存放在 blob storage，不进入 MySQL。
 18. V35 增加 Ansible Galaxy 协议状态。显式唯一约束保护不可变 collection identity；task/lease 可在进程丢失后继续；group binding 保证 metadata/checksum/artifact 来自同一成员；archive/signature 字节仍只在 blob storage。
 19. V41 增加 Conda 协议状态，包括 canonical record fingerprint，以及用于有界 proxy 增量同步和流式 metadata 投影的复合索引。Package/channel 投影与 tombstone 让 repodata 可确定性重建；group binding 将 metadata 固定到 package bytes，事务内重新校验的 coordinate lease 对发布和 proxy inventory 变更做 fencing；package 与 staging 字节仍只在 blob storage。
+20. V42 增加 APT 协议状态。Package 投影与 tombstone 驱动确定性 Packages；suite revision 与不可变 snapshot manifest 提供原子发布；加密 key revision 和带 fencing 的 lease 保证多副本签名/rebuild 安全。`.deb`、index、Release 和 signature 字节仍只保存在 blob storage。

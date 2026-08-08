@@ -735,6 +735,80 @@ class NexusApiMigrationServiceTest {
   }
 
   @Test
+  void requiresExplicitAptSigningKeyImportAndKeepsAffectedRepositoriesOffline() {
+    FakeBlobStoreDao blobStores = new FakeBlobStoreDao();
+    FakeRepositoryDao repositories = new FakeRepositoryDao();
+    FakeMigrationJobDao migrationJobs = new FakeMigrationJobDao();
+    NexusApiMigrationService service = new NexusApiMigrationService(
+        new ObjectMapper(),
+        blobStores.asDao(),
+        repositories.asDao(),
+        null,
+        migrationJobs,
+        noopSecurityWriter());
+    String privateKey = "-----BEGIN PGP PRIVATE KEY BLOCK-----\nfixture\n"
+        + "-----END PGP PRIVATE KEY BLOCK-----";
+    NexusInventory inventory = new NexusInventory(
+        List.of(Map.of("name", "default")),
+        List.of(
+            repository("apt-hosted", "apt", "hosted", Map.of(
+                "storage", storage("default"),
+                "apt", Map.of("distribution", "stable"),
+                "aptSigning", Map.of("keypair", privateKey))),
+            repository("apt-resign", "apt", "proxy", Map.of(
+                "storage", storage("default"),
+                "apt", Map.of("distribution", "stable", "flat", false),
+                "aptSigning", Map.of("keypair", privateKey),
+                "proxy", Map.of("remoteUrl", "https://deb.example.invalid/"),
+                "httpClient", Map.of("authentication", Map.of(
+                    "type", "username", "username", "mirror", "password", "********")))),
+            repository("apt-passthrough", "apt", "proxy", Map.of(
+                "storage", storage("default"),
+                "apt", Map.of("distribution", "stable", "flat", false),
+                "proxy", Map.of("remoteUrl", "https://deb.example.invalid/")))),
+        NexusSecurityExport.empty(),
+        List.of());
+
+    NexusMigrationPreflight preflight = service.preflight(
+        inventory,
+        request("https://old-nexus.example").targetBlobStore());
+    NexusApiMigrationService.NexusMigrationResult result = service.migrate(
+        inventory,
+        request("https://old-nexus.example"));
+
+    assertEquals(SupportStatus.NEEDS_MANUAL_ACTION, status(preflight, "apt-hosted"));
+    assertEquals(SupportStatus.NEEDS_MANUAL_ACTION, status(preflight, "apt-resign"));
+    assertTrue(preflight.migrationPlan().manualActions().contains("repository:apt-hosted"));
+    assertTrue(preflight.migrationPlan().manualActions().contains("repository:apt-resign"));
+    assertTrue(preflight.warnings().stream().anyMatch(warning ->
+        warning.contains("Proxy repository apt-resign requires manual upstream credential")));
+    assertTrue(preflight.warnings().stream().anyMatch(warning ->
+        warning.contains("APT repository apt-resign requires manual signing-key import")));
+    assertFalse(preflight.repositoriesToMigrate().stream()
+        .filter(repository -> repository.name().equals("apt-hosted")
+            || repository.name().equals("apt-resign"))
+        .anyMatch(NexusApiMigrationService.RepositoryMigrationPlan::online));
+    assertTrue(preflight.repositoriesToMigrate().stream()
+        .filter(repository -> repository.name().equals("apt-passthrough"))
+        .allMatch(NexusApiMigrationService.RepositoryMigrationPlan::online));
+    assertEquals("finished_with_manual_actions", result.status());
+    assertTrue(result.validation().manualActions().contains("repository/APT signing keys"));
+    assertTrue(result.validation().manualActions().contains("repository/proxy credentials"));
+    assertFalse(repositories.required("apt-hosted").online());
+    assertFalse(repositories.required("apt-resign").online());
+    assertTrue(repositories.required("apt-passthrough").online());
+    assertEquals("RESIGN", ((Map<?, ?>) repositories.required("apt-hosted")
+        .attributes().get("apt")).get("metadataMode"));
+    assertEquals("RESIGN", ((Map<?, ?>) repositories.required("apt-resign")
+        .attributes().get("apt")).get("metadataMode"));
+    assertEquals("PASSTHROUGH", ((Map<?, ?>) repositories.required("apt-passthrough")
+        .attributes().get("apt")).get("metadataMode"));
+    Map<?, ?> source = (Map<?, ?>) repositories.required("apt-hosted")
+        .attributes().get("sourceRepository");
+    assertEquals("<redacted>", ((Map<?, ?>) source.get("aptSigning")).get("keypair"));
+  }
+
+  @Test
   void rollsBackRepositoryAndGroupDefinitionWritesButKeepsFailedJobSummary() {
     FakeBlobStoreDao blobStores = new FakeBlobStoreDao();
     FakeRepositoryDao repositories = new FakeRepositoryDao();

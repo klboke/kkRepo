@@ -386,6 +386,23 @@ const repositoryRequiredFields = [
     label: "Connector port",
     required: () => currentRecipe()?.format === "docker"
         && document.getElementById("repository-docker-connector-enabled").checked
+  },
+  {
+    id: "repository-apt-distribution",
+    label: "APT distribution",
+    required: () => currentRecipe()?.format === "apt"
+        && (currentRecipe()?.type === "HOSTED"
+          || document.getElementById("repository-apt-enforce-distribution").checked)
+  },
+  {
+    id: "repository-apt-component",
+    label: "APT component",
+    required: () => currentRecipe()?.format === "apt"
+  },
+  {
+    id: "repository-apt-architectures",
+    label: "APT architectures",
+    required: () => currentRecipe()?.format === "apt"
   }
 ];
 const securityUserRequiredFields = [
@@ -474,6 +491,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   swift: "swift",
   ansiblegalaxy: "ansiblegalaxy",
   conda: "conda",
+  apt: "apt",
   raw: "raw",
 });
 
@@ -494,6 +512,7 @@ const FORMAT_DISPLAY_NAMES = Object.freeze({
   swift: "Swift",
   ansiblegalaxy: "Ansible Galaxy",
   conda: "Conda",
+  apt: "APT / Debian",
   raw: "Raw",
 });
 
@@ -2084,6 +2103,7 @@ function refreshRepositoryRecipeControls() {
   document.getElementById("repository-docker-fields").hidden = format !== "docker";
   document.getElementById("repository-cargo-fields").hidden =
     format !== "cargo";
+  document.getElementById("repository-apt-fields").hidden = format !== "apt";
   document.getElementById("repository-swift-proxy-note").hidden =
     !(format === "swift" && type === "PROXY");
   const minimumReleaseAgeVisible = format === "npm" && type === "PROXY";
@@ -2092,6 +2112,7 @@ function refreshRepositoryRecipeControls() {
   document.getElementById("repository-minimum-release-age-note").hidden =
     !minimumReleaseAgeVisible;
   refreshDockerConnectorControls();
+  refreshAptControls();
   document.getElementById("repository-blobstore").closest("label").hidden = false;
   refreshRepositoryBlobStoreLock();
   document.querySelectorAll("#repository-hosted-fields .maven-only").forEach((el) => {
@@ -2123,7 +2144,8 @@ function refreshRepositoryRemoteDefaults(recipe) {
     terraform: "https://registry.terraform.io/",
     swift: "https://github.com/",
     ansiblegalaxy: "https://galaxy.ansible.com/",
-    conda: "https://repo.anaconda.com/pkgs/main/"
+    conda: "https://repo.anaconda.com/pkgs/main/",
+    apt: "https://deb.debian.org/debian/"
   };
   if (recipe.format === "swift") {
     remote.value = defaults.swift;
@@ -2131,6 +2153,123 @@ function refreshRepositoryRemoteDefaults(recipe) {
   remote.placeholder = defaults[recipe.format] || "https://example.com/";
   if (repositoryFormMode === "create" && !remote.value.trim() && defaults[recipe.format]) {
     remote.value = defaults[recipe.format];
+  }
+}
+
+function refreshAptControls() {
+  const recipe = currentRecipe();
+  const apt = recipe?.format === "apt";
+  const hosted = apt && recipe?.type === "HOSTED";
+  const proxy = apt && recipe?.type === "PROXY";
+  const mode = document.getElementById("repository-apt-metadata-mode");
+  if (hosted) mode.value = "RESIGN";
+  mode.disabled = hosted;
+  document.getElementById("repository-apt-flat-field").hidden = !proxy;
+  document.getElementById("repository-apt-enforce-field").hidden = !proxy;
+  if (hosted) document.getElementById("repository-apt-enforce-distribution").checked = true;
+  const flat = document.getElementById("repository-apt-flat");
+  if (!proxy) flat.checked = false;
+  if (flat.checked && mode.value === "RESIGN") mode.value = "PASSTHROUGH";
+  mode.querySelector('option[value="RESIGN"]').disabled = proxy && flat.checked;
+  document.getElementById("repository-apt-valid-until-days").disabled = !hosted && mode.value !== "RESIGN";
+  document.getElementById("repository-apt-origin").disabled = !hosted && mode.value !== "RESIGN";
+  document.getElementById("repository-apt-label").disabled = !hosted && mode.value !== "RESIGN";
+  document.getElementById("repository-apt-operations").hidden =
+    !apt || repositoryFormMode !== "edit";
+  updateRequiredMarkers(repositoryRequiredFields);
+}
+
+async function loadAptStatus(name = editingRepositoryName) {
+  if (!name) return;
+  const output = document.getElementById("repository-apt-status");
+  output.textContent = "Loading APT status…";
+  try {
+    const response = await fetch(
+      `/internal/repositories/${encodeURIComponent(name)}/apt/status`);
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    const status = await response.json();
+    const key = status.activeKey
+      ? `key ${status.activeKey.fingerprint} (revision ${status.activeKey.revision})`
+      : "signing key will be generated on first publication";
+    const suites = Array.isArray(status.suites) && status.suites.length
+      ? status.suites.map((suite) => {
+        const failure = suite.lastError ? `, last error: ${suite.lastError}` : "";
+        return `${suite.distribution}: ${suite.publishedRevision}/${suite.desiredRevision}${failure}`;
+      }).join("; ")
+      : "no metadata snapshot published";
+    const proxies = Array.isArray(status.proxyDistributions)
+      ? status.proxyDistributions.map((item) =>
+        `${item.distribution}: ${item.indexCount} Release entries`).join("; ")
+      : "";
+    output.textContent = `${key}. Suites: ${suites}.${proxies ? ` Upstream: ${proxies}.` : ""}`;
+  } catch (error) {
+    output.textContent = `Unable to load APT status: ${error.message}`;
+  }
+}
+
+async function rebuildAptMetadata() {
+  if (!editingRepositoryName) return;
+  showToast("Rebuilding APT metadata…");
+  try {
+    const distribution = document.getElementById("repository-apt-distribution").value.trim();
+    const response = await fetch(
+      `/internal/repositories/${encodeURIComponent(editingRepositoryName)}/apt/rebuild`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ distribution: distribution || null })
+      });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    showToast("APT metadata rebuilt.", "success");
+    await loadAptStatus();
+  } catch (error) {
+    showToast(error.message || "APT metadata rebuild failed.", "error");
+  }
+}
+
+async function rotateAptSigningKey() {
+  if (!editingRepositoryName) return;
+  const privateKey = document.getElementById("repository-apt-private-key").value.trim();
+  if (!privateKey) {
+    showToast("Paste an ASCII-armored OpenPGP private key first.", "error");
+    return;
+  }
+  showToast("Importing APT signing key…");
+  try {
+    const response = await fetch(
+      `/internal/repositories/${encodeURIComponent(editingRepositoryName)}/apt/signing-key`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          privateKey,
+          passphrase: document.getElementById("repository-apt-key-passphrase").value
+        })
+      });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    document.getElementById("repository-apt-private-key").value = "";
+    document.getElementById("repository-apt-key-passphrase").value = "";
+    showToast("APT signing key rotated and metadata republished.", "success");
+    await loadAptStatus();
+  } catch (error) {
+    showToast(error.message || "APT signing key import failed.", "error");
+  }
+}
+
+async function generateAptSigningKey() {
+  if (!editingRepositoryName) return;
+  if (!window.confirm("Generate a new APT signing key and republish repository metadata?")) return;
+  showToast("Generating APT signing key…");
+  try {
+    const response = await fetch(
+      `/internal/repositories/${encodeURIComponent(editingRepositoryName)}/apt/signing-key`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ generate: true })
+      });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    showToast("APT signing key rotated and metadata republished.", "success");
+    await loadAptStatus();
+  } catch (error) {
+    showToast(error.message || "APT signing key generation failed.", "error");
   }
 }
 
@@ -2198,6 +2337,24 @@ function repositoryFormPayload() {
       requireAuthentication: document.getElementById("repository-cargo-require-authentication").checked
     };
   }
+  if (recipe?.format === "apt") {
+    const architectures = document.getElementById("repository-apt-architectures").value
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const validUntil = document.getElementById("repository-apt-valid-until-days").value;
+    payload.apt = {
+      distribution: document.getElementById("repository-apt-distribution").value.trim(),
+      component: document.getElementById("repository-apt-component").value.trim(),
+      architectures,
+      flat: document.getElementById("repository-apt-flat").checked,
+      enforceDistribution: document.getElementById("repository-apt-enforce-distribution").checked,
+      metadataMode: document.getElementById("repository-apt-metadata-mode").value,
+      validUntilDays: validUntil === "" ? 0 : Number(validUntil),
+      origin: document.getElementById("repository-apt-origin").value.trim(),
+      label: document.getElementById("repository-apt-label").value.trim()
+    };
+  }
   return payload;
 }
 
@@ -2231,6 +2388,18 @@ function setRepositoryFormDefaults() {
   document.getElementById("repository-docker-connector-port").value = "";
   document.getElementById("repository-docker-connector-public-url").value = "";
   document.getElementById("repository-cargo-require-authentication").checked = false;
+  document.getElementById("repository-apt-distribution").value = "stable";
+  document.getElementById("repository-apt-component").value = "main";
+  document.getElementById("repository-apt-architectures").value = "amd64";
+  document.getElementById("repository-apt-flat").checked = false;
+  document.getElementById("repository-apt-enforce-distribution").checked = false;
+  document.getElementById("repository-apt-metadata-mode").value = "PASSTHROUGH";
+  document.getElementById("repository-apt-valid-until-days").value = "30";
+  document.getElementById("repository-apt-origin").value = "kkRepo";
+  document.getElementById("repository-apt-label").value = "kkRepo";
+  document.getElementById("repository-apt-private-key").value = "";
+  document.getElementById("repository-apt-key-passphrase").value = "";
+  document.getElementById("repository-apt-status").textContent = "APT status not loaded.";
   memberTransfer.selected = [];
   memberTransfer.highlight.available.clear();
   memberTransfer.highlight.selected.clear();
@@ -2337,7 +2506,23 @@ function showEditRepositoryForm(name) {
     document.getElementById("repository-cargo-require-authentication").checked =
       Boolean(repo.cargo.requireAuthentication);
   }
+  if (repo.apt) {
+    document.getElementById("repository-apt-distribution").value = repo.apt.distribution || "";
+    document.getElementById("repository-apt-component").value = repo.apt.component || "main";
+    document.getElementById("repository-apt-architectures").value =
+      Array.isArray(repo.apt.architectures) ? repo.apt.architectures.join(", ") : "amd64";
+    document.getElementById("repository-apt-flat").checked = Boolean(repo.apt.flat);
+    document.getElementById("repository-apt-enforce-distribution").checked =
+      Boolean(repo.apt.enforceDistribution);
+    document.getElementById("repository-apt-metadata-mode").value =
+      repo.apt.metadataMode || (repo.type === "HOSTED" ? "RESIGN" : "PASSTHROUGH");
+    document.getElementById("repository-apt-valid-until-days").value =
+      repo.apt.validUntilDays ?? "0";
+    document.getElementById("repository-apt-origin").value = repo.apt.origin || "kkRepo";
+    document.getElementById("repository-apt-label").value = repo.apt.label || "kkRepo";
+  }
   refreshRepositoryRecipeControls();
+  if (repo.format === "apt") loadAptStatus(repo.name);
   clearRequiredFieldErrors(repositoryRequiredFields);
   openFormModal("repository-form", "repository-online");
 }
@@ -6850,6 +7035,13 @@ document.getElementById("repository-form").addEventListener("submit", (event) =>
 bindRepositoryRecipeCombobox();
 document.getElementById("repository-recipe").addEventListener("change", refreshRepositoryRecipeControls);
 document.getElementById("repository-docker-connector-enabled").addEventListener("change", refreshDockerConnectorControls);
+document.getElementById("repository-apt-flat").addEventListener("change", refreshAptControls);
+document.getElementById("repository-apt-enforce-distribution").addEventListener("change", refreshAptControls);
+document.getElementById("repository-apt-metadata-mode").addEventListener("change", refreshAptControls);
+document.getElementById("repository-apt-refresh-status").addEventListener("click", () => loadAptStatus());
+document.getElementById("repository-apt-rebuild").addEventListener("click", rebuildAptMetadata);
+document.getElementById("repository-apt-rotate-key").addEventListener("click", rotateAptSigningKey);
+document.getElementById("repository-apt-generate-key").addEventListener("click", generateAptSigningKey);
 bindRequiredFieldErrors(repositoryRequiredFields);
 bindMemberTransferEvents();
 bindSecurityTransfers();

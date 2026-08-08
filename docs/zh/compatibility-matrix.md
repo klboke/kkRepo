@@ -4,7 +4,7 @@
 
 更详细的验证流程见 [Nexus 兼容性测试说明](nexus-compatibility-testing.md)。
 
-下表中的验证类主要是黑盒协议检查。`client-e2e` suite 会额外覆盖 Maven、npm、PyPI、Go resolve、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform 0.13/当前稳定版、SwiftPM/Xcode、Ansible Galaxy 2.9/当前版、Conda、NuGet、RubyGems、Yum、Docker/OCI 的真实包管理器客户端行为；运行环境要求和 `artifacts/client-e2e/` 诊断信息见 [compat-test README](../../compat-test/README.md)。
+下表中的验证类主要是黑盒协议检查。`client-e2e` suite 会额外覆盖 Maven、npm、PyPI、Go resolve、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform 0.13/当前稳定版、SwiftPM/Xcode、Ansible Galaxy 2.9/当前版、Conda、APT/Debian、NuGet、RubyGems、Yum、Docker/OCI 的真实包管理器客户端行为；运行环境要求和 `artifacts/client-e2e/` 诊断信息见 [compat-test README](../../compat-test/README.md)。
 
 ## 兼容原则
 
@@ -38,6 +38,7 @@
 | Swift Package Registry | hosted / proxy / group | Registry v1 release list/metadata/manifest/archive/identifiers、`swift package-registry login/publish`、GitHub-backed proxy、SCM replacement、CMS 签名、不可变发布、Range/cache validator 和 group source binding | 支持 scope/package/version、checksum、签名、tools version、source member、Browse/Search 和 Usage | 仅 Nexus 3.92.x-3.94.x 且 Swift datastore shape 已验证时 hosted 数据可规划为 `FULL`；版本超出范围、shape 漂移或 proxy secret 不可用时需 manual action | `SwiftRepositoryBlackBoxCompatibilityTest`、Swift protocol/server contract、SwiftPM 5.7/5.10/6.x、macOS Xcode、Windows proxy、S3-compatible 双副本 resilience 和 migration E2E |
 | Ansible Galaxy | hosted / proxy / group | Galaxy v3 discovery、collection/version metadata、`ansible-galaxy collection publish/install/download`、multipart task 轮询、Nexus raw PUT、依赖解析、artifact checksum 固定、Bearer/Token/Basic 认证和 group source binding | 支持 namespace/name/version、dependency、SHA-256、signature 状态、source member、Browse/Search 和 Usage | Repository definition 与 hosted/proxy collection data 仅对 Nexus 3.93.x-3.94.x 原生 shape 开放；proxy cache 需显式选择且 plan 为 `FULL` | `AnsibleGalaxyRepositoryBlackBoxCompatibilityTest`、Ansible protocol/server contract、Ansible 2.9/当前版 client E2E、双副本生命周期测试和 migration contract |
 | Conda | hosted / proxy / group | 根/嵌套 channel、`.tar.bz2`/`.conda` package 读取、Nexus raw PUT 与 UI/API 上传、JSON/BZ2/ZSTD repodata、current repodata、channeldata、条件读取、上游 proxy 和有序 group 解析 | 支持 channel/subdir/name/version/package 层级、package metadata、Browse/Search 和 Usage | Repository definition 与 hosted package 仅对已验证的 Nexus 3.92.x-3.94.x datastore shape 为 `FULL`；生成 metadata 在目标端重建 | `CondaRepositoryBlackBoxCompatibilityTest`、Conda protocol/server/persistence contract、真实 Conda client E2E、双副本检查、cleanup/scanning 测试和 migration E2E |
+| APT / Debian | hosted / proxy | 仓库根 POST 与 Components API/UI `.deb` 上传、签名 Packages/Release/InRelease、by-hash、GET/HEAD/Range/validator、passthrough/re-sign proxy，以及 `apt update/download/install/upgrade` | 支持 distribution/component/package/version/architecture 层级、package metadata、Browse/Search 和 Usage | Definition 与 hosted `.deb` 仅对已验证的 Nexus 3.92.x-3.94.x datastore shape 开放；生成 metadata 在目标端重建，私钥需在目标端显式导入 | `AptRepositoryBlackBoxCompatibilityTest`、APT protocol/server/persistence contract、Debian/Ubuntu/当前 APT 真实客户端 E2E、双副本、cleanup/scanning 和 migration E2E |
 | NuGet | hosted / proxy / group | package push、包下载、v3 service index、registration、flat container、search/autocomplete、管理台上传 | 支持 v3 service index/search | 默认迁移 hosted；proxy 可选 | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
 | RubyGems | hosted / proxy / group | gem push/yank、gem 下载、compact 和 legacy index assets、管理台上传 | 支持 | 默认迁移 hosted；proxy 可选 | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
 | Yum | hosted / proxy / group | RPM PUT/upload、包下载、`repodata` metadata | 支持 `repodata` | 默认迁移 hosted；proxy 可选 | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
@@ -83,6 +84,8 @@ Swift 验证证据按层级区分。Nexus 3.94.x 对比覆盖 canonical JSON/`Li
 /repository/ansible-hosted/api/v3/plugin/ansible/content/published/collections/artifacts/acme-tools-1.0.0.tar.gz
 /repository/conda-group/noarch/repodata.json.zst
 /repository/conda-hosted/team/release/linux-64/demo-1.0.0-py_0.conda
+/repository/apt-hosted/dists/stable/InRelease
+/repository/apt-hosted/pool/d/demo/demo_1.0.0-1_amd64.deb
 /repository/nuget-group/v3/index.json
 ```
 
@@ -112,6 +115,7 @@ kkrepo 把迁移作为产品能力，而不是一次性脚本：
 - Swift repository definition 会保留 hosted/proxy/group 配置、TTL 和有序成员。可恢复的 proxy credential 以密文保存；源 secret 被遮蔽或缺失时生成 `NEEDS_MANUAL_ACTION`，目标 proxy 保持 offline，且不写入占位 credential。Hosted archive、checksum 和 manifest 仅对已验证 Nexus 3.92.x-3.94.x datastore shape 规划为 `FULL`；签名、原始 metadata 和 repository URL mapping 仅在源导出实际包含对应字段时保留，绝不伪造。原生 Nexus 3.94 接受这些可选字段后并不会持久化。版本超出范围、未知 profile 和 shape 漂移均 fail closed。Migration E2E 覆盖 Nexus 3.94 H2 源到 MySQL，以及 PostgreSQL 源到 MySQL/PostgreSQL 目标，并验证 restart/resume 和精确行数幂等。
 - Ansible Galaxy repository definition 会保留 hosted/proxy/group 配置、TTL 和有序成员。Hosted collection 与显式选择的 proxy cache 仅在 Nexus 3.93.x-3.94.x 原生 datastore shape 已验证时规划为 `FULL`。完整性字段缺失、未知 profile、shape 漂移以及 proxy credential 被遮蔽/缺失都 fail closed 并生成 manual action。Collection tarball 与完整 `MANIFEST.json`/`FILES.json` 放在 blob storage；关系表只保存有上限的元数据投影、hash、引用、task、lease 和 source binding。
 - Conda repository definition 会保留 hosted/proxy/group 配置、TTL 和有序成员。Hosted `.tar.bz2`/`.conda` package 仅对已验证的 Nexus 3.92.x-3.94.x datastore shape 为 `FULL`。迁移时校验 package identity、size 和 checksum，过滤源端生成的 repodata/channeldata，并从目标关系投影重建。未知 profile、shape 漂移或无法证明 package identity 时 fail closed。Migration E2E 覆盖 Nexus H2/PostgreSQL 源、两种目标数据库、真实 Conda 安装、跨副本读取、checksum、restart/resume 和精确行数幂等。
+- APT repository definition 会保留 hosted/proxy 配置、TTL、distribution policy 和 passthrough/re-sign 模式。Hosted `.deb` 仅在 Nexus 3.92.x-3.94.x datastore shape 能证明 canonical package path、APT attributes 和 SHA-256 时恢复；源端生成的 `dists/` metadata 会被过滤并从目标投影重建。私钥绝不静默复制，管理员显式导入前目标仓库保持 offline。Migration E2E 覆盖 H2/PostgreSQL 源、MySQL/PostgreSQL 目标、真实 `apt` 安装、checksum/行数、key fail-closed 与跨副本读取。
 - 迁移步骤按 preflight/dry-run、resume、checksum 校验和报告能力设计。
 - 不支持或被阻塞的条目应进入报告，而不是静默跳过。
 
@@ -130,6 +134,7 @@ kkrepo 把迁移作为产品能力，而不是一次性脚本：
 - Swift proxy 有意限定为与 Nexus 3.94.x 兼容的 GitHub source-to-registry 模式，不暴露 generic registry chaining 或 `/availability` endpoint。Swift 规范中 `POST /login` 是可选能力（未实现的服务端可返回 `501`），但 kkRepo 已实现 `200`/`401`，`501` 不是 kkRepo 的预期响应。Windows E2E 只覆盖 proxy resolve/build，不把 hosted publish 列为验收项。
 - Ansible 当前支持 Galaxy v3 collection，不支持 Galaxy v1 role、GitHub role import、notification secret 和 `ansible-galaxy role install`。Collection version 不可变；大体积上游 JSON 和完整 manifest/files 文档作为 blob 内容处理，不存成无上限数据库 JSON。
 - Conda 支持 classic repodata、BZ2/ZSTD 与 current-repodata alias。`current_repodata.json*` 当前返回完整兼容 snapshot，不是 conda-index 裁剪后的子集；暂不暴露 CEP 16 sharded repodata 和 JLAP。Conda 没有原生 publish 命令，hosted 发布使用 Nexus 兼容 PUT 或 UI/API 上传。
+- APT 通过 hosted/proxy 支持二进制 `.deb` 仓库，不暴露 Nexus 不支持的 APT group。Hosted source package、flat hosted、PDiff、生成式 Contents/Translation 和 `.udeb` index 不在当前支持边界；proxy passthrough 可原样提供这些上游路径，本地 re-sign metadata 只声明已校验并缓存的二进制 package。
 - Go 不支持 hosted 上传；Go module proxy 行为以读取代理为主。
 - 不承诺覆盖每一个 Nexus UI endpoint。只有在支持用户工作流或迁移兼容需要时，才补对应 endpoint。
 - 当协议允许非确定性时，测试中可能规范化排序、时间戳、生成 ID 和 hostname。

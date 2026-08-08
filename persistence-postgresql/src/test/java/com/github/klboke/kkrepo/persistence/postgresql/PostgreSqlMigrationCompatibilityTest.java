@@ -17,7 +17,7 @@ class PostgreSqlMigrationCompatibilityTest extends PostgreSqlIntegrationTestSupp
     assertTrue(flyway().validateWithResult().validationSuccessful);
     var result = flyway().migrate();
     assertEquals(0, result.migrationsExecuted);
-    assertEquals("41", flyway().info().current().getVersion().getVersion());
+    assertEquals("42", flyway().info().current().getVersion().getVersion());
   }
 
   @Test

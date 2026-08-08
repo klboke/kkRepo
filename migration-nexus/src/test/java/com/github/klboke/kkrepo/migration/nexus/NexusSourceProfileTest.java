@@ -33,6 +33,12 @@ class NexusSourceProfileTest {
       "sha256Checksum", true,
       "inspectedAssetCount", 2,
       "packageAssetCount", 1);
+  private static final Map<String, Object> VERIFIED_APT_SHAPE = Map.of(
+      "packageAssetPath", true,
+      "aptAssetAttributes", true,
+      "sha256Checksum", true,
+      "inspectedAssetCount", 2,
+      "packageAssetCount", 1);
 
   @Test
   void enablesSwiftHostedContentOnlyForKnownNexusVersionsAndVerifiedShape() {
@@ -141,6 +147,36 @@ class NexusSourceProfileTest {
     }
   }
 
+  @Test
+  void enablesAptHostedContentOnlyForKnownVersionsAndVerifiedShape() {
+    for (String version : List.of("3.92.0-01", "3.93.1-01", "3.94.0-01")) {
+      NexusSourceProfile profile = aptProfile(version, VERIFIED_APT_SHAPE);
+
+      assertTrue(profile.formatCapabilities().get("apt").contentMigration(), version);
+      assertEquals(SupportStatus.FULL, aptHostedStatus(profile), version);
+    }
+  }
+
+  @Test
+  void unknownVersionOrDriftedShapeKeepsAptHostedMigrationManual() {
+    for (String version : List.of("unknown", "3.91.2-01", "3.95.0-01", "4.0.0")) {
+      NexusSourceProfile profile = aptProfile(version, VERIFIED_APT_SHAPE);
+      assertFalse(profile.formatCapabilities().get("apt").contentMigration(), version);
+      assertEquals("apt-source-version-unverified",
+          profile.formatCapabilities().get("apt").evidence(), version);
+      assertEquals(SupportStatus.NEEDS_MANUAL_ACTION, aptHostedStatus(profile), version);
+    }
+    for (String missing : List.of("packageAssetPath", "aptAssetAttributes", "sha256Checksum")) {
+      Map<String, Object> drifted = new LinkedHashMap<>(VERIFIED_APT_SHAPE);
+      drifted.remove(missing);
+      NexusSourceProfile profile = aptProfile("3.94.0-01", drifted);
+      assertFalse(profile.formatCapabilities().get("apt").contentMigration(), missing);
+      assertEquals("apt-content-shape-incomplete",
+          profile.formatCapabilities().get("apt").evidence(), missing);
+      assertEquals(SupportStatus.NEEDS_MANUAL_ACTION, aptHostedStatus(profile), missing);
+    }
+  }
+
   private static SupportStatus hostedStatus(NexusSourceProfile profile) {
     return new MigrationPlanBuilder().build(
             profile, new MigrationScope(List.of("swift-hosted"), false, false))
@@ -169,6 +205,58 @@ class NexusSourceProfileTest {
         .findFirst()
         .orElseThrow()
         .status();
+  }
+
+  private static SupportStatus aptHostedStatus(NexusSourceProfile profile) {
+    return new MigrationPlanBuilder().build(
+            profile, new MigrationScope(List.of("apt-hosted"), false, false))
+        .items().stream()
+        .filter(item -> "apt-hosted".equals(item.name()))
+        .findFirst()
+        .orElseThrow()
+        .status();
+  }
+
+  private static NexusSourceProfile aptProfile(
+      String probedVersion,
+      Map<String, Object> formatShape) {
+    SourceProbe probe = new SourceProbe(
+        probedVersion,
+        true,
+        true,
+        true,
+        "text/plain",
+        "ok",
+        "DATASTORE_POSTGRESQL",
+        "PostgreSQL",
+        "jdbc:postgresql://nexus/nexus",
+        Map.of("datastoreContentModels", Map.of("apt", Map.of(
+            "prefix", "APT",
+            "tablesPresent", true,
+            "requiredColumnsPresent", true,
+            "tables", Map.of(
+                "contentRepository", "APT_CONTENT_REPOSITORY",
+                "asset", "APT_ASSET",
+                "assetBlob", "APT_ASSET_BLOB",
+                "component", "APT_COMPONENT"),
+            "columns", Map.of(),
+            "formatShape", formatShape))),
+        List.of());
+    RepositoryDocument repository = new RepositoryDocument(
+        Map.of(
+            "name", "apt-hosted",
+            "format", "apt",
+            "type", "hosted",
+            "online", true),
+        Map.of("storage", Map.of("blobStoreName", "default")));
+    return NexusSourceProfile.fromInventory(
+        new NexusInventory(
+            List.of(Map.of("name", "default", "type", "File")),
+            List.of(repository),
+            NexusSecurityExport.empty(),
+            List.of(),
+            probe),
+        null);
   }
 
   private static NexusSourceProfile condaProfile(

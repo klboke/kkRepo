@@ -5,6 +5,7 @@ import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
@@ -47,6 +48,7 @@ public class BrowseController {
   private final BrowseAssetDetailService assetDetailService;
   private final SecurityAuthenticationService authenticationService;
   private final SecurityManagementService securityService;
+  private AssetDao assetDao;
 
   @Autowired
   public BrowseController(
@@ -66,6 +68,11 @@ public class BrowseController {
     this.assetDetailService = assetDetailService;
     this.authenticationService = authenticationService;
     this.securityService = securityService;
+  }
+
+  @Autowired(required = false)
+  void setAssetDao(AssetDao assetDao) {
+    this.assetDao = assetDao;
   }
 
   public BrowseController(
@@ -229,7 +236,7 @@ public class BrowseController {
     }
   }
 
-  private static BrowseEntry toEntry(
+  private BrowseEntry toEntry(
       RepositoryRecord visibleRepository,
       RepositoryRecord sourceRepository,
       BrowseNodeDao.BrowseChild row,
@@ -245,16 +252,25 @@ public class BrowseController {
         row.assetSha1(),
         row.assetLastUpdatedAt(),
         row.leaf() ? BrowseDownloadUrls.asset(visibleRepository, downloadPath(
-            visibleRepository.format(), publicPath, row)) : null);
+            visibleRepository.format(), sourceRepository, publicPath, row)) : null);
   }
 
-  private static String downloadPath(
-      RepositoryFormat format, String publicPath, BrowseNodeDao.BrowseChild row) {
+  private String downloadPath(
+      RepositoryFormat format,
+      RepositoryRecord sourceRepository,
+      String publicPath,
+      BrowseNodeDao.BrowseChild row) {
     if (format == RepositoryFormat.ANSIBLEGALAXY) {
       return AnsibleGalaxyPathParser.ARTIFACT_BASE + row.displayName();
     }
     if (format == RepositoryFormat.CONDA) {
       return CondaBrowsePaths.toStoragePath(publicPath);
+    }
+    if (format == RepositoryFormat.APT && assetDao != null && row.assetId() != null) {
+      return assetDao.findAssetById(row.assetId())
+          .filter(asset -> asset.repositoryId() == sourceRepository.id())
+          .map(asset -> asset.path())
+          .orElse(row.path());
     }
     return row.path();
   }

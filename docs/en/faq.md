@@ -2,7 +2,7 @@
 
 ## What is kkrepo?
 
-kkrepo is a Nexus-compatible, self-hosted artifact repository for common package formats such as Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift Package Registry, Ansible Galaxy, Conda, Docker/OCI, NuGet, RubyGems, Yum, and Raw.
+kkrepo is a Nexus-compatible, self-hosted artifact repository for common package formats such as Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift Package Registry, Ansible Galaxy, Conda, APT/Debian, Docker/OCI, NuGet, RubyGems, Yum, and Raw.
 
 It keeps Nexus-like client URLs, protocol behavior, permissions, and migration goals while using MySQL for metadata and OSS/S3-compatible storage for blobs.
 
@@ -34,6 +34,7 @@ Current supported formats:
 - Swift Package Registry
 - Ansible Galaxy
 - Conda
+- APT / Debian
 - Docker / OCI
 - NuGet
 - RubyGems
@@ -48,7 +49,7 @@ For supported non-Docker formats, the main client URL shape is compatible with N
 /repository/<repo>/<artifact-path>
 ```
 
-This helps preserve Maven, npm, pip, Helm, Cargo, Dart/Flutter Pub, Composer, Terraform, SwiftPM, Ansible Galaxy, Conda, NuGet, RubyGems, Yum, Raw, and CI client configuration during migration for formats covered by the migration flow.
+This helps preserve Maven, npm, pip, Helm, Cargo, Dart/Flutter Pub, Composer, Terraform, SwiftPM, Ansible Galaxy, Conda, APT, NuGet, RubyGems, Yum, Raw, and CI client configuration during migration for formats covered by the migration flow.
 
 Docker / OCI uses the Registry HTTP API V2 `/v2/...` route instead of `/repository/<repo>/...`: shared-entrypoint deployments use `<host>/<repo>/<image>:<tag>`, and repository-level connector ports can expose `<host>:<repo-port>/<image>:<tag>`.
 
@@ -169,6 +170,12 @@ Nexus 3.93.x-3.94.x native Ansible repository definitions and shape-gated hosted
 Yes. `conda-hosted`, `conda-proxy`, and `conda-group` support root and nested channels, platform subdirs plus `noarch`, `.tar.bz2` and `.conda` packages, JSON/BZ2/ZSTD repodata, channeldata, conditional reads, Browse/Search/Usage, UI/API upload, and Nexus-compatible raw PUT. Real Conda client E2E covers hosted publication, group search/create/list, upstream proxy search/create/list, and cleanup.
 
 Nexus 3.92.x-3.94.x Conda repository definitions and shape-gated hosted packages can be migrated. Generated repodata/channeldata is rebuilt at the target; unknown source profiles, datastore shapes, or packages whose identity cannot be proven fail closed instead of being guessed. See [Client Recipes](client-recipes.md#conda) and the [Conda Repository Design Notes](../zh/dev/conda-repository-design.md).
+
+## Is APT / Debian supported?
+
+Yes. `apt-hosted` and `apt-proxy` provide signed Packages/Release/InRelease metadata, by-hash reads, Nexus-compatible `.deb` upload, passthrough or local re-sign proxy modes, Browse/Search/Usage, and real Debian/Ubuntu `apt update`, download, install, and upgrade flows. APT group is not exposed because Nexus does not define that recipe.
+
+Nexus 3.92.x-3.94.x hosted package data can be migrated only after preflight proves the APT datastore shape. Generated metadata is rebuilt on the target. Private signing keys are not copied implicitly, so migrated repositories remain offline until an administrator explicitly imports the intended key. See [Client Recipes](client-recipes.md#apt--debian), the [APT Design Notes](../zh/dev/apt-debian-repository-design.md), and the [Nexus performance baseline](../zh/dev/apt-performance-baseline.md).
 
 ## Is kkrepo production-ready?
 

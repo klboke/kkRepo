@@ -21,6 +21,7 @@ ANSIBLE_SECRET_PROXY_NEXUS_REPOSITORY="${ANSIBLE_SECRET_PROXY_MIGRATION_NEXUS_RE
 CONDA_NEXUS_REPOSITORY="${CONDA_MIGRATION_NEXUS_REPOSITORY:-conda-hosted}"
 CONDA_PROXY_NEXUS_REPOSITORY="${CONDA_PROXY_MIGRATION_NEXUS_REPOSITORY:-conda-proxy}"
 CONDA_GROUP_NEXUS_REPOSITORY="${CONDA_GROUP_MIGRATION_NEXUS_REPOSITORY:-conda-group}"
+APT_NEXUS_REPOSITORY="${APT_MIGRATION_NEXUS_REPOSITORY:-apt-hosted}"
 NEXUS_USER="${NEXUS_COMPAT_USERNAME:-admin}"
 NEXUS_PASSWORD="${NEXUS_COMPAT_PASSWORD:-Admin1234}"
 
@@ -43,6 +44,7 @@ ANSIBLE_SECRET_PROXY_KKREPO_REPOSITORY="${ANSIBLE_SECRET_PROXY_MIGRATION_KKREPO_
 CONDA_KKREPO_REPOSITORY="${CONDA_MIGRATION_KKREPO_REPOSITORY:-conda-hosted}"
 CONDA_PROXY_KKREPO_REPOSITORY="${CONDA_PROXY_MIGRATION_KKREPO_REPOSITORY:-conda-proxy}"
 CONDA_GROUP_KKREPO_REPOSITORY="${CONDA_GROUP_MIGRATION_KKREPO_REPOSITORY:-conda-group}"
+APT_KKREPO_REPOSITORY="${APT_MIGRATION_KKREPO_REPOSITORY:-apt-hosted}"
 KKREPO_SECONDARY_URL="${KKREPO_MIGRATION_SECONDARY_URL:-}"
 KKREPO_TARGET_DATABASE="${KKREPO_MIGRATION_TARGET_DATABASE:-mysql}"
 KKREPO_TARGET_DATABASE_SERVICE="${KKREPO_MIGRATION_TARGET_DATABASE_SERVICE:-mysql}"
@@ -112,6 +114,18 @@ CONDA_FIXTURE_WORKDIR=""
 CONDA_FIXTURE_ARCHIVE=""
 CONDA_FIXTURE_SHA256=""
 CONDA_FIXTURE_MARKER="kkrepo Conda Nexus migration E2E $TAG_SAFE_LC"
+APT_MIGRATION_ENABLED="${APT_MIGRATION_ENABLED:-false}"
+APT_PACKAGE="${APT_MIGRATION_PACKAGE:-kkrepo-apt-migration}"
+APT_VERSION="${APT_MIGRATION_VERSION:-1:1.2.3~rc1-2}"
+APT_ARCHITECTURE="${APT_MIGRATION_ARCHITECTURE:-amd64}"
+APT_FIXTURE_MARKER="${APT_MIGRATION_MARKER:-kkRepo Nexus APT migration E2E}"
+APT_FIXTURE_WORKDIR="${APT_MIGRATION_FIXTURE_DIR:-${RUNNER_TEMP:-/tmp}/kkrepo-apt-migration-fixture}"
+APT_FIXTURE_MANIFEST="$APT_FIXTURE_WORKDIR/fixture.json"
+APT_FIXTURE_ARCHIVE=""
+APT_FIXTURE_PRIVATE_KEY="$APT_FIXTURE_WORKDIR/private.asc"
+APT_FIXTURE_PUBLIC_KEY="$APT_FIXTURE_WORKDIR/public.asc"
+APT_FIXTURE_SHA256=""
+APT_FIXTURE_PACKAGE_PATH=""
 TERRAFORM_PROXY_PROVIDER_NAMESPACE="${TERRAFORM_PROXY_PROVIDER_NAMESPACE:-hashicorp}"
 TERRAFORM_PROXY_PROVIDER_NAME="${TERRAFORM_PROXY_PROVIDER_NAME:-null}"
 TERRAFORM_PROXY_PROVIDER_VERSION="${TERRAFORM_PROXY_PROVIDER_VERSION:-3.2.4}"
@@ -259,6 +273,23 @@ cleanup() {
   fi
   if [[ -n "$CONDA_FIXTURE_WORKDIR" ]]; then
     rm -rf "$CONDA_FIXTURE_WORKDIR"
+  fi
+  if [[ "$APT_MIGRATION_ENABLED" == "true" ]]; then
+    rm -f \
+      "$APT_FIXTURE_WORKDIR/private.asc" \
+      "$APT_FIXTURE_WORKDIR/public.asc" \
+      "$APT_FIXTURE_WORKDIR/fixture.json" \
+      "$APT_FIXTURE_WORKDIR/key-import.json" \
+      "$APT_FIXTURE_WORKDIR/target-repository.json" \
+      "$APT_FIXTURE_WORKDIR/target-job.json" \
+      "$APT_FIXTURE_WORKDIR/target-Packages" \
+      "$APT_FIXTURE_WORKDIR/target-package.deb" \
+      "$APT_FIXTURE_WORKDIR/source-Packages" \
+      "$APT_FIXTURE_WORKDIR/source-package.deb"
+    if [[ -n "$APT_FIXTURE_ARCHIVE" ]]; then
+      rm -f "$APT_FIXTURE_ARCHIVE"
+    fi
+    rmdir "$APT_FIXTURE_WORKDIR" >/dev/null 2>&1 || true
   fi
 }
 
@@ -421,6 +452,373 @@ ansible_migration_enabled() {
 
 conda_migration_enabled() {
   [[ "$CONDA_MIGRATION_ENABLED" == "true" ]]
+}
+
+apt_migration_enabled() {
+  [[ "$APT_MIGRATION_ENABLED" == "true" ]]
+}
+
+source_apt_available() {
+  curl -m 20 -fsS \
+    -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$NEXUS_URL/service/rest/v1/repositories/apt/hosted/$APT_NEXUS_REPOSITORY" \
+    >/dev/null 2>&1
+}
+
+load_apt_fixture() {
+  if [[ ! -s "$APT_FIXTURE_MANIFEST" \
+      || ! -s "$APT_FIXTURE_PRIVATE_KEY" \
+      || ! -s "$APT_FIXTURE_PUBLIC_KEY" ]]; then
+    log "APT migration fixture is incomplete in $APT_FIXTURE_WORKDIR"
+    exit 1
+  fi
+  local fixture_repository fixture_package fixture_version fixture_architecture
+  local fixture_filename fixture_path fixture_marker
+  IFS=$'\t' read -r \
+    fixture_repository fixture_package fixture_version fixture_architecture \
+    fixture_filename fixture_path APT_FIXTURE_SHA256 APT_FIXTURE_SIZE fixture_marker \
+    < <(python3 - "$APT_FIXTURE_MANIFEST" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+fields = [
+    "repository", "package", "version", "architecture", "filename",
+    "packagePath", "sha256", "size", "marker",
+]
+values = [str(payload.get(field, "")) for field in fields]
+if any(not value for value in values):
+    raise SystemExit(f"APT fixture manifest is incomplete: {payload}")
+print("\t".join(values))
+PY
+)
+  if [[ "$fixture_repository" != "$APT_NEXUS_REPOSITORY" \
+      || "$fixture_package" != "$APT_PACKAGE" \
+      || "$fixture_version" != "$APT_VERSION" \
+      || "$fixture_architecture" != "$APT_ARCHITECTURE" \
+      || "$fixture_marker" != "$APT_FIXTURE_MARKER" ]]; then
+    log "APT fixture manifest does not match the configured migration coordinates"
+    exit 1
+  fi
+  APT_FIXTURE_ARCHIVE="$APT_FIXTURE_WORKDIR/$fixture_filename"
+  APT_FIXTURE_PACKAGE_PATH="$fixture_path"
+  if [[ ! -s "$APT_FIXTURE_ARCHIVE" ]]; then
+    log "APT fixture archive is missing: $APT_FIXTURE_ARCHIVE"
+    exit 1
+  fi
+  if [[ "$(file_size "$APT_FIXTURE_ARCHIVE")" != "$APT_FIXTURE_SIZE" \
+      || "$(file_sha256 "$APT_FIXTURE_ARCHIVE")" != "$APT_FIXTURE_SHA256" ]]; then
+    log "APT fixture archive size or SHA-256 does not match its manifest"
+    exit 1
+  fi
+}
+
+assert_apt_packages_file() {
+  local packages_file="$1"
+  local expected_path="$2"
+  python3 - \
+    "$packages_file" "$APT_PACKAGE" "$APT_VERSION" "$APT_ARCHITECTURE" \
+    "$APT_FIXTURE_SHA256" "$APT_FIXTURE_SIZE" "$expected_path" <<'PY'
+import pathlib
+import sys
+
+path, package, version, architecture, sha256, size, expected_path = sys.argv[1:8]
+paragraphs = pathlib.Path(path).read_text(encoding="utf-8").strip().split("\n\n")
+records = []
+for paragraph in paragraphs:
+    fields = {}
+    current = None
+    for line in paragraph.splitlines():
+        if line.startswith((" ", "\t")) and current:
+            fields[current] += "\n" + line
+            continue
+        if ":" not in line:
+            continue
+        current, value = line.split(":", 1)
+        fields[current] = value.strip()
+    if fields:
+        records.append(fields)
+matches = [record for record in records if record.get("Package") == package]
+if len(matches) != 1:
+    raise SystemExit(f"APT Packages contains {len(matches)} records for {package}: {records}")
+record = matches[0]
+expected = {
+    "Version": version,
+    "Architecture": architecture,
+    "SHA256": sha256,
+    "Size": size,
+    "Filename": expected_path,
+}
+wrong = {key: (record.get(key), value) for key, value in expected.items()
+         if record.get(key) != value}
+if wrong:
+    raise SystemExit(f"APT Packages metadata changed during migration: {wrong}")
+PY
+}
+
+verify_source_apt_fixture() {
+  local packages_file="$APT_FIXTURE_WORKDIR/source-Packages"
+  local downloaded="$APT_FIXTURE_WORKDIR/source-package.deb"
+  local packages_url="$NEXUS_URL/repository/$APT_NEXUS_REPOSITORY/dists/stable/main/binary-$APT_ARCHITECTURE/Packages"
+  for ((i = 1; i <= WAIT_TIMEOUT_SECONDS; i++)); do
+    if curl -m 30 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+        "$packages_url" -o "$packages_file" 2>/dev/null \
+        && grep -Fq "Package: $APT_PACKAGE" "$packages_file"; then
+      break
+    fi
+    sleep 1
+  done
+  assert_apt_packages_file "$packages_file" "$APT_FIXTURE_PACKAGE_PATH"
+  curl -m 60 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$NEXUS_URL/repository/$APT_NEXUS_REPOSITORY/$APT_FIXTURE_PACKAGE_PATH" \
+    -o "$downloaded"
+  cmp "$APT_FIXTURE_ARCHIVE" "$downloaded"
+  curl -m 30 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$NEXUS_URL/repository/$APT_NEXUS_REPOSITORY/dists/stable/InRelease" \
+    >/dev/null
+  rm -f "$packages_file" "$downloaded"
+  log "source Nexus APT package, metadata, and signed Release verified"
+}
+
+verify_apt_repository_definition() {
+  local target_url="$1"
+  local label="$2"
+  local expected_online="$3"
+  local output="$APT_FIXTURE_WORKDIR/target-repository.json"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/internal/repositories/$APT_KKREPO_REPOSITORY" >"$output"
+  python3 - "$output" "$expected_online" <<'PY'
+import json
+import pathlib
+import sys
+
+repository = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+expected_online = sys.argv[2] == "true"
+if repository.get("recipe") != "apt-hosted":
+    raise SystemExit(f"migrated APT recipe is invalid: {repository}")
+if repository.get("online") is not expected_online:
+    raise SystemExit(
+        f"migrated APT online state is {repository.get('online')!r}, expected {expected_online}"
+    )
+apt = repository.get("apt") or {}
+if apt.get("distribution") != "stable" or apt.get("metadataMode") != "RESIGN":
+    raise SystemExit(f"migrated APT settings are invalid: {apt}")
+PY
+  log "APT hosted definition verified through $label (online=$expected_online)"
+}
+
+apt_signing_key_count() {
+  local repository_name
+  repository_name="$(sql_literal "$APT_KKREPO_REPOSITORY")"
+  target_db_query "
+    SELECT COUNT(*)
+      FROM apt_signing_key key_row
+      JOIN repository r ON r.id = key_row.repository_id
+     WHERE r.name = $repository_name"
+}
+
+activate_migrated_apt_repository() {
+  local payload="$APT_FIXTURE_WORKDIR/key-import.json"
+  python3 - "$APT_FIXTURE_PRIVATE_KEY" "$payload" <<'PY'
+import json
+import pathlib
+import sys
+
+private_key = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+pathlib.Path(sys.argv[2]).write_text(
+    json.dumps({"privateKey": private_key, "passphrase": ""}),
+    encoding="utf-8",
+)
+PY
+  curl -m 90 -fsS -u "$(auth)" \
+    -X PUT -H "Content-Type: application/json" --data-binary "@$payload" \
+    "$KKREPO_URL/internal/repositories/$APT_KKREPO_REPOSITORY/apt/signing-key" \
+    >/dev/null
+  rm -f "$payload"
+  curl -m 30 -fsS -u "$(auth)" \
+    -X PUT -H "Content-Type: application/json" --data '{"online":true}' \
+    "$KKREPO_URL/internal/repositories/$APT_KKREPO_REPOSITORY" >/dev/null
+  curl -m 30 -fsS -u "$(auth)" \
+    -X POST -H "Content-Type: application/json" --data '{}' \
+    "$KKREPO_URL/internal/repositories/$APT_KKREPO_REPOSITORY/apt/rebuild" >/dev/null
+  log "APT signing key was explicitly imported and the migrated repository was brought online"
+}
+
+wait_for_migrated_apt_packages() {
+  local target_url="$1"
+  local output="$2"
+  local packages_url="$target_url/repository/$APT_KKREPO_REPOSITORY/dists/stable/main/binary-$APT_ARCHITECTURE/Packages"
+  for ((i = 1; i <= WAIT_TIMEOUT_SECONDS; i++)); do
+    if curl -m 30 -fsS -u "$(auth)" "$packages_url" -o "$output" 2>/dev/null \
+        && grep -Fq "Package: $APT_PACKAGE" "$output"; then
+      return 0
+    fi
+    sleep 1
+  done
+  log "timed out waiting for migrated APT Packages through $target_url"
+  exit 1
+}
+
+apt_client_url() {
+  python3 - "$1" <<'PY'
+import sys
+from urllib.parse import urlsplit, urlunsplit
+
+parts = urlsplit(sys.argv[1])
+host = parts.hostname or ""
+if host in {"127.0.0.1", "localhost", "::1"}:
+    host = "host.docker.internal"
+port = f":{parts.port}" if parts.port else ""
+print(urlunsplit((parts.scheme, host + port, parts.path.rstrip("/"), "", "")))
+PY
+}
+
+run_apt_migration_client_acceptance() {
+  local target_url="$1"
+  local label="$2"
+  local safe_label workdir client_url auth_machine
+  safe_label="$(printf '%s' "$label" | tr -c 'A-Za-z0-9._-' '-')"
+  workdir="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-apt-migration-client-${safe_label}.XXXXXX")"
+  client_url="$(apt_client_url "$target_url")"
+  auth_machine="$(python3 - "$client_url" "$APT_KKREPO_REPOSITORY" <<'PY'
+import sys
+from urllib.parse import urlsplit
+
+parts = urlsplit(sys.argv[1])
+print(f"{parts.scheme}://{parts.netloc}/repository/{sys.argv[2]}/")
+PY
+)"
+  printf 'deb [signed-by=/etc/apt/keyrings/kkrepo.asc] %s/repository/%s stable main\n' \
+    "$client_url" "$APT_KKREPO_REPOSITORY" >"$workdir/kkrepo.list"
+  printf 'machine %s\nlogin %s\npassword %s\n' \
+    "$auth_machine" "$KKREPO_USER" "$KKREPO_PASSWORD" >"$workdir/kkrepo.conf"
+  chmod 0600 "$workdir/kkrepo.conf"
+  cp "$APT_FIXTURE_PUBLIC_KEY" "$workdir/kkrepo.asc"
+  log "running real apt update/download/install acceptance through $label"
+  docker run --rm --pull=missing \
+    --add-host host.docker.internal:host-gateway \
+    --volume "$workdir/kkrepo.list:/etc/apt/sources.list.d/kkrepo.list:ro" \
+    --volume "$workdir/kkrepo.conf:/etc/apt/auth.conf.d/kkrepo.conf:ro" \
+    --volume "$workdir/kkrepo.asc:/etc/apt/keyrings/kkrepo.asc:ro" \
+    -e APT_PACKAGE="$APT_PACKAGE" \
+    -e APT_VERSION="$APT_VERSION" \
+    -e APT_SHA256="$APT_FIXTURE_SHA256" \
+    -e APT_MARKER="$APT_FIXTURE_MARKER" \
+    debian:12-slim sh -euxc '
+      find /etc/apt/sources.list.d -maxdepth 1 -type f ! -name kkrepo.list -delete
+      rm -f /etc/apt/sources.list
+      rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb
+      apt-get update
+      cd /tmp
+      apt-get download "$APT_PACKAGE=$APT_VERSION"
+      archive="$(find /tmp -maxdepth 1 -type f -name "${APT_PACKAGE}_*.deb" -print -quit)"
+      test -n "$archive"
+      test "$(sha256sum "$archive" | cut -d " " -f 1)" = "$APT_SHA256"
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        "$APT_PACKAGE=$APT_VERSION"
+      test "$(dpkg-query -W -f="\${Version}" "$APT_PACKAGE")" = "$APT_VERSION"
+      test "$(cat "/usr/share/kkrepo-apt/$APT_PACKAGE.txt")" = "$APT_MARKER"
+    '
+  rm -rf "$workdir"
+}
+
+verify_migrated_apt_fixture() {
+  local job_id="$1"
+  local target_url="${2:-$KKREPO_URL}"
+  local label="${3:-primary}"
+  local activate="${4:-false}"
+  local job="$APT_FIXTURE_WORKDIR/target-job.json"
+  local packages="$APT_FIXTURE_WORKDIR/target-Packages"
+  local downloaded="$APT_FIXTURE_WORKDIR/target-package.deb"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/internal/migration/nexus/repository-data/jobs/$job_id" >"$job"
+  python3 - "$job" "$APT_NEXUS_REPOSITORY" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+repository = sys.argv[2]
+rows = (payload.get("repositoryJobs") or payload.get("repositoryStatuses")
+        or payload.get("repositoryDetails") or [])
+matches = [row for row in rows
+           if (row.get("sourceRepositoryName") or row.get("repositoryName")
+               or row.get("name")) == repository]
+if not matches:
+    raise SystemExit(f"APT migration repository status not found: {repository}")
+row = matches[0]
+if int(row.get("migratedAssets") or 0) < 1 or int(row.get("failedAssets") or 0) != 0:
+    raise SystemExit(f"APT migration package result is invalid: {row}")
+PY
+  if [[ "$activate" == "true" ]]; then
+    if [[ "$(apt_signing_key_count | tr -d '[:space:]')" != "0" ]]; then
+      log "APT signing key was imported before explicit migration acceptance"
+      exit 1
+    fi
+    activate_migrated_apt_repository
+  fi
+  verify_apt_repository_definition "$target_url" "$label" true
+  wait_for_migrated_apt_packages "$target_url" "$packages"
+  assert_apt_packages_file "$packages" "$APT_FIXTURE_PACKAGE_PATH"
+  curl -m 60 -fsS -u "$(auth)" \
+    "$target_url/repository/$APT_KKREPO_REPOSITORY/$APT_FIXTURE_PACKAGE_PATH" \
+    -o "$downloaded"
+  cmp "$APT_FIXTURE_ARCHIVE" "$downloaded"
+  run_apt_migration_client_acceptance "$target_url" "$label"
+  rm -f "$job" "$packages" "$downloaded"
+  log "migrated APT package and real-client install verified through $label"
+}
+
+apt_fixture_row_counts() {
+  local repository_name package_name version
+  repository_name="$(sql_literal "$APT_KKREPO_REPOSITORY")"
+  package_name="$(sql_literal "$APT_PACKAGE")"
+  version="$(sql_literal "$APT_VERSION")"
+  target_db_query "
+    SELECT
+      (SELECT COUNT(*) FROM apt_package_record p JOIN repository r ON r.id = p.repository_id
+        WHERE r.name = $repository_name AND p.package_name = $package_name
+          AND p.package_version = $version),
+      (SELECT COUNT(*) FROM component c JOIN repository r ON r.id = c.repository_id
+        WHERE r.name = $repository_name AND c.format = 'apt'
+          AND c.name = $package_name AND c.version = $version),
+      (SELECT COUNT(*) FROM asset a JOIN component c ON c.id = a.component_id
+        JOIN repository r ON r.id = c.repository_id
+        WHERE r.name = $repository_name AND c.format = 'apt'
+          AND c.name = $package_name AND c.version = $version),
+      (SELECT COUNT(DISTINCT ab.id) FROM asset_blob ab JOIN asset a ON a.asset_blob_id = ab.id
+        JOIN component c ON c.id = a.component_id JOIN repository r ON r.id = c.repository_id
+        WHERE r.name = $repository_name AND c.format = 'apt'
+          AND c.name = $package_name AND c.version = $version),
+      (SELECT COUNT(*) FROM apt_suite_state s JOIN repository r ON r.id = s.repository_id
+        WHERE r.name = $repository_name AND s.distribution_name = 'stable'),
+      (SELECT COUNT(*) FROM apt_snapshot s JOIN repository r ON r.id = s.repository_id
+        WHERE r.name = $repository_name AND s.distribution_name = 'stable'
+          AND s.published_at IS NOT NULL),
+      (SELECT COUNT(*) FROM apt_signing_key k JOIN repository r ON r.id = k.repository_id
+        WHERE r.name = $repository_name AND k.active = TRUE)"
+}
+
+assert_apt_fixture_counts() {
+  local counts="$1"
+  python3 - "$counts" <<'PY'
+import sys
+
+raw = sys.argv[1]
+values = [int(value) for value in raw.split()]
+names = ["package", "component", "asset", "blob", "suite", "snapshots", "active_key"]
+if len(values) != len(names):
+    raise SystemExit(f"unexpected APT row-count snapshot: {raw!r}")
+wrong = [name for name, value in zip(names[:5], values[:5]) if value != 1]
+if values[5] < 1:
+    wrong.append("snapshots")
+if values[6] != 1:
+    wrong.append("active_key")
+if wrong:
+    raise SystemExit(f"APT migration row counts are invalid for {wrong}: {raw!r}")
+print(" ".join(f"{name}={value}" for name, value in zip(names, values)))
+PY
 }
 
 source_conda_available() {
@@ -3277,7 +3675,9 @@ run_config_metadata_migration() {
     "$ANSIBLE_PROXY_NEXUS_REPOSITORY" \
     "$ANSIBLE_SECRET_PROXY_NEXUS_REPOSITORY" \
     "$CONDA_MIGRATION_ENABLED" \
-    "$CONDA_NEXUS_REPOSITORY" <<'PY'
+    "$CONDA_NEXUS_REPOSITORY" \
+    "$APT_MIGRATION_ENABLED" \
+    "$APT_NEXUS_REPOSITORY" <<'PY'
 import json
 import sys
 
@@ -3295,7 +3695,9 @@ import sys
     ansible_secret_proxy_repository,
     conda_enabled,
     conda_repository,
-) = sys.argv[1:14]
+    apt_enabled,
+    apt_repository,
+) = sys.argv[1:16]
 with open(path, "r", encoding="utf-8") as source:
     payload = json.load(source)
 plan = payload.get("migrationPlan") or {}
@@ -3453,6 +3855,31 @@ if conda_enabled == "true":
         raise SystemExit(f"Conda hosted plan item not found: {conda_repository}")
     if conda[0].get("status") != "FULL" or conda[0].get("readMode") != "script-datastore":
         raise SystemExit(f"Conda hosted migration is not fail-closed FULL: {conda[0]}")
+if apt_enabled == "true":
+    capability = ((profile.get("formatCapabilities") or {}).get("apt") or {})
+    if capability.get("contentMigration") is not True:
+        raise SystemExit(f"APT datastore content model was not proven: {capability}")
+    apt = [
+        item
+        for item in items
+        if item.get("area") == "repository" and item.get("name") == apt_repository
+    ]
+    if not apt:
+        raise SystemExit(f"APT hosted plan item not found: {apt_repository}")
+    if (apt[0].get("status") != "NEEDS_MANUAL_ACTION"
+            or apt[0].get("readMode") != "script-datastore"):
+        raise SystemExit(f"APT hosted migration did not fail closed for key import: {apt[0]}")
+    expected_action = "repository:" + apt_repository
+    if expected_action not in (plan.get("manualActions") or []):
+        raise SystemExit(
+            f"APT hosted preflight omitted manual action {expected_action}: "
+            f"{plan.get('manualActions')}"
+        )
+    if not any(
+        f"APT repository {apt_repository} requires manual signing-key import" in warning
+        for warning in (payload.get("warnings") or [])
+    ):
+        raise SystemExit("APT preflight omitted the explicit signing-key warning")
 print(
     "preflight adapter="
     + str(adapter)
@@ -3472,7 +3899,8 @@ PY
   python3 - \
     "$run_file" "$expected_adapter" "$NEXUS_REPOSITORY" \
     "$SWIFT_MIGRATION_ENABLED" "$SWIFT_PROXY_NEXUS_REPOSITORY" \
-    "$ANSIBLE_MIGRATION_ENABLED" "$ANSIBLE_SECRET_PROXY_NEXUS_REPOSITORY" <<'PY'
+    "$ANSIBLE_MIGRATION_ENABLED" "$ANSIBLE_SECRET_PROXY_NEXUS_REPOSITORY" \
+    "$APT_MIGRATION_ENABLED" "$APT_NEXUS_REPOSITORY" <<'PY'
 import json
 import sys
 
@@ -3484,15 +3912,19 @@ import sys
     swift_proxy_repository,
     ansible_enabled,
     ansible_secret_proxy_repository,
-) = sys.argv[1:8]
+    apt_enabled,
+    apt_repository,
+) = sys.argv[1:10]
 with open(path, "r", encoding="utf-8") as source:
     payload = json.load(source)
 status = payload.get("status")
 has_unavailable_proxy = swift_enabled == "true" or ansible_enabled == "true"
-if has_unavailable_proxy:
+has_apt_signing = apt_enabled == "true"
+has_manual_repository = has_unavailable_proxy or has_apt_signing
+if has_manual_repository:
     if status != "finished_with_manual_actions":
         raise SystemExit(
-            "metadata migration with an unavailable proxy credential returned "
+            "metadata migration with a fail-closed repository returned "
             f"unexpected status: {status!r}"
         )
 elif status not in {"finished", "finished_with_password_resets_required"}:
@@ -3501,10 +3933,15 @@ validation = payload.get("validation") or {}
 if validation.get("failed"):
     raise SystemExit(f"metadata migration validation failed: {validation}")
 manual = validation.get("manualActions") or []
-if has_unavailable_proxy:
-    if "repository/proxy credentials" not in manual:
+if has_manual_repository:
+    if has_unavailable_proxy and "repository/proxy credentials" not in manual:
         raise SystemExit(
             "metadata migration did not require manual proxy credential completion: "
+            f"{manual}"
+        )
+    if has_apt_signing and "repository/APT signing keys" not in manual:
+        raise SystemExit(
+            "metadata migration did not require explicit APT signing-key import: "
             f"{manual}"
         )
 elif manual:
@@ -3523,17 +3960,28 @@ failed_checks = [check for check in checks if check.get("status") == "FAIL"]
 manual_checks = [check for check in checks if check.get("status") == "MANUAL"]
 if failed_checks:
     raise SystemExit(f"metadata migration had failed checks: {failed_checks}")
-if has_unavailable_proxy:
+if has_manual_repository:
     proxy_checks = [
         check
         for check in manual_checks
         if check.get("scope") == "repository" and check.get("name") == "proxy credentials"
     ]
-    other_manual_checks = [check for check in manual_checks if check not in proxy_checks]
-    if len(proxy_checks) != 1 or other_manual_checks:
+    apt_checks = [
+        check
+        for check in manual_checks
+        if check.get("scope") == "repository" and check.get("name") == "APT signing keys"
+    ]
+    expected_proxy_checks = 1 if has_unavailable_proxy else 0
+    expected_apt_checks = 1 if has_apt_signing else 0
+    other_manual_checks = [
+        check for check in manual_checks if check not in proxy_checks and check not in apt_checks
+    ]
+    if (len(proxy_checks) != expected_proxy_checks
+            or len(apt_checks) != expected_apt_checks
+            or other_manual_checks):
         raise SystemExit(
-            "metadata migration manual checks differ from the expected fail-closed proxy "
-            f"credential check: proxy={proxy_checks} other={other_manual_checks}"
+            "metadata migration manual checks differ from the expected fail-closed "
+            f"repositories: proxy={proxy_checks} apt={apt_checks} other={other_manual_checks}"
         )
     plan_manual = plan.get("manualActions") or []
     expected_actions = []
@@ -3541,6 +3989,8 @@ if has_unavailable_proxy:
         expected_actions.append("repository:" + swift_proxy_repository)
     if ansible_enabled == "true":
         expected_actions.append("repository:" + ansible_secret_proxy_repository)
+    if apt_enabled == "true":
+        expected_actions.append("repository:" + apt_repository)
     missing_actions = [action for action in expected_actions if action not in plan_manual]
     if missing_actions:
         raise SystemExit(
@@ -3668,6 +4118,19 @@ if conda_migration_enabled; then
   publish_conda_fixture_to_source_nexus
   verify_source_conda_fixture
 fi
+if apt_migration_enabled; then
+  need python3
+  need cmp
+  if ! source_apt_available; then
+    log "required APT hosted repository $APT_NEXUS_REPOSITORY is not available on the Nexus 3.92/3.94 source"
+    exit 1
+  fi
+  # The preparation test creates a real signed Nexus repository and leaves its private key only
+  # in the runner's temporary directory. Preflight can therefore prove the datastore shape while
+  # target activation still requires an explicit key-import step below.
+  load_apt_fixture
+  verify_source_apt_fixture
+fi
 run_config_metadata_migration
 if composer_migration_enabled; then
   verify_composer_requires_explicit_proxy_selection
@@ -3683,6 +4146,13 @@ if ansible_migration_enabled; then
 fi
 if conda_migration_enabled; then
   verify_conda_repository_definitions "$KKREPO_URL" "primary"
+fi
+if apt_migration_enabled; then
+  verify_apt_repository_definition "$KKREPO_URL" "primary fail-closed migration" false
+  if [[ "$(apt_signing_key_count | tr -d '[:space:]')" != "0" ]]; then
+    log "APT private signing material was migrated without explicit approval"
+    exit 1
+  fi
 fi
 
 kkrepo_ref="${KKREPO_DOCKER_REGISTRY}/${IMAGE}:${TAG}"
@@ -3725,6 +4195,9 @@ if ansible_migration_enabled; then
 fi
 if conda_migration_enabled; then
   migration_repositories_json="$migration_repositories_json,\"$(json_escape "$CONDA_NEXUS_REPOSITORY")\""
+fi
+if apt_migration_enabled; then
+  migration_repositories_json="$migration_repositories_json,\"$(json_escape "$APT_NEXUS_REPOSITORY")\""
 fi
 if terraform_migration_enabled; then
   migration_repositories_json="$migration_repositories_json,\"$(json_escape "$TERRAFORM_NEXUS_REPOSITORY")\""
@@ -3879,4 +4352,13 @@ if swift_migration_enabled; then
   fi
 fi
 
-log "Docker/Cargo/Pub/Composer/Terraform/Swift/Ansible/Conda migration E2E completed: job=$job_id source=${NEXUS_URL%/}/repository/${NEXUS_REPOSITORY}/v2/${IMAGE}:${TAG} target=$kkrepo_ref"
+if apt_migration_enabled; then
+  verify_migrated_apt_fixture "$job_id" "$KKREPO_URL" "primary" true
+  apt_counts="$(apt_fixture_row_counts)"
+  log "APT migration row counts: $(assert_apt_fixture_counts "$apt_counts")"
+  if swift_migration_enabled && [[ -n "$KKREPO_SECONDARY_URL" ]]; then
+    verify_migrated_apt_fixture "$job_id" "$KKREPO_SECONDARY_URL" "secondary" false
+  fi
+fi
+
+log "Docker/Cargo/Pub/Composer/Terraform/Swift/Ansible/Conda/APT migration E2E completed: job=$job_id source=${NEXUS_URL%/}/repository/${NEXUS_REPOSITORY}/v2/${IMAGE}:${TAG} target=$kkrepo_ref"

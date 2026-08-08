@@ -157,7 +157,7 @@ public class NexusApiMigrationService {
             validateMigration(inventory, request, preflight, passwordResetRequired);
         String status = validation.failed()
             ? "finished_with_validation_failures"
-            : hasProxyManualAction(inventory)
+            : hasRepositoryManualAction(inventory)
                 ? "finished_with_manual_actions"
                 : !passwordResetRequired.isEmpty()
                     ? "finished_with_password_resets_required"
@@ -214,7 +214,7 @@ public class NexusApiMigrationService {
       NexusMigrationTargetBlobStore targetBlobStore,
       String requestedVersion) {
     NexusSourceProfile sourceProfile = NexusSourceProfile.fromInventory(inventory, requestedVersion);
-    NexusMigrationPlan migrationPlan = withProxyManualActions(
+    NexusMigrationPlan migrationPlan = withRepositoryManualActions(
         new MigrationPlanBuilder().build(sourceProfile, new MigrationScope(List.of(), true, false)),
         inventory);
     List<UnsupportedRepository> unsupported = new ArrayList<>();
@@ -245,6 +245,7 @@ public class NexusApiMigrationService {
       }
       supported++;
       String credentialRisk = "proxy".equalsIgnoreCase(type) ? proxyCredentialRisk(document) : null;
+      String manualActionRisk = repositoryManualActionRisk(document);
       repositoriesToMigrate.add(new RepositoryMigrationPlan(
           name,
           format,
@@ -253,7 +254,7 @@ public class NexusApiMigrationService {
               .map(RepositoryRecipe::name)
               .orElse(null),
           sourceBlobStoreName(document),
-          credentialRisk == null && bool(value(document, "online"), true),
+          manualActionRisk == null && bool(value(document, "online"), true),
           remoteUrl(document)));
       if (repositoryTypeEnum(document) == RepositoryType.GROUP) {
         groupRepositories.add(new GroupRepositoryMigrationPlan(
@@ -281,15 +282,22 @@ public class NexusApiMigrationService {
     if (!missingPasswordUsers.isEmpty()) {
       warnings.add("Local users without password hash compensation will need password reset.");
     }
-    proxyManualActionRisks(inventory).forEach((repository, risk) -> {
+    repositoryManualActionRisks(inventory).forEach((repository, risk) -> {
       if ("unsupported_swift_remote".equals(risk)) {
         warnings.add("Swift proxy repository " + repository
             + " uses an unsupported remote and will be skipped; recreate it manually with "
             + "the GitHub base URL https://github.com/.");
       } else {
-        warnings.add("Proxy repository " + repository
-            + " requires manual upstream credential configuration (" + risk
-            + "); the migrated repository will be offline.");
+        if (containsProxyCredentialRisk(risk)) {
+          warnings.add("Proxy repository " + repository
+              + " requires manual upstream credential configuration (" + risk
+              + "); the migrated repository will be offline.");
+        }
+        if (containsAptSigningRisk(risk)) {
+          warnings.add("APT repository " + repository
+              + " requires manual signing-key import (" + risk
+              + "); the migrated repository will be offline.");
+        }
       }
     });
     return new NexusMigrationPreflight(
@@ -534,8 +542,11 @@ public class NexusApiMigrationService {
     if (recipe.format().name().equals("DOCKER")) {
       putIfNotNull(attributes, "docker", dockerAttributes(document));
     }
+    if (recipe.format() == RepositoryFormat.APT) {
+      attributes.put("apt", aptAttributes(document, recipe));
+    }
     boolean online = bool(value(document, "online"), true);
-    if (recipe.type() == RepositoryType.PROXY && proxyCredentialRisk(document) != null) {
+    if (repositoryManualActionRisk(document) != null) {
       online = false;
     }
     return new RepositoryRecord(
@@ -693,6 +704,7 @@ public class NexusApiMigrationService {
           List.of()));
     }
     checks.add(validateProxyCredentials(inventory));
+    checks.add(validateAptSigningKeys(inventory));
     checks.add(validateApiKeyExport(inventory));
     checks.add(validatePlanHashes(preflight));
     return new NexusMigrationValidation(checks.stream()
@@ -884,6 +896,33 @@ public class NexusApiMigrationService {
             .toList());
   }
 
+  private ValidationCheck validateAptSigningKeys(NexusInventory inventory) {
+    Map<String, String> risks = repositoryManualActionRisks(inventory).entrySet().stream()
+        .filter(entry -> containsAptSigningRisk(entry.getValue()))
+        .collect(java.util.stream.Collectors.toMap(
+            Map.Entry::getKey,
+            Map.Entry::getValue,
+            (left, right) -> left,
+            LinkedHashMap::new));
+    if (risks.isEmpty()) {
+      return new ValidationCheck(
+          "repository",
+          "APT signing keys",
+          ValidationStatus.PASS.name(),
+          "No migrated APT repository requires a local signing key.",
+          List.of());
+    }
+    return new ValidationCheck(
+        "repository",
+        "APT signing keys",
+        ValidationStatus.MANUAL.name(),
+        "APT private signing keys require explicit administrator import; affected target "
+            + "repositories remain offline until their existing key is configured.",
+        risks.entrySet().stream()
+            .map(entry -> entry.getKey() + ": " + entry.getValue())
+            .toList());
+  }
+
   private ValidationCheck validatePlanHashes(NexusMigrationPreflight preflight) {
     NexusMigrationPlan plan = preflight.migrationPlan();
     String profileHash = plan == null ? null : plan.profileHash();
@@ -1041,10 +1080,54 @@ public class NexusApiMigrationService {
     return Map.copyOf(attributes);
   }
 
-  private static NexusMigrationPlan withProxyManualActions(
+  private static Map<String, Object> aptAttributes(
+      RepositoryDocument document, RepositoryRecipe recipe) {
+    Object raw = value(document, "apt");
+    if (!(raw instanceof Map<?, ?>)) {
+      raw = nested(value(document, "attributes"), "apt");
+    }
+    String distribution = string(nested(raw, "distribution"));
+    boolean flat = bool(nested(raw, "flat"), false);
+    boolean hosted = recipe.type() == RepositoryType.HOSTED;
+    LinkedHashMap<String, Object> attributes = new LinkedHashMap<>();
+    if (distribution != null) {
+      attributes.put("distribution", distribution);
+    } else if (hosted) {
+      attributes.put("distribution", "stable");
+    }
+    attributes.put("component", "main");
+    attributes.put("architectures", List.of(
+        "amd64", "arm64", "armhf", "i386", "ppc64el", "s390x"));
+    attributes.put("flat", !hosted && flat);
+    attributes.put(
+        "enforceDistribution",
+        hosted || bool(nested(raw, "enforceDistribution"), distribution != null));
+    attributes.put("metadataMode", hosted || aptSigningConfigured(document)
+        ? "RESIGN" : "PASSTHROUGH");
+    if (hosted) {
+      attributes.put("validUntilDays", 30);
+    }
+    attributes.put("origin", "kkRepo");
+    attributes.put("label", "kkRepo");
+    return Map.copyOf(attributes);
+  }
+
+  private static Object aptSigning(RepositoryDocument document) {
+    Object signing = value(document, "aptSigning");
+    if (!(signing instanceof Map<?, ?>)) {
+      signing = nested(value(document, "attributes"), "aptSigning");
+    }
+    return signing;
+  }
+
+  private static boolean aptSigningConfigured(RepositoryDocument document) {
+    return aptSigning(document) instanceof Map<?, ?> values && !values.isEmpty();
+  }
+
+  private static NexusMigrationPlan withRepositoryManualActions(
       NexusMigrationPlan plan,
       NexusInventory inventory) {
-    Map<String, String> risks = proxyManualActionRisks(inventory);
+    Map<String, String> risks = repositoryManualActionRisks(inventory);
     if (risks.isEmpty()) {
       return plan;
     }
@@ -1062,10 +1145,18 @@ public class NexusApiMigrationService {
             warnings.add("Target repository will be skipped because Swift proxy mode only supports "
                 + "the GitHub base URL.");
           } else {
-            reasons.add("Source Nexus omitted or masked the configured upstream credential; "
-                + "configure it manually before enabling the migrated proxy repository.");
-            warnings.add("Target repository will be migrated offline because the upstream credential "
-                + "cannot be recovered from the Nexus REST response (" + risk + ").");
+            if (containsProxyCredentialRisk(risk)) {
+              reasons.add("Source Nexus omitted or masked the configured upstream credential; "
+                  + "configure it manually before enabling the migrated proxy repository.");
+              warnings.add("Target repository will be migrated offline because the upstream credential "
+                  + "cannot be recovered from the Nexus REST response (" + risk + ").");
+            }
+            if (containsAptSigningRisk(risk)) {
+              reasons.add("APT signing keys are not imported without explicit administrator approval; "
+                  + "import the existing private key before enabling the migrated repository.");
+              warnings.add("Target APT repository will be migrated offline so it cannot silently create "
+                  + "a replacement signing identity (" + risk + ").");
+            }
           }
           return new NexusMigrationPlanItem(
               item.area(),
@@ -1087,9 +1178,13 @@ public class NexusApiMigrationService {
     if (risks.containsValue("unsupported_swift_remote")) {
       warnings.add("Swift proxies with non-GitHub remotes are skipped and require manual recreation.");
     }
-    if (risks.values().stream().anyMatch(risk -> !"unsupported_swift_remote".equals(risk))) {
+    if (risks.values().stream().anyMatch(NexusApiMigrationService::containsProxyCredentialRisk)) {
       warnings.add("Some proxy credentials were omitted or masked by the source Nexus REST API; "
           + "the affected target repositories are offline until credentials are configured manually.");
+    }
+    if (risks.values().stream().anyMatch(NexusApiMigrationService::containsAptSigningRisk)) {
+      warnings.add("APT repositories that require a local signing identity are migrated offline until "
+          + "an administrator explicitly imports the existing private key.");
     }
     LinkedHashSet<String> manualActions = new LinkedHashSet<>(plan.manualActions());
     risks.keySet().forEach(repository -> manualActions.add("repository:" + repository));
@@ -1104,20 +1199,80 @@ public class NexusApiMigrationService {
         manualActionList);
   }
 
-  private static boolean hasProxyManualAction(NexusInventory inventory) {
-    return !proxyManualActionRisks(inventory).isEmpty();
+  private static boolean hasRepositoryManualAction(NexusInventory inventory) {
+    return !repositoryManualActionRisks(inventory).isEmpty();
   }
 
-  private static Map<String, String> proxyManualActionRisks(NexusInventory inventory) {
+  private static Map<String, String> repositoryManualActionRisks(NexusInventory inventory) {
     LinkedHashMap<String, String> risks = new LinkedHashMap<>(proxyCredentialRisks(inventory));
     inventory.repositories().stream()
         .filter(NexusApiMigrationService::unsupportedSwiftProxyRemote)
         .sorted(Comparator.comparing(
             NexusApiMigrationService::repositoryName,
             Comparator.nullsLast(String::compareTo)))
-        .forEach(document -> risks.put(
-            repositoryName(document), "unsupported_swift_remote"));
+        .forEach(document -> addRisk(
+            risks, repositoryName(document), "unsupported_swift_remote"));
+    inventory.repositories().stream()
+        .sorted(Comparator.comparing(
+            NexusApiMigrationService::repositoryName,
+            Comparator.nullsLast(String::compareTo)))
+        .forEach(document -> addRisk(
+            risks, repositoryName(document), aptSigningRisk(document)));
     return java.util.Collections.unmodifiableMap(risks);
+  }
+
+  private static String repositoryManualActionRisk(RepositoryDocument document) {
+    String risk = repositoryTypeEnum(document) == RepositoryType.PROXY
+        ? proxyCredentialRisk(document) : null;
+    return combineRisk(risk, aptSigningRisk(document));
+  }
+
+  private static String aptSigningRisk(RepositoryDocument document) {
+    if (!"apt".equalsIgnoreCase(repositoryFormat(document))) {
+      return null;
+    }
+    RepositoryType type = repositoryTypeEnum(document);
+    if (type != RepositoryType.HOSTED
+        && !(type == RepositoryType.PROXY && aptSigningConfigured(document))) {
+      return null;
+    }
+    Object signing = aptSigning(document);
+    String keypair = string(nested(signing, "keypair"));
+    if (keypair == null || keypair.isBlank()) {
+      return "missing_apt_signing_key";
+    }
+    if (maskedSecret(keypair)) {
+      return "masked_apt_signing_key";
+    }
+    if (!keypair.contains("BEGIN PGP PRIVATE KEY BLOCK")) {
+      return "invalid_apt_signing_key";
+    }
+    String passphrase = string(nested(signing, "passphrase"));
+    if (maskedSecret(passphrase)) {
+      return "masked_apt_signing_passphrase";
+    }
+    return "apt_signing_key_import_required";
+  }
+
+  private static boolean containsProxyCredentialRisk(String risk) {
+    return risk != null && risk.contains("proxy_credential");
+  }
+
+  private static boolean containsAptSigningRisk(String risk) {
+    return risk != null && risk.contains("apt_signing");
+  }
+
+  private static void addRisk(Map<String, String> risks, String repository, String risk) {
+    if (repository == null || risk == null) {
+      return;
+    }
+    risks.merge(repository, risk, NexusApiMigrationService::combineRisk);
+  }
+
+  private static String combineRisk(String left, String right) {
+    if (left == null || left.isBlank()) return right;
+    if (right == null || right.isBlank() || left.contains(right)) return left;
+    return left + "," + right;
   }
 
   private static Map<String, String> proxyCredentialRisks(NexusInventory inventory) {

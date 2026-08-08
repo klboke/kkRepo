@@ -5,6 +5,7 @@ import com.github.klboke.kkrepo.core.RepositoryRecipe;
 import com.github.klboke.kkrepo.core.RepositoryRecipes;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
@@ -24,6 +25,7 @@ import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CargoSettings;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.AptSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CreateCommand;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.DockerSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.GroupSettings;
@@ -80,6 +82,7 @@ public class RepositoryService {
   private final SwiftRegistryDao swiftRegistry;
   private AnsibleGalaxyRegistryDao ansibleRegistry;
   private CondaRegistryDao condaRegistry;
+  private AptRegistryDao aptRegistry;
   private CleanupPolicyDao cleanupPolicies;
   private final String urlPrefix;
   private final int serverPort;
@@ -137,6 +140,11 @@ public class RepositoryService {
   @Autowired(required = false)
   void setCondaRegistry(CondaRegistryDao condaRegistry) {
     this.condaRegistry = condaRegistry;
+  }
+
+  @Autowired(required = false)
+  void setAptRegistry(AptRegistryDao aptRegistry) {
+    this.aptRegistry = aptRegistry;
   }
 
   @Autowired(required = false)
@@ -248,6 +256,11 @@ public class RepositoryService {
     if (usesCargoAuthenticationHint(recipe.format(), recipe.type())) {
       attributes.put("cargo", cargoAttributes(normalizeCargo(command.cargo())));
     }
+    AptSettings apt = null;
+    if (recipe.format() == RepositoryFormat.APT) {
+      apt = normalizeApt(command.apt(), recipe.type());
+      attributes.put("apt", aptAttributes(apt));
+    }
 
     String versionPolicy = null;
     String layoutPolicy = null;
@@ -274,6 +287,11 @@ public class RepositoryService {
         blobStoreId, null, proxyRemoteUrl, versionPolicy, layoutPolicy, writePolicy,
         strict, attributes);
     long id = repositoryDao.insert(toInsert);
+
+    if (recipe.format() == RepositoryFormat.APT && aptRegistry != null
+        && apt != null && apt.distribution() != null && !apt.distribution().isBlank()) {
+      aptRegistry.ensureSuite(id, apt.distribution(), java.time.Instant.now());
+    }
 
     if (recipe.type() == RepositoryType.GROUP) {
       List<Long> memberIds = resolveMemberIds(name, recipe.format(), command.group());
@@ -332,6 +350,11 @@ public class RepositoryService {
     } else {
       attributes.remove("cargo");
     }
+    if (recipe.format() == RepositoryFormat.APT) {
+      AptSettings current = readAptAttributes(existing);
+      AptSettings merged = mergeApt(current, command.apt(), existing.type());
+      attributes.put("apt", aptAttributes(merged));
+    }
 
     String versionPolicy = existing.versionPolicy();
     String layoutPolicy = existing.layoutPolicy();
@@ -365,6 +388,17 @@ public class RepositoryService {
         online, blobStoreId, existing.routingRuleId(), proxyRemoteUrl,
         versionPolicy, layoutPolicy, writePolicy, strict, attributes);
     repositoryDao.update(toUpdate);
+    if (recipe.format() == RepositoryFormat.APT && aptRegistry != null) {
+      AptSettings settings = readAptAttributes(toUpdate);
+      if (settings.distribution() != null && !settings.distribution().isBlank()) {
+        aptRegistry.ensureSuite(existing.id(), settings.distribution(), java.time.Instant.now());
+        if (existing.type() == RepositoryType.HOSTED
+            || "RESIGN".equals(settings.metadataMode())) {
+          aptRegistry.markSuiteDirty(
+              existing.id(), settings.distribution(), java.time.Instant.now());
+        }
+      }
+    }
     evictStaleOutboundProxyClient(existing.name(), existing.attributes(), attributes);
 
     if (recipe.type() == RepositoryType.GROUP && command.group() != null) {
@@ -421,6 +455,9 @@ public class RepositoryService {
     }
     if (condaRegistry != null && existing.format() == RepositoryFormat.CONDA) {
       condaRegistry.deleteRepositoryState(existing.id());
+    }
+    if (aptRegistry != null && existing.format() == RepositoryFormat.APT) {
+      aptRegistry.deleteRepositoryState(existing.id());
     }
     int removed = repositoryDao.deleteById(existing.id());
     if (removed == 0) {
@@ -881,6 +918,7 @@ public class RepositoryService {
     CargoSettings cargo = usesCargoAuthenticationHint(record.format(), record.type())
         ? readCargoAttributes(record)
         : null;
+    AptSettings apt = record.format() == RepositoryFormat.APT ? readAptAttributes(record) : null;
     GroupSettings group = null;
     switch (record.type()) {
       case HOSTED -> hosted = new HostedSettings(
@@ -893,7 +931,7 @@ public class RepositoryService {
         record.id(), record.name(), record.recipeName(),
         record.format(), record.type(), record.online(),
         blobStoreName, record.strictContentTypeValidation(), url,
-        hosted, proxy, raw, docker, cargo, group);
+        hosted, proxy, raw, docker, cargo, group, apt);
   }
 
   private Map<Long, String> blobStoreNameIndex() {
@@ -1287,6 +1325,146 @@ public class RepositoryService {
     RawSettings effective = raw == null ? new RawSettings("ATTACHMENT") : raw;
     String disposition = normalizeRawContentDisposition(effective.contentDisposition());
     return Map.of("contentDisposition", disposition);
+  }
+
+  private static AptSettings normalizeApt(AptSettings input, RepositoryType type) {
+    boolean hosted = type == RepositoryType.HOSTED;
+    AptSettings source = input == null
+        ? new AptSettings(
+            hosted ? "stable" : "",
+            "main",
+            List.of("amd64"),
+            false,
+            hosted,
+            hosted ? "RESIGN" : "PASSTHROUGH",
+            hosted ? 30 : null,
+            "kkRepo",
+            "kkRepo")
+        : input;
+    String distribution = source.distribution() == null
+        ? (hosted ? "stable" : "")
+        : source.distribution().trim();
+    String component = source.component() == null ? "main" : source.component().trim();
+    List<String> rawArchitectures = source.architectures() == null || source.architectures().isEmpty()
+        ? List.of("amd64") : source.architectures();
+    LinkedHashSet<String> architectures = new LinkedHashSet<>();
+    for (String architecture : rawArchitectures) {
+      String normalized = architecture == null
+          ? "" : architecture.trim().toLowerCase(java.util.Locale.ROOT);
+      requireAptSegment("architecture", normalized, 64);
+      architectures.add(normalized);
+    }
+    boolean flat = Boolean.TRUE.equals(source.flat());
+    boolean enforce = source.enforceDistribution() == null
+        ? hosted : source.enforceDistribution();
+    String metadataMode = source.metadataMode() == null || source.metadataMode().isBlank()
+        ? (hosted ? "RESIGN" : "PASSTHROUGH")
+        : source.metadataMode().trim().toUpperCase(java.util.Locale.ROOT);
+    if (hosted && distribution.isBlank()) {
+      throw new RepositoryValidationException("apt.distribution is required for hosted repositories");
+    }
+    if (enforce && distribution.isBlank()) {
+      throw new RepositoryValidationException(
+          "apt.distribution is required when apt.enforceDistribution is enabled");
+    }
+    if (!distribution.isBlank()) requireAptSegment("distribution", distribution, 128);
+    requireAptSegment("component", component, 128);
+    if (hosted && flat) {
+      throw new RepositoryValidationException("apt.flat is only supported for proxy repositories");
+    }
+    if (!hosted && flat && "RESIGN".equals(metadataMode)) {
+      throw new RepositoryValidationException(
+          "apt.flat proxy repositories only support PASSTHROUGH metadata");
+    }
+    if (hosted && !"RESIGN".equals(metadataMode)) {
+      throw new RepositoryValidationException("APT hosted metadata must be locally signed");
+    }
+    if (!Set.of("PASSTHROUGH", "RESIGN").contains(metadataMode)) {
+      throw new RepositoryValidationException(
+          "apt.metadataMode must be PASSTHROUGH or RESIGN");
+    }
+    Integer validUntilDays = source.validUntilDays();
+    if (validUntilDays != null && (validUntilDays < 0 || validUntilDays > 3650)) {
+      throw new RepositoryValidationException("apt.validUntilDays must be between 0 and 3650");
+    }
+    String origin = boundedAptText("origin", source.origin(), "kkRepo", 128);
+    String label = boundedAptText("label", source.label(), "kkRepo", 128);
+    return new AptSettings(
+        distribution, component, List.copyOf(architectures), flat, enforce, metadataMode,
+        validUntilDays, origin, label);
+  }
+
+  private static AptSettings mergeApt(
+      AptSettings base, AptSettings incoming, RepositoryType type) {
+    if (incoming == null) return normalizeApt(base, type);
+    AptSettings current = normalizeApt(base, type);
+    return normalizeApt(new AptSettings(
+        incoming.distribution() == null ? current.distribution() : incoming.distribution(),
+        incoming.component() == null ? current.component() : incoming.component(),
+        incoming.architectures() == null ? current.architectures() : incoming.architectures(),
+        incoming.flat() == null ? current.flat() : incoming.flat(),
+        incoming.enforceDistribution() == null
+            ? current.enforceDistribution() : incoming.enforceDistribution(),
+        incoming.metadataMode() == null ? current.metadataMode() : incoming.metadataMode(),
+        incoming.validUntilDays() == null ? current.validUntilDays() : incoming.validUntilDays(),
+        incoming.origin() == null ? current.origin() : incoming.origin(),
+        incoming.label() == null ? current.label() : incoming.label()), type);
+  }
+
+  private static Map<String, Object> aptAttributes(AptSettings settings) {
+    AptSettings apt = settings == null
+        ? normalizeApt(null, RepositoryType.HOSTED) : settings;
+    LinkedHashMap<String, Object> map = new LinkedHashMap<>();
+    map.put("distribution", apt.distribution());
+    map.put("component", apt.component());
+    map.put("architectures", apt.architectures());
+    map.put("flat", apt.flat());
+    map.put("enforceDistribution", apt.enforceDistribution());
+    map.put("metadataMode", apt.metadataMode());
+    if (apt.validUntilDays() != null) map.put("validUntilDays", apt.validUntilDays());
+    map.put("origin", apt.origin());
+    map.put("label", apt.label());
+    return Map.copyOf(map);
+  }
+
+  private static AptSettings readAptAttributes(RepositoryRecord record) {
+    Map<String, Object> attributes = record.attributes() == null ? Map.of() : record.attributes();
+    Object raw = attributes.get("apt");
+    if (!(raw instanceof Map<?, ?> map)) return normalizeApt(null, record.type());
+    ArrayList<String> architectures = new ArrayList<>();
+    Object rawArchitectures = map.get("architectures");
+    if (rawArchitectures instanceof Iterable<?> values) {
+      for (Object value : values) {
+        if (value != null) architectures.add(value.toString());
+      }
+    }
+    return normalizeApt(new AptSettings(
+        stringOrNull(map.get("distribution")),
+        stringOrNull(map.get("component")),
+        architectures.isEmpty() ? null : List.copyOf(architectures),
+        boolValue(map.get("flat")),
+        boolValue(map.get("enforceDistribution")),
+        stringOrNull(map.get("metadataMode")),
+        intValue(map.get("validUntilDays")),
+        stringOrNull(map.get("origin")),
+        stringOrNull(map.get("label"))), record.type());
+  }
+
+  private static void requireAptSegment(String field, String value, int maxLength) {
+    if (value == null || value.isBlank() || value.length() > maxLength
+        || !value.matches("[A-Za-z0-9][A-Za-z0-9+._-]*")) {
+      throw new RepositoryValidationException("Invalid apt." + field + ": " + value);
+    }
+  }
+
+  private static String boundedAptText(
+      String field, String value, String fallback, int maxLength) {
+    String normalized = value == null || value.isBlank() ? fallback : value.trim();
+    if (normalized.length() > maxLength || normalized.indexOf('\0') >= 0
+        || normalized.indexOf('\r') >= 0 || normalized.indexOf('\n') >= 0) {
+      throw new RepositoryValidationException("Invalid apt." + field);
+    }
+    return normalized;
   }
 
   private static RawSettings readRawAttributes(RepositoryRecord record) {

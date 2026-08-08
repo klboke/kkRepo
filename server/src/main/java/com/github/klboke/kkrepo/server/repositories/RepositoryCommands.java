@@ -21,7 +21,23 @@ public final class RepositoryCommands {
       RawSettings raw,
       DockerSettings docker,
       CargoSettings cargo,
-      GroupSettings group) {
+      GroupSettings group,
+      AptSettings apt) {
+    public CreateCommand(
+        String name,
+        String recipe,
+        Boolean online,
+        String blobStoreName,
+        Boolean strictContentTypeValidation,
+        HostedSettings hosted,
+        ProxySettings proxy,
+        RawSettings raw,
+        DockerSettings docker,
+        CargoSettings cargo,
+        GroupSettings group) {
+      this(name, recipe, online, blobStoreName, strictContentTypeValidation, hosted, proxy,
+          raw, docker, cargo, group, null);
+    }
   }
 
   public record UpdateCommand(
@@ -33,7 +49,21 @@ public final class RepositoryCommands {
       RawSettings raw,
       DockerSettings docker,
       CargoSettings cargo,
-      GroupSettings group) {
+      GroupSettings group,
+      AptSettings apt) {
+    public UpdateCommand(
+        Boolean online,
+        String blobStoreName,
+        Boolean strictContentTypeValidation,
+        HostedSettings hosted,
+        ProxySettings proxy,
+        RawSettings raw,
+        DockerSettings docker,
+        CargoSettings cargo,
+        GroupSettings group) {
+      this(online, blobStoreName, strictContentTypeValidation, hosted, proxy, raw, docker,
+          cargo, group, null);
+    }
   }
 
   public record HostedSettings(
@@ -145,6 +175,19 @@ public final class RepositoryCommands {
 
   public record CargoSettings(
       Boolean requireAuthentication) {
+  }
+
+  /** APT distribution and signed-metadata behavior shared by hosted and proxy recipes. */
+  public record AptSettings(
+      String distribution,
+      String component,
+      List<String> architectures,
+      Boolean flat,
+      Boolean enforceDistribution,
+      String metadataMode,
+      Integer validUntilDays,
+      String origin,
+      String label) {
   }
 
   public record GroupSettings(

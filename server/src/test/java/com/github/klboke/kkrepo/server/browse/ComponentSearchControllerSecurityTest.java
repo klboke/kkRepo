@@ -13,6 +13,7 @@ import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
@@ -337,6 +338,58 @@ class ComponentSearchControllerSecurityTest {
     assertEquals(Map.of(), withoutRegistry.search(
         null, "conda", 10, request("GET", "/internal/search/components"))
         .items().getFirst().details());
+  }
+
+  @Test
+  void aptSearchIncludesPackageCoordinatesChecksumsAndSourceDetails() {
+    StubComponentDao components = new StubComponentDao();
+    String packagePath = "pool/main/d/demo/demo_1.0_amd64.deb";
+    components.rows = List.of(row(
+        90L, "apt-hosted", RepositoryFormat.APT, "stable/main", "demo", "1.0",
+        "apt-package", packagePath));
+    AptRegistryDao apt = mock(AptRegistryDao.class);
+    Instant now = Instant.parse("2026-08-08T08:00:00Z");
+    when(apt.findPackageByPath(90L, packagePath)).thenReturn(Optional.of(
+        new AptRegistryDao.PackageRecord(
+            91L, 90L, "stable", "main", "amd64", "demo", "1.0", "demo-source",
+            "demo_1.0_amd64.deb", packagePath,
+            Map.of("Section", "utils", "Description", "Demo package"),
+            "a".repeat(32), "b".repeat(40), "c".repeat(64), 123L,
+            92L, 90L, AptRegistryDao.SOURCE_HOSTED, 1L, now, now, now)));
+    RecordingSecurityService security =
+        new RecordingSecurityService(permission -> AccessDecision.allow());
+    ComponentSearchController controller = controller(
+        components, subject("alice"), null, security);
+    controller.setAptRegistry(apt);
+
+    Map<String, Object> details = controller.search(
+        "demo", "apt", 10, request("GET", "/internal/search/components"))
+        .items().getFirst().details();
+
+    assertEquals("stable", details.get("distribution"));
+    assertEquals("main", details.get("component"));
+    assertEquals("amd64", details.get("architecture"));
+    assertEquals("demo-source", details.get("sourcePackage"));
+    assertEquals("demo_1.0_amd64.deb", details.get("filename"));
+    assertEquals("c".repeat(64), details.get("sha256"));
+    assertEquals(123L, details.get("size"));
+    assertEquals(AptRegistryDao.SOURCE_HOSTED, details.get("sourceKind"));
+    assertEquals("apt-hosted", details.get("sourceRepository"));
+    assertEquals("utils", details.get("section"));
+    assertEquals("Demo package", details.get("description"));
+
+    ComponentSearchController.ComponentSearchResponse filtered = controller.search(
+        "demo", "apt", 10, "stable", "main", "amd64", "demo-source", "cccccccc",
+        request("GET", "/internal/search/components"));
+    assertEquals(1, filtered.count());
+    assertEquals("demo", filtered.items().getFirst().name());
+
+    ResponseStatusException wrongFormat = assertThrows(
+        ResponseStatusException.class,
+        () -> controller.search(
+            "demo", "maven2", 10, "stable", null, null, null, null,
+            request("GET", "/internal/search/components")));
+    assertEquals(HttpStatus.BAD_REQUEST, wrongFormat.getStatusCode());
   }
 
   @Test

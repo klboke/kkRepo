@@ -5,6 +5,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
+import com.github.klboke.kkrepo.server.apt.AptService;
 import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyService;
 import com.github.klboke.kkrepo.server.cargo.CargoHostedService;
 import com.github.klboke.kkrepo.server.composer.ComposerHostedService;
@@ -108,6 +109,7 @@ public class ComponentUploadService {
               field("subdir", "STRING", "Conda subdir, for example linux-64 or noarch", false,
                   "Component coordinates")),
           List.of(field("asset", "FILE", "Conda .conda or .tar.bz2 package", false, null))),
+      singleAsset("apt"),
       rawLikeUpload("nuget"),
       rawLikeUpload("rubygems"),
       rawLikeUpload("yum"),
@@ -128,6 +130,7 @@ public class ComponentUploadService {
   private final SwiftService swiftService;
   private AnsibleGalaxyService ansibleGalaxyService;
   private CondaService condaService;
+  private AptService aptService;
   private final MavenPathParser mavenPathParser = new MavenPathParser();
   private final TerraformPathParser terraformPathParser = new TerraformPathParser();
 
@@ -217,6 +220,11 @@ public class ComponentUploadService {
     this.condaService = condaService;
   }
 
+  @Autowired(required = false)
+  void setAptService(AptService aptService) {
+    this.aptService = aptService;
+  }
+
   public UploadDefinition definition(String format) {
     String normalized = normalizeFormat(format);
     return DEFINITIONS.stream()
@@ -261,6 +269,7 @@ public class ComponentUploadService {
       case SWIFT -> uploadSwift(runtime, upload, createdBy, createdByIp);
       case ANSIBLEGALAXY -> uploadAnsible(runtime, upload, createdBy, createdByIp);
       case CONDA -> uploadConda(runtime, upload, createdBy, createdByIp);
+      case APT -> uploadApt(runtime, upload, createdBy, createdByIp);
       case DOCKER -> throw new UploadValidationException("Docker hosted upload must use the Docker Registry V2 API");
       case NUGET -> uploadRaw(runtime, upload, createdBy, createdByIp);
       case RUBYGEMS -> uploadRaw(runtime, upload, createdBy, createdByIp);
@@ -294,6 +303,25 @@ public class ComponentUploadService {
           runtime, path, body, asset.file().getContentType(), createdBy, createdByIp);
     }
     return List.of(path);
+  }
+
+  private List<String> uploadApt(
+      RepositoryRuntime runtime,
+      NormalizedUpload upload,
+      String createdBy,
+      String createdByIp) throws IOException {
+    if (aptService == null) {
+      throw new UploadValidationException("APT upload service is unavailable");
+    }
+    AssetUpload asset = singleAsset(upload, "APT");
+    String filename = originalFilename(asset.file());
+    if (!filename.toLowerCase(Locale.ROOT).endsWith(".deb")) {
+      throw new UploadValidationException("APT upload requires a .deb package");
+    }
+    try (InputStream body = asset.file().getInputStream()) {
+      return List.of(aptService.publish(
+          runtime, filename, body, null, null, createdBy, createdByIp).path());
+    }
   }
 
   private List<String> uploadTerraform(
@@ -658,6 +686,7 @@ public class ComponentUploadService {
       case SWIFT -> "swift";
       case ANSIBLEGALAXY -> "ansiblegalaxy";
       case CONDA -> "conda";
+      case APT -> "apt";
       case RAW -> "raw";
     };
   }

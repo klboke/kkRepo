@@ -302,8 +302,25 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
       case SWIFT -> swiftOperation(path, normalizedMethod);
       case ANSIBLEGALAXY -> ansibleOperation(path, normalizedMethod);
       case CONDA -> condaOperation(path, normalizedMethod);
+      case APT -> aptOperation(path, normalizedMethod);
       case RAW -> rawOperation(normalizedMethod);
     };
+  }
+
+  private static String aptOperation(String path, String method) {
+    if (path.equals("gpg.key")) return "apt_public_key";
+    if (path.endsWith("/InRelease") || path.endsWith("/Release")
+        || path.endsWith("/Release.gpg")) return "apt_release_metadata";
+    if (path.contains("/Packages") || path.contains("/Sources")
+        || path.contains("/by-hash/")) return "apt_package_index";
+    if (path.endsWith(".deb")) {
+      return switch (method) {
+        case "PUT", "POST" -> "apt_package_upload";
+        case "DELETE" -> "apt_package_delete";
+        default -> "apt_package_download";
+      };
+    }
+    return "apt_repository";
   }
 
   private static String condaOperation(String path, String method) {
