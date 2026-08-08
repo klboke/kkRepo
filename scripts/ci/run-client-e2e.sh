@@ -2692,7 +2692,9 @@ apt_test_key_rotation() {
   local old_status=$?
   set -e
   redact_log_file "$old_log"
-  if [[ "$old_status" -eq 0 ]] || ! grep -Eq 'NO_PUBKEY|signatures couldn.t be verified' "$old_log"; then
+  if [[ "$old_status" -eq 0 ]] || ! grep -Eq \
+      'NO_PUBKEY|signatures couldn.t be verified|Missing key .*needed to verify signature|OpenPGP signature verification failed|repository .* is not signed' \
+      "$old_log"; then
     log "APT key rotation did not reject metadata with the retired scoped key"
     return 1
   fi
