@@ -120,7 +120,7 @@ public class AptService {
     String section = chooseConfigured("component", component, settings.component());
     try (AptDebPackageInspector.InspectedPackage inspected = inspector.inspect(body, filename)) {
       return publishInspected(
-          runtime, settings, inspected, suite, section, actor, ip, expectedPath);
+          runtime, settings, inspected, suite, section, actor, ip, expectedPath, true);
     }
   }
 
@@ -136,8 +136,10 @@ public class AptService {
     AptRepositorySettings.Settings settings = repositorySettings.get(runtime);
     String suite = chooseConfigured("distribution", distribution, settings.distribution());
     String section = chooseConfigured("component", component, settings.component());
+    // savePackage marks the suite dirty. Migration deliberately leaves that state unpublished
+    // until an administrator imports the source signing key and requests an explicit rebuild.
     return publishInspected(
-        runtime, settings, inspected, suite, section, actor, ip, expectedPath);
+        runtime, settings, inspected, suite, section, actor, ip, expectedPath, false);
   }
 
   private PublishedPackage publishInspected(
@@ -148,7 +150,8 @@ public class AptService {
       String section,
       String actor,
       String ip,
-      String expectedPath) {
+      String expectedPath,
+      boolean publishSnapshot) {
     AptPackageControl control = inspected.control();
     if (!"all".equals(control.architecture())
         && !settings.architectures().contains(control.architecture())) {
@@ -229,7 +232,9 @@ public class AptService {
           .filter(row -> !row.assetId().equals(stored.assetId()))
           .ifPresent(row -> assets.retirePackageProjection(row.assetId()));
       lease.assertHeld();
-      publishPending(runtime, settings, suite);
+      if (publishSnapshot) {
+        publishPending(runtime, settings, suite);
+      }
       return new PublishedPackage(
           stored.path(), stored.packageName(), stored.version(), stored.architecture(),
           stored.sha256(), stored.size());

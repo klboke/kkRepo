@@ -280,8 +280,12 @@ class AptRepositoryBlackBoxCompatibilityTest {
           Exchange signature = get(endpoint, "dists/stable/Release.gpg");
           Exchange inRelease = get(endpoint, "dists/stable/InRelease");
           Exchange publicKey = get(endpoint, "gpg.key");
-          assertEquals(200, signature.status());
-          assertEquals(200, inRelease.status());
+          if (signature.status() != 200
+              || inRelease.status() != 200
+              || (publicKey.status() != 200 && publicKeyFallback == null)) {
+            Thread.sleep(500L);
+            continue;
+          }
           String publicArmor;
           if (publicKey.status() == 200) {
             publicArmor = publicKey.text();
