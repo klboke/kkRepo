@@ -78,6 +78,9 @@ class PostgreSqlDatabaseDialectTest {
     assertEquals(4, jdbc.sql.size());
     assertTrue(jdbc.sql.stream().allMatch(sql -> sql.contains("ON CONFLICT")));
     assertTrue(jdbc.sql.stream().allMatch(sql -> sql.contains("DO NOTHING")));
+    assertTrue(dialect.conda().insertChannelStateIfAbsentSql().contains("ON CONFLICT"));
+    assertTrue(dialect.conda().insertCoordinateLeaseIfAbsentSql().contains("DO NOTHING"));
+    assertEquals(512, dialect.conda().streamingFetchSize());
   }
 
   @Test

@@ -66,6 +66,9 @@ class MySqlDatabaseDialectTest {
     dialect.security().inheritRoleIfAbsent(jdbc, "developers", "readers");
 
     assertTrue(jdbc.sql.stream().allMatch(sql -> sql.contains("INSERT IGNORE")));
+    assertTrue(dialect.conda().insertChannelStateIfAbsentSql().contains("INSERT IGNORE"));
+    assertTrue(dialect.conda().insertCoordinateLeaseIfAbsentSql().contains("INSERT IGNORE"));
+    assertEquals(Integer.MIN_VALUE, dialect.conda().streamingFetchSize());
   }
 
   @Test

@@ -512,14 +512,19 @@ envs_dirs:
   - $workdir/envs
 EOF
   log "running Conda client search/create acceptance through $label"
-  env \
-    CONDARC="$condarc" \
-    CONDA_PKGS_DIRS="$workdir/pkgs" \
-    CONDA_ENVS_PATH="$workdir/envs" \
-    CONDA_SUBDIR="$CONDA_SUBDIR" \
-    "$CONDA_BIN" search --json --override-channels \
-      --channel "$channel" "$CONDA_PACKAGE=$CONDA_VERSION=$CONDA_BUILD" \
-      >"$search"
+  if ! env \
+      CONDARC="$condarc" \
+      CONDA_PKGS_DIRS="$workdir/pkgs" \
+      CONDA_ENVS_PATH="$workdir/envs" \
+      CONDA_SUBDIR="$CONDA_SUBDIR" \
+      "$CONDA_BIN" search --json --override-channels \
+        --channel "$channel" "$CONDA_PACKAGE=$CONDA_VERSION=$CONDA_BUILD" \
+        >"$search"; then
+    log "Conda client search failed through $label"
+    cat "$search" >&2 || true
+    rm -rf "$workdir"
+    return 1
+  fi
   python3 - "$search" "$CONDA_PACKAGE" "$CONDA_VERSION" "$CONDA_BUILD" <<'PY'
 import json
 import pathlib
@@ -534,15 +539,20 @@ if not any(
 ):
     raise SystemExit(f"Conda client search did not find migrated fixture: {payload}")
 PY
-  env \
-    CONDARC="$condarc" \
-    CONDA_PKGS_DIRS="$workdir/pkgs" \
-    CONDA_ENVS_PATH="$workdir/envs" \
-    CONDA_SUBDIR="$CONDA_SUBDIR" \
-    "$CONDA_BIN" create --json --yes --no-deps \
-      --prefix "$prefix" --override-channels \
-      --channel "$channel" "$CONDA_PACKAGE=$CONDA_VERSION=$CONDA_BUILD" \
-      >"$workdir/create.json"
+  if ! env \
+      CONDARC="$condarc" \
+      CONDA_PKGS_DIRS="$workdir/pkgs" \
+      CONDA_ENVS_PATH="$workdir/envs" \
+      CONDA_SUBDIR="$CONDA_SUBDIR" \
+      "$CONDA_BIN" create --json --yes --no-deps \
+        --prefix "$prefix" --override-channels \
+        --channel "$channel" "$CONDA_PACKAGE=$CONDA_VERSION=$CONDA_BUILD" \
+        >"$workdir/create.json"; then
+    log "Conda client create failed through $label"
+    cat "$workdir/create.json" >&2 || true
+    rm -rf "$workdir"
+    return 1
+  fi
   grep -Fxq "$CONDA_FIXTURE_MARKER" "$prefix/$marker_path"
   env \
     CONDARC="$condarc" \
@@ -590,7 +600,11 @@ PY
     "$NEXUS_URL/repository/$CONDA_NEXUS_REPOSITORY/$CONDA_SUBDIR/$(basename "$CONDA_FIXTURE_ARCHIVE")" \
     -o "$downloaded"
   cmp "$CONDA_FIXTURE_ARCHIVE" "$downloaded"
-  run_conda_client_acceptance "source Nexus hosted" "$NEXUS_URL" "$CONDA_NEXUS_REPOSITORY"
+  # A valid Conda channel must expose both the requested platform and noarch metadata.
+  # The source hosted repository only contains the platform fixture, while the group combines
+  # it with the proxy's noarch index, matching the client-facing repository used after migration.
+  run_conda_client_acceptance \
+    "source Nexus group" "$NEXUS_URL" "$CONDA_GROUP_NEXUS_REPOSITORY"
 }
 
 verify_conda_repository_definitions() {

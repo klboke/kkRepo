@@ -11,9 +11,9 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.EnumColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcUpserts;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.CondaPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.CoordinationPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
-import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseType;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -47,15 +47,15 @@ public class JdbcCondaRegistryDao implements CondaRegistryDao {
 
   private final JdbcTemplate jdbc;
   private final JsonColumns json;
+  private final CondaPersistenceDialect conda;
   private final CoordinationPersistenceDialect coordination;
-  private final DatabaseType databaseType;
 
   public JdbcCondaRegistryDao(
       JdbcTemplate jdbc, JsonColumns json, DatabaseDialect databaseDialect) {
     this.jdbc = jdbc;
     this.json = json;
+    this.conda = databaseDialect.conda();
     this.coordination = databaseDialect.coordination();
-    this.databaseType = databaseDialect.type();
   }
 
   @Override
@@ -731,22 +731,8 @@ public class JdbcCondaRegistryDao implements CondaRegistryDao {
         ? state.revision()
         : currentRepositoryRevision(state.repositoryId());
     byte[] hash = channelHash(state.channel());
-    String insert = databaseType == DatabaseType.MYSQL
-        ? """
-          INSERT IGNORE INTO conda_channel_state
-            (repository_id, channel_key, channel_key_hash, subdir, metadata_sha256,
-             package_base_url, revision, indexed_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-          """
-        : """
-          INSERT INTO conda_channel_state
-            (repository_id, channel_key, channel_key_hash, subdir, metadata_sha256,
-             package_base_url, revision, indexed_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT (repository_id, channel_key_hash, subdir) DO NOTHING
-          """;
     jdbc.update(
-        insert,
+        conda.insertChannelStateIfAbsentSql(),
         state.repositoryId(), state.channel(), hash, state.subdir(), state.metadataSha256(),
         state.packageBaseUrl(), revision, nullableTimestamp(indexedAt), nullableTimestamp(now));
   }
@@ -909,20 +895,8 @@ public class JdbcCondaRegistryDao implements CondaRegistryDao {
         leaseKey,
         nullableTimestamp(now));
     if (updated == 0) {
-      String insert = databaseType == DatabaseType.MYSQL
-          ? """
-            INSERT IGNORE INTO conda_coordinate_lease
-              (lease_key, owner, fencing_token, attempt_count, expires_at, updated_at)
-            VALUES (?, ?, 1, 1, ?, ?)
-            """
-          : """
-            INSERT INTO conda_coordinate_lease
-              (lease_key, owner, fencing_token, attempt_count, expires_at, updated_at)
-            VALUES (?, ?, 1, 1, ?, ?)
-            ON CONFLICT (lease_key) DO NOTHING
-            """;
       jdbc.update(
-          insert,
+          conda.insertCoordinateLeaseIfAbsentSql(),
           leaseKey,
           owner,
           nullableTimestamp(expiresAt),
@@ -1091,7 +1065,7 @@ public class JdbcCondaRegistryDao implements CondaRegistryDao {
       throws java.sql.SQLException {
     PreparedStatement statement = connection.prepareStatement(
         sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
-    statement.setFetchSize(databaseType == DatabaseType.MYSQL ? Integer.MIN_VALUE : 512);
+    statement.setFetchSize(conda.streamingFetchSize());
     return statement;
   }
 

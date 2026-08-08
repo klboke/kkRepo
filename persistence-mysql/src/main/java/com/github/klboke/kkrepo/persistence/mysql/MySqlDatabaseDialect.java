@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.persistence.mysql;
 
 import com.github.klboke.kkrepo.persistence.jdbc.spi.ComponentPersistenceDialect;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.CondaPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.CoordinationPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseType;
@@ -24,6 +25,7 @@ import org.springframework.jdbc.core.JdbcOperations;
 public final class MySqlDatabaseDialect implements DatabaseDialect {
   private final MySqlJsonPersistenceDialect json = new MySqlJsonPersistenceDialect();
   private final ComponentPersistenceDialect components = new MySqlComponentPersistenceDialect(json);
+  private final CondaPersistenceDialect conda = new MySqlCondaPersistenceDialect();
   private final CoordinationPersistenceDialect coordination = new MySqlCoordinationPersistenceDialect();
   private final SearchPersistenceDialect search = new MySqlSearchPersistenceDialect();
   private final SecurityPersistenceDialect security = new MySqlSecurityPersistenceDialect(json);
@@ -43,6 +45,11 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
   @Override
   public ComponentPersistenceDialect components() {
     return components;
+  }
+
+  @Override
+  public CondaPersistenceDialect conda() {
+    return conda;
   }
 
   @Override
@@ -238,6 +245,36 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
         throw new IllegalArgumentException("Unsafe timestamp column: " + timestampColumn);
       }
       return "COALESCE(TIMESTAMPDIFF(SECOND, MIN(" + timestampColumn + "), NOW(3)), 0)";
+    }
+  }
+
+  private static final class MySqlCondaPersistenceDialect
+      implements CondaPersistenceDialect {
+    private static final String INSERT_CHANNEL_STATE_IF_ABSENT_SQL = """
+        INSERT IGNORE INTO conda_channel_state
+          (repository_id, channel_key, channel_key_hash, subdir, metadata_sha256,
+           package_base_url, revision, indexed_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """;
+    private static final String INSERT_COORDINATE_LEASE_IF_ABSENT_SQL = """
+        INSERT IGNORE INTO conda_coordinate_lease
+          (lease_key, owner, fencing_token, attempt_count, expires_at, updated_at)
+        VALUES (?, ?, 1, 1, ?, ?)
+        """;
+
+    @Override
+    public String insertChannelStateIfAbsentSql() {
+      return INSERT_CHANNEL_STATE_IF_ABSENT_SQL;
+    }
+
+    @Override
+    public String insertCoordinateLeaseIfAbsentSql() {
+      return INSERT_COORDINATE_LEASE_IF_ABSENT_SQL;
+    }
+
+    @Override
+    public int streamingFetchSize() {
+      return Integer.MIN_VALUE;
     }
   }
 

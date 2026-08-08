@@ -21,6 +21,8 @@ public interface DatabaseDialect {
 
   ComponentPersistenceDialect components();
 
+  CondaPersistenceDialect conda();
+
   CoordinationPersistenceDialect coordination();
 
   JsonPersistenceDialect json();
