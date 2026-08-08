@@ -188,6 +188,7 @@ Swift 的生产加固证据拆分为独立 lane：定时 S3-compatible resilienc
 - [Swift Package Registry 开发设计说明](dev/swift-package-registry-design.md)
 - [Ansible Galaxy 仓库开发设计说明](dev/ansible-galaxy-repository-design.md)
 - [Conda 仓库开发设计说明](dev/conda-repository-design.md)
+- [APT / Debian 仓库开发设计说明](dev/apt-debian-repository-design.md)
 - [Cleanup Policy 开发设计说明](dev/cleanup-policy-design.md)
 - [Cleanup Policy 使用指南](cleanup-policy-guide.md)
 - [Ansible Galaxy 仓库使用指南](ansible-galaxy-guide.md)

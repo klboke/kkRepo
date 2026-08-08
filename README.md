@@ -191,8 +191,8 @@ Repository format roadmap:
 6. ✅ Swift Package Registry - Hosted, GitHub-backed proxy, group, Registry v1, immutable signed publication, UI/API upload, Browse/Search, multi-replica coordination, real SwiftPM/Xcode E2E, and shape-gated Nexus 3.92.x-3.94.x migration are implemented ([Chinese design notes](docs/zh/dev/swift-package-registry-design.md))
 7. ✅ Ansible Galaxy - Galaxy v3 hosted/proxy/group, immutable collection publishing, dependency resolution, route-scoped Base64 Bearer/Ansible 2.9 Token and GenericToken authentication, UI/API upload, Browse/Search, durable multi-replica import/proxy coordination, real Ansible 2.9/current client E2E, Nexus black-box compatibility, and shape-gated Nexus 3.93.x-3.94.x migration are implemented ([usage guide](docs/en/ansible-galaxy-guide.md), [Chinese design notes](docs/zh/dev/ansible-galaxy-repository-design.md))
 8. ✅ Conda - Hosted, proxy, group, `.tar.bz2`/`.conda` publication, JSON/BZ2/ZSTD channel metadata, UI/API upload, Browse/Search, multi-replica coordination, real Conda client E2E, Nexus black-box fixtures, and shape-gated Nexus 3.92.x-3.94.x hosted-data migration E2E are implemented ([Chinese design notes](docs/zh/dev/conda-repository-design.md))
-9. ohpm / HarmonyOS - Planned with hosted, proxy, group, import, and admin capabilities ([Chinese design notes](docs/zh/dev/ohpm-repository-design.md))
-10. APT / Debian
+9. APT / Debian - Design completed; hosted and proxy repository support is planned ([Chinese design notes](docs/zh/dev/apt-debian-repository-design.md))
+10. ohpm / HarmonyOS - Planned with hosted, proxy, group, import, and admin capabilities ([Chinese design notes](docs/zh/dev/ohpm-repository-design.md))
 11. Conan
 
 Token types exposed in the user and admin UI include protocol-specific tokens (`NpmToken`, `CargoToken`, `PubToken`, `NuGetApiKey`, `RubyGemsApiKey`) plus `GenericToken` for Terraform service URLs, Ansible Galaxy clients, CI, scripts, and custom HTTP clients that can send the configured API-key header or bearer token.
