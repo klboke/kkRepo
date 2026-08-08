@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.persistence.mysql.dao;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
@@ -23,8 +24,11 @@ class AptRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
     assertEquals(1, stored.revision());
     assertEquals(stored, dao.findPackage(
         repositoryId, "stable", "main", "demo", "1.0", "amd64").orElseThrow());
+    assertEquals(List.of(stored), dao.listPackages(repositoryId, "stable"));
     assertEquals(List.of("stable"), dao.listDistributions(repositoryId));
     assertEquals(List.of("main"), dao.listComponents(repositoryId, "stable"));
+    assertEquals(List.of("amd64"), dao.listArchitectures(repositoryId, "stable", "main"));
+    assertEquals(1, dao.listSuites(repositoryId).size());
 
     AptRegistryDao.SuiteState pending = dao.findSuite(repositoryId, "stable").orElseThrow();
     assertEquals(1, pending.desiredRevision());
@@ -40,8 +44,24 @@ class AptRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
         "a".repeat(64), now);
     assertFalse(dao.publishSnapshot(snapshot, "first", first.fencingToken() + 1));
     assertTrue(dao.publishSnapshot(snapshot, "first", first.fencingToken()));
+    assertTrue(dao.publishSnapshot(snapshot, "first", first.fencingToken()));
+    assertThrows(IllegalStateException.class, () -> dao.publishSnapshot(
+        new AptRegistryDao.Snapshot(
+            repositoryId, "stable", 1, 1,
+            Map.of("dists/stable/Release", ".apt/different"), "f".repeat(64), now),
+        "first", first.fencingToken()));
+    assertThrows(IllegalArgumentException.class,
+        () -> dao.publishSnapshot(null, "first", first.fencingToken()));
+    assertThrows(IllegalArgumentException.class, () -> dao.publishSnapshot(
+        new AptRegistryDao.Snapshot(repositoryId, "stable", 2, 1, Map.of(), "a", now),
+        "first", first.fencingToken()));
     assertEquals(snapshot, dao.findPublishedSnapshot(repositoryId, "stable").orElseThrow());
     assertEquals(List.of(snapshot), dao.listSnapshots(repositoryId, "stable", 2));
+    assertEquals(snapshot, dao.findSnapshot(repositoryId, "stable", 1).orElseThrow());
+    assertEquals(List.of(snapshot), dao.listSnapshots(repositoryId, "stable", 0));
+    assertEquals(List.of(snapshot), dao.listSnapshots(repositoryId, "stable", 1000));
+    assertTrue(dao.renewLease(
+        leaseKey, "first", first.fencingToken(), now, now.plusSeconds(120)));
 
     long staleRevision = dao.markSuiteDirty(repositoryId, "racing", now);
     String racingLeaseKey = "apt:publish:" + repositoryId + ":racing";
@@ -62,6 +82,12 @@ class AptRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
     assertTrue(second.fencingToken() > first.fencingToken());
     assertFalse(dao.renewLease(
         leaseKey, "first", first.fencingToken(), now.plusSeconds(1), now.plusSeconds(62)));
+    assertThrows(IllegalArgumentException.class,
+        () -> dao.tryAcquireLease("invalid", "owner", now, now));
+    assertThrows(IllegalArgumentException.class,
+        () -> dao.tryAcquireLease("", "owner", now, now.plusSeconds(1)));
+    assertThrows(IllegalArgumentException.class,
+        () -> dao.tryAcquireLease("valid", "", now, now.plusSeconds(1)));
 
     long expiredRevision = dao.markSuiteDirty(repositoryId, "expired", now.minusSeconds(120));
     String expiredLeaseKey = "apt:publish:" + repositoryId + ":expired";
@@ -84,17 +110,64 @@ class AptRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
     dao.insertSigningKey(new AptRegistryDao.SigningKey(
         repositoryId, 1, "ABCD", "F".repeat(40), "encrypted", "public", true, now));
     assertEquals("ABCD", dao.findActiveSigningKey(repositoryId).orElseThrow().keyId());
-    assertEquals(1, dao.listSigningKeys(repositoryId, 2).size());
-    dao.observeProxyDistribution(repositoryId, "testing", "release-1", now);
-    assertEquals("testing", dao.listProxyDistributions(repositoryId).getFirst().distribution());
+    assertEquals("ABCD", dao.findSigningKey(repositoryId, 1).orElseThrow().keyId());
+    dao.insertSigningKey(new AptRegistryDao.SigningKey(
+        repositoryId, 2, "EFGH", "E".repeat(40), "encrypted-2", "public-2", true,
+        now.plusSeconds(1)));
+    assertEquals("EFGH", dao.findActiveSigningKey(repositoryId).orElseThrow().keyId());
+    assertEquals(2, dao.listSigningKeys(repositoryId, 100).size());
+    Map<String, AptRegistryDao.ProxyIndex> indices = Map.of(
+        "dists/testing/main/binary-amd64/Packages.gz",
+        new AptRegistryDao.ProxyIndex("9".repeat(64), 123L));
+    dao.observeProxyDistribution(
+        repositoryId, "testing", "release-1", indices, true, now);
+    AptRegistryDao.ProxyDistribution proxy =
+        dao.findProxyDistribution(repositoryId, "testing").orElseThrow();
+    assertEquals(indices, proxy.indices());
+    assertTrue(proxy.signatureVerified());
+    dao.observeProxyDistribution(
+        repositoryId, "testing", "release-2", null, false, null);
+    assertEquals("release-2",
+        dao.listProxyDistributions(repositoryId).getFirst().releaseIdentity());
+
+    long failedRevision = dao.markSuiteDirty(repositoryId, "broken", null);
+    dao.recordBuildFailure(repositoryId, "broken", failedRevision, "x".repeat(3000), null);
+    assertEquals(2048, dao.findSuite(repositoryId, "broken").orElseThrow().lastError().length());
+    dao.recordBuildFailure(repositoryId, "broken", failedRevision, null, now);
+    assertEquals(null, dao.findSuite(repositoryId, "broken").orElseThrow().lastError());
 
     AptRegistryDao.PackageRecord removed = inTransaction(() -> dao.deletePackage(
         repositoryId, "stable", "main", "demo", "1.0", "amd64", "test", now.plusSeconds(3)))
         .orElseThrow();
     assertEquals(stored.id(), removed.id());
     assertTrue(dao.findPackageByPath(repositoryId, stored.path()).isEmpty());
-    assertEquals(all.revision() + 1,
+    assertEquals(failedRevision + 1,
         dao.findSuite(repositoryId, "stable").orElseThrow().desiredRevision());
+    assertTrue(inTransaction(() -> dao.deletePackage(
+        repositoryId, "stable", "main", "missing", "1.0", "amd64", "test", now))
+        .isEmpty());
+
+    assertThrows(IllegalArgumentException.class, () -> dao.savePackage(null));
+    AptRegistryDao.PackageRecord invalidChecksum = packageRecord(
+        repositoryId, "amd64", "bad", AptRegistryDao.SOURCE_HOSTED, now);
+    invalidChecksum = new AptRegistryDao.PackageRecord(
+        invalidChecksum.id(), invalidChecksum.repositoryId(), invalidChecksum.distribution(),
+        invalidChecksum.component(), invalidChecksum.architecture(), invalidChecksum.packageName(),
+        invalidChecksum.version(), invalidChecksum.sourcePackage(), invalidChecksum.filename(),
+        invalidChecksum.path(), invalidChecksum.controlFields(), invalidChecksum.md5(),
+        invalidChecksum.sha1(), "short", invalidChecksum.size(), invalidChecksum.assetId(),
+        invalidChecksum.componentId(), invalidChecksum.sourceKind(), invalidChecksum.revision(),
+        invalidChecksum.indexedAt(), invalidChecksum.createdAt(), invalidChecksum.updatedAt());
+    AptRegistryDao.PackageRecord badChecksum = invalidChecksum;
+    assertThrows(IllegalArgumentException.class, () -> dao.savePackage(badChecksum));
+    AptRegistryDao.PackageRecord invalidSource = packageRecord(
+        repositoryId, "amd64", "bad-source", "UNKNOWN", now);
+    assertThrows(IllegalArgumentException.class, () -> dao.savePackage(invalidSource));
+
+    dao.deleteRepositoryState(repositoryId);
+    assertTrue(dao.listSuites(repositoryId).isEmpty());
+    assertTrue(dao.listSigningKeys(repositoryId, 2).isEmpty());
+    assertTrue(dao.listProxyDistributions(repositoryId).isEmpty());
   }
 
   private static AptRegistryDao.PackageRecord packageRecord(

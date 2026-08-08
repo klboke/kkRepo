@@ -16,6 +16,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
@@ -52,6 +53,81 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
 class BrowseAssetDetailServiceTest {
+
+  @Test
+  void aptDetailMapsProjectedPathAndExposesRegistryIdentity() {
+    RepositoryRecord repository = repository(
+        55L, "apt-hosted", RepositoryFormat.APT, RepositoryType.HOSTED);
+    String publicPath = "stable/main/demo/1.2.3/amd64/demo_1.2.3_amd64.deb";
+    String storagePath = "pool/d/demo/demo_1.2.3_amd64.deb";
+    AssetRecord archive = new AssetRecord(
+        56L, repository.id(), 57L, 58L, RepositoryFormat.APT,
+        storagePath, PersistenceHashes.pathHash(storagePath), archiveName(storagePath),
+        "apt-package", "application/vnd.debian.binary-package", 512L,
+        null, Instant.EPOCH, Map.of());
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(repository.id(), storagePath), archive), Map.of(58L, blob(58L, 512L)));
+    AptRegistryDao apt = mock(AptRegistryDao.class);
+    AptRegistryDao.PackageRecord record = aptPackage(
+        repository.id(), archive.id(), archive.componentId(), storagePath);
+    when(apt.findPackage(repository.id(), "stable", "main", "demo", "1.2.3", "amd64"))
+        .thenReturn(Optional.of(record));
+    when(apt.findPackageByPath(repository.id(), storagePath)).thenReturn(Optional.of(record));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(), assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+    service.setAptRegistryDao(apt);
+
+    BrowseAssetDetailService.BrowseAssetDetail detail =
+        service.detail(repository, publicPath, null);
+
+    assertEquals(publicPath, detail.path());
+    assertEquals(storagePath, assets.pathLookups.getFirst().split("\\|", 2)[1]);
+    assertEquals("stable", detail.apt().get("distribution"));
+    assertEquals("main", detail.apt().get("component"));
+    assertEquals("amd64", detail.apt().get("architecture"));
+    assertEquals("demo", detail.apt().get("package"));
+    assertEquals("1.2.3", detail.apt().get("version"));
+    assertEquals("demo", detail.apt().get("source_package"));
+    assertEquals("admin@example.invalid", detail.apt().get("maintainer"));
+    assertEquals("demo package", detail.apt().get("description"));
+    assertEquals("libc6", detail.apt().get("depends"));
+    assertEquals(AptRegistryDao.SOURCE_HOSTED, detail.apt().get("source_kind"));
+    assertEquals(repository.name(), detail.apt().get("source_repository"));
+  }
+
+  @Test
+  void aptDetailFallsBackWithoutRegistryAndFailsClosedForMissingOrConflictingState() {
+    RepositoryRecord repository = repository(
+        59L, "apt-hosted", RepositoryFormat.APT, RepositoryType.HOSTED);
+    String path = "pool/d/demo/demo_1.2.3_amd64.deb";
+    AssetRecord archive = new AssetRecord(
+        60L, repository.id(), null, 61L, RepositoryFormat.APT,
+        path, PersistenceHashes.pathHash(path), archiveName(path),
+        "apt-package", "application/vnd.debian.binary-package", 10L,
+        null, Instant.EPOCH, Map.of());
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(repository.id(), path), archive), Map.of(61L, blob(61L, 10L)));
+    BrowseAssetDetailService unavailable = new BrowseAssetDetailService(
+        new StubRepositoryDao(), assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+    assertTrue(unavailable.detail(repository, path, null).apt().isEmpty());
+
+    AptRegistryDao apt = mock(AptRegistryDao.class);
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(), assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+    service.setAptRegistryDao(apt);
+    ResponseStatusException missing = assertThrows(
+        ResponseStatusException.class, () -> service.detail(repository, path, null));
+    assertEquals(HttpStatus.NOT_FOUND, missing.getStatusCode());
+
+    when(apt.findPackageByPath(repository.id(), path)).thenReturn(Optional.of(
+        aptPackage(repository.id(), 999L, null, path)));
+    ResponseStatusException conflict = assertThrows(
+        ResponseStatusException.class, () -> service.detail(repository, path, null));
+    assertEquals(HttpStatus.CONFLICT, conflict.getStatusCode());
+  }
 
   @Test
   void ansibleCollectionDetailResolvesPublicPathAndShowsBoundedRegistryMetadata() {
@@ -1327,6 +1403,25 @@ class BrowseAssetDetailServiceTest {
             "description", "fixture"),
         Map.of("acme.base", ">=1.0.0"), ">=2.15", "HOSTED", 1L,
         AnsibleGalaxyRegistryDao.VERSION_READY, now, now, now);
+  }
+
+  private static AptRegistryDao.PackageRecord aptPackage(
+      long repositoryId, Long assetId, Long componentId, String path) {
+    return new AptRegistryDao.PackageRecord(
+        1L, repositoryId, "stable", "main", "amd64", "demo", "1.2.3", "demo",
+        archiveName(path), path,
+        Map.of(
+            "Package", "demo",
+            "Version", "1.2.3",
+            "Architecture", "amd64",
+            "Section", "utils",
+            "Priority", "optional",
+            "Maintainer", "admin@example.invalid",
+            "Description", "demo package",
+            "Depends", "libc6"),
+        "a".repeat(32), "b".repeat(40), "c".repeat(64), 512L,
+        assetId, componentId, AptRegistryDao.SOURCE_HOSTED, 7L,
+        Instant.EPOCH, Instant.EPOCH, Instant.EPOCH);
   }
 
   private static String archiveName(String path) {

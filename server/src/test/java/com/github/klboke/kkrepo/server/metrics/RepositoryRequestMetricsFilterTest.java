@@ -25,6 +25,39 @@ import org.springframework.mock.web.MockHttpServletResponse;
 class RepositoryRequestMetricsFilterTest {
 
   @Test
+  void recordsLowCardinalityAptOperations() throws Exception {
+    SimpleMeterRegistry registry = new SimpleMeterRegistry();
+    RepositoryRequestMetricsFilter filter = new RepositoryRequestMetricsFilter(
+        new KkRepoMetrics(registry), true, "");
+    String[][] requests = {
+        {"GET", "/repository/apt-hosted/gpg.key", "apt_public_key"},
+        {"GET", "/repository/apt-hosted/dists/stable/InRelease", "apt_release_metadata"},
+        {"GET", "/repository/apt-hosted/dists/stable/Release", "apt_release_metadata"},
+        {"GET", "/repository/apt-hosted/dists/stable/Release.gpg", "apt_release_metadata"},
+        {"GET", "/repository/apt-hosted/dists/stable/main/binary-amd64/Packages.gz", "apt_package_index"},
+        {"GET", "/repository/apt-hosted/dists/stable/main/source/Sources.xz", "apt_package_index"},
+        {"GET", "/repository/apt-hosted/dists/stable/main/binary-amd64/by-hash/SHA256/digest", "apt_package_index"},
+        {"GET", "/repository/apt-hosted/pool/d/demo/demo_1_amd64.deb", "apt_package_download"},
+        {"PUT", "/repository/apt-hosted/pool/d/demo/demo_1_amd64.deb", "apt_package_upload"},
+        {"POST", "/repository/apt-hosted/pool/d/demo/demo_1_amd64.deb", "apt_package_upload"},
+        {"DELETE", "/repository/apt-hosted/pool/d/demo/demo_1_amd64.deb", "apt_package_delete"},
+        {"GET", "/repository/apt-hosted/unknown", "apt_repository"},
+    };
+
+    for (String[] item : requests) {
+      MockHttpServletRequest request = new MockHttpServletRequest(item[0], item[1]);
+      MockHttpServletResponse response = new MockHttpServletResponse();
+      FilterChain chain = (req, resp) -> req.setAttribute(
+          RepositorySecurityFilter.REPOSITORY_RECORD_ATTRIBUTE,
+          repository("apt-hosted", RepositoryFormat.APT, RepositoryType.HOSTED));
+      filter.doFilter(request, response, chain);
+      assertNotNull(registry.find("kkrepo_repository_requests_total")
+          .tags("operation", item[2], "status", "200")
+          .counter(), item[2]);
+    }
+  }
+
+  @Test
   void recordsRepositoryRequestWithResolvedRepositoryTags() throws Exception {
     SimpleMeterRegistry registry = new SimpleMeterRegistry();
     RepositoryRequestMetricsFilter filter = new RepositoryRequestMetricsFilter(new KkRepoMetrics(registry), true, "");

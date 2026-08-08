@@ -52,4 +52,40 @@ class AptPackageControlTest {
         Description: demo
         """));
   }
+
+  @Test
+  void validatesOptionalIdentityGeneratedDigestsAndSafetyBounds() {
+    AptPackageControl control = AptPackageControl.parse("""
+        Package: demo
+        Version: 1.0
+        Architecture: all
+        Maintainer: Demo <demo@example.com>
+        Description: demo
+        Multi-Arch: foreign
+        Filename: attacker
+        SHA512: attacker
+        """);
+    assertEquals("demo", control.sourcePackageName());
+    AptDeb822.Stanza generated = control.packagesStanza(
+        "pool/d/demo/demo_1.0_all.deb", 1, null, null, "A".repeat(64));
+    assertEquals(null, generated.get("SHA512"));
+    assertEquals("a".repeat(64), generated.get("SHA256"));
+
+    assertThrows(IllegalArgumentException.class, () -> control.packagesStanza(
+        "/absolute.deb", 1, null, null, "a".repeat(64)));
+    assertThrows(IllegalArgumentException.class, () -> control.packagesStanza(
+        "demo.deb", -1, null, null, "a".repeat(64)));
+    assertThrows(IllegalArgumentException.class, () -> control.packagesStanza(
+        "demo.deb", 1, "bad", null, "a".repeat(64)));
+    assertThrows(IllegalArgumentException.class, () -> control.packagesStanza(
+        "demo.deb", 1, null, "b".repeat(40), null));
+    assertThrows(IllegalArgumentException.class, () -> AptPackageControl.parse("""
+        Package: demo
+        Version: 1.0
+        Architecture: all
+        Maintainer: Demo <demo@example.com>
+        Description: demo
+        Multi-Arch: sometimes
+        """));
+  }
 }

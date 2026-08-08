@@ -11,6 +11,7 @@ import org.apache.commons.compress.archivers.ar.ArArchiveOutputStream;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream;
+import org.apache.commons.compress.compressors.bzip2.BZip2CompressorOutputStream;
 import org.apache.commons.compress.compressors.xz.XZCompressorOutputStream;
 
 final class AptTestPackage {
@@ -54,7 +55,7 @@ final class AptTestPackage {
         """.formatted(name, version, architecture);
   }
 
-  private static byte[] tar(String compression, List<Item> items) throws IOException {
+  static byte[] tar(String compression, List<Item> items) throws IOException {
     ByteArrayOutputStream bytes = new ByteArrayOutputStream();
     try (OutputStream compressed = compressor(compression, bytes);
          TarArchiveOutputStream tar = new TarArchiveOutputStream(compressed)) {
@@ -82,6 +83,7 @@ final class AptTestPackage {
     return switch (compression) {
       case "none" -> output;
       case "gz" -> new GzipCompressorOutputStream(output);
+      case "bz2" -> new BZip2CompressorOutputStream(output);
       case "xz" -> new XZCompressorOutputStream(output);
       case "zst" -> new ZstdOutputStream(output);
       default -> throw new IllegalArgumentException("unknown compression: " + compression);

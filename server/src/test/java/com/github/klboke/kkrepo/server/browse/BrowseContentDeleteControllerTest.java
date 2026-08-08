@@ -16,6 +16,7 @@ import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
@@ -31,6 +32,7 @@ import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
 import com.github.klboke.kkrepo.server.cache.NexusCacheType;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
+import com.github.klboke.kkrepo.server.apt.AptService;
 import com.github.klboke.kkrepo.server.conda.CondaService;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
@@ -51,6 +53,118 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.server.ResponseStatusException;
 
 class BrowseContentDeleteControllerTest {
+  @Test
+  void aptHostedDeletionResolvesBrowseCoordinateAndDelegatesToProtocolService() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord repository =
+        repository(1L, "apt-hosted", RepositoryFormat.APT, RepositoryType.HOSTED);
+    RepositoryRuntime runtime = new RepositoryRuntime(
+        1L, repository.name(), RepositoryFormat.APT, RepositoryType.HOSTED, "apt-hosted",
+        true, 7L, "ALLOW", null, null, true, null, null, null, null, null, List.of());
+    String browsePath = "stable/main/demo/1.0/amd64/demo_1.0_amd64.deb";
+    String storagePath = "pool/d/demo/demo_1.0_amd64.deb";
+    AptRegistryDao.PackageRecord row = aptPackage(repository.id(), storagePath);
+    when(fixture.repositoryDao.findByName(repository.name())).thenReturn(Optional.of(repository));
+    when(fixture.aptRegistry.findPackageByPath(repository.id(), browsePath))
+        .thenReturn(Optional.empty());
+    when(fixture.aptRegistry.findPackage(
+        repository.id(), "stable", "main", "demo", "1.0", "amd64"))
+        .thenReturn(Optional.of(row));
+    when(fixture.runtimeRegistry.resolveById(repository.id())).thenReturn(Optional.of(runtime));
+    when(fixture.aptService.delete(
+        runtime, storagePath, "administrative delete by admin", false))
+        .thenReturn(MavenResponse.noBody(204));
+
+    BrowseContentDeleteController.BrowseDeleteResult result = fixture.controller.delete(
+        repository.name(), browsePath, null, new MockHttpServletRequest());
+
+    assertEquals(1, result.deletedAssets());
+    assertEquals(browsePath, result.path());
+    verify(fixture.aptService).delete(
+        runtime, storagePath, "administrative delete by admin", false);
+    verify(fixture.assetDao, never()).deleteAssetById(anyLong());
+  }
+
+  @Test
+  void aptDeletionSupportsDirectPathsAndFailsClosedForUnavailableState() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord repository =
+        repository(1L, "apt-hosted", RepositoryFormat.APT, RepositoryType.HOSTED);
+    RepositoryRuntime runtime = new RepositoryRuntime(
+        1L, repository.name(), RepositoryFormat.APT, RepositoryType.HOSTED, "apt-hosted",
+        true, 7L, "ALLOW", null, null, true, null, null, null, null, null, List.of());
+    String path = "pool/d/demo/demo_1.0_amd64.deb";
+    when(fixture.repositoryDao.findByName(repository.name())).thenReturn(Optional.of(repository));
+    when(fixture.aptRegistry.findPackageByPath(repository.id(), path))
+        .thenReturn(Optional.of(aptPackage(repository.id(), path)));
+
+    fixture.controller.setAptDeleteSupport(null, fixture.aptRegistry, null);
+    assertStatus(HttpStatus.SERVICE_UNAVAILABLE, () -> fixture.controller.delete(
+        repository.name(), path, null, new MockHttpServletRequest()));
+
+    fixture.controller.setAptDeleteSupport(
+        fixture.runtimeRegistry, fixture.aptRegistry, fixture.aptService);
+    assertStatus(HttpStatus.CONFLICT, () -> fixture.controller.delete(
+        repository.name(), path, null, new MockHttpServletRequest()));
+
+    when(fixture.runtimeRegistry.resolveById(repository.id())).thenReturn(Optional.of(runtime));
+    when(fixture.aptService.delete(eq(runtime), eq(path), any(), eq(false)))
+        .thenReturn(MavenResponse.noBody(404), MavenResponse.noBody(500));
+    assertStatus(HttpStatus.NOT_FOUND, () -> fixture.controller.delete(
+        repository.name(), path, null, new MockHttpServletRequest()));
+    assertStatus(HttpStatus.CONFLICT, () -> fixture.controller.delete(
+        repository.name(), path, null, new MockHttpServletRequest()));
+  }
+
+  @Test
+  void aptCleanupUsesComponentPathAndAssetFallback() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord repository =
+        repository(1L, "apt-hosted", RepositoryFormat.APT, RepositoryType.HOSTED);
+    RepositoryRuntime runtime = new RepositoryRuntime(
+        1L, repository.name(), RepositoryFormat.APT, RepositoryType.HOSTED, "apt-hosted",
+        true, 7L, "ALLOW", null, null, true, null, null, null, null, null, List.of());
+    String path = "pool/d/demo/demo_1.0_amd64.deb";
+    ComponentRecord component = new ComponentRecord(
+        21L, repository.id(), RepositoryFormat.APT, "main", "demo", "1.0",
+        "apt-package", new byte[] {1}, Map.of("assetPath", path), Instant.EPOCH);
+    when(fixture.repositoryDao.findByName(repository.name())).thenReturn(Optional.of(repository));
+    when(fixture.componentDao.findById(component.id())).thenReturn(Optional.of(component));
+    when(fixture.aptRegistry.findPackageByPath(repository.id(), path))
+        .thenReturn(Optional.of(aptPackage(repository.id(), path)));
+    when(fixture.runtimeRegistry.resolveById(repository.id())).thenReturn(Optional.of(runtime));
+    when(fixture.aptService.delete(eq(runtime), eq(path), any(), eq(false)))
+        .thenReturn(MavenResponse.noBody(204));
+
+    assertEquals(1, fixture.controller.deleteForCleanup(
+        repository.name(), "COMPONENT", component.id(), null, "cleanup-run:1"));
+    verify(fixture.aptService).delete(
+        runtime, path, "administrative delete by cleanup-run:1", false);
+
+    ComponentRecord fallback = new ComponentRecord(
+        22L, repository.id(), RepositoryFormat.APT, "main", "other", "2.0",
+        "apt-package", new byte[] {2}, Map.of(), Instant.EPOCH);
+    AssetRecord fallbackAsset = asset(
+        23L, fallback.id(), 24L, RepositoryFormat.APT,
+        "pool/o/other/other_2.0_amd64.deb", "apt-package", Map.of());
+    when(fixture.componentDao.findById(fallback.id())).thenReturn(Optional.of(fallback));
+    when(fixture.assetDao.listAssetsByComponent(fallback.id())).thenReturn(List.of(fallbackAsset));
+    when(fixture.aptRegistry.findPackageByPath(repository.id(), fallbackAsset.path()))
+        .thenReturn(Optional.of(aptPackage(repository.id(), fallbackAsset.path())));
+    when(fixture.aptService.delete(eq(runtime), eq(fallbackAsset.path()), any(), eq(false)))
+        .thenReturn(MavenResponse.noBody(204));
+    assertEquals(1, fixture.controller.deleteForCleanup(
+        repository.name(), "COMPONENT", fallback.id(), " ", "cleanup-run:2"));
+
+    ComponentRecord empty = new ComponentRecord(
+        25L, repository.id(), RepositoryFormat.APT, "main", "empty", "1.0",
+        "apt-package", new byte[] {3}, null, Instant.EPOCH);
+    when(fixture.componentDao.findById(empty.id())).thenReturn(Optional.of(empty));
+    when(fixture.assetDao.listAssetsByComponent(empty.id())).thenReturn(List.of());
+    assertStatus(HttpStatus.NOT_FOUND, () -> fixture.controller.deleteForCleanup(
+        repository.name(), "COMPONENT", empty.id(), null, "cleanup-run:3"));
+  }
+
   @Test
   void requiresAuthenticationPermissionAndPath() {
     Fixture unauthenticated = fixture(false, AccessDecision.allow());
@@ -748,6 +862,8 @@ class BrowseContentDeleteControllerTest {
     NexusLikeCacheController cacheController = mock(NexusLikeCacheController.class);
     RepositoryRuntimeRegistry runtimeRegistry = mock(RepositoryRuntimeRegistry.class);
     CondaService condaService = mock(CondaService.class);
+    AptRegistryDao aptRegistry = mock(AptRegistryDao.class);
+    AptService aptService = mock(AptService.class);
     PermissionSubject permissionSubject = mock(PermissionSubject.class);
     AuthenticatedSubject subject =
         new AuthenticatedSubject("test", "admin", "local", null, permissionSubject);
@@ -760,11 +876,12 @@ class BrowseContentDeleteControllerTest {
         indexRebuildDao, authentication, security, assetCache, npmCache, pypiCache,
         groupMemberAssetCache, cacheController);
     controller.setCondaDeleteSupport(runtimeRegistry, condaService);
+    controller.setAptDeleteSupport(runtimeRegistry, aptRegistry, aptService);
     return new Fixture(
         repositoryDao, assetDao, terraformRegistryDao, swiftRegistryDao, ansibleRegistryDao,
         browseNodeDao, componentDao, metadataRebuildDao,
         indexRebuildDao, npmCache, pypiCache, groupMemberAssetCache, cacheController,
-        runtimeRegistry, condaService, controller);
+        runtimeRegistry, condaService, aptRegistry, aptService, controller);
   }
 
   private static RepositoryRecord repository(
@@ -797,6 +914,16 @@ class BrowseContentDeleteControllerTest {
         AnsibleGalaxyRegistryDao.VERSION_READY, Instant.EPOCH, Instant.EPOCH, Instant.EPOCH);
   }
 
+  private static AptRegistryDao.PackageRecord aptPackage(long repositoryId, String path) {
+    return new AptRegistryDao.PackageRecord(
+        1L, repositoryId, "stable", "main", "amd64", "demo", "1.0", "demo",
+        path.substring(path.lastIndexOf('/') + 1), path,
+        Map.of("Package", "demo", "Version", "1.0", "Architecture", "amd64"),
+        "a".repeat(32), "b".repeat(40), "c".repeat(64), 4L,
+        2L, 3L, AptRegistryDao.SOURCE_HOSTED, 1L,
+        Instant.EPOCH, Instant.EPOCH, Instant.EPOCH);
+  }
+
   private record Fixture(
       RepositoryDao repositoryDao,
       AssetDao assetDao,
@@ -813,6 +940,8 @@ class BrowseContentDeleteControllerTest {
       NexusLikeCacheController cacheController,
       RepositoryRuntimeRegistry runtimeRegistry,
       CondaService condaService,
+      AptRegistryDao aptRegistry,
+      AptService aptService,
       BrowseContentDeleteController controller) {
   }
 }

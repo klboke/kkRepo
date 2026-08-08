@@ -12,6 +12,7 @@ import static org.mockito.Mockito.verify;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao;
@@ -25,6 +26,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CargoSettings;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.AptSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CreateCommand;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.DockerSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.HostedSettings;
@@ -43,6 +45,136 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 class RepositoryServiceTest {
+
+  @Test
+  void aptHostedDefaultsRoundTripAndInitializeDurableSuite() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    AptRegistryDao aptRegistry = mock(AptRegistryDao.class);
+    RepositoryService service = service(repositories);
+    service.setAptRegistry(aptRegistry);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "apt-hosted", "apt-hosted", null, "default", null,
+        new HostedSettings("ALLOW", null, null), null, null, null, null, null, null));
+
+    assertEquals("stable", created.apt().distribution());
+    assertEquals("main", created.apt().component());
+    assertEquals(List.of("amd64"), created.apt().architectures());
+    assertEquals(false, created.apt().flat());
+    assertEquals(true, created.apt().enforceDistribution());
+    assertEquals("RESIGN", created.apt().metadataMode());
+    assertEquals(30, created.apt().validUntilDays());
+    assertEquals("kkRepo", created.apt().origin());
+    verify(aptRegistry).ensureSuite(org.mockito.ArgumentMatchers.eq(100L),
+        org.mockito.ArgumentMatchers.eq("stable"), org.mockito.ArgumentMatchers.any());
+  }
+
+  @Test
+  void aptProxyNormalizesCustomSettingsAndOmitsBlankDistributionByDefault() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+    RepositoryView custom = service.create(new CreateCommand(
+        "apt-proxy", "apt-proxy", true, "default", true, null,
+        new ProxySettings("https://deb.debian.org/debian/", 60, 30, true),
+        null, null, null, null,
+        new AptSettings(" bookworm ", " contrib ", List.of(" AMD64 ", "all", "amd64"),
+            true, false, " passthrough ", null, " Debian ", " Mirror ")));
+    assertEquals("bookworm", custom.apt().distribution());
+    assertEquals("contrib", custom.apt().component());
+    assertEquals(List.of("amd64", "all"), custom.apt().architectures());
+    assertEquals("PASSTHROUGH", custom.apt().metadataMode());
+    assertNull(custom.apt().validUntilDays());
+    assertEquals("Debian", custom.apt().origin());
+    assertEquals("Mirror", custom.apt().label());
+
+    StubRepositoryDao defaults = new StubRepositoryDao(repository(1L));
+    RepositoryView defaulted = service(defaults).create(new CreateCommand(
+        "apt-proxy-default", "apt-proxy", true, "default", true, null,
+        new ProxySettings("https://deb.debian.org/debian/", 60, 30, true),
+        null, null, null, null, null));
+    assertEquals("", defaulted.apt().distribution());
+    assertEquals(false, defaulted.apt().enforceDistribution());
+    assertEquals("PASSTHROUGH", defaulted.apt().metadataMode());
+  }
+
+  @Test
+  void aptUpdatesMergeSettingsAndMarkOnlyLocallySignedSuitesDirty() {
+    StubRepositoryDao hostedRepositories = new StubRepositoryDao(
+        aptRepository(60L, "apt-hosted", RepositoryType.HOSTED, "RESIGN", true));
+    AptRegistryDao hostedRegistry = mock(AptRegistryDao.class);
+    RepositoryService hosted = service(hostedRepositories);
+    hosted.setAptRegistry(hostedRegistry);
+    RepositoryView updated = hosted.update("apt-hosted", new UpdateCommand(
+        false, null, null, null, null, null, null, null, null,
+        new AptSettings(null, "updates", null, null, null, null, null, null, null)));
+    assertEquals("stable", updated.apt().distribution());
+    assertEquals("updates", updated.apt().component());
+    assertEquals(List.of("amd64", "arm64"), updated.apt().architectures());
+    verify(hostedRegistry).ensureSuite(org.mockito.ArgumentMatchers.eq(60L),
+        org.mockito.ArgumentMatchers.eq("stable"), org.mockito.ArgumentMatchers.any());
+    verify(hostedRegistry).markSuiteDirty(org.mockito.ArgumentMatchers.eq(60L),
+        org.mockito.ArgumentMatchers.eq("stable"), org.mockito.ArgumentMatchers.any());
+
+    StubRepositoryDao proxyRepositories = new StubRepositoryDao(
+        aptRepository(61L, "apt-proxy", RepositoryType.PROXY, "PASSTHROUGH", false));
+    AptRegistryDao proxyRegistry = mock(AptRegistryDao.class);
+    RepositoryService proxy = service(proxyRepositories);
+    proxy.setAptRegistry(proxyRegistry);
+    proxy.update("apt-proxy", new UpdateCommand(
+        true, null, null, null, null, null, null, null, null, null));
+    verify(proxyRegistry).ensureSuite(org.mockito.ArgumentMatchers.eq(61L),
+        org.mockito.ArgumentMatchers.eq("stable"), org.mockito.ArgumentMatchers.any());
+    verify(proxyRegistry, org.mockito.Mockito.never()).markSuiteDirty(
+        org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyString(),
+        org.mockito.ArgumentMatchers.any());
+
+    proxy.update("apt-proxy", new UpdateCommand(
+        true, null, null, null, null, null, null, null, null,
+        new AptSettings(null, null, null, null, null, "RESIGN", null, null, null)));
+    verify(proxyRegistry).markSuiteDirty(org.mockito.ArgumentMatchers.eq(61L),
+        org.mockito.ArgumentMatchers.eq("stable"), org.mockito.ArgumentMatchers.any());
+  }
+
+  @Test
+  void aptSettingsRejectUnsafeOrIncompatibleConfigurations() {
+    assertInvalidApt(RepositoryType.HOSTED,
+        new AptSettings(" ", "main", List.of("amd64"), false, true, "RESIGN", 1, "o", "l"));
+    assertInvalidApt(RepositoryType.PROXY,
+        new AptSettings("", "main", List.of("amd64"), false, true, "PASSTHROUGH", null, "o", "l"));
+    assertInvalidApt(RepositoryType.HOSTED,
+        new AptSettings("stable", "main", List.of("amd64"), true, true, "RESIGN", 1, "o", "l"));
+    assertInvalidApt(RepositoryType.PROXY,
+        new AptSettings("stable", "main", List.of("amd64"), true, true, "RESIGN", 1, "o", "l"));
+    assertInvalidApt(RepositoryType.HOSTED,
+        new AptSettings("stable", "main", List.of("amd64"), false, true, "PASSTHROUGH", 1, "o", "l"));
+    assertInvalidApt(RepositoryType.PROXY,
+        new AptSettings("stable", "main", List.of("amd64"), false, true, "OTHER", 1, "o", "l"));
+    assertInvalidApt(RepositoryType.HOSTED,
+        new AptSettings("stable", "main", List.of("amd64"), false, true, "RESIGN", -1, "o", "l"));
+    assertInvalidApt(RepositoryType.HOSTED,
+        new AptSettings("stable", "main", List.of(""), false, true, "RESIGN", 1, "o", "l"));
+    assertInvalidApt(RepositoryType.HOSTED,
+        new AptSettings("bad/name", "main", List.of("amd64"), false, true, "RESIGN", 1, "o", "l"));
+    assertInvalidApt(RepositoryType.HOSTED,
+        new AptSettings("stable", "bad/name", List.of("amd64"), false, true, "RESIGN", 1, "o", "l"));
+    assertInvalidApt(RepositoryType.HOSTED,
+        new AptSettings("stable", "main", List.of("amd64"), false, true, "RESIGN", 1,
+            "bad\norigin", "l"));
+    assertInvalidApt(RepositoryType.HOSTED,
+        new AptSettings("stable", "main", List.of("amd64"), false, true, "RESIGN", 1,
+            "o", "x".repeat(129)));
+  }
+
+  @Test
+  void aptRepositoryDeletionRemovesDurableProtocolState() {
+    StubRepositoryDao repositories = new StubRepositoryDao(
+        aptRepository(62L, "apt-hosted", RepositoryType.HOSTED, "RESIGN", true));
+    AptRegistryDao registry = mock(AptRegistryDao.class);
+    RepositoryService service = service(repositories);
+    service.setAptRegistry(registry);
+    service.delete("apt-hosted");
+    verify(registry).deleteRepositoryState(62L);
+  }
 
   @Test
   void updateRejectsBlobStoreChange() {
@@ -1494,6 +1626,53 @@ class RepositoryServiceTest {
         new StubSecurityDao(),
         new RepositoryRuntimeRegistry(repositories, 0),
         "/repository");
+  }
+
+  private static void assertInvalidApt(RepositoryType type, AptSettings settings) {
+    RepositoryService service = service(new StubRepositoryDao(repository(1L)));
+    String recipe = type == RepositoryType.HOSTED ? "apt-hosted" : "apt-proxy";
+    HostedSettings hosted = type == RepositoryType.HOSTED
+        ? new HostedSettings("ALLOW", null, null) : null;
+    ProxySettings proxy = type == RepositoryType.PROXY
+        ? new ProxySettings("https://deb.debian.org/debian/", 60, 30, true) : null;
+    assertThrows(RepositoryValidationException.class, () -> service.create(new CreateCommand(
+        "invalid-apt-" + System.nanoTime(), recipe, true, "default", true,
+        hosted, proxy, null, null, null, null, settings)));
+  }
+
+  private static RepositoryRecord aptRepository(
+      long id, String name, RepositoryType type, String metadataMode, boolean withNullArchitecture) {
+    ArrayList<String> architectures = new ArrayList<>();
+    architectures.add("amd64");
+    if (withNullArchitecture) architectures.add(null);
+    architectures.add("arm64");
+    Map<String, Object> apt = new LinkedHashMap<>();
+    apt.put("distribution", "stable");
+    apt.put("component", "main");
+    apt.put("architectures", architectures);
+    apt.put("flat", false);
+    apt.put("enforceDistribution", true);
+    apt.put("metadataMode", metadataMode);
+    apt.put("validUntilDays", 30);
+    apt.put("origin", "kkRepo");
+    apt.put("label", "kkRepo");
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", type == RepositoryType.HOSTED ? "apt-hosted" : "apt-proxy");
+    attributes.put("apt", apt);
+    if (type == RepositoryType.PROXY) {
+      attributes.put("proxy", Map.of(
+          "remoteUrl", "https://deb.debian.org/debian/",
+          "contentMaxAgeMinutes", 60,
+          "metadataMaxAgeMinutes", 30,
+          "autoBlock", true));
+    }
+    return new RepositoryRecord(
+        id, name, RepositoryFormat.APT, type,
+        type == RepositoryType.HOSTED ? "apt-hosted" : "apt-proxy",
+        true, 1L, null,
+        type == RepositoryType.PROXY ? "https://deb.debian.org/debian/" : null,
+        null, null, type == RepositoryType.HOSTED ? "ALLOW" : null,
+        true, attributes);
   }
 
   private static RepositoryService service(StubRepositoryDao repositories, ProxiedHttpClientFactory factory) {

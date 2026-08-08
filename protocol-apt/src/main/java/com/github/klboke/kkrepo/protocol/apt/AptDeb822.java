@@ -1,7 +1,6 @@
 package com.github.klboke.kkrepo.protocol.apt;
 
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -120,19 +119,6 @@ public final class AptDeb822 {
       output.append(stanzas.get(index).render());
     }
     return output.toString();
-  }
-
-  private static byte[] readBounded(InputStream input, int maxBytes) throws IOException {
-    ByteArrayOutputStream output = new ByteArrayOutputStream(Math.min(maxBytes, 64 * 1024));
-    byte[] buffer = new byte[8192];
-    int total = 0;
-    int read;
-    while ((read = input.read(buffer)) >= 0) {
-      total += read;
-      if (total > maxBytes) throw new IllegalArgumentException("deb822 input exceeds byte limit");
-      output.write(buffer, 0, read);
-    }
-    return output.toByteArray();
   }
 
   private static final class StanzaConsumer {

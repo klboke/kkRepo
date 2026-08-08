@@ -9,30 +9,40 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /** Renewable database lease with fencing tokens for cross-replica APT publication. */
 @Component
 final class AptLeaseManager {
-  private static final Duration TTL = Duration.ofMinutes(5);
-  private static final Duration WAIT = Duration.ofSeconds(30);
+  private static final Duration DEFAULT_TTL = Duration.ofMinutes(5);
+  private static final Duration DEFAULT_WAIT = Duration.ofSeconds(30);
   private final AptRegistryDao registry;
+  private final Duration ttl;
+  private final Duration wait;
 
+  @Autowired
   AptLeaseManager(AptRegistryDao registry) {
+    this(registry, DEFAULT_TTL, DEFAULT_WAIT);
+  }
+
+  AptLeaseManager(AptRegistryDao registry, Duration ttl, Duration wait) {
     this.registry = registry;
+    this.ttl = ttl;
+    this.wait = wait;
   }
 
   Lease acquire(String key) {
     String owner = UUID.randomUUID().toString();
-    long deadline = System.nanoTime() + WAIT.toNanos();
+    long deadline = System.nanoTime() + wait.toNanos();
     long retryMillis = 20;
     do {
       Instant now = Instant.now();
-      Instant expiresAt = now.plus(TTL);
+      Instant expiresAt = now.plus(ttl);
       var acquired = registry.tryAcquireLease(key, owner, now, expiresAt);
       if (acquired.isPresent()) {
         AptRegistryDao.Lease row = acquired.orElseThrow();
-        return new Lease(registry, row.leaseKey(), row.owner(), row.fencingToken(), expiresAt);
+        return new Lease(registry, row.leaseKey(), row.owner(), row.fencingToken(), expiresAt, ttl);
       }
       if (Thread.currentThread().isInterrupted()) {
         Thread.currentThread().interrupt();
@@ -59,18 +69,21 @@ final class AptLeaseManager {
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicBoolean lost = new AtomicBoolean();
     private final Thread renewal;
+    private final Duration ttl;
 
     private Lease(
         AptRegistryDao registry,
         String key,
         String owner,
         long fencingToken,
-        Instant expiresAt) {
+        Instant expiresAt,
+        Duration ttl) {
       this.registry = registry;
       this.key = key;
       this.owner = owner;
       this.fencingToken = fencingToken;
       this.expiresAt = new AtomicReference<>(expiresAt);
+      this.ttl = ttl;
       this.renewal = Thread.ofVirtual().name("apt-publish-lease-renewal").start(this::renew);
     }
 
@@ -87,7 +100,7 @@ final class AptLeaseManager {
         throw busy(key);
       }
       Instant now = Instant.now();
-      Instant next = now.plus(TTL);
+      Instant next = now.plus(ttl);
       if (!registry.renewLease(key, owner, fencingToken, now, next)) {
         lost.set(true);
         throw busy(key);
@@ -97,10 +110,10 @@ final class AptLeaseManager {
 
     private void renew() {
       while (!closed.get() && !lost.get()) {
-        LockSupport.parkNanos(TTL.toNanos() / 3);
+        LockSupport.parkNanos(ttl.toNanos() / 3);
         if (closed.get() || lost.get()) return;
         Instant now = Instant.now();
-        Instant next = now.plus(TTL);
+        Instant next = now.plus(ttl);
         try {
           if (registry.renewLease(key, owner, fencingToken, now, next)) expiresAt.set(next);
           else lost.set(true);
