@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.protocol.apt;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class AptPackageControlTest {
@@ -87,5 +88,22 @@ class AptPackageControlTest {
         Description: demo
         Multi-Arch: sometimes
         """));
+    assertThrows(IllegalArgumentException.class, () -> AptPackageControl.parse("""
+        Package: Demo
+        Version: 1.0
+        Architecture: all
+        Maintainer: Demo <demo@example.com>
+        Description: demo
+        """));
+    assertThrows(IllegalArgumentException.class, () -> AptPackageControl.parse("""
+        Package: demo
+        Version: 1.0
+        Architecture: bad_arch
+        Maintainer: Demo <demo@example.com>
+        Description: demo
+        """));
+    assertThrows(IllegalArgumentException.class, () -> new AptPackageControl(
+        "demo", "1.0", "all", "Demo <demo@example.com>", "demo", null,
+        "x".repeat(257), null, null, Map.of()));
   }
 }

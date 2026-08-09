@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.apt;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -265,6 +266,190 @@ class AptServiceTest {
 
     assertThrows(MavenExceptions.WritePolicyDenied.class, () -> fixture.service.delete(
         runtime(RepositoryType.HOSTED, "DENY", null), path, "manual", true));
+  }
+
+  @Test
+  void cleanupDeletesEveryPackageArchitectureAndPublishesTheSuiteOnce() {
+    Fixture fixture = new Fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.HOSTED, "ALLOW", null);
+    assertEquals(List.of(), fixture.service.deleteComponentsForCleanup(
+        runtime, null, "cleanup"));
+
+    String amd64Path = "pool/d/demo/demo_1.0_amd64.deb";
+    String allPath = "pool/d/demo/demo_1.0_all.deb";
+    String stalePath = "pool/s/stale/stale_1.0_amd64.deb";
+    AptRegistryDao.PackageRecord amd64 = record(
+        runtime, "stable", "main", "demo", "1.0", "amd64", amd64Path,
+        "a".repeat(64), 10L, 100L);
+    AptRegistryDao.PackageRecord all = record(
+        runtime, "stable", "main", "demo", "1.0", "all", allPath,
+        "b".repeat(64), 11L, 100L);
+    when(fixture.assets.listAssetsByComponent(100L)).thenReturn(List.of(
+        asset(runtime, 10L, 20L, 100L, amd64Path),
+        asset(runtime, 11L, 21L, 100L, allPath),
+        asset(runtime, 12L, 22L, 100L, stalePath),
+        asset(runtime, 13L, 23L, 100L, amd64Path)));
+    when(fixture.assets.listAssetsByComponent(200L)).thenReturn(List.of());
+    when(fixture.registry.findPackageByPath(runtime.id(), amd64Path))
+        .thenReturn(Optional.of(amd64));
+    when(fixture.registry.findPackageByPath(runtime.id(), allPath))
+        .thenReturn(Optional.of(all));
+    when(fixture.registry.findPackageByPath(runtime.id(), stalePath))
+        .thenReturn(Optional.empty());
+    when(fixture.registry.deletePackage(
+        eq(runtime.id()), eq("stable"), eq("main"), eq("demo"), eq("1.0"),
+        eq("amd64"), eq("cleanup"), any()))
+        .thenReturn(Optional.of(amd64));
+    when(fixture.registry.deletePackage(
+        eq(runtime.id()), eq("stable"), eq("main"), eq("demo"), eq("1.0"),
+        eq("all"), eq("cleanup"), any()))
+        .thenReturn(Optional.of(all));
+    fixture.readyToPublish(runtime, "stable", 3);
+
+    List<Integer> deleted = fixture.service.deleteComponentsForCleanup(
+        runtime, java.util.Arrays.asList(null, -1L, 100L, 200L), "cleanup");
+
+    assertEquals(List.of(0, 0, 2, 0), deleted);
+    verify(fixture.assets).retirePackageProjection(10L);
+    verify(fixture.assets).retirePackageProjection(11L);
+    verify(fixture.registry, times(1)).publishSnapshot(any(), eq("owner"), eq(9L));
+  }
+
+  @Test
+  void lazilyPublishesAMissingHostedSnapshotBeforeServingMetadata() {
+    Fixture fixture = new Fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.HOSTED, "ALLOW", null);
+    AptRegistryDao.SuiteState state = suite(runtime, "stable", 1, 1);
+    AptMetadataBuilder.BuiltSnapshot built = new AptMetadataBuilder.BuiltSnapshot(
+        Map.of("dists/stable/Release", ".apt/release"),
+        "a".repeat(64), fixture.key.revision(), Instant.EPOCH);
+    AptRegistryDao.Snapshot snapshot = snapshot(
+        runtime, "stable", 1, built.manifest());
+    java.util.concurrent.atomic.AtomicBoolean published =
+        new java.util.concurrent.atomic.AtomicBoolean();
+    when(fixture.registry.findSuite(runtime.id(), "stable")).thenReturn(Optional.of(state));
+    when(fixture.registry.ensureSuite(eq(runtime.id()), eq("stable"), any())).thenReturn(state);
+    when(fixture.registry.findPublishedSnapshot(runtime.id(), "stable"))
+        .thenAnswer(ignored -> published.get() ? Optional.of(snapshot) : Optional.empty());
+    when(fixture.metadataBuilder.build(
+        runtime, fixture.hostedSettings, state, fixture.key)).thenReturn(built);
+    when(fixture.registry.publishSnapshot(any(), eq("owner"), eq(9L))).thenAnswer(ignored -> {
+      published.set(true);
+      return true;
+    });
+    when(fixture.assets.serve(runtime, ".apt/release", false))
+        .thenReturn(MavenResponse.noBody(200));
+
+    assertEquals(200, fixture.service.get(runtime, "dists/stable/Release", false).status());
+
+    verify(fixture.registry).markSuiteDirty(eq(runtime.id()), eq("stable"), any());
+    verify(fixture.metadataBuilder).build(
+        runtime, fixture.hostedSettings, state, fixture.key);
+  }
+
+  @Test
+  void recordsTheExactRevisionWhenAsynchronousPublicationFails() {
+    Fixture fixture = new Fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.HOSTED, "ALLOW", null);
+    AptRegistryDao.SuiteState state = suite(runtime, "stable", 4, 3);
+    when(fixture.registry.findSuite(runtime.id(), "stable")).thenReturn(Optional.of(state));
+    when(fixture.registry.findPublishedSnapshot(runtime.id(), "stable"))
+        .thenReturn(Optional.empty());
+    when(fixture.leases.tryAcquire("apt:publish:" + runtime.id() + ":stable"))
+        .thenReturn(Optional.of(fixture.lease));
+    when(fixture.metadataBuilder.build(
+        runtime, fixture.hostedSettings, state, fixture.key))
+        .thenThrow(new IllegalStateException("generation failed"));
+
+    assertThrows(IllegalStateException.class,
+        () -> fixture.service.publishPendingIfAvailable(runtime, "stable"));
+
+    verify(fixture.registry).recordBuildFailure(
+        eq(runtime.id()), eq("stable"), eq(4L), eq("generation failed"), any());
+  }
+
+  @Test
+  void exhaustsFencedPublicationRetriesForSynchronousAndAsynchronousCallers() {
+    Fixture fixture = new Fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.HOSTED, "ALLOW", null);
+    AptRegistryDao.SuiteState state = suite(runtime, "stable", 4, 3);
+    AptMetadataBuilder.BuiltSnapshot built = new AptMetadataBuilder.BuiltSnapshot(
+        Map.of("dists/stable/Release", ".apt/release"),
+        "a".repeat(64), fixture.key.revision(), Instant.EPOCH);
+    when(fixture.registry.findSuite(runtime.id(), "stable")).thenReturn(Optional.of(state));
+    when(fixture.registry.findPublishedSnapshot(runtime.id(), "stable"))
+        .thenReturn(Optional.empty());
+    when(fixture.leases.tryAcquire("apt:publish:" + runtime.id() + ":stable"))
+        .thenReturn(Optional.of(fixture.lease));
+    when(fixture.metadataBuilder.build(
+        runtime, fixture.hostedSettings, state, fixture.key)).thenReturn(built);
+    when(fixture.registry.publishSnapshot(any(), eq("owner"), eq(9L))).thenReturn(false);
+
+    assertFalse(fixture.service.publishPendingIfAvailable(runtime, "stable"));
+    assertThrows(MavenExceptions.WritePolicyDenied.class,
+        () -> fixture.service.rebuild(runtime, "stable"));
+
+    verify(fixture.registry, times(8)).publishSnapshot(any(), eq("owner"), eq(9L));
+  }
+
+  @Test
+  void publishesAFreshResignedProxySnapshotWhenItsDurableManifestIsMissing() {
+    Fixture fixture = new Fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.PROXY, "ALLOW", 60);
+    AptRepositorySettings.Settings settings = new AptRepositorySettings.Settings(
+        "stable", "main", List.of("amd64"), false, true, true, null,
+        "kkRepo", "kkRepo");
+    AptRegistryDao.SuiteState state = suite(runtime, "stable", 2, 1);
+    AptMetadataBuilder.BuiltSnapshot built = new AptMetadataBuilder.BuiltSnapshot(
+        Map.of("dists/stable/Release", ".apt/proxy/Release"),
+        "a".repeat(64), fixture.key.revision(), Instant.EPOCH);
+    AptRegistryDao.Snapshot snapshot = snapshot(runtime, "stable", 2, built.manifest());
+    java.util.concurrent.atomic.AtomicBoolean published =
+        new java.util.concurrent.atomic.AtomicBoolean();
+    Instant now = Instant.now();
+    when(fixture.repositorySettings.get(runtime)).thenReturn(settings);
+    when(fixture.registry.findProxyDistribution(runtime.id(), "stable")).thenReturn(Optional.of(
+        new AptRegistryDao.ProxyDistribution(
+            runtime.id(), "stable", "release", Map.of(), false, now, now)));
+    when(fixture.registry.findSuite(runtime.id(), "stable")).thenReturn(Optional.of(state));
+    when(fixture.registry.findPublishedSnapshot(runtime.id(), "stable"))
+        .thenAnswer(ignored -> published.get() ? Optional.of(snapshot) : Optional.empty());
+    when(fixture.metadataBuilder.build(runtime, settings, state, fixture.key)).thenReturn(built);
+    when(fixture.registry.publishSnapshot(any(), eq("owner"), eq(9L))).thenAnswer(ignored -> {
+      published.set(true);
+      return true;
+    });
+    when(fixture.assets.serve(runtime, ".apt/proxy/Release", false))
+        .thenReturn(MavenResponse.noBody(200));
+
+    assertEquals(200, fixture.service.get(runtime, "dists/stable/Release", false).status());
+
+    verify(fixture.proxyProjection).refreshForResign(runtime, settings, "stable");
+  }
+
+  @Test
+  void refreshesAStaleResignedProxyEvenWhenItsPublishedSnapshotStillExists() {
+    Fixture fixture = new Fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.PROXY, "ALLOW", 60);
+    AptRepositorySettings.Settings settings = new AptRepositorySettings.Settings(
+        "stable", "main", List.of("amd64"), false, true, true, null,
+        "kkRepo", "kkRepo");
+    AptRegistryDao.Snapshot snapshot = snapshot(runtime, "stable", 1,
+        Map.of("dists/stable/Release", ".apt/proxy/Release"));
+    when(fixture.repositorySettings.get(runtime)).thenReturn(settings);
+    when(fixture.registry.findProxyDistribution(runtime.id(), "stable")).thenReturn(Optional.of(
+        new AptRegistryDao.ProxyDistribution(
+            runtime.id(), "stable", "release", Map.of(), false, Instant.EPOCH, null)));
+    when(fixture.registry.findSuite(runtime.id(), "stable"))
+        .thenReturn(Optional.of(suite(runtime, "stable", 1, 1)));
+    when(fixture.registry.findPublishedSnapshot(runtime.id(), "stable"))
+        .thenReturn(Optional.of(snapshot));
+    when(fixture.assets.serve(runtime, ".apt/proxy/Release", false))
+        .thenReturn(MavenResponse.noBody(200));
+
+    assertEquals(200, fixture.service.get(runtime, "dists/stable/Release", false).status());
+
+    verify(fixture.proxyProjection).refreshForResign(runtime, settings, "stable");
   }
 
   @Test

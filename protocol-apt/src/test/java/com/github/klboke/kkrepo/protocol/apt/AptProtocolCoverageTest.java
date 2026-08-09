@@ -18,4 +18,16 @@ class AptProtocolCoverageTest {
     assertFalse(protocol.capability().groupRead());
     assertTrue(protocol.capability().nexusPathCompatible());
   }
+
+  @Test
+  void classifiesPlainMetadataUnknownContentAndImmutablePaths() {
+    assertEquals(AptMediaTypes.TEXT, AptMediaTypes.forPath("Packages"));
+    assertEquals(AptMediaTypes.TEXT, AptMediaTypes.forPath("Sources"));
+    assertEquals(AptMediaTypes.BINARY, AptMediaTypes.forPath("unknown.bin"));
+    AptPathParser parser = new AptPathParser();
+    assertTrue(parser.parse(
+        "dists/stable/main/binary-amd64/by-hash/SHA256/" + "a".repeat(64)).immutable());
+    assertTrue(parser.parse("pool/d/demo/demo_1.0_amd64.deb").immutable());
+    assertFalse(parser.parse("dists/stable/Release").immutable());
+  }
 }

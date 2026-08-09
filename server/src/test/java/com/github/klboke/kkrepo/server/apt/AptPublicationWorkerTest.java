@@ -45,6 +45,28 @@ class AptPublicationWorkerTest {
   }
 
   @Test
+  void containsPublicationFailureSoTheDurableRevisionCanRetry() {
+    AptRegistryDao registry = mock(AptRegistryDao.class);
+    RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
+    AptRepositorySettings settings = mock(AptRepositorySettings.class);
+    AptService service = mock(AptService.class);
+    AptRegistryDao.SuiteState suite = suite(1, "stable", 4, 2);
+    RepositoryRuntime runtime = runtime(1, true, RepositoryType.HOSTED);
+    when(registry.listPendingSuites(any(), any(), any(), eq(1)))
+        .thenReturn(List.of(suite));
+    when(runtimes.resolveById(1)).thenReturn(Optional.of(runtime));
+    when(settings.get(runtime)).thenReturn(hostedSettings());
+    when(service.publishPendingIfAvailable(runtime, "stable"))
+        .thenThrow(new IllegalStateException("generation failed"));
+
+    new AptPublicationWorker(
+        registry, runtimes, settings, service, true, 1, 0, 1_000, 1_000)
+        .publishPending();
+
+    verify(service).publishPendingIfAvailable(runtime, "stable");
+  }
+
+  @Test
   void skipsPassthroughProxyAndThrottlesInvalidConfigurationFailures() {
     AptRegistryDao registry = mock(AptRegistryDao.class);
     RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);

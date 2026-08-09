@@ -282,6 +282,25 @@ class AptProxyProjectionServiceTest {
   }
 
   @Test
+  void rejectsUnsafePackagePathsNegativeSizesAndInvalidDigests() throws Exception {
+    byte[] packageBytes = "deb".getBytes(StandardCharsets.UTF_8);
+    String validIndex = INDEX.formatted(
+        digest("MD5", packageBytes), digest("SHA-1", packageBytes),
+        digest("SHA-256", packageBytes));
+    List<String> invalidIndices = List.of(
+        validIndex.replace(
+            "Filename: pool/d/demo/demo_1.0-1_amd64.deb", "Filename: ../demo.deb"),
+        validIndex.replace("Size: 3", "Size: -1"),
+        validIndex.replace("SHA256: " + digest("SHA-256", packageBytes), "SHA256: invalid"));
+
+    for (String invalidIndex : invalidIndices) {
+      Fixture fixture = configuredIndex(invalidIndex, packageBytes);
+      assertThrows(MavenExceptions.BadUpstreamException.class, () ->
+          fixture.service.refreshForResign(fixture.runtime, fixture.settings, "stable"));
+    }
+  }
+
+  @Test
   void rejectsUnsafeInvalidOversizedAndUnreadableReleases() throws Exception {
     String checksum = "a".repeat(64);
     Fixture unsafe = new Fixture();
