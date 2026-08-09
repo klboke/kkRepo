@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 
 /** Guards the frozen V1-V29 chain and validates repeat startup after newer migrations. */
 class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
+  private static final int LATEST_MIGRATION = 44;
   private static final Map<String, String> V29_SHA256 = checksums();
 
   @Test
@@ -36,7 +37,9 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
     assertTrue(flyway().validateWithResult().validationSuccessful);
     var result = flyway().migrate();
     assertEquals(0, result.migrationsExecuted);
-    assertEquals("42", flyway().info().current().getVersion().getVersion());
+    assertEquals(
+        Integer.toString(LATEST_MIGRATION),
+        flyway().info().current().getVersion().getVersion());
   }
 
   @Test
@@ -78,8 +81,10 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
 
     Flyway resumed = migration(null);
     resumed.repair();
-    assertEquals(7, resumed.migrate().migrationsExecuted);
-    assertEquals("42", resumed.info().current().getVersion().getVersion());
+    assertEquals(LATEST_MIGRATION - 35, resumed.migrate().migrationsExecuted);
+    assertEquals(
+        Integer.toString(LATEST_MIGRATION),
+        resumed.info().current().getVersion().getVersion());
     assertEquals(1, jdbc().queryForObject("""
         SELECT COUNT(*)
         FROM information_schema.table_constraints
@@ -113,8 +118,10 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
         """);
 
     Flyway resumed = migration(null);
-    assertEquals(3, resumed.migrate().migrationsExecuted);
-    assertEquals("42", resumed.info().current().getVersion().getVersion());
+    assertEquals(LATEST_MIGRATION - 39, resumed.migrate().migrationsExecuted);
+    assertEquals(
+        Integer.toString(LATEST_MIGRATION),
+        resumed.info().current().getVersion().getVersion());
     assertEquals(5, jdbc().queryForObject("""
         SELECT COUNT(*)
         FROM information_schema.columns
