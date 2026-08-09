@@ -76,6 +76,23 @@ class AssetMetadataCacheTest {
   }
 
   @Test
+  void positiveEntryRoundTripsThroughSharedTierAcrossReplicas() {
+    AssetMetadataCache writer = new AssetMetadataCache(sharedCache, true, 120, 5);
+    AssetMetadataCache reader = new AssetMetadataCache(sharedCache, true, 120, 5);
+    writer.find(7L, "com/foo/bar.jar",
+        () -> Optional.of(new Loaded(asset(101L, 7L, "com/foo/bar.jar"), blob(501L))));
+    AtomicInteger readerLoads = new AtomicInteger();
+
+    Optional<CachedAssetMetadata> cached = reader.find(7L, "com/foo/bar.jar", () -> {
+      readerLoads.incrementAndGet();
+      return Optional.empty();
+    });
+
+    assertEquals(101L, cached.orElseThrow().assetId());
+    assertEquals(0, readerLoads.get());
+  }
+
+  @Test
   void missingResultCachedWithNegativeMarker() {
     AssetMetadataCache cache = new AssetMetadataCache(sharedCache, true, 120, 5);
     AtomicInteger loads = new AtomicInteger();

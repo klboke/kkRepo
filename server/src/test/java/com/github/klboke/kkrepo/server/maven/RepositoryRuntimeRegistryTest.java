@@ -77,7 +77,38 @@ class RepositoryRuntimeRegistryTest {
 
     RepositoryRecord filtered = registry.findRecordByName("hosted").orElseThrow();
     assertEquals("hosted", registry.resolve(filtered).orElseThrow().name());
+    assertEquals("hosted", registry.resolve(filtered).orElseThrow().name());
     assertEquals("hosted", registry.resolve("hosted").orElseThrow().name());
+
+    assertEquals(1, dao.findByNameCalls);
+  }
+
+  @Test
+  void sharedRuntimeSeedsTheTypedLocalTierOnAnotherReplica() {
+    FakeRepositoryDao dao = new FakeRepositoryDao();
+    dao.add(repo(1, "hosted", RepositoryType.HOSTED), List.of());
+    ObjectMapper mapper = new ObjectMapper()
+        .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+    InMemorySharedCache shared = new InMemorySharedCache(mapper, 1000, null);
+    RepositoryRuntimeRegistry writer = new RepositoryRuntimeRegistry(
+        dao, shared, mapper, (CatalogCacheBroadcaster) null, 300);
+    RepositoryRuntimeRegistry reader = new RepositoryRuntimeRegistry(
+        dao, shared, mapper, (CatalogCacheBroadcaster) null, 300);
+
+    assertEquals("hosted", writer.resolve("hosted").orElseThrow().name());
+    assertEquals("hosted", reader.resolve("hosted").orElseThrow().name());
+    assertEquals("hosted", reader.resolve("hosted").orElseThrow().name());
+
+    assertEquals(1, dao.findByNameCalls);
+  }
+
+  @Test
+  void missingRepositoryRecordIsNegativeCachedLocally() {
+    FakeRepositoryDao dao = new FakeRepositoryDao();
+    RepositoryRuntimeRegistry registry = new RepositoryRuntimeRegistry(dao, 300);
+
+    assertTrue(registry.findRecordByName("missing").isEmpty());
+    assertTrue(registry.findRecordByName("missing").isEmpty());
 
     assertEquals(1, dao.findByNameCalls);
   }

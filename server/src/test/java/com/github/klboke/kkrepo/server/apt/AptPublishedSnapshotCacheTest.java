@@ -67,6 +67,28 @@ class AptPublishedSnapshotCacheTest {
     verify(registry, times(2)).findPublishedSnapshot(7L, "stable");
   }
 
+  @Test
+  void publishWatermarkFailureDropsLocalSnapshotAndReloadsDurableState() {
+    AtomicReference<AptRegistryDao.Snapshot> durable = new AtomicReference<>(snapshot(1));
+    AptRegistryDao registry = mock(AptRegistryDao.class);
+    when(registry.findPublishedSnapshot(7L, "stable"))
+        .thenAnswer(ignored -> Optional.of(durable.get()));
+    VersionWatermark watermark = mock(VersionWatermark.class);
+    when(watermark.current("apt-published-snapshot:repo:7:stable")).thenReturn(0L);
+    when(watermark.bump("apt-published-snapshot:repo:7:stable"))
+        .thenThrow(new IllegalStateException("watermark unavailable"));
+    AptPublishedSnapshotCache cache = new AptPublishedSnapshotCache(
+        registry, watermark, true, 60);
+
+    assertEquals(1, cache.find(7L, "stable").orElseThrow().revision());
+    AptRegistryDao.Snapshot second = snapshot(2);
+    durable.set(second);
+    cache.published(second);
+
+    assertEquals(2, cache.find(7L, "stable").orElseThrow().revision());
+    verify(registry, times(2)).findPublishedSnapshot(7L, "stable");
+  }
+
   private static AptRegistryDao.Snapshot snapshot(long revision) {
     return new AptRegistryDao.Snapshot(
         7L, "stable", revision, 1,

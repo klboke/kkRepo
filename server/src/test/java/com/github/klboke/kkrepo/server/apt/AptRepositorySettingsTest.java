@@ -86,6 +86,11 @@ class AptRepositorySettingsTest {
     assertTrue(actual.flat());
     assertTrue(actual.enforceDistribution());
     assertFalse(actual.resign());
+
+    when(repositories.findById(runtime.id())).thenReturn(Optional.of(record(runtime, Map.of(
+        "apt", Map.of("validUntilDays", "8")))));
+    settings = new AptRepositorySettings(repositories);
+    assertEquals(8, settings.get(runtime).validUntilDays());
   }
 
   @Test
