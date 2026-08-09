@@ -62,12 +62,17 @@ class AptAssetSupportTest {
     support.storeGenerated(runtime, ".apt/Release", new byte[] {1, 2}, "text/plain", attributes);
     verify(hosted).putInternalUnindexed(
         any(), any(), any(), any(), any(), any(), any());
+    support.storeGeneratedFile(runtime, ".apt/Packages", file, "text/plain", attributes);
+    verify(hosted).putInternalUnindexedFile(
+        runtime, ".apt/Packages", file, "text/plain", attributes, "apt-metadata", runtime.name());
     MavenResponse response = MavenResponse.noBody(204);
     when(hosted.getInternal(runtime, asset.path(), true)).thenReturn(response);
     assertSame(response, support.serve(runtime, asset.path(), true));
     support.delete(runtime, asset.path());
     verify(hosted).deleteInternal(runtime, asset.path());
     assertEquals(Optional.of(asset), support.findAsset(runtime, asset.path()));
+    when(assets.listAssetsByComponent(30L)).thenReturn(List.of(asset));
+    assertEquals(List.of(asset), support.listAssetsByComponent(30L));
 
     assertThrows(IllegalStateException.class, () -> support.storePackage(
         runtime, "missing", "browse", file, attributes, null, null, component));

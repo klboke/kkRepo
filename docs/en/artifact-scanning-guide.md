@@ -329,11 +329,12 @@ signatures, indexes, and ordinary protocol metadata are excluded.
 | Swift | Source archives; excludes manifests/metadata |
 | Ansible Galaxy | Collection `.tar.gz` |
 | Conda | `.conda` and `.tar.bz2` packages; excludes repodata/channeldata |
+| APT / Debian | Canonical `.deb` packages; excludes generated `dists/` metadata and signatures |
 | Docker/OCI | Images resolved from manifests/indexes; standalone layers/metadata are not treated as artifacts |
 | NuGet | `.nupkg`; excludes `.snupkg` |
 | RubyGems | `.gem` |
 | Yum | `.rpm`; excludes `repodata` |
-| Raw | `.zip`, `.tar`, `.tar.gz`, `.tgz`, `.tar.xz`, `.txz`, `.xz`, `.tar.bz2`, `.tbz2`, `.jar`, `.war`, `.ear`, `.whl`, `.crate`, `.gem`, `.nupkg`, `.rpm` |
+| Raw | `.zip`, `.tar`, `.tar.gz`, `.tgz`, `.tar.xz`, `.txz`, `.xz`, `.tar.bz2`, `.tbz2`, `.jar`, `.war`, `.ear`, `.whl`, `.crate`, `.gem`, `.nupkg`, `.rpm`, `.deb` |
 
 Conda packages use the dedicated `CONDA_PACKAGE` scan subject, so their protocol-aware catalog does not reuse or contaminate the generic-archive SBOM cache. The adapter validates the complete archive against compressed-size, entry-count, expanded-byte, nesting, path, link, special-file, and deadline limits, captures the bounded `info/index.json` projection, and presents it to Syft as `conda-meta/package.json`. A successful result must contain a matching `conda` component with the expected name and version; an empty or mismatched catalog fails closed.
 

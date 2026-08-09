@@ -4,6 +4,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -53,6 +54,21 @@ final class AptLeaseManager {
       retryMillis = Math.min(250, retryMillis * 2);
     } while (System.nanoTime() < deadline);
     throw busy(key);
+  }
+
+  /** Attempts once so scheduled workers never tie up a thread behind another replica. */
+  Optional<Lease> tryAcquire(String key) {
+    String owner = UUID.randomUUID().toString();
+    Instant now = Instant.now();
+    Instant expiresAt = now.plus(ttl);
+    return registry.tryAcquireLease(key, owner, now, expiresAt)
+        .map(row -> new Lease(
+            registry,
+            row.leaseKey(),
+            row.owner(),
+            row.fencingToken(),
+            row.expiresAt() == null ? expiresAt : row.expiresAt(),
+            ttl));
   }
 
   private static MavenExceptions.WritePolicyDenied busy(String key) {

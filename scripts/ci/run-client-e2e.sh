@@ -2580,6 +2580,36 @@ apt_upload_fixture() {
     "$KKREPO_URL/repository/$APT_HOSTED_REPOSITORY/"
 }
 
+apt_wait_for_version() {
+  local label="$1"
+  local package="$2"
+  local version="$3"
+  local architecture="$4"
+  local timeout_seconds="${APT_E2E_PUBLICATION_TIMEOUT_SECONDS:-60}"
+  local deadline=$((SECONDS + timeout_seconds))
+  local index_url="$KKREPO_URL/repository/$APT_HOSTED_REPOSITORY/dists/stable/main/binary-$architecture/Packages"
+  while (( SECONDS < deadline )); do
+    if curl -m 10 --fail-with-body -sS -u "$KKREPO_AUTH" "$index_url" 2>/dev/null \
+        | awk -v package="$package" -v version="$version" '
+            BEGIN { RS=""; FS="\n"; matched=0 }
+            {
+              found_package=0; found_version=0
+              for (field=1; field<=NF; field++) {
+                if ($field == "Package: " package) found_package=1
+                if ($field == "Version: " version) found_version=1
+              }
+              if (found_package && found_version) { matched=1; exit }
+            }
+            END { exit matched ? 0 : 1 }
+          '; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  log "APT $label metadata publication did not expose $package=$version within ${timeout_seconds}s"
+  return 1
+}
+
 apt_start_client() {
   local container="$1"
   local image="$2"
@@ -2873,6 +2903,7 @@ test_apt() {
   apt_create_fixture "$base_file" "$base_package" 1.0.0 all "" \
     "kkRepo APT architecture-all dependency"
   apt_upload_fixture base "$base_file"
+  apt_wait_for_version base "$base_package" 1.0.0 all
 
   local entry label image label_slug architecture package container config
   local v1_file v2_file v1_sha v2_sha v1_message v2_message
@@ -2900,6 +2931,7 @@ test_apt() {
     apt_create_fixture "$v1_file" "$package" 1.0.0 "$architecture" \
       "$base_package (= 1.0.0)" "$v1_message"
     apt_upload_fixture "$label_slug-v1" "$v1_file"
+    apt_wait_for_version "$label_slug-v1" "$package" 1.0.0 "$architecture"
     v1_sha="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$v1_file")"
     apt_write_client_config "$config" "$KKREPO_URL" "$APT_HOSTED_REPOSITORY" "$key_file"
     apt_start_client "$container" "$image" "$config"
@@ -2909,6 +2941,7 @@ test_apt() {
     apt_create_fixture "$v2_file" "$package" 1.1.0 "$architecture" \
       "$base_package (= 1.0.0)" "$v2_message"
     apt_upload_fixture "$label_slug-v2" "$v2_file"
+    apt_wait_for_version "$label_slug-v2" "$package" 1.1.0 "$architecture"
     v2_sha="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$v2_file")"
     apt_upgrade_version "$container" "$package" 1.1.0 "$v2_message"
     run_logged "apt-$label_slug-v2-bytes" docker exec \

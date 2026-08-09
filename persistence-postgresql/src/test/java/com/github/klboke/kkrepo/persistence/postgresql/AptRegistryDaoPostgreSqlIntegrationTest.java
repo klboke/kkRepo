@@ -7,11 +7,97 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
 import com.github.klboke.kkrepo.persistence.postgresql.support.PostgreSqlIntegrationTestSupport;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class AptRegistryDaoPostgreSqlIntegrationTest extends PostgreSqlIntegrationTestSupport {
+  @Test
+  void pendingQueueStreamingCursorAndSnapshotRetentionAreBounded() {
+    long repositoryId = insertRepository("apt-worker");
+    AptRegistryDao dao = stores().aptRegistry();
+    Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
+    inTransaction(() -> dao.savePackage(packageRecord(repositoryId, "amd64", "1.0", now)));
+    inTransaction(() -> dao.savePackage(
+        packageRecord(repositoryId, "amd64", "2.0", now.plusMillis(1))));
+    ArrayList<String> streamed = new ArrayList<>();
+    dao.visitPackages(
+        repositoryId,
+        "stable",
+        "main",
+        "amd64",
+        record -> streamed.add(record.version()));
+    assertEquals(List.of("1.0", "2.0"), streamed);
+    assertEquals(now.plusMillis(1),
+        dao.findSuite(repositoryId, "stable").orElseThrow().desiredAt());
+    assertEquals(1, dao.listPendingSuites(
+        now.plusSeconds(1), now, now.plusSeconds(1), 10).size());
+    assertEquals(1, dao.listPendingSuites(
+        now.minusSeconds(1), now, now.plusSeconds(1), 10).size());
+    jdbc().update("UPDATE repository SET online = false WHERE id = ?", repositoryId);
+    assertTrue(dao.listPendingSuites(
+        now.plusSeconds(1), now.plusSeconds(1), now.plusSeconds(1), 10).isEmpty());
+    jdbc().update("UPDATE repository SET online = true WHERE id = ?", repositoryId);
+    jdbc().update("UPDATE repository SET type = 'proxy' WHERE id = ?", repositoryId);
+    assertTrue(dao.listPendingSuites(
+        now.plusSeconds(1), now.plusSeconds(1), now.plusSeconds(1), 10).isEmpty());
+    jdbc().update("UPDATE repository SET type = 'hosted' WHERE id = ?", repositoryId);
+
+    String leaseKey = "apt:publish:" + repositoryId + ":stable";
+    AptRegistryDao.Lease lease = dao.tryAcquireLease(
+        leaseKey, "retention", now, now.plusSeconds(60)).orElseThrow();
+    long currentRevision = 0;
+    for (int index = 0; index < 4; index++) {
+      currentRevision = index == 0
+          ? dao.findSuite(repositoryId, "stable").orElseThrow().desiredRevision()
+          : dao.markSuiteDirty(repositoryId, "stable", now.plusMillis(index + 1));
+      AptRegistryDao.Snapshot snapshot = new AptRegistryDao.Snapshot(
+          repositoryId,
+          "stable",
+          currentRevision,
+          1,
+          Map.of("dists/stable/Release", ".apt/snapshots/stable/" + currentRevision + "/Release"),
+          Integer.toHexString(index).repeat(64).substring(0, 64),
+          now.minusSeconds(100 - index));
+      assertTrue(dao.publishSnapshot(snapshot, "retention", lease.fencingToken()));
+    }
+    List<AptRegistryDao.Snapshot> expired =
+        dao.listSnapshotCleanupCandidates(now.plusSeconds(1), 3, 10);
+    assertEquals(1, expired.size());
+    assertFalse(dao.deleteSnapshot(repositoryId, "stable", currentRevision));
+    assertTrue(dao.deleteSnapshot(repositoryId, "stable", expired.getFirst().revision()));
+
+    inTransaction(() -> dao.deletePackage(
+        repositoryId, "stable", "main", "demo", "1.0", "amd64", "cleanup", now));
+    long tombstoneRevision = dao.findSuite(repositoryId, "stable").orElseThrow().desiredRevision();
+    assertTrue(dao.listPackageCleanupCandidates(now.plusSeconds(1), 10).isEmpty());
+    AptRegistryDao.Snapshot deletionSnapshot = new AptRegistryDao.Snapshot(
+        repositoryId,
+        "stable",
+        tombstoneRevision,
+        1,
+        Map.of("dists/stable/Release", ".apt/snapshots/stable/" + tombstoneRevision + "/Release"),
+        "f".repeat(64),
+        now);
+    assertTrue(dao.publishSnapshot(deletionSnapshot, "retention", lease.fencingToken()));
+    dao.listSnapshots(repositoryId, "stable", 100).stream()
+        .filter(snapshot -> snapshot.revision() < tombstoneRevision)
+        .forEach(snapshot -> assertTrue(dao.deleteSnapshot(
+            repositoryId, "stable", snapshot.revision())));
+    AptRegistryDao.PackageTombstone tombstone =
+        dao.listPackageCleanupCandidates(now.plusSeconds(1), 10).getFirst();
+    assertEquals("pool/d/demo/demo_1.0_amd64.deb", tombstone.path());
+    assertTrue(dao.deletePackageTombstone(tombstone));
+
+    long failedRevision = dao.markSuiteDirty(repositoryId, "retry", now.minusSeconds(10));
+    assertTrue(dao.listPendingSuites(now, now, now, 10).stream()
+        .anyMatch(suite -> suite.distribution().equals("retry")));
+    dao.recordBuildFailure(repositoryId, "retry", failedRevision, "failed", now);
+    assertFalse(dao.listPendingSuites(now, now, now.minusSeconds(1), 10).stream()
+        .anyMatch(suite -> suite.distribution().equals("retry")));
+  }
+
   @Test
   void packageSnapshotAndFencedLeaseLifecycleIsDurable() {
     long repositoryId = insertRepository("apt-hosted");

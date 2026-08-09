@@ -20,8 +20,10 @@ import java.io.InputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -123,7 +125,7 @@ public class AptService {
     String section = chooseConfigured("component", component, settings.component());
     try (AptDebPackageInspector.InspectedPackage inspected = inspector.inspect(body, filename)) {
       return publishInspected(
-          runtime, settings, inspected, suite, section, actor, ip, expectedPath, true);
+          runtime, settings, inspected, suite, section, actor, ip, expectedPath);
     }
   }
 
@@ -142,7 +144,7 @@ public class AptService {
     // savePackage marks the suite dirty. Migration deliberately leaves that state unpublished
     // until an administrator imports the source signing key and requests an explicit rebuild.
     return publishInspected(
-        runtime, settings, inspected, suite, section, actor, ip, expectedPath, false);
+        runtime, settings, inspected, suite, section, actor, ip, expectedPath);
   }
 
   private PublishedPackage publishInspected(
@@ -153,8 +155,7 @@ public class AptService {
       String section,
       String actor,
       String ip,
-      String expectedPath,
-      boolean publishSnapshot) {
+      String expectedPath) {
     AptPackageControl control = inspected.control();
     if (!"all".equals(control.architecture())
         && !settings.architectures().contains(control.architecture())) {
@@ -235,9 +236,9 @@ public class AptService {
           .filter(row -> !row.assetId().equals(stored.assetId()))
           .ifPresent(row -> assets.retirePackageProjection(row.assetId()));
       lease.assertHeld();
-      if (publishSnapshot) {
-        publishPending(runtime, settings, suite);
-      }
+      // savePackage already advanced durable desired_revision. The publication worker debounces
+      // concurrent writes and serves the previous coherent snapshot until the replacement is
+      // atomically visible. Validation and canonical identity are final before this method returns.
       return new PublishedPackage(
           stored.path(), stored.packageName(), stored.version(), stored.architecture(),
           stored.sha256(), stored.size());
@@ -256,21 +257,51 @@ public class AptService {
     }
     AptRegistryDao.PackageRecord existing = registry.findPackageByPath(runtime.id(), path.normalized())
         .orElseThrow(() -> new MavenExceptions.MavenNotFoundException(path.normalized()));
-    AptPackageControl control = packageControl(existing);
-    try (AptLeaseManager.Lease lease = leases.acquire(
-        coordinateLease(runtime, existing.distribution(), existing.component(), control))) {
-      lease.assertHeld();
-      AptRegistryDao.PackageRecord removed = registry.deletePackage(
-          runtime.id(), existing.distribution(), existing.component(), existing.packageName(),
-          existing.version(), existing.architecture(), reason, Instant.now())
-          .orElseThrow(() -> new MavenExceptions.MavenNotFoundException(path.normalized()));
-      assets.retirePackageProjection(removed.assetId());
-      lease.assertHeld();
-      publishPending(runtime, repositorySettings.get(runtime), removed.distribution());
-      // Retain the package blob for old signed snapshots. Automated grace-period cleanup is
-      // intentionally deferred until snapshot/package reference retention is implemented.
-      return MavenResponse.noBody(204);
+    AptRegistryDao.PackageRecord removed = deletePackageRecord(runtime, existing, reason)
+        .orElseThrow(() -> new MavenExceptions.MavenNotFoundException(path.normalized()));
+    // Deletion remains synchronous: the current signed index must stop advertising a package
+    // before the administrative operation succeeds.
+    publishPending(runtime, repositorySettings.get(runtime), removed.distribution());
+    return MavenResponse.noBody(204);
+  }
+
+  /** Deletes every architecture bound to each cleanup component and publishes each suite once. */
+  public List<Integer> deleteComponentsForCleanup(
+      RepositoryRuntime runtime, List<Long> componentIds, String reason) {
+    requireHosted(runtime);
+    if (componentIds == null || componentIds.isEmpty()) return List.of();
+    ArrayList<Integer> counts = new ArrayList<>(componentIds.size());
+    LinkedHashSet<String> changedDistributions = new LinkedHashSet<>();
+    for (Long componentId : componentIds) {
+      if (componentId == null || componentId <= 0) {
+        counts.add(0);
+        continue;
+      }
+      int deleted = 0;
+      LinkedHashSet<String> paths = new LinkedHashSet<>();
+      assets.listAssetsByComponent(componentId).stream()
+          .filter(asset -> asset.repositoryId() == runtime.id())
+          .filter(asset -> asset.format() == RepositoryFormat.APT)
+          .map(AssetRecord::path)
+          .forEach(paths::add);
+      for (String packagePath : paths) {
+        Optional<AptRegistryDao.PackageRecord> existing =
+            registry.findPackageByPath(runtime.id(), packagePath);
+        if (existing.isEmpty()) continue;
+        Optional<AptRegistryDao.PackageRecord> removed = deletePackageRecord(
+            runtime, existing.orElseThrow(), reason);
+        if (removed.isPresent()) {
+          deleted++;
+          changedDistributions.add(removed.orElseThrow().distribution());
+        }
+      }
+      counts.add(deleted);
     }
+    AptRepositorySettings.Settings settings = repositorySettings.get(runtime);
+    for (String distribution : changedDistributions) {
+      publishPending(runtime, settings, distribution);
+    }
+    return List.copyOf(counts);
   }
 
   public MavenResponse publicKey(RepositoryRuntime runtime, boolean headOnly) {
@@ -464,17 +495,34 @@ public class AptService {
       RepositoryRuntime runtime,
       AptRepositorySettings.Settings settings,
       String distribution) {
-    for (int attempt = 0; attempt < 4; attempt++) {
-      AptRegistryDao.SuiteState before = registry.findSuite(runtime.id(), distribution)
-          .orElseGet(() -> registry.ensureSuite(runtime.id(), distribution, Instant.now()));
-      if (before.desiredRevision() == before.publishedRevision()
-          && publishedSnapshots.find(runtime.id(), distribution).isPresent()) return;
-      try (AptLeaseManager.Lease lease = leases.acquire(
-          "apt:publish:" + runtime.id() + ":" + distribution)) {
+    publishPending(runtime, settings, distribution, true);
+  }
+
+  boolean publishPendingIfAvailable(RepositoryRuntime runtime, String distribution) {
+    requireApt(runtime);
+    return publishPending(
+        runtime, repositorySettings.get(runtime), distribution, false);
+  }
+
+  private boolean publishPending(
+      RepositoryRuntime runtime,
+      AptRepositorySettings.Settings settings,
+      String distribution,
+      boolean waitForLease) {
+    AptRegistryDao.SuiteState before = registry.findSuite(runtime.id(), distribution)
+        .orElseGet(() -> registry.ensureSuite(runtime.id(), distribution, Instant.now()));
+    if (before.desiredRevision() == before.publishedRevision()
+        && publishedSnapshots.find(runtime.id(), distribution).isPresent()) return true;
+    Optional<AptLeaseManager.Lease> acquired = waitForLease
+        ? Optional.of(leases.acquire("apt:publish:" + runtime.id() + ":" + distribution))
+        : leases.tryAcquire("apt:publish:" + runtime.id() + ":" + distribution);
+    if (acquired.isEmpty()) return false;
+    try (AptLeaseManager.Lease lease = acquired.orElseThrow()) {
+      for (int attempt = 0; attempt < 4; attempt++) {
         lease.assertHeld();
         AptRegistryDao.SuiteState state = registry.findSuite(runtime.id(), distribution).orElseThrow();
         if (state.desiredRevision() == state.publishedRevision()
-            && publishedSnapshots.find(runtime.id(), distribution).isPresent()) return;
+            && publishedSnapshots.find(runtime.id(), distribution).isPresent()) return true;
         try {
           AptSigningService.SigningMaterial key = signing.active(runtime);
           AptMetadataBuilder.BuiltSnapshot built = metadataBuilder.build(
@@ -488,7 +536,7 @@ public class AptService {
               snapshot, lease.owner(), lease.fencingToken());
           if (published) {
             publishedSnapshots.published(snapshot);
-            return;
+            return true;
           }
         } catch (RuntimeException error) {
           registry.recordBuildFailure(
@@ -497,8 +545,26 @@ public class AptService {
         }
       }
     }
-    throw new MavenExceptions.WritePolicyDenied(
-        "APT suite changed repeatedly during publication; retry the request");
+    if (waitForLease) {
+      throw new MavenExceptions.WritePolicyDenied(
+          "APT suite changed repeatedly during publication; retry the request");
+    }
+    return false;
+  }
+
+  private Optional<AptRegistryDao.PackageRecord> deletePackageRecord(
+      RepositoryRuntime runtime, AptRegistryDao.PackageRecord existing, String reason) {
+    AptPackageControl control = packageControl(existing);
+    try (AptLeaseManager.Lease lease = leases.acquire(
+        coordinateLease(runtime, existing.distribution(), existing.component(), control))) {
+      lease.assertHeld();
+      Optional<AptRegistryDao.PackageRecord> removed = registry.deletePackage(
+          runtime.id(), existing.distribution(), existing.component(), existing.packageName(),
+          existing.version(), existing.architecture(), reason, Instant.now());
+      removed.ifPresent(row -> assets.retirePackageProjection(row.assetId()));
+      lease.assertHeld();
+      return removed;
+    }
   }
 
   private static String poolPath(AptPackageControl control, String filename) {

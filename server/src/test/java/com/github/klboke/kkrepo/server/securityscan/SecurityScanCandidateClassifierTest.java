@@ -47,6 +47,7 @@ class SecurityScanCandidateClassifierTest {
         Arguments.of(RepositoryFormat.ANSIBLEGALAXY, "artifacts/acme-demo-1.0.0.tar.gz", "collection-artifact"),
         Arguments.of(RepositoryFormat.CONDA, "noarch/demo-1.0-py_0.conda", "package"),
         Arguments.of(RepositoryFormat.CONDA, "linux-64/demo-1.0-py_0.tar.bz2", "package"),
+        Arguments.of(RepositoryFormat.APT, "pool/d/demo/demo_1.0_amd64.deb", "package"),
         Arguments.of(RepositoryFormat.NUGET, "flat/demo/1.0.0/demo.1.0.0.nupkg", "package"),
         Arguments.of(RepositoryFormat.RUBYGEMS, "gems/demo-1.0.0.gem", "gem"),
         Arguments.of(RepositoryFormat.YUM, "packages/demo-1.0.0.x86_64.rpm", "package"),
@@ -99,6 +100,7 @@ class SecurityScanCandidateClassifierTest {
         Arguments.of(RepositoryFormat.TERRAFORM, "providers/demo/1.0.0_SHA256SUMS", "checksum"),
         Arguments.of(RepositoryFormat.CONDA, "noarch/repodata.json", "repodata"),
         Arguments.of(RepositoryFormat.CONDA, "channeldata.json", "channeldata"),
+        Arguments.of(RepositoryFormat.APT, ".apt/snapshots/stable/1/Packages.deb", "metadata"),
         Arguments.of(RepositoryFormat.NUGET, "registration/demo/index.json", "metadata"),
         Arguments.of(RepositoryFormat.YUM, "repodata/primary.xml.gz", "metadata"));
   }

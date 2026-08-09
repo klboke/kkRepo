@@ -14,6 +14,7 @@ import java.io.ByteArrayInputStream;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.springframework.stereotype.Component;
@@ -76,6 +77,22 @@ final class AptAssetSupport {
         runtime.name());
   }
 
+  void storeGeneratedFile(
+      RepositoryRuntime runtime,
+      String path,
+      Path file,
+      String contentType,
+      Map<String, ?> attributes) {
+    hosted.putInternalUnindexedFile(
+        runtime,
+        path,
+        file,
+        contentType,
+        attributes,
+        "apt-metadata",
+        runtime.name());
+  }
+
   MavenResponse serve(RepositoryRuntime runtime, String path, boolean headOnly) {
     return hosted.getInternal(runtime, path, headOnly);
   }
@@ -91,6 +108,10 @@ final class AptAssetSupport {
 
   Optional<AssetRecord> findAsset(RepositoryRuntime runtime, String path) {
     return assets.findAssetByPath(runtime.id(), path);
+  }
+
+  List<AssetRecord> listAssetsByComponent(long componentId) {
+    return assets.listAssetsByComponent(componentId);
   }
 
   void retirePackageProjection(Long assetId) {

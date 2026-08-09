@@ -40,11 +40,10 @@ import org.mockito.ArgumentCaptor;
 class AptServiceTest {
 
   @Test
-  void publishesCanonicalHostedPackageAndAtomicallyPublishesSnapshot() throws Exception {
+  void commitsCanonicalHostedPackageWithoutBlockingOnMetadataPublication() throws Exception {
     Fixture fixture = new Fixture();
     RepositoryRuntime runtime = runtime(RepositoryType.HOSTED, "ALLOW", null);
     byte[] archive = archive("demo", "1.0-1", "amd64");
-    fixture.readyToPublish(runtime, "stable", 1);
     AssetRecord asset = asset(runtime, 10L, 20L, 30L,
         "pool/d/demo/demo_1.0-1_amd64.deb");
     when(fixture.assets.storePackage(
@@ -72,6 +71,20 @@ class AptServiceTest {
     assertEquals("stable", row.distribution());
     assertEquals(sha256(archive), row.sha256());
     assertEquals(10L, row.assetId());
+    verify(fixture.metadataBuilder, never()).build(any(), any(), any(), any());
+    verify(fixture.registry, never()).publishSnapshot(any(), anyString(), anyLong());
+  }
+
+  @Test
+  void asynchronouslyPublishesPendingRevisionWhenTheSuiteLeaseIsAvailable() {
+    Fixture fixture = new Fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.HOSTED, "ALLOW", null);
+    fixture.readyToPublish(runtime, "stable", 1);
+    when(fixture.leases.tryAcquire("apt:publish:" + runtime.id() + ":stable"))
+        .thenReturn(Optional.of(fixture.lease));
+
+    assertTrue(fixture.service.publishPendingIfAvailable(runtime, "stable"));
+
     verify(fixture.metadataBuilder).build(
         eq(runtime), eq(fixture.hostedSettings), any(), eq(fixture.key));
     verify(fixture.registry).publishSnapshot(any(), eq("owner"), eq(9L));
@@ -94,8 +107,6 @@ class AptServiceTest {
         eq(runtime), eq(path), anyString(), any(), any(), anyString(), anyString(), any()))
         .thenReturn(asset(runtime, 10L, 20L, 30L, path));
     when(fixture.registry.savePackage(any())).thenAnswer(invocation -> invocation.getArgument(0));
-    fixture.readyToPublish(runtime, "stable", 2);
-
     AptService.PublishedPackage published = fixture.service.publish(
         runtime, "libdemo_2.0_amd64.deb", new ByteArrayInputStream(archive),
         " stable ", " main ", "alice", "ip");

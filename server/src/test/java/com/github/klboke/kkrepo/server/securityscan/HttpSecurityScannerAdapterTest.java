@@ -64,6 +64,7 @@ class HttpSecurityScannerAdapterTest {
       "packages/demo-1.0.0.tar.gz,TAR_GZ",
       "modules/acme/vpc/1.0.0.xz,XZ",
       "flat/demo/1.0.0/demo.1.0.0.NUPKG,NUPKG",
+      "pool/d/demo/demo_1.0_amd64.deb,DEB",
       "release/no-extension,UNKNOWN",
       "release/invalid.jar?download=true,UNKNOWN"
   })

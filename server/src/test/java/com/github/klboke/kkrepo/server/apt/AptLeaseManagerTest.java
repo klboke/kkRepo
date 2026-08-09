@@ -36,6 +36,22 @@ class AptLeaseManagerTest {
   }
 
   @Test
+  void nonBlockingAcquisitionAttemptsOnlyOnce() {
+    AptRegistryDao available = availableRegistry();
+    try (AptLeaseManager.Lease lease =
+        new AptLeaseManager(available).tryAcquire("worker").orElseThrow()) {
+      assertEquals(9L, lease.fencingToken());
+    }
+    verify(available, times(1)).tryAcquireLease(anyString(), anyString(), any(), any());
+
+    AptRegistryDao busy = mock(AptRegistryDao.class);
+    when(busy.tryAcquireLease(anyString(), anyString(), any(), any()))
+        .thenReturn(Optional.empty());
+    assertTrue(new AptLeaseManager(busy).tryAcquire("worker").isEmpty());
+    verify(busy, times(1)).tryAcquireLease(anyString(), anyString(), any(), any());
+  }
+
+  @Test
   void failsClosedWhenRenewalIsLostOrAcquisitionIsInterrupted() {
     AptRegistryDao lost = availableRegistry();
     when(lost.renewLease(anyString(), anyString(), anyLong(), any(), any())).thenReturn(false);

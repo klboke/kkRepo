@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.cleanup;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.server.apt.AptService;
 import com.github.klboke.kkrepo.server.browse.BrowseContentDeleteController;
 import com.github.klboke.kkrepo.server.browse.RepositoryContentDeletionService;
 import com.github.klboke.kkrepo.server.browse.RepositoryContentDeletionService.CleanupDeleteSubject;
@@ -20,16 +21,19 @@ public class CleanupRepositoryContentDeletionService
   private final RepositoryRuntimeRegistry runtimes;
   private final DockerManifestStore dockerManifests;
   private final NpmHostedService npmHosted;
+  private final AptService aptService;
 
   public CleanupRepositoryContentDeletionService(
       BrowseContentDeleteController browseDeletion,
       RepositoryRuntimeRegistry runtimes,
       DockerManifestStore dockerManifests,
-      NpmHostedService npmHosted) {
+      NpmHostedService npmHosted,
+      AptService aptService) {
     this.browseDeletion = browseDeletion;
     this.runtimes = runtimes;
     this.dockerManifests = dockerManifests;
     this.npmHosted = npmHosted;
+    this.aptService = aptService;
   }
 
   @Override
@@ -74,6 +78,14 @@ public class CleanupRepositoryContentDeletionService
         && subjects.stream().allMatch(subject -> "COMPONENT".equals(subject.subjectKind()))) {
       return npmHosted.deleteTarballsForCleanup(
           runtime, subjects.stream().map(CleanupDeleteSubject::path).toList(), actorId);
+    }
+    if (runtime.format() == RepositoryFormat.APT
+        && runtime.type() == RepositoryType.HOSTED
+        && subjects.stream().allMatch(subject -> "COMPONENT".equals(subject.subjectKind()))) {
+      return aptService.deleteComponentsForCleanup(
+          runtime,
+          subjects.stream().map(CleanupDeleteSubject::subjectId).toList(),
+          "cleanup policy delete by " + actorId);
     }
     return RepositoryContentDeletionService.super.deleteBatchForCleanup(
         repository, subjects, actorId);

@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcUpserts;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.CoordinationPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -18,8 +19,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Consumer;
 import org.springframework.jdbc.core.ArgumentPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,6 +35,7 @@ public class JdbcAptRegistryDao implements AptRegistryDao {
   private final JdbcTemplate jdbc;
   private final JsonColumns json;
   private final CoordinationPersistenceDialect coordination;
+  private final int streamingFetchSize;
   private final RowMapper<PackageRecord> packageMapper = this::mapPackage;
 
   public JdbcAptRegistryDao(
@@ -39,6 +43,7 @@ public class JdbcAptRegistryDao implements AptRegistryDao {
     this.jdbc = jdbc;
     this.json = json;
     this.coordination = databaseDialect.coordination();
+    this.streamingFetchSize = databaseDialect.streamingFetchSize();
   }
 
   @Override
@@ -129,6 +134,37 @@ public class JdbcAptRegistryDao implements AptRegistryDao {
   }
 
   @Override
+  @Transactional(readOnly = true)
+  public void visitPackages(
+      long repositoryId,
+      String distribution,
+      String component,
+      String architecture,
+      Consumer<PackageRecord> visitor) {
+    if (visitor == null) return;
+    int[] row = {0};
+    jdbc.query(
+        connection -> {
+          PreparedStatement statement = connection.prepareStatement(
+              """
+              SELECT * FROM apt_package_record
+              WHERE repository_id = ? AND distribution_name = ? AND component_name = ?
+                AND architecture = ?
+              ORDER BY package_name, id
+              """,
+              ResultSet.TYPE_FORWARD_ONLY,
+              ResultSet.CONCUR_READ_ONLY);
+          statement.setFetchSize(streamingFetchSize);
+          statement.setLong(1, repositoryId);
+          statement.setString(2, distribution);
+          statement.setString(3, component);
+          statement.setString(4, architecture);
+          return statement;
+        },
+        (RowCallbackHandler) result -> visitor.accept(mapPackage(result, row[0]++)));
+  }
+
+  @Override
   public List<PackageRecord> listPackages(long repositoryId, String distribution) {
     return jdbc.query(
         """
@@ -211,6 +247,53 @@ public class JdbcAptRegistryDao implements AptRegistryDao {
   }
 
   @Override
+  public List<PackageTombstone> listPackageCleanupCandidates(
+      Instant deletedBefore, int limit) {
+    int boundedLimit = Math.max(1, Math.min(limit, 256));
+    Instant cutoff = deletedBefore == null ? Instant.now() : deletedBefore;
+    return jdbc.query(
+        """
+        SELECT t.* FROM apt_package_tombstone t
+        WHERE t.deleted_at < ?
+          AND NOT EXISTS (
+            SELECT 1 FROM apt_snapshot s
+            WHERE s.repository_id = t.repository_id
+              AND s.distribution_name = t.distribution_name
+              AND s.published_at IS NOT NULL
+              AND s.revision < t.revision)
+        ORDER BY t.deleted_at, t.repository_id, t.revision
+        LIMIT ?
+        """,
+        this::mapPackageTombstone,
+        nullableTimestamp(cutoff),
+        boundedLimit);
+  }
+
+  @Override
+  @Transactional
+  public boolean deletePackageTombstone(PackageTombstone tombstone) {
+    if (tombstone == null) return false;
+    byte[] coordinateHash = PersistenceHashes.sha256(
+        tombstone.distribution(),
+        tombstone.component(),
+        tombstone.packageName(),
+        tombstone.version(),
+        tombstone.architecture());
+    return jdbc.update(
+        """
+        DELETE FROM apt_package_tombstone
+        WHERE repository_id = ? AND coordinate_hash = ? AND revision = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM apt_package_record p
+            WHERE p.repository_id = apt_package_tombstone.repository_id
+              AND p.coordinate_hash = apt_package_tombstone.coordinate_hash)
+        """,
+        tombstone.repositoryId(),
+        coordinateHash,
+        tombstone.revision()) == 1;
+  }
+
+  @Override
   @Transactional
   public SuiteState ensureSuite(long repositoryId, String distribution, Instant now) {
     requireSegment("distribution", distribution);
@@ -259,6 +342,31 @@ public class JdbcAptRegistryDao implements AptRegistryDao {
   }
 
   @Override
+  public List<SuiteState> listPendingSuites(
+      Instant readyBefore, Instant forceBefore, Instant retryBefore, int limit) {
+    int boundedLimit = Math.max(1, Math.min(limit, 256));
+    Instant ready = readyBefore == null ? Instant.now() : readyBefore;
+    Instant forced = forceBefore == null ? ready : forceBefore;
+    Instant retry = retryBefore == null ? ready : retryBefore;
+    return jdbc.query(
+        """
+        SELECT suite.* FROM apt_suite_state suite
+        JOIN repository r ON r.id = suite.repository_id
+        WHERE suite.desired_revision > suite.published_revision
+          AND (suite.desired_at <= ? OR COALESCE(suite.pending_since, suite.desired_at) <= ?)
+          AND (suite.last_error_at IS NULL OR suite.last_error_at <= ?)
+          AND r.online = true AND r.format = 'apt' AND r.type = 'hosted'
+        ORDER BY suite.desired_at, suite.repository_id, suite.distribution_name
+        LIMIT ?
+        """,
+        this::mapSuite,
+        nullableTimestamp(ready),
+        nullableTimestamp(forced),
+        nullableTimestamp(retry),
+        boundedLimit);
+  }
+
+  @Override
   @Transactional
   public boolean publishSnapshot(Snapshot snapshot, String leaseOwner, long fencingToken) {
     if (snapshot == null || snapshot.manifest() == null || snapshot.manifest().isEmpty()) {
@@ -295,7 +403,7 @@ public class JdbcAptRegistryDao implements AptRegistryDao {
         """
         UPDATE apt_suite_state
         SET published_revision = ?, signing_key_revision = ?, last_published_at = ?,
-            last_error = NULL, last_error_at = NULL, updated_at = ?
+            pending_since = NULL, last_error = NULL, last_error_at = NULL, updated_at = ?
         WHERE repository_id = ? AND distribution_name = ? AND desired_revision = ?
           AND published_revision <= ?
           AND EXISTS (
@@ -359,6 +467,56 @@ public class JdbcAptRegistryDao implements AptRegistryDao {
         ORDER BY revision DESC
         LIMIT ?
         """, this::mapSnapshot, repositoryId, distribution, boundedLimit);
+  }
+
+  @Override
+  public List<Snapshot> listSnapshotCleanupCandidates(
+      Instant createdBefore, int minSnapshots, int limit) {
+    int retained = Math.max(3, Math.min(minSnapshots, 100));
+    int boundedLimit = Math.max(1, Math.min(limit, 256));
+    Instant cutoff = createdBefore == null ? Instant.now() : createdBefore;
+    return jdbc.query(
+        """
+        SELECT candidate.* FROM (
+          SELECT s.*,
+            ROW_NUMBER() OVER (
+              PARTITION BY s.repository_id, s.distribution_name
+              ORDER BY s.revision DESC) AS retention_rank
+          FROM apt_snapshot s
+          WHERE s.published_at IS NOT NULL
+        ) candidate
+        JOIN apt_suite_state suite
+          ON suite.repository_id = candidate.repository_id
+          AND suite.distribution_name = candidate.distribution_name
+        WHERE candidate.retention_rank > ? AND candidate.created_at < ?
+          AND candidate.revision <> suite.published_revision
+        ORDER BY candidate.created_at, candidate.repository_id,
+          candidate.distribution_name, candidate.revision
+        LIMIT ?
+        """,
+        this::mapSnapshot,
+        retained,
+        nullableTimestamp(cutoff),
+        boundedLimit);
+  }
+
+  @Override
+  @Transactional
+  public boolean deleteSnapshot(long repositoryId, String distribution, long revision) {
+    return jdbc.update(
+        """
+        DELETE FROM apt_snapshot
+        WHERE repository_id = ? AND distribution_name = ? AND revision = ?
+          AND published_at IS NOT NULL
+          AND revision <> (
+            SELECT published_revision FROM apt_suite_state
+            WHERE repository_id = ? AND distribution_name = ?)
+        """,
+        repositoryId,
+        distribution,
+        revision,
+        repositoryId,
+        distribution) == 1;
   }
 
   @Override
@@ -554,11 +712,17 @@ public class JdbcAptRegistryDao implements AptRegistryDao {
     jdbc.update(
         """
         UPDATE apt_suite_state
-        SET desired_revision = CASE WHEN desired_revision < ? THEN ? ELSE desired_revision END,
+        SET pending_since = CASE
+              WHEN desired_revision <= published_revision THEN ?
+              ELSE COALESCE(pending_since, ?)
+            END,
             desired_at = CASE WHEN desired_revision < ? THEN ? ELSE desired_at END,
+            desired_revision = CASE WHEN desired_revision < ? THEN ? ELSE desired_revision END,
             updated_at = ?
         WHERE repository_id = ? AND distribution_name = ?
-        """, revision, revision, revision, nullableTimestamp(now), nullableTimestamp(now),
+        """,
+        nullableTimestamp(now), nullableTimestamp(now),
+        revision, nullableTimestamp(now), revision, revision, nullableTimestamp(now),
         repositoryId, distribution);
   }
 
@@ -601,6 +765,20 @@ public class JdbcAptRegistryDao implements AptRegistryDao {
         rs.getInt("signing_key_revision"), nullableInstant(rs, "last_published_at"),
         rs.getString("last_error"), nullableInstant(rs, "last_error_at"),
         nullableInstant(rs, "updated_at"));
+  }
+
+  private PackageTombstone mapPackageTombstone(ResultSet rs, int row) throws SQLException {
+    return new PackageTombstone(
+        rs.getLong("repository_id"),
+        rs.getString("distribution_name"),
+        rs.getString("component_name"),
+        rs.getString("architecture"),
+        rs.getString("package_name"),
+        rs.getString("package_version"),
+        rs.getString("asset_path"),
+        rs.getString("reason"),
+        rs.getLong("revision"),
+        nullableInstant(rs, "deleted_at"));
   }
 
   private Snapshot mapSnapshot(ResultSet rs, int row) throws SQLException {

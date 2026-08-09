@@ -23,6 +23,11 @@ public interface DatabaseDialect {
 
   CondaPersistenceDialect conda();
 
+  /** Forward-only cursor fetch size suitable for this JDBC backend. */
+  default int streamingFetchSize() {
+    return conda().streamingFetchSize();
+  }
+
   CoordinationPersistenceDialect coordination();
 
   JsonPersistenceDialect json();

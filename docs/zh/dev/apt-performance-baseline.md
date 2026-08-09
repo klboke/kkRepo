@@ -61,6 +61,24 @@
 
 复测后五个客户端可见读取场景的吞吐均高于同机 Nexus；首轮最明显的 metadata 和 HEAD 差距已经消除。结果仍是单机方向性数据，生产环境需继续覆盖 TLS、远端 OSS/S3、数据库高可用和多副本负载均衡。
 
+## 异步发布与流式索引落地后复测（2026-08-09）
+
+在两端同一性能仓库各增加 100 个完全相同的小型 `.deb`，使仓库从 3 个 package 增长到 103 个 package；随后继续使用相同的 250 请求、并发 16、预热 32、3 轮交替顺序测试。结果如下：
+
+| 场景 | Nexus req/s | kkRepo req/s | kkRepo / Nexus | Nexus p50 | kkRepo p50 | Nexus p95 | kkRepo p95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `InRelease` | 1383.36 | 1985.02 | 1.435x | 8.677 ms | 5.119 ms | 22.275 ms | 12.934 ms |
+| `Packages.gz` | 1572.25 | 2366.74 | 1.505x | 7.792 ms | 4.877 ms | 17.334 ms | 10.430 ms |
+| 4 MiB package GET | 283.54 | 390.54 | 1.377x | 17.447 ms | 17.525 ms | 62.682 ms | 34.791 ms |
+| package Range 64 KiB | 1644.48 | 2044.32 | 1.243x | 6.719 ms | 5.956 ms | 15.293 ms | 14.300 ms |
+| package HEAD | 2275.14 | 3177.13 | 1.396x | 5.286 ms | 3.925 ms | 13.495 ms | 9.515 ms |
+
+同一组 100 package、并发 16 的突发写入中，kkRepo 的 100 个 durable desired revision 被合并为 1 个新 snapshot；上传结束后 `0.777 s` 可见新 metadata。Nexus 的对应时间为 `0.582 s`。kkRepo 上传响应仍慢于 Nexus：本轮 wall time 为 `2.738 s` 对 `2.124 s`，p50 为 `354.06 ms` 对 `108.10 ms`。异步发布已经把全量索引生成移出写请求，但写路径仍包含 `.deb` 解包/identity/checksum 校验、blob/asset/component 持久化、审计与安全扫描 outbox；后续写吞吐优化应基于 profile 缩减这些固定开销，不能把写入正确性推迟到 metadata 投影阶段。
+
+本轮说明 package 数增加后没有出现读取热路径突降；五个读取场景的吞吐仍全部高于同机 Nexus。发布侧的单次工作量仍会随 Packages 大小近似线性增长，流式生成解决的是堆内存随 N 增长的问题，debounce 解决的是突发写入重复重建问题，并不把完整索引生成变成 O(1)。
+
+最终 V44 双副本镜像部署后又完整执行三次相同基准。各次结果本身仍取 3 轮中位数，再对三次吞吐比取中位数，`InRelease`、`Packages.gz`、完整 GET、Range 和 HEAD 分别为 `1.564x`、`1.251x`、`1.258x`、`1.176x` 和 `0.988x`。其中 metadata 的单次结果抖动较大（`InRelease` 为 `0.639x`–`1.582x`，`Packages.gz` 为 `0.924x`–`1.461x`），HEAD 基本持平；大包 GET/Range 三次均领先。应把本机结果视为方向性证据，而不是稳定 SLA。
+
 ## 复现
 
 先向两端 hosted 仓库上传同一个 package，再执行：

@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -15,10 +16,14 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -40,12 +45,28 @@ class AptMetadataBuilderTest {
         2, "key", "fingerprint", "public", "private", "");
     when(registry.listArchitectures(runtime.id(), "stable", "main"))
         .thenReturn(List.of("all", "amd64"));
-    when(registry.listPackages(runtime.id(), "stable", "main", "all"))
-        .thenReturn(List.of(record("common", "1.0", "all", "a".repeat(64))));
-    when(registry.listPackages(runtime.id(), "stable", "main", "amd64"))
-        .thenReturn(List.of(
-            record("demo", "2.0", "amd64", "b".repeat(64)),
-            record("demo", "1.0~rc1", "amd64", "c".repeat(64))));
+    doAnswer(invocation -> {
+      String architecture = invocation.getArgument(3);
+      Consumer<AptRegistryDao.PackageRecord> visitor = invocation.getArgument(4);
+      List<AptRegistryDao.PackageRecord> records = "all".equals(architecture)
+          ? List.of(record("common", "1.0", "all", "a".repeat(64)))
+          : List.of(
+              record("demo", "2.0", "amd64", "b".repeat(64)),
+              record("demo", "1.0~rc1", "amd64", "c".repeat(64)));
+      records.forEach(visitor);
+      return null;
+    }).when(registry).visitPackages(
+        eq(runtime.id()), eq("stable"), eq("main"), anyString(), any());
+    AtomicReference<String> amd64Packages = new AtomicReference<>();
+    doAnswer(invocation -> {
+      String hiddenPath = invocation.getArgument(1);
+      Path file = invocation.getArgument(2);
+      if (hiddenPath.endsWith("binary-amd64/Packages")) {
+        amd64Packages.set(Files.readString(file, StandardCharsets.UTF_8));
+      }
+      return null;
+    }).when(assets).storeGeneratedFile(
+        eq(runtime), anyString(), any(), anyString(), any());
     when(signing.sign(any(), eq(key), eq(state.desiredAt())))
         .thenReturn(new AptSigningService.SignedRelease(
             "inrelease".getBytes(StandardCharsets.UTF_8),
@@ -59,8 +80,12 @@ class AptMetadataBuilderTest {
     assertEquals(19, built.manifest().size());
     assertTrue(built.manifest().containsKey("dists/stable/Release"));
     assertTrue(built.manifest().keySet().stream().anyMatch(path -> path.contains("by-hash/SHA256")));
-    verify(assets, times(11)).storeGenerated(
+    verify(assets, times(8)).storeGeneratedFile(
         eq(runtime), anyString(), any(), anyString(), any());
+    verify(assets, times(3)).storeGenerated(
+        eq(runtime), anyString(), any(), anyString(), any());
+    assertTrue(amd64Packages.get().indexOf("Version: 1.0~rc1")
+        < amd64Packages.get().indexOf("Version: 2.0"));
     ArgumentCaptor<byte[]> release = ArgumentCaptor.forClass(byte[].class);
     verify(signing).sign(release.capture(), eq(key), eq(state.desiredAt()));
     String releaseText = new String(release.getValue(), StandardCharsets.UTF_8);
@@ -85,8 +110,6 @@ class AptMetadataBuilderTest {
     AptSigningService.SigningMaterial key = new AptSigningService.SigningMaterial(
         1, "key", "fingerprint", "public", "private", "");
     when(registry.listArchitectures(runtime.id(), "testing", "contrib"))
-        .thenReturn(List.of());
-    when(registry.listPackages(runtime.id(), "testing", "contrib", "arm64"))
         .thenReturn(List.of());
     when(signing.sign(any(), eq(key), any()))
         .thenReturn(new AptSigningService.SignedRelease(new byte[0], new byte[0]));

@@ -91,8 +91,7 @@ Nexus 兼容结论：
 - Flat hosted repository；第一版只要求 flat proxy passthrough。
 - `Contents-*`、Translation 和 PDiff 的 hosted 生成。
 - `.udeb` 与 `debian-installer/binary-*` 索引。
-- Nexus 风格的 snapshot 管理 API；当前内部 `apt_snapshot` 只用于原子发布与历史 by-hash 读取。
-- 历史 snapshot/package blob 的自动保留期回收，以及超大 hosted Packages 的 cursor/spool 流式生成；当前版本保守地保留历史对象并按单 architecture 在内存中构建索引。
+- Nexus 风格的用户可见 snapshot 管理 API；内部 snapshot 仅服务原子发布、by-hash 兼容和自动保留清理。
 - Release 中 `NotAutomatic`、`ButAutomaticUpgrades`、`Signed-By`、Changelogs 和 Snapshots 等高级字段。
 - 可选的外部 KMS/HSM/OpenPGP signer；初版使用 kkrepo 加密后的 repository signing key。
 
@@ -263,7 +262,7 @@ V42 在 MySQL/PostgreSQL 同号落地七张表：
 
 3. `apt_suite_state`
    - `(repository_id, distribution_name)` 为主键。
-   - desired/published revision、实际 signing key revision、发布时间和最近构建错误。
+   - desired/published revision、最后一次 mutation 时间、当前 pending 周期起点、实际 signing key revision、发布时间和最近构建错误。
 
 4. `apt_snapshot`
    - repository/distribution/revision、signing key revision、canonical-to-hidden manifest、Release SHA-256、创建/发布时间。
@@ -291,10 +290,10 @@ APT 的正确性单位不是单个 `Packages.gz`，而是一个由同一 signed 
 2. 上传流写入有大小/时间限制的临时文件并计算 checksum；`.deb` inspector 提取并校验 control identity、canonical filename 与 pool path。
 3. 获取 package coordinate lease，复查 write policy、重复 identity 和 path 冲突，再通过通用 hosted 存储把 blob、asset、component 与 Browse 投影写入共享存储/数据库。
 4. `apt_package_record` upsert 在短事务内分配 repository mutation revision、推进 suite desired revision；替换时解绑旧 component/Browse 投影。
-5. 当前请求获取 suite publish lease。获得者捕获当前 desired revision，在事务外读取当前 projection，构建 Packages 的四种表示、Release、InRelease 和 Release.gpg，并写入 `.apt/snapshots/<distribution>/<revision>/...` 隐藏资产。
-6. Builder 完成所有对象后，通过 `(desired_revision, published_revision, owner, fencing_token, lease expiry)` 条件更新发布 snapshot；并发 mutation 使 CAS 失败时会重新读取 revision 并重建。
+5. 请求在 package/blob/asset/component 与 `apt_package_record` 提交后返回；后台 publication worker 以 500 ms debounce 批量发现 durable pending hosted suite，只尝试一次共享 lease，避免多个副本在同一 suite 上排队。`pending_since` 只在 clean -> dirty 时写入，默认 30 秒后即使 mutation 尚未停止也会发起构建，避免 trailing debounce 本身无限饥饿；最终 CAS 发布仍要求出现一次足以完成一致构建的窗口。
+6. lease 获得者捕获当前 desired revision，在事务外构建 Packages 的四种表示、Release、InRelease 和 Release.gpg，并写入 `.apt/snapshots/<distribution>/<revision>/...` 隐藏资产。Builder 完成所有对象后，通过 `(desired_revision, published_revision, owner, fencing_token, lease expiry)` 条件切换 snapshot；构建期间出现新 mutation 时在同一 lease 内合并到最新 revision。
 7. 对外 metadata route 只通过 published snapshot manifest 解析 canonical path。任一构建失败时继续提供上一个完整 snapshot，不暴露半套新 metadata。
-8. 当前版本保留历史 snapshot、by-hash 对象和被删除 package blob，优先保证已有客户端可继续下载；自动 retention 回收在后续版本补充。
+8. 当前 snapshot 与至少两个历史 snapshot 永不因数量策略删除；更老对象还必须超过可配置 grace period 才会被分批清理。被删 package 的 tombstone/blob 只有在不存在 revision 更早的 published snapshot 后才进入同一回收链。
 
 如果请求在发布提交后断连，客户端重试同一 coordinate + checksum 应返回幂等成功；同一 coordinate + 不同 checksum 按 write policy 拒绝或替换，并生成新 revision。
 
@@ -309,7 +308,8 @@ APT 的正确性单位不是单个 `Packages.gz`，而是一个由同一 signed 
 - stanza 从已校验 control fields 生成，再追加 canonical `Filename`、`Size`、`MD5sum`、`SHA1` 和 `SHA256`。
 - `Filename` 必须是 archive root 相对路径，不含 `.`、`..`、encoded separator 或 query。
 - 稳定排序至少以 package name、Debian version、architecture 和 filename 为键；具体同版本排序通过 fixture 固定。
-- 当前生成器按 architecture 读取当前 package projection，在内存中生成稳定 Packages bytes 及四种压缩表示；因此超大 hosted index 的 cursor/spool 化列为后续扩展，运维侧应结合 JVM 容量控制单 suite 规模。
+- 生成器使用数据库 forward-only cursor，按 package name 分组，并只在内存中对同一 package 的版本按 Debian 规则排序；未压缩 Packages 写入临时 spool，gzip/bzip2/xz 逐个流式生成、计算 digest 并上传。内存占用由单个 package 的版本数和固定 I/O buffer 决定，而不是由 suite 总包数决定。
+- 单次发布仍必须重新生成完整 Packages 及压缩表示，因此 CPU、临时磁盘和上传字节随当前 package 数近似线性增长；debounce 会把突发写入合并成一次 O(N) 发布，最大等待则保证持续写入周期性推进。若每次写入都恰好跨过 debounce 并形成独立 snapshot，长期累计工作仍可能呈 O(N²)，这是 APT 单体签名索引的容量规划边界，不用批量投影承担正确性。
 - GZIP/BZIP2/XZ 参数固定，保证同 revision 重建产生相同 Packages 表示；timestamp 字段不得使用请求时间。
 
 ### Release 与签名
@@ -336,14 +336,15 @@ OpenPGP signer：
 ### By-hash 与保留
 
 - 每个 index 表示同时写 canonical path 和 `by-hash/SHA256/<digest>` identity；route 可以通过 snapshot manifest 映射到同一 blob，避免重复存储。
-- 当前版本和历史版本均保留；by-hash route 最多查询最近 100 个已发布 snapshot。自动保留期回收尚未启用，避免在缺少客户端 grace-period 配置时提前删除仍被旧 metadata 引用的对象。
+- by-hash route 可查询保留的历史 snapshot。自动清理默认至少保留当前加两个历史版本，并要求 24 小时 grace；当前 pointer、保留窗口内对象和仍引用已删 package 的旧 snapshot 均不可回收。
 - canonical path 的 ETag 基于当前 blob digest；by-hash path 使用 immutable cache headers。
-- 后续增加自动清理时，必须先证明没有 published pointer、snapshot retention、迁移任务或 blob reference 依赖。
+- snapshot manifest 中 canonical 与 by-hash 指向同一 hidden asset；清理时先去重路径，再在事务内删除 generated asset 与 snapshot row，底层 bytes 继续由统一 blob GC 的 grace/引用检查回收。
 
 ## 删除与 write policy
 
-- 删除 component/package 先获取 coordinate lease，在事务中写 tombstone、递增 desired revision，随后沿同一同步 pipeline 发布新 snapshot。
-- 新 snapshot 成功发布后，该 package 才从 Packages 消失；旧 snapshot 和 package blob 继续保留并可服务已有客户端，自动 grace-period 回收尚未启用。
+- 删除 component/package 先获取 coordinate lease，在事务中写 tombstone、递增 desired revision，随后沿同步发布路径切换新 snapshot；删除、key rotation 和显式 rebuild 不经过 debounce。
+- Cleanup Policy 以 APT component 的 Debian version 做保留判断；一个 component 下的全部 architecture asset 会批量 tombstone，每个 distribution 只重建一次，避免只删一个架构或逐文件重复生成 metadata。
+- 新 snapshot 成功发布后 package 才从 Packages 消失；旧 snapshot 和 package blob 在保留窗口内继续服务已有客户端。最后一个可能引用它的旧 snapshot 清理后，tombstone worker 才删除 package asset，并交给通用安全扫描外键清理和 blob GC。
 - 删除失败或 rebuild 失败时继续提供旧 snapshot，不允许 Packages 已删但 Release 仍引用旧 checksum，或反向出现新 Packages 未签名的状态。
 - `ALLOW_ONCE` 对已存在 coordinate 拒绝；`ALLOW` 允许相同 identity 替换，但必须经过完整 snapshot pipeline；`DENY` 拒绝所有写入。
 - Browse/API 删除与 repository content DELETE 复用同一路径，不能直接删 asset 绕过 APT projection。
@@ -410,10 +411,10 @@ APT group 不是按路径 first-hit 就能正确实现：
 - 上传 byte limit 来自 repository 配置；control archive 展开字节、entry count、field count、line length 和解析时长使用有界安全默认值。
 - ar/tar/decompressor 使用流式读取和明确 EOF；拒绝 truncated member、超大声明、压缩炸弹、路径穿越、symlink/device 和重复关键 entry。
 - deb822 parser 对字段名、continuation、UTF-8 和 stanza 数设置上限；不能把整个远端多 GB Packages 文件一次性读入内存。
-- Metadata builder 由请求线程同步执行；每个 distribution 通过共享 lease 最多一个跨副本 active build，lease 过期后可由其他副本接管。
-- 上传临时文件由 importer 的 `AutoCloseable`/异常路径显式回收；metadata 直接写 revisioned hidden asset，不依赖节点本地 build spool 或 marker 作为真相。
+- Metadata builder 由 durable pending-suite worker 异步执行；每个 distribution 通过共享 lease 最多一个跨副本 active build，lease 过期后可由其他副本接管。首次 metadata 读取、删除、key rotation 和管理员 rebuild 保留同步兜底语义。
+- 上传临时文件由 importer 的 `AutoCloseable`/异常路径显式回收；metadata spool 同样在成功/失败路径删除，只是有界 I/O 缓冲，不参与发布真相或跨副本协调。
 - `Filename`、redirect 和 remote URL 不能绕过出站访问策略；query 中的 credential 不写 cache key、日志或 Browse。
-- Package 安全扫描在 snapshot 发布后异步执行；是否下载阻断由现有 scanning policy 决定，不能在 metadata 中宣称可安装却永远阻断而无可观测原因。
+- `.deb` 写入时已经完成 archive/control identity、canonical path、size 和 checksum 校验，并在统一 asset/blob 事务提交时产生 security-scan content-change 事件；扫描本身异步执行，是否下载阻断由现有 scanning policy 决定。生成的 `.apt/` metadata 和签名不会进入扫描候选。
 
 ## Browse、Search、Usage 与运维
 

@@ -77,7 +77,8 @@ public class SecurityScanCandidateClassifier {
           && !containsAny(kind, "metadata", "signature", "import");
       case CONDA -> hasAnySuffix(path, ".conda", ".tar.bz2")
           && !containsAny(kind, "metadata", "repodata", "channeldata");
-      case APT -> hasAnySuffix(path, ".deb") && !path.contains("/.apt/");
+      case APT -> hasAnySuffix(path, ".deb")
+          && !path.startsWith(".apt/") && !path.contains("/.apt/");
       case NUGET -> hasAnySuffix(path, ".nupkg") && !hasAnySuffix(path, ".snupkg");
       case RUBYGEMS -> hasAnySuffix(path, ".gem") && !containsAny(kind, "index", "spec");
       case YUM -> hasAnySuffix(path, ".rpm") && !path.contains("/repodata/");

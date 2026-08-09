@@ -8,11 +8,14 @@ import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.server.apt.AptService;
 import com.github.klboke.kkrepo.server.browse.BrowseContentDeleteController;
+import com.github.klboke.kkrepo.server.browse.RepositoryContentDeletionService.CleanupDeleteSubject;
 import com.github.klboke.kkrepo.server.docker.DockerManifestStore;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmHostedService;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -37,7 +40,8 @@ class CleanupRepositoryContentDeletionServiceTest {
             browse,
             runtimes,
             mock(DockerManifestStore.class),
-            mock(NpmHostedService.class));
+            mock(NpmHostedService.class),
+            mock(AptService.class));
 
     assertEquals(2, service.deleteForCleanup(
         "releases", "COMPONENT", 9L, "path", "cleanup"));
@@ -60,7 +64,8 @@ class CleanupRepositoryContentDeletionServiceTest {
             mock(BrowseContentDeleteController.class),
             runtimes,
             mock(DockerManifestStore.class),
-            npmHosted);
+            npmHosted,
+            mock(AptService.class));
 
     assertEquals(1, service.deleteForCleanup(
         "npm-hosted", "COMPONENT", 9L, "demo/-/demo-1.0.0.tgz", "cleanup"));
@@ -85,7 +90,8 @@ class CleanupRepositoryContentDeletionServiceTest {
             browse,
             runtimes,
             mock(DockerManifestStore.class),
-            mock(NpmHostedService.class));
+            mock(NpmHostedService.class),
+            mock(AptService.class));
 
     assertEquals(1, service.deleteForCleanup(
         "npm-proxy", "COMPONENT", 9L, "demo/-/demo-1.0.0.tgz", "cleanup"));
@@ -107,7 +113,8 @@ class CleanupRepositoryContentDeletionServiceTest {
             mock(BrowseContentDeleteController.class),
             runtimes,
             manifests,
-            mock(NpmHostedService.class));
+            mock(NpmHostedService.class),
+            mock(AptService.class));
 
     assertEquals(1, service.deleteForCleanup(
         "images", "DOCKER_MANIFEST", 9L, "team/app@sha256:abc", "cleanup"));
@@ -126,9 +133,42 @@ class CleanupRepositoryContentDeletionServiceTest {
             mock(BrowseContentDeleteController.class),
             runtimes,
             mock(DockerManifestStore.class),
-            mock(NpmHostedService.class));
+            mock(NpmHostedService.class),
+            mock(AptService.class));
 
     assertThrows(CleanupValidationException.class, () -> service.deleteForCleanup(
         "images", "ASSET", 9L, "blob", "cleanup"));
+  }
+
+  @Test
+  void hostedAptBatchDeletesEveryArchitecturePerComponentAndPublishesOnce() {
+    RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
+    RepositoryRuntime runtime = mock(RepositoryRuntime.class);
+    AptService apt = mock(AptService.class);
+    when(runtime.format()).thenReturn(RepositoryFormat.APT);
+    when(runtime.type()).thenReturn(RepositoryType.HOSTED);
+    when(runtimes.resolve("apt-hosted")).thenReturn(Optional.of(runtime));
+    when(apt.deleteComponentsForCleanup(
+        runtime, List.of(9L, 10L), "cleanup policy delete by cleanup"))
+        .thenReturn(List.of(2, 1));
+    CleanupRepositoryContentDeletionService service =
+        new CleanupRepositoryContentDeletionService(
+            mock(BrowseContentDeleteController.class),
+            runtimes,
+            mock(DockerManifestStore.class),
+            mock(NpmHostedService.class),
+            apt);
+
+    assertEquals(
+        List.of(2, 1),
+        service.deleteBatchForCleanup(
+            "apt-hosted",
+            List.of(
+                new CleanupDeleteSubject("COMPONENT", 9L, "amd64.deb"),
+                new CleanupDeleteSubject("COMPONENT", 10L, "arm64.deb")),
+            "cleanup"));
+
+    verify(apt).deleteComponentsForCleanup(
+        runtime, List.of(9L, 10L), "cleanup policy delete by cleanup");
   }
 }

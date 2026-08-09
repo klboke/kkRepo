@@ -305,11 +305,12 @@ metadata 不会被送入扫描器。
 | Swift | source archive，不扫描 manifest/metadata |
 | Ansible Galaxy | collection `.tar.gz` |
 | Conda | `.conda` 和 `.tar.bz2` package，不扫描 repodata/channeldata |
+| APT / Debian | canonical `.deb` package，不扫描生成的 `dists/` metadata 和签名 |
 | Docker/OCI | image manifest/index 解析出的镜像；不把单独 layer/metadata 当成制品扫描 |
 | NuGet | `.nupkg`，不扫描 `.snupkg` |
 | RubyGems | `.gem` |
 | Yum | `.rpm`，不扫描 `repodata` |
-| Raw | `.zip`、`.tar`、`.tar.gz`、`.tgz`、`.tar.xz`、`.txz`、`.xz`、`.tar.bz2`、`.tbz2`、`.jar`、`.war`、`.ear`、`.whl`、`.crate`、`.gem`、`.nupkg`、`.rpm` |
+| Raw | `.zip`、`.tar`、`.tar.gz`、`.tgz`、`.tar.xz`、`.txz`、`.xz`、`.tar.bz2`、`.tbz2`、`.jar`、`.war`、`.ear`、`.whl`、`.crate`、`.gem`、`.nupkg`、`.rpm`、`.deb` |
 
 Conda package 使用独立的 `CONDA_PACKAGE` 扫描 subject，协议感知 catalog 不会复用或污染普通压缩包的 SBOM cache。Adapter 会按压缩输入、entry 数量、展开字节、嵌套、path、link、special file 和 deadline 上限检查整个 archive，捕获有界 `info/index.json` 投影，并以 `conda-meta/package.json` 交给 Syft。成功结果必须包含 name/version 匹配的 `conda` component；空 catalog 或 identity 不匹配会 fail closed。
 

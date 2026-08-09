@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Consumer;
 
 /** Durable APT package projections, signed snapshots, signing keys and fencing leases. */
 public interface AptRegistryDao {
@@ -25,6 +26,21 @@ public interface AptRegistryDao {
   List<PackageRecord> listPackages(
       long repositoryId, String distribution, String component, String architecture);
 
+  /**
+   * Visits one architecture index with a database cursor. Implementations must keep ordering
+   * stable by package name so callers can bound in-memory Debian-version sorting to one package.
+   */
+  default void visitPackages(
+      long repositoryId,
+      String distribution,
+      String component,
+      String architecture,
+      Consumer<PackageRecord> visitor) {
+    if (visitor != null) {
+      listPackages(repositoryId, distribution, component, architecture).forEach(visitor);
+    }
+  }
+
   List<PackageRecord> listPackages(long repositoryId, String distribution);
 
   List<String> listDistributions(long repositoryId);
@@ -43,6 +59,11 @@ public interface AptRegistryDao {
       String reason,
       Instant deletedAt);
 
+  /** Package tombstones become collectible only after every referencing snapshot is gone. */
+  List<PackageTombstone> listPackageCleanupCandidates(Instant deletedBefore, int limit);
+
+  boolean deletePackageTombstone(PackageTombstone tombstone);
+
   SuiteState ensureSuite(long repositoryId, String distribution, Instant now);
 
   long markSuiteDirty(long repositoryId, String distribution, Instant now);
@@ -50,6 +71,10 @@ public interface AptRegistryDao {
   Optional<SuiteState> findSuite(long repositoryId, String distribution);
 
   List<SuiteState> listSuites(long repositoryId);
+
+  /** Returns a bounded global queue of hosted, debounced or retryable suites awaiting publication. */
+  List<SuiteState> listPendingSuites(
+      Instant readyBefore, Instant forceBefore, Instant retryBefore, int limit);
 
   boolean publishSnapshot(Snapshot snapshot, String leaseOwner, long fencingToken);
 
@@ -59,6 +84,13 @@ public interface AptRegistryDao {
 
   /** Returns newest snapshots first so immutable by-hash paths remain readable across publishes. */
   List<Snapshot> listSnapshots(long repositoryId, String distribution, int limit);
+
+  /** Returns old published snapshots outside the newest retained window, oldest first. */
+  List<Snapshot> listSnapshotCleanupCandidates(
+      Instant createdBefore, int minSnapshots, int limit);
+
+  /** Deletes a non-current immutable snapshot; the published pointer is never removed. */
+  boolean deleteSnapshot(long repositoryId, String distribution, long revision);
 
   void recordBuildFailure(
       long repositoryId, String distribution, long revision, String message, Instant failedAt);
@@ -143,6 +175,18 @@ public interface AptRegistryDao {
       String lastError,
       Instant lastErrorAt,
       Instant updatedAt) { }
+
+  record PackageTombstone(
+      long repositoryId,
+      String distribution,
+      String component,
+      String architecture,
+      String packageName,
+      String version,
+      String path,
+      String reason,
+      long revision,
+      Instant deletedAt) { }
 
   record Snapshot(
       long repositoryId,
