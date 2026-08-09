@@ -4,11 +4,12 @@
 [GitHub Issue #61](https://github.com/klboke/kkRepo/issues/61) 只提供了最初的业务场景，不是
 功能范围、兼容目标或实现约束。Cleanup Policy 是仓库平台能力，必须覆盖当前
 `RepositoryFormat` 中的 Maven、npm、PyPI、Cargo、Pub、Composer、Go、Helm、Docker、
-NuGet、RubyGems、Yum、Terraform、Swift、Ansible Galaxy、Conda 和 Raw，而不是 Maven 专属功能。
+NuGet、RubyGems、Yum、Terraform、Swift、Ansible Galaxy、Conda、APT 和 Raw，而不是 Maven
+专属功能。
 其中的 Maven 多模块场景只是一个用例和验收 fixture。
 
 本文同时描述目标架构和本分支已经落地的生产运行基线。当前实现已经打通“策略聚合、多仓库、
-Quartz Cron、有界 Try Run、异步手动/定时执行、逐条审计”主链路，并向当前 17 种格式开放扫描、
+Quartz Cron、有界 Try Run、异步手动/定时执行、逐条审计”主链路，并向当前 18 种格式开放扫描、
 最后下载条件和应用层实际删除；同时补齐了数据库 claim、repository lease/fencing、心跳、接管、
 有界重试、取消、持久 protection、跨 run 扫描游标、下载水位写合并、有界历史保留和双数据库
 合同。不能通过直接写表绕过 API 校验启用自动清理。
@@ -26,22 +27,24 @@ Blob GC，不在本文中把尚未实现的恢复窗口标记为已交付。
   Hosted/Proxy 仓库，同一仓库也可以属于多个策略。Group 不持有独立清理对象，不能作为策略目标。
 - 每个策略拥有自己的 Quartz Cron 表达式和 IANA 时区。新策略默认暂停；修改规则、目标仓库
   或限额会自动暂停 schedule，要求管理员重新确认后启用。
-- 17 种 `RepositoryFormat` 都可以保存策略并执行有界 Try Run。扫描上限按仓库设置，单次
+- 18 种 `RepositoryFormat` 都可以保存策略并执行有界 Try Run。扫描上限按仓库设置，单次
   Try Run 另受服务端 50,000 subject 总硬上限约束；被截断的 family 不给出删除结论。
-- Maven、Cargo、Pub、Terraform、Swift、Ansible Galaxy 和 Conda 复用现有版本比较器支持
+- Maven、Cargo、Pub、Terraform、Swift、Ansible Galaxy、Conda 和 APT 复用现有版本比较器支持
   `retainCount`；其他格式在比较器完成协议验证前不展示该规则。
 - `lastDownloadedOlderThanDays` 对全部格式开放。各协议已有的 `ArtifactDownloadPolicy` 读取关口
   在成功授权的外部 GET 上更新具体 source asset 水位；Hosted、Proxy 以及通过 Group 访问时解析出的
   实际 source repository 都能正确归属。HEAD、内部扫描器请求和策略拒绝请求不更新；body 打开后的网络中断可能保守地保留一次
   使用记录。Docker 以 manifest GET 作为镜像 subject 的使用水位；共享 layer GET 不向所有引用
   manifest 扇出写入。
-- 17 种格式都开放手动执行和定时执行。非 Docker subject 复用现有 Browse/协议应用层删除事务；
+- 18 种格式都开放手动执行和定时执行。非 Docker subject 复用现有 Browse/协议应用层删除事务；
   Docker manifest 复用 `DockerManifestStore.deleteReference`；Swift、Ansible Galaxy 和 Terraform
   provider 同时清理各自 registry state。Hosted npm 以 tarball/version 为清理单位，在同一事务
   重写 packument 与 dist-tags；NuGet 把同一 id/version 的 nupkg 与 nuspec 作为一个 subject
   锁定和删除；Conda 通过带坐标 lease 的协议删除入口写 tombstone 并更新 channel revision。
   删除不以通用 SQL 绕过应用层，既有 Maven metadata、Helm/PyPI index、
-  Yum/RubyGems metadata、npm/PyPI group cache、Terraform metadata cache 和 Blob 引用处理继续生效。
+  Yum/RubyGems metadata、npm/PyPI group cache、Terraform metadata cache 和 Blob 引用处理继续生效；
+  APT 使用 Debian version comparator，按 component 批量 tombstone 全部 architecture asset，并按
+  distribution 只发布一次完整 signed snapshot。
 - Hosted 仓库中的 packument、index、repodata 等协议生成物不是独立清理 subject，只由所属制品
   删除流程重写或重建；Proxy 持有的本地缓存可以作为清理 subject。Group 派生缓存由 member 变更失效
   和内部缓存维护机制管理，不通过 Cleanup Policy 直接扫描或删除。

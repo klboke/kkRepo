@@ -92,7 +92,7 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 | Swift Package Registry | hosted / proxy / group | 支持 `swift package-registry publish`、Basic/Bearer 登录和 UI/API source archive 上传 | 支持 Registry v1 release/manifest/archive 元数据、Browse/Search 和 Usage | 仅已验证 Nexus 3.92.x-3.94.x datastore shape 可规划为 `FULL`；shape 漂移或 proxy secret 不可用时需人工处理 |
 | Ansible Galaxy | hosted / proxy / group | 支持 `ansible-galaxy collection publish`、Nexus 兼容 raw PUT、route-scoped Base64 Bearer/Ansible 2.9 Token 凭据、GenericToken 和 UI/API collection 上传（[使用指南](docs/zh/ansible-galaxy-guide.md)） | 支持 Galaxy v3 collection/version/artifact 元数据、依赖、Browse/Search 和 Usage | 支持 Nexus 3.93.x-3.94.x 仓库定义与 shape-gated hosted/proxy collection 数据迁移；未知 datastore shape 失败关闭 |
 | Conda | hosted / proxy / group | 支持 Nexus 兼容 raw PUT，以及 `.tar.bz2`/`.conda` 的 UI/API 上传 | 支持 channel/subdir 元数据、JSON/BZ2/ZSTD repodata、channeldata、Browse/Search 和 Usage | 支持仓库定义与 shape-gated Nexus 3.92.x-3.94.x hosted package 数据迁移；生成元数据在目标端重建 |
-| APT / Debian | hosted / proxy | 支持 Nexus 兼容仓库根 POST、Components API/UI `.deb` 上传，以及真实 `apt update`、下载、安装和升级 | 支持签名 Packages/Release 元数据、by-hash、Browse/Search 和 Usage | 支持仓库定义与 shape-gated Nexus 3.92.x-3.94.x hosted package；签名私钥需显式导入后才启用迁移仓库 |
+| APT / Debian | hosted / proxy | 支持 Nexus 兼容仓库根 POST、Components API/UI `.deb` 上传，以及真实 `apt update`、下载、安装和升级（[使用指南](docs/zh/apt-debian-guide.md)） | 支持签名 Packages/Release 元数据、by-hash、Browse/Search 和 Usage | 支持仓库定义与 shape-gated Nexus 3.92.x-3.94.x hosted package；签名私钥需显式导入后才启用迁移仓库 |
 | Docker / OCI | hosted / proxy / group | 支持 Registry V2 login、hosted push/pull、proxy pull、group pull、OCI referrers、cleanup 和 connector port 访问 | 支持 manifest/tag/blob metadata | Docker hosted 仓库数据迁移走 Nexus Repository Data 流程 |
 | NuGet | hosted / proxy / group | 支持 package push 和管理台上传 | 支持 v3 service index / search | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 | RubyGems | hosted / proxy / group | 支持 gem push/yank 和管理台上传 | 支持 | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
@@ -192,7 +192,7 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 6. ✅ Swift Package Registry - hosted、GitHub-backed proxy、group、Registry v1、不可变签名发布、UI/API 上传、Browse/Search、多副本协同、真实 SwiftPM/Xcode E2E 和 shape-gated Nexus 3.92.x-3.94.x 迁移已实现（[设计说明](docs/zh/dev/swift-package-registry-design.md)）
 7. ✅ Ansible Galaxy - 已实现 Galaxy v3 hosted/proxy/group、collection 不可变发布、依赖解析、route-scoped Base64 Bearer/Ansible 2.9 Token 与 GenericToken 认证、UI/API 上传、Browse/Search、持久化多副本 import/proxy 协同、Ansible 2.9/当前版真实客户端 E2E、Nexus 黑盒兼容和 shape-gated Nexus 3.93.x-3.94.x 迁移（[使用指南](docs/zh/ansible-galaxy-guide.md)、[设计说明](docs/zh/dev/ansible-galaxy-repository-design.md)）
 8. ✅ Conda - 已实现 hosted、proxy、group、`.tar.bz2`/`.conda` 发布、JSON/BZ2/ZSTD channel 元数据、UI/API 上传、Browse/Search、多副本协同、真实 Conda 客户端 E2E、Nexus 黑盒 fixture，以及 shape-gated Nexus 3.92.x-3.94.x hosted 数据迁移 E2E（[设计说明](docs/zh/dev/conda-repository-design.md)）
-9. ✅ APT / Debian - 已实现 hosted/proxy、签名元数据、UI/API 上传、Browse/Search、多副本发布、真实 APT 客户端与 Nexus 黑盒验证、shape-gated 迁移和可复现的 Nexus 性能基线（[设计说明](docs/zh/dev/apt-debian-repository-design.md)、[性能基线](docs/zh/dev/apt-performance-baseline.md)）
+9. ✅ APT / Debian - 已实现 hosted/proxy、签名元数据、UI/API 上传、Browse/Search、多副本发布、真实 APT 客户端与 Nexus 黑盒验证、shape-gated 迁移和可复现的 Nexus 性能基线（[使用指南](docs/zh/apt-debian-guide.md)、[设计说明](docs/zh/dev/apt-debian-repository-design.md)、[性能基线](docs/zh/dev/apt-performance-baseline.md)）
 10. ohpm / HarmonyOS - 规划中，覆盖 hosted、proxy、group、导入和管理端能力（[设计说明](docs/zh/dev/ohpm-repository-design.md)）
 11. Conan
 
@@ -222,6 +222,7 @@ kkRepo 使用 [Apache License 2.0](LICENSE) 开源。
 - [构建部署指南](docs/zh/build-deployment-guide.md)
 - [Artifact Scanning 使用指南](docs/zh/artifact-scanning-guide.md)
 - [Cleanup Policy 使用指南](docs/zh/cleanup-policy-guide.md)
+- [APT / Debian 仓库使用指南](docs/zh/apt-debian-guide.md)
 - [Native Image 与 JVM 选型指南](docs/zh/native-vs-jvm-guide.md)
 - [Nginx 反向代理配置注意事项](docs/zh/nginx-reverse-proxy.md)
 - [客户端配置示例](docs/zh/client-recipes.md)

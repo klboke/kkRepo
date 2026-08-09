@@ -495,9 +495,12 @@ The package filename, `info/index.json` name/version/build, and target subdir mu
 Download the repository public key into a scoped keyring:
 
 ```bash
-curl -u alice:"$KKREPO_PASSWORD" \
-  -o /etc/apt/keyrings/kkrepo.asc \
+sudo install -d -m 0755 /etc/apt/keyrings
+curl --fail --show-error -u alice:"$KKREPO_PASSWORD" \
+  -o /tmp/kkrepo-apt.asc \
   https://nexus.example.com/repository/apt-hosted/gpg.key
+sudo install -m 0644 /tmp/kkrepo-apt.asc /etc/apt/keyrings/kkrepo.asc
+rm -f /tmp/kkrepo-apt.asc
 ```
 
 Configure `/etc/apt/sources.list.d/kkrepo.list`:
@@ -538,6 +541,9 @@ curl -u alice:"$KKREPO_PASSWORD" \
   -F apt.asset=@demo-package_1.0.0-1_amd64.deb \
   'https://nexus.example.com/service/rest/v1/components?repository=apt-hosted'
 ```
+
+For signing-key lifecycle, asynchronous publication status, proxy modes, snapshot retention,
+cleanup, migration, and recovery, see the [APT / Debian Repository Guide](apt-debian-guide.md).
 
 ## NuGet
 

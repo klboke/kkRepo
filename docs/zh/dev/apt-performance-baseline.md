@@ -2,6 +2,8 @@
 
 本文记录 APT 功能落地时对 kkRepo 与 Sonatype Nexus Repository 的同机定向基线。它用于发现协议热路径差异，不等同于生产容量结论；跨机网络、TLS、反向代理、OSS/S3、数据库高可用和混合读写负载仍需在目标部署环境单独压测。
 
+英文版见 [Local APT / Debian Performance Baseline Against Nexus](../../en/dev/apt-performance-baseline.md)。
+
 ## 测试环境
 
 - 时间：`2026-08-08T17:46:11Z`。

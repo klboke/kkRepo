@@ -142,7 +142,7 @@ kkrepo 已经经过一轮真实生产规模验证。验证场景主要使用以�
 
 这组数据用于说明 kkrepo 在真实业务流量和迁移规模下的验证结果，不代表固定 SLA。实际吞吐和延迟仍会受到 MySQL 规格、OSS/S3 性能、网络、proxy 上游质量、仓库数量、包大小和副本数影响。
 
-Cargo / Rust、Dart / Pub、Terraform、Swift、Ansible Galaxy 和 Conda 不包含在上述历史生产规模验证数据中。生产切换前应通过 Nexus 3.77.x+ 兼容性测试套件和真实 Cargo 客户端验证 Cargo，通过 Nexus 3.92.0+ 兼容性测试套件和真实 `dart pub` / `flutter pub` 客户端验证 Pub，通过 Nexus 3.90.0+ reference 与 Terraform 0.13/当前稳定版 `terraform init` 验证 Terraform，通过 Nexus 3.94.x reference 与跨平台 SwiftPM/Xcode matrix 验证 Swift，通过 Nexus 3.94.x `ansible` suite 与 Ansible 2.9/当前版 `ansible-galaxy` 验证 Ansible，并通过 Nexus 3.92.x-3.94.x Conda black box 与真实 group/proxy `conda search/create/list` 验证 Conda。
+Cargo / Rust、Dart / Pub、Terraform、Swift、Ansible Galaxy、Conda 和 APT/Debian 不包含在上述历史生产规模验证数据中。生产切换前应通过 Nexus 3.77.x+ 兼容性测试套件和真实 Cargo 客户端验证 Cargo，通过 Nexus 3.92.0+ 兼容性测试套件和真实 `dart pub` / `flutter pub` 客户端验证 Pub，通过 Nexus 3.90.0+ reference 与 Terraform 0.13/当前稳定版 `terraform init` 验证 Terraform，通过 Nexus 3.94.x reference 与跨平台 SwiftPM/Xcode matrix 验证 Swift，通过 Nexus 3.94.x `ansible` suite 与 Ansible 2.9/当前版 `ansible-galaxy` 验证 Ansible，通过 Nexus 3.92.x-3.94.x Conda black box 与真实 group/proxy `conda search/create/list` 验证 Conda，并通过 Nexus 3.94.x APT black box 与 Debian/Ubuntu/当前 `apt update/download/install/upgrade` 验证 APT。
 
 ## 兼容性问题处理流程
 

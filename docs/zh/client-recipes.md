@@ -494,9 +494,12 @@ Package filename、`info/index.json` 中的 name/version/build 和目标 subdir 
 把仓库公钥下载到独立 keyring：
 
 ```bash
-curl -u alice:"$KKREPO_PASSWORD" \
-  -o /etc/apt/keyrings/kkrepo.asc \
+sudo install -d -m 0755 /etc/apt/keyrings
+curl --fail --show-error -u alice:"$KKREPO_PASSWORD" \
+  -o /tmp/kkrepo-apt.asc \
   https://nexus.example.com/repository/apt-hosted/gpg.key
+sudo install -m 0644 /tmp/kkrepo-apt.asc /etc/apt/keyrings/kkrepo.asc
+rm -f /tmp/kkrepo-apt.asc
 ```
 
 配置 `/etc/apt/sources.list.d/kkrepo.list`：
@@ -536,6 +539,9 @@ curl -u alice:"$KKREPO_PASSWORD" \
   -F apt.asset=@demo-package_1.0.0-1_amd64.deb \
   'https://nexus.example.com/service/rest/v1/components?repository=apt-hosted'
 ```
+
+签名密钥生命周期、异步发布状态、Proxy 模式、snapshot 保留、清理、迁移与恢复说明见
+[APT / Debian 仓库使用指南](apt-debian-guide.md)。
 
 ## NuGet
 

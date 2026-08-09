@@ -134,7 +134,7 @@ kkrepo 把迁移作为产品能力，而不是一次性脚本：
 - Swift proxy 有意限定为与 Nexus 3.94.x 兼容的 GitHub source-to-registry 模式，不暴露 generic registry chaining 或 `/availability` endpoint。Swift 规范中 `POST /login` 是可选能力（未实现的服务端可返回 `501`），但 kkRepo 已实现 `200`/`401`，`501` 不是 kkRepo 的预期响应。Windows E2E 只覆盖 proxy resolve/build，不把 hosted publish 列为验收项。
 - Ansible 当前支持 Galaxy v3 collection，不支持 Galaxy v1 role、GitHub role import、notification secret 和 `ansible-galaxy role install`。Collection version 不可变；大体积上游 JSON 和完整 manifest/files 文档作为 blob 内容处理，不存成无上限数据库 JSON。
 - Conda 支持 classic repodata、BZ2/ZSTD 与 current-repodata alias。`current_repodata.json*` 当前返回完整兼容 snapshot，不是 conda-index 裁剪后的子集；暂不暴露 CEP 16 sharded repodata 和 JLAP。Conda 没有原生 publish 命令，hosted 发布使用 Nexus 兼容 PUT 或 UI/API 上传。
-- APT 通过 hosted/proxy 支持二进制 `.deb` 仓库，不暴露 Nexus 不支持的 APT group。Hosted source package、flat hosted、PDiff、生成式 Contents/Translation 和 `.udeb` index 不在当前支持边界；proxy passthrough 可原样提供这些上游路径，本地 re-sign metadata 只声明已校验并缓存的二进制 package。
+- APT 通过 hosted/proxy 支持二进制 `.deb` 仓库，不暴露 Nexus 不支持的 APT group。Hosted source package、flat hosted、PDiff、生成式 Contents/Translation 和 `.udeb` index 不在当前支持边界；proxy passthrough 可原样提供这些上游路径，本地 re-sign metadata 只声明已校验并缓存的二进制 package。配置和运维语义见 [APT / Debian 仓库使用指南](apt-debian-guide.md)。
 - Go 不支持 hosted 上传；Go module proxy 行为以读取代理为主。
 - 不承诺覆盖每一个 Nexus UI endpoint。只有在支持用户工作流或迁移兼容需要时，才补对应 endpoint。
 - 当协议允许非确定性时，测试中可能规范化排序、时间戳、生成 ID 和 hostname。

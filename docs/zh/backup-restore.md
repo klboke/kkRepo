@@ -45,6 +45,11 @@ Blob storage 中存在额外未引用 object 通常可以接受，因为数据�
 
 如果对象存储支持 versioning，把数据库恢复到时间点 `T`，同时保留 `T` 或之后的 blob 版本，通常比把 blob storage 恢复到更早时间点更安全。
 
+对于 APT hosted 和 re-sign proxy，数据库保存加密 signing material、suite
+desired/published revision 与 immutable snapshot manifest，blob storage 保存 `.deb` 内容和生成的
+`.apt/snapshots/` asset。两边与原 `KKREPO_CREDENTIAL_SECRET` 共同构成一个恢复单元；缺少该
+secret 时，恢复后的 APT private key 无法解密。
+
 ## MySQL 备份示例
 
 逻辑备份：
@@ -106,7 +111,10 @@ pg_dump --format=custom --dbname='postgresql://kkrepo@db:5432/kkrepo' \
 - `/actuator/health` 为 `UP`。
 - 管理员登录可用。
 - 仓库列表和 blob store 列表可加载。
-- 关键 Maven/npm/PyPI/Go/Helm/Cargo/Pub/Composer/Terraform/Ansible Galaxy/Conda/Docker/OCI/NuGet/RubyGems/Yum/Raw 包或镜像可下载；Composer 同时验证 `packages.json`、p2 metadata 和 dist archive；Terraform 通过 group 验证 module/provider metadata、platform archive、SHA256SUMS 和 detached signature；Ansible 验证 v3 discovery、version/dependency metadata、artifact SHA-256、group install，并确认没有 import task 被已丢失副本错误占用；Conda 验证恢复后的 group/proxy search、environment create、package SHA-256 和 JSON/BZ2/ZSTD repodata。
+- 关键 Maven/npm/PyPI/Go/Helm/Cargo/Pub/Composer/Terraform/Ansible Galaxy/Conda/APT/Docker/OCI/NuGet/RubyGems/Yum/Raw 包或镜像可下载；Composer 同时验证 `packages.json`、p2 metadata 和 dist archive；Terraform 通过 group 验证 module/provider metadata、platform archive、SHA256SUMS 和 detached signature；Ansible 验证 v3 discovery、version/dependency metadata、artifact SHA-256、group install，并确认没有 import task 被已丢失副本错误占用；Conda 验证恢复后的 group/proxy search、environment create、package SHA-256 和 JSON/BZ2/ZSTD repodata。
+- 对每个恢复的 APT hosted 或 re-sign proxy，验证预期 `gpg.key` fingerprint、
+  `InRelease` signature、压缩 Packages checksum、代表性 `.deb` checksum 与
+  `desiredRevision == publishedRevision`，再执行 `apt-get update` 和一次性安装。
 - 测试仓库 hosted 上传可用。
 - Browse/search 返回预期 asset。
 - 迁移页面没有遗留非预期 running job；如有，应确认是否需要恢复运行。
@@ -125,7 +133,8 @@ pg_dump --format=custom --dbname='postgresql://kkrepo@db:5432/kkrepo' \
 5. 验证代表性客户端操作。
 6. 记录耗时和发现的问题。
 
-加密密钥必须和源环境一致。缺少这些密钥时，已加密的 blob-store 凭据、realm secret 和 API key payload 无法解密。
+加密密钥必须和源环境一致。缺少这些密钥时，已加密的 blob-store 凭据、realm secret、API key
+payload 和 APT signing key 无法解密。
 
 ## 迁移期间备份
 

@@ -2,9 +2,12 @@
 
 本文记录 kkrepo APT / Debian 仓库格式的开发设计。目标不是把 `.deb` 和 `dists/` 目录当作 Raw 文件树保存，而是在 Debian 官方仓库格式、APT 客户端安全模型和 Sonatype Nexus Repository APT 行为之间取兼容交集，并按 kkrepo 的关系数据库 + OSS/S3 + 多副本约束落地可托管、可代理、可迁移、可检索和可观测的 APT 仓库。
 
+面向仓库管理员和客户端使用者的配置、发布、密钥轮换、状态检查、保留清理与恢复流程见
+[APT / Debian 仓库使用指南](../apt-debian-guide.md)。
+
 ## 当前支持状态与落地结论
 
-截至 2026-08-08，本文定义的第一阶段能力已经落地：代码已注册 `RepositoryFormat.APT`、`apt-hosted`、`apt-proxy` 和独立 `protocol-apt`，并接入双数据库持久化、Admin/Browse/Search、Components API、cleanup/scanning、Nexus definition/content migration 和多副本发布协调。路线图状态同步调整为“已实现”。
+截至 2026-08-09，本文定义的第一阶段能力已经落地：代码已注册 `RepositoryFormat.APT`、`apt-hosted`、`apt-proxy` 和独立 `protocol-apt`，并接入双数据库持久化、Admin/Browse/Search、Components API、cleanup/scanning、Nexus definition/content migration 和多副本发布协调。路线图状态同步调整为“已实现”。
 
 当前验证证据包括：
 
@@ -350,6 +353,11 @@ OpenPGP signer：
 - Browse/API 删除与 repository content DELETE 复用同一路径，不能直接删 asset 绕过 APT projection。
 
 ## Proxy 设计
+
+本节的 proxy projection 只把上游 Release/Packages 变成可检索、可浏览和可绑定 cache 的本地目录，
+不是把 hosted 写入校验推迟到后台。Hosted 在成功响应前已经确认 `.deb` control identity、
+canonical path、size/checksum 并提交 package/blob/asset/component 真相；passthrough projection
+失败不改变原始上游响应，re-sign 则必须先完成全量校验才能切换本地 snapshot。
 
 ### Passthrough mode
 

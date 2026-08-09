@@ -378,7 +378,7 @@ WantedBy=multi-user.target
 生产部署建议使用多副本 kkrepo 服务、独立 MySQL 或 PostgreSQL 和 OSS/S3 blob store：
 
 ```text
-Maven/npm/PyPI/Go/Helm/Cargo/Pub/Composer/Terraform/Ansible Galaxy/Conda/Docker/OCI/NuGet/RubyGems/Yum clients
+Maven/npm/PyPI/Go/Helm/Cargo/Pub/Composer/Terraform/Ansible Galaxy/Conda/APT/Docker/OCI/NuGet/RubyGems/Yum clients
         |
 DNS / Load Balancer / Reverse Proxy
         |
@@ -387,7 +387,7 @@ kkrepo replicas
         |---------------- OSS / S3 blob store
 ```
 
-kkrepo 运行时不依赖 OrientDB、内嵌 Elasticsearch 或本地持久化 blob 文件系统。仓库、组件、asset、用户、权限、token、审计、迁移状态和跨副本协调状态存储在所选关系数据库；包括 Ansible collection archive、完整 manifest/files JSON、Conda package 和缓存的压缩 repodata 在内的大 blob 存储在 OSS/S3；进程内 TTL 缓存只作为可重建热缓存。
+kkrepo 运行时不依赖 OrientDB、内嵌 Elasticsearch 或本地持久化 blob 文件系统。仓库、组件、asset、用户、权限、token、审计、迁移状态和跨副本协调状态存储在所选关系数据库；包括 Ansible collection archive、完整 manifest/files JSON、Conda package/repodata，以及 APT package/immutable signed metadata snapshot 在内的大 blob 存储在 OSS/S3；进程内 TTL 缓存只作为可重建热缓存。
 
 ## 生产资源建议
 

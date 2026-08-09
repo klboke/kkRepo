@@ -45,6 +45,12 @@ Blob storage may contain extra unreferenced objects. That is usually acceptable 
 
 If your object storage supports versioning, restoring the database to time `T` while keeping blob versions at or after `T` is usually safer than restoring blob storage to an earlier point.
 
+For APT hosted and re-signing proxy repositories, the database contains encrypted signing material,
+desired/published suite revisions, and immutable snapshot manifests. Blob storage contains `.deb`
+content and generated `.apt/snapshots/` assets. Those two sides and the original
+`KKREPO_CREDENTIAL_SECRET` are one recovery unit; without that secret, restored APT private keys
+cannot be decrypted.
+
 ## MySQL Backup Example
 
 Logical backup:
@@ -106,7 +112,10 @@ Check:
 - `/actuator/health` is `UP`.
 - Admin login works.
 - Repository list and blob store list load.
-- Key Maven/npm/PyPI/Go/Helm/Cargo/Pub/Composer/Terraform/Ansible Galaxy/Conda/Docker/OCI/NuGet/RubyGems/Yum/Raw packages or images can be downloaded; for Composer, verify `packages.json`, p2 metadata, and the dist archive; for Terraform, verify module/provider metadata, the platform archive, SHA256SUMS, and detached signature through the group; for Ansible, verify v3 discovery, version/dependency metadata, artifact SHA-256, group installation, and that no import task remains incorrectly claimed by a lost replica; for Conda, verify group/proxy search and environment creation, package SHA-256, and JSON/BZ2/ZSTD repodata after restore.
+- Key Maven/npm/PyPI/Go/Helm/Cargo/Pub/Composer/Terraform/Ansible Galaxy/Conda/APT/Docker/OCI/NuGet/RubyGems/Yum/Raw packages or images can be downloaded; for Composer, verify `packages.json`, p2 metadata, and the dist archive; for Terraform, verify module/provider metadata, the platform archive, SHA256SUMS, and detached signature through the group; for Ansible, verify v3 discovery, version/dependency metadata, artifact SHA-256, group installation, and that no import task remains incorrectly claimed by a lost replica; for Conda, verify group/proxy search and environment creation, package SHA-256, and JSON/BZ2/ZSTD repodata after restore.
+- For each restored APT hosted or re-signing proxy repository, verify the expected `gpg.key`
+  fingerprint, `InRelease` signature, compressed Packages checksum, representative `.deb` checksum,
+  and `desiredRevision == publishedRevision`, then run `apt-get update` and a disposable install.
 - Hosted upload works on a test repository.
 - Browse/search returns expected assets.
 - Migration pages do not show stuck running jobs from the old environment unless intentionally resumed.
@@ -125,7 +134,8 @@ At least periodically:
 5. Verify representative client operations.
 6. Record time taken and gaps found.
 
-The encryption secrets must match the source environment. Without them, encrypted blob-store credentials, realm secrets, and API key payloads cannot be decrypted.
+The encryption secrets must match the source environment. Without them, encrypted blob-store
+credentials, realm secrets, API key payloads, and APT signing keys cannot be decrypted.
 
 ## Backup During Migration
 

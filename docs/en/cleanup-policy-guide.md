@@ -19,11 +19,20 @@ The Chinese version is available in the
   format-specific delete path also updates generated metadata, indexes, and caches.
 - Try Run, manual execution, and scheduled execution are available for all current formats. The
   **Keep newest versions** rule is available only where kkRepo has a validated protocol version
-  comparator: Maven, Cargo/Rust, Dart/Pub, Terraform, Swift Package Registry, Ansible Galaxy, and Conda.
+  comparator: Maven, Cargo/Rust, Dart/Pub, Terraform, Swift Package Registry, Ansible Galaxy,
+  Conda, and APT/Debian.
 - Actual execution is irreversible. kkRepo does not currently provide a cleanup-specific restore
   window, so keep a tested database and blob-store backup before enabling deletion in production.
 
 For Conda, one cleanup subject is one complete channel/subdir/name/version/build package. **Keep newest versions** uses Conda VersionOrder within each `(channel, subdir, name)` family and preserves every build of a retained version. Hosted deletion writes a tombstone and advances the channel revision so repodata, channeldata, Browse, Search, and group bindings rebuild consistently. Proxy cleanup removes only the local cached package asset while retaining validated upstream inventory for the next fetch.
+
+For APT, one cleanup subject is one `(distribution, component, package, version)` component across
+all of its architecture assets. **Keep newest versions** uses Debian version ordering within each
+package family. Hosted deletion tombstones every architecture selected by the component and
+synchronously publishes each affected distribution once. The previous signed snapshot stays
+readable until the new complete snapshot is active, and retained by-hash history controls when
+deleted package blobs can become eligible for garbage collection. APT proxy cleanup only removes
+local cached content.
 
 ## How Rules Combine
 

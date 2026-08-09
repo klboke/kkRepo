@@ -175,7 +175,7 @@ Nexus 3.92.x-3.94.x Conda repository definitions and shape-gated hosted packages
 
 Yes. `apt-hosted` and `apt-proxy` provide signed Packages/Release/InRelease metadata, by-hash reads, Nexus-compatible `.deb` upload, passthrough or local re-sign proxy modes, Browse/Search/Usage, and real Debian/Ubuntu `apt update`, download, install, and upgrade flows. APT group is not exposed because Nexus does not define that recipe.
 
-Nexus 3.92.x-3.94.x hosted package data can be migrated only after preflight proves the APT datastore shape. Generated metadata is rebuilt on the target. Private signing keys are not copied implicitly, so migrated repositories remain offline until an administrator explicitly imports the intended key. See [Client Recipes](client-recipes.md#apt--debian), the [APT Design Notes](../zh/dev/apt-debian-repository-design.md), and the [Nexus performance baseline](../zh/dev/apt-performance-baseline.md).
+Nexus 3.92.x-3.94.x hosted package data can be migrated only after preflight proves the APT datastore shape. Generated metadata is rebuilt on the target. Private signing keys are not copied implicitly, so migrated repositories remain offline until an administrator explicitly imports the intended key. See the [APT / Debian Repository Guide](apt-debian-guide.md), [Client Recipes](client-recipes.md#apt--debian), the [APT Design Notes](../zh/dev/apt-debian-repository-design.md), and the [Nexus performance baseline](dev/apt-performance-baseline.md).
 
 ## Is kkrepo production-ready?
 

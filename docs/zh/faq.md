@@ -175,7 +175,7 @@ Nexus 3.92.x-3.94.x Conda repository definition 和 shape-gated hosted package �
 
 已支持。`apt-hosted` 和 `apt-proxy` 提供签名 Packages/Release/InRelease、by-hash、Nexus 兼容 `.deb` 上传、passthrough/本地 re-sign proxy、Browse/Search/Usage，以及 Debian/Ubuntu 真实 `apt update`、下载、安装和升级流程。Nexus 没有 APT group recipe，因此 kkrepo 也不暴露 APT group。
 
-Nexus 3.92.x-3.94.x hosted package 仅在 preflight 证明 APT datastore shape 后迁移，生成 metadata 在目标端重建。私钥不会被静默复制，迁移仓库会保持 offline，直到管理员显式导入预期 key。详见[客户端配置示例](client-recipes.md#apt--debian)、[APT 设计说明](dev/apt-debian-repository-design.md)和 [Nexus 性能基线](dev/apt-performance-baseline.md)。
+Nexus 3.92.x-3.94.x hosted package 仅在 preflight 证明 APT datastore shape 后迁移，生成 metadata 在目标端重建。私钥不会被静默复制，迁移仓库会保持 offline，直到管理员显式导入预期 key。详见 [APT / Debian 仓库使用指南](apt-debian-guide.md)、[客户端配置示例](client-recipes.md#apt--debian)、[APT 设计说明](dev/apt-debian-repository-design.md)和 [Nexus 性能基线](dev/apt-performance-baseline.md)。
 
 ## kkrepo 可以用于生产吗？
 
